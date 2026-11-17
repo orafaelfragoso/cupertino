@@ -18,7 +18,7 @@ fn set(policy: AutoHide) -> MenuBarSet {
 }
 
 #[test]
-fn a_visible_bar_reserves_its_height_from_the_usable_area() {
+fn a_visible_bar_reserves_its_own_outputs_height_from_the_usable_area() {
     let s = set(AutoHide::Never);
     let h = s.bar_height(A).unwrap();
     assert_eq!(s.reserved_height(A), Some(h));
@@ -28,10 +28,6 @@ fn a_visible_bar_reserves_its_height_from_the_usable_area() {
     );
     assert!(s.reserves_space(A));
     assert!(s.usable_area(OutputId(9)).is_none());
-}
-
-#[test]
-fn a_per_output_bar_height_changes_only_that_output() {
     let mut s = set(AutoHide::Never);
     s.add_output(B, RECT_B, 0.0);
     s.set_bar_height(B, 48.0);
@@ -41,7 +37,7 @@ fn a_per_output_bar_height_changes_only_that_output() {
 }
 
 #[test]
-fn the_default_policy_hides_the_bar_only_while_full_screen() {
+fn each_policy_decides_when_the_bar_hides() {
     let mut s = set(AutoHide::FullscreenOnly);
     assert!(s.reserves_space(A));
     let ev = s.set_fullscreen(A, true, 1.0);
@@ -55,10 +51,6 @@ fn the_default_policy_hides_the_bar_only_while_full_screen() {
     );
     s.set_fullscreen(A, false, 2.0);
     assert!(s.reserves_space(A));
-}
-
-#[test]
-fn never_ignores_full_screen_and_always_hides_without_it() {
     let mut never = set(AutoHide::Never);
     assert!(never.set_fullscreen(A, true, 1.0).is_empty());
     assert!(never.reserves_space(A));
@@ -93,7 +85,7 @@ fn the_slide_follows_the_hidden_target_over_time() {
 }
 
 #[test]
-fn dwelling_at_the_top_edge_reveals_a_hidden_bar_after_the_dwell() {
+fn dwelling_at_the_top_edge_reveals_a_hidden_bar_unless_the_pointer_leaves_first() {
     let mut s = set(AutoHide::Always);
     let dwell = s.cfg.reveal_dwell;
     assert!(s.pointer_moved(Point::new(500.0, 0.0), 1.0).is_empty());
@@ -105,10 +97,6 @@ fn dwelling_at_the_top_edge_reveals_a_hidden_bar_after_the_dwell() {
         !s.reserves_space(A),
         "a reveal overlays, it does not take room"
     );
-}
-
-#[test]
-fn leaving_the_edge_before_the_dwell_cancels_it() {
     let mut s = set(AutoHide::Always);
     s.pointer_moved(Point::new(500.0, 0.0), 1.0);
     s.pointer_moved(Point::new(500.0, 400.0), 1.05);
@@ -118,7 +106,7 @@ fn leaving_the_edge_before_the_dwell_cancels_it() {
 }
 
 #[test]
-fn a_revealed_bar_hides_after_the_pointer_leaves_it_for_the_hide_delay() {
+fn a_revealed_bar_hides_after_the_hide_delay_unless_the_pointer_or_an_open_menu_keeps_it() {
     let mut s = set(AutoHide::Always);
     s.set_revealed(A, true, 1.0);
     let delay = s.cfg.hide_delay;
@@ -126,20 +114,12 @@ fn a_revealed_bar_hides_after_the_pointer_leaves_it_for_the_hide_delay() {
     assert!(s.tick(2.0 + delay / 2.0).is_empty());
     assert_eq!(s.tick(2.0 + delay), [BarEvent::Hidden { output: A }]);
     assert!(!s.is_revealed(A));
-}
-
-#[test]
-fn staying_over_the_bar_keeps_it_revealed() {
     let mut s = set(AutoHide::Always);
     s.set_revealed(A, true, 1.0);
     s.pointer_moved(Point::new(500.0, 500.0), 2.0);
     s.pointer_moved(Point::new(500.0, 10.0), 2.1);
     assert!(s.tick(10.0).is_empty());
     assert!(s.is_revealed(A));
-}
-
-#[test]
-fn an_open_menu_keeps_the_bar_shown_and_closing_it_starts_the_hide_timer() {
     let mut s = set(AutoHide::Always);
     s.set_revealed(A, true, 1.0);
     s.set_menu_open(A, true, 2.0);

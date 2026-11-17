@@ -9,7 +9,7 @@ use cupertino_wm::{
 };
 
 fn three_apps() -> cupertino_wm::Wm {
-    let mut wm = wm();
+    let mut wm = common::wm();
     open(&mut wm, 1, "a", 1.0);
     open(&mut wm, 2, "b", 2.0);
     open(&mut wm, 3, "c", 3.0);
@@ -17,60 +17,42 @@ fn three_apps() -> cupertino_wm::Wm {
 }
 
 #[test]
-fn applications_are_listed_most_recently_used_first() {
+fn activating_an_app_raises_its_most_recent_window_and_puts_it_first() {
     let mut wm = three_apps();
+    open(&mut wm, 4, "a", 4.0);
     let (a, b, c) = (app_of(&wm, 1), app_of(&wm, 2), app_of(&wm, 3));
-    assert_eq!(wm.app_mru(), [c, b, a]);
-    wm.handle(Command::ActivateApp { app: a }, 10.0);
+    assert_eq!(wm.app_mru(), [a, c, b]);
+    wm.handle(Command::ActivateApp { app: c }, 10.0);
+    assert_eq!(wm.app_mru(), [c, a, b]);
+    wm.handle(Command::ActivateApp { app: a }, 11.0);
     assert_eq!(wm.app_mru(), [a, c, b]);
     assert_eq!(wm.front_app(), Some(a));
-    assert_eq!(wm.key_window(), Some(win(1)));
+    assert_eq!(wm.key_window(), Some(win(4)));
+    assert_eq!(wm.stacking_order().last(), Some(&win(4)));
 }
 
 #[test]
-fn activating_an_app_raises_its_most_recent_window() {
-    let mut wm = wm();
-    open(&mut wm, 1, "a", 1.0);
-    open(&mut wm, 2, "a", 2.0);
-    open(&mut wm, 3, "b", 3.0);
-    let a = app_of(&wm, 1);
-    wm.handle(Command::ActivateApp { app: a }, 10.0);
-    assert_eq!(wm.key_window(), Some(win(2)));
-    assert_eq!(wm.stacking_order().last(), Some(&win(2)));
-}
-
-#[test]
-fn hiding_an_app_removes_its_windows_from_the_screen_and_moves_the_keyboard() {
-    let mut wm = three_apps();
-    let c = app_of(&wm, 3);
-    wm.handle(Command::HideApp { app: c }, 10.0);
-    assert!(wm.app(c).unwrap().hidden);
-    assert!(!wm.window_on_screen(win(3)));
-    assert!(wm.window_on_screen(win(2)));
-    assert_eq!(wm.key_window(), Some(win(2)));
-    assert_eq!(wm.front_app(), Some(app_of(&wm, 2)));
-}
-
-#[test]
-fn unhiding_brings_the_app_back_in_front() {
-    let mut wm = three_apps();
-    let c = app_of(&wm, 3);
-    wm.handle(Command::HideApp { app: c }, 10.0);
-    wm.handle(Command::UnhideApp { app: c }, 11.0);
-    assert!(!wm.app(c).unwrap().hidden);
-    assert!(wm.window_on_screen(win(3)));
-    assert_eq!(wm.front_app(), Some(c));
-    assert_eq!(wm.key_window(), Some(win(3)));
-}
-
-#[test]
-fn activating_a_hidden_app_shows_it() {
-    let mut wm = three_apps();
-    let a = app_of(&wm, 1);
-    wm.handle(Command::HideApp { app: a }, 10.0);
-    wm.handle(Command::ActivateApp { app: a }, 11.0);
-    assert!(!wm.app(a).unwrap().hidden);
-    assert!(wm.window_on_screen(win(1)));
+fn hiding_an_app_moves_the_keyboard_and_unhiding_or_activating_it_shows_it_in_front() {
+    for by_activation in [false, true] {
+        let mut wm = three_apps();
+        let c = app_of(&wm, 3);
+        wm.handle(Command::HideApp { app: c }, 10.0);
+        assert!(wm.app(c).unwrap().hidden);
+        assert!(!wm.window_on_screen(win(3)));
+        assert!(wm.window_on_screen(win(2)));
+        assert_eq!(wm.key_window(), Some(win(2)));
+        assert_eq!(wm.front_app(), Some(app_of(&wm, 2)));
+        let unhide = if by_activation {
+            Command::ActivateApp { app: c }
+        } else {
+            Command::UnhideApp { app: c }
+        };
+        wm.handle(unhide, 11.0);
+        assert!(!wm.app(c).unwrap().hidden);
+        assert!(wm.window_on_screen(win(3)));
+        assert_eq!(wm.front_app(), Some(c));
+        assert_eq!(wm.key_window(), Some(win(3)));
+    }
 }
 
 #[test]
@@ -117,14 +99,15 @@ fn activating_an_app_with_only_a_minimized_window_restores_it() {
 fn the_app_switcher_opens_on_the_previous_app_and_commits_it() {
     let mut wm = three_apps();
     let fx = wm.handle(Command::SwitcherOpen { backward: false }, 10.0);
-    let selected = fx.iter().find_map(|e| match e {
-        Effect::SwitcherChanged { apps, selected } => Some((apps.clone(), *selected)),
-        _ => None,
-    });
-    let (apps, selected) = selected.expect("the switcher shows");
+    let (apps, selected) = fx
+        .iter()
+        .find_map(|e| match e {
+            Effect::SwitcherChanged { apps, selected } => Some((apps.clone(), *selected)),
+            _ => None,
+        })
+        .expect("the switcher shows");
     assert_eq!(apps, [app_of(&wm, 3), app_of(&wm, 2), app_of(&wm, 1)]);
     assert_eq!(selected, 1, "the previous app, not the current one");
-    assert!(wm.switcher().is_some());
     let fx = wm.handle(Command::SwitcherCommit, 10.5);
     assert!(has(&fx, |e| matches!(
         e,
@@ -133,90 +116,78 @@ fn the_app_switcher_opens_on_the_previous_app_and_commits_it() {
     assert!(wm.switcher().is_none());
     assert_eq!(wm.front_app(), Some(app_of(&wm, 2)));
     assert_eq!(wm.key_window(), Some(win(2)));
-}
 
-#[test]
-fn opening_backward_selects_the_last_app() {
     let mut wm = three_apps();
     wm.handle(Command::SwitcherOpen { backward: true }, 10.0);
-    assert_eq!(wm.switcher().unwrap().selected, 2);
+    assert_eq!(wm.switcher().unwrap().selected, 2, "backward: the last app");
 }
 
 #[test]
 fn stepping_moves_the_selection_and_wraps_only_for_a_new_press() {
     let mut wm = three_apps();
     wm.handle(Command::SwitcherOpen { backward: false }, 10.0);
-    wm.handle(
-        Command::SwitcherStep {
-            step: SwitcherStep::Next,
-            repeat: false,
-        },
-        10.1,
-    );
-    assert_eq!(wm.switcher().unwrap().selected, 2);
-    wm.handle(
-        Command::SwitcherStep {
-            step: SwitcherStep::Next,
-            repeat: true,
-        },
-        10.2,
-    );
-    assert_eq!(
-        wm.switcher().unwrap().selected,
-        2,
-        "a held key stops at the end"
-    );
-    wm.handle(
-        Command::SwitcherStep {
-            step: SwitcherStep::Next,
-            repeat: false,
-        },
-        10.3,
-    );
-    assert_eq!(wm.switcher().unwrap().selected, 0, "a new press wraps");
-    wm.handle(
-        Command::SwitcherStep {
-            step: SwitcherStep::Previous,
-            repeat: false,
-        },
-        10.4,
-    );
-    assert_eq!(wm.switcher().unwrap().selected, 2);
-    wm.handle(
-        Command::SwitcherStep {
-            step: SwitcherStep::First,
-            repeat: false,
-        },
-        10.5,
-    );
-    assert_eq!(wm.switcher().unwrap().selected, 0);
-    wm.handle(
-        Command::SwitcherStep {
-            step: SwitcherStep::Last,
-            repeat: false,
-        },
-        10.6,
-    );
-    assert_eq!(wm.switcher().unwrap().selected, 2);
-    wm.handle(Command::SwitcherSelect { index: 1 }, 10.7);
-    assert_eq!(wm.switcher().unwrap().selected, 1);
+    for (name, command, selected, now) in [
+        (
+            "next",
+            Command::SwitcherStep {
+                step: SwitcherStep::Next,
+                repeat: false,
+            },
+            2,
+        ),
+        (
+            "a held key stops at the end",
+            Command::SwitcherStep {
+                step: SwitcherStep::Next,
+                repeat: true,
+            },
+            2,
+        ),
+        (
+            "a new press wraps",
+            Command::SwitcherStep {
+                step: SwitcherStep::Next,
+                repeat: false,
+            },
+            0,
+        ),
+        (
+            "previous wraps",
+            Command::SwitcherStep {
+                step: SwitcherStep::Previous,
+                repeat: false,
+            },
+            2,
+        ),
+        (
+            "first",
+            Command::SwitcherStep {
+                step: SwitcherStep::First,
+                repeat: false,
+            },
+            0,
+        ),
+        (
+            "last",
+            Command::SwitcherStep {
+                step: SwitcherStep::Last,
+                repeat: false,
+            },
+            2,
+        ),
+        ("select", Command::SwitcherSelect { index: 1 }, 1),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(i, (name, command, selected))| (name, command, selected, 10.1 + 0.1 * i as f64))
+    {
+        wm.handle(command, now);
+        assert_eq!(wm.switcher().unwrap().selected, selected, "{name}");
+    }
 }
 
 #[test]
-fn cancelling_the_switcher_changes_nothing() {
-    let mut wm = three_apps();
-    wm.handle(Command::SwitcherOpen { backward: false }, 10.0);
-    let fx = wm.handle(Command::SwitcherCancel, 10.2);
-    assert!(has(&fx, |e| matches!(
-        e,
-        Effect::SwitcherClosed { committed: false }
-    )));
-    assert_eq!(wm.front_app(), Some(app_of(&wm, 3)));
-    assert_eq!(wm.key_window(), Some(win(3)));
-}
-
-#[test]
-fn quitting_from_the_switcher_asks_the_selected_apps_windows_to_close() {
+fn the_switcher_cancels_quits_and_hides_the_selected_app() {
     let mut wm = three_apps();
     wm.handle(Command::SwitcherOpen { backward: false }, 10.0);
     let fx = wm.handle(Command::SwitcherQuit, 10.1);
@@ -224,21 +195,26 @@ fn quitting_from_the_switcher_asks_the_selected_apps_windows_to_close() {
         &fx,
         |e| matches!(e, Effect::RequestClose { window } if *window == win(2))
     ));
-}
-
-#[test]
-fn hiding_from_the_switcher_hides_the_selected_app_and_unhiding_shows_it() {
-    let mut wm = three_apps();
-    wm.handle(Command::SwitcherOpen { backward: false }, 10.0);
-    wm.handle(Command::SwitcherToggleHide, 10.1);
-    assert!(wm.app(app_of(&wm, 2)).unwrap().hidden);
     wm.handle(Command::SwitcherToggleHide, 10.2);
+    assert!(wm.app(app_of(&wm, 2)).unwrap().hidden);
+    wm.handle(Command::SwitcherToggleHide, 10.3);
     assert!(!wm.app(app_of(&wm, 2)).unwrap().hidden);
+    let fx = wm.handle(Command::SwitcherCancel, 10.4);
+    assert!(has(&fx, |e| matches!(
+        e,
+        Effect::SwitcherClosed { committed: false }
+    )));
+    assert_eq!(
+        wm.front_app(),
+        Some(app_of(&wm, 3)),
+        "cancel changes nothing"
+    );
+    assert_eq!(wm.key_window(), Some(win(3)));
 }
 
 #[test]
-fn cycling_windows_walks_the_apps_windows_and_ends_with_the_chosen_one_in_front() {
-    let mut wm = wm();
+fn cycling_windows_walks_the_apps_windows() {
+    let mut wm = common::wm();
     open(&mut wm, 1, "a", 1.0);
     open(&mut wm, 2, "a", 2.0);
     open(&mut wm, 3, "a", 3.0);
@@ -246,175 +222,157 @@ fn cycling_windows_walks_the_apps_windows_and_ends_with_the_chosen_one_in_front(
     let first = wm.key_window();
     assert_ne!(first, Some(win(3)));
     wm.handle(Command::CycleWindows { backward: false }, 10.1);
-    let second = wm.key_window();
-    assert_ne!(second, first);
+    assert_ne!(wm.key_window(), first);
     wm.handle(Command::EndCycleWindows, 10.2);
     wm.handle(Command::FocusWindow { window: win(3) }, 10.3);
     assert_eq!(wm.key_window(), Some(win(3)));
 }
 
 #[test]
-fn a_window_that_maps_while_the_person_works_elsewhere_opens_behind() {
-    let mut wm = wm();
-    open(&mut wm, 1, "a", 1.0);
-    let mut p = MapParams::new(win(2), "b", frame(2));
-    p.activation = Activation::Policy(MapFocus {
-        first_of_client: true,
-        input_elsewhere: true,
-        grant: None,
-        last_user_event: Some(1.5),
-    });
-    let fx = wm.handle(Command::Map(p), 2.0);
-    assert_eq!(wm.key_window(), Some(win(1)));
-    assert!(has(&fx, |e| matches!(e, Effect::AppAttention { .. })));
-    assert_eq!(
-        wm.stacking_order(),
-        [win(2), win(1)],
-        "behind the key window"
-    );
-}
-
-#[test]
-fn a_first_window_with_no_competing_input_takes_the_keyboard() {
-    let mut wm = wm();
-    open(&mut wm, 1, "a", 1.0);
-    let mut p = MapParams::new(win(2), "b", frame(2));
-    p.activation = Activation::Policy(MapFocus {
-        first_of_client: true,
-        input_elsewhere: false,
-        grant: None,
-        last_user_event: Some(2.0 - TYPING_QUIET - 1.0),
-    });
-    wm.handle(Command::Map(p), 2.0);
-    assert_eq!(wm.key_window(), Some(win(2)));
-}
-
-#[test]
-fn typing_in_progress_keeps_the_keyboard_from_a_new_program() {
-    let mut wm = wm();
-    open(&mut wm, 1, "a", 1.0);
-    let mut p = MapParams::new(win(2), "b", frame(2));
-    p.activation = Activation::Policy(MapFocus {
-        first_of_client: true,
-        input_elsewhere: false,
-        grant: None,
-        last_user_event: Some(1.9),
-    });
-    wm.handle(Command::Map(p), 2.0);
-    assert_eq!(wm.key_window(), Some(win(1)));
-}
-
-#[test]
-fn a_valid_fresh_grant_takes_the_keyboard_even_while_typing() {
-    let mut wm = wm();
-    open(&mut wm, 1, "a", 1.0);
-    let mut p = MapParams::new(win(2), "b", frame(2));
-    p.activation = Activation::Policy(MapFocus {
-        first_of_client: false,
-        input_elsewhere: true,
-        grant: Some(Grant {
-            created: 1.95,
-            valid: true,
-        }),
-        last_user_event: Some(1.9),
-    });
-    wm.handle(Command::Map(p), 2.0);
-    assert_eq!(wm.key_window(), Some(win(2)));
-}
-
-#[test]
-fn a_grant_that_is_invalid_or_too_old_is_not_honoured() {
-    for grant in [
-        Grant {
-            created: 1.95,
-            valid: false,
-        },
-        Grant {
-            created: 2.0 - GRANT_LIFETIME - 1.0,
-            valid: true,
-        },
+fn a_new_window_takes_the_keyboard_only_when_the_policy_allows_it() {
+    let policy = |first_of_client, input_elsewhere, grant, last_user_event| MapFocus {
+        first_of_client,
+        input_elsewhere,
+        grant,
+        last_user_event,
+    };
+    let fresh = |valid| Grant {
+        created: 1.95,
+        valid,
+    };
+    let stale = Grant {
+        created: 2.0 - GRANT_LIFETIME - 1.0,
+        valid: true,
+    };
+    for (name, app, focus, takes) in [
+        (
+            "the person works elsewhere",
+            "b",
+            policy(true, true, None, Some(1.5)),
+            false,
+        ),
+        (
+            "a first window with no competing input",
+            "b",
+            policy(true, false, None, Some(2.0 - TYPING_QUIET - 1.0)),
+            true,
+        ),
+        (
+            "typing in progress",
+            "b",
+            policy(true, false, None, Some(1.9)),
+            false,
+        ),
+        (
+            "a valid fresh grant, even while typing",
+            "b",
+            policy(false, true, Some(fresh(true)), Some(1.9)),
+            true,
+        ),
+        (
+            "an invalid grant",
+            "b",
+            policy(false, true, Some(fresh(false)), None),
+            false,
+        ),
+        (
+            "a grant too old",
+            "b",
+            policy(false, true, Some(stale), None),
+            false,
+        ),
+        (
+            "a window of the front app",
+            "a",
+            policy(false, true, None, Some(1.99)),
+            true,
+        ),
     ] {
-        let mut wm = wm();
+        let mut wm = common::wm();
         open(&mut wm, 1, "a", 1.0);
-        let mut p = MapParams::new(win(2), "b", frame(2));
-        p.activation = Activation::Policy(MapFocus {
-            first_of_client: false,
-            input_elsewhere: true,
-            grant: Some(grant),
-            last_user_event: None,
-        });
-        wm.handle(Command::Map(p), 2.0);
-        assert_eq!(wm.key_window(), Some(win(1)), "{grant:?}");
+        let mut p = MapParams::new(win(2), app, frame(2));
+        p.activation = Activation::Policy(focus);
+        let fx = wm.handle(Command::Map(p), 2.0);
+        let key = if takes { win(2) } else { win(1) };
+        assert_eq!(wm.key_window(), Some(key), "{name}");
+        if name == "the person works elsewhere" {
+            assert!(
+                has(&fx, |e| matches!(e, Effect::AppAttention { .. })),
+                "{name}"
+            );
+            assert_eq!(
+                wm.stacking_order(),
+                [win(2), win(1)],
+                "behind the key window"
+            );
+        }
     }
 }
 
 #[test]
-fn a_window_of_the_front_app_or_a_child_of_the_key_window_takes_the_keyboard() {
-    let mut wm = wm();
-    open(&mut wm, 1, "a", 1.0);
-    let mut sibling = MapParams::new(win(2), "a", frame(2));
-    sibling.activation = Activation::Policy(MapFocus {
-        first_of_client: false,
-        input_elsewhere: true,
-        grant: None,
-        last_user_event: Some(1.99),
-    });
-    wm.handle(Command::Map(sibling), 2.0);
-    assert_eq!(wm.key_window(), Some(win(2)));
-}
-
-#[test]
 fn an_activation_token_must_be_recent_and_not_older_than_the_apps_last_activation() {
-    let mut wm = wm();
+    let mut wm = common::wm();
     open(&mut wm, 1, "a", 1.0);
-    let activated = wm
+    let at = wm
         .app(app_of(&wm, 1))
         .unwrap()
         .activated_at
         .expect("activated");
-    assert!(wm.activation_allowed(win(1), activated + 0.5, None, activated + 0.6));
-    assert!(
-        !wm.activation_allowed(win(1), activated - 0.5, None, activated + 0.6),
-        "older than the activation"
-    );
-    assert!(
-        !wm.activation_allowed(
-            win(1),
-            activated + 0.5,
-            None,
-            activated + 0.5 + LATE_ACTIVATION + 0.1
+    for (name, window, created, now, allowed) in [
+        ("recent", 1, at + 0.5, at + 0.6, true),
+        ("older than the activation", 1, at - 0.5, at + 0.6, false),
+        (
+            "too late",
+            1,
+            at + 0.5,
+            at + 0.5 + LATE_ACTIVATION + 0.1,
+            false,
         ),
-        "too late"
-    );
-    assert!(
-        !wm.activation_allowed(win(9), 1.0, None, 1.1),
-        "no such window"
-    );
+        ("no such window", 9, 1.0, 1.1, false),
+    ] {
+        assert_eq!(
+            wm.activation_allowed(win(window), created, None, now),
+            allowed,
+            "{name}"
+        );
+    }
 }
 
 #[test]
 fn a_token_is_denied_by_a_later_user_event_but_not_by_one_within_the_slack() {
-    assert!(token_accepted(5.0, None, None));
-    assert!(token_accepted(5.0, Some(4.0), Some(5.0 + USER_EVENT_SLACK)));
-    assert!(!token_accepted(
-        5.0,
-        Some(4.0),
-        Some(5.0 + USER_EVENT_SLACK + 0.01)
-    ));
-    assert!(!token_accepted(5.0, Some(5.5), None));
-    assert!(token_accepted(5.0, Some(5.0), None));
+    for (created, user_event, used, accepted) in [
+        (5.0, None, None, true),
+        (5.0, Some(4.0), Some(5.0 + USER_EVENT_SLACK), true),
+        (5.0, Some(4.0), Some(5.0 + USER_EVENT_SLACK + 0.01), false),
+        (5.0, Some(5.5), None, false),
+        (5.0, Some(5.0), None, true),
+    ] {
+        assert_eq!(
+            token_accepted(created, user_event, used),
+            accepted,
+            "{created} {user_event:?} {used:?}"
+        );
+    }
 }
 
 #[test]
 fn the_switcher_start_index_follows_the_hidden_count_rule() {
-    // No count: the previous app going forward, the last one going backward.
-    assert_eq!(hidden_index(0, 5, true), 1);
-    assert_eq!(hidden_index(0, 5, false), 4);
-    assert_eq!(hidden_index(0, 1, true), 0);
-    // A positive count is an index from the front, a negative one from the back; both are bounded.
-    assert_eq!(hidden_index(3, 5, true), 3);
-    assert_eq!(hidden_index(9, 5, true), 4);
-    assert_eq!(hidden_index(-1, 5, true), 4);
-    assert_eq!(hidden_index(-5, 5, true), 0);
-    assert_eq!(hidden_index(-9, 5, true), 0);
+    // No count: the previous app going forward, the last one going backward. A positive count is an index from the
+    // front, a negative one from the back; both are bounded.
+    for (count, len, forward, index) in [
+        (0, 5, true, 1),
+        (0, 5, false, 4),
+        (0, 1, true, 0),
+        (3, 5, true, 3),
+        (9, 5, true, 4),
+        (-1, 5, true, 4),
+        (-5, 5, true, 0),
+        (-9, 5, true, 0),
+    ] {
+        assert_eq!(
+            hidden_index(count, len, forward),
+            index,
+            "{count} of {len} forward {forward}"
+        );
+    }
 }

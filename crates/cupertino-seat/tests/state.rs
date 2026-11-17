@@ -54,7 +54,7 @@ const ACTIVATED: Output = Output::Transition(Transition::Activate);
 
 /// One step of a scenario: an input and what it must give, or a call on the machine.
 enum Step {
-    Step(Input, Vec<Output>),
+    Feed(Input, Vec<Output>),
     Take(DevT, i32, bool),
     Release(i32),
     Running(bool),
@@ -63,7 +63,7 @@ enum Step {
 use Step::{Release, Running, Take};
 
 fn step(input: Input, outputs: impl Into<Vec<Output>>) -> Step {
-    Step::Step(input, outputs.into())
+    Step::Feed(input, outputs.into())
 }
 
 #[test]
@@ -220,7 +220,7 @@ fn the_session_pauses_once_and_activates_only_when_active_and_every_held_device_
     for (name, mut machine, steps) in scenarios {
         for (index, item) in steps.into_iter().enumerate() {
             match item {
-                Step::Step(input, expected) => {
+                Step::Feed(input, expected) => {
                     assert_eq!(machine.step(input), expected, "{name}, step {index}");
                 }
                 Take(dev, fd, inactive) => machine.take(dev, fd, inactive).unwrap(),

@@ -16,7 +16,7 @@ Updated by the lead at every merge.
 | | |
 |---|---|
 | Current wave | 1 |
-| Running tasks | none |
+| Running tasks | W1.1, W1.2, W1.7 |
 | Enforced layers | none (target rules checked since W0.2; 248 remaining-work lines) |
 | Waiting on the owner | nothing |
 | Last closed wave | 0 |
@@ -519,19 +519,19 @@ login osd portal screenshot`. **After** W1.3.
 **Owns** layer lines and dependencies of `apps assets defaults diagnostic-events icons peer radios trash`; `build-info`,
 `profile`, `thumbnails`. **Touches** `cli server settings files launcher ui-wayland`. **After** W0.close.
 
-- [ ] Each declares `layer = "system"` and depends only on `foundation` and `system` crates.
-- [ ] `cupertino-build-info` is a module of `cupertino-diagnostic-events`, with its build script; so is
+- [x] (a02b1972e) Each declares `layer = "system"` and depends only on `foundation` and `system` crates.
+- [x] (a02b1972e) `cupertino-build-info` is a module of `cupertino-diagnostic-events`, with its build script; so is
       `cupertino-profile`, its frame timelines on the same per-instance state.
-- [ ] `cupertino-thumbnails` is a module of `cupertino-icons`.
+- [x] (a02b1972e) `cupertino-thumbnails` is a module of `cupertino-icons`.
 
 #### W1.4 The `testing` layer and `cupertino-session-tests` (M)
 
 **Owns** the layer line of `capture`; new `cupertino-session-tests`, the home of tests that start programs from more
 than one crate. **Touches** `menubar server` (dev-dependencies), `contracts.yaml`. **After** W0.close.
 
-- [ ] `capture` and `cupertino-session-tests` declare `layer = "testing"`; nothing has a normal or build dependency on
+- [x] (44782bc91) `capture` and `cupertino-session-tests` declare `layer = "testing"`; nothing has a normal or build dependency on
       them.
-- [ ] Any test that starts programs from more than one crate lives in `cupertino-session-tests`;
+- [x] (44782bc91) Any test that starts programs from more than one crate lives in `cupertino-session-tests`;
       `cupertino-menubar` no longer depends on `cupertino-files` or `cupertino-settings`; `cupertino-server`'s tests start
       no other crate's program.
 
@@ -540,7 +540,7 @@ than one crate. **Touches** `menubar server` (dev-dependencies), `contracts.yaml
 **Owns** `ui-controls typeahead filepicker`, the exports of `kit`; the `app` features of `menubar settings portal`.
 **After** W0.close.
 
-- [ ] Both are modules of `cupertino-ui-controls`; their directories are gone; `menubar`, `settings` and `portal` reach
+- [x] (9b0f48e58) Both are modules of `cupertino-ui-controls`; their directories are gone; `menubar`, `settings` and `portal` reach
       them through `cupertino-kit`, now a normal dependency of all three: their `app` features and the builds without
       Kit go (the portal leaves Kit in W6.11).
 

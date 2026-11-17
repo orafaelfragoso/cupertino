@@ -1,6 +1,6 @@
 //! Export the runtime's existing semantics; actions take the same native route as assistive actions.
 use super::*;
-use cupertino_semantics as wire;
+use cupertino_app_protocols::semantics as wire;
 
 /// The least time between two snapshots of one window's tree, in nanoseconds. Each snapshot is a file sent to the
 /// compositor, so a tree that changes every frame (a slide, a spring, a fade) is published a few times a second, with

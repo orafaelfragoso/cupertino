@@ -881,6 +881,9 @@ name = "cupertino-app-protocols"
 version = "0.1.0"
 dependencies = [
  "bitflags 2.13.2",
+ "rustix 1.1.6",
+ "serde",
+ "serde_json",
  "wayland-backend",
  "wayland-client",
  "wayland-scanner",
@@ -960,9 +963,9 @@ dependencies = [
 name = "cupertino-control"
 version = "0.1.0"
 dependencies = [
+ "cupertino-app-protocols",
  "cupertino-control-model",
  "cupertino-peer",
- "cupertino-semantics",
  "cupertino-shell-client",
  "cupertino-wayland-client",
  "image",
@@ -1523,7 +1526,6 @@ dependencies = [
  "cupertino-app-protocols",
  "cupertino-defaults",
  "cupertino-geometry",
- "cupertino-semantics",
  "cupertino-wayland-client",
  "wayland-client",
 ]
@@ -1608,15 +1610,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cupertino-semantics"
-version = "0.1.0"
-dependencies = [
- "rustix 1.1.6",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "cupertino-server"
 version = "0.1.0"
 dependencies = [
@@ -1627,6 +1620,7 @@ dependencies = [
  "bytemuck",
  "clap",
  "cupertino-animation",
+ "cupertino-app-protocols",
  "cupertino-assets",
  "cupertino-control-model",
  "cupertino-cursor",
@@ -1646,7 +1640,6 @@ dependencies = [
  "cupertino-raster-math",
  "cupertino-scene",
  "cupertino-seat",
- "cupertino-semantics",
  "cupertino-theme",
  "cupertino-wm",
  "image",
@@ -1721,11 +1714,11 @@ dependencies = [
 name = "cupertino-shell-client"
 version = "0.1.0"
 dependencies = [
+ "cupertino-app-protocols",
  "cupertino-defaults",
  "cupertino-geometry",
  "cupertino-protocol-app",
  "cupertino-protocols",
- "cupertino-semantics",
  "cupertino-wayland-client",
  "wayland-client",
  "wayland-protocols",
@@ -1793,10 +1786,10 @@ version = "0.1.0"
 dependencies = [
  "async-task",
  "cupertino-animation",
+ "cupertino-app-protocols",
  "cupertino-defaults",
  "cupertino-geometry",
  "cupertino-menu-model",
- "cupertino-semantics",
  "cupertino-theme",
  "cupertino-ui-layout",
  "cupertino-ui-platform",
@@ -1845,10 +1838,10 @@ name = "cupertino-ui-platform"
 version = "0.1.0"
 dependencies = [
  "cupertino-animation",
+ "cupertino-app-protocols",
  "cupertino-geometry",
  "cupertino-keyboard",
  "cupertino-menu-model",
- "cupertino-semantics",
  "cupertino-ui-render",
  "cupertino-ui-text",
 ]

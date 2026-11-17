@@ -1,10 +1,10 @@
 //! Server-owned scope and transforms. Publications never grant permission or name another client's surface.
 use super::*;
+use cupertino_app_protocols::semantics as wire;
 use cupertino_protocols::server::semantics::{
     cupertino_semantic_surface_v1::{self as publisher, CupertinoSemanticSurfaceV1},
     cupertino_semantics_v1::{self as manager, CupertinoSemanticsV1},
 };
-use cupertino_semantics as wire;
 use smithay::desktop::{layer_map_for_output, PopupManager};
 use smithay::utils::{Serial, SERIAL_COUNTER};
 use std::os::fd::{AsFd, OwnedFd};

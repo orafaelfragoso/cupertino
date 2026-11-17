@@ -16,7 +16,7 @@ toolkits link it without the private protocols; the XML itself is `MIT OR Apache
 
 ## How it works
 
-The crate has no code of its own. `build.rs` reruns when the XML changes, because the scanner macros read it untracked.
+The generated bindings are the crate's only protocol code; its `semantics` module holds the wire values of `cupertino_semantics_v1` (bounded snapshots, actions, and sealed memfd payloads: `seal`, `read`, `MAX_FRAME`, `MAX_OBSERVATION`, `MAX_NODES`, `MAX_TEXT`, `MAX_DEPTH`, `MAX_WINDOWS`), used as `cupertino_app_protocols::semantics` and, in Kit, `cupertino_ui_platform::semantics`. It knows neither widgets nor compositor policy. `build.rs` reruns when the XML changes, because the scanner macros read it untracked.
 `cupertino-protocols` re-exports both modules, so `cupertino-server` names them as before.
 
 | Feature | Generates |

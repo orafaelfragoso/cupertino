@@ -51,7 +51,7 @@ pub enum Command {
         vertical: f64,
     },
     Observe,
-    Perform(cupertino_semantics::Invocation),
+    Perform(cupertino_app_protocols::semantics::Invocation),
     Resume,
 }
 
@@ -100,8 +100,8 @@ struct Remote {
     capabilities: u32,
     geometry: Value,
     reply: Option<(u32, Result<(), u32>)>,
-    observation: Option<(u32, cupertino_semantics::Observation)>,
-    action_reply: Option<(u32, cupertino_semantics::ActionReply)>,
+    observation: Option<(u32, cupertino_app_protocols::semantics::Observation)>,
+    action_reply: Option<(u32, cupertino_app_protocols::semantics::ActionReply)>,
 }
 impl Remote {
     /// Take the events of the run whose epoch is `epoch`.
@@ -473,7 +473,7 @@ fn execute<D: Desktop>(
             data,
         } => {
             let serial = peer.serial()?;
-            let invocation = cupertino_semantics::Invocation {
+            let invocation = cupertino_app_protocols::semantics::Invocation {
                 window,
                 revision,
                 node,

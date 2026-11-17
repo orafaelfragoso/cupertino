@@ -10,7 +10,7 @@ layer = "shell"
 
 [dependencies]
 cupertino-control-model = { path = "../cupertino-control-model" }
-cupertino-semantics = { path = "../cupertino-semantics" }
+cupertino-app-protocols = { path = "../cupertino-app-protocols" }
 cupertino-shell-client = { path = "../cupertino-shell-client" }
 cupertino-wayland-client = { path = "../cupertino-wayland-client" }
 cupertino-peer = { path = "../cupertino-peer" }

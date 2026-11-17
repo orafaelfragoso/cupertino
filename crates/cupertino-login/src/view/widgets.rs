@@ -16,12 +16,12 @@ use cupertino_kit::layout::{
 };
 use cupertino_kit::platform::{Keysym, MouseButton, PointerEvent};
 use cupertino_kit::render::{
-    Effect, FillRule, GradientStop, ImageResource, Paint, PaintOp, PathVerb, PixelFormat,
-    ResourceId, Sampling, Shape,
+    Effect, FillRule, ImageResource, Paint, PaintOp, PathVerb, PixelFormat, ResourceId, Sampling,
+    Shape,
 };
 use cupertino_kit::text::{
-    AttributedText, FontWeight, ParagraphLayout, ParagraphStyle, TextAlign, TextStyle, TextSystem,
-    Wrap,
+    AttributedText, FontWeight, GlyphFormat, GlyphKey, GlyphRaster, GlyphRasterizer,
+    ParagraphLayout, ParagraphStyle, TextAlign, TextStyle, TextSystem, Wrap,
 };
 use cupertino_kit::theme::{Color, ColorRole, StateVariant, Surface};
 
@@ -34,12 +34,6 @@ const KP_ENTER: Keysym = Keysym(0xff8d);
 const SPACE: Keysym = Keysym(0x20);
 pub(crate) const ESCAPE: Keysym = Keysym(0xff1b);
 
-/// Avatar halo: how far the shadow reaches past the disc and its opacity at the disc.
-const AVATAR_SHADOW_RADIUS: f64 = 15.0;
-const AVATAR_SHADOW_OPACITY: f32 = 0.25;
-/// Avatar ring: its width and white at this alpha.
-const RING_WIDTH: f64 = 1.0;
-const RING_ALPHA: f32 = 0.1;
 /// Fill behind the initials (approximate).
 const AVATAR_FILL: [f32; 3] = [0.60, 0.62, 0.66];
 /// The mark on the avatar of a user who has a session: a disc of this fill with a white check, at its lower right.
@@ -81,16 +75,19 @@ const POWER_RING_STEPS: usize = 30;
 /// The power item's fill while it has the keyboard focus or its menu is open (white at this alpha).
 const POWER_HIGHLIGHT_ALPHA: f32 = 0.2;
 
-/// The selected picker tile: the tile's frame with continuous corners of this radius, outlined 1 pt in white at this
-/// alpha over a fill of white at this alpha (the fill is approximate).
+/// The selected picker tile: the tile's frame with continuous corners of this radius on the control material,
+/// outlined 1 pt in white at this alpha; where there is no picture to make the material from, a fill of white at this
+/// alpha (approximate).
 const SELECTION_RADIUS: f64 = 12.0;
 const SELECTION_BORDER_WIDTH: f64 = 1.0;
 const SELECTION_BORDER_ALPHA: f32 = 0.1;
 const SELECTION_FILL_ALPHA: f32 = 0.1;
 
-/// The user name's shadow: black at this opacity, blurred by this radius, not offset.
+/// The user name's shadow: black at this opacity, not offset, of this blur radius in points. A blur radius is a
+/// Gaussian of half its deviation (`sigma_for_radius`), so this is a deviation of 3 pt: a soft glow that hugs the
+/// letters, gone about 9 pt from them.
 const NAME_SHADOW_ALPHA: f32 = 0.5;
-const NAME_SHADOW_BLUR: f64 = 6.0;
+pub(crate) const NAME_SHADOW_BLUR: f64 = 6.0;
 
 /// The glyphs of the submit and help buttons, in a square of [`BUTTON_GLYPH`] points: the ring's stroke, white at this
 /// alpha (the help button's alpha is approximate, the submit button's).
@@ -165,6 +162,8 @@ enum Kind {
     Frame(u32),
     /// The control material over these device pixels of the screen.
     Material([u32; 4]),
+    /// Glass letters, by a hash of their text, size, weight and place.
+    Glass(u64),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -187,6 +186,15 @@ thread_local! {
     static KEPT: RefCell<Vec<Kept>> = const { RefCell::new(Vec::new()) };
     /// How many pictures of a whole screen were made from a source on this thread.
     static MADE: Cell<u64> = const { Cell::new(0) };
+    /// How many pictures of glass letters were made on this thread.
+    static GLASS_MADE: Cell<u64> = const { Cell::new(0) };
+}
+
+/// How many pictures of glass letters (the large time) were made on this thread: once per text, size and place on a
+/// screen, so once a minute for the time.
+#[cfg(test)]
+pub(crate) fn glass_made() -> u64 {
+    GLASS_MADE.get()
 }
 
 /// How many pictures of a whole screen were made from their source on this thread: once per screen size, scale and
@@ -242,6 +250,9 @@ fn kept(key: KeptKey, make: impl FnOnce() -> ImageResource) -> (ResourceId, Imag
     if matches!(key.kind, Kind::Undimmed | Kind::Dimmed) {
         MADE.set(MADE.get() + 1);
     }
+    if matches!(key.kind, Kind::Glass(_)) {
+        GLASS_MADE.set(GLASS_MADE.get() + 1);
+    }
     let id = next_resource_id();
     KEPT.with_borrow_mut(|kept| {
         let screen = |k: &KeptKey| {
@@ -256,6 +267,10 @@ fn kept(key: KeptKey, make: impl FnOnce() -> ImageResource) -> (ResourceId, Imag
             Kind::Dimmed => kept.retain(|k| {
                 !(screen(&k.key) && matches!(k.key.kind, Kind::Frame(_) | Kind::Undimmed))
             }),
+            // the time of the minute before is not shown again
+            Kind::Glass(_) => {
+                kept.retain(|k| !(screen(&k.key) && matches!(k.key.kind, Kind::Glass(_))))
+            }
             Kind::Undimmed | Kind::Material(_) => {}
         }
         kept.push(Kept {
@@ -961,7 +976,12 @@ impl<M: 'static> Widget<M> for Label {
         }
         let first = layout.lines().first().map_or(0.0, |line| line.baseline);
         let origin = Point::new(0.0, self.ascent - first);
-        for line in layout.lines() {
+        // a wrapped label draws the lines its box holds, so it never runs into what stands under it
+        let shown = layout
+            .lines()
+            .iter()
+            .take_while(|line| !self.wrap || origin.y + line.baseline <= self.rect.height());
+        for line in shown {
             for run in &line.runs {
                 cx.push(PaintOp::Glyphs {
                     origin: origin + run.origin,
@@ -981,8 +1001,265 @@ impl<M: 'static> Widget<M> for Label {
     }
 }
 
-/// The halo, disc and ring of an avatar at `rect`, with its picture or initials as children, and the mark of a user
-/// with a session.
+/// Text in glass letters (the large time): the screen's own picture under the letters, blurred and lifted toward
+/// white, with a light rim along their top and left edges and a dark one along their bottom and right
+/// ([`wallpaper::glass_letters`]). It is made from the kept picture, never from what lies under the window, and kept, so
+/// a frame lays it again without making it; without a picture the letters are white. Centred in its box, its first
+/// baseline `ascent` below the box's top.
+#[derive(Clone, Debug)]
+pub(crate) struct GlassText {
+    pub text: String,
+    pub size: f64,
+    pub weight: FontWeight,
+    /// The box, in the parent's points.
+    pub rect: Rect,
+    pub ascent: f64,
+    pub ground: Ground,
+    /// Where the parent's origin lies on the screen, points.
+    pub origin: Point,
+}
+
+impl GlassText {
+    fn same(&self, other: &GlassText) -> bool {
+        (
+            self.text.as_str(),
+            self.size,
+            self.weight,
+            self.ascent,
+            self.origin,
+        ) == (
+            other.text.as_str(),
+            other.size,
+            other.weight,
+            other.ascent,
+            other.origin,
+        ) && self.ground.source.key() == other.ground.source.key()
+            && self.ground.size == other.ground.size
+    }
+
+    /// The glass letters at `scale` and the device pixels of the screen they cover, kept; `None` without glyphs.
+    fn letters(
+        &self,
+        cx: &PaintCx<'_>,
+        layout: &ParagraphLayout,
+        scale: f64,
+    ) -> Option<(ResourceId, ImageResource, [u32; 4])> {
+        use std::hash::{Hash, Hasher};
+        let (width, height) = device_size(self.ground.size, scale);
+        let at = Point::new(self.origin.x + self.rect.x(), self.origin.y + self.rect.y());
+        let first = layout.lines().first().map_or(0.0, |line| line.baseline);
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        (
+            self.text.as_str(),
+            self.size.to_bits(),
+            self.weight.0,
+            self.ascent.to_bits(),
+            at.x.to_bits(),
+            at.y.to_bits(),
+            self.rect.width().to_bits(),
+            self.rect.height().to_bits(),
+        )
+            .hash(&mut hasher);
+        let key = KeptKey {
+            source: self.ground.source.key(),
+            width,
+            height,
+            scale: scale.to_bits(),
+            kind: Kind::Glass(hasher.finish()),
+        };
+        // the box in device pixels: the letters are cut to it and to the screen
+        let bound = [
+            ((at.x * scale).floor().max(0.0) as u32).min(width),
+            ((at.y * scale).floor().max(0.0) as u32).min(height),
+            ((self.rect.max_x() + self.origin.x) * scale)
+                .ceil()
+                .clamp(0.0, f64::from(width)) as u32,
+            ((self.rect.max_y() + self.origin.y) * scale)
+                .ceil()
+                .clamp(0.0, f64::from(height)) as u32,
+        ];
+        let found = KEPT.with_borrow_mut(|kept| {
+            let i = kept.iter().position(|k| k.key == key)?;
+            let entry = kept.remove(i);
+            let found = (entry.id, entry.image.clone());
+            kept.push(entry);
+            Some(found)
+        });
+        let region = |image: &ImageResource, left: u32, top: u32| {
+            [left, top, left + image.width, top + image.height]
+        };
+        if let Some((id, image)) = found {
+            let left = REGIONS.with_borrow(|r| r.get(&id).copied())?;
+            return Some((id, image.clone(), region(&image, left[0], left[1])));
+        }
+        // each glyph's coverage at its device pixel, as the renderer places it
+        let mut raster = GlyphRaster::new(cx.env().text.clone());
+        let mut glyphs = Vec::new();
+        for line in layout.lines() {
+            for run in &line.runs {
+                let size_px = f64::from(run.run.size) * scale;
+                for g in &run.run.glyphs {
+                    let px = (at.x + run.origin.x + f64::from(g.x)) * scale;
+                    let py = (at.y + self.ascent - first + run.origin.y + f64::from(g.y)) * scale;
+                    let ix = px.floor();
+                    let key = GlyphKey::for_draw(
+                        run.run.font,
+                        g.id,
+                        size_px,
+                        px - ix,
+                        true,
+                        [1.0, 1.0, 1.0],
+                    );
+                    let Ok(Some(glyph)) = raster.rasterize(&key) else {
+                        continue;
+                    };
+                    if glyph.format != GlyphFormat::Coverage {
+                        continue;
+                    }
+                    let x = ix as i64 + i64::from(glyph.bearing_x);
+                    let y = py.round() as i64 - i64::from(glyph.bearing_y);
+                    glyphs.push((x, y, glyph));
+                }
+            }
+        }
+        let clamp = |v: i64, lo: u32, hi: u32| v.clamp(i64::from(lo), i64::from(hi)) as u32;
+        let (mut x0, mut y0, mut x1, mut y1) = (u32::MAX, u32::MAX, 0, 0);
+        for (x, y, g) in &glyphs {
+            x0 = x0.min(clamp(*x, bound[0], bound[2]));
+            y0 = y0.min(clamp(*y, bound[1], bound[3]));
+            x1 = x1.max(clamp(x + i64::from(g.width), bound[0], bound[2]));
+            y1 = y1.max(clamp(y + i64::from(g.height), bound[1], bound[3]));
+        }
+        if x0 >= x1 || y0 >= y1 {
+            return None;
+        }
+        let (rw, rh) = ((x1 - x0) as usize, (y1 - y0) as usize);
+        let mut coverage = vec![0u8; rw * rh];
+        for (x, y, g) in &glyphs {
+            for row in 0..g.height as i64 {
+                let sy = y + row - i64::from(y0);
+                if sy < 0 || sy >= rh as i64 {
+                    continue;
+                }
+                for col in 0..g.width as i64 {
+                    let sx = x + col - i64::from(x0);
+                    if sx < 0 || sx >= rw as i64 {
+                        continue;
+                    }
+                    let v = g.pixels[(row * i64::from(g.stride) + col) as usize];
+                    let at = sy as usize * rw + sx as usize;
+                    coverage[at] = coverage[at].saturating_add(v);
+                }
+            }
+        }
+        let region_px = [x0, y0, x1, y1];
+        let source = &self.ground.source;
+        let (id, image) = kept(key, || {
+            let pixels =
+                wallpaper::glass_letters(source, width, height, scale, region_px, &coverage);
+            ImageResource {
+                revision: 1,
+                width: x1 - x0,
+                height: y1 - y0,
+                stride: (x1 - x0) * 4,
+                format: PixelFormat::Rgba8Premultiplied,
+                pixels: Arc::from(pixels),
+            }
+        });
+        REGIONS.with_borrow_mut(|r| {
+            r.retain(|k, _| KEPT.with_borrow(|kept| kept.iter().any(|e| e.id == *k)));
+            r.insert(id, [x0, y0]);
+        });
+        Some((id, image, region_px))
+    }
+}
+
+thread_local! {
+    /// Where each kept picture of glass letters lies on its screen: its top-left device pixel.
+    static REGIONS: RefCell<std::collections::HashMap<ResourceId, [u32; 2]>> =
+        RefCell::new(std::collections::HashMap::new());
+}
+
+impl<M: 'static> Widget<M> for GlassText {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: SizeSpec::Fixed(self.rect.width()),
+            height: SizeSpec::Fixed(self.rect.height()),
+            position: self.rect.origin,
+            ..LayoutSpec::new(ContainerKind::Leaf)
+        }
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self.rect != old.rect {
+            Change::Layout
+        } else if !self.same(old) {
+            Change::Paint
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: self.rect.size,
+            baseline: Some(self.ascent),
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        let label = Label {
+            color: Some(WHITE),
+            ..label_of(&self.text, self.size, self.weight, self.rect, self.ascent)
+        };
+        let Some(layout) = label.laid_out(cx) else {
+            return;
+        };
+        let scale = cx.env().scale;
+        let Some((id, image, region)) = self.letters(cx, &layout, scale) else {
+            return;
+        };
+        let at = Point::new(self.origin.x + self.rect.x(), self.origin.y + self.rect.y());
+        let dst = Rect::new(
+            f64::from(region[0]) / scale - at.x,
+            f64::from(region[1]) / scale - at.y,
+            f64::from(image.width) / scale,
+            f64::from(image.height) / scale,
+        );
+        cx.image(id, &image, dst, Sampling::Nearest);
+    }
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        cx.role(Role::StaticText);
+        cx.name(self.text.clone());
+    }
+}
+
+/// A plain label of `text` at `size` and `weight` in `rect`, its first baseline `ascent` below its top.
+fn label_of(text: &str, size: f64, weight: FontWeight, rect: Rect, ascent: f64) -> Label {
+    Label {
+        text: text.to_owned(),
+        size,
+        weight,
+        color: None,
+        rect,
+        ascent,
+        wrap: false,
+        live: None,
+        shadow: false,
+    }
+}
+
+/// An avatar at `rect`: a plain disc, its picture or initials as children, with no ring and no shadow, and the mark
+/// of a user with a session.
 pub(crate) struct Avatar<M> {
     pub rect: Rect,
     /// No picture: the disc is filled behind the initials.
@@ -1034,37 +1311,9 @@ impl<M: 'static> Widget<M> for Avatar<M> {
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
         let radius = self.rect.width() / 2.0;
         let center = Point::new(radius, radius);
-        let outer = radius + AVATAR_SHADOW_RADIUS;
-        let shadow = |alpha| Color::new(0.0, 0.0, 0.0, alpha);
-        cx.push(PaintOp::Fill {
-            shape: circle(center, outer),
-            paint: Paint::Radial {
-                center,
-                radius: outer,
-                stops: vec![
-                    GradientStop {
-                        offset: 0.0,
-                        color: shadow(AVATAR_SHADOW_OPACITY),
-                    },
-                    GradientStop {
-                        offset: (radius / outer) as f32,
-                        color: shadow(AVATAR_SHADOW_OPACITY),
-                    },
-                    GradientStop {
-                        offset: 1.0,
-                        color: shadow(0.0),
-                    },
-                ],
-            },
-        });
         if self.filled {
             fill(cx, circle(center, radius), rgba(AVATAR_FILL, 1.0));
         }
-        cx.push(PaintOp::Stroke {
-            shape: circle(center, radius - RING_WIDTH / 2.0),
-            width: RING_WIDTH,
-            paint: Paint::Solid(Color::new(1.0, 1.0, 1.0, RING_ALPHA)),
-        });
         if self.logged_in {
             let mark = Point::new(
                 2.0 * radius - LOGGED_IN_RADIUS,
@@ -1230,6 +1479,95 @@ impl<M: 'static> Widget<M> for FieldFrame<M> {
             cx.initial_focus();
         }
     }
+}
+
+/// The selection's border along the inside of a tile of `size`.
+fn selection_border(cx: &mut PaintCx<'_>, size: Size) {
+    let half = SELECTION_BORDER_WIDTH / 2.0;
+    cx.push(PaintOp::Stroke {
+        shape: continuous(
+            Rect::new(
+                half,
+                half,
+                size.width - SELECTION_BORDER_WIDTH,
+                size.height - SELECTION_BORDER_WIDTH,
+            ),
+            SELECTION_RADIUS - half,
+        ),
+        width: SELECTION_BORDER_WIDTH,
+        paint: Paint::Solid(Color::new(1.0, 1.0, 1.0, SELECTION_BORDER_ALPHA)),
+    });
+}
+
+/// The selected picker tile's plate at `rect`: the control material in continuous corners of [`SELECTION_RADIUS`] with
+/// the selection's border, and no shadow.
+pub(crate) struct MaterialPlate {
+    pub rect: Rect,
+    pub material: FieldMaterial,
+}
+
+impl<M: 'static> Widget<M> for MaterialPlate {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: SizeSpec::Fixed(self.rect.width()),
+            height: SizeSpec::Fixed(self.rect.height()),
+            position: self.rect.origin,
+            ..LayoutSpec::new(ContainerKind::Leaf)
+        }
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        let key = |m: &FieldMaterial| (m.ground.source.key(), m.ground.size, m.strip, m.origin);
+        if self.rect != old.rect {
+            Change::Layout
+        } else if key(&self.material) != key(&old.material) {
+            Change::Paint
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: self.rect.size,
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        let size = cx.size();
+        let plate = continuous(
+            Rect::new(0.0, 0.0, size.width, size.height),
+            SELECTION_RADIUS,
+        );
+        let scale = cx.env().scale;
+        let m = &self.material;
+        match material(&m.ground, scale, m.strip) {
+            Some((id, image, region)) => {
+                cx.push(PaintOp::PushClip(plate));
+                let dst = Rect::new(
+                    f64::from(region[0]) / scale - m.origin.x,
+                    f64::from(region[1]) / scale - m.origin.y,
+                    f64::from(image.width) / scale,
+                    f64::from(image.height) / scale,
+                );
+                cx.image(id, &image, dst, Sampling::Nearest);
+                cx.push(PaintOp::PopClip);
+            }
+            None => fill(cx, plate, Color::new(1.0, 1.0, 1.0, SELECTION_FILL_ALPHA)),
+        }
+        selection_border(cx, size);
+    }
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
 }
 
 /// A glyph of the buttons beside the field.
@@ -1664,30 +2002,17 @@ impl<M: Clone + 'static> Widget<M> for Pressable<M> {
                 }
                 power_glyph(cx, Point::new(size.width / 2.0, size.height / 2.0));
             }
+            // a selected tile's plate ([`MaterialPlate`]), its first child, draws the selection; a tile that has the
+            // keyboard without the selection shows the selection's fill and border
             Look::Tile { selected } => {
-                if selected || (state.focused && cx.focus_visible()) {
+                if !selected && state.focused && cx.focus_visible() {
+                    let frame = Rect::new(0.0, 0.0, size.width, size.height);
                     fill(
                         cx,
-                        continuous(
-                            Rect::new(0.0, 0.0, size.width, size.height),
-                            SELECTION_RADIUS,
-                        ),
+                        continuous(frame, SELECTION_RADIUS),
                         Color::new(1.0, 1.0, 1.0, SELECTION_FILL_ALPHA),
                     );
-                    let half = SELECTION_BORDER_WIDTH / 2.0;
-                    cx.push(PaintOp::Stroke {
-                        shape: continuous(
-                            Rect::new(
-                                half,
-                                half,
-                                size.width - SELECTION_BORDER_WIDTH,
-                                size.height - SELECTION_BORDER_WIDTH,
-                            ),
-                            SELECTION_RADIUS - half,
-                        ),
-                        width: SELECTION_BORDER_WIDTH,
-                        paint: Paint::Solid(Color::new(1.0, 1.0, 1.0, SELECTION_BORDER_ALPHA)),
-                    });
+                    selection_border(cx, size);
                 }
             }
             // its children draw it: its material and its glyph

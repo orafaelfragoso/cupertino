@@ -1363,6 +1363,46 @@ fn a_typed_character_adds_its_dot_and_moves_the_caret_and_nothing_else_of_the_sc
 }
 
 #[test]
+fn the_time_is_glass_letters_made_once_from_the_screens_own_picture() {
+    let made = widgets::glass_made();
+    let mut run = Run::new(Surface::Lock);
+    // one picture of the time's letters; typing and the caret make none
+    assert_eq!(widgets::glass_made(), made + 1);
+    run.type_text("abc");
+    assert_eq!(widgets::glass_made(), made + 1);
+    // the time is an image laid over the kept picture, not text over what lies under the window: no run of glyphs is
+    // drawn at its size, and a picture of its letters is laid
+    let metrics = run.model().metrics;
+    let layout = crate::layout::Layout::new(
+        SCREEN.width,
+        SCREEN.height,
+        metrics.ascent,
+        metrics.descent,
+        metrics.placeholder,
+    );
+    let snapshot = run.driver.runtime().snapshot(run.window).unwrap();
+    let ops: Vec<&PaintOp> = snapshot
+        .display_list
+        .nodes
+        .iter()
+        .flat_map(|n| n.ops.iter())
+        .collect();
+    assert!(!ops.iter().any(|op| matches!(
+        op,
+        PaintOp::Glyphs { run, .. } if (f64::from(run.size) - layout.time_size).abs() < 0.5
+    )));
+    let glass = snapshot
+        .nodes
+        .iter()
+        .find(|n| n.widget.contains("GlassText"))
+        .expect("the time in glass letters");
+    assert!(ops.iter().any(|op| matches!(
+        op,
+        PaintOp::Image { dst, .. } if dst.width() > layout.time_size && dst.width() < glass.rect.width()
+    )));
+}
+
+#[test]
 fn a_typed_character_repaints_only_around_the_field() {
     let mut run = Run::new(Surface::Lock);
     run.type_text("x");
@@ -1843,9 +1883,88 @@ fn the_clock_and_the_user_block_are_each_a_part_no_larger_than_they_draw() {
     let layout = crate::layout::Layout::new(
         SCREEN.width,
         SCREEN.height,
+        metrics.ascent,
         metrics.descent,
         metrics.placeholder,
     );
     assert_eq!(field.min_y(), layout.pill.min_y());
     assert_eq!(field.width(), layout.pill.width());
+}
+
+#[test]
+fn the_names_shadow_is_a_gaussian_of_half_its_radius_held_by_the_user_block() {
+    // a blur radius of 6 pt is a deviation of 3 pt, and the block's layer holds three deviations past the name
+    let sigma = cupertino_raster_math::blur::sigma_for_radius(widgets::NAME_SHADOW_BLUR as f32);
+    assert_eq!(sigma, 3.0);
+    assert!(3.0 * f64::from(sigma) <= SHADOW_REACH);
+}
+
+#[test]
+fn the_selected_tile_is_its_frame_on_the_material_with_equal_padding_round_its_avatar_and_name() {
+    let run = Run::new(Surface::Picker);
+    let metrics = run.model().metrics;
+    let layout = crate::layout::Layout::new(
+        SCREEN.width,
+        SCREEN.height,
+        metrics.ascent,
+        metrics.descent,
+        metrics.placeholder,
+    );
+    let snapshot = run.driver.runtime().snapshot(run.window).unwrap();
+    let tile = |index: usize| {
+        let id = run
+            .driver
+            .runtime()
+            .find(run.window, &tile_key(index))
+            .unwrap();
+        snapshot.nodes.iter().find(|n| n.id == id).unwrap()
+    };
+    let selected = tile(run.model().picker.selected_index());
+    let inside = |name: &str| {
+        snapshot
+            .nodes
+            .iter()
+            .filter(|n| {
+                let parent = n
+                    .parent
+                    .and_then(|p| snapshot.nodes.iter().find(|m| m.id == p));
+                n.widget.contains(name)
+                    && (n.parent == Some(selected.id)
+                        || parent.is_some_and(|p| p.parent == Some(selected.id)))
+            })
+            .map(|n| n.rect)
+            .collect::<Vec<Rect>>()
+    };
+    // the plate is the tile's frame
+    assert_eq!(inside("MaterialPlate"), vec![selected.rect]);
+    let [avatar] = inside("Avatar")[..] else {
+        panic!("one avatar in the selected tile");
+    };
+    let name = inside("Decorative")
+        .into_iter()
+        .find(|r| r.width() == crate::layout::NAME_MAX_WIDTH)
+        .expect("the tile's name");
+    // the padding above the avatar is the padding below the name's descenders, and the content is centred across
+    let above = avatar.min_y() - selected.rect.min_y();
+    let baseline = name.min_y() + metrics.ascent * crate::layout::NAME_SIZE;
+    let below = selected.rect.max_y() - (baseline + metrics.descent * crate::layout::NAME_SIZE);
+    assert!((above - below).abs() < 1e-6, "{above} above, {below} below");
+    assert!((above - crate::layout::TILE_PADDING).abs() < 1e-6);
+    assert!(
+        (avatar.center().x - selected.rect.center().x).abs() < 1e-6
+            && (name.center().x - selected.rect.center().x).abs() < 1e-6
+    );
+    // the tiles stand further apart than the padding inside one, and the last row ends 0.1 of the height above the
+    // bottom
+    let (first, second) = (tile(0).rect, tile(1).rect);
+    let gap = (second.min_x() - first.max_x()).max(second.min_y() - first.max_y());
+    assert!(gap >= above, "tiles {gap} apart");
+    let bottom = snapshot
+        .nodes
+        .iter()
+        .filter(|n| n.widget.contains("Pressable") && n.rect.width() == crate::layout::TILE_WIDTH)
+        .map(|n| n.rect.max_y())
+        .fold(0.0_f64, f64::max);
+    assert!((bottom - 0.9 * SCREEN.height).abs() < 1e-6, "{bottom}");
+    assert!((layout.tile_height - selected.rect.height()).abs() < 1e-6);
 }

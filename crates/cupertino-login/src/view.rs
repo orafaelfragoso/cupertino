@@ -34,8 +34,8 @@ use cupertino_kit::theme::Color;
 
 use crate::interrupt::{self, Choice};
 use crate::layout::{
-    Layout, BUTTON_SIZE, HELP_SIZE, NAME_BASELINE_GAP, NAME_MAX_WIDTH, NAME_SIZE, SUBMIT_GAP,
-    TILE_WIDTH, USER_VIEW_BORDER,
+    Layout, BUTTON_SIZE, HELP_SIZE, NAME_MAX_WIDTH, NAME_SIZE, NOTICE_LINES, NOTICE_SIZE,
+    SUBMIT_GAP, TILE_WIDTH,
 };
 use crate::lock_notices::{self, Notice};
 use crate::model::{Key as PanelKey, Password, MAX_PASSWORD_BYTES, SHAKE_AMPLITUDE};
@@ -45,8 +45,9 @@ use crate::power::{self, Menu};
 use crate::user::{initials, User};
 use crate::wallpaper::Source;
 use widgets::{
-    Adornment, AlertBody, Avatar, Backdrop, Fade, FieldFrame, FieldMaterial, Glyph, GlyphKind,
-    Ground, Label, Look, NoticeCard, Place, Pressable, Slot, ESCAPE, WHITE,
+    Adornment, AlertBody, Avatar, Backdrop, Fade, FieldFrame, FieldMaterial, GlassText, Glyph,
+    GlyphKind, Ground, Label, Look, MaterialPlate, NoticeCard, Place, Pressable, Slot, ESCAPE,
+    WHITE,
 };
 
 /// The `app_id` of a lock surface's window, followed by `.` and the output's registry name: the surface roles give it
@@ -87,15 +88,12 @@ pub const LOGGED_IN: &str = "Logged in";
 /// Weights of the date and the names (medium) and of the time.
 const WEIGHT_MEDIUM: FontWeight = FontWeight(500);
 const WEIGHT_TIME: FontWeight = FontWeight(640);
-/// Size of the messages under the field and of the help (the field's text size).
-const NOTICE_SIZE: f64 = 13.0;
 /// Size of the text typed in the field and of its placeholder.
 const FIELD_TEXT_SIZE: f64 = 13.0;
 /// The password field's placeholder: white at half opacity.
 const PLACEHOLDER_COLOR: Color = Color::new(1.0, 1.0, 1.0, 0.5);
-/// Widest a message under the field draws, and how many lines it may take (the lines are approximate).
+/// Widest a message under the field draws.
 const NOTICE_MAX_WIDTH: f64 = 400.0;
-const NOTICE_LINES: f64 = 3.0;
 /// White at this alpha for the help line and the count of notifications not shown (approximate).
 const NOTICE_ALPHA: f32 = 0.8;
 /// Space between the screen's edges and the help line.
@@ -112,8 +110,8 @@ const NAME_INSETS: Insets = Insets {
     bottom: 0.0,
     right: SLOT_WIDTH,
 };
-/// How far the avatar's halo and the name's shadow reach past them: the user block's layer holds them.
-const HALO_REACH: f64 = 16.0;
+/// How far the name's shadow reaches past its line: three deviations of its blur, rounded up. The user block's layer
+/// holds it.
 const SHADOW_REACH: f64 = 12.0;
 /// Panel title and info: the title's weight; the icon disc's fill (approximate, a neutral grey).
 const PANEL_ICON_FILL: Color = Color::new(0.60, 0.62, 0.66, 1.0);
@@ -458,7 +456,14 @@ fn within(rect: Rect, origin: Point) -> Rect {
 }
 
 /// The clock at the top of a screen, a part of its own just its size.
-fn clock<M: 'static>(clock: &Clock, layout: &Layout, metrics: Metrics, opacity: f64) -> Element<M> {
+/// The date in solid white and the time below it in glass letters made from `ground`'s picture.
+fn clock<M: 'static>(
+    clock: &Clock,
+    layout: &Layout,
+    metrics: Metrics,
+    opacity: f64,
+    ground: &Ground,
+) -> Element<M> {
     let date = metrics.line(
         layout.center_x,
         layout.date_width(),
@@ -485,13 +490,15 @@ fn clock<M: 'static>(clock: &Clock, layout: &Layout, metrics: Metrics, opacity: 
                 within(date, rect.origin),
                 metrics,
             )),
-            Element::new(label(
-                &clock.time,
-                layout.time_size,
-                WEIGHT_TIME,
-                within(time, rect.origin),
-                metrics,
-            )),
+            Element::new(GlassText {
+                text: clock.time.clone(),
+                size: layout.time_size,
+                weight: WEIGHT_TIME,
+                rect: within(time, rect.origin),
+                ascent: metrics.ascent * layout.time_size,
+                ground: ground.clone(),
+                origin: rect.origin,
+            }),
         ],
     ))
 }
@@ -513,9 +520,21 @@ pub fn screen<M: Clone + 'static>(
 ) -> Element<M> {
     let metrics = screen.metrics;
     let (width, height) = (screen.size.width, screen.size.height);
-    let layout = Layout::new(width, height, metrics.descent, metrics.placeholder);
+    let layout = Layout::new(
+        width,
+        height,
+        metrics.ascent,
+        metrics.descent,
+        metrics.placeholder,
+    );
     let ground = ground(screen.wallpaper, screen.size, screen.dim);
-    let mut parts: Vec<Element<M>> = vec![clock(screen.clock, &layout, metrics, screen.opacity)];
+    let mut parts: Vec<Element<M>> = vec![clock(
+        screen.clock,
+        &layout,
+        metrics,
+        screen.opacity,
+        &ground,
+    )];
 
     // the user block: the avatar, the name, the field and its buttons and the messages under it, one part
     let name_line = metrics.line(
@@ -525,20 +544,50 @@ pub fn screen<M: Clone + 'static>(
         NAME_SIZE,
         1.0,
     );
+    // the messages under the field, one under the other: the refusal takes a line, a message up to three as the room
+    // above the help line allows
     let line_height = (metrics.ascent + metrics.descent) * NOTICE_SIZE;
-    let message = |i: usize| {
-        metrics.line(
-            layout.center_x,
-            NOTICE_MAX_WIDTH,
-            layout.notice_baseline + i as f64 * NOTICE_LINES * line_height,
-            NOTICE_SIZE,
-            NOTICE_LINES,
-        )
-    };
+    let messages: Vec<(&str, f64)> = screen
+        .denied_said
+        .then_some((DENIED, 1.0))
+        .into_iter()
+        .chain(screen.notice.map(|notice| (notice, NOTICE_LINES)))
+        .collect();
+    let mut baseline = layout.notice_baseline;
+    let mut placed = Vec::with_capacity(messages.len());
+    for (text, most) in messages {
+        let top = baseline - metrics.ascent * NOTICE_SIZE;
+        let room = ((layout.notice_bottom - top) / line_height).floor();
+        let lines = room.clamp(1.0, most);
+        placed.push((
+            text,
+            metrics.line(
+                layout.center_x,
+                NOTICE_MAX_WIDTH,
+                baseline,
+                NOTICE_SIZE,
+                lines,
+            ),
+        ));
+        baseline += lines * line_height;
+    }
+    // the block holds the whole room the messages may take, so it keeps its size as they come and go
+    let notices = metrics.line(
+        layout.center_x,
+        NOTICE_MAX_WIDTH,
+        layout.notice_baseline,
+        NOTICE_SIZE,
+        1.0,
+    );
+    let notices = notices.union(&Rect::new(
+        notices.x(),
+        notices.y(),
+        notices.width(),
+        (layout.notice_bottom - notices.y()).max(notices.height()),
+    ));
     let reach = SHAKE_AMPLITUDE + widgets::FAILURE_OUTLINE_WIDTH;
     let block = layout
         .avatar
-        .outset(HALO_REACH)
         .union(&name_line.outset(SHADOW_REACH))
         .union(&layout.pill.inset(Insets {
             top: -reach,
@@ -547,8 +596,7 @@ pub fn screen<M: Clone + 'static>(
             right: -reach,
         }))
         .union(&layout.help_button)
-        .union(&message(0))
-        .union(&message(1));
+        .union(&notices);
     let at = block.origin;
     let mut children: Vec<Element<M>> =
         vec![avatar(screen.user, within(layout.avatar, at), metrics)];
@@ -718,12 +766,7 @@ pub fn screen<M: Clone + 'static>(
         );
     }
 
-    let messages = screen
-        .denied_said
-        .then_some(DENIED)
-        .into_iter()
-        .chain(screen.notice);
-    for (i, notice) in messages.enumerate() {
+    for (notice, rect) in placed {
         children.push(Element::new(Label {
             wrap: true,
             live: Some(Live::Assertive),
@@ -731,7 +774,7 @@ pub fn screen<M: Clone + 'static>(
                 notice,
                 NOTICE_SIZE,
                 FontWeight::REGULAR,
-                within(message(i), at),
+                within(rect, at),
                 metrics,
             )
         }));
@@ -862,15 +905,27 @@ pub fn tile_key(index: usize) -> Key {
 pub fn picker<M: Clone + 'static>(screen: &PickerScreen<'_>, map: fn(Input) -> M) -> Element<M> {
     let metrics = screen.metrics;
     let (width, height) = (screen.size.width, screen.size.height);
-    let layout = Layout::new(width, height, metrics.descent, metrics.placeholder);
-    let mut parts: Vec<Element<M>> = vec![clock(screen.clock, &layout, metrics, screen.opacity)];
+    let layout = Layout::new(
+        width,
+        height,
+        metrics.ascent,
+        metrics.descent,
+        metrics.placeholder,
+    );
+    let ground = ground(screen.wallpaper, screen.size, screen.dim);
+    let mut parts: Vec<Element<M>> = vec![clock(
+        screen.clock,
+        &layout,
+        metrics,
+        screen.opacity,
+        &ground,
+    )];
     let picker = screen.picker;
     let page = picker.page(screen.max_per_page);
     let grid = Grid::for_count(screen.max_per_page.min(picker.tiles().len()));
     let frames = layout.tiles(grid, page.len());
-    let diameter = layout.avatar.width();
-    let avatar_center = Point::new(TILE_WIDTH / 2.0, USER_VIEW_BORDER + diameter / 2.0);
-    let name_baseline = 2.0 * USER_VIEW_BORDER + diameter + NAME_BASELINE_GAP;
+    let tile_avatar = layout.tile_avatar();
+    let name_baseline = layout.tile_name_baseline();
     let area = frames
         .iter()
         .copied()
@@ -884,45 +939,49 @@ pub fn picker<M: Clone + 'static>(screen: &PickerScreen<'_>, map: fn(Input) -> M
             Tile::Other => None,
         };
         let name = user.map_or(OTHER_LABEL, |u| u.display.as_str());
+        let selected = index == picker.selected_index();
+        // the selected tile stands on the control material, its frame the tile's
+        let plate = selected.then(|| {
+            Element::new(MaterialPlate {
+                rect: Rect::new(0.0, 0.0, frame.width(), frame.height()),
+                material: FieldMaterial {
+                    ground: ground.clone(),
+                    strip: frame,
+                    origin: frame.origin,
+                },
+            })
+        });
         let tile = Pressable {
             rect: within(frame, area.origin),
-            look: Look::Tile {
-                selected: index == picker.selected_index(),
-            },
+            look: Look::Tile { selected },
             label: name.to_owned(),
             description: user.filter(|u| u.logged_in).map(|_| LOGGED_IN.to_owned()),
             on_press: map(Input::Choose(index)),
             on_focus: Some(map(Input::Select(index))),
             on_hover: Some(map(Input::Select(index))),
             focusable: true,
-            children: vec![
-                avatar(
-                    user,
-                    Rect::new(
-                        avatar_center.x - diameter / 2.0,
-                        USER_VIEW_BORDER,
-                        diameter,
-                        diameter,
-                    ),
-                    metrics,
-                ),
-                Element::new(Decorative(Label {
-                    shadow: true,
-                    ..label(
-                        name,
-                        NAME_SIZE,
-                        WEIGHT_MEDIUM,
-                        metrics.line(
-                            avatar_center.x,
-                            NAME_MAX_WIDTH,
-                            name_baseline,
+            children: plate
+                .into_iter()
+                .chain([
+                    avatar(user, tile_avatar, metrics),
+                    Element::new(Decorative(Label {
+                        shadow: true,
+                        ..label(
+                            name,
                             NAME_SIZE,
-                            1.0,
-                        ),
-                        metrics,
-                    )
-                })),
-            ],
+                            WEIGHT_MEDIUM,
+                            metrics.line(
+                                TILE_WIDTH / 2.0,
+                                NAME_MAX_WIDTH,
+                                name_baseline,
+                                NAME_SIZE,
+                                1.0,
+                            ),
+                            metrics,
+                        )
+                    })),
+                ])
+                .collect(),
         };
         tiles.push(Element::new(tile).key(tile_key(index)));
     }
@@ -936,7 +995,7 @@ pub fn picker<M: Clone + 'static>(screen: &PickerScreen<'_>, map: fn(Input) -> M
     let power = screen.power.is_some();
     let selected = picker.selected_index();
     Element::new(Backdrop {
-        ground: Some(ground(screen.wallpaper, screen.size, screen.dim)),
+        ground: Some(ground),
         hidden: false,
         on_activity: None,
         keys: Box::new(move |keysym, _| {

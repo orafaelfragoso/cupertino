@@ -666,6 +666,37 @@ pub fn box_radii(sigma: f64) -> [usize; 3] {
 /// [`MATERIAL_SATURATION`], [`MATERIAL_FILL`] grey laid over at [`MATERIAL_FILL_ALPHA`], lightened to at least
 /// [`MATERIAL_TONE`] and white laid over at [`MATERIAL_LIFT`]. Opaque premultiplied RGBA of the region, dithered; empty for an empty region.
 pub fn frosted(source: &Source, width: u32, height: u32, scale: f64, region: [u32; 4]) -> Vec<u8> {
+    let Some((blurred, [x0, y0, x1, _])) =
+        blurred(source, width, height, scale, region, MATERIAL_BLUR)
+    else {
+        return Vec::new();
+    };
+    let rw = (x1 - x0) as usize;
+    let mut out = vec![0u8; blurred.len() * 4];
+    for (j, line) in out.chunks_mut(rw * 4).enumerate() {
+        for (i, px) in line.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            let c = material(blurred[j * rw + i]);
+            let (x, y) = (x0 + i as u32, y0 + j as u32);
+            for k in 0..3 {
+                px[k] = dither::store(c[k], x, y);
+            }
+            px[3] = 255;
+        }
+    }
+    out
+}
+
+/// The fully dimmed picture of `source` on a screen of `width` x `height` device pixels at `scale`, blurred by `blur`
+/// points, over `region` (device pixels `[x0, y0, x1, y1]`, cut to the screen): its colours (0 to 1) row by row and the
+/// region they cover; `None` for an empty region.
+fn blurred(
+    source: &Source,
+    width: u32,
+    height: u32,
+    scale: f64,
+    region: [u32; 4],
+    blur: f64,
+) -> Option<(Vec<[f32; 3]>, [u32; 4])> {
     let [x0, y0, x1, y1] = [
         region[0].min(width),
         region[1].min(height),
@@ -673,16 +704,14 @@ pub fn frosted(source: &Source, width: u32, height: u32, scale: f64, region: [u3
         region[3].min(height),
     ];
     if x0 >= x1 || y0 >= y1 {
-        return Vec::new();
+        return None;
     }
     let scale = if scale.is_finite() && scale > 0.0 {
         scale
     } else {
         1.0
     };
-    let sigma = f64::from(cupertino_raster_math::blur::sigma_for_radius(
-        MATERIAL_BLUR as f32,
-    )) * scale;
+    let sigma = f64::from(cupertino_raster_math::blur::sigma_for_radius(blur as f32)) * scale;
     let radii = box_radii(sigma);
     let reach = radii.iter().sum::<usize>() as u32;
     // the blur reads the picture around the region
@@ -714,19 +743,85 @@ pub fn frosted(source: &Source, width: u32, height: u32, scale: f64, region: [u3
         box_pass(&mut pixels, (w, h), radius, true);
     }
     let (rw, rh) = ((x1 - x0) as usize, (y1 - y0) as usize);
+    let mut out = Vec::with_capacity(rw * rh);
+    for j in 0..rh {
+        let sy = (y0 - outer[1]) as usize + j;
+        let at = sy * w + (x0 - outer[0]) as usize;
+        out.extend_from_slice(&pixels[at..at + rw]);
+    }
+    Some((out, [x0, y0, x1, y1]))
+}
+
+/// The glass the large time is drawn in: the picture under its letters blurred by this radius, points, and white laid
+/// over it at this alpha, so the letters read as white glass the picture shows through (approximate).
+pub const GLASS_TEXT_BLUR: f64 = 20.0;
+pub const GLASS_TEXT_WHITE: f32 = 0.78;
+/// The glass letters' rims, along the inside of their edges: this wide, points; white at this alpha along the top and
+/// left edges and black at this alpha along the bottom and right ones (approximate).
+pub const GLASS_TEXT_RIM: f64 = 1.0;
+pub const GLASS_TEXT_RIM_LIGHT: f32 = 0.5;
+pub const GLASS_TEXT_RIM_DARK: f32 = 0.12;
+
+/// The glass letters over `region` (device pixels `[x0, y0, x1, y1]`) of the fully dimmed picture of `source` on a
+/// screen of `width` x `height` device pixels at `scale`, in the shape of `coverage` (one byte a pixel of the region,
+/// row by row): the picture blurred by [`GLASS_TEXT_BLUR`], [`GLASS_TEXT_WHITE`] white laid over it, a light rim along
+/// the letters' top and left edges and a dark one along their bottom and right, each [`GLASS_TEXT_RIM`] wide.
+/// Premultiplied RGBA of the region, dithered, clear outside the letters; empty when the region is empty or the
+/// coverage is not of its size.
+#[allow(clippy::too_many_arguments)]
+pub fn glass_letters(
+    source: &Source,
+    width: u32,
+    height: u32,
+    scale: f64,
+    region: [u32; 4],
+    coverage: &[u8],
+) -> Vec<u8> {
+    let Some((blurred, [x0, y0, x1, y1])) =
+        blurred(source, width, height, scale, region, GLASS_TEXT_BLUR)
+    else {
+        return Vec::new();
+    };
+    let (rw, rh) = ((x1 - x0) as usize, (y1 - y0) as usize);
+    if coverage.len() != rw * rh || region != [x0, y0, x1, y1] {
+        return Vec::new();
+    }
+    let rim = (GLASS_TEXT_RIM * scale).round().max(1.0) as isize;
+    let cover = |i: isize, j: isize| -> f32 {
+        if i < 0 || j < 0 || i >= rw as isize || j >= rh as isize {
+            0.0
+        } else {
+            f32::from(coverage[j as usize * rw + i as usize]) / 255.0
+        }
+    };
     let mut out = vec![0u8; rw * rh * 4];
     for (j, line) in out.chunks_mut(rw * 4).enumerate() {
         for (i, px) in line.as_chunks_mut::<4>().0.iter_mut().enumerate() {
-            let (sx, sy) = ((x0 - outer[0]) as usize + i, (y0 - outer[1]) as usize + j);
-            let c = material(pixels[sy * w + sx]);
+            let a = f32::from(coverage[j * rw + i]) / 255.0;
+            if a <= 0.0 {
+                continue;
+            }
+            let (ii, jj) = (i as isize, j as isize);
+            // an edge facing up and left: the letter here, less of it `rim` up and to the left
+            let light = (a - cover(ii - rim, jj - rim)).clamp(0.0, 1.0) * GLASS_TEXT_RIM_LIGHT;
+            let dark = (a - cover(ii + rim, jj + rim)).clamp(0.0, 1.0) * GLASS_TEXT_RIM_DARK;
+            let c = glass_text(blurred[j * rw + i]).map(|v| {
+                let lit = v + (1.0 - v) * light;
+                lit * (1.0 - dark)
+            });
             let (x, y) = (x0 + i as u32, y0 + j as u32);
             for k in 0..3 {
-                px[k] = dither::store(c[k], x, y);
+                px[k] = dither::store(c[k] * a, x, y);
             }
-            px[3] = 255;
+            px[3] = dither::store(a, x, y).max(px[0].max(px[1]).max(px[2]));
         }
     }
     out
+}
+
+/// The glass letters' colour over the blurred colour `c` (0 to 1): [`GLASS_TEXT_WHITE`] white laid over it.
+pub fn glass_text(c: [f32; 3]) -> [f32; 3] {
+    c.map(|v| v + (1.0 - v) * GLASS_TEXT_WHITE)
 }
 
 /// The control material's colour over the blurred colour `c` (0 to 1): saturated, the grey laid over, lightened, the
@@ -1253,6 +1348,56 @@ mod tests {
         for light in [0.6, 0.75, 0.9] {
             let on = material([light; 3])[0];
             assert!(light - on > 0.08, "{light}: {on}");
+        }
+    }
+
+    #[test]
+    fn glass_letters_read_as_white_glass_with_a_light_rim_up_and_left_and_a_dark_one_down_and_right(
+    ) {
+        // a dark grey screen of 100 x 60 points at scale 1, a square letter from (30, 20) to (70, 40)
+        let p = picture(100, 60, |_, _| 40);
+        let region = [20, 10, 80, 50];
+        let (rw, rh) = (60usize, 40usize);
+        let mut coverage = vec![0u8; rw * rh];
+        for y in 10..30 {
+            for x in 10..50 {
+                coverage[y * rw + x] = 255;
+            }
+        }
+        let out = glass_letters(&Source::Picture(p), 100, 60, 1.0, region, &coverage);
+        assert_eq!(out.len(), rw * rh * 4);
+        let at = |x: u32, y: u32| pixel(&out, rw as u32, x, y);
+        // outside the letter nothing is drawn
+        assert_eq!(at(2, 2), [0, 0, 0, 0]);
+        // inside it is opaque and mostly white over the dark picture, as glass that lets it through
+        let middle = at(30, 20);
+        assert_eq!(middle[3], 255);
+        let white = f32::from(middle[0]) / 255.0;
+        assert!((0.7..0.9).contains(&white), "{middle:?}");
+        // the top-left edge is lighter than the middle, the bottom-right one darker
+        let (top_left, bottom_right) = (at(10, 10), at(49, 29));
+        assert!(top_left[0] > middle[0] + 10, "{top_left:?} {middle:?}");
+        assert!(
+            bottom_right[0] + 10 < middle[0],
+            "{bottom_right:?} {middle:?}"
+        );
+        // a coverage of another size draws nothing
+        assert!(glass_letters(
+            &Source::Picture(picture(100, 60, |_, _| 40)),
+            100,
+            60,
+            1.0,
+            region,
+            &[0; 3]
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn glass_letters_brighten_any_picture_toward_white() {
+        for v in [0.0, 0.2, 0.5, 0.9] {
+            let c = glass_text([v; 3])[0];
+            assert!(c >= GLASS_TEXT_WHITE && c >= v, "{v}: {c}");
         }
     }
 

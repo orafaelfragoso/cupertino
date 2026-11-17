@@ -76,17 +76,17 @@ impl Kind {
     pub fn text(self) -> &'static Text {
         const LOG_OUT: Text = Text {
             title: "Log out now?",
-            info_before: Some("Logging out automatically in "),
+            info_before: Some("Logging out in "),
             confirm: "Log Out",
         };
         const RESTART: Text = Text {
             title: "Restart this computer?",
-            info_before: Some("Restarting automatically in "),
+            info_before: Some("Restarting in "),
             confirm: "Restart",
         };
         const SHUT_DOWN: Text = Text {
             title: "Turn off this computer?",
-            info_before: Some("Turning off automatically in "),
+            info_before: Some("Turning off in "),
             confirm: "Shut Down",
         };
         const POWER_BUTTON: Text = Text {
@@ -768,15 +768,15 @@ mod tests {
     fn the_message_is_the_sentence_with_the_countdown_in_seconds() {
         assert_eq!(
             Kind::ShutDown.countdown_message(60).as_deref(),
-            Some("Turning off automatically in 60\u{a0}seconds.")
+            Some("Turning off in 60\u{a0}seconds.")
         );
         assert_eq!(
             Kind::LogOut.countdown_message(1).as_deref(),
-            Some("Logging out automatically in 1\u{a0}second.")
+            Some("Logging out in 1\u{a0}second.")
         );
         assert_eq!(
             Kind::Restart.countdown_message(59).as_deref(),
-            Some("Restarting automatically in 59\u{a0}seconds.")
+            Some("Restarting in 59\u{a0}seconds.")
         );
     }
 

@@ -1,5 +1,7 @@
 //! The connection: globals, surfaces with their roles and buffers, seat input and the event loop.
 
+#[path = "commit.rs"]
+pub(crate) mod commit;
 #[path = "gpu.rs"]
 pub(crate) mod gpu;
 
@@ -82,6 +84,7 @@ use crate::input::{
 use crate::output::{identification, physical_size, OutputBuilder, OutputId, OutputTransform};
 use crate::scale::ScaleSources;
 use crate::text_input::{Preedit, TextInput, TextInputDone};
+use commit::Commit;
 use wayland_client::protocol::wl_data_device_manager::DndAction as DragActions;
 
 use crate::{
@@ -398,7 +401,7 @@ enum Role {
         current: Option<PopupConfigure>,
     },
     External {
-        role: Box<dyn ExternalRole>,
+        role: Arc<dyn ExternalRole>,
         /// The size of the latest [`State::configure_external`]; a 0 dimension is left to the client.
         size: (u32, u32),
     },
@@ -415,7 +418,7 @@ enum Role {
 
 /// The role an extension gives a surface of [`Connection::external_surface`] through a protocol of its own, such as
 /// a layer surface. The connection calls it where the role's requests belong in the surface's lifecycle.
-pub trait ExternalRole {
+pub trait ExternalRole: Send + Sync {
     /// Acknowledge the configure `serial`, which the frame being presented answers. Called before the commit.
     fn ack_configure(&self, serial: u32);
 
@@ -460,7 +463,8 @@ struct Surface {
     entered: Vec<OutputId>,
     /// The scale last reported to the application, which buffers are drawn at.
     scale: Scale,
-    serials: Serials,
+    /// The configure serials, shared with the commits made for the surface.
+    shared: commit::SharedState,
     slots: Vec<Slot>,
     next_slot: u64,
     /// The memory of the next buffer, made while the surface draws into the ones it has.
@@ -469,6 +473,60 @@ struct Surface {
     presented_at: Option<Instant>,
     /// The surface's `wp_linux_drm_syncobj_surface_v1` while it shows dmabufs with explicit sync.
     syncobj: Option<wayland_protocols::wp::linux_drm_syncobj::v1::client::wp_linux_drm_syncobj_surface_v1::WpLinuxDrmSyncobjSurfaceV1>,
+}
+
+impl Surface {
+    fn serials(&self) -> Serials {
+        commit::lock(&self.shared).serials
+    }
+
+    /// Who acknowledges the surface's configures, and its latest configure, which a frame drawn now answers; `None`
+    /// for a subsurface, which answers none.
+    fn answers(&self) -> Result<Option<(commit::Ack, u32)>, Error> {
+        let ack = match &self.role {
+            Role::Toplevel { xdg, .. } | Role::Popup { xdg, .. } => commit::Ack::Xdg(xdg.clone()),
+            Role::External { role, .. } => commit::Ack::External(Arc::clone(role)),
+            Role::Subsurface { .. } => return Ok(None),
+        };
+        let serial = self.serials().latest().ok_or(Error::NotConfigured)?;
+        Ok(Some((ack, serial)))
+    }
+
+    /// How a buffer is scaled onto the surface to show `logical` points at `scale`: through the viewport where it has
+    /// one, showing the `source` rectangle of the buffer (pixels) when given and all of it otherwise; else by a whole
+    /// buffer scale, which shows all of it.
+    fn scaling(
+        &mut self,
+        logical: (u32, u32),
+        scale: Scale,
+        source: Option<(f64, f64, f64, f64)>,
+    ) -> Result<commit::Scaling, Error> {
+        match (&self.viewport, scale.integer()) {
+            (Some(viewport), _) => {
+                let source = match source {
+                    Some(source) => {
+                        self.zoomed = true;
+                        Some(source)
+                    }
+                    None if self.zoomed => {
+                        self.zoomed = false;
+                        Some((-1.0, -1.0, -1.0, -1.0))
+                    }
+                    None => None,
+                };
+                Ok(commit::Scaling::Viewport {
+                    viewport: viewport.clone(),
+                    source,
+                    destination: logical,
+                })
+            }
+            (None, _) if source.is_some() => Err(Error::Protocol(
+                "a cropped frame on a surface without a viewport",
+            )),
+            (None, Some(n)) => Ok(commit::Scaling::Buffer(n)),
+            (None, None) => Err(Error::InvalidScale),
+        }
+    }
 }
 
 /// Dispatch state of the connection. Extensions implement `Dispatch` for it with user data of their own type, so their
@@ -825,7 +883,7 @@ impl Connection {
         } else {
             None
         };
-        let positioner = positioner(&s.wm_base, &qh, placement, s.surface(parent)?.serials)?;
+        let positioner = positioner(&s.wm_base, &qh, placement, s.surface(parent)?.serials())?;
         let id = s.next_id();
         let wl = s.compositor.create_surface(&qh, id);
         let xdg = s.wm_base.get_xdg_surface(&wl, &qh, id);
@@ -878,7 +936,7 @@ impl Connection {
             unreachable!("a Popup handle names a popup");
         };
         let (popup, parent) = (popup.clone(), *parent);
-        let positioner = positioner(&s.wm_base, &qh, placement, s.surface(parent)?.serials)?;
+        let positioner = positioner(&s.wm_base, &qh, placement, s.surface(parent)?.serials())?;
         s.next_reposition += 1;
         popup.reposition(&positioner, s.next_reposition);
         positioner.destroy();
@@ -911,6 +969,8 @@ impl Connection {
             .position(|s| s.id == surface)
             .ok_or(Error::UnknownSurface)?;
         let s = self.state.surfaces.remove(i);
+        // a commit made for it on another thread sends nothing from now on
+        commit::lock(&s.shared).gone = true;
         self.state.clipboard.forget_surface(surface);
         match &s.role {
             Role::Toplevel {
@@ -1464,7 +1524,7 @@ impl Connection {
         let s = &mut self.state;
         let id = s.next_id();
         let wl = s.compositor.create_surface(&qh, id);
-        let role = Box::new(assign(&wl, &qh, id));
+        let role = Arc::new(assign(&wl, &qh, id));
         s.add_surface(id, wl, Role::External { role, size: (0, 0) }, &qh);
         id
     }
@@ -1611,7 +1671,7 @@ impl Connection {
         let surf = s.surface_mut(surface)?;
         let serial = match surf.role {
             Role::Subsurface { .. } => 0,
-            _ => surf.serials.latest().ok_or(Error::NotConfigured)?,
+            _ => surf.serials().latest().ok_or(Error::NotConfigured)?,
         };
         let logical = logical_size(&surf.role, preferred)?;
         let scale = parent_scale.unwrap_or(surf.scale);
@@ -1620,26 +1680,26 @@ impl Connection {
             .zip(scale.to_physical(logical.1))
             .and_then(|(w, h)| BufferLayout::new(w, h, format))
             .ok_or(Error::InvalidScale)?;
-        let (slot, created) = match pick_slot(surf.slots.iter().map(|s| (s.busy, s.layout)), layout)
-        {
-            SlotChoice::Reuse(i) => (i, false),
-            SlotChoice::AllBusy => return Err(Error::NoFreeBuffer),
-            SlotChoice::Create => {
-                surf.slots.retain(|s| s.busy);
-                surf.next_slot += 1;
-                let tag = SlotTag {
-                    surface: surface.0,
-                    slot: surf.next_slot,
-                };
-                let memory = surf
-                    .spare
-                    .take()
-                    .filter(|spare| spare.fits(layout))
-                    .and_then(Spare::take);
-                surf.slots.push(Slot::new(&shm, &qh, tag, layout, memory)?);
-                (surf.slots.len() - 1, true)
-            }
-        };
+        let (slot, created) =
+            match pick_slot(surf.slots.iter().map(|s| (!s.free(), s.layout)), layout) {
+                SlotChoice::Reuse(i) => (i, false),
+                SlotChoice::AllBusy => return Err(Error::NoFreeBuffer),
+                SlotChoice::Create => {
+                    surf.slots.retain(|s| !s.free());
+                    surf.next_slot += 1;
+                    let tag = SlotTag {
+                        surface: surface.0,
+                        slot: surf.next_slot,
+                    };
+                    let memory = surf
+                        .spare
+                        .take()
+                        .filter(|spare| spare.fits(layout))
+                        .and_then(Spare::take);
+                    surf.slots.push(Slot::new(&shm, &qh, tag, layout, memory)?);
+                    (surf.slots.len() - 1, true)
+                }
+            };
         let animating = surf
             .presented_at
             .is_some_and(|at| at.elapsed() < ANIMATION_GAP);
@@ -1648,7 +1708,7 @@ impl Connection {
             .slots
             .iter()
             .enumerate()
-            .any(|(i, s)| i != slot && !s.busy && s.layout == layout);
+            .any(|(i, s)| i != slot && s.free() && s.layout == layout);
         let fitting = surf.spare.as_ref().is_some_and(|s| s.fits(layout));
         match spare_wanted(animating, created, of_layout, free, fitting) {
             Some(true) => surf.spare = Spare::start(layout),
@@ -1691,14 +1751,15 @@ impl Connection {
         if matches!(surf.role, Role::Subsurface { .. }) {
             return Err(Error::Protocol("present_solid on a subsurface"));
         }
-        surf.serials.latest().ok_or(Error::NotConfigured)?;
+        surf.serials().latest().ok_or(Error::NotConfigured)?;
         let logical = logical_size(&surf.role, preferred)?;
         if logical.0 == 0 || logical.1 == 0 {
             return Err(Error::InvalidScale);
         }
         s.drop_syncobj(surface)?;
         let surf = s.surface_mut(surface)?;
-        if let Some(serial) = surf.serials.present()? {
+        let acked = commit::lock(&surf.shared).serials.present()?;
+        if let Some(serial) = acked {
             match &surf.role {
                 Role::Toplevel { xdg, .. } | Role::Popup { xdg, .. } => xdg.ack_configure(serial),
                 Role::External { role, .. } => role.ack_configure(serial),
@@ -1918,7 +1979,7 @@ pub struct BufferLease<'a> {
     zoom: f64,
 }
 
-impl BufferLease<'_> {
+impl<'a> BufferLease<'a> {
     /// Show the frame magnified `zoom` times (at least 1) about its centre, scaled by the compositor: the viewport shows
     /// the middle `1 / zoom` of the buffer over the whole surface. `false` when the surface has no viewport (the
     /// compositor lacks `wp_viewporter` or fractional scaling), and the frame shows unmagnified.
@@ -1987,28 +2048,104 @@ impl BufferLease<'_> {
     /// lease holds the connection, so no configure arrives between the lease and the present: the buffer answers the
     /// latest one, which is acknowledged with it.
     pub fn present_damage(self, damage: Option<&[PixelRect]>) -> Result<(), Error> {
+        let (connection, buffer, commit) = self.split()?;
+        commit.commit(damage)?;
+        connection.buffer_shown(buffer, damage);
+        Ok(())
+    }
+
+    /// The buffer taken out of the connection, to be drawn into and committed on other threads: its pixels (with
+    /// what it missed, as [`BufferLease::missed`] says) and the [`Commit`] that shows it, which answers the configure
+    /// of [`BufferLease::serial`]. The buffer counts as held by the compositor until it is given back, with
+    /// [`Connection::buffer_shown`] once the commit is sent or [`Connection::buffer_unused`] when it is not; meanwhile
+    /// the surface draws into its other buffers.
+    pub fn detach(self) -> Result<(DetachedBuffer, Commit), Error> {
+        let (_, buffer, commit) = self.split()?;
+        Ok((buffer, commit))
+    }
+
+    fn split(self) -> Result<(&'a mut Connection, DetachedBuffer, Commit), Error> {
         let qh = self.connection.queue.handle();
         let presentation = self.connection.state.presentation.clone();
+        let conn = self.connection.conn.clone();
         // a commit without points on a surface with a syncobj object is a protocol error
         self.connection.state.drop_syncobj(self.surface)?;
         let surf = self.connection.state.surface_mut(self.surface)?;
-        let subsurface = matches!(surf.role, Role::Subsurface { .. });
-        if !subsurface {
-            if let Some(serial) = surf.serials.present()? {
-                match &surf.role {
-                    Role::Toplevel { xdg, .. } | Role::Popup { xdg, .. } => {
-                        xdg.ack_configure(serial)
-                    }
-                    Role::External { role, .. } => role.ack_configure(serial),
-                    Role::Subsurface { .. } => {}
-                }
-            }
-        }
-        let layout = surf.slots[self.slot].layout;
+        let ack = surf.answers()?.map(|(ack, _)| (ack, self.serial));
+        let slot = &surf.slots[self.slot];
+        let layout = slot.layout;
+        let source = (self.zoom > 1.0 && surf.viewport.is_some()).then(|| {
+            let (w, h) = (f64::from(layout.width()), f64::from(layout.height()));
+            let (cw, ch) = (w / self.zoom, h / self.zoom);
+            ((w - cw) / 2.0, (h - ch) / 2.0, cw, ch)
+        });
+        let scaling = surf.scaling(self.logical, self.scale, source)?;
+        surf.presented_at = Some(Instant::now());
+        let slot = &mut surf.slots[self.slot];
+        let missed = slot.missed.rects().map(<[PixelRect]>::to_vec);
+        slot.missed.forget();
+        slot.busy = true;
+        let map = slot.take_map();
+        let commit = Commit {
+            surface: self.surface,
+            wl: surf.wl.clone(),
+            shared: Arc::clone(&surf.shared),
+            ack,
+            buffer: slot.buffer.clone(),
+            layout: (layout.width(), layout.height()),
+            scaling,
+            sync: None,
+            qh,
+            presentation,
+            conn,
+        };
+        let buffer = DetachedBuffer {
+            surface: self.surface,
+            tag: slot.tag,
+            layout,
+            map,
+            missed,
+        };
+        Ok((self.connection, buffer, commit))
+    }
+}
+
+/// A buffer of a surface taken out of the connection to be drawn into on another thread ([`BufferLease::detach`]).
+pub struct DetachedBuffer {
+    surface: SurfaceId,
+    tag: SlotTag,
+    layout: BufferLayout,
+    map: memmap2::MmapMut,
+    missed: Option<Vec<PixelRect>>,
+}
+
+impl DetachedBuffer {
+    pub fn layout(&self) -> BufferLayout {
+        self.layout
+    }
+
+    /// What the buffer differs in from the frame shown last, as [`BufferLease::missed`] said.
+    pub fn missed(&self) -> Option<&[PixelRect]> {
+        self.missed.as_deref()
+    }
+
+    pub fn pixels_mut(&mut self) -> &mut [u8] {
+        &mut self.map[..]
+    }
+}
+
+impl Connection {
+    /// `buffer` back after its commit was sent with `damage` (`None` for all of it): the other buffers of its size
+    /// miss what it changed.
+    pub fn buffer_shown(&mut self, buffer: DetachedBuffer, damage: Option<&[PixelRect]>) {
+        let layout = buffer.layout;
+        let Some(surf) = self.give_back(buffer) else {
+            return;
+        };
         let damage: Option<Vec<PixelRect>> =
             damage.map(|rects| rects.iter().filter_map(|r| r.clamp(layout)).collect());
-        for (i, slot) in surf.slots.iter_mut().enumerate() {
-            if i == self.slot {
+        for (slot, given) in surf {
+            if given {
                 slot.missed.shown();
             } else if slot.layout == layout {
                 slot.missed.passed(damage.as_deref());
@@ -2016,45 +2153,33 @@ impl BufferLease<'_> {
                 slot.missed.forget();
             }
         }
-        surf.presented_at = Some(Instant::now());
-        let slot = &mut surf.slots[self.slot];
-        slot.busy = true;
-        surf.wl.attach(Some(&slot.buffer), 0, 0);
-        match (&surf.viewport, self.scale.integer()) {
-            (Some(viewport), _) => {
-                surf.wl.set_buffer_scale(1);
-                if self.zoom > 1.0 {
-                    let (w, h) = (f64::from(layout.width()), f64::from(layout.height()));
-                    let (cw, ch) = (w / self.zoom, h / self.zoom);
-                    viewport.set_source((w - cw) / 2.0, (h - ch) / 2.0, cw, ch);
-                    surf.zoomed = true;
-                } else if surf.zoomed {
-                    viewport.set_source(-1.0, -1.0, -1.0, -1.0);
-                    surf.zoomed = false;
-                }
-                viewport.set_destination(clamp_i32(self.logical.0), clamp_i32(self.logical.1));
-            }
-            (None, Some(n)) => surf.wl.set_buffer_scale(n),
-            (None, None) => unreachable!("a surface without a viewport is drawn at a whole scale"),
-        }
-        match damage {
-            None => surf.wl.damage_buffer(0, 0, i32::MAX, i32::MAX),
-            Some(rects) => {
-                for r in rects {
-                    surf.wl
-                        .damage_buffer(r.x as i32, r.y as i32, r.width as i32, r.height as i32);
+    }
+
+    /// `buffer` back unshown: its commit was never sent, and its pixels are unknown.
+    pub fn buffer_unused(&mut self, buffer: DetachedBuffer) {
+        if let Some(slots) = self.give_back(buffer) {
+            for (slot, given) in slots {
+                if given {
+                    slot.busy = false;
                 }
             }
         }
-        // a subsurface shows with its parent's commit, whose frame callback and feedback stand for both
-        if !subsurface {
-            surf.wl.frame(&qh, self.surface);
-            if let Some(presentation) = presentation {
-                presentation.feedback(&surf.wl, &qh, self.surface);
-            }
-        }
-        surf.wl.commit();
-        self.connection.flush()
+    }
+
+    /// Puts `buffer`'s memory back in its slot: the surface's slots, each with whether it is the one given back.
+    /// `None` when the surface or the slot is gone.
+    fn give_back(
+        &mut self,
+        buffer: DetachedBuffer,
+    ) -> Option<impl Iterator<Item = (&mut Slot, bool)>> {
+        let surf = self.state.surface_mut(buffer.surface).ok()?;
+        let slot = surf.slots.iter_mut().find(|s| s.tag == buffer.tag)?;
+        slot.put_map(buffer.map);
+        let tag = buffer.tag;
+        Some(surf.slots.iter_mut().map(move |s| {
+            let given = s.tag == tag;
+            (s, given)
+        }))
     }
 }
 
@@ -2196,7 +2321,8 @@ impl State {
             ));
         };
         *current = size;
-        if let Err(e) = surf.serials.receive(serial) {
+        let received = commit::lock(&surf.shared).serials.receive(serial);
+        if let Err(e) = received {
             self.fail(e);
         }
     }
@@ -2260,7 +2386,10 @@ impl State {
             preferred_scale: None,
             entered: Vec::new(),
             scale: Scale::ONE,
-            serials,
+            shared: Arc::new(std::sync::Mutex::new(commit::Shared {
+                serials,
+                gone: false,
+            })),
             slots: Vec::new(),
             next_slot: 0,
             spare: None,
@@ -2720,7 +2849,8 @@ impl Dispatch<XdgSurface, SurfaceId> for State {
         let Ok(surf) = state.surface_mut(*id) else {
             return;
         };
-        if let Err(e) = surf.serials.receive(serial) {
+        let received = commit::lock(&surf.shared).serials.receive(serial);
+        if let Err(e) = received {
             return state.fail(e);
         }
         let event = match &mut surf.role {

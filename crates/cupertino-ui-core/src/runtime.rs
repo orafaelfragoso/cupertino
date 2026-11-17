@@ -19,8 +19,8 @@ use crate::platform::{
     ConstraintAdjust, DragImage, DragProgress, DragRequest, DragToken, DropAction, DropToken,
     GlassTone, KeyEvent, Keysym, Lent, MaterialRegion, MenuDescription, Mods, MouseButton,
     PlatformError, PlatformEvent, PointerEvent, PopupEdge, PopupSpec, PresentOutcome, RaisedLayer,
-    SystemAppearance, Timestamp, TouchEvent, WindowEvent, WindowId, WindowRequest, WindowSpec,
-    WindowSystem,
+    SharedRenderer, Shown, Submission, Submitted, SystemAppearance, Timestamp, TouchEvent,
+    WindowEvent, WindowId, WindowRequest, WindowSpec, WindowSystem,
 };
 use crate::pointer::Pointer;
 use crate::route::{hit_test, Geometry, Route};
@@ -46,7 +46,7 @@ use cupertino_ui_render::{
 use cupertino_ui_text::TextSystem;
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::num::NonZeroU32;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 const TAB: Keysym = Keysym(0xff09);
@@ -55,7 +55,7 @@ const ESCAPE: Keysym = Keysym(0xff1b);
 const HELD_PAINTS: u8 = 4;
 const LEFT_TAB: Keysym = Keysym(0xfe20);
 
-pub type RendererFactory = Box<dyn FnMut() -> Box<dyn UiRenderer<Frame = CpuFrame>>>;
+pub type RendererFactory = Box<dyn FnMut() -> Box<dyn UiRenderer<Frame = CpuFrame> + Send>>;
 pub type WindowErrorHandler = Box<dyn FnMut(WindowId, &UiError)>;
 /// Makes the theme for the session's appearance and display options.
 pub type ThemeForAppearance = Box<dyn FnMut(&SystemAppearance) -> Arc<ThemeTokens>>;
@@ -156,7 +156,7 @@ impl<M> WindowState<M> {
 struct LayerState {
     damage: DamageTracker,
     /// Made on the first frame that shows a layer.
-    renderer: Option<Box<dyn UiRenderer<Frame = CpuFrame>>>,
+    renderer: Option<Box<dyn UiRenderer<Frame = CpuFrame> + Send>>,
     list: DisplayList,
     /// The height in whole points of the layer the window system shows, while it shows one.
     shown: Option<u32>,
@@ -281,10 +281,13 @@ struct WindowState<M> {
     layer: LayerState,
     /// The marked subtrees the window system shows in surfaces of their own ([`Widget::surface_layer`]).
     surface_layers: surface_layers::SurfaceLayers,
-    display_list: DisplayList,
+    display_list: Arc<DisplayList>,
     /// The images the display list draws.
-    resources: PaintResources,
-    renderer: Box<dyn UiRenderer<Frame = CpuFrame>>,
+    resources: Arc<PaintResources>,
+    renderer: SharedRenderer,
+    /// The frame the window system took ([`WindowSystem::submit`]) and has not said yet how it was shown, with the
+    /// configure it answers.
+    in_flight: Option<Option<ConfigureId>>,
     /// The error of the last frame, until one renders and presents; animations wait for that.
     failed: Option<UiError>,
     popup: Option<PopupState<M>>,
@@ -1427,9 +1430,10 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             obscuring: Vec::new(),
             layer: LayerState::default(),
             surface_layers: surface_layers::SurfaceLayers::default(),
-            display_list: DisplayList::default(),
-            resources: PaintResources::default(),
-            renderer: (self.options.renderers)(),
+            display_list: Arc::default(),
+            resources: Arc::default(),
+            renderer: Arc::new(Mutex::new((self.options.renderers)())),
+            in_flight: None,
             failed: None,
             popup: None,
             opening_press: None,
@@ -1613,7 +1617,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             PlatformEvent::RendererChanged(_) => {
                 // the factory makes renderers of the new kind; the old ones go with their frames, layers and caches
                 for w in &mut self.windows {
-                    w.renderer = (self.options.renderers)();
+                    w.renderer = Arc::new(Mutex::new((self.options.renderers)()));
                     w.layer.renderer = None;
                     w.surface_layers.drop_renderers();
                     w.invalidate();
@@ -1692,7 +1696,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 let shown_active = w.active || w.keyboard_in_popup;
                 // a window nobody sees (minimized, or covered whole) keeps its frame and lets go of its layers
                 if c.states.suspended {
-                    w.renderer.drop_layers();
+                    held(&w.renderer).drop_layers();
                     if let Some(layer) = w.layer.renderer.as_mut() {
                         layer.drop_layers();
                     }
@@ -1744,6 +1748,50 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                     w.invalidate();
                     w.invalidate_damage();
                 }
+                return Ok(());
+            }
+            WindowEvent::Shown(shown) => {
+                let Some(answered) = w.in_flight.take() else {
+                    return Ok(());
+                };
+                match shown {
+                    Shown::Presented(id) => {
+                        if let Some(t) = &mut self.frame_timing {
+                            t.presented();
+                        }
+                        w.failed = None;
+                        // a configure that arrived meanwhile waits for the next frame
+                        if w.ack == answered {
+                            w.ack = None;
+                        }
+                        w.owed = false;
+                        w.committed = true;
+                        if let Some(timing) = &mut self.scroll_timing {
+                            timing.submitted(w.id, id, self.options.clock.now());
+                        }
+                    }
+                    Shown::NotReady => {
+                        w.dirty = true;
+                        w.owed = true;
+                        w.damage.invalidate();
+                    }
+                    Shown::Failed(e) => {
+                        let error = UiError::Render(e);
+                        // as a frame that fails on the UI thread: drawn again whole on the next change
+                        w.invalidate();
+                        w.dirty = false;
+                        w.invalidate_damage();
+                        if w.failed.as_ref() != Some(&error) {
+                            if let Some(report) = &mut self.options.on_window_error {
+                                report(w.id, &error);
+                            }
+                        }
+                        w.failed = Some(error);
+                    }
+                }
+                // the next frame waits for the compositor to ask for it
+                w.frame_ready = false;
+                self.system.request_frame(w.id);
                 return Ok(());
             }
             WindowEvent::Frame(time) => {
@@ -2895,7 +2943,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             return Ok(());
         }
 
-        if !(w.configured && w.frame_ready) {
+        // a window whose last frame is still being drawn or committed away from the UI thread draws no other
+        if !(w.configured && w.frame_ready) || w.in_flight.is_some() {
             return Ok(());
         }
         if let (WindowBackground::Solid(color), false) = (w.background, w.solid_refused) {
@@ -3066,8 +3115,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         w.paint_animate.extend(painting.animating.iter().copied());
         w.idle.extend(painting.idle.iter().copied());
         w.animate.extend(painting.animating);
-        w.display_list = painting.list;
-        w.resources = painting.resources;
+        w.display_list = Arc::new(painting.list);
+        w.resources = Arc::new(painting.resources);
         w.dirty = false;
         w.held_paints = 0;
         let layer_changed = layer_height != w.layer.shown
@@ -3174,8 +3223,43 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             }
             w.layer.shown = layer_height;
         }
-        let rastering = mark(&self.frame_timing);
         let height = physical(w.size.height, scale);
+        // the frame drawn and committed away from the UI thread where the window system takes it that way
+        let submitting = mark(&self.frame_timing);
+        let submission = Submission {
+            renderer: Arc::clone(&w.renderer),
+            list: Arc::clone(&w.display_list),
+            resources: Arc::clone(&w.resources),
+            scale,
+            width,
+            height,
+            damage: damage.clone(),
+            configure: w.ack,
+        };
+        let submitted = tracing::trace_span!("ui.submit")
+            .in_scope(|| self.system.submit(w.id, &submission))
+            .map_err(UiError::Platform)?;
+        drop(submission);
+        match submitted {
+            Submitted::Taken => {
+                lap(&mut self.frame_timing, Phase::Commit, submitting);
+                w.in_flight = Some(w.ack);
+                w.frame_ready = false;
+                return Ok(());
+            }
+            // nothing was drawn, and the tracker has already taken the frame's damage
+            Submitted::NotReady => {
+                w.damage.invalidate();
+                w.frame_ready = false;
+                w.dirty = true;
+                w.owed = true;
+                self.system.request_frame(w.id);
+                return Ok(());
+            }
+            Submitted::Declined => {}
+        }
+        let rastering = mark(&self.frame_timing);
+        let mut renderer = held(&w.renderer);
         let request = RenderRequest {
             list: &w.display_list,
             resources: &w.resources,
@@ -3187,7 +3271,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         // the frame drawn straight into a buffer the window system lends, where it lends one; else drawn into the
         // renderer's own image and copied
         let mut lent = None;
-        if w.renderer.draws_into_memory() {
+        if renderer.draws_into_memory() {
             let changes = match &damage {
                 DamageRegion::Full => vec![PixelRect {
                     x: 0,
@@ -3197,7 +3281,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 }],
                 DamageRegion::Rects(rects) => damage_rects(rects, scale, width, height),
             };
-            let (renderer, timing) = (&mut w.renderer, &mut self.frame_timing);
+            let timing = &mut self.frame_timing;
             let (mut failed, mut drawn, mut committing) = (None, None, None);
             let _present = tracing::trace_span!("ui.present", lent = true).entered();
             let outcome = self
@@ -3237,8 +3321,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             Some(lent) => lent,
             None => {
                 let raster_span = tracing::trace_span!("ui.raster", layer = "content").entered();
-                let id = w.renderer.render(&request).map_err(UiError::Render)?;
-                let frame = w.renderer.frame(id).map_err(UiError::Render)?;
+                let id = renderer.render(&request).map_err(UiError::Render)?;
+                let frame = renderer.frame(id).map_err(UiError::Render)?;
                 drop(raster_span);
                 lap(&mut self.frame_timing, Phase::Raster, rastering);
                 let committing = mark(&self.frame_timing);
@@ -3372,7 +3456,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 .map(|(&id, n)| (id, n.clone()))
                 .collect(),
             accessibility_focus: w.accessibility_focus,
-            display_list: w.display_list.clone(),
+            display_list: (*w.display_list).clone(),
             pending: self.pending(),
             layout: w.layout,
         })
@@ -3918,4 +4002,9 @@ fn appearance_of(theme: &ThemeTokens) -> SystemAppearance {
         reduce_motion: preferences.reduce_motion,
         steady_caret: theme.motion.caret_phase_ms == 0,
     }
+}
+
+/// The window's renderer, waiting for a frame the window system draws with it away from the UI thread to finish.
+fn held(renderer: &SharedRenderer) -> MutexGuard<'_, Box<dyn UiRenderer<Frame = CpuFrame> + Send>> {
+    renderer.lock().unwrap_or_else(PoisonError::into_inner)
 }

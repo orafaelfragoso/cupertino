@@ -138,6 +138,8 @@ pub type Publications = Arc<Mutex<Vec<(u64, Result<Snapshot, String>)>>>;
 #[derive(Default)]
 pub struct Server {
     requests: Arc<Mutex<Vec<String>>>,
+    /// The configure acknowledgements, attaches and commits of the windows, as text, in the order received.
+    presents: Arc<Mutex<Vec<String>>>,
     publications: Publications,
     replies: Arc<Mutex<Vec<String>>>,
     pub layers: Vec<CupertinoLayerV1>,
@@ -160,6 +162,19 @@ impl Server {
         self.requests.lock().unwrap().push(text.to_owned());
     }
 
+    fn present(&self, text: &str) {
+        self.presents.lock().unwrap().push(text.to_owned());
+    }
+
+    /// Configure window `index` again, returning the serial.
+    pub fn reconfigure(&mut self, index: usize) -> u32 {
+        let serial = self.next_serial();
+        let (toplevel, surface) = &self.toplevels[index];
+        toplevel.configure(0, 0, Vec::new());
+        surface.configure(serial);
+        serial
+    }
+
     fn next_serial(&mut self) -> u32 {
         self.serial += 1;
         self.serial
@@ -171,6 +186,7 @@ type Job = Box<dyn FnOnce(&mut Server) + Send>;
 /// The server's thread and what it saw.
 pub struct Harness {
     requests: Arc<Mutex<Vec<String>>>,
+    presents: Arc<Mutex<Vec<String>>>,
     pub publications: Publications,
     pub replies: Arc<Mutex<Vec<String>>>,
     jobs: Sender<Job>,
@@ -192,6 +208,7 @@ impl Harness {
         let (client_end, server_end) = UnixStream::pair().unwrap();
         let server = Server::default();
         let requests = server.requests.clone();
+        let presents = server.presents.clone();
         let publications = server.publications.clone();
         let replies = server.replies.clone();
         let (jobs, inbox) = channel::<Job>();
@@ -202,6 +219,7 @@ impl Harness {
         (
             Harness {
                 requests,
+                presents,
                 publications,
                 replies,
                 jobs,
@@ -223,6 +241,11 @@ impl Harness {
     /// Run `job` on the server's thread, where it can send events through the resources it holds.
     pub fn run(&self, job: impl FnOnce(&mut Server) + Send + 'static) {
         self.jobs.send(Box::new(job)).unwrap();
+    }
+
+    /// The configure acknowledgements, attaches and commits of the windows received so far, as text, in order.
+    pub fn presents(&self) -> Vec<String> {
+        self.presents.lock().unwrap().clone()
     }
 
     /// The requests of the Cupertino protocols received so far, as text.
@@ -398,6 +421,8 @@ impl Dispatch<WlSurface, ()> for Server {
             }
             // the damage a client reports is part of what a test can read back
             damage @ wl_surface::Request::DamageBuffer { .. } => server.record(damage),
+            wl_surface::Request::Attach { .. } => server.present("Attach"),
+            wl_surface::Request::Commit => server.present("Commit"),
             _ => {}
         }
     }
@@ -499,6 +524,10 @@ impl Dispatch<XdgSurface, ()> for Server {
         _: &DisplayHandle,
         init: &mut DataInit<'_, Server>,
     ) {
+        if let xdg_surface::Request::AckConfigure { serial } = request {
+            server.present(&format!("AckConfigure {serial}"));
+            return;
+        }
         if let xdg_surface::Request::GetToplevel { id } = request {
             let toplevel = init.init(id, ());
             toplevel.configure(0, 0, Vec::new());

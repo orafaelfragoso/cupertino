@@ -154,3 +154,25 @@ fn the_windows_of_two_instances_are_drawn_by_the_one_render_thread_on_its_one_de
         "the last claim lets the device go"
     );
 }
+
+#[test]
+fn handed_over_work_reaches_the_render_threads_state_and_the_heartbeat_counts_it() {
+    let before = render_thread::heartbeat().done;
+    let (tx, rx) = std::sync::mpsc::channel();
+    render_thread::hand_over(move || {
+        let busy = render_thread::heartbeat().busy_for.is_some();
+        // run, called on the render thread from handed-over work, runs there at once
+        let name = render_thread::run(|_| std::thread::current().name().map(str::to_owned));
+        tx.send((busy, name)).unwrap();
+    });
+    let (busy, name) = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert!(
+        busy,
+        "the heartbeat says the render thread is busy while it works"
+    );
+    assert_eq!(name.as_deref(), Some(RENDER_THREAD));
+    render_thread::run(|_| ());
+    let after = render_thread::heartbeat();
+    // the handed-over work is counted once the work after it ran
+    assert!(after.done > before, "the finished work counted");
+}

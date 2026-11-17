@@ -190,10 +190,11 @@ fn an_unfinished_trace_is_readable_up_to_its_last_event_and_finish_closes_it() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("trace.json");
     let layer = profile::layer_of::<Registry>(&[Sink::Chrome(path.clone())], "p").unwrap();
+    let writer = std::thread::spawn(profile::write_traces);
     tracing::subscriber::with_default(tracing_subscriber::registry().with(layer), || {
         let _s = tracing::trace_span!(target: "cupertino_test", "frame").entered();
     });
-    // the writer thread writes within FLUSH_DELAY
+    // the writer writes within FLUSH_DELAY
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let text = std::fs::read_to_string(&path).unwrap();
@@ -208,6 +209,7 @@ fn an_unfinished_trace_is_readable_up_to_its_last_event_and_finish_closes_it() {
         std::thread::sleep(FLUSH_DELAY / 4);
     }
     profile::finish();
+    writer.join().unwrap();
     assert!(std::fs::read_to_string(&path)
         .unwrap()
         .trim_end()

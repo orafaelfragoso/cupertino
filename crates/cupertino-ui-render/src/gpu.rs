@@ -976,7 +976,7 @@ impl<R: GlyphRasterizer + 'static> UiRenderer for WindowRenderer<R> {
             format: PixelFormat::Rgba8Premultiplied,
             pixels: Vec::new(),
             damage,
-            device: Some(DeviceFrameRef(Rc::new(WindowFrame {
+            device: Some(DeviceFrameRef(std::sync::Arc::new(WindowFrame {
                 texture,
                 size: (width, height),
             }))),

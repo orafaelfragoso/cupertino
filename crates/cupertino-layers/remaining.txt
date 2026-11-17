@@ -126,4 +126,3 @@ shell forbidden_edge cupertino-portal -> cupertino-shell-client normal
 shell forbidden_edge cupertino-portal -> cupertino-wayland-client normal
 shell forbidden_edge cupertino-screenshot -> cupertino-shell-client normal
 shell forbidden_edge cupertino-screenshot -> cupertino-wayland-client normal
-system starts_thread cupertino-diagnostic-events src/profile.rs std::thread::Builder::spawn

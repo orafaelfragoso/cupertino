@@ -18,6 +18,7 @@
 
 use std::os::fd::{AsFd, OwnedFd};
 use std::rc::Rc;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use cupertino_gpu::syncobj::{self, SyncNode, Timeline};
@@ -31,7 +32,7 @@ use cupertino_ui_render::gpu::WindowFrame;
 use cupertino_ui_render::render_thread::{self, Ready, Resident};
 use cupertino_ui_render::CpuFrame;
 use cupertino_wayland_client::{
-    Connection, DmabufAttributes, DmabufPlaneRef, Error as WlError, GpuBufferId, GpuFrame,
+    Commit, Connection, DmabufAttributes, DmabufPlaneRef, Error as WlError, GpuBufferId, GpuFrame,
     PixelRect, SurfaceId, TimelineId,
 };
 
@@ -199,10 +200,10 @@ pub struct GpuDevice {
     generation: u64,
     info: DeviceInfo,
     /// The render node's syncobj requests, when explicit sync is used.
-    sync: Option<SyncNode>,
+    sync: Option<Arc<SyncNode>>,
     /// The modifiers buffers may use.
     modifiers: Vec<u64>,
-    programs: Resident<Programs>,
+    programs: Arc<Resident<Programs>>,
 }
 
 /// The programs a surface draws with, on the render thread; freed with the last of them.
@@ -304,13 +305,13 @@ impl GpuDevice {
             Some(cupertino_gpu::Allocator::Export) => offered.to_vec(),
             _ => usable_modifiers(offered, &ready.renderable, info.software),
         };
-        let sync = sync.filter(|_| info.native_fences);
+        let sync = sync.filter(|_| info.native_fences).map(Arc::new);
         Ok(GpuDevice {
             generation,
             info,
             sync,
             modifiers,
-            programs,
+            programs: Arc::new(programs),
         })
     }
 
@@ -354,7 +355,7 @@ impl GpuDevice {
 
 struct Slot {
     buffer: GpuBufferId,
-    timeline: Option<(Timeline, TimelineId)>,
+    timeline: Option<(Arc<Timeline>, TimelineId)>,
     uses: u64,
     reuse: Reuse,
     release: Option<OwnedFd>,
@@ -415,7 +416,10 @@ enum Submit {
 #[derive(Default)]
 pub struct GpuSurface {
     slots: Vec<Slot>,
-    images: Option<Resident<Images>>,
+    /// Shared with the frame being drawn on the render thread, if one is.
+    images: Arc<Mutex<Option<Resident<Images>>>>,
+    /// Frames of the surface were handed to the render thread: freeing waits for the last of them to be committed.
+    handed: bool,
     allocated: Option<(u32, u32)>,
     commits: u64,
     /// The staging texture no longer holds the last frame: the next upload is whole.
@@ -468,18 +472,24 @@ impl GpuSurface {
         self.stale = true;
     }
 
-    /// Free every buffer, texture and timeline; the textures go on the render thread.
+    /// Free every buffer, texture and timeline; the textures go on the render thread. A frame still on its way there
+    /// is waited for first, so nothing it commits is gone.
     pub fn free(&mut self, gpu: Option<&GpuDevice>, conn: &mut Connection) {
+        if self.handed {
+            render_thread::run(|_| ());
+        }
         for slot in self.slots.drain(..) {
             conn.destroy_gpu_buffer(slot.buffer);
             if let Some((timeline, id)) = slot.timeline {
                 conn.destroy_timeline(id);
-                if let Some(sync) = gpu.and_then(|g| g.sync.as_ref()) {
+                if let (Some(sync), Some(timeline)) =
+                    (gpu.and_then(|g| g.sync.as_ref()), Arc::into_inner(timeline))
+                {
                     sync.destroy(timeline);
                 }
             }
         }
-        self.images = None;
+        *held(&self.images) = None;
         self.allocated = None;
     }
 
@@ -490,7 +500,8 @@ impl GpuSurface {
         size: (u32, u32),
     ) -> Result<(), PresentError> {
         let (generation, modifiers) = (gpu.generation, gpu.modifiers.clone());
-        let images = &mut self.images;
+        let mut guard = held(&self.images);
+        let images: &mut Option<Resident<Images>> = &mut guard;
         let dmabuf = render_thread::run(move |on| {
             let device = on.device_of(generation)?;
             let image = device.allocate_dmabuf(&DmabufDesc {
@@ -511,7 +522,9 @@ impl GpuSurface {
             images.get_mut(on).buffers.push(image.texture);
             Ok(image.dmabuf)
         })
-        .map_err(gpu_error)?;
+        .map_err(gpu_error);
+        drop(guard);
+        let dmabuf = dmabuf?;
         let planes = dmabuf
             .planes
             .iter()
@@ -545,7 +558,7 @@ impl GpuSurface {
                     .timeline()
                     .and_then(|t| sync.export(&t).map(|fd| (t, fd)));
                 match made {
-                    Ok((t, fd)) => Some((t, conn.import_timeline(fd.as_fd())?)),
+                    Ok((t, fd)) => Some((Arc::new(t), conn.import_timeline(fd.as_fd())?)),
                     Err(e) => {
                         conn.destroy_gpu_buffer(buffer);
                         self.free_last();
@@ -569,13 +582,14 @@ impl GpuSurface {
 
     /// Free the texture of the buffer allocated last, whose `wl_buffer` could not be made.
     fn free_last(&mut self) {
-        if let Some(images) = &mut self.images {
+        let mut images = held(&self.images);
+        if let Some(images) = images.as_mut() {
             render_thread::run(|on| images.get_mut(on).free_last());
         }
     }
 
-    /// Show `frame` on `surface`: copied from its renderer's texture on this device, or its `damage` (pixels;
-    /// everything when `whole`) uploaded, drawn into a free buffer on the render thread, synchronised and committed.
+    /// Show `frame` on `surface` now: [`GpuSurface::prepare`]d, drawn and committed. A frame that cannot be drawn
+    /// leaves the surface without buffers, allocated again for the next.
     #[allow(clippy::too_many_arguments)]
     pub fn present(
         &mut self,
@@ -587,25 +601,45 @@ impl GpuSurface {
         damage: &[PixelRect],
         whole: bool,
     ) -> Result<(), PresentError> {
+        let draw = self.prepare(
+            gpu,
+            conn,
+            surface,
+            preferred,
+            (frame.width, frame.height),
+            whole,
+        )?;
+        match draw.draw(frame, damage) {
+            Ok(drawn) => {
+                self.drawn(drawn.from_texture);
+                drawn.commit()?;
+                Ok(())
+            }
+            Err(e) => {
+                self.free(Some(gpu), conn);
+                Err(e)
+            }
+        }
+    }
+
+    /// Everything a frame of `pixels` (drawn for `preferred`, `whole` when the compositor must take all of it) needs
+    /// to be drawn into a free buffer of `surface` and committed, on any thread ([`Draw::draw`]): the buffer chosen
+    /// (allocated, in size steps, when none serves), its sync points and the commit made. The buffer counts as drawn
+    /// into from now on: [`Busy`](PresentError::Busy) when none is free, [`Resized`](PresentError::Resized) when the
+    /// surface asks for another size.
+    pub fn prepare(
+        &mut self,
+        gpu: &GpuDevice,
+        conn: &mut Connection,
+        surface: SurfaceId,
+        preferred: (u32, u32),
+        pixels: (u32, u32),
+        whole: bool,
+    ) -> Result<Draw, PresentError> {
         let size = conn.frame_size(surface, preferred)?;
-        let pixels = (frame.width, frame.height);
         if (size.width, size.height) != pixels {
             return Err(PresentError::Resized);
         }
-        // a frame a window's renderer drew on the render thread is copied from its texture there; any other has its
-        // pixels uploaded, read back first when they stayed on another device
-        let source = frame
-            .device
-            .as_ref()
-            .and_then(|d| d.0.as_any().downcast_ref::<WindowFrame>())
-            .filter(|w| w.size() == pixels);
-        let read_back;
-        let frame = if source.is_none() && frame.pixels.is_empty() {
-            read_back = frame.in_memory().map_err(|_| PresentError::Resized)?;
-            &*read_back
-        } else {
-            frame
-        };
         let can_crop = conn.can_crop(surface)?;
         // the compositor's damage is the frame's unless the frame is whole or the buffers are new
         let mut shown_whole = whole;
@@ -636,18 +670,151 @@ impl GpuSurface {
         } else {
             Submit::Finish
         };
-        let generation = gpu.generation;
-        let programs = &gpu.programs;
-        let images = self
-            .images
-            .as_mut()
-            .expect("a surface with buffers has their images");
+        let slot = &mut self.slots[index];
+        let (acquire, points) = match (&gpu.sync, &slot.timeline, submit) {
+            (Some(sync), Some((timeline, id)), Submit::Fence) => {
+                slot.uses += 1;
+                let (acquire, release) = (2 * slot.uses - 1, 2 * slot.uses);
+                slot.release = Some(
+                    sync.wait_fd(timeline, release)
+                        .map_err(|e| PresentError::Fallback(format!("release wait: {e}")))?,
+                );
+                slot.reuse = Reuse::ReleasePoint;
+                (
+                    Some((Arc::clone(sync), Arc::clone(timeline), acquire)),
+                    Some((*id, acquire, release)),
+                )
+            }
+            _ => {
+                // without explicit sync the client waits for its own fence before the commit
+                self.stats.fence_waits += 1;
+                slot.reuse = Reuse::Release;
+                (None, None)
+            }
+        };
+        let commit = conn.gpu_commit(
+            surface,
+            &GpuFrame {
+                buffer: slot.buffer,
+                size: pixels,
+                preferred,
+                sync: points,
+                damage: None,
+            },
+        )?;
+        self.commits += 1;
+        self.stats.frames += 1;
+        Ok(Draw {
+            generation: gpu.generation,
+            programs: Arc::clone(&gpu.programs),
+            images: Arc::clone(&self.images),
+            index,
+            allocated,
+            whole,
+            shown_whole,
+            submit,
+            acquire,
+            commit,
+        })
+    }
+
+    /// A frame of [`GpuSurface::prepare`] is on its way to the render thread: the surface's buffers stay until it is
+    /// drawn and committed.
+    pub fn handed_over(&mut self) {
+        self.handed = true;
+    }
+
+    /// The frame was drawn, from a renderer's texture or uploaded ([`Drawn::from_texture`]).
+    pub fn drawn(&mut self, from_texture: bool) {
+        if from_texture {
+            self.stats.from_texture += 1;
+        }
+        // the staging texture holds the frame when it was uploaded, and missed it otherwise
+        self.stale = from_texture;
+    }
+
+    /// The frame handed over could not be drawn: the buffers go, allocated again for the next frame.
+    pub fn not_drawn(&mut self, gpu: Option<&GpuDevice>, conn: &mut Connection) {
+        self.free(gpu, conn);
+    }
+}
+
+/// A frame's buffer and commit, ready to be drawn into and sent ([`GpuSurface::prepare`]).
+pub struct Draw {
+    generation: u64,
+    programs: Arc<Resident<Programs>>,
+    images: Arc<Mutex<Option<Resident<Images>>>>,
+    index: usize,
+    allocated: (u32, u32),
+    /// Whether the whole frame is uploaded.
+    whole: bool,
+    /// Whether the compositor takes the whole frame as changed.
+    shown_whole: bool,
+    submit: Submit,
+    /// The timeline point the frame's fence becomes, with explicit sync.
+    acquire: Option<(Arc<SyncNode>, Arc<Timeline>, u64)>,
+    commit: Commit,
+}
+
+/// A frame drawn into its buffer and synchronised, its commit still to be sent ([`Drawn::commit`]).
+pub struct Drawn {
+    commit: Commit,
+    damage: Option<Vec<PixelRect>>,
+    /// Copied from its renderer's texture, with nothing uploaded.
+    pub from_texture: bool,
+}
+
+impl Drawn {
+    /// Send the commit.
+    pub fn commit(self) -> Result<(), WlError> {
+        let _commit = tracing::trace_span!("wl.commit", gpu = true).entered();
+        self.commit.commit(self.damage.as_deref())
+    }
+}
+
+impl Draw {
+    /// Draw `frame` into the buffer (on the render thread, from any thread but from work [`render_thread::run`] gave
+    /// it): copied from its renderer's texture on this device, or its `damage` (pixels) uploaded, a frame drawn on
+    /// another device read back first; then synchronised, its fence the buffer's acquire point or waited for.
+    pub fn draw(self, frame: &CpuFrame, damage: &[PixelRect]) -> Result<Drawn, PresentError> {
+        let pixels = (frame.width, frame.height);
+        // a frame a window's renderer drew on the render thread is copied from its texture there; any other has its
+        // pixels uploaded, read back first when they stayed on another device
+        let source = frame
+            .device
+            .as_ref()
+            .and_then(|d| d.0.as_any().downcast_ref::<WindowFrame>())
+            .filter(|w| w.size() == pixels);
+        let read_back;
+        let frame = if source.is_none() && frame.pixels.is_empty() {
+            read_back = frame.in_memory().map_err(|_| PresentError::Resized)?;
+            &*read_back
+        } else {
+            frame
+        };
+        let Draw {
+            generation,
+            programs,
+            images,
+            index,
+            allocated,
+            mut whole,
+            shown_whole,
+            submit,
+            acquire,
+            commit,
+        } = self;
+        let mut images = held(&images);
+        let images: &mut Option<Resident<Images>> = &mut images;
         let (width, height, stride) = (frame.width, frame.height, frame.stride as usize);
         let frame_pixels: &[u8] = &frame.pixels;
-        let drawn = render_thread::run(|on| {
+        let fence = render_thread::run(|on| {
             let device = on.device_of(generation).map_err(gpu_error)?;
             let programs = programs.get(on);
-            let images = images.get_mut(on);
+            let images = images
+                .as_mut()
+                .expect("a surface with buffers has their images")
+                .get_mut(on);
             match source {
                 Some(source) => {
                     let texture = source.texture(on);
@@ -700,107 +867,45 @@ impl GpuSurface {
                     blit(device, programs, &images.buffers[index], staging)?;
                 }
             }
-            let fence = match submit {
+            match submit {
                 Submit::Fence => {
                     let (fence, file) = tracing::trace_span!("wl.submit")
                         .in_scope(|| device.submit_exported())
                         .map_err(gpu_error)?;
                     device.destroy_fence(fence);
-                    Some(file)
+                    Ok(Some(file))
                 }
                 Submit::Finish => {
                     tracing::trace_span!("wl.finish")
                         .in_scope(|| device.finish())
                         .map_err(gpu_error)?;
-                    None
+                    Ok(None)
                 }
-            };
-            Ok(fence)
+            }
         })?;
-        if source.is_some() {
-            self.stats.from_texture += 1;
-            // the staging texture missed this frame
-            self.stale = true;
-            return self.commit(
-                gpu,
-                conn,
-                surface,
-                index,
-                drawn,
-                (pixels, preferred),
-                damage,
-                shown_whole,
-            );
+        match (acquire, fence) {
+            (Some((sync, timeline, point)), Some(file)) => sync
+                .signal_with(&timeline, file.as_fd(), point)
+                .map_err(|e| PresentError::Fallback(format!("acquire point: {e}")))?,
+            // without explicit sync the compositor must not read a buffer still being drawn
+            (_, Some(file)) => {
+                tracing::trace_span!("wl.fence_wait")
+                    .in_scope(|| cupertino_gpu::wait_sync_file(&file, FENCE_WAIT));
+            }
+            (_, None) => {}
         }
-        self.commit(
-            gpu,
-            conn,
-            surface,
-            index,
-            drawn,
-            (pixels, preferred),
-            damage,
-            whole,
-        )?;
-        self.stale = false;
-        Ok(())
+        let from_texture = source.is_some();
+        let whole = if from_texture { shown_whole } else { whole };
+        Ok(Drawn {
+            commit,
+            damage: (!whole).then(|| damage.to_vec()),
+            from_texture,
+        })
     }
+}
 
-    /// Synchronises the buffer of slot `index`, drawn with a frame of `pixels` and finished with `fence` (the frame's
-    /// native fence, `None` once the GPU finished it), and commits it with `damage` (or whole).
-    #[allow(clippy::too_many_arguments)]
-    fn commit(
-        &mut self,
-        gpu: &GpuDevice,
-        conn: &mut Connection,
-        surface: SurfaceId,
-        index: usize,
-        fence: Option<OwnedFd>,
-        (pixels, preferred): ((u32, u32), (u32, u32)),
-        damage: &[PixelRect],
-        whole: bool,
-    ) -> Result<(), PresentError> {
-        let _commit = tracing::trace_span!("wl.commit", gpu = true).entered();
-        let slot = &mut self.slots[index];
-        let sync = match (&gpu.sync, &slot.timeline, fence) {
-            (Some(sync), Some((timeline, id)), Some(file)) => {
-                slot.uses += 1;
-                let (acquire, release) = (2 * slot.uses - 1, 2 * slot.uses);
-                sync.signal_with(timeline, file.as_fd(), acquire)
-                    .map_err(|e| PresentError::Fallback(format!("acquire point: {e}")))?;
-                slot.release = Some(
-                    sync.wait_fd(timeline, release)
-                        .map_err(|e| PresentError::Fallback(format!("release wait: {e}")))?,
-                );
-                slot.reuse = Reuse::ReleasePoint;
-                Some((*id, acquire, release))
-            }
-            (_, _, fence) => {
-                // without explicit sync the compositor must not read a buffer still being drawn
-                if let Some(file) = fence {
-                    tracing::trace_span!("wl.fence_wait")
-                        .in_scope(|| cupertino_gpu::wait_sync_file(&file, FENCE_WAIT));
-                }
-                self.stats.fence_waits += 1;
-                slot.reuse = Reuse::Release;
-                None
-            }
-        };
-        let buffer = slot.buffer;
-        conn.present_gpu(
-            surface,
-            &GpuFrame {
-                buffer,
-                size: pixels,
-                preferred,
-                sync,
-                damage: (!whole).then_some(damage),
-            },
-        )?;
-        self.commits += 1;
-        self.stats.frames += 1;
-        Ok(())
-    }
+fn held<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Draws `texture` (a renderer's frame) into `target`, a buffer's texture, texel for texel.

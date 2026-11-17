@@ -397,7 +397,7 @@ pub trait DeviceFrame {
 /// A frame's image on a device, shared with the renderer that keeps drawing into it. Two are equal when they are the
 /// same image.
 #[derive(Clone)]
-pub struct DeviceFrameRef(pub std::rc::Rc<dyn DeviceFrame>);
+pub struct DeviceFrameRef(pub Arc<dyn DeviceFrame + Send + Sync>);
 
 impl std::fmt::Debug for DeviceFrameRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -407,7 +407,7 @@ impl std::fmt::Debug for DeviceFrameRef {
 
 impl PartialEq for DeviceFrameRef {
     fn eq(&self, other: &Self) -> bool {
-        std::rc::Rc::ptr_eq(&self.0, &other.0)
+        Arc::ptr_eq(&self.0, &other.0)
     }
 }
 

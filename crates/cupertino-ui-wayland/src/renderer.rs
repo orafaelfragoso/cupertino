@@ -11,19 +11,13 @@
 //! default device then), which tests use; nothing overrides missing libraries or the losses. A process that wanted the
 //! GPU and draws on the CPU instead says so on standard error and in a diagnostic event ([`fallback`]).
 
-use std::collections::VecDeque;
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
 
 pub use cupertino_ui_core::platform::{RendererClass, RendererKind};
+use cupertino_ui_render::render_thread::{LOSS_LIMIT, LOSS_WINDOW};
 
 /// The variable that asks for a renderer: `cpu` or `gpu`.
 pub const RENDERER_ENV: &str = "CUPERTINO_RENDERER";
-
-/// Losses within [`LOSS_WINDOW`] after which a process stays on the CPU.
-pub const LOSS_LIMIT: usize = 3;
-/// The time [`LOSS_LIMIT`] losses are counted over.
-pub const LOSS_WINDOW: Duration = Duration::from_secs(60);
 
 /// A window covering more than one part in this many of its output's pixels is large: the size rule's quarter.
 pub const LARGE_WINDOW_PARTS: u64 = 4;
@@ -121,7 +115,7 @@ pub enum Reason {
     Software,
     /// The device allocates no dmabufs the compositor takes.
     NoAllocator,
-    /// The context was lost [`LOSS_LIMIT`] times within [`LOSS_WINDOW`].
+    /// The process's device was reset [`LOSS_LIMIT`] times within [`LOSS_WINDOW`] ([`render_thread::losses_exceeded`](cupertino_ui_render::render_thread::losses_exceeded)).
     Losses,
     /// The process draws on the GPU while its context and programs are made; the first frames are the CPU's.
     WarmingUp,
@@ -241,34 +235,6 @@ pub fn settle(
         (true, _) => (RendererKind::Cpu, Reason::Software),
         (false, Requested::Gpu) => (RendererKind::Gpu, Reason::Forced),
         (false, _) => (RendererKind::Gpu, Reason::Gpu),
-    }
-}
-
-/// The context losses of a process: resets count toward the CPU fallback, purges never do.
-#[derive(Clone, Debug, Default)]
-pub struct LossHistory {
-    resets: VecDeque<Instant>,
-}
-
-impl LossHistory {
-    /// Count a loss at `now` (`counts`: a reset, not a purge); whether the process must stay on the CPU from now on.
-    pub fn record(&mut self, counts: bool, now: Instant) -> bool {
-        if counts {
-            self.resets.push_back(now);
-        }
-        self.exceeded(now)
-    }
-
-    /// Whether [`LOSS_LIMIT`] resets happened within the last [`LOSS_WINDOW`].
-    pub fn exceeded(&mut self, now: Instant) -> bool {
-        while self
-            .resets
-            .front()
-            .is_some_and(|&at| now.saturating_duration_since(at) >= LOSS_WINDOW)
-        {
-            self.resets.pop_front();
-        }
-        self.resets.len() >= LOSS_LIMIT
     }
 }
 

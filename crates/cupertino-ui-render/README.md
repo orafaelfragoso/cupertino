@@ -159,8 +159,11 @@ run on Mesa's software rasteriser).
 A Kit process has one render thread (`kit-render`), which owns the process's one GPU device and its only context.
 Whatever is made on the device lives there as a `Resident`: made, opened and dropped on the render thread, owned from
 any thread (a window's renderer, its frames' texture, a surface's buffers). `run` hands the render thread work and
-returns its result once the work before it is done (a panic in it goes on in the caller); `hand_over` hands it work
-nobody waits for. `request` asks for the device: unless it is ready or being made, a warm-up thread (`gpu-warm-up`)
+returns its result once the work before it is done (a panic in it goes on in the caller), and runs it at once when called
+from work `hand_over` gave the render thread; `hand_over` hands it work whose result comes back another way (a window's
+frame drawn and committed there) or that nobody waits for. `heartbeat` reads, from any thread, how long the work it
+is doing has taken and how much it finished: a stuck render thread shows there.
+`request` asks for the device: unless it is ready or being made, a warm-up thread (`gpu-warm-up`)
 makes the context on the render node it names (the surfaceless platform without one), makes the renderers' programs
 (saved per driver, made in turn with the session's other processes, `PROGRAM_TURN_PATIENCE`) and draws with each
 once, and hands the device to the render thread, which wakes those who asked; the first request names the node of the
@@ -169,6 +172,8 @@ warming since when and whether `Device::new` returned, ready with the device's g
 and the modifiers it renders ARGB8888 to, or failed); a warm-up inside `Device::new` for `DEVICE_HANG` (10 s) is a
 driver that hangs, and its callers give the GPU up. A `Claim` holds the device; the last one going stops a warm-up
 after its step, lets the device go, and waits up to 5 s for both. `lost` lets a reset or purged device go once
-however many instances saw it, and `RenderThread::device_of` reads a device let go as lost by the same loss. A
+however many instances saw it, and counts it (resets only, never purges): after `LOSS_LIMIT` (3) resets within
+`LOSS_WINDOW` (60 s) `lost` and `losses_exceeded` tell every window system of the process to stay on the CPU.
+`RenderThread::device_of` reads a device let go as lost by the same loss. A
 `GpuRenderer` made on a device someone else lends (`Device::borrow`, the server's) draws on the lender's thread and
 never meets the render thread.

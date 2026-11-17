@@ -23,8 +23,10 @@ use wayland_protocols::wp::linux_drm_syncobj::v1::client::wp_linux_drm_syncobj_m
 use wayland_protocols::wp::linux_drm_syncobj::v1::client::wp_linux_drm_syncobj_surface_v1::WpLinuxDrmSyncobjSurfaceV1;
 use wayland_protocols::wp::linux_drm_syncobj::v1::client::wp_linux_drm_syncobj_timeline_v1::WpLinuxDrmSyncobjTimelineV1;
 
+use super::commit::Commit;
 use super::{clamp_i32, logical_size, Connection, Role, State, Surface, SurfaceId};
 use crate::{Error, PixelRect, Scale};
+use std::sync::Arc;
 
 /// What the compositor's dmabuf feedback says: the device it composites on and the formats it imports.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -367,7 +369,7 @@ impl Connection {
         let parent_scale = s.drawn_scale(surface)?;
         let surf = s.surface(surface)?;
         if !matches!(surf.role, Role::Subsurface { .. }) {
-            surf.serials.latest().ok_or(Error::NotConfigured)?;
+            surf.serials().latest().ok_or(Error::NotConfigured)?;
         }
         let logical = logical_size(&surf.role, preferred)?;
         let scale = parent_scale.unwrap_or(surf.scale);
@@ -390,10 +392,21 @@ impl Connection {
         Ok(self.state.surface(surface)?.viewport.is_some())
     }
 
-    /// Show `frame` on `surface`, answering its latest configure, with a frame callback and presentation feedback.
-    /// With points the surface gets its syncobj object first (made once, kept while it shows dmabufs); without, any
-    /// object it had is destroyed.
+    /// Show `frame` on `surface`, answering its latest configure, with a frame callback and presentation feedback:
+    /// [`Connection::gpu_commit`] committed at once.
     pub fn present_gpu(&mut self, surface: SurfaceId, frame: &GpuFrame<'_>) -> Result<(), Error> {
+        self.gpu_commit(surface, frame)?.commit(frame.damage)
+    }
+
+    /// The present of `frame` on `surface` (its `damage` aside, which [`Commit::commit`] takes), to be sent from any
+    /// thread: it answers the surface's latest configure, with a frame callback and presentation feedback. With points
+    /// the surface gets its syncobj object now (made once, kept while it shows dmabufs); without, any object it had is
+    /// destroyed. The buffer counts as held by the compositor from now on.
+    pub fn gpu_commit(
+        &mut self,
+        surface: SurfaceId,
+        frame: &GpuFrame<'_>,
+    ) -> Result<Commit, Error> {
         let qh = self.queue.handle();
         let presentation = self.state.presentation.clone();
         let size = self.frame_size(surface, frame.preferred)?;
@@ -411,19 +424,8 @@ impl Connection {
         if frame.size.0 > buffer_size.0 || frame.size.1 > buffer_size.1 {
             return Err(Error::Protocol("a frame larger than its buffer"));
         }
-        let subsurface = matches!(surf.role, Role::Subsurface { .. });
-        if !subsurface {
-            if let Some(serial) = surf.serials.present()? {
-                match &surf.role {
-                    Role::Toplevel { xdg, .. } | Role::Popup { xdg, .. } => {
-                        xdg.ack_configure(serial)
-                    }
-                    Role::External { role, .. } => role.ack_configure(serial),
-                    Role::Subsurface { .. } => {}
-                }
-            }
-        }
-        match frame.sync {
+        let ack = surf.answers()?;
+        let sync = match frame.sync {
             Some((timeline, acquire, release)) => {
                 let manager = gpu
                     .syncobj
@@ -439,61 +441,36 @@ impl Connection {
                     surf.syncobj = Some(manager.get_surface(&surf.wl, &qh, GpuQuiet));
                     gpu.syncobj_surfaces.0 += 1;
                 }
-                let object = surf.syncobj.as_ref().expect("made above");
-                object.set_acquire_point(&timeline, (acquire >> 32) as u32, acquire as u32);
-                object.set_release_point(&timeline, (release >> 32) as u32, release as u32);
+                let object = surf.syncobj.clone().expect("made above");
+                Some((object, timeline, acquire, release))
             }
-            None => surf.drop_syncobj(gpu),
-        }
+            None => {
+                surf.drop_syncobj(gpu);
+                None
+            }
+        };
+        let cropped = frame.size != buffer_size;
+        let source = cropped.then(|| (0.0, 0.0, f64::from(frame.size.0), f64::from(frame.size.1)));
+        let scaling = surf.scaling(size.logical, size.scale, source)?;
         // the shared-memory slots no longer hold what is shown
         for slot in &mut surf.slots {
             slot.missed.forget();
         }
         let buffer = &mut gpu.buffers[at];
         buffer.busy = true;
-        surf.wl.attach(Some(&buffer.wl), 0, 0);
-        let cropped = frame.size != buffer_size;
-        match (&surf.viewport, size.scale.integer()) {
-            (Some(viewport), _) => {
-                surf.wl.set_buffer_scale(1);
-                if cropped {
-                    viewport.set_source(0.0, 0.0, f64::from(frame.size.0), f64::from(frame.size.1));
-                    surf.zoomed = true;
-                } else if surf.zoomed {
-                    viewport.set_source(-1.0, -1.0, -1.0, -1.0);
-                    surf.zoomed = false;
-                }
-                viewport.set_destination(clamp_i32(size.logical.0), clamp_i32(size.logical.1));
-            }
-            (None, _) if cropped => {
-                return Err(Error::Protocol(
-                    "a cropped frame on a surface without a viewport",
-                ))
-            }
-            (None, Some(n)) => surf.wl.set_buffer_scale(n),
-            (None, None) => return Err(Error::InvalidScale),
-        }
-        match frame.damage {
-            None => surf.wl.damage_buffer(0, 0, i32::MAX, i32::MAX),
-            Some(rects) => {
-                for r in rects {
-                    surf.wl.damage_buffer(
-                        clamp_i32(r.x),
-                        clamp_i32(r.y),
-                        clamp_i32(r.width),
-                        clamp_i32(r.height),
-                    );
-                }
-            }
-        }
-        if !subsurface {
-            surf.wl.frame(&qh, surface);
-            if let Some(presentation) = presentation {
-                presentation.feedback(&surf.wl, &qh, surface);
-            }
-        }
-        surf.wl.commit();
-        self.flush()
+        Ok(Commit {
+            surface,
+            wl: surf.wl.clone(),
+            shared: Arc::clone(&surf.shared),
+            ack,
+            buffer: buffer.wl.clone(),
+            layout: buffer_size,
+            scaling,
+            sync,
+            qh,
+            presentation,
+            conn: self.conn.clone(),
+        })
     }
 }
 

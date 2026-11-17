@@ -650,12 +650,15 @@ A slow frame then shows which part of it grew, without adding timing prints. The
 
 - the toolkit's run loop: each turn (`ui.turn`); its update (`ui.update`: the wake-ups and fades, each platform event
   by its kind, the tasks run, each message by its type); `ui.view`; and per window (`ui.window`) its layout, paint,
-  raster per layer (`content`, `raised`, the surface layers) and present; accessibility and semantics; each idle slice;
+  raster per layer (`content`, `raised`, the surface layers), present and the frame handed away (`ui.submit`);
+  accessibility and semantics; each idle slice;
 - the GPU renderer: `gpu.render` per layer with its prepare, plan, record, submit and image uploads, and the programs
   made; the CPU renderer: `cpu.raster` per layer with its plan, scroll layers and paint;
-- the Wayland presenter: lease (with allocations), copy, commit, submit and the fence wait or finish, and the GPU
-  warm-up's device, program turn, programs and their first draws (`gpu.programs.prime`), on the warm-up thread's
-  track;
+- the Wayland presenter: lease (with allocations), copy, commit, submit and the fence wait or finish; a submitted
+  frame's raster and copy, submit and commit on the render thread's track (`kit-render`), or its raster on a CPU
+  pool thread's (`kit-cpu-N`) and its commit on the render thread's; and the GPU warm-up (`gpu.warm`: `gpu.device`,
+  `gpu.program_turn`, the programs and their first draws, `gpu.programs.prime`) on the warm-up thread's track
+  (`gpu-warm-up`);
 - the compositor: each output's frame (`server.output_frame`), its scene, its render (lower, supersample, draw) with the
   glass, material, blur, content blur, surface and shrink passes inside, the flip submitted, the GPU wait of a timed
   headless frame, and on the text console the late start after a vblank (`server.latch_wait`) on a track of its own.

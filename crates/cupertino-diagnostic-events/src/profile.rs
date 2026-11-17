@@ -15,9 +15,9 @@
 //! presentation times, so the files of the processes of one session line up on one timeline: their events concatenated
 //! into one array open as one trace, each process its own track.
 //!
-//! A file is written as the process goes, at most [`FLUSH_DELAY`] after a span ends, a whole event at a time, and
-//! closed (its array's `]`) when the process exits. A process killed before that leaves a file without the closing
-//! bracket, which the format allows and the viewers read.
+//! A file is written as the process goes, at most [`FLUSH_DELAY`] after a span ends, a whole event at a time, by
+//! [`write_traces`] on a thread the process starts, and closed (its array's `]`) when the process exits. A process
+//! killed before that leaves a file without the closing bracket, which the format allows and the viewers read.
 
 use std::cell::RefCell;
 use std::fmt::{self, Write as _};
@@ -159,14 +159,15 @@ where
 }
 
 /// Installs a subscriber of the sinks [`ENV`] names, for a process with none of its own; nothing when the variable is
-/// unset, or when the process has a subscriber already.
-pub fn init() {
+/// unset, or when the process has a subscriber already. Whether it installed one, after which the process starts
+/// [`write_traces`].
+pub fn init() -> bool {
     if std::env::var_os(ENV).is_none() || tracing::dispatcher::has_been_set() {
-        return;
+        return false;
     }
-    if let Some(layer) = layer::<tracing_subscriber::Registry>() {
-        let _ = tracing::subscriber::set_global_default(tracing_subscriber::registry().with(layer));
-    }
+    layer::<tracing_subscriber::Registry>().is_some_and(|layer| {
+        tracing::subscriber::set_global_default(tracing_subscriber::registry().with(layer)).is_ok()
+    })
 }
 
 /// The monotonic clock in nanoseconds: the clock the timelines are written in.
@@ -219,7 +220,6 @@ mod tracy {
 struct Shared {
     file: Mutex<Option<File>>,
     pending: Mutex<Pending>,
-    ready: Condvar,
 }
 
 #[derive(Default)]
@@ -247,7 +247,7 @@ impl Shared {
         pending.started = true;
         pending.bytes.extend_from_slice(event.as_bytes());
         if wake {
-            self.ready.notify_one();
+            wake_writer();
         }
     }
 
@@ -278,26 +278,55 @@ impl Shared {
         }
     }
 
-    /// The writer's thread: waits for events, gives them [`FLUSH_DELAY`] to gather, writes them. It wakes only when
-    /// there are events.
-    fn writer(self: Arc<Shared>) {
-        loop {
-            {
-                let Ok(mut pending) = self.pending.lock() else {
-                    return;
+    /// Whether the trace is closed: nothing more is written.
+    fn closed(&self) -> bool {
+        self.pending.lock().map_or(true, |p| p.closed)
+    }
+}
+
+/// Set when a trace has events to write or was closed: what [`write_traces`] waits for.
+static WAITING: Mutex<bool> = Mutex::new(false);
+static WAKE: Condvar = Condvar::new();
+
+fn wake_writer() {
+    if let Ok(mut waiting) = WAITING.lock() {
+        *waiting = true;
+        WAKE.notify_all();
+    }
+}
+
+/// The name of the thread a process runs [`write_traces`] on.
+pub const WRITER_THREAD: &str = "profile-writer";
+
+/// Writes the events of the process's trace files as they come: waits for events, gives them [`FLUSH_DELAY`] to
+/// gather, writes them, and wakes only when there are events. It returns once every trace is closed, and at once when
+/// the process writes none, so a process starts it after the subscriber is installed ([`init`], [`layer`]), on a
+/// thread of its own named [`WRITER_THREAD`]; it starts no thread itself. Without it a trace is written when it is
+/// closed ([`finish`], the process's exit).
+pub fn write_traces() {
+    loop {
+        let traces: Vec<Arc<Shared>> = OPEN
+            .get()
+            .and_then(|open| open.lock().ok().map(|open| open.clone()))
+            .unwrap_or_default();
+        if traces.iter().all(|t| t.closed()) {
+            return;
+        }
+        {
+            let Ok(mut waiting) = WAITING.lock() else {
+                return;
+            };
+            while !*waiting {
+                waiting = match WAKE.wait(waiting) {
+                    Ok(w) => w,
+                    Err(_) => return,
                 };
-                while pending.bytes.is_empty() && !pending.closed {
-                    pending = match self.ready.wait(pending) {
-                        Ok(p) => p,
-                        Err(_) => return,
-                    };
-                }
-                if pending.closed {
-                    return;
-                }
             }
-            std::thread::sleep(FLUSH_DELAY);
-            self.write(false);
+            *waiting = false;
+        }
+        std::thread::sleep(FLUSH_DELAY);
+        for trace in &traces {
+            trace.write(false);
         }
     }
 }
@@ -319,6 +348,8 @@ extern "C" fn close_traces() {
             }
         }
     }
+    // the writer ends
+    wake_writer();
 }
 
 /// A layer writing each span as a complete event (`"ph":"X"`) when it ends, with its fields as the event's arguments;
@@ -369,12 +400,7 @@ impl ChromeLayer {
         let shared = Arc::new(Shared {
             file: Mutex::new(Some(file)),
             pending: Mutex::new(Pending::default()),
-            ready: Condvar::new(),
         });
-        let writer = Arc::clone(&shared);
-        std::thread::Builder::new()
-            .name("profile-writer".into())
-            .spawn(move || writer.writer())?;
         let open = OPEN.get_or_init(|| {
             // Safety: `close_traces` is an `extern "C"` function that takes no arguments and lives as long as the
             // process.

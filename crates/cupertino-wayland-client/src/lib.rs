@@ -31,13 +31,14 @@ pub use clipboard::{
     ClipboardOffer, DragEvent, DragIcon, DragOffer, DragSource, DragSourceEvent, ReadId,
 };
 pub use configure::{Decorations, WindowConfigure, WindowStates, WmCapabilities};
+pub use connection::commit::Commit;
 pub use connection::gpu::{
     DmabufAttributes, DmabufFeedback, DmabufPlaneRef, FrameSize, GpuBufferId, GpuFrame, TimelineId,
 };
 pub use connection::{
-    BufferLease, Connection, Event, ExtensionEvent, ExternalRole, ForeignParent, FrameCallback,
-    HeldPress, Popup, PopupConfigure, PopupPlacement, PressDevice, State, SurfaceId, TokenRequest,
-    Toplevel, ToplevelConfig, Waker,
+    BufferLease, Connection, DetachedBuffer, Event, ExtensionEvent, ExternalRole, ForeignParent,
+    FrameCallback, HeldPress, Popup, PopupConfigure, PopupPlacement, PressDevice, State, SurfaceId,
+    TokenRequest, Toplevel, ToplevelConfig, Waker,
 };
 pub use cursor::CursorTheme;
 pub use error::{Disconnect, Error};

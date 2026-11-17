@@ -19,6 +19,7 @@ mod paint;
 mod personal;
 pub mod platform;
 mod pointer;
+pub mod pool;
 mod route;
 mod runtime;
 mod scroll;

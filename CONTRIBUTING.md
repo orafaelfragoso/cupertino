@@ -25,7 +25,8 @@ Notes:
 
 - Run `cargo fmt` without `--all`, as CI does: `--all` also formats the vendored crates in `third-party/`, which stay as their authors wrote them (and one is missing the test files that its sources declare).
 - Shell and app crates build their process code behind the `app` feature. Use `cargo test -p <crate> --features app` for those.
-- The tests come in two tiers (`.config/nextest.toml`): the fast tier, held to 2 seconds a test and 5 minutes for the workspace, and the slow tier of tests that run whole programs, buses or displays. `scripts/test --slow` runs the slow one; the `ci` profile runs both.
+- The tests come in two tiers (`.config/nextest.toml`): the fast tier, held to 2 seconds a test and 5 minutes for the workspace, and the slow tier of tests that run whole programs, buses or displays, listed one per line with the reason in `.config/slow-tests.txt` (`ci/test_suite.py --write` writes the tiers' filters from it). `scripts/test --slow` runs the slow one; the `ci` profile runs both.
+- Tests exercise a crate's public interface: integration tests in `tests/`, not unit tests of private items.
 - Each crate's integration tests build as one program, `tests/suite.rs`; after adding or removing a test file run `ci/test_suite.py --write`.
 - Install [mold](https://github.com/rui314/mold): builds link through it when it is there (`ci/linker.sh`), several times faster than the default linker.
 - Install [cargo-nextest](https://nexte.st) (`cargo install cargo-nextest --locked`; CI uses 0.9.151). It runs every test in its own process and kills a test that runs longer than 2 minutes (`.config/nextest.toml`), so a hang fails with the test's name. To use libtest, replace `cargo nextest run` with `cargo test` inside the fixture script above; libtest has no per-test limit. A killed run can leave a test `dbus-daemon` behind: stop it, never your real session bus.

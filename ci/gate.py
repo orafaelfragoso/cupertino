@@ -231,6 +231,9 @@ def gate(root: Path) -> tuple[Counter, list[str]]:
             path = parent / name
             rel = path.relative_to(root).as_posix()
             if path.is_symlink():
+                # A link git ignores (a local tool's link out of the checkout) can never be committed.
+                if visible is not None and rel not in visible:
+                    continue
                 target = path.resolve(strict=True)
                 if Path(os.readlink(path)).is_absolute() or not target.is_relative_to(root):
                     problems.append(f"source symlink escapes tree: {rel}")

@@ -617,9 +617,13 @@ cargo run -p cupertino-layers
 
 The tests come in two tiers, defined in `.config/nextest.toml`. The fast tier (the `default` profile) is every test
 but the slow tier's: `scripts/test` fails a fast-tier test that takes more than 2 seconds and a whole-workspace run that
-takes more than 5 minutes, and prints the 20 slowest tests after every run. The slow tier (the `slow` profile) lists by
-name the tests that run whole programs, buses or displays or that measure, each with its reason; the `ci` profile runs
-both. `scripts/test` prepares the integration-test programs through `ci/build-test-fixtures.py` before nextest starts.
+takes more than 5 minutes, and prints the 20 slowest tests after every run. The slow tier (the `slow` profile) is the
+tests that run whole programs, buses or displays or that measure. They are listed one per line in
+`.config/slow-tests.txt` with the reasons, and `ci/test_suite.py --write` writes both profiles' filters from that list
+(`--check`, which CI runs, fails when they differ). Git merges the list by keeping both sides' lines, so branches that
+each move a test there do not conflict. The `ci` profile runs both tiers. Builds and test runs take turns on the
+machine: `scripts/done`, `scripts/test` and `scripts/dev/build` wait for one already running in any checkout
+(`scripts/dev/heavy-lock`; `CUPERTINO_HEAVY_LOCK=0` turns it off). `scripts/test` prepares the integration-test programs through `ci/build-test-fixtures.py` before nextest starts.
 Doctests run separately, as nextest does not run them.
 
 Install [cargo-nextest](https://nexte.st) (`cargo install cargo-nextest --locked`; CI uses 0.9.151). It runs every
@@ -630,7 +634,9 @@ can leave a test `dbus-daemon` behind: stop it, never your real session bus.
 `scripts/done` runs every check a change must pass, stopping at the first that fails: the project gate
 (`ci/gate.py`) and the test suite layout, formatting, clippy on the changed crates and their dependents, a test change
 for every crate whose sources changed (`NO_TEST_REASON="..."` accepts one without, for a reason), `scripts/test`,
-`scripts/dev/build` and `scripts/preview --changed`.
+`scripts/dev/build` and `scripts/preview --changed`. `scripts/done --quick` runs only the gate, formatting, clippy and
+`scripts/test`, for iterating or for a branch that is gated again after merging. `scripts/done --full` adds the slow tier
+(`scripts/test --slow`) and `scripts/dev/perf-gate`, for the checks after merging and before pushing.
 
 ### Instruction-count benchmarks
 

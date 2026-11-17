@@ -35,13 +35,22 @@ scripts/dev/profile --scenario NAME [--tool perf|samply|heaptrack]   # every pro
 scripts/dev/profile -- PROGRAM [ARGS]   # one program (and what it starts) under a profiler
 scripts/dev/perf-gate    # the scenarios the change since the last pass can affect, against this machine's baseline; profiles a regression
 scripts/done             # everything a change must pass before it is called done
+scripts/done --quick     # the gate, format, clippy and the fast tier of the change: while iterating, and on a branch someone else merges
+scripts/done --full      # scripts/done, then the slow tier and scripts/dev/perf-gate: after merging, before pushing
 ```
 
 - A change is done when `scripts/done` passes: the gate, formatting, clippy on the changed crates, a test change with
   every source change (or `NO_TEST_REASON`), the fast tier, the release build and the changed programs' screens.
   Report its last line; never call work done on a partial run.
+- Write tests against a crate's public interface only: integration tests in `tests/`, through what the crate exports.
+  Do not add unit tests of private items.
 - A test over 2 seconds fails `scripts/test`. Make it fast (a manual clock, no sleeps, no real timeouts) or move it to
-  the slow tier in `.config/nextest.toml` with the reason.
+  the slow tier: a line in `.config/slow-tests.txt` with the reason, then `ci/test_suite.py --write`, which writes the
+  tiers' filters in `.config/nextest.toml`. Git merges the list by keeping both sides' lines.
+- Builds and test runs take turns on the machine: `scripts/done`, `scripts/test` and `scripts/dev/build` wait for one
+  already running in any checkout, so several worktrees never build at once.
+- Run `cargo check` and `cargo clippy` with `--all-features`; without it the workspace reports false errors.
+- Find where time goes with `scripts/dev/profile` and `CUPERTINO_PROFILE` timelines, not with timing prints.
 - Each crate's integration tests are modules of one program, `tests/suite.rs`, written by `ci/test_suite.py --write`
   after a test file is added or removed (CI checks it). A test's name starts with its file's module
   (`cargo test -p CRATE --test suite store::`); a test that runs itself again names itself through

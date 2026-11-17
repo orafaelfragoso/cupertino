@@ -2,6 +2,10 @@
 # Whether a change is done: every check a change must pass before it is called finished, in one command, stopping at
 # the first that fails. Covers the work since origin/main, committed or not.
 #   scripts/done              the checks below
+#   scripts/done --quick      checks 1, 2 and 4 only: what to run while iterating on a change, or on a branch that
+#                             someone else gates after merging
+#   scripts/done --full       every check below, then the slow tier (scripts/test --slow) and the performance check
+#                             of the scenarios the change can affect (scripts/dev/perf-gate): the gate after merging
 #   NO_TEST_REASON="..." scripts/done
 #                             accept a source change without a test change, for a reason (a refactor, say)
 # 1. the project gate and the test suite layout
@@ -11,8 +15,18 @@
 #    render node opens (ci/render_node.py), so the tests that need one cannot skip here
 # 5. the release build of every program (scripts/dev/build)
 # 6. the screens of the changed programs (scripts/preview --changed), shown in target/preview/index.html
+# Builds and test runs take turns on this machine: a second run waits for the first (scripts/dev/heavy-lock).
 set -euo pipefail
 cd "$(dirname "$0")/.."
+mode=standard
+case "${1:-}" in
+    --quick) mode=quick ;;
+    --full) mode=full ;;
+    "") ;;
+    *) echo "usage: scripts/done [--quick | --full]" >&2; exit 2 ;;
+esac
+. scripts/dev/heavy-lock
+heavy_lock scripts/done "$PWD/scripts/done" "$@"
 step() { printf '\n== %s\n' "$*"; }
 
 step "gate"
@@ -39,26 +53,33 @@ if [ ${#crates[@]} -gt 0 ]; then
     cargo clippy --locked --all-targets --all-features $(printf -- '-p %s ' "${crates[@]}") -- -D warnings
 fi
 
-step "tests come with the change"
-missing=()
-for crate_dir in $(printf '%s\n' "${changed[@]}" | grep -oE '^crates/[^/]+' | sort -u); do
-    src=$(printf '%s\n' "${changed[@]}" | grep -E "^$crate_dir/src/.*\.rs$" | grep -vE '/tests?(\.rs|/)' || true)
-    [ -n "$src" ] || continue
-    tests=$(printf '%s\n' "${changed[@]}" | grep -E "^$crate_dir/(tests/|src/.*/tests?(\.rs|/)|src/tests?\.rs)" || true)
-    # a test added or changed inside a source file counts too
-    inline=$(git diff "$base" -- $src | grep -cE '^\+.*#\[(test|tokio::test)' || true)
-    [ -n "$tests" ] || [ "$inline" -gt 0 ] || missing+=("$crate_dir")
-done
-if [ ${#missing[@]} -gt 0 ] && [ -z "${NO_TEST_REASON:-}" ]; then
-    printf 'sources changed with no test change: %s\n' "${missing[@]}" >&2
-    echo "add a test of the new behaviour, or set NO_TEST_REASON=\"why none is needed\"" >&2
-    exit 1
+if [ "$mode" != quick ]; then
+    step "tests come with the change"
+    missing=()
+    for crate_dir in $(printf '%s\n' "${changed[@]}" | grep -oE '^crates/[^/]+' | sort -u); do
+        src=$(printf '%s\n' "${changed[@]}" | grep -E "^$crate_dir/src/.*\.rs$" | grep -vE '/tests?(\.rs|/)' || true)
+        [ -n "$src" ] || continue
+        tests=$(printf '%s\n' "${changed[@]}" | grep -E "^$crate_dir/(tests/|src/.*/tests?(\.rs|/)|src/tests?\.rs)" || true)
+        # a test added or changed inside a source file counts too
+        inline=$(git diff "$base" -- $src | grep -cE '^\+.*#\[(test|tokio::test)' || true)
+        [ -n "$tests" ] || [ "$inline" -gt 0 ] || missing+=("$crate_dir")
+    done
+    if [ ${#missing[@]} -gt 0 ] && [ -z "${NO_TEST_REASON:-}" ]; then
+        printf 'sources changed with no test change: %s\n' "${missing[@]}" >&2
+        echo "add a test of the new behaviour, or set NO_TEST_REASON=\"why none is needed\"" >&2
+        exit 1
+    fi
+    [ ${#missing[@]} -eq 0 ] || echo "no test change, accepted: $NO_TEST_REASON"
 fi
-[ ${#missing[@]} -eq 0 ] || echo "no test change, accepted: $NO_TEST_REASON"
 
 step "tests"
 eval "$(python3 -I ci/render_node.py --export)"
 scripts/test
+
+if [ "$mode" = quick ]; then
+    printf '\nDONE (quick): the gate, formatting, clippy and the fast tier passed; scripts/done runs the rest.\n'
+    exit 0
+fi
 
 step "release build"
 scripts/dev/build
@@ -66,4 +87,12 @@ scripts/dev/build
 step "screens"
 scripts/preview --changed
 
-printf '\nDONE: every check passed.\n'
+if [ "$mode" = full ]; then
+    step "slow tier"
+    scripts/test --slow
+
+    step "performance"
+    scripts/dev/perf-gate
+fi
+
+printf '\nDONE%s: every check passed.\n' "$([ "$mode" = full ] && echo ' (full)')"

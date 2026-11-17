@@ -12,9 +12,13 @@ With --slow on a machine whose render node opens, CUPERTINO_GPU_REQUIRED=1 is se
 the tests that need a render node fail there instead of skipping; the run says which (ci/render_node.py).
 
 The fast tier must finish in 5 minutes for the whole workspace, and each of its tests in 2 seconds. A test over that
-budget fails the run with its name and time: make it faster (the test clock, not sleeps), or move it to the slow tier in
-.config/nextest.toml with a reason. The 20 slowest tests are printed after every run.
+budget fails the run with its name and time: make it faster (the test clock, not sleeps), or move it to the slow tier:
+a line in .config/slow-tests.txt with the reason, then `ci/test_suite.py --write`. The 20 slowest tests are printed
+after every run.
+
+Builds and test runs take turns on this machine: a run waits for any other one to finish (scripts/dev/heavy-lock).
 """
+import fcntl
 import os
 import pathlib
 import subprocess
@@ -39,7 +43,22 @@ def changed() -> list[str]:
     return sorted(set(out))
 
 
+def take_turn() -> None:
+    """Wait for any other build or test run on this machine, as scripts/dev/heavy-lock does for the shell scripts."""
+    if os.environ.get("CUPERTINO_HEAVY_LOCK") == "0" or os.environ.get("CUPERTINO_HEAVY_LOCK_HELD"):
+        return
+    path = pathlib.Path(os.environ.get("XDG_RUNTIME_DIR") or "/tmp") / "cupertino-heavy-jobs.lock"
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print("scripts/test: waiting for another build or test run on this machine to finish", file=sys.stderr, flush=True)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+    os.environ["CUPERTINO_HEAVY_LOCK_HELD"] = "1"  # held until this process exits; the runs it starts share it
+
+
 def main() -> int:
+    take_turn()
     args = sys.argv[1:]
     passthrough = []
     if "--" in args:

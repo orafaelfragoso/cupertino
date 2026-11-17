@@ -1,1 +1,3 @@
 data/build-commit export-subst
+# The slow-test list is one test per line: merging keeps both sides, so branches that each add one never conflict.
+.config/slow-tests.txt merge=union

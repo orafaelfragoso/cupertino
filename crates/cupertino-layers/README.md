@@ -55,10 +55,17 @@ The further rules, each a check with its own problem kind:
 - `reaches_up`: no crate reaches a crate of a higher layer (later in the table, `testing` aside) through a chain of two
   or more dependencies: its own dependencies of every kind, then their normal and build dependencies. So no layer
   reaches up through `tools` or `testing` either.
-- `impure_source`: the Rust files of `foundation` and `models` crates (`PURE_LAYERS`), except `tests/`, the build
-  script and its `build/` directory, use none of `IMPURE` (`std::fs`, `std::net`, `std::process`, `std::env`,
-  `std::thread`, by path or in a `use std::{…}` group), no `unsafe` and no FFI (`extern` blocks and ABIs, `no_mangle`,
-  `export_name`, `link`, `link_name`). Comments and literals do not count. One problem per file and item.
+- `impure_source`: the Rust files of `foundation` and `models` crates (`PURE_LAYERS`), except the crate's own `tests/`
+  and `target/`, the build script and its `build/` directory, use none of `IMPURE` (`std::fs`, `std::net`,
+  `std::process`, `std::env`, `std::thread`, by path or in a `use std::{…}` group; `std::os::unix::net` counts as
+  `std::net`), no `unsafe` and no FFI (`extern` blocks and ABIs, `no_mangle`, `export_name`, `link`, `link_name`).
+  Comments and literals do not count, and a `tests` or `target` directory below the crate's root is checked like any
+  other. One problem per file and item.
+- `starts_thread`: the Rust files in the `src/` of `system` crates (`THREADLESS_LAYERS`) start no threads: no path
+  through `std::thread` to `spawn`, `Builder` or `scope`, whole, in a `use std::{…}` group or as `thread::…` after
+  `use std::thread`. The line names the call: `std::thread::spawn`, `std::thread::Builder::spawn` or
+  `std::thread::scope`. A `system` crate offers blocking functions; its callers run them as tasks. Tests, examples,
+  benches and the build script are not checked. One problem per file and call.
 - `components_apart`: a `shell` crate never depends on another `shell` crate, except `SHELL_HOST` (`cupertino-shell`)
   on the components; `SEPARATE_PROGRAMS` (`cupertino-login`, `cupertino-prompts`, `cupertino-screenshot`) are not
   components.
@@ -90,7 +97,8 @@ one line, `<layer> <rule> <crate> …` (the layer the crate declares), sorted, u
 
 ```
 shell facade cupertino-dock -> cupertino-ui-wayland normal
-foundation impure_source cupertino-trash src/lib.rs std::fs
+models impure_source cupertino-effects examples/render_effects.rs std::fs
+system starts_thread cupertino-trash src/lib.rs std::thread::Builder::spawn
 ```
 
 A line names only what the problem is about (crates, kind of dependency, file and item; never a line number or a
@@ -103,8 +111,13 @@ cargo run -q -p cupertino-layers -- --write-remaining
 ```
 
 `ENFORCED` lists the closed layers. Their problems are never excused by the file, `--write-remaining` leaves them out
-and fails while they remain, and a line of an enforced layer in the file is a problem (`enforced_remaining`). It is
-empty until the first layer closes.
+and fails while they remain, and a line of an enforced layer in the file is a problem (`enforced_remaining`). It holds
+`foundation` and `testing`; `system` leaves it while its crates still start threads.
+
+`cargo xtask ci`, in the profiles that run this check, also compares the file with its version at the merge base
+(`cargo xtask remaining [<ref>]` runs only that comparison): a line the base does not hold fails, unless the same change
+removes a line with the same `<layer> <rule> <crate>` (a renamed dependency or file) or the line's rule is one this
+check at the base does not have yet. So `--write-remaining` cannot list a new problem of an existing rule.
 
 ## The clippy.toml of shell and apps crates
 

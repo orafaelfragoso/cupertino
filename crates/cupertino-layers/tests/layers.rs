@@ -4,7 +4,7 @@ mod common;
 
 use common::{run_in, stderr, stdout, Fixture};
 use cupertino_layers::Layer::{
-    Apps, Core, Foundation, Graphics, Models, Protocol, Services, Shell, Testing, Ui,
+    Apps, Core, Foundation, Graphics, Models, Protocol, Services, Shell, System, Testing, Ui,
 };
 use cupertino_layers::{Policy, POLICY};
 
@@ -175,6 +175,42 @@ fn a_source_in_a_module_directory_is_checked() {
 }
 
 #[test]
+fn a_unix_socket_is_std_net() {
+    assert_eq!(
+        impure_lines(Foundation, "use std::os::unix::net::UnixStream;"),
+        ["foundation impure_source p src/lib.rs std::net"]
+    );
+    assert_eq!(
+        impure_lines(
+            Models,
+            "use std::{io, os::unix::{io::RawFd, net::UnixListener as L}};"
+        ),
+        ["models impure_source p src/lib.rs std::net"]
+    );
+    assert_eq!(
+        impure_lines(Foundation, "use std::os::unix::io::RawFd;"),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn tests_and_target_directories_are_exempt_only_at_the_crate_root() {
+    let fx = Fixture::new("pure-deep-tests")
+        .krate("p", Foundation, &[])
+        .file("p", "src/tests/t.rs", "fn t() { std::fs::read(\"x\"); }")
+        .file("p", "src/target/x.rs", "use std::env;")
+        .file("p", "target/debug/build/x.rs", "use std::env;")
+        .build();
+    assert_eq!(
+        fx.lines(),
+        [
+            "foundation impure_source p src/target/x.rs std::env",
+            "foundation impure_source p src/tests/t.rs std::fs"
+        ]
+    );
+}
+
+#[test]
 fn other_layers_may_be_impure() {
     assert_eq!(
         impure_lines(
@@ -183,6 +219,66 @@ fn other_layers_may_be_impure() {
         ),
         Vec::<String>::new()
     );
+}
+
+// threads of system crates
+
+#[test]
+fn a_system_crate_that_starts_a_thread_is_a_problem() {
+    let fx = Fixture::new("threads")
+        .krate("s", System, &[])
+        .file(
+            "s",
+            "src/lib.rs",
+            "fn f() { std::thread::spawn(|| {}); }\nfn g() { std::thread::scope(|_| {}); }",
+        )
+        .file(
+            "s",
+            "src/a.rs",
+            "use std::thread;\nfn f() { thread::Builder::new().spawn(|| {}); thread::spawn(|| {}); }",
+        )
+        .file("s", "src/b/c.rs", "use std::{io, thread::{self, scope}};")
+        .build();
+    assert_eq!(
+        fx.lines(),
+        [
+            "system starts_thread s src/a.rs std::thread::Builder::spawn",
+            "system starts_thread s src/a.rs std::thread::spawn",
+            "system starts_thread s src/b/c.rs std::thread::scope",
+            "system starts_thread s src/lib.rs std::thread::scope",
+            "system starts_thread s src/lib.rs std::thread::spawn",
+        ]
+    );
+    let findings = fx.check();
+    assert_eq!(findings.unlisted().count(), 5);
+    assert!(findings.unlisted().all(|p| p.kind() == "starts_thread"));
+}
+
+#[test]
+fn other_thread_items_comments_and_strings_start_no_thread() {
+    let src = "// std::thread::spawn\nconst A: &str = \"thread::spawn\";\n\
+               fn f() { std::thread::sleep(std::time::Duration::ZERO); let t = std::thread::current(); \
+               rustix::thread::gettid(); }";
+    let fx = Fixture::new("threads-none")
+        .krate("s", System, &[])
+        .file("s", "src/lib.rs", src)
+        .build();
+    assert_eq!(fx.lines(), Vec::<String>::new());
+}
+
+#[test]
+fn only_the_src_of_a_system_crate_is_checked_for_threads() {
+    let spawn = "fn f() { std::thread::spawn(|| {}); }";
+    let fx = Fixture::new("threads-exempt")
+        .krate("s", System, &[])
+        .krate("v", Services, &[])
+        .file("s", "tests/t.rs", spawn)
+        .file("s", "examples/e.rs", spawn)
+        .file("s", "build.rs", spawn)
+        .file("s", "benches/b.rs", spawn)
+        .file("v", "src/lib.rs", spawn)
+        .build();
+    assert_eq!(fx.lines(), Vec::<String>::new());
 }
 
 // facades, components, window system, external crates, licences

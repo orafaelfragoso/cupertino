@@ -1,7 +1,7 @@
 //! Layer rules of the workspace. A crate declares its layer in its manifest
 //! (`[package.metadata.cupertino] layer = "<layer>"`). [`RULES`] says which layers each layer may depend on; the
 //! further rules are checks of their own: no layer reaches up through a chain of dependencies, `foundation` and
-//! `models` sources stay pure, components stay apart, the window-system boundaries ([`WINDOW_SYSTEM`]) hold, `shell`
+//! `models` sources stay pure, `system` crates start no threads ([`THREADLESS_LAYERS`]), components stay apart, the window-system boundaries ([`WINDOW_SYSTEM`]) hold, `shell`
 //! and `apps` crates reach the toolkit through its facades ([`FACADES`]), external crates stay in their layers
 //! ([`EXTERNAL_CRATES`]) and every crate declares a licence.
 //!
@@ -187,7 +187,11 @@ pub const RULES: Rules = &[
 ];
 
 /// The closed layers: none of their problems may be listed in the remaining-work file.
-pub const ENFORCED: &[Layer] = &[Layer::Foundation, Layer::System, Layer::Testing];
+pub const ENFORCED: &[Layer] = &[Layer::Foundation, Layer::Testing];
+
+/// The layers whose crates start no threads in their `src/`: they offer blocking functions, which callers run as
+/// tasks.
+pub const THREADLESS_LAYERS: &[Layer] = &[System];
 
 /// The layers whose sources must stay pure: no I/O, no threads, no `unsafe`, no FFI.
 pub const PURE_LAYERS: &[Layer] = &[Foundation, Models];
@@ -426,6 +430,14 @@ pub enum Problem {
         file: String,
         what: &'static str,
     },
+    /// A source in the `src/` of a crate of a threadless layer that starts a thread with `call`. `file` is relative to
+    /// the crate's directory.
+    StartsThread {
+        krate: String,
+        layer: Layer,
+        file: String,
+        call: &'static str,
+    },
     /// A crate whose `license` is missing or no licence expression.
     UndeclaredLicence {
         krate: String,
@@ -454,6 +466,7 @@ impl Problem {
             Problem::WindowSystem { .. } => "window_system",
             Problem::ExternalCrate { .. } => "external_crate",
             Problem::Impure { .. } => "impure_source",
+            Problem::StartsThread { .. } => "starts_thread",
             Problem::UndeclaredLicence { .. } => "undeclared_licence",
             Problem::StaleRemaining(_) => "stale_remaining",
             Problem::EnforcedRemaining(_) => "enforced_remaining",
@@ -473,6 +486,7 @@ impl Problem {
             }
             Problem::ExternalCrate { from, .. } => from,
             Problem::Impure { krate, .. }
+            | Problem::StartsThread { krate, .. }
             | Problem::UndeclaredLicence { krate, .. }
             | Problem::DisallowedMethods { krate, .. } => krate,
             Problem::StaleRemaining(_) | Problem::EnforcedRemaining(_) | Problem::StaleGraph(_) => {
@@ -505,6 +519,7 @@ impl Problem {
             | Problem::WindowSystem { from_layer, .. }
             | Problem::ExternalCrate { from_layer, .. } => Some(*from_layer),
             Problem::Impure { layer, .. }
+            | Problem::StartsThread { layer, .. }
             | Problem::UndeclaredLicence { layer, .. }
             | Problem::DisallowedMethods { layer, .. } => Some(*layer),
             _ => None,
@@ -529,6 +544,9 @@ impl Problem {
             Problem::Impure {
                 krate, file, what, ..
             } => format!("{krate} {file} {what}"),
+            Problem::StartsThread {
+                krate, file, call, ..
+            } => format!("{krate} {file} {call}"),
             Problem::UndeclaredLicence { krate, .. } => krate.clone(),
             Problem::DisallowedMethods { krate, .. } => format!("{krate} clippy.toml"),
             _ => return None,
@@ -586,6 +604,16 @@ impl fmt::Display for Problem {
                 file,
                 what,
             } => write!(f, "{krate} ({layer}) is pure and its {file} uses {what}"),
+            Problem::StartsThread {
+                krate,
+                layer,
+                file,
+                call,
+            } => write!(
+                f,
+                "{krate} ({layer}) starts a thread with {call} in {file}: offer the blocking function and let the \
+                 caller run it as a task"
+            ),
             Problem::UndeclaredLicence { krate, licence, .. } => {
                 write!(f, "{krate} declares no licence expression (`{licence}`)")
             }

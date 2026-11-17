@@ -1,5 +1,5 @@
 //! Scans of a crate's Rust sources, read as tokens with comments and literals set apart: the purity rule of the
-//! `foundation` and `models` layers.
+//! `foundation` and `models` layers, and the thread rule of the `system` layer.
 
 use std::path::Path;
 
@@ -146,44 +146,75 @@ fn ident(tokens: &[Token], i: usize) -> Option<&str> {
     }
 }
 
+/// Appends to `out` the paths that start at token `i`, as their segments, with every `use` group expanded:
+/// `std::{fs, os::unix::net}` is `std::fs` and `std::os::unix::net`. Returns the index after them.
+fn paths<'a>(
+    tokens: &'a [Token],
+    mut i: usize,
+    mut prefix: Vec<&'a str>,
+    out: &mut Vec<Vec<&'a str>>,
+) -> usize {
+    loop {
+        match tokens.get(i) {
+            Some(Token::Ident(word)) => {
+                prefix.push(word);
+                i += 1;
+                if punct(tokens, i, ':') && punct(tokens, i + 1, ':') {
+                    i += 2;
+                } else {
+                    out.push(prefix);
+                    return i;
+                }
+            }
+            Some(Token::Punct('{')) => {
+                i += 1;
+                loop {
+                    match tokens.get(i) {
+                        None => return i,
+                        Some(Token::Punct('}')) => return i + 1,
+                        // a renamed item: the name after `as` is no path
+                        Some(Token::Ident(word)) if word == "as" => i += 2,
+                        Some(Token::Ident(_)) | Some(Token::Punct('{')) => {
+                            i = paths(tokens, i, prefix.clone(), out)
+                        }
+                        _ => i += 1,
+                    }
+                }
+            }
+            _ => {
+                out.push(prefix);
+                return i;
+            }
+        }
+    }
+}
+
+/// The standard library module a path names, with `std::os::unix::net` counted as `std::net`.
+fn std_module<'a>(path: &[&'a str]) -> Option<&'a str> {
+    if path.first() != Some(&"std") {
+        return None;
+    }
+    if path.get(1..4) == Some(&["os", "unix", "net"]) {
+        return Some("net");
+    }
+    path.get(1).copied()
+}
+
 /// What the purity rule finds in `src`, each once and in the order of `impure`: `std::<module>` for a module of
-/// `impure` named by a path or a `use std::{…}` group, `unsafe`, and `ffi` for an `extern` block or ABI or a linking
-/// attribute.
+/// `impure` named by a path or a `use std::{…}` group (`std::os::unix::net` is `std::net`), `unsafe`, and `ffi` for
+/// an `extern` block or ABI or a linking attribute.
 pub(crate) fn impurities(src: &str, impure: &[&'static str]) -> Vec<&'static str> {
     let tokens = tokens(src);
     let mut found = Vec::new();
     for i in 0..tokens.len() {
         match ident(&tokens, i) {
             Some("std") if punct(&tokens, i + 1, ':') && punct(&tokens, i + 2, ':') => {
-                let mut names = Vec::new();
-                if let Some(module) = ident(&tokens, i + 3) {
-                    names.push(module);
-                } else if punct(&tokens, i + 3, '{') {
-                    let mut depth = 0;
-                    for j in i + 3..tokens.len() {
-                        match tokens[j] {
-                            Token::Punct('{') => depth += 1,
-                            Token::Punct('}') => {
-                                depth -= 1;
-                                if depth == 0 {
-                                    break;
-                                }
-                            }
-                            Token::Ident(ref name)
-                                if depth == 1
-                                    && (punct(&tokens, j - 1, '{')
-                                        || punct(&tokens, j - 1, ',')) =>
-                            {
-                                names.push(name)
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                for name in names {
+                let mut named = Vec::new();
+                paths(&tokens, i, Vec::new(), &mut named);
+                for module in named.iter().filter_map(|path| std_module(path)) {
                     if let Some(item) = impure
                         .iter()
-                        .find(|m| m.strip_prefix("std::") == Some(name))
+                        .find(|m| m.strip_prefix("std::") == Some(module))
                     {
                         found.push(*item);
                     }
@@ -214,8 +245,46 @@ pub(crate) fn impurities(src: &str, impure: &[&'static str]) -> Vec<&'static str
         .collect()
 }
 
-/// The Rust files under `dir`, as paths relative to `base` with `/` separators, sorted. Hidden directories, `target`,
-/// `tests` directories, and the build script at `base` with its `build` directory of modules, are left out.
+/// The calls that start a thread: the item of `std::thread` a path reaches, and the call the thread rule names.
+const THREAD_STARTS: [(&str, &str); 3] = [
+    ("spawn", "std::thread::spawn"),
+    ("Builder", "std::thread::Builder::spawn"),
+    ("scope", "std::thread::scope"),
+];
+
+/// The calls of `src` that start a thread, each once and in the order of [`THREAD_STARTS`]: a path through
+/// `std::thread` to `spawn`, `Builder` or `scope`, whole, in a `use std::{…}` group, or as `thread::…` after a
+/// `use std::thread`.
+pub(crate) fn thread_starts(src: &str) -> Vec<&'static str> {
+    let tokens = tokens(src);
+    let mut named = Vec::new();
+    for i in 0..tokens.len() {
+        let path_start = punct(&tokens, i + 1, ':') && punct(&tokens, i + 2, ':');
+        match ident(&tokens, i) {
+            Some("std") if path_start => {
+                paths(&tokens, i, Vec::new(), &mut named);
+            }
+            // `thread::spawn` after `use std::thread`, never the inside of a longer path
+            Some("thread") if path_start && !punct(&tokens, i.wrapping_sub(1), ':') => {
+                paths(&tokens, i, vec!["std"], &mut named);
+            }
+            _ => {}
+        }
+    }
+    THREAD_STARTS
+        .iter()
+        .filter(|(item, _)| {
+            named
+                .iter()
+                .any(|path| path.get(..3) == Some(&["std", "thread", item]))
+        })
+        .map(|(_, call)| *call)
+        .collect()
+}
+
+/// The Rust files under `dir`, as paths relative to `base` with `/` separators, sorted. Hidden directories are left
+/// out, and so are the `target` and `tests` directories, the build script and its `build` directory of modules at
+/// `base`; a `tests` or `target` directory deeper down is scanned like any other.
 pub(crate) fn rust_files(base: &Path, dir: &Path) -> Vec<String> {
     let mut out = Vec::new();
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -229,10 +298,7 @@ pub(crate) fn rust_files(base: &Path, dir: &Path) -> Vec<String> {
             .and_then(|n| n.to_str())
             .unwrap_or_default();
         if path.is_dir() {
-            if name.starts_with('.')
-                || name == "target"
-                || name == "tests"
-                || dir == base && name == "build"
+            if name.starts_with('.') || dir == base && matches!(name, "target" | "tests" | "build")
             {
                 continue;
             }

@@ -14,9 +14,9 @@
 //! edge is hard, so the content stops at the row as it does under a solid title bar.
 
 use cupertino_geometry::{Point, Rect};
+use cupertino_theme::ui::{Color, ColorRole, StateVariant, ThemePreferences};
 use cupertino_ui_core::{OverlayCx, PaintCx};
 use cupertino_ui_render::{GradientStop, Paint};
-use cupertino_ui_theme::{Color, ColorRole, StateVariant, ThemePreferences};
 
 /// The soft edge's veil over the top of the band: this much of the window background shows over the content.
 pub const SOFT_EDGE_MAX: f64 = 0.96;

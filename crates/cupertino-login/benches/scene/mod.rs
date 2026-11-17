@@ -160,7 +160,7 @@ impl Run {
         let glyphs = Arc::clone(&text);
         let data = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/theme");
         let theme = ThemeTokens::cupertino(
-            &cupertino_theme::Theme::from_dir(data).unwrap(),
+            &cupertino_assets::theme::from_dir(data).unwrap(),
             ThemePreferences {
                 appearance: Appearance::Dark,
                 reduce_transparency: false,

@@ -6,7 +6,6 @@ use crate::error::{Error, Result};
 use crate::typography::Typography;
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::path::Path;
 
 #[derive(Deserialize, Default)]
 struct RawAppearance(HashMap<String, [u8; 4]>);
@@ -86,15 +85,6 @@ impl DesignTokens {
             colors,
             typography: Typography::from_raw(&raw.typography),
         })
-    }
-
-    pub fn from_path(path: impl AsRef<Path>) -> Result<Self> {
-        let path = path.as_ref();
-        let text = std::fs::read_to_string(path).map_err(|source| Error::Io {
-            path: path.to_path_buf(),
-            source,
-        })?;
-        Self::from_str(&text)
     }
 
     /// The catalog of exactly this appearance (high-contrast catalogs are partial).

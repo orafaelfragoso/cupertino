@@ -1,14 +1,14 @@
 //! Text and symbols on glass. The compositor draws glass under a part of a window, and the window draws its text over
-//! it; that text goes through the foreground matrix of the glass (`cupertino_theme::glass`): the face under it lifted
+//! it; that text goes through the foreground matrix of the glass (`crate::glass`): the face under it lifted
 //! to white on dark glass, pushed to black on light glass. A small shape takes the matrix of the side its face was
 //! measured on, so a control over a light backdrop in the dark appearance gets dark text; larger bars and panels keep
 //! their appearance's. Labels on glass are also drawn more opaque than on a plain window, since the face behind them
 //! is busier: a primary label at full strength, a placeholder somewhat less, and a secondary label at the strength
 //! that shifts the face under it by the secondary shift of its side (darker on light glass, lighter on dark glass).
 
-use crate::{Color, ColorRole, InteractionVariant, ThemeTokens};
-use cupertino_theme::glass::{foreground_rgb, FaceTone};
-pub use cupertino_theme::glass::{vibrant_secondary, VIBRANT_PLACEHOLDER, VIBRANT_PRIMARY};
+use crate::glass::{foreground_rgb, FaceTone};
+pub use crate::glass::{vibrant_secondary, VIBRANT_PLACEHOLDER, VIBRANT_PRIMARY};
+use crate::ui::{Color, ColorRole, InteractionVariant, ThemeTokens};
 
 /// How strongly the text of `role` is drawn on glass whose foreground is the `dark` side's (white text), or `None`
 /// for a colour that stays as the theme has it (fills, accents, the text of a filled control).

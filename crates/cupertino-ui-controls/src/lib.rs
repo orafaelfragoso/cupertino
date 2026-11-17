@@ -99,6 +99,7 @@ pub use tooltip::{TooltipChange, TooltipState};
 pub use cupertino_ui_core::SortOrder;
 
 use cupertino_geometry::{Insets, Point, Size};
+use cupertino_theme::ui::{ColorRole, ControlSize};
 use cupertino_ui_core::{
     Checked, CommandRegistry, Element, Key, PaintCx, WindowBackground, WindowKey,
 };
@@ -106,7 +107,6 @@ use cupertino_ui_layout::{Align, Axis, ScrollState, Track};
 use cupertino_ui_platform::{KeyEvent, WindowSpec};
 use cupertino_ui_render::{ImageResource, ResourceId};
 use cupertino_ui_text::{AttributedText, ContentPurpose, SecureBuffer};
-use cupertino_ui_theme::{ColorRole, ControlSize};
 use std::ops::Range;
 
 /// The space a form-style window (a form, a dialog) leaves between its edges and its content, for a [`Stack`]'s
@@ -1034,7 +1034,7 @@ pub struct DatePicker<M> {
 pub struct ColorWell<M> {
     /// The accessible name.
     pub label: String,
-    pub color: cupertino_ui_theme::Color,
+    pub color: cupertino_theme::ui::Color,
     pub enabled: bool,
     pub on_open: Option<M>,
 }
@@ -1444,7 +1444,7 @@ pub struct BareSecureField<M> {
     pub field: SecureField<M>,
     pub size: f64,
     pub weight: Option<u16>,
-    pub placeholder_color: Option<cupertino_ui_theme::Color>,
+    pub placeholder_color: Option<cupertino_theme::ui::Color>,
     /// The text and the placeholder are centred in the field while they fit, else they start at the reading
     /// direction's start and scroll as in any field.
     pub centered: bool,

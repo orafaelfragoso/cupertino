@@ -15,6 +15,7 @@ name = "glass-renderer"
 path = "src/bin/glass_renderer.rs"
 
 [dependencies]
+cupertino-assets = { path = "../cupertino-assets" }
 cupertino-theme = { path = "../cupertino-theme" }
 cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-geometry = { path = "../cupertino-geometry" }

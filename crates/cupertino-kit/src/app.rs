@@ -6,6 +6,7 @@ use cupertino_assets::{Assets, FontRole, FontSource, BUILTIN_FONT};
 use cupertino_defaults::appearance::{AppearanceSettings, Highlight};
 use cupertino_defaults::watch::{ConfigWatcher, WatchEvent};
 use cupertino_modifiers::Profile;
+use cupertino_theme::ui::{Appearance, ColorTokens, ThemePreferences, ThemeTokens};
 use cupertino_theme::Theme;
 use cupertino_ui_atspi::AtspiAdapter;
 use cupertino_ui_core::{
@@ -18,7 +19,6 @@ use cupertino_ui_render::{CpuConfig, CpuRenderer};
 use cupertino_ui_text::{
     FontIndex, FontStyle, FontWeight, GlyphRaster, InstalledFonts, TextSystem,
 };
-use cupertino_ui_theme::{Appearance, ColorTokens, ThemePreferences, ThemeTokens};
 use cupertino_ui_wayland::{GpuRenderers, WaylandWindowSystem};
 use std::cell::Cell;
 use std::fmt;
@@ -469,7 +469,7 @@ impl Personal {
 /// The Cupertino theme from the installed theme data, else the neutral one: an application starts without the
 /// desktop's data, and says why on stderr.
 fn start_theme(preferences: ThemePreferences) -> Result<(ThemeTokens, Option<Theme>), AppError> {
-    let cupertino = Theme::load().and_then(|data| {
+    let cupertino = cupertino_assets::theme::load().and_then(|data| {
         ThemeTokens::cupertino(&data, preferences).map(|theme| (theme, Some(data)))
     });
     cupertino.or_else(|e| {

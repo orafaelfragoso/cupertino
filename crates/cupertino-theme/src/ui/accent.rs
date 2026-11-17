@@ -1,7 +1,7 @@
 //! The person's accent and highlight colours laid over a palette: the fills that mark a default choice or a selection
 //! take the accent, and the background of selected text takes a light tint of the highlight.
 
-use crate::{Color, ColorRole, ColorTokens, InteractionVariant, StateVariant};
+use crate::ui::{Color, ColorRole, ColorTokens, InteractionVariant, StateVariant};
 
 /// How much of the colour a pressed accent keeps: a little darker than the resting one.
 const PRESSED_KEEP: f32 = 0.86;

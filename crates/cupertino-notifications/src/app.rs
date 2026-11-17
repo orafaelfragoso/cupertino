@@ -18,7 +18,6 @@ use cupertino_shell_client::{
     Anchor, KeyboardInteractivity, Layer, LayerShell, LayerSurface, LayerSurfaceConfig, Margin,
     ShellEvent,
 };
-use cupertino_theme::Theme;
 use cupertino_ui_wayland::{RoleEvent, SurfaceRoles, WaylandWindowSystem};
 use cupertino_wayland_client::{
     Connection, Error as WaylandError, ExtensionEvent, OutputId, SurfaceId,
@@ -603,7 +602,7 @@ fn watch_policy(notes: async_channel::Sender<Note>) -> Option<ConfigWatcher> {
 }
 
 fn start(options: &Options) -> Result<(Notifications, Vec<Command<Message>>)> {
-    let mut config = CenterConfig::from_theme(&Theme::load()?);
+    let mut config = CenterConfig::from_theme(&cupertino_assets::theme::load()?);
     // the toolkit's first frame has the session's options; the roles report changes
     config.motion.reduce_motion = false;
     let (sender, notes) = async_channel::unbounded();

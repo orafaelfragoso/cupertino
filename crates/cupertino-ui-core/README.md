@@ -1,6 +1,6 @@
 # cupertino-ui-core
 
-The CupertinoKit runtime. MPL-2.0. Depends on the other `cupertino-ui-*` type crates, `cupertino-menu-model`, `async-task`,
+The CupertinoKit runtime. MPL-2.0. Depends on the other `cupertino-ui-*` type crates, `cupertino-theme` (its `ui` theme tokens), `cupertino-menu-model`, `async-task`,
 `rustix` and `tracing` (the spans of each frame's phases, which `cupertino-diagnostic-events`' `profile` records when asked);
 never on a server, shell or private-protocol crate.
 
@@ -120,6 +120,9 @@ all on one thread.
   (`PaintCx::window_active`) while it has the keyboard or a popup opened from it has, as a menu takes the keyboard
   while its window stays the one in use. It stays so after the popup closes, until the window hears of the keyboard
   itself or a configure says it is no longer activated, so it does not flash inactive while the keyboard comes back.
+  A window that just became active crosses from its inactive colours to its active ones: the runtime keeps when it
+  became active and paints it, until the crossing ends, with its theme and its pinned themes carrying the progress
+  (`ColorTokens::set_activation`).
   A popup still open that loses the keyboard ends it, as the keyboard may have gone to another application without
   the compositor deactivating the window.
   Keys, focus and `EventCx::window_active` follow the keyboard alone.

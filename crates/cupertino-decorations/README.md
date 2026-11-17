@@ -26,9 +26,9 @@ premultiplied RGBA buffers that a compositor uploads as textures.
 ```rust
 use cupertino_decorations::*;
 use cupertino_geometry::Size;
-use cupertino_theme::{Appearance, Theme};
+use cupertino_theme::Appearance;
 
-let theme = Theme::load()?;                                   // or DecorationConfig::builtin(..)
+let theme = cupertino_assets::theme::load()?;                 // or DecorationConfig::builtin(..)
 let mut dec = Decorations::new(DecorationConfig::from_theme(&theme, Appearance::Light, TitlebarStyle::Standard));
 let content = Size::new(800.0, 600.0);
 let frame = dec.frame_size(content);                          // 800 × 628

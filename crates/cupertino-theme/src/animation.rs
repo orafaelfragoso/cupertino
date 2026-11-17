@@ -1,11 +1,11 @@
-//! Animation presets loaded from the theme data (`animations.json`), converted into `cupertino-animation` types.
+//! Animation presets loaded from the theme data (`animations.json`), converted into `cupertino-animation` types, and
+//! the design's timing-function table ([`TimingPreset`]).
 
 use crate::error::{Error, Result};
 use cupertino_animation::cosine_ease;
-use cupertino_animation::{CubicBezier, Momentum, RubberBand, SpringParams};
+use cupertino_animation::{CubicBezier, Curve, Momentum, RubberBand, Spring, SpringParams};
 use serde::Deserialize;
 use std::collections::BTreeMap;
-use std::path::Path;
 
 /// An easing referenced by name: a cubic bézier of the timing table or the cosine S-curve (`0.5 − 0.5·cos(π·x)`), which is
 /// not a bézier.
@@ -204,15 +204,6 @@ impl AnimationPresets {
         })
     }
 
-    pub fn from_path(path: impl AsRef<Path>) -> Result<Self> {
-        let path = path.as_ref();
-        let text = std::fs::read_to_string(path).map_err(|source| Error::Io {
-            path: path.to_path_buf(),
-            source,
-        })?;
-        Self::from_str(&text)
-    }
-
     pub fn timing_names(&self) -> impl Iterator<Item = &str> {
         self.timing.keys().map(String::as_str)
     }
@@ -256,5 +247,86 @@ impl AnimationPresets {
 
     pub fn minimize_effects(&self) -> &[MinimizeEffect] {
         &self.minimize_effects
+    }
+}
+
+/// The timing-function table: five cubic béziers and one
+/// spring (mass 1, stiffness 100, damping 10). Which transitions use the spring entry is unknown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TimingPreset {
+    Ease,
+    Linear,
+    EaseIn,
+    EaseOut,
+    EaseInOut,
+    Spring,
+}
+
+impl TimingPreset {
+    pub const TABLE: [TimingPreset; 6] = [
+        Self::Ease,
+        Self::Linear,
+        Self::EaseIn,
+        Self::EaseOut,
+        Self::EaseInOut,
+        Self::Spring,
+    ];
+
+    pub fn from_index(i: usize) -> Option<Self> {
+        Self::TABLE.get(i).copied()
+    }
+
+    pub fn index(self) -> usize {
+        Self::TABLE.iter().position(|p| *p == self).unwrap_or(0)
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Ease => "ease",
+            Self::Linear => "linear",
+            Self::EaseIn => "ease-in",
+            Self::EaseOut => "ease-out",
+            Self::EaseInOut => "ease-in-out",
+            Self::Spring => "spring",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::TABLE.iter().copied().find(|p| p.name() == name)
+    }
+
+    pub fn bezier(self) -> Option<CubicBezier> {
+        match self {
+            Self::Ease => Some(CubicBezier::DEFAULT),
+            Self::Linear => Some(CubicBezier::LINEAR),
+            Self::EaseIn => Some(CubicBezier::EASE_IN),
+            Self::EaseOut => Some(CubicBezier::EASE_OUT),
+            Self::EaseInOut => Some(CubicBezier::EASE_IN_EASE_OUT),
+            Self::Spring => None,
+        }
+    }
+
+    pub fn spring(self) -> Option<SpringParams> {
+        (self == Self::Spring).then(SpringParams::default)
+    }
+
+    /// Eased progress `elapsed / duration`; the spring entry ignores `duration` (it runs in
+    /// absolute time and settles by itself).
+    pub fn sample(self, elapsed: f64, duration: f64) -> f64 {
+        match self.bezier() {
+            Some(b) => b.eval(if duration <= 0.0 {
+                1.0
+            } else {
+                elapsed / duration
+            }),
+            None => Spring::new(SpringParams::default()).value(elapsed),
+        }
+    }
+
+    pub fn curve(self, duration: f64) -> Curve {
+        match self.bezier() {
+            Some(bezier) => Curve::Timed { duration, bezier },
+            None => Curve::Spring(SpringParams::default()),
+        }
     }
 }

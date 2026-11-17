@@ -2,9 +2,9 @@
 
 use cupertino_assets::{Assets, IconName};
 use cupertino_icons::{SystemIcons, ThemeIcons};
+use cupertino_theme::ui::Color;
 use cupertino_ui_core::{next_resource_id, IconImage, Icons, PlaceholderIcons};
 use cupertino_ui_render::{ImageResource, PixelFormat};
-use cupertino_ui_theme::Color;
 use std::collections::HashMap;
 use std::fmt;
 use std::path::PathBuf;

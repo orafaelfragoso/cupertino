@@ -1,6 +1,7 @@
 # cupertino-animation
 
-Dependency-free animation primitives for the Cupertino compositor. Time is always an absolute timestamp in seconds, so a
+Dependency-free animation maths for the Cupertino compositor: curves, springs, momentum and overscroll, sampled by time; the
+design's named motions (the timing-function table, the theme data's presets) are in `cupertino-theme`. Time is always an absolute timestamp in seconds, so a
 curve samples identically at any refresh rate.
 
 ## Public API
@@ -8,7 +9,7 @@ curve samples identically at any refresh rate.
 | Module | Contents |
 |---|---|
 | `spring` | `SpringParams`, `Spring`: damped spring with perceptual duration/bounce constructors, settling duration |
-| `timing` | `CubicBezier` with the five built-in timing functions, `TimingPreset` (table: five béziers + spring mass 1 / stiffness 100 / damping 10), `cosine_ease` |
+| `timing` | `CubicBezier` with the five built-in timing functions, `cosine_ease` |
 | `momentum` | `QuarticMomentum` (default model, `C = 1000`, `x0 + sign·C·(T⁴−(T−t)⁴)`), `QuarticMomentum2D`, `MomentumModel` selector, `Momentum` (per-millisecond exponential alternative) |
 | `rubber_band` | `RubberBand` and free functions: elastic overscroll `d·(1 − 1/(x·c/d + 1))`, inverse, slope, clamp helper. Coefficient `c` is configurable, default 0.55 |
 | `rubber_band` | `ElasticMotion` (`(x0 + v·t·0.31)·exp(−20t/1.6)`), `RubberBandFilterConfig` / `RubberBandFilter` (stiffness 20, direction lock 1.0, min delta 10) |

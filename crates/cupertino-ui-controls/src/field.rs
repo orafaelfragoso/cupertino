@@ -6,6 +6,9 @@ use crate::look::{self, paint_focus_ring};
 use crate::text_menu::{self, Can, Command, Opens};
 use crate::{BareField, BareSecureField, SearchField, SecureField, TextChange, TextField};
 use cupertino_geometry::{Insets, Point, Rect, Size};
+use cupertino_theme::ui::{
+    control_geometry, Color, ColorRole, ControlFamily, ControlSize, ThemeTokens,
+};
 use cupertino_ui_core::{
     AccessibleStates, AccessibleValue, Action, ActionData, Change, ControlState, Environment,
     Event, EventCx, MeasureCx, OverlayCx, PaintCx, Pasted, Propagation, Role, SemanticsCx,
@@ -20,9 +23,6 @@ use cupertino_ui_text::{
     Affinity, ChangeCause, ContentHints, ContentPurpose, ImeBatch, ImeEvent, Keymap,
     ParagraphLayout, Response, SecureBuffer, Selection, TextBuffer, TextFieldKeys,
     TextInputSession, TextPosition, CARET_WIDTH, SURROUNDING_MAX_BYTES,
-};
-use cupertino_ui_theme::{
-    control_geometry, Color, ColorRole, ControlFamily, ControlSize, ThemeTokens,
 };
 use std::cell::{Cell, RefCell};
 use std::ops::Range;
@@ -406,7 +406,7 @@ fn placed(
 pub(crate) fn fill_rect(
     cx: &mut PaintCx<'_>,
     rect: Rect,
-    color: Option<cupertino_ui_theme::Color>,
+    color: Option<cupertino_theme::ui::Color>,
 ) {
     if let Some(color) = color {
         cx.push(PaintOp::Fill {
@@ -544,7 +544,7 @@ fn paint_text(
 const BLINK_LIMIT_NS: u64 = 10_000_000_000;
 
 /// How the caret's blink cycle divides, as shares of its period: the caret fades out, stays hidden, fades in and
-/// stays shown. The period is two blink phases ([`Motion::caret_phase_ms`](cupertino_ui_theme::Motion)), less a
+/// stays shown. The period is two blink phases ([`Motion::caret_phase_ms`](cupertino_theme::ui::Motion)), less a
 /// fiftieth, so the default phase gives a period just under a second.
 const BLINK_PERIOD_SHARE: f64 = 1.96;
 const BLINK_FADE_OUT: f64 = 0.12 / 0.98;
@@ -573,7 +573,7 @@ pub(crate) struct Blink {
     layered: Cell<bool>,
 }
 
-/// How a field's caret blinks, as its window's theme says ([`Motion::caret_phase_ms`](cupertino_ui_theme::Motion)):
+/// How a field's caret blinks, as its window's theme says ([`Motion::caret_phase_ms`](cupertino_theme::ui::Motion)):
 /// for an owner that shows the blink itself, on the compositor's clock ([`BareField::caret_layer`]). Its default is
 /// the theme's own blink, before a field told its own ([`BareField::on_blink`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -588,7 +588,7 @@ pub struct CaretBlink {
 impl Default for CaretBlink {
     fn default() -> CaretBlink {
         CaretBlink {
-            phase_ms: cupertino_ui_theme::CARET_PHASE_MS,
+            phase_ms: cupertino_theme::ui::CARET_PHASE_MS,
             restarted: false,
         }
     }

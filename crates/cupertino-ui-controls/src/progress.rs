@@ -1,5 +1,6 @@
 use crate::{look, Progress};
 use cupertino_geometry::{Rect, Size};
+use cupertino_theme::ui::ColorRole;
 use cupertino_ui_core::{
     AccessibleStates, AccessibleValue, Change, ControlState, Event, EventCx, MeasureCx, PaintCx,
     Propagation, Role, SemanticsCx, Widget,
@@ -8,7 +9,6 @@ use cupertino_ui_layout::{
     Constraints, ContainerKind, LayoutDirection, LayoutSpec, Measured, SizeSpec,
 };
 use cupertino_ui_render::{PaintOp, Shape};
-use cupertino_ui_theme::ColorRole;
 
 const TRACK: f64 = 6.0;
 /// The moving segment of an indeterminate bar, as a share of the track.

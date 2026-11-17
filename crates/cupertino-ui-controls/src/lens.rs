@@ -17,9 +17,9 @@
 
 use crate::glass::GlassRole;
 use cupertino_geometry::{Insets, Point, Rect};
+use cupertino_theme::ui::{Color, ThemeTokens};
 use cupertino_ui_core::PaintCx;
 use cupertino_ui_render::{Effect, GradientStop, Paint, PaintOp, Shape};
-use cupertino_ui_theme::{Color, ThemeTokens};
 
 /// Which thumb the lens takes the place of.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

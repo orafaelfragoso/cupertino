@@ -1,7 +1,7 @@
 //! Images for widgets to draw: the process-wide resource ids that name them, and the source of the system's symbols.
 
+use cupertino_theme::ui::Color;
 use cupertino_ui_render::{ImageResource, PixelFormat, ResourceId};
-use cupertino_ui_theme::Color;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};

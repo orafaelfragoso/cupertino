@@ -5,6 +5,7 @@ use crate::look::{self, paint_focus_ring};
 use crate::press::{Keys, Outcome, Press};
 use crate::{FullWidthSegmentedControl, RadioGroup, SegmentedControl};
 use cupertino_geometry::{Insets, Point, Rect, Size};
+use cupertino_theme::ui::{choice_mark, ColorRole, ControlFamily, StateVariant, ThemeTokens};
 use cupertino_ui_core::{
     AccessibleStates, AccessibleValue, Action, Change, Checked, ControlState, Element, Environment,
     Event, EventCx, FocusTarget, MeasureCx, PaintCx, Propagation, Relation, Role, SemanticsCx,
@@ -16,7 +17,6 @@ use cupertino_ui_layout::{
 use cupertino_ui_platform::Keysym;
 use cupertino_ui_platform::{MouseButton, PointerEvent};
 use cupertino_ui_render::{Paint, PaintOp, Shape};
-use cupertino_ui_theme::{choice_mark, ColorRole, ControlFamily, StateVariant, ThemeTokens};
 use std::rc::Rc;
 
 const LEFT: Keysym = Keysym(0xff51);

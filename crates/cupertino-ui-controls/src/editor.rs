@@ -7,6 +7,7 @@ use crate::text_box;
 use crate::text_menu::{self, Can, Command, Opens};
 use crate::{TextChange, TextEditor};
 use cupertino_geometry::{Point, Rect, Size};
+use cupertino_theme::ui::ColorRole;
 use cupertino_ui_core::{
     AccessibleStates, AccessibleValue, Action, ActionData, Change, Environment, Event, EventCx,
     MeasureCx, OverlayCx, PaintCx, Pasted, Propagation, Role, SemanticsCx, TextSemantics, Widget,
@@ -20,7 +21,6 @@ use cupertino_ui_text::{
     Paragraph, ParagraphLayout, ParagraphStyle, Response, TextAlign, TextBuffer, TextEditorKeys,
     TextInputSession, TextPosition, TextStyle, TextSystem, CARET_WIDTH,
 };
-use cupertino_ui_theme::ColorRole;
 use std::cell::{Cell, RefCell};
 use std::ops::Range;
 use std::sync::Arc;

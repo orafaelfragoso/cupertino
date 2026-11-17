@@ -15,7 +15,7 @@ use cupertino_decorations::{
     DoubleClickAction, DrawList, Edge, FrameKind, Hit, ResizeEdge, ShadowParams, TitlebarStyle,
 };
 use cupertino_geometry::{Point, Rect, Size};
-use cupertino_theme::{Appearance, Theme};
+use cupertino_theme::Appearance;
 use cupertino_wm::WindowId;
 use smithay::input::pointer::CursorIcon;
 
@@ -93,7 +93,7 @@ fn hash_of(parts: &[u64], title: &str) -> u64 {
 /// Decorations of `appearance` and `style`; a high-contrast appearance also selects the
 /// increased-contrast half of the shadow table, whose denser rim is the window border.
 fn config_for(appearance: Appearance, style: TitlebarStyle) -> DecorationConfig {
-    let mut cfg = match Theme::load() {
+    let mut cfg = match cupertino_assets::theme::load() {
         Ok(t) => DecorationConfig::from_theme(&t, appearance, style),
         Err(e) => {
             tracing::warn!(error = %e, "theme not loaded, built-in decoration palette");

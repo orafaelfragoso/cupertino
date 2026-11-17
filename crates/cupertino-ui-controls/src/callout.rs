@@ -3,6 +3,7 @@
 //! shape with curved shoulders flowing into the panel; without glass it is one filled outline of the same silhouette.
 
 use cupertino_geometry::{Point, Size};
+use cupertino_theme::ui::Surface;
 use cupertino_ui_core::{
     Change, Element, Event, EventCx, Glass, MeasureCx, PaintCx, Propagation, SemanticsCx, Widget,
 };
@@ -10,7 +11,6 @@ use cupertino_ui_layout::{
     Align, Axis, Constraints, ContainerKind, Justify, LayoutSpec, Measured, SizeSpec,
 };
 use cupertino_ui_render::{FillRule, Paint, PaintOp, PathVerb, Shape};
-use cupertino_ui_theme::Surface;
 
 /// How wide each layer is, from the one at the panel to the tip, as a share of the pointer's width: they narrow a little
 /// faster towards the tip, so the union's outline is a taper with soft shoulders and a small rounded tip.

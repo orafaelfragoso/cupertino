@@ -1,6 +1,7 @@
 use crate::look::{self, paint_focus_ring};
 use crate::{Handler, SplitLayout, SplitPane, SplitView, Stack};
 use cupertino_geometry::{Insets, Point, Rect, Size};
+use cupertino_theme::ui::ColorRole;
 use cupertino_ui_core::{
     AccessibleStates, AccessibleValue, Action, ActionData, Change, ControlState, Element, Event,
     EventCx, MeasureCx, PaintCx, Propagation, Role, SemanticsCx, Widget,
@@ -10,7 +11,6 @@ use cupertino_ui_layout::{
     Overflow, SizeSpec, SplitSpec,
 };
 use cupertino_ui_platform::{CursorShape, Keysym, MouseButton, PointerEvent};
-use cupertino_ui_theme::ColorRole;
 use std::cell::Cell;
 
 const RETURN: Keysym = Keysym(0xff0d);
@@ -605,9 +605,9 @@ impl<M: 'static> Widget<M> for Divider<M> {
                         }
                     };
                     let color = if theme.preferences.appearance.is_dark() {
-                        cupertino_ui_theme::Color::new(1.0, 1.0, 1.0, SIDEBAR_RIM_DARK)
+                        cupertino_theme::ui::Color::new(1.0, 1.0, 1.0, SIDEBAR_RIM_DARK)
                     } else {
-                        cupertino_ui_theme::Color::new(0.0, 0.0, 0.0, SIDEBAR_RIM_LIGHT)
+                        cupertino_theme::ui::Color::new(0.0, 0.0, 0.0, SIDEBAR_RIM_LIGHT)
                     };
                     // one whole device pixel: at a fractional scale a rim between two pixels would show as a soft line two
                     // pixels wide, half over the sidebar's glass

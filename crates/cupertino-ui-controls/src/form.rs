@@ -9,6 +9,7 @@ use crate::{
     PaneHeader, Stack, Text, TextRole, TileColor,
 };
 use cupertino_geometry::{Insets, Point, Rect, Size};
+use cupertino_theme::ui::{Color, ColorRole, StateVariant, Surface, ThemeTokens};
 use cupertino_ui_core::{
     AccessibleStates, Action, Change, ControlState, Element, Environment, Event, EventCx,
     MeasureCx, PaintCx, Propagation, Role, SemanticsCx, Widget,
@@ -21,7 +22,6 @@ use cupertino_ui_render::{GradientStop, Paint, PaintOp, Shape};
 use cupertino_ui_text::{
     AttributedText, FontWeight, ParagraphLayout, ParagraphStyle, TextAlign, TextStyle, Wrap,
 };
-use cupertino_ui_theme::{Color, ColorRole, StateVariant, Surface, ThemeTokens};
 
 /// A tile's corner radius and its symbol's size, as shares of the tile's side.
 const TILE_RADIUS: f64 = 0.225;

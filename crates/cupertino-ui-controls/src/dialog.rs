@@ -12,6 +12,7 @@ use crate::{
     Button, ButtonRole, ButtonStyle, Dialog, DialogAction, DialogKind, Modal, Stack, Text, TextRole,
 };
 use cupertino_geometry::{Insets, Point, Rect, Size};
+use cupertino_theme::ui::{Color, ColorRole, StateVariant};
 use cupertino_ui_core::{
     AccessibleStates, Change, Element, Event, EventCx, Glass, MeasureCx, PaintCx, Phase,
     Propagation, Role, SemanticsCx, Widget,
@@ -22,7 +23,6 @@ use cupertino_ui_layout::{
 use cupertino_ui_platform::{Keysym, Timestamp};
 use cupertino_ui_render::{Effect, FillRule, GradientStop, Paint, PaintOp, Sampling, Shape};
 use cupertino_ui_text::{AttributedText, FontWeight, TextStyle};
-use cupertino_ui_theme::{Color, ColorRole, StateVariant};
 use std::cell::Cell;
 
 const RETURN: Keysym = Keysym(0xff0d);

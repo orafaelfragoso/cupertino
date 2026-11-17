@@ -22,10 +22,6 @@ apps forbidden_edge cupertino-settings -> cupertino-wayland-client normal
 foundation forbidden_edge cupertino-keyboard -> cupertino-defaults normal
 foundation impure_source cupertino-key-bindings src/binding.rs std::fs
 foundation impure_source cupertino-keyboard src/xkb.rs std::fs
-foundation impure_source cupertino-theme src/animation.rs std::fs
-foundation impure_source cupertino-theme src/recipe.rs std::fs
-foundation impure_source cupertino-theme src/theme.rs std::env
-foundation impure_source cupertino-theme src/tokens.rs std::fs
 foundation impure_source xkbcommon src/xkb/mod.rs std::fs
 foundation impure_source xkbcommon src/xkb/mod.rs unsafe
 models external_crate cupertino-effects -> tiny-skia normal
@@ -62,7 +58,6 @@ shell facade cupertino-control -> cupertino-shell-client normal
 shell facade cupertino-control -> cupertino-wayland-client normal
 shell facade cupertino-controlcenter -> cupertino-animation normal
 shell facade cupertino-controlcenter -> cupertino-shell-client normal
-shell facade cupertino-controlcenter -> cupertino-theme normal
 shell facade cupertino-controlcenter -> cupertino-ui-wayland normal
 shell facade cupertino-controlcenter -> cupertino-wayland-client normal
 shell facade cupertino-dock -> cupertino-animation normal
@@ -77,7 +72,6 @@ shell facade cupertino-launcher -> cupertino-wayland-client normal
 shell facade cupertino-login -> cupertino-animation normal
 shell facade cupertino-login -> cupertino-raster-math normal
 shell facade cupertino-login -> cupertino-shell-client normal
-shell facade cupertino-login -> cupertino-theme dev
 shell facade cupertino-login -> cupertino-ui-test dev
 shell facade cupertino-login -> cupertino-ui-wayland normal
 shell facade cupertino-login -> cupertino-wayland-client normal

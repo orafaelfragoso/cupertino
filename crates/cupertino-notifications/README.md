@@ -192,9 +192,8 @@ Close reasons: expired 1, dismissed 2 (swipe, click without default action, clea
 
 ```rust
 use cupertino_notifications::{dbus::{Server, ServerOptions}, view::{self, Input, Ui}, CenterConfig, Wakeup};
-use cupertino_theme::Theme;
 
-let theme = Theme::load()?;
+let theme = cupertino_assets::theme::load()?;
 let server = Server::start(ServerOptions {
     config: CenterConfig::from_theme(&theme),          // top inset = menu bar height + gap, spec springs
     wake: Some(Box::new(move || ping.ping())),         // runs on the zbus thread after Notify/Close

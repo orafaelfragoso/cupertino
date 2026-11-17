@@ -1,16 +1,16 @@
 //! How a control's state picks its colours, its label's type, and the keyboard focus ring drawn around its chrome.
 
 use cupertino_geometry::{Point, Rect};
+use cupertino_theme::ui::{
+    Color, ColorRole, ControlFamily, ControlGeometry, FocusRing, InteractionVariant, StateVariant,
+    ThemeTokens,
+};
 use cupertino_ui_core::{ControlState, Environment, PaintCx};
 use cupertino_ui_layout::LayoutDirection;
 use cupertino_ui_render::{Paint, PaintOp, PathVerb, Shape};
 use cupertino_ui_text::{
     AttributedText, Direction, FontWeight, Paragraph, ParagraphLayout, ParagraphStyle, TextStyle,
     Wrap,
-};
-use cupertino_ui_theme::{
-    Color, ColorRole, ControlFamily, ControlGeometry, FocusRing, InteractionVariant, StateVariant,
-    ThemeTokens,
 };
 
 /// Disabled overrides everything; pressed overrides hover. Keyboard focus is drawn as a ring, not a colour.

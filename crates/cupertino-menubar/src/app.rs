@@ -39,7 +39,6 @@ use cupertino_shell_client::{
     MenuBar, MenuBarUpdate, Session as SessionObserver, SessionChange, SessionState, Shell,
     ShellEvent,
 };
-use cupertino_theme::Theme;
 use cupertino_ui_wayland::{RoleEvent, SurfaceRoles, WaylandWindowSystem};
 use cupertino_wayland_client::{
     Connection, Error as WaylandError, Event, ExtensionEvent, OutputGeometry, OutputId, SurfaceId,
@@ -531,7 +530,7 @@ fn write_appearance(dark: bool) -> std::io::Result<()> {
 /// Connect, claim the bus names and serve until the connection or the bus fails.
 pub fn run() -> Result<std::convert::Infallible> {
     let assets = Assets::discover();
-    let theme = Theme::load()?;
+    let theme = cupertino_assets::theme::load()?;
     let conf = load_conf(None)?;
     let metrics = BarMetrics {
         height: theme.shapes.menu_bar_height,

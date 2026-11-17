@@ -1,7 +1,7 @@
 //! A theme's colours before state resolution: one colour per role, plus the state colours no role holds, expanded into
 //! every role and state so [`ColorTokens::get`]'s normal fallback never erases a selected or disabled state.
 
-use crate::{Color, ColorRole, ColorTokens, InteractionVariant, StateVariant};
+use crate::ui::{Color, ColorRole, ColorTokens, InteractionVariant, StateVariant};
 
 /// The colours of state treatments that no role holds in its normal state.
 #[derive(Clone, Copy, Debug, PartialEq)]

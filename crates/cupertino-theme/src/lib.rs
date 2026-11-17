@@ -1,9 +1,8 @@
 //! Typed access to the design tokens, material recipes and animation presets of the theme data
-//! (`data/theme/{tokens,materials,animations}.json`).
+//! (`data/theme/{tokens,materials,animations}.json`), and the theme tokens the toolkit's controls draw with.
 //!
-//! * [`Theme::load`] reads the files from `$CUPERTINO_SPEC_DIR`, defaulting to
-//!   `../../data/theme` relative to this crate; every loader also has a `from_str`
-//!   constructor.
+//! * [`Theme::from_strs`] parses the three documents it is given; every part also has a `from_str` constructor. The
+//!   crate reads no files: `cupertino-assets` finds the theme data and loads a [`Theme`] from it.
 //! * [`Appearance`] selects one of four catalogs (light/dark, normal/high contrast).
 //! * [`tokens::DesignTokens`]: semantic colours (sRGB `f32` + alpha) by name.
 //! * [`metrics`]: control alignment heights per size class and shape tokens, as data.
@@ -18,6 +17,9 @@
 //!   for reduce-transparency and the high-contrast catalogs.
 //! * [`glass`]: glass recipes (background pass and foreground matrix) per appearance, style, accessibility option and
 //!   shape size.
+//! * [`ui`]: the toolkit's theme tokens: semantic colours per control state ([`ui::ColorRole`], [`ui::StateVariant`]),
+//!   control metrics, type scale, focus ring and motion ([`ui::ThemeTokens`]), from the neutral built-in theme or the
+//!   theme data.
 
 pub mod animation;
 pub mod appearance;
@@ -31,9 +33,10 @@ pub mod recipe;
 pub mod theme;
 pub mod tokens;
 pub mod typography;
+pub mod ui;
 pub mod window_shadow;
 
-pub use animation::{AnimationPresets, Easing};
+pub use animation::{AnimationPresets, Easing, TimingPreset};
 pub use appearance::Appearance;
 pub use color::{AccentColor, Color, SemanticColor};
 pub use control_sizes::{control_geometry, ControlFamily, ControlGeometry, Corners};
@@ -45,7 +48,7 @@ pub use recipe::{
     kept_when_inactive, Backdrop, Blend, Catalog, ColorOp, CornerCurve, Fill, Interaction,
     MaterialLibrary, MaterialOptions, Recipe, WindowState, KEPT_WHEN_INACTIVE,
 };
-pub use theme::{spec_dir, Theme, SPEC_DIR_ENV};
+pub use theme::Theme;
 pub use tokens::DesignTokens;
 pub use typography::Typography;
 pub use window_shadow::{

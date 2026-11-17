@@ -17,5 +17,5 @@ pub use momentum::{Momentum, MomentumModel, QuarticMomentum, QuarticMomentum2D};
 pub use rubber_band::{ElasticMotion, RubberBand, RubberBandFilter, RubberBandFilterConfig};
 pub use scroll::{KineticScroller, MomentumKind, ScrollConfig};
 pub use spring::{Spring, SpringParams};
-pub use timing::{cosine_ease, CubicBezier, TimingPreset};
+pub use timing::{cosine_ease, CubicBezier};
 pub use velocity::VelocityTracker;

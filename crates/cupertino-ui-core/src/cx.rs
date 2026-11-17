@@ -6,13 +6,13 @@ use crate::route::Placement;
 use crate::widget::Change;
 use crate::{Environment, Key, NodeId, Phase, WindowKey};
 use cupertino_geometry::{Insets, Point, Rect, Size};
+use cupertino_theme::ui::Surface;
 use cupertino_ui_layout::LayoutDirection;
 use cupertino_ui_platform::{CursorShape, GlassRegion, GlassStyle, Timestamp};
 use cupertino_ui_render::{
     Effect, Group, ImageResource, PaintOp, ResourceId, ResourceRef, Sampling, Shape,
 };
 use cupertino_ui_text::TextInputState;
-use cupertino_ui_theme::Surface;
 use std::cell::Cell;
 use std::collections::BTreeSet;
 
@@ -612,7 +612,7 @@ impl PaintCx<'_> {
     /// Fills `rect` (node coordinates) with `color`, each edge on the nearest device pixel edge of the window wherever
     /// a frame draws the node, at least one device pixel each way, so no pixel at its edge blends with what lies under
     /// it: for a mark that meets the caret or text, such as a selection.
-    pub fn fill_pixels(&mut self, rect: Rect, color: cupertino_ui_theme::Color) {
+    pub fn fill_pixels(&mut self, rect: Rect, color: cupertino_theme::ui::Color) {
         self.pixels.push(self.ops.len());
         self.ops.push(PaintOp::Fill {
             shape: cupertino_ui_render::Shape::Rect(rect),
@@ -681,7 +681,7 @@ impl PaintCx<'_> {
     /// not reach it, so a node that fades passes its opacity here too. Returns whether the window shows the material.
     /// It does not without the desktop's effects, with Reduce Transparency or Increase Contrast, or past
     /// [`MAX_MATERIALS`](crate::MAX_MATERIALS) in one window; the node then paints the surface's opaque fill
-    /// ([`ThemeTokens::surface`](cupertino_ui_theme::ThemeTokens::surface)) itself. The material lies under everything
+    /// ([`ThemeTokens::surface`](cupertino_theme::ui::ThemeTokens::surface)) itself. The material lies under everything
     /// the window paints, so a node over other content of its window paints its own fill instead.
     pub fn material(&mut self, surface: Surface, radius: f64, alpha: f64) -> bool {
         *self.asked_material = true;
@@ -739,7 +739,7 @@ impl PaintCx<'_> {
     /// recipes for them. The glass lies under everything the window paints.
     ///
     /// What the node paints after it asked, and its whole subtree, lies on the glass: [`PaintCx::env`] then has the
-    /// theme of text on glass ([`ThemeTokens::on_glass`](cupertino_ui_theme::ThemeTokens::on_glass)), whose labels take
+    /// theme of text on glass ([`ThemeTokens::on_glass`](cupertino_theme::ui::ThemeTokens::on_glass)), whose labels take
     /// the colour of the glass's face, light or dark on a small shape as the compositor measured it. A node reads its
     /// colours after this call. [`PaintCx::material`] with a glass surface does the same.
     pub fn glass(&mut self, glass: Glass) -> bool {
@@ -1292,7 +1292,7 @@ impl OverlayCx<'_> {
 
     /// Fills `rect` with `color`, each edge moved to the nearest device pixel edge of the window and the rect at least
     /// one device pixel each way, so every pixel is covered whole or not at all.
-    pub fn fill_pixels(&mut self, rect: Rect, color: cupertino_ui_theme::Color) {
+    pub fn fill_pixels(&mut self, rect: Rect, color: cupertino_theme::ui::Color) {
         let at = rect.translate(self.origin.x, self.origin.y);
         self.ops.push(PaintOp::Fill {
             shape: cupertino_ui_render::Shape::Rect(pixel_fill(at, self.env.scale)),

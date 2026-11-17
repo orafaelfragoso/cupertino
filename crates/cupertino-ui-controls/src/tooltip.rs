@@ -1,6 +1,7 @@
 use crate::look;
 use crate::{Handler, Tooltip};
 use cupertino_geometry::{Insets, Point, Rect, Size};
+use cupertino_theme::ui::{ColorRole, StateVariant};
 use cupertino_ui_core::{
     Change, CommandRegistry, Element, Environment, Event, EventCx, Key, MeasureCx, PaintCx, Phase,
     Popup, PopupAnchor, Propagation, Role, SemanticsCx, Widget, Window, WindowBackground,
@@ -9,7 +10,6 @@ use cupertino_ui_core::{
 use cupertino_ui_layout::{Constraints, ContainerKind, LayoutSpec, Measured};
 use cupertino_ui_platform::{DecorationMode, PointerEvent, Timestamp, WindowSpec};
 use cupertino_ui_text::{AttributedText, ParagraphLayout, ParagraphStyle, TextStyle, Wrap};
-use cupertino_ui_theme::{ColorRole, StateVariant};
 
 /// How long the pointer rests on the anchor before the tip is asked for.
 const DELAY: u64 = 600_000_000;

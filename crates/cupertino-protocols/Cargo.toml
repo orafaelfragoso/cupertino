@@ -19,3 +19,11 @@ wayland-backend = { version = "0.3", optional = true }
 wayland-scanner = { version = "0.31", optional = true }
 wayland-client = { version = "0.31", optional = true }
 wayland-server = { version = "0.31", optional = true }
+
+[[test]]
+name = "interfaces"
+required-features = ["client", "server"]
+
+[[test]]
+name = "global-shortcuts-wire"
+required-features = ["client", "server"]

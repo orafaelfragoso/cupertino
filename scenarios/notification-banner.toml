@@ -1,4 +1,0 @@
-title = "A notification banner"
-programs = ["cupertino-notifications"]
-after = 3.5
-args = ["--spawn", "sh @ROOT@/scenarios/notify.sh"]

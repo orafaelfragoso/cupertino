@@ -1,5 +1,0 @@
-title = "Dock: the downloads folder open as a grid, its pointer on the tile"
-programs = ["cupertino-dock"]
-after = 3.5
-fixture = "fixtures/dock-stack-grid"
-args = ["--click", "2:634,600"]

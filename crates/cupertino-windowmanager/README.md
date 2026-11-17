@@ -1,6 +1,6 @@
 # cupertino-windowmanager
 
-The window manager process of the Cupertino desktop. It stands in for the design's window manager process and owns the stage policy, on the `cupertino-stage` model. The server owns the frame clock: it
+The window manager process of the Cupertino desktop. It stands in for the design's window manager process and owns the stage policy, on the `cupertino_wm::stage` model. The server owns the frame clock: it
 animates the windows to the placements this process commits and draws the strip.
 
 | Item | Contents |
@@ -9,7 +9,7 @@ animates the windows to the placements this process commits and draws the strip.
 | `parse_conf`, `WindowManagerFile` | `windowmanager.conf` |
 | `cupertino-windowmanager` (feature `app`) | The process: one `cupertino_window_manager_v1` per output of `cupertino-shell-v1`, a `Controller` each. |
 
-Layer: `shell`. Depends on `cupertino-stage` and `cupertino-wm`. The process also depends on `cupertino-defaults`,
+Layer: `shell`. Depends on `cupertino-wm` (its `stage` module). The process also depends on `cupertino-defaults`,
 `cupertino-protocols` and `wayland-client`. It has no surface, so it does not use `cupertino-ui-wayland`.
 
 ## Running
@@ -36,7 +36,7 @@ skipped.
 - **Stage off** (the default). The process sends nothing, so every window is drawn and hit as without it.
 - **Stage on** (`stage = on`, or the `toggle-stage` action, which has no default chord). The windows of the most recently
   active application are on the stage. The windows of the other applications are thumbnails in the strip on the left, one
-  group per application, in the layout of `cupertino-stage`: 170 pt slots, 4 to 6 rows,. Groups beyond the
+  group per application, in the layout of `cupertino_wm::stage`: 170 pt slots, 4 to 6 rows,. Groups beyond the
   rows are hidden.
 - A press on a thumbnail brings its group to the stage, sends the previous group to the top of the strip and activates the
   front window of the group. A window focused any other way (the switcher, the dock, a new window) brings its group to the

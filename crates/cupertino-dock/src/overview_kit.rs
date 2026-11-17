@@ -6,7 +6,7 @@
 //! ring round the current desktop's picture and the remove button after a rest on a picture), the ring round the
 //! selected window and its name on a plate in its middle, and springs out when the server closes the overview.
 //!
-//! The windows' layout is the overview model's ([`crate::overview_ui`] on `cupertino-overview`): below the band by its
+//! The windows' layout is the overview model's ([`crate::overview_ui`] on `cupertino_wm::overview`): below the band by its
 //! layout gap, balanced in the area and never overlapping, moving down when the band opens. [`OverviewSurface::changed`]
 //! returns the frames the server is told with `overview_frame`, and [`OverviewSurface::input`] and
 //! [`OverviewSurface::tick`] the requests that follow from the pointer and the clock: new frames when the band opens
@@ -26,8 +26,8 @@ use cupertino_kit::core::{
 use cupertino_kit::geometry::{Point, Rect, Size};
 use cupertino_kit::platform::{DecorationMode, KeyEvent, WindowSpec};
 use cupertino_kit::render::{GradientStop, Paint, PaintOp, Shape};
-use cupertino_overview::Key as OverviewKey;
 use cupertino_wm::geometry::{Point as WmPoint, Rect as WmRect};
+use cupertino_wm::overview::Key as OverviewKey;
 
 /// The `app_id` of the chrome's window, and the namespace of its layer surface.
 pub const APP_ID: &str = "cupertino-dock-overview";
@@ -621,7 +621,7 @@ impl OverviewSurface {
     /// and the remove button.
     fn band<M, F>(
         children: &mut Vec<Element<M>>,
-        bar: &cupertino_overview::BarLayout,
+        bar: &cupertino_wm::overview::BarLayout,
         ui: &OverviewUi,
         now: f64,
         input: &F,

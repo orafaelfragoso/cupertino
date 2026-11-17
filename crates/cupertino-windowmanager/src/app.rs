@@ -9,9 +9,9 @@ use cupertino_protocols::client::cupertino_shell_v1::CupertinoShellV1;
 use cupertino_protocols::client::cupertino_window_manager_v1::{
     self, CupertinoWindowManagerV1, Placement as WirePlacement, WindowState,
 };
-use cupertino_stage::{Placement, StageConfig};
 use cupertino_windowmanager::{parse_conf, Change, Controller, Request, Window};
 use cupertino_wm::geometry::Rect;
+use cupertino_wm::stage::{Placement, StageConfig};
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
 use wayland_client::protocol::{wl_output, wl_registry};
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, WEnum};

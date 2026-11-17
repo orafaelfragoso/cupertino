@@ -1,16 +1,27 @@
+//! Window overview model: layout, app overview, workspaces bar, selection, keyboard navigation and
+//! the gesture-driven transition. Pure logic (no compositor dependency).
+//!
+//! The values (the transition's spring, the desktops bar's band, the packing's constants) are in
+//! [`OverviewConfig`].
+//!
 //! Overview model: modes, windows, progress-driven transition, selection and keyboard navigation.
+
+pub mod bar;
+pub mod config;
+pub mod layout;
+pub mod transition;
+
+pub use bar::{BarConfig, BarHit, BarLayout, BarSlot, WorkspaceBar};
+pub use config::{AppOverviewConfig, HighlightConfig, OverviewConfig, TitleFade};
+pub use layout::{layout, layout_row, pack, reading_order, LayoutParams, Packing, Rect};
+pub use transition::Transition;
 
 use std::collections::HashMap;
 
+use crate::geometry::Point;
+use crate::ids::{AppId, WindowId, WorkspaceId};
 use cupertino_animation::{AnimatedValue, Curve, SpringParams};
 use cupertino_theme::animation::EASE_IN_OUT_CURVE;
-use cupertino_wm::geometry::{Point, Rect};
-use cupertino_wm::ids::{AppId, WindowId, WorkspaceId};
-
-use crate::bar::{BarHit, WorkspaceBar};
-use crate::config::OverviewConfig;
-use crate::layout::{layout, layout_row, reading_order};
-use crate::transition::Transition;
 
 /// Which windows are shown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -160,7 +171,7 @@ impl Overview {
 
     /// Area the windows are packed into in the current mode. In `Overview` it starts below the
     /// desktops band at the height it is heading for: the packing's inset then puts the thumbnails at least the
-    /// band's [`layout_gap`](crate::BarConfig::layout_gap) below its bottom.
+    /// band's [`layout_gap`](BarConfig::layout_gap) below its bottom.
     pub fn layout_area(&self) -> Rect {
         match self.mode {
             OverviewMode::Overview => {

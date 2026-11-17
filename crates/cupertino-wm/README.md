@@ -25,6 +25,8 @@ shadow, minimize progress).
 | `window` | `App`, `Window`, `WindowLevel`, `Assignment`, `DisabledControls` (the controls an application disabled on its window: `Window::can_minimize` and `can_zoom`, which also needs a size that is not fixed; `minimize_window` and the zoom leg of `toggle_zoom` refuse them for every caller, `tile_window` refuses the fill tile where zoom is refused (half and quarter tiles stay) and a move does not offer its zone, while an unzoom, a restore and Hide still work; `fullscreen_window` refuses a full screen the person asks for (`Requester::User`: shortcut, menu) where zoom is refused, and keeps the client's own request (`Requester::Client`) and every exit; `toggle_zoom` of a full-screen window leaves full screen, so the zoom button and the Zoom command leave full screen whatever the window's controls) |
 | `menu_bar` | menu bar presentation per output: dimming, auto-hide with a reveal dwell, where a full-screen window's title bar shows below a revealed bar (`fullscreen_titlebar`), the area the bar reserves (the menu bar process draws the content) |
 | `command`, `config` | `Command` in, `Effect` out; every tunable value, with its evidence label |
+| `stage` | the stage model: a centre stage holding the active window group and a left strip of recent groups. The `cupertino-windowmanager` process runs it, and the server animates what it asks. See *Stage* below |
+| `overview` | the window overview model: layout, app overview, workspaces bar, selection, keyboard navigation and the gesture-driven transition. See *Overview* below |
 
 ## Usage
 
@@ -114,3 +116,69 @@ A window that maps (`MapParams.activation`) takes the keyboard when the composit
 | Alt disables snapping | on |
 | resize hit zones | 3 pt inside, 4 pt outside, corners 12 pt, bottom-right 15 pt |
 | resize snapping | dragged edges snap to other windows, not for child windows |
+
+### Stage
+
+| Item | Role |
+|---|---|
+| Groups | Grouping by app or one window at a time (`Grouping`), merge by drag (`add_to_stage`, `drop_group`), split a window out (`drop_window`) |
+| Centre and swap | `activate_group`, `window_activated`, `window_opened`. Swaps animate with springs and stay continuous when interrupted (`window_frames` combines each group's blend and slot) |
+| `placements` | Every window's resting placement (on the stage, a strip thumbnail rectangle, or hidden beyond the strip's rows), independent of time. It is the target a window manager sends a compositor that runs the animation on its own frame clock |
+| Strip layout | Rows clamped between configured minimum and maximum, slot rectangles, icon overlay rectangles, hit-testing |
+| Hide / peek | The strip hides when a centre window overlaps it (or always, when configured), leaves a peek width visible, and reveals on edge hover with dwell times |
+| Desktop | Desktop items are hidden while the stage is active and revealed by clicking the desktop (`ClickDesktop`) |
+| `StageConfig` | Layout defaults |
+
+The layout defaults in `StageConfig` are as designed:
+
+- 170 × 170 pt slots, 32 pt spacing, 16 pt strip edge inset, 16 pt gap to the stage (stage inset 202 pt);
+- 4–6 rows, slot height cap 160 pt, preferred minimum 96 pt, absolute minimum 20 pt;
+- strip corner radius 8 pt, icon overlay 40 pt (offsets −10 / 10, spacing −4 / −22);
+- peek width 0, auto-hide off, reveal dwell 0.15 s.
+
+Using the preferred minimum height to choose the row count is.
+
+The swap and slide springs are the window manager's generic frame spring, damping ratio 1.0 and response 0.38 s; a swap's alpha and corner-radius springs (`alpha_curve`,
+`corner_curve`) are its alpha and corner-radius property springs, damping ratio 1.0 and responses 0.30 s and 0.20 s. No strip-specific spring exists, so their use for the strip is. The vertical padding and alignment, the thumbnail padding and the hide dwell remain approximate and are
+configurable.
+
+### Overview
+
+| Item | Role |
+|---|---|
+| `pack` / `layout` | The design's iterative relaxation. See *Overview layout* below |
+| `layout_row`, `reading_order` | The minimized row; keyboard order |
+| `OverviewMode::Overview` | All windows of the workspace plus the workspaces bar |
+| `OverviewMode::AppOverview(app) | One app's windows, minimized windows in a lower row |
+| `Transition` | Gesture-driven progress with rubber band and velocity projection, spring completion. Also used on its own by the display server, which owns the open and close animation. `Overview` interpolates per-window frames from it, and windows reflow smoothly when the set or the mode changes |
+| `WorkspaceBar` | The full-width desktops band: names when closed, pictures and names when open on hover, add button, hit-testing |
+| Selection | Hover selection, animated highlight, keyboard navigation (directional keys, next/previous, activate, cancel), click actions |
+| `TitleFade` | Title fade schedule (approximate: after progress 0.8) |
+| `OverviewConfig` | Every number is configurable through it |
+
+#### Overview layout
+
+The display rectangle is inset by 16 pt. Windows are placed at their scaled centres 20 pt up, pushed apart along the line
+through their centres, and shrunk by `s·(r + 0.9·(1 − r))`, where `r` is the room left over the room used. The pass repeats
+until no pair overlaps by more than 2 pt and the largest move is under 2 pt, or 499 passes have run. 14 pt is kept between
+windows. A packing that ends at the pass limit with windows still closer than 2 pt falls back to a grid of the work area in
+the same reading order, so thumbnails never overlap. The arrangement is then moved as a whole so its bounding box is centred
+across the work area and sits the lift above its middle: it is balanced whatever the windows' desktop places were. `LayoutParams::title_space`
+reserves space under every window for a title; the overview uses 0, as only the highlighted window shows its name, on a
+plate centred over the window.
+
+In the all-windows mode the work area starts below the desktops band: 39 pt (`BarConfig::layout_gap`) under the band's
+bottom, 72 pt closed and 165 pt open, so windows start 111 pt from the top (`BarConfig::windows_top`). The band opens
+while the pointer is over it and the windows lay out again below it; it closes when the pointer leaves.
+
+- **** the inset, the gap value, the lift, the tolerance, the shrink constant and the pass limit.
+- **** the gap's role, the start scale from the windows' bounding box, scaling about the work area's centre and the
+  repulsion direction.
+
+#### Overview transition and bar numbers
+
+The transition is a critically damped spring of response 0.25 s, or 2.0 s while the slow-motion modifier is held
+(`Overview::set_slow_motion`). A gesture released faster than 5 progress/s settles on a spring of response × 0.6. The
+band is 72 pt closed and 165 pt open, with 146×95 pt pictures 20 pt below its top, 24 pt name pills and a 20 pt add button
+whose centre is 28 pt from the right and 35 pt from the top. The gap between pictures and the side margin are
+approximate.

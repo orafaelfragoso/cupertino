@@ -338,11 +338,11 @@ transition, the windows' frames and their animation, Escape, the click fallback,
 the dock dies. It sends the dock of its output the window set with desktop frames, the workspaces and the area from the
 output's top to the usable area's bottom (`overview_changed`); the menu bar gives way while the overview is open.
 
-The dock lays the windows out with the design packing (`cupertino-overview`: inset 16, gap 14, lift 20, tolerance 2,
+The dock lays the windows out with the design packing (`cupertino_wm::overview`: inset 16, gap 14, lift 20, tolerance 2,
 shrink 0.9, 499 passes, constants; the application mode puts minimized windows in a lower row) and answers one
 `overview_frame` per window. A changed set is laid out again and resent. The windows start 39 pt (`BarConfig::layout_gap`)
 below the desktops band (111 pt from the top while it is closed), and are laid out again when the band opens or
-closes; the arrangement is centred in the area left (see the `cupertino-overview` README).
+closes; the arrangement is centred in the area left (see the `cupertino-wm` README).
 
 The chrome is a keyboard-exclusive overlay surface over the whole output (namespace `cupertino-dock-overview`, exclusive zone
 -1, so surface and output coordinates agree). The server draws the windows and the desktops' live pictures. The chrome has:

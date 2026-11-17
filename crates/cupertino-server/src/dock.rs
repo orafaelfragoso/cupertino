@@ -24,12 +24,12 @@ use std::io::{Seek, Write};
 use std::os::fd::AsFd;
 use std::sync::Arc;
 
-use cupertino_overview::OverviewMode;
 use cupertino_protocols::server::cupertino_dock_v1::{
     self, Corner, CupertinoDockV1, Gesture, WindowState,
 };
 use cupertino_protocols::server::cupertino_session_v1::Activation as AppActivation;
 use cupertino_protocols::server::cupertino_shell_v1::{CupertinoShellV1, Error as ShellError};
+use cupertino_wm::overview::OverviewMode;
 use cupertino_wm::{Command, LifecycleState, OutputId, Rect, WindowId};
 use smithay::desktop::{layer_map_for_output, WindowSurfaceType};
 use smithay::output::Output;

@@ -2,8 +2,8 @@
 //! for it (target frames, selection, workspaces, named actions, tile commands), the server-side
 //! fallbacks that work without a dock (click, Escape, workspace switch), and the hot corners.
 
-use cupertino_overview::{OverviewConfig, OverviewMode};
 use cupertino_protocols::server::cupertino_dock_v1::{AppCommand, Corner};
+use cupertino_wm::overview::{OverviewConfig, OverviewMode};
 use cupertino_wm::{Command, OutputId, Point as MPoint, WindowId, WorkspaceId};
 use smithay::utils::{Logical, Point};
 

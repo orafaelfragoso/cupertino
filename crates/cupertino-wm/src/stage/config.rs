@@ -6,8 +6,8 @@
 //! re-expressions of the verified keys. The strip moves with the window manager's generic frame
 //! spring (no strip-specific spring exists).
 
+use crate::geometry::Rect;
 use cupertino_animation::{Curve, SpringParams};
-use cupertino_wm::geometry::Rect;
 
 /// How the windows of one app are grouped (the setting "all windows of an app" versus "one at a
 /// time" exists).

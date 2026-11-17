@@ -31,7 +31,6 @@ cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events" }
 async-channel = { version = "2", optional = true }
 async-io = { version = "2", optional = true }
 cupertino-animation = { path = "../cupertino-animation" }
-cupertino-overview = { path = "../cupertino-overview" }
 cupertino-wm = { path = "../cupertino-wm" }
 cupertino-apps = { path = "../cupertino-apps", optional = true }
 cupertino-assets = { path = "../cupertino-assets", optional = true }

@@ -8,7 +8,7 @@
 
 use cupertino_animation::{AnimatedValue, Curve, SpringParams};
 
-use crate::config::OverviewConfig;
+use super::config::OverviewConfig;
 
 /// Progress-driven open/close transition.
 #[derive(Clone, Debug)]

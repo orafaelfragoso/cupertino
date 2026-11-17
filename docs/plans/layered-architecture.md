@@ -402,12 +402,16 @@ Only for what you changed; the lead runs the layers check, the gate and the reve
 (`cargo xtask ci --profile integration --base <batch base>`) and the full gates when a wave closes.
 
 ```bash
-cargo xtask ci --profile agent --dry-run  # first: see what the plan selects
-cargo xtask ci --profile agent            # fmt, clippy and nextest of the crates you changed; no layers, no gate
+cargo xtask ci --profile agent --base <B> --dry-run  # first: see what the plan selects
+cargo xtask ci --profile agent --base <B>            # fmt, clippy and nextest of the crates you changed; no layers, no gate
 cargo run -q -p cupertino-layers -- --graph > crates/cupertino-layers/graph/layers.dot
 cargo run -q -p cupertino-layers -- --write-remaining   # once W0.2 is merged
 cargo run -q -p cupertino-layers
 ```
+
+`<B>` is the commit your brief names as your base. Always pass it: without it the plan diffs against `origin/main`,
+which is behind the local waves, so every crate merged away since then shows as paths "in no package" and selects the
+whole workspace. That fallback is expected, not a problem to investigate.
 
 `.config/validation.toml` sends a change to `Cargo.toml`, `Cargo.lock`, `.config/`, any `build.rs` or `third-party/` to
 the whole workspace, whatever the scope; a crate merge always changes `Cargo.lock`. When the dry run says "checks the

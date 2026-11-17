@@ -4,8 +4,8 @@
 
 use cupertino_animation::{Curve, SpringParams};
 
-use crate::bar::BarConfig;
-use crate::layout::LayoutParams;
+use super::bar::BarConfig;
+use super::layout::LayoutParams;
 
 /// Window titles fade in near the end of the open transition (approximate schedule: they start
 /// to appear once progress exceeds `start` and are fully visible at `end`).

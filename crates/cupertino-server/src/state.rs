@@ -1098,7 +1098,7 @@ impl Cupertino {
             layers,
             axis_carry: crate::events::AxisCarry::default(),
             accessibility: crate::accessibility::Accessibility::default(),
-            window_managers: WindowManagers::new(&cupertino_stage::StageConfig::default()),
+            window_managers: WindowManagers::new(&cupertino_wm::stage::StageConfig::default()),
             cascade: policy::Cascade::default(),
             exclusive_layer: None,
             released_layer: None,
@@ -1672,7 +1672,7 @@ impl Cupertino {
             .unwrap_or_default();
         // the visible frame new windows are placed in: the stage frame while the stage is on
         let visible = if self.window_managers.stage_active(output) {
-            cupertino_stage::StageConfig::default().stage_frame(usable)
+            cupertino_wm::stage::StageConfig::default().stage_frame(usable)
         } else {
             usable
         };

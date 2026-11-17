@@ -1,12 +1,12 @@
 //! The stage policy of one output: the server's groups of window events in, placement and
-//! activation requests out. The `cupertino-stage` model decides; the controller keeps what the
+//! activation requests out. The `cupertino_wm::stage` model decides; the controller keeps what the
 //! server was told so that each group yields only the placements that changed.
 
 use std::collections::{BTreeMap, HashMap};
 
-use cupertino_stage::{Placement, Stage, StageConfig};
 use cupertino_wm::geometry::Rect;
 use cupertino_wm::ids::{AppId, WindowId};
+use cupertino_wm::stage::{Placement, Stage, StageConfig};
 
 /// An arranged window as the server describes it.
 #[derive(Clone, Debug, PartialEq)]

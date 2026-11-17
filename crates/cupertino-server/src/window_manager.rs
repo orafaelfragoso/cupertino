@@ -15,7 +15,7 @@ use cupertino_protocols::server::cupertino_shell_v1::{CupertinoShellV1, Error as
 use cupertino_protocols::server::cupertino_window_manager_v1::{
     self, CupertinoWindowManagerV1, Error, Placement as WirePlacement, WindowState,
 };
-use cupertino_stage::StageConfig;
+use cupertino_wm::stage::StageConfig;
 use cupertino_wm::{OutputId, Rect, WindowId};
 use smithay::desktop::layer_map_for_output;
 use smithay::output::Output;

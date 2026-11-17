@@ -62,7 +62,7 @@ as dev-dependencies, and only dev-dependencies point at a `testing` crate. The c
 |---|---|---|
 | `foundation` (values, maths and data models with no I/O) | `cupertino-animation`, `cupertino-geometry`, `cupertino-glyph`, `cupertino-keyboard`, `cupertino-menu-model`, `cupertino-theme` | `foundation` |
 | `graphics` (the one definition of the drawing maths, and the GPU device) | `cupertino-gpu`, `cupertino-raster-math` | `foundation`, `graphics` |
-| `models` (desktop policy as pure logic) | `cupertino-control-model`, `cupertino-displays`, `cupertino-effects`, `cupertino-input`, `cupertino-overview`, `cupertino-scene`, `cupertino-stage`, `cupertino-wm` | `foundation`, `models` |
+| `models` (desktop policy as pure logic) | `cupertino-control-model`, `cupertino-displays`, `cupertino-effects`, `cupertino-input`, `cupertino-scene`, `cupertino-wm` | `foundation`, `models` |
 | `system` (user-space operating-system access) | `cupertino-apps`, `cupertino-assets`, `cupertino-defaults`, `cupertino-diagnostic-events`, `cupertino-icons`, `cupertino-peer`, `cupertino-radios`, `cupertino-trash` | `foundation`, `system` |
 | `platform` (kernel interfaces that more than one program needs) | `cupertino-alsa`, `cupertino-bluetooth`, `cupertino-devices`, `cupertino-evdev`, `cupertino-netlink`, `cupertino-pipewire`, `cupertino-screencast`, `cupertino-seat` | `foundation`, `platform` |
 | `protocol` (wire schemas) | `cupertino-app-protocols`, `cupertino-login-ipc`, `cupertino-protocols`, `cupertino-semantics` | `foundation`, `protocol` |

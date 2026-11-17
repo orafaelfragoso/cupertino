@@ -46,31 +46,19 @@ fn sink(id: u32, name: &str, default: bool) -> Sink {
 }
 
 #[test]
-fn a_volume_line_is_a_level() {
-    assert_eq!(
-        parse_volume("Volume: 0.42\n").unwrap(),
-        Volume {
-            level: 0.42,
-            muted: false
-        }
-    );
-}
-
-#[test]
-fn a_muted_marker_is_the_mute_state() {
-    assert_eq!(
-        parse_volume("Volume: 0.30 [MUTED]\n").unwrap(),
-        Volume {
-            level: 0.30,
-            muted: true
-        }
-    );
-}
-
-#[test]
-fn a_level_above_one_reads_as_one_and_a_negative_one_as_zero() {
-    assert_eq!(parse_volume("Volume: 1.50").unwrap().level, 1.0);
-    assert_eq!(parse_volume("Volume: -0.20").unwrap().level, 0.0);
+fn a_volume_line_is_a_level_in_zero_to_one_and_a_mute_state() {
+    for (text, level, muted) in [
+        ("Volume: 0.42\n", 0.42, false),
+        ("Volume: 0.30 [MUTED]\n", 0.30, true),
+        ("Volume: 1.50", 1.0, false),
+        ("Volume: -0.20", 0.0, false),
+    ] {
+        assert_eq!(
+            parse_volume(text).unwrap(),
+            Volume { level, muted },
+            "{text:?}"
+        );
+    }
 }
 
 #[test]
@@ -95,95 +83,100 @@ fn output_that_is_not_a_volume_line_is_unparsed_and_quotes_the_text() {
 }
 
 #[test]
-fn the_audio_sinks_are_listed_in_order_with_the_default_marked() {
-    assert_eq!(
-        parse_sinks(STATUS),
-        [
-            sink(46, "Built-in Audio Analog Stereo", false),
-            sink(52, "HDMI / DisplayPort 1", true),
-        ]
+fn the_audio_nodes_of_a_section_are_listed_in_order_with_the_default_marked() {
+    for (name, nodes, expected) in [
+        (
+            "sinks, video sinks left out",
+            parse_sinks(STATUS),
+            vec![
+                sink(46, "Built-in Audio Analog Stereo", false),
+                sink(52, "HDMI / DisplayPort 1", true),
+            ],
+        ),
+        (
+            "sources, the bracket group cut off",
+            parse_nodes(STATUS, "Sources:"),
+            vec![
+                sink(47, "Built-in Audio Analog Stereo", true),
+                sink(48, "Webcam Microphone", false),
+            ],
+        ),
+        (
+            "devices",
+            parse_nodes(STATUS, "Devices:"),
+            vec![sink(45, "Built-in Audio", false)],
+        ),
+        ("a heading not listed", parse_nodes(STATUS, "Filters:"), vec![]),
+        ("empty output", parse_sinks(""), vec![]),
+        (
+            "an empty section",
+            parse_sinks("Audio\n ├─ Sinks:\n │\n └─ Streams:\n"),
+            vec![],
+        ),
+        (
+            "video only",
+            parse_sinks("Video\n ├─ Sinks:\n │      42. Camera\n"),
+            vec![],
+        ),
+        (
+            "lines that are not nodes skipped",
+            parse_sinks(
+                "Audio\n ├─ Sinks:\n │      not-a-number. Name\n │      7. Kept\n │      8.NoSpace\n",
+            ),
+            vec![sink(7, "Kept", false)],
+        ),
+        (
+            "brackets inside a name kept",
+            parse_sinks("Audio\n ├─ Sinks:\n │      9. Name [with] brackets inside\n"),
+            vec![sink(9, "Name [with] brackets inside", false)],
+        ),
+    ] {
+        assert_eq!(nodes, expected, "{name}");
+    }
+    assert!(
+        parse_nodes(STATUS, "Streams:").iter().any(|s| s.id == 60),
+        "streams"
     );
 }
 
 #[test]
-fn the_audio_sources_are_listed_and_a_trailing_bracket_group_is_cut_off() {
-    assert_eq!(
-        parse_nodes(STATUS, "Sources:"),
-        [
-            sink(47, "Built-in Audio Analog Stereo", true),
-            sink(48, "Webcam Microphone", false),
-        ]
-    );
-}
-
-#[test]
-fn video_nodes_and_other_sections_are_not_audio_nodes() {
-    assert!(parse_sinks(STATUS).iter().all(|s| s.id != 42 && s.id != 41));
-    assert!(parse_nodes(STATUS, "Streams:").iter().any(|s| s.id == 60));
-    assert!(parse_nodes(STATUS, "Devices:").iter().any(|s| s.id == 45));
-    assert!(parse_nodes(STATUS, "Filters:").is_empty());
-}
-
-#[test]
-fn a_heading_that_is_not_listed_or_empty_output_gives_no_nodes() {
-    assert!(parse_sinks("").is_empty());
-    assert!(parse_sinks("Audio\n ├─ Sinks:\n │\n └─ Streams:\n").is_empty());
-    assert!(parse_sinks("Video\n ├─ Sinks:\n │      42. Camera\n").is_empty());
-}
-
-#[test]
-fn a_line_that_is_not_a_node_is_skipped() {
-    let text =
-        "Audio\n ├─ Sinks:\n │      not-a-number. Name\n │      7. Kept\n │      8.NoSpace\n";
-    assert_eq!(parse_sinks(text), [sink(7, "Kept", false)]);
-}
-
-#[test]
-fn a_name_without_a_trailing_bracket_group_is_kept_whole() {
-    let text = "Audio\n ├─ Sinks:\n │      9. Name [with] brackets inside\n";
-    assert_eq!(
-        parse_sinks(text),
-        [sink(9, "Name [with] brackets inside", false)]
-    );
-}
-
-#[test]
-fn equal_channels_have_no_balance() {
-    let (balance, level) = parse_balance(
-        "Volume: front-left: 32768 /  50% / -18.06 dB,   front-right: 32768 /  50% / -18.06 dB\n",
-    )
-    .unwrap();
-    assert_eq!(balance, 0.0);
-    assert_eq!(level, 0.5);
-}
-
-#[test]
-fn the_quieter_channel_gives_the_side_and_the_louder_one_the_level() {
-    let (balance, level) =
-        parse_balance("Volume: front-left: 1 / 100% / 0 dB, front-right: 1 / 50% / 0 dB").unwrap();
-    assert_eq!(balance, -0.5);
-    assert_eq!(level, 1.0);
-    let (balance, level) =
-        parse_balance("Volume: front-left: 1 / 20% / 0 dB, front-right: 1 / 80% / 0 dB").unwrap();
-    assert!((balance - 0.75).abs() < 1e-9);
-    assert!((level - 0.8).abs() < 1e-9);
-}
-
-#[test]
-fn a_level_above_one_hundred_percent_is_capped_at_one() {
-    let (balance, level) =
-        parse_balance("Volume: front-left: 1 / 120% / 0 dB, front-right: 1 / 120% / 0 dB").unwrap();
-    assert_eq!(balance, 0.0);
-    assert_eq!(level, 1.0);
-}
-
-#[test]
-fn silence_has_no_balance_and_no_level() {
-    assert_eq!(
-        parse_balance("Volume: front-left: 0 / 0% / -inf dB, front-right: 0 / 0% / -inf dB")
-            .unwrap(),
-        (0.0, 0.0)
-    );
+fn two_channels_give_a_balance_toward_the_louder_one_and_its_level() {
+    for (text, balance, level) in [
+        (
+            "Volume: front-left: 32768 /  50% / -18.06 dB,   front-right: 32768 /  50% / -18.06 dB\n",
+            0.0,
+            0.5,
+        ),
+        (
+            "Volume: front-left: 1 / 100% / 0 dB, front-right: 1 / 50% / 0 dB",
+            -0.5,
+            1.0,
+        ),
+        (
+            "Volume: front-left: 1 / 20% / 0 dB, front-right: 1 / 80% / 0 dB",
+            0.75,
+            0.8,
+        ),
+        (
+            "Volume: front-left: 1 / 120% / 0 dB, front-right: 1 / 120% / 0 dB",
+            0.0,
+            1.0,
+        ),
+        (
+            "Volume: front-left: 0 / 0% / -inf dB, front-right: 0 / 0% / -inf dB",
+            0.0,
+            0.0,
+        ),
+        (
+            "Volume: front-left: 1 / 50% / 0 dB, front-right: 1 / 50% / 0 dB\nBalance: 0.00\n",
+            0.0,
+            0.5,
+        ),
+    ] {
+        let (got_balance, got_level) = parse_balance(text).unwrap();
+        assert!((got_balance - balance).abs() < 1e-9, "{text:?}: {got_balance}");
+        assert!((got_level - level).abs() < 1e-9, "{text:?}: {got_level}");
+    }
 }
 
 #[test]
@@ -199,13 +192,4 @@ fn an_output_that_is_not_two_channels_has_no_balance() {
             "{text:?}"
         );
     }
-}
-
-#[test]
-fn only_the_first_line_of_the_balance_is_read() {
-    let (balance, _) = parse_balance(
-        "Volume: front-left: 1 / 50% / 0 dB, front-right: 1 / 50% / 0 dB\nBalance: 0.00\n",
-    )
-    .unwrap();
-    assert_eq!(balance, 0.0);
 }

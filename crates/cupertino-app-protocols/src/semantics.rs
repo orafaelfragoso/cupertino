@@ -1,4 +1,4 @@
-//! Cupertino-owned semantic wire values. This crate knows neither widgets nor compositor policy.
+//! Cupertino-owned semantic wire values: bounded snapshots, actions and sealed Wayland payloads. This module knows neither widgets nor compositor policy.
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;

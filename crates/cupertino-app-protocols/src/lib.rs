@@ -1,7 +1,8 @@
 //! Generated bindings of the public protocols `protocols/cupertino-app-effects-v1.xml`,
 //! `protocols/cupertino-scroll-v1.xml` and `protocols/cupertino-layers-v1.xml`: enable `client` in clients and `server` in the display server.
+//! The `semantics` module holds the wire values of `cupertino_semantics_v1`.
 
-#![allow(clippy::all)]
+pub mod semantics;
 
 // The scanner macros read the XML without telling rustc; including it puts it in the dep-info that caches such as
 // sccache key on, so an edited protocol regenerates the bindings.
@@ -11,6 +12,7 @@ const _: &[u8] = include_bytes!("../protocols/cupertino-semantics-v1.xml");
 const _: &[u8] = include_bytes!("../protocols/cupertino-layers-v1.xml");
 
 #[cfg(feature = "client")]
+#[allow(clippy::all)]
 pub mod client {
     #![allow(
         dead_code,
@@ -79,6 +81,7 @@ pub mod client {
 }
 
 #[cfg(feature = "server")]
+#[allow(clippy::all)]
 pub mod server {
     #![allow(
         dead_code,

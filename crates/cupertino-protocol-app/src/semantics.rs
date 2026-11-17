@@ -3,7 +3,7 @@ use cupertino_app_protocols::client::semantics::{
     cupertino_semantic_surface_v1::{self, CupertinoSemanticSurfaceV1},
     cupertino_semantics_v1::CupertinoSemanticsV1,
 };
-use cupertino_semantics::{ActionCall, ActionReply, Outcome, Snapshot, MAX_FRAME};
+use cupertino_app_protocols::semantics::{ActionCall, ActionReply, Outcome, Snapshot, MAX_FRAME};
 use cupertino_wayland_client::{Connection, State, SurfaceId};
 use std::os::fd::AsFd;
 use std::sync::{Arc, Mutex};
@@ -80,7 +80,7 @@ impl SemanticSurface {
         match snapshot
             .validate()
             .map_err(std::io::Error::other)
-            .and_then(|_| cupertino_semantics::seal(snapshot, MAX_FRAME))
+            .and_then(|_| cupertino_app_protocols::semantics::seal(snapshot, MAX_FRAME))
         {
             Ok((file, len)) => {
                 self.proxy
@@ -95,7 +95,7 @@ impl SemanticSurface {
         if !s.active || s.epoch != call.epoch {
             return;
         }
-        if let Ok((file, len)) = cupertino_semantics::seal(
+        if let Ok((file, len)) = cupertino_app_protocols::semantics::seal(
             &ActionReply {
                 id: call.id,
                 epoch: call.epoch,
@@ -154,9 +154,9 @@ impl Dispatch<CupertinoSemanticSurfaceV1, Shared> for State {
             cupertino_semantic_surface_v1::Event::Perform { payload, length } => {
                 // a serial goes only with the perform right after it, even one that is dropped
                 let grab_serial = s.grab_serial.take();
-                if let Ok(call) =
-                    cupertino_semantics::read::<ActionCall>(payload, length, MAX_FRAME)
-                {
+                if let Ok(call) = cupertino_app_protocols::semantics::read::<ActionCall>(
+                    payload, length, MAX_FRAME,
+                ) {
                     if s.active && call.epoch == s.epoch && s.requests.is_empty() {
                         s.requests.push(SemanticRequest { call, grab_serial });
                     }

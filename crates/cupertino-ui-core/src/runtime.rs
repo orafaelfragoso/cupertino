@@ -239,7 +239,7 @@ struct WindowState<M> {
     /// The node of `accessibility` assistive technology is told holds the focus.
     accessibility_focus: Option<NodeId>,
     semantic_revision: u64,
-    semantic_snapshot: Option<cupertino_semantics::Snapshot>,
+    semantic_snapshot: Option<cupertino_app_protocols::semantics::Snapshot>,
     /// When the tree was last handed to the window system as a new snapshot.
     semantic_sent: Option<Timestamp>,
     /// When a change of the tree held back by the publishing interval may go out.
@@ -447,8 +447,8 @@ pub struct Runtime<A: Application, W: WindowSystem> {
     next_timer: u64,
     semantic_finishing: Vec<(
         WindowId,
-        cupertino_semantics::ActionCall,
-        cupertino_semantics::Outcome,
+        cupertino_app_protocols::semantics::ActionCall,
+        cupertino_app_protocols::semantics::Outcome,
     )>,
     /// Popups the window system refused, kept closed until the view stops declaring them.
     refused_popups: Vec<WindowKey>,

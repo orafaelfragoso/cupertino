@@ -849,7 +849,7 @@ pub enum PlatformError {
     Protocol(String),
 }
 
-pub use cupertino_semantics as semantics;
+pub use cupertino_app_protocols::semantics;
 
 pub trait WindowSystem {
     /// Native semantics are opt-in per surface and require compositor consent.

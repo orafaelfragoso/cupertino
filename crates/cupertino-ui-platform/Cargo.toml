@@ -10,7 +10,7 @@ layer = "ui"
 
 [dependencies]
 cupertino-animation = { path = "../cupertino-animation" }
-cupertino-semantics = { path = "../cupertino-semantics" }
+cupertino-app-protocols = { path = "../cupertino-app-protocols" }
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-menu-model = { path = "../cupertino-menu-model" }
 cupertino-keyboard = { path = "../cupertino-keyboard" }

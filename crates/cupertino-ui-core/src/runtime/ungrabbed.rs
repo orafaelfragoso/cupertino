@@ -7,7 +7,7 @@
 use super::Dismiss;
 use super::{Runtime, WindowState};
 use crate::{Application, UiError, WindowKey};
-use cupertino_semantics::Outcome;
+use cupertino_app_protocols::semantics::Outcome;
 use cupertino_ui_platform::{
     PlatformError, PointerEvent, TouchEvent, WindowEvent, WindowId, WindowSystem,
 };

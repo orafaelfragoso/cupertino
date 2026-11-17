@@ -47,12 +47,12 @@ pub enum ControlEvent {
     Observation {
         epoch: u64,
         serial: u32,
-        data: cupertino_semantics::Observation,
+        data: cupertino_app_protocols::semantics::Observation,
     },
     ActionFinished {
         epoch: u64,
         serial: u32,
-        reply: cupertino_semantics::ActionReply,
+        reply: cupertino_app_protocols::semantics::ActionReply,
     },
     SemanticChanged {
         epoch: u64,
@@ -218,9 +218,12 @@ impl ControlSession {
     pub fn perform(
         &self,
         serial: u32,
-        call: &cupertino_semantics::Invocation,
+        call: &cupertino_app_protocols::semantics::Invocation,
     ) -> Result<(), std::io::Error> {
-        let (file, len) = cupertino_semantics::seal(call, cupertino_semantics::MAX_FRAME)?;
+        let (file, len) = cupertino_app_protocols::semantics::seal(
+            call,
+            cupertino_app_protocols::semantics::MAX_FRAME,
+        )?;
         let (h, l) = self.parts();
         self.proxy.perform(serial, h, l, file.as_fd(), len);
         Ok(())
@@ -338,10 +341,10 @@ impl Dispatch<CupertinoControlSessionV1, RunData> for State {
                 payload,
                 length,
             } => {
-                let Ok(data) = cupertino_semantics::read(
+                let Ok(data) = cupertino_app_protocols::semantics::read(
                     payload,
                     length,
-                    cupertino_semantics::MAX_OBSERVATION,
+                    cupertino_app_protocols::semantics::MAX_OBSERVATION,
                 ) else {
                     return;
                 };
@@ -356,9 +359,11 @@ impl Dispatch<CupertinoControlSessionV1, RunData> for State {
                 payload,
                 length,
             } => {
-                let Ok(reply) =
-                    cupertino_semantics::read(payload, length, cupertino_semantics::MAX_FRAME)
-                else {
+                let Ok(reply) = cupertino_app_protocols::semantics::read(
+                    payload,
+                    length,
+                    cupertino_app_protocols::semantics::MAX_FRAME,
+                ) else {
                     return;
                 };
                 ControlEvent::ActionFinished {

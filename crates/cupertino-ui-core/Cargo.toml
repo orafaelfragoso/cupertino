@@ -9,7 +9,7 @@ description = "CupertinoKit runtime: the application model, elements and the ret
 layer = "ui"
 
 [dependencies]
-cupertino-semantics = { path = "../cupertino-semantics" }
+cupertino-app-protocols = { path = "../cupertino-app-protocols" }
 async-task = "4.7"
 cupertino-animation = { path = "../cupertino-animation" }
 cupertino-defaults = { path = "../cupertino-defaults" }

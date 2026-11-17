@@ -1,7 +1,7 @@
 //! Cupertino's Rust MCP stdio adapter. The native compositor remains the permission authority.
 use super::capture::Region;
 use super::{ipc, json, Value};
-use cupertino_semantics::{Action, Data};
+use cupertino_app_protocols::semantics::{Action, Data};
 use serde::Deserialize;
 use std::io::{self, BufReader, Write};
 use std::net::Shutdown;
@@ -469,7 +469,7 @@ fn observation(
         || role.as_ref().is_some_and(|s| s.len() > 64)
         || name
             .as_ref()
-            .is_some_and(|s| s.len() > cupertino_semantics::MAX_TEXT)
+            .is_some_and(|s| s.len() > cupertino_app_protocols::semantics::MAX_TEXT)
     {
         return Err("invalid observation filter or node limit".into());
     }

@@ -339,7 +339,7 @@ it is not a prerequisite for Terra to operate Cupertino.
 | --- | --- |
 | `cupertino-control-model` | Grant states, epochs, scope and capability narrowing, the app a request comes from, the remembered answers, and the ownership of held keys and buttons per input source, without I/O |
 | `cupertino-protocols` | The private `cupertino_control_v1` and `cupertino_control_authority_v1` protocols |
-| `cupertino-semantics`, `cupertino-app-protocols` | Bounded semantic snapshots and actions, and the public `cupertino_semantics_v1` through which a Kit application publishes only its own surfaces |
+| `cupertino-app-protocols` | Bounded semantic snapshots and actions, and the public `cupertino_semantics_v1` through which a Kit application publishes only its own surfaces |
 | `cupertino-server` | The `DesktopControl` role (the role set is 16 bits wide), grants checked on every request, accepted input routed through the existing handlers, capture checked per frame, the controller's held input released when its run ends |
 | `cupertino-shell-client` | Binds the control and consent protocols for the controller and the session agent |
 | `cupertino-control` | The supervised controller: the local socket, bounded requests, capture, and the MCP stdio bridge |

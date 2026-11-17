@@ -552,7 +552,7 @@ The script refuses to run inside a desktop session (`WAYLAND_DISPLAY` or `DISPLA
 - Server flags pass through: `./run-cupertino.sh --run-for 600` stops by itself after ten minutes.
 - Without `--run-for` the run stops after `CUPERTINO_RUN_FOR` seconds (900 by default), and a watchdog ends the whole process tree 30 seconds later if the server hangs instead of stopping. No limit (`0`) needs `CUPERTINO_ALLOW_NO_TIMEOUT=1`: a hung server on a console without a limit leaves the keyboard muted.
 
-The TTY backend has run in a virtual machine, not yet on real hardware. Treat it as experimental.
+The TTY backend is in daily use on real hardware with an NVIDIA GPU and one display, and runs in virtual machines. Other GPUs and setups with several displays are less tested.
 
 ## Headless captures
 
@@ -601,7 +601,7 @@ The system file may also declare a development folder, `"dev_folder": {"path": "
 
 Without a flag the server runs nested when `WAYLAND_DISPLAY` or `DISPLAY` is set and on the TTY otherwise. Other useful flags: `--size WxH`, `--scale F`, `--appearance light|dark`, `--spawn "cmd args"` (repeatable), `--run-for S`. `cargo run -p cupertino-server -- --help` lists them all, and the server's README describes each.
 
-The TTY backend has run in a virtual machine, not yet on real hardware. Treat it as experimental.
+The TTY backend is in daily use on real hardware with an NVIDIA GPU and one display, and runs in virtual machines. Other GPUs and setups with several displays are less tested.
 
 ## Tests
 

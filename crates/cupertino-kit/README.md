@@ -17,6 +17,23 @@ fn paint(cx: &mut PaintCx<'_>) {
 }
 ```
 
+Several Kit instances can run in one process, each on a UI thread of its own (the components of a shell host). What
+differs between them lives with each instance, never in a process-wide static: an `Instance` (`Instance::new(area)`)
+is entered on a thread (`enter`, until the guard drops; `Instance::current` gives it), and the thread's diagnostic
+events are recorded in its scope (`cupertino_diagnostic_events::Scope`: its panic is `<area>.panic`); each window
+system keeps its own renderer choice and context losses. Every `app::run` runs for the instance the calling thread
+entered, else for the process's own (named by the program, its events the process's). The diagnostic emitter and the
+panic hook stay one per process, installed by `main`.
+
+Work that would hold up a UI thread goes to the process's pools as a command (`kit::task`): `task::cpu` on a pool of
+one thread a core, `task::io` on a pool of `task::IO_THREADS` for blocking work with the deadline the caller names.
+Each runs for the instance that asked, its result comes back to that UI thread as a message, one instance runs at most
+`task::IO_SHARE` I/O tasks at once, an I/O task still running past its deadline is reported once
+(`toolkit.task.overdue`, with its instance, deadline and call site), and a task's panic is its instance's and is raised
+again on the UI thread. `kit::bus::connect` opens a D-Bus connection whose work the UI loop polls, with no executor
+thread: the connection comes as one message and its close as another. `kit::time` reads the session's local time
+(`local`, `now`) and turns a local date and time back into a moment (`from_local`), daylight saving time included.
+
 `app::run` and `app::options` start on the Cupertino theme from the installed theme data, and on
 `ThemeTokens::neutral` when there is none or it is unusable (one line on stderr says why), so an application runs on any
 compositor. `app::run` connects for the application's renderer class (`Application::RENDERER`), and its renderer factory
@@ -41,6 +58,9 @@ text that lines up by character (a file's contents); `None` when no pack names o
 The widgets' icons are the asset packs' symbols. `Icons::application`, the icon an alert shows, is the icon named by
 the `Icon=` of the desktop entry whose id is the running program's file name (`cupertino-files.desktop` for
 `cupertino-files`), from the packs, else from the host icon themes or a file, else the packs' generic application icon.
+The icons' caches, like the text system's, can serve every instance of a process: they take whole images that never
+change afterwards, a cache's lock is held only to look one up or put one in, and the packs are read and drawn outside
+it.
 
 `file_icons::FileIcons` gives apps that list files the icon of each item's type as image renditions (1× and 2×) for
 `controls::Image`: the asset packs' and the host icon theme's icon of the type's kind or its nearest ancestor's (as

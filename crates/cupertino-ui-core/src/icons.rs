@@ -54,32 +54,32 @@ impl Icons for PlaceholderIcons {
         let tint = color
             .premultiplied()
             .map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8);
-        let mut drawn = self.drawn.lock().unwrap_or_else(|e| e.into_inner());
-        drawn
-            .entry((px, tint))
-            .or_insert_with(|| {
-                let edge = (px / 12).max(1);
-                let side = px as usize;
-                let mut pixels = vec![0u8; side * side * 4];
-                for (i, pixel) in pixels.as_chunks_mut::<4>().0.iter_mut().enumerate() {
-                    let (x, y) = ((i % side) as u32, (i / side) as u32);
-                    if x < edge || y < edge || x >= px - edge || y >= px - edge {
-                        *pixel = tint;
-                    }
-                }
-                IconImage {
-                    id: next_resource_id(),
-                    image: ImageResource {
-                        revision: 1,
-                        width: px,
-                        height: px,
-                        stride: px * 4,
-                        format: PixelFormat::Rgba8Premultiplied,
-                        pixels: Arc::from(pixels),
-                    },
-                }
-            })
-            .clone()
+        let drawn = || self.drawn.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(image) = drawn().get(&(px, tint)) {
+            return image.clone();
+        }
+        // drawn with no lock held: an image another thread put in first is the one given
+        let edge = (px / 12).max(1);
+        let side = px as usize;
+        let mut pixels = vec![0u8; side * side * 4];
+        for (i, pixel) in pixels.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            let (x, y) = ((i % side) as u32, (i / side) as u32);
+            if x < edge || y < edge || x >= px - edge || y >= px - edge {
+                *pixel = tint;
+            }
+        }
+        let image = IconImage {
+            id: next_resource_id(),
+            image: ImageResource {
+                revision: 1,
+                width: px,
+                height: px,
+                stride: px * 4,
+                format: PixelFormat::Rgba8Premultiplied,
+                pixels: Arc::from(pixels),
+            },
+        };
+        drawn().entry((px, tint)).or_insert(image).clone()
     }
 
     fn application(&self, px: u32) -> Option<IconImage> {

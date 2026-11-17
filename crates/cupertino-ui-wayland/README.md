@@ -130,7 +130,8 @@ allocator); `CUPERTINO_RENDERER=cpu` keeps a process on the CPU. Missing librari
 device whose render node the process cannot see (`NoRenderNode`, a sandbox without `/dev/dri`), a device that can
 allocate no dmabufs, by GBM or by texture export (`NoAllocator`), and three resets within a minute select the CPU;
 purges never count.
-The current renderer and why (`active`) is logged as `renderer: <cpu|gpu> (<reason>)` on each change and recorded in
+Each window system keeps its renderer and why (`WaylandWindowSystem::renderer`, `GpuPath::choice`, with the context
+losses it counts); a change is logged as `renderer: <cpu|gpu> (<reason>)` and recorded in
 `$XDG_RUNTIME_DIR/cupertino/renderers/<pid>`. A process or surface that wanted the GPU and draws on the CPU
 (`renderer::fallback`: the process, one surface, or a reset of its context) logs
 `renderer: fell back to the CPU (<scope>): <why>` and records the diagnostic event `toolkit.renderer.fallback`,

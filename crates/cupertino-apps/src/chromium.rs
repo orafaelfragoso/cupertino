@@ -19,7 +19,7 @@
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::SystemTime;
 
 /// The resource file every Chromium build ships beside its executable.
@@ -134,21 +134,27 @@ pub fn is_chromium(program: &str, path_dirs: &[PathBuf]) -> bool {
 /// Chromium. Kept for each program until a file read for it changes.
 pub fn launcher(program: &str, path_dirs: &[PathBuf]) -> Option<Launcher> {
     let path = std::fs::canonicalize(resolve(program, path_dirs)?).ok()?;
-    static FOUND: Mutex<Option<HashMap<PathBuf, Found>>> = Mutex::new(None);
-    let mut found = FOUND.lock().unwrap_or_else(|e| e.into_inner());
-    let found = found.get_or_insert_with(HashMap::new);
-    if let Some(known) = found.get(&path).filter(|f| f.current()) {
+    // the process's one table: its entries never change, and the lock is held only to look one up or put one in
+    static FOUND: Mutex<Option<HashMap<PathBuf, Arc<Found>>>> = Mutex::new(None);
+    let known = FOUND
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .as_ref()
+        .and_then(|found| found.get(&path).cloned());
+    if let Some(known) = known.filter(|f| f.current()) {
         return known.launcher.clone();
     }
     let mut read = Vec::new();
     let launcher = inspect(&path, path_dirs, DEPTH, &mut read);
-    found.insert(
-        path,
-        Found {
-            read,
-            launcher: launcher.clone(),
-        },
-    );
+    let found = Arc::new(Found {
+        read,
+        launcher: launcher.clone(),
+    });
+    FOUND
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get_or_insert_with(HashMap::new)
+        .insert(path, found);
     launcher
 }
 

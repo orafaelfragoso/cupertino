@@ -395,7 +395,10 @@ pub struct GpuPath {
     node: Option<PathBuf>,
     offered: Vec<u64>,
     explicit_offered: bool,
+    /// The context losses counted toward staying on the CPU.
     losses: LossHistory,
+    /// The renderer it draws with now, and why; `None` until the rule first decided.
+    choice: Option<Choice>,
     surfaces: HashMap<SurfaceId, SurfaceKind>,
     cache: Option<PathBuf>,
     /// The warm-up's timing and when the switch happened after the start, once the GPU took over.
@@ -428,6 +431,7 @@ impl GpuPath {
             offered: Vec::new(),
             explicit_offered: false,
             losses: LossHistory::default(),
+            choice: None,
             surfaces: HashMap::new(),
             cache: program_cache::default_dir(),
             warmed: None,
@@ -469,7 +473,7 @@ impl GpuPath {
             },
         };
         match renderer::start(self.requested, self.class, wanted, feedback) {
-            Start::Cpu(reason) => renderer::set_active(Choice {
+            Start::Cpu(reason) => self.choose(Choice {
                 kind: RendererKind::Cpu,
                 reason,
             }),
@@ -483,6 +487,22 @@ impl GpuPath {
     /// The process's class.
     pub fn class(&self) -> RendererClass {
         self.class
+    }
+
+    /// The renderer it draws with now, and why: the CPU until the rule decided otherwise.
+    pub fn choice(&self) -> Choice {
+        self.choice.clone().unwrap_or(Choice {
+            kind: RendererKind::Cpu,
+            reason: Reason::CpuClass,
+        })
+    }
+
+    /// Takes `choice`, announced once per change ([`renderer::announce`]).
+    fn choose(&mut self, choice: Choice) {
+        if self.choice.as_ref() != Some(&choice) {
+            renderer::announce(&choice);
+            self.choice = Some(choice);
+        }
     }
 
     /// Whether the process takes the size and repaint rule and no window of it was large or busy yet.
@@ -533,7 +553,7 @@ impl GpuPath {
         match WarmUp::start(self.node.clone(), self.cache.clone(), move || waker.wake()) {
             Ok(warm_up) => {
                 self.state = State::Warming(warm_up);
-                renderer::set_active(Choice {
+                self.choose(Choice {
                     kind: RendererKind::Cpu,
                     reason: Reason::WarmingUp,
                 });
@@ -619,13 +639,13 @@ impl GpuPath {
                     self.renderers
                         .set(Some((Rc::clone(&gpu.device), Rc::clone(&gpu.ui))));
                     self.state = State::On(Box::new(gpu));
-                    renderer::set_active(Choice { kind, reason });
+                    self.choose(Choice { kind, reason });
                     self.events
                         .push(PlatformEvent::RendererChanged(RendererKind::Gpu));
                     let _ = conn;
                 } else {
                     self.state = State::Cpu;
-                    renderer::set_active(Choice { kind, reason });
+                    self.choose(Choice { kind, reason });
                 }
             }
             Err(why) => self.settle(Err(why)),
@@ -636,7 +656,7 @@ impl GpuPath {
         let (kind, reason) =
             renderer::settle(self.requested, device, self.losses.exceeded(Instant::now()));
         self.state = State::Cpu;
-        renderer::set_active(Choice { kind, reason });
+        self.choose(Choice { kind, reason });
     }
 
     /// The render node's syncobj requests, when the compositor offers explicit sync and the kernel can wait on
@@ -727,7 +747,7 @@ impl GpuPath {
         self.events
             .push(PlatformEvent::RendererChanged(RendererKind::Cpu));
         if exceeded {
-            renderer::set_active(Choice {
+            self.choose(Choice {
                 kind: RendererKind::Cpu,
                 reason: Reason::Losses,
             });

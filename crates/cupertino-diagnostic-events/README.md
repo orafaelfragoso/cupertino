@@ -38,6 +38,7 @@ diag::event(Severity::Warn, "dock.icon.load_failed", "an icon could not be loade
 | `install_panic_hook()` | Records `fatal` `<area>.panic` (the message through the scrubber, the location's file basename and line, the thread name), writes the open summaries, then calls the hook that was there before (so the server's own hook still writes `server.log`). |
 | `exit_error(&error)` | Records `error` `<area>.exit_error` with the error's text through the scrubber, for a process about to exit because of it; the caller still prints and returns its error. |
 | `set_context(key, Value)` | A field every later event of the process carries (the server's `backend` and `renderer`); an event's own field of that key wins. |
+| `Scope::new(area)`, `.enter()`, `Scope::current()`, `.set_context(key, Value)` | One part of a process that records as its own, such as one of several toolkit instances: while a thread is in it (from `enter` until the guard drops), its panic is `<area>.panic`, its `exit_error` `<area>.exit_error`, and its events carry the scope's context fields over the process's. A thread in no scope records as the process. Every scope records through the process's one emitter and its one panic hook. |
 | `recent()` | The last events of the process (the memory ring), for crash reports. |
 | `Emitter::prepare_fatal(id, message, key, values)` | Lines a fatal signal handler writes with no lock and no allocation, one per value of `key`, to `fatal-<boot>-<pid>.jsonl` in the store (`FatalRecord::path`, `FatalRecord::render`). |
 | `store::{Store, read, segments, user_dir}` | The store itself, and reading it back (used by `cupertino_diagnostics::events`). |
@@ -188,6 +189,7 @@ Every id, where it comes from, and how. The table matches `grep -rn 'diag::event
 | `power.suspend.failed` | error | `cupertino-server`, `cupertino-sessiond` | a sleep did not happen: the idle policy's (`reason`), or the login screen's that logind failed |
 | `power.inhibit.failed` | warn | `cupertino-server` | logind gave no sleep delay inhibitor |
 | `toolkit.renderer.fallback` | warn | any toolkit process | a process or surface that wanted the GPU draws on the CPU (`program`, `scope`: `process`, `surface` or `loss`, `reason`); a purge is not one |
+| `toolkit.task.overdue` | warn | any toolkit process | an I/O task ran past the deadline its caller named (`instance`, `deadline` in milliseconds, `site`), once a task |
 | `login.power.failed` | error | `cupertino-sessiond` | logind failed to restart or shut down (`action`) |
 | `login.auth.failed` | warn | `cupertino-sessiond` | PAM refused an authentication (`service`, `stage`, `error`, `outcome`, `failures`); never the account |
 | `login.session.start_failed` | error | `cupertino-sessiond` | a session could not be started at `stage` |

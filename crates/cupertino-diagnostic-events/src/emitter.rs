@@ -8,7 +8,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::panic::Location;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard, Once, OnceLock, TryLockError};
+use std::sync::{Arc, Mutex, MutexGuard, Once, OnceLock, PoisonError, TryLockError};
 use std::time::{Duration, Instant, SystemTime};
 
 use crate::build_info::Component;
@@ -51,6 +51,113 @@ static BEFORE_INSTALL: AtomicU64 = AtomicU64::new(0);
 thread_local! {
     /// Set while this thread records an event, so a panic inside it does not record again.
     static RECORDING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The scope this thread's events are recorded in, while one is entered.
+    static SCOPE: std::cell::RefCell<Option<Scope>> = const { std::cell::RefCell::new(None) };
+}
+
+/// One part of a process that records its events as its own, such as one component of several in a process: its panic
+/// is `<area>.panic`, its exit with an error `<area>.exit_error`, and its events carry its context fields. A thread
+/// records in the scope it entered ([`Scope::enter`]); a thread that entered none records as the process, with the
+/// area [`init`] named. Every scope records through the process's one emitter.
+#[derive(Clone)]
+pub struct Scope(Arc<ScopeState>);
+
+struct ScopeState {
+    area: &'static str,
+    panic_id: &'static str,
+    exit_error_id: &'static str,
+    /// Fields every later event of the scope carries, reduced when an event is built.
+    context: Mutex<Vec<(&'static str, Owned)>>,
+}
+
+impl std::fmt::Debug for Scope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Scope").field(&self.0.area).finish()
+    }
+}
+
+impl Scope {
+    /// A scope whose event ids start with `area` (`dock`, `menubar`).
+    pub fn new(area: &'static str) -> Scope {
+        let (panic_id, exit_error_id) = area_ids(area);
+        Scope(Arc::new(ScopeState {
+            area,
+            panic_id,
+            exit_error_id,
+            context: Mutex::new(Vec::new()),
+        }))
+    }
+
+    /// The scope the calling thread records in, if it entered one.
+    pub fn current() -> Option<Scope> {
+        SCOPE
+            .try_with(|s| s.try_borrow().ok().and_then(|s| s.clone()))
+            .ok()
+            .flatten()
+    }
+
+    /// Records the calling thread's events in this scope until the guard is dropped, which restores the scope the thread
+    /// was in before.
+    pub fn enter(&self) -> Entered {
+        let previous = SCOPE.with(|s| s.replace(Some(self.clone())));
+        Entered {
+            previous,
+            _thread: std::marker::PhantomData,
+        }
+    }
+
+    pub fn area(&self) -> &'static str {
+        self.0.area
+    }
+
+    /// Adds a field every later event of the scope carries, over the process's field of that key; a later call for the
+    /// same key replaces it.
+    pub fn set_context(&self, key: &'static str, value: Value<'_>) {
+        let mut context = self
+            .0
+            .context
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        context.retain(|(k, _)| *k != key);
+        context.push((key, Owned::of(&value)));
+    }
+
+    fn context(&self) -> Vec<(&'static str, Owned)> {
+        self.0
+            .context
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+}
+
+/// A thread's time in a [`Scope`]; dropping it, on the thread that entered, restores the scope before.
+pub struct Entered {
+    previous: Option<Scope>,
+    /// Bound to the thread whose scope it restores.
+    _thread: std::marker::PhantomData<*const ()>,
+}
+
+impl Drop for Entered {
+    fn drop(&mut self) {
+        let previous = self.previous.take();
+        SCOPE.with(|s| *s.borrow_mut() = previous);
+    }
+}
+
+/// The ids of `area`'s panic and exit with an error, made once per area for the life of the process.
+fn area_ids(area: &'static str) -> (&'static str, &'static str) {
+    static IDS: Mutex<Vec<(&'static str, &'static str, &'static str)>> = Mutex::new(Vec::new());
+    let mut ids = IDS.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(&(_, panic, exit)) = ids.iter().find(|(a, ..)| *a == area) {
+        return (panic, exit);
+    }
+    let made = (
+        leak(format!("{area}.panic")),
+        leak(format!("{area}.exit_error")),
+    );
+    ids.push((area, made.0, made.1));
+    made
 }
 
 /// The kernel's boot id, read once.
@@ -292,6 +399,7 @@ impl Emitter {
     }
 
     fn record(&'static self, event: &Event<'_>, source: Option<String>, bounded: bool) {
+        let scoped = Scope::current().map(|s| s.context()).unwrap_or_default();
         let state = if bounded {
             self.lock_bounded()
         } else {
@@ -304,7 +412,7 @@ impl Emitter {
             *c += 1;
             *c
         };
-        let record = self.build(&mut state, event, count, source);
+        let record = self.build(&mut state, event, count, source, &scoped);
         let mut out = state.rate.due(now);
         out.extend(state.rate.offer(record, now));
         for record in out {
@@ -323,6 +431,7 @@ impl Emitter {
         event: &Event<'_>,
         count: u64,
         source: Option<String>,
+        scoped: &[(&'static str, Owned)],
     ) -> Record {
         let origin = Origin {
             time: time::format(SystemTime::now()),
@@ -335,7 +444,11 @@ impl Emitter {
         };
         let policy = self.policy_in(state);
         let mut record = event.to_record(policy, &origin, count);
-        for (key, value) in &state.context {
+        let process = state
+            .context
+            .iter()
+            .filter(|(key, _)| scoped.iter().all(|(k, _)| k != key));
+        for (key, value) in scoped.iter().chain(process) {
             if event.fields.iter().any(|(k, _)| k == key) {
                 continue;
             }
@@ -426,7 +539,7 @@ impl Emitter {
         )
         .field("reason", Value::Public(reason.code()))
         .field("kept_in_memory", Value::Count(kept));
-        let mut record = self.build(state, &event, count, None);
+        let mut record = self.build(state, &event, count, None, &[]);
         let line = record.fit(self.limits.event_bytes);
         push_ring(state, &line);
         if let Out::Store {
@@ -498,7 +611,7 @@ impl Emitter {
         let mut lines = Vec::new();
         for value in values {
             let event = event::event(Severity::Fatal, id, message).field(key, Value::Public(value));
-            let mut record = self.build(&mut state, &event, 1, None);
+            let mut record = self.build(&mut state, &event, 1, None, &[]);
             record.time = time::format(SystemTime::UNIX_EPOCH);
             let line = record.fit(self.limits.event_bytes.min(FATAL_LINE));
             let at = line.find("\"time\":\"")? + "\"time\":\"".len();
@@ -671,7 +784,8 @@ pub fn init(component: Component, area: &'static str, sink: Sink) -> &'static Em
 pub const TEST_PANIC_ENV: &str = "CUPERTINO_DIAG_TEST_PANIC";
 
 /// Chains a panic hook that records `<area>.panic` (`fatal`, the message through the free-text scrubber, the location's
-/// file basename and line) and writes the open summaries, then calls the hook that was there before. Once per process.
+/// file basename and line; `<area>` that of the panicking thread's [`Scope`], else the process's) and writes the open
+/// summaries, then calls the hook that was there before. Once per process.
 pub fn install_panic_hook() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
@@ -698,8 +812,12 @@ fn record_panic(info: &std::panic::PanicHookInfo<'_>) {
         .location()
         .map(|l| format!("{}:{}", basename(l.file()), l.line()));
     let thread = std::thread::current();
-    let mut event = event::event(Severity::Fatal, emitter.panic_id, "the process panicked")
-        .field("panic", Value::Public(payload));
+    let mut event = event::event(
+        Severity::Fatal,
+        Scope::current().map_or(emitter.panic_id, |s| s.0.panic_id),
+        "the process panicked",
+    )
+    .field("panic", Value::Public(payload));
     if let Some(location) = &location {
         event = event.field("location", Value::Public(location));
     }
@@ -718,8 +836,9 @@ fn basename(file: &str) -> &str {
     file.rsplit(['/', '\\']).next().unwrap_or(file)
 }
 
-/// Records `<area>.exit_error` (`error`, the error's text through the free-text scrubber) for a process about to exit
-/// because of `error`, and writes the open summaries. The caller still prints and returns its error as before.
+/// Records `<area>.exit_error` (`error`, the error's text through the free-text scrubber; `<area>` that of the calling
+/// thread's [`Scope`], else the process's) for a process or scope about to exit because of `error`, and writes the open
+/// summaries. The caller still prints and returns its error as before.
 #[track_caller]
 pub fn exit_error(error: &dyn Display) {
     let Some(emitter) = EMITTER.get() else {
@@ -729,7 +848,7 @@ pub fn exit_error(error: &dyn Display) {
     let text = error.to_string();
     let event = event::event(
         Severity::Error,
-        emitter.exit_error_id,
+        Scope::current().map_or(emitter.exit_error_id, |s| s.0.exit_error_id),
         "the process ended with an error",
     )
     .field("error", Value::Public(&text));

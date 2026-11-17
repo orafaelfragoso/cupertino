@@ -3,7 +3,7 @@ use crate::{FaceId, FontId, FontStyle, FontVariation, FontWeight, TextError};
 use harfrust::font::{Font, Variation};
 use harfrust::Tag;
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use swash::{FontDataRef, StringId, Style};
 
 const WEIGHT_AXIS: [u8; 4] = *b"wght";
@@ -46,10 +46,10 @@ struct Face {
     colour: bool,
 }
 
-struct Instance {
+pub(crate) struct Instance {
     face: FaceId,
     variations: Vec<FontVariation>,
-    font: Font,
+    pub(crate) font: Font,
     metrics: FontMetrics,
 }
 
@@ -61,23 +61,45 @@ struct InstanceKey {
 
 /// The fonts the text engine can use: faces registered from font files, and the face instances (a face at a set of
 /// variation coordinates) that layout and rasterization name by [`FontId`].
+///
+/// One index serves every thread that lays out or draws text, so it only grows: a face, an instance or a fallback list,
+/// once made, never changes, and the lock of each table is held only to look an entry up or put one in, never while a
+/// font file is read, a face parsed or a list worked out. A panic anywhere leaves every table whole for the others.
 #[derive(Default)]
 pub struct FontIndex {
-    faces: Vec<Face>,
-    instances: Vec<Instance>,
-    instance_ids: HashMap<InstanceKey, FontId>,
-    fallbacks: HashMap<(FontId, FontWeight), Arc<[FontId]>>,
-    system: Option<Box<dyn SystemFonts>>,
+    faces: RwLock<Vec<Arc<Face>>>,
+    instances: RwLock<Instances>,
+    /// Kept per font, weight and the number of faces the list was made from: a face added later makes a new list.
+    fallbacks: RwLock<HashMap<FallbackKey, Arc<[FontId]>>>,
+    /// Asked one question at a time; it keeps nothing the index relies on.
+    system: Option<Mutex<Box<dyn SystemFonts>>>,
     /// The installed faces asked for so far, and the face each became (`None` for a file that did not load).
-    system_faces: HashMap<FontFile, Option<FaceId>>,
+    system_faces: RwLock<HashMap<FontFile, Option<FaceId>>>,
     /// Characters and families the installed fonts were asked for and had nothing new for.
-    system_misses: HashSet<SystemQuery>,
+    system_misses: RwLock<HashSet<SystemQuery>>,
+}
+
+/// A font, a weight and how many faces there were when its fallback list was made.
+type FallbackKey = (FontId, FontWeight, usize);
+
+#[derive(Default)]
+struct Instances {
+    list: Vec<Arc<Instance>>,
+    ids: HashMap<InstanceKey, FontId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum SystemQuery {
     Char(char, Option<Box<str>>),
     Family(Box<str>, FontWeight, FontStyle),
+}
+
+fn read<T>(lock: &RwLock<T>) -> RwLockReadGuard<'_, T> {
+    lock.read().unwrap_or_else(PoisonError::into_inner)
+}
+
+fn write<T>(lock: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
+    lock.write().unwrap_or_else(PoisonError::into_inner)
 }
 
 impl FontIndex {
@@ -95,33 +117,10 @@ impl FontIndex {
         data: Arc<Vec<u8>>,
         index: u32,
     ) -> Result<FaceId, TextError> {
-        let font = Font::new(
-            harfrust::font::Blob::from(Arc::clone(&data) as Arc<dyn AsRef<[u8]> + Send + Sync>),
-            index,
-        )
-        .ok_or_else(|| TextError::InvalidFont(family.into()))?;
-        let weight_range = font
-            .axes()
-            .get_by_tag(Tag::new(&WEIGHT_AXIS))
-            .map(|axis| (axis.min_value(), axis.max_value()));
-        let colour = swash::FontRef::from_index(&data, index as usize).is_some_and(|font| {
-            [b"COLR", b"CBDT", b"sbix"]
-                .into_iter()
-                .any(|tag| font.table(swash::tag_from_bytes(tag)).is_some())
-        });
-        let id = FaceId(self.faces.len() as u32);
-        self.fallbacks.clear();
-        self.faces.push(Face {
-            family: family.into(),
-            data,
-            index,
-            weight,
-            style,
-            font,
-            weight_range,
-            colour,
-        });
-        Ok(id)
+        let face = parse_face(family, weight, style, data, index)?;
+        let faces = self.faces.get_mut().unwrap_or_else(PoisonError::into_inner);
+        faces.push(Arc::new(face));
+        Ok(FaceId(faces.len() as u32 - 1))
     }
 
     /// Registers every face of a font file or collection under the family, weight and style its own tables name. A face
@@ -145,76 +144,107 @@ impl FontIndex {
     /// Lets the index load installed fonts: a family no registered face has, and, after every registered face, a face
     /// for a character none of them draws. Installed faces load once, when first needed.
     pub fn set_system_fonts(&mut self, system: Box<dyn SystemFonts>) {
-        self.system = Some(system);
-        self.system_misses.clear();
+        self.system = Some(Mutex::new(system));
+        self.system_misses
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
+    }
+
+    /// The installed fonts' answer to `ask`; `None` without installed fonts.
+    fn ask_system(
+        &self,
+        ask: impl FnOnce(&dyn SystemFonts) -> Option<FontFile>,
+    ) -> Option<FontFile> {
+        let system = self
+            .system
+            .as_ref()?
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        ask(system.as_ref())
     }
 
     /// The installed face of `family`, loaded on first use; `None` without installed fonts or such a family.
     pub(crate) fn system_family(
-        &mut self,
+        &self,
         family: &str,
         weight: FontWeight,
         style: FontStyle,
     ) -> Option<FaceId> {
         let query = SystemQuery::Family(family.into(), weight, style);
-        if self.system_misses.contains(&query) {
+        if read(&self.system_misses).contains(&query) {
             return None;
         }
-        let file = self.system.as_ref()?.family(family, weight, style);
+        self.system.as_ref()?;
+        let file = self.ask_system(|system| system.family(family, weight, style));
         let face = file.and_then(|file| self.load_system(file));
         if face.is_none() {
-            self.system_misses.insert(query);
+            write(&self.system_misses).insert(query);
         }
         face
     }
 
     /// An installed face that draws `ch` and was not loaded before, loaded now; `None` when the system has nothing new.
     pub(crate) fn system_covering(
-        &mut self,
+        &self,
         ch: char,
         lang: Option<&str>,
         weight: FontWeight,
         style: FontStyle,
     ) -> Option<FaceId> {
         let query = SystemQuery::Char(ch, lang.map(Into::into));
-        if self.system_misses.contains(&query) {
+        if read(&self.system_misses).contains(&query) {
             return None;
         }
-        let file = self.system.as_ref()?.covering(ch, lang, weight, style);
+        self.system.as_ref()?;
+        let file = self.ask_system(|system| system.covering(ch, lang, weight, style));
         let face = file
-            .filter(|file| !self.system_faces.contains_key(file))
+            .filter(|file| !read(&self.system_faces).contains_key(file))
             .and_then(|file| self.load_system(file));
         if face.is_none() {
-            self.system_misses.insert(query);
+            write(&self.system_misses).insert(query);
         }
         face
     }
 
-    fn load_system(&mut self, file: FontFile) -> Option<FaceId> {
-        if let Some(face) = self.system_faces.get(&file) {
+    fn load_system(&self, file: FontFile) -> Option<FaceId> {
+        if let Some(face) = read(&self.system_faces).get(&file) {
             return *face;
         }
-        let face = read_font(&file.path).ok().and_then(|data| {
+        let parsed = read_font(&file.path).ok().and_then(|data| {
             let (family, weight, style) = named_face(&data, file.index)?;
-            self.add_face(&family, weight, style, Arc::new(data), file.index)
-                .ok()
+            parse_face(&family, weight, style, Arc::new(data), file.index).ok()
         });
-        self.system_faces.insert(file, face);
+        // another thread may have loaded the file meanwhile: its face stands
+        let mut system_faces = write(&self.system_faces);
+        if let Some(face) = system_faces.get(&file) {
+            return *face;
+        }
+        let face = parsed.map(|face| {
+            let mut faces = write(&self.faces);
+            faces.push(Arc::new(face));
+            FaceId(faces.len() as u32 - 1)
+        });
+        system_faces.insert(file, face);
         face
     }
 
-    pub fn family(&self, face: FaceId) -> Option<&str> {
-        self.faces.get(face.0 as usize).map(|f| &*f.family)
+    pub fn family(&self, face: FaceId) -> Option<Arc<str>> {
+        self.face(face).map(|f| Arc::clone(&f.family))
     }
 
     pub fn face_count(&self) -> usize {
-        self.faces.len()
+        read(&self.faces).len()
+    }
+
+    fn face(&self, face: FaceId) -> Option<Arc<Face>> {
+        read(&self.faces).get(face.0 as usize).cloned()
     }
 
     /// The face that best matches `family`, `weight` and `style`, by family name (case-insensitive), then the style,
     /// then the nearest weight. A variable face matches any weight inside its range.
     pub fn match_face(&self, family: &str, weight: FontWeight, style: FontStyle) -> Option<FaceId> {
-        self.faces
+        read(&self.faces)
             .iter()
             .enumerate()
             .filter(|(_, face)| face.family.eq_ignore_ascii_case(family))
@@ -235,12 +265,12 @@ impl FontIndex {
     /// The instance of `face` at `weight` and `variations`; a variation given for `wght` wins over `weight`. The same
     /// request always returns the same [`FontId`].
     pub fn instance(
-        &mut self,
+        &self,
         face: FaceId,
         weight: FontWeight,
         variations: &[FontVariation],
     ) -> Result<FontId, TextError> {
-        let entry = self.faces.get(face.0 as usize).ok_or(TextError::NoFont)?;
+        let entry = self.face(face).ok_or(TextError::NoFont)?;
         let mut coords: Vec<([u8; 4], f32)> = Vec::with_capacity(variations.len() + 1);
         if let Some((low, high)) = entry.weight_range {
             if !variations
@@ -264,7 +294,7 @@ impl FontIndex {
                 .map(|(tag, value)| (*tag, value.to_bits()))
                 .collect(),
         };
-        if let Some(id) = self.instance_ids.get(&key) {
+        if let Some(id) = read(&self.instances).ids.get(&key) {
             return Ok(*id);
         }
         let font = entry
@@ -277,8 +307,7 @@ impl FontIndex {
             )
             .build();
         let metrics = metrics_of(&font);
-        let id = FontId(self.instances.len() as u32);
-        self.instances.push(Instance {
+        let made = Arc::new(Instance {
             face,
             variations: coords
                 .iter()
@@ -290,28 +319,39 @@ impl FontIndex {
             font,
             metrics,
         });
-        self.instance_ids.insert(key, id);
+        // another thread may have made the same instance meanwhile: its id stands
+        let mut instances = write(&self.instances);
+        if let Some(id) = instances.ids.get(&key) {
+            return Ok(*id);
+        }
+        let id = FontId(instances.list.len() as u32);
+        instances.list.push(made);
+        instances.ids.insert(key, id);
         Ok(id)
     }
 
     /// The fonts that stand in for `font` where it has no glyph: every other face in load order, at `weight`. Kept per
-    /// font and weight.
+    /// font, weight and the faces there were.
     pub(crate) fn fallbacks(
-        &mut self,
+        &self,
         font: FontId,
         weight: FontWeight,
     ) -> Result<Arc<[FontId]>, TextError> {
-        if let Some(fonts) = self.fallbacks.get(&(font, weight)) {
+        let count = self.face_count();
+        if let Some(fonts) = read(&self.fallbacks).get(&(font, weight, count)) {
             return Ok(Arc::clone(fonts));
         }
         let own = self.face_of(font)?;
-        let fonts: Arc<[FontId]> = (0..self.faces.len() as u32)
+        let fonts: Arc<[FontId]> = (0..count as u32)
             .map(FaceId)
             .filter(|face| *face != own)
             .map(|face| self.instance(face, weight, &[]))
             .collect::<Result<_, _>>()?;
-        self.fallbacks.insert((font, weight), Arc::clone(&fonts));
-        Ok(fonts)
+        Ok(Arc::clone(
+            write(&self.fallbacks)
+                .entry((font, weight, count))
+                .or_insert(fonts),
+        ))
     }
 
     pub fn face_of(&self, font: FontId) -> Result<FaceId, TextError> {
@@ -321,7 +361,7 @@ impl FontIndex {
     /// The font file and variation coordinates behind `font`, for a rasterizer.
     pub fn source(&self, font: FontId) -> Result<FontSource, TextError> {
         let instance = self.instance_entry(font)?;
-        let face = &self.faces[instance.face.0 as usize];
+        let face = self.face(instance.face).ok_or(TextError::NoFont)?;
         Ok(FontSource {
             data: Arc::clone(&face.data),
             index: face.index,
@@ -336,24 +376,57 @@ impl FontIndex {
     /// Whether the font's face has colour glyphs (COLR, CBDT or sbix).
     pub fn is_colour(&self, font: FontId) -> Result<bool, TextError> {
         let face = self.face_of(font)?;
-        Ok(self.faces[face.0 as usize].colour)
+        Ok(self.face(face).ok_or(TextError::NoFont)?.colour)
     }
 
     /// Whether the font has a glyph for `ch`.
     pub fn has_glyph(&self, font: FontId, ch: char) -> Result<bool, TextError> {
-        self.font(font)
-            .map(|font| font.charmap().map_unicode(ch).is_some())
+        self.instance_entry(font)
+            .map(|instance| instance.font.charmap().map_unicode(ch).is_some())
     }
 
-    pub(crate) fn font(&self, font: FontId) -> Result<&Font, TextError> {
-        self.instance_entry(font).map(|instance| &instance.font)
-    }
-
-    fn instance_entry(&self, font: FontId) -> Result<&Instance, TextError> {
-        self.instances
+    /// The instance behind `font`, with its shaping font.
+    pub(crate) fn instance_entry(&self, font: FontId) -> Result<Arc<Instance>, TextError> {
+        read(&self.instances)
+            .list
             .get(font.0 as usize)
+            .cloned()
             .ok_or(TextError::UnknownFont(font))
     }
+}
+
+/// A face of `family` from the font at `index` in `data`, with what the index keeps of it.
+fn parse_face(
+    family: &str,
+    weight: FontWeight,
+    style: FontStyle,
+    data: Arc<Vec<u8>>,
+    index: u32,
+) -> Result<Face, TextError> {
+    let font = Font::new(
+        harfrust::font::Blob::from(Arc::clone(&data) as Arc<dyn AsRef<[u8]> + Send + Sync>),
+        index,
+    )
+    .ok_or_else(|| TextError::InvalidFont(family.into()))?;
+    let weight_range = font
+        .axes()
+        .get_by_tag(Tag::new(&WEIGHT_AXIS))
+        .map(|axis| (axis.min_value(), axis.max_value()));
+    let colour = swash::FontRef::from_index(&data, index as usize).is_some_and(|font| {
+        [b"COLR", b"CBDT", b"sbix"]
+            .into_iter()
+            .any(|tag| font.table(swash::tag_from_bytes(tag)).is_some())
+    });
+    Ok(Face {
+        family: family.into(),
+        data,
+        index,
+        weight,
+        style,
+        font,
+        weight_range,
+        colour,
+    })
 }
 
 /// The family, weight and style the name and OS/2 tables of face `index` in `data` give; `None` without a family name.

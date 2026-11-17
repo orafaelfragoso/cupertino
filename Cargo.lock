@@ -1231,6 +1231,7 @@ dependencies = [
  "cupertino-assets",
  "cupertino-capture",
  "cupertino-defaults",
+ "cupertino-diagnostic-events",
  "cupertino-geometry",
  "cupertino-icons",
  "cupertino-keyboard",
@@ -1241,7 +1242,9 @@ dependencies = [
  "cupertino-ui-test",
  "cupertino-ui-text",
  "cupertino-ui-wayland",
+ "libc",
  "tiny-skia",
+ "zbus",
 ]
 
 [[package]]

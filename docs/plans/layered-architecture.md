@@ -16,7 +16,7 @@ Updated by the lead at every merge.
 | | |
 |---|---|
 | Current wave | 1 |
-| Running tasks | W1.1, W1.2, W1.7 |
+| Running tasks | W1.2, W1.T |
 | Enforced layers | none (target rules checked since W0.2; 248 remaining-work lines) |
 | Waiting on the owner | nothing |
 | Last closed wave | 0 |
@@ -496,8 +496,8 @@ As in W1.T. Done in 6b9e146c4: 31 tests in `tests/` over fixture workspaces writ
 `ui-text`. **Touches** `controlcenter dock files input kit launcher login menu-model menubar notifications osd
 screenshot server settings ui-menus ui-platform ui-text ui-wayland`. **After** W1.3.
 
-- [ ] Both crates are modules of `cupertino-keyboard`; their directories are gone; consumers import from it.
-- [ ] `cupertino-keyboard` has no I/O and no dependency on `cupertino-defaults`. `KeyboardSettings` and the reading of
+- [x] (d0d651793) Both crates are modules of `cupertino-keyboard`; their directories are gone; consumers import from it.
+- [x] (d0d651793) `cupertino-keyboard` has no I/O and no dependency on `cupertino-defaults`. `KeyboardSettings` and the reading of
       `keyboard.conf` live in `cupertino-defaults`' keyboard module; the binding file is read by `cupertino-ui-text`
       and parsed by `cupertino-keyboard`. Anything else that does I/O is reported.
 
@@ -556,12 +556,12 @@ than one crate. **Touches** `menubar server` (dev-dependencies), `contracts.yaml
 compile, packaging dependencies and the package recipes' licence files. **Touches** `wayland-client portal kit`
 (its package's dependencies). **After** W0.close.
 
-- [ ] Before the swap, each difference listed at the top of `cupertino-xkbcommon/src/xkb/mod.rs` is checked against the
+- [x] (8efe5f162) Before the swap, each difference listed at the top of `cupertino-xkbcommon/src/xkb/mod.rs` is checked against the
       C library, and every caller that relied on one is made safe: names asked for out of range (the C library returns
       null), activity of an unknown layout or LED, empty options, keysym names. Listed in the report.
-- [ ] The `xkbcommon` patch entry and both directories are gone; Smithay, the client transport and the portal use the
+- [x] (8efe5f162) The `xkbcommon` patch entry and both directories are gone; Smithay, the client transport and the portal use the
       `xkbcommon` crate over libxkbcommon; packaging depends on libxkbcommon; `docs/src/architecture.md` says so.
-- [ ] A layout that does not compile leaves the last working layout in place and logs the failure. Program test.
+- [x] (8efe5f162) A layout that does not compile leaves the last working layout in place and logs the failure. Program test.
 
 #### W1.T Tests of wave 1's crates
 
@@ -1061,6 +1061,10 @@ One line per change to a decision or approval of a design: date, number, what, w
   the missing file is a remaining-work line (D22), so clippy does not fail on code a later task removes.
 - 2026-11-17: lead: the gate already keeps test code out of `src/`, so `cupertino-layers` has no test-placement check
   and the `T` tasks only make sure removed behaviour is covered by public or program tests.
+- 2026-11-17: lead: the portal keeps `xkbcommon` as a remaining-work line until it becomes a service (W6.11); a
+  server whose environment layout does not compile at start uses a US keymap (D31 has no last layout then).
+- 2026-11-17: lead: the test suite was restarted from nothing before wave 1, so each `T` task writes the public tests
+  of its crate's documented behaviour.
 - 2026-11-17: second independent review: statics allowed under D3, render-thread commits and CPU drawing (D4), two
   pools and a structural ban on blocking calls (D6), file operations in Kit (D8), the session agent's and the
   portal's dialogs placed (D9, D10, D11, D13), audio started on use (D15), self-restart and hang hand-back (D16, D17),

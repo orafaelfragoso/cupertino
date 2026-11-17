@@ -250,6 +250,25 @@ impl AnimationPresets {
     }
 }
 
+/// The default timing curve: a gentle start and a long settle (the table's `ease` entry).
+pub const EASE_CURVE: CubicBezier = CubicBezier::new(0.25, 0.1, 0.25, 1.0);
+/// Constant speed from start to end (the table's `linear` entry).
+pub const LINEAR_CURVE: CubicBezier = CubicBezier::new(0.0, 0.0, 1.0, 1.0);
+/// Starts slowly and ends at full speed (the table's `ease-in` entry).
+pub const EASE_IN_CURVE: CubicBezier = CubicBezier::new(0.42, 0.0, 1.0, 1.0);
+/// Starts at full speed and slows to a stop (the table's `ease-out` entry).
+pub const EASE_OUT_CURVE: CubicBezier = CubicBezier::new(0.0, 0.0, 0.58, 1.0);
+/// Starts and ends slowly, symmetric about the midpoint (the table's `ease-in-out` entry).
+pub const EASE_IN_OUT_CURVE: CubicBezier = CubicBezier::new(0.42, 0.0, 0.58, 1.0);
+/// The design's default spring, used where a motion names a spring without parameters (the table's `spring` entry).
+pub const DEFAULT_SPRING: SpringParams = SpringParams {
+    mass: 1.0,
+    stiffness: 100.0,
+    damping: 10.0,
+    initial_velocity: 0.0,
+    allows_overdamping: false,
+};
+
 /// The timing-function table: five cubic béziers and one
 /// spring (mass 1, stiffness 100, damping 10). Which transitions use the spring entry is unknown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -297,17 +316,17 @@ impl TimingPreset {
 
     pub fn bezier(self) -> Option<CubicBezier> {
         match self {
-            Self::Ease => Some(CubicBezier::DEFAULT),
-            Self::Linear => Some(CubicBezier::LINEAR),
-            Self::EaseIn => Some(CubicBezier::EASE_IN),
-            Self::EaseOut => Some(CubicBezier::EASE_OUT),
-            Self::EaseInOut => Some(CubicBezier::EASE_IN_EASE_OUT),
+            Self::Ease => Some(EASE_CURVE),
+            Self::Linear => Some(LINEAR_CURVE),
+            Self::EaseIn => Some(EASE_IN_CURVE),
+            Self::EaseOut => Some(EASE_OUT_CURVE),
+            Self::EaseInOut => Some(EASE_IN_OUT_CURVE),
             Self::Spring => None,
         }
     }
 
     pub fn spring(self) -> Option<SpringParams> {
-        (self == Self::Spring).then(SpringParams::default)
+        (self == Self::Spring).then_some(DEFAULT_SPRING)
     }
 
     /// Eased progress `elapsed / duration`; the spring entry ignores `duration` (it runs in
@@ -319,14 +338,14 @@ impl TimingPreset {
             } else {
                 elapsed / duration
             }),
-            None => Spring::new(SpringParams::default()).value(elapsed),
+            None => Spring::new(DEFAULT_SPRING).value(elapsed),
         }
     }
 
     pub fn curve(self, duration: f64) -> Curve {
         match self.bezier() {
             Some(bezier) => Curve::Timed { duration, bezier },
-            None => Curve::Spring(SpringParams::default()),
+            None => Curve::Spring(DEFAULT_SPRING),
         }
     }
 }

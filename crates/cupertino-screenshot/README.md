@@ -19,8 +19,9 @@ authored and replaceable.
 
 Layer: `shell`. Depends on:
 
-- `cupertino-animation`, `cupertino-defaults` and `cupertino-geometry` (the turned-output math, `transform`);
-- with `app`, also `cupertino-kit`, `cupertino-keyboard`, `cupertino-ui-wayland` (the Kit window system, with layer-surface
+- `cupertino-kit` (the design's curves; with `app`, also its windows), `cupertino-defaults` and `cupertino-geometry` (the
+  turned-output math, `transform`);
+- with `app`, also `cupertino-keyboard`, `cupertino-ui-wayland` (the Kit window system, with layer-surface
   roles), `cupertino-shell-client`, `cupertino-wayland-client` and `cupertino-protocols`.
 
 ## Running

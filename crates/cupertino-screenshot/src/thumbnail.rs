@@ -4,8 +4,8 @@
 //!
 //! Times are seconds on a clock the caller chooses; positions are logical points on the thumbnail's surface.
 
-use cupertino_animation::CubicBezier;
 use cupertino_geometry::Point;
+use cupertino_kit::theme::EASE_IN_OUT_CURVE;
 
 use crate::values::{
     DRAG_SLOP, SWIPE_DISMISS_FACTOR, SWIPE_DISMISS_MIN, SWIPE_THRESHOLD, THUMBNAIL_DISMISS,
@@ -142,7 +142,7 @@ impl Thumbnail {
                 if t >= 1.0 {
                     return Phase::Gone;
                 }
-                let eased = CubicBezier::EASE_IN_EASE_OUT.eval(t);
+                let eased = EASE_IN_OUT_CURVE.eval(t);
                 Phase::Dismissing(Look {
                     offset: d.from + (self.travel() - d.from) * eased,
                     alpha: 1.0 - eased,

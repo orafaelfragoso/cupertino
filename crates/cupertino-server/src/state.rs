@@ -263,7 +263,7 @@ pub fn set_minimize_timing(cfg: &mut WmConfig, effects: crate::fx::EffectsConfig
         Some(kind) => {
             let linear = |duration| cupertino_animation::Curve::Timed {
                 duration,
-                bezier: cupertino_animation::CubicBezier::LINEAR,
+                bezier: cupertino_theme::animation::LINEAR_CURVE,
             };
             (
                 linear(kind.duration_s(false)),

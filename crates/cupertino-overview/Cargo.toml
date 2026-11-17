@@ -9,4 +9,5 @@ layer = "models"
 
 [dependencies]
 cupertino-animation = { path = "../cupertino-animation" }
+cupertino-theme = { path = "../cupertino-theme" }
 cupertino-wm = { path = "../cupertino-wm" }

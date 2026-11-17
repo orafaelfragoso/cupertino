@@ -1,7 +1,7 @@
 //! XKB keymap generator for decoded keyboard layouts.
 //!
 //! Layout data is **not** embedded in
-//! this crate; pass the path of a decoded layout.
+//! this crate; the caller reads a decoded layout and passes its text to [`Layout::from_json`].
 //!
 //! Output ([`generate`]):
 //!
@@ -85,10 +85,6 @@ pub struct Layout {
 impl Layout {
     pub fn from_json(text: &str) -> Result<Layout, serde_json::Error> {
         serde_json::from_str(text)
-    }
-
-    pub fn from_json_file(path: &std::path::Path) -> Result<Layout, Box<dyn std::error::Error>> {
-        Ok(Self::from_json(&std::fs::read_to_string(path)?)?)
     }
 }
 

@@ -8,8 +8,8 @@ curve samples identically at any refresh rate.
 
 | Module | Contents |
 |---|---|
-| `spring` | `SpringParams`, `Spring`: damped spring with perceptual duration/bounce constructors, settling duration |
-| `timing` | `CubicBezier` with the five built-in timing functions, `cosine_ease` |
+| `spring` | `SpringParams`, `Spring`: damped spring with perceptual duration/bounce constructors, settling duration; the default spring is in `cupertino-theme` |
+| `timing` | `CubicBezier` (a curve from its control points, `eval`), `cosine_ease`; the named curves are in `cupertino-theme` |
 | `momentum` | `QuarticMomentum` (default model, `C = 1000`, `x0 + sign·C·(T⁴−(T−t)⁴)`), `QuarticMomentum2D`, `MomentumModel` selector, `Momentum` (per-millisecond exponential alternative) |
 | `rubber_band` | `RubberBand` and free functions: elastic overscroll `d·(1 − 1/(x·c/d + 1))`, inverse, slope, clamp helper. Coefficient `c` is configurable, default 0.55 |
 | `rubber_band` | `ElasticMotion` (`(x0 + v·t·0.31)·exp(−20t/1.6)`), `RubberBandFilterConfig` / `RubberBandFilter` (stiffness 20, direction lock 1.0, min delta 10) |

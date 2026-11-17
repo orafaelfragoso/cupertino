@@ -4,6 +4,7 @@
 
 use cupertino_animation::{CubicBezier, Curve, SpringParams};
 use cupertino_effects::{Driver, TilingSprings};
+use cupertino_theme::animation::{EASE_IN_OUT_CURVE, EASE_OUT_CURVE};
 
 use crate::tiling::TileKind;
 
@@ -63,11 +64,11 @@ impl Default for AnimationConfig {
         Self {
             minimizing: Curve::Timed {
                 duration: 0.5,
-                bezier: CubicBezier::EASE_IN_EASE_OUT,
+                bezier: EASE_IN_OUT_CURVE,
             },
             restoring: Curve::Timed {
                 duration: 0.5,
-                bezier: CubicBezier::EASE_IN_EASE_OUT,
+                bezier: EASE_IN_OUT_CURVE,
             },
             enter_fullscreen: fullscreen,
             exit_fullscreen: fullscreen,
@@ -148,7 +149,7 @@ impl Default for MagnetConfig {
             min_piece: 20.0,
             screen_guide_min: 4.0,
             catch_up_duration: 0.15,
-            catch_up_curve: CubicBezier::EASE_OUT,
+            catch_up_curve: EASE_OUT_CURVE,
             disable_with_alt: true,
         }
     }

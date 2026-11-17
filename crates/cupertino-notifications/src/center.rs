@@ -25,6 +25,7 @@ use crate::notification::{
 use cupertino_animation::{CubicBezier, Spring, SpringParams};
 use cupertino_defaults::notifications::{NotificationSettings, Policy, Previews};
 use cupertino_geometry::{Point, Rect, Size};
+use cupertino_theme::animation::{DEFAULT_SPRING, EASE_IN_OUT_CURVE};
 use cupertino_theme::Theme;
 use std::borrow::Cow;
 use std::collections::VecDeque;
@@ -212,7 +213,7 @@ impl Default for SwipeConfig {
                 mass: 1.0,
                 stiffness: 100.0,
                 damping: 100.0,
-                ..SpringParams::default()
+                ..DEFAULT_SPRING
             },
         }
     }
@@ -247,7 +248,7 @@ impl Default for Motion {
     fn default() -> Self {
         Self {
             duration: 0.25,
-            curve: CubicBezier::EASE_IN_EASE_OUT,
+            curve: EASE_IN_OUT_CURVE,
             completion_slack: 0.01,
             reduce_motion: false,
             speed_divisor: 15.0,

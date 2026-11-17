@@ -1,7 +1,6 @@
-//! Cubic-Bézier timing functions (reference timing function semantics).
+//! Cubic-Bézier timing functions (reference timing function semantics). The design's named curves are
+//! constants of `cupertino_theme::animation`.
 //!
-//! Built-in control points —: default (0.25,0.1,0.25,1),
-//! linear (0,0,1,1), easeIn (0.42,0,1,1), easeOut (0,0,0.58,1), easeInEaseOut (0.42,0,0.58,1).
 //! Solver — approximate: Newton–Raphson with bisection fallback (unit-bezier style); the
 //! reference solver was not analysed numerically. Differences are expected to be < 1e-6.
 
@@ -14,12 +13,6 @@ pub struct CubicBezier {
 }
 
 impl CubicBezier {
-    pub const DEFAULT: Self = Self::new(0.25, 0.1, 0.25, 1.0);
-    pub const LINEAR: Self = Self::new(0.0, 0.0, 1.0, 1.0);
-    pub const EASE_IN: Self = Self::new(0.42, 0.0, 1.0, 1.0);
-    pub const EASE_OUT: Self = Self::new(0.0, 0.0, 0.58, 1.0);
-    pub const EASE_IN_EASE_OUT: Self = Self::new(0.42, 0.0, 0.58, 1.0);
-
     pub const fn new(x1: f64, y1: f64, x2: f64, y2: f64) -> Self {
         Self { x1, y1, x2, y2 }
     }

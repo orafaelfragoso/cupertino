@@ -2,7 +2,8 @@
 
 use std::collections::HashMap;
 
-use cupertino_animation::{AnimatedValue, CubicBezier, Curve, SpringParams};
+use cupertino_animation::{AnimatedValue, Curve, SpringParams};
+use cupertino_theme::animation::EASE_IN_OUT_CURVE;
 use cupertino_wm::geometry::{Point, Rect};
 use cupertino_wm::ids::{AppId, WindowId, WorkspaceId};
 
@@ -419,7 +420,7 @@ impl Overview {
         let h = &self.cfg.highlight;
         let fade = Curve::Timed {
             duration: h.fade_s,
-            bezier: CubicBezier::EASE_IN_EASE_OUT,
+            bezier: EASE_IN_OUT_CURVE,
         };
         match self.selection.and_then(|s| self.rect_of(s, now)) {
             Some(r) => {

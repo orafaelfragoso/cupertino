@@ -4,6 +4,9 @@
 use cupertino_geometry::Size;
 use std::collections::HashMap;
 
+pub use crate::animation::{
+    DEFAULT_SPRING, EASE_CURVE, EASE_IN_CURVE, EASE_IN_OUT_CURVE, EASE_OUT_CURVE, LINEAR_CURVE,
+};
 pub use crate::control_sizes::{
     choice_mark, control_geometry, slider_geometry, switch_geometry, ControlFamily,
     ControlGeometry, Corners, SliderGeometry, SwitchGeometry,

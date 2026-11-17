@@ -3,8 +3,8 @@
 //! started and then goes; when the window the drag started in is no longer shown, the snapshot fades out where the
 //! drag ended instead. A drag that drops removes its icon at once.
 
-use cupertino_animation::CubicBezier;
 use cupertino_effects::{Driver, Ease, ProgressAnimator};
+use cupertino_theme::animation::EASE_OUT_CURVE;
 use cupertino_wm::{Rect, WindowId};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point};
@@ -17,7 +17,7 @@ pub const DRAG_RETURN_DURATION: f64 = 0.4;
 /// to fly back to, in seconds.
 pub const DRAG_FADE_DURATION: f64 = 0.25;
 /// The easing of the flight back: fast at first, settling into place.
-const RETURN_EASE: Ease = Ease::Bezier(CubicBezier::EASE_OUT);
+const RETURN_EASE: Ease = Ease::Bezier(EASE_OUT_CURVE);
 
 /// Where a client's drag started, kept while it runs.
 #[derive(Clone, Debug)]

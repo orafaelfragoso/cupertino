@@ -1099,6 +1099,7 @@ version = "0.1.0"
 dependencies = [
  "cupertino-animation",
  "cupertino-geometry",
+ "cupertino-theme",
  "tiny-skia",
 ]
 
@@ -1297,7 +1298,6 @@ version = "0.1.0"
 dependencies = [
  "async-channel",
  "async-io",
- "cupertino-animation",
  "cupertino-apps",
  "cupertino-assets",
  "cupertino-capture",
@@ -1443,6 +1443,7 @@ name = "cupertino-overview"
 version = "0.1.0"
 dependencies = [
  "cupertino-animation",
+ "cupertino-theme",
  "cupertino-wm",
 ]
 
@@ -1605,7 +1606,6 @@ version = "0.1.0"
 dependencies = [
  "async-channel",
  "async-io",
- "cupertino-animation",
  "cupertino-defaults",
  "cupertino-diagnostic-events",
  "cupertino-geometry",
@@ -1990,6 +1990,7 @@ dependencies = [
  "cupertino-animation",
  "cupertino-effects",
  "cupertino-input",
+ "cupertino-theme",
 ]
 
 [[package]]

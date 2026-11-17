@@ -29,6 +29,7 @@ use cupertino_animation::{AnimatedValue, CubicBezier, Curve};
 use cupertino_effects::{
     cosine, frame_change_duration, ProgressAnimator, TransformKind, TransformSample, WindowKind,
 };
+use cupertino_theme::animation::LINEAR_CURVE;
 
 use crate::config::AnimationConfig;
 use crate::geometry::{Edges, Rect};
@@ -255,7 +256,7 @@ pub struct Lifecycle {
 fn instant() -> Curve {
     Curve::Timed {
         duration: 0.0,
-        bezier: CubicBezier::LINEAR,
+        bezier: LINEAR_CURVE,
     }
 }
 

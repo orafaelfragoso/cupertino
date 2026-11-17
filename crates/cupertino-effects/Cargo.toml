@@ -10,6 +10,7 @@ layer = "models"
 [dependencies]
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-animation = { path = "../cupertino-animation" }
+cupertino-theme = { path = "../cupertino-theme" }
 tiny-skia = "0.12"
 
 [[bench]]

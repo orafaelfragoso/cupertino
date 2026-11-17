@@ -854,7 +854,8 @@ pub fn generate_decoded(
     keyboard: Keyboard,
     level3: Level3Keys,
 ) -> Result<DecodedSource, String> {
-    let layout = cupertino_keyboard::Layout::from_json_file(path)
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let layout = cupertino_keyboard::Layout::from_json(&text)
         .map_err(|e| format!("{}: {e}", path.display()))?;
     let out = cupertino_keyboard::generate(
         &layout,

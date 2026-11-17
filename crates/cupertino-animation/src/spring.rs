@@ -12,18 +12,6 @@ pub struct SpringParams {
     pub allows_overdamping: bool,
 }
 
-impl Default for SpringParams {
-    fn default() -> Self {
-        Self {
-            mass: 1.0,
-            stiffness: 100.0,
-            damping: 10.0,
-            initial_velocity: 0.0,
-            allows_overdamping: false,
-        }
-    }
-}
-
 impl SpringParams {
     /// Reference perceptual duration/bounce constructor (formulae):
     /// mass = 1, stiffness = (2π/d)², damping = 4π(1−b)/d for b ≥ 0, 4π/((1+b)·d) for b < 0.
@@ -43,7 +31,8 @@ impl SpringParams {
             mass: 1.0,
             stiffness,
             damping: b * 4.0 * std::f64::consts::PI * inv,
-            ..Default::default()
+            initial_velocity: 0.0,
+            allows_overdamping: false,
         }
     }
 
@@ -71,7 +60,8 @@ impl SpringParams {
             mass: 1.0,
             stiffness: w0 * w0,
             damping: 2.0 * damping_ratio * w0,
-            ..Default::default()
+            initial_velocity: 0.0,
+            allows_overdamping: false,
         }
     }
 }

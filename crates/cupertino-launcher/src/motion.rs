@@ -25,6 +25,7 @@
 //! The model is pure: every value is sampled at a time passed in.
 
 use cupertino_animation::{AnimatedValue, CubicBezier, Curve, Spring, SpringParams};
+use cupertino_kit::theme::{EASE_IN_OUT_CURVE, EASE_OUT_CURVE, LINEAR_CURVE};
 
 /// The enclosure fading in when the launcher opens, in seconds.
 pub const OPEN_FADE: f64 = 0.10;
@@ -156,7 +157,7 @@ impl Fade {
             to: value,
             start: 0.0,
             duration: 0.0,
-            ease: CubicBezier::LINEAR,
+            ease: LINEAR_CURVE,
         }
     }
 
@@ -349,9 +350,8 @@ impl Motion {
         } else {
             self.shape_to(shape, now, 0.0);
         }
-        self.alpha
-            .retarget(1.0, now, 0.0, OPEN_FADE, CubicBezier::LINEAR);
-        self.blur.retarget(0.0, now, 0.0, 0.0, CubicBezier::LINEAR);
+        self.alpha.retarget(1.0, now, 0.0, OPEN_FADE, LINEAR_CURVE);
+        self.blur.retarget(0.0, now, 0.0, 0.0, LINEAR_CURVE);
         if self.reduce {
             self.scale.set_immediately(1.0);
         } else {
@@ -375,13 +375,12 @@ impl Motion {
             // reopened while closing, it comes back alongside the enclosure
             if closing {
                 self.content
-                    .retarget(1.0, now, 0.0, OPEN_FADE, CubicBezier::LINEAR);
+                    .retarget(1.0, now, 0.0, OPEN_FADE, LINEAR_CURVE);
             } else {
                 self.content = Fade::at(1.0);
             }
         } else {
-            self.content
-                .retarget(0.0, now, 0.0, 0.0, CubicBezier::LINEAR);
+            self.content.retarget(0.0, now, 0.0, 0.0, LINEAR_CURVE);
         }
         // the buttons start inside the field and bud out as it opens
         if !closing {
@@ -397,25 +396,25 @@ impl Motion {
     /// The panel goes at `now`: it grows a little, its content blurs and it fades out.
     pub fn hide(&mut self, now: f64) {
         self.alpha
-            .retarget(0.0, now, 0.0, CLOSE_DURATION, CubicBezier::EASE_OUT);
+            .retarget(0.0, now, 0.0, CLOSE_DURATION, EASE_OUT_CURVE);
         if !self.reduce {
             self.scale.animate_to(
                 CLOSE_SCALE,
                 Curve::Timed {
                     duration: CLOSE_DURATION,
-                    bezier: CubicBezier::EASE_OUT,
+                    bezier: EASE_OUT_CURVE,
                 },
                 now,
             );
             self.blur
-                .retarget(1.0, now, 0.0, CLOSE_DURATION, CubicBezier::EASE_OUT);
+                .retarget(1.0, now, 0.0, CLOSE_DURATION, EASE_OUT_CURVE);
         }
     }
 
     /// A scope folds into the search field's `compact` shape at `now`.
     pub fn fold(&mut self, compact: Shape, now: f64) {
         self.content
-            .retarget(0.0, now, 0.0, FOLD_FADE, CubicBezier::LINEAR);
+            .retarget(0.0, now, 0.0, FOLD_FADE, LINEAR_CURVE);
         let wait = if self.reduce { 0.0 } else { FOLD_FADE };
         self.switch_header(Header::Search, now, now + wait);
         self.shape_to(compact, now, wait);
@@ -445,8 +444,7 @@ impl Motion {
         } else {
             (UNFOLD_CONTENT_DELAY, UNFOLD_CONTENT_FADE)
         };
-        self.content
-            .retarget(1.0, now, delay, fade, CubicBezier::EASE_OUT);
+        self.content.retarget(1.0, now, delay, fade, EASE_OUT_CURVE);
         self.dip = (header == Header::Files && from_field && !self.reduce).then_some(now);
     }
 
@@ -489,13 +487,8 @@ impl Motion {
         self.split
             .animate_to(1.0, spring(SPLIT_RESPONSE, SPLIT_DAMPING), now + delay);
         self.sharp = Fade::at(0.0);
-        self.sharp.retarget(
-            1.0,
-            now,
-            delay + GLYPH_DELAY,
-            GLYPH_SHARPEN,
-            CubicBezier::EASE_OUT,
-        );
+        self.sharp
+            .retarget(1.0, now, delay + GLYPH_DELAY, GLYPH_SHARPEN, EASE_OUT_CURVE);
     }
 
     /// The buttons merge back into the field.
@@ -508,7 +501,7 @@ impl Motion {
         }
         let timed = Curve::Timed {
             duration: MERGE_DURATION,
-            bezier: CubicBezier::EASE_OUT,
+            bezier: EASE_OUT_CURVE,
         };
         self.field.animate_to(0.0, timed, now);
         self.split.animate_to(0.0, timed, now);
@@ -573,7 +566,7 @@ impl Motion {
         }
         if t < DIP_IN {
             let x = t / DIP_IN;
-            return -DIP_DEPTH * CubicBezier::EASE_IN_EASE_OUT.eval(x);
+            return -DIP_DEPTH * EASE_IN_OUT_CURVE.eval(x);
         }
         let back = Spring::new(SpringParams::from_ratio(DIP_RESPONSE, 1.0)).value(t - DIP_IN);
         -DIP_DEPTH * (1.0 - back)

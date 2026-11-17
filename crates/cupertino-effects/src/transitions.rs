@@ -30,6 +30,7 @@ use crate::scale::lerp_rect;
 use crate::space_slide::SPACE_GAP;
 use cupertino_animation::CubicBezier;
 use cupertino_geometry::Rect;
+use cupertino_theme::animation::{EASE_CURVE, EASE_IN_OUT_CURVE};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Placement {
@@ -151,7 +152,7 @@ const WINDOW_OPEN_SHADOW_START: f64 = 0.45;
 /// Duration of the crossfade when the appearance changes (0.5 s).
 pub const APPEARANCE_FADE_DURATION: f64 = 0.5;
 /// How the appearance crossfade advances: a quick start that settles slowly, half done before a third of the way in.
-pub const APPEARANCE_FADE_CURVE: CubicBezier = CubicBezier::DEFAULT;
+pub const APPEARANCE_FADE_CURVE: CubicBezier = EASE_CURVE;
 /// Scale an ordinary window ends at when it closes (0.983).
 pub const WINDOW_CLOSE_SCALE: f64 = 0.983;
 /// Duration of the ordinary window close (0.15 s).
@@ -481,7 +482,7 @@ pub const SERVER_MOVE_DURATION: f64 = 0.25;
 pub fn server_move_driver() -> Driver {
     Driver::Timed {
         duration: SERVER_MOVE_DURATION,
-        ease: Ease::Bezier(CubicBezier::EASE_IN_EASE_OUT),
+        ease: Ease::Bezier(EASE_IN_OUT_CURVE),
     }
 }
 
@@ -527,7 +528,7 @@ impl Default for OverviewZoom {
         Self {
             duration: 0.25,
             slow_motion_duration: 2.0,
-            ease: Ease::Bezier(CubicBezier::EASE_IN_EASE_OUT),
+            ease: Ease::Bezier(EASE_IN_OUT_CURVE),
         }
     }
 }

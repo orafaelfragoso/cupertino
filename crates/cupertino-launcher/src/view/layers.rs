@@ -44,8 +44,9 @@ use cupertino_kit::core::{
 use cupertino_kit::geometry::{Point, Rect, Size};
 use cupertino_kit::layout::{Constraints, ContainerKind, LayoutSpec, Measured, SizeSpec};
 use cupertino_kit::platform::{
-    CubicBezier, GlassStyle, LayerChange, LayerCurve, LayerEdge, LayerProperty, SurfaceLayerLook,
+    GlassStyle, LayerChange, LayerCurve, LayerEdge, LayerProperty, SurfaceLayerLook,
 };
+use cupertino_kit::theme::{EASE_OUT_CURVE, LINEAR_CURVE};
 use std::cell::Cell;
 use std::sync::Arc;
 
@@ -651,7 +652,7 @@ pub fn close_changes(
 ) -> Vec<(u64, Vec<LayerChange>)> {
     let curve = Some(LayerCurve::Timed {
         duration: CLOSE_DURATION,
-        bezier: CubicBezier::EASE_OUT,
+        bezier: EASE_OUT_CURVE,
     });
     let go = |property, value: f64| LayerChange::new(property, value, curve);
     let fade = || go(LayerProperty::Opacity, 0.0);
@@ -738,7 +739,7 @@ pub fn open_changes(
     });
     let fade = Some(LayerCurve::Timed {
         duration: OPEN_FADE,
-        bezier: CubicBezier::LINEAR,
+        bezier: LINEAR_CURVE,
     });
     // a property set where the open starts and moved to where it rests along `curve`
     let from_to = |out: &mut Vec<LayerChange>, property, a: f64, b: f64, curve| {
@@ -847,7 +848,7 @@ pub fn field_open_changes(
     let count = rest.modes.count;
     let fade = Some(LayerCurve::Timed {
         duration: OPEN_FADE,
-        bezier: CubicBezier::LINEAR,
+        bezier: LINEAR_CURVE,
     });
     let opacity = |out: &mut Vec<LayerChange>| {
         out.push(LayerChange::new(LayerProperty::Opacity, first.alpha, None));

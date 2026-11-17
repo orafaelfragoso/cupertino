@@ -7,7 +7,8 @@ modifiers, chords and text-editing bindings.
 
 The crate reads no settings: `keyboard.conf` is read by `cupertino-defaults` (`keyboard::KeyboardSettings`,
 `keyboard::user_profile`), and the user's binding file by `cupertino-ui-text` (`binding_file`), which hands its text to
-`BindingTable::apply_overrides`. One file read is left: `Layout::from_json_file` reads a decoded layout.
+`BindingTable::apply_overrides`. It reads no files: a decoded layout's text is read by its caller (the server's keymap
+code) and parsed by `Layout::from_json`.
 
 ## Public API
 
@@ -37,7 +38,7 @@ let cfg = RepeatConfig::from_pref_units(25.0, 6.0);     // preference units of 1
 let RepeatInfo { rate, delay } = cfg.repeat_info();      // wl_keyboard.repeat_info(rate, delay)
 
 // 2. keymap → wl_keyboard.keymap (xkb v1 text), compose table → ~/.XCompose include
-let layout = Layout::from_json_file(std::path::Path::new("keyboard/layouts/U_S_0.json"))?;
+let layout = Layout::from_json(&std::fs::read_to_string("keyboard/layouts/U_S_0.json")?)?;
 let out = generate(&layout, &GenOptions { keyboard: Keyboard::Iso, ..Default::default() })?;
 // out.keymap → memfd for wl_keyboard.keymap; out.compose → compose table for clients
 

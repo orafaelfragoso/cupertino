@@ -3,7 +3,7 @@
 //! geometry, the show delay and fade, the
 //! selection and label colours and the pointer rules.
 
-use cupertino_animation::CubicBezier;
+use cupertino_kit::theme::EASE_IN_OUT_CURVE;
 use cupertino_wm::geometry::{Point, Rect};
 
 /// Delay between the switcher opening and its panel appearing; a commit before then switches
@@ -83,7 +83,7 @@ impl Switcher {
     /// Panel opacity: 1 until the fade starts, then `1 - ease(t)` over [`HIDE_DURATION`].
     pub fn alpha(&self, now: f64) -> f64 {
         self.closed_at.map_or(1.0, |at| {
-            1.0 - CubicBezier::EASE_IN_EASE_OUT.eval(((now - at) / HIDE_DURATION).clamp(0.0, 1.0))
+            1.0 - EASE_IN_OUT_CURVE.eval(((now - at) / HIDE_DURATION).clamp(0.0, 1.0))
         })
     }
 

@@ -14,7 +14,6 @@ default = []
 app = [
     "dep:async-channel",
     "dep:async-io",
-    "dep:cupertino-kit",
     "dep:cupertino-keyboard",
     "dep:cupertino-protocols",
     "dep:cupertino-shell-client",
@@ -30,14 +29,13 @@ app = [
 
 [dependencies]
 cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events", optional = true }
-cupertino-animation = { path = "../cupertino-animation" }
 cupertino-defaults = { path = "../cupertino-defaults", optional = true }
 cupertino-geometry = { path = "../cupertino-geometry" }
 tiny-skia = "0.12"
 rustix = { version = "1", features = ["event", "fs"] }
 async-channel = { version = "2", optional = true }
 async-io = { version = "2", optional = true }
-cupertino-kit = { path = "../cupertino-kit", optional = true }
+cupertino-kit = { path = "../cupertino-kit" }
 cupertino-keyboard = { path = "../cupertino-keyboard", optional = true }
 cupertino-protocols = { path = "../cupertino-protocols", features = ["client"], optional = true }
 cupertino-shell-client = { path = "../cupertino-shell-client", optional = true }

@@ -19,7 +19,6 @@ apps forbidden_edge cupertino-files -> cupertino-wayland-client normal
 apps forbidden_edge cupertino-settings -> cupertino-alsa normal
 apps forbidden_edge cupertino-settings -> cupertino-pipewire normal
 apps forbidden_edge cupertino-settings -> cupertino-wayland-client normal
-foundation impure_source cupertino-keyboard src/xkb.rs std::fs
 models external_crate cupertino-effects -> tiny-skia normal
 models impure_source cupertino-effects examples/render_effects.rs std::fs
 platform external_crate cupertino-seat -> smithay normal
@@ -66,7 +65,6 @@ shell facade cupertino-launcher -> cupertino-shell-client normal
 shell facade cupertino-launcher -> cupertino-ui-text normal
 shell facade cupertino-launcher -> cupertino-ui-wayland normal
 shell facade cupertino-launcher -> cupertino-wayland-client normal
-shell facade cupertino-login -> cupertino-animation normal
 shell facade cupertino-login -> cupertino-raster-math normal
 shell facade cupertino-login -> cupertino-shell-client normal
 shell facade cupertino-login -> cupertino-ui-test dev
@@ -94,7 +92,6 @@ shell facade cupertino-portal -> cupertino-protocols normal
 shell facade cupertino-portal -> cupertino-shell-client normal
 shell facade cupertino-portal -> cupertino-ui-wayland normal
 shell facade cupertino-portal -> cupertino-wayland-client normal
-shell facade cupertino-screenshot -> cupertino-animation normal
 shell facade cupertino-screenshot -> cupertino-protocols normal
 shell facade cupertino-screenshot -> cupertino-shell-client normal
 shell facade cupertino-screenshot -> cupertino-ui-wayland normal

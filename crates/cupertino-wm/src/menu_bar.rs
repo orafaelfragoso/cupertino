@@ -11,7 +11,8 @@
 
 use std::collections::HashMap;
 
-use cupertino_animation::{AnimatedValue, CubicBezier, Curve};
+use cupertino_animation::{AnimatedValue, Curve};
+use cupertino_theme::animation::EASE_IN_OUT_CURVE;
 
 use crate::geometry::{Point, Rect};
 use crate::ids::OutputId;
@@ -45,7 +46,7 @@ impl Default for BarSetConfig {
     fn default() -> Self {
         let timed = Curve::Timed {
             duration: 0.2,
-            bezier: CubicBezier::EASE_IN_EASE_OUT,
+            bezier: EASE_IN_OUT_CURVE,
         };
         Self {
             bar_height: 33.0,

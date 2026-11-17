@@ -3,6 +3,8 @@
 
 use std::ops::Range;
 
+use cupertino_kit::theme::EASE_IN_OUT_CURVE;
+
 use crate::user::User;
 
 /// Tiles per page on an output larger than [`SMALL_SCREEN`], and on one that is not (25 or 12 by
@@ -35,7 +37,7 @@ pub const SWITCH_DURATION: f64 = 0.5;
 /// How far the switch is `elapsed` seconds after it began, 0 to 1: the opacity of the screen it shows.
 pub fn switched(elapsed: f64) -> f64 {
     let t = (elapsed / SWITCH_DURATION).clamp(0.0, 1.0);
-    cupertino_animation::CubicBezier::EASE_IN_EASE_OUT.eval(t)
+    EASE_IN_OUT_CURVE.eval(t)
 }
 
 /// Tiles per page for an output of `width` x `height` points.

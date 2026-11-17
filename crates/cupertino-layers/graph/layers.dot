@@ -1,5 +1,5 @@
 // cupertino-layers --graph
-// 83 crates, 367 internal dependencies
+// 83 crates, 368 internal dependencies
 // per layer: foundation 6, graphics 2, models 9, system 8, platform 8, protocol 4, transport 3, render 3, ui 13, shellkit 0, core 1, services 4, shell 12, apps 2, tools 6, testing 2
 // forbidden normal edge cupertino-control (shell) -> cupertino-shell-client (transport)
 // forbidden normal edge cupertino-control (shell) -> cupertino-wayland-client (transport)
@@ -228,6 +228,7 @@ digraph "layers" {
   "cupertino-dock" -> "cupertino-wm";
   "cupertino-effects" -> "cupertino-animation";
   "cupertino-effects" -> "cupertino-geometry";
+  "cupertino-effects" -> "cupertino-theme";
   "cupertino-files" -> "cupertino-apps";
   "cupertino-files" -> "cupertino-assets";
   "cupertino-files" -> "cupertino-capture" [label="dev"];
@@ -286,7 +287,6 @@ digraph "layers" {
   "cupertino-launcher" -> "cupertino-ui-text";
   "cupertino-launcher" -> "cupertino-ui-wayland";
   "cupertino-launcher" -> "cupertino-wayland-client" [color=red];
-  "cupertino-login" -> "cupertino-animation";
   "cupertino-login" -> "cupertino-apps";
   "cupertino-login" -> "cupertino-assets";
   "cupertino-login" -> "cupertino-assets" [label="dev"];
@@ -352,6 +352,7 @@ digraph "layers" {
   "cupertino-osd" -> "cupertino-ui-wayland";
   "cupertino-osd" -> "cupertino-wayland-client" [color=red];
   "cupertino-overview" -> "cupertino-animation";
+  "cupertino-overview" -> "cupertino-theme";
   "cupertino-overview" -> "cupertino-wm";
   "cupertino-polkit-agent" -> "cupertino-assets";
   "cupertino-polkit-agent" -> "cupertino-decorations" [color=red];
@@ -395,7 +396,6 @@ digraph "layers" {
   "cupertino-render-api" -> "cupertino-scene";
   "cupertino-scene" -> "cupertino-effects";
   "cupertino-scene" -> "cupertino-geometry";
-  "cupertino-screenshot" -> "cupertino-animation";
   "cupertino-screenshot" -> "cupertino-defaults";
   "cupertino-screenshot" -> "cupertino-diagnostic-events";
   "cupertino-screenshot" -> "cupertino-geometry";
@@ -538,4 +538,5 @@ digraph "layers" {
   "cupertino-wm" -> "cupertino-animation";
   "cupertino-wm" -> "cupertino-effects";
   "cupertino-wm" -> "cupertino-input";
+  "cupertino-wm" -> "cupertino-theme";
 }

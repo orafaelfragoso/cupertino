@@ -1126,3 +1126,5 @@ One line per change to a decision or approval of a design: date, number, what, w
   tests are one per behaviour, table-driven across cases, with no tests of constants, names, versions or type
   plumbing, and never restored from history (26 tests of `cupertino-diagnostic-events` were). A consolidation task
   rewrites the existing suites to that rule before wave 4's `T` tasks.
+- 2026-11-17: lead: the test suites of waves 1 to 3 are rewritten to one test per behaviour: 3414 tests become 1406
+  across the same 36 crates, with every regression and safety test of the refactor kept and none restored from history.

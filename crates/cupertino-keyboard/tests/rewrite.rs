@@ -1,4 +1,5 @@
-//! Which Super and Alt chords are rewritten for third-party clients.
+//! Which Super, Ctrl and Alt chords are rewritten for third-party clients, and how a received
+//! chord maps back to the keys pressed.
 
 use cupertino_keyboard::modifiers::{Profile, RawMods};
 use cupertino_keyboard::rewrite::{
@@ -11,14 +12,11 @@ const KEY_C: u32 = 46;
 const KEY_A: u32 = 30;
 const KEY_TAB: u32 = 15;
 const KEY_MINUS: u32 = 12;
-
-fn target(class: ClientClass, text_input_active: bool) -> ClientTarget {
-    ClientTarget {
-        class,
-        text_input_active,
-        opted_out: false,
-    }
-}
+const KEY_RETURN: u32 = 28;
+const SYM_LEFT: u32 = 0xff51;
+const SYM_DOWN: u32 = 0xff54;
+const SYM_BACKSPACE: u32 = 0xff08;
+const SYM_TAB: u32 = 0xff09;
 
 fn press(evdev: u32, sym: u32, raw: RawMods) -> KeyPress {
     KeyPress {
@@ -34,83 +32,180 @@ fn letter(evdev: u32, ch: char, raw: RawMods) -> KeyPress {
     press(evdev, ch as u32, raw)
 }
 
-fn other(text_input: bool) -> ClientTarget {
-    target(ClientClass::Other, text_input)
+fn target(class: ClientClass, text_input_active: bool) -> ClientTarget {
+    ClientTarget {
+        class,
+        text_input_active,
+        opted_out: false,
+    }
 }
 
-fn cup() -> Profile {
-    Profile::cupertino()
+fn mods(remove: RawMods, add: RawMods) -> Rewrite {
+    Rewrite::Mods { remove, add }
+}
+
+fn key(evdev: u32, remove: RawMods, add: RawMods) -> Rewrite {
+    Rewrite::Key { evdev, remove, add }
 }
 
 #[test]
 fn printable_characters_exclude_space_controls_and_none() {
-    assert!(is_printable(Some('a')));
-    assert!(is_printable(Some('é')));
-    assert!(!is_printable(Some(' ')));
-    assert!(!is_printable(Some('\n')));
-    assert!(!is_printable(Some('\u{7}')));
-    assert!(!is_printable(None));
+    for (ch, printable) in [
+        (Some('a'), true),
+        (Some('é'), true),
+        (Some(' '), false),
+        (Some('\n'), false),
+        (Some('\u{7}'), false),
+        (None, false),
+    ] {
+        assert_eq!(is_printable(ch), printable, "{ch:?}");
+    }
 }
 
 #[test]
-fn super_letter_becomes_the_ctrl_chord_for_other_clients() {
-    let r = decide(&cup(), &other(false), &letter(KEY_C, 'c', RawMods::SUPER));
-    assert_eq!(
-        r,
-        Rewrite::Mods {
-            remove: RawMods::SUPER,
-            add: RawMods::CTRL
-        }
+fn cupertino_profile_rewrites_chords_by_client_class_and_text_input() {
+    use ClientClass::{FirstParty, Other, Terminal};
+    let (sup, ctrl, alt, shift, none) = (
+        RawMods::SUPER,
+        RawMods::CTRL,
+        RawMods::ALT,
+        RawMods::SHIFT,
+        RawMods::default(),
     );
-}
-
-#[test]
-fn super_chord_keeps_shift_and_alt() {
-    let r = decide(
-        &cup(),
-        &other(false),
-        &letter(KEY_A, 'z', RawMods::SUPER | RawMods::SHIFT),
-    );
-    assert_eq!(
-        r,
-        Rewrite::Mods {
-            remove: RawMods::SUPER,
-            add: RawMods::CTRL
-        }
-    );
-}
-
-#[test]
-fn super_return_becomes_ctrl_return() {
-    let r = decide(
-        &cup(),
-        &other(false),
-        &press(28, SYM_RETURN, RawMods::SUPER),
-    );
-    assert_eq!(
-        r,
-        Rewrite::Mods {
-            remove: RawMods::SUPER,
-            add: RawMods::CTRL
-        }
-    );
-}
-
-#[test]
-fn ctrl_chord_reaches_other_clients_as_super() {
-    let r = decide(&cup(), &other(false), &letter(KEY_C, 'c', RawMods::CTRL));
-    assert_eq!(
-        r,
-        Rewrite::Mods {
-            remove: RawMods::CTRL,
-            add: RawMods::SUPER
-        }
-    );
-}
-
-#[test]
-fn ctrl_line_editing_chords_become_their_keys_in_a_text_input() {
-    let cases = [
+    let modifier_key = KeyPress {
+        is_modifier: true,
+        ..letter(KEY_C, 'c', sup)
+    };
+    let rows = [
+        (
+            "Super+letter is the Ctrl chord",
+            target(Other, false),
+            letter(KEY_C, 'c', sup),
+            mods(sup, ctrl),
+        ),
+        (
+            "Super+Shift+letter keeps Shift",
+            target(Other, false),
+            letter(KEY_A, 'z', sup | shift),
+            mods(sup, ctrl),
+        ),
+        (
+            "Super+Return is Ctrl+Return",
+            target(Other, false),
+            press(KEY_RETURN, SYM_RETURN, sup),
+            mods(sup, ctrl),
+        ),
+        (
+            "Ctrl+letter is not the command key: it reaches the app as Super",
+            target(Other, false),
+            letter(KEY_C, 'c', ctrl),
+            mods(ctrl, sup),
+        ),
+        (
+            "Ctrl+A outside a text input is the Super chord",
+            target(Other, false),
+            letter(KEY_A, 'a', ctrl),
+            mods(ctrl, sup),
+        ),
+        (
+            "Super+Left in a text input is Home",
+            target(Other, true),
+            press(KEY_LEFT, SYM_LEFT, sup),
+            key(KEY_HOME, sup, none),
+        ),
+        (
+            "Super+Down in a text input is Ctrl+End",
+            target(Other, true),
+            press(KEY_DOWN, SYM_DOWN, sup),
+            key(KEY_END, sup, ctrl),
+        ),
+        (
+            "Super+Left without a text input passes",
+            target(Other, false),
+            press(KEY_LEFT, SYM_LEFT, sup),
+            Rewrite::Pass,
+        ),
+        (
+            "Super+Backspace without a text input passes",
+            target(Other, false),
+            press(KEY_BACKSPACE, SYM_BACKSPACE, sup),
+            Rewrite::Pass,
+        ),
+        (
+            "Alt+Left in a text input is Ctrl+Left",
+            target(Other, true),
+            press(KEY_LEFT, SYM_LEFT, alt),
+            mods(alt, ctrl),
+        ),
+        (
+            "Alt+Left without a text input passes",
+            target(Other, false),
+            press(KEY_LEFT, SYM_LEFT, alt),
+            Rewrite::Pass,
+        ),
+        (
+            "Super+Tab passes",
+            target(Other, false),
+            press(KEY_TAB, SYM_TAB, sup),
+            Rewrite::Pass,
+        ),
+        (
+            "a modifier key passes",
+            target(Other, false),
+            modifier_key,
+            Rewrite::Pass,
+        ),
+        (
+            "Ctrl+Super passes",
+            target(Other, false),
+            letter(KEY_C, 'c', sup | ctrl),
+            Rewrite::Pass,
+        ),
+        (
+            "first-party clients get the chord as pressed",
+            target(FirstParty, true),
+            letter(KEY_C, 'c', sup),
+            Rewrite::Pass,
+        ),
+        (
+            "opted-out clients get the chord as pressed",
+            ClientTarget {
+                opted_out: true,
+                ..target(Other, true)
+            },
+            letter(KEY_C, 'c', sup),
+            Rewrite::Pass,
+        ),
+        (
+            "terminal Super+letter is Ctrl+Shift",
+            target(Terminal, false),
+            letter(KEY_C, 'c', sup),
+            mods(sup, ctrl | shift),
+        ),
+        (
+            "terminal Super on a text size key is Ctrl",
+            target(Terminal, false),
+            press(KEY_MINUS, 0x2d, sup),
+            mods(sup, ctrl),
+        ),
+        (
+            "terminal Ctrl+letter reaches it unchanged",
+            target(Terminal, true),
+            letter(KEY_C, 'c', ctrl),
+            Rewrite::Pass,
+        ),
+        (
+            "terminal Super+Tab reaches it unchanged",
+            target(Terminal, true),
+            press(KEY_TAB, SYM_TAB, sup),
+            Rewrite::Pass,
+        ),
+    ];
+    let cup = Profile::cupertino();
+    for (row, client, k, expected) in rows {
+        assert_eq!(decide(&cup, &client, &k), expected, "{row}");
+    }
+    for (ch, evdev) in [
         ('a', KEY_HOME),
         ('e', KEY_END),
         ('b', KEY_LEFT),
@@ -119,222 +214,75 @@ fn ctrl_line_editing_chords_become_their_keys_in_a_text_input() {
         ('n', KEY_DOWN),
         ('d', KEY_DELETE),
         ('h', KEY_BACKSPACE),
-    ];
-    for (ch, evdev) in cases {
-        let r = decide(&cup(), &other(true), &letter(1, ch, RawMods::CTRL));
+    ] {
         assert_eq!(
-            r,
-            Rewrite::Key {
-                evdev,
-                remove: RawMods::CTRL,
-                add: RawMods::default()
-            },
-            "Ctrl+{ch}"
+            decide(&cup, &target(Other, true), &letter(1, ch, ctrl)),
+            key(evdev, ctrl, none),
+            "Ctrl+{ch} in a text input is its line-editing key"
         );
     }
 }
 
 #[test]
-fn ctrl_line_editing_chord_outside_a_text_input_is_the_super_chord() {
-    let r = decide(&cup(), &other(false), &letter(KEY_A, 'a', RawMods::CTRL));
-    assert_eq!(
-        r,
-        Rewrite::Mods {
-            remove: RawMods::CTRL,
-            add: RawMods::SUPER
+fn the_classic_pc_profile_is_never_rewritten() {
+    for client in [ClientClass::Other, ClientClass::Terminal] {
+        for raw in [RawMods::SUPER, RawMods::CTRL] {
+            assert_eq!(
+                decide(
+                    &Profile::classic_pc(),
+                    &target(client, true),
+                    &letter(KEY_C, 'c', raw)
+                ),
+                Rewrite::Pass,
+                "{client:?} {raw:?}"
+            );
         }
-    );
+    }
 }
 
 #[test]
-fn super_arrows_become_home_and_end_in_a_text_input() {
-    let left = decide(
-        &cup(),
-        &other(true),
-        &press(KEY_LEFT, 0xff51, RawMods::SUPER),
-    );
-    assert_eq!(
-        left,
-        Rewrite::Key {
-            evdev: KEY_HOME,
-            remove: RawMods::SUPER,
-            add: RawMods::default()
-        }
-    );
-    let down = decide(
-        &cup(),
-        &other(true),
-        &press(KEY_DOWN, 0xff54, RawMods::SUPER),
-    );
-    assert_eq!(
-        down,
-        Rewrite::Key {
-            evdev: KEY_END,
-            remove: RawMods::SUPER,
-            add: RawMods::CTRL
-        }
-    );
-}
-
-#[test]
-fn super_arrows_and_backspace_pass_without_a_text_input() {
-    assert_eq!(
-        decide(
-            &cup(),
-            &other(false),
-            &press(KEY_LEFT, 0xff51, RawMods::SUPER)
+fn pressed_for_inverts_the_rewrite() {
+    let cup = Profile::cupertino();
+    let pc = Profile::classic_pc();
+    for (row, profile, class, received, pressed) in [
+        (
+            "other: Ctrl came from Super",
+            &cup,
+            ClientClass::Other,
+            RawMods::CTRL,
+            RawMods::SUPER,
         ),
-        Rewrite::Pass
-    );
-    assert_eq!(
-        decide(
-            &cup(),
-            &other(false),
-            &press(KEY_BACKSPACE, 0xff08, RawMods::SUPER)
+        (
+            "other: Super came from Ctrl",
+            &cup,
+            ClientClass::Other,
+            RawMods::SUPER,
+            RawMods::CTRL,
         ),
-        Rewrite::Pass
-    );
-}
-
-#[test]
-fn alt_word_chords_become_ctrl_in_a_text_input() {
-    let r = decide(&cup(), &other(true), &press(KEY_LEFT, 0xff51, RawMods::ALT));
-    assert_eq!(
-        r,
-        Rewrite::Mods {
-            remove: RawMods::ALT,
-            add: RawMods::CTRL
-        }
-    );
-    assert_eq!(
-        decide(
-            &cup(),
-            &other(false),
-            &press(KEY_LEFT, 0xff51, RawMods::ALT)
+        (
+            "terminal: Ctrl+Shift+C came from Super+C",
+            &cup,
+            ClientClass::Terminal,
+            RawMods::CTRL | RawMods::SHIFT,
+            RawMods::SUPER,
         ),
-        Rewrite::Pass
-    );
-}
-
-#[test]
-fn super_tab_and_unprintable_keys_pass() {
-    assert_eq!(
-        decide(
-            &cup(),
-            &other(false),
-            &press(KEY_TAB, 0xff09, RawMods::SUPER)
+        (
+            "first party: unchanged",
+            &cup,
+            ClientClass::FirstParty,
+            RawMods::CTRL,
+            RawMods::CTRL,
         ),
-        Rewrite::Pass
-    );
-}
-
-#[test]
-fn first_party_clients_and_opt_outs_are_never_rewritten() {
-    let k = letter(KEY_C, 'c', RawMods::SUPER);
-    assert_eq!(
-        decide(&cup(), &target(ClientClass::FirstParty, true), &k),
-        Rewrite::Pass
-    );
-    let opted = ClientTarget {
-        opted_out: true,
-        ..other(true)
-    };
-    assert_eq!(decide(&cup(), &opted, &k), Rewrite::Pass);
-}
-
-#[test]
-fn other_profiles_are_never_rewritten() {
-    let k = letter(KEY_C, 'c', RawMods::SUPER);
-    assert_eq!(
-        decide(&Profile::classic_pc(), &other(true), &k),
-        Rewrite::Pass
-    );
-}
-
-#[test]
-fn modifier_keys_and_ctrl_super_chords_pass() {
-    let mut k = letter(KEY_C, 'c', RawMods::SUPER);
-    k.is_modifier = true;
-    assert_eq!(decide(&cup(), &other(false), &k), Rewrite::Pass);
-    let both = letter(KEY_C, 'c', RawMods::SUPER | RawMods::CTRL);
-    assert_eq!(decide(&cup(), &other(false), &both), Rewrite::Pass);
-}
-
-#[test]
-fn terminal_super_letter_is_ctrl_shift() {
-    let t = target(ClientClass::Terminal, false);
-    let r = decide(&cup(), &t, &letter(KEY_C, 'c', RawMods::SUPER));
-    assert_eq!(
-        r,
-        Rewrite::Mods {
-            remove: RawMods::SUPER,
-            add: RawMods::CTRL | RawMods::SHIFT
-        }
-    );
-}
-
-#[test]
-fn terminal_super_size_key_is_ctrl() {
-    let t = target(ClientClass::Terminal, false);
-    let r = decide(&cup(), &t, &press(KEY_MINUS, 0x2d, RawMods::SUPER));
-    assert_eq!(
-        r,
-        Rewrite::Mods {
-            remove: RawMods::SUPER,
-            add: RawMods::CTRL
-        }
-    );
-}
-
-#[test]
-fn terminal_ctrl_chords_and_other_super_keys_reach_it_unchanged() {
-    let t = target(ClientClass::Terminal, true);
-    assert_eq!(
-        decide(&cup(), &t, &letter(KEY_C, 'c', RawMods::CTRL)),
-        Rewrite::Pass
-    );
-    assert_eq!(
-        decide(&cup(), &t, &press(KEY_TAB, 0xff09, RawMods::SUPER)),
-        Rewrite::Pass
-    );
-}
-
-#[test]
-fn pressed_for_inverts_the_super_row_for_other_clients() {
-    let received = letter(KEY_C, 'c', RawMods::CTRL);
-    assert_eq!(
-        pressed_for(&cup(), ClientClass::Other, &received).raw,
-        RawMods::SUPER
-    );
-}
-
-#[test]
-fn pressed_for_inverts_the_ctrl_row_for_other_clients() {
-    let received = letter(KEY_C, 'c', RawMods::SUPER);
-    assert_eq!(
-        pressed_for(&cup(), ClientClass::Other, &received).raw,
-        RawMods::CTRL
-    );
-}
-
-#[test]
-fn pressed_for_a_terminal_copy_is_super_c() {
-    let received = letter(KEY_C, 'c', RawMods::CTRL | RawMods::SHIFT);
-    assert_eq!(
-        pressed_for(&cup(), ClientClass::Terminal, &received).raw,
-        RawMods::SUPER
-    );
-}
-
-#[test]
-fn pressed_for_leaves_first_party_and_classic_chords_alone() {
-    let received = letter(KEY_C, 'c', RawMods::CTRL);
-    assert_eq!(
-        pressed_for(&cup(), ClientClass::FirstParty, &received),
-        received
-    );
-    assert_eq!(
-        pressed_for(&Profile::classic_pc(), ClientClass::Other, &received),
-        received
-    );
+        (
+            "classic profile: unchanged",
+            &pc,
+            ClientClass::Other,
+            RawMods::CTRL,
+            RawMods::CTRL,
+        ),
+    ] {
+        let k = letter(KEY_C, 'c', received);
+        let back = pressed_for(profile, class, &k);
+        assert_eq!(back, KeyPress { raw: pressed, ..k }, "{row}");
+    }
 }

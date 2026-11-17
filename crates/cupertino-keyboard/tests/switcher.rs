@@ -16,29 +16,30 @@ fn switcher() -> Switcher {
     sw
 }
 
+fn commit(id: &str) -> SwitchEvent {
+    SwitchEvent::Commit { id: id.into() }
+}
+
 #[test]
-fn history_comes_first_then_menu_order() {
+fn history_orders_sources_most_recent_first_and_follows_the_source_list() {
     let mut sw = switcher();
     assert_eq!(sw.historical_order(), ids(&["abc", "fr", "de"]));
     sw.set_current("de");
     assert_eq!(sw.historical_order(), ids(&["de", "abc", "fr"]));
-    assert_eq!(sw.current(), Some("de"));
-}
-
-#[test]
-fn unknown_sources_are_not_recorded_as_current() {
-    let mut sw = switcher();
     sw.set_current("zz");
-    assert_eq!(sw.current(), Some("abc"));
-}
-
-#[test]
-fn replacing_the_sources_drops_removed_ones_from_history_and_current() {
-    let mut sw = switcher();
+    assert_eq!(
+        sw.current(),
+        Some("de"),
+        "an unknown source is not recorded"
+    );
     sw.set_current("fr");
     sw.set_sources(ids(&["abc", "de"]));
-    assert_eq!(sw.current(), None);
-    assert_eq!(sw.historical_order(), ids(&["abc", "de"]));
+    assert_eq!(sw.current(), None, "a removed source is no longer current");
+    assert_eq!(
+        sw.historical_order(),
+        ids(&["de", "abc"]),
+        "fr leaves the history"
+    );
 }
 
 #[test]
@@ -50,98 +51,66 @@ fn fewer_than_two_sources_never_switch() {
 }
 
 #[test]
-fn a_press_with_held_modifiers_opens_the_hud_one_step_on() {
+fn a_press_without_held_modifiers_switches_at_once() {
     let mut sw = switcher();
-    assert_eq!(
-        sw.press(Step::Next, true),
-        SwitchEvent::ShowHud {
-            order: ids(&["abc", "fr", "de"]),
-            selection: 1
-        }
-    );
-    assert!(sw.is_hud_open());
-    assert_eq!(sw.selection(), Some(1));
+    assert_eq!(sw.press(Step::Next, false), commit("fr"));
+    assert!(!sw.is_hud_open());
+    assert_eq!(sw.current(), Some("fr"));
 }
 
 #[test]
-fn previous_wraps_to_the_last_source() {
-    let mut sw = switcher();
-    assert_eq!(
-        sw.press(Step::Previous, true),
-        SwitchEvent::ShowHud {
-            order: ids(&["abc", "fr", "de"]),
-            selection: 2
-        }
-    );
-}
-
-#[test]
-fn further_presses_move_the_selection_and_wrap() {
+fn a_held_press_opens_the_hud_and_further_presses_step_with_wrapping() {
+    for (step, opened_on) in [(Step::Next, 1), (Step::Previous, 2)] {
+        let mut sw = switcher();
+        assert_eq!(
+            sw.press(step, true),
+            SwitchEvent::ShowHud {
+                order: ids(&["abc", "fr", "de"]),
+                selection: opened_on
+            },
+            "{step:?}"
+        );
+        assert!(sw.is_hud_open());
+        assert_eq!(sw.selection(), Some(opened_on));
+    }
     let mut sw = switcher();
     sw.press(Step::Next, true);
-    assert_eq!(
-        sw.press(Step::Next, true),
-        SwitchEvent::MoveSelection { selection: 2 }
-    );
-    assert_eq!(
-        sw.press(Step::Next, true),
-        SwitchEvent::MoveSelection { selection: 0 }
-    );
+    for selection in [2, 0] {
+        assert_eq!(
+            sw.press(Step::Next, true),
+            SwitchEvent::MoveSelection { selection }
+        );
+    }
 }
 
 #[test]
-fn releasing_the_modifiers_commits_the_displayed_source() {
+fn the_open_hud_ends_by_release_commit_or_escape() {
     let mut sw = switcher();
+    assert_eq!(sw.modifiers_released(), SwitchEvent::None, "no HUD open");
+    assert_eq!(sw.escape(), SwitchEvent::None, "no HUD open");
+
     sw.press(Step::Next, true);
-    assert_eq!(
-        sw.modifiers_released(),
-        SwitchEvent::Commit { id: "fr".into() }
-    );
+    assert_eq!(sw.modifiers_released(), commit("fr"));
     assert!(!sw.is_hud_open());
     assert_eq!(sw.current(), Some("fr"));
     assert_eq!(sw.historical_order(), ids(&["fr", "abc", "de"]));
-}
 
-#[test]
-fn a_press_without_modifiers_switches_immediately() {
-    let mut sw = switcher();
-    assert_eq!(
-        sw.press(Step::Next, false),
-        SwitchEvent::Commit { id: "fr".into() }
-    );
-    assert!(!sw.is_hud_open());
-    assert_eq!(sw.current(), Some("fr"));
-}
+    sw.press(Step::Next, true);
+    assert_eq!(sw.commit(), commit("abc"), "commit picks the displayed row");
 
-#[test]
-fn escape_closes_the_hud_without_switching() {
-    let mut sw = switcher();
     sw.press(Step::Next, true);
     assert_eq!(sw.escape(), SwitchEvent::Cancel);
-    assert_eq!(sw.current(), Some("abc"));
-    assert_eq!(sw.escape(), SwitchEvent::None);
-}
-
-#[test]
-fn releasing_modifiers_with_no_hud_does_nothing() {
-    let mut sw = switcher();
-    assert_eq!(sw.modifiers_released(), SwitchEvent::None);
-}
-
-#[test]
-fn commit_while_the_hud_is_open_selects_the_displayed_source() {
-    let mut sw = switcher();
-    sw.press(Step::Next, true);
-    assert_eq!(sw.commit(), SwitchEvent::Commit { id: "fr".into() });
+    assert!(!sw.is_hud_open());
+    assert_eq!(sw.current(), Some("abc"), "escape does not switch");
 }
 
 #[test]
 fn hovering_a_row_moves_the_selection_when_it_exists() {
     let mut sw = switcher();
-    assert_eq!(sw.select(1), SwitchEvent::None);
+    assert_eq!(sw.select(1), SwitchEvent::None, "no HUD open");
     sw.press(Step::Next, true);
     assert_eq!(sw.select(2), SwitchEvent::MoveSelection { selection: 2 });
-    assert_eq!(sw.select(3), SwitchEvent::None);
+    assert_eq!(sw.select(3), SwitchEvent::None, "no such row");
     assert_eq!(sw.selection(), Some(2));
 }
 
@@ -150,15 +119,9 @@ fn the_menu_shortcut_walks_menu_order_not_history() {
     let mut sw = switcher();
     sw.set_current("de");
     sw.set_current("abc");
-    // history: abc, de, fr; menu: abc, fr, de
-    assert_eq!(
-        sw.press_menu(Step::Next, false),
-        SwitchEvent::Commit { id: "fr".into() }
-    );
-}
+    // History: abc, de, fr; menu: abc, fr, de.
+    assert_eq!(sw.press_menu(Step::Next, false), commit("fr"));
 
-#[test]
-fn the_menu_shortcut_opens_the_hud_on_the_menu_neighbour_and_then_steps() {
     let mut sw = switcher();
     sw.set_current("de");
     sw.set_current("abc");
@@ -176,13 +139,16 @@ fn the_menu_shortcut_opens_the_hud_on_the_menu_neighbour_and_then_steps() {
 }
 
 #[test]
-fn hud_fade_is_linear_over_its_duration() {
-    assert_eq!(HUD_FADE_OUT_S, 0.3);
-    assert_eq!(fade_alpha(0.0), 1.0);
-    assert!((fade_alpha(0.15) - 0.5).abs() < 1e-12);
-    assert_eq!(fade_alpha(0.3), 0.0);
-    assert_eq!(fade_alpha(5.0), 0.0);
-    assert_eq!(fade_alpha(-1.0), 1.0);
+fn hud_fade_is_linear_and_clamped() {
+    for (t, alpha) in [
+        (-1.0, 1.0),
+        (0.0, 1.0),
+        (HUD_FADE_OUT_S / 2.0, 0.5),
+        (HUD_FADE_OUT_S, 0.0),
+        (5.0, 0.0),
+    ] {
+        assert!((fade_alpha(t) - alpha).abs() < 1e-12, "t = {t}");
+    }
 }
 
 #[test]

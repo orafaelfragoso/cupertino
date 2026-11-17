@@ -17,7 +17,7 @@ Updated by the lead at every merge.
 |---|---|
 | Current wave | 4 |
 | Running tasks | W4.6 |
-| Enforced layers | foundation, graphics, models, protocol, transport, testing; system after W4.5 (133 remaining-work lines) |
+| Enforced layers | foundation, graphics, models, protocol, transport, testing; system after W4.6 (127 remaining-work lines) |
 | Waiting on the owner | nothing |
 | Last closed wave | 3 |
 
@@ -721,7 +721,7 @@ ui-wayland`. **After** W4.2.
 
 **Owns** `gpu ui-render ui-wayland ui-test ui-abi`. **After** W4.5.
 
-1. [ ] `cupertino-ui-render`: one device and one context per process, owned by the render thread; `cupertino-gpu`
+1. [x] (2ba9c3f4c) `cupertino-ui-render`: one device and one context per process, owned by the render thread; `cupertino-gpu`
        keeps working with a lent device.
 2. [ ] Presenting and committing move to the render thread in D4's order; UI threads hand over recorded display lists
        with their configure serials; CPU surfaces are rasterised on the CPU pool; the heartbeat reaches the watchdog.
@@ -1145,3 +1145,14 @@ One line per change to a decision or approval of a design: date, number, what, w
   with `try_wait` on each turn of the instance's loop, not by a task on the I/O pool, which would hold a thread and a
   quarter of the instance's share for the life of every launched app. A child that exits while the loop waits is
   reaped at its next turn. The launcher's own spawn helper keeps its reaping thread until its task.
+- 2026-11-17: lead, W4.6: D4's commit order needs the transport and the frame loop, so W4.6 also owns
+  `cupertino-wayland-client` (a per-surface commit handle the render thread uses; events stay on the UI queue) and
+  `cupertino-ui-core`'s frame loop (the display list and configure serial are handed over, presentation comes back as
+  an event). The CPU pool moves below Kit so CPU surfaces are drawn on it; `kit::task` keeps its API.
+- 2026-11-17: lead, W4.5: six of the seven thread starts in `system` crates are gone (application activation and
+  catalogue, the settings watcher, the emitter's summary thread, trash volumes and looks); callers run the blocking
+  functions as Kit tasks or follow a never-ending watch. Accepted with them: a first look at a hung trash volume holds
+  its I/O task until Kit reports it overdue; a rate-limit summary waits for the next event, a flush or the exit; a
+  full change queue in Settings drops a report, since a later read covers it; watchers wait through async-io's
+  reactor, as Kit's bus does, because Kit's loop has no way to register a descriptor. The profile writer's thread moves
+  to its callers with W4.6, which owns `cupertino-ui-wayland`; `system` returns to `ENFORCED` then.

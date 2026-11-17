@@ -82,7 +82,7 @@ pub fn run_on<A: Application>(
 /// that keeps the dark appearance in a light session maps `dark` to true and follows the display options as they are.
 pub fn run_on_with_appearance<A: Application>(
     system: WaylandWindowSystem,
-    start: (A::Model, Vec<Command<A::Message>>),
+    mut start: (A::Model, Vec<Command<A::Message>>),
     appearance: fn(SystemAppearance) -> SystemAppearance,
 ) -> Result<(), AppError> {
     let _instance = instance();
@@ -90,10 +90,11 @@ pub fn run_on_with_appearance<A: Application>(
     let (mut options, theme) = options_and_theme(preferences(&first))?;
     renderers_on_gpu(&mut options, system.gpu_renderers());
     keep_caret(Arc::make_mut(&mut options.theme), &first);
-    let personal = Personal::follow(system.waker(), theme, &options.theme, first);
+    let mut personal = Personal::follow(system.waker(), theme, &options.theme, first);
     options.theme = personal.theme();
     let follow = mapped(personal.theme_for(), appearance);
     options.accessibility = Some(Box::new(AtspiAdapter::muted(system.waker())));
+    start.1.extend(personal.watching());
     let renderers = system.gpu_renderers();
     Runtime::<A, _>::start(system, options, start)
         .with_theme_for(follow)
@@ -116,11 +117,12 @@ pub fn run_on_with<A: Application>(
     renderers_on_gpu(&mut options, system.gpu_renderers());
     let first = system.appearance().unwrap_or_default();
     keep_caret(Arc::make_mut(&mut options.theme), &first);
-    let personal = Personal::follow(system.waker(), theme, &options.theme, first);
+    let mut personal = Personal::follow(system.waker(), theme, &options.theme, first);
     options.theme = personal.theme();
     let follow = personal.theme_for();
     options.accessibility = Some(Box::new(AtspiAdapter::muted(system.waker())));
-    let start = start(&options);
+    let mut start = start(&options);
+    start.1.extend(personal.watching());
     let renderers = system.gpu_renderers();
     Runtime::<A, _>::start(system, options, start)
         .with_theme_for(follow)
@@ -141,11 +143,12 @@ pub fn run_lock_screen_on_with<A: Application>(
     let (mut options, theme) = options_and_theme(start_preferences(system.appearance()))?;
     let first = system.appearance().unwrap_or_default();
     keep_caret(Arc::make_mut(&mut options.theme), &first);
-    let personal = Personal::follow(system.waker(), theme, &options.theme, first);
+    let mut personal = Personal::follow(system.waker(), theme, &options.theme, first);
     options.theme = personal.theme();
     let follow = personal.theme_for();
     options.accessibility = Some(Box::new(AtspiAdapter::lock_screen(system.waker())));
-    let start = start(&options);
+    let mut start = start(&options);
+    start.1.extend(personal.watching());
     let renderers = system.gpu_renderers();
     Runtime::<A, _>::start(system, options, start)
         .with_theme_for(follow)
@@ -363,8 +366,10 @@ fn mapped(
 /// go into the theme, and the other choices are told to the toolkit ([`cupertino_ui_core::set_personal`]).
 struct Personal {
     inner: Rc<PersonalInner>,
-    /// Keeps the watch on the file while the application runs.
-    _watch: Option<ConfigWatcher>,
+    /// The watch on the file, until [`Personal::watching`] hands it to the loop.
+    watch: Option<ConfigWatcher>,
+    /// What wakes the loop when the file changed.
+    waker: std::task::Waker,
 }
 
 struct PersonalInner {
@@ -422,8 +427,9 @@ fn apply_personal(settings: &AppearanceSettings) {
 }
 
 impl Personal {
-    /// Read the file, tell the toolkit what it holds and watch it: a change wakes the loop through `waker`. `theme` is
-    /// the installed theme data, `start` the theme the application starts with and `first` the session's appearance.
+    /// Read the file, tell the toolkit what it holds and set a watch on it, which [`Personal::watching`] hands to the
+    /// loop: a change wakes the loop through `waker`. `theme` is the installed theme data, `start` the theme the
+    /// application starts with and `first` the session's appearance.
     fn follow(
         waker: std::task::Waker,
         theme: Option<Theme>,
@@ -432,27 +438,32 @@ impl Personal {
     ) -> Self {
         let settings = AppearanceSettings::current();
         apply_personal(&settings);
-        let changed = Arc::new(AtomicBool::new(false));
-        let flag = Arc::clone(&changed);
-        let watch = AppearanceSettings::path().and_then(|path| {
-            ConfigWatcher::new(vec![path], move |event| {
-                if matches!(event, WatchEvent::Changed(_)) {
-                    flag.store(true, Ordering::Release);
-                    waker.wake_by_ref();
-                }
-            })
-            .ok()
-        });
+        let watch = AppearanceSettings::path().and_then(|path| ConfigWatcher::new(vec![path]).ok());
         Personal {
             inner: Rc::new(PersonalInner {
                 theme,
                 start: Arc::clone(start),
                 settings: Cell::new(settings),
                 last: Cell::new(first),
-                changed,
+                changed: Arc::new(AtomicBool::new(false)),
             }),
-            _watch: watch,
+            watch,
+            waker,
         }
+    }
+
+    /// The task of the loop that follows the file while the application runs, once: it never ends, and a change
+    /// marks the file to be read again and wakes the loop.
+    fn watching<M: Send + 'static>(&mut self) -> Option<Command<M>> {
+        let watch = self.watch.take()?;
+        let changed = Arc::clone(&self.inner.changed);
+        let waker = self.waker.clone();
+        Some(Command::Perform(Box::pin(watch.follow(move |event| {
+            if matches!(event, WatchEvent::Changed(_)) {
+                changed.store(true, Ordering::Release);
+                waker.wake_by_ref();
+            }
+        }))))
     }
 
     /// The theme for the appearance the application starts in.

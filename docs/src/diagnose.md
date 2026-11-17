@@ -148,7 +148,7 @@ Readers ignore fields they do not know. A change that is not additive raises the
 | Age | 14 days after a segment's last write |
 | One event | 4 KiB; a longer one has its text fields cut to 256 characters, then fields dropped, and `truncated: true` |
 | The memory ring of each process | the last 256 events or 256 KiB |
-| Rate | 10 events per id per 10 s; the rest are counted and written as one summary with `suppressed` when the window closes |
+| Rate | 10 events per id per 10 s; the rest are counted and written as one summary with `suppressed` with the first event after the window closes, or when the process ends |
 
 When the store cannot be written (a read-only file system, a full disk, a refused directory), events stay in the memory ring, one warning per reason goes to standard error, and an event says why once the store works again.
 

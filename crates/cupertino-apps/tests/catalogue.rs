@@ -140,10 +140,17 @@ mod watch {
             vis(),
         );
         let (send, changes) = mpsc::channel();
-        let _watch = ApplicationWatch::start(catalogue, fast(), move |c| {
-            let _ = send.send(c);
-        })
-        .unwrap();
+        let mut watch = ApplicationWatch::new(catalogue, fast()).unwrap();
+        // the program's loop: the folders are read, then the next burst is waited out
+        assert!(watch.reread().is_empty(), "nothing changed yet");
+        std::thread::spawn(move || loop {
+            async_io::block_on(watch.quiet()).unwrap();
+            for change in watch.reread() {
+                if send.send(change).is_err() {
+                    return;
+                }
+            }
+        });
         write(&existing, "b.desktop", &desktop("B", "b", ""));
         assert_eq!(
             until(&changes, "b.desktop", true),

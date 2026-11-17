@@ -73,8 +73,10 @@ sidebar row (approximate). The desktop entry is `data/applications/cupertino-set
 - The pane open and close hooks (scan, discovery, agent registration and unregistration) run in the window process;
 - `ShowPane` switches the pane of the running window; `ShowPaneWithToken` also raises it. On a compositor without the
   activation protocol the window and More Info show unraised.
-- Bus, watcher and worker threads hand events to the window through a queue of 64. Workers wait for room; a pane request
-  or a pairing prompt arriving at a full queue is dropped, and a dropped prompt refuses the pairing.
+- Bus and worker threads, and the watch of the settings files that the window's loop follows, hand events to the
+  window through a queue of 64. Workers wait for room; a pane request or a pairing prompt arriving at a full queue is
+  dropped, and a dropped prompt refuses the pairing; so is a report of the watch, whose next report reads the files
+  again.
 - Not built yet: keyboard steps of the sliders, the focus ring animation, the overlay scroller, tooltips, undo,
   the Mouse and Trackpad rows' device predicates (both rows always show until the device monitor is wired, §3).
 - The width cannot be fixed at the server: `ToplevelConfig` carries a minimum size only, so the window can be widened.

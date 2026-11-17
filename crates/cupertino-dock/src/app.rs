@@ -733,11 +733,17 @@ impl Host for AppHost {
     }
 
     fn dbus_activate(&mut self, bus_name: &str, token: Option<String>) -> Option<kit::BusCall> {
-        Some(Box::pin(cupertino_dock::activate::activate_in_thread(
-            PROCESS,
-            bus_name.to_owned(),
-            token,
-        )))
+        use cupertino_dock::activate::{activate_on_session, ACTIVATE_DEADLINE};
+        let id = bus_name.to_owned();
+        let asked = cupertino_kit::task::io(
+            ACTIVATE_DEADLINE,
+            move || activate_on_session(PROCESS, &id, token.as_deref()),
+            |ok| ok,
+        );
+        match asked {
+            Command::Perform(call) => Some(call),
+            _ => None,
+        }
     }
 
     fn icon(&mut self, desktop: &DesktopIndex, icon: &IconKey, side: f64) -> IconSet {
@@ -869,6 +875,14 @@ impl Host for AppHost {
         self.trash.full()
     }
 
+    fn look_at_trash(&mut self) -> Option<kit::TrashLook> {
+        let look = self.trash.next()?;
+        match cupertino_kit::task::io(cupertino_trash::LOOK_DEADLINE, look, |changed| changed) {
+            Command::Perform(look) => Some(look),
+            _ => None,
+        }
+    }
+
     /// Emptied on a thread of its own: a big trash takes a while to delete.
     fn empty_trash(&mut self) -> kit::Emptying {
         let (sender, receiver) = async_channel::bounded(1);
@@ -965,21 +979,22 @@ impl Application for App {
     }
 }
 
-/// Watch `dock.conf` at `path`; a change is told as [`Message::ConfChanged`]. A watch that cannot be set up is
-/// reported: the file then applies at the next start.
+/// The task of the loop that watches `dock.conf` at `path`; a change is told as [`Message::ConfChanged`]. A watch that
+/// cannot be set up is reported: the file then applies at the next start.
 fn watch_conf(
     path: Option<&PathBuf>,
     messages: async_channel::Sender<Message>,
-) -> Option<ConfigWatcher> {
+) -> Option<Command<Message>> {
     let path = path?;
-    let watch = ConfigWatcher::new(vec![path.clone()], move |event| match event {
-        WatchEvent::Changed(_) => {
-            let _ = messages.send_blocking(Message::ConfChanged);
-        }
-        WatchEvent::Error(e) => eprintln!("{PROCESS}: watching dock.conf failed: {e}"),
-    });
-    match watch {
-        Ok(w) => Some(w),
+    match ConfigWatcher::new(vec![path.clone()]) {
+        Ok(watch) => Some(Command::Perform(Box::pin(watch.follow(
+            move |event| match event {
+                WatchEvent::Changed(_) => {
+                    let _ = messages.try_send(Message::ConfChanged);
+                }
+                WatchEvent::Error(e) => eprintln!("{PROCESS}: watching dock.conf failed: {e}"),
+            },
+        )))),
         Err(e) => {
             eprintln!(
                 "{PROCESS}: cannot watch {}: {e}; changes apply at the next start",
@@ -1149,15 +1164,10 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     let session = Session::new(dock, desktop);
 
     let (messages, heard) = async_channel::unbounded();
-    let _conf_watch = watch_conf(conf_path.as_ref(), messages.clone());
+    let conf_watch = watch_conf(conf_path.as_ref(), messages.clone());
     let _trash_watch = watch_trash(messages.clone());
     listen_badges(messages.clone());
-    let trash = {
-        let messages = messages.clone();
-        cupertino_trash::Look::new(cupertino_trash::Trash::new(), move || {
-            let _ = messages.send_blocking(Message::TrashChanged);
-        })
-    };
+    let trash = cupertino_trash::Look::new(cupertino_trash::Trash::new());
     let surfaces = Rc::new(RefCell::new(Surfaces::default()));
     let initial = (
         observed.dark,
@@ -1186,6 +1196,7 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     let mut model = Model::new(session, actions, file.unwrap_or_default(), Box::new(host));
     model.set_unresponsive(fixture_unresponsive());
     let mut commands = vec![listen(&heard)];
+    commands.extend(conf_watch);
     for message in [
         Message::Dark(initial.0),
         Message::ReduceMotion(initial.1),

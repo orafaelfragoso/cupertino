@@ -1,9 +1,10 @@
 //! `watch::ConfigWatcher`: change notification for the settings files.
 
+use std::os::fd::{AsFd, AsRawFd};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{channel, sync_channel, Receiver, RecvTimeoutError};
-use std::time::Duration;
+use std::sync::mpsc::{channel, sync_channel, Receiver};
+use std::time::{Duration, Instant};
 
 use cupertino_defaults::atomic::write_atomic;
 use cupertino_defaults::watch::{ConfigWatcher, WatchEvent};
@@ -13,13 +14,20 @@ const REPORT: Duration = Duration::from_secs(10);
 /// Long enough, many times over the watcher's coalescing time, for a report that should not come to have come.
 const QUIET: Duration = Duration::from_millis(600);
 
-fn watch(files: Vec<PathBuf>) -> (ConfigWatcher, Receiver<WatchEvent>) {
+/// The reports of a watch of `files` that a thread of the test's waits for.
+fn watch(files: Vec<PathBuf>) -> Receiver<WatchEvent> {
     let (tx, rx) = channel();
-    let watcher = ConfigWatcher::new(files, move |event| {
-        let _ = tx.send(event);
-    })
-    .unwrap();
-    (watcher, rx)
+    let mut watcher = ConfigWatcher::new(files).unwrap();
+    std::thread::spawn(move || {
+        while let Some(events) = watcher.wait() {
+            for event in events {
+                if tx.send(event).is_err() {
+                    return;
+                }
+            }
+        }
+    });
+    rx
 }
 
 fn changed(rx: &Receiver<WatchEvent>) -> Vec<PathBuf> {
@@ -37,7 +45,7 @@ fn nothing(rx: &Receiver<WatchEvent>, row: &str) {
 fn each_kind_of_change_to_a_watched_file_is_one_report() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("a.conf");
-    let (_w, rx) = watch(vec![file.clone()]);
+    let rx = watch(vec![file.clone()]);
     let bursts: [(&str, &dyn Fn()); 4] = [
         ("created", &|| std::fs::write(&file, "start").unwrap()),
         ("replaced atomically", &|| {
@@ -63,7 +71,7 @@ fn events_that_change_no_watched_file_are_not_reported() {
     let file = dir.path().join("a.conf");
     std::fs::write(&file, "old").unwrap();
     std::fs::write(&file, "same").unwrap();
-    let (_w, rx) = watch(vec![file.clone()]);
+    let rx = watch(vec![file.clone()]);
     nothing(&rx, "a change before the watch began");
     let events: [(&str, &dyn Fn()); 4] = [
         ("unchanged contents", &|| {
@@ -94,7 +102,7 @@ fn unrelated_activity_in_the_directory_does_not_hold_back_a_report() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("cupertino/a.conf");
     let noise = dir.path().join("cupertino/other.conf");
-    let (_w, rx) = watch(vec![file.clone()]);
+    let rx = watch(vec![file.clone()]);
     let stop = AtomicBool::new(false);
     let (started_tx, started) = sync_channel(1);
     let received = std::thread::scope(|scope| {
@@ -119,7 +127,7 @@ fn unrelated_activity_in_the_directory_does_not_hold_back_a_report() {
 fn several_files_changed_in_one_burst_are_all_reported() {
     let dir = tempfile::tempdir().unwrap();
     let (a, b) = (dir.path().join("a.conf"), dir.path().join("b.conf"));
-    let (_w, rx) = watch(vec![b.clone(), a.clone()]);
+    let rx = watch(vec![b.clone(), a.clone()]);
     std::fs::write(&a, "1").unwrap();
     std::fs::write(&b, "1").unwrap();
     let mut seen = changed(&rx);
@@ -135,7 +143,7 @@ fn the_settings_directory_is_created_and_watched_again_when_recreated() {
     let dir = tempfile::tempdir().unwrap();
     let settings = dir.path().join("redirected/cupertino");
     let file = settings.join("a.conf");
-    let (_w, rx) = watch(vec![file.clone()]);
+    let rx = watch(vec![file.clone()]);
     assert!(settings.is_dir(), "the settings directory is created");
     write_atomic(&file, b"1").unwrap();
     assert_eq!(changed(&rx), std::slice::from_ref(&file));
@@ -158,35 +166,53 @@ fn a_fifo_at_a_watched_path_does_not_block_the_watch() {
     // Safety: `c` is a valid C string for the call.
     assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
     let other = dir.path().join("b.conf");
-    let (_w, rx) = watch(vec![fifo, other.clone()]);
+    let rx = watch(vec![fifo, other.clone()]);
     write_atomic(&other, b"x").unwrap();
     assert_eq!(changed(&rx), [other]);
 }
 
 #[test]
-fn a_panicking_callback_ends_the_watch_without_taking_the_process() {
+fn a_loop_that_polls_the_descriptor_reads_each_quiet_burst_without_waiting() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("a.conf");
-    let (tx, rx) = channel();
-    let _w = ConfigWatcher::new(vec![file.clone()], move |_| {
-        let _ = tx.send(());
-        panic!("callback fails on purpose");
-    })
-    .unwrap();
+    let mut watcher = ConfigWatcher::new(vec![file.clone()]).unwrap();
+    assert!(watcher.read(Instant::now()).is_empty(), "nothing changed");
+    assert_eq!(watcher.quiet_at(), None, "no burst under way");
     std::fs::write(&file, "1").unwrap();
-    rx.recv_timeout(REPORT).expect("the callback ran");
-    std::fs::write(&file, "2").unwrap();
-    assert!(
-        rx.recv_timeout(QUIET).is_err(),
-        "the watch ended after the panic"
+    let mut fd = libc::pollfd {
+        fd: watcher.as_fd().as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    // Safety: `fd` is an initialised pollfd that outlives the call, and the count says it is one.
+    let ready = unsafe { libc::poll(&mut fd, 1, REPORT.as_millis() as i32) };
+    assert_eq!(ready, 1, "the descriptor is readable");
+    let now = Instant::now();
+    assert!(watcher.read(now).is_empty(), "the burst is not quiet yet");
+    let quiet = watcher.quiet_at().expect("a burst under way");
+    assert!(quiet > now);
+    assert_eq!(
+        watcher.read(quiet),
+        [WatchEvent::Changed(vec![file.clone()])]
     );
+    assert_eq!(watcher.quiet_at(), None);
+    assert!(watcher.read(quiet).is_empty(), "reported once");
 }
 
 #[test]
-fn dropping_the_watcher_ends_its_thread_and_so_the_callback() {
+fn a_followed_watch_reports_through_its_callback_from_the_loop_that_polls_it() {
     let dir = tempfile::tempdir().unwrap();
-    let (w, rx) = watch(vec![dir.path().join("a.conf")]);
-    drop(w);
-    // the callback owns the sender: it is dropped when the watch thread ends
-    assert_eq!(rx.recv_timeout(REPORT), Err(RecvTimeoutError::Disconnected));
+    let file = dir.path().join("a.conf");
+    let watcher = ConfigWatcher::new(vec![file.clone()]).unwrap();
+    let (tx, rx) = channel();
+    std::thread::spawn(move || {
+        let on = std::thread::current().id();
+        async_io::block_on(watcher.follow::<()>(move |event| {
+            let _ = tx.send((event, std::thread::current().id() == on));
+        }))
+    });
+    std::fs::write(&file, "1").unwrap();
+    let (event, on_the_loop) = rx.recv_timeout(REPORT).expect("a report");
+    assert_eq!(event, WatchEvent::Changed(vec![file]));
+    assert!(on_the_loop, "the callback runs where the future is polled");
 }

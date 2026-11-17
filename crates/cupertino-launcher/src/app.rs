@@ -4,7 +4,7 @@
 //! builds the file index on a thread, searches it on another, resizes the panel's surface, loads the results' and the
 //! applications' icons, reads what the preview shows of the selected file on a thread, and keeps the deadlines.
 
-use cupertino_apps::catalogue::{ApplicationWatch, Catalogue, Change, Timing};
+use cupertino_apps::catalogue::{ApplicationWatch, Catalogue, Change, Timing, REREAD_DEADLINE};
 use cupertino_apps::{DesktopEntry, MimeDatabase, XdgDirs};
 use cupertino_assets::Assets;
 use cupertino_defaults::terminal::DEFAULT_TERMINALS;
@@ -933,11 +933,17 @@ impl Host for AppHost {
         if !source.is_some_and(cupertino_apps::entry::dbus_activatable_file) {
             return None;
         }
-        Some(Box::pin(cupertino_apps::activate::activate_in_thread(
-            "cupertino-launcher",
-            bus_name.to_owned(),
-            token,
-        )))
+        use cupertino_apps::activate::{activate_on_session, ACTIVATE_DEADLINE};
+        let id = bus_name.to_owned();
+        let asked = cupertino_kit::task::io(
+            ACTIVATE_DEADLINE,
+            move || activate_on_session("cupertino-launcher", &id, token.as_deref()),
+            |ok| ok,
+        );
+        match asked {
+            Command::Perform(call) => Some(call),
+            _ => None,
+        }
     }
 }
 
@@ -980,6 +986,51 @@ fn signalled(message: &Message) -> bool {
             | Message::Opened(..)
             | Message::Installed(_)
     )
+}
+
+/// The task of the loop that follows the application folders while the launcher runs: the folders are read again on
+/// the I/O pool, never on the loop's thread, and each change is told as [`Signal::Installed`]. It never ends.
+fn follow_applications(
+    mut watch: ApplicationWatch,
+    installed: async_channel::Sender<Signal>,
+) -> Command<Message> {
+    Command::Perform(Box::pin(async move {
+        loop {
+            let read = match cupertino_kit::task::io(
+                REREAD_DEADLINE,
+                move || {
+                    let changes = watch.reread();
+                    (watch, changes)
+                },
+                |read| read,
+            ) {
+                Command::Perform(read) => Some(read),
+                _ => None,
+            };
+            let Some(read) = read else {
+                return std::future::pending().await;
+            };
+            let changes;
+            (watch, changes) = read.await;
+            for change in changes {
+                match change {
+                    Change::Applications(entries) => {
+                        let _ = installed.try_send(Signal::Installed(entries));
+                    }
+                    Change::Error(e) => {
+                        eprintln!("cupertino-launcher: watching the applications: {e}")
+                    }
+                }
+            }
+            if let Err(e) = watch.quiet().await {
+                eprintln!(
+                    "cupertino-launcher: the application folders are no longer watched: {e}; applications \
+                     installed from now on show after a restart"
+                );
+                return std::future::pending().await;
+            }
+        }
+    }))
 }
 
 /// Waits for the next signal: one wait at a time, started again as its message is handled ([`signalled`]).
@@ -1091,22 +1142,15 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     };
     let catalogue = Catalogue::from_env();
     let entries = catalogue.entries().to_vec();
-    let installed = signals_in.clone();
-    // the folders are read again on the watch's thread, never on the loop's
-    let _applications =
-        ApplicationWatch::start(catalogue, Timing::default(), move |change| match change {
-            Change::Applications(entries) => {
-                let _ = installed.send_blocking(Signal::Installed(entries));
-            }
-            Change::Error(e) => eprintln!("cupertino-launcher: watching the applications: {e}"),
-        })
+    let applications = ApplicationWatch::new(catalogue, Timing::default())
         .map_err(|e| {
             eprintln!(
                 "cupertino-launcher: cannot watch the application folders: {e}; applications installed from now \
                  on show after a restart"
             );
         })
-        .ok();
+        .ok()
+        .map(|watch| follow_applications(watch, signals_in.clone()));
     let launcher = Launcher::new(config, entries, Frecency::load_default());
     let mut model = Model::new(launcher, Box::new(host));
     model.files = files;
@@ -1121,6 +1165,7 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     model.window_held = model.compositor_layers;
     let app = App { model, signals };
     let first = listen(&app.signals);
-    cupertino_kit::app::run_on::<App>(system, (app, vec![first]))?;
+    let start = std::iter::once(first).chain(applications).collect();
+    cupertino_kit::app::run_on::<App>(system, (app, start))?;
     Err("the launcher's surfaces were closed".into())
 }

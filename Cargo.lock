@@ -894,9 +894,9 @@ dependencies = [
 name = "cupertino-apps"
 version = "0.1.0"
 dependencies = [
- "async-channel",
  "async-io",
- "notify",
+ "futures-lite",
+ "inotify",
  "percent-encoding",
  "serde",
  "serde_json",
@@ -1027,7 +1027,9 @@ dependencies = [
 name = "cupertino-defaults"
 version = "0.1.0"
 dependencies = [
+ "async-io",
  "cupertino-keyboard",
+ "futures-lite",
  "inotify",
  "libc",
  "serde_json",

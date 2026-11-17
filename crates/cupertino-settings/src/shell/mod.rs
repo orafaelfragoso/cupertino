@@ -712,7 +712,7 @@ impl Application for SettingsApp {
 
     fn init() -> (Shell, Vec<Command<Message>>) {
         let Start {
-            state,
+            mut state,
             background,
             woken,
             activation,
@@ -722,6 +722,7 @@ impl Application for SettingsApp {
             .take()
             .expect("the Settings window is launched with its start");
         let mut commands = vec![wait(&woken)];
+        commands.extend(state.watching().into_iter().map(Command::Perform));
         if !activation.is_empty() {
             commands.push(Command::Window(
                 main_window(),

@@ -18,7 +18,7 @@ Updated by the lead at every merge.
 | Current wave | 4 |
 | Running tasks | W4.6 |
 | Enforced layers | foundation, graphics, models, protocol, transport, testing; system after W4.6 (127 remaining-work lines) |
-| Waiting on the owner | nothing |
+| Waiting on the owner | approval of W4.7 step 1, the Kit API proposal in `crates/cupertino-kit/README.md` |
 | Last closed wave | 3 |
 
 ## Contents

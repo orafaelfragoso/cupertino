@@ -15,11 +15,11 @@ Updated by the lead at every merge.
 
 | | |
 |---|---|
-| Current wave | 1 |
-| Running tasks | W1.6, W1.T |
-| Enforced layers | none (target rules checked since W0.2; 248 remaining-work lines) |
+| Current wave | 2 (not started) |
+| Running tasks | none |
+| Enforced layers | foundation, system, testing (133 remaining-work lines) |
 | Waiting on the owner | nothing |
-| Last closed wave | 0 |
+| Last closed wave | 1 |
 
 ## Contents
 
@@ -569,15 +569,15 @@ One task per crate, after its structural task: `keyboard theme apps assets defau
 radios trash animation geometry menu-model`. (`glyph` is tested with `raster-math` in W2.T, `capture`
 with `kit` in W4.T.)
 
-- [ ] The crate follows [Tests](#tests-d29): no `#[cfg(test)]` left in `src/`, removed tests listed by behaviour,
+- [x] (eb41c041e) The crate follows [Tests](#tests-d29): no `#[cfg(test)]` left in `src/`, removed tests listed by behaviour,
       behaviour nothing else covered now covered by a public or program test.
 
 #### W1.close (lead)
 
-- [ ] `ENFORCED` gains `Foundation`, `System`, `Testing`.
-- [ ] `docs/src/architecture.md`'s layer table, the layer rule in the repository's agent instructions and the READMEs of
+- [x] (eb41c041e) `ENFORCED` gains `Foundation`, `System`, `Testing`.
+- [x] (eb41c041e) `docs/src/architecture.md`'s layer table, the layer rule in the repository's agent instructions and the READMEs of
       absorbing crates match.
-- [ ] `cargo xtask ci --profile integration` passes on merged `main`.
+- [x] (eb41c041e) `cargo xtask ci --profile integration` passes on merged `main`.
 
 ### Wave 2: graphics, models, platform
 

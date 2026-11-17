@@ -16,8 +16,8 @@ Updated by the lead at every merge.
 | | |
 |---|---|
 | Current wave | 4 |
-| Running tasks | W4.6 |
-| Enforced layers | foundation, graphics, models, protocol, transport, testing; system after W4.6 (127 remaining-work lines) |
+| Running tasks | W4.6 step 4 (measurement) |
+| Enforced layers | foundation, system, graphics, models, protocol, transport, testing (126 remaining-work lines) |
 | Waiting on the owner | approval of W4.7 step 1, the Kit API proposal in `crates/cupertino-kit/README.md` |
 | Last closed wave | 3 |
 
@@ -723,9 +723,9 @@ ui-wayland`. **After** W4.2.
 
 1. [x] (2ba9c3f4c) `cupertino-ui-render`: one device and one context per process, owned by the render thread; `cupertino-gpu`
        keeps working with a lent device.
-2. [ ] Presenting and committing move to the render thread in D4's order; UI threads hand over recorded display lists
+2. [x] (bcf681ad2) Presenting and committing move to the render thread in D4's order; UI threads hand over recorded display lists
        with their configure serials; CPU surfaces are rasterised on the CPU pool; the heartbeat reaches the watchdog.
-3. [ ] Device loss handled once per process.
+3. [x] (bcf681ad2) Device loss handled once per process.
 4. [ ] Frame timings and per-process PSS of Files and Settings no worse than W0.1 (lead compares with a profile).
 
 #### W4.7 Kit's public API (L, design then code)
@@ -1156,3 +1156,6 @@ One line per change to a decision or approval of a design: date, number, what, w
   full change queue in Settings drops a report, since a later read covers it; watchers wait through async-io's
   reactor, as Kit's bus does, because Kit's loop has no way to register a descriptor. The profile writer's thread moves
   to its callers with W4.6, which owns `cupertino-ui-wayland`; `system` returns to `ENFORCED` then.
+- 2026-11-17: lead, W4.6: the profile writer is a blocking function its callers (the window system and the server)
+  run on a thread of their own, so `system` is in `ENFORCED` again. A trace whose program starts no writer is written
+  when it closes.

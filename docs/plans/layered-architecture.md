@@ -15,8 +15,8 @@ Updated by the lead at every merge.
 
 | | |
 |---|---|
-| Current wave | 3 (not started) |
-| Running tasks | none |
+| Current wave | 3 |
+| Running tasks | W3.1, W3.T (protocols, login-ipc) |
 | Enforced layers | foundation, graphics, models, testing; system after W4.5 (139 remaining-work lines) |
 | Waiting on the owner | nothing |
 | Last closed wave | 2 |

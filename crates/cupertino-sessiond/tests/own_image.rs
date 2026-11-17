@@ -77,6 +77,10 @@ fn run_as_manager(step: &str) -> String {
         .env(STEP, step)
         .env(DIR, dir.path())
         .env("CUPERTINO_TEST_OWN_IMAGE_NAME", &name)
+        // the stand-in reads no packs and keeps any diagnostic event to this directory
+        .env("CUPERTINO_ASSET_SEARCH_PATH", "")
+        .env("XDG_STATE_HOME", dir.path())
+        .env("CUPERTINO_DIAG_JOURNAL_SOCKET", dir.path().join("journal"))
         .output()
         .expect("the manager starts");
     assert!(

@@ -26,7 +26,7 @@ use crate::render::scene::{
 use crate::render::shader_rect::ElementCache;
 use crate::render::CupertinoElement;
 use crate::state::Cupertino;
-use cupertino_render_api::{Failure, RenderFailure};
+use cupertino_scene::renderer::{Failure, RenderFailure};
 use cupertino_scene::SceneKind;
 use smithay::backend::renderer::damage::OutputDamageTracker;
 
@@ -265,7 +265,7 @@ impl Cupertino {
         note_built: bool,
     ) -> anyhow::Result<image::RgbaImage> {
         use anyhow::Context;
-        use cupertino_render_api::Renderer;
+        use cupertino_scene::renderer::Renderer;
         if note_built {
             self.note_scene_built(idx);
         }

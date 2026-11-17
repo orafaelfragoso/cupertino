@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
-use cupertino_render_api::Renderer;
+use cupertino_scene::renderer::Renderer;
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::renderer::Color32F;
 use smithay::backend::winit::{self, WinitEvent, WinitEventLoop, WinitGraphicsBackend};

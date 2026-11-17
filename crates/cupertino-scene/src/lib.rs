@@ -1,8 +1,10 @@
 //! Renderer-neutral desktop scene data. Composition samples models once; adapters resolve the
-//! typed resources and retain their leases through rendering and presentation completion.
+//! typed resources and retain their leases through rendering and presentation completion. [`renderer`] is the seam
+//! a renderer implements to draw a [`SceneFrame`].
 
 mod coordinates;
 mod layers;
+pub mod renderer;
 mod source;
 
 pub use coordinates::{

@@ -18,7 +18,7 @@ Remaining security and coverage debt stays visible in [#28](https://github.com/o
 
 Completed for the agreed scope, WP-02, WP-03 and the GLES half of WP-04. The standard Wayland client, neutral scene model and render API are merged. Layer rules keep the public toolkit separate from the private shell protocols. Settings and Files gained damage submission.
 
-Source: `crates/cupertino-wayland-client`, `crates/cupertino-scene`, `crates/cupertino-render-api` and the server's scene code. The old client adapter is gone.
+Source: `crates/cupertino-wayland-client`, `crates/cupertino-scene` (its `renderer` module) and the server's scene code. The old client adapter is gone.
 
 Since the audit:
 

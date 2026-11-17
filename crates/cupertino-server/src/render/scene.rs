@@ -54,7 +54,7 @@ use crate::shell::Shell;
 use crate::state::{Shrink, WindowEntry};
 use crate::window_manager::Look;
 use cupertino_glass::glass::{Container, GlassShape};
-use cupertino_render_api::Renderer;
+use cupertino_scene::renderer::Renderer;
 
 /// Material over a window while a sheet hangs from it (material 30).
 pub(super) const SHEET_DIMMING_MATERIAL: &str = "SheetUnderlay";

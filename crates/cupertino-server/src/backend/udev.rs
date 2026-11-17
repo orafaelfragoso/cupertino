@@ -15,7 +15,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use cupertino_devices::{Action, DevT, DeviceEvent, Monitor, Subsystem, SEAT0};
-use cupertino_render_api::{Completion as _, Failure, RenderFailure as _, RenderStatus, Renderer};
+use cupertino_scene::renderer::{
+    Completion as _, Failure, RenderFailure as _, RenderStatus, Renderer,
+};
 use cupertino_seat::LogindSession;
 use cupertino_wm::OutputId;
 use smithay::backend::allocator::gbm::{GbmAllocator, GbmBufferFlags, GbmDevice};

@@ -16,8 +16,8 @@ Updated by the lead at every merge.
 | | |
 |---|---|
 | Current wave | 4 |
-| Running tasks | W4.5 |
-| Enforced layers | foundation, graphics, models, protocol, transport, testing; system after W4.5 (134 remaining-work lines) |
+| Running tasks | W4.6 |
+| Enforced layers | foundation, graphics, models, protocol, transport, testing; system after W4.5 (133 remaining-work lines) |
 | Waiting on the owner | nothing |
 | Last closed wave | 3 |
 
@@ -707,14 +707,14 @@ ui-wayland`. **After** W4.2.
 **Owns** `kit ui-core ui-wayland ui-text ui-render icons diagnostic-events apps` (`chromium.rs`, `launch.rs`).
 **Touches** every crate that calls `diag::init`. **After** W4.4.
 
-1. [ ] Every process-wide static in Kit and the crates it uses (`rg -n 'static .*(Mutex|RwLock|Cell|OnceLock|Atomic)'`)
+1. [x] (0e3a49bdd) Every process-wide static in Kit and the crates it uses (`rg -n 'static .*(Mutex|RwLock|Cell|OnceLock|Atomic)'`)
        is listed in the report with its fate under D3: a field of the runtime object (profiling state, renderer choice,
        device-loss counter), the thread's scope (the diagnostic emitter; the panic hook stays one per process), a cache
        in D5's form (`cupertino-apps`' Chromium table), or allowed as it is (id counters, immutable tables, the C
        interface's registry). `cupertino-apps`' launch starts no thread; the child is reaped by its caller.
-2. [ ] Font, glyph and icon caches in D5's forms.
-3. [ ] `kit::task` and the bus integration of D6; `kit::time` for local time.
-4. [ ] Program test: two Kit instances in one process draw and take input independently; a panic in one
+2. [x] (368eac681) Font, glyph and icon caches in D5's forms.
+3. [x] (368eac681) `kit::task` and the bus integration of D6; `kit::time` for local time.
+4. [x] (368eac681) Program test: two Kit instances in one process draw and take input independently; a panic in one
        leaves the other drawing.
 
 #### W4.6 One render thread per process (L, behaviour change)
@@ -1141,3 +1141,7 @@ One line per change to a decision or approval of a design: date, number, what, w
   rewrites the existing suites to that rule before wave 4's `T` tasks.
 - 2026-11-17: lead: the test suites of waves 1 to 3 are rewritten to one test per behaviour: 3414 tests become 1406
   across the same 36 crates, with every regression and safety test of the refactor kept and none restored from history.
+- 2026-11-17: lead, W4.5: a launched program's child is reaped by the Kit instance it is handed to (`kit::spawn`),
+  with `try_wait` on each turn of the instance's loop, not by a task on the I/O pool, which would hold a thread and a
+  quarter of the instance's share for the life of every launched app. A child that exits while the loop waits is
+  reaped at its next turn. The launcher's own spawn helper keeps its reaping thread until its task.

@@ -2,21 +2,9 @@
 
 mod support;
 
-use cupertino_app_protocols::server::scroll::cupertino_pointer_scroll_v1::CupertinoPointerScrollV1;
 use cupertino_wayland_client::app::{AppEvent, ScrollCounts};
-use cupertino_wayland_client::Connection;
 use support::*;
 use wayland_server::protocol::wl_pointer::Axis;
-
-/// A connection whose seat has a pointer, the server's scroll resources made for it.
-fn watched() -> (Harness, Connection, ScrollCounts) {
-    let (server, mut conn) = Harness::start(Offer {
-        scroll: Some(1),
-        ..Offer::NONE
-    });
-    let scroll = ScrollCounts::bind(&mut conn).expect("the server offers scroll counts");
-    (server, conn, scroll)
-}
 
 #[test]
 fn a_server_without_the_global_gives_none() {
@@ -25,67 +13,45 @@ fn a_server_without_the_global_gives_none() {
 }
 
 #[test]
-fn the_seat_has_a_pointer_to_watch() {
-    let (_server, conn, _scroll) = watched();
-    assert!(conn.pointer().is_some());
-}
-
-#[test]
-fn counts_arrive_per_axis_in_order() {
-    let (server, mut conn, scroll) = watched();
-    let pointer = conn.pointer().unwrap();
-    let _watch = scroll.watch(&conn, &pointer);
-    conn.roundtrip().unwrap();
-    server.wait_for("get_scroll", 1);
-    server.run(|s| {
-        let scroll: &CupertinoPointerScrollV1 = &s.scrolls[0];
-        scroll.scroll_count(Axis::VerticalScroll, 3);
-        scroll.scroll_count(Axis::HorizontalScroll, 0);
-        scroll.scroll_count(Axis::VerticalScroll, 4);
+fn counts_arrive_per_axis_in_order_from_every_watch() {
+    let (server, mut conn) = Harness::start(Offer {
+        scroll: Some(1),
+        ..Offer::NONE
     });
-    let (events, _) = wait_app_events(&mut conn, |e| e.len() >= 3);
-    assert_eq!(
-        events,
-        [
-            AppEvent::ScrollCount {
-                vertical: true,
-                count: 3
-            },
-            AppEvent::ScrollCount {
-                vertical: false,
-                count: 0
-            },
-            AppEvent::ScrollCount {
-                vertical: true,
-                count: 4
-            },
-        ]
-    );
-}
-
-#[test]
-fn a_pointer_may_be_watched_twice() {
-    let (server, mut conn, scroll) = watched();
-    let pointer = conn.pointer().unwrap();
+    let scroll = ScrollCounts::bind(&mut conn).expect("the server offers scroll counts");
+    let pointer = conn.pointer().expect("the seat has a pointer to watch");
     let _a = scroll.watch(&conn, &pointer);
     let _b = scroll.watch(&conn, &pointer);
     conn.roundtrip().unwrap();
     server.wait_for("get_scroll", 2);
     server.run(|s| {
-        for watch in &s.scrolls {
-            watch.scroll_count(Axis::VerticalScroll, 1);
-        }
+        s.scrolls[0].scroll_count(Axis::VerticalScroll, 3);
+        s.scrolls[0].scroll_count(Axis::HorizontalScroll, 0);
+        s.scrolls[1].scroll_count(Axis::VerticalScroll, 1);
+        s.scrolls[0].scroll_count(Axis::VerticalScroll, 4);
     });
-    let (events, _) = wait_app_events(&mut conn, |e| e.len() >= 2);
-    assert_eq!(events.len(), 2);
+    let (events, _) = wait_app_events(&mut conn, |e| e.len() >= 4);
+    let count = |vertical, count| AppEvent::ScrollCount { vertical, count };
+    assert_eq!(
+        events,
+        [
+            count(true, 3),
+            count(false, 0),
+            count(true, 1),
+            count(true, 4)
+        ]
+    );
 }
 
 #[test]
 fn dropping_the_watch_destroys_it() {
-    let (server, mut conn, scroll) = watched();
+    let (server, mut conn) = Harness::start(Offer {
+        scroll: Some(1),
+        ..Offer::NONE
+    });
+    let scroll = ScrollCounts::bind(&mut conn).unwrap();
     let pointer = conn.pointer().unwrap();
-    let watch = scroll.watch(&conn, &pointer);
-    drop(watch);
+    drop(scroll.watch(&conn, &pointer));
     conn.roundtrip().unwrap();
     server.wait_for("Destroy", 1);
 }

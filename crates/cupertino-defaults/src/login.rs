@@ -19,6 +19,12 @@
 //! | `retries-until-hint` | failed attempts until the password help shows, 0 for the setting absent | 0 | 0 |
 //! | `admin-groups` | group names: a member of any of them is an administrator; the manager uses the key only when this file is root-owned and writable by root alone | the build's ([`DEFAULT_ADMIN_GROUPS`]) | no administrator |
 //! | `auto-login` | the account logged in without a password once per boot (semantics unknown in the design); the manager refuses it unless this file is root-owned and writable by root alone | off | off |
+//! | `lock-message` | a line of text the login and lock screens show near the bottom, at most 200 characters | none | none |
+//! | `show-full-name` | `true` or `false`: the login screen starts with a name and a password field instead of the picker | false | false |
+//! | `host-info` | `hostname`, `version` or `ip`: a status item of the login screen shows it | none | none |
+//! | `show-input-menu` | `true` or `false`: the login and lock screens show the keyboard layout item | false | false |
+//! | `hide-user-avatar-and-name` | `true` or `false`: the password screens show no avatar and no name | false | false |
+//! | `large-clock` | `true` or `false`: the login and lock screens show the date and the large time | true | true |
 //!
 //! The filter and power keys are the login window preferences of the design (`HiddenUsersList`, `HideAdminUsers`,
 //! `AllowList`, `DenyList`, `SHOWOTHERUSERS_MANAGED`, `RestartDisabled`, `ShutDownDisabled`, `SleepDisabled`,
@@ -77,6 +83,121 @@ pub struct LoginConfig {
     /// The groups whose members are administrators; `None` takes [`DEFAULT_ADMIN_GROUPS`]. The manager refuses the key
     /// unless the file is root-owned and writable by no one else.
     pub admin_groups: Option<Vec<String>>,
+    /// What the login and lock screens show.
+    pub screens: ScreenSettings,
+}
+
+/// The longest lock message, in characters.
+pub const MAX_LOCK_MESSAGE_CHARS: usize = 200;
+
+/// What a status item of the login screen says about the machine.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HostInfo {
+    Hostname,
+    Version,
+    Ip,
+}
+
+/// The settings of `login.conf` the login and lock screens follow.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScreenSettings {
+    pub lock_message: Option<String>,
+    pub show_full_name: bool,
+    pub host_info: Option<HostInfo>,
+    pub show_input_menu: bool,
+    pub hide_user_avatar_and_name: bool,
+    pub large_clock: bool,
+}
+
+impl Default for ScreenSettings {
+    fn default() -> Self {
+        ScreenSettings {
+            lock_message: None,
+            show_full_name: false,
+            host_info: None,
+            show_input_menu: false,
+            hide_user_avatar_and_name: false,
+            large_clock: true,
+        }
+    }
+}
+
+impl ScreenSettings {
+    /// The screens' settings of a settings file's text, every other key and every bad line left out: the screens read
+    /// the file the manager reads, and follow what they understand of it.
+    pub fn parse(text: &str) -> ScreenSettings {
+        let mut settings = ScreenSettings::default();
+        for raw in text.lines() {
+            let line = raw.split('#').next().unwrap_or("").trim();
+            if let Some((key, value)) = line.split_once('=') {
+                let _ = settings.apply(key.trim(), value.trim());
+            }
+        }
+        settings
+    }
+
+    /// The screens' settings of the settings file ([`LoginConfig::path`]); the defaults when it cannot be read.
+    pub fn load() -> ScreenSettings {
+        std::fs::read_to_string(LoginConfig::path())
+            .map(|text| ScreenSettings::parse(&text))
+            .unwrap_or_default()
+    }
+
+    /// Take `key = value` when it is one of the screens' keys: `None` for another key.
+    fn apply(&mut self, key: &str, value: &str) -> Option<Result<(), String>> {
+        let applied = match key {
+            "lock-message" => lock_message(key, value).map(|m| self.lock_message = m),
+            "show-full-name" => flag(key, value).map(|v| self.show_full_name = v),
+            "host-info" => host_info(key, value).map(|v| self.host_info = Some(v)),
+            "show-input-menu" => flag(key, value).map(|v| self.show_input_menu = v),
+            "hide-user-avatar-and-name" => {
+                flag(key, value).map(|v| self.hide_user_avatar_and_name = v)
+            }
+            "large-clock" => flag(key, value).map(|v| self.large_clock = v),
+            _ => return None,
+        };
+        Some(applied)
+    }
+
+    /// The safe value of `key`, whose line was bad.
+    fn fail_closed(&mut self, key: &str) {
+        let safe = ScreenSettings::default();
+        match key {
+            "lock-message" => self.lock_message = safe.lock_message,
+            "show-full-name" => self.show_full_name = safe.show_full_name,
+            "host-info" => self.host_info = safe.host_info,
+            "show-input-menu" => self.show_input_menu = safe.show_input_menu,
+            "hide-user-avatar-and-name" => {
+                self.hide_user_avatar_and_name = safe.hide_user_avatar_and_name
+            }
+            "large-clock" => self.large_clock = safe.large_clock,
+            _ => {}
+        }
+    }
+}
+
+/// A lock message: printable text of at most [`MAX_LOCK_MESSAGE_CHARS`] characters; empty is none.
+fn lock_message(key: &str, value: &str) -> Result<Option<String>, String> {
+    if value.chars().any(char::is_control) {
+        return Err(format!("{key}: control characters are not allowed"));
+    }
+    if value.chars().count() > MAX_LOCK_MESSAGE_CHARS {
+        return Err(format!(
+            "{key}: at most {MAX_LOCK_MESSAGE_CHARS} characters"
+        ));
+    }
+    Ok((!value.is_empty()).then(|| value.to_owned()))
+}
+
+fn host_info(key: &str, value: &str) -> Result<HostInfo, String> {
+    match value {
+        "hostname" => Ok(HostInfo::Hostname),
+        "version" => Ok(HostInfo::Version),
+        "ip" => Ok(HostInfo::Ip),
+        _ => Err(format!(
+            "{key}: expected hostname, version or ip, got {value:?}"
+        )),
+    }
 }
 
 /// A line that was not understood, as `(line number, message)`; a missing required key is line 0.
@@ -125,6 +246,7 @@ impl LoginConfig {
             retries_until_hint: 0,
             auto_login: None,
             admin_groups: None,
+            screens: ScreenSettings::default(),
         };
         let mut problems = Vec::new();
         let mut bad_keys = Vec::new();
@@ -194,7 +316,7 @@ impl LoginConfig {
             "sleep-disabled" => self.sleep_disabled = Some(true),
             "power-off-disabled" => self.power_off_disabled = Some(true),
             "retries-until-hint" => self.retries_until_hint = 0,
-            _ => {}
+            other => self.screens.fail_closed(other),
         }
     }
 
@@ -228,7 +350,12 @@ impl LoginConfig {
                     format!("{key}: expected a number of failed attempts, got {value:?}")
                 })?
             }
-            other => return Err(format!("unknown setting {other:?}")),
+            other => {
+                return self
+                    .screens
+                    .apply(other, value)
+                    .unwrap_or_else(|| Err(format!("unknown setting {other:?}")))
+            }
         }
         Ok(())
     }
@@ -310,6 +437,43 @@ mod tests {
 
     const REQUIRED: &str =
         "greeter-command = /usr/local/bin/greeter --a\nsession-command = /usr/local/bin/session\n";
+
+    #[test]
+    fn the_screen_keys_are_read_by_the_manager_and_by_the_screens() {
+        let keys = "lock-message = Property of the lab. Call 555-0100.\nshow-full-name = true\nhost-info = ip\nshow-input-menu = true\nhide-user-avatar-and-name = true\nlarge-clock = false\n";
+        let loaded = LoginConfig::parse(&format!("{REQUIRED}{keys}")).unwrap();
+        assert!(loaded.problems.is_empty(), "{:?}", loaded.problems);
+        let expected = ScreenSettings {
+            lock_message: Some("Property of the lab. Call 555-0100.".into()),
+            show_full_name: true,
+            host_info: Some(HostInfo::Ip),
+            show_input_menu: true,
+            hide_user_avatar_and_name: true,
+            large_clock: false,
+        };
+        assert_eq!(loaded.config.screens, expected);
+        // the screens read the same file without the manager's keys, and skip what they do not know
+        assert_eq!(
+            ScreenSettings::parse(&format!("vt = 2\nunknown = 1\n{keys}")),
+            expected
+        );
+        assert_eq!(ScreenSettings::parse(""), ScreenSettings::default());
+        assert!(ScreenSettings::default().large_clock);
+    }
+
+    #[test]
+    fn a_bad_screen_key_takes_its_safe_value_and_is_reported() {
+        let long = "x".repeat(MAX_LOCK_MESSAGE_CHARS + 1);
+        let text = format!(
+            "{REQUIRED}host-info = everything\nlarge-clock = maybe\nlock-message = {long}\nshow-full-name = yes\n"
+        );
+        let loaded = LoginConfig::parse(&text).unwrap();
+        assert_eq!(loaded.problems.len(), 4, "{:?}", loaded.problems);
+        assert_eq!(loaded.config.screens, ScreenSettings::default());
+        // an empty message is none
+        let none = ScreenSettings::parse("lock-message =\n");
+        assert_eq!(none.lock_message, None);
+    }
 
     #[test]
     fn the_required_commands_alone_give_the_defaults() {

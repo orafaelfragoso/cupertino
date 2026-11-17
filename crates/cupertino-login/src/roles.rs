@@ -44,7 +44,12 @@ pub enum Heard {
         explicit: bool,
     },
     LogOutRequested,
-    ReduceMotion(bool),
+    /// The session's display options: Reduce Motion, Increase Contrast and Reduce Transparency.
+    Display {
+        reduce_motion: bool,
+        increase_contrast: bool,
+        reduce_transparency: bool,
+    },
     /// The session's appearance is dark (`true`) or light.
     Appearance(bool),
     /// The session lock cannot be taken: the server lacks the protocol.
@@ -292,9 +297,11 @@ impl SurfaceRoles for LoginRoles {
             self.send(Heard::DesktopControl(control.clone()));
         }
         match self.session.as_mut().and_then(|s| s.apply(event)) {
-            Some(SessionChange::DisplayOptions(options)) => {
-                self.send(Heard::ReduceMotion(options.reduce_motion))
-            }
+            Some(SessionChange::DisplayOptions(options)) => self.send(Heard::Display {
+                reduce_motion: options.reduce_motion,
+                increase_contrast: options.increase_contrast,
+                reduce_transparency: options.reduce_transparency,
+            }),
             Some(SessionChange::Appearance { dark }) => self.send(Heard::Appearance(dark)),
             _ => {}
         }

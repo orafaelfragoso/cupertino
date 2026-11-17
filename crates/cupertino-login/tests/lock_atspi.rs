@@ -35,7 +35,8 @@ use cupertino_kit::theme::{Appearance, ThemePreferences, ThemeTokens};
 use cupertino_login::model::{AuthOutcome, LockScreen};
 use cupertino_login::user::User;
 use cupertino_login::view::{
-    self, Clock, Field, Input, Metrics, Screen, DENIED, LOCKED_TITLE, LOCK_APP_ID, PASSWORD_LABEL,
+    self, Access, Clock, Field, Input, Metrics, Screen, DENIED, LOCKED_TITLE, LOCK_APP_ID,
+    PASSWORD_LABEL,
 };
 use cupertino_login::wallpaper::Source;
 use cupertino_test_bus::PrivateBus;
@@ -201,6 +202,13 @@ impl Application for Locker {
                 block: 1.0,
                 shake: 0.0,
                 hidden: false,
+                lock_message: None,
+                back: false,
+                locked: false,
+                hide_user: false,
+                access: Access::default(),
+                large_clock: true,
+                avatar_from: None,
                 power: None,
                 notices: &[],
                 wallpaper: &Source::Plain,

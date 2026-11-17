@@ -31,8 +31,8 @@ use cupertino_login::picker::{self, Picker};
 use cupertino_login::power::{Action, Menu};
 use cupertino_login::user::User;
 use cupertino_login::view::{
-    self, Clock, Field, Input, Metrics, PickerScreen, Screen, GREETER_APP_ID, GREETER_TITLE,
-    LOCKED_TITLE, LOCK_APP_ID,
+    self, Access, Clock, Field, Input, Metrics, PickerScreen, Screen, GREETER_APP_ID,
+    GREETER_TITLE, LOCKED_TITLE, LOCK_APP_ID,
 };
 use cupertino_login::wallpaper::Source;
 use cupertino_theme::Theme;
@@ -166,6 +166,9 @@ impl Application for Shown {
                     clock: &model.clock,
                     picker: &model.picker,
                     max_per_page: picker::max_per_page(size.width, size.height),
+                    rtl: false,
+                    large_clock: true,
+                    avatar_from: None,
                     power,
                     opacity: 1.0,
                     block: 1.0,
@@ -197,6 +200,13 @@ impl Application for Shown {
                     block: 1.0,
                     shake: 0.0,
                     hidden: false,
+                    lock_message: None,
+                    back: false,
+                    locked: false,
+                    hide_user: false,
+                    access: Access::default(),
+                    large_clock: true,
+                    avatar_from: None,
                     power,
                     notices: &[],
                     wallpaper: &model.wallpaper,

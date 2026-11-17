@@ -46,15 +46,15 @@ const PLAIN_GLOWS: [([f32; 2], f32, [f32; 3]); 2] = [
 const GLOW_STRENGTH: f32 = 0.85;
 
 /// The control material under the password field and its buttons: the blur's radius, points; how much it saturates
-/// what it blurs; the grey laid over it and that grey's alpha; the grey it is lightened to at least; and the alpha of
-/// the white laid over last, which keeps it a little lighter than a dark picture so the field reads there too
-/// (approximate).
+/// what it blurs; the grey laid over it and that grey's alpha; how far the result is drawn toward the mean colour of
+/// the picture under the control, so the material takes a trace of its surroundings; and the grey it is lightened to
+/// at least.
 pub const MATERIAL_BLUR: f64 = 30.0;
 pub const MATERIAL_SATURATION: f32 = 1.6;
 pub const MATERIAL_FILL: f32 = 0.1569;
 pub const MATERIAL_FILL_ALPHA: f32 = 0.4;
+pub const MATERIAL_SURROUND: f32 = 0.05;
 pub const MATERIAL_TONE: f32 = 0.08;
-pub const MATERIAL_LIFT: f32 = 0.12;
 
 /// The most pixels a decoded picture may have a side, and in all.
 pub const MAX_SIDE: u32 = 8192;
@@ -663,8 +663,9 @@ pub fn box_radii(sigma: f64) -> [usize; 3] {
 
 /// The control material over `region` (device pixels `[x0, y0, x1, y1]`) of the fully dimmed picture of `source` on a
 /// screen of `width` x `height` device pixels at `scale`: the picture blurred by [`MATERIAL_BLUR`] points, saturated by
-/// [`MATERIAL_SATURATION`], [`MATERIAL_FILL`] grey laid over at [`MATERIAL_FILL_ALPHA`], lightened to at least
-/// [`MATERIAL_TONE`] and white laid over at [`MATERIAL_LIFT`]. Opaque premultiplied RGBA of the region, dithered; empty for an empty region.
+/// [`MATERIAL_SATURATION`], [`MATERIAL_FILL`] grey laid over at [`MATERIAL_FILL_ALPHA`], drawn toward the region's
+/// mean blurred colour by [`MATERIAL_SURROUND`] and lightened to at least [`MATERIAL_TONE`]. Opaque premultiplied RGBA
+/// of the region, dithered; empty for an empty region.
 pub fn frosted(source: &Source, width: u32, height: u32, scale: f64, region: [u32; 4]) -> Vec<u8> {
     let Some((blurred, [x0, y0, x1, _])) =
         blurred(source, width, height, scale, region, MATERIAL_BLUR)
@@ -672,10 +673,11 @@ pub fn frosted(source: &Source, width: u32, height: u32, scale: f64, region: [u3
         return Vec::new();
     };
     let rw = (x1 - x0) as usize;
+    let surround = mean(&blurred);
     let mut out = vec![0u8; blurred.len() * 4];
     for (j, line) in out.chunks_mut(rw * 4).enumerate() {
         for (i, px) in line.as_chunks_mut::<4>().0.iter_mut().enumerate() {
-            let c = material(blurred[j * rw + i]);
+            let c = material(blurred[j * rw + i], surround);
             let (x, y) = (x0 + i as u32, y0 + j as u32);
             for k in 0..3 {
                 px[k] = dither::store(c[k], x, y);
@@ -824,17 +826,34 @@ pub fn glass_text(c: [f32; 3]) -> [f32; 3] {
     c.map(|v| v + (1.0 - v) * GLASS_TEXT_WHITE)
 }
 
-/// The control material's colour over the blurred colour `c` (0 to 1): saturated, the grey laid over, lightened, the
-/// white laid over: darker than a light picture, lighter than a dark one.
-pub fn material(c: [f32; 3]) -> [f32; 3] {
+/// The mean of `colours`; black for none.
+fn mean(colours: &[[f32; 3]]) -> [f32; 3] {
+    if colours.is_empty() {
+        return [0.0; 3];
+    }
+    let mut sum = [0.0f64; 3];
+    for c in colours {
+        for k in 0..3 {
+            sum[k] += f64::from(c[k]);
+        }
+    }
+    sum.map(|v| (v / colours.len() as f64) as f32)
+}
+
+/// The control material's colour over the blurred colour `c` (0 to 1) of a picture whose mean colour under the
+/// control is `surround`: saturated, the grey laid over, drawn a little toward `surround`, lightened to the tone:
+/// darker than a light picture and never black.
+pub fn material(c: [f32; 3], surround: [f32; 3]) -> [f32; 3] {
     // Rec. 709 luma keeps its brightness as the colour moves away from grey
     let luma = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
-    c.map(|v| {
-        let saturated = (luma + (v - luma) * MATERIAL_SATURATION).clamp(0.0, 1.0);
+    let mut out = [0.0; 3];
+    for k in 0..3 {
+        let saturated = (luma + (c[k] - luma) * MATERIAL_SATURATION).clamp(0.0, 1.0);
         let filled = saturated + (MATERIAL_FILL - saturated) * MATERIAL_FILL_ALPHA;
-        let toned = filled.max(MATERIAL_TONE);
-        toned + (1.0 - toned) * MATERIAL_LIFT
-    })
+        let surrounded = filled + (surround[k] - filled) * MATERIAL_SURROUND;
+        out[k] = surrounded.max(MATERIAL_TONE);
+    }
+    out
 }
 
 /// The largest picture file [`decode`] reads.
@@ -933,11 +952,15 @@ impl Stamp {
 /// How many of the users' pictures the login screen keeps decoded.
 const KEPT_USERS: usize = 4;
 
+/// The solid colour the login screen stands on where a user has no wallpaper or it does not decode: the deep blue the
+/// desktop's own fallback starts from (approximate).
+pub const LOGIN_FALLBACK: [u8; 3] = [18, 23, 51];
+
 /// The login screen's users' wallpapers, decoded off the screen's thread as each user is selected and kept for a few
 /// users: each file once, again when it changes.
 #[derive(Debug, Default)]
 pub struct Pictures {
-    /// Most recently used last; a file that did not decode is kept as the drawn fallback, so it is not read again.
+    /// Most recently used last; a file that did not decode is kept as the fallback colour, so it is not read again.
     kept: Vec<(std::path::PathBuf, Stamp, Source)>,
     reading: Option<(std::path::PathBuf, Stamp)>,
 }
@@ -954,13 +977,13 @@ pub enum Want {
 }
 
 impl Pictures {
-    /// The wallpaper at `path` (`None`: the user has none, the screen shows the drawn fallback).
+    /// The wallpaper at `path` (`None`: the user has none, the screen shows [`LOGIN_FALLBACK`]).
     pub fn want(&mut self, path: Option<&std::path::Path>) -> Want {
         let Some(path) = path else {
-            return Want::Ready(Source::Plain);
+            return Want::Ready(Source::Solid(LOGIN_FALLBACK));
         };
         let Some(stamp) = Stamp::of(path) else {
-            return Want::Ready(Source::Plain);
+            return Want::Ready(Source::Solid(LOGIN_FALLBACK));
         };
         if let Some(i) = self
             .kept
@@ -1001,7 +1024,7 @@ impl Pictures {
             Ok(picture) => Source::Picture(Arc::new(picture)),
             Err(e) => {
                 eprintln!("cupertino-login: a login screen wallpaper: {e}");
-                Source::Plain
+                Source::Solid(LOGIN_FALLBACK)
             }
         };
         self.kept.retain(|(p, _, _)| *p != path);
@@ -1275,10 +1298,14 @@ mod tests {
         };
         write(3);
         let mut pictures = Pictures::default();
-        assert!(matches!(pictures.want(None), Want::Ready(Source::Plain)));
+        // no wallpaper, or none there: the solid fallback colour, not the drawn gradient
+        assert!(matches!(
+            pictures.want(None),
+            Want::Ready(Source::Solid(LOGIN_FALLBACK))
+        ));
         assert!(matches!(
             pictures.want(Some(&dir.path().join("none.jpg"))),
-            Want::Ready(Source::Plain)
+            Want::Ready(Source::Solid(LOGIN_FALLBACK))
         ));
         let Want::Read(file, stamp) = pictures.want(Some(&path)) else {
             panic!("the file is read");
@@ -1305,7 +1332,7 @@ mod tests {
         pictures.read(file.clone(), stamp, decode(&file, MAX_FILE_BYTES));
         assert!(matches!(
             pictures.want(Some(&path)),
-            Want::Ready(Source::Plain)
+            Want::Ready(Source::Solid(LOGIN_FALLBACK))
         ));
     }
 
@@ -1322,31 +1349,50 @@ mod tests {
 
     #[test]
     fn the_material_saturates_greys_toward_its_fill_and_never_goes_below_its_tone() {
-        let lift = |v: f32| f64::from(v + (1.0 - v) * MATERIAL_LIFT);
-        // black is lightened to the tone after the fill (0.4 of the fill grey is 0.063, below the tone), then lifted
-        let black = material([0.0; 3]);
-        approx(f64::from(black[0]), lift(MATERIAL_TONE));
-        // a grey stays grey, pulled toward the fill and lifted
-        let grey = material([0.5; 3]);
-        approx(f64::from(grey[0]), lift(0.5 + (MATERIAL_FILL - 0.5) * 0.4));
+        // black is lightened to the tone after the fill (0.4 of the fill grey is 0.063, below the tone)
+        let black = material([0.0; 3], [0.0; 3]);
+        approx(f64::from(black[0]), f64::from(MATERIAL_TONE));
+        // a grey stays grey, pulled toward the fill
+        let grey = material([0.5; 3], [0.5; 3]);
+        let filled = 0.5 + (MATERIAL_FILL - 0.5) * 0.4;
+        approx(
+            f64::from(grey[0]),
+            f64::from(filled + (0.5 - filled) * 0.05),
+        );
         approx(f64::from(grey[0]), f64::from(grey[2]));
         // a colour moves further from grey
-        let red = material([0.6, 0.4, 0.4]);
-        assert!(
-            red[0] - red[1] > (0.6 - 0.4) * (1.0 - MATERIAL_FILL_ALPHA) * (1.0 - MATERIAL_LIFT)
-        );
+        let red = material([0.6, 0.4, 0.4], [0.5; 3]);
+        assert!(red[0] - red[1] > (0.6 - 0.4) * (1.0 - MATERIAL_FILL_ALPHA) * 0.95);
     }
 
     #[test]
-    fn the_material_is_lighter_than_a_dark_picture_and_darker_than_a_light_one() {
-        // a dark picture: the field stands out from it by a clear step, not a level or two
-        for dark in [0.0, 0.03, 0.06, 0.1] {
-            let on = material([dark; 3])[0];
-            assert!(on - dark > 0.08, "{dark}: {on}");
+    fn the_material_takes_a_twentieth_of_the_mean_colour_around_it() {
+        // the same grey under the control, on a red picture and on a grey one of the same brightness
+        let on_red = material([0.4; 3], [0.8, 0.2, 0.2]);
+        let on_grey = material([0.4; 3], [0.4; 3]);
+        approx(
+            f64::from(on_red[0] - on_grey[0]),
+            f64::from(0.05f32 * (0.8 - 0.4)),
+        );
+        approx(
+            f64::from(on_red[1] - on_grey[1]),
+            f64::from(0.05f32 * (0.2 - 0.4)),
+        );
+        // the mean is over the region
+        let m = mean(&[[0.0, 0.2, 1.0], [1.0, 0.4, 0.0]]);
+        approx(f64::from(m[0]), 0.5);
+        approx(f64::from(m[1]), 0.3);
+        assert_eq!(mean(&[]), [0.0; 3]);
+    }
+
+    #[test]
+    fn the_material_is_darker_than_a_light_picture_and_never_black() {
+        for dark in [0.0, 0.03, 0.06] {
+            let on = material([dark; 3], [dark; 3])[0];
+            assert!(on >= MATERIAL_TONE, "{dark}: {on}");
         }
-        // a light picture: the field is darker
         for light in [0.6, 0.75, 0.9] {
-            let on = material([light; 3])[0];
+            let on = material([light; 3], [light; 3])[0];
             assert!(light - on > 0.08, "{light}: {on}");
         }
     }

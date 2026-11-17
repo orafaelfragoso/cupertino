@@ -12,6 +12,7 @@
 use crate::options::SessionOptions;
 use crate::roles::{self, Heard, LockWish, LoginRoles};
 use crate::screen::{self, Result, Timer, FRAME};
+use cupertino_defaults::login::ScreenSettings;
 use cupertino_kit::core::{Application, Command, Key, Window, WindowKey};
 use cupertino_kit::geometry::Size;
 use cupertino_kit::text::TextSystem;
@@ -35,8 +36,8 @@ use cupertino_login::probe;
 use cupertino_login::restore::{self, Applications, SessionMark, Taken};
 use cupertino_login::user::User;
 use cupertino_login::view::{
-    self, Clock, ControlChoice, ControlRequest, Field, Input, Metrics, RequestingApp, Screen,
-    LOCKED_TITLE, LOCK_APP_ID,
+    self, Access, Clock, ControlChoice, ControlRequest, Field, Input, Metrics, RequestingApp,
+    Screen, LOCKED_TITLE, LOCK_APP_ID,
 };
 use cupertino_login::wallpaper::{self, Source};
 use cupertino_login::{session, upower};
@@ -165,6 +166,12 @@ pub struct SessionApp {
     _idle: Option<IdleWatch>,
     /// The session asks for reduced motion: the lock screen follows it.
     reduce_motion: bool,
+    /// The display options the field and its buttons follow.
+    access: Access,
+    /// What `login.conf` says the screens show.
+    settings: ScreenSettings,
+    /// The clock's hour cycle: the session's.
+    hours: cupertino_defaults::menubar::HourCycle,
     /// The session's appearance is dark: the lock screen stands on its dark wallpaper.
     dark: bool,
     /// The number of the last lock taken.
@@ -417,6 +424,12 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
             _session: session,
             _idle: idle,
             reduce_motion: session_state.display.reduce_motion,
+            access: Access {
+                increase_contrast: session_state.display.increase_contrast,
+                reduce_transparency: session_state.display.reduce_transparency,
+            },
+            settings: ScreenSettings::load(),
+            hours: screen::session_hour_cycle(),
             dark: session_state.dark,
             locks: 0,
             bus_sender,
@@ -700,7 +713,8 @@ impl Application for SessionApp {
                         user: Some(&app.user),
                         field: Field::Password {
                             generation: screen.field(),
-                            enabled: screen.phase() != Phase::Unlocking,
+                            // nothing is typed while an attempt is checked
+                            enabled: screen.phase() != Phase::Unlocking && !screen.checking(),
                             busy: screen.checking(),
                         },
                         typed: screen.typed(),
@@ -715,6 +729,13 @@ impl Application for SessionApp {
                         block: 1.0,
                         shake: screen.shake(now),
                         hidden: screen.hidden(),
+                        lock_message: app.settings.lock_message.as_deref(),
+                        back: false,
+                        locked: false,
+                        hide_user: app.settings.hide_user_avatar_and_name,
+                        access: app.access,
+                        large_clock: app.settings.large_clock,
+                        avatar_from: None,
                         power: None,
                         notices: &app.lock_notices,
                         wallpaper,
@@ -890,10 +911,18 @@ impl SessionApp {
             // this process is the one that holds the lock
             Heard::LockRequested { explicit } => self.request_lock(now, explicit)?,
             Heard::LogOutRequested => self.show_panel(now, Kind::LogOut)?,
-            Heard::ReduceMotion(on) => {
-                self.reduce_motion = on;
+            Heard::Display {
+                reduce_motion,
+                increase_contrast,
+                reduce_transparency,
+            } => {
+                self.reduce_motion = reduce_motion;
+                self.access = Access {
+                    increase_contrast,
+                    reduce_transparency,
+                };
                 if let Some(lock) = &mut self.lock {
-                    lock.screen.set_reduce_motion(on);
+                    lock.screen.set_reduce_motion(reduce_motion);
                 }
             }
             Heard::Appearance(dark) => {
@@ -1017,7 +1046,7 @@ impl SessionApp {
         let Some(lock) = &mut self.lock else {
             return Ok(());
         };
-        self.clock = screen::clock()?;
+        self.clock = screen::clock(self.hours)?;
         match lock.answer {
             Some(false) => return Err("the server refused or ended the session lock".into()),
             Some(true) if !lock.confirmed => {
@@ -1158,7 +1187,7 @@ impl SessionApp {
         });
         self.read_wallpaper(self.locks);
         self.wish.borrow_mut().wanted = true;
-        self.clock = screen::clock()?;
+        self.clock = screen::clock(self.hours)?;
         self.control.set_locked(true)?;
         Ok(())
     }

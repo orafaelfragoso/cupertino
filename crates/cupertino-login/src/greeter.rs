@@ -11,6 +11,7 @@
 use crate::app::listen;
 use crate::roles::{self, Heard, LockWish, LoginRoles};
 use crate::screen::{self, Result, Timer, FRAME};
+use cupertino_defaults::login::ScreenSettings;
 use cupertino_kit::core::{Application, Command, Key, Window, WindowKey};
 use cupertino_kit::geometry::Size;
 use cupertino_login::hint::FailedAttempts;
@@ -20,7 +21,7 @@ use cupertino_login::picker::{self, NameEntry, Picker, Tile};
 use cupertino_login::power::{Action, Menu};
 use cupertino_login::user::User;
 use cupertino_login::view::{
-    self, Clock, Field, Input, Metrics, PickerScreen, Screen, GREETER_APP_ID, GREETER_TITLE,
+    self, Access, Clock, Field, Input, Metrics, PickerScreen, Screen, GREETER_APP_ID, GREETER_TITLE,
 };
 use cupertino_login::wallpaper::{self, Pictures, Source, Stamp, Want};
 use cupertino_login_ipc::{
@@ -54,7 +55,7 @@ enum Stage {
     /// A name is typed for the "Other…" tile.
     Naming(NameEntry),
     /// The password of `user`.
-    Password { user: User, screen: LockScreen },
+    Password { user: User, screen: Box<LockScreen> },
 }
 
 #[derive(Clone, Debug)]
@@ -116,6 +117,16 @@ pub struct GreeterApp {
     /// switched; `None`: at once, for a fixed test clock.
     shown: Option<f64>,
     switched: Option<f64>,
+    /// What `login.conf` says the screens show.
+    settings: ScreenSettings,
+    /// The display options chosen on the accessibility item.
+    access: Access,
+    /// The screen's language reads right to left.
+    rtl: bool,
+    /// The account the manager said is locked, while its password screen shows.
+    locked: Option<String>,
+    /// The clock's hour cycle: the locale's.
+    hours: cupertino_defaults::menubar::HourCycle,
 }
 
 /// The users' wallpapers by user id in `rows`.
@@ -353,7 +364,8 @@ pub fn run() -> Result<std::convert::Infallible> {
             outputs,
             caps_lock: false,
             metrics: Metrics::of(&runtime.text),
-            clock: screen::clock().unwrap_or_default(),
+            clock: screen::clock(cupertino_login::user::locale_hour_cycle()).unwrap_or_default(),
+            hours: cupertino_login::user::locale_hour_cycle(),
             picker,
             show_other: welcome.show_other,
             stage: Stage::Picking,
@@ -365,10 +377,14 @@ pub fn run() -> Result<std::convert::Infallible> {
             help_open: false,
             wallpapers: wallpapers(&welcome.users),
             pictures: Pictures::default(),
-            wallpaper: Source::Plain,
+            wallpaper: Source::Solid(cupertino_login::wallpaper::LOGIN_FALLBACK),
             sender: wallpaper_sender,
             shown: (!cupertino_shell_client::test_clock::motion_settled()).then_some(0.0),
             switched: None,
+            settings: ScreenSettings::load(),
+            access: Access::default(),
+            rtl: cupertino_login::user::locale_is_rtl(),
+            locked: None,
         };
         let commands = vec![
             listen(
@@ -447,7 +463,7 @@ impl Application for GreeterApp {
             if let Stage::Password { screen, .. } = &mut app.stage {
                 screen.tick(now);
             }
-            app.clock = screen::clock()?;
+            app.clock = screen::clock(app.hours)?;
             app.follow_wallpaper();
             Ok(())
         });
@@ -469,6 +485,18 @@ impl Application for GreeterApp {
         let mut windows = Vec::new();
         let dim = app.shown.map_or(1.0, |at| wallpaper::dimming_at(now - at));
         let block = app.switched.map_or(1.0, |at| picker::switched(now - at));
+        // the chosen tile's avatar moves between its row and the password screen during the switch
+        let moving = block < 1.0;
+        let tile_avatar = |size| {
+            view::tile_avatar(
+                size,
+                app.metrics,
+                &app.picker,
+                app.max_per_page(),
+                app.rtl,
+                app.picker.selected_index(),
+            )
+        };
         for &(output, size) in &app.outputs {
             let key = WindowKey(Key::from(format!("greeter-{output}")));
             let content = match &app.stage {
@@ -479,6 +507,14 @@ impl Application for GreeterApp {
                         clock: &app.clock,
                         picker: &app.picker,
                         max_per_page: app.max_per_page(),
+                        rtl: app.rtl,
+                        large_clock: app.settings.large_clock,
+                        avatar_from: moving.then(|| {
+                            (
+                                app.picker.selected_index(),
+                                view::user_avatar(size, app.metrics),
+                            )
+                        }),
                         power: app.power.as_ref(),
                         opacity: 1.0,
                         block,
@@ -509,6 +545,13 @@ impl Application for GreeterApp {
                         block,
                         shake: 0.0,
                         hidden: false,
+                        lock_message: app.settings.lock_message.as_deref(),
+                        back: true,
+                        locked: false,
+                        hide_user: false,
+                        access: app.access,
+                        large_clock: app.settings.large_clock,
+                        avatar_from: moving.then(|| tile_avatar(size)).flatten(),
                         power: app.power.as_ref(),
                         notices: &[],
                         wallpaper: &app.wallpaper,
@@ -525,7 +568,9 @@ impl Application for GreeterApp {
                         user: Some(user),
                         field: Field::Password {
                             generation: screen.field(),
-                            enabled: !matches!(screen.phase(), Phase::Unlocking | Phase::Unlocked),
+                            // nothing is typed while an attempt is checked
+                            enabled: !matches!(screen.phase(), Phase::Unlocking | Phase::Unlocked)
+                                && !screen.checking(),
                             busy: screen.checking(),
                         },
                         typed: screen.typed(),
@@ -541,6 +586,13 @@ impl Application for GreeterApp {
                         block,
                         shake: screen.shake(now),
                         hidden: screen.hidden(),
+                        lock_message: app.settings.lock_message.as_deref(),
+                        back: true,
+                        locked: app.locked.as_deref() == Some(user.login.as_str()),
+                        hide_user: app.settings.hide_user_avatar_and_name,
+                        access: app.access,
+                        large_clock: app.settings.large_clock,
+                        avatar_from: moving.then(|| tile_avatar(size)).flatten(),
                         power: app.power.as_ref(),
                         notices: &[],
                         wallpaper: &app.wallpaper,
@@ -694,6 +746,7 @@ impl GreeterApp {
         }
         match (&mut self.stage, input) {
             (Stage::Picking, Input::Select(index)) => self.picker.select(index),
+            (Stage::Picking, Input::Focused(index)) => self.picker.focus(index),
             (Stage::Picking, Input::Choose(index)) => {
                 self.picker.select(index);
                 self.choose(now);
@@ -701,6 +754,11 @@ impl GreeterApp {
             (Stage::Picking, Input::Step(direction)) => {
                 let max_per_page = self.max_per_page();
                 self.picker.step(direction, max_per_page);
+                commands.push(Command::Focus(view::tile_key(self.picker.selected_index())));
+            }
+            (Stage::Picking, Input::Jump(jump)) => {
+                let max_per_page = self.max_per_page();
+                self.picker.jump(jump, max_per_page);
                 commands.push(Command::Focus(view::tile_key(self.picker.selected_index())));
             }
             (Stage::Naming(entry), Input::Name(change)) => entry.set(&change.text),
@@ -714,7 +772,7 @@ impl GreeterApp {
                         now,
                         Stage::Password {
                             user: User::typed(name),
-                            screen,
+                            screen: Box::new(screen),
                         },
                     );
                 }
@@ -798,7 +856,7 @@ impl GreeterApp {
                 }
                 Stage::Password {
                     user: user.clone(),
-                    screen,
+                    screen: Box::new(screen),
                 }
             }
             Tile::Other => Stage::Naming(NameEntry::default()),
@@ -914,6 +972,9 @@ impl GreeterApp {
                     eprintln!("cupertino-login: authentication failed");
                     screen.finish_auth(now, AuthOutcome::Denied)?;
                 } else {
+                    if outcome == Outcome::Locked {
+                        self.locked = Some(user.login.clone());
+                    }
                     let reason = refusal_text(outcome, screen.notice());
                     eprintln!("cupertino-login: authentication error: {reason}");
                     screen.finish_auth(now, AuthOutcome::Error(reason))?;

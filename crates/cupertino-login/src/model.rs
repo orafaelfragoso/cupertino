@@ -162,6 +162,8 @@ pub struct LockScreen {
     failure_outline: bool,
     /// The session asks for reduced motion: the field does not shake.
     reduce_motion: bool,
+    /// When the last shake started: a denial while it plays does not start it again.
+    shake_since: Option<f64>,
 }
 
 impl LockScreen {
@@ -183,6 +185,7 @@ impl LockScreen {
             hide_after,
             failure_outline: false,
             reduce_motion: false,
+            shake_since: None,
         }
     }
 
@@ -273,12 +276,19 @@ impl LockScreen {
         }
     }
 
-    /// Horizontal offset of the password field in points at `now`; always 0 under Reduce Motion.
+    /// Horizontal offset of the password group in points at `now`: the shake of the last denial, which plays to its
+    /// end whatever comes meanwhile; always 0 under Reduce Motion.
     pub fn shake(&self, now: f64) -> f64 {
-        match self.phase {
-            Phase::Failed { since } if !self.reduce_motion => shake_offset(now - since),
+        match self.shake_since {
+            Some(since) if !self.reduce_motion => shake_offset(now - since),
             _ => 0.0,
         }
+    }
+
+    /// Whether a shake plays at `now`.
+    fn shaking(&self, now: f64) -> bool {
+        self.shake_since
+            .is_some_and(|since| (0.0..SHAKE_DURATION).contains(&(now - since)))
     }
 
     /// Whether the interface is on its way to hidden or hidden: the next key only shows it again.
@@ -286,14 +296,11 @@ impl LockScreen {
         self.interface.to == 0.0 && self.phase != Phase::Unlocking
     }
 
-    /// Whether the field takes edits now: while waiting, during an attempt and during the shake (it was emptied on
-    /// submit, and a retry is typed straight away), never while the interface is hidden or the screen unlocks.
+    /// Whether the field takes edits now: while waiting and during the shake (it was emptied on submit, and a retry
+    /// is typed straight away); never while an attempt is checked, while the interface is hidden or as the screen
+    /// unlocks.
     pub fn editable(&self) -> bool {
-        !self.hidden()
-            && matches!(
-                self.phase,
-                Phase::Locked | Phase::Authenticating { .. } | Phase::Failed { .. }
-            )
+        !self.hidden() && matches!(self.phase, Phase::Locked | Phase::Failed { .. })
     }
 
     /// Note input: it shows a hidden interface and restarts the idle time. The key or click that shows a hidden
@@ -376,6 +383,10 @@ impl LockScreen {
                 self.interface.retarget(now, 0.0);
             }
             AuthOutcome::Denied => {
+                // a shake still playing goes on as it is
+                if !self.shaking(now) {
+                    self.shake_since = Some(now);
+                }
                 self.phase = Phase::Failed { since: now };
                 self.failure_outline = true;
                 self.denied_said = true;
@@ -445,6 +456,9 @@ impl LockScreen {
         let deadlines = [
             said,
             (!self.interface.settled(now)).then_some(fade_end),
+            self.shaking(now)
+                .then(|| self.shake_since.map(|since| since + SHAKE_DURATION))
+                .flatten(),
             match self.phase {
                 Phase::Failed { since } => Some(since + SHAKE_DURATION),
                 Phase::Locked if !self.hidden() => Some(self.last_input + self.hide_after),
@@ -614,12 +628,30 @@ mod tests {
         );
         assert_eq!(screen.phase(), Phase::Authenticating { since: 1.0 });
         assert_eq!(screen.field(), 1, "a new, empty field");
-        // a retry can be typed while the answer is pending, but not submitted: one attempt at a time
-        screen.edit(1.1);
-        assert!(screen.editable());
+        // nothing is typed or submitted while the answer is pending: one attempt at a time
+        assert!(!screen.editable());
         assert_eq!(submit(&mut screen, 1.1, "x"), None);
         assert_eq!(screen.phase(), Phase::Authenticating { since: 1.0 });
         assert_eq!(screen.field(), 1, "the retry is kept");
+    }
+
+    #[test]
+    fn a_denial_while_the_shake_plays_leaves_it_as_it_is() {
+        let mut screen = LockScreen::new(0.0, HIDE_AFTER);
+        submit(&mut screen, 1.0, "wrong");
+        screen.finish_auth(2.0, AuthOutcome::Denied).unwrap();
+        // a retry submitted and denied 0.1 s into the shake: the shake goes on from its start
+        assert_eq!(submit(&mut screen, 2.05, "again").as_deref(), Some("again"));
+        approx(screen.shake(2.05), shake_offset(0.05));
+        screen.finish_auth(2.1, AuthOutcome::Denied).unwrap();
+        approx(screen.shake(2.2), shake_offset(0.2));
+        approx(screen.shake(2.0 + SHAKE_DURATION), 0.0);
+        approx(screen.next_wakeup(2.2).unwrap(), 2.0 + SHAKE_DURATION - 2.2);
+        // once it ended, the next denial shakes again
+        screen.tick(2.1 + SHAKE_DURATION);
+        submit(&mut screen, 3.0, "third");
+        screen.finish_auth(3.1, AuthOutcome::Denied).unwrap();
+        approx(screen.shake(3.1 + 0.05), shake_offset(0.05));
     }
 
     #[test]

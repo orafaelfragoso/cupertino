@@ -18,7 +18,7 @@ use cupertino_kit::theme::{Appearance, ThemePreferences, ThemeTokens};
 use cupertino_login::model::LockScreen;
 use cupertino_login::user::User;
 use cupertino_login::view::{
-    self, Clock, Field, Input, Metrics, Screen, LOCKED_TITLE, LOCK_APP_ID,
+    self, Access, Clock, Field, Input, Metrics, Screen, LOCKED_TITLE, LOCK_APP_ID,
 };
 use cupertino_login::wallpaper::Source;
 use cupertino_ui_test::{ManualClock, TestDriver};
@@ -111,6 +111,13 @@ impl Application for Lock {
                 block: 1.0,
                 shake: 0.0,
                 hidden: false,
+                lock_message: None,
+                back: false,
+                locked: false,
+                hide_user: false,
+                access: Access::default(),
+                large_clock: true,
+                avatar_from: None,
                 power: None,
                 notices: &[],
                 wallpaper: wallpaper(),

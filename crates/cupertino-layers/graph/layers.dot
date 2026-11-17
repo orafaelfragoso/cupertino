@@ -491,6 +491,7 @@ digraph "layers" {
   "cupertino-ui-wayland" -> "cupertino-wayland-client";
   "cupertino-wayland-client" -> "cupertino-animation";
   "cupertino-wayland-client" -> "cupertino-app-protocols";
+  "cupertino-wayland-client" -> "cupertino-app-protocols" [label="dev"];
   "cupertino-wayland-client" -> "cupertino-defaults";
   "cupertino-wayland-client" -> "cupertino-geometry";
   "cupertino-windowmanager" -> "cupertino-defaults";

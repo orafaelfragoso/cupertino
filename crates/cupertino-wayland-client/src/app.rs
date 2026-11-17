@@ -28,7 +28,10 @@ pub use effects::{
     MenuAddress, WindowControls, WindowStyle,
 };
 pub use error::Error;
-pub use layers::{Fixed, Layer, LayerId, LayerProperty, Layers, MAX_SAMPLES};
+pub use layers::{
+    Fixed, Layer, LayerId, LayerProperty, Layers, MAX_CONTENT_BLUR, MAX_GLASS_EDGE,
+    MAX_GROUP_SPACING, MAX_SAMPLES,
+};
 pub use scroll::{PointerScroll, ScrollCounts};
 
 /// User data of the objects whose events carry nothing for the application.

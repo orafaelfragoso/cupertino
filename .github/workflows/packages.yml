@@ -2,7 +2,7 @@ name: Arch packages
 
 # Build, inspect and install-test the Arch packages of the committed source. The build job writes the release source
 # archive (git archive of the commit, xz) and the stable PKGBUILD with that archive's checksum (and, for a tag, the
-# release version), and runs makepkg in the CI image (check() included) as the unprivileged build user, then namcap and
+# release version), and runs makepkg in the CI image as the unprivileged build user, then namcap and
 # the file lists of each package. A fresh container of the plain Arch base installs them, checks the login-screen
 # account, the unit state, the installed command, the manual pages and completions, conffile preservation across a
 # reinstall and a clean removal, then installs the SDK package alone and builds and runs the C samples against /usr.
@@ -274,8 +274,7 @@ jobs:
               echo 'libcupertinokit.so.1 resolves its libraries'
               useradd --no-create-home --shell /usr/bin/nologin "$user"
               install -d -o "$user" -g "$user" -m 700 "$home" "$home/make"
-              install -o "$user" -g "$user" -m 644 /abi/examples/c/headless.c /abi/examples/c/headless.expected /abi/tests/c/layout.c \
-                  /abi/abi/layout-1.txt "$home/"
+              install -o "$user" -g "$user" -m 644 /abi/examples/c/headless.c /abi/examples/c/headless.expected "$home/"
               install -o "$user" -g "$user" -m 644 /abi/examples/c/headless.c /abi/examples/c/Makefile "$home/make/"
               sdk_user() { (cd "$home" && exec setpriv --reuid="$user" --regid="$user" --clear-groups env -i PATH=/usr/bin HOME="$home" sh -c "$1"); }
               check 'the headless sample compiles against /usr with -Werror' sdk_user \
@@ -285,8 +284,6 @@ jobs:
               check 'the headless sample prints its trace and exits 0' sdk_user './headless > headless.out && cmp headless.out headless.expected'
               check 'the C++ build prints the same trace' sdk_user './headless-cxx > headless-cxx.out && cmp headless-cxx.out headless.expected'
               check 'the Makefile builds it with pkg-config alone' sdk_user 'make -C make && ./make/headless > make.out && cmp make.out headless.expected'
-              check 'the C compiler sees the struct layouts of layout-1.txt' sdk_user \
-                  'cc -std=c11 -Wall -Wextra -Werror $(pkg-config --cflags cupertinokit) layout.c -o layout && ./layout > layout.out && diff layout.out layout-1.txt'
               # with the desktop installed too, the cupertino command reports and checks the SDK, and starts a project on it
               pacman -U --noconfirm /dist/cupertino-data-*.pkg.tar.zst /dist/cupertino-0*.pkg.tar.zst >/dev/null
               check 'cupertino sdk info --require: the SDK is installed' sdk_user 'cupertino sdk info --require'

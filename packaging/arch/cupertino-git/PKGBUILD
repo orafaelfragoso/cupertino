@@ -32,6 +32,8 @@ prepare() {
 build() {
   cd "$_srcname"
   # The packaged binaries are stripped and carry no path of the build machine.
+  # A clean build: no compiler cache wrapper, whatever the checkout's cargo config names.
+  export CARGO_BUILD_RUSTC_WRAPPER=
   export CARGO_INCREMENTAL=0 CARGO_PROFILE_RELEASE_DEBUG=0 CUPERTINO_THEME_DIR=/usr/share/cupertino/theme
   local remap target_dir
   target_dir=$(realpath -m "${CARGO_TARGET_DIR:-target}")

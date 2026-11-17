@@ -19,8 +19,21 @@ struct Outcome {
 }
 
 /// The report file, below the target directory.
-fn report_path(target: &Path) -> PathBuf {
-    target.join("xtask").join("ci-latest.json")
+/// Where a run's report goes: a dry run's plan never replaces the last run's results.
+fn report_path(target: &Path, dry_run: bool) -> PathBuf {
+    let name = if dry_run {
+        "ci-plan.json"
+    } else {
+        "ci-latest.json"
+    };
+    target.join("xtask").join(name)
+}
+
+/// The target directory before `cargo metadata` names it: `CARGO_TARGET_DIR`, else `target` under `root`.
+fn early_target(root: &Path) -> PathBuf {
+    std::env::var_os("CARGO_TARGET_DIR")
+        .filter(|dir| !dir.is_empty())
+        .map_or_else(|| root.join("target"), PathBuf::from)
 }
 
 fn first_line(root: &Path, program: &str, args: &[&str]) -> Option<String> {
@@ -210,7 +223,7 @@ fn print_plan(plan: &Plan, report: &Value) {
 
 /// Writes the report and prints it in the chosen format.
 fn finish(target: &Path, report: &Value, plan: Option<&Plan>, options: &Options, code: u8) -> u8 {
-    let path = report_path(target);
+    let path = report_path(target, options.dry_run);
     let text = serde_json::to_string_pretty(report).expect("the report serializes");
     let written = path
         .parent()
@@ -237,7 +250,7 @@ fn finish(target: &Path, report: &Value, plan: Option<&Plan>, options: &Options,
             }
             println!(
                 "xtask ci: {} in {} ms; report: {}",
-                if code == 0 { "passed" } else { "failed" },
+                report["status"].as_str().unwrap_or_default(),
                 report["duration_ms"].as_u64().unwrap_or_default(),
                 path.display()
             );
@@ -254,6 +267,7 @@ fn planning_failure(
     start: Instant,
 ) -> u8 {
     let report = json!({
+        "status": "planning failed",
         "error": error,
         "scope": scope,
         "profile": options.profile,
@@ -268,12 +282,12 @@ fn planning_failure(
 pub fn ci(options: &Options) -> u8 {
     let start = Instant::now();
     let in_ci = std::env::var_os("CI").is_some_and(|value| !value.is_empty());
-    let fallback_target = PathBuf::from("target");
+    let fallback_target = early_target(Path::new("."));
     let root = match plan::repository_root() {
         Ok(root) => root,
         Err(error) => return planning_failure(&fallback_target, options, None, error, start),
     };
-    let fallback_target = root.join("target");
+    let fallback_target = early_target(&root);
     let config = match Config::load(&root) {
         Ok(config) => config,
         Err(error) => return planning_failure(&fallback_target, options, None, error, start),
@@ -404,7 +418,18 @@ pub fn ci(options: &Options) -> u8 {
         })
         .collect();
     let git = &plan.git;
+    // An empty scope is reported as such, never as a pass of checks that ran.
+    let status = if options.dry_run {
+        "planned"
+    } else if code != 0 {
+        "failed"
+    } else if checks.iter().all(|check| check["status"] == "skipped") {
+        "nothing to check"
+    } else {
+        "passed"
+    };
     let report = json!({
+        "status": status,
         "scope": scope.name(),
         "profile": options.profile,
         "dry_run": options.dry_run,

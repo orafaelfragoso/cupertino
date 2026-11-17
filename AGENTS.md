@@ -32,7 +32,7 @@ cargo xtask ci --profile full                  # L4: whole workspace, every feat
 cargo xtask ci --profile P --dry-run           # the plan only
 ```
 
-Rules and feature configurations are in `.config/validation.toml`. Manifests, `Cargo.lock`, the toolchain, `.cargo/`, `.config/`, `build.rs` and any unmapped path select the whole workspace. Exit 1 is a failed check; exit 2 is a failed plan, never a pass.
+Rules and feature configurations are in `.config/validation.toml`. The root manifest, `Cargo.lock`, the toolchain, `.cargo/`, `.config/`, `build.rs` and any unmapped path select the whole workspace. Exit 1 is a failed check; exit 2 is a failed plan, never a pass.
 
 ### As a subagent
 

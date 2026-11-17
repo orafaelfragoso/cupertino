@@ -1512,7 +1512,7 @@ the 10-bit half is smoother than the 8-bit half, beside `target/gpu-probes/depth
 
 **Presentation-time branch and plane assignment on the target driver.** DEFERRED by the owner (2026-11-15): it needs the session
 server on the display. With a build that has the trace installed: log out, switch to a text console, log in, run
-`CUPERTINO_DRM_TRACE=1 CUPERTINO_SESSION_LIMIT=300 cupertino-session`, use the desktop for a few minutes (move and
+`CUPERTINO_DRM_TRACE=1 CUPERTINO_SESSION_LIMIT=300 cupertino-server --session`, use the desktop for a few minutes (move and
 resize a window, scroll in Files, play a video full screen), let it end, then
 `grep drm_trace ~/.local/state/cupertino/server.log`. The lines name the branch, missed flips, planes and latencies.
 
@@ -2418,7 +2418,7 @@ from `main` (`makepkg -si` in `packaging/arch/cupertino`, then `pacman -U`), log
 and from the checkout run:
 
 ```sh
-CUPERTINO_DRM_TRACE=1 CUPERTINO_SESSION_LIMIT=3600 CUPERTINO_LATE_LATCH=0 cupertino-session; CUPERTINO_DRM_TRACE=1 CUPERTINO_SESSION_LIMIT=3600 cupertino-session; the trace summary on ~/.local/state/cupertino/server.log.1 (baseline) and ~/.local/state/cupertino/server.log
+CUPERTINO_DRM_TRACE=1 CUPERTINO_SESSION_LIMIT=3600 CUPERTINO_LATE_LATCH=0 cupertino-server --session; CUPERTINO_DRM_TRACE=1 CUPERTINO_SESSION_LIMIT=3600 cupertino-server --session; the trace summary on ~/.local/state/cupertino/server.log.1 (baseline) and ~/.local/state/cupertino/server.log
 ```
 
 The first session is the baseline (frames start at once), the second has the late start; each ends after an hour.

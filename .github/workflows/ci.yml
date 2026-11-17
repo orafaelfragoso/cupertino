@@ -228,7 +228,7 @@ jobs:
           # the crates the change affects, from the plan of `cargo xtask ci`; every bench crate when it names none
           # ARGS is two words (an option and its value) and is split on purpose.
           plan=$(cargo xtask ci --profile pr $ARGS --dry-run --format json || true)
-          affected=$(jq -c '(.affected_packages // .affected // null)
+          affected=$(jq -c '(if .whole_workspace then .selected_packages else .affected_packages end // null)
               | if type == "array" then map(if type == "object" then (.name // .package) else . end) else null end' \
               <<<"$plan" 2>/dev/null || echo null)
           if [ "$affected" = null ] || [ -z "$affected" ]; then

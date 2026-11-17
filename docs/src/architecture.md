@@ -78,7 +78,7 @@ An edge the table forbids that exists today is listed as an exception in `cupert
 
 ## Contracts registry
 
-[`docs/architecture/contracts.yaml`](../architecture/contracts.yaml) lists every Wayland global the server advertises, every D-Bus interface a Cupertino process serves and every binary a workspace crate builds. Each entry has its version, owner crate and area, threat scope (`public`, `shell-private` or `system`), and the file that defines it with a short text (`source_match`) that must occur in it; the file's header defines the fields. `unknown` marks a value that is not measured yet.
+[`docs/architecture/contracts.yaml`](../architecture/contracts.yaml) lists every Wayland global the server advertises, every D-Bus interface a Cupertino process serves and every binary a workspace crate builds. Each entry has its version, owner crate and area, threat scope (`public`, `shell-private` or `system`), and the file that defines it with a short text (`source_match`) found in it; the file's header defines the fields. No tool checks the registry against the code: keeping it true is part of the change that touches an entry. `unknown` marks a value that is not measured yet.
 
 The registry records the state of the code; it does not grant access. It covers D-Bus interfaces that Cupertino serves, not the interfaces it calls on other services. When a global, a served interface or a binary is added, removed or moved, change its entry in the same commit.
 

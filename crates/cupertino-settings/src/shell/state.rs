@@ -155,7 +155,8 @@ const PROGRAM_CHOOSER_START: &str = "/usr/bin";
 /// The window loop owns the receiver until it ends; what arrives after that has no window. What arrives before the
 /// window exists waits for the loop's first turn. A full queue makes a worker thread wait. What comes from a bus is
 /// dropped instead, so a caller can neither grow the queue nor block a bus executor: a dropped pane request shows nothing,
-/// a dropped agent prompt refuses the pairing.
+/// a dropped agent prompt refuses the pairing. So is a report of the settings files' watch, which the window loop
+/// itself follows and must not wait on: a later report reads the files again.
 pub(crate) fn background_channel(
     wake: impl Fn() + Send + Sync + 'static,
 ) -> (Notify, std::sync::mpsc::Receiver<Background>) {
@@ -163,9 +164,10 @@ pub(crate) fn background_channel(
     let notify: Notify = std::sync::Arc::new(move |event| {
         let queued = match event {
             // a change signal that finds the queue full is not needed: the changes queued read everything again
-            Background::ShowPane(..) | Background::Agent(_) | Background::Changed(_) => {
-                sender.try_send(event).is_ok()
-            }
+            Background::ShowPane(..)
+            | Background::Agent(_)
+            | Background::Changed(_)
+            | Background::Files(_) => sender.try_send(event).is_ok(),
             event => sender.send(event).is_ok(),
         };
         if queued {
@@ -278,10 +280,11 @@ pub struct State {
     /// The buses whose watch ended and has not started again, and how long until the next try, in seconds.
     lost: Vec<Which>,
     rewatch_in: f64,
-    _files: Option<ConfigWatcher>,
+    /// Watches the settings files, until [`State::watching`] hands it to the loop.
+    files: Option<ConfigWatcher>,
     /// Watches `desktop-control.conf`, which the compositor writes when an app first asks, on its own: a file that
     /// can't be read stops no other file's watch.
-    _answers: Option<ConfigWatcher>,
+    answers: Option<ConfigWatcher>,
 }
 
 impl State {
@@ -318,9 +321,7 @@ impl State {
         .flatten()
         .cloned()
         .collect();
-        let to_loop = notify.clone();
-        let files = match ConfigWatcher::new(files, move |event| to_loop(Background::Files(event)))
-        {
+        let files = match ConfigWatcher::new(files) {
             Ok(w) => Some(w),
             Err(e) => {
                 eprintln!("cupertino-settings: cannot watch the settings files: {e}; the panes show changes of other writers at the next commit");
@@ -328,8 +329,7 @@ impl State {
             }
         };
         let answers = paths.desktop_control.clone().and_then(|path| {
-            let to_loop = notify.clone();
-            ConfigWatcher::new(vec![path], move |event| to_loop(Background::Files(event)))
+            ConfigWatcher::new(vec![path])
                 .inspect_err(|e| {
                     eprintln!("cupertino-settings: cannot watch desktop-control.conf: {e}; the Privacy pane shows its changes when it opens")
                 })
@@ -389,8 +389,8 @@ impl State {
             activation: None,
             lost: Vec::new(),
             rewatch_in: REWATCH_FIRST,
-            _files: files,
-            _answers: answers,
+            files,
+            answers,
         };
         state.sync_accessibility();
         let to_loop = state.notify.clone();
@@ -400,6 +400,22 @@ impl State {
         state.read_appearance();
         state.enter_pane(None, pane)?;
         Ok(state)
+    }
+
+    /// The tasks of the window loop that follow the settings files, once: they never end, and each change goes to the
+    /// loop as [`Background::Files`].
+    pub(crate) fn watching<T: 'static>(
+        &mut self,
+    ) -> Vec<std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send>>> {
+        [self.files.take(), self.answers.take()]
+            .into_iter()
+            .flatten()
+            .map(|watch| {
+                let to_loop = self.notify.clone();
+                let follow = watch.follow(move |event| to_loop(Background::Files(event)));
+                Box::pin(follow) as std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send>>
+            })
+            .collect()
     }
 
     /// Read the appearance the session is in; it changes with the session interface's change signal.

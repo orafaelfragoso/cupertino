@@ -1026,7 +1026,9 @@ dependencies = [
 name = "cupertino-defaults"
 version = "0.1.0"
 dependencies = [
+ "async-io",
  "cupertino-keyboard",
+ "futures-lite",
  "inotify",
  "libc",
  "serde_json",

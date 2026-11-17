@@ -393,8 +393,6 @@ pub struct Notifications {
     /// The generation of the banners' and the list's windows: each one is a new window, so one whose surface the
     /// compositor closed (its output went away) is not kept.
     surfaces: u64,
-    /// Follows `notifications.conf`; `None` when it cannot, and the file then applies at the next start.
-    _policy_watch: Option<ConfigWatcher>,
 }
 
 #[derive(Clone, Debug)]
@@ -584,13 +582,14 @@ fn load_policy(last: Option<&NotificationSettings>) -> NotificationSettings {
     }
 }
 
-/// Watch `notifications.conf`; each change is a [`Note::Policy`].
-fn watch_policy(notes: async_channel::Sender<Note>) -> Option<ConfigWatcher> {
+/// The task of the loop that watches `notifications.conf`; each change is a [`Note::Policy`]. `None` when it cannot,
+/// and the file then applies at the next start.
+fn watch_policy(notes: async_channel::Sender<Note>) -> Option<Command<Message>> {
     let path = NotificationSettings::path()?;
-    match ConfigWatcher::new(vec![path.clone()], move |_| {
-        let _ = notes.try_send(Note::Policy);
-    }) {
-        Ok(watch) => Some(watch),
+    match ConfigWatcher::new(vec![path.clone()]) {
+        Ok(watch) => Some(Command::Perform(Box::pin(watch.follow(move |_| {
+            let _ = notes.try_send(Note::Policy);
+        })))),
         Err(e) => {
             eprintln!(
                 "cupertino-notifications: cannot watch {}: {e}; changes apply at the next start",
@@ -637,9 +636,8 @@ fn start(options: &Options) -> Result<(Notifications, Vec<Command<Message>>)> {
             outputs: Vec::new(),
             no_output: false,
             surfaces: 0,
-            _policy_watch: policy_watch,
         },
-        vec![first],
+        std::iter::once(first).chain(policy_watch).collect(),
     ))
 }
 

@@ -17,13 +17,17 @@
 //! | `data-control.conf` | the allowed applications; a client no longer allowed is disconnected (`crate::data_control`) | — |
 //! | `desktop-control.conf` | each app's remembered desktop control and capture answers; a run whose app lost a service it uses is revoked (`crate::control`) | — |
 
+use std::os::fd::AsFd;
 use std::path::PathBuf;
+use std::time::Instant;
 
 use cupertino_defaults::compositor::CompositorSettings;
 use cupertino_defaults::keyboard::KeyboardSettings as KeyboardConf;
 use cupertino_defaults::power::PowerSettings;
 use cupertino_defaults::watch::{ConfigWatcher, WatchEvent};
-use smithay::reexports::calloop::channel;
+use smithay::reexports::calloop::generic::Generic;
+use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
+use smithay::reexports::calloop::{Interest, Mode, PostAction};
 
 use crate::config::{Config, SettingsFiles};
 use crate::state::Cupertino;
@@ -76,6 +80,8 @@ pub struct LiveSettings {
     /// `appearance.conf`, whose tint of windows and title bar double click the server follows.
     appearance: Option<PathBuf>,
     watcher: Option<ConfigWatcher>,
+    /// Whether a timer waits for the burst of file changes under way to be quiet.
+    quiet_timer: bool,
 }
 
 impl Cupertino {
@@ -110,23 +116,61 @@ impl Cupertino {
             tracing::warn!("no settings directory (neither XDG_CONFIG_HOME nor HOME is set): settings apply at the next start only");
             return;
         }
-        let (events, rx) = channel::channel::<WatchEvent>();
-        if let Err(e) = self.loop_handle.insert_source(rx, |event, _, state| {
-            if let channel::Event::Msg(event) = event {
-                state.on_settings_event(event);
+        let watcher = match ConfigWatcher::new(watched) {
+            Ok(w) => w,
+            Err(e) => {
+                tracing::warn!(error = %e, "cannot watch the settings files: they apply at the next start only");
+                return;
             }
-        }) {
-            tracing::warn!(error = %e, "cannot watch the settings files: they apply at the next start only");
-            return;
-        }
-        let watcher = ConfigWatcher::new(watched, move |event| {
-            // the receiver is gone only while the event loop shuts down, when no change can be applied anyway
-            let _ = events.send(event);
+        };
+        // the loop waits on a descriptor of the watch's own; the watch stays here, where its reads reach it
+        let readable = watcher.as_fd().try_clone_to_owned().and_then(|fd| {
+            self.loop_handle
+                .insert_source(
+                    Generic::new(fd, Interest::READ, Mode::Level),
+                    |_, _, state| {
+                        state.read_settings();
+                        Ok(PostAction::Continue)
+                    },
+                )
+                .map_err(|e| std::io::Error::other(e.to_string()))
         });
-        match watcher {
-            Ok(w) => self.live.watcher = Some(w),
+        match readable {
+            Ok(_) => {
+                self.live.watcher = Some(watcher);
+                // a change made while the watch was set up is read now
+                self.read_settings();
+            }
             Err(e) => {
                 tracing::warn!(error = %e, "cannot watch the settings files: they apply at the next start only")
+            }
+        }
+    }
+
+    /// Apply what the watch of the settings files reports now, without waiting, and wake when the burst under way is
+    /// quiet.
+    fn read_settings(&mut self) {
+        let Some(watcher) = self.live.watcher.as_mut() else {
+            return;
+        };
+        let events = watcher.read(Instant::now());
+        let quiet_at = watcher.quiet_at();
+        for event in events {
+            self.on_settings_event(event);
+        }
+        if let Some(at) = quiet_at.filter(|_| !self.live.quiet_timer) {
+            let armed = self
+                .loop_handle
+                .insert_source(Timer::from_deadline(at), |_, _, state| {
+                    state.live.quiet_timer = false;
+                    state.read_settings();
+                    TimeoutAction::Drop
+                });
+            match armed {
+                Ok(_) => self.live.quiet_timer = true,
+                Err(e) => {
+                    tracing::warn!(error = %e, "cannot wait for the settings files to be quiet: a change applies with the next one")
+                }
             }
         }
     }

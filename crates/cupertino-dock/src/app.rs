@@ -979,21 +979,22 @@ impl Application for App {
     }
 }
 
-/// Watch `dock.conf` at `path`; a change is told as [`Message::ConfChanged`]. A watch that cannot be set up is
-/// reported: the file then applies at the next start.
+/// The task of the loop that watches `dock.conf` at `path`; a change is told as [`Message::ConfChanged`]. A watch that
+/// cannot be set up is reported: the file then applies at the next start.
 fn watch_conf(
     path: Option<&PathBuf>,
     messages: async_channel::Sender<Message>,
-) -> Option<ConfigWatcher> {
+) -> Option<Command<Message>> {
     let path = path?;
-    let watch = ConfigWatcher::new(vec![path.clone()], move |event| match event {
-        WatchEvent::Changed(_) => {
-            let _ = messages.send_blocking(Message::ConfChanged);
-        }
-        WatchEvent::Error(e) => eprintln!("{PROCESS}: watching dock.conf failed: {e}"),
-    });
-    match watch {
-        Ok(w) => Some(w),
+    match ConfigWatcher::new(vec![path.clone()]) {
+        Ok(watch) => Some(Command::Perform(Box::pin(watch.follow(
+            move |event| match event {
+                WatchEvent::Changed(_) => {
+                    let _ = messages.try_send(Message::ConfChanged);
+                }
+                WatchEvent::Error(e) => eprintln!("{PROCESS}: watching dock.conf failed: {e}"),
+            },
+        )))),
         Err(e) => {
             eprintln!(
                 "{PROCESS}: cannot watch {}: {e}; changes apply at the next start",
@@ -1163,7 +1164,7 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     let session = Session::new(dock, desktop);
 
     let (messages, heard) = async_channel::unbounded();
-    let _conf_watch = watch_conf(conf_path.as_ref(), messages.clone());
+    let conf_watch = watch_conf(conf_path.as_ref(), messages.clone());
     let _trash_watch = watch_trash(messages.clone());
     listen_badges(messages.clone());
     let trash = cupertino_trash::Look::new(cupertino_trash::Trash::new());
@@ -1195,6 +1196,7 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     let mut model = Model::new(session, actions, file.unwrap_or_default(), Box::new(host));
     model.set_unresponsive(fixture_unresponsive());
     let mut commands = vec![listen(&heard)];
+    commands.extend(conf_watch);
     for message in [
         Message::Dark(initial.0),
         Message::ReduceMotion(initial.1),

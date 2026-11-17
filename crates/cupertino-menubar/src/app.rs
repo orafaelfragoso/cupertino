@@ -396,9 +396,8 @@ struct Services {
     events: Receiver<worker::Event>,
     extras: ExtrasBus,
     extras_events: Receiver<Extras>,
-    /// Reports of the watch on `menubar.conf`; the watch lives as long as the process (`None` without one).
+    /// Reports of the watch on `menubar.conf`, which a task of the loop follows as long as the process lives.
     conf_changes: Receiver<WatchEvent>,
-    _conf_watch: Option<ConfigWatcher>,
     /// Where Recent Items is read from; `None` when the session's directories are not known.
     recent: Option<RecentSources>,
 }
@@ -476,9 +475,11 @@ fn load_conf(last_good: Option<&MenuBarSettings>) -> Result<MenuBarSettings> {
     Ok(settings)
 }
 
-/// Watch `menubar.conf`; its changes wake the application. A watch that cannot be set up is reported: the file then
-/// applies at the next start.
-fn watch_conf(wakes: async_channel::Sender<Wake>) -> (Option<ConfigWatcher>, Receiver<WatchEvent>) {
+/// The task of the loop that watches `menubar.conf`, and its reports; its changes wake the application. A watch that
+/// cannot be set up is reported: the file then applies at the next start.
+fn watch_conf(
+    wakes: async_channel::Sender<Wake>,
+) -> (Option<Command<Message>>, Receiver<WatchEvent>) {
     let (tx, rx) = std::sync::mpsc::channel();
     let Some(path) = MenuBarSettings::path() else {
         return (None, rx);
@@ -487,14 +488,16 @@ fn watch_conf(wakes: async_channel::Sender<Wake>) -> (Option<ConfigWatcher>, Rec
     let files: Vec<PathBuf> = std::iter::once(path.clone())
         .chain(AppearanceSettings::path())
         .collect();
-    let watch = ConfigWatcher::new(files, move |event| {
-        // the receivers are gone only while the process exits
-        if tx.send(event).is_ok() {
-            let _ = wakes.send_blocking(Wake::Conf);
+    match ConfigWatcher::new(files) {
+        Ok(watch) => {
+            let follow = watch.follow(move |event| {
+                // the receivers are gone only while the process exits
+                if tx.send(event).is_ok() {
+                    let _ = wakes.try_send(Wake::Conf);
+                }
+            });
+            (Some(Command::Perform(Box::pin(follow))), rx)
         }
-    });
-    match watch {
-        Ok(w) => (Some(w), rx),
         Err(e) => {
             eprintln!(
                 "{PROCESS}: cannot watch {}: {e}; changes apply at the next start",
@@ -616,7 +619,6 @@ pub fn run() -> Result<std::convert::Infallible> {
                 extras,
                 extras_events,
                 conf_changes,
-                _conf_watch: conf_watch,
                 recent,
             },
             shared: {
@@ -652,6 +654,7 @@ pub fn run() -> Result<std::convert::Infallible> {
             wakeup: Wakeup::default(),
         };
         let mut commands = vec![listen_shell(&app.shell), listen_wakes(&app.wakes)];
+        commands.extend(conf_watch);
         commands.extend(app.outputs(outputs));
         commands.extend(app.housekeeping());
         (app, commands)

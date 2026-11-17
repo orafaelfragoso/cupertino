@@ -5,44 +5,50 @@ use cupertino_scene::{ContentBlur, GlobalRect, OutputRect};
 
 #[test]
 fn a_global_rect_is_expressed_relative_to_its_output() {
-    let output = GlobalRect(Rect::new(1920.0, 100.0, 2560.0, 1440.0));
-    let window = GlobalRect(Rect::new(2000.0, 150.0, 300.0, 200.0));
-    let OutputRect(local) = window.on_output(output);
-    assert_eq!(local, Rect::new(80.0, 50.0, 300.0, 200.0));
+    for (name, output, window, local) in [
+        (
+            "inside an output right of the origin",
+            Rect::new(1920.0, 100.0, 2560.0, 1440.0),
+            Rect::new(2000.0, 150.0, 300.0, 200.0),
+            Rect::new(80.0, 50.0, 300.0, 200.0),
+        ),
+        (
+            "left of the output's origin",
+            Rect::new(0.0, 0.0, 1920.0, 1080.0),
+            Rect::new(-40.0, -10.0, 100.0, 100.0),
+            Rect::new(-40.0, -10.0, 100.0, 100.0),
+        ),
+        (
+            "the output itself",
+            Rect::new(-1280.0, 0.0, 1280.0, 720.0),
+            Rect::new(-1280.0, 0.0, 1280.0, 720.0),
+            Rect::new(0.0, 0.0, 1280.0, 720.0),
+        ),
+    ] {
+        assert_eq!(
+            GlobalRect(window).on_output(GlobalRect(output)),
+            OutputRect(local),
+            "{name}"
+        );
+    }
 }
 
 #[test]
-fn a_rect_left_of_the_output_origin_has_negative_coordinates() {
-    let output = GlobalRect(Rect::new(0.0, 0.0, 1920.0, 1080.0));
-    let window = GlobalRect(Rect::new(-40.0, -10.0, 100.0, 100.0));
-    assert_eq!(
-        window.on_output(output),
-        OutputRect(Rect::new(-40.0, -10.0, 100.0, 100.0))
-    );
-}
-
-#[test]
-fn a_rect_on_the_output_origin_does_not_move() {
-    let output = GlobalRect(Rect::new(-1280.0, 0.0, 1280.0, 720.0));
-    assert_eq!(
-        output.on_output(output),
-        OutputRect(Rect::new(0.0, 0.0, 1280.0, 720.0))
-    );
-}
-
-#[test]
-fn a_blur_radius_round_trips_through_thousandths() {
-    let blur = ContentBlur::of_points(12.5);
-    assert_eq!(blur.sigma_milli, 12_500);
-    assert_eq!(blur.sigma(), 12.5);
-    assert_eq!(ContentBlur::of_points(0.0004).sigma_milli, 0);
-    assert_eq!(ContentBlur::of_points(0.0006).sigma_milli, 1);
-}
-
-#[test]
-fn a_negative_or_huge_blur_radius_is_clamped() {
-    assert_eq!(ContentBlur::of_points(-3.0).sigma_milli, 0);
-    assert_eq!(ContentBlur::of_points(f64::NAN).sigma_milli, 0);
-    assert_eq!(ContentBlur::of_points(1e12).sigma_milli, u32::MAX);
-    assert_eq!(ContentBlur::of_points(f64::INFINITY).sigma_milli, u32::MAX);
+fn a_blur_radius_is_kept_in_thousandths_and_clamped() {
+    for (points, milli) in [
+        (12.5, 12_500),
+        (0.0004, 0),
+        (0.0006, 1),
+        (-3.0, 0),
+        (f64::NAN, 0),
+        (1e12, u32::MAX),
+        (f64::INFINITY, u32::MAX),
+    ] {
+        assert_eq!(
+            ContentBlur::of_points(points).sigma_milli,
+            milli,
+            "{points}"
+        );
+    }
+    assert_eq!(ContentBlur::of_points(12.5).sigma(), 12.5);
 }

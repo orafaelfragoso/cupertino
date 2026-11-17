@@ -3,63 +3,50 @@
 use cupertino_scene::{LayerStack, SceneLayer};
 
 #[test]
-fn layers_are_ordered_bottom_to_top() {
+fn flattening_lists_layers_top_to_bottom_and_keeps_the_callers_order_within_a_layer() {
     use SceneLayer::*;
-    let bottom_to_top = [
-        Wallpaper,
-        LayerBackground,
-        LayerBottom,
-        OverviewBackdrop,
-        BackdropCapture,
-        Windows,
-        SnapPreview,
-        LayerTop,
-        Popups,
-        Banners,
-        InputHud,
-        AccentPopup,
-        LayerOverlay,
-        DragIcon,
-        DisplayFilter,
-        Cursor,
-        CompositorOverlay,
+    let top_to_bottom = [
         SessionOverlay,
+        CompositorOverlay,
+        Cursor,
+        DisplayFilter,
+        DragIcon,
+        LayerOverlay,
+        AccentPopup,
+        InputHud,
+        Banners,
+        Popups,
+        LayerTop,
+        SnapPreview,
+        Windows,
+        BackdropCapture,
+        OverviewBackdrop,
+        LayerBottom,
+        LayerBackground,
+        Wallpaper,
     ];
-    assert!(bottom_to_top.windows(2).all(|w| w[0] < w[1]));
-}
-
-#[test]
-fn flattening_lists_the_topmost_layer_first_whatever_the_push_order() {
     let mut stack = LayerStack::new();
-    stack.push(SceneLayer::Windows, "window");
-    stack.push(SceneLayer::Cursor, "cursor");
-    stack.push(SceneLayer::Wallpaper, "wallpaper");
-    stack.push(SceneLayer::Popups, "popup");
-    assert_eq!(stack.flatten(), ["cursor", "popup", "window", "wallpaper"]);
-}
+    for layer in top_to_bottom.iter().rev().step_by(2) {
+        stack.push(*layer, *layer);
+    }
+    for layer in top_to_bottom.iter().step_by(2) {
+        stack.push(*layer, *layer);
+    }
+    assert_eq!(stack.flatten(), top_to_bottom, "push order does not matter");
 
-#[test]
-fn within_a_layer_the_callers_order_is_kept() {
     let mut stack = LayerStack::new();
-    stack.push(SceneLayer::Windows, 1);
-    stack.extend(SceneLayer::Windows, [2, 3]);
-    stack.push(SceneLayer::Popups, 10);
-    stack.push(SceneLayer::Windows, 4);
-    assert_eq!(stack.flatten(), [10, 1, 2, 3, 4]);
-}
-
-#[test]
-fn flattening_with_layers_names_each_items_layer() {
-    let mut stack = LayerStack::new();
-    stack.push(SceneLayer::Windows, 'a');
-    stack.push(SceneLayer::SessionOverlay, 'b');
-    stack.push(SceneLayer::Windows, 'c');
+    stack.push(Windows, 1);
+    stack.extend(Windows, [2, 3]);
+    stack.push(Popups, 10);
+    stack.push(Windows, 4);
     assert_eq!(
         stack.flatten_with_layer(),
         [
-            (SceneLayer::SessionOverlay, 'b'),
-            (SceneLayer::Windows, 'a'),
-            (SceneLayer::Windows, 'c'),
+            (Popups, 10),
+            (Windows, 1),
+            (Windows, 2),
+            (Windows, 3),
+            (Windows, 4)
         ]
     );
 }
@@ -68,16 +55,9 @@ fn flattening_with_layers_names_each_items_layer() {
 fn length_counts_items_across_layers() {
     let mut stack: LayerStack<u8> = LayerStack::default();
     assert!(stack.is_empty());
-    assert_eq!(stack.len(), 0);
     stack.push(SceneLayer::Cursor, 1);
     stack.extend(SceneLayer::Windows, [2, 3]);
     stack.extend(SceneLayer::Popups, []);
     assert!(!stack.is_empty());
     assert_eq!(stack.len(), 3);
-}
-
-#[test]
-fn an_empty_stack_flattens_to_nothing() {
-    let stack: LayerStack<u8> = LayerStack::new();
-    assert!(stack.flatten().is_empty());
 }

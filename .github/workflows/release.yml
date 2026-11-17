@@ -1,13 +1,14 @@
-# Release: on a v*.*.* or v*.*.*-rc* tag, test, build and install-test the Arch packages in pinned containers, write the
-# source archive and the stable PKGBUILD,
-# sign the Arch packages and write the signed repository tree (packaging/keyring/build-repo), and create a draft release
+# Release: on a v*.*.* or v*.*.*-rc* tag, check the tag, run every check over the whole workspace (full-validation.yml),
+# build and install-test the Arch packages in the CI image and the plain base (packages.yml), which also writes the source
+# archive and the stable PKGBUILD, sign the Arch packages and write the signed repository tree, and create a draft release
 # with SHA256SUMS (a release candidate is marked as a prerelease). The `release` environment only admits v* tags; it has no
 # required reviewers (not available for a private repository on this plan). The gate is that this workflow creates a draft:
-# publishing it is a manual step in the GitHub UI. The `sign` job runs only after `source` has checked that the tag is on main, and holds
-# the signing subkey (secret CUPERTINO_SIGNING_KEY of the `signing` environment, v* tags only; never the master, and not in
-# `release`, so `publish` never has it) and has read-only permissions; without the secret or the variable
-# CUPERTINO_REPO_URL (the https base of the repository) it fails, and then no draft is created. A final release also builds
-# the ISO (iso.yml) and attaches it; a release candidate does not (run the ISO workflow by hand on the tag to test one).
+# publishing it is a manual step in the GitHub UI. The `sign` job runs only after `eligibility` has checked that the tag is
+# on main, and holds the signing subkey (secret CUPERTINO_SIGNING_KEY of the `signing` environment, v* tags only; never the
+# master, and not in `release`, so `publish` never has it) and has read-only permissions; without the secret or the
+# variable CUPERTINO_REPO_URL (the https base of the repository) it fails, and then no draft is created. A final release
+# also builds the ISO (iso.yml) and attaches it; a release candidate does not (run the ISO workflow by hand on the tag to
+# test one).
 name: Release
 on:
   push:
@@ -18,10 +19,9 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
-env:
-  CARGO_INCREMENTAL: '0'
-
 jobs:
+  # The tag is v<version> or v<version>-rc<N> of the cupertino-server version (cupertino-assets has the same), points at
+  # the commit, and that commit is on main.
   eligibility:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -33,103 +33,88 @@ jobs:
       - name: Validate the tag before starting release builds
         env:
           RELEASE_TAG: ${{ github.ref_name }}
-        run: python3 packaging/release.py verify-tag "$RELEASE_TAG"
+        run: |
+          set -euo pipefail
+          version() { sed -n '/^\[package\]/,/^\[/s/^version = "\(.*\)"$/\1/p' "crates/$1/Cargo.toml" | head -1; }
+          v=$(version cupertino-server)
+          if [[ ! "$RELEASE_TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)(-rc[0-9]+)?$ ]] || [ "${BASH_REMATCH[1]}" != "$v" ]; then
+            echo "::error::tag $RELEASE_TAG does not match the cupertino-server version $v"
+            exit 1
+          fi
+          assets=$(version cupertino-assets)
+          [ "$assets" = "$v" ] || { echo "::error::cupertino-assets is $assets, cupertino-server $v"; exit 1; }
+          git rev-parse --verify --quiet "refs/tags/$RELEASE_TAG" >/dev/null \
+            || { echo "::error::tag $RELEASE_TAG does not exist"; exit 1; }
+          [ "$(git rev-list -n1 "$RELEASE_TAG")" = "$(git rev-parse HEAD)" ] \
+            || { echo "::error::$RELEASE_TAG does not point at HEAD"; exit 1; }
+          git merge-base --is-ancestor HEAD origin/main || { echo "::error::HEAD is not reachable from origin/main"; exit 1; }
+          echo "$RELEASE_TAG: version $v, reachable from origin/main"
 
+  # `cargo xtask ci --profile full`; the packages are built below, with the release version.
   verify:
     needs: eligibility
-    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+      actions: read
+      packages: write
+    uses: ./.github/workflows/full-validation.yml
     with:
-      full: true
+      packages: false
+
+  # Artifacts `source`, `packages-arch` and `logs-arch`.
+  packages:
+    needs: verify
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/packages.yml
+    with:
+      tag: ${{ github.ref_name }}
 
   iso:
     needs: packages
     if: ${{ !contains(github.ref_name, '-rc') }}
+    permissions:
+      contents: read
+      packages: write
     uses: ./.github/workflows/iso.yml
     with:
       reuse-packages: true
 
-  source:
-    needs: verify
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-16
-        with:
-          toolchain: 1.99.1
-      # check-metadata and test_release read the dependency graph with cargo metadata --offline.
-      - run: cargo fetch --locked
-      - name: Check the tag and write the source archive and PKGBUILDs
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
-        run: |
-          python3 ci/gate.py .
-          python3 packaging/release.py verify-tag "$RELEASE_TAG"
-          python3 packaging/release.py check-metadata
-          archive=$(python3 packaging/release.py source --output dist --tag "$RELEASE_TAG")
-          python3 packaging/release.py pkgbuild --tag "$RELEASE_TAG" "$archive" dist/PKGBUILD
-          cp packaging/arch/cupertino-git/PKGBUILD dist/PKGBUILD-git
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: source
-          path: dist/*
-          if-no-files-found: error
+  image:
+    needs: eligibility
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/ci-images.yml
 
-  packages:
-    needs: verify
-    runs-on: ubuntu-24.04
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Free unused runner SDKs before restoring build caches
-        run: |
-          df -h /
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
-          df -h /
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-        with:
-          cache-binary: false
-      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/package-images
-          key: package-image-${{ runner.os }}-arch-${{ hashFiles('packaging/ci/Dockerfile') }}
-      - name: Build, verify and install-test in pinned containers
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
-          CUPERTINO_BUILD_CACHE_DIR: ${{ runner.temp }}/package-images
-          CARGO_BUILD_JOBS: '4'
-        run: bash packaging/ci/build-in-container.sh arch out/arch
-      - name: Separate the packages from the build logs
-        run: |
-          mkdir -p dist logs
-          find out/arch -maxdepth 1 -type f \( -name '*.pkg.tar.zst' -o -name packages.json \) -exec mv -t dist {} +
-          mv out/arch/* logs/
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: packages-arch
-          path: dist/*
-          if-no-files-found: error
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: logs-arch
-          path: logs/*
-          if-no-files-found: error
-
+  # Sign each package (a detached .sig, checked), make the signed database with repo-add, and write the repository tree:
+  #
+  #   repo/      the packages of this release with their .sig, cupertino.db and cupertino.files with their .sig
+  #   archive/   the packages of this release with their .sig
+  #   cupertino.conf             the [cupertino] section for pacman.conf, Server = URL/repo
+  #   cupertino-rollback.conf    archive=URL/archive
+  #   SHA256SUMS                 every file of the tree, with its detached signature SHA256SUMS.sig
+  #
+  # With the ISO, also a detached signature NAME.iso.sha256.sig of each NAME.iso.sha256, so that the ISO, the trust
+  # root of every install, can be checked against the release key. The key must import, hold a signing subkey and no
+  # primary secret key (the master never goes to CI); otherwise nothing is signed and the job fails. Nothing is
+  # uploaded anywhere but to this run's artifacts.
   sign:
-    needs: [source, packages, iso]
-    if: ${{ !cancelled() && needs.source.result == 'success' && needs.packages.result == 'success' && (needs.iso.result == 'success' || needs.iso.result == 'skipped') }}
+    needs: [packages, iso, image]
+    if: ${{ !cancelled() && needs.packages.result == 'success' && needs.image.result == 'success' && (needs.iso.result == 'success' || needs.iso.result == 'skipped') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     environment: signing
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ${{ needs.image.outputs.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: packages-arch
@@ -140,14 +125,78 @@ jobs:
           name: iso
           path: iso
       - name: Sign the Arch packages and the ISO checksum, and write the repository tree
+        shell: bash
         env:
           CUPERTINO_SIGNING_KEY: ${{ secrets.CUPERTINO_SIGNING_KEY }}
           CUPERTINO_REPO_URL: ${{ vars.CUPERTINO_REPO_URL }}
           HAS_ISO: ${{ needs.iso.result == 'success' }}
         run: |
-          iso=()
-          if [ "$HAS_ISO" = true ]; then iso=(iso); fi
-          bash packaging/ci/sign-release.sh arch "$CUPERTINO_REPO_URL" signed "${iso[@]}"
+          set -euo pipefail
+          die() { echo "::error::sign: $*"; exit 1; }
+          [ -n "$CUPERTINO_SIGNING_KEY" ] || die 'CUPERTINO_SIGNING_KEY is empty; nothing is signed'
+          url=$CUPERTINO_REPO_URL
+          case $url in https://?*) ;; *) die 'CUPERTINO_REPO_URL is not https://HOST/PATH; nothing is signed' ;; esac
+          case $url in *[[:space:]\'\"\\]*) die 'CUPERTINO_REPO_URL has a space or a quote' ;; esac
+          url=${url%/}
+          if [ "$HAS_ISO" = true ]; then
+            ls iso/*.iso.sha256 >/dev/null 2>&1 || die 'the ISO artifact holds no *.iso.sha256; nothing is signed'
+          fi
+          set -- arch/*.pkg.tar.zst
+          [ -e "$1" ] || die 'no *.pkg.tar.zst in the packages'
+          for p in "$@"; do
+            case $(basename "$p") in *[!A-Za-z0-9@._+:-]*) die "unexpected characters in the package file name $p" ;; esac
+          done
+
+          # The key reaches gpg on stdin only, in a keyring that lives as long as this step.
+          export LC_ALL=C GNUPGHOME
+          GNUPGHOME=$(mktemp -d)
+          chmod 700 "$GNUPGHOME"
+          trap 'rm -rf "$GNUPGHOME"' EXIT
+          printf '%s\n' "$CUPERTINO_SIGNING_KEY" | gpg --batch --quiet --import 2>/dev/null || die 'the signing key does not import'
+          gpg --batch --with-colons --list-secret-keys \
+            | awk -F: '$1 == "sec" { n++; if ($15 != "#") bad = 1 } END { exit !(n > 0 && !bad) }' \
+            || die 'the key holds a primary secret key; export only the signing subkey'
+          key=$(gpg --batch --with-colons --list-secret-keys \
+            | awk -F: '$1 == "ssb" { want = ($12 ~ /s/ && $15 != "#"); next } want && $1 == "fpr" { print $10; exit }')
+          [ -n "$key" ] || die 'the key has no signing subkey'
+
+          out=signed/tree
+          mkdir -p "$out/repo" "$out/archive"
+          for p in "$@"; do
+            name=$(basename "$p")
+            cp "$p" "$out/repo/$name"
+            gpg --batch --yes --detach-sign -u "$key!" -o "$out/repo/$name.sig" "$out/repo/$name" || die "signing $name failed"
+            gpg --batch --verify "$out/repo/$name.sig" "$out/repo/$name" >/dev/null 2>&1 \
+              || die "$name: the new signature does not verify"
+            cp "$out/repo/$name" "$out/repo/$name.sig" "$out/archive/"
+          done
+          (
+            cd "$out/repo"
+            repo-add --quiet --sign --key "$key" cupertino.db.tar.zst ./*.pkg.tar.zst
+            # repo-add makes cupertino.db a symlink to the archive; a static host serves the files, so make them files
+            for f in cupertino.db cupertino.db.sig cupertino.files cupertino.files.sig; do
+              if [ -L "$f" ]; then cp --remove-destination "$(readlink -f "$f")" "$f"; fi
+            done
+          )
+          [ -f "$out/repo/cupertino.db.tar.zst.sig" ] || die 'repo-add wrote no database signature'
+          gpg --batch --verify "$out/repo/cupertino.db.tar.zst.sig" "$out/repo/cupertino.db.tar.zst" >/dev/null 2>&1 \
+            || die 'the database signature does not verify'
+          printf '[cupertino]\nSigLevel = Required DatabaseRequired TrustedOnly\nServer = %s/repo\n' "$url" > "$out/cupertino.conf"
+          printf 'archive=%s/archive\n' "$url" > "$out/cupertino-rollback.conf"
+          (cd "$out" && find . -type f ! -name SHA256SUMS ! -name SHA256SUMS.sig | sort | xargs sha256sum > SHA256SUMS)
+          gpg --batch --yes --detach-sign -u "$key!" -o "$out/SHA256SUMS.sig" "$out/SHA256SUMS" || die 'signing SHA256SUMS failed'
+          gpg --batch --verify "$out/SHA256SUMS.sig" "$out/SHA256SUMS" >/dev/null 2>&1 \
+            || die 'the SHA256SUMS signature does not verify'
+          echo "$(ls "$out/repo" | grep -c '\.pkg\.tar\.zst$') packages in $out/repo"
+
+          if [ "$HAS_ISO" = true ]; then
+            mkdir signed/iso
+            for sums in iso/*.iso.sha256; do
+              sig=signed/iso/$(basename "$sums").sig
+              gpg --batch --yes --detach-sign -u "$key!" -o "$sig" "$sums" || die "signing $sums failed"
+              gpg --batch --verify "$sig" "$sums" >/dev/null 2>&1 || die "the signature of $sums does not verify"
+            done
+          fi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: signed
@@ -161,7 +210,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: [source, packages, sign, iso]
+    needs: [packages, sign, iso]
     if: ${{ !cancelled() && needs.sign.result == 'success' && (needs.iso.result == 'success' || needs.iso.result == 'skipped') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15

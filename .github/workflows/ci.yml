@@ -1,156 +1,136 @@
 name: CI
 
-# Pull requests and main run policy checks plus the gates and crates affected by the change.
-# Main is the trusted cache writer; newer pushes cancel obsolete integration runs.
-# Reusable full validation also checks default features, Weston, goldens and the package environment.
-# Arch is the only target: every job that builds, tests or lints the code runs in an Arch container (see `gate` for the
-# setup every such job repeats); the Ubuntu runner is only the VM that hosts the container.
+# Pull requests and main: every Rust check goes through `cargo xtask ci --profile pr`, which plans the crates the change
+# affects and runs formatting, Clippy, the tests, the doctests, the layer check and the repository gate on them. Beside
+# it: the dependency policy, the book, and the instruction counts of the hot functions against the commit before.
+# Arch is the only target: every job that builds Rust runs in the CI image (ci-images.yml); the Ubuntu runner is only
+# the VM that hosts the container. Newer pushes cancel obsolete runs.
 on:
   pull_request:
   push:
     branches: [main]
-  workflow_call:
-    inputs:
-      full:
-        description: Run every check, including the package build environment
-        type: boolean
-        default: false
 
-# One run per ref: a newer push cancels the older run. A tag run is not cancelled.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 env:
-  CARGO_INCREMENTAL: "0"
   CARGO_TERM_COLOR: always
   CARGO_NET_RETRY: "10"
   RUST_BACKTRACE: "1"
 
 jobs:
-  selection:
-    name: Affected crates
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      packages: ${{ steps.select.outputs.packages }}
-      checks: ${{ steps.select.outputs.checks }}
-      microbench: ${{ steps.microbench.outputs.crates }}
+  image:
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/ci-images.yml
+
+  # The plan and the checks of `cargo xtask ci`. The base is the commit the change is compared with: the pull request's
+  # base, or the commit main was at before the push; without one (a new branch, a force push) every crate is checked.
+  #
+  # The setup of every container job: actions/checkout and the cache restores run as root, then the setup action gives
+  # the unprivileged user `ci` what they wrote, and every `run` step runs as `ci` (the job's default shell).
+  validate:
+    needs: image
+    name: cargo xtask ci
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ${{ needs.image.outputs.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
+      # The runner VM's Android SDK, .NET, Haskell and CodeQL are never used here and take about 30 GB of its 72 GB
+      # disk; the build and its cache need the room. They are mounted so that the job can remove them from inside.
+      volumes:
+        - /usr/local/lib/android:/host/android
+        - /usr/share/dotnet:/host/dotnet
+        - /opt/ghc:/host/ghc
+        - /opt/hostedtoolcache/CodeQL:/host/codeql
+    defaults: &as-ci
+      run:
+        shell: runuser -u ci -- bash --noprofile --norc -eo pipefail {0}
+    env:
+      # Without debug information the test binaries take a third of the disk; panics still name file and line.
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      SCCACHE_DIR: /var/cache/sccache
+      SCCACHE_CACHE_SIZE: 6G
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-16
+      # Main is the only writer of the compile cache; a pull request reads main's.
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          toolchain: 1.99.1
-      - run: python3 -I ci/test_affected.py
-      - id: select
+          path: /var/cache/sccache
+          key: sccache-validate-${{ github.sha }}
+          restore-keys: sccache-validate-
+      - uses: ./.github/actions/arch-setup
+        with:
+          free-disk: 'true'
+      - name: The commit to compare with
+        id: base
         env:
-          FULL: ${{ inputs.full == true }}
-          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
-          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          if [ "$FULL" = true ]; then
-            packages=$(python3 -I ci/affected.py full)
-            checks='{"docs":true,"deny":true,"fmt":true,"layers":true}'
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          BEFORE: ${{ github.event.before }}
+        run: &base |
+          if [ "$EVENT" = pull_request ]; then base=$PR_BASE; else base=$BEFORE; fi
+          if [ -z "$base" ] || [ "$base" = 0000000000000000000000000000000000000000 ] \
+              || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            echo "::notice::No earlier commit to compare with: every crate is checked"
+            echo "base=" >> "$GITHUB_OUTPUT"
+            echo "args=--scope all" >> "$GITHUB_OUTPUT"
           else
-            packages=$(python3 -I ci/affected.py select "$BASE" "$HEAD")
-            checks=$(python3 -I ci/affected.py gates "$BASE" "$HEAD")
+            echo "base=$base" >> "$GITHUB_OUTPUT"
+            echo "args=--base $base" >> "$GITHUB_OUTPUT"
           fi
-          echo "packages=$packages" >> "$GITHUB_OUTPUT"
-          echo "checks=$checks" >> "$GITHUB_OUTPUT"
-          echo "Selected crates: $packages" >> "$GITHUB_STEP_SUMMARY"
-          echo "Selected gates: $checks" >> "$GITHUB_STEP_SUMMARY"
-      # the selected crates that have instruction-count benches (benches/instructions.rs)
-      - id: microbench
+      - name: cargo xtask ci --profile pr
         env:
-          PACKAGES: ${{ steps.select.outputs.packages }}
+          ARGS: ${{ steps.base.outputs.args }}
+        # ARGS is two words (an option and its value) and is split on purpose.
+        run: cargo xtask ci --profile pr $ARGS
+      - name: Compile cache
+        if: always()
+        run: sccache --show-stats || true
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: ci-latest
+          path: target/xtask/ci-latest.json
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Summary
+        if: always()
         run: |
-          crates=$(python3 -I scripts/dev/microbench --list --among "$PACKAGES")
-          echo "crates=$crates" >> "$GITHUB_OUTPUT"
-          echo "Instruction-count benches: $crates" >> "$GITHUB_STEP_SUMMARY"
+          if [ -f target/xtask/ci-latest.json ]; then
+            jq -r -f .github/ci-summary.jq target/xtask/ci-latest.json >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "cargo xtask ci wrote no report (target/xtask/ci-latest.json)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: always() && github.ref == 'refs/heads/main' && github.event_name == 'push'
+        with:
+          path: /var/cache/sccache
+          key: sccache-validate-${{ github.sha }}
 
-  # Source policy: no provenance text, no vendor names, no forbidden or binary files except the pinned built-in font.
-  #
-  # The setup of every Arch container job: the image is pinned by digest (archlinux:base-devel-20261101.0.620205) and
-  # pacman brings it up to date; ci/arch-ci.sh installs the job's packages and makes the unprivileged user `ci`, which
-  # runs every `run` step (the job's default shell) except the setup steps, which say `shell: bash` and run as root.
-  # Actions run as root, so the user is given back what a cache restore wrote. git comes first: without it,
-  # actions/checkout downloads an archive instead of a repository.
-  gate:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    container:
-      image: &arch-image docker.io/library/archlinux:base-devel@sha256:2de80105abb49f813a85393c6758a4334deb6bcec4a2411bd2f059c0bee6ee4c
-    defaults: &as-ci
-      run:
-        shell: runuser -u ci -- bash --noprofile --norc -eo pipefail {0}
-    steps:
-      - &arch-bootstrap
-        name: Pacman keyring and git
-        shell: bash
-        run: pacman -Sy --noconfirm --needed archlinux-keyring && pacman -Su --noconfirm --needed git
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: System packages and the build user
-        shell: bash
-        run: ci/arch-ci.sh install gate && ci/arch-ci.sh user
-      - run: python3 -I ci/test_gate.py
-      - run: python3 -I ci/test_replace.py
-      - run: python3 -I ci/test_soak.py
-      - run: python3 -I scripts/dev/test_bench.py
-      - run: python3 -I scripts/dev/test_microbench.py
-      - run: python3 -I scripts/dev/test_profile.py
-      - run: python3 -I scripts/dev/test_perf_gate.py
-      - run: python3 -I scripts/dev/test_drm_trace_summary.py
-      - run: python3 -I ci/test_arch_ci.py
-      - run: python3 -I ci/test_render_node.py
-      - &rust-toolchain
-        name: Rust 1.99.1
-        run: |
-          rustup toolchain install 1.99.1 --profile minimal
-          echo RUSTUP_TOOLCHAIN=1.99.1 >> "$GITHUB_ENV"
-      # check-metadata and test_release read the dependency graph with cargo metadata --offline.
-      - run: cargo fetch --locked
-      # the GPU probes are a workspace of their own, built nowhere else; the tests of their arithmetic need no GPU
-      - run: cargo test --locked --manifest-path tools/gpu-probes/Cargo.toml --target-dir target/gpu-probes
-      # the SDK's verify tests compile a library with cc; without one they must fail here, not skip
-      - run: python3 -I packaging/test_release.py
-        env:
-          CUPERTINO_CC_REQUIRED: "1"
-      # the session command's logout lock runs against the real keyring daemon too
-      - run: python3 -I packaging/test_session.py
-        env:
-          CUPERTINO_KEYRING_REQUIRED: "1"
-      - run: python3 -I packaging/installer/test_cupertino_install.py
-      - run: python3 -I packaging/iso/test_profile.py
-      - run: python3 -I packaging/iso/test-build-iso.py
-      - run: python3 -I packaging/arch/test-build-environment.py
-      - run: python3 -I ci/test_contracts.py
-      - run: python3 -I ci/test_c_sdk.py
-      - run: python3 -I ci/test_goldens_log.py
-      - run: python3 -I ci/test-build-test-fixtures.py
-      - run: python3 -I packaging/ci/test-container-build.py
-      - run: python3 -I ci/gate.py .
-      - run: python3 -I ci/test_suite.py --check
-      # The Wayland globals are compared with the registry by crates/cupertino-server/tests/contracts.rs (nextest below).
-      - run: python3 -I ci/contracts.py .
-
-  # The book must build, and its internal links and anchors must resolve. mdBook and lychee are
-  # pinned, and both release archives are checked against the published sha256.
+  # The book must build, and its internal links and anchors must resolve. mdBook and lychee are prebuilt release
+  # binaries, pinned, and both archives are checked against the published sha256; the job builds no Rust.
   docs:
-    needs: selection
-    if: fromJSON(needs.selection.outputs.checks).docs
     runs-on: ubuntu-24.04
     timeout-minutes: 10
-    # The tools are prebuilt release binaries; the job needs nothing beyond the base image, and runs as root.
-    container:
-      image: *arch-image
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: mdBook and link checker
         run: |
           set -euo pipefail
@@ -174,237 +154,35 @@ jobs:
 
   # Licences, advisories, bans and sources, as set in deny.toml.
   deny:
-    needs: selection
-    if: fromJSON(needs.selection.outputs.checks).deny
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           command: check
 
-  fmt:
-    needs: selection
-    if: fromJSON(needs.selection.outputs.checks).fmt
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-16
-        with:
-          toolchain: 1.99.1
-          components: rustfmt
-      # Without --all: only the workspace members, not the vendored third-party crate.
-      - run: cargo fmt --check
-
-  # Independent of the affected Rust selection: manifest and licence changes still check the graph.
-  layers:
-    needs: selection
-    if: fromJSON(needs.selection.outputs.checks).layers
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    container:
-      image: *arch-image
-    defaults: *as-ci
-    env:
-      CARGO_PROFILE_DEV_DEBUG: "0"
-    steps:
-      - *arch-bootstrap
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: System packages and the build user
-        shell: bash
-        run: ci/arch-ci.sh install build && ci/arch-ci.sh user
-      - *rust-toolchain
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          shared-key: layers-arch
-          save-if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
-      - &own-restored
-        name: Give the build user the restored cache
-        shell: bash
-        run: ci/arch-ci.sh user
-      - run: cargo fetch --locked
-      - run: cargo run --locked -p cupertino-layers
-
-  # Clippy builds every affected target with warnings treated as errors.
-  clippy:
-    needs: selection
-    if: needs.selection.outputs.packages != '[]'
-    name: Clippy
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    container: &arch-with-room
-      image: *arch-image
-      # The runner VM's Android SDK, .NET, Haskell and CodeQL are never used here and take about 30 GB of its 72 GB
-      # disk; the build and its cache need the room. They are mounted so that the job can remove them from inside.
-      volumes:
-        - /usr/local/lib/android:/host/android
-        - /usr/share/dotnet:/host/dotnet
-        - /opt/ghc:/host/ghc
-        - /opt/hostedtoolcache/CodeQL:/host/codeql
-    defaults: *as-ci
-    env:
-      CARGO_PROFILE_DEV_DEBUG: "0"
-      CUPERTINO_CI_PACKAGES: ${{ needs.selection.outputs.packages }}
-    steps:
-      - &free-disk
-        name: Free disk space
-        shell: bash
-        run: |
-          df -h "$GITHUB_WORKSPACE"
-          find /host -mindepth 2 -maxdepth 2 -exec rm -rf {} +
-          df -h "$GITHUB_WORKSPACE"
-      - *arch-bootstrap
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: System packages and the build user
-        shell: bash
-        run: ci/arch-ci.sh install build && ci/arch-ci.sh user
-      - name: Rust 1.99.1 with Clippy
-        run: |
-          rustup toolchain install 1.99.1 --profile minimal --component clippy
-          echo RUSTUP_TOOLCHAIN=1.99.1 >> "$GITHUB_ENV"
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          shared-key: clippy-arch
-          save-if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
-      - *own-restored
-      - run: cargo fetch --locked
-      - name: Clippy
-        run: python3 -I ci/affected.py run clippy
-      - name: Clippy build timings
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: clippy-timings
-          path: target/cargo-timings/*.html
-          if-no-files-found: warn
-          retention-days: 7
-      # The lint build and the tests enable every feature of every crate at once, so a crate that only builds with
-      # another crate's features (or its own optional ones) passes them. Each package is checked on its own here, with
-      # its default features and only the dependencies it names.
-      - name: Default features, one package at a time
-        if: inputs.full == true
-        run: |
-          packages=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name')
-          [ -n "$packages" ] || { echo "::error::cargo metadata listed no packages"; exit 1; }
-          failed=()
-          for package in $packages; do
-            cargo check -p "$package" || failed+=("$package")
-          done
-          if [ "${#failed[@]}" -ne 0 ]; then
-            echo "::error::does not build with its default features: ${failed[*]}"
-            exit 1
-          fi
-
-  # The whole test suite runs with no CUPERTINO_* variable set: the tests must pass on
-  # the built-in assets alone. The second leg runs the tests as the Arch package's check() does: binaries compiled with
-  # the installed theme directory, which does not exist here, and CUPERTINO_SPEC_DIR pointing at the checkout. A test
-  # that starts a binary with a cleared environment and does not pass CUPERTINO_SPEC_DIR fails only there.
-  # The tests need a dbus-daemon that gives the caller's ProcessFD (1.15 and later; the server and sessiond check a caller
-  # only through it) and a PipeWire on which a screencast stream follows a resize (1.4 and later; 1.0 never streams the
-  # new size). Arch ships newer versions of both, and the package requires them (dbus>=1.16, pipewire>=1:1.4).
-  tests:
-    needs: selection
-    if: needs.selection.outputs.packages != '[]'
-    name: Tests${{ matrix.package-env && ' (package build environment)' || '' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    container: *arch-with-room
-    defaults: *as-ci
-    strategy:
-      fail-fast: false
-      matrix:
-        # Full validation repeats the suite in the package build environment.
-        package-env: ${{ fromJSON(inputs.full == true && '[false, true]' || '[false]') }}
-    env:
-      # The test binaries each link the whole workspace: with line tables the build took 12 GB of the runner's disk
-      # and ran it out of space; without debug information it takes 4 GB. Panics still name file and line.
-      CARGO_PROFILE_DEV_DEBUG: "0"
-      CUPERTINO_CI_PACKAGES: ${{ needs.selection.outputs.packages }}
-    steps:
-      - *free-disk
-      - *arch-bootstrap
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: System packages and the build user
-        shell: bash
-        run: ci/arch-ci.sh install test && ci/arch-ci.sh user
-      - *rust-toolchain
-      - name: The package build environment
-        if: matrix.package-env
-        run: |
-          echo "CUPERTINO_THEME_DIR=/usr/share/cupertino/theme" >> "$GITHUB_ENV"
-          echo "CUPERTINO_SPEC_DIR=$GITHUB_WORKSPACE/data/theme" >> "$GITHUB_ENV"
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          shared-key: tests-arch-package-env-${{ matrix.package-env }}
-          save-if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
-      - *own-restored
-      - run: cargo fetch --locked
-      # The keymap oracle's recordings are only valid for the xkeyboard-config releases they were made with
-      # (crates/cupertino-xkbcommon/tests/fixtures/xkb-data.txt), and the container's rolling package can move past them.
-      # This is one of those releases' package (byte-identical data), verified against a pinned checksum.
-      - name: xkeyboard-config 2.48 data
-        run: |
-          curl -sSfL -o xkeyboard-config.pkg.tar.zst \
-            https://archive.archlinux.org/packages/x/xkeyboard-config/xkeyboard-config-2.48-1-any.pkg.tar.zst
-          echo '7f7f8656dbd0b37e36d3a97f6e188fc5c6cbccc4c1e5d34ff35f1d7a79b1cc73  xkeyboard-config.pkg.tar.zst' | sha256sum -c -
-          mkdir -p "$RUNNER_TEMP/xkb"
-          tar --zstd -xf xkeyboard-config.pkg.tar.zst -C "$RUNNER_TEMP/xkb" usr/share/xkeyboard-config-2
-          echo "XKB_CONFIG_ROOT=$RUNNER_TEMP/xkb/usr/share/xkeyboard-config-2" >> "$GITHUB_ENV"
-      - name: Install Nextest 0.9.151
-        run: &install-nextest |
-          set -euo pipefail
-          archive="$RUNNER_TEMP/cargo-nextest-0.9.151.tar.gz"
-          curl --fail --location --silent --show-error --output "$archive" \
-            https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.151/cargo-nextest-0.9.151-x86_64-unknown-linux-musl.tar.gz
-          echo "6b284d6fde9670dfb6ee10ea9d9abbc85f95643d3f592472d420d82e257b3a6c  $archive" | sha256sum --check --strict
-          mkdir -p "$HOME/.local/bin"
-          tar --extract --gzip --file "$archive" --directory "$HOME/.local/bin" cargo-nextest
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          export PATH="$HOME/.local/bin:$PATH"
-          cargo nextest --version
-      # nextest enforces the per-test time limit in .config/nextest.toml; it does not run doctests.
-      - name: Tests
-        env:
-          # Required backends must fail tests instead of allowing a skip.
-          CUPERTINO_EGL_REQUIRED: "1"
-          CUPERTINO_DBUS_REQUIRED: "1"
-          CUPERTINO_XKB_DATA_REQUIRED: "1"
-          CUPERTINO_KEYRING_REQUIRED: "1"
-          CUPERTINO_SHELLS_REQUIRED: "1"
-          CUPERTINO_MANDOC_REQUIRED: "1"
-        run: python3 -I ci/affected.py run tests
-      - name: Doctests
-        run: python3 -I ci/affected.py run doctests
-      - name: Test build timings
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: test-timings-package-env-${{ matrix.package-env }}
-          path: target/cargo-timings/*.html
-          if-no-files-found: warn
-          retention-days: 7
-      - name: Disk after the tests
-        if: always()
-        run: |
-          df -h .
-          if [ -d target ]; then du -sh target; fi
-
-  # Instruction counts of the hot functions (scripts/dev/microbench), under Valgrind, at the commit before the change and
-  # at the change, one after the other on this runner: a count that rises by more than MICROBENCH_LIMIT_PERCENT over the
-  # earlier commit's fails the job. A benchmark the earlier commit does not have is counted and kept, with nothing to
-  # compare it with; without an earlier commit (a new branch) every count is new. Only the selected crates with benches
-  # run. The runner switches address randomisation off for repeatable counts (setarch -R), a personality call the
-  # container's default seccomp profile refuses.
+  # Instruction counts of the hot functions (each crate's `instructions` bench, gungraun under Valgrind's Callgrind),
+  # at the commit before the change and at the change, one after the other on this runner: a count that rises by more
+  # than MICROBENCH_LIMIT_PERCENT over the earlier commit's fails the job. A benchmark the earlier commit does not have is
+  # counted and kept, with nothing to compare it with; without an earlier commit (a new branch) every count is new. Only
+  # the crates `cargo xtask ci` plans as affected run, all of them when the plan names none. The runner switches address
+  # randomisation off for repeatable counts, a personality call the container's default seccomp profile refuses.
   microbench:
-    needs: selection
-    if: needs.selection.outputs.microbench != '[]' && needs.selection.outputs.microbench != ''
+    needs: image
     name: Instruction counts
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: read
     container:
-      image: *arch-image
+      image: ${{ needs.image.outputs.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
       options: --security-opt seccomp=unconfined
       volumes:
         - /usr/local/lib/android:/host/android
@@ -415,166 +193,147 @@ jobs:
     env:
       # how much, in percent, an instruction count may rise over the earlier commit's before the job fails
       MICROBENCH_LIMIT_PERCENT: "3"
-      CRATES: ${{ needs.selection.outputs.microbench }}
-      BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+      SCCACHE_DIR: /var/cache/sccache
+      SCCACHE_CACHE_SIZE: 2G
     steps:
-      - *free-disk
-      - *arch-bootstrap
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: System packages, Valgrind and the build user
-        shell: bash
-        run: ci/arch-ci.sh install build && pacman -S --noconfirm --needed valgrind && ci/arch-ci.sh user
-      - *rust-toolchain
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          shared-key: microbench-arch
-          save-if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
-      - *own-restored
-      # The counts stay out of the cached target directory, so a restored cache never brings back an old baseline. The
-      # runner (exactly the library's version) is kept in the cargo home, whose binaries the cache keeps.
-      - name: Where the counts and the runner go
+          path: /var/cache/sccache
+          key: sccache-microbench-${{ github.sha }}
+          restore-keys: sccache-microbench-
+      - uses: ./.github/actions/arch-setup
+        with:
+          free-disk: 'true'
+      - name: The commit to compare with
+        id: base
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          BEFORE: ${{ github.event.before }}
+        run: *base
+      # The counts stay out of the target directory, so a restored cache never brings back an old baseline.
+      - name: The crates to bench and their runner
+        id: crates
+        env:
+          ARGS: ${{ steps.base.outputs.args }}
         run: |
           echo "GUNGRAUN_HOME=$RUNNER_TEMP/gungraun" >> "$GITHUB_ENV"
-          echo "MICROBENCH_RUNNER_ROOT=$CARGO_HOME" >> "$GITHUB_ENV"
-      - run: cargo fetch --locked
+          # the crates that declare a [[bench]] named `instructions`
+          benches=$(cargo metadata --locked --no-deps --format-version 1 \
+            | jq -c '[.packages[] | select(any(.targets[]; .name == "instructions" and (.kind | index("bench")))) | .name]')
+          # the crates the change affects, from the plan of `cargo xtask ci`; every bench crate when it names none
+          # ARGS is two words (an option and its value) and is split on purpose.
+          plan=$(cargo xtask ci --profile pr $ARGS --dry-run --format json || true)
+          affected=$(jq -c '(.affected_packages // .affected // null)
+              | if type == "array" then map(if type == "object" then (.name // .package) else . end) else null end' \
+              <<<"$plan" 2>/dev/null || echo null)
+          if [ "$affected" = null ] || [ -z "$affected" ]; then
+            echo "::notice::The plan names no affected crates: every crate with benches runs"
+            crates=$benches
+          else
+            crates=$(jq -nc --argjson b "$benches" --argjson a "$affected" '$b - ($b - $a)')
+          fi
+          echo "crates=$(jq -r 'join(" ")' <<<"$crates")" >> "$GITHUB_OUTPUT"
+          echo "Instruction-count benches: $crates" >> "$GITHUB_STEP_SUMMARY"
+          # The runner must be exactly the version of the library in Cargo.lock; the image has one, a newer lock
+          # installs its own.
+          version=$(cargo metadata --locked --format-version 1 | jq -r '[.packages[] | select(.name == "gungraun") | .version][0] // empty')
+          if [ -n "$version" ] && [ "$(gungraun-runner --version | awk '{print $2}')" != "$version" ]; then
+            cargo install gungraun-runner --version "=$version" --locked --root "$RUNNER_TEMP/gungraun-runner"
+            echo "GUNGRAUN_RUNNER=$RUNNER_TEMP/gungraun-runner/bin/gungraun-runner" >> "$GITHUB_ENV"
+          else
+            echo "GUNGRAUN_RUNNER=$(command -v gungraun-runner)" >> "$GITHUB_ENV"
+          fi
       - name: Counts at the commit before the change
+        if: steps.crates.outputs.crates != ''
+        env:
+          BASE: ${{ steps.base.outputs.base }}
+          CRATES: ${{ steps.crates.outputs.crates }}
         run: |
-          if [ -z "$BASE" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+          if [ -z "$BASE" ]; then
             echo "::notice::No earlier commit to compare with: every count is new"
             exit 0
           fi
           git worktree add --detach "$RUNNER_TEMP/base" "$BASE"
-          if ! python3 -I scripts/dev/microbench --checkout "$RUNNER_TEMP/base" --among "$CRATES" \
-              --save-baseline=base --summary "$GITHUB_STEP_SUMMARY"; then
+          # only the crates that already had the bench at that commit; built into this checkout's target directory
+          had=$(cd "$RUNNER_TEMP/base" && cargo metadata --locked --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(any(.targets[]; .name == "instructions" and (.kind | index("bench")))) | .name')
+          packages=()
+          for crate in $CRATES; do
+            if grep -qxF "$crate" <<<"$had"; then packages+=(-p "$crate"); fi
+          done
+          if [ "${#packages[@]}" -eq 0 ]; then
+            echo "::notice::The earlier commit has none of these benches: every count is new"
+            exit 0
+          fi
+          # the change's toolchain and target directory, so that both counts come from one compiler and one place
+          export CARGO_TARGET_DIR=$GITHUB_WORKSPACE/target
+          RUSTUP_TOOLCHAIN=$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)
+          export RUSTUP_TOOLCHAIN
+          if ! (cd "$RUNNER_TEMP/base" && cargo bench --locked --no-fail-fast "${packages[@]}" --bench instructions \
+              -- --save-baseline=base); then
             echo "::warning::The benches of $BASE did not all run: the counts they did not save are new"
           fi
       - name: Counts at the change, against the commit before
-        run: >-
-          python3 -I scripts/dev/microbench --among "$CRATES" --baseline=base --limit "$MICROBENCH_LIMIT_PERCENT"
-          --summary "$GITHUB_STEP_SUMMARY"
-
-  # The C SDK as the cupertino-kit package installs it, built into a staging root: the C samples build as C11 and as
-  # C++17 with -Werror and print their traces, the samples' Makefile and the layout probe build with pkg-config alone,
-  # `cupertino sdk info` and `sdk check` read and build against the root, and the projects `cupertino sdk new` writes
-  # build (C: built and run headless; Rust: cargo check against this checkout's cupertino-kit).
-  c-sdk:
-    needs: selection
-    if: >-
-      inputs.full == true ||
-      contains(fromJSON(needs.selection.outputs.packages), 'cupertino-ui-abi') ||
-      contains(fromJSON(needs.selection.outputs.packages), 'cupertino-cli') ||
-      contains(fromJSON(needs.selection.outputs.packages), 'cupertino-kit')
-    name: C SDK
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    container: *arch-with-room
-    defaults: *as-ci
-    env:
-      CARGO_PROFILE_DEV_DEBUG: "0"
-    steps:
-      - *free-disk
-      - *arch-bootstrap
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: System packages and the build user
-        shell: bash
-        run: ci/arch-ci.sh install build && ci/arch-ci.sh user
-      - *rust-toolchain
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          shared-key: c-sdk-arch
-          save-if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
-      - *own-restored
-      - run: cargo fetch --locked
-      - run: python3 -I ci/c-sdk.py
-
-  # The transport's simple-window on a second compositor: Weston's headless backend, which offers no decoration
-  # protocol and no Cupertino protocol. These tests are ignored in the other jobs, which have no Weston.
-  weston:
-    if: inputs.full == true
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    container:
-      image: *arch-image
-    defaults: *as-ci
-    env:
-      CARGO_PROFILE_DEV_DEBUG: "0"
-    steps:
-      - *arch-bootstrap
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: System packages and the build user
-        shell: bash
-        run: ci/arch-ci.sh install weston && ci/arch-ci.sh user
-      - *rust-toolchain
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          shared-key: weston-arch
-          save-if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
-      - *own-restored
-      - name: Install Nextest 0.9.151
-        run: *install-nextest
-      - name: simple-window on Weston
-        # The example is the only fixture: prepared from this package alone, not the whole workspace.
-        run: python3 ci/build-test-fixtures.py --locked --package cupertino-wayland-client -- cargo nextest run --locked --profile ci -p cupertino-wayland-client --run-ignored only --no-fail-fast
-
-  # The headless golden scenes. Their baselines are valid only on the renderer of ci/goldens/Dockerfile (an Arch image
-  # pinned by digest, with every package from one Arch Linux Archive date), so the job runs ci/goldens.sh, which fails on
-  # any other renderer. The tests job skips these tests (they are ignored there). It runs docker on the runner VM, so it
-  # is not a container job itself.
-  goldens:
-    if: inputs.full == true
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Free unused runner SDKs before restoring build caches
-        run: |
-          df -h /
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
-          df -h /
-      - uses: ./.github/actions/golden-image
-        id: image
-      - name: Goldens in the pinned image
+        if: steps.crates.outputs.crates != ''
         env:
-          CUPERTINO_GOLDENS_IMAGE: ${{ steps.image.outputs.image }}
-        run: ci/goldens.sh
+          CRATES: ${{ steps.crates.outputs.crates }}
+        run: |
+          packages=()
+          for crate in $CRATES; do packages+=(-p "$crate"); done
+          status=0
+          cargo bench --locked --no-fail-fast "${packages[@]}" --bench instructions -- --output-format=json \
+            --baseline=base --callgrind-limits="ir=${MICROBENCH_LIMIT_PERCENT}%" > "$RUNNER_TEMP/counts.out" || status=$?
+          grep -v '^[[:space:]]*{' "$RUNNER_TEMP/counts.out" || true
+          # One row per benchmark from the runner's JSON lines: its instructions now and at the earlier commit.
+          grep '^[[:space:]]*{' "$RUNNER_TEMP/counts.out" | jq -s '[.[] as $s | ($s.profiles // [])[]
+              | select(.tool == "Callgrind") | (.data.total // {}) as $t
+              | {crate: (($s.package_dir // "") | split("/") | last),
+                 name: (($s.module_path // "?") + (if $s.id then " " + $s.id else "" end)),
+                 new: $t.metrics.Ir.values.new, old: $t.metrics.Ir.values.old,
+                 regressed: (($t.regressions // []) | length > 0)}]' > "$RUNNER_TEMP/counts.json"
+          {
+            echo "### Instruction counts against the commit before"
+            echo
+            echo "| crate | benchmark | instructions | baseline | change |"
+            echo "|---|---|---:|---:|---:|"
+            jq -r '.[] | "| \(.crate) | \(.name) | \(.new // "?") | \(.old // "new") | "
+                + (if .new != null and .old != null and .old != 0
+                   then "\((.new - .old) * 10000 / .old | round / 100)%" else "" end)
+                + (if .regressed then " **regressed**" else "" end) + " |"' "$RUNNER_TEMP/counts.json"
+          } >> "$GITHUB_STEP_SUMMARY"
+          regressed=$(jq -r '[.[] | select(.regressed) | .name] | join(", ")' "$RUNNER_TEMP/counts.json")
+          if [ -n "$regressed" ]; then
+            echo "::error::rose by more than ${MICROBENCH_LIMIT_PERCENT}% over the commit before: $regressed"
+            exit 1
+          fi
+          if [ "$status" -ne 0 ]; then
+            echo "::error::cargo bench failed ($status)"
+            exit 1
+          fi
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: always() && github.ref == 'refs/heads/main' && github.event_name == 'push'
+        with:
+          path: /var/cache/sccache
+          key: sccache-microbench-${{ github.sha }}
 
   result:
     name: CI result
     if: always()
-    needs: [selection, gate, docs, deny, fmt, layers, clippy, tests, microbench, c-sdk, weston, goldens]
-    runs-on: ubuntu-latest
+    needs: [image, validate, docs, deny, microbench]
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - env:
           NEEDS: ${{ toJSON(needs) }}
-          FULL: ${{ inputs.full == true }}
         run: |
-          python3 - <<'PY'
-          import json
-          import os
-
-          needs = json.loads(os.environ["NEEDS"])
-          expected = {"selection", "gate"}
-          if needs["selection"]["result"] == "success":
-              outputs = needs["selection"]["outputs"]
-              expected.update(name for name, enabled in json.loads(outputs["checks"]).items() if enabled)
-              packages = json.loads(outputs["packages"])
-              if packages:
-                  expected.update(("clippy", "tests"))
-              if {"cupertino-ui-abi", "cupertino-cli", "cupertino-kit"} & set(packages):
-                  expected.add("c-sdk")
-              if json.loads(outputs.get("microbench") or "[]"):
-                  expected.add("microbench")
-          if os.environ["FULL"] == "true":
-              expected.update(("docs", "deny", "fmt", "layers", "clippy", "tests", "c-sdk", "weston", "goldens"))
-          failed = {name: job["result"] for name, job in needs.items()
-                    if job["result"] in ("failure", "cancelled") or
-                    (name in expected and job["result"] != "success")}
-          print("Expected checks:", ", ".join(sorted(expected)))
-          print("Job results:", {name: job["result"] for name, job in needs.items()})
-          if failed:
-              raise SystemExit(f"required CI jobs did not succeed: {failed}")
-          PY
+          echo "Job results: $(jq -c 'map_values(.result)' <<<"$NEEDS")"
+          failed=$(jq -r 'to_entries | map(select(.value.result != "success") | "\(.key): \(.value.result)") | join(", ")' <<<"$NEEDS")
+          if [ -n "$failed" ]; then
+            echo "::error::required CI jobs did not succeed: $failed"
+            exit 1
+          fi

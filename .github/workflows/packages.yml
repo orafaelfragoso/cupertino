@@ -1,0 +1,342 @@
+name: Arch packages
+
+# Build, inspect and install-test the Arch packages of the committed source. The build job writes the release source
+# archive (git archive of the commit, xz) and the stable PKGBUILD with that archive's checksum (and, for a tag, the
+# release version), and runs makepkg in the CI image (check() included) as the unprivileged build user, then namcap and
+# the file lists of each package. A fresh container of the plain Arch base installs them, checks the login-screen
+# account, the unit state, the installed command, the manual pages and completions, conffile preservation across a
+# reinstall and a clean removal, then installs the SDK package alone and builds and runs the C samples against /usr.
+# Only then is packages.json written (the commit, the version and each package's SHA-256), so the ISO and the release
+# take packages that passed.
+#
+# Artifacts: `source` (the archive, PKGBUILD, PKGBUILD-git), `packages-arch` (the packages and packages.json) and
+# `logs-arch` (the build's and the tests' logs, the file lists).
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: The release tag (v<version> or v<version>-rc<N>); empty for the version in the source
+        type: string
+        default: ''
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_NET_RETRY: "10"
+
+jobs:
+  image:
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/ci-images.yml
+
+  build:
+    needs: image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ${{ needs.image.outputs.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
+      volumes:
+        - /usr/local/lib/android:/host/android
+        - /usr/share/dotnet:/host/dotnet
+        - /opt/ghc:/host/ghc
+        - /opt/hostedtoolcache/CodeQL:/host/codeql
+    defaults:
+      run:
+        shell: runuser -u ci -- bash --noprofile --norc -eo pipefail {0}
+    outputs:
+      commit: ${{ steps.source.outputs.commit }}
+      version: ${{ steps.source.outputs.version }}
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      CARGO_BUILD_JOBS: '4'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/arch-setup
+        with:
+          free-disk: 'true'
+      # The Arch pkgver of a v<version> or v<version>-rc<N> tag is <version> or <version>rc<N> (no hyphen; it sorts before
+      # <version>). Without a tag it is the cupertino-server version.
+      - name: Source archive and PKGBUILD
+        id: source
+        run: |
+          commit=$(git rev-parse HEAD)
+          source_version=$(sed -n '/^\[package\]/,/^\[/s/^version = "\(.*\)"$/\1/p' crates/cupertino-server/Cargo.toml | head -1)
+          tag=${RELEASE_TAG:-v$source_version}
+          if [[ ! "$tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)(-(rc[0-9]+))?$ ]]; then
+            echo "::error::tag $tag is neither v<version> nor v<version>-rc<N>"
+            exit 1
+          fi
+          version=${BASH_REMATCH[1]}${BASH_REMATCH[3]}
+          mkdir -p dist arch-build out/arch
+          archive=dist/cupertino-$version-source.tar.xz
+          git archive --format=tar --prefix="cupertino-$version/" "$commit" | xz -9 -T1 > "$archive"
+          grep -qxF "sha256sums=('UNRELEASED')" packaging/arch/cupertino/PKGBUILD \
+            || { echo "::error::packaging/arch/cupertino/PKGBUILD has no UNRELEASED checksum to fill"; exit 1; }
+          digest=$(sha256sum "$archive" | cut -d ' ' -f 1)
+          sed "s/^sha256sums=('UNRELEASED')\$/sha256sums=('$digest')/" packaging/arch/cupertino/PKGBUILD > dist/PKGBUILD
+          if [ -n "$RELEASE_TAG" ]; then
+            for line in "pkgver=$source_version" '_tag=v$pkgver'; do
+              [ "$(grep -cxF "$line" dist/PKGBUILD)" = 1 ] \
+                || { echo "::error::packaging/arch/cupertino/PKGBUILD must have exactly one line $line"; exit 1; }
+            done
+            sed -i -e "s/^pkgver=$source_version\$/pkgver=$version/" -e "s/^_tag=v\$pkgver\$/_tag=$RELEASE_TAG/" dist/PKGBUILD
+          fi
+          cp packaging/arch/cupertino-git/PKGBUILD dist/PKGBUILD-git
+          cp "$archive" dist/PKGBUILD arch-build/
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: source
+          path: dist/*
+          if-no-files-found: error
+      # The source is the archive next to the PKGBUILD, so makepkg downloads nothing. Packages are stripped; debug
+      # information would only take build storage.
+      - name: makepkg
+        env:
+          CARGO_INCREMENTAL: '0'
+          CARGO_PROFILE_RELEASE_DEBUG: '0'
+          CUPERTINO_THEME_DIR: /usr/share/cupertino/theme
+        run: |
+          export CARGO_TARGET_DIR=$GITHUB_WORKSPACE/arch-build/target
+          (cd arch-build && makepkg --noconfirm)
+          df -h . | tee out/arch/disk-after-makepkg.log
+      - name: namcap and the file lists
+        run: |
+          namcap arch-build/PKGBUILD arch-build/*.pkg.tar.zst | tee out/arch/namcap.log
+          cp arch-build/*.pkg.tar.zst arch-build/PKGBUILD out/arch/
+          for p in out/arch/*.pkg.tar.zst; do pacman -Qip "$p" > "$p.info"; pacman -Qlp "$p" > "$p.contents"; done
+          rm -rf arch-build/target
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: packages-arch-untested
+          path: out/arch/*
+          if-no-files-found: error
+          retention-days: 3
+
+  # The plain base image the packages are installed on, never the dependency-filled CI image.
+  install-test:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    container:
+      image: docker.io/library/archlinux@sha256:3cbf69d2d5958d6a294f3722c5668e6187c4df8e00fa27f72352f0bf83e495e1
+    steps:
+      # the C samples of the SDK test come from the source
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: packages-arch-untested
+          path: out/arch
+      - name: Install test
+        shell: bash
+        run: |
+          set -euo pipefail
+          ln -sfn "$GITHUB_WORKSPACE/out/arch" /dist
+          ln -sfn "$GITHUB_WORKSPACE/crates/cupertino-ui-abi" /abi
+          exec > >(tee out/arch/install-test-arch.log) 2>&1
+          check() { local label=$1; shift; "$@" || { echo "FAIL: $label"; exit 1; }; echo "$label"; }
+          absent() { for p in "$@"; do [ ! -e "$p" ] || return 1; done; }
+          pacman -Syu --noconfirm -q >/dev/null
+          # The container image's pacman.conf skips manual pages, documentation and most locales (NoExtract). An installed system
+          # has no such rule, and the packages are tested as it would extract them.
+          sed -i '/^NoExtract/d' /etc/pacman.conf
+          pacman -U --noconfirm /dist/cupertino-data-*.pkg.tar.zst /dist/cupertino-0*.pkg.tar.zst >/dev/null
+          reinstall() { pacman -U --noconfirm /dist/cupertino-0*.pkg.tar.zst >/dev/null 2>&1; }
+          remove() { pacman -Rns --noconfirm cupertino cupertino-data >/dev/null; }
+          echo "installed: $(ls /usr/bin/cupertino-* | wc -l) files in /usr/bin"
+          getent passwd cupertino-greeter
+          for u in cupertino-login cupertino-netd cupertino-btd cupertino-powerd; do
+              state=$(systemctl is-enabled "$u.service" 2>/dev/null || true)
+              echo "$u.service: $state"
+              [ "$state" = disabled ] || [ "$state" = static ]
+          done
+          for b in /usr/bin/cupertino /usr/bin/cupertino-*; do
+              [ "$b" = /usr/bin/cupertino-session ] && continue
+              if ldd "$b" | grep -q 'not found'; then ldd "$b"; exit 1; fi
+          done
+          echo 'all binaries resolve their libraries'
+          # the shell processes' test clock exists only in debug builds (cupertino-shell-client test_clock): a packaged binary that
+          # holds its variable's name was built with debug assertions
+          for b in /usr/bin/cupertino-login /usr/bin/cupertino-dock /usr/bin/cupertino-launcher; do
+              if grep -q -a CUPERTINO_TEST_CLOCK "$b"; then echo "$b holds the test clock: a debug build was packaged"; exit 1; fi
+          done
+          echo 'no packaged shell process reads the test clock'
+          /usr/bin/cupertino-server --help >/dev/null
+          echo 'cupertino-server --help: ok'
+          # The cupertino command as installed: run from /, as a user without a session, with nothing of the build's environment.
+          cli_checks() {
+              local user=cupertino-cli-test out recorded pkgver status
+              pacman -S --noconfirm --needed -q man-db bash-completion jq >/dev/null
+              useradd --no-create-home --shell /usr/bin/nologin "$user"
+              install -d -o "$user" -g "$user" -m 700 /tmp/u /tmp/u/runtime
+              local run_as=(setpriv --reuid="$user" --regid="$user" --clear-groups env -i PATH=/usr/bin HOME=/tmp/u)
+              as_user() { (cd / && exec "${run_as[@]}" "$@"); }
+              out=$(as_user cupertino --version)
+              check "cupertino --version: $out" grep -Eq '^cupertino [0-9]+\.[0-9]+\.[0-9]+ \([0-9a-f]{12}\)$' <<<"$out"
+              as_user cupertino --format json version > /tmp/u/version.json
+              for part in runtime-package:cupertino data-package:cupertino-data; do
+                  recorded=$(jq -er --arg n "${part%%:*}" '.data.components[] | select(.name == $n and .status == "ok") | .version' /tmp/u/version.json)
+                  pkgver=$(pacman -Q "${part#*:}" | cut -d' ' -f2)
+                  pkgver=${pkgver%-*}
+                  check "${part%%:*} $recorded is ${part#*:} $pkgver" test "$recorded" = "${pkgver%%rc*}"
+              done
+              check 'the runtime package records the commit cupertino was built from' \
+                  jq -e '[.data.components[] | select(.name == "cli" or .name == "runtime-package") | .commit] | .[0] == .[1] and (.[0] | test("^[0-9a-f]{40}$"))' /tmp/u/version.json
+              as_user cupertino help > /tmp/u/help.txt
+              check 'cupertino help lists desktop start' grep -q '^  desktop start' /tmp/u/help.txt
+              status=0
+              as_user cupertino --format jsonl diagnose > /tmp/u/diagnose.jsonl || status=$?
+              check "cupertino --format jsonl diagnose: exit $status, end last" \
+                  jq -se --argjson s "$status" '$s == 0 and .[-1].type == "end" and .[-1].ok and ([.[] | select(.type == "end")] | length) == 1' /tmp/u/diagnose.jsonl
+              as_user cupertino diagnose export --output /tmp/u/export.json >/dev/null
+              check 'cupertino diagnose export writes one private JSON document with its keys' sh -c \
+                  'test "$(stat -c %a /tmp/u/export.json)" = 600 && jq -e '"'"'.schema == "cupertino.diag.export.v1" and ((["created", "events", "report", "schema", "sources", "versions"] - keys) == [])'"'"' /tmp/u/export.json >/dev/null'
+              # desktop start runs until stopped: started in the background, stopped with SIGTERM once the compositor is ready.
+              # The subshell is the background job itself and exec replaces it, so $! is the cupertino process: the signal reaches
+              # it and wait returns its exit status. (`as_user … &` would make $! a shell that waits for the command: SIGTERM would
+              # end that shell with status 143 and leave the command running.)
+              (cd / && exec "${run_as[@]}" XDG_RUNTIME_DIR=/tmp/u/runtime cupertino --format jsonl desktop start --backend headless \
+                  --spawn true) > /tmp/u/desktop.jsonl 2> /tmp/u/desktop.err &
+              local pid=$!
+              desktop_failed() {
+                  echo "FAIL: $1 (exit status $status); its last records and the end of its stderr:"
+                  tail -n 5 /tmp/u/desktop.jsonl
+                  tail -n 20 /tmp/u/desktop.err
+                  exit 1
+              }
+              # grep reads a process substitution, so the test does not wait for tail, which follows the file until the command ends
+              if timeout 120 grep -m1 -q '"event":"ready"' <(tail -n +1 --pid="$pid" -f /tmp/u/desktop.jsonl); then
+                  check "the background job is the cupertino process: $(cat "/proc/$pid/comm")" test "$(cat "/proc/$pid/comm")" = cupertino
+                  kill -TERM "$pid"
+                  status=0
+                  wait "$pid" || status=$?
+                  jq -se --argjson s "$status" '$s == 0 and .[-1].type == "end" and .[-1].reason == "stopped" and (map(.event) | index("ready")) != null' \
+                      /tmp/u/desktop.jsonl >/dev/null || desktop_failed 'cupertino desktop start --backend headless: ready, stopped by SIGTERM, exit 0'
+                  echo 'cupertino desktop start --backend headless: ready, stopped by SIGTERM, exit 0'
+                  check 'the stopped compositor left no runtime file' sh -c '! ls /tmp/u/runtime/cupertino/server-*.json 2>/dev/null'
+              else
+                  kill -TERM "$pid" 2>/dev/null || true
+                  status=0
+                  wait "$pid" || status=$?
+                  if grep -q 'no usable EGL device' /tmp/u/desktop.err; then
+                      cat /tmp/u/desktop.jsonl /tmp/u/desktop.err
+                      echo 'BLOCKED B5: the container has no EGL device for the headless compositor; run `cupertino desktop start --backend headless --spawn true` on a machine with a GPU'
+                  else
+                      desktop_failed 'cupertino desktop start --backend headless did not get ready'
+                  fi
+              fi
+              check "man -w cupertino: $(man -w cupertino)" test "$(man -w cupertino)" = /usr/share/man/man1/cupertino.1
+              check 'man -l renders cupertino.1' sh -c 'man -l /usr/share/man/man1/cupertino.1 2>/dev/null | head -5 | grep -q cupertino'
+              for page in /usr/share/man/man1/cupertino-*.1; do man -l "$page" >/dev/null 2>&1 || { echo "FAIL: man -l $page"; exit 1; }; done
+              out=$(as_user bash -ic 'for f in _comp_load __load_completion _completion_loader; do
+                  declare -F "$f" >/dev/null && { "$f" cupertino; break; }; done; complete -p cupertino' 2>/dev/null)
+              check "bash completes cupertino: $out" test "$out" = 'complete -F _cupertino cupertino'
+              userdel "$user"
+          }
+          cli_checks
+          test -f /usr/share/cupertino/theme/tokens.json && test -f /usr/share/cupertino/assets/manifest.json
+          echo '# local edit' >> /etc/cupertino/login.conf
+          reinstall
+          check 'login.conf kept across reinstall' grep -q '^# local edit' /etc/cupertino/login.conf
+          remove
+          check 'removed cleanly' absent /usr/bin/cupertino-server /usr/share/cupertino/assets/manifest.json
+          # The C SDK as a developer gets it: the cupertino-kit package alone, then C programs built from / by a user without a
+          # session, with only /usr/bin on PATH, against the installed header, library and pkg-config file.
+          sdk_checks() {
+              local user=cupertino-sdk-test home=/tmp/sdk major minor version
+              pacman -S --noconfirm --needed -q gcc make pkgconf >/dev/null
+              pacman -U --noconfirm /dist/cupertino-kit-*.pkg.tar.zst >/dev/null
+              check 'cupertino-kit installs without cupertino' sh -c '! pacman -Q cupertino >/dev/null 2>&1'
+              major=$(sed -n 's/^#define CUPERTINOKIT_ABI_MAJOR \([0-9]*\)$/\1/p' /usr/include/cupertinokit-1/cupertinokit.h)
+              minor=$(sed -n 's/^#define CUPERTINOKIT_ABI_MINOR \([0-9]*\)$/\1/p' /usr/include/cupertinokit-1/cupertinokit.h)
+              version=$(pkg-config --modversion cupertinokit)
+              check "pkg-config --modversion cupertinokit: $version, the header's ABI $major.$minor" test "$version" = "$major.$minor.0"
+              check 'libcupertinokit.so.1 is the soname' sh -c "readelf -d /usr/lib/libcupertinokit.so.1 | grep -q 'SONAME.*libcupertinokit.so.1'"
+              check "libcupertinokit.so.1 -> $(readlink /usr/lib/libcupertinokit.so.1)" \
+                  test "$(readlink /usr/lib/libcupertinokit.so.1)" = "libcupertinokit.so.1.$minor.0"
+              check 'libcupertinokit.so -> libcupertinokit.so.1' test "$(readlink /usr/lib/libcupertinokit.so)" = libcupertinokit.so.1
+              if ldd /usr/lib/libcupertinokit.so.1 | grep -q 'not found'; then ldd /usr/lib/libcupertinokit.so.1; exit 1; fi
+              echo 'libcupertinokit.so.1 resolves its libraries'
+              useradd --no-create-home --shell /usr/bin/nologin "$user"
+              install -d -o "$user" -g "$user" -m 700 "$home" "$home/make"
+              install -o "$user" -g "$user" -m 644 /abi/examples/c/headless.c /abi/examples/c/headless.expected /abi/tests/c/layout.c \
+                  /abi/abi/layout-1.txt "$home/"
+              install -o "$user" -g "$user" -m 644 /abi/examples/c/headless.c /abi/examples/c/Makefile "$home/make/"
+              sdk_user() { (cd "$home" && exec setpriv --reuid="$user" --regid="$user" --clear-groups env -i PATH=/usr/bin HOME="$home" sh -c "$1"); }
+              check 'the headless sample compiles against /usr with -Werror' sdk_user \
+                  'cc -std=c11 -Wall -Wextra -Werror -pthread $(pkg-config --cflags cupertinokit) headless.c -o headless $(pkg-config --libs cupertinokit)'
+              check 'it compiles as C++ too' sdk_user \
+                  'c++ -x c++ -std=c++17 -Wall -Wextra -Werror -pthread $(pkg-config --cflags cupertinokit) headless.c -o headless-cxx $(pkg-config --libs cupertinokit)'
+              check 'the headless sample prints its trace and exits 0' sdk_user './headless > headless.out && cmp headless.out headless.expected'
+              check 'the C++ build prints the same trace' sdk_user './headless-cxx > headless-cxx.out && cmp headless-cxx.out headless.expected'
+              check 'the Makefile builds it with pkg-config alone' sdk_user 'make -C make && ./make/headless > make.out && cmp make.out headless.expected'
+              check 'the C compiler sees the struct layouts of layout-1.txt' sdk_user \
+                  'cc -std=c11 -Wall -Wextra -Werror $(pkg-config --cflags cupertinokit) layout.c -o layout && ./layout > layout.out && diff layout.out layout-1.txt'
+              # with the desktop installed too, the cupertino command reports and checks the SDK, and starts a project on it
+              pacman -U --noconfirm /dist/cupertino-data-*.pkg.tar.zst /dist/cupertino-0*.pkg.tar.zst >/dev/null
+              check 'cupertino sdk info --require: the SDK is installed' sdk_user 'cupertino sdk info --require'
+              check 'cupertino sdk check compiles and runs its probe' sdk_user 'cupertino sdk check'
+              check 'cupertino sdk new --lang c demo && make -C demo: the starter builds and runs' sdk_user \
+                  'cupertino sdk new --lang c demo && make -C demo && ./demo/demo'
+              pacman -Rns --noconfirm cupertino cupertino-data >/dev/null
+              pacman -Rns --noconfirm cupertino-kit >/dev/null
+              check 'cupertino-kit removed cleanly' absent /usr/lib/libcupertinokit.so.1 /usr/lib/libcupertinokit.so \
+                  /usr/include/cupertinokit-1 /usr/lib/pkgconfig/cupertinokit.pc /usr/share/cupertino-kit
+              check 'no libcupertinokit file is left' sh -c '! ls /usr/lib/libcupertinokit.so* 2>/dev/null'
+              userdel "$user"
+          }
+          sdk_checks
+      - name: packages.json
+        shell: bash
+        env:
+          COMMIT: ${{ needs.build.outputs.commit }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          pacman -S --noconfirm --needed -q jq >/dev/null
+          mkdir -p dist logs
+          cd out/arch
+          # exactly one runtime, one data and one SDK package of this version
+          shopt -s nullglob
+          runtime=(cupertino-"$VERSION"-[0-9]*-x86_64.pkg.tar.zst)
+          data=(cupertino-data-"$VERSION"-[0-9]*-any.pkg.tar.zst)
+          sdk=(cupertino-kit-"$VERSION"-[0-9]*-x86_64.pkg.tar.zst)
+          all=(*.pkg.tar.zst)
+          if [ "${#runtime[@]}" != 1 ] || [ "${#data[@]}" != 1 ] || [ "${#sdk[@]}" != 1 ] || [ "${#all[@]}" != 3 ]; then
+            echo "::error::expected one runtime, one data and one SDK package for $VERSION, found: ${all[*]}"
+            exit 1
+          fi
+          files=$(sha256sum "${all[@]}" | jq -Rn '[inputs | split("  ") | {(.[1]): .[0]}] | add')
+          jq -nS --arg commit "$COMMIT" --arg version "$VERSION" --argjson files "$files" \
+            '{schema: 1, commit: $commit, version: $version, files: $files}' > packages.json
+          mv "${all[@]}" packages.json ../../dist/
+          mv ./* ../../logs/
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: packages-arch
+          path: dist/*
+          if-no-files-found: error
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: logs-arch
+          path: |
+            logs/*
+            out/arch/*.log
+          if-no-files-found: warn

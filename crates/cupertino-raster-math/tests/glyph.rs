@@ -1,18 +1,11 @@
-//! Glyph rasterisation: stem darkening and exact-area scan conversion, on hand-made outlines and on the toolkit's
-//! font.
+//! Glyph rasterisation: stem darkening and exact-area scan conversion, on hand-made outlines (the toolkit's font is
+//! tested in `cupertino-ui-text`).
 
 use cupertino_raster_math::glyph::{
     declarative_size, mask_bounds, quantization, quantized_luminance, rasterize, Mask, Smoothing,
     MAX_MASK_SIDE,
 };
-use swash::scale::ScaleContext;
 use swash::zeno::{Point, Verb};
-use swash::FontRef;
-
-const FONT: &[u8] = include_bytes!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../cupertino-assets/fonts/InterVariable-subset.ttf"
-));
 
 fn pt(x: f32, y: f32) -> Point {
     Point::new(x, y)
@@ -142,6 +135,11 @@ fn mask_bounds_are_at_least_one_pixel() {
 #[test]
 fn mask_bounds_refuse_what_is_not_finite_or_too_large() {
     assert_eq!(mask_bounds((f32::NAN, 0.0), (1.0, 1.0)), None);
+    // inverted corners, on either axis or both
+    assert_eq!(mask_bounds((1.0, 1.0), (5.0, 5.0)), Some((1, 5, 4, 4)));
+    assert_eq!(mask_bounds((5.0, 5.0), (1.0, 1.0)), None);
+    assert_eq!(mask_bounds((5.0, 1.0), (1.0, 5.0)), None);
+    assert_eq!(mask_bounds((1.0, 5.0), (5.0, 1.0)), None);
     assert_eq!(mask_bounds((0.0, 0.0), (f32::INFINITY, 1.0)), None);
     assert_eq!(mask_bounds((0.0, f32::NEG_INFINITY), (1.0, 1.0)), None);
     let max = MAX_MASK_SIDE as f32;
@@ -266,8 +264,10 @@ fn an_empty_or_degenerate_outline_has_no_mask() {
     assert!(raster(&two, (0.0, 0.0), (0.0, 0.0)).is_none());
     let flat = polygon(&[(0.0, 0.0), (5.0, 0.0), (10.0, 0.0)]);
     let m = raster(&flat, (0.0, 0.0), (0.0, 0.0));
-    // a zero-area contour covers nothing, whether or not it makes a mask
-    assert!(m.is_none_or(|m| m.data.iter().all(|&v| v == 0)));
+    // a zero-area contour has bounds of at least one pixel, so it makes a mask that covers nothing
+    let m = m.expect("a flat contour still gets a one pixel mask");
+    assert_eq!((m.width, m.height), (10, 1));
+    assert!(m.data.iter().all(|&v| v == 0));
 }
 
 #[test]
@@ -316,80 +316,4 @@ fn dilation_only_adds_ink() {
         assert!(ink(&thick) > last, "d = {d}");
         last = ink(&thick);
     }
-}
-
-fn glyph_outline(c: char, size: f32) -> Option<(Vec<Point>, Vec<Verb>)> {
-    let font = FontRef::from_index(FONT, 0).expect("the font parses");
-    let id = font.charmap().map(c);
-    let mut context = ScaleContext::new();
-    let mut scaler = context.builder(font).size(size).hint(false).build();
-    let outline = scaler.scale_outline(id)?;
-    Some((outline.points().to_vec(), outline.verbs().to_vec()))
-}
-
-#[test]
-fn a_font_glyph_rasterises_to_a_mask_around_its_ink() {
-    let outline = glyph_outline('H', 32.0).expect("the font has an H");
-    let m = raster(&outline, (0.0, 0.0), (0.0, 0.0)).unwrap();
-    assert!(m.width > 8 && m.width < 32, "{}", m.width);
-    // an H is a cap height tall: about 0.73 em
-    assert!((20..=26).contains(&m.height), "{}", m.height);
-    assert!(m.top > 0, "the glyph stands on the baseline");
-    assert_eq!(m.data.len(), (m.width * m.height) as usize);
-    // full-coverage pixels sit in the stems, and the ink is some fraction of the box
-    assert!(m.data.contains(&255));
-    let box_area = (m.width * m.height) as f32;
-    assert!(ink(&m) > 0.2 * box_area && ink(&m) < 0.6 * box_area);
-}
-
-#[test]
-fn an_h_is_left_right_symmetric_to_the_subpixel() {
-    let outline = glyph_outline('H', 40.0).unwrap();
-    let m = raster(&outline, (0.0, 0.0), (0.0, 0.0)).unwrap();
-    let w = m.width as usize;
-    let mid = m.height as usize / 4;
-    let left: f32 = row(&m, mid)[..w / 2].iter().map(|&v| f32::from(v)).sum();
-    let right: f32 = row(&m, mid)[w - w / 2..]
-        .iter()
-        .map(|&v| f32::from(v))
-        .sum();
-    assert!(
-        (left - right).abs() < 0.2 * left.max(right),
-        "{left} {right}"
-    );
-}
-
-#[test]
-fn a_font_glyph_has_the_same_ink_wherever_it_sits_between_pixels() {
-    let outline = glyph_outline('o', 24.0).unwrap();
-    let base = ink(&raster(&outline, (0.0, 0.0), (0.0, 0.0)).unwrap());
-    for dx in [0.25, 0.5, 0.75] {
-        let moved = ink(&raster(&outline, (dx, 0.0), (0.0, 0.0)).unwrap());
-        assert!(
-            (moved - base).abs() < 0.01 * base,
-            "{dx}: {moved} against {base}"
-        );
-    }
-}
-
-#[test]
-fn stem_darkening_thickens_a_font_glyph_by_the_dilation_it_names() {
-    let outline = glyph_outline('l', 16.0).unwrap();
-    let plain = raster(&outline, (0.0, 0.0), (0.0, 0.0)).unwrap();
-    let d = Smoothing::On.dilation(declarative_size(16.0), 1.0);
-    let bold = raster(&outline, (0.0, 0.0), (d, d)).unwrap();
-    assert!(d > 0.0 && d < 0.3);
-    assert!(ink(&bold) > ink(&plain));
-    // a stem gains d on each side
-    let w = plain.width as f32;
-    let gained = (ink(&bold) - ink(&plain)) / plain.height as f32;
-    assert!(gained > d, "{gained} per row for {d}");
-    assert!(gained < 4.0 * d + w * 0.01, "{gained}");
-}
-
-#[test]
-fn the_font_has_glyphs_without_outlines() {
-    // a space has no ink: the scaler yields no outline or an empty one, and either way there is no mask
-    let mask = glyph_outline(' ', 16.0).and_then(|o| raster(&o, (0.0, 0.0), (0.1, 0.1)));
-    assert!(mask.is_none());
 }

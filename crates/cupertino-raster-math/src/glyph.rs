@@ -207,9 +207,11 @@ fn dilated_edges(
 pub const MAX_MASK_SIDE: u32 = 4096;
 
 /// The whole-pixel mask `(left, top, width, height)` around the bounds `min`–`max` (pixels, y up), at least one pixel
-/// on a side. `None` when a bound is not finite, a side exceeds [`MAX_MASK_SIDE`] or `left` / `top` leave `i32`.
+/// on a side. `None` when a bound is not finite, `min` is above `max` on either axis (inverted corners), a side exceeds
+/// [`MAX_MASK_SIDE`] or `left` / `top` leave `i32`.
 pub fn mask_bounds(min: (f32, f32), max: (f32, f32)) -> Option<(i32, i32, u32, u32)> {
-    if ![min.0, min.1, max.0, max.1].iter().all(|v| v.is_finite()) {
+    if ![min.0, min.1, max.0, max.1].iter().all(|v| v.is_finite()) || min.0 > max.0 || min.1 > max.1
+    {
         return None;
     }
     let (left, right) = (min.0.floor() as i64, max.0.ceil() as i64);

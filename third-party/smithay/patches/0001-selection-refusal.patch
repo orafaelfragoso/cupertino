@@ -1,0 +1,339 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,6 +1,16 @@
+ # Smithay Changelog
+ 
+ ## Unreleased
++
++### Additions
++
++`SelectionHandler::allow_selection` is asked before a client's set_selection replaces the clipboard or
++primary selection, through wl_data_device, the primary selection, wlr and ext data control. A refused
++source is cancelled, `new_selection` is not called, and the current selection keeps its source.
++`SelectionHandler::allow_receive` is asked before a client reads an offered selection, or the data of a
++client's drag (wl_data_offer.receive during a drag or after its drop); a refused read closes the client's
++pipe, and a read whose seat is gone is refused. `SelectionSource::provider` and the re-exported `SelectionSourceProvider`
++name the protocol object that set a selection.
+ 
+ ## 0.7.0
+ 
+diff --git a/src/wayland/selection/data_device/device.rs b/src/wayland/selection/data_device/device.rs
+--- a/src/wayland/selection/data_device/device.rs
++++ b/src/wayland/selection/data_device/device.rs
+@@ -131,6 +131,15 @@
+                 };
+                 let source = source.map(SelectionSourceProvider::DataDevice);
+ 
++                if crate::wayland::selection::refused(
++                    handler,
++                    SelectionTarget::Clipboard,
++                    source.as_ref(),
++                    &seat,
++                ) {
++                    return;
++                }
++
+                 handler.new_selection(
+                     SelectionTarget::Clipboard,
+                     source.clone().map(|provider| SelectionSource { provider }),
+diff --git a/src/wayland/selection/data_device/dnd_grab.rs b/src/wayland/selection/data_device/dnd_grab.rs
+--- a/src/wayland/selection/data_device/dnd_grab.rs
++++ b/src/wayland/selection/data_device/dnd_grab.rs
+@@ -5,6 +5,7 @@
+     sync::{Arc, Mutex},
+ };
+ 
++use tracing::debug;
+ use wayland_server::{
+     backend::{protocol::Message, ClientId, Handle, ObjectData, ObjectId},
+     protocol::{
+@@ -25,7 +26,7 @@
+             PointerInnerHandle, RelativeMotionEvent,
+         },
+         touch::{GrabStartData as TouchGrabStartData, TouchGrab},
+-        Seat, SeatHandler,
++        Seat, SeatHandler, WeakSeat,
+     },
+     utils::{IsAlive, Logical, Point, Serial, SERIAL_COUNTER},
+     wayland::{seat::WaylandFocus, selection::seat_data::SeatData},
+@@ -182,6 +183,7 @@
+                                 Arc::new(DndDataOffer {
+                                     offer_data: offer_data.clone(),
+                                     source: source.clone(),
++                                    seat: self.seat.downgrade(),
+                                 }),
+                             )
+                             .unwrap();
+@@ -506,12 +508,14 @@
+ }
+ 
+ #[derive(Debug)]
+-struct DndDataOffer {
++struct DndDataOffer<D: SeatHandler> {
+     offer_data: Arc<Mutex<OfferData>>,
+     source: WlDataSource,
+-}
+-
+-impl<D> ObjectData<D> for DndDataOffer
++    /// The seat of the drag, for [`SelectionHandler::allow_receive`](super::super::SelectionHandler::allow_receive).
++    seat: WeakSeat<D>,
++}
++
++impl<D> ObjectData<D> for DndDataOffer<D>
+ where
+     D: DataDeviceHandler,
+     D: 'static,
+@@ -520,12 +524,12 @@
+         self: Arc<Self>,
+         dh: &Handle,
+         handler: &mut D,
+-        _client_id: ClientId,
++        client_id: ClientId,
+         msg: Message<ObjectId, OwnedFd>,
+     ) -> Option<Arc<dyn ObjectData<D>>> {
+         let dh = DisplayHandle::from(dh.clone());
+         if let Ok((resource, request)) = WlDataOffer::parse_request(&dh, msg) {
+-            handle_dnd(handler, &resource, request, &self);
++            handle_dnd(handler, &client_id, &resource, request, &self);
+         }
+ 
+         None
+@@ -541,13 +545,19 @@
+     }
+ }
+ 
+-fn handle_dnd<D>(handler: &mut D, offer: &WlDataOffer, request: wl_data_offer::Request, data: &DndDataOffer)
+-where
++fn handle_dnd<D>(
++    handler: &mut D,
++    client: &ClientId,
++    offer: &WlDataOffer,
++    request: wl_data_offer::Request,
++    data: &DndDataOffer<D>,
++) where
+     D: DataDeviceHandler,
+     D: 'static,
+ {
+     use self::wl_data_offer::Request;
+     let source = &data.source;
++    let seat = &data.seat;
+     let mut data = data.offer_data.lock().unwrap();
+     match request {
+         Request::Accept { mime_type, .. } => {
+@@ -567,7 +577,12 @@
+                 .unwrap_or(false)
+                 && source.alive()
+                 && data.active;
+-            if valid {
++            let allowed = seat
++                .upgrade()
++                .is_some_and(|seat| handler.allow_receive(client, &seat));
++            if !allowed {
++                debug!("Denying a wl_data_offer.receive of a drag the compositor refused");
++            } else if valid {
+                 source.send(mime_type, fd.as_fd());
+             }
+         }
+diff --git a/src/wayland/selection/ext_data_control/device.rs b/src/wayland/selection/ext_data_control/device.rs
+--- a/src/wayland/selection/ext_data_control/device.rs
++++ b/src/wayland/selection/ext_data_control/device.rs
+@@ -49,6 +49,15 @@
+ 
+                 let source = source.map(SelectionSourceProvider::ExtDataControl);
+ 
++                if crate::wayland::selection::refused(
++                    handler,
++                    SelectionTarget::Clipboard,
++                    source.as_ref(),
++                    &seat,
++                ) {
++                    return;
++                }
++
+                 handler.new_selection(
+                     SelectionTarget::Clipboard,
+                     source.clone().map(|provider| SelectionSource { provider }),
+@@ -71,6 +80,15 @@
+                     .insert_if_missing(|| RefCell::new(SeatData::<D::SelectionUserData>::new()));
+ 
+                 let source = source.map(SelectionSourceProvider::ExtDataControl);
++
++                if crate::wayland::selection::refused(
++                    handler,
++                    SelectionTarget::Primary,
++                    source.as_ref(),
++                    &seat,
++                ) {
++                    return;
++                }
+ 
+                 handler.new_selection(
+                     SelectionTarget::Primary,
+diff --git a/src/wayland/selection/mod.rs b/src/wayland/selection/mod.rs
+--- a/src/wayland/selection/mod.rs
++++ b/src/wayland/selection/mod.rs
+@@ -13,6 +13,8 @@
+ 
+ use std::os::unix::io::OwnedFd;
+ 
++use wayland_server::backend::ClientId;
++
+ use crate::input::{Seat, SeatHandler};
+ 
+ pub mod data_device;
+@@ -25,12 +27,32 @@
+ mod seat_data;
+ mod source;
+ 
+-pub use source::SelectionSource;
++pub use source::{SelectionSource, SelectionSourceProvider};
+ 
+ /// Events that are generated by interactions of the clients with the data device.
+ pub trait SelectionHandler: Sized + SeatHandler {
+     /// UserData attached to server-side selections.
+     type SelectionUserData: Clone + Send + Sync + 'static;
++
++    /// A client asks to set the selection to `source`.
++    ///
++    /// Returning `false` refuses the request: `source` is cancelled, [`SelectionHandler::new_selection`]
++    /// is not called, and the current selection and its source stay as they are. Clearing the
++    /// selection is not asked for. The default allows every request.
++    #[allow(unused_variables)]
++    fn allow_selection(&mut self, ty: SelectionTarget, source: &SelectionSource, seat: &Seat<Self>) -> bool {
++        true
++    }
++
++    /// The client `client` asks to read a selection, or the data of a client's drag, offered to it.
++    ///
++    /// Returning `false` refuses the request: the source is not asked for the data and the
++    /// client's end of the pipe is closed. A request whose seat is gone is refused without
++    /// asking. The default allows every request.
++    #[allow(unused_variables)]
++    fn allow_receive(&mut self, client: &ClientId, seat: &Seat<Self>) -> bool {
++        true
++    }
+ 
+     /// A client has set the selection
+     #[allow(unused_variables)]
+@@ -50,6 +72,26 @@
+         user_data: &Self::SelectionUserData,
+     ) {
+     }
++}
++
++/// Ask the handler whether a client may set the selection to `source`, and cancel the source when it may not.
++pub(crate) fn refused<D: SelectionHandler>(
++    handler: &mut D,
++    ty: SelectionTarget,
++    source: Option<&SelectionSourceProvider>,
++    seat: &Seat<D>,
++) -> bool {
++    let Some(provider) = source else {
++        return false;
++    };
++    let source = SelectionSource {
++        provider: provider.clone(),
++    };
++    if handler.allow_selection(ty, &source, seat) {
++        return false;
++    }
++    provider.cancel();
++    true
+ }
+ 
+ /// The target for the selection request.
+diff --git a/src/wayland/selection/offer.rs b/src/wayland/selection/offer.rs
+--- a/src/wayland/selection/offer.rs
++++ b/src/wayland/selection/offer.rs
+@@ -127,7 +127,7 @@
+         self: Arc<Self>,
+         dh: &Handle,
+         handle: &mut D,
+-        _: ClientId,
++        client: ClientId,
+         msg: Message<ObjectId, OwnedFd>,
+     ) -> Option<Arc<dyn ObjectData<D>>> {
+         let dh = DisplayHandle::from(dh.clone());
+@@ -174,7 +174,11 @@
+             }
+         };
+ 
+-        if !self.source.contains_mime_type(&mime_type) {
++        let allowed =
++            Seat::<D>::from_resource(&self.seat).is_some_and(|seat| handle.allow_receive(&client, &seat));
++        if !allowed {
++            debug!("Denying a {object_name}.receive the compositor refused");
++        } else if !self.source.contains_mime_type(&mime_type) {
+             debug!("Denying a {object_name}.receive with invalid mime type");
+         } else {
+             match &self.source {
+diff --git a/src/wayland/selection/primary_selection/device.rs b/src/wayland/selection/primary_selection/device.rs
+--- a/src/wayland/selection/primary_selection/device.rs
++++ b/src/wayland/selection/primary_selection/device.rs
+@@ -68,6 +68,15 @@
+ 
+                 let source = source.map(SelectionSourceProvider::Primary);
+ 
++                if crate::wayland::selection::refused(
++                    handler,
++                    SelectionTarget::Primary,
++                    source.as_ref(),
++                    &seat,
++                ) {
++                    return;
++                }
++
+                 handler.new_selection(
+                     SelectionTarget::Primary,
+                     source.clone().map(|provider| SelectionSource { provider }),
+diff --git a/src/wayland/selection/source.rs b/src/wayland/selection/source.rs
+--- a/src/wayland/selection/source.rs
++++ b/src/wayland/selection/source.rs
+@@ -25,6 +25,11 @@
+     /// Mime types associated with the source.
+     pub fn mime_types(&self) -> Vec<String> {
+         self.provider.mime_types()
++    }
++
++    /// The protocol object that provides the data. Its client is the one that set the selection.
++    pub fn provider(&self) -> &SelectionSourceProvider {
++        &self.provider
+     }
+ }
+ 
+diff --git a/src/wayland/selection/wlr_data_control/device.rs b/src/wayland/selection/wlr_data_control/device.rs
+--- a/src/wayland/selection/wlr_data_control/device.rs
++++ b/src/wayland/selection/wlr_data_control/device.rs
+@@ -50,6 +50,15 @@
+ 
+                 let source = source.map(SelectionSourceProvider::WlrDataControl);
+ 
++                if crate::wayland::selection::refused(
++                    handler,
++                    SelectionTarget::Clipboard,
++                    source.as_ref(),
++                    &seat,
++                ) {
++                    return;
++                }
++
+                 handler.new_selection(
+                     SelectionTarget::Clipboard,
+                     source.clone().map(|provider| SelectionSource { provider }),
+@@ -72,6 +81,15 @@
+                     .insert_if_missing(|| RefCell::new(SeatData::<D::SelectionUserData>::new()));
+ 
+                 let source = source.map(SelectionSourceProvider::WlrDataControl);
++
++                if crate::wayland::selection::refused(
++                    handler,
++                    SelectionTarget::Primary,
++                    source.as_ref(),
++                    &seat,
++                ) {
++                    return;
++                }
+ 
+                 handler.new_selection(
+                     SelectionTarget::Primary,

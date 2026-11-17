@@ -1,0 +1,145 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -19,6 +19,10 @@
+ (`GraphicsResetStatus`), so a compositor can recreate a lost context.
+ 
+ ### Bugfixes
++
++Remove four unused tracing imports, cast the SIGBUS handler through a pointer before its integer representation,
++and advance swapchain buffer ages with compare/exchange instead of deprecated `fetch_update`. Age zero and overflow
++handling and sequentially consistent ordering are preserved without raising the declared Rust version.
+ 
+ Removing a `wl_shm` buffer destruction hook removed another hook of that buffer instead of the given one. A
+ client that destroyed its `xdg_toplevel_icon_v1` and then a buffer it had added to it got the `no_buffer`
+diff --git a/src/backend/allocator/swapchain.rs b/src/backend/allocator/swapchain.rs
+--- a/src/backend/allocator/swapchain.rs
++++ b/src/backend/allocator/swapchain.rs
+@@ -15,6 +15,26 @@
+ use super::dmabuf::{AsDmabuf, Dmabuf};
+ 
+ pub const SLOT_CAP: usize = 4;
++
++/// Advance a used buffer's age, preserving zero for a buffer never submitted.
++/// Return false on overflow so the caller discards the stale slot. Use compare/exchange rather than the deprecated
++/// `fetch_update` or its newer replacement to retain the vendored crate's declared Rust compatibility.
++fn advance_age(age: &AtomicU8) -> bool {
++    let mut current = age.load(Ordering::SeqCst);
++    loop {
++        let next = if current == 0 {
++            0
++        } else if let Some(next) = current.checked_add(1) {
++            next
++        } else {
++            return false;
++        };
++        match age.compare_exchange_weak(current, next, Ordering::SeqCst, Ordering::SeqCst) {
++            Ok(_) => return true,
++            Err(actual) => current = actual,
++        }
++    }
++}
+ 
+ /// Swapchain handling a fixed set of re-usable buffers e.g. for scan-out.
+ ///
+@@ -204,17 +224,8 @@
+         slot.0.age.store(1, Ordering::SeqCst);
+         for other_slot in &mut self.slots {
+             if !Arc::ptr_eq(other_slot, &slot.0) && other_slot.buffer.is_some() {
+-                let res = other_slot
+-                    .age
+-                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |age| {
+-                        if age > 0 {
+-                            age.checked_add(1)
+-                        } else {
+-                            Some(0)
+-                        }
+-                    });
+                 // If the age overflows the slot was not used for a long time. Lets clear it
+-                if res.is_err() {
++                if !advance_age(&other_slot.age) {
+                     *other_slot = Default::default();
+                 }
+             }
+@@ -264,3 +275,22 @@
+         &self.modifiers
+     }
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn buffer_age_preserves_unused_buffers_and_rejects_overflow() {
++        for initial in 0..=u8::MAX {
++            let age = AtomicU8::new(initial);
++            assert_eq!(advance_age(&age), initial != u8::MAX);
++            let expected = match initial {
++                0 => 0,
++                u8::MAX => u8::MAX,
++                used => used + 1,
++            };
++            assert_eq!(age.load(Ordering::SeqCst), expected);
++        }
++    }
++}
+diff --git a/src/backend/drm/surface/gbm.rs b/src/backend/drm/surface/gbm.rs
+--- a/src/backend/drm/surface/gbm.rs
++++ b/src/backend/drm/surface/gbm.rs
+@@ -16,7 +16,7 @@
+ use crate::backend::SwapBuffersError;
+ use crate::utils::{DevPath, Physical, Rectangle, Transform};
+ 
+-use tracing::{debug, error, info_span, instrument, trace, warn};
++use tracing::{debug, info_span, instrument, trace, warn};
+ 
+ use super::{PlaneConfig, PlaneDamageClips, PlaneState, VrrSupport};
+ 
+diff --git a/src/backend/winit/mod.rs b/src/backend/winit/mod.rs
+--- a/src/backend/winit/mod.rs
++++ b/src/backend/winit/mod.rs
+@@ -24,7 +24,7 @@
+ 
+ use calloop::generic::Generic;
+ use calloop::{EventSource, Interest, PostAction, Readiness, Token};
+-use tracing::{debug, error, info, info_span, instrument, trace, warn};
++use tracing::{debug, info, info_span, instrument, trace, warn};
+ use wayland_egl as wegl;
+ use winit::platform::pump_events::PumpStatus;
+ use winit::platform::scancode::PhysicalKeyExtScancode;
+diff --git a/src/input/keyboard/mod.rs b/src/input/keyboard/mod.rs
+--- a/src/input/keyboard/mod.rs
++++ b/src/input/keyboard/mod.rs
+@@ -12,7 +12,7 @@
+     sync::{Arc, Mutex},
+ };
+ use thiserror::Error;
+-use tracing::{debug, error, info, info_span, instrument, trace};
++use tracing::{debug, info, info_span, instrument, trace};
+ 
+ use xkbcommon::xkb::ffi::XKB_STATE_LAYOUT_EFFECTIVE;
+ pub use xkbcommon::xkb::{self, keysyms, Keycode, Keysym};
+diff --git a/src/wayland/seat/keyboard.rs b/src/wayland/seat/keyboard.rs
+--- a/src/wayland/seat/keyboard.rs
++++ b/src/wayland/seat/keyboard.rs
+@@ -1,6 +1,6 @@
+ use std::fmt;
+ 
+-use tracing::{error, instrument, trace, warn};
++use tracing::{instrument, trace, warn};
+ use wayland_server::{
+     backend::{ClientId, ObjectId},
+     protocol::{
+diff --git a/src/wayland/shm/pool.rs b/src/wayland/shm/pool.rs
+--- a/src/wayland/shm/pool.rs
++++ b/src/wayland/shm/pool.rs
+@@ -300,7 +300,7 @@
+             // We use `mem::zeroed()` because regular struct init as well as struct update syntax require all fields to be public
+             // and libc does not guarantee that for all targets
+             let mut action: libc::sigaction = mem::zeroed();
+-            action.sa_sigaction = sigbus_handler as _;
++            action.sa_sigaction = sigbus_handler as *const () as _;
+             action.sa_flags = libc::SA_SIGINFO | libc::SA_NODEFER;
+ 
+             let mut old_action = mem::zeroed();

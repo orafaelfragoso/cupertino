@@ -12,8 +12,16 @@ client's drag (wl_data_offer.receive during a drag or after its drop); a refused
 pipe, and a read whose seat is gone is refused. `SelectionSource::provider` and the re-exported `SelectionSourceProvider`
 name the protocol object that set a selection.
 
+`EGLContext::new_with_reset_notification` creates a context with the reset notification strategy
+`EGL_LOSE_CONTEXT_ON_RESET_EXT` where `EGL_EXT_create_context_robustness` is offered, and asks for a purge of video
+memory to count as a reset where `EGL_NV_robustness_video_memory_purge` is offered; `EGLContext::loses_context_on_reset`
+tells whether it was. `GlesRenderer::graphics_reset_status` reports a reset since the last call
+(`GraphicsResetStatus`), so a compositor can recreate a lost context.
+
 `GlesRenderer::memory_uploads` counts the textures `ImportMem` made or updated from memory and the bytes of pixels
 they sent (`MemoryUploads`), so a compositor can count its own uploads per frame.
+
+`RescaleRenderElement::element_mut` gives the re-scaled element, to change it in place.
 
 ### Bugfixes
 
@@ -25,6 +33,9 @@ handling and sequentially consistent ordering are preserved without raising the 
 crtc already has the surface's mode and connectors: the frame takes over what another program left on the crtc (a
 `DrmDevice` created without disabling the connectors, a resumed session), and a flip alone could be refused, for a
 primary plane format the driver changes only in a modeset. The kernel still modesets only when the state needs it.
+
+A `wl_shm` buffer committed without damage keeps the texture its surface already holds instead of being uploaded
+whole again, so a client presenting an unchanged frame costs no upload.
 
 Removing a `wl_shm` buffer destruction hook removed another hook of that buffer instead of the given one. A
 client that destroyed its `xdg_toplevel_icon_v1` and then a buffer it had added to it got the `no_buffer`

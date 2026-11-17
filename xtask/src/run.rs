@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 
 use crate::config::Config;
 use crate::plan::{self, Check, Kind, Plan};
-use crate::{gate, Options};
+use crate::{gate, vendored, Options};
 
 /// What a run did with each check.
 struct Outcome {
@@ -165,6 +165,23 @@ fn run_gate(root: &Path) -> bool {
         }
         Err(error) => {
             eprintln!("gate: {error}");
+            false
+        }
+    }
+}
+
+/// Runs the vendored-tree check and prints its problems and summary; whether it passed.
+pub fn run_vendored(root: &Path) -> bool {
+    match vendored::problems(root) {
+        Ok(problems) => {
+            for problem in &problems {
+                eprintln!("{problem}");
+            }
+            eprintln!("{}", vendored::summary(&problems));
+            problems.is_empty()
+        }
+        Err(error) => {
+            eprintln!("vendored patches: {error}");
             false
         }
     }
@@ -374,6 +391,7 @@ pub fn ci(options: &Options) -> u8 {
             let started = Instant::now();
             let passed = match check.kind {
                 Kind::Gate => run_gate(&root),
+                Kind::Vendored => run_vendored(&root),
                 Kind::Cargo => {
                     run_cargo(&root, check, jobs, in_ci, options.json).unwrap_or_else(|error| {
                         eprintln!("xtask ci: {error}");

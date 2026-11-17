@@ -1,0 +1,27 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -20,6 +20,8 @@
+ 
+ `GlesRenderer::memory_uploads` counts the textures `ImportMem` made or updated from memory and the bytes of pixels
+ they sent (`MemoryUploads`), so a compositor can count its own uploads per frame.
++
++`RescaleRenderElement::element_mut` gives the re-scaled element, to change it in place.
+ 
+ ### Bugfixes
+ 
+diff --git a/src/backend/renderer/element/utils/elements.rs b/src/backend/renderer/element/utils/elements.rs
+--- a/src/backend/renderer/element/utils/elements.rs
++++ b/src/backend/renderer/element/utils/elements.rs
+@@ -29,6 +29,11 @@
+             origin,
+             scale: scale.into(),
+         }
++    }
++
++    /// The element re-scaled, to change in place
++    pub fn element_mut(&mut self) -> &mut E {
++        &mut self.element
+     }
+ }
+ 

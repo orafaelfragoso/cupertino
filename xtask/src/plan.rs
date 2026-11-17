@@ -57,6 +57,8 @@ pub struct Check {
 pub enum Kind {
     Cargo,
     Gate,
+    /// The vendored trees reverse to their upstream releases (`crate::vendored`).
+    Vendored,
 }
 
 /// The whole plan of a run.
@@ -428,6 +430,23 @@ pub fn checks(
             "gate".to_owned(),
             vec!["xtask".to_owned(), "gate".to_owned()],
             Kind::Gate,
+        ));
+    }
+
+    let vendored_changed = plan
+        .git
+        .changed_files
+        .iter()
+        .any(|path| crate::vendored::touches(path));
+    let command = vec!["xtask".to_owned(), "vendored".to_owned()];
+    if profile.gate || vendored_changed {
+        list.push(run("vendored".to_owned(), command, Kind::Vendored));
+    } else {
+        list.push(skip(
+            "vendored".to_owned(),
+            command,
+            Kind::Vendored,
+            "no vendored tree changed",
         ));
     }
 

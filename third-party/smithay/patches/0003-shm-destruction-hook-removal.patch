@@ -1,0 +1,28 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -17,6 +17,12 @@
+ memory to count as a reset where `EGL_NV_robustness_video_memory_purge` is offered; `EGLContext::loses_context_on_reset`
+ tells whether it was. `GlesRenderer::graphics_reset_status` reports a reset since the last call
+ (`GraphicsResetStatus`), so a compositor can recreate a lost context.
++
++### Bugfixes
++
++Removing a `wl_shm` buffer destruction hook removed another hook of that buffer instead of the given one. A
++client that destroyed its `xdg_toplevel_icon_v1` and then a buffer it had added to it got the `no_buffer`
++protocol error and was disconnected.
+ 
+ ## 0.7.0
+ 
+diff --git a/src/wayland/shm/mod.rs b/src/wayland/shm/mod.rs
+--- a/src/wayland/shm/mod.rs
++++ b/src/wayland/shm/mod.rs
+@@ -493,7 +493,7 @@
+ 
+     pub(crate) fn remove_destruction_hook(&self, hook_id: HookId) {
+         let mut guard = self.destruction_hooks.lock().unwrap();
+-        if let Some(id) = guard.iter().position(|hook| hook.id != hook_id) {
++        if let Some(id) = guard.iter().position(|hook| hook.id == hook_id) {
+             guard.remove(id);
+         }
+     }

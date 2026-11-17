@@ -195,20 +195,7 @@ pub fn keep_current() {
     else {
         return;
     };
-    let (changed, changes) = std::sync::mpsc::channel::<()>();
-    // the first write
-    let _ = changed.send(());
-    let watcher = ConfigWatcher::new(vec![config.clone()], move |event| match event {
-        WatchEvent::Changed(_) => {
-            let _ = changed.send(());
-        }
-        WatchEvent::Error(e) => {
-            eprintln!(
-                "cupertino-login: the login screen's wallpaper no longer follows the settings: {e}"
-            )
-        }
-    });
-    let watcher = match watcher {
+    let watcher = match ConfigWatcher::new(vec![config.clone()]) {
         Ok(watcher) => Some(watcher),
         Err(e) => {
             eprintln!("cupertino-login: the login screen's wallpaper is written once: {e}");
@@ -218,12 +205,26 @@ pub fn keep_current() {
     let started = std::thread::Builder::new()
         .name("login-wallpaper".into())
         .spawn(move || {
+            // the first write
+            update(&config, &home);
             // the watch lives as long as this thread, which is as long as the process
-            let _watcher = watcher;
-            while changes.recv().is_ok() {
+            let Some(mut watcher) = watcher else {
+                return;
+            };
+            while let Some(events) = watcher.wait() {
+                let mut changed = false;
+                for event in events {
+                    match event {
+                        WatchEvent::Changed(_) => changed = true,
+                        WatchEvent::Error(e) => eprintln!(
+                            "cupertino-login: the login screen's wallpaper no longer follows the settings: {e}"
+                        ),
+                    }
+                }
                 // a burst of changes is one write
-                while changes.try_recv().is_ok() {}
-                update(&config, &home);
+                if changed {
+                    update(&config, &home);
+                }
             }
         });
     if let Err(e) = started {

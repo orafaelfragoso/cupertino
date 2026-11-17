@@ -398,11 +398,9 @@ struct Session {
     /// Where a window on a file system that goes away goes.
     home: PathBuf,
     trash: Trash,
-    /// Whether the trash holds anything: the home trash as it is, the mounted volumes' as last looked at off the
-    /// windows' thread, which a volume that does not answer would hold up.
+    /// Whether the trash holds anything: the home trash as it is, the mounted volumes' as last looked at by an I/O
+    /// task, which a volume that does not answer would hold up.
     trash_look: Arc<cupertino_trash::Look>,
-    /// What wakes when the volumes' trash was found changed.
-    trash_woken: async_channel::Receiver<()>,
     /// How a new window shows its folder and which bars it shows: the last choice any window made.
     prefs: std::cell::Cell<WindowPrefs>,
     /// Where that choice is kept between launches.
@@ -547,8 +545,8 @@ pub enum Message {
     Places,
     /// A thumbnail was made.
     Thumbnails,
-    /// A look at the mounted volumes found their trash changed.
-    TrashLooked,
+    /// A look at the mounted volumes' trash ended; whether their answer changed.
+    TrashLooked(bool),
     /// An event of the window with this id.
     Window(u64, Event),
     /// A file operation, or the progress window.
@@ -772,8 +770,7 @@ impl Application for Files {
         let places_watch =
             places::PlacesWatch::start(start.places_folders, start.trash.home_trash());
         let (thumbnails_wake, thumbnails_woken) = wake_channel();
-        let (trash_wake, trash_woken) = wake_channel();
-        let trash_look = cupertino_trash::Look::new(start.trash.clone(), move || trash_wake());
+        let trash_look = cupertino_trash::Look::new(start.trash.clone());
         // the first look is under way before a window or a menu asks what the volumes hold
         trash_look.look();
         let file_icons = start.file_icons.unwrap_or_else(|| {
@@ -807,7 +804,6 @@ impl Application for Files {
                 }),
                 trash: start.trash,
                 trash_look,
-                trash_woken,
                 prefs: std::cell::Cell::new(start.prefs),
                 prefs_file: start.prefs_file,
                 pasteboard: Vec::new(),
@@ -827,10 +823,8 @@ impl Application for Files {
                 view_revision: 0,
             },
         };
-        let mut commands = vec![
-            woken(&model.session.places_watch.woken, Message::Places),
-            woken(&model.session.trash_woken, Message::TrashLooked),
-        ];
+        let mut commands = vec![woken(&model.session.places_watch.woken, Message::Places)];
+        commands.extend(model.session.look_at_trash());
         match start.first {
             Some((browser, woken, wake)) => {
                 let first = model.next_window;
@@ -868,6 +862,7 @@ impl Application for Files {
         };
         let mut commands = model.handle(message);
         commands.extend(model.follow_peeks(recheck));
+        commands.extend(model.session.look_at_trash());
         commands.extend(model.exit_when_done());
         commands
     }
@@ -914,12 +909,14 @@ impl Model {
                 self.session.follow_places();
                 vec![woken(&self.session.places_watch.woken, Message::Places)]
             }
-            Message::TrashLooked => {
-                let session = &self.session;
-                for window in self.windows.values_mut() {
-                    window.trash_looked(session);
+            Message::TrashLooked(changed) => {
+                if changed {
+                    let session = &self.session;
+                    for window in self.windows.values_mut() {
+                        window.trash_looked(session);
+                    }
                 }
-                vec![woken(&session.trash_woken, Message::TrashLooked)]
+                Vec::new()
             }
             // the windows draw the thumbnails made
             Message::Thumbnails => {
@@ -2100,6 +2097,16 @@ impl Model {
 }
 
 impl Session {
+    /// The look at the mounted volumes' trash asked for, as an I/O task, unless one is still out.
+    fn look_at_trash(&self) -> Option<Command<Message>> {
+        let look = self.trash_look.next()?;
+        Some(cupertino_kit::task::io(
+            cupertino_trash::LOOK_DEADLINE,
+            look,
+            Message::TrashLooked,
+        ))
+    }
+
     /// What waits for the next click on a notice of a file operation's end; nothing without a session bus.
     fn notice_clicks(&self) -> Option<Command<Message>> {
         let clicks = self.notices.clicks()?.clone();

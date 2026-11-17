@@ -8,7 +8,7 @@ mod support;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 
 use cupertino_diagnostic_events::store::{self, Unavailable};
 use cupertino_diagnostic_events::{self as diag, Record, Severity, Value};
@@ -133,7 +133,7 @@ fn the_memory_ring_keeps_the_last_events_within_its_count_and_bytes_and_the_memo
 }
 
 #[test]
-fn the_summary_of_a_rate_limited_id_is_written_when_its_window_closes() {
+fn the_summary_of_a_rate_limited_id_is_written_by_the_first_event_after_its_window_closes() {
     let _state = isolated();
     let emitter = diag::init(diag::component!(), "test", diag::Sink::Memory);
     let sent = diag::RATE_PER_ID as u64 + 3;
@@ -143,18 +143,17 @@ fn the_summary_of_a_rate_limited_id_is_written_when_its_window_closes() {
             .emit();
     }
     assert_eq!(emitter.recent().len(), diag::RATE_PER_ID);
-    // the writer thread writes it with no later event to carry it
-    let until = Instant::now() + diag::RATE_WINDOW + Duration::from_secs(20);
-    let summary = loop {
-        if let Some(line) = emitter.recent().get(diag::RATE_PER_ID) {
-            break line.clone();
-        }
-        assert!(Instant::now() < until, "no summary");
-        std::thread::sleep(Duration::from_millis(50));
-    };
-    let record = Record::parse(summary.trim_end()).unwrap();
+    std::thread::sleep(diag::RATE_WINDOW + Duration::from_millis(100));
+    // no thread writes it while nothing else is recorded
+    assert_eq!(emitter.recent().len(), diag::RATE_PER_ID);
+    diag::event(Severity::Info, "test.emitter.later", "later").emit();
+    let recent = emitter.recent();
+    assert_eq!(recent.len(), diag::RATE_PER_ID + 2);
+    let record = Record::parse(recent[diag::RATE_PER_ID].trim_end()).unwrap();
     assert_eq!((record.count, record.suppressed), (sent, 3));
     assert_eq!(record.fields.get("n").unwrap(), sent - 1);
+    let later = Record::parse(recent[diag::RATE_PER_ID + 1].trim_end()).unwrap();
+    assert_eq!(later.id, "test.emitter.later");
 }
 
 #[test]

@@ -14,10 +14,12 @@
 //!   sticky bit, a trash directory only as a real directory the user owns, and a link found in a trash is deleted
 //!   itself, never followed.
 //!
-//! * A mounted volume may not answer (a network mount whose server went away blocks every call on it for minutes),
-//!   so the volumes are looked at off the calling thread and each is waited for [`VOLUME_ANSWERS_WITHIN`] at most: a
-//!   volume that stays silent counts as holding no trash for that look, and no second look is started on it while
-//!   the first is still out. The home trash is always taken first and never waits for a volume.
+//! * A mounted volume may not answer (a network mount whose server went away blocks every call on it for minutes).
+//!   Every function here blocks and starts no thread: a program runs the ones that touch the volumes as tasks. The
+//!   volumes are looked at one after another on the calling thread, one look at a time per volume in the process: a
+//!   look that finds another still out on a volume waits for it [`VOLUME_ANSWERS_WITHIN`] at most, then counts that
+//!   volume as silent, holding no trash for that look. The home trash is always taken first and never waits for a
+//!   volume.
 //!
 //! Absolute locations are injectable through [`Trash`] so tests can use temporary directories.
 
@@ -27,13 +29,13 @@ use std::fs;
 use std::io::{self, Write};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::{mpsc, Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 mod look;
-pub use look::Look;
+pub use look::{Look, LOOK_DEADLINE};
 
-/// How long a look at the trash waits for one mounted volume to answer before it goes on without it.
+/// How long a look at the trash waits for another look still out on a mounted volume before it goes on without it.
 pub const VOLUME_ANSWERS_WITHIN: Duration = Duration::from_secs(2);
 
 /// What the question asked before the trash is emptied says, for every program that asks it: its title, what happens
@@ -229,8 +231,8 @@ pub struct Trash {
 }
 
 /// The mount points a look is out on, each with when it began: one look at a time per volume in this process, so the
-/// looks at a volume that does not answer cannot pile up threads. A look that finds one taken waits for it only
-/// until the one out has had its time.
+/// looks at a volume that does not answer cannot pile up the threads that run them. A look that finds one taken waits
+/// for it only until the one out has had its time.
 static LOOKS_OUT: Mutex<Option<HashMap<PathBuf, Instant>>> = Mutex::new(None);
 static LOOK_BACK: Condvar = Condvar::new();
 
@@ -272,53 +274,23 @@ impl Drop for Taken {
     }
 }
 
-/// What a look says of one volume, given its mount point.
-type Ask<T> = Arc<dyn Fn(&Path) -> T + Send + Sync>;
-/// The thread the looks run on: the mount points go in, what the look says of each comes back.
-type Looking<T> = (mpsc::Sender<Taken>, mpsc::Receiver<T>);
-
-fn start_looking<T: Send + 'static>(look: Ask<T>) -> Option<Looking<T>> {
-    let (to, asked) = mpsc::channel::<Taken>();
-    let (answer, from) = mpsc::channel();
-    std::thread::Builder::new()
-        .name("trash-volumes".into())
-        .spawn(move || {
-            for taken in asked {
-                let said = look(&taken.0);
-                drop(taken);
-                if answer.send(said).is_err() {
-                    break;
-                }
-            }
-        })
-        .ok()
-        .map(|_| (to, from))
-}
-
-/// What `look` says of each of the mount points `tops`, in their order; `None` for a volume that did not answer
-/// within `wait`. The looks run one after another on a thread of their own; when a volume stays silent that thread
-/// is left with it (it ends when the volume answers after all, and gives the mount point back) and the next volumes
-/// go to a new one.
-fn ask_volumes<T: Send + 'static>(
+/// What `look` says of each of the mount points `tops`, in their order, looked at one after another on the calling
+/// thread; `None` for a volume another look was still out on after `wait`. The look at a volume that does not answer
+/// waits for it, and gives the mount point back when the volume answers after all.
+fn ask_volumes<T>(
     tops: Vec<PathBuf>,
     wait: Duration,
-    look: Ask<T>,
+    look: impl Fn(&Path) -> T,
 ) -> Vec<(PathBuf, Option<T>)> {
-    let mut thread: Option<Looking<T>> = None;
-    let mut answers = Vec::with_capacity(tops.len());
-    for top in tops {
-        let said = take_volume(&top, wait)
-            .then(|| Taken(top.clone()))
-            .and_then(|taken| {
-                let (to, from) = thread.take().or_else(|| start_looking(look.clone()))?;
-                to.send(taken).ok()?;
-                let said = from.recv_timeout(wait).ok()?;
-                thread = Some((to, from));
-                Some(said)
+    tops.into_iter()
+        .map(|top| {
+            let said = take_volume(&top, wait).then(|| {
+                let _taken = Taken(top.clone());
+                look(&top)
             });
-        answers.push((top, said));
-    }
-    answers
+            (top, said)
+        })
+        .collect()
 }
 
 pub fn encode_path(p: &str) -> String {
@@ -591,23 +563,16 @@ impl Trash {
             .collect()
     }
 
-    /// What `read` makes of the trash directories of each mounted volume, by mount point; `None` for a volume that
-    /// did not answer in time. `read` runs off the calling thread, within the time the volume is given, so it may
-    /// read the directories it is handed.
-    fn ask_volumes<T: Send + 'static>(
+    /// What `read` makes of the trash directories of each mounted volume, by mount point; `None` for a volume another
+    /// look was still out on after the time a volume is given. `read` runs on the calling thread with the volume
+    /// taken, so it may read the directories it is handed.
+    fn ask_volumes<T>(
         &self,
-        read: impl Fn(&Trash, Vec<PathBuf>) -> T + Send + Sync + 'static,
+        read: impl Fn(&Trash, Vec<PathBuf>) -> T,
     ) -> Vec<(PathBuf, Option<T>)> {
-        let tops = self.volumes();
-        if tops.is_empty() {
-            return Vec::new();
-        }
-        let trash = self.clone();
-        ask_volumes(
-            tops,
-            self.volume_wait,
-            Arc::new(move |top: &Path| read(&trash, trash.trash_dirs_on(top))),
-        )
+        ask_volumes(self.volumes(), self.volume_wait, |top: &Path| {
+            read(self, self.trash_dirs_on(top))
+        })
     }
 
     /// The user's trash directories on the mounted volumes that answer ([`Trash::silent_volumes`] are left out),
@@ -622,7 +587,7 @@ impl Trash {
             .collect()
     }
 
-    /// The mount points that do not answer within the time a volume is given.
+    /// The mount points another look is still out on after the time a volume is given: volumes that do not answer.
     pub fn silent_volumes(&self) -> Vec<PathBuf> {
         self.ask_volumes(|_, _| ())
             .into_iter()
@@ -865,8 +830,8 @@ impl Trash {
 
     /// Empty the home trash and the user's trash on every mounted volume that can be written
     /// ([`Trash::trash_dirs`]), and touch nothing else. What could not be deleted is in the result's failures and
-    /// stays in its trash. The home trash goes first, whatever the volumes do; a volume that does not answer in
-    /// time is left as it is and is one of the failures, by its mount point.
+    /// stays in its trash. The home trash goes first, whatever the volumes do; a volume another look is still out on
+    /// after the time a volume is given is left as it is and is one of the failures, by its mount point.
     pub fn empty(&self) -> Emptied {
         let mut emptied = Emptied::default();
         empty_dir(&self.home_trash, &mut emptied);

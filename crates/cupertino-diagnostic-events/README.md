@@ -99,7 +99,7 @@ raises the schema to `cupertino.diag.v2`.
 | `RETENTION_DAYS` | 14 | a segment last written longer ago is deleted |
 | `EVENT_BYTES` | 4 KiB | one event's line: a longer one has its string fields cut to `FIELD_TEXT_LIMIT` (256) characters, then fields dropped from the last, and `truncated: true` |
 | `RING_EVENTS`, `RING_BYTES` | 256 events, 256 KiB | the memory ring of each process |
-| `RATE_PER_ID`, `RATE_WINDOW` | 10 events, 10 s | events of one id written per window, from its first event; the rest are counted and written as one summary (the last suppressed event with `suppressed: N`) when the window closes, by a thread started on first need, or at exit |
+| `RATE_PER_ID`, `RATE_WINDOW` | 10 events, 10 s | events of one id written per window, from its first event; the rest are counted and written as one summary (the last suppressed event with `suppressed: N`) with the first event recorded after the window closes, by `flush`, or at exit; no thread waits for the window |
 
 The store is local only and on by default; nothing is uploaded. `cupertino diagnose events clear` deletes it.
 

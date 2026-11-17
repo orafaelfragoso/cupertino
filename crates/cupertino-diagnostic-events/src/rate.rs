@@ -1,5 +1,5 @@
 //! The per-id rate limit: at most [`RATE_PER_ID`] events of one id in a [`RATE_WINDOW`]; the rest are counted and written
-//! as one summary when the window closes (or the process ends).
+//! as one summary once the window closes: with the next event, or when the process ends.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};

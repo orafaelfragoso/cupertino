@@ -6,16 +6,17 @@
 //! The events of one change come in bursts (create, write and rename of the temporary file; an editor's backup and
 //! write). The watcher waits until events touching watched files or their directories are quiet for [`COALESCE`],
 //! then reports each watched file whose contents changed since the last report, once. A burst that leaves a file
-//! as it was (a `touch`, a write of the same text) reports nothing. Reports go to a callback on the watcher's thread;
-//! a process forwards them to its event loop
-//! (the server's calloop channel, a shell process's waker).
+//! as it was (a `touch`, a write of the same text) reports nothing.
+//!
+//! The watcher starts no thread: the loop of the process that holds it drives it. A loop that polls file descriptors
+//! (the server's calloop) waits for the watcher's descriptor ([`AsFd`]) and for [`ConfigWatcher::quiet_at`], and
+//! calls [`ConfigWatcher::read`], which never waits; a loop that polls futures (a Kit program's) runs
+//! [`ConfigWatcher::follow`]; a thread of the caller's own waits in [`ConfigWatcher::wait`].
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::io;
-use std::os::fd::AsRawFd;
-use std::os::unix::net::UnixStream;
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use inotify::{EventMask, Inotify, WatchMask};
@@ -47,7 +48,7 @@ const PARENT_EVENTS: WatchMask = WatchMask::CREATE
     .union(WatchMask::DELETE_SELF)
     .union(WatchMask::MOVE_SELF);
 
-/// What the callback of a [`ConfigWatcher`] is told.
+/// What a [`ConfigWatcher`] reports.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WatchEvent {
     /// These watched files changed (contents, creation or removal), in the order they were given.
@@ -56,25 +57,28 @@ pub enum WatchEvent {
     Error(String),
 }
 
-/// Watches settings files while it lives; dropping it stops the watch and its thread.
+/// Watches settings files while it lives.
 pub struct ConfigWatcher {
-    /// Closing it wakes the watch thread, which then ends.
-    _stop: UnixStream,
+    inbox: Inotified,
+    files: Vec<PathBuf>,
+    dirs: BTreeSet<PathBuf>,
+    /// The contents of each file at the last report.
+    last: BTreeMap<PathBuf, Option<Vec<u8>>>,
+    /// When the burst under way is quiet, and the files are compared.
+    quiet_at: Option<Instant>,
+    /// The descriptor [`ConfigWatcher::changes`] waits on, once it has.
+    ready: Option<async_io::Async<OwnedFd>>,
 }
 
-/// What the watch thread receives.
+/// What the kernel's notification says.
 #[derive(Debug)]
 enum Msg {
     /// `path`, a watched directory or an entry of one, changed; `appeared` when it was created or moved there.
-    Changed {
-        path: PathBuf,
-        appeared: bool,
-    },
+    Changed { path: PathBuf, appeared: bool },
     /// Events were lost (the kernel's queue overflowed): every file is compared.
     Lost,
     /// The notification failed.
     Failed(String),
-    Stop,
 }
 
 /// The contents of `path` as the watcher compares them: `None` when the file does not exist.
@@ -120,14 +124,10 @@ fn masks(dirs: &BTreeSet<PathBuf>) -> BTreeMap<PathBuf, WatchMask> {
 }
 
 impl ConfigWatcher {
-    /// Watch `files` and call `report` from the watcher's thread for each quiet burst that changed some of them. The
-    /// directories of the files are created when missing (they are the settings directories). Their parents are
-    /// watched too, so a settings directory that is removed and created again is watched again. A panic in `report`
-    /// ends the watch; it is written to stderr.
-    pub fn new(
-        files: Vec<PathBuf>,
-        report: impl FnMut(WatchEvent) + Send + 'static,
-    ) -> io::Result<Self> {
+    /// Watch `files`. The directories of the files are created when missing (they are the settings directories).
+    /// Their parents are watched too, so a settings directory that is removed and created again is watched again. The
+    /// files are read now; a change made before the watches were set is reported by the first read.
+    pub fn new(files: Vec<PathBuf>) -> io::Result<Self> {
         let mut last: BTreeMap<PathBuf, Option<Vec<u8>>> = BTreeMap::new();
         for f in &files {
             last.insert(f.clone(), snapshot(f)?);
@@ -136,37 +136,149 @@ impl ConfigWatcher {
         for dir in &dirs {
             std::fs::create_dir_all(dir)?;
         }
-        let (stop, stopped) = UnixStream::pair()?;
-        let mut inbox = Inotified::new(masks(&dirs), stopped)?;
-        let mut report = report;
-        std::thread::Builder::new().name("cupertino-defaults-watch".into()).spawn(move || {
-            let run = std::panic::AssertUnwindSafe(|| watch_loop(&mut inbox, &files, &dirs, &mut last, &mut report));
-            if let Err(panic) = std::panic::catch_unwind(run) {
-                let what = panic.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| panic.downcast_ref::<String>().cloned()).unwrap_or_default();
-                eprintln!("cupertino-defaults: the settings watch callback panicked ({what}); the settings files are no longer watched");
+        let inbox = Inotified::new(masks(&dirs))?;
+        Ok(Self {
+            inbox,
+            files,
+            dirs,
+            last,
+            // the files were read before the watch began: a change in between shows at the first read
+            quiet_at: Some(Instant::now()),
+            ready: None,
+        })
+    }
+
+    /// When the burst under way is quiet: [`ConfigWatcher::read`] then reports what it changed. `None` when no burst
+    /// is under way, and the next report comes after the descriptor is readable.
+    pub fn quiet_at(&self) -> Option<Instant> {
+        self.quiet_at
+    }
+
+    /// Takes the events the kernel holds, without waiting, and reports each watched file a burst that is quiet by
+    /// `now` changed, once, with any failure of the notification. Empty while a burst is under way and when nothing
+    /// changed.
+    pub fn read(&mut self, now: Instant) -> Vec<WatchEvent> {
+        let mut out = Vec::new();
+        for msg in self.inbox.take() {
+            let touched = match msg {
+                Msg::Changed { path, appeared } => {
+                    if appeared && self.dirs.contains(&path) {
+                        if let Err(e) = self.inbox.add(&path) {
+                            out.push(WatchEvent::Error(format!("{}: {e}", path.display())));
+                        }
+                    }
+                    self.files.contains(&path) || self.dirs.contains(&path)
+                }
+                Msg::Lost => true,
+                // a notification error may have lost events: every file is compared
+                Msg::Failed(e) => {
+                    out.push(WatchEvent::Error(e));
+                    true
+                }
+            };
+            if touched {
+                self.quiet_at = Some(now + COALESCE);
             }
-        })?;
-        Ok(Self { _stop: stop })
+        }
+        if self.quiet_at.is_some_and(|at| at <= now) {
+            self.quiet_at = None;
+            compare(&self.files, &mut self.last, &mut out);
+        }
+        out
+    }
+
+    /// Waits for the next report and returns it; `None` once the notification failed for good, after its failure was
+    /// reported. It blocks: for a thread of the caller's own.
+    pub fn wait(&mut self) -> Option<Vec<WatchEvent>> {
+        loop {
+            let events = self.read(Instant::now());
+            if !events.is_empty() {
+                return Some(events);
+            }
+            if self.inbox.broken {
+                return None;
+            }
+            let left = self
+                .quiet_at
+                .map(|at| at.saturating_duration_since(Instant::now()));
+            self.inbox.wait(left);
+        }
+    }
+
+    /// The next report, waited for without blocking: the future is woken when the descriptor is readable or the burst
+    /// is quiet. `None` once the notification failed for good, after its failure was reported.
+    pub async fn changes(&mut self) -> Option<Vec<WatchEvent>> {
+        loop {
+            let events = self.read(Instant::now());
+            if !events.is_empty() {
+                return Some(events);
+            }
+            if self.inbox.broken {
+                return None;
+            }
+            if self.ready.is_none() {
+                let ready = self
+                    .inbox
+                    .inotify
+                    .as_fd()
+                    .try_clone_to_owned()
+                    .and_then(async_io::Async::new);
+                match ready {
+                    Ok(ready) => self.ready = Some(ready),
+                    Err(e) => {
+                        self.inbox.broken = true;
+                        return Some(vec![WatchEvent::Error(format!(
+                            "waiting for file events: {e}"
+                        ))]);
+                    }
+                }
+            }
+            let Some(ready) = &self.ready else {
+                return None;
+            };
+            let readable = async {
+                if let Err(e) = ready.readable().await {
+                    self.inbox
+                        .pending
+                        .push_back(Msg::Failed(format!("waiting for file events: {e}")));
+                    self.inbox.broken = true;
+                }
+            };
+            match self.quiet_at {
+                Some(at) => {
+                    futures_lite::future::or(readable, async {
+                        async_io::Timer::at(at).await;
+                    })
+                    .await
+                }
+                None => readable.await,
+            }
+        }
+    }
+
+    /// Calls `report` with each report, where the future is polled: the future a loop that polls futures runs for as
+    /// long as the files are followed. It never ends, so it stands for a task of any output; once the notification
+    /// failed for good, after its failure was reported, it only waits.
+    pub async fn follow<T>(mut self, mut report: impl FnMut(WatchEvent)) -> T {
+        while let Some(events) = self.changes().await {
+            for event in events {
+                report(event);
+            }
+        }
+        std::future::pending().await
     }
 }
 
-/// Where the watch thread's messages come from, and the clock their quiet is timed on: the kernel's file
-/// notification and the monotonic clock, or in tests a script of messages and quiet spans on a clock of its own.
-trait Inbox {
-    /// The next message, waiting as long as it takes; `None` once no more can come.
-    fn recv(&mut self) -> Option<Msg>;
-    /// The next message if one comes within `timeout`.
-    fn recv_timeout(&mut self, timeout: Duration) -> Result<Msg, mpsc::RecvTimeoutError>;
-    fn now(&self) -> Instant;
-    /// Watch `dir` again: it was made anew.
-    fn watch_again(&mut self, dir: &Path) -> io::Result<()>;
+/// Readable when the kernel holds file events for [`ConfigWatcher::read`].
+impl AsFd for ConfigWatcher {
+    fn as_fd(&self) -> BorrowedFd<'_> {
+        self.inbox.inotify.as_fd()
+    }
 }
 
-/// The kernel's file notification for the watched directories, and the end of a socket whose other end the
-/// [`ConfigWatcher`] holds: it closing is [`Msg::Stop`].
+/// The kernel's file notification for the watched directories.
 struct Inotified {
     inotify: Inotify,
-    stop: UnixStream,
     masks: BTreeMap<PathBuf, WatchMask>,
     /// The directory each watch descriptor (by its number) watches.
     watching: HashMap<i32, PathBuf>,
@@ -176,10 +288,9 @@ struct Inotified {
 }
 
 impl Inotified {
-    fn new(masks: BTreeMap<PathBuf, WatchMask>, stop: UnixStream) -> io::Result<Self> {
+    fn new(masks: BTreeMap<PathBuf, WatchMask>) -> io::Result<Self> {
         let mut inbox = Self {
             inotify: Inotify::init()?,
-            stop,
             masks,
             watching: HashMap::new(),
             pending: VecDeque::new(),
@@ -202,40 +313,33 @@ impl Inotified {
         Ok(())
     }
 
-    /// Wait up to `timeout` (forever when `None`) for events or the stop, and queue what came.
+    /// Wait up to `timeout` (forever when `None`) for events.
     fn wait(&mut self, timeout: Option<Duration>) {
         let ms = timeout.map_or(-1, |t| {
             t.as_micros().div_ceil(1000).min(i32::MAX as u128) as i32
         });
-        let mut fds = [
-            libc::pollfd {
-                fd: self.inotify.as_raw_fd(),
-                events: libc::POLLIN,
-                revents: 0,
-            },
-            libc::pollfd {
-                fd: self.stop.as_raw_fd(),
-                events: libc::POLLIN,
-                revents: 0,
-            },
-        ];
-        // Safety: `fds` is an array of two initialised pollfd that outlives the call.
-        if unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, ms) } < 0 {
+        let mut fd = libc::pollfd {
+            fd: self.inotify.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // Safety: `fd` is an initialised pollfd that outlives the call, and the count says it is one.
+        if unsafe { libc::poll(&mut fd, 1, ms) } < 0 {
             let e = io::Error::last_os_error();
             if e.kind() != io::ErrorKind::Interrupted {
                 self.pending
                     .push_back(Msg::Failed(format!("waiting for file events: {e}")));
                 self.broken = true;
             }
-            return;
         }
-        if fds[1].revents != 0 {
-            self.pending.push_back(Msg::Stop);
-            return;
-        }
-        if fds[0].revents != 0 {
+    }
+
+    /// What was queued and every event the kernel has, without waiting; nothing more once the notification failed.
+    fn take(&mut self) -> VecDeque<Msg> {
+        if !self.broken {
             self.read();
         }
+        std::mem::take(&mut self.pending)
     }
 
     /// Queue every event the kernel has.
@@ -274,116 +378,11 @@ impl Inotified {
     }
 }
 
-impl Inbox for Inotified {
-    fn recv(&mut self) -> Option<Msg> {
-        loop {
-            if let Some(msg) = self.pending.pop_front() {
-                return Some(msg);
-            }
-            if self.broken {
-                return None;
-            }
-            self.wait(None);
-        }
-    }
-
-    fn recv_timeout(&mut self, timeout: Duration) -> Result<Msg, mpsc::RecvTimeoutError> {
-        let deadline = Instant::now() + timeout;
-        loop {
-            if let Some(msg) = self.pending.pop_front() {
-                return Ok(msg);
-            }
-            if self.broken {
-                return Err(mpsc::RecvTimeoutError::Disconnected);
-            }
-            let Some(left) = deadline
-                .checked_duration_since(Instant::now())
-                .filter(|d| !d.is_zero())
-            else {
-                return Err(mpsc::RecvTimeoutError::Timeout);
-            };
-            self.wait(Some(left));
-        }
-    }
-
-    fn now(&self) -> Instant {
-        Instant::now()
-    }
-
-    fn watch_again(&mut self, dir: &Path) -> io::Result<()> {
-        self.add(dir)
-    }
-}
-
-/// Whether `msg` may have changed a watched file; a settings directory that appears again is watched again. `None`
-/// for the stop.
-fn handle(
-    msg: Msg,
-    inbox: &mut impl Inbox,
-    watched: &BTreeSet<&PathBuf>,
-    dirs: &BTreeSet<PathBuf>,
-    report: &mut dyn FnMut(WatchEvent),
-) -> Option<bool> {
-    match msg {
-        Msg::Stop => None,
-        Msg::Changed { path, appeared } => {
-            if appeared && dirs.contains(&path) {
-                if let Err(e) = inbox.watch_again(&path) {
-                    report(WatchEvent::Error(format!("{}: {e}", path.display())));
-                }
-            }
-            Some(watched.contains(&path) || dirs.contains(&path))
-        }
-        Msg::Lost => Some(true),
-        // A notification error may have lost events: compare every file.
-        Msg::Failed(e) => {
-            report(WatchEvent::Error(e));
-            Some(true)
-        }
-    }
-}
-
-/// The watch thread: waits for a burst, lets it go quiet, then reports the files whose contents changed.
-fn watch_loop(
-    rx: &mut impl Inbox,
-    files: &[PathBuf],
-    dirs: &BTreeSet<PathBuf>,
-    last: &mut BTreeMap<PathBuf, Option<Vec<u8>>>,
-    report: &mut impl FnMut(WatchEvent),
-) {
-    let watched: BTreeSet<&PathBuf> = files.iter().collect();
-    // the files were read before the watch began: a change in between shows now
-    compare(files, last, report);
-    loop {
-        // wait for the first event of a burst, then until the burst is quiet
-        let Some(first) = rx.recv() else { return };
-        let Some(touched) = handle(first, rx, &watched, dirs, report) else {
-            return;
-        };
-        if !touched {
-            continue;
-        }
-        let mut deadline = rx.now() + COALESCE;
-        while let Some(left) = deadline.checked_duration_since(rx.now()) {
-            match rx.recv_timeout(left) {
-                Ok(msg) => match handle(msg, rx, &watched, dirs, report) {
-                    Some(true) => deadline = rx.now() + COALESCE,
-                    Some(false) => (),
-                    None => return,
-                },
-                Err(mpsc::RecvTimeoutError::Timeout) => break,
-                Err(mpsc::RecvTimeoutError::Disconnected) => return,
-            }
-        }
-        compare(files, last, report);
-    }
-}
-
 /// Report each of `files` whose contents differ from `last`, and remember them.
 fn compare(
     files: &[PathBuf],
     last: &mut BTreeMap<PathBuf, Option<Vec<u8>>>,
-    report: &mut dyn FnMut(WatchEvent),
+    out: &mut Vec<WatchEvent>,
 ) {
     let mut changed = Vec::new();
     for f in files {
@@ -394,10 +393,10 @@ fn compare(
                     changed.push(f.clone());
                 }
             }
-            Err(e) => report(WatchEvent::Error(format!("{}: {e}", f.display()))),
+            Err(e) => out.push(WatchEvent::Error(format!("{}: {e}", f.display()))),
         }
     }
     if !changed.is_empty() {
-        report(WatchEvent::Changed(changed));
+        out.push(WatchEvent::Changed(changed));
     }
 }

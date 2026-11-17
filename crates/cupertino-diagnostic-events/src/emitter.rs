@@ -215,7 +215,6 @@ pub struct Emitter {
     policy: OnceLock<Policy>,
     limits: Limits,
     state: Mutex<State>,
-    flusher: OnceLock<Option<std::thread::Thread>>,
 }
 
 impl std::fmt::Debug for Emitter {
@@ -300,7 +299,6 @@ impl Emitter {
                 down: None,
                 warned: Vec::new(),
             }),
-            flusher: OnceLock::new(),
         }
     }
 
@@ -413,15 +411,11 @@ impl Emitter {
             *c
         };
         let record = self.build(&mut state, event, count, source, &scoped);
+        // the summaries of the windows that closed since the last event go first, on this thread
         let mut out = state.rate.due(now);
         out.extend(state.rate.offer(record, now));
         for record in out {
             self.write(&mut state, record);
-        }
-        let pending = state.rate.next_due().is_some();
-        drop(state);
-        if pending {
-            self.wake_flusher();
         }
     }
 
@@ -547,35 +541,6 @@ impl Emitter {
         } = &state.out
         {
             let _ = store.append(line.as_bytes());
-        }
-    }
-
-    /// Wakes the thread that writes the rate-limit summaries when their windows close; started on first use.
-    fn wake_flusher(&'static self) {
-        let thread = self.flusher.get_or_init(|| {
-            std::thread::Builder::new()
-                .name("diagnostic-events".into())
-                .spawn(move || loop {
-                    let next = {
-                        let mut state = self.lock();
-                        let now = Instant::now();
-                        for record in state.rate.due(now) {
-                            self.write(&mut state, record);
-                        }
-                        state.rate.next_due()
-                    };
-                    match next {
-                        Some(at) => {
-                            std::thread::park_timeout(at.saturating_duration_since(Instant::now()))
-                        }
-                        None => std::thread::park(),
-                    }
-                })
-                .ok()
-                .map(|handle| handle.thread().clone())
-        });
-        if let Some(thread) = thread {
-            thread.unpark();
         }
     }
 

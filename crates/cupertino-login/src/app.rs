@@ -717,6 +717,7 @@ impl Application for SessionApp {
                             enabled: screen.phase() != Phase::Unlocking && !screen.checking(),
                             busy: screen.checking(),
                         },
+                        name: None,
                         typed: screen.typed(),
                         caps_lock: app.caps_lock,
                         spinner: screen.spinner(now),

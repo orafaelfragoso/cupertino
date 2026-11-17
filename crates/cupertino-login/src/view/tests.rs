@@ -117,6 +117,8 @@ thread_local! {
     static LOCKED: Cell<bool> = const { Cell::new(false) };
     /// The lock screens of this thread hide the avatar and the name.
     static HIDE_USER: Cell<bool> = const { Cell::new(false) };
+    /// The lock screens of this thread show a name field with this text and revision above the password field.
+    static NAME: Cell<Option<(&'static str, u64)>> = const { Cell::new(None) };
     /// How far the switch between the picker and the password screen has come on this thread.
     static BLOCK: Cell<f64> = const { Cell::new(1.0) };
     /// Where the moving avatar starts during that switch: on the password screen, and on the picker for its first tile.
@@ -268,6 +270,9 @@ impl Application for Shown {
                             enabled: true,
                             busy: s.checking(),
                         },
+                        name: NAME
+                            .get()
+                            .map(|(text, revision)| NameField { text, revision }),
                         typed: s.typed(),
                         caps_lock: false,
                         spinner: None,
@@ -2272,4 +2277,98 @@ fn during_the_switch_the_avatar_moves_between_its_tile_and_the_password_screen_a
         assert!(a.abs_diff(*b) <= 2, "{moving:?} {settled:?}");
     }
     AVATAR_FROM.set(None);
+}
+
+/// Option+Return on the test screens, delivered as the keyboard would.
+fn option_return(run: &mut Run) {
+    for pressed in [true, false] {
+        run.deliver(WindowEvent::Key(
+            KeyEvent {
+                code: 28,
+                keysym: Keysym(0xff0d),
+                text: None,
+                pressed,
+                repeat: false,
+                mods: Mods::ALT,
+            },
+            Timestamp(0),
+        ));
+    }
+}
+
+#[test]
+fn a_name_field_stands_over_the_password_field_and_takes_the_focus_while_it_is_empty() {
+    NAME.set(Some(("", 0)));
+    BACK.set(true);
+    HELP.set(true);
+    let mut run = Run::new(Surface::Lock);
+    let name = keyed(&run, "name");
+    let field = keyed(&run, "password-0");
+    // both at least 160 x 28, the name field 8 pt over the password field, with the same width
+    assert!(name.width() >= 160.0 && field.width() >= 160.0);
+    assert_eq!((name.height(), field.height()), (28.0, 28.0));
+    assert_eq!(field.min_y() - name.max_y(), 8.0);
+    assert_eq!(name.min_x(), field.min_x());
+    // the name label is not drawn; the name field is
+    assert!(labelled(&run, &run.model().user.display).is_none());
+    let focused = run.focused().expect("a focus");
+    assert_eq!(focused.role, Role::TextInput);
+    // Tab: the name field, the password field, the help button, the back button
+    run.key(TAB, None);
+    assert!(is_password(&run.focused().unwrap()));
+    run.key(TAB, None);
+    assert_eq!(
+        run.focused().and_then(|n| n.name).as_deref(),
+        Some(HELP_LABEL)
+    );
+    run.key(TAB, None);
+    assert_eq!(
+        run.focused().and_then(|n| n.name).as_deref(),
+        Some(BACK_LABEL)
+    );
+    run.key(TAB, None);
+    assert_eq!(run.focused().unwrap().role, Role::TextInput);
+    // Option+Return goes back to the picker
+    option_return(&mut run);
+    assert!(run.model().handled.iter().any(|m| m == "ToggleNames"));
+    // with a name typed the password field has the focus
+    NAME.set(Some(("ada", 1)));
+    let run = Run::new(Surface::Lock);
+    assert!(is_password(&run.focused().expect("a focus")));
+    NAME.set(None);
+    BACK.set(false);
+    HELP.set(false);
+}
+
+#[test]
+fn the_text_of_both_fields_starts_15_points_in() {
+    NAME.set(Some(("ada", 1)));
+    let run = Run::new(Surface::Lock);
+    let snapshot = run.driver.runtime().snapshot(run.window).unwrap();
+    for key in ["name", "password-0"] {
+        let frame = keyed(&run, key);
+        let id = run
+            .driver
+            .runtime()
+            .find(run.window, &Key::from(key))
+            .unwrap();
+        let inner = snapshot
+            .nodes
+            .iter()
+            .find(|n| n.parent == Some(id))
+            .expect("the field in its frame")
+            .rect;
+        assert_eq!(inner.min_x() - frame.min_x(), 15.0, "{key}");
+    }
+    NAME.set(None);
+}
+
+#[test]
+fn option_return_on_the_picker_asks_for_the_name_and_password_screen_and_return_alone_chooses() {
+    let mut run = Run::new(Surface::Picker);
+    option_return(&mut run);
+    assert!(run.model().handled.iter().any(|m| m == "ToggleNames"));
+    assert!(!run.model().handled.iter().any(|m| m.starts_with("Choose")));
+    run.key(RETURN, None);
+    assert!(run.model().handled.iter().any(|m| m.starts_with("Choose")));
 }

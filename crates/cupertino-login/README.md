@@ -476,8 +476,8 @@ login screen.
 
 **Ellipsis and administrator's authentication.** While a user session is open (`will_prompt` of the manager's
 `Welcome` and `Users`) the titles are `Restart…` and `Shut Down… (the design's, set from
-). Choosing one then opens the name screen (the "Other…" tile's) with the notice "Other users are
-logged in. To restart, enter an administrator's name and password." (ours, approximate), then the password screen; the screen sends
+). Choosing one then opens the name and password screen with the notice "Other users are
+logged in. To restart, enter an administrator's name and password." (ours, approximate); the screen sends
 `Request::AuthenticatePower { name, action }` instead of `Authenticate`. Escape goes back to the picker. The manager accepts a
 member of `wheel` with the right password, carries the action out and logs `power action authorised` on the screen; a name that is
 no administrator, a wrong password and a lock-out are the login screen's usual failures. The design passes this through the
@@ -500,12 +500,19 @@ column k % columns and row k / columns for k = i % M. One page shows at a time.
 | Page Up, Page Down | Select the first tile of the page before, or of the next page (the last tile on the last page). |
 | Return, a click on a tile | Choose the selected account: the password screen for it. |
 | Pointer over a tile | Select it. |
+| Option+Return | The name and password screen, and back. |
 | Escape on the password screen | Back to the picker, unless an attempt is being decided. |
 
-"Other…" opens the name screen: the "Other…" avatar and a field that takes the name as text (no whitespace, 32 bytes at most,
-Return to go on, Escape to go back). Nothing is looked up for it, so the screen does not say whether the account exists; the
-manager decides at the attempt. A failed attempt counts for the account
-that was chosen (the password help, below).
+"Other…", Option+Return on the picker and `show-full-name = true` in `login.conf` (which starts there and goes back
+there in place of the picker) open the name and password screen: the "Other…" avatar, a Name field over the Password
+field (each at least 160 x 28 pt, 8 pt apart, their text 15 pt in from the leading edge; approximate gap), no picker and
+no name label. The name is text (no whitespace, 32 bytes at most). The focus starts in the Name field while it is empty,
+else in the Password field; Return in the Name field goes on to the Password field, Return in the Password field with
+an empty name goes back to the Name field. Option+Return or Escape goes back to the picker. The names `>restart`,
+`>sleep`, and `>power` or `>shutdown` carry out that power item when the power menu offers it (as its menu item does),
+and nothing else. Nothing is looked up for a name, so the screen does not say whether the account exists; the manager
+decides at the attempt. A failed attempt counts for the account that was chosen (the password help, below). An
+administrator's authorisation for a power item asks on the same screen.
 
 ### Account filters
 

@@ -188,6 +188,7 @@ impl Application for Shown {
                         enabled: true,
                         busy: false,
                     },
+                    name: None,
                     typed: s.typed(),
                     caps_lock: false,
                     spinner: None,

@@ -48,7 +48,7 @@ pub use widgets::Access;
 use widgets::{
     Adornment, AlertBody, Avatar, Backdrop, Fade, FieldFrame, FieldMaterial, FieldTint, GlassText,
     Glyph, GlyphKind, Ground, Label, Look, NoticeCard, Place, Pressable, Shift, Slot, ESCAPE,
-    WHITE,
+    OPTION_RETURN, WHITE,
 };
 
 /// The `app_id` of a lock surface's window, followed by `.` and the output's registry name: the surface roles give it
@@ -107,13 +107,15 @@ const INITIALS_SIZE: f64 = 0.4;
 /// The field's trailing slot for the Caps Lock badge and the spinner, and the room after it (approximate).
 const SLOT_WIDTH: f64 = 18.0;
 const SLOT_INSET: f64 = 5.0;
-/// The name field's text insets in its capsule, before and after the text (approximate).
-const NAME_INSETS: Insets = Insets {
+/// The text insets of the name and the password fields where both show, before and after the text.
+const CREDENTIAL_INSETS: Insets = Insets {
     top: 0.0,
-    left: 10.0,
+    left: 15.0,
     bottom: 0.0,
-    right: SLOT_WIDTH,
+    right: 15.0,
 };
+/// The gap between the name field and the password field under it where both show (approximate).
+const CREDENTIAL_GAP: f64 = 8.0;
 /// How far the avatar moves with the password group's shake, as a share of the group's offset (approximate).
 const AVATAR_SHAKE_SHARE: f64 = 0.25;
 /// How far the name's shadow reaches past its line: three deviations of its blur, rounded up. The user block's layer
@@ -238,6 +240,8 @@ pub enum Input {
     Step(Direction),
     /// Home, End, Page Up or Page Down on the picker.
     Jump(Jump),
+    /// Option+Return: the name and password screen in place of the picker, or the picker again.
+    ToggleNames,
     /// The power item: open or close its menu.
     TogglePower,
     /// The power menu closed without a choice.
@@ -261,7 +265,7 @@ pub struct Clock {
     pub time: String,
 }
 
-/// The field of the password screen, or of the name screen.
+/// The password field of the screen.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Field {
     /// The password field of `generation` ([`LockScreen::field`](crate::model::LockScreen::field)); `enabled` while
@@ -272,8 +276,14 @@ pub enum Field {
         enabled: bool,
         busy: bool,
     },
-    /// The name typed for "Other…" or for an administrator.
-    Name { text: String, revision: u64 },
+}
+
+/// The name field shown above the password field: the name typed and the revision of it the field shows
+/// ([`NameEntry`](crate::picker::NameEntry)).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NameField<'a> {
+    pub text: &'a str,
+    pub revision: u64,
 }
 
 /// Everything a password or name screen shows.
@@ -281,9 +291,11 @@ pub struct Screen<'a> {
     pub size: Size,
     pub metrics: Metrics,
     pub clock: &'a Clock,
-    /// Whose password is asked; `None` on the name screen, which shows the "Other…" disc.
+    /// Whose password is asked; `None` where a name is typed, which shows the "Other…" disc.
     pub user: Option<&'a User>,
     pub field: Field,
+    /// A name field above the password field, for a name typed with its password: the name label does not show.
+    pub name: Option<NameField<'a>>,
     /// The field holds text: the submit button shows.
     pub typed: bool,
     pub caps_lock: bool,
@@ -445,10 +457,15 @@ impl<M: 'static> cupertino_kit::core::Widget<M> for Decorative {
     }
 }
 
-/// The keys every screen with a field takes from the focus: Escape. Tab moves between the screen's controls.
-fn field_keys<M: 'static>(map: fn(Input) -> M) -> Box<dyn Fn(Keysym, Option<char>) -> Option<M>> {
+/// The keys every screen with a field takes from the focus: Escape, and Option+Return where a name is typed. Tab
+/// moves between the screen's controls.
+fn field_keys<M: 'static>(
+    names: bool,
+    map: fn(Input) -> M,
+) -> Box<dyn Fn(Keysym, Option<char>) -> Option<M>> {
     Box::new(move |keysym, _| match keysym {
         ESCAPE => Some(map(Input::Escape)),
+        OPTION_RETURN if names => Some(map(Input::ToggleNames)),
         _ => None,
     })
 }
@@ -614,10 +631,20 @@ pub fn screen<M: Clone + 'static>(
         .pill
         .union(&layout.help_button)
         .union(&layout.back_button);
+    // the name field, where a name is typed with the password, stands above the password field
+    let name_box = layout
+        .pill
+        .translate(0.0, -(layout.pill.height() + CREDENTIAL_GAP));
     let block = layout
         .avatar
         .outset(AVATAR_SHAKE_SHARE * SHAKE_AMPLITUDE)
         .union(&name_line.outset(SHADOW_REACH))
+        .union(&name_box.inset(Insets {
+            top: 0.0,
+            left: -reach,
+            bottom: 0.0,
+            right: -reach,
+        }))
         .union(&group.inset(Insets {
             top: 0.0,
             left: -reach,
@@ -646,8 +673,8 @@ pub fn screen<M: Clone + 'static>(
             ))
             .key("avatar"),
         );
-        // the name gives way to the password help while it shows
-        if !screen.help_open {
+        // the name gives way to the password help while it shows, and to the name field
+        if !screen.help_open && screen.name.is_none() {
             let name = screen.user.map_or(OTHER_LABEL, |u| u.display.as_str());
             children.push(Element::new(Label {
                 shadow: true,
@@ -669,9 +696,8 @@ pub fn screen<M: Clone + 'static>(
         (None, true, _) => Some((Adornment::CapsLock, CAPS_LOCK_ON)),
         (None, false, false) => None,
     };
-    let password = matches!(screen.field, Field::Password { .. });
     // the submit button and the slot take the end of the field, which the text is centred clear of
-    let submit = if password && screen.typed && !screen.locked {
+    let submit = if screen.typed && !screen.locked {
         SUBMIT_GAP + BUTTON_SIZE
     } else {
         0.0
@@ -681,70 +707,53 @@ pub fn screen<M: Clone + 'static>(
     } else {
         0.0
     };
-    let (field, key, insets) = match &screen.field {
-        Field::Password {
-            generation,
-            enabled,
+    let Field::Password {
+        generation,
+        enabled,
+        busy,
+    } = screen.field;
+    // with a name field the two fields keep their text at the leading side, 15 pt in
+    let both = screen.name.is_some();
+    let field = Element::new(BareSecureField {
+        field: SecureField {
+            label: PASSWORD_LABEL.to_owned(),
+            placeholder: if screen.locked {
+                LOCKED_PLACEHOLDER
+            } else {
+                PASSWORD_PLACEHOLDER
+            }
+            .to_owned(),
+            enabled: enabled && !screen.locked,
+            on_change: Some(Box::new(move |buffer| {
+                map(Input::Edited(!buffer.is_empty()))
+            })),
+            on_submit: Some(Box::new(move |buffer| {
+                map(Input::Submit(Typed::of(buffer)))
+            })),
             busy,
-        } => (
-            Element::new(BareSecureField {
-                field: SecureField {
-                    label: PASSWORD_LABEL.to_owned(),
-                    placeholder: if screen.locked {
-                        LOCKED_PLACEHOLDER
-                    } else {
-                        PASSWORD_PLACEHOLDER
-                    }
-                    .to_owned(),
-                    enabled: *enabled && !screen.locked,
-                    on_change: Some(Box::new(move |buffer| {
-                        map(Input::Edited(!buffer.is_empty()))
-                    })),
-                    on_submit: Some(Box::new(move |buffer| {
-                        map(Input::Submit(Typed::of(buffer)))
-                    })),
-                    busy: *busy,
-                    // the hint under the field says it, once
-                    invalid: screen.denied,
-                    // the field refuses what the authenticator would not take, so a submission is never cut
-                    max_len: Some(MAX_PASSWORD_BYTES),
-                    initial: false,
-                },
-                size: FIELD_TEXT_SIZE,
-                weight: Some(WEIGHT_MEDIUM.0),
-                placeholder_color: Some(placeholder_color(screen.access)),
-                centered: true,
-                submit_width: submit + slot_room,
-            }),
-            format!("password-{generation}"),
-            Insets::ZERO,
-        ),
-        Field::Name { text, revision } => (
-            Element::new(BareField {
-                // no menu and no paste where the session asks who logs in
-                menu: false,
-                field: TextField {
-                    label: NAME_LABEL.to_owned(),
-                    placeholder: NAME_PLACEHOLDER.to_owned(),
-                    value: text.clone(),
-                    revision: *revision,
-                    purpose: ContentPurpose::Name,
-                    enabled: true,
-                    on_change: Some(Box::new(move |change| map(Input::Name(change)))),
-                    on_submit: Some(map(Input::SubmitName)),
-                    selection: None,
-                    initial: true,
-                },
-                size: FIELD_TEXT_SIZE,
-                hold_caret: false,
-                blink_start: None,
-                caret_layer: None,
-                on_blink: None,
-            }),
-            "name".to_owned(),
-            NAME_INSETS,
-        ),
+            // the hint under the field says it, once
+            invalid: screen.denied,
+            // the field refuses what the authenticator would not take, so a submission is never cut
+            max_len: Some(MAX_PASSWORD_BYTES),
+            initial: false,
+        },
+        size: FIELD_TEXT_SIZE,
+        weight: Some(WEIGHT_MEDIUM.0),
+        placeholder_color: Some(placeholder_color(screen.access)),
+        centered: !both,
+        submit_width: submit + slot_room,
+    });
+    let key = format!("password-{generation}");
+    let insets = if both {
+        Insets {
+            right: 0.0,
+            ..CREDENTIAL_INSETS
+        }
+    } else {
+        Insets::ZERO
     };
+    // the name field takes the focus while it is empty, the password field once a name is there
+    let name_first = screen.name.is_some_and(|name| name.text.is_empty());
     let round_button =
         |button: Rect, look: Look, label: &str, on_press: Input, kind: GlyphKind, key: &str| {
             let button = button.translate(shake, 0.0);
@@ -798,12 +807,54 @@ pub fn screen<M: Clone + 'static>(
         ));
     }
     // the material is the screen's under the field wherever the shake takes it
-    let strip = layout.pill.inset(Insets {
-        top: 0.0,
-        left: -SHAKE_AMPLITUDE,
-        bottom: 0.0,
-        right: -SHAKE_AMPLITUDE,
-    });
+    let strip_of = |rect: Rect| {
+        rect.inset(Insets {
+            top: 0.0,
+            left: -SHAKE_AMPLITUDE,
+            bottom: 0.0,
+            right: -SHAKE_AMPLITUDE,
+        })
+    };
+    if let Some(name) = screen.name {
+        let name_rect = name_box.translate(shake, 0.0);
+        children.push(
+            Element::new(FieldFrame {
+                rect: within(name_rect, at),
+                insets: CREDENTIAL_INSETS,
+                material: Some(FieldMaterial {
+                    ground: ground.clone(),
+                    strip: strip_of(name_box),
+                    origin: name_rect.origin,
+                }),
+                tint: FieldTint::of(screen.access, !enabled),
+                initial: name_first,
+                submit: None,
+                children: vec![Element::new(BareField {
+                    // no menu and no paste where the session asks who logs in
+                    menu: false,
+                    field: TextField {
+                        label: NAME_LABEL.to_owned(),
+                        placeholder: NAME_PLACEHOLDER.to_owned(),
+                        value: name.text.to_owned(),
+                        revision: name.revision,
+                        purpose: ContentPurpose::Name,
+                        enabled,
+                        on_change: Some(Box::new(move |change| map(Input::Name(change)))),
+                        on_submit: Some(map(Input::SubmitName)),
+                        selection: None,
+                        initial: false,
+                    },
+                    size: FIELD_TEXT_SIZE,
+                    hold_caret: false,
+                    blink_start: None,
+                    caret_layer: None,
+                    on_blink: None,
+                })],
+            })
+            .key("name"),
+        );
+    }
+    let strip = strip_of(layout.pill);
     children.push(
         Element::new(FieldFrame {
             rect: within(pill, at),
@@ -813,11 +864,8 @@ pub fn screen<M: Clone + 'static>(
                 strip,
                 origin: pill.origin,
             }),
-            tint: FieldTint::of(
-                screen.access,
-                matches!(screen.field, Field::Password { enabled: false, .. }) || screen.locked,
-            ),
-            initial: true,
+            tint: FieldTint::of(screen.access, !enabled || screen.locked),
+            initial: !name_first,
             submit: (submit > 0.0).then(|| within(layout.submit, layout.pill.origin)),
             children: vec![field],
         })
@@ -929,7 +977,7 @@ pub fn screen<M: Clone + 'static>(
         ground: Some(ground),
         hidden: screen.hidden,
         on_activity: Some(map(Input::Activity)),
-        keys: field_keys(map),
+        keys: field_keys(screen.name.is_some(), map),
         label: title.to_owned(),
         description: screen.user.map(|u| u.display.clone()),
         role: Role::Group,
@@ -1145,6 +1193,7 @@ pub fn picker<M: Clone + 'static>(screen: &PickerScreen<'_>, map: fn(Input) -> M
                 Keysym(0xff57) => Input::Jump(Jump::Last),
                 Keysym(0xff55) => Input::Jump(Jump::PageBack),
                 Keysym(0xff56) => Input::Jump(Jump::PageForward),
+                OPTION_RETURN => Input::ToggleNames,
                 Keysym(0xff0d) | Keysym(0xff8d) => Input::Choose(selected),
                 _ => return None,
             }))

@@ -190,6 +190,7 @@ impl Application for Locker {
                     enabled: true,
                     busy,
                 },
+                name: None,
                 typed: false,
                 caps_lock: false,
                 spinner: None,

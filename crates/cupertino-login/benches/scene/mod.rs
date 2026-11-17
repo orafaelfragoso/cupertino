@@ -99,6 +99,7 @@ impl Application for Lock {
                     enabled: true,
                     busy: false,
                 },
+                name: None,
                 typed: s.typed(),
                 caps_lock: false,
                 spinner: None,

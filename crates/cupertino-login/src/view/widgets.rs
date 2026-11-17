@@ -14,7 +14,7 @@ use cupertino_kit::geometry::{Insets, Point, Rect, Size};
 use cupertino_kit::layout::{
     Align, Axis, Constraints, ContainerKind, Justify, LayoutSpec, Measured, SizeSpec,
 };
-use cupertino_kit::platform::{Keysym, MouseButton, PointerEvent};
+use cupertino_kit::platform::{Keysym, Mods, MouseButton, PointerEvent};
 use cupertino_kit::render::{
     Effect, FillRule, ImageResource, Paint, PaintOp, PathVerb, PixelFormat, ResourceId, Sampling,
     Shape,
@@ -33,6 +33,9 @@ const RETURN: Keysym = Keysym(0xff0d);
 const KP_ENTER: Keysym = Keysym(0xff8d);
 const SPACE: Keysym = Keysym(0x20);
 pub(crate) const ESCAPE: Keysym = Keysym(0xff1b);
+/// Return or Enter with Option held, as the screens' keys see it first: no key has this symbol. A screen that does
+/// not take it gets the plain key.
+pub(crate) const OPTION_RETURN: Keysym = Keysym(0x0100_ff0d);
 
 /// Fill behind the initials (approximate).
 const AVATAR_FILL: [f32; 3] = [0.60, 0.62, 0.66];
@@ -628,7 +631,13 @@ impl<M: Clone + 'static> Widget<M> for Backdrop<M> {
                 if self.hidden {
                     return Propagation::Stop;
                 }
-                match (self.keys)(key.keysym, key.text) {
+                let option_return = key.mods.contains(Mods::ALT)
+                    && matches!(key.keysym, Keysym(0xff0d) | Keysym(0xff8d));
+                let taken = option_return
+                    .then(|| (self.keys)(OPTION_RETURN, None))
+                    .flatten()
+                    .or_else(|| (self.keys)(key.keysym, key.text));
+                match taken {
                     Some(message) => {
                         cx.emit(message);
                         Propagation::Stop

@@ -21,7 +21,8 @@ use cupertino_login::picker::{self, NameEntry, Picker, Tile};
 use cupertino_login::power::{Action, Menu};
 use cupertino_login::user::User;
 use cupertino_login::view::{
-    self, Access, Clock, Field, Input, Metrics, PickerScreen, Screen, GREETER_APP_ID, GREETER_TITLE,
+    self, Access, Clock, Field, Input, Metrics, NameField, PickerScreen, Screen, GREETER_APP_ID,
+    GREETER_TITLE,
 };
 use cupertino_login::wallpaper::{self, Pictures, Source, Stamp, Want};
 use cupertino_login_ipc::{
@@ -52,10 +53,13 @@ const WELCOME_POLL: Duration = Duration::from_millis(10);
 enum Stage {
     /// The tiles of the picker.
     Picking,
-    /// A name is typed for the "Other…" tile.
-    Naming(NameEntry),
-    /// The password of `user`.
-    Password { user: User, screen: Box<LockScreen> },
+    /// The password of `user`; with `name`, the name is typed above it (the "Other…" tile, `show-full-name`, an
+    /// administrator's authorisation) and `user` is who it names at the next attempt.
+    Password {
+        user: User,
+        screen: Box<LockScreen>,
+        name: Option<NameEntry>,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -127,6 +131,17 @@ pub struct GreeterApp {
     locked: Option<String>,
     /// The clock's hour cycle: the locale's.
     hours: cupertino_defaults::menubar::HourCycle,
+}
+
+/// The power item a special name in the name field stands for: `>restart`, `>sleep`, and `>power` or `>shutdown`
+/// for shutting down.
+fn special_name(name: &str) -> Option<Action> {
+    match name {
+        ">restart" => Some(Action::Restart),
+        ">sleep" => Some(Action::Sleep),
+        ">power" | ">shutdown" => Some(Action::ShutDown),
+        _ => None,
+    }
 }
 
 /// The users' wallpapers by user id in `rows`.
@@ -386,6 +401,10 @@ pub fn run() -> Result<std::convert::Infallible> {
             rtl: cupertino_login::user::locale_is_rtl(),
             locked: None,
         };
+        let mut app = app;
+        if app.settings.show_full_name {
+            app.stage = app.credentials(0.0);
+        }
         let commands = vec![
             listen(
                 &app.manager,
@@ -523,49 +542,12 @@ impl Application for GreeterApp {
                     },
                     Message::Input,
                 ),
-                Stage::Naming(entry) => view::screen(
+                Stage::Password { user, screen, name } => view::screen(
                     &Screen {
                         size,
                         metrics: app.metrics,
                         clock: &app.clock,
-                        user: None,
-                        field: Field::Name {
-                            text: entry.text().to_owned(),
-                            revision: entry.revision(),
-                        },
-                        typed: false,
-                        caps_lock: false,
-                        spinner: None,
-                        denied: false,
-                        denied_said: false,
-                        notice: app.authorising.map(authorisation_notice),
-                        help: false,
-                        help_open: false,
-                        opacity: 1.0,
-                        block,
-                        shake: 0.0,
-                        hidden: false,
-                        lock_message: app.settings.lock_message.as_deref(),
-                        back: true,
-                        locked: false,
-                        hide_user: false,
-                        access: app.access,
-                        large_clock: app.settings.large_clock,
-                        avatar_from: moving.then(|| tile_avatar(size)).flatten(),
-                        power: app.power.as_ref(),
-                        notices: &[],
-                        wallpaper: &app.wallpaper,
-                        dim,
-                    },
-                    GREETER_TITLE,
-                    Message::Input,
-                ),
-                Stage::Password { user, screen } => view::screen(
-                    &Screen {
-                        size,
-                        metrics: app.metrics,
-                        clock: &app.clock,
-                        user: Some(user),
+                        user: name.is_none().then_some(user),
                         field: Field::Password {
                             generation: screen.field(),
                             // nothing is typed while an attempt is checked
@@ -573,6 +555,10 @@ impl Application for GreeterApp {
                                 && !screen.checking(),
                             busy: screen.checking(),
                         },
+                        name: name.as_ref().map(|entry| NameField {
+                            text: entry.text(),
+                            revision: entry.revision(),
+                        }),
                         typed: screen.typed(),
                         caps_lock: app.caps_lock,
                         spinner: screen.spinner(now),
@@ -587,7 +573,10 @@ impl Application for GreeterApp {
                         shake: screen.shake(now),
                         hidden: screen.hidden(),
                         lock_message: app.settings.lock_message.as_deref(),
-                        back: true,
+                        // nothing to go back to where the name and password screen is the first one
+                        back: name.is_none()
+                            || !app.settings.show_full_name
+                            || app.authorising.is_some(),
                         locked: app.locked.as_deref() == Some(user.login.as_str()),
                         hide_user: app.settings.hide_user_avatar_and_name,
                         access: app.access,
@@ -663,7 +652,6 @@ impl GreeterApp {
                 Tile::Account(user) => user.uid,
                 Tile::Other => None,
             },
-            Stage::Naming(_) => None,
             Stage::Password { user, .. } => user.uid,
         };
         let path = uid.and_then(|uid| self.wallpapers.get(&uid));
@@ -761,25 +749,38 @@ impl GreeterApp {
                 self.picker.jump(jump, max_per_page);
                 commands.push(Command::Focus(view::tile_key(self.picker.selected_index())));
             }
-            (Stage::Naming(entry), Input::Name(change)) => entry.set(&change.text),
-            (Stage::Naming(entry), Input::SubmitName) => {
-                if let Some(name) = entry.submit() {
-                    let mut screen = LockScreen::new(now, HIDE_AFTER);
-                    if let Some(action) = self.authorising {
-                        screen.notify(authorisation_notice(action).to_owned());
-                    }
-                    self.switch(
-                        now,
-                        Stage::Password {
-                            user: User::typed(name),
-                            screen: Box::new(screen),
-                        },
-                    );
-                }
+            // Option+Return: the name and password screen in place of the picker, and back
+            (Stage::Picking, Input::ToggleNames) => {
+                let to = self.credentials(now);
+                self.switch(now, to);
             }
-            (Stage::Naming(_), Input::Escape) => {
+            (Stage::Password { name: Some(_), .. }, Input::ToggleNames) => {
                 self.authorising = None;
                 self.switch(now, Stage::Picking);
+            }
+            (
+                Stage::Password {
+                    name: Some(entry), ..
+                },
+                Input::Name(change),
+            ) => entry.set(&change.text),
+            (
+                Stage::Password {
+                    name: Some(entry),
+                    screen,
+                    ..
+                },
+                Input::SubmitName,
+            ) => {
+                if let Some(action) = special_name(entry.text()) {
+                    return self.special(action);
+                }
+                if !entry.text().is_empty() {
+                    commands.push(Command::Focus(Key::from(format!(
+                        "password-{}",
+                        screen.field()
+                    ))));
+                }
             }
             (Stage::Password { screen, .. }, Input::Escape) => {
                 // Escape goes back to the tiles unless an attempt is on its way to a decision
@@ -791,13 +792,25 @@ impl GreeterApp {
                     screen.escape(now);
                 } else {
                     self.authorising = None;
-                    self.switch(now, Stage::Picking);
+                    let home = self.home(now);
+                    self.switch(now, home);
                 }
             }
             (Stage::Password { screen, .. }, Input::Activity) => screen.activity(now),
             (Stage::Password { screen, .. }, Input::Edited(typed)) => screen.edit_to(now, typed),
             (Stage::Password { .. }, Input::Help) => self.help_open = !self.help_open,
-            (Stage::Password { user, screen }, Input::Submit(typed)) => {
+            (Stage::Password { user, screen, name }, Input::Submit(typed)) => {
+                // with a name field: a name first, and the special names do what they name
+                if let Some(entry) = name {
+                    if let Some(action) = special_name(entry.text()) {
+                        return self.special(action);
+                    }
+                    if entry.text().is_empty() {
+                        commands.push(Command::Focus(Key::from("name")));
+                        return Ok(());
+                    }
+                    *user = User::typed(entry.text().to_owned());
+                }
                 if let Some(password) = screen.submit(now, typed.secret()) {
                     let request = match self.authorising {
                         Some(action) => Request::AuthenticatePower {
@@ -839,7 +852,10 @@ impl GreeterApp {
             self.connection.send(&Request::Cancel {})?;
             self.pending = None;
             self.authorising = Some(action);
-            self.stage = Stage::Naming(NameEntry::default());
+            self.stage = self.credentials(0.0);
+            if let Stage::Password { screen, .. } = &mut self.stage {
+                screen.notify(authorisation_notice(action).to_owned());
+            }
             return Ok(());
         }
         self.connection.send(&Request::Power { action })?;
@@ -857,11 +873,51 @@ impl GreeterApp {
                 Stage::Password {
                     user: user.clone(),
                     screen: Box::new(screen),
+                    name: None,
                 }
             }
-            Tile::Other => Stage::Naming(NameEntry::default()),
+            Tile::Other => self.credentials(now),
         };
         self.switch(now, to);
+    }
+
+    /// The screen with a name and a password field.
+    fn credentials(&self, now: f64) -> Stage {
+        let mut screen = LockScreen::new(now, HIDE_AFTER);
+        if cupertino_shell_client::test_clock::motion_settled() {
+            screen.settle_interface();
+        }
+        Stage::Password {
+            user: User::typed(String::new()),
+            screen: Box::new(screen),
+            name: Some(NameEntry::default()),
+        }
+    }
+
+    /// The screen the greeter starts on and goes back to: the picker, or the name and password screen with
+    /// `show-full-name`.
+    fn home(&self, now: f64) -> Stage {
+        if self.settings.show_full_name {
+            self.credentials(now)
+        } else {
+            Stage::Picking
+        }
+    }
+
+    /// A special name typed in the name field: the power item it names, when the menu offers it.
+    fn special(&mut self, action: Action) -> Result<()> {
+        if self
+            .power
+            .as_ref()
+            .is_some_and(|menu| menu.items().contains(&action))
+        {
+            return self.perform(action);
+        }
+        eprintln!(
+            "cupertino-login: power action not offered: {}",
+            action.log_name()
+        );
+        Ok(())
     }
 
     /// The authentication hand-off: answer the manager's prompt with the password of the open attempt. The password is
@@ -887,7 +943,8 @@ impl GreeterApp {
                 eprintln!("cupertino-login: reset");
                 self.pending = None;
                 self.authorising = None;
-                self.switch(now, Stage::Picking);
+                let home = self.home(now);
+                self.switch(now, home);
                 return Ok(());
             }
             ManagerEvent::Users { users, will_prompt } => {
@@ -964,7 +1021,7 @@ impl GreeterApp {
                 eprintln!("cupertino-login: session starting");
             }
             &ManagerEvent::Result { outcome } => {
-                let Stage::Password { user, screen } = &mut self.stage else {
+                let Stage::Password { user, screen, .. } = &mut self.stage else {
                     unreachable!("checked above");
                 };
                 if outcome == Outcome::Denied {
@@ -1004,5 +1061,23 @@ mod renderer_class {
             <GreeterApp as Application>::RENDERER,
             cupertino_kit::core::RendererClass::Cpu
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn special_names_stand_for_the_power_items() {
+        assert_eq!(special_name(">restart"), Some(Action::Restart));
+        assert_eq!(special_name(">sleep"), Some(Action::Sleep));
+        assert_eq!(special_name(">power"), Some(Action::ShutDown));
+        assert_eq!(special_name(">shutdown"), Some(Action::ShutDown));
+        // only the whole name, as typed
+        assert_eq!(special_name("restart"), None);
+        assert_eq!(special_name(">Restart"), None);
+        assert_eq!(special_name(">restart "), None);
+        assert_eq!(special_name(""), None);
     }
 }

@@ -4,6 +4,7 @@
 mod config;
 mod gate;
 mod glob;
+mod licences;
 mod plan;
 mod run;
 

@@ -135,6 +135,7 @@ package_cupertino() {
   install -Dm644 third-party/smithay/LICENSE.txt "$lic/smithay"
   install -Dm644 crates/cupertino-assets/fonts/OFL.txt "$lic/OFL.txt"
   install -Dm644 packaging/licenses/THIRD-PARTY-LICENSES "$lic/THIRD-PARTY-LICENSES"
+  install -Dm644 packaging/licenses/THIRD-PARTY-NOTICES "$lic/THIRD-PARTY-NOTICES"
 }
 
 package_cupertino-data() {
@@ -184,4 +185,5 @@ package_cupertino-kit() {
   install -Dm644 third-party/xkbcommon-rs/LICENSE "$lic/libxkbcommon"
   install -Dm644 crates/cupertino-assets/fonts/OFL.txt "$lic/OFL.txt"
   install -Dm644 packaging/licenses/THIRD-PARTY-LICENSES "$lic/THIRD-PARTY-LICENSES"
+  install -Dm644 packaging/licenses/THIRD-PARTY-NOTICES "$lic/THIRD-PARTY-NOTICES"
 }

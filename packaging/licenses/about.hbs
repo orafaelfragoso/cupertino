@@ -1,0 +1,32 @@
+{{!--
+The registry crates the workspace links and their licence texts; the workspace's own crates are left out, their
+licences ship beside this file. cargo-about sorts a licence's users by package id, which puts registry crates after
+path and git crates: a text whose last user is a registry crate is a third-party text.
+--}}
+Third-party software in the Cupertino binaries
+Generated with cargo-about from packaging/licenses/about.toml and about.hbs; do not edit.
+The crates' NOTICE files and the notices of embedded protocol files are in THIRD-PARTY-NOTICES.
+
+CRATES
+==============================================================================
+{{#each crates}}
+{{#if package.source}}
+{{{package.name}}} {{{package.version}}}
+{{/if}}
+{{/each}}
+
+LICENSES
+==============================================================================
+{{#each licenses}}
+{{#each used_by}}
+{{#if @last}}
+{{#if crate.source}}
+--- {{{../name}}} ({{{../id}}})
+Used by: {{#each ../used_by}}{{#if crate.source}}{{{crate.name}}} {{{crate.version}}}{{#unless @last}}, {{/unless}}{{/if}}{{/each}}
+
+{{{../text}}}
+
+{{/if}}
+{{/if}}
+{{/each}}
+{{/each}}

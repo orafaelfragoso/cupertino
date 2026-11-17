@@ -2,9 +2,15 @@ use anyhow::Result;
 use clap::Parser;
 use cupertino_diagnostic_events::{self as diag, Value};
 use cupertino_server::cli::{Cli, Mode};
-use cupertino_server::logging;
+use cupertino_server::{logging, session};
 
 fn main() -> Result<()> {
+    // the session of a login: a process that runs the compositor as its child and outlives it
+    let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    if session::requested(&args) {
+        Cli::parse();
+        std::process::exit(session::run(&args));
+    }
     // before the logging: its panic hook chains to this one, and its fatal signal handler writes the lines made here
     diag::init(diag::component!(), "server", diag::Sink::UserStore);
     let cli = Cli::parse();

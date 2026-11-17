@@ -23,7 +23,7 @@
 #   advertised  globals only: always, accent-table (only when the server is started with an accent table) or render-node
 #               (only when the device has a render node and its kernel waits on syncobj timelines through an eventfd)
 #   bus, bus_name  D-Bus only: session or system; the well-known name its owner claims (none if it claims none)
-#   shipped     binaries only: yes when packaging/release.py installs it
+#   shipped     binaries only: yes when the package recipes in packaging/arch install it
 #   source      file that defines it
 #   source_match globals, D-Bus interfaces and sockets: text that must occur in the source file, such as the call that
 #               creates the global (a library state constructor or `create_global`) or the quoted interface name or path;
@@ -37,7 +37,7 @@
   owner_area: design
   scope: public
   source: crates/cupertino-ui-abi/src/lib.rs
-  note: CupertinoKit's C ABI. The exported ck_* functions, the header and the struct layouts are pinned in crates/cupertino-ui-abi/abi/. Shipped in the cupertino-kit package as /usr/lib/libcupertinokit.so.1.<minor>.0 with the soname link, /usr/include/cupertinokit-1/cupertinokit.h and the pkg-config file cupertinokit.pc; release.py verify --package sdk checks the packaged library against the same baselines.
+  note: CupertinoKit's C ABI. The exported ck_* functions, the header and the struct layouts are pinned in crates/cupertino-ui-abi/abi/. Shipped in the cupertino-kit package as /usr/lib/libcupertinokit.so.1.<minor>.0 with the soname link, /usr/include/cupertinokit-1/cupertinokit.h and the pkg-config file cupertinokit.pc.
 - name: /run/cupertino-login/greeter.sock
   kind: socket-protocol
   version: 5

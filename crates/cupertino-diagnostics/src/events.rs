@@ -2,9 +2,9 @@
 //!
 //! - the user store, `$XDG_STATE_HOME/cupertino/events/` (else `~/.local/state/cupertino/events/`), which the user's
 //!   own processes write;
-//! - `session.log`, whose `starting` and `the compositor …` lines `cupertino-session` writes. They are turned into
-//!   records here, when they are read (`session.start`, `session.end`, `session.end_abnormal`), and never stored a
-//!   second time;
+//! - `session.log`, whose `starting` and `the compositor …` lines the session (`cupertino-server --session`) writes.
+//!   They are turned into records here, when they are read (`session.start`, `session.end`, `session.end_abnormal`),
+//!   and never stored a second time;
 //! - the system journal, whose entries with `CUPERTINO_DIAG_SCHEMA=1` the system services write, read with `journalctl`.
 //!
 //! [`read`] gives every event a [`Filter`] lets through and the state of each source; [`start`] does the same and
@@ -32,7 +32,7 @@ pub const SESSION_LOG: &str = "session.log";
 /// The name of the system journal among the sources.
 pub const JOURNAL: &str = "journal";
 /// The `component` of the records made from `session.log`.
-pub const SESSION_COMPONENT: &str = "cupertino-session";
+pub const SESSION_COMPONENT: &str = "cupertino-server";
 
 /// The groups whose members may read the whole system journal.
 pub const JOURNAL_GROUPS: [&str; 3] = ["systemd-journal", "wheel", "adm"];

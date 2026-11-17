@@ -49,7 +49,7 @@ runtime's generation and owner, its posted messages and its wake fd.
 
 ## The installed SDK
 
-The `cupertino-kit` package (`packaging/release.py`'s `sdk` manifest) installs:
+The `cupertino-kit` package (`package_cupertino-kit` in `packaging/arch/cupertino/PKGBUILD`) installs:
 
 | File | What it is |
 |---|---|
@@ -66,10 +66,6 @@ with `pkg-config cupertinokit` alone and needs no path of its own:
 ```sh
 cc -std=c11 $(pkg-config --cflags cupertinokit) app.c -o app $(pkg-config --libs cupertinokit)
 ```
-
-`release.py verify --package sdk` reads the packaged library with `readelf`. It fails unless the exports equal
-`abi/symbols-1.txt`, no symbol version is defined, the soname is `libcupertinokit.so.1` and `FLAGS_1` has `NODELETE`, and
-unless the header and every other copied file equal the checkout's.
 
 ## C samples
 

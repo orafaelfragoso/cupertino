@@ -790,7 +790,7 @@ pub fn start_session_service_on(state: &mut Cupertino, address: Option<String>) 
     state.quit.properties = Some(Arc::clone(&settings));
     // the values the change signals were last emitted for
     let mut emitted = state.session_settings();
-    let spawned = std::thread::Builder::new().name("cupertino-session".into()).spawn(move || {
+    let spawned = std::thread::Builder::new().name("session-service".into()).spawn(move || {
         // when the bus connection drops, connect again after a growing pause and claim the name again
         let mut pause = crate::dbus::RECONNECT_FIRST;
         let mut served_before = false;

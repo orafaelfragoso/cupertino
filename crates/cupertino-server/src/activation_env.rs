@@ -2,7 +2,7 @@
 //! manager and D-Bus activation start portals and services with the environment they hold: the one the last graphical
 //! session left (another desktop's `WAYLAND_DISPLAY` and `XDG_CURRENT_DESKTOP`). Once the compositor listens, the variables
 //! of this session are put there and `cupertino-session.target` (bound to `graphical-session.target`) is started; the
-//! session command stops it again when the compositor ends.
+//! session (`session.rs`) stops it again when the compositor ends.
 //!
 //! A user has one systemd manager for all sessions: when a graphical session is already active (another desktop of the
 //! same user), nothing is changed, since its services would lose their display. The exception is a leftover
@@ -49,7 +49,7 @@ pub enum Outcome {
 }
 
 /// The file in `XDG_RUNTIME_DIR` that names the defaults this session put in the manager, one per line, so the session
-/// command removes them with the session's variables and leaves a value of the user's own alone.
+/// removes them with the session's variables and leaves a value of the user's own alone.
 pub const DEFAULTS_RECORD: &str = "cupertino-session-defaults";
 
 /// Writes [`DEFAULTS_RECORD`] for the defaults `publish` set (removes it when none were).

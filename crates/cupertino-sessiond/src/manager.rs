@@ -16,6 +16,7 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use cupertino_defaults::compositor::{COMPOSITOR_CONF_ENV, GREETER_CONF_PATH};
 use cupertino_defaults::login::{default_admin_groups, LoginConfig, Problem, DEFAULT_ADMIN_GROUPS};
 use cupertino_diagnostic_events::{self as diag, Severity, Value};
 use cupertino_login_ipc::message::{MAX_EVENT_FRAME, MAX_REQUEST_FRAME, SOCKET_PATH};
@@ -1305,7 +1306,11 @@ impl Manager {
             class: SessionClass::Greeter,
             mode: Mode::Open,
             command: self.config.greeter_command.clone(),
-            environment: vec![format!("{SOCKET_VARIABLE}={SOCKET_PATH}")],
+            // the login screen's server reads its own settings file
+            environment: vec![
+                format!("{SOCKET_VARIABLE}={SOCKET_PATH}"),
+                format!("{COMPOSITOR_CONF_ENV}={GREETER_CONF_PATH}"),
+            ],
             path: self.session_path.clone(),
             screen_reader: screen_reader_at_login(Path::new(system_accessibility::MACHINE_DIR)),
             failures: 0,

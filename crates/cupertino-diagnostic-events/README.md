@@ -204,8 +204,8 @@ Every id a test can drive, where it comes from, and how. `tests/registry.rs` che
 | `portal.permission.store_failed` | warn | `cupertino-portal` | a screen cast permission could not be stored | `cupertino-portal/tests/diag_events.rs` |
 | `polkit.register.failed` | error | `cupertino-polkit-agent` | the agent could not register with polkit | `cupertino-polkit-agent/tests/diag_events.rs` |
 | `polkit.auth.failed` | warn | `cupertino-polkit-agent` | an authentication failed; never its text | `cupertino-polkit-agent/tests/flow.rs` |
-| `session.start`, `session.end` | info | `cupertino-session` | read from `session.log` by `cupertino diagnose events`, not recorded: a session started, or ended normally or by a stop | `cupertino-diagnostics/tests/events.rs` |
-| `session.end_abnormal` | error | `cupertino-session` | read from `session.log`, not recorded: the compositor ended abnormally | `cupertino-diagnostics/tests/events.rs` |
+| `session.start`, `session.end` | info | `cupertino-server` | read from `session.log` by `cupertino diagnose events`, not recorded: a session started, or ended normally or by a stop | `cupertino-diagnostics/tests/events.rs` |
+| `session.end_abnormal` | error | `cupertino-server` | read from `session.log`, not recorded: the compositor ended abnormally | `cupertino-diagnostics/tests/events.rs` |
 
 The areas: `server`, `dock`, `menubar`, `launcher`, `notifications`, `controlcenter`, `osd`, `screenshot`,
 `windowmanager`, `login_ui` (`cupertino-login`), `files`, `settings`, `portal`, `polkit` (`cupertino-polkit-agent`),

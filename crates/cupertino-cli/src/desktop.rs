@@ -16,7 +16,7 @@ pub(crate) const GROUP: Group = Group {
     name: "desktop",
     summary: "Starts the desktop",
     description: "Commands that run the desktop itself. The compositor is the `cupertino-server` program installed \
-                  beside this command (or in /usr/bin); the session on a text console is `cupertino-session`.",
+                  beside this command (or in /usr/bin); the session on a text console is `cupertino-server --session`.",
     commands: &[COMMANDS],
 };
 
@@ -33,7 +33,7 @@ const COMMANDS: &[Command] = &[Command {
                   `headless` runs it offscreen, for tests and scripts. Both need XDG_RUNTIME_DIR for the compositor's \
                   socket (no_runtime_dir) and take --size, --scale and --spawn, a command line the compositor starts \
                   once it runs (repeatable).\n\n\
-                  `tty` turns this command into `cupertino-session`, the session of a text console, as a login \
+                  `tty` turns this command into `cupertino-server --session`, the session of a text console, as a login \
                   would start it; it takes no other option (option_not_for_backend). It refuses to start inside a \
                   graphical session (inside_graphical_session, exit code 4) and from anything but a text console \
                   (not_a_vt, exit code 3). Once the session starts, its exit status is the command's, and after the \
@@ -261,7 +261,7 @@ fn start(args: &Args, cx: &Context, sink: &mut Sink) -> Result<Reply, Failure> {
     ))
 }
 
-/// `--backend tty`: becomes `cupertino-session` after its checks.
+/// `--backend tty`: becomes `cupertino-server --session` after its checks.
 fn session(args: &Args, cx: &Context, sink: &mut Sink) -> Result<Reply, Failure> {
     if let Some(name) = ["size", "scale", "spawn"]
         .into_iter()
@@ -290,23 +290,25 @@ fn session(args: &Args, cx: &Context, sink: &mut Sink) -> Result<Reply, Failure>
             "the tty backend needs a text console: its standard input is not one",
         ));
     }
-    let program = installed(cx, "", "cupertino-session").ok_or_else(|| {
+    let program = installed(cx, "", "cupertino-server").ok_or_else(|| {
         Failure::new(
             FailureKind::Unavailable,
             "session_not_installed",
-            "cupertino-session is installed neither beside this command nor in /usr/bin",
+            "cupertino-server is installed neither beside this command nor in /usr/bin",
         )
     })?;
+    let session_args = ["--session".to_owned()];
     sink.event(
         "starting",
         &Starting {
             backend: "tty",
             server: &program,
-            args: &[],
+            args: &session_args,
         },
-        &format!("starting {}", program.display()),
+        &format!("starting {} --session", program.display()),
     )?;
     let mut command = cx.command(&program);
+    command.args(&session_args);
     // SAFETY: close_range, getrlimit and fcntl are async-signal-safe.
     unsafe {
         command.pre_exec(|| {

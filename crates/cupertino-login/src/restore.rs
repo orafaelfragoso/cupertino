@@ -64,7 +64,6 @@ pub const SHELL_PROGRAMS: &[&str] = &[
     "cupertino-powerd",
     "cupertino-screenshot",
     "cupertino-server",
-    "cupertino-session",
     "cupertino-sessiond",
     "cupertino-windowmanager",
 ];

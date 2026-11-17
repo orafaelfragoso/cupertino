@@ -20,8 +20,8 @@ pub use cupertino_defaults::compositor::COMPOSITOR_CONF_ENV as CONFIG_ENV;
 /// The system configuration file the packages install: the shell processes and whatever else a fresh account needs.
 pub const SYSTEM_CONFIG: &str = "/etc/cupertino/compositor.json";
 
-/// The system file of the login screen's server, which `$CUPERTINO_SERVER_CONFIG` names when the packages start it.
-pub const GREETER_CONFIG: &str = "/etc/cupertino/greeter.json";
+/// The system file of the login screen's server, which `$CUPERTINO_SERVER_CONFIG` names when the login manager starts it.
+pub const GREETER_CONFIG: &str = cupertino_defaults::compositor::GREETER_CONF_PATH;
 
 /// Where the programs of the shell processes and the screenshot process must be installed. The install prefix of the
 /// build is added to `/usr` when it is set (`CUPERTINO_INSTALL_PREFIX` at compile time).

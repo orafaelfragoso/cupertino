@@ -454,7 +454,7 @@ fn read_pc(root: &Path) -> Part {
     }
 }
 
-/// The build record `release.py` writes into the package: `{package, version, commit, source_date_epoch}`.
+/// The build record the package recipe writes into the package: `{package, version, commit, source_date_epoch}`.
 #[derive(serde::Deserialize)]
 struct BuildRecord {
     package: String,

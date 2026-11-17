@@ -17,7 +17,7 @@ TTYVTDisallocate=yes
 UtmpIdentifier=tty1
 UtmpMode=user
 Environment=XDG_SESSION_TYPE=wayland XDG_SESSION_CLASS=user
-ExecStart=/usr/bin/cupertino-session
+ExecStart=/usr/bin/cupertino-server --session
 Restart=on-failure
 RestartSec=2
 

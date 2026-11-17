@@ -40,6 +40,9 @@ use serde_json::{Map, Value};
 /// Environment variable that redirects the settings file.
 pub const COMPOSITOR_CONF_ENV: &str = "CUPERTINO_SERVER_CONFIG";
 
+/// The settings file of the login screen's server, which the login manager names in [`COMPOSITOR_CONF_ENV`].
+pub const GREETER_CONF_PATH: &str = "/etc/cupertino/greeter.json";
+
 /// A key whose value was not applied, or the whole file (`key` empty) when it is not a JSON object.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct JsonProblem {

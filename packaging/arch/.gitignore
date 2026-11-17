@@ -1,0 +1,8 @@
+# What makepkg leaves in a recipe directory: the clone of the sources, the build and package trees, the packages.
+*/cupertino/
+*/cupertino-checkout/
+*/cupertino-*-source.tar.xz
+*/src/
+*/pkg/
+*/*.pkg.tar.*
+*/*.log

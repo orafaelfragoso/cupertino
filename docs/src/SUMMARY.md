@@ -9,7 +9,7 @@
 - [Portals](portals.md)
 - [Release checklist](release-checklist.md)
 - [Building and running](building.md)
-- [Signed updates and rollback](updates-and-rollback.md)
+- [Signed updates](updates-and-rollback.md)
 - [Displays and GPUs](displays-and-gpus.md)
 - [CupertinoKit: getting started](kit-getting-started.md)
 - [What runs on CupertinoKit](apps-on-kit.md)

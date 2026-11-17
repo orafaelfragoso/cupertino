@@ -161,7 +161,7 @@ pub(crate) fn append(path: &Path, line: &str) -> std::io::Result<()> {
     file.write_all(line.as_bytes())
 }
 
-/// `$XDG_STATE_HOME/cupertino`, else `~/.local/state/cupertino`, where `cupertino-session` keeps `session.log`.
+/// `$XDG_STATE_HOME/cupertino`, else `~/.local/state/cupertino`, where the session keeps `session.log`.
 pub(crate) fn state_dir() -> Option<PathBuf> {
     let base = std::env::var_os("XDG_STATE_HOME")
         .map(PathBuf::from)
@@ -170,7 +170,7 @@ pub(crate) fn state_dir() -> Option<PathBuf> {
     Some(base.join("cupertino"))
 }
 
-/// The local time as `cupertino-session` writes it, `YYYY-MM-DD HH:MM:SS`; empty when the C library cannot tell.
+/// The local time as `session.log` has it, `YYYY-MM-DD HH:MM:SS`; empty when the C library cannot tell.
 pub(crate) fn local_now() -> String {
     // SAFETY: `time` with a null pointer only returns the time; `localtime_r` writes the zeroed `tm` it is given.
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };

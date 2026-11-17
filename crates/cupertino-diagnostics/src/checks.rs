@@ -219,7 +219,7 @@ fn renderer(sources: &Sources) -> Check {
     )
 }
 
-/// A line `cupertino-session` writes before it starts the compositor: `<date> <time> starting`, with a limit or not.
+/// A line the session (`cupertino-server --session`) writes before it starts the compositor: `<date> <time> starting`, with a limit or not.
 fn session_start(line: &str) -> bool {
     line.splitn(3, ' ')
         .nth(2)

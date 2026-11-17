@@ -49,7 +49,7 @@ for effect in out.effects {
 
 Feature `app` builds the binary: a client of the display server that shows one menu bar per output and opens its menus as
 popups. It is a CupertinoKit application (`cupertino-kit`, `src/view.rs`): each bar is a Kit window whose layer surface,
-menu-bar object and `MenuBar` backdrop come from `cupertino-shell-client` and `cupertino-protocol-app` through its surface
+menu-bar object and `MenuBar` backdrop come from `cupertino-shell-client` and `cupertino_wayland_client::app` through its surface
 roles, and each open menu level is a Kit popup with a grab, on the `Menu` material, placed where the controller laid it out. The
 server starts it from its `"shell"` configuration and restarts it after a failure; `cupertino-server`'s
 

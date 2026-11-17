@@ -255,8 +255,8 @@ pub(crate) fn role_configure(n: u32, size: (u32, u32), activated: bool) -> platf
 /// The window style the desktop's effects give a window of `mode`, if it is not the default titled one.
 pub(crate) fn window_style(
     mode: platform::DecorationMode,
-) -> Option<cupertino_protocol_app::WindowStyle> {
-    use cupertino_protocol_app::WindowStyle;
+) -> Option<cupertino_wayland_client::app::WindowStyle> {
+    use cupertino_wayland_client::app::WindowStyle;
     match mode {
         platform::DecorationMode::Unified => Some(WindowStyle::Unified),
         platform::DecorationMode::UnifiedCompact => Some(WindowStyle::UnifiedCompact),

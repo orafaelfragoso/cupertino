@@ -12,10 +12,6 @@ use crate::action_grab::ActionGrabs;
 use cupertino_geometry::{Rect, Size};
 use cupertino_keyboard::modifiers::Profile;
 use cupertino_menu_model::{ActionName, Command, Entry, Menu, MenuBar};
-use cupertino_protocol_app::{
-    AppEffects, AppEvent, Appearance as AppearanceObserver, Backdrop as Material, BackdropId,
-    BackdropTone,
-};
 use cupertino_ui_menus::{AppMenus, WindowMenus};
 use cupertino_ui_platform::{
     ActivationRequest, Backdrop, Capabilities, ClipboardData, ClipboardKind, ClipboardToken, Color,
@@ -27,6 +23,10 @@ use cupertino_ui_platform::{
 };
 use cupertino_ui_render::{CpuFrame, MemoryTarget, RenderFrameId};
 use cupertino_ui_text::TextInputState;
+use cupertino_wayland_client::app::{
+    AppEffects, AppEvent, Appearance as AppearanceObserver, Backdrop as Material, BackdropId,
+    BackdropTone,
+};
 use cupertino_wayland_client::{
     BufferFormat, Capability, ClipboardOffer, Connection, DragActions, DragEvent, DragIcon,
     DragOffer, DragSource, DragSourceEvent, Error, Event, KeyboardEvent, PixelRect, Popup, ReadId,
@@ -210,7 +210,7 @@ fn set_look(
     backdrop: &Material,
     name: &str,
     glass: Option<GlassRegion>,
-) -> Result<(), cupertino_protocol_app::Error> {
+) -> Result<(), cupertino_wayland_client::app::Error> {
     let glass = glass.or_else(|| {
         GlassStyle::of_material(name).map(|style| GlassRegion {
             style,
@@ -228,24 +228,24 @@ fn set_look(
 }
 
 /// The protocol's glass style for a region's.
-pub(crate) fn protocol_style(style: GlassStyle) -> cupertino_protocol_app::GlassStyle {
+pub(crate) fn protocol_style(style: GlassStyle) -> cupertino_wayland_client::app::GlassStyle {
     match style {
-        GlassStyle::Regular => cupertino_protocol_app::GlassStyle::Regular,
-        GlassStyle::Clear => cupertino_protocol_app::GlassStyle::Clear,
-        GlassStyle::LargePanel => cupertino_protocol_app::GlassStyle::LargePanel,
-        GlassStyle::Bar => cupertino_protocol_app::GlassStyle::Bar,
-        GlassStyle::Dense => cupertino_protocol_app::GlassStyle::Dense,
-        GlassStyle::Module => cupertino_protocol_app::GlassStyle::Module,
-        GlassStyle::Card => cupertino_protocol_app::GlassStyle::Card,
-        GlassStyle::Track => cupertino_protocol_app::GlassStyle::Track,
-        GlassStyle::Popover => cupertino_protocol_app::GlassStyle::Popover,
-        GlassStyle::Switcher => cupertino_protocol_app::GlassStyle::Switcher,
-        GlassStyle::Sidebar => cupertino_protocol_app::GlassStyle::Sidebar,
-        GlassStyle::SubduedModule => cupertino_protocol_app::GlassStyle::SubduedModule,
-        GlassStyle::Snippet => cupertino_protocol_app::GlassStyle::Snippet,
-        GlassStyle::Veiled => cupertino_protocol_app::GlassStyle::Veiled,
-        GlassStyle::Toolbar => cupertino_protocol_app::GlassStyle::Toolbar,
-        GlassStyle::Menu => cupertino_protocol_app::GlassStyle::Menu,
+        GlassStyle::Regular => cupertino_wayland_client::app::GlassStyle::Regular,
+        GlassStyle::Clear => cupertino_wayland_client::app::GlassStyle::Clear,
+        GlassStyle::LargePanel => cupertino_wayland_client::app::GlassStyle::LargePanel,
+        GlassStyle::Bar => cupertino_wayland_client::app::GlassStyle::Bar,
+        GlassStyle::Dense => cupertino_wayland_client::app::GlassStyle::Dense,
+        GlassStyle::Module => cupertino_wayland_client::app::GlassStyle::Module,
+        GlassStyle::Card => cupertino_wayland_client::app::GlassStyle::Card,
+        GlassStyle::Track => cupertino_wayland_client::app::GlassStyle::Track,
+        GlassStyle::Popover => cupertino_wayland_client::app::GlassStyle::Popover,
+        GlassStyle::Switcher => cupertino_wayland_client::app::GlassStyle::Switcher,
+        GlassStyle::Sidebar => cupertino_wayland_client::app::GlassStyle::Sidebar,
+        GlassStyle::SubduedModule => cupertino_wayland_client::app::GlassStyle::SubduedModule,
+        GlassStyle::Snippet => cupertino_wayland_client::app::GlassStyle::Snippet,
+        GlassStyle::Veiled => cupertino_wayland_client::app::GlassStyle::Veiled,
+        GlassStyle::Toolbar => cupertino_wayland_client::app::GlassStyle::Toolbar,
+        GlassStyle::Menu => cupertino_wayland_client::app::GlassStyle::Menu,
     }
 }
 
@@ -328,8 +328,8 @@ pub struct WaylandWindowSystem {
     conn: Connection,
     /// The time copying frames into buffers took since the runtime last asked, while it times frames.
     copy_time: Option<Duration>,
-    semantics: Option<cupertino_protocol_app::Semantics>,
-    semantic_surfaces: HashMap<WindowId, cupertino_protocol_app::SemanticSurface>,
+    semantics: Option<cupertino_wayland_client::app::Semantics>,
+    semantic_surfaces: HashMap<WindowId, cupertino_wayland_client::app::SemanticSurface>,
     /// The desktop-control actions that came with a grab serial, while a popup of their window may still grab with it.
     action_grabs: ActionGrabs,
     profile: Profile,
@@ -484,7 +484,7 @@ impl WaylandWindowSystem {
             let observer = effects.appearance(&conn);
             (effects, observer)
         });
-        let semantics = cupertino_protocol_app::Semantics::bind(&mut conn);
+        let semantics = cupertino_wayland_client::app::Semantics::bind(&mut conn);
         let presentations = Presentations::bind(&mut conn);
         let gpu = GpuPath::start(&mut conn, class);
         let mut system = WaylandWindowSystem {
@@ -784,7 +784,8 @@ impl WaylandWindowSystem {
         window: WindowId,
         backdrop: Option<Backdrop>,
     ) -> Result<(), PlatformError> {
-        let protocol = |e: cupertino_protocol_app::Error| PlatformError::Protocol(e.to_string());
+        let protocol =
+            |e: cupertino_wayland_client::app::Error| PlatformError::Protocol(e.to_string());
         let surface = self.window(window)?.surface;
         let shown = match backdrop {
             None => None,
@@ -840,7 +841,8 @@ impl WaylandWindowSystem {
         window: WindowId,
         regions: Vec<MaterialRegion>,
     ) -> Result<(), PlatformError> {
-        let protocol = |e: cupertino_protocol_app::Error| PlatformError::Protocol(e.to_string());
+        let protocol =
+            |e: cupertino_wayland_client::app::Error| PlatformError::Protocol(e.to_string());
         let surface = self.window(window)?.surface;
         if !regions.is_empty() && self.effects.is_none() {
             return Err(PlatformError::Unsupported);
@@ -950,7 +952,7 @@ impl WaylandWindowSystem {
     fn surface_layers_drawn(&self) -> bool {
         self.presentations
             .layers()
-            .is_some_and(cupertino_protocol_app::Layers::blurs_content)
+            .is_some_and(cupertino_wayland_client::app::Layers::blurs_content)
     }
 
     /// Sends `changes` to `window`'s surface layer `key` and commits the window without a buffer when it shows a frame,
@@ -1142,7 +1144,7 @@ impl WaylandWindowSystem {
 
     /// The window system's events for one transport event; none for a surface that is not a window here.
     fn translate(&mut self, event: Event, out: &mut Vec<PlatformEvent>) {
-        if matches!(&event, Event::Extension(e) if e.downcast_ref::<cupertino_protocol_app::SemanticWake>().is_some())
+        if matches!(&event, Event::Extension(e) if e.downcast_ref::<cupertino_wayland_client::app::SemanticWake>().is_some())
         {
             out.push(PlatformEvent::Wake);
             return;
@@ -1555,7 +1557,7 @@ impl WindowSystem for WaylandWindowSystem {
                 && self
                     .presentations
                     .layers()
-                    .is_some_and(cupertino_protocol_app::Layers::draws_glass_edges),
+                    .is_some_and(cupertino_wayland_client::app::Layers::draws_glass_edges),
         }
     }
 

@@ -9,8 +9,8 @@
 
 use std::collections::HashMap;
 
-use cupertino_protocol_app::{AppEvent, Layer, LayerId, LayerProperty, Layers};
 use cupertino_ui_platform::{PlatformError, PresentChange, PresentProperty, WindowId};
+use cupertino_wayland_client::app::{AppEvent, Layer, LayerId, LayerProperty, Layers};
 use cupertino_wayland_client::{Connection, SurfaceId};
 
 fn property(p: PresentProperty) -> LayerProperty {

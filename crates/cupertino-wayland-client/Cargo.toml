@@ -3,11 +3,14 @@ name = "cupertino-wayland-client"
 version = "0.1.0"
 edition.workspace = true
 license = "MPL-2.0"
-description = "Wayland client transport over standard protocols only: connection with capability discovery, application windows and popups, shm buffer leases, frame callbacks and presentation feedback, per-surface scale, pointer with an XCursor theme fallback, keyboard, input methods and clipboard"
+description = "Wayland client transport: connection with capability discovery, application windows and popups, shm buffer leases, frame callbacks and presentation feedback, per-surface scale, pointer with an XCursor theme fallback, keyboard, input methods and clipboard over the standard protocols, and the public Cupertino protocols: appearance and display options, server-rendered backdrops, the title bar style, scroll counts and layers the server animates"
 [package.metadata.cupertino]
 layer = "transport"
 
 [dependencies]
+cupertino-animation = { path = "../cupertino-animation" }
+cupertino-app-protocols = { path = "../cupertino-app-protocols", features = ["client"] }
+cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-geometry = { path = "../cupertino-geometry" }
 memmap2 = "0.9"
 rustix = { version = "1", features = ["event", "fs", "net"] }

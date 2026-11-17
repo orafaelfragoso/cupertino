@@ -13,12 +13,12 @@ use cupertino_notifications::view::{
     SHADOW_MARGIN,
 };
 use cupertino_notifications::{CenterConfig, StackLayout, Wakeup};
-use cupertino_protocol_app::AppEvent;
 use cupertino_shell_client::{
     Anchor, KeyboardInteractivity, Layer, LayerShell, LayerSurface, LayerSurfaceConfig, Margin,
     ShellEvent,
 };
 use cupertino_ui_wayland::{RoleEvent, SurfaceRoles, WaylandWindowSystem};
+use cupertino_wayland_client::app::AppEvent;
 use cupertino_wayland_client::{
     Connection, Error as WaylandError, ExtensionEvent, OutputId, SurfaceId,
 };

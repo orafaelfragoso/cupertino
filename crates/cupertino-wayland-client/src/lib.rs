@@ -1,4 +1,4 @@
-//! Wayland client transport over standard protocols only.
+//! Wayland client transport over the standard protocols, with the public Cupertino protocols in [`app`].
 //!
 //! A [`Connection`] needs `wl_compositor`, `wl_shm` and `xdg_wm_base`; every other protocol is optional and listed in
 //! its [`CapabilitySet`]. It owns application windows ([`Toplevel`]) and their popups ([`Popup`]), hands out shm
@@ -9,6 +9,7 @@
 //! ([`Decorations::Client`]). The application runs one loop around [`Connection::wait`] and reacts to the returned
 //! [`Event`]s; other threads wake it with a [`Waker`].
 
+pub mod app;
 mod buffer;
 mod capability;
 mod clipboard;

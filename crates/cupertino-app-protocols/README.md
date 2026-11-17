@@ -21,5 +21,5 @@ The generated bindings are the crate's only protocol code; its `semantics` modul
 
 | Feature | Generates |
 |---|---|
-| `client` | `cupertino_app_protocols::client::{app_effects, scroll}`, used by `cupertino-protocol-app` |
+| `client` | `cupertino_app_protocols::client::{app_effects, scroll}`, used by `cupertino-wayland-client`'s `app` module |
 | `server` | `cupertino_app_protocols::server::{app_effects, scroll}`, used by `cupertino-server` through `cupertino-protocols` |

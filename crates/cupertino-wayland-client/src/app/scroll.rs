@@ -1,11 +1,11 @@
 //! `cupertino_scroll_v1`: the scroll count of the pointer's scrolls.
 
-use crate::{AppEvent, Quiet};
+use crate::app::{AppEvent, Quiet};
+use crate::{Connection, Error, State};
 use cupertino_app_protocols::client::scroll::cupertino_pointer_scroll_v1::{
     self, CupertinoPointerScrollV1,
 };
 use cupertino_app_protocols::client::scroll::cupertino_scroll_v1::CupertinoScrollV1;
-use cupertino_wayland_client::{Connection, Error, State};
 use wayland_client::protocol::wl_pointer::{Axis, WlPointer};
 use wayland_client::{Connection as WlConnection, Dispatch, QueueHandle, WEnum};
 

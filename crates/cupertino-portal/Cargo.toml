@@ -16,7 +16,6 @@ cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-icons = { path = "../cupertino-icons" }
 cupertino-kit = { path = "../cupertino-kit" }
-cupertino-protocol-app = { path = "../cupertino-protocol-app" }
 cupertino-protocols = { path = "../cupertino-protocols", features = ["client"] }
 cupertino-screencast = { path = "../cupertino-screencast" }
 cupertino-shell-client = { path = "../cupertino-shell-client" }

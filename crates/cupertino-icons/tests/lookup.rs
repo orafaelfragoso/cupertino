@@ -3,274 +3,207 @@
 #[allow(dead_code)]
 mod support;
 
+use std::path::{Path, PathBuf};
+
 use cupertino_assets::Assets;
 use cupertino_icons::{IconLookup, ThemeIcons};
 
-const NO_PACK: &str = r#"{"version": 2}"#;
-
-fn bases(dir: &tempfile::TempDir) -> Vec<std::path::PathBuf> {
-    vec![dir.path().join("icons")]
-}
+const BLACK: [u8; 4] = [0, 0, 0, 255];
+const APPS_48: [(&str, u32, &str); 1] = [("48x48/apps", 48, "Fixed")];
 
 #[test]
-fn an_empty_name_finds_nothing() {
+fn a_name_is_found_in_hicolor_at_the_nearest_size_then_in_the_flat_directories() {
     let dir = tempfile::tempdir().unwrap();
-    let mut lookup = IconLookup::with_roots(&Assets::builtin(), bases(&dir));
-    assert_eq!(lookup.find("", 32, 1), None);
-}
-
-#[test]
-fn an_absolute_path_is_found_as_it_is_when_it_is_a_file() {
-    let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join("mine.png");
-    support::write_png(&file, 8, 8, [1, 1, 1, 255]);
-    let mut lookup = IconLookup::with_roots(&Assets::builtin(), bases(&dir));
-    assert_eq!(lookup.find(file.to_str().unwrap(), 64, 2), Some(file));
-    assert_eq!(
-        lookup.find(dir.path().join("none.png").to_str().unwrap(), 32, 1),
-        None
-    );
-    assert_eq!(
-        lookup.find(dir.path().to_str().unwrap(), 32, 1),
-        None,
-        "a directory is no icon"
-    );
-}
-
-#[test]
-fn hicolor_is_searched_for_the_nearest_size() {
-    let dir = tempfile::tempdir().unwrap();
-    let icons = dir.path().join("icons");
-    let root = support::theme(
-        &icons,
-        "hicolor",
-        None,
-        &[
-            ("16x16/apps", 16, "Fixed"),
-            ("48x48/apps", 48, "Fixed"),
-            ("256x256/apps", 256, "Fixed"),
-        ],
+    let (icons, second_base) = (dir.path().join("icons"), dir.path().join("second"));
+    let hicolor = icons.join("hicolor");
+    support::write(
+        &hicolor.join("index.theme"),
+        b"[Icon Theme]\nDirectories=16x16/apps,32x32/apps,48x48/apps,256x256/apps,scalable/apps\n\n\
+          [16x16/apps]\nSize=16\nType=Fixed\n\n[32x32/apps]\nSize=32\nType=Fixed\n\n\
+          [48x48/apps]\nSize=48\nType=Fixed\n\n[256x256/apps]\nSize=256\nType=Fixed\n\n\
+          [scalable/apps]\nSize=64\nMinSize=8\nMaxSize=512\nType=Scalable\n",
     );
     for px in [16, 48, 256] {
         support::write_png(
-            &root.join(format!("{px}x{px}/apps/mail.png")),
+            &hicolor.join(format!("{px}x{px}/apps/mail.png")),
             px,
             px,
-            [0, 0, 0, 255],
+            BLACK,
         );
     }
-    let mut lookup = IconLookup::with_roots(&Assets::builtin(), vec![icons]);
-    let pick = |lookup: &mut IconLookup, size, scale| {
-        lookup
-            .find("mail", size, scale)
-            .unwrap()
-            .strip_prefix(&root)
-            .unwrap()
-            .to_path_buf()
-    };
-    assert_eq!(
-        pick(&mut lookup, 16, 1),
-        std::path::Path::new("16x16/apps/mail.png")
-    );
-    assert_eq!(
-        pick(&mut lookup, 40, 1),
-        std::path::Path::new("48x48/apps/mail.png")
-    );
-    assert_eq!(
-        pick(&mut lookup, 200, 1),
-        std::path::Path::new("256x256/apps/mail.png")
-    );
-    assert_eq!(
-        pick(&mut lookup, 24, 2),
-        std::path::Path::new("48x48/apps/mail.png"),
-        "size times scale"
-    );
-    assert_eq!(
-        pick(&mut lookup, 1000, 1),
-        std::path::Path::new("256x256/apps/mail.png")
-    );
-}
-
-#[test]
-fn a_scalable_directory_serves_every_size_in_its_range() {
-    let dir = tempfile::tempdir().unwrap();
-    let icons = dir.path().join("icons");
-    let root = icons.join("hicolor");
+    support::write_png(&hicolor.join("32x32/apps/x.png"), 32, 32, BLACK);
     support::write(
-        &root.join("index.theme"),
-        b"[Icon Theme]\nDirectories=32x32/apps,scalable/apps\n\n[32x32/apps]\nSize=32\nType=Fixed\n\n[scalable/apps]\nSize=64\nMinSize=8\nMaxSize=512\nType=Scalable\n",
-    );
-    support::write_png(&root.join("32x32/apps/x.png"), 32, 32, [0, 0, 0, 255]);
-    support::write(
-        &root.join("scalable/apps/x.svg"),
+        &hicolor.join("scalable/apps/x.svg"),
         support::BLACK_SVG.as_bytes(),
     );
-    let mut lookup = IconLookup::with_roots(&Assets::builtin(), vec![icons]);
-    assert!(
-        lookup
-            .find("x", 32, 1)
-            .unwrap()
-            .ends_with("32x32/apps/x.png"),
-        "exact fixed size"
-    );
-    assert!(lookup
-        .find("x", 100, 1)
-        .unwrap()
-        .ends_with("scalable/apps/x.svg"));
-}
-
-#[test]
-fn a_png_wins_over_an_svg_of_the_same_directory() {
-    let dir = tempfile::tempdir().unwrap();
-    let icons = dir.path().join("icons");
-    let root = support::theme(&icons, "hicolor", None, &[("48x48/apps", 48, "Fixed")]);
-    support::write_png(&root.join("48x48/apps/a.png"), 48, 48, [0, 0, 0, 255]);
+    support::write_png(&hicolor.join("48x48/apps/both.png"), 48, 48, BLACK);
     support::write(
-        &root.join("48x48/apps/a.svg"),
+        &hicolor.join("48x48/apps/both.svg"),
         support::BLACK_SVG.as_bytes(),
     );
-    let mut lookup = IconLookup::with_roots(&Assets::builtin(), vec![icons]);
-    assert!(lookup.find("a", 48, 1).unwrap().ends_with("a.png"));
-}
-
-#[test]
-fn a_name_no_theme_has_finds_nothing() {
-    let dir = tempfile::tempdir().unwrap();
-    let icons = dir.path().join("icons");
-    support::theme(&icons, "hicolor", None, &[("48x48/apps", 48, "Fixed")]);
-    let mut lookup = IconLookup::with_roots(&Assets::builtin(), vec![icons]);
-    assert_eq!(lookup.find("missing", 48, 1), None);
-}
-
-#[test]
-fn other_themes_than_hicolor_are_not_searched_without_an_opt_in() {
-    let dir = tempfile::tempdir().unwrap();
-    let icons = dir.path().join("icons");
-    let root = support::theme(&icons, "Other", None, &[("48x48/apps", 48, "Fixed")]);
-    support::write_png(&root.join("48x48/apps/a.png"), 48, 48, [0, 0, 0, 255]);
-    support::theme(&icons, "hicolor", None, &[("48x48/apps", 48, "Fixed")]);
-    let mut lookup = IconLookup::with_roots(&Assets::builtin(), vec![icons]);
-    assert_eq!(lookup.find("a", 48, 1), None);
-}
-
-#[test]
-fn flat_directories_are_searched_after_the_themes() {
-    let dir = tempfile::tempdir().unwrap();
-    let icons = dir.path().join("icons");
-    support::write_png(&icons.join("flat.png"), 8, 8, [0, 0, 0, 255]);
+    support::write_png(&icons.join("flat.png"), 8, 8, BLACK);
     support::write(&icons.join("vector.svg"), support::BLACK_SVG.as_bytes());
-    let mut lookup = IconLookup::with_roots(&Assets::builtin(), vec![icons.clone()]);
-    assert_eq!(lookup.find("flat", 32, 1), Some(icons.join("flat.png")));
-    assert_eq!(lookup.find("vector", 32, 1), Some(icons.join("vector.svg")));
+    let other = support::theme(&icons, "Other", None, &APPS_48);
+    support::write_png(&other.join("48x48/apps/other-only.png"), 48, 48, BLACK);
+    let second = support::theme(&second_base, "hicolor", None, &APPS_48);
+    support::write_png(&second.join("48x48/apps/only-second.png"), 48, 48, BLACK);
+    let file = dir.path().join("mine.png");
+    support::write_png(&file, 8, 8, BLACK);
+
+    let mut lookup = IconLookup::with_roots(&Assets::builtin(), vec![icons.clone(), second_base]);
+    let path = |p: &Path| p.to_str().unwrap().to_string();
+    for (row, name, size, scale, expected) in [
+        (
+            "exact size",
+            "mail".to_string(),
+            16,
+            1,
+            Some(hicolor.join("16x16/apps/mail.png")),
+        ),
+        (
+            "nearest size",
+            "mail".to_string(),
+            40,
+            1,
+            Some(hicolor.join("48x48/apps/mail.png")),
+        ),
+        (
+            "size times scale",
+            "mail".to_string(),
+            24,
+            2,
+            Some(hicolor.join("48x48/apps/mail.png")),
+        ),
+        (
+            "above every size",
+            "mail".to_string(),
+            1000,
+            1,
+            Some(hicolor.join("256x256/apps/mail.png")),
+        ),
+        (
+            "an exact fixed size before scalable",
+            "x".to_string(),
+            32,
+            1,
+            Some(hicolor.join("32x32/apps/x.png")),
+        ),
+        (
+            "scalable within its range",
+            "x".to_string(),
+            100,
+            1,
+            Some(hicolor.join("scalable/apps/x.svg")),
+        ),
+        (
+            "a png before an svg",
+            "both".to_string(),
+            48,
+            1,
+            Some(hicolor.join("48x48/apps/both.png")),
+        ),
+        (
+            "a flat png",
+            "flat".to_string(),
+            32,
+            1,
+            Some(icons.join("flat.png")),
+        ),
+        (
+            "a flat svg",
+            "vector".to_string(),
+            32,
+            1,
+            Some(icons.join("vector.svg")),
+        ),
+        (
+            "hicolor of a later base",
+            "only-second".to_string(),
+            48,
+            1,
+            Some(second.join("48x48/apps/only-second.png")),
+        ),
+        (
+            "other themes need an opt-in",
+            "other-only".to_string(),
+            48,
+            1,
+            None,
+        ),
+        ("unknown", "missing".to_string(), 48, 1, None),
+        ("empty", String::new(), 32, 1, None),
+        ("an absolute file", path(&file), 64, 2, Some(file.clone())),
+        (
+            "an absolute path that is missing",
+            path(&dir.path().join("none.png")),
+            32,
+            1,
+            None,
+        ),
+        ("a directory is no icon", path(dir.path()), 32, 1, None),
+    ] {
+        assert_eq!(lookup.find(&name, size, scale), expected, "{row}");
+    }
 }
 
 #[test]
-fn a_theme_is_found_in_the_first_base_that_has_it_and_files_in_every_base() {
-    let dir = tempfile::tempdir().unwrap();
-    let (one, two) = (dir.path().join("one"), dir.path().join("two"));
-    let dirs = [("48x48/apps", 48, "Fixed")];
-    support::theme(&one, "hicolor", None, &dirs);
-    let second = support::theme(&two, "hicolor", None, &dirs);
-    support::write_png(
-        &second.join("48x48/apps/only-second.png"),
-        48,
-        48,
-        [0, 0, 0, 255],
-    );
-    let mut lookup = IconLookup::with_roots(&Assets::builtin(), vec![one, two]);
-    assert!(lookup
-        .find("only-second", 48, 1)
-        .unwrap()
-        .starts_with(&second));
-}
-
-#[test]
-fn an_application_name_comes_from_the_pack_before_the_themes() {
+fn the_pack_comes_before_the_themes_and_an_opted_in_pack_theme_before_hicolor() {
     let dir = tempfile::tempdir().unwrap();
     let pack = dir.path().join("pack");
     support::write_png(&pack.join("icons/files-48.png"), 48, 48, [5, 5, 5, 255]);
     let assets = support::pack(
         &pack,
-        r#"{"version": 2, "icons": {"application.files": {"raster": {"48": "icons/files-48.png"}}}}"#,
+        r#"{"version": 2, "icon_theme": {"name": "Fancy", "applications": true},
+            "icons": {"application.files": {"raster": {"48": "icons/files-48.png"}}}}"#,
     );
     let icons = dir.path().join("icons");
-    let root = support::theme(&icons, "hicolor", None, &[("48x48/apps", 48, "Fixed")]);
-    support::write_png(
-        &root.join("48x48/apps/application.files.png"),
-        48,
-        48,
-        [0, 0, 0, 255],
-    );
+    let fancy = support::theme(&icons, "Fancy", Some("Parent"), &APPS_48);
+    let parent = support::theme(&icons, "Parent", None, &APPS_48);
+    let hicolor = support::theme(&icons, "hicolor", None, &APPS_48);
+    for (root, names) in [
+        (&fancy, &["a"][..]),
+        (&parent, &["a", "b"]),
+        (
+            &hicolor,
+            &["a", "c", "application.files", "application.other"],
+        ),
+    ] {
+        for name in names {
+            support::write_png(&root.join(format!("48x48/apps/{name}.png")), 48, 48, BLACK);
+        }
+    }
     let mut lookup = IconLookup::with_roots(&assets, vec![icons]);
-    assert_eq!(
-        lookup.find("application.files", 48, 1),
-        Some(pack.join("icons/files-48.png"))
-    );
+    for (name, expected) in [
+        ("application.files", pack.join("icons/files-48.png")),
+        (
+            "application.other",
+            hicolor.join("48x48/apps/application.other.png"),
+        ),
+        ("a", fancy.join("48x48/apps/a.png")),
+        ("b", parent.join("48x48/apps/b.png")),
+        ("c", hicolor.join("48x48/apps/c.png")),
+    ] {
+        assert_eq!(lookup.find(name, 48, 1), Some(expected), "{name}");
+    }
 }
 
 #[test]
-fn an_application_name_the_pack_lacks_falls_through_to_the_themes() {
-    let dir = tempfile::tempdir().unwrap();
-    let assets = support::pack(&dir.path().join("pack"), NO_PACK);
-    let icons = dir.path().join("icons");
-    let root = support::theme(&icons, "hicolor", None, &[("48x48/apps", 48, "Fixed")]);
-    support::write_png(
-        &root.join("48x48/apps/application.other.png"),
-        48,
-        48,
-        [0, 0, 0, 255],
-    );
-    let mut lookup = IconLookup::with_roots(&assets, vec![icons]);
-    assert!(lookup
-        .find("application.other", 48, 1)
-        .unwrap()
-        .starts_with(&root));
-}
-
-#[test]
-fn a_pack_that_opts_in_adds_its_theme_and_the_themes_it_inherits_before_hicolor() {
-    let dir = tempfile::tempdir().unwrap();
-    let assets = support::pack(
-        &dir.path().join("pack"),
-        r#"{"version": 2, "icon_theme": {"name": "Fancy", "applications": true}}"#,
-    );
-    assert_eq!(assets.application_icon_theme(), Some("Fancy"));
-    let icons = dir.path().join("icons");
-    let dirs = [("48x48/apps", 48, "Fixed")];
-    let fancy = support::theme(&icons, "Fancy", Some("Parent"), &dirs);
-    let parent = support::theme(&icons, "Parent", None, &dirs);
-    let hicolor = support::theme(&icons, "hicolor", None, &dirs);
-    support::write_png(&fancy.join("48x48/apps/a.png"), 48, 48, [0, 0, 0, 255]);
-    support::write_png(&parent.join("48x48/apps/a.png"), 48, 48, [0, 0, 0, 255]);
-    support::write_png(&parent.join("48x48/apps/b.png"), 48, 48, [0, 0, 0, 255]);
-    support::write_png(&hicolor.join("48x48/apps/a.png"), 48, 48, [0, 0, 0, 255]);
-    support::write_png(&hicolor.join("48x48/apps/c.png"), 48, 48, [0, 0, 0, 255]);
-    let mut lookup = IconLookup::with_roots(&assets, vec![icons]);
-    assert!(lookup.find("a", 48, 1).unwrap().starts_with(&fancy));
-    assert!(lookup.find("b", 48, 1).unwrap().starts_with(&parent));
-    assert!(lookup.find("c", 48, 1).unwrap().starts_with(&hicolor));
-}
-
-#[test]
-fn a_pack_theme_without_the_opt_in_is_not_an_application_theme() {
-    let dir = tempfile::tempdir().unwrap();
-    let assets = support::pack(
-        &dir.path().join("pack"),
-        r#"{"version": 2, "icon_theme": {"name": "Fancy"}}"#,
-    );
-    assert_eq!(assets.application_icon_theme(), None);
-}
-
-#[test]
-fn the_application_icon_of_a_desktop_entry_is_loaded_by_its_id() {
+fn the_icon_of_a_desktop_entry_is_loaded_by_its_id() {
     let dir = tempfile::tempdir().unwrap();
     let apps = dir.path().join("applications");
-    support::write(
-        &apps.join("org.example.Mail.desktop"),
-        b"[Desktop Entry]\nType=Application\nName=Mail\nExec=mail\nIcon=mail-icon\n",
-    );
+    let own = dir.path().join("own.png");
+    support::write_png(&own, 16, 16, [0, 255, 0, 255]);
+    let entry = |id: &str, icon: &str| {
+        support::write(
+            &apps.join(format!("{id}.desktop")),
+            format!("[Desktop Entry]\nType=Application\nName={id}\nExec={id}\n{icon}").as_bytes(),
+        );
+    };
+    entry("org.example.Mail", "Icon=mail-icon\n");
+    entry("own", &format!("Icon={}\n", own.display()));
+    entry("plain", "");
     let icons = dir.path().join("icons");
-    let root = support::theme(&icons, "hicolor", None, &[("48x48/apps", 48, "Fixed")]);
+    let root = support::theme(&icons, "hicolor", None, &APPS_48);
     support::write_png(
         &root.join("48x48/apps/mail-icon.png"),
         48,
@@ -278,66 +211,32 @@ fn the_application_icon_of_a_desktop_entry_is_loaded_by_its_id() {
         [255, 0, 0, 255],
     );
     let mut theme_icons = ThemeIcons::with_roots(&Assets::builtin(), vec![icons], vec![apps]);
-    let pixmap = theme_icons.load_for_entry("org.example.Mail", 48).unwrap();
-    assert_eq!((pixmap.width(), pixmap.height()), (48, 48));
-    assert_eq!(pixmap.pixels()[0].red(), 255);
-    let with_suffix = theme_icons
-        .load_for_entry("org.example.Mail.desktop", 48)
-        .unwrap();
-    assert_eq!(
-        with_suffix.data(),
-        pixmap.data(),
-        "a trailing .desktop is accepted"
-    );
+    for (id, size, expected) in [
+        ("org.example.Mail", 48, Some((48, [255, 0, 0]))),
+        ("org.example.Mail.desktop", 48, Some((48, [255, 0, 0]))),
+        ("own", 16, Some((16, [0, 255, 0]))),
+        ("plain", 32, None),
+        ("absent", 32, None),
+    ] {
+        let got = theme_icons.load_for_entry(id, size).map(|p| {
+            let c = p.pixels()[0];
+            (p.width(), [c.red(), c.green(), c.blue()])
+        });
+        assert_eq!(got, expected, "{id}");
+    }
 }
 
 #[test]
-fn an_entry_that_is_not_installed_or_names_no_icon_has_no_icon() {
+fn a_name_path_or_file_uri_loads_as_a_pixmap() {
     let dir = tempfile::tempdir().unwrap();
-    let apps = dir.path().join("applications");
-    support::write(
-        &apps.join("plain.desktop"),
-        b"[Desktop Entry]\nType=Application\nName=Plain\nExec=plain\n",
-    );
-    let mut theme_icons = ThemeIcons::with_roots(
-        &Assets::builtin(),
-        vec![dir.path().join("icons")],
-        vec![apps],
-    );
-    assert!(theme_icons.load_for_entry("plain", 32).is_none());
-    assert!(theme_icons.load_for_entry("absent", 32).is_none());
-}
-
-#[test]
-fn an_entry_whose_icon_is_a_file_path_loads_that_file() {
-    let dir = tempfile::tempdir().unwrap();
-    let apps = dir.path().join("applications");
-    let png = dir.path().join("own.png");
-    support::write_png(&png, 16, 16, [0, 255, 0, 255]);
-    support::write(
-        &apps.join("own.desktop"),
-        format!(
-            "[Desktop Entry]\nType=Application\nName=Own\nExec=own\nIcon={}\n",
-            png.display()
-        )
-        .as_bytes(),
-    );
-    let mut theme_icons = ThemeIcons::with_roots(&Assets::builtin(), vec![], vec![apps]);
-    let pixmap = theme_icons.load_for_entry("own", 16).unwrap();
-    assert_eq!((pixmap.width(), pixmap.height()), (16, 16));
-}
-
-#[test]
-fn a_name_loads_as_a_pixmap_and_a_file_uri_is_a_path() {
-    let dir = tempfile::tempdir().unwrap();
-    let png = dir.path().join("p.png");
+    let png: PathBuf = dir.path().join("p.png");
     support::write_png(&png, 8, 8, [0, 0, 255, 255]);
     let mut theme_icons = ThemeIcons::with_roots(&Assets::builtin(), vec![], vec![]);
     let by_path = theme_icons.load(png.to_str().unwrap(), 8).unwrap();
+    assert_eq!(by_path.pixels()[0].blue(), 255);
     let by_uri = theme_icons
         .load(&format!("file://{}", png.display()), 8)
         .unwrap();
     assert_eq!(by_path.data(), by_uri.data());
-    assert_eq!(by_path.pixels()[0].blue(), 255);
     assert!(theme_icons.load("no-such-icon", 8).is_none());
 }

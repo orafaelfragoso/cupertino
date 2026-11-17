@@ -3,119 +3,146 @@
 #[allow(dead_code)]
 mod support;
 
-use cupertino_icons::{decode_png, from_argb, load_icon, system_mark, IconImage};
+use cupertino_icons::{decode_png, from_argb, load_icon, system_mark};
 
 #[test]
-fn a_png_is_decoded_at_its_own_size() {
-    let img = decode_png(&support::png_bytes(4, 3, [10, 20, 30, 255]), 32).unwrap();
-    assert_eq!((img.width, img.height), (4, 3));
-    assert_eq!(img.rgba.len(), 4 * 3 * 4);
-    assert_eq!(&img.rgba[..4], &[10, 20, 30, 255]);
+fn a_png_decodes_premultiplied_and_is_shrunk_only_past_twice_the_size() {
+    // (row, picture size, colour, asked size, decoded size, first pixel)
+    for (row, (w, h), rgba, size, expected, first) in [
+        (
+            "its own size",
+            (4, 3),
+            [10, 20, 30, 255],
+            32,
+            (4, 3),
+            [10, 20, 30, 255],
+        ),
+        (
+            "premultiplied",
+            (1, 1),
+            [200, 100, 50, 128],
+            8,
+            (1, 1),
+            [100, 50, 25, 128],
+        ),
+        ("clear", (1, 1), [200, 100, 50, 0], 8, (1, 1), [0, 0, 0, 0]),
+        (
+            "up to twice keeps its size",
+            (32, 20),
+            [1, 2, 3, 255],
+            16,
+            (32, 20),
+            [1, 2, 3, 255],
+        ),
+        (
+            "more than twice is shrunk",
+            (100, 100),
+            [1, 2, 3, 255],
+            16,
+            (16, 16),
+            [1, 2, 3, 255],
+        ),
+        (
+            "a size of zero is one pixel",
+            (8, 8),
+            [1, 2, 3, 255],
+            0,
+            (1, 1),
+            [1, 2, 3, 255],
+        ),
+    ] {
+        let img = decode_png(&support::png_bytes(w, h, rgba), size).expect(row);
+        assert_eq!((img.width, img.height), expected, "{row}");
+        assert_eq!(
+            img.rgba.len(),
+            (expected.0 * expected.1 * 4) as usize,
+            "{row}"
+        );
+        assert_eq!(img.rgba[..4], first, "{row}");
+    }
+    for bytes in [&b"not a picture"[..], &[]] {
+        assert_eq!(decode_png(bytes, 16), None, "{bytes:?}");
+    }
 }
 
 #[test]
-fn a_png_is_premultiplied_by_its_alpha() {
-    let img = decode_png(&support::png_bytes(1, 1, [200, 100, 50, 128]), 8).unwrap();
-    assert_eq!(img.rgba, [100, 50, 25, 128]);
-    let clear = decode_png(&support::png_bytes(1, 1, [200, 100, 50, 0]), 8).unwrap();
-    assert_eq!(clear.rgba, [0, 0, 0, 0]);
-}
-
-#[test]
-fn a_png_more_than_twice_as_large_as_asked_is_shrunk_to_it() {
-    let img = decode_png(&support::png_bytes(100, 100, [1, 2, 3, 255]), 16).unwrap();
-    assert_eq!((img.width, img.height), (16, 16));
-}
-
-#[test]
-fn a_png_up_to_twice_as_large_as_asked_keeps_its_size() {
-    let img = decode_png(&support::png_bytes(32, 20, [1, 2, 3, 255]), 16).unwrap();
-    assert_eq!((img.width, img.height), (32, 20));
-}
-
-#[test]
-fn a_size_of_zero_is_taken_as_one_pixel() {
-    let img = decode_png(&support::png_bytes(8, 8, [1, 2, 3, 255]), 0).unwrap();
-    assert_eq!((img.width, img.height), (1, 1));
-}
-
-#[test]
-fn bytes_that_are_not_a_picture_do_not_decode() {
-    assert_eq!(decode_png(b"not a picture", 16), None);
-    assert_eq!(decode_png(&[], 16), None);
-}
-
-#[test]
-fn a_png_file_loads_like_its_bytes() {
+fn an_icon_file_loads_by_its_content_drawn_to_fit_the_size() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("a.png");
-    support::write_png(&path, 6, 6, [9, 8, 7, 255]);
-    assert_eq!(
-        load_icon(&path, 32),
-        decode_png(&support::png_bytes(6, 6, [9, 8, 7, 255]), 32)
-    );
+    let file = |name: &str, bytes: &[u8]| {
+        let path = dir.path().join(name);
+        support::write(&path, bytes);
+        path
+    };
+    let png = support::png_bytes(6, 6, [9, 8, 7, 255]);
+    let wide = br##"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><rect width="40" height="20" fill="#00ff00"/></svg>"##;
+    for (row, path, size, expected) in [
+        (
+            "a png file is its bytes",
+            file("a.png", &png),
+            32,
+            decode_png(&png, 32),
+        ),
+        ("missing", dir.path().join("none.png"), 16, None),
+        ("a broken png", file("broken.png", b"junk"), 16, None),
+        ("a broken svg", file("bad.svg", b"<svg"), 16, None),
+    ] {
+        assert_eq!(load_icon(&path, size), expected, "{row}");
+    }
+    for (row, path, size, dims, first) in [
+        (
+            "an svg fills the size",
+            file("red.svg", support::RED_SVG.as_bytes()),
+            32,
+            (32, 32),
+            [255, 0, 0, 255],
+        ),
+        (
+            "an svg keeps its aspect",
+            file("wide.svg", wide),
+            20,
+            (20, 10),
+            [0, 255, 0, 255],
+        ),
+    ] {
+        let img = load_icon(&path, size).expect(row);
+        assert_eq!((img.width, img.height), dims, "{row}");
+        assert_eq!(img.rgba[..4], first, "{row}");
+    }
 }
 
 #[test]
-fn a_missing_or_broken_file_does_not_load() {
-    let dir = tempfile::tempdir().unwrap();
-    assert_eq!(load_icon(&dir.path().join("none.png"), 16), None);
-    let broken = dir.path().join("broken.png");
-    support::write(&broken, b"junk");
-    assert_eq!(load_icon(&broken, 16), None);
-    let bad_svg = dir.path().join("bad.svg");
-    support::write(&bad_svg, b"<svg");
-    assert_eq!(load_icon(&bad_svg, 16), None);
-}
-
-#[test]
-fn an_svg_file_is_drawn_to_fit_the_size() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("a.svg");
-    support::write(&path, support::RED_SVG.as_bytes());
-    let img = load_icon(&path, 32).unwrap();
-    assert_eq!((img.width, img.height), (32, 32));
-    assert_eq!(&img.rgba[..4], &[255, 0, 0, 255]);
-}
-
-#[test]
-fn an_svg_keeps_its_aspect_ratio() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("wide.svg");
-    support::write(
-        &path,
-        br##"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><rect width="40" height="20" fill="#00ff00"/></svg>"##,
-    );
-    let img = load_icon(&path, 20).unwrap();
-    assert_eq!((img.width, img.height), (20, 10));
-}
-
-#[test]
-fn an_argb_pixmap_becomes_premultiplied_rgba() {
+fn an_argb_pixmap_becomes_premultiplied_rgba_and_a_wrong_size_is_refused() {
     // network byte order: alpha first
-    let img = from_argb(1, 1, &[128, 200, 100, 50]).unwrap();
-    assert_eq!(
-        img,
-        IconImage {
-            width: 1,
-            height: 1,
-            rgba: vec![100, 50, 25, 128]
+    for (row, w, h, argb, expected) in [
+        (
+            "premultiplied",
+            1,
+            1,
+            &[128, 200, 100, 50][..],
+            Some(vec![100, 50, 25, 128]),
+        ),
+        (
+            "two pixels",
+            2,
+            1,
+            &[255, 1, 2, 3, 255, 4, 5, 6],
+            Some(vec![1, 2, 3, 255, 4, 5, 6, 255]),
+        ),
+        ("too short", 2, 2, &[0; 12], None),
+        ("too long", 1, 1, &[0; 8], None),
+        ("no width", 0, 1, &[], None),
+        ("a negative height", 1, -1, &[0; 4], None),
+    ] {
+        let img = from_argb(w, h, argb);
+        assert_eq!(img.as_ref().map(|i| i.rgba.clone()), expected, "{row}");
+        if let Some(img) = img {
+            assert_eq!((img.width, img.height), (w as u32, h as u32), "{row}");
         }
-    );
-    let img = from_argb(2, 1, &[255, 1, 2, 3, 255, 4, 5, 6]).unwrap();
-    assert_eq!(img.rgba, [1, 2, 3, 255, 4, 5, 6, 255]);
+    }
 }
 
 #[test]
-fn an_argb_pixmap_of_the_wrong_length_or_size_is_refused() {
-    assert_eq!(from_argb(2, 2, &[0; 12]), None);
-    assert_eq!(from_argb(1, 1, &[0; 8]), None);
-    assert_eq!(from_argb(0, 1, &[]), None);
-    assert_eq!(from_argb(1, -1, &[0; 4]), None);
-}
-
-#[test]
-fn the_system_mark_is_drawn_in_the_colour_asked_for() {
+fn the_system_mark_is_drawn_in_the_colour_asked_for_at_any_size() {
     let mark = system_mark(32, [1.0, 0.0, 0.0, 1.0]);
     assert_eq!((mark.width(), mark.height()), (32, 32));
     let opaque: Vec<_> = mark.pixels().iter().filter(|p| p.alpha() == 255).collect();
@@ -123,23 +150,15 @@ fn the_system_mark_is_drawn_in_the_colour_asked_for() {
     assert!(opaque
         .iter()
         .all(|p| p.red() == 255 && p.green() == 0 && p.blue() == 0));
-}
 
-#[test]
-fn the_system_mark_colour_alpha_scales_its_coverage() {
-    let full = system_mark(32, [0.0, 1.0, 0.0, 1.0]);
     let half = system_mark(32, [0.0, 1.0, 0.0, 0.5]);
-    let max = |p: &tiny_skia::Pixmap| p.pixels().iter().map(|p| p.alpha()).max().unwrap();
-    assert_eq!(max(&full), 255);
-    assert!((i32::from(max(&half)) - 128).abs() <= 1);
+    let max = half.pixels().iter().map(|p| p.alpha()).max().unwrap();
+    assert!((i32::from(max) - 128).abs() <= 1, "alpha scales coverage");
     assert!(
         half.pixels().iter().all(|p| p.green() == p.alpha()),
         "premultiplied green"
     );
-}
 
-#[test]
-fn the_system_mark_is_never_empty_even_for_a_size_of_zero() {
-    let mark = system_mark(0, [0.0, 0.0, 0.0, 1.0]);
-    assert!(mark.width() >= 1 && mark.height() >= 1);
+    let tiny = system_mark(0, [0.0, 0.0, 0.0, 1.0]);
+    assert!(tiny.width() >= 1 && tiny.height() >= 1, "never empty");
 }

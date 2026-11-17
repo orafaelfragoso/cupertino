@@ -1,7 +1,9 @@
 # cupertino-kit
 
 CupertinoKit, the Cupertino UI toolkit: the one crate applications depend on. It re-exports the `cupertino-ui-*` crates
-as modules and has a `prelude`. MPL-2.0.
+as modules and has a `prelude`. `typeahead` (`TypeAhead`) and `filepicker` (`Picker` and its `Mode`, `Key`,
+`Request`, `Listing`, `Entry` and `Outcome`; `places` with `session_places`, `parse_user_dirs` and `Place`) name the
+type-to-select and file chooser model of `cupertino-ui-controls`. MPL-2.0.
 
 A node is glass when its `paint` calls `PaintCx::glass` (`Glass` and `GlassStyle` are in the `prelude`): the compositor
 draws the glass under it, and nodes in the same container merge into one shape (`cupertino-ui-core`, *Glass*):

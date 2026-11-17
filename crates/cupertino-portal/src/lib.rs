@@ -1,17 +1,14 @@
 //! The session's xdg-desktop-portal backend. See the README.
 
 pub mod app_chooser;
-#[cfg(feature = "app")]
 pub mod capture;
 pub mod chooser;
 pub mod consent;
-#[cfg(feature = "app")]
 pub mod dialog;
 pub mod file_chooser;
 pub mod geometry;
 pub mod global_shortcuts;
 pub mod pick;
-#[cfg(feature = "app")]
 pub mod pick_overlay;
 pub mod request;
 pub mod screen_cast;
@@ -19,7 +16,6 @@ pub mod screenshot;
 pub mod session;
 pub mod settings;
 pub mod sharing;
-#[cfg(feature = "app")]
 pub mod shortcut_keys;
 pub mod toolkits;
 

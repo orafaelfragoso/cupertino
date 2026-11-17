@@ -19,10 +19,10 @@ use crate::layout::{
     Slot, SlotKey, TextMeasure, SYSTEM_MARK_PT,
 };
 use crate::search::{self, Match};
+use cupertino_kit::typeahead::TypeAhead;
 use cupertino_menu_model::tracking::{
     Edge, Release, SubmenuAim, Tracking, Under, SUBMENU_OPEN_DELAY,
 };
-use cupertino_typeahead::TypeAhead;
 use cupertino_ui_text::{KeyInput, Keymap, Response, TextBuffer, TextFieldKeys};
 use std::time::Instant;
 

@@ -60,7 +60,7 @@ as dev-dependencies, and only dev-dependencies point at a `testing` crate. The c
 
 | Layer | Crates | May depend on |
 |---|---|---|
-| `foundation` (values, maths and data models with no I/O) | `cupertino-animation`, `cupertino-apps`, `cupertino-assets`, `cupertino-build-info`, `cupertino-capture`, `cupertino-defaults`, `cupertino-diagnostic-events`, `cupertino-filepicker`, `cupertino-geometry`, `cupertino-glyph`, `cupertino-icons`, `cupertino-key-bindings`, `cupertino-keyboard`, `cupertino-menu-model`, `cupertino-modifiers`, `cupertino-profile`, `cupertino-radios`, `cupertino-theme`, `cupertino-thumbnails`, `cupertino-trash`, `cupertino-typeahead`, `xkbcommon` | `foundation` |
+| `foundation` (values, maths and data models with no I/O) | `cupertino-animation`, `cupertino-apps`, `cupertino-assets`, `cupertino-build-info`, `cupertino-capture`, `cupertino-defaults`, `cupertino-diagnostic-events`, `cupertino-geometry`, `cupertino-glyph`, `cupertino-icons`, `cupertino-key-bindings`, `cupertino-keyboard`, `cupertino-menu-model`, `cupertino-modifiers`, `cupertino-profile`, `cupertino-radios`, `cupertino-theme`, `cupertino-thumbnails`, `cupertino-trash`, `xkbcommon` | `foundation` |
 | `graphics` (the one definition of the drawing maths, and the GPU device) | `cupertino-gpu`, `cupertino-raster-math` | `foundation`, `graphics` |
 | `models` (desktop policy as pure logic) | `cupertino-control-model`, `cupertino-displays`, `cupertino-effects`, `cupertino-input`, `cupertino-overview`, `cupertino-render-api`, `cupertino-scene`, `cupertino-stage`, `cupertino-wm` | `foundation`, `models` |
 | `system` (user-space operating-system access) | none | `foundation`, `system` |

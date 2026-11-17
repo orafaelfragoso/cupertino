@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use cupertino_diagnostic_events::{self as diag, Severity, Value as Field};
-use cupertino_filepicker::places::parse_user_dirs;
+use cupertino_kit::filepicker::places::parse_user_dirs;
 use tiny_skia::{BlendMode, FilterQuality, Pixmap, PixmapPaint, Transform};
 use zbus::message::Header;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};

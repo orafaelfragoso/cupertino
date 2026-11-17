@@ -23,7 +23,7 @@ use crate::PaneId;
 use cupertino_assets::Assets;
 use cupertino_defaults::accessibility::{DisplayOptions, SYSTEM_ACCESSIBILITY};
 use cupertino_defaults::watch::{ConfigWatcher, WatchEvent};
-use cupertino_filepicker::Mode;
+use cupertino_kit::filepicker::Mode;
 
 /// A level slider still this long, in seconds, has ended its drag: the live readings show again.
 const LEVEL_SETTLE: f64 = 0.5;
@@ -49,7 +49,7 @@ pub(crate) enum Background {
         files: Vec<cupertino_assets::WallpaperFile>,
     },
     /// A folder the chooser asked for was read.
-    Listing(cupertino_filepicker::Listing),
+    Listing(cupertino_kit::filepicker::Listing),
     /// The thumbnail of a picture of the Wallpaper pane is made.
     Thumbnail {
         image: std::path::PathBuf,
@@ -140,7 +140,7 @@ fn decode_thumbnail(
 pub(crate) enum ListingKey {
     Packs,
     Pictures(std::path::PathBuf),
-    Chooser(std::path::PathBuf, bool, cupertino_filepicker::Mode),
+    Chooser(std::path::PathBuf, bool, cupertino_kit::filepicker::Mode),
 }
 
 /// Hands a [`Background`] to the window loop and wakes it.
@@ -260,7 +260,7 @@ pub struct State {
     pub(crate) thumbnails_asked: std::collections::HashSet<PathBuf>,
     /// The cache folder the thumbnails are kept under; the standard one (`XDG_CACHE_HOME`) when `None`.
     pub(crate) thumbnail_cache: Option<PathBuf>,
-    pub(crate) listings: Reads<ListingKey, Option<cupertino_filepicker::Request>>,
+    pub(crate) listings: Reads<ListingKey, Option<cupertino_kit::filepicker::Request>>,
     pub(crate) agent_answer: Option<(u64, async_channel::Sender<Answer>)>,
     pub(crate) agent_registered: bool,
     pub(crate) login_opening: u64,
@@ -1198,7 +1198,7 @@ impl State {
     pub(crate) fn start_listing(
         &mut self,
         key: ListingKey,
-        request: Option<cupertino_filepicker::Request>,
+        request: Option<cupertino_kit::filepicker::Request>,
     ) {
         if let Some(request) = self.listings.ask(key.clone(), request) {
             self.run_listing(key, request);
@@ -1209,7 +1209,7 @@ impl State {
     pub(crate) fn run_listing(
         &mut self,
         key: ListingKey,
-        request: Option<cupertino_filepicker::Request>,
+        request: Option<cupertino_kit::filepicker::Request>,
     ) {
         let notify = self.notify.clone();
         let spawned_key = key.clone();

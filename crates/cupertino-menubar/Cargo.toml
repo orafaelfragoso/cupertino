@@ -3,67 +3,40 @@ name = "cupertino-menubar"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
-description = "Menu bar for the Cupertino desktop: menu model and layout, interaction state machine, an optional D-Bus layer (DBusMenu, status notifier items, GMenuModel) and the `cupertino-menubar` process"
+description = "Menu bar for the Cupertino desktop: menu model and layout, interaction state machine, a D-Bus layer (DBusMenu, status notifier items, GMenuModel) and the `cupertino-menubar` process"
 [package.metadata.cupertino]
 layer = "shell"
 
-[features]
-default = ["dbus"]
-dbus = ["dep:zbus", "dep:futures-util"]
-# the `cupertino-menubar` process: one bar per output as a client of the server
-app = [
-    "dbus",
-    "dep:async-channel",
-    "dep:async-io",
-    "dep:cupertino-radios",
-    "dep:cupertino-assets",
-    "dep:cupertino-icons",
-    "dep:cupertino-kit",
-    "dep:cupertino-protocol-app",
-    "dep:cupertino-shell-client",
-    "dep:cupertino-theme",
-    "dep:cupertino-ui-wayland",
-    "dep:cupertino-wayland-client",
-    "dep:libc",
-    "dep:tiny-skia",
-    "dep:x11rb",
-    "dep:cupertino-diagnostic-events",
-    "dep:cupertino-peer",
-]
-
 [dependencies]
-cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events", optional = true }
+cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events" }
 cupertino-apps = { path = "../cupertino-apps" }
-cupertino-assets = { path = "../cupertino-assets", optional = true }
+cupertino-assets = { path = "../cupertino-assets" }
 cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-menu-model = { path = "../cupertino-menu-model" }
 cupertino-modifiers = { path = "../cupertino-modifiers" }
-cupertino-typeahead = { path = "../cupertino-typeahead" }
 cupertino-keyboard = { path = "../cupertino-keyboard" }
-cupertino-peer = { path = "../cupertino-peer", optional = true }
-cupertino-radios = { path = "../cupertino-radios", features = ["dbus"], optional = true }
-cupertino-icons = { path = "../cupertino-icons", optional = true }
-cupertino-kit = { path = "../cupertino-kit", optional = true }
-cupertino-protocol-app = { path = "../cupertino-protocol-app", optional = true }
-cupertino-shell-client = { path = "../cupertino-shell-client", optional = true }
+cupertino-peer = { path = "../cupertino-peer" }
+cupertino-radios = { path = "../cupertino-radios", features = ["dbus"] }
+cupertino-icons = { path = "../cupertino-icons" }
+cupertino-kit = { path = "../cupertino-kit" }
+cupertino-protocol-app = { path = "../cupertino-protocol-app" }
+cupertino-shell-client = { path = "../cupertino-shell-client" }
 cupertino-ui-text = { path = "../cupertino-ui-text" }
 zeroize = "1"
-cupertino-theme = { path = "../cupertino-theme", optional = true }
-cupertino-ui-wayland = { path = "../cupertino-ui-wayland", optional = true }
-cupertino-wayland-client = { path = "../cupertino-wayland-client", optional = true }
-async-channel = { version = "2", optional = true }
-async-io = { version = "2", optional = true }
-libc = { version = "0.2", optional = true }
-tiny-skia = { version = "0.12", optional = true }
-x11rb = { version = "0.13", default-features = false, optional = true }
-zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"], optional = true }
-futures-util = { version = "0.3", default-features = false, features = ["std"], optional = true }
+cupertino-theme = { path = "../cupertino-theme" }
+cupertino-ui-wayland = { path = "../cupertino-ui-wayland" }
+cupertino-wayland-client = { path = "../cupertino-wayland-client" }
+async-channel = "2"
+async-io = "2"
+libc = "0.2"
+tiny-skia = "0.12"
+x11rb = { version = "0.13", default-features = false }
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
 [[bin]]
 name = "cupertino-menubar"
 path = "src/main.rs"
-required-features = ["app"]
 
 [[example]]
 name = "fake-login"
-required-features = ["dbus"]

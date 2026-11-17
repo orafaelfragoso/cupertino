@@ -11,11 +11,11 @@ Build output is large: leave tens of GiB free before starting.
 
 ## Development builds without tests
 
-For a local build or binary replacement, build only the package and binary being changed. For example, the portal's
-`app` feature includes its production screen-sharing dependency without enabling every workspace test feature:
+For a local build or binary replacement, build only the package and binary being changed, without enabling every
+workspace test feature:
 
 ```bash
-cargo build --locked -p cupertino-portal --features app --bin cupertino-portal
+cargo build --locked -p cupertino-portal --bin cupertino-portal
 cargo build --locked -p cupertino-server --bin cupertino-server
 ```
 
@@ -57,9 +57,9 @@ and restarting the session are separate operations; neither is the default for a
 | Changed component | Development loop | Effect on the running session |
 | --- | --- | --- |
 | A setting supported by the live watcher | Change the setting and observe its applied value | No process restart; `shell`, `screenshot` and menu-bar geometry remain startup settings |
-| Files or Settings | Regular applications: build the binary with `--features app` and run that build directly; no installed file is replaced | Quit the installed copy first when the change concerns its single instance; preserve navigation and pending work |
+| Files or Settings | Regular applications: build the binary (Files with `--features app`) and run that build directly; no installed file is replaced | Quit the installed copy first when the change concerns its single instance; preserve navigation and pending work |
 | Dock, menu bar, launcher, notifications, control panel, OSD or window manager | The development folder loop below, as the session's own user | A short interruption of that component; transient state can be lost (overview/switcher, queued notifications, window placement, open panels) |
-| Portal | Build only `cupertino-portal` with `--features app`; test it nested or headless and leave it for a planned package update; after the update, `cupertino shell restart portal` | Restarting the portal ends its active screen-sharing sessions and outstanding requests |
+| Portal | Build only `cupertino-portal`; test it nested or headless and leave it for a planned package update; after the update, `cupertino shell restart portal` | Restarting the portal ends its active screen-sharing sessions and outstanding requests |
 | Login, lock screen, authentication prompts, desktop control | Use private backends, a nested session or a VM before a planned package update; after the update, `cupertino shell restart NAME` (`login`, `polkit-agent`, `keyring-prompter`, `desktop-control`) | They never start from the development folder; a restart loses what the process held in memory (an open prompt, every desktop-control run) |
 | Session manager, network/Bluetooth/power daemons | Use private backends, a nested session or a VM before a planned package update | These can affect authentication, connectivity or device state; the session manager takes a new package at the next login, the daemons through their system service units |
 | Server, its linked libraries or vendored Smithay | Build the server and exercise it nested or headless | A new server binary takes effect in the installed desktop at its next session start |
@@ -565,11 +565,11 @@ It writes one PNG per state and appearance into `captures` under `$CARGO_TARGET_
 
 ## The shell processes
 
-The dock, menu bar, launcher, notifications and the other shell parts are separate processes. Each builds its binary behind an `app` feature:
+The dock, menu bar, launcher, notifications and the other shell parts are separate processes. Each but the menu bar builds its binary behind an `app` feature:
 
 ```bash
 cargo build --release -p cupertino-dock --features app
-cargo build --release -p cupertino-menubar --features app
+cargo build --release -p cupertino-menubar
 ```
 
 The server starts and restarts the processes listed under the `"shell"` key of `/etc/cupertino/compositor.json` (the packages install one that starts the whole desktop), for example `[{"name": "dock", "command": ["/usr/bin/cupertino-dock"], "roles": ["session", "dock"]}]`. A process that has roles must be a program under `/usr`; the user file `~/.config/cupertino/compositor.json` can remove or reorder the entries but not add a process with roles, and a checkout or nested run that needs other programs starts the server with `--dev-shell`. A process that exits with failure is restarted at most once per second. The optional `roles` list is what the server lets the process do on its connection: `session`, `menu_bar`, `dock`, `window_manager`, `session_lock`, `clipboard` (data control without an entry in the person's `data-control.conf`); the default is `["session"]`, and a process asks for no role it does not hold. The roles end with the process.
@@ -605,7 +605,7 @@ cargo xtask ci --profile agent --dry-run       # the plan only
 The rules and the feature configurations are in `.config/validation.toml`: `--profile agent` for the crates a change touches, `integration` after merging, `pr` in CI on every push and `full` nightly.
 Install [cargo-nextest](https://nexte.st) (`cargo install cargo-nextest --locked`). It runs every test in its own
 process and kills a test that runs longer than 2 minutes, so a hang fails with the test's name. Shell and app crates
-need `--features app` to test their process code; the profiles pass the features of each configuration.
+with an `app` feature need it to test their process code; the profiles pass the features of each configuration.
 
 Tests live only in `crates/*/tests/` and go through a crate's public interface. The layer rules are checked by
 `cargo run -p cupertino-layers`.

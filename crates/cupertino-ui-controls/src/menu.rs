@@ -11,6 +11,7 @@
 use crate::button::ButtonLook;
 use crate::look::{self, paint_focus_ring};
 use crate::press::{Keys, Outcome, Press};
+use crate::typeahead::TypeAhead;
 use crate::{
     ButtonRole, ButtonStyle, CalloutPointer, ContextMenu, Handler, InlinePopUpButton, Menu,
     MenuAnchor, MenuItem, MenuStyle, MenuTail, PopUpButton, PullDownButton,
@@ -20,7 +21,6 @@ use cupertino_menu_model::tracking::{
     Edge, Release, SubmenuAim, Tracking, Under, SUBMENU_OPEN_DELAY, TRACKING_INTERVAL,
 };
 use cupertino_theme::ControlFamily;
-use cupertino_typeahead::TypeAhead;
 use cupertino_ui_core::{
     AccessibleStates, AccessibleValue, Action, ActivationSource, Change, Checked, CommandRegistry,
     ControlState, Element, Environment, Event, EventCx, FocusTarget, Glass, Key, MeasureCx,

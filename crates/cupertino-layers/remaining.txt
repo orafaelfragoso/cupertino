@@ -93,9 +93,6 @@ foundation impure_source cupertino-diagnostic-events src/redact.rs std::env
 foundation impure_source cupertino-diagnostic-events src/redact.rs std::fs
 foundation impure_source cupertino-diagnostic-events src/redact.rs std::process
 foundation impure_source cupertino-diagnostic-events src/store.rs std::fs
-foundation impure_source cupertino-filepicker src/lib.rs std::fs
-foundation impure_source cupertino-filepicker src/places.rs std::env
-foundation impure_source cupertino-filepicker src/places.rs std::fs
 foundation impure_source cupertino-icons examples/render-artwork.rs std::env
 foundation impure_source cupertino-icons examples/resolve.rs std::env
 foundation impure_source cupertino-icons src/lib.rs std::env

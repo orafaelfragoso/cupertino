@@ -1,5 +1,5 @@
 //! What the panes of live services show (§2 T1, §6.4): the readings of the network,
-//! Bluetooth and power daemons, the notification centre and the mixer, filled by `services` (feature `app`) and read by
+//! Bluetooth and power daemons, the notification centre and the mixer, filled by `services` and read by
 //! `panes`. A reading is unknown before its first read, or the reason it is unavailable (no daemon on the bus, no
 //! device), which the pane shows instead of an empty list (ST-19).
 

@@ -1160,13 +1160,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cupertino-filepicker"
-version = "0.1.0"
-dependencies = [
- "cupertino-typeahead",
-]
-
-[[package]]
 name = "cupertino-files"
 version = "0.1.0"
 dependencies = [
@@ -1428,7 +1421,6 @@ dependencies = [
  "cupertino-radios",
  "cupertino-shell-client",
  "cupertino-theme",
- "cupertino-typeahead",
  "cupertino-ui-text",
  "cupertino-ui-wayland",
  "cupertino-wayland-client",
@@ -1573,7 +1565,6 @@ dependencies = [
  "cupertino-assets",
  "cupertino-defaults",
  "cupertino-diagnostic-events",
- "cupertino-filepicker",
  "cupertino-geometry",
  "cupertino-icons",
  "cupertino-kit",
@@ -1816,7 +1807,6 @@ dependencies = [
  "cupertino-defaults",
  "cupertino-diagnostic-events",
  "cupertino-displays",
- "cupertino-filepicker",
  "cupertino-icons",
  "cupertino-kit",
  "cupertino-menu-model",
@@ -1825,7 +1815,6 @@ dependencies = [
  "cupertino-radios",
  "cupertino-theme",
  "cupertino-thumbnails",
- "cupertino-typeahead",
  "cupertino-wayland-client",
  "libc",
  "wayland-client",
@@ -1886,10 +1875,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cupertino-typeahead"
-version = "0.1.0"
-
-[[package]]
 name = "cupertino-ui-abi"
 version = "0.1.0"
 dependencies = [
@@ -1918,7 +1903,6 @@ dependencies = [
  "cupertino-geometry",
  "cupertino-menu-model",
  "cupertino-theme",
- "cupertino-typeahead",
  "cupertino-ui-core",
  "cupertino-ui-layout",
  "cupertino-ui-platform",

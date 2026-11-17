@@ -590,6 +590,11 @@ impl WaylandWindowSystem {
         self.gpu.renderers()
     }
 
+    /// The renderer this window system draws with now, and why: the CPU until the rule decided otherwise.
+    pub fn renderer(&self) -> crate::renderer::Choice {
+        self.gpu.choice()
+    }
+
     /// The transport, for an extension protocol such as the desktop's effects.
     pub fn connection(&mut self) -> &mut Connection {
         &mut self.conn

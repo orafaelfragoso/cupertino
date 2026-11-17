@@ -35,7 +35,7 @@ use cupertino_ui_render::{
 use cupertino_ui_text::{GlyphKey, GlyphRasterizer, RasterGlyph, TextError};
 use cupertino_ui_wayland::gpu_path::{GpuPath, Presented};
 use cupertino_ui_wayland::gpu_present::{buffer_count, SurfaceStats};
-use cupertino_ui_wayland::renderer::{self, Requested};
+use cupertino_ui_wayland::renderer::Requested;
 use cupertino_wayland_client::{
     BufferFormat, Connection, Decorations, Error, Event, PixelRect, ToplevelConfig,
 };
@@ -431,7 +431,7 @@ fn report(args: &Args, conn: &Connection, gpu: &GpuPath, seen: &mut Seen) {
     let current = std::mem::take(&mut seen.current);
     add(&mut seen.banked, current);
     let stats = seen.banked;
-    let choice = renderer::active();
+    let choice = gpu.choice();
     let (made, destroyed) = conn.syncobj_surfaces();
     let (first_ms, first_renderer) = seen
         .first_frame

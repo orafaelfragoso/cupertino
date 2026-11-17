@@ -13,7 +13,6 @@
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
-use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 pub use cupertino_ui_core::platform::{RendererClass, RendererKind};
@@ -273,42 +272,16 @@ impl LossHistory {
     }
 }
 
-/// The renderer a process draws with now, and why.
+/// The renderer a window system draws with now, and why.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Choice {
     pub kind: RendererKind,
     pub reason: Reason,
 }
 
-static ACTIVE: Mutex<Option<Choice>> = Mutex::new(None);
-
-/// The renderer this process draws with: the CPU until a window system decided otherwise.
-pub fn active() -> Choice {
-    ACTIVE
-        .lock()
-        .ok()
-        .and_then(|c| c.clone())
-        .unwrap_or(Choice {
-            kind: RendererKind::Cpu,
-            reason: Reason::CpuClass,
-        })
-}
-
-/// The name the frame statistics give the renderer this process draws with now (`cpu` or `gpu`).
-pub fn active_name() -> &'static str {
-    active().kind.name()
-}
-
-/// Record the renderer this process draws with: logged once per change on standard error, and written to the
-/// session's record of process renderers ([`record_dir`]) that `cupertino-diagnose` reads.
-pub fn set_active(choice: Choice) {
-    let changed = ACTIVE
-        .lock()
-        .map(|mut c| c.replace(choice.clone()).as_ref() != Some(&choice))
-        .unwrap_or(false);
-    if !changed {
-        return;
-    }
+/// A window system takes `choice` as its renderer: logged on standard error, and written to the session's record of
+/// process renderers ([`record_dir`]) that `cupertino-diagnose` reads.
+pub(crate) fn announce(choice: &Choice) {
     eprintln!(
         "renderer: {} ({})",
         choice.kind.name(),
@@ -318,7 +291,7 @@ pub fn set_active(choice: Choice) {
         fallback(FallbackScope::Process, &choice.reason.label());
     }
     if let Some(dir) = record_dir() {
-        let _ = write_record(&dir, std::process::id(), &program(), &choice);
+        let _ = write_record(&dir, std::process::id(), &program(), choice);
     }
 }
 

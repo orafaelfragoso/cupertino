@@ -4,6 +4,9 @@
 pub mod app;
 pub mod file_icons;
 mod icons;
+mod instance;
+
+pub use instance::{Entered, Instance};
 
 pub use cupertino_geometry as geometry;
 pub use cupertino_theme::ui as theme;

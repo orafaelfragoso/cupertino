@@ -247,6 +247,63 @@ fn a_panic_is_recorded_scrubbed_and_the_hook_set_before_still_runs() {
 }
 
 #[test]
+fn a_thread_in_a_scope_records_its_panic_exit_and_context_as_the_scope_and_others_as_the_process() {
+    let state = isolated();
+    std::panic::set_hook(Box::new(|_| {}));
+    diag::init(diag::component!(), "shell", diag::Sink::UserStore);
+    diag::set_context("backend", Value::Public("udev"));
+    diag::set_context("output", Value::Public("DP-1"));
+    let dock = diag::Scope::new("dock");
+    dock.set_context("output", Value::Public("HDMI-A-1"));
+    std::thread::scope(|threads| {
+        threads.spawn(|| {
+            let _in_dock = dock.enter();
+            assert_eq!(diag::Scope::current().map(|s| s.area()), Some("dock"));
+            diag::event(Severity::Info, "dock.icon.drawn", "drawn").emit();
+            diag::exit_error(&"gone");
+            let caught = std::panic::catch_unwind(|| panic!("in the dock"));
+            assert!(caught.is_err());
+        });
+    });
+    assert!(diag::Scope::current().is_none());
+    diag::event(Severity::Info, "shell.started", "started").emit();
+    let outer = dock.enter();
+    {
+        let _inner = diag::Scope::new("menubar").enter();
+        diag::exit_error(&"nested");
+    }
+    diag::exit_error(&"back in the dock");
+    drop(outer);
+    diag::exit_error(&"the process");
+    let records: Vec<(String, Option<String>, Option<String>)> = support::stored(state.path())
+        .into_iter()
+        .map(|r| {
+            let field = |k: &str| r.fields.get(k).and_then(|v| v.as_str()).map(str::to_owned);
+            (r.id.clone(), field("output"), field("backend"))
+        })
+        .collect();
+    let row = |id: &str, output: &str| {
+        (
+            id.to_owned(),
+            Some(output.to_owned()),
+            Some("udev".to_owned()),
+        )
+    };
+    assert_eq!(
+        records,
+        [
+            row("dock.icon.drawn", "HDMI-A-1"),
+            row("dock.exit_error", "HDMI-A-1"),
+            row("dock.panic", "HDMI-A-1"),
+            row("shell.started", "DP-1"),
+            row("menubar.exit_error", "DP-1"),
+            row("dock.exit_error", "HDMI-A-1"),
+            row("shell.exit_error", "DP-1"),
+        ]
+    );
+}
+
+#[test]
 fn the_test_variable_makes_the_process_of_its_area_panic_right_after_init() {
     let state = isolated();
     std::panic::set_hook(Box::new(|_| {}));

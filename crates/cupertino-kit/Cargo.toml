@@ -11,6 +11,7 @@ layer = "ui"
 cupertino-apps = { path = "../cupertino-apps" }
 cupertino-assets = { path = "../cupertino-assets" }
 cupertino-defaults = { path = "../cupertino-defaults" }
+cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events" }
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-icons = { path = "../cupertino-icons" }
 cupertino-keyboard = { path = "../cupertino-keyboard" }

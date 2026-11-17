@@ -1231,6 +1231,7 @@ dependencies = [
  "cupertino-assets",
  "cupertino-capture",
  "cupertino-defaults",
+ "cupertino-diagnostic-events",
  "cupertino-geometry",
  "cupertino-icons",
  "cupertino-keyboard",

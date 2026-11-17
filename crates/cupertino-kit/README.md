@@ -17,6 +17,14 @@ fn paint(cx: &mut PaintCx<'_>) {
 }
 ```
 
+Several Kit instances can run in one process, each on a UI thread of its own (the components of a shell host). What
+differs between them lives with each instance, never in a process-wide static: an `Instance` (`Instance::new(area)`)
+is entered on a thread (`enter`, until the guard drops; `Instance::current` gives it), and the thread's diagnostic
+events are recorded in its scope (`cupertino_diagnostic_events::Scope`: its panic is `<area>.panic`); each window
+system keeps its own renderer choice and context losses. Every `app::run` runs for the instance the calling thread
+entered, else for the process's own (named by the program, its events the process's). The diagnostic emitter and the
+panic hook stay one per process, installed by `main`.
+
 `app::run` and `app::options` start on the Cupertino theme from the installed theme data, and on
 `ThemeTokens::neutral` when there is none or it is unusable (one line on stderr says why), so an application runs on any
 compositor. `app::run` connects for the application's renderer class (`Application::RENDERER`), and its renderer factory

@@ -29,6 +29,8 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use crate::{Entered, Instance};
+
 /// The most nodes one application's tree holds.
 const NODE_LIMIT: usize = 100_000;
 
@@ -56,8 +58,10 @@ impl std::error::Error for AppError {}
 /// Opens `A`'s windows on the session's Wayland display, publishes them to assistive technology over AT-SPI, follows
 /// the session's appearance and display options, and runs until the application exits, its last window without a
 /// close handler is closed, or a non-[resident](Application::RESIDENT) application closes its last window. Its
-/// windows draw with the renderer of its class ([`Application::RENDERER`]).
+/// windows draw with the renderer of its class ([`Application::RENDERER`]). It and every other `run` here run for the
+/// [`Instance`] the calling thread entered, else for the process's own.
 pub fn run<A: Application>() -> Result<(), AppError> {
+    let _instance = instance();
     let system = WaylandWindowSystem::connect_as(Profile::cupertino(), A::RENDERER)
         .map_err(AppError::Connect)?;
     run_on::<A>(system, A::init())
@@ -80,6 +84,7 @@ pub fn run_on_with_appearance<A: Application>(
     start: (A::Model, Vec<Command<A::Message>>),
     appearance: fn(SystemAppearance) -> SystemAppearance,
 ) -> Result<(), AppError> {
+    let _instance = instance();
     let first = appearance(system.appearance().unwrap_or_default());
     let (mut options, theme) = options_and_theme(preferences(&first))?;
     renderers_on_gpu(&mut options, system.gpu_renderers());
@@ -88,10 +93,11 @@ pub fn run_on_with_appearance<A: Application>(
     options.theme = personal.theme();
     let follow = mapped(personal.theme_for(), appearance);
     options.accessibility = Some(Box::new(AtspiAdapter::muted(system.waker())));
+    let renderers = system.gpu_renderers();
     Runtime::<A, _>::start(system, options, start)
         .with_theme_for(follow)
         .with_personal_refresh(personal.refresh())
-        .timed()
+        .timed(renderers)
         .run()
         .map_err(AppError::Runtime)
 }
@@ -102,6 +108,7 @@ pub fn run_on_with<A: Application>(
     system: WaylandWindowSystem,
     start: impl FnOnce(&RuntimeOptions) -> (A::Model, Vec<Command<A::Message>>),
 ) -> Result<(), AppError> {
+    let _instance = instance();
     // the first frame already has the session's appearance
     let (mut options, theme) = options_and_theme(start_preferences(system.appearance()))?;
     renderers_on_gpu(&mut options, system.gpu_renderers());
@@ -112,10 +119,11 @@ pub fn run_on_with<A: Application>(
     let follow = personal.theme_for();
     options.accessibility = Some(Box::new(AtspiAdapter::muted(system.waker())));
     let start = start(&options);
+    let renderers = system.gpu_renderers();
     Runtime::<A, _>::start(system, options, start)
         .with_theme_for(follow)
         .with_personal_refresh(personal.refresh())
-        .timed()
+        .timed(renderers)
         .run()
         .map_err(AppError::Runtime)
 }
@@ -126,6 +134,7 @@ pub fn run_lock_screen_on_with<A: Application>(
     system: WaylandWindowSystem,
     start: impl FnOnce(&RuntimeOptions) -> (A::Model, Vec<Command<A::Message>>),
 ) -> Result<(), AppError> {
+    let _instance = instance();
     let (mut options, theme) = options_and_theme(start_preferences(system.appearance()))?;
     let first = system.appearance().unwrap_or_default();
     keep_caret(Arc::make_mut(&mut options.theme), &first);
@@ -134,10 +143,11 @@ pub fn run_lock_screen_on_with<A: Application>(
     let follow = personal.theme_for();
     options.accessibility = Some(Box::new(AtspiAdapter::lock_screen(system.waker())));
     let start = start(&options);
+    let renderers = system.gpu_renderers();
     Runtime::<A, _>::start(system, options, start)
         .with_theme_for(follow)
         .with_personal_refresh(personal.refresh())
-        .timed()
+        .timed(renderers)
         .run()
         .map_err(AppError::Runtime)
 }
@@ -152,9 +162,10 @@ pub const FRAME_TIMING_ENV: &str = "CUPERTINO_FRAME_TIMING";
 /// one JSON object a line per scroll event, its stages in nanoseconds (`input`, `handled`, `updated`, `submitted`,
 /// `presented`; `null` for a stage that did not happen). When [`FRAME_TIMING_ENV`] names an absolute path it appends
 /// the phases of every frame there ([`frame_timing_json`]), one line per frame written whole, so the processes of a
-/// session can share the file. Without the variables the runtime keeps no timing.
+/// session can share the file, each with the renderer `renderers` drew it with. Without the variables the runtime keeps
+/// no timing.
 pub trait Timed {
-    fn timed(self) -> Self;
+    fn timed(self, renderers: GpuRenderers) -> Self;
 }
 
 /// The file an absolute path in `var` names, opened to append; `None` (said on standard error) otherwise.
@@ -173,7 +184,7 @@ fn timing_file(var: &str) -> Option<std::fs::File> {
 }
 
 impl<A: Application, W: WindowSystem> Timed for Runtime<A, W> {
-    fn timed(self) -> Self {
+    fn timed(self, renderers: GpuRenderers) -> Self {
         let mut runtime = self;
         if let Some(file) = timing_file(SCROLL_TIMING_ENV) {
             let mut out = std::io::LineWriter::new(file);
@@ -188,7 +199,7 @@ impl<A: Application, W: WindowSystem> Timed for Runtime<A, W> {
             runtime = runtime.with_frame_timing(Box::new(move |t| {
                 use std::io::Write;
                 // one write per line: lines of other processes appending to the same file never land inside it
-                let renderer = cupertino_ui_wayland::renderer::active_name();
+                let renderer = if renderers.on() { "gpu" } else { "cpu" };
                 let line = format!("{}\n", frame_timing_json(t, pid, &program, renderer));
                 let _ = file.write_all(line.as_bytes());
             }));
@@ -483,6 +494,14 @@ fn start_theme(preferences: ThemePreferences) -> Result<(ThemeTokens, Option<The
 /// The windows' renderers drawn on the process's GPU while it draws there (the window system's GPU path chose it and
 /// its device is ready), with the CPU renderer otherwise: before the switch, after a loss, and for a renderer the
 /// device cannot make.
+/// The calling thread runs for the instance it entered, or for the process's own when it entered none, until the
+/// guard is dropped.
+fn instance() -> Entered {
+    Instance::current()
+        .unwrap_or_else(Instance::process)
+        .enter()
+}
+
 fn renderers_on_gpu(options: &mut RuntimeOptions, gpu: GpuRenderers) {
     let text = Arc::clone(&options.text);
     let mut cpu = std::mem::replace(

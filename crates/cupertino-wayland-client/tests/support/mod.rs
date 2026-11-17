@@ -216,7 +216,7 @@ impl Harness {
     pub fn hang_up(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
         if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
+            join_strictly(thread);
         }
     }
 
@@ -253,11 +253,21 @@ impl Harness {
     }
 }
 
+/// Joins the server thread and re-raises its panic, so a failing job shows its own message and not a timeout. A panic
+/// already unwinding the test is left alone: a second one would abort.
+fn join_strictly(thread: JoinHandle<()>) {
+    if let Err(panic) = thread.join() {
+        if !std::thread::panicking() {
+            std::panic::resume_unwind(panic);
+        }
+    }
+}
+
 impl Drop for Harness {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
         if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
+            join_strictly(thread);
         }
     }
 }
@@ -374,7 +384,7 @@ ignore!(WlRegion, WlBuffer, WlPointer, XdgToplevel, WlCallback);
 
 impl Dispatch<WlSurface, ()> for Server {
     fn request(
-        _: &mut Server,
+        server: &mut Server,
         _: &Client,
         _: &WlSurface,
         request: wl_surface::Request,
@@ -382,8 +392,13 @@ impl Dispatch<WlSurface, ()> for Server {
         _: &DisplayHandle,
         init: &mut DataInit<'_, Server>,
     ) {
-        if let wl_surface::Request::Frame { callback } = request {
-            init.init(callback, ());
+        match request {
+            wl_surface::Request::Frame { callback } => {
+                init.init(callback, ());
+            }
+            // the damage a client reports is part of what a test can read back
+            damage @ wl_surface::Request::DamageBuffer { .. } => server.record(damage),
+            _ => {}
         }
     }
 }

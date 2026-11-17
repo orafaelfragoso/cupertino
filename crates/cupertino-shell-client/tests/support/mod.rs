@@ -165,6 +165,8 @@ pub struct Wire {
     thread: Option<JoinHandle<()>>,
 }
 
+/// `set_var` is sound here only because nextest runs every test in its own process, so no other thread reads the
+/// environment while it is written. The `Once` keeps a plain `cargo test` of the same binary to a single write.
 static HOME: Once = Once::new();
 
 /// Points every directory the transport or the defaults could read at an empty one under the target directory.

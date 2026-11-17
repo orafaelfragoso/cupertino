@@ -87,9 +87,20 @@ fn a_zeroed_allocation_is_zero_and_a_grown_block_frees_the_old_one_clean() {
 fn the_smallest_block_is_zeroed_too() {
     let allocator = ZeroOnFree(Inspect);
     let layout = Layout::from_size_align(1, 1).unwrap();
+    let freed_before = FREED.load(Ordering::SeqCst);
+    let dirty_before = DIRTY.load(Ordering::SeqCst);
     unsafe {
         let block = allocator.alloc(layout);
         *block = 0xff;
         allocator.dealloc(block, layout);
     }
+    assert!(
+        FREED.load(Ordering::SeqCst) > freed_before,
+        "the block was freed"
+    );
+    assert_eq!(
+        DIRTY.load(Ordering::SeqCst),
+        dirty_before,
+        "it reached the allocator zeroed"
+    );
 }

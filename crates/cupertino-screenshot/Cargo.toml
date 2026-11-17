@@ -15,7 +15,7 @@ app = [
     "dep:async-channel",
     "dep:async-io",
     "dep:cupertino-kit",
-    "dep:cupertino-modifiers",
+    "dep:cupertino-keyboard",
     "dep:cupertino-protocols",
     "dep:cupertino-shell-client",
     "dep:cupertino-ui-wayland",
@@ -38,7 +38,7 @@ rustix = { version = "1", features = ["event", "fs"] }
 async-channel = { version = "2", optional = true }
 async-io = { version = "2", optional = true }
 cupertino-kit = { path = "../cupertino-kit", optional = true }
-cupertino-modifiers = { path = "../cupertino-modifiers", optional = true }
+cupertino-keyboard = { path = "../cupertino-keyboard", optional = true }
 cupertino-protocols = { path = "../cupertino-protocols", features = ["client"], optional = true }
 cupertino-shell-client = { path = "../cupertino-shell-client", optional = true }
 cupertino-ui-wayland = { path = "../cupertino-ui-wayland", optional = true }

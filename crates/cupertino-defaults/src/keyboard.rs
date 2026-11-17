@@ -23,13 +23,15 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
+use cupertino_keyboard::modifiers::Profile;
+
 use crate::conf::{self, parse_list, parse_switch, switch_text, Key, Problem};
 
 /// Environment variable that redirects the settings file.
 pub const KEYBOARD_CONF_ENV: &str = "CUPERTINO_KEYBOARD_CONFIG";
 
 /// Longest caps-lock press that the setting accepts as the hold duration (accepted 1 to 1500 ms).
-pub const CAPS_LOCK_HOLD_MAX_MS: u32 = 1500;
+pub const CAPS_LOCK_HOLD_MAX_MS: u32 = cupertino_keyboard::repeat::CAPS_HOLD_MAX_MS;
 
 /// `~/` at the start of `path` replaced by `$HOME`.
 pub fn expand_home(path: &str) -> PathBuf {
@@ -69,7 +71,7 @@ macro_rules! file_enum {
 }
 
 file_enum!(
-    /// The modifier profile (`cupertino_keyboard::ModifierProfile::by_name`).
+    /// The modifier profile (`cupertino_keyboard::modifiers::Profile::by_name`).
     ModifierProfile { Cupertino = "cupertino", ClassicPc = "classic-pc" }
 );
 file_enum!(
@@ -389,4 +391,13 @@ impl KeyboardSettings {
     pub fn store(&self, path: &Path) -> io::Result<Vec<Problem>> {
         conf::store(path, KEYS, &Self::default(), None, self)
     }
+}
+
+/// The modifier profile of `keyboard.conf`; the design's profile when the file or the setting cannot be read.
+pub fn user_profile() -> Profile {
+    KeyboardSettings::path()
+        .and_then(|path| KeyboardSettings::load(&path, None).ok())
+        .and_then(|(settings, _)| settings.modifier_profile)
+        .and_then(|p| Profile::by_name(p.name()))
+        .unwrap_or_else(Profile::cupertino)
 }

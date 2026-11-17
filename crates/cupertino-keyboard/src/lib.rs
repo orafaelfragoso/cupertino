@@ -1,10 +1,12 @@
 //! Keyboard model for the Cupertino compositor (no windowing-library or Wayland dependency).
 //!
 //! * [`repeat`]: key repeat timing (preference units, clamping, `wl_keyboard.repeat_info`, caps-lock delay, repeater).
-//! * [`modifiers`]: physical → logical modifier profiles (including a `cupertino` profile with the super key
-//!   as the primary shortcut modifier), shortcut symbol selection, fn / globe key usage and tap debounce.
+//! * [`modifiers`]: the logical modifiers ([`modifiers::Mods`]), the physical keys ([`modifiers::RawMods`]) and the
+//!   profiles that map one to the other (including a `cupertino` profile with the super key as the primary shortcut
+//!   modifier), shortcut symbol selection, fn / globe key usage and tap debounce.
 //! * [`rewrite`]: which Super and Alt chords the compositor rewrites for third-party clients.
-//! * [`binding`]: the text-editing binding table, chord sequences, user override file, resolver.
+//! * [`keys`]: [`Chord`], [`Key`] and [`NamedKey`], with logical modifiers.
+//! * [`binding`]: the text-editing binding table, chord sequences, override text, resolver.
 //! * [`shortcuts`]: desktop shortcut defaults with neutral action names.
 //! * [`accent`]: accent picker state machine and popup layout.
 //! * [`slow_keys`], [`sticky_keys`], [`mouse_keys`]: the accessibility keyboard filters.
@@ -15,8 +17,9 @@
 
 pub mod accent;
 pub mod binding;
+mod binding_table;
 pub mod keycodes;
-pub use cupertino_key_bindings::keys;
+pub mod keys;
 pub mod modifiers;
 pub mod mouse_keys;
 pub mod repeat;
@@ -29,7 +32,7 @@ pub mod switcher;
 pub mod xkb;
 
 pub use accent::{AccentConfig, AccentEvent, AccentPicker, AccentTable};
-pub use binding::{BindingTable, Resolution, Resolver, TextAction};
+pub use binding::{BindingTable, OverrideError, Resolution, Resolver, TextAction};
 pub use keys::{Chord, ChordError, Key, NamedKey};
 pub use modifiers::{FnUsage, GlobeTap};
 pub use mouse_keys::{MouseKeys, PointerAction};

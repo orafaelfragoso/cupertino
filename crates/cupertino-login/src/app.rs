@@ -13,6 +13,7 @@ use crate::options::SessionOptions;
 use crate::roles::{self, Heard, LockWish, LoginRoles};
 use crate::screen::{self, Result, Timer, FRAME};
 use cupertino_defaults::login::ScreenSettings;
+use cupertino_keyboard::modifiers::Profile;
 use cupertino_kit::core::{Application, Command, Key, Window, WindowKey};
 use cupertino_kit::geometry::Size;
 use cupertino_kit::text::TextSystem;
@@ -42,7 +43,6 @@ use cupertino_login::view::{
 };
 use cupertino_login::wallpaper::{self, Source};
 use cupertino_login::{session, upower};
-use cupertino_modifiers::Profile;
 use cupertino_shell_client::{
     IdleNotifier, IdleWatch, LayerShell, Session as ShellSession, SessionLockManager, Shell,
 };

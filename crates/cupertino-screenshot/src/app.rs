@@ -12,9 +12,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use cupertino_geometry::Rect;
+use cupertino_keyboard::modifiers::Profile;
 use cupertino_kit::core::{Application, Command, Window};
 use cupertino_kit::platform::WindowSpec;
-use cupertino_modifiers::Profile;
 use cupertino_screenshot::controller::{Controller, Effect};
 use cupertino_screenshot::image;
 use cupertino_screenshot::session::Style;

@@ -3,10 +3,10 @@
 use std::time::Instant;
 
 use crate::{LineLayout, TextBuffer};
-use cupertino_key_bindings::TextAction;
+use cupertino_keyboard::TextAction;
 
 use crate::keymap::{Command, KeyInput, Keymap};
-use cupertino_modifiers::Mods;
+use cupertino_keyboard::modifiers::Mods;
 
 /// What a key or pointer input did; the window redraws for every value but [`Response::Ignored`].
 #[derive(Clone, Debug, PartialEq, Eq)]

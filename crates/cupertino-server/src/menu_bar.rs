@@ -12,8 +12,8 @@ use crate::input::{translate_action, Action, Chord};
 use crate::owner_check::{OwnerCheck, OwnerKey};
 use crate::render::wallpaper::BarBands;
 use cupertino_input::{KeyCombo, Modifiers};
+use cupertino_keyboard::modifiers::{Physical, Profile, RawMods};
 use cupertino_keyboard::rewrite::ClientClass;
-use cupertino_modifiers::{Physical, Profile, RawMods};
 use cupertino_protocols::server::app_effects::cupertino_app_menu_v1::{
     self, CupertinoAppMenuV1, Error as AppMenuError,
 };

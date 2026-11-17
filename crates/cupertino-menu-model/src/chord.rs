@@ -1,6 +1,6 @@
 //! Chords in logical modifiers, and their accelerator and display text through a modifier map.
 
-use cupertino_modifiers::{Modifier, ModifierMap, Mods, Physical};
+use cupertino_keyboard::modifiers::{Modifier, ModifierMap, Mods, Physical};
 
 /// The modifier of an accelerator's angle brackets for `p`; `None` for a key GTK has no accelerator for.
 fn accelerator(p: Physical) -> Option<&'static str> {

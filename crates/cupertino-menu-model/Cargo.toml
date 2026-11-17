@@ -9,4 +9,4 @@ description = "Typed application menus shared by CupertinoKit and the menu bar: 
 layer = "foundation"
 
 [dependencies]
-cupertino-modifiers = { path = "../cupertino-modifiers" }
+cupertino-keyboard = { path = "../cupertino-keyboard" }

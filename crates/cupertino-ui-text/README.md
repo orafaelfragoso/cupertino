@@ -29,8 +29,10 @@ buffer follow.
   `SecureBuffer::select_masked` selects by grapheme index, so a click lands between bullets.
 - `TextBuffer` is the single-line editing model of Kit's fields and the apps' text fields: grapheme caret and selection,
   undo, kill buffer, composition range, click counting, caret blink and scroll. `Keymap` resolves a key (evdev code, modifiers
-  physical through a profile or already logical, and the character) through `cupertino-key-bindings`' chords, and
-  `TextFieldKeys` carries the result out on the buffer; neither reads settings, which `cupertino-keyboard` does. Left
+  physical through a profile or already logical, and the character) through `cupertino-keyboard`'s chords, and
+  `TextFieldKeys` carries the result out on the buffer; neither reads settings. `binding_file::load_default` reads
+  the user's `keybindings.conf` in the settings directory (`default_user_path`, through `cupertino-defaults`) over the
+  standard table, and `load_user_file` any other binding file; `cupertino-keyboard` parses them. Left
   and Right move to the next caret stop on screen through text of either direction, each hard line in the direction it
   is laid out in, and past a line's edge on in that line's reading order (`TextBuffer::caret_position` keeps
   the side of a direction change the caret is on, and `TextBuffer::set_direction` takes the base direction the field

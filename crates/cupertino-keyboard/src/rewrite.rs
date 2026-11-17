@@ -10,7 +10,7 @@
 //! text bindings and the documented chords; the terminal mapping and
 //! the guards are approximate and configurable in the compositor.
 
-use cupertino_modifiers::{Physical, Profile, RawMods};
+use crate::modifiers::{Physical, Profile, RawMods};
 
 /// evdev codes of the keys the table names (`linux/input-event-codes.h`).
 pub const KEY_HOME: u32 = 102;

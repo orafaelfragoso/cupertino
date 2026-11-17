@@ -26,11 +26,11 @@ use cupertino_dock::view::{
     OVERVIEW_APP_ID, SWITCHER_APP_ID,
 };
 use cupertino_dock::Dock;
+use cupertino_keyboard::modifiers::Profile;
 use cupertino_kit::controls::ImageSource;
 use cupertino_kit::core::{next_resource_id, Application, Command, Window};
 use cupertino_kit::platform::WindowSpec;
 use cupertino_kit::render::{ImageResource, PixelFormat};
-use cupertino_modifiers::Profile;
 use cupertino_shell_client::{
     Anchor, AppCommand, Corner, Dock as DockRole, DockChange, DockWindowIcon, Gesture,
     KeyboardInteractivity, Layer, LayerShell, LayerSurface, LayerSurfaceConfig, Margin,

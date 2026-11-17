@@ -23,12 +23,12 @@ use cupertino_controlcenter::view::{
     self, edit_key, focus_key, Editing, Held, Input, Opened, Presentation, Via, APP_ID,
     CATCHER_APP_ID, DETAIL_FOCUS, EDIT_FOCUS,
 };
+use cupertino_keyboard::modifiers::Profile;
 use cupertino_kit::controls::FrameClock;
 use cupertino_kit::core::{Application, Command, Element, Key, Window, WindowKey};
 use cupertino_kit::platform::{
     PresentChange, PresentProperty, SystemAppearance, WindowRequest, WindowSpec, WindowSystem,
 };
-use cupertino_modifiers::Profile;
 use cupertino_pipewire::Wpctl;
 use cupertino_protocol_app::AppEvent;
 use cupertino_shell_client::{

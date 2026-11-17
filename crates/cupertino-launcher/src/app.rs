@@ -10,6 +10,7 @@ use cupertino_assets::Assets;
 use cupertino_defaults::terminal::DEFAULT_TERMINALS;
 use cupertino_icons::thumbnail::{ThumbSize, Thumbnailer};
 use cupertino_icons::{SystemIcons, ThemeIcons};
+use cupertino_keyboard::modifiers::Profile;
 use cupertino_kit::controls::ImageSource;
 use cupertino_kit::core::{next_resource_id, Application, Command, Window};
 use cupertino_kit::file_icons::FileIcons;
@@ -32,7 +33,6 @@ use cupertino_launcher::view::{
     TOP_FRACTION,
 };
 use cupertino_launcher::{Frecency, Launcher, LauncherConfig};
-use cupertino_modifiers::Profile;
 use cupertino_protocol_app::AppEvent;
 use cupertino_shell_client::{
     Anchor, AppActivation, KeyboardInteractivity, Layer, LayerShell, LayerSurface,

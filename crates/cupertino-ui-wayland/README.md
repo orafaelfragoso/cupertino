@@ -3,7 +3,7 @@
 CupertinoKit's window system on the transport (`cupertino-wayland-client`), and drawing a surface of it with tiny-skia.
 MPL-2.0. It binds no protocol beyond the
 transport's standard set and never reaches the private protocols (`cupertino-layers` denies `cupertino-protocols` and
-`cupertino-shell-client`). Depends on `cupertino-wayland-client`, `cupertino-geometry`, `cupertino-modifiers`,
+`cupertino-shell-client`). Depends on `cupertino-wayland-client`, `cupertino-geometry`, `cupertino-keyboard`,
 `cupertino-ui-platform`, `cupertino-ui-render`, `cupertino-ui-text`, `cupertino-menu-model`, `cupertino-ui-menus`,
 `cupertino-gpu` (the graphics layer, for the GPU presenter), `cupertino-ui-gpu` (the GPU renderer the presenter's
 windows draw with), `cupertino-diagnostic-events`' `profile` (the frame timeline `CUPERTINO_PROFILE` asks for, installed when the window

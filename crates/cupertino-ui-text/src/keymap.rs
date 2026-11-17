@@ -1,9 +1,7 @@
 //! Keys to field commands: physical modifiers through the user's modifier profile, then the standard editing chords.
 
-use cupertino_key_bindings::{
-    BindingTable, Chord, Key, NamedKey, Resolution, Resolver, TextAction,
-};
-use cupertino_modifiers::{Mods, Physical, Profile, RawMods};
+use cupertino_keyboard::modifiers::{Mods, Physical, Profile, RawMods};
+use cupertino_keyboard::{BindingTable, Chord, Key, NamedKey, Resolution, Resolver, TextAction};
 
 /// Evdev codes of the named keys a field reads (`linux/input-event-codes.h`).
 const NAMED_KEYS: [(u32, NamedKey); 15] = [

@@ -13,7 +13,6 @@ cupertino-apps = { path = "../cupertino-apps" }
 cupertino-assets = { path = "../cupertino-assets" }
 cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-menu-model = { path = "../cupertino-menu-model" }
-cupertino-modifiers = { path = "../cupertino-modifiers" }
 cupertino-keyboard = { path = "../cupertino-keyboard" }
 cupertino-peer = { path = "../cupertino-peer" }
 cupertino-radios = { path = "../cupertino-radios", features = ["dbus"] }

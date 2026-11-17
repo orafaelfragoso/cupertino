@@ -18,7 +18,7 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use cupertino_geometry::{Rect, Size};
-use cupertino_modifiers::Profile;
+use cupertino_keyboard::modifiers::Profile;
 use cupertino_ui_gpu::{GpuConfig, WindowRenderer};
 use cupertino_ui_platform::{
     DecorationMode, LayerChange, LayerProperty, PlatformEvent, PresentOutcome, RendererKind,

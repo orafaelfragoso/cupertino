@@ -16,7 +16,7 @@ app = [
     "dep:async-channel",
     "dep:async-io",
     "dep:cupertino-kit",
-    "dep:cupertino-modifiers",
+    "dep:cupertino-keyboard",
     "dep:cupertino-protocol-app",
     "dep:cupertino-shell-client",
     "dep:cupertino-theme",
@@ -38,7 +38,7 @@ cupertino-radios = { path = "../cupertino-radios", features = ["dbus"], optional
 cupertino-theme = { path = "../cupertino-theme", optional = true }
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-kit = { path = "../cupertino-kit", optional = true }
-cupertino-modifiers = { path = "../cupertino-modifiers", optional = true }
+cupertino-keyboard = { path = "../cupertino-keyboard", optional = true }
 cupertino-protocol-app = { path = "../cupertino-protocol-app", optional = true }
 cupertino-shell-client = { path = "../cupertino-shell-client", optional = true }
 cupertino-ui-wayland = { path = "../cupertino-ui-wayland", optional = true }

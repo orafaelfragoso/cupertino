@@ -2,8 +2,8 @@
 //! application's session-bus connection, its announcement (`cupertino_app_menu_v1`), the reader the compositor names,
 //! and the chosen items handed to the application's loop.
 
+use cupertino_keyboard::modifiers::ModifierMap;
 use cupertino_menu_model::{ActionName, MenuBar};
-use cupertino_modifiers::ModifierMap;
 use cupertino_protocol_app::{AppEffects, AppEvent, AppMenu, MenuAddress};
 use cupertino_wayland_client::{Connection, SurfaceId};
 

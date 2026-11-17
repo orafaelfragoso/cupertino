@@ -19,8 +19,6 @@ apps forbidden_edge cupertino-files -> cupertino-wayland-client normal
 apps forbidden_edge cupertino-settings -> cupertino-alsa normal
 apps forbidden_edge cupertino-settings -> cupertino-pipewire normal
 apps forbidden_edge cupertino-settings -> cupertino-wayland-client normal
-foundation forbidden_edge cupertino-keyboard -> cupertino-defaults normal
-foundation impure_source cupertino-key-bindings src/binding.rs std::fs
 foundation impure_source cupertino-keyboard src/xkb.rs std::fs
 foundation impure_source cupertino-theme src/animation.rs std::fs
 foundation impure_source cupertino-theme src/recipe.rs std::fs

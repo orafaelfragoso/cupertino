@@ -12,6 +12,7 @@ use crate::app::listen;
 use crate::roles::{self, Heard, LockWish, LoginRoles};
 use crate::screen::{self, Result, Timer};
 use cupertino_defaults::login::ScreenSettings;
+use cupertino_keyboard::modifiers::Profile;
 use cupertino_kit::controls::FrameClock;
 use cupertino_kit::core::{Application, Command, Element, Key, Window, WindowKey};
 use cupertino_kit::geometry::Size;
@@ -31,7 +32,6 @@ use cupertino_login_ipc::{
     Account, Event as ManagerEvent, Outcome, PowerAction, PowerMenu, PowerRefusal, Request, Secret,
     UserRow, VERSION,
 };
-use cupertino_modifiers::Profile;
 use cupertino_shell_client::LayerShell;
 use cupertino_ui_wayland::WaylandWindowSystem;
 use std::cell::{Cell, RefCell};

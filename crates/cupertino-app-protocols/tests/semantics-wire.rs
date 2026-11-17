@@ -567,7 +567,8 @@ fn read_refuses_files_that_are_not_fully_sealed_memfds() {
 
 #[test]
 fn read_refuses_a_regular_file() {
-    let dir = std::env::temp_dir().join(format!("app-protocols-seal-{}", std::process::id()));
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("app-protocols-seal-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("payload");
     std::fs::write(&path, b"\"abc\"").unwrap();

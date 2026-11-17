@@ -317,7 +317,7 @@ fn a_server_that_never_releases_leaves_three_frames_in_flight() {
 
 #[test]
 fn damage_outside_the_buffer_is_accepted_and_clipped() {
-    let (_server, mut conn) = Harness::start(Offer::NONE);
+    let (server, mut conn) = Harness::start(Offer::NONE);
     let window = window(&mut conn);
     let lease = conn
         .lease(window.surface(), (8, 8), BufferFormat::Argb8888)
@@ -338,6 +338,16 @@ fn damage_outside_the_buffer_is_accepted_and_clipped() {
     ];
     lease.present_damage(Some(&damage)).unwrap();
     conn.roundtrip().unwrap();
+    let damage: Vec<String> = server
+        .requests()
+        .into_iter()
+        .filter(|r| r.starts_with("DamageBuffer"))
+        .collect();
+    assert_eq!(
+        damage,
+        ["DamageBuffer { x: 4, y: 4, width: 4, height: 4 }"],
+        "the first rectangle is cut to the buffer and the one wholly outside is dropped"
+    );
 }
 
 #[test]

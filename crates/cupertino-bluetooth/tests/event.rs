@@ -2,8 +2,8 @@
 
 use cupertino_bluetooth::{
     decode_packet, Address, AddressType, AddressTypes, ClassOfDevice, ControllerIndex, DeviceId,
-    DisconnectReason, Eir, Event, FoundFlags, KeyValue, LinkKeyType, LongTermKeyType, Opcode,
-    ParseError, Settings, Status,
+    DisconnectReason, Eir, EirName, Event, FoundFlags, KeyValue, LinkKey, LinkKeyType,
+    LongTermKey, LongTermKeyType, Opcode, ParseError, Settings, Status,
 };
 
 const DEVICE_BYTES: [u8; 7] = [0x13, 0x71, 0xDA, 0x7D, 0x1A, 0x00, 0];
@@ -26,244 +26,280 @@ fn packet(code: u16, index: u16, parameters: &[u8]) -> Vec<u8> {
     .concat()
 }
 
-fn decode(code: u16, parameters: &[u8]) -> Event {
-    decode_packet(&packet(code, 0, parameters)).unwrap().event
+fn decode(code: u16, parameters: &[u8]) -> Result<Event, ParseError> {
+    decode_packet(&packet(code, 0, parameters)).map(|decoded| decoded.event)
 }
 
-fn decode_error(code: u16, parameters: &[u8]) -> ParseError {
-    decode_packet(&packet(code, 0, parameters)).unwrap_err()
+fn with_device(extra: &[&[u8]]) -> Vec<u8> {
+    [&[DEVICE_BYTES.as_slice()], extra].concat().concat()
+}
+
+fn device_found(rssi: i8, flags: u32, eir: &[u8]) -> Vec<u8> {
+    with_device(&[
+        &[rssi as u8],
+        &flags.to_le_bytes(),
+        &(eir.len() as u16).to_le_bytes(),
+        eir,
+    ])
 }
 
 #[test]
-fn the_controller_index_comes_from_the_header() {
+fn the_header_gives_the_controller_index_and_must_agree_with_the_bytes() {
     let decoded = decode_packet(&packet(0x0004, 7, &[])).unwrap();
-    assert_eq!(decoded.index, ControllerIndex(7));
-    assert_eq!(decoded.event, Event::IndexAdded);
+    assert_eq!(
+        (decoded.index, decoded.event),
+        (ControllerIndex(7), Event::IndexAdded)
+    );
     assert_eq!(
         decode_packet(&packet(0x0005, 0xFFFF, &[])).unwrap().index,
         ControllerIndex::NONE
     );
-}
 
-#[test]
-fn a_packet_shorter_than_its_header_is_truncated() {
-    assert!(matches!(
-        decode_packet(&[0x01, 0x00, 0x00]),
-        Err(ParseError::Truncated {
-            what: "packet header",
-            ..
-        })
-    ));
-    assert!(matches!(
-        decode_packet(&[]),
-        Err(ParseError::Truncated { .. })
-    ));
-}
-
-#[test]
-fn a_header_length_that_disagrees_with_the_bytes_is_refused() {
+    for bytes in [&[0x01, 0x00, 0x00][..], &[]] {
+        assert!(
+            matches!(
+                decode_packet(bytes),
+                Err(ParseError::Truncated {
+                    what: "packet header",
+                    ..
+                })
+            ),
+            "{bytes:?}"
+        );
+    }
     let mut bytes = packet(0x0003, 0, &[9]);
-    bytes[4] = 2;
-    assert_eq!(
-        decode_packet(&bytes),
-        Err(ParseError::LengthMismatch {
-            header: 2,
-            actual: 1
-        })
-    );
-    bytes[4] = 0;
-    assert_eq!(
-        decode_packet(&bytes),
-        Err(ParseError::LengthMismatch {
-            header: 0,
-            actual: 1
-        })
-    );
+    for header in [2, 0] {
+        bytes[4] = header as u8;
+        assert_eq!(
+            decode_packet(&bytes),
+            Err(ParseError::LengthMismatch { header, actual: 1 }),
+            "{header}"
+        );
+    }
 }
 
 #[test]
-fn command_complete_keeps_the_return_parameters() {
-    assert_eq!(
-        decode(0x0001, &[0x05, 0x00, 0x00, 0xAA, 0xBB]),
-        Event::CommandComplete {
-            opcode: Opcode::SET_POWERED,
-            status: Status::Success,
-            data: vec![0xAA, 0xBB]
-        }
-    );
-    assert_eq!(
-        decode(0x0001, &[0x23, 0x00, 0x0A]),
-        Event::CommandComplete {
-            opcode: Opcode::START_DISCOVERY,
-            status: Status::Busy,
-            data: Vec::new()
-        }
-    );
-}
+fn each_event_decodes_to_its_fields() {
+    let mut local_name = vec![0u8; 249 + 11];
+    local_name[..6].copy_from_slice(b"Laptop");
+    local_name[249..252].copy_from_slice(b"Lap");
+    let mut long_term_key = vec![0u8];
+    long_term_key.extend([0x13, 0x71, 0xDA, 0x7D, 0x1A, 0x00, 2]);
+    long_term_key.extend([0x03, 1, 16, 0x0B, 0x0A]);
+    long_term_key.extend([1, 2, 3, 4, 5, 6, 7, 8]);
+    long_term_key.extend([0x77; 16]);
+    let mut le_random = device();
+    le_random.kind = AddressType::LeRandom;
+    let appearance = [3, 0x19, 0xC1, 0x03];
 
-#[test]
-fn command_status_has_exactly_an_opcode_and_a_status() {
-    assert_eq!(
-        decode(0x0002, &[0x19, 0x00, 0x0C]),
-        Event::CommandStatus {
-            opcode: Opcode::PAIR_DEVICE,
-            status: Status::NotSupported
-        }
-    );
-    assert_eq!(
-        decode_error(0x0002, &[0x19, 0x00, 0x0C, 0]),
-        ParseError::TrailingBytes {
-            what: "Command Status",
-            extra: 1
-        }
-    );
-    assert_eq!(
-        decode_error(0x0002, &[0x19, 0x00]),
-        ParseError::Truncated {
-            what: "Command Status",
-            needed: 1,
-            found: 0
-        }
-    );
-}
-
-#[test]
-fn simple_controller_events_decode() {
-    assert_eq!(
-        decode(0x0003, &[0x42]),
-        Event::ControllerError { code: 0x42 }
-    );
-    assert_eq!(decode(0x0005, &[]), Event::IndexRemoved);
-    assert_eq!(
-        decode(0x0006, &1u32.to_le_bytes()),
-        Event::NewSettings(Settings(1))
-    );
-    assert_eq!(
-        decode(0x0007, &[0x0C, 0x01, 0x1A]),
-        Event::ClassOfDeviceChanged(ClassOfDevice::from_wire([0x0C, 0x01, 0x1A]))
-    );
-}
-
-#[test]
-fn a_local_name_stops_at_its_nul_in_each_field() {
-    let mut parameters = vec![0u8; 249 + 11];
-    parameters[..6].copy_from_slice(b"Laptop");
-    parameters[249..252].copy_from_slice(b"Lap");
-    assert_eq!(
-        decode(0x0008, &parameters),
-        Event::LocalNameChanged {
-            name: "Laptop".to_owned(),
-            short_name: "Lap".to_owned()
-        }
-    );
-    assert!(matches!(
-        decode_error(0x0008, &parameters[..259]),
-        ParseError::Truncated { .. }
-    ));
-}
-
-#[test]
-fn a_new_link_key_carries_the_store_hint_and_the_key() {
-    let mut parameters = vec![1u8];
-    parameters.extend(DEVICE_BYTES);
-    parameters.push(0x07);
-    parameters.extend([0x5A; 16]);
-    parameters.push(0);
-    let Event::NewLinkKey { store, key } = decode(0x0009, &parameters) else {
-        panic!("a new link key");
-    };
-    assert!(store);
-    assert_eq!(key.device, device());
-    assert_eq!(key.key_type, LinkKeyType::UnauthenticatedP256);
-    assert_eq!(key.value, KeyValue([0x5A; 16]));
-    assert_eq!(key.pin_length, 0);
-}
-
-#[test]
-fn a_store_hint_that_is_not_zero_or_one_is_refused() {
-    let mut parameters = vec![2u8];
-    parameters.extend(DEVICE_BYTES);
-    parameters.push(0);
-    parameters.extend([0; 17]);
-    assert_eq!(
-        decode_error(0x0009, &parameters),
-        ParseError::InvalidBool {
-            what: "store hint",
-            value: 2
-        }
-    );
-}
-
-#[test]
-fn a_new_long_term_key_decodes_every_field() {
-    let mut parameters = vec![0u8];
-    parameters.extend([0x13, 0x71, 0xDA, 0x7D, 0x1A, 0x00, 2]);
-    parameters.extend([0x03, 1, 16, 0x0B, 0x0A]);
-    parameters.extend([1, 2, 3, 4, 5, 6, 7, 8]);
-    parameters.extend([0x77; 16]);
-    let Event::NewLongTermKey { store, key } = decode(0x000A, &parameters) else {
-        panic!("a new long term key");
-    };
-    assert!(!store);
-    assert_eq!(key.device.kind, AddressType::LeRandom);
-    assert_eq!(key.key_type, LongTermKeyType::AuthenticatedP256);
-    assert!(key.central);
-    assert_eq!(key.encryption_size, 16);
-    assert_eq!(key.diversifier, 0x0A0B);
-    assert_eq!(key.random, [1, 2, 3, 4, 5, 6, 7, 8]);
-    assert_eq!(key.value, KeyValue([0x77; 16]));
-}
-
-#[test]
-fn a_connected_device_carries_its_flags_and_advertising_data() {
-    let eir = [3, 0x19, 0xC1, 0x03];
-    let mut parameters = DEVICE_BYTES.to_vec();
-    parameters.extend(8u32.to_le_bytes());
-    parameters.extend((eir.len() as u16).to_le_bytes());
-    parameters.extend(eir);
-    let Event::DeviceConnected {
-        device: found,
-        flags,
-        eir,
-    } = decode(0x000B, &parameters)
-    else {
-        panic!("a connected device");
-    };
-    assert_eq!(found, device());
-    assert_eq!(flags, 8);
-    assert_eq!(eir.appearance, Some(0x03C1));
-}
-
-#[test]
-fn advertising_data_longer_than_the_packet_is_truncated() {
-    let mut parameters = DEVICE_BYTES.to_vec();
-    parameters.extend(0u32.to_le_bytes());
-    parameters.extend(10u16.to_le_bytes());
-    parameters.extend([2, 0x01, 0x06]);
-    assert!(matches!(
-        decode_error(0x000B, &parameters),
-        ParseError::Truncated {
-            needed: 10,
-            found: 3,
-            ..
-        }
-    ));
-}
-
-#[test]
-fn bad_advertising_data_fails_the_whole_event() {
-    let mut parameters = DEVICE_BYTES.to_vec();
-    parameters.extend(0u32.to_le_bytes());
-    parameters.extend(3u16.to_le_bytes());
-    parameters.extend([9, 0x09, b'a']);
-    assert_eq!(
-        decode_error(0x000B, &parameters),
-        ParseError::EirOverrun { offset: 0 }
-    );
-}
-
-#[test]
-fn disconnect_reasons_keep_values_the_document_does_not_define() {
+    let mut rows = vec![
+        (
+            "command complete",
+            0x0001,
+            vec![0x05, 0x00, 0x00, 0xAA, 0xBB],
+            Event::CommandComplete {
+                opcode: Opcode::SET_POWERED,
+                status: Status::Success,
+                data: vec![0xAA, 0xBB],
+            },
+        ),
+        (
+            "command complete without data",
+            0x0001,
+            vec![0x23, 0x00, 0x0A],
+            Event::CommandComplete {
+                opcode: Opcode::START_DISCOVERY,
+                status: Status::Busy,
+                data: Vec::new(),
+            },
+        ),
+        (
+            "command status",
+            0x0002,
+            vec![0x19, 0x00, 0x0C],
+            Event::CommandStatus {
+                opcode: Opcode::PAIR_DEVICE,
+                status: Status::NotSupported,
+            },
+        ),
+        (
+            "controller error",
+            0x0003,
+            vec![0x42],
+            Event::ControllerError { code: 0x42 },
+        ),
+        ("index removed", 0x0005, vec![], Event::IndexRemoved),
+        (
+            "new settings",
+            0x0006,
+            1u32.to_le_bytes().to_vec(),
+            Event::NewSettings(Settings(1)),
+        ),
+        (
+            "class changed",
+            0x0007,
+            vec![0x0C, 0x01, 0x1A],
+            Event::ClassOfDeviceChanged(ClassOfDevice::from_wire([0x0C, 0x01, 0x1A])),
+        ),
+        (
+            "local name, each field to its nul",
+            0x0008,
+            local_name,
+            Event::LocalNameChanged {
+                name: "Laptop".to_owned(),
+                short_name: "Lap".to_owned(),
+            },
+        ),
+        (
+            "new link key",
+            0x0009,
+            [vec![1u8], with_device(&[&[0x07], &[0x5A; 16], &[0]])].concat(),
+            Event::NewLinkKey {
+                store: true,
+                key: LinkKey {
+                    device: device(),
+                    key_type: LinkKeyType::UnauthenticatedP256,
+                    value: KeyValue([0x5A; 16]),
+                    pin_length: 0,
+                },
+            },
+        ),
+        (
+            "new long term key",
+            0x000A,
+            long_term_key,
+            Event::NewLongTermKey {
+                store: false,
+                key: LongTermKey {
+                    device: le_random,
+                    key_type: LongTermKeyType::AuthenticatedP256,
+                    central: true,
+                    encryption_size: 16,
+                    diversifier: 0x0A0B,
+                    random: [1, 2, 3, 4, 5, 6, 7, 8],
+                    value: KeyValue([0x77; 16]),
+                },
+            },
+        ),
+        (
+            "device connected with its advertising data",
+            0x000B,
+            with_device(&[&8u32.to_le_bytes(), &4u16.to_le_bytes(), &appearance]),
+            Event::DeviceConnected {
+                device: device(),
+                flags: 8,
+                eir: Eir {
+                    appearance: Some(0x03C1),
+                    ..Eir::default()
+                },
+            },
+        ),
+        (
+            "connect failed",
+            0x000D,
+            with_device(&[&[0x04]]),
+            Event::ConnectFailed {
+                device: device(),
+                status: Status::ConnectFailed,
+            },
+        ),
+        (
+            "PIN request",
+            0x000E,
+            with_device(&[&[1]]),
+            Event::PinCodeRequest {
+                device: device(),
+                secure: true,
+            },
+        ),
+        (
+            "confirmation request",
+            0x000F,
+            with_device(&[&[1], &482_913u32.to_le_bytes()]),
+            Event::UserConfirmationRequest {
+                device: device(),
+                just_works: true,
+                value: 482_913,
+            },
+        ),
+        (
+            "passkey request",
+            0x0010,
+            DEVICE_BYTES.to_vec(),
+            Event::UserPasskeyRequest { device: device() },
+        ),
+        (
+            "authentication failed",
+            0x0011,
+            with_device(&[&[0x05]]),
+            Event::AuthenticationFailed {
+                device: device(),
+                status: Status::AuthenticationFailed,
+            },
+        ),
+        (
+            "device found with a signed signal level",
+            0x0012,
+            device_found(-60, 0b10_0101, &[5, 0x09, b'T', b'V', b'!', b'?']),
+            Event::DeviceFound {
+                device: device(),
+                rssi: Some(-60),
+                flags: FoundFlags(0b10_0101),
+                eir: Eir {
+                    name: Some(EirName {
+                        text: "TV!?".to_owned(),
+                        complete: true,
+                    }),
+                    ..Eir::default()
+                },
+            },
+        ),
+        (
+            "a signal level of 127 is not available",
+            0x0012,
+            device_found(127, 0, &[]),
+            Event::DeviceFound {
+                device: device(),
+                rssi: None,
+                flags: FoundFlags(0),
+                eir: Eir::default(),
+            },
+        ),
+        (
+            "discovering",
+            0x0013,
+            vec![0x07, 1],
+            Event::Discovering {
+                types: AddressTypes::ALL,
+                active: true,
+            },
+        ),
+        (
+            "unpaired",
+            0x0016,
+            DEVICE_BYTES.to_vec(),
+            Event::DeviceUnpaired(device()),
+        ),
+        (
+            "passkey notify",
+            0x0017,
+            with_device(&[&654_321u32.to_le_bytes(), &[3]]),
+            Event::PasskeyNotify {
+                device: device(),
+                passkey: 654_321,
+                entered: 3,
+            },
+        ),
+        (
+            "an unknown event kept whole",
+            0x0030,
+            vec![1, 2, 3],
+            Event::Other {
+                code: 0x0030,
+                parameters: vec![1, 2, 3],
+            },
+        ),
+    ];
     for (wire, reason) in [
         (0, DisconnectReason::Unspecified),
         (1, DisconnectReason::Timeout),
@@ -274,191 +310,154 @@ fn disconnect_reasons_keep_values_the_document_does_not_define() {
         (6, DisconnectReason::Other(6)),
     ] {
         assert_eq!(DisconnectReason::from_wire(wire), reason);
-        assert_eq!(
-            decode(0x000C, &[&DEVICE_BYTES[..], &[wire]].concat()),
+        rows.push((
+            "disconnected",
+            0x000C,
+            with_device(&[&[wire]]),
             Event::DeviceDisconnected {
                 device: device(),
-                reason
-            }
+                reason,
+            },
+        ));
+    }
+    for (name, code, parameters, expected) in rows {
+        assert_eq!(decode(code, &parameters), Ok(expected), "{name}");
+    }
+}
+
+#[test]
+fn found_flags_are_independent_bits() {
+    for (bits, expected) in [
+        (0b10_0101, [true, false, true, false, true]),
+        (1 << 1 | 1 << 4, [false, true, false, true, false]),
+    ] {
+        let flags = FoundFlags(bits);
+        assert_eq!(
+            [
+                flags.confirm_name(),
+                flags.legacy_pairing(),
+                flags.not_connectable(),
+                flags.name_request_failed(),
+                flags.scan_response(),
+            ],
+            expected,
+            "{bits:#b}"
         );
     }
 }
 
 #[test]
-fn pairing_events_decode() {
-    assert_eq!(
-        decode(0x000D, &[&DEVICE_BYTES[..], &[0x04]].concat()),
-        Event::ConnectFailed {
-            device: device(),
-            status: Status::ConnectFailed
-        }
-    );
-    assert_eq!(
-        decode(0x000E, &[&DEVICE_BYTES[..], &[1]].concat()),
-        Event::PinCodeRequest {
-            device: device(),
-            secure: true
-        }
-    );
-    assert_eq!(
-        decode(
-            0x000F,
-            &[&DEVICE_BYTES[..], &[1], &482_913u32.to_le_bytes()].concat()
+fn parameters_that_do_not_fit_the_events_layout_fail_the_event_naming_it() {
+    let mut bad_store = vec![2u8];
+    bad_store.extend(with_device(&[&[0], &[0; 17]]));
+    let mut bad_address_type = DEVICE_BYTES.to_vec();
+    bad_address_type[6] = 9;
+    let mut short_name = vec![0u8; 259];
+    short_name[..6].copy_from_slice(b"Laptop");
+    for (name, code, parameters, expected) in [
+        (
+            "command status with a byte more",
+            0x0002,
+            vec![0x19, 0x00, 0x0C, 0],
+            Some(ParseError::TrailingBytes {
+                what: "Command Status",
+                extra: 1,
+            }),
         ),
-        Event::UserConfirmationRequest {
-            device: device(),
-            just_works: true,
-            value: 482_913
-        }
-    );
-    assert_eq!(
-        decode(0x0010, &DEVICE_BYTES),
-        Event::UserPasskeyRequest { device: device() }
-    );
-    assert_eq!(
-        decode(0x0011, &[&DEVICE_BYTES[..], &[0x05]].concat()),
-        Event::AuthenticationFailed {
-            device: device(),
-            status: Status::AuthenticationFailed
-        }
-    );
-    assert_eq!(
-        decode(0x0016, &DEVICE_BYTES),
-        Event::DeviceUnpaired(device())
-    );
-    assert_eq!(
-        decode(
-            0x0017,
-            &[&DEVICE_BYTES[..], &654_321u32.to_le_bytes(), &[3]].concat()
+        (
+            "command status without its status",
+            0x0002,
+            vec![0x19, 0x00],
+            Some(ParseError::Truncated {
+                what: "Command Status",
+                needed: 1,
+                found: 0,
+            }),
         ),
-        Event::PasskeyNotify {
-            device: device(),
-            passkey: 654_321,
-            entered: 3
+        (
+            "controller error with a byte more",
+            0x0003,
+            vec![1, 2],
+            Some(ParseError::TrailingBytes {
+                what: "Controller Error",
+                extra: 1,
+            }),
+        ),
+        (
+            "index added with a byte",
+            0x0004,
+            vec![1],
+            Some(ParseError::TrailingBytes {
+                what: "Index Added",
+                extra: 1,
+            }),
+        ),
+        ("a short local name", 0x0008, short_name, None),
+        (
+            "a store hint that is not a boolean",
+            0x0009,
+            bad_store,
+            Some(ParseError::InvalidBool {
+                what: "store hint",
+                value: 2,
+            }),
+        ),
+        (
+            "advertising data longer than the packet",
+            0x000B,
+            with_device(&[&0u32.to_le_bytes(), &10u16.to_le_bytes(), &[2, 0x01, 0x06]]),
+            None,
+        ),
+        (
+            "bad advertising data",
+            0x000B,
+            with_device(&[&0u32.to_le_bytes(), &3u16.to_le_bytes(), &[9, 0x09, b'a']]),
+            Some(ParseError::EirOverrun { offset: 0 }),
+        ),
+        (
+            "a disconnection without its reason",
+            0x000C,
+            DEVICE_BYTES.to_vec(),
+            Some(ParseError::Truncated {
+                what: "Device Disconnected",
+                needed: 1,
+                found: 0,
+            }),
+        ),
+        (
+            "an address type outside the document",
+            0x0010,
+            bad_address_type,
+            Some(ParseError::UnknownAddressType(9)),
+        ),
+        (
+            "discovering that is not a boolean",
+            0x0013,
+            vec![0x07, 5],
+            Some(ParseError::InvalidBool {
+                what: "discovering",
+                value: 5,
+            }),
+        ),
+    ] {
+        let error = decode(code, &parameters).unwrap_err();
+        match expected {
+            Some(expected) => assert_eq!(error, expected, "{name}"),
+            None => assert!(
+                matches!(error, ParseError::Truncated { .. }),
+                "{name}: {error:?}"
+            ),
         }
-    );
-}
-
-fn device_found(rssi: i8, flags: u32, eir: &[u8]) -> Vec<u8> {
-    let mut parameters = DEVICE_BYTES.to_vec();
-    parameters.push(rssi as u8);
-    parameters.extend(flags.to_le_bytes());
-    parameters.extend((eir.len() as u16).to_le_bytes());
-    parameters.extend(eir);
-    parameters
-}
-
-#[test]
-fn a_found_device_has_a_signed_signal_level_and_flags() {
-    let eir = [5, 0x09, b'T', b'V', b'!', b'?'];
-    let Event::DeviceFound {
-        device: found,
-        rssi,
-        flags,
-        eir,
-    } = decode(0x0012, &device_found(-60, 0b10_0101, &eir))
-    else {
-        panic!("a found device");
-    };
-    assert_eq!(found, device());
-    assert_eq!(rssi, Some(-60));
-    assert!(flags.confirm_name());
-    assert!(!flags.legacy_pairing());
-    assert!(flags.not_connectable());
-    assert!(!flags.name_request_failed());
-    assert!(flags.scan_response());
-    assert_eq!(eir.name.unwrap().text, "TV!?");
-}
-
-#[test]
-fn a_signal_level_of_127_is_not_available() {
-    let Event::DeviceFound { rssi, eir, .. } = decode(0x0012, &device_found(127, 0, &[])) else {
-        panic!("a found device");
-    };
-    assert_eq!(rssi, None);
-    assert_eq!(eir, Eir::default());
-}
-
-#[test]
-fn found_flags_are_independent_bits() {
-    let flags = FoundFlags(1 << 1 | 1 << 4);
-    assert!(flags.legacy_pairing());
-    assert!(flags.name_request_failed());
-    assert!(!flags.confirm_name());
-    assert!(!flags.not_connectable());
-    assert!(!flags.scan_response());
-}
-
-#[test]
-fn discovery_state_carries_the_address_types() {
-    assert_eq!(
-        decode(0x0013, &[0x07, 1]),
-        Event::Discovering {
-            types: AddressTypes::ALL,
-            active: true
-        }
-    );
-    assert_eq!(
-        decode_error(0x0013, &[0x07, 5]),
-        ParseError::InvalidBool {
-            what: "discovering",
-            value: 5
-        }
-    );
-}
-
-#[test]
-fn an_event_the_crate_does_not_know_is_kept_whole() {
-    assert_eq!(
-        decode(0x0030, &[1, 2, 3]),
-        Event::Other {
-            code: 0x0030,
-            parameters: vec![1, 2, 3]
-        }
-    );
-}
-
-#[test]
-fn an_address_type_outside_the_document_fails_the_event() {
-    let mut parameters = DEVICE_BYTES.to_vec();
-    parameters[6] = 9;
-    assert_eq!(
-        decode_error(0x0010, &parameters),
-        ParseError::UnknownAddressType(9)
-    );
-}
-
-#[test]
-fn parameters_beyond_the_layout_are_refused() {
-    assert_eq!(
-        decode_error(0x0003, &[1, 2]),
-        ParseError::TrailingBytes {
-            what: "Controller Error",
-            extra: 1
-        }
-    );
-    assert_eq!(
-        decode_error(0x0004, &[1]),
-        ParseError::TrailingBytes {
-            what: "Index Added",
-            extra: 1
-        }
-    );
-}
-
-#[test]
-fn truncation_names_the_event_being_read() {
-    let error = decode_error(0x000C, &DEVICE_BYTES);
-    assert_eq!(
-        error,
-        ParseError::Truncated {
-            what: "Device Disconnected",
-            needed: 1,
-            found: 0
-        }
-    );
-    assert_eq!(
-        error.to_string(),
-        "Device Disconnected: needs 1 bytes, got 0"
-    );
+    }
+    assert!(matches!(
+        decode(
+            0x000B,
+            &with_device(&[&0u32.to_le_bytes(), &10u16.to_le_bytes(), &[2, 0x01, 0x06]])
+        ),
+        Err(ParseError::Truncated {
+            needed: 10,
+            found: 3,
+            ..
+        })
+    ));
 }

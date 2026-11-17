@@ -1,16 +1,18 @@
 //! Gives the process's CupertinoKit windows their surfaces, by `app_id` ([`cupertino_login::view`]): a lock screen
 //! window gets its output's `ext-session-lock` surface, a greeter window a full-output overlay layer surface with the
-//! keyboard, and a panel a centred overlay layer surface with the keyboard. The roles also hold the session lock:
-//! they lock before the first lock surface and unlock once the application stopped wanting the lock and its lock
-//! surfaces are gone, and they pass on what the server says that the windows do not hear (the lock's answer, the
-//! session's requests, Caps Lock, the outputs).
+//! keyboard, and a panel an overlay layer surface that appears centred with the keyboard, moves when its background is
+//! dragged and lets the keyboard go when the person turns to another window (taking it again when clicked). The roles
+//! also hold the session lock: they lock before the first lock surface and unlock once the application stopped wanting
+//! the lock and its lock surfaces are gone, and they pass on what the server says that the windows do not hear (the
+//! lock's answer, the session's requests, Caps Lock, the outputs).
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
 use cupertino_kit::geometry::Size;
 use cupertino_kit::platform::WindowSpec;
+use cupertino_login::panel::Placement;
 use cupertino_login::view::{GREETER_APP_ID, INTERRUPT_APP_ID, LOCK_APP_ID, PANEL_APP_ID};
 use cupertino_shell_client::{
     Anchor, ControlAuthority, ControlEvent, Error as ShellError, KeyboardInteractivity, Layer,
@@ -74,6 +76,16 @@ enum Role {
     Layer(LayerSurface),
 }
 
+/// How far the person has dragged the session panels since the roles last moved them, in points; the application
+/// adds to it, the roles take it.
+pub type PanelDrag = Rc<Cell<(f64, f64)>>;
+
+/// A session panel's surface: where it stands, and whether it lost the keyboard and is to let go of it.
+struct PanelSurface {
+    placement: Placement,
+    let_go: bool,
+}
+
 pub struct LoginRoles {
     layer_shell: LayerShell,
     lock_manager: Option<SessionLockManager>,
@@ -87,6 +99,8 @@ pub struct LoginRoles {
     control_wish: Rc<RefCell<ControlWish>>,
     control_surface: Option<SurfaceId>,
     control_phase: Option<u32>,
+    panels: HashMap<SurfaceId, PanelSurface>,
+    panel_drag: PanelDrag,
 }
 
 /// The outputs `conn` has described, by registry name, with their size.
@@ -140,7 +154,15 @@ impl LoginRoles {
             control_wish: Rc::new(RefCell::new(ControlWish::default())),
             control_surface: None,
             control_phase: None,
+            panels: HashMap::new(),
+            panel_drag: PanelDrag::default(),
         }
+    }
+
+    /// The panels move by what `drag` gathers.
+    pub fn with_panel_drag(mut self, drag: PanelDrag) -> Self {
+        self.panel_drag = drag;
+        self
     }
 
     pub fn with_control(
@@ -170,6 +192,32 @@ impl LoginRoles {
         self.wish.borrow_mut().generation = Some(lock.generation());
         self.lock = Some(lock);
         true
+    }
+
+    /// Move the panels by the drag gathered since the last call, and let a panel that lost the keyboard go of it. Both
+    /// are double-buffered, so the surface is committed for them without a repaint.
+    fn place_panels(&mut self, conn: &mut Connection) {
+        let by = self.panel_drag.take();
+        for (surface, panel) in &mut self.panels {
+            let moved = by != (0.0, 0.0);
+            let let_go = std::mem::take(&mut panel.let_go);
+            if !moved && !let_go {
+                continue;
+            }
+            let Some(Role::Layer(layer)) = self.surfaces.get(surface) else {
+                continue;
+            };
+            if moved {
+                panel.placement.moved(by);
+                layer.set_margin(panel_margin(&panel.placement));
+            }
+            if let_go {
+                layer.set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
+            }
+            if let Ok(wl) = conn.wl_surface(*surface) {
+                wl.commit();
+            }
+        }
     }
 
     fn layer(
@@ -263,26 +311,41 @@ impl SurfaceRoles for LoginRoles {
             return Some(result);
         }
         if spec.app_id == PANEL_APP_ID || spec.app_id == INTERRUPT_APP_ID {
-            // the panels show on the first output the server has described
-            let output = conn
-                .outputs()
-                .into_iter()
-                .find(|o| o.geometry.is_some())
-                .map(|o| o.id);
-            return Some(self.layer(
+            // the panels show on the first output the server has described, centred on it
+            let output = conn.outputs().into_iter().find(|o| o.geometry.is_some());
+            let room = output
+                .as_ref()
+                .and_then(|o| o.geometry)
+                .map_or((0.0, 0.0), |g| (f64::from(g.width), f64::from(g.height)));
+            let placement =
+                Placement::centred(room, (spec.size.width.ceil(), spec.size.height.ceil()));
+            // a drag made before this panel showed is not this panel's
+            self.panel_drag.take();
+            let created = self.layer(
                 conn,
                 &LayerSurfaceConfig {
                     namespace: PANEL_NAMESPACE.to_owned(),
-                    output,
+                    output: output.map(|o| o.id),
                     layer: Layer::Overlay,
-                    // no anchor: the server centres the surface on the output
-                    anchor: Anchor::empty(),
+                    // anchored to the top-left corner, so its margins place it and a drag moves it
+                    anchor: Anchor::Top | Anchor::Left,
                     size: (spec.size.width as u32, spec.size.height as u32),
-                    margin: Margin::default(),
+                    margin: panel_margin(&placement),
                     exclusive_zone: -1,
+                    // it takes the keyboard when it shows, and lets it go when the person turns to a window
                     keyboard: KeyboardInteractivity::Exclusive,
                 },
-            ));
+            );
+            if let Ok(surface) = created {
+                self.panels.insert(
+                    surface,
+                    PanelSurface {
+                        placement,
+                        let_go: false,
+                    },
+                );
+            }
+            return Some(created);
         }
         None
     }
@@ -335,11 +398,20 @@ impl SurfaceRoles for LoginRoles {
     }
 
     fn destroyed(&mut self, surface: SurfaceId) {
+        self.panels.remove(&surface);
         if self.control_surface == Some(surface) {
             self.control_surface = None;
             self.control_phase = None;
         }
         self.surfaces.remove(&surface);
+    }
+
+    /// A session panel that lost the keyboard to another surface lets it go: from then on it takes the keyboard only
+    /// when it is clicked, so the window the person turned to keeps it.
+    fn keyboard_focus(&mut self, surface: SurfaceId, focused: bool) {
+        if let Some(panel) = self.panels.get_mut(&surface) {
+            panel.let_go |= !focused;
+        }
     }
 
     fn outputs_changed(&mut self, conn: &Connection) {
@@ -349,6 +421,7 @@ impl SurfaceRoles for LoginRoles {
     /// Follow the application's wish: lock before its first lock surface (also with no output at all), and unlock once
     /// it no longer wants the lock and its lock surfaces are destroyed. Pass Caps Lock on when it changes.
     fn prepare(&mut self, conn: &mut Connection) {
+        self.place_panels(conn);
         let phase = self.control_wish.borrow().phase;
         let pending = phase == 1;
         if self.control_phase != Some(phase) {
@@ -407,5 +480,15 @@ impl SurfaceRoles for LoginRoles {
                 self.wish.borrow_mut().generation = None;
             }
         }
+    }
+}
+
+/// The margins of a panel's surface, anchored to the output's top and left edges, for where it stands.
+fn panel_margin(placement: &Placement) -> Margin {
+    let (left, top) = placement.origin();
+    Margin {
+        top,
+        left,
+        ..Margin::default()
     }
 }

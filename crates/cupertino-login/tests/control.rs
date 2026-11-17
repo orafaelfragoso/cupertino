@@ -74,7 +74,7 @@ fn lock_reaches_the_callback_and_a_second_lock_screen_cannot_take_the_name() {
 }
 
 #[test]
-fn the_panel_methods_reach_the_callback_until_the_session_is_locked() {
+fn the_panel_methods_and_log_out_now_reach_the_callback_until_the_session_is_locked() {
     let Some(bus) = PrivateBus::start() else {
         eprintln!("skipping: dbus-daemon is not available");
         return;
@@ -104,9 +104,20 @@ fn the_panel_methods_reach_the_callback_until_the_session_is_locked() {
             "{method}"
         );
     }
+    // the log out that skips the panel
+    call("LogOutNow").expect("LogOutNow");
+    assert_eq!(
+        requests_rx.recv_timeout(Duration::from_secs(5)),
+        Ok(Request::LogOutNow)
+    );
 
     login.set_locked(true).unwrap();
     let refused = call("RequestShutDown").expect_err("a locked session shows no panel");
+    assert!(
+        refused.to_string().contains("the session is locked"),
+        "{refused}"
+    );
+    let refused = call("LogOutNow").expect_err("a locked session does not log out unseen");
     assert!(
         refused.to_string().contains("the session is locked"),
         "{refused}"
@@ -408,6 +419,7 @@ fn a_host_process_that_the_server_did_not_start_is_refused_every_method() {
         ("Lock", vec![]),
         ("LockNow", vec![]),
         ("RequestLogOut", vec![]),
+        ("LogOutNow", vec![]),
         ("RequestRestart", vec![]),
         ("RequestShutDown", vec![]),
         ("RequestPowerDialog", vec![]),

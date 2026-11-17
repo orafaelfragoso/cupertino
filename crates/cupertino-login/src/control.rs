@@ -1,5 +1,6 @@
 //! `org.cupertino.Login1`: the control interface of the `cupertino-login` process, which is the session agent. The server
-//! calls `Lock` for the lock shortcut and `PowerKey` for the press and the release of the power key, and the `Request*`
+//! calls `Lock` for the lock shortcut, `LogOutNow` for the log out shortcut that skips the panel and `PowerKey` for the
+//! press and the release of the power key, and the `Request*`
 //! methods, which show the confirmation panel of [`crate::panel`]; any client may read `Locked`, `UserName` and
 //! `Capabilities` (what the session menu of the menu bar offers).
 //!
@@ -48,6 +49,8 @@ pub enum Request {
     Lock { explicit: bool },
     /// `RequestLogOut`, `RequestRestart` or `RequestShutDown`.
     Panel(Kind),
+    /// `LogOutNow`: log out without the panel; the applications still quit first.
+    LogOutNow,
     /// `PowerKey`: the key went down (`true`) or up (`false`).
     PowerKey { pressed: bool },
     /// `SwitchToLoginWindow`.
@@ -122,6 +125,28 @@ impl Control {
         )
         .await?;
         self.panel(Kind::LogOut)
+    }
+
+    /// Log out without asking: the applications quit first, as after a confirmed panel, with the "Reopen windows" choice
+    /// last stored. Fails while the session is locked.
+    async fn log_out_now(
+        &self,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &zbus::Connection,
+    ) -> Result<(), CallerError> {
+        check_call(
+            connection,
+            &header,
+            "org.cupertino.Login1",
+            "LogOutNow",
+            SERVER,
+        )
+        .await?;
+        if self.locked {
+            return Err(zbus::fdo::Error::Failed("the session is locked".into()).into());
+        }
+        (self.on_request)(Request::LogOutNow);
+        Ok(())
     }
 
     /// Ask whether to restart the computer, with a countdown. Fails while the session is locked.

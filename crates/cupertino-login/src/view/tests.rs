@@ -44,8 +44,12 @@ const SPACE: u32 = 0x20;
 enum Surface {
     Lock,
     Picker,
-    Panel { kind: Kind, reopen: bool },
-    Interrupt,
+    Panel {
+        kind: Kind,
+        reopen: bool,
+    },
+    /// The interrupt panel for an application that is still there for this reason.
+    Interrupt(Reason),
     DesktopControl(Asking),
 }
 
@@ -122,6 +126,8 @@ struct Model {
     outcome: AuthOutcome,
     panel: Panel,
     frames: Frames,
+    /// The interrupt panel's question.
+    stage: Stage,
     picker: Picker,
     clock: Clock,
     user: User,
@@ -178,6 +184,7 @@ impl Application for Shown {
             outcome: AuthOutcome::Denied,
             panel: Panel::new(kind, 0.0, reopen),
             frames: panel_frames(kind, &text),
+            stage: Stage::Ask,
             picker: Picker::new(vec![user("ada", "Ada"), user("grace", "Grace")], true).unwrap(),
             clock: Clock {
                 date: "Monday, June 1".into(),
@@ -229,6 +236,8 @@ impl Application for Shown {
                 }
             }
             Input::Decide(decision) => model.decided.push(decision),
+            Input::Interrupt(Choice::ForceQuit) => model.stage = Stage::ConfirmForceQuit,
+            Input::Interrupt(Choice::Back) => model.stage = Stage::Ask,
             _ => {}
         }
         Vec::new()
@@ -312,7 +321,17 @@ impl Application for Shown {
                 &model.frames,
                 |input| input,
             )],
-            Surface::Interrupt => vec![interrupt(key, "Notes", |input| input)],
+            Surface::Interrupt(reason) => vec![interrupt(
+                key,
+                InterruptView {
+                    app: "Notes",
+                    reason,
+                    stage: model.stage,
+                    action: Action::LogOut,
+                    text: &text_system(),
+                },
+                |input| input,
+            )],
             Surface::DesktopControl(asking) => {
                 vec![desktop_control(key, &control_request(asking), |input| {
                     input
@@ -914,21 +933,37 @@ fn the_reopen_checkbox_starts_at_the_saved_choice_and_a_click_space_or_action_fl
 }
 
 #[test]
-fn the_default_button_has_the_focus_return_confirms_and_escape_cancels() {
+fn the_checkbox_has_the_focus_return_confirms_and_escape_cancels() {
+    for kind in [
+        Kind::LogOut,
+        Kind::Restart,
+        Kind::ShutDown,
+        Kind::PowerButton,
+    ] {
+        let run = Run::new(Surface::Panel { kind, reopen: true });
+        let focused = run.focused().expect("a focused control");
+        assert_eq!(
+            (focused.role, focused.name.as_deref()),
+            (Role::CheckBox, Some(REOPEN_LABEL)),
+            "{kind:?}"
+        );
+    }
     let mut run = Run::new(Surface::Panel {
         kind: Kind::ShutDown,
         reopen: true,
     });
-    let focused = run.focused().expect("a focused button");
-    assert_eq!(
-        (focused.role, focused.name.as_deref()),
-        (Role::Button, Some("Shut Down"))
-    );
     let dialog = run
         .node(|n| n.role == Role::AlertDialog)
         .expect("an alert dialog")
         .1;
-    assert!(dialog.states.modal);
+    assert!(
+        !dialog.states.modal,
+        "the panel is no modal dialog: the session stays usable while it counts down"
+    );
+    // Space flips the focused checkbox and decides nothing; Return still presses the default button
+    run.key(SPACE, Some(' '));
+    assert!(!run.model().panel.reopen());
+    assert!(run.model().decided.is_empty());
     run.key(ESCAPE, None);
     run.key(RETURN, None);
     run.click("Cancel");
@@ -971,31 +1006,82 @@ fn tab_moves_the_focus_through_the_checkbox_and_the_buttons() {
 }
 
 #[test]
-fn the_power_button_panel_has_no_checkbox_and_its_letters_choose() {
+fn the_power_button_panel_stacks_its_buttons_shows_the_checkbox_and_its_letters_choose() {
     let mut run = Run::new(Surface::Panel {
         kind: Kind::PowerButton,
         reopen: true,
     });
-    assert!(run.node(is_reopen).is_none());
+    assert!(
+        run.node(is_reopen).is_some(),
+        "the checkbox shows there too"
+    );
+    let labels = ["Shut Down", "Restart", "Sleep", CANCEL_LABEL];
+    let frames: Vec<Rect> = labels.iter().map(|l| keyed(&run, l)).collect();
+    for pair in frames.windows(2) {
+        assert_eq!(
+            pair[1].min_y() - pair[0].max_y(),
+            6.0,
+            "stacked 6 points apart, top to bottom as {labels:?}"
+        );
+    }
+    assert!(
+        !run.tree()
+            .iter()
+            .any(|(_, n)| n.name.as_deref().is_some_and(|s| s.contains("seconds"))),
+        "no countdown"
+    );
     run.key('s' as u32, Some('s'));
     run.key('r' as u32, Some('r'));
-    // Shut Down has no countdown here, so Cancel has the focus: Space flips no choice and cancels, Return still shuts down
-    let focused = run.focused().expect("a focused button");
-    assert_eq!(
-        (focused.role, focused.name.as_deref()),
-        (Role::Button, Some(CANCEL_LABEL))
-    );
     run.key(SPACE, Some(' '));
-    assert!(run.model().panel.reopen());
+    assert!(
+        !run.model().panel.reopen(),
+        "Space flips the focused checkbox"
+    );
     run.key(RETURN, None);
     assert_eq!(
         run.model().decided,
         [
             Decision::Do(Action::Sleep),
             Decision::Do(Action::Restart),
-            Decision::Cancel,
             Decision::Do(Action::ShutDown)
         ]
+    );
+}
+
+#[test]
+fn a_drag_on_the_background_moves_the_panel_and_a_press_on_a_control_does_not() {
+    let mut run = Run::new(Surface::Panel {
+        kind: Kind::LogOut,
+        reopen: true,
+    });
+    // between the icon and the right edge, above the title: no control there
+    run.drag(Point::new(200.0, 40.0), Point::new(230.0, 20.0));
+    let moves: Vec<&String> = run
+        .model()
+        .handled
+        .iter()
+        .filter(|m| m.starts_with("MovePanel"))
+        .collect();
+    assert!(!moves.is_empty(), "{:?}", run.model().handled);
+    assert!(
+        moves
+            .iter()
+            .any(|m| m.contains("30.0") && m.contains("-20.0")),
+        "the whole way from the press: {moves:?}"
+    );
+    assert!(run.model().decided.is_empty());
+    let before = run.model().handled.len();
+    let cancel = keyed(&run, "Cancel");
+    run.drag(
+        cancel.center(),
+        Point::new(cancel.center().x + 40.0, cancel.center().y),
+    );
+    assert!(
+        !run.model().handled[before..]
+            .iter()
+            .any(|m| m.starts_with("MovePanel")),
+        "a press on a button is the button's: {:?}",
+        &run.model().handled[before..]
     );
 }
 
@@ -1092,22 +1178,119 @@ fn the_consent_panel_shows_untrusted_names_plainly_and_bounded() {
 }
 
 #[test]
-fn the_interrupt_panel_focuses_cancel_and_return_does_not_force_quit() {
-    let mut run = Run::new(Surface::Interrupt);
+fn the_interrupt_panel_says_why_and_offers_try_again_cancel_and_force_quit_by_the_reason() {
+    let buttons = |run: &Run| -> Vec<String> {
+        let mut shown: Vec<(f64, String)> = run
+            .tree()
+            .into_iter()
+            .filter(|(_, n)| n.role == Role::Button)
+            .filter_map(|(_, n)| Some((n.bounds.min_x(), n.name?)))
+            .collect();
+        shown.sort_by(|a, b| a.0.total_cmp(&b.0));
+        shown.into_iter().map(|(_, name)| name).collect()
+    };
+    let cancelled = Run::new(Surface::Interrupt(Reason::Cancelled));
+    assert_eq!(buttons(&cancelled), ["Cancel", "Try Again"]);
+    let mut titles = Vec::new();
+    for reason in [
+        Reason::Cancelled,
+        Reason::FailedToQuit,
+        Reason::NotResponding,
+    ] {
+        let run = Run::new(Surface::Interrupt(reason));
+        if reason != Reason::Cancelled {
+            assert_eq!(
+                buttons(&run),
+                ["Force Quit", "Cancel", "Try Again"],
+                "{reason:?}"
+            );
+        }
+        // the words, however many lines they wrap to, end above the buttons
+        let top = run
+            .tree()
+            .into_iter()
+            .filter(|(_, n)| n.role == Role::Button)
+            .map(|(_, n)| n.bounds.min_y())
+            .fold(f64::INFINITY, f64::min);
+        let snapshot = run.driver.runtime().snapshot(run.window).unwrap();
+        let lowest = snapshot
+            .display_list
+            .nodes
+            .iter()
+            .flat_map(|n| n.ops.iter().map(move |op| (n, op)))
+            .filter_map(|(n, op)| match op {
+                PaintOp::Glyphs { origin, .. } => Some(origin.y + n.transform.0[5]),
+                _ => None,
+            })
+            .filter(|&y| y <= top)
+            .fold(0.0, f64::max);
+        assert!(
+            lowest > 50.0 && lowest + 6.0 <= top,
+            "{reason:?}: the last line's baseline {lowest} runs into the buttons at {top}"
+        );
+        let dialog = run.node(|n| n.role == Role::AlertDialog).unwrap().1;
+        assert!(!dialog.states.modal, "{reason:?}: no modal dialog");
+        titles.push(dialog.name.clone().unwrap());
+    }
+    titles.dedup();
+    assert_eq!(titles.len(), 3, "each reason has its own words: {titles:?}");
+}
+
+#[test]
+fn try_again_is_the_default_and_force_quit_asks_before_it_kills() {
+    let mut run = Run::new(Surface::Interrupt(Reason::NotResponding));
     let focused = run.focused().expect("a focused button");
-    assert_eq!(focused.name.as_deref(), Some("Cancel"));
+    assert_eq!(focused.name.as_deref(), Some("Try Again"));
+    run.key(RETURN, None);
+    assert_eq!(
+        run.model().handled.last().map(String::as_str),
+        Some("Interrupt(TryAgain)")
+    );
+    run.click("Ask-Force Quit");
+    assert_eq!(
+        run.model().stage,
+        Stage::ConfirmForceQuit,
+        "a second question first"
+    );
+    assert!(
+        !run.model()
+            .handled
+            .iter()
+            .any(|m| m == "Interrupt(ConfirmForceQuit)"),
+        "nothing is killed yet"
+    );
+    let focused = run.focused().expect("a focused button");
+    assert_eq!(
+        focused.name.as_deref(),
+        Some("Cancel"),
+        "the safe answer has the focus"
+    );
     run.key(RETURN, None);
     assert!(
-        !run.model().handled.iter().any(|m| m.contains("ForceQuit")),
-        "{:?}",
-        run.model().handled
+        !run.model()
+            .handled
+            .iter()
+            .any(|m| m == "Interrupt(ConfirmForceQuit)"),
+        "Return kills nothing on the second question"
     );
     run.key(ESCAPE, None);
-    assert!(run
-        .model()
-        .handled
-        .iter()
-        .any(|m| m.contains("Interrupt(Cancel)")));
+    assert_eq!(
+        run.model().stage,
+        Stage::Ask,
+        "Escape goes back to the first question"
+    );
+    run.click("Ask-Force Quit");
+    run.click("ConfirmForceQuit-Force Quit");
+    assert_eq!(
+        run.model().handled.last().map(String::as_str),
+        Some("Interrupt(ConfirmForceQuit)")
+    );
+    let mut run = Run::new(Surface::Interrupt(Reason::Cancelled));
+    run.key(ESCAPE, None);
+    assert_eq!(
+        run.model().handled.last().map(String::as_str),
+        Some("Interrupt(Cancel)")
+    );
 }
 
 #[test]
@@ -1170,7 +1353,16 @@ fn pictures_for_review() {
         }),
         "panel-log-out-unchecked",
     );
-    look(&mut Run::new(Surface::Interrupt), "interrupt");
+    for (reason, name) in [
+        (Reason::Cancelled, "interrupt-cancelled"),
+        (Reason::FailedToQuit, "interrupt-failed"),
+        (Reason::NotResponding, "interrupt-not-responding"),
+    ] {
+        look(&mut Run::new(Surface::Interrupt(reason)), name);
+    }
+    let mut confirm = Run::new(Surface::Interrupt(Reason::NotResponding));
+    confirm.click("Ask-Force Quit");
+    look(&mut confirm, "interrupt-force-quit");
     for (asking, name) in [
         (Asking::Terminal, "control-consent"),
         (Asking::Program, "control-consent-program"),
@@ -1425,7 +1617,8 @@ fn keyed(run: &Run, key: &'static str) -> Rect {
 }
 
 #[test]
-fn the_confirmation_alert_has_no_icon_and_its_capsules_stand_8_points_apart() {
+fn the_confirmation_alert_fits_its_checkbox_row_shows_its_icon_and_its_capsules_stand_8_points_apart(
+) {
     for (kind, confirm) in [
         (Kind::LogOut, "Log Out"),
         (Kind::Restart, "Restart"),
@@ -1433,15 +1626,31 @@ fn the_confirmation_alert_has_no_icon_and_its_capsules_stand_8_points_apart() {
     ] {
         let run = Run::new(Surface::Panel { kind, reopen: true });
         let frames = &run.model().frames;
-        assert_eq!(frames.width, 260.0, "{kind:?}: an alert's width");
+        // the alert is as wide as its checkbox row on one line needs, and never narrower than 260 points
+        let reopen = keyed(&run, "reopen");
+        assert!(frames.width >= 260.0, "{kind:?}: {}", frames.width);
+        assert_eq!(
+            frames.width,
+            crate::panel::width_for(line_width(
+                &text_system(),
+                REOPEN_LABEL,
+                panel_style(FontWeight::REGULAR, false)
+            )),
+            "{kind:?}: the label, its box and the text column's insets"
+        );
+        assert_eq!(
+            reopen.height(),
+            16.0,
+            "{kind:?}: the checkbox row is one line: {reopen:?}"
+        );
         let snapshot = run.driver.runtime().snapshot(run.window).unwrap();
-        // no disc, no image: nothing round is painted but the capsules and the box
+        // the picture: a 64 point disc at the text column's leading edge, 20 points from the top
         let discs: Vec<Rect> = snapshot
             .display_list
             .nodes
             .iter()
-            .flat_map(|n| n.ops.iter())
-            .filter_map(|op| match op {
+            .flat_map(|n| n.ops.iter().map(move |op| (n, op)))
+            .filter_map(|(n, op)| match op {
                 PaintOp::Fill {
                     shape: Shape::RoundedRect { rect, radius },
                     ..
@@ -1449,27 +1658,37 @@ fn the_confirmation_alert_has_no_icon_and_its_capsules_stand_8_points_apart() {
                     && rect.width() == rect.height()
                     && *radius >= rect.width() / 2.0 =>
                 {
-                    Some(*rect)
+                    // the node is placed by a translation
+                    Some(Rect::new(
+                        n.transform.0[4] + rect.x(),
+                        n.transform.0[5] + rect.y(),
+                        rect.width(),
+                        rect.height(),
+                    ))
                 }
                 _ => None,
             })
             .collect();
-        assert!(
-            discs.is_empty(),
-            "{kind:?}: an icon disc is drawn: {discs:?}"
-        );
-        assert!(
-            !snapshot
-                .accessibility
-                .iter()
-                .any(|(_, n)| n.role == Role::Image),
-            "{kind:?}: an image is shown"
+        assert_eq!(
+            discs,
+            [Rect::new(22.0, 20.0, 64.0, 64.0)],
+            "{kind:?}: one icon disc"
         );
         let (cancel, action) = (keyed(&run, "Cancel"), keyed(&run, confirm));
         assert_eq!(
-            (cancel.height(), action.height()),
-            (28.0, 28.0),
-            "{kind:?}: capsule buttons 28 points high"
+            (
+                cancel.width(),
+                cancel.height(),
+                action.width(),
+                action.height()
+            ),
+            (
+                (frames.width - 32.0 - 8.0) / 2.0,
+                28.0,
+                (frames.width - 32.0 - 8.0) / 2.0,
+                28.0
+            ),
+            "{kind:?}: two capsules 28 points high share the row"
         );
         assert_eq!(cancel.min_y(), action.min_y(), "{kind:?}: side by side");
         assert_eq!(
@@ -1482,16 +1701,37 @@ fn the_confirmation_alert_has_no_icon_and_its_capsules_stand_8_points_apart() {
             (16.0, 16.0),
             "{kind:?}: inside the alert's padding"
         );
-        // the checkbox's label wraps in the text column instead of running past the alert
-        let reopen = run.node(is_reopen).unwrap().1.bounds;
         assert!(
             reopen.min_x() >= 22.0 && reopen.max_x() <= frames.width - 22.0,
             "{kind:?}: the checkbox leaves the text column: {reopen:?}"
         );
-        assert!(
-            reopen.max_y() <= cancel.min_y() - 16.0,
-            "{kind:?}: the checkbox runs into the buttons: {reopen:?}"
+        assert_eq!(
+            cancel.min_y() - reopen.max_y(),
+            16.0,
+            "{kind:?}: 16 points between the checkbox row and the buttons: {reopen:?}"
         );
+        // its label on one line: every run of glyphs between the checkbox row's top and the buttons stands on one baseline
+        let baselines: std::collections::BTreeSet<i64> = snapshot
+            .display_list
+            .nodes
+            .iter()
+            .flat_map(|n| n.ops.iter().map(move |op| (n, op)))
+            .filter_map(|(n, op)| match op {
+                PaintOp::Glyphs { origin, .. } => Some(Point::new(
+                    origin.x + n.transform.0[4],
+                    origin.y + n.transform.0[5],
+                )),
+                _ => None,
+            })
+            .filter(|at| at.y > reopen.min_y() && at.y < cancel.min_y())
+            .map(|at| (at.y * 4.0).round() as i64)
+            .collect();
+        assert_eq!(
+            baselines.len(),
+            1,
+            "{kind:?}: the checkbox's label wraps: {baselines:?}"
+        );
+        assert_eq!(frames.height - cancel.max_y(), 16.0, "{kind:?}");
     }
 }
 
@@ -1580,7 +1820,7 @@ fn each_session_panel_on_glass_outlines_itself_with_increase_contrast_alone() {
         panel(Kind::Restart),
         panel(Kind::ShutDown),
         panel(Kind::PowerButton),
-        Surface::Interrupt,
+        Surface::Interrupt(Reason::NotResponding),
     ] {
         let glassy = Capabilities {
             app_effects: true,
@@ -1664,7 +1904,7 @@ fn each_session_panel_is_an_alert_on_regular_glass_and_paints_its_body_only_with
         panel(Kind::Restart),
         panel(Kind::ShutDown),
         panel(Kind::PowerButton),
-        Surface::Interrupt,
+        Surface::Interrupt(Reason::NotResponding),
     ] {
         let glassy = Capabilities {
             app_effects: true,
@@ -1718,6 +1958,24 @@ fn each_session_panel_is_an_alert_on_regular_glass_and_paints_its_body_only_with
             );
             assert_eq!(window.map(|c| c.a), Some(1.0));
         }
+    }
+}
+
+impl Run {
+    /// A press of the left button at `from`, a move with it held to `to`, and its release there.
+    fn drag(&mut self, from: Point, to: Point) {
+        let pointer = |event| WindowEvent::Pointer(event, Timestamp(0));
+        let button = |position, pressed| PointerEvent::Button {
+            position,
+            button: MouseButton::Left,
+            pressed,
+            serial: 1,
+            mods: Mods::NONE,
+        };
+        self.deliver(pointer(PointerEvent::Motion { position: from }));
+        self.deliver(pointer(button(from, true)));
+        self.deliver(pointer(PointerEvent::Motion { position: to }));
+        self.deliver(pointer(button(to, false)));
     }
 }
 

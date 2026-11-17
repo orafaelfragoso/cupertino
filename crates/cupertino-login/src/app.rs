@@ -20,7 +20,7 @@ use cupertino_login::autostart;
 use cupertino_login::capabilities::{Answer, Capabilities, Inputs};
 use cupertino_login::control::{self, Request};
 use cupertino_login::hint::FailedAttempts;
-use cupertino_login::interrupt::Choice;
+use cupertino_login::interrupt::{Choice, Reason, Stage};
 use cupertino_login::lock_notices::{self, Notice};
 use cupertino_login::login_manager::{LoginManager, Power};
 use cupertino_login::logind::{Inhibitor, Logind, Signal};
@@ -62,6 +62,8 @@ pub enum Bus {
     Lock { explicit: bool },
     /// `RequestLogOut`, `RequestRestart` or `RequestShutDown` on the control interface.
     Panel(Kind),
+    /// `LogOutNow` on the control interface: log out without the panel.
+    LogOutNow,
     /// `PowerKey` on the control interface: the power key went down (`true`) or up.
     PowerKey(bool),
     /// `SwitchToLoginWindow` on the control interface: lock, then hand the console to the login screen.
@@ -143,12 +145,19 @@ struct Quitting {
     sequence: LogOut,
     /// What follows once no application is left.
     then: Action,
-    /// The application the interrupt panel asks about.
-    interrupt: Option<String>,
+    /// The interrupt panel on screen.
+    interrupt: Option<Interrupted>,
     /// The "Reopen windows" choice the panel was confirmed with.
     reopen: bool,
     /// The identities the server named as it asked each application to quit, in that order.
     quit: Vec<String>,
+}
+
+/// The interrupt panel on screen: the application it asks about, why it is still there, and which question it asks.
+struct Interrupted {
+    app: String,
+    reason: Reason,
+    stage: Stage,
 }
 
 pub struct SessionApp {
@@ -201,6 +210,8 @@ pub struct SessionApp {
     /// The app the next consent request of this epoch names (authority version 2).
     control_app: Option<(u64, cupertino_shell_client::ConsentApp)>,
     control_wish: Rc<RefCell<roles::ControlWish>>,
+    /// How far the person dragged the session panel since the roles last moved it.
+    panel_drag: roles::PanelDrag,
     /// A confirmed log-out is running: the power button panel does not show over it.
     logging_out: bool,
     /// The applications are being quit before a confirmed action.
@@ -269,6 +280,7 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
         request(match request_made {
             Request::Lock { explicit } => Bus::Lock { explicit },
             Request::Panel(kind) => Bus::Panel(kind),
+            Request::LogOutNow => Bus::LogOutNow,
             Request::PowerKey { pressed } => Bus::PowerKey(pressed),
             Request::SwitchToLoginWindow => Bus::SwitchToLoginWindow,
             Request::Sleep => Bus::Sleep,
@@ -388,6 +400,7 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
     }
     let wish = Rc::new(RefCell::new(LockWish::default()));
     let control_wish = Rc::new(RefCell::new(roles::ControlWish::default()));
+    let panel_drag = roles::PanelDrag::default();
     let mut roles = LoginRoles::new(
         layer_shell,
         lock_manager,
@@ -395,7 +408,8 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
         Rc::clone(&wish),
         heard,
     )
-    .with_control(authority, Rc::clone(&control_wish));
+    .with_control(authority, Rc::clone(&control_wish))
+    .with_panel_drag(Rc::clone(&panel_drag));
     // what the server said before the roles listened: a lock request that came with the connection
     for event in early {
         if let Event::Extension(event) = event {
@@ -442,6 +456,7 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
             desktop_control: None,
             control_app: None,
             control_wish,
+            panel_drag,
             logging_out: false,
             quitting: None,
             restore_path,
@@ -752,12 +767,20 @@ impl Application for SessionApp {
                 Message::Input,
             ));
         }
-        if let Some(name) = app.quitting.as_ref().and_then(|q| q.interrupt.as_deref()) {
-            windows.push(view::interrupt(
-                WindowKey(Key::from("interrupt")),
-                name,
-                Message::Input,
-            ));
+        if let Some(quitting) = &app.quitting {
+            if let Some(shown) = &quitting.interrupt {
+                windows.push(view::interrupt(
+                    WindowKey(Key::from("interrupt")),
+                    view::InterruptView {
+                        app: &shown.app,
+                        reason: shown.reason,
+                        stage: shown.stage,
+                        action: quitting.then,
+                        text: &app.text,
+                    },
+                    Message::Input,
+                ));
+            }
         }
         windows
     }
@@ -819,6 +842,7 @@ impl SessionApp {
         match bus {
             Bus::Lock { explicit } => self.request_lock(now, explicit)?,
             Bus::Panel(kind) => self.show_panel(now, kind)?,
+            Bus::LogOutNow => self.log_out_now(now)?,
             Bus::PowerKey(pressed) => self.power_key(now, pressed)?,
             Bus::SwitchToLoginWindow => {
                 self.switch_pending = true;
@@ -980,6 +1004,11 @@ impl SessionApp {
                 return Ok(());
             }
             Input::Interrupt(choice) if self.interrupt_shown() => return self.choose(now, choice),
+            Input::MovePanel(by) => {
+                let (x, y) = self.panel_drag.get();
+                self.panel_drag.set((x + by.x, y + by.y));
+                return Ok(());
+            }
             _ => {}
         }
         let Some(lock) = &mut self.lock else {
@@ -1229,6 +1258,29 @@ impl SessionApp {
         Ok(())
     }
 
+    /// Log out without asking (the log out now shortcut): the applications quit first as after a confirmed log out, with
+    /// the "Reopen windows" choice last stored. An open panel closes as if cancelled. Ignored on a locked session, which
+    /// has nobody to see it, and while a log out, restart or shut down is already under way.
+    fn log_out_now(&mut self, now: f64) -> Result<()> {
+        if self.lock.is_some() {
+            eprintln!("cupertino-login: log out now ignored: the session is locked");
+            return Ok(());
+        }
+        if self.logging_out {
+            eprintln!("cupertino-login: log out now ignored: the session is already ending");
+            return Ok(());
+        }
+        if self.panel.is_some() {
+            self.decide(Decision::Cancel)?;
+        }
+        let reopen = self
+            .restore_path
+            .as_deref()
+            .map_or(restore::REOPEN_DEFAULT, restore::choice);
+        eprintln!("cupertino-login: log out without the panel");
+        self.carry_out(now, Action::LogOut, reopen)
+    }
+
     /// Close the panel with `decision`; an action is carried out through logind. Confirming a log out, restart or shut
     /// down remembers the panel's "Reopen windows" choice; cancelling forgets a change to it.
     fn decide(&mut self, decision: Decision) -> Result<()> {
@@ -1240,7 +1292,7 @@ impl SessionApp {
             Decision::Cancel => eprintln!("cupertino-login: panel cancelled"),
             Decision::Do(action) => {
                 eprintln!("cupertino-login: panel confirmed: {}", action.log_name());
-                if action != Action::Sleep && panel.kind().has_checkbox() {
+                if action != Action::Sleep {
                     self.remember_choice(panel.reopen());
                 }
                 self.carry_out(self.now(), action, panel.reopen())?;
@@ -1410,32 +1462,67 @@ impl SessionApp {
             .is_some_and(|q| q.interrupt.is_some())
     }
 
-    /// Show the interrupt panel for `app` on the first output. On a locked session there is nobody to answer it: the
-    /// sequence is cancelled.
+    /// Show the interrupt panel for `app` on the first output, with why the server says it is still there. On a locked
+    /// session there is nobody to answer it: the sequence is cancelled.
     fn show_interrupt(&mut self, now: f64, app: String) -> Result<()> {
-        eprintln!("cupertino-login: application did not quit: {app}");
         if self.lock.is_some() {
+            eprintln!("cupertino-login: application did not quit: {app}");
             return self.choose(now, Choice::Cancel);
         }
+        let reason = match session::quit_status(&self.session_bus, &app) {
+            Ok(status) => Reason::of_status(&status),
+            Err(e) => {
+                eprintln!("cupertino-login: the quit status of {app} is unknown: {e}");
+                Reason::FailedToQuit
+            }
+        };
+        eprintln!("cupertino-login: application did not quit: {app} ({reason:?})");
         if self.outputs.is_empty() {
             return Err("the server has no output".into());
         }
         self.quitting
             .as_mut()
             .expect("the interrupt panel belongs to a quit sequence")
-            .interrupt = Some(app);
+            .interrupt = Some(Interrupted {
+            app,
+            reason,
+            stage: Stage::Ask,
+        });
         Ok(())
     }
 
-    /// The answer on the interrupt panel: Cancel ends the sequence and the session goes on; Force Quit kills the
-    /// application, which then has another full timeout to go away.
+    /// The answer on the interrupt panel: Try Again asks the applications to quit again, Cancel ends the sequence and
+    /// the session goes on, Force Quit asks whether to force the application, and the answer to that either goes back
+    /// to the first question or kills the application, which then has another full timeout to go away.
     fn choose(&mut self, now: f64, choice: Choice) -> Result<()> {
         let quitting = self
             .quitting
             .as_mut()
             .expect("a choice is only made while the applications are quit");
+        match choice {
+            Choice::ForceQuit | Choice::Back => {
+                if let Some(shown) = &mut quitting.interrupt {
+                    shown.stage = if choice == Choice::ForceQuit && shown.reason.offers_force_quit()
+                    {
+                        Stage::ConfirmForceQuit
+                    } else {
+                        Stage::Ask
+                    };
+                }
+                return Ok(());
+            }
+            Choice::TryAgain | Choice::Cancel | Choice::ConfirmForceQuit => {}
+        }
         quitting.interrupt = None;
         match choice {
+            Choice::TryAgain => {
+                eprintln!(
+                    "cupertino-login: trying the {} again",
+                    quitting.then.log_name()
+                );
+                let step = quitting.sequence.try_again();
+                return self.follow(now, step);
+            }
             Choice::Cancel => {
                 let quitting = self.quitting.take().expect("checked above");
                 self.logging_out = false;
@@ -1444,7 +1531,7 @@ impl SessionApp {
                     quitting.then.log_name()
                 );
             }
-            Choice::ForceQuit => {
+            Choice::ConfirmForceQuit => {
                 let app = quitting
                     .sequence
                     .force_quit(now)
@@ -1457,6 +1544,7 @@ impl SessionApp {
                     Err(e) => eprintln!("cupertino-login: force quit of {app} failed: {e}"),
                 }
             }
+            Choice::ForceQuit | Choice::Back => unreachable!("answered above"),
         }
         Ok(())
     }

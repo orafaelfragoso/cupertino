@@ -85,7 +85,7 @@ impl LayerChange {
 
 /// The most values a change through samples carries ([`LayerChange::through`]): as many as one request to the window
 /// system carries.
-pub const MAX_LAYER_SAMPLES: usize = 1000;
+pub const MAX_LAYER_SAMPLES: usize = cupertino_app_protocols::layers::MAX_SAMPLES;
 
 /// How a surface layer looks besides its frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]

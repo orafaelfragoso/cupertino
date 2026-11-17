@@ -13,6 +13,12 @@ use cupertino_app_protocols::client::layers::cupertino_layer_v1::{
     self, CupertinoLayerV1, Property as WireProperty,
 };
 use cupertino_app_protocols::client::layers::cupertino_layers_v1::CupertinoLayersV1;
+use cupertino_app_protocols::layers::{
+    LENS, MAX_DURATION_MS, MIN_SAMPLES, SPRING_DAMPING, SPRING_RESPONSE,
+};
+pub use cupertino_app_protocols::layers::{
+    MAX_CONTENT_BLUR, MAX_GLASS_EDGE, MAX_GROUP_SPACING, MAX_SAMPLES,
+};
 use std::sync::atomic::{AtomicU64, Ordering};
 use wayland_client::{Connection as WlConnection, Dispatch, Proxy, QueueHandle};
 
@@ -26,18 +32,6 @@ const CONTENT_BLUR_VERSION: u32 = 4;
 const GLASS_EDGE_VERSION: u32 = 5;
 /// The version that softens the edge along a layer's glass by its content blur ([`Layers::softens_glass_edges`]).
 const SOFT_EDGE_VERSION: u32 = 6;
-/// Widest edge along a layer's glass the server takes, in points.
-pub const MAX_GLASS_EDGE: f64 = 4.0;
-/// Widest blend between the joined shapes of a glass group the server takes, in points.
-pub const MAX_GROUP_SPACING: f64 = 64.0;
-/// Widest blur of a layer's content the server takes: the standard deviation of its Gaussian, in points.
-pub const MAX_CONTENT_BLUR: f64 = 64.0;
-/// Longest timed or sampled animation the server takes, in milliseconds.
-const MAX_DURATION_MS: f64 = 10_000.0;
-/// Shortest and longest spring response the server takes, in seconds.
-const SPRING_RESPONSE: (f64, f64) = (0.01, 10.0);
-/// Lowest and highest spring damping ratio the server takes.
-const SPRING_DAMPING: (f64, f64) = (0.05, 4.0);
 
 /// Names a [`Layer`] of this process in [`AppEvent::LayerFinished`], [`AppEvent::LayerReplaced`] and
 /// [`AppEvent::LayerSettled`].
@@ -61,6 +55,13 @@ impl Fixed {
     pub fn to_f64(self) -> f64 {
         f64::from(self.0) / 256.0
     }
+}
+
+/// `v` as the server reads a `fixed` argument: the bindings truncate it towards zero to 256ths of a unit. A range whose
+/// lower end is above 0 and not a whole number of 256ths is checked on this value, or a value at its end arrives below
+/// it; the other ranges hold 0 or start at a whole unit, so truncation keeps a value inside them.
+fn on_wire(v: f64) -> f64 {
+    f64::from((v * 256.0) as i32) / 256.0
 }
 
 /// An animatable property of a layer or a presentation.
@@ -228,7 +229,8 @@ impl Layer {
     /// Animate `property` to `value` along `curve` from what is shown when the commit is first drawn; `velocity` (units
     /// per second) starts a spring from rest. `serial` names the animation in the events. A curve the server refuses (a
     /// duration over 10 seconds, Bézier x control points outside 0 to 1, a spring response outside 0.01 to 10 seconds or
-    /// damping ratio outside 0.05 to 4, a number that is not finite) is [`Error::InvalidLayerValue`] and sends nothing.
+    /// damping ratio outside 0.05 to 4 as the wire carries them in 256ths, a number that is not finite) is
+    /// [`Error::InvalidLayerValue`] and sends nothing.
     pub fn animate(
         &self,
         serial: u32,
@@ -247,7 +249,7 @@ impl Layer {
                 let ms = (duration.max(0.0) * 1000.0).round();
                 let unit = 0.0..=1.0;
                 if !(duration.is_finite()
-                    && ms <= MAX_DURATION_MS
+                    && ms <= f64::from(MAX_DURATION_MS)
                     && unit.contains(&bezier.x1)
                     && unit.contains(&bezier.x2)
                     && bezier.y1.is_finite()
@@ -267,8 +269,10 @@ impl Layer {
                 );
             }
             LayerCurve::Spring { response, damping } => {
-                if !((SPRING_RESPONSE.0..=SPRING_RESPONSE.1).contains(&response)
-                    && (SPRING_DAMPING.0..=SPRING_DAMPING.1).contains(&damping)
+                if !(response.is_finite()
+                    && damping.is_finite()
+                    && (SPRING_RESPONSE.0..=SPRING_RESPONSE.1).contains(&on_wire(response))
+                    && (SPRING_DAMPING.0..=SPRING_DAMPING.1).contains(&on_wire(damping))
                     && velocity.is_finite())
                 {
                     return Err(Error::InvalidLayerValue);
@@ -295,7 +299,9 @@ impl Layer {
         }
         self.takes(property)?;
         let ms = (duration * 1000.0).round();
-        if !(1.0..=MAX_DURATION_MS).contains(&ms) || !(2..=MAX_SAMPLES).contains(&samples.len()) {
+        if !(1.0..=f64::from(MAX_DURATION_MS)).contains(&ms)
+            || !(MIN_SAMPLES..=MAX_SAMPLES).contains(&samples.len())
+        {
             return Err(Error::InvalidLayerValue);
         }
         if !samples.iter().all(|&v| property.accepts(f64::from(v))) {
@@ -314,10 +320,10 @@ impl Layer {
         }
     }
 
-    /// Draw `style` of glass below the layer's content, in its bounds, magnified by `lens` (1 for none); `None` draws
-    /// none.
+    /// Draw `style` of glass below the layer's content, in its bounds, magnified by `lens` (1 for none, at most 4); `None`
+    /// draws none. A lens outside 1 to 4 is [`Error::InvalidGlass`] and sends nothing.
     pub fn set_glass(&self, style: Option<crate::app::GlassStyle>, lens: f64) -> Result<(), Error> {
-        if !(lens.is_finite() && lens >= 1.0) {
+        if !(lens.is_finite() && (LENS.0..=LENS.1).contains(&lens)) {
             return Err(Error::InvalidGlass);
         }
         self.0
@@ -360,10 +366,6 @@ impl Layer {
         Ok(())
     }
 }
-
-/// The most samples one animation through samples takes ([`Layer::animate_samples`]): as many as one request carries,
-/// a request being at most 4096 bytes, its header and other arguments 24 of them, with room to spare.
-pub const MAX_SAMPLES: usize = 1000;
 
 impl Drop for Layer {
     fn drop(&mut self) {

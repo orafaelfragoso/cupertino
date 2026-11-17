@@ -171,7 +171,7 @@
     </description>
 
     <enum name="error">
-      <entry name="invalid_value" value="0" summary="opacity outside 0 to 1, a negative size, scale, radius or blur, a content blur over 64, a lens below 1, a glass group spacing outside 0 to 64, or a glass edge wider than 4 or of a channel outside 0 to 1"/>
+      <entry name="invalid_value" value="0" summary="opacity outside 0 to 1, a negative size, scale, radius or blur, a content blur over 64, a lens outside 1 to 4, a glass group spacing outside 0 to 64, or a glass edge wider than 4 or of a channel outside 0 to 1"/>
       <entry name="invalid_property" value="1" summary="a property, glass style, blend role, elevation or highlight not defined at the object's version"/>
       <entry name="invalid_curve" value="2" summary="a duration over 10 seconds, Bézier x control points outside 0 to 1, or a spring response outside 0.01 to 10 seconds or damping ratio outside 0.05 to 4"/>
       <entry name="too_many_animations" value="3" summary="the client has as many animations running or waiting as the server allows"/>

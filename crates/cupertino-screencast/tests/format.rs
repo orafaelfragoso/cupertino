@@ -100,8 +100,18 @@ fn a_fixed_format_that_matches_the_offer_becomes_the_stream_format_at_the_negoti
         ("no maximum", rate(10, 1), rate(0, 1), rate(10, 1)),
         ("a maximum over zero", rate(10, 1), rate(5, 0), rate(10, 1)),
         ("no rate", rate(0, 1), rate(0, 1), rate(DEFAULT_RATE, 1)),
-        ("above the limit", rate(0, 1), rate(144, 1), rate(MAX_RATE, 1)),
-        ("a fraction above", rate(0, 1), rate(121, 2), rate(MAX_RATE, 1)),
+        (
+            "above the limit",
+            rate(0, 1),
+            rate(144, 1),
+            rate(MAX_RATE, 1),
+        ),
+        (
+            "a fraction above",
+            rate(0, 1),
+            rate(121, 2),
+            rate(MAX_RATE, 1),
+        ),
         ("a fraction at", rate(0, 1), rate(120, 2), rate(120, 2)),
         ("at the limit", rate(0, 1), rate(60, 1), rate(60, 1)),
     ] {

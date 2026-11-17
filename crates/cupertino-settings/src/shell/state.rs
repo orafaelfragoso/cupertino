@@ -23,8 +23,8 @@ use crate::PaneId;
 use cupertino_assets::Assets;
 use cupertino_defaults::accessibility::{DisplayOptions, SYSTEM_ACCESSIBILITY};
 use cupertino_defaults::watch::{ConfigWatcher, WatchEvent};
-use cupertino_kit::filepicker::Mode;
 use cupertino_icons::thumbnail::{ThumbError, ThumbSize, Thumbnailer};
+use cupertino_kit::filepicker::Mode;
 
 /// A level slider still this long, in seconds, has ended its drag: the live readings show again.
 const LEVEL_SETTLE: f64 = 0.5;

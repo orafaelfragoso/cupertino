@@ -138,7 +138,7 @@ impl Fixture {
                         format!("../{to}")
                     } else {
                         externals.push(to.clone());
-                        format!("../../../ext/{to}")
+                        format!("{}ext/{to}", "../".repeat(3))
                     };
                     m.push_str(&format!("{to} = {{ path = \"{path}\" }}\n"));
                 }

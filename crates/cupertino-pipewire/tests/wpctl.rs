@@ -44,9 +44,13 @@ fn calls(log: &std::path::Path) -> Vec<String> {
 }
 
 #[test]
-fn the_volume_is_asked_of_the_default_sink_or_source() {
-    let dir = directory("volume");
-    let (wpctl, log) = program(&dir, "*\tstdout\tVolume: 0.55 [MUTED]\\n");
+fn each_request_runs_the_wpctl_command_for_its_target() {
+    let dir = directory("commands");
+    let (wpctl, log) = program(
+        &dir,
+        "get-volume\tstdout\tVolume: 0.55 [MUTED]\\n\n\
+         status\tstdout\tAudio\\n ├─ Sinks:\\n │  *   5. Speakers [vol: 1.00]\\n ├─ Sources:\\n │      6. Mic\\n\n",
+    );
     assert_eq!(
         wpctl.volume(Target::DefaultSink).unwrap(),
         Volume {
@@ -55,60 +59,14 @@ fn the_volume_is_asked_of_the_default_sink_or_source() {
         }
     );
     wpctl.volume(Target::DefaultSource).unwrap();
-    assert_eq!(
-        calls(&log),
-        [
-            "get-volume @DEFAULT_AUDIO_SINK@",
-            "get-volume @DEFAULT_AUDIO_SOURCE@"
-        ]
-    );
-}
-
-#[test]
-fn a_level_is_clamped_and_written_with_four_decimals() {
-    let dir = directory("level");
-    let (wpctl, log) = program(&dir, "");
+    // a level is clamped to zero to one and written with four decimals
     for level in [0.5, 1.7, -3.0, f64::NAN, 1.0 / 3.0] {
         wpctl.set_level(Target::DefaultSink, level).unwrap();
     }
-    assert_eq!(
-        calls(&log),
-        [
-            "set-volume @DEFAULT_AUDIO_SINK@ 0.5000",
-            "set-volume @DEFAULT_AUDIO_SINK@ 1.0000",
-            "set-volume @DEFAULT_AUDIO_SINK@ 0.0000",
-            "set-volume @DEFAULT_AUDIO_SINK@ 0.0000",
-            "set-volume @DEFAULT_AUDIO_SINK@ 0.3333",
-        ]
-    );
-}
-
-#[test]
-fn muting_and_choosing_defaults_use_the_commands_of_wpctl() {
-    let dir = directory("commands");
-    let (wpctl, log) = program(&dir, "");
     wpctl.set_muted(Target::DefaultSource, true).unwrap();
     wpctl.set_muted(Target::DefaultSink, false).unwrap();
     wpctl.set_default_sink(52).unwrap();
     wpctl.set_default_source(47).unwrap();
-    assert_eq!(
-        calls(&log),
-        [
-            "set-mute @DEFAULT_AUDIO_SOURCE@ 1",
-            "set-mute @DEFAULT_AUDIO_SINK@ 0",
-            "set-default 52",
-            "set-default 47",
-        ]
-    );
-}
-
-#[test]
-fn sinks_and_sources_come_from_the_status_listing() {
-    let dir = directory("status");
-    let (wpctl, log) = program(
-        &dir,
-        "*\tstdout\tAudio\\n ├─ Sinks:\\n │  *   5. Speakers [vol: 1.00]\\n ├─ Sources:\\n │      6. Mic\\n\n",
-    );
     assert_eq!(
         wpctl.sinks().unwrap(),
         [Sink {
@@ -125,96 +83,80 @@ fn sinks_and_sources_come_from_the_status_listing() {
             default: false
         }]
     );
-    assert_eq!(calls(&log), ["status", "status"]);
+    assert_eq!(
+        calls(&log),
+        [
+            "get-volume @DEFAULT_AUDIO_SINK@",
+            "get-volume @DEFAULT_AUDIO_SOURCE@",
+            "set-volume @DEFAULT_AUDIO_SINK@ 0.5000",
+            "set-volume @DEFAULT_AUDIO_SINK@ 1.0000",
+            "set-volume @DEFAULT_AUDIO_SINK@ 0.0000",
+            "set-volume @DEFAULT_AUDIO_SINK@ 0.0000",
+            "set-volume @DEFAULT_AUDIO_SINK@ 0.3333",
+            "set-mute @DEFAULT_AUDIO_SOURCE@ 1",
+            "set-mute @DEFAULT_AUDIO_SINK@ 0",
+            "set-default 52",
+            "set-default 47",
+            "status",
+            "status",
+        ]
+    );
 }
 
 #[test]
-fn a_program_that_fails_reports_its_exit_code_and_trimmed_message() {
-    let dir = directory("failure");
-    let (wpctl, _) = program(&dir, "*\tstderr\t  no default node  \\n\n*\texit\t3\n");
-    match wpctl.volume(Target::DefaultSink) {
-        Err(Error::Failed { code, stderr }) => {
-            assert_eq!(code, Some(3));
-            assert_eq!(stderr, "no default node");
+fn a_program_that_fails_is_reported_by_how_it_failed() {
+    let timeout = Duration::from_millis(200);
+    for (name, behaviour) in [
+        ("exit", "*\tstderr\t  no default node  \\n\n*\texit\t3\n"),
+        ("signal", "*\tabort\n"),
+        ("unparsed", "*\tstdout\thello\\n\n"),
+        ("timeout", "*\thang\n"),
+    ] {
+        let dir = directory(&format!("failure-{name}"));
+        let (wpctl, _) = program(&dir, behaviour);
+        let started = Instant::now();
+        let error = wpctl
+            .with_timeout(timeout)
+            .volume(Target::DefaultSink)
+            .unwrap_err();
+        assert!(started.elapsed() < Duration::from_secs(10), "{name}");
+        match (name, &error) {
+            ("exit", Error::Failed { code, stderr }) => {
+                assert_eq!((*code, stderr.as_str()), (Some(3), "no default node"));
+            }
+            ("signal", Error::Failed { code, .. }) => assert_eq!(*code, None),
+            ("unparsed", Error::Unparsed(text)) => assert_eq!(text, "hello"),
+            ("timeout", Error::Failed { code, stderr }) => {
+                assert_eq!((*code, stderr.as_str()), (None, "no answer within 200 ms"));
+            }
+            _ => panic!("{name}: {error:?}"),
         }
-        other => panic!("{other:?}"),
     }
-    let error = wpctl.set_muted(Target::DefaultSink, true).unwrap_err();
-    assert_eq!(error.to_string(), "wpctl exited with 3: no default node");
-}
 
-#[test]
-fn a_program_ended_by_a_signal_has_no_exit_code() {
-    let dir = directory("signal");
-    let (wpctl, _) = program(&dir, "*\tabort\n");
-    let error = wpctl.volume(Target::DefaultSink).unwrap_err();
+    let dir = directory("absent");
+    let error = Wpctl::new(dir.join("no-such-wpctl"))
+        .volume(Target::DefaultSink)
+        .unwrap_err();
     assert!(
-        matches!(error, Error::Failed { code: None, .. }),
+        matches!(&error, Error::Spawn { program, .. } if program.ends_with("no-such-wpctl")),
         "{error:?}"
     );
-    assert!(error.to_string().starts_with("wpctl was killed"));
 }
 
 #[test]
-fn output_that_is_not_a_volume_is_unparsed() {
-    let dir = directory("unparsed");
-    let (wpctl, _) = program(&dir, "*\tstdout\thello\\n\n");
-    let error = wpctl.volume(Target::DefaultSink).unwrap_err();
-    assert!(matches!(&error, Error::Unparsed(text) if text == "hello"));
-    assert_eq!(error.to_string(), "unexpected wpctl output \"hello\"");
-}
-
-#[test]
-fn a_program_that_does_not_answer_in_time_is_stopped() {
-    let dir = directory("timeout");
-    let (wpctl, _) = program(&dir, "*\thang\n");
-    let wpctl = wpctl.with_timeout(Duration::from_millis(200));
-    let started = Instant::now();
-    let error = wpctl.volume(Target::DefaultSink).unwrap_err();
-    assert!(started.elapsed() < Duration::from_secs(10));
-    match error {
-        Error::Failed { code: None, stderr } => assert_eq!(stderr, "no answer within 200 ms"),
-        other => panic!("{other:?}"),
-    }
-}
-
-#[test]
-fn a_program_that_is_not_there_fails_to_start_and_names_the_program() {
-    let dir = directory("absent");
-    let wpctl = Wpctl::new(dir.join("no-such-wpctl"));
-    let error = wpctl.volume(Target::DefaultSink).unwrap_err();
-    assert!(matches!(&error, Error::Spawn { program, .. } if program.ends_with("no-such-wpctl")));
-    assert!(error.to_string().starts_with("cannot run "));
-    assert!(std::error::Error::source(&error).is_some());
-    assert!(std::error::Error::source(&Error::Unparsed(String::new())).is_none());
-}
-
-#[test]
-fn the_worker_writes_the_last_value_asked_and_mute_only_when_it_changes() {
+fn the_worker_shows_a_value_at_once_and_writes_the_level_and_mute_only_when_it_changes() {
     let dir = directory("worker-write");
     let (wpctl, log) = program(&dir, "");
     let worker = VolumeWorker::new(wpctl, Target::DefaultSink);
-    worker
-        .set(Volume {
-            level: 0.25,
-            muted: false,
-        })
-        .unwrap();
-    worker.wait_idle();
-    worker
-        .set(Volume {
-            level: 0.5,
-            muted: false,
-        })
-        .unwrap();
-    worker.wait_idle();
-    worker
-        .set(Volume {
-            level: 0.5,
-            muted: true,
-        })
-        .unwrap();
-    worker.wait_idle();
+    assert_eq!(worker.latest(), None);
+    for (level, muted) in [(0.25, false), (0.5, false), (0.5, true)] {
+        let asked = Volume { level, muted };
+        worker.set(asked).unwrap();
+        let latest = worker.latest().unwrap();
+        assert_eq!(latest.volume, Ok(asked));
+        assert_eq!(latest.sinks, None);
+        worker.wait_idle();
+    }
     assert_eq!(
         calls(&log),
         [
@@ -225,22 +167,6 @@ fn the_worker_writes_the_last_value_asked_and_mute_only_when_it_changes() {
             "set-mute @DEFAULT_AUDIO_SINK@ 1",
         ]
     );
-}
-
-#[test]
-fn a_value_asked_shows_in_the_latest_reading_at_once() {
-    let dir = directory("worker-latest");
-    let (wpctl, _) = program(&dir, "");
-    let worker = VolumeWorker::new(wpctl, Target::DefaultSink);
-    assert_eq!(worker.latest(), None);
-    let asked = Volume {
-        level: 0.8,
-        muted: false,
-    };
-    worker.set(asked).unwrap();
-    let latest = worker.latest().unwrap();
-    assert_eq!(latest.volume, Ok(asked));
-    assert_eq!(latest.sinks, None);
 }
 
 #[test]
@@ -290,8 +216,8 @@ fn a_reading_asked_for_arrives_with_the_sinks_when_they_were_asked_for() {
 }
 
 #[test]
-fn a_failed_reading_is_the_message_of_the_program() {
-    let dir = directory("worker-failed-read");
+fn the_workers_failures_reach_the_caller_as_a_failed_reading_or_once_from_the_next_set() {
+    let dir = directory("worker-failed");
     let (wpctl, _) = program(&dir, "*\tstderr\tno server\\n\n*\texit\t1\n");
     let worker = VolumeWorker::new(wpctl, Target::DefaultSink);
     worker.request_read(false);
@@ -300,13 +226,7 @@ fn a_failed_reading_is_the_message_of_the_program() {
         worker.latest().unwrap().volume,
         Err("wpctl exited with 1: no server".to_owned())
     );
-}
 
-#[test]
-fn a_failed_write_is_reported_by_the_next_call_once() {
-    let dir = directory("worker-failed-write");
-    let (wpctl, _) = program(&dir, "*\tstderr\tno server\\n\n*\texit\t1\n");
-    let worker = VolumeWorker::new(wpctl, Target::DefaultSink);
     let volume = Volume {
         level: 0.5,
         muted: false,

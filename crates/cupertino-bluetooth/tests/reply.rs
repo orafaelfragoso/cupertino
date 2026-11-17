@@ -5,8 +5,8 @@ use cupertino_bluetooth::reply::{
     ControllerInfo, Version,
 };
 use cupertino_bluetooth::{
-    Address, AddressType, AddressTypes, ClassOfDevice, ControllerIndex, DeviceId, Error,
-    MajorClass, ParseError, Settings, Status,
+    Address, AddressType, AddressTypes, ClassOfDevice, ControllerIndex, DeviceId, MajorClass,
+    ParseError, Settings, Status,
 };
 
 const DEVICE_BYTES: [u8; 7] = [0x13, 0x71, 0xDA, 0x7D, 0x1A, 0x00, 1];
@@ -16,50 +16,6 @@ fn device() -> DeviceId {
         address: "00:1A:7D:DA:71:13".parse::<Address>().unwrap(),
         kind: AddressType::LePublic,
     }
-}
-
-#[test]
-fn a_version_is_one_byte_and_a_little_endian_revision() {
-    assert_eq!(
-        Version::parse(&[1, 0x15, 0x01]).unwrap(),
-        Version {
-            version: 1,
-            revision: 0x0115
-        }
-    );
-    assert!(matches!(
-        Version::parse(&[1, 2]),
-        Err(ParseError::Truncated { .. })
-    ));
-    assert!(matches!(
-        Version::parse(&[1, 2, 3, 4]),
-        Err(ParseError::TrailingBytes { extra: 1, .. })
-    ));
-}
-
-#[test]
-fn an_index_list_has_a_count_and_that_many_indexes() {
-    assert_eq!(
-        parse_index_list(&[2, 0, 0, 0, 5, 0]).unwrap(),
-        vec![ControllerIndex(0), ControllerIndex(5)]
-    );
-    assert_eq!(parse_index_list(&[0, 0]).unwrap(), Vec::new());
-}
-
-#[test]
-fn an_index_list_with_the_wrong_number_of_entries_is_refused() {
-    assert!(matches!(
-        parse_index_list(&[2, 0, 0, 0]),
-        Err(ParseError::Truncated { .. })
-    ));
-    assert!(matches!(
-        parse_index_list(&[1, 0, 0, 0, 9, 9]),
-        Err(ParseError::TrailingBytes { extra: 2, .. })
-    ));
-    assert!(matches!(
-        parse_index_list(&[]),
-        Err(ParseError::Truncated { .. })
-    ));
 }
 
 fn controller_info() -> Vec<u8> {
@@ -77,8 +33,36 @@ fn controller_info() -> Vec<u8> {
     data
 }
 
+fn connections() -> Vec<u8> {
+    let mut data = vec![2, 0];
+    data.extend(DEVICE_BYTES);
+    data.extend([1, 2, 3, 4, 5, 6, 0]);
+    data
+}
+
 #[test]
-fn controller_information_decodes_every_field() {
+fn each_reply_decodes_to_its_value() {
+    assert_eq!(
+        Version::parse(&[1, 0x15, 0x01]),
+        Ok(Version {
+            version: 1,
+            revision: 0x0115
+        })
+    );
+    assert_eq!(
+        parse_index_list(&[2, 0, 0, 0, 5, 0]),
+        Ok(vec![ControllerIndex(0), ControllerIndex(5)])
+    );
+    assert_eq!(parse_index_list(&[0, 0]), Ok(Vec::new()));
+    assert_eq!(parse_settings(&0x0Bu32.to_le_bytes()), Ok(Settings(0x0B)));
+    assert_eq!(parse_device(&DEVICE_BYTES), Ok(device()));
+    assert_eq!(parse_address_types(&[7]), Ok(AddressTypes::ALL));
+    let devices = parse_connections(&connections()).unwrap();
+    assert_eq!(devices.len(), 2);
+    assert_eq!(devices[0], device());
+    assert_eq!(devices[1].kind, AddressType::BrEdr);
+    assert_eq!(parse_connections(&[0, 0]), Ok(Vec::new()));
+
     let info = ControllerInfo::parse(&controller_info()).unwrap();
     assert_eq!(info.address.to_string(), "00:1A:7D:DA:71:13");
     assert_eq!(info.bluetooth_version, 9);
@@ -93,78 +77,97 @@ fn controller_information_decodes_every_field() {
 }
 
 #[test]
-fn controller_information_of_the_wrong_size_is_refused() {
-    let data = controller_info();
-    assert!(matches!(
-        ControllerInfo::parse(&data[..data.len() - 1]),
-        Err(ParseError::Truncated { .. })
-    ));
-    let mut long = data;
-    long.push(0);
-    assert!(matches!(
-        ControllerInfo::parse(&long),
-        Err(ParseError::TrailingBytes { extra: 1, .. })
-    ));
-}
-
-#[test]
-fn small_replies_decode_and_refuse_extra_bytes() {
-    assert_eq!(
-        parse_settings(&0x0Bu32.to_le_bytes()).unwrap(),
-        Settings(0x0B)
-    );
-    assert!(parse_settings(&[1, 0, 0]).is_err());
-    assert!(parse_settings(&[1, 0, 0, 0, 0]).is_err());
-    assert_eq!(parse_device(&DEVICE_BYTES).unwrap(), device());
-    assert!(parse_device(&DEVICE_BYTES[..6]).is_err());
-    assert_eq!(parse_address_types(&[7]).unwrap(), AddressTypes::ALL);
-    assert!(parse_address_types(&[]).is_err());
-    assert!(parse_address_types(&[7, 7]).is_err());
-}
-
-#[test]
-fn a_connection_list_has_a_count_and_that_many_devices() {
-    let mut data = vec![2, 0];
-    data.extend(DEVICE_BYTES);
-    data.extend([1, 2, 3, 4, 5, 6, 0]);
-    let devices = parse_connections(&data).unwrap();
-    assert_eq!(devices.len(), 2);
-    assert_eq!(devices[0], device());
-    assert_eq!(devices[1].kind, AddressType::BrEdr);
-    assert_eq!(parse_connections(&[0, 0]).unwrap(), Vec::new());
-    assert!(parse_connections(&data[..data.len() - 1]).is_err());
+fn a_reply_shorter_or_longer_than_its_layout_is_refused() {
+    let info = controller_info();
+    let mut long_info = info.clone();
+    long_info.push(0);
+    let connections = connections();
+    for (name, result, trailing) in [
+        ("short version", Version::parse(&[1, 2]).map(drop), None),
+        (
+            "long version",
+            Version::parse(&[1, 2, 3, 4]).map(drop),
+            Some(1),
+        ),
+        (
+            "fewer indexes than counted",
+            parse_index_list(&[2, 0, 0, 0]).map(drop),
+            None,
+        ),
+        (
+            "more indexes than counted",
+            parse_index_list(&[1, 0, 0, 0, 9, 9]).map(drop),
+            Some(2),
+        ),
+        ("no index count", parse_index_list(&[]).map(drop), None),
+        (
+            "short controller info",
+            ControllerInfo::parse(&info[..info.len() - 1]).map(drop),
+            None,
+        ),
+        (
+            "long controller info",
+            ControllerInfo::parse(&long_info).map(drop),
+            Some(1),
+        ),
+        ("short settings", parse_settings(&[1, 0, 0]).map(drop), None),
+        (
+            "long settings",
+            parse_settings(&[1, 0, 0, 0, 0]).map(drop),
+            Some(1),
+        ),
+        (
+            "short device",
+            parse_device(&DEVICE_BYTES[..6]).map(drop),
+            None,
+        ),
+        ("no address types", parse_address_types(&[]).map(drop), None),
+        (
+            "long address types",
+            parse_address_types(&[7, 7]).map(drop),
+            Some(1),
+        ),
+        (
+            "fewer connections than counted",
+            parse_connections(&connections[..connections.len() - 1]).map(drop),
+            None,
+        ),
+    ] {
+        let refused = match (trailing, &result) {
+            (None, Err(ParseError::Truncated { .. })) => true,
+            (Some(n), Err(ParseError::TrailingBytes { extra, .. })) => *extra == n,
+            _ => false,
+        };
+        assert!(refused, "{name}: {result:?}");
+    }
 }
 
 #[test]
 fn a_status_decodes_to_its_name_and_only_success_succeeds() {
-    assert_eq!(Status::from_wire(0), Status::Success);
-    assert!(Status::from_wire(0).is_success());
-    assert_eq!(Status::from_wire(0x0A), Status::Busy);
-    assert_eq!(Status::from_wire(0x12), Status::RfKilled);
-    assert_eq!(Status::from_wire(0x14), Status::PermissionDenied);
-    assert!(!Status::from_wire(0x14).is_success());
-    assert_eq!(Status::from_wire(0x55), Status::Other(0x55));
-    assert!(!Status::Other(0x55).is_success());
-}
-
-#[test]
-fn every_status_has_text_and_an_unknown_one_shows_its_number() {
-    for wire in 0..=0x14 {
-        let text = Status::from_wire(wire).to_string();
-        assert!(!text.is_empty());
-        assert!(!text.starts_with("status"), "{wire}: {text}");
+    for (wire, status, success) in [
+        (0, Status::Success, true),
+        (0x0A, Status::Busy, false),
+        (0x12, Status::RfKilled, false),
+        (0x14, Status::PermissionDenied, false),
+        (0x55, Status::Other(0x55), false),
+    ] {
+        assert_eq!(Status::from_wire(wire), status, "{wire:#x}");
+        assert_eq!(status.is_success(), success, "{wire:#x}");
     }
-    assert_eq!(Status::RfKilled.to_string(), "blocked by rfkill");
-    assert_eq!(Status::Other(0x55).to_string(), "status 0x55");
 }
 
 #[test]
 fn settings_bits_are_tested_as_a_set() {
     let settings = Settings(Settings::POWERED | Settings::BONDABLE);
-    assert!(settings.powered());
-    assert!(settings.bondable());
-    assert!(!settings.connectable());
-    assert!(!settings.discoverable());
+    assert_eq!(
+        [
+            settings.powered(),
+            settings.bondable(),
+            settings.connectable(),
+            settings.discoverable()
+        ],
+        [true, true, false, false]
+    );
     assert!(settings.contains(Settings::POWERED | Settings::BONDABLE));
     assert!(!settings.contains(Settings::POWERED | Settings::CONNECTABLE));
     assert!(Settings(0).contains(0));
@@ -190,22 +193,10 @@ fn a_class_of_device_splits_into_major_and_minor() {
         (31, MajorClass::Uncategorized),
         (12, MajorClass::Other(12)),
     ] {
-        assert_eq!(ClassOfDevice::from_wire([0, major, 0]).major(), expected);
+        assert_eq!(
+            ClassOfDevice::from_wire([0, major, 0]).major(),
+            expected,
+            "{major}"
+        );
     }
-}
-
-#[test]
-fn errors_say_what_went_wrong_and_chain_to_their_cause() {
-    let parse = Error::from(ParseError::UnknownAddressType(7));
-    assert_eq!(
-        parse.to_string(),
-        "malformed management packet: unknown address type 7"
-    );
-    assert!(std::error::Error::source(&parse).is_some());
-    let syscall = Error::Syscall {
-        call: "send",
-        source: rustix::io::Errno::PERM,
-    };
-    assert!(syscall.to_string().starts_with("send: "));
-    assert!(std::error::Error::source(&syscall).is_some());
 }

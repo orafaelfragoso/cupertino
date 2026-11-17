@@ -1,6 +1,6 @@
 //! The typed output of the framer: everything the device reported between two `SYN_REPORT`s.
 
-use crate::codes::{MT_TOOL_FINGER, MT_TOOL_PALM, MT_TOOL_PEN};
+use crate::evdev::codes::{MT_TOOL_FINGER, MT_TOOL_PALM, MT_TOOL_PEN};
 
 /// What happened to a key or button.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,7 +79,7 @@ impl Tool {
 }
 
 /// One touch contact. Positions are in device units; convert with the axis resolution from
-/// [`DeviceInfo`](crate::DeviceInfo).
+/// [`DeviceInfo`](crate::evdev::DeviceInfo).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Contact {
     /// The multitouch slot holding the contact.

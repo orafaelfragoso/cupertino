@@ -342,7 +342,7 @@ impl GlyphKey {
         fill: [f32; 3],
     ) -> Self {
         let dilation_q = if smoothing {
-            1 + (cupertino_glyph::quantized_luminance(fill) * 4.0).round() as u8
+            1 + (cupertino_raster_math::glyph::quantized_luminance(fill) * 4.0).round() as u8
         } else {
             0
         };

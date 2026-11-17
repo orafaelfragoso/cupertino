@@ -23,7 +23,6 @@ udev = [
     "smithay/backend_session",
     "dep:smithay-drm-extras",
     "dep:cupertino-devices",
-    "dep:cupertino-evdev",
     "dep:cupertino-seat",
 ]
 # session bus worker: notification centre toggle
@@ -51,7 +50,6 @@ cupertino-effects = { path = "../cupertino-effects" }
 cupertino-input = { path = "../cupertino-input" }
 cupertino-keyboard = { path = "../cupertino-keyboard" }
 cupertino-devices = { path = "../cupertino-devices", optional = true }
-cupertino-evdev = { path = "../cupertino-evdev", optional = true }
 cupertino-peer = { path = "../cupertino-peer" }
 cupertino-seat = { path = "../cupertino-seat", optional = true }
 async-channel = "2"

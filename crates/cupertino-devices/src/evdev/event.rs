@@ -1,7 +1,7 @@
 //! The `struct input_event` record.
 
 #[cfg(not(target_pointer_width = "64"))]
-compile_error!("cupertino-evdev implements the 64-bit `struct input_event` layout only");
+compile_error!("cupertino_devices::evdev implements the 64-bit `struct input_event` layout only");
 
 /// Size in bytes of one `struct input_event` on a 64-bit kernel: `timeval` (two `i64`), type, code, value.
 pub const EVENT_SIZE: usize = 24;

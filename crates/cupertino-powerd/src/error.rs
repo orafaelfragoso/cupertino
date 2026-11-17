@@ -27,7 +27,7 @@ pub enum Error {
     /// Opening or reading the lid switch device failed.
     Evdev {
         path: PathBuf,
-        source: cupertino_evdev::Error,
+        source: cupertino_devices::evdev::Error,
     },
     /// Opening a device node failed.
     Open { path: PathBuf, errno: Errno },

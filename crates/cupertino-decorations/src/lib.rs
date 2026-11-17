@@ -33,7 +33,7 @@ pub mod coverage;
 pub mod draws;
 pub mod edge;
 pub mod field;
-pub use cupertino_glyph as glyph;
+pub use cupertino_raster_math::glyph;
 pub mod hit;
 pub mod layout;
 pub mod metrics;

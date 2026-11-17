@@ -1015,7 +1015,6 @@ version = "0.1.0"
 dependencies = [
  "cupertino-assets",
  "cupertino-geometry",
- "cupertino-glyph",
  "cupertino-raster-math",
  "cupertino-theme",
  "swash",
@@ -1037,7 +1036,6 @@ dependencies = [
 name = "cupertino-devices"
 version = "0.1.0"
 dependencies = [
- "cupertino-evdev",
  "rustix 1.1.6",
 ]
 
@@ -1107,13 +1105,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cupertino-evdev"
-version = "0.1.0"
-dependencies = [
- "rustix 1.1.6",
-]
-
-[[package]]
 name = "cupertino-files"
 version = "0.1.0"
 dependencies = [
@@ -1168,13 +1159,6 @@ dependencies = [
  "cupertino-theme",
  "gungraun",
  "image",
-]
-
-[[package]]
-name = "cupertino-glyph"
-version = "0.1.0"
-dependencies = [
- "swash",
 ]
 
 [[package]]
@@ -1526,7 +1510,6 @@ version = "0.1.0"
 dependencies = [
  "cupertino-devices",
  "cupertino-diagnostic-events",
- "cupertino-evdev",
  "cupertino-seat",
  "rustix 1.1.6",
  "zbus",
@@ -1571,6 +1554,7 @@ version = "0.1.0"
 dependencies = [
  "cupertino-geometry",
  "gungraun",
+ "swash",
 ]
 
 [[package]]
@@ -1652,7 +1636,6 @@ dependencies = [
  "cupertino-diagnostic-events",
  "cupertino-displays",
  "cupertino-effects",
- "cupertino-evdev",
  "cupertino-geometry",
  "cupertino-glass",
  "cupertino-gpu",
@@ -1904,8 +1887,8 @@ version = "0.1.0"
 dependencies = [
  "cupertino-defaults",
  "cupertino-geometry",
- "cupertino-glyph",
  "cupertino-keyboard",
+ "cupertino-raster-math",
  "fontconfig",
  "gungraun",
  "harfrust",

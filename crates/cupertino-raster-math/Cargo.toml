@@ -3,11 +3,12 @@ name = "cupertino-raster-math"
 version = "0.1.0"
 edition.workspace = true
 license = "MPL-2.0"
-description = "The one definition of the drawing maths every Cupertino renderer and shader implements: shape distance and coverage, the blur kernel and its pyramid, shadows, gradients and position-keyed dithering, with test vectors"
+description = "The one definition of the drawing maths every Cupertino renderer and shader implements: shape distance and coverage, the blur kernel and its pyramid, shadows, gradients, position-keyed dithering and glyph rasterisation, with test vectors"
 [package.metadata.cupertino]
 layer = "graphics"
 
 [dependencies]
+swash = "0.2.10"
 
 [dev-dependencies]
 cupertino-geometry = { path = "../cupertino-geometry" }

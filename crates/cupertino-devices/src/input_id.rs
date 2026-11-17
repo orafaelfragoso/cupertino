@@ -8,14 +8,14 @@
 
 use std::path::Path;
 
-use cupertino_evdev::codes;
+use crate::evdev::codes;
 
 use crate::capabilities::CapabilityMask;
 use crate::device::Device;
 use crate::error::{Error, Result};
 use crate::sysfs;
 
-// The kernel codes live in `cupertino_evdev::codes` as `u16`; the capability masks index with `u32`.
+// The kernel codes live in `crate::evdev::codes` as `u16`; the capability masks index with `u32`.
 macro_rules! widen {
     ($($name:ident),+ $(,)?) => {$(const $name: u32 = codes::$name as u32;)+};
 }

@@ -1,14 +1,14 @@
 //! The framer: a state machine from raw [`InputEvent`]s to [`Frame`]s. It owns no fd, so recorded sequences drive it
 //! directly in tests.
 
-use crate::bitset::BitSet;
-use crate::codes::*;
-use crate::error::FrameError;
-use crate::event::InputEvent;
-use crate::frame::{
+use crate::evdev::bitset::BitSet;
+use crate::evdev::codes::*;
+use crate::evdev::error::FrameError;
+use crate::evdev::event::InputEvent;
+use crate::evdev::frame::{
     AbsPoint, Contact, Frame, KeyEvent, KeyState, Motion, Switch, SwitchEvent, Tool, Wheel,
 };
-use crate::info::DeviceInfo;
+use crate::evdev::info::DeviceInfo;
 
 /// What the framer needs to know about a device, derived once from its [`DeviceInfo`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

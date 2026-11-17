@@ -3,9 +3,9 @@
 use std::os::fd::{AsFd, BorrowedFd};
 use std::path::{Path, PathBuf};
 
+use cupertino_devices::evdev::codes::SW_LID;
+use cupertino_devices::evdev::Device;
 use cupertino_devices::{classify_device, enumerate, Subsystem};
-use cupertino_evdev::codes::SW_LID;
-use cupertino_evdev::Device;
 use rustix::fs::{open, Mode, OFlags};
 
 use crate::error::{Error, Result};

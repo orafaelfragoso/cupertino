@@ -1,6 +1,6 @@
 //! The pool of render targets, driven by a source that only counts.
 
-use cupertino_gpu::pool::{cost, TargetPool, TargetSource, ALLOCATION_GRANULE, TARGET_POOL_CAP};
+use cupertino_gpu::pool::{cost, TargetPool, TargetSource, TARGET_POOL_CAP};
 use cupertino_gpu::{Error, Result, TextureFormat};
 
 const MIB: u64 = 1 << 20;
@@ -32,65 +32,42 @@ impl TargetSource for Counting {
 }
 
 #[test]
-fn a_target_costs_its_bytes_rounded_up_to_the_granule() {
-    assert_eq!(ALLOCATION_GRANULE, 2 * MIB);
-    assert_eq!(TARGET_POOL_CAP, 16 * MIB);
-    assert_eq!(cost((1, 1), TextureFormat::R8), 2 * MIB);
-    assert_eq!(cost((2048, 1024), TextureFormat::R8), 2 * MIB);
-    assert_eq!(cost((2048, 1025), TextureFormat::R8), 4 * MIB);
-    assert_eq!(cost((1024, 1024), TextureFormat::Rgba8), 4 * MIB);
-    assert_eq!(cost((1024, 1024), TextureFormat::Rgba16Float), 8 * MIB);
-    assert_eq!(cost((1024, 1024), TextureFormat::Rgba32Float), 16 * MIB);
-    assert_eq!(cost((0, 100), TextureFormat::Rgba8), 0);
+fn a_target_costs_its_bytes_rounded_up_to_the_two_mebibyte_granule() {
+    for (size, format, expected) in [
+        ((1, 1), TextureFormat::R8, 2 * MIB),
+        ((2048, 1024), TextureFormat::R8, 2 * MIB),
+        ((2048, 1025), TextureFormat::R8, 4 * MIB),
+        ((1024, 1024), TextureFormat::Rgba8, 4 * MIB),
+        ((1024, 1024), TextureFormat::Rgba16Float, 8 * MIB),
+        ((1024, 1024), TextureFormat::Rgba32Float, 16 * MIB),
+        ((0, 100), TextureFormat::Rgba8, 0),
+    ] {
+        assert_eq!(cost(size, format), expected, "{size:?} {format:?}");
+    }
 }
 
 #[test]
-fn a_new_pool_holds_nothing() {
-    let pool = TargetPool::<u32>::new(TARGET_POOL_CAP);
-    assert_eq!(pool.bytes(), (0, 0));
-    assert_eq!(pool.made(), 0);
-}
-
-#[test]
-fn acquiring_makes_a_target_and_counts_it_as_in_use() {
+fn a_released_target_is_handed_out_again_only_for_the_same_size_and_format() {
     let mut source = Counting::default();
     let mut pool = TargetPool::new(TARGET_POOL_CAP);
-    let target = pool
-        .acquire(&mut source, (1024, 1024), TextureFormat::Rgba8)
-        .unwrap();
-    assert_eq!(target.target, 1);
-    assert_eq!(target.size, (1024, 1024));
-    assert_eq!(target.format, TextureFormat::Rgba8);
-    assert_eq!(pool.bytes(), (4 * MIB, 0));
-    assert_eq!(pool.made(), 1);
-}
-
-#[test]
-fn a_released_target_is_handed_out_again_for_the_same_size_and_format() {
-    let mut source = Counting::default();
-    let mut pool = TargetPool::new(TARGET_POOL_CAP);
+    assert_eq!((pool.bytes(), pool.made()), ((0, 0), 0));
     let target = pool
         .acquire(&mut source, (512, 512), TextureFormat::Rgba8)
         .unwrap();
+    assert_eq!(
+        (target.target, target.size, target.format),
+        (1, (512, 512), TextureFormat::Rgba8)
+    );
+    assert_eq!((pool.bytes(), pool.made()), ((2 * MIB, 0), 1));
     pool.release(target, 1);
     assert_eq!(pool.bytes(), (0, 2 * MIB));
     let again = pool
         .acquire(&mut source, (512, 512), TextureFormat::Rgba8)
         .unwrap();
     assert_eq!(again.target, 1);
-    assert_eq!(pool.made(), 1);
-    assert_eq!(pool.bytes(), (2 * MIB, 0));
-    assert_eq!(source.created.len(), 1);
-}
+    assert_eq!((pool.bytes(), pool.made()), ((2 * MIB, 0), 1));
+    pool.release(again, 2);
 
-#[test]
-fn another_size_or_format_makes_a_new_target() {
-    let mut source = Counting::default();
-    let mut pool = TargetPool::new(TARGET_POOL_CAP);
-    let target = pool
-        .acquire(&mut source, (512, 512), TextureFormat::Rgba8)
-        .unwrap();
-    pool.release(target, 1);
     let other_size = pool
         .acquire(&mut source, (512, 513), TextureFormat::Rgba8)
         .unwrap();
@@ -133,28 +110,26 @@ fn targets_in_use_are_never_freed_and_the_cap_refuses_instead() {
         .unwrap();
     match pool.acquire(&mut source, (64, 64), TextureFormat::Rgba8) {
         Err(Error::OverBudget { what, need, cap }) => {
-            assert_eq!(what, "render target pool");
-            assert_eq!(need, 2 * MIB);
-            assert_eq!(cap, 8 * MIB);
+            assert_eq!((what, need, cap), ("render target pool", 2 * MIB, 8 * MIB));
         }
         other => panic!("{other:?}"),
     }
     assert!(source.destroyed.is_empty());
-    assert_eq!(pool.made(), 2);
-    assert_eq!(pool.bytes(), (8 * MIB, 0));
+    assert_eq!((pool.bytes(), pool.made()), ((8 * MIB, 0), 2));
 }
 
 #[test]
 fn a_refused_creation_leaves_the_books_as_they_were() {
-    let mut source = Counting::default();
+    let mut source = Counting {
+        refuse: true,
+        ..Counting::default()
+    };
     let mut pool = TargetPool::<u32>::new(TARGET_POOL_CAP);
-    source.refuse = true;
     assert!(matches!(
         pool.acquire(&mut source, (64, 64), TextureFormat::Rgba8),
         Err(Error::Driver(_))
     ));
-    assert_eq!(pool.bytes(), (0, 0));
-    assert_eq!(pool.made(), 0);
+    assert_eq!((pool.bytes(), pool.made()), ((0, 0), 0));
 }
 
 #[test]

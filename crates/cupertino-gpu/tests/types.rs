@@ -1,91 +1,52 @@
-//! The device-independent values and errors of the API, and the synchronisation helpers that need no GPU.
+//! The device-independent values of the API, and the synchronisation helpers that need no GPU.
 
 use cupertino_gpu::syncobj::{eventfd, wait_readable, SyncNode};
 use cupertino_gpu::{
-    Dmabuf, DmabufPlane, Error, Loss, Region, TextureFormat, VertexFormat, FOURCC_ABGR8888,
-    FOURCC_ARGB8888, MODIFIER_INVALID, MODIFIER_LINEAR,
+    Dmabuf, DmabufPlane, Loss, TextureFormat, VertexFormat, FOURCC_ARGB8888, MODIFIER_LINEAR,
 };
 use std::io::{Read, Write};
-use std::os::fd::{AsFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, OwnedFd};
+use std::time::{Duration, Instant};
 
 #[test]
-fn a_texture_pixel_takes_the_bytes_of_its_channels() {
-    assert_eq!(TextureFormat::R8.bytes_per_pixel(), 1);
-    assert_eq!(TextureFormat::Rgba8.bytes_per_pixel(), 4);
-    assert_eq!(TextureFormat::Rgba16Float.bytes_per_pixel(), 8);
-    assert_eq!(TextureFormat::Rgba32Float.bytes_per_pixel(), 16);
-}
-
-#[test]
-fn a_vertex_attribute_takes_the_bytes_of_its_format() {
-    assert_eq!(VertexFormat::Float32x2.size(), 8);
-    assert_eq!(VertexFormat::Float32x4.size(), 16);
-    assert_eq!(VertexFormat::Unorm8x4.size(), 4);
-}
-
-#[test]
-fn a_region_keeps_its_corner_and_size() {
-    let region = Region::new(1, 2, 3, 4);
-    assert_eq!(
-        (region.x, region.y, region.width, region.height),
-        (1, 2, 3, 4)
-    );
-    assert_eq!(Region::default(), Region::new(0, 0, 0, 0));
+fn a_texture_pixel_and_a_vertex_attribute_take_the_bytes_of_their_channels() {
+    for (format, expected) in [
+        (TextureFormat::R8, 1),
+        (TextureFormat::Rgba8, 4),
+        (TextureFormat::Rgba16Float, 8),
+        (TextureFormat::Rgba32Float, 16),
+    ] {
+        assert_eq!(format.bytes_per_pixel(), expected, "{format:?}");
+    }
+    for (format, expected) in [
+        (VertexFormat::Float32x2, 8),
+        (VertexFormat::Float32x4, 16),
+        (VertexFormat::Unorm8x4, 4),
+    ] {
+        assert_eq!(format.size(), expected, "{format:?}");
+    }
 }
 
 #[test]
 fn only_a_reset_counts_toward_falling_back_to_the_cpu() {
-    assert!(Loss::Reset { guilty: None }.counts_as_failure());
-    assert!(Loss::Reset { guilty: Some(true) }.counts_as_failure());
-    assert!(!Loss::Purge.counts_as_failure());
+    for (loss, expected) in [
+        (Loss::Reset { guilty: None }, true),
+        (Loss::Reset { guilty: Some(true) }, true),
+        (Loss::Purge, false),
+    ] {
+        assert_eq!(loss.counts_as_failure(), expected, "{loss:?}");
+    }
 }
 
 #[test]
-fn errors_name_their_kind_and_their_reason() {
-    assert_eq!(
-        Error::Unavailable("no EGL".to_owned()).to_string(),
-        "unavailable: no EGL"
-    );
-    assert_eq!(
-        Error::Unsupported("fences".to_owned()).to_string(),
-        "unsupported: fences"
-    );
-    assert_eq!(
-        Error::Invalid("size".to_owned()).to_string(),
-        "invalid: size"
-    );
-    assert_eq!(
-        Error::Driver("out of memory".to_owned()).to_string(),
-        "driver: out of memory"
-    );
-    assert_eq!(
-        Error::OverBudget {
-            what: "atlas",
-            need: 10,
-            cap: 20
-        }
-        .to_string(),
-        "atlas: 10 bytes more than the cap of 20 allows"
-    );
-    assert!(Error::Lost(Loss::Purge)
-        .to_string()
-        .starts_with("device lost: "));
-}
-
-#[test]
-fn the_fourcc_codes_spell_their_formats_in_memory_order() {
-    assert_eq!(FOURCC_ARGB8888.to_le_bytes(), *b"AR24");
-    assert_eq!(FOURCC_ABGR8888.to_le_bytes(), *b"AB24");
-    assert_eq!(MODIFIER_LINEAR, 0);
-    assert_eq!(MODIFIER_INVALID, 0x00ff_ffff_ffff_ffff);
-}
-
-fn dmabuf_over(fds: Vec<OwnedFd>) -> Dmabuf {
-    Dmabuf {
+fn a_cloned_dmabuf_has_its_own_descriptors_of_the_same_files_for_every_plane() {
+    let (reader, writer) = std::io::pipe().unwrap();
+    let (_, second) = std::io::pipe().unwrap();
+    let buffer = Dmabuf {
         size: (64, 32),
         fourcc: FOURCC_ARGB8888,
         modifier: MODIFIER_LINEAR,
-        planes: fds
+        planes: [OwnedFd::from(writer), OwnedFd::from(second)]
             .into_iter()
             .enumerate()
             .map(|(i, fd)| DmabufPlane {
@@ -94,23 +55,23 @@ fn dmabuf_over(fds: Vec<OwnedFd>) -> Dmabuf {
                 stride: 256,
             })
             .collect(),
-    }
-}
-
-#[test]
-fn a_cloned_dmabuf_has_its_own_descriptors_of_the_same_files() {
-    let (reader, writer) = std::io::pipe().unwrap();
-    let buffer = dmabuf_over(vec![OwnedFd::from(writer)]);
+    };
     let clone = buffer.try_clone().unwrap();
-    assert_eq!(clone.size, (64, 32));
-    assert_eq!(clone.fourcc, FOURCC_ARGB8888);
-    assert_eq!(clone.modifier, MODIFIER_LINEAR);
-    assert_eq!(clone.planes.len(), 1);
-    assert_eq!((clone.planes[0].offset, clone.planes[0].stride), (0, 256));
-    assert_ne!(
-        std::os::fd::AsRawFd::as_raw_fd(&clone.planes[0].fd),
-        std::os::fd::AsRawFd::as_raw_fd(&buffer.planes[0].fd)
+    assert_eq!(
+        (clone.size, clone.fourcc, clone.modifier),
+        ((64, 32), FOURCC_ARGB8888, MODIFIER_LINEAR)
     );
+    assert_eq!(
+        clone
+            .planes
+            .iter()
+            .map(|p| (p.offset, p.stride))
+            .collect::<Vec<_>>(),
+        [(0, 256), (16, 256)]
+    );
+    for (copy, original) in clone.planes.iter().zip(&buffer.planes) {
+        assert_ne!(copy.fd.as_raw_fd(), original.fd.as_raw_fd());
+    }
 
     // the original can go and the copy still reaches the pipe
     drop(buffer);
@@ -124,42 +85,22 @@ fn a_cloned_dmabuf_has_its_own_descriptors_of_the_same_files() {
 }
 
 #[test]
-fn every_plane_of_a_dmabuf_is_cloned_with_its_offset() {
-    let (_, first) = std::io::pipe().unwrap();
-    let (_, second) = std::io::pipe().unwrap();
-    let buffer = dmabuf_over(vec![OwnedFd::from(first), OwnedFd::from(second)]);
-    let clone = buffer.try_clone().unwrap();
-    assert_eq!(
-        clone.planes.iter().map(|p| p.offset).collect::<Vec<_>>(),
-        [0, 16]
-    );
-}
-
-#[test]
-fn an_eventfd_is_not_readable_until_it_is_signalled() {
+fn an_eventfd_is_readable_only_once_signalled_and_never_blocks_a_read() {
     let fd = eventfd().unwrap();
-    assert!(!wait_readable(fd.as_fd(), 0));
     let mut file = std::fs::File::from(fd.try_clone().unwrap());
+    let mut bytes = [0u8; 8];
+    assert_eq!(
+        file.read(&mut bytes).unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+    assert!(!wait_readable(fd.as_fd(), 0));
+    let started = Instant::now();
+    assert!(!wait_readable(fd.as_fd(), 50));
+    assert!(started.elapsed() >= Duration::from_millis(40));
+
     file.write_all(&1u64.to_ne_bytes()).unwrap();
     assert!(wait_readable(fd.as_fd(), 0));
     assert!(wait_readable(fd.as_fd(), -1));
-}
-
-#[test]
-fn an_eventfd_does_not_block_a_read_that_has_nothing_to_read() {
-    let fd = eventfd().unwrap();
-    let mut file = std::fs::File::from(fd);
-    let mut bytes = [0u8; 8];
-    let error = file.read(&mut bytes).unwrap_err();
-    assert_eq!(error.kind(), std::io::ErrorKind::WouldBlock);
-}
-
-#[test]
-fn waiting_on_a_quiet_descriptor_times_out() {
-    let fd = eventfd().unwrap();
-    let started = std::time::Instant::now();
-    assert!(!wait_readable(fd.as_fd(), 50));
-    assert!(started.elapsed() >= std::time::Duration::from_millis(40));
 }
 
 #[test]

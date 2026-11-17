@@ -59,73 +59,52 @@ fn process_of(caller: &Caller) -> &Identified {
     }
 }
 
-#[test]
-fn credentials_without_a_process_are_anonymous() {
-    let proc = proc_with(&[]);
-    let caller = Caller::from_credentials(&ConnectionCredentials::default(), proc.path());
-    assert!(matches!(caller, Caller::Anonymous));
-    assert_eq!(caller.pid(), None);
-}
-
-#[test]
-fn a_process_id_alone_names_the_process_when_it_is_running() {
-    let proc = proc_with(&[own_pid()]);
-    let caller = Caller::from_credentials(&by_pid(own_pid()), proc.path());
-    let found = process_of(&caller);
-    assert_eq!(found.process.pid, own_pid());
-    assert_eq!(found.sandbox, None);
-    assert_eq!(caller.pid(), Some(own_pid()));
-}
-
-#[test]
-fn a_process_id_of_a_process_that_is_gone_is_anonymous() {
+/// The pid of a process that has exited and been reaped.
+fn gone_pid() -> u32 {
     let mut child = std::process::Command::new("true").spawn().unwrap();
     let pid = child.id();
     child.wait().unwrap();
-    let proc = proc_with(&[pid]);
-    assert!(matches!(
-        Caller::from_credentials(&by_pid(pid), proc.path()),
-        Caller::Anonymous
-    ));
+    pid
 }
 
 #[test]
-fn a_process_descriptor_names_the_process() {
-    let proc = proc_with(&[own_pid()]);
-    let caller = Caller::from_credentials(&by_fd(own_pid()), proc.path());
-    assert_eq!(process_of(&caller).process.pid, own_pid());
-}
-
-#[test]
-fn a_process_id_that_disagrees_with_the_descriptor_is_anonymous() {
-    let proc = proc_with(&[own_pid(), own_parent()]);
-    let credentials = by_fd(own_pid()).set_process_id(own_parent());
-    assert!(matches!(
-        Caller::from_credentials(&credentials, proc.path()),
-        Caller::Anonymous
-    ));
-    let agreeing = by_fd(own_pid()).set_process_id(own_pid());
-    assert!(matches!(
-        Caller::from_credentials(&agreeing, proc.path()),
-        Caller::Process(_)
-    ));
-}
-
-#[test]
-fn a_descriptor_that_is_not_a_pidfd_is_anonymous() {
-    let proc = proc_with(&[own_pid()]);
-    let file = std::fs::File::open("/dev/null").unwrap();
-    let credentials =
-        ConnectionCredentials::default().set_process_fd(std::os::fd::OwnedFd::from(file).into());
-    assert!(matches!(
-        Caller::from_credentials(&credentials, proc.path()),
-        Caller::Anonymous
-    ));
-}
-
-#[test]
-fn only_a_descriptor_names_the_process_when_the_caller_must_have_one() {
-    let proc = proc_with(&[own_pid()]);
+fn credentials_name_the_process_only_when_they_identify_it_for_sure() {
+    let gone = gone_pid();
+    let proc = proc_with(&[own_pid(), own_parent(), gone]);
+    let not_a_pidfd = || {
+        let file = std::fs::File::open("/dev/null").unwrap();
+        ConnectionCredentials::default().set_process_fd(std::os::fd::OwnedFd::from(file).into())
+    };
+    for (row, credentials, expected) in [
+        ("nothing", ConnectionCredentials::default(), None),
+        ("a running pid", by_pid(own_pid()), Some(own_pid())),
+        ("a pid that is gone", by_pid(gone), None),
+        ("a pidfd", by_fd(own_pid()), Some(own_pid())),
+        (
+            "a pid that agrees with the pidfd",
+            by_fd(own_pid()).set_process_id(own_pid()),
+            Some(own_pid()),
+        ),
+        (
+            "a pid that disagrees with the pidfd",
+            by_fd(own_pid()).set_process_id(own_parent()),
+            None,
+        ),
+        ("a descriptor that is no pidfd", not_a_pidfd(), None),
+    ] {
+        let caller = Caller::from_credentials(&credentials, proc.path());
+        match expected {
+            Some(pid) => {
+                assert_eq!(process_of(&caller).process.pid, pid, "{row}");
+                assert_eq!(caller.pid(), Some(pid), "{row}");
+            }
+            None => {
+                assert!(matches!(caller, Caller::Anonymous), "{row}: {caller:?}");
+                assert_eq!(caller.pid(), None, "{row}");
+            }
+        }
+    }
+    // a caller that must have a descriptor is not named by its pid alone
     assert!(matches!(
         Caller::from_process_fd(&by_pid(own_pid()), proc.path()),
         Caller::Anonymous
@@ -137,48 +116,46 @@ fn only_a_descriptor_names_the_process_when_the_caller_must_have_one() {
 }
 
 #[test]
-fn a_flatpak_info_in_the_root_makes_a_flatpak() {
-    let proc = proc_with(&[own_pid()]);
-    flatpak_info(
-        proc.path(),
-        own_pid(),
-        "[Application]\nname=org.example.App\n",
-    );
-    let caller = Caller::from_credentials(&by_pid(own_pid()), proc.path());
-    assert_eq!(process_of(&caller).sandbox, Some(Sandbox::Flatpak));
-}
-
-#[test]
-fn a_security_label_that_starts_with_snap_makes_a_snap() {
-    let proc = proc_with(&[own_pid()]);
-    let credentials =
-        by_pid(own_pid()).set_linux_security_label(b"snap.firefox.firefox (enforce)".to_vec());
-    let caller = Caller::from_credentials(&credentials, proc.path());
-    assert_eq!(process_of(&caller).sandbox, Some(Sandbox::Snap));
-}
-
-#[test]
-fn other_security_labels_are_no_sandbox() {
-    let proc = proc_with(&[own_pid()]);
-    for label in [&b"unconfined"[..], b"", b"notsnap.x"] {
-        let credentials = by_pid(own_pid()).set_linux_security_label(label.to_vec());
+fn the_sandbox_comes_from_the_security_label_then_the_flatpak_info() {
+    for (label, flatpak, expected) in [
+        (None, false, None),
+        (None, true, Some(Sandbox::Flatpak)),
+        (
+            Some(&b"snap.firefox.firefox (enforce)"[..]),
+            false,
+            Some(Sandbox::Snap),
+        ),
+        (Some(b"unconfined"), false, None),
+        (Some(b""), false, None),
+        (Some(b"notsnap.x"), false, None),
+        (Some(b"snap.x.y"), true, Some(Sandbox::Snap)),
+    ] {
+        let proc = proc_with(&[own_pid()]);
+        if flatpak {
+            flatpak_info(
+                proc.path(),
+                own_pid(),
+                "[Application]\nname=org.example.App\n",
+            );
+        }
+        let mut credentials = by_pid(own_pid());
+        if let Some(label) = label {
+            credentials = credentials.set_linux_security_label(label.to_vec());
+        }
         let caller = Caller::from_credentials(&credentials, proc.path());
-        assert_eq!(process_of(&caller).sandbox, None, "{label:?}");
+        assert_eq!(
+            process_of(&caller).sandbox,
+            expected,
+            "{label:?}, flatpak info {flatpak}"
+        );
     }
-}
-
-#[test]
-fn a_snap_label_wins_over_a_flatpak_info() {
-    let proc = proc_with(&[own_pid()]);
-    flatpak_info(proc.path(), own_pid(), "");
-    let credentials = by_pid(own_pid()).set_linux_security_label(b"snap.x.y".to_vec());
-    let caller = Caller::from_credentials(&credentials, proc.path());
-    assert_eq!(process_of(&caller).sandbox, Some(Sandbox::Snap));
 }
 
 #[test]
 fn the_program_is_what_the_exe_link_names() {
     let proc = proc_with(&[own_pid()]);
+    let caller = Caller::from_credentials(&by_pid(own_pid()), proc.path());
+    assert_eq!(process_of(&caller).exe, None, "no link");
     std::os::unix::fs::symlink(
         "/usr/bin/example",
         proc.path().join(own_pid().to_string()).join("exe"),
@@ -189,13 +166,10 @@ fn the_program_is_what_the_exe_link_names() {
         process_of(&caller).exe.as_deref(),
         Some(Path::new("/usr/bin/example"))
     );
-    let without = proc_with(&[own_pid()]);
-    let caller = Caller::from_credentials(&by_pid(own_pid()), without.path());
-    assert_eq!(process_of(&caller).exe, None);
 }
 
 #[test]
-fn a_root_the_kernel_refuses_leaves_the_caller_unclassified() {
+fn a_root_the_kernel_refuses_leaves_the_caller_unclassified_and_untrusted() {
     if unsafe { libc::geteuid() } == 0 {
         return;
     }
@@ -230,247 +204,282 @@ fn a_root_that_cannot_be_checked_for_another_reason_is_anonymous() {
 
 #[test]
 fn a_process_held_otherwise_is_classified_by_its_own_label_and_root() {
-    let proc = proc_with(&[own_pid()]);
-    let attr = proc.path().join(own_pid().to_string()).join("attr");
-    std::fs::create_dir_all(attr.join("apparmor")).unwrap();
-    std::fs::write(attr.join("apparmor/current"), "unconfined").unwrap();
-    let caller = Caller::of_process(ProcessHandle::open(own_pid()).unwrap(), proc.path());
-    assert_eq!(process_of(&caller).sandbox, None);
-    std::fs::write(attr.join("apparmor/current"), "snap.app.cmd").unwrap();
-    let caller = Caller::of_process(ProcessHandle::open(own_pid()).unwrap(), proc.path());
-    assert_eq!(process_of(&caller).sandbox, Some(Sandbox::Snap));
+    for (file, label, expected) in [
+        ("attr/apparmor/current", Some("unconfined"), Some(None)),
+        (
+            "attr/apparmor/current",
+            Some("snap.app.cmd"),
+            Some(Some(Sandbox::Snap)),
+        ),
+        // the first security module's label when AppArmor has no entry of its own
+        (
+            "attr/current",
+            Some("snap.app.cmd"),
+            Some(Some(Sandbox::Snap)),
+        ),
+        ("attr/current", None, None),
+    ] {
+        let proc = proc_with(&[own_pid()]);
+        let path = proc.path().join(own_pid().to_string()).join(file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        if let Some(label) = label {
+            std::fs::write(&path, label).unwrap();
+        }
+        let caller = Caller::of_process(ProcessHandle::open(own_pid()).unwrap(), proc.path());
+        match expected {
+            Some(sandbox) => assert_eq!(process_of(&caller).sandbox, sandbox, "{file} {label:?}"),
+            None => assert!(matches!(caller, Caller::Anonymous), "{file}: {caller:?}"),
+        }
+    }
 }
 
 #[test]
-fn the_label_of_the_first_security_module_is_used_without_apparmors_entry() {
-    let proc = proc_with(&[own_pid()]);
-    let attr = proc.path().join(own_pid().to_string()).join("attr");
-    std::fs::create_dir_all(&attr).unwrap();
-    std::fs::write(attr.join("current"), "snap.app.cmd").unwrap();
-    let caller = Caller::of_process(ProcessHandle::open(own_pid()).unwrap(), proc.path());
-    assert_eq!(process_of(&caller).sandbox, Some(Sandbox::Snap));
-}
-
-#[test]
-fn a_process_whose_label_cannot_be_read_is_anonymous() {
-    let proc = proc_with(&[own_pid()]);
-    assert!(matches!(
-        Caller::of_process(ProcessHandle::open(own_pid()).unwrap(), proc.path()),
-        Caller::Anonymous
-    ));
-}
-
-#[test]
-fn the_pid_of_each_kind_of_caller() {
-    let proc = proc_with(&[own_pid()]);
-    let process = Caller::from_credentials(&by_pid(own_pid()), proc.path());
-    assert_eq!(process.pid(), Some(own_pid()));
-    assert_eq!(Caller::Anonymous.pid(), None);
-    assert_eq!(
-        Caller::Unclassified(ProcessHandle::open(own_pid()).unwrap()).pid(),
-        Some(own_pid())
-    );
-}
-
-#[test]
-fn an_unsandboxed_caller_is_accepted_and_the_rest_are_refused_by_kind() {
+fn only_an_unsandboxed_caller_is_accepted_and_the_rest_are_refused_by_kind() {
     let plain = Caller::Process(identified(own_pid(), None));
     assert_eq!(plain.unsandboxed().unwrap().process.pid, own_pid());
-    let flatpak = Caller::Process(identified(own_pid(), Some(Sandbox::Flatpak)));
-    assert_eq!(
-        flatpak.unsandboxed().unwrap_err(),
-        Denial::Sandboxed(Sandbox::Flatpak)
-    );
-    let snap = Caller::Process(identified(own_pid(), Some(Sandbox::Snap)));
-    assert_eq!(
-        snap.unsandboxed().unwrap_err(),
-        Denial::Sandboxed(Sandbox::Snap)
-    );
-    assert_eq!(
-        Caller::Anonymous.unsandboxed().unwrap_err(),
-        Denial::Anonymous
-    );
-    let unclassified = Caller::Unclassified(ProcessHandle::open(own_pid()).unwrap());
-    assert_eq!(unclassified.unsandboxed().unwrap_err(), Denial::Untrusted);
+    for (caller, denial) in [
+        (
+            Caller::Process(identified(own_pid(), Some(Sandbox::Flatpak))),
+            Denial::Sandboxed(Sandbox::Flatpak),
+        ),
+        (
+            Caller::Process(identified(own_pid(), Some(Sandbox::Snap))),
+            Denial::Sandboxed(Sandbox::Snap),
+        ),
+        (Caller::Anonymous, Denial::Anonymous),
+        (
+            Caller::Unclassified(ProcessHandle::open(own_pid()).unwrap()),
+            Denial::Untrusted,
+        ),
+    ] {
+        assert_eq!(caller.unsandboxed().unwrap_err(), denial, "{caller:?}");
+    }
 }
 
 #[test]
 fn a_process_is_its_own_relation_or_its_parents_or_neither() {
     let own = identified(own_pid(), None);
-    assert_eq!(own.relation(own_pid(), own_parent()), Relation::Itself);
-    assert_eq!(own.relation(1, own_pid()), Relation::Parent);
-    assert_eq!(own.relation(1, 2), Relation::Other);
-    // the process itself wins when it is also named as its own parent
-    assert_eq!(own.relation(own_pid(), own_pid()), Relation::Itself);
+    for (own_pid_, parent, expected) in [
+        (own_pid(), own_parent(), Relation::Itself),
+        (1, own_pid(), Relation::Parent),
+        (1, 2, Relation::Other),
+        // the process itself wins when it is also named as its own parent
+        (own_pid(), own_pid(), Relation::Itself),
+    ] {
+        assert_eq!(
+            own.relation(own_pid_, parent),
+            expected,
+            "{own_pid_} {parent}"
+        );
+    }
 }
 
 #[test]
-fn a_relation_is_required_of_an_unsandboxed_caller() {
-    let caller = Caller::Process(identified(own_pid(), None));
-    assert_eq!(
-        caller.require_relation(own_pid(), 1, &[Relation::Itself]),
-        Ok(())
-    );
-    assert_eq!(
-        caller.require_relation(1, own_pid(), &[Relation::Parent]),
-        Ok(())
-    );
-    assert_eq!(
-        caller.require_relation(1, own_pid(), &[Relation::Itself, Relation::Parent]),
-        Ok(())
-    );
-}
-
-#[test]
-fn a_caller_in_no_allowed_relation_is_untrusted() {
-    let caller = Caller::Process(identified(own_pid(), None));
-    assert_eq!(
-        caller.require_relation(1, 2, &[Relation::Itself, Relation::Parent]),
-        Err(Denial::Untrusted)
-    );
-    assert_eq!(
-        caller.require_relation(own_pid(), 1, &[Relation::Parent]),
-        Err(Denial::Untrusted)
-    );
-    assert_eq!(
-        caller.require_relation(own_pid(), 1, &[]),
-        Err(Denial::Untrusted)
-    );
-    assert_eq!(caller.require_relation(1, 2, &[Relation::Other]), Ok(()));
-}
-
-#[test]
-fn a_sandboxed_or_anonymous_caller_is_refused_whatever_its_relation() {
-    let flatpak = Caller::Process(identified(own_pid(), Some(Sandbox::Flatpak)));
-    assert_eq!(
-        flatpak.require_relation(
+fn a_relation_is_required_of_an_unsandboxed_caller_only() {
+    let plain = || Caller::Process(identified(own_pid(), None));
+    let all = &[Relation::Itself, Relation::Parent, Relation::Other][..];
+    for (row, caller, pid, parent, allowed, expected) in [
+        (
+            "itself",
+            plain(),
             own_pid(),
             1,
-            &[Relation::Itself, Relation::Parent, Relation::Other]
+            &[Relation::Itself][..],
+            Ok(()),
         ),
-        Err(Denial::Sandboxed(Sandbox::Flatpak))
-    );
-    assert_eq!(
-        Caller::Anonymous.require_relation(own_pid(), 1, &[Relation::Other]),
-        Err(Denial::Anonymous)
-    );
+        (
+            "parent",
+            plain(),
+            1,
+            own_pid(),
+            &[Relation::Parent][..],
+            Ok(()),
+        ),
+        (
+            "either",
+            plain(),
+            1,
+            own_pid(),
+            &[Relation::Itself, Relation::Parent][..],
+            Ok(()),
+        ),
+        (
+            "other allowed",
+            plain(),
+            1,
+            2,
+            &[Relation::Other][..],
+            Ok(()),
+        ),
+        (
+            "neither",
+            plain(),
+            1,
+            2,
+            &[Relation::Itself, Relation::Parent][..],
+            Err(Denial::Untrusted),
+        ),
+        (
+            "itself not allowed",
+            plain(),
+            own_pid(),
+            1,
+            &[Relation::Parent][..],
+            Err(Denial::Untrusted),
+        ),
+        (
+            "nothing allowed",
+            plain(),
+            own_pid(),
+            1,
+            &[][..],
+            Err(Denial::Untrusted),
+        ),
+        (
+            "flatpak",
+            Caller::Process(identified(own_pid(), Some(Sandbox::Flatpak))),
+            own_pid(),
+            1,
+            all,
+            Err(Denial::Sandboxed(Sandbox::Flatpak)),
+        ),
+        (
+            "anonymous",
+            Caller::Anonymous,
+            own_pid(),
+            1,
+            all,
+            Err(Denial::Anonymous),
+        ),
+    ] {
+        assert_eq!(
+            caller.require_relation(pid, parent, allowed),
+            expected,
+            "{row}"
+        );
+    }
 }
 
 #[test]
-fn a_flatpak_process_and_its_proxy_are_one_instance() {
-    let proc = proc_with(&[own_pid(), own_parent()]);
-    flatpak_info(
-        proc.path(),
-        own_pid(),
-        &flatpak_text("org.example.App", "42"),
-    );
-    flatpak_info(
-        proc.path(),
-        own_parent(),
-        &flatpak_text("org.example.App", "42"),
-    );
-    let app = identified(own_pid(), Some(Sandbox::Flatpak));
-    let proxy = identified(own_parent(), Some(Sandbox::Flatpak));
-    assert!(same_instance(&app, &proxy, proc.path()));
-    assert!(same_instance(&proxy, &app, proc.path()));
+fn two_processes_are_one_instance_only_as_one_flatpak_instance() {
+    let flatpak = Some(Sandbox::Flatpak);
+    let app = flatpak_text("org.example.App", "42");
+    for (row, second, sandboxes, infos, expected) in [
+        (
+            "the same process, no sandbox",
+            own_pid(),
+            (None, None),
+            None,
+            true,
+        ),
+        (
+            "the same process, flatpak",
+            own_pid(),
+            (flatpak, flatpak),
+            None,
+            true,
+        ),
+        (
+            "the same process, snap",
+            own_pid(),
+            (Some(Sandbox::Snap), Some(Sandbox::Snap)),
+            None,
+            true,
+        ),
+        ("sandboxed and not", own_pid(), (None, flatpak), None, false),
+        (
+            "flatpak and snap",
+            own_pid(),
+            (flatpak, Some(Sandbox::Snap)),
+            None,
+            false,
+        ),
+        (
+            "two plain processes",
+            own_parent(),
+            (None, None),
+            None,
+            false,
+        ),
+        (
+            "two snaps",
+            own_parent(),
+            (Some(Sandbox::Snap), Some(Sandbox::Snap)),
+            None,
+            false,
+        ),
+        (
+            "an app and its proxy",
+            own_parent(),
+            (flatpak, flatpak),
+            Some((app.clone(), app.clone())),
+            true,
+        ),
+        (
+            "another instance",
+            own_parent(),
+            (flatpak, flatpak),
+            Some((app.clone(), flatpak_text("org.example.App", "43"))),
+            false,
+        ),
+        (
+            "another application",
+            own_parent(),
+            (flatpak, flatpak),
+            Some((app.clone(), flatpak_text("org.example.Other", "42"))),
+            false,
+        ),
+        (
+            "ids trimmed",
+            own_parent(),
+            (flatpak, flatpak),
+            Some((
+                "[Application]\n name = org.example.App \n[Instance]\n instance-id = 7 \n".into(),
+                flatpak_text("org.example.App", "7"),
+            )),
+            true,
+        ),
+        (
+            "no info for the second",
+            own_parent(),
+            (flatpak, flatpak),
+            Some((app.clone(), String::new())),
+            false,
+        ),
+    ] {
+        let proc = proc_with(&[own_pid(), own_parent()]);
+        if let Some((a, b)) = &infos {
+            flatpak_info(proc.path(), own_pid(), a);
+            if !b.is_empty() {
+                flatpak_info(proc.path(), own_parent(), b);
+            }
+        }
+        let a = identified(own_pid(), sandboxes.0);
+        let b = identified(second, sandboxes.1);
+        assert_eq!(same_instance(&a, &b, proc.path()), expected, "{row}");
+        assert_eq!(
+            same_instance(&b, &a, proc.path()),
+            expected,
+            "{row}, reversed"
+        );
+    }
 }
 
 #[test]
-fn flatpak_processes_of_another_instance_or_application_are_not() {
-    let proc = proc_with(&[own_pid(), own_parent()]);
-    let app = identified(own_pid(), Some(Sandbox::Flatpak));
-    let other = identified(own_parent(), Some(Sandbox::Flatpak));
-    flatpak_info(
-        proc.path(),
-        own_pid(),
-        &flatpak_text("org.example.App", "42"),
-    );
-    flatpak_info(
-        proc.path(),
-        own_parent(),
-        &flatpak_text("org.example.App", "43"),
-    );
-    assert!(!same_instance(&app, &other, proc.path()));
-    flatpak_info(
-        proc.path(),
-        own_parent(),
-        &flatpak_text("org.example.Other", "42"),
-    );
-    assert!(!same_instance(&app, &other, proc.path()));
-}
-
-#[test]
-fn flatpak_info_that_cannot_be_read_or_lacks_an_id_is_no_match() {
-    let proc = proc_with(&[own_pid(), own_parent()]);
-    let app = identified(own_pid(), Some(Sandbox::Flatpak));
-    let other = identified(own_parent(), Some(Sandbox::Flatpak));
-    flatpak_info(
-        proc.path(),
-        own_pid(),
-        &flatpak_text("org.example.App", "42"),
-    );
-    assert!(
-        !same_instance(&app, &other, proc.path()),
-        "no file for one of them"
-    );
+fn flatpak_info_without_both_ids_is_no_match() {
     for text in [
         "[Application]\nname=org.example.App\n",
         "[Instance]\ninstance-id=42\n",
         "[Application]\nname=\n[Instance]\ninstance-id=\n",
         "[Other]\nname=org.example.App\ninstance-id=42\n",
     ] {
+        let proc = proc_with(&[own_pid(), own_parent()]);
         flatpak_info(proc.path(), own_pid(), text);
         flatpak_info(proc.path(), own_parent(), text);
+        let app = identified(own_pid(), Some(Sandbox::Flatpak));
+        let other = identified(own_parent(), Some(Sandbox::Flatpak));
         assert!(!same_instance(&app, &other, proc.path()), "{text:?}");
     }
-}
-
-#[test]
-fn the_ids_of_a_flatpak_info_are_trimmed() {
-    let proc = proc_with(&[own_pid(), own_parent()]);
-    flatpak_info(
-        proc.path(),
-        own_pid(),
-        "[Application]\n name = org.example.App \n[Instance]\n instance-id = 7 \n",
-    );
-    flatpak_info(
-        proc.path(),
-        own_parent(),
-        &flatpak_text("org.example.App", "7"),
-    );
-    let app = identified(own_pid(), Some(Sandbox::Flatpak));
-    let other = identified(own_parent(), Some(Sandbox::Flatpak));
-    assert!(same_instance(&app, &other, proc.path()));
-}
-
-#[test]
-fn the_same_process_is_one_instance_without_reading_anything() {
-    let proc = proc_with(&[]);
-    for sandbox in [None, Some(Sandbox::Flatpak), Some(Sandbox::Snap)] {
-        let a = identified(own_pid(), sandbox);
-        let b = identified(own_pid(), sandbox);
-        assert!(same_instance(&a, &b, proc.path()), "{sandbox:?}");
-    }
-}
-
-#[test]
-fn two_processes_without_a_sandbox_or_in_snaps_are_never_one_instance() {
-    let proc = proc_with(&[own_pid(), own_parent()]);
-    for sandbox in [None, Some(Sandbox::Snap)] {
-        let a = identified(own_pid(), sandbox);
-        let b = identified(own_parent(), sandbox);
-        assert!(!same_instance(&a, &b, proc.path()), "{sandbox:?}");
-    }
-}
-
-#[test]
-fn a_sandboxed_and_an_unsandboxed_process_never_match() {
-    let proc = proc_with(&[own_pid()]);
-    let plain = identified(own_pid(), None);
-    let flatpak = identified(own_pid(), Some(Sandbox::Flatpak));
-    let snap = identified(own_pid(), Some(Sandbox::Snap));
-    assert!(!same_instance(&plain, &flatpak, proc.path()));
-    assert!(!same_instance(&flatpak, &snap, proc.path()));
 }
 
 #[test]
@@ -503,44 +512,33 @@ fn an_exited_process_is_no_instance_of_anything() {
 
 #[test]
 fn the_notice_says_so_when_the_bus_gives_no_process_descriptor() {
-    assert_eq!(process_fd_notice(&by_pid(own_pid())), Some(NO_PROCESS_FD));
-    assert_eq!(
-        process_fd_notice(&ConnectionCredentials::default()),
-        Some(NO_PROCESS_FD)
-    );
-    assert_eq!(process_fd_notice(&by_fd(own_pid())), None);
+    for (credentials, expected) in [
+        (by_pid(own_pid()), Some(NO_PROCESS_FD)),
+        (ConnectionCredentials::default(), Some(NO_PROCESS_FD)),
+        (by_fd(own_pid()), None),
+    ] {
+        assert_eq!(process_fd_notice(&credentials), expected, "{credentials:?}");
+    }
 }
 
 #[test]
-fn each_denial_has_an_error_name_of_its_own() {
-    let name = |denial| CallerError::from(denial).name().to_string();
-    assert_eq!(
-        name(Denial::Anonymous),
-        "org.cupertino.Error.AnonymousCaller"
-    );
-    assert_eq!(
-        name(Denial::Sandboxed(Sandbox::Flatpak)),
-        "org.cupertino.Error.FlatpakCaller"
-    );
-    assert_eq!(
-        name(Denial::Sandboxed(Sandbox::Snap)),
-        "org.cupertino.Error.SnapCaller"
-    );
-    assert_eq!(
-        name(Denial::Untrusted),
-        "org.cupertino.Error.UntrustedCaller"
-    );
-}
-
-#[test]
-fn a_denial_has_a_message_that_says_who_is_refused() {
-    let description = |denial| CallerError::from(denial).description().map(str::to_owned);
-    assert!(description(Denial::Sandboxed(Sandbox::Flatpak))
-        .unwrap()
-        .contains("Flatpak"));
-    assert!(description(Denial::Sandboxed(Sandbox::Snap))
-        .unwrap()
-        .contains("Snap"));
-    assert!(description(Denial::Anonymous).is_some());
-    assert!(description(Denial::Untrusted).is_some());
+fn each_denial_is_a_bus_error_of_its_own_that_says_who_is_refused() {
+    for (denial, name, says) in [
+        (Denial::Anonymous, "org.cupertino.Error.AnonymousCaller", ""),
+        (
+            Denial::Sandboxed(Sandbox::Flatpak),
+            "org.cupertino.Error.FlatpakCaller",
+            "Flatpak",
+        ),
+        (
+            Denial::Sandboxed(Sandbox::Snap),
+            "org.cupertino.Error.SnapCaller",
+            "Snap",
+        ),
+        (Denial::Untrusted, "org.cupertino.Error.UntrustedCaller", ""),
+    ] {
+        let error = CallerError::from(denial);
+        assert_eq!(error.name().as_str(), name);
+        assert!(error.description().unwrap().contains(says), "{name}");
+    }
 }

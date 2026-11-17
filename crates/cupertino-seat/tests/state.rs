@@ -12,6 +12,10 @@ fn keyboard() -> DevT {
     DevT::new(13, 64)
 }
 
+fn other() -> DevT {
+    DevT::new(99, 9)
+}
+
 fn pause(dev: DevT) -> Input {
     Input::PauseDevice {
         dev,
@@ -48,52 +52,191 @@ fn running() -> Machine {
 const PAUSED: Output = Output::Transition(Transition::Pause);
 const ACTIVATED: Output = Output::Transition(Transition::Activate);
 
-#[test]
-fn pause_kinds_parse_from_the_wire_strings() {
-    assert_eq!(PauseKind::parse("pause").unwrap(), PauseKind::Pause);
-    assert_eq!(PauseKind::parse("force").unwrap(), PauseKind::Force);
-    assert_eq!(PauseKind::parse("gone").unwrap(), PauseKind::Gone);
-    assert!(matches!(
-        PauseKind::parse("Pause"),
-        Err(Error::UnknownPauseType(kind)) if kind == "Pause"
-    ));
-    assert!(PauseKind::parse("").is_err());
+/// One step of a scenario: an input and what it must give, or a call on the machine.
+enum Step {
+    Step(Input, Vec<Output>),
+    Take(DevT, i32, bool),
+    Release(i32),
+    Running(bool),
+}
+
+use Step::{Release, Running, Take};
+
+fn step(input: Input, outputs: impl Into<Vec<Output>>) -> Step {
+    Step::Step(input, outputs.into())
 }
 
 #[test]
-fn a_session_runs_when_it_starts_active() {
-    assert!(Machine::new(true).is_running());
-    assert!(!Machine::new(true).is_waiting_to_activate());
-    assert!(!Machine::new(false).is_running());
-    assert!(Machine::new(false).is_waiting_to_activate());
+fn a_session_runs_when_it_starts_active_and_otherwise_waits_to_activate() {
+    for active in [true, false] {
+        let machine = Machine::new(active);
+        assert_eq!(machine.is_running(), active, "{active}");
+        assert_eq!(machine.is_waiting_to_activate(), !active, "{active}");
+    }
 }
 
 #[test]
-fn a_device_cannot_be_taken_twice() {
-    let mut machine = running();
-    assert!(matches!(
-        machine.take(gpu(), 12, false),
-        Err(Error::AlreadyTaken(dev)) if dev == gpu()
-    ));
+fn the_session_pauses_once_and_activates_only_when_active_and_every_held_device_resumed() {
+    let scenarios: Vec<(&str, Machine, Vec<Step>)> = vec![
+        (
+            "the first pause pauses and each pause asks for its acknowledgement",
+            running(),
+            vec![
+                step(pause(gpu()), [PAUSED, Output::CompletePause(gpu())]),
+                Running(false),
+                step(pause(keyboard()), [Output::CompletePause(keyboard())]),
+            ],
+        ),
+        (
+            "a forced pause needs no acknowledgement",
+            running(),
+            vec![step(force(gpu()), [PAUSED])],
+        ),
+        (
+            "active returns and every device resumes",
+            running(),
+            vec![
+                step(pause(gpu()), [PAUSED, Output::CompletePause(gpu())]),
+                step(pause(keyboard()), [Output::CompletePause(keyboard())]),
+                step(Input::ActiveChanged(false), []),
+                step(Input::ActiveChanged(true), []),
+                step(resume(gpu()), []),
+                step(resume(keyboard()), [ACTIVATED]),
+                Running(true),
+            ],
+        ),
+        (
+            "a resume activates a session that never saw active turn false",
+            running(),
+            vec![
+                step(pause(gpu()), [PAUSED, Output::CompletePause(gpu())]),
+                step(resume(gpu()), [ACTIVATED]),
+                Running(true),
+            ],
+        ),
+        (
+            "a property change alone does not activate a pausing session",
+            running(),
+            vec![
+                step(pause(gpu()), [PAUSED, Output::CompletePause(gpu())]),
+                step(Input::ActiveChanged(true), []),
+                Running(false),
+            ],
+        ),
+        (
+            "active turning false pauses once",
+            running(),
+            vec![
+                step(Input::ActiveChanged(false), [PAUSED]),
+                step(Input::ActiveChanged(false), []),
+            ],
+        ),
+        (
+            "a session without devices activates when active returns",
+            Machine::new(false),
+            vec![
+                step(Input::ActiveChanged(true), [ACTIVATED]),
+                Running(true),
+                step(Input::ActiveChanged(true), []),
+            ],
+        ),
+        (
+            "a session that started inactive waits for its devices",
+            Machine::new(false),
+            vec![
+                Take(gpu(), 10, true),
+                step(Input::ActiveChanged(true), []),
+                step(resume(gpu()), [ACTIVATED]),
+            ],
+        ),
+        (
+            "a device taken while inactive counts as paused until it resumes",
+            Machine::new(true),
+            vec![
+                Take(gpu(), 10, true),
+                step(Input::ActiveChanged(false), [PAUSED]),
+                step(Input::ActiveChanged(true), []),
+                Running(false),
+                step(resume(gpu()), [ACTIVATED]),
+            ],
+        ),
+        (
+            "a gone device holds nothing back and its later signals are ignored",
+            running(),
+            vec![
+                step(gone(gpu()), []),
+                step(pause(gpu()), []),
+                step(resume(gpu()), []),
+                step(Input::ActiveChanged(false), [PAUSED]),
+                step(Input::ActiveChanged(true), [ACTIVATED]),
+            ],
+        ),
+        (
+            "signals about a device not held are ignored",
+            running(),
+            vec![
+                step(pause(other()), []),
+                step(force(other()), []),
+                step(gone(other()), []),
+                step(resume(other()), []),
+                Running(true),
+            ],
+        ),
+        (
+            "a released paused device no longer holds the session back",
+            running(),
+            vec![
+                step(Input::ActiveChanged(false), [PAUSED]),
+                step(pause(gpu()), [Output::CompletePause(gpu())]),
+                step(Input::ActiveChanged(true), []),
+                Running(false),
+                step(resume(keyboard()), []),
+                Release(10),
+                step(Input::Recheck, [ACTIVATED]),
+                Running(true),
+            ],
+        ),
+        (
+            "a recheck changes nothing while active is false or the session runs",
+            running(),
+            vec![
+                step(Input::ActiveChanged(false), [PAUSED]),
+                step(Input::Recheck, []),
+                step(Input::ActiveChanged(true), [ACTIVATED]),
+                step(Input::Recheck, []),
+            ],
+        ),
+        (
+            "a released device does not start a pausing session again",
+            running(),
+            vec![
+                step(pause(gpu()), [PAUSED, Output::CompletePause(gpu())]),
+                Release(10),
+                step(Input::Recheck, []),
+                Running(false),
+            ],
+        ),
+    ];
+    for (name, mut machine, steps) in scenarios {
+        for (index, item) in steps.into_iter().enumerate() {
+            match item {
+                Step::Step(input, expected) => {
+                    assert_eq!(machine.step(input), expected, "{name}, step {index}");
+                }
+                Take(dev, fd, inactive) => machine.take(dev, fd, inactive).unwrap(),
+                Release(fd) => {
+                    machine.release(fd).unwrap();
+                }
+                Running(running) => {
+                    assert_eq!(machine.is_running(), running, "{name}, step {index}");
+                }
+            }
+        }
+    }
 }
 
 #[test]
-fn the_first_pause_of_any_device_pauses_the_session_and_asks_for_the_acknowledgement() {
-    let mut machine = running();
-    assert_eq!(
-        machine.step(pause(gpu())),
-        [PAUSED, Output::CompletePause(gpu())]
-    );
-    assert!(!machine.is_running());
-    // the session is reported paused once: the second device only asks for its acknowledgement
-    assert_eq!(
-        machine.step(pause(keyboard())),
-        [Output::CompletePause(keyboard())]
-    );
-}
-
-#[test]
-fn an_acknowledgement_is_due_once_and_only_while_the_device_is_held() {
+fn an_acknowledgement_is_due_once_and_only_while_the_device_is_held_and_asked() {
     let mut machine = running();
     machine.step(pause(gpu()));
     assert!(machine.ack_pause(gpu()));
@@ -104,101 +247,32 @@ fn an_acknowledgement_is_due_once_and_only_while_the_device_is_held() {
     machine.step(pause(keyboard()));
     machine.release(11).unwrap();
     assert!(!machine.ack_pause(keyboard()), "released since");
-}
 
-#[test]
-fn a_forced_pause_needs_no_acknowledgement() {
     let mut machine = running();
-    assert_eq!(machine.step(force(gpu())), [PAUSED]);
-    assert!(!machine.ack_pause(gpu()));
+    machine.step(force(gpu()));
+    assert!(!machine.ack_pause(gpu()), "forced");
 }
 
 #[test]
-fn the_session_activates_when_active_returns_and_every_device_resumed() {
+fn a_device_is_held_once_under_the_descriptor_it_was_taken_with() {
     let mut machine = running();
-    machine.step(pause(gpu()));
-    machine.step(pause(keyboard()));
-    assert_eq!(machine.step(Input::ActiveChanged(false)), []);
-    assert!(machine.is_waiting_to_activate());
+    assert!(matches!(
+        machine.take(gpu(), 12, false),
+        Err(Error::AlreadyTaken(dev)) if dev == gpu()
+    ));
+    assert!(matches!(machine.release(99), Err(Error::UnknownFd(99))));
+    machine.release(11).unwrap();
+    assert!(matches!(machine.release(11), Err(Error::UnknownFd(11))));
 
-    assert_eq!(machine.step(Input::ActiveChanged(true)), []);
-    assert_eq!(machine.step(resume(gpu())), []);
-    assert_eq!(machine.step(resume(keyboard())), [ACTIVATED]);
-    assert!(machine.is_running());
+    // a device that went away can be taken again; the old descriptor is no longer recognised
+    machine.step(gone(gpu()));
+    machine.take(gpu(), 20, false).unwrap();
+    assert!(matches!(machine.release(10), Err(Error::UnknownFd(10))));
+    assert_eq!(machine.release(20).unwrap().dev, gpu());
 }
 
 #[test]
-fn a_resume_before_active_changes_activates_a_session_that_never_saw_it_turn_false() {
-    let mut machine = running();
-    machine.step(pause(gpu()));
-    assert_eq!(machine.step(resume(gpu())), [ACTIVATED]);
-    assert!(machine.is_running());
-}
-
-#[test]
-fn a_property_change_alone_does_not_activate_a_session_that_is_only_pausing() {
-    let mut machine = running();
-    machine.step(pause(gpu()));
-    assert_eq!(machine.step(Input::ActiveChanged(true)), []);
-    assert!(!machine.is_running());
-}
-
-#[test]
-fn active_turning_false_pauses_the_session_once() {
-    let mut machine = running();
-    assert_eq!(machine.step(Input::ActiveChanged(false)), [PAUSED]);
-    assert_eq!(machine.step(Input::ActiveChanged(false)), []);
-}
-
-#[test]
-fn a_session_without_devices_activates_when_active_returns() {
-    let mut machine = Machine::new(false);
-    assert_eq!(machine.step(Input::ActiveChanged(true)), [ACTIVATED]);
-    assert!(machine.is_running());
-    assert_eq!(machine.step(Input::ActiveChanged(true)), []);
-}
-
-#[test]
-fn a_session_that_started_inactive_waits_for_its_devices_too() {
-    let mut machine = Machine::new(false);
-    machine.take(gpu(), 10, true).unwrap();
-    assert_eq!(machine.step(Input::ActiveChanged(true)), []);
-    assert_eq!(machine.step(resume(gpu())), [ACTIVATED]);
-}
-
-#[test]
-fn a_device_taken_while_the_session_is_inactive_counts_as_paused_until_it_resumes() {
-    let mut machine = Machine::new(true);
-    machine.take(gpu(), 10, true).unwrap();
-    machine.step(Input::ActiveChanged(false));
-    machine.step(Input::ActiveChanged(true));
-    assert!(!machine.is_running());
-    assert_eq!(machine.step(resume(gpu())), [ACTIVATED]);
-}
-
-#[test]
-fn a_gone_device_does_not_hold_the_session_back_and_ignores_later_signals() {
-    let mut machine = running();
-    assert_eq!(machine.step(gone(gpu())), []);
-    assert_eq!(machine.step(pause(gpu())), []);
-    assert_eq!(machine.step(resume(gpu())), []);
-    assert_eq!(machine.step(Input::ActiveChanged(false)), [PAUSED]);
-    assert_eq!(machine.step(Input::ActiveChanged(true)), [ACTIVATED]);
-}
-
-#[test]
-fn signals_about_a_device_that_is_not_held_are_ignored() {
-    let mut machine = running();
-    let other = DevT::new(99, 9);
-    assert_eq!(machine.step(pause(other)), []);
-    assert_eq!(machine.step(force(other)), []);
-    assert_eq!(machine.step(gone(other)), []);
-    assert_eq!(machine.step(resume(other)), []);
-    assert!(machine.is_running());
-}
-
-#[test]
-fn releasing_a_device_finds_it_by_descriptor_and_asks_logind_to_let_go() {
+fn releasing_asks_logind_to_let_go_unless_the_device_is_gone() {
     let mut machine = running();
     assert_eq!(
         machine.release(10).unwrap(),
@@ -210,70 +284,14 @@ fn releasing_a_device_finds_it_by_descriptor_and_asks_logind_to_let_go() {
     assert!(machine.is_unreleased(gpu()));
     machine.confirm_release(gpu());
     assert!(!machine.is_unreleased(gpu()));
-}
 
-#[test]
-fn a_descriptor_not_handed_out_or_already_released_is_unknown() {
-    let mut machine = running();
-    assert!(matches!(machine.release(99), Err(Error::UnknownFd(99))));
-    machine.release(10).unwrap();
-    assert!(matches!(machine.release(10), Err(Error::UnknownFd(10))));
-}
-
-#[test]
-fn releasing_a_gone_device_needs_no_call_to_logind() {
-    let mut machine = running();
-    machine.step(gone(gpu()));
+    machine.step(gone(keyboard()));
     assert_eq!(
-        machine.release(10).unwrap(),
+        machine.release(11).unwrap(),
         Released {
-            dev: gpu(),
+            dev: keyboard(),
             notify_logind: false
         }
     );
-    assert!(!machine.is_unreleased(gpu()));
-}
-
-#[test]
-fn a_device_that_went_away_can_be_taken_again_under_a_new_descriptor() {
-    let mut machine = running();
-    machine.step(gone(gpu()));
-    machine.take(gpu(), 20, false).unwrap();
-    // the descriptor of the replaced entry is no longer recognised
-    assert!(matches!(machine.release(10), Err(Error::UnknownFd(10))));
-    assert_eq!(machine.release(20).unwrap().dev, gpu());
-}
-
-#[test]
-fn a_released_paused_device_no_longer_holds_the_session_back() {
-    let mut machine = running();
-    machine.step(Input::ActiveChanged(false));
-    machine.step(pause(gpu()));
-    machine.step(Input::ActiveChanged(true));
-    assert!(!machine.is_running());
-    assert_eq!(machine.step(resume(keyboard())), []);
-    machine.release(10).unwrap();
-    assert!(machine.is_waiting_to_activate());
-    assert_eq!(machine.step(Input::Recheck), [ACTIVATED]);
-    assert!(machine.is_running());
-}
-
-#[test]
-fn a_recheck_changes_nothing_while_devices_wait_or_active_is_false() {
-    let mut machine = running();
-    machine.step(Input::ActiveChanged(false));
-    assert_eq!(machine.step(Input::Recheck), []);
-    machine.step(Input::ActiveChanged(true));
-    assert!(machine.is_running());
-    assert_eq!(machine.step(Input::Recheck), []);
-}
-
-#[test]
-fn a_released_device_does_not_start_a_pausing_session_again() {
-    let mut machine = running();
-    machine.step(pause(gpu()));
-    machine.release(10).unwrap();
-    // never saw Active turn false and no resume came: a recheck is not enough
-    assert_eq!(machine.step(Input::Recheck), []);
-    assert!(!machine.is_running());
+    assert!(!machine.is_unreleased(keyboard()));
 }

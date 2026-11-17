@@ -60,7 +60,7 @@ pub const CANCEL_LABEL: &str = "Cancel";
 
 /// The checkbox of every panel: whether the applications open now start again at the next
 /// login ([`crate::restore`]).
-pub const REOPEN_LABEL: &str = "Reopen windows when logging back in";
+pub const REOPEN_LABEL: &str = "Open my windows again after I log in";
 
 impl Kind {
     /// The name in the log lines `panel shown: <name>`.
@@ -75,18 +75,18 @@ impl Kind {
 
     pub fn text(self) -> &'static Text {
         const LOG_OUT: Text = Text {
-            title: "Are you sure you want to quit all applications and log out now?",
-            info_before: Some("If you do nothing, you will be logged out automatically in "),
+            title: "Log out now?",
+            info_before: Some("Logging out automatically in "),
             confirm: "Log Out",
         };
         const RESTART: Text = Text {
-            title: "Are you sure you want to restart your computer now?",
-            info_before: Some("If you do nothing, the computer will restart automatically in "),
+            title: "Restart this computer?",
+            info_before: Some("Restarting automatically in "),
             confirm: "Restart",
         };
         const SHUT_DOWN: Text = Text {
-            title: "Are you sure you want to shut down your computer now?",
-            info_before: Some("If you do nothing, the computer will shut down automatically in "),
+            title: "Turn off this computer?",
+            info_before: Some("Turning off automatically in "),
             confirm: "Shut Down",
         };
         const POWER_BUTTON: Text = Text {
@@ -228,7 +228,7 @@ pub struct PanelButton {
     pub decision: Decision,
 }
 
-/// The "Reopen windows" checkbox of a panel.
+/// The "Open my windows again" checkbox of a panel.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PanelCheckbox {
     /// The row: the box and its label across the text column; a click anywhere on it toggles.
@@ -385,7 +385,7 @@ impl Placement {
 pub struct Panel {
     kind: Kind,
     start: f64,
-    /// The "Reopen windows" choice: the checkbox's state.
+    /// The "Open my windows again" choice: the checkbox's state.
     reopen: bool,
 }
 
@@ -768,17 +768,15 @@ mod tests {
     fn the_message_is_the_sentence_with_the_countdown_in_seconds() {
         assert_eq!(
             Kind::ShutDown.countdown_message(60).as_deref(),
-            Some(
-                "If you do nothing, the computer will shut down automatically in 60\u{a0}seconds."
-            )
+            Some("Turning off automatically in 60\u{a0}seconds.")
         );
         assert_eq!(
             Kind::LogOut.countdown_message(1).as_deref(),
-            Some("If you do nothing, you will be logged out automatically in 1\u{a0}second.")
+            Some("Logging out automatically in 1\u{a0}second.")
         );
         assert_eq!(
             Kind::Restart.countdown_message(59).as_deref(),
-            Some("If you do nothing, the computer will restart automatically in 59\u{a0}seconds.")
+            Some("Restarting automatically in 59\u{a0}seconds.")
         );
     }
 

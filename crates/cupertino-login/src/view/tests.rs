@@ -1,6 +1,6 @@
 //! The Kit views on the headless window system: what the password field publishes while a password is typed and after it
 //! is submitted, how a wrong password is shown and said, the field's busy and invalid states and its length limit, and
-//! the confirmation panels' keys, buttons and "Reopen windows" checkbox, through the tree assistive technology reads and
+//! the confirmation panels' keys, buttons and "Open my windows again" checkbox, through the tree assistive technology reads and
 //! the Inspector dump. With `CUPERTINO_LOOK_DIR` set, the test `pictures_for_review` writes each surface in light and dark
 //! at 1× and 2× there.
 

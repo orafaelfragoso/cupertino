@@ -237,7 +237,7 @@ pub enum Input {
     Power(usize),
     /// A button or key of the confirmation panel.
     Decide(Decision),
-    /// The confirmation panel's "Reopen windows" checkbox was set to this, by a click, Space or assistive technology.
+    /// The confirmation panel's "Open my windows again" checkbox was set to this, by a click, Space or assistive technology.
     Reopen(bool),
     /// A choice on the native desktop-control consent panel.
     DesktopControl(ControlChoice),
@@ -1176,7 +1176,7 @@ fn panel_icon<M: 'static>(rect: Rect, icon: crate::panel::Icon) -> Element<M> {
 }
 
 /// The confirmation panel, an alert on glass: the picture of its action, its title, the countdown line (its digits
-/// of one width), the "Reopen windows" checkbox at `reopen`, which has the focus, and its buttons as capsules. Return
+/// of one width), the "Open my windows again" checkbox at `reopen`, which has the focus, and its buttons as capsules. Return
 /// does the default action, Escape cancels, Space flips the checkbox, and the power-button panel's letters choose. A
 /// press on its background that no control takes drags it ([`Input::MovePanel`]); it is no modal dialog, so the rest
 /// of the session stays usable while it counts down.

@@ -120,7 +120,7 @@ fn values_a_reader_needs_are_reported_missing_or_out_of_range() {
     let t = tree(
         vec![
             (1, node(Role::Window, Some("Panel"), &[2, 3, 4, 5, 6])),
-            (2, control(Role::CheckBox, Some("Reopen windows"))),
+            (2, control(Role::CheckBox, Some("Open my windows again"))),
             (3, control(Role::Slider, Some("Brightness"))),
             (4, progress),
             (5, password),
@@ -131,7 +131,7 @@ fn values_a_reader_needs_are_reported_missing_or_out_of_range() {
     assert_eq!(
         accessibility_audit(&t),
         [
-            "Window \"Panel\" > CheckBox \"Reopen windows\": does not say whether it is on or off",
+            "Window \"Panel\" > CheckBox \"Open my windows again\": does not say whether it is on or off",
             "Window \"Panel\" > Slider \"Brightness\": does not read a number within its range",
             "Window \"Panel\" > ProgressIndicator \"Copying\": reads progress outside its range",
             "Window \"Panel\" > PasswordInput \"Password\": reads its secret as text",

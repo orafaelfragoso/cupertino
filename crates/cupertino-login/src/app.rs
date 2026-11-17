@@ -147,7 +147,7 @@ struct Quitting {
     then: Action,
     /// The interrupt panel on screen.
     interrupt: Option<Interrupted>,
-    /// The "Reopen windows" choice the panel was confirmed with.
+    /// The "Open my windows again" choice the panel was confirmed with.
     reopen: bool,
     /// The identities the server named as it asked each application to quit, in that order.
     quit: Vec<String>,
@@ -216,7 +216,7 @@ pub struct SessionApp {
     logging_out: bool,
     /// The applications are being quit before a confirmed action.
     quitting: Option<Quitting>,
-    /// The file of the "Reopen windows" choice and list ([`restore`]); `None` without a state or home directory.
+    /// The file of the "Open my windows again" choice and list ([`restore`]); `None` without a state or home directory.
     restore_path: Option<PathBuf>,
     /// Wrong passwords typed at the lock screens of this run.
     failed: FailedAttempts,
@@ -1259,7 +1259,7 @@ impl SessionApp {
     }
 
     /// Log out without asking (the log out now shortcut): the applications quit first as after a confirmed log out, with
-    /// the "Reopen windows" choice last stored. An open panel closes as if cancelled. Ignored on a locked session, which
+    /// the "Open my windows again" choice last stored. An open panel closes as if cancelled. Ignored on a locked session, which
     /// has nobody to see it, and while a log out, restart or shut down is already under way.
     fn log_out_now(&mut self, now: f64) -> Result<()> {
         if self.lock.is_some() {
@@ -1282,7 +1282,7 @@ impl SessionApp {
     }
 
     /// Close the panel with `decision`; an action is carried out through logind. Confirming a log out, restart or shut
-    /// down remembers the panel's "Reopen windows" choice; cancelling forgets a change to it.
+    /// down remembers the panel's "Open my windows again" choice; cancelling forgets a change to it.
     fn decide(&mut self, decision: Decision) -> Result<()> {
         let PanelState { panel, .. } = self
             .panel
@@ -1301,7 +1301,7 @@ impl SessionApp {
         Ok(())
     }
 
-    /// Store the "Reopen windows" choice, with no list yet: the list follows once the applications have quit.
+    /// Store the "Open my windows again" choice, with no list yet: the list follows once the applications have quit.
     fn remember_choice(&self, reopen: bool) {
         let Some(path) = &self.restore_path else {
             return;
@@ -1392,7 +1392,7 @@ impl SessionApp {
         Ok(())
     }
 
-    /// Sleep at once; log out, restart and shut down after the applications have quit, with the "Reopen windows" choice
+    /// Sleep at once; log out, restart and shut down after the applications have quit, with the "Open my windows again" choice
     /// `reopen`.
     fn carry_out(&mut self, now: f64, action: Action, reopen: bool) -> Result<()> {
         if action == Action::Sleep {

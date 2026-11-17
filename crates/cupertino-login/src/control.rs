@@ -127,7 +127,7 @@ impl Control {
         self.panel(Kind::LogOut)
     }
 
-    /// Log out without asking: the applications quit first, as after a confirmed panel, with the "Reopen windows" choice
+    /// Log out without asking: the applications quit first, as after a confirmed panel, with the "Open my windows again" choice
     /// last stored. Fails while the session is locked.
     async fn log_out_now(
         &self,

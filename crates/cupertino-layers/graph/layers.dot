@@ -134,13 +134,14 @@ digraph "layers" {
     "cupertino-settings";
   }
   subgraph "cluster_tools" {
-    label="tools (6)";
+    label="tools (7)";
     "cupertino-cli";
     "cupertino-diagnostics";
     "cupertino-gpu-shaders";
     "cupertino-gpu-slice";
     "cupertino-layers";
     "cupertino-testclient";
+    "xtask";
   }
   "cupertino-app-protocols" -> "cupertino-semantics";
   "cupertino-btd" -> "cupertino-bluetooth";

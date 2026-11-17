@@ -187,7 +187,12 @@ pub const RULES: Rules = &[
 ];
 
 /// The closed layers: none of their problems may be listed in the remaining-work file.
-pub const ENFORCED: &[Layer] = &[Layer::Foundation, Layer::Testing];
+pub const ENFORCED: &[Layer] = &[
+    Layer::Foundation,
+    Layer::Graphics,
+    Layer::Models,
+    Layer::Testing,
+];
 
 /// The layers whose crates start no threads in their `src/`: they offer blocking functions, which callers run as
 /// tasks.

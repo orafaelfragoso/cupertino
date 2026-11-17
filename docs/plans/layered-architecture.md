@@ -15,11 +15,11 @@ Updated by the lead at every merge.
 
 | | |
 |---|---|
-| Current wave | 2 |
-| Running tasks | W2.T |
-| Enforced layers | foundation, testing; system after W4.5 (139 remaining-work lines) |
+| Current wave | 3 (not started) |
+| Running tasks | none |
+| Enforced layers | foundation, graphics, models, testing; system after W4.5 (139 remaining-work lines) |
 | Waiting on the owner | nothing |
-| Last closed wave | 1 |
+| Last closed wave | 2 |
 
 ## Contents
 
@@ -622,9 +622,12 @@ W2.3.
 `wm scene gpu raster-math control-model displays effects input alsa bluetooth devices evdev netlink pipewire screencast
 seat`, as in W1.T.
 
+- [x] (0ddf758b5) The crates follow [Tests](#tests-d29); about 1280 public tests. Found and fixed: the atlas's and the
+      screencast size check's overflow on huge sizes, and `glyph::rasterize` returning a mask for a non-finite outline.
+
 #### W2.close (lead)
 
-- [ ] `ENFORCED` gains `Graphics`, `Models`; `Platform` joins when W5.6 lands. Docs and gates as in W1.close.
+- [x] `ENFORCED` gains `Graphics`, `Models`; `Platform` joins when W5.6 lands. Docs and gates as in W1.close.
 
 ### Wave 3: protocol, transport
 

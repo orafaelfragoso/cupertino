@@ -6,7 +6,12 @@
 //!
 //! A first run can be bounded: a whole number of seconds in `~/.config/cupertino/session-limit` (or
 //! `$CUPERTINO_SESSION_LIMIT`) stops the compositor after that long (`--run-for`), and the session ends it 30 s later if
-//! it hangs instead: TERM, then KILL 10 s after that. No file, no limit.
+//! it hangs instead: TERM, then KILL 10 s after that, to every process of the compositor's session of processes (also
+//! when `dbus-run-session` ends first and the compositor outlives it). No file, no limit.
+//!
+//! TERM, INT and HUP stay blocked for the whole life of the process: one that comes during the clean-up after the
+//! compositor is noted, not acted on, so the clean-up always runs to its end, and every call on the user bus in it is
+//! bounded.
 
 use std::ffi::OsString;
 use std::os::unix::process::CommandExt as _;
@@ -29,12 +34,15 @@ pub const SERVER_ENV: &str = "CUPERTINO_SESSION_SERVER";
 pub const LIMIT_ENV: &str = "CUPERTINO_SESSION_LIMIT";
 /// The desktop name programs of the session see.
 const DESKTOP: &str = "Cupertino";
-/// How long a hung compositor gets after its limit before the session sends TERM, and then KILL.
+/// How long a hung compositor gets after its limit before the session sends TERM.
 const GRACE: Duration = Duration::from_secs(30);
+/// How long after a TERM the session sends what is left of the compositor's session of processes gets KILL.
 const KILL_AFTER: Duration = Duration::from_secs(10);
+/// How often the session looks again for processes of the child's session that outlived the child.
+const POLL: Duration = Duration::from_millis(100);
 /// The most digits a limit may have.
 const LIMIT_DIGITS: usize = 7;
-/// How long a call on the user bus may take at the end of the session.
+/// How long connecting to the user bus, and each call on it, may take at the end of the session.
 const BUS_TIMEOUT: Duration = Duration::from_secs(2);
 /// The statuses a watchdog end is reported with: TERM sent, then KILL.
 const STATUS_TIMED_OUT: i32 = 124;
@@ -123,21 +131,23 @@ pub fn run(args: &[OsString]) -> i32 {
         });
     }
 
+    // blocked until the process ends, so that a stop during the clean-up cannot end it half way; the threads the
+    // clean-up starts inherit the mask
     let signals = Signals::block();
     let started = Instant::now();
     let child = match command.spawn() {
         Ok(child) => child,
         Err(e) => {
-            signals.restore();
             log.note(&format!("could not start the compositor: {e}"));
             return 127;
         }
     };
-    let outcome = supervise(child.id() as libc::pid_t, &signals, limit);
-    signals.restore();
+    let mut outcome = supervise(child.id() as libc::pid_t, &signals, limit);
     let seconds = started.elapsed().as_secs();
 
     end_shared_session(&log);
+    // a stop that came after the compositor ended, before or during the clean-up
+    outcome.stopped |= signals.stop_pending();
 
     let reason = end_file.as_deref().and_then(read_reason);
     log.note(&end_line(&outcome, reason.as_deref(), seconds));
@@ -245,25 +255,27 @@ fn config_dir() -> Option<PathBuf> {
 }
 
 /// The signals the session waits for, blocked so that they queue until it asks for them: the session's stop (TERM,
-/// INT, HUP) and the end of its child (CHLD).
+/// INT, HUP) and the end of its child (CHLD). They are never unblocked: one still pending when the process ends goes
+/// with it.
 struct Signals {
     set: libc::sigset_t,
-    old: libc::sigset_t,
 }
+
+/// The session's stop.
+const STOP_SIGNALS: [libc::c_int; 3] = [libc::SIGTERM, libc::SIGINT, libc::SIGHUP];
 
 impl Signals {
     fn block() -> Signals {
-        // SAFETY: the sets are plain values the calls initialise; the mask of the calling thread only changes. The child
-        // empties it again before `exec`.
+        // SAFETY: the set is a plain value the calls initialise; the mask of the calling thread only changes, and the
+        // threads it starts later inherit it. The child empties it again before `exec`.
         unsafe {
             let mut set: libc::sigset_t = std::mem::zeroed();
-            let mut old: libc::sigset_t = std::mem::zeroed();
             libc::sigemptyset(&mut set);
-            for signal in [libc::SIGTERM, libc::SIGINT, libc::SIGHUP, libc::SIGCHLD] {
+            for signal in STOP_SIGNALS.into_iter().chain([libc::SIGCHLD]) {
                 libc::sigaddset(&mut set, signal);
             }
-            libc::pthread_sigmask(libc::SIG_BLOCK, &set, &mut old);
-            Signals { set, old }
+            libc::pthread_sigmask(libc::SIG_BLOCK, &set, std::ptr::null_mut());
+            Signals { set }
         }
     }
 
@@ -292,49 +304,76 @@ impl Signals {
         }
     }
 
-    fn restore(&self) {
-        // SAFETY: `old` is the mask `block` saved.
+    /// Whether a stop signal is pending, blocked since it came.
+    fn stop_pending(&self) -> bool {
+        // SAFETY: the set is a plain value the calls fill in.
         unsafe {
-            libc::pthread_sigmask(libc::SIG_SETMASK, &self.old, std::ptr::null_mut());
+            let mut pending: libc::sigset_t = std::mem::zeroed();
+            libc::sigemptyset(&mut pending);
+            libc::sigpending(&mut pending) == 0
+                && STOP_SIGNALS
+                    .iter()
+                    .any(|signal| libc::sigismember(&pending, *signal) == 1)
         }
     }
 }
 
 /// Waits for the child `pid`: a signal for the session goes on to every process of the child's session, and with a
-/// limit the watchdog ends a compositor that outlives it by [`GRACE`].
+/// limit the watchdog ends a compositor that outlives it by [`GRACE`]. After the first TERM the session sends (a stop or
+/// the watchdog), it waits until nothing of the child's session is left, also when the child ended first (as
+/// `dbus-run-session` does on TERM while the compositor under it goes on), and sends KILL to what is left
+/// [`KILL_AFTER`] after that TERM.
 fn supervise(pid: libc::pid_t, signals: &Signals, limit: Option<u64>) -> Outcome {
     let mut stopped = false;
-    let mut watchdog_status = None;
-    let mut deadline = limit.map(|seconds| Instant::now() + Duration::from_secs(seconds) + GRACE);
+    let mut timed_out = false;
+    let mut killed = false;
+    let mut ended: Option<i32> = None;
+    let limit_at = limit.map(|seconds| Instant::now() + Duration::from_secs(seconds) + GRACE);
+    let mut kill_at: Option<Instant> = None;
     loop {
-        if let Some(status) = reap(pid) {
-            let status = match (watchdog_status, status) {
-                (Some(watchdog), _) => watchdog,
-                (None, Reaped::Exit(code)) => code,
-                (None, Reaped::Signal(signal)) => 128 + signal,
-            };
-            return Outcome { status, stopped };
+        if ended.is_none() {
+            ended = reap(pid).map(|reaped| match reaped {
+                Reaped::Exit(code) => code,
+                Reaped::Signal(signal) => 128 + signal,
+            });
         }
-        let timeout = deadline.map(|d| d.saturating_duration_since(Instant::now()));
+        if let Some(code) = ended {
+            if kill_at.is_none() || killed || !session_alive(pid) {
+                let status = match (timed_out, killed) {
+                    (false, _) => code,
+                    (true, false) => STATUS_TIMED_OUT,
+                    (true, true) => STATUS_KILLED,
+                };
+                return Outcome { status, stopped };
+            }
+        }
+        let next = [limit_at.filter(|_| !timed_out), kill_at.filter(|_| !killed)]
+            .into_iter()
+            .flatten()
+            .min();
+        let mut timeout = next.map(|at| at.saturating_duration_since(Instant::now()));
+        // processes that are not this one's children end without a signal to it, so they are looked for again
+        if ended.is_some() {
+            timeout = Some(timeout.map_or(POLL, |t| t.min(POLL)));
+        }
         match signals.wait(timeout) {
             Some(libc::SIGCHLD) => {}
             Some(_) => {
                 stopped = true;
                 signal_session(pid, libc::SIGTERM);
+                kill_at.get_or_insert(Instant::now() + KILL_AFTER);
             }
-            None if deadline.is_some_and(|d| Instant::now() >= d) => match watchdog_status {
-                None => {
-                    watchdog_status = Some(STATUS_TIMED_OUT);
+            None => {
+                let now = Instant::now();
+                if !timed_out && limit_at.is_some_and(|at| now >= at) {
+                    timed_out = true;
                     signal_session(pid, libc::SIGTERM);
-                    deadline = Some(Instant::now() + KILL_AFTER);
-                }
-                Some(_) => {
-                    watchdog_status = Some(STATUS_KILLED);
+                    kill_at.get_or_insert(now + KILL_AFTER);
+                } else if !killed && kill_at.is_some_and(|at| now >= at) {
+                    killed = true;
                     signal_session(pid, libc::SIGKILL);
-                    deadline = None;
                 }
-            },
-            None => {}
+            }
         }
     }
 }
@@ -363,44 +402,52 @@ fn reap(pid: libc::pid_t) -> Option<Reaped> {
 
 /// Sends `signal` to every process of the session `sid` leads, and to its process group when none is found.
 fn signal_session(sid: libc::pid_t, signal: libc::c_int) {
-    let mut sent = false;
-    if let Ok(entries) = std::fs::read_dir("/proc") {
-        for entry in entries.flatten() {
-            let Some(pid) = entry
-                .file_name()
-                .to_str()
-                .and_then(|n| n.parse::<libc::pid_t>().ok())
-            else {
-                continue;
-            };
-            if session_of(&entry.path()) == Some(sid) {
-                // SAFETY: `kill` takes no pointers.
-                unsafe { libc::kill(pid, signal) };
-                sent = true;
-            }
-        }
+    let members = session_members(sid);
+    for pid in &members {
+        // SAFETY: `kill` takes no pointers.
+        unsafe { libc::kill(*pid, signal) };
     }
-    if !sent {
+    if members.is_empty() {
         // SAFETY: as above; a negative pid names the process group.
         unsafe { libc::kill(-sid, signal) };
     }
 }
 
-/// The session id in `/proc/<pid>/stat`: the fourth field after the command's closing parenthesis.
-fn session_of(proc_dir: &Path) -> Option<libc::pid_t> {
+/// Whether a process of the session `sid` leads still runs.
+fn session_alive(sid: libc::pid_t) -> bool {
+    !session_members(sid).is_empty()
+}
+
+/// The processes of the session `sid` leads that have not ended; zombies are left out.
+fn session_members(sid: libc::pid_t) -> Vec<libc::pid_t> {
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let pid = entry.file_name().to_str()?.parse::<libc::pid_t>().ok()?;
+            let (state, session) = stat_of(&entry.path())?;
+            (session == sid && !matches!(state, 'Z' | 'X')).then_some(pid)
+        })
+        .collect()
+}
+
+/// The state and the session id in `/proc/<pid>/stat`: the first and the fourth field after the command's closing
+/// parenthesis.
+fn stat_of(proc_dir: &Path) -> Option<(char, libc::pid_t)> {
     let stat = std::fs::read_to_string(proc_dir.join("stat")).ok()?;
-    let rest = &stat[stat.rfind(')')? + 1..];
-    rest.split_whitespace().nth(3)?.parse().ok()
+    let mut fields = stat[stat.rfind(')')? + 1..].split_whitespace();
+    let state = fields.next()?.chars().next()?;
+    let session = fields.nth(2)?.parse().ok()?;
+    Some((state, session))
 }
 
 /// On a shared user bus, the session target and the variables the compositor put in the user manager end with it, and
 /// every collection of the Secret Service is locked. The stop is queued, not waited for: the login screen comes back
 /// when the session ends, whatever the target's services take.
 fn end_shared_session(log: &Log) {
-    let Ok(conn) = zbus::blocking::connection::Builder::session()
-        .map(|b| b.method_timeout(BUS_TIMEOUT))
-        .and_then(|b| b.build())
-    else {
+    let Some(conn) = connect_user_bus() else {
         return;
     };
     if !has_owner(&conn, SYSTEMD) || !unit_active(&conn, SESSION_TARGET) {
@@ -424,6 +471,22 @@ fn end_shared_session(log: &Log) {
     );
     log.note("stopped cupertino-session.target and removed the session's variables from the user manager");
     lock_secrets(&conn, log);
+}
+
+/// The user bus, every call on it bounded by [`BUS_TIMEOUT`]; `None` when it cannot be reached within that time either.
+/// A bus that takes the connection and never answers keeps a thread, which ends with the process.
+fn connect_user_bus() -> Option<Connection> {
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    std::thread::Builder::new()
+        .name("session-bus".into())
+        .spawn(move || {
+            let conn = zbus::blocking::connection::Builder::session()
+                .map(|b| b.method_timeout(BUS_TIMEOUT))
+                .and_then(|b| b.build());
+            let _ = sender.send(conn.ok());
+        })
+        .ok()?;
+    receiver.recv_timeout(BUS_TIMEOUT).ok().flatten()
 }
 
 /// The defaults the compositor set because the manager had no value of the user's own, from [`DEFAULTS_RECORD`],

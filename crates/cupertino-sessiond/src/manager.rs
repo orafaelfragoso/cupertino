@@ -17,7 +17,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use cupertino_defaults::compositor::{COMPOSITOR_CONF_ENV, GREETER_CONF_PATH};
-use cupertino_defaults::login::{default_admin_groups, LoginConfig, Problem, DEFAULT_ADMIN_GROUPS};
+use cupertino_defaults::login::{
+    default_admin_groups, LoginConfig, Problem, Replaced, DEFAULT_ADMIN_GROUPS,
+};
 use cupertino_diagnostic_events::{self as diag, Severity, Value};
 use cupertino_login_ipc::message::{MAX_EVENT_FRAME, MAX_REQUEST_FRAME, SOCKET_PATH};
 use cupertino_login_ipc::{
@@ -113,6 +115,9 @@ pub fn check_config() -> ExitCode {
                 .iter()
                 .map(|p| format!("{}; the setting takes its safe value", describe(p)))
                 .collect();
+            if let Some(warning) = replaced_warning(&path, &loaded.replaced) {
+                problems.push(warning);
+            }
             if let Err(reason) = auto_login::settings_are_trusted(&path) {
                 let config = &loaded.config;
                 for (key, set) in [
@@ -140,6 +145,30 @@ pub fn check_config() -> ExitCode {
     } else {
         ExitCode::FAILURE
     }
+}
+
+/// The one warning for the commands of the settings file at `path` that name a removed program and run its
+/// replacement: which ones, what runs, and the package's new file to merge. `None` when there is none.
+fn replaced_warning(path: &Path, replaced: &[Replaced]) -> Option<String> {
+    if replaced.is_empty() {
+        return None;
+    }
+    let commands: Vec<String> = replaced
+        .iter()
+        .map(|r| {
+            format!(
+                "{} names {}, which this version no longer has, and runs `{}` instead",
+                r.key,
+                r.program,
+                r.command.join(" ")
+            )
+        })
+        .collect();
+    Some(format!(
+        "{}; merge {}.pacnew into the file",
+        commands.join("; "),
+        path.display()
+    ))
 }
 
 /// A problem of the settings file as its line number and message; one of the whole file (line 0) as its message.
@@ -468,6 +497,9 @@ impl Manager {
             format!("{}: {}", LoginConfig::path().display(), lines.join("; "))
         })?;
         let path = LoginConfig::path();
+        if let Some(warning) = replaced_warning(&path, &loaded.replaced) {
+            eprintln!("cupertino-sessiond: {}: {warning}", path.display());
+        }
         for problem in &loaded.problems {
             eprintln!(
                 "cupertino-sessiond: {}: {}; the setting takes its safe value",

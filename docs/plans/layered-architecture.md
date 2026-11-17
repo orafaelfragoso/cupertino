@@ -16,7 +16,7 @@ Updated by the lead at every merge.
 | | |
 |---|---|
 | Current wave | 1 |
-| Running tasks | W1.2, W1.T |
+| Running tasks | W1.6, W1.T |
 | Enforced layers | none (target rules checked since W0.2; 248 remaining-work lines) |
 | Waiting on the owner | nothing |
 | Last closed wave | 0 |
@@ -507,12 +507,12 @@ screenshot server settings ui-menus ui-platform ui-text ui-wayland`. **After** W
 controlcenter decorations files glass menubar notifications polkit-agent server settings ui-gpu ui-render dock launcher
 login osd portal screenshot`. **After** W1.3.
 
-- [ ] The tokens (`ThemeTokens`, `ColorRole`, `StateVariant`, appearance) are a module of `cupertino-theme`. The
+- [x] (50a18e5bd) The tokens (`ThemeTokens`, `ColorRole`, `StateVariant`, appearance) are a module of `cupertino-theme`. The
       thread-local activation value of `cupertino-ui-theme` moves to `cupertino-ui-core`, which owns runtime state.
-- [ ] `cupertino-theme` parses a specification it is given; `cupertino-assets` finds the files
+- [x] (50a18e5bd) `cupertino-theme` parses a specification it is given; `cupertino-assets` finds the files
       (`CUPERTINO_THEME_DIR`, `CUPERTINO_SPEC_DIR`, the installed path) and offers theme loading that composes both;
       callers of `Theme::load` and `Theme::from_dir` use it.
-- [ ] Durations, curves and springs of the design are named in `cupertino-theme`; `cupertino-animation` holds the maths.
+- [ ] Durations, curves and springs of the design are named in `cupertino-theme`; `cupertino-animation` holds the maths. The timing presets moved in 50a18e5bd; the five cubic-bezier constants and the default spring move in W1.6.
 
 #### W1.3 The `system` layer (S)
 
@@ -1065,6 +1065,9 @@ One line per change to a decision or approval of a design: date, number, what, w
   server whose environment layout does not compile at start uses a US keymap (D31 has no last layout then).
 - 2026-11-17: lead: the test suite was restarted from nothing before wave 1, so each `T` task writes the public tests
   of its crate's documented behaviour.
+- 2026-11-17: lead: the window activation value is a field of `ColorTokens` that the runtime sets while colours cross,
+  not a thread-local in `cupertino-ui-core` (D3: no per-thread state a second instance would share); the design tokens
+  are `cupertino_theme::ui`.
 - 2026-11-17: second independent review: statics allowed under D3, render-thread commits and CPU drawing (D4), two
   pools and a structural ban on blocking calls (D6), file operations in Kit (D8), the session agent's and the
   portal's dialogs placed (D9, D10, D11, D13), audio started on use (D15), self-restart and hang hand-back (D16, D17),

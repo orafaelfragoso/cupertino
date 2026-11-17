@@ -10,7 +10,7 @@
 
 use std::time::{Duration, Instant};
 
-use cupertino_ui_platform::Timestamp;
+use crate::platform::Timestamp;
 
 /// The phases of one turn that presented at least one frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -114,7 +114,7 @@ pub(crate) fn lap(timings: &mut Option<FrameTimings>, phase: Phase, since: Optio
 
 /// A frame was handed to `system` since `since` (when timing): its copy into a buffer, as the window system timed it,
 /// and the rest of the hand-over, the commit.
-pub(crate) fn handed_over<W: cupertino_ui_platform::WindowSystem>(
+pub(crate) fn handed_over<W: crate::platform::WindowSystem>(
     timings: &mut Option<FrameTimings>,
     system: &mut W,
     since: Option<Instant>,

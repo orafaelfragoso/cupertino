@@ -1,7 +1,9 @@
 //! Horizontal and vertical stacks: flexible main-axis sharing, cross-axis alignment and baseline alignment.
 
-use crate::engine::{align_offset, has_own_size, is_fixed, Arranged, Engine, Solved};
-use crate::{Align, Axis, AxisConstraint, Constraints, Justify, LayoutError, LayoutTree, SizeSpec};
+use crate::layout::engine::{align_offset, has_own_size, is_fixed, Arranged, Engine, Solved};
+use crate::layout::{
+    Align, Axis, AxisConstraint, Constraints, Justify, LayoutError, LayoutTree, SizeSpec,
+};
 use std::rc::Rc;
 
 const EPSILON: f64 = 1e-9;

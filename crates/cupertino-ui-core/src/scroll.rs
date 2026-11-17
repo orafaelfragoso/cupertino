@@ -2,12 +2,12 @@
 //! keyboard or programmatic focus moved to. The offset lives in the application's model, so a container passes both
 //! on as a message and the next view moves the content.
 
+use crate::layout::{ContainerKind, LayoutDirection};
+use crate::platform::ScrollBars;
 use crate::route::Geometry;
 use crate::tree::Tree;
 use crate::{Event, NodeId};
 use cupertino_geometry::{Point, Rect, Size};
-use cupertino_ui_layout::{ContainerKind, LayoutDirection};
-use cupertino_ui_platform::ScrollBars;
 use std::cell::Cell;
 use std::collections::HashMap;
 

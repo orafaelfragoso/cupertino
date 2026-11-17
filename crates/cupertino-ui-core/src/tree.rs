@@ -3,9 +3,9 @@
 //! unmounts, as do all but the first of siblings that share a key. Node ids carry their slot's generation, so an id
 //! of an unmounted node never reaches its successor.
 
+use crate::layout::{Generation, LayoutSpec};
 use crate::widget::{AnyWidget, Change, Element};
 use crate::{Key, NodeId, UiError};
-use cupertino_ui_layout::{Generation, LayoutSpec};
 use std::any::Any;
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};

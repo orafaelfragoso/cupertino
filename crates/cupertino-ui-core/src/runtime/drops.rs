@@ -3,14 +3,14 @@
 
 use super::Runtime;
 use crate::drop_target::{DropFrame, Lit};
+use crate::platform::{
+    ClipboardData, ClipboardToken, DropAction, DropAnswer, DropEvent, DropToken, Mods, WindowSystem,
+};
 use crate::route::{hit_test, Geometry};
 use crate::tree::Tree;
 use crate::widget::Change;
 use crate::{Application, DropOver, DropPlace, Dropped, Key, NodeId, WindowKey};
 use cupertino_geometry::{Point, Rect};
-use cupertino_ui_platform::{
-    ClipboardData, ClipboardToken, DropAction, DropAnswer, DropEvent, DropToken, Mods, WindowSystem,
-};
 use std::collections::BTreeSet;
 
 /// A drag over a window, from its enter until it leaves or drops.

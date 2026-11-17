@@ -8,10 +8,10 @@
 //! The kinetic motion a gesture leaves belongs to the view that took it and is not routed at all.
 
 use crate::cx::CaptureRequest;
+use crate::platform::{PointerEvent, ScrollSource, Timestamp};
 use crate::route::{hit_test, Geometry, Route};
 use crate::{Event, NodeId};
 use cupertino_geometry::Point;
-use cupertino_ui_platform::{PointerEvent, ScrollSource, Timestamp};
 
 /// A wheel or continuous scroll ends after this long without an event, in nanoseconds.
 pub const SCROLL_IDLE_NS: u64 = 300_000_000;

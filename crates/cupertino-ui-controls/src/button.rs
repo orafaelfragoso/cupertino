@@ -5,11 +5,11 @@ use crate::press::{Keys, Outcome, Press};
 use crate::{Button, ButtonRole, ButtonStyle};
 use cupertino_geometry::{Rect, Size};
 use cupertino_theme::ui::{Color, ColorRole, ControlFamily, InteractionVariant, ThemeTokens};
+use cupertino_ui_core::layout::{Constraints, ContainerKind, LayoutSpec, Measured, SizeSpec};
 use cupertino_ui_core::{
     AccessibleStates, Action, Change, ControlState, Environment, Event, EventCx, MeasureCx,
     PaintCx, Propagation, Role, SemanticsCx, Widget,
 };
-use cupertino_ui_layout::{Constraints, ContainerKind, LayoutSpec, Measured, SizeSpec};
 
 impl<M> Button<M> {
     fn radius(&self, chrome: Rect, theme: &ThemeTokens) -> f64 {

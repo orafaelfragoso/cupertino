@@ -2,9 +2,9 @@
 //! technology sees the same object across updates. A protected node's value never enters this tree: its value is
 //! [`AccessibleValue::Protected`], which carries nothing.
 
+use crate::platform::WindowId;
 use crate::NodeId;
 use cupertino_geometry::Rect;
-use cupertino_ui_platform::WindowId;
 use std::ops::Range;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

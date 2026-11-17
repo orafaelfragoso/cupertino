@@ -7,8 +7,8 @@
 
 use std::cell::Cell;
 
+use cupertino_ui_core::platform::Timestamp;
 use cupertino_ui_core::PaintCx;
-use cupertino_ui_platform::Timestamp;
 
 /// How a tween's progress runs from 0 to 1.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

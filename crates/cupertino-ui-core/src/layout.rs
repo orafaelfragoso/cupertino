@@ -1,6 +1,6 @@
 //! CupertinoKit layout. A container measures its children under [`Constraints`] and then places them; core hands its
 //! node tree in through [`LayoutTree`] and reads back a [`LayoutResult`]. Leaves (text, images, icons) are measured by
-//! the tree, so this crate never sees a font. Values are logical points; the scale factor never reaches layout.
+//! the tree, so this module never sees a font. Values are logical points; the scale factor never reaches layout.
 
 mod engine;
 mod grid;

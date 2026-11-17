@@ -5,12 +5,12 @@ use crate::look::{self, paint_focus_ring};
 use crate::{CalendarDate, DatePart, DatePicker};
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_theme::ui::{Color, ColorRole, ControlFamily};
+use cupertino_ui_core::layout::{Constraints, ContainerKind, LayoutSpec, Measured};
+use cupertino_ui_core::platform::{Keysym, MouseButton, PointerEvent};
 use cupertino_ui_core::{
     AccessibleStates, AccessibleValue, Action, Change, ControlState, Environment, Event, EventCx,
     MeasureCx, PaintCx, Propagation, Role, SemanticsCx, Widget,
 };
-use cupertino_ui_layout::{Constraints, ContainerKind, LayoutSpec, Measured};
-use cupertino_ui_platform::{Keysym, MouseButton, PointerEvent};
 use cupertino_ui_render::{Paint, PaintOp, Shape};
 
 const LEFT: Keysym = Keysym(0xff51);
@@ -100,7 +100,7 @@ fn parts(size: Size, env: &Environment) -> (Rect, Rect) {
     let height = look::geometry(&env.theme, ControlFamily::DatePicker).height;
     let top = (size.height - height) / 2.0;
     let well = size.width - STEPPER - STEPPER_GAP;
-    let rtl = env.direction == cupertino_ui_layout::LayoutDirection::Rtl;
+    let rtl = env.direction == cupertino_ui_core::layout::LayoutDirection::Rtl;
     let (well_x, stepper_x) = if rtl {
         (STEPPER + STEPPER_GAP, 0.0)
     } else {
@@ -227,7 +227,7 @@ impl<M: Clone + 'static> Widget<M> for DatePicker<M> {
                     return Propagation::Continue;
                 }
                 let index = state.part.index();
-                let rtl = cx.env().direction == cupertino_ui_layout::LayoutDirection::Rtl;
+                let rtl = cx.env().direction == cupertino_ui_core::layout::LayoutDirection::Rtl;
                 let (back, forth) = if rtl { (RIGHT, LEFT) } else { (LEFT, RIGHT) };
                 match key.keysym {
                     UP => self.set(self.date.stepped(state.part, 1), cx),

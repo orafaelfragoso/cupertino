@@ -1,6 +1,6 @@
 //! Minimal dependency-free benchmark for whole-tree layout: time per call, sizing cache misses and leaf measurements.
 use cupertino_geometry::{Insets, Size};
-use cupertino_ui_layout::{
+use cupertino_ui_core::layout::{
     layout, layout_cached, Align, Axis, Constraints, ContainerKind, Flex, Generation, Justify,
     LayoutCache, LayoutDirection, LayoutOptions, LayoutSpec, LayoutTree, Measured, SizeSpec,
 };

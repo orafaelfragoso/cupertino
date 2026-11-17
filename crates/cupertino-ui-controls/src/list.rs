@@ -14,15 +14,15 @@ use crate::{
 };
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_theme::ui::{ColorRole, StateVariant};
+use cupertino_ui_core::layout::{
+    Align, Axis, Constraints, ContainerKind, Flex, ItemMetrics, Justify, LayoutDirection,
+    LayoutSpec, Measured, ScrollState, SizeSpec, VirtualList,
+};
+use cupertino_ui_core::platform::{KeyEvent, Keysym, Mods, MouseButton, PointerEvent, Timestamp};
 use cupertino_ui_core::{
     AccessibleStates, Action, Change, ControlState, Element, Event, EventCx, FocusTarget, Key,
     MeasureCx, PaintCx, Phase, Propagation, Role, SemanticsCx, Widget,
 };
-use cupertino_ui_layout::{
-    Align, Axis, Constraints, ContainerKind, Flex, ItemMetrics, Justify, LayoutDirection,
-    LayoutSpec, Measured, ScrollState, SizeSpec, VirtualList,
-};
-use cupertino_ui_platform::{KeyEvent, Keysym, Mods, MouseButton, PointerEvent, Timestamp};
 use cupertino_ui_render::{Paint, PaintOp, Shape};
 use cupertino_ui_text::{AttributedText, FontWeight, TextStyle};
 use std::ops::Range;

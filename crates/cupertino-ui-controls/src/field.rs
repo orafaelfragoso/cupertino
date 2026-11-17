@@ -9,15 +9,15 @@ use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_theme::ui::{
     control_geometry, Color, ColorRole, ControlFamily, ControlSize, ThemeTokens,
 };
+use cupertino_ui_core::layout::{
+    Constraints, ContainerKind, LayoutDirection, LayoutSpec, Measured, SizeSpec,
+};
+use cupertino_ui_core::platform::{KeyEvent, Keysym, Mods, MouseButton, PointerEvent, Timestamp};
 use cupertino_ui_core::{
     AccessibleStates, AccessibleValue, Action, ActionData, Change, ControlState, Environment,
     Event, EventCx, MeasureCx, OverlayCx, PaintCx, Pasted, Propagation, Role, SemanticsCx,
     SurfaceLayerMark, TextSemantics, Widget,
 };
-use cupertino_ui_layout::{
-    Constraints, ContainerKind, LayoutDirection, LayoutSpec, Measured, SizeSpec,
-};
-use cupertino_ui_platform::{KeyEvent, Keysym, Mods, MouseButton, PointerEvent, Timestamp};
 use cupertino_ui_render::{Paint, PaintOp, Shape};
 use cupertino_ui_text::{
     Affinity, ChangeCause, ContentHints, ContentPurpose, ImeBatch, ImeEvent, Keymap,
@@ -1846,7 +1846,7 @@ impl<M: Clone + 'static> SecureField<M> {
     }
 
     fn key(&self, state: &mut SecureState, key: &KeyEvent, cx: &mut EventCx<'_, M>) -> Propagation {
-        use cupertino_ui_platform::Mods;
+        use cupertino_ui_core::platform::Mods;
         if !key.pressed {
             return Propagation::Continue;
         }
@@ -2317,7 +2317,7 @@ impl<M: Clone + 'static> Widget<M> for BareField<M> {
     fn overlay_layer(&self, _: &FieldState) -> Option<SurfaceLayerMark> {
         self.caret_layer.map(|key| SurfaceLayerMark {
             key,
-            look: cupertino_ui_platform::SurfaceLayerLook::default(),
+            look: cupertino_ui_core::platform::SurfaceLayerLook::default(),
         })
     }
 }

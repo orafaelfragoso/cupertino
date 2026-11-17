@@ -5,12 +5,12 @@
 
 use crate::PressCatcher;
 use cupertino_geometry::Size;
+use cupertino_ui_core::layout::{Constraints, ContainerKind, LayoutSpec, Measured, SizeSpec};
+use cupertino_ui_core::platform::{DecorationMode, MouseButton, PointerEvent, WindowSpec};
 use cupertino_ui_core::{
     Change, CommandRegistry, Element, Event, EventCx, MeasureCx, PaintCx, Propagation, SemanticsCx,
     Widget, Window, WindowBackground,
 };
-use cupertino_ui_layout::{Constraints, ContainerKind, LayoutSpec, Measured, SizeSpec};
-use cupertino_ui_platform::{DecorationMode, MouseButton, PointerEvent, WindowSpec};
 
 impl<M: Clone + 'static> From<PressCatcher<M>> for Window<M> {
     fn from(catcher: PressCatcher<M>) -> Self {

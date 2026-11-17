@@ -1,7 +1,7 @@
 //! Containers whose children share one box: absolute, overlay and scroll content.
 
-use crate::engine::{align_offset, has_own_size, Arranged, Engine};
-use crate::{Align, AxisConstraint, Constraints, LayoutError, LayoutTree, SizeSpec};
+use crate::layout::engine::{align_offset, has_own_size, Arranged, Engine};
+use crate::layout::{Align, AxisConstraint, Constraints, LayoutError, LayoutTree, SizeSpec};
 use cupertino_geometry::{Point, Rect, Size};
 
 #[derive(Clone, Copy)]
@@ -9,7 +9,7 @@ pub(crate) enum Mode {
     /// Children keep their natural size at their `position`; in a container that `crops` them ([`Overflow::Crop`]),
     /// a size of their own even past its edge, where it cuts them off.
     ///
-    /// [`Overflow::Crop`]: crate::Overflow::Crop
+    /// [`Overflow::Crop`]: crate::layout::Overflow::Crop
     Absolute { crops: bool },
     /// Children are layered; each follows its `align_self`, stretching by default.
     Overlay,

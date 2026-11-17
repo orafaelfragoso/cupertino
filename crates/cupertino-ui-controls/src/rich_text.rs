@@ -4,12 +4,12 @@ use crate::text::leading_origin;
 use crate::{RichText, Text};
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_theme::ui::{ColorRole, StateVariant};
+use cupertino_ui_core::layout::{Constraints, ContainerKind, LayoutSpec, Measured};
+use cupertino_ui_core::platform::CursorShape;
 use cupertino_ui_core::{
     Action, Change, Element, Event, EventCx, MeasureCx, PaintCx, Propagation, Role, SemanticsCx,
     Widget,
 };
-use cupertino_ui_layout::{Constraints, ContainerKind, LayoutSpec, Measured};
-use cupertino_ui_platform::CursorShape;
 use cupertino_ui_render::{Paint, PaintOp, Shape};
 use cupertino_ui_text::{AttributedText, ParagraphLayout, TextRange};
 use std::cell::RefCell;

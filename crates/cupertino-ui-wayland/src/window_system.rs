@@ -12,8 +12,7 @@ use crate::action_grab::ActionGrabs;
 use cupertino_geometry::{Rect, Size};
 use cupertino_keyboard::modifiers::Profile;
 use cupertino_menu_model::{ActionName, Command, Entry, Menu, MenuBar};
-use cupertino_ui_menus::{AppMenus, WindowMenus};
-use cupertino_ui_platform::{
+use cupertino_ui_core::platform::{
     ActivationRequest, Backdrop, Capabilities, ClipboardData, ClipboardKind, ClipboardToken, Color,
     ConfigureId, CursorShape, DragImage, DragProgress, DragRequest, DragToken, DrawInto,
     DropAction, DropAnswer, DropEvent, DropToken, GlassRegion, GlassStyle, GlassTone, KeyEvent,
@@ -21,6 +20,7 @@ use cupertino_ui_platform::{
     PresentOutcome, RaisedLayer, RendererClass, ScrollBars, SystemAppearance, Timestamp,
     WindowEvent, WindowId, WindowRequest, WindowSpec, WindowSystem,
 };
+use cupertino_ui_menus::{AppMenus, WindowMenus};
 use cupertino_ui_render::{CpuFrame, MemoryTarget, RenderFrameId};
 use cupertino_ui_text::TextInputState;
 use cupertino_wayland_client::app::{
@@ -921,7 +921,7 @@ impl WaylandWindowSystem {
     fn present_changes(
         &mut self,
         window: WindowId,
-        changes: &[cupertino_ui_platform::PresentChange],
+        changes: &[cupertino_ui_core::platform::PresentChange],
     ) -> Result<(), PlatformError> {
         let w = self.window(window)?;
         let popup = matches!(w.kind, Kind::Popup(_)) && self.presentations.popups();
@@ -961,7 +961,7 @@ impl WaylandWindowSystem {
         &mut self,
         window: WindowId,
         key: u64,
-        changes: Vec<cupertino_ui_platform::LayerChange>,
+        changes: Vec<cupertino_ui_core::platform::LayerChange>,
     ) -> Result<(), PlatformError> {
         if !self.surface_layers_drawn() {
             return Err(PlatformError::Unsupported);
@@ -1494,7 +1494,7 @@ impl WindowSystem for WaylandWindowSystem {
     fn publish_semantics(
         &mut self,
         window: WindowId,
-        snapshot: &cupertino_ui_platform::semantics::Snapshot,
+        snapshot: &cupertino_ui_core::platform::semantics::Snapshot,
     ) {
         if let Some(s) = self.semantic_surfaces.get(&window) {
             s.publish(snapshot);
@@ -1502,7 +1502,7 @@ impl WindowSystem for WaylandWindowSystem {
     }
     fn semantic_requests(
         &mut self,
-    ) -> Vec<(WindowId, cupertino_ui_platform::semantics::ActionCall)> {
+    ) -> Vec<(WindowId, cupertino_ui_core::platform::semantics::ActionCall)> {
         let requests: Vec<_> = self
             .semantic_surfaces
             .iter()
@@ -1523,12 +1523,12 @@ impl WindowSystem for WaylandWindowSystem {
     fn semantic_finished(
         &mut self,
         window: WindowId,
-        call: &cupertino_ui_platform::semantics::ActionCall,
-        outcome: cupertino_ui_platform::semantics::Outcome,
+        call: &cupertino_ui_core::platform::semantics::ActionCall,
+        outcome: cupertino_ui_core::platform::semantics::Outcome,
         revision: u64,
     ) {
         // answered as applied, the action's work may still show a popup a moment later; any other answer ends the grab
-        let applied = outcome == cupertino_ui_platform::semantics::Outcome::Applied;
+        let applied = outcome == cupertino_ui_core::platform::semantics::Outcome::Applied;
         self.action_grabs
             .answered(window, call.id, applied, Instant::now());
         if let Some(s) = self.semantic_surfaces.get(&window) {
@@ -2208,7 +2208,7 @@ impl WindowSystem for WaylandWindowSystem {
     fn present_surface_layers(
         &mut self,
         window: WindowId,
-        layers: &[cupertino_ui_platform::SurfaceLayer<'_>],
+        layers: &[cupertino_ui_core::platform::SurfaceLayer<'_>],
     ) -> Result<PresentOutcome, PlatformError> {
         if !self.surface_layers_drawn() {
             return if layers.is_empty() {

@@ -1,7 +1,7 @@
 use cupertino_geometry::Point;
 use cupertino_geometry::Size;
-use cupertino_ui_platform::semantics;
-use cupertino_ui_platform::{
+use cupertino_ui_core::platform::semantics;
+use cupertino_ui_core::platform::{
     ActivationRequest, Capabilities, ClipboardData, ClipboardKind, ClipboardToken, Color,
     Configure, ConfigureId, CursorShape, DragRequest, DragToken, DropAction, DropAnswer, DropEvent,
     DropToken, MenuDescription, Mods, PlatformError, PlatformEvent, PointerEvent, PopupSpec,
@@ -68,7 +68,7 @@ struct HeadlessWindow {
 pub struct PresentedSurfaceLayer {
     pub key: u64,
     pub rect: cupertino_geometry::Rect,
-    pub look: cupertino_ui_platform::SurfaceLayerLook,
+    pub look: cupertino_ui_core::platform::SurfaceLayerLook,
     pub frame: Option<PresentedLayer>,
 }
 
@@ -831,7 +831,7 @@ impl WindowSystem for HeadlessWindowSystem {
             size: spec.size,
             min_size: None,
             max_size: None,
-            decorations: cupertino_ui_platform::DecorationMode::None,
+            decorations: cupertino_ui_core::platform::DecorationMode::None,
             foreign_parent: None,
             input_region: None,
         };
@@ -1042,7 +1042,7 @@ impl WindowSystem for HeadlessWindowSystem {
     fn present_layer(
         &mut self,
         window: WindowId,
-        layer: Option<cupertino_ui_platform::RaisedLayer<'_>>,
+        layer: Option<cupertino_ui_core::platform::RaisedLayer<'_>>,
     ) -> Result<PresentOutcome, PlatformError> {
         if layer.is_some() && !self.capabilities.raised_layer {
             return Err(PlatformError::Unsupported);
@@ -1066,7 +1066,7 @@ impl WindowSystem for HeadlessWindowSystem {
     fn present_surface_layers(
         &mut self,
         window: WindowId,
-        layers: &[cupertino_ui_platform::SurfaceLayer<'_>],
+        layers: &[cupertino_ui_core::platform::SurfaceLayer<'_>],
     ) -> Result<PresentOutcome, PlatformError> {
         if !layers.is_empty() && !self.capabilities.surface_layers {
             return Err(PlatformError::Unsupported);

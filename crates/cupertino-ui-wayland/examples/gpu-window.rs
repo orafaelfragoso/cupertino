@@ -25,8 +25,8 @@ use std::time::{Duration, Instant};
 
 use cupertino_geometry::Rect;
 use cupertino_gpu::Loss;
+use cupertino_ui_core::platform::{PlatformEvent, RendererClass, RendererKind};
 use cupertino_ui_gpu::{GpuConfig, WindowRenderer};
-use cupertino_ui_platform::{PlatformEvent, RendererClass, RendererKind};
 use cupertino_ui_render::{
     Color, CpuFrame, DamageRegion, DisplayList, Paint, PaintNode, PaintNodeId, PaintOp,
     PaintResources, PaintRevision, PixelFormat, RenderFrameId, RenderRequest, Shape, Transform,

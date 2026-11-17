@@ -1,7 +1,7 @@
 //! Grid containers: fixed, auto and fraction tracks, children flowing row by row, each covering one or more cells.
 
-use crate::engine::{align_offset, has_own_size, Arranged, Engine};
-use crate::{Align, AxisConstraint, Constraints, GridSpan, LayoutError, LayoutTree, Track};
+use crate::layout::engine::{align_offset, has_own_size, Arranged, Engine};
+use crate::layout::{Align, AxisConstraint, Constraints, GridSpan, LayoutError, LayoutTree, Track};
 use cupertino_geometry::{Rect, Size};
 
 const PROBE_FACTOR: usize = 64;

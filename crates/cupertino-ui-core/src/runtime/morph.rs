@@ -5,9 +5,9 @@
 //! about that point frame by frame. Under Reduce Motion a popover shows at its full size at once and goes at once.
 
 use super::Runtime;
+use crate::platform::{MaterialRegion, Timestamp, WindowRequest, WindowSystem};
 use crate::{Application, PopupAnchor};
 use cupertino_geometry::{Point, Rect};
-use cupertino_ui_platform::{MaterialRegion, Timestamp, WindowRequest, WindowSystem};
 use cupertino_ui_render::{DisplayList, Layer, Transform};
 
 /// The scale a popover starts at as it opens.

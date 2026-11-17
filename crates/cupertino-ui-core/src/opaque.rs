@@ -7,8 +7,8 @@
 //! leave them to show through. Each rectangle is pulled in by a point and rounded inwards to whole points, so the pixels
 //! at its edges, which a fill at a fractional place covers only in part, are left out at any scale.
 
+use crate::platform::MaterialRegion;
 use cupertino_geometry::{Rect, Size};
-use cupertino_ui_platform::MaterialRegion;
 use cupertino_ui_render::{DisplayList, Paint, PaintNodeId, PaintOp, Shape, Transform};
 
 /// The shortest side a rectangle of the region may have, in points: smaller fills are left out, and the operations of

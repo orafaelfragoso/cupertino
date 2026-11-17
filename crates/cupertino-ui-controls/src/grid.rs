@@ -1,9 +1,9 @@
 use crate::Grid;
 use cupertino_geometry::Size;
+use cupertino_ui_core::layout::{Constraints, ContainerKind, LayoutSpec, Measured};
 use cupertino_ui_core::{
     Change, Element, Event, EventCx, MeasureCx, PaintCx, Propagation, SemanticsCx, Widget,
 };
-use cupertino_ui_layout::{Constraints, ContainerKind, LayoutSpec, Measured};
 
 impl<M: 'static> Widget<M> for Grid<M> {
     type State = ();

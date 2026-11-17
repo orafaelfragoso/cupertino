@@ -13,15 +13,15 @@ use crate::look::{self, paint_focus_ring};
 use crate::press::{Keys, Outcome, Press};
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_theme::ui::{Color, ColorRole};
+use cupertino_ui_core::layout::{
+    Align, Axis, Constraints, ContainerKind, Flex, Justify, LayoutDirection, LayoutSpec, Measured,
+    SizeSpec,
+};
+use cupertino_ui_core::platform::{MouseButton, PointerEvent};
 use cupertino_ui_core::{
     AccessibleStates, AccessibleValue, Action, Change, Checked, ControlState, Element, Event,
     EventCx, Key, MeasureCx, PaintCx, Phase, Propagation, Role, SemanticsCx, Widget,
 };
-use cupertino_ui_layout::{
-    Align, Axis, Constraints, ContainerKind, Flex, Justify, LayoutDirection, LayoutSpec, Measured,
-    SizeSpec,
-};
-use cupertino_ui_platform::{MouseButton, PointerEvent};
 use cupertino_ui_render::{Paint, PaintOp, PathVerb, Shape};
 use cupertino_ui_text::{AttributedText, FontWeight, ParagraphStyle, TextStyle, Wrap};
 
@@ -34,8 +34,8 @@ pub const COMPACT_TOOLBAR_ROW: f64 = 40.0;
 /// A window whose content fills it ([`DecorationMode::content_fills_window`]) draws its toolbar row over its top, 52 pt
 /// ([`TOOLBAR_ROW`]) or 40 pt compact ([`COMPACT_TOOLBAR_ROW`]); the other modes put the title bar above the content and
 /// cover none of it.
-pub fn unobscured_insets(mode: cupertino_ui_platform::DecorationMode) -> Insets {
-    use cupertino_ui_platform::DecorationMode;
+pub fn unobscured_insets(mode: cupertino_ui_core::platform::DecorationMode) -> Insets {
+    use cupertino_ui_core::platform::DecorationMode;
     let top = match mode {
         DecorationMode::Unified | DecorationMode::Sidebar => TOOLBAR_ROW,
         DecorationMode::UnifiedCompact => COMPACT_TOOLBAR_ROW,

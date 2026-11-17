@@ -4,12 +4,12 @@ use crate::press::{Keys, Outcome, Press};
 use crate::{BatteryMeter, ModuleLayout, ModuleToggle, Tile};
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_theme::ui::{ColorRole, StateVariant};
+use cupertino_ui_core::layout::{
+    Constraints, ContainerKind, LayoutDirection, LayoutSpec, Measured, SizeSpec,
+};
 use cupertino_ui_core::{
     AccessibleStates, AccessibleValue, Action, Change, Checked, ControlState, Element, Environment,
     Event, EventCx, MeasureCx, PaintCx, Propagation, Role, SemanticsCx, Widget,
-};
-use cupertino_ui_layout::{
-    Constraints, ContainerKind, LayoutDirection, LayoutSpec, Measured, SizeSpec,
 };
 use cupertino_ui_text::{
     AttributedText, FontWeight, ParagraphLayout, ParagraphStyle, TextStyle, Wrap,
@@ -320,10 +320,10 @@ impl<M: 'static> Widget<M> for TileFrame<M> {
 
     fn layout(&self) -> LayoutSpec {
         LayoutSpec::new(ContainerKind::Stack {
-            axis: cupertino_ui_layout::Axis::Vertical,
+            axis: cupertino_ui_core::layout::Axis::Vertical,
             spacing: 0.0,
-            align: cupertino_ui_layout::Align::Stretch,
-            justify: cupertino_ui_layout::Justify::Start,
+            align: cupertino_ui_core::layout::Align::Stretch,
+            justify: cupertino_ui_core::layout::Justify::Start,
         })
     }
 

@@ -1,6 +1,6 @@
 //! Windowing for long lists: only the rows near the viewport exist as nodes.
 
-use crate::{ItemMetrics, LayoutError, VirtualWindow};
+use crate::layout::{ItemMetrics, LayoutError, VirtualWindow};
 
 /// Row heights of a list and the arithmetic to find the rows in a viewport. Fixed heights take no storage and every
 /// query is constant time; estimated heights keep a prefix-sum tree, so a measured row costs `O(log n)` to record and

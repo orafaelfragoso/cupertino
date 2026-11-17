@@ -9,12 +9,12 @@ use cupertino_keyboard::modifiers::Profile;
 use cupertino_theme::ui::{Appearance, ColorTokens, ThemePreferences, ThemeTokens};
 use cupertino_theme::Theme;
 use cupertino_ui_atspi::AtspiAdapter;
+use cupertino_ui_core::layout::LayoutDirection;
+use cupertino_ui_core::platform::{PlatformError, SystemAppearance, WindowSystem};
 use cupertino_ui_core::{
     Application, Command, MonotonicClock, Runtime, RuntimeOptions, ThemeForAppearance, UiError,
 };
 use cupertino_ui_gpu::GpuConfig;
-use cupertino_ui_layout::LayoutDirection;
-use cupertino_ui_platform::{PlatformError, SystemAppearance, WindowSystem};
 use cupertino_ui_render::{CpuConfig, CpuRenderer};
 use cupertino_ui_text::{
     FontIndex, FontStyle, FontWeight, GlyphRaster, InstalledFonts, TextSystem,
@@ -282,7 +282,7 @@ pub fn frame_timing_json(
 
 /// One line of the scroll timing report.
 pub fn scroll_timing_json(t: &cupertino_ui_core::ScrollTiming) -> String {
-    let ns = |t: Option<cupertino_ui_platform::Timestamp>| {
+    let ns = |t: Option<cupertino_ui_core::platform::Timestamp>| {
         t.map_or("null".to_string(), |t| t.0.to_string())
     };
     format!(

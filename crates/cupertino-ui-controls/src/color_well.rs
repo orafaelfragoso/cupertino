@@ -5,11 +5,11 @@ use crate::press::{Keys, Outcome, Press};
 use crate::ColorWell;
 use cupertino_geometry::{Insets, Rect, Size};
 use cupertino_theme::ui::{Color, ColorRole, ControlFamily};
+use cupertino_ui_core::layout::{Constraints, ContainerKind, LayoutSpec, Measured};
 use cupertino_ui_core::{
     AccessibleStates, AccessibleValue, Action, Change, ControlState, Event, EventCx, MeasureCx,
     PaintCx, Propagation, Role, SemanticsCx, Widget,
 };
-use cupertino_ui_layout::{Constraints, ContainerKind, LayoutSpec, Measured};
 
 /// The well's width as a share of its height: a capsule about twice as wide as it is high.
 const ASPECT: f64 = 2.0;

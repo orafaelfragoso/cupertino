@@ -100,11 +100,11 @@ pub use cupertino_ui_core::SortOrder;
 
 use cupertino_geometry::{Insets, Point, Size};
 use cupertino_theme::ui::{ColorRole, ControlSize};
+use cupertino_ui_core::layout::{Align, Axis, ScrollState, Track};
+use cupertino_ui_core::platform::{KeyEvent, WindowSpec};
 use cupertino_ui_core::{
     Checked, CommandRegistry, Element, Key, PaintCx, WindowBackground, WindowKey,
 };
-use cupertino_ui_layout::{Align, Axis, ScrollState, Track};
-use cupertino_ui_platform::{KeyEvent, WindowSpec};
 use cupertino_ui_render::{ImageResource, ResourceId};
 use cupertino_ui_text::{AttributedText, ContentPurpose, SecureBuffer};
 use std::ops::Range;

@@ -5,8 +5,8 @@ use cupertino_theme::ui::{
     Color, ColorRole, ControlFamily, ControlGeometry, FocusRing, InteractionVariant, StateVariant,
     ThemeTokens,
 };
+use cupertino_ui_core::layout::LayoutDirection;
 use cupertino_ui_core::{ControlState, Environment, PaintCx};
-use cupertino_ui_layout::LayoutDirection;
 use cupertino_ui_render::{Paint, PaintOp, PathVerb, Shape};
 use cupertino_ui_text::{
     AttributedText, Direction, FontWeight, Paragraph, ParagraphLayout, ParagraphStyle, TextStyle,

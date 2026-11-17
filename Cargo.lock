@@ -1239,8 +1239,6 @@ dependencies = [
  "cupertino-ui-controls",
  "cupertino-ui-core",
  "cupertino-ui-gpu",
- "cupertino-ui-layout",
- "cupertino-ui-platform",
  "cupertino-ui-render",
  "cupertino-ui-test",
  "cupertino-ui-text",
@@ -1461,7 +1459,6 @@ dependencies = [
  "cupertino-theme",
  "cupertino-ui-atspi",
  "cupertino-ui-core",
- "cupertino-ui-platform",
  "cupertino-ui-wayland",
  "cupertino-wayland-client",
  "hkdf",
@@ -1744,7 +1741,6 @@ dependencies = [
  "accesskit",
  "accesskit_unix",
  "cupertino-ui-core",
- "cupertino-ui-platform",
  "unicode-segmentation",
 ]
 
@@ -1756,8 +1752,6 @@ dependencies = [
  "cupertino-menu-model",
  "cupertino-theme",
  "cupertino-ui-core",
- "cupertino-ui-layout",
- "cupertino-ui-platform",
  "cupertino-ui-render",
  "cupertino-ui-text",
 ]
@@ -1771,12 +1765,12 @@ dependencies = [
  "cupertino-app-protocols",
  "cupertino-defaults",
  "cupertino-geometry",
+ "cupertino-keyboard",
  "cupertino-menu-model",
  "cupertino-theme",
- "cupertino-ui-layout",
- "cupertino-ui-platform",
  "cupertino-ui-render",
  "cupertino-ui-text",
+ "gungraun",
  "rustix 1.1.6",
  "tracing",
 ]
@@ -1796,14 +1790,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cupertino-ui-layout"
-version = "0.1.0"
-dependencies = [
- "cupertino-geometry",
- "gungraun",
-]
-
-[[package]]
 name = "cupertino-ui-menus"
 version = "0.1.0"
 dependencies = [
@@ -1812,19 +1798,6 @@ dependencies = [
  "cupertino-wayland-client",
  "tracing",
  "zbus",
-]
-
-[[package]]
-name = "cupertino-ui-platform"
-version = "0.1.0"
-dependencies = [
- "cupertino-animation",
- "cupertino-app-protocols",
- "cupertino-geometry",
- "cupertino-keyboard",
- "cupertino-menu-model",
- "cupertino-ui-render",
- "cupertino-ui-text",
 ]
 
 [[package]]
@@ -1849,7 +1822,6 @@ dependencies = [
  "cupertino-geometry",
  "cupertino-theme",
  "cupertino-ui-core",
- "cupertino-ui-platform",
  "cupertino-ui-render",
  "cupertino-ui-text",
  "tiny-skia",
@@ -1883,9 +1855,9 @@ dependencies = [
  "cupertino-gpu",
  "cupertino-keyboard",
  "cupertino-menu-model",
+ "cupertino-ui-core",
  "cupertino-ui-gpu",
  "cupertino-ui-menus",
- "cupertino-ui-platform",
  "cupertino-ui-render",
  "cupertino-ui-text",
  "cupertino-wayland-client",

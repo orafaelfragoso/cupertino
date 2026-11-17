@@ -2,11 +2,11 @@ use crate::look;
 use crate::Badge;
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_theme::ui::ColorRole;
+use cupertino_ui_core::layout::{Constraints, ContainerKind, LayoutSpec, Measured};
 use cupertino_ui_core::{
     Change, ControlState, Environment, Event, EventCx, MeasureCx, PaintCx, Propagation,
     SemanticsCx, Widget,
 };
-use cupertino_ui_layout::{Constraints, ContainerKind, LayoutSpec, Measured};
 use cupertino_ui_text::{AttributedText, FontWeight, ParagraphLayout, ParagraphStyle, TextStyle};
 
 /// The pill's height and its narrowest width, a circle for one digit. Approximate design values.

@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-pub use cupertino_ui_platform::{RendererClass, RendererKind};
+pub use cupertino_ui_core::platform::{RendererClass, RendererKind};
 
 /// The variable that asks for a renderer: `cpu` or `gpu`.
 pub const RENDERER_ENV: &str = "CUPERTINO_RENDERER";

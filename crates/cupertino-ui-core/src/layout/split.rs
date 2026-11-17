@@ -1,7 +1,7 @@
 //! Two panes along an axis: the leading one at its asked extent within its limits, the trailing one taking the rest.
 
-use crate::engine::{Arranged, Engine};
-use crate::{AxisConstraint, Constraints, LayoutError, LayoutTree, SplitSpec};
+use crate::layout::engine::{Arranged, Engine};
+use crate::layout::{AxisConstraint, Constraints, LayoutError, LayoutTree, SplitSpec};
 
 pub(crate) fn arrange<T: LayoutTree>(
     engine: &mut Engine<'_, T>,

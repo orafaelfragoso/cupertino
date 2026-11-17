@@ -4,8 +4,8 @@
 //! the frames over a budget, so a slow full repaint is never hidden behind an average.
 
 use crate::{HeadlessWindowSystem, TestDriver};
+use cupertino_ui_core::platform::{Timestamp, WindowId};
 use cupertino_ui_core::Application;
-use cupertino_ui_platform::{Timestamp, WindowId};
 use std::fmt::Write as _;
 use std::num::NonZeroU32;
 use std::time::{Duration, Instant};

@@ -1,6 +1,6 @@
 //! Scroll arithmetic. The offset lives in the application's model; velocity and deceleration live with the node.
 
-use crate::{Axis, ScrollState};
+use crate::layout::{Axis, ScrollState};
 use cupertino_geometry::Point;
 
 /// A page scroll moves this share of the viewport, so the last row of the old page stays in view.

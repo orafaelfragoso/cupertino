@@ -11,5 +11,4 @@ layer = "ui"
 accesskit = "0.25"
 accesskit_unix = "0.24"
 cupertino-ui-core = { path = "../cupertino-ui-core" }
-cupertino-ui-platform = { path = "../cupertino-ui-platform" }
 unicode-segmentation = "1.13"

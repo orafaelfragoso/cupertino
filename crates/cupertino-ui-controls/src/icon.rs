@@ -1,10 +1,12 @@
 use crate::{Icon, IconDirection};
 use cupertino_geometry::{Rect, Size};
 use cupertino_theme::ui::{Color, ColorRole, StateVariant};
+use cupertino_ui_core::layout::{
+    Constraints, ContainerKind, LayoutDirection, LayoutSpec, Measured,
+};
 use cupertino_ui_core::{
     Change, Event, EventCx, MeasureCx, PaintCx, Propagation, Role, SemanticsCx, Widget,
 };
-use cupertino_ui_layout::{Constraints, ContainerKind, LayoutDirection, LayoutSpec, Measured};
 use cupertino_ui_render::Sampling;
 
 /// Draws the system symbol `name` at `size` points in `color`, at the device's pixels and centred in `area`.

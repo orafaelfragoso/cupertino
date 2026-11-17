@@ -6,11 +6,11 @@
 
 use crate::WindowDragArea;
 use cupertino_geometry::{Point, Size};
+use cupertino_ui_core::layout::{Constraints, ContainerKind, LayoutSpec, Measured};
+use cupertino_ui_core::platform::{MouseButton, PointerEvent, Timestamp};
 use cupertino_ui_core::{
     Change, Element, Event, EventCx, MeasureCx, PaintCx, Phase, Propagation, SemanticsCx, Widget,
 };
-use cupertino_ui_layout::{Constraints, ContainerKind, LayoutSpec, Measured};
-use cupertino_ui_platform::{MouseButton, PointerEvent, Timestamp};
 use cupertino_ui_text::MULTI_CLICK_INTERVAL;
 
 /// How far, in points along either axis, the pointer travels from the press with the button held before the window

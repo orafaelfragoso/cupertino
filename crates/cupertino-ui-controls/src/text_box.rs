@@ -2,12 +2,12 @@ use crate::look::{self, paint_ring};
 use crate::{scroll, TextBox};
 use cupertino_geometry::{Insets, Rect, Size};
 use cupertino_theme::ui::ColorRole;
+use cupertino_ui_core::layout::{
+    Align, Axis, Constraints, ContainerKind, Flex, Justify, LayoutSpec, Measured, SizeSpec,
+};
 use cupertino_ui_core::{
     Change, ControlState, Element, Event, EventCx, MeasureCx, PaintCx, Propagation, SemanticsCx,
     Widget,
-};
-use cupertino_ui_layout::{
-    Align, Axis, Constraints, ContainerKind, Flex, Justify, LayoutSpec, Measured, SizeSpec,
 };
 use std::rc::Rc;
 

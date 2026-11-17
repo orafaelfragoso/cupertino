@@ -1,5 +1,5 @@
+use crate::platform::Timestamp;
 use crate::Clock;
-use cupertino_ui_platform::Timestamp;
 use rustix::time::{clock_gettime, ClockId};
 
 /// The system's monotonic clock, the one the window system stamps its events with.

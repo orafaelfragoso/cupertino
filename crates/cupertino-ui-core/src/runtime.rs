@@ -8,8 +8,20 @@ use crate::cx::{Effects, Status, WindowGesture};
 use crate::damage::DamageTracker;
 use crate::focus::{Focus, FocusChange};
 use crate::frame_timing::{handed_over, lap, mark, Phase};
+use crate::layout::{
+    layout, layout_cached, Constraints, LayoutCache, LayoutDirection, LayoutOptions, LayoutResult,
+    LayoutStats,
+};
 use crate::layout_view::{placements, placements_kept, KeptPlacements, TreeView};
 use crate::paint::{raised_nodes, same_environment, PaintInput, Painter};
+use crate::platform::{
+    ActivationRequest, Backdrop, ClipboardData, ClipboardKind, ClipboardToken, ConfigureId,
+    ConstraintAdjust, DragImage, DragProgress, DragRequest, DragToken, DropAction, DropToken,
+    GlassTone, KeyEvent, Keysym, Lent, MaterialRegion, MenuDescription, Mods, MouseButton,
+    PlatformError, PlatformEvent, PointerEvent, PopupEdge, PopupSpec, PresentOutcome, RaisedLayer,
+    SystemAppearance, Timestamp, TouchEvent, WindowEvent, WindowId, WindowRequest, WindowSpec,
+    WindowSystem,
+};
 use crate::pointer::Pointer;
 use crate::route::{hit_test, Geometry, Route};
 use crate::scroll::{geometry_events, reveal_events};
@@ -27,18 +39,6 @@ use crate::{
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_menu_model::ActionName;
 use cupertino_theme::ui::{Color, Surface, ThemeTokens};
-use cupertino_ui_layout::{
-    layout, layout_cached, Constraints, LayoutCache, LayoutDirection, LayoutOptions, LayoutResult,
-    LayoutStats,
-};
-use cupertino_ui_platform::{
-    ActivationRequest, Backdrop, ClipboardData, ClipboardKind, ClipboardToken, ConfigureId,
-    ConstraintAdjust, DragImage, DragProgress, DragRequest, DragToken, DropAction, DropToken,
-    GlassTone, KeyEvent, Keysym, Lent, MaterialRegion, MenuDescription, Mods, MouseButton,
-    PlatformError, PlatformEvent, PointerEvent, PopupEdge, PopupSpec, PresentOutcome, RaisedLayer,
-    SystemAppearance, Timestamp, TouchEvent, WindowEvent, WindowId, WindowRequest, WindowSpec,
-    WindowSystem,
-};
 use cupertino_ui_render::{
     damage_rects, CpuFrame, DamageRegion, DisplayList, PaintResources, PixelRect, RenderError,
     RenderRequest, UiRenderer,
@@ -2042,8 +2042,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             return;
         }
         if key.keysym == TAB || key.keysym == LEFT_TAB {
-            let forward =
-                key.keysym == TAB && !key.mods.contains(cupertino_ui_platform::Mods::SHIFT);
+            let forward = key.keysym == TAB && !key.mods.contains(crate::platform::Mods::SHIFT);
             let next = w.focus.step(&self.tree, &w.focusable, forward);
             let change = w.focus.set(&self.tree, next, true);
             let rest = Self::focus_events(&mut self.tree, w, change, &mut self.messages, now);

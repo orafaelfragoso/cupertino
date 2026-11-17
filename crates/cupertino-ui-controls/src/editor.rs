@@ -8,14 +8,14 @@ use crate::text_menu::{self, Can, Command, Opens};
 use crate::{TextChange, TextEditor};
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_theme::ui::ColorRole;
+use cupertino_ui_core::layout::{
+    Constraints, ContainerKind, LayoutDirection, LayoutSpec, Measured, SizeSpec,
+};
+use cupertino_ui_core::platform::{KeyEvent, Keysym, Mods, MouseButton, PointerEvent, Timestamp};
 use cupertino_ui_core::{
     AccessibleStates, AccessibleValue, Action, ActionData, Change, Environment, Event, EventCx,
     MeasureCx, OverlayCx, PaintCx, Pasted, Propagation, Role, SemanticsCx, TextSemantics, Widget,
 };
-use cupertino_ui_layout::{
-    Constraints, ContainerKind, LayoutDirection, LayoutSpec, Measured, SizeSpec,
-};
-use cupertino_ui_platform::{KeyEvent, Keysym, Mods, MouseButton, PointerEvent, Timestamp};
 use cupertino_ui_text::{
     AttributedText, ChangeCause, ContentPurpose, FontWeight, ImeEvent, Keymap, LineLayout,
     Paragraph, ParagraphLayout, ParagraphStyle, Response, TextAlign, TextBuffer, TextEditorKeys,

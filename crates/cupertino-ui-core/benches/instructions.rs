@@ -2,11 +2,11 @@
 //! 64 visible rows of five columns under a header, and a status bar, about 480 nodes. Solved cold (a new cache), again
 //! with nothing changed (every size cached), and at a new width (the cache keyed to the old one).
 //!
-//! The wall-clock bench beside it (`cargo bench -p cupertino-ui-layout
+//! The wall-clock bench beside it (`cargo bench -p cupertino-ui-core
 //! --bench layout`) times synthetic trees of 1 000 and 10 000 nodes.
 
 use cupertino_geometry::{Insets, Size};
-use cupertino_ui_layout::{
+use cupertino_ui_core::layout::{
     layout, layout_cached, Align, Axis, Constraints, ContainerKind, Flex, Generation, Justify,
     LayoutCache, LayoutDirection, LayoutOptions, LayoutResult, LayoutSpec, LayoutTree, Measured,
     SizeSpec, SplitSpec,

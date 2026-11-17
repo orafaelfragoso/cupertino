@@ -1,7 +1,7 @@
 use crate::cx::{EventCx, IdleCx, MeasureCx, OverlayCx, PaintCx, SemanticsCx};
+use crate::layout::{Constraints, Flex, GridSpan, LayoutSpec, Measured, SizeSpec};
 use crate::{Environment, Event, Key};
 use cupertino_geometry::{Point, Size};
-use cupertino_ui_layout::{Constraints, Flex, GridSpan, LayoutSpec, Measured, SizeSpec};
 use std::any::{type_name, Any, TypeId};
 use std::fmt;
 
@@ -68,7 +68,7 @@ pub trait Widget<M>: 'static {
     /// window's top edge; the part of the window a raised node covers is obscured for the rest of it
     /// ([`PaintCx::obscured`]): scroll containers reveal what they scroll to below it and overlays such as a caret are
     /// cut from it. Where the window system has no raised layer
-    /// ([`Capabilities::raised_layer`](cupertino_ui_platform::Capabilities)) the nodes draw in place, over what comes
+    /// ([`Capabilities::raised_layer`](crate::platform::Capabilities)) the nodes draw in place, over what comes
     /// before them, with their materials under the window as any other's, and scroll containers outside them clip
     /// what they scroll to the part the raised nodes leave, so nothing scrolls over those materials. Their paint draws
     /// after the rest of the window then, and so do their materials: they lie over any the rest of the window asks
@@ -87,7 +87,7 @@ pub trait Widget<M>: 'static {
     }
     /// Whether the widget's subtree draws into a surface layer of its own, which the compositor places, fades, scales
     /// and blurs on its clock ([`SurfaceLayerMark`](crate::SurfaceLayerMark)), where the window system shows them
-    /// ([`Capabilities::surface_layers`](cupertino_ui_platform::Capabilities)); elsewhere the subtree paints in place
+    /// ([`Capabilities::surface_layers`](crate::platform::Capabilities)); elsewhere the subtree paints in place
     /// and the application draws its motion itself. Its layout, input and semantics stay the window's. A mark inside
     /// a marked subtree draws in the outer layer. A widget whose answer changes returns [`Change::Paint`] from its
     /// update.
@@ -293,7 +293,7 @@ impl<M: 'static> Widget<M> for Kept<M> {
     type State = ();
 
     fn layout(&self) -> LayoutSpec {
-        LayoutSpec::new(cupertino_ui_layout::ContainerKind::Leaf)
+        LayoutSpec::new(crate::layout::ContainerKind::Leaf)
     }
 
     fn state(&self) {}

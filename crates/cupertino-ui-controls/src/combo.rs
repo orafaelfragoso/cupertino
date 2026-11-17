@@ -6,11 +6,13 @@ use crate::press::{Keys, Outcome, Press};
 use crate::{BareField, ComboBox, Handler, Menu, MenuAnchor, MenuItem};
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_theme::ui::{ColorRole, ControlFamily};
+use cupertino_ui_core::layout::{
+    Align, Axis, Constraints, ContainerKind, Justify, LayoutSpec, Measured,
+};
 use cupertino_ui_core::{
     AccessibleStates, Action, Change, ControlState, Element, Event, EventCx, Key, MeasureCx,
     PaintCx, Phase, Propagation, Role, SemanticsCx, Widget, WindowKey,
 };
-use cupertino_ui_layout::{Align, Axis, Constraints, ContainerKind, Justify, LayoutSpec, Measured};
 use cupertino_ui_render::{Paint, PaintOp};
 
 /// The disclosure button: its side, its distance from the well's end, and its corner radius.

@@ -8,10 +8,10 @@
 //! the same curves ([`super::handover`]) and the popup draws no frame for them.
 
 use super::{morph, set_background, sync_backdrop, Runtime, WindowState};
+use crate::platform::{Timestamp, WindowRequest, WindowSystem};
 use crate::{Application, WindowBackground, WindowKey};
 use cupertino_geometry::Point;
 use cupertino_theme::ui::Surface;
-use cupertino_ui_platform::{Timestamp, WindowRequest, WindowSystem};
 use cupertino_ui_render::{DisplayList, Group, Layer};
 use std::collections::HashMap;
 

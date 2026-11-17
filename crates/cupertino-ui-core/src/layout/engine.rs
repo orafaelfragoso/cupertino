@@ -1,23 +1,23 @@
 //! The two-pass engine: `solve` sizes a node under constraints and arranges its children, `layout` then places the tree.
 
-use crate::{
+use crate::layout::{
     grid, layers, stack, Align, Axis, AxisConstraint, Constraints, ContainerKind, LayoutDirection,
     LayoutError, LayoutOptions, LayoutResult, LayoutSpec, LayoutStats, LayoutTree, NodeLayout,
     Overflow, SizeSpec, Track,
 };
-use crate::{IdMap, IdSet};
+use crate::layout::{IdMap, IdSet};
 use cupertino_geometry::{Point, Rect, Size};
 use std::rc::Rc;
 
 const MAX_DEPTH: usize = 256;
 
 /// Sizing results kept from earlier calls so an unchanged subtree is not measured again. A node's entries are dropped when
-/// its [`Generation`](crate::Generation) changed or any descendant's did; entries of nodes that left the tree go too.
+/// its [`Generation`](crate::layout::Generation) changed or any descendant's did; entries of nodes that left the tree go too.
 /// Pass the same cache to every [`layout_cached`] call for one tree.
 pub struct LayoutCache<Id> {
     entries: IdMap<Key<Id>, Rc<Solved<Id>>>,
     minimums: IdMap<MinKey<Id>, f64>,
-    generations: IdMap<Id, crate::Generation>,
+    generations: IdMap<Id, crate::layout::Generation>,
     direction: Option<LayoutDirection>,
 }
 
@@ -386,7 +386,11 @@ impl<T: LayoutTree> Engine<'_, T> {
                 match axis {
                     // the widest child alone in its row
                     Axis::Horizontal => sizes.iter().map(|s| s.width).fold(0.0, f64::max),
-                    Axis::Vertical => crate::wrap::place(&sizes, inner_cross, *gaps).1.height,
+                    Axis::Vertical => {
+                        crate::layout::wrap::place(&sizes, inner_cross, *gaps)
+                            .1
+                            .height
+                    }
                 }
             }
             ContainerKind::Split(split) if split.axis == axis => match kids.get(1) {
@@ -482,8 +486,8 @@ impl<T: LayoutTree> Engine<'_, T> {
                 layers::arrange(self, kids, layers::Mode::Absolute { crops }, inner)?
             }
             ContainerKind::Overlay => layers::arrange(self, kids, layers::Mode::Overlay, inner)?,
-            ContainerKind::Split(split) => crate::split::arrange(self, kids, split, inner)?,
-            ContainerKind::Wrap { gaps } => crate::wrap::arrange(self, kids, *gaps, inner)?,
+            ContainerKind::Split(split) => crate::layout::split::arrange(self, kids, split, inner)?,
+            ContainerKind::Wrap { gaps } => crate::layout::wrap::arrange(self, kids, *gaps, inner)?,
             ContainerKind::Scroll {
                 horizontal,
                 vertical,

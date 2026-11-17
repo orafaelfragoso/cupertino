@@ -16,8 +16,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::task::Waker;
 
 use accesskit::{ActionHandler, ActivationHandler, DeactivationHandler, TreeInfo, TreeUpdate};
+use cupertino_ui_core::platform::WindowId;
 use cupertino_ui_core::{AccessibilityAdapter, AccessibilityUpdate, Action, ActionRequest, NodeId};
-use cupertino_ui_platform::WindowId;
 
 /// The AT-SPI adapter of an application: one AccessKit adapter per window, created when core first names the window.
 pub struct AtspiAdapter {

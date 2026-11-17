@@ -6,8 +6,8 @@ use crate::menu::{self, Levels, Out};
 use crate::{MenuAnchor, MenuItem, MenuStyle};
 use cupertino_geometry::Point;
 use cupertino_menu_model::tracking::TRACKING_INTERVAL;
+use cupertino_ui_core::platform::{Keysym, Mods, MouseButton, PointerEvent, Timestamp, TouchEvent};
 use cupertino_ui_core::{Event, EventCx, Key, OwnedWindow, WindowKey};
-use cupertino_ui_platform::{Keysym, Mods, MouseButton, PointerEvent, Timestamp, TouchEvent};
 
 /// The key of the menu's window, unlike any an application gives its own.
 const WINDOW: &str = "cupertino.text-menu";

@@ -1,11 +1,11 @@
 //! Subtrees of a window drawn into surfaces of their own that the compositor places, fades, scales and blurs on its
-//! clock ([`WindowSystem::present_surface_layers`](crate::WindowSystem::present_surface_layers)), so a part of a
+//! clock ([`WindowSystem::present_surface_layers`](crate::platform::WindowSystem::present_surface_layers)), so a part of a
 //! window can move without the window drawing a frame for it.
 //!
 //! A widget marks its subtree a surface layer with a key and a look ([`SurfaceLayerLook`]); the runtime paints the
 //! subtree into a frame of its own, at its layout size, and hands the frames to the window system with the window's.
 //! The layer's properties start at its layout: its place, its size, opaque, unscaled, its look's corner radius and
-//! sharp. The application changes them, at once or along a curve, with [`WindowRequest::Layer`](crate::WindowRequest);
+//! sharp. The application changes them, at once or along a curve, with [`WindowRequest::Layer`](crate::platform::WindowRequest);
 //! input and the published semantics keep the layout.
 
 use std::sync::Arc;
@@ -13,9 +13,9 @@ use std::sync::Arc;
 use cupertino_geometry::Rect;
 use cupertino_ui_render::CpuFrame;
 
-use crate::GlassStyle;
+use crate::platform::GlassStyle;
 
-/// A property of a surface layer ([`WindowRequest::Layer`](crate::WindowRequest)).
+/// A property of a surface layer ([`WindowRequest::Layer`](crate::platform::WindowRequest)).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum LayerProperty {
     /// Its left edge in the window, in points.
@@ -101,7 +101,7 @@ pub struct SurfaceLayerLook {
     pub masks: bool,
     /// The line the compositor draws along the outside of the layer's glass, or of each shape of its group's glass cut
     /// by the others when the layer is the group's first ([`LayerEdge`]); its default draws none. Only where the window system draws edges
-    /// ([`Capabilities::surface_layer_edges`](crate::Capabilities::surface_layer_edges)).
+    /// ([`Capabilities::surface_layer_edges`](crate::platform::Capabilities::surface_layer_edges)).
     pub edge: LayerEdge,
 }
 
@@ -125,7 +125,7 @@ impl LayerEdge {
 
 /// A marked subtree's frame as the window system shows it ([`WindowSystem::present_surface_layers`]).
 ///
-/// [`WindowSystem::present_surface_layers`]: crate::WindowSystem::present_surface_layers
+/// [`WindowSystem::present_surface_layers`]: crate::platform::WindowSystem::present_surface_layers
 #[derive(Clone, Copy, Debug)]
 pub struct SurfaceLayer<'a> {
     /// The application's name for the layer, unique within its window.

@@ -3,10 +3,10 @@
 //! respecting every clip on the way down.
 
 use crate::cx::{Effects, EventCx, Status};
+use crate::layout::IdMap;
 use crate::tree::Tree;
 use crate::{Environment, Event, NodeId, Phase, Propagation, WindowKey};
 use cupertino_geometry::{Point, Rect};
-use cupertino_ui_layout::IdMap;
 
 /// Where a node sits in its window, in logical points.
 #[derive(Clone, Copy, Debug, PartialEq)]

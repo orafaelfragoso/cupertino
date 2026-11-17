@@ -895,7 +895,8 @@ name = "cupertino-apps"
 version = "0.1.0"
 dependencies = [
  "async-io",
- "notify",
+ "futures-lite",
+ "inotify",
  "percent-encoding",
  "serde",
  "serde_json",

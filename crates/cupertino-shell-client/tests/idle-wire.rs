@@ -8,22 +8,21 @@ use wayland_protocols::ext::idle_notify::v1::server::ext_idle_notification_v1::R
 
 #[test]
 fn the_notifier_binds_at_version_one_or_two_and_not_when_absent() {
-    for version in [1, 2] {
+    for (offered, binds) in [(None, false), (Some(1), true), (Some(2), true)] {
         let mut wire = Wire::new(Offer {
-            idle: Some(version),
+            idle: offered,
             ..Offer::all()
         });
-        assert!(IdleNotifier::bind(&mut wire.conn).is_some());
+        assert_eq!(
+            IdleNotifier::bind(&mut wire.conn).is_some(),
+            binds,
+            "offered at {offered:?}"
+        );
     }
-    let mut wire = Wire::new(Offer {
-        idle: None,
-        ..Offer::all()
-    });
-    assert!(IdleNotifier::bind(&mut wire.conn).is_none());
 }
 
 #[test]
-fn a_watch_asks_for_its_timeout_and_reports_idle_and_resume() {
+fn a_watch_asks_for_its_timeout_reports_idle_and_resume_and_ends_when_dropped() {
     let mut wire = Wire::all();
     let notifier = IdleNotifier::bind(&mut wire.conn).expect("notifier");
     let seat = wire.conn.seat().expect("seat");
@@ -47,17 +46,8 @@ fn a_watch_asks_for_its_timeout_and_reports_idle_and_resume() {
             ShellEvent::Idle(true)
         ]
     );
-    drop(watch);
-}
 
-#[test]
-fn dropping_a_watch_destroys_its_notification() {
-    let mut wire = Wire::all();
-    let notifier = IdleNotifier::bind(&mut wire.conn).expect("notifier");
-    let seat = wire.conn.seat().expect("seat");
-    drop(notifier.watch(&wire.conn, &seat, 1000));
+    drop(watch);
     wire.events();
-    let seen = wire.take();
-    assert!(matches!(seen[0], Seen::IdleCreated { millis: 1000 }));
-    assert!(matches!(seen[1], Seen::Idle(Request::Destroy)));
+    assert!(matches!(wire.take()[..], [Seen::Idle(Request::Destroy)]));
 }

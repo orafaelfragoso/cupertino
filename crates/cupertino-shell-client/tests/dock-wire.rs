@@ -8,13 +8,29 @@ use cupertino_protocols::server::cupertino_dock_v1::{
     self as wire_dock, CupertinoDockV1, Request, WindowState,
 };
 use cupertino_shell_client::{
-    Anchor, AppCommand, Corner, Dock, DockChange, DockWindow, DockWindowIcon, DockWindowThumbnail,
-    Error, Gesture, KeyboardInteractivity, Layer, LayerShell, LayerSurfaceConfig, Margin,
-    OverviewMode, OverviewWindow, OverviewWorkspace, Shell, ShellEvent, ThumbnailImage,
-    WindowIconImage, MAX_WINDOW_THUMBNAIL,
+    Anchor, AppCommand, Corner, Dock, DockChange, DockWindow, Error, Gesture,
+    KeyboardInteractivity, Layer, LayerShell, LayerSurfaceConfig, Margin, OverviewMode,
+    OverviewWindow, OverviewWorkspace, Shell, ShellEvent, ThumbnailImage, WindowIconImage,
+    MAX_WINDOW_THUMBNAIL,
 };
 use std::os::fd::AsFd;
 use support::{pixel_file, Offer, Seen, Wire};
+
+/// The largest icon side a dock accepts.
+const MAX_ICON_SIDE: u32 = 512;
+
+fn surface_config(output: Option<cupertino_wayland_client::OutputId>) -> LayerSurfaceConfig {
+    LayerSurfaceConfig {
+        namespace: "dock".into(),
+        output,
+        layer: Layer::Top,
+        anchor: Anchor::Bottom,
+        size: (400, 80),
+        margin: Margin::default(),
+        exclusive_zone: 0,
+        keyboard: KeyboardInteractivity::None,
+    }
+}
 
 /// A dock on the first output; the server sends `first` as the dock's first group.
 fn dock_with(offer: Offer, first: impl Fn(&CupertinoDockV1) + Send + 'static) -> (Wire, Dock) {
@@ -24,22 +40,18 @@ fn dock_with(offer: Offer, first: impl Fn(&CupertinoDockV1) + Send + 'static) ->
     let shell = Shell::bind(&mut wire.conn).expect("shell");
     let output = wire.conn.outputs()[0].id;
     let surface = layers
-        .layer_surface(
-            &mut wire.conn,
-            &LayerSurfaceConfig {
-                namespace: "dock".into(),
-                output: Some(output),
-                layer: Layer::Top,
-                anchor: Anchor::Bottom,
-                size: (400, 80),
-                margin: Margin::default(),
-                exclusive_zone: 0,
-                keyboard: KeyboardInteractivity::None,
-            },
-        )
+        .layer_surface(&mut wire.conn, &surface_config(Some(output)))
         .expect("layer surface")
         .surface();
     let dock = shell.dock(&wire.conn, surface, output).expect("dock");
+    (wire, dock)
+}
+
+/// A dock whose first group is empty, with everything sent so far taken.
+fn ready(offer: Offer) -> (Wire, Dock) {
+    let (mut wire, dock) = dock_with(offer, |dock| dock.done());
+    wire.events();
+    wire.take();
     (wire, dock)
 }
 
@@ -53,6 +65,11 @@ fn changes(wire: &mut Wire) -> Vec<Vec<DockChange>> {
         .collect()
 }
 
+/// The one change of the first group.
+fn only_change(wire: &mut Wire) -> DockChange {
+    changes(wire).remove(0).remove(0)
+}
+
 fn dock_requests(wire: &Wire) -> Vec<Request> {
     wire.take()
         .into_iter()
@@ -63,9 +80,12 @@ fn dock_requests(wire: &Wire) -> Vec<Request> {
         .collect()
 }
 
-fn ready(wire: &mut Wire) {
-    wire.events();
-    wire.take();
+fn fails_the_connection(wire: &mut Wire) -> bool {
+    let result = wire
+        .conn
+        .roundtrip()
+        .and_then(|()| wire.conn.wait(Some(std::time::Duration::ZERO)).map(|_| ()));
+    matches!(result, Err(cupertino_wayland_client::Error::Protocol(_)))
 }
 
 #[test]
@@ -84,10 +104,15 @@ fn the_first_group_lists_the_windows_and_their_states() {
             "Three".into(),
             WindowState::empty(),
         );
+        // a state bit a newer server defines is ignored
+        dock.window(
+            4,
+            "org.example.C".into(),
+            "Four".into(),
+            WindowState::from_bits_retain(0x100 | WindowState::Active.bits()),
+        );
         dock.done();
     });
-    let groups = changes(&mut wire);
-    assert_eq!(groups.len(), 1);
     let window = |id, app: &str, title: &str, minimized, active| {
         DockChange::Window(DockWindow {
             id,
@@ -98,67 +123,27 @@ fn the_first_group_lists_the_windows_and_their_states() {
         })
     };
     assert_eq!(
-        groups[0],
-        [
+        changes(&mut wire),
+        [vec![
             window(1, "org.example.A", "One", false, true),
             window(2, "org.example.B", "Two", true, false),
             window(3, "org.example.B", "Three", false, false),
-        ]
+            window(4, "org.example.C", "Four", false, true),
+        ]]
     );
 }
 
 #[test]
-fn state_bits_a_newer_server_defines_are_ignored() {
-    let (mut wire, _dock) = dock_with(Offer::all(), |dock| {
-        dock.window(
-            1,
-            "a".into(),
-            "A".into(),
-            WindowState::from_bits_retain(0x100 | WindowState::Active.bits()),
-        );
-        dock.done();
-    });
-    let groups = changes(&mut wire);
-    assert!(matches!(
-        &groups[0][0],
-        DockChange::Window(DockWindow {
-            active: true,
-            minimized: false,
-            ..
-        })
-    ));
-}
-
-#[test]
-fn a_group_with_nothing_in_it_is_not_reported_and_events_stay_in_their_group() {
+fn each_event_is_one_change_in_its_group_and_an_empty_group_is_not_reported() {
     let (mut wire, _dock) = dock_with(Offer::all(), |dock| dock.done());
     assert!(changes(&mut wire).is_empty());
 
     wire.server(|s| {
-        s.docks[0].launching("org.example.A".into());
-        s.docks[0].done();
-        s.docks[0].window_closed(4);
-        s.docks[0].attention("org.example.A".into());
-        s.docks[0].done();
-    });
-    assert_eq!(
-        changes(&mut wire),
-        [
-            vec![DockChange::Launching("org.example.A".into())],
-            vec![
-                DockChange::WindowClosed(4),
-                DockChange::Attention("org.example.A".into())
-            ],
-        ]
-    );
-}
-
-#[test]
-fn the_simple_events_map_one_to_one_in_order() {
-    let (mut wire, _dock) = dock_with(Offer::all(), |dock| dock.done());
-    wire.events();
-    wire.server(|s| {
         let dock = &s.docks[0];
+        dock.launching("org.example.A".into());
+        dock.done();
+        dock.window_closed(4);
+        dock.attention("org.example.A".into());
         dock.toggle_auto_hide();
         dock.toggle_app_grid();
         dock.unresponsive("org.example.A".into(), 1);
@@ -169,47 +154,72 @@ fn the_simple_events_map_one_to_one_in_order() {
         dock.app_resident("org.example.B".into(), 0);
         dock.switcher_closed(1);
         dock.switcher_closed(0);
-        dock.hot_corner(wire_dock::Corner::BottomRight);
-        dock.gesture(wire_dock::Gesture::Spread);
+        for corner in [
+            wire_dock::Corner::TopLeft,
+            wire_dock::Corner::TopRight,
+            wire_dock::Corner::BottomLeft,
+            wire_dock::Corner::BottomRight,
+        ] {
+            dock.hot_corner(corner);
+        }
+        for gesture in [
+            wire_dock::Gesture::SwipeUp,
+            wire_dock::Gesture::SwipeDown,
+            wire_dock::Gesture::Pinch,
+            wire_dock::Gesture::Spread,
+        ] {
+            dock.gesture(gesture);
+        }
         dock.overview_closed();
+        dock.done();
         dock.done();
     });
     assert_eq!(
         changes(&mut wire),
-        [vec![
-            DockChange::ToggleAutoHide,
-            DockChange::ToggleAppGrid,
-            DockChange::Unresponsive {
-                app_id: "org.example.A".into(),
-                unresponsive: true
-            },
-            DockChange::Unresponsive {
-                app_id: "org.example.A".into(),
-                unresponsive: false
-            },
-            DockChange::ForceQuitDialog,
-            DockChange::Engage,
-            DockChange::AppResident {
-                app_id: "org.example.A".into(),
-                resident: true
-            },
-            DockChange::AppResident {
-                app_id: "org.example.B".into(),
-                resident: false
-            },
-            DockChange::SwitcherClosed { committed: true },
-            DockChange::SwitcherClosed { committed: false },
-            DockChange::HotCorner(Corner::BottomRight),
-            DockChange::Gesture(Gesture::Spread),
-            DockChange::OverviewClosed,
-        ]]
+        [
+            vec![DockChange::Launching("org.example.A".into())],
+            vec![
+                DockChange::WindowClosed(4),
+                DockChange::Attention("org.example.A".into()),
+                DockChange::ToggleAutoHide,
+                DockChange::ToggleAppGrid,
+                DockChange::Unresponsive {
+                    app_id: "org.example.A".into(),
+                    unresponsive: true
+                },
+                DockChange::Unresponsive {
+                    app_id: "org.example.A".into(),
+                    unresponsive: false
+                },
+                DockChange::ForceQuitDialog,
+                DockChange::Engage,
+                DockChange::AppResident {
+                    app_id: "org.example.A".into(),
+                    resident: true
+                },
+                DockChange::AppResident {
+                    app_id: "org.example.B".into(),
+                    resident: false
+                },
+                DockChange::SwitcherClosed { committed: true },
+                DockChange::SwitcherClosed { committed: false },
+                DockChange::HotCorner(Corner::TopLeft),
+                DockChange::HotCorner(Corner::TopRight),
+                DockChange::HotCorner(Corner::BottomLeft),
+                DockChange::HotCorner(Corner::BottomRight),
+                DockChange::Gesture(Gesture::SwipeUp),
+                DockChange::Gesture(Gesture::SwipeDown),
+                DockChange::Gesture(Gesture::Pinch),
+                DockChange::Gesture(Gesture::Spread),
+                DockChange::OverviewClosed,
+            ],
+        ]
     );
 }
 
 #[test]
 fn the_switcher_names_the_output_the_entries_and_the_selection() {
-    let (mut wire, _dock) = dock_with(Offer::all(), |dock| dock.done());
-    wire.events();
+    let (mut wire, _dock) = ready(Offer::all());
     let output = wire.conn.outputs()[0].id;
     wire.server(|s| {
         let panel = s.outputs[0].clone();
@@ -220,24 +230,7 @@ fn the_switcher_names_the_output_the_entries_and_the_selection() {
         dock.switcher_entry("org.example.C".into());
         dock.switcher_changed(1);
         dock.done();
-    });
-    assert_eq!(
-        changes(&mut wire),
-        [vec![DockChange::SwitcherChanged {
-            output,
-            apps: vec![
-                "org.example.A".into(),
-                "org.example.B".into(),
-                "org.example.C".into()
-            ],
-            selected: 1,
-        }]]
-    );
-
-    // the entries of one change are not the next one's
-    wire.server(|s| {
-        let panel = s.outputs[0].clone();
-        let dock = &s.docks[0];
+        // the entries of one change are not the next one's
         dock.switcher_output(&panel);
         dock.switcher_entry("org.example.D".into());
         dock.switcher_changed(0);
@@ -245,37 +238,38 @@ fn the_switcher_names_the_output_the_entries_and_the_selection() {
     });
     assert_eq!(
         changes(&mut wire),
-        [vec![DockChange::SwitcherChanged {
-            output,
-            apps: vec!["org.example.D".into()],
-            selected: 0,
-        }]]
+        [
+            vec![DockChange::SwitcherChanged {
+                output,
+                apps: vec![
+                    "org.example.A".into(),
+                    "org.example.B".into(),
+                    "org.example.C".into()
+                ],
+                selected: 1,
+            }],
+            vec![DockChange::SwitcherChanged {
+                output,
+                apps: vec!["org.example.D".into()],
+                selected: 0,
+            }]
+        ]
     );
-}
 
-#[test]
-fn a_switcher_change_without_its_output_fails_the_connection() {
-    let (mut wire, _dock) = dock_with(Offer::all(), |dock| dock.done());
-    wire.events();
     wire.server(|s| {
         s.docks[0].switcher_entry("org.example.A".into());
         s.docks[0].switcher_changed(0);
         s.docks[0].done();
     });
-    let result = wire
-        .conn
-        .roundtrip()
-        .and_then(|()| wire.conn.wait(Some(std::time::Duration::ZERO)).map(|_| ()));
-    assert!(matches!(
-        result,
-        Err(cupertino_wayland_client::Error::Protocol(_))
-    ));
+    assert!(
+        fails_the_connection(&mut wire),
+        "a switcher change without its output"
+    );
 }
 
 #[test]
 fn the_overview_carries_its_mode_area_windows_and_workspaces() {
-    let (mut wire, _dock) = dock_with(Offer::all(), |dock| dock.done());
-    wire.events();
+    let (mut wire, _dock) = ready(Offer::all());
     wire.server(|s| {
         let dock = &s.docks[0];
         dock.overview_window(7, 10, 20, 300, 200);
@@ -342,183 +336,112 @@ fn the_overview_carries_its_mode_area_windows_and_workspaces() {
 }
 
 #[test]
-fn every_corner_and_gesture_is_reported() {
-    let (mut wire, _dock) = dock_with(Offer::all(), |dock| dock.done());
-    wire.events();
-    wire.server(|s| {
-        let dock = &s.docks[0];
-        for corner in [
-            wire_dock::Corner::TopLeft,
-            wire_dock::Corner::TopRight,
-            wire_dock::Corner::BottomLeft,
-            wire_dock::Corner::BottomRight,
-        ] {
-            dock.hot_corner(corner);
-        }
-        for gesture in [
-            wire_dock::Gesture::SwipeUp,
-            wire_dock::Gesture::SwipeDown,
-            wire_dock::Gesture::Pinch,
-            wire_dock::Gesture::Spread,
-        ] {
-            dock.gesture(gesture);
-        }
-        dock.done();
-    });
-    assert_eq!(
-        changes(&mut wire),
-        [vec![
-            DockChange::HotCorner(Corner::TopLeft),
-            DockChange::HotCorner(Corner::TopRight),
-            DockChange::HotCorner(Corner::BottomLeft),
-            DockChange::HotCorner(Corner::BottomRight),
-            DockChange::Gesture(Gesture::SwipeUp),
-            DockChange::Gesture(Gesture::SwipeDown),
-            DockChange::Gesture(Gesture::Pinch),
-            DockChange::Gesture(Gesture::Spread),
-        ]]
-    );
-}
-
-fn icon_group(
-    id: u32,
-    name: &'static str,
-    size: u32,
-    bytes: Vec<u8>,
-) -> impl Fn(&CupertinoDockV1) + Send + 'static {
-    move |dock| {
-        let file = pixel_file(&bytes);
-        dock.window_icon(id, name.into(), size, file.as_fd());
-        dock.done();
-    }
-}
-
-fn icon_of(wire: &mut Wire) -> DockWindowIcon {
-    match changes(wire).remove(0).remove(0) {
-        DockChange::WindowIcon(icon) => icon,
-        other => panic!("not an icon: {other:?}"),
-    }
-}
-
-#[test]
-fn a_window_icon_is_the_file_read_whole() {
-    let bytes: Vec<u8> = (0..2 * 2 * 4).collect();
-    let (mut wire, _dock) = dock_with(Offer::all(), icon_group(5, "text-editor", 2, bytes.clone()));
-    assert_eq!(
-        icon_of(&mut wire),
-        DockWindowIcon {
-            id: 5,
-            name: Some("text-editor".into()),
-            image: Some(WindowIconImage {
-                size: 2,
-                argb: bytes
-            }),
-        }
-    );
-}
-
-#[test]
-fn a_window_icon_without_a_name_has_none() {
-    let (mut wire, _dock) = dock_with(Offer::all(), icon_group(5, "", 1, vec![0; 4]));
-    let icon = icon_of(&mut wire);
-    assert_eq!(icon.name, None);
-    assert!(icon.image.is_some());
-}
-
-#[test]
-fn a_window_icon_that_is_empty_too_big_or_the_wrong_length_has_no_image() {
-    // size 0
-    let (mut wire, _dock) = dock_with(Offer::all(), icon_group(5, "x", 0, vec![]));
-    assert_eq!(icon_of(&mut wire).image, None);
-    // a file shorter than the size says
-    let (mut wire, _dock) = dock_with(Offer::all(), icon_group(5, "x", 2, vec![0; 15]));
-    assert_eq!(icon_of(&mut wire).image, None);
-    // a file longer than the size says
-    let (mut wire, _dock) = dock_with(Offer::all(), icon_group(5, "x", 2, vec![0; 17]));
-    assert_eq!(icon_of(&mut wire).image, None);
-    // over the largest side a dock accepts, with a file of exactly that size
-    let side = 513u32;
-    let (mut wire, _dock) = dock_with(
-        Offer::all(),
-        icon_group(5, "x", side, vec![0; (side * side * 4) as usize]),
-    );
-    assert_eq!(icon_of(&mut wire).image, None);
-}
-
-#[test]
-fn a_window_icon_of_the_largest_side_is_accepted() {
-    let side = 512u32;
-    let (mut wire, _dock) = dock_with(
-        Offer::all(),
-        icon_group(5, "x", side, vec![7; (side * side * 4) as usize]),
-    );
-    let image = icon_of(&mut wire).image.expect("image");
-    assert_eq!(image.size, 512);
-    assert_eq!(image.argb.len(), 512 * 512 * 4);
-}
-
-fn thumbnail_group(
-    width: u32,
-    height: u32,
-    bytes: Vec<u8>,
-) -> impl Fn(&CupertinoDockV1) + Send + 'static {
-    move |dock| {
-        let file = pixel_file(&bytes);
-        dock.window_thumbnail(6, width, height, file.as_fd());
-        dock.done();
-    }
-}
-
-fn thumbnail_of(wire: &mut Wire) -> DockWindowThumbnail {
-    match changes(wire).remove(0).remove(0) {
-        DockChange::WindowThumbnail(thumbnail) => thumbnail,
-        other => panic!("not a thumbnail: {other:?}"),
+fn a_window_icon_is_its_file_read_whole_or_no_image() {
+    let side = MAX_ICON_SIDE;
+    let over = MAX_ICON_SIDE + 1;
+    let ramp: Vec<u8> = (0..2 * 2 * 4).collect();
+    let rows: Vec<(&str, &'static str, u32, Vec<u8>, bool)> = vec![
+        ("a named icon", "text-editor", 2, ramp, true),
+        ("an icon without a name", "", 1, vec![0; 4], true),
+        (
+            "the largest side",
+            "x",
+            side,
+            vec![7; (side * side * 4) as usize],
+            true,
+        ),
+        ("size 0", "x", 0, vec![], false),
+        (
+            "a file shorter than the size says",
+            "x",
+            2,
+            vec![0; 15],
+            false,
+        ),
+        (
+            "a file longer than the size says",
+            "x",
+            2,
+            vec![0; 17],
+            false,
+        ),
+        (
+            "over the largest side",
+            "x",
+            over,
+            vec![0; (over * over * 4) as usize],
+            false,
+        ),
+    ];
+    for (row, name, size, bytes, has_image) in rows {
+        let sent = bytes.clone();
+        let (mut wire, _dock) = dock_with(Offer::all(), move |dock| {
+            let file = pixel_file(&sent);
+            dock.window_icon(5, name.into(), size, file.as_fd());
+            dock.done();
+        });
+        let DockChange::WindowIcon(icon) = only_change(&mut wire) else {
+            panic!("{row}: not an icon");
+        };
+        assert_eq!(icon.id, 5, "{row}");
+        assert_eq!(
+            icon.name,
+            (!name.is_empty()).then(|| name.to_string()),
+            "{row}"
+        );
+        let expected = has_image.then_some(WindowIconImage { size, argb: bytes });
+        assert!(icon.image == expected, "{row}");
     }
 }
 
 #[test]
-fn a_window_thumbnail_is_the_file_read_whole() {
-    let bytes: Vec<u8> = (0..4 * 3 * 4).collect();
-    let (mut wire, _dock) = dock_with(Offer::all(), thumbnail_group(4, 3, bytes.clone()));
-    assert_eq!(
-        thumbnail_of(&mut wire),
-        DockWindowThumbnail {
-            id: 6,
-            image: Some(ThumbnailImage {
-                width: 4,
-                height: 3,
-                argb: bytes
-            }),
-        }
-    );
-}
-
-#[test]
-fn a_window_thumbnail_that_is_empty_too_big_or_the_wrong_length_has_no_image() {
-    assert_eq!(MAX_WINDOW_THUMBNAIL, 256);
-    let (mut wire, _dock) = dock_with(Offer::all(), thumbnail_group(0, 3, vec![]));
-    assert_eq!(thumbnail_of(&mut wire).image, None);
-    let (mut wire, _dock) = dock_with(Offer::all(), thumbnail_group(3, 0, vec![]));
-    assert_eq!(thumbnail_of(&mut wire).image, None);
-    let (mut wire, _dock) = dock_with(Offer::all(), thumbnail_group(2, 2, vec![0; 15]));
-    assert_eq!(thumbnail_of(&mut wire).image, None);
-    let (mut wire, _dock) = dock_with(Offer::all(), thumbnail_group(257, 1, vec![0; 257 * 4]));
-    assert_eq!(thumbnail_of(&mut wire).image, None);
-    let (mut wire, _dock) = dock_with(Offer::all(), thumbnail_group(1, 257, vec![0; 257 * 4]));
-    assert_eq!(thumbnail_of(&mut wire).image, None);
-}
-
-#[test]
-fn a_window_thumbnail_of_the_largest_side_is_accepted() {
-    let (mut wire, _dock) = dock_with(Offer::all(), thumbnail_group(256, 1, vec![1; 256 * 4]));
-    let image = thumbnail_of(&mut wire).image.expect("image");
-    assert_eq!((image.width, image.height), (256, 1));
+fn a_window_thumbnail_is_its_file_read_whole_or_no_image() {
+    let max = MAX_WINDOW_THUMBNAIL;
+    let ramp: Vec<u8> = (0..4 * 3 * 4).collect();
+    let rows: Vec<(&str, u32, u32, Vec<u8>, bool)> = vec![
+        ("a thumbnail", 4, 3, ramp, true),
+        ("the largest side", max, 1, vec![1; max as usize * 4], true),
+        ("no width", 0, 3, vec![], false),
+        ("no height", 3, 0, vec![], false),
+        ("a file of the wrong length", 2, 2, vec![0; 15], false),
+        (
+            "too wide",
+            max + 1,
+            1,
+            vec![0; (max as usize + 1) * 4],
+            false,
+        ),
+        (
+            "too tall",
+            1,
+            max + 1,
+            vec![0; (max as usize + 1) * 4],
+            false,
+        ),
+    ];
+    for (row, width, height, bytes, has_image) in rows {
+        let sent = bytes.clone();
+        let (mut wire, _dock) = dock_with(Offer::all(), move |dock| {
+            let file = pixel_file(&sent);
+            dock.window_thumbnail(6, width, height, file.as_fd());
+            dock.done();
+        });
+        let DockChange::WindowThumbnail(thumbnail) = only_change(&mut wire) else {
+            panic!("{row}: not a thumbnail");
+        };
+        assert_eq!(thumbnail.id, 6, "{row}");
+        let expected = has_image.then_some(ThumbnailImage {
+            width,
+            height,
+            argb: bytes,
+        });
+        assert!(thumbnail.image == expected, "{row}");
+    }
 }
 
 #[test]
 fn the_requests_of_the_dock_carry_their_arguments() {
-    let (mut wire, dock) = dock_with(Offer::all(), |dock| dock.done());
-    ready(&mut wire);
+    let (mut wire, dock) = ready(Offer::all());
 
     dock.activate_app("org.example.A");
     dock.force_quit_app("org.example.B");
@@ -530,10 +453,12 @@ fn the_requests_of_the_dock_carry_their_arguments() {
     dock.add_workspace();
     dock.remove_workspace(4);
     dock.run_action("toggle-overview");
-    dock.app_command("org.example.A", AppCommand::Hide);
     dock.switcher_select(2).unwrap();
     dock.switcher_activate(1).unwrap();
     dock.move_workspace(5, 0).unwrap();
+    for command in [AppCommand::ShowWindows, AppCommand::Hide, AppCommand::Quit] {
+        dock.app_command("org.example.A", command);
+    }
     wire.events();
 
     let requests = dock_requests(&wire);
@@ -547,45 +472,30 @@ fn the_requests_of_the_dock_carry_their_arguments() {
     assert!(matches!(requests[7], Request::AddWorkspace));
     assert!(matches!(requests[8], Request::RemoveWorkspace { id: 4 }));
     assert!(matches!(&requests[9], Request::RunAction { name } if name == "toggle-overview"));
+    assert!(matches!(requests[10], Request::SwitcherSelect { index: 2 }));
     assert!(matches!(
-        &requests[10],
-        Request::AppCommand { app_id, command }
-            if app_id == "org.example.A" && u32::from(*command) == 1
-    ));
-    assert!(matches!(requests[11], Request::SwitcherSelect { index: 2 }));
-    assert!(matches!(
-        requests[12],
+        requests[11],
         Request::SwitcherActivate { index: 1 }
     ));
     assert!(matches!(
-        requests[13],
+        requests[12],
         Request::MoveWorkspace { id: 5, index: 0 }
     ));
-    assert_eq!(requests.len(), 14);
-}
-
-#[test]
-fn every_app_command_has_its_own_wire_value() {
-    let (mut wire, dock) = dock_with(Offer::all(), |dock| dock.done());
-    ready(&mut wire);
-    for command in [AppCommand::ShowWindows, AppCommand::Hide, AppCommand::Quit] {
-        dock.app_command("a", command);
-    }
-    wire.events();
-    let values: Vec<u32> = dock_requests(&wire)
-        .into_iter()
+    let commands: Vec<u32> = requests[13..]
+        .iter()
         .map(|r| match r {
-            Request::AppCommand { command, .. } => u32::from(command),
+            Request::AppCommand { app_id, command } if app_id == "org.example.A" => {
+                u32::from(*command)
+            }
             other => panic!("unexpected {other:?}"),
         })
         .collect();
-    assert_eq!(values, [0, 1, 2]);
+    assert_eq!(commands, [0, 1, 2], "each app command has its own value");
 }
 
 #[test]
-fn rectangles_are_rounded_outwards_to_whole_points() {
-    let (mut wire, dock) = dock_with(Offer::all(), |dock| dock.done());
-    ready(&mut wire);
+fn a_rectangle_is_sent_as_the_whole_points_around_it_and_an_empty_workspace_frame_as_zeros() {
+    let (mut wire, dock) = ready(Offer::all());
     let rect = Rect::new(0.5, 0.25, 10.0, 10.0);
 
     dock.restore_window(3, &rect).unwrap();
@@ -593,6 +503,10 @@ fn rectangles_are_rounded_outwards_to_whole_points() {
     dock.overview_frame(4, &rect).unwrap();
     dock.overview_drag(5, &rect).unwrap();
     dock.overview_workspace_frame(6, &rect).unwrap();
+    dock.overview_workspace_frame(2, &Rect::new(5.0, 5.0, 0.0, 10.0))
+        .unwrap();
+    dock.overview_workspace_frame(2, &Rect::new(5.0, 5.0, 10.0, -1.0))
+        .unwrap();
     wire.events();
 
     let requests = dock_requests(&wire);
@@ -645,54 +559,7 @@ fn rectangles_are_rounded_outwards_to_whole_points() {
             height: 11
         }
     ));
-}
-
-#[test]
-fn a_rectangle_that_is_not_finite_is_refused_and_nothing_is_sent() {
-    let (mut wire, dock) = dock_with(Offer::all(), |dock| dock.done());
-    ready(&mut wire);
-    for bad in [
-        Rect::new(f64::NAN, 0.0, 1.0, 1.0),
-        Rect::new(0.0, f64::INFINITY, 1.0, 1.0),
-        Rect::new(0.0, 0.0, f64::INFINITY, 1.0),
-        Rect::new(0.0, 0.0, 1.0, f64::NAN),
-    ] {
-        assert!(matches!(
-            dock.restore_window(1, &bad),
-            Err(Error::InvalidShape)
-        ));
-        assert!(matches!(
-            dock.set_minimize_target(&bad),
-            Err(Error::InvalidShape)
-        ));
-        assert!(matches!(
-            dock.overview_frame(1, &bad),
-            Err(Error::InvalidShape)
-        ));
-        assert!(matches!(
-            dock.overview_drag(1, &bad),
-            Err(Error::InvalidShape)
-        ));
-        assert!(matches!(
-            dock.overview_workspace_frame(1, &bad),
-            Err(Error::InvalidShape)
-        ));
-    }
-    wire.events();
-    assert!(dock_requests(&wire).is_empty());
-}
-
-#[test]
-fn an_empty_workspace_frame_sends_zeros_to_clear_it() {
-    let (mut wire, dock) = dock_with(Offer::all(), |dock| dock.done());
-    ready(&mut wire);
-    dock.overview_workspace_frame(2, &Rect::new(5.0, 5.0, 0.0, 10.0))
-        .unwrap();
-    dock.overview_workspace_frame(2, &Rect::new(5.0, 5.0, 10.0, -1.0))
-        .unwrap();
-    wire.events();
-    let requests = dock_requests(&wire);
-    for request in &requests {
+    for request in &requests[5..] {
         assert!(matches!(
             request,
             Request::OverviewWorkspaceFrame {
@@ -704,26 +571,42 @@ fn an_empty_workspace_frame_sends_zeros_to_clear_it() {
             }
         ));
     }
-    assert_eq!(requests.len(), 2);
+    assert_eq!(requests.len(), 7);
 }
 
 #[test]
-fn indices_that_do_not_fit_the_wire_are_refused() {
-    let (mut wire, dock) = dock_with(Offer::all(), |dock| dock.done());
-    ready(&mut wire);
+fn a_shape_the_wire_cannot_carry_is_refused_and_nothing_is_sent() {
+    let (mut wire, dock) = ready(Offer::all());
+    for bad in [
+        Rect::new(f64::NAN, 0.0, 1.0, 1.0),
+        Rect::new(0.0, f64::INFINITY, 1.0, 1.0),
+        Rect::new(0.0, 0.0, f64::INFINITY, 1.0),
+        Rect::new(0.0, 0.0, 1.0, f64::NAN),
+    ] {
+        for (request, result) in [
+            ("restore_window", dock.restore_window(1, &bad)),
+            ("set_minimize_target", dock.set_minimize_target(&bad)),
+            ("overview_frame", dock.overview_frame(1, &bad)),
+            ("overview_drag", dock.overview_drag(1, &bad)),
+            (
+                "overview_workspace_frame",
+                dock.overview_workspace_frame(1, &bad),
+            ),
+        ] {
+            assert!(
+                matches!(result, Err(Error::InvalidShape)),
+                "{request} of {bad:?}"
+            );
+        }
+    }
     let too_big = u32::MAX as usize + 1;
-    assert!(matches!(
-        dock.switcher_select(too_big),
-        Err(Error::InvalidShape)
-    ));
-    assert!(matches!(
-        dock.switcher_activate(too_big),
-        Err(Error::InvalidShape)
-    ));
-    assert!(matches!(
-        dock.move_workspace(1, too_big),
-        Err(Error::InvalidShape)
-    ));
+    for (request, result) in [
+        ("switcher_select", dock.switcher_select(too_big)),
+        ("switcher_activate", dock.switcher_activate(too_big)),
+        ("move_workspace", dock.move_workspace(1, too_big)),
+    ] {
+        assert!(matches!(result, Err(Error::InvalidShape)), "{request}");
+    }
     dock.switcher_select(u32::MAX as usize).unwrap();
     wire.events();
     assert!(matches!(
@@ -733,71 +616,54 @@ fn indices_that_do_not_fit_the_wire_are_refused() {
 }
 
 #[test]
-fn a_server_older_than_the_overview_drag_is_sent_nothing_for_it() {
-    let (mut wire, dock) = dock_with(Offer::shell(22), |dock| dock.done());
-    ready(&mut wire);
+fn a_request_newer_than_the_server_is_not_sent() {
     let rect = Rect::new(0.0, 0.0, 10.0, 10.0);
-    dock.overview_drag(1, &rect).unwrap();
-    dock.overview_move_window(1, 2);
-    dock.overview_workspace_frame(2, &rect).unwrap();
-    dock.overview_frame(1, &rect).unwrap();
-    wire.events();
-    let requests = dock_requests(&wire);
-    assert!(matches!(requests[..], [Request::OverviewFrame { .. }]));
+    for version in [22, 23, 25, 26] {
+        let (mut wire, dock) = ready(Offer::shell(version));
+        dock.overview_drag(1, &rect).unwrap();
+        dock.overview_move_window(8, 2);
+        dock.overview_workspace_frame(2, &rect).unwrap();
+        assert_eq!(dock.activate_window(3), version >= 26, "version {version}");
+        wire.events();
+        let requests = dock_requests(&wire);
+        let sent = |matches: fn(&Request) -> bool| requests.iter().any(matches);
+        let drags = version >= 23;
+        assert_eq!(
+            sent(|r| matches!(r, Request::OverviewDrag { .. })),
+            drags,
+            "version {version}: overview_drag"
+        );
+        assert_eq!(
+            sent(|r| matches!(
+                r,
+                Request::OverviewMoveWindow {
+                    id: 8,
+                    workspace: 2
+                }
+            )),
+            drags,
+            "version {version}: overview_move_window"
+        );
+        assert_eq!(
+            sent(|r| matches!(r, Request::OverviewWorkspaceFrame { .. })),
+            drags,
+            "version {version}: overview_workspace_frame"
+        );
+        assert_eq!(
+            sent(|r| matches!(r, Request::ActivateWindow { id: 3 })),
+            version >= 26,
+            "version {version}: activate_window"
+        );
+    }
 }
 
 #[test]
-fn the_overview_drag_requests_are_sent_from_version_twenty_three() {
-    let (mut wire, dock) = dock_with(Offer::shell(23), |dock| dock.done());
-    ready(&mut wire);
-    dock.overview_move_window(8, 2);
-    wire.events();
-    assert!(matches!(
-        dock_requests(&wire)[..],
-        [Request::OverviewMoveWindow {
-            id: 8,
-            workspace: 2
-        }]
-    ));
-}
-
-#[test]
-fn showing_one_window_needs_version_twenty_six() {
-    let (mut wire, dock) = dock_with(Offer::shell(25), |dock| dock.done());
-    ready(&mut wire);
-    assert!(!dock.activate_window(3));
-    wire.events();
-    assert!(dock_requests(&wire).is_empty());
-}
-
-#[test]
-fn dropping_the_dock_gives_up_the_role() {
-    let (mut wire, dock) = dock_with(Offer::all(), |dock| dock.done());
-    ready(&mut wire);
-    drop(dock);
-    wire.events();
-    assert!(matches!(&dock_requests(&wire)[..], [Request::Destroy]));
-}
-
-#[test]
-fn a_dock_for_an_unplugged_output_is_refused() {
-    let (mut wire, _dock) = dock_with(Offer::all(), |dock| dock.done());
+fn a_dock_needs_a_plugged_output_and_gives_up_the_role_when_dropped() {
+    let (mut wire, dock) = ready(Offer::all());
     let shell = Shell::bind(&mut wire.conn).expect("shell");
     let layers = LayerShell::bind(&mut wire.conn).expect("layer shell");
     let surface = layers
-        .layer_surface(
-            &mut wire.conn,
-            &LayerSurfaceConfig {
-                namespace: "dock".into(),
-                output: None,
-                layer: Layer::Top,
-                anchor: Anchor::Bottom,
-                size: (1, 1),
-                margin: Margin::default(),
-                exclusive_zone: 0,
-                keyboard: KeyboardInteractivity::None,
-            },
-        )
+        .layer_surface(&mut wire.conn, &surface_config(None))
         .expect("surface")
         .surface();
     let result = shell.dock(
@@ -806,4 +672,10 @@ fn a_dock_for_an_unplugged_output_is_refused() {
         cupertino_wayland_client::OutputId::from_registry_name(9999),
     );
     assert!(matches!(result, Err(Error::UnknownOutput)));
+    wire.events();
+    wire.take();
+
+    drop(dock);
+    wire.events();
+    assert!(matches!(&dock_requests(&wire)[..], [Request::Destroy]));
 }

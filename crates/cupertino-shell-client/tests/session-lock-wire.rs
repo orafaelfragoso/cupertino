@@ -10,23 +10,26 @@ use wayland_protocols::ext::session_lock::v1::server::ext_session_lock_v1::Reque
 
 #[test]
 fn the_manager_binds_only_when_offered() {
-    let mut wire = Wire::new(Offer {
-        lock: false,
-        ..Offer::all()
-    });
-    assert!(SessionLockManager::bind(&mut wire.conn).is_none());
-    let mut wire = Wire::all();
-    assert!(SessionLockManager::bind(&mut wire.conn).is_some());
+    for offered in [false, true] {
+        let mut wire = Wire::new(Offer {
+            lock: offered,
+            ..Offer::all()
+        });
+        assert_eq!(
+            SessionLockManager::bind(&mut wire.conn).is_some(),
+            offered,
+            "offered: {offered}"
+        );
+    }
 }
 
 #[test]
-fn each_lock_has_the_next_generation() {
+fn each_lock_has_the_next_generation_and_its_events_name_it() {
     let mut wire = Wire::all();
     let mut manager = SessionLockManager::bind(&mut wire.conn).expect("manager");
     let first = manager.lock(&wire.conn);
     let second = manager.lock(&wire.conn);
-    assert_eq!(first.generation(), 1);
-    assert_eq!(second.generation(), 2);
+    assert_eq!((first.generation(), second.generation()), (1, 2));
     wire.events();
     let created = wire
         .take()
@@ -34,15 +37,6 @@ fn each_lock_has_the_next_generation() {
         .filter(|s| matches!(s, Seen::LockCreated))
         .count();
     assert_eq!(created, 2);
-}
-
-#[test]
-fn a_confirmation_and_a_finish_name_the_lock_they_belong_to() {
-    let mut wire = Wire::all();
-    let mut manager = SessionLockManager::bind(&mut wire.conn).expect("manager");
-    let _first = manager.lock(&wire.conn);
-    let _second = manager.lock(&wire.conn);
-    wire.events();
 
     wire.server(|s| {
         s.locks[1].locked();
@@ -64,10 +58,13 @@ fn a_confirmation_and_a_finish_name_the_lock_they_belong_to() {
 }
 
 #[test]
-fn a_lock_surface_is_configured_and_reported() {
+fn a_lock_surface_needs_a_plugged_output_and_a_configure_with_a_size() {
     let mut wire = Wire::all();
     let mut manager = SessionLockManager::bind(&mut wire.conn).expect("manager");
     let lock = manager.lock(&wire.conn);
+    let unplugged = lock.lock_surface(&mut wire.conn, OutputId::from_registry_name(9999));
+    assert!(matches!(unplugged, Err(Error::UnknownOutput)));
+
     let output = wire.conn.outputs()[0].id;
     let surface = lock
         .lock_surface(&mut wire.conn, output)
@@ -77,7 +74,6 @@ fn a_lock_surface_is_configured_and_reported() {
         .take()
         .iter()
         .any(|s| matches!(s, Seen::LockSurfaceCreated)));
-
     wire.server(|s| s.lock_surfaces[0].configure(3, 1920, 1080));
     assert_eq!(
         wire.shell_events(),
@@ -86,28 +82,8 @@ fn a_lock_surface_is_configured_and_reported() {
             size: (1920, 1080)
         }]
     );
-}
 
-#[test]
-fn a_lock_surface_for_an_unplugged_output_is_refused() {
-    let mut wire = Wire::all();
-    let mut manager = SessionLockManager::bind(&mut wire.conn).expect("manager");
-    let lock = manager.lock(&wire.conn);
-    let result = lock.lock_surface(&mut wire.conn, OutputId::from_registry_name(9999));
-    assert!(matches!(result, Err(Error::UnknownOutput)));
-}
-
-#[test]
-fn a_lock_surface_configured_without_a_size_fails_the_connection() {
-    let mut wire = Wire::all();
-    let mut manager = SessionLockManager::bind(&mut wire.conn).expect("manager");
-    let lock = manager.lock(&wire.conn);
-    let output = wire.conn.outputs()[0].id;
-    lock.lock_surface(&mut wire.conn, output)
-        .expect("lock surface");
-    wire.events();
-
-    wire.server(|s| s.lock_surfaces[0].configure(3, 0, 1080));
+    wire.server(|s| s.lock_surfaces[0].configure(4, 0, 1080));
     let result = wire
         .conn
         .roundtrip()

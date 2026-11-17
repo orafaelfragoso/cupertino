@@ -116,7 +116,11 @@ fn a_reply_shorter_or_longer_than_its_layout_is_refused() {
             parse_settings(&[1, 0, 0, 0, 0]).map(drop),
             Some(1),
         ),
-        ("short device", parse_device(&DEVICE_BYTES[..6]).map(drop), None),
+        (
+            "short device",
+            parse_device(&DEVICE_BYTES[..6]).map(drop),
+            None,
+        ),
         ("no address types", parse_address_types(&[]).map(drop), None),
         (
             "long address types",

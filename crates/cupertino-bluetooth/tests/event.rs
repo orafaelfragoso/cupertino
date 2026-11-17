@@ -2,8 +2,8 @@
 
 use cupertino_bluetooth::{
     decode_packet, Address, AddressType, AddressTypes, ClassOfDevice, ControllerIndex, DeviceId,
-    DisconnectReason, Eir, EirName, Event, FoundFlags, KeyValue, LinkKey, LinkKeyType,
-    LongTermKey, LongTermKeyType, Opcode, ParseError, Settings, Status,
+    DisconnectReason, Eir, EirName, Event, FoundFlags, KeyValue, LinkKey, LinkKeyType, LongTermKey,
+    LongTermKeyType, Opcode, ParseError, Settings, Status,
 };
 
 const DEVICE_BYTES: [u8; 7] = [0x13, 0x71, 0xDA, 0x7D, 0x1A, 0x00, 0];

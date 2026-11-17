@@ -57,7 +57,12 @@ fn a_command_is_its_opcode_controller_and_length_then_its_parameters() {
         ("read info", Command::ReadControllerInfo, 0x0004, vec![]),
         ("connections", Command::GetConnections, 0x0015, vec![]),
         ("powered", Command::SetPowered(true), 0x0005, vec![1]),
-        ("connectable", Command::SetConnectable(false), 0x0007, vec![0]),
+        (
+            "connectable",
+            Command::SetConnectable(false),
+            0x0007,
+            vec![0],
+        ),
         ("bondable", Command::SetBondable(true), 0x0009, vec![1]),
         (
             "not discoverable",

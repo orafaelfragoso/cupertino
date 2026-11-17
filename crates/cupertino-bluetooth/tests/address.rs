@@ -59,7 +59,11 @@ fn address_types_round_trip_through_the_management_numbers_and_their_names() {
         assert_eq!(kind.to_wire(), wire, "{kind:?}");
         assert_eq!(AddressType::from_wire(wire), Ok(kind), "{kind:?}");
         assert_eq!(kind.is_le(), le, "{kind:?}");
-        assert_eq!(kind.to_string().parse::<AddressType>(), Ok(kind), "{kind:?}");
+        assert_eq!(
+            kind.to_string().parse::<AddressType>(),
+            Ok(kind),
+            "{kind:?}"
+        );
     }
     assert_eq!(
         AddressType::from_wire(3),

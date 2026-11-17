@@ -4,14 +4,14 @@
 //! 8 × 8 ordered matrix, `(m + 0.5) / 64 − 0.5` for the matrix entry `m` (0 to 63). The offset lies inside half a
 //! step, so a value 8 bits hold exactly is stored unchanged (flat colours, opaque alpha, nothing at all) and only
 //! values between two steps are spread over the neighbouring pixels. The same pixel always gets the same offset:
-//! nothing is random, damage repaints match and goldens are stable.
+//! nothing is random, damage repaints match and frames are stable.
 //!
 //! Which channels: the colour of a straight-alpha output (blur, material, glass), the alpha of a one-colour coverage
 //! output (a shadow), and the colour of a gradient (its premultiplied channels, held at its alpha; the alpha is
 //! rounded). The position is the framebuffer pixel, as `gl_FragCoord` counts it, or the pixel of the window or buffer
 //! a renderer draws into. [`GLSL`] is the shader implementation, tested against [`offset`].
 
-/// Whether renderers dither by default: on since the look freeze, which re-recorded the goldens with it.
+/// Whether renderers dither by default: on since the look freeze.
 pub const BY_DEFAULT: bool = true;
 
 /// The shader implementation: `dither_offset`, `dither_rgb` and `dither_alpha` over `gl_FragCoord.xy`.

@@ -30,14 +30,12 @@ third-party packs stay outside it.
 Its full-colour app tiles use layered frosted glass. System objects remain free-standing: sky-blue folders with
 recessed marks, folded white documents with small printed type hints, neutral ribbed bins, a display and overlay badges.
 The parametric artwork has separate 16- and 32-pixel optical editions; any lettering is outlined geometry.
-To regenerate it, build the `cupertino-icons` example `render-artwork` with `cargo build --locked -p cupertino-icons --example render-artwork`, then run
-`python3 -B data/assets/cupertino/generate.py`. That example uses the shell's native SVG loader for every PNG rendition,
+The PNG renditions are baked with the `cupertino-icons` example `render-artwork` (`cargo build --locked -p cupertino-icons --example render-artwork`). That example uses the shell's native SVG loader for every PNG rendition,
 so the raster source preferred by manifest version 2 has the same lighting and filter support as the source SVG.
 
 For development, set `CUPERTINO_ASSET_DIR="$PWD/data/assets/cupertino"`. Headless session captures search your user pack
-(when there is one), then that pack; set `CUPERTINO_ASSET_DIR=` to capture the built-in fallback. Tests keep their
-isolated asset search path: every process a test starts gets `CUPERTINO_ASSET_SEARCH_PATH=` and never opens an installed
-pack.
+(when there is one), then that pack; set `CUPERTINO_ASSET_DIR=` to capture the built-in fallback. An isolated run sets
+`CUPERTINO_ASSET_SEARCH_PATH=`, so its processes never open an installed pack.
 
 ## Manifest, version 2
 

@@ -65,22 +65,16 @@ runtime to take it.
 ## Look checks
 
 `TestDriver::look(window, name)` writes the window as `<name>-<appearance>@<scale>x.png` for a person to compare with
-a reference, and does nothing unless `CUPERTINO_LOOK_DIR` names a folder, so an ordinary test run writes no file.
+a reference, and does nothing unless `CUPERTINO_LOOK_DIR` names a folder, so an ordinary run writes no file.
 `CUPERTINO_LOOK_SCALE` sets the backing scale (2 when unset) and `CUPERTINO_LOOK_APPEARANCES` the appearances,
 comma-separated from `light`, `dark`, `light-hc` and `dark-hc` (`light,dark` when unset). Each picture uses the
 Cupertino theme of `data/theme` with the window's own preferences in that appearance; afterwards the window has its
 theme back at scale 1. `look_into(dir, window, name, scale, appearances)` does the same without the environment.
 
-The portal's file chooser and screenshot consent, the Files browser window and every Settings pane call it from
-their tests. One command writes all of them at 2x, light and dark:
-
-```sh
-CUPERTINO_LOOK_DIR=/tmp/look cargo test -p cupertino-portal -p cupertino-files -p cupertino-settings \
-  --features cupertino-portal/app,cupertino-files/app,cupertino-settings/app
-```
+Set `CUPERTINO_LOOK_DIR` to a folder in any run that calls it, for the pictures at 2x, light and dark.
 
 Add `CUPERTINO_LOOK_APPEARANCES=light,dark,light-hc,dark-hc` for the high-contrast pictures too. The pictures use
-the test's placeholder icons, not the asset pack's.
+placeholder icons, not the asset pack's.
 
 ## Frame timing
 
@@ -91,8 +85,7 @@ presents. `Summary::of` gives the nearest-rank p50, p95, p99 and maximum, the fr
 the whole frames, never an average alone, and `markdown_row` and `csv` write them out.
 `HeadlessWindowSystem::set_keep_pixels(false)` stops presented frames from keeping a copy of all their pixels: only
 each frame's damage is copied, into one buffer per window, as a client copies a frame into its shared buffer, so a
-timing run does not count a whole-window copy that only a test makes. The Files and Settings repaint reports use both
-(see their READMEs). Wall time depends on the machine: a test that pins what a frame repaints reads the damage of
+timing run does not count a whole-window copy that only a test makes. Wall time depends on the machine: a run that pins what a frame repaints reads the damage of
 `HeadlessWindowSystem::frames`.
 
 A `HeadlessWindowSystem::new` with `Capabilities::raised_layer` takes raised layers: `layers(window)` lists every raised

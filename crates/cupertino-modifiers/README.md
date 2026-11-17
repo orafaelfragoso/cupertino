@@ -33,9 +33,3 @@ are a table of their own and do not depend on it.
 
 `classic-pc` is a full swap of Ctrl and Super: a chord that needs Primary and Ctrl together (Lock, Full screen, the
 tiles) is typed with Ctrl and Super.
-
-## Tests
-
-```
-cargo test -p cupertino-modifiers
-```

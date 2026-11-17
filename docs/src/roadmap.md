@@ -2,15 +2,15 @@
 
 Phase assessment recorded on 2026-11-09 against merged commit `5a4f015f`; desktop quality reassessed on 2026-11-10 from an installed-session recording and maintainer reports. Phases 4 and 6 and the desktop quality status updated on 2026-11-12 at `b030dced`. Phases 1–3 have recorded completion audits. Phases 4–6 remain incomplete. Phase 7 has not started. Hardware acceptance is a separate gate and remains open. The [desktop quality backlog](desktop-quality.md) records 31 open issues (2 fixed in code and awaiting the installed-session check), one resolved by design and the closed OBS capture regression; implementation coverage below is not installed-session acceptance.
 
-This assessment compares the phase criteria, merged source, tests, packaging and issue checklists. Existing test results belong to their recorded commits. Reading a test here does not mean it ran again, and code coverage does not replace a hardware run.
+This assessment compares the phase criteria, merged source, packaging and issue checklists. Results recorded here belong to their commits, and a recorded result does not replace a hardware run.
 
 ## Phase 1: baseline and trust
 
-Completed for the agreed scope, WP-00 and WP-01. The contracts registry, layer graph, headless goldens and input replay exist. Supervised shell roles and session-bus mutation checks have tests. The dock and lock golden regressions found after the phase audit were fixed before the recorded green CI run on November 2.
+Completed for the agreed scope, WP-00 and WP-01. The contracts registry, layer graph and input replay exist. Supervised shell roles and session-bus mutation checks were covered. The dock and lock regressions found after the phase audit were fixed before the recorded green CI run on November 2.
 
-Source: `docs/architecture/contracts.yaml`, `ci/contracts.py`, `crates/cupertino-layers`, `crates/cupertino-server/tests/shell_roles.rs` and `ci/goldens.sh`.
+Source: `docs/architecture/contracts.yaml`, `crates/cupertino-layers` and the server's shell role handling.
 
-Since the audit, every test that starts a Cupertino binary gives it an empty asset search path, so the tests draw with the built-in assets even where a pack is installed; `crates/cupertino-server/tests/asset-isolation.rs` checks the test sources for spawns that do not. Server tests wait for the events they check rather than for a fixed time, with a 60-second guard against a hang. The CI build, test and golden jobs run in pinned Arch containers, and the golden baselines are recorded on that image's renderer.
+Since the audit, server runs wait for the events they check rather than for a fixed time. The CI build and test jobs run in pinned Arch containers.
 
 Remaining security and coverage debt stays visible in [#28](https://github.com/orafaelfragoso/cupertino/issues/28) and [#53](https://github.com/orafaelfragoso/cupertino/issues/53). Completion of the baseline does not establish isolation from every same-user application.
 
@@ -18,7 +18,7 @@ Remaining security and coverage debt stays visible in [#28](https://github.com/o
 
 Completed for the agreed scope, WP-02, WP-03 and the GLES half of WP-04. The standard Wayland client, neutral scene model and render API are merged. Layer rules keep the public toolkit separate from the private shell protocols. Settings and Files gained damage submission.
 
-Source: `crates/cupertino-wayland-client`, `crates/cupertino-scene`, `crates/cupertino-render-api` and the server's scene tests. The old client adapter is gone.
+Source: `crates/cupertino-wayland-client`, `crates/cupertino-scene`, `crates/cupertino-render-api` and the server's scene code. The old client adapter is gone.
 
 Since the audit:
 
@@ -32,9 +32,9 @@ Frame scheduling, presentation tracking, scene serialization, dirty-region propa
 
 ## Phase 3: CupertinoKit core
 
-Completed for WP-06 and the CPU half of WP-07. Runtime, layout, text editing, controls, CPU rendering, themes and AT-SPI are merged. Counter, Forms, Virtual List and Editor have headless event-trace goldens and compatibility tests on Cupertino and a second compositor. The virtual-list tests bound work and memory for 50,000 rows.
+Completed for WP-06 and the CPU half of WP-07. Runtime, layout, text editing, controls, CPU rendering, themes and AT-SPI are merged. Counter, Forms, Virtual List and Editor have headless event traces and ran on Cupertino and a second compositor. The virtual list bounds work and memory for 50,000 rows.
 
-Source: `crates/cupertino-kit/tests`, `crates/cupertino-ui-test`, `crates/cupertino-server/tests/standard-clients.rs` and `crates/cupertino-wayland-client/tests/mutter.rs`. See [Get started with CupertinoKit](kit-getting-started.md).
+Source: `crates/cupertino-kit`, `crates/cupertino-ui-test` and `crates/cupertino-wayland-client`. See [Get started with CupertinoKit](kit-getting-started.md).
 
 Since the audit, Kit gained:
 
@@ -42,7 +42,7 @@ Since the audit, Kit gained:
 - text input: inline composition, grapheme-safe input-method edits, multi-click and drag selection, a caret drawn as an overlay on device pixels, and a steady caret option;
 - one table of control sizes, a search field capsule for fields that sit on a material, and glass buttons;
 - menus and popups that open, track and close under touch;
-- a CPU renderer whose incremental frames are pixel-identical to full frames, checked by a property test.
+- a CPU renderer whose incremental frames are pixel-identical to full frames.
 
 GPU rendering and per-node GPU resource retirement belong to the deferred renderer work. External CJK input methods remain out of scope ([#24](https://github.com/orafaelfragoso/cupertino/issues/24)). Core accessibility does not complete the app migration checks in Phase 4.
 
@@ -56,7 +56,7 @@ Implemented:
 - Files runs on Kit and the old window is deleted ([#46](https://github.com/orafaelfragoso/cupertino/issues/46)). Removable media mount, unlock and eject from the sidebar; the encrypted-device and policy checks on hardware remain ([#65](https://github.com/orafaelfragoso/cupertino/issues/65)). Search widens its field while it runs and shows No Results when nothing matches ([#39](https://github.com/orafaelfragoso/cupertino/issues/39)). Drops onto folders, places, the Trash and the open folder, drags out with an image of the items ([#68](https://github.com/orafaelfragoso/cupertino/issues/68)), file-type icons, thumbnails, the toolbar's View, Tags and Action pop-ups, the rubber band, disclosure triangles, click-to-rename, a clickable path bar and transfers off the window's thread with progress and Stop are in ([#108](https://github.com/orafaelfragoso/cupertino/issues/108)).
 - The overview lays out windows below its desktops strip without overlap, with room for each title ([#67](https://github.com/orafaelfragoso/cupertino/issues/67)). Menu bar and control panel interaction gaps are fixed ([#113](https://github.com/orafaelfragoso/cupertino/issues/113), [#114](https://github.com/orafaelfragoso/cupertino/issues/114)), and notification cards use materials, wrap their bodies and scroll in the centre ([#115](https://github.com/orafaelfragoso/cupertino/issues/115)).
 - Portals provide Settings, FileChooser, ScreenCast, AppChooser and Screenshot, with app icons, activation tokens, screenshot retry, colour picking, remembered screen shares (Forget in Settings, file locking between the portal and Settings), upright captures of rotated displays and the requesting app named in screen-sharing consent ([#116](https://github.com/orafaelfragoso/cupertino/issues/116)). The keyring unlocks at login and at the lock screen ([#117](https://github.com/orafaelfragoso/cupertino/issues/117)), the authentication prompt names the requesting app, and log out, restart and shut down can reopen windows at the next login ([#37](https://github.com/orafaelfragoso/cupertino/issues/37)).
-- Accessibility audit ([#30](https://github.com/orafaelfragoso/cupertino/issues/30)), building on the screen-reader checks of [#93](https://github.com/orafaelfragoso/cupertino/pull/93): every Kit surface, Files included, is checked by a shared audit on every settled frame in the tests, against a stand-in reader that follows the AT-SPI bridge's rules. These are automated checks; speech and braille with a real reader are checked by hand. Settings has a Screen reader switch and `Super+Alt+S` toggles the reader; long labels and footnotes wrap ([#35](https://github.com/orafaelfragoso/cupertino/issues/35)).
+- Accessibility audit ([#30](https://github.com/orafaelfragoso/cupertino/issues/30)), building on the screen-reader checks of [#93](https://github.com/orafaelfragoso/cupertino/pull/93): every Kit surface, Files included, is checked by a shared audit on every settled frame, against a stand-in reader that follows the AT-SPI bridge's rules. Speech and braille with a real reader are checked by hand. Settings has a Screen reader switch and `Super+Alt+S` toggles the reader; long labels and footnotes wrap ([#35](https://github.com/orafaelfragoso/cupertino/issues/35)).
 - Frame time at 4K ([#40](https://github.com/orafaelfragoso/cupertino/issues/40)): Files and Settings repaint only what changed. Selection, hover, the caret, the search field and renaming in Files, and switches and sliders in Settings, meet 8 ms at 3840×2160 at scales 2 and 1.5, and so does scrolling a Settings pane at its default window size (a long pane fits a 4K window unscrolled); a Settings pane switch or search and closing the Files search field miss on one or two frames, and scale 1 misses more often. Scrolling the Files list, opening a large folder and the search keystroke that fills the list take 34–59 ms a frame with the window filling a 3840×2160 output (the GPU plan's step 0 measurements), as they repaint most of the window. Meeting 8 ms there needs a scroll blit or the GPU composition planned for Phase 6, pending maintainer acceptance. [Frame time](apps-on-kit.md#frame-time) has the measurements.
 - Look and materials: windows, menus, the Dock, the menu bar, toolbars and the control panel draw on glass materials with their Reduce Transparency and Increase Contrast recipes, and text on glass follows the tone of what is behind it. Windows have a hairline outline and an inner rim, inactive windows use their own recipes, and the light window background is white. The control panel is a grid of separate glass tiles with detail views. The launcher sits on a dimmer material for large panels, and the menu bar's text lies sharp on the wallpaper with no halo under it. The apps, folders, documents and the Trash use the project's own icon pack.
 - Launcher: one panel for search and the application browser, which the Dock opens. Its providers and previews can be cancelled, choosing a running app brings it forward, its status announcements wait until the results settle, and its icons load off the event loop. Its frame budgets are measured in CPU time.
@@ -102,13 +102,13 @@ Still required:
 
 In progress, WP-14, WP-16 and WP-11.
 
-The `cupertino` command ships as `/usr/bin/cupertino` with the groups `appearance`, `diagnose` (with `events` and `export`), `desktop`, `shell`, `dev`, `dev-folder`, `sdk`, `version` and `completions`, human, JSON and JSON-lines output, defined exit codes, completions and manual pages generated from its registry. Every process records diagnostic events in a bounded store. `cupertino-diagnose` and `cupertino-assets check` remain as deprecated programs. The C ABI has a headless runtime, generational handles, panic containment and symbol, header and layout baselines; the `cupertino-kit` package ships its library, header and pkg-config file, and CI builds and runs a C sample against it.
+The `cupertino` command ships as `/usr/bin/cupertino` with the groups `appearance`, `diagnose` (with `events` and `export`), `desktop`, `shell`, `dev`, `dev-folder`, `sdk`, `version` and `completions`, human, JSON and JSON-lines output, defined exit codes, completions and manual pages generated from its registry. Every process records diagnostic events in a bounded store. `cupertino-diagnose` and `cupertino-assets check` remain as deprecated programs. The C ABI has a headless runtime, generational handles, panic containment and symbol, header and layout baselines; the `cupertino-kit` package ships its library, header and pkg-config file.
 
-Source: `crates/cupertino-cli/src/lib.rs`, `crates/cupertino-diagnostics`, `crates/cupertino-diagnostic-events`, `crates/cupertino-ui-abi`, `ci/c-sdk.py` and `packaging/release.py`.
+Source: `crates/cupertino-cli/src/lib.rs`, `crates/cupertino-diagnostics`, `crates/cupertino-diagnostic-events`, `crates/cupertino-ui-abi`, `packaging/release.py`.
 
 Still required:
 
-- Extend the C ABI to windows, nodes and UI events, and run an interactive C application in CI ([#122](https://github.com/orafaelfragoso/cupertino/issues/122), [#123](https://github.com/orafaelfragoso/cupertino/issues/123)).
+- Extend the C ABI to windows, nodes and UI events, and run an interactive C application ([#122](https://github.com/orafaelfragoso/cupertino/issues/122), [#123](https://github.com/orafaelfragoso/cupertino/issues/123)).
 - Complete the phase-end review. See [The cupertino command](cupertino-command.md) for the commands available today.
 
 ## Phase 6: hardware and distribution
@@ -117,7 +117,7 @@ In progress, WP-05, WP-15 and WP-13.
 
 Implemented in code: per-card DRM output handling and cross-card copies, render-GPU selection, explicit sync when supported, VT resume and GPU-reset recovery. Signed Arch repositories, keyring checks and rollback exist. The live ISO has VM boot evidence. The release workflow signs the ISO checksum and requires the checked-in release-key fingerprint; the local build writes an unsigned checksum.
 
-Source: `crates/cupertino-server/src/backend`, `scripts/build-iso.sh`, `packaging/installer`, `packaging/keyring` and `.github/workflows/release.yml`.
+Source: `crates/cupertino-server/src/backend`, `packaging/installer`, `packaging/keyring` and `.github/workflows/release.yml`.
 
 Still required:
 
@@ -133,7 +133,7 @@ Since 2026-11-09:
 - Idle CPU: a headless session sleeps until a frame, timed work or the end of its run is due, as the display backend does. Settings watches and Files' places and folder listings wake for changes, not for files being opened or read, frame clocks, the launcher and the control panel step once per frame their window gets, and the screenshot overlay asks for a frame only when its look changes.
 - Frame timing: `--frame-stats` writes each headless frame's compose, render and glass times, the blurs made and reused and the input-to-present latency, timing the glass passes with GPU timer queries where the device has them. Animation is sampled at presentation time.
 - Damage and blur reuse: a layout damages only the nodes it moved or that paint anew, a configure that changes nothing draws nothing, and a frame whose glass regions alone changed repaints none of the window. A shm buffer committed without damage keeps its texture instead of being uploaded again. A glass backdrop is blurred again only when what lies under it changed, sidebars of one material keep one blurred backdrop each, and a blurring region captures only the framebuffer around it.
-- Bench and measure tools: `scripts/dev/bench` prints the frame rate of a window drag, a dock sweep, the overview, the launcher and a scrolled Files list at 60 and 120 Hz, and every scenario is within 8.33 ms at the 95th percentile with no owed frame missed on the headless GPU run. `scripts/dev/measure` reports each desktop program's memory and CPU at rest and in use, and compares with an earlier build. The installed session still shows stutter as the launcher and the overview close ([#158](https://github.com/orafaelfragoso/cupertino/issues/158)); frame scheduling and dirty-region propagation remain in [#124](https://github.com/orafaelfragoso/cupertino/issues/124) and [#125](https://github.com/orafaelfragoso/cupertino/issues/125).
+- Profiling: `samply`, `perf`, `heaptrack` and `CUPERTINO_PROFILE` timelines show where time and memory go. The installed session still shows stutter as the launcher and the overview close ([#158](https://github.com/orafaelfragoso/cupertino/issues/158)); frame scheduling and dirty-region propagation remain in [#124](https://github.com/orafaelfragoso/cupertino/issues/124) and [#125](https://github.com/orafaelfragoso/cupertino/issues/125).
 
 NetworkManager and BlueZ are the shipped ISO and installed-system backends. Cupertino's network and Bluetooth daemons remain available for development; they do not establish replacement parity. See [Architecture](architecture.md), [Displays and GPUs](displays-and-gpus.md) and [Signed updates and rollback](updates-and-rollback.md).
 
@@ -141,7 +141,7 @@ NetworkManager and BlueZ are the shipped ISO and installed-system backends. Cupe
 
 Open, assessed 2026-11-10 and rechecked on 2026-11-12 at `b030dced`. At that commit 16 items are open (DQ-08 included: its 0.35 s delay is in code, but submenus are still reported slow on the installed session), 10 partly met, 3 need only the installed-session check, 2 are fixed and await that check (DQ-02, DQ-13), and DQ-09 is resolved by design: menus may cover the dock, staying within the display and flipping or sliding at its edges. The [status table](desktop-quality.md#status-at-b030dced-2026-11-12) gives each item's verdict, fixing commits and GitHub issue. The [complete backlog](desktop-quality.md) distinguishes recording evidence, maintainer reports and follow-up inspection, with priorities and acceptance checks for all 32 items. It includes titlebar long-press maximization, cursor scaling, the inverted Delay until repeat setting (key repeat works), slow submenus, missing context-menu behavior, sidebar bounds and leaks, unreadable or incorrect control panel state, Edit Controls dismissal, the dock's bottom-edge gap, notification wording/dismissal, Trash emptying, preview activation/flashing/placement, thick scrollbars and material/motion inconsistencies. It also records the additional Files toolbar/title, sidebar clipping, submenu placement, Applications, Bluetooth naming and wallpaper-preview findings, plus startup-only launcher indexing that hides applications installed during the session (DQ-30) and XWayland dragging of Electron windows, tested with ChatGPT Desktop (DQ-33). Native Wayland dragging passed the maintainer's follow-up test; the app-specific launch flag is a workaround, and the remaining DQ-33 acceptance checks stay open. The Electron titlebar policy (DQ-31) is closed: applications that draw their own titlebar keep it. A live D-Bus trace also confirmed stale action IDs in the ChatGPT status menu (DQ-32), affecting Open and reported Quit actions.
 
-P1 items are the next functional acceptance work; P2 items remain part of the intended desktop experience. A fix needs focused automated coverage where practical and an installed-session check at an exact candidate commit. Do not close these items from existing feature tests, a headless screenshot or the presence of a glass recipe alone. The OBS black-capture regression CAP-01 is fixed; that does not close this gate.
+P1 items are the next functional acceptance work; P2 items remain part of the intended desktop experience. A fix needs focused automated coverage where practical and an installed-session check at an exact candidate commit. Do not close these items from a headless screenshot or the presence of a glass recipe alone. The OBS black-capture regression CAP-01 is fixed; that does not close this gate.
 
 ## Daily-driver acceptance
 

@@ -142,10 +142,9 @@ composite then, per pixel:
    with no pass of its own; a deviation of 0 is the sharp band to the bit, and the glass draws three deviations further
    for it. The compositor draws a layer's `set_glass_edge` through it, softened by the layer's content blur.
 
-Unit tests check each stage on the model (`glass::tests`; a one-dimensional run of stages 3 and 4, the blur and the
+On the model, a one-dimensional run of stages 3 and 4, the blur and the
 fill each a Gaussian of its deviation, shows the large panel blurring a step over twice the distance of regular glass of its
-size and a 6 point bright stripe coming through at about half the height), and that body text (black at 85 %) on light regular glass stays at 4.5:1 or more over the darkest backdrops at every panel size and accessibility recipe, and `tests/shaders.rs` checks that the `Glass` block has the
-same members in both shader languages and the Rust struct's size.
+size and a 6 point bright stripe coming through at about half the height, and body text (black at 85 %) on light regular glass stays at 4.5:1 or more over the darkest backdrops at every panel size and accessibility recipe.
 
 **Foreground.** `cupertino-theme` holds the foreground matrices (`foreground_matrix`, lifting the face under a glyph to
 white on dark glass and dropping it to black on light glass) and `adapts_foreground` (shapes whose shorter side is under
@@ -171,8 +170,7 @@ each including `shaders/include/pass.wgsl` (the `PassParams` block, the source t
 through a `// include pass.wgsl` line, with the shared module of `cupertino-gpu` ahead of it. `cargo run -p
 cupertino-gpu-shaders` generates `shaders/generated/`: GLSL ES 3.00 of each stage, SPIR-V, the GLSL names of the block
 and sampler by WGSL group and binding (`NAME.bindings`), and the assembled WGSL without the functions the program
-never calls (`NAME.wgsl`), for a backend that compiles WGSL itself. The generated files are committed; that crate's
-test fails when they differ from a fresh generation. `shaders::DOWNSAMPLE`, `BLUR`, `COLOR` and `BLIT` hold them; the
+never calls (`NAME.wgsl`), for a backend that compiles WGSL itself. The generated files are committed. `shaders::DOWNSAMPLE`, `BLUR`, `COLOR` and `BLIT` hold them; the
 compositor links their GLSL and binds `PassParams` and the source by `Program::block` and `Program::sampler`. The blur
 dithers its result by pixel when `PassParams::flags[0]` is `PASS_DITHER` (set by the compositor for 8-bit levels).
 
@@ -183,20 +181,7 @@ mapped through a projection from target pixels to clip space, and the dither fla
 damage rectangle through its frame projection and the headless renderer one padded quad per region through its own.
 The backdrop is sampled at the framebuffer-normalised coordinate mapped into the area it covers (`Region.info.zw`, its
 origin, and `Region.sizes.zw`, its size, in target pixels). Uniform blocks are std140 and byte-identical to the Rust
-structs, and `tests/shaders.rs` checks the members in the WGSL and in the GLSL generated from it.
-
-## Tests
-
-```
-cargo test -p cupertino-glass
-```
-
-Tests cover recipe → ops encoding, blur plan, uniform layout, display filter matrices against the
-reference builders, the CPU chain of matrix, invert and contrast, GPU vs CPU PSNR ≥ 60 dB (multi-region frames at scale 1
-and 2), the CPU colour chain against the GPU colour pass within one level (both menu bar recipes, unblurred, on a grey
-ramp, a saturated hue ramp and the procedural wallpaper), the rounded mask against `cupertino-geometry` coverage, circle area, opacity, backdrop cache hit/miss accounting,
-vibrant blend GPU vs CPU, and WGSL validation and block layouts (`tests/shaders.rs`). GPU tests skip (pass) when no device is available,
-and fail then with `CUPERTINO_GPU_REQUIRED=1`.
+structs.
 
 ## Binary
 

@@ -29,9 +29,8 @@ let band = RubberBand::new(800.0);
 let shown = band.map(120.0);
 ```
 
-## Tests
+## Benchmarks
 
 ```
-cargo test -p cupertino-animation
 cargo bench -p cupertino-animation --bench throughput
 ```

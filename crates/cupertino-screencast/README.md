@@ -42,16 +42,3 @@ uses it. Layer: `platform`.
 - Video only, no audio.
 - A frame is at most `i32::MAX` bytes, the largest `wl_shm` pool (`Size::shareable`): the portal ends the share of a
   larger source.
-
-## Tests
-
-```
-cargo test -p cupertino-screencast --features fake
-```
-
-The format tests run anywhere. `tests/stream.rs` (feature `fake`) starts a private `pipewire` daemon in a temporary
-runtime directory, never the user's, links a consumer stream to a shared stream, and checks the negotiated format, one
-frame with its pixels, damage and timestamp, and a resize. `tests/resize.rs` resizes as soon as the format is fixed,
-before PipeWire adds its buffers. Both are skipped when `pipewire` is not installed.
-`cupertino-server`'s `tests/screen_share.rs` runs the whole path: the portal binary against the headless server, a
-private bus, and a consumer that reads frames of the output.

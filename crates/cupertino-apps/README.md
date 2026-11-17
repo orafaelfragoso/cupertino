@@ -48,8 +48,3 @@ Out of scope:
 - `mimeinfo.cache` is not read. The `MimeType` keys it is built from are.
 - Types come from file names only. `magic` is not read, so a file whose name matches no glob has no type here, and the
   caller uses `application/octet-stream` for a regular file, as the shared-mime-info specification does.
-
-## Tests
-
-`cargo test -p cupertino-apps` (`--features dbus` adds the activation unit tests; the call against a private bus is
-`cupertino-dock`'s `tests/activate.rs`).

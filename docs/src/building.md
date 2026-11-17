@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- A current stable Rust toolchain (`rustup` or your distribution's package).
+- Rust 1.100.0, which `rust-toolchain.toml` pins (`rustup` installs it on first use). `sccache` is the compiler wrapper; the default linker is used.
 - OpenGL ES drivers (Mesa) and a Wayland session to run nested in. A TTY session needs logind and a DRM/KMS device.
 - A Wayland terminal such as `foot` to start inside the session.
 - Some crates link system libraries (for example the session manager links libpam); each crate's README lists what it needs.
@@ -20,15 +20,15 @@ cargo build --locked -p cupertino-server --bin cupertino-server
 ```
 
 These commands compile the selected binary and its dependencies, without test harnesses, examples or benchmarks.
-Ordinary `cargo build` does not compile test harnesses either. Do not add `--all-targets`, `--tests`, `cargo test`,
-`cargo nextest`, or `ci/build-test-fixtures.py` to a build-only operation. The fixture script explicitly uses
-`--all-targets` to prepare a test run; it is not a development build shortcut. `--all-features` alone does not select
-test targets, but can enable optional test-support dependencies, so prefer the production features needed by the package.
+Ordinary `cargo build` does not compile test harnesses either. Do not add `--all-targets`, `--tests` or `cargo test` to
+a build-only operation. `--all-features` alone does not select test targets, but can enable optional test-support
+dependencies, so prefer the production features needed by the package.
 
-Run regression tests separately when validating implementation changes. Scope them to the affected behavior and packages;
-the workspace test and packaging gates remain separate checks. In particular, when using the fixture script for a
-package-specific test run, pass its repeated `--package` options for all required fixture packages as well as selecting
-the tests in the child command; a package filter only on nextest does not narrow the script's preparation.
+`cargo build-programs` builds every program of the workspace in release mode (an alias for `cargo build --locked
+--release --workspace --all-features --bins`).
+
+Validate changes separately with `cargo xtask ci --profile agent`, which checks the crates you changed (see
+[Tests](#tests)).
 
 Keep the same profile and build environment during an active development task so Cargo can reuse unchanged
 artifacts. Switching between dev and release, or starting from a fresh target, forces more compilation. Incremental
@@ -36,12 +36,12 @@ compilation is disabled by this repository's configuration; shared downloads are
 
 ## Installing a local build
 
-On Arch Linux, `scripts/package-local.sh` builds the packages of the committed HEAD (release, no test suite) with a
-release number from the current time, so each build replaces the installed one:
+On Arch Linux, `makepkg -si` in `packaging/arch/cupertino` builds the packages of the checkout (release, no test
+suite) and installs them:
 
 ```bash
-scripts/package-local.sh                       # writes ~/.cache/cupertino-pkg/cupertino-*.pkg.tar.zst
-sudo pacman -U ~/.cache/cupertino-pkg/cupertino-*.pkg.tar.zst
+cd packaging/arch/cupertino
+makepkg -si
 ```
 
 Install the three packages together, so the server, the shell processes, the applications, the theme and the assets
@@ -103,7 +103,7 @@ installed program and logs why. Its log names the program and the source of ever
      cargo build --release --locked -p cupertino-dock --bin cupertino-dock --features app
    ```
 
-   Validate the change separately with the scoped tests, as for any implementation change. The build must speak the
+   Validate the change separately with `cargo xtask ci --profile agent`, as for any implementation change. The build must speak the
    running server's protocols: a change that also needs a new server waits for the next session start.
 3. Copy it into the folder by a staged write and an atomic rename, never by truncating a file a process may be
    running:
@@ -143,7 +143,7 @@ a new login.
 
 The server, the login process, the session manager, the authentication agent, the portal, desktop control and the
 system daemons are not swapped in a running session. Build them, exercise them nested or headless (`cupertino desktop
-start --backend nested|headless`, the integration tests) or in a VM, and take them into the installed desktop through
+start --backend nested|headless`) or in a VM, and take them into the installed desktop through
 a planned package update: then `cupertino shell restart NAME` for the processes the server supervises (`login`,
 `portal`, `polkit-agent`, `keyring-prompter`, `desktop-control`), a new login for the server and the session manager. When a manual replacement is unavoidable for an investigation, follow
 the same identity rules as above: find the process through the server's runtime record under
@@ -311,17 +311,9 @@ A host connection refresh is separate from restarting Cupertino. Host MCP tool a
 are separate gates. The project Codex configuration approves this one server's tools
 (`default_tools_approval_mode = "approve"`), which a host with approval policy `never` needs; the compositor still
 asks the person natively the first time the app requests control.
-The opt-in model acceptance test scopes `default_tools_approval_mode = "approve"` to its isolated fixture server.
-
-The real Counter and Forms examples are tested through the shipped Rust MCP adapter, supervised controller and
-native Kit consent panel on private headless sessions. Those tests assert button state changes, Unicode field
-updates, stale-action/coordinate rejection, protected values, image content and cancellation.
-Run the optional model acceptance test only with an installed, authenticated Codex CLI:
-set `CUPERTINO_TERRA_CODEX` to its absolute path and `CUPERTINO_TERRA_EVIDENCE` to a retained JSONL receipt path,
-then use the fixture script with `cargo nextest run --run-ignored only -E 'test(terra_controls_kit)'`.
-It selects `gpt-6.1-terra`, approves only its isolated MCP server, supplies genuine fixture backend consent,
-and checks the actual semantic tool result after a single mutation, image capture and stop.
-It uses the host's existing account, so it is excluded from ordinary CI.
+Check the real Counter and Forms examples through the shipped Rust MCP adapter, the supervised controller and the
+native Kit consent panel on a private headless session: button state changes, Unicode field updates,
+stale-action/coordinate rejection, protected values, image content and cancellation.
 
 Window-scoped grants, CLI registry convenience commands and deployment automation remain future work.
 No external control framework, MCP SDK or third-party runtime dependency is added. Server changes take effect at
@@ -496,12 +488,11 @@ implicitly through the initial control grant.
 
 ### Acceptance and evidence
 
-Run protocol/model tests without a display, transport tests on private connections, and compositor integration tests
-with fixture homes, assets and buses. Include malformed/oversized messages, unsupported versions, wrong roles,
+Test protocol and model code without a display, transport code on private connections, and the compositor with
+fixture homes, assets and buses. Include malformed/oversized messages, unsupported versions, wrong roles,
 stale handles, lock/revoke/disconnect, held-input cleanup, output removal, rotated/mixed-scale coordinates,
 and pointer delivery to both native and XWayland applications. Check a slow or stalled client cannot block the
-compositor loop. Run the applicable build, scoped regressions, doctests, clippy, format, layer, contract and packaging
-checks before deployment.
+compositor loop. Run `cargo xtask ci` at the level the change needs, and the packaging build, before deployment.
 
 Start regression scenarios with DQ-30 (discover a newly installed fixture desktop entry), DQ-05 (repeat-delay
 direction), DQ-01 (sidebar bounds) and DQ-32 (current status-menu IDs). Use real pointer paths for DQ-03, DQ-06,
@@ -538,41 +529,36 @@ Without a pack of your own, text, icons and cursors come from the built-in fallb
 
 ## The whole desktop on a TTY
 
-From a text console (switch with `Ctrl+Alt+F3`), a checkout can start the full desktop — compositor, the shell processes of the packaged configuration (dock, menu bar, launcher, notifications, control panel, OSD, the desktop's items, window manager and lock screen), Files and Settings:
+From a text console (switch with `Ctrl+Alt+F3`), a checkout can start the compositor on the display with the shell processes of the packaged configuration (dock, menu bar, launcher, notifications, control panel, OSD, the desktop's items, window manager and lock screen), Files and Settings. Build the programs first, then start the server on a fresh session bus:
 
 ```bash
-./run-cupertino.sh
+cargo build-programs
+target/release/cupertino-server --check-hardware
+dbus-run-session -- target/release/cupertino-server --udev --dev-shell --run-for 600 --spawn cupertino-files --spawn cupertino-settings 2>&1 | tee ~/cupertino-tty.log
 ```
 
-The script refuses to run inside a desktop session (`WAYLAND_DISPLAY` or `DISPLAY` set). It builds the workspace's release binaries (`cargo build --release --workspace --all-features --bins`), runs `cupertino-server --check-hardware`, copies the packaged shell process list (`packaging/files/etc/cupertino/compositor.json`) to a temporary file with the programs taken from the build, starts a fresh session bus with `dbus-run-session`, and runs `cupertino-server --udev --dev-shell` with Files and Settings. The built-in processes (portal, authentication prompts, desktop control) start from their installed programs under `/usr/bin` when a package is installed, never from the checkout. It installs nothing and enables no service: the session manager and the login screen are not used. `XDG_RUNTIME_DIR` must be set, which a console login does.
+`--dev-shell` lets a configuration file name the shell processes from any path, so give the server a shell list whose programs are the build's (a copy of `packaging/files/etc/cupertino/compositor.json` with the paths changed). Do not run it inside a desktop session. `XDG_RUNTIME_DIR` must be set, which a console login does. Always give `--run-for`: a hung server on a console without a limit leaves the keyboard muted.
 
 - `Ctrl+Alt+Backspace` quits.
 - `Ctrl+Alt+F<n>` returns to the console session you came from.
-- The log is `~/cupertino-tty.log`; when the server exits with a non-zero status the script prints the last 20 lines.
-- Server flags pass through: `./run-cupertino.sh --run-for 600` stops by itself after ten minutes.
-- Without `--run-for` the run stops after `CUPERTINO_RUN_FOR` seconds (900 by default), and a watchdog ends the whole process tree 30 seconds later if the server hangs instead of stopping. No limit (`0`) needs `CUPERTINO_ALLOW_NO_TIMEOUT=1`: a hung server on a console without a limit leaves the keyboard muted.
 
 The TTY backend is in daily use on real hardware with an NVIDIA GPU and one display, and runs in virtual machines. Other GPUs and setups with several displays are less tested.
 
-## Headless captures
+## Captures
 
-`crates/cupertino-server/scripts/capture.sh` renders the full desktop once and writes a PNG:
+The server renders the full desktop once headless and writes a PNG:
 
 ```bash
-crates/cupertino-server/scripts/capture.sh out.png --spawn cupertino-files
-AFTER=6 crates/cupertino-server/scripts/capture.sh switcher.png --spawn cupertino-files --spawn cupertino-settings --hold-modifiers --key 5:Super+Tab
+cargo run --release -p cupertino-server -- --headless --size 1280x800 --screenshot out.png --exit-after-screenshot --spawn cupertino-files
 ```
 
-The script uses the release binaries in `target/release`, or `target/debug` when the release build is missing (`BIN_DIR` overrides both), with a temporary sample home folder and cleared environment, so a capture never reads your files and looks the same on every machine: a stand-in `wpctl` holds the volume at 50 % (no sound device is read), the shell prompt and terminal title name neither user nor machine, and the pointer starts on the bottom-right corner, over no surface, until a `--pointer` moves it. The Files sidebar still names the computer by the machine's host name. `AFTER` sets the seconds before the shot (default 5), `SIZE` the output size (default `1280x800`), and `dbus-run-session` is required. One asset pack is used: `CUPERTINO_ASSET_DIR`, else the user pack under `$XDG_DATA_HOME` (or `~/.local/share`), else the built-in assets; the system pack is not searched. The script prints the path it wrote.
+Run it with an empty environment and a temporary home folder when the picture must not depend on the machine.
 
-## Surface captures
-
-`ci/capture.sh` draws one surface of Files or the toolkit with the app's own painter on sample data, without a display, a session bus or the server, for look checks and merge screenshots. `overview/all` runs the server headless (`session.sh`) with test windows and builds the release binaries first unless `BIN_DIR` names them:
+One surface of Files, the toolkit or the login screens is drawn with the app's own painter on sample data, without a display, a session bus or the server, by the capture example of its crate:
 
 ```bash
-ci/capture.sh files/sidebar --drop-place Desktop --increase-contrast --sheet
-ci/capture.sh kit                # lists the surfaces of an app
-ci/capture.sh overview/all --windows 3 --scale 2
+cargo run -p cupertino-files --example files_capture -- files/sidebar --drop-place Desktop --increase-contrast --sheet
+cargo run -p cupertino-kit --example kit_capture -- kit/controls --scale 2
 ```
 
 It writes one PNG per state and appearance into `captures` under `$CARGO_TARGET_DIR`, else under the workspace's `target` (`--out` changes it) and prints each path. The flags, the file names and the surfaces are in `crates/cupertino-capture/README.md`. It needs an asset pack and exits 2 without one.
@@ -605,38 +591,24 @@ The TTY backend is in daily use on real hardware with an NVIDIA GPU and one disp
 
 ## Tests
 
+`cargo xtask ci` is the one validation command. It plans from git, runs formatting, clippy and nextest and the doc tests
+on the crates that need them, and writes `target/xtask/ci-latest.json`:
+
 ```bash
-scripts/test                   # the fast tier of the crates changed since origin/main and of their dependents
-scripts/test --all             # the fast tier of the whole workspace
-scripts/test --slow            # the slow tier: whole programs, private buses, displays and measurements
-scripts/test -p cupertino-dock # the fast tier of the crates named
-scripts/test -- -E 'test(/dock/)'   # arguments after -- go to nextest
-cargo test --workspace --all-features --doc
-cargo run -p cupertino-layers
+cargo xtask ci --profile agent                 # the crates you changed
+cargo xtask ci --profile integration --base B  # changed crates and their reverse dependencies, the layer check, the gate
+cargo xtask ci --profile pr                    # what CI runs on every push
+cargo xtask ci --profile full                  # the whole workspace, every feature configuration
+cargo xtask ci --profile agent --dry-run       # the plan only
 ```
 
-The tests come in two tiers, defined in `.config/nextest.toml`. The fast tier (the `default` profile) is every test
-but the slow tier's: `scripts/test` fails a fast-tier test that takes more than 2 seconds and a whole-workspace run that
-takes more than 5 minutes, and prints the 20 slowest tests after every run. The slow tier (the `slow` profile) is the
-tests that run whole programs, buses or displays or that measure. They are listed one per line in
-`.config/slow-tests.txt` with the reasons, and `ci/test_suite.py --write` writes both profiles' filters from that list
-(`--check`, which CI runs, fails when they differ). Git merges the list by keeping both sides' lines, so branches that
-each move a test there do not conflict. The `ci` profile runs both tiers. Builds and test runs take turns on the
-machine: `scripts/done`, `scripts/test` and `scripts/dev/build` wait for one already running in any checkout
-(`scripts/dev/heavy-lock`; `CUPERTINO_HEAVY_LOCK=0` turns it off). `scripts/test` prepares the integration-test programs through `ci/build-test-fixtures.py` before nextest starts.
-Doctests run separately, as nextest does not run them.
+The rules and the feature configurations are in `.config/validation.toml`; `AGENTS.md` says which level to run when.
+Install [cargo-nextest](https://nexte.st) (`cargo install cargo-nextest --locked`). It runs every test in its own
+process and kills a test that runs longer than 2 minutes, so a hang fails with the test's name. Shell and app crates
+need `--features app` to test their process code; the profiles pass the features of each configuration.
 
-Install [cargo-nextest](https://nexte.st) (`cargo install cargo-nextest --locked`; CI uses 0.9.151). It runs every
-test in its own process and kills a test that runs longer than 2 minutes, so a hang fails with the test's name. Shell
-and app crates need `--features app` to test their process code; `scripts/test` passes `--all-features`. A killed run
-can leave a test `dbus-daemon` behind: stop it, never your real session bus.
-
-`scripts/done` runs every check a change must pass, stopping at the first that fails: the project gate
-(`ci/gate.py`) and the test suite layout, formatting, clippy on the changed crates and their dependents, a test change
-for every crate whose sources changed (`NO_TEST_REASON="..."` accepts one without, for a reason), `scripts/test`,
-`scripts/dev/build` and `scripts/preview --changed`. `scripts/done --quick` runs only the gate, formatting, clippy and
-`scripts/test`, for iterating or for a branch that is gated again after merging. `scripts/done --full` adds the slow tier
-(`scripts/test --slow`) and `scripts/dev/perf-gate`, for the checks after merging and before pushing.
+Tests live only in `crates/*/tests/` and go through a crate's public interface. The layer rules are checked by
+`cargo run -p cupertino-layers`.
 
 ### Instruction-count benchmarks
 
@@ -655,42 +627,21 @@ named `instructions` per crate (`benches/instructions.rs`), with what each measu
 | `cupertino-launcher` | The index of 5 000 applications, seven queries, the scorer alone |
 
 ```bash
-scripts/dev/microbench                        # every crate's benches, with a table of their counts
-scripts/dev/microbench raster-math glass      # only these crates
-scripts/dev/microbench --save-baseline main   # keep the counts as the baseline `main`
-scripts/dev/microbench --baseline main        # compare with it; fails when a count rises by more than 3% (--limit)
+cargo bench -p cupertino-raster-math --bench instructions
+cargo bench -p cupertino-glass --bench instructions -- --save-baseline=main   # keep the counts as the baseline `main`
+cargo bench -p cupertino-glass --bench instructions -- --baseline=main        # compare with it
 ```
 
 It needs Valgrind (`pacman -S valgrind`). The framework's runner, `gungraun-runner`, must be the library's version in
-`Cargo.lock` exactly: the script uses `GUNGRAUN_RUNNER` or the one on `PATH` when it is that version, and otherwise
-installs that version once into `target/gungraun-runner/VERSION`. Counts and baselines are kept under `target/gungraun`
-with the Callgrind profile of each benchmark, which `callgrind_annotate` reads. The setup a benchmark names (building
-the tree, the scene, the index) is not counted. The wall-clock benches beside them (`cargo bench -p cupertino-ui-layout
---bench layout`, `cargo bench -p cupertino-launcher --bench matching` and the other crates' `cargo bench`) stay, for the
-time a call takes.
+`Cargo.lock` exactly (`cargo install gungraun-runner --version VERSION --locked`). Counts and baselines are kept under
+`target/gungraun` with the Callgrind profile of each benchmark, which `callgrind_annotate` reads. The setup a benchmark
+names (building the tree, the scene, the index) is not counted. The wall-clock benches beside them (`cargo bench -p
+cupertino-ui-layout --bench layout`, `cargo bench -p cupertino-launcher --bench matching` and the other crates' `cargo
+bench`) stay, for the time a call takes.
 
-CI's **Instruction counts** job runs the benches of the selected crates at the commit before the change (saved as the
-baseline `base`, through `--checkout` on a worktree of that commit) and then at the change, on the same runner, and
-fails when a count rises by more than `MICROBENCH_LIMIT_PERCENT` (3) over it. A benchmark the earlier commit does not
-have is counted with nothing to compare it with, and so is every benchmark of a new branch. Counts move a little with
-the hash seeds of a run (under 0.1% here), so a change has to rise well past that to fail. A change to a function these
-benches cover comes with its benchmark; a new hot function gets one in its crate's `benches/instructions.rs`.
-
-## Development scripts
-
-| Script | What it does |
-|---|---|
-| `scripts/dev/build` | The release build of every program (`cargo build --locked --release --workspace --all-features --bins`) into `target/release`, the one build the package recipe, the headless checks and `scripts/preview` share. |
-| `scripts/dev/warm-target` | In a fresh git worktree, a copy-on-write clone of the main checkout's `target/debug` (btrfs, XFS), so the worktree's first build reuses every dependency already compiled; the worktree's own crates still rebuild once. |
-| `scripts/dev/shot OUT.png [server flags]` | One headless screenshot of the whole desktop with the current checkout, built first. `SIZE` (default `1512x982`), `SCALE` (default 2), `APPEARANCE` (`dark` or `light`), `AFTER` (seconds before the shot, default 5) and `WALLPAPER` change it. |
-| `scripts/preview` | Shoots every scenario in `scenarios/*.toml` headless with this checkout and with the installed release (or the programs in `PREVIEW_BEFORE=DIR`), at scales 1, 1.5 and 2 in light and dark, and shows them side by side with the changed pixels in `target/preview/index.html`. `--changed` takes only the scenarios of the programs changed since `origin/main`, `--no-before` skips the comparison, and `--live` runs the checkout's desktop in a window of the current session. |
-| `scripts/dev/microbench [CRATE...]` | The instruction counts of the hot functions under Valgrind, one bench target `instructions` per crate ([Instruction-count benchmarks](#instruction-count-benchmarks)). `--save-baseline NAME` keeps a run's counts, `--baseline NAME` compares with them and fails on a rise of more than `--limit` percent (default 3), `--checkout DIR` benches another checkout into this one's target directory, `--summary FILE` appends the table in Markdown; arguments after `--` go to the framework's runner. It installs the runner at the library's exact version when it finds none. |
-| `scripts/dev/bench` | The desktop's rest and its busiest moments in headless sessions on the real render path, every process measured. `--size WxH` and `--scale S` set the output (default 2560 × 1600, scale 2), `--rate` the refresh rates (default 60), `--runs N` the sessions per scenario, `--scenario` which ones. The baseline scenarios: idle (which process wakes, how often, where it sleeps and its timers), a window drag over glass, a hover along the window buttons, a live resize, the control panel opened and closed, typing in the launcher and a scrolled Files list; `--scenario all` adds a dock sweep, the overview, the launcher, a context menu with its submenu, and Files full screen (`files-full-repaint`: the appearance turned, each a repaint of the whole window; `files-full-scroll`: its list scrolled). Per scenario: the compositor's frame intervals, missed refreshes, work p50/p99, the CPU time to compose and submit a frame without waiting for the GPU (`cpu99`) and the GPU time p50/p99, title bar and HUD rasters and uploads, blur passes, input latency and CPU time; per program the frames, slow frames (longer than a refresh) and the p50/p99 of each phase (update, view, layout, paint, raster, copy, commit) from `CUPERTINO_FRAME_TIMING`; per program the CPU and private memory. `--out F.json` writes every run and the median of the runs with their spread; `NO_BUILD=1` or `BIN_DIR=DIR` measures other programs, `BENCH_KEEP=DIR` keeps the raw files and `BENCH_SHOTS=DIR` a screenshot of each scenario. `--profile[=perf\|samply\|heaptrack]` also runs every process of each session under the profiler, with the profiling build, and `--compare BASE.json` compares the run with a stored one and exits 1 on a regression ([Profiling and performance](#profiling-and-performance)). |
-| `scripts/dev/profile` | A program (`-- PROGRAM [ARGS]`) or the bench's sessions of some scenarios (`--scenario NAME[,NAME]`) under `perf` (the default), `samply` or `heaptrack`, with the profiling build: the tool's file and a plain-text summary per process ([Profiling and performance](#profiling-and-performance)). |
-| `scripts/dev/perf-gate [BASE]` | The scenarios the crates changed since `BASE` can affect, once each at 3840 × 2160 and scale 1.5, compared with this machine's stored baseline; on a regression the regressed scenario is profiled and the top functions of the regressed program are printed. `--update-baseline` records the baseline (three runs of every mapped scenario). |
-| `scripts/dev/measure` | Memory (PSS, RSS and private dirty) and CPU of every desktop process in a headless session at rest, while used and at rest after use, the median of `RUNS` sessions (default 3). `--out F.json` writes the figures and `--compare A.json B.json` shows the change process by process; `NO_BUILD=1` or `MEASURE_BIN=DIR` measures other programs. |
-| `scripts/package-local.sh [OUT_DIR]` | The Arch packages of the committed HEAD ([Installing a local build](#installing-a-local-build)). |
-| `scripts/build-iso.sh [OUT_DIR]` | The live and install ISO ([Install from a USB stick](install-usb.md)). |
+Counts move a little with the hash seeds of a run (under 0.1% here), so a change has to rise well past that to count. A
+change to a function these benches cover comes with its benchmark; a new hot function gets one in its crate's
+`benches/instructions.rs`.
 
 ### Frame timelines
 
@@ -716,52 +667,40 @@ A slow frame then shows which part of it grew, without adding timing prints. The
 | `tracy` | the spans streamed to the Tracy profiler, in a build with its client (`crates/cupertino-profile/README.md`) |
 
 ```sh
-CUPERTINO_PROFILE=chrome:/tmp/trace/ scripts/dev/shot /tmp/files.png --spawn cupertino-files
+CUPERTINO_PROFILE=chrome:/tmp/trace/ cargo run -p cupertino-server -- --headless --screenshot /tmp/files.png --exit-after-screenshot --spawn cupertino-files
 CUPERTINO_PROFILE=chrome:/tmp/trace/ cargo run -p cupertino-server -- --spawn cupertino-files
 ```
 
-The headless session (`session.sh`, which `scripts/dev/shot` and `scripts/dev/bench` start) passes the variable through,
-and the server passes it to every process it starts. A file is written as the process runs, at most 100 ms behind, and
-closed when the process exits; a process killed first (the shell processes when the server ends) leaves it without the
-closing `]`, which Perfetto reads. Unset, no layer is installed and a span costs its callsite's check that nothing
-listens, about a nanosecond: `scripts/test -p cupertino-ui-core -- --no-capture -E 'test(/frame_spans/)'` prints a
-frame's spans and their cost, recorded and not. The frame timing file (`CUPERTINO_FRAME_TIMING`, the phases
-`scripts/dev/bench` reads) is apart and unchanged.
+The server passes the variable to every process it starts. A file is written as the process runs, at most 100 ms
+behind, and closed when the process exits; a process killed first (the shell processes when the server ends) leaves it
+without the closing `]`, which Perfetto reads. Unset, no layer is installed and a span costs its callsite's check that
+nothing listens, about a nanosecond. The frame timing file (`CUPERTINO_FRAME_TIMING`, the phases of each frame) is
+apart and unchanged.
+
 ## Profiling and performance
 
-Before adding timing code to find out where time goes, profile: one command runs the programs under a profiler and
-writes a summary to read straight away.
+Before adding timing code to find out where time goes, profile.
 
 | Question | Tool | Command |
 |---|---|---|
-| Which functions take the CPU time of a scenario, per process | perf | `scripts/dev/profile --scenario launcher` |
-| The same, to browse as a call tree, flame graph or timeline | samply | `scripts/dev/profile --scenario launcher --tool samply`, then `samply load FILE` |
-| What allocates, how often, and what the heap holds at its peak | heaptrack | `scripts/dev/profile --scenario files-scroll --tool heaptrack` |
-| Where one program, outside a session, spends its time | any | `scripts/dev/profile -- cupertino-gpu-shaders --check` |
-| Whether a change made a scenario slower | the bench | `scripts/dev/perf-gate`, or `scripts/dev/bench --compare BASE.json` |
-| How fast a scenario is, every figure | the bench | `scripts/dev/bench --scenario launcher --out F.json` |
-| Which part of a slow frame grew, on a timeline across every process | frame timelines | `CUPERTINO_PROFILE=chrome:/tmp/trace/ scripts/dev/bench --scenario launcher`, then open the files in Perfetto ([Frame timelines](#frame-timelines)) |
-| Whether a change made a hot function slower, in instructions | Callgrind | `scripts/dev/microbench CRATE --baseline NAME` ([Instruction-count benchmarks](#instruction-count-benchmarks)) |
+| Which functions take the CPU time of a program | perf | `perf record --call-graph fp -- target/profiling/PROGRAM`, then `perf report` |
+| The same, to browse as a call tree, flame graph or timeline | samply | `samply record target/profiling/PROGRAM`, then the browser opens it |
+| What allocates, how often, and what the heap holds at its peak | heaptrack | `heaptrack target/profiling/PROGRAM`, then `heaptrack_gui FILE` |
+| Which part of a slow frame grew, on a timeline across every process | frame timelines | `CUPERTINO_PROFILE=chrome:/tmp/trace/ cargo run -p cupertino-server -- ...`, then open the files in Perfetto ([Frame timelines](#frame-timelines)) |
+| Whether a change made a hot function slower, in instructions | Callgrind | `cargo bench -p CRATE --bench instructions` ([Instruction-count benchmarks](#instruction-count-benchmarks)) |
 
-`scripts/dev/profile` builds the profiling build first: the `profiling` Cargo profile (the release build with full
-debug info and no stripping), with `RUSTFLAGS="-C force-frame-pointers=yes"`, into `target/profiling-fp/profiling`, a
-target folder of its own so the release build's cache is untouched. `NO_BUILD=1` takes it as it is. `--scenario`
-accepts the bench's scenarios and `--size WxH --scale S`; it runs `scripts/dev/bench --profile=TOOL`, so the bench's
-figures come out too. `--out DIR` sets where the files go (default `target/profile/TIME`, a folder per scenario and run
-inside it). At the end it prints each process's summary and `summary.txt`, which holds all of them, the busiest
-process first; `index.json` lists every file for scripts.
+Build the profiling build first: `RUSTFLAGS="-C force-frame-pointers=yes" cargo build --profile profiling -p CRATE
+--bin PROGRAM --all-features --target-dir target/profiling-fp`. The `profiling` Cargo profile is the release build with
+full debug info and no stripping; the separate target folder keeps the release build's cache untouched, and the binary
+is `target/profiling-fp/profiling/PROGRAM`.
 
-perf samples user space only (`kernel.perf_event_paranoid` 2 allows no more) at 1999 samples per second of CPU time,
-with frame-pointer call chains. The session's server runs under it and every process the server starts is followed, so
-one file, `cupertino-server.PID.perf.data`, holds the whole session; `perf report -i FILE --pid PID` shows one process.
-samply cannot record at `perf_event_paranoid` 2, so `--tool samply` records with perf too and converts the file to
-`*.samply.json.gz`. heaptrack follows no child process, so under it every program of the session runs on its own, a
-`PROGRAM.PID.heaptrack.zst` each (`heaptrack_gui FILE`, `heaptrack_print FILE`). A profiler must start the program:
-attaching to a running process is not allowed here (`kernel.yama.ptrace_scope` 1).
+perf samples user space only (`kernel.perf_event_paranoid` 2 allows no more), with frame-pointer call chains. To follow
+a whole session, start the server under the profiler: every process it starts is followed, and `perf report -i FILE
+--pid PID` shows one process. heaptrack follows no child process, so run each program on its own under it. A profiler
+must start the program: attaching to a running process is not allowed here (`kernel.yama.ptrace_scope` 1).
 
-How to read a CPU summary (`PROGRAM.PID.summary.txt`):
+How to read a CPU profile:
 
-- The heading gives the process's samples and, at the sampling rate, about how much CPU time they are.
 - Threads: each thread's share of the process's samples, so a render or warm-up thread shows apart from the main loop.
 - Self time: the functions the samples were in, in percent of the process's samples; a hot loop shows here. A library
   without symbols (the GPU driver) is one summed row, `(code without symbols)`.
@@ -769,37 +708,9 @@ How to read a CPU summary (`PROGRAM.PID.summary.txt`):
   raster, the compositor's render). A call chain stops at a library built without frame pointers, so a caller's share
   is a lower bound.
 
-How to read a heap summary: the peak heap and peak RSS (RSS includes the tool's own memory), then the allocation sites
+How to read a heap profile: the peak heap and peak RSS (RSS includes the tool's own memory), then the allocation sites
 by number of calls (temporary allocations in a hot path show here) and by bytes held at the heap's peak (what fills
 memory). A site is the innermost frame outside the allocator and the standard containers, with the two frames above it.
-
-`scripts/dev/bench --compare BASE.json` runs the stored run's size, scale, rates and scenarios (unless given) and
-compares, scenario by scenario, the compositor's work, CPU and GPU p99 and its missed refreshes, each program's frame
-p99, each phase's p99, its slow frames and its private memory, and each program's wakeups a minute at idle. A figure
-regresses when it is worse than the stored median by more than 25%, by more than three times the stored spread
-(max − min over the stored runs), and by more than a floor: 0.5 ms for a time, one frame for a count, 1 MiB, one wakeup
-a minute. It prints the regressions and improvements and exits 1 on a regression.
-
-`scripts/dev/perf-gate` is the check to run after a performance-sensitive change or a merge. It takes the files changed
-in `BASE..HEAD` (default: the last commit that passed it, kept in `target/bench/baseline/last-pass`, else
-`origin/main`), the crates they are in and every crate that depends on them, and the scenarios those programs can
-affect (its `SCENARIOS` table: the server and the glass every scenario, Files its scroll and resize, the launcher its
-open and typing, and so on; tests, scripts, CI and documentation none). It runs them once at 3840 × 2160, scale 1.5,
-and compares them with `target/bench/baseline/HOSTNAME-3840x2160-1.5.json`. On a regression it profiles each regressed
-scenario under perf and prints the top functions by self and inclusive time of each regressed program, so the failure
-says where the time went. `scripts/dev/perf-gate --update-baseline` records the baseline: three runs of every scenario
-in the table. Record it again after a change that is meant to move the figures, and after a driver or kernel update.
-
-## Soak
-
-`ci/soak.py` runs the daily-driver workload for hours and samples the server's RSS and open file descriptors every minute: Chrome and an Electron window each play a looping video while the page scrolls itself (from the page's script, not from input events), foot prints a listing five times a second, Files shows the home folder, and `glxgears` draws through `xwayland-satellite`. A `cupertino-testclient --intervals` window draws on every frame callback and logs the time between its presented frames; each sample carries that minute's median and 99th percentile, and the result reports how both changed after the warm-up (reported, not judged). It needs `google-chrome-stable`, `electron43`, `foot`, `glxgears`, `xwayland-satellite` and `ffmpeg` (it encodes the test video). `cupertino-files` and `cupertino-testclient` are taken from `BIN_DIR` (default `target/release`), else from `PATH`; `--headless` also runs the server from there.
-
-```bash
-ci/soak.py                                     # in a terminal of the session: 8 h, 1 h warm-up
-ci/soak.py --headless --hours 1 --warmup-minutes 10
-```
-
-The run fails when the server's RSS at the end is more than 10% above its RSS after the warm-up (the median of five samples each), when any descriptor count after the warm-up is more than 5% from the one after the warm-up, when the server exits, or when a workload program exits. It writes `samples.csv` (a line a minute, as it goes), `frames.txt`, `workloads.log` and `results.json` into `soak-DATE-TIME` (`--out` changes it), prints `PASSED` or `FAILED` with the reasons, and exits 1 on a failure. It ignores the hang-up of the terminal, so a server crash that takes the terminal down still ends with `results.json`. `--without NAME` leaves a workload out and marks the result incomplete. `--headless` runs the same soak as a client of `crates/cupertino-server/scripts/session.sh`'s headless desktop and writes the server's log and a screenshot of the desktop three minutes in (`desktop.png`) next to the results.
 
 ## Configuration
 

@@ -43,9 +43,9 @@ Open the [bug report form](https://github.com/orafaelfragoso/cupertino/issues/ne
 
 Attach the log:
 
-- TTY run: `~/cupertino-tty.log` (the script prints this path).
+- TTY run: `~/cupertino-tty.log` (see [Building and running](building.md#the-whole-desktop-on-a-tty)).
 - Nested run: the output of `cupertino-server` in the terminal that started it.
-- Headless capture: the output of `capture.sh` or `scripts/dev/shot`.
+- Headless capture: the output of the `cupertino-server --headless` command that made it.
 
 `cupertino diagnose export --output FILE` writes the versions, the machine check and the recorded errors into one file you can attach; `--include-logs` adds the scrubbed server and session logs ([The cupertino command](cupertino-command.md)).
 

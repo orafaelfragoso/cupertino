@@ -93,8 +93,7 @@ names no protocol beyond the standard ones.
   dispatches the answers to requests sent so far, for state an extension reads at setup; the transport's own events
   stay for the next wait. It and every wait prepare the read and then dispatch what is queued before they poll, so a
   second thread reading the same connection for a queue of its own (`cupertino-screenshot`'s capture thread) cannot
-  take an answer and leave the wait polling a quiet socket; `tests/protocol-flow.rs` runs 2000 roundtrips beside such
-  a reader.
+  take an answer and leave the wait polling a quiet socket;
 
 ## Example
 
@@ -104,23 +103,3 @@ cargo run -p cupertino-wayland-client --example simple-window [-- --frames N]
 
 A window that asks for server-side decorations and draws its own title bar when it gets client-side ones. Escape or
 the close request exits; `--frames N` animates N frames and prints the size, scale and decorations it ended with.
-
-## Tests
-
-```
-python3 ci/build-test-fixtures.py --locked -- cargo nextest run --locked --all-features -p cupertino-wayland-client
-# Mutter check; skips only when mutter is absent.
-python3 ci/build-test-fixtures.py --locked -- cargo nextest run --locked --all-features -p cupertino-wayland-client --test suite mutter::
-# Optional Weston check.
-python3 ci/build-test-fixtures.py --locked -- cargo nextest run --locked --all-features -p cupertino-wayland-client --run-ignored only
-```
-
-`tests/protocol-flow.rs` runs a minimal protocol server in-process: required globals, configure and ack, resize, buffer
-reuse, scale, decorations, popups, input, the held press a move, resize or window menu answers (after motion and keys, from a pointer or a finger, and none once released), text input, clipboard and disconnect. Its `layer` module is an extension written against
-the public API (layer shell, a protocol the transport does not know): it is listed in the capabilities once bound and
-not when absent, a layer surface draws through the lease, acks through its own protocol, takes a popup, fills a 0
-dimension from the preferred size, and a burst of 100 of its configures arrives in at most three waits. A layer surface of one colour commits a 1×1 buffer at buffer scale 1 with its viewport at the configured size, keeps its input region, follows a new size and a fractional scale with the destination alone, replaces the pixel only for another colour, and a compositor without one-pixel buffers or the viewporter refuses it. `tests/mutter.rs` runs
-`simple-window` with a private bus and headless Mutter, asserting 30 frames, 320×240 size, scale 1 and client-side
-decorations. An absent executable skips; an installed compositor or client failure fails. `tests/weston.rs` remains an
-optional check on Weston's
-headless backend; `cupertino-server`'s `tests/standard-clients.rs` runs it and `cupertino-testclient` on the real server.

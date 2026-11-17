@@ -79,25 +79,10 @@ unless the header and every other copied file equal the checkout's.
   `examples/c/headless.expected` and exits 0. It compiles as C11 and as C++17. Until the runtime has a pollable fd,
   it polls `ck_poll_events` in steps of 1 ms.
 - `examples/c/Makefile` builds the samples with `pkg-config cupertinokit` only.
-- `tests/c/layout.c` prints every struct's size, alignment and field offsets as the C compiler sees them through the
-  installed header, in the format of `abi/layout-1.txt`.
+- `abi/layout-1.txt` holds every struct's size, alignment and field offsets as the C compiler sees them through the
+  installed header.
 
-`ci/c-sdk.py` installs the SDK from a build into a temporary root, compiles the samples there with
-`-Wall -Wextra -Werror` (also as C++), runs them against the trace, diffs the layout probe with `abi/layout-1.txt`, and
-builds and runs the project `cupertino sdk new --lang c` writes. The package's install test does the same against
-`/usr` in a fresh container, with the `cupertino-kit` package installed alone.
-
-## Tests
-
-- `src/tests.rs`: the hostile inputs, the thread rules, the post queue and injected panics, calling the functions
-  directly.
-- `tests/symbols.rs` builds the library and reads it with the `object` crate. It checks that the exports equal
-  `abi/symbols-1.txt` and are all `ck_*`, that no symbol version node is defined, the soname, and `DF_1_NODELETE`.
-- `tests/header.rs` regenerates the header with cbindgen. `tests/layout.rs` compares every struct's size, alignment and
-  field offsets with `abi/layout-1.txt`.
-
-`CUPERTINO_UPDATE_GOLDENS=1` rewrites the three files under `abi/`. Review the diff: a removed or changed line breaks
-ABI 1.
+The package's install check compiles the samples against `/usr` in a fresh container, with the `cupertino-kit` package installed alone.
 
 ## Known limitations
 

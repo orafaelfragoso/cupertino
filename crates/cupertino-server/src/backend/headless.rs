@@ -1,5 +1,5 @@
 //! Headless backend: an EGL device without a window system renders into an offscreen texture.
-//! Used by `--headless`, the integration tests and screenshots without a display.
+//! Used by `--headless` and screenshots without a display.
 //!
 //! Device selection order: `$CUPERTINO_RENDER_NODE` (GBM on that node), the first EGL device with
 //! a render node, the surfaceless platform, the default render node `/dev/dri/renderD128`.

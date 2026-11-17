@@ -26,12 +26,3 @@ state other than 0 or 1 and a menu reader that is not a unique bus name fail the
 `set_disabled_controls` replaces the window's disabled set, applies with the surface's next commit and may change at any
 time. The server applies it with that commit: the buttons are dimmed, and the shortcuts, the Window menu and the client's
 own `set_minimized` / `set_maximized` do nothing for a disabled control (unzooming a zoomed window still works).
-
-## Tests
-
-```
-cargo test -p cupertino-protocol-app
-```
-
-Unit tests cover the backdrop shape. `tests/protocol-flow.rs` runs every object against an in-process server
-(`set_disabled_controls` reaches a version 4 server and not a version 3 one), `tests/menu.rs` the menu announcement.

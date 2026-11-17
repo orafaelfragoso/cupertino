@@ -1,15 +1,12 @@
 # Contracts registry: every Wayland global the server advertises, every D-Bus interface a Cupertino process serves, and
-# every binary a workspace crate builds. Checked in CI by:
-#   - crates/cupertino-server/tests/contracts.rs  (the globals each kind of connection sees, at run time)
-#   - ci/contracts.py                             (D-Bus interfaces and org.cupertino.* names in the source, binaries,
-#                                                   C libraries)
+# every binary a workspace crate builds. It records the state of the code and does not grant access.
 #
-# Format: a list of flat entries, one `key: value` per line, no quoting, no nesting. Both checkers read exactly this.
+# Format: a list of flat entries, one `key: value` per line, no quoting, no nesting. Keep to exactly this.
 #   name        interface name, binary name, or the soname of a C library (the one its build script links with)
 #   kind        wayland-global | dbus-interface | binary | socket-protocol | c-library
 #   version     advertised version (globals), interface generation (D-Bus: the number in the name, n/a if none), crate
 #               version (binaries), ABI version (C libraries: MAJOR.MINOR of the header under the crate's abi/, and
-#               every crate that builds a cdylib, apart from the test-only ones, has an entry); `unknown` where it
+#               every crate that builds a cdylib has an entry); `unknown` where it
 #               cannot be measured
 #   owner_crate workspace crate that defines it
 #   owner_area  compositor | rendering | design | apps | services | packaging
@@ -27,20 +24,18 @@
 #               (only when the device has a render node and its kernel waits on syncobj timelines through an eventfd)
 #   bus, bus_name  D-Bus only: session or system; the well-known name its owner claims (none if it claims none)
 #   shipped     binaries only: yes when packaging/release.py installs it
-#   test_owner  test file that exercises it, or `unknown`
 #   source      file that defines it
 #   source_match globals, D-Bus interfaces and sockets: text that must occur in the source file, such as the call that
 #               creates the global (a library state constructor or `create_global`) or the quoted interface name or path;
 #               binaries have none, their source is the file the binary target builds from. It only keeps the source
 #               pointing at the right file: entries may share one (wl_compositor and wl_subcompositor), and the
-#               globals themselves are proven at run time by crates/cupertino-server/tests/contracts.rs
+#               globals themselves are what the server advertises at run time
 - name: libcupertinokit.so.1
   kind: c-library
   version: 1.0
   owner_crate: cupertino-ui-abi
   owner_area: design
   scope: public
-  test_owner: crates/cupertino-ui-abi/tests/symbols.rs
   source: crates/cupertino-ui-abi/src/lib.rs
   note: CupertinoKit's C ABI. The exported ck_* functions, the header and the struct layouts are pinned in crates/cupertino-ui-abi/abi/. Shipped in the cupertino-kit package as /usr/lib/libcupertinokit.so.1.<minor>.0 with the soname link, /usr/include/cupertinokit-1/cupertinokit.h and the pkg-config file cupertinokit.pc; release.py verify --package sdk checks the packaged library against the same baselines.
 - name: /run/cupertino-login/greeter.sock
@@ -49,7 +44,6 @@
   owner_crate: cupertino-login-ipc
   owner_area: services
   scope: system
-  test_owner: crates/cupertino-login-ipc/tests/protocol.rs
   source: crates/cupertino-login-ipc/src/message.rs
   source_match: "/run/cupertino-login/greeter.sock"
   note: Carries authentication secrets between the greeter and the root session manager. cupertino-sessiond enforces access in bind (mode 0600, owned by the greeter user) and Manager::accept (SO_PEERCRED uid must be the greeter's; one login-screen connection at a time). Frames are capped at MAX_REQUEST_FRAME (2 KiB) from the greeter and MAX_EVENT_FRAME (4 MiB) to it.
@@ -61,7 +55,6 @@
   scope: public
   role: none
   advertised: always
-  test_owner: crates/cupertino-server/tests/headless.rs
   source: crates/cupertino-server/src/state.rs
   source_match: CompositorState::new_v6
 - name: wl_subcompositor
@@ -72,7 +65,6 @@
   scope: public
   role: none
   advertised: always
-  test_owner: crates/cupertino-server/tests/popup-grab.rs
   source: crates/cupertino-server/src/state.rs
   source_match: CompositorState::new
 - name: xdg_wm_base
@@ -83,7 +75,6 @@
   scope: public
   role: none
   advertised: always
-  test_owner: crates/cupertino-server/tests/headless.rs
   source: crates/cupertino-server/src/state.rs
   source_match: XdgShellState::new
 - name: zxdg_decoration_manager_v1
@@ -94,7 +85,6 @@
   scope: public
   role: none
   advertised: always
-  test_owner: crates/cupertino-server/tests/headless.rs
   source: crates/cupertino-server/src/state.rs
   source_match: XdgDecorationState::new
 - name: xdg_wm_dialog_v1
@@ -105,7 +95,6 @@
   scope: public
   role: none
   advertised: always
-  test_owner: crates/cupertino-server/tests/window_kinds.rs
   source: crates/cupertino-server/src/state.rs
   source_match: XdgDialogState::new
 - name: zwlr_layer_shell_v1
@@ -116,7 +105,6 @@
   scope: public
   role: none
   advertised: always
-  test_owner: crates/cupertino-server/tests/layer_input.rs
   source: crates/cupertino-server/src/state.rs
   source_match: WlrLayerShellState::new_with_filter
   visible_to: unsandboxed
@@ -129,7 +117,6 @@
   scope: public
   role: none
   advertised: always
-  test_owner: crates/cupertino-server/tests/headless.rs
   source: crates/cupertino-server/src/state.rs
   source_match: ShmState::new
 - name: wl_output
@@ -140,7 +127,6 @@
   scope: public
   role: none
   advertised: always
-  test_owner: crates/cupertino-server/tests/output_management.rs
   source: crates/cupertino-server/src/state.rs
   source_match: output.create_global::<Self>
 - name: zxdg_output_manager_v1
@@ -151,7 +137,6 @@
   scope: public
   role: none
   advertised: always
-  test_owner: crates/cupertino-wayland-client/tests/protocol-flow.rs
   source: crates/cupertino-server/src/state.rs
   source_match: OutputManagerState::new_with_xdg_output
 - name: wl_data_device_manager
@@ -162,7 +147,6 @@
   scope: public
   role: none
   advertised: always
-  test_owner: crates/cupertino-server/tests/clipboard.rs
   source: crates/cupertino-server/src/state.rs
   source_match: DataDeviceState::new
 - name: zwp_primary_selection_device_manager_v1
@@ -173,7 +157,6 @@
   scope: public
   role: none
   advertised: always
-  test_owner: unknown
   source: crates/cupertino-server/src/state.rs
   source_match: PrimarySelectionState::new
 - name: ext_data_control_manager_v1
@@ -184,7 +167,6 @@
   scope: shell-private
   role: DataControl
   advertised: always
-  test_owner: crates/cupertino-server/tests/data_control.rs
   source: crates/cupertino-server/src/clipboard.rs
   source_match: ext_data_control::DataControlState::new
   note: also offered to an unsandboxed application allowed in data-control.conf (crate::data_control), never through a security context; while the session is locked a selection set is cancelled and the clipboard put back, a clear is honoured
@@ -196,7 +178,6 @@
   scope: shell-private
   role: DataControl
   advertised: always
-  test_owner: crates/cupertino-server/tests/data_control.rs
   source: crates/cupertino-server/src/clipboard.rs
   source_match: wlr_data_control::DataControlState::new
   note: also offered to an unsandboxed application allowed in data-control.conf (crate::data_control), never through a security context; while the session is locked a selection set is cancelled and the clipboard put back, a clear is honoured
@@ -208,7 +189,6 @@
   scope: public
   role: none
   advertised: always
-  test_owner: crates/cupertino-wayland-client/tests/protocol-flow.rs
   source: crates/cupertino-server/src/state.rs
   source_match: ViewporterState::new
 - name: wp_single_pixel_buffer_manager_v1
@@ -219,7 +199,6 @@
   scope: public
   role: none
   advertised: always
-  test_owner: crates/cupertino-server/tests/single_pixel_buffer.rs
   source: crates/cupertino-server/src/state.rs
   source_match: SinglePixelBufferState::new
 - name: wp_fractional_scale_manager_v1
@@ -230,7 +209,6 @@
   scope: public
   role: none
   advertised: always
-  test_owner: crates/cupertino-wayland-client/tests/protocol-flow.rs
   source: crates/cupertino-server/src/state.rs
   source_match: FractionalScaleManagerState::new
 - name: wp_presentation
@@ -241,7 +219,6 @@
   scope: public
   role: none
   advertised: always
-  test_owner: unknown
   source: crates/cupertino-server/src/state.rs
   source_match: PresentationState::new
 - name: wp_content_type_manager_v1
@@ -252,7 +229,6 @@
   scope: public
   role: none
   advertised: always
-  test_owner: crates/cupertino-server/tests/content_type.rs
   source: crates/cupertino-server/src/state.rs
   source_match: ContentTypeState::new
 - name: xdg_activation_v1
@@ -263,7 +239,6 @@
   scope: public
   role: none
   advertised: always
-  test_owner: crates/cupertino-server/tests/dock_v1.rs
   source: crates/cupertino-server/src/state.rs
   source_match: XdgActivationState::new
 - name: zxdg_exporter_v2
@@ -274,7 +249,6 @@
   scope: public
   role: none
   advertised: always
-  test_owner: crates/cupertino-server/tests/xdg_foreign.rs
   source: crates/cupertino-server/src/state.rs
   source_match: XdgForeignState::new
   note: a random handle per export, naming no window; the export ends with its object or its client
@@ -286,7 +260,6 @@
   scope: public
   role: none
   advertised: always
-  test_owner: crates/cupertino-server/tests/xdg_foreign.rs
   source: crates/cupertino-server/src/state.rs
   source_match: XdgForeignState::new
   note: set_parent_of makes the imported toplevel the parent of a toplevel of the importer; an unknown handle is destroyed at once
@@ -298,7 +271,6 @@
   scope: public
   role: none
   advertised: always
-  test_owner: unknown
   source: crates/cupertino-server/src/state.rs
   source_match: CursorShapeManagerState::new
 - name: ext_foreign_toplevel_list_v1
@@ -309,7 +281,6 @@
   scope: public
   role: none
   advertised: always
-  test_owner: crates/cupertino-server/tests/capture.rs
   source: crates/cupertino-server/src/state.rs
   source_match: ForeignToplevelListState::new_with_filter
   visible_to: unsandboxed
@@ -322,7 +293,6 @@
   scope: public
   role: none
   advertised: always
-  test_owner: crates/cupertino-server/tests/toplevel_icon.rs
   source: crates/cupertino-server/src/state.rs
   source_match: XdgToplevelIconManager::new
 - name: ext_idle_notifier_v1
@@ -333,7 +303,6 @@
   scope: public
   role: none
   advertised: always
-  test_owner: crates/cupertino-shell-client/tests/protocol-flow.rs
   source: crates/cupertino-server/src/state.rs
   source_match: IdleNotifierState::new
 - name: zwp_idle_inhibit_manager_v1
@@ -344,7 +313,6 @@
   scope: public
   role: none
   advertised: always
-  test_owner: unknown
   source: crates/cupertino-server/src/state.rs
   source_match: IdleInhibitManagerState::new
 - name: zwp_keyboard_shortcuts_inhibit_manager_v1
@@ -355,7 +323,6 @@
   scope: public
   role: none
   advertised: always
-  test_owner: crates/cupertino-server/tests/shortcut_inhibit.rs
   source: crates/cupertino-server/src/state.rs
   source_match: KeyboardShortcutsInhibitState::new
 - name: zwp_pointer_constraints_v1
@@ -366,7 +333,6 @@
   scope: public
   role: none
   advertised: always
-  test_owner: crates/cupertino-server/tests/pointer_constraints.rs
   source: crates/cupertino-server/src/state.rs
   source_match: PointerConstraintsState::new
 - name: zwp_pointer_gestures_v1
@@ -377,7 +343,6 @@
   scope: public
   role: none
   advertised: always
-  test_owner: unknown
   source: crates/cupertino-server/src/state.rs
   source_match: PointerGesturesState::new
 - name: zwp_relative_pointer_manager_v1
@@ -388,7 +353,6 @@
   scope: public
   role: none
   advertised: always
-  test_owner: unknown
   source: crates/cupertino-server/src/state.rs
   source_match: RelativePointerManagerState::new
 - name: wl_seat
@@ -399,7 +363,6 @@
   scope: public
   role: none
   advertised: always
-  test_owner: crates/cupertino-server/tests/pointer_buttons.rs
   source: crates/cupertino-server/src/state.rs
   source_match: new_wl_seat
 - name: zwp_linux_dmabuf_v1
@@ -411,7 +374,6 @@
   scope: public
   role: none
   advertised: always
-  test_owner: unknown
   source: crates/cupertino-server/src/backend/mod.rs
   source_match: create_global_with_default_feedback
 - name: wp_linux_drm_syncobj_manager_v1
@@ -422,7 +384,6 @@
   scope: public
   role: none
   advertised: render-node
-  test_owner: crates/cupertino-server/tests/gpu_slice.rs
   source: crates/cupertino-server/src/backend/headless.rs
   source_match: DrmSyncobjState::new
   note: the DRM backend offers it when its kernel waits on timeline points through an eventfd; the headless backend when its device also has a render node, unless started with --no-explicit-sync
@@ -434,7 +395,6 @@
   scope: public
   role: none
   advertised: always
-  test_owner: crates/cupertino-server/tests/sandbox_globals.rs
   source: crates/cupertino-server/src/state.rs
   source_match: SecurityContextState::new
   visible_to: unsandboxed
@@ -447,7 +407,6 @@
   scope: public
   role: none
   advertised: always
-  test_owner: crates/cupertino-server/tests/output_management.rs
   source: crates/cupertino-server/src/displays/management.rs
   source_match: Cupertino, ZwlrOutputManagerV1
   visible_to: unsandboxed
@@ -460,7 +419,6 @@
   scope: public
   role: none
   advertised: always
-  test_owner: unknown
   source: crates/cupertino-server/src/displays/power.rs
   source_match: Cupertino, ZwlrOutputPowerManagerV1
   visible_to: unsandboxed
@@ -473,7 +431,6 @@
   scope: public
   role: none
   advertised: always
-  test_owner: crates/cupertino-server/tests/menu_bar_v1.rs
   source: crates/cupertino-server/src/protocols.rs
   source_match: Cupertino, OrgKdeKwinAppmenuManager
   note: a service name over 255 bytes or not a bus name, or an object path over 512 bytes or malformed, gives no menus; not a protocol error
@@ -485,7 +442,6 @@
   scope: public
   role: none
   advertised: always
-  test_owner: unknown
   source: crates/cupertino-server/src/protocols.rs
   source_match: Cupertino, GtkShell1
   note: set_dbus_properties with a bus name over 255 bytes or not a bus name, an application id over 255 bytes, or an object path over 512 bytes or malformed gives no menus; not a protocol error
@@ -497,7 +453,6 @@
   scope: public
   role: none
   advertised: always
-  test_owner: crates/cupertino-server/tests/scroll_v1.rs
   source: crates/cupertino-server/src/scroll_v1.rs
   source_match: Cupertino, CupertinoScrollV1
 - name: cupertino_app_effects_v1
@@ -508,10 +463,9 @@
   scope: public
   role: none
   advertised: always
-  test_owner: crates/cupertino-server/tests/app_effects_v1.rs
   source: crates/cupertino-server/src/app_effects_v1.rs
   source_match: Cupertino, CupertinoAppEffectsV1
-  note: Version 21 adds buffers_lost to cupertino_appearance_v1, the per-client observer every toolkit process holds: sent to each observer of version 21 or later after the server's GPU was reset or its video memory purged and its renderer made again (crates/cupertino-server/src/gpu_reset.rs, Cupertino::rebuild_render), never at creation. The client draws every surface whole again and commits it; a client whose own context was lost makes it again first. Tested in crates/cupertino-server/tests/gpu-reset.rs.
+  note: Version 21 adds buffers_lost to cupertino_appearance_v1, the per-client observer every toolkit process holds: sent to each observer of version 21 or later after the server's GPU was reset or its video memory purged and its renderer made again (crates/cupertino-server/src/gpu_reset.rs, Cupertino::rebuild_render), never at creation. The client draws every surface whole again and commits it; a client whose own context was lost makes it again first..
 - name: cupertino_layers_v1
   kind: wayland-global
   version: 6
@@ -520,17 +474,15 @@
   scope: public
   role: none
   advertised: always
-  test_owner: crates/cupertino-server/tests/layers_v1.rs
   source: crates/cupertino-server/src/layers_v1.rs
   source_match: Cupertino, CupertinoLayersV1
-  note: Surfaces of a client made layers of its own parent surface. Geometry in fixed point and every request of a layer apply with the parent's commit (a synchronized parent caches them); content applies on the layer surface's own commit and never holds the parent's (late content shows the placeholder colour in the bounds it does not cover). Timed and spring animations start with the first frame that shows their commit (at the latest 100 ms after it) on the server's clock, so they follow the time scale and the fixed time; a retarget keeps value and velocity and sends replaced, an animation that ends sends finished, a layer with none left settled. Reduce motion ends spatial animations at their target. Layers take no input; a window's are always clipped to the window, glass and placeholder included, with masks_to_bounds too and for a window that draws its own decorations (a layer shell surface's only by masks_to_bounds). The parent is an xdg_toplevel's, an xdg_popup's or a layer shell surface's main surface, and a layer surface becomes a layer again only once its layer object is destroyed (role otherwise). Limits: 64 layers per parent, 256 per client, 512 animations running or waiting per client (those queued in a parent's pending or cached state included), 16 layers of a parent per glass group (group_full otherwise), 10 s per timed animation, spring response 0.01 to 10 s and damping 0.05 to 4, lens 1 to 4. Values shown are held in range, nothing posted: origins within 1e6 points either way, sizes and radii up to 1e6, scale up to 64, Bézier y -10 to 11; a value or look queued again before the parent's commit replaces the earlier one. Version 2 adds get_presentation: a layer shell surface's own presentation, a layer object whose x, y, opacity and scale (about the surface's centre) apply to all the surface draws, its backdrops, popups and layers included, with the surface's own commit; the other properties and the look requests are invalid_property on it, one per surface (role otherwise), and input stays with the surface at rest. Tested in crates/cupertino-server/tests/layers_v1.rs (a_presentation_*); the toolkit hands a window with a shell role its open and close through it (crates/cupertino-ui-wayland/src/presentations.rs). Version 3 takes an xdg_popup's surface in get_presentation too (its scale about the centre of its window geometry, or of what its surfaces cover without one; its offset, opacity and scale apply to the popup, its subsurfaces and its backdrops after the rescale of its window or the presentation of its layer surface), and adds set_glass_group: layers of one parent with the same nonzero group draw their glass as one container of their shapes as shown at each frame, blended over the spacing (0 to 64 points, invalid_value otherwise), with the look of the group's first layer in drawing order, below its content. Tested in crates/cupertino-server/tests/layers_v1.rs (a_glass_group_*, a_popup_s_presentation_*); the toolkit hands a popover's growth and shrinking and a closing menu's fade through it (crates/cupertino-ui-core/src/runtime/handover.rs). Version 4 adds the content_blur property: the standard deviation of a Gaussian blur of a layer's own content in its points (0 to 64, invalid_value otherwise; invalid_property on a presentation and on a layer object below version 4), animatable on the server's clock and ended at its target under reduce motion. The server draws the content of a layer of the normal blend role into a texture with room for three deviations around it, cropped to what can show on the output and inside its mask with that reach around it and drawn sharp past 6144 x 4096 pixels or 8192 on a side, blurs it by the backdrop passes' pyramid and Gaussian keeping its alpha, and draws it in the content's place through the layer's mask, scale and opacity (crates/cupertino-server/src/render/content_blur.rs); a vibrant layer draws its content sharp. Tested in crates/cupertino-server/tests/layers_v1.rs (a_layer_s_content_blurs_*); the client side is LayerProperty::ContentBlur (crates/cupertino-protocol-app/src/layers.rs). Version 4 also adds animate_samples: 2 to 1024 values of a property at even steps of a duration of 1 to 10000 ms, 32-bit floats in the host's byte order (invalid_curve otherwise, invalid_value for a value outside the property's range), followed in straight lines on the server's clock from the first, not from what is shown, to the last, where the property rests; an animation that replaces it keeps the value and the slope shown, and reduce motion ends a spatial one at its last value. Tested in crates/cupertino-server/tests/layers_v1.rs (a_property_moves_through_samples_*); the client side is Layer::animate_samples. Version 5 adds set_glass_edge(width, red, green, blue, alpha): a line width points wide (0 to 4, 0 none; invalid_value otherwise or for a channel outside 0 to 1) just outside the outline of a layer's glass, or of its glass group's joined shape with the group's first layer's edge, drawn by the glass composite over what lies there and over the glass's own antialiased edge as a stroke, at the output's scale so its width stays as the layer scales, left out where the group's shapes join and faded with the glass (crates/cupertino-glass/src/glass.rs, GlassEdge; crates/cupertino-server/src/render/layers.rs). Tested in crates/cupertino-server/tests/layers_v1.rs (a_glass_edge_runs_*); the client side is Layer::set_glass_edge and the toolkit's SurfaceLayerLook::edge under Capabilities::surface_layer_edges. Version 6 adds no request: the edge along a layer's glass softens with that layer's content_blur, the band blurred in closed form by the Gaussian the layer's content is drawn with (its deviation scaled with the layer, none where the content is drawn sharp), and the glass reaches three deviations further for it; a layer object below version 6 keeps its edge sharp. Tested in crates/cupertino-server/tests/layers_v1.rs (a_glass_edge_softens_*); the client side is Layers::softens_glass_edges.
+  note: Surfaces of a client made layers of its own parent surface. Geometry in fixed point and every request of a layer apply with the parent's commit (a synchronized parent caches them); content applies on the layer surface's own commit and never holds the parent's (late content shows the placeholder colour in the bounds it does not cover). Timed and spring animations start with the first frame that shows their commit (at the latest 100 ms after it) on the server's clock, so they follow the time scale and the fixed time; a retarget keeps value and velocity and sends replaced, an animation that ends sends finished, a layer with none left settled. Reduce motion ends spatial animations at their target. Layers take no input; a window's are always clipped to the window, glass and placeholder included, with masks_to_bounds too and for a window that draws its own decorations (a layer shell surface's only by masks_to_bounds). The parent is an xdg_toplevel's, an xdg_popup's or a layer shell surface's main surface, and a layer surface becomes a layer again only once its layer object is destroyed (role otherwise). Limits: 64 layers per parent, 256 per client, 512 animations running or waiting per client (those queued in a parent's pending or cached state included), 16 layers of a parent per glass group (group_full otherwise), 10 s per timed animation, spring response 0.01 to 10 s and damping 0.05 to 4, lens 1 to 4. Values shown are held in range, nothing posted: origins within 1e6 points either way, sizes and radii up to 1e6, scale up to 64, Bézier y -10 to 11; a value or look queued again before the parent's commit replaces the earlier one. Version 2 adds get_presentation: a layer shell surface's own presentation, a layer object whose x, y, opacity and scale (about the surface's centre) apply to all the surface draws, its backdrops, popups and layers included, with the surface's own commit; the other properties and the look requests are invalid_property on it, one per surface (role otherwise), and input stays with the surface at rest; the toolkit hands a window with a shell role its open and close through it (crates/cupertino-ui-wayland/src/presentations.rs). Version 3 takes an xdg_popup's surface in get_presentation too (its scale about the centre of its window geometry, or of what its surfaces cover without one; its offset, opacity and scale apply to the popup, its subsurfaces and its backdrops after the rescale of its window or the presentation of its layer surface), and adds set_glass_group: layers of one parent with the same nonzero group draw their glass as one container of their shapes as shown at each frame, blended over the spacing (0 to 64 points, invalid_value otherwise), with the look of the group's first layer in drawing order, below its content; the toolkit hands a popover's growth and shrinking and a closing menu's fade through it (crates/cupertino-ui-core/src/runtime/handover.rs). Version 4 adds the content_blur property: the standard deviation of a Gaussian blur of a layer's own content in its points (0 to 64, invalid_value otherwise; invalid_property on a presentation and on a layer object below version 4), animatable on the server's clock and ended at its target under reduce motion. The server draws the content of a layer of the normal blend role into a texture with room for three deviations around it, cropped to what can show on the output and inside its mask with that reach around it and drawn sharp past 6144 x 4096 pixels or 8192 on a side, blurs it by the backdrop passes' pyramid and Gaussian keeping its alpha, and draws it in the content's place through the layer's mask, scale and opacity (crates/cupertino-server/src/render/content_blur.rs); a vibrant layer draws its content sharp; the client side is LayerProperty::ContentBlur (crates/cupertino-protocol-app/src/layers.rs). Version 4 also adds animate_samples: 2 to 1024 values of a property at even steps of a duration of 1 to 10000 ms, 32-bit floats in the host's byte order (invalid_curve otherwise, invalid_value for a value outside the property's range), followed in straight lines on the server's clock from the first, not from what is shown, to the last, where the property rests; an animation that replaces it keeps the value and the slope shown, and reduce motion ends a spatial one at its last value; the client side is Layer::animate_samples. Version 5 adds set_glass_edge(width, red, green, blue, alpha): a line width points wide (0 to 4, 0 none; invalid_value otherwise or for a channel outside 0 to 1) just outside the outline of a layer's glass, or of its glass group's joined shape with the group's first layer's edge, drawn by the glass composite over what lies there and over the glass's own antialiased edge as a stroke, at the output's scale so its width stays as the layer scales, left out where the group's shapes join and faded with the glass (crates/cupertino-glass/src/glass.rs, GlassEdge; crates/cupertino-server/src/render/layers.rs); the client side is Layer::set_glass_edge and the toolkit's SurfaceLayerLook::edge under Capabilities::surface_layer_edges. Version 6 adds no request: the edge along a layer's glass softens with that layer's content_blur, the band blurred in closed form by the Gaussian the layer's content is drawn with (its deviation scaled with the layer, none where the content is drawn sharp), and the glass reaches three deviations further for it; a layer object below version 6 keeps its edge sharp; the client side is Layers::softens_glass_edges.
 - name: cupertino.control.v1
   kind: socket-protocol
   version: 1
   owner_crate: cupertino-control
   owner_area: services
   scope: shell-private
-  test_owner: crates/cupertino-server/tests/lock-screen/control.rs
   source: crates/cupertino-control/src/mux.rs
   source_match: cupertino.control.v1
   note: Bounded sequential JSON lines over a mode-0600 session socket. Same-user peer identity and exact process lifetime are checked; each connection gets a fresh inactive run. Up to eight connections are served at once, each with one command in flight and its own run; a further connection is answered at once with an error saying the controller is full. The controller names the peer process (id and start time) to the compositor, which decides each request from the app's remembered answers and asks natively only for undecided services. The local wire protocol stays at 3, so older bridges keep working.
@@ -542,7 +494,6 @@
   scope: public
   role: none
   advertised: always
-  test_owner: crates/cupertino-server/tests/lock-screen/semantics.rs
   source: crates/cupertino-server/src/control/semantics.rs
   source_match: create_global::<Cupertino, CupertinoSemanticsV1, ()>
   note: Surface-owned sealed semantic publications. Publishing grants no control; only active scoped observation enables interest, and native actions require separate consent and current publication revisions. Version 2 sends a grab serial before each action: one popup grab of the action's window tree by its own client, while the action is handled and one second after an applied answer; moves, resizes, drags and activation tokens refuse it, and the grab it starts is held under a serial no client is given.
@@ -554,7 +505,6 @@
   scope: shell-private
   role: DesktopControl
   advertised: always
-  test_owner: crates/cupertino-server/tests/shell_roles.rs
   source: crates/cupertino-server/src/control.rs
   source_match: create_global::<Cupertino, CupertinoControlV1, ()>
   note: Version 1 stays discovery-only. Version 2 requests explicit output-scoped native consent, publishes granted geometry, routes bounded input with deduplicated outcomes and gates output capture by the exact run epoch. Lock, disconnect and stop revoke; the authentication prompt or a protected session panel suspends until it closes, and physical input never pauses a run. The role is not configurable. Version 3 adds bounded native semantic observation and consented actions, with authoritative surface transforms, exact publication revisions and asynchronous outcomes. Version 4 adds identify: the controller names its peer process, the compositor resolves its app (desktop entry of the window it runs under, else its parent's executable) and decides start from desktop-control.conf, refusing denied or unidentified requests and starting allowed ones without the panel. Version 5 allows eight sessions on the controller's connection, one independent run per agent with its own held input, asks runs that need consent one at a time, and adds select_capture, which binds the next output capture source to the selecting run.
@@ -566,7 +516,6 @@
   scope: shell-private
   role: SessionLock
   advertised: always
-  test_owner: crates/cupertino-server/tests/capture/control.rs
   source: crates/cupertino-server/src/control.rs
   source_match: create_global::<Cupertino, CupertinoControlAuthorityV1, ()>
   note: The native session agent registers its own consent surface. Allow and a remembered Don't Allow require a fresh physical serial delivered to that surface after the request; synthetic input cannot approve. Version 2 names the requesting app and its services before each request and remembers the person's answer in desktop-control.conf; its loss revokes only runs awaiting an answer. It is asked one request at a time.
@@ -578,7 +527,6 @@
   scope: shell-private
   role: Session MenuBar Dock WindowManager
   advertised: always
-  test_owner: crates/cupertino-server/tests/shell_roles.rs
   source: crates/cupertino-server/src/shell_v1.rs
   source_match: Cupertino, CupertinoShellV1
 - name: ext_session_lock_manager_v1
@@ -589,7 +537,6 @@
   scope: shell-private
   role: SessionLock
   advertised: always
-  test_owner: crates/cupertino-server/tests/session_lock.rs
   source: crates/cupertino-server/src/session_lock.rs
   source_match: SessionLockManagerState::new
 - name: ext_output_image_capture_source_manager_v1
@@ -600,7 +547,6 @@
   scope: shell-private
   role: Capture DesktopControl
   advertised: always
-  test_owner: crates/cupertino-server/tests/capture.rs
   source: crates/cupertino-server/src/capture/mod.rs
   source_match: Cupertino, ExtOutputImageCaptureSourceManagerV1
 - name: ext_foreign_toplevel_image_capture_source_manager_v1
@@ -611,7 +557,6 @@
   scope: shell-private
   role: Capture
   advertised: always
-  test_owner: crates/cupertino-server/tests/capture.rs
   source: crates/cupertino-server/src/capture/mod.rs
   source_match: Cupertino, ExtForeignToplevelImageCaptureSourceManagerV1
 - name: ext_image_copy_capture_manager_v1
@@ -622,7 +567,6 @@
   scope: shell-private
   role: Capture DesktopControl
   advertised: always
-  test_owner: crates/cupertino-server/tests/capture.rs
   source: crates/cupertino-server/src/capture/mod.rs
   source_match: Cupertino, ExtImageCopyCaptureManagerV1
 - name: cupertino_screenshot_v1
@@ -633,7 +577,6 @@
   scope: shell-private
   role: Capture
   advertised: always
-  test_owner: crates/cupertino-server/tests/capture.rs
   source: crates/cupertino-server/src/capture/mod.rs
   source_match: Cupertino, CupertinoScreenshotV1
 - name: cupertino_global_shortcuts_v1
@@ -644,7 +587,6 @@
   scope: shell-private
   role: GlobalShortcuts
   advertised: always
-  test_owner: crates/cupertino-server/tests/global_shortcuts.rs
   source: crates/cupertino-server/src/global_shortcuts.rs
   source_match: Cupertino, CupertinoGlobalShortcutsV1
 - name: zwp_text_input_manager_v3
@@ -655,7 +597,6 @@
   scope: public
   role: none
   advertised: accent-table
-  test_owner: crates/cupertino-server/tests/overlays.rs
   source: crates/cupertino-server/src/state.rs
   source_match: TextInputManagerState::new
 - name: zwp_input_method_manager_v2
@@ -666,7 +607,6 @@
   scope: shell-private
   role: internal client
   advertised: accent-table
-  test_owner: crates/cupertino-server/tests/overlays.rs
   source: crates/cupertino-server/src/state.rs
   source_match: InputMethodManagerState::new
 - name: org.cupertino.Login1
@@ -677,7 +617,6 @@
   owner_crate: cupertino-login
   owner_area: services
   scope: shell-private
-  test_owner: crates/cupertino-login/tests/control.rs
   source: crates/cupertino-login/src/control.rs
   source_match: "org.cupertino.Login1"
   note: callers: the server and the login process itself (cupertino-peer)
@@ -689,7 +628,6 @@
   owner_crate: cupertino-sessiond
   owner_area: services
   scope: system
-  test_owner: crates/cupertino-sessiond/tests/service.rs
   source: crates/cupertino-sessiond/src/service.rs
   source_match: "org.cupertino.LoginManager1"
   note: methods bind to the caller session via logind
@@ -701,7 +639,6 @@
   owner_crate: cupertino-server
   owner_area: compositor
   scope: shell-private
-  test_owner: crates/cupertino-server/tests/quit.rs
   source: crates/cupertino-server/src/quit.rs
   source_match: "org.cupertino.Session1"
   note: methods are caller-checked; ListShellProcesses and RestartShellProcess (the cupertino shell commands) answer only an unsandboxed process of the session's own user
@@ -713,7 +650,6 @@
   owner_crate: cupertino-launcher
   owner_area: apps
   scope: shell-private
-  test_owner: crates/cupertino-launcher/tests/control.rs
   source: crates/cupertino-launcher/src/control.rs
   source_match: "org.cupertino.Launcher1"
   note: Toggle accepts only the server (the parent) and the launcher itself
@@ -725,7 +661,6 @@
   owner_crate: cupertino-controlcenter
   owner_area: apps
   scope: public
-  test_owner: crates/cupertino-controlcenter/tests/control.rs
   source: crates/cupertino-controlcenter/src/control.rs
   source_match: "org.cupertino.ControlPanel1"
   note: Toggle only changes the UI; refused to a sandboxed caller or one the bus cannot name
@@ -737,7 +672,6 @@
   owner_crate: cupertino-settings
   owner_area: apps
   scope: public
-  test_owner: crates/cupertino-settings/tests/instance.rs
   source: crates/cupertino-settings/src/instance.rs
   source_match: "org.cupertino.Settings1"
   note: ShowPane changes the UI; ShowPaneWithToken also forwards a caller activation token of at most 4096 bytes to the compositor; open
@@ -749,7 +683,6 @@
   owner_crate: cupertino-settings
   owner_area: apps
   scope: public
-  test_owner: crates/cupertino-settings/tests/instance.rs
   source: crates/cupertino-settings/src/instance.rs
   source_match: "org.cupertino.Settings.About1"
   note: Show takes a caller activation token of at most 4096 bytes; any session peer may request activation and the compositor validates the token
@@ -761,7 +694,6 @@
   owner_crate: cupertino-files
   owner_area: apps
   scope: public
-  test_owner: crates/cupertino-files/tests/single-instance.rs
   source: crates/cupertino-files/src/instance.rs
   source_match: "org.freedesktop.Application"
   note: served at /org/cupertino/Files by the one Files process of the session; Activate, Open (file and trash URIs only) and ActivateAction (show-progress, new-window) take an activation token of at most 4096 bytes in the platform data; every method refuses sandboxed, unnamed and other-user callers
@@ -773,7 +705,6 @@
   owner_crate: cupertino-files
   owner_area: apps
   scope: public
-  test_owner: crates/cupertino-files/tests/single-instance.rs
   source: crates/cupertino-files/src/instance.rs
   source_match: "org.freedesktop.FileManager1"
   note: served at /org/freedesktop/FileManager1 by the Files process beside org.cupertino.Files, the name asked for in line behind another file manager; ShowItems, ShowFolders and ShowItemProperties take at most 64 file URIs or absolute paths and a startup id used as an activation token of at most 4096 bytes; callers are admitted as org.freedesktop.Application's; the bus starts Files with --gapplication-service when nothing holds the name
@@ -785,7 +716,6 @@
   owner_crate: cupertino-settings
   owner_area: apps
   scope: shell-private
-  test_owner: crates/cupertino-settings/tests/services.rs
   source: crates/cupertino-settings/src/agent.rs
   source_match: "org.cupertino.Bluetooth1.Agent"
   note: pairing agent served by the Settings app at a path of its own connection
@@ -797,7 +727,6 @@
   owner_crate: cupertino-osd
   owner_area: apps
   scope: shell-private
-  test_owner: crates/cupertino-osd/tests/control.rs
   source: crates/cupertino-osd/src/control.rs
   source_match: "org.cupertino.Osd1"
   note: step methods accept only the server; Show is open
@@ -809,7 +738,6 @@
   owner_crate: cupertino-btd
   owner_area: services
   scope: system
-  test_owner: crates/cupertino-btd/tests/dbus.rs
   source: crates/cupertino-btd/src/interfaces.rs
   source_match: "org.cupertino.Bluetooth1"
 - name: org.cupertino.Network1
@@ -820,7 +748,6 @@
   owner_crate: cupertino-netd
   owner_area: services
   scope: system
-  test_owner: crates/cupertino-netd/tests/dbus.rs
   source: crates/cupertino-netd/src/interfaces.rs
   source_match: "org.cupertino.Network1"
 - name: org.freedesktop.NetworkManager
@@ -831,7 +758,6 @@
   owner_crate: cupertino-netd
   owner_area: services
   scope: system
-  test_owner: crates/cupertino-netd/tests/dbus.rs
   source: crates/cupertino-netd/src/interfaces.rs
   source_match: "org.freedesktop.NetworkManager"
   note: compatibility subset for applications
@@ -843,7 +769,6 @@
   owner_crate: cupertino-netd
   owner_area: services
   scope: system
-  test_owner: unknown
   source: crates/cupertino-netd/src/iwd.rs
   source_match: "net.connman.iwd.Agent"
   note: agent served to iwd
@@ -855,7 +780,6 @@
   owner_crate: cupertino-powerd
   owner_area: services
   scope: system
-  test_owner: crates/cupertino-powerd/tests/dbus.rs
   source: crates/cupertino-powerd/src/interfaces.rs
   source_match: "org.cupertino.Power1"
 - name: org.freedesktop.UPower
@@ -866,7 +790,6 @@
   owner_crate: cupertino-powerd
   owner_area: services
   scope: system
-  test_owner: crates/cupertino-powerd/tests/dbus.rs
   source: crates/cupertino-powerd/src/interfaces.rs
   source_match: "org.freedesktop.UPower"
   note: compatibility subset for applications
@@ -878,7 +801,6 @@
   owner_crate: cupertino-powerd
   owner_area: services
   scope: system
-  test_owner: crates/cupertino-powerd/tests/dbus.rs
   source: crates/cupertino-powerd/src/interfaces.rs
   source_match: "org.freedesktop.UPower.Device"
 - name: org.freedesktop.UPower.KbdBacklight
@@ -889,7 +811,6 @@
   owner_crate: cupertino-powerd
   owner_area: services
   scope: system
-  test_owner: crates/cupertino-powerd/tests/dbus.rs
   source: crates/cupertino-powerd/src/interfaces.rs
   source_match: "org.freedesktop.UPower.KbdBacklight"
 - name: org.freedesktop.Notifications
@@ -900,7 +821,6 @@
   owner_crate: cupertino-notifications
   owner_area: apps
   scope: public
-  test_owner: crates/cupertino-notifications/tests/dbus_integration.rs
   source: crates/cupertino-notifications/src/dbus.rs
   source_match: "org.freedesktop.Notifications"
   note: any application may notify; a sandboxed one replaces or closes only what its own instance sent
@@ -912,7 +832,6 @@
   owner_crate: cupertino-notifications
   owner_area: apps
   scope: public
-  test_owner: crates/cupertino-notifications/tests/dbus_integration.rs
   source: crates/cupertino-notifications/src/dbus.rs
   source_match: "org.cupertino.NotificationCenter1"
   note: every method refuses sandboxed and unnamed callers
@@ -924,7 +843,6 @@
   owner_crate: cupertino-menubar
   owner_area: apps
   scope: public
-  test_owner: crates/cupertino-menubar/tests/worker.rs
   source: crates/cupertino-menubar/src/dbus/registrar.rs
   source_match: "com.canonical.AppMenu.Registrar"
   note: registers nothing; owned while a bar exists and no other process owns the name
@@ -936,7 +854,6 @@
   owner_crate: cupertino-menubar
   owner_area: apps
   scope: public
-  test_owner: crates/cupertino-menubar/tests/dbus_integration.rs
   source: crates/cupertino-menubar/src/dbus/sni.rs
   source_match: "org.kde.StatusNotifierWatcher"
   note: any application registers its tray item
@@ -948,7 +865,6 @@
   owner_crate: cupertino-ui-menus
   owner_area: design
   scope: public
-  test_owner: crates/cupertino-ui-menus/tests/bus.rs
   source: crates/cupertino-ui-menus/src/objects.rs
   source_match: "org.gtk.Menus"
   note: served by each CupertinoKit application on its own connection; only the menu bar connection the compositor names (cupertino_app_menu_v1.menu_reader) is answered
@@ -960,7 +876,6 @@
   owner_crate: cupertino-ui-menus
   owner_area: design
   scope: public
-  test_owner: crates/cupertino-ui-menus/tests/bus.rs
   source: crates/cupertino-ui-menus/src/objects.rs
   source_match: "org.gtk.Actions"
   note: only the menu bar connection the compositor names (cupertino_app_menu_v1.menu_reader) may list or activate actions; any other peer is AccessDenied
@@ -972,7 +887,6 @@
   owner_crate: cupertino-portal
   owner_area: services
   scope: shell-private
-  test_owner: crates/cupertino-portal/tests/settings.rs
   source: crates/cupertino-portal/src/settings.rs
   source_match: "org.freedesktop.impl.portal.Settings"
   note: only the xdg-desktop-portal frontend calls
@@ -984,7 +898,6 @@
   owner_crate: cupertino-portal
   owner_area: services
   scope: shell-private
-  test_owner: crates/cupertino-portal/tests/file_chooser.rs
   source: crates/cupertino-portal/src/file_chooser.rs
   source_match: "org.freedesktop.impl.portal.FileChooser"
   note: only the xdg-desktop-portal frontend calls
@@ -996,7 +909,6 @@
   owner_crate: cupertino-portal
   owner_area: services
   scope: shell-private
-  test_owner: crates/cupertino-portal/tests/file_chooser.rs
   source: crates/cupertino-portal/src/request.rs
   source_match: "org.freedesktop.impl.portal.Request"
   note: one object for each open request; only the frontend calls
@@ -1008,7 +920,6 @@
   owner_crate: cupertino-portal
   owner_area: services
   scope: shell-private
-  test_owner: crates/cupertino-portal/tests/screen_cast.rs
   source: crates/cupertino-portal/src/screen_cast.rs
   source_match: "org.freedesktop.impl.portal.ScreenCast"
   note: only the xdg-desktop-portal frontend calls
@@ -1020,7 +931,6 @@
   owner_crate: cupertino-portal
   owner_area: services
   scope: shell-private
-  test_owner: crates/cupertino-portal/tests/screen_cast.rs
   source: crates/cupertino-portal/src/session.rs
   source_match: "org.freedesktop.impl.portal.Session"
   note: one object for each screen cast or global shortcuts session; only the frontend calls
@@ -1032,7 +942,6 @@
   owner_crate: cupertino-portal
   owner_area: services
   scope: shell-private
-  test_owner: crates/cupertino-portal/tests/app_chooser.rs
   source: crates/cupertino-portal/src/app_chooser.rs
   source_match: "org.freedesktop.impl.portal.AppChooser"
   note: only the xdg-desktop-portal frontend calls
@@ -1044,7 +953,6 @@
   owner_crate: cupertino-portal
   owner_area: services
   scope: shell-private
-  test_owner: crates/cupertino-portal/tests/screenshot.rs
   source: crates/cupertino-portal/src/screenshot.rs
   source_match: "org.freedesktop.impl.portal.Screenshot"
   note: only the xdg-desktop-portal frontend calls; nothing is captured before the person agrees
@@ -1056,7 +964,6 @@
   owner_crate: cupertino-portal
   owner_area: services
   scope: shell-private
-  test_owner: crates/cupertino-portal/tests/global_shortcuts.rs
   source: crates/cupertino-portal/src/global_shortcuts.rs
   source_match: "org.freedesktop.impl.portal.GlobalShortcuts"
   note: only the xdg-desktop-portal frontend calls; nothing is bound before the person allows the app
@@ -1068,7 +975,6 @@
   owner_crate: cupertino-portal
   owner_area: services
   scope: public
-  test_owner: crates/cupertino-portal/tests/screen_cast.rs
   source: crates/cupertino-portal/src/sharing.rs
   source_match: "org.kde.StatusNotifierItem"
   note: the menu-bar item of a running screen share, one object and one bus name per share, registered with org.kde.StatusNotifierWatcher; the name is released when the share ends
@@ -1080,7 +986,6 @@
   owner_crate: cupertino-portal
   owner_area: services
   scope: public
-  test_owner: crates/cupertino-portal/tests/screen_cast.rs
   source: crates/cupertino-portal/src/sharing.rs
   source_match: "com.canonical.dbusmenu"
   note: the screen-share item's menu, at the item's path: who shares what, and Stop Sharing, which ends the share; its events are taken only from the owner of org.kde.StatusNotifierWatcher (the menu bar)
@@ -1092,7 +997,6 @@
   owner_crate: cupertino-polkit-agent
   owner_area: services
   scope: system
-  test_owner: crates/cupertino-polkit-agent/tests/agent.rs
   source: crates/cupertino-polkit-agent/src/agent.rs
   source_match: "org.freedesktop.PolicyKit1.AuthenticationAgent"
   note: registered with polkitd for the session; only polkitd calls
@@ -1104,7 +1008,6 @@
   owner_crate: cupertino-settings
   owner_area: services
   scope: system
-  test_owner: crates/cupertino-settings/tests/fallback-services.rs
   source: crates/cupertino-settings/src/bluez.rs
   source_match: "org.bluez.Agent1"
   note: the pairing agent Settings registers with BlueZ; only bluetoothd calls
@@ -1115,7 +1018,6 @@
   owner_crate: cupertino-cli
   owner_area: packaging
   scope: public
-  test_owner: crates/cupertino-cli/tests/cli.rs
   source: crates/cupertino-cli/src/bin/cupertino.rs
 - name: cupertino-assets
   kind: binary
@@ -1124,7 +1026,6 @@
   owner_crate: cupertino-assets
   owner_area: design
   scope: public
-  test_owner: unknown
   source: crates/cupertino-assets/src/bin/cupertino-assets.rs
 - name: cupertino-btd
   kind: binary
@@ -1133,7 +1034,6 @@
   owner_crate: cupertino-btd
   owner_area: services
   scope: system
-  test_owner: crates/cupertino-server/tests/shell_processes.rs
   source: crates/cupertino-btd/src/main.rs
 - name: cupertino-controlcenter
   kind: binary
@@ -1142,7 +1042,6 @@
   owner_crate: cupertino-controlcenter
   owner_area: apps
   scope: shell-private
-  test_owner: crates/cupertino-server/tests/shell_processes.rs
   source: crates/cupertino-controlcenter/src/main.rs
 - name: cupertino-cursor
   kind: binary
@@ -1151,7 +1050,6 @@
   owner_crate: cupertino-cursor
   owner_area: rendering
   scope: public
-  test_owner: unknown
   source: crates/cupertino-cursor/src/bin/cupertino-cursor.rs
 - name: cupertino-diagnose
   kind: binary
@@ -1160,7 +1058,6 @@
   owner_crate: cupertino-diagnostics
   owner_area: services
   scope: public
-  test_owner: crates/cupertino-diagnostics/tests/exit-codes.rs
   source: crates/cupertino-diagnostics/src/bin/cupertino-diagnose.rs
 - name: cupertino-dock
   kind: binary
@@ -1169,7 +1066,6 @@
   owner_crate: cupertino-dock
   owner_area: apps
   scope: shell-private
-  test_owner: crates/cupertino-server/tests/shell_processes.rs
   source: crates/cupertino-dock/src/main.rs
 - name: cupertino-files
   kind: binary
@@ -1178,7 +1074,6 @@
   owner_crate: cupertino-files
   owner_area: apps
   scope: shell-private
-  test_owner: crates/cupertino-server/tests/shell_processes.rs
   source: crates/cupertino-files/src/main.rs
 - name: cupertino-launcher
   kind: binary
@@ -1187,7 +1082,6 @@
   owner_crate: cupertino-launcher
   owner_area: apps
   scope: shell-private
-  test_owner: crates/cupertino-server/tests/shell_processes.rs
   source: crates/cupertino-launcher/src/main.rs
 - name: cupertino-layers
   kind: binary
@@ -1196,7 +1090,6 @@
   owner_crate: cupertino-layers
   owner_area: packaging
   scope: public
-  test_owner: crates/cupertino-layers/tests/graph-snapshots.rs
   source: crates/cupertino-layers/src/bin/cupertino-layers.rs
 - name: cupertino-login
   kind: binary
@@ -1205,7 +1098,6 @@
   owner_crate: cupertino-login
   owner_area: services
   scope: unknown
-  test_owner: crates/cupertino-login/tests/harden.rs
   source: crates/cupertino-login/src/main.rs
 - name: cupertino-menubar
   kind: binary
@@ -1214,7 +1106,6 @@
   owner_crate: cupertino-menubar
   owner_area: apps
   scope: shell-private
-  test_owner: crates/cupertino-server/tests/shell_processes.rs
   source: crates/cupertino-menubar/src/main.rs
 - name: cupertino-netd
   kind: binary
@@ -1223,7 +1114,6 @@
   owner_crate: cupertino-netd
   owner_area: services
   scope: system
-  test_owner: crates/cupertino-server/tests/shell_processes.rs
   source: crates/cupertino-netd/src/main.rs
 - name: cupertino-notifications
   kind: binary
@@ -1232,7 +1122,6 @@
   owner_crate: cupertino-notifications
   owner_area: apps
   scope: shell-private
-  test_owner: crates/cupertino-server/tests/shell_processes.rs
   source: crates/cupertino-notifications/src/main.rs
 - name: cupertino-osd
   kind: binary
@@ -1241,7 +1130,6 @@
   owner_crate: cupertino-osd
   owner_area: apps
   scope: shell-private
-  test_owner: crates/cupertino-server/tests/shell_processes.rs
   source: crates/cupertino-osd/src/main.rs
 - name: cupertino-control
   kind: binary
@@ -1250,7 +1138,6 @@
   owner_crate: cupertino-control
   owner_area: services
   scope: shell-private
-  test_owner: crates/cupertino-control/src/main.rs
   source: crates/cupertino-control/src/main.rs
 - name: cupertino-polkit-agent
   kind: binary
@@ -1259,7 +1146,6 @@
   owner_crate: cupertino-polkit-agent
   owner_area: services
   scope: shell-private
-  test_owner: crates/cupertino-server/tests/shell_processes.rs
   source: crates/cupertino-polkit-agent/src/main.rs
 - name: cupertino-keyring-prompter
   kind: binary
@@ -1268,7 +1154,6 @@
   owner_crate: cupertino-polkit-agent
   owner_area: services
   scope: shell-private
-  test_owner: crates/cupertino-server/tests/shell_processes.rs
   source: crates/cupertino-polkit-agent/src/keyring_main.rs
 - name: cupertino-portal
   kind: binary
@@ -1277,7 +1162,6 @@
   owner_crate: cupertino-portal
   owner_area: services
   scope: shell-private
-  test_owner: crates/cupertino-server/tests/shell_processes.rs
   source: crates/cupertino-portal/src/main.rs
 - name: cupertino-powerd
   kind: binary
@@ -1286,7 +1170,6 @@
   owner_crate: cupertino-powerd
   owner_area: services
   scope: system
-  test_owner: crates/cupertino-server/tests/shell_processes.rs
   source: crates/cupertino-powerd/src/main.rs
 - name: cupertino-screenshot
   kind: binary
@@ -1295,7 +1178,6 @@
   owner_crate: cupertino-screenshot
   owner_area: apps
   scope: shell-private
-  test_owner: crates/cupertino-server/tests/shell_processes.rs
   source: crates/cupertino-screenshot/src/main.rs
 - name: cupertino-server
   kind: binary
@@ -1304,7 +1186,6 @@
   owner_crate: cupertino-server
   owner_area: compositor
   scope: shell-private
-  test_owner: crates/cupertino-server/tests/shell_processes.rs
   source: crates/cupertino-server/src/main.rs
 - name: cupertino-sessiond
   kind: binary
@@ -1313,7 +1194,6 @@
   owner_crate: cupertino-sessiond
   owner_area: services
   scope: system
-  test_owner: crates/cupertino-server/tests/shell_processes.rs
   source: crates/cupertino-sessiond/src/main.rs
 - name: cupertino-settings
   kind: binary
@@ -1322,7 +1202,6 @@
   owner_crate: cupertino-settings
   owner_area: apps
   scope: shell-private
-  test_owner: crates/cupertino-settings/tests/start-process.rs
   source: crates/cupertino-settings/src/main.rs
 - name: cupertino-gpu-slice
   kind: binary
@@ -1331,7 +1210,6 @@
   owner_crate: cupertino-gpu-slice
   owner_area: rendering
   scope: public
-  test_owner: crates/cupertino-server/tests/gpu_slice.rs
   source: crates/cupertino-gpu-slice/src/main.rs
 - name: cupertino-gpu-shaders
   kind: binary
@@ -1340,17 +1218,7 @@
   owner_crate: cupertino-gpu-shaders
   owner_area: rendering
   scope: public
-  test_owner: crates/cupertino-gpu-shaders/tests/generate.rs
   source: crates/cupertino-gpu-shaders/src/main.rs
-- name: cupertino-testclient
-  kind: binary
-  version: 0.1.0
-  shipped: no
-  owner_crate: cupertino-testclient
-  owner_area: compositor
-  scope: public
-  test_owner: unknown
-  source: crates/cupertino-testclient/src/main.rs
 - name: cupertino-windowmanager
   kind: binary
   version: 0.1.0
@@ -1358,7 +1226,6 @@
   owner_crate: cupertino-windowmanager
   owner_area: apps
   scope: shell-private
-  test_owner: crates/cupertino-server/tests/shell_processes.rs
   source: crates/cupertino-windowmanager/src/main.rs
 - name: glass-renderer
   kind: binary
@@ -1367,5 +1234,4 @@
   owner_crate: cupertino-glass
   owner_area: rendering
   scope: public
-  test_owner: unknown
   source: crates/cupertino-glass/src/bin/glass_renderer.rs

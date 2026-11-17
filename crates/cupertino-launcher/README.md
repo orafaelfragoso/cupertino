@@ -71,10 +71,7 @@ that `LauncherRoles` gives it, none of them on an output, so the server puts the
   the panel draws no frame until the compositor is done and the window goes: the panel takes every key meanwhile and the
   query field holds its caret (`BareField::hold_caret`), so neither a key nor the caret's blink draws the content
   again. At each frame the panel draws of its own close, the compositor's layers at the same moment, from the curves it
-  sent, are its pixels (`view::tests::frames::layers`, which writes the pairs out with `CUPERTINO_LAUNCHER_MOMENTS`
-  set to a directory; with `CUPERTINO_LAUNCHER_QUICK=1` the same-moment tests check only their key moments, the first,
-  the last, the header's switch, where a bound changes and where the figures come nearest their bounds, for a quick
-  look while working on them, and without it every moment, as the gate runs them). While the panel moves, under Reduce Motion and
+  sent, are its pixels. While the panel moves, under Reduce Motion and
   without the capability it draws its own close. The compositor can also draw the edge along the glass itself
   (`view::layers::glass_edge` in a glass layer's look, `SurfaceLayerLook::edge`), the panel's own edge along capsules and
   straight sides; a scope's open from hidden can be handed over (`view::layers::open_changes`, the layers drawn once at
@@ -251,7 +248,7 @@ D-Bus activatable application.
 | `ToggleApplications` | Opens the application browser, unfolds the search field into it, or closes it. The server calls it for the Dock's app-grid action; the same callers are allowed. |
 
 A call from a shell (`gdbus call ... --method org.cupertino.Launcher1.Toggle`) is refused for that reason; press
-`Super+Space`, or pass `--key 2:Super+space` to a scripted server (`cupertino-server/scripts/capture-overlays.sh`).
+`Super+Space`, or pass `--key 2:Super+space` to a scripted server .
 
 ## Icons
 
@@ -403,27 +400,12 @@ The keypad navigation keys without Num Lock are not mapped, and the field edits 
 keyboard profile. The preview's sized labels draw in the label colours themselves rather than through Kit's text roles. Reveal
 opens the folder without selecting the file, since the file manager takes folders only.
 
-## Tests
+## Examples and benchmarks
 
 ```
 cargo run -p cupertino-launcher --release --example search -- [--files] <query>
-cargo test  -p cupertino-launcher --features app
-CUPERTINO_UPDATE_GOLDENS=1 cargo test -p cupertino-launcher view::   # re-record the fixtures, then fails
 cargo bench -p cupertino-launcher --bench matching
-scripts/dev/microbench launcher   # the same matching in instruction counts, under Valgrind
-CUPERTINO_REPAINT_DIR=out cargo test -p cupertino-launcher --release frames::frame_cost_report -- --ignored --nocapture
-CUPERTINO_REPAINT_OUTPUT=1512x982 CUPERTINO_REPAINT_SCALES=1,2 CUPERTINO_REPAINT_DIR=out cargo test -p cupertino-launcher --release frames::frame_cost_report -- --ignored --nocapture   # on another output
-cargo test -p cupertino-launcher --release frames::   # the frame budgets, in CPU time, hold only in an optimised build
-cargo test -p cupertino-launcher --release frames::every_frame -- --ignored   # the same budgets in wall time, on an idle machine
+cargo bench -p cupertino-launcher --bench instructions   # the same matching in instruction counts, under Valgrind
 ```
 
-| Item | Proves or shows |
-|---|---|
-| `tests/control.rs` | The `Toggle` and `ToggleApplications` methods against a private `dbus-daemon`, that a second launcher cannot take the name, and that another process (a `dbus-send` the test starts) is refused as `UntrustedCaller`. |
-| `cupertino-server/tests/shell_processes.rs` | The real process (`--no-files`) connects to the real server, maps its hidden window at start and keeps running; the Dock's app-grid action opens the browser, and Escape folds it into the search field and then closes it. |
-| `src/view/tests.rs` | The windows run headless on Kit's test driver: the search field, the results list and keyboard navigation against the Inspector goldens in `tests/goldens/` and the screen-reader readings in `tests/fixtures/screen-reader/`; launching, the clipboard, hover, click and dismissal; opening an application that runs (brought forward from the search and the browser, nothing started), one that does not (started with its token once the server says so), a resident one (asked over D-Bus, started again when it does not answer or is not D-Bus activatable) and a desktop action (never asks the server); the preview arriving (and a stale one dropped), Reveal in Files, choosing an action with the arrows, a conversion; the browser opened by the Dock's request, the arrows, typing and category filters, the list arrangement (goldens `browser-grid` and `browser-list`), the view options as a popup below their button on the menu material, the panel kept open while their menu holds the keyboard and closed by a leave after it, and the focus ring a pointer choice does not leave, the shortcut that unfolds the search field, a late file search dropped and one past its deadline, the enlarged preview and its timeout, Reduce Motion, and the window following the browser on a moving clock. |
-| `src/view/tests/frames.rs` | On a clock that moves a 60 Hz frame at a time: at 1.25, 1.5 and 1.75, the arrows and the pointer in the browser reshape no glass and repaint no whole window, and a transition reshapes it at most once a frame; at 1 to 2, a settled panel's glass ends on whole device pixels. `frame_cost_report` (ignored) times each interaction's frames with the CPU renderer and counts its whole repaints and glass changes, the Dock opening the browser over 200 applications among them. `opening_the_browser_over_200_applications_keeps_icon_decoding_off_the_frames`: with each icon costing 3 ms of CPU to decode on the host's thread, every icon near the view is asked once, at most 14 wait at once, asking costs the loop under a millisecond of CPU in all, and the frames showing the icons arrive within the 8 ms frame budget in the loop thread's CPU time; the first frame, which lays the browser out, is held to the budget in an optimised build (2.7 ms in release at 1x; about 54 ms unoptimised). It measures CPU time, not wall time, so a machine busy with other work does not fail it: under a busy loop on every processor the arriving frames' median took about 3 ms of CPU against 2 ms on a quiet machine (unoptimised), while their wall time reached 15 ms. `every_frame_of_the_panel_s_transitions_fits_the_budget_in_an_optimised_build`: in an optimised build, drawn with the CPU renderer, every frame of the search field opening and closing, typing, unfolding and folding, the arrows and the pointer in the browser, the Dock opening the browser and Escape folding it, and the Dock opening it over 200 applications, is under 8 ms at 1x and 16 ms at 2x, the first frame of a new window included; a run with a frame over the budget is run again afresh, up to three runs, and the test fails when every run has one, so a frame doing several times its work fails it while a build that comes and goes beside it does not; it measures the CPU time the loop's thread spends on each frame, which other work on the machine raises only by what sharing caches and cores costs (up to a quarter on the slowest frames under a busy loop on every processor), where wall time is stretched two to six times; other tests drawing on every processor raise it past the budget, so `.config/nextest.toml` runs this test and the icon test with no other test beside them; unoptimised it measures nothing. `every_frame_of_the_panel_s_transitions_fits_the_budget_in_wall_time_on_an_idle_machine` (ignored) holds the same frames to the same budgets in wall time, run by hand in the release profile on an idle machine. In release, on a 1000×700 pt output, the slowest frames are about 2.5 ms at 1x (a typed key) and 4.9 ms at 2x (the first frame of the Dock opening the browser over 200 applications); on a 1512×982 pt output (`CUPERTINO_REPAINT_OUTPUT`) about 2.6 ms and 7 ms (`frame_cost_report`). The catcher adds nothing to a first frame at any output size: it is a stretched pixel, where a drawn transparent catcher cost 1.5 to 8 ms more on the first frame of a window. |
-| `src/nav.rs`, `src/browse/tests.rs`, `src/motion.rs`, `src/providers.rs` | The navigation table (Escape order, toggles, dismissal), the browser's model (categories, grid and list keys, Tab zones, scroll kept across a filter, the bottom inset under a revealed row, selection kept by application, 5 000 applications), the transitions and their interruption, generations, cancellation and deadlines. |
-| `cargo test` | Matching, ranking, frecency, calculator (division by zero, huge numbers, invalid input), conversions, preview words and dates, file search, panel state and action traversal, that `takes_key` agrees with `handle_key`, and the `app` process code. |
-| `cargo bench --bench matching` | Scores 5 000 synthetic applications: about 1–3 ms per query in a release build (14 ms to build the index), calculator 0.6 µs. |
-| `benches/instructions.rs` | The index of the same 5 000 applications, seven queries and the scorer alone, in instructions (`scripts/dev/microbench launcher`): about 110 million to build the index, 36 to 61 million a query. |
+`matching` scores 5 000 synthetic applications: about 1–3 ms per query in a release build (14 ms to build the index), calculator 0.6 µs. `instructions` counts the index of the same applications, seven queries and the scorer alone: about 110 million instructions to build the index, 36 to 61 million a query.

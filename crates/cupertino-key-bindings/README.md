@@ -6,6 +6,3 @@ Key chords and the text-editing binding table: `Chord`/`Key`/`NamedKey` with log
 It reads no settings and watches no files, so CupertinoKit's text fields can use it. `cupertino-keyboard` re-exports
 it and adds `binding::load_default`, which reads `~/.config/cupertino/keybindings.conf`.
 
-```sh
-cargo test -p cupertino-key-bindings
-```

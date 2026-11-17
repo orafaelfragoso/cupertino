@@ -24,10 +24,7 @@ opens paths.
 - Opcodes and constants are written out from `linux/input.h` and `linux/input-event-codes.h`; only the 64-bit
   `input_event` layout is supported.
 
-## Tests
-
-Tests drive `Framer` with event sequences in `tests/fixtures/*.events` (`<sec>.<usec> <type> <code> <value>`). The fixtures
-are hand-written to match what kernels emit. None was captured from hardware.
+## Examples
 
 `cargo run -p cupertino-evdev --example print-frames -- /dev/input/event5` prints the capabilities and frames of a real
 device. It needs read access to the node.

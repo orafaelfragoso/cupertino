@@ -44,15 +44,3 @@ The transition is a critically damped spring of response 0.25 s, or 2.0 s while 
 band is 72 pt closed and 165 pt open, with 146×95 pt pictures 20 pt below its top, 24 pt name pills and a 20 pt add button
 whose centre is 28 pt from the right and 35 pt from the top. The gap between pictures and the side margin are
 approximate.
-
-## Tests
-
-Unit tests cover packing (containment, the gap, one common scale, the lift, the pass limit, the shrink constant idle while
-room is left, determinism), the transition and the bar. `tests/overview.rs` covers gestures, modes, reflow, selection,
-keyboard navigation and title fading, and
-`three_windows_stay_below_the_strip_and_apart_at_every_size_and_scale` checks three windows of different sizes (one small)
-in four arrangements on six output modes at scales 1, 1.25, 1.5 and 2, edges snapped to device pixels: every thumbnail at
-least 39 pt below the band, none over a slot or another thumbnail, the arrangement centred, and hit testing on each frame.
-`adversarial_window_sets_keep_thumbnails_and_titles_apart_and_below_the_strip` checks 3000 seeded cases (up to sixteen
-windows, tiny, very wide and very tall ones and windows on one place, outputs from 640×360 pt to 4K at scales 1 to 2): no
-thumbnail or title over the strip, another window or another title, or outside the area, also snapped to device pixels.

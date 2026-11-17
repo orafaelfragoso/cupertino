@@ -473,7 +473,7 @@ impl RoundedRect {
 
     /// Closed-form first-order distance, identical to the shader implementation. Exact for circular
     /// corners and straight edges; for continuous corners it deviates from the true distance by well
-    /// under 1 % within a few pixels of the boundary (see the unit tests).
+    /// under 1 % within a few pixels of the boundary.
     pub fn sdf_approx(&self, p: Point) -> f64 {
         self.sdf_impl(p, true)
     }

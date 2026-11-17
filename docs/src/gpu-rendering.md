@@ -43,8 +43,8 @@ Three facts decide most of the plan:
 Every renderer, CPU or GPU, toolkit or compositor, computes coverage, blur, shadows, gradients and dithering from one
 set of definitions: a crate of plain Rust functions with test vectors, in a graphics layer the toolkit, the render
 layer and the compositor may depend on. The shaders implement the same definitions and are tested against the
-vectors. The CPU renderer is changed once to use them (see section 7); that change, and the one re-recording of the
-goldens it needs, is the look freeze. After it, a change re-records goldens only when it names the pixels it changes.
+vectors. The CPU renderer is changed once to use them (see section 7); that change is the look freeze. After it, a
+change alters pixels only when it names the pixels it changes.
 
 ### 2. Retained layers before the GPU
 
@@ -158,11 +158,11 @@ programs, those of `cupertino-glass` that the compositor draws (`crates/cupertin
 vertex stage); for the second set it also writes the assembled WGSL without the functions the program never reaches,
 for the glass crate's own headless renderer; and the compositor's rectangle passes
 (`crates/cupertino-server/shaders/passes/`, with an include directory of its own). The generated output is committed, so no
-product binary builds `naga`; a test regenerates it and fails on a difference. The generator runs with
+product binary builds `naga`; regenerating it must give the committed text. The generator runs with
 coordinate-space adjustment off, declares every block `std140` (GLSL ES 3.00 would leave the layout to the driver),
 writes the GLSL name of each block and sampler by WGSL group and binding beside the code, since GLSL ES 3.00 has no
 binding qualifiers, and refuses a program with anything but uniform blocks and textures or with a `mat2x2` in a
-block. Each backend has an orientation test.
+block. Each backend is checked for orientation.
 
 Texture programs compiled through Smithay's shader interface sample client buffers, including import-only ones through
 `samplerExternalOES`, and that interface takes GLSL ES 1.00 only. They stay hand-written: the clip program, its
@@ -187,14 +187,14 @@ the GPU computes:
 - blur, drop shadow and inner shadow from one definition: the Gaussian kernel, its pyramid levels, transparent edges,
   premultiplied alpha and intermediate precision;
 - gradients evaluated per pixel with at most eight stops and one interpolation rule;
-- dithering keyed to the pixel position, never random, so damage repaints and goldens are stable;
+- dithering keyed to the pixel position, never random, so damage repaints are stable;
 - glyphs from our own rasterizer through an atlas, identical by construction, at quarter-pixel x phase and whole-pixel
   y;
 - path coverage rasterized once on the CPU into a mask atlas; path clips through the mask atlas, the stencil only for
   pixel-aligned rectangles.
 
-After the look freeze both renderers agree within the golden tolerance of 2/255 per channel, and no bench scenario's
-client CPU p99 is more than 10% above its baseline.
+After the look freeze both renderers agree within 2/255 per channel, and no scenario's client CPU p99 is more than 10%
+above its baseline.
 
 ### 8. The fallback rule
 
@@ -347,7 +347,7 @@ reviewed change that records the reason.
 
 | Measure | Budget | Gate |
 |---|---|---|
-| Any frame, compositor or client | inside one refresh (16.7 ms at 60 Hz); no missed refreshes in the bench scenarios, and no client frame longer than a refresh | every step: no scenario worse than its baseline beyond the recorded run-to-run noise (step 1: within its 10% budget); absolute from the step that owns the scenario (scroll 4, drag 2, resize and animation 7) |
+| Any frame, compositor or client | inside one refresh (16.7 ms at 60 Hz); no missed refreshes in the profiled scenarios, and no client frame longer than a refresh | every step: no scenario worse than its baseline beyond the recorded run-to-run noise (step 1: within its 10% budget); absolute from the step that owns the scenario (scroll 4, drag 2, resize and animation 7) |
 | Files wheel scroll with the window filling the output, p99 client frame CPU | under 8 ms at scale 1 and 1.5; paint and raster cover only the exposed strip | 4 |
 | Files live resize | client CPU excluding raster under 8 ms; client GPU under 4 ms | 7 |
 | Toolkit animation frame (the control panel opening, launcher typing), client CPU | under 4 ms | 7 |
@@ -356,25 +356,23 @@ reviewed change that records the reason.
 | First frame of a GPU process | no later than the CPU path; the switch to the GPU within 150 ms with a warm program cache | 6 |
 | Added private memory per GPU process | under 80 MiB; CPU-class processes unchanged | 7 |
 | GPU memory per GPU window | at most two buffers and one window-sized layer (width x height x 4 bytes each) plus 32 MiB of atlases and pools, measured as the change in total GPU memory with the window open and closed; a process's first render target adds the one more target's size the driver reserves with it | 7 |
-| Client CPU after the look freeze | no bench scenario's client CPU p99 more than 10% above its baseline, or more than its recorded run-to-run spread where that is larger | 1 |
+| Client CPU after the look freeze | no profiled scenario's client CPU p99 more than 10% above its baseline, or more than its recorded run-to-run spread where that is larger | 1 |
 | Fence overhead | resident-memory slope with fences minus the slope without, under 1 byte per frame over 10 million frames | 3 |
 | Idle desktop | no frames drawn and no GPU work but the clock's minute (one menu bar frame and its composite); processes wake only by the timers recorded and justified in step 0, listed in the plan's measurements | 7 |
 | Pointer motion to screen | input-to-flip latency from the DRM backend's log, below the baseline; the cursor on the cursor plane | 11 |
 
 ## Testing
 
-- Every golden scene of the toolkit's renderer runs through both renderers: `cupertino-ui-gpu`'s tests draw the CPU
-  renderer's scenes on the GPU against the same baselines. CI runs them, and `cupertino-gpu`'s, on Mesa's software
-  rasteriser (llvmpipe) through EGL's surfaceless platform, with `CUPERTINO_EGL_REQUIRED=1` making a missing device a
-  failure. The compositor's goldens run on the software rasteriser too, in the pinned image of `ci/goldens/Dockerfile`
-  (`ci/goldens.sh`). CI sets no `CUPERTINO_RENDERER`, and its runners have no render node, so the presenter's
-  end-to-end tests skip there and the session tests' toolkit windows draw on the CPU.
-- What CI cannot exercise (GBM, hardware modifiers, syncobj with the DRM backend, the NVIDIA driver) runs in a local
-  tier before every push that touches rendering, with `CUPERTINO_GPU_REQUIRED=1` making a missing GPU a failure
-  (`scripts/test --slow` and `scripts/done` set it when the machine's render node opens, and say so): dmabuf
-  import, syncobj round trips (the headless backend offers the protocol when its device has a render node, and can
-  withhold it), injected context loss and purge, the CPU↔GPU switch mid-session, a failed import falling back to shared
-  memory, a resize storm, the fence soak, and the goldens re-run on the NVIDIA GPU.
+- Every reference scene of the toolkit's renderer runs through both renderers: `cupertino-ui-gpu`'s tests draw the CPU
+  renderer's scenes on the GPU and compare them. They run on Mesa's software rasteriser (llvmpipe) through EGL's
+  surfaceless platform, with `CUPERTINO_EGL_REQUIRED=1` making a missing device a failure. Without a render node the
+  presenter's end-to-end tests skip and the toolkit windows draw on the CPU.
+- What a software device cannot exercise (GBM, hardware modifiers, syncobj with the DRM backend, the NVIDIA driver)
+  runs on the maintainer's machine before every push that touches rendering, with `CUPERTINO_GPU_REQUIRED=1` making a
+  missing GPU a failure: dmabuf import, syncobj round trips (the headless backend offers the protocol when its device
+  has a render node, and can withhold it), injected context loss and purge, the CPU↔GPU switch mid-session, a failed
+  import falling back to shared memory, a resize storm, the fence soak, and the reference scenes re-run on the NVIDIA
+  GPU.
 - Parity tests cover scales 1, 1.5 and 2 with odd sizes, and a scissored repaint against a full repaint with effects
   that cross the damage edge.
 - Objective image checks replace judging by eye where possible: an overdraw test that must end in one flat colour
@@ -382,5 +380,4 @@ reviewed change that records the reason.
   a box-filtered reference (shimmer).
 - `cupertino-gpu` has its own tests per backend: pipelines, orientation, atlas eviction, pool reuse, buffer export and
   import, fences, context loss.
-- The headless session and `scripts/dev/bench` report the renderer of every process, so a silent fallback shows in
-  the numbers.
+- The headless session reports the renderer of every process, so a silent fallback shows in the numbers.

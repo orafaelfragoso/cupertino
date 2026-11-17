@@ -1,4 +1,4 @@
-//! Per-frame timings of an offscreen output, for the frame-rate benchmark (`--frame-stats PATH`, `scripts/dev/bench`).
+//! Per-frame timings of an offscreen output, for the frame-rate benchmark (`--frame-stats PATH`).
 //!
 //! Each frame drawn for presentation writes one line: when it was shown, how long composing the scene and rendering it
 //! took (the GPU waited for, so the time covers the GPU's work too), how much of that the glass passes and their

@@ -9,7 +9,7 @@ Keyboard model for the Cupertino compositor. Pure logic, with no Smithay, Waylan
 | Module | Contents |
 |---|---|
 | `repeat` | `RepeatConfig` (initial delay / interval; from preference units of 1/60 s or from nanoseconds with the filter's clamp), `RepeatInfo` for `wl_keyboard.repeat_info`, `SliderTable`, `KeyRepeater` (single repeating key), `hid_usage_repeats` / `evdev_repeats`, `CapsLockDelay`, caps-lock hold limits |
-| `rewrite` | `decide`: the pure table that turns a Super or Alt chord into the Ctrl chord (or Home / End) for a third-party client, given the client class, `text_input_active` and the physical modifiers; never touches Ctrl. `pressed_for` is its inverse outside a text input: the chord the person presses for the chord a client of a class receives (Super+key for a third-party Ctrl chord of a printable key or Return, Super+C / V for a terminal's Shift+Ctrl+C / V; anything else, a first-party client and `classic-pc` unchanged), which the menu bar shows for an application's accelerators; a test runs every chord of a representative set through both |
+| `rewrite` | `decide`: the pure table that turns a Super or Alt chord into the Ctrl chord (or Home / End) for a third-party client, given the client class, `text_input_active` and the physical modifiers; never touches Ctrl. `pressed_for` is its inverse outside a text input: the chord the person presses for the chord a client of a class receives (Super+key for a third-party Ctrl chord of a printable key or Return, Super+C / V for a terminal's Shift+Ctrl+C / V; anything else, a first-party client and `classic-pc` unchanged), which the menu bar shows for an application's accelerators |
 | `modifiers` | `symbol_selectors` (the profile that maps physical keys to roles is `cupertino_modifiers::Profile`), `FnUsage`, `GlobeTap` (a tap is a release within the threshold with no other key in between: `other_key`) |
 | `keys` | `Key`, `NamedKey`, `Chord` with parser (`Ctrl+Alt+Left`); the logical `Mods` and physical `RawMods` are `cupertino-modifiers`' |
 | `binding` | `BindingTable::standard` (100 rows, 75 `TextAction`s: emacs-style control chords, alt+arrow word moves, primary+arrow line / document moves, shift = extend selection), chord sequences, user file `~/.config/cupertino/keybindings.conf`, `Resolver` |
@@ -59,10 +59,7 @@ let ev = sw.modifiers_released();         // Commit { id }
 
 Decoded layouts are not part of the crate.
 
-- The tests use the small hand-authored `tests/test_layout.json`.
-- `tests/decoded_layouts.rs` also runs over local decoded layouts when `CUPERTINO_LAYOUT_DIR` (default
-  ) exists. It compiles the result with `xkbcli` when that is installed.
-- `src/binding_table.rs` and `src/shortcut_table.rs` are generated from the verified tables by.
+- `src/binding_table.rs` and `src/shortcut_table.rs` are generated from the verified tables.
 
 ## How it works
 
@@ -101,10 +98,3 @@ the first-party clients use themselves. Clients keep repeating from `repeat_info
   (`AccentEvent::Commit`) or clear the preedit (`AccentEvent::Cancel { restore }).
 - **Text-editing chords** are toolkit business on Wayland. `Resolver` serves first-party clients; third-party clients get
   the key-event rewrite of `rewrite::decide` (§10).
-
-## Tests
-
-```
-cargo test -p cupertino-keyboard
-cargo clippy -p cupertino-keyboard --all-targets
-```

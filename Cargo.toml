@@ -11,10 +11,9 @@ license = "GPL-3.0-or-later"
 [profile.release]
 debug = "line-tables-only"
 
-# The release build with full debug info and every symbol kept, for profilers: `scripts/dev/profile` builds it. Frame
-# pointers cannot be set per profile on stable Cargo, so the script adds `RUSTFLAGS="-C force-frame-pointers=yes"` and
-# builds into a target folder of its own (target/profiling-fp): a different RUSTFLAGS in target/ would rebuild the
-# release build from scratch on its next run.
+# The release build with full debug info and every symbol kept, for profilers: `cargo build --profile profiling`.
+# Frame pointers cannot be set per profile on stable Cargo; add `RUSTFLAGS="-C force-frame-pointers=yes"` and a target
+# folder of its own when a profiler needs them, so the release build in target/ is not rebuilt.
 [profile.profiling]
 inherits = "release"
 debug = "full"

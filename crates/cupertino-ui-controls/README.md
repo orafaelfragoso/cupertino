@@ -12,7 +12,7 @@ from the application's model and reports changes as messages.
   colours as selected. Every control keeps its states apart: enabled or disabled, focused, selected, pressed or at
   rest, and in an active window or not. A disabled control is fainter (its bezel and its label); a control in a window
   that is not active keeps its look, but for a default button, which rests as an ordinary one there
-  (`tests/contract.rs`). An ordinary button, a pop-up or pull-down button, a segmented control and a stepper rest on
+ . An ordinary button, a pop-up or pull-down button, a segmented control and a stepper rest on
   a quiet bezel with no edge (white at 7.5 % over a dark window, black at 7.5 % over a light one, stronger under the
   pointer and pressed); a check box, a radio button, an off switch and the empty part of a slider or progress track
   on a slightly stronger well. A default button is the accent; a destructive one a red label over a faint red tint
@@ -77,7 +77,7 @@ from the application's model and reports changes as messages.
   so they are crisp at every scale, fractional ones included, and the caret a whole number of device pixels wide. The
   selection lies under the text on whole device pixels of the window too (`PaintCx::fill_pixels`), as does the
   field's interior clip, so its edges meet the caret and the field without a blended row or column
-  (`tests/caret-overlay.rs`). The caret is 2 pt wide and blinks in a cycle of two `caret_phase_ms` phases less a fiftieth (about a second):
+ . The caret is 2 pt wide and blinks in a cycle of two `caret_phase_ms` phases less a fiftieth (about a second):
   it fades out over about an eighth of it, stays hidden, fades in and stays shown about half of it; each frame of a fade
   draws only the overlay again, no node, and the caret stays on with Reduce Motion or a phase of 0 (a
   session that asks for a steady caret). Shift-click and shift-drag extend the selection; a drag held past the field's
@@ -95,7 +95,7 @@ from the application's model and reports changes as messages.
   disabled field is read only: neither Cut, Paste nor Select All, and Copy copies all its text. A `SecureField`'s menu
   never enables Cut or Copy, and a `BareSecureField`, which stands on the surfaces that ask for the session's
   password, has no menu and takes no paste; a `BareField` has both unless its `menu` is off, as the login screen's
-  name field's is (`tests/text-menu.rs`).
+  name field's is.
 - **Passwords.** `SecureField` keeps its text in a `SecureBuffer` only: no undo, copy, cut or other command chord but
   select all and paste, no surrounding text for the input method, a protected accessible value, and the secret reaches the application only
   borrowed, in the submit handler. A composition is never held; only committed text goes in. The input method is
@@ -113,7 +113,7 @@ from the application's model and reports changes as messages.
   place, standing still under Reduce Motion. In a window that is not active every row's icon and label, the selected
   row's too, and the headings and accessories take the inactive sidebar text colour (`ColorRole::InactiveSidebarText`)
   and the selection turns to the sidebar's faint neutral selection (`ColorRole::SidebarSelection` resolved inactive),
-  laid over the material so its tint shows; the geometry and the text stay (`tests/sidebar.rs`).
+  laid over the material so its tint shows; the geometry and the text stay.
   `Sidebar::with_look(SidebarLook::Neutral { accent })` draws a list of places instead: taller rows with larger
   symbols, the selected row filled with the sidebar's neutral selection (`ColorRole::SidebarSelection`), its label
   semibold and its symbol in the accent colour; the
@@ -136,16 +136,16 @@ from the application's model and reports changes as messages.
   appearance, 45 % in the light one, with a faint rim; the theme's border under Increase Contrast). It edits and reads
   as its field does. Its height is the size table's for a search field at its `size`, the window's when `None`
   (24 pt at the regular size), 28 pt at `ControlSize::Large`, the size a sidebar's header uses
-  (`tests/search-field.rs`). The other fields (plain, secure, combo box, date picker) keep their well on a material. `BareField` is a `TextField` with no chrome, its
+ . The other fields (plain, secure, combo box, date picker) keep their well on a material. `BareField` is a `TextField` with no chrome, its
   text and placeholder at its own size (whole points), for a field standing on a surface drawn around it such as a
-  launcher capsule; it edits and reads as its field does (`tests/bare_field.rs`). With `hold_caret` its caret holds
+  launcher capsule; it edits and reads as its field does. With `hold_caret` its caret holds
   what it shows: the blink's cycle goes on but draws nothing, and a paint for any other reason draws the caret as it
   was last drawn, for a field whose surface the compositor is moving.
 - **Tiled sidebar.** `TileSidebar` lists a settings window's pages: rows of `TILE_SIDEBAR_ROW_HEIGHT`, a tile before
   each label, in groups set apart by space, under an optional header (a `SearchField`) that does not scroll. The
   selected row fills with the selected control colour, its label bold. In a window that is not active every label, the
   selected row's too, takes the inactive sidebar text colour and the selection turns to the sidebar's faint neutral
-  selection; the tiles keep their colours (`tests/form.rs`). Keys, Tab stop, reporting and assistive
+  selection; the tiles keep their colours. Keys, Tab stop, reporting and assistive
   technology behave as `Sidebar`'s, except that a press or click on the selected row reports it again, so that a
   window showing a page below that row's page can go back to it.
 - **Positions.** A menu item says its place among the menu's items and the menu says how many it holds, separators not
@@ -290,11 +290,11 @@ from the application's model and reports changes as messages.
   hears of anything only for a menu no held press opened. A press dragged over the menus and let go away from all of
   them chooses nothing and closes them; one that never came over them leaves them open. Escape closes them at once,
   mid-drag too, and a pop-up button keeps its value. None of this waits on how a menu appears: it tracks alike with
-  Reduce Motion (`tests/menu-tracking.rs`). A finger does the same: put down on a `PopUpButton` it opens the menu,
+  Reduce Motion. A finger does the same: put down on a `PopUpButton` it opens the menu,
   slid onto an item and lifted it chooses it, tapped it leaves the menu open, and a later tap on an item chooses. A
   finger that rests 0.5 s within 8 pt of where it went down on a `ContextMenu`'s region opens its menu there, and the
   content under it is not clicked. A second finger chooses nothing while the first holds the menu, and a cancelled
-  touch chooses nothing and leaves the menu open (`tests/menu-touch.rs`).
+  touch chooses nothing and leaves the menu open.
   `MenuItem::Shortcut` is an item that shows the keys that choose it ("⇧⌘N") at its trailing edge in the secondary
   label colour (the row's colour when it is highlighted or disabled), which assistive technology reads as its
   description; the application binds the keys itself.
@@ -316,7 +316,7 @@ from the application's model and reports changes as messages.
   beside it; a click or Left and Right pick the year, month or day, and Up, Down and the stepper step that part,
   wrapping within its range and fitting the day to the month. `ComboBox` is an editable field in a well with a small
   bezel button at its end that opens a menu of choices below it (built with `Element::from`); the field takes any
-  text and its value is marked in the menu (`tests/pickers.rs`).
+  text and its value is marked in the menu.
 - **Sliders.** `on_change` reports every value a drag passes; `on_end` reports the value once the change ends, when
   the pointer lets go or the drag is cancelled, and at once for a key or assistive technology step, so an
   application can write a level live and commit it once. A regular knob is a white capsule 1.25 times as wide as

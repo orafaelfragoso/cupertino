@@ -75,7 +75,7 @@ pyftsubset InterVariable.ttf --unicodes-file=unicodes.txt --name-IDs='*' --name-
 ```
 
 The result is byte-identical to the committed file, sha256
-`8082ab1587b6b1a0ee14e44287b204f3aae7f2021583ca76beb1f717a093dcea`, which `ci/gate.py` pins. The 1216 code points:
+`8082ab1587b6b1a0ee14e44287b204f3aae7f2021583ca76beb1f717a093dcea`. The 1216 code points:
 
 ```text
 U+0000, U+0020-007E, U+00A0-00AC, U+00AE-0148, U+014A-01C3, U+01C5-024F, U+0300-0304, U+0306-030A, U+030C, U+030F,
@@ -116,7 +116,7 @@ and the list of names that fall back. It exits 1 only when the manifest cannot b
 unsupported version, never because assets are missing. `PackReport` is that report; `cupertino appearance assets check
 <dir>` (crate `cupertino-cli`) prints the same text, or the report as JSON with `--format json`, and replaces it:
 `cupertino-assets check` first prints one line on stderr naming it, and will be removed in a later release
-(`tests/deprecation.rs`).
+.
 
 ## Open issues
 
@@ -125,8 +125,3 @@ startup (`SystemIcons::required`). The packaged original icon pack provides all 
 built-in fallback stays available to isolated tests. `volume.internal` and `volume.external` are not in the directory (those
 icons do not exist yet) and `document.script` has no payload icon (scripts use `document.text`). The semantic icon name
 list is not checked against the contract's list, only its shape.
-
-## Tests
-
-`cargo test -p cupertino-assets`. The tests build a fixture directory (manifest and placeholder files) in a temporary directory.
-Tests run with the built-in font; set `CUPERTINO_ASSET_DIR` only to try another pack.

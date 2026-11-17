@@ -69,14 +69,3 @@ a Wayland client announces), `cupertino-login`
   reads the process at the time of the call, so a process that then runs `/usr/bin/cupertino-settings` counts as the settings
   application. It gains nothing it could not do by writing the person's files.
 * Properties are not checked.
-
-## Tests
-
-`cargo test -p cupertino-peer`: anonymous (no descriptor, a disagreeing process id, an unclassifiable root), host, Flatpak
-(a scratch `/proc`) and Snap (the label), the relations, the parent from `status`; `same_instance` (one process, a
-process that exited, a Flatpak process that exited with its info file still matching, the same Flatpak instance through a proxy, another instance or application id, a missing or
-incomplete `.flatpak-info`, sandboxed against unsandboxed both ways, two Snap processes), credentials without a
-`ProcessFD`, the peer of a socket, and a Wayland client classified by its label and root; `sent_by_bus` on messages that carry the daemon's name, a unique name and
-no sender; `from_owner` on a private bus: only the owner is heard, through a change of owner and a name nobody owns yet, and 1000
-forged signals stop neither the owner's signal nor a call on the same connection; `Lookup` names a caller on its own
-connection, and a name nobody holds is no caller.

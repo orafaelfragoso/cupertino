@@ -39,10 +39,3 @@ Feed `GestureRecognizer::handle` a `GestureEvent` (for example `SwipeBegin { tim
 act on the returned `GestureOutput`s (`Update { progress, .. }` drives the overview). Until the recognizer reports
 `Disposition::Claimed` or `Disposition::Ignored`, the compositor keeps forwarding swipe events to the focused client.
 `Begin` is where the compositor takes them over.
-
-## Tests
-
-```
-cargo test -p cupertino-input
-cargo clippy -p cupertino-input --all-targets
-```

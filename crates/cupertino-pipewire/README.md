@@ -33,9 +33,3 @@ PipeWire library is linked. Layer: `platform`.
 
 The Sound pane lists the sinks and sets the default one when there are two or more. The overlay, the control panel and the Sound pane use the default sink, and use the ALSA master (`cupertino-alsa`)
 when no PipeWire daemon answers.
-
-## Tests
-
-```
-cargo test -p cupertino-pipewire
-```

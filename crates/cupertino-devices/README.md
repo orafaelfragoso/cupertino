@@ -17,8 +17,7 @@ Device discovery for the compositor without libudev. It reads `/sys` and the ker
 | `dev_t` | `DevT`, the device number newtype |
 
 Every function that reads sysfs takes the root as a parameter (`/sys` in production), and every parser takes bytes or
-text. The tests therefore run on `tests/fixtures/sys` (a hand-written tree modelled on a keyboard, a mouse, a clickpad
-touchpad, a touchscreen and two GPUs) and on recorded uevent datagrams.
+text.
 
 ## How it works
 
@@ -33,9 +32,8 @@ touchpad, a touchscreen and two GPUs) and on recorded uevent datagrams.
 - **Provenance.** The decision rules follow systemd's `src/udev/udev-builtin-input_id.c` (GPL-2.0-or-later), written
   afresh in Rust.
 
-## Tests
+## Examples
 
 ```
-cargo test -p cupertino-devices
 cargo run -p cupertino-devices --example list-devices   # opt-in: classifies this machine's real /sys
 ```

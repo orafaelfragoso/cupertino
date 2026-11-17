@@ -32,8 +32,7 @@ const ATTRIB_UV: u32 = 1;
 type GLuint = ffi::types::GLuint;
 type GLint = ffi::types::GLint;
 
-/// Whether textures produced by [`capture`] store the top image row at texture `v = 1` (verified
-/// by `tests/headless.rs::capture_orientation`). The mesh shader flips `v` accordingly.
+/// Whether textures produced by [`capture`] store the top image row at texture `v = 1`. The mesh shader flips `v` accordingly.
 pub const CAPTURE_V_FLIPPED: bool = false;
 
 struct MeshProgram {

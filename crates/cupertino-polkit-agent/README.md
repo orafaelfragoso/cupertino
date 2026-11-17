@@ -186,57 +186,6 @@ names the user, polkitd's identities or anything typed.
 | `polkit.exit_error` | error | `error` | the agent ends with an error, or cannot harden itself |
 | `polkit.panic` | fatal | `panic`, `location` | any panic |
 
-## Tests
-
-The keyring's prompter: `src/keyring/*/tests.rs` the exchange (both directions, padding, refused keys and messages),
-the model, the panel's layout and keys, the drawing (warning and outline red, glass, check box) and the accessibility
-audit; `tests/keyring.rs` the prompter on a private bus with a caller of the test's own, which decrypts the typed
-password from the exchange: a password round trip, a wrong password asked again with the warning, a new password with
-its confirmation and the choice, a confirmation, a cancel, one caller at a time, refusals, a locked session, and both
-names on one connection; `tests/keyring_daemon.rs` the installed gnome-keyring daemon on a private bus unlocking its
-login keyring with the password typed into the prompt, after a cancel and a wrong password, and making a keyring an
-application asks for (`CreateCollection`) with the new password typed twice: a cancel, a confirmation that differs,
-the keyring made and opening with that password only, and the ticked choice letting the daemon open it without a
-question afterwards (skipped when the daemon is not installed; `CUPERTINO_KEYRING_REQUIRED=1` fails instead).
-
-The offer about the default keyring: `src/keyring/offer/tests.rs` the model without a bus: when the question is
-asked, accept, decline by the button and its memory, a question that went away without a button, a cancelled
-password, each failure of the move leaving the default and both keyrings as they were, a default that cannot be read
-back (put back, or the copies kept and the alert saying so) or reads back as the old or another keyring, a move
-repeated after it stopped halfway, and no secret in what is printed; `src/keyring/model/tests.rs` Escape as a cancel
-and, for a caller that asks for it, as the end of its prompt; `src/keyring/render/tests.rs` the alert shows the question's and each failure's whole text;
-`tests/keyring_offer.rs` the installed daemon on a private bus with a second, locked keyring as the default: nothing
-asked without a service, with the login keyring the default or locked; a cancelled password, a locked session, Escape
-and a decline leave everything as it was and only the decline is kept; accepting copies every item (read back over a
-session of the test's own), skips the one already copied, keeps a differing item, changes the alias and keeps the old
-keyring.
-
-The polkit agent:
-
-`cargo test -p cupertino-polkit-agent`: the model, the panel, the text and the helper's protocol as unit tests;
-`tests/agent.rs` the agent on a private bus with a fake polkitd (registration, refusals, limits, a forged restart that
-registers nothing); the `logind` unit test a forged `Active` change ignored and logind's own followed; `tests/zeroing.rs` a
-password typed, answered to the fixture helper and dropped, with a watching allocator that finds no freed block holding any
-piece of it (the field never grows, the model test `typing_up_to_the_limit_never_moves_the_field`); `tests/flow.rs` a whole
-authentication without a display: a fake polkitd asks, the model and `conversation` run the fixture helper
-(`tests/fixtures/polkit-agent-helper-1`, which accepts "right"), and the test types. It checks the reason and the
-application the prompt shows, that a valid password answers polkitd, that three wrong ones are retried and then end the
-authentication, and that Escape and polkitd's cancel answer `Cancelled`. polkitd and its real helper are not run: they
-need the system bus and root. The panel's unit tests run `cupertino-ui-test`'s accessibility audit on every phase of
-the prompt and check that no typed password reaches its accessible tree.
-
-**Not verified on an installed session.** Logged in on a machine installed from the live image:
-
-1. In a terminal, `pkexec true`: the prompt shows "Authentication is needed to run `/usr/bin/true' as the super user"
-   (polkit's own text); Details shows the shell as the application and `org.freedesktop.policykit.exec`.
-2. Type a wrong password three times: "Incorrect password. Try again." twice, then the prompt closes and `pkexec` prints
-   that the authorization failed (`echo $?` is 127).
-3. `pkexec true` again, Escape: `pkexec` reports the request dismissed (`echo $?` is 126). Again with the right password:
-   exit 0.
-4. Mount a disk from the file manager as a user that needs a password (or `udisksctl mount -b DEVICE`): the prompt
-   shows udisks' reason and the file manager as the application.
-5. Lock the screen while a prompt is up: it is dismissed; after unlocking, a new `pkexec true` prompts again.
-
 ## Not yet
 
 - The user pop-up steps through the users (click, Space, Up, Down) instead of opening a menu.

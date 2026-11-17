@@ -64,7 +64,7 @@ sent would replace the animation) and sends them with the first frame after it e
 `presentation_settled`, and a window whose layers' last running animation ends hears `WindowEvent::LayersSettled` once,
 in the read that saw it end; a `LayerChange::through` goes as `animate_samples`. The `surface-layers` example is a window
 with one layer that fades on the compositor's clock while its content blur goes up and back down through samples, or
-with `--renderer` is drawn by the GPU renderer; the server's tests run it.
+with `--renderer` is drawn by the GPU renderer.
 Configures, close, popup dismissal, scale, pointer, keys, keyboard focus and the input method arrive as `WindowEvent`s
 of the window whose surface they name. A popup's configure comes after a `WindowEvent::PopupPlaced` with the rectangle
 the compositor placed it at in its parent, after any flip or slide. Key modifiers are logical (`Mods`), through the `Profile` the window system was
@@ -159,18 +159,6 @@ the own fence and a buffer is reused one commit after its release (three buffers
 or that the compositor refuses moves the surface to shared memory for good; the transport destroys its syncobj
 surface object before the first shared-memory attach.
 
-`examples/gpu-window.rs` is the presenter's check window, a client for `cupertino-server`'s `tests/gpu_presenter.rs`:
+`examples/gpu-window.rs` is the presenter's check window, a client for `cupertino-server`:
 `--frames`, `--reset-every`, `--purge-every`, `--losses`, `--renderer` (frames drawn by the GPU renderer and copied
 from its texture), and a `key value` report of what it did.
-
-## Tests
-
-```
-cargo test -p cupertino-ui-wayland
-```
-
-Unit tests cover the pixel conversion, the damage cut, popup placement and where the compositor placed a popup, the clipboard text, and the window system's
-conversions, input timeline and carried-damage bound. `tests/protocol-flow.rs` drives the presenter, the clipboard and
-the window system (frame pacing, carried and missed damage, the input region, a solid window as one pixel at its configured size keeping its input region and refused without the globals, the presenter's solid colour and its filled fallback, a click, the clipboard, a drag with its
-icon, the waker, refused requests)
-against an in-process server.

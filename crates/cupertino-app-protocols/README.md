@@ -23,12 +23,3 @@ The crate has no code of its own. `build.rs` reruns when the XML changes, becaus
 |---|---|
 | `client` | `cupertino_app_protocols::client::{app_effects, scroll}`, used by `cupertino-protocol-app` |
 | `server` | `cupertino_app_protocols::server::{app_effects, scroll}`, used by `cupertino-server` through `cupertino-protocols` |
-
-## Tests
-
-The crate has no tests of its own. `tests/app_effects_v1.rs` and `tests/scroll_v1.rs` in `cupertino-server` and
-`tests/protocol-flow.rs` in `cupertino-protocol-app` exercise the bindings:
-
-```
-cargo build -p cupertino-app-protocols --features client,server
-```

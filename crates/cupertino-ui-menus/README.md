@@ -28,16 +28,3 @@ application's, the objects answer only the reader, the menu bar connection the c
 (`cupertino_app_menu_v1.menu_reader`, passed to `Exporter::set_reader`): every `org.gtk.Menus` and `org.gtk.Actions`
 method of any other peer, and of every peer while there is no reader, is `AccessDenied`, and `Changed` is sent to the
 reader alone. Labels carry document names, so reads are refused as well as activation.
-
-## Tests
-
-```
-cargo test -p cupertino-ui-menus
-```
-
-Unit tests cover the menu encoding, the change records and the object paths. `tests/bus.rs` starts a private
-`dbus-daemon` (skipped when it is not installed; a child of the test, with a deadline on its address, every call and every
-signal) and reads the menus as the menu bar does: the published objects and
-paths, activation, a disabled action, a profile change, a closed window, three windows of one application sharing one connection (counted in `ListNames`) with their items reaching only their own window and a closed one taking only its own objects, and the reader: another peer and every peer
-without a reader refused, a new reader taking the right over, signals the other peer does not receive. `cupertino-menubar`'s `tests/kit_export.rs`
-reads an export through the bar's own `GtkMenuClient`.

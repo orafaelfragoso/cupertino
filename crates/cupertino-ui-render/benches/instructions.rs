@@ -2,8 +2,6 @@
 //! a toolbar and its title, a sidebar of 12 labels, a list of 20 rows of text, a blurred banner and a card with a drop
 //! shadow. Its first frame (every glyph rasterized, every scratch image new), the same frame painted whole again with
 //! the caches warm, and one row's damage repainted.
-//!
-//! `scripts/dev/microbench cupertino-ui-render`
 
 use cupertino_geometry::{Point, Rect};
 use cupertino_theme::Color;

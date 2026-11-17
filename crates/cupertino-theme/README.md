@@ -10,7 +10,7 @@ and typography.
 | `tokens.json` | `DesignTokens`: named colours per `Appearance` (sRGB `f32` + alpha) and the system font sizes, metrics and tracking table |
 | `materials.json` | `MaterialLibrary`/`Recipe`: backdrop filter chain + fill layers per window state and interaction, opaque variants, high-contrast catalogs |
 | `glass` (code) | `GlassParams::new(GlassMode, short_side)`: the glass recipe of an appearance, style (`GlassStyle::{Regular, Clear, LargePanel, Bar, Dense, Module, Card, Track}`), Reduce Transparency, Increase Contrast and Reduce Motion, for a shape whose shorter side is `short_side` points; `foreground_matrix(dark)`, `adapts_foreground(side)`, `apply_matrix` for content on glass; `FaceTone`, `face_tone(luminance, previous)` (light above `FACE_TONE_THRESHOLD`, 0.179, where white and black text read alike, changing only `FACE_TONE_HYSTERESIS`, 0.03, past it), `foreground_matrix_for(dark, tone)` and `foreground_rgb(dark, tone)`, the colour of text on glass; `VIBRANT_PRIMARY`, `vibrant_secondary(dark)`, `VIBRANT_PLACEHOLDER` (1, about 0.55, 0.7), how opaque labels are drawn on glass, a secondary label at the opacity that shifts the label face by `SECONDARY_SHIFT_LIGHT` (−0.4) or `SECONDARY_SHIFT_DARK` (+0.3); `relative_luminance`, `contrast_ratio` |
-| `control_sizes` (code) | `control_geometry(ControlFamily, ControlSize, compact)`: each control family's height, width, corners, label size and inset at the five sizes (`ControlSize::ASCENDING`: mini, small, regular, large, extra large), normal and compact; `switch_geometry(compact)`, `slider_geometry(size)` and `choice_mark(size, compact)` for the parts of a switch, a slider and a check box or radio button. It is the one table of control sizes: `metrics` keeps only `ControlSize`, `ShapeTokens` and `WindowShadowPreset`, and `tests/one-size-table.rs` checks that no crate reads a per-control height table beside it |
+| `control_sizes` (code) | `control_geometry(ControlFamily, ControlSize, compact)`: each control family's height, width, corners, label size and inset at the five sizes (`ControlSize::ASCENDING`: mini, small, regular, large, extra large), normal and compact; `switch_geometry(compact)`, `slider_geometry(size)` and `choice_mark(size, compact)` for the parts of a switch, a slider and a check box or radio button. It is the one table of control sizes: `metrics` keeps only `ControlSize`, `ShapeTokens` and `WindowShadowPreset` |
 | `animations.json` | `AnimationPresets`: springs, timing functions, momentum, rubber band and dock timings as `cupertino-animation` types; `Easing` (bézier timing functions plus the cosine ease, which is not a bézier) via `AnimationPresets::easing(name)`; the dock auto-hide curve is `Easing::CosineEase` with the 0.15 s delay / 0.24 s duration; an unknown curve name is an error, not a silent fallback |
 
 
@@ -159,55 +159,4 @@ approximate.
 ### Typography
 
 The system font substitute is `Inter`. The crate holds size presets (13/11/9/10 pt), the `trak` tracking table with linear interpolation by
-size and track, and line metrics. A test checks the built-in table against the one loaded from the theme data.
-
-## Tests
-
-### M1 control colour data
-
-The ordinary `light` and `dark` catalogs include explicit M1 chrome state colours. Existing entries are unchanged.
-The following table records the design basis of every added value. All new state assignments and literals are
-approximated. They await the control fixture review. RGBA values are straight 8-bit sRGB.
-
-| Tokens | Light | Dark | Design basis |
-|---|---|---|---|
-| `control-fill`, `control-fill-hover` | `control` | `control` | Existing fill, retained on hover |
-| `control-fill-pressed` | `secondary-selected-control` | `secondary-selected-control` | Neutral momentary press, paired with `control-text` |
-| `control-fill-disabled`, `default-button-fill-disabled`, `destructive-fill-disabled`, `text-background-disabled` | [242,242,242,255] | [62,62,62,255] | approximated dedicated disabled fill without subtree opacity |
-| `control-border` | `container-border` | `container-border` | Existing border |
-| `control-border-emphasized` | [0,0,0,96] | [255,255,255,96] | approximated hover and pressed border |
-| `control-border-disabled` | [0,0,0,32] | [255,255,255,32] | approximated dedicated disabled border |
-| `default-button-fill`, `default-button-fill-hover`, `selected-control`, `switch-track-selected`, `switch-track-selected-hover` | `control-accent-blue` | `control-accent-blue` | Existing accent, retained on hover |
-| `default-button-fill-pressed`, `switch-track-selected-pressed` | [0,104,218,255] | [0,104,218,255] | approximated explicit pressed accent |
-| `default-button-text`, `destructive-text`, `selected-control-text` | [255,255,255,255] | [255,255,255,255] | Light uses existing alternate selection foreground; dark completion approximated |
-| `alternate-selected-control-text` (dark only) | Existing entry | [255,255,255,255] | approximated missing dark selection foreground |
-| `default-button-text-disabled`, `destructive-text-disabled` | `disabled-control-text` | `disabled-control-text` | Existing disabled foreground |
-| `destructive-fill`, `destructive-fill-hover` | `system-red` | `system-red` | Existing destructive colour, retained on hover |
-| `destructive-fill-pressed` | [215,45,38,255] | [220,55,46,255] | approximated explicit destructive press |
-| `switch-track`, `switch-track-hover` | `system-fill` | `system-fill` | Existing off treatment |
-| `switch-track-pressed` | [0,0,0,51] | [255,255,255,51] | approximated off press |
-| `switch-track-disabled` | [220,220,220,255] | [70,70,70,255] | Existing secondary selection RGB, opaque disabled off |
-| `switch-track-selected-disabled` | [166,198,232,255] | [54,82,112,255] | approximated disabled on treatment; thumb position also conveys state |
-| `switch-thumb`, `switch-thumb-hover`, `switch-thumb-pressed` | [255,255,255,255] | [255,255,255,255] | approximated opaque thumb; dark `control` is translucent and unsuitable |
-| `switch-thumb-disabled` | [248,248,248,255] | [180,180,180,255] | approximated dedicated disabled thumb |
-| `secondary-selected-control-text` | `control-text` | `control-text` | Existing foreground for neutral selection |
-| `selected-text` | `text` | `text` | Existing foreground over translucent text selection |
-| `control-focus-indicator` | `keyboard-focus-indicator` | [26,169,255,127] (dark) | Focus ring colour, half transparent in both appearances |
-| `tool-tip` (dark only) | Existing entry | [40,40,40,255] | approximated opaque completion of the dark tooltip pair |
-
-Names in the Light and Dark columns mean exact copies of that appearance's existing values, not runtime aliases.
-Disabled overrides pressed and hover. Selection is independent of interaction. Active selected controls use
-`selected-control` with `selected-control-text`; inactive selected controls use `secondary-selected-control` with
-`secondary-selected-control-text`. Switch selection retains its on colour when the window is inactive. Keyboard
-focus paints a separate ring. No runtime colour darkening or whole-control opacity is needed.
-
-These additions provide ordinary appearance data for the chrome fixture. They do not implement the Kit adapter or
-the neutral built-in theme, and do not complete the high-contrast catalogs. White text on the inherited accent and
-red, disabled foregrounds, and faint boundaries still require resolved-pair contrast review. A label-free chrome
-capture cannot establish text contrast or complete accessibility acceptance.
-
-```
-cargo test -p cupertino-theme
-```
-
-The tests run against the theme data in `data/theme/`.
+size and track, and line metrics.

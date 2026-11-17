@@ -2,7 +2,7 @@
 //! painter and hands them to [`run`], which reads the flags, writes one PNG per state and appearance under the names of
 //! [`file_name`] and, with `--sheet`, one contact sheet: the states as columns, the appearances as rows.
 //!
-//! `ci/capture.sh APP/SURFACE [flags]` runs the example of APP; `ci/capture.sh APP` lists its surfaces.
+//! `cargo run -p CRATE --example APP_capture -- APP/SURFACE [flags]` runs the example of APP; without a surface it lists them.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;

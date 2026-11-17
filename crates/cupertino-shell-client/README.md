@@ -17,13 +17,4 @@ GPL-3.0-or-later. Depends on `cupertino-wayland-client`, `cupertino-protocol-app
 | `Dock`, `DockUpdate`, `DockChange`, `DockWindow`, `OverviewMode`, `OverviewWindow`, `OverviewWorkspace`, `Corner`, `Gesture`, `AppCommand` | the dock role, with `done`-grouped updates (from version 18 `DockChange::Engage`, the Focus Dock shortcut; from version 19 `DockChange::AppResident`, an application that runs with or without windows; from version 22 `DockChange::WindowThumbnail`, the picture of a minimized window, at most `MAX_WINDOW_THUMBNAIL` (256) pixels a side, `None` once it is no longer minimized; from version 23 `Dock::overview_drag`, `Dock::overview_move_window` and `Dock::overview_workspace_frame`, which do nothing on an older server; from version 26 `Dock::activate_window`, one window shown, which sends nothing and says so on an older server); the switcher's output arrives as the transport's `OutputId` |
 | `ShellEvent` | what the objects receive, inside the transport's `Event::Extension` and in order with its events: configures of layer and lock surfaces (acknowledged by the transport), `Closed`, `Lock`, `Idle`, `SessionLock`, `LockRequested`, `LogOutRequested`, `AppActivation`, `MenuBar`, `Dock`. The session's appearance and display options arrive as `cupertino_protocol_app::AppEvent` |
 | `Error` | `Transport`, `UnknownOutput`, `InvalidShape`, `Unsized` |
-| `test_clock` | `display_unix_seconds`, `display_now`: the clock a shell process draws with (the login screens' time, the dock's trash check, the launcher's caret). In a debug build `CUPERTINO_TEST_CLOCK=<decimal Unix seconds>` fixes the wall clock and freezes the monotonic one at the first reading, so the goldens settle; a release build (no `debug_assertions`) has neither the override nor the variable's name, which the release install test checks. Never for authentication, back-off, locks or IPC deadlines |
-
-## Tests
-
-```
-cargo test -p cupertino-shell-client
-```
-
-Unit tests cover the menu-bar and dock groups, the configured size of a layer surface and the session state.
-`tests/protocol-flow.rs` runs every role and `Shell::observe` against an in-process server.
+| `test_clock` | `display_unix_seconds`, `display_now`: the clock a shell process draws with (the login screens' time, the dock's trash check, the launcher's caret). In a debug build `CUPERTINO_TEST_CLOCK=<decimal Unix seconds>` fixes the wall clock and freezes the monotonic one at the first reading, so a scene settles; a release build (no `debug_assertions`) has neither the override nor the variable's name. Never for authentication, back-off, locks or IPC deadlines |

@@ -99,16 +99,3 @@ manager and the server, so it records none of their failures.
 | `power.request.failed` | warn | `interface`, `method` (`SetBrightness`), `error` (the D-Bus error name), `backlight` (the keyboard backlight's name) | a brightness change is answered with an error |
 | `power.exit_error` | error | `error` | the daemon ends with an error, or the arguments are wrong |
 | `power.panic` | fatal | `panic`, `location` | any panic |
-
-## Tests
-
-```
-cargo test -p cupertino-powerd --features app
-```
-
-`tests/fake-sysfs.rs` reads fake trees (a battery with `energy_*`, one with `charge_*` and voltage, two batteries plus a
-device battery, mains online with a full battery, several backlights, a keyboard LED). `tests/dbus.rs` runs on a private
-`dbus-daemon` (skipped when missing): display device `Percentage` and `State`, `PropertiesChanged`, `DeviceAdded` and
-`DeviceRemoved`, `SetBrightness` writing the fake file, `WarningLevel` from low to critical and back to none on external
-power, a refused caller, and `LogindAuthorizer` against a stand-in logind (including the nested call from inside a served
-method). Unit tests cover the parsers and the estimate bounds. The lid device needs `/dev/input` and is not covered.

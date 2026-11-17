@@ -48,7 +48,7 @@ It aims for a desktop that feels finished: translucent materials, soft shadows, 
 - **A whole desktop, one codebase.** Compositor, shell, toolkit, apps, login and session manager, system daemons, installer and packaging live in one Rust workspace and share one design.
 - **Materials on the GPU.** The compositor draws backdrop blur and glass with OpenGL ES. Apps built with the toolkit, CupertinoKit, draw on the GPU too, with a CPU renderer that they are tested against and fall back to.
 - **Crash isolation.** The dock, menu bar, launcher and the other shell parts are separate processes. If one crashes, the compositor restarts it and your windows stay put.
-- **Updates you can undo.** Releases are signed pacman packages. `cupertino-rollback` puts an earlier release back ([Signed updates and rollback](docs/src/updates-and-rollback.md)).
+- **Updates you can undo.** Releases are signed pacman packages, and pacman puts an earlier release back from its cache ([Signed updates](docs/src/updates-and-rollback.md)).
 - **Runs your apps.** Cupertino serves Wayland clients natively, runs X11 programs through [`xwayland-satellite`](https://github.com/Supreeeme/xwayland-satellite), shows the menus of Electron apps in the menu bar and provides an xdg-desktop-portal backend for file choosers, screen sharing and screenshots.
 - **Swappable look.** Fonts, icons, cursors and wallpapers come from asset packs you can replace without rebuilding ([Asset packs](docs/src/asset-packs.md)).
 - **Made for agents, with consent.** `cupertino-control` lets local AI agents see and operate the desktop through an MCP server. Each app is asked once and can be turned off at any moment in Settings › Privacy.

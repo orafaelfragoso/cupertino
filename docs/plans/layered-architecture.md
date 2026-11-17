@@ -555,7 +555,7 @@ the report). **Touches** `menubar server` (dev-dependencies), `ci/soak.py`, `ci/
 #### W1.7 Keyboard layouts from libxkbcommon (M, behaviour change)
 
 **Owns** `cupertino-xkbcommon`, `third-party/xkbcommon-rs`, the root `Cargo.toml` patch section, the server's keymap
-compile, packaging dependencies and `packaging/release.py`'s licence files. **Touches** `wayland-client portal kit`
+compile, packaging dependencies and the package recipes' licence files. **Touches** `wayland-client portal kit`
 (its package's dependencies). **After** W0.close.
 
 - [ ] Before the swap, each difference listed at the top of `cupertino-xkbcommon/src/xkb/mod.rs` is checked against the
@@ -884,7 +884,7 @@ the server's four crates each get theirs after their split step.
 Every component task has this shape:
 
 - **Owns** the component's crate (and the new crate where named). **Touches** the component list in `cupertino-shell`,
-  `packaging/files/etc/cupertino/compositor.json`, `packaging/release.py`'s binary list, `contracts.yaml`. **After**
+  `packaging/files/etc/cupertino/compositor.json`, the package recipes' binary list, `contracts.yaml`. **After**
   W6.2 (the memory checkpoint), unless stated.
 - [ ] A library exposing one `Component`; its `main` and binary target are gone; its entry in the component list
       switches to the host (W5.5).
@@ -1008,7 +1008,7 @@ Every crate of wave 6, as in W1.T.
 
 #### W7.3 Conformance of `tools` (S)
 
-**Owns** layer lines and dependencies of `cli diagnostics gpu-shaders gpu-slice`. **Touches** `packaging/release.py`,
+**Owns** layer lines and dependencies of `cli diagnostics gpu-shaders gpu-slice`. **Touches** `packaging/arch/*/PKGBUILD`,
 `contracts.yaml`, `docs/src/diagnose.md`. **After** W6.close.
 
 - [ ] `cupertino-diagnostics` is a module of `cupertino-cli`; the deprecated `cupertino-diagnose` program is gone from

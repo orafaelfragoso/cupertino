@@ -85,7 +85,7 @@ reference; they were options of `cupertino-login --greeter`.
 | Step | Detail |
 |---|---|
 | Start | `PR_SET_DUMPABLE` 0 and `RLIMIT_CORE` 0; read `login.conf`; resolve the greeter account (not root); bind the socket; hold `/dev/ttyN` of the login VT open (`VT_OPENQRY` skips a terminal something has open); start the greeter worker |
-| Greeter | the worker authenticates `cupertino-greeter` through PAM, opens a session of class `greeter` on the login VT, and runs `greeter-command` as that account with `CUPERTINO_LOGIN_SOCK` set |
+| Greeter | the worker authenticates `cupertino-greeter` through PAM, opens a session of class `greeter` on the login VT, and runs `greeter-command` (packaged: `cupertino-server --udev`) as that account with `CUPERTINO_LOGIN_SOCK` set and `CUPERTINO_SERVER_CONFIG=/etc/cupertino/greeter.json`, so the server reads the login screen's settings |
 | Hello | the screen's first message must be `Hello` with this protocol version; the manager answers `Hello` and `Welcome` (roster, power items, `will_prompt`, hint setting). Anything else is refused and the connection closed |
 | Roster | (`logged_in` marks the accounts that have a session the manager started: see "Fast user switching") `/etc/passwd` rows with a uid in `UID_MIN..=UID_MAX` of `login.defs` (1000 and 60000 when unset) and a shell other than `nologin` or `false`; the filters of (`filter.rs`); at most 1024 rows and 1 MiB of pictures. Directory-service accounts are not listed; "Other…" reaches them |
 | Pictures | `~/.face` is read on a short-lived thread with `setfsuid(uid)`, `O_NOFOLLOW` and `O_NONBLOCK`, and `fstat` insisting on a regular file of that user of at most 256 KiB. Not decoded. A bad file means no picture, logged once per user per start |
@@ -332,7 +332,7 @@ target gnome-keyring.
 | Unlock at login | PAM service `cupertino-session`: `-auth optional pam_gnome_keyring.so` right after the stack that checks the password keeps the password the stack accepted; `-session optional pam_gnome_keyring.so auto_start`, last, after `pam_systemd` has made `XDG_RUNTIME_DIR`, hands it to the daemon through its control socket (`$XDG_RUNTIME_DIR/keyring/control`, which starts the socket-activated service) or, when nothing listens there, starts the daemon with it. Both run in the worker's single PAM transaction (`Mode::Open`), so the password never leaves PAM |
 | Auto login | PAM service `cupertino-autologin`: the session line only. There is no password, so the daemon runs locked |
 | Unlock at the lock screen | PAM service `cupertino-login` (`cupertino-login`'s lock screen): `-auth optional pam_gnome_keyring.so` after `system-auth` unlocks a running daemon with the password that unlocked the screen |
-| Lock at logout | the session command `cupertino-session` (below) |
+| Lock at logout | the session, `cupertino-server --session` (below) |
 | The prompt for a locked keyring | gcr's system prompter (`org.gnome.keyring.SystemPrompter`, a GTK window started on demand). It is not a Cupertino surface |
 | Sandboxed applications | xdg-desktop-portal's Secret portal, routed to gnome-keyring in `cupertino-portals.conf` |
 | Packages | Arch (`cupertino`, `cupertino-git`) depends on `gnome-keyring` and `libsecret` (`secret-tool`); the live image lists both. The `-` before each PAM line skips it silently when the module is not installed |
@@ -348,7 +348,7 @@ target gnome-keyring.
 | Another keyring is the default collection (an application made it so) | login unlocks the login keyring only, so that keyring stays locked. Nothing is changed silently: `cupertino-keyring-prompter` asks once whether to copy its items into the login keyring and make the login keyring the default (`cupertino-polkit-agent`'s README, "The default keyring that login does not unlock"). It asks from a thread of its own after the session started, so login never waits for it |
 | Screen locked | the keyring stays unlocked, as on other desktops; unlocking the screen unlocks a keyring that was locked |
 | Fast user switching, the administrator's restart | `Mode::Verify` runs the same `auth` stack, but the worker sets no `XDG_RUNTIME_DIR` before `pam_authenticate`, so the module finds no daemon and keeps nothing: the session's keyring is not changed |
-| Logout | after the compositor ends and `cupertino-session.target` is stopped, the session command lists the provider's `Collections` and calls `Lock` on all of them through `busctl --user --auto-start=no`, so a provider that is not running is not started. It logs `locked the keyring (N collections)` in `session.log`; a path that is not `/org/freedesktop/secrets/collection/…` stops it with a log line. The daemon itself ends with the user manager, after the user's last session. A session that did not own the user manager (another graphical session of the user was active) locks nothing |
+| Logout | after the compositor ends and `cupertino-session.target` is stopped, the session (`cupertino-server --session`) lists the provider's `Collections` and calls `Lock` on all of them over the user bus, only when the provider has the name already, so a provider that is not running is not started. It logs `locked the keyring (N collections)` in `session.log`; a path that is not `/org/freedesktop/secrets/collection/…` stops it with a log line. The daemon itself ends with the user manager, after the user's last session. A session that did not own the user manager (another graphical session of the user was active) locks nothing |
 
 Neither the password nor any secret is logged: PAM modules do not print the password, the daemon does not print values
 (the tests check its output), and the session command never reads a secret.
@@ -377,8 +377,7 @@ secret over the D-Bus API and through `secret-tool`; a locked keyring refuses re
 system prompter (a stand-in that refuses, as a dismissed window does); a wrong or missing password leaves it locked; the
 keyring file is the account's alone; no secret is in the daemon's output. It is skipped with `SKIPPED:
 gnome-keyring-daemon is not installed` when the daemon is missing, and its `secret-tool` part without `secret-tool`
-(`CUPERTINO_KEYRING_REQUIRED=1`, set in CI, fails instead). `packaging/test_session.py` checks the lock at logout (with a
-fake `busctl`, and with the real daemon when it is installed, required in CI the same way) and `packaging/test_release.py` the PAM lines and the packages. PAM itself is not run: that needs root.
+(`CUPERTINO_KEYRING_REQUIRED=1`, set in CI, fails instead). PAM itself is not run: that needs root.
 
 **Not verified on an installed session.** On a machine installed from the live image, as a user with a password:
 

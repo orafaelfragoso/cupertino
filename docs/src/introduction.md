@@ -1,6 +1,6 @@
 # Introduction
 
-Cupertino is an Arch-based Linux distribution with its own Wayland desktop, written in Rust on Smithay. You install it from a USB stick ([Install from a USB stick](install-usb.md)), and its updates are signed packages that can be rolled back ([Signed updates and rollback](updates-and-rollback.md)). The desktop is made of small processes around one compositor: a dock, a menu bar, a launcher, notifications, a control panel, a file manager, a settings app, a lock screen and a session manager.
+Cupertino is an Arch-based Linux distribution with its own Wayland desktop, written in Rust on Smithay. You install it from a USB stick ([Install from a USB stick](install-usb.md)), and its updates are signed packages that pacman can take back to an earlier release ([Signed updates](updates-and-rollback.md)). The desktop is made of small processes around one compositor: a dock, a menu bar, a launcher, notifications, a control panel, a file manager, a settings app, a lock screen and a session manager.
 
 Cupertino serves Wayland clients, and X11 programs through `xwayland-satellite` when it is installed. The project is early (0.x): the compositor runs nested in another Wayland session and on a TTY, and the TTY backend is in daily use on real hardware with an NVIDIA GPU.
 

@@ -9,14 +9,14 @@ pkgdesc='Wayland desktop shell and compositor'
 arch=('x86_64')
 url='https://github.com/orafaelfragoso/cupertino'
 license=('GPL-3.0-or-later' 'MPL-2.0' 'MIT' 'OFL-1.1' 'LGPL-2.1-or-later' 'MIT-CMU' 'BSD-3-Clause')
-makedepends=('git' 'cargo' 'python' 'mesa' 'libglvnd' 'pam' 'gcc-libs' 'systemd' 'dbus' 'xkeyboard-config' 'shared-mime-info' 'adwaita-icon-theme' 'clang' 'libpipewire')
-checkdepends=('cargo-nextest>=0.9.151')
+makedepends=('git' 'cargo' 'mesa' 'libglvnd' 'pam' 'gcc-libs' 'systemd' 'dbus' 'xkeyboard-config' 'shared-mime-info' 'adwaita-icon-theme' 'clang' 'libpipewire')
 # makepkg's LTO flags would reach the C code of build dependencies only; the release profile decides for Rust. No
 # split debug package: it is ~0.9 GB of debug info for the sixteen binaries.
-# The manual pages ship as release.py's manifest names them (usr/share/man/man1/*.1), uncompressed.
+# The manual pages ship uncompressed, as the built command writes them.
 options=('!lto' '!debug' '!zipman')
 source=("cupertino::git+$url.git")
 sha256sums=('SKIP')
+_srcname=cupertino
 
 # Fails without a v* tag in the history: the version is the last release plus the commits since.
 pkgver() {
@@ -25,13 +25,13 @@ pkgver() {
 }
 
 prepare() {
-  cd cupertino
+  cd "$_srcname"
   cargo fetch --locked
 }
 
-# Build and check share compiler inputs even when makepkg carries exported flags between functions.
-build_environment() {
-  # The packaged binaries are stripped; keep test compilation on the same release settings.
+build() {
+  cd "$_srcname"
+  # The packaged binaries are stripped and carry no path of the build machine.
   export CARGO_INCREMENTAL=0 CARGO_PROFILE_RELEASE_DEBUG=0 CUPERTINO_THEME_DIR=/usr/share/cupertino/theme
   local remap target_dir
   target_dir=$(realpath -m "${CARGO_TARGET_DIR:-target}")
@@ -44,16 +44,11 @@ build_environment() {
     esac
   done
   export RUSTFLAGS
-}
-
-build() {
-  cd cupertino
-  build_environment
   cargo build --frozen --release --workspace --all-features --bins
   # libcupertinokit.so, the C SDK's library: the cdylib of cupertino-ui-abi, which no binary links
   cargo build --frozen --release -p cupertino-ui-abi --lib --all-features
   # The manual pages and the completions of the cupertino command, written by the binary just built from its registry;
-  # the pages are dated by makepkg's SOURCE_DATE_EPOCH. MANIFEST names what was written.
+  # the pages are dated by makepkg's SOURCE_DATE_EPOCH.
   local cli="${CARGO_TARGET_DIR:-target}/release/cupertino" gen="$srcdir/gen" shell
   rm -rf "$gen"
   "$cli" dev manual "$gen/man" >/dev/null
@@ -61,24 +56,38 @@ build() {
   for shell in bash zsh fish; do
     "$cli" completions "$shell" > "$gen/completions/$shell"
   done
-  (cd "$gen" && find . -type f ! -name MANIFEST -printf '%P\n' | LC_ALL=C sort > MANIFEST)
 }
 
-check() {
-  cd cupertino
-  build_environment
-  export CUPERTINO_SPEC_DIR="$PWD/data/theme"
-  # The compositor tests open a Wayland socket; the build environment has no runtime directory of its own.
-  export XDG_RUNTIME_DIR="$srcdir/runtime"
-  install -d -m 700 "$XDG_RUNTIME_DIR"
-  dbus-run-session -- python3 ci/build-test-fixtures.py --frozen --release -- cargo nextest run --frozen --release --profile ci --workspace --all-features
-  cargo test --frozen --release --workspace --all-features --doc
+# The version of a crate of the source tree.
+_crate_version() {
+  sed -n '/^\[package\]/,/^\[/s/^version = "\(.*\)"$/\1/p' "crates/$1/Cargo.toml" | head -n 1
+}
+
+# The build record `cupertino version` reads: the package, its version (the crate's), the commit and the build time.
+_build_record() {
+  local commit epoch
+  commit=${CUPERTINO_BUILD_COMMIT:-$(sed -n '1{/^[0-9a-f]\{40\}$/p}' data/build-commit)}
+  [[ -n $commit ]] || commit=$(git rev-parse HEAD 2>/dev/null) || commit=
+  [[ $commit =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]] && commit="\"$commit\"" || commit=null
+  [[ ${SOURCE_DATE_EPOCH:-} =~ ^[0-9]+$ ]] && epoch=$SOURCE_DATE_EPOCH || epoch=null
+  install -d "$(dirname "$3")"
+  printf '{\n  "package": "%s",\n  "version": "%s",\n  "commit": %s,\n  "source_date_epoch": %s\n}\n' \
+    "$1" "$(_crate_version "$2")" "$commit" "$epoch" > "$3"
+  chmod 644 "$3"
+}
+
+# Installs each file of a source directory under a destination directory, keeping the relative paths.
+_install_tree() {
+  local from=$1 to=$2 file
+  while IFS= read -r -d '' file; do
+    install -Dm644 "$from/$file" "$to/$file"
+  done < <(cd "$from" && find . -type f ! -name '*.py' -printf '%P\0' | LC_ALL=C sort -z)
 }
 
 package_cupertino-git() {
   provides=('cupertino')
   conflicts=('cupertino')
-  depends=('glibc' 'sh' 'gcc-libs' 'mesa' 'libglvnd' 'pam' 'systemd' 'dbus>=1.16' 'polkit' 'gnome-keyring' 'libsecret' 'pipewire>=1:1.4' 'xdg-desktop-portal' 'xdg-desktop-portal-gtk' 'xkeyboard-config' 'shared-mime-info' 'adwaita-icon-theme' 'cupertino-data')
+  depends=('glibc' 'gcc-libs' 'mesa' 'libglvnd' 'pam' 'systemd' 'dbus>=1.16' 'polkit' 'gnome-keyring' 'libsecret' 'pipewire>=1:1.4' 'xdg-desktop-portal' 'xdg-desktop-portal-gtk' 'xkeyboard-config' 'shared-mime-info' 'adwaita-icon-theme' 'cupertino-data')
   optdepends=('wayland: nested session inside another Wayland desktop'
               'libxkbcommon: nested session'
               'foot: terminal for the nested try-out'
@@ -88,14 +97,44 @@ package_cupertino-git() {
   backup=('etc/cupertino/login.conf' 'etc/cupertino/greeter.json' 'etc/cupertino/compositor.json'
           'etc/pam.d/cupertino-login' 'etc/pam.d/cupertino-session'
           'etc/pam.d/cupertino-greeter' 'etc/pam.d/cupertino-autologin')
-  cd cupertino
-  python3 packaging/release.py install --format arch --package runtime --destdir "$pkgdir" --bindir "${CARGO_TARGET_DIR:-target}/release" \
-    --gendir "$srcdir/gen"
+  cd "$_srcname"
+  local bin="${CARGO_TARGET_DIR:-target}/release" gen="$srcdir/gen" lic="$pkgdir/usr/share/licenses/cupertino" name
+  for name in cupertino-server cupertino-dock cupertino-menubar cupertino-launcher cupertino-notifications \
+              cupertino-controlcenter cupertino-osd cupertino-screenshot cupertino-control cupertino-windowmanager \
+              cupertino-login cupertino-polkit-agent cupertino-keyring-prompter cupertino-portal cupertino-files \
+              cupertino-settings cupertino-sessiond cupertino-netd cupertino-btd cupertino-powerd cupertino-diagnose \
+              cupertino; do
+    install -Dm755 "$bin/$name" "$pkgdir/usr/bin/$name"
+  done
+  install -Dm644 -t "$pkgdir/usr/share/man/man1" "$gen"/man/*.1
+  install -Dm644 "$gen/completions/bash" "$pkgdir/usr/share/bash-completion/completions/cupertino"
+  install -Dm644 "$gen/completions/zsh" "$pkgdir/usr/share/zsh/site-functions/_cupertino"
+  install -Dm644 "$gen/completions/fish" "$pkgdir/usr/share/fish/vendor_completions.d/cupertino.fish"
+  _build_record cupertino cupertino-server "$pkgdir/usr/share/cupertino/build-info.json"
+  # the session entry, the user target, the greeter account, the bus policy, the portal choice, the settings and units
+  _install_tree packaging/files "$pkgdir"
+  install -Dm644 crates/cupertino-portal/data/cupertino.portal \
+    "$pkgdir/usr/share/xdg-desktop-portal/portals/cupertino.portal"
+  # the session bus starts Files for a "show in folder" call when it is not running
+  install -Dm644 -t "$pkgdir/usr/share/dbus-1/services" \
+    crates/cupertino-files/data/dbus-1/services/org.cupertino.Files.FileManager1.service
+  # the apps' desktop entries (the menu bar and the dock take an app's name and icon from them) and the default apps
+  install -Dm644 -t "$pkgdir/usr/share/applications" \
+    crates/cupertino-files/data/applications/* crates/cupertino-settings/data/applications/*
+  install -Dm644 -t "$pkgdir/usr/share/cupertino/theme" data/theme/{tokens,materials,animations}.json
+  install -Dm644 -t "$pkgdir/etc/pam.d" packaging/pam/arch/cupertino-{login,session,greeter,autologin}
+  install -Dm644 LICENSE "$lic/LICENSE"
+  install -Dm644 crates/cupertino-geometry/LICENSE "$lic/MPL-2.0"
+  install -Dm644 crates/cupertino-xkbcommon/LICENSE "$lic/MIT"
+  install -Dm644 third-party/xkbcommon-rs/LICENSE "$lic/libxkbcommon"
+  install -Dm644 third-party/smithay/LICENSE.txt "$lic/smithay"
+  install -Dm644 crates/cupertino-assets/fonts/OFL.txt "$lic/OFL.txt"
+  install -Dm644 packaging/licenses/THIRD-PARTY-LICENSES "$lic/THIRD-PARTY-LICENSES"
 }
 
-# The C SDK: libcupertinokit.so.1 with its soname links, header and pkg-config file (release.py's sdk manifest). It
-# links the toolkit statically and the C and GCC runtimes dynamically; the theme and the asset pack are read at run time
-# when installed, else the toolkit uses its built-in fallbacks.
+# The C SDK: libcupertinokit.so.<major>.<minor>.0 with its soname links, header and pkg-config file. It links the
+# toolkit statically and the C and GCC runtimes dynamically; the theme and the asset pack are read at run time when
+# installed, else the toolkit uses its built-in fallbacks.
 package_cupertino-kit-git() {
   pkgdesc='CupertinoKit C SDK: the libcupertinokit shared library, its header and pkg-config file'
   license=('MPL-2.0' 'MIT' 'OFL-1.1')
@@ -104,6 +143,22 @@ package_cupertino-kit-git() {
               'cupertino: the desktop theme')
   provides=('cupertino-kit' 'libcupertinokit.so')
   conflicts=('cupertino-kit')
-  cd cupertino
-  python3 packaging/release.py install --format arch --package sdk --destdir "$pkgdir" --bindir "${CARGO_TARGET_DIR:-target}/release"
+  cd "$_srcname"
+  local header=crates/cupertino-ui-abi/abi/cupertinokit.h major minor lic="$pkgdir/usr/share/licenses/cupertino-kit"
+  major=$(sed -n 's/^#define CUPERTINOKIT_ABI_MAJOR \([0-9]\+\)$/\1/p' "$header")
+  minor=$(sed -n 's/^#define CUPERTINOKIT_ABI_MINOR \([0-9]\+\)$/\1/p' "$header")
+  [[ -n $major && -n $minor ]] || { error "$header defines no ABI version"; return 1; }
+  install -Dm755 "${CARGO_TARGET_DIR:-target}/release/libcupertinokit.so" "$pkgdir/usr/lib/libcupertinokit.so.$major.$minor.0"
+  ln -s "libcupertinokit.so.$major.$minor.0" "$pkgdir/usr/lib/libcupertinokit.so.$major"
+  ln -s "libcupertinokit.so.$major" "$pkgdir/usr/lib/libcupertinokit.so"
+  install -Dm644 "$header" "$pkgdir/usr/include/cupertinokit-$major/cupertinokit.h"
+  install -d "$pkgdir/usr/lib/pkgconfig"
+  sed "s/@VERSION@/$major.$minor.0/" crates/cupertino-ui-abi/cupertinokit.pc.in > "$pkgdir/usr/lib/pkgconfig/cupertinokit.pc"
+  chmod 644 "$pkgdir/usr/lib/pkgconfig/cupertinokit.pc"
+  _build_record cupertino-kit cupertino-server "$pkgdir/usr/share/cupertino-kit/build-info.json"
+  install -Dm644 crates/cupertino-ui-abi/LICENSE "$lic/MPL-2.0"
+  install -Dm644 crates/cupertino-xkbcommon/LICENSE "$lic/MIT"
+  install -Dm644 third-party/xkbcommon-rs/LICENSE "$lic/libxkbcommon"
+  install -Dm644 crates/cupertino-assets/fonts/OFL.txt "$lic/OFL.txt"
+  install -Dm644 packaging/licenses/THIRD-PARTY-LICENSES "$lic/THIRD-PARTY-LICENSES"
 }

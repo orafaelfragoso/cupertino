@@ -28,7 +28,7 @@ outside one.
 | Id | Status |
 |---|---|
 | `gpu.driver` | the primary GPU's driver, and what it needs before a compositor takes the display (`cupertino_devices::preflight`): `fail` for a problem (nvidia-drm without `modeset=1`, no GPU), `warn` for a warning (no nvidia GBM backend, no driver bound) |
-| `gpu.renderer` | the last session's line in `session.log` saying it rendered with a software renderer (`cupertino_server::software_render`): `warn` when the last or the running session did, that is when no `starting` line of `cupertino-session` follows it; facts: its time and GPU; `skip` without a `session.log` |
+| `gpu.renderer` | the last session's line in `session.log` saying it rendered with a software renderer (`cupertino_server::software_render`): `warn` when the last or the running session did, that is when no `starting` line of the session follows it; facts: its time and GPU; `skip` without a `session.log` |
 | `session.logind` | logind's record of `XDG_SESSION_ID`: `ok` for an active wayland session; facts: class, PAM service, VT, seat |
 | `session.desktop` | `XDG_CURRENT_DESKTOP` names Cupertino; `skip` otherwise |
 | `session.wayland` | the compositor answers on `WAYLAND_DISPLAY` (a connect to the socket); `fail` when nothing does |
@@ -79,7 +79,7 @@ in time order (events of the same time keep their order):
 | Source | What is read |
 |---|---|
 | `store` | the user store, `Sources::store_dir()` (`$XDG_STATE_HOME/cupertino/events`, else `~/.local/state/cupertino/events`), with `store::segments` and `store::read_lines` |
-| `session.log` | the `starting` and `the compositor …` lines `cupertino-session` writes, made into records when read (below) |
+| `session.log` | the `starting` and `the compositor …` lines the session (`cupertino-server --session`) writes, made into records when read (below) |
 | `journal` | `journalctl --output=json --no-pager --all CUPERTINO_DIAG_SCHEMA=1 [--since=@SECONDS]`, with no input and `LC_ALL=C`; `CUPERTINO_DIAG_JSON` is a string, or an array of byte values for a value that is not UTF-8 or is large (`events::journal_entry`) |
 
 Each source has a `SourceReport`: `name`, `status`, `events` (how many the filter let through), `corrupt`, `partial`, and
@@ -102,7 +102,7 @@ command `Sources::journal_follow` makes from it.
 
 **`session.log`.** Its lines carry local time without a zone (`date '+%Y-%m-%d %H:%M:%S'`), read with `mktime`
 (`events::local_to_utc`; `events::local_time` is the reverse). They become records with `component`
-`cupertino-session`, `source` `session.log`, an empty `version`, no `commit`, no `boot_id` or `session`, `pid` 0, and
+`cupertino-server`, `source` `session.log`, an empty `version`, no `commit`, no `boot_id` or `session`, `pid` 0, and
 `count` numbering the records of each id in the log. They are made at read time and never stored a second time.
 
 | Id | Severity | Line | Fields |

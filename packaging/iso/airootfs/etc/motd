@@ -1,2 +1,2 @@
 Cupertino live medium. Session on tty1; this console is tty2 (Ctrl+Alt+F2).
-Install: run `cupertino-install` (plain archinstall skips the Cupertino setup).
+Install: `archinstall`, then the Cupertino steps of the install guide (install-usb in the book).

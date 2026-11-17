@@ -27,7 +27,7 @@ temporary trees):
    hash, 40 hexadecimal digits (or 64 for a repository with sha256 object names); any other value fails the build,
    because it was set on purpose.
 2. The tracked file `data/build-commit`. In the repository it holds `$Format:%H$`, and `.gitattributes` marks it
-   `export-subst`, so `git archive` (and `packaging/release.py source`) writes the archived commit into it. A file with
+   `export-subst`, so `git archive` (and so the release source archive) writes the archived commit into it. A file with
    any other text is skipped with a Cargo warning.
 3. `git rev-parse HEAD` when the workspace has a `.git` (a directory, or the file of a linked worktree).
 4. Otherwise the commit is unknown, and `COMMIT` is `None`.

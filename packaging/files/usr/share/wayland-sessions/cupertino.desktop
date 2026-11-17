@@ -1,7 +1,7 @@
 [Desktop Entry]
 Name=Cupertino
 Comment=Cupertino Wayland session
-Exec=/usr/bin/cupertino-session
+Exec=/usr/bin/cupertino-server --session
 TryExec=/usr/bin/cupertino-server
 Type=Application
 DesktopNames=Cupertino

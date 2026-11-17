@@ -86,7 +86,7 @@ impl Sources {
         self.root.join(path.trim_start_matches('/'))
     }
 
-    /// The directory of the session's logs, as `cupertino-session` and the server name it.
+    /// The directory of the session's logs, as the session and the server name it.
     pub fn state_dir(&self) -> Option<PathBuf> {
         let state = self
             .var("XDG_STATE_HOME")

@@ -31,6 +31,10 @@ pub struct Cli {
     /// Run without a window system (offscreen EGL device).
     #[arg(long)]
     pub headless: bool,
+    /// Run the session of a login: start the compositor on a TTY (`--udev`, with the other arguments) as a child, wait
+    /// for it, end the session in the user manager and lock the keyring after it, and exit with its status.
+    #[arg(long, conflicts_with_all = ["winit", "udev", "headless", "check_hardware"])]
+    pub session: bool,
     /// Print what the TTY backend needs from this machine (GPU driver and its settings) and exit; opens no device.
     #[arg(long)]
     pub check_hardware: bool,

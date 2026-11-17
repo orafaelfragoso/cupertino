@@ -220,7 +220,7 @@ extern "C" fn fatal_signal(signal: libc::c_int) {
     let index = FATAL_SIGNALS.iter().position(|s| *s == signal);
     if let Some(end) = SESSION_END.get() {
         // a reason written already (a panic, a lost rendering context) is the real one, and a crash in the teardown it
-        // started keeps it; `cupertino-session` removes the file before the start
+        // started keeps it; the session removes the file before the start
         // Safety: `open`, `write` and `close` are async-signal-safe; the path is a C string made before any crash.
         unsafe {
             let fd = libc::open(
@@ -322,7 +322,7 @@ fn write_raw(fd: libc::c_int, parts: &[&[u8]]) {
     }
 }
 
-/// The file `cupertino-session` reads, when the compositor has ended, for the reason it writes to the session log.
+/// The file the session (`cupertino-server --session`) reads, when the compositor has ended, for the reason it writes to the session log.
 pub const SESSION_END_ENV: &str = "CUPERTINO_SESSION_END";
 
 /// How long the teardown after a panic or a lost rendering context may take before the server exits without finishing
@@ -356,7 +356,7 @@ pub fn record_session_end(var: impl Fn(&str) -> Option<OsString>) {
 }
 
 /// The session ends for `reason`: records `server.session_end` ([`server_ended`]), writes the reason for
-/// `cupertino-session` and exits with `status` once [`TEARDOWN_LIMIT`] has passed, if the server is still tearing down.
+/// the session and exits with `status` once [`TEARDOWN_LIMIT`] has passed, if the server is still tearing down.
 /// Only the event without [`record_session_end`].
 pub fn session_ends(reason: &str, status: i32) {
     server_ended(status, Some(reason));

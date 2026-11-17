@@ -137,7 +137,7 @@ Readers ignore fields they do not know. A change that is not additive raises the
 
 - **Your own processes** (the compositor, the shell, apps, the portal, the polkit agent) write to a store in `$XDG_STATE_HOME/cupertino/events/`, else `~/.local/state/cupertino/events/`. The directory is mode 0700 and its files 0600; a directory that is a symbolic link, belongs to someone else or that others may write is refused. Segments are `events-<boot>-<seq>.jsonl`; `lock` is the lock every writer holds, and `salt` keys the hashes.
 - **System services** (`cupertino-sessiond`, `cupertino-netd`, `cupertino-btd`, `cupertino-powerd`) write to the system journal. Each entry has `CUPERTINO_DIAG_SCHEMA=1`, `CUPERTINO_DIAG_ID`, `CUPERTINO_DIAG_SEVERITY` and the whole line in `CUPERTINO_DIAG_JSON`, so `journalctl CUPERTINO_DIAG_SCHEMA=1` finds them.
-- **Session starts and ends** come from `session.log`, which `cupertino-session` writes; see [below](#sessionlog).
+- **Session starts and ends** come from `session.log`, which the session (`cupertino-server --session`) writes; see [below](#sessionlog).
 
 ### Limits
 
@@ -195,7 +195,7 @@ The system services' events are in the system journal, which only root and membe
 
 ### session.log
 
-`cupertino-session` writes a line to `~/.local/state/cupertino/session.log` when a session starts and when the compositor ends. Its lines are turned into `cupertino.diag.v1` records when they are read, with `component` `cupertino-session`, `source` `session.log`, an empty `version`, no `commit` and `pid` 0. They are never stored a second time. The lines carry local time without a zone, which is read with this machine's time zone.
+The session (`cupertino-server --session`) writes a line to `~/.local/state/cupertino/session.log` when a session starts and when the compositor ends. Its lines are turned into `cupertino.diag.v1` records when they are read, with `component` `cupertino-server`, `source` `session.log`, an empty `version`, no `commit` and `pid` 0. They are never stored a second time. The lines carry local time without a zone, which is read with this machine's time zone.
 
 | Line | Record |
 |---|---|

@@ -30,8 +30,8 @@ cupertino sdk new --lang c|rust <name> [--dir <dir>] [--source <checkout>] # a s
 `ready` when the compositor writes `WAYLAND_DISPLAY=<name>` there. The compositor's stdout goes to this command's stderr,
 so stdout carries the command's own output alone; it runs in its own process group and gets SIGTERM if this command
 dies, even by SIGKILL. It inherits the standard streams and the ready pipe alone: every other descriptor the command
-had (a build tool's lock, a terminal multiplexer's pipe) is close-on-exec in the child, for `cupertino-session` too.
-`--backend tty` checks it is on a text console outside a graphical session, then `exec`s `cupertino-session`
+had (a build tool's lock, a terminal multiplexer's pipe) is close-on-exec in the child, for the session too.
+`--backend tty` checks it is on a text console outside a graphical session, then `exec`s `cupertino-server --session`
 (beside the binary, else `/usr/bin`).
 
 The packages install the command with `/usr/share/bash-completion/completions/cupertino`,

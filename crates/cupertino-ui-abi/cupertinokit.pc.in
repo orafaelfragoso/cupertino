@@ -1,4 +1,4 @@
-# pkg-config metadata of CupertinoKit's C ABI; packaging/release.py writes cupertinokit.pc from it.
+# pkg-config metadata of CupertinoKit's C ABI; the package recipe writes cupertinokit.pc from it.
 prefix=/usr
 libdir=${prefix}/lib
 includedir=${prefix}/include/cupertinokit-1

@@ -209,8 +209,7 @@ field until the next edit, also after a wrong password. Every prompt but the pas
 **Account lockout.** A failed attempt at the lock screen counts towards the account lockout like a failed login: the packaged
 `/etc/pam.d/cupertino-login` runs the shared password stack and account stack, `system-auth`, which has `pam_faillock`
 (`preauth`, `authfail` and `authsucc`) by default. The file adds no `pam_faillock` line of its own, which would count each
-failure twice, and nothing in it can pass a password the shared stack refused (`packaging/test_release.py`,
-`test_the_lock_screen_counts_towards_the_account_lockout`). `pam_faillock`
+failure twice, and nothing in it can pass a password the shared stack refused. `pam_faillock`
 runs in this process, as the user, and records the failure in the user's own tally file (`/run/faillock/$USER` by default); the
 directory is root's, so the file must exist already: `pam_faillock` makes it, owned by the user, when it runs as root for the
 session's login (the shared stack's `authsucc`, or the `authsucc` line of `cupertino-autologin` for a session that started
@@ -436,7 +435,7 @@ it when it starts.
 
 `cupertino-login --greeter` is the login screen of the session manager, [`cupertino-sessiond`](../cupertino-sessiond/README.md).
 The manager starts `cupertino-server --udev` as the account `cupertino-greeter` (`greeter-command` in `/etc/cupertino/login.conf`),
-in a logind session of class `greeter` on the login VT. The server's configuration (`CUPERTINO_SERVER_CONFIG`, in the harness
+in a logind session of class `greeter` on the login VT. The server's configuration (`CUPERTINO_SERVER_CONFIG`, which the manager sets to
 `/etc/cupertino/greeter.json`) starts this process as its only shell process:
 
 ```json

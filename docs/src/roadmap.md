@@ -104,7 +104,7 @@ In progress, WP-14, WP-16 and WP-11.
 
 The `cupertino` command ships as `/usr/bin/cupertino` with the groups `appearance`, `diagnose` (with `events` and `export`), `desktop`, `shell`, `dev`, `dev-folder`, `sdk`, `version` and `completions`, human, JSON and JSON-lines output, defined exit codes, completions and manual pages generated from its registry. Every process records diagnostic events in a bounded store. `cupertino-diagnose` and `cupertino-assets check` remain as deprecated programs. The C ABI has a headless runtime, generational handles, panic containment and symbol, header and layout baselines; the `cupertino-kit` package ships its library, header and pkg-config file, and CI builds and runs a C sample against it.
 
-Source: `crates/cupertino-cli/src/lib.rs`, `crates/cupertino-diagnostics`, `crates/cupertino-diagnostic-events`, `crates/cupertino-ui-abi`, `ci/c-sdk.py` and `packaging/release.py`.
+Source: `crates/cupertino-cli/src/lib.rs`, `crates/cupertino-diagnostics`, `crates/cupertino-diagnostic-events`, `crates/cupertino-ui-abi` and `packaging/arch`.
 
 Still required:
 
@@ -115,9 +115,9 @@ Still required:
 
 In progress, WP-05, WP-15 and WP-13.
 
-Implemented in code: per-card DRM output handling and cross-card copies, render-GPU selection, explicit sync when supported, VT resume and GPU-reset recovery. Signed Arch repositories, keyring checks and rollback exist. The live ISO has VM boot evidence. The release workflow signs the ISO checksum and requires the checked-in release-key fingerprint; the local build writes an unsigned checksum.
+Implemented in code: per-card DRM output handling and cross-card copies, render-GPU selection, explicit sync when supported, VT resume and GPU-reset recovery. Signed Arch repositories and keyring checks exist; going back to a release is `pacman -U` from the cache. The live ISO has VM boot evidence. The release workflow signs the ISO checksum and requires the checked-in release-key fingerprint.
 
-Source: `crates/cupertino-server/src/backend`, `scripts/build-iso.sh`, `packaging/installer`, `packaging/keyring` and `.github/workflows/release.yml`.
+Source: `crates/cupertino-server/src/backend`, `packaging/iso`, `packaging/keyring` and `.github/workflows/release.yml`.
 
 Still required:
 
@@ -135,7 +135,7 @@ Since 2026-11-09:
 - Damage and blur reuse: a layout damages only the nodes it moved or that paint anew, a configure that changes nothing draws nothing, and a frame whose glass regions alone changed repaints none of the window. A shm buffer committed without damage keeps its texture instead of being uploaded again. A glass backdrop is blurred again only when what lies under it changed, sidebars of one material keep one blurred backdrop each, and a blurring region captures only the framebuffer around it.
 - Bench and measure tools: `scripts/dev/bench` prints the frame rate of a window drag, a dock sweep, the overview, the launcher and a scrolled Files list at 60 and 120 Hz, and every scenario is within 8.33 ms at the 95th percentile with no owed frame missed on the headless GPU run. `scripts/dev/measure` reports each desktop program's memory and CPU at rest and in use, and compares with an earlier build. The installed session still shows stutter as the launcher and the overview close ([#158](https://github.com/orafaelfragoso/cupertino/issues/158)); frame scheduling and dirty-region propagation remain in [#124](https://github.com/orafaelfragoso/cupertino/issues/124) and [#125](https://github.com/orafaelfragoso/cupertino/issues/125).
 
-NetworkManager and BlueZ are the shipped ISO and installed-system backends. Cupertino's network and Bluetooth daemons remain available for development; they do not establish replacement parity. See [Architecture](architecture.md), [Displays and GPUs](displays-and-gpus.md) and [Signed updates and rollback](updates-and-rollback.md).
+NetworkManager and BlueZ are the shipped ISO and installed-system backends. Cupertino's network and Bluetooth daemons remain available for development; they do not establish replacement parity. See [Architecture](architecture.md), [Displays and GPUs](displays-and-gpus.md) and [Signed updates](updates-and-rollback.md).
 
 ## Desktop quality acceptance
 

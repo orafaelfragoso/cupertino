@@ -1,8 +1,8 @@
 # cupertino-defaults
 
 The settings store shared by the Cupertino processes. Every settings file lives in `$XDG_CONFIG_HOME/cupertino/` (default
-`~/.config/cupertino/`), and each file has its own environment variable that redirects it, so tests and fixtures never
-touch the user's files. For each file the crate has one typed reader and writer, used by the process that applies the
+`~/.config/cupertino/`), and each file has its own environment variable that redirects it, so a run can use other files
+and leave the user's alone. For each file the crate has one typed reader and writer, used by the process that applies the
 file and by the settings application, an atomic write, and change notification. Dependencies: `inotify`, `libc` and
 `serde_json` (for `compositor.json`).
 
@@ -78,7 +78,7 @@ machine's settings. A file with every key, as earlier versions wrote it, stays v
 **Power defaults.** Display sleep is 600 s on mains and 120 s on battery, and dim is on (the
 reference's built-in power table, no model overrides them). System sleep is never on mains, because a build, a download or a
 remote session takes no sleep inhibitor and nothing else says the machine is busy, and 600 s on battery. The session locks 300 s after the
-display sleeps (the new-user template), and the display sleeps after 30 s on the lock screen. Values are in seconds, where the design uses minutes, so tests can use short timers. `never` switches a timer
+display sleeps (the new-user template), and the display sleeps after 30 s on the lock screen. Values are in seconds, where the design uses minutes, so short timers are possible. `never` switches a timer
 off.
 
 ## Open issues
@@ -86,8 +86,3 @@ off.
 - The server watches `compositor.json`, `keyboard.conf` and `power.conf` (its README, *Live settings*), the dock `dock.conf`
   and the menu bar `menubar.conf`; a few keys still apply at the next start only (listed in those READMEs).
 - `windowmanager.conf`, `screenshot.conf` and `shortcuts.conf` are still parsed by their processes.
-
-## Tests
-
-`cargo test -p cupertino-defaults`: the atomic write (a process killed between write and rename leaves the old file), the
-line format, each file's keys and round trip, and the watcher (one report per change, none for unchanged contents).

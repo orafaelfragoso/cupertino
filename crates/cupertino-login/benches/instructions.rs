@@ -2,7 +2,7 @@
 //! made for the bench: the first frame, which makes the screen's picture once, and the frame of one typed character,
 //! which lays only the squares of the kept picture under the field again.
 //!
-//! `scripts/dev/microbench cupertino-login`.
+//! `cargo bench -p cupertino-login --bench instructions`.
 
 mod scene;
 

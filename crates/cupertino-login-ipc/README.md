@@ -1,7 +1,7 @@
 # cupertino-login-ipc
 
 The protocol between the login screen (`cupertino-login --greeter`, unprivileged) and the session manager (`cupertino-sessiond`,
-root) over `/run/cupertino-login/greeter.sock`. Pure: bytes in, bytes out, no I/O, so both sides and their tests share one
+root) over `/run/cupertino-login/greeter.sock`. Pure: bytes in, bytes out, no I/O, so both sides share one
 definition. Layer: `models`. The design is, section 2.4. Passwords travel on this socket
 only, never on D-Bus.
 
@@ -38,11 +38,3 @@ only, never on D-Bus.
   buffer, which is not zeroed. `Secret` is zeroed on drop; the decoder's body buffers and `encode`'s output are `Zeroizing`.
 - **Version:** `VERSION` is 5 (2 added `Power` and `PowerRefused`, 3 `UserRow::logged_in`, 4 `AuthenticatePower` and `will_prompt`, 5 the `conversation` of `Prompt` and `Answer`), the first message each way carries it. A change that adds or removes a message increments it; an optional field that is left out of the message when it is empty and read as empty when it is missing (`UserRow::wallpaper`) does not; the
   screen and the manager ship in one package, so there is no negotiation.
-
-## Tests
-
-`cargo test -p cupertino-login-ipc`: `ZeroOnFree` hands the allocator below it a zeroed block, also the one a block grew out of; a secret round-trips, is hex on the wire, never shows in `Debug` and a malformed one is a decode
-error that does not echo it; the state machine follows an attempt and refuses every pair it must; typed account names; a frame survives every chunking; a length over the cap is refused before its body is read,
-a zero length and an overrun are refused; a message over the cap is not encoded; unknown types, unknown fields and wrong field
-types are errors; a decode error names its class and never the value; the first message must be `Hello` with this version; a power request has one wire form and no other action decodes; a row without a wallpaper has no `wallpaper` field and one without the field reads as having none, one with a wallpaper carries its path; the
-hex codec round-trips and refuses malformed text.

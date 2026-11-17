@@ -68,8 +68,7 @@ when empty. `status` is `skip`, `ok`, `warn` or `fail`; `area` is `gpu`, `sessio
 
 `run(&Sources, &[Area]) -> Report`. `Sources` holds the sysfs root, the file system root, the environment, a function
 that names a unit's state, a function that reads the system journal (`journal`) and one that makes the command following
-it (`journal_follow`), so `tests/diagnose.rs` and `tests/events.rs` run every area against a fixture tree and a fake
-journal. `Sources::system()` is this machine: `systemctl`, `events::journalctl` and `events::journalctl_follow`.
+it (`journal_follow`), so every area can run against another tree and another journal. `Sources::system()` is this machine: `systemctl`, `events::journalctl` and `events::journalctl_follow`.
 
 ### Diagnostic events (`events`)
 
@@ -121,12 +120,3 @@ when it changed them. This crate records no events of its own.
 - `crash.last` reads the logs of the user running it; another user's sessions are not seen.
 - No GPU check of the second GPU of a hybrid machine, only the primary one.
 - The journal is read whole for the filter's time span; `journalctl` is not asked to filter by component, id or severity.
-
-## Tests
-
-```
-cargo test -p cupertino-diagnostics
-```
-
-`tests/exit-codes.rs` runs the program: its exit codes, the notice on stderr in the text form, and a `--json` stdout
-that is the report alone with nothing on stderr.

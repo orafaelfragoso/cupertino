@@ -1,0 +1,10 @@
+[package]
+name = "cupertino-session-tests"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Program tests of the Cupertino desktop that start programs from more than one crate"
+publish = false
+
+[package.metadata.cupertino]
+layer = "testing"

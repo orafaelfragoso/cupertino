@@ -89,7 +89,3 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 version = "0.7"
 default-features = false
 features = ["desktop", "wayland_frontend", "backend_egl", "backend_drm", "backend_gbm", "renderer_gl"]
-
-[dev-dependencies]
-# the greeter test's stand-in session manager speaks the login screen's protocol
-# the asset icons the switcher test compares the dock process's panel with

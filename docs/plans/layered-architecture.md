@@ -15,8 +15,8 @@ Updated by the lead at every merge.
 
 | | |
 |---|---|
-| Current wave | 2 (not started) |
-| Running tasks | none |
+| Current wave | 2 |
+| Running tasks | W2.1, W2.2, W2.3 |
 | Enforced layers | foundation, testing; system after W4.5 (141 remaining-work lines) |
 | Waiting on the owner | nothing |
 | Last closed wave | 1 |

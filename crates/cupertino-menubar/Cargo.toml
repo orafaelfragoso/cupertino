@@ -9,7 +9,7 @@ layer = "shell"
 
 [features]
 default = ["dbus"]
-dbus = ["dep:cupertino-peer", "dep:zbus", "dep:futures-util"]
+dbus = ["dep:zbus", "dep:futures-util"]
 # the `cupertino-menubar` process: one bar per output as a client of the server
 app = [
     "dbus",
@@ -27,10 +27,12 @@ app = [
     "dep:libc",
     "dep:tiny-skia",
     "dep:x11rb",
+    "dep:cupertino-diagnostic-events",
+    "dep:cupertino-peer",
 ]
 
 [dependencies]
-cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events" }
+cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events", optional = true }
 cupertino-apps = { path = "../cupertino-apps" }
 cupertino-assets = { path = "../cupertino-assets", optional = true }
 cupertino-defaults = { path = "../cupertino-defaults" }

@@ -20,14 +20,16 @@ app = [
     "dep:cupertino-shell-client",
     "dep:cupertino-ui-wayland",
     "dep:cupertino-wayland-client",
+    "dep:cupertino-diagnostic-events",
+    "dep:cupertino-peer",
 ]
 
 [dependencies]
-cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events" }
+cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events", optional = true }
 async-channel = { version = "2", optional = true }
 async-io = { version = "2", optional = true }
 cupertino-alsa = { path = "../cupertino-alsa" }
-cupertino-peer = { path = "../cupertino-peer" }
+cupertino-peer = { path = "../cupertino-peer", optional = true }
 cupertino-pipewire = { path = "../cupertino-pipewire" }
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-kit = { path = "../cupertino-kit", optional = true }

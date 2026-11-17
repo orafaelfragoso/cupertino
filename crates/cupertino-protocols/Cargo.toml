@@ -9,13 +9,13 @@ description = "Private Wayland protocols between the Cupertino server and its sh
 layer = "protocol"
 
 [features]
-client = ["dep:wayland-client", "cupertino-app-protocols/client"]
-server = ["dep:wayland-server", "cupertino-app-protocols/server"]
+client = ["dep:wayland-client", "dep:wayland-backend", "dep:wayland-scanner", "dep:bitflags", "cupertino-app-protocols/client"]
+server = ["dep:wayland-server", "dep:wayland-backend", "dep:wayland-scanner", "dep:bitflags", "cupertino-app-protocols/server"]
 
 [dependencies]
-cupertino-app-protocols = { path = "../cupertino-app-protocols" }
-bitflags = "2"
-wayland-backend = "0.3"
-wayland-scanner = "0.31"
+cupertino-app-protocols = { path = "../cupertino-app-protocols", optional = true }
+bitflags = { version = "2", optional = true }
+wayland-backend = { version = "0.3", optional = true }
+wayland-scanner = { version = "0.31", optional = true }
 wayland-client = { version = "0.31", optional = true }
 wayland-server = { version = "0.31", optional = true }

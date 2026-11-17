@@ -10,10 +10,10 @@ layer = "shell"
 
 [features]
 # the `cupertino-windowmanager` process: a client of the server's `cupertino_window_manager_v1`, no surface of its own
-app = ["dep:cupertino-defaults", "dep:cupertino-protocols", "dep:wayland-client"]
+app = ["dep:cupertino-defaults", "dep:cupertino-protocols", "dep:wayland-client", "dep:cupertino-diagnostic-events"]
 
 [dependencies]
-cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events" }
+cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events", optional = true }
 cupertino-stage = { path = "../cupertino-stage" }
 cupertino-wm = { path = "../cupertino-wm" }
 cupertino-defaults = { path = "../cupertino-defaults", optional = true }

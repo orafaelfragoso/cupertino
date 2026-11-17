@@ -20,10 +20,14 @@ app = [
     "dep:async-channel",
     "dep:wayland-client",
     "dep:wayland-protocols-wlr",
+    "dep:cupertino-diagnostic-events",
+    "dep:cupertino-thumbnails",
+    "dep:cupertino-icons",
+    "dep:cupertino-theme",
 ]
 
 [dependencies]
-cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events" }
+cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events", optional = true }
 cupertino-menu-model = { path = "../cupertino-menu-model" }
 cupertino-kit = { path = "../cupertino-kit", optional = true }
 cupertino-assets = { path = "../cupertino-assets" }
@@ -33,10 +37,10 @@ cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-radios = { path = "../cupertino-radios" }
 cupertino-displays = { path = "../cupertino-displays" }
 cupertino-filepicker = { path = "../cupertino-filepicker" }
-cupertino-thumbnails = { path = "../cupertino-thumbnails" }
+cupertino-thumbnails = { path = "../cupertino-thumbnails", optional = true }
 cupertino-typeahead = { path = "../cupertino-typeahead" }
-cupertino-icons = { path = "../cupertino-icons" }
-cupertino-theme = { path = "../cupertino-theme" }
+cupertino-icons = { path = "../cupertino-icons", optional = true }
+cupertino-theme = { path = "../cupertino-theme", optional = true }
 cupertino-modifiers = { path = "../cupertino-modifiers" }
 cupertino-wayland-client = { path = "../cupertino-wayland-client", optional = true }
 cupertino-alsa = { path = "../cupertino-alsa", optional = true }

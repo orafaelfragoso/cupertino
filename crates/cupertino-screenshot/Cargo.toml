@@ -24,12 +24,14 @@ app = [
     "dep:memmap2",
     "dep:wayland-client",
     "dep:wayland-protocols",
+    "dep:cupertino-diagnostic-events",
+    "dep:cupertino-defaults",
 ]
 
 [dependencies]
-cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events" }
+cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events", optional = true }
 cupertino-animation = { path = "../cupertino-animation" }
-cupertino-defaults = { path = "../cupertino-defaults" }
+cupertino-defaults = { path = "../cupertino-defaults", optional = true }
 cupertino-geometry = { path = "../cupertino-geometry" }
 tiny-skia = "0.12"
 rustix = { version = "1", features = ["event", "fs"] }

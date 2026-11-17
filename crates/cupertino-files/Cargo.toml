@@ -21,10 +21,11 @@ app = [
     "dep:wayland-protocols-wlr",
     "dep:zbus",
     "dep:zeroize",
+    "dep:cupertino-diagnostic-events",
 ]
 
 [dependencies]
-cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events" }
+cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events", optional = true }
 cupertino-menu-model = { path = "../cupertino-menu-model" }
 cupertino-modifiers = { path = "../cupertino-modifiers" }
 cupertino-apps = { path = "../cupertino-apps" }

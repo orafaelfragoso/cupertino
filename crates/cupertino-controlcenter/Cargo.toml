@@ -22,11 +22,12 @@ app = [
     "dep:cupertino-theme",
     "dep:cupertino-ui-wayland",
     "dep:cupertino-wayland-client",
+    "dep:cupertino-diagnostic-events",
 ]
 
 [dependencies]
 cupertino-animation = { path = "../cupertino-animation" }
-cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events" }
+cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events", optional = true }
 async-channel = { version = "2", optional = true }
 async-io = { version = "2", optional = true }
 cupertino-alsa = { path = "../cupertino-alsa" }

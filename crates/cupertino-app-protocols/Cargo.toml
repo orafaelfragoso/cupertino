@@ -9,12 +9,12 @@ description = "Public Wayland protocols of the Cupertino server that any client 
 layer = "protocol"
 
 [features]
-client = ["dep:wayland-client"]
-server = ["dep:wayland-server"]
+client = ["dep:wayland-client", "dep:wayland-backend", "dep:wayland-scanner", "dep:bitflags"]
+server = ["dep:wayland-server", "dep:wayland-backend", "dep:wayland-scanner", "dep:bitflags"]
 
 [dependencies]
-bitflags = "2"
-wayland-backend = "0.3"
-wayland-scanner = "0.31"
+bitflags = { version = "2", optional = true }
+wayland-backend = { version = "0.3", optional = true }
+wayland-scanner = { version = "0.31", optional = true }
 wayland-client = { version = "0.31", optional = true }
 wayland-server = { version = "0.31", optional = true }

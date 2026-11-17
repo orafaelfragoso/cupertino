@@ -10,10 +10,10 @@ layer = "services"
 [features]
 default = []
 # the `cupertino-sessiond` process: the manager and its worker
-app = ["dep:pam-client2", "dep:zbus", "dep:cupertino-seat", "dep:cupertino-peer"]
+app = ["dep:pam-client2", "dep:zbus", "dep:cupertino-seat", "dep:cupertino-peer", "dep:cupertino-diagnostic-events"]
 
 [dependencies]
-cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events" }
+cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events", optional = true }
 cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-login-ipc = { path = "../cupertino-login-ipc" }
 cupertino-peer = { path = "../cupertino-peer", optional = true }

@@ -13,8 +13,8 @@ use cupertino_protocols::server::control::cupertino_control_session_v1::{
     KeyState, Phase, Refusal, Request,
 };
 use cupertino_shell_client::{
-    Anchor, ConsentAnswer, ConsentApp, ControlAuthority, ControlEvent, DesktopControl, Error,
-    KeyboardInteractivity, Layer, LayerShell, LayerSurfaceConfig, Margin,
+    Anchor, ConsentAnswer, ConsentApp, ControlAuthority, ControlEvent, ControlSession,
+    DesktopControl, Error, KeyboardInteractivity, Layer, LayerShell, LayerSurfaceConfig, Margin,
 };
 use cupertino_wayland_client::OutputId;
 use std::os::fd::AsFd;
@@ -45,11 +45,7 @@ fn control_events(wire: &mut Wire) -> Vec<ControlEvent> {
 }
 
 /// A bound control with a session whose run the server created as epoch `(hi, lo)`.
-fn run(
-    offer: Offer,
-    hi: u32,
-    lo: u32,
-) -> (Wire, DesktopControl, cupertino_shell_client::ControlSession) {
+fn run(offer: Offer, hi: u32, lo: u32) -> (Wire, DesktopControl, ControlSession) {
     let mut wire = Wire::new(offer);
     let control = DesktopControl::bind(&mut wire.conn).expect("control");
     let session = control.session(&wire.conn);
@@ -60,79 +56,99 @@ fn run(
     (wire, control, session)
 }
 
+fn observation() -> Observation {
+    Observation {
+        geometry: OutputGeometry {
+            revision: 3,
+            name: "DP-1".into(),
+            x: 0.0,
+            y: 0.0,
+            width: 1920.0,
+            height: 1080.0,
+            scale: 1.0,
+            transform: "normal".into(),
+        },
+        epoch: 5,
+        revision: 9,
+        geometry_revision: 3,
+        windows: vec![],
+    }
+}
+
+fn set_value(text: String) -> Invocation {
+    Invocation {
+        window: 3,
+        revision: 9,
+        node: 12,
+        action: Action::SetValue,
+        data: Some(Data::Text(text)),
+    }
+}
+
 #[test]
-fn the_control_binds_at_versions_three_to_five() {
-    for (offered, bound) in [(2, None), (3, Some(3)), (4, Some(4)), (5, Some(5))] {
+fn the_control_and_the_authority_bind_only_at_the_versions_they_speak() {
+    for (offered, bound) in [
+        (None, None),
+        (Some(2), None),
+        (Some(3), Some(3)),
+        (Some(4), Some(4)),
+        (Some(5), Some(5)),
+    ] {
         let mut wire = Wire::new(Offer {
-            control: Some(offered),
+            control: offered,
             ..Offer::all()
         });
         assert_eq!(
             DesktopControl::bind(&mut wire.conn).map(|c| c.version()),
             bound,
-            "{offered}"
+            "control offered at {offered:?}"
         );
     }
-    let mut wire = Wire::new(Offer {
-        control: None,
-        ..Offer::all()
-    });
-    assert!(DesktopControl::bind(&mut wire.conn).is_none());
-}
-
-#[test]
-fn the_authority_binds_at_versions_one_and_two_only_when_offered() {
-    for offered in [1, 2] {
+    for (offered, binds) in [(None, false), (Some(1), true), (Some(2), true)] {
         let mut wire = Wire::new(Offer {
-            authority: Some(offered),
+            authority: offered,
             ..Offer::all()
         });
-        assert!(ControlAuthority::bind(&mut wire.conn).is_some());
+        assert_eq!(
+            ControlAuthority::bind(&mut wire.conn).is_some(),
+            binds,
+            "authority offered at {offered:?}"
+        );
     }
-    let mut wire = Wire::new(Offer {
-        authority: None,
-        ..Offer::all()
-    });
-    assert!(ControlAuthority::bind(&mut wire.conn).is_none());
 }
 
 #[test]
-fn a_session_has_no_epoch_until_the_server_creates_the_run() {
-    let mut wire = Wire::all();
-    let control = DesktopControl::bind(&mut wire.conn).expect("control");
-    let session = control.session(&wire.conn);
-    wire.events();
-    assert_eq!(session.epoch(), 0);
-
-    wire.server(|s| s.control_sessions[0].created(0x1, 0x2, 0b10011));
-    assert_eq!(
-        control_events(&mut wire),
-        [ControlEvent::Created {
-            epoch: 0x1_0000_0002,
-            available: 0b10011
-        }]
-    );
-    assert_eq!(session.epoch(), 0x1_0000_0002);
-}
-
-#[test]
-fn two_sessions_have_their_own_epochs() {
+fn each_session_has_no_epoch_until_the_server_creates_its_run() {
     let mut wire = Wire::all();
     let control = DesktopControl::bind(&mut wire.conn).expect("control");
     let first = control.session(&wire.conn);
     let second = control.session(&wire.conn);
     wire.events();
+    assert_eq!((first.epoch(), second.epoch()), (0, 0));
+
     wire.server(|s| {
         s.control_sessions[1].created(0, 8, 1);
-        s.control_sessions[0].created(0, 7, 1);
+        s.control_sessions[0].created(0x1, 0x2, 0b10011);
     });
-    wire.events();
-    assert_eq!(first.epoch(), 7);
+    assert_eq!(
+        control_events(&mut wire),
+        [
+            ControlEvent::Created {
+                epoch: 8,
+                available: 1
+            },
+            ControlEvent::Created {
+                epoch: 0x1_0000_0002,
+                available: 0b10011
+            }
+        ]
+    );
+    assert_eq!(first.epoch(), 0x1_0000_0002);
     assert_eq!(second.epoch(), 8);
 }
 
 #[test]
-fn the_events_of_a_run_carry_its_epoch() {
+fn the_events_of_a_run_carry_its_epoch_and_their_wire_numbers() {
     let (mut wire, _control, _session) = run(Offer::all(), 2, 9);
     let epoch = (2u64 << 32) | 9;
     wire.server(|s| {
@@ -173,11 +189,7 @@ fn the_events_of_a_run_carry_its_epoch() {
             },
         ]
     );
-}
 
-#[test]
-fn every_phase_and_refusal_arrives_as_its_number() {
-    let (mut wire, _control, _session) = run(Offer::all(), 0, 1);
     wire.server(|s| {
         let session = &s.control_sessions[0];
         for phase in [
@@ -225,27 +237,8 @@ fn every_phase_and_refusal_arrives_as_its_number() {
     assert_eq!(reasons, (0..=11).collect::<Vec<u32>>());
 }
 
-fn observation() -> Observation {
-    Observation {
-        geometry: OutputGeometry {
-            revision: 3,
-            name: "DP-1".into(),
-            x: 0.0,
-            y: 0.0,
-            width: 1920.0,
-            height: 1080.0,
-            scale: 1.0,
-            transform: "normal".into(),
-        },
-        epoch: 5,
-        revision: 9,
-        geometry_revision: 3,
-        windows: vec![],
-    }
-}
-
 #[test]
-fn an_observation_and_an_action_reply_are_read_from_their_sealed_files() {
+fn a_payload_is_read_only_from_a_sealed_file_of_its_length() {
     let (mut wire, _control, _session) = run(Offer::all(), 0, 5);
     let reply = ActionReply {
         id: 2,
@@ -255,10 +248,23 @@ fn an_observation_and_an_action_reply_are_read_from_their_sealed_files() {
     };
     let sent = reply.clone();
     wire.server(move |s| {
+        let session = &s.control_sessions[0];
         let (file, len) = semantics::seal(&observation(), semantics::MAX_OBSERVATION).unwrap();
-        s.control_sessions[0].observation(11, file.as_fd(), len);
+        session.observation(11, file.as_fd(), len);
         let (file, len) = semantics::seal(&sent, semantics::MAX_FRAME).unwrap();
-        s.control_sessions[0].action_finished(12, file.as_fd(), len);
+        session.action_finished(12, file.as_fd(), len);
+
+        // a plain file is not sealed, so it is refused whatever it holds
+        let json = br#"{"id":1,"epoch":5,"revision":9,"outcome":"applied"}"#;
+        let file = pixel_file(json);
+        session.observation(1, file.as_fd(), json.len() as u32);
+        // a sealed file whose length differs from the one sent
+        let (file, len) = semantics::seal(&observation(), semantics::MAX_OBSERVATION).unwrap();
+        session.observation(2, file.as_fd(), len + 1);
+        // an action reply announced longer than a frame
+        let (file, len) = semantics::seal(&observation(), semantics::MAX_OBSERVATION).unwrap();
+        session.action_finished(3, file.as_fd(), len.max(semantics::MAX_FRAME as u32 + 1));
+        session.completed(4);
     });
     assert_eq!(
         control_events(&mut wire),
@@ -273,42 +279,12 @@ fn an_observation_and_an_action_reply_are_read_from_their_sealed_files() {
                 serial: 12,
                 reply
             },
+            ControlEvent::Completed {
+                epoch: 5,
+                serial: 4
+            },
         ]
     );
-}
-
-#[test]
-fn a_payload_that_is_not_a_sealed_file_of_its_length_is_dropped() {
-    let (mut wire, _control, _session) = run(Offer::all(), 0, 5);
-    wire.server(|s| {
-        let json = serde_json_bytes();
-        // a plain file is not sealed, so it is refused whatever it holds
-        let file = pixel_file(&json);
-        s.control_sessions[0].observation(1, file.as_fd(), json.len() as u32);
-        // a sealed file whose length differs from the one sent
-        let (file, len) = semantics::seal(&observation(), semantics::MAX_OBSERVATION).unwrap();
-        s.control_sessions[0].observation(2, file.as_fd(), len + 1);
-        // and an action reply announced longer than a frame
-        let (file, len) = semantics::seal(&observation(), semantics::MAX_OBSERVATION).unwrap();
-        s.control_sessions[0].action_finished(
-            3,
-            file.as_fd(),
-            len.max(semantics::MAX_FRAME as u32 + 1),
-        );
-        s.control_sessions[0].completed(4);
-    });
-    // only what came after the refused payloads arrives
-    assert_eq!(
-        control_events(&mut wire),
-        [ControlEvent::Completed {
-            epoch: 5,
-            serial: 4
-        }]
-    );
-}
-
-fn serde_json_bytes() -> Vec<u8> {
-    br#"{"id":1,"epoch":5,"revision":9,"outcome":"applied"}"#.to_vec()
 }
 
 #[test]
@@ -376,24 +352,9 @@ fn requests_name_the_run_in_every_message() {
 }
 
 #[test]
-fn starting_a_run_on_an_unplugged_output_is_refused_and_sends_nothing() {
-    let (mut wire, _control, session) = run(Offer::all(), 0, 1);
-    let result = session.start(&wire.conn, 1, OutputId::from_registry_name(9999), 1);
-    assert!(matches!(result, Err(Error::UnknownOutput)));
-    wire.events();
-    assert!(control_requests(&wire).is_empty());
-}
-
-#[test]
 fn an_action_is_sent_as_a_sealed_file_holding_the_call() {
     let (mut wire, _control, session) = run(Offer::all(), 0, 4);
-    let call = Invocation {
-        window: 3,
-        revision: 9,
-        node: 12,
-        action: Action::SetValue,
-        data: Some(Data::Text("hello".into())),
-    };
+    let call = set_value("hello".into());
     session.perform(77, &call).expect("perform");
     wire.events();
 
@@ -414,23 +375,25 @@ fn an_action_is_sent_as_a_sealed_file_holding_the_call() {
 }
 
 #[test]
-fn an_action_over_the_frame_limit_is_refused_and_nothing_is_sent() {
-    let (mut wire, _control, session) = run(Offer::all(), 0, 4);
-    let call = Invocation {
-        window: 3,
-        revision: 9,
-        node: 12,
-        action: Action::SetValue,
-        data: Some(Data::Text("x".repeat(semantics::MAX_FRAME + 1))),
-    };
-    assert!(session.perform(1, &call).is_err());
+fn a_request_the_server_would_refuse_is_refused_here_and_sends_nothing() {
+    let (mut wire, _control, session) = run(Offer::all(), 0, 1);
+    let unplugged = session.start(&wire.conn, 1, OutputId::from_registry_name(9999), 1);
+    assert!(
+        matches!(unplugged, Err(Error::UnknownOutput)),
+        "a run on an unplugged output"
+    );
+    let too_long = set_value("x".repeat(semantics::MAX_FRAME + 1));
+    assert!(
+        session.perform(1, &too_long).is_err(),
+        "an action over the frame limit"
+    );
     wire.events();
     assert!(control_requests(&wire).is_empty());
 }
 
 #[test]
-fn naming_the_app_needs_version_four() {
-    for (version, names) in [(3, false), (4, true), (5, true)] {
+fn naming_the_app_needs_version_four_and_selecting_the_capture_version_five() {
+    for (version, names, selects) in [(3, false, false), (4, true, false), (5, true, true)] {
         let (mut wire, _control, session) = run(
             Offer {
                 control: Some(version),
@@ -442,56 +405,45 @@ fn naming_the_app_needs_version_four() {
         assert_eq!(session.names_apps(), names, "version {version}");
         if names {
             session.identify(4242, (7u64 << 32) | 9);
-            wire.events();
-            assert!(matches!(
-                control_requests(&wire)[..],
-                [Request::Identify {
+        }
+        session.select_capture();
+        wire.events();
+        let requests = control_requests(&wire);
+        let identified = requests.iter().any(|r| {
+            matches!(
+                r,
+                Request::Identify {
                     pid: 4242,
                     start_hi: 7,
                     start_lo: 9
-                }]
-            ));
-        }
+                }
+            )
+        });
+        let selected = requests.iter().any(|r| matches!(r, Request::SelectCapture));
+        assert_eq!(identified, names, "version {version}: identify");
+        assert_eq!(selected, selects, "version {version}: select capture");
     }
 }
 
 #[test]
-fn selecting_the_capture_needs_version_five() {
-    let (mut wire, _control, session) = run(
-        Offer {
-            control: Some(4),
-            ..Offer::all()
-        },
-        1,
-        2,
-    );
-    session.select_capture();
-    wire.events();
-    assert!(control_requests(&wire).is_empty());
-
-    let (mut wire, _control, session) = run(Offer::all(), 1, 2);
-    session.select_capture();
-    wire.events();
-    assert!(matches!(
-        control_requests(&wire)[..],
-        [Request::SelectCapture]
-    ));
-}
-
-#[test]
-fn dropping_a_session_destroys_it() {
-    let (mut wire, _control, session) = run(Offer::all(), 1, 2);
+fn dropping_a_session_the_control_or_the_authority_destroys_it() {
+    let (mut wire, control, session) = run(Offer::all(), 1, 2);
     drop(session);
     wire.events();
     assert!(matches!(control_requests(&wire)[..], [Request::Destroy]));
-}
-
-#[test]
-fn dropping_the_control_destroys_it() {
-    let (mut wire, control, _session) = run(Offer::all(), 1, 2);
     drop(control);
     wire.events();
     assert!(wire.take().iter().any(|s| matches!(s, Seen::Control(_))));
+
+    let authority = ControlAuthority::bind(&mut wire.conn).expect("authority");
+    wire.events();
+    wire.take();
+    drop(authority);
+    wire.events();
+    assert!(matches!(
+        authority_requests(&wire)[..],
+        [AuthorityRequest::Destroy]
+    ));
 }
 
 #[test]
@@ -623,19 +575,5 @@ fn the_consent_panel_is_attached_by_its_surface() {
     assert!(matches!(
         authority_requests(&wire)[..],
         [AuthorityRequest::SetSurface { .. }]
-    ));
-}
-
-#[test]
-fn dropping_the_authority_destroys_it() {
-    let mut wire = Wire::all();
-    let authority = ControlAuthority::bind(&mut wire.conn).expect("authority");
-    wire.events();
-    wire.take();
-    drop(authority);
-    wire.events();
-    assert!(matches!(
-        authority_requests(&wire)[..],
-        [AuthorityRequest::Destroy]
     ));
 }

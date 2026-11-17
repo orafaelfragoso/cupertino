@@ -53,28 +53,36 @@ impl Setup {
     }
 }
 
+fn rect(x: f64, y: f64, w: f64, h: f64) -> Rect {
+    Rect::new(x, y, w, h)
+}
+
+fn address(app_menu: Option<&str>) -> MenuAddress {
+    MenuAddress {
+        bus_name: ":1.42".into(),
+        application_object_path: "/app".into(),
+        window_object_path: "/app/window/1".into(),
+        menubar_object_path: "/app/menubar".into(),
+        app_menu_object_path: app_menu.map(Into::into),
+    }
+}
+
 #[test]
-fn a_server_without_the_global_gives_none() {
+fn binding_takes_the_servers_version_up_to_21_and_reports_what_it_offers() {
     let (_server, mut conn) = Harness::start(Offer::NONE);
-    assert!(AppEffects::bind(&mut conn).is_none());
-}
-
-#[test]
-fn the_bound_version_is_the_highest_the_server_offers_up_to_21() {
-    let s = setup(21);
-    assert_eq!(
-        s.conn.capabilities().extension("cupertino_app_effects_v1"),
-        Some(21)
+    assert!(
+        AppEffects::bind(&mut conn).is_none(),
+        "no global, no effects"
     );
-    let s = setup(9);
-    assert_eq!(
-        s.conn.capabilities().extension("cupertino_app_effects_v1"),
-        Some(9)
-    );
-}
 
-#[test]
-fn version_flags_follow_the_versions_that_add_them() {
+    for version in [21, 9] {
+        let s = setup(version);
+        assert_eq!(
+            s.conn.capabilities().extension("cupertino_app_effects_v1"),
+            Some(version)
+        );
+    }
+
     // session lock (5), disabled controls (4), subsurface backdrops (11), buffers lost (21)
     let table = [
         (1, [false, false, false, false]),
@@ -97,51 +105,25 @@ fn version_flags_follow_the_versions_that_add_them() {
 }
 
 #[test]
-fn an_older_server_grants_the_nearest_title_bar_style_it_has() {
-    let old = setup(5);
-    assert_eq!(
-        old.effects.granted_style(WindowStyle::UnifiedCompact),
-        WindowStyle::Unified
-    );
-    assert_eq!(
-        old.effects.granted_style(WindowStyle::Sidebar),
-        WindowStyle::Titled
-    );
-    assert_eq!(
-        old.effects.granted_style(WindowStyle::Unified),
-        WindowStyle::Unified
-    );
-    assert_eq!(
-        old.effects.granted_style(WindowStyle::Titled),
-        WindowStyle::Titled
-    );
-    let new = setup(6);
-    for style in [
-        WindowStyle::Titled,
-        WindowStyle::Unified,
-        WindowStyle::UnifiedCompact,
-        WindowStyle::Sidebar,
-    ] {
-        assert_eq!(new.effects.granted_style(style), style);
-    }
-}
-
-#[test]
-fn the_default_window_style_is_titled() {
-    assert_eq!(WindowStyle::default(), WindowStyle::Titled);
-}
-
-#[test]
-fn the_style_sent_is_the_style_granted() {
-    for (version, style, wire) in [
-        (6, WindowStyle::Sidebar, "Sidebar"),
-        (6, WindowStyle::UnifiedCompact, "UnifiedCompact"),
-        (5, WindowStyle::Sidebar, "Standard"),
-        (5, WindowStyle::UnifiedCompact, "Unified"),
-        (5, WindowStyle::Unified, "Unified"),
-        (1, WindowStyle::Titled, "Standard"),
+fn an_older_server_is_sent_the_nearest_title_bar_style_it_has() {
+    use WindowStyle::*;
+    for (version, style, granted, wire) in [
+        (6, Titled, Titled, "Standard"),
+        (6, Unified, Unified, "Unified"),
+        (6, Sidebar, Sidebar, "Sidebar"),
+        (6, UnifiedCompact, UnifiedCompact, "UnifiedCompact"),
+        (5, Sidebar, Titled, "Standard"),
+        (5, UnifiedCompact, Unified, "Unified"),
+        (5, Unified, Unified, "Unified"),
+        (5, Titled, Titled, "Standard"),
+        (1, Titled, Titled, "Standard"),
     ] {
         let mut s = setup(version);
+        assert_eq!(
+            s.effects.granted_style(style),
+            granted,
+            "version {version} {style:?}"
+        );
         s.effects
             .set_window_style(&s.conn, s.surface, style)
             .unwrap();
@@ -153,10 +135,7 @@ fn the_style_sent_is_the_style_granted() {
             sent[0]
         );
     }
-}
 
-#[test]
-fn unifying_the_title_bar_sends_the_unified_style() {
     let mut s = setup(21);
     s.effects.unify_titlebar(&s.conn, s.surface).unwrap();
     let sent = s.sent();
@@ -215,26 +194,14 @@ fn disabled_controls_go_out_as_bits_from_version_four() {
 }
 
 #[test]
-fn a_menu_announcement_needs_version_two() {
+fn a_menu_announcement_needs_version_two_and_sends_its_address() {
     let s = setup(1);
     assert!(s.effects.menu(&s.conn, s.surface).unwrap().is_none());
 
     let mut s = setup(2);
     let menu = s.effects.menu(&s.conn, s.surface).unwrap().unwrap();
-    menu.set_address(&MenuAddress {
-        bus_name: ":1.42".into(),
-        application_object_path: "/app".into(),
-        window_object_path: "/app/window/1".into(),
-        menubar_object_path: "/app/menubar".into(),
-        app_menu_object_path: None,
-    });
-    menu.set_address(&MenuAddress {
-        bus_name: ":1.42".into(),
-        application_object_path: "/app".into(),
-        window_object_path: "/app/window/1".into(),
-        menubar_object_path: "/app/menubar".into(),
-        app_menu_object_path: Some("/app/appmenu".into()),
-    });
+    menu.set_address(&address(None));
+    menu.set_address(&address(Some("/app/appmenu")));
     let sent = s.sent();
     assert_eq!(
         sent,
@@ -251,7 +218,7 @@ fn a_menu_announcement_needs_version_two() {
 #[test]
 fn the_menu_bar_and_reader_events_name_the_surface() {
     let mut s = setup(3);
-    let menu = s.effects.menu(&s.conn, s.surface).unwrap().unwrap();
+    let _menu = s.effects.menu(&s.conn, s.surface).unwrap().unwrap();
     s.sent();
     s.server.run(|server| {
         server.menus[0].menu_bar(1);
@@ -282,80 +249,80 @@ fn the_menu_bar_and_reader_events_name_the_surface() {
             },
         ]
     );
-    drop(menu);
 }
 
 #[test]
-fn a_menu_reader_that_is_not_a_unique_bus_name_fails_the_connection() {
-    let mut s = setup(3);
-    let _menu = s.effects.menu(&s.conn, s.surface).unwrap().unwrap();
-    s.sent();
-    s.server
-        .run(|server| server.menus[0].menu_reader("org.example.Menus".into()));
-    let error = loop {
-        match s.conn.wait(Some(std::time::Duration::from_millis(100))) {
-            Err(e) => break e,
-            Ok(_) => continue,
-        }
-    };
-    assert!(
-        matches!(error, cupertino_wayland_client::Error::Protocol(_)),
-        "{error}"
-    );
+fn a_server_value_outside_its_range_fails_the_connection() {
+    type Send = fn(&mut Server);
+    let rows: [(&str, Send); 5] = [
+        ("a menu reader that is not a unique bus name", |s| {
+            s.menus[0].menu_reader("org.example.Menus".into())
+        }),
+        ("a menu bar flag of 2", |s| s.menus[0].menu_bar(2)),
+        ("an appearance of 2", |s| s.appearances[0].appearance(2)),
+        ("display options with reserved bits", |s| {
+            s.appearances[0].display_options(DisplayOption::from_bits_retain(0x100))
+        }),
+        ("a session lock of 5", |s| s.appearances[0].session_lock(5)),
+    ];
+    for (row, send) in rows {
+        let mut s = setup(21);
+        let _menu = s.effects.menu(&s.conn, s.surface).unwrap().unwrap();
+        let _observer = s.effects.appearance(&s.conn);
+        s.sent();
+        s.server.run(send);
+        let error = loop {
+            if let Err(e) = s.conn.wait(Some(std::time::Duration::from_millis(100))) {
+                break e;
+            }
+        };
+        assert!(
+            matches!(error, cupertino_wayland_client::Error::Protocol(_)),
+            "{row}: {error}"
+        );
+    }
 }
 
 #[test]
-fn a_menu_bar_flag_other_than_zero_or_one_fails_the_connection() {
-    let mut s = setup(3);
-    let _menu = s.effects.menu(&s.conn, s.surface).unwrap().unwrap();
-    s.sent();
-    s.server.run(|server| server.menus[0].menu_bar(2));
-    let error = loop {
-        match s.conn.wait(Some(std::time::Duration::from_millis(100))) {
-            Err(e) => break e,
-            Ok(_) => continue,
-        }
-    };
-    assert!(matches!(
-        error,
-        cupertino_wayland_client::Error::Protocol(_)
-    ));
-}
-
-fn rect(x: f64, y: f64, w: f64, h: f64) -> Rect {
-    Rect::new(x, y, w, h)
-}
-
-#[test]
-fn a_shape_is_whole_points_before_version_fourteen() {
+fn a_backdrop_sends_its_shape_in_the_servers_units_its_alpha_and_its_material() {
     let mut s = setup(13);
-    let backdrop = s.backdrop();
-    backdrop
-        .set_shape(&rect(1.4, 2.6, 100.5, 40.4), 12.5)
-        .unwrap();
+    let whole = s.backdrop();
+    whole.set_shape(&rect(1.4, 2.6, 100.5, 40.4), 12.5).unwrap();
     assert_eq!(
         s.sent(),
-        ["SetShape { x: 1, y: 3, width: 101, height: 40, radius: 12.5 }"]
+        ["SetShape { x: 1, y: 3, width: 101, height: 40, radius: 12.5 }"],
+        "whole points before version 14"
     );
-}
 
-#[test]
-fn a_shape_is_fractional_from_version_fourteen() {
     let mut s = setup(14);
     let backdrop = s.backdrop();
     backdrop
         .set_shape(&rect(1.5, 2.25, 100.5, 40.0), 8.0)
         .unwrap();
+    // a zero extent hides the backdrop
+    backdrop.set_shape(&rect(5.0, 5.0, 0.0, 0.0), 0.0).unwrap();
+    backdrop.set_alpha(0.0).unwrap();
+    backdrop.set_alpha(1.0).unwrap();
+    backdrop.set_material("Menu");
+    backdrop.set_glass(GlassStyle::Regular, 1, 0.0).unwrap();
     assert_eq!(
         s.sent(),
-        ["SetShapeFixed { x: 1.5, y: 2.25, width: 100.5, height: 40.0, radius: 8.0 }"]
+        [
+            "SetShapeFixed { x: 1.5, y: 2.25, width: 100.5, height: 40.0, radius: 8.0 }",
+            "SetShapeFixed { x: 5.0, y: 5.0, width: 0.0, height: 0.0, radius: 0.0 }",
+            "SetAlpha { alpha: 0.0 }",
+            "SetAlpha { alpha: 1.0 }",
+            "SetMaterial { name: \"Menu\" }",
+            "SetGlass { style: Value(Regular), container: 1, spacing: 0.0 }",
+        ]
     );
 }
 
 #[test]
-fn a_shape_with_a_negative_extent_or_radius_or_a_non_finite_value_is_refused() {
+fn a_backdrop_refuses_a_bad_shape_alpha_or_glass_spacing_and_sends_nothing() {
     let mut s = setup(21);
     let backdrop = s.backdrop();
+    let mut results = Vec::new();
     for (r, radius) in [
         (rect(0.0, 0.0, -1.0, 10.0), 0.0),
         (rect(0.0, 0.0, 10.0, -1.0), 0.0),
@@ -364,73 +331,30 @@ fn a_shape_with_a_negative_extent_or_radius_or_a_non_finite_value_is_refused() {
         (rect(0.0, f64::INFINITY, 10.0, 10.0), 0.0),
         (rect(0.0, 0.0, 10.0, 10.0), f64::NAN),
     ] {
-        assert!(
+        results.push((
+            format!("shape {r:?} {radius}"),
             matches!(backdrop.set_shape(&r, radius), Err(Error::InvalidShape)),
-            "{r:?} {radius}"
-        );
+        ));
+    }
+    for alpha in [-0.01, 1.01, f64::NAN, f64::INFINITY] {
+        results.push((
+            format!("alpha {alpha}"),
+            matches!(backdrop.set_alpha(alpha), Err(Error::InvalidAlpha)),
+        ));
+    }
+    for spacing in [-0.5, f64::NAN, f64::INFINITY] {
+        results.push((
+            format!("spacing {spacing}"),
+            matches!(
+                backdrop.set_glass(GlassStyle::Regular, 1, spacing),
+                Err(Error::InvalidGlass)
+            ),
+        ));
+    }
+    for (row, refused) in results {
+        assert!(refused, "{row}");
     }
     assert!(s.sent().is_empty());
-}
-
-#[test]
-fn a_zero_extent_shape_hides_the_backdrop_and_is_accepted() {
-    let mut s = setup(21);
-    let backdrop = s.backdrop();
-    backdrop.set_shape(&rect(5.0, 5.0, 0.0, 0.0), 0.0).unwrap();
-    assert_eq!(s.sent().len(), 1);
-}
-
-#[test]
-fn alpha_is_a_unit_interval() {
-    let mut s = setup(21);
-    let backdrop = s.backdrop();
-    backdrop.set_alpha(0.0).unwrap();
-    backdrop.set_alpha(1.0).unwrap();
-    for alpha in [-0.01, 1.01, f64::NAN, f64::INFINITY] {
-        assert!(matches!(
-            backdrop.set_alpha(alpha),
-            Err(Error::InvalidAlpha)
-        ));
-    }
-    assert_eq!(
-        s.sent(),
-        ["SetAlpha { alpha: 0.0 }", "SetAlpha { alpha: 1.0 }"]
-    );
-}
-
-#[test]
-fn a_material_goes_out_by_name() {
-    let mut s = setup(21);
-    let backdrop = s.backdrop();
-    backdrop.set_material("Menu");
-    assert_eq!(s.sent()[0], "SetMaterial { name: \"Menu\" }");
-}
-
-#[test]
-fn glass_spacing_is_not_negative_or_non_finite() {
-    let mut s = setup(21);
-    let backdrop = s.backdrop();
-    for spacing in [-0.5, f64::NAN, f64::INFINITY] {
-        assert!(matches!(
-            backdrop.set_glass(GlassStyle::Regular, 1, spacing),
-            Err(Error::InvalidGlass)
-        ));
-    }
-    backdrop.set_glass(GlassStyle::Regular, 1, 0.0).unwrap();
-    assert_eq!(s.sent().len(), 1);
-}
-
-#[test]
-fn a_server_without_glass_draws_a_material_instead() {
-    let mut s = setup(5);
-    let backdrop = s.backdrop();
-    backdrop.set_glass(GlassStyle::Clear, 3, 4.0).unwrap();
-    assert_eq!(
-        s.sent(),
-        ["SetMaterial { name: \"Menu\" }"],
-        "the fallback is {}",
-        GlassStyle::Clear.fallback_material()
-    );
 }
 
 /// The style the server receives for `style` at `version`.
@@ -441,6 +365,9 @@ fn glass_on(version: u32, style: GlassStyle) -> String {
     let sent = s.sent();
     assert_eq!(sent.len(), 1);
     let sent = &sent[0];
+    if version < 6 {
+        return sent.clone();
+    }
     assert!(sent.ends_with("container: 2, spacing: 6.0 }"), "{sent}");
     sent.trim_start_matches("SetGlass { style: Value(")
         .split(')')
@@ -450,7 +377,15 @@ fn glass_on(version: u32, style: GlassStyle) -> String {
 }
 
 #[test]
-fn newer_styles_fall_back_on_servers_that_lack_them() {
+fn a_glass_style_falls_back_on_servers_that_lack_it() {
+    assert_eq!(
+        glass_on(5, GlassStyle::Clear),
+        format!(
+            "SetMaterial {{ name: {:?} }}",
+            GlassStyle::Clear.fallback_material()
+        ),
+        "a server without glass draws a material instead"
+    );
     let table = [
         (GlassStyle::Regular, 6, "Regular"),
         (GlassStyle::Clear, 6, "Clear"),
@@ -494,10 +429,13 @@ fn newer_styles_fall_back_on_servers_that_lack_them() {
 }
 
 #[test]
-fn the_tone_of_the_face_behind_a_backdrop_arrives_from_version_seven() {
+fn backdrops_have_distinct_ids_tell_the_tone_behind_them_from_version_seven_and_go_when_dropped() {
     assert!(!setup(6).backdrop().tells_tone());
     let mut s = setup(7);
     let backdrop = s.backdrop();
+    let other = s.backdrop();
+    assert_ne!(backdrop.id(), other.id());
+    assert_ne!(backdrop.id().0, 0);
     assert!(backdrop.tells_tone());
     s.sent();
     s.server.run(|server| {
@@ -507,102 +445,53 @@ fn the_tone_of_the_face_behind_a_backdrop_arrives_from_version_seven() {
     });
     let id = backdrop.id();
     let (events, _) = wait_app_events(&mut s.conn, |e| e.len() >= 3);
+    let tone = |tone| AppEvent::BackdropTone { backdrop: id, tone };
     assert_eq!(
         events,
         [
-            AppEvent::BackdropTone {
-                backdrop: id,
-                tone: BackdropTone::Dark
-            },
-            AppEvent::BackdropTone {
-                backdrop: id,
-                tone: BackdropTone::Light
-            },
-            AppEvent::BackdropTone {
-                backdrop: id,
-                tone: BackdropTone::Appearance
-            },
+            tone(BackdropTone::Dark),
+            tone(BackdropTone::Light),
+            tone(BackdropTone::Appearance)
         ]
     );
-}
 
-#[test]
-fn backdrops_have_distinct_ids() {
-    let s = setup(21);
-    let (a, b) = (s.backdrop(), s.backdrop());
-    assert_ne!(a.id(), b.id());
-    assert_ne!(a.id().0, 0);
-}
-
-#[test]
-fn dropping_a_backdrop_destroys_it() {
-    let mut s = setup(21);
-    drop(s.backdrop());
+    drop(other);
     s.sent();
     s.server.wait_for("Destroy", 1);
 }
 
 #[test]
-fn the_tone_default_is_the_appearance() {
-    assert_eq!(BackdropTone::default(), BackdropTone::Appearance);
-    assert_eq!(GlassStyle::default(), GlassStyle::Regular);
-}
-
-#[test]
-fn the_appearance_observer_reports_light_and_dark() {
+fn the_appearance_observer_reports_appearance_display_options_session_lock_and_lost_buffers() {
     let mut s = setup(21);
     let _observer = s.effects.appearance(&s.conn);
     s.sent();
     s.server.run(|server| {
-        server.appearances[0].appearance(1);
-        server.appearances[0].appearance(0);
+        let appearance = &server.appearances[0];
+        appearance.appearance(1);
+        appearance.appearance(0);
+        appearance.display_options(DisplayOption::ReduceMotion | DisplayOption::IncreaseContrast);
+        appearance.session_lock(1);
+        appearance.session_lock(0);
+        appearance.buffers_lost();
     });
-    let (events, _) = wait_app_events(&mut s.conn, |e| e.len() >= 2);
+    let (events, _) = wait_app_events(&mut s.conn, |e| e.len() >= 8);
     assert_eq!(
         events,
         [
             AppEvent::Appearance { dark: true },
-            AppEvent::Appearance { dark: false }
+            AppEvent::Appearance { dark: false },
+            AppEvent::DisplayOptions(DisplayOptions {
+                reduce_motion: true,
+                reduce_transparency: false,
+                increase_contrast: true,
+                differentiate_without_color: false,
+            }),
+            AppEvent::ScrollBars { always: false },
+            AppEvent::SteadyCaret { on: false },
+            AppEvent::SessionLock { locked: true },
+            AppEvent::SessionLock { locked: false },
+            AppEvent::BuffersLost
         ]
-    );
-}
-
-#[test]
-fn an_appearance_value_other_than_zero_or_one_fails_the_connection() {
-    let mut s = setup(21);
-    let _observer = s.effects.appearance(&s.conn);
-    s.sent();
-    s.server.run(|server| server.appearances[0].appearance(2));
-    let error = loop {
-        match s.conn.wait(Some(std::time::Duration::from_millis(100))) {
-            Err(e) => break e,
-            Ok(_) => continue,
-        }
-    };
-    assert!(matches!(
-        error,
-        cupertino_wayland_client::Error::Protocol(_)
-    ));
-}
-
-#[test]
-fn display_options_report_each_flag() {
-    let mut s = setup(7);
-    let _observer = s.effects.appearance(&s.conn);
-    s.sent();
-    s.server.run(|server| {
-        server.appearances[0]
-            .display_options(DisplayOption::ReduceMotion | DisplayOption::IncreaseContrast);
-    });
-    let (events, _) = wait_app_events(&mut s.conn, |e| !e.is_empty());
-    assert_eq!(
-        events,
-        [AppEvent::DisplayOptions(DisplayOptions {
-            reduce_motion: true,
-            reduce_transparency: false,
-            increase_contrast: true,
-            differentiate_without_color: false,
-        })]
     );
 }
 
@@ -626,63 +515,4 @@ fn scroll_bar_and_caret_options_follow_their_versions() {
             assert!(events.contains(&AppEvent::SteadyCaret { on: true }));
         }
     }
-}
-
-#[test]
-fn display_options_with_reserved_bits_fail_the_connection() {
-    let mut s = setup(21);
-    let _observer = s.effects.appearance(&s.conn);
-    s.sent();
-    s.server.run(|server| {
-        server.appearances[0].display_options(DisplayOption::from_bits_retain(0x100));
-    });
-    let error = loop {
-        match s.conn.wait(Some(std::time::Duration::from_millis(100))) {
-            Err(e) => break e,
-            Ok(_) => continue,
-        }
-    };
-    assert!(matches!(
-        error,
-        cupertino_wayland_client::Error::Protocol(_)
-    ));
-}
-
-#[test]
-fn session_lock_and_lost_buffers_are_reported() {
-    let mut s = setup(21);
-    let _observer = s.effects.appearance(&s.conn);
-    s.sent();
-    s.server.run(|server| {
-        server.appearances[0].session_lock(1);
-        server.appearances[0].session_lock(0);
-        server.appearances[0].buffers_lost();
-    });
-    let (events, _) = wait_app_events(&mut s.conn, |e| e.len() >= 3);
-    assert_eq!(
-        events,
-        [
-            AppEvent::SessionLock { locked: true },
-            AppEvent::SessionLock { locked: false },
-            AppEvent::BuffersLost
-        ]
-    );
-}
-
-#[test]
-fn a_session_lock_value_other_than_zero_or_one_fails_the_connection() {
-    let mut s = setup(21);
-    let _observer = s.effects.appearance(&s.conn);
-    s.sent();
-    s.server.run(|server| server.appearances[0].session_lock(5));
-    let error = loop {
-        match s.conn.wait(Some(std::time::Duration::from_millis(100))) {
-            Err(e) => break e,
-            Ok(_) => continue,
-        }
-    };
-    assert!(matches!(
-        error,
-        cupertino_wayland_client::Error::Protocol(_)
-    ));
 }

@@ -35,28 +35,32 @@ unsafe impl GlobalAlloc for Inspect {
 #[test]
 fn freed_blocks_are_zero_and_live_blocks_are_untouched() {
     let allocator = ZeroOnFree(Inspect);
-    let layout = Layout::from_size_align(256, 8).unwrap();
-    let freed_before = FREED.load(Ordering::SeqCst);
-    let dirty_before = DIRTY.load(Ordering::SeqCst);
-    unsafe {
-        let block = allocator.alloc(layout);
-        assert!(!block.is_null());
-        std::slice::from_raw_parts_mut(block, 256).fill(0xa5);
-        // the block keeps its contents while it is live
-        assert!(std::slice::from_raw_parts(block, 256)
-            .iter()
-            .all(|&b| b == 0xa5));
-        allocator.dealloc(block, layout);
+    for (size, align) in [(256, 8), (1, 1)] {
+        let layout = Layout::from_size_align(size, align).unwrap();
+        let freed_before = FREED.load(Ordering::SeqCst);
+        let dirty_before = DIRTY.load(Ordering::SeqCst);
+        unsafe {
+            let block = allocator.alloc(layout);
+            assert!(!block.is_null());
+            std::slice::from_raw_parts_mut(block, size).fill(0xa5);
+            assert!(
+                std::slice::from_raw_parts(block, size)
+                    .iter()
+                    .all(|&b| b == 0xa5),
+                "{size} bytes: the block keeps its contents while it is live"
+            );
+            allocator.dealloc(block, layout);
+        }
+        assert!(
+            FREED.load(Ordering::SeqCst) > freed_before,
+            "{size} bytes: the inner allocator saw the free"
+        );
+        assert_eq!(
+            DIRTY.load(Ordering::SeqCst),
+            dirty_before,
+            "{size} bytes: the block reached it zeroed"
+        );
     }
-    assert!(
-        FREED.load(Ordering::SeqCst) > freed_before,
-        "the inner allocator saw the free"
-    );
-    assert_eq!(
-        DIRTY.load(Ordering::SeqCst),
-        dirty_before,
-        "and the block was already zero"
-    );
 }
 
 #[test]
@@ -81,26 +85,4 @@ fn a_zeroed_allocation_is_zero_and_a_grown_block_frees_the_old_one_clean() {
         allocator.dealloc(grown, Layout::from_size_align(4096, 16).unwrap());
     }
     assert_eq!(DIRTY.load(Ordering::SeqCst), dirty_before);
-}
-
-#[test]
-fn the_smallest_block_is_zeroed_too() {
-    let allocator = ZeroOnFree(Inspect);
-    let layout = Layout::from_size_align(1, 1).unwrap();
-    let freed_before = FREED.load(Ordering::SeqCst);
-    let dirty_before = DIRTY.load(Ordering::SeqCst);
-    unsafe {
-        let block = allocator.alloc(layout);
-        *block = 0xff;
-        allocator.dealloc(block, layout);
-    }
-    assert!(
-        FREED.load(Ordering::SeqCst) > freed_before,
-        "the block was freed"
-    );
-    assert_eq!(
-        DIRTY.load(Ordering::SeqCst),
-        dirty_before,
-        "it reached the allocator zeroed"
-    );
 }

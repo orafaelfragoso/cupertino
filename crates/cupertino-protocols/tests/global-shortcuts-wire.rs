@@ -173,17 +173,12 @@ impl Wire {
 }
 
 #[test]
-fn the_global_is_advertised_and_bound_at_version_one() {
+fn binding_the_global_sends_the_reserved_shortcuts_then_done() {
     let wire = Wire::new();
     let object = wire.client.shortcuts.as_ref().expect("bound");
     assert_eq!(object.version(), 1);
     assert_eq!(wire.server.objects.len(), 1);
     assert_eq!(wire.server.objects[0].version(), 1);
-}
-
-#[test]
-fn events_sent_on_bind_arrive_in_order() {
-    let wire = Wire::new();
     assert_eq!(wire.client.reserved, [(2 | 4, 0x74)]);
     assert_eq!(wire.client.done, 1);
 }

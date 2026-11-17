@@ -1,6 +1,6 @@
-//! The seat keymap when an input source's generated keymap is involved and a keymap does not compile: switching to a
-//! generated keymap that does not compile keeps the system layouts, and switching from a generated keymap to system
-//! layouts that do not compile keeps the generated one. Each failure is logged.
+//! The seat keymap when a keymap does not compile: at start the seat falls back to the US keymap, and later the last
+//! keymap that compiled stays, whether it came from system layouts or from an input source's generated keymap. Each
+//! failure is logged.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -10,9 +10,11 @@ use cupertino_assets::Assets;
 use cupertino_keyboard::keycodes::evdev_of;
 use cupertino_keyboard::switcher::Step;
 use cupertino_server::kbd::{InputSources, SourceSpec};
+use cupertino_server::localed::SystemLayout;
 use cupertino_server::{Config, Cupertino};
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
+use tracing::subscriber::DefaultGuard;
 
 /// The evdev code of the key between T and U on a US keyboard (Y there, Z on a German one).
 const KEY_Y: u32 = 21;
@@ -48,6 +50,17 @@ const LAYOUT: &str = r#"{
 struct Log(Arc<Mutex<Vec<u8>>>);
 
 impl Log {
+    /// Collects what the server logs on this thread until the guard drops.
+    fn capture() -> (Self, DefaultGuard) {
+        let log = Self::default();
+        let writer = log.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || writer.clone())
+            .with_ansi(false)
+            .finish();
+        (log, tracing::subscriber::set_default(subscriber))
+    }
+
     fn text(&self) -> String {
         String::from_utf8_lossy(&self.0.lock().unwrap()).into_owned()
     }
@@ -95,7 +108,15 @@ fn server() -> Cupertino {
         false,
         &Assets::builtin(),
     )
-    .unwrap()
+    .expect("the server starts")
+}
+
+fn layout(layout: &str, variant: &str) -> SystemLayout {
+    SystemLayout {
+        layout: layout.to_string(),
+        variant: variant.to_string(),
+        options: String::new(),
+    }
 }
 
 /// The decoded source of the test layout, written into `home`.
@@ -124,93 +145,117 @@ fn switch_to(state: &mut Cupertino, id: &str) {
     assert_eq!(state.overlays.inputs.current(), Some(id));
 }
 
-/// Applies the system layouts US and German with the test layout as a third source, then breaks the test layout's
-/// generated keymap with `break_keymap` and switches to it: the seat keeps the system layouts. Returns the log.
-fn switch_to_a_broken_generated_keymap(name: &str, break_keymap: impl Fn(&mut String)) -> String {
-    let home = private_environment(name);
-    let log = Log::default();
-    let writer = log.clone();
-    let subscriber = tracing_subscriber::fmt()
-        .with_writer(move || writer.clone())
-        .with_ansi(false)
-        .finish();
-    let _guard = tracing::subscriber::set_default(subscriber);
-    let mut state = server();
-
-    let decoded = decoded_source(&home);
-    let sources = [
-        SourceSpec::parse("us").unwrap(),
-        SourceSpec::parse("de").unwrap(),
-        decoded.clone(),
-    ];
-    use_sources(&mut state, &sources);
-    assert!(
-        log.text().contains("decoded layout loaded"),
-        "{}",
-        log.text()
-    );
-    assert_eq!(state.xkb_first_keysym(KEY_Y, 0), Some(KEYSYM_Y));
-    assert_eq!(state.xkb_first_keysym(KEY_Y, 1), Some(KEYSYM_Z));
-
-    let generated = state
-        .overlays
-        .inputs
-        .decoded
-        .get_mut(&decoded.id)
-        .expect("the generated keymap of the decoded source");
-    break_keymap(&mut generated.keymap);
-    switch_to(&mut state, &decoded.id);
-
-    assert!(
-        !state.overlays.inputs.decoded_active,
-        "the seat keymap is not the generated one"
-    );
+/// Asserts the seat keymap still has the US group first and the German group second.
+fn assert_us_and_german(state: &mut Cupertino, row: &str) {
     assert_eq!(
         state.xkb_first_keysym(KEY_Y, 0),
         Some(KEYSYM_Y),
-        "the US group of the system keymap stays"
+        "{row}: the US group stays"
     );
     assert_eq!(
         state.xkb_first_keysym(KEY_Y, 1),
         Some(KEYSYM_Z),
-        "the German group of the system keymap stays"
+        "{row}: the German group stays"
     );
-    log.text()
 }
 
 #[test]
-fn a_generated_keymap_that_does_not_compile_keeps_the_last_working_keymap() {
-    let text = switch_to_a_broken_generated_keymap("keymap-decoded-broken", |keymap| {
-        // a keymap cut off half way: its sections never close
-        keymap.truncate(keymap.len() / 2);
-    });
+fn a_default_layout_that_does_not_compile_starts_the_fallback_keymap() {
+    private_environment("keymap-fallback");
+    std::env::set_var("XKB_DEFAULT_LAYOUT", MISSING_LAYOUT);
+    std::env::set_var("XKB_DEFAULT_OPTIONS", "cupertino-no-such-option");
+    let (log, _guard) = Log::capture();
+
+    let mut state = server();
+
+    assert_eq!(state.xkb_first_keysym(KEY_Y, 0), Some(KEYSYM_Y));
+    let text = log.text();
     assert!(
-        text.contains("the generated keymap does not compile; the last working keymap stays"),
+        text.contains("the default keyboard layout does not compile"),
         "the failure is logged: {text}"
     );
 }
 
 #[test]
-fn a_generated_keymap_holding_a_nul_keeps_the_last_working_keymap() {
-    let text = switch_to_a_broken_generated_keymap("keymap-decoded-nul", |keymap| {
-        keymap.insert(keymap.len() / 2, '\0');
-    });
+fn a_layout_that_does_not_compile_keeps_the_last_working_keymap() {
+    private_environment("keymap-kept");
+    let (log, _guard) = Log::capture();
+    let mut state = server();
+
+    state.apply_system_layout(layout("us,de", ","));
+    assert_us_and_german(&mut state, "us,de");
+    assert!(!log.text().contains("do not compile"), "{}", log.text());
+
+    state.apply_system_layout(layout(MISSING_LAYOUT, ""));
+    assert_us_and_german(&mut state, MISSING_LAYOUT);
+    let text = log.text();
     assert!(
-        text.contains("the generated keymap holds a NUL; the last working keymap stays"),
-        "the failure is logged: {text}"
+        text.contains("the configured input sources do not compile; the last working keymap stays")
+            && text.contains(MISSING_LAYOUT),
+        "the failure is logged with the layout: {text}"
     );
+}
+
+#[test]
+fn a_generated_keymap_that_does_not_compile_keeps_the_system_keymap() {
+    type Break = fn(&mut String);
+    let rows: [(&str, Break, &str); 2] = [
+        (
+            "cut off half way",
+            |keymap| keymap.truncate(keymap.len() / 2),
+            "the generated keymap does not compile; the last working keymap stays",
+        ),
+        (
+            "holding a NUL",
+            |keymap| keymap.insert(keymap.len() / 2, '\0'),
+            "the generated keymap holds a NUL; the last working keymap stays",
+        ),
+    ];
+    for (row, break_keymap, logged) in rows {
+        let home = private_environment(&format!("keymap-decoded-{}", row.replace(' ', "-")));
+        let (log, _guard) = Log::capture();
+        let mut state = server();
+
+        let decoded = decoded_source(&home);
+        let sources = [
+            SourceSpec::parse("us").unwrap(),
+            SourceSpec::parse("de").unwrap(),
+            decoded.clone(),
+        ];
+        use_sources(&mut state, &sources);
+        assert!(
+            log.text().contains("decoded layout loaded"),
+            "{row}: {}",
+            log.text()
+        );
+        assert_us_and_german(&mut state, row);
+
+        let generated = state
+            .overlays
+            .inputs
+            .decoded
+            .get_mut(&decoded.id)
+            .expect("the generated keymap of the decoded source");
+        break_keymap(&mut generated.keymap);
+        switch_to(&mut state, &decoded.id);
+
+        assert!(
+            !state.overlays.inputs.decoded_active,
+            "{row}: the seat keymap is not the generated one"
+        );
+        assert_us_and_german(&mut state, row);
+        let text = log.text();
+        assert!(
+            text.contains(logged),
+            "{row}: the failure is logged: {text}"
+        );
+    }
 }
 
 #[test]
 fn system_layouts_that_do_not_compile_keep_the_generated_keymap() {
     let home = private_environment("keymap-decoded-kept");
-    let log = Log::default();
-    let writer = log.clone();
-    let subscriber = tracing_subscriber::fmt()
-        .with_writer(move || writer.clone())
-        .with_ansi(false)
-        .finish();
-    let _guard = tracing::subscriber::set_default(subscriber);
+    let (log, _guard) = Log::capture();
     let mut state = server();
 
     let decoded = decoded_source(&home);

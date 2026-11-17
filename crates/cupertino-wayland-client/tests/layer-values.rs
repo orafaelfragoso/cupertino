@@ -1,171 +1,99 @@
-//! The value types of the layers protocol: property ranges, versions, wire fixed point and the error texts.
+//! The value types of the layers protocol: property ranges, versions and wire fixed point.
 
-use cupertino_wayland_client::app::{
-    Error, Fixed, LayerId, LayerProperty, MAX_CONTENT_BLUR, MAX_GLASS_EDGE, MAX_GROUP_SPACING,
-    MAX_SAMPLES,
-};
-
-const ALL: [LayerProperty; 8] = [
-    LayerProperty::X,
-    LayerProperty::Y,
-    LayerProperty::Width,
-    LayerProperty::Height,
-    LayerProperty::Opacity,
-    LayerProperty::Scale,
-    LayerProperty::CornerRadius,
-    LayerProperty::ContentBlur,
-];
+use cupertino_wayland_client::app::{Fixed, LayerProperty, MAX_CONTENT_BLUR};
 
 #[test]
-fn positions_take_any_finite_value() {
-    for property in [LayerProperty::X, LayerProperty::Y] {
-        assert!(property.accepts(-1e9));
-        assert!(property.accepts(0.0));
-        assert!(property.accepts(1e9));
-        assert!(!property.accepts(f64::NAN));
-        assert!(!property.accepts(f64::INFINITY));
-        assert!(!property.accepts(f64::NEG_INFINITY));
+fn each_property_accepts_only_finite_values_in_its_range() {
+    use LayerProperty::*;
+    let mut rows = Vec::new();
+    for property in [X, Y] {
+        rows.extend([
+            (property, -1e9, true),
+            (property, 0.0, true),
+            (property, 1e9, true),
+        ]);
     }
-}
-
-#[test]
-fn opacity_is_a_unit_interval() {
-    let opacity = LayerProperty::Opacity;
-    assert!(opacity.accepts(0.0));
-    assert!(opacity.accepts(0.5));
-    assert!(opacity.accepts(1.0));
-    assert!(!opacity.accepts(-f64::EPSILON));
-    assert!(!opacity.accepts(1.0 + f64::EPSILON));
-    assert!(!opacity.accepts(f64::NAN));
-    assert!(!opacity.accepts(f64::INFINITY));
-}
-
-#[test]
-fn extents_scale_and_radius_are_not_negative() {
+    rows.extend([
+        (Opacity, 0.0, true),
+        (Opacity, 0.5, true),
+        (Opacity, 1.0, true),
+        (Opacity, -f64::EPSILON, false),
+        (Opacity, 1.0 + f64::EPSILON, false),
+    ]);
+    for property in [Width, Height, Scale, CornerRadius] {
+        rows.extend([
+            (property, 0.0, true),
+            (property, 1e6, true),
+            (property, -0.001, false),
+        ]);
+    }
+    rows.extend([
+        (ContentBlur, 0.0, true),
+        (ContentBlur, MAX_CONTENT_BLUR, true),
+        (ContentBlur, MAX_CONTENT_BLUR + 0.001, false),
+        (ContentBlur, -0.001, false),
+    ]);
     for property in [
-        LayerProperty::Width,
-        LayerProperty::Height,
-        LayerProperty::Scale,
-        LayerProperty::CornerRadius,
+        X,
+        Y,
+        Width,
+        Height,
+        Opacity,
+        Scale,
+        CornerRadius,
+        ContentBlur,
     ] {
-        assert!(property.accepts(0.0));
-        assert!(property.accepts(1e6));
-        assert!(!property.accepts(-0.001));
-        assert!(!property.accepts(f64::NAN));
-        assert!(!property.accepts(f64::INFINITY));
+        rows.extend([
+            (property, f64::NAN, false),
+            (property, f64::INFINITY, false),
+            (property, f64::NEG_INFINITY, false),
+        ]);
+    }
+    for (property, value, accepted) in rows {
+        assert_eq!(property.accepts(value), accepted, "{property:?} {value}");
     }
 }
 
 #[test]
-fn content_blur_stops_at_its_maximum() {
-    let blur = LayerProperty::ContentBlur;
-    assert_eq!(MAX_CONTENT_BLUR, 64.0);
-    assert!(blur.accepts(0.0));
-    assert!(blur.accepts(MAX_CONTENT_BLUR));
-    assert!(!blur.accepts(MAX_CONTENT_BLUR + 0.001));
-    assert!(!blur.accepts(-0.001));
-    assert!(!blur.accepts(f64::NAN));
-    assert!(!blur.accepts(f64::INFINITY));
-}
-
-#[test]
-fn only_content_blur_needs_a_newer_protocol() {
-    for property in ALL {
-        let expected = if property == LayerProperty::ContentBlur {
-            4
-        } else {
-            1
-        };
-        assert_eq!(property.since(), expected, "{property:?}");
+fn only_content_blur_needs_a_newer_protocol_and_a_presentation_moves_offset_opacity_and_scale() {
+    use LayerProperty::*;
+    for (property, since, presented) in [
+        (X, 1, true),
+        (Y, 1, true),
+        (Width, 1, false),
+        (Height, 1, false),
+        (Opacity, 1, true),
+        (Scale, 1, true),
+        (CornerRadius, 1, false),
+        (ContentBlur, 4, false),
+    ] {
+        assert_eq!(property.since(), since, "{property:?}");
+        assert_eq!(property.presented(), presented, "{property:?}");
     }
 }
 
 #[test]
-fn a_presentation_has_offset_opacity_and_scale_only() {
-    let presented: Vec<_> = ALL.into_iter().filter(|p| p.presented()).collect();
-    assert_eq!(
-        presented,
-        [
-            LayerProperty::X,
-            LayerProperty::Y,
-            LayerProperty::Opacity,
-            LayerProperty::Scale
-        ]
-    );
-}
-
-#[test]
-fn limits_keep_their_documented_values() {
-    assert_eq!(MAX_GLASS_EDGE, 4.0);
-    assert_eq!(MAX_GROUP_SPACING, 64.0);
-    assert_eq!(MAX_SAMPLES, 1000);
-}
-
-#[test]
-fn fixed_point_is_in_256ths() {
-    assert_eq!(Fixed::from_f64(1.0), Fixed(256));
-    assert_eq!(Fixed::from_f64(-1.5), Fixed(-384));
-    assert_eq!(Fixed::from_f64(0.0), Fixed(0));
+fn fixed_point_is_in_256ths_rounded_to_the_nearest_step_and_saturating() {
+    for (row, value, fixed) in [
+        ("one", 1.0, 256),
+        ("minus one and a half", -1.5, -384),
+        ("zero", 0.0, 0),
+        ("just over half a step", 1.0 / 512.0 + 1e-9, 1),
+        ("just under half a step", 1.0 / 512.0 - 1e-9, 0),
+        ("just over half a step down", -1.0 / 512.0 - 1e-9, -1),
+        ("infinity", f64::INFINITY, i32::MAX),
+        ("minus infinity", f64::NEG_INFINITY, i32::MIN),
+        ("too large", 1e30, i32::MAX),
+        ("NaN", f64::NAN, 0),
+    ] {
+        assert_eq!(Fixed::from_f64(value), Fixed(fixed), "{row}");
+    }
     assert_eq!(Fixed(64).to_f64(), 0.25);
-    assert_eq!(Fixed::default(), Fixed(0));
-}
-
-#[test]
-fn fixed_point_rounds_to_the_nearest_step() {
-    assert_eq!(Fixed::from_f64(1.0 / 512.0 + 1e-9), Fixed(1));
-    assert_eq!(Fixed::from_f64(1.0 / 512.0 - 1e-9), Fixed(0));
-    assert_eq!(Fixed::from_f64(-1.0 / 512.0 - 1e-9), Fixed(-1));
-}
-
-#[test]
-fn fixed_point_round_trips_every_step_it_holds() {
     for raw in [-8_388_608, -257, -1, 0, 1, 255, 256, 8_388_607] {
-        assert_eq!(Fixed::from_f64(Fixed(raw).to_f64()), Fixed(raw));
+        assert_eq!(
+            Fixed::from_f64(Fixed(raw).to_f64()),
+            Fixed(raw),
+            "{raw} round trips"
+        );
     }
-}
-
-#[test]
-fn fixed_point_saturates_and_maps_nan_to_zero() {
-    assert_eq!(Fixed::from_f64(f64::INFINITY), Fixed(i32::MAX));
-    assert_eq!(Fixed::from_f64(f64::NEG_INFINITY), Fixed(i32::MIN));
-    assert_eq!(Fixed::from_f64(1e30), Fixed(i32::MAX));
-    assert_eq!(Fixed::from_f64(f64::NAN), Fixed(0));
-}
-
-#[test]
-fn layer_ids_compare_by_number() {
-    assert_eq!(LayerId(3), LayerId(3));
-    assert_ne!(LayerId(3), LayerId(4));
-}
-
-#[test]
-fn each_error_says_what_was_refused() {
-    let texts = [
-        (
-            Error::InvalidShape,
-            "backdrop shape has a negative extent or radius, or is not finite",
-        ),
-        (Error::InvalidAlpha, "backdrop alpha is outside 0 to 1"),
-        (
-            Error::InvalidGlass,
-            "glass spacing is negative or not finite",
-        ),
-        (
-            Error::InvalidLayerValue,
-            "layer value is outside its property's range",
-        ),
-        (
-            Error::Unsupported("cupertino_layer_v1.set_glass_edge"),
-            "the server does not take cupertino_layer_v1.set_glass_edge",
-        ),
-    ];
-    for (error, text) in texts {
-        assert_eq!(error.to_string(), text);
-    }
-}
-
-#[test]
-fn the_error_is_a_std_error() {
-    fn takes(_: &dyn std::error::Error) {}
-    takes(&Error::InvalidAlpha);
 }

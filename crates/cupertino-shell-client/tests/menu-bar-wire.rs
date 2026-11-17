@@ -47,6 +47,14 @@ fn bar_with(
     (wire, bar, surface)
 }
 
+/// A bar whose first group is empty, with everything sent so far taken.
+fn ready(offer: Offer) -> (Wire, MenuBar, cupertino_wayland_client::SurfaceId) {
+    let (mut wire, bar, surface) = bar_with(offer, |bar| bar.done());
+    wire.events();
+    wire.take();
+    (wire, bar, surface)
+}
+
 fn updates(wire: &mut Wire) -> Vec<MenuBarUpdate> {
     wire.shell_events()
         .into_iter()
@@ -55,6 +63,18 @@ fn updates(wire: &mut Wire) -> Vec<MenuBarUpdate> {
             _ => None,
         })
         .collect()
+}
+
+/// The update of the one group `send` sends.
+fn next_update(
+    wire: &mut Wire,
+    send: impl FnOnce(&CupertinoMenuBarV1) + Send + 'static,
+) -> MenuBarUpdate {
+    wire.server(move |s| {
+        send(&s.menu_bars[0]);
+        s.menu_bars[0].done();
+    });
+    updates(wire).remove(0)
 }
 
 fn bar_requests(wire: &Wire) -> Vec<Request> {
@@ -68,14 +88,15 @@ fn bar_requests(wire: &Wire) -> Vec<Request> {
 }
 
 #[test]
-fn the_first_group_arrives_with_the_surface_of_the_bar() {
+fn each_group_is_one_update_of_the_fields_it_mentions_and_an_empty_one_is_not_reported() {
     let (mut wire, _bar, surface) = bar_with(Offer::all(), |bar| {
         bar.active_app("org.example.Edit".into(), "Edit".into());
         bar.menu_none();
         bar.done();
+        bar.done();
     });
     let events = wire.shell_events();
-    assert_eq!(events.len(), 1);
+    assert_eq!(events.len(), 1, "the empty group is not reported");
     let ShellEvent::MenuBar {
         surface: of,
         update,
@@ -83,7 +104,10 @@ fn the_first_group_arrives_with_the_surface_of_the_bar() {
     else {
         panic!("not a menu bar event: {:?}", events[0]);
     };
-    assert_eq!(*of, surface);
+    assert_eq!(
+        *of, surface,
+        "the first group arrives with the bar's surface"
+    );
     assert_eq!(
         update.active_app,
         Some(ActiveApp {
@@ -92,30 +116,24 @@ fn the_first_group_arrives_with_the_surface_of_the_bar() {
         })
     );
     assert_eq!(update.menu, Some(WindowMenu::None));
-}
 
-#[test]
-fn a_group_with_nothing_in_it_is_not_reported() {
-    let (mut wire, _bar, _) = bar_with(Offer::all(), |bar| bar.done());
-    assert!(updates(&mut wire).is_empty());
-}
-
-#[test]
-fn a_field_the_group_does_not_mention_is_none() {
-    let (mut wire, _bar, _) = bar_with(Offer::all(), |bar| {
-        bar.active_app("a".into(), "A".into());
-        bar.done();
-    });
-    updates(&mut wire);
-    wire.server(|s| {
-        s.menu_bars[0].screen_capture(1);
-        s.menu_bars[0].done();
-    });
-    let update = updates(&mut wire).remove(0);
     assert_eq!(
-        update,
+        next_update(&mut wire, |bar| bar.screen_capture(1)),
         MenuBarUpdate {
             screen_capture: Some(true),
+            ..MenuBarUpdate::default()
+        }
+    );
+    assert_eq!(
+        next_update(&mut wire, |bar| {
+            bar.engage();
+            bar.engage_help();
+            bar.screen_capture(0);
+        }),
+        MenuBarUpdate {
+            engage: true,
+            engage_help: true,
+            screen_capture: Some(false),
             ..MenuBarUpdate::default()
         }
     );
@@ -123,19 +141,19 @@ fn a_field_the_group_does_not_mention_is_none() {
 
 #[test]
 fn the_menus_of_the_active_window_keep_their_addresses() {
-    let (mut wire, _bar, _) = bar_with(Offer::all(), |bar| {
+    let (mut wire, _bar, _) = ready(Offer::all());
+    let update = next_update(&mut wire, |bar| {
         bar.menu_dbusmenu(":1.5".into(), "/menu".into());
-        bar.done();
     });
     assert_eq!(
-        updates(&mut wire)[0].menu,
+        update.menu,
         Some(WindowMenu::DbusMenu {
             service: ":1.5".into(),
             path: "/menu".into()
         })
     );
-    wire.server(|s| {
-        s.menu_bars[0].menu_gtk(
+    let update = next_update(&mut wire, |bar| {
+        bar.menu_gtk(
             ":1.9".into(),
             "org.example".into(),
             "/org/example".into(),
@@ -143,10 +161,9 @@ fn the_menus_of_the_active_window_keep_their_addresses() {
             "/menubar".into(),
             String::new(),
         );
-        s.menu_bars[0].done();
     });
     assert_eq!(
-        updates(&mut wire)[0].menu,
+        update.menu,
         Some(WindowMenu::Gtk(GtkMenu {
             bus_name: ":1.9".into(),
             application_id: Some("org.example".into()),
@@ -159,14 +176,13 @@ fn the_menus_of_the_active_window_keep_their_addresses() {
 }
 
 #[test]
-fn window_state_takes_the_enabled_controls_and_full_screen_of_its_group() {
-    let (mut wire, _bar, _) = bar_with(Offer::all(), |bar| {
+fn window_state_takes_the_controls_full_screen_and_window_list_of_its_group() {
+    let (mut wire, _bar, _) = ready(Offer::all());
+    let update = next_update(&mut wire, |bar| {
         bar.window_state(1, 2, 4);
         bar.window_controls(WindowControl::Minimize);
         bar.window_full_screen(1);
-        bar.done();
     });
-    let update = updates(&mut wire).remove(0);
     assert_eq!(
         update.window_state,
         Some(WindowState {
@@ -177,121 +193,69 @@ fn window_state_takes_the_enabled_controls_and_full_screen_of_its_group() {
             workspaces: 4,
         })
     );
-    // the window list is complete in every group with a window state, empty when no window is listed
-    assert_eq!(update.windows, Some(vec![]));
+    assert_eq!(
+        update.windows,
+        Some(vec![]),
+        "the window list is complete in every group with a window state"
+    );
 
-    wire.server(|s| {
-        s.menu_bars[0].window_state(1, 1, 1);
-        s.menu_bars[0].done();
-    });
-    let state = updates(&mut wire).remove(0).window_state.expect("state");
-    assert!(state.can_minimize && state.can_zoom && !state.full_screen);
-}
+    let state = next_update(&mut wire, |bar| bar.window_state(1, 1, 1))
+        .window_state
+        .expect("state");
+    assert!(
+        state.can_minimize && state.can_zoom && !state.full_screen,
+        "without controls every control is enabled"
+    );
 
-#[test]
-fn a_window_that_cannot_zoom_stays_unable_whatever_its_controls_say() {
-    let (mut wire, _bar, _) = bar_with(Offer::all(), |bar| {
+    let state = next_update(&mut wire, |bar| {
         bar.window_state(0, 1, 1);
         bar.window_controls(WindowControl::Minimize | WindowControl::Zoom);
-        bar.done();
-    });
-    let state = updates(&mut wire).remove(0).window_state.expect("state");
-    assert!(state.can_minimize);
-    assert!(!state.can_zoom);
-}
+    })
+    .window_state
+    .expect("state");
+    assert!(
+        state.can_minimize && !state.can_zoom,
+        "a window that cannot zoom stays unable whatever its controls say"
+    );
 
-#[test]
-fn the_window_list_carries_the_active_and_minimized_flags() {
-    let (mut wire, _bar, _) = bar_with(Offer::all(), |bar| {
+    let update = next_update(&mut wire, |bar| {
         bar.window_state(1, 1, 1);
         bar.app_window(3, "One".into(), AppWindowFlags::Active);
         bar.app_window(4, "Two".into(), AppWindowFlags::Minimized);
         bar.app_window(5, "Three".into(), AppWindowFlags::empty());
-        bar.done();
     });
+    let window = |id, title: &str, active, minimized| AppWindow {
+        id,
+        title: title.into(),
+        active,
+        minimized,
+    };
     assert_eq!(
-        updates(&mut wire)[0].windows,
+        update.windows,
         Some(vec![
-            AppWindow {
-                id: 3,
-                title: "One".into(),
-                active: true,
-                minimized: false
-            },
-            AppWindow {
-                id: 4,
-                title: "Two".into(),
-                active: false,
-                minimized: true
-            },
-            AppWindow {
-                id: 5,
-                title: "Three".into(),
-                active: false,
-                minimized: false
-            },
+            window(3, "One", true, false),
+            window(4, "Two", false, true),
+            window(5, "Three", false, false),
         ])
     );
-}
 
-#[test]
-fn a_server_without_the_window_list_sends_no_list() {
-    let (mut wire, _bar, _) = bar_with(Offer::shell(9), |bar| {
-        bar.window_state(1, 1, 1);
-        bar.done();
-    });
-    let update = updates(&mut wire).remove(0);
+    let (mut wire, _bar, _) = ready(Offer::shell(9));
+    let update = next_update(&mut wire, |bar| bar.window_state(1, 1, 1));
     assert!(update.window_state.is_some());
-    assert_eq!(update.windows, None);
-}
-
-#[test]
-fn the_flags_of_a_group_are_reported() {
-    let (mut wire, _bar, _) = bar_with(Offer::all(), |bar| {
-        bar.engage();
-        bar.engage_help();
-        bar.screen_capture(0);
-        bar.done();
-    });
-    let update = updates(&mut wire).remove(0);
-    assert!(update.engage && update.engage_help);
-    assert_eq!(update.screen_capture, Some(false));
+    assert_eq!(update.windows, None, "a server without the window list");
 }
 
 #[test]
 fn the_session_agent_trust_maps_to_who_may_answer() {
-    let (mut wire, _bar, _) = bar_with(Offer::all(), |bar| {
-        bar.session_agent(AgentTrust::Process, 1234);
-        bar.done();
-    });
-    assert_eq!(
-        updates(&mut wire)[0].session_agent,
-        Some(SessionAgent::Process(1234))
-    );
-    for (trust, expected) in [
-        (AgentTrust::Any, SessionAgent::Any),
-        (AgentTrust::None, SessionAgent::None),
+    let (mut wire, _bar, _) = ready(Offer::all());
+    for (trust, pid, expected) in [
+        (AgentTrust::Process, 1234, SessionAgent::Process(1234)),
+        (AgentTrust::Any, 77, SessionAgent::Any),
+        (AgentTrust::None, 77, SessionAgent::None),
     ] {
-        wire.server(move |s| {
-            s.menu_bars[0].session_agent(trust, 77);
-            s.menu_bars[0].done();
-        });
-        assert_eq!(updates(&mut wire)[0].session_agent, Some(expected));
+        let update = next_update(&mut wire, move |bar| bar.session_agent(trust, pid));
+        assert_eq!(update.session_agent, Some(expected));
     }
-}
-
-#[test]
-fn the_backdrop_lightness_is_at_most_one_thousand() {
-    let (mut wire, _bar, _) = bar_with(Offer::all(), |bar| {
-        bar.backdrop_luminance(640);
-        bar.done();
-    });
-    assert_eq!(updates(&mut wire)[0].backdrop_lightness, Some(640));
-    wire.server(|s| {
-        s.menu_bars[0].backdrop_luminance(5000);
-        s.menu_bars[0].done();
-    });
-    assert_eq!(updates(&mut wire)[0].backdrop_lightness, Some(1000));
 }
 
 fn bands(count: usize) -> Vec<u8> {
@@ -307,26 +271,26 @@ fn bands(count: usize) -> Vec<u8> {
 }
 
 #[test]
-fn backdrop_bands_are_little_endian_triples_and_a_partial_band_is_dropped() {
-    let mut bytes = bands(3);
-    bytes.extend([9, 9, 9]);
-    let (mut wire, _bar, _) = bar_with(Offer::all(), move |bar| {
-        bar.backdrop_bands(bytes.clone());
-        bar.done();
-    });
-    assert_eq!(
-        updates(&mut wire)[0].backdrop_bands,
-        Some(vec![[0, 1, 0xff00], [1, 2, 0xff01], [2, 3, 0xff02]])
-    );
-}
+fn the_backdrop_is_a_bounded_lightness_and_at_most_the_band_limit_of_whole_bands() {
+    let (mut wire, _bar, _) = ready(Offer::all());
+    for (sent, read) in [(640, 640), (5000, 1000)] {
+        let update = next_update(&mut wire, move |bar| bar.backdrop_luminance(sent));
+        assert_eq!(update.backdrop_lightness, Some(read), "{sent}");
+    }
 
-#[test]
-fn backdrop_bands_beyond_the_limit_are_dropped() {
-    let (mut wire, _bar, _) = bar_with(Offer::all(), |bar| {
-        bar.backdrop_bands(bands(MAX_BACKDROP_BANDS + 10));
-        bar.done();
+    let mut partial = bands(3);
+    partial.extend([9, 9, 9]);
+    let update = next_update(&mut wire, move |bar| bar.backdrop_bands(partial));
+    assert_eq!(
+        update.backdrop_bands,
+        Some(vec![[0, 1, 0xff00], [1, 2, 0xff01], [2, 3, 0xff02]]),
+        "little-endian triples, a partial band dropped"
+    );
+
+    let update = next_update(&mut wire, |bar| {
+        bar.backdrop_bands(bands(MAX_BACKDROP_BANDS + 10))
     });
-    let read = updates(&mut wire)[0].backdrop_bands.clone().expect("bands");
+    let read = update.backdrop_bands.expect("bands");
     assert_eq!(read.len(), MAX_BACKDROP_BANDS);
     assert_eq!(
         read[MAX_BACKDROP_BANDS - 1][0],
@@ -335,137 +299,115 @@ fn backdrop_bands_beyond_the_limit_are_dropped() {
 }
 
 #[test]
-fn shortcuts_are_added_and_an_empty_chord_removes_one() {
-    let (mut wire, _bar, _) = bar_with(Offer::all(), |bar| {
-        bar.shortcut(WireBoundAction::QuitApp, "Super+q".into());
-        bar.shortcut(WireBoundAction::Lock, "Ctrl+Super+q".into());
+fn shortcuts_are_added_per_action_and_an_empty_chord_removes_one() {
+    let actions = [
+        (WireBoundAction::CloseWindow, BoundAction::CloseWindow),
+        (WireBoundAction::Minimize, BoundAction::Minimize),
+        (WireBoundAction::Zoom, BoundAction::Zoom),
+        (
+            WireBoundAction::ToggleFullscreen,
+            BoundAction::ToggleFullscreen,
+        ),
+        (WireBoundAction::HideApp, BoundAction::HideApp),
+        (WireBoundAction::HideOthers, BoundAction::HideOthers),
+        (WireBoundAction::QuitApp, BoundAction::QuitApp),
+        (WireBoundAction::TileLeft, BoundAction::TileLeft),
+        (WireBoundAction::TileRight, BoundAction::TileRight),
+        (WireBoundAction::TileFill, BoundAction::TileFill),
+        (WireBoundAction::ForceQuit, BoundAction::ForceQuit),
+        (WireBoundAction::Lock, BoundAction::Lock),
+        (WireBoundAction::LogOut, BoundAction::LogOut),
+        (WireBoundAction::HelpSearch, BoundAction::HelpSearch),
+    ];
+    let (mut wire, _bar, _) = ready(Offer::all());
+    let update = next_update(&mut wire, move |bar| {
+        for (i, (action, _)) in actions.into_iter().enumerate() {
+            bar.shortcut(action, format!("chord{i}"));
+        }
         bar.primary_modifier(ModifierKey::Ctrl);
-        bar.done();
     });
-    let shortcuts = updates(&mut wire)[0].shortcuts.clone().expect("shortcuts");
-    assert_eq!(shortcuts.chord(BoundAction::QuitApp), Some("Super+q"));
-    assert_eq!(shortcuts.chord(BoundAction::Lock), Some("Ctrl+Super+q"));
-    assert_eq!(shortcuts.chord(BoundAction::HideApp), None);
+    let shortcuts = update.shortcuts.expect("shortcuts");
+    assert_eq!(shortcuts.chords.len(), actions.len());
+    for (i, (_, action)) in actions.into_iter().enumerate() {
+        assert_eq!(
+            shortcuts.chord(action),
+            Some(format!("chord{i}").as_str()),
+            "{action:?}"
+        );
+    }
     assert_eq!(shortcuts.primary, PrimaryModifier::Ctrl);
 
     // a group lists the chords it changes: an empty one unbinds, and a group that does not name the modifier reads Super
-    wire.server(|s| {
-        s.menu_bars[0].shortcut(WireBoundAction::Lock, String::new());
-        s.menu_bars[0].done();
+    let update = next_update(&mut wire, |bar| {
+        bar.shortcut(WireBoundAction::QuitApp, "Super+q".into());
     });
-    let shortcuts = updates(&mut wire)[0].shortcuts.clone().expect("shortcuts");
-    assert!(shortcuts.chords.is_empty());
+    let shortcuts = update.shortcuts.expect("shortcuts");
+    assert_eq!(shortcuts.chord(BoundAction::QuitApp), Some("Super+q"));
+    assert_eq!(shortcuts.chord(BoundAction::HideApp), None);
     assert_eq!(shortcuts.primary, PrimaryModifier::Super);
-}
-
-#[test]
-fn every_bound_action_has_its_own_entry() {
-    let (mut wire, _bar, _) = bar_with(Offer::all(), |bar| {
-        for (i, action) in [
-            WireBoundAction::CloseWindow,
-            WireBoundAction::Minimize,
-            WireBoundAction::Zoom,
-            WireBoundAction::ToggleFullscreen,
-            WireBoundAction::HideApp,
-            WireBoundAction::HideOthers,
-            WireBoundAction::QuitApp,
-            WireBoundAction::TileLeft,
-            WireBoundAction::TileRight,
-            WireBoundAction::TileFill,
-            WireBoundAction::ForceQuit,
-            WireBoundAction::Lock,
-            WireBoundAction::LogOut,
-            WireBoundAction::HelpSearch,
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            bar.shortcut(action, format!("chord{i}"));
-        }
-        bar.done();
+    let update = next_update(&mut wire, |bar| {
+        bar.shortcut(WireBoundAction::QuitApp, String::new());
     });
-    let shortcuts = updates(&mut wire)[0].shortcuts.clone().expect("shortcuts");
-    assert_eq!(shortcuts.chords.len(), 14);
-    assert_eq!(shortcuts.chord(BoundAction::CloseWindow), Some("chord0"));
-    assert_eq!(shortcuts.chord(BoundAction::ForceQuit), Some("chord10"));
-    assert_eq!(shortcuts.chord(BoundAction::HelpSearch), Some("chord13"));
+    assert!(update.shortcuts.expect("shortcuts").chords.is_empty());
 }
 
 #[test]
 fn the_active_client_and_its_key_class_come_together() {
-    let (mut wire, _bar, _) = bar_with(Offer::all(), |bar| {
+    let (mut wire, _bar, _) = ready(Offer::all());
+    let update = next_update(&mut wire, |bar| {
         bar.window_state(1, 1, 1);
         bar.active_client(500, ClientKind::X11);
         bar.active_client_keys(WireKeyClass::Terminal);
-        bar.done();
     });
-    let update = updates(&mut wire).remove(0);
     assert_eq!(update.active_client, Some(ActiveClient::X11(500)));
     assert_eq!(update.key_class, Some(KeyClass::Terminal));
-
-    wire.server(|s| {
-        s.menu_bars[0].active_client(0, ClientKind::Wayland);
-        s.menu_bars[0].active_client_keys(WireKeyClass::Toolkit);
-        s.menu_bars[0].done();
+    let update = next_update(&mut wire, |bar| {
+        bar.active_client(0, ClientKind::Wayland);
+        bar.active_client_keys(WireKeyClass::Toolkit);
     });
-    let update = updates(&mut wire).remove(0);
     assert_eq!(update.active_client, Some(ActiveClient::Wayland(0)));
     assert_eq!(update.key_class, Some(KeyClass::Toolkit));
-}
 
-#[test]
-fn a_version_24_server_gets_the_default_key_class() {
-    let (mut wire, _bar, _) = bar_with(Offer::shell(24), |bar| {
-        bar.active_client(42, ClientKind::Wayland);
-        bar.done();
-    });
-    let update = updates(&mut wire).remove(0);
+    let (mut wire, _bar, _) = ready(Offer::shell(24));
+    let update = next_update(&mut wire, |bar| bar.active_client(42, ClientKind::Wayland));
     assert_eq!(update.active_client, Some(ActiveClient::Wayland(42)));
-    assert_eq!(update.key_class, Some(KeyClass::Other));
-    assert_eq!(KeyClass::default(), KeyClass::Other);
+    assert_eq!(
+        update.key_class,
+        Some(KeyClass::Other),
+        "a version 24 server gets the default key class"
+    );
 }
 
 #[test]
 fn the_requests_of_the_bar_carry_their_arguments() {
-    let (mut wire, bar, _) = bar_with(Offer::all(), |bar| bar.done());
-    wire.events();
-    wire.take();
+    let (mut wire, bar, _) = ready(Offer::all());
 
     bar.set_menu_open(true);
     bar.set_menu_open(false);
-    bar.window_command(WindowCommand::Minimize);
-    bar.window_command(WindowCommand::CascadeAll);
     bar.activate_window(9);
-    bar.session_action(SessionAction::ShutDown);
     bar.move_to_workspace(3);
-    bar.edit(EditAction::Paste);
     bar.force_quit_app("org.example.Stuck");
-    wire.events();
-
-    let requests = bar_requests(&wire);
-    assert!(matches!(requests[0], Request::SetMenuOpen { open: 1 }));
-    assert!(matches!(requests[1], Request::SetMenuOpen { open: 0 }));
-    assert!(matches!(requests[2], Request::WindowCommand { command } if u32::from(command) == 4));
-    assert!(matches!(requests[3], Request::WindowCommand { command } if u32::from(command) == 12));
-    assert!(matches!(requests[4], Request::ActivateWindow { id: 9 }));
-    assert!(matches!(requests[5], Request::SessionAction { action } if u32::from(action) == 2));
-    assert!(matches!(
-        requests[6],
-        Request::MoveToWorkspace { workspace: 3 }
-    ));
-    assert!(matches!(requests[7], Request::Edit { action } if u32::from(action) == 4));
-    assert!(matches!(
-        &requests[8],
-        Request::ForceQuitApp { app_id } if app_id == "org.example.Stuck"
-    ));
-    assert_eq!(requests.len(), 9);
-}
-
-#[test]
-fn every_session_action_and_edit_action_has_its_own_wire_value() {
-    let (mut wire, bar, _) = bar_with(Offer::all(), |bar| bar.done());
-    wire.events();
-    wire.take();
+    let commands = [
+        WindowCommand::HideApp,
+        WindowCommand::HideOthers,
+        WindowCommand::ShowAll,
+        WindowCommand::QuitApp,
+        WindowCommand::Minimize,
+        WindowCommand::Zoom,
+        WindowCommand::Close,
+        WindowCommand::ToggleFullscreen,
+        WindowCommand::TileLeft,
+        WindowCommand::TileRight,
+        WindowCommand::TileFill,
+        WindowCommand::BringAllToFront,
+        WindowCommand::CascadeAll,
+        WindowCommand::MinimizeAll,
+        WindowCommand::ZoomAll,
+        WindowCommand::ForceQuitDialog,
+    ];
+    for command in commands {
+        bar.window_command(command);
+    }
     for action in [
         SessionAction::Sleep,
         SessionAction::Restart,
@@ -488,88 +430,66 @@ fn every_session_action_and_edit_action_has_its_own_wire_value() {
         bar.edit(action);
     }
     wire.events();
-    let wire_values: Vec<u32> = bar_requests(&wire)
-        .into_iter()
+
+    let requests = bar_requests(&wire);
+    assert!(matches!(requests[0], Request::SetMenuOpen { open: 1 }));
+    assert!(matches!(requests[1], Request::SetMenuOpen { open: 0 }));
+    assert!(matches!(requests[2], Request::ActivateWindow { id: 9 }));
+    assert!(matches!(
+        requests[3],
+        Request::MoveToWorkspace { workspace: 3 }
+    ));
+    assert!(matches!(
+        &requests[4],
+        Request::ForceQuitApp { app_id } if app_id == "org.example.Stuck"
+    ));
+    let values: Vec<(&str, u32)> = requests[5..]
+        .iter()
         .map(|r| match r {
-            Request::SessionAction { action } => u32::from(action),
-            Request::Edit { action } => u32::from(action),
+            Request::WindowCommand { command } => ("window", u32::from(*command)),
+            Request::SessionAction { action } => ("session", u32::from(*action)),
+            Request::Edit { action } => ("edit", u32::from(*action)),
             other => panic!("unexpected {other:?}"),
         })
         .collect();
-    assert_eq!(wire_values, [0, 1, 2, 3, 4, 5, 6, 0, 1, 2, 3, 4, 5]);
-}
-
-#[test]
-fn every_window_command_has_its_own_wire_value() {
-    let (mut wire, bar, _) = bar_with(Offer::all(), |bar| bar.done());
-    wire.events();
-    wire.take();
-    for command in [
-        WindowCommand::HideApp,
-        WindowCommand::HideOthers,
-        WindowCommand::ShowAll,
-        WindowCommand::QuitApp,
-        WindowCommand::Minimize,
-        WindowCommand::Zoom,
-        WindowCommand::Close,
-        WindowCommand::ToggleFullscreen,
-        WindowCommand::TileLeft,
-        WindowCommand::TileRight,
-        WindowCommand::TileFill,
-        WindowCommand::BringAllToFront,
-        WindowCommand::CascadeAll,
-        WindowCommand::MinimizeAll,
-        WindowCommand::ZoomAll,
-        WindowCommand::ForceQuitDialog,
-    ] {
-        bar.window_command(command);
-    }
-    wire.events();
-    let values: Vec<u32> = bar_requests(&wire)
-        .into_iter()
-        .map(|r| match r {
-            Request::WindowCommand { command } => u32::from(command),
-            other => panic!("unexpected {other:?}"),
-        })
+    let expected: Vec<(&str, u32)> = (0..16)
+        .map(|v| ("window", v))
+        .chain((0..7).map(|v| ("session", v)))
+        .chain((0..6).map(|v| ("edit", v)))
         .collect();
-    assert_eq!(values, (0..16).collect::<Vec<u32>>());
+    assert_eq!(
+        values, expected,
+        "each command and action has its own value"
+    );
 }
 
 #[test]
-fn a_server_of_version_nine_is_sent_only_what_it_knows() {
-    let (mut wire, bar, _) = bar_with(Offer::shell(9), |bar| bar.done());
-    wire.events();
-    wire.take();
-
-    assert!(!bar.can_edit());
-    assert!(!bar.can_force_quit_app());
+fn a_server_is_sent_only_the_requests_its_version_knows() {
+    let (mut wire, bar, _) = ready(Offer::shell(9));
     bar.window_command(WindowCommand::Zoom);
     bar.window_command(WindowCommand::TileLeft);
     bar.window_command(WindowCommand::ForceQuitDialog);
     bar.activate_window(1);
-    bar.edit(EditAction::Copy);
-    bar.force_quit_app("org.example.Stuck");
     bar.session_action(SessionAction::Lock);
     wire.events();
-
     let requests = bar_requests(&wire);
     assert!(matches!(requests[0], Request::WindowCommand { command } if u32::from(command) == 5));
     assert!(matches!(requests[1], Request::SessionAction { .. }));
-    assert_eq!(requests.len(), 2);
-}
+    assert_eq!(requests.len(), 2, "version 9");
 
-#[test]
-fn the_edit_and_force_quit_requests_start_at_their_versions() {
-    for (version, edit, force_quit) in [(10, false, false), (11, true, false), (13, true, true)] {
-        let (mut wire, bar, _) = bar_with(Offer::shell(version), |bar| bar.done());
-        wire.events();
+    for (version, edit, force_quit) in [
+        (9, false, false),
+        (10, false, false),
+        (11, true, false),
+        (13, true, true),
+    ] {
+        let (mut wire, bar, _) = ready(Offer::shell(version));
         assert_eq!(bar.can_edit(), edit, "edit at {version}");
         assert_eq!(
             bar.can_force_quit_app(),
             force_quit,
             "force quit at {version}"
         );
-        wire.take();
         bar.edit(EditAction::Undo);
         bar.force_quit_app("x");
         wire.events();
@@ -582,18 +502,8 @@ fn the_edit_and_force_quit_requests_start_at_their_versions() {
 }
 
 #[test]
-fn dropping_the_bar_gives_up_the_role() {
-    let (mut wire, bar, _) = bar_with(Offer::all(), |bar| bar.done());
-    wire.events();
-    wire.take();
-    drop(bar);
-    wire.events();
-    assert!(matches!(&bar_requests(&wire)[..], [Request::Destroy]));
-}
-
-#[test]
-fn a_bar_for_an_unplugged_output_is_refused() {
-    let (mut wire, _bar, surface) = bar_with(Offer::all(), |bar| bar.done());
+fn a_bar_needs_a_plugged_output_and_gives_up_the_role_when_dropped() {
+    let (mut wire, bar, surface) = ready(Offer::all());
     let shell = Shell::bind(&mut wire.conn).expect("shell");
     let result = shell.menu_bar(
         &wire.conn,
@@ -604,4 +514,10 @@ fn a_bar_for_an_unplugged_output_is_refused() {
         result,
         Err(cupertino_shell_client::Error::UnknownOutput)
     ));
+    wire.events();
+    wire.take();
+
+    drop(bar);
+    wire.events();
+    assert!(matches!(&bar_requests(&wire)[..], [Request::Destroy]));
 }

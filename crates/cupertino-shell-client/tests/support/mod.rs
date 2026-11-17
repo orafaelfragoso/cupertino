@@ -31,9 +31,7 @@ use wayland_protocols::ext::idle_notify::v1::server::ext_idle_notifier_v1::{
 use wayland_protocols::ext::session_lock::v1::server::ext_session_lock_manager_v1::{
     self, ExtSessionLockManagerV1,
 };
-use wayland_protocols::ext::session_lock::v1::server::ext_session_lock_surface_v1::{
-    self, ExtSessionLockSurfaceV1,
-};
+use wayland_protocols::ext::session_lock::v1::server::ext_session_lock_surface_v1::ExtSessionLockSurfaceV1;
 use wayland_protocols::ext::session_lock::v1::server::ext_session_lock_v1::{
     self, ExtSessionLockV1,
 };
@@ -67,18 +65,13 @@ pub enum Seen {
     LockCreated,
     Lock(ext_session_lock_v1::Request),
     LockSurfaceCreated,
-    LockSurface(ext_session_lock_surface_v1::Request),
     IdleCreated {
         millis: u32,
     },
     Idle(ext_idle_notification_v1::Request),
-    SessionCreated,
     Session(cupertino_session_v1::Request),
-    MenuBarCreated,
     MenuBar(cupertino_menu_bar_v1::Request),
-    DockCreated,
     Dock(cupertino_dock_v1::Request),
-    ControlSessionCreated,
     ControlSession(cupertino_control_session_v1::Request),
     Authority(cupertino_control_authority_v1::Request),
     Control(cupertino_control_v1::Request),
@@ -93,7 +86,6 @@ pub struct Offer {
     pub idle: Option<u32>,
     pub control: Option<u32>,
     pub authority: Option<u32>,
-    pub outputs: u32,
 }
 
 impl Offer {
@@ -105,7 +97,6 @@ impl Offer {
             idle: Some(2),
             control: Some(5),
             authority: Some(2),
-            outputs: 1,
         }
     }
 
@@ -317,7 +308,7 @@ fn serve(stream: UnixStream, offer: Offer, log: Arc<Mutex<Vec<Seen>>>, inbox: Re
     handle.create_global::<Server, WlShm, ()>(1, ());
     handle.create_global::<Server, XdgWmBase, ()>(6, ());
     handle.create_global::<Server, WlSeat, ()>(7, ());
-    for _ in 0..offer.outputs {
+    {
         handle.create_global::<Server, WlOutput, ()>(4, ());
     }
     if let Some(version) = offer.shell {
@@ -407,7 +398,8 @@ ignore_requests!(
     WlSeat,
     WlOutput,
     WlCallback,
-    CupertinoWindowManagerV1
+    CupertinoWindowManagerV1,
+    ExtSessionLockSurfaceV1
 );
 
 macro_rules! record_requests {
@@ -430,7 +422,6 @@ macro_rules! record_requests {
 
 record_requests!(
     ZwlrLayerSurfaceV1 => Layer,
-    ExtSessionLockSurfaceV1 => LockSurface,
     ExtIdleNotificationV1 => Idle,
     CupertinoSessionV1 => Session,
     CupertinoMenuBarV1 => MenuBar,
@@ -651,7 +642,6 @@ impl Dispatch<CupertinoShellV1, ()> for Server {
                     greet(&bar);
                 }
                 state.menu_bars.push(bar);
-                state.see(Seen::MenuBarCreated);
             }
             cupertino_shell_v1::Request::GetDock { id, .. } => {
                 let dock = init.init(id, ());
@@ -659,7 +649,6 @@ impl Dispatch<CupertinoShellV1, ()> for Server {
                     greet(&dock);
                 }
                 state.docks.push(dock);
-                state.see(Seen::DockCreated);
             }
             cupertino_shell_v1::Request::GetSession { id } => {
                 let session = init.init(id, ());
@@ -667,7 +656,6 @@ impl Dispatch<CupertinoShellV1, ()> for Server {
                     greet(&session);
                 }
                 state.sessions.push(session);
-                state.see(Seen::SessionCreated);
             }
             cupertino_shell_v1::Request::GetWindowManager { id, .. } => {
                 init.init(id, ());
@@ -705,7 +693,6 @@ impl Dispatch<CupertinoControlV1, ()> for Server {
             cupertino_control_v1::Request::GetSession { id } => {
                 let session = init.init(id, ());
                 state.control_sessions.push(session);
-                state.see(Seen::ControlSessionCreated);
             }
             other => state.see(Seen::Control(other)),
         }

@@ -2,7 +2,6 @@
 
 use cupertino_pipewire::{Error, Sink, Target, Volume, VolumeWorker, Wpctl};
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -14,17 +13,26 @@ fn directory(name: &str) -> PathBuf {
     dir
 }
 
-/// A program that appends its arguments to `calls` and then runs `body`.
-fn program(dir: &std::path::Path, body: &str) -> (Wpctl, PathBuf) {
-    let log = dir.join("calls");
+/// The built stand-in program (`examples/wpctl-stand-in.rs`): the `examples` directory of the
+/// nearest enclosing directory of this test executable (or of the target tmp directory) that
+/// has one, whatever layout cargo gives its build directories.
+fn stand_in() -> PathBuf {
+    let exe = std::env::current_exe().unwrap();
+    let tmp = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    exe.ancestors()
+        .chain(tmp.ancestors())
+        .map(|dir| dir.join("examples").join("wpctl-stand-in"))
+        .find(|path| path.is_file())
+        .expect("examples/wpctl-stand-in is not built; build the examples of cupertino-pipewire")
+}
+
+/// A copy of the stand-in program in `dir` that records its arguments in `calls` and follows
+/// `behaviour`: lines of `COMMAND<TAB>ACTION[<TAB>TEXT]` (see the example).
+fn program(dir: &std::path::Path, behaviour: &str) -> (Wpctl, PathBuf) {
     let path = dir.join("wpctl");
-    fs::write(
-        &path,
-        format!("#!/bin/sh\necho \"$@\" >> '{}'\n{body}\n", log.display()),
-    )
-    .unwrap();
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
-    (Wpctl::new(path), log)
+    fs::copy(stand_in(), &path).unwrap();
+    fs::write(dir.join("behaviour"), behaviour).unwrap();
+    (Wpctl::new(path), dir.join("calls"))
 }
 
 fn calls(log: &std::path::Path) -> Vec<String> {
@@ -38,7 +46,7 @@ fn calls(log: &std::path::Path) -> Vec<String> {
 #[test]
 fn the_volume_is_asked_of_the_default_sink_or_source() {
     let dir = directory("volume");
-    let (wpctl, log) = program(&dir, "echo 'Volume: 0.55 [MUTED]'");
+    let (wpctl, log) = program(&dir, "*\tstdout\tVolume: 0.55 [MUTED]\\n");
     assert_eq!(
         wpctl.volume(Target::DefaultSink).unwrap(),
         Volume {
@@ -99,7 +107,7 @@ fn sinks_and_sources_come_from_the_status_listing() {
     let dir = directory("status");
     let (wpctl, log) = program(
         &dir,
-        "printf 'Audio\\n ├─ Sinks:\\n │  *   5. Speakers [vol: 1.00]\\n ├─ Sources:\\n │      6. Mic\\n'",
+        "*\tstdout\tAudio\\n ├─ Sinks:\\n │  *   5. Speakers [vol: 1.00]\\n ├─ Sources:\\n │      6. Mic\\n\n",
     );
     assert_eq!(
         wpctl.sinks().unwrap(),
@@ -123,7 +131,7 @@ fn sinks_and_sources_come_from_the_status_listing() {
 #[test]
 fn a_program_that_fails_reports_its_exit_code_and_trimmed_message() {
     let dir = directory("failure");
-    let (wpctl, _) = program(&dir, "echo '  no default node  ' >&2\nexit 3");
+    let (wpctl, _) = program(&dir, "*\tstderr\t  no default node  \\n\n*\texit\t3\n");
     match wpctl.volume(Target::DefaultSink) {
         Err(Error::Failed { code, stderr }) => {
             assert_eq!(code, Some(3));
@@ -138,7 +146,7 @@ fn a_program_that_fails_reports_its_exit_code_and_trimmed_message() {
 #[test]
 fn a_program_ended_by_a_signal_has_no_exit_code() {
     let dir = directory("signal");
-    let (wpctl, _) = program(&dir, "kill -9 $$");
+    let (wpctl, _) = program(&dir, "*\tabort\n");
     let error = wpctl.volume(Target::DefaultSink).unwrap_err();
     assert!(
         matches!(error, Error::Failed { code: None, .. }),
@@ -150,7 +158,7 @@ fn a_program_ended_by_a_signal_has_no_exit_code() {
 #[test]
 fn output_that_is_not_a_volume_is_unparsed() {
     let dir = directory("unparsed");
-    let (wpctl, _) = program(&dir, "echo hello");
+    let (wpctl, _) = program(&dir, "*\tstdout\thello\\n\n");
     let error = wpctl.volume(Target::DefaultSink).unwrap_err();
     assert!(matches!(&error, Error::Unparsed(text) if text == "hello"));
     assert_eq!(error.to_string(), "unexpected wpctl output \"hello\"");
@@ -159,7 +167,7 @@ fn output_that_is_not_a_volume_is_unparsed() {
 #[test]
 fn a_program_that_does_not_answer_in_time_is_stopped() {
     let dir = directory("timeout");
-    let (wpctl, _) = program(&dir, "sleep 30");
+    let (wpctl, _) = program(&dir, "*\thang\n");
     let wpctl = wpctl.with_timeout(Duration::from_millis(200));
     let started = Instant::now();
     let error = wpctl.volume(Target::DefaultSink).unwrap_err();
@@ -240,7 +248,7 @@ fn a_reading_asked_for_arrives_with_the_sinks_when_they_were_asked_for() {
     let dir = directory("worker-read");
     let (wpctl, log) = program(
         &dir,
-        "case \"$1\" in get-volume) echo 'Volume: 0.60';; status) printf 'Audio\\n ├─ Sinks:\\n │  *   5. Speakers\\n';; esac",
+        "get-volume\tstdout\tVolume: 0.60\\n\nstatus\tstdout\tAudio\\n ├─ Sinks:\\n │  *   5. Speakers\\n\n",
     );
     let worker = VolumeWorker::new(wpctl, Target::DefaultSink);
     worker.request_read(false);
@@ -284,7 +292,7 @@ fn a_reading_asked_for_arrives_with_the_sinks_when_they_were_asked_for() {
 #[test]
 fn a_failed_reading_is_the_message_of_the_program() {
     let dir = directory("worker-failed-read");
-    let (wpctl, _) = program(&dir, "echo 'no server' >&2\nexit 1");
+    let (wpctl, _) = program(&dir, "*\tstderr\tno server\\n\n*\texit\t1\n");
     let worker = VolumeWorker::new(wpctl, Target::DefaultSink);
     worker.request_read(false);
     worker.wait_idle();
@@ -297,7 +305,7 @@ fn a_failed_reading_is_the_message_of_the_program() {
 #[test]
 fn a_failed_write_is_reported_by_the_next_call_once() {
     let dir = directory("worker-failed-write");
-    let (wpctl, _) = program(&dir, "echo 'no server' >&2\nexit 1");
+    let (wpctl, _) = program(&dir, "*\tstderr\tno server\\n\n*\texit\t1\n");
     let worker = VolumeWorker::new(wpctl, Target::DefaultSink);
     let volume = Volume {
         level: 0.5,

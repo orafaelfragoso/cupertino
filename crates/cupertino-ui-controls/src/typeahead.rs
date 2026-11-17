@@ -1,4 +1,4 @@
-//! Type-to-select for the items of a menu or a pop-up list. See the README.
+//! Type-to-select for the items of a menu or a pop-up list. See the crate README, *Type-to-select*.
 
 /// How long a pause ends the typed text (seconds).
 pub const RESET_AFTER: f64 = 1.0;

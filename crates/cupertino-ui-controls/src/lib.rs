@@ -15,6 +15,7 @@ mod dialog;
 mod disclosure;
 mod editor;
 mod field;
+pub mod filepicker;
 mod form;
 mod frame_clock;
 mod glass;
@@ -56,6 +57,7 @@ mod tile_sidebar;
 mod toggle;
 mod toolbar;
 mod tooltip;
+pub mod typeahead;
 mod window_drag;
 mod window_group;
 

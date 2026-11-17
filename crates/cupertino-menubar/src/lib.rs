@@ -16,9 +16,9 @@
 //! * [`source`]: window / app identity → menu source (KDE appmenu service + path, GTK bus name and
 //!   object paths).
 //! * [`tone`]: the colours of the bar and its menus, and the tone and scrim of the bar's text over the wallpaper.
-//! * `dbus` (feature `dbus`, on by default): DBusMenu client, StatusNotifier watcher / item client,
+//! * [`dbus`]: DBusMenu client, StatusNotifier watcher / item client,
 //!   GMenuModel reader.
-//! * feature `app`, the logic of the `cupertino-menubar` process (one bar per output as a client
+//! * the logic of the `cupertino-menubar` process (one bar per output as a client
 //!   of the server): [`feed`] (what the bars show, from the server's groups and the bus),
 //!   [`routing`] (keys and controller effects to actions), [`popups`] (placement of the menus'
 //!   popups), [`view`] (the bar and its menus as CupertinoKit windows), [`desktop`] (application names),
@@ -33,7 +33,6 @@
 
 pub mod clock;
 pub mod controller;
-#[cfg(feature = "dbus")]
 pub mod dbus;
 pub mod extras;
 pub mod fallback;
@@ -48,21 +47,12 @@ pub mod source;
 pub mod tone;
 pub mod wakeup;
 
-#[cfg(feature = "app")]
 pub mod desktop;
-#[cfg(feature = "app")]
 pub mod extras_bus;
-#[cfg(feature = "app")]
 pub mod feed;
-#[cfg(feature = "app")]
 pub mod follow;
-#[cfg(feature = "app")]
 pub mod popups;
-#[cfg(feature = "app")]
 pub mod routing;
-#[cfg(feature = "app")]
 pub mod view;
-#[cfg(feature = "app")]
 pub mod worker;
-#[cfg(feature = "app")]
 pub mod x11;

@@ -8,8 +8,6 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
 use cupertino_assets::Assets;
-use cupertino_filepicker::places::{session_places, Place};
-use cupertino_filepicker::{Listing, Request};
 use cupertino_icons::ThemeIcons;
 use cupertino_kit::controls::{
     CheckBox, Image, ImageFit, ImageSource, ListView, ScrollView, Scroller, SegmentedControl,
@@ -21,6 +19,8 @@ use cupertino_kit::core::{
     MeasureCx, PaintCx, Phase, Propagation, SemanticsCx, Shortcut, Widget,
 };
 use cupertino_kit::file_icons::FileIcons;
+use cupertino_kit::filepicker::places::{session_places, Place};
+use cupertino_kit::filepicker::{Listing, Request};
 use cupertino_kit::geometry::{Insets, Point, Size};
 use cupertino_kit::layout::{Constraints, ContainerKind, LayoutSpec, Measured, ScrollState};
 use cupertino_kit::platform::{DecorationMode, ForeignParent, Keysym, Mods};

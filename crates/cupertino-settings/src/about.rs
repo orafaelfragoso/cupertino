@@ -420,7 +420,6 @@ impl About {
 
     /// A Displays row before Kernel for each connected display with a current mode: one short connection asks the
     /// server.
-    #[cfg(feature = "app")]
     /// Add a Displays row for each output, and give the height in points of the shortest one, which the window keeps
     /// within ([`Layout::fit`]).
     pub fn read_displays(&mut self) -> Result<Option<f64>, cupertino_wayland_client::Error> {

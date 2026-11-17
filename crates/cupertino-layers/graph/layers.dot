@@ -1,6 +1,6 @@
 // cupertino-layers --graph
-// 89 crates, 381 internal dependencies
-// per layer: foundation 11, graphics 2, models 9, system 8, platform 8, protocol 4, transport 3, render 3, ui 14, shellkit 0, core 1, services 4, shell 12, apps 2, tools 6, testing 2
+// 87 crates, 375 internal dependencies
+// per layer: foundation 9, graphics 2, models 9, system 8, platform 8, protocol 4, transport 3, render 3, ui 14, shellkit 0, core 1, services 4, shell 12, apps 2, tools 6, testing 2
 // forbidden normal edge cupertino-control (shell) -> cupertino-shell-client (transport)
 // forbidden normal edge cupertino-control (shell) -> cupertino-wayland-client (transport)
 // forbidden normal edge cupertino-controlcenter (shell) -> cupertino-alsa (platform)
@@ -45,9 +45,8 @@
 digraph "layers" {
   node [shape=box];
   subgraph "cluster_foundation" {
-    label="foundation (11)";
+    label="foundation (9)";
     "cupertino-animation";
-    "cupertino-filepicker";
     "cupertino-geometry";
     "cupertino-glyph";
     "cupertino-key-bindings";
@@ -55,7 +54,6 @@ digraph "layers" {
     "cupertino-menu-model";
     "cupertino-modifiers";
     "cupertino-theme";
-    "cupertino-typeahead";
     "xkbcommon";
   }
   subgraph "cluster_graphics" {
@@ -233,7 +231,6 @@ digraph "layers" {
   "cupertino-dock" -> "cupertino-wm";
   "cupertino-effects" -> "cupertino-animation";
   "cupertino-effects" -> "cupertino-geometry";
-  "cupertino-filepicker" -> "cupertino-typeahead";
   "cupertino-files" -> "cupertino-apps";
   "cupertino-files" -> "cupertino-assets";
   "cupertino-files" -> "cupertino-capture" [label="dev"];
@@ -332,7 +329,6 @@ digraph "layers" {
   "cupertino-menubar" -> "cupertino-radios";
   "cupertino-menubar" -> "cupertino-shell-client" [color=red];
   "cupertino-menubar" -> "cupertino-theme";
-  "cupertino-menubar" -> "cupertino-typeahead";
   "cupertino-menubar" -> "cupertino-ui-text";
   "cupertino-menubar" -> "cupertino-ui-wayland";
   "cupertino-menubar" -> "cupertino-wayland-client" [color=red];
@@ -383,7 +379,6 @@ digraph "layers" {
   "cupertino-portal" -> "cupertino-assets";
   "cupertino-portal" -> "cupertino-defaults";
   "cupertino-portal" -> "cupertino-diagnostic-events";
-  "cupertino-portal" -> "cupertino-filepicker";
   "cupertino-portal" -> "cupertino-geometry";
   "cupertino-portal" -> "cupertino-icons";
   "cupertino-portal" -> "cupertino-kit";
@@ -459,7 +454,6 @@ digraph "layers" {
   "cupertino-settings" -> "cupertino-defaults";
   "cupertino-settings" -> "cupertino-diagnostic-events";
   "cupertino-settings" -> "cupertino-displays";
-  "cupertino-settings" -> "cupertino-filepicker";
   "cupertino-settings" -> "cupertino-icons";
   "cupertino-settings" -> "cupertino-kit";
   "cupertino-settings" -> "cupertino-menu-model";
@@ -467,7 +461,6 @@ digraph "layers" {
   "cupertino-settings" -> "cupertino-pipewire" [color=red];
   "cupertino-settings" -> "cupertino-radios";
   "cupertino-settings" -> "cupertino-theme";
-  "cupertino-settings" -> "cupertino-typeahead";
   "cupertino-settings" -> "cupertino-wayland-client" [color=red];
   "cupertino-shell-client" -> "cupertino-defaults";
   "cupertino-shell-client" -> "cupertino-geometry";
@@ -485,7 +478,6 @@ digraph "layers" {
   "cupertino-ui-controls" -> "cupertino-geometry";
   "cupertino-ui-controls" -> "cupertino-menu-model";
   "cupertino-ui-controls" -> "cupertino-theme";
-  "cupertino-ui-controls" -> "cupertino-typeahead";
   "cupertino-ui-controls" -> "cupertino-ui-core";
   "cupertino-ui-controls" -> "cupertino-ui-layout";
   "cupertino-ui-controls" -> "cupertino-ui-platform";

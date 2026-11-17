@@ -26,3 +26,22 @@ pub mod prelude {
     pub use cupertino_ui_layout::{Align, Axis};
     pub use cupertino_ui_platform::WindowSpec;
 }
+
+/// Type-to-select for the items of a menu or a pop-up list.
+pub mod typeahead {
+    pub use cupertino_ui_controls::typeahead::TypeAhead;
+}
+
+/// The model of a file chooser: a folder's entries, the highlighted one, navigation, filters and type-to-select.
+pub mod filepicker {
+    pub use cupertino_ui_controls::filepicker::{
+        Entry, Key, Listing, Mode, Outcome, Picker, Request,
+    };
+
+    /// The folders of a chooser's sidebar: the home folder and the user directories of `user-dirs.dirs`.
+    pub mod places {
+        pub use cupertino_ui_controls::filepicker::places::{
+            parse_user_dirs, session_places, Place,
+        };
+    }
+}

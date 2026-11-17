@@ -46,7 +46,6 @@ pub struct LocalTime {
 }
 
 /// The local time of `unix_seconds` in the session's time zone.
-#[cfg(feature = "app")]
 pub fn local_time(unix_seconds: i64) -> LocalTime {
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
     let t = unix_seconds as libc::time_t;

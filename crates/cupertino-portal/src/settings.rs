@@ -55,7 +55,6 @@ impl Setting {
 
 impl Appearance {
     /// The appearance after `event`; events of other kinds leave it as it is.
-    #[cfg(feature = "app")]
     pub fn after(mut self, event: &cupertino_protocol_app::AppEvent) -> Self {
         use cupertino_protocol_app::AppEvent;
         match event {

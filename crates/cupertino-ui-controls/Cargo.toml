@@ -11,7 +11,6 @@ layer = "ui"
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-menu-model = { path = "../cupertino-menu-model" }
 cupertino-theme = { path = "../cupertino-theme" }
-cupertino-typeahead = { path = "../cupertino-typeahead" }
 cupertino-ui-core = { path = "../cupertino-ui-core" }
 cupertino-ui-layout = { path = "../cupertino-ui-layout" }
 cupertino-ui-platform = { path = "../cupertino-ui-platform" }

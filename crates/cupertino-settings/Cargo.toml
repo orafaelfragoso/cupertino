@@ -7,49 +7,29 @@ description = "Settings application on CupertinoKit: pane table, sidebar, naviga
 [package.metadata.cupertino]
 layer = "apps"
 
-[features]
-# the `cupertino-settings` process: the settings window as a client of the server
-app = [
-    "dep:async-io",
-    "dep:cupertino-kit",
-    "dep:cupertino-wayland-client",
-    "dep:zbus",
-    "cupertino-radios/dbus",
-    "dep:cupertino-alsa",
-    "dep:cupertino-pipewire",
-    "dep:async-channel",
-    "dep:wayland-client",
-    "dep:wayland-protocols-wlr",
-    "dep:cupertino-icons",
-    "dep:cupertino-theme",
-]
-
 [dependencies]
 cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events" }
 cupertino-menu-model = { path = "../cupertino-menu-model" }
-cupertino-kit = { path = "../cupertino-kit", optional = true }
+cupertino-kit = { path = "../cupertino-kit" }
 cupertino-assets = { path = "../cupertino-assets" }
 cupertino-apps = { path = "../cupertino-apps" }
 cupertino-defaults = { path = "../cupertino-defaults" }
-cupertino-radios = { path = "../cupertino-radios" }
+cupertino-radios = { path = "../cupertino-radios", features = ["dbus"] }
 cupertino-displays = { path = "../cupertino-displays" }
-cupertino-filepicker = { path = "../cupertino-filepicker" }
-cupertino-typeahead = { path = "../cupertino-typeahead" }
-cupertino-icons = { path = "../cupertino-icons", optional = true }
-cupertino-theme = { path = "../cupertino-theme", optional = true }
+cupertino-icons = { path = "../cupertino-icons" }
+cupertino-theme = { path = "../cupertino-theme" }
 cupertino-modifiers = { path = "../cupertino-modifiers" }
-cupertino-wayland-client = { path = "../cupertino-wayland-client", optional = true }
-cupertino-alsa = { path = "../cupertino-alsa", optional = true }
-cupertino-pipewire = { path = "../cupertino-pipewire", optional = true }
-wayland-client = { version = "0.31", optional = true }
-wayland-protocols-wlr = { version = "0.3", features = ["client"], optional = true }
+cupertino-wayland-client = { path = "../cupertino-wayland-client" }
+cupertino-alsa = { path = "../cupertino-alsa" }
+cupertino-pipewire = { path = "../cupertino-pipewire" }
+wayland-client = "0.31"
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 libc = "0.2"
 zeroize = "1"
-async-channel = { version = "2", optional = true }
-async-io = { version = "2", optional = true }
-zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"], optional = true }
+async-channel = "2"
+async-io = "2"
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
 
 [[bin]]
 name = "cupertino-settings"
 path = "src/main.rs"
-required-features = ["app"]

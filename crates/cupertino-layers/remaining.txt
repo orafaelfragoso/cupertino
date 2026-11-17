@@ -20,9 +20,6 @@ apps forbidden_edge cupertino-settings -> cupertino-alsa normal
 apps forbidden_edge cupertino-settings -> cupertino-pipewire normal
 apps forbidden_edge cupertino-settings -> cupertino-wayland-client normal
 foundation forbidden_edge cupertino-keyboard -> cupertino-defaults normal
-foundation impure_source cupertino-filepicker src/lib.rs std::fs
-foundation impure_source cupertino-filepicker src/places.rs std::env
-foundation impure_source cupertino-filepicker src/places.rs std::fs
 foundation impure_source cupertino-key-bindings src/binding.rs std::fs
 foundation impure_source cupertino-keyboard src/xkb.rs std::fs
 foundation impure_source cupertino-theme src/animation.rs std::fs

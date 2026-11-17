@@ -1,4 +1,4 @@
-//! The live services (feature `app`): `org.cupertino.Network1` (else NetworkManager, [`nm`]),
+//! The live services: `org.cupertino.Network1` (else NetworkManager, [`nm`]),
 //! `org.cupertino.Bluetooth1` (else BlueZ, [`bluez`]), `org.cupertino.Power1` and `org.cupertino.LoginManager1` with
 //! UPower's display device on the system bus, `org.cupertino.NotificationCenter1` on
 //! the session bus, and the default PipeWire sink through `cupertino-pipewire`, else the mixer's master through

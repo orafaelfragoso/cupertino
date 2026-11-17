@@ -7,8 +7,8 @@ use zeroize::{Zeroize, Zeroizing};
 
 use cupertino_defaults::compositor::MOUSE_DPI_RANGE;
 
-use cupertino_filepicker::{Key as PickerKey, Mode, Outcome as PickerOutcome, Picker};
-use cupertino_typeahead::TypeAhead;
+use cupertino_kit::filepicker::{Key as PickerKey, Mode, Outcome as PickerOutcome, Picker};
+use cupertino_kit::typeahead::TypeAhead;
 
 use crate::geom::{Point, Rect};
 use crate::panes::Call;
@@ -317,7 +317,7 @@ impl Sheet {
     }
 
     /// The folder the chooser wants listed next, once.
-    pub fn picker_request(&mut self) -> Option<cupertino_filepicker::Request> {
+    pub fn picker_request(&mut self) -> Option<cupertino_kit::filepicker::Request> {
         match &mut self.kind {
             Kind::Picker { chooser, .. } => chooser.0.take_request(),
             _ => None,
@@ -325,7 +325,7 @@ impl Sheet {
     }
 
     /// The listing a thread read for the chooser.
-    pub fn apply_listing(&mut self, listing: cupertino_filepicker::Listing) {
+    pub fn apply_listing(&mut self, listing: cupertino_kit::filepicker::Listing) {
         if let Kind::Picker { chooser, top, .. } = &mut self.kind {
             if chooser.0.apply(listing) == PickerOutcome::Changed {
                 picked(chooser, top, PickerOutcome::Changed);

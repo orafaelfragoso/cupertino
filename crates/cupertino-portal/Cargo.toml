@@ -7,39 +7,32 @@ description = "xdg-desktop-portal backend of the session: the appearance setting
 [package.metadata.cupertino]
 layer = "shell"
 
-[features]
-default = []
-# the `cupertino-portal` process
-app = ["dep:cupertino-assets", "dep:cupertino-icons", "dep:cupertino-kit", "dep:cupertino-protocol-app", "dep:cupertino-protocols", "dep:cupertino-screencast", "dep:cupertino-shell-client", "dep:cupertino-ui-wayland", "dep:cupertino-wayland-client", "dep:rustix", "dep:wayland-client", "dep:wayland-protocols"]
-
 [dependencies]
 cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events" }
 async-channel = "2"
 cupertino-apps = { path = "../cupertino-apps" }
-cupertino-assets = { path = "../cupertino-assets", optional = true }
+cupertino-assets = { path = "../cupertino-assets" }
 cupertino-defaults = { path = "../cupertino-defaults" }
-cupertino-filepicker = { path = "../cupertino-filepicker" }
 cupertino-geometry = { path = "../cupertino-geometry" }
-cupertino-icons = { path = "../cupertino-icons", optional = true }
-cupertino-kit = { path = "../cupertino-kit", optional = true }
-cupertino-protocol-app = { path = "../cupertino-protocol-app", optional = true }
-cupertino-protocols = { path = "../cupertino-protocols", features = ["client"], optional = true }
-cupertino-screencast = { path = "../cupertino-screencast", optional = true }
-cupertino-shell-client = { path = "../cupertino-shell-client", optional = true }
-cupertino-ui-wayland = { path = "../cupertino-ui-wayland", optional = true }
-cupertino-wayland-client = { path = "../cupertino-wayland-client", optional = true }
+cupertino-icons = { path = "../cupertino-icons" }
+cupertino-kit = { path = "../cupertino-kit" }
+cupertino-protocol-app = { path = "../cupertino-protocol-app" }
+cupertino-protocols = { path = "../cupertino-protocols", features = ["client"] }
+cupertino-screencast = { path = "../cupertino-screencast" }
+cupertino-shell-client = { path = "../cupertino-shell-client" }
+cupertino-ui-wayland = { path = "../cupertino-ui-wayland" }
+cupertino-wayland-client = { path = "../cupertino-wayland-client" }
 futures-lite = "2"
 libc = "0.2"
 xkbcommon = { path = "../cupertino-xkbcommon" }
 mime_guess = "2"
 percent-encoding = "2"
-rustix = { version = "1", features = ["fs", "time"], optional = true }
+rustix = { version = "1", features = ["fs", "time"] }
 tiny-skia = "0.12"
-wayland-client = { version = "0.31", optional = true }
-wayland-protocols = { version = "0.32", features = ["client", "staging"], optional = true }
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
 
 [[bin]]
 name = "cupertino-portal"
 path = "src/main.rs"
-required-features = ["app"]

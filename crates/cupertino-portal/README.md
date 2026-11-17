@@ -6,12 +6,12 @@ xdg-desktop-portal reads `cupertino-portals.conf` to pick the backend for each i
 
 ## Running
 
-Feature `app` builds the `cupertino-portal` binary. The server starts and supervises it from its installed path. It
+The crate builds the `cupertino-portal` binary. The server starts and supervises it from its installed path. It
 owns `org.freedesktop.impl.portal.desktop.cupertino` on the session bus and serves `/org/freedesktop/portal/desktop`.
 There is no D-Bus activation file: an instance that the bus starts would lack the server's Wayland connection.
 
 ```
-cargo build -p cupertino-portal --features app
+cargo build -p cupertino-portal
 ```
 
 It reads the session's appearance before it takes the bus name, so the first read after the server publishes the

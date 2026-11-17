@@ -1,8 +1,8 @@
-//! The model of a file chooser. See the README.
+//! The model of a file chooser. See the crate README, *File chooser model*.
 
 use std::path::{Path, PathBuf};
 
-use cupertino_typeahead::TypeAhead;
+use crate::typeahead::TypeAhead;
 
 pub mod places;
 

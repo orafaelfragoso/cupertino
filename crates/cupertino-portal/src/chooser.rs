@@ -4,7 +4,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use cupertino_filepicker::{Entry, Listing, Mode, Outcome, Picker, Request};
+use cupertino_kit::filepicker::{Entry, Listing, Mode, Outcome, Picker, Request};
 
 use crate::file_chooser::{Answer, Ask, Choice, Filter, Kind, Pattern};
 

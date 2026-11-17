@@ -1,6 +1,6 @@
 # Contributing to Cupertino
 
-Thanks for helping. This page covers how to build, what a good change looks like and what we cannot accept. `AGENTS.md` has the same rules in short form for coding agents.
+Thanks for helping. This page covers how to build, what a good change looks like and what we cannot accept.
 
 ## Build and test
 

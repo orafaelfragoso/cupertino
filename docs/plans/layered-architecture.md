@@ -459,7 +459,7 @@ Each task: **Owns**, **Touches** (mechanical edits only), **After**, size, and a
 
 #### W0.3 Smithay as release plus documented patches (M)
 
-**Owns** `third-party/smithay`, a new check script under `ci/`. **After** nothing.
+**Owns** `third-party/smithay`, a new check in the `cargo xtask ci` gate. **After** nothing.
 
 - [ ] `third-party/smithay/PATCHES.md`: the upstream release, then one entry per change (what, why, files), matching the
       Unreleased section of its changelog; `patches/` holds each change as a patch file.

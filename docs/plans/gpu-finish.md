@@ -4,7 +4,7 @@ What is left of `docs/plans/gpu-rendering.md` once the owner's checks are deferr
 Each task is one change with its own tests, in the crates it names; tasks that share a crate run one after the other.
 The boxes here are ticked together with their items in the GPU plan.
 
-The repository has since dropped its scripts, its golden images and the test suite. Where this plan names a script, a golden, a test tier or a benchmark run, it records what was done at the time; validation is now `cargo xtask ci` (`AGENTS.md`), and profiling is `samply`, `perf`, `heaptrack` and `CUPERTINO_PROFILE`.
+The repository has since dropped its scripts, its golden images and the test suite. Where this plan names a script, a golden, a test tier or a benchmark run, it records what was done at the time; validation is now `cargo xtask ci`, and profiling is `samply`, `perf`, `heaptrack` and `CUPERTINO_PROFILE`.
 
 ## Rules
 

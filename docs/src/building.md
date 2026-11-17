@@ -602,7 +602,7 @@ cargo xtask ci --profile full                  # the whole workspace, every feat
 cargo xtask ci --profile agent --dry-run       # the plan only
 ```
 
-The rules and the feature configurations are in `.config/validation.toml`; `AGENTS.md` says which level to run when.
+The rules and the feature configurations are in `.config/validation.toml`: `--profile agent` for the crates a change touches, `integration` after merging, `pr` in CI on every push and `full` nightly.
 Install [cargo-nextest](https://nexte.st) (`cargo install cargo-nextest --locked`). It runs every test in its own
 process and kills a test that runs longer than 2 minutes, so a hang fails with the test's name. Shell and app crates
 need `--features app` to test their process code; the profiles pass the features of each configuration.

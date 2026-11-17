@@ -42,7 +42,7 @@ A window draws with `WindowRenderer`, a `UiRenderer` whose frames are `CpuFrame`
 presenter on the same device copies into its buffers and anything else reads back (`CpuFrame::in_memory`). The
 programs (`GpuPrograms`) are made once per device and shared by every renderer on it (`GpuRenderer::with_programs`).
 
-Both renderers are meant to agree on the reference scenes and on generated scenes of each primitive group at scales
+Both renderers are meant to agree on the sample scenes and on generated scenes of each primitive group at scales
 1, 1.5 and 2 on odd sizes, whole and repainting damage, and with scroll layers scrolled frame by frame against the
 same frames drawn whole. The GPU renderer needs an EGL device: the first render node, or the surfaceless platform;
 `CUPERTINO_GPU_REQUIRED=1` makes a missing or software device a failure, `CUPERTINO_EGL_REQUIRED=1` a missing one (a

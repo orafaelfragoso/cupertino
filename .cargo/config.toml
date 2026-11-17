@@ -12,3 +12,5 @@ rustc-wrapper = "sccache"
 # `cargo xtask ci` plans and runs the checks a change needs (.config/validation.toml).
 [alias]
 xtask = "run --locked --quiet --package xtask --"
+# The release build of every program, with the feature set the packages use.
+build-programs = "build --locked --release --workspace --all-features --bins"

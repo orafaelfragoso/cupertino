@@ -371,7 +371,7 @@ reviewed change that records the reason.
   runs on the maintainer's machine before every push that touches rendering, with `CUPERTINO_GPU_REQUIRED=1` making a
   missing GPU a failure: dmabuf import, syncobj round trips (the headless backend offers the protocol when its device
   has a render node, and can withhold it), injected context loss and purge, the CPU↔GPU switch mid-session, a failed
-  import falling back to shared memory, a resize storm, the fence soak, and the reference scenes re-run on the NVIDIA
+  import falling back to shared memory, a resize storm, the fence soak, and the sample scenes re-run on the NVIDIA
   GPU.
 - Parity tests cover scales 1, 1.5 and 2 with odd sizes, and a scissored repaint against a full repaint with effects
   that cross the damage edge.

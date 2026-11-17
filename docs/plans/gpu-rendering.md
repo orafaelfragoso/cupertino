@@ -5,7 +5,7 @@ The design is in `docs/src/gpu-rendering.md` (in the book: "GPU rendering") and 
 done. Tick a box only when the item is on `main`; tick a step's gate only when its "done when" holds. Record
 measurements under "Measurements" with the commit they were taken at.
 
-The repository has since dropped its scripts, its golden images and the test suite. Where this plan names a script, a golden, a test tier or a benchmark run, it records what was done at the time; validation is now `cargo xtask ci` (`AGENTS.md`), and profiling is `samply`, `perf`, `heaptrack` and `CUPERTINO_PROFILE`.
+The repository has since dropped its scripts, its golden images and the test suite. Where this plan names a script, a golden, a test tier or a benchmark run, it records what was done at the time; validation is now `cargo xtask ci`, and profiling is `samply`, `perf`, `heaptrack` and `CUPERTINO_PROFILE`.
 
 Target machine for every measured gate: NVIDIA (proprietary driver), 3840 x 2160 at 60 Hz, session scale 1.5.
 Headless numbers are also recorded at scale 2 for comparison.

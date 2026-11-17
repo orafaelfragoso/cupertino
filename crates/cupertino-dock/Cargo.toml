@@ -49,7 +49,7 @@ tiny-skia = { version = "0.12", optional = true }
 zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"], optional = true }
 
 [lints.rust]
-# `--cfg cupertino_capture_fixtures` is set only by `capture.sh` (see the README); no cargo feature enables it
+# `--cfg cupertino_capture_fixtures` is set by hand through RUSTFLAGS (see the README); no cargo feature enables it
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(cupertino_capture_fixtures)'] }
 
 [[bin]]

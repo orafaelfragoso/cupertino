@@ -7,7 +7,7 @@ use cupertino_menu_model::{ActionName, MenuBar};
 use cupertino_wayland_client::app::{AppEffects, AppEvent, AppMenu, MenuAddress};
 use cupertino_wayland_client::{Connection, SurfaceId};
 
-use crate::{Activation, AppMenus, WindowExport};
+use crate::menus::{Activation, AppMenus, WindowExport};
 
 /// The window's menus while they are published.
 pub struct WindowMenus {

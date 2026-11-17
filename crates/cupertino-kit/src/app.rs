@@ -8,7 +8,6 @@ use cupertino_defaults::watch::{ConfigWatcher, WatchEvent};
 use cupertino_keyboard::modifiers::Profile;
 use cupertino_theme::ui::{Appearance, ColorTokens, ThemePreferences, ThemeTokens};
 use cupertino_theme::Theme;
-use cupertino_ui_atspi::AtspiAdapter;
 use cupertino_ui_core::layout::LayoutDirection;
 use cupertino_ui_core::platform::{PlatformError, SystemAppearance, WindowSystem};
 use cupertino_ui_core::{
@@ -19,6 +18,7 @@ use cupertino_ui_render::{CpuConfig, CpuRenderer};
 use cupertino_ui_text::{
     FontIndex, FontStyle, FontWeight, GlyphRaster, InstalledFonts, TextSystem,
 };
+use cupertino_ui_wayland::atspi::AtspiAdapter;
 use cupertino_ui_wayland::{GpuRenderers, WaylandWindowSystem};
 use std::cell::Cell;
 use std::fmt;

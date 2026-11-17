@@ -13,7 +13,7 @@ pub(crate) fn node_id(id: NodeId) -> accesskit::NodeId {
     accesskit::NodeId(u64::from(id.generation().get()) << 32 | u64::from(id.index()))
 }
 
-/// The core id of an AccessKit id this crate gave out; `None` for any other.
+/// The core id of an AccessKit id this module gave out; `None` for any other.
 fn core_id(id: accesskit::NodeId) -> Option<NodeId> {
     let generation = NonZeroU32::new((id.0 >> 32) as u32)?;
     Some(NodeId::new(id.0 as u32, generation))

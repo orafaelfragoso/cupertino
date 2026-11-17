@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use crate::action_grab::ActionGrabs;
 
+use crate::menus::{AppMenus, WindowMenus};
 use cupertino_geometry::{Rect, Size};
 use cupertino_keyboard::modifiers::Profile;
 use cupertino_menu_model::{ActionName, Command, Entry, Menu, MenuBar};
@@ -20,7 +21,6 @@ use cupertino_ui_core::platform::{
     PresentOutcome, RaisedLayer, RendererClass, ScrollBars, SystemAppearance, Timestamp,
     WindowEvent, WindowId, WindowRequest, WindowSpec, WindowSystem,
 };
-use cupertino_ui_menus::{AppMenus, WindowMenus};
 use cupertino_ui_render::{CpuFrame, MemoryTarget, RenderFrameId};
 use cupertino_ui_text::TextInputState;
 use cupertino_wayland_client::app::{

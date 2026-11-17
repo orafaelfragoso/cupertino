@@ -1235,7 +1235,6 @@ dependencies = [
  "cupertino-icons",
  "cupertino-keyboard",
  "cupertino-theme",
- "cupertino-ui-atspi",
  "cupertino-ui-controls",
  "cupertino-ui-core",
  "cupertino-ui-render",
@@ -1456,7 +1455,6 @@ dependencies = [
  "cupertino-peer",
  "cupertino-shell-client",
  "cupertino-theme",
- "cupertino-ui-atspi",
  "cupertino-ui-core",
  "cupertino-ui-wayland",
  "cupertino-wayland-client",
@@ -1734,16 +1732,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cupertino-ui-atspi"
-version = "0.1.0"
-dependencies = [
- "accesskit",
- "accesskit_unix",
- "cupertino-ui-core",
- "unicode-segmentation",
-]
-
-[[package]]
 name = "cupertino-ui-controls"
 version = "0.1.0"
 dependencies = [
@@ -1772,17 +1760,6 @@ dependencies = [
  "gungraun",
  "rustix 1.1.6",
  "tracing",
-]
-
-[[package]]
-name = "cupertino-ui-menus"
-version = "0.1.0"
-dependencies = [
- "cupertino-keyboard",
- "cupertino-menu-model",
- "cupertino-wayland-client",
- "tracing",
- "zbus",
 ]
 
 [[package]]
@@ -1836,19 +1813,22 @@ dependencies = [
 name = "cupertino-ui-wayland"
 version = "0.1.0"
 dependencies = [
+ "accesskit",
+ "accesskit_unix",
  "cupertino-diagnostic-events",
  "cupertino-geometry",
  "cupertino-gpu",
  "cupertino-keyboard",
  "cupertino-menu-model",
  "cupertino-ui-core",
- "cupertino-ui-menus",
  "cupertino-ui-render",
  "cupertino-ui-text",
  "cupertino-wayland-client",
  "rustix 1.1.6",
  "tiny-skia",
  "tracing",
+ "unicode-segmentation",
+ "zbus",
 ]
 
 [[package]]

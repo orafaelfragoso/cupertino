@@ -9,7 +9,7 @@ use cupertino_keyboard::modifiers::ModifierMap;
 use cupertino_menu_model::{ActionName, MenuBar};
 use zbus::blocking::connection;
 
-use crate::{Activation, DbusProperties, Exporter, WindowId};
+use crate::menus::{Activation, DbusProperties, Exporter, WindowId};
 
 type Connect = Box<dyn Fn() -> zbus::Result<connection::Builder<'static>> + Send + Sync>;
 type Wake = Box<dyn Fn() + Send + Sync>;

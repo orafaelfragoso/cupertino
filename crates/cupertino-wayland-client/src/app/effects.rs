@@ -57,7 +57,7 @@ pub enum AppEvent {
     /// created. From version 3 it is true only while [`AppEvent::MenuReader`] names a connection, which arrives first.
     MenuBar { surface: SurfaceId, shown: bool },
     /// The unique bus name of the menu bar connection the server verified, the only peer that may use the menus
-    /// `surface` announced (`Exporter::set_reader` of `cupertino-ui-menus`); `None` while there is none. Sent with
+    /// `surface` announced (`Exporter::set_reader` of `cupertino-ui-wayland`'s `menus`); `None` while there is none. Sent with
     /// [`AppEvent::MenuBar`] from version 3.
     MenuReader {
         surface: SurfaceId,

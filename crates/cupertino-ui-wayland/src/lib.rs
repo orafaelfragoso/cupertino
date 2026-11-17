@@ -10,12 +10,14 @@
 //! compositor's clock (`WindowRequest::Present`), so it opens and closes without drawing a frame.
 
 mod action_grab;
+pub mod atspi;
 pub mod clipboard;
 mod convert;
 mod damage;
 mod error;
 pub mod gpu_path;
 pub mod gpu_present;
+pub mod menus;
 mod pixels;
 pub mod popup;
 mod presentations;

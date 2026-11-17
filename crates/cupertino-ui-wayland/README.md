@@ -1,19 +1,22 @@
 # cupertino-ui-wayland
 
-CupertinoKit's window system on the transport (`cupertino-wayland-client`), and drawing a surface of it with tiny-skia.
-MPL-2.0. It binds no protocol beyond the
+CupertinoKit's window system on the transport (`cupertino-wayland-client`), and drawing a surface of it with tiny-skia;
+the application's menus published to the desktop menu bar (the `menus` module, *Menus*) and its accessibility tree
+published over AT-SPI (the `atspi` module, *Accessibility*). MPL-2.0. It binds no protocol beyond the
 transport's standard set and never reaches the private protocols (`cupertino-layers` denies `cupertino-protocols` and
 `cupertino-shell-client`). Depends on `cupertino-wayland-client`, `cupertino-geometry`, `cupertino-keyboard`,
-`cupertino-ui-core` (its `platform` module), `cupertino-ui-render` (with its `gpu` module, the GPU renderer the presenter's windows draw with), `cupertino-ui-text`, `cupertino-menu-model`, `cupertino-ui-menus`,
-`cupertino-gpu` (the graphics layer, for the GPU presenter),
-`cupertino-diagnostic-events`' `profile` (the frame timeline `CUPERTINO_PROFILE` asks for, installed when the window
-system connects), `tracing` and `tiny-skia`.
+`cupertino-ui-core` (its `platform` module, and the `AccessibilityAdapter` the `atspi` module implements),
+`cupertino-ui-render` (with its `gpu` module, the GPU renderer the presenter's windows draw with), `cupertino-ui-text`,
+`cupertino-menu-model`, `cupertino-gpu` (the graphics layer, for the GPU presenter), `cupertino-diagnostic-events`'
+`profile` (the frame timeline `CUPERTINO_PROFILE` asks for, installed when the window system connects), zbus (the
+menus on the session bus), `accesskit` and `accesskit_unix` (AT-SPI), `unicode-segmentation`, `tracing` and
+`tiny-skia`.
 
 ## Public API
 
 | Item | Contents |
 |---|---|
-| `WaylandWindowSystem` | `cupertino-ui-core`'s `platform::WindowSystem` on one transport `Connection` (`connect(profile)`, `new(connection, profile)`); `connection` and `surface(window)` reach the transport for an extension protocol; on a compositor with `cupertino_app_effects_v1` it learns the session's appearance and display options before the first window (`appearance()`) and reports them as `PlatformEvent::Appearance`; it reports how scroll views show their bars as `PlatformEvent::ScrollBars` after each display options; it takes a steady caret (version 9) into `SystemAppearance::steady_caret` and reports `PlatformEvent::Appearance` only when it changed; it reports the lock state as `PlatformEvent::SessionLock`, and `SessionLock(false)` once at start on a compositor that can't tell (below version 5); `WindowRequest::Backdrop` puts that protocol's material under the whole window at the backdrop's alpha, shaped to the window's size and corner radius on each present, and a new alpha or radius for the same material changes the one shown; `WindowRequest::Materials` puts one more backdrop of that protocol under each region of the list (shape, radius, alpha; a region with `glass`, or a backdrop of a glass material name, is sent as `set_glass` with its style, container and spacing; the tone the compositor tells a glass backdrop, version 7, arrives as `WindowEvent::GlassTone` with the region's index, or none for the window's own backdrop), reuses the backdrops already shown and takes away the ones left over, and an empty list takes them all away; a list or a backdrop past the protocol's limits (64 backdrops on a surface, 128 for the client), which the compositor would answer by ending the connection, is refused before any backdrop is asked for, and a refused list leaves the window without its materials; `WindowRequest::Menus` publishes a toplevel's menus through `cupertino-ui-menus` once it is configured, keeps their items' enabled states, reports chosen items as `WindowEvent::MenuActivated` and withdraws them with `None` or when the window goes; without the effects at version 2 or a session bus the menus are not shown; a window opened with `DecorationMode::{Unified, UnifiedCompact, Sidebar}` asks the effects for that window style at creation, and is titled where the compositor has no effects; `request_activation_token` asks `xdg_activation_v1` for a token naming the application and answers `None` when it can't ask |
+| `WaylandWindowSystem` | `cupertino-ui-core`'s `platform::WindowSystem` on one transport `Connection` (`connect(profile)`, `new(connection, profile)`); `connection` and `surface(window)` reach the transport for an extension protocol; on a compositor with `cupertino_app_effects_v1` it learns the session's appearance and display options before the first window (`appearance()`) and reports them as `PlatformEvent::Appearance`; it reports how scroll views show their bars as `PlatformEvent::ScrollBars` after each display options; it takes a steady caret (version 9) into `SystemAppearance::steady_caret` and reports `PlatformEvent::Appearance` only when it changed; it reports the lock state as `PlatformEvent::SessionLock`, and `SessionLock(false)` once at start on a compositor that can't tell (below version 5); `WindowRequest::Backdrop` puts that protocol's material under the whole window at the backdrop's alpha, shaped to the window's size and corner radius on each present, and a new alpha or radius for the same material changes the one shown; `WindowRequest::Materials` puts one more backdrop of that protocol under each region of the list (shape, radius, alpha; a region with `glass`, or a backdrop of a glass material name, is sent as `set_glass` with its style, container and spacing; the tone the compositor tells a glass backdrop, version 7, arrives as `WindowEvent::GlassTone` with the region's index, or none for the window's own backdrop), reuses the backdrops already shown and takes away the ones left over, and an empty list takes them all away; a list or a backdrop past the protocol's limits (64 backdrops on a surface, 128 for the client), which the compositor would answer by ending the connection, is refused before any backdrop is asked for, and a refused list leaves the window without its materials; `WindowRequest::Menus` publishes a toplevel's menus through the `menus` module (*Menus*) once it is configured, keeps their items' enabled states, reports chosen items as `WindowEvent::MenuActivated` and withdraws them with `None` or when the window goes; without the effects at version 2 or a session bus the menus are not shown; a window opened with `DecorationMode::{Unified, UnifiedCompact, Sidebar}` asks the effects for that window style at creation, and is titled where the compositor has no effects; `request_activation_token` asks `xdg_activation_v1` for a token naming the application and answers `None` when it can't ask |
 | `GpuRenderers` | from `WaylandWindowSystem::gpu_renderers`: `renderer(config, rasterizer)` makes a window's GPU renderer (`cupertino_ui_render::gpu::WindowRenderer`) on the process's device while it draws on the GPU, `None` otherwise; a renderer factory holds a clone and asks it each time |
 | `SurfaceRoles`, `RoleEvent` | `with_roles` gives windows roles from protocols outside the window system (a desktop shell's layer and lock surfaces): `create` makes a window's surface by its `app_id`, `event` turns the transport's extension events into configures and closes, `destroyed`, `keyboard_focus` and `outputs_changed` follow the windows and outputs, and `prepare`, called at the start of every dispatch, sends the requests the application asked for since and reads the transport's state; a role's configure has no activated state, so its `WindowStates::activated` says whether the window or a popup of its chain has the keyboard (between `wl_keyboard.enter` and `leave`), and a configure never turns inactive a window that keys still reach |
 | `ShmPresenter`, `Ready` | one per surface, owned by the application, holding no protocol object: `configured(size)` after a configure, `frame_done` on the surface's `Event::Frame`, `request_redraw`; `poll(&Connection)` until `Ready::Idle` reports a new scale (`Ready::ScaleChanged`) first and then `Ready::Draw` once the surface is configured, a frame is asked for, none is in flight and the transport has a free buffer; `draw(&mut Connection, damage, paint)` paints and presents a frame; `draw_solid(&mut Connection, rgba)` shows the surface as one colour, a stretched single pixel (`Connection::present_solid`), or where the compositor has no one-pixel buffers a frame filled with it |
@@ -162,3 +165,115 @@ surface object before the first shared-memory attach.
 `examples/gpu-window.rs` is the presenter's check window, a client for `cupertino-server`:
 `--frames`, `--reset-every`, `--purge-every`, `--losses`, `--renderer` (frames drawn by the GPU renderer and copied
 from its texture), and a `key value` report of what it did.
+
+## Menus (`menus`)
+
+Publishes the application's menus to the desktop menu bar over the session bus.
+
+### Public API
+
+| Item | Contents |
+|---|---|
+| `Exporter` | one per application and bus connection. `new(builder, app_id, map, on_activate)` builds the connection from a `zbus::blocking::connection::Builder` (`Builder::session()` on the desktop) with the application object already served, so zbus listens for method calls before it reads the socket: a call made right after an address is announced is never dropped unanswered. `export(window, &MenuBar)` publishes `MenuBar::exported` and returns the window's `DbusProperties`; `set_enabled(window, action, enabled)`; `set_modifier_map` rewrites every accelerator for another profile; `remove(window)` withdraws a closed window's objects; `set_reader(name)` names the only peer answered |
+| `AppMenus`, `WindowExport` | the windows of a process share one connection and `Exporter` per application id: `AppMenus::open(app_id, map, wake)` gives a window the next `WindowId` on its application's connection (made for the first window, closed with the last), and its `WindowExport` exports, enables, names the reader and yields the items chosen in that window alone (an `app.` item goes to the newest window, whose application menu is shown). Dropping it withdraws the window's objects. `AppMenus::default()` is on the session bus |
+| `WindowMenus` | a Wayland window's menus: its `WindowExport` and its `cupertino_app_menu_v1` announcement |
+| `DbusProperties` | where a window's menus are, which it passes to `cupertino_app_menu_v1.set_address` |
+| `Activation`, `WindowId` | a chosen item: the action, and the window for a `win.` action |
+
+### How it works
+
+The application object (`/org/example/Notes` for `org.example.Notes`) serves `org.gtk.Actions` with every `app.`
+action of the open windows and, at `<app>/menus/appmenu`, `org.gtk.Menus` with the application menu (About,
+Settings… and Quit when the application handles them; the menu bar adds Hide, Hide Others and Show All). Each window
+serves its `win.` actions at `<app>/window/<n>` and its menu bar at `<app>/window/<n>/menus/menubar`. Every menu is in
+group 0; sections and submenus are menus of their own linked with `:section` and `:submenu`. Labels carry no
+mnemonic: each `_` goes out doubled. A change replaces each
+menu that differs in one `Changed` record. Actions are stateless and take no parameter: `Activate` of a disabled one
+does nothing, of an unknown one or with a parameter is `InvalidArgs`; `SetState` is `NotSupported`. Unlike a GTK
+application's, the objects answer only the reader, the menu bar connection the compositor verified
+(`cupertino_app_menu_v1.menu_reader`, passed to `Exporter::set_reader`): every `org.gtk.Menus` and `org.gtk.Actions`
+method of any other peer, and of every peer while there is no reader, is `AccessDenied`, and `Changed` is sent to the
+reader alone. Labels carry document names, so reads are refused as well as activation.
+
+## Accessibility (`atspi`)
+
+Publishes the application's accessibility tree to assistive technology (screen readers) over AT-SPI, and hands
+their requests back to the application's loop. It implements `cupertino-ui-core`'s `AccessibilityAdapter` on
+AccessKit's Unix adapter (`accesskit` 0.25, `accesskit_unix` 0.24 with its default features: zbus 5 on async-io, no
+tokio). AccessKit's types stay inside the module.
+
+### Public API
+
+| Item | Contents |
+|---|---|
+| `AtspiAdapter` | `new(waker)` takes the window system's `Waker` (`WindowSystem::waker()`); the adapter goes into `RuntimeOptions.accessibility`. `muted(waker)` starts muted and hidden until the first `session_locked`, for an application that may start while the session is locked (`cupertino_kit::app` uses it for every Kit application); `lock_screen(waker)` is never muted nor hidden by `session_locked`, for the application that draws the lock screen |
+
+```rust
+let options = RuntimeOptions {
+    accessibility: Some(Box::new(AtspiAdapter::new(system.waker()))),
+    ..options
+};
+let runtime = Runtime::new(system, options);
+```
+
+### How it works
+
+- **Windows.** Each window is a top-level AT-SPI object with its own AccessKit adapter, created the first time core
+  names the window (its first focus or update). The application's name on the bus is its process name.
+- **Activation.** Nothing is exported until an assistive technology turns accessibility on (`org.a11y.Status`
+  `IsEnabled`); until then `is_active` is false and core builds no tree. When a window activates, the adapter wakes the
+  application so core sends every window whole; a window that activates after core sent its tree gets it from the copy
+  the adapter keeps, never by calling into the application from AccessKit's thread. When the last window deactivates,
+  those copies are no longer handed out: core stops sending while nothing listens.
+- **Nodes.** Roles, names, descriptions, states, bounds in window points, relations, children and values (text, number
+  with its range and step, toggle) map one to one. `Separator` and `Splitter` are both AccessKit's splitter, ARIA's
+  separator. A list item, tree item, cell or tab without a name or label is labelled by its children, so a reader
+  speaks the text inside it (AccessKit computes a name from descendants only for buttons, links, check boxes, radio
+  buttons and menu items). An item's place and its container's count go out as AccessKit's position in set and set
+  size.
+- **Window title.** Core passes each window's title through `window_title` before its first tree and whenever it
+  changes; a root without a name of its own is published with the title as its name.
+- **Text.** An editable value is published as AccessKit text runs: one per line, ending with its line break, split in
+  runs of at most 255 characters on one line (AccessKit counts a run's characters in a byte). A character is a grapheme
+  cluster; a word takes the spaces after it. The caret and selection core sends in bytes become a text selection in the
+  runs, so the AT-SPI Text interface answers `CaretOffset`, `GetSelection` and `GetNSelections` in characters, and
+  AccessKit emits `TextCaretMoved` and `TextSelectionChanged` as they change in the focused field. A node keeps its runs'
+  ids from update to update. `SetSelection` from the bus becomes core's `SetSelection` with the byte range, when the
+  node offers it.
+- **Sort.** A sorting column header carries its order as AccessKit's sort direction. AccessKit's AT-SPI adapter does
+  not export that, so a header without a description also says "Sorted ascending" or "Sorted descending" as one.
+- **Secrets.** A `PasswordInput` node, or any node whose value is `Protected`, carries no value and offers neither
+  `SetValue` nor a selection, whatever core sent: a second defence after core's.
+- **Session lock.** The lock state comes from the compositor's `cupertino_appearance_v1.session_lock` (core's
+  `session_locked`; a compositor without it is taken as unlocked). While the session is locked the application's content
+  is not readable: each window is published as an empty frame without a name (its root alone, so AccessKit drops every
+  other node), the window title is not published, and an action request from the bus is dropped before it is queued.
+  Core's updates are still taken into the adapter's copy, so the unlock publishes every window whole again, as it is
+  then. An adapter made with `muted` is hidden this way from its start until it learns the session is unlocked. Every
+  node is also sent without its live politeness while locked, and the tree published again at the unlock carries none:
+  AccessKit announces only as a live node is added or renamed, from the node it is sent then, so neither the lock nor
+  the unlock announces anything, and the first change after the unlock speaks as usual. The lock screen's own adapter
+  (`lock_screen`) ignores the lock, so the lock screen is what an assistive technology reads, and the answer to a
+  password attempt is announced while the session is locked.
+- **Actions.** A request from an assistive technology becomes core's `ActionRequest` (`Click`, `Focus`, `Increment`,
+  `Decrement`, `Expand`, `Collapse`, `ShowMenu`, `ScrollIntoView`, `SetValue` with text or a number). It is kept only
+  when its target advertised that action in its last update and it doesn't set a secret's value. It waits in a queue
+  that `drain_actions` empties on the application's loop, and the waker wakes the loop for it. A request without a
+  core action, or with data the action doesn't take, is dropped.
+
+### Limitations
+
+- **Other toolkits behind the lock.** Only CupertinoKit applications hide their tree while the session is locked. An
+  application on another toolkit (GTK, Qt, Electron, an X11 client) publishes its own tree on the same accessibility
+  bus and nothing in the session can make it stop, so an assistive technology can still read it, and act on it, behind
+  the lock screen. Check by hand in an installed session: open such an application next to a Kit one, lock with
+  `Super+Ctrl+Q`, and read the accessibility bus with Accerciser: the Kit windows are empty frames without a name, the
+  other application's content is still there.
+
+- **Text lines and extents.** Runs follow hard line breaks only: a line the editor wraps is one AT-SPI line. Runs carry
+  no character positions, so `GetCharacterExtents` and `GetRangeExtents` have nothing to answer with.
+- **Selection direction.** Core's `SetSelection` takes a range, so a selection set from the bus puts the caret at its
+  end whichever way it was asked.
+- **Window position.** A Wayland client doesn't know where its window is, so bounds are window-relative.
+- **Closed windows.** Core's adapter interface has no call for a closed window, so its AT-SPI object stays until the
+  application exits.

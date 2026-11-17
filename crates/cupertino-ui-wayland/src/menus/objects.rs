@@ -11,8 +11,8 @@ use zbus::names::OwnedUniqueName;
 use zbus::object_server::SignalEmitter;
 use zbus::zvariant::{OwnedValue, Signature};
 
-use crate::wire::{WireMenus, GROUP};
-use crate::{Activation, WindowId};
+use crate::menus::wire::{WireMenus, GROUP};
+use crate::menus::{Activation, WindowId};
 
 type Dict = HashMap<String, OwnedValue>;
 /// `(enabled, parameter type, state)` of one action.

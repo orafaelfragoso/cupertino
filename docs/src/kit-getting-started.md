@@ -111,7 +111,7 @@ runtime's thread reads the posts with `ck_poll_events`.
 
 ## Accessibility
 
-`app::run` publishes every window's accessibility tree over AT-SPI (`cupertino-ui-atspi`, on AccessKit's Unix
+`app::run` publishes every window's accessibility tree over AT-SPI (`cupertino-ui-wayland`'s `atspi` module, on AccessKit's Unix
 adapter). Nothing is exported until an assistive technology turns accessibility on (`org.a11y.Status` `IsEnabled`).
 
 Works:

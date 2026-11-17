@@ -862,10 +862,10 @@
   version: n/a
   bus: session
   bus_name: none
-  owner_crate: cupertino-ui-menus
+  owner_crate: cupertino-ui-wayland
   owner_area: design
   scope: public
-  source: crates/cupertino-ui-menus/src/objects.rs
+  source: crates/cupertino-ui-wayland/src/menus/objects.rs
   source_match: "org.gtk.Menus"
   note: served by each CupertinoKit application on its own connection; only the menu bar connection the compositor names (cupertino_app_menu_v1.menu_reader) is answered
 - name: org.gtk.Actions
@@ -873,10 +873,10 @@
   version: n/a
   bus: session
   bus_name: none
-  owner_crate: cupertino-ui-menus
+  owner_crate: cupertino-ui-wayland
   owner_area: design
   scope: public
-  source: crates/cupertino-ui-menus/src/objects.rs
+  source: crates/cupertino-ui-wayland/src/menus/objects.rs
   source_match: "org.gtk.Actions"
   note: only the menu bar connection the compositor names (cupertino_app_menu_v1.menu_reader) may list or activate actions; any other peer is AccessDenied
 - name: org.freedesktop.impl.portal.Settings

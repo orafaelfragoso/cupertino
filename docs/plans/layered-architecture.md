@@ -15,11 +15,11 @@ Updated by the lead at every merge.
 
 | | |
 |---|---|
-| Current wave | 0 |
+| Current wave | 1 |
 | Running tasks | none |
 | Enforced layers | none (target rules checked since W0.2; 248 remaining-work lines) |
 | Waiting on the owner | nothing |
-| Last closed wave | none |
+| Last closed wave | 0 |
 
 ## Contents
 
@@ -482,11 +482,11 @@ Each task: **Owns**, **Touches** (mechanical edits only), **After**, size, and a
 
 #### W0.T Tests of `cupertino-layers`
 
-As in W1.T.
+As in W1.T. Done in 6b9e146c4: 31 tests in `tests/` over fixture workspaces written at test time.
 
 #### W0.close (lead)
 
-- [ ] `cargo xtask ci --profile integration` passes; `remaining.txt` committed.
+- [x] (9cd523297) `cargo xtask ci --profile integration` passes; `remaining.txt` committed.
 
 ### Wave 1: foundation, system, testing
 

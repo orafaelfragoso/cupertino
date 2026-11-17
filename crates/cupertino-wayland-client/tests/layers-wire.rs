@@ -243,6 +243,53 @@ fn an_animation_to_a_value_outside_the_range_is_refused() {
 }
 
 #[test]
+fn a_curve_the_server_refuses_is_refused_before_it_is_sent() {
+    let mut s = setup(6);
+    let timed = |duration: f64, x1: f64, y1: f64, x2: f64| LayerCurve::Timed {
+        duration,
+        bezier: CubicBezier::new(x1, y1, x2, 1.0),
+    };
+    let spring = |response: f64, damping: f64| LayerCurve::Spring { response, damping };
+    let refused = [
+        (timed(10.0006, 0.0, 0.0, 1.0), 0.0),
+        (timed(f64::NAN, 0.0, 0.0, 1.0), 0.0),
+        (timed(f64::INFINITY, 0.0, 0.0, 1.0), 0.0),
+        (timed(1.0, -0.1, 0.0, 1.0), 0.0),
+        (timed(1.0, 0.0, 0.0, 1.1), 0.0),
+        (timed(1.0, f64::NAN, 0.0, 1.0), 0.0),
+        (timed(1.0, 0.0, f64::INFINITY, 1.0), 0.0),
+        (spring(0.009, 1.0), 0.0),
+        (spring(10.1, 1.0), 0.0),
+        (spring(0.5, 0.04), 0.0),
+        (spring(0.5, 4.1), 0.0),
+        (spring(f64::NAN, 1.0), 0.0),
+        (spring(0.5, 1.0), f64::NAN),
+    ];
+    for (curve, velocity) in refused {
+        assert!(
+            matches!(
+                s.layer
+                    .animate(1, LayerProperty::Opacity, 1.0, curve, velocity),
+                Err(Error::InvalidLayerValue)
+            ),
+            "{curve:?}"
+        );
+    }
+    assert!(s.sent().is_empty());
+    // the limits themselves are taken, and a Bézier y control point may leave 0 to 1
+    for curve in [
+        timed(10.0, 0.0, -2.0, 1.0),
+        spring(0.01, 0.05),
+        spring(10.0, 4.0),
+    ] {
+        s.layer
+            .animate(2, LayerProperty::Opacity, 1.0, curve, 0.0)
+            .unwrap();
+    }
+    assert_eq!(s.sent().len(), 3);
+}
+
+#[test]
 fn samples_are_sent_as_native_endian_floats() {
     let mut s = setup(6);
     s.layer

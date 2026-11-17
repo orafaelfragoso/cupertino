@@ -32,6 +32,12 @@ pub const MAX_GLASS_EDGE: f64 = 4.0;
 pub const MAX_GROUP_SPACING: f64 = 64.0;
 /// Widest blur of a layer's content the server takes: the standard deviation of its Gaussian, in points.
 pub const MAX_CONTENT_BLUR: f64 = 64.0;
+/// Longest timed or sampled animation the server takes, in milliseconds.
+const MAX_DURATION_MS: f64 = 10_000.0;
+/// Shortest and longest spring response the server takes, in seconds.
+const SPRING_RESPONSE: (f64, f64) = (0.01, 10.0);
+/// Lowest and highest spring damping ratio the server takes.
+const SPRING_DAMPING: (f64, f64) = (0.05, 4.0);
 
 /// Names a [`Layer`] of this process in [`AppEvent::LayerFinished`], [`AppEvent::LayerReplaced`] and
 /// [`AppEvent::LayerSettled`].
@@ -220,7 +226,9 @@ impl Layer {
     }
 
     /// Animate `property` to `value` along `curve` from what is shown when the commit is first drawn; `velocity` (units
-    /// per second) starts a spring from rest. `serial` names the animation in the events.
+    /// per second) starts a spring from rest. `serial` names the animation in the events. A curve the server refuses (a
+    /// duration over 10 seconds, Bézier x control points outside 0 to 1, a spring response outside 0.01 to 10 seconds or
+    /// damping ratio outside 0.05 to 4, a number that is not finite) is [`Error::InvalidLayerValue`] and sends nothing.
     pub fn animate(
         &self,
         serial: u32,
@@ -233,13 +241,25 @@ impl Layer {
         if !property.accepts(value) {
             return Err(Error::InvalidLayerValue);
         }
+        // a curve the server refuses ends the connection, so it is refused here first
         match curve {
             LayerCurve::Timed { duration, bezier } => {
+                let ms = (duration.max(0.0) * 1000.0).round();
+                let unit = 0.0..=1.0;
+                if !(duration.is_finite()
+                    && ms <= MAX_DURATION_MS
+                    && unit.contains(&bezier.x1)
+                    && unit.contains(&bezier.x2)
+                    && bezier.y1.is_finite()
+                    && bezier.y2.is_finite())
+                {
+                    return Err(Error::InvalidLayerValue);
+                }
                 self.0.animate_timed(
                     serial,
                     property.wire(),
                     value,
-                    (duration.max(0.0) * 1000.0).round() as u32,
+                    ms as u32,
                     bezier.x1,
                     bezier.y1,
                     bezier.x2,
@@ -247,6 +267,12 @@ impl Layer {
                 );
             }
             LayerCurve::Spring { response, damping } => {
+                if !((SPRING_RESPONSE.0..=SPRING_RESPONSE.1).contains(&response)
+                    && (SPRING_DAMPING.0..=SPRING_DAMPING.1).contains(&damping)
+                    && velocity.is_finite())
+                {
+                    return Err(Error::InvalidLayerValue);
+                }
                 self.0
                     .animate_spring(serial, property.wire(), value, response, damping, velocity)
             }
@@ -269,7 +295,7 @@ impl Layer {
         }
         self.takes(property)?;
         let ms = (duration * 1000.0).round();
-        if !(1.0..=10_000.0).contains(&ms) || !(2..=MAX_SAMPLES).contains(&samples.len()) {
+        if !(1.0..=MAX_DURATION_MS).contains(&ms) || !(2..=MAX_SAMPLES).contains(&samples.len()) {
             return Err(Error::InvalidLayerValue);
         }
         if !samples.iter().all(|&v| property.accepts(f64::from(v))) {

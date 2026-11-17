@@ -29,6 +29,15 @@ const FULL_GRID: Grid = Grid {
 /// The longest name the "Other…" tile takes, in bytes (approximate: `useradd(8) limits a login name to 32).
 const MAX_NAME_BYTES: usize = 32;
 
+/// The switch between the picker and the password screen: how long it takes, eased in and out.
+pub const SWITCH_DURATION: f64 = 0.5;
+
+/// How far the switch is `elapsed` seconds after it began, 0 to 1: the opacity of the screen it shows.
+pub fn switched(elapsed: f64) -> f64 {
+    let t = (elapsed / SWITCH_DURATION).clamp(0.0, 1.0);
+    cupertino_animation::CubicBezier::EASE_IN_EASE_OUT.eval(t)
+}
+
 /// Tiles per page for an output of `width` x `height` points.
 pub fn max_per_page(width: f64, height: f64) -> usize {
     if width > SMALL_SCREEN.0 && height > SMALL_SCREEN.1 {
@@ -225,6 +234,20 @@ impl NameEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_switch_eases_in_and_out_over_half_a_second() {
+        assert_eq!(switched(0.0), 0.0);
+        assert!(
+            (switched(0.25) - 0.5).abs() < 1e-6,
+            "half way at the middle"
+        );
+        assert!(switched(0.05) < 0.1 * 0.5, "slow at the start");
+        assert!(switched(0.45) > 1.0 - 0.1 * 0.5, "slow at the end");
+        assert_eq!(switched(0.5), 1.0);
+        assert_eq!(switched(3.0), 1.0);
+        assert_eq!(switched(-1.0), 0.0);
+    }
 
     fn account(login: &str, display: &str) -> User {
         User {

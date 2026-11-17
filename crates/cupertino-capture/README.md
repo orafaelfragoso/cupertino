@@ -1,7 +1,7 @@
 # cupertino-capture
 
 The shared part of the look-check capture command: the flags of every app's capture example, the names of the PNGs it
-writes and the contact sheet. MPL-2.0; a dev-dependency of `cupertino-files` and `cupertino-kit`,
+writes and the contact sheet. MPL-2.0; a dev-dependency of `cupertino-files`, `cupertino-kit` and `cupertino-login`,
 whose `examples/<app>_capture.rs` draw their surfaces with their own painters on sample data.
 
 ```
@@ -33,6 +33,7 @@ alone does not show the surfaces as they look.
 | `kit/gallery` (every control family; its sheet shows each state) | `--state rest\|held-button\|held-switch\|held-slider\|held-segment\|disabled`, `--control-size mini\|small\|regular\|large\|extra-large`, `--compact on\|off`, `--backdrop flat\|busy`, `--direction ltr\|rtl` |
 | `kit/scroll` (an overlay scroll view: at rest, pulled past its top edge, its bar shown, fading and hidden after a wheel step) | `--direction ltr\|rtl`, `--phase rest\|stretch\|shown\|fading\|hidden` |
 | `kit/under-toolbar` (a page that scrolls under a toolbar row drawn in a layer over it, set off by the scroll edge: at rest, just after a wheel step and after the bar has faded) | `--direction ltr\|rtl`, `--phase rest\|shown\|hidden` |
+| `login/lock`, `login/picker`, `login/password` (the lock screen, and the login screen's accounts and password screen, at 2560 x 1440 points unless `--size` says otherwise, on a wallpaper made for the capture) | `--field empty\|typed\|help` (not the picker: the password typed shows its dots and the submit button; help, after failed attempts, the help button, its line and the message) |
 | `overview/all` (the server headless with test windows, `ci/capture-overview.sh`; no `--sheet`) | `--windows N` (1 to 6, default 2) |
 
 The sidebar material is the server's, so a flat fill of the window background stands in for it. The home folder and

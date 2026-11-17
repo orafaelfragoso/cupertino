@@ -19,6 +19,8 @@ pub const FADE_DURATION: f64 = 0.25;
 pub const HIDE_AFTER: f64 = 30.0;
 /// The same after a lock the person asked for: lock request type 8,.
 pub const HIDE_AFTER_EXPLICIT_LOCK: f64 = 5.0;
+/// What the screen says about an attempt (a wrong password, the authenticator's message) shows this long, seconds.
+pub const MESSAGE_SHOWN: f64 = 15.0;
 /// Longest password in bytes: `PAM_MAX_RESP_SIZE` (`security/_pam_types.h`); further characters are dropped.
 pub const MAX_PASSWORD_BYTES: usize = 512;
 
@@ -143,8 +145,15 @@ pub struct LockScreen {
     /// Counts the times the password field was emptied (a submission, Escape, an unlock): the view makes a new field
     /// for each, so the typed text of the one before is dropped and zeroed.
     field: u64,
-    /// Why the last attempt could not be decided; shown until the next edit.
+    /// Why the last attempt could not be decided; shown until the next edit or for [`MESSAGE_SHOWN`].
     notice: Option<String>,
+    /// When what the screen says about the last attempt started to show, once it does; `None` until the next tick
+    /// for a message that came without a time.
+    said_at: Option<f64>,
+    /// [`DENIED`](crate::view::DENIED) shows with the outline, until it has shown for [`MESSAGE_SHOWN`].
+    denied_said: bool,
+    /// The field holds text: the submit button shows.
+    typed: bool,
     interface: Fade,
     last_input: f64,
     /// Seconds without input until the interface hides: [`HIDE_AFTER`] or [`HIDE_AFTER_EXPLICIT_LOCK`].
@@ -162,6 +171,9 @@ impl LockScreen {
             phase: Phase::Locked,
             field: 0,
             notice: None,
+            said_at: None,
+            denied_said: false,
+            typed: false,
             interface: Fade {
                 from: 0.0,
                 to: 1.0,
@@ -205,9 +217,44 @@ impl LockScreen {
         self.field
     }
 
-    /// The failure of the last attempt that was not a wrong password, until the next edit.
+    /// The failure of the last attempt that was not a wrong password, until the next edit or for [`MESSAGE_SHOWN`].
     pub fn notice(&self) -> Option<&str> {
         self.notice.as_deref()
+    }
+
+    /// Whether the screen says the last attempt was a wrong password: with the outline, for [`MESSAGE_SHOWN`] at most.
+    pub fn denied_said(&self) -> bool {
+        self.failure_outline && self.denied_said
+    }
+
+    /// Whether the field holds text, as its last edit said: the submit button shows while it does.
+    pub fn typed(&self) -> bool {
+        self.typed
+    }
+
+    /// Start the interface's fade in again at `now` (the screen's wallpaper is ready only now): it shows from nothing.
+    pub fn show_from(&mut self, now: f64) {
+        if self.phase == Phase::Locked && !self.hidden() {
+            self.interface = Fade {
+                from: if self.interface.from == self.interface.to {
+                    self.interface.to
+                } else {
+                    0.0
+                },
+                to: 1.0,
+                start: now,
+            };
+            self.last_input = now;
+        }
+    }
+
+    /// Empty the field (a new [`LockScreen::field`]): the display went to sleep or woke, and what was typed before does
+    /// not wait for whoever comes next. What the screen said about the last attempt stays.
+    pub fn clear_field(&mut self) {
+        if matches!(self.phase, Phase::Locked | Phase::Failed { .. }) {
+            self.field += 1;
+            self.typed = false;
+        }
     }
 
     /// Opacity of the interface (everything but the wallpaper) at `now`.
@@ -268,12 +315,22 @@ impl LockScreen {
         }
     }
 
+    /// [`LockScreen::edit`] that says whether the field holds text now (`typed`).
+    pub fn edit_to(&mut self, now: f64, typed: bool) {
+        let editable = self.editable();
+        self.edit(now);
+        if editable {
+            self.typed = typed;
+        }
+    }
+
     /// Escape: empty the field (a new [`LockScreen::field`]) and forget what the screen said about the last attempt.
     pub fn escape(&mut self, now: f64) {
         let editable = self.editable();
         self.activity(now);
         if editable {
             self.field += 1;
+            self.typed = false;
             self.notice = None;
             self.failure_outline = false;
         }
@@ -291,6 +348,7 @@ impl LockScreen {
         }
         self.phase = Phase::Authenticating { since: now };
         self.field += 1;
+        self.typed = false;
         self.notice = None;
         self.failure_outline = false;
         Some(password(typed))
@@ -303,6 +361,8 @@ impl LockScreen {
             (Some(earlier), Phase::Authenticating { .. }) => format!("{earlier} {text}"),
             _ => text,
         });
+        // its time starts at the next tick, or with the answer of the attempt it came during
+        self.said_at = None;
     }
 
     /// Take the authenticator's answer to the attempt [`LockScreen::submit`] handed out.
@@ -318,12 +378,14 @@ impl LockScreen {
             AuthOutcome::Denied => {
                 self.phase = Phase::Failed { since: now };
                 self.failure_outline = true;
+                self.denied_said = true;
             }
             AuthOutcome::Error(reason) => {
                 self.phase = Phase::Locked;
                 self.notice = Some(reason);
             }
         }
+        self.said_at = Some(now);
         // the answer, not the typing, counts as the last input: the screen stays up for a retry
         self.last_input = now;
         Ok(())
@@ -333,14 +395,27 @@ impl LockScreen {
     /// ): unlock from any phase. The caller only calls this for a message of the manager.
     pub fn unlock_by_switch(&mut self, now: f64) {
         self.field += 1;
+        self.typed = false;
         self.failure_outline = false;
         self.phase = Phase::Unlocking;
         self.interface.retarget(now, 0.0);
         self.last_input = now;
     }
 
-    /// Advance the timers: end the shake, finish the unlock fade, hide an interface nobody touched.
+    /// Advance the timers: end the shake, finish the unlock fade, hide an interface nobody touched, and take away what
+    /// the screen said about the last attempt once it has shown for [`MESSAGE_SHOWN`].
     pub fn tick(&mut self, now: f64) {
+        if self.saying() && !matches!(self.phase, Phase::Authenticating { .. }) {
+            match self.said_at {
+                None => self.said_at = Some(now),
+                Some(at) if now - at >= MESSAGE_SHOWN => {
+                    self.notice = None;
+                    self.denied_said = false;
+                    self.said_at = None;
+                }
+                Some(_) => {}
+            }
+        }
         match self.phase {
             Phase::Failed { since } if now - since >= SHAKE_DURATION => self.phase = Phase::Locked,
             Phase::Unlocking if self.interface.settled(now) => self.phase = Phase::Unlocked,
@@ -351,13 +426,24 @@ impl LockScreen {
         }
     }
 
-    /// Seconds until the screen next changes without input: the end of the shake or of a fade, the idle hide, or the
-    /// spinner appearing or turning to its next frame. The caller draws a frame per refresh in between (the opacity and
+    /// Whether the screen says something about the last attempt.
+    fn saying(&self) -> bool {
+        self.notice.is_some() || self.denied_said()
+    }
+
+    /// Seconds until the screen next changes without input: the end of the shake or of a fade, the idle hide, the end
+    /// of a message, or the spinner appearing or turning to its next frame. The caller draws a frame per refresh in between (the opacity and
     /// the shake change with time) and ticks at this deadline.
     pub fn next_wakeup(&self, now: f64) -> Option<f64> {
         let fade_end =
             self.interface.start + (self.interface.to - self.interface.from).abs() * FADE_DURATION;
+        let said = match (self.saying(), self.phase, self.said_at) {
+            (false, _, _) | (_, Phase::Authenticating { .. }, _) => None,
+            (true, _, None) => Some(now),
+            (true, _, Some(at)) => Some(at + MESSAGE_SHOWN),
+        };
         let deadlines = [
+            said,
             (!self.interface.settled(now)).then_some(fade_end),
             match self.phase {
                 Phase::Failed { since } => Some(since + SHAKE_DURATION),
@@ -390,6 +476,80 @@ mod tests {
 
     fn approx(actual: f64, expected: f64) {
         assert!((actual - expected).abs() < 1e-6, "{actual} != {expected}");
+    }
+
+    #[test]
+    fn what_the_screen_says_of_an_attempt_goes_after_fifteen_seconds_and_the_outline_stays() {
+        let mut screen = LockScreen::new(0.0, 3600.0);
+        submit(&mut screen, 1.0, "wrong");
+        screen.finish_auth(2.0, AuthOutcome::Denied).unwrap();
+        assert!(screen.denied_said() && screen.failure_outline());
+        assert_eq!(screen.next_wakeup(10.0).map(|w| w <= 7.0), Some(true));
+        screen.tick(16.9);
+        assert!(screen.denied_said());
+        screen.tick(17.0);
+        assert!(!screen.denied_said(), "the words go");
+        assert!(
+            screen.failure_outline(),
+            "the outline stays until the next edit"
+        );
+        // a message of the authenticator outside an attempt counts from the next tick
+        screen.notify("Password expires soon".into());
+        screen.tick(20.0);
+        assert_eq!(screen.notice(), Some("Password expires soon"));
+        screen.tick(34.9);
+        assert!(screen.notice().is_some());
+        screen.tick(35.0);
+        assert_eq!(screen.notice(), None);
+    }
+
+    #[test]
+    fn the_field_says_whether_it_holds_text_and_a_new_field_holds_none() {
+        let mut screen = LockScreen::new(0.0, HIDE_AFTER);
+        screen.settle_interface();
+        assert!(!screen.typed());
+        screen.edit_to(1.0, true);
+        assert!(screen.typed());
+        screen.edit_to(1.1, false);
+        assert!(!screen.typed());
+        screen.edit_to(1.2, true);
+        screen.escape(1.3);
+        assert!(!screen.typed(), "Escape empties the field");
+        screen.edit_to(1.4, true);
+        submit(&mut screen, 1.5, "x");
+        assert!(!screen.typed(), "a submission empties the field");
+    }
+
+    #[test]
+    fn the_display_sleeping_or_waking_empties_the_field_and_keeps_the_rest() {
+        let mut screen = LockScreen::new(0.0, HIDE_AFTER);
+        screen.settle_interface();
+        screen.edit_to(1.0, true);
+        let field = screen.field();
+        screen.clear_field();
+        assert_eq!(screen.field(), field + 1);
+        assert!(!screen.typed());
+        assert_eq!(screen.phase(), Phase::Locked);
+        // an attempt being checked keeps its field: the password is out already, the retry typed meanwhile stays
+        submit(&mut screen, 2.0, "x");
+        let checking = screen.field();
+        screen.clear_field();
+        assert_eq!(screen.field(), checking);
+    }
+
+    #[test]
+    fn the_interface_fades_in_again_once_its_wallpaper_is_ready() {
+        let mut screen = LockScreen::new(0.0, HIDE_AFTER);
+        approx(screen.opacity(0.3), 1.0);
+        screen.show_from(0.3);
+        approx(screen.opacity(0.3), 0.0);
+        approx(screen.opacity(0.425), 0.5);
+        approx(screen.opacity(0.55), 1.0);
+        // a settled interface stays shown
+        let mut settled = LockScreen::new(0.0, HIDE_AFTER);
+        settled.settle_interface();
+        settled.show_from(0.3);
+        approx(settled.opacity(0.3), 1.0);
     }
 
     #[test]

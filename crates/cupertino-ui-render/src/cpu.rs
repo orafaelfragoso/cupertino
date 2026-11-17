@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use tiny_skia::{
     FilterQuality, GradientStop, LinearGradient, Mask, Pattern, Pixmap, PixmapMut, PixmapPaint,
-    Point, RadialGradient, SpreadMode, Stroke,
+    PixmapRef, Point, RadialGradient, SpreadMode, Stroke,
 };
 
 /// Largest glyph the renderer rasterizes, in physical pixels per em.
@@ -1178,8 +1178,8 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
             };
             let at = (area.x0 - t.origin.0, y0 - view.shift.1 - t.origin.1);
             match under {
-                Some(color) => over_color_part(t.pixmap, at, &image.pixels, &part, color),
-                None => source_over_part(t.pixmap, at, &image.pixels, &part, 1.0),
+                Some(color) => over_color_part(t.pixmap, at, image.pixels.as_ref(), &part, color),
+                None => source_over_part(t.pixmap, at, image.pixels.as_ref(), &part, 1.0),
             }
         }
     }
@@ -1349,7 +1349,7 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
         source_over_part(
             t.pixmap,
             (visible.x0 - t.origin.0, visible.y0 - t.origin.1),
-            image,
+            image.as_ref(),
             &visible.offset(-area.x0, -area.y0),
             opacity,
         );
@@ -1416,6 +1416,9 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
         self.stats.nodes_painted += 1;
         let halo = node_support(node, self.scale);
         let reach = Reach { extent, halo };
+        if self.straight_image(t, tree, i, chain, &area) {
+            return Ok(());
+        }
         // in a scroll layer, whose targets are the rows being painted, a fill straight into the target would be cut at
         // their edges: only glyphs are, as in the frame
         if self.direct(tree, i, chain, t.frame || t.space == EVERYWHERE) {
@@ -1540,7 +1543,7 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
             source_over_part(
                 t.pixmap,
                 (visible.x0 - t.origin.0, visible.y0 - t.origin.1),
-                &scratch,
+                scratch.as_ref(),
                 &visible.offset(-area.x0, -area.y0),
                 1.0,
             );
@@ -1632,7 +1635,7 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
         source_over(
             t.pixmap,
             (visible.x0 - t.origin.0, visible.y0 - t.origin.1),
-            &shown,
+            shown.as_ref(),
             opacity,
         );
         Ok(())
@@ -1874,73 +1877,39 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
         if u64::from(image.width) * u64::from(image.height) > self.config.max_pixels {
             return Err(RenderError::ResourceLimit);
         }
-        if src.width() <= 0.0 || src.height() <= 0.0 || dst.width() <= 0.0 || dst.height() <= 0.0 {
-            return Ok(());
-        }
-        let (x0, y0) = (src.min_x().floor().max(0.0), src.min_y().floor().max(0.0));
-        let (x1, y1) = (
-            src.max_x().ceil().min(f64::from(image.width)),
-            src.max_y().ceil().min(f64::from(image.height)),
-        );
-        let Some(crop) =
-            tiny_skia::IntRect::from_xywh(x0 as i32, y0 as i32, (x1 - x0) as u32, (y1 - y0) as u32)
+        let Some(Placement {
+            crop,
+            place,
+            ts,
+            whole,
+        }) = self.placement(t, node, image, src, dst)
         else {
             return Ok(());
         };
-        let (sx, sy) = (dst.width() / src.width(), dst.height() / src.height());
-        let place = tiny_skia::Transform::from_row(
-            sx as f32,
-            0.0,
-            0.0,
-            sy as f32,
-            (dst.min_x() + (x0 - src.min_x()) * sx) as f32,
-            (dst.min_y() + (y0 - src.min_y()) * sy) as f32,
-        );
-        let mut ts = self.ts(t, node);
-        // an image drawn one source pixel per device pixel lands on whole pixels, so it is copied, not resampled; the
-        // pixel is chosen in window pixels, so every piece of the window it is drawn into puts it in the same place
-        let device = ts.pre_concat(place);
-        if device.kx == 0.0
-            && device.ky == 0.0
-            && (device.sx - 1.0).abs() < 1e-4
-            && (device.sy - 1.0).abs() < 1e-4
-        {
-            let window = self.window_ts(node).pre_concat(place);
-            let x = whole_pixel(window.tx) - t.origin.0 as f32;
-            let y = whole_pixel(window.ty) - t.origin.1 as f32;
-            ts = ts.post_translate(x - device.tx, y - device.ty);
-            // whole source pixels filling a destination on whole pixels are laid over directly, with the same result
-            if x0 == src.min_x()
-                && y0 == src.min_y()
-                && x1 == src.max_x()
-                && y1 == src.max_y()
-                && on_pixels(&ts, dst, (x, y), crop)
-            {
-                let mask = t.clips.last().map(Mask::data);
-                let at = (x as i32, y as i32);
-                // premultiplied pixels are read where they are, with no copy kept
-                if image.format == PixelFormat::Rgba8Premultiplied {
-                    lay_over(
-                        t.pixmap,
-                        mask,
-                        &image.pixels,
-                        image.stride as usize,
-                        crop,
-                        at,
-                    );
-                } else {
-                    let whole = self.images.get(id, image, self.config.max_pixels)?;
-                    lay_over(
-                        t.pixmap,
-                        mask,
-                        whole.data(),
-                        whole.width() as usize * 4,
-                        crop,
-                        at,
-                    );
-                }
-                return Ok(());
+        if let Some(at) = whole {
+            let mask = t.clips.last().map(Mask::data);
+            // premultiplied pixels are read where they are, with no copy kept
+            if image.format == PixelFormat::Rgba8Premultiplied {
+                lay_over(
+                    t.pixmap,
+                    mask,
+                    &image.pixels,
+                    image.stride as usize,
+                    crop,
+                    at,
+                );
+            } else {
+                let whole = self.images.get(id, image, self.config.max_pixels)?;
+                lay_over(
+                    t.pixmap,
+                    mask,
+                    whole.data(),
+                    whole.width() as usize * 4,
+                    crop,
+                    at,
+                );
             }
+            return Ok(());
         }
         let whole = self.images.get(id, image, self.config.max_pixels)?;
         let Some(part) = whole.clone_rect(crop) else {
@@ -1965,6 +1934,160 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
             t.clips.last(),
         );
         Ok(())
+    }
+
+    /// Where `src` of `image` drawn into `dst` (node coordinates) lands in the target: the source pixels it reads, how
+    /// they are placed and the node's transform to the target; `None` when it draws nothing.
+    fn placement(
+        &self,
+        t: &Target<'_, '_>,
+        node: &PaintNode,
+        image: &crate::ImageResource,
+        src: &Rect,
+        dst: &Rect,
+    ) -> Option<Placement> {
+        if src.width() <= 0.0 || src.height() <= 0.0 || dst.width() <= 0.0 || dst.height() <= 0.0 {
+            return None;
+        }
+        let (x0, y0) = (src.min_x().floor().max(0.0), src.min_y().floor().max(0.0));
+        let (x1, y1) = (
+            src.max_x().ceil().min(f64::from(image.width)),
+            src.max_y().ceil().min(f64::from(image.height)),
+        );
+        let crop = tiny_skia::IntRect::from_xywh(
+            x0 as i32,
+            y0 as i32,
+            (x1 - x0) as u32,
+            (y1 - y0) as u32,
+        )?;
+        let (sx, sy) = (dst.width() / src.width(), dst.height() / src.height());
+        let place = tiny_skia::Transform::from_row(
+            sx as f32,
+            0.0,
+            0.0,
+            sy as f32,
+            (dst.min_x() + (x0 - src.min_x()) * sx) as f32,
+            (dst.min_y() + (y0 - src.min_y()) * sy) as f32,
+        );
+        let mut ts = self.ts(t, node);
+        let mut whole = None;
+        // an image drawn one source pixel per device pixel lands on whole pixels, so it is copied, not resampled; the
+        // pixel is chosen in window pixels, so every piece of the window it is drawn into puts it in the same place
+        let device = ts.pre_concat(place);
+        if device.kx == 0.0
+            && device.ky == 0.0
+            && (device.sx - 1.0).abs() < 1e-4
+            && (device.sy - 1.0).abs() < 1e-4
+        {
+            let window = self.window_ts(node).pre_concat(place);
+            let x = whole_pixel(window.tx) - t.origin.0 as f32;
+            let y = whole_pixel(window.ty) - t.origin.1 as f32;
+            ts = ts.post_translate(x - device.tx, y - device.ty);
+            // whole source pixels filling a destination on whole pixels are laid over directly, with the same result
+            if x0 == src.min_x()
+                && y0 == src.min_y()
+                && x1 == src.max_x()
+                && y1 == src.max_y()
+                && on_pixels(&ts, dst, (x, y), crop)
+            {
+                whole = Some((x as i32, y as i32));
+            }
+        }
+        Some(Placement {
+            crop,
+            place,
+            ts,
+            whole,
+        })
+    }
+
+    /// Paints a node of the frame whose one operation lays premultiplied pixels one to a device pixel, and which
+    /// nothing clips, straight from the image's pixels: its scratch image would hold just those pixels, so they are
+    /// laid over the frame as that image would be, with the same bytes, and where the frame is still only to be set
+    /// to one colour they are laid over that colour as it is written. Says whether it painted the node; one it does
+    /// not take goes through a scratch image as ever.
+    fn straight_image(
+        &mut self,
+        t: &mut Target<'_, '_>,
+        tree: &Tree<'_>,
+        i: usize,
+        chain: &[&PaintNode],
+        area: &Bounds,
+    ) -> bool {
+        let node = &tree.nodes[i];
+        let [PaintOp::Image {
+            image: resource,
+            src,
+            dst,
+            ..
+        }] = node.ops.as_slice()
+        else {
+            return false;
+        };
+        if !self.fast || !t.frame || !t.clips.is_empty() || !t.holes.is_empty() {
+            return false;
+        }
+        let reach = tree.extents[i].outset(node_support(node, self.scale));
+        let unclipped = chain.iter().all(|owner| {
+            owner
+                .clip
+                .as_ref()
+                .is_none_or(|clip| geometry::clip_holds(clip, &owner.transform, self.scale, &reach))
+        });
+        let resources = self.resources;
+        let Some(image) = resources.images.get(&resource.id) else {
+            return false;
+        };
+        if !unclipped
+            || image.format != PixelFormat::Rgba8Premultiplied
+            || image.stride != image.width.saturating_mul(4)
+            || u64::from(image.width) * u64::from(image.height) > self.config.max_pixels
+        {
+            return false;
+        }
+        let Some(Placement {
+            crop,
+            whole: Some(at),
+            ..
+        }) = self.placement(t, node, image, src, dst)
+        else {
+            return false;
+        };
+        let Some(pixels) = PixmapRef::from_bytes(&image.pixels, image.width, image.height) else {
+            return false;
+        };
+        self.stats.images += 1;
+        // the image's pixels in window pixels, and those of them the scratch image would lay over
+        let (left, top) = (at.0 + t.origin.0, at.1 + t.origin.1);
+        let laid = Bounds {
+            x0: left,
+            y0: top,
+            x1: left + crop.width() as i32,
+            y1: top + crop.height() as i32,
+        };
+        let visible = area.intersect(&t.limit);
+        let shown = laid.intersect(&visible);
+        let known = if shown.is_empty() {
+            Vec::new()
+        } else {
+            self.pending.take_set(&shown)
+        };
+        self.pending.flush(t.pixmap, t.origin, &visible);
+        self.stats
+            .node_composite
+            .add(u64::from(shown.width()) * u64::from(shown.height()) * 4);
+        let to_image = |b: &Bounds| b.offset(crop.x() - left, crop.y() - top);
+        let to_target = |b: &Bounds| (b.x0 - t.origin.0, b.y0 - t.origin.1);
+        let set: Vec<Bounds> = known.iter().map(|(k, _)| *k).collect();
+        for rest in spans::subtract(shown, &set) {
+            if !rest.is_empty() {
+                source_over_part(t.pixmap, to_target(&rest), pixels, &to_image(&rest), 1.0);
+            }
+        }
+        for (part, color) in &known {
+            over_color_part(t.pixmap, to_target(part), pixels, &to_image(part), *color);
+        }
+        true
     }
 
     fn glyph_run(
@@ -2241,7 +2364,7 @@ pub(crate) fn skia_paint(paint: &Paint) -> Option<tiny_skia::Paint<'static>> {
 
 /// Source-over of the premultiplied `src`, scaled by `opacity`, onto the pixmap with its top-left pixel at `at`, in
 /// 8-bit integers. Whatever of `src` falls outside the pixmap is not drawn.
-fn source_over(dst: &mut PixmapMut<'_>, at: (i32, i32), src: &Pixmap, opacity: f32) {
+fn source_over(dst: &mut PixmapMut<'_>, at: (i32, i32), src: PixmapRef<'_>, opacity: f32) {
     let whole = Bounds::of_size(src.width(), src.height());
     source_over_part(dst, at, src, &whole, opacity);
 }
@@ -2255,7 +2378,7 @@ fn opacity_factor(opacity: f32) -> u32 {
 fn source_over_part(
     dst: &mut PixmapMut<'_>,
     at: (i32, i32),
-    src: &Pixmap,
+    src: PixmapRef<'_>,
     part: &Bounds,
     opacity: f32,
 ) {
@@ -2280,7 +2403,7 @@ fn source_over_part(
 fn over_color_part(
     dst: &mut PixmapMut<'_>,
     at: (i32, i32),
-    src: &Pixmap,
+    src: PixmapRef<'_>,
     part: &Bounds,
     color: [u8; 4],
 ) {
@@ -2305,7 +2428,7 @@ fn over_color_part(
 fn lay_part(
     dst: &mut PixmapMut<'_>,
     at: (i32, i32),
-    src: &Pixmap,
+    src: PixmapRef<'_>,
     part: &Bounds,
     mut run: impl FnMut(&[u8], &mut [u8]),
 ) {
@@ -2387,6 +2510,16 @@ fn over_run(s: &[u8], d: &mut [u8], k: u32) {
 
 /// Source-over of a glyph image at (`x`, `y`) in the pixmap, through the clip mask and inside `limit` (pixmap
 /// pixels): a raster can reach past the box its node's extent allows.
+/// Where an image operation lands: the source pixels it reads, how they are placed in node coordinates, the node's
+/// transform to the target (moved onto whole pixels for an image drawn one source pixel per device pixel), and, when
+/// whole source pixels fill a destination on whole pixels, the target pixel their top-left corner falls on.
+struct Placement {
+    crop: tiny_skia::IntRect,
+    place: tiny_skia::Transform,
+    ts: tiny_skia::Transform,
+    whole: Option<(i32, i32)>,
+}
+
 /// Whether `dst` under `ts` covers exactly the device pixels an image cut to `crop` covers at `at`.
 fn on_pixels(
     ts: &tiny_skia::Transform,
@@ -2886,6 +3019,158 @@ mod tests {
             }
         }
         (spans, hidden)
+    }
+
+    /// Squares of a picture laid one pixel to a device pixel over an opaque background, as a screen that stands on a
+    /// picture lays it, with a translucent fill and an image that is scaled among them; the picture has opaque,
+    /// translucent and empty pixels.
+    fn squares(scale: f64) -> (DisplayList, PaintResources, u32, u32) {
+        const SQUARES: ResourceId = ResourceId(7);
+        let (w, h) = (96.0, 64.0);
+        let size = |v: f64| (v * scale).ceil() as u32;
+        let (pw, ph) = (size(w), size(h));
+        let mut draw = Draw(0x51de);
+        let pixels: Vec<u8> = (0..pw * ph)
+            .flat_map(|i| {
+                let a = match i % 7 {
+                    0 => 0,
+                    1 => 90 + draw.pick(100) as u8,
+                    _ => 255,
+                };
+                let c = |draw: &mut Draw| (u32::from(a) * draw.pick(256) / 255) as u8;
+                [c(&mut draw), c(&mut draw), c(&mut draw), a]
+            })
+            .collect();
+        let picture = ImageResource {
+            revision: 1,
+            width: pw,
+            height: ph,
+            stride: pw * 4,
+            format: crate::PixelFormat::Rgba8Premultiplied,
+            pixels: Arc::from(pixels),
+        };
+        let mut nodes = vec![plain(
+            1,
+            None,
+            (0.0, 0.0),
+            vec![PaintOp::Fill {
+                shape: Shape::Rect(Rect::new(0.0, 0.0, w, h)),
+                paint: Paint::Solid(Color::new(0.2, 0.3, 0.4, 1.0)),
+            }],
+        )];
+        let side = 32.0;
+        let mut id = 2;
+        for row in 0..2 {
+            for column in 0..3 {
+                let (x, y) = (f64::from(column) * side, f64::from(row) * side);
+                let edge = |v: f64| (v * scale).round();
+                let src = Rect::new(
+                    edge(x),
+                    edge(y),
+                    edge(x + side).min(f64::from(pw)) - edge(x),
+                    edge(y + side).min(f64::from(ph)) - edge(y),
+                );
+                let mut node = plain(
+                    id,
+                    Some(1),
+                    (x, y),
+                    vec![PaintOp::Image {
+                        image: ResourceRef {
+                            id: SQUARES,
+                            revision: 1,
+                        },
+                        src,
+                        dst: Rect::new(
+                            src.min_x() / scale - x,
+                            src.min_y() / scale - y,
+                            src.width() / scale,
+                            src.height() / scale,
+                        ),
+                        sampling: Sampling::Nearest,
+                    }],
+                );
+                node.bounds = Rect::new(0.0, 0.0, side, side);
+                nodes.push(node);
+                id += 1;
+            }
+        }
+        nodes.push(plain(
+            id,
+            Some(1),
+            (10.0, 12.0),
+            vec![PaintOp::Fill {
+                shape: Shape::Rect(Rect::new(0.0, 0.0, 30.0, 20.0)),
+                paint: Paint::Solid(Color::new(1.0, 1.0, 1.0, 0.4)),
+            }],
+        ));
+        nodes.push(plain(
+            id + 1,
+            Some(1),
+            (40.25, 30.5),
+            vec![PaintOp::Image {
+                image: ResourceRef {
+                    id: SQUARES,
+                    revision: 1,
+                },
+                src: Rect::new(0.0, 0.0, 20.0, 20.0),
+                dst: Rect::new(0.0, 0.0, 13.0, 13.0),
+                sampling: Sampling::Linear,
+            }],
+        ));
+        let resources = PaintResources {
+            images: [(SQUARES, picture)].into(),
+        };
+        (DisplayList { nodes }, resources, pw, ph)
+    }
+
+    #[test]
+    fn squares_of_a_picture_laid_one_to_a_pixel_go_straight_to_the_frame_with_the_bytes_of_a_scratch_image(
+    ) {
+        let config = CpuConfig {
+            max_pixels: 1 << 22,
+            glyph_cache_bytes: 1 << 16,
+            image_cache_bytes: 1 << 20,
+            font_smoothing: true,
+        };
+        for scale in [1.0, 1.5, 2.0] {
+            let (list, resources, width, height) = squares(scale);
+            let mut fast = CpuRenderer::new(config, NoGlyphs);
+            let mut slow = CpuRenderer::new(config, NoGlyphs).without_fast_paths();
+            let damages = [
+                DamageRegion::Full,
+                DamageRegion::Rects(vec![Rect::new(5.5, 7.25, 40.0, 30.0)]),
+                DamageRegion::Rects(vec![
+                    Rect::new(30.0, 0.0, 4.0, 64.0),
+                    Rect::new(60.0, 20.0, 30.0, 30.0),
+                ]),
+            ];
+            for (n, damage) in damages.iter().enumerate() {
+                let request = RenderRequest {
+                    list: &list,
+                    resources: &resources,
+                    scale,
+                    width,
+                    height,
+                    damage,
+                };
+                let a = fast.render(&request).unwrap();
+                let b = slow.render(&request).unwrap();
+                let (laid, general) = (*fast.stats(), *slow.stats());
+                // each of the six squares a scratch image fewer
+                if n == 0 {
+                    assert!(
+                        laid.scratch_images.count + 6 <= general.scratch_images.count,
+                        "scale {scale}: {laid:?} {general:?}"
+                    );
+                }
+                assert!(laid.scratch_images.bytes < general.scratch_images.bytes);
+                let (a, b) = (fast.frame(a).unwrap(), slow.frame(b).unwrap());
+                assert!(
+                    a.pixels == b.pixels,
+                    "scale {scale}, frame {n}: the bytes differ"
+                );
+            }
+        }
     }
 
     #[test]
@@ -3655,7 +3940,7 @@ mod tests {
             let src = noise(37, 23, seed);
             let dst = noise(64, 48, seed + 100);
             let mut integer = dst.clone();
-            source_over(&mut integer.as_mut(), (11, 7), &src, opacity);
+            source_over(&mut integer.as_mut(), (11, 7), src.as_ref(), opacity);
             let mut float = dst.clone();
             float.draw_pixmap(
                 11,
@@ -3740,13 +4025,13 @@ mod tests {
                     }
                 }
             }
-            source_over_part(&mut two.as_mut(), at, &src, &part, 1.0);
+            source_over_part(&mut two.as_mut(), at, src.as_ref(), &part, 1.0);
             let mut one = dst.clone();
-            over_color_part(&mut one.as_mut(), at, &src, &part, color);
+            over_color_part(&mut one.as_mut(), at, src.as_ref(), &part, color);
             assert_eq!(one.data(), two.data(), "seed {seed}");
             // and the composite that copies opaque runs has the bytes of one that blends every pixel
             let mut copied = dst.clone();
-            source_over_part(&mut copied.as_mut(), at, &src, &part, 1.0);
+            source_over_part(&mut copied.as_mut(), at, src.as_ref(), &part, 1.0);
             let mut blended = dst.clone();
             let stride = 96 * 4;
             for y in 0..part.height() as usize {

@@ -20,6 +20,8 @@
 //! * [`restore`]: reopening applications at the next login: the saved choice and list, and starting the list once.
 //! * [`low_battery`]: which low-battery notification to post, replace or withdraw as the warning level changes.
 //! * [`user`]: the user's name and picture, and the clock text.
+//! * [`wallpaper`]: the picture the screens stand on, dimmed, made once per output, and the control material under the
+//!   field.
 //! * feature `dbus`: [`control`] (the `org.cupertino.Login1` bus interface), [`logind`] (the session's lock request, suspend
 //!   preparation and the call that ends the session), [`login_manager`] (the session manager's `org.cupertino.LoginManager1`: power
 //!   actions, inhibitor locks, the session's announcement) and
@@ -64,5 +66,6 @@ pub mod spinner;
 pub mod upower;
 pub mod user;
 pub mod view;
+pub mod wallpaper;
 
 pub use model::{AuthOutcome, Key, LockScreen, NoAttempt, Password, Phase};

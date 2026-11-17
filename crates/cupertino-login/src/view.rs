@@ -34,18 +34,19 @@ use cupertino_kit::theme::Color;
 
 use crate::interrupt::{self, Choice};
 use crate::layout::{
-    Layout, AVATAR_DIAMETER, HELP_SIZE, NAME_BASELINE_GAP, NAME_MAX_WIDTH, NAME_SIZE, TILE_WIDTH,
-    USER_VIEW_BORDER,
+    Layout, BUTTON_SIZE, HELP_SIZE, NAME_BASELINE_GAP, NAME_MAX_WIDTH, NAME_SIZE, SUBMIT_GAP,
+    TILE_WIDTH, USER_VIEW_BORDER,
 };
 use crate::lock_notices::{self, Notice};
-use crate::model::{Key as PanelKey, Password, MAX_PASSWORD_BYTES};
+use crate::model::{Key as PanelKey, Password, MAX_PASSWORD_BYTES, SHAKE_AMPLITUDE};
 use crate::panel::{Decision, Frames, Kind, Panel};
 use crate::picker::{Direction, Grid, Picker, Tile};
 use crate::power::{self, Menu};
 use crate::user::{initials, User};
+use crate::wallpaper::Source;
 use widgets::{
-    Adornment, AlertBody, Avatar, Backdrop, Fade, FieldFrame, Label, Look, NoticeCard, Place,
-    Pressable, Slot, ESCAPE, WHITE,
+    Adornment, AlertBody, Avatar, Backdrop, Fade, FieldFrame, FieldMaterial, Glyph, GlyphKind,
+    Ground, Label, Look, NoticeCard, Place, Pressable, Slot, ESCAPE, WHITE,
 };
 
 /// The `app_id` of a lock surface's window, followed by `.` and the output's registry name: the surface roles give it
@@ -77,30 +78,43 @@ pub const CHECKING: &str = "Checking the password";
 /// The password help line (approximate: this system has no hint to show, so the line points to whoever can reset the
 /// password).
 pub const PASSWORD_HELP: &str = "Forgot your password? Ask an administrator to reset it.";
+/// The help button's name (approximate).
+pub const HELP_LABEL: &str = "Password Help";
 /// The power item's name, and the description of a picker tile whose user has a session.
 pub const POWER_LABEL: &str = "Power";
 pub const LOGGED_IN: &str = "Logged in";
 
-/// Weights of the clock and the names (medium and semibold).
+/// Weights of the date and the names (medium) and of the time.
 const WEIGHT_MEDIUM: FontWeight = FontWeight(500);
-const WEIGHT_SEMIBOLD: FontWeight = FontWeight::SEMIBOLD;
-/// Size of the field's notices and the help (the field's text size).
+const WEIGHT_TIME: FontWeight = FontWeight(640);
+/// Size of the messages under the field and of the help (the field's text size).
 const NOTICE_SIZE: f64 = 13.0;
 /// Size of the text typed in the field and of its placeholder.
 const FIELD_TEXT_SIZE: f64 = 13.0;
 /// The password field's placeholder: white at half opacity.
 const PLACEHOLDER_COLOR: Color = Color::new(1.0, 1.0, 1.0, 0.5);
-/// Widest a notice draws, and how many lines it may take.
-const NOTICE_MAX_WIDTH: f64 = 544.0;
+/// Widest a message under the field draws, and how many lines it may take (the lines are approximate).
+const NOTICE_MAX_WIDTH: f64 = 400.0;
 const NOTICE_LINES: f64 = 3.0;
-/// White at this alpha for the notices and the help.
+/// White at this alpha for the help line and the count of notifications not shown (approximate).
 const NOTICE_ALPHA: f32 = 0.8;
 /// Space between the screen's edges and the help line.
 const HELP_MARGIN: f64 = 40.0;
 /// Initials size as a fraction of the avatar diameter (approximate).
 const INITIALS_SIZE: f64 = 0.4;
-/// The field's trailing slot for the Caps Lock badge and the spinner.
+/// The field's trailing slot for the Caps Lock badge and the spinner, and the room after it (approximate).
 const SLOT_WIDTH: f64 = 18.0;
+const SLOT_INSET: f64 = 5.0;
+/// The name field's text insets in its capsule, before and after the text (approximate).
+const NAME_INSETS: Insets = Insets {
+    top: 0.0,
+    left: 10.0,
+    bottom: 0.0,
+    right: SLOT_WIDTH,
+};
+/// How far the avatar's halo and the name's shadow reach past them: the user block's layer holds them.
+const HALO_REACH: f64 = 16.0;
+const SHADOW_REACH: f64 = 12.0;
 /// Panel title and info: the title's weight; the icon disc's fill (approximate, a neutral grey).
 const PANEL_ICON_FILL: Color = Color::new(0.60, 0.62, 0.66, 1.0);
 /// Text size the panels' title and lines are measured at; the roles set the size they draw at.
@@ -111,26 +125,51 @@ const PANEL_ALERT_RADIUS: f64 = 26.0;
 /// checkbox wraps.
 const CHECKBOX_LABEL_INSET: f64 = 22.0;
 
-/// Ascent and descent of the interface font as fractions of the em: what places text by its baseline.
+/// Ascent and descent of the interface font as fractions of the em: what places text by its baseline; and the
+/// password field's placeholder's width in points, which the field grows to hold.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Metrics {
     pub ascent: f64,
     pub descent: f64,
+    pub placeholder: f64,
 }
 
 /// Metrics of a typical sans face, for a text system that cannot resolve a font.
 const FALLBACK_METRICS: Metrics = Metrics {
     ascent: 0.97,
     descent: 0.24,
+    placeholder: 90.0,
 };
 
 impl Metrics {
     /// The theme font's metrics in `text`.
     pub fn of(text: &TextSystem) -> Metrics {
+        let placeholder = AttributedText::plain(
+            PASSWORD_PLACEHOLDER,
+            TextStyle {
+                weight: WEIGHT_MEDIUM,
+                ..TextStyle::new(FIELD_TEXT_SIZE as f32)
+            },
+        );
+        let placeholder = text
+            .paragraph(
+                &placeholder,
+                &cupertino_kit::text::ParagraphStyle::default(),
+            )
+            .ok()
+            .and_then(|p| {
+                p.layout(None)
+                    .lines()
+                    .iter()
+                    .map(|line| line.rect.width())
+                    .reduce(f64::max)
+            })
+            .unwrap_or(FALLBACK_METRICS.placeholder);
         text.metrics(&TextStyle::new(PANEL_TITLE_SIZE))
             .map_or(FALLBACK_METRICS, |m| Metrics {
                 ascent: f64::from(m.ascent),
                 descent: f64::from(m.descent),
+                placeholder,
             })
     }
 
@@ -173,8 +212,10 @@ impl fmt::Debug for Typed {
 pub enum Input {
     /// A key, a press or a move of the pointer: shows a hidden interface and restarts the idle time.
     Activity,
-    /// The password changed.
-    Edited,
+    /// The password changed; whether the field holds text now.
+    Edited(bool),
+    /// The help button: show or hide the password help.
+    Help,
     /// Escape on the password or name screen.
     Escape,
     /// Return in the password field.
@@ -235,15 +276,23 @@ pub struct Screen<'a> {
     /// Whose password is asked; `None` on the name screen, which shows the "Other…" disc.
     pub user: Option<&'a User>,
     pub field: Field,
+    /// The field holds text: the submit button shows.
+    pub typed: bool,
     pub caps_lock: bool,
     /// The spinner's frame while an attempt has been checked for a while.
     pub spinner: Option<u32>,
-    /// The last attempt was a wrong password: the outline and [`DENIED`].
+    /// The last attempt was a wrong password: the outline.
     pub denied: bool,
+    /// And [`DENIED`] says so under the field.
+    pub denied_said: bool,
     pub notice: Option<&'a str>,
+    /// The help button shows; `help_open`: and the help it opens.
     pub help: bool,
+    pub help_open: bool,
     /// Of everything but the wallpaper.
     pub opacity: f64,
+    /// Of the user block on top of `opacity`: the greeter's switch between its picker and this screen.
+    pub block: f64,
     /// The field's horizontal offset.
     pub shake: f64,
     /// The interface is hidden: the next key or press only shows it.
@@ -253,6 +302,9 @@ pub struct Screen<'a> {
     /// The notifications the lock screen shows, newest first, as the notification daemon gave them
     /// ([`crate::lock_notices`]); none on the greeter.
     pub notices: &'a [Notice],
+    /// What the screen stands on, and its dimming's opacity (0 to 1).
+    pub wallpaper: &'a Source,
+    pub dim: f64,
 }
 
 fn label(
@@ -271,6 +323,7 @@ fn label(
         ascent: metrics.ascent * size,
         wrap: false,
         live: None,
+        shadow: false,
     }
 }
 
@@ -293,14 +346,13 @@ fn avatar<M: 'static>(user: Option<&User>, rect: Rect, metrics: Metrics) -> Elem
             let text = user.map_or_else(|| OTHER_GLYPH.to_owned(), |u| initials(&u.display));
             let size = diameter * INITIALS_SIZE;
             let baseline = diameter / 2.0 + (metrics.ascent - metrics.descent) * size / 2.0;
-            let mut initials = label(
+            let initials = label(
                 text,
                 size,
                 WEIGHT_MEDIUM,
                 metrics.line(diameter / 2.0, diameter, baseline, size, 1.0),
                 metrics,
             );
-            initials.live = None;
             (
                 true,
                 user.is_some_and(|u| u.logged_in),
@@ -372,10 +424,16 @@ fn field_keys<M: 'static>(
     })
 }
 
-/// The power item at `layout.power_item`, keyed for its menu to hang under.
-fn power_item<M: Clone + 'static>(menu: &Menu, layout: &Layout, map: fn(Input) -> M) -> Element<M> {
-    Element::new(Pressable {
-        rect: layout.power_item,
+/// The status bar's power item at `layout.power_item`, keyed for its menu to hang under, in a part of its own.
+fn power_item<M: Clone + 'static>(
+    menu: &Menu,
+    layout: &Layout,
+    opacity: f64,
+    map: fn(Input) -> M,
+) -> Element<M> {
+    let rect = layout.power_item;
+    let item = Element::new(Pressable {
+        rect: Rect::new(0.0, 0.0, rect.width(), rect.height()),
         look: Look::Power {
             open: menu.is_open(),
         },
@@ -384,44 +442,67 @@ fn power_item<M: Clone + 'static>(menu: &Menu, layout: &Layout, map: fn(Input) -
         on_press: map(Input::TogglePower),
         on_focus: None,
         on_hover: None,
+        focusable: true,
         children: Vec::new(),
     })
-    .key(POWER_KEY)
+    .key(POWER_KEY);
+    Element::new(Fade::new(rect, opacity, vec![item]))
 }
 
 /// The element key of the power item, which the menu hangs under.
 pub const POWER_KEY: &str = "power";
 
-/// The clock at the top of a screen.
-fn clock<M: 'static>(
-    clock: &Clock,
-    layout: &Layout,
-    width: f64,
-    metrics: Metrics,
-) -> [Element<M>; 2] {
-    let line = |text: &str, baseline, size, weight| {
-        Element::new(label(
-            text,
-            size,
-            weight,
-            metrics.line(layout.center_x, width, baseline, size, 1.0),
-            metrics,
-        ))
-    };
-    [
-        line(
-            &clock.date,
-            layout.date_baseline,
-            layout.date_size,
-            WEIGHT_MEDIUM,
-        ),
-        line(
-            &clock.time,
-            layout.time_baseline,
-            layout.time_size,
-            WEIGHT_SEMIBOLD,
-        ),
-    ]
+/// `rect` in the points of a part that starts at `origin`.
+fn within(rect: Rect, origin: Point) -> Rect {
+    rect.translate(-origin.x, -origin.y)
+}
+
+/// The clock at the top of a screen, a part of its own just its size.
+fn clock<M: 'static>(clock: &Clock, layout: &Layout, metrics: Metrics, opacity: f64) -> Element<M> {
+    let date = metrics.line(
+        layout.center_x,
+        layout.date_width(),
+        layout.date_baseline,
+        layout.date_size,
+        1.0,
+    );
+    let time = metrics.line(
+        layout.center_x,
+        layout.time_width(),
+        layout.time_baseline,
+        layout.time_size,
+        1.0,
+    );
+    let rect = date.union(&time);
+    Element::new(Fade::new(
+        rect,
+        opacity,
+        vec![
+            Element::new(label(
+                &clock.date,
+                layout.date_size,
+                WEIGHT_MEDIUM,
+                within(date, rect.origin),
+                metrics,
+            )),
+            Element::new(label(
+                &clock.time,
+                layout.time_size,
+                WEIGHT_TIME,
+                within(time, rect.origin),
+                metrics,
+            )),
+        ],
+    ))
+}
+
+/// The ground of a screen of `size` on `wallpaper` with its dimming at `dim`.
+fn ground(wallpaper: &Source, size: Size, dim: f64) -> Ground {
+    Ground {
+        source: wallpaper.clone(),
+        size,
+        dim,
+    }
 }
 
 /// The password screen of the lock screen and the greeter, or the greeter's name screen.
@@ -432,26 +513,76 @@ pub fn screen<M: Clone + 'static>(
 ) -> Element<M> {
     let metrics = screen.metrics;
     let (width, height) = (screen.size.width, screen.size.height);
-    let layout = Layout::new(width, height, metrics.descent);
-    let mut children: Vec<Element<M>> = clock(screen.clock, &layout, width, metrics).into();
-    children.push(avatar(screen.user, layout.avatar, metrics));
-    let name = screen.user.map_or(OTHER_LABEL, |u| u.display.as_str());
-    children.push(Element::new(label(
-        name,
+    let layout = Layout::new(width, height, metrics.descent, metrics.placeholder);
+    let ground = ground(screen.wallpaper, screen.size, screen.dim);
+    let mut parts: Vec<Element<M>> = vec![clock(screen.clock, &layout, metrics, screen.opacity)];
+
+    // the user block: the avatar, the name, the field and its buttons and the messages under it, one part
+    let name_line = metrics.line(
+        layout.center_x,
+        NAME_MAX_WIDTH,
+        layout.name_baseline,
         NAME_SIZE,
-        WEIGHT_MEDIUM,
+        1.0,
+    );
+    let line_height = (metrics.ascent + metrics.descent) * NOTICE_SIZE;
+    let message = |i: usize| {
         metrics.line(
             layout.center_x,
-            NAME_MAX_WIDTH,
-            layout.name_baseline,
+            NOTICE_MAX_WIDTH,
+            layout.notice_baseline + i as f64 * NOTICE_LINES * line_height,
+            NOTICE_SIZE,
+            NOTICE_LINES,
+        )
+    };
+    let reach = SHAKE_AMPLITUDE + widgets::FAILURE_OUTLINE_WIDTH;
+    let block = layout
+        .avatar
+        .outset(HALO_REACH)
+        .union(&name_line.outset(SHADOW_REACH))
+        .union(&layout.pill.inset(Insets {
+            top: -reach,
+            left: -reach,
+            bottom: -reach,
+            right: -reach,
+        }))
+        .union(&layout.help_button)
+        .union(&message(0))
+        .union(&message(1));
+    let at = block.origin;
+    let mut children: Vec<Element<M>> =
+        vec![avatar(screen.user, within(layout.avatar, at), metrics)];
+    let name = screen.user.map_or(OTHER_LABEL, |u| u.display.as_str());
+    children.push(Element::new(Label {
+        shadow: true,
+        ..label(
+            name,
             NAME_SIZE,
-            1.0,
-        ),
-        metrics,
-    )));
+            WEIGHT_MEDIUM,
+            within(name_line, at),
+            metrics,
+        )
+    }));
 
     let pill = layout.pill.translate(screen.shake, 0.0);
-    let (field, key) = match &screen.field {
+    let slot = match (screen.spinner, screen.caps_lock) {
+        (Some(frame), _) => Some((Adornment::Spinner(frame), CHECKING)),
+        (None, true) => Some((Adornment::CapsLock, CAPS_LOCK_ON)),
+        (None, false) => None,
+    };
+    let password = matches!(screen.field, Field::Password { .. });
+    // the submit button and the slot take the end of the field, which the text is centred clear of
+    let submit = if password && screen.typed {
+        SUBMIT_GAP + BUTTON_SIZE
+    } else {
+        0.0
+    };
+    let slot_room = if slot.is_some() {
+        SLOT_WIDTH + SLOT_INSET
+    } else {
+        0.0
+    };
+    let (field, key, insets) = match &screen.field {
         Field::Password {
             generation,
             enabled,
@@ -462,7 +593,9 @@ pub fn screen<M: Clone + 'static>(
                     label: PASSWORD_LABEL.to_owned(),
                     placeholder: PASSWORD_PLACEHOLDER.to_owned(),
                     enabled: *enabled,
-                    on_change: Some(Box::new(move |_| map(Input::Edited))),
+                    on_change: Some(Box::new(move |buffer| {
+                        map(Input::Edited(!buffer.is_empty()))
+                    })),
                     on_submit: Some(Box::new(move |buffer| {
                         map(Input::Submit(Typed::of(buffer)))
                     })),
@@ -476,8 +609,11 @@ pub fn screen<M: Clone + 'static>(
                 size: FIELD_TEXT_SIZE,
                 weight: Some(WEIGHT_MEDIUM.0),
                 placeholder_color: Some(PLACEHOLDER_COLOR),
+                centered: true,
+                submit_width: submit + slot_room,
             }),
             format!("password-{generation}"),
+            Insets::ZERO,
         ),
         Field::Name { text, revision } => (
             Element::new(BareField {
@@ -502,85 +638,144 @@ pub fn screen<M: Clone + 'static>(
                 on_blink: None,
             }),
             "name".to_owned(),
+            NAME_INSETS,
         ),
     };
+    // the material is the screen's under the field wherever the shake takes it
+    let strip = layout.pill.inset(Insets {
+        top: 0.0,
+        left: -SHAKE_AMPLITUDE,
+        bottom: 0.0,
+        right: -SHAKE_AMPLITUDE,
+    });
     children.push(
         Element::new(FieldFrame {
-            rect: pill,
+            rect: within(pill, at),
+            insets,
+            material: Some(FieldMaterial {
+                ground: ground.clone(),
+                strip,
+                origin: pill.origin,
+            }),
             outline: screen.denied,
+            scope: true,
+            submit: (submit > 0.0).then(|| within(layout.submit, layout.pill.origin)),
             children: vec![field],
         })
         .key(key),
     );
-    let slot = match (screen.spinner, screen.caps_lock) {
-        (Some(frame), _) => Some((Adornment::Spinner(frame), CHECKING)),
-        (None, true) => Some((Adornment::CapsLock, CAPS_LOCK_ON)),
-        (None, false) => None,
-    };
     if let Some((adornment, label)) = slot {
         children.push(Element::new(Slot {
-            rect: Rect::new(
-                pill.max_x() - SLOT_WIDTH,
-                pill.y(),
-                SLOT_WIDTH,
-                pill.height(),
+            rect: within(
+                Rect::new(
+                    pill.max_x() - submit - SLOT_INSET - SLOT_WIDTH,
+                    pill.y(),
+                    SLOT_WIDTH,
+                    pill.height(),
+                ),
+                at,
             ),
             adornment,
             label,
         }));
     }
+    if screen.help {
+        let button = layout.help_button;
+        let local = Rect::new(0.0, 0.0, button.width(), button.height());
+        children.push(
+            Element::new(Pressable {
+                rect: within(button, at),
+                look: Look::Help {
+                    open: screen.help_open,
+                },
+                label: HELP_LABEL.to_owned(),
+                description: None,
+                on_press: map(Input::Help),
+                on_focus: None,
+                on_hover: None,
+                focusable: false,
+                children: vec![
+                    Element::new(FieldFrame {
+                        rect: local,
+                        insets: Insets::ZERO,
+                        material: Some(FieldMaterial {
+                            ground: ground.clone(),
+                            strip: button,
+                            origin: button.origin,
+                        }),
+                        outline: false,
+                        scope: false,
+                        submit: None,
+                        children: Vec::new(),
+                    }),
+                    Element::new(Glyph {
+                        rect: local,
+                        kind: GlyphKind::Help,
+                    }),
+                ],
+            })
+            .key("help"),
+        );
+    }
 
-    let notices = screen
-        .denied
+    let messages = screen
+        .denied_said
         .then_some(DENIED)
         .into_iter()
         .chain(screen.notice);
-    let line_height = (metrics.ascent + metrics.descent) * NOTICE_SIZE;
-    for (i, notice) in notices.enumerate() {
-        let baseline = layout.notice_baseline + i as f64 * NOTICE_LINES * line_height;
+    for (i, notice) in messages.enumerate() {
         children.push(Element::new(Label {
-            color: Some(Color::new(1.0, 1.0, 1.0, NOTICE_ALPHA)),
             wrap: true,
             live: Some(Live::Assertive),
             ..label(
                 notice,
                 NOTICE_SIZE,
                 FontWeight::REGULAR,
-                metrics.line(
-                    layout.center_x,
-                    NOTICE_MAX_WIDTH,
-                    baseline,
-                    NOTICE_SIZE,
-                    NOTICE_LINES,
-                ),
+                within(message(i), at),
                 metrics,
             )
         }));
     }
-    if screen.help {
-        children.push(Element::new(Label {
-            color: Some(Color::new(1.0, 1.0, 1.0, NOTICE_ALPHA)),
-            ..label(
-                PASSWORD_HELP,
-                HELP_SIZE,
-                FontWeight::REGULAR,
-                metrics.line(
-                    layout.center_x,
-                    (width - 2.0 * HELP_MARGIN).max(0.0),
-                    layout.help_baseline,
+    parts.push(Element::new(Fade::new(
+        block,
+        screen.opacity * screen.block,
+        children,
+    )));
+
+    if screen.help_open {
+        let line = metrics.line(
+            layout.center_x,
+            (width - 2.0 * HELP_MARGIN).max(1.0),
+            layout.help_baseline,
+            HELP_SIZE,
+            1.0,
+        );
+        parts.push(Element::new(Fade::new(
+            line,
+            screen.opacity,
+            vec![Element::new(Label {
+                color: Some(Color::new(1.0, 1.0, 1.0, NOTICE_ALPHA)),
+                ..label(
+                    PASSWORD_HELP,
                     HELP_SIZE,
-                    1.0,
-                ),
-                metrics,
-            )
-        }));
+                    FontWeight::REGULAR,
+                    within(line, line.origin),
+                    metrics,
+                )
+            })],
+        )));
     }
     if let Some(menu) = screen.power {
-        children.push(power_item(menu, &layout, map));
+        parts.push(power_item(menu, &layout, screen.opacity, map));
     }
-    children.extend(notice_cards(screen.notices, screen.size, metrics));
+    parts.extend(notice_cards(
+        screen.notices,
+        screen.size,
+        metrics,
+        screen.opacity,
+    ));
     Element::new(Backdrop {
-        wallpaper: Some(screen.size),
+        ground: Some(ground),
         hidden: screen.hidden,
         on_activity: Some(map(Input::Activity)),
         keys: field_keys(screen.power.is_some(), map),
@@ -588,19 +783,18 @@ pub fn screen<M: Clone + 'static>(
         description: screen.user.map(|u| u.display.clone()),
         role: Role::Group,
         modal: false,
-        children: vec![Element::new(Fade {
-            opacity: screen.opacity,
-            children,
-        })],
+        children: parts,
     })
 }
 
 /// The cards of the lock screen's notifications in a column at the top right, and the line that counts those not
-/// shown. A card shows only what the daemon sent: an application and "Notification", or a title and body it allowed.
+/// shown, a part of its own. A card shows only what the daemon sent: an application and "Notification", or a title and
+/// body it allowed.
 fn notice_cards<M: 'static>(
     notices: &[Notice],
     size: Size,
     metrics: Metrics,
+    opacity: f64,
 ) -> Option<Element<M>> {
     if notices.is_empty() {
         return None;
@@ -635,7 +829,12 @@ fn notice_cards<M: 'static>(
         }));
     }
     let column = lock_notices::column(size.width, size.height);
-    Some(Element::new(Place::text(column, children)).key("notices"))
+    let place = Element::new(Place::text(
+        Rect::new(0.0, 0.0, column.width(), column.height()),
+        children,
+    ))
+    .key("notices");
+    Some(Element::new(Fade::new(column, opacity, vec![place])))
 }
 
 /// Everything the user picker shows.
@@ -646,6 +845,12 @@ pub struct PickerScreen<'a> {
     pub picker: &'a Picker,
     pub max_per_page: usize,
     pub power: Option<&'a Menu>,
+    /// Of everything but the wallpaper, and of the tiles on top of it (the switch from the password screen).
+    pub opacity: f64,
+    pub block: f64,
+    /// What the screen stands on, and its dimming's opacity (0 to 1).
+    pub wallpaper: &'a Source,
+    pub dim: f64,
 }
 
 /// The element key of picker tile `index`, which the focus follows.
@@ -657,14 +862,22 @@ pub fn tile_key(index: usize) -> Key {
 pub fn picker<M: Clone + 'static>(screen: &PickerScreen<'_>, map: fn(Input) -> M) -> Element<M> {
     let metrics = screen.metrics;
     let (width, height) = (screen.size.width, screen.size.height);
-    let layout = Layout::new(width, height, metrics.descent);
-    let mut children: Vec<Element<M>> = clock(screen.clock, &layout, width, metrics).into();
+    let layout = Layout::new(width, height, metrics.descent, metrics.placeholder);
+    let mut parts: Vec<Element<M>> = vec![clock(screen.clock, &layout, metrics, screen.opacity)];
     let picker = screen.picker;
     let page = picker.page(screen.max_per_page);
     let grid = Grid::for_count(screen.max_per_page.min(picker.tiles().len()));
     let frames = layout.tiles(grid, page.len());
-    let avatar_center = Point::new(TILE_WIDTH / 2.0, USER_VIEW_BORDER + AVATAR_DIAMETER / 2.0);
-    let name_baseline = 2.0 * USER_VIEW_BORDER + AVATAR_DIAMETER + NAME_BASELINE_GAP;
+    let diameter = layout.avatar.width();
+    let avatar_center = Point::new(TILE_WIDTH / 2.0, USER_VIEW_BORDER + diameter / 2.0);
+    let name_baseline = 2.0 * USER_VIEW_BORDER + diameter + NAME_BASELINE_GAP;
+    let area = frames
+        .iter()
+        .copied()
+        .reduce(|a, b| a.union(&b))
+        .unwrap_or(layout.avatar)
+        .outset(SHADOW_REACH);
+    let mut tiles = Vec::new();
     for (frame, index) in frames.into_iter().zip(page) {
         let user = match &picker.tiles()[index] {
             Tile::Account(user) => Some(user),
@@ -672,51 +885,58 @@ pub fn picker<M: Clone + 'static>(screen: &PickerScreen<'_>, map: fn(Input) -> M
         };
         let name = user.map_or(OTHER_LABEL, |u| u.display.as_str());
         let tile = Pressable {
-            rect: frame,
+            rect: within(frame, area.origin),
             look: Look::Tile {
                 selected: index == picker.selected_index(),
-                avatar_center,
             },
             label: name.to_owned(),
             description: user.filter(|u| u.logged_in).map(|_| LOGGED_IN.to_owned()),
             on_press: map(Input::Choose(index)),
             on_focus: Some(map(Input::Select(index))),
             on_hover: Some(map(Input::Select(index))),
+            focusable: true,
             children: vec![
                 avatar(
                     user,
                     Rect::new(
-                        avatar_center.x - AVATAR_DIAMETER / 2.0,
+                        avatar_center.x - diameter / 2.0,
                         USER_VIEW_BORDER,
-                        AVATAR_DIAMETER,
-                        AVATAR_DIAMETER,
+                        diameter,
+                        diameter,
                     ),
                     metrics,
                 ),
-                Element::new(Decorative(label(
-                    name,
-                    NAME_SIZE,
-                    WEIGHT_MEDIUM,
-                    metrics.line(
-                        avatar_center.x,
-                        NAME_MAX_WIDTH,
-                        name_baseline,
+                Element::new(Decorative(Label {
+                    shadow: true,
+                    ..label(
+                        name,
                         NAME_SIZE,
-                        1.0,
-                    ),
-                    metrics,
-                ))),
+                        WEIGHT_MEDIUM,
+                        metrics.line(
+                            avatar_center.x,
+                            NAME_MAX_WIDTH,
+                            name_baseline,
+                            NAME_SIZE,
+                            1.0,
+                        ),
+                        metrics,
+                    )
+                })),
             ],
         };
-        children.push(Element::new(tile).key(tile_key(index)));
+        tiles.push(Element::new(tile).key(tile_key(index)));
     }
+    parts.push(Element::new(Fade {
+        initial: true,
+        ..Fade::new(area, screen.opacity * screen.block, tiles)
+    }));
     if let Some(menu) = screen.power {
-        children.push(power_item(menu, &layout, map));
+        parts.push(power_item(menu, &layout, screen.opacity, map));
     }
     let power = screen.power.is_some();
     let selected = picker.selected_index();
     Element::new(Backdrop {
-        wallpaper: Some(screen.size),
+        ground: Some(ground(screen.wallpaper, screen.size, screen.dim)),
         hidden: false,
         on_activity: None,
         keys: Box::new(move |keysym, _| {
@@ -735,17 +955,21 @@ pub fn picker<M: Clone + 'static>(screen: &PickerScreen<'_>, map: fn(Input) -> M
         description: None,
         role: Role::Group,
         modal: false,
-        children: vec![Element::new(Place {
-            initial: true,
-            ..Place::new(
-                Rect::new(0.0, 0.0, width, height),
-                vec![Element::new(Fade {
-                    opacity: 1.0,
-                    children,
-                })],
-            )
-        })],
+        children: parts,
     })
+}
+
+/// How many pictures of a whole screen this thread made from their wallpaper: once per screen size, scale and
+/// wallpaper, and once more as the dimming has come in. What a frame of a typed character, a hover or a fade draws
+/// leaves it as it is.
+pub fn pictures_made() -> u64 {
+    widgets::pictures_made()
+}
+
+/// Drop the pictures the screens keep: when the lock screen ends or the greeter hands over to a session, so a screen's
+/// memory is given back.
+pub fn forget_pictures() {
+    widgets::forget_pictures();
 }
 
 /// The power menu's popup windows while it is open, under the power item of the window `parent`.
@@ -1003,7 +1227,7 @@ pub fn panel<M: Clone + 'static>(
         );
     }
     let content = Element::new(Backdrop {
-        wallpaper: None,
+        ground: None,
         hidden: false,
         on_activity: None,
         keys: Box::new(move |keysym, text| {
@@ -1311,7 +1535,7 @@ pub fn desktop_control<M: Clone + 'static>(
     let close = cancel.clone();
     let size = Size::new(CONTROL_WIDTH, CONTROL_HEIGHT);
     let content = Element::new(Backdrop {
-        wallpaper: None,
+        ground: None,
         hidden: false,
         on_activity: None,
         keys: Box::new(move |sym, _| (sym == ESCAPE).then(|| cancel.clone())),
@@ -1392,7 +1616,7 @@ pub fn interrupt<M: Clone + 'static>(key: WindowKey, app: &str, map: fn(Input) -
         );
     }
     let content = Element::new(Backdrop {
-        wallpaper: None,
+        ground: None,
         hidden: false,
         on_activity: None,
         keys: Box::new(move |keysym, text| {

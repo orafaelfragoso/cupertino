@@ -8,9 +8,10 @@ use std::time::Duration;
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
-/// `strftime` patterns for the date (`EEEEMMMMd`) and the time (`Jmm`). The hour cycle of `J` follows
-/// the locale; the 24-hour cycle is fixed here (approximate), as in the menu bar clock.
-const DATE_FORMAT: &std::ffi::CStr = c"%A, %B %-d";
+/// `strftime` patterns for the date (`EEEMMMd`: the short weekday, the short month and the day, "Mon Nov 16") and the
+/// time (`Jmm`). The hour cycle of `J` follows the locale; the 24-hour cycle is fixed here (approximate), as in the menu
+/// bar clock.
+const DATE_FORMAT: &std::ffi::CStr = c"%a %b %-d";
 const TIME_FORMAT: &std::ffi::CStr = c"%H:%M";
 
 /// The interval of the frames of a fade, a shake or the spinner.

@@ -37,6 +37,7 @@ use cupertino_login::user::User;
 use cupertino_login::view::{
     self, Clock, Field, Input, Metrics, Screen, DENIED, LOCKED_TITLE, LOCK_APP_ID, PASSWORD_LABEL,
 };
+use cupertino_login::wallpaper::Source;
 use cupertino_test_bus::PrivateBus;
 use cupertino_ui_atspi::AtspiAdapter;
 use cupertino_ui_test::{Inspector, ManualClock, TestDriver};
@@ -128,6 +129,7 @@ impl Application for Locker {
             metrics: Metrics {
                 ascent: 0.97,
                 descent: 0.24,
+                placeholder: 90.0,
             },
         };
         (model, Vec::new())
@@ -141,7 +143,7 @@ impl Application for Locker {
         match message {
             Msg::Marker(Input::Escape) => model.markers += 1,
             Msg::Marker(_) => {}
-            Msg::Lock(Input::Edited) => model.screen.edit(now),
+            Msg::Lock(Input::Edited(typed)) => model.screen.edit_to(now, typed),
             Msg::Lock(Input::Escape) => model.screen.escape(now),
             // a held attempt is answered by the next input on the lock screen, a pointer move in the tests
             Msg::Lock(Input::Activity) if model.held && model.screen.checking() => {
@@ -187,16 +189,22 @@ impl Application for Locker {
                     enabled: true,
                     busy,
                 },
+                typed: false,
                 caps_lock: false,
                 spinner: None,
                 denied,
+                denied_said: denied,
                 notice,
                 help: false,
+                help_open: false,
                 opacity: 1.0,
+                block: 1.0,
                 shake: 0.0,
                 hidden: false,
                 power: None,
                 notices: &[],
+                wallpaper: &Source::Plain,
+                dim: 1.0,
             }
         }
         let s = &model.screen;

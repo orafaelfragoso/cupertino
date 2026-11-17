@@ -1443,6 +1443,12 @@ pub struct BareSecureField<M> {
     pub size: f64,
     pub weight: Option<u16>,
     pub placeholder_color: Option<cupertino_ui_theme::Color>,
+    /// The text and the placeholder are centred in the field while they fit, else they start at the reading
+    /// direction's start and scroll as in any field.
+    pub centered: bool,
+    /// A strip this many points wide at the field's trailing end that a primary press submits from, as Return does
+    /// (`on_submit`), where its owner draws the button that says so; the text keeps clear of it. 0 for none.
+    pub submit_width: f64,
 }
 
 /// A row of a [`TileSidebar`].

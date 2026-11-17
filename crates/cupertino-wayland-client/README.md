@@ -1,8 +1,8 @@
 # cupertino-wayland-client
 
 Wayland client transport for application windows over standard protocols only, so the same code runs on Cupertino and
-on any other compositor. Depends on `cupertino-geometry`, `wayland-client`, `wayland-protocols` and `xkbcommon` (the
-workspace's pure-Rust `cupertino-xkbcommon`); `cupertino-layers` fails the build if it ever reaches
+on any other compositor. Depends on `cupertino-geometry`, `wayland-client`, `wayland-protocols` and `xkbcommon` (over
+the system's libxkbcommon); `cupertino-layers` fails the build if it ever reaches
 `cupertino-protocols` or another compositor's protocol crates.
 
 ## Public API

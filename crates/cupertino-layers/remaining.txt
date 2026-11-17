@@ -117,8 +117,6 @@ foundation impure_source cupertino-trash src/lib.rs std::process
 foundation impure_source cupertino-trash src/lib.rs std::thread
 foundation impure_source cupertino-trash src/lib.rs unsafe
 foundation impure_source cupertino-trash src/look.rs std::thread
-foundation impure_source xkbcommon src/xkb/mod.rs std::fs
-foundation impure_source xkbcommon src/xkb/mod.rs unsafe
 models external_crate cupertino-effects -> tiny-skia normal
 models impure_source cupertino-effects examples/render_effects.rs std::fs
 platform external_crate cupertino-seat -> smithay normal
@@ -145,6 +143,7 @@ shell external_crate cupertino-polkit-agent -> tiny-skia normal
 shell external_crate cupertino-portal -> tiny-skia normal
 shell external_crate cupertino-portal -> wayland-client normal
 shell external_crate cupertino-portal -> wayland-protocols normal
+shell external_crate cupertino-portal -> xkbcommon normal
 shell external_crate cupertino-screenshot -> tiny-skia normal
 shell external_crate cupertino-screenshot -> wayland-client normal
 shell external_crate cupertino-screenshot -> wayland-protocols normal

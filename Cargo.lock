@@ -1238,7 +1238,6 @@ dependencies = [
  "cupertino-ui-atspi",
  "cupertino-ui-controls",
  "cupertino-ui-core",
- "cupertino-ui-gpu",
  "cupertino-ui-render",
  "cupertino-ui-test",
  "cupertino-ui-text",
@@ -1776,20 +1775,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cupertino-ui-gpu"
-version = "0.1.0"
-dependencies = [
- "cupertino-geometry",
- "cupertino-gpu",
- "cupertino-raster-math",
- "cupertino-theme",
- "cupertino-ui-render",
- "cupertino-ui-text",
- "tiny-skia",
- "tracing",
-]
-
-[[package]]
 name = "cupertino-ui-menus"
 version = "0.1.0"
 dependencies = [
@@ -1805,6 +1790,7 @@ name = "cupertino-ui-render"
 version = "0.1.0"
 dependencies = [
  "cupertino-geometry",
+ "cupertino-gpu",
  "cupertino-raster-math",
  "cupertino-theme",
  "cupertino-ui-text",
@@ -1856,7 +1842,6 @@ dependencies = [
  "cupertino-keyboard",
  "cupertino-menu-model",
  "cupertino-ui-core",
- "cupertino-ui-gpu",
  "cupertino-ui-menus",
  "cupertino-ui-render",
  "cupertino-ui-text",

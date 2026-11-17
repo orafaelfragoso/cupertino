@@ -30,7 +30,7 @@ checkout and was run on the commit this page was written against.
   (`RendererClass::ByUse`) starts on the CPU: the kit rasterizes each window there (`cupertino-ui-render`), repainting
   only what changed and keeping scrolled content as an image it moves, and hands it to the compositor in shared memory
   (`wl_shm`). Once one of its windows covers more than a quarter of its output, or presents more than 30 frames a
-  second for two seconds, the process moves to the GPU renderer (`cupertino-ui-gpu`) on the device the compositor
+  second for two seconds, the process moves to the GPU renderer (`cupertino-ui-render`'s `gpu` module) on the device the compositor
   names and hands its windows over as dmabufs, drawing on the CPU while the device warms up. `RendererClass::Gpu`
   starts there (a large or busy window), `RendererClass::Cpu` never goes (a small window drawn now and then);
   `CUPERTINO_RENDERER=cpu|gpu` overrides the class, and the CPU stays the fallback.

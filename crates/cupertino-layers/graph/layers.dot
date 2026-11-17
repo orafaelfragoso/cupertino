@@ -1,6 +1,6 @@
 // cupertino-layers --graph
-// 74 crates, 328 internal dependencies
-// per layer: foundation 5, graphics 2, models 6, system 8, platform 7, protocol 3, transport 2, render 3, ui 11, shellkit 0, core 1, services 4, shell 12, apps 2, tools 6, testing 2
+// 73 crates, 321 internal dependencies
+// per layer: foundation 5, graphics 2, models 6, system 8, platform 7, protocol 3, transport 2, render 3, ui 10, shellkit 0, core 1, services 4, shell 12, apps 2, tools 6, testing 2
 // forbidden normal edge cupertino-control (shell) -> cupertino-shell-client (transport)
 // forbidden normal edge cupertino-control (shell) -> cupertino-wayland-client (transport)
 // forbidden normal edge cupertino-controlcenter (shell) -> cupertino-alsa (platform)
@@ -98,13 +98,12 @@ digraph "layers" {
     "cupertino-glass";
   }
   subgraph "cluster_ui" {
-    label="ui (11)";
+    label="ui (10)";
     "cupertino-kit";
     "cupertino-ui-abi";
     "cupertino-ui-atspi";
     "cupertino-ui-controls";
     "cupertino-ui-core";
-    "cupertino-ui-gpu";
     "cupertino-ui-menus";
     "cupertino-ui-render";
     "cupertino-ui-test";
@@ -247,7 +246,6 @@ digraph "layers" {
   "cupertino-kit" -> "cupertino-ui-atspi";
   "cupertino-kit" -> "cupertino-ui-controls";
   "cupertino-kit" -> "cupertino-ui-core";
-  "cupertino-kit" -> "cupertino-ui-gpu";
   "cupertino-kit" -> "cupertino-ui-render";
   "cupertino-kit" -> "cupertino-ui-test" [label="dev"];
   "cupertino-kit" -> "cupertino-ui-text";
@@ -436,16 +434,11 @@ digraph "layers" {
   "cupertino-ui-core" -> "cupertino-theme";
   "cupertino-ui-core" -> "cupertino-ui-render";
   "cupertino-ui-core" -> "cupertino-ui-text";
-  "cupertino-ui-gpu" -> "cupertino-geometry";
-  "cupertino-ui-gpu" -> "cupertino-gpu";
-  "cupertino-ui-gpu" -> "cupertino-raster-math";
-  "cupertino-ui-gpu" -> "cupertino-theme";
-  "cupertino-ui-gpu" -> "cupertino-ui-render";
-  "cupertino-ui-gpu" -> "cupertino-ui-text";
   "cupertino-ui-menus" -> "cupertino-keyboard";
   "cupertino-ui-menus" -> "cupertino-menu-model";
   "cupertino-ui-menus" -> "cupertino-wayland-client";
   "cupertino-ui-render" -> "cupertino-geometry";
+  "cupertino-ui-render" -> "cupertino-gpu";
   "cupertino-ui-render" -> "cupertino-raster-math";
   "cupertino-ui-render" -> "cupertino-theme";
   "cupertino-ui-render" -> "cupertino-ui-text";
@@ -466,7 +459,6 @@ digraph "layers" {
   "cupertino-ui-wayland" -> "cupertino-keyboard";
   "cupertino-ui-wayland" -> "cupertino-menu-model";
   "cupertino-ui-wayland" -> "cupertino-ui-core";
-  "cupertino-ui-wayland" -> "cupertino-ui-gpu";
   "cupertino-ui-wayland" -> "cupertino-ui-menus";
   "cupertino-ui-wayland" -> "cupertino-ui-render";
   "cupertino-ui-wayland" -> "cupertino-ui-text";

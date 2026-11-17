@@ -14,7 +14,7 @@ use cupertino_ui_core::platform::{PlatformError, SystemAppearance, WindowSystem}
 use cupertino_ui_core::{
     Application, Command, MonotonicClock, Runtime, RuntimeOptions, ThemeForAppearance, UiError,
 };
-use cupertino_ui_gpu::GpuConfig;
+use cupertino_ui_render::gpu::GpuConfig;
 use cupertino_ui_render::{CpuConfig, CpuRenderer};
 use cupertino_ui_text::{
     FontIndex, FontStyle, FontWeight, GlyphRaster, InstalledFonts, TextSystem,

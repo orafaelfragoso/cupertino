@@ -5,8 +5,8 @@ use cupertino_gpu::{
     BindGroupEntry, BindingResource, BufferUsage, Error as GpuError, LoadOp, Pass, Texture,
 };
 
-use crate::record::{Cmd, Program, Recording, TargetId, Tex};
-use crate::{GpuRenderer, Programs, TargetMem, INSTANCE_BYTES};
+use crate::gpu::record::{Cmd, Program, Recording, TargetId, Tex};
+use crate::gpu::{GpuRenderer, Programs, TargetMem, INSTANCE_BYTES};
 
 impl<R> GpuRenderer<R> {
     /// Draws what `rec` recorded since the last execution, and empties its draws.
@@ -18,13 +18,13 @@ impl<R> GpuRenderer<R> {
         let device = std::rc::Rc::clone(&self.device);
         let uploading = tracing::trace_span!("gpu.upload_buffers").entered();
         let instance_bytes: Vec<u8> = rec.instances.iter().flat_map(|f| f.to_le_bytes()).collect();
-        crate::upload(
+        crate::gpu::upload(
             &device,
             &mut self.uniforms,
             BufferUsage::Uniform,
             &rec.uniforms,
         )?;
-        crate::upload(
+        crate::gpu::upload(
             &device,
             &mut self.instances,
             BufferUsage::Vertex,
@@ -51,7 +51,9 @@ impl<R> GpuRenderer<R> {
                     }
                     rec.started[target.0] = true;
                     let texture = target_texture(
-                        self.window.as_deref().map(crate::WindowTexture::texture),
+                        self.window
+                            .as_deref()
+                            .map(crate::gpu::WindowTexture::texture),
                         rec,
                         *target,
                     );
@@ -86,7 +88,9 @@ impl<R> GpuRenderer<R> {
                     LoadOp::Load
                 };
                 let texture = target_texture(
-                    self.window.as_deref().map(crate::WindowTexture::texture),
+                    self.window
+                        .as_deref()
+                        .map(crate::gpu::WindowTexture::texture),
                     rec,
                     target,
                 );
@@ -197,7 +201,9 @@ impl<R> GpuRenderer<R> {
             Tex::Mask(page) => self.masks.page(page).unwrap_or(&programs.empty),
             Tex::Image(id) => self.images.get(&id).map_or(&programs.empty, |i| &i.texture),
             Tex::Target(t) => target_texture(
-                self.window.as_deref().map(crate::WindowTexture::texture),
+                self.window
+                    .as_deref()
+                    .map(crate::gpu::WindowTexture::texture),
                 rec,
                 t,
             ),

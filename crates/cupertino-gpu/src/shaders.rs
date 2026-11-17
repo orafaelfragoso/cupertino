@@ -143,7 +143,7 @@ program!(
     "probe_dither"
 );
 
-/// The programs a toolkit process makes on its device: its GPU renderer's (`cupertino-ui-gpu`) and its presenter's
+/// The programs a toolkit process makes on its device: its GPU renderer's (`cupertino-ui-render`'s `gpu` module) and its presenter's
 /// (`cupertino-ui-wayland`). The compositor makes these into the program cache at a session's start
 /// ([`crate::program_cache::make_ahead`]), so a toolkit process loads them instead of compiling.
 pub const TOOLKIT: &[ShaderSource] = &[

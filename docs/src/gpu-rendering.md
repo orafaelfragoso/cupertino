@@ -14,7 +14,7 @@ step-by-step plan and its checklist are in `docs/plans/gpu-rendering.md`, and th
 | Rounded clips of window content, reduced copies | the compositor, texture programs compiled through Smithay's shader interface | n/a |
 | Title bars, window buttons, rims, keyboard HUDs | the compositor: each recorded as a list of draws, drawn by the borrowed device with the toolkit's coverage program into a texture of the renderer when its state changes (glyphs and button glyph paths kept in an atlas); painted on the CPU from the same list where the device cannot draw it | n/a |
 | The procedural cursor | the compositor, rasterized on the CPU (tiny-skia), cached, uploaded on change: the cursor plane's buffer is filled on the CPU | memory buffers |
-| Toolkit windows of the GPU class (Files windows, Settings, the dock and overview, the launcher) and third-party windows once large or busy | the GPU renderer (`cupertino-ui-gpu`) after the first frames, which the CPU draws while the device warms up, its scroll layers kept as textures; the CPU renderer on a fallback | dmabufs copied from the renderer's texture; shared memory on a fallback |
+| Toolkit windows of the GPU class (Files windows, Settings, the dock and overview, the launcher) and third-party windows once large or busy | the GPU renderer (`cupertino-ui-render`'s `gpu` module) after the first frames, which the CPU draws while the device warms up, its scroll layers kept as textures; the CPU renderer on a fallback | dmabufs copied from the renderer's texture; shared memory on a fallback |
 | Toolkit windows of the CPU class (menu bar, OSD, banners, the control panel, screenshot, portal dialogs, lock screen, login, the Files desktop) | the CPU: tiny-skia, our own glyph rasterizer, resvg icons, box blur for layer effects; `CUPERTINO_RENDERER=gpu` takes them to the GPU renderer | `wl_shm`, three slots, damage rectangles, drawn straight into the leased slot as `abgr8888` where the compositor lists it (what the slot missed repainted, nothing copied), converted into `argb8888` elsewhere, the next slot's pages made off the frame while a window draws frame after frame; on the GPU, dmabufs copied from the renderer's texture |
 | The polkit agent, keyring prompter and portal pick overlay | the CPU, drawing with tiny-skia directly rather than through the toolkit renderer | `wl_shm` |
 
@@ -363,7 +363,7 @@ reviewed change that records the reason.
 
 ## Testing
 
-- Every reference scene of the toolkit's renderer runs through both renderers: `cupertino-ui-gpu`'s tests draw the CPU
+- Every reference scene of the toolkit's renderer runs through both renderers: `cupertino-ui-render`'s GPU tests draw the CPU
   renderer's scenes on the GPU and compare them. They run on Mesa's software rasteriser (llvmpipe) through EGL's
   surfaceless platform, with `CUPERTINO_EGL_REQUIRED=1` making a missing device a failure. Without a render node the
   presenter's end-to-end tests skip and the toolkit windows draw on the CPU.

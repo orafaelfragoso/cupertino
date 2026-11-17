@@ -1,13 +1,17 @@
 //! Walking a display list into draws, as the CPU renderer walks it: a node's own operations under its ancestors'
 //! clips, cut at the pixels its scratch image would cover; groups and layers into offscreen targets sized as the CPU
 //! renderer sizes them, their effects, then laid over through the clips around them. Draws are recorded with their
-//! uniforms and instances and executed afterwards ([`crate::exec`]); glyphs, path masks and images are uploaded while
+//! uniforms and instances and executed afterwards ([`crate::gpu::exec`]); glyphs, path masks and images are uploaded while
 //! recording.
 
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
+use crate::{
+    Effect, Group, Paint, PaintNode, PaintNodeId, PaintOp, PixelFormat, RenderError, RenderRequest,
+    ResourceId, Sampling, Shape,
+};
 use cupertino_gpu::atlas::Atlas;
 use cupertino_gpu::{
     ClipBlock, ClipsBlock, Error as GpuError, FillBlock, Region, Texture, TextureBlock,
@@ -19,14 +23,10 @@ use cupertino_raster_math::dither;
 use cupertino_raster_math::gradient::{Stop, Stops, MAX_STOPS};
 use cupertino_raster_math::placement::whole_pixel;
 use cupertino_theme::Color;
-use cupertino_ui_render::{
-    Effect, Group, Paint, PaintNode, PaintNodeId, PaintOp, PixelFormat, RenderError, RenderRequest,
-    ResourceId, Sampling, Shape,
-};
 use cupertino_ui_text::{GlyphFormat, GlyphKey, GlyphRasterizer, GlyphRun};
 
-use crate::geometry::{self, Bounds, Outline};
-use crate::{gpu, GlyphMeta, GpuRenderer, ImageTexture, TargetMem, UNIFORM_ALIGN};
+use crate::gpu::geometry::{self, Bounds, Outline};
+use crate::gpu::{gpu, GlyphMeta, GpuRenderer, ImageTexture, TargetMem, UNIFORM_ALIGN};
 
 /// Largest glyph the renderer rasterizes, in physical pixels per em (the CPU renderer's limit).
 const MAX_GLYPH_PX: f64 = 8192.0;
@@ -260,7 +260,7 @@ enum ClipItem {
 }
 
 impl ClipItem {
-    fn new(shape: &Shape, transform: &cupertino_ui_render::Transform, scale: f64) -> ClipItem {
+    fn new(shape: &Shape, transform: &crate::Transform, scale: f64) -> ClipItem {
         let window = geometry::to_target(transform, scale, (0, 0));
         let bounds = geometry::clip_bounds(shape, transform, scale);
         if let Shape::Path { .. } = shape {
@@ -1120,7 +1120,7 @@ impl<R: GlyphRasterizer> Painter<'_, '_, R> {
     /// The format of the blur's levels: floats where the device renders to them (the blur's sums kept as exact as
     /// the CPU keeps them), then half floats, then bytes.
     fn level_format(&self) -> TextureFormat {
-        crate::level_format(self.device().info())
+        crate::gpu::level_format(self.device().info())
     }
 
     /// Applies `effect` to the layer `layer` covering `area`: the layer that holds the result.

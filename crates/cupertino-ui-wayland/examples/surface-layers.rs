@@ -23,7 +23,7 @@ use cupertino_ui_core::platform::{
     DecorationMode, LayerChange, LayerProperty, PlatformEvent, PresentOutcome, RendererKind,
     SurfaceLayer, SurfaceLayerLook, WindowEvent, WindowRequest, WindowSpec, WindowSystem,
 };
-use cupertino_ui_gpu::{GpuConfig, WindowRenderer};
+use cupertino_ui_render::gpu::{GpuConfig, WindowRenderer};
 use cupertino_ui_render::{
     Color, CpuFrame, DamageRegion, DisplayList, Paint, PaintNode, PaintNodeId, PaintOp,
     PaintResources, PaintRevision, PixelFormat, PixelRect, RenderFrameId, RenderRequest, Shape,

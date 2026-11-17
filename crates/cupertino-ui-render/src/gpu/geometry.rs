@@ -3,9 +3,9 @@
 //! rectangle or rounded rectangle placed for its coverage. Both renderers must size layers and cut what they draw at
 //! the same pixels, so these follow the CPU renderer's definitions exactly.
 
+use crate::{Effect, PaintNode, PaintOp, PathVerb, Shape, Transform};
 use cupertino_geometry::{Point, Rect};
 use cupertino_raster_math::blur::sigma_for_radius;
-use cupertino_ui_render::{Effect, PaintNode, PaintOp, PathVerb, Shape, Transform};
 use tiny_skia::{Path, PathBuilder};
 
 const KAPPA: f64 = 0.552_284_749_830_793_4;
@@ -167,7 +167,7 @@ pub(crate) fn path(shape: &Shape) -> Option<Path> {
 pub(crate) fn fill_rule(shape: &Shape) -> tiny_skia::FillRule {
     match shape {
         Shape::Path {
-            fill_rule: cupertino_ui_render::FillRule::EvenOdd,
+            fill_rule: crate::FillRule::EvenOdd,
             ..
         } => tiny_skia::FillRule::EvenOdd,
         _ => tiny_skia::FillRule::Winding,

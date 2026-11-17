@@ -1,4 +1,4 @@
-//! CupertinoKit's GPU renderer. [`GpuRenderer`] draws a [`DisplayList`](cupertino_ui_render::DisplayList) with
+//! CupertinoKit's GPU renderer. [`GpuRenderer`] draws a [`DisplayList`](crate::DisplayList) with
 //! `cupertino-gpu` into a window-sized texture it keeps between frames, and computes what the CPU renderer computes:
 //!
 //! * rectangles and rounded rectangles, filled and stroked, by the shared distance, their coverage stored as a byte
@@ -31,6 +31,10 @@ mod record;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use crate::{
+    damage_rects, CpuFrame, DamageRegion, DeviceFrame, DeviceFrameRef, Layer, PaintNodeId,
+    PixelFormat, PixelRect, RenderError, RenderFrameId, RenderRequest, ResourceId, UiRenderer,
+};
 use cupertino_gpu::atlas::{Atlas, AtlasKind};
 use cupertino_gpu::pool::{Pooled, TargetPool, TARGET_POOL_CAP};
 use cupertino_gpu::{
@@ -39,13 +43,9 @@ use cupertino_gpu::{
     PipelineDesc, Region, StepMode, Texture, TextureDesc, TextureFormat, TextureUsage, Topology,
     VertexAttribute, VertexFormat, VertexLayout,
 };
-use cupertino_ui_render::{
-    damage_rects, CpuFrame, DamageRegion, DeviceFrame, DeviceFrameRef, Layer, PaintNodeId,
-    PixelFormat, PixelRect, RenderError, RenderFrameId, RenderRequest, ResourceId, UiRenderer,
-};
 use cupertino_ui_text::{GlyphFormat, GlyphKey, GlyphRasterizer};
 
-use crate::geometry::Bounds;
+use crate::gpu::geometry::Bounds;
 
 /// What a GPU renderer may use.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -378,7 +378,7 @@ pub struct GpuRenderer<R> {
     next_id: u64,
     frame: GpuFrame,
     stats: GpuStats,
-    /// Each scroll layer of the last frame ([`cupertino_ui_render::scroll_layers`]): the window pixels its clip
+    /// Each scroll layer of the last frame ([`crate::scroll_layers`]): the window pixels its clip
     /// showed and its drawn offset in device pixels.
     scrolls: HashMap<PaintNodeId, (Bounds, (i32, i32))>,
     /// The scroll layers whose content is kept.
@@ -569,7 +569,7 @@ impl<R: GlyphRasterizer> GpuRenderer<R> {
 
     /// Sizes the window texture for `request`: whether the frame is drawn whole.
     fn prepare(&mut self, request: &RenderRequest<'_>) -> Result<bool, RenderError> {
-        cupertino_ui_render::check_request(request)?;
+        crate::check_request(request)?;
         if u64::from(request.width) * u64::from(request.height) > self.config.max_pixels {
             return Err(RenderError::ResourceLimit);
         }
@@ -743,7 +743,7 @@ impl<R> GpuRenderer<R> {
         }
     }
 
-    /// What this frame does to its scroll layers ([`cupertino_ui_render::scroll_layers`]), and the window pixels it
+    /// What this frame does to its scroll layers ([`crate::scroll_layers`]), and the window pixels it
     /// paints again for them besides the damage `damage`. A frame's damage leaves out what only moved with a scroll
     /// layer's offset: a kept layer's texture takes what stays in view moved by as many device pixels, and what comes
     /// into view and what the damage names is painted into it, so only those pixels of the content are painted again
@@ -758,7 +758,7 @@ impl<R> GpuRenderer<R> {
     ) -> (Vec<record::ScrollPlan>, Vec<Bounds>) {
         let scale = request.scale;
         let whole = Bounds::of_size(request.width, request.height);
-        let mut layers: Vec<usize> = cupertino_ui_render::scroll_layers(request.list)
+        let mut layers: Vec<usize> = crate::scroll_layers(request.list)
             .into_iter()
             .flatten()
             .collect();

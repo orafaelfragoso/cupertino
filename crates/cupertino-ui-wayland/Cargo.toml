@@ -15,7 +15,6 @@ cupertino-menu-model = { path = "../cupertino-menu-model" }
 cupertino-keyboard = { path = "../cupertino-keyboard" }
 cupertino-ui-core = { path = "../cupertino-ui-core" }
 cupertino-ui-menus = { path = "../cupertino-ui-menus" }
-cupertino-ui-gpu = { path = "../cupertino-ui-gpu" }
 cupertino-ui-render = { path = "../cupertino-ui-render" }
 cupertino-ui-text = { path = "../cupertino-ui-text" }
 cupertino-wayland-client = { path = "../cupertino-wayland-client" }

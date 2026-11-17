@@ -6,7 +6,7 @@
 //! Presenting what was rendered (page flips, buffer swaps, frame callbacks, presentation feedback) is not a renderer's
 //! business: a successful render is not a successful presentation.
 
-use cupertino_scene::SceneFrame;
+use crate::SceneFrame;
 
 /// What a render call achieved, in terms every presenter understands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

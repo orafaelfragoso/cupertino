@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
-use cupertino_render_api::{Completion as _, RenderStatus, Renderer};
+use cupertino_scene::renderer::{Completion as _, RenderStatus, Renderer};
 use cupertino_wm::OutputId;
 use smithay::backend::allocator::gbm::GbmDevice;
 use smithay::backend::allocator::Fourcc;

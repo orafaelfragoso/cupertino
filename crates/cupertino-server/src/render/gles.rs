@@ -6,7 +6,7 @@
 //! A target carries the device it draws on, so binding a window's framebuffer or a texture happens inside the render
 //! call and no borrowed framebuffer leaks into the trait.
 
-use cupertino_render_api::{Completion, Failure, RenderFailure, RenderStatus, Renderer};
+use cupertino_scene::renderer::{Completion, Failure, RenderFailure, RenderStatus, Renderer};
 use cupertino_scene::{Output, SceneFrame};
 use image::RgbaImage;
 use smithay::backend::allocator::dmabuf::Dmabuf;

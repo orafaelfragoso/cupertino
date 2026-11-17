@@ -1,6 +1,6 @@
 // cupertino-layers --graph
-// 83 crates, 368 internal dependencies
-// per layer: foundation 6, graphics 2, models 9, system 8, platform 8, protocol 4, transport 3, render 3, ui 13, shellkit 0, core 1, services 4, shell 12, apps 2, tools 6, testing 2
+// 82 crates, 366 internal dependencies
+// per layer: foundation 6, graphics 2, models 8, system 8, platform 8, protocol 4, transport 3, render 3, ui 13, shellkit 0, core 1, services 4, shell 12, apps 2, tools 6, testing 2
 // forbidden normal edge cupertino-control (shell) -> cupertino-shell-client (transport)
 // forbidden normal edge cupertino-control (shell) -> cupertino-wayland-client (transport)
 // forbidden normal edge cupertino-controlcenter (shell) -> cupertino-alsa (platform)
@@ -58,13 +58,12 @@ digraph "layers" {
     "cupertino-raster-math";
   }
   subgraph "cluster_models" {
-    label="models (9)";
+    label="models (8)";
     "cupertino-control-model";
     "cupertino-displays";
     "cupertino-effects";
     "cupertino-input";
     "cupertino-overview";
-    "cupertino-render-api";
     "cupertino-scene";
     "cupertino-stage";
     "cupertino-wm";
@@ -393,7 +392,6 @@ digraph "layers" {
   "cupertino-protocol-app" -> "cupertino-wayland-client";
   "cupertino-protocols" -> "cupertino-app-protocols";
   "cupertino-raster-math" -> "cupertino-geometry" [label="dev"];
-  "cupertino-render-api" -> "cupertino-scene";
   "cupertino-scene" -> "cupertino-effects";
   "cupertino-scene" -> "cupertino-geometry";
   "cupertino-screenshot" -> "cupertino-defaults";
@@ -426,7 +424,6 @@ digraph "layers" {
   "cupertino-server" -> "cupertino-peer";
   "cupertino-server" -> "cupertino-protocols";
   "cupertino-server" -> "cupertino-raster-math";
-  "cupertino-server" -> "cupertino-render-api";
   "cupertino-server" -> "cupertino-scene";
   "cupertino-server" -> "cupertino-seat";
   "cupertino-server" -> "cupertino-semantics";

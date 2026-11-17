@@ -55,7 +55,8 @@ impl Size {
     /// Whether a frame of this size, four bytes a pixel, is a buffer Wayland can share: not empty, and at most
     /// `i32::MAX` bytes (the size of a `wl_shm` pool).
     pub fn shareable(self) -> bool {
-        let bytes = u64::from(self.width) * 4 * u64::from(self.height);
+        // 4 * width fits a u64 and the product with a height saturates instead of wrapping around to a small size
+        let bytes = (u64::from(self.width) * 4).saturating_mul(u64::from(self.height));
         bytes > 0 && bytes <= i32::MAX as u64
     }
 }

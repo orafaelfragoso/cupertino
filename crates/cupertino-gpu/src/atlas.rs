@@ -184,7 +184,11 @@ impl AtlasModel {
     /// Room for a new entry `key` of `size`, used in `frame`.
     pub fn insert(&mut self, key: u64, size: (u32, u32), frame: u64) -> Result<Placement> {
         let (pw, ph) = self.config.page_size;
-        if size.0 == 0 || size.1 == 0 || size.0 + GAP > pw || size.1 + GAP > ph {
+        if size.0 == 0
+            || size.1 == 0
+            || size.0.saturating_add(GAP) > pw
+            || size.1.saturating_add(GAP) > ph
+        {
             return Err(Error::Invalid(format!(
                 "an atlas entry of {size:?} in pages of {pw} x {ph}"
             )));

@@ -1,0 +1,101 @@
+# What `cargo xtask ci` checks for a change.
+#
+# A changed file inside a workspace package selects that package. A file outside every package, and any `build.rs`,
+# is matched against `rules` in order and the first match wins:
+#   action = "all"       the whole workspace is checked;
+#   action = "none"      no Rust package is checked (only the formatting check and the gate, if the profile runs them);
+#   action = "packages"  the packages listed in `packages` are checked.
+# A file no rule matches checks the whole workspace and is reported as a fallback with its path.
+#
+# Patterns are globs over paths relative to the repository root: `*` and `?` stay within one path segment, `**`
+# matches any number of segments.
+
+[limits]
+# Runs of `cargo xtask ci` that may build at once on this machine, across every checkout. XTASK_SLOTS overrides it.
+slots = 2
+
+[[rules]]
+name = "workspace inputs"
+action = "all"
+patterns = [
+    "Cargo.toml",
+    "Cargo.lock",
+    "rust-toolchain.toml",
+    ".cargo/**",
+    ".config/**",
+    "**/build.rs",
+    "third-party/**",
+]
+
+[[rules]]
+name = "documentation and tooling"
+action = "none"
+patterns = [
+    "docs/**",
+    "**/*.md",
+    ".github/**",
+    ".agents/**",
+    ".claude/**",
+    ".codex/**",
+    ".mcp.json",
+    "packaging/**",
+    "LICENSE*",
+    "deny.toml",
+    ".gitattributes",
+    ".gitignore",
+    "tools/**",
+]
+
+# Feature configurations a profile can build and test with.
+[features.all]
+args = ["--all-features"]
+per_package = false
+
+# Default features, one package at a time, so that features unified across packages cannot hide a missing one.
+[features.default]
+args = []
+per_package = true
+
+# Each profile: its default scope (`changed`, `affected` or `all`; `--scope` wins), its feature configurations, and
+# which checks run. fmt is `off`, `changed` (the changed packages) or `all`; clippy, nextest and doctests are `off`,
+# `scope` (the selected packages) or `workspace`; layers and gate are on or off.
+
+[profiles.agent]
+scope = "changed"
+features = ["all"]
+fmt = "changed"
+clippy = "scope"
+nextest = "scope"
+doctests = "off"
+layers = false
+gate = false
+
+[profiles.integration]
+scope = "affected"
+features = ["all"]
+fmt = "changed"
+clippy = "scope"
+nextest = "scope"
+doctests = "scope"
+layers = true
+gate = true
+
+[profiles.pr]
+scope = "affected"
+features = ["all", "default"]
+fmt = "all"
+clippy = "scope"
+nextest = "scope"
+doctests = "scope"
+layers = true
+gate = true
+
+[profiles.full]
+scope = "all"
+features = ["all", "default"]
+fmt = "all"
+clippy = "workspace"
+nextest = "workspace"
+doctests = "workspace"
+layers = true
+gate = true

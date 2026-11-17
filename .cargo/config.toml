@@ -5,6 +5,10 @@ debug = "line-tables-only"
 # Debug and test builds are incremental (cargo's default), so an edit rebuilds only what changed. CI and packaging set
 # CARGO_INCREMENTAL=0 themselves.
 
-# Link through ci/linker.sh, which uses mold when it is installed.
-[target.x86_64-unknown-linux-gnu]
-linker = "ci/linker.sh"
+# Compiled crates are shared between checkouts through sccache's cache.
+[build]
+rustc-wrapper = "sccache"
+
+# `cargo xtask ci` plans and runs the checks a change needs (.config/validation.toml).
+[alias]
+xtask = "run --locked --quiet --package xtask --"

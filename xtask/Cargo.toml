@@ -1,0 +1,17 @@
+[package]
+name = "xtask"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Repository tasks: `cargo xtask ci` plans and runs the checks a change needs"
+publish = false
+
+[package.metadata.cupertino]
+layer = "tools"
+
+[dependencies]
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+toml = "1"

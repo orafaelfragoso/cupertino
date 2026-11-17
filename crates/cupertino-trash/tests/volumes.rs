@@ -31,72 +31,62 @@ fn with_silent_volume(trash: Trash, silent: PathBuf) -> (Trash, Sender<()>, Arc<
     (trash, release, calls)
 }
 
+fn own_trash(vol: &Path) -> PathBuf {
+    vol.join(format!(".Trash-{}", common::uid()))
+}
+
 fn volume_with_item(t: &Tree, name: &str) -> PathBuf {
     let vol = t.path(name);
-    let own = vol.join(format!(".Trash-{}", common::uid()));
-    put_item(&own, "v.txt", "x", "docs/v.txt", "2026-01-01T00:00:00");
+    put_item(
+        &own_trash(&vol),
+        "v.txt",
+        "x",
+        "docs/v.txt",
+        "2026-01-01T00:00:00",
+    );
     vol
 }
 
-#[test]
-fn a_volume_that_does_not_answer_is_named_and_counts_as_holding_nothing() {
-    let t = Tree::new();
-    let silent = volume_with_item(&t, "silent");
-    let trash = t.trash().with_mounts(vec![silent.clone()]);
-    let (trash, release, _) = with_silent_volume(trash, silent.clone());
-    assert_eq!(trash.silent_volumes(), [silent]);
-    assert!(trash.volume_trash_dirs().is_empty());
-    assert!(!trash.volumes_hold_items());
-    drop(release);
+fn wait_until(what: &str, done: impl Fn() -> bool) {
+    let deadline = std::time::Instant::now() + LONG;
+    while !done() {
+        assert!(std::time::Instant::now() < deadline, "{what}");
+        std::thread::yield_now();
+    }
 }
 
 #[test]
-fn a_volume_that_does_not_answer_is_not_looked_at_again_while_the_first_look_is_out() {
+fn a_volume_that_does_not_answer_is_named_holds_nothing_and_is_not_asked_again_while_out() {
     let t = Tree::new();
     let silent = volume_with_item(&t, "silent");
     let trash = t.trash().with_mounts(vec![silent.clone()]);
     let (trash, release, calls) = with_silent_volume(trash, silent.clone());
     assert_eq!(trash.silent_volumes(), std::slice::from_ref(&silent));
-    assert_eq!(trash.silent_volumes(), [silent]);
+    assert_eq!(trash.silent_volumes(), std::slice::from_ref(&silent));
+    assert!(trash.volume_trash_dirs().is_empty());
+    assert!(!trash.volumes_hold_items());
     assert!(trash.entries().is_empty());
     assert_eq!(calls.load(Ordering::SeqCst), 1);
+    // the volume answers after all; the look that was out ends and gives the mount point back
     drop(release);
+    wait_until("the volume never came back", || {
+        trash.silent_volumes().is_empty()
+    });
 }
 
 #[test]
-fn the_volumes_after_a_silent_one_still_answer() {
+fn the_volumes_after_a_silent_one_still_answer_and_list() {
     let t = Tree::new();
     let silent = volume_with_item(&t, "silent");
     let live = volume_with_item(&t, "live");
     let trash = t.trash().with_mounts(vec![silent.clone(), live.clone()]);
     let (trash, release, _) = with_silent_volume(trash, silent.clone());
     assert_eq!(trash.silent_volumes(), [silent]);
-    assert_eq!(
-        trash.volume_trash_dirs(),
-        [live.join(format!(".Trash-{}", common::uid()))]
-    );
+    assert_eq!(trash.volume_trash_dirs(), [own_trash(&live)]);
     assert!(trash.volumes_hold_items());
     assert_eq!(trash.volume_entries().len(), 1);
+    assert_eq!(trash.list_volumes().unwrap().len(), 1);
     drop(release);
-}
-
-#[test]
-fn a_volume_that_answers_late_is_looked_at_again_afterwards() {
-    let t = Tree::new();
-    let slow = volume_with_item(&t, "slow");
-    let trash = t.trash().with_mounts(vec![slow.clone()]);
-    let (trash, release, _) = with_silent_volume(trash, slow.clone());
-    assert_eq!(trash.silent_volumes(), [slow]);
-    // the volume answers after all; the look that was out ends and gives the mount point back
-    drop(release);
-    let deadline = std::time::Instant::now() + LONG;
-    while !trash.silent_volumes().is_empty() {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the volume never came back"
-        );
-        std::thread::yield_now();
-    }
 }
 
 #[test]
@@ -115,65 +105,48 @@ fn emptying_reports_a_silent_volume_by_its_mount_point_and_still_empties_the_hom
         std::io::ErrorKind::TimedOut
     );
     assert!(!home.file_path().exists());
-    assert!(silent
-        .join(format!(".Trash-{}", common::uid()))
-        .join("files/v.txt")
-        .exists());
+    assert!(own_trash(&silent).join("files/v.txt").exists());
     drop(release);
 }
 
 #[test]
-fn the_home_trash_is_checked_without_asking_a_volume() {
+fn the_volumes_are_asked_whether_the_trash_holds_items_only_when_the_home_trash_is_empty() {
     let t = Tree::new();
     let live = volume_with_item(&t, "live");
     let trash = t.trash().with_mounts(vec![live.clone()]);
-    let (trash, release, calls) = with_silent_volume(trash, PathBuf::from("/nowhere"));
-    assert!(!trash.home_holds_items());
-    assert!(trash.home_entries().is_empty());
+    let (counted, release, calls) = with_silent_volume(trash, PathBuf::from("/nowhere"));
+    assert!(!counted.home_holds_items());
+    assert!(counted.home_entries().is_empty());
     assert_eq!(calls.load(Ordering::SeqCst), 0);
-    trash.trash(&t.file("a.txt", "x")).unwrap();
-    assert!(trash.home_holds_items());
-    assert!(trash.holds_items());
-    assert_eq!(trash.home_entries().len(), 1);
-    assert_eq!(
-        calls.load(Ordering::SeqCst),
-        0,
-        "the volumes are asked only when the home trash is empty"
-    );
+    counted.trash(&t.file("a.txt", "x")).unwrap();
+    assert!(counted.home_holds_items());
+    assert!(counted.holds_items());
+    assert_eq!(counted.home_entries().len(), 1);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
     drop(release);
-}
 
-#[test]
-fn an_empty_home_trash_asks_the_volumes() {
-    let t = Tree::new();
-    let live = volume_with_item(&t, "live");
-    let trash = t.trash().with_mounts(vec![live]);
-    assert!(trash.holds_items());
-    assert!(trash.volumes_hold_items());
+    let only_volume = t.trash().with_mounts(vec![live]);
+    std::fs::remove_dir_all(t.home_trash()).unwrap();
+    assert!(only_volume.holds_items());
+    assert!(only_volume.volumes_hold_items());
     let none = t.trash().with_mounts(vec![t.path("empty-volume")]);
     assert!(!none.holds_items());
 }
 
 #[test]
-fn the_entries_are_the_home_trashs_then_the_volumes_and_include_those_without_records() {
+fn the_entries_and_the_list_are_the_home_trashs_then_the_volumes() {
     let t = Tree::new();
     let live = volume_with_item(&t, "live");
     let trash = t.trash().with_mounts(vec![live.clone()]);
+    // entries include those without records
     std::fs::create_dir_all(t.home_trash().join("files")).unwrap();
     std::fs::write(t.home_trash().join("files/orphan"), "").unwrap();
-    let own = live.join(format!(".Trash-{}", common::uid()));
+    let own = own_trash(&live);
     assert_eq!(
         trash.entries(),
         [t.home_trash().join("files/orphan"), own.join("files/v.txt")]
     );
     assert_eq!(trash.volume_entries(), [own.join("files/v.txt")]);
-}
-
-#[test]
-fn the_list_of_everything_has_the_home_trashs_items_then_the_volumes() {
-    let t = Tree::new();
-    let live = volume_with_item(&t, "live");
-    let trash = t.trash().with_mounts(vec![live.clone()]);
     put_item(
         &t.home_trash(),
         "h.txt",
@@ -181,41 +154,24 @@ fn the_list_of_everything_has_the_home_trashs_items_then_the_volumes() {
         "/home/u/h.txt",
         "2026-01-02T00:00:00",
     );
-    let items = trash.list_all().unwrap();
-    let listed: Vec<(&str, PathBuf)> = items
-        .iter()
-        .map(|i| (i.name.as_str(), i.original_path.clone()))
+    let listed: Vec<(String, PathBuf)> = trash
+        .list_all()
+        .unwrap()
+        .into_iter()
+        .map(|i| (i.name, i.original_path))
         .collect();
     assert_eq!(
         listed,
         [
-            ("h.txt", PathBuf::from("/home/u/h.txt")),
-            ("v.txt", live.join("docs/v.txt"))
+            ("h.txt".into(), PathBuf::from("/home/u/h.txt")),
+            ("v.txt".into(), live.join("docs/v.txt"))
         ]
     );
     assert_eq!(trash.list_volumes().unwrap().len(), 1);
-}
-
-#[test]
-fn a_bad_record_on_a_volume_is_an_error_of_the_list() {
-    let t = Tree::new();
-    let live = volume_with_item(&t, "live");
-    let own = live.join(format!(".Trash-{}", common::uid()));
+    // a bad record on a volume is an error of the lists
     std::fs::write(own.join("info/bad.trashinfo"), "[Trash Info]\n").unwrap();
-    let trash = t.trash().with_mounts(vec![live]);
     assert!(trash.list_volumes().is_err());
     assert!(trash.list_all().is_err());
-}
-
-#[test]
-fn a_silent_volume_leaves_the_list_of_the_others() {
-    let t = Tree::new();
-    let silent = volume_with_item(&t, "silent");
-    let live = volume_with_item(&t, "live");
-    let trash = t.trash().with_mounts(vec![silent.clone(), live]);
-    let (trash, release, _) = with_silent_volume(trash, silent);
-    assert_eq!(trash.list_volumes().unwrap().len(), 1);
-    drop(release);
 }
 
 fn watched(trash: Trash) -> (Arc<Look>, Receiver<()>) {
@@ -228,18 +184,12 @@ fn watched(trash: Trash) -> (Arc<Look>, Receiver<()>) {
 }
 
 #[test]
-fn a_look_has_the_trash_it_looks_at() {
+fn a_look_answers_from_the_home_trash_at_once() {
     let t = Tree::new();
     let (look, _) = watched(t.trash());
     assert_eq!(look.trash().home_trash(), t.home_trash());
     assert!(!look.looking());
     assert!(!look.volumes_held());
-}
-
-#[test]
-fn a_look_answers_from_the_home_trash_at_once() {
-    let t = Tree::new();
-    let (look, _) = watched(t.trash());
     assert!(!look.full());
     t.trash().trash(&t.file("a.txt", "x")).unwrap();
     assert!(look.full());
@@ -255,11 +205,7 @@ fn a_look_reports_a_change_of_the_volumes_answer_and_then_answers_from_it() {
     changed.recv_timeout(LONG).unwrap();
     assert!(look.volumes_held());
     // the volume is emptied; the next look says so
-    std::fs::remove_file(
-        live.join(format!(".Trash-{}", common::uid()))
-            .join("files/v.txt"),
-    )
-    .unwrap();
+    std::fs::remove_file(own_trash(&live).join("files/v.txt")).unwrap();
     look.look();
     changed.recv_timeout(LONG).unwrap();
     assert!(!look.volumes_held());
@@ -270,11 +216,11 @@ fn a_look_reports_a_change_of_the_volumes_answer_and_then_answers_from_it() {
 fn what_an_emptying_knows_can_be_set_without_a_look() {
     let t = Tree::new();
     let (look, _) = watched(t.trash());
-    look.set_volumes_held(true);
-    assert!(look.volumes_held());
-    assert!(!look.looking());
-    look.set_volumes_held(false);
-    assert!(!look.volumes_held());
+    for held in [true, false] {
+        look.set_volumes_held(held);
+        assert_eq!(look.volumes_held(), held);
+        assert!(!look.looking());
+    }
 }
 
 #[test]
@@ -288,11 +234,7 @@ fn a_look_at_a_silent_volume_is_not_started_twice() {
     look.look();
     assert!(look.looking());
     drop(release);
-    // the look ends once the volume answers; a second look can then be started
-    let deadline = std::time::Instant::now() + LONG;
-    while look.looking() {
-        assert!(std::time::Instant::now() < deadline);
-        std::thread::yield_now();
-    }
+    // the look ends once the volume answers
+    wait_until("the look never ended", || !look.looking());
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 }

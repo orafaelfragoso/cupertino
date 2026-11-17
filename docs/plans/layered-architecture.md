@@ -1098,4 +1098,4 @@ One line per change to a decision or approval of a design: date, number, what, w
   Rust example, not shell; `TableCurve::new` refuses empty or non-positive entries, `mask_bounds` inverted corners; the
   font tests of `glyph` live in `cupertino-ui-text`. Left: `cupertino-effects`' sample-image example writes files, which
   the purity check does not see while the helper lives in `tests/common`; test file names mix kebab-case and
-  snake_case; the shake test's slope check depends on orientation (to compare with the research before any change).
+  snake_case; the shake test's slope check depends on orientation (the owner decides whether it should; no change until then).

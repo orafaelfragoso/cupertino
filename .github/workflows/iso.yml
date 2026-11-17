@@ -103,7 +103,7 @@ jobs:
         with:
           name: packages-arch
           path: ${{ github.workspace }}/iso-build/arch
-      # packages.json must name this commit and exactly the packages beside it, by SHA-256.
+      # packages.json must name this commit and exactly the packages beside it, by sha256.
       - name: The packages are this commit's
         run: |
           dir=iso-build/arch
@@ -112,7 +112,7 @@ jobs:
             || { echo "::error::$dir/packages.json: the packages are not from $commit"; exit 1; }
           actual=$(cd "$dir" && sha256sum ./*.pkg.tar.zst | jq -Rn '[inputs | split("  ") | {(.[1] | ltrimstr("./")): .[0]}] | add')
           jq -e --argjson actual "$actual" '.files == $actual' "$dir/packages.json" >/dev/null \
-            || { echo "::error::$dir/packages.json: package names or SHA-256 digests differ"; exit 1; }
+            || { echo "::error::$dir/packages.json: package names or sha256 digests differ"; exit 1; }
           mkdir -p iso-build/pkgs
           cp "$dir"/*.pkg.tar.zst "$dir/packages.json" iso-build/pkgs/
           echo "reused $(ls "$dir"/*.pkg.tar.zst | wc -l) verified Arch packages from $commit"

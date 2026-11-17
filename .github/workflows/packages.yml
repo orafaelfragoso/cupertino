@@ -6,7 +6,7 @@ name: Arch packages
 # the file lists of each package. A fresh container of the plain Arch base installs them, checks the login-screen
 # account, the unit state, the installed command, the manual pages and completions, conffile preservation across a
 # reinstall and a clean removal, then installs the SDK package alone and builds and runs the C samples against /usr.
-# Only then is packages.json written (the commit, the version and each package's SHA-256), so the ISO and the release
+# Only then is packages.json written (the commit, the version and each package's sha256), so the ISO and the release
 # take packages that passed.
 #
 # Artifacts: `source` (the archive, PKGBUILD, PKGBUILD-git), `packages-arch` (the packages and packages.json) and

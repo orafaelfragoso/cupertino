@@ -1,9 +1,9 @@
 name: CI image
 
 # The CI and package-build image (.github/images/arch/Dockerfile), published to the GitHub Container Registry under a
-# tag that is the Dockerfile's SHA-256, so a tag always names the image of one definition. Every workflow that runs in
+# tag that is the Dockerfile's sha256, so a tag always names the image of one definition. Every workflow that runs in
 # the image calls this one first: it builds and pushes the image only when its tag is not in the registry yet (the first
-# run after the Dockerfile changes), and otherwise just returns the reference.
+# run after the Dockerfile changes), and otherwise just returns the image name.
 on:
   workflow_call:
     outputs:

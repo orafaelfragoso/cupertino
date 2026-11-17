@@ -1068,7 +1068,7 @@ impl GreeterApp {
     /// password screen.
     fn manager_event(&mut self, now: f64, event: &ManagerEvent) -> Result<()> {
         match event {
-            ManagerEvent::Reset => {
+            ManagerEvent::Reset {} => {
                 eprintln!("cupertino-login: reset");
                 self.pending = None;
                 self.authorising = None;
@@ -1170,7 +1170,7 @@ impl GreeterApp {
             ManagerEvent::Hello { .. } | ManagerEvent::Welcome { .. } => {
                 return Err("the session manager sent a message out of order".into())
             }
-            ManagerEvent::Reset
+            ManagerEvent::Reset {}
             | ManagerEvent::Users { .. }
             | ManagerEvent::Refused { .. }
             | ManagerEvent::PowerRefused { .. } => unreachable!("handled above"),

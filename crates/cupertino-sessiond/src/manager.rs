@@ -1504,7 +1504,7 @@ impl Manager {
             if let Err(reason) = self.power(action, &Requester::Administrator) {
                 eprintln!("cupertino-sessiond: power request {action:?} refused: {reason:?}");
                 self.send(&Event::PowerRefused { reason });
-                self.send(&Event::Reset);
+                self.send(&Event::Reset {});
             }
             return;
         }
@@ -1654,7 +1654,7 @@ impl Manager {
             Err(e) => {
                 eprintln!("cupertino-sessiond: {e}");
                 session_start_failed("console", &e.to_string());
-                self.send(&Event::Reset);
+                self.send(&Event::Reset {});
             }
         }
     }
@@ -1707,7 +1707,7 @@ impl Manager {
             Err(e) => {
                 eprintln!("cupertino-sessiond: {e}");
                 session_start_failed("console", &e.to_string());
-                self.send(&Event::Reset);
+                self.send(&Event::Reset {});
             }
         }
     }
@@ -1798,7 +1798,7 @@ impl Manager {
             None => self.send(&Event::Result {
                 outcome: Outcome::Internal,
             }),
-            Some(_) => self.send(&Event::Reset),
+            Some(_) => self.send(&Event::Reset {}),
         }
     }
 
@@ -2339,7 +2339,7 @@ impl Manager {
             return;
         }
         self.cancel();
-        self.send(&Event::Reset);
+        self.send(&Event::Reset {});
         self.refresh_users();
     }
 }

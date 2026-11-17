@@ -52,7 +52,7 @@ fn the_happy_path_walks_new_idle_authenticating_starting() {
     assert_eq!(state, State::Authenticating);
     let state = state.after(&result(Outcome::Accepted));
     assert_eq!(state, State::Starting);
-    assert_eq!(state.after(&Event::Reset), State::Idle);
+    assert_eq!(state.after(&Event::Reset {}), State::Idle);
 }
 
 #[test]
@@ -170,10 +170,10 @@ fn a_result_outside_an_attempt_changes_nothing() {
 
 #[test]
 fn reset_ends_an_attempt_or_a_starting_session_and_nothing_else() {
-    assert_eq!(State::Authenticating.after(&Event::Reset), State::Idle);
-    assert_eq!(State::Starting.after(&Event::Reset), State::Idle);
-    assert_eq!(State::Idle.after(&Event::Reset), State::Idle);
-    assert_eq!(State::New.after(&Event::Reset), State::New);
+    assert_eq!(State::Authenticating.after(&Event::Reset {}), State::Idle);
+    assert_eq!(State::Starting.after(&Event::Reset {}), State::Idle);
+    assert_eq!(State::Idle.after(&Event::Reset {}), State::Idle);
+    assert_eq!(State::New.after(&Event::Reset {}), State::New);
 }
 
 #[test]
@@ -222,6 +222,6 @@ fn other_events_change_nothing() {
 #[test]
 fn a_starting_session_accepts_no_new_attempt_until_reset() {
     assert!(State::Starting.next(&authenticate()).is_err());
-    let idle = State::Starting.after(&Event::Reset);
+    let idle = State::Starting.after(&Event::Reset {});
     assert_eq!(idle.next(&authenticate()).unwrap(), State::Authenticating);
 }

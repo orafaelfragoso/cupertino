@@ -271,7 +271,7 @@ pub enum Event {
         uid: u32,
     },
     /// The screen is shown again: clear every field and go back to the picker.
-    Reset,
+    Reset {},
     Refused {
         reason: ProtocolRefusal,
     },

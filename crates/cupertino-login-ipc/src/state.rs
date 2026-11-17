@@ -47,7 +47,7 @@ impl State {
                 },
             ) => State::Starting,
             (State::Authenticating, Event::Result { .. }) => State::Idle,
-            (State::Starting | State::Authenticating, Event::Reset) => State::Idle,
+            (State::Starting | State::Authenticating, Event::Reset {}) => State::Idle,
             _ => self,
         }
     }

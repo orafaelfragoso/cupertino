@@ -285,3 +285,13 @@ fn a_request_that_fits_the_request_cap_is_never_a_user_list() {
     };
     assert!(encode(&request, MAX_REQUEST_FRAME).is_ok());
 }
+
+#[test]
+fn a_message_without_fields_refuses_an_unknown_field() {
+    assert!(matches!(
+        decode::<Event>(br#"{"type":"Reset"}"#),
+        Ok(Event::Reset {})
+    ));
+    assert!(decode::<Event>(br#"{"type":"Reset","x":1}"#).is_err());
+    assert!(decode::<Request>(br#"{"type":"Cancel","x":1}"#).is_err());
+}

@@ -10,8 +10,8 @@ layer = "ui"
 [dependencies]
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-glyph = { path = "../cupertino-glyph" }
-cupertino-key-bindings = { path = "../cupertino-key-bindings" }
-cupertino-modifiers = { path = "../cupertino-modifiers" }
+cupertino-defaults = { path = "../cupertino-defaults" }
+cupertino-keyboard = { path = "../cupertino-keyboard" }
 swash = "0.2.10"
 unicode-segmentation = "1.13"
 harfrust = "0.15"

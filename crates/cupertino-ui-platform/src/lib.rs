@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 use std::task::Waker;
 use std::time::Duration;
 
-pub use cupertino_modifiers::Mods;
+pub use cupertino_keyboard::modifiers::Mods;
 
 mod surface_layers;
 pub use cupertino_animation::{CubicBezier, LayerCurve};

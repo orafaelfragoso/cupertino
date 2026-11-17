@@ -1,13 +1,13 @@
 # cupertino-menu-model
 
 Typed application menus, shared by CupertinoKit, which exports them, and the menu bar, which shows them. MPL-2.0,
-foundation layer, one dependency (`cupertino-modifiers`). It also holds the pointer tracking every menu shares.
+foundation layer, one dependency (`cupertino-keyboard`, for its `modifiers` module). It also holds the pointer tracking every menu shares.
 
 ## Public API
 
 | Item | Contents |
 |---|---|
-| (`cupertino-modifiers`) | the logical modifiers (`Modifier`, `Mods`), the physical keys (`Physical`) and the `ModifierMap` between them, supplied by the caller as the active modifier profile; a chord holds `Mods` and has no modifier type of its own |
+| (`cupertino-keyboard::modifiers`) | the logical modifiers (`Modifier`, `Mods`), the physical keys (`Physical`) and the `ModifierMap` between them, supplied by the caller as the active modifier profile; a chord holds `Mods` and has no modifier type of its own |
 | `Key`, `Chord` | a key by keysym name and a key with logical modifiers. `display(map)` is menu text (`Shift+Super+Q` under `cupertino`, `Shift+Ctrl+Q` under `classic-pc`); `to_accel(map)` / `from_accel(accel, map)` are the GTK accelerator of the physical keys (`<Shift><Super>q`); GTK's `<Primary>` is the Control key. A modifier no key carries gives `None` |
 | `Scope`, `ActionName`, `Role` | `app.` and `win.` actions; the roles the menu bar rebinds, by action: `app.about`, `app.preferences` (also `app.settings`), `app.quit`, `win.close`, `win.fullscreen` |
 | `Menu`, `Entry`, `Item`, `Command`, `SystemCommand`, `MenuBar` | the menu tree: groups of entries, items naming an action or a desktop command (Hide, Hide Others, Show All); `MenuBar::exported` drops the desktop commands and whatever they leave empty |

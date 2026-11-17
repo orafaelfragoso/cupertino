@@ -2,8 +2,8 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
+use cupertino_keyboard::modifiers::ModifierMap;
 use cupertino_menu_model::{ActionName, Command, Entry, Menu};
-use cupertino_modifiers::ModifierMap;
 use zbus::zvariant::{OwnedValue, Str, Value};
 
 /// The group every menu of an object is in; a client subscribes to it once.

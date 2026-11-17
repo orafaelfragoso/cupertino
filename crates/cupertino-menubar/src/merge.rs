@@ -17,11 +17,11 @@
 
 use crate::fallback::{self, FallbackAction};
 use crate::item::{key_char, split_mnemonic, ItemId, MenuItem, Shortcut, ShortcutModifier};
+use cupertino_keyboard::modifiers::{ModifierMap, Profile, RawMods};
 use cupertino_keyboard::rewrite::{
     is_printable, pressed_for, ClientClass, KeyPress, SYM_KP_ENTER, SYM_RETURN,
 };
 use cupertino_menu_model::{ActionName, Chord, Role};
-use cupertino_modifiers::{ModifierMap, Profile, RawMods};
 
 /// The top-level item of a GMenuModel tree that holds its application menu (`app_menu_object_path`).
 pub const GTK_APP_MENU: ItemId = ItemId(-1);

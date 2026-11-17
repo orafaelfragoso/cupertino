@@ -4,9 +4,9 @@
 
 use cupertino_defaults::notifications::NotificationSettings;
 use cupertino_defaults::watch::ConfigWatcher;
+use cupertino_keyboard::modifiers::Profile;
 use cupertino_kit::core::{Application, Command, Key, RuntimeOptions, Window, WindowKey};
 use cupertino_kit::platform::WindowSpec;
-use cupertino_modifiers::Profile;
 use cupertino_notifications::dbus::{CentrePresence, CentrePublisher, Server, ServerOptions};
 use cupertino_notifications::view::{
     self, banner_key, centre_key, CardMetrics, Fold, HostAction, Input, Ui, CENTRE_TITLE,

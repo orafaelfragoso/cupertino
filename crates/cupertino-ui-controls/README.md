@@ -64,7 +64,7 @@ from the application's model and reports changes as messages.
   from one segment across the others keeps the chosen segment marked and shows the one under the pointer pressed;
   the release chooses that one, and a release off the control chooses nothing.
 - **Fields.** `TextField` edits through `cupertino-ui-text`'s chords (the binding table of
-  `cupertino-key-bindings`, no settings or file watching) with the platform's logical modifiers. Edits report the
+  `cupertino-keyboard`, no settings or file watching) with the platform's logical modifiers. Edits report the
   committed text with a revision; the field takes the model's text only at or past its last reported revision, so a
   model that lags is not undone. An input method's composition never reaches the model, the accessible value or a
   snapshot. Return submits unless a composition holds it, and Escape cancels a composition first and asks the input

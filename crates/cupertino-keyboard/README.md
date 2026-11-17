@@ -1,8 +1,13 @@
 # cupertino-keyboard
 
-Keyboard model for the Cupertino compositor. Pure logic, with no Smithay, Wayland, xkbcommon or windowing dependency
-(only `serde` / `serde_json` for the layout and accent data files). The compositor feeds events and timestamps
-(milliseconds) and acts on the returned values.
+Keyboard model for the Cupertino desktop. Pure logic, with no Smithay, Wayland, xkbcommon or windowing dependency
+(only `serde` / `serde_json` for the layout and accent data files), foundation layer. The compositor feeds events and
+timestamps (milliseconds) and acts on the returned values; the toolkit, the menus and the shell components use its
+modifiers, chords and text-editing bindings.
+
+The crate reads no settings: `keyboard.conf` is read by `cupertino-defaults` (`keyboard::KeyboardSettings`,
+`keyboard::user_profile`), and the user's binding file by `cupertino-ui-text` (`binding_file`), which hands its text to
+`BindingTable::apply_overrides`. One file read is left: `Layout::from_json_file` reads a decoded layout.
 
 ## Public API
 
@@ -10,9 +15,9 @@ Keyboard model for the Cupertino compositor. Pure logic, with no Smithay, Waylan
 |---|---|
 | `repeat` | `RepeatConfig` (initial delay / interval; from preference units of 1/60 s or from nanoseconds with the filter's clamp), `RepeatInfo` for `wl_keyboard.repeat_info`, `SliderTable`, `KeyRepeater` (single repeating key), `hid_usage_repeats` / `evdev_repeats`, `CapsLockDelay`, caps-lock hold limits |
 | `rewrite` | `decide`: the pure table that turns a Super or Alt chord into the Ctrl chord (or Home / End) for a third-party client, given the client class, `text_input_active` and the physical modifiers; never touches Ctrl. `pressed_for` is its inverse outside a text input: the chord the person presses for the chord a client of a class receives (Super+key for a third-party Ctrl chord of a printable key or Return, Super+C / V for a terminal's Shift+Ctrl+C / V; anything else, a first-party client and `classic-pc` unchanged), which the menu bar shows for an application's accelerators |
-| `modifiers` | `symbol_selectors` (the profile that maps physical keys to roles is `cupertino_modifiers::Profile`), `FnUsage`, `GlobeTap` (a tap is a release within the threshold with no other key in between: `other_key`) |
-| `keys` | `Key`, `NamedKey`, `Chord` with parser (`Ctrl+Alt+Left`); the logical `Mods` and physical `RawMods` are `cupertino-modifiers`' |
-| `binding` | `BindingTable::standard` (100 rows, 75 `TextAction`s: emacs-style control chords, alt+arrow word moves, primary+arrow line / document moves, shift = extend selection), chord sequences, user file `~/.config/cupertino/keybindings.conf`, `Resolver` |
+| `modifiers` | the logical roles `Modifier` (Shift, Primary, Ctrl, Alt, Fn, in the order a chord shows them) and a set of them, `Mods` (prints as `Primary+Ctrl+Alt+Shift+Fn`, `none` when empty); the physical keys `Physical` (Shift, Ctrl, Alt, Super, Fn) and the set that is down, `RawMods`; `Profile` (`cupertino()`, `classic_pc()`, `by_name`; `translate(RawMods) -> Mods`, `role(Physical)`, `physical_for(Modifier)`, `display(Modifier)`, the key's name in a menu, `alt_selects_symbols`); `ModifierMap`, what a caller that only formats or parses chords needs of a profile (`Profile` implements it); `symbol_selectors`, `FnUsage`, `GlobeTap` (a tap is a release within the threshold with no other key in between: `other_key`) |
+| `keys` | `Key`, `NamedKey`, `Chord` with parser (`Ctrl+Alt+Left`), in logical `Mods` |
+| `binding` | `BindingTable::standard` (100 rows, 75 `TextAction`s: emacs-style control chords, alt+arrow word moves, primary+arrow line / document moves, shift = extend selection), chord sequences, override text (`apply_overrides`, its problems as `OverrideError`), `Resolver` |
 | `shortcuts` | `ShortcutSet` over the 80 built-in desktop assignments (app switcher, window cycling, screenshots, launcher, input-source switching, overview, workspaces, window tiling …) with neutral `SystemAction` names, enable / rebind / override text |
 | `accent` | `AccentPicker`: opens on the first auto-repeat of a held character key (not with ctrl / primary, not for digits), focus with Tab / arrows, `1..9` direct selection, Return commit, Escape cancel with restore, preview text; `AccentTable` loader (JSON file, nothing embedded); `layout_popup` |
 | `switcher` | `Switcher`: usage-ordered source list, HUD open / step / commit-on-modifier-release / cancel, immediate switch without modifiers, `press_menu` (the "next source in the menu" shortcut walks the menu order), HUD constants (0.3 s fade, 24 pt radius, 40 pt rows …) |
@@ -37,13 +42,14 @@ let out = generate(&layout, &GenOptions { keyboard: Keyboard::Iso, ..Default::de
 // out.keymap → memfd for wl_keyboard.keymap; out.compose → compose table for clients
 
 // 3. shortcuts: translate the physical modifier state, then look the chord up
-let profile = cupertino_modifiers::Profile::cupertino();
-let mods = profile.translate(RawMods::SUPER | RawMods::SHIFT);          // Primary+Shift
+let profile = modifiers::Profile::cupertino();
+let mods = profile.translate(modifiers::RawMods::SUPER | modifiers::RawMods::SHIFT);          // Primary+Shift
 let shortcuts = ShortcutSet::reference_defaults();
 if let Some(action) = shortcuts.lookup(&Chord::new(mods, Key::Char('4'))) { /* run the action */ }
 
-// 3b. text editing: standard table + ~/.config/cupertino/keybindings.conf
-let (bindings, _errors) = cupertino_keyboard::binding::load_default();
+// 3b. text editing: standard table + the text of an override file
+let mut bindings = BindingTable::standard();
+let _errors = bindings.apply_overrides("Ctrl+K = DeleteToEndOfParagraph");
 let mut resolver = Resolver::new(bindings);
 let _ = resolver.feed(Chord::parse("Alt+Left").unwrap());      // Actions([MoveWordLeft])
 
@@ -54,6 +60,23 @@ sw.set_current("abc");
 let ev = sw.press(Step::Next, true);      // ShowHud { order, selection }
 let ev = sw.modifiers_released();         // Commit { id }
 ```
+
+## Modifier profiles
+
+A shortcut is written once, in logical modifiers (`Primary+Q`); the keyboard reports physical keys; the active `Profile`
+translates. Every profile is a permutation, so each role has exactly one key and every chord can be typed under every
+profile. The system shortcuts of `classic-pc` are a table of their own and do not depend on it.
+
+| Physical key | `cupertino` | `classic-pc` |
+|---|---|---|
+| Super | Primary | Ctrl |
+| Ctrl | Ctrl | Primary |
+| Alt | Alt | Alt |
+| Shift | Shift | Shift |
+| Fn | Fn | Fn |
+
+`classic-pc` is a full swap of Ctrl and Super: a chord that needs Primary and Ctrl together (Lock, Full screen, the
+tiles) is typed with Ctrl and Super.
 
 ## Layouts and generated tables
 

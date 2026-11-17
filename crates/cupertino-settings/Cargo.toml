@@ -18,7 +18,7 @@ cupertino-radios = { path = "../cupertino-radios", features = ["dbus"] }
 cupertino-displays = { path = "../cupertino-displays" }
 cupertino-icons = { path = "../cupertino-icons" }
 cupertino-theme = { path = "../cupertino-theme" }
-cupertino-modifiers = { path = "../cupertino-modifiers" }
+cupertino-keyboard = { path = "../cupertino-keyboard" }
 cupertino-wayland-client = { path = "../cupertino-wayland-client" }
 cupertino-alsa = { path = "../cupertino-alsa" }
 cupertino-pipewire = { path = "../cupertino-pipewire" }

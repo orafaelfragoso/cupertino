@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
 
-use cupertino_modifiers::{Modifier, Physical, Profile};
+use cupertino_keyboard::modifiers::{Modifier, Physical, Profile};
 
 use crate::geom::Modifiers;
 use crate::keysym;

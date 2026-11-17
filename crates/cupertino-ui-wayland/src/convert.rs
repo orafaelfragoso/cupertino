@@ -1,7 +1,7 @@
 //! Between the window-system interface (`cupertino-ui-platform`, `cupertino-ui-text`) and the transport's types.
 
 use cupertino_geometry::{Point, Rect, Size};
-use cupertino_modifiers::{Profile, RawMods};
+use cupertino_keyboard::modifiers::{Profile, RawMods};
 use cupertino_ui_platform as platform;
 use cupertino_ui_text as text;
 use cupertino_wayland_client as wl;

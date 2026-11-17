@@ -24,7 +24,7 @@ use std::collections::HashMap;
 
 use serde::Deserialize;
 
-use cupertino_modifiers::Mods;
+use crate::modifiers::Mods;
 
 /// Where the source data places the alternatives relative to the key ("right" / "left" / "strictly-left").
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]

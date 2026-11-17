@@ -328,8 +328,8 @@ impl CapsLockDelay {
 
 /// Duration limits used for caps-lock hold-to-switch input source switching.
 pub const CAPS_HOLD_DEFAULT_MS: u32 = 500;
-/// The upper bound the settings file accepts (`keyboard.conf`, defined with the file in `cupertino_defaults::keyboard`).
-pub const CAPS_HOLD_MAX_MS: u32 = cupertino_defaults::keyboard::CAPS_LOCK_HOLD_MAX_MS;
+/// The upper bound of the caps-lock hold in ms, and the most the settings file (`keyboard.conf`) accepts.
+pub const CAPS_HOLD_MAX_MS: u32 = 1500;
 pub const CAPS_OVERRIDE_DEFAULT_MS: u32 = 250;
 pub const CAPS_OVERRIDE_MAX_MS: u32 = 3000;
 

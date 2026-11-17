@@ -4,7 +4,7 @@
 
 use crate::chord::Chord;
 use crate::menu::{ActionName, Command, Entry, Item, Menu, MenuBar, Scope, SystemCommand};
-use cupertino_modifiers::Modifier;
+use cupertino_keyboard::modifiers::Modifier;
 use Modifier::{Alt, Ctrl, Primary, Shift};
 
 /// What the application handles beyond the commands every application has. Items for anything left out are omitted,

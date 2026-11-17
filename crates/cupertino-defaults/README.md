@@ -3,8 +3,8 @@
 The settings store shared by the Cupertino processes. Every settings file lives in `$XDG_CONFIG_HOME/cupertino/` (default
 `~/.config/cupertino/`), and each file has its own environment variable that redirects it, so a run can use other files
 and leave the user's alone. For each file the crate has one typed reader and writer, used by the process that applies the
-file and by the settings application, an atomic write, and change notification. Dependencies: `inotify`, `libc` and
-`serde_json` (for `compositor.json`).
+file and by the settings application, an atomic write, and change notification. Dependencies: `cupertino-keyboard` (the
+modifier profiles and the caps-lock limit), `inotify`, `libc` and `serde_json` (for `compositor.json`).
 
 ## Public API
 
@@ -21,7 +21,7 @@ file and by the settings application, an atomic write, and change notification. 
 | `dock::DockSettings` | `dock.conf` (`$CUPERTINO_DOCK_CONFIG`): pins (read only), sizes with the design validation (`sanitize_tile_size`, `sanitize_large_size`), magnification, auto-hide, position, recents, minimise into the application's tile, the launch bounce, the running indicators, and the eight corner and gesture actions (`Trigger`, `ActionTarget`, `ActionMap` with the defaults of) |
 | `appearance::AppearanceSettings` | `appearance.conf` (`$CUPERTINO_APPEARANCE_CONFIG`), read by every program that draws with the toolkit: the automatic look and its two switch times, the accent and highlight colours, the sidebar icon size, what a click in a scroll bar's track does, and what a double click on a title bar does |
 | `menubar::MenuBarSettings` | `menubar.conf` (`$CUPERTINO_MENUBAR_CONFIG`): the clock options (`ClockSettings`, unset as the design reads it), which items show (`ShownItems`), the bar's own background, the recent-item counts and the status icons kept out of the bar |
-| `keyboard::KeyboardSettings` | `keyboard.conf` (`$CUPERTINO_KEYBOARD_CONFIG`): every key as `Option`, applied by the server over the keyboard model's defaults; input sources (`SourceSpec`), the file's choice values (`ModifierProfile`, `FnKey`, `LayoutKeyboard`, `Level3`), `CAPS_LOCK_HOLD_MAX_MS` (1500) |
+| `keyboard::KeyboardSettings` | `keyboard.conf` (`$CUPERTINO_KEYBOARD_CONFIG`): every key as `Option`, applied by the server over the keyboard model's defaults; input sources (`SourceSpec`), the file's choice values (`ModifierProfile`, `FnKey`, `LayoutKeyboard`, `Level3`), `CAPS_LOCK_HOLD_MAX_MS` (the keyboard model's `repeat::CAPS_HOLD_MAX_MS`, 1500); `keyboard::user_profile`, the file's modifier profile as a `cupertino-keyboard` `modifiers::Profile` (the `cupertino` profile when the file or the key cannot be read) |
 | `compositor::CompositorSettings` | `compositor.json` (`$CUPERTINO_SERVER_CONFIG`): every key as `Option`; each key checked on its own (`JsonProblem`); unknown keys kept on a write. `ScrollBarsName` is `show_scroll_bars`: `automatic`, `when-scrolling` or `always` |
 | `launcher::LauncherSettings` | `launcher.conf` (`$CUPERTINO_LAUNCHER_CONF`): which kinds of result the launcher lists (`results.applications`, `results.folders`, `results.files`, `results.calculator`, `results.actions`, all on when unset), `top_hit` (on when unset) and `files.exclude`, a comma-separated list of folders the file search leaves out (`exclusion_patterns` turns them into ignore patterns). The launcher reads it each time it opens, the settings application writes it |
 | `control_panel::ControlPanelSettings` | `control-panel.conf` (`$CUPERTINO_CONTROL_PANEL_CONF`): `controls`, the names of the controls the control panel shows, in order, as written (the panel skips a name it does not know); unset is the panel's own controls and order, an empty value none |

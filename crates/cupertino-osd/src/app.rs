@@ -2,9 +2,9 @@
 //! bus interface's commands arrive as messages, and timers pace the hold and the fade.
 
 use cupertino_alsa::DEVICE_DIR;
+use cupertino_keyboard::modifiers::Profile;
 use cupertino_kit::core::{Application, Command, Key, Window, WindowKey};
 use cupertino_kit::platform::WindowSpec;
-use cupertino_modifiers::Profile;
 use cupertino_osd::backend::{
     AlsaVolume, MemoryBacklight, MemoryVolume, SessionMicrophone, SessionVolume, Volume,
 };

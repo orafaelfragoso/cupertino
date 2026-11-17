@@ -17,7 +17,7 @@ app = [
     "dep:cupertino-assets",
     "dep:cupertino-geometry",
     "dep:cupertino-icons",
-    "dep:cupertino-modifiers",
+    "dep:cupertino-keyboard",
     "dep:cupertino-shell-client",
     "dep:notify",
     "dep:cupertino-ui-wayland",
@@ -39,7 +39,7 @@ cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-kit = { path = "../cupertino-kit" }
 cupertino-geometry = { path = "../cupertino-geometry", optional = true }
 cupertino-icons = { path = "../cupertino-icons", optional = true }
-cupertino-modifiers = { path = "../cupertino-modifiers", optional = true }
+cupertino-keyboard = { path = "../cupertino-keyboard", optional = true }
 cupertino-shell-client = { path = "../cupertino-shell-client", optional = true }
 cupertino-trash = { path = "../cupertino-trash" }
 cupertino-ui-wayland = { path = "../cupertino-ui-wayland", optional = true }

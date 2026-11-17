@@ -8,6 +8,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 mod bidi;
+pub mod binding_file;
 mod buffer;
 mod font;
 mod input;

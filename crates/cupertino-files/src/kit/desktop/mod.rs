@@ -28,6 +28,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cupertino_apps::{launch, Locale, MimeApps, MimeDatabase, Visibility, XdgDirs};
+use cupertino_keyboard::modifiers::Profile;
 use cupertino_kit::controls::{Menu, MenuAnchor, MenuItem as KitItem, TextChange, TextField};
 use cupertino_kit::core::{
     Application, Command, CommandRegistry, Element, Key, Shortcut, Window, WindowBackground,
@@ -37,7 +38,6 @@ use cupertino_kit::file_icons::FileIcons;
 use cupertino_kit::geometry::{Point, Rect, Size};
 use cupertino_kit::platform::{DecorationMode, Keysym, Mods, Timestamp, WindowSpec};
 use cupertino_kit::text::ContentPurpose;
-use cupertino_modifiers::Profile;
 use cupertino_ui_wayland::WaylandWindowSystem;
 
 use self::layer::DesktopShell;

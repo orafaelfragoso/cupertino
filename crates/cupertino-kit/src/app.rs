@@ -5,7 +5,7 @@
 use cupertino_assets::{Assets, FontRole, FontSource, BUILTIN_FONT};
 use cupertino_defaults::appearance::{AppearanceSettings, Highlight};
 use cupertino_defaults::watch::{ConfigWatcher, WatchEvent};
-use cupertino_modifiers::Profile;
+use cupertino_keyboard::modifiers::Profile;
 use cupertino_theme::Theme;
 use cupertino_ui_atspi::AtspiAdapter;
 use cupertino_ui_core::{

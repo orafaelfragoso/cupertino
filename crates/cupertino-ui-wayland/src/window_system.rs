@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 use crate::action_grab::ActionGrabs;
 
 use cupertino_geometry::{Rect, Size};
+use cupertino_keyboard::modifiers::Profile;
 use cupertino_menu_model::{ActionName, Command, Entry, Menu, MenuBar};
-use cupertino_modifiers::Profile;
 use cupertino_protocol_app::{
     AppEffects, AppEvent, Appearance as AppearanceObserver, Backdrop as Material, BackdropId,
     BackdropTone,

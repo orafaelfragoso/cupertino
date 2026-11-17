@@ -11,6 +11,7 @@ use cupertino_defaults::appearance::AppearanceSettings;
 use cupertino_defaults::menubar::MenuBarSettings;
 use cupertino_defaults::watch::{ConfigWatcher, WatchEvent};
 use cupertino_icons::{SystemIcons, ThemeIcons};
+use cupertino_keyboard::modifiers::{Modifier, Physical, Profile};
 use cupertino_kit::core::{Application, Command, RuntimeOptions, Window};
 use cupertino_kit::geometry::{Rect as GRect, Size};
 use cupertino_kit::platform::{KeyEvent, Keysym, Mods, WindowSpec};
@@ -32,7 +33,6 @@ use cupertino_menubar::view::{
 };
 use cupertino_menubar::wakeup::Wakeup;
 use cupertino_menubar::worker::{self, Worker};
-use cupertino_modifiers::{Modifier, Physical, Profile};
 use cupertino_protocol_app::{AppEffects, Backdrop};
 use cupertino_shell_client::{
     Anchor, KeyboardInteractivity, Layer, LayerShell, LayerSurface, LayerSurfaceConfig, Margin,
@@ -543,8 +543,8 @@ pub fn run() -> Result<std::convert::Infallible> {
     // the extras' symbols are drawn by the toolkit from the same packs; a missing one is reported now
     let _ = SystemIcons::required(&assets, &[], &extras::SYMBOL_NAMES);
     let keymap = Keymap::new(
-        cupertino_keyboard::binding::user_profile(),
-        cupertino_keyboard::binding::load_default().0,
+        cupertino_defaults::keyboard::user_profile(),
+        cupertino_kit::text::binding_file::load_default().0,
     );
 
     let mut system = WaylandWindowSystem::connect_as(keymap.profile().clone(), App::RENDERER)

@@ -5,8 +5,8 @@
 use std::collections::BTreeMap;
 use std::sync::{mpsc, Arc, Mutex, Weak};
 
+use cupertino_keyboard::modifiers::ModifierMap;
 use cupertino_menu_model::{ActionName, MenuBar};
-use cupertino_modifiers::ModifierMap;
 use zbus::blocking::connection;
 
 use crate::{Activation, DbusProperties, Exporter, WindowId};

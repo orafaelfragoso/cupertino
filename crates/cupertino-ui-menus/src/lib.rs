@@ -18,8 +18,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
 pub use app::{AppMenus, WindowExport};
+use cupertino_keyboard::modifiers::ModifierMap;
 use cupertino_menu_model::{ActionName, MenuBar, Scope};
-use cupertino_modifiers::ModifierMap;
 use objects::{action_changes, Actions, Menus, OnActivate, Reader};
 pub use window::WindowMenus;
 use wire::WireMenus;

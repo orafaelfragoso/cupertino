@@ -1037,8 +1037,8 @@ dependencies = [
  "cupertino-defaults",
  "cupertino-diagnostic-events",
  "cupertino-geometry",
+ "cupertino-keyboard",
  "cupertino-kit",
- "cupertino-modifiers",
  "cupertino-peer",
  "cupertino-pipewire",
  "cupertino-protocol-app",
@@ -1074,6 +1074,7 @@ dependencies = [
 name = "cupertino-defaults"
 version = "0.1.0"
 dependencies = [
+ "cupertino-keyboard",
  "inotify",
  "libc",
  "serde_json",
@@ -1129,8 +1130,8 @@ dependencies = [
  "cupertino-diagnostic-events",
  "cupertino-geometry",
  "cupertino-icons",
+ "cupertino-keyboard",
  "cupertino-kit",
- "cupertino-modifiers",
  "cupertino-overview",
  "cupertino-shell-client",
  "cupertino-trash",
@@ -1169,9 +1170,9 @@ dependencies = [
  "cupertino-defaults",
  "cupertino-diagnostic-events",
  "cupertino-icons",
+ "cupertino-keyboard",
  "cupertino-kit",
  "cupertino-menu-model",
- "cupertino-modifiers",
  "cupertino-theme",
  "cupertino-trash",
  "cupertino-ui-test",
@@ -1269,23 +1270,13 @@ name = "cupertino-input"
 version = "0.1.0"
 dependencies = [
  "cupertino-animation",
- "cupertino-modifiers",
-]
-
-[[package]]
-name = "cupertino-key-bindings"
-version = "0.1.0"
-dependencies = [
- "cupertino-modifiers",
+ "cupertino-keyboard",
 ]
 
 [[package]]
 name = "cupertino-keyboard"
 version = "0.1.0"
 dependencies = [
- "cupertino-defaults",
- "cupertino-key-bindings",
- "cupertino-modifiers",
  "serde",
  "serde_json",
 ]
@@ -1300,7 +1291,7 @@ dependencies = [
  "cupertino-defaults",
  "cupertino-geometry",
  "cupertino-icons",
- "cupertino-modifiers",
+ "cupertino-keyboard",
  "cupertino-theme",
  "cupertino-ui-atspi",
  "cupertino-ui-controls",
@@ -1328,8 +1319,8 @@ dependencies = [
  "cupertino-defaults",
  "cupertino-diagnostic-events",
  "cupertino-icons",
+ "cupertino-keyboard",
  "cupertino-kit",
- "cupertino-modifiers",
  "cupertino-peer",
  "cupertino-protocol-app",
  "cupertino-shell-client",
@@ -1364,9 +1355,9 @@ dependencies = [
  "cupertino-diagnostic-events",
  "cupertino-geometry",
  "cupertino-icons",
+ "cupertino-keyboard",
  "cupertino-kit",
  "cupertino-login-ipc",
- "cupertino-modifiers",
  "cupertino-peer",
  "cupertino-radios",
  "cupertino-raster-math",
@@ -1399,7 +1390,7 @@ dependencies = [
 name = "cupertino-menu-model"
 version = "0.1.0"
 dependencies = [
- "cupertino-modifiers",
+ "cupertino-keyboard",
 ]
 
 [[package]]
@@ -1416,7 +1407,6 @@ dependencies = [
  "cupertino-keyboard",
  "cupertino-kit",
  "cupertino-menu-model",
- "cupertino-modifiers",
  "cupertino-peer",
  "cupertino-protocol-app",
  "cupertino-radios",
@@ -1432,10 +1422,6 @@ dependencies = [
  "zbus",
  "zeroize",
 ]
-
-[[package]]
-name = "cupertino-modifiers"
-version = "0.1.0"
 
 [[package]]
 name = "cupertino-netd"
@@ -1470,8 +1456,8 @@ dependencies = [
  "cupertino-defaults",
  "cupertino-diagnostic-events",
  "cupertino-geometry",
+ "cupertino-keyboard",
  "cupertino-kit",
- "cupertino-modifiers",
  "cupertino-peer",
  "cupertino-protocol-app",
  "cupertino-shell-client",
@@ -1492,8 +1478,8 @@ dependencies = [
  "cupertino-alsa",
  "cupertino-diagnostic-events",
  "cupertino-geometry",
+ "cupertino-keyboard",
  "cupertino-kit",
- "cupertino-modifiers",
  "cupertino-peer",
  "cupertino-pipewire",
  "cupertino-shell-client",
@@ -1673,8 +1659,8 @@ dependencies = [
  "cupertino-defaults",
  "cupertino-diagnostic-events",
  "cupertino-geometry",
+ "cupertino-keyboard",
  "cupertino-kit",
- "cupertino-modifiers",
  "cupertino-protocols",
  "cupertino-shell-client",
  "cupertino-ui-wayland",
@@ -1733,7 +1719,6 @@ dependencies = [
  "cupertino-gpu",
  "cupertino-input",
  "cupertino-keyboard",
- "cupertino-modifiers",
  "cupertino-overview",
  "cupertino-peer",
  "cupertino-protocols",
@@ -1799,9 +1784,9 @@ dependencies = [
  "cupertino-diagnostic-events",
  "cupertino-displays",
  "cupertino-icons",
+ "cupertino-keyboard",
  "cupertino-kit",
  "cupertino-menu-model",
- "cupertino-modifiers",
  "cupertino-pipewire",
  "cupertino-radios",
  "cupertino-theme",
@@ -1935,8 +1920,8 @@ dependencies = [
 name = "cupertino-ui-menus"
 version = "0.1.0"
 dependencies = [
+ "cupertino-keyboard",
  "cupertino-menu-model",
- "cupertino-modifiers",
  "cupertino-protocol-app",
  "cupertino-wayland-client",
  "tracing",
@@ -1949,8 +1934,8 @@ version = "0.1.0"
 dependencies = [
  "cupertino-animation",
  "cupertino-geometry",
+ "cupertino-keyboard",
  "cupertino-menu-model",
- "cupertino-modifiers",
  "cupertino-semantics",
  "cupertino-ui-render",
  "cupertino-ui-text",
@@ -1988,10 +1973,10 @@ dependencies = [
 name = "cupertino-ui-text"
 version = "0.1.0"
 dependencies = [
+ "cupertino-defaults",
  "cupertino-geometry",
  "cupertino-glyph",
- "cupertino-key-bindings",
- "cupertino-modifiers",
+ "cupertino-keyboard",
  "fontconfig",
  "gungraun",
  "harfrust",
@@ -2017,8 +2002,8 @@ dependencies = [
  "cupertino-diagnostic-events",
  "cupertino-geometry",
  "cupertino-gpu",
+ "cupertino-keyboard",
  "cupertino-menu-model",
- "cupertino-modifiers",
  "cupertino-protocol-app",
  "cupertino-ui-gpu",
  "cupertino-ui-menus",

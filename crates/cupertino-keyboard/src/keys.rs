@@ -1,12 +1,12 @@
 //! Logical modifiers, keys and chords.
 //!
-//! A [`Chord`] is expressed with *logical* modifiers: [`cupertino_modifiers::Mods::PRIMARY`] is the modifier that carries
+//! A [`Chord`] is expressed with *logical* modifiers: [`crate::modifiers::Mods::PRIMARY`] is the modifier that carries
 //! application shortcuts. Which physical key produces it is decided by a
-//! [`cupertino_modifiers::Profile`].
+//! [`crate::modifiers::Profile`].
 
 use std::fmt;
 
-use cupertino_modifiers::Mods;
+use crate::modifiers::Mods;
 
 /// Keys that have no character of their own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]

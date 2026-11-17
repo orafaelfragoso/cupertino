@@ -3,9 +3,9 @@
 //! item's chord is the window's own key for it. Files exports no Quit: each
 //! window is a process of its own, so the bar's Quit, which closes every window of the application, quits Files.
 
+use cupertino_keyboard::modifiers::{Modifier, Mods};
 use cupertino_menu_model::standard::{self, Features};
 use cupertino_menu_model::{ActionName, Chord, Entry, Item, Menu, MenuBar, Scope};
-use cupertino_modifiers::{Modifier, Mods};
 
 use crate::menu_spec::sort_choices;
 use crate::sort::SortKey;

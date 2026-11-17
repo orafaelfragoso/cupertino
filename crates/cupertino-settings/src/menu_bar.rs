@@ -2,9 +2,9 @@
 //! search field and Find, Hide and Show Sidebar, and full screen. No About or Settings… item (the bar's About stands),
 //! no pane list, and no Window or Help menu, which the bar adds.
 
+use cupertino_keyboard::modifiers::Modifier;
 use cupertino_menu_model::standard::{self, Features};
 use cupertino_menu_model::{ActionName, Chord, Command, Entry, Item, Menu, MenuBar, Scope};
-use cupertino_modifiers::Modifier;
 
 /// What a menu item asks of the window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

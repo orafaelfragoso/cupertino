@@ -111,7 +111,8 @@ cargo run -q -p cupertino-layers -- --write-remaining
 
 `ENFORCED` lists the closed layers. Their problems are never excused by the file, `--write-remaining` leaves them out
 and fails while they remain, and a line of an enforced layer in the file is a problem (`enforced_remaining`). It holds
-`foundation`, `graphics`, `models` and `testing`; `system` leaves it while its crates still start threads.
+`foundation`, `graphics`, `models`, `protocol`, `transport` and `testing`; `system` leaves it while its crates still
+start threads.
 
 `cargo xtask ci`, in the profiles that run this check, also compares the file with its version at the merge base
 (`cargo xtask remaining [<ref>]` runs only that comparison) and reports a line the base does not hold, unless the same

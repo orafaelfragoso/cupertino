@@ -15,11 +15,11 @@ Updated by the lead at every merge.
 
 | | |
 |---|---|
-| Current wave | 3 |
-| Running tasks | W3.1, W3.T (protocols, login-ipc) |
-| Enforced layers | foundation, graphics, models, testing; system after W4.5 (139 remaining-work lines) |
+| Current wave | 4 (not started) |
+| Running tasks | none |
+| Enforced layers | foundation, graphics, models, protocol, transport, testing; system after W4.5 (134 remaining-work lines) |
 | Waiting on the owner | nothing |
-| Last closed wave | 2 |
+| Last closed wave | 3 |
 
 ## Contents
 
@@ -649,9 +649,13 @@ shell-client ui-menus ui-wayland`. **After** W3.1.
 
 `app-protocols wayland-client protocols login-ipc shell-client`, as in W1.T.
 
+- [x] (548058785) The crates follow [Tests](#tests-d29); about 380 public tests, the wire tests against an in-process
+      server on a socket pair. Found and fixed: `Event::Reset` and the semantic `Value::Protected` took unknown
+      fields; `Layer::animate` sent curves the server refuses, which ends the connection.
+
 #### W3.close (lead)
 
-- [ ] `ENFORCED` gains `Protocol`, `Transport`. Docs and gates as in W1.close.
+- [x] `ENFORCED` gains `Protocol`, `Transport`. Docs and gates as in W1.close.
 
 ### Wave 4: render and the toolkit
 
@@ -1099,3 +1103,7 @@ One line per change to a decision or approval of a design: date, number, what, w
   font tests of `glyph` live in `cupertino-ui-text`. Left: `cupertino-effects`' sample-image example writes files, which
   the purity check does not see while the helper lives in `tests/common`; test file names mix kebab-case and
   snake_case; the shake test's slope check depends on orientation (the owner decides whether it should; no change until then).
+- 2026-11-17: lead, wave 3: `cupertino-semantics` is `cupertino_app_protocols::semantics`, `cupertino-protocol-app` is
+  `cupertino_wayland_client::app`. `cupertino-control` reaching `cupertino-app-protocols` is a new `shell facade`
+  remaining-work line (it reached `cupertino-semantics` before). Messages without fields are written `{}` variants so
+  that serde refuses unknown fields; the wire form is unchanged. Wire tests use `wayland-server` as a dev-dependency.

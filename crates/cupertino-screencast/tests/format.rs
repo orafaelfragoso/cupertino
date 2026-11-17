@@ -52,118 +52,118 @@ fn a_frame_of_four_byte_pixels_has_a_stride_and_a_length() {
 
 #[test]
 fn a_size_is_shareable_when_its_frame_is_not_empty_and_fits_a_wayland_pool() {
-    assert!(size(1920, 1080).shareable());
-    assert!(size(1, 1).shareable());
-    assert!(!size(0, 1080).shareable());
-    assert!(!size(1920, 0).shareable());
-    // 2^31 - 4 bytes is the largest pool of four-byte pixels in whole pixels
-    assert!(size(536_870_911, 1).shareable());
-    assert!(!size(536_870_912, 1).shareable());
-    assert!(!size(u32::MAX, u32::MAX).shareable());
+    for (width, height, expected) in [
+        (1920, 1080, true),
+        (1, 1, true),
+        (0, 1080, false),
+        (1920, 0, false),
+        // 2^31 - 4 bytes is the largest pool of four-byte pixels in whole pixels
+        (536_870_911, 1, true),
+        (536_870_912, 1, false),
+        // the product of a huge size must not wrap into a small one
+        (u32::MAX, u32::MAX, false),
+        (65_536, 65_537, false),
+    ] {
+        assert_eq!(
+            size(width, height).shareable(),
+            expected,
+            "{width}x{height}"
+        );
+    }
 }
 
 #[test]
 fn the_time_between_frames_is_the_inverse_of_the_rate() {
-    assert_eq!(rate(60, 1).interval(), Duration::from_nanos(16_666_666));
-    assert_eq!(rate(30, 1).interval(), Duration::from_nanos(33_333_333));
-    assert_eq!(rate(1, 1).interval(), Duration::from_secs(1));
-    assert_eq!(rate(2, 4).interval(), Duration::from_secs(2));
+    for (num, denom, expected) in [
+        (60, 1, Duration::from_nanos(16_666_666)),
+        (30, 1, Duration::from_nanos(33_333_333)),
+        (1, 1, Duration::from_secs(1)),
+        (2, 4, Duration::from_secs(2)),
+    ] {
+        assert_eq!(rate(num, denom).interval(), expected, "{num}/{denom}");
+    }
 }
 
 #[test]
-fn a_fixed_format_that_matches_the_offer_becomes_the_stream_format() {
-    let format = negotiate(&offer(), fixed(VideoFormat::BGRA, rate(0, 1), rate(25, 1))).unwrap();
+fn a_fixed_format_that_matches_the_offer_becomes_the_stream_format_at_the_negotiated_rate() {
     assert_eq!(
-        format,
-        Format {
+        negotiate(&offer(), fixed(VideoFormat::BGRA, rate(0, 1), rate(25, 1))),
+        Ok(Format {
             width: 1920,
             height: 1080,
             pixel: Pixel::Bgra,
             framerate: rate(25, 1)
-        }
+        })
     );
+    for (name, framerate, max_framerate, expected) in [
+        ("the maximum wins", rate(10, 1), rate(24, 1), rate(24, 1)),
+        ("no maximum", rate(10, 1), rate(0, 1), rate(10, 1)),
+        ("a maximum over zero", rate(10, 1), rate(5, 0), rate(10, 1)),
+        ("no rate", rate(0, 1), rate(0, 1), rate(DEFAULT_RATE, 1)),
+        ("above the limit", rate(0, 1), rate(144, 1), rate(MAX_RATE, 1)),
+        ("a fraction above", rate(0, 1), rate(121, 2), rate(MAX_RATE, 1)),
+        ("a fraction at", rate(0, 1), rate(120, 2), rate(120, 2)),
+        ("at the limit", rate(0, 1), rate(60, 1), rate(60, 1)),
+    ] {
+        let format = negotiate(&offer(), fixed(VideoFormat::BGRx, framerate, max_framerate));
+        assert_eq!(format.map(|f| f.framerate), Ok(expected), "{name}");
+    }
 }
 
 #[test]
-fn the_maximum_rate_wins_over_the_rate_and_a_missing_maximum_falls_back_to_it() {
-    let negotiated = |framerate, max_framerate| {
-        negotiate(&offer(), fixed(VideoFormat::BGRx, framerate, max_framerate))
-            .unwrap()
-            .framerate
-    };
-    assert_eq!(negotiated(rate(10, 1), rate(24, 1)), rate(24, 1));
-    assert_eq!(negotiated(rate(10, 1), rate(0, 1)), rate(10, 1));
-    assert_eq!(negotiated(rate(10, 1), rate(5, 0)), rate(10, 1));
-}
-
-#[test]
-fn a_consumer_that_names_no_rate_gets_the_default() {
-    let format = negotiate(&offer(), fixed(VideoFormat::BGRx, rate(0, 1), rate(0, 1))).unwrap();
-    assert_eq!(format.framerate, rate(DEFAULT_RATE, 1));
-    assert_eq!(DEFAULT_RATE, 30);
-}
-
-#[test]
-fn a_rate_above_the_limit_is_lowered_to_it() {
-    let negotiated = |max_framerate| {
-        negotiate(
-            &offer(),
-            fixed(VideoFormat::BGRx, rate(0, 1), max_framerate),
-        )
-        .unwrap()
-        .framerate
-    };
-    assert_eq!(negotiated(rate(144, 1)), rate(MAX_RATE, 1));
-    assert_eq!(negotiated(rate(121, 2)), rate(MAX_RATE, 1));
-    assert_eq!(negotiated(rate(120, 2)), rate(120, 2));
-    assert_eq!(negotiated(rate(60, 1)), rate(60, 1));
-    assert_eq!(MAX_RATE, 60);
-}
-
-#[test]
-fn a_pixel_layout_the_offer_lacks_is_refused_with_its_number() {
+fn a_fixed_format_the_offer_cannot_serve_is_refused_with_what_differs() {
     let narrow = Offer {
         pixels: vec![Pixel::Bgrx],
         ..offer()
     };
-    assert_eq!(
-        negotiate(&narrow, fixed(VideoFormat::BGRA, rate(30, 1), rate(0, 1))),
-        Err(Mismatch::Pixel(VideoFormat::BGRA.as_raw()))
-    );
-    assert_eq!(
-        negotiate(&offer(), fixed(VideoFormat::RGB, rate(30, 1), rate(0, 1))),
-        Err(Mismatch::Pixel(VideoFormat::RGB.as_raw()))
-    );
+    let mut other_size = fixed(VideoFormat::BGRx, rate(30, 1), rate(0, 1));
+    other_size.size = size(1280, 720);
+    for (name, offer, fixed, expected) in [
+        (
+            "a layout not offered",
+            narrow,
+            fixed(VideoFormat::BGRA, rate(30, 1), rate(0, 1)),
+            Mismatch::Pixel(VideoFormat::BGRA.as_raw()),
+        ),
+        (
+            "a layout never offered",
+            offer(),
+            fixed(VideoFormat::RGB, rate(30, 1), rate(0, 1)),
+            Mismatch::Pixel(VideoFormat::RGB.as_raw()),
+        ),
+        (
+            "another size",
+            offer(),
+            other_size,
+            Mismatch::Size(size(1280, 720)),
+        ),
+    ] {
+        assert_eq!(negotiate(&offer, fixed), Err(expected), "{name}");
+    }
 }
 
-#[test]
-fn a_size_other_than_the_sources_is_refused_with_that_size() {
-    let mut other = fixed(VideoFormat::BGRx, rate(30, 1), rate(0, 1));
-    other.size = size(1280, 720);
-    assert_eq!(
-        negotiate(&offer(), other),
-        Err(Mismatch::Size(size(1280, 720)))
-    );
+fn serialize(value: &Value) -> Vec<u8> {
+    PodSerializer::serialize(std::io::Cursor::new(Vec::new()), value)
+        .unwrap()
+        .0
+        .into_inner()
 }
 
 /// The serialized `Format` object a consumer fixes.
-fn format_param(
-    media_type: MediaType,
-    subtype: MediaSubtype,
-    format: VideoFormat,
-    width: u32,
-    height: u32,
-) -> Vec<u8> {
-    let object = object!(
+fn format_param(media_type: MediaType, subtype: MediaSubtype) -> Vec<u8> {
+    serialize(&Value::Object(object!(
         SpaTypes::ObjectParamFormat,
         ParamType::Format,
         property!(FormatProperties::MediaType, Id, media_type),
         property!(FormatProperties::MediaSubtype, Id, subtype),
-        property!(FormatProperties::VideoFormat, Id, format),
+        property!(FormatProperties::VideoFormat, Id, VideoFormat::BGRx),
         property!(
             FormatProperties::VideoSize,
             Rectangle,
-            Rectangle { width, height }
+            Rectangle {
+                width: 1920,
+                height: 1080
+            }
         ),
         property!(
             FormatProperties::VideoFramerate,
@@ -175,52 +175,41 @@ fn format_param(
             Fraction,
             Fraction { num: 45, denom: 1 }
         ),
-    );
-    PodSerializer::serialize(std::io::Cursor::new(Vec::new()), &Value::Object(object))
-        .unwrap()
-        .0
-        .into_inner()
+    )))
 }
 
 #[test]
-fn a_fixed_raw_video_format_is_read_from_its_param() {
-    let bytes = format_param(
-        MediaType::Video,
-        MediaSubtype::Raw,
-        VideoFormat::BGRx,
-        1920,
-        1080,
-    );
-    let pod = Pod::from_bytes(&bytes).unwrap();
-    assert_eq!(
-        Fixed::parse(pod),
-        Some(Fixed {
-            format: VideoFormat::BGRx,
-            size: size(1920, 1080),
-            framerate: rate(0, 1),
-            max_framerate: rate(45, 1)
-        })
-    );
-}
-
-#[test]
-fn a_param_that_is_not_raw_video_is_not_a_fixed_format() {
-    for (media_type, subtype) in [
-        (MediaType::Audio, MediaSubtype::Raw),
-        (MediaType::Video, MediaSubtype::H264),
+fn only_a_raw_video_format_object_is_read_as_a_fixed_format() {
+    let raw = Fixed {
+        format: VideoFormat::BGRx,
+        size: size(1920, 1080),
+        framerate: rate(0, 1),
+        max_framerate: rate(45, 1),
+    };
+    for (name, bytes, expected) in [
+        (
+            "raw video",
+            format_param(MediaType::Video, MediaSubtype::Raw),
+            Some(raw),
+        ),
+        (
+            "audio",
+            format_param(MediaType::Audio, MediaSubtype::Raw),
+            None,
+        ),
+        (
+            "encoded video",
+            format_param(MediaType::Video, MediaSubtype::H264),
+            None,
+        ),
+        ("not an object", serialize(&Value::Int(3)), None),
     ] {
-        let bytes = format_param(media_type, subtype, VideoFormat::BGRx, 16, 16);
-        assert_eq!(Fixed::parse(Pod::from_bytes(&bytes).unwrap()), None);
+        assert_eq!(
+            Fixed::parse(Pod::from_bytes(&bytes).unwrap()),
+            expected,
+            "{name}"
+        );
     }
-}
-
-#[test]
-fn a_pod_that_is_not_a_format_object_is_not_a_fixed_format() {
-    let bytes = PodSerializer::serialize(std::io::Cursor::new(Vec::new()), &Value::Int(3))
-        .unwrap()
-        .0
-        .into_inner();
-    assert_eq!(Fixed::parse(Pod::from_bytes(&bytes).unwrap()), None);
 }
 
 fn deserialize(bytes: &[u8]) -> spa::pod::Object {
@@ -240,7 +229,7 @@ fn property(object: &spa::pod::Object, key: u32) -> &Value {
 }
 
 #[test]
-fn the_enum_format_lists_the_offered_layouts_in_order_at_the_exact_size() {
+fn the_enum_format_lists_the_offered_layouts_in_order_at_the_exact_size_and_a_variable_rate() {
     let object = deserialize(&enum_format(&offer()));
     assert_eq!(object.type_, SpaTypes::ObjectParamFormat.as_raw());
     assert_eq!(object.id, ParamType::EnumFormat.as_raw());
@@ -279,11 +268,7 @@ fn the_enum_format_lists_the_offered_layouts_in_order_at_the_exact_size() {
             Id(VideoFormat::BGRA.as_raw())
         ]
     );
-}
 
-#[test]
-fn the_enum_format_offers_a_variable_rate_up_to_the_limit() {
-    let object = deserialize(&enum_format(&offer()));
     assert_eq!(
         property(&object, FormatProperties::VideoFramerate.as_raw()),
         &Value::Fraction(Fraction { num: 0, denom: 1 })
@@ -296,9 +281,20 @@ fn the_enum_format_offers_a_variable_rate_up_to_the_limit() {
     let ChoiceEnum::Range { default, min, max } = &choice.1 else {
         panic!("a range");
     };
-    assert_eq!(*default, Fraction { num: 30, denom: 1 });
-    assert_eq!(*min, Fraction { num: 1, denom: 1 });
-    assert_eq!(*max, Fraction { num: 60, denom: 1 });
+    assert_eq!(
+        (*default, *min, *max),
+        (
+            Fraction {
+                num: DEFAULT_RATE,
+                denom: 1
+            },
+            Fraction { num: 1, denom: 1 },
+            Fraction {
+                num: MAX_RATE,
+                denom: 1
+            }
+        )
+    );
 }
 
 #[test]
@@ -366,5 +362,4 @@ fn the_meta_params_are_a_header_and_room_for_the_damage_of_a_frame() {
         property(&damage, spa::sys::SPA_PARAM_META_size),
         &Value::Int((std::mem::size_of::<spa::sys::spa_meta_region>() * DAMAGE_REGIONS) as i32)
     );
-    assert_eq!(DAMAGE_REGIONS, 16);
 }

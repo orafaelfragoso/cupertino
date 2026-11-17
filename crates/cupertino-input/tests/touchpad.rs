@@ -14,6 +14,9 @@ const GEOMETRY: TouchpadGeometry = TouchpadGeometry {
 /// One frame every 8 ms, the pace of a 120 Hz pad.
 const FRAME_S: f64 = 1.0 / 120.0;
 
+const LEFT_CLICK: [(TouchpadButton, bool); 2] =
+    [(TouchpadButton::Left, true), (TouchpadButton::Left, false)];
+
 fn finger(id: u32, x: f64, y: f64) -> TouchContact {
     TouchContact {
         id,
@@ -21,6 +24,13 @@ fn finger(id: u32, x: f64, y: f64) -> TouchContact {
         pressure: None,
         palm: false,
     }
+}
+
+fn fingers(at: &[(f64, f64)]) -> Vec<TouchContact> {
+    at.iter()
+        .enumerate()
+        .map(|(id, (x, y))| finger(id as u32, *x, *y))
+        .collect()
 }
 
 fn frame(time_s: f64, contacts: Vec<TouchContact>) -> TouchpadFrame {
@@ -39,8 +49,12 @@ struct Pad {
 
 impl Pad {
     fn new(settings: TouchpadSettings) -> Self {
+        Self::with_geometry(GEOMETRY, settings)
+    }
+
+    fn with_geometry(geometry: TouchpadGeometry, settings: TouchpadSettings) -> Self {
         Pad {
-            pad: Touchpad::new(GEOMETRY, settings),
+            pad: Touchpad::new(geometry, settings),
             t: 1.0,
             events: Vec::new(),
         }
@@ -105,6 +119,16 @@ fn motion(events: &[TouchpadEvent]) -> (f64, f64) {
     })
 }
 
+fn scrolled(events: &[TouchpadEvent]) -> f64 {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            TouchpadEvent::ScrollUpdate { dy, .. } => Some(*dy),
+            _ => None,
+        })
+        .sum()
+}
+
 fn tapping() -> TouchpadSettings {
     TouchpadSettings {
         tap_to_click: true,
@@ -112,8 +136,20 @@ fn tapping() -> TouchpadSettings {
     }
 }
 
+fn tap_drag() -> TouchpadSettings {
+    TouchpadSettings {
+        tap_to_click: true,
+        tap_drag: true,
+        ..TouchpadSettings::default()
+    }
+}
+
 #[test]
-fn one_finger_moving_moves_the_pointer_in_its_direction() {
+fn one_finger_moving_moves_the_pointer_in_its_direction_and_a_still_one_does_not() {
+    let mut still = Pad::new(TouchpadSettings::default());
+    still.hold(&[finger(0, 20.0, 20.0)], 0.5);
+    assert!(still.take().is_empty());
+
     let mut p = Pad::new(TouchpadSettings::default());
     p.step(vec![finger(0, 20.0, 20.0)]);
     assert!(p.take().is_empty(), "touching down does nothing");
@@ -124,424 +160,352 @@ fn one_finger_moving_moves_the_pointer_in_its_direction() {
 }
 
 #[test]
-fn a_still_finger_does_not_move_the_pointer() {
-    let mut p = Pad::new(TouchpadSettings::default());
-    p.hold(&[finger(0, 20.0, 20.0)], 0.5);
-    assert!(p.take().is_empty());
-}
-
-#[test]
 fn pointer_motion_is_reported_in_device_counts_whatever_the_speed() {
-    let travel = |frames: usize| {
+    // Acceleration belongs to the caller (`TouchpadSettings::pointer_accel`); the model reports 60 mm in counts.
+    let counts = 60.0 / MM_PER_COUNT;
+    for frames in [8, 80] {
         let mut p = Pad::new(TouchpadSettings::default());
         p.step(vec![finger(0, 10.0, 30.0)]);
         p.take();
         p.drag(&[(10.0, 30.0)], 60.0, 0.0, frames);
-        motion(&p.take()).0
+        let travel = motion(&p.take()).0;
+        assert!((travel - counts).abs() < 1.0, "{frames} frames: {travel}");
+    }
+}
+
+#[test]
+fn a_quick_still_touch_is_a_tap_when_tap_to_click_is_on() {
+    let one = [(30.0, 20.0)];
+    let two = [(30.0, 20.0), (45.0, 20.0)];
+    let right = [
+        (TouchpadButton::Right, true),
+        (TouchpadButton::Right, false),
+    ];
+    for (name, settings, at, seconds, travel, expected) in [
+        (
+            "a quick touch",
+            tapping(),
+            &one[..],
+            0.1,
+            0.0,
+            &LEFT_CLICK[..],
+        ),
+        (
+            "tap to click off",
+            TouchpadSettings::default(),
+            &one[..],
+            0.1,
+            0.0,
+            &[][..],
+        ),
+        ("a long touch", tapping(), &one[..], 0.4, 0.0, &[][..]),
+        ("two fingers", tapping(), &two[..], 0.1, 0.0, &right[..]),
+        (
+            "a touch that travels",
+            tapping(),
+            &one[..],
+            0.0,
+            40.0,
+            &[][..],
+        ),
+    ] {
+        let mut p = Pad::new(settings);
+        if seconds > 0.0 {
+            p.hold(&fingers(at), seconds);
+        } else {
+            p.step(fingers(at));
+            p.drag(at, travel, 0.0, 12);
+        }
+        p.lift();
+        assert_eq!(clicks(&p.take()), expected, "{name}");
+    }
+}
+
+#[test]
+fn a_physical_click_is_secondary_with_two_fingers_or_in_the_configured_corner() {
+    let one = [(30.0, 20.0)];
+    let two = [(30.0, 20.0), (45.0, 20.0)];
+    let corner = [(105.0, 66.0)];
+    let buttons = TouchpadGeometry {
+        clickpad: false,
+        ..GEOMETRY
     };
-    // Acceleration belongs to the caller (`TouchpadSettings::pointer_accel`); the model reports 60 mm in counts.
-    let counts = 60.0 / MM_PER_COUNT;
-    assert!((travel(8) - counts).abs() < 1.0, "{}", travel(8));
-    assert!((travel(80) - counts).abs() < 1.0, "{}", travel(80));
-}
-
-#[test]
-fn a_quick_touch_clicks_when_tap_to_click_is_on() {
-    let mut p = Pad::new(tapping());
-    p.hold(&[finger(0, 30.0, 20.0)], 0.1);
-    p.lift();
-    assert_eq!(
-        clicks(&p.take()),
-        [(TouchpadButton::Left, true), (TouchpadButton::Left, false)]
-    );
-}
-
-#[test]
-fn a_touch_does_not_click_with_tap_to_click_off() {
-    let mut p = Pad::new(TouchpadSettings::default());
-    p.hold(&[finger(0, 30.0, 20.0)], 0.1);
-    p.lift();
-    assert!(clicks(&p.take()).is_empty());
-}
-
-#[test]
-fn a_long_touch_is_not_a_tap() {
-    let mut p = Pad::new(tapping());
-    p.hold(&[finger(0, 30.0, 20.0)], 0.4);
-    p.lift();
-    assert!(clicks(&p.take()).is_empty());
-}
-
-#[test]
-fn a_two_finger_tap_is_a_secondary_click() {
-    let mut p = Pad::new(tapping());
-    let two = [finger(0, 30.0, 20.0), finger(1, 45.0, 20.0)];
-    p.hold(&two, 0.1);
-    p.lift();
-    assert_eq!(
-        clicks(&p.take()),
-        [
-            (TouchpadButton::Right, true),
-            (TouchpadButton::Right, false)
-        ]
-    );
-}
-
-#[test]
-fn a_touch_that_travels_is_not_a_tap() {
-    let mut p = Pad::new(tapping());
-    p.step(vec![finger(0, 20.0, 20.0)]);
-    p.drag(&[(20.0, 20.0)], 40.0, 0.0, 12);
-    p.lift();
-    assert!(clicks(&p.take()).is_empty());
-}
-
-#[test]
-fn a_physical_click_presses_and_releases_the_left_button() {
-    let mut p = Pad::new(TouchpadSettings::default());
-    let one = vec![finger(0, 30.0, 20.0)];
-    p.step(one.clone());
-    p.step_button(one.clone(), true);
-    p.step_button(one.clone(), true);
-    p.step_button(one, false);
-    assert_eq!(
-        clicks(&p.take()),
-        [(TouchpadButton::Left, true), (TouchpadButton::Left, false)]
-    );
-}
-
-#[test]
-fn a_click_with_two_fingers_down_is_a_secondary_click_when_enabled() {
-    let two = vec![finger(0, 30.0, 20.0), finger(1, 45.0, 20.0)];
-    let mut p = Pad::new(TouchpadSettings::default());
-    p.step(two.clone());
-    p.step_button(two.clone(), true);
-    p.step_button(two.clone(), false);
-    assert_eq!(
-        clicks(&p.take()),
-        [
-            (TouchpadButton::Right, true),
-            (TouchpadButton::Right, false)
-        ]
-    );
-    let mut off = Pad::new(TouchpadSettings {
+    let corner_click = |corner_click| TouchpadSettings {
+        corner_click,
+        ..TouchpadSettings::default()
+    };
+    let no_secondary = TouchpadSettings {
         secondary_click: false,
         ..TouchpadSettings::default()
-    });
-    off.step(two.clone());
-    off.step_button(two, true);
-    assert_eq!(clicks(&off.take()), [(TouchpadButton::Left, true)]);
-}
-
-#[test]
-fn a_click_in_a_configured_corner_is_a_secondary_click() {
-    let corner = vec![finger(0, 105.0, 66.0)];
-    let mut p = Pad::new(TouchpadSettings {
-        corner_click: CornerClick::BottomRight,
-        ..TouchpadSettings::default()
-    });
-    p.step(corner.clone());
-    p.step_button(corner.clone(), true);
-    assert_eq!(clicks(&p.take()), [(TouchpadButton::Right, true)]);
-    let mut other = Pad::new(TouchpadSettings {
-        corner_click: CornerClick::BottomLeft,
-        ..TouchpadSettings::default()
-    });
-    other.step(corner.clone());
-    other.step_button(corner, true);
-    assert_eq!(clicks(&other.take()), [(TouchpadButton::Left, true)]);
-}
-
-#[test]
-fn a_pad_with_its_own_buttons_always_reports_the_left_one() {
-    let mut p = Pad {
-        pad: Touchpad::new(
-            TouchpadGeometry {
-                clickpad: false,
-                ..GEOMETRY
-            },
-            TouchpadSettings::default(),
-        ),
-        t: 1.0,
-        events: Vec::new(),
     };
-    let two = vec![finger(0, 30.0, 20.0), finger(1, 45.0, 20.0)];
-    p.step(two.clone());
-    p.step_button(two, true);
-    assert_eq!(clicks(&p.take()), [(TouchpadButton::Left, true)]);
+    for (name, geometry, settings, at, button) in [
+        (
+            "one finger",
+            GEOMETRY,
+            TouchpadSettings::default(),
+            &one[..],
+            TouchpadButton::Left,
+        ),
+        (
+            "two fingers",
+            GEOMETRY,
+            TouchpadSettings::default(),
+            &two[..],
+            TouchpadButton::Right,
+        ),
+        (
+            "two fingers, secondary click off",
+            GEOMETRY,
+            no_secondary,
+            &two[..],
+            TouchpadButton::Left,
+        ),
+        (
+            "the configured corner",
+            GEOMETRY,
+            corner_click(CornerClick::BottomRight),
+            &corner[..],
+            TouchpadButton::Right,
+        ),
+        (
+            "another corner than the configured one",
+            GEOMETRY,
+            corner_click(CornerClick::BottomLeft),
+            &corner[..],
+            TouchpadButton::Left,
+        ),
+        (
+            "a pad with its own buttons",
+            buttons,
+            TouchpadSettings::default(),
+            &two[..],
+            TouchpadButton::Left,
+        ),
+    ] {
+        let mut p = Pad::with_geometry(geometry, settings);
+        p.step(fingers(at));
+        p.step_button(fingers(at), true);
+        p.step_button(fingers(at), true);
+        p.step_button(fingers(at), false);
+        assert_eq!(
+            clicks(&p.take()),
+            [(button, true), (button, false)],
+            "{name}"
+        );
+    }
 }
 
 #[test]
-fn two_fingers_moving_together_scroll() {
-    let mut p = Pad::new(TouchpadSettings::default());
+fn two_fingers_moving_together_scroll_in_the_natural_scrolling_direction() {
     let start = [(30.0, 20.0), (45.0, 20.0)];
-    p.step(vec![finger(0, 30.0, 20.0), finger(1, 45.0, 20.0)]);
-    p.drag(&start, 0.0, 25.0, 20);
-    let events = p.take();
-    assert!(events.contains(&TouchpadEvent::ScrollBegin));
-    let dy: f64 = events
-        .iter()
-        .filter_map(|e| match e {
-            TouchpadEvent::ScrollUpdate { dy, .. } => Some(*dy),
-            _ => None,
-        })
-        .sum();
-    assert!(dy != 0.0);
-    p.lift();
-    let end = p.take();
-    assert!(end
-        .iter()
-        .any(|e| matches!(e, TouchpadEvent::ScrollEnd { .. })));
-}
-
-#[test]
-fn scroll_direction_follows_the_natural_scrolling_setting() {
-    let total = |natural: bool| {
+    let mut totals = Vec::new();
+    for natural in [true, false] {
         let mut p = Pad::new(TouchpadSettings {
             natural_scrolling: natural,
             ..TouchpadSettings::default()
         });
-        let start = [(30.0, 20.0), (45.0, 20.0)];
-        p.step(vec![finger(0, 30.0, 20.0), finger(1, 45.0, 20.0)]);
+        p.step(fingers(&start));
         p.drag(&start, 0.0, 25.0, 20);
-        p.events
-            .iter()
-            .filter_map(|e| match e {
-                TouchpadEvent::ScrollUpdate { dy, .. } => Some(*dy),
-                _ => None,
-            })
-            .sum::<f64>()
-    };
-    let (natural, classic) = (total(true), total(false));
-    assert!(natural * classic < 0.0, "{natural} {classic}");
-}
-
-#[test]
-fn two_fingers_spreading_pinch() {
-    let mut p = Pad::new(TouchpadSettings::default());
-    p.step(vec![finger(0, 40.0, 30.0), finger(1, 60.0, 30.0)]);
-    for i in 1..=20 {
-        let spread = f64::from(i);
-        p.step(vec![
-            finger(0, 40.0 - spread / 2.0, 30.0),
-            finger(1, 60.0 + spread / 2.0, 30.0),
-        ]);
+        let events = p.take();
+        assert!(events.contains(&TouchpadEvent::ScrollBegin), "{natural}");
+        totals.push(scrolled(&events));
+        p.lift();
+        assert!(
+            p.take()
+                .iter()
+                .any(|e| matches!(e, TouchpadEvent::ScrollEnd { .. })),
+            "{natural}"
+        );
     }
-    let events = p.take();
-    assert!(events.contains(&TouchpadEvent::PinchBegin { fingers: 2 }));
-    let scale = events.iter().rev().find_map(|e| match e {
-        TouchpadEvent::PinchUpdate { scale, .. } => Some(*scale),
-        _ => None,
-    });
-    assert!((scale.expect("an update") - 2.0).abs() < 0.05);
-    assert!(!events.contains(&TouchpadEvent::ScrollBegin));
+    assert!(totals[0] * totals[1] < 0.0, "{totals:?}");
 }
 
 #[test]
-fn with_pinch_and_rotate_off_two_fingers_apart_scroll_instead() {
-    let mut p = Pad::new(TouchpadSettings {
-        pinch: false,
-        rotate: false,
-        ..TouchpadSettings::default()
-    });
-    p.step(vec![finger(0, 40.0, 30.0), finger(1, 60.0, 30.0)]);
-    for i in 1..=20 {
-        let spread = f64::from(i);
-        p.step(vec![
-            finger(0, 40.0 - spread / 2.0, 30.0 + spread),
-            finger(1, 60.0 + spread / 2.0, 30.0 + spread),
-        ]);
+fn two_fingers_spreading_pinch_or_scroll_with_pinch_and_rotate_off() {
+    for pinch in [true, false] {
+        let mut p = Pad::new(TouchpadSettings {
+            pinch,
+            rotate: pinch,
+            ..TouchpadSettings::default()
+        });
+        p.step(fingers(&[(40.0, 30.0), (60.0, 30.0)]));
+        for i in 1..=20 {
+            let spread = f64::from(i);
+            // Without pinch the pair also moves down, so it can scroll.
+            let down = if pinch { 0.0 } else { spread };
+            p.step(fingers(&[
+                (40.0 - spread / 2.0, 30.0 + down),
+                (60.0 + spread / 2.0, 30.0 + down),
+            ]));
+        }
+        let events = p.take();
+        let scale = events.iter().rev().find_map(|e| match e {
+            TouchpadEvent::PinchUpdate { scale, .. } => Some(*scale),
+            _ => None,
+        });
+        if pinch {
+            assert!(events.contains(&TouchpadEvent::PinchBegin { fingers: 2 }));
+            assert!((scale.expect("an update") - 2.0).abs() < 0.05);
+            assert!(!events.contains(&TouchpadEvent::ScrollBegin));
+        } else {
+            assert_eq!(scale, None);
+            assert!(events.contains(&TouchpadEvent::ScrollBegin));
+        }
     }
-    let events = p.take();
-    assert!(!events
-        .iter()
-        .any(|e| matches!(e, TouchpadEvent::PinchBegin { .. })));
-    assert!(events.contains(&TouchpadEvent::ScrollBegin));
 }
 
 #[test]
-fn three_fingers_swiping_sideways_drive_a_horizontal_swipe() {
-    let mut p = Pad::new(TouchpadSettings::default());
+fn three_fingers_swipe_along_an_axis_and_commit_only_when_far_enough() {
     let start = [(30.0, 20.0), (45.0, 20.0), (60.0, 20.0)];
-    p.step(
-        start
-            .iter()
-            .enumerate()
-            .map(|(i, (x, y))| finger(i as u32, *x, *y))
-            .collect(),
-    );
-    p.drag(&start, SWIPE_COMPLETE_MM, 0.0, 30);
-    let events = p.take();
-    assert!(events.contains(&TouchpadEvent::SwipeBegin {
-        fingers: 3,
-        axis: SwipeAxis::Horizontal
-    }));
-    let last = events.iter().rev().find_map(|e| match e {
-        TouchpadEvent::SwipeUpdate {
-            fingers: 3,
-            progress,
-        } => Some(*progress),
-        _ => None,
-    });
-    let progress = last.expect("updates");
-    assert!(progress.abs() > 0.5 && progress.abs() <= 1.5, "{progress}");
-    p.lift();
-    let end = p.take();
-    let committed = end.iter().find_map(|e| match e {
-        TouchpadEvent::SwipeEnd { committed, .. } => Some(*committed),
-        _ => None,
-    });
-    assert_eq!(committed, Some(true));
-}
+    for (name, dx, dy, axis, rest, committed) in [
+        (
+            "a full sideways swipe",
+            SWIPE_COMPLETE_MM,
+            0.0,
+            SwipeAxis::Horizontal,
+            0.0,
+            true,
+        ),
+        (
+            "a short swipe up, held",
+            0.0,
+            -15.0,
+            SwipeAxis::Vertical,
+            0.6,
+            false,
+        ),
+    ] {
+        let mut p = Pad::new(TouchpadSettings::default());
+        p.step(fingers(&start));
+        p.drag(&start, dx, dy, 30);
+        let events = p.take();
+        assert!(
+            events.contains(&TouchpadEvent::SwipeBegin { fingers: 3, axis }),
+            "{name}"
+        );
+        if committed {
+            let progress = events
+                .iter()
+                .rev()
+                .find_map(|e| match e {
+                    TouchpadEvent::SwipeUpdate {
+                        fingers: 3,
+                        progress,
+                    } => Some(*progress),
+                    _ => None,
+                })
+                .expect("updates");
+            assert!(progress.abs() > 0.5 && progress.abs() <= 1.5, "{progress}");
+        }
+        let moved: Vec<(f64, f64)> = start.iter().map(|(x, y)| (x + dx, y + dy)).collect();
+        p.hold(&fingers(&moved), rest);
+        p.lift();
+        let end = p.take().into_iter().find_map(|e| match e {
+            TouchpadEvent::SwipeEnd { committed, .. } => Some(committed),
+            _ => None,
+        });
+        assert_eq!(end, Some(committed), "{name}");
+    }
 
-#[test]
-fn a_short_swipe_is_cancelled_on_lift() {
-    let mut p = Pad::new(TouchpadSettings::default());
-    let start = [(30.0, 20.0), (45.0, 20.0), (60.0, 20.0)];
-    p.step(
-        start
-            .iter()
-            .enumerate()
-            .map(|(i, (x, y))| finger(i as u32, *x, *y))
-            .collect(),
-    );
-    p.drag(&start, 0.0, -15.0, 30);
-    let events = p.take();
-    assert!(events.contains(&TouchpadEvent::SwipeBegin {
-        fingers: 3,
-        axis: SwipeAxis::Vertical
-    }));
-    p.hold(
-        &start
-            .iter()
-            .enumerate()
-            .map(|(i, (x, y))| finger(i as u32, *x, y - 15.0))
-            .collect::<Vec<_>>(),
-        0.6,
-    );
-    p.lift();
-    let committed = p.take().into_iter().find_map(|e| match e {
-        TouchpadEvent::SwipeEnd { committed, .. } => Some(committed),
-        _ => None,
-    });
-    assert_eq!(committed, Some(false));
-}
-
-#[test]
-fn swipes_with_a_finger_count_that_is_turned_off_do_not_start() {
-    let mut p = Pad::new(TouchpadSettings {
+    let mut off = Pad::new(TouchpadSettings {
         three_finger_swipe: false,
         ..TouchpadSettings::default()
     });
-    let start = [(30.0, 20.0), (45.0, 20.0), (60.0, 20.0)];
-    p.step(
-        start
+    off.step(fingers(&start));
+    off.drag(&start, 40.0, 0.0, 20);
+    assert!(
+        !off.take()
             .iter()
-            .enumerate()
-            .map(|(i, (x, y))| finger(i as u32, *x, *y))
-            .collect(),
+            .any(|e| matches!(e, TouchpadEvent::SwipeBegin { .. })),
+        "a finger count that is turned off does not start"
     );
-    p.drag(&start, 40.0, 0.0, 20);
-    assert!(!p
-        .take()
-        .iter()
-        .any(|e| matches!(e, TouchpadEvent::SwipeBegin { .. })));
 }
 
 #[test]
-fn a_palm_contact_is_ignored() {
-    let mut p = Pad::new(tapping());
-    let palm = TouchContact {
+fn a_palm_or_a_resting_thumb_does_not_count_as_a_finger() {
+    let mut palm = Pad::new(tapping());
+    let resting_palm = TouchContact {
         palm: true,
         ..finger(1, 80.0, 60.0)
     };
-    p.step(vec![finger(0, 30.0, 20.0), palm]);
-    p.drag(&[(30.0, 20.0)], 20.0, 0.0, 10);
-    let events = p.take();
-    assert!(
-        motion(&events).0 > 0.0,
-        "the other finger still moves the pointer"
-    );
-    assert!(!events.contains(&TouchpadEvent::ScrollBegin));
-}
+    palm.step(vec![finger(0, 30.0, 20.0), resting_palm]);
+    palm.drag(&[(30.0, 20.0)], 20.0, 0.0, 10);
 
-#[test]
-fn a_thumb_resting_in_the_bottom_zone_does_not_count_as_a_finger() {
-    let mut p = Pad::new(TouchpadSettings::default());
-    let thumb = finger(1, 55.0, 68.0);
-    // The thumb lands first and rests for longer than a tap; then a finger lands.
-    p.hold(&[thumb], 0.4);
-    p.step(vec![thumb, finger(0, 20.0, 20.0)]);
-    p.take();
+    let mut thumb = Pad::new(TouchpadSettings::default());
+    let resting_thumb = finger(1, 55.0, 68.0);
+    // The thumb lands in the bottom zone and rests for longer than a tap; then a finger lands.
+    thumb.hold(&[resting_thumb], 0.4);
+    thumb.step(vec![resting_thumb, finger(0, 20.0, 20.0)]);
+    thumb.take();
     for i in 1..=10 {
-        p.step(vec![thumb, finger(0, 20.0 + f64::from(i) * 3.0, 20.0)]);
+        thumb.step(vec![
+            resting_thumb,
+            finger(0, 20.0 + f64::from(i) * 3.0, 20.0),
+        ]);
     }
-    let events = p.take();
-    assert!(
-        motion(&events).0 > 0.0,
-        "one counted finger moves the pointer"
-    );
-    assert!(!events.contains(&TouchpadEvent::ScrollBegin));
+
+    for (name, mut p) in [("palm", palm), ("thumb", thumb)] {
+        let events = p.take();
+        assert!(
+            motion(&events).0 > 0.0,
+            "{name}: the finger moves the pointer"
+        );
+        assert!(!events.contains(&TouchpadEvent::ScrollBegin), "{name}");
+    }
 }
 
 #[test]
 fn a_hard_press_is_a_force_click_with_hysteresis() {
     let mut p = Pad::new(TouchpadSettings::default());
-    let at = |pressure: f64| {
-        vec![TouchContact {
+    for (pressure, expected) in [
+        (0.2, None),
+        (0.7, Some(true)),
+        // Stays active between the release and activation levels.
+        (0.55, None),
+        (0.3, Some(false)),
+    ] {
+        p.step(vec![TouchContact {
             pressure: Some(pressure),
             ..finger(0, 30.0, 20.0)
-        }]
-    };
-    p.step(at(0.2));
-    assert!(p.take().is_empty());
-    p.step(at(0.7));
-    assert_eq!(p.take(), [TouchpadEvent::ForceClick { active: true }]);
-    p.step(at(0.55));
-    assert!(
-        p.take().is_empty(),
-        "stays active between the release and activation levels"
-    );
-    p.step(at(0.3));
-    assert_eq!(p.take(), [TouchpadEvent::ForceClick { active: false }]);
+        }]);
+        let expected: Vec<TouchpadEvent> = expected
+            .map(|active| TouchpadEvent::ForceClick { active })
+            .into_iter()
+            .collect();
+        assert_eq!(p.take(), expected, "{pressure}");
+    }
 }
 
 #[test]
 fn the_click_pressure_setting_moves_the_force_threshold() {
-    let force_at = |pressure: ClickPressure, level: f64| {
+    for (pressure, force_click, level, fires) in [
+        (ClickPressure::Light, true, 0.5, true),
+        (ClickPressure::Medium, true, 0.5, false),
+        (ClickPressure::Firm, true, 0.65, false),
+        (ClickPressure::Firm, true, 0.75, true),
+        (ClickPressure::Medium, false, 1.0, false),
+    ] {
         let mut p = Pad::new(TouchpadSettings {
             click_pressure: pressure,
+            force_click,
             ..TouchpadSettings::default()
         });
         p.step(vec![TouchContact {
             pressure: Some(level),
             ..finger(0, 30.0, 20.0)
         }]);
-        p.take()
-            .contains(&TouchpadEvent::ForceClick { active: true })
-    };
-    assert!(force_at(ClickPressure::Light, 0.5));
-    assert!(!force_at(ClickPressure::Medium, 0.5));
-    assert!(!force_at(ClickPressure::Firm, 0.65));
-    assert!(force_at(ClickPressure::Firm, 0.75));
-    let mut off = Pad::new(TouchpadSettings {
-        force_click: false,
-        ..TouchpadSettings::default()
-    });
-    off.step(vec![TouchContact {
-        pressure: Some(1.0),
-        ..finger(0, 30.0, 20.0)
-    }]);
-    assert!(off.take().is_empty());
+        assert_eq!(
+            p.take()
+                .contains(&TouchpadEvent::ForceClick { active: true }),
+            fires,
+            "{pressure:?} force click {force_click} at {level}"
+        );
+    }
 }
 
 #[test]
 fn a_tap_and_a_touch_within_the_window_starts_a_drag() {
-    let mut p = Pad::new(TouchpadSettings {
-        tap_to_click: true,
-        tap_drag: true,
-        ..TouchpadSettings::default()
-    });
+    let mut p = Pad::new(tap_drag());
     p.hold(&[finger(0, 30.0, 20.0)], 0.08);
     p.lift();
     assert!(
@@ -569,21 +533,17 @@ fn a_tap_and_a_touch_within_the_window_starts_a_drag() {
 }
 
 #[test]
-fn a_single_tap_with_tap_drag_clicks_after_the_hold_time() {
-    let mut p = Pad::new(TouchpadSettings {
-        tap_to_click: true,
-        tap_drag: true,
-        ..TouchpadSettings::default()
-    });
+fn a_single_tap_with_tap_drag_clicks_when_its_deadline_is_due() {
+    let mut idle = Touchpad::new(GEOMETRY, TouchpadSettings::default());
+    assert_eq!(idle.next_deadline(), None, "an idle pad has nothing due");
+    assert!(idle.tick(10.0).is_empty());
+
+    let mut p = Pad::new(tap_drag());
     p.hold(&[finger(0, 30.0, 20.0)], 0.08);
     p.lift();
     let due = p.pad.next_deadline().expect("a held-back click");
     assert!(p.pad.tick(due - 0.01).is_empty());
-    let out = p.pad.tick(due);
-    assert_eq!(
-        clicks(&out),
-        [(TouchpadButton::Left, true), (TouchpadButton::Left, false)]
-    );
+    assert_eq!(clicks(&p.pad.tick(due)), LEFT_CLICK);
 }
 
 #[test]
@@ -594,11 +554,4 @@ fn time_going_backwards_is_a_bug_in_the_caller() {
         pad.process_frame(&frame(1.0, Vec::new()))
     }));
     assert!(result.is_err());
-}
-
-#[test]
-fn an_idle_pad_has_nothing_due() {
-    let mut pad = Touchpad::new(GEOMETRY, TouchpadSettings::default());
-    assert_eq!(pad.next_deadline(), None);
-    assert!(pad.tick(10.0).is_empty());
 }

@@ -80,7 +80,7 @@ fn only_a_fast_wide_shake_grows_the_cursor() {
         let (triggered, t) = shake(&mut d, sweeps, width, dt, 0.0);
         assert_eq!(triggered, shakes, "{name}");
         let m = d.evaluate(t);
-        assert!(m >= 1.0 && m <= SHAKE_SCALE_MAX, "{name}: {m}");
+        assert!((1.0..=SHAKE_SCALE_MAX).contains(&m), "{name}: {m}");
         if shakes {
             assert!(m > 1.0, "{name}: {m}");
         }

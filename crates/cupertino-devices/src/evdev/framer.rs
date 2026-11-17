@@ -269,7 +269,7 @@ impl Framer {
     /// event up to the next `SYN_REPORT`, which then returns [`FramerOutput::ResyncNeeded`].
     pub fn push(&mut self, event: &InputEvent) -> Result<Option<FramerOutput>, FrameError> {
         if event.kind == EV_SYN && event.code == SYN_DROPPED {
-            self.pending = Pending::default();
+            self.discard_pending();
             self.dropping = true;
             return Ok(None);
         }
@@ -323,6 +323,8 @@ impl Framer {
             (Vec::new(), 0)
         };
 
+        // Diff against the state the consumer last saw, not one that includes the partial frame's transitions.
+        self.discard_pending();
         let mut pending = Pending::default();
         for code in 0..=KEY_MAX {
             let was = self.pressed.contains(code);
@@ -403,6 +405,26 @@ impl Framer {
             slot.tool = tools.map_or(Tool::Finger, |values| Tool::from_raw(values[index]));
         }
         Ok((slots, current_slot))
+    }
+
+    /// Drops the partial frame and undoes its key and switch transitions in reverse order, so `pressed` and
+    /// `switches_on` hold the state as last reported.
+    fn discard_pending(&mut self) {
+        let pending = std::mem::take(&mut self.pending);
+        for event in pending.keys.iter().rev() {
+            match event.state {
+                KeyState::Pressed => self.pressed.insert(event.code, false),
+                KeyState::Released => self.pressed.insert(event.code, true),
+                KeyState::Repeat => {}
+            }
+        }
+        for event in pending.switches.iter().rev() {
+            let code = match event.switch {
+                Switch::Lid => SW_LID,
+                Switch::TabletMode => SW_TABLET_MODE,
+            };
+            self.switches_on.insert(code, !event.on);
+        }
     }
 
     fn key(&mut self, code: u16, value: i32) -> Result<(), FrameError> {

@@ -119,7 +119,7 @@ Cupertino is a set of small processes around one compositor.
 | `cupertino-netd`, `cupertino-btd`, `cupertino-powerd` | network, Bluetooth and power daemons |
 | `cupertino` | the command line ([The cupertino command](docs/src/cupertino-command.md)) |
 
-The 90 crates of the workspace are layered (`foundation`, `models`, `platform`, `protocol`, `transport`, `render`, `ui`, `core`, `shell`, `services`, `apps`, `tools`). Model crates are pure logic, tested without a display, and `cargo run -p cupertino-layers` checks that no crate reaches above its layer. [Architecture](docs/src/architecture.md) describes the design.
+The crates of the workspace are layered (`foundation`, `graphics`, `models`, `system`, `platform`, `protocol`, `transport`, `render`, `ui`, `shellkit`, `core`, `services`, `shell`, `apps`, `tools`, `testing`). Model crates are pure logic, tested without a display, and `cargo run -p cupertino-layers` checks that no crate reaches above its layer. [Architecture](docs/src/architecture.md) describes the design.
 
 Apps can be written in Rust with CupertinoKit ([Getting started with Kit](docs/src/kit-getting-started.md)). A C SDK is in progress.
 
@@ -136,7 +136,7 @@ Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) for how to bu
 
 ## Licence
 
-Cupertino is licensed under the [GNU General Public License, version 3 or (at your option) any later version](LICENSE) (`GPL-3.0-or-later`), except the library crates under the [Mozilla Public License 2.0](https://www.mozilla.org/en-US/MPL/2.0/) (`MPL-2.0`): `cupertino-wayland-client` and the crates it and the toolkit libraries depend on, each with its own `LICENSE`. An MPL-2.0 crate may not depend on a GPL crate, and `cargo run -p cupertino-layers` checks it. Contributions are accepted under a contributor licence agreement; see [CONTRIBUTING.md](CONTRIBUTING.md).
+Cupertino is licensed under the [GNU General Public License, version 3 or (at your option) any later version](LICENSE) (`GPL-3.0-or-later`), except the library crates under the [Mozilla Public License 2.0](https://www.mozilla.org/en-US/MPL/2.0/) (`MPL-2.0`): `cupertino-wayland-client` and the crates it and the toolkit libraries depend on, each with its own `LICENSE`. Contributions are accepted under a contributor licence agreement; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 The default asset pack uses the Inter font, Cupertino's own cursors and its own icons (`data/assets/cupertino`, `GPL-3.0-or-later`). Other packs are data and are not part of the source tree.
 

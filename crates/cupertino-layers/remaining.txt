@@ -1,5 +1,7 @@
 # The target layer rules that crates still break, one problem per line: <layer> <rule> <crate> ...
 # Written by `cargo run -q -p cupertino-layers -- --write-remaining`; never edit by hand. Lines only leave.
+apps disallowed_methods cupertino-files clippy.toml
+apps disallowed_methods cupertino-settings clippy.toml
 apps external_crate cupertino-files -> tiny-skia dev
 apps external_crate cupertino-files -> wayland-client normal
 apps external_crate cupertino-files -> wayland-protocols normal
@@ -124,6 +126,18 @@ foundation impure_source xkbcommon src/xkb/mod.rs unsafe
 models external_crate cupertino-effects -> tiny-skia normal
 models impure_source cupertino-effects examples/render_effects.rs std::fs
 platform external_crate cupertino-seat -> smithay normal
+shell disallowed_methods cupertino-control clippy.toml
+shell disallowed_methods cupertino-controlcenter clippy.toml
+shell disallowed_methods cupertino-dock clippy.toml
+shell disallowed_methods cupertino-launcher clippy.toml
+shell disallowed_methods cupertino-login clippy.toml
+shell disallowed_methods cupertino-menubar clippy.toml
+shell disallowed_methods cupertino-notifications clippy.toml
+shell disallowed_methods cupertino-osd clippy.toml
+shell disallowed_methods cupertino-polkit-agent clippy.toml
+shell disallowed_methods cupertino-portal clippy.toml
+shell disallowed_methods cupertino-screenshot clippy.toml
+shell disallowed_methods cupertino-windowmanager clippy.toml
 shell external_crate cupertino-control -> image normal
 shell external_crate cupertino-control -> wayland-client normal
 shell external_crate cupertino-control -> wayland-protocols normal

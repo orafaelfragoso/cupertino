@@ -54,27 +54,55 @@ The server composites and draws its materials (backdrop blur, glass) on the GPU 
 
 ## Crate layers
 
-A crate's layer is declared in its manifest (`[package.metadata.cupertino] layer`). `cargo run -p cupertino-layers` fails on any dependency between layers that the table does not allow.
+A crate's layer is declared in its manifest (`[package.metadata.cupertino] layer`). The table, from the bottom, says
+which layers each layer may depend on, in normal, build and dev dependencies; every crate may also have `testing` crates
+as dev-dependencies, and only dev-dependencies point at a `testing` crate. The crates column is what each crate declares.
 
 | Layer | Crates | May depend on |
 |---|---|---|
-| `foundation` | `cupertino-animation`, `cupertino-apps`, `cupertino-assets`, `cupertino-build-info`, `cupertino-capture`, `cupertino-defaults`, `cupertino-diagnostic-events`, `cupertino-filepicker`, `cupertino-geometry`, `cupertino-glyph`, `cupertino-icons`, `cupertino-key-bindings`, `cupertino-keyboard`, `cupertino-menu-model`, `cupertino-modifiers`, `cupertino-radios`, `cupertino-theme`, `cupertino-thumbnails`, `cupertino-trash`, `cupertino-typeahead`, `xkbcommon` | `foundation` |
-| `graphics` (the one definition of the drawing maths, and the thin GPU layer) | `cupertino-gpu`, `cupertino-raster-math` | `foundation`, `graphics` |
-| `models` (pure logic, no I/O) | `cupertino-control-model`, `cupertino-displays`, `cupertino-effects`, `cupertino-input`, `cupertino-overview`, `cupertino-render-api`, `cupertino-scene`, `cupertino-stage`, `cupertino-wm` | `foundation`, `models` |
-| `platform` (kernel interfaces, and the PipeWire boundary) | `cupertino-alsa`, `cupertino-bluetooth`, `cupertino-devices`, `cupertino-evdev`, `cupertino-netlink`, `cupertino-peer`, `cupertino-pipewire`, `cupertino-screencast`, `cupertino-seat` | `foundation`, `platform` |
-| `protocol` | `cupertino-app-protocols`, `cupertino-login-ipc`, `cupertino-protocols`, `cupertino-semantics` | `foundation`, `protocol` |
-| `transport` | `cupertino-protocol-app`, `cupertino-shell-client`, `cupertino-wayland-client` | `foundation`, `platform`, `protocol`, `transport` |
-| `render` | `cupertino-cursor`, `cupertino-decorations`, `cupertino-glass` | `foundation`, `graphics`, `platform`, `render` |
-| `ui` (the toolkit) | `cupertino-kit`, `cupertino-ui-abi`, `cupertino-ui-atspi`, `cupertino-ui-controls`, `cupertino-ui-core`, `cupertino-ui-gpu`, `cupertino-ui-layout`, `cupertino-ui-menus`, `cupertino-ui-platform`, `cupertino-ui-render`, `cupertino-ui-test`, `cupertino-ui-text`, `cupertino-ui-theme`, `cupertino-ui-wayland` | `foundation`, `graphics`, `protocol`, `transport`, `ui` |
-| `core` | `cupertino-server` | `foundation`, `graphics`, `models`, `platform`, `protocol`, `render` |
-| `shell` | `cupertino-control`, `cupertino-controlcenter`, `cupertino-dock`, `cupertino-launcher`, `cupertino-login`, `cupertino-menubar`, `cupertino-notifications`, `cupertino-osd`, `cupertino-polkit-agent`, `cupertino-portal`, `cupertino-screenshot`, `cupertino-windowmanager` | `foundation`, `graphics`, `models`, `platform`, `protocol`, `transport`, `render`, `ui` |
-| `services` | `cupertino-btd`, `cupertino-netd`, `cupertino-powerd`, `cupertino-sessiond` | `foundation`, `models`, `platform`, `protocol`, `services` |
-| `apps` | `cupertino-files`, `cupertino-settings` | `foundation`, `graphics`, `models`, `protocol`, `transport`, `ui` |
-| `tools` | `cupertino-cli`, `cupertino-diagnostics`, `cupertino-gpu-shaders`, `cupertino-gpu-slice`, `cupertino-layers` | all but `core`, `shell`, `services`, `apps` |
+| `foundation` (values, maths and data models with no I/O) | `cupertino-animation`, `cupertino-apps`, `cupertino-assets`, `cupertino-build-info`, `cupertino-capture`, `cupertino-defaults`, `cupertino-diagnostic-events`, `cupertino-filepicker`, `cupertino-geometry`, `cupertino-glyph`, `cupertino-icons`, `cupertino-key-bindings`, `cupertino-keyboard`, `cupertino-menu-model`, `cupertino-modifiers`, `cupertino-profile`, `cupertino-radios`, `cupertino-theme`, `cupertino-thumbnails`, `cupertino-trash`, `cupertino-typeahead`, `xkbcommon` | `foundation` |
+| `graphics` (the one definition of the drawing maths, and the GPU device) | `cupertino-gpu`, `cupertino-raster-math` | `foundation`, `graphics` |
+| `models` (desktop policy as pure logic) | `cupertino-control-model`, `cupertino-displays`, `cupertino-effects`, `cupertino-input`, `cupertino-overview`, `cupertino-render-api`, `cupertino-scene`, `cupertino-stage`, `cupertino-wm` | `foundation`, `models` |
+| `system` (user-space operating-system access) | none | `foundation`, `system` |
+| `platform` (kernel interfaces that more than one program needs) | `cupertino-alsa`, `cupertino-bluetooth`, `cupertino-devices`, `cupertino-evdev`, `cupertino-netlink`, `cupertino-peer`, `cupertino-pipewire`, `cupertino-screencast`, `cupertino-seat` | `foundation`, `platform` |
+| `protocol` (wire schemas) | `cupertino-app-protocols`, `cupertino-login-ipc`, `cupertino-protocols`, `cupertino-semantics` | `foundation`, `protocol` |
+| `transport` (client connections without widgets) | `cupertino-protocol-app`, `cupertino-shell-client`, `cupertino-wayland-client` | `foundation`, `system`, `platform`, `protocol`, `transport` |
+| `render` (the compositor's own drawing) | `cupertino-cursor`, `cupertino-decorations`, `cupertino-glass` | `foundation`, `graphics`, `system`, `platform`, `render` |
+| `ui` (the toolkit) | `cupertino-kit`, `cupertino-ui-abi`, `cupertino-ui-atspi`, `cupertino-ui-controls`, `cupertino-ui-core`, `cupertino-ui-gpu`, `cupertino-ui-layout`, `cupertino-ui-menus`, `cupertino-ui-platform`, `cupertino-ui-render`, `cupertino-ui-test`, `cupertino-ui-text`, `cupertino-ui-theme`, `cupertino-ui-wayland` | `foundation`, `graphics`, `system`, `protocol`, `transport`, `ui` |
+| `shellkit` (the shell's extension of the toolkit) | none | `foundation`, `system`, `protocol`, `transport`, `ui` |
+| `core` (the compositor) | `cupertino-server` | `foundation`, `graphics`, `models`, `system`, `platform`, `protocol`, `render`, `core` |
+| `services` (processes with no interface of their own) | `cupertino-btd`, `cupertino-netd`, `cupertino-powerd`, `cupertino-sessiond` | `foundation`, `models`, `system`, `platform`, `protocol`, `transport`, `services` |
+| `shell` | `cupertino-control`, `cupertino-controlcenter`, `cupertino-dock`, `cupertino-launcher`, `cupertino-login`, `cupertino-menubar`, `cupertino-notifications`, `cupertino-osd`, `cupertino-polkit-agent`, `cupertino-portal`, `cupertino-screenshot`, `cupertino-windowmanager` | `foundation`, `models`, `system`, `protocol`, `ui`, `shellkit`, `shell` |
+| `apps` | `cupertino-files`, `cupertino-settings` | `foundation`, `models`, `system`, `protocol`, `ui` |
+| `tools` | `cupertino-cli`, `cupertino-diagnostics`, `cupertino-gpu-shaders`, `cupertino-gpu-slice`, `cupertino-layers`, `xtask` | every layer except `core`, `shell`, `services`, `apps`, `testing` |
+| `testing` (test harnesses, tests that start programs from more than one crate) | none | every layer |
 
-`shell`, `services`, `apps` and `tools` crates never depend on `core` or on each other. Each shell component is one crate: its pure model plus a binary behind an `app` feature. Only `cupertino-server` and `cupertino-seat` (which implements Smithay's session trait) depend on Smithay. The `xkbcommon` package of the workspace is `cupertino-xkbcommon`, a pure-Rust drop-in for the C-binding crate, selected through `[patch.crates-io]`.
+Further rules:
 
-An edge the table forbids that exists today is listed as an exception in `cupertino-layers` (permanent, or migration debt with its issue), and any dependency chain from `ui` to `core`, `shell` or `services` fails even when its edges are excused. `crates/cupertino-layers/graph/layers.dot` is a DOT snapshot of the layers, (`cargo run -p cupertino-layers -- --graph` writes it).
+- No crate reaches a higher layer through a chain of dependencies, also not through `tools` or `testing`.
+- `foundation` and `models` sources use no `std::fs`, `std::net`, `std::process`, `std::env`, `std::thread`, no
+  `unsafe` and no FFI. Build scripts and `tests/` are exempt.
+- A `shell` crate never depends on another `shell` crate, except the shell host on its components.
+- `cupertino-wayland-client` never reaches `cupertino-protocols` or the wlr, misc or plasma protocol crates;
+  `cupertino-app-protocols` never reaches `cupertino-protocols`; `cupertino-kit` and the `cupertino-ui-*` crates never
+  reach `cupertino-protocols` or `cupertino-shell-client`; `cupertino-ui-render` never reaches `cupertino-ui-wayland` or
+  `cupertino-wayland-client`.
+- `shell` and `apps` crates reach the toolkit only through `cupertino-kit`, and `cupertino-shell-client` and
+  `cupertino-protocols` only through `cupertino-kit-shell` (for `shell` crates).
+- External crates stay in their layers: Smithay in `core` only; the image, Wayland client, `xkbcommon`,
+  `wayland-server`, `zbus` and system-call crates in the layers `cupertino-layers` lists for them.
+- Every `shell` and `apps` crate holds the `clippy.toml` that `cupertino-layers` writes, which disallows starting
+  threads, `block_on`, `std::fs` and blocking bus calls.
+- Every crate declares a licence.
+
+`cargo run -p cupertino-layers` checks them all. The problems that crates still have are listed one per line in
+`crates/cupertino-layers/remaining.txt`: the check fails on a problem the list does not hold and on a line that is no
+longer a problem, so the list only shrinks, and `cargo run -q -p cupertino-layers -- --write-remaining` writes it again.
+The layers in `ENFORCED` in `cupertino-layers` are closed: none of their problems may be listed. Test code outside a
+crate's `tests/` is refused by the gate of `cargo xtask ci`. The `xkbcommon` package of the workspace is
+`cupertino-xkbcommon`, a pure-Rust drop-in for the C-binding crate, selected through `[patch.crates-io]`.
+`crates/cupertino-layers/graph/layers.dot` is a DOT snapshot of the layers (`cargo run -p cupertino-layers -- --graph`
+writes it).
 
 ## Contracts registry
 

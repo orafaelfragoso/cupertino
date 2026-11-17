@@ -5,7 +5,8 @@
 //! cupertino-layers                     (run from anywhere inside the workspace)
 //! cupertino-layers --graph             DOT graph of the layers on stdout
 //! cupertino-layers --write-remaining   write the remaining-work file from the problems found
-//! cupertino-layers --write-clippy      write the clippy.toml of every shell and apps crate
+//! cupertino-layers --write-clippy [CRATE…]
+//!                                      write the clippy.toml of these shell and apps crates, or of all of them
 //! ```
 //!
 //! `cupertino dev layers` runs the same check through [`cupertino_layers::check_workspace`].
@@ -16,7 +17,7 @@ enum Mode {
     Check,
     Graph,
     WriteRemaining,
-    WriteClippy,
+    WriteClippy(Vec<String>),
 }
 
 fn main() -> ExitCode {
@@ -25,9 +26,13 @@ fn main() -> ExitCode {
         [] => Mode::Check,
         ["--graph"] => Mode::Graph,
         ["--write-remaining"] => Mode::WriteRemaining,
-        ["--write-clippy"] => Mode::WriteClippy,
+        ["--write-clippy", ref crates @ ..] => {
+            Mode::WriteClippy(crates.iter().map(|c| (*c).to_owned()).collect())
+        }
         _ => {
-            eprintln!("usage: cupertino-layers [--graph | --write-remaining | --write-clippy]");
+            eprintln!(
+                "usage: cupertino-layers [--graph | --write-remaining | --write-clippy [CRATE...]]"
+            );
             return ExitCode::from(2);
         }
     };
@@ -51,8 +56,9 @@ fn main() -> ExitCode {
             println!("{}: {lines} lines", cupertino_layers::REMAINING);
             findings.problems_writing_the_remaining_work().collect()
         }
-        Mode::WriteClippy => {
-            match findings.write_clippy() {
+        Mode::WriteClippy(ref crates) => {
+            let crates: Vec<&str> = crates.iter().map(String::as_str).collect();
+            match findings.write_clippy(&crates) {
                 Ok(written) => {
                     for path in written {
                         println!("{}", path.display());
@@ -72,7 +78,7 @@ fn main() -> ExitCode {
     match mode {
         Mode::Check => println!("{}", findings.summary()),
         Mode::Graph => print!("{}", findings.dot()),
-        Mode::WriteRemaining | Mode::WriteClippy => {}
+        Mode::WriteRemaining | Mode::WriteClippy(_) => {}
     }
     if problems.is_empty() {
         ExitCode::SUCCESS

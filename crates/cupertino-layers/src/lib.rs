@@ -439,8 +439,8 @@ pub enum Problem {
     /// The committed DOT snapshot of the layers, at this path relative to the workspace root, no longer matches the
     /// workspace.
     StaleGraph(String),
-    /// The `clippy.toml` at this path relative to the workspace root differs from the list of disallowed methods.
-    StaleClippy(String),
+    /// A `shell` or `apps` crate whose `clippy.toml` is missing or differs from the list of disallowed methods.
+    DisallowedMethods { krate: String, layer: Layer },
 }
 
 impl Problem {
@@ -458,7 +458,7 @@ impl Problem {
             Problem::StaleRemaining(_) => "stale_remaining",
             Problem::EnforcedRemaining(_) => "enforced_remaining",
             Problem::StaleGraph(_) => "stale_graph",
-            Problem::StaleClippy(_) => "stale_clippy",
+            Problem::DisallowedMethods { .. } => "disallowed_methods",
         }
     }
 
@@ -472,11 +472,12 @@ impl Problem {
                 path.first().map_or("", String::as_str)
             }
             Problem::ExternalCrate { from, .. } => from,
-            Problem::Impure { krate, .. } | Problem::UndeclaredLicence { krate, .. } => krate,
-            Problem::StaleRemaining(_)
-            | Problem::EnforcedRemaining(_)
-            | Problem::StaleGraph(_)
-            | Problem::StaleClippy(_) => "cupertino-layers",
+            Problem::Impure { krate, .. }
+            | Problem::UndeclaredLicence { krate, .. }
+            | Problem::DisallowedMethods { krate, .. } => krate,
+            Problem::StaleRemaining(_) | Problem::EnforcedRemaining(_) | Problem::StaleGraph(_) => {
+                "cupertino-layers"
+            }
         }
     }
 
@@ -503,9 +504,9 @@ impl Problem {
             Problem::ReachesUp { from_layer, .. }
             | Problem::WindowSystem { from_layer, .. }
             | Problem::ExternalCrate { from_layer, .. } => Some(*from_layer),
-            Problem::Impure { layer, .. } | Problem::UndeclaredLicence { layer, .. } => {
-                Some(*layer)
-            }
+            Problem::Impure { layer, .. }
+            | Problem::UndeclaredLicence { layer, .. }
+            | Problem::DisallowedMethods { layer, .. } => Some(*layer),
             _ => None,
         }
     }
@@ -529,6 +530,7 @@ impl Problem {
                 krate, file, what, ..
             } => format!("{krate} {file} {what}"),
             Problem::UndeclaredLicence { krate, .. } => krate.clone(),
+            Problem::DisallowedMethods { krate, .. } => format!("{krate} clippy.toml"),
             _ => return None,
         };
         Some(format!("{layer} {kind} {rest}"))
@@ -599,9 +601,10 @@ impl fmt::Display for Problem {
                 f,
                 "{path} is out of date: cargo run -q -p cupertino-layers -- --graph > {path}"
             ),
-            Problem::StaleClippy(path) => write!(
+            Problem::DisallowedMethods { krate, layer } => write!(
                 f,
-                "{path} differs from the disallowed methods: cargo run -q -p cupertino-layers -- --write-clippy"
+                "{krate} ({layer}) has no clippy.toml with the disallowed methods: remove its banned calls, then \
+                 cargo run -q -p cupertino-layers -- --write-clippy {krate}"
             ),
         }
     }

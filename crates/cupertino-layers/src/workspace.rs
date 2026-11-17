@@ -1,6 +1,6 @@
 //! Every check on a checkout: `cargo metadata` read into layers, dependencies and licences, the sources of the pure
-//! layers read, then every rule checked and compared with the remaining-work file, the graph snapshot and the
-//! `clippy.toml` files.
+//! layers and the `clippy.toml` files read, then every rule checked and compared with the remaining-work file and the
+//! graph snapshot.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -93,11 +93,10 @@ pub struct Findings {
     pub remaining: Vec<String>,
     /// [`Problem::StaleRemaining`] and [`Problem::EnforcedRemaining`] for lines of the file.
     pub listing: Vec<Problem>,
-    /// [`Problem::StaleGraph`] when the workspace has a committed graph snapshot that no longer matches it, and
-    /// [`Problem::StaleClippy`] for each `clippy.toml` that differs from the list.
+    /// [`Problem::StaleGraph`] when the workspace has a committed graph snapshot that no longer matches it.
     pub snapshot: Vec<Problem>,
-    /// The `clippy.toml` each `shell` and `apps` crate holds, as absolute paths.
-    pub clippy_files: Vec<PathBuf>,
+    /// The `clippy.toml` of each `shell` and `apps` crate, by crate, as absolute paths.
+    pub clippy_files: BTreeMap<String, PathBuf>,
 }
 
 impl Findings {
@@ -171,11 +170,22 @@ impl Findings {
         std::fs::write(self.root.join(REMAINING), self.remaining_file())
     }
 
-    /// Writes the `clippy.toml` of every `shell` and `apps` crate whose file differs from the list, and returns them.
-    pub fn write_clippy(&self) -> std::io::Result<Vec<&Path>> {
+    /// Writes the `clippy.toml` of the `shell` and `apps` crates in `crates`, or of all of them when `crates` is
+    /// empty, where the file differs from the list, and returns the files written. A name that is not a `shell` or
+    /// `apps` crate is an [`std::io::ErrorKind::InvalidInput`] error, and nothing is written.
+    pub fn write_clippy(&self, crates: &[&str]) -> std::io::Result<Vec<&Path>> {
+        if let Some(unknown) = crates.iter().find(|c| !self.clippy_files.contains_key(**c)) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("{unknown} is not a shell or apps crate of the workspace"),
+            ));
+        }
         let content = clippy_toml(self.policy.disallowed_methods);
         let mut written = Vec::new();
-        for path in &self.clippy_files {
+        for (name, path) in &self.clippy_files {
+            if !crates.is_empty() && !crates.contains(&name.as_str()) {
+                continue;
+            }
             if std::fs::read_to_string(path).ok().as_deref() != Some(content.as_str()) {
                 std::fs::write(path, &content)?;
                 written.push(path.as_path());
@@ -260,6 +270,21 @@ pub fn check_workspace_with(
             });
         }
     }
+    let clippy_files: BTreeMap<String, PathBuf> = crates
+        .dirs
+        .iter()
+        .filter(|(name, _)| CLIPPY_LAYERS.contains(&crates.layers[*name]))
+        .map(|(name, dir)| (name.clone(), dir.join("clippy.toml")))
+        .collect();
+    let content = clippy_toml(policy.disallowed_methods);
+    for (name, path) in &clippy_files {
+        if std::fs::read_to_string(path).ok().as_deref() != Some(content.as_str()) {
+            problems.push(Problem::DisallowedMethods {
+                krate: name.clone(),
+                layer: crates.layers[name],
+            });
+        }
+    }
     let mut sorted: BTreeMap<String, Problem> = BTreeMap::new();
     for p in problems {
         sorted
@@ -289,12 +314,6 @@ pub fn check_workspace_with(
         })
         .collect();
 
-    let clippy_files: Vec<PathBuf> = crates
-        .dirs
-        .iter()
-        .filter(|(name, _)| CLIPPY_LAYERS.contains(&crates.layers[*name]))
-        .map(|(_, dir)| dir.join("clippy.toml"))
-        .collect();
     let mut findings = Findings {
         policy: *policy,
         root: workspace_root,
@@ -312,15 +331,6 @@ pub fn check_workspace_with(
         findings
             .snapshot
             .push(Problem::StaleGraph(GRAPH_SNAPSHOT.to_owned()));
-    }
-    let content = clippy_toml(policy.disallowed_methods);
-    for path in &findings.clippy_files {
-        if std::fs::read_to_string(path).ok().as_deref() != Some(content.as_str()) {
-            let relative = path.strip_prefix(&findings.root).unwrap_or(path);
-            findings
-                .snapshot
-                .push(Problem::StaleClippy(relative.display().to_string()));
-        }
     }
     Ok(findings)
 }

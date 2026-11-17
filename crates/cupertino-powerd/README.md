@@ -21,7 +21,7 @@ The power and backlight daemon, replacing UPower and the backlight helpers. It r
 | `view` | `DeviceView::of_supply`, `DeviceView::display` (all batteries as one), `on_battery`: the values of a UPower device |
 | `backlight` | `Backlight`, `BacklightType`, `select` (firmware, then platform, then raw), `KeyboardBacklight` |
 | `sysfs` | `Snapshot::read(sysfs_root, lid)`, `read_supplies`, `read_backlights`, `read_keyboard_backlights`, `write_brightness` |
-| `lid` | `LidSwitch::find(sysfs_root)`: the input device that reports `SW_LID`, found with `cupertino-devices` and read with `cupertino-evdev` |
+| `lid` | `LidSwitch::find(sysfs_root)`: the input device that reports `SW_LID`, found with `cupertino-devices` and read with its `evdev` module |
 | `events` | `concerns_power(&DeviceEvent): which uevents mean "read sysfs again" |
 | `warning` | `Warnings::update(now, Reading)`: the low-battery level (none, early, final), `Level::upower |
 | `auth` (feature `dbus`) | `Authorizer`, `LogindAuthorizer` (the real check), `AllowAll` |

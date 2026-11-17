@@ -2,7 +2,7 @@ use crate::strike::strikes_fit;
 use crate::{
     FontId, FontSource, GlyphFormat, GlyphKey, GlyphRasterizer, RasterGlyph, TextError, TextSystem,
 };
-use cupertino_glyph::{declarative_size, mask_bounds, rasterize, Smoothing};
+use cupertino_raster_math::glyph::{declarative_size, mask_bounds, rasterize, Smoothing};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::sync::Arc;

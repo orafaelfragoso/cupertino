@@ -1,7 +1,7 @@
 //! Colour bitmap strikes (the CBLC index and CBDT data tables): the size of a glyph's image, read before anything
 //! allocates for or decodes it.
 
-use cupertino_glyph::MAX_MASK_SIDE;
+use cupertino_raster_math::glyph::MAX_MASK_SIDE;
 
 /// The largest side of an uncompressed strike image: its metrics store width and height as bytes.
 const METRICS_SIDE: u32 = 255;

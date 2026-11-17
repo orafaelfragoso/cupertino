@@ -1,7 +1,8 @@
 # cupertino-devices
 
-Device discovery for the compositor without libudev. It reads `/sys` and the kernel's
-`NETLINK_KOBJECT_UEVENT` socket directly. The only dependency is `rustix` (`fs`, `net`).
+Device discovery and input for the compositor without libudev or libinput. It reads `/sys` and the kernel's
+`NETLINK_KOBJECT_UEVENT` socket directly, and reads evdev devices from an fd. The only dependency is `rustix` (`fs`,
+`net`, `time`).
 
 ## Public API
 
@@ -15,6 +16,7 @@ Device discovery for the compositor without libudev. It reads `/sys` and the ker
 | `monitor` | `Monitor`: a non-blocking uevent socket on the kernel group (`AsFd`, register it with the event loop; `drain` returns `DeviceEvent`s). `parse_datagram is the pure parser |
 | `seat` | `seat_name`: `ID_SEAT`, else `seat0` |
 | `dev_t` | `DevT`, the device number newtype |
+| `evdev` | Linux evdev input, replacing libinput's device layer; see [evdev](#evdev) |
 
 Every function that reads sysfs takes the root as a parameter (`/sys` in production), and every parser takes bytes or
 text.
@@ -32,8 +34,30 @@ text.
 - **Provenance.** The decision rules follow systemd's `src/udev/udev-builtin-input_id.c` (GPL-2.0-or-later), written
   afresh in Rust.
 
+## evdev
+
+Pure Rust over `rustix` ioctls; no libinput, libevdev or libudev. The session opens `/dev/input/eventN` and hands over
+an `OwnedFd`; the module never opens paths.
+
+| Item | Contents |
+|---|---|
+| `Device` | `open(fd)` sets non-blocking and `CLOCK_MONOTONIC`, queries the device, reads its current state; `read_frames` reads batches until `EAGAIN`; `grab` is `EVIOCGRAB`; `AsFd` for calloop |
+| `DeviceInfo` | name, id, properties, event-type and key/rel/switch bitmaps, and an `AbsInfo` per absolute axis (min, max, fuzz, flat, `Resolution`) |
+| `Framer` | state machine from `InputEvent` to `Frame`, no fd needed; `apply_snapshot` is the `SYN_DROPPED` resync over plain data |
+| `Frame` | keys (pressed, released, repeat), held buttons, relative motion, wheel in 1/120 detents, absolute pointer, full multitouch contact set, finger count, switches |
+
+- `SYN_DROPPED` discards the partial frame and everything to the next `SYN_REPORT`, then `Device` re-reads
+  `EVIOCGKEY`, `EVIOCGSW`, `EVIOCGABS` and `EVIOCGMTSLOTS` and emits a `resynced` frame (stuck keys come out as releases).
+- A device with `REL_WHEEL_HI_RES` is read through that axis only; one without it reports each legacy step as 120.
+- A resolution of 0 is `Resolution::Unknown`; `AbsInfo::units_to_mm` then returns `None`.
+- Structural violations (bad key value, slot out of range, contact data without a tracking id, multitouch protocol A) are
+  `FrameError`s, never skipped. Event codes outside the modelled set (`EV_MSC`, `ABS_PRESSURE`, ...) are ignored.
+- Opcodes and constants are written out from `linux/input.h` and `linux/input-event-codes.h`; only the 64-bit
+  `input_event` layout is supported.
+
 ## Examples
 
 ```
 cargo run -p cupertino-devices --example list-devices   # opt-in: classifies this machine's real /sys
+cargo run -p cupertino-devices --example print-frames -- /dev/input/event5   # an evdev node's capabilities and frames; needs read access
 ```

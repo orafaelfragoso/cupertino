@@ -1,6 +1,6 @@
 // cupertino-layers --graph
-// 83 crates, 368 internal dependencies
-// per layer: foundation 6, graphics 2, models 9, system 8, platform 8, protocol 4, transport 3, render 3, ui 13, shellkit 0, core 1, services 4, shell 12, apps 2, tools 6, testing 2
+// 81 crates, 364 internal dependencies
+// per layer: foundation 5, graphics 2, models 9, system 8, platform 7, protocol 4, transport 3, render 3, ui 13, shellkit 0, core 1, services 4, shell 12, apps 2, tools 6, testing 2
 // forbidden normal edge cupertino-control (shell) -> cupertino-shell-client (transport)
 // forbidden normal edge cupertino-control (shell) -> cupertino-wayland-client (transport)
 // forbidden normal edge cupertino-controlcenter (shell) -> cupertino-alsa (platform)
@@ -44,10 +44,9 @@
 digraph "layers" {
   node [shape=box];
   subgraph "cluster_foundation" {
-    label="foundation (6)";
+    label="foundation (5)";
     "cupertino-animation";
     "cupertino-geometry";
-    "cupertino-glyph";
     "cupertino-keyboard";
     "cupertino-menu-model";
     "cupertino-theme";
@@ -81,11 +80,10 @@ digraph "layers" {
     "cupertino-trash";
   }
   subgraph "cluster_platform" {
-    label="platform (8)";
+    label="platform (7)";
     "cupertino-alsa";
     "cupertino-bluetooth";
     "cupertino-devices";
-    "cupertino-evdev";
     "cupertino-netlink";
     "cupertino-pipewire";
     "cupertino-screencast";
@@ -203,11 +201,9 @@ digraph "layers" {
   "cupertino-controlcenter" -> "cupertino-wayland-client" [color=red];
   "cupertino-decorations" -> "cupertino-assets";
   "cupertino-decorations" -> "cupertino-geometry";
-  "cupertino-decorations" -> "cupertino-glyph";
   "cupertino-decorations" -> "cupertino-raster-math";
   "cupertino-decorations" -> "cupertino-theme";
   "cupertino-defaults" -> "cupertino-keyboard";
-  "cupertino-devices" -> "cupertino-evdev";
   "cupertino-diagnostics" -> "cupertino-defaults";
   "cupertino-diagnostics" -> "cupertino-devices";
   "cupertino-diagnostics" -> "cupertino-diagnostic-events";
@@ -383,7 +379,6 @@ digraph "layers" {
   "cupertino-portal" -> "cupertino-wayland-client" [color=red];
   "cupertino-powerd" -> "cupertino-devices";
   "cupertino-powerd" -> "cupertino-diagnostic-events";
-  "cupertino-powerd" -> "cupertino-evdev";
   "cupertino-powerd" -> "cupertino-seat";
   "cupertino-protocol-app" -> "cupertino-animation";
   "cupertino-protocol-app" -> "cupertino-app-protocols";
@@ -416,7 +411,6 @@ digraph "layers" {
   "cupertino-server" -> "cupertino-diagnostic-events";
   "cupertino-server" -> "cupertino-displays";
   "cupertino-server" -> "cupertino-effects";
-  "cupertino-server" -> "cupertino-evdev";
   "cupertino-server" -> "cupertino-geometry";
   "cupertino-server" -> "cupertino-glass";
   "cupertino-server" -> "cupertino-gpu";
@@ -515,8 +509,8 @@ digraph "layers" {
   "cupertino-ui-test" -> "cupertino-ui-text";
   "cupertino-ui-text" -> "cupertino-defaults";
   "cupertino-ui-text" -> "cupertino-geometry";
-  "cupertino-ui-text" -> "cupertino-glyph";
   "cupertino-ui-text" -> "cupertino-keyboard";
+  "cupertino-ui-text" -> "cupertino-raster-math";
   "cupertino-ui-wayland" -> "cupertino-diagnostic-events";
   "cupertino-ui-wayland" -> "cupertino-geometry";
   "cupertino-ui-wayland" -> "cupertino-gpu";

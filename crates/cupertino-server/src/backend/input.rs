@@ -20,18 +20,18 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use cupertino_devices::{
-    classify_device, enumerate, Action, DevT, Device as SysDevice, DeviceEvent, InputClass,
-    Subsystem,
-};
-use cupertino_evdev::codes::{
+use cupertino_devices::evdev::codes::{
     is_button, ABS_MT_POSITION_X, ABS_MT_POSITION_Y, ABS_MT_PRESSURE, ABS_MT_SLOT, ABS_X, ABS_Y,
     BTN_LEFT, BTN_RIGHT, BTN_TASK,
 };
-use cupertino_evdev::{
+use cupertino_devices::evdev::{
     AbsPoint, Contact, Device as EvdevDevice, DeviceInfo, Frame, KeyEvent as EvdevKey,
     KeyState as EvdevKeyState, Resolution, Switch as EvdevSwitch, SwitchEvent as EvdevSwitchEvent,
     Tool,
+};
+use cupertino_devices::{
+    classify_device, enumerate, Action, DevT, Device as SysDevice, DeviceEvent, InputClass,
+    Subsystem,
 };
 use cupertino_input::{
     SwipeAxis, TouchContact, Touchpad, TouchpadButton, TouchpadEvent, TouchpadFrame,
@@ -1124,7 +1124,7 @@ fn read(
     evdev: &mut EvdevDevice,
     translator: &mut Translator,
     out: &mut Vec<Event_>,
-) -> Result<(), cupertino_evdev::Error> {
+) -> Result<(), cupertino_devices::evdev::Error> {
     let mut frames = Vec::new();
     evdev.read_frames(&mut frames)?;
     for frame in &frames {
@@ -1440,7 +1440,7 @@ fn read_ready(
         }
         Err(e) => {
             match &e {
-                cupertino_evdev::Error::Io {
+                cupertino_devices::evdev::Error::Io {
                     errno: Errno::NODEV,
                     ..
                 } => tracing::info!(devnum = %devnum, "input device unplugged"),

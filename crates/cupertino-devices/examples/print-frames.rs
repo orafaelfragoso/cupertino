@@ -1,8 +1,8 @@
 //! Opens an evdev node read-only and prints its capabilities, then every frame as it arrives.
 //!
-//! Usage: `cargo run -p cupertino-evdev --example print-frames -- /dev/input/event5`
+//! Usage: `cargo run -p cupertino-devices --example print-frames -- /dev/input/event5`
 
-use cupertino_evdev::Device;
+use cupertino_devices::evdev::Device;
 use rustix::event::{poll, PollFd, PollFlags};
 use rustix::fs::{open, Mode, OFlags};
 

@@ -74,7 +74,7 @@ buffer follow.
   `Right` hold in either. Positions stay logical: a downstream caret sits at the start edge of the character after it and an upstream one at the end edge of
   the character before it, `index_at` returns the side a click lands on, and a selection across a direction change can
   be several rectangles on one line.
-- `GlyphRaster` implements `GlyphRasterizer` over a `TextSystem`'s fonts with `swash` and `cupertino-glyph`: unhinted
+- `GlyphRaster` implements `GlyphRasterizer` over a `TextSystem`'s fonts with `swash` and `cupertino_raster_math::glyph`: unhinted
   coverage with the stem darkening that `GlyphKey::dilation_q` names (0 is font smoothing off, 1 to 5 is the fill's
   luminance in quarters; build keys with `GlyphKey::for_draw`, and the size the dilation reads is floored to a power of
   1.25), and colour glyphs as premultiplied RGBA without dilation. The rasters are the `TextSystem`'s, shared by

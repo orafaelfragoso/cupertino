@@ -3,12 +3,12 @@
 use std::num::NonZeroU32;
 use std::os::fd::BorrowedFd;
 
-use crate::bitset::BitSet;
-use crate::codes::{
+use crate::evdev::bitset::BitSet;
+use crate::evdev::codes::{
     ABS_MAX, EV_ABS, EV_KEY, EV_MAX, EV_REL, EV_SW, INPUT_PROP_MAX, KEY_MAX, REL_MAX, SW_MAX,
 };
-use crate::error::Error;
-use crate::ioctl;
+use crate::evdev::error::Error;
+use crate::evdev::ioctl;
 
 /// `struct input_id`: where the device is attached and who made it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

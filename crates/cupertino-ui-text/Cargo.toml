@@ -9,7 +9,7 @@ layer = "ui"
 
 [dependencies]
 cupertino-geometry = { path = "../cupertino-geometry" }
-cupertino-glyph = { path = "../cupertino-glyph" }
+cupertino-raster-math = { path = "../cupertino-raster-math" }
 cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-keyboard = { path = "../cupertino-keyboard" }
 swash = "0.2.10"

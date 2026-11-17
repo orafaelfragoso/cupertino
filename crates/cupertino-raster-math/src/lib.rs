@@ -8,6 +8,8 @@
 //! * [`shadow`]: drop and inner shadows of a rounded rectangle in closed form.
 //! * [`gradient`]: up to eight stops, interpolated in straight encoded sRGB, premultiplied after.
 //! * [`dither`]: dithering keyed to the pixel position, and its shader implementation.
+//! * [`glyph`]: glyph rasterisation for text: outline dilation (stem darkening) and exact-area scan conversion to 8-bit
+//!   coverage.
 //! * [`placement`]: where an image drawn one source pixel per device pixel lands.
 //! * [`resample`]: shrinking a frame drawn at a whole scale to the pixels of a display at a fractional one.
 //!
@@ -16,6 +18,7 @@
 pub mod blur;
 pub mod coverage;
 pub mod dither;
+pub mod glyph;
 pub mod gradient;
 pub mod placement;
 pub mod resample;

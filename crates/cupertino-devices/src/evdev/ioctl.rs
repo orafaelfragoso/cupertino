@@ -8,9 +8,9 @@ use std::os::fd::BorrowedFd;
 
 use rustix::ioctl::{self, opcode, Direction, IntegerSetter, Ioctl, IoctlOutput, Opcode, Setter};
 
-use crate::codes::{bitmap_bytes, CLOCK_MONOTONIC, KEY_MAX, SW_MAX};
-use crate::error::Error;
-use crate::info::{AbsInfo, DeviceId, Resolution};
+use crate::evdev::codes::{bitmap_bytes, CLOCK_MONOTONIC, KEY_MAX, SW_MAX};
+use crate::evdev::error::Error;
+use crate::evdev::info::{AbsInfo, DeviceId, Resolution};
 
 /// The ioctl "type" byte of every evdev request (`'E'` in `linux/input.h`).
 const EVDEV_TYPE: u8 = b'E';

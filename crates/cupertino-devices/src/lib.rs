@@ -11,6 +11,7 @@
 //!   setting that is wrong.
 //! - [`seat`]: seat assignment (always `seat0` without udevd).
 //! - [`udev_db`]: the properties udevd stored for a node (hardware database entries such as `MOUSE_DPI`).
+//! - [`evdev`]: Linux evdev input devices from an fd, read into typed frames, without libinput or libevdev.
 //!
 //! Every function that reads sysfs takes the sysfs root as a parameter; production passes `/sys`,
 //! tests pass a fixture tree. Parsers take their input as data.
@@ -19,6 +20,7 @@ pub mod capabilities;
 pub mod dev_t;
 pub mod device;
 pub mod error;
+pub mod evdev;
 pub mod gpu;
 pub mod input_id;
 pub mod monitor;

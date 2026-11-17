@@ -6,13 +6,13 @@ use rustix::fs::{fcntl_getfl, fcntl_setfl, OFlags};
 use rustix::io::Errno;
 use rustix::time::{clock_gettime, ClockId};
 
-use crate::bitset::BitSet;
-use crate::error::Error;
-use crate::event::{InputEvent, EVENT_SIZE};
-use crate::frame::Frame;
-use crate::framer::{Framer, FramerOutput, Layout, MtSlotValues, Snapshot};
-use crate::info::DeviceInfo;
-use crate::ioctl;
+use crate::evdev::bitset::BitSet;
+use crate::evdev::error::Error;
+use crate::evdev::event::{InputEvent, EVENT_SIZE};
+use crate::evdev::frame::Frame;
+use crate::evdev::framer::{Framer, FramerOutput, Layout, MtSlotValues, Snapshot};
+use crate::evdev::info::DeviceInfo;
+use crate::evdev::ioctl;
 
 /// Events read per `read` call.
 const BATCH_EVENTS: usize = 64;

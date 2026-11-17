@@ -228,8 +228,8 @@ pub fn mask_bounds(min: (f32, f32), max: (f32, f32)) -> Option<(i32, i32, u32, u
 }
 
 /// Rasterise the outline `points` / `verbs` (pixels, y up, origin on the baseline; a scaled glyph outline) at the
-/// subpixel `offset` with the dilation `dilation`. `None` for an empty outline, or one whose [`mask_bounds`] are
-/// `None`.
+/// subpixel `offset` with the dilation `dilation`. `None` for an empty outline, one with a point that is not finite, or
+/// one whose [`mask_bounds`] are `None`.
 pub fn rasterize(
     points: &[Point],
     verbs: &[Verb],
@@ -246,6 +246,13 @@ pub fn rasterize(
         -1.0
     };
     let edges = dilated_edges(&contours, dilation, orientation);
+    // `f32::min` and `max` skip a NaN, so the bounds below would not show one
+    if edges
+        .iter()
+        .any(|(a, b)| ![a.x, a.y, b.x, b.y].iter().all(|v| v.is_finite()))
+    {
+        return None;
+    }
     let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
     for (a, b) in &edges {
         for p in [a, b] {

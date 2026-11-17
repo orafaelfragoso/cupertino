@@ -16,8 +16,8 @@ Updated by the lead at every merge.
 | | |
 |---|---|
 | Current wave | 2 |
-| Running tasks | W2.1, W2.2, W2.3 |
-| Enforced layers | foundation, testing; system after W4.5 (141 remaining-work lines) |
+| Running tasks | W2.T |
+| Enforced layers | foundation, testing; system after W4.5 (139 remaining-work lines) |
 | Waiting on the owner | nothing |
 | Last closed wave | 1 |
 
@@ -589,22 +589,24 @@ with `kit` in W4.T.)
 
 **Owns** `wm stage overview`. **Touches** `server dock windowmanager`. **After** W1.close.
 
-- [ ] Both are modules of `cupertino-wm`; their directories are gone.
+- [x] (ebd29b793) Both are modules of `cupertino-wm`; their directories are gone.
 
 #### W2.2 `cupertino-scene` absorbs `cupertino-render-api` (S)
 
 **Owns** `scene render-api`. **Touches** `server`. **After** W1.close.
 
-- [ ] The `Renderer` trait and its types are a module of `cupertino-scene`.
-- [ ] The report says whether the server's frames go through `Renderer` or past it, with the call sites.
+- [x] (04eafdc52) The `Renderer` trait and its types are a module of `cupertino-scene`.
+- [x] (04eafdc52) The report says whether the server's frames go through `Renderer` or past it, with the call sites:
+      every scene frame goes through `impl Renderer for Gles` (`render/gles.rs`); only the cross-GPU path's
+      presentation of the copied buffer on the display card (`backend/udev.rs`, `render_frame`) goes past it.
 
 #### W2.3 Conformance of `graphics`, `models`, `platform` (S)
 
 **Owns** layer lines and dependencies of `gpu raster-math control-model displays effects input alsa bluetooth devices
 evdev netlink pipewire screencast seat`. **After** W1.close.
 
-- [ ] `models` crates pass the purity check; `cupertino-effects`' raster helper is a dev-only module.
-- [ ] `cupertino-seat` keeps its Smithay dependency until W5.6 moves the session implementation; it is the one line
+- [x] (af87c33b8) `models` crates pass the purity check; `cupertino-effects`' raster helper is a dev-only module.
+- [x] (af87c33b8) `cupertino-seat` keeps its Smithay dependency until W5.6 moves the session implementation; it is the one line
       left in `remaining.txt` for `platform`.
 
 #### W2.4 `cupertino-devices` absorbs `cupertino-evdev`; `cupertino-raster-math` absorbs `cupertino-glyph` (S)
@@ -612,7 +614,7 @@ evdev netlink pipewire screencast seat`. **After** W1.close.
 **Owns** `devices evdev raster-math glyph`. **Touches** `powerd server diagnostics seat ui-text decorations`. **After**
 W2.3.
 
-- [ ] `cupertino-evdev` is a module of `cupertino-devices`; `cupertino-glyph` one of `cupertino-raster-math`, which
+- [x] (e19357510) `cupertino-evdev` is a module of `cupertino-devices`; `cupertino-glyph` one of `cupertino-raster-math`, which
       stays free of I/O.
 
 #### W2.T Tests of wave 2's crates

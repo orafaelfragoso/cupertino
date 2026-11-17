@@ -1,7 +1,8 @@
 //! Generated bindings of the public protocols `protocols/cupertino-app-effects-v1.xml`,
 //! `protocols/cupertino-scroll-v1.xml` and `protocols/cupertino-layers-v1.xml`: enable `client` in clients and `server` in the display server.
-//! The `semantics` module holds the wire values of `cupertino_semantics_v1`.
+//! The `semantics` module holds the wire values of `cupertino_semantics_v1`, and `layers` the limits of `cupertino_layers_v1`.
 
+pub mod layers;
 pub mod semantics;
 
 // The scanner macros read the XML without telling rustc; including it puts it in the dep-info that caches such as

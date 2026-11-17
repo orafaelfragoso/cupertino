@@ -4,6 +4,7 @@
 mod support;
 
 use cupertino_animation::{CubicBezier, LayerCurve};
+use cupertino_app_protocols::layers::{LENS, SPRING_DAMPING, SPRING_RESPONSE};
 use cupertino_wayland_client::app::{
     AppEvent, Error, Fixed, GlassStyle, Layer, LayerProperty, Layers, MAX_CONTENT_BLUR,
     MAX_GLASS_EDGE, MAX_GROUP_SPACING, MAX_SAMPLES,
@@ -264,6 +265,9 @@ fn a_curve_the_server_refuses_is_refused_before_it_is_sent() {
         (spring(0.5, 4.1), 0.0),
         (spring(f64::NAN, 1.0), 0.0),
         (spring(0.5, 1.0), f64::NAN),
+        // the wire truncates to 256ths, so the ends themselves arrive below the server.s range
+        (spring(SPRING_RESPONSE.0, 1.0), 0.0),
+        (spring(0.5, SPRING_DAMPING.0), 0.0),
     ];
     for (curve, velocity) in refused {
         assert!(
@@ -276,17 +280,29 @@ fn a_curve_the_server_refuses_is_refused_before_it_is_sent() {
         );
     }
     assert!(s.sent().is_empty());
-    // the limits themselves are taken, and a Bézier y control point may leave 0 to 1
+    // the smallest springs the server takes, the upper limits, and a Bézier y control point may leave 0 to 1
+    let least = |v: f64| (v * 256.0).ceil() / 256.0;
     for curve in [
         timed(10.0, 0.0, -2.0, 1.0),
-        spring(0.01, 0.05),
-        spring(10.0, 4.0),
+        spring(least(SPRING_RESPONSE.0), least(SPRING_DAMPING.0)),
+        spring(SPRING_RESPONSE.1, SPRING_DAMPING.1),
     ] {
         s.layer
             .animate(2, LayerProperty::Opacity, 1.0, curve, 0.0)
             .unwrap();
     }
-    assert_eq!(s.sent().len(), 3);
+    let sent = s.sent();
+    assert_eq!(sent.len(), 3);
+    assert!(
+        sent[1].contains("response: 0.01171875, damping: 0.05078125"),
+        "{}",
+        sent[1]
+    );
+    assert!(
+        sent[2].contains("response: 10.0, damping: 4.0"),
+        "{}",
+        sent[2]
+    );
 }
 
 #[test]
@@ -366,21 +382,30 @@ fn cancel_names_the_property() {
 }
 
 #[test]
-fn glass_takes_a_style_or_none_and_a_lens_of_one_or_more() {
+fn glass_takes_a_style_or_none_and_a_lens_of_one_to_four() {
     let mut s = setup(6);
-    s.layer.set_glass(None, 1.0).unwrap();
+    s.layer.set_glass(None, LENS.0).unwrap();
     s.layer.set_glass(Some(GlassStyle::Clear), 1.5).unwrap();
-    for lens in [0.99, 0.0, f64::NAN, f64::INFINITY] {
+    s.layer.set_glass(None, LENS.1).unwrap();
+    for lens in [
+        0.99,
+        0.0,
+        4.5,
+        LENS.1 + 1.0 / 256.0,
+        f64::NAN,
+        f64::INFINITY,
+    ] {
         assert!(matches!(
             s.layer.set_glass(None, lens),
             Err(Error::InvalidGlass)
         ));
     }
     let sent = s.sent();
-    assert_eq!(sent.len(), 2);
+    assert_eq!(sent.len(), 3);
     assert_eq!(sent[0], "SetGlass { style: 4294967295, lens: 1.0 }");
     assert!(sent[1].ends_with("lens: 1.5 }"), "{}", sent[1]);
     assert!(!sent[1].contains("4294967295"));
+    assert_eq!(sent[2], "SetGlass { style: 4294967295, lens: 4.0 }");
 }
 
 #[test]

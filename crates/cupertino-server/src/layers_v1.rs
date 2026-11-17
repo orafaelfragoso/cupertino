@@ -19,6 +19,10 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use cupertino_animation::{CubicBezier, LayerCurve, LayerProperty};
+use cupertino_app_protocols::layers::{
+    LENS, MAX_CONTENT_BLUR, MAX_DURATION_MS, MAX_GLASS_EDGE, MAX_GROUP_SPACING, MAX_SAMPLES,
+    MIN_SAMPLES, SPRING_DAMPING, SPRING_RESPONSE,
+};
 use cupertino_protocols::server::layers::cupertino_layer_v1::{
     self, Blend, CupertinoLayerV1, Elevation, Error, Highlight, Property,
 };
@@ -43,14 +47,6 @@ pub const MAX_PER_PARENT: usize = 64;
 pub const MAX_PER_CLIENT: usize = 256;
 /// Animations one client may have running or waiting.
 pub const MAX_ANIMATIONS: usize = 512;
-/// Longest timed animation, in milliseconds.
-pub const MAX_DURATION_MS: u32 = 10_000;
-/// Range of a spring's response, in seconds.
-pub const SPRING_RESPONSE: (f64, f64) = (0.01, 10.0);
-/// Range of a spring's damping ratio.
-pub const SPRING_DAMPING: (f64, f64) = (0.05, 4.0);
-/// Range of a lens's magnification.
-pub const LENS: (f64, f64) = (1.0, 4.0);
 /// Model seconds after its commit by which an animation starts though no frame showed it.
 pub const START_AT_THE_LATEST: f64 = 0.1;
 /// The wire value of "no glass" in `set_glass`.
@@ -59,16 +55,10 @@ pub const NO_GLASS: u32 = u32::MAX;
 pub const VERSION: u32 = 6;
 /// The version from which a popup may have a presentation and layers may join their glass.
 pub const POPUP_VERSION: u32 = 3;
-/// Widest blend between the joined shapes of a glass group, in logical points.
-pub const MAX_GROUP_SPACING: f64 = 64.0;
 /// The version from which a layer's content blurs ([`CONTENT_BLUR`]).
 pub const CONTENT_BLUR_VERSION: u32 = 4;
-/// The widest blur of a layer's content: the standard deviation of its Gaussian, in the layer's logical points.
-pub const MAX_CONTENT_BLUR: f64 = 64.0;
 /// The version from which a layer's glass carries an edge (`set_glass_edge`).
 pub const GLASS_EDGE_VERSION: u32 = 5;
-/// The widest edge along a layer's glass, in logical points.
-pub const MAX_GLASS_EDGE: f64 = 4.0;
 /// The version from which the edge along a layer's glass softens by the layer's content blur ([`GlassEdge::soft`]).
 pub const SOFT_EDGE_VERSION: u32 = 6;
 /// Layers of one parent in one glass group: as many shapes as one joined glass holds.
@@ -1051,10 +1041,6 @@ fn timed(duration: u32, x1: f64, y1: f64, x2: f64, y2: f64) -> Option<LayerCurve
     })
 }
 
-/// The fewest and the most samples an `animate_samples` takes: as many as one request carries, a request being at
-/// most 4096 bytes.
-const SAMPLES: (usize, usize) = (2, 1000);
-
 /// The samples of `animate_samples`, floats in the host's byte order, or `None` when the request is refused for its
 /// duration or its array.
 fn sampled(duration: u32, bytes: &[u8]) -> Option<Arc<[f32]>> {
@@ -1062,7 +1048,7 @@ fn sampled(duration: u32, bytes: &[u8]) -> Option<Arc<[f32]>> {
     if duration == 0
         || duration > MAX_DURATION_MS
         || !rest.is_empty()
-        || !(SAMPLES.0..=SAMPLES.1).contains(&chunks.len())
+        || !(MIN_SAMPLES..=MAX_SAMPLES).contains(&chunks.len())
     {
         return None;
     }

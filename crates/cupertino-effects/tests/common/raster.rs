@@ -1,4 +1,4 @@
-//! A small CPU renderer for textured meshes, used for tests and sample images.
+//! A small CPU renderer for textured meshes, used by the benchmark and the sample-image example, which include it.
 //!
 //! The mesh is rasterised into a 2× supersampled buffer (later triangles overwrite earlier ones, so
 //! shared edges leave no seams), box-filtered and composited source-over onto the destination.

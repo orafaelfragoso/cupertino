@@ -97,14 +97,13 @@ one line, `<layer> <rule> <crate> …` (the layer the crate declares), sorted, u
 
 ```
 shell facade cupertino-dock -> cupertino-ui-wayland normal
-models impure_source cupertino-effects examples/render_effects.rs std::fs
+platform external_crate cupertino-seat -> smithay normal
 system starts_thread cupertino-trash src/lib.rs std::thread::Builder::spawn
 ```
 
 A line names only what the problem is about (crates, kind of dependency, file and item; never a line number or a
 chain), so it changes only when the problem does. The check fails on a problem the file does not list
-(`forbidden_edge`, `reaches_up`, …) and on a line that is no longer a problem (`stale_remaining`): the list only
-shrinks. After fixing a problem, or after a change that moves a crate to another layer, write it again:
+(`forbidden_edge`, `reaches_up`, …) and on a line that is no longer a problem (`stale_remaining`). After fixing a problem, or after a change that moves a crate to another layer, write it again:
 
 ```sh
 cargo run -q -p cupertino-layers -- --write-remaining
@@ -112,12 +111,13 @@ cargo run -q -p cupertino-layers -- --write-remaining
 
 `ENFORCED` lists the closed layers. Their problems are never excused by the file, `--write-remaining` leaves them out
 and fails while they remain, and a line of an enforced layer in the file is a problem (`enforced_remaining`). It holds
-`foundation` and `testing`; `system` leaves it while its crates still start threads.
+`foundation`, `graphics`, `models` and `testing`; `system` leaves it while its crates still start threads.
 
 `cargo xtask ci`, in the profiles that run this check, also compares the file with its version at the merge base
-(`cargo xtask remaining [<ref>]` runs only that comparison): a line the base does not hold fails, unless the same change
-removes a line with the same `<layer> <rule> <crate>` (a renamed dependency or file) or the line's rule is one this
-check at the base does not have yet. So `--write-remaining` cannot list a new problem of an existing rule.
+(`cargo xtask remaining [<ref>]` runs only that comparison) and reports a line the base does not hold, unless the same
+change removes a line with the same `<layer> <rule> <crate>` (a renamed dependency or file) or the line's rule is one
+this check at the base does not have yet. During the layered refactor such a line passes; once `GROWTH_FAILS` in
+`xtask/src/remaining.rs` is set, it fails, so `--write-remaining` cannot list a new problem of an existing rule.
 
 ## The clippy.toml of shell and apps crates
 

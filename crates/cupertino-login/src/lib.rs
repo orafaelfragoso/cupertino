@@ -14,6 +14,7 @@
 //! * [`power_button`]: what a press, a release and a hold of the power button do.
 //! * [`view`]: the screens and panels as CupertinoKit draws them, and what the person does on them.
 //! * [`spinner`]: the frames and spoke opacities of the progress spinner.
+//! * [`status`]: what the status items at the top right of the lock and login screens show, read every few seconds.
 //! * [`panel`]: the confirmation panel's countdown, keys, button frames and words.
 //! * [`logout`]: the timing of quitting the applications one at a time before the session ends.
 //! * [`interrupt`]: the panel that shows when an application does not quit: Cancel or Force Quit.
@@ -62,6 +63,7 @@ pub mod restore;
 #[cfg(feature = "dbus")]
 pub mod session;
 pub mod spinner;
+pub mod status;
 #[cfg(feature = "dbus")]
 pub mod upower;
 pub mod user;

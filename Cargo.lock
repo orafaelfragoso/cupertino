@@ -1507,6 +1507,7 @@ dependencies = [
  "cupertino-login-ipc",
  "cupertino-modifiers",
  "cupertino-peer",
+ "cupertino-radios",
  "cupertino-raster-math",
  "cupertino-seat",
  "cupertino-shell-client",

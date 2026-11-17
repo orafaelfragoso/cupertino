@@ -11,7 +11,7 @@ layer = "shell"
 
 [features]
 default = []
-dbus = ["dep:zbus", "dep:cupertino-seat"]
+dbus = ["dep:zbus", "dep:cupertino-seat", "dep:cupertino-radios"]
 # the `cupertino-login` process: the lock screen, greeter and session agent as a client of the server
 app = [
     "dbus",
@@ -41,6 +41,7 @@ cupertino-login-ipc = { path = "../cupertino-login-ipc" }
 cupertino-modifiers = { path = "../cupertino-modifiers", optional = true }
 cupertino-peer = { path = "../cupertino-peer" }
 cupertino-raster-math = { path = "../cupertino-raster-math" }
+cupertino-radios = { path = "../cupertino-radios", features = ["dbus"], optional = true }
 cupertino-seat = { path = "../cupertino-seat", optional = true }
 cupertino-shell-client = { path = "../cupertino-shell-client", optional = true }
 cupertino-ui-wayland = { path = "../cupertino-ui-wayland", optional = true }

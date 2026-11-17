@@ -546,7 +546,10 @@ network users).
 | Password field cleared | when the display goes to sleep or wakes, and when a lock is asked for while locked |
 | Wallpaper treatment | black 0.25 over it; then black 0.3 blended to keep the lighter, which changes no pixel and is not drawn; then a radial black 0.20 at the middle to none at the edge of a 1200 pt square centred on the screen. It comes in linearly over 0.25 s when a screen first shows (`wallpaper::DIM_FADE`) |
 | Picker and password screen | the switch between them takes 0.5 s, ease-in-out (`picker::SWITCH_DURATION`): the chosen tile's avatar moves between its row and the password screen's place at full opacity, the rest fades in; the interface fades linearly over 0.25 s |
-| Status items | in a row, 14 pt apart |
+| Status items | at the top right of both screens, in a bar as tall as the menu bar (33 pt), each 22 pt tall and centred in it, 14 pt apart, ending 20 pt from the trailing edge: from the trailing end the power item (login screen), the accessibility item (login screen), the battery, the Wi-Fi radio, the input source (`show-input-menu`) and the line about the machine (`host-info = hostname`, `version` or `ip`; login screen); text in the menu bar's 13 pt, white; glyphs our own; read every 10 s on a thread of their own (`status`, `view::widgets::StatusItem`) |
+| Accessibility item | login screen: a menu of Increase Contrast, Reduce Transparency and Reduce Motion, each checked while on; they change the field's tint, make it opaque, and stop the shake and the switch's movement (`view::access_menu`) |
+| Hiding the user | `hide-user-avatar-and-name` in `login.conf` leaves out the avatar and the name on both screens |
+| Large clock | `large-clock = false` in `login.conf` leaves out the date and the large time on both screens |
 | Idle lock | after the display sleep plus the password delay, timed by the server |
 | Quit sequence | one application at a time, 45 s each, the next 0.1 s after one quits; interrupt panel 413 x 128 |
 | Login items | global items before the user's, one after the other |
@@ -579,7 +582,8 @@ network users).
 | Logged-in mark | A 9 pt disc (green, 0.20 0.72 0.35) with a white check at the lower right of the avatar of a user who has a session; the tile's description says "Logged in". approximate: the design marks such users in its picker, the shape and place are not read. | `view::widgets::LOGGED_IN_FILL` |
 | Picker tiles | Rows D + 196 wide and D + 14 tall for the avatar's diameter D, which stands with its centre D / 2 + 18 from the leading edge and D / 2 + 7 from the top; the name 10 pt after it, at most 150 pt, 15 pt semibold, white, with the name's shadow; cells are whole rows, touching, the grid centred across, its last row's bottom where the field's is, growing upward; right to left mirrors them. Selection: the row's frame with a 1 pt white 0.1 border and continuous corners of radius 12, no fill. "Other…" avatar: grey disc with an ellipsis. "Larger than 1024 x 768" means both sides larger. | `layout::ROW_*`, `view::widgets::SELECTION_*`, `picker::max_per_page` |
 | Login screen without a wallpaper | A solid deep blue (18, 23, 51), not the drawn gradient. | `wallpaper::LOGIN_FALLBACK` |
-| Power item and menu | The status bar is only the power item: 22 pt square, 20 pt from the trailing edge, 6 pt from the top; a ring with a 60 degree gap and a stem, 5.5 pt radius, 1.6 pt stroke. The menu is Kit's menu below the item. | `layout`, `view::widgets::POWER_*`, `view::power_menu` |
+| Power item and menu | 22 pt square, 20 pt from the trailing edge, centred in the 33 pt bar; a ring with a 60 degree gap and a stem, 5.5 pt radius, 1.6 pt stroke. The menu is Kit's menu below the item. | `layout`, `view::widgets::POWER_*`, `view::power_menu` |
+| Status glyphs | Wi-Fi: a dot and three arcs, the arcs past the signal's bars (the menu bar's: from -55 dBm 3, from -67 dBm 2, else 1) at white 0.3, all of them with the radio off or joined to nothing; battery: a 22 x 11 pt outlined body with a cap filled to the charge (red at 20 % or less while not charging) and a bolt while it charges; accessibility: a ring with a figure. The input source's short name is the first of the person's input sources, else the default xkb layout, else "US". | `status`, `view::widgets` |
 | Interrupt panel buttons, words | Cancel 83 pt at x 204, Force Quit 100 pt at x 295, capsules 28 pt high and 8 pt apart, ending with the text column; no default button (Return does nothing). The words are ours; the design fills them in at run time. | `interrupt` |
 | Quit order | Most recently used first; the design walks its process list from the end, order not read. | server `quit.rs` |
 | Force Quit | No confirmation sheet. SIGKILL to the processes of the application's windows. | server `quit.rs` |
@@ -605,6 +609,7 @@ network users).
 | `picker` | `Picker` (`new` takes the accounts and whether "Other…" shows; `NoTiles` when nothing is left), `Tile`, `Grid`, `cell_of`, `max_per_page`, `NameEntry` |
 | `view` | The Kit views: `screen` (lock and greeter password and name screens), `picker`, `power_menu`, `panel`, `interrupt`, `full_screen`, `panel_frames`; `Input`, the messages they send; `Typed`, a submitted password |
 | `spinner` | the spinner's frame, head spoke and spoke opacities |
+| `status` | `StatusItems`, `WifiState`, `BatteryState`, `signal_bars`, `input_label`, `os_version`, `host_text`; with feature `dbus`, `poll`: what the status items show |
 | `user` | `User::current` (account, full name, picture), `User::from_row` (a row of the manager's list), `initials`, `format_time` |
 | `panel` | `Kind`, `Action`, `Decision`, `Panel`, `PanelCheckbox`: the countdown, the keys, the button and checkbox frames and the words of the confirmation panels and the power-button panel |
 | `power_button` | `PowerButton`, `Effect`: the power key's hold timing |

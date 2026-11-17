@@ -19,10 +19,11 @@ use cupertino_login::manager::{Connection, Message as ManagerMessage, SOCKET_VAR
 use cupertino_login::model::{AuthOutcome, LockScreen, Password, Phase, HIDE_AFTER};
 use cupertino_login::picker::{self, NameEntry, Picker, Tile};
 use cupertino_login::power::{Action, Menu};
+use cupertino_login::status::{self, StatusItems};
 use cupertino_login::user::User;
 use cupertino_login::view::{
-    self, Access, Clock, Field, Input, Metrics, NameField, PickerScreen, Screen, GREETER_APP_ID,
-    GREETER_TITLE,
+    self, Access, AccessOption, Clock, Field, Input, Metrics, NameField, PickerScreen, Screen,
+    Status, GREETER_APP_ID, GREETER_TITLE,
 };
 use cupertino_login::wallpaper::{self, Pictures, Source, Stamp, Want};
 use cupertino_login_ipc::{
@@ -73,6 +74,8 @@ pub enum Message {
     ),
     /// The connection to the manager broke.
     Broken(String),
+    /// A reading of the status items.
+    Status(StatusItems),
     Heard(Heard),
     Input(Input),
     Timer(u64),
@@ -125,6 +128,12 @@ pub struct GreeterApp {
     settings: ScreenSettings,
     /// The display options chosen on the accessibility item.
     access: Access,
+    /// The last reading of the status items.
+    status: StatusItems,
+    /// The accessibility item's menu is open.
+    access_open: bool,
+    /// Reduce Motion, chosen on the accessibility item: no shake and no movement in the switch.
+    reduce_motion: bool,
     /// The screen's language reads right to left.
     rtl: bool,
     /// The account the manager said is locked, while its password screen shows.
@@ -329,6 +338,7 @@ pub fn run() -> Result<std::convert::Infallible> {
     let outputs = roles::outputs(conn);
     let (sender, messages) = async_channel::unbounded();
     let wallpaper_sender = sender.clone();
+    let status_sender = sender.clone();
     let connection = Connection::spawn(stream, move |message| {
         let message = match message {
             ManagerMessage::Event(event) => Message::Manager(Arc::new(event)),
@@ -398,12 +408,23 @@ pub fn run() -> Result<std::convert::Infallible> {
             switched: None,
             settings: ScreenSettings::load(),
             access: Access::default(),
+            status: StatusItems::default(),
+            access_open: false,
+            reduce_motion: false,
             rtl: cupertino_login::user::locale_is_rtl(),
             locked: None,
         };
         let mut app = app;
         if app.settings.show_full_name {
             app.stage = app.credentials(0.0);
+        }
+        // the status items, read on a thread of their own; the screen goes on without them
+        if let Err(e) = status::poll(
+            app.settings.host_info,
+            app.settings.show_input_menu,
+            move |items| status_sender.send_blocking(Message::Status(items)).is_ok(),
+        ) {
+            eprintln!("cupertino-login: the status items: {e}");
         }
         let commands = vec![
             listen(
@@ -449,6 +470,12 @@ impl Application for GreeterApp {
                 app.manager_event(now, &event)
             }
             Message::Wallpaper(path, stamp, picture) => {
+                // it came on the manager's channel: listen on for what comes next
+                commands.push(listen(
+                    &app.manager,
+                    std::convert::identity,
+                    Message::Unheard("the session manager's reader"),
+                ));
                 let picture = Arc::try_unwrap(picture).unwrap_or_else(|shared| match &*shared {
                     Ok(_) => Err("the picture was shared".into()),
                     Err(e) => Err(e.clone()),
@@ -457,6 +484,15 @@ impl Application for GreeterApp {
                 Ok(())
             }
             Message::Broken(e) => Err(e.into()),
+            Message::Status(items) => {
+                commands.push(listen(
+                    &app.manager,
+                    std::convert::identity,
+                    Message::Unheard("the session manager's reader"),
+                ));
+                app.status = items;
+                Ok(())
+            }
             Message::Heard(heard) => {
                 commands.push(listen(
                     &app.heard,
@@ -503,7 +539,11 @@ impl Application for GreeterApp {
         let now = app.now();
         let mut windows = Vec::new();
         let dim = app.shown.map_or(1.0, |at| wallpaper::dimming_at(now - at));
-        let block = app.switched.map_or(1.0, |at| picker::switched(now - at));
+        // with Reduce Motion the switch is at once
+        let block = app
+            .switched
+            .filter(|_| !app.reduce_motion)
+            .map_or(1.0, |at| picker::switched(now - at));
         // the chosen tile's avatar moves between its row and the password screen during the switch
         let moving = block < 1.0;
         let tile_avatar = |size| {
@@ -535,6 +575,10 @@ impl Application for GreeterApp {
                             )
                         }),
                         power: app.power.as_ref(),
+                        status: Status {
+                            items: &app.status,
+                            access: Some(app.access_open),
+                        },
                         opacity: 1.0,
                         block,
                         wallpaper: &app.wallpaper,
@@ -583,6 +627,10 @@ impl Application for GreeterApp {
                         large_clock: app.settings.large_clock,
                         avatar_from: moving.then(|| tile_avatar(size)).flatten(),
                         power: app.power.as_ref(),
+                        status: Status {
+                            items: &app.status,
+                            access: Some(app.access_open),
+                        },
                         notices: &[],
                         wallpaper: &app.wallpaper,
                         dim,
@@ -600,8 +648,15 @@ impl Application for GreeterApp {
                 Some(Message::Closed),
             ));
             if let Some(menu) = &app.power {
-                windows.extend(view::power_menu(key, menu, Message::Input));
+                windows.extend(view::power_menu(key.clone(), menu, Message::Input));
             }
+            windows.extend(view::access_menu(
+                key,
+                app.access_open,
+                app.access,
+                app.reduce_motion,
+                Message::Input,
+            ));
         }
         if !windows.is_empty() && !app.announced.replace(true) {
             eprintln!("cupertino-login: greeter ready");
@@ -714,6 +769,30 @@ impl GreeterApp {
             Input::TogglePower => {
                 if let Some(menu) = &mut self.power {
                     menu.toggle();
+                }
+                return Ok(());
+            }
+            Input::ToggleAccess => {
+                self.access_open = !self.access_open;
+                return Ok(());
+            }
+            Input::CloseAccess => {
+                self.access_open = false;
+                return Ok(());
+            }
+            Input::AccessOption(option) => {
+                match option {
+                    AccessOption::IncreaseContrast => {
+                        self.access.increase_contrast = !self.access.increase_contrast
+                    }
+                    AccessOption::ReduceTransparency => {
+                        self.access.reduce_transparency = !self.access.reduce_transparency
+                    }
+                    AccessOption::ReduceMotion => self.reduce_motion = !self.reduce_motion,
+                }
+                self.access_open = false;
+                if let Stage::Password { screen, .. } = &mut self.stage {
+                    screen.set_reduce_motion(self.reduce_motion);
                 }
                 return Ok(());
             }
@@ -867,6 +946,7 @@ impl GreeterApp {
         let to = match self.picker.selected() {
             Tile::Account(user) => {
                 let mut screen = LockScreen::new(now, HIDE_AFTER);
+                screen.set_reduce_motion(self.reduce_motion);
                 if cupertino_shell_client::test_clock::motion_settled() {
                     screen.settle_interface();
                 }
@@ -884,6 +964,7 @@ impl GreeterApp {
     /// The screen with a name and a password field.
     fn credentials(&self, now: f64) -> Stage {
         let mut screen = LockScreen::new(now, HIDE_AFTER);
+        screen.set_reduce_motion(self.reduce_motion);
         if cupertino_shell_client::test_clock::motion_settled() {
             screen.settle_interface();
         }

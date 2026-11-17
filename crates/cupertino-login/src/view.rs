@@ -35,20 +35,21 @@ use cupertino_kit::theme::Color;
 use crate::interrupt::{self, Choice};
 use crate::layout::{
     Layout, BUTTON_SIZE, HINT_LINES, HINT_SIZE, HINT_WIDTH, LOCK_MESSAGE_SIZE, LOCK_MESSAGE_WIDTH,
-    NAME_MAX_WIDTH, NAME_SIZE, SUBMIT_GAP, SUB_HINT_SIZE, SUB_HINT_WIDTH,
+    NAME_MAX_WIDTH, NAME_SIZE, STATUS_BAR_HEIGHT, SUBMIT_GAP, SUB_HINT_SIZE, SUB_HINT_WIDTH,
 };
 use crate::lock_notices::{self, Notice};
 use crate::model::{Key as PanelKey, Password, MAX_PASSWORD_BYTES, SHAKE_AMPLITUDE};
 use crate::panel::{Decision, Frames, Kind, Panel};
 use crate::picker::{Direction, Grid, Jump, Picker, Tile};
 use crate::power::{self, Menu};
+use crate::status::{StatusItems, WifiState};
 use crate::user::{initials, User};
 use crate::wallpaper::Source;
 pub use widgets::Access;
 use widgets::{
     Adornment, AlertBody, Avatar, Backdrop, Fade, FieldFrame, FieldMaterial, FieldTint, GlassText,
-    Glyph, GlyphKind, Ground, Label, Look, NoticeCard, Place, Pressable, Shift, Slot, ESCAPE,
-    OPTION_RETURN, WHITE,
+    Glyph, GlyphKind, Ground, Label, Look, NoticeCard, Place, Pressable, Shift, Slot, StatusItem,
+    StatusKind, StatusRow, ESCAPE, OPTION_RETURN, WHITE,
 };
 
 /// The `app_id` of a lock surface's window, followed by `.` and the output's registry name: the surface roles give it
@@ -244,6 +245,12 @@ pub enum Input {
     ToggleNames,
     /// The power item: open or close its menu.
     TogglePower,
+    /// The accessibility item: open or close its menu.
+    ToggleAccess,
+    /// The accessibility menu closed.
+    CloseAccess,
+    /// A row of the accessibility menu: turn its option on or off.
+    AccessOption(AccessOption),
     /// The power menu closed without a choice.
     ClosePower,
     /// A row of the power menu.
@@ -334,6 +341,8 @@ pub struct Screen<'a> {
     pub avatar_from: Option<Rect>,
     /// The greeter's power item.
     pub power: Option<&'a Menu>,
+    /// The status bar's other items.
+    pub status: Status<'a>,
     /// The notifications the lock screen shows, newest first, as the notification daemon gave them
     /// ([`crate::lock_notices`]); none on the greeter.
     pub notices: &'a [Notice],
@@ -497,6 +506,182 @@ fn power_item<M: Clone + 'static>(
 
 /// The element key of the power item, which the menu hangs under.
 pub const POWER_KEY: &str = "power";
+/// The element key of the accessibility item, which its menu hangs under.
+pub const ACCESS_KEY: &str = "accessibility";
+/// What assistive technology calls the accessibility item.
+pub const ACCESS_LABEL: &str = "Accessibility";
+
+/// No status items.
+pub static NO_STATUS: StatusItems = StatusItems {
+    wifi: None,
+    battery: None,
+    input: None,
+    host: None,
+};
+
+/// What the status bar shows besides the power item.
+#[derive(Clone, Copy, Debug)]
+pub struct Status<'a> {
+    pub items: &'a StatusItems,
+    /// The login screen's accessibility item: `Some(open)` while it shows, `open` while its menu is.
+    pub access: Option<bool>,
+}
+
+impl Status<'_> {
+    /// Nothing but the power item, if any.
+    pub const NONE: Status<'static> = Status {
+        items: &NO_STATUS,
+        access: None,
+    };
+}
+
+/// The status bar's items at the top right besides the power item: the accessibility item after it (the login screen),
+/// and before them, 14 pt apart and centred in the bar, a line about the machine, the input source, the Wi-Fi radio and
+/// the battery, each a part of its own.
+fn status_bar<M: Clone + 'static>(
+    status: Status<'_>,
+    power: bool,
+    width: f64,
+    metrics: Metrics,
+    opacity: f64,
+    map: fn(Input) -> M,
+) -> Vec<Element<M>> {
+    let mut parts = Vec::new();
+    let mut fixed = usize::from(power);
+    if let Some(open) = status.access {
+        let rect = Layout::status_item(width, fixed);
+        fixed += 1;
+        let item = Element::new(Pressable {
+            rect: Rect::new(0.0, 0.0, rect.width(), rect.height()),
+            look: Look::Access { open },
+            label: ACCESS_LABEL.to_owned(),
+            description: None,
+            on_press: map(Input::ToggleAccess),
+            on_focus: None,
+            on_hover: None,
+            focusable: true,
+            children: Vec::new(),
+        })
+        .key(ACCESS_KEY);
+        parts.push(Element::new(Fade::new(rect, opacity, vec![item])));
+    }
+    let items = status.items;
+    let item = |kind: StatusKind, label: String| {
+        Element::new(StatusItem {
+            kind,
+            label,
+            ascent: metrics.ascent,
+            descent: metrics.descent,
+        })
+    };
+    let mut row = Vec::new();
+    if let Some(host) = &items.host {
+        row.push(item(StatusKind::Text(host.clone()), host.clone()));
+    }
+    if let Some(input) = &items.input {
+        row.push(item(
+            StatusKind::Text(input.clone()),
+            format!("{INPUT_LABEL}: {input}"),
+        ));
+    }
+    if let Some(wifi) = items.wifi {
+        let said = match wifi {
+            WifiState::Off => WIFI_OFF,
+            WifiState::NotConnected => WIFI_NOT_CONNECTED,
+            WifiState::Connected { .. } => WIFI_CONNECTED,
+        };
+        row.push(item(StatusKind::Wifi(wifi), said.to_owned()));
+    }
+    if let Some(battery) = items.battery {
+        row.push(item(
+            StatusKind::Battery(battery),
+            format!("{BATTERY_LABEL}: {:.0} %", battery.percentage),
+        ));
+    }
+    if !row.is_empty() {
+        // the row ends 14 pt before the first fixed item, or where the power item would end
+        let first = Layout::status_item(width, fixed);
+        let end = if fixed > 0 {
+            Layout::status_item(width, fixed - 1).x() - STATUS_ROW_GAP
+        } else {
+            first.max_x()
+        };
+        let bar = Rect::new(0.0, 0.0, width, STATUS_BAR_HEIGHT);
+        parts.push(Element::new(Fade::new(
+            bar,
+            opacity,
+            vec![Element::new(StatusRow {
+                rect: Rect::new(0.0, 0.0, end.max(0.0), STATUS_BAR_HEIGHT),
+                children: row,
+            })],
+        )));
+    }
+    parts
+}
+
+/// The accessibility item's menu while it is open, under the item of the window `parent`: the display options the login
+/// screen can change, each checked while it is on.
+pub fn access_menu<M: Clone + 'static>(
+    parent: WindowKey,
+    open: bool,
+    access: Access,
+    reduce_motion: bool,
+    map: fn(Input) -> M,
+) -> Vec<Window<M>> {
+    if !open {
+        return Vec::new();
+    }
+    let key = WindowKey(Key::from(format!("{:?}-access-menu", parent.0)));
+    let row = |label: &str, checked: bool, option: AccessOption| MenuItem::Item {
+        label: label.to_owned(),
+        enabled: true,
+        checked,
+        on_select: map(Input::AccessOption(option)),
+    };
+    KitMenu {
+        parent,
+        anchor: MenuAnchor::Below(Key::from(ACCESS_KEY)),
+        label: ACCESS_LABEL.to_owned(),
+        items: vec![
+            row(
+                INCREASE_CONTRAST,
+                access.increase_contrast,
+                AccessOption::IncreaseContrast,
+            ),
+            row(
+                REDUCE_TRANSPARENCY,
+                access.reduce_transparency,
+                AccessOption::ReduceTransparency,
+            ),
+            row(REDUCE_MOTION, reduce_motion, AccessOption::ReduceMotion),
+        ],
+        current: None,
+        open: Vec::new(),
+        on_open: Box::new(move |_| map(Input::Activity)),
+        on_close: map(Input::CloseAccess),
+    }
+    .windows(key)
+}
+
+/// A display option of the accessibility menu.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AccessOption {
+    IncreaseContrast,
+    ReduceTransparency,
+    ReduceMotion,
+}
+
+/// The status items' words for assistive technology and the accessibility menu's rows.
+const INPUT_LABEL: &str = "Input source";
+const BATTERY_LABEL: &str = "Battery";
+const WIFI_OFF: &str = "Wi-Fi: off";
+const WIFI_NOT_CONNECTED: &str = "Wi-Fi: not connected";
+const WIFI_CONNECTED: &str = "Wi-Fi: connected";
+const INCREASE_CONTRAST: &str = "Increase Contrast";
+const REDUCE_TRANSPARENCY: &str = "Reduce Transparency";
+const REDUCE_MOTION: &str = "Reduce Motion";
+/// The gap between the status bar's row and the items after it.
+const STATUS_ROW_GAP: f64 = 14.0;
 
 /// `rect` in the points of a part that starts at `origin`.
 fn within(rect: Rect, origin: Point) -> Rect {
@@ -966,6 +1151,14 @@ pub fn screen<M: Clone + 'static>(
     if let Some(menu) = screen.power {
         parts.push(power_item(menu, &layout, screen.opacity, map));
     }
+    parts.extend(status_bar(
+        screen.status,
+        screen.power.is_some(),
+        width,
+        metrics,
+        screen.opacity,
+        map,
+    ));
     parts.extend(notice_cards(
         screen.notices,
         screen.size,
@@ -1069,6 +1262,8 @@ pub struct PickerScreen<'a> {
     /// password screen's avatar, here, to its place in the row, at full opacity, as the rest fades in.
     pub avatar_from: Option<(usize, Rect)>,
     pub power: Option<&'a Menu>,
+    /// The status bar's other items.
+    pub status: Status<'a>,
     /// Of everything but the wallpaper, and of the tiles on top of it (the switch from the password screen).
     pub opacity: f64,
     pub block: f64,
@@ -1178,6 +1373,14 @@ pub fn picker<M: Clone + 'static>(screen: &PickerScreen<'_>, map: fn(Input) -> M
     if let Some(menu) = screen.power {
         parts.push(power_item(menu, &layout, screen.opacity, map));
     }
+    parts.extend(status_bar(
+        screen.status,
+        screen.power.is_some(),
+        width,
+        metrics,
+        screen.opacity,
+        map,
+    ));
     let selected = picker.selected_index();
     Element::new(Backdrop {
         ground: Some(ground),

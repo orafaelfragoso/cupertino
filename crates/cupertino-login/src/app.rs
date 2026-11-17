@@ -34,10 +34,11 @@ use cupertino_login::panel::{Action, Decision, Frames, Kind, Panel};
 use cupertino_login::power_button::{Effect, PowerButton};
 use cupertino_login::probe;
 use cupertino_login::restore::{self, Applications, SessionMark, Taken};
+use cupertino_login::status::{self, StatusItems};
 use cupertino_login::user::User;
 use cupertino_login::view::{
     self, Access, Clock, ControlChoice, ControlRequest, Field, Input, Metrics, RequestingApp,
-    Screen, LOCKED_TITLE, LOCK_APP_ID,
+    Screen, Status, LOCKED_TITLE, LOCK_APP_ID,
 };
 use cupertino_login::wallpaper::{self, Source};
 use cupertino_login::{session, upower};
@@ -85,6 +86,8 @@ pub enum Bus {
     LockNotices(Vec<Notice>),
     /// The wallpaper of the lock of this number is ready.
     Wallpaper { lock: u64, source: Source },
+    /// A reading of the status items.
+    Status(StatusItems),
 }
 
 /// What the lock screen shows until its wallpaper is ready, and the longest it waits for it before it shows its
@@ -170,6 +173,8 @@ pub struct SessionApp {
     access: Access,
     /// What `login.conf` says the screens show.
     settings: ScreenSettings,
+    /// The last reading of the status items.
+    status: StatusItems,
     /// The clock's hour cycle: the session's.
     hours: cupertino_defaults::menubar::HourCycle,
     /// The session's appearance is dark: the lock screen stands on its dark wallpaper.
@@ -317,6 +322,11 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
             Err(e) => Bus::Failed(e.to_string()),
         })
     })?;
+    // the status items: the Wi-Fi radio, the battery and, when `login.conf` asks for it, the input source
+    let status_items = bus.clone();
+    status::poll(None, ScreenSettings::load().show_input_menu, move |items| {
+        status_items.send_blocking(Bus::Status(items)).is_ok()
+    })?;
     let battery = send(&bus);
     upower::watch(logind.connection(), move |report| {
         battery(Bus::Battery(report.map_err(|e| e.to_string())))
@@ -429,6 +439,7 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
                 reduce_transparency: session_state.display.reduce_transparency,
             },
             settings: ScreenSettings::load(),
+            status: StatusItems::default(),
             hours: screen::session_hour_cycle(),
             dark: session_state.dark,
             locks: 0,
@@ -738,6 +749,10 @@ impl Application for SessionApp {
                         large_clock: app.settings.large_clock,
                         avatar_from: None,
                         power: None,
+                        status: Status {
+                            items: &app.status,
+                            access: None,
+                        },
                         notices: &app.lock_notices,
                         wallpaper,
                         dim,
@@ -866,6 +881,7 @@ impl SessionApp {
             Bus::Auth(event) => self.handle_auth(now, event)?,
             Bus::Failed(reason) => return Err(reason.into()),
             Bus::Battery(report) => self.battery(report),
+            Bus::Status(items) => self.status = items,
             // a list that comes while the session is not locked is a late one: it never shows
             Bus::LockNotices(list) => {
                 self.lock_notices = if self.lock.is_some() {

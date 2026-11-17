@@ -211,6 +211,7 @@ impl Application for Locker {
                 large_clock: true,
                 avatar_from: None,
                 power: None,
+                status: view::Status::NONE,
                 notices: &[],
                 wallpaper: &Source::Plain,
                 dim: 1.0,

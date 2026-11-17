@@ -1993,6 +1993,8 @@ pub(crate) enum Look {
     Tile { selected: bool },
     /// The help button: its children are its material and its glyph; `open` while the help shows.
     Help { open: bool },
+    /// The accessibility item, highlighted while its menu is open.
+    Access { open: bool },
 }
 
 #[derive(Default)]
@@ -2099,6 +2101,19 @@ impl<M: Clone + 'static> Widget<M> for Pressable<M> {
                 }
                 power_glyph(cx, Point::new(size.width / 2.0, size.height / 2.0));
             }
+            Look::Access { open } => {
+                if open || (state.focused && cx.focus_visible()) {
+                    fill(
+                        cx,
+                        Shape::RoundedRect {
+                            rect: Rect::new(0.0, 0.0, size.width, size.height),
+                            radius: size.height / 2.0,
+                        },
+                        Color::new(1.0, 1.0, 1.0, POWER_HIGHLIGHT_ALPHA),
+                    );
+                }
+                access_glyph(cx, Point::new(size.width / 2.0, size.height / 2.0));
+            }
             // the selection is the row's frame outlined, with no fill and no shadow
             Look::Tile { selected } => {
                 if selected || (state.focused && cx.focus_visible()) {
@@ -2122,7 +2137,7 @@ impl<M: Clone + 'static> Widget<M> for Pressable<M> {
                 ..AccessibleStates::default()
             });
         }
-        if let Look::Power { open } | Look::Help { open } = self.look {
+        if let Look::Power { open } | Look::Help { open } | Look::Access { open } = self.look {
             cx.states(AccessibleStates {
                 expanded: Some(open),
                 ..AccessibleStates::default()
@@ -2393,4 +2408,379 @@ impl<M: 'static> Widget<M> for NoticeCard {
         cx.name(self.speech.clone());
         cx.live(Live::Polite);
     }
+}
+
+/// The status bar's row of items that show a state and take no input, at the trailing end of `rect`, `STATUS_GAP` apart
+/// and centred on the bar's height.
+pub(crate) struct StatusRow<M> {
+    pub rect: Rect,
+    pub children: Vec<Element<M>>,
+}
+
+/// The gap between the status items.
+const STATUS_GAP: f64 = 14.0;
+
+impl<M: 'static> Widget<M> for StatusRow<M> {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: SizeSpec::Fixed(self.rect.width()),
+            height: SizeSpec::Fixed(self.rect.height()),
+            position: self.rect.origin,
+            ..LayoutSpec::new(ContainerKind::Stack {
+                axis: Axis::Horizontal,
+                spacing: STATUS_GAP,
+                align: Align::Center,
+                justify: Justify::End,
+            })
+        }
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        std::mem::take(&mut self.children)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self.rect != old.rect {
+            Change::Layout
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: self.rect.size,
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
+/// What a status item shows.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum StatusKind {
+    Wifi(crate::status::WifiState),
+    Battery(crate::status::BatteryState),
+    /// A line of text in the menu bar's font: the input source, a line about the machine.
+    Text(String),
+}
+
+/// A status item: a glyph of our own or a line of text, white, as tall as the bar's items; named for assistive
+/// technology by `label`.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct StatusItem {
+    pub kind: StatusKind,
+    pub label: String,
+    pub ascent: f64,
+    pub descent: f64,
+}
+
+/// The status items' size: as tall as the power item, the Wi-Fi glyph square, the battery wider; their text the menu
+/// bar's 13 pt.
+const STATUS_ITEM_HEIGHT: f64 = 22.0;
+const STATUS_BATTERY_WIDTH: f64 = 27.0;
+const STATUS_TEXT_SIZE: f64 = 13.0;
+/// The Wi-Fi glyph: the radius of its outer arc, the gap between arcs, its stroke, the half angle of its fan, degrees,
+/// and the alpha of an arc beyond the signal's bars.
+const WIFI_RADIUS: f64 = 8.0;
+const WIFI_STEP: f64 = 3.2;
+const WIFI_STROKE: f64 = 1.7;
+const WIFI_HALF_ANGLE: f64 = 45.0;
+const WIFI_DIM_ALPHA: f32 = 0.3;
+/// The battery glyph: its body, corner radius and stroke, the cap's size, and the inset of the charge's fill.
+const BATTERY_BODY: Size = Size::new(22.0, 11.0);
+const BATTERY_RADIUS: f64 = 3.0;
+const BATTERY_STROKE: f64 = 1.0;
+const BATTERY_CAP: Size = Size::new(1.5, 4.0);
+const BATTERY_INSET: f64 = 2.0;
+/// The charge's fill at or below this share: red.
+const BATTERY_LOW: f64 = 0.2;
+const BATTERY_LOW_FILL: [f32; 3] = [1.0, 0.27, 0.23];
+
+impl StatusItem {
+    fn laid_out(&self, text: &TextSystem, words: &str) -> Option<ParagraphLayout> {
+        let content = AttributedText::plain(
+            words.to_owned(),
+            TextStyle {
+                weight: FontWeight::REGULAR,
+                ..TextStyle::new(STATUS_TEXT_SIZE as f32)
+            },
+        );
+        let style = ParagraphStyle {
+            wrap: Wrap::None,
+            ..ParagraphStyle::default()
+        };
+        Some(text.paragraph(&content, &style).ok()?.layout(None))
+    }
+
+    fn width(&self, text: &TextSystem) -> f64 {
+        match &self.kind {
+            StatusKind::Wifi(_) => STATUS_ITEM_HEIGHT,
+            StatusKind::Battery(_) => STATUS_BATTERY_WIDTH,
+            StatusKind::Text(words) => self
+                .laid_out(text, words)
+                .and_then(|l| {
+                    l.lines()
+                        .iter()
+                        .map(|line| line.rect.max_x())
+                        .reduce(f64::max)
+                })
+                .unwrap_or(0.0)
+                .ceil(),
+        }
+    }
+}
+
+impl<M: 'static> Widget<M> for StatusItem {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec::new(ContainerKind::Leaf)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self.kind != old.kind || self.ascent != old.ascent || self.descent != old.descent {
+            Change::Layout
+        } else if self.label != old.label {
+            Change::Paint
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, cx: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(self.width(&cx.env().text), STATUS_ITEM_HEIGHT),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        let size = cx.size();
+        let middle = Point::new(size.width / 2.0, size.height / 2.0);
+        match &self.kind {
+            StatusKind::Wifi(state) => wifi_glyph(cx, middle, *state),
+            StatusKind::Battery(battery) => battery_glyph(cx, middle, *battery),
+            StatusKind::Text(words) => {
+                let Some(layout) = self.laid_out(&cx.env().text, words) else {
+                    return;
+                };
+                let line = (self.ascent + self.descent) * STATUS_TEXT_SIZE;
+                let top = (size.height - line) / 2.0;
+                let first = layout.lines().first().map_or(0.0, |l| l.baseline);
+                let origin = Point::new(0.0, top + self.ascent * STATUS_TEXT_SIZE - first);
+                for l in layout.lines() {
+                    for run in &l.runs {
+                        cx.push(PaintOp::Glyphs {
+                            origin: origin + run.origin,
+                            run: run.run.clone(),
+                            color: WHITE,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        cx.role(Role::StaticText);
+        cx.name(self.label.clone());
+    }
+}
+
+/// An arc of the circle about `center` of `radius`, from `from` to `to` degrees clockwise from 12 o'clock.
+fn arc(center: Point, radius: f64, from: f64, to: f64) -> Vec<PathVerb> {
+    const STEPS: usize = 16;
+    (0..=STEPS)
+        .map(|step| {
+            let angle = (from + (to - from) * step as f64 / STEPS as f64).to_radians();
+            let point = Point::new(
+                center.x + radius * angle.sin(),
+                center.y - radius * angle.cos(),
+            );
+            if step == 0 {
+                PathVerb::MoveTo(point)
+            } else {
+                PathVerb::LineTo(point)
+            }
+        })
+        .collect()
+}
+
+/// The Wi-Fi glyph about `middle`: a dot and three arcs fanning up from it; the arcs past the signal's bars, and all of
+/// them with the radio off or joined to nothing, dimmed.
+fn wifi_glyph(cx: &mut PaintCx<'_>, middle: Point, state: crate::status::WifiState) {
+    use crate::status::WifiState;
+    let lit = match state {
+        WifiState::Connected { bars } => usize::from(bars.max(1)),
+        WifiState::NotConnected | WifiState::Off => 0,
+    };
+    let center = Point::new(middle.x, middle.y + WIFI_RADIUS / 2.0 + 1.0);
+    let dot_alpha = if state == WifiState::Off {
+        WIFI_DIM_ALPHA
+    } else {
+        1.0
+    };
+    fill(
+        cx,
+        circle(center, WIFI_STROKE * 0.9),
+        Color::new(1.0, 1.0, 1.0, dot_alpha),
+    );
+    for ring in 1..=3usize {
+        let radius = WIFI_RADIUS - (3 - ring) as f64 * WIFI_STEP;
+        let alpha = if ring <= lit { 1.0 } else { WIFI_DIM_ALPHA };
+        cx.push(PaintOp::Stroke {
+            shape: Shape::Path {
+                verbs: arc(center, radius, -WIFI_HALF_ANGLE, WIFI_HALF_ANGLE),
+                fill_rule: FillRule::NonZero,
+            },
+            width: WIFI_STROKE,
+            paint: Paint::Solid(Color::new(1.0, 1.0, 1.0, alpha)),
+        });
+    }
+}
+
+/// The battery glyph about `middle`: an outlined body with a cap, filled to the charge (red when low), and a bolt over
+/// it while it charges.
+fn battery_glyph(cx: &mut PaintCx<'_>, middle: Point, battery: crate::status::BatteryState) {
+    let width = BATTERY_BODY.width + BATTERY_CAP.width;
+    let body = Rect::new(
+        middle.x - width / 2.0,
+        middle.y - BATTERY_BODY.height / 2.0,
+        BATTERY_BODY.width,
+        BATTERY_BODY.height,
+    );
+    let half = BATTERY_STROKE / 2.0;
+    cx.push(PaintOp::Stroke {
+        shape: Shape::RoundedRect {
+            rect: body.inset(Insets {
+                top: half,
+                left: half,
+                bottom: half,
+                right: half,
+            }),
+            radius: BATTERY_RADIUS,
+        },
+        width: BATTERY_STROKE,
+        paint: Paint::Solid(Color::new(1.0, 1.0, 1.0, 0.5)),
+    });
+    fill(
+        cx,
+        Shape::RoundedRect {
+            rect: Rect::new(
+                body.max_x() + 0.5,
+                middle.y - BATTERY_CAP.height / 2.0,
+                BATTERY_CAP.width,
+                BATTERY_CAP.height,
+            ),
+            radius: BATTERY_CAP.width / 2.0,
+        },
+        Color::new(1.0, 1.0, 1.0, 0.5),
+    );
+    let share = (battery.percentage / 100.0).clamp(0.0, 1.0);
+    let inner = body.inset(Insets {
+        top: BATTERY_INSET,
+        left: BATTERY_INSET,
+        bottom: BATTERY_INSET,
+        right: BATTERY_INSET,
+    });
+    let color = if share <= BATTERY_LOW && !battery.charging {
+        rgba(BATTERY_LOW_FILL, 1.0)
+    } else {
+        WHITE
+    };
+    if share > 0.0 {
+        fill(
+            cx,
+            Shape::RoundedRect {
+                rect: Rect::new(
+                    inner.x(),
+                    inner.y(),
+                    (inner.width() * share).max(1.0),
+                    inner.height(),
+                ),
+                radius: (BATTERY_RADIUS - BATTERY_INSET).max(1.0),
+            },
+            color,
+        );
+    }
+    if battery.charging {
+        // a bolt over the body, drawn dark on the fill
+        let (x, y, h) = (body.center().x, body.center().y, body.height() - 1.0);
+        let bolt = [
+            Point::new(x + 1.0, y - h / 2.0),
+            Point::new(x - 3.0, y + 0.8),
+            Point::new(x - 0.2, y + 0.8),
+            Point::new(x - 1.0, y + h / 2.0),
+            Point::new(x + 3.0, y - 0.8),
+            Point::new(x + 0.2, y - 0.8),
+        ];
+        let mut verbs: Vec<PathVerb> = bolt
+            .iter()
+            .enumerate()
+            .map(|(i, &p)| {
+                if i == 0 {
+                    PathVerb::MoveTo(p)
+                } else {
+                    PathVerb::LineTo(p)
+                }
+            })
+            .collect();
+        verbs.push(PathVerb::Close);
+        cx.push(PaintOp::Fill {
+            shape: Shape::Path {
+                verbs,
+                fill_rule: FillRule::NonZero,
+            },
+            paint: Paint::Solid(Color::new(0.0, 0.0, 0.0, 0.75)),
+        });
+    }
+}
+
+/// The accessibility glyph about `center`: a ring with a figure, arms out, inside it.
+fn access_glyph(cx: &mut PaintCx<'_>, center: Point) {
+    const RING: f64 = 7.5;
+    const STROKE: f64 = 1.5;
+    cx.push(PaintOp::Stroke {
+        shape: circle(center, RING),
+        width: STROKE,
+        paint: Paint::Solid(WHITE),
+    });
+    fill(cx, circle(Point::new(center.x, center.y - 3.6), 1.4), WHITE);
+    let limbs = vec![
+        // the arms
+        PathVerb::MoveTo(Point::new(center.x - 4.2, center.y - 1.4)),
+        PathVerb::LineTo(Point::new(center.x + 4.2, center.y - 1.4)),
+        // the body and the legs
+        PathVerb::MoveTo(Point::new(center.x, center.y - 1.4)),
+        PathVerb::LineTo(Point::new(center.x, center.y + 1.2)),
+        PathVerb::LineTo(Point::new(center.x - 2.4, center.y + 4.6)),
+        PathVerb::MoveTo(Point::new(center.x, center.y + 1.2)),
+        PathVerb::LineTo(Point::new(center.x + 2.4, center.y + 4.6)),
+    ];
+    cx.push(PaintOp::Stroke {
+        shape: Shape::Path {
+            verbs: limbs,
+            fill_rule: FillRule::NonZero,
+        },
+        width: STROKE,
+        paint: Paint::Solid(WHITE),
+    });
 }

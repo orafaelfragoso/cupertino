@@ -18,7 +18,7 @@ use cupertino_kit::theme::{Appearance, ThemePreferences, ThemeTokens};
 use cupertino_login::model::LockScreen;
 use cupertino_login::user::User;
 use cupertino_login::view::{
-    self, Access, Clock, Field, Input, Metrics, Screen, LOCKED_TITLE, LOCK_APP_ID,
+    self, Access, Clock, Field, Input, Metrics, Screen, Status, LOCKED_TITLE, LOCK_APP_ID,
 };
 use cupertino_login::wallpaper::Source;
 use cupertino_ui_test::{ManualClock, TestDriver};
@@ -120,6 +120,7 @@ impl Application for Lock {
                 large_clock: true,
                 avatar_from: None,
                 power: None,
+                status: Status::NONE,
                 notices: &[],
                 wallpaper: wallpaper(),
                 dim: 1.0,

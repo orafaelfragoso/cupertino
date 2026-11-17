@@ -29,9 +29,13 @@ use cupertino_kit::theme::ThemeTokens;
 use cupertino_login::model::LockScreen;
 use cupertino_login::picker::{self, Picker};
 use cupertino_login::power::{Action, Menu};
+use cupertino_login::status::{BatteryState, StatusItems, WifiState};
+
+/// The lock message the captures show.
+const LOCK_MESSAGE: &str = "If found, please return to the front desk.";
 use cupertino_login::user::User;
 use cupertino_login::view::{
-    self, Access, Clock, Field, Input, Metrics, PickerScreen, Screen, GREETER_APP_ID,
+    self, Access, Clock, Field, Input, Metrics, PickerScreen, Screen, Status, GREETER_APP_ID,
     GREETER_TITLE, LOCKED_TITLE, LOCK_APP_ID,
 };
 use cupertino_login::wallpaper::Source;
@@ -154,6 +158,20 @@ impl Application for Shown {
             .power
             .as_ref()
             .filter(|_| shot.surface != Surface::Lock);
+        // a battery, a joined network and the input source in the status bar; the login screen's accessibility item
+        let items = StatusItems {
+            wifi: Some(WifiState::Connected { bars: 3 }),
+            battery: Some(BatteryState {
+                percentage: 76.0,
+                charging: false,
+            }),
+            input: Some("US".to_owned()),
+            host: None,
+        };
+        let status = Status {
+            items: &items,
+            access: (shot.surface != Surface::Lock).then_some(false),
+        };
         let (title, app_id) = match shot.surface {
             Surface::Lock => (LOCKED_TITLE, LOCK_APP_ID.to_string()),
             _ => (GREETER_TITLE, format!("{GREETER_APP_ID}.capture")),
@@ -170,6 +188,7 @@ impl Application for Shown {
                     large_clock: true,
                     avatar_from: None,
                     power,
+                    status,
                     opacity: 1.0,
                     block: 1.0,
                     wallpaper: &model.wallpaper,
@@ -201,14 +220,15 @@ impl Application for Shown {
                     block: 1.0,
                     shake: 0.0,
                     hidden: false,
-                    lock_message: None,
-                    back: false,
+                    lock_message: Some(LOCK_MESSAGE),
+                    back: shot.surface == Surface::Password,
                     locked: false,
                     hide_user: false,
                     access: Access::default(),
                     large_clock: true,
                     avatar_from: None,
                     power,
+                    status,
                     notices: &[],
                     wallpaper: &model.wallpaper,
                     dim: 1.0,

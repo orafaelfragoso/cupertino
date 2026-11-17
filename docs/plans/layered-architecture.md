@@ -1013,7 +1013,9 @@ Filled in by W0.1, W6.2 and W6.close.
 
 | Scenario | Processes replaced: PSS sum today | After | Ratio | Frame p99 today | After |
 |---|---|---|---|---|---|
-| | | | | | |
+| Idle session, installed packages 0.1.0-202611162246, 4K at scale 1.5 | 179 692 kB (dock 53 868, launcher 42 164, menubar 28 916, notifications 19 477, files `--desktop` 14 772, controlcenter 9 989, osd 9 675, windowmanager 831); login, polkit agent and keyring prompter are not dumpable, read as root | | | not yet recorded | |
+
+The server measured 161 185 kB in the same session. Frame timings need a session started with `CUPERTINO_PROFILE` set.
 
 Processes replaced by the shell host: `cupertino-dock`, `-menubar`, `-launcher`, `-notifications`, `-controlcenter`,
 `-osd`, `-windowmanager`, `cupertino-files --desktop`, and the session-agent part of `cupertino-login`. Replaced by

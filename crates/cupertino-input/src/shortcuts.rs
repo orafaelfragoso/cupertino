@@ -73,6 +73,8 @@ pub enum Action {
     PowerKey,
     /// Ask the login process whether to log out (confirmation panel, countdown, applications quit first).
     Logout,
+    /// Log out at once, without the confirmation panel: the applications still quit first.
+    LogoutNow,
     /// Open the power panel of the login process: Restart, Sleep, Cancel, Shut Down.
     PowerDialog,
     /// Give the keys and the pointer back to the system while an application holds them (see `is_reserved` in the
@@ -165,6 +167,7 @@ impl Action {
             Action::ToggleStage => "toggle-stage".into(),
             Action::PowerKey => "power-key".into(),
             Action::Logout => "logout".into(),
+            Action::LogoutNow => "logout-now".into(),
             Action::PowerDialog => "power-dialog".into(),
             Action::ReleaseShortcuts => "release-shortcuts".into(),
             Action::InputSourcePrevious => "input-source-previous".into(),
@@ -277,6 +280,7 @@ impl FromStr for Action {
             "toggle-stage" => Action::ToggleStage,
             "power-key" => Action::PowerKey,
             "logout" => Action::Logout,
+            "logout-now" => Action::LogoutNow,
             "power-dialog" => Action::PowerDialog,
             "release-shortcuts" => Action::ReleaseShortcuts,
             "input-source-previous" => Action::InputSourcePrevious,
@@ -690,6 +694,7 @@ Super+F3 = focus-dock
 Super+Alt+d = toggle-dock-auto-hide
 Super+l = lock
 Super+Shift+q = logout
+Super+Alt+Shift+q = logout-now
 XF86PowerOff = power-key
 Ctrl+XF86PowerOff = power-dialog
 Ctrl+XF86Eject = power-dialog
@@ -754,6 +759,7 @@ Ctrl+F3 = focus-dock
 Super+Alt+d = toggle-dock-auto-hide
 Super+Ctrl+q = lock
 Super+Shift+q = logout
+Super+Alt+Shift+q = logout-now
 XF86PowerOff = power-key
 Ctrl+XF86PowerOff = power-dialog
 Ctrl+XF86Eject = power-dialog

@@ -7,7 +7,7 @@
 //! follows 0.1 s after one quits. The timers are the agent's; this side does the Wayland part:
 //!
 //! Every mutating method checks its caller ([`crate::caller`]): the process behind the connection, from the bus
-//! daemon's `ProcessFD`. `QuitNextApplication` and `ForceQuitApplication` are for the session agent the server
+//! daemon's `ProcessFD`. `QuitNextApplication`, `QuitStatus` and `ForceQuitApplication` are for the session agent the server
 //! supervises; `SetAppearance` and `SetAccessibility` for the settings application (a known program under `/usr`) and
 //! that agent; `ListShellProcesses` and `RestartShellProcess` for any unsandboxed process of the user the server runs as
 //! (the `cupertino shell` commands), by the user id the bus daemon gives for the connection. A caller without a process descriptor, a Flatpak or a Snap is refused, with an error name of its own
@@ -17,6 +17,7 @@
 //! | Member | What it does |
 //! |---|---|
 //! | `QuitNextApplication -> (s app_id, u windows)` | activates the most recently used application that has toplevels and sends `close` to each of them (`xdg_toplevel.close`); `("", 0) when no application has a window |
+//! | `QuitStatus(s app_id) -> s` | why the application asked to quit is still there: `not-responding` (a client behind its windows does not answer), `kept-windows` (it answers and has exactly the windows it was asked to close), `closing` (it closed some or opened another), `gone` (no window left). Only the session agent may call it |
 //! | `ForceQuitApplication(s app_id) -> u` | sends SIGKILL to the client processes of that application's toplevels, by the rules of Force Quit; returns how many processes. Only the session agent may call it |
 //! | `ApplicationQuit(s app_id) signal | the last toplevel of the application being quit went away |
 //! | `SetAppearance(s appearance)` | `light` or `dark`: stored as `appearance` in `compositor.json`, then applied at once; `auto` is refused with `NotSupported` (no time-of-day or location backend), anything else with `InvalidArgs`; a failed store, or no settings directory to store in, changes nothing (`Failed`) |
@@ -40,7 +41,7 @@ use crate::authorization::ShellRole;
 use crate::caller::{identify, Caller, Denial, Need, Sandbox};
 use crate::state::Cupertino;
 use crate::supervisor::{ProcessInfo, RestartError};
-use cupertino_wm::{AppId, Command};
+use cupertino_wm::{AppId, Command, WindowId};
 
 pub const BUS_NAME: &str = "org.cupertino.Session1";
 pub const OBJECT_PATH: &str = "/org/cupertino/Session1";
@@ -50,6 +51,8 @@ pub const OBJECT_PATH: &str = "/org/cupertino/Session1";
 struct Quitting {
     app: AppId,
     identity: String,
+    /// The toplevels it was asked to close.
+    asked: Vec<WindowId>,
 }
 
 /// State of the quit sequence and the link to the bus thread.
@@ -108,6 +111,12 @@ pub enum Reject {
 /// A call that arrived on the bus, with its caller and where its answer goes.
 pub enum Call {
     QuitNext(Caller, async_channel::Sender<Result<(String, u32), Reject>>),
+    /// The application whose quit status is asked.
+    QuitStatus(
+        String,
+        Caller,
+        async_channel::Sender<Result<String, Reject>>,
+    ),
     /// The application to force quit.
     ForceQuit(String, Caller, async_channel::Sender<Result<u32, Reject>>),
     SetAppearance(String, Caller, async_channel::Sender<Result<(), Reject>>),
@@ -197,15 +206,16 @@ impl Cupertino {
             .app_identity_of(app)
             .expect("an application with windows is known to the window model");
         self.command(Command::ActivateApp { app });
-        let mut windows = 0;
+        let mut asked = Vec::new();
         for entry in self
             .windows
             .iter()
             .filter(|e| self.wm.window(e.id).is_some_and(|w| w.app == app))
         {
             entry.close();
-            windows += 1;
+            asked.push(entry.id);
         }
+        let windows = asked.len() as u32;
         tracing::info!(
             app = identity,
             windows,
@@ -214,8 +224,49 @@ impl Cupertino {
         self.quit.quitting = Some(Quitting {
             app,
             identity: identity.clone(),
+            asked,
         });
         (identity, windows)
+    }
+
+    /// `QuitStatus`: why `identity`, asked to quit, is still there. `not-responding` while a client behind its windows
+    /// does not answer; `gone` when it has no window left; `kept-windows` when it still has exactly the windows it was
+    /// asked to close, which is how an application that declines to quit looks; `closing` otherwise (it closed some, or
+    /// opened another, such as a sheet asking to save).
+    pub fn quit_status(&self, identity: &str) -> &'static str {
+        if self.unresponsive_apps().contains(identity) {
+            return "not-responding";
+        }
+        let Some(app) = self.wm.app_for_identity(identity) else {
+            return "gone";
+        };
+        let mut open: Vec<WindowId> = self
+            .windows
+            .iter()
+            .filter(|e| self.wm.window(e.id).is_some_and(|w| w.app == app))
+            .map(|e| e.id)
+            .collect();
+        if open.is_empty() {
+            return "gone";
+        }
+        let asked = self
+            .quit
+            .quitting
+            .as_ref()
+            .filter(|q| q.app == app)
+            .map(|q| q.asked.clone());
+        match asked {
+            Some(mut asked) => {
+                open.sort();
+                asked.sort();
+                if open == asked {
+                    "kept-windows"
+                } else {
+                    "closing"
+                }
+            }
+            None => "closing",
+        }
     }
 
     /// `ForceQuitApplication`: SIGKILL the processes behind the application's toplevels, by the same rules as Force Quit.
@@ -440,6 +491,13 @@ impl Cupertino {
                     .map_err(Reject::Caller);
                 let _ = reply.try_send(answer);
             }
+            Call::QuitStatus(identity, caller, reply) => {
+                let answer = self
+                    .authorize_call("QuitStatus", &caller, Need::SessionAgent)
+                    .map(|()| self.quit_status(&identity).to_owned())
+                    .map_err(Reject::Caller);
+                let _ = reply.try_send(answer);
+            }
             Call::ForceQuit(identity, caller, reply) => {
                 let answer = self
                     .force_quit_application_for(&caller, &identity)
@@ -605,6 +663,16 @@ impl Session1 {
     ) -> Result<(String, u32), CallError> {
         let caller = caller_of(&header, connection).await;
         self.ask(|tx| Call::QuitNext(caller, tx)).await
+    }
+
+    async fn quit_status(
+        &self,
+        app_id: String,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &zbus::Connection,
+    ) -> Result<String, CallError> {
+        let caller = caller_of(&header, connection).await;
+        self.ask(|tx| Call::QuitStatus(app_id, caller, tx)).await
     }
 
     async fn force_quit_application(

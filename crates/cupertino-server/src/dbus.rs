@@ -47,6 +47,8 @@ pub enum Request {
     LockNow,
     /// Ask `cupertino-login` whether to log out (its confirmation panel).
     LogOut,
+    /// Have `cupertino-login` log out without its panel: the applications still quit first.
+    LogOutNow,
     /// Open `cupertino-login`'s power panel.
     PowerDialog,
     /// The menu bar's entries, forwarded by the server: sleep without a panel, the restart and shut down panels, the
@@ -153,6 +155,7 @@ impl Request {
                 "RequestPowerDialog",
                 Body::Empty,
             ),
+            Request::LogOutNow => login_call("LogOutNow"),
             Request::Sleep => login_call("Sleep"),
             Request::Restart => login_call("RequestRestart"),
             Request::ShutDown => login_call("RequestShutDown"),
@@ -971,7 +974,7 @@ async fn call(
     // an owner that is not the login process gets nothing, and a log out is not the end of the session then: the name
     // being taken is not the same as nobody to ask
     let Some(destination) = destination(conn, name, login).await else {
-        if what == Request::LogOut {
+        if matches!(what, Request::LogOut | Request::LogOutNow) {
             post_notice(conn, LogOutDropped::OwnerNotTheLoginProcess).await;
         }
         return;
@@ -998,7 +1001,7 @@ async fn call(
         }
     };
     if let Err(e) = sent {
-        if what == Request::LogOut && is_nobody_there(&e) {
+        if matches!(what, Request::LogOut | Request::LogOutNow) && is_nobody_there(&e) {
             let trust = *login
                 .lock()
                 .expect("no thread panics while holding the login trust");
@@ -1131,6 +1134,19 @@ impl crate::state::Cupertino {
         }
         if !self.dbus.as_ref().is_some_and(|d| d.send(Request::LogOut)) {
             tracing::warn!("no login process to ask: the log out shortcut ends the server");
+            self.quit_compositor();
+        }
+    }
+
+    /// Have the login process log out without its confirmation panel (the log out now shortcut). It goes over the session
+    /// bus to the login process the server trusts; without one to ask the server ends, as for [`Self::log_out_session`].
+    pub fn log_out_session_now(&mut self) {
+        if !self
+            .dbus
+            .as_ref()
+            .is_some_and(|d| d.send(Request::LogOutNow))
+        {
+            tracing::warn!("no login process to ask: the log out now shortcut ends the server");
             self.quit_compositor();
         }
     }
@@ -1412,6 +1428,7 @@ mod tests {
     fn the_log_out_and_power_dialog_requests_call_the_panels_of_the_login_process() {
         for (request, method) in [
             (Request::LogOut, "RequestLogOut"),
+            (Request::LogOutNow, "LogOutNow"),
             (Request::PowerDialog, "RequestPowerDialog"),
         ] {
             assert_eq!(

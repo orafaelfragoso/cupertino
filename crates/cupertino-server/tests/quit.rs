@@ -228,7 +228,7 @@ impl Drop for App {
 }
 
 #[test]
-fn applications_are_asked_to_quit_one_at_a_time_most_recent_first() {
+fn applications_are_asked_to_quit_one_at_a_time_most_recent_first_and_say_why_one_stays() {
     let Some(mut h) = Harness::new() else { return };
     let socket = h.socket_path();
     let stubborn = App::start(socket.clone(), "org.example.stubborn", false);
@@ -266,6 +266,16 @@ fn applications_are_asked_to_quit_one_at_a_time_most_recent_first() {
         "an application that ignores the request is still being quit"
     );
     assert_eq!(
+        h.state.quit_status("org.example.stubborn"),
+        "kept-windows",
+        "it answers and keeps the window it was asked to close"
+    );
+    assert_eq!(
+        h.state.quit_status("org.example.polite"),
+        "gone",
+        "the application that quit has no window left"
+    );
+    assert_eq!(
         h.state.force_quit_application("org.example.unknown"),
         0,
         "an unknown application has no process to kill"
@@ -278,4 +288,5 @@ fn applications_are_asked_to_quit_one_at_a_time_most_recent_first() {
         (String::new(), 0),
         "nothing is left to quit"
     );
+    assert_eq!(h.state.quit_status("org.example.stubborn"), "gone");
 }

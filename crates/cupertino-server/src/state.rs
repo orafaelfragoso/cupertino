@@ -286,6 +286,12 @@ pub const CURRENT_DESKTOP: &str = "Cupertino";
 /// messages) is full within half a second; this holds about half a minute of it.
 pub const CLIENT_EVENT_BUFFER: usize = 1 << 20;
 
+/// The layer-shell namespace of the session agent's panels: the log out, restart and shut down confirmations, the power
+/// key's panel and the panel that interrupts a log out. They stand above the windows as alerts on glass with an alert's
+/// shadow (`render::scene`), take the keyboard when they appear and give it up to a window the person presses
+/// ([`Cupertino::release_engaged_layer`]): they are no modal dialogs.
+pub const SESSION_PANEL_NAMESPACE: &str = "login-panel";
+
 /// How long a global that went away can still be bound, for the clients that bind it before they hear that it is gone.
 pub const RETIRED_GLOBAL_LIFETIME: std::time::Duration = std::time::Duration::from_secs(5);
 
@@ -2581,11 +2587,21 @@ impl Cupertino {
         }
     }
 
+    /// Whether `surface` is a layer surface of the session agent's panels ([`SESSION_PANEL_NAMESPACE`]).
+    pub fn is_session_panel(&self, surface: &WlSurface) -> bool {
+        self.outputs.iter().any(|o| {
+            layer_map_for_output(&o.output)
+                .layer_for_surface(surface, WindowSurfaceType::TOPLEVEL)
+                .is_some_and(|l| l.namespace() == SESSION_PANEL_NAMESPACE)
+        })
+    }
+
     /// A press at `pos` outside the dock bar or menu bar that holds the keyboard exclusively, which it asks for only
-    /// while engaged (Focus Dock, the menu bar's keyboard mode), ends that: the layer loses the keyboard, which goes back
-    /// to the key window, and the layer answers the leave by letting go. A press on the layer or on one of its popups
-    /// keeps it. Other exclusive layers (the authentication prompt, the launcher, the overview) are left as they are,
-    /// and the lock screen never gets here.
+    /// while engaged (Focus Dock, the menu bar's keyboard mode), or outside a session panel, which asks for it when it
+    /// appears ([`SESSION_PANEL_NAMESPACE`]), ends that: the layer loses the keyboard, which goes back to the key window
+    /// (and to the window pressed), and the layer answers the leave by letting go. A press on the layer or on one of its
+    /// popups keeps it. Other exclusive layers (the authentication prompt, the launcher, the overview) are left as they
+    /// are, and the lock screen never gets here.
     ///
     /// A menu open from the layer closes first, so the keyboard is back on the layer when it leaves and the layer is
     /// told; the press is then consumed, as any press that closes a menu is. True when it was.
@@ -2595,11 +2611,9 @@ impl Cupertino {
         serial: Serial,
         time: u32,
     ) -> bool {
-        let Some(layer) = self
-            .exclusive_layer
-            .clone()
-            .filter(|l| self.docks.has_surface(l) || self.menu_bars.has_surface(l))
-        else {
+        let Some(layer) = self.exclusive_layer.clone().filter(|l| {
+            self.docks.has_surface(l) || self.menu_bars.has_surface(l) || self.is_session_panel(l)
+        }) else {
             return false;
         };
         if self
@@ -2724,6 +2738,7 @@ impl Cupertino {
                 }
                 ShellOp::Lock => self.lock_session_now(),
                 ShellOp::LogOut => self.log_out_session(),
+                ShellOp::LogOutNow => self.log_out_session_now(),
                 ShellOp::PowerDialog => self.power_dialog(),
                 ShellOp::ReleaseShortcuts => {
                     self.release_shortcuts();

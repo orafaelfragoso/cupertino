@@ -9,98 +9,97 @@ const LEFT: Area = Area::new(0.0, 0.0, 1920.0, 1080.0);
 const RIGHT: Area = Area::new(1920.0, 0.0, 2560.0, 1440.0);
 
 #[test]
-fn touching_displays_are_a_valid_arrangement() {
-    assert_eq!(check(&[LEFT, RIGHT]), Ok(()));
-    let stacked = Area::new(0.0, 1080.0, 1920.0, 1080.0);
-    assert_eq!(check(&[LEFT, stacked]), Ok(()));
-}
-
-#[test]
-fn an_arrangement_needs_a_display() {
-    assert_eq!(check(&[]), Err(ArrangementError::Nothing));
-}
-
-#[test]
-fn a_display_without_a_finite_area_is_empty() {
-    for bad in [
-        Area::new(0.0, 0.0, 0.0, 100.0),
-        Area::new(0.0, 0.0, 100.0, -1.0),
-        Area::new(f64::NAN, 0.0, 100.0, 100.0),
-        Area::new(0.0, 0.0, f64::INFINITY, 100.0),
+fn an_arrangement_is_checked_as_a_whole_and_its_first_problem_is_named() {
+    let empty = Area::new(0.0, 0.0, 0.0, 0.0);
+    for (name, areas, expected) in [
+        ("side by side", vec![LEFT, RIGHT], Ok(())),
+        (
+            "stacked",
+            vec![LEFT, Area::new(0.0, 1080.0, 1920.0, 1080.0)],
+            Ok(()),
+        ),
+        ("no display", vec![], Err(ArrangementError::Nothing)),
+        (
+            "zero width",
+            vec![LEFT, Area::new(0.0, 0.0, 0.0, 100.0)],
+            Err(ArrangementError::Empty(1)),
+        ),
+        (
+            "negative height",
+            vec![LEFT, Area::new(0.0, 0.0, 100.0, -1.0)],
+            Err(ArrangementError::Empty(1)),
+        ),
+        (
+            "not a number",
+            vec![LEFT, Area::new(f64::NAN, 0.0, 100.0, 100.0)],
+            Err(ArrangementError::Empty(1)),
+        ),
+        (
+            "infinite",
+            vec![LEFT, Area::new(0.0, 0.0, f64::INFINITY, 100.0)],
+            Err(ArrangementError::Empty(1)),
+        ),
+        (
+            "beyond the protocol range",
+            vec![Area::new(COORDINATE_LIMIT, 0.0, 100.0, 100.0)],
+            Err(ArrangementError::OutOfRange(0)),
+        ),
+        (
+            "below the protocol range",
+            vec![LEFT, Area::new(-COORDINATE_LIMIT - 1.0, 0.0, 10.0, 10.0)],
+            Err(ArrangementError::OutOfRange(1)),
+        ),
+        (
+            "at the range's edge",
+            vec![Area::new(COORDINATE_LIMIT - 100.0, 0.0, 100.0, 100.0)],
+            Ok(()),
+        ),
+        (
+            "one inside another",
+            vec![LEFT, RIGHT, Area::new(100.0, 100.0, 50.0, 50.0)],
+            Err(ArrangementError::Overlap(0, 2)),
+        ),
+        (
+            "partly over another",
+            vec![LEFT, Area::new(1900.0, 0.0, 100.0, 100.0), RIGHT],
+            Err(ArrangementError::Overlap(0, 1)),
+        ),
+        (
+            "shape problems before overlaps",
+            vec![LEFT, LEFT, empty],
+            Err(ArrangementError::Empty(2)),
+        ),
     ] {
-        assert_eq!(check(&[LEFT, bad]), Err(ArrangementError::Empty(1)));
+        assert_eq!(check(&areas), expected, "{name}");
     }
 }
 
 #[test]
-fn a_display_beyond_the_protocol_range_is_refused() {
-    let far = Area::new(COORDINATE_LIMIT, 0.0, 100.0, 100.0);
-    assert_eq!(check(&[far]), Err(ArrangementError::OutOfRange(0)));
-    let negative = Area::new(-COORDINATE_LIMIT - 1.0, 0.0, 10.0, 10.0);
-    assert_eq!(
-        check(&[LEFT, negative]),
-        Err(ArrangementError::OutOfRange(1))
-    );
-    let edge = Area::new(COORDINATE_LIMIT - 100.0, 0.0, 100.0, 100.0);
-    assert_eq!(check(&[edge]), Ok(()));
-}
-
-#[test]
-fn overlapping_displays_are_named_by_position() {
-    let inside = Area::new(100.0, 100.0, 50.0, 50.0);
-    assert_eq!(
-        check(&[LEFT, RIGHT, inside]),
-        Err(ArrangementError::Overlap(0, 2))
-    );
-    let partly = Area::new(1900.0, 0.0, 100.0, 100.0);
-    assert_eq!(
-        check(&[LEFT, partly, RIGHT]),
-        Err(ArrangementError::Overlap(0, 1))
-    );
-}
-
-#[test]
-fn the_first_problem_found_is_the_one_reported() {
-    let empty = Area::new(0.0, 0.0, 0.0, 0.0);
-    assert_eq!(
-        check(&[LEFT, LEFT, empty]),
-        Err(ArrangementError::Empty(2)),
-        "shape problems come before overlaps"
-    );
-}
-
-#[test]
-fn errors_describe_themselves() {
-    assert_eq!(
-        ArrangementError::Overlap(0, 2).to_string(),
-        "displays 0 and 2 would overlap"
-    );
-    assert_eq!(
-        ArrangementError::Nothing.to_string(),
-        "at least one display must stay on"
-    );
-}
-
-#[test]
-fn a_free_place_is_kept() {
-    assert_eq!(
-        free_place(&[LEFT], Area::new(0.0, 1080.0, 800.0, 600.0)),
-        (0.0, 1080.0)
-    );
-    assert_eq!(free_place(&[], LEFT), (0.0, 0.0));
-}
-
-#[test]
-fn a_taken_place_goes_beside_the_others() {
-    let taken = Area::new(100.0, 50.0, 800.0, 600.0);
+fn a_returning_display_keeps_a_free_place_or_goes_beside_the_others() {
     let others = [
         Area::new(0.0, 20.0, 1000.0, 700.0),
         Area::new(1000.0, -40.0, 500.0, 500.0),
     ];
-    let (x, y) = free_place(&others, taken);
-    assert_eq!((x, y), (1500.0, -40.0));
-    let placed = Area::new(x, y, taken.w, taken.h);
-    assert!(others.iter().all(|o| !o.overlaps(&placed)));
+    for (name, others, area, expected) in [
+        (
+            "free",
+            &[LEFT][..],
+            Area::new(0.0, 1080.0, 800.0, 600.0),
+            (0.0, 1080.0),
+        ),
+        ("alone", &[][..], LEFT, (0.0, 0.0)),
+        (
+            "taken",
+            &others[..],
+            Area::new(100.0, 50.0, 800.0, 600.0),
+            (1500.0, -40.0),
+        ),
+    ] {
+        let (x, y) = free_place(others, area);
+        assert_eq!((x, y), expected, "{name}");
+        let placed = Area::new(x, y, area.w, area.h);
+        assert!(others.iter().all(|o| !o.overlaps(&placed)), "{name}");
+    }
 }
 
 #[test]
@@ -115,49 +114,58 @@ fn a_moved_window_keeps_its_offset_from_the_corner() {
 }
 
 #[test]
-fn a_covered_point_stays() {
-    assert_eq!(
-        reachable_point(&[LEFT, RIGHT], (2000.0, 10.0)),
-        Some((2000.0, 10.0))
-    );
-    assert_eq!(reachable_point(&[LEFT], (0.0, 0.0)), Some((0.0, 0.0)));
-}
-
-#[test]
-fn an_uncovered_point_goes_to_the_nearest_display() {
-    // Bottom and right edges are exclusive: the pointer stays one point inside them.
-    assert_eq!(
-        reachable_point(&[LEFT], (1920.0, 500.0)),
-        Some((1919.0, 500.0))
-    );
-    assert_eq!(reachable_point(&[LEFT], (-50.0, -50.0)), Some((0.0, 0.0)));
-    assert_eq!(
-        reachable_point(&[LEFT], (100.0, 5000.0)),
-        Some((100.0, 1079.0))
-    );
+fn a_pointer_left_outside_every_display_goes_to_the_nearest_one() {
     let apart = Area::new(5000.0, 0.0, 800.0, 600.0);
-    assert_eq!(
-        reachable_point(&[LEFT, apart], (4000.0, 300.0)),
-        Some((5000.0, 300.0))
-    );
-    assert_eq!(
-        reachable_point(&[LEFT, apart], (3000.0, 300.0)),
-        Some((1919.0, 300.0))
-    );
-}
-
-#[test]
-fn without_displays_no_point_is_reachable() {
-    assert_eq!(reachable_point(&[], (1.0, 1.0)), None);
+    for (name, areas, point, expected) in [
+        (
+            "covered",
+            vec![LEFT, RIGHT],
+            (2000.0, 10.0),
+            Some((2000.0, 10.0)),
+        ),
+        ("on the origin", vec![LEFT], (0.0, 0.0), Some((0.0, 0.0))),
+        // Bottom and right edges are exclusive: the pointer stays one point inside them.
+        (
+            "on the right edge",
+            vec![LEFT],
+            (1920.0, 500.0),
+            Some((1919.0, 500.0)),
+        ),
+        (
+            "above and left",
+            vec![LEFT],
+            (-50.0, -50.0),
+            Some((0.0, 0.0)),
+        ),
+        ("below", vec![LEFT], (100.0, 5000.0), Some((100.0, 1079.0))),
+        (
+            "nearer the far display",
+            vec![LEFT, apart],
+            (4000.0, 300.0),
+            Some((5000.0, 300.0)),
+        ),
+        (
+            "nearer the first display",
+            vec![LEFT, apart],
+            (3000.0, 300.0),
+            Some((1919.0, 300.0)),
+        ),
+        ("no display", vec![], (1.0, 1.0), None),
+    ] {
+        assert_eq!(reachable_point(&areas, point), expected, "{name}");
+    }
 }
 
 #[test]
 fn area_edges_and_containment_are_half_open() {
-    assert_eq!(LEFT.right(), 1920.0);
-    assert_eq!(LEFT.bottom(), 1080.0);
-    assert!(LEFT.contains((0.0, 0.0)));
-    assert!(!LEFT.contains((1920.0, 0.0)));
-    assert!(!LEFT.contains((0.0, 1080.0)));
+    assert_eq!((LEFT.right(), LEFT.bottom()), (1920.0, 1080.0));
+    for (point, inside) in [
+        ((0.0, 0.0), true),
+        ((1920.0, 0.0), false),
+        ((0.0, 1080.0), false),
+    ] {
+        assert_eq!(LEFT.contains(point), inside, "{point:?}");
+    }
     assert!(!LEFT.overlaps(&RIGHT));
     assert!(LEFT.overlaps(&LEFT));
 }

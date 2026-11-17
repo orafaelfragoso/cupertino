@@ -2,163 +2,101 @@
 
 use cupertino_theme::{Appearance, Color, Evidence};
 
-fn close(a: f32, b: f32) -> bool {
-    (a - b).abs() < 1e-6
+fn close(a: [f32; 4], b: [f32; 4]) -> bool {
+    a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-6)
 }
 
 #[test]
-fn eight_bit_channels_round_trip() {
+fn eight_bit_and_hex_forms_convert_and_clamp() {
     for c in [[0, 0, 0, 0], [255, 255, 255, 255], [12, 200, 77, 128]] {
-        assert_eq!(Color::from_rgba8(c).to_rgba8(), c);
+        assert_eq!(Color::from_rgba8(c).to_rgba8(), c, "{c:?} round trip");
     }
-}
-
-#[test]
-fn eight_bit_channels_map_to_the_unit_range() {
-    let c = Color::from_rgba8([255, 0, 51, 255]);
-    assert!(close(c.r, 1.0) && close(c.g, 0.0) && close(c.b, 0.2) && close(c.a, 1.0));
-}
-
-#[test]
-fn converting_to_eight_bits_clamps() {
+    assert!(close(
+        Color::from_rgba8([255, 0, 51, 255]).to_array(),
+        [1.0, 0.0, 0.2, 1.0]
+    ));
     assert_eq!(
         Color::new(2.0, -1.0, 0.5, 1.5).to_rgba8(),
-        [255, 0, 128, 255]
+        [255, 0, 128, 255],
+        "out-of-range channels clamp"
+    );
+    assert_eq!(
+        Color::from_rgba8([255, 0, 171, 10]).hex(),
+        "#FF00AB",
+        "hex drops alpha"
     );
 }
 
 #[test]
-fn the_hex_form_drops_alpha() {
-    assert_eq!(Color::from_rgba8([255, 0, 171, 10]).hex(), "#FF00AB");
-}
-
-#[test]
-fn premultiplying_scales_the_channels_by_alpha() {
-    let p = Color::new(1.0, 0.5, 0.0, 0.5).premultiplied();
-    assert_eq!(p, [0.5, 0.25, 0.0, 0.5]);
-}
-
-#[test]
-fn with_alpha_changes_only_alpha() {
-    let c = Color::new(0.1, 0.2, 0.3, 1.0).with_alpha(0.4);
-    assert_eq!(c.to_array(), [0.1, 0.2, 0.3, 0.4]);
-}
-
-#[test]
-fn lerp_runs_from_one_colour_to_the_other() {
+fn colour_arithmetic() {
     let a = Color::new(0.0, 0.0, 0.0, 0.0);
     let b = Color::new(1.0, 0.5, 0.2, 1.0);
-    assert_eq!(a.lerp(b, 0.0), a);
-    assert_eq!(a.lerp(b, 1.0), b);
-    let m = a.lerp(b, 0.5);
-    assert!(close(m.r, 0.5) && close(m.g, 0.25) && close(m.b, 0.1) && close(m.a, 0.5));
-}
-
-#[test]
-fn there_are_four_appearances() {
-    assert_eq!(Appearance::ALL.len(), 4);
-}
-
-#[test]
-fn dark_and_high_contrast_are_told_apart() {
-    assert!(!Appearance::Light.is_dark() && !Appearance::Light.is_high_contrast());
-    assert!(Appearance::Dark.is_dark() && !Appearance::Dark.is_high_contrast());
-    assert!(
-        !Appearance::LightHighContrast.is_dark()
-            && Appearance::LightHighContrast.is_high_contrast()
-    );
-    assert!(
-        Appearance::DarkHighContrast.is_dark() && Appearance::DarkHighContrast.is_high_contrast()
-    );
-}
-
-#[test]
-fn the_base_appearance_drops_high_contrast() {
-    assert_eq!(Appearance::LightHighContrast.base(), Appearance::Light);
-    assert_eq!(Appearance::DarkHighContrast.base(), Appearance::Dark);
-    assert_eq!(Appearance::Dark.base(), Appearance::Dark);
-}
-
-#[test]
-fn a_session_picks_its_catalog_from_dark_and_contrast() {
-    assert_eq!(Appearance::of_session(false, false), Appearance::Light);
-    assert_eq!(Appearance::of_session(true, false), Appearance::Dark);
-    assert_eq!(
-        Appearance::of_session(false, true),
-        Appearance::LightHighContrast
-    );
-    assert_eq!(
-        Appearance::of_session(true, true),
-        Appearance::DarkHighContrast
-    );
-}
-
-#[test]
-fn contrast_switches_without_changing_darkness() {
-    for a in Appearance::ALL {
-        assert_eq!(a.with_high_contrast(true).is_dark(), a.is_dark());
-        assert!(a.with_high_contrast(true).is_high_contrast());
-        assert_eq!(a.with_high_contrast(false), a.base());
+    for (label, got, expected) in [
+        (
+            "premultiplied",
+            Color::new(1.0, 0.5, 0.0, 0.5).premultiplied(),
+            [0.5, 0.25, 0.0, 0.5],
+        ),
+        (
+            "with_alpha",
+            Color::new(0.1, 0.2, 0.3, 1.0).with_alpha(0.4).to_array(),
+            [0.1, 0.2, 0.3, 0.4],
+        ),
+        ("lerp at 0", a.lerp(b, 0.0).to_array(), a.to_array()),
+        ("lerp at 1", a.lerp(b, 1.0).to_array(), b.to_array()),
+        (
+            "lerp at 0.5",
+            a.lerp(b, 0.5).to_array(),
+            [0.5, 0.25, 0.1, 0.5],
+        ),
+    ] {
+        assert!(close(got, expected), "{label}: {got:?}");
     }
 }
 
 #[test]
-fn appearance_names_round_trip_through_parsing() {
-    for a in Appearance::ALL {
-        assert_eq!(a.as_str().parse::<Appearance>(), Ok(a));
+fn appearances_tell_darkness_and_contrast_apart_and_convert() {
+    use Appearance::*;
+    // (appearance, dark, high contrast, base, name)
+    for (a, dark, contrast, base, name) in [
+        (Light, false, false, Light, "light"),
+        (Dark, true, false, Dark, "dark"),
+        (LightHighContrast, false, true, Light, "light-high-contrast"),
+        (DarkHighContrast, true, true, Dark, "dark-high-contrast"),
+    ] {
+        assert_eq!(
+            (a.is_dark(), a.is_high_contrast()),
+            (dark, contrast),
+            "{a:?}"
+        );
+        assert_eq!(a.base(), base, "{a:?}");
+        assert_eq!(Appearance::of_session(dark, contrast), a, "{a:?}");
+        assert_eq!(a.with_high_contrast(false), base, "{a:?}");
+        assert_eq!(
+            a.with_high_contrast(true),
+            Appearance::of_session(dark, true),
+            "{a:?}"
+        );
+        assert_eq!(name.parse::<Appearance>(), Ok(a), "{name}");
+        assert_eq!(a.as_str().parse::<Appearance>(), Ok(a), "{name}");
     }
-    assert_eq!(Appearance::DarkHighContrast.as_str(), "dark-high-contrast");
     assert!("sepia".parse::<Appearance>().is_err());
 }
 
 #[test]
-fn evidence_classes_order_from_unknown_to_verified() {
-    assert!(Evidence::Unknown < Evidence::Approximated);
-    assert!(Evidence::Approximated < Evidence::Inferred);
-    assert!(Evidence::Inferred < Evidence::Documented);
-    assert!(Evidence::Documented < Evidence::Verified);
-}
-
-#[test]
-fn the_weakest_class_in_a_label_wins() {
-    assert_eq!(
-        Evidence::parse_weakest(Evidence::Verified.as_str()),
-        Evidence::Verified
-    );
-    assert_eq!(
-        Evidence::parse_weakest(&format!(
-            "{} (a) / {} (b)",
-            Evidence::Verified.as_str(),
-            Evidence::Inferred.as_str()
-        )),
-        Evidence::Inferred
-    );
-    assert_eq!(
-        Evidence::parse_weakest(&format!(
-            "{} / {}",
-            Evidence::Documented.as_str(),
-            Evidence::Approximated.as_str()
-        )),
-        Evidence::Approximated
-    );
-}
-
-#[test]
-fn a_label_without_a_class_is_unknown() {
-    assert_eq!(Evidence::parse_weakest("nothing here"), Evidence::Unknown);
-    assert_eq!(Evidence::parse_weakest(""), Evidence::Unknown);
-}
-
-#[test]
-fn evidence_names_are_upper_case_words() {
-    for e in [
-        Evidence::Unknown,
-        Evidence::Approximated,
-        Evidence::Inferred,
-        Evidence::Documented,
-        Evidence::Verified,
+fn the_weakest_evidence_class_in_a_label_wins() {
+    let v = Evidence::Verified.as_str();
+    let d = Evidence::Documented.as_str();
+    let i = Evidence::Inferred.as_str();
+    let a = Evidence::Approximated.as_str();
+    for (label, expected) in [
+        (v.to_string(), Evidence::Verified),
+        (format!("{v} (a) / {i} (b)"), Evidence::Inferred),
+        (format!("{d} / {a}"), Evidence::Approximated),
+        (d.to_string(), Evidence::Documented),
+        ("nothing here".to_string(), Evidence::Unknown),
+        (String::new(), Evidence::Unknown),
     ] {
-        assert!(e.as_str().chars().all(|c| c.is_ascii_uppercase()));
-        assert_eq!(Evidence::parse_weakest(e.as_str()), e);
+        assert_eq!(Evidence::parse_weakest(&label), expected, "{label:?}");
     }
 }

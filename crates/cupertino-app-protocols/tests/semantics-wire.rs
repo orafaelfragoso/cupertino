@@ -104,7 +104,7 @@ fn protected_is_by_role_or_value() {
     n.role = "password-input".into();
     assert!(n.protected());
     n.role = "text-input".into();
-    n.value = Some(Value::Protected);
+    n.value = Some(Value::Protected {});
     assert!(n.protected());
     n.value = Some(text("x"));
     assert!(!n.protected());
@@ -232,7 +232,7 @@ fn numbers_must_be_finite_ordered_with_a_positive_step() {
 
 #[test]
 fn protected_nodes_disclose_nothing_and_offer_nothing() {
-    let mut s = with_field(Value::Protected, vec![]);
+    let mut s = with_field(Value::Protected {}, vec![]);
     assert_eq!(s.validate(), Ok(()));
     s.nodes[1].actions = vec![Action::Focus];
     assert_eq!(err(&s), "protected node disclosed a value or actions");
@@ -242,7 +242,7 @@ fn protected_nodes_disclose_nothing_and_offer_nothing() {
     assert_eq!(err(&s), "protected node disclosed a value or actions");
     s.nodes[1].value = None;
     assert_eq!(err(&s), "protected node disclosed a value or actions");
-    s.nodes[1].value = Some(Value::Protected);
+    s.nodes[1].value = Some(Value::Protected {});
     assert_eq!(s.validate(), Ok(()));
 }
 
@@ -303,7 +303,7 @@ fn permits_refuses_unknown_protected_disabled_busy_and_unlisted() {
     s.nodes[1].states.busy = true;
     assert!(!s.permits(2, Action::Click, None));
     s.nodes[1].states.busy = false;
-    s.nodes[1].value = Some(Value::Protected);
+    s.nodes[1].value = Some(Value::Protected {});
     assert!(!s.permits(2, Action::Click, None));
 }
 
@@ -379,7 +379,7 @@ fn set_selection_needs_ordered_char_boundaries() {
 
 #[test]
 fn json_shapes_are_stable() {
-    assert_eq!(json(&Value::Protected), r#"{"kind":"protected"}"#);
+    assert_eq!(json(&Value::Protected {}), r#"{"kind":"protected"}"#);
     assert_eq!(json(&text("a")), r#"{"kind":"text","text":"a"}"#);
     assert_eq!(json(&Action::ScrollIntoView), r#""scroll-into-view""#);
     assert_eq!(json(&Action::ShowMenu), r#""show-menu""#);
@@ -584,4 +584,13 @@ fn read_refuses_invalid_json_in_a_valid_seal() {
         serde_json::json!({"revision": 1, "root": 1, "focus": null, "nodes": [], "extra": 1});
     let (file, len) = seal(&unknown, MAX_FRAME).unwrap();
     assert!(read::<Snapshot>(file.into(), len, MAX_FRAME).is_err());
+}
+
+#[test]
+fn a_protected_value_refuses_an_unknown_field() {
+    assert_eq!(
+        serde_json::from_str::<Value>(r#"{"kind":"protected"}"#).unwrap(),
+        Value::Protected {}
+    );
+    assert!(serde_json::from_str::<Value>(r#"{"kind":"protected","text":"secret"}"#).is_err());
 }

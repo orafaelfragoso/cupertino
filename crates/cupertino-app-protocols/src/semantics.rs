@@ -51,7 +51,7 @@ pub enum Value {
     Toggle {
         checked: Option<bool>,
     },
-    Protected,
+    Protected {},
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -120,7 +120,7 @@ pub struct Node {
 }
 impl Node {
     pub fn protected(&self) -> bool {
-        self.role == "password-input" || matches!(self.value, Some(Value::Protected))
+        self.role == "password-input" || matches!(self.value, Some(Value::Protected {}))
     }
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -172,7 +172,7 @@ impl Snapshot {
                 }
                 _ => {}
             }
-            if n.protected() && (n.value != Some(Value::Protected) || !n.actions.is_empty()) {
+            if n.protected() && (n.value != Some(Value::Protected {}) || !n.actions.is_empty()) {
                 return Err("protected node disclosed a value or actions");
             }
         }

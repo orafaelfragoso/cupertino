@@ -45,10 +45,10 @@ fn node(key: NodeId, n: &AccessibilityNode) -> wire::Node {
     let protected = n.role == crate::Role::PasswordInput
         || matches!(n.value, Some(crate::AccessibleValue::Protected));
     let value = if protected {
-        Some(wire::Value::Protected)
+        Some(wire::Value::Protected {})
     } else {
         n.value.as_ref().map(|v| match v {
-            crate::AccessibleValue::Protected => wire::Value::Protected,
+            crate::AccessibleValue::Protected => wire::Value::Protected {},
             crate::AccessibleValue::Text { value, .. } => wire::Value::Text {
                 text: bounded(value),
             },

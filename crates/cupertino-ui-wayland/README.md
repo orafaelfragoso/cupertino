@@ -6,7 +6,7 @@ transport's standard set and never reaches the private protocols (`cupertino-lay
 `cupertino-shell-client`). Depends on `cupertino-wayland-client`, `cupertino-geometry`, `cupertino-modifiers`,
 `cupertino-ui-platform`, `cupertino-ui-render`, `cupertino-ui-text`, `cupertino-menu-model`, `cupertino-ui-menus`,
 `cupertino-gpu` (the graphics layer, for the GPU presenter), `cupertino-ui-gpu` (the GPU renderer the presenter's
-windows draw with), `cupertino-profile` (the frame timeline `CUPERTINO_PROFILE` asks for, installed when the window
+windows draw with), `cupertino-diagnostic-events`' `profile` (the frame timeline `CUPERTINO_PROFILE` asks for, installed when the window
 system connects), `tracing` and `tiny-skia`.
 
 ## Public API

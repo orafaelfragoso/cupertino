@@ -59,7 +59,7 @@ pub mod sort;
 pub mod spring;
 pub mod tab_strip;
 pub mod tags;
-pub use cupertino_thumbnails as thumbnail;
+pub use cupertino_icons::thumbnail;
 pub mod thumbnail_service;
 pub use cupertino_trash as trash;
 pub mod typeselect;

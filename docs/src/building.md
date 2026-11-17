@@ -664,7 +664,7 @@ A slow frame then shows which part of it grew, without adding timing prints. The
 |---|---|
 | `chrome:DIR/` | each process's spans in `DIR/<program>-<pid>.json` (Trace Event format), which [Perfetto](https://ui.perfetto.dev) opens; the files' times are the monotonic clock's, so their events concatenated into one array open as one timeline with a track per process |
 | `chrome:FILE` | one process's spans in `FILE` |
-| `tracy` | the spans streamed to the Tracy profiler, in a build with its client (`crates/cupertino-profile/README.md`) |
+| `tracy` | the spans streamed to the Tracy profiler, in a build with its client (`crates/cupertino-diagnostic-events/README.md`) |
 
 ```sh
 CUPERTINO_PROFILE=chrome:/tmp/trace/ cargo run -p cupertino-server -- --headless --screenshot /tmp/files.png --exit-after-screenshot --spawn cupertino-files

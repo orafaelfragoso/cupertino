@@ -10,7 +10,7 @@ mod commit;
 use std::path::Path;
 
 fn main() {
-    // the workspace directory: this crate is `crates/cupertino-build-info`
+    // the workspace directory: this crate is `crates/cupertino-diagnostic-events`
     let manifest = std::env::var_os("CARGO_MANIFEST_DIR").expect("Cargo sets CARGO_MANIFEST_DIR");
     let root = Path::new(&manifest).join("../..");
     println!("cargo:rerun-if-env-changed={}", commit::VARIABLE);

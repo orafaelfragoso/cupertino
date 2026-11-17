@@ -5,6 +5,7 @@
 use crate::{
     Arg, Args, Command, Context, Failure, FailureKind, Reply, Run, Sink, Stability, ValueHint,
 };
+use cupertino_diagnostic_events::build_info;
 use cupertino_diagnostic_events::store::{Limits, Store};
 use cupertino_diagnostic_events::{time, Record};
 use cupertino_diagnostics::events::{self, Counts, Filter, FollowFrom, SourceReport, SourceStatus};
@@ -481,10 +482,10 @@ fn clear(args: &Args, cx: &Context) -> Result<Reply, Failure> {
 
 /// What the build knows of itself and the system, with the field names of a version report.
 fn versions(sources: &Sources) -> serde_json::Value {
-    let os = cupertino_build_info::read_os_image(&sources.root).unwrap_or_default();
+    let os = build_info::read_os_image(&sources.root).unwrap_or_default();
     serde_json::json!({
         "cli": env!("CARGO_PKG_VERSION"),
-        "commit": cupertino_build_info::COMMIT,
+        "commit": build_info::COMMIT,
         "os_image": {
             "name": os.name,
             "id": os.id,
@@ -493,7 +494,7 @@ fn versions(sources: &Sources) -> serde_json::Value {
             "image_id": os.image_id,
             "image_version": os.image_version,
         },
-        "kernel": cupertino_build_info::kernel_in(&sources.root),
+        "kernel": build_info::kernel_in(&sources.root),
     })
 }
 

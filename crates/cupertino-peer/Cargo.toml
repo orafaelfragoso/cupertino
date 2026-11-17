@@ -6,7 +6,7 @@ license.workspace = true
 description = "Who is on the other end of a session bus call: the process behind a connection from the daemon's pidfd, its sandbox (Flatpak, Snap) and parent, and the error names a refused caller gets"
 
 [package.metadata.cupertino]
-layer = "platform"
+layer = "system"
 
 [dependencies]
 async-lock = "3"

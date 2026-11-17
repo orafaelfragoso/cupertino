@@ -7,7 +7,8 @@ host icon theme (a pack's `theme` sources and the default map of its `icon_theme
 `Adwaita`, then its `Inherits` chain, then `hicolor`). A name no pack provides is drawn as a
 placeholder rounded square. An application's icon comes only from its own `Icon=` entry: a name of the packs'
 `application.` namespace (the session's own applications, `application.file-manager`, `application.settings`), an absolute
-path or the `hicolor` theme. Depends on `cupertino-assets`, `cupertino-defaults` and `cupertino-apps`.
+path or the `hicolor` theme. It also holds the freedesktop.org thumbnail cache of pictures (`thumbnail`). Layer: `system`.
+Depends on `cupertino-assets`, `cupertino-defaults` and `cupertino-apps`.
 
 ## Public API
 
@@ -22,6 +23,7 @@ path or the `hicolor` theme. Depends on `cupertino-assets`, `cupertino-defaults`
 | `IconImage` | `width`, `height` and premultiplied RGBA bytes |
 | `from_argb(width, height, argb) | converts the ARGB pixmaps of StatusNotifier items to an `IconImage` |
 | `document` | file icons: `document_icon_name(db, mime)`, `corner_badge`, `Badge`, `badge_rect`, and `FileIcons` (document, folder and badge pixmaps by path, type and size) |
+| `thumbnail` | the freedesktop.org thumbnail cache: `Thumbnailer`, `ThumbSize`, `ThumbError` ([Thumbnails](#thumbnails)) |
 
 ## How it works
 
@@ -60,6 +62,22 @@ theme searched. A theme's stock icon names (`folder`, `audio-volume-high-symboli
 The `render-artwork` example takes an SVG path, an output PNG path and a pixel size. It uses `load_icon`, including
 its native SVG filters and premultiplied pixel handling, so a PNG baked from an SVG is exactly the
 rendition the shell renders. Build it with `cargo build --locked -p cupertino-icons --example render-artwork`.
+
+### Thumbnails
+
+The freedesktop.org thumbnail cache (`$XDG_CACHE_HOME/thumbnails/<normal|large|x-large|xx-large>/<md5 of the file URI>.png`)
+for every application that shows pictures: `Thumbnailer::lookup` returns a valid cached thumbnail, `create` decodes the
+image (PNG, JPEG, WebP), scales it to the cache size and writes it with the standard text chunks, and
+`get_or_create` does both; `pixels` returns the cached or created thumbnail decoded to straight RGBA, shrunk to fit an
+edge, and `root` is the cache directory, whose own files are never thumbnailed (`create` refuses a file whose canonical path
+is under it, `is_in_cache`, so a symbolic link into the cache leads nowhere). Each write has its own temporary name, so
+threads making the same thumbnail at once each rename a whole file into place. A failed image is remembered under `fail/<application>/` so it is not tried again. The MIME type
+written into a thumbnail is the one of the format found in the file's content. The file is opened without blocking and
+must be a regular file of at most 256 MiB, and the picture at most 8192 pixels a side: a pipe named `x.png`, a huge file or
+a decompression bomb fails at once and is remembered as a failure.
+
+`thumbnail` is used by `cupertino-files` and `cupertino-settings`, so both share one cache. A `Thumbnailer` is `Clone`, so one
+application can keep a second handle on the same cache, as Files does for its larger previews.
 
 ## Open issues
 

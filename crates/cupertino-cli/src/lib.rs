@@ -1091,10 +1091,10 @@ fn take(args: &mut Args, arg: &'static Arg, value: &str) -> Result<(), Failure> 
 
 /// `cupertino 0.1.0 (0123456789ab)`, without the parenthesis when the commit is unknown.
 fn version() -> Reply {
-    let component = cupertino_build_info::component!("cupertino");
+    let component = cupertino_diagnostic_events::component!("cupertino");
     let data = Version {
         cli: component.version,
-        commit: cupertino_build_info::COMMIT,
+        commit: cupertino_diagnostic_events::build_info::COMMIT,
     };
     Reply::new(&data, format!("{component}\n"))
 }

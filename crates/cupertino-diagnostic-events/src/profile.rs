@@ -38,7 +38,7 @@ use tracing_subscriber::registry::LookupSpan;
 pub const ENV: &str = "CUPERTINO_PROFILE";
 
 /// The target of the events [`interval`] sends: a stretch of time already measured, drawn on a track of its own.
-pub const INTERVAL_TARGET: &str = "cupertino_profile::interval";
+pub const INTERVAL_TARGET: &str = "cupertino_diagnostic_events::profile::interval";
 
 /// How long after a span ends its event reaches the file, at most: a process killed loses no more than this.
 pub const FLUSH_DELAY: Duration = Duration::from_millis(100);
@@ -149,7 +149,7 @@ where
             Sink::Tracy => match tracy::layer() {
                 Some(tracy) => layers.push(tracy),
                 None => eprintln!(
-                    "{program}: {ENV}: this build has no Tracy client (build with `--features cupertino-profile/tracy` \
+                    "{program}: {ENV}: this build has no Tracy client (build with `--features cupertino-diagnostic-events/tracy` \
                      and RUSTFLAGS=\"--cfg cupertino_tracy\")"
                 ),
             },
@@ -180,7 +180,7 @@ pub fn now_ns() -> u64 {
 /// span can cover. Costs nothing measurable when no timeline is recorded.
 #[inline]
 pub fn interval(name: &'static str, start_ns: u64, end_ns: u64) {
-    tracing::trace!(target: "cupertino_profile::interval", name, start_ns, end_ns);
+    tracing::trace!(target: "cupertino_diagnostic_events::profile::interval", name, start_ns, end_ns);
 }
 
 /// The Tracy layer, in a build with the client.

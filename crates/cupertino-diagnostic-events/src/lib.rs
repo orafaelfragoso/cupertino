@@ -15,17 +15,22 @@
 //!     .emit();
 //! ```
 //!
+//! [`build_info`] says what the build is and what it runs on; [`profile`] records the frame timelines
+//! `CUPERTINO_PROFILE` asks for.
+//!
 //! The README lists every event id, the record's fields, the limits and the redaction policy.
 
+pub mod build_info;
 mod emitter;
 mod event;
 pub mod journal;
+pub mod profile;
 pub mod rate;
 pub mod redact;
 pub mod store;
 pub mod time;
 
-pub use cupertino_build_info::{component, Component};
+pub use build_info::Component;
 pub use emitter::{
     boot_id, dropped_before_install, exit_error, flush, init, install_panic_hook, recent,
     set_context, Emitter, FatalRecord, Sink, FATAL_LINE, RING_BYTES, RING_EVENTS,

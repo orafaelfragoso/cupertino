@@ -62,7 +62,7 @@ gives some, else `Sources::system()`. It records no events of its own.
   `validation`/`store_unavailable` (`no_home` without a home).
 - `diagnose export` (`Run::Once`) writes one JSON document with `O_EXCL` and mode 0600: `schema`
   (`cupertino.diag.export.v1`), `created`, `versions` (`cli`, `commit`, `os_image`, `kernel`, from
-  `cupertino-build-info`, the field names a version report uses), `report` (`cupertino_diagnostics::run(&sources, &[])`,
+  `cupertino-diagnostic-events`' `build_info`, the field names a version report uses), `report` (`cupertino_diagnostics::run(&sources, &[])`,
   its `summary`, fact `value` and `fix` texts through the free-text scrubber), `events` and `sources` (their `path` and
   `detail` scrubbed). `--include-logs` adds `logs`: `server.log`, `server.log.1` and `session.log` of the state
   directory, each line through `events::policy` (the store's salt, so hashes match the events', else a random one). A

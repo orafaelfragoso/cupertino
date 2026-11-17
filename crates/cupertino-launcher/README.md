@@ -188,7 +188,7 @@ runs them through `Panel::handle_key`. Every other key edits the field, which re
 a row activates it, a click on an action button carries that action out, and `Escape` clears the query and then closes.
 
 **Preview and actions.** Beside the results the pane shows the selected result: a file's picture (a thumbnail through
-`cupertino-thumbnails`), the first lines of a text file or its type's icon, then its name, its type in words, its size (or a
+`cupertino-icons`' `thumbnail`), the first lines of a text file or its type's icon, then its name, its type in words, its size (or a
 folder's item count), when it changed and its folder; an application's icon at the pane's size and its description; a
 calculation's or a conversion's value set large over its expression. The host reads a file's preview on one thread
 of its own that takes only the newest request (`preview::LatestOnly`, `Host::preview`, `Message::Previewed`), so moving

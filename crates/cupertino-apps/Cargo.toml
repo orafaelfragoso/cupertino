@@ -6,7 +6,7 @@ license = "MPL-2.0"
 description = "Application registry shared by the Cupertino processes: desktop entries and their Exec lines, launching with an activation token, the shared MIME database (globs, aliases, subclasses, icon names), default applications from mimeapps.list, and the recently-used files and the launcher's usage store"
 
 [package.metadata.cupertino]
-layer = "foundation"
+layer = "system"
 
 [features]
 default = []

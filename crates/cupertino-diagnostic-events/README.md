@@ -1,8 +1,12 @@
 # cupertino-diagnostic-events
 
-Versioned diagnostic events of every Cupertino process: what failed, where, and in which build. Layer: `foundation`.
-Licence: MPL-2.0. It depends on `cupertino-build-info`, `serde` and `serde_json` only, so every process, the toolkit and
-the C library can link it.
+Diagnostics of every Cupertino process. Layer: `system`. Licence: MPL-2.0. It depends on `serde`, `serde_json`,
+`tracing`, `tracing-subscriber` (registry only), `rustix` and `libc`, so every process, the toolkit and the C library
+can link it. It holds:
+
+- the versioned diagnostic events: what failed, where, and in which build (this page down to [Event ids](#event-ids));
+- `build_info`: what a build is and what it runs on ([Build information](#build-information));
+- `profile`: the frame timelines `CUPERTINO_PROFILE` asks for ([Frame timelines](#frame-timelines)).
 
 An event is recorded beside a failure's existing log line and error return, never instead of them: `emit` returns
 nothing, never panics and waits at most for one bounded write.
@@ -70,7 +74,7 @@ One JSON object per line, with its fields in this order:
 | `time` | RFC 3339 in UTC with milliseconds, `2026-11-09T14:03:27.512Z` |
 | `boot_id` | `/proc/sys/kernel/random/boot_id`, or `null` |
 | `session` | `XDG_SESSION_ID`, or `null` |
-| `component`, `version`, `commit` | the binary's name, its package version and the source commit (`cupertino-build-info`), or `null` for an unknown commit |
+| `component`, `version`, `commit` | the binary's name, its package version and the source commit (`build_info`), or `null` for an unknown commit |
 | `pid` | the process id |
 | `id` | stable and dotted, `area.subject.what`, for example `server.gpu.reset` |
 | `severity` | `info`, `warn`, `error` or `fatal` |
@@ -207,3 +211,99 @@ The areas: `server`, `dock`, `menubar`, `launcher`, `notifications`, `controlcen
 `windowmanager`, `login_ui` (`cupertino-login`), `files`, `settings`, `portal`, `polkit` (`cupertino-polkit-agent`),
 `keyring` (`cupertino-keyring-prompter`), `login` (`cupertino-sessiond`), `network`, `bluetooth` and `power`
 (`cupertino-netd`, `-btd`, `-powerd`).
+
+## Build information
+
+`build_info` says what a Cupertino build is and what it runs on. It reads nothing at run time beyond the two files
+below; the commit is found once, by the crate's build script.
+
+### Public API
+
+| Item | What it gives |
+|---|---|
+| `COMMIT: Option<&str>` | The full hash of the commit the sources come from, in lower case, or `None` when the build could not know it. |
+| `COMMIT_SOURCE: CommitSource` | Where `COMMIT` came from: `Environment`, `Archive`, `Checkout` or `Unknown` (`name()` gives the lower-case word). |
+| `short_commit()` | The first 12 digits of `COMMIT`. |
+| `Component { name, version }`, `component!()` | A program or library of the desktop. `component!()` takes the caller's `CARGO_PKG_NAME` and `CARGO_PKG_VERSION`; `component!("cupertino")` names a binary whose name differs from its package. Its `Display` is `cupertino 0.1.0 (0123456789ab)`, without the parenthesis when the commit is unknown. |
+| `os_image()`, `read_os_image(root)`, `OsImage::parse(text)` | `NAME`, `ID`, `VERSION_ID`, `BUILD_ID`, `IMAGE_ID` and `IMAGE_VERSION` from `etc/os-release`, or `usr/lib/os-release` when the first does not exist, under a root. Every field is optional. `read_os_image` returns `NotFound` when neither file exists and the read error otherwise, so a caller can tell missing from unreadable; `os_image()` reads `/` and gives an empty `OsImage` on any error. |
+| `kernel()`, `kernel_in(root)` | The running kernel's release from `proc/sys/kernel/osrelease`, or `None`. |
+
+The parser follows the `os-release` format: blank lines and `#` comments are skipped, a value may be in double quotes
+(with `\"`, `\\`, `\$` and `` \` `` escapes) or single quotes (literal), a backslash in an unquoted value stands for the
+character after it, a later line for the same key wins, and an empty value counts as not set.
+
+### Where the commit comes from
+
+`build.rs` takes the first source that knows the commit (`build/commit.rs`):
+
+1. `CUPERTINO_BUILD_COMMIT` from the environment, for a build that knows its commit otherwise. It must be a full
+   hash, 40 hexadecimal digits (or 64 for a repository with sha256 object names); any other value fails the build,
+   because it was set on purpose.
+2. The tracked file `data/build-commit`. In the repository it holds `$Format:%H$`, and `.gitattributes` marks it
+   `export-subst`, so `git archive` (and so the release source archive) writes the archived commit into it. A file with
+   any other text is skipped with a Cargo warning.
+3. `git rev-parse HEAD` when the workspace has a `.git` (a directory, or the file of a linked worktree).
+4. Otherwise the commit is unknown, and `COMMIT` is `None`.
+
+The script reruns only when `CUPERTINO_BUILD_COMMIT`, `data/build-commit` or the script itself change. A new commit in a
+checkout does not rerun it, so it does not rebuild every binary that links this crate, and a shared build directory
+stays reusable across commits. In a development build `COMMIT_SOURCE` is then `Checkout` and the value can be older
+than the checkout's `HEAD`; `cargo clean -p cupertino-diagnostic-events` or `CUPERTINO_BUILD_COMMIT` gives the exact one.
+Package builds start from a fresh source tree, the release archive (stable recipe) or a clone (development
+recipe), and get the exact commit.
+
+The commit does not affect reproducibility: it is a fixed input of a given source tree, like the sources themselves.
+Two builds of the same archive or the same checkout `HEAD` embed the same value; nothing else here reads the build
+machine (no time, host or path).
+
+## Frame timelines
+
+`profile` records where each frame's time goes, as spans on a timeline. The spans themselves are `tracing::trace_span!`
+in the crates that do the work (the toolkit's run loop, its renderers and presenter, the compositor's frame); this module
+records them when `CUPERTINO_PROFILE` asks, and only then. Unset, no layer is installed, and a span costs its callsite's
+check that nothing listens.
+
+### `CUPERTINO_PROFILE`
+
+| Value | What is recorded |
+|---|---|
+| `chrome:FILE` | the process's spans, written to `FILE` in the Trace Event format (JSON), which Perfetto (`ui.perfetto.dev`) and `chrome://tracing` open |
+| `chrome:DIR/` | the same, into `DIR/<program>-<pid>.json`: one file per process, so one value serves a whole session (an existing directory needs no slash) |
+| `tracy` | the spans streamed to the Tracy profiler, in a build with its client (below) |
+| `chrome:DIR/,tracy` | both |
+
+A span is written as a complete event (`"ph":"X"`) when it ends, its fields as the event's arguments; a field named
+`label` goes into the event's name (`ui.message cupertino_launcher::app::Message`). Times are the monotonic clock's
+in microseconds, the clock of the frame and presentation times, and every event carries the process's real id, so the
+events of the files of one session concatenated into one array open as one trace with a track per process and thread.
+`interval(name, start_ns, end_ns)` draws a wait measured already (the compositor's late start after a vblank) on a
+track of its thread's own, beside the thread's spans.
+
+The file is written as the process goes, at most `FLUSH_DELAY` (100 ms) after a span ends and a whole event at a time,
+by a thread that wakes only when there are events; the array is closed when the process exits (`finish` closes it
+earlier). A process killed before that leaves the file without the closing `]`, which the format allows and both viewers
+read.
+
+### API
+
+| Item | Contents |
+|---|---|
+| `layer::<S>()` | the layer of the sinks the variable names, filtered to the workspace's spans (targets starting with `cupertino`), for a process's own subscriber: the server adds it beside its log layers; `None` when unset |
+| `init()` | installs a subscriber of that layer for a process with none (every toolkit process, from `WaylandWindowSystem::connect_as`); nothing when unset |
+| `parse`, `Sink`, `layer_of`, `program` | the variable's sinks, the layer of given sinks, the process's file name |
+| `interval`, `now_ns`, `finish` | a measured wait on the timeline; the clock; closing the traces now |
+
+### Tracy
+
+The client is behind the `tracy` feature, which takes effect only with `--cfg cupertino_tracy` as well: every package
+and CI build uses `--all-features`, which turns the feature on, and the cfg keeps the client (and its C++ library, which
+listens for the profiler) out of them. A build that streams to Tracy, in a target folder of its own since the flag
+rebuilds every crate:
+
+```sh
+RUSTFLAGS="--cfg cupertino_tracy" cargo build --release --workspace --all-features --bins --target-dir target/tracy
+BIN_DIR=target/tracy/release CUPERTINO_PROFILE=tracy target/tracy/release/cupertino-server --headless --spawn cupertino-files
+```
+
+The client collects only while a profiler is connected, is reachable from this machine alone, and installs no handler
+of fatal signals. It speaks the protocol of Tracy 0.14: use that version's profiler.

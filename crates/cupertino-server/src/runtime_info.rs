@@ -57,7 +57,7 @@ impl<'a> RuntimeInfo<'a> {
         Self {
             schema: SCHEMA,
             version: env!("CARGO_PKG_VERSION"),
-            commit: cupertino_build_info::COMMIT,
+            commit: cupertino_diagnostic_events::build_info::COMMIT,
             pid: std::process::id(),
             backend,
             renderer: RENDERER,

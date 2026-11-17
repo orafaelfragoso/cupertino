@@ -34,7 +34,6 @@ cupertino-semantics = { path = "../cupertino-semantics" }
 cupertino-control-model = { path = "../cupertino-control-model" }
 cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events" }
 cupertino-assets = { path = "../cupertino-assets" }
-cupertino-build-info = { path = "../cupertino-build-info" }
 cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-displays = { path = "../cupertino-displays" }
 cupertino-protocols = { path = "../cupertino-protocols", features = ["server"] }
@@ -58,7 +57,6 @@ cupertino-modifiers = { path = "../cupertino-modifiers" }
 cupertino-devices = { path = "../cupertino-devices", optional = true }
 cupertino-evdev = { path = "../cupertino-evdev", optional = true }
 cupertino-peer = { path = "../cupertino-peer" }
-cupertino-profile = { path = "../cupertino-profile" }
 cupertino-seat = { path = "../cupertino-seat", optional = true }
 async-channel = "2"
 libc = "0.2"

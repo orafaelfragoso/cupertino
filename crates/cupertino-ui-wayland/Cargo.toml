@@ -13,7 +13,6 @@ cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-gpu = { path = "../cupertino-gpu" }
 cupertino-menu-model = { path = "../cupertino-menu-model" }
 cupertino-modifiers = { path = "../cupertino-modifiers" }
-cupertino-profile = { path = "../cupertino-profile" }
 cupertino-protocol-app = { path = "../cupertino-protocol-app" }
 cupertino-ui-platform = { path = "../cupertino-ui-platform" }
 cupertino-ui-menus = { path = "../cupertino-ui-menus" }

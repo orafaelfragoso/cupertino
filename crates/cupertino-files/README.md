@@ -199,7 +199,7 @@ A PNG, JPEG or WebP picture shows its thumbnail once it is made (a symbolic link
 `thumbnail_service::ThumbnailService` makes thumbnails on two worker threads, never on the UI thread: after each
 message a window says which items are in view or within 200 pt of it (`view::shown`), and the service drops what no
 window wants any more before a worker starts it. A worker takes the thumbnail from the freedesktop cache
-(`$XDG_CACHE_HOME/thumbnails`, `Thumbnailer::from_env("cupertino-files")`, the rules of `cupertino-thumbnails`: valid
+(`$XDG_CACHE_HOME/thumbnails`, `Thumbnailer::from_env("cupertino-files")`, the rules of `cupertino-icons`' `thumbnail`: valid
 for the file's modification time and size, a failure remembered under `fail/cupertino-files/`, nothing under the cache
 itself thumbnailed) or creates it there, then decodes it at 2 pixels a point (128 for the icon view's 64 pt, 32 for
 the list's 16 pt). Beyond those in view, at most 32 MiB of decoded thumbnails stay in memory, the least recently drawn
@@ -533,7 +533,7 @@ what it builds or the scroll turns.
   knows the window, not the item, so after the item is removed (or scrolled away by something other than a spring-loaded
   folder, which the window returns from) the image still lands where the item was. It fades in place only when the
   window is gone or hidden.
-* Thumbnails are made for PNG, JPEG and WebP pictures only (what `cupertino-thumbnails` decodes): no external
+* Thumbnails are made for PNG, JPEG and WebP pictures only (what `cupertino-icons`' `thumbnail` decodes): no external
   thumbnailers, so videos, PDFs and other documents show their type's icon. Thumbnails are decoded for a 2× display;
   a 1× display draws them shrunk. The sidebar keeps the design's template symbols, as the places are not files.
 * The column view's selection is inset 4 pt in its column, as the list's is, where the design insets it 10 pt. Its text

@@ -11,8 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, Once, OnceLock, TryLockError};
 use std::time::{Duration, Instant, SystemTime};
 
-use cupertino_build_info::Component;
-
+use crate::build_info::Component;
 use crate::event::{self, AddressKind, Event, Identity, Origin, Record, Severity, Value};
 use crate::journal::{self, Journal};
 use crate::rate::RateLimiter;
@@ -331,7 +330,7 @@ impl Emitter {
             session: self.session.clone(),
             component: self.component.to_owned(),
             version: self.version.to_owned(),
-            commit: cupertino_build_info::COMMIT.map(str::to_owned),
+            commit: crate::build_info::COMMIT.map(str::to_owned),
             pid: self.pid,
         };
         let policy = self.policy_in(state);

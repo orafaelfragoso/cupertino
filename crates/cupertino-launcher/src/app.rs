@@ -8,6 +8,7 @@ use cupertino_apps::catalogue::{ApplicationWatch, Catalogue, Change, Timing};
 use cupertino_apps::{DesktopEntry, MimeDatabase, XdgDirs};
 use cupertino_assets::Assets;
 use cupertino_defaults::terminal::DEFAULT_TERMINALS;
+use cupertino_icons::thumbnail::{ThumbSize, Thumbnailer};
 use cupertino_icons::{SystemIcons, ThemeIcons};
 use cupertino_kit::controls::ImageSource;
 use cupertino_kit::core::{next_resource_id, Application, Command, Window};
@@ -37,7 +38,6 @@ use cupertino_shell_client::{
     Anchor, AppActivation, KeyboardInteractivity, Layer, LayerShell, LayerSurface,
     LayerSurfaceConfig, Margin, Session, Shell, ShellEvent,
 };
-use cupertino_thumbnails::{ThumbSize, Thumbnailer};
 use cupertino_ui_wayland::{RoleEvent, SurfaceRoles, WaylandWindowSystem};
 use cupertino_wayland_client::{Connection, Error as WaylandError, ExtensionEvent, SurfaceId};
 use std::cell::RefCell;

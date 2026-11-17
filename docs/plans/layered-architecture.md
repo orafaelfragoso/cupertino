@@ -386,6 +386,11 @@ These apply to every task. A task's own text can narrow them, never widen them.
 - In a `T` task: every `#[cfg(test)]` module in `src/` goes. A test that uses only the public API moves to `tests/`.
   A test of internals is removed; before removing it, check whether a public or program test covers its behaviour, and
   if none does, write that test first. List removed tests by the behaviour they covered.
+- One test per behaviour a caller relies on, not per input: cases of one behaviour are rows of one table-driven test.
+  No test restates a constant, a name, a version or a derived trait; no test of a type's plumbing (`Display` of each
+  variant, `From`, `Clone`). A crate's tests stay proportional to its public behaviour; the report gives the count
+  and says why it is that size.
+- Tests are written from the current public API, never restored from git history.
 
 ### Stop and report instead of deciding
 
@@ -1117,3 +1122,7 @@ One line per change to a decision or approval of a design: date, number, what, w
   `cupertino_app_protocols::layers`, used by the client, the server and ui-platform, and a test checks the protocol
   XML states each; the client checks spring response and damping as the 24.8 fixed point carries them and refuses a
   lens above 4, so no curve or glass it sends ends the connection.
+- 2026-11-17: owner, after waves 1 to 3 (3414 tests in 36 of 75 crates, on course for the 8428 the restart removed):
+  tests are one per behaviour, table-driven across cases, with no tests of constants, names, versions or type
+  plumbing, and never restored from history (26 tests of `cupertino-diagnostic-events` were). A consolidation task
+  rewrites the existing suites to that rule before wave 4's `T` tasks.

@@ -2954,18 +2954,13 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 // of what a node's cached paint is keyed on
                 w.painter.forget_nodes();
             }
-            let progress = w.activation_progress(now);
-            let crossing = (progress < 1.0).then(|| activating(&w.env, pinned, progress));
-            let (env, pinned) = match &crossing {
-                Some((env, pinned)) => (env, pinned),
-                None => (&w.env, pinned),
-            };
+            let activation = w.activation_progress(now);
             let mut painting = w.painter.paint(
                 tree,
                 root,
                 &w.geometry,
                 &PaintInput {
-                    env,
+                    env: &w.env,
                     focus: w.focus.node(),
                     focus_visible: w.focus.visible(),
                     window_active: w.active || w.keyboard_in_popup,
@@ -2977,6 +2972,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                     obscuring: &w.obscuring,
                     layer: layered,
                     pinned,
+                    activation,
                 },
             );
             if let Some(fade) = w.fade {
@@ -3622,6 +3618,7 @@ fn drag_image<M: 'static>(
             obscuring: &[],
             layer: false,
             pinned: &[None, None],
+            activation: 1.0,
         },
     );
     let mut renderer = (options.renderers)();
@@ -3890,31 +3887,6 @@ fn pinned_themes(
     let pinned = [false, true].map(|dark| Some(theme_for(&SystemAppearance { dark, ..session })));
     theme_for(&session);
     pinned
-}
-
-/// `env` and the `pinned` themes with their colours `progress` of the way from a window's inactive colours to its
-/// active ones ([`ColorTokens::set_activation`](cupertino_theme::ui::ColorTokens::set_activation)), for the paint of a
-/// window that just became active.
-fn activating(
-    env: &Environment,
-    pinned: &[Option<Arc<ThemeTokens>>; 2],
-    progress: f32,
-) -> (Environment, [Option<Arc<ThemeTokens>>; 2]) {
-    let cross = |theme: &ThemeTokens| {
-        let mut theme = theme.clone();
-        theme.colors.set_activation(progress);
-        Arc::new(theme)
-    };
-    (
-        Environment {
-            theme: cross(&env.theme),
-            ..env.clone()
-        },
-        [
-            pinned[0].as_deref().map(cross),
-            pinned[1].as_deref().map(cross),
-        ],
-    )
 }
 
 /// The session's appearance and display options as `theme` was made for them.

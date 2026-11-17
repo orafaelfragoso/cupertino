@@ -38,13 +38,13 @@ fn grab(wm: &mut Wm, n: u64, now: f64) -> Point {
 }
 
 fn one_window() -> Wm {
-    let mut wm = wm();
+    let mut wm = common::wm();
     open(&mut wm, 1, "a", 1.0);
     wm
 }
 
 #[test]
-fn a_move_keeps_the_grab_point_under_the_pointer() {
+fn a_move_keeps_the_grab_point_under_the_pointer_until_released_or_cancelled() {
     let mut wm = one_window();
     let p = grab(&mut wm, 1, 10.0);
     assert!(wm.is_moving());
@@ -61,7 +61,7 @@ fn a_move_keeps_the_grab_point_under_the_pointer() {
 
 #[test]
 fn the_press_box_stops_a_click_from_moving_a_tiled_window() {
-    let mut wm = wm();
+    let mut wm = common::wm();
     open(&mut wm, 1, "a", 1.0);
     wm.handle(
         Command::Tile {
@@ -118,10 +118,6 @@ fn dragging_a_tiled_window_out_of_its_tile_restores_the_untiled_size() {
     assert_eq!(wm.window(win(1)).unwrap().state(), LifecycleState::Normal);
     let g = wm.window(win(1)).unwrap().geometry();
     assert_eq!((g.w, g.h), (before.w, before.h));
-}
-
-#[test]
-fn releasing_a_move_ends_the_interaction_and_keeps_the_frame() {
     let mut wm = one_window();
     let p = grab(&mut wm, 1, 10.0);
     motion(&mut wm, p.x + 100.0, p.y + 100.0, 10.1);
@@ -129,10 +125,6 @@ fn releasing_a_move_ends_the_interaction_and_keeps_the_frame() {
     wm.handle(Command::PointerRelease, 10.2);
     assert!(!wm.is_interacting());
     assert_eq!(wm.window(win(1)).unwrap().geometry(), at);
-}
-
-#[test]
-fn cancelling_a_move_puts_the_window_back() {
     let mut wm = one_window();
     let p = grab(&mut wm, 1, 10.0);
     motion(&mut wm, p.x + 400.0, p.y + 250.0, 10.1);
@@ -144,16 +136,12 @@ fn cancelling_a_move_puts_the_window_back() {
 }
 
 #[test]
-fn a_title_bar_cannot_be_dragged_above_the_usable_area() {
+fn a_title_bar_stays_in_the_usable_area_unless_the_setting_is_off() {
     let mut wm = one_window();
     let p = grab(&mut wm, 1, 10.0);
     motion(&mut wm, p.x, -500.0, 10.1);
     let g = wm.window(win(1)).unwrap().geometry();
     assert!(g.y >= USABLE.y, "{g:?}");
-}
-
-#[test]
-fn the_title_bar_may_leave_the_area_when_the_setting_is_off() {
     let mut wm = one_window();
     wm.config_mut().snap.keep_titlebar_visible = false;
     wm.config_mut().magnet.enabled = false;
@@ -192,8 +180,8 @@ fn begin_move_ignores_missing_minimized_and_full_screen_windows() {
 }
 
 #[test]
-fn a_new_begin_cancels_the_interaction_in_progress() {
-    let mut wm = wm();
+fn beginning_an_interaction_focuses_the_window_and_cancels_the_one_in_progress() {
+    let mut wm = common::wm();
     open(&mut wm, 1, "a", 1.0);
     open(&mut wm, 2, "b", 2.0);
     let p = grab(&mut wm, 1, 10.0);
@@ -205,11 +193,7 @@ fn a_new_begin_cancels_the_interaction_in_progress() {
         frame(1),
         "the first move was undone"
     );
-}
-
-#[test]
-fn beginning_an_interaction_focuses_the_window() {
-    let mut wm = wm();
+    let mut wm = common::wm();
     open(&mut wm, 1, "a", 1.0);
     open(&mut wm, 2, "b", 2.0);
     grab(&mut wm, 1, 10.0);
@@ -217,7 +201,7 @@ fn beginning_an_interaction_focuses_the_window() {
 }
 
 #[test]
-fn resizing_the_right_and_bottom_edges_grows_the_window_from_its_origin() {
+fn resizing_moves_only_the_dragged_edges() {
     let mut wm = one_window();
     wm.config_mut().magnet.enabled = false;
     let f = frame(1);
@@ -243,10 +227,6 @@ fn resizing_the_right_and_bottom_edges_grows_the_window_from_its_origin() {
     let g = placed(&fx, 1).expect("placed");
     assert_eq!((g.x, g.y), (f.x, f.y));
     assert_eq!((g.w, g.h), (f.w + 100.0, f.h + 60.0));
-}
-
-#[test]
-fn resizing_the_left_edge_moves_the_origin_and_keeps_the_right_edge_fixed() {
     let mut wm = one_window();
     wm.config_mut().magnet.enabled = false;
     let f = frame(1);
@@ -271,8 +251,8 @@ fn resizing_the_left_edge_moves_the_origin_and_keeps_the_right_edge_fixed() {
 }
 
 #[test]
-fn a_resize_never_goes_below_the_minimum_size() {
-    let mut wm = wm();
+fn a_resize_needs_an_edge_and_never_goes_below_the_minimum_size() {
+    let mut wm = common::wm();
     let mut p = cupertino_wm::MapParams::new(win(1), "a", frame(1));
     p.min_size = Some(cupertino_wm::Size::new(300.0, 200.0));
     wm.handle(Command::Map(p), 1.0);
@@ -296,10 +276,6 @@ fn a_resize_never_goes_below_the_minimum_size() {
     motion(&mut wm, start.x - 2000.0, start.y - 2000.0, 10.1);
     let g = wm.window(win(1)).unwrap().geometry();
     assert_eq!((g.w, g.h), (300.0, 200.0));
-}
-
-#[test]
-fn a_resize_without_any_edge_does_nothing() {
     let mut wm = one_window();
     wm.handle(
         Command::BeginResize {
@@ -313,7 +289,7 @@ fn a_resize_without_any_edge_does_nothing() {
 }
 
 #[test]
-fn cancelling_a_resize_restores_the_start_frame_and_reports_the_end() {
+fn ending_a_resize_tells_the_client_and_cancelling_restores_the_start_frame() {
     let mut wm = one_window();
     wm.config_mut().magnet.enabled = false;
     let f = frame(1);
@@ -335,10 +311,6 @@ fn cancelling_a_resize_restores_the_start_frame_and_reports_the_end() {
     assert_eq!(placed(&fx, 1), Some(f));
     assert!(has(&fx, |e| matches!(e, Effect::Configure { .. })));
     assert!(!wm.is_interacting());
-}
-
-#[test]
-fn releasing_a_resize_tells_the_client_it_is_done() {
     let mut wm = one_window();
     let f = frame(1);
     let start = Point::new(f.right(), f.bottom());
@@ -368,7 +340,7 @@ fn pointer_motion_without_an_interaction_is_ignored() {
 }
 
 #[test]
-fn a_double_click_on_an_edge_stretches_the_window_to_the_usable_edge() {
+fn a_double_click_on_an_edge_stretches_one_or_with_the_modifier_both_sides_to_the_usable_edge() {
     let mut wm = one_window();
     let f = frame(1);
     let fx = wm.handle(
@@ -384,10 +356,6 @@ fn a_double_click_on_an_edge_stretches_the_window_to_the_usable_edge() {
     );
     let g = placed(&fx, 1).expect("placed");
     assert_eq!(g, Rect::new(f.x, f.y, USABLE.right() - f.x, f.h));
-}
-
-#[test]
-fn the_opposite_modifier_stretches_both_sides_of_the_axis() {
     let mut wm = one_window();
     let f = frame(1);
     let fx = wm.handle(
@@ -450,7 +418,7 @@ fn stretching_to_the_edge_is_off_with_its_setting_and_for_tiled_windows() {
 
 #[test]
 fn an_axis_that_would_break_the_size_limit_keeps_its_edges() {
-    let mut wm = wm();
+    let mut wm = common::wm();
     let mut p = cupertino_wm::MapParams::new(win(1), "a", frame(1));
     p.max_size = Some(cupertino_wm::Size::new(700.0, 0.0));
     wm.handle(Command::Map(p), 1.0);
@@ -470,7 +438,7 @@ fn an_axis_that_would_break_the_size_limit_keeps_its_edges() {
 }
 
 #[test]
-fn dragging_into_the_left_edge_previews_and_then_tiles_the_window() {
+fn dragging_into_the_left_edge_previews_and_tiles_unless_the_pointer_leaves_the_zone() {
     let mut wm = one_window();
     wm.config_mut().magnet.enabled = false;
     let p = grab(&mut wm, 1, 10.0);
@@ -496,10 +464,6 @@ fn dragging_into_the_left_edge_previews_and_then_tiles_the_window() {
         LifecycleState::Tiled(TileKind::Left)
     );
     assert!(wm.snap_preview(20.0).is_none());
-}
-
-#[test]
-fn leaving_the_hot_zone_withdraws_the_preview_and_release_does_not_tile() {
     let mut wm = one_window();
     wm.config_mut().magnet.enabled = false;
     let p = grab(&mut wm, 1, 10.0);

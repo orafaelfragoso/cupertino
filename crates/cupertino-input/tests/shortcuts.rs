@@ -1,20 +1,28 @@
 //! Shortcut maps bind key combinations to actions, are written in a small text format and ship with two default sets.
 
-use cupertino_input::keysym::{self, ESCAPE, ISO_LEFT_TAB, TAB};
+use cupertino_input::keysym::{ISO_LEFT_TAB, TAB};
 use cupertino_input::{
     names_super, Action, KeyCombo, Modifiers, ParseError, ScreenshotRequest, ShortcutMap,
 };
+use cupertino_keyboard::modifiers::Physical;
 
 fn mods(shift: bool, ctrl: bool, alt: bool, sup: bool) -> Modifiers {
     Modifiers::new(shift, ctrl, alt, sup)
 }
 
+const SUPER: Modifiers = Modifiers::new(false, false, false, true);
+const CTRL: Modifiers = Modifiers::new(false, true, false, false);
+
 fn combo(text: &str) -> KeyCombo {
     text.parse().unwrap_or_else(|e| panic!("{text}: {e}"))
 }
 
+fn bound(m: &ShortcutMap) -> Vec<String> {
+    m.bindings().map(|(c, _)| c.to_string()).collect()
+}
+
 #[test]
-fn every_action_name_parses_back_to_the_action() {
+fn actions_are_written_by_name_and_parse_back_or_name_what_was_wrong() {
     let mut actions = vec![
         Action::CloseWindow,
         Action::MinimizeOrRestoreWindow,
@@ -36,196 +44,155 @@ fn every_action_name_parses_back_to_the_action() {
         assert_eq!(name.parse::<Action>().as_ref(), Ok(&action), "{name}");
         assert_eq!(action.to_string(), name);
     }
-}
-
-#[test]
-fn action_parsing_reports_what_was_wrong() {
-    assert_eq!("".parse::<Action>(), Err(ParseError::Empty));
-    assert_eq!("   ".parse::<Action>(), Err(ParseError::Empty));
-    assert_eq!(
-        "frobnicate".parse::<Action>(),
-        Err(ParseError::UnknownAction("frobnicate".into()))
-    );
-    assert_eq!(
-        "workspace:x".parse::<Action>(),
-        Err(ParseError::BadNumber("x".into()))
-    );
-    assert_eq!(
-        "workspace:-1".parse::<Action>(),
-        Err(ParseError::BadNumber("-1".into()))
-    );
-    assert_eq!("workspace: 4".parse::<Action>(), Ok(Action::Workspace(4)));
-    assert_eq!(
-        "exec:  ls -l ".parse::<Action>(),
-        Ok(Action::Exec("ls -l".into()))
-    );
-}
-
-#[test]
-fn combinations_parse_in_both_spellings() {
-    let expected = KeyCombo::new(mods(false, true, true, false), u32::from(b'q'));
-    assert_eq!(combo("Ctrl+Alt+q"), expected);
-    assert_eq!(combo("<Ctrl><Alt>q"), expected);
-    assert_eq!(
-        combo("control+option+Q"),
-        expected,
-        "names and case are free"
-    );
-    assert_eq!(
-        combo("Super+Tab").modifiers,
-        mods(false, false, false, true)
-    );
-    for name in ["super", "logo", "win", "windows", "mod4"] {
-        assert!(combo(&format!("{name}+a")).modifiers.super_key, "{name}");
+    for (text, expected) in [
+        ("", Err(ParseError::Empty)),
+        ("   ", Err(ParseError::Empty)),
+        (
+            "frobnicate",
+            Err(ParseError::UnknownAction("frobnicate".into())),
+        ),
+        ("workspace:x", Err(ParseError::BadNumber("x".into()))),
+        ("workspace:-1", Err(ParseError::BadNumber("-1".into()))),
+        ("workspace: 4", Ok(Action::Workspace(4))),
+        ("exec:  ls -l ", Ok(Action::Exec("ls -l".into()))),
+    ] {
+        assert_eq!(text.parse::<Action>(), expected, "{text:?}");
     }
 }
 
 #[test]
-fn a_literal_plus_key_is_written_with_a_trailing_plus() {
-    let c = combo("Super++");
-    assert_eq!(c.keysym, 0x2b);
-    assert!(c.modifiers.super_key);
-    assert_eq!(combo("+").keysym, 0x2b);
-}
-
-#[test]
-fn combination_errors_name_the_offending_part() {
-    assert_eq!("".parse::<KeyCombo>(), Err(ParseError::Empty));
+fn combinations_parse_in_either_spelling_or_name_the_offending_part() {
+    let ctrl_alt_q = KeyCombo::new(mods(false, true, true, false), u32::from(b'q'));
+    let super_plus = KeyCombo::new(SUPER, 0x2b);
+    for (text, expected) in [
+        ("Ctrl+Alt+q", Ok(ctrl_alt_q)),
+        ("<Ctrl><Alt>q", Ok(ctrl_alt_q)),
+        ("control+option+Q", Ok(ctrl_alt_q)),
+        ("super+a", Ok(KeyCombo::new(SUPER, u32::from(b'a')))),
+        ("logo+a", Ok(KeyCombo::new(SUPER, u32::from(b'a')))),
+        ("win+a", Ok(KeyCombo::new(SUPER, u32::from(b'a')))),
+        ("windows+a", Ok(KeyCombo::new(SUPER, u32::from(b'a')))),
+        ("mod4+a", Ok(KeyCombo::new(SUPER, u32::from(b'a')))),
+        ("Super+Q", Ok(KeyCombo::new(SUPER, u32::from(b'q')))),
+        ("Super++", Ok(super_plus)),
+        ("+", Ok(KeyCombo::new(Modifiers::NONE, 0x2b))),
+        (
+            "Shift+Tab",
+            Ok(KeyCombo::new(Modifiers::NONE, ISO_LEFT_TAB)),
+        ),
+        ("", Err(ParseError::Empty)),
+        ("Hyper+a", Err(ParseError::UnknownModifier("Hyper".into()))),
+        ("<Hyper>a", Err(ParseError::UnknownModifier("Hyper".into()))),
+        ("<Ctrl", Err(ParseError::UnknownModifier("<Ctrl".into()))),
+        (
+            "Ctrl+Nonsense",
+            Err(ParseError::UnknownKey("Nonsense".into())),
+        ),
+        ("<Ctrl>", Err(ParseError::MissingKey)),
+    ] {
+        assert_eq!(text.parse::<KeyCombo>(), expected, "{text:?}");
+    }
+    let shift_tab = KeyCombo::new(Modifiers::NONE, ISO_LEFT_TAB);
     assert_eq!(
-        "Hyper+a".parse::<KeyCombo>(),
-        Err(ParseError::UnknownModifier("Hyper".into()))
+        (shift_tab.keysym, shift_tab.modifiers.shift),
+        (TAB, true),
+        "Shift+Tab has one spelling"
     );
-    assert_eq!(
-        "<Hyper>a".parse::<KeyCombo>(),
-        Err(ParseError::UnknownModifier("Hyper".into()))
-    );
-    assert_eq!(
-        "<Ctrl".parse::<KeyCombo>(),
-        Err(ParseError::UnknownModifier("<Ctrl".into()))
-    );
-    assert_eq!(
-        "Ctrl+Nonsense".parse::<KeyCombo>(),
-        Err(ParseError::UnknownKey("Nonsense".into()))
-    );
-    assert_eq!("<Ctrl>".parse::<KeyCombo>(), Err(ParseError::MissingKey));
-}
-
-#[test]
-fn shift_tab_has_one_spelling() {
-    let a = KeyCombo::new(Modifiers::NONE, ISO_LEFT_TAB);
-    assert_eq!(a.keysym, TAB);
-    assert!(a.modifiers.shift);
-    assert_eq!(a, combo("Shift+Tab"));
-    assert_eq!(combo("Super+Q"), combo("Super+q"), "letters are folded");
 }
 
 #[test]
 fn combinations_print_in_a_fixed_order_and_parse_back() {
-    for text in [
-        "Ctrl+Alt+Shift+Super+Left",
-        "Super+space",
-        "F11",
-        "Ctrl+XF86PowerOff",
-        "Alt+1",
+    for (text, printed) in [
+        ("Ctrl+Alt+Shift+Super+Left", "Ctrl+Alt+Shift+Super+Left"),
+        ("Super+space", "Super+space"),
+        ("F11", "F11"),
+        ("Ctrl+XF86PowerOff", "Ctrl+XF86PowerOff"),
+        ("Alt+1", "Alt+1"),
+        ("<Super><Ctrl>x", "Ctrl+Super+x"),
     ] {
-        assert_eq!(combo(text).to_string(), text);
+        assert_eq!(combo(text).to_string(), printed, "{text}");
     }
-    assert_eq!(combo("<Super><Ctrl>x").to_string(), "Ctrl+Super+x");
     let unnamed = KeyCombo::new(Modifiers::NONE, 0x1234_5678);
     assert_eq!(unnamed.to_string(), "0x12345678");
     assert_eq!(unnamed.to_string().parse::<KeyCombo>(), Ok(unnamed));
 }
 
 #[test]
-fn the_primary_modifier_follows_the_profile() {
+fn the_primary_modifier_is_the_profiles_command_key() {
+    assert!(combo("Primary+c").modifiers.super_key);
     assert!(
-        KeyCombo::parse_with("Primary+c", cupertino_keyboard::modifiers::Physical::Ctrl)
+        KeyCombo::parse_with("Primary+c", Physical::Ctrl)
             .unwrap()
             .modifiers
             .ctrl
     );
-    assert!(combo("Primary+c").modifiers.super_key);
+    for (profile, modifiers) in [("cupertino", SUPER), ("classic-pc", CTRL)] {
+        let mut m = ShortcutMap::new();
+        m.apply_config_for("Primary+c = lock\n", profile);
+        assert_eq!(
+            m.lookup(modifiers, u32::from(b'c')),
+            Some(&Action::Lock),
+            "{profile}"
+        );
+    }
 }
 
 #[test]
-fn binding_replaces_and_returns_the_old_action() {
-    let mut m = ShortcutMap::new();
-    assert!(m.is_empty());
-    assert_eq!(m.bind(combo("Super+q"), Action::QuitApp), None);
-    assert_eq!(
-        m.bind(combo("Super+Q"), Action::Lock),
-        Some(Action::QuitApp)
-    );
-    assert_eq!(m.len(), 1);
-    assert_eq!(
-        m.lookup(mods(false, false, false, true), u32::from(b'q')),
-        Some(&Action::Lock)
-    );
-    assert_eq!(
-        m.lookup(mods(false, false, false, true), u32::from(b'Q')),
-        Some(&Action::Lock)
-    );
-    assert_eq!(m.lookup(Modifiers::NONE, u32::from(b'q')), None);
-}
-
-#[test]
-fn lookups_need_the_exact_modifiers() {
+fn a_lookup_needs_the_exact_modifiers_and_folds_letters_and_shift_tab() {
     let mut m = ShortcutMap::new();
     m.bind(combo("Ctrl+a"), Action::AppGrid);
-    assert!(m
-        .lookup(mods(false, true, false, false), u32::from(b'a'))
-        .is_some());
-    assert!(m
-        .lookup(mods(true, true, false, false), u32::from(b'a'))
-        .is_none());
-    assert!(m
-        .lookup(mods(false, true, false, true), u32::from(b'a'))
-        .is_none());
-}
-
-#[test]
-fn a_shift_tab_event_finds_the_shift_tab_binding() {
-    let mut m = ShortcutMap::new();
+    m.bind(combo("Super+q"), Action::Lock);
     m.bind(combo("Shift+Tab"), Action::SwitchAppReverse);
-    assert_eq!(
-        m.lookup(Modifiers::NONE, ISO_LEFT_TAB),
-        Some(&Action::SwitchAppReverse)
-    );
-    assert_eq!(
-        m.lookup(mods(true, false, false, false), TAB),
-        Some(&Action::SwitchAppReverse)
-    );
+    for (modifiers, keysym, expected) in [
+        (CTRL, u32::from(b'a'), Some(Action::AppGrid)),
+        (mods(true, true, false, false), u32::from(b'a'), None),
+        (mods(false, true, false, true), u32::from(b'a'), None),
+        (SUPER, u32::from(b'q'), Some(Action::Lock)),
+        (SUPER, u32::from(b'Q'), Some(Action::Lock)),
+        (Modifiers::NONE, u32::from(b'q'), None),
+        (
+            Modifiers::NONE,
+            ISO_LEFT_TAB,
+            Some(Action::SwitchAppReverse),
+        ),
+        (
+            mods(true, false, false, false),
+            TAB,
+            Some(Action::SwitchAppReverse),
+        ),
+    ] {
+        assert_eq!(
+            m.lookup(modifiers, keysym),
+            expected.as_ref(),
+            "{modifiers:?} {keysym:#x}"
+        );
+    }
 }
 
 #[test]
-fn bindings_iterate_in_binding_order_and_unbinding_removes_them() {
+fn binding_replaces_in_place_and_unbinding_removes() {
     let mut m = ShortcutMap::new();
-    m.bind(combo("F5"), Action::Overview);
+    assert!(m.is_empty());
+    assert_eq!(m.bind(combo("F5"), Action::Overview), None);
     m.bind(combo("F1"), Action::Lock);
     m.bind(combo("F3"), Action::AppGrid);
-    m.bind(combo("F1"), Action::Launcher);
-    let order: Vec<String> = m.bindings().map(|(c, _)| c.to_string()).collect();
-    assert_eq!(order, ["F5", "F1", "F3"]);
+    assert_eq!(m.bind(combo("F1"), Action::Launcher), Some(Action::Lock));
+    assert_eq!(bound(&m), ["F5", "F1", "F3"], "binding order is kept");
     assert_eq!(m.unbind(combo("F1")), Some(Action::Launcher));
     assert_eq!(m.unbind(combo("F1")), None);
     assert_eq!(m.len(), 2);
     assert_eq!(m.combo_for(&Action::AppGrid), Some(combo("F3")));
     assert_eq!(m.combo_for(&Action::Launcher), None);
-}
-
-#[test]
-fn bind_str_reports_a_bad_combination() {
-    let mut m = ShortcutMap::new();
     assert_eq!(m.bind_str("Ctrl+z", Action::HideApp), Ok(None));
     assert_eq!(
         m.bind_str("Ctrl+nokey", Action::HideApp),
         Err(ParseError::UnknownKey("nokey".into()))
     );
-    assert_eq!(m.len(), 1);
+    assert_eq!(m.len(), 3);
 }
 
 #[test]
-fn the_tap_binding_is_separate_from_the_combinations() {
+fn the_tap_binding_is_separate_from_the_combinations_and_only_super_can_be_tapped() {
     let mut m = ShortcutMap::new();
     assert_eq!(m.tap(), None);
     assert_eq!(m.bind_tap(Action::Launcher), None);
@@ -233,6 +200,12 @@ fn the_tap_binding_is_separate_from_the_combinations() {
     assert_eq!(m.tap(), Some(&Action::Overview));
     assert!(m.is_empty());
     assert_eq!(m.unbind_tap(), Some(Action::Overview));
+    assert_eq!(m.tap(), None);
+
+    let errors = m.apply_config("Super = launcher\nCtrl = overview\n");
+    assert_eq!(errors, vec![(2, ParseError::TapNotSuper("Ctrl".into()))]);
+    assert_eq!(m.tap(), Some(&Action::Launcher));
+    assert!(m.apply_config("Super = none\n").is_empty());
     assert_eq!(m.tap(), None);
 }
 
@@ -248,14 +221,8 @@ fn a_config_binds_unbinds_and_skips_comments() {
          Ctrl+Shift+e = exec:foot -e htop\n",
     );
     assert!(errors.is_empty(), "{errors:?}");
-    assert_eq!(
-        m.lookup(mods(false, false, false, true), u32::from(b'q')),
-        Some(&Action::Lock)
-    );
-    assert_eq!(
-        m.lookup(mods(false, false, false, true), u32::from(b'w')),
-        None
-    );
+    assert_eq!(m.lookup(SUPER, u32::from(b'q')), Some(&Action::Lock));
+    assert_eq!(m.lookup(SUPER, u32::from(b'w')), None);
     assert_eq!(
         m.lookup(mods(true, true, false, false), u32::from(b'e')),
         Some(&Action::Exec("foot -e htop".into()))
@@ -287,16 +254,6 @@ fn config_errors_carry_their_line_numbers_and_do_not_stop_the_rest() {
 }
 
 #[test]
-fn only_the_super_key_can_be_tapped() {
-    let mut m = ShortcutMap::new();
-    let errors = m.apply_config("Super = launcher\nCtrl = overview\n");
-    assert_eq!(errors, vec![(2, ParseError::TapNotSuper("Ctrl".into()))]);
-    assert_eq!(m.tap(), Some(&Action::Launcher));
-    assert!(m.apply_config("Super = none\n").is_empty());
-    assert_eq!(m.tap(), None);
-}
-
-#[test]
 fn sections_apply_to_their_profile_only() {
     let text = "Ctrl+a = lock\n\
                 [cupertino]\n\
@@ -305,35 +262,19 @@ fn sections_apply_to_their_profile_only() {
                 Ctrl+c = lock\n\
                 [elsewhere]\n\
                 Ctrl+d = lock\n";
-    let mut cupertino = ShortcutMap::new();
-    let report = cupertino.apply_config_for(text, "cupertino");
-    assert_eq!(
-        report.errors,
-        vec![(6, ParseError::UnknownSection("elsewhere".into()))]
-    );
-    let bound: Vec<String> = cupertino.bindings().map(|(c, _)| c.to_string()).collect();
-    assert_eq!(bound, ["Ctrl+a", "Ctrl+b"]);
-
-    let mut classic = ShortcutMap::new();
-    classic.apply_config_for(text, "classic-pc");
-    let bound: Vec<String> = classic.bindings().map(|(c, _)| c.to_string()).collect();
-    assert_eq!(bound, ["Ctrl+a", "Ctrl+c"]);
-}
-
-#[test]
-fn the_primary_modifier_in_a_config_is_the_profiles_command_key() {
-    let mut cupertino = ShortcutMap::new();
-    cupertino.apply_config_for("Primary+c = lock\n", "cupertino");
-    assert_eq!(
-        cupertino.lookup(mods(false, false, false, true), u32::from(b'c')),
-        Some(&Action::Lock)
-    );
-    let mut classic = ShortcutMap::new();
-    classic.apply_config_for("Primary+c = lock\n", "classic-pc");
-    assert_eq!(
-        classic.lookup(mods(false, true, false, false), u32::from(b'c')),
-        Some(&Action::Lock)
-    );
+    for (profile, expected) in [
+        ("cupertino", ["Ctrl+a", "Ctrl+b"]),
+        ("classic-pc", ["Ctrl+a", "Ctrl+c"]),
+    ] {
+        let mut m = ShortcutMap::new();
+        let report = m.apply_config_for(text, profile);
+        assert_eq!(
+            report.errors,
+            vec![(6, ParseError::UnknownSection("elsewhere".into()))],
+            "{profile}"
+        );
+        assert_eq!(bound(&m), expected, "{profile}");
+    }
 }
 
 #[test]
@@ -346,99 +287,70 @@ fn classic_pc_lines_naming_super_outside_a_section_are_reported_as_retargeted() 
         .apply_config_for("Super+q = lock\n", "cupertino")
         .retargeted
         .is_empty());
+    for (text, names) in [
+        ("Super+q", true),
+        ("<Ctrl><Logo>x", true),
+        ("alt+WIN+x", true),
+        ("Ctrl+Alt+q", false),
+        ("Superb", false),
+    ] {
+        assert_eq!(names_super(text), names, "{text}");
+    }
 }
 
 #[test]
-fn names_super_looks_at_every_part_of_the_left_hand_side() {
-    assert!(names_super("Super+q"));
-    assert!(names_super("<Ctrl><Logo>x"));
-    assert!(names_super("alt+WIN+x"));
-    assert!(!names_super("Ctrl+Alt+q"));
-    assert!(!names_super("Superb"));
+fn a_strong_release_chord_is_always_kept() {
+    let chord = ShortcutMap::release_chord();
+    assert_eq!(chord, combo("Super+Escape"));
+    for (name, own, added, kept) in [
+        (
+            "weak ones only",
+            &["F9", "Shift+F10"][..],
+            Some(chord),
+            chord,
+        ),
+        (
+            "a strong one of the user's own",
+            &["Ctrl+Alt+Escape"][..],
+            None,
+            combo("Ctrl+Alt+Escape"),
+        ),
+    ] {
+        let mut m = ShortcutMap::new();
+        for text in own {
+            m.bind(combo(text), Action::ReleaseShortcuts);
+        }
+        assert_eq!(m.keep_release_chord(), added, "{name}");
+        assert_eq!(m.combo_for(&Action::ReleaseShortcuts), Some(kept), "{name}");
+        assert_eq!(m.len(), 1, "{name}: weak bindings are dropped");
+        assert_eq!(m.keep_release_chord(), None, "{name}: already there");
+    }
 }
 
 #[test]
-fn the_release_chord_is_kept_strong_and_present() {
-    let mut m = ShortcutMap::new();
-    m.bind(combo("F9"), Action::ReleaseShortcuts);
-    m.bind(combo("Shift+F10"), Action::ReleaseShortcuts);
-    let added = m.keep_release_chord();
-    assert_eq!(added, Some(ShortcutMap::release_chord()));
-    assert_eq!(ShortcutMap::release_chord(), combo("Super+Escape"));
-    assert_eq!(
-        m.combo_for(&Action::ReleaseShortcuts),
-        Some(ShortcutMap::release_chord())
-    );
-    assert_eq!(m.len(), 1, "the weak bindings were dropped");
-    assert_eq!(m.keep_release_chord(), None, "already there");
-}
-
-#[test]
-fn a_strong_release_chord_of_the_users_own_is_kept() {
-    let mut m = ShortcutMap::new();
-    m.bind(combo("Ctrl+Alt+Escape"), Action::ReleaseShortcuts);
-    assert_eq!(m.keep_release_chord(), None);
-    assert_eq!(
-        m.combo_for(&Action::ReleaseShortcuts),
-        Some(combo("Ctrl+Alt+Escape"))
-    );
-    assert_eq!(keysym::ESCAPE, ESCAPE);
-}
-
-#[test]
-fn both_default_sets_parse_cleanly_and_can_always_release_shortcuts() {
-    for profile in ["cupertino", "classic-pc"] {
+fn both_default_sets_are_complete_without_duplicates() {
+    for (profile, tap) in [("cupertino", None), ("classic-pc", Some(&Action::Launcher))] {
         let m = ShortcutMap::defaults_for(profile);
+        assert_eq!(m.tap(), tap, "{profile}");
         assert!(m.len() > 40, "{profile}");
-        assert!(
-            m.combo_for(&Action::ReleaseShortcuts).is_some(),
-            "{profile}"
-        );
-        assert!(m.combo_for(&Action::Overview).is_some(), "{profile}");
-        for n in 1..=9 {
-            assert!(
-                m.combo_for(&Action::Workspace(n)).is_some(),
-                "{profile} {n}"
-            );
+        let mut actions = vec![Action::ReleaseShortcuts, Action::Overview];
+        actions.extend((1..=9).map(Action::Workspace));
+        actions.extend(ScreenshotRequest::ALL.map(Action::Screenshot));
+        for action in actions {
+            assert!(m.combo_for(&action).is_some(), "{profile} {action:?}");
         }
-        for request in ScreenshotRequest::ALL {
-            assert!(
-                m.combo_for(&Action::Screenshot(request)).is_some(),
-                "{profile} {request:?}"
-            );
-        }
+        let mut combos = bound(&m);
+        let count = combos.len();
+        combos.sort();
+        combos.dedup();
+        assert_eq!(combos.len(), count, "{profile}: no two share a combination");
     }
     assert_eq!(
         ShortcutMap::defaults_for("anything else").len(),
         ShortcutMap::defaults().len()
     );
-}
-
-#[test]
-fn the_classic_defaults_tap_super_for_the_launcher_and_the_cupertino_ones_do_not() {
     assert_eq!(
         ShortcutMap::classic_pc_defaults().tap(),
         Some(&Action::Launcher)
     );
-    assert_eq!(ShortcutMap::defaults().tap(), None);
-}
-
-#[test]
-fn no_two_defaults_share_a_combination() {
-    for profile in ["cupertino", "classic-pc"] {
-        let m = ShortcutMap::defaults_for(profile);
-        let all: Vec<KeyCombo> = m.bindings().map(|(c, _)| *c).collect();
-        let mut sorted: Vec<String> = all.iter().map(ToString::to_string).collect();
-        sorted.sort();
-        sorted.dedup();
-        assert_eq!(sorted.len(), all.len(), "{profile}");
-    }
-}
-
-#[test]
-fn screenshot_requests_have_distinct_names() {
-    let mut names: Vec<&str> = ScreenshotRequest::ALL.iter().map(|r| r.name()).collect();
-    names.sort_unstable();
-    names.dedup();
-    assert_eq!(names.len(), ScreenshotRequest::ALL.len());
 }

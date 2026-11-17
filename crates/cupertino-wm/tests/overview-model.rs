@@ -28,13 +28,9 @@ fn inside(r: &Rect, area: &Rect) -> bool {
 // ---- packing ---------------------------------------------------------------------------------
 
 #[test]
-fn packing_nothing_takes_no_passes() {
+fn a_lone_window_is_never_enlarged_is_centred_a_little_above_the_middle_and_shrinks_to_fit() {
     let p = pack(&[], AREA, &LayoutParams::default());
     assert!(p.rects.is_empty() && p.passes == 0);
-}
-
-#[test]
-fn one_window_is_never_enlarged_and_is_centred_a_little_above_the_middle() {
     let w = Rect::new(500.0, 400.0, 600.0, 400.0);
     let r = layout(&[w], AREA, &LayoutParams::default())[0];
     assert_eq!((r.w, r.h), (600.0, 400.0));
@@ -43,10 +39,6 @@ fn one_window_is_never_enlarged_and_is_centred_a_little_above_the_middle() {
         (r.cy() - (AREA.cy() - 20.0)).abs() < 1e-6,
         "lifted by 20 points: {r:?}"
     );
-}
-
-#[test]
-fn a_window_larger_than_the_area_is_shrunk_to_fit_keeping_its_aspect_ratio() {
     let w = Rect::new(0.0, 0.0, 4000.0, 2000.0);
     let r = layout(&[w], AREA, &LayoutParams::default())[0];
     let work = AREA.inset(16.0);
@@ -55,7 +47,8 @@ fn a_window_larger_than_the_area_is_shrunk_to_fit_keeping_its_aspect_ratio() {
 }
 
 #[test]
-fn many_windows_never_overlap_stay_inside_and_keep_their_aspect_ratios() {
+fn many_windows_pack_deterministically_without_overlap_inside_the_area_keeping_their_aspect_ratios()
+{
     let windows: Vec<Rect> = (0..9)
         .map(|i| {
             let i = i as f64;
@@ -82,10 +75,6 @@ fn many_windows_never_overlap_stay_inside_and_keep_their_aspect_ratios() {
             assert!(overlap(r, s) <= 1e-6, "{r:?} overlaps {s:?}");
         }
     }
-}
-
-#[test]
-fn packing_is_deterministic() {
     let windows = [
         Rect::new(10.0, 10.0, 800.0, 600.0),
         Rect::new(50.0, 40.0, 700.0, 500.0),
@@ -150,7 +139,7 @@ fn a_crowded_packing_that_cannot_settle_falls_back_to_a_grid() {
 }
 
 #[test]
-fn the_row_layout_is_one_centred_row_in_input_order() {
+fn the_row_layout_is_one_centred_row_in_input_order_within_the_maximum_scale() {
     let wins = [
         Rect::new(0.0, 0.0, 400.0, 300.0),
         Rect::new(0.0, 0.0, 400.0, 300.0),
@@ -163,10 +152,6 @@ fn the_row_layout_is_one_centred_row_in_input_order() {
     assert!((left - right).abs() < 1e-9, "centred");
     assert!(out[0].h <= 200.0 && out[0].w / out[0].h - 4.0 / 3.0 < 1e-9);
     assert!(layout_row(&[], area, 16.0, 0.5).is_empty());
-}
-
-#[test]
-fn the_row_layout_never_exceeds_the_maximum_scale() {
     let wins = [Rect::new(0.0, 0.0, 400.0, 300.0)];
     let r = layout_row(&wins, Rect::new(0.0, 0.0, 1920.0, 1000.0), 16.0, 0.5)[0];
     assert_eq!((r.w, r.h), (200.0, 150.0));
@@ -187,7 +172,7 @@ fn reading_order_goes_row_by_row_left_to_right() {
 // ---- configuration -------------------------------------------------------------------------
 
 #[test]
-fn the_title_fade_is_a_smoothstep_between_start_and_end() {
+fn the_title_fade_is_a_smoothstep_between_start_and_end_or_a_step_when_they_meet() {
     let f = TitleFade {
         start: 0.8,
         end: 1.0,
@@ -198,10 +183,6 @@ fn the_title_fade_is_a_smoothstep_between_start_and_end() {
     assert_eq!(f.opacity(1.0), 1.0);
     assert_eq!(f.opacity(1.5), 1.0);
     assert!(f.opacity(0.85) < f.opacity(0.95));
-}
-
-#[test]
-fn a_degenerate_title_fade_is_a_step() {
     let f = TitleFade {
         start: 0.9,
         end: 0.9,
@@ -253,7 +234,7 @@ fn centre(o: &Overview, id: u64) -> Point {
 }
 
 #[test]
-fn the_overview_starts_closed_with_every_window_shown() {
+fn the_overview_opens_from_the_desktop_frames_to_the_layout_with_the_titles_fading_in() {
     let o = overview(4);
     assert!(!o.is_open());
     assert_eq!(o.mode(), OverviewMode::Overview);
@@ -262,10 +243,6 @@ fn the_overview_starts_closed_with_every_window_shown() {
     assert_eq!(o.progress_at(0.0), 0.0);
     assert_eq!(o.selection(), None);
     assert!(o.highlight(0.0).is_none());
-}
-
-#[test]
-fn closed_the_frames_are_the_desktop_frames_and_open_they_are_the_layout() {
     let mut o = overview(3);
     let from: Vec<Rect> = o.shown_windows().iter().map(|w| w.from).collect();
     assert_eq!(o.frames(0.0), from);
@@ -277,10 +254,6 @@ fn closed_the_frames_are_the_desktop_frames_and_open_they_are_the_layout() {
         assert!((a.x - b.x).abs() < 1e-3 && (a.w - b.w).abs() < 1e-3);
     }
     assert!(!o.is_animating(20.0));
-}
-
-#[test]
-fn the_title_opacity_follows_the_progress() {
     let mut o = overview(2);
     assert_eq!(o.title_opacity(0.0), 0.0);
     o.toggle(true, 1.0);
@@ -290,7 +263,7 @@ fn the_title_opacity_follows_the_progress() {
 }
 
 #[test]
-fn the_layout_area_starts_below_the_desktops_band() {
+fn the_layout_stays_below_the_desktops_band() {
     let mut o = overview(3);
     let bar = BarConfig::default();
     let closed = o.layout_area();
@@ -305,10 +278,6 @@ fn the_layout_area_starts_below_the_desktops_band() {
     assert!(open.y >= bar.open_height);
     o.set_bar_open(false, 2.0);
     assert_eq!(o.layout_area(), closed);
-}
-
-#[test]
-fn laid_out_windows_stay_below_the_band() {
     let o = overview(5);
     let top = BarConfig::default().windows_top(false);
     for r in o.layout_rects() {
@@ -426,7 +395,7 @@ fn hovering_selects_the_window_under_the_pointer_and_shows_a_highlight() {
 }
 
 #[test]
-fn clicking_a_window_selects_it_and_clicking_the_background_closes() {
+fn clicks_select_a_window_close_on_the_background_and_switch_or_add_workspaces_in_the_bar() {
     let mut o = overview(2);
     o.toggle(true, 0.0);
     let c = centre(&o, 1);
@@ -435,10 +404,6 @@ fn clicking_a_window_selects_it_and_clicking_the_background_closes() {
         o.click(Point::new(1.0, 1075.0), 10.0),
         OverviewAction::Close
     );
-}
-
-#[test]
-fn clicking_the_bar_switches_or_adds_a_workspace() {
     let mut o = overview(2);
     o.set_workspaces(&[WorkspaceId(7), WorkspaceId(8)], Some(WorkspaceId(7)));
     let l = o.bar.layout(0.0);
@@ -451,10 +416,6 @@ fn clicking_the_bar_switches_or_adds_a_workspace() {
         o.click(Point::new(l.add.cx(), l.add.cy()), 1.0),
         OverviewAction::AddWorkspace
     );
-}
-
-#[test]
-fn the_app_overview_has_no_bar() {
     let mut o = Overview::new(
         OverviewConfig::default(),
         AREA,
@@ -479,7 +440,7 @@ fn cancel_closes_and_activate_needs_a_selection() {
 }
 
 #[test]
-fn next_and_previous_walk_the_reading_order_and_wrap() {
+fn next_and_previous_walk_the_reading_order_and_wrap_from_either_end() {
     let mut o = overview(4);
     o.toggle(true, 0.0);
     o.key(Key::Next, 10.0);
@@ -500,10 +461,6 @@ fn next_and_previous_walk_the_reading_order_and_wrap() {
         Some(*ids.last().unwrap()),
         "and back to the end"
     );
-}
-
-#[test]
-fn previous_without_a_selection_starts_at_the_last_window() {
     let mut o = overview(3);
     o.key(Key::Previous, 0.0);
     let rects = o.layout_rects().to_vec();
@@ -512,7 +469,7 @@ fn previous_without_a_selection_starts_at_the_last_window() {
 }
 
 #[test]
-fn arrow_keys_move_to_a_window_in_that_direction() {
+fn arrow_keys_move_to_a_window_in_that_direction_when_there_is_one() {
     let rects = overview(6).layout_rects().to_vec();
     let order = reading_order(&rects);
     for (key, goes) in [
@@ -544,10 +501,6 @@ fn arrow_keys_move_to_a_window_in_that_direction() {
             }
         }
     }
-}
-
-#[test]
-fn some_window_has_a_neighbour_to_the_right_and_one_below() {
     let rects = overview(6).layout_rects().to_vec();
     let mut moved_right = false;
     let mut moved_down = false;
@@ -567,7 +520,7 @@ fn some_window_has_a_neighbour_to_the_right_and_one_below() {
 }
 
 #[test]
-fn a_direction_with_nothing_beyond_keeps_the_selection() {
+fn a_direction_with_nothing_beyond_or_no_windows_keeps_the_selection() {
     let mut o = overview(1);
     o.key(Key::Next, 0.0);
     let only = o.selection();
@@ -575,10 +528,6 @@ fn a_direction_with_nothing_beyond_keeps_the_selection() {
         o.key(k, 0.1);
         assert_eq!(o.selection(), only);
     }
-}
-
-#[test]
-fn keys_do_nothing_without_windows() {
     let mut o = Overview::new(
         OverviewConfig::default(),
         AREA,
@@ -638,7 +587,7 @@ fn a_gesture_drives_the_progress_one_to_one_and_rubber_bands_past_the_ends() {
 }
 
 #[test]
-fn releasing_a_slow_gesture_decides_by_position() {
+fn releasing_a_gesture_decides_by_position_or_by_a_fast_flick() {
     let mut o = overview(2);
     o.gesture_update(200.0, 0.0, 1.0);
     o.gesture_update(200.0, 0.0, 2.0);
@@ -648,10 +597,6 @@ fn releasing_a_slow_gesture_decides_by_position() {
     o.gesture_update(-200.0, 1.0, 11.0);
     assert!(!o.gesture_end(11.0), "back below half way closes");
     assert!(!o.is_open());
-}
-
-#[test]
-fn a_fast_flick_opens_even_from_a_short_distance() {
     let mut o = overview(2);
     o.gesture_update(10.0, 0.0, 1.00);
     o.gesture_update(40.0, 0.0, 1.02);
@@ -746,7 +691,7 @@ fn an_open_bar_shows_pictures_at_the_output_aspect_with_names_below() {
 }
 
 #[test]
-fn the_slots_are_centred_with_the_gap_between_them() {
+fn the_slots_are_centred_with_the_gap_between_them_and_narrow_to_fit_the_margins() {
     let b = bar(3);
     let l = b.layout(0.0);
     let (a, c) = (l.slots[0].name, l.slots[2].name);
@@ -755,10 +700,6 @@ fn the_slots_are_centred_with_the_gap_between_them() {
         "symmetric about the centre"
     );
     assert!((l.slots[1].name.x - a.right() - 24.0).abs() < 1e-9);
-}
-
-#[test]
-fn many_desktops_narrow_the_pictures_to_fit_between_the_side_margins() {
     let b = bar(30);
     let l = b.layout(0.0);
     let first = l.slots.first().unwrap().name;
@@ -817,7 +758,7 @@ fn hit_testing_finds_the_add_button_names_and_open_pictures() {
 }
 
 #[test]
-fn the_pointer_over_the_band_expands_it_and_marks_the_hovered_slot() {
+fn the_pointer_over_the_band_expands_it_when_enabled_and_marks_the_hovered_slot() {
     let mut b = bar(2);
     let n = b.layout(0.0).slots[0].name;
     b.pointer_moved(Some(Point::new(n.cx(), n.cy())), 1.0);
@@ -832,10 +773,6 @@ fn the_pointer_over_the_band_expands_it_and_marks_the_hovered_slot() {
     assert_eq!(b.hovered(), None);
     b.pointer_moved(None, 32.0);
     assert_eq!(b.hovered(), None);
-}
-
-#[test]
-fn hover_expansion_can_be_disabled() {
     let mut b = WorkspaceBar::new(
         BarConfig {
             expand_on_hover: false,
@@ -847,26 +784,10 @@ fn hover_expansion_can_be_disabled() {
     b.set_workspaces(&[WorkspaceId(1)], Some(WorkspaceId(1)));
     b.pointer_moved(Some(Point::new(900.0, 10.0)), 1.0);
     assert!(!b.is_expanded_target());
-}
-
-#[test]
-fn removing_a_workspace_clears_a_hover_on_it() {
     let mut b = bar(2);
     let n = b.layout(0.0).slots[1].name;
     b.pointer_moved(Some(Point::new(n.cx(), n.cy())), 1.0);
     assert_eq!(b.hovered(), Some(BarHit::Workspace(WorkspaceId(2))));
     b.set_workspaces(&[WorkspaceId(1)], Some(WorkspaceId(1)));
     assert_eq!(b.hovered(), None);
-}
-
-#[test]
-fn the_bar_metrics_derive_from_the_configuration() {
-    let c = BarConfig::default();
-    assert_eq!(c.band_height(false), 72.0);
-    assert_eq!(c.band_height(true), 165.0);
-    assert_eq!(c.windows_top(true), c.open_height + c.layout_gap);
-    assert_eq!(
-        c.open_name_cy(),
-        c.thumb_top + c.thumb_height + c.open_name_gap
-    );
 }

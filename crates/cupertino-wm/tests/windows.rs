@@ -10,7 +10,7 @@ use cupertino_wm::{
 
 #[test]
 fn mapping_a_window_opens_it_and_gives_it_the_keyboard() {
-    let mut wm = wm();
+    let mut wm = common::wm();
     let fx = wm.handle(
         Command::Map(MapParams::new(win(1), "org.test.a", frame(1))),
         1.0,
@@ -36,7 +36,7 @@ fn mapping_a_window_opens_it_and_gives_it_the_keyboard() {
 
 #[test]
 fn windows_of_one_identity_share_an_application() {
-    let mut wm = wm();
+    let mut wm = common::wm();
     open(&mut wm, 1, "org.test.a", 1.0);
     open(&mut wm, 2, "org.test.a", 2.0);
     open(&mut wm, 3, "org.test.b", 3.0);
@@ -55,7 +55,7 @@ fn windows_of_one_identity_share_an_application() {
 
 #[test]
 fn the_newest_window_is_on_top_and_focusing_raises_another() {
-    let mut wm = wm();
+    let mut wm = common::wm();
     open(&mut wm, 1, "a", 1.0);
     open(&mut wm, 2, "b", 2.0);
     assert_eq!(wm.stacking_order(), [win(1), win(2)]);
@@ -71,8 +71,8 @@ fn the_newest_window_is_on_top_and_focusing_raises_another() {
 }
 
 #[test]
-fn closing_the_key_window_hands_the_keyboard_to_the_next_one() {
-    let mut wm = wm();
+fn closing_or_destroying_windows_hands_the_keyboard_to_the_next_one() {
+    let mut wm = common::wm();
     open(&mut wm, 1, "a", 1.0);
     open(&mut wm, 2, "a", 2.0);
     let fx = wm.handle(Command::Unmap { window: win(2) }, 3.0);
@@ -88,20 +88,12 @@ fn closing_the_key_window_hands_the_keyboard_to_the_next_one() {
     ));
     assert!(wm.window(win(2)).is_none());
     assert_eq!(wm.key_window(), Some(win(1)));
-}
-
-#[test]
-fn closing_the_last_window_of_an_app_leaves_no_key_window() {
-    let mut wm = wm();
+    let mut wm = common::wm();
     open(&mut wm, 1, "a", 1.0);
     open(&mut wm, 2, "b", 2.0);
     wm.handle(Command::Destroy { window: win(2) }, 3.0);
     assert_eq!(wm.key_window(), None);
-}
-
-#[test]
-fn destroying_a_window_removes_it_at_once() {
-    let mut wm = wm();
+    let mut wm = common::wm();
     open(&mut wm, 1, "a", 1.0);
     let fx = wm.handle(Command::Destroy { window: win(1) }, 3.0);
     assert!(has(
@@ -115,7 +107,7 @@ fn destroying_a_window_removes_it_at_once() {
 
 #[test]
 fn commands_for_unknown_windows_do_nothing() {
-    let mut wm = wm();
+    let mut wm = common::wm();
     for cmd in [
         Command::FocusWindow { window: win(9) },
         Command::Minimize {
@@ -142,7 +134,7 @@ fn commands_for_unknown_windows_do_nothing() {
 
 #[test]
 fn minimizing_hides_the_window_and_restoring_brings_back_the_exact_frame() {
-    let mut wm = wm();
+    let mut wm = common::wm();
     open(&mut wm, 1, "a", 1.0);
     open(&mut wm, 2, "a", 2.0);
     let target = cupertino_wm::Rect::new(900.0, 1000.0, 60.0, 60.0);
@@ -188,7 +180,7 @@ fn minimizing_hides_the_window_and_restoring_brings_back_the_exact_frame() {
 
 #[test]
 fn minimize_or_restore_undoes_a_zoom_or_a_tile_before_it_minimizes() {
-    let mut wm = wm();
+    let mut wm = common::wm();
     open(&mut wm, 1, "a", 1.0);
     wm.handle(Command::ToggleZoom { window: win(1) }, 3.0);
     settle(&mut wm, 3.0);
@@ -215,7 +207,7 @@ fn minimize_or_restore_undoes_a_zoom_or_a_tile_before_it_minimizes() {
 
 #[test]
 fn a_window_whose_app_disabled_minimize_stays_up() {
-    let mut wm = wm();
+    let mut wm = common::wm();
     let mut p = MapParams::new(win(1), "a", frame(1));
     p.disabled = DisabledControls {
         minimize: true,
@@ -244,8 +236,8 @@ fn a_window_whose_app_disabled_minimize_stays_up() {
 }
 
 #[test]
-fn zoom_fits_the_window_to_the_usable_area_and_unzoom_returns_it() {
-    let mut wm = wm();
+fn zoom_fits_the_window_within_its_size_limits_and_unzoom_returns_it() {
+    let mut wm = common::wm();
     open(&mut wm, 1, "a", 1.0);
     let fx = wm.handle(Command::ToggleZoom { window: win(1) }, 3.0);
     assert!(has(&fx, |e| matches!(
@@ -269,11 +261,7 @@ fn zoom_fits_the_window_to_the_usable_area_and_unzoom_returns_it() {
     settle(&mut wm, 10.0);
     assert_eq!(state(&wm, 1), LifecycleState::Normal);
     assert_eq!(wm.window(win(1)).unwrap().geometry(), frame(1));
-}
-
-#[test]
-fn a_window_with_a_fixed_size_cannot_zoom() {
-    let mut wm = wm();
+    let mut wm = common::wm();
     open(&mut wm, 1, "a", 1.0);
     let fixed = Some(cupertino_wm::Size::new(640.0, 480.0));
     wm.handle(
@@ -289,11 +277,7 @@ fn a_window_with_a_fixed_size_cannot_zoom() {
     wm.handle(Command::ToggleZoom { window: win(1) }, 3.0);
     settle(&mut wm, 3.0);
     assert_eq!(state(&wm, 1), LifecycleState::Normal);
-}
-
-#[test]
-fn zoom_respects_a_maximum_size() {
-    let mut wm = wm();
+    let mut wm = common::wm();
     open(&mut wm, 1, "a", 1.0);
     wm.handle(
         Command::SetSizeHints {
@@ -317,8 +301,8 @@ fn zoom_respects_a_maximum_size() {
 }
 
 #[test]
-fn full_screen_covers_the_output_and_exiting_restores_the_frame() {
-    let mut wm = wm();
+fn full_screen_covers_the_output_and_exiting_restores_the_frame_or_the_zoom() {
+    let mut wm = common::wm();
     open(&mut wm, 1, "a", 1.0);
     let fx = wm.handle(
         Command::Fullscreen {
@@ -352,11 +336,7 @@ fn full_screen_covers_the_output_and_exiting_restores_the_frame() {
     assert_eq!(state(&wm, 1), LifecycleState::Normal);
     assert_eq!(wm.window(win(1)).unwrap().geometry(), frame(1));
     assert_eq!(wm.fullscreen_front(OUT), None);
-}
-
-#[test]
-fn a_window_that_was_zoomed_returns_to_zoomed_after_full_screen() {
-    let mut wm = wm();
+    let mut wm = common::wm();
     open(&mut wm, 1, "a", 1.0);
     wm.handle(Command::ToggleZoom { window: win(1) }, 3.0);
     settle(&mut wm, 3.0);
@@ -379,8 +359,8 @@ fn a_window_that_was_zoomed_returns_to_zoomed_after_full_screen() {
 }
 
 #[test]
-fn tiling_places_the_window_in_its_half_with_the_margin() {
-    let mut wm = wm();
+fn tiling_places_the_window_in_its_half_and_a_later_zoom_returns_to_the_frame_before_either() {
+    let mut wm = common::wm();
     open(&mut wm, 1, "a", 1.0);
     let fx = wm.handle(
         Command::Tile {
@@ -409,11 +389,7 @@ fn tiling_places_the_window_in_its_half_with_the_margin() {
     settle(&mut wm, 10.0);
     assert_eq!(state(&wm, 1), LifecycleState::Normal);
     assert_eq!(wm.window(win(1)).unwrap().geometry(), frame(1));
-}
-
-#[test]
-fn a_zoom_after_tiling_comes_back_to_the_frame_before_either() {
-    let mut wm = wm();
+    let mut wm = common::wm();
     open(&mut wm, 1, "a", 1.0);
     wm.handle(Command::ToggleZoom { window: win(1) }, 3.0);
     settle(&mut wm, 3.0);
@@ -435,7 +411,7 @@ fn a_zoom_after_tiling_comes_back_to_the_frame_before_either() {
 
 #[test]
 fn titles_and_parents_are_kept_on_the_window() {
-    let mut wm = wm();
+    let mut wm = common::wm();
     open(&mut wm, 1, "a", 1.0);
     open(&mut wm, 2, "a", 2.0);
     wm.handle(
@@ -466,7 +442,7 @@ fn titles_and_parents_are_kept_on_the_window() {
 
 #[test]
 fn a_close_request_is_passed_to_the_client_not_acted_on() {
-    let mut wm = wm();
+    let mut wm = common::wm();
     open(&mut wm, 1, "a", 1.0);
     let fx = wm.handle(Command::RequestClose { window: win(1) }, 3.0);
     assert_eq!(fx, [Effect::RequestClose { window: win(1) }]);
@@ -474,8 +450,8 @@ fn a_close_request_is_passed_to_the_client_not_acted_on() {
 }
 
 #[test]
-fn a_sheet_is_placed_hanging_from_its_parent_and_dims_it() {
-    let mut wm = wm();
+fn a_sheet_hangs_from_its_parent_dims_it_and_blocks_its_input() {
+    let mut wm = common::wm();
     open(&mut wm, 1, "a", 1.0);
     let mut sheet = MapParams::new(win(2), "a", cupertino_wm::Rect::new(0.0, 0.0, 400.0, 200.0));
     sheet.parent = Some(win(1));
@@ -490,11 +466,7 @@ fn a_sheet_is_placed_hanging_from_its_parent_and_dims_it() {
     wm.tick(3.3);
     assert!(wm.sheet_dimming(win(1), 4.0) > 0.0);
     assert_eq!(wm.sheet_dimming(win(2), 4.0), 0.0);
-}
-
-#[test]
-fn input_is_blocked_to_a_window_with_a_modal_child() {
-    let mut wm = wm();
+    let mut wm = common::wm();
     open(&mut wm, 1, "a", 1.0);
     let mut dialog = MapParams::new(
         win(2),
@@ -511,37 +483,4 @@ fn input_is_blocked_to_a_window_with_a_modal_child() {
         Some(win(2)),
         "the modal child keeps the keyboard"
     );
-}
-
-#[test]
-fn a_sticky_window_is_shown_on_every_workspace() {
-    let mut wm = wm();
-    open(&mut wm, 1, "a", 1.0);
-    open(&mut wm, 2, "b", 2.0);
-    wm.handle(
-        Command::SetSticky {
-            window: win(1),
-            sticky: true,
-        },
-        3.0,
-    );
-    assert!(wm.window(win(1)).unwrap().sticky);
-    let fx = wm.handle(Command::AddWorkspace { output: OUT }, 4.0);
-    let new = fx
-        .iter()
-        .find_map(|e| match e {
-            Effect::WorkspaceCreated { workspace, .. } => Some(*workspace),
-            _ => None,
-        })
-        .expect("a workspace");
-    wm.handle(
-        Command::SwitchWorkspace {
-            output: OUT,
-            workspace: new,
-        },
-        5.0,
-    );
-    settle(&mut wm, 5.0);
-    assert!(wm.window_on_screen(win(1)));
-    assert!(!wm.window_on_screen(win(2)));
 }

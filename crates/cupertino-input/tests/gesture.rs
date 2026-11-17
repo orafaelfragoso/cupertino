@@ -18,11 +18,8 @@ fn swipe_to(r: &mut GestureRecognizer, fingers: u32, dx: f64, dy: f64) -> Vec<Ge
     out
 }
 
-fn end(r: &mut GestureRecognizer, time: f64) -> GestureOutput {
-    let out = r.handle(GestureEvent::SwipeEnd {
-        time,
-        cancelled: false,
-    });
+fn end(r: &mut GestureRecognizer, time: f64, cancelled: bool) -> GestureOutput {
+    let out = r.handle(GestureEvent::SwipeEnd { time, cancelled });
     assert_eq!(out.len(), 1);
     out[0]
 }
@@ -36,6 +33,17 @@ fn final_progress(outputs: &[GestureOutput]) -> f64 {
             _ => None,
         })
         .expect("an update")
+}
+
+fn pinch(r: &mut GestureRecognizer, fingers: u32, scale: f64) -> Vec<GestureOutput> {
+    r.handle(GestureEvent::PinchBegin { time: 0.0, fingers });
+    r.handle(GestureEvent::PinchUpdate {
+        time: 0.02,
+        dx: 0.0,
+        dy: 0.0,
+        scale,
+        rotation: 0.0,
+    })
 }
 
 #[test]
@@ -69,6 +77,22 @@ fn a_swipe_waits_for_the_lock_distance_before_it_claims_anything() {
         }
     );
     assert!(matches!(out[1], GestureOutput::Update { .. }));
+
+    let mut unstarted = GestureRecognizer::new(GestureConfig::default());
+    unstarted.handle(GestureEvent::SwipeBegin {
+        time: 0.0,
+        fingers: 3,
+    });
+    assert!(
+        unstarted
+            .handle(GestureEvent::SwipeEnd {
+                time: 0.1,
+                cancelled: false
+            })
+            .is_empty(),
+        "a swipe that never starts ends silently"
+    );
+    assert_eq!(unstarted.disposition(), Disposition::Idle);
 }
 
 #[test]
@@ -83,189 +107,212 @@ fn the_axis_and_direction_decide_the_kind() {
         swipe_to(&mut r, 3, dx, dy);
         assert_eq!(r.active_kind(), Some(kind), "({dx}, {dy})");
     }
-}
 
-#[test]
-fn a_diagonal_swipe_stays_undecided_until_one_axis_wins() {
-    let mut r = GestureRecognizer::new(GestureConfig::default());
-    r.handle(GestureEvent::SwipeBegin {
+    let mut diagonal = GestureRecognizer::new(GestureConfig::default());
+    diagonal.handle(GestureEvent::SwipeBegin {
         time: 0.0,
         fingers: 3,
     });
-    r.handle(GestureEvent::SwipeUpdate {
+    diagonal.handle(GestureEvent::SwipeUpdate {
         time: 0.01,
         dx: 20.0,
         dy: 20.0,
     });
-    assert_eq!(r.disposition(), Disposition::Pending);
-    r.handle(GestureEvent::SwipeUpdate {
+    assert_eq!(
+        diagonal.disposition(),
+        Disposition::Pending,
+        "a diagonal stays undecided"
+    );
+    diagonal.handle(GestureEvent::SwipeUpdate {
         time: 0.02,
         dx: 20.0,
         dy: 0.0,
     });
-    assert_eq!(r.active_kind(), Some(GestureKind::WorkspaceSwitch));
+    assert_eq!(diagonal.active_kind(), Some(GestureKind::WorkspaceSwitch));
 }
 
 #[test]
-fn a_finger_count_with_no_binding_is_ignored_until_the_gesture_ends() {
-    let mut r = GestureRecognizer::new(GestureConfig::default());
-    assert!(swipe_to(&mut r, 5, 100.0, 0.0).is_empty());
-    assert_eq!(r.disposition(), Disposition::Ignored);
-    assert!(r
-        .handle(GestureEvent::SwipeEnd {
-            time: 1.0,
-            cancelled: false
-        })
-        .is_empty());
-    assert_eq!(r.disposition(), Disposition::Idle);
-}
-
-#[test]
-fn an_axis_with_no_binding_for_that_finger_count_is_ignored() {
-    let cfg = GestureConfig {
+fn a_gesture_with_no_binding_is_ignored_until_it_ends() {
+    let only_four_for_overview = GestureConfig {
         overview_fingers: vec![4],
         ..GestureConfig::default()
     };
-    let mut r = GestureRecognizer::new(cfg);
-    assert!(swipe_to(&mut r, 3, 0.0, -100.0).is_empty());
+    for (name, config, fingers, dx, dy) in [
+        ("five finger swipe", GestureConfig::default(), 5, 100.0, 0.0),
+        ("unbound axis", only_four_for_overview, 3, 0.0, -100.0),
+    ] {
+        let mut r = GestureRecognizer::new(config);
+        assert!(swipe_to(&mut r, fingers, dx, dy).is_empty(), "{name}");
+        assert_eq!(r.disposition(), Disposition::Ignored, "{name}");
+        assert!(r
+            .handle(GestureEvent::SwipeEnd {
+                time: 1.0,
+                cancelled: false
+            })
+            .is_empty());
+        assert_eq!(r.disposition(), Disposition::Idle, "{name}");
+    }
+    let mut r = GestureRecognizer::new(GestureConfig::default());
+    assert!(pinch(&mut r, 3, 0.5).is_empty(), "three finger pinch");
     assert_eq!(r.disposition(), Disposition::Ignored);
 }
 
 #[test]
 fn horizontal_progress_follows_the_natural_direction_setting() {
-    let mut natural = GestureRecognizer::new(GestureConfig::default());
-    let out = swipe_to(&mut natural, 3, 150.0, 0.0);
-    assert!(
-        (final_progress(&out) + 0.5).abs() < 1e-9,
-        "fingers right, content right: previous"
-    );
-    let mut reverse = GestureRecognizer::new(GestureConfig {
-        natural_direction: false,
+    for (natural, progress) in [(true, -0.5), (false, 0.5)] {
+        let mut r = GestureRecognizer::new(GestureConfig {
+            natural_direction: natural,
+            ..GestureConfig::default()
+        });
+        let out = swipe_to(&mut r, 3, 150.0, 0.0);
+        assert!(
+            (final_progress(&out) - progress).abs() < 1e-9,
+            "natural {natural}"
+        );
+    }
+}
+
+#[test]
+fn a_swipe_ends_by_its_distance_and_velocity_in_a_commit_or_a_cancel() {
+    let three_steps = GestureConfig {
+        max_steps: 3,
         ..GestureConfig::default()
-    });
-    let out = swipe_to(&mut reverse, 3, 150.0, 0.0);
-    assert!((final_progress(&out) - 0.5).abs() < 1e-9);
+    };
+    // (name, config, dx, dy, end time, cancelled, kind, outcome, direction, steps, target)
+    for (name, config, dx, dy, time, cancelled, kind, outcome, direction, steps, target) in [
+        (
+            "a long swipe to the next workspace",
+            GestureConfig::default(),
+            -240.0,
+            0.0,
+            0.11,
+            false,
+            GestureKind::WorkspaceSwitch,
+            Outcome::Commit,
+            Some(Direction::Next),
+            1,
+            1.0,
+        ),
+        (
+            "a long swipe to the previous workspace",
+            GestureConfig::default(),
+            240.0,
+            0.0,
+            0.11,
+            false,
+            GestureKind::WorkspaceSwitch,
+            Outcome::Commit,
+            Some(Direction::Previous),
+            1,
+            -1.0,
+        ),
+        (
+            "a short swipe held still before lifting",
+            GestureConfig::default(),
+            -60.0,
+            0.0,
+            2.0,
+            false,
+            GestureKind::WorkspaceSwitch,
+            Outcome::Cancel,
+            None,
+            0,
+            0.0,
+        ),
+        (
+            "a short fast swipe carried over by its velocity",
+            GestureConfig::default(),
+            -90.0,
+            0.0,
+            0.1,
+            false,
+            GestureKind::WorkspaceSwitch,
+            Outcome::Commit,
+            Some(Direction::Next),
+            1,
+            1.0,
+        ),
+        (
+            "a cancelled gesture",
+            GestureConfig::default(),
+            -400.0,
+            0.0,
+            0.11,
+            true,
+            GestureKind::WorkspaceSwitch,
+            Outcome::Cancel,
+            None,
+            0,
+            0.0,
+        ),
+        (
+            "several workspaces when the limit allows",
+            three_steps,
+            -750.0,
+            0.0,
+            2.0,
+            false,
+            GestureKind::WorkspaceSwitch,
+            Outcome::Commit,
+            Some(Direction::Next),
+            3,
+            3.0,
+        ),
+        (
+            "an upward swipe to the overview",
+            GestureConfig::default(),
+            0.0,
+            -300.0,
+            0.11,
+            false,
+            GestureKind::Overview,
+            Outcome::Commit,
+            None,
+            1,
+            1.0,
+        ),
+    ] {
+        let mut r = GestureRecognizer::new(config);
+        swipe_to(&mut r, 3, dx, dy);
+        let GestureOutput::End {
+            kind: got_kind,
+            outcome: got_outcome,
+            direction: got_direction,
+            steps: got_steps,
+            target: got_target,
+            velocity,
+            ..
+        } = end(&mut r, time, cancelled)
+        else {
+            panic!("{name}: an end");
+        };
+        assert_eq!(
+            (got_kind, got_outcome, got_direction, got_target),
+            (kind, outcome, direction, target),
+            "{name}"
+        );
+        if kind == GestureKind::WorkspaceSwitch {
+            assert_eq!(got_steps, steps, "{name}");
+        }
+        if name.contains("velocity") {
+            assert!(velocity > 0.0, "{name}");
+        }
+        assert_eq!(r.disposition(), Disposition::Idle, "{name}");
+    }
 }
 
 #[test]
-fn a_long_swipe_commits_to_the_next_workspace() {
+fn pulling_a_swipe_back_below_the_commit_point_cancels_it() {
     let mut r = GestureRecognizer::new(GestureConfig::default());
-    let out = swipe_to(&mut r, 3, -240.0, 0.0);
-    assert!((final_progress(&out) - 0.8).abs() < 1e-9);
-    let GestureOutput::End {
-        kind,
-        outcome,
-        direction,
-        steps,
-        target,
-        ..
-    } = end(&mut r, 0.11)
-    else {
-        panic!("an end");
-    };
-    assert_eq!(kind, GestureKind::WorkspaceSwitch);
-    assert_eq!(outcome, Outcome::Commit);
-    assert_eq!(direction, Some(Direction::Next));
-    assert_eq!(steps, 1);
-    assert_eq!(target, 1.0);
-    assert_eq!(r.disposition(), Disposition::Idle);
-}
-
-#[test]
-fn a_swipe_the_other_way_commits_to_the_previous_workspace() {
-    let mut r = GestureRecognizer::new(GestureConfig::default());
-    swipe_to(&mut r, 3, 240.0, 0.0);
-    let GestureOutput::End {
-        direction, target, ..
-    } = end(&mut r, 0.11)
-    else {
-        panic!("an end");
-    };
-    assert_eq!(direction, Some(Direction::Previous));
-    assert_eq!(target, -1.0);
-}
-
-#[test]
-fn a_short_slow_swipe_cancels() {
-    let mut r = GestureRecognizer::new(GestureConfig::default());
-    swipe_to(&mut r, 3, -60.0, 0.0);
-    // Held still for a while before lifting: no velocity to project.
-    let GestureOutput::End {
-        outcome,
-        target,
-        direction,
-        steps,
-        ..
-    } = end(&mut r, 2.0)
-    else {
-        panic!("an end");
-    };
-    assert_eq!(outcome, Outcome::Cancel);
-    assert_eq!((target, direction, steps), (0.0, None, 0));
-}
-
-#[test]
-fn velocity_can_carry_a_short_swipe_over_the_commit_point() {
-    let mut r = GestureRecognizer::new(GestureConfig::default());
-    let out = swipe_to(&mut r, 3, -90.0, 0.0);
-    assert!(final_progress(&out) < 0.5);
-    let GestureOutput::End {
-        outcome, velocity, ..
-    } = end(&mut r, 0.1)
-    else {
-        panic!("an end");
-    };
-    assert!(velocity > 0.0);
-    assert_eq!(outcome, Outcome::Commit);
-}
-
-#[test]
-fn a_cancelled_gesture_never_commits() {
-    let mut r = GestureRecognizer::new(GestureConfig::default());
-    swipe_to(&mut r, 3, -400.0, 0.0);
-    let out = r.handle(GestureEvent::SwipeEnd {
-        time: 0.11,
-        cancelled: true,
-    });
-    let [GestureOutput::End {
-        outcome, target, ..
-    }] = out[..]
-    else {
-        panic!("an end");
-    };
-    assert_eq!(outcome, Outcome::Cancel);
-    assert_eq!(target, 0.0);
-}
-
-#[test]
-fn an_upward_swipe_commits_the_overview_and_a_downward_one_does_not() {
-    let mut up = GestureRecognizer::new(GestureConfig::default());
-    swipe_to(&mut up, 3, 0.0, -300.0);
-    let GestureOutput::End {
-        kind,
-        outcome,
-        target,
-        direction,
-        ..
-    } = end(&mut up, 0.11)
-    else {
-        panic!("an end");
-    };
-    assert_eq!(
-        (kind, outcome, target, direction),
-        (GestureKind::Overview, Outcome::Commit, 1.0, None)
-    );
-    // Pulling back down after going up: progress below the commit point cancels.
-    let mut back = GestureRecognizer::new(GestureConfig::default());
-    swipe_to(&mut back, 3, 0.0, -300.0);
+    swipe_to(&mut r, 3, 0.0, -300.0);
     for i in 1..=10 {
-        back.handle(GestureEvent::SwipeUpdate {
+        r.handle(GestureEvent::SwipeUpdate {
             time: 0.11 + f64::from(i) * 0.01,
             dx: 0.0,
             dy: 25.0,
         });
     }
-    let GestureOutput::End { outcome, .. } = end(&mut back, 2.0) else {
+    let GestureOutput::End { outcome, .. } = end(&mut r, 2.0, false) else {
         panic!("an end");
     };
     assert_eq!(outcome, Outcome::Cancel);
@@ -273,84 +320,29 @@ fn an_upward_swipe_commits_the_overview_and_a_downward_one_does_not() {
 
 #[test]
 fn pinching_in_opens_the_app_grid_and_spreading_shows_the_desktop() {
-    let mut r = GestureRecognizer::new(GestureConfig::default());
-    r.handle(GestureEvent::PinchBegin {
-        time: 0.0,
-        fingers: 4,
-    });
-    assert!(r
-        .handle(GestureEvent::PinchUpdate {
-            time: 0.01,
-            dx: 0.0,
-            dy: 0.0,
-            scale: 0.97,
-            rotation: 0.0
-        })
-        .is_empty());
-    let out = r.handle(GestureEvent::PinchUpdate {
-        time: 0.02,
-        dx: 0.0,
-        dy: 0.0,
-        scale: 0.8,
-        rotation: 0.0,
-    });
-    assert_eq!(
-        out[0],
-        GestureOutput::Begin {
-            kind: GestureKind::AppGrid,
-            fingers: 4
-        }
+    for (scale, kind, progress) in [
+        (0.8, GestureKind::AppGrid, 0.4),
+        (1.3, GestureKind::ShowDesktop, 0.6),
+    ] {
+        let mut r = GestureRecognizer::new(GestureConfig::default());
+        let out = pinch(&mut r, 4, scale);
+        assert_eq!(out[0], GestureOutput::Begin { kind, fingers: 4 }, "{scale}");
+        assert!((final_progress(&out) - progress).abs() < 1e-9, "{scale}");
+        r.handle(GestureEvent::PinchEnd {
+            time: 2.0,
+            cancelled: false,
+        });
+        assert_eq!(r.disposition(), Disposition::Idle);
+    }
+    let mut small = GestureRecognizer::new(GestureConfig::default());
+    assert!(
+        pinch(&mut small, 4, 0.97).is_empty(),
+        "below the lock distance"
     );
-    assert!((final_progress(&out) - 0.4).abs() < 1e-9);
-    r.handle(GestureEvent::PinchEnd {
-        time: 2.0,
-        cancelled: false,
-    });
-    assert_eq!(r.disposition(), Disposition::Idle);
-
-    let mut s = GestureRecognizer::new(GestureConfig::default());
-    s.handle(GestureEvent::PinchBegin {
-        time: 0.0,
-        fingers: 4,
-    });
-    let out = s.handle(GestureEvent::PinchUpdate {
-        time: 0.02,
-        dx: 0.0,
-        dy: 0.0,
-        scale: 1.3,
-        rotation: 0.0,
-    });
-    assert_eq!(
-        out[0],
-        GestureOutput::Begin {
-            kind: GestureKind::ShowDesktop,
-            fingers: 4
-        }
-    );
-    assert!((final_progress(&out) - 0.6).abs() < 1e-9);
 }
 
 #[test]
-fn a_pinch_with_an_unbound_finger_count_is_ignored() {
-    let mut r = GestureRecognizer::new(GestureConfig::default());
-    r.handle(GestureEvent::PinchBegin {
-        time: 0.0,
-        fingers: 3,
-    });
-    assert_eq!(r.disposition(), Disposition::Ignored);
-    assert!(r
-        .handle(GestureEvent::PinchUpdate {
-            time: 0.1,
-            dx: 0.0,
-            dy: 0.0,
-            scale: 0.5,
-            rotation: 0.0
-        })
-        .is_empty());
-}
-
-#[test]
-fn a_swipe_update_does_not_feed_a_pinch_and_the_reverse() {
+fn a_swipe_update_does_not_feed_a_pinch() {
     let mut r = GestureRecognizer::new(GestureConfig::default());
     r.handle(GestureEvent::PinchBegin {
         time: 0.0,
@@ -396,56 +388,19 @@ fn holds_are_reported_with_their_finger_count() {
 }
 
 #[test]
-fn a_swipe_that_never_starts_ends_silently() {
-    let mut r = GestureRecognizer::new(GestureConfig::default());
-    r.handle(GestureEvent::SwipeBegin {
-        time: 0.0,
-        fingers: 3,
-    });
-    assert!(r
-        .handle(GestureEvent::SwipeEnd {
-            time: 0.1,
-            cancelled: false
-        })
-        .is_empty());
-    assert_eq!(r.disposition(), Disposition::Idle);
-}
-
-#[test]
-fn several_workspaces_can_be_crossed_when_the_limit_allows() {
-    let mut r = GestureRecognizer::new(GestureConfig {
-        max_steps: 3,
-        ..GestureConfig::default()
-    });
-    swipe_to(&mut r, 3, -750.0, 0.0);
-    let GestureOutput::End { steps, target, .. } = end(&mut r, 2.0) else {
-        panic!("an end");
-    };
-    assert_eq!(steps, 3);
-    assert_eq!(target, 3.0);
-}
-
-#[test]
 fn the_fluid_swipe_commits_on_projected_progress_in_the_same_direction() {
-    assert!(
-        fluid_swipe_commits(0.4, 0.5, 0.6, 0.5),
-        "0.4 + 0.3 passes one half"
-    );
-    assert!(
-        !fluid_swipe_commits(0.2, 0.2, 0.2, 0.5),
-        "0.3 projected is too little"
-    );
-    assert!(
-        !fluid_swipe_commits(0.4, 0.5, -2.0, 0.5),
-        "thrown back the other way"
-    );
-    assert!(fluid_swipe_commits(-0.6, -0.6, -0.1, 0.5));
-    assert!(
-        !fluid_swipe_commits(0.0, 1.0, 5.0, 0.5),
-        "no progress, no commit"
-    );
-    assert!(
-        !fluid_swipe_commits(0.6, 2.0, 0.0, 0.5),
-        "well short of the peak"
-    );
+    for (name, progress, peak, velocity, commits) in [
+        ("0.4 + 0.3 passes one half", 0.4, 0.5, 0.6, true),
+        ("0.3 projected is too little", 0.2, 0.2, 0.2, false),
+        ("thrown back the other way", 0.4, 0.5, -2.0, false),
+        ("the other direction", -0.6, -0.6, -0.1, true),
+        ("no progress, no commit", 0.0, 1.0, 5.0, false),
+        ("well short of the peak", 0.6, 2.0, 0.0, false),
+    ] {
+        assert_eq!(
+            fluid_swipe_commits(progress, peak, velocity, 0.5),
+            commits,
+            "{name}"
+        );
+    }
 }

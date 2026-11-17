@@ -42,7 +42,7 @@ fn created(ev: &[StageEvent]) -> Vec<GroupId> {
 }
 
 #[test]
-fn a_disabled_stage_ignores_windows_and_hides_nothing() {
+fn a_disabled_stage_ignores_windows_and_disabling_forgets_every_group() {
     let mut s = Stage::new(StageConfig::default(), USABLE);
     assert!(!s.is_enabled());
     assert!(s.window_opened(w(1), app(1), frame(1), 0.0).is_empty());
@@ -98,10 +98,6 @@ fn windows_of_one_app_share_a_group_unless_grouping_is_one_at_a_time() {
     );
     s.set_enabled(true, &wins, 0.0);
     assert_ne!(s.group_of(w(1)), s.group_of(w(2)));
-}
-
-#[test]
-fn disabling_forgets_every_group_and_shows_the_desktop() {
     let mut s = stage_of(3);
     let ev = s.set_enabled(false, &[], 10.0);
     assert_eq!(
@@ -113,7 +109,7 @@ fn disabling_forgets_every_group_and_shows_the_desktop() {
 }
 
 #[test]
-fn a_new_window_takes_the_stage_and_the_previous_centre_moves_to_the_strip() {
+fn a_new_window_takes_the_stage_joins_its_apps_group_or_activates_a_known_window() {
     let mut s = on(StageConfig::default());
     let ev = s.window_opened(w(1), app(1), frame(1), 1.0);
     let g1 = created(&ev)[0];
@@ -129,20 +125,12 @@ fn a_new_window_takes_the_stage_and_the_previous_centre_moves_to_the_strip() {
     }));
     assert_eq!(s.center_group(), Some(g2));
     assert_eq!(s.strip_groups(), [g1]);
-}
-
-#[test]
-fn a_new_window_of_an_app_on_the_stage_joins_its_group_without_a_swap() {
     let mut s = on(StageConfig::default());
     s.window_opened(w(1), app(1), frame(1), 1.0);
     let ev = s.window_opened(w(2), app(1), frame(2), 2.0);
     assert!(created(&ev).is_empty());
     assert!(!ev.iter().any(|e| matches!(e, StageEvent::Swap { .. })));
     assert_eq!(s.center_windows(), [w(2), w(1)], "most recent first");
-}
-
-#[test]
-fn opening_a_window_that_is_already_known_activates_it() {
     let mut s = stage_of(2);
     let ev = s.window_opened(w(1), app(1), frame(1), 5.0);
     assert!(created(&ev).is_empty());
@@ -161,7 +149,7 @@ fn the_strip_keeps_the_most_recently_left_group_on_top() {
 }
 
 #[test]
-fn activating_a_strip_window_swaps_it_with_the_centre() {
+fn activating_a_strip_window_swaps_it_with_the_centre_and_the_centre_changes_nothing() {
     let mut s = stage_of(3);
     let old = s.center_group().unwrap();
     let ev = s.window_activated(w(1), 10.0);
@@ -173,10 +161,6 @@ fn activating_a_strip_window_swaps_it_with_the_centre() {
     assert_eq!(s.center_group(), Some(g1));
     assert!(s.strip_groups().contains(&old));
     assert!(!s.strip_groups().contains(&g1));
-}
-
-#[test]
-fn activating_the_centre_again_changes_nothing() {
     let mut s = stage_of(2);
     assert!(s.window_activated(w(2), 5.0).is_empty());
     assert!(s.window_activated(w(99), 5.0).is_empty(), "unknown window");
@@ -202,7 +186,7 @@ fn a_swap_animates_the_blend_between_thumbnail_and_stage() {
 }
 
 #[test]
-fn closing_the_last_window_of_the_centre_empties_the_stage_or_promotes_the_strip() {
+fn closing_windows_keeps_removes_or_promotes_groups() {
     let mut s = stage_of(2);
     let centre = s.center_group().unwrap();
     let ev = s.window_closed(w(2), 10.0);
@@ -219,20 +203,12 @@ fn closing_the_last_window_of_the_centre_empties_the_stage_or_promotes_the_strip
     let ev = s.window_closed(w(2), 10.0);
     assert!(ev.iter().any(|e| matches!(e, StageEvent::Swap { .. })));
     assert_eq!(s.center_windows(), [w(1)]);
-}
-
-#[test]
-fn closing_one_of_several_windows_of_a_group_keeps_the_group() {
     let mut s = on(StageConfig::default());
     s.window_opened(w(1), app(1), frame(1), 1.0);
     s.window_opened(w(2), app(1), frame(2), 2.0);
     assert!(s.window_closed(w(2), 3.0).is_empty());
     assert_eq!(s.center_windows(), [w(1)]);
     assert!(s.window_closed(w(99), 3.0).is_empty(), "unknown window");
-}
-
-#[test]
-fn closing_a_strip_group_removes_it_and_closes_the_gap() {
     let mut s = stage_of(3);
     let g1 = s.group_of(w(1)).unwrap();
     let ev = s.window_closed(w(1), 10.0);
@@ -242,7 +218,7 @@ fn closing_a_strip_group_removes_it_and_closes_the_gap() {
 }
 
 #[test]
-fn clicking_the_desktop_empties_the_stage_and_reveals_the_desktop_items() {
+fn clicking_the_desktop_empties_the_stage_unless_configured_to_do_nothing() {
     let mut s = stage_of(2);
     let centre = s.center_group().unwrap();
     assert!(!s.desktop_items_visible(), "hidden while the stage is on");
@@ -261,10 +237,6 @@ fn clicking_the_desktop_empties_the_stage_and_reveals_the_desktop_items() {
     // The next window takes the stage and hides the desktop items again.
     let ev = s.window_opened(w(3), app(3), frame(3), 11.0);
     assert!(ev.contains(&StageEvent::DesktopItemsVisible(false)));
-}
-
-#[test]
-fn clicking_the_desktop_can_be_configured_to_do_nothing() {
     let mut s = on(StageConfig {
         click_desktop: ClickDesktop::Nothing,
         ..StageConfig::default()
@@ -285,27 +257,19 @@ fn the_stage_area_sits_right_of_the_strip_and_the_strip_area_is_a_full_height_co
     assert_eq!(stage.right(), USABLE.right() - 16.0);
     assert_eq!((stage.y, stage.h), (USABLE.y, USABLE.h));
     assert_eq!(cfg.stage_frame(USABLE), stage);
-}
-
-#[test]
-fn the_stage_frame_never_collapses_below_one_point() {
     let narrow = Rect::new(0.0, 0.0, 100.0, 100.0);
     let f = StageConfig::default().stage_frame(narrow);
     assert!(f.w >= 1.0 && f.h >= 1.0);
 }
 
 #[test]
-fn the_strip_shows_up_to_the_maximum_number_of_rows() {
+fn the_strip_shows_up_to_the_maximum_rows_and_fewer_smaller_slots_on_a_short_output() {
     let s = stage_of(12);
     let (rows, height) = s.strip_metrics();
     assert!((4..=6).contains(&rows), "{rows}");
     assert!((20.0..=160.0).contains(&height), "{height}");
     assert_eq!(s.visible_strip().len(), rows);
     assert_eq!(s.rows(), rows);
-}
-
-#[test]
-fn a_short_output_gets_fewer_and_smaller_slots_never_below_the_minimum() {
     let mut s = on(StageConfig::default());
     s.set_usable(Rect::new(0.0, 0.0, 1000.0, 300.0), 0.0);
     let (rows, h) = s.strip_metrics();
@@ -373,7 +337,7 @@ fn merging_groups_onto_the_stage_collects_their_apps() {
 }
 
 #[test]
-fn adding_a_strip_group_to_the_stage_merges_it_into_the_centre() {
+fn adding_a_group_to_the_stage_merges_it_into_the_centre_or_makes_it_the_centre() {
     let mut s = stage_of(2);
     let g1 = s.group_of(w(1)).unwrap();
     let centre = s.center_group().unwrap();
@@ -391,18 +355,10 @@ fn adding_a_strip_group_to_the_stage_merges_it_into_the_centre() {
     );
     assert!(s.strip_groups().is_empty());
     assert_eq!(s.group_of(w(1)), Some(centre));
-}
-
-#[test]
-fn adding_the_centre_or_an_unknown_group_to_the_stage_does_nothing() {
     let mut s = stage_of(2);
     let centre = s.center_group().unwrap();
     assert!(s.add_to_stage(centre, 5.0).is_empty());
     assert!(s.add_to_stage(GroupId(999), 5.0).is_empty());
-}
-
-#[test]
-fn adding_to_an_empty_stage_makes_the_group_the_centre() {
     let mut s = stage_of(2);
     s.empty_stage(5.0);
     let g = s.strip_groups()[0];
@@ -441,10 +397,6 @@ fn drop_targets_are_the_stage_the_strip_column_or_nothing() {
         None,
         "between strip and stage"
     );
-}
-
-#[test]
-fn dropping_a_group_off_the_stage_does_nothing_and_on_it_adds() {
     let mut s = stage_of(2);
     let g1 = s.group_of(w(1)).unwrap();
     assert!(s.drop_group(g1, Point::new(100.0, 500.0), 5.0).is_empty());
@@ -452,7 +404,7 @@ fn dropping_a_group_off_the_stage_does_nothing_and_on_it_adds() {
 }
 
 #[test]
-fn dropping_one_window_of_a_group_on_the_strip_splits_it_into_its_own_group() {
+fn dropping_a_centre_window_on_the_strip_splits_it_into_its_own_group() {
     let mut s = on(StageConfig::default());
     s.window_opened(w(1), app(1), frame(1), 1.0);
     s.window_opened(w(2), app(1), frame(2), 2.0);
@@ -468,10 +420,6 @@ fn dropping_one_window_of_a_group_on_the_strip_splits_it_into_its_own_group() {
     }));
     assert_eq!(s.strip_groups()[0], new);
     assert_eq!(s.center_windows(), [w(1)]);
-}
-
-#[test]
-fn dropping_the_only_window_on_the_strip_empties_the_stage_but_keeps_the_desktop_hidden() {
     let mut s = stage_of(1);
     let centre = s.center_group().unwrap();
     let ev = s.drop_window(w(1), Point::new(100.0, 500.0), 5.0);
@@ -483,10 +431,6 @@ fn dropping_the_only_window_on_the_strip_empties_the_stage_but_keeps_the_desktop
     );
     assert!(!s.desktop_items_visible());
     assert_eq!(s.strip_groups(), [centre]);
-}
-
-#[test]
-fn only_a_centre_window_dropped_on_the_strip_moves() {
     let mut s = stage_of(2);
     assert!(
         s.drop_window(w(1), Point::new(100.0, 500.0), 5.0)
@@ -588,7 +532,7 @@ fn fitting_a_group_shrinks_it_to_the_stage_and_centres_it_but_never_enlarges() {
 }
 
 #[test]
-fn the_strip_stays_put_unless_a_centre_window_overlaps_it_or_auto_hide_is_on() {
+fn the_strip_hides_when_a_centre_window_overlaps_it_or_auto_hide_is_on() {
     let mut s = stage_of(2);
     assert!(!s.center_overlaps_strip());
     assert!(s.update(Some(Point::new(900.0, 500.0)), 5.0).is_empty());
@@ -609,7 +553,7 @@ fn the_strip_stays_put_unless_a_centre_window_overlaps_it_or_auto_hide_is_on() {
 }
 
 #[test]
-fn dwelling_at_the_left_edge_brings_a_hidden_strip_back_after_the_reveal_delay() {
+fn dwelling_at_the_left_edge_brings_a_hidden_strip_back_unless_the_pointer_leaves() {
     let mut s = stage_of(2);
     s.set_window_frame(w(2), Rect::new(100.0, 100.0, 800.0, 600.0));
     s.update(Some(Point::new(900.0, 500.0)), 10.0);
@@ -621,10 +565,6 @@ fn dwelling_at_the_left_edge_brings_a_hidden_strip_back_after_the_reveal_delay()
     let ev = s.update(Some(Point::new(1.0, 500.0)), 20.16);
     assert_eq!(ev, [StageEvent::StripShown]);
     assert!(!s.is_strip_hidden_target());
-}
-
-#[test]
-fn leaving_the_edge_cancels_the_reveal() {
     let mut s = stage_of(2);
     s.set_window_frame(w(2), Rect::new(100.0, 100.0, 800.0, 600.0));
     s.update(Some(Point::new(900.0, 500.0)), 10.0);
@@ -633,10 +573,6 @@ fn leaving_the_edge_cancels_the_reveal() {
     s.update(Some(Point::new(900.0, 500.0)), 20.1);
     assert!(s.update(Some(Point::new(900.0, 500.0)), 21.0).is_empty());
     assert!(s.is_strip_hidden_target());
-}
-
-#[test]
-fn auto_hide_hides_the_strip_even_without_overlap() {
     let mut s = on(StageConfig {
         auto_hide: true,
         ..StageConfig::default()

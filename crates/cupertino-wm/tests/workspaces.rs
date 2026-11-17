@@ -20,18 +20,14 @@ fn add(wm: &mut cupertino_wm::Wm) -> WorkspaceId {
 }
 
 #[test]
-fn a_new_output_has_one_current_workspace() {
-    let wm = wm();
+fn a_new_output_has_one_current_workspace_and_added_ones_append() {
+    let wm = common::wm();
     assert_eq!(wm.workspaces(OUT).len(), 1);
     assert_eq!(wm.current_workspace(OUT), Some(first(&wm)));
     assert_eq!(wm.workspace_position(OUT, 0.0), 0.0);
     assert!(wm.workspaces(cupertino_wm::OutputId(9)).is_empty());
     assert_eq!(wm.current_workspace(cupertino_wm::OutputId(9)), None);
-}
-
-#[test]
-fn added_workspaces_append_and_report_their_index() {
-    let mut wm = wm();
+    let mut wm = common::wm();
     let fx = wm.handle(Command::AddWorkspace { output: OUT }, 1.0);
     assert!(has(&fx, |e| matches!(
         e,
@@ -51,8 +47,8 @@ fn added_workspaces_append_and_report_their_index() {
 }
 
 #[test]
-fn switching_slides_to_the_new_workspace_and_reports_it() {
-    let mut wm = wm();
+fn switching_slides_to_another_workspace_and_ignores_the_current_or_an_unknown_one() {
+    let mut wm = common::wm();
     let b = add(&mut wm);
     let a = first(&wm);
     let fx = wm.handle(
@@ -71,11 +67,7 @@ fn switching_slides_to_the_new_workspace_and_reports_it() {
     assert!(mid > 0.0 && mid < 1.0, "mid-slide position {mid}");
     wm.tick(10.0);
     assert!((wm.workspace_position(OUT, 10.0) - 1.0).abs() < 1e-6);
-}
-
-#[test]
-fn switching_to_the_current_or_an_unknown_workspace_does_nothing() {
-    let mut wm = wm();
+    let mut wm = common::wm();
     let a = first(&wm);
     let fx = wm.handle(
         Command::SwitchWorkspace {
@@ -98,7 +90,7 @@ fn switching_to_the_current_or_an_unknown_workspace_does_nothing() {
 
 #[test]
 fn relative_switching_clamps_at_both_ends() {
-    let mut wm = wm();
+    let mut wm = common::wm();
     let a = first(&wm);
     let b = add(&mut wm);
     wm.handle(
@@ -128,8 +120,8 @@ fn relative_switching_clamps_at_both_ends() {
 }
 
 #[test]
-fn a_window_stays_on_the_workspace_it_opened_on_and_leaves_the_screen_on_a_switch() {
-    let mut wm = wm();
+fn a_window_stays_on_its_workspace_and_leaves_the_screen_on_a_switch_or_a_move() {
+    let mut wm = common::wm();
     open(&mut wm, 1, "a", 1.0);
     let a = first(&wm);
     let b = add(&mut wm);
@@ -149,7 +141,7 @@ fn a_window_stays_on_the_workspace_it_opened_on_and_leaves_the_screen_on_a_switc
 
 #[test]
 fn switching_refocuses_a_window_of_the_new_workspace() {
-    let mut wm = wm();
+    let mut wm = common::wm();
     open(&mut wm, 1, "a", 1.0);
     let b = add(&mut wm);
     open(&mut wm, 2, "b", 2.0);
@@ -182,11 +174,7 @@ fn switching_refocuses_a_window_of_the_new_workspace() {
         8.0,
     );
     assert_eq!(wm.key_window(), Some(win(1)));
-}
-
-#[test]
-fn moving_a_window_to_another_workspace_takes_it_off_the_screen() {
-    let mut wm = wm();
+    let mut wm = common::wm();
     open(&mut wm, 1, "a", 1.0);
     let b = add(&mut wm);
     wm.handle(
@@ -203,7 +191,7 @@ fn moving_a_window_to_another_workspace_takes_it_off_the_screen() {
 
 #[test]
 fn a_sticky_window_is_on_every_workspace() {
-    let mut wm = wm();
+    let mut wm = common::wm();
     open(&mut wm, 1, "a", 1.0);
     let a = first(&wm);
     let b = add(&mut wm);
@@ -246,7 +234,7 @@ fn a_sticky_window_is_on_every_workspace() {
 
 #[test]
 fn assigning_an_app_to_all_workspaces_makes_its_windows_sticky_and_unassigning_undoes_only_that() {
-    let mut wm = wm();
+    let mut wm = common::wm();
     open(&mut wm, 1, "a", 1.0);
     open(&mut wm, 2, "b", 2.0);
     wm.handle(
@@ -280,8 +268,8 @@ fn assigning_an_app_to_all_workspaces_makes_its_windows_sticky_and_unassigning_u
 }
 
 #[test]
-fn removing_a_workspace_moves_its_windows_to_the_previous_one() {
-    let mut wm = wm();
+fn removing_a_workspace_moves_its_windows_and_assignments_away_but_the_last_one_stays() {
+    let mut wm = common::wm();
     open(&mut wm, 1, "a", 1.0);
     let b = add(&mut wm);
     let c = add(&mut wm);
@@ -299,11 +287,7 @@ fn removing_a_workspace_moves_its_windows_to_the_previous_one() {
     ));
     assert_eq!(wm.window(win(1)).unwrap().workspace, b);
     assert_eq!(wm.workspaces(OUT).len(), 2);
-}
-
-#[test]
-fn removing_the_first_workspace_moves_windows_to_the_next() {
-    let mut wm = wm();
+    let mut wm = common::wm();
     open(&mut wm, 1, "a", 1.0);
     let a = first(&wm);
     let b = add(&mut wm);
@@ -311,20 +295,12 @@ fn removing_the_first_workspace_moves_windows_to_the_next() {
     assert_eq!(wm.window(win(1)).unwrap().workspace, b);
     assert_eq!(wm.current_workspace(OUT), Some(b));
     assert_eq!(wm.workspaces(OUT).len(), 1);
-}
-
-#[test]
-fn the_last_regular_workspace_cannot_be_removed() {
-    let mut wm = wm();
+    let mut wm = common::wm();
     let a = first(&wm);
     let fx = wm.handle(Command::RemoveWorkspace { workspace: a }, 1.0);
     assert!(fx.is_empty());
     assert_eq!(wm.workspaces(OUT).len(), 1);
-}
-
-#[test]
-fn removing_a_workspace_clears_app_assignments_to_it() {
-    let mut wm = wm();
+    let mut wm = common::wm();
     open(&mut wm, 1, "a", 1.0);
     let b = add(&mut wm);
     let app = app_of(&wm, 1);
@@ -341,7 +317,7 @@ fn removing_a_workspace_clears_app_assignments_to_it() {
 
 #[test]
 fn moving_a_workspace_reorders_the_list_and_clamps_the_index() {
-    let mut wm = wm();
+    let mut wm = common::wm();
     let a = first(&wm);
     let b = add(&mut wm);
     let c = add(&mut wm);
@@ -383,7 +359,7 @@ fn moving_a_workspace_reorders_the_list_and_clamps_the_index() {
 
 #[test]
 fn a_full_screen_window_gets_its_own_workspace_after_the_current_one_and_gives_it_up_on_exit() {
-    let mut wm = wm();
+    let mut wm = common::wm();
     open(&mut wm, 1, "a", 1.0);
     let a = first(&wm);
     let b = add(&mut wm);
@@ -417,8 +393,8 @@ fn a_full_screen_window_gets_its_own_workspace_after_the_current_one_and_gives_i
 }
 
 #[test]
-fn a_swipe_follows_the_fingers_and_commits_past_the_half_way_point() {
-    let mut wm = wm();
+fn a_swipe_follows_the_fingers_and_commits_only_past_the_half_way_point() {
+    let mut wm = common::wm();
     let b = add(&mut wm);
     wm.handle(Command::WorkspaceGestureBegin { output: OUT }, 1.0);
     wm.handle(
@@ -443,11 +419,7 @@ fn a_swipe_follows_the_fingers_and_commits_past_the_half_way_point() {
     ));
     wm.tick(10.0);
     assert!((wm.workspace_position(OUT, 10.0) - 1.0).abs() < 1e-6);
-}
-
-#[test]
-fn a_short_slow_swipe_returns_to_where_it_started() {
-    let mut wm = wm();
+    let mut wm = common::wm();
     let a = first(&wm);
     add(&mut wm);
     wm.handle(Command::WorkspaceGestureBegin { output: OUT }, 1.0);
@@ -474,7 +446,7 @@ fn a_short_slow_swipe_returns_to_where_it_started() {
 
 #[test]
 fn a_swipe_past_the_ends_rubber_bands_and_stays_bounded() {
-    let mut wm = wm();
+    let mut wm = common::wm();
     add(&mut wm);
     wm.handle(Command::WorkspaceGestureBegin { output: OUT }, 1.0);
     wm.handle(
@@ -500,8 +472,8 @@ fn a_swipe_past_the_ends_rubber_bands_and_stays_bounded() {
 }
 
 #[test]
-fn a_swipe_moves_at_most_one_workspace_by_default() {
-    let mut wm = wm();
+fn a_swipe_moves_at_most_one_workspace_and_needs_a_begin() {
+    let mut wm = common::wm();
     add(&mut wm);
     let c = add(&mut wm);
     wm.handle(Command::WorkspaceGestureBegin { output: OUT }, 1.0);
@@ -526,11 +498,7 @@ fn a_swipe_moves_at_most_one_workspace_by_default() {
         .iter()
         .position(|w| Some(w.id) == wm.current_workspace(OUT));
     assert_eq!(at, Some(1));
-}
-
-#[test]
-fn gesture_updates_without_a_begin_are_ignored() {
-    let mut wm = wm();
+    let mut wm = common::wm();
     add(&mut wm);
     wm.handle(
         Command::WorkspaceGestureUpdate {

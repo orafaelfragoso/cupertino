@@ -13,105 +13,107 @@ fn remembered(
     }
 }
 
+fn services(list: &[Service]) -> Services {
+    list.iter().copied().collect()
+}
+
 #[test]
 fn services_follow_from_the_operations_asked_for() {
-    for op in [
-        Operation::Observe,
-        Operation::Pointer,
-        Operation::Keyboard,
-        Operation::Semantic,
+    use Operation::*;
+    for (ops, expected) in [
+        (&[Observe][..], &[Service::Control][..]),
+        (&[Pointer], &[Service::Control]),
+        (&[Keyboard], &[Service::Control]),
+        (&[Semantic], &[Service::Control]),
+        (&[Capture], &[Service::Capture]),
+        (&[Observe, Capture], &[Service::Control, Service::Capture]),
+        (&[], &[]),
     ] {
-        let s = Services::needed_by(Capabilities::of([op]));
-        assert_eq!(s.iter().collect::<Vec<_>>(), vec![Service::Control]);
+        let needed = Services::needed_by(Capabilities::of(ops.iter().copied()));
+        assert_eq!(needed.iter().collect::<Vec<_>>(), expected, "{ops:?}");
     }
-    let capture = Services::needed_by(Capabilities::of([Operation::Capture]));
-    assert_eq!(capture.iter().collect::<Vec<_>>(), vec![Service::Capture]);
-    let both = Services::needed_by(Capabilities::of([Operation::Observe, Operation::Capture]));
-    assert!(both.contains(Service::Control) && both.contains(Service::Capture));
-    assert!(Services::needed_by(Capabilities::NONE).is_empty());
 }
 
 #[test]
 fn the_wire_bits_are_control_one_capture_two() {
-    let mut s = Services::NONE;
-    assert_eq!(s.bits(), 0);
-    s.insert(Service::Capture);
-    assert_eq!(s.bits(), 2);
-    s.insert(Service::Control);
-    assert_eq!(s.bits(), 3);
-    s.insert(Service::Control);
-    assert_eq!(s.bits(), 3, "insert is idempotent");
+    for (list, bits) in [
+        (&[][..], 0),
+        (&[Service::Control], 1),
+        (&[Service::Capture], 2),
+        (&[Service::Capture, Service::Control, Service::Control], 3),
+    ] {
+        assert_eq!(services(list).bits(), bits, "{list:?}");
+    }
+    let control = services(&[Service::Control]);
+    assert_eq!(control.union(services(&[Service::Capture])).bits(), 3);
+    assert_eq!(control.union(control), control);
+    assert_eq!(control.union(Services::NONE), control);
 }
 
 #[test]
-fn union_and_collect_agree() {
-    let a: Services = [Service::Control].into_iter().collect();
-    let b: Services = [Service::Capture].into_iter().collect();
-    assert_eq!(a.union(b).bits(), 3);
-    assert_eq!(a.union(a), a);
-    assert_eq!(a.union(Services::NONE), a);
-}
-
-#[test]
-fn all_allowed_starts_without_asking() {
-    let needed = Services::needed_by(Capabilities::of([Operation::Observe, Operation::Capture]));
-    let all = remembered(Some(Decision::Allow), Some(Decision::Allow));
-    assert_eq!(decide(needed, all), Verdict::Allowed);
-}
-
-#[test]
-fn a_service_turned_off_refuses_even_when_another_is_undecided() {
-    let needed = Services::needed_by(Capabilities::of([Operation::Observe, Operation::Capture]));
-    assert_eq!(
-        decide(needed, remembered(None, Some(Decision::Deny))),
-        Verdict::Denied
-    );
-    assert_eq!(
-        decide(
-            needed,
-            remembered(Some(Decision::Deny), Some(Decision::Allow))
+fn a_request_is_allowed_denied_or_asks_only_for_what_is_undecided() {
+    let allow = Some(Decision::Allow);
+    let deny = Some(Decision::Deny);
+    let both = services(&[Service::Control, Service::Capture]);
+    let control = services(&[Service::Control]);
+    for (name, needed, control_choice, capture_choice, expected) in [
+        ("all allowed", both, allow, allow, Verdict::Allowed),
+        (
+            "one turned off while another is undecided",
+            both,
+            None,
+            deny,
+            Verdict::Denied,
         ),
-        Verdict::Denied
-    );
-}
-
-#[test]
-fn only_the_undecided_services_are_asked() {
-    let needed = Services::needed_by(Capabilities::of([Operation::Observe, Operation::Capture]));
-    let Verdict::Ask(ask) = decide(needed, remembered(Some(Decision::Allow), None)) else {
-        panic!("capture is undecided");
-    };
-    assert_eq!(ask.iter().collect::<Vec<_>>(), vec![Service::Capture]);
-}
-
-#[test]
-fn a_denied_service_that_is_not_needed_does_not_matter() {
-    let needed = Services::needed_by(Capabilities::of([Operation::Observe]));
-    assert_eq!(
-        decide(
-            needed,
-            remembered(Some(Decision::Allow), Some(Decision::Deny))
+        ("one turned off", both, deny, allow, Verdict::Denied),
+        (
+            "one undecided",
+            both,
+            allow,
+            None,
+            Verdict::Ask(services(&[Service::Capture])),
         ),
-        Verdict::Allowed
-    );
-}
-
-#[test]
-fn a_request_needing_nothing_is_allowed() {
-    assert_eq!(
-        decide(Services::NONE, remembered(None, None)),
-        Verdict::Allowed
-    );
+        (
+            "a denied service that is not needed",
+            control,
+            allow,
+            deny,
+            Verdict::Allowed,
+        ),
+        (
+            "nothing needed",
+            Services::NONE,
+            None,
+            None,
+            Verdict::Allowed,
+        ),
+    ] {
+        assert_eq!(
+            decide(needed, remembered(control_choice, capture_choice)),
+            expected,
+            "{name}"
+        );
+    }
 }
 
 #[test]
 fn a_run_loses_a_service_turned_off_or_forgotten() {
-    let held: Services = Service::ALL.into_iter().collect();
     let allow = Some(Decision::Allow);
-    assert!(!lost(held, remembered(allow, allow)));
-    assert!(lost(held, remembered(allow, Some(Decision::Deny))));
-    assert!(lost(held, remembered(None, allow)));
-    assert!(!lost(Services::NONE, remembered(None, None)));
-    let control: Services = [Service::Control].into_iter().collect();
-    assert!(!lost(control, remembered(allow, None)));
+    let deny = Some(Decision::Deny);
+    let all: Services = Service::ALL.into_iter().collect();
+    for (name, held, control, capture, expected) in [
+        ("all still allowed", all, allow, allow, false),
+        ("one turned off", all, allow, deny, true),
+        ("one forgotten", all, None, allow, true),
+        ("nothing held", Services::NONE, None, None, false),
+        (
+            "an unheld service forgotten",
+            services(&[Service::Control]),
+            allow,
+            None,
+            false,
+        ),
+    ] {
+        assert_eq!(lost(held, remembered(control, capture)), expected, "{name}");
+    }
 }

@@ -23,15 +23,24 @@ fn encode(signature: &[u8; 4], entries: &[(f64, Vec<(f64, f64)>)]) -> Vec<u8> {
     bytes
 }
 
+fn entries() -> Vec<TableEntry> {
+    vec![
+        TableEntry {
+            acceleration: 0.0,
+            points: vec![(1.0, 1.0), (4.0, 4.0)],
+        },
+        TableEntry {
+            acceleration: 1.0,
+            points: vec![(1.0, 2.0), (4.0, 8.0)],
+        },
+    ]
+}
+
 fn table() -> AccelTable {
-    AccelTable::parse(&encode(
-        b"@200",
-        &[
-            (0.0, vec![(1.0, 1.0), (4.0, 4.0)]),
-            (1.0, vec![(1.0, 2.0), (4.0, 8.0)]),
-        ],
-    ))
-    .unwrap()
+    AccelTable {
+        scale: 1.0,
+        entries: entries(),
+    }
 }
 
 #[test]
@@ -53,31 +62,42 @@ fn the_embedded_default_table_parses_into_ordered_entries() {
 }
 
 #[test]
-fn a_table_round_trips_its_fixed_point_fields() {
-    let t = table();
-    assert_eq!(t.scale, 1.0);
-    assert_eq!(
-        t.entries,
-        vec![
-            TableEntry {
-                acceleration: 0.0,
-                points: vec![(1.0, 1.0), (4.0, 4.0)]
-            },
-            TableEntry {
-                acceleration: 1.0,
-                points: vec![(1.0, 2.0), (4.0, 8.0)]
-            },
-        ]
-    );
-}
-
-#[test]
-fn both_known_signatures_are_accepted_and_others_are_named_in_the_error() {
-    assert!(AccelTable::parse(&encode(b"USB*", &[])).is_ok());
-    assert_eq!(
-        AccelTable::parse(&encode(b"NOPE", &[])),
-        Err(TableError::Signature(*b"NOPE"))
-    );
+fn a_table_is_parsed_from_its_fixed_point_form_and_a_malformed_one_refused() {
+    let points = |e: &TableEntry| (e.acceleration, e.points.clone());
+    let good: Vec<(f64, Vec<(f64, f64)>)> = entries().iter().map(points).collect();
+    for (name, bytes, expected) in [
+        ("@200", encode(b"@200", &good), Ok(table())),
+        (
+            "USB*",
+            encode(b"USB*", &[]),
+            Ok(AccelTable {
+                scale: 1.0,
+                entries: vec![],
+            }),
+        ),
+        (
+            "an unknown signature",
+            encode(b"NOPE", &[]),
+            Err(TableError::Signature(*b"NOPE")),
+        ),
+        (
+            "an entry without points",
+            encode(b"@200", &[(0.0, vec![])]),
+            Err(TableError::Degenerate),
+        ),
+        (
+            "a point at zero",
+            encode(b"@200", &[(0.0, vec![(0.0, 1.0)])]),
+            Err(TableError::Degenerate),
+        ),
+        (
+            "a point below zero",
+            encode(b"@200", &[(0.0, vec![(-1.0, 1.0)])]),
+            Err(TableError::Degenerate),
+        ),
+    ] {
+        assert_eq!(AccelTable::parse(&bytes), expected, "{name}");
+    }
 }
 
 #[test]
@@ -94,52 +114,25 @@ fn a_truncated_table_is_refused_at_every_length() {
 }
 
 #[test]
-fn an_entry_without_points_or_with_a_non_positive_x_is_degenerate() {
-    assert_eq!(
-        AccelTable::parse(&encode(b"@200", &[(0.0, vec![])])),
-        Err(TableError::Degenerate)
-    );
-    assert_eq!(
-        AccelTable::parse(&encode(b"@200", &[(0.0, vec![(0.0, 1.0)])])),
-        Err(TableError::Degenerate)
-    );
-    assert_eq!(
-        AccelTable::parse(&encode(b"@200", &[(0.0, vec![(-1.0, 1.0)])])),
-        Err(TableError::Degenerate)
-    );
-}
-
-#[test]
-fn a_negative_setting_or_an_empty_table_has_no_curve() {
-    assert!(TableCurve::new(&table(), -0.5).is_none());
-    let empty = AccelTable {
-        scale: 1.0,
-        entries: Vec::new(),
-    };
-    assert!(TableCurve::new(&empty, 0.5).is_none());
-}
-
-#[test]
-fn an_exact_setting_uses_that_entry() {
-    let curve = TableCurve::new(&table(), 1.0).unwrap();
-    assert_eq!(curve.points(), &[(1.0, 2.0), (4.0, 8.0)]);
-    let base = TableCurve::new(&table(), 0.0).unwrap();
-    assert_eq!(base.points(), &[(1.0, 1.0), (4.0, 4.0)]);
-}
-
-#[test]
-fn a_setting_beyond_the_last_entry_scales_that_entry() {
-    let curve = TableCurve::new(&table(), 3.0).unwrap();
-    // (3 + 1) / (1 + 1) = 2 times the last entry.
-    assert_eq!(curve.points(), &[(1.0, 4.0), (4.0, 16.0)]);
+fn a_curve_is_the_entry_at_the_setting_scaled_past_the_last_one() {
+    for (setting, points) in [
+        (0.0, vec![(1.0, 1.0), (4.0, 4.0)]),
+        (1.0, vec![(1.0, 2.0), (4.0, 8.0)]),
+        // (3 + 1) / (1 + 1) = 2 times the last entry.
+        (3.0, vec![(1.0, 4.0), (4.0, 16.0)]),
+    ] {
+        let curve = TableCurve::new(&table(), setting).unwrap();
+        assert_eq!(curve.points(), &points[..], "{setting}");
+    }
 }
 
 #[test]
 fn a_setting_between_entries_blends_their_curves() {
     let curve = TableCurve::new(&table(), 0.5).unwrap();
+    let lo = TableCurve::new(&table(), 0.0).unwrap();
+    let hi = TableCurve::new(&table(), 1.0).unwrap();
     for (x, y) in curve.points() {
-        let lo = TableCurve::new(&table(), 0.0).unwrap().speed(*x);
-        let hi = TableCurve::new(&table(), 1.0).unwrap().speed(*x);
+        let (lo, hi) = (lo.speed(*x), hi.speed(*x));
         assert!(
             *y >= lo - 1e-9 && *y <= hi + 1e-9,
             "({x}, {y}) outside [{lo}, {hi}]"
@@ -149,17 +142,55 @@ fn a_setting_between_entries_blends_their_curves() {
 }
 
 #[test]
-fn speed_interpolates_linearly_from_the_origin_and_between_points() {
-    let curve = TableCurve::new(&table(), 0.0).unwrap();
-    assert_eq!(curve.speed(0.0), 0.0);
-    assert_eq!(curve.speed(0.5), 0.5, "from the origin to the first point");
-    assert_eq!(curve.speed(1.0), 1.0);
-    assert_eq!(curve.speed(2.5), 2.5);
-    assert_eq!(curve.speed(4.0), 4.0);
+fn an_unusable_setting_or_entry_gives_no_curve_instead_of_a_panic_or_a_nan() {
+    let with = |change: fn(&mut AccelTable)| {
+        let mut t = table();
+        change(&mut t);
+        t
+    };
+    let no_points_first = with(|t| t.entries[0].points.clear());
+    let no_points_last = with(|t| t.entries[1].points.clear());
+    let empty = AccelTable {
+        scale: 1.0,
+        entries: Vec::new(),
+    };
+    let mut rows = vec![
+        ("a negative setting", table(), -0.5, false),
+        ("an empty table", empty, 0.5, false),
+        (
+            "the entry has no points",
+            no_points_first.clone(),
+            0.0,
+            false,
+        ),
+        (
+            "a blend touches an empty entry",
+            no_points_first,
+            0.5,
+            false,
+        ),
+        ("an unused malformed entry", no_points_last, 0.0, true),
+    ];
+    for x in [0.0, -1.0, f64::NAN] {
+        let mut t = table();
+        t.entries[1].points[0].0 = x;
+        rows.push(("a point at or below zero", t.clone(), 1.0, false));
+        rows.push(("a blend with a point at or below zero", t, 0.5, false));
+    }
+    for (name, table, setting, some) in rows {
+        assert_eq!(TableCurve::new(&table, setting).is_some(), some, "{name}");
+    }
 }
 
 #[test]
-fn past_the_last_point_the_last_segment_continues() {
-    let curve = TableCurve::new(&table(), 1.0).unwrap();
-    assert!((curve.speed(6.0) - 12.0).abs() < 1e-9);
+fn speed_interpolates_from_the_origin_between_points_and_past_the_last() {
+    let base = TableCurve::new(&table(), 0.0).unwrap();
+    for (x, speed) in [(0.0, 0.0), (0.5, 0.5), (1.0, 1.0), (2.5, 2.5), (4.0, 4.0)] {
+        assert_eq!(base.speed(x), speed, "{x}");
+    }
+    let steep = TableCurve::new(&table(), 1.0).unwrap();
+    assert!(
+        (steep.speed(6.0) - 12.0).abs() < 1e-9,
+        "the last segment continues"
+    );
 }

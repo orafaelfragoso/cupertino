@@ -100,7 +100,8 @@ Further rules:
 longer a problem, so the list only shrinks, and `cargo run -q -p cupertino-layers -- --write-remaining` writes it again.
 The layers in `ENFORCED` in `cupertino-layers` are closed: none of their problems may be listed. Test code outside a
 crate's `tests/` is refused by the gate of `cargo xtask ci`. Keyboard layouts come from the system's libxkbcommon
-through the registry `xkbcommon` crate, the one Smithay uses too.
+through the registry `xkbcommon` crate, the one Smithay uses too; the server keeps the last keymap that compiled when a
+new layout does not.
 `crates/cupertino-layers/graph/layers.dot` is a DOT snapshot of the layers (`cargo run -p cupertino-layers -- --graph`
 writes it).
 

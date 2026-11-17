@@ -326,6 +326,7 @@ impl Cupertino {
         };
         let info = self.config.keyboard.repeat_info();
         keyboard.change_repeat_info(info.rate, info.delay);
+        // layouts that do not compile leave the keymap as it was (logged)
         self.set_system_keymap();
         self.keep_release_chord_typeable();
         let (kb, level3) = (
@@ -358,28 +359,29 @@ impl Cupertino {
         }
     }
 
-    /// The system XKB layouts of the input sources as the seat keymap.
-    fn set_system_keymap(&mut self) {
+    /// The system XKB layouts of the input sources as the seat keymap. False when they do not compile: the seat keeps
+    /// the keymap it had, the last one that compiled, and the failure is logged.
+    fn set_system_keymap(&mut self) -> bool {
         let Some(keyboard) = self.seat.get_keyboard() else {
-            return;
+            return false;
         };
         let (layout, variant) = self.config.keyboard.xkb_names();
         let options = self.config.keyboard.xkb_options();
         if layout.is_empty() && options.is_empty() {
-            return;
+            return true;
         }
         // the names are C strings
         if [&layout, &variant, &options]
             .iter()
             .any(|n| n.contains('\0'))
         {
-            tracing::warn!(
+            tracing::error!(
                 layout,
                 variant,
                 options,
-                "the configured input sources hold a NUL and form no keymap; the keymap is kept"
+                "the configured input sources hold a NUL and form no keymap; the last working keymap stays"
             );
-            return;
+            return false;
         }
         let cfg = XkbConfig {
             layout: &layout,
@@ -387,8 +389,12 @@ impl Cupertino {
             options: (!options.is_empty()).then(|| options.clone()),
             ..XkbConfig::default()
         };
-        if let Err(e) = keyboard.set_xkb_config(self, cfg) {
-            tracing::warn!(error = ?e, layout, variant, options, "the configured input sources do not form a keymap");
+        match keyboard.set_xkb_config(self, cfg) {
+            Ok(()) => true,
+            Err(e) => {
+                tracing::error!(error = ?e, layout, variant, options, "the configured input sources do not compile; the last working keymap stays");
+                false
+            }
         }
     }
 
@@ -525,7 +531,7 @@ impl Cupertino {
             if keymap.contains('\0') {
                 tracing::error!(
                     source = id,
-                    "the generated keymap holds a NUL; the keymap is kept"
+                    "the generated keymap holds a NUL; the last working keymap stays"
                 );
                 return;
             }
@@ -536,7 +542,7 @@ impl Cupertino {
                     tracing::info!(source = id, "input source (decoded layout)");
                 }
                 Err(e) => {
-                    tracing::error!(source = id, error = ?e, "the generated keymap was rejected")
+                    tracing::error!(source = id, error = ?e, "the generated keymap does not compile; the last working keymap stays")
                 }
             }
             return;
@@ -548,8 +554,11 @@ impl Cupertino {
             );
             return;
         };
+        // the decoded keymap stays when the system layouts do not compile: its groups are not theirs
         if self.overlays.inputs.decoded_active {
-            self.set_system_keymap();
+            if !self.set_system_keymap() {
+                return;
+            }
             self.overlays.inputs.decoded_active = false;
         }
         keyboard.with_xkb_state(self, |mut ctx| ctx.set_layout(Layout(idx as u32)));

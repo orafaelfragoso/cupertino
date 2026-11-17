@@ -182,7 +182,12 @@ fn an_address_decodes_its_local_address_flags_scope_and_label() {
         .attr_cstr(3, "eth0");
     let address = parse_address(v4.as_bytes()).unwrap().unwrap();
     assert_eq!(
-        (address.index, address.family, address.prefix_len, address.scope),
+        (
+            address.index,
+            address.family,
+            address.prefix_len,
+            address.scope
+        ),
         (2, Family::V4, 24, Scope::Universe)
     );
     assert_eq!(
@@ -230,8 +235,8 @@ fn an_address_decodes_its_local_address_flags_scope_and_label() {
 }
 
 #[test]
-fn a_route_decodes_its_attributes_and_is_default_only_when_unicast_to_everything_in_the_main_table(
-) {
+fn a_route_decodes_its_attributes_and_is_default_only_when_unicast_to_everything_in_the_main_table()
+{
     let mut body = Body::new();
     body.header(&route_header(2, 0, 254, 16, 0, 1))
         .attr(5, &[192, 168, 1, 1])
@@ -261,7 +266,10 @@ fn a_route_decodes_its_attributes_and_is_default_only_when_unicast_to_everything
         .attr(1, &[10, 1, 0, 0])
         .attr_u32(15, 1000);
     let route = parse_route(wide_table.as_bytes()).unwrap().unwrap();
-    assert_eq!(route.table, 1000, "the table attribute wins over the header");
+    assert_eq!(
+        route.table, 1000,
+        "the table attribute wins over the header"
+    );
     assert_eq!(
         route.destination,
         Some(IpAddr::V4(Ipv4Addr::new(10, 1, 0, 0)))

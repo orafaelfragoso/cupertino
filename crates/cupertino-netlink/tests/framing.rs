@@ -1,7 +1,9 @@
 //! Netlink messages and attributes: framing, the body builder, and the typed readers.
 
 use cupertino_netlink::attr::{attrs, NLA_F_NET_BYTEORDER};
-use cupertino_netlink::message::{align4, frame, messages, Body, HEADER_LEN, NLMSG_DONE, NLM_F_REQUEST};
+use cupertino_netlink::message::{
+    align4, frame, messages, Body, HEADER_LEN, NLMSG_DONE, NLM_F_REQUEST,
+};
 use cupertino_netlink::{MacAddr, ParseError};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
@@ -172,7 +174,11 @@ fn attributes_are_read_as_their_type() {
     assert_eq!(all[5].ip(), Ok(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 7))));
     assert_eq!(all[6].ip(), Ok(IpAddr::V6(Ipv6Addr::LOCALHOST)));
     assert_eq!(all[7].data, b"wlan0\0");
-    assert_eq!(all[7].string().unwrap(), "wlan0", "the reader removes the nul");
+    assert_eq!(
+        all[7].string().unwrap(),
+        "wlan0",
+        "the reader removes the nul"
+    );
     assert_eq!(all[8].string().unwrap(), "abc", "a string without a nul");
     assert!(all[9].data.is_empty(), "an empty flag");
     assert_eq!(
@@ -267,7 +273,11 @@ fn an_attribute_list_reads_an_unpadded_last_attribute_and_refuses_a_cut_one() {
         ),
     ] {
         let mut iterator = attrs(&bytes);
-        assert_eq!(iterator.next().map(|r| r.map(drop)), Some(Err(error)), "{name}");
+        assert_eq!(
+            iterator.next().map(|r| r.map(drop)),
+            Some(Err(error)),
+            "{name}"
+        );
         assert!(iterator.next().is_none(), "{name}");
     }
 }

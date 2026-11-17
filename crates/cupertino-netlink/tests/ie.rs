@@ -41,7 +41,13 @@ fn wpa(akms: &[u8]) -> Vec<u8> {
 fn the_ssid_is_the_names_bytes_and_a_name_of_nothing_or_nul_bytes_is_hidden() {
     for (name, elements, bytes, text, hidden) in [
         ("no elements", vec![], &[][..], "", true),
-        ("a name", ssid("Cafe Wifi"), b"Cafe Wifi", "Cafe Wifi", false),
+        (
+            "a name",
+            ssid("Cafe Wifi"),
+            b"Cafe Wifi",
+            "Cafe Wifi",
+            false,
+        ),
         (
             "not UTF-8",
             element(0, &[b'a', 0xFF, b'b']),
@@ -56,8 +62,20 @@ fn the_ssid_is_the_names_bytes_and_a_name_of_nothing_or_nul_bytes_is_hidden() {
             "home",
             false,
         ),
-        ("nul bytes", element(0, &[0, 0, 0]), &[0, 0, 0], "\0\0\0", true),
-        ("a nul and a letter", element(0, &[0, b'x']), &[0, b'x'], "\0x", false),
+        (
+            "nul bytes",
+            element(0, &[0, 0, 0]),
+            &[0, 0, 0],
+            "\0\0\0",
+            true,
+        ),
+        (
+            "a nul and a letter",
+            element(0, &[0, b'x']),
+            &[0, b'x'],
+            "\0x",
+            false,
+        ),
     ] {
         let (ssid, _) = ssid_and_security(&elements, 0).unwrap();
         assert_eq!(ssid, Ssid(bytes.to_vec()), "{name}");
@@ -75,8 +93,18 @@ fn the_security_follows_the_key_management_of_the_rsn_then_the_wpa_element_then_
     let other_vendor = element(221, &[0x00, 0x10, 0x18, 0x02, 0, 0]);
     let mut rows: Vec<(String, Vec<u8>, u16, Security)> = vec![
         ("no elements".into(), vec![], 0, Security::Open),
-        ("privacy alone is WEP".into(), ssid("old"), CAPABILITY_PRIVACY, Security::Wep),
-        ("another capability bit".into(), ssid("old"), 0x0001, Security::Open),
+        (
+            "privacy alone is WEP".into(),
+            ssid("old"),
+            CAPABILITY_PRIVACY,
+            Security::Wep,
+        ),
+        (
+            "another capability bit".into(),
+            ssid("old"),
+            0x0001,
+            Security::Open,
+        ),
         (
             "a suite of another OUI".into(),
             element(48, &other_oui),
@@ -84,8 +112,18 @@ fn the_security_follows_the_key_management_of_the_rsn_then_the_wpa_element_then_
             Security::Unsupported,
         ),
         ("WPA".into(), wpa(&[2]), CAPABILITY_PRIVACY, Security::Wpa),
-        ("WPA enterprise".into(), wpa(&[1]), CAPABILITY_PRIVACY, Security::Enterprise),
-        ("WPA unknown".into(), wpa(&[9]), CAPABILITY_PRIVACY, Security::Unsupported),
+        (
+            "WPA enterprise".into(),
+            wpa(&[1]),
+            CAPABILITY_PRIVACY,
+            Security::Enterprise,
+        ),
+        (
+            "WPA unknown".into(),
+            wpa(&[9]),
+            CAPABILITY_PRIVACY,
+            Security::Unsupported,
+        ),
         (
             "RSN after WPA wins".into(),
             [wpa(&[2]), rsn(&[2])].concat(),
@@ -98,7 +136,12 @@ fn the_security_follows_the_key_management_of_the_rsn_then_the_wpa_element_then_
             CAPABILITY_PRIVACY,
             Security::Wpa3,
         ),
-        ("another vendor element".into(), other_vendor.clone(), 0, Security::Open),
+        (
+            "another vendor element".into(),
+            other_vendor.clone(),
+            0,
+            Security::Open,
+        ),
         (
             "another vendor element with privacy".into(),
             other_vendor,
@@ -107,7 +150,13 @@ fn the_security_follows_the_key_management_of_the_rsn_then_the_wpa_element_then_
         ),
         (
             "RSN among other elements".into(),
-            [element(1, &[0x82, 0x84]), ssid("home"), element(3, &[6]), rsn(&[2])].concat(),
+            [
+                element(1, &[0x82, 0x84]),
+                ssid("home"),
+                element(3, &[6]),
+                rsn(&[2]),
+            ]
+            .concat(),
             CAPABILITY_PRIVACY,
             Security::Wpa2,
         ),
@@ -133,7 +182,12 @@ fn the_security_follows_the_key_management_of_the_rsn_then_the_wpa_element_then_
         (&[99], Security::Unsupported),
         (&[], Security::Unsupported),
     ] {
-        rows.push((format!("RSN {akms:?}"), rsn(akms), CAPABILITY_PRIVACY, expected));
+        rows.push((
+            format!("RSN {akms:?}"),
+            rsn(akms),
+            CAPABILITY_PRIVACY,
+            expected,
+        ));
     }
     for (name, elements, capability, expected) in rows {
         assert_eq!(

@@ -375,13 +375,21 @@ fn an_event_carries_the_interface_and_what_happened() {
     };
     let nothing = |_: &mut Body| {};
     for (name, payload, expected) in [
-        ("scan started", on(33, &nothing), Some(Event::ScanStarted { ifindex: 4 })),
+        (
+            "scan started",
+            on(33, &nothing),
+            Some(Event::ScanStarted { ifindex: 4 }),
+        ),
         (
             "scan results ready",
             on(34, &nothing),
             Some(Event::ScanResultsReady { ifindex: 4 }),
         ),
-        ("scan aborted", on(35, &nothing), Some(Event::ScanAborted { ifindex: 4 })),
+        (
+            "scan aborted",
+            on(35, &nothing),
+            Some(Event::ScanAborted { ifindex: 4 }),
+        ),
         (
             "connected",
             on(46, &|b| {
@@ -549,7 +557,10 @@ fn a_dump_lists_its_objects_of_the_family_and_names_its_request_when_damaged() {
     raw.extend(dump(&[interface_payload(), p2p_device()]));
     let interfaces = parse_interfaces(&raw, FAMILY).unwrap();
     assert_eq!(
-        interfaces.iter().map(|i| i.name.as_str()).collect::<Vec<_>>(),
+        interfaces
+            .iter()
+            .map(|i| i.name.as_str())
+            .collect::<Vec<_>>(),
         ["wlan0"],
         "network devices of the family only"
     );

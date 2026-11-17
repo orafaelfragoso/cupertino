@@ -73,14 +73,20 @@ fn the_checksums_make_the_ip_header_and_the_udp_datagram_with_its_pseudo_header_
             ..discover()
         });
         assert_eq!(ones_complement_sum(0, &packet[..20]), 0xffff, "{source}");
-        let word = |octets: [u8; 4], at: usize| u32::from(u16::from_be_bytes([octets[at], octets[at + 1]]));
+        let word = |octets: [u8; 4], at: usize| {
+            u32::from(u16::from_be_bytes([octets[at], octets[at + 1]]))
+        };
         let pseudo = word(source.octets(), 0)
             + word(source.octets(), 2)
             + word(destination.octets(), 0)
             + word(destination.octets(), 2)
             + 17
             + (packet.len() as u32 - 20);
-        assert_eq!(ones_complement_sum(pseudo, &packet[20..]), 0xffff, "{source}");
+        assert_eq!(
+            ones_complement_sum(pseudo, &packet[20..]),
+            0xffff,
+            "{source}"
+        );
     }
 }
 

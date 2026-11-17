@@ -5,7 +5,7 @@ edition.workspace = true
 license = "MPL-2.0 AND OFL-1.1"
 description = "The asset packs of the Cupertino processes: finds and reads them (manifest versions 1 and 2), resolves fonts, icons, cursors and wallpaper per logical name through them, with an embedded built-in font"
 [package.metadata.cupertino]
-layer = "foundation"
+layer = "system"
 
 [[bin]]
 name = "cupertino-assets"

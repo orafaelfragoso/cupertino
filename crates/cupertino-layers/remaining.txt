@@ -19,108 +19,21 @@ apps forbidden_edge cupertino-files -> cupertino-wayland-client normal
 apps forbidden_edge cupertino-settings -> cupertino-alsa normal
 apps forbidden_edge cupertino-settings -> cupertino-pipewire normal
 apps forbidden_edge cupertino-settings -> cupertino-wayland-client normal
-foundation external_crate cupertino-apps -> notify normal
-foundation external_crate cupertino-apps -> zbus normal
 foundation external_crate cupertino-capture -> tiny-skia normal
-foundation external_crate cupertino-defaults -> inotify normal
-foundation external_crate cupertino-defaults -> libc normal
-foundation external_crate cupertino-icons -> image normal
-foundation external_crate cupertino-icons -> resvg normal
-foundation external_crate cupertino-icons -> tiny-skia normal
-foundation external_crate cupertino-profile -> libc normal
-foundation external_crate cupertino-profile -> rustix normal
-foundation external_crate cupertino-radios -> zbus normal
-foundation external_crate cupertino-thumbnails -> image normal
-foundation external_crate cupertino-thumbnails -> png normal
-foundation external_crate cupertino-thumbnails -> rustix normal
-foundation external_crate cupertino-trash -> libc normal
-foundation impure_source cupertino-apps src/activate.rs std::thread
-foundation impure_source cupertino-apps src/catalogue.rs std::thread
-foundation impure_source cupertino-apps src/chromium.rs std::env
-foundation impure_source cupertino-apps src/chromium.rs std::fs
-foundation impure_source cupertino-apps src/entry.rs std::env
-foundation impure_source cupertino-apps src/entry.rs std::fs
-foundation impure_source cupertino-apps src/exec.rs std::process
-foundation impure_source cupertino-apps src/frecency.rs std::env
-foundation impure_source cupertino-apps src/launch.rs std::process
-foundation impure_source cupertino-apps src/launch.rs std::thread
-foundation impure_source cupertino-apps src/mime.rs std::fs
-foundation impure_source cupertino-apps src/mimeapps.rs std::env
-foundation impure_source cupertino-apps src/mimeapps.rs std::fs
-foundation impure_source cupertino-apps src/recent.rs std::fs
-foundation impure_source cupertino-assets src/bin/cupertino-assets.rs std::env
-foundation impure_source cupertino-assets src/bin/cupertino-assets.rs std::process
-foundation impure_source cupertino-assets src/lib.rs std::env
-foundation impure_source cupertino-assets src/lib.rs std::fs
-foundation impure_source cupertino-build-info src/lib.rs std::fs
+foundation forbidden_edge cupertino-capture -> cupertino-assets normal
+foundation forbidden_edge cupertino-keyboard -> cupertino-defaults normal
 foundation impure_source cupertino-capture src/lib.rs std::env
 foundation impure_source cupertino-capture src/lib.rs std::fs
 foundation impure_source cupertino-capture src/lib.rs std::process
-foundation impure_source cupertino-defaults src/accessibility.rs std::fs
-foundation impure_source cupertino-defaults src/atomic.rs std::fs
-foundation impure_source cupertino-defaults src/atomic.rs std::process
-foundation impure_source cupertino-defaults src/compositor.rs std::fs
-foundation impure_source cupertino-defaults src/conf.rs std::fs
-foundation impure_source cupertino-defaults src/data_control.rs std::fs
-foundation impure_source cupertino-defaults src/data_control.rs unsafe
-foundation impure_source cupertino-defaults src/desktop_control.rs std::fs
-foundation impure_source cupertino-defaults src/desktop_control.rs unsafe
-foundation impure_source cupertino-defaults src/displays.rs std::fs
-foundation impure_source cupertino-defaults src/global_shortcuts.rs std::fs
-foundation impure_source cupertino-defaults src/global_shortcuts.rs unsafe
-foundation impure_source cupertino-defaults src/keyboard.rs std::env
-foundation impure_source cupertino-defaults src/lib.rs std::env
-foundation impure_source cupertino-defaults src/lock.rs std::fs
-foundation impure_source cupertino-defaults src/lock.rs std::thread
-foundation impure_source cupertino-defaults src/lock.rs unsafe
-foundation impure_source cupertino-defaults src/login.rs std::env
-foundation impure_source cupertino-defaults src/login.rs std::fs
-foundation impure_source cupertino-defaults src/screen_sharing.rs std::fs
-foundation impure_source cupertino-defaults src/screen_sharing.rs unsafe
-foundation impure_source cupertino-defaults src/system.rs std::fs
-foundation impure_source cupertino-defaults src/terminal.rs std::env
-foundation impure_source cupertino-defaults src/watch.rs std::fs
-foundation impure_source cupertino-defaults src/watch.rs std::thread
-foundation impure_source cupertino-defaults src/watch.rs unsafe
-foundation impure_source cupertino-diagnostic-events src/emitter.rs ffi
-foundation impure_source cupertino-diagnostic-events src/emitter.rs std::env
-foundation impure_source cupertino-diagnostic-events src/emitter.rs std::fs
-foundation impure_source cupertino-diagnostic-events src/emitter.rs std::process
-foundation impure_source cupertino-diagnostic-events src/emitter.rs std::thread
-foundation impure_source cupertino-diagnostic-events src/emitter.rs unsafe
-foundation impure_source cupertino-diagnostic-events src/journal.rs std::env
-foundation impure_source cupertino-diagnostic-events src/redact.rs std::env
-foundation impure_source cupertino-diagnostic-events src/redact.rs std::fs
-foundation impure_source cupertino-diagnostic-events src/redact.rs std::process
-foundation impure_source cupertino-diagnostic-events src/store.rs std::fs
 foundation impure_source cupertino-filepicker src/lib.rs std::fs
 foundation impure_source cupertino-filepicker src/places.rs std::env
 foundation impure_source cupertino-filepicker src/places.rs std::fs
-foundation impure_source cupertino-icons examples/render-artwork.rs std::env
-foundation impure_source cupertino-icons examples/resolve.rs std::env
-foundation impure_source cupertino-icons src/lib.rs std::env
-foundation impure_source cupertino-icons src/lib.rs std::fs
 foundation impure_source cupertino-key-bindings src/binding.rs std::fs
 foundation impure_source cupertino-keyboard src/xkb.rs std::fs
-foundation impure_source cupertino-profile src/lib.rs ffi
-foundation impure_source cupertino-profile src/lib.rs std::env
-foundation impure_source cupertino-profile src/lib.rs std::fs
-foundation impure_source cupertino-profile src/lib.rs std::process
-foundation impure_source cupertino-profile src/lib.rs std::thread
-foundation impure_source cupertino-profile src/lib.rs unsafe
 foundation impure_source cupertino-theme src/animation.rs std::fs
 foundation impure_source cupertino-theme src/recipe.rs std::fs
 foundation impure_source cupertino-theme src/theme.rs std::env
 foundation impure_source cupertino-theme src/tokens.rs std::fs
-foundation impure_source cupertino-thumbnails src/lib.rs std::env
-foundation impure_source cupertino-thumbnails src/lib.rs std::fs
-foundation impure_source cupertino-thumbnails src/lib.rs std::process
-foundation impure_source cupertino-trash src/lib.rs std::env
-foundation impure_source cupertino-trash src/lib.rs std::fs
-foundation impure_source cupertino-trash src/lib.rs std::process
-foundation impure_source cupertino-trash src/lib.rs std::thread
-foundation impure_source cupertino-trash src/lib.rs unsafe
-foundation impure_source cupertino-trash src/look.rs std::thread
 foundation impure_source xkbcommon src/xkb/mod.rs std::fs
 foundation impure_source xkbcommon src/xkb/mod.rs unsafe
 models external_crate cupertino-effects -> tiny-skia normal
@@ -204,41 +117,33 @@ shell facade cupertino-screenshot -> cupertino-shell-client normal
 shell facade cupertino-screenshot -> cupertino-ui-wayland normal
 shell facade cupertino-screenshot -> cupertino-wayland-client normal
 shell facade cupertino-windowmanager -> cupertino-protocols normal
-shell forbidden_edge cupertino-control -> cupertino-peer normal
 shell forbidden_edge cupertino-control -> cupertino-shell-client normal
 shell forbidden_edge cupertino-control -> cupertino-wayland-client normal
 shell forbidden_edge cupertino-controlcenter -> cupertino-alsa normal
-shell forbidden_edge cupertino-controlcenter -> cupertino-peer normal
 shell forbidden_edge cupertino-controlcenter -> cupertino-pipewire normal
 shell forbidden_edge cupertino-controlcenter -> cupertino-protocol-app normal
 shell forbidden_edge cupertino-controlcenter -> cupertino-shell-client normal
 shell forbidden_edge cupertino-controlcenter -> cupertino-wayland-client normal
 shell forbidden_edge cupertino-dock -> cupertino-shell-client normal
 shell forbidden_edge cupertino-dock -> cupertino-wayland-client normal
-shell forbidden_edge cupertino-launcher -> cupertino-peer normal
 shell forbidden_edge cupertino-launcher -> cupertino-protocol-app normal
 shell forbidden_edge cupertino-launcher -> cupertino-shell-client normal
 shell forbidden_edge cupertino-launcher -> cupertino-wayland-client normal
-shell forbidden_edge cupertino-login -> cupertino-peer normal
 shell forbidden_edge cupertino-login -> cupertino-raster-math normal
 shell forbidden_edge cupertino-login -> cupertino-seat normal
 shell forbidden_edge cupertino-login -> cupertino-shell-client normal
 shell forbidden_edge cupertino-login -> cupertino-wayland-client normal
-shell forbidden_edge cupertino-menubar -> cupertino-peer normal
 shell forbidden_edge cupertino-menubar -> cupertino-protocol-app normal
 shell forbidden_edge cupertino-menubar -> cupertino-shell-client normal
 shell forbidden_edge cupertino-menubar -> cupertino-wayland-client normal
-shell forbidden_edge cupertino-notifications -> cupertino-peer normal
 shell forbidden_edge cupertino-notifications -> cupertino-protocol-app normal
 shell forbidden_edge cupertino-notifications -> cupertino-shell-client normal
 shell forbidden_edge cupertino-notifications -> cupertino-wayland-client normal
 shell forbidden_edge cupertino-osd -> cupertino-alsa normal
-shell forbidden_edge cupertino-osd -> cupertino-peer normal
 shell forbidden_edge cupertino-osd -> cupertino-pipewire normal
 shell forbidden_edge cupertino-osd -> cupertino-shell-client normal
 shell forbidden_edge cupertino-osd -> cupertino-wayland-client normal
 shell forbidden_edge cupertino-polkit-agent -> cupertino-decorations normal
-shell forbidden_edge cupertino-polkit-agent -> cupertino-peer normal
 shell forbidden_edge cupertino-polkit-agent -> cupertino-protocol-app normal
 shell forbidden_edge cupertino-polkit-agent -> cupertino-shell-client normal
 shell forbidden_edge cupertino-polkit-agent -> cupertino-wayland-client normal

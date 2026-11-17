@@ -6,7 +6,7 @@ license.workspace = true
 description = "The trash of the freedesktop.org Trash specification: moving items in, listing, restoring, deleting and emptying, shared by the file manager and the dock"
 
 [package.metadata.cupertino]
-layer = "foundation"
+layer = "system"
 
 [dependencies]
 libc = "0.2"

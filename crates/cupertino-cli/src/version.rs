@@ -2,6 +2,7 @@
 //! the theme, the asset pack, the output schemas, the OS image and the kernel.
 
 use crate::{Args, Command, Context, Failure, Group, Reply, Run, Stability, SCHEMA, STREAM_SCHEMA};
+use cupertino_diagnostic_events::build_info;
 use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -144,11 +145,8 @@ struct Versions {
 fn version(_: &Args, cx: &Context) -> Result<Reply, Failure> {
     let mut components = vec![
         Entry::ok("cli", "built-in", env!("CARGO_PKG_VERSION"))
-            .commit(cupertino_build_info::COMMIT)
-            .detail(format!(
-                "commit from {}",
-                cupertino_build_info::COMMIT_SOURCE.name()
-            )),
+            .commit(build_info::COMMIT)
+            .detail(format!("commit from {}", build_info::COMMIT_SOURCE.name())),
         record(cx, "runtime-package", RUNTIME_RECORD),
         record(cx, "data-package", DATA_RECORD),
         compositor(cx),
@@ -189,7 +187,7 @@ fn version(_: &Args, cx: &Context) -> Result<Reply, Failure> {
 fn short(commit: &str) -> &str {
     commit
         .char_indices()
-        .nth(cupertino_build_info::SHORT_COMMIT_DIGITS)
+        .nth(build_info::SHORT_COMMIT_DIGITS)
         .map_or(commit, |(end, _)| &commit[..end])
 }
 
@@ -437,7 +435,7 @@ fn asset_pack(cx: &Context) -> Entry {
 fn os_image(cx: &Context) -> Entry {
     const NAME: &str = "os-image";
     const SOURCE: &str = "/etc/os-release";
-    match cupertino_build_info::read_os_image(cx.root()) {
+    match build_info::read_os_image(cx.root()) {
         Ok(image) if !image.is_empty() => {
             let version = [&image.image_version, &image.version_id, &image.build_id]
                 .into_iter()
@@ -471,8 +469,8 @@ fn os_image(cx: &Context) -> Entry {
 
 fn kernel(cx: &Context) -> Entry {
     const NAME: &str = "kernel";
-    let source = format!("/{}", cupertino_build_info::KERNEL_RELEASE_FILE);
-    match cupertino_build_info::kernel_in(cx.root()) {
+    let source = format!("/{}", build_info::KERNEL_RELEASE_FILE);
+    match build_info::kernel_in(cx.root()) {
         Some(release) => Entry::ok(NAME, source, release),
         None => Entry::new(
             NAME,

@@ -6,7 +6,7 @@ license = "MPL-2.0"
 description = "Settings store shared by the Cupertino processes: where each settings file lives (environment override, else the XDG configuration directory), typed read and atomic write of the files, change notification"
 
 [package.metadata.cupertino]
-layer = "foundation"
+layer = "system"
 
 [dependencies]
 libc = "0.2"

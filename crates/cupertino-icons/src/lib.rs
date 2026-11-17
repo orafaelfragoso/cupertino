@@ -4,8 +4,11 @@
 //! provides is drawn as a placeholder. An application's icon comes from its own `Icon=` entry: a name of the packs'
 //! `application.` namespace (the session's own applications), an absolute path, or the `hicolor` theme, after the icon
 //! theme of a pack that opts in with `icon_theme.applications` ([`IconLookup`], [`ThemeIcons`]). Files load into premultiplied RGBA pixels.
+//!
+//! [`thumbnail`] is the freedesktop.org thumbnail cache of pictures, which the file manager and Settings share.
 
 pub mod document;
+pub mod thumbnail;
 
 use cupertino_assets::{Assets, IconName, IconSource};
 use std::collections::HashMap;

@@ -6,7 +6,7 @@ license.workspace = true
 description = "The Wi-Fi and Bluetooth radios through whichever service owns them: the Cupertino network and Bluetooth daemons, else NetworkManager and BlueZ, found, read, changed and followed the same way by Settings, the control panel and the menu bar"
 
 [package.metadata.cupertino]
-layer = "foundation"
+layer = "system"
 
 [features]
 default = []

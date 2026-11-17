@@ -463,7 +463,7 @@ impl WaylandWindowSystem {
         class: RendererClass,
     ) -> Result<WaylandWindowSystem, PlatformError> {
         // the frame timeline `CUPERTINO_PROFILE` asks for, from the process's first frame
-        cupertino_profile::init();
+        cupertino_diagnostic_events::profile::init();
         Connection::connect()
             .map(|conn| WaylandWindowSystem::new_as(conn, profile, class))
             .map_err(platform_error)

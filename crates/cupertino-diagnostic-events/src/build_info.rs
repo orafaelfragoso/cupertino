@@ -1,8 +1,8 @@
 //! What a Cupertino build is and what it runs on: the commit the sources come from ([`COMMIT`]), a component's name
 //! and version ([`component!`]), the OS image ([`os_image`]) and the kernel ([`kernel`]).
 //!
-//! The crate has no dependencies, so every process, the toolkit and the C library can link it. Nothing here touches
-//! the network or runs a program at run time; the commit is found once, by the build script.
+//! Nothing here touches the network or runs a program at run time; the commit is found once, by the crate's build
+//! script.
 
 use std::fmt;
 use std::io;

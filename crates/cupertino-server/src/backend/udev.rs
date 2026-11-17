@@ -1741,7 +1741,11 @@ fn render_surface(
     if held && state.fixed_time.is_none() {
         if let Some(vblank) = state.outputs[idx].scheduler.last_vblank() {
             let nanos = |d: Duration| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX);
-            cupertino_profile::interval("server.latch_wait", nanos(vblank), nanos(started_at));
+            cupertino_diagnostic_events::profile::interval(
+                "server.latch_wait",
+                nanos(vblank),
+                nanos(started_at),
+            );
         }
     }
     // without a scene (no render resources or no mode yet) or a drawn frame, nothing is queued, but the tail still runs

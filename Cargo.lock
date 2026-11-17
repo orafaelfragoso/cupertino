@@ -981,10 +981,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cupertino-build-info"
-version = "0.1.0"
-
-[[package]]
 name = "cupertino-capture"
 version = "0.1.0"
 dependencies = [
@@ -997,7 +993,6 @@ name = "cupertino-cli"
 version = "0.1.0"
 dependencies = [
  "cupertino-assets",
- "cupertino-build-info",
  "cupertino-defaults",
  "cupertino-diagnostic-events",
  "cupertino-diagnostics",
@@ -1096,9 +1091,13 @@ dependencies = [
 name = "cupertino-diagnostic-events"
 version = "0.1.0"
 dependencies = [
- "cupertino-build-info",
+ "libc",
+ "rustix 1.1.6",
  "serde",
  "serde_json",
+ "tracing",
+ "tracing-subscriber",
+ "tracing-tracy",
 ]
 
 [[package]]
@@ -1181,7 +1180,6 @@ dependencies = [
  "cupertino-menu-model",
  "cupertino-modifiers",
  "cupertino-theme",
- "cupertino-thumbnails",
  "cupertino-trash",
  "cupertino-ui-test",
  "cupertino-ui-text",
@@ -1265,7 +1263,11 @@ dependencies = [
  "cupertino-assets",
  "cupertino-defaults",
  "image",
+ "md5",
+ "percent-encoding",
+ "png",
  "resvg",
+ "rustix 1.1.6",
  "tiny-skia",
 ]
 
@@ -1338,7 +1340,6 @@ dependencies = [
  "cupertino-peer",
  "cupertino-protocol-app",
  "cupertino-shell-client",
- "cupertino-thumbnails",
  "cupertino-ui-text",
  "cupertino-ui-wayland",
  "cupertino-wayland-client",
@@ -1608,17 +1609,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cupertino-profile"
-version = "0.1.0"
-dependencies = [
- "libc",
- "rustix 1.1.6",
- "tracing",
- "tracing-subscriber",
- "tracing-tracy",
-]
-
-[[package]]
 name = "cupertino-protocol-app"
 version = "0.1.0"
 dependencies = [
@@ -1738,7 +1728,6 @@ dependencies = [
  "clap",
  "cupertino-animation",
  "cupertino-assets",
- "cupertino-build-info",
  "cupertino-control-model",
  "cupertino-cursor",
  "cupertino-decorations",
@@ -1756,7 +1745,6 @@ dependencies = [
  "cupertino-modifiers",
  "cupertino-overview",
  "cupertino-peer",
- "cupertino-profile",
  "cupertino-protocols",
  "cupertino-raster-math",
  "cupertino-render-api",
@@ -1812,7 +1800,6 @@ dependencies = [
  "cupertino-alsa",
  "cupertino-apps",
  "cupertino-assets",
- "cupertino-build-info",
  "cupertino-defaults",
  "cupertino-diagnostic-events",
  "cupertino-displays",
@@ -1824,7 +1811,6 @@ dependencies = [
  "cupertino-pipewire",
  "cupertino-radios",
  "cupertino-theme",
- "cupertino-thumbnails",
  "cupertino-typeahead",
  "cupertino-wayland-client",
  "libc",
@@ -1864,17 +1850,6 @@ dependencies = [
  "cupertino-animation",
  "serde",
  "serde_json",
-]
-
-[[package]]
-name = "cupertino-thumbnails"
-version = "0.1.0"
-dependencies = [
- "image",
- "md5",
- "percent-encoding",
- "png",
- "rustix 1.1.6",
 ]
 
 [[package]]
@@ -2056,7 +2031,6 @@ dependencies = [
  "cupertino-gpu",
  "cupertino-menu-model",
  "cupertino-modifiers",
- "cupertino-profile",
  "cupertino-protocol-app",
  "cupertino-ui-gpu",
  "cupertino-ui-menus",

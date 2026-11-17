@@ -12,7 +12,6 @@ layer = "apps"
 app = [
     "dep:async-channel",
     "dep:cupertino-assets",
-    "dep:cupertino-icons",
     "dep:cupertino-kit",
     "dep:cupertino-theme",
     "dep:cupertino-ui-wayland",
@@ -32,12 +31,11 @@ cupertino-modifiers = { path = "../cupertino-modifiers" }
 cupertino-apps = { path = "../cupertino-apps" }
 cupertino-theme = { path = "../cupertino-theme", optional = true }
 cupertino-defaults = { path = "../cupertino-defaults" }
-cupertino-thumbnails = { path = "../cupertino-thumbnails" }
 cupertino-trash = { path = "../cupertino-trash" }
 cupertino-ui-text = { path = "../cupertino-ui-text" }
 cupertino-kit = { path = "../cupertino-kit", optional = true }
 cupertino-assets = { path = "../cupertino-assets", optional = true }
-cupertino-icons = { path = "../cupertino-icons", optional = true }
+cupertino-icons = { path = "../cupertino-icons" }
 cupertino-ui-wayland = { path = "../cupertino-ui-wayland", optional = true }
 cupertino-wayland-client = { path = "../cupertino-wayland-client", optional = true }
 wayland-client = { version = "0.31", optional = true }

@@ -24,6 +24,7 @@ use cupertino_assets::Assets;
 use cupertino_defaults::accessibility::{DisplayOptions, SYSTEM_ACCESSIBILITY};
 use cupertino_defaults::watch::{ConfigWatcher, WatchEvent};
 use cupertino_filepicker::Mode;
+use cupertino_icons::thumbnail::{ThumbError, ThumbSize, Thumbnailer};
 
 /// A level slider still this long, in seconds, has ended its drag: the live readings show again.
 const LEVEL_SETTLE: f64 = 0.5;
@@ -99,9 +100,9 @@ pub(crate) enum VideoMemory {
 const THUMBNAIL_EDGE: u32 = 256;
 
 /// Why the thumbnail of a picture could not be made: its file is gone, or it is no picture that can be read.
-fn unreadable(error: &cupertino_thumbnails::ThumbError) -> crate::controls::Unreadable {
+fn unreadable(error: &ThumbError) -> crate::controls::Unreadable {
     match error {
-        cupertino_thumbnails::ThumbError::Io(e) if e.kind() == std::io::ErrorKind::NotFound => {
+        ThumbError::Io(e) if e.kind() == std::io::ErrorKind::NotFound => {
             crate::controls::Unreadable::Missing
         }
         _ => crate::controls::Unreadable::Damaged,
@@ -1271,13 +1272,11 @@ impl State {
             .name("wallpaper-thumbnails".into())
             .spawn(move || {
                 let cache = match cache_home {
-                    Some(home) => {
-                        cupertino_thumbnails::Thumbnailer::new(home, "cupertino-settings")
-                    }
-                    None => cupertino_thumbnails::Thumbnailer::from_env("cupertino-settings"),
+                    Some(home) => Thumbnailer::new(home, "cupertino-settings"),
+                    None => Thumbnailer::from_env("cupertino-settings"),
                 };
                 for image in wanted {
-                    match cache.get_or_create(&image, cupertino_thumbnails::ThumbSize::Large) {
+                    match cache.get_or_create(&image, ThumbSize::Large) {
                         Ok(thumbnail) => {
                             let pixels = decode_thumbnail(&thumbnail, THUMBNAIL_EDGE);
                             notify(Background::Thumbnail {

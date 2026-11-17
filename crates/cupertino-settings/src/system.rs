@@ -583,7 +583,7 @@ impl SystemInfo {
         let image = ["etc/os-release", "usr/lib/os-release"]
             .iter()
             .find_map(|p| read_small(&Path::new("/").join(p)))
-            .map(|t| cupertino_build_info::OsImage::parse(&t))
+            .map(|t| cupertino_diagnostic_events::build_info::OsImage::parse(&t))
             .unwrap_or_default();
         SystemInfo {
             account: Account::read(),
@@ -596,7 +596,7 @@ impl SystemInfo {
             os_version: image.version_id,
             os_build: image.build_id.or(image.image_version),
             desktop_version: env!("CARGO_PKG_VERSION").to_owned(),
-            commit: cupertino_build_info::short_commit().map(str::to_owned),
+            commit: cupertino_diagnostic_events::build_info::short_commit().map(str::to_owned),
             login: cupertino_defaults::login::LoginConfig::load()
                 .ok()
                 .map(|loaded| loaded.config),

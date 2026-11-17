@@ -5,7 +5,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt::Write as _;
 use std::path::{Component, Path, PathBuf};
-use std::process::Command;
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -195,7 +194,7 @@ const GATE_EXEMPT: [(&str, &str); 7] = [
 const GATE_HOLDERS: [(&str, &str); 1] =
     // The name is split so that this file passes the gate itself.
     [(
-        "packaging/licenses/THIRD-PARTY-LICENSES",
+        "packaging/licenses/THIRD-PARTY-NOTICES",
         concat!("Status Re", "search & Development GmbH"),
     )];
 
@@ -666,7 +665,7 @@ fn source_problems(
 }
 
 /// Every `.rs` file under `directory`, sorted.
-fn rust_files(directory: &Path, found: &mut Vec<PathBuf>) {
+pub(crate) fn rust_files(directory: &Path, found: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(directory) else {
         return;
     };
@@ -767,46 +766,6 @@ fn lockfile_problems(root: &Path) -> Vec<String> {
     problems
 }
 
-/// Runs an external checker that lives in the tree, when it is there, and turns its output into problems.
-fn external_problems(root: &Path, label: &str, checker: &Path, args: &[&str]) -> Vec<String> {
-    if !root.join(checker).is_file() {
-        return Vec::new();
-    }
-    let result = Command::new("python3")
-        .arg("-I")
-        .arg(checker)
-        .args(args)
-        .current_dir(root)
-        .output();
-    let result = match result {
-        Ok(result) => result,
-        Err(error) => return vec![format!("{label}: {error}")],
-    };
-    if result.status.success() {
-        return Vec::new();
-    }
-    let stderr = String::from_utf8_lossy(&result.stderr);
-    let stdout = String::from_utf8_lossy(&result.stdout);
-    let shown = if stderr.trim().is_empty() {
-        stdout
-    } else {
-        stderr
-    };
-    let lines: Vec<String> = shown
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| format!("{label}: {line}"))
-        .collect();
-    if lines.is_empty() {
-        let code = result
-            .status
-            .code()
-            .map_or_else(|| "a signal".to_owned(), |code| code.to_string());
-        return vec![format!("{label}: exit {code} with no output")];
-    }
-    lines
-}
-
 /// Checks the tree at `root`.
 pub fn run(root: &Path) -> Result<Outcome, String> {
     let mut hits = Vec::new();
@@ -814,21 +773,7 @@ pub fn run(root: &Path) -> Result<Outcome, String> {
     source_problems(root, &mut hits, &mut problems)?;
     problems.extend(protocol_xml_problems(root));
     problems.extend(lockfile_problems(root));
-    let release = Path::new("packaging").join("release.py");
-    problems.extend(external_problems(
-        root,
-        "packaging: check-metadata",
-        &release,
-        &["check-metadata"],
-    ));
-    let contracts = Path::new(REMOVED_DIRECTORIES[1]).join("contracts.py");
-    let root_text = root.to_string_lossy().into_owned();
-    problems.extend(external_problems(
-        root,
-        "contracts",
-        &contracts,
-        &[&root_text],
-    ));
+    problems.extend(crate::licences::problems(root));
     Ok(Outcome { hits, problems })
 }
 

@@ -1,5 +1,5 @@
 //! Thumbnails of the items a window shows, made off the UI thread. A window says which of its items are in view
-//! ([`ThumbnailService::want`]); worker threads take them from the freedesktop thumbnail cache ([`crate::thumbnail`])
+//! ([`ThumbnailService::want`]); worker threads take them from the freedesktop thumbnail cache ([`cupertino_icons::thumbnail`])
 //! or create them there, decode them to pixels and call the wake function. A request no window wants any more is
 //! dropped before a worker starts it, so scrolling past a folder costs nothing.
 //!
@@ -17,8 +17,8 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::SystemTime;
 
-use crate::thumbnail::{Pixels, ThumbError, ThumbSize, Thumbnailer};
 use crate::Entry;
+use cupertino_icons::thumbnail::{Pixels, ThumbError, ThumbSize, Thumbnailer};
 
 /// The types whose thumbnails are made: the formats the thumbnail cache decodes.
 pub const THUMBNAIL_TYPES: [&str; 3] = ["image/png", "image/jpeg", "image/webp"];

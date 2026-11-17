@@ -20,11 +20,11 @@ use cupertino_icons::{SystemIcons, ThemeIcons};
 const GENERIC_APPLICATION: &str = "application.generic";
 
 use crate::item_art::{self, Art};
-use crate::thumbnail::Thumbnailer;
 use crate::thumbnail_service::{
     has_thumbnail, Stamp, Thumbnail, ThumbnailService, MEMORY_BUDGET, WORKERS,
 };
 use crate::{mime, Entry, Kind};
+use cupertino_icons::thumbnail::Thumbnailer;
 
 /// Thumbnails are made for this many device pixels a point, so they stay sharp on a 2× display; a 1× display draws
 /// them shrunk.

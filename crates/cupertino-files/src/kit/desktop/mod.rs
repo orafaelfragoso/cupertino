@@ -53,9 +53,9 @@ use crate::open::{command_with, default_app_id, open_command, open_with, OpenErr
 use crate::operations::{self, DropAction};
 use crate::places::{desktop_folder, session_places};
 use crate::sort::{sort_entries, SortKey, SortSpec};
-use crate::thumbnail::Thumbnailer;
 use crate::trash::Trash;
 use crate::{DirectoryModel, Entry, ModelOptions};
+use cupertino_icons::thumbnail::Thumbnailer;
 
 /// What the desktop's windows are called by the roles: `cupertino-desktop@OUTPUT`.
 pub const APP_ID: &str = "cupertino-desktop";

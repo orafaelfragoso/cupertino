@@ -15,9 +15,9 @@ use cupertino_files::kit::{self, Start};
 use cupertino_files::notice::Notices;
 use cupertino_files::places::{session_places, SessionPlaces};
 use cupertino_files::recents;
-use cupertino_files::thumbnail::Thumbnailer;
 use cupertino_files::trash::Trash;
 use cupertino_files::window_prefs;
+use cupertino_icons::thumbnail::Thumbnailer;
 use cupertino_kit::file_icons::FileIcons;
 
 const USAGE: &str = "usage: cupertino-files [--terminal PROGRAM] [FOLDER | file:///FOLDER | trash:///] | --desktop | \

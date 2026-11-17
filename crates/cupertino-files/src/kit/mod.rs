@@ -77,12 +77,12 @@ use crate::search_field::{self, SearchWidth};
 use crate::settings::ColumnId;
 use crate::tab_strip::{TabId, TabStrip};
 use crate::tags::{self, TagColor};
-use crate::thumbnail::Thumbnailer;
 use crate::trash::Trash;
 use crate::udisks::{Media, Passphrase, Report, Volumes};
 use crate::window::ViewMode;
 use crate::window_prefs::WindowPrefs;
 use crate::SortSpec;
+use cupertino_icons::thumbnail::Thumbnailer;
 
 /// Identifier of the window for the server, as the desktop entry names it.
 pub const APP_ID: &str = "cupertino-files";

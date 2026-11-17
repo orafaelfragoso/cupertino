@@ -20,7 +20,6 @@ change and follow the radios through this crate, so the three show the same stat
 | `CALL_TIMEOUT`, `LINK_TIMEOUT`, `call_timeout`, `set_call_timeout`, `unanswered` | how long a reading or a switch waits for a service's answer (3 s; a process can set another wait), how long a call waits that answers once a link is up, down or removed (90 s), and whether an error says the service did not answer in time |
 | `netd`, `btd`, `nm`, `bluez` | each service's readings and calls; `nm` also has the saved networks' Forget and Auto-Join and the VPN connections, `bluez` discovery, pairing and removal |
 | `watch::rules`, `watch::classify`, `watch::concern`, `watch::shown`, `watch::follow` | the match rules of the signals that tell a reading is out of date (a service starting or stopping, the services' objects), which radio an object is about, which radio's reading a signal makes out of date (none for a change of the Bluetooth stack that no reading shows: a device's signal strength and advertisement, a player's position), and a follower that calls back with the radio after each such signal on a connection's own executor |
-| `fake::FakeNetworkManager`, `fake::FakeBluez`, `fake::Silent` (feature `fake`) | stand-ins for the two services on a test bus, for the tests of the crates that use this one: they record what they were asked and how often they were read, send the services' signals, and can be changed from outside as the radio itself would change; `FakeNetworkManager::hang` and `Silent` keep a service's name and answer no reading |
 
 ## How it works
 

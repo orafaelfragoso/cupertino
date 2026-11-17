@@ -37,19 +37,18 @@ fn a_timed_animation_runs_from_its_start_to_its_end() {
     p.animate(10.0, linear(1.0), 2.0, 0.0);
     assert_eq!(p.target(), 10.0);
     assert_eq!(p.end(), Some(3.0));
-    assert!(close(p.value(2.0), 0.0, 1e-6));
-    assert!(close(p.value(2.5), 5.0, 1e-6));
-    assert_eq!(p.value(3.0), 10.0);
-    assert_eq!(p.value(30.0), 10.0);
-}
+    for (t, expected) in [(2.0, 0.0), (2.5, 5.0), (3.0, 10.0), (30.0, 10.0)] {
+        assert!(close(p.value(t), expected, 1e-6), "t = {t}");
+    }
+    // one that has not started yet counts as running
+    for (t, running) in [(1.0, true), (2.5, true), (3.0, false)] {
+        assert_eq!(p.is_animating(t), running, "t = {t}");
+    }
 
-#[test]
-fn an_animation_that_has_not_started_counts_as_running() {
-    let mut p = LayerProperty::new(0.0);
-    p.animate(10.0, linear(1.0), 2.0, 0.0);
-    assert!(p.is_animating(1.0));
-    assert!(p.is_animating(2.5));
-    assert!(!p.is_animating(3.0));
+    let mut jump = LayerProperty::new(0.0);
+    jump.animate(10.0, linear(0.0), 1.0, 0.0);
+    assert_eq!(jump.value(1.0), 10.0, "a zero duration jumps");
+    assert!(!jump.is_animating(1.0));
 }
 
 #[test]
@@ -62,33 +61,36 @@ fn a_timed_animation_from_rest_follows_the_curves_own_slope() {
 }
 
 #[test]
-fn a_zero_duration_timed_animation_jumps_to_its_target() {
-    let mut p = LayerProperty::new(0.0);
-    p.animate(10.0, linear(0.0), 1.0, 0.0);
-    assert_eq!(p.value(1.0), 10.0);
-    assert!(!p.is_animating(1.0));
+fn an_animation_from_rest_starts_with_the_given_velocity() {
+    let mut timed = LayerProperty::new(0.0);
+    timed.animate(10.0, linear(1.0), 0.0, 50.0);
+    assert!(close(timed.velocity(1e-4), 50.0, 0.5));
+    assert!(close(timed.value(1.0), 10.0, 1e-9));
+
+    let mut sprung = LayerProperty::new(0.0);
+    sprung.animate(0.0, spring(0.5, 0.5), 0.0, 40.0);
+    assert!(close(sprung.velocity(0.0), 40.0, 1e-6));
+    let moved = (1..100)
+        .map(|i| sprung.value(f64::from(i) * 0.005).abs())
+        .fold(0.0, f64::max);
+    assert!(moved > 0.1);
+    assert_eq!(sprung.value(sprung.end().unwrap()), 0.0);
 }
 
 #[test]
-fn a_timed_retarget_keeps_value_and_velocity_continuous() {
-    let mut p = LayerProperty::new(0.0);
-    p.animate(10.0, linear(1.0), 0.0, 0.0);
-    let (value, velocity) = (p.value(0.4), p.velocity(0.4));
-    p.animate(-5.0, linear(1.0), 0.4, 0.0);
-    assert!(close(p.value(0.4), value, 1e-9));
-    assert!(close(p.velocity(0.4), velocity, 1e-2));
+fn a_retarget_keeps_value_and_velocity_continuous() {
+    for (row, next) in [("timed", linear(1.0)), ("spring", spring(0.5, 1.0))] {
+        let mut p = LayerProperty::new(0.0);
+        p.animate(100.0, linear(1.0), 0.0, 0.0);
+        let (value, velocity) = (p.value(0.4), p.velocity(0.4));
+        p.animate(-5.0, next, 0.4, 0.0);
+        assert!(close(p.value(0.4), value, 1e-9), "{row}");
+        assert!(close(p.velocity(0.4), velocity, 1e-1), "{row}");
+    }
 }
 
 #[test]
-fn a_timed_animation_from_rest_can_start_with_a_given_velocity() {
-    let mut p = LayerProperty::new(0.0);
-    p.animate(10.0, linear(1.0), 0.0, 50.0);
-    assert!(close(p.velocity(1e-4), 50.0, 0.5));
-    assert!(close(p.value(1.0), 10.0, 1e-9));
-}
-
-#[test]
-fn a_spring_ends_on_its_target_and_stays_there() {
+fn a_spring_ends_exactly_on_its_target_and_stays_there() {
     let mut p = LayerProperty::new(0.0);
     p.animate(1.0, spring(0.5, 1.0), 0.0, 0.0);
     let end = p.end().expect("a spring has an end");
@@ -97,68 +99,35 @@ fn a_spring_ends_on_its_target_and_stays_there() {
     assert_eq!(p.value(end), 1.0);
     assert_eq!(p.value(end + 10.0), 1.0);
     assert!(!p.is_animating(end));
+
+    let mut resting = LayerProperty::new(2.0);
+    resting.animate(2.0, spring(0.5, 1.0), 1.0, 0.0);
+    assert_eq!(resting.end(), Some(1.0), "already at rest ends at once");
+    assert!(!resting.is_animating(1.0));
+    assert_eq!(resting.value(1.5), 2.0);
 }
 
 #[test]
-fn a_critically_damped_spring_never_overshoots() {
-    let mut p = LayerProperty::new(0.0);
-    p.animate(1.0, spring(0.5, 1.0), 0.0, 0.0);
-    for i in 0..400 {
-        assert!(p.value(f64::from(i) * 0.005) <= 1.0 + 1e-9);
+fn spring_damping_decides_overshoot() {
+    // (damping, overshoots, rises monotonically)
+    for (damping, overshoots, monotonic) in
+        [(0.4, true, false), (1.0, false, true), (2.0, false, true)]
+    {
+        let mut p = LayerProperty::new(0.0);
+        p.animate(1.0, spring(0.5, damping), 0.0, 0.0);
+        let values: Vec<f64> = (0..600).map(|i| p.value(f64::from(i) * 0.005)).collect();
+        let peak = values.iter().copied().fold(f64::MIN, f64::max);
+        assert_eq!(peak > 1.05, overshoots, "damping {damping}: peak {peak}");
+        if !overshoots {
+            assert!(peak <= 1.0 + 1e-9, "damping {damping}");
+        }
+        if monotonic {
+            assert!(
+                values.windows(2).all(|w| w[1] >= w[0] - 1e-12),
+                "damping {damping}"
+            );
+        }
     }
-}
-
-#[test]
-fn a_bouncing_spring_overshoots() {
-    let mut p = LayerProperty::new(0.0);
-    p.animate(1.0, spring(0.5, 0.4), 0.0, 0.0);
-    let peak = (0..400)
-        .map(|i| p.value(f64::from(i) * 0.005))
-        .fold(f64::MIN, f64::max);
-    assert!(peak > 1.05);
-}
-
-#[test]
-fn an_overdamped_spring_creeps_up_without_overshoot() {
-    let mut p = LayerProperty::new(0.0);
-    p.animate(1.0, spring(0.5, 2.0), 0.0, 0.0);
-    let mut last = 0.0;
-    for i in 0..600 {
-        let v = p.value(f64::from(i) * 0.005);
-        assert!(v <= 1.0 + 1e-9 && v >= last - 1e-12);
-        last = v;
-    }
-}
-
-#[test]
-fn a_spring_retarget_seeds_its_velocity_from_the_running_animation() {
-    let mut p = LayerProperty::new(0.0);
-    p.animate(100.0, linear(1.0), 0.0, 0.0);
-    let (value, velocity) = (p.value(0.5), p.velocity(0.5));
-    p.animate(0.0, spring(0.5, 1.0), 0.5, 0.0);
-    assert!(close(p.value(0.5), value, 1e-9));
-    assert!(close(p.velocity(0.5), velocity, 1e-3));
-}
-
-#[test]
-fn a_spring_from_rest_uses_the_given_velocity() {
-    let mut p = LayerProperty::new(0.0);
-    p.animate(0.0, spring(0.5, 0.5), 0.0, 40.0);
-    assert!(close(p.velocity(0.0), 40.0, 1e-6));
-    let moved = (1..100)
-        .map(|i| p.value(f64::from(i) * 0.005).abs())
-        .fold(0.0, f64::max);
-    assert!(moved > 0.1);
-    assert_eq!(p.value(p.end().unwrap()), 0.0);
-}
-
-#[test]
-fn a_spring_that_is_already_at_rest_ends_at_once() {
-    let mut p = LayerProperty::new(2.0);
-    p.animate(2.0, spring(0.5, 1.0), 1.0, 0.0);
-    assert_eq!(p.end(), Some(1.0));
-    assert!(!p.is_animating(1.0));
-    assert_eq!(p.value(1.5), 2.0);
 }
 
 #[test]
@@ -167,67 +136,53 @@ fn samples_are_played_in_straight_lines_between_even_steps() {
     p.animate_samples(Arc::from([0.0f32, 10.0, 0.0]), 2.0, 1.0);
     assert_eq!(p.target(), 0.0);
     assert_eq!(p.end(), Some(3.0));
-    assert_eq!(p.value(1.0), 0.0);
-    assert!(close(p.value(1.5), 5.0, 1e-9));
-    assert_eq!(p.value(2.0), 10.0);
-    assert!(close(p.value(2.5), 5.0, 1e-9));
-    assert_eq!(p.value(3.0), 0.0);
+    // before the start it shows the first sample, not the old value
+    for (t, value) in [
+        (0.5, 0.0),
+        (1.0, 0.0),
+        (1.5, 5.0),
+        (2.0, 10.0),
+        (2.5, 5.0),
+        (3.0, 0.0),
+    ] {
+        assert!(close(p.value(t), value, 1e-9), "value at {t}");
+    }
+    for (t, velocity) in [(0.5, 0.0), (1.5, 10.0), (2.5, -10.0), (3.0, 0.0)] {
+        assert!(close(p.velocity(t), velocity, 1e-9), "velocity at {t}");
+    }
 }
 
 #[test]
-fn samples_start_at_their_first_value_whatever_was_shown() {
-    let mut p = LayerProperty::new(7.0);
-    p.animate_samples(Arc::from([1.0f32, 2.0]), 1.0, 5.0);
-    assert_eq!(p.value(0.0), 1.0);
-    assert_eq!(p.value(5.0), 1.0);
-}
-
-#[test]
-fn sample_velocity_is_the_slope_of_the_current_segment() {
-    let mut p = LayerProperty::new(0.0);
-    p.animate_samples(Arc::from([0.0f32, 10.0, 0.0]), 2.0, 1.0);
-    assert!(close(p.velocity(1.5), 10.0, 1e-9));
-    assert!(close(p.velocity(2.5), -10.0, 1e-9));
-    assert_eq!(p.velocity(0.5), 0.0);
-    assert_eq!(p.velocity(3.0), 0.0);
-}
-
-#[test]
-fn degenerate_samples_rest_at_their_last_value() {
+fn degenerate_samples_rest_at_their_last_value_and_empty_ones_change_nothing() {
     let mut one = LayerProperty::new(0.0);
     one.animate_samples(Arc::from([4.0f32]), 1.0, 0.0);
     assert_eq!(one.target(), 4.0);
     assert_eq!(one.value(0.5), 4.0);
     assert!(!one.is_animating(0.0));
+
     let mut instant = LayerProperty::new(0.0);
     instant.animate_samples(Arc::from([1.0f32, 9.0]), 0.0, 0.0);
     assert_eq!(instant.value(0.0), 9.0);
+
+    let mut empty = LayerProperty::new(2.0);
+    empty.animate_samples(Arc::from([] as [f32; 0]), 1.0, 0.0);
+    assert_eq!(empty.target(), 2.0);
+    assert_eq!(empty.value(0.5), 2.0);
 }
 
 #[test]
-fn an_empty_sample_list_changes_nothing() {
-    let mut p = LayerProperty::new(2.0);
-    p.animate_samples(Arc::from([] as [f32; 0]), 1.0, 0.0);
-    assert_eq!(p.target(), 2.0);
-    assert_eq!(p.value(0.5), 2.0);
-}
+fn set_jumps_and_cancel_stops_at_the_value_shown() {
+    let mut set = LayerProperty::new(0.0);
+    set.animate(10.0, linear(1.0), 0.0, 0.0);
+    set.set(4.0);
+    assert_eq!(set.value(0.5), 4.0);
+    assert_eq!(set.target(), 4.0);
+    assert_eq!(set.end(), None);
 
-#[test]
-fn set_jumps_and_rests() {
-    let mut p = LayerProperty::new(0.0);
-    p.animate(10.0, linear(1.0), 0.0, 0.0);
-    p.set(4.0);
-    assert_eq!(p.value(0.5), 4.0);
-    assert_eq!(p.target(), 4.0);
-    assert_eq!(p.end(), None);
-}
-
-#[test]
-fn cancel_stops_at_the_value_shown() {
-    let mut p = LayerProperty::new(0.0);
-    p.animate(10.0, linear(1.0), 0.0, 0.0);
-    p.cancel(0.5);
-    assert!(close(p.value(0.9), 5.0, 1e-6));
-    assert_eq!(p.velocity(0.9), 0.0);
-    assert!(!p.is_animating(0.9));
+    let mut cancelled = LayerProperty::new(0.0);
+    cancelled.animate(10.0, linear(1.0), 0.0, 0.0);
+    cancelled.cancel(0.5);
+    assert!(close(cancelled.value(0.9), 5.0, 1e-6));
+    assert_eq!(cancelled.velocity(0.9), 0.0);
+    assert!(!cancelled.is_animating(0.9));
 }

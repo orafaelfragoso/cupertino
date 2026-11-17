@@ -162,7 +162,8 @@ fn a_window_takes_the_servers_configures_and_close_request() {
 #[test]
 fn a_malformed_configure_fails_the_connection() {
     type Send = fn(&mut Server);
-    let rows: [(&str, Send, fn(&Error) -> bool); 2] = [
+    type Row = (&'static str, Send, fn(&Error) -> bool);
+    let rows: [Row; 2] = [
         (
             "a negative extent",
             |s| {
@@ -217,14 +218,13 @@ fn a_lease_is_the_configured_size_or_else_the_preferred_one_at_the_surface_scale
         lease.pixels_mut().fill(0xAB);
         // dropped without presenting: the buffer goes back
     }
-    let mut lease = conn
+    let mut again = conn
         .lease(window.surface(), (64, 32), BufferFormat::Argb8888)
         .unwrap();
     assert!(
-        lease.pixels_mut().iter().all(|&b| b == 0xAB),
+        again.pixels_mut().iter().all(|&b| b == 0xAB),
         "the pixels written to a lease are in the same buffer"
     );
-    drop(lease);
 
     server.run(|s| {
         let (toplevel, surface) = &s.toplevels[0];

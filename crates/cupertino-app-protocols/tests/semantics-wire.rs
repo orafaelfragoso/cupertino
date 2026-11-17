@@ -405,7 +405,9 @@ fn permits_allows_only_a_listed_action_on_a_usable_node_with_the_data_it_takes()
     let t = |s: &str| Some(Data::Text(s.into()));
     let n = |v: f64| Some(Data::Number(v));
     let sel = |start, end| Some(Data::Selection { start, end });
-    let rows: Vec<(&str, &Snapshot, u64, Action, Option<Data>, bool)> = vec![
+    // the snapshot, the node, the action and its data, and whether it is permitted
+    type Row<'a> = (&'static str, &'a Snapshot, u64, Action, Option<Data>, bool);
+    let rows: Vec<Row> = vec![
         ("a listed click", &plain, 2, Action::Click, None, true),
         ("an unknown node", &plain, 99, Action::Click, None, false),
         ("an unlisted action", &plain, 2, Action::Expand, None, false),

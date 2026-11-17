@@ -245,7 +245,10 @@ fn a_generated_keymap_that_does_not_compile_keeps_the_system_keymap() {
         );
         assert_us_and_german(&mut state, row);
         let text = log.text();
-        assert!(text.contains(logged), "{row}: the failure is logged: {text}");
+        assert!(
+            text.contains(logged),
+            "{row}: the failure is logged: {text}"
+        );
     }
 }
 

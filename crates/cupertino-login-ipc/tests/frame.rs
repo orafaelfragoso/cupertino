@@ -89,7 +89,9 @@ fn wanted_counts_down_the_header_then_the_body() {
 #[test]
 fn the_decoder_refuses_a_bad_length_before_taking_any_body() {
     let header = |length: u32| length.to_le_bytes().to_vec();
-    let rows: [(&str, usize, Vec<Vec<u8>>, Result<(), FrameError>); 6] = [
+    // what each row pushes, under which limit, and what the decoder says
+    type Row = (&'static str, usize, Vec<Vec<u8>>, Result<(), FrameError>);
+    let rows: [Row; 6] = [
         (
             "more than the header",
             64,

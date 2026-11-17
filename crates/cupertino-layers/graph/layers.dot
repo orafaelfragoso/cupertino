@@ -1,6 +1,6 @@
 // cupertino-layers --graph
-// 90 crates, 390 internal dependencies
-// per layer: foundation 22, graphics 2, models 9, platform 9, protocol 4, transport 3, render 3, ui 14, core 1, shell 12, services 4, apps 2, tools 5
+// 91 crates, 390 internal dependencies
+// per layer: foundation 22, graphics 2, models 9, platform 9, protocol 4, transport 3, render 3, ui 14, core 1, shell 12, services 4, apps 2, tools 6
 // forbidden normal edge cupertino-settings (apps) -> cupertino-alsa (platform), migration #21 exception (services): the sound pane drives the default sink and the mixer itself until audio goes through a service
 // forbidden normal edge cupertino-settings (apps) -> cupertino-pipewire (platform), migration #21 exception (services): the sound pane drives the default sink and the mixer itself until audio goes through a service
 // denied paths ui -> core, shell, services: none
@@ -128,12 +128,13 @@ digraph "layers" {
     "cupertino-settings";
   }
   subgraph "cluster_tools" {
-    label="tools (5)";
+    label="tools (6)";
     "cupertino-cli";
     "cupertino-diagnostics";
     "cupertino-gpu-shaders";
     "cupertino-gpu-slice";
     "cupertino-layers";
+    "xtask";
   }
   "cupertino-btd" -> "cupertino-bluetooth";
   "cupertino-btd" -> "cupertino-diagnostic-events";

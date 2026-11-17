@@ -310,18 +310,18 @@ fn a_missing_or_malformed_licence_is_a_problem() {
 
 fn one_problem(name: &str) -> Fixture {
     Fixture::new(name)
-        .krate("f", Foundation, &[("normal", "g")])
+        .krate("f", Models, &[("normal", "g")])
         .krate("g", Graphics, &[])
 }
 
-const LISTED: &str = "foundation forbidden_edge f -> g normal";
+const LISTED: &str = "models forbidden_edge f -> g normal";
 
 #[test]
 fn a_problem_the_list_does_not_name_fails() {
     let fx = one_problem("unlisted").build();
     let out = fx.run(&[]);
     assert!(!out.status.success());
-    assert!(stderr(&out).contains("f (foundation) must not depend on g (graphics)"));
+    assert!(stderr(&out).contains("f (models) must not depend on g (graphics)"));
     assert!(stdout(&out).ends_with("1 problems\n"), "{}", stdout(&out));
     assert_eq!(fx.check().unlisted().count(), 1);
 }
@@ -341,11 +341,11 @@ fn a_listed_problem_passes() {
 #[test]
 fn a_line_that_is_no_longer_a_problem_fails() {
     let fx = one_problem("stale")
-        .remaining(&[LISTED, "foundation forbidden_edge f -> h normal"])
+        .remaining(&[LISTED, "models forbidden_edge f -> h normal"])
         .build();
     let out = fx.run(&[]);
     assert!(!out.status.success());
-    assert!(stderr(&out).contains("foundation forbidden_edge f -> h normal"));
+    assert!(stderr(&out).contains("models forbidden_edge f -> h normal"));
     let findings = fx.check();
     assert_eq!(findings.unlisted().count(), 0);
     assert_eq!(
@@ -361,12 +361,12 @@ fn a_line_that_is_no_longer_a_problem_fails() {
 #[test]
 fn write_remaining_writes_sorted_lines_and_is_idempotent() {
     let fx = Fixture::new("write-remaining")
-        .krate("z", Foundation, &[("normal", "g")])
+        .krate("z", Models, &[("normal", "g")])
         .krate("a", Models, &[("normal", "g")])
         .krate("g", Graphics, &[])
-        .krate("m", Foundation, &[])
+        .krate("m", Models, &[])
         .file("m", "src/lib.rs", "use std::{io, env};")
-        .remaining(&["foundation forbidden_edge old -> gone normal"])
+        .remaining(&["models forbidden_edge old -> gone normal"])
         .build();
     let file = fx.path(cupertino_layers::REMAINING);
     let out = fx.run(&["--write-remaining"]);
@@ -381,9 +381,9 @@ fn write_remaining_writes_sorted_lines_and_is_idempotent() {
     assert_eq!(
         lines,
         [
-            "foundation forbidden_edge z -> g normal",
-            "foundation impure_source m src/lib.rs std::env",
-            "models forbidden_edge a -> g normal"
+            "models forbidden_edge a -> g normal",
+            "models forbidden_edge z -> g normal",
+            "models impure_source m src/lib.rs std::env"
         ]
     );
     let mut sorted = lines.clone();
@@ -398,7 +398,7 @@ fn write_remaining_writes_sorted_lines_and_is_idempotent() {
 fn an_enforced_layer_is_never_excused_by_the_list() {
     let fx = one_problem("enforced").remaining(&[LISTED]).build();
     let policy = Policy {
-        enforced: &[Foundation],
+        enforced: &[Models],
         ..POLICY
     };
     let findings = fx.check_with(&policy);

@@ -187,7 +187,7 @@ pub const RULES: Rules = &[
 ];
 
 /// The closed layers: none of their problems may be listed in the remaining-work file.
-pub const ENFORCED: &[Layer] = &[];
+pub const ENFORCED: &[Layer] = &[Layer::Foundation, Layer::System, Layer::Testing];
 
 /// The layers whose sources must stay pure: no I/O, no threads, no `unsafe`, no FFI.
 pub const PURE_LAYERS: &[Layer] = &[Foundation, Models];

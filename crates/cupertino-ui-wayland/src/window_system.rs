@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use crate::action_grab::ActionGrabs;
 
 use crate::menus::{AppMenus, WindowMenus};
+use cupertino_diagnostic_events::profile as timeline;
 use cupertino_geometry::{Rect, Size};
 use cupertino_keyboard::modifiers::Profile;
 use cupertino_menu_model::{ActionName, Command, Entry, Menu, MenuBar};
@@ -494,7 +495,11 @@ impl WaylandWindowSystem {
         class: RendererClass,
     ) -> Result<WaylandWindowSystem, PlatformError> {
         // the frame timeline `CUPERTINO_PROFILE` asks for, from the process's first frame
-        cupertino_diagnostic_events::profile::init();
+        if timeline::init() {
+            let _ = std::thread::Builder::new()
+                .name(timeline::WRITER_THREAD.into())
+                .spawn(timeline::write_traces);
+        }
         Connection::connect()
             .map(|conn| WaylandWindowSystem::new_as(conn, profile, class))
             .map_err(platform_error)

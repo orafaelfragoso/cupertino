@@ -67,7 +67,7 @@ pub fn open_log(path: &PathBuf) -> io::Result<File> {
 pub fn init(file: Option<File>) {
     let filter =
         || EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_FILTER));
-    match file {
+    let writes_timeline = match file {
         Some(file) => {
             if let Ok(crash_log) = file.try_clone() {
                 CRASH_LOG.store(crash_log.into_raw_fd(), Ordering::Relaxed);
@@ -76,6 +76,8 @@ pub fn init(file: Option<File>) {
                 .with_ansi(false)
                 .with_writer(Mutex::new(file))
                 .with_filter(filter());
+            let timeline = diag::profile::layer();
+            let writes = timeline.is_some();
             tracing_subscriber::registry()
                 .with(file)
                 .with(
@@ -83,17 +85,28 @@ pub fn init(file: Option<File>) {
                         .with_writer(io::stderr)
                         .with_filter(LevelFilter::WARN),
                 )
-                .with(diag::profile::layer())
+                .with(timeline)
                 .init();
+            writes
         }
-        None => tracing_subscriber::registry()
-            .with(
-                tracing_subscriber::fmt::layer()
-                    .with_writer(io::stderr)
-                    .with_filter(filter()),
-            )
-            .with(diag::profile::layer())
-            .init(),
+        None => {
+            let timeline = diag::profile::layer();
+            let writes = timeline.is_some();
+            tracing_subscriber::registry()
+                .with(
+                    tracing_subscriber::fmt::layer()
+                        .with_writer(io::stderr)
+                        .with_filter(filter()),
+                )
+                .with(timeline)
+                .init();
+            writes
+        }
+    };
+    if writes_timeline {
+        let _ = std::thread::Builder::new()
+            .name(diag::profile::WRITER_THREAD.into())
+            .spawn(diag::profile::write_traces);
     }
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {

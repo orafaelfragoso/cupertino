@@ -98,7 +98,7 @@ one line, `<layer> <rule> <crate> …` (the layer the crate declares), sorted, u
 ```
 shell facade cupertino-dock -> cupertino-ui-wayland normal
 platform external_crate cupertino-seat -> smithay normal
-system starts_thread cupertino-trash src/lib.rs std::thread::Builder::spawn
+apps disallowed_methods cupertino-files clippy.toml
 ```
 
 A line names only what the problem is about (crates, kind of dependency, file and item; never a line number or a
@@ -111,8 +111,7 @@ cargo run -q -p cupertino-layers -- --write-remaining
 
 `ENFORCED` lists the closed layers. Their problems are never excused by the file, `--write-remaining` leaves them out
 and fails while they remain, and a line of an enforced layer in the file is a problem (`enforced_remaining`). It holds
-`foundation`, `graphics`, `models`, `protocol`, `transport` and `testing`; `system` leaves it while its crates still
-start threads.
+`foundation`, `graphics`, `models`, `system`, `protocol`, `transport` and `testing`.
 
 `cargo xtask ci`, in the profiles that run this check, also compares the file with its version at the merge base
 (`cargo xtask remaining [<ref>]` runs only that comparison) and reports a line the base does not hold, unless the same

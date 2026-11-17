@@ -1068,6 +1068,10 @@ One line per change to a decision or approval of a design: date, number, what, w
 - 2026-11-17: lead: the window activation value is a field of `ColorTokens` that the runtime sets while colours cross,
   not a thread-local in `cupertino-ui-core` (D3: no per-thread state a second instance would share); the design tokens
   are `cupertino_theme::ui`.
+- 2026-11-17: lead, after the review of waves 0 and 1: `standard::menu_bar` leaves out the groups an application's
+  features leave empty (found by W1.T; no consumer depended on them). D6's rule that `system` crates start no threads
+  becomes a check; the nine thread starts found are remaining-work lines, so `system` leaves `ENFORCED` until W4.5
+  moves them onto Kit's task API and closes it again. The remaining-work list may only lose lines against the base.
 - 2026-11-17: second independent review: statics allowed under D3, render-thread commits and CPU drawing (D4), two
   pools and a structural ban on blocking calls (D6), file operations in Kit (D8), the session agent's and the
   portal's dialogs placed (D9, D10, D11, D13), audio started on use (D15), self-restart and hang hand-back (D16, D17),

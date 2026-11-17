@@ -5,5 +5,3 @@ __pycache__/
 # mdBook output
 docs/book/
 
-# made by running the vendored port's own tests (crates/cupertino-xkbcommon/README.md)
-/third-party/xkbcommon-rs/Cargo.lock

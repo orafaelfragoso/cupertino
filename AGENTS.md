@@ -10,7 +10,7 @@ Crate details are in each crate's README; project docs in `docs/`.
 - Layers: a crate depends only on the layers its row of `docs/src/architecture.md` allows, plus the further rules there (purity, facades, external crates); `cargo run -p cupertino-layers` checks them. Violations not fixed yet are listed in `crates/cupertino-layers/remaining.txt`: a new one fails, a fixed one must leave the list (`-- --write-remaining`).
 - Names: crates `cupertino-*`, files kebab-case, user-visible terms the project's own (overview, workspaces, launcher, control panel, file manager).
 - One purpose per change. No drive-by renames or reformatting, no new documents unless asked.
-- No scripts (shell, Python): use cargo, nextest, the workspace's programs and examples. Repository automation is `cargo xtask ci` only.
+- No scripts (shell, Python): use cargo, nextest, the workspace's programs and examples. Repository automation is `cargo xtask ci`, and `cargo xtask vendored` for the vendored trees.
 - Tests live only in `crates/*/tests/` and go through the crate's public interface. No `#[test]` or `#[cfg(test)]` in `src/`. The gate enforces both.
 - Find where time goes with `samply`, `perf`, `heaptrack` and `CUPERTINO_PROFILE` timelines, never timing prints.
 

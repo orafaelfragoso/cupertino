@@ -1,7 +1,7 @@
 # cupertino-screencast
 
 PipeWire video source streams for screen sharing: one stream for each share, which a consumer such as a browser
-connects to by its node id. This is the only crate that links libpipewire, and only `cupertino-portal` (feature `app`)
+connects to by its node id. This is the only crate that links libpipewire, and only `cupertino-portal`
 uses it. Layer: `platform`.
 
 ## Public API

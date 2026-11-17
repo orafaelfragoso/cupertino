@@ -29,7 +29,7 @@ RUN printf 'Server = https://archive.archlinux.org/repos/%s/$repo/os/$arch\n' "$
  && ! grep -q '^[[:space:]]*Server' /etc/pacman.conf \
  && [ -z "$(grep '^[[:space:]]*Include' /etc/pacman.conf | grep -v '= /etc/pacman.d/mirrorlist$')" ] \
  && pacman -Syyuu --noconfirm --needed \
-      base-devel python mesa libglvnd pam gcc-libs systemd dbus xkeyboard-config shared-mime-info \
+      base-devel python mesa libglvnd pam gcc-libs systemd dbus libxkbcommon xkeyboard-config shared-mime-info \
       adwaita-icon-theme clang libpipewire rustup git jq zstd mold sccache cargo-about \
       pipewire gnome-keyring libsecret bash-completion zsh fish mandoc \
       gnupg namcap archiso valgrind \

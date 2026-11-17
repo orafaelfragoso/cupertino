@@ -19,6 +19,7 @@ pkgbase = cupertino
 	makedepends = gcc-libs
 	makedepends = systemd
 	makedepends = dbus
+	makedepends = libxkbcommon
 	makedepends = xkeyboard-config
 	makedepends = shared-mime-info
 	makedepends = adwaita-icon-theme
@@ -44,12 +45,12 @@ pkgname = cupertino
 	depends = pipewire>=1:1.4
 	depends = xdg-desktop-portal
 	depends = xdg-desktop-portal-gtk
+	depends = libxkbcommon
 	depends = xkeyboard-config
 	depends = shared-mime-info
 	depends = adwaita-icon-theme
 	depends = cupertino-data>=0.1.0
 	optdepends = wayland: nested session inside another Wayland desktop
-	optdepends = libxkbcommon: nested session
 	optdepends = foot: terminal for the nested try-out
 	optdepends = iwd: wireless backend when cupertino-netd is enabled
 	optdepends = xwayland-satellite>=0.8: X11 app support
@@ -77,6 +78,7 @@ pkgname = cupertino-kit
 	license = OFL-1.1
 	depends = glibc
 	depends = gcc-libs
+	depends = libxkbcommon
 	optdepends = cupertino-data: the fonts and icons of the desktop
 	optdepends = cupertino: the desktop theme
 	provides = libcupertinokit.so

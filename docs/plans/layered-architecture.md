@@ -1300,3 +1300,6 @@ One line per change to a decision or approval of a design: date, number, what, w
   as built. `ui-controls`' `TableView` and `ListView` handlers return a message, so for the events they report a view's
   `on_event` must answer `Some`; Files maps every event, and W6.11, the first caller that answers `None`, makes those
   handlers return `Option<M>`. The capture sample folder is kept between runs so its birth times repeat.
+- 2026-11-18: owner, after W4.8: the C SDK's closure holds `cupertino-ui-files` and `cupertino-trash` through Kit, so
+  the SDK package declares GPL-3.0-or-later with MPL-2.0 and ships its text; the licences are reconciled when they are
+  redefined (D28).

@@ -1,7 +1,7 @@
 # CupertinoKit: getting started
 
 CupertinoKit is the UI toolkit for Cupertino applications. An application depends on one crate, `cupertino-kit`
-(MPL-2.0), which re-exports the `cupertino-ui-*` crates as modules and has a `prelude`. Every command below runs from a
+(MPL-2.0), whose modules list the toolkit items an application names and which has a `prelude`. Every command below runs from a
 checkout and was run on the commit this page was written against.
 
 ## What an application needs

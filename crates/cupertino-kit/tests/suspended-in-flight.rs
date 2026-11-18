@@ -7,18 +7,16 @@ mod support;
 
 use cupertino_kit::controls::WINDOW_CONTENT_INSET;
 use cupertino_kit::core::CommandRegistry;
-use cupertino_kit::core::StepStatus;
 use cupertino_kit::geometry::Size;
-use cupertino_kit::platform::{
-    Capabilities, DecorationMode, PlatformEvent, Shown, Submitted, Timestamp, WindowEvent,
-    WindowStates,
-};
+use cupertino_kit::platform::{DecorationMode, Timestamp};
 use cupertino_kit::prelude::*;
-use cupertino_kit::render::{
-    render_thread, CpuFrame, MemoryTarget, PixelRect, RenderError, RenderFrameId, RenderRequest,
-    UiRenderer,
+use cupertino_kit::render::{RenderRequest, UiRenderer};
+use cupertino_kit::test::{
+    Capabilities, ManualClock, StepStatus, TestDriver, WindowEvent, WindowStates,
 };
-use cupertino_ui_test::{ManualClock, TestDriver};
+use cupertino_ui_core::platform::{PlatformEvent, Shown, Submitted};
+use cupertino_ui_render::render_thread;
+use cupertino_ui_render::{CpuFrame, MemoryTarget, PixelRect, RenderError, RenderFrameId};
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, PoisonError};

@@ -4,16 +4,15 @@
 mod fixture;
 
 use cupertino_assets::BUILTIN_FONT;
-use cupertino_kit::core::{
-    Application, Command, Key, PlaceholderIcons, RuntimeOptions, Window, WindowKey,
-};
+use cupertino_kit::core::{Application, Command, Key, RuntimeOptions, Window, WindowKey};
 use cupertino_kit::geometry::Size;
 use cupertino_kit::layout::LayoutDirection;
-use cupertino_kit::platform::{
-    Capabilities, KeyEvent, Keysym, Mods, Timestamp, WindowEvent, WindowId, WindowStates,
-};
+use cupertino_kit::platform::{KeyEvent, Keysym, Mods, Timestamp, WindowId};
 use cupertino_kit::render::{CpuConfig, CpuRenderer};
-use cupertino_kit::text::{FontIndex, GlyphRaster, TextSystem};
+use cupertino_kit::test::{
+    Capabilities, FontIndex, ManualClock, PlaceholderIcons, TestDriver, WindowEvent, WindowStates,
+};
+use cupertino_kit::text::{GlyphRaster, TextSystem};
 use cupertino_kit::theme::{Appearance, ThemePreferences, ThemeTokens};
 use cupertino_login::model::LockScreen;
 use cupertino_login::user::User;
@@ -21,7 +20,6 @@ use cupertino_login::view::{
     self, Access, Clock, Field, Input, Metrics, Screen, Status, LOCKED_TITLE, LOCK_APP_ID,
 };
 use cupertino_login::wallpaper::Source;
-use cupertino_ui_test::{ManualClock, TestDriver};
 use std::cell::Cell;
 use std::num::NonZeroU32;
 use std::sync::{Arc, OnceLock};

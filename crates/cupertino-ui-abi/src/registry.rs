@@ -9,7 +9,7 @@ use std::os::fd::OwnedFd;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::thread::{self, ThreadId};
 
-use cupertino_kit::core::{Application, Command, Runtime, Window};
+use cupertino_ui_core::{Application, Command, Runtime, Window};
 use cupertino_ui_test::HeadlessWindowSystem;
 use rustix::event::{eventfd, EventfdFlags};
 

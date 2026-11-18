@@ -51,14 +51,13 @@ use cupertino_kit::core::{Checked, CommandRegistry, Key, PaintCx};
 use cupertino_kit::geometry::{Insets, Point, Rect, Size};
 use cupertino_kit::layout::{LayoutDirection, ScrollState};
 use cupertino_kit::platform::{
-    Capabilities, DecorationMode, MouseButton, PointerEvent, ScrollSource, SystemAppearance,
-    Timestamp, WindowEvent, WindowId, WindowStates,
+    DecorationMode, MouseButton, PointerEvent, ScrollSource, SystemAppearance, Timestamp, WindowId,
 };
 use cupertino_kit::prelude::*;
 use cupertino_kit::render::{GradientStop, Paint, PaintOp, PixelFormat, Shape};
+use cupertino_kit::test::{Capabilities, ManualClock, TestDriver, WindowEvent, WindowStates};
 use cupertino_kit::text::{AttributedText, ContentPurpose, TextStyle};
 use cupertino_kit::theme::{Color, ColorRole, ControlSize, ThemeTokens};
-use cupertino_ui_test::{ManualClock, TestDriver};
 use tiny_skia::{IntSize, Pixmap};
 
 /// Between the controls of a row, an approximate design value.
@@ -892,7 +891,7 @@ fn draw_with<A: Application>(
 ) -> Result<Pixmap, String> {
     let mut options = cupertino_kit::app::options().map_err(|e| e.to_string())?;
     options.direction = direction;
-    let preferences = cupertino_kit::app::preferences(&SystemAppearance {
+    let preferences = cupertino_kit::test::preferences(&SystemAppearance {
         dark: look.dark,
         increase_contrast: look.increase_contrast,
         reduce_transparency: look.reduce_transparency,

@@ -160,10 +160,10 @@ pub fn run_lock_screen_on_with<A: Application>(
 }
 
 /// Names the file that [`Timed::timed`] appends the timing of each scroll to.
-pub const SCROLL_TIMING_ENV: &str = "CUPERTINO_SCROLL_TIMING";
+const SCROLL_TIMING_ENV: &str = "CUPERTINO_SCROLL_TIMING";
 
 /// Names the file that [`Timed::timed`] appends the phases of each frame to; every process of a session may share it.
-pub const FRAME_TIMING_ENV: &str = "CUPERTINO_FRAME_TIMING";
+const FRAME_TIMING_ENV: &str = "CUPERTINO_FRAME_TIMING";
 
 /// A runtime that reports how long scrolls take to reach the screen when [`SCROLL_TIMING_ENV`] names an absolute path:
 /// one JSON object a line per scroll event, its stages in nanoseconds (`input`, `handled`, `updated`, `submitted`,
@@ -171,7 +171,7 @@ pub const FRAME_TIMING_ENV: &str = "CUPERTINO_FRAME_TIMING";
 /// the phases of every frame there ([`frame_timing_json`]), one line per frame written whole, so the processes of a
 /// session can share the file, each with the renderer `renderers` drew it with. Without the variables the runtime keeps
 /// no timing.
-pub trait Timed {
+trait Timed {
     fn timed(self, renderers: GpuRenderers) -> Self;
 }
 
@@ -274,7 +274,7 @@ fn json_string(text: &str) -> String {
 
 /// One line of the frame timing report: the process, the renderer it drew the frame with (`cpu` or `gpu`), the turn's
 /// start on the monotonic clock and each phase, in nanoseconds, then the frames the turn presented.
-pub fn frame_timing_json(
+fn frame_timing_json(
     t: &cupertino_ui_core::FrameTiming,
     pid: u32,
     program: &str,
@@ -299,7 +299,7 @@ pub fn frame_timing_json(
 }
 
 /// One line of the scroll timing report.
-pub fn scroll_timing_json(t: &cupertino_ui_core::ScrollTiming) -> String {
+fn scroll_timing_json(t: &cupertino_ui_core::ScrollTiming) -> String {
     let ns = |t: Option<cupertino_ui_core::platform::Timestamp>| {
         t.map_or("null".to_string(), |t| t.0.to_string())
     };
@@ -329,7 +329,7 @@ pub fn options() -> Result<RuntimeOptions, AppError> {
 
 /// The theme preferences an application starts with: the session's when the window system knows them, else light with
 /// motion on.
-pub fn start_preferences(appearance: Option<SystemAppearance>) -> ThemePreferences {
+fn start_preferences(appearance: Option<SystemAppearance>) -> ThemePreferences {
     preferences(&appearance.unwrap_or_default())
 }
 

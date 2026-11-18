@@ -1,9 +1,10 @@
 # cupertino-kit
 
-CupertinoKit, the Cupertino UI toolkit: the one crate applications depend on. It re-exports the `cupertino-ui-*` crates
-as modules and has a `prelude`. `typeahead` (`TypeAhead`) and `filepicker` (`Picker` and its `Mode`, `Key`,
+CupertinoKit, the Cupertino UI toolkit: the one crate applications depend on. Each module lists the toolkit items
+an application names, one by one ([Public API](#public-api-proposal)), and it has a `prelude`. `typeahead` (`TypeAhead`) and `filepicker` (`Picker` and its `Mode`, `Key`,
 `Request`, `Listing`, `Entry` and `Outcome`; `places` with `session_places`, `parse_user_dirs` and `Place`) name the
-type-to-select and file chooser model of `cupertino-ui-controls`. MPL-2.0.
+type-to-select and file chooser model of `cupertino-ui-controls`. The `test` feature, enabled only in
+dev-dependencies, adds `kit::test`: the headless backend and what a driver is built from. MPL-2.0.
 
 A node is glass when its `paint` calls `PaintCx::glass` (`Glass` and `GlassStyle` are in the `prelude`): the compositor
 draws the glass under it, and nodes in the same container merge into one shape (`cupertino-ui-core`, *Glass*):
@@ -37,7 +38,7 @@ the UI loop only waits for each burst of changes to be quiet, and the files are 
 thread: the connection comes as one message and its close as another. `kit::time` reads the session's local time
 (`local`, `now`) and turns a local date and time back into a moment (`from_local`), daylight saving time included.
 `kit::spawn` starts a program for the instance the thread runs for, and the instance's UI loop reaps it on its first
-turn after it ends (`app::each_turn`, which every `app::run` installs with `Runtime::with_each_turn`), reporting an
+turn after it ends (`test::each_turn`, which every `app::run` installs with `Runtime::with_each_turn`), reporting an
 unsuccessful exit on standard error; no thread waits for it.
 
 `app::run` and `app::options` start on the Cupertino theme from the installed theme data, and on
@@ -49,12 +50,12 @@ desktop shell set up with its surface roles (connected with `WaylandWindowSystem
 (`AtspiAdapter::lock_screen`), and `app::run_on_with_appearance` passes the session's appearance through a function first, for a
 shell surface that keeps the dark appearance in a light session. Every one of them keeps the text caret from blinking
 (`caret_phase_ms` 0) while the session asks for a steady caret, from the first frame.
-Every one of them reports scroll timing when `CUPERTINO_SCROLL_TIMING` (`app::SCROLL_TIMING_ENV`) names an absolute path:
+Every one of them reports scroll timing when `CUPERTINO_SCROLL_TIMING` names an absolute path:
 one JSON line a pointer scroll event, appended, with its stages in nanoseconds of `CLOCK_MONOTONIC` (`input`, the
 window system's timestamp; `handled`; `updated`, the model update and view, or `null`; `submitted`, the frame that drew
 it; `presented`, the compositor's time for that frame, or `null` when it was dropped). Without the variable no timing
-is kept (`app::Timed`, on `Runtime::with_scroll_timing`). They report frame timing when `CUPERTINO_FRAME_TIMING`
-(`app::FRAME_TIMING_ENV`) names an absolute path: one JSON line a presented frame, appended (every process of a session
+is kept (`Runtime::with_scroll_timing`). They report frame timing when `CUPERTINO_FRAME_TIMING`
+names an absolute path: one JSON line a presented frame, appended (every process of a session
 may share the file), with `pid`, `program`, `renderer` (`cpu` or `gpu`, what the process draws with now), `start` in nanoseconds of `CLOCK_MONOTONIC`, and the nanoseconds of each
 phase: `update`, `view`, `layout`, `paint`, `raster`, `copy` (into the shared buffer), `commit`, and their `total`
 (`Runtime::with_frame_timing`). Without the variable nothing is timed.

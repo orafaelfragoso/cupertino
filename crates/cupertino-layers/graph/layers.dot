@@ -1,5 +1,5 @@
 // cupertino-layers --graph
-// 71 crates, 318 internal dependencies
+// 71 crates, 319 internal dependencies
 // per layer: foundation 5, graphics 2, models 6, system 8, platform 7, protocol 3, transport 2, render 3, ui 8, shellkit 0, core 1, services 4, shell 12, apps 2, tools 6, testing 2
 // forbidden normal edge cupertino-control (shell) -> cupertino-shell-client (transport)
 // forbidden normal edge cupertino-control (shell) -> cupertino-wayland-client (transport)
@@ -214,10 +214,10 @@ digraph "layers" {
   "cupertino-files" -> "cupertino-icons";
   "cupertino-files" -> "cupertino-keyboard";
   "cupertino-files" -> "cupertino-kit";
+  "cupertino-files" -> "cupertino-kit" [label="dev"];
   "cupertino-files" -> "cupertino-menu-model";
   "cupertino-files" -> "cupertino-theme";
   "cupertino-files" -> "cupertino-trash";
-  "cupertino-files" -> "cupertino-ui-test" [label="dev"];
   "cupertino-files" -> "cupertino-ui-text";
   "cupertino-files" -> "cupertino-ui-wayland";
   "cupertino-files" -> "cupertino-wayland-client" [color=red];
@@ -246,7 +246,7 @@ digraph "layers" {
   "cupertino-kit" -> "cupertino-ui-controls";
   "cupertino-kit" -> "cupertino-ui-core";
   "cupertino-kit" -> "cupertino-ui-render";
-  "cupertino-kit" -> "cupertino-ui-test" [label="dev"];
+  "cupertino-kit" -> "cupertino-ui-test";
   "cupertino-kit" -> "cupertino-ui-text";
   "cupertino-kit" -> "cupertino-ui-wayland";
   "cupertino-kit" -> "cupertino-wayland-client" [label="dev"];
@@ -273,13 +273,13 @@ digraph "layers" {
   "cupertino-login" -> "cupertino-icons";
   "cupertino-login" -> "cupertino-keyboard";
   "cupertino-login" -> "cupertino-kit";
+  "cupertino-login" -> "cupertino-kit" [label="dev"];
   "cupertino-login" -> "cupertino-login-ipc";
   "cupertino-login" -> "cupertino-peer";
   "cupertino-login" -> "cupertino-radios";
   "cupertino-login" -> "cupertino-raster-math" [color=red];
   "cupertino-login" -> "cupertino-seat" [color=red];
   "cupertino-login" -> "cupertino-shell-client" [color=red];
-  "cupertino-login" -> "cupertino-ui-test" [label="dev"];
   "cupertino-login" -> "cupertino-ui-wayland";
   "cupertino-login" -> "cupertino-wayland-client" [color=red];
   "cupertino-menu-model" -> "cupertino-keyboard";
@@ -416,6 +416,7 @@ digraph "layers" {
   "cupertino-theme" -> "cupertino-animation";
   "cupertino-theme" -> "cupertino-geometry";
   "cupertino-ui-abi" -> "cupertino-kit";
+  "cupertino-ui-abi" -> "cupertino-ui-core";
   "cupertino-ui-abi" -> "cupertino-ui-test";
   "cupertino-ui-controls" -> "cupertino-geometry";
   "cupertino-ui-controls" -> "cupertino-menu-model";

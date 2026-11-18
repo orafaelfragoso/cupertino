@@ -1123,7 +1123,6 @@ dependencies = [
  "cupertino-menu-model",
  "cupertino-theme",
  "cupertino-trash",
- "cupertino-ui-test",
  "cupertino-ui-text",
  "cupertino-ui-wayland",
  "cupertino-wayland-client",
@@ -1308,7 +1307,6 @@ dependencies = [
  "cupertino-raster-math",
  "cupertino-seat",
  "cupertino-shell-client",
- "cupertino-ui-test",
  "cupertino-ui-wayland",
  "cupertino-wayland-client",
  "gungraun",
@@ -1735,6 +1733,7 @@ name = "cupertino-ui-abi"
 version = "0.1.0"
 dependencies = [
  "cupertino-kit",
+ "cupertino-ui-core",
  "cupertino-ui-test",
  "object",
  "rustix 1.1.6",

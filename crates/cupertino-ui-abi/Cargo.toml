@@ -15,6 +15,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 cupertino-kit = { path = "../cupertino-kit" }
+cupertino-ui-core = { path = "../cupertino-ui-core" }
 cupertino-ui-test = { path = "../cupertino-ui-test" }
 rustix = { version = "1", features = ["event"] }
 

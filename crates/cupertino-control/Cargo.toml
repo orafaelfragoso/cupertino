@@ -6,7 +6,7 @@ license.workspace = true
 description = "The native desktop controller: scoped session consent, input and capture over local Rust IPC"
 
 [package.metadata.cupertino]
-layer = "shell"
+layer = "services"
 
 [dependencies]
 cupertino-control-model = { path = "../cupertino-control-model" }

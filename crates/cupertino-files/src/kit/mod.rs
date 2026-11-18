@@ -3,18 +3,14 @@
 //! runs.
 
 mod announce;
-mod band;
-mod clicks;
 mod columns;
 mod context;
 pub mod desktop;
 mod dragged;
 mod drops;
 mod gallery;
-mod grid;
 mod item_icons;
 mod jobs;
-mod list;
 mod peek;
 mod places;
 mod progress;
@@ -29,10 +25,8 @@ mod toolbar;
 mod transfer;
 mod view;
 
-pub use dragged::Grab;
 pub use drops::Destination;
 pub use jobs::{JobEvent, PROGRESS_WINDOW_DELAY};
-pub use list::RowGrab;
 pub use peek::PeekEvent;
 pub use places::PlacesSource;
 pub use remote::{LookUp, LOOK_UP_DEADLINE, MAX_LOOK_UPS};
@@ -67,22 +61,28 @@ use crate::context_menu::{common_apps, AppChoice, Command as MenuCommand};
 use crate::instance::Service;
 use crate::menu_bar::{self, MenuAction, MenuState};
 use crate::menu_spec::{self, Background, Subject};
-use crate::name_edit::NameEdit;
 use crate::notice::{self, Action, Notices};
-use crate::open::{command_with, default_app_id, open_command, open_with, OpenError};
-use crate::operations::{self, DropAction};
 use crate::places::{removable_holding, Place};
 use crate::preview::Browse;
 use crate::search_field::{self, SearchWidth};
 use crate::settings::ColumnId;
 use crate::tab_strip::{TabId, TabStrip};
-use crate::tags::{self, TagColor};
 use crate::trash::Trash;
 use crate::udisks::{Media, Passphrase, Report, Volumes};
 use crate::window::ViewMode;
 use crate::window_prefs::WindowPrefs;
-use crate::SortSpec;
 use cupertino_icons::thumbnail::Thumbnailer;
+use cupertino_kit::files::entry::{Entry, Kind};
+use cupertino_kit::files::grid::Grab;
+use cupertino_kit::files::list::{row_key, Presses, RowGrab};
+use cupertino_kit::files::name_edit::NameEdit;
+use cupertino_kit::files::open::{
+    command_with, default_app_id, open_command, open_with, OpenError,
+};
+use cupertino_kit::files::operations::{self, DropAction};
+use cupertino_kit::files::sort::SortSpec;
+use cupertino_kit::files::tags::{self, TagColor};
+use cupertino_kit::files::{ColumnEvent, ViewEvent};
 
 /// Identifier of the window for the server, as the desktop entry names it.
 pub const APP_ID: &str = "cupertino-files";
@@ -334,6 +334,44 @@ fn wake_channel() -> (Wake, async_channel::Receiver<()>) {
     (wake, woken)
 }
 
+/// What window `id`'s file views report, as its messages: each event to the window's `Event` for it.
+fn view_events(id: u64) -> Rc<dyn Fn(ViewEvent) -> Option<Message>> {
+    Rc::new(move |event| {
+        let event = match event {
+            ViewEvent::Select(selection) => Event::Select(selection),
+            ViewEvent::Open(index) => Event::Open(index),
+            ViewEvent::SecondaryPress(index) => Event::SecondaryPress(index),
+            ViewEvent::ContextMenu(at) => Event::ContextMenu(at),
+            ViewEvent::DragOut(grab) => Event::DragOut(grab),
+            ViewEvent::DragRows(grab) => Event::DragRows(grab),
+            ViewEvent::Band(band) => Event::Band(band),
+            ViewEvent::Scroll(scroll) => Event::Scroll(scroll),
+            ViewEvent::Rename(index) => Event::RenameItem(index),
+            ViewEvent::FocusRow(index) => Event::FocusRow(index),
+            ViewEvent::Sort(sort) => Event::Sort(sort),
+            ViewEvent::Toggle(toggle) => Event::Toggle(toggle),
+            ViewEvent::Column(ColumnEvent::Scroll(folder, scroll)) => {
+                Event::ColumnScroll(folder, scroll)
+            }
+            ViewEvent::Column(ColumnEvent::Pick {
+                folder,
+                index,
+                secondary,
+            }) => Event::ColumnPick {
+                folder,
+                index,
+                secondary,
+            },
+            ViewEvent::Column(ColumnEvent::Step(by)) => Event::ColumnStep(by),
+            ViewEvent::Column(ColumnEvent::Resize { index, width, all }) => {
+                Event::ColumnResize { index, width, all }
+            }
+            ViewEvent::Column(ColumnEvent::Resized) => Event::ColumnResized,
+        };
+        Some(Message::Window(id, event))
+    })
+}
+
 /// The browser of `folder`, what wakes when its model has changes waiting, and what wakes it: the window's other tabs
 /// wake it too.
 fn open_browser(
@@ -500,7 +538,7 @@ struct BrowserWindow {
     /// The rubber band being drawn over the items, in the view's content.
     band: Option<cupertino_kit::geometry::Rect>,
     /// The presses on the list's rows, which its rows and its frame share.
-    list_presses: list::SharedPresses,
+    list_presses: Presses,
     /// What the window's live region reads last ([`announce`]).
     announcement: announce::Announcement,
     /// The keyboard is on the folder's items.
@@ -1508,7 +1546,7 @@ impl Model {
                 let Some(entry) = window.browser.entries().get(index) else {
                     return Vec::new();
                 };
-                let key = view::row_key(id, &entry.path);
+                let key = row_key(id, &entry.path);
                 let mut alone = Selection::new([], None, None);
                 alone.select_only(index);
                 window.select(&alone, session);
@@ -1793,7 +1831,10 @@ impl Model {
             MenuAction::Back => window.step(Step::Back, session),
             MenuAction::Forward => window.step(Step::Forward, session),
             MenuAction::EnclosingFolder => window.step(Step::Parent, session),
-            MenuAction::Recents => window.go(crate::recents::location().to_path_buf(), session),
+            MenuAction::Recents => window.go(
+                cupertino_kit::files::recents::location().to_path_buf(),
+                session,
+            ),
             MenuAction::Home => window.go(session.home.clone(), session),
             MenuAction::MoveToTrash => window.trash_selection(session),
             MenuAction::PutBack => window.put_back(session),
@@ -1818,7 +1859,7 @@ impl Model {
                 window.browser.collapse_all();
                 window.band = None;
                 // a press or a band of the list ends with it: its nodes go without a release
-                *window.list_presses.borrow_mut() = Default::default();
+                window.list_presses = Presses::default();
                 window.view = view;
                 window.scroll.offset = cupertino_kit::geometry::Point::ZERO;
                 // the gallery shows an item: the first, when none is selected
@@ -2151,7 +2192,7 @@ impl Session {
     }
 
     /// The tags `entries` carry join those the sidebar lists.
-    fn learn_tags(&self, entries: &[crate::Entry]) {
+    fn learn_tags(&self, entries: &[Entry]) {
         let mut known = self.known_tags.borrow_mut();
         for tag in entries.iter().flat_map(|e| &e.tags) {
             if !known.contains(tag) {
@@ -2305,13 +2346,13 @@ impl BrowserWindow {
             look.follow_app(session, &current);
         }
         let (previewed, _) = self.previewed();
-        let previewed: Vec<crate::Entry> = previewed.cloned().collect();
+        let previewed: Vec<Entry> = previewed.cloned().collect();
         self.texts.follow(&previewed, &self.wake);
     }
 
     /// The items previewed: the preview column's file, the gallery's item and the preview window's item, and the side
     /// of their pictures in points.
-    fn previewed(&self) -> (impl Iterator<Item = &crate::Entry>, f64) {
+    fn previewed(&self) -> (impl Iterator<Item = &Entry>, f64) {
         let entries = self.browser.entries();
         let column = (self.view == ViewMode::Columns)
             .then(|| self.columns.chain(&self.browser).preview)
@@ -2421,7 +2462,7 @@ impl BrowserWindow {
         self.peek = None;
         self.tag_editor = None;
         self.share = None;
-        *self.list_presses.borrow_mut() = Default::default();
+        self.list_presses = Presses::default();
         let polled = self.browser.poll();
         for error in polled.errors {
             eprintln!("cupertino-files: {error}");
@@ -2535,7 +2576,8 @@ impl BrowserWindow {
     /// The folder's items can be copied out but not moved: an application's entry in Applications, a file on a
     /// read-only medium.
     fn items_stay(&self, session: &Session) -> bool {
-        self.browser.dir() == crate::applications::location() || self.read_only(session)
+        self.browser.dir() == cupertino_kit::files::applications::location()
+            || self.read_only(session)
     }
 
     fn read_only(&self, session: &Session) -> bool {
@@ -2835,7 +2877,7 @@ impl BrowserWindow {
     /// What the menu of the selection depends on.
     fn subject(&self, in_trash: bool) -> Subject {
         let entries = self.browser.entries();
-        let selected: Vec<&crate::Entry> = self
+        let selected: Vec<&Entry> = self
             .browser
             .selection()
             .indices()
@@ -2849,7 +2891,7 @@ impl BrowserWindow {
             count: selected.len(),
             name: selected.first().map(|e| e.name.clone()).unwrap_or_default(),
             all_folders: selected.iter().all(|e| e.is_dir),
-            single_link: selected.len() == 1 && selected[0].kind == crate::Kind::Symlink,
+            single_link: selected.len() == 1 && selected[0].kind == Kind::Symlink,
             in_trash,
             tags_on,
         }
@@ -2889,7 +2931,7 @@ impl BrowserWindow {
     /// together.
     fn toggle_tag(&self, color: TagColor, session: &Session) {
         let entries = self.browser.entries();
-        let selected: Vec<&crate::Entry> = self
+        let selected: Vec<&Entry> = self
             .browser
             .selection()
             .indices()
@@ -2911,7 +2953,7 @@ impl BrowserWindow {
     /// Take the tag `name` off every selected item when each carries it, else add it to those without it.
     fn toggle_named_tag(&self, name: &str, session: &Session) {
         let entries = self.browser.entries();
-        let selected: Vec<&crate::Entry> = self
+        let selected: Vec<&Entry> = self
             .browser
             .selection()
             .indices()
@@ -3004,7 +3046,7 @@ impl BrowserWindow {
         };
         let key = match self.view {
             ViewMode::Icons | ViewMode::Gallery => view::item_key(id, index),
-            _ => view::row_key(id, path),
+            _ => row_key(id, path),
         };
         vec![Command::Perform(Box::pin(async move {
             Message::Window(id, Event::FocusKey(key))
@@ -3017,7 +3059,7 @@ impl BrowserWindow {
         if !self.browser.entries().iter().any(|e| e.path == path) {
             return Vec::new();
         }
-        let key = view::row_key(id, path);
+        let key = row_key(id, path);
         vec![Command::Perform(Box::pin(async move {
             Message::Window(id, Event::FollowKey(key))
         }))]
@@ -3153,7 +3195,7 @@ impl BrowserWindow {
         MenuState {
             count: selected.len(),
             all_folders: !selected.is_empty() && selected.iter().all(|e| e.is_dir),
-            single_link: matches!(selected.as_slice(), [e] if e.kind == crate::Kind::Symlink),
+            single_link: matches!(selected.as_slice(), [e] if e.kind == Kind::Symlink),
             in_trash: self.browser.dir() == session.trash.home_trash().join("files"),
             path_bar: self.path_bar,
             status_bar: self.status_bar,
@@ -3234,12 +3276,12 @@ fn dropped(
 }
 
 /// Whether `entry` carries the tag `name`.
-fn carries(entry: &crate::Entry, name: &str) -> bool {
+fn carries(entry: &Entry, name: &str) -> bool {
     entry.tags.iter().any(|t| t.eq_ignore_ascii_case(name))
 }
 
 /// Whether `entry` has the tag of `color`.
-fn has_tag(entry: &crate::Entry, color: TagColor) -> bool {
+fn has_tag(entry: &Entry, color: TagColor) -> bool {
     entry
         .tags
         .iter()

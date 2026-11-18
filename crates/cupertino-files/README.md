@@ -1,7 +1,7 @@
 # cupertino-files
 
-File-manager core with no window-system or toolkit dependency, plus the file manager itself: the `cupertino-files`
-binary (feature `app`) runs it as a CupertinoKit application (`kit`). The library implements the data, interaction
+File-manager core on Kit's file family (`cupertino_kit::files`), with or without the `app` feature, plus the file
+manager itself: the `cupertino-files` binary (feature `app`) runs it as a CupertinoKit application (`kit`). The library implements the data, interaction
 logic and layout metrics a native file manager (and a desktop-icon layer) needs.
 
 ## Usage
@@ -11,6 +11,8 @@ cargo run -p cupertino-files --features app -- [--terminal PROGRAM] [FOLDER | fi
 cargo clippy -p cupertino-files --all-targets
 cargo run -p cupertino-files --example files_capture -- files/window --view list   # a window or its sidebar on a sample home folder (`kit::test::capture`)
 cargo run -p cupertino-files --example files_capture -- files/sidebar --devices removable --scale 2   # the sidebar with a mounted, a busy and an unmounted device
+cargo run -p cupertino-files --example files_capture -- files/window --view gallery --state ring   # the view's item ringed under its context menu (also rename, band)
+cargo run -p cupertino-files --example files_capture -- files/desktop   # the desktop's items over a flat fill
 cargo bench -p cupertino-files --bench directory                # 50k entries
 ```
 
@@ -99,9 +101,9 @@ from the window's top edge to its bottom edge, the window control buttons in its
 floating toolbar holds the back / forward group, the folder's name (Kit's `ToolbarTitle`, cut with an ellipsis; in the column view the folder selected in the last column, as the window's title is), the
 view-mode choice (icons, list, columns and gallery), the View menu button, the group of share (disabled),
 Tags (its own drawn tag, as a host symbol theme may have none) and Action (each opens below its button: the view modes, the tags popover of the selection (below), else a menu of
-the tags unavailable, the selection's context menu or the folder's) and the search field, which rests as a round button, over the folder in the icon view (`kit::grid`, laid out by `layout::icon` from a 10 pt leading and 8 pt
+the tags unavailable, the selection's context menu or the folder's) and the search field, which rests as a round button, over the folder in the icon view (`cupertino_kit::files::grid`, laid out by `layout::icon` from a 10 pt leading and 8 pt
 top inset; a name is centred and wraps to two lines, a longer one keeping its first line and cut in the middle of the
-rest with an ellipsis, so its end and extension stay) or the list view (`kit::list`: the toolkit's outline table, Name, Date Modified,
+rest with an ellipsis, so its end and extension stay) or the list view (`cupertino_kit::files::list`: the toolkit's outline table, Name, Date Modified,
 Size, Kind, each cut with an ellipsis in its cell; a type the kind table does not list is described from its MIME
 subtype (`mime::kind_description`), in capitals only when it is an abbreviation of up to four letters and digits, else
 in words with the first capitalised and, in a subtype of several words, each of up to three kept as an abbreviation
@@ -124,7 +126,7 @@ folder, read again whenever the listing changes and after a transfer). Changes o
 the theme's sidebar material where the compositor can draw it, and its opaque fill without desktop effects or under
 Reduce Transparency (Kit's sidebar panel glass).
 
-**Column view** (`columns`, `kit::columns`). The folders from the one the window opened on down to the selection stand
+**Column view** (`columns`, `kit::columns`, drawn by `cupertino_kit::files::columns`). The folders from the one the window opened on down to the selection stand
 side by side in a chain that scrolls sideways, each a list of 22 pt rows with the item's 16 pt icon, its name and a
 chevron on folders; a folder's row stays highlighted in grey (in the accent while its column has the keyboard) and the
 column after it lists it. The chain scrolls to keep its last column whole in view. Up and Down move in the column shown,
@@ -142,7 +144,7 @@ group named "Preview of <name>".
 
 **Gallery** (`kit::gallery`, Primary+4). The item shown is drawn as large as the pane allows (a picture's thumbnail,
 else its icon) with its name under it, over a strip of every item's 64 pt picture in one row that scrolls sideways
-(`layout::icon::strip`, worked by `kit::grid` in its strip mode), and the preview pane of the item at the trailing side,
+(`layout::icon::strip`, worked by `cupertino_kit::files::grid` in its strip mode), and the preview pane of the item at the trailing side,
 250 pt wide, as in the column view. The item shown is the selection's cursor, else the first item selected, else the
 folder's first; switching to the gallery with nothing selected selects the first item. Left and Right move along the
 strip (Shift extends), Home and End go to its ends, Page Up and Page Down by the pictures in view, typed letters select
@@ -177,11 +179,11 @@ in the `user.xdg.tags` extended attribute, a symbolic link's on the item it poin
 attributes on a link), and every listing reads them on its own thread. The sidebar lists under Tags the colours and names in use, and one chosen shows the folder's items
 that carry it.
 
-**Pointer and keyboard in the views.** A press on empty space and a drag draw a rubber band (`kit::band`): the items it
+**Pointer and keyboard in the views.** A press on empty space and a drag draw a rubber band (`cupertino_kit::files::band`): the items it
 touches replace the selection, or toggle against it with Shift or Primary held at the press; near the top or bottom
 edge the view scrolls under the band. In the list a press on a row's blank part (anywhere but its icon and the text of its name) selects the
 row as a click, and draws a band once it moves; a press on the name drags the row. A click on the name of the only selected item edits the name after the
-double-click interval, unless a second click (which opens), a scroll or a key comes first (`kit::clicks`). Ctrl with a
+double-click interval, unless a second click (which opens), a scroll or a key comes first (`cupertino_kit::files::clicks`). Ctrl with a
 press opens the context menu; Tab and Shift+Tab on an item select the next and previous item by name (with nothing
 selected, from the first or last by name, or the one after it when the keyboard is already on it), and past the last or
 before the first item the keyboard goes on to the next or previous control. In the list, Tab on a column header goes to
@@ -259,7 +261,7 @@ removing what was half written and leaving the rest where it was. An item moved 
 record with it; a copy leaves the record with the trashed item. The pasteboard is not the session's clipboard: other
 applications neither see it nor fill it.
 
-**Dragging out.** Both views drag items out of the window (`kit::dragged`, hooked into `kit::grid`'s and `kit::list`'s
+**Dragging out.** Both views drag items out of the window (`kit::dragged`, hooked into `cupertino_kit::files::grid`'s and `cupertino_kit::files::list`'s
 press, motion and release and `kit`'s `Event::DragOut` and `Event::DragRows`): a press on an item that moves 5 pt offers the dragged files as a
 `text/uri-list` (copy or move; the pressed item first, then the rest of the selection in the view's order) and the image
 follows the pointer, which holds it where the press grabbed the cell. One item shows its icon (or thumbnail) and its
@@ -445,40 +447,41 @@ which the dock tile, the switcher and the launcher draw (`cupertino-icons`).
 
 ### Modules and API
 
+The items of a folder, their order, types and tags, the icon layout, renaming, opening, the file operations and the
+views' metrics are Kit's file family (`cupertino_kit::files`, from `cupertino-ui-files`): `entry`, `natural`, `sort`,
+`mime`, `tags`, `applications`, `recents`, `layout::icon`, `rename`, `name_edit`, `open`, `operations`, `item_art`
+and `metrics::{icon_view, list_view, column_view, timing, selection, marquee, drag}`. Files' own modules:
+
 | Module | Role | Main items |
 |---|---|---|
 | `model` | async directory model | `DirectoryModel::open(dir, ModelOptions)`, `poll` / `poll_timeout` → `Vec<ModelDelta>` (`Reloaded`, `LoadComplete`, `Inserted`, `Removed`, `Changed`, `Moved`, `DirectoryGone`), `enumerate_blocking`, `set_sort` |
-| `natural`, `sort`, `group` | name collation (case-, width-insensitive, numeric, localized), ordering, the date buckets dates read in | `NameKey`, `compare_names`, `SortSpec { key, ascending, folders_first }`, `sort_entries`, `insertion_index`, `date_bucket` |
+| `group` | the date buckets dates read in | `date_bucket` |
 | `settings` | per-folder view state | `ViewSettings` (icon / list / column / gallery), `ViewStyle`, `default_columns`, `SettingsStore` (atomic JSON, keyed by device + inode), `FolderKey` |
 | `selection` | selection model | `Selection::{mouse_down, mouse_up, click_empty, move_focus, on_insert, on_remove, on_move}`, `Modifiers` |
-| `rename`, `typeselect`, `spring` | interaction logic | `RenameTrigger`, `validate_name`, `needs_extension_warning`, `initial_selection`, `unique_name`; `TypeSelect::{type_text, tab}`; `SpringLoad::{hover, due, cancel, flashing}` (a drag's dwell over folders, with `SPRING_DELAY` and `SPRING_FLASH`) |
+| `typeselect`, `spring` | interaction logic | `TypeSelect::{type_text, tab}`; `SpringLoad::{hover, due, cancel, flashing}` (a drag's dwell over folders, with `SPRING_DELAY` and `SPRING_FLASH`) |
 | `context_menu`, `menu_spec` | context menus | `menu_spec::{item_menu, background_menu, condense}` (the rows in order), `MenuItem`, `Command`, `common_apps` (the Open With list of a selection) |
 | `menu_bar`, `search_field` | the menu bar and the search field | `menu_bar(MenuState)`, `MenuAction` (`chord`: its keys), `glyphs`, `chords`, `enabled`; `SearchWidth::{want, tick, follow_toolbar, width}`, `open_width` |
-| `name_edit`, `operations` | rename in place and file changes | `NameEdit::{field, field_mut, commit}`; `rename_item` (no replace), `new_folder`, `drop_action`, `drop_into` (move or copy, `name copy` on a clash), `transfer` (the same for a list of items, with `Progress` and a `Cancel`), `duplicate_with` (Duplicate with them), `stopped` |
 | `trash` | freedesktop Trash 1.0 | `Trash::{trash, trash_unsized, list, list_all, list_volumes, trash_dirs, restore, delete, empty, purge_older_than}`, `PendingSize`, `Emptied`, `Look`; home and mount-point trash (Empty Trash takes both: the home trash first, then the volumes that answer; the windows read no volume on their own thread, so whether a volume's trash holds something, for the Empty button and the Trash place's Empty Trash, is what the last look on a thread of its own found), `.trashinfo`, `directorysizes`; `trashed_item`, `forget` (an item moved out of a trash) |
 | `thumbnail` | freedesktop thumbnail cache | `Thumbnailer::{lookup, lookup_at_least, create, get_or_create}`, `ThumbSize::for_icon`, `file_uri`, failure markers |
-| `tags`, `mime` | metadata | `read_tags` / `write_tags` (`user.xdg.tags`), `TagColor` (seven label colours), `parse_reference_tags`; `detect`, `kind_group`, `kind_description` |
-| `open` | opening files | `open_command` (default application of `mimeapps.list` through `cupertino-apps`; `Terminal=true` under `--terminal`), `command_with`, `open_with` (Open With list: default first, rest by name), `OpenError` |
-| `layout::icon` | icon view | `ideal_cell_size`, `max_title_lines`, `layout` (flow / justified, 32 pt section headers), `IconLayout::{hit, hits_in_rect, neighbour}`, `FreeGrid` |
 | `layout::list` | list view | `row_height`, `layout` (columns, rows with level and expanded state, disclosure, indentation), `ListLayout::{row_at, visible_rows}` |
-| `history`, `places`, `recents` | navigation state | `History::{visit, back, forward}`; `standard_places` (the home folder, Applications, Desktop, Documents, Downloads, the computer, Trash), `recents_place`, `folder_icons`, `session_places` (`SessionPlaces`), `computer_name`, `applications_folder`; `recents::{parse_xbel, recent_entries}` (the bookmark file is read with `cupertino_apps::recent`, which `parse_xbel` and `XBEL_NAME` re-export) |
+| `history`, `places` | navigation state | `History::{visit, back, forward}`; `standard_places` (the home folder, Applications, Desktop, Documents, Downloads, the computer, Trash), `recents_place`, `folder_icons`, `session_places` (`SessionPlaces`), `computer_name`, `applications_folder` |
 | `browser` | one window's folder | `Browser::{open, go, back, forward, parent, poll, sort_by, press, release, move_focus, select_all, type_text, activation, outline, expand, collapse, collapse_all, available_space, visit, return_to, is_loading}`: model, history (a `Visit` to go back to, with its selection), the list's outline of expanded folders, selection by path across reloads, nearest-ancestor fallback for a deleted folder |
-| `item_art` | Files' own item images | `Art::{for_icon}` (folder, text, document, archive), `draw(art, px, seed)` (premultiplied RGBA) |
 | `window_prefs` | the view and bars kept between windows | `WindowPrefs::{parse, text, load, save}`, `location`, `column_width` |
-| `columns` | the column view's chain | `ColumnChain::{follow, folders, width, resize, widths}`, `layout` → `ChainLayout` (where each column sits and the scroll that keeps the last whole), `DEFAULT_WIDTH`, `MIN_WIDTH`, `MAX_WIDTH`, `PREVIEW_WIDTH`, `ROW_HEIGHT` |
+| `columns` | the column view's chain | `ColumnChain::{follow, folders, width, resize, widths}`, `layout` → `ChainLayout` (where each column sits and the scroll that keeps the last whole), `DEFAULT_WIDTH`, `MIN_WIDTH`, `MAX_WIDTH`, `PREVIEW_WIDTH` |
 | `preview` | what a preview shows | `kind` → `PreviewKind`, `read_text` / `text_of` (`TEXT_LIMIT`), `summary`, `details`, `Browse` (the items gone through, `step`), `Motion` (the window's open and close, `at` → `MotionFrame`), `WINDOW_SIZE` |
 | `tab_strip` | a window's tabs | `TabStrip::{open, close, select, cycle, move_to, order, active_id}`, `tab_frames`, `drop_place` |
 | `window`, `format` | the window's wording and metrics | `metrics`, `ViewMode`, `path_chain`, `status_text`; `human_size`, `available_size`, `relative_date` |
 | `udisks` (feature `app`) | removable media | `devices` (the listed file systems and locked containers of udisks' managed objects), `Volumes::{watch, poll, mount, unlock, eject}` → `Report`, `Media` (the listed devices and the busy ones), `Passphrase`, `holders`, `notice` (a failure's notification text) |
 | `notice` (feature `app`) | failures as notifications | `failure`, `unopened`, `bad_name`, `finished` (an operation that ended unseen) → `Notice`; `Notices::{start, post, flush}`; `shown`, `escape`, `explained` (an error as a sentence for a window) |
-| `kit` (feature `app`) | the window on CupertinoKit; driven headless through `cupertino_kit::test` | `prepare(Start::open(folder, places, types, recents, notices, applications, terminal))`, with `with_file_icons`, `with_thumbnails`, `with_places_source`, `with_instance` and `with_activation_token`, then `run` or a `TestDriver<Files>`; `grid` (the icon view), `list` (the list view's presses and band), `band` (the rubber band), `clicks` (double-click and click-to-rename), `toolbar` (pop-up buttons, path bar folders), `sidebar` (material, keyboard watch), `places` (live places), `transfer` (the worker of a file operation: `Work` → `Outcome`), `jobs` (the file operations of the process and when the progress window shows; `PROGRESS_WINDOW_DELAY`, `Start::with_progress_delay`), `progress` (the progress window, and the click on a window's row that shows it), `remote` (what the calls of later launches and of the desktop do), `context` (context menus), `search` (the field's slot and "No Results"), `dragged` (drag images), `drops` (drops onto folders, places, the path bar and the folder shown), `spring` (spring-loaded folders and the way back), `item_icons` (items' icons, thumbnails and previews), `columns` (the column view), `gallery` (the gallery), `peek` (the preview window), `tabs` (the tab bar and a tab's parked state), `tag_editor` (the tags popover) |
+| `kit` (feature `app`) | the window on CupertinoKit; driven headless through `cupertino_kit::test` | `prepare(Start::open(folder, places, types, recents, notices, applications, terminal))`, with `with_file_icons`, `with_thumbnails`, `with_places_source`, `with_instance` and `with_activation_token`, then `run` or a `TestDriver<Files>`; `view_events` (the file views' events as the window's), `toolbar` (pop-up buttons, path bar folders), `sidebar` (material, keyboard watch), `places` (live places), `transfer` (the worker of a file operation: `Work` → `Outcome`), `jobs` (the file operations of the process and when the progress window shows; `PROGRESS_WINDOW_DELAY`, `Start::with_progress_delay`), `progress` (the progress window, and the click on a window's row that shows it), `remote` (what the calls of later launches and of the desktop do), `context` (context menus), `search` (the field's slot and "No Results"), `dragged` (drag images), `drops` (drops onto folders, places, the path bar and the folder shown), `spring` (spring-loaded folders and the way back), `item_icons` (items' icons, thumbnails and previews), `columns` (the column view), `gallery` (the gallery), `peek` (the preview window), `tabs` (the tab bar and a tab's parked state), `tag_editor` (the tags popover), `desktop` (the desktop: `run`, and `prepare` for a `TestDriver<Desktop>`) |
 | `thumbnail_service` | thumbnails of the items in view | `ThumbnailService::{new, want, forget, get, queued, memory}`, `Stamp`, `has_thumbnail`, `MEMORY_BUDGET`, `WORKERS` |
 | `instance` (feature `app`) | one process per session | `Service::serve` (the names, `org.freedesktop.Application` and `org.freedesktop.FileManager1`; `take` the waiting `Call`s), `serve_or_forward` → `Launch::{Serve, Forwarded}`, `Target::{of_argument, of_uri, uri, folder}`, `Request`, `Action`, `take_activation_token`, `FORWARD_TIMEOUT`, `BUS_NAME`, `OBJECT_PATH` |
 | `main` (feature `app`) | the binary | arguments, the hand-over to a running Files, the session's places, types, associations and buses, then `kit::run` |
 
 ### Measured defaults
 
-Values live in `metrics.rs`.
+Values live in `metrics.rs`, and the views' (icon, list and column views, timing, selection, band, drag) in
+`cupertino-ui-files`' `metrics.rs`.
 
 | Area | Value |
 |---|---|
@@ -570,5 +573,5 @@ what it builds or the scroll turns.
 * The window does not hear the window states the compositor sets: after the compositor takes a window out of full
   screen, or refuses it, the menu still offers Exit Full Screen, and the next choice asks for the state the window is
   already in.
-* The icon view (`kit::grid`) scrolls back to the top when the view changes, so the selection can be out of sight, and
+* The icon view (`cupertino_kit::files::grid`) scrolls back to the top when the view changes, so the selection can be out of sight, and
   each rebuild lays out every item of the folder.

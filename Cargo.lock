@@ -1108,28 +1108,25 @@ dependencies = [
  "cupertino-assets",
  "cupertino-defaults",
  "cupertino-diagnostic-events",
+ "cupertino-geometry",
  "cupertino-icons",
  "cupertino-keyboard",
  "cupertino-kit",
  "cupertino-menu-model",
  "cupertino-theme",
  "cupertino-trash",
- "cupertino-ui-text",
  "cupertino-ui-wayland",
  "cupertino-wayland-client",
  "libc",
- "mime_guess",
  "notify",
  "percent-encoding",
  "serde",
  "serde_json",
  "tempfile",
  "tiny-skia",
- "tree_magic_mini",
  "wayland-client",
  "wayland-protocols",
  "wayland-protocols-wlr",
- "xattr",
  "zbus",
  "zeroize",
 ]
@@ -1230,6 +1227,7 @@ dependencies = [
  "cupertino-theme",
  "cupertino-ui-controls",
  "cupertino-ui-core",
+ "cupertino-ui-files",
  "cupertino-ui-render",
  "cupertino-ui-test",
  "cupertino-ui-text",
@@ -1762,6 +1760,27 @@ dependencies = [
  "gungraun",
  "rustix 1.1.6",
  "tracing",
+]
+
+[[package]]
+name = "cupertino-ui-files"
+version = "0.1.0"
+dependencies = [
+ "cupertino-apps",
+ "cupertino-assets",
+ "cupertino-geometry",
+ "cupertino-theme",
+ "cupertino-trash",
+ "cupertino-ui-controls",
+ "cupertino-ui-core",
+ "cupertino-ui-render",
+ "cupertino-ui-test",
+ "cupertino-ui-text",
+ "libc",
+ "mime_guess",
+ "serde",
+ "tree_magic_mini",
+ "xattr",
 ]
 
 [[package]]

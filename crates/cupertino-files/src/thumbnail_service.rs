@@ -17,8 +17,8 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::SystemTime;
 
-use crate::Entry;
 use cupertino_icons::thumbnail::{Pixels, ThumbError, ThumbSize, Thumbnailer};
+use cupertino_kit::files::entry::Entry;
 
 /// The types whose thumbnails are made: the formats the thumbnail cache decodes.
 pub const THUMBNAIL_TYPES: [&str; 3] = ["image/png", "image/jpeg", "image/webp"];

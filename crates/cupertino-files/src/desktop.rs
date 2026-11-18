@@ -14,9 +14,10 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Map, Value};
 
-use crate::geom::{Direction, Point, Rect};
 use crate::metrics::desktop as m;
-use crate::sort::SortKey;
+use cupertino_geometry::{Insets, Point, Rect};
+use cupertino_kit::files::geom::Direction;
+use cupertino_kit::files::sort::SortKey;
 
 /// A cell of the grid: `column` 0 is the rightmost, `row` 0 the top one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -126,16 +127,16 @@ pub struct ItemFrames {
 pub fn item_frames(cell: Rect) -> ItemFrames {
     let side = m::ICON_SIZE + 2.0 * m::BACKDROP_PAD;
     let backdrop = Rect::new(
-        cell.x + (cell.w - side) / 2.0,
-        cell.y + m::ICON_TOP,
+        cell.x() + (cell.width() - side) / 2.0,
+        cell.y() + m::ICON_TOP,
         side,
         side,
     );
     ItemFrames {
         backdrop,
-        icon: backdrop.inset(m::BACKDROP_PAD, m::BACKDROP_PAD),
-        label_top: backdrop.bottom() + m::LABEL_GAP,
-        label_center: cell.x + cell.w / 2.0,
+        icon: backdrop.inset(Insets::symmetric(m::BACKDROP_PAD, m::BACKDROP_PAD)),
+        label_top: backdrop.max_y() + m::LABEL_GAP,
+        label_center: cell.x() + cell.width() / 2.0,
     }
 }
 

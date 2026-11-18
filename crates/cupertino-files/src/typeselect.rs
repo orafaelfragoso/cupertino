@@ -11,8 +11,8 @@
 //! * Tab / Shift-Tab move to the next / previous item in display order (derived from
 //!   `FindMatchPreviousNext`).
 
-use crate::metrics::timing::TYPE_SELECT_MIN_TIMEOUT;
-use crate::natural::type_select_key;
+use cupertino_kit::files::metrics::timing::TYPE_SELECT_MIN_TIMEOUT;
+use cupertino_kit::files::natural::type_select_key;
 
 #[derive(Clone, Debug)]
 pub struct TypeSelect {

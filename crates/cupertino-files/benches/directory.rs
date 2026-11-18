@@ -2,11 +2,11 @@
 //!
 //! `cargo bench -p cupertino-files --bench directory`
 
-use cupertino_files::entry::Entry;
-use cupertino_files::layout::icon::{self, FontMetrics, IconParams, SectionSpec};
 use cupertino_files::model::{enumerate_blocking, DirectoryModel, ModelOptions};
-use cupertino_files::natural::NameKey;
-use cupertino_files::sort::{sort_entries, SortKey, SortSpec};
+use cupertino_kit::files::entry::Entry;
+use cupertino_kit::files::layout::icon::{self, FontMetrics, IconParams, SectionSpec};
+use cupertino_kit::files::natural::NameKey;
+use cupertino_kit::files::sort::{sort_entries, SortKey, SortSpec};
 use std::hint::black_box;
 use std::time::Instant;
 
@@ -79,12 +79,12 @@ fn main() {
     });
     println!(
         "    columns {} cell {}x{} content height {:.0}",
-        l.columns, l.cell.w, l.cell.h, l.content.h
+        l.columns, l.cell.width, l.cell.height, l.content.height
     );
     time("1000 rubber-band hit queries over 50k cells", || {
         let mut n = 0;
         for i in 0..1000 {
-            let r = cupertino_files::Rect::new(i as f64, i as f64 * 20.0, 300.0, 200.0);
+            let r = cupertino_geometry::Rect::new(i as f64, i as f64 * 20.0, 300.0, 200.0);
             n += l.hits_in_rect(&r).len();
         }
         n

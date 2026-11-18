@@ -20,9 +20,9 @@ use cupertino_kit::platform::{DropAction as Offered, Mods};
 use cupertino_kit::prelude::*;
 use percent_encoding::percent_decode_str;
 
-use super::{view, BrowserWindow, Event, Message, Session};
-use crate::operations::{self, DropAction};
+use super::{BrowserWindow, Event, Message, Session};
 use crate::places::PlaceKind;
+use cupertino_kit::files::operations::{self, DropAction};
 
 /// The type dropped files are read in.
 pub(super) const URI_LIST: &str = "text/uri-list";
@@ -71,7 +71,7 @@ pub(super) fn folder(
             .entries()
             .iter()
             .enumerate()
-            .map(|(i, e)| (view::row_key(id, &e.path), i as u64))
+            .map(|(i, e)| (cupertino_kit::files::list::row_key(id, &e.path), i as u64))
             .chain(
                 columns
                     .into_iter()
@@ -143,7 +143,7 @@ fn item_under(keys: &[Key], rows: &HashMap<Key, u64>) -> Option<(Key, u64)> {
         .find_map(|key| Some((key.clone(), *rows.get(key)?)));
     row.or_else(|| {
         keys.iter()
-            .find_map(|key| Some((key.clone(), super::grid::cell_index(key)?)))
+            .find_map(|key| Some((key.clone(), cupertino_kit::files::grid::cell_index(key)?)))
     })
 }
 
@@ -249,8 +249,9 @@ fn shown(session: &Session, dir: &Path) -> Option<Destination> {
     if dir == session.trash.home_trash().join("files") {
         return Some(Destination::Trash);
     }
-    (dir != crate::recents::location() && dir != crate::applications::location())
-        .then(|| Destination::Folder(dir.to_path_buf()))
+    (dir != cupertino_kit::files::recents::location()
+        && dir != cupertino_kit::files::applications::location())
+    .then(|| Destination::Folder(dir.to_path_buf()))
 }
 
 /// The place a drag over `to` lands on, and the action it shows: none on one of this application's dragged folders,

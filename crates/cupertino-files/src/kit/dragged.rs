@@ -18,9 +18,10 @@ use cupertino_kit::prelude::Command;
 use cupertino_kit::text::{AttributedText, TextStyle};
 use percent_encoding::{percent_encode, AsciiSet, NON_ALPHANUMERIC};
 
-use super::list::RowGrab;
-use super::{grid, Event as WindowEvent, Message};
-use crate::Entry;
+use super::{Event as WindowEvent, Message};
+use cupertino_kit::files::entry::Entry;
+use cupertino_kit::files::grid::{self, Grab};
+use cupertino_kit::files::list::RowGrab;
 
 /// How opaque the image of dragged items is: the folder under the pointer shows through it.
 pub(super) const OPACITY: f32 = 0.8;
@@ -38,28 +39,6 @@ const ROW_GAP: f64 = 6.0;
 const ROW_TEXT_SIZE: f32 = 13.0;
 /// The type the dragged files are offered in.
 const URI_LIST: &str = "text/uri-list";
-
-/// A press in the icon grid that moved far enough to drag: what is dragged and how its cell is laid out, so the image
-/// shows the pressed item as the grid does.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Grab {
-    /// The dragged items, the pressed one first.
-    pub indices: Vec<usize>,
-    /// The pressed item's name, and the renditions of each dragged item's icon or thumbnail in the order of `indices`.
-    pub name: String,
-    pub icons: Vec<Vec<ImageSource>>,
-    /// Where the press was, from the top left corner of the pressed item's cell, in points.
-    pub offset: Point,
-    /// The window reads right to left: the image's parts are placed from its right edge.
-    pub rtl: bool,
-    /// The cell: its size, the room above its icon, the icon's side, the gap to the name, the name's box and size.
-    pub cell: Size,
-    pub icon_top: f64,
-    pub icon_size: f64,
-    pub gap: f64,
-    pub label: Size,
-    pub text_size: f64,
-}
 
 /// The drag of `grab`'s items of `entries` out of window `id`.
 pub(super) fn start(

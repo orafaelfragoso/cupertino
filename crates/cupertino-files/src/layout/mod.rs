@@ -1,4 +1,3 @@
-//! Layout engines of the icon and list views.
+//! Layout engine of the list view.
 
-pub mod icon;
 pub mod list;

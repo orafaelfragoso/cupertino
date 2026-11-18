@@ -3,38 +3,39 @@
 //! the focus to the cursor's cell, which the runtime scrolls into view. Arrows go to the nearest cell that way
 //! ([`IconLayout::neighbour`], mirrored in right-to-left layouts), Page Up and Page Down by the rows in view, Home and
 //! End to the first and last item, Return opens, typing selects by name, and Tab and Shift+Tab select the next and the
-//! previous item by name, and past the last (or before the first) move the keyboard on to the next control. A press on empty space draws a rubber band ([`super::band`]); a double click opens an item, a
-//! press on the name of the only selected item renames it after the double-click interval ([`super::clicks`]), and a
-//! press with Ctrl held opens the context menu. Read as a list of items.
+//! previous item by name, and past the last (or before the first) move the keyboard on to the next control. A press on empty space draws a rubber band ([`crate::band`]); a double click opens an item, a
+//! press on the name of the only selected item renames it after the double-click interval ([`crate::clicks`]), and a
+//! press with Ctrl held opens the context menu. Read as a list of items. It reports through [`ViewEvent`].
 
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 
-use cupertino_kit::controls::{Image, ImageFit, ImageSource, Selection, Text, TextRole};
-use cupertino_kit::core::{
-    AccessibleStates, Action, Change, Element, Environment, Event, EventCx, FocusTarget, IdleCx,
-    Key, MeasureCx, PaintCx, Phase, Propagation, Role, SemanticsCx, Widget,
-};
-use cupertino_kit::geometry::{Insets, Point, Rect, Size};
-use cupertino_kit::layout::{
+use cupertino_geometry::{Insets, Point, Rect, Size};
+use cupertino_theme::ui::{Color, ColorRole, InteractionVariant, StateVariant, TypeRole};
+use cupertino_ui_controls::{Image, ImageFit, ImageSource, Selection, Text, TextRole};
+use cupertino_ui_core::layout::{
     Align, Axis, Constraints, ContainerKind, Justify, LayoutDirection, LayoutSpec, Measured,
     Overflow, ScrollState, SizeSpec,
 };
-use cupertino_kit::platform::{KeyEvent, Keysym, Mods, MouseButton, PointerEvent, Timestamp};
-use cupertino_kit::render::{Paint, PaintOp, Shape};
-use cupertino_kit::text::{
+use cupertino_ui_core::platform::{KeyEvent, Keysym, Mods, MouseButton, PointerEvent, Timestamp};
+use cupertino_ui_core::{
+    AccessibleStates, Action, Change, Element, Environment, Event, EventCx, FocusTarget, IdleCx,
+    Key, MeasureCx, PaintCx, Phase, Propagation, Role, SemanticsCx, Widget,
+};
+use cupertino_ui_render::{Paint, PaintOp, Shape};
+use cupertino_ui_text::{
     AttributedText, FontWeight, ParagraphLayout, ParagraphStyle, TextAlign, TextStyle, TextSystem,
     Wrap,
 };
-use cupertino_kit::theme::{Color, ColorRole, InteractionVariant, StateVariant, TypeRole};
 
-use super::band::{self, Band};
-use super::clicks::Clicks;
-use super::dragged::Grab;
-use super::{Event as WindowEvent, Message};
-use crate::geom::{self, Direction};
-use crate::layout::icon::{IconLayout, IconParams};
+use crate::band::{self, Band};
+use crate::clicks::Clicks;
+use crate::entry::Entry;
+use crate::geom::Direction;
+use crate::layout::icon::{IconCell, IconLayout, IconParams};
 use crate::metrics::{drag, selection as sel};
+use crate::natural::compare_names;
+use crate::ViewEvent;
 
 const RETURN: Keysym = Keysym(0xff0d);
 const KP_ENTER: Keysym = Keysym(0xff8d);
@@ -106,7 +107,7 @@ pub(super) fn by_name<S: AsRef<str>>(
     back: bool,
 ) -> Option<usize> {
     let mut order: Vec<usize> = (0..names.len()).collect();
-    order.sort_by(|&a, &b| crate::natural::compare_names(names[a].as_ref(), names[b].as_ref()));
+    order.sort_by(|&a, &b| compare_names(names[a].as_ref(), names[b].as_ref()));
     let at = from.and_then(|f| order.iter().position(|&i| i == f));
     let next = match (at, back) {
         (None, false) => 0,
@@ -119,7 +120,7 @@ pub(super) fn by_name<S: AsRef<str>>(
 
 /// The key of item `index`'s cell in the grid of window `id`: one per window, as focus goes to the first window holding
 /// the key.
-pub(super) fn cell_key(id: u64, index: usize) -> Key {
+pub fn cell_key(id: u64, index: usize) -> Key {
     Key::from(format!("icon/{id}/{index}"))
 }
 
@@ -144,7 +145,7 @@ fn cell_mark(revision: u64, index: usize, state: [bool; 3], frames: [Rect; 3], s
 }
 
 /// The index of the item whose cell [`cell_key`] keyed `key`.
-pub(super) fn cell_index(key: &Key) -> Option<u64> {
+pub fn cell_index(key: &Key) -> Option<u64> {
     let Key::Str(key) = key else {
         return None;
     };
@@ -154,18 +155,40 @@ pub(super) fn cell_index(key: &Key) -> Option<u64> {
 
 /// The renditions of an item's icon or thumbnail, made only for the items a grid builds or drags: a folder of thousands
 /// of items makes a few hundred icons a view, not one for each item.
-pub(super) type ItemIcon = Rc<dyn Fn(&crate::Entry) -> Vec<ImageSource>>;
+pub type ItemIcon = Rc<dyn Fn(&Entry) -> Vec<ImageSource>>;
+
+/// A press in the icon grid that moved far enough to drag: what is dragged and how its cell is laid out, so the image
+/// shows the pressed item as the grid does.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Grab {
+    /// The dragged items, the pressed one first.
+    pub indices: Vec<usize>,
+    /// The pressed item's name, and the renditions of each dragged item's icon or thumbnail in the order of `indices`.
+    pub name: String,
+    pub icons: Vec<Vec<ImageSource>>,
+    /// Where the press was, from the top left corner of the pressed item's cell, in points.
+    pub offset: Point,
+    /// The window reads right to left: the image's parts are placed from its right edge.
+    pub rtl: bool,
+    /// The cell: its size, the room above its icon, the icon's side, the gap to the name, the name's box and size.
+    pub cell: Size,
+    pub icon_top: f64,
+    pub icon_size: f64,
+    pub gap: f64,
+    pub label: Size,
+    pub text_size: f64,
+}
 
 /// The content of the grid's scroll view: as tall as every cell, holding the cells that are built.
-pub(super) struct IconGrid {
-    /// The id of the window the grid's messages are for.
+pub struct IconGrid<M> {
+    /// Tells the grid's keys from those of the program's other windows.
     pub window: u64,
     /// The accessible name.
     pub label: String,
     pub layout: Rc<IconLayout>,
     pub params: IconParams,
     /// The items, in the layout's order, and how each one's icon is made.
-    pub items: Rc<[crate::Entry]>,
+    pub items: Rc<[Entry]>,
     pub icon: ItemIcon,
     pub scroll: ScrollState,
     pub selection: Selection,
@@ -177,7 +200,7 @@ pub(super) struct IconGrid {
     /// which the grid scrolls under.
     pub lead: f64,
     /// What sits under item `index`'s icon, given as `(index, selected)`: its [`name`], or the field it is renamed in.
-    pub name: Rc<dyn Fn(usize, bool) -> Element<Message>>,
+    pub name: Rc<dyn Fn(usize, bool) -> Element<M>>,
     /// How `name` shapes an item's name, for the names past the cells built, which the grid shapes in the window's
     /// idle time so the frame that builds their cells finds them shaped; `None` where the cells show no names.
     pub names: Option<NameShape>,
@@ -187,12 +210,14 @@ pub(super) struct IconGrid {
     /// One row scrolled sideways ([`crate::layout::icon::strip`]), as wide as its cells and as tall as the view: a page
     /// is the pictures in view, and a press between them draws no band.
     pub strip: bool,
+    /// The program's message for each event the grid reports, or none.
+    pub on_event: Rc<dyn Fn(ViewEvent) -> Option<M>>,
 }
 
 /// The node state of the grid: what was typed to select, and when that search ends; the press that may become a drag,
 /// the band being drawn and what the presses mean.
 #[derive(Default)]
-pub(super) struct TypeSelect {
+pub struct TypeSelect {
     typed: String,
     typed_until: Option<Timestamp>,
     press: Option<Press>,
@@ -211,7 +236,7 @@ struct Walk {
     band: (f64, f64),
     back: bool,
     layout: Weak<IconLayout>,
-    items: Weak<[crate::Entry]>,
+    items: Weak<[Entry]>,
     revision: u64,
     names: NameShape,
     scale: f64,
@@ -224,7 +249,7 @@ struct Walk {
 impl Walk {
     /// The walk of `grid`'s names past its band toward the start when `back`, shaped as `names` says in `env`, none of
     /// them shaped yet.
-    fn of(grid: &IconGrid, back: bool, names: NameShape, env: &Environment) -> Walk {
+    fn of<M: 'static>(grid: &IconGrid<M>, back: bool, names: NameShape, env: &Environment) -> Walk {
         Walk {
             band: grid.band(),
             back,
@@ -256,7 +281,7 @@ impl Walk {
 
 /// How a grid's names are shaped: in the view's text size, keeping at most `max_lines` lines ([`name`]).
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct NameShape {
+pub struct NameShape {
     pub text_size: f64,
     pub max_lines: u32,
 }
@@ -273,11 +298,7 @@ struct Press {
 }
 
 /// What an assistive Click on item `index` reports: the item selected alone, unless it already is.
-type Pick = Rc<dyn Fn(usize) -> Option<Message>>;
-
-fn rect(r: geom::Rect) -> Rect {
-    Rect::new(r.x, r.y, r.w, r.h)
-}
+type Pick<M> = Rc<dyn Fn(usize) -> Option<M>>;
 
 fn no_measure() -> Measured {
     Measured {
@@ -294,7 +315,14 @@ fn selected_variant(window_active: bool) -> StateVariant {
     }
 }
 
-impl IconGrid {
+impl<M: 'static> IconGrid<M> {
+    /// Hand `event` to the program, as its message if it has one for it.
+    fn emit(&self, event: ViewEvent, cx: &mut EventCx<'_, M>) {
+        if let Some(message) = (self.on_event)(event) {
+            cx.emit(message);
+        }
+    }
+
     fn count(&self) -> usize {
         self.layout.cells.len()
     }
@@ -310,10 +338,10 @@ impl IconGrid {
             let first = match self.strip {
                 true => cells
                     .iter()
-                    .position(|c| c.frame.x + c.frame.w > self.scroll.offset.x),
+                    .position(|c| c.frame.x() + c.frame.width() > self.scroll.offset.x),
                 false => cells
                     .iter()
-                    .position(|c| c.frame.y + c.frame.h > self.scroll.offset.y),
+                    .position(|c| c.frame.y() + c.frame.height() > self.scroll.offset.y),
             };
             first.or(cells.len().checked_sub(1))
         })
@@ -324,12 +352,12 @@ impl IconGrid {
         let (room, pitch, per) = match self.strip {
             true => (
                 self.scroll.viewport.width,
-                self.layout.cell.w + self.layout.spacing.0,
+                self.layout.cell.width + self.layout.spacing.0,
                 1,
             ),
             false => (
                 self.scroll.viewport.height - self.lead,
-                self.layout.cell.h + self.layout.spacing.1,
+                self.layout.cell.height + self.layout.spacing.1,
                 self.layout.columns,
             ),
         };
@@ -339,15 +367,15 @@ impl IconGrid {
     /// The cells to build, in order: those near the viewport and the keyboard's.
     fn built(&self) -> Vec<usize> {
         let at = self.at();
-        let near: Box<dyn Fn(&crate::layout::icon::IconCell) -> bool> = match self.strip {
+        let near: Box<dyn Fn(&IconCell) -> bool> = match self.strip {
             true => {
                 let left = self.scroll.offset.x - OVERSCAN;
                 let right = self.scroll.offset.x + self.scroll.viewport.width + OVERSCAN;
-                Box::new(move |c| c.frame.x + c.frame.w >= left && c.frame.x <= right)
+                Box::new(move |c| c.frame.x() + c.frame.width() >= left && c.frame.x() <= right)
             }
             false => {
                 let (top, bottom) = self.band();
-                Box::new(move |c| c.frame.y + c.frame.h >= top && c.frame.y <= bottom)
+                Box::new(move |c| c.frame.y() + c.frame.height() >= top && c.frame.y() <= bottom)
             }
         };
         self.layout
@@ -371,8 +399,11 @@ impl IconGrid {
         let (top, bottom) = self.band();
         let cells = &self.layout.cells;
         (
-            cells.iter().filter(|c| c.frame.y + c.frame.h < top).count(),
-            cells.iter().filter(|c| c.frame.y <= bottom).count(),
+            cells
+                .iter()
+                .filter(|c| c.frame.y() + c.frame.height() < top)
+                .count(),
+            cells.iter().filter(|c| c.frame.y() <= bottom).count(),
         )
     }
 
@@ -385,14 +416,17 @@ impl IconGrid {
             cells
                 .iter()
                 .rev()
-                .filter(|c| c.frame.y + c.frame.h < top && c.frame.y + c.frame.h >= top - AHEAD)
+                .filter(|c| {
+                    c.frame.y() + c.frame.height() < top
+                        && c.frame.y() + c.frame.height() >= top - AHEAD
+                })
                 .take(AHEAD_NAMES)
                 .map(|c| c.index)
                 .collect()
         } else {
             cells
                 .iter()
-                .filter(|c| c.frame.y > bottom && c.frame.y <= bottom + AHEAD)
+                .filter(|c| c.frame.y() > bottom && c.frame.y() <= bottom + AHEAD)
                 .take(AHEAD_NAMES)
                 .map(|c| c.index)
                 .collect()
@@ -401,26 +435,23 @@ impl IconGrid {
     }
 
     /// `position` in the window as a point of the layout, which is laid out left to right.
-    fn layout_point(&self, position: Point, cx: &EventCx<'_, Message>) -> Option<geom::Point> {
+    fn layout_point(&self, position: Point, cx: &EventCx<'_, M>) -> Option<Point> {
         let bounds = cx.bounds()?;
         let x = position.x - bounds.min_x();
         let x = match cx.env().direction {
             LayoutDirection::Ltr => x,
             LayoutDirection::Rtl => bounds.size.width - x,
         };
-        Some(geom::Point {
-            x,
-            y: position.y - bounds.min_y(),
-        })
+        Some(Point::new(x, position.y - bounds.min_y()))
     }
 
     /// The item whose icon or name is under a pointer at `position`, in window coordinates.
-    fn index_at(&self, position: Point, cx: &EventCx<'_, Message>) -> Option<usize> {
+    fn index_at(&self, position: Point, cx: &EventCx<'_, M>) -> Option<usize> {
         self.layout.hit(self.layout_point(position, cx)?)
     }
 
     /// Whether `position` in the window is on the name of item `index`.
-    fn on_name(&self, index: usize, position: Point, cx: &EventCx<'_, Message>) -> bool {
+    fn on_name(&self, index: usize, position: Point, cx: &EventCx<'_, M>) -> bool {
         let (Some(at), Some(cell)) = (
             self.layout_point(position, cx),
             self.layout.cells.get(index),
@@ -431,7 +462,7 @@ impl IconGrid {
     }
 
     /// The part of the grid the scroll view shows below the toolbar row, in the window.
-    fn shown(&self, cx: &EventCx<'_, Message>) -> Option<Rect> {
+    fn shown(&self, cx: &EventCx<'_, M>) -> Option<Rect> {
         let bounds = cx.bounds()?;
         let viewport = self.scroll.viewport;
         Some(Rect::new(
@@ -444,7 +475,7 @@ impl IconGrid {
 
     /// Show `band` and select what it touches: the items whose icon or name it meets. The window hears of the band
     /// before its selection, so it holds the selection's count until the band is let go.
-    fn draw_band(&self, band: &Band, cx: &mut EventCx<'_, Message>) {
+    fn draw_band(&self, band: &Band, cx: &mut EventCx<'_, M>) {
         let Some(bounds) = cx.bounds() else {
             return;
         };
@@ -455,33 +486,32 @@ impl IconGrid {
         } else {
             rect.min_x()
         };
-        let hits = self.layout.hits_in_rect(&geom::Rect {
-            x,
-            y: rect.min_y(),
-            w: rect.width(),
-            h: rect.height(),
-        });
-        cx.emit(Message::Window(self.window, WindowEvent::Band(Some(rect))));
+        let hits =
+            self.layout
+                .hits_in_rect(&Rect::new(x, rect.min_y(), rect.width(), rect.height()));
+        self.emit(ViewEvent::Band(Some(rect)), cx);
         self.select(band.select(&hits), cx);
     }
 
-    fn pick(&self) -> Pick {
-        let (window, selection) = (self.window, self.selection.clone());
+    fn pick(&self) -> Pick<M> {
+        let (on_event, selection) = (Rc::clone(&self.on_event), self.selection.clone());
         Rc::new(move |index| {
             let mut next = selection.clone();
             next.select_only(index);
-            (next != selection).then_some(Message::Window(window, WindowEvent::Select(next)))
+            (next != selection)
+                .then(|| on_event(ViewEvent::Select(next)))
+                .flatten()
         })
     }
 
-    fn select(&self, next: Selection, cx: &mut EventCx<'_, Message>) {
+    fn select(&self, next: Selection, cx: &mut EventCx<'_, M>) {
         if next != self.selection {
-            cx.emit(Message::Window(self.window, WindowEvent::Select(next)));
+            self.emit(ViewEvent::Select(next), cx);
         }
     }
 
     /// Moves the cursor to `index`, selecting it alone or extending to it, and the focus with it.
-    fn move_to(&self, index: usize, extend: bool, cx: &mut EventCx<'_, Message>) {
+    fn move_to(&self, index: usize, extend: bool, cx: &mut EventCx<'_, M>) {
         let mut next = self.selection.clone();
         if extend {
             next.extend_to(index);
@@ -492,12 +522,7 @@ impl IconGrid {
         cx.focus_item(FocusTarget::Key(cell_key(self.window, index)));
     }
 
-    fn key(
-        &self,
-        state: &mut TypeSelect,
-        key: &KeyEvent,
-        cx: &mut EventCx<'_, Message>,
-    ) -> Propagation {
+    fn key(&self, state: &mut TypeSelect, key: &KeyEvent, cx: &mut EventCx<'_, M>) -> Propagation {
         let Some(at) = self.at() else {
             return Propagation::Continue;
         };
@@ -540,7 +565,7 @@ impl IconGrid {
             RETURN | KP_ENTER if plain => {
                 return match self.cursor() {
                     Some(c) => {
-                        cx.emit(Message::Window(self.window, WindowEvent::Open(c)));
+                        self.emit(ViewEvent::Open(c), cx);
                         Propagation::Stop
                     }
                     None => Propagation::Continue,
@@ -558,14 +583,10 @@ impl IconGrid {
     }
 
     /// What a drag of `press` carries, and how the pressed item's cell is laid out for its image.
-    fn grab(&self, press: &Press, cx: &EventCx<'_, Message>) -> Option<Grab> {
+    fn grab(&self, press: &Press, cx: &EventCx<'_, M>) -> Option<Grab> {
         let bounds = cx.bounds()?;
         let cell = self.layout.cells.get(press.index)?;
-        let (frame, icon, label) = (
-            rect(cell.frame),
-            rect(cell.icon_frame),
-            rect(cell.label_frame),
-        );
+        let (frame, icon, label) = (cell.frame, cell.icon_frame, cell.label_frame);
         // the folder may have changed under a held press
         if press.dragged.iter().any(|&i| i >= self.items.len()) {
             return None;
@@ -604,7 +625,7 @@ impl IconGrid {
         &self,
         state: &mut TypeSelect,
         key: &KeyEvent,
-        cx: &mut EventCx<'_, Message>,
+        cx: &mut EventCx<'_, M>,
     ) -> Propagation {
         let Some(c) = key.text else {
             return Propagation::Continue;
@@ -634,14 +655,14 @@ impl IconGrid {
     }
 }
 
-impl Widget<Message> for IconGrid {
+impl<M: 'static> Widget<M> for IconGrid<M> {
     type State = TypeSelect;
 
     fn layout(&self) -> LayoutSpec {
         if self.strip {
             return LayoutSpec {
-                width: SizeSpec::Fixed(self.layout.content.w.max(self.scroll.viewport.width)),
-                height: SizeSpec::Fixed(self.layout.content.h),
+                width: SizeSpec::Fixed(self.layout.content.width.max(self.scroll.viewport.width)),
+                height: SizeSpec::Fixed(self.layout.content.height),
                 ..LayoutSpec::new(ContainerKind::Absolute)
             };
         }
@@ -651,17 +672,17 @@ impl Widget<Message> for IconGrid {
             height: SizeSpec::Fixed(
                 self.layout
                     .content
-                    .h
+                    .height
                     .max(self.scroll.viewport.height - self.lead),
             ),
             ..LayoutSpec::new(ContainerKind::Absolute)
         }
     }
 
-    fn take_children(&mut self) -> Vec<Element<Message>> {
+    fn take_children(&mut self) -> Vec<Element<M>> {
         let at = self.at();
         let pick = self.pick();
-        let side = self.params.icon_box().w;
+        let side = self.params.icon_box().width;
         let icon_size = self.params.icon_size;
         let band = self.band.map(band::view);
         self.built()
@@ -671,9 +692,9 @@ impl Widget<Message> for IconGrid {
                 let selected = self.selection.contains(index);
                 let ringed = self.ringed.contains(index);
                 let stop = at == Some(index);
-                let frame = rect(cell.frame);
-                let icon = rect(cell.icon_frame);
-                let label = rect(cell.label_frame);
+                let frame = cell.frame;
+                let icon = cell.icon_frame;
+                let label = cell.label_frame;
                 let mark = cell_mark(
                     self.revision,
                     index,
@@ -754,12 +775,7 @@ impl Widget<Message> for IconGrid {
         no_measure()
     }
 
-    fn event(
-        &self,
-        state: &mut TypeSelect,
-        event: &Event,
-        cx: &mut EventCx<'_, Message>,
-    ) -> Propagation {
+    fn event(&self, state: &mut TypeSelect, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
         if cx.phase() == Phase::Capture {
             return Propagation::Continue;
         }
@@ -779,19 +795,10 @@ impl Widget<Message> for IconGrid {
                     state.clicks.cancel();
                     let index = self.index_at(position, cx);
                     if index.is_some() {
-                        cx.emit(Message::Window(
-                            self.window,
-                            WindowEvent::SecondaryPress(index),
-                        ));
+                        self.emit(ViewEvent::SecondaryPress(index), cx);
                     }
-                    cx.emit(Message::Window(
-                        self.window,
-                        WindowEvent::SecondaryPress(None),
-                    ));
-                    cx.emit(Message::Window(
-                        self.window,
-                        WindowEvent::ContextMenu(position),
-                    ));
+                    self.emit(ViewEvent::SecondaryPress(None), cx);
+                    self.emit(ViewEvent::ContextMenu(position), cx);
                     return Propagation::Stop;
                 }
                 let mut next = self.selection.clone();
@@ -817,7 +824,7 @@ impl Widget<Message> for IconGrid {
                 let on_name = self.on_name(pressed, position, cx);
                 let plain = !mods.contains(Mods::SHIFT) && !mods.contains(Mods::PRIMARY);
                 if state.clicks.press(pressed, on_name, sole, plain, cx.now()) {
-                    cx.emit(Message::Window(self.window, WindowEvent::Open(pressed)));
+                    self.emit(ViewEvent::Open(pressed), cx);
                     return Propagation::Stop;
                 }
                 state.clicks.arm(cx);
@@ -861,10 +868,7 @@ impl Widget<Message> for IconGrid {
                 _,
             ) => {
                 if let Some(index) = self.index_at(position, cx) {
-                    cx.emit(Message::Window(
-                        self.window,
-                        WindowEvent::SecondaryPress(Some(index)),
-                    ));
+                    self.emit(ViewEvent::SecondaryPress(Some(index)), cx);
                 }
                 Propagation::Continue
             }
@@ -874,7 +878,7 @@ impl Widget<Message> for IconGrid {
                     let band = band.clone();
                     self.draw_band(&band, cx);
                     if let Some(shown) = self.shown(cx) {
-                        band::follow(self.window, self.scroll, position, shown, cx);
+                        band::follow(&self.on_event, self.scroll, position, shown, cx);
                     }
                     return Propagation::Stop;
                 }
@@ -889,7 +893,7 @@ impl Widget<Message> for IconGrid {
                 state.clicks.cancel();
                 cx.release_pointer();
                 if let Some(grab) = self.grab(&press, cx) {
-                    cx.emit(Message::Window(self.window, WindowEvent::DragOut(grab)));
+                    self.emit(ViewEvent::DragOut(grab), cx);
                 }
                 Propagation::Stop
             }
@@ -903,7 +907,7 @@ impl Widget<Message> for IconGrid {
             ) => {
                 if state.band.take().is_some() {
                     cx.release_pointer();
-                    cx.emit(Message::Window(self.window, WindowEvent::Band(None)));
+                    self.emit(ViewEvent::Band(None), cx);
                     return Propagation::Stop;
                 }
                 let Some(press) = state.press.take() else {
@@ -923,7 +927,7 @@ impl Widget<Message> for IconGrid {
                 state.press = None;
                 state.clicks.cancel();
                 if state.band.take().is_some() {
-                    cx.emit(Message::Window(self.window, WindowEvent::Band(None)));
+                    self.emit(ViewEvent::Band(None), cx);
                 }
                 Propagation::Continue
             }
@@ -933,12 +937,12 @@ impl Widget<Message> for IconGrid {
             }
             Event::Wake(now) => {
                 let held = state.press.is_some();
-                state.clicks.wake(self.window, now, held, cx);
+                state.clicks.wake(&self.on_event, now, held, cx);
                 if let Some(band) = state.band.clone() {
                     // the content moved under a still pointer: the band follows, and the scroll goes on
                     self.draw_band(&band, cx);
                     if let Some(shown) = self.shown(cx) {
-                        band::follow(self.window, self.scroll, band.pointer, shown, cx);
+                        band::follow(&self.on_event, self.scroll, band.pointer, shown, cx);
                     }
                 }
                 Propagation::Continue
@@ -984,7 +988,7 @@ impl Widget<Message> for IconGrid {
             };
             let content =
                 AttributedText::plain(item.name.clone(), TextStyle::new(names.text_size as f32));
-            let room = cell.label_frame.w - NAME_INSETS.left - NAME_INSETS.right;
+            let room = cell.label_frame.width() - NAME_INSETS.left - NAME_INSETS.right;
             let lines = Some(names.max_lines);
             if let Some(laid) = laid_out_name(cx.env(), &content, lines, room) {
                 laid_out_name(cx.env(), &content, lines, laid.size().width);
@@ -1006,7 +1010,7 @@ impl Widget<Message> for IconGrid {
 }
 
 /// One built cell: its icon over its name, the highlight of a selected icon, and the focus at the keyboard's item.
-struct Cell {
+struct Cell<M> {
     index: usize,
     /// In the grid.
     frame: Rect,
@@ -1022,11 +1026,11 @@ struct Cell {
     /// The grid's one Tab stop.
     stop: bool,
     name: String,
-    pick: Pick,
-    children: Vec<Element<Message>>,
+    pick: Pick<M>,
+    children: Vec<Element<M>>,
 }
 
-impl Widget<Message> for Cell {
+impl<M: 'static> Widget<M> for Cell<M> {
     type State = ();
 
     fn layout(&self) -> LayoutSpec {
@@ -1047,7 +1051,7 @@ impl Widget<Message> for Cell {
         }
     }
 
-    fn take_children(&mut self) -> Vec<Element<Message>> {
+    fn take_children(&mut self) -> Vec<Element<M>> {
         std::mem::take(&mut self.children)
     }
 
@@ -1073,7 +1077,7 @@ impl Widget<Message> for Cell {
 
     /// A press focuses the cell without showing the ring or scrolling, then goes on to the grid, which selects.
     /// Assistive technology selects a cell with its Click action.
-    fn event(&self, _: &mut (), event: &Event, cx: &mut EventCx<'_, Message>) -> Propagation {
+    fn event(&self, _: &mut (), event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
         match event {
             Event::Action(request)
                 if cx.node() == cx.target() && request.action == Action::Click =>
@@ -1180,12 +1184,12 @@ impl Widget<Message> for Cell {
 }
 
 /// The room of a cell's name: its width, and as many lines as the layout gives it; the name is centred in it.
-struct NameBox {
+struct NameBox<M> {
     size: Size,
-    children: Vec<Element<Message>>,
+    children: Vec<Element<M>>,
 }
 
-impl Widget<Message> for NameBox {
+impl<M: 'static> Widget<M> for NameBox<M> {
     type State = ();
 
     fn layout(&self) -> LayoutSpec {
@@ -1202,7 +1206,7 @@ impl Widget<Message> for NameBox {
         }
     }
 
-    fn take_children(&mut self) -> Vec<Element<Message>> {
+    fn take_children(&mut self) -> Vec<Element<M>> {
         std::mem::take(&mut self.children)
     }
 
@@ -1220,7 +1224,7 @@ impl Widget<Message> for NameBox {
         no_measure()
     }
 
-    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, Message>) -> Propagation {
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
         Propagation::Continue
     }
 
@@ -1231,12 +1235,12 @@ impl Widget<Message> for NameBox {
 
 /// An item's name in `text_size` points, wrapping in its cell, on the selected control colour when `selected`. With
 /// `max_lines` it keeps that many lines at most, the last ending in an ellipsis when the name goes on past it.
-pub(super) fn name(
+pub fn name<M: 'static>(
     text: String,
     text_size: f64,
     selected: bool,
     max_lines: Option<u32>,
-) -> Element<Message> {
+) -> Element<M> {
     Element::new(Highlight {
         selected,
         children: vec![Element::new(Name {
@@ -1269,7 +1273,7 @@ impl Name {
 /// centred, laid out within `width`; `None` if the fonts cannot shape it. A name that runs past `max_lines` keeps its
 /// first lines and has the rest cut in the middle to what the last line holds, so its end (the extension) stays in
 /// view: "report with a…middle.xlsx".
-pub(super) fn laid_out_name(
+pub fn laid_out_name(
     env: &Environment,
     content: &AttributedText,
     max_lines: Option<u32>,
@@ -1345,7 +1349,7 @@ pub(super) fn laid_out_name(
     Some(paragraph.layout(room))
 }
 
-impl Widget<Message> for Name {
+impl<M: 'static> Widget<M> for Name {
     type State = ();
 
     fn layout(&self) -> LayoutSpec {
@@ -1383,7 +1387,7 @@ impl Widget<Message> for Name {
         }
     }
 
-    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, Message>) -> Propagation {
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
         Propagation::Continue
     }
 
@@ -1420,12 +1424,12 @@ impl Widget<Message> for Name {
 }
 
 /// Fits its text and paints the selection behind it.
-struct Highlight {
+struct Highlight<M> {
     selected: bool,
-    children: Vec<Element<Message>>,
+    children: Vec<Element<M>>,
 }
 
-impl Widget<Message> for Highlight {
+impl<M: 'static> Widget<M> for Highlight<M> {
     type State = ();
 
     fn layout(&self) -> LayoutSpec {
@@ -1440,7 +1444,7 @@ impl Widget<Message> for Highlight {
         }
     }
 
-    fn take_children(&mut self) -> Vec<Element<Message>> {
+    fn take_children(&mut self) -> Vec<Element<M>> {
         std::mem::take(&mut self.children)
     }
 
@@ -1458,7 +1462,7 @@ impl Widget<Message> for Highlight {
         no_measure()
     }
 
-    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, Message>) -> Propagation {
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
         Propagation::Continue
     }
 

@@ -18,12 +18,13 @@ use cupertino_kit::layout::{
 use cupertino_kit::text::{AttributedText, TextStyle};
 
 use super::columns;
-use super::grid::{IconGrid, ItemIcon};
 use super::view::{name_field, shown_selection, under_row};
 use super::{BrowserWindow, Event as WindowEvent, Message, Session};
-use crate::layout::icon::{self, FontMetrics, IconLayout, IconParams};
 use crate::places::window_title;
 use crate::settings::GalleryViewSettings;
+use cupertino_kit::files::entry::Entry;
+use cupertino_kit::files::grid::{IconGrid, ItemIcon};
+use cupertino_kit::files::layout::icon::{self, FontMetrics, IconLayout, IconParams};
 
 /// Room around the large picture and its name.
 const STAGE_INSETS: Insets = Insets {
@@ -74,7 +75,7 @@ pub(super) fn shown(win: &BrowserWindow, margin: f64) -> (Vec<usize>, f64) {
     let shown = layout
         .cells
         .iter()
-        .filter(|c| c.frame.x + c.frame.w >= left && c.frame.x <= right)
+        .filter(|c| c.frame.x() + c.frame.width() >= left && c.frame.x() <= right)
         .map(|c| c.index)
         .collect();
     (shown, params.icon_size)
@@ -138,7 +139,7 @@ fn stage(
     id: u64,
     win: &BrowserWindow,
     index: usize,
-    entry: &crate::Entry,
+    entry: &Entry,
 ) -> Element<Message> {
     let picture = super::peek::PICTURE;
     let sources = match columns::preview_content(session, &win.texts, entry, picture, picture) {
@@ -185,8 +186,8 @@ fn stage(
 /// Every item's picture in a row, which scrolls sideways.
 fn strip(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
     let (params, layout) = strip_layout(win);
-    let height = layout.content.h;
-    let items: Rc<[crate::Entry]> = win.browser.entries().into();
+    let height = layout.content.height;
+    let items: Rc<[Entry]> = win.browser.entries().into();
     let item_icons = Rc::clone(&session.icons);
     let side = params.icon_size;
     let icon: ItemIcon = Rc::new(move |e| item_icons.icon(e, side));
@@ -207,6 +208,7 @@ fn strip(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
         names: None,
         revision: session.view_revision,
         strip: true,
+        on_event: super::view_events(id),
     });
     let scroll = Element::from(ScrollView {
         content: grid,

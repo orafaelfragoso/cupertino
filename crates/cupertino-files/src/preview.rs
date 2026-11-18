@@ -12,9 +12,9 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use crate::entry::Entry;
 use crate::format::{human_size, relative_date};
-use crate::mime::{self, KindGroup};
+use cupertino_kit::files::entry::Entry;
+use cupertino_kit::files::mime::{self, KindGroup};
 
 /// The most of a text file a preview reads.
 pub const TEXT_LIMIT: u64 = 64 * 1024;

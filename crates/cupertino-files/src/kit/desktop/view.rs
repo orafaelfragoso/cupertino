@@ -31,20 +31,16 @@ use cupertino_kit::theme::{Color, ColorRole, InteractionVariant, StateVariant};
 
 use super::Message;
 use crate::desktop::{backdrop_radius, item_frames};
-use crate::kit::grid::laid_out_name;
 use crate::metrics::desktop as m;
-use crate::metrics::{drag, timing::DOUBLE_CLICK_INTERVAL};
-use crate::rename::{RenameEvent, RenameTrigger};
+use cupertino_kit::files::grid::laid_out_name;
+use cupertino_kit::files::metrics::{drag, timing::DOUBLE_CLICK_INTERVAL};
+use cupertino_kit::files::rename::{RenameEvent, RenameTrigger};
 
 /// The grey of the backdrop behind a selected icon, before its opacity.
 const BACKDROP_GREY: f32 = 0.35;
 
 fn seconds(at: Timestamp) -> f64 {
     at.0 as f64 / 1e9
-}
-
-fn rect(r: crate::geom::Rect) -> Rect {
-    Rect::new(r.x, r.y, r.w, r.h)
 }
 
 fn no_measure() -> Measured {
@@ -172,12 +168,7 @@ impl Desk {
     /// Where item `index`'s name is, in the window, with the room of its capsule.
     fn label_rect(&self, index: usize, env: &Environment) -> Rect {
         let item = &self.items[index];
-        let frames = item_frames(crate::geom::Rect::new(
-            item.cell.min_x(),
-            item.cell.min_y(),
-            item.cell.width(),
-            item.cell.height(),
-        ));
+        let frames = item_frames(item.cell);
         let size = laid_out(env, &item.name).map_or(Size::ZERO, |l| l.size());
         let (px, py) = m::LABEL_PAD;
         Rect::new(
@@ -190,15 +181,7 @@ impl Desk {
 
     fn icon_rect(&self, index: usize) -> Rect {
         let cell = self.items[index].cell;
-        rect(
-            item_frames(crate::geom::Rect::new(
-                cell.min_x(),
-                cell.min_y(),
-                cell.width(),
-                cell.height(),
-            ))
-            .backdrop,
-        )
+        item_frames(cell).backdrop
     }
 
     /// The item whose icon or name is under `position`, and whether it was the name.
@@ -648,7 +631,7 @@ impl Widget<Message> for Cell {
         if self.ringed {
             let theme = cx.env().theme.clone();
             if let Some(accent) = theme.colors.get(ColorRole::ControlFill, selected_variant()) {
-                let ring = crate::metrics::selection::CONTEXT_RING;
+                let ring = cupertino_kit::files::metrics::selection::CONTEXT_RING;
                 cx.push(PaintOp::Stroke {
                     shape: Shape::RoundedRect {
                         rect: backdrop.outset(-ring / 2.0),
@@ -819,7 +802,7 @@ impl Widget<Message> for BandView {
                 paint: Paint::Solid(faded(fill)),
             });
         }
-        let width = crate::metrics::marquee::BORDER_WIDTH;
+        let width = cupertino_kit::files::metrics::marquee::BORDER_WIDTH;
         let border = colors.get(ColorRole::PlaceholderText, StateVariant::NORMAL);
         if let Some(border) = border.filter(|_| size.width >= width && size.height >= width) {
             cx.push(PaintOp::Stroke {

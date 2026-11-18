@@ -7,13 +7,12 @@ use std::rc::Rc;
 use cupertino_menu_model::{ActionName, MenuBar};
 
 use cupertino_kit::controls::{
-    striped_element, unobscured_insets, Column, ColumnWidth, CompactButton, ContextMenu, Dialog,
-    DialogAction, DialogButton, DialogKind, Icon, IconDirection, Image, ImageFit, ImageSource,
-    MenuAnchor, Modal, NavigationStack, OutlineTable, Progress, ScrollView, Scroller, SearchField,
-    SecureField, Selection, Sidebar, SidebarAccessory, SidebarItem, SidebarLook, SidebarSection,
-    SidebarWindow, SortOrder, Spacer, Stack, TableView, Text, TextField, TextRole, ToolbarGlyph,
-    ToolbarGroup, ToolbarItem, ToolbarMenuButton, ToolbarPicker, ToolbarSearch, ToolbarTitle,
-    TreeItem,
+    unobscured_insets, Column, ColumnWidth, CompactButton, ContextMenu, Dialog, DialogAction,
+    DialogButton, DialogKind, Icon, IconDirection, MenuAnchor, Modal, NavigationStack, Progress,
+    ScrollView, Scroller, SearchField, SecureField, Selection, Sidebar, SidebarAccessory,
+    SidebarItem, SidebarLook, SidebarSection, SidebarWindow, SortOrder, Spacer, Stack, Text,
+    TextField, TextRole, ToolbarGlyph, ToolbarGroup, ToolbarItem, ToolbarMenuButton, ToolbarPicker,
+    ToolbarSearch, ToolbarTitle, TreeItem,
 };
 use cupertino_kit::core::{CommandRegistry, Key, Menus, Shortcut, WindowBackground};
 use cupertino_kit::geometry::{Insets, Size};
@@ -29,33 +28,33 @@ use super::columns;
 use super::context::Secondary;
 use super::drops;
 use super::gallery;
-use super::grid::{self, IconGrid};
 use super::jobs::Job;
-use super::list::{self, Gestures, RowCell};
 use super::progress::{self, ShowsProgress};
 use super::search::{no_results, SearchSlot};
 use super::sidebar::FocusWatch;
 use super::toolbar::{PathBar, PathSegment};
 use super::{window_key, BrowserWindow, Event, Message, Popup, Session, Unlock, COLUMNS};
 use crate::format::{human_size, relative_date};
-use crate::layout::icon::{self, Flow, FontMetrics, IconLayout, IconParams, SectionSpec};
 use crate::layout::list::RowSpec;
 use crate::menu_bar::MenuAction;
-use crate::metrics::{list_view, sidebar, trash, window as window_metrics};
+use crate::metrics::{sidebar, trash, window as window_metrics};
 use crate::places::{window_title, PlaceGroup};
 use crate::places::{PlaceKind, Volume};
 use crate::settings::{default_columns, ColumnId, IconViewSettings};
 use crate::udisks::Passphrase;
 use crate::window::{metrics, path_chain, status_text, ViewMode};
-use crate::{mime, Entry, SortKey};
+use cupertino_kit::files::entry::Entry;
+use cupertino_kit::files::grid::{self, IconGrid};
+use cupertino_kit::files::layout::icon::{
+    self, Flow, FontMetrics, IconLayout, IconParams, SectionSpec,
+};
+use cupertino_kit::files::list::{FileList, ROW_HEIGHT, ROW_ICON};
+use cupertino_kit::files::metrics::list_view;
+use cupertino_kit::files::mime;
+use cupertino_kit::files::sort::SortKey;
+use cupertino_kit::files::tags::TagColor;
 
 pub(super) const SIDEBAR_WIDTH: f64 = sidebar::DEFAULT_WIDTH;
-/// The side of a list row's icon, in points.
-const ROW_ICON: f64 = list_view::ICON_SIZE_DEFAULT as f64;
-/// From a name cell's leading edge to its text: the item's icon and the gap after it.
-pub(super) const NAME_TEXT_X: f64 = ROW_ICON + metrics::PATH_ICON_GAP;
-/// A list row: the icon size over the row padding, as the list view's rows.
-const ROW_HEIGHT: f64 = ROW_ICON + list_view::ROW_PADDING;
 /// How far beyond the viewport items count as shown, in points: their thumbnails are made before they scroll in.
 const SHOWN_MARGIN: f64 = 200.0;
 /// The symbol of a folder of the path bar that is not a place of the sidebar.
@@ -309,7 +308,7 @@ fn sidebar_tags(session: &Session) -> Vec<String> {
         .map(str::to_owned);
     let others = known
         .iter()
-        .filter(|k| crate::tags::TagColor::from_title(k).is_none())
+        .filter(|k| TagColor::from_title(k).is_none())
         .cloned();
     colours.chain(others).collect()
 }
@@ -366,7 +365,7 @@ pub(super) fn share_popover(
     let first = selected.first()?;
     let subject = match selected.as_slice() {
         [one] => {
-            let kind = crate::mime::kind_description(&crate::mime::entry_mime(one));
+            let kind = mime::kind_description(&mime::entry_mime(one));
             let mut chars = kind.chars();
             let kind = chars
                 .next()
@@ -919,131 +918,41 @@ fn list(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
             (column, order)
         });
     let now = win.now;
-    // the table asks only for the rows it shows, so their text and icons are made then
-    let entries: Rc<[crate::Entry]> = browser.entries().into();
-    let names: Rc<[String]> = browser.entries().iter().map(|e| e.name.clone()).collect();
-    let type_names = Rc::clone(&names);
     let item_icons = Rc::clone(&session.icons);
-    let paths = Rc::clone(&entries);
-    let items = tree_items(browser.outline());
-    let selected = shown_selection(win);
-    let cell_selection = selected.clone();
-    let presses = Rc::clone(&win.list_presses);
-    let cell_presses = Rc::clone(&win.list_presses);
-    let label = window_title(browser.dir(), &session.places);
-    let rename = win.rename.as_ref().map(|r| {
-        (
-            r.edit.index(),
-            r.edit.text().to_owned(),
-            r.revision,
-            r.selection.clone(),
-        )
-    });
-    let table = TableView {
-        label,
-        columns,
-        sort,
-        on_sort: Some(send(id, Event::Sort)),
-        count: entries.len(),
-        row_height: ROW_HEIGHT,
-        scroll: win.scroll,
-        selection: selected.clone(),
-        multiple: true,
-        cell: Box::new(move |row, column, selected| {
-            if let Some((_, value, revision, selection)) =
-                rename.as_ref().filter(|r| r.0 == row && column == 0)
-            {
-                return name_field(id, value.clone(), *revision, selection.clone());
-            }
-            // a stack that fills the cell gives the text its width, so a long one ends in an ellipsis
-            let cell = Element::new(Stack {
-                axis: Axis::Vertical,
-                padding: Insets::ZERO,
-                spacing: 0.0,
-                align: Align::Stretch,
-                children: vec![
-                    Element::new(Spacer { min: 0.0 }),
-                    cell_text_element(
-                        cell_text(&entries[row], COLUMNS[column], now),
-                        column,
-                        selected,
-                    ),
-                    Element::new(Spacer { min: 0.0 }),
-                ],
-            })
-            .fill();
-            // the name follows the item's icon
-            let cell = match column {
-                0 => Element::new(Stack {
-                    axis: Axis::Horizontal,
-                    padding: Insets::ZERO,
-                    spacing: metrics::PATH_ICON_GAP,
-                    align: Align::Center,
-                    children: vec![
-                        item_image(item_icons.icon(&entries[row], ROW_ICON), ROW_ICON),
-                        cell,
-                    ],
-                })
-                .fill(),
-                _ => cell,
-            };
-            Element::new(RowCell {
-                window: id,
-                index: row,
-                name: column == 0,
-                label: (column == 0).then(|| entries[row].name.clone()),
-                selection: cell_selection.clone(),
-                presses: Rc::clone(&cell_presses),
-                children: vec![cell],
-            })
-            .fill()
-        }),
-        type_select: Some(Box::new(move |row| type_names[row].clone())),
-        on_scroll: send(id, Event::Scroll),
-        on_select: Some(send(id, Event::Select)),
-        double_click_activates: false,
-        on_activate: Some(send(id, Event::Open)),
-        on_row_key: Some(Box::new(list::tab(id, names, selected.cursor()))),
-        header_top: under_row(win),
-    };
-    let count = table.count;
-    let ringed = ringed_items(win);
-    let table = striped_element(
-        OutlineTable {
-            table,
-            // the outline follows the entries; a row it does not know yet is a top-level one
-            item: Box::new(move |row| {
-                items.get(row).copied().unwrap_or(TreeItem {
-                    level: 0,
-                    expanded: None,
-                    position: row,
-                    siblings: count,
-                })
-            }),
-            key: Some(Box::new(move |row| row_key(id, &paths[row].path))),
-            on_toggle: Some(send(id, Event::Toggle)),
-        },
-        ringed,
-    )
-    .key("items");
-    Element::new(Gestures {
+    Element::from(FileList {
         window: id,
-        count,
-        row_height: ROW_HEIGHT,
+        label: window_title(browser.dir(), &session.places),
+        items: browser.entries().into(),
+        outline: tree_items(browser.outline()).into(),
+        columns,
+        text: Rc::new(move |entry, column| cell_text(entry, COLUMNS[column], now)),
+        sort,
+        icon: Rc::new(move |entry| item_icons.icon(entry, ROW_ICON)),
+        multiple: true,
         scroll: win.scroll,
-        selection: selected,
-        presses,
+        selection: shown_selection(win),
+        ringed: ringed_items(win),
         band: win.band,
-        lead: under_row(win) + list_view::HEADER_HEIGHT,
-        children: vec![table],
+        lead: under_row(win),
+        name_field: name_field_of(id, win),
+        presses: win.list_presses.clone(),
+        on_event: super::view_events(id),
     })
-    .key("list")
 }
 
-/// The key of the list's row for the item at `path` in window `id`: its focus follows the item while folders open
-/// and close above it.
-pub(super) fn row_key(id: u64, path: &std::path::Path) -> Key {
-    Key::from(format!("row/{id}/{}", path.display()))
+/// The row whose name window `id` edits, and the field that stands in its name, for the list and the column view.
+#[allow(clippy::type_complexity)]
+pub(super) fn name_field_of(
+    id: u64,
+    win: &BrowserWindow,
+) -> Option<(usize, Rc<dyn Fn() -> Element<Message>>)> {
+    win.rename.as_ref().map(|r| {
+        let (value, revision, selection) =
+            (r.edit.text().to_owned(), r.revision, r.selection.clone());
+        let field: Rc<dyn Fn() -> Element<Message>> =
+            Rc::new(move || name_field(id, value.clone(), revision, selection.clone()));
+        (r.edit.index(), field)
+    })
 }
 
 /// The key of the icon grid's cell for item `index` in window `id`.
@@ -1175,23 +1084,12 @@ pub(super) fn shown(win: &BrowserWindow) -> (Vec<usize>, f64) {
             let shown = layout
                 .cells
                 .iter()
-                .filter(|c| c.frame.y + c.frame.h >= top && c.frame.y <= bottom)
+                .filter(|c| c.frame.y() + c.frame.height() >= top && c.frame.y() <= bottom)
                 .map(|c| c.index)
                 .collect();
             (shown, params.icon_size)
         }
     }
-}
-
-/// An item's icon or thumbnail, `side` points square.
-fn item_image(sources: Vec<ImageSource>, side: f64) -> Element<Message> {
-    Element::new(Image {
-        sources,
-        size: Size::new(side, side),
-        fit: ImageFit::Contain,
-        radius: 0.0,
-        label: None,
-    })
 }
 
 /// The folder as a grid of icons with their names, at the icon view's default settings, as wide as its viewport.
@@ -1201,7 +1099,7 @@ fn icons(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
     let text_size = params.text_size;
     // the whole lines the layout gives a name; a name past them ends in an ellipsis
     let lines = icon::max_title_lines(&params).floor().max(1.0) as u32;
-    let items: Rc<[crate::Entry]> = browser.entries().into();
+    let items: Rc<[Entry]> = browser.entries().into();
     let item_icons = Rc::clone(&session.icons);
     let side = params.icon_size;
     let icon: grid::ItemIcon = Rc::new(move |e| item_icons.icon(e, side));
@@ -1240,6 +1138,7 @@ fn icons(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
         }),
         revision: session.view_revision,
         strip: false,
+        on_event: super::view_events(id),
     });
     // the grid starts below the toolbar row, and scrolls under it
     let content = Element::new(Stack {
@@ -1306,7 +1205,7 @@ fn path_bar(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message>
         .into_iter()
         .enumerate()
         .flat_map(|(i, (path, name))| {
-            let recents = path == crate::recents::location();
+            let recents = path == cupertino_kit::files::recents::location();
             let place = session.places.iter().find(|p| p.path == path);
             let symbol = match place {
                 _ if recents => PlaceKind::Recents.symbol(),
@@ -1388,18 +1287,6 @@ fn text(content: String, role: TextRole, secondary: bool) -> Element<Message> {
         wrap: false,
         secondary,
         selected: false,
-    })
-}
-
-/// A list cell's text: the name in the label colour and the other columns in the secondary one, and every column of a
-/// selected row in the theme's selected control text colour, which reads on the selection's fill.
-fn cell_text_element(content: String, column: usize, selected: bool) -> Element<Message> {
-    Element::new(Text {
-        content: AttributedText::plain(content, TextStyle::new(13.0)),
-        role: TextRole::Body,
-        wrap: false,
-        secondary: column != 0,
-        selected,
     })
 }
 

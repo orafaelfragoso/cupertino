@@ -2,7 +2,7 @@
 //! items into a folder. Nothing here overwrites: a clash renames the arriving item (drops) or fails (renames).
 
 use crate::rename::unique_name;
-use crate::trash;
+use cupertino_trash as trash;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::os::unix::ffi::OsStrExt;

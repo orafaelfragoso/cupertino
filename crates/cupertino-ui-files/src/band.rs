@@ -8,20 +8,22 @@
 
 use std::collections::BTreeSet;
 
-use cupertino_kit::controls::Selection;
-use cupertino_kit::core::{
-    Change, Element, Event, EventCx, MeasureCx, PaintCx, Propagation, SemanticsCx, Widget,
-};
-use cupertino_kit::geometry::{Point, Rect, Size};
-use cupertino_kit::layout::{
+use std::rc::Rc;
+
+use cupertino_geometry::{Point, Rect, Size};
+use cupertino_theme::ui::{ColorRole, StateVariant};
+use cupertino_ui_controls::Selection;
+use cupertino_ui_core::layout::{
     Constraints, ContainerKind, LayoutSpec, Measured, ScrollState, SizeSpec,
 };
-use cupertino_kit::platform::{Mods, Timestamp};
-use cupertino_kit::render::{Paint, PaintOp, Shape};
-use cupertino_kit::theme::{ColorRole, StateVariant};
+use cupertino_ui_core::platform::{Mods, Timestamp};
+use cupertino_ui_core::{
+    Change, Element, Event, EventCx, MeasureCx, PaintCx, Propagation, SemanticsCx, Widget,
+};
+use cupertino_ui_render::{Paint, PaintOp, Shape};
 
-use super::{Event as WindowEvent, Message};
 use crate::metrics::marquee;
+use crate::ViewEvent;
 
 /// The time between two steps of the scroll at an edge, in nanoseconds.
 pub(super) const AUTOSCROLL_NS: u64 = (marquee::AUTOSCROLL_INTERVAL * 1e9) as u64;
@@ -106,19 +108,21 @@ pub(super) fn scrolled(scroll: ScrollState, dy: f64) -> Option<ScrollState> {
 
 /// What a view does when a band's pointer moves or its edge timer fires: the next scroll when the pointer is in an
 /// edge's zone, and the wake for the step after it.
-pub(super) fn follow(
-    window: u64,
+pub(super) fn follow<M>(
+    on_event: &Rc<dyn Fn(ViewEvent) -> Option<M>>,
     scroll: ScrollState,
     pointer: Point,
     view: Rect,
-    cx: &mut EventCx<'_, Message>,
+    cx: &mut EventCx<'_, M>,
 ) -> Option<ScrollState> {
     let dy = edge_step(pointer.y, view.min_y(), view.max_y());
     if dy == 0.0 {
         return None;
     }
     let next = scrolled(scroll, dy)?;
-    cx.emit(Message::Window(window, WindowEvent::Scroll(next)));
+    if let Some(message) = on_event(ViewEvent::Scroll(next)) {
+        cx.emit(message);
+    }
     cx.wake_at(Timestamp(cx.now().0 + AUTOSCROLL_NS));
     Some(next)
 }
@@ -129,7 +133,7 @@ pub(super) struct BandView {
     pub rect: Rect,
 }
 
-impl Widget<Message> for BandView {
+impl<M: 'static> Widget<M> for BandView {
     type State = ();
 
     fn layout(&self) -> LayoutSpec {
@@ -158,7 +162,7 @@ impl Widget<Message> for BandView {
         }
     }
 
-    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, Message>) -> Propagation {
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
         Propagation::Continue
     }
 
@@ -193,6 +197,6 @@ impl Widget<Message> for BandView {
 }
 
 /// The band's element over a view's items.
-pub(super) fn view(rect: Rect) -> Element<Message> {
+pub(super) fn view<M: 'static>(rect: Rect) -> Element<M> {
     Element::new(BandView { rect }).key("band")
 }

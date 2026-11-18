@@ -45,7 +45,8 @@ use super::toolbar::focus_ring;
 use super::{BrowserWindow, Event as WindowEvent, Message, Session, Wake, NO_SCROLL};
 use crate::preview::{self as file_preview, Browse, PreviewKind};
 use crate::window::ViewMode;
-use crate::Entry;
+use cupertino_kit::files::entry::Entry;
+use cupertino_kit::files::open::{application_at, open_with};
 
 /// The height of the window's toolbar.
 const TOOLBAR_HEIGHT: f64 = 36.0;
@@ -293,10 +294,10 @@ impl Peek {
             .get_or_insert_with(|| (session.applications)().ok());
         // an application opens itself: its button reads Open
         let name = apps.as_ref().and_then(|apps| {
-            if crate::open::application_at(apps, path).is_some() {
+            if application_at(apps, path).is_some() {
                 return None;
             }
-            crate::open::open_with(apps, path, path.is_dir())
+            open_with(apps, path, path.is_dir())
                 .into_iter()
                 .find(|item| item.is_default)
                 .map(|item| item.entry.name.clone())
@@ -379,7 +380,7 @@ fn item_key(id: u64, win: &BrowserWindow, entry: &Entry) -> Key {
                 .position(|e| e.path == entry.path);
             super::view::item_key(id, index.unwrap_or(usize::MAX))
         }
-        _ => super::view::row_key(id, &entry.path),
+        _ => cupertino_kit::files::list::row_key(id, &entry.path),
     }
 }
 

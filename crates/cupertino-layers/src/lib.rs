@@ -268,6 +268,7 @@ pub const FACADES: &[Facade] = &[
         hidden: &[
             "cupertino-ui-core",
             "cupertino-ui-controls",
+            "cupertino-ui-files",
             "cupertino-ui-text",
             "cupertino-ui-render",
             "cupertino-ui-wayland",

@@ -130,6 +130,7 @@ What `shell` and `apps` crates name from the toolkit, where each item is in Kit,
 | `kit::theme` | `ThemeTokens` and the types of its fields (`ThemePreferences`, `ColorTokens`, `ControlMetrics`, `TypeScale`, `FocusRing`, `Motion`), `Appearance`, `Color`, `ColorRole`, `StateVariant`, `InteractionVariant`, `ControlFamily`, `ControlSize`, `TypeRole`, `Surface`, `BAR_GLASS_MATERIAL`, `GLASS_MATERIAL`, `CARET_PHASE_MS`, and `system_color(name, appearance) -> Option<Color>`, a colour the theme data names (`system-green`) |
 | `kit::controls` | every control of `cupertino-ui-controls` with its option types (states, handlers, styles, `SortOrder`) and layout constants, and the helpers programs paint with (`caret_blinking`, `caret_opacity`, `paint_glass_edge`, `striped_element`, `unobscured_insets`) |
 | `kit::filepicker`, `kit::typeahead` | the file chooser's model and type-to-select |
+| `kit::files` | the file family of `cupertino-ui-files`, in modules named as its own, each listing what Files names: `entry` (`Entry`, `Kind`), `natural`, `sort`, `mime`, `tags`, `applications`, `recents`, `geom` (`Direction`), `layout::icon`, `rename`, `name_edit`, `open`, `operations`, `item_art`, and the views' `metrics` (`icon_view`, `list_view`, `column_view`, `timing`, `selection`, `marquee`, `drag`); the views: `ViewEvent`, `grid` (`IconGrid`), `list` (`FileList`), `columns` (`FileColumns`), `ColumnEvent` |
 | `kit::geometry` | `Point`, `Size`, `Rect`, `Insets` |
 | `kit::motion` | [Motion](#motion) |
 | `kit::image` | `decode` (PNG and JPEG within the side the caller allows), `resize`, `crop`, `orient` (upright from a `cupertino_geometry::OutputTransform`), `encode_png`, `encode_jpeg`, and `ImageError`: plain functions on `render::ImageResource` that a program runs as a `task::cpu`, each refusing a picture of more pixels than a window drawn on the CPU has |
@@ -215,7 +216,7 @@ alone does not show the surfaces as they look.
 
 | Surface | States |
 |---|---|
-| `files/window`, `files/sidebar` (the sidebar column of the window) | `--view icon\|list`, `--selected NAME`, `--devices removable` (a mounted, a busy and an unmounted device in the sidebar) |
+| `files/window`, `files/sidebar` (the sidebar column of the window), `files/preview`, `files/popover`, `files/tabs`, `files/desktop` (the desktop's items over a flat fill) | `--view icon\|list\|columns\|gallery`, `--selected NAME`, `--state rename\|ring\|band` (the view's item renamed from its context menu, ringed under its open context menu, or under a band held over it), `--devices removable` (a mounted, a busy and an unmounted device in the sidebar); `files/desktop` has none |
 | `kit/controls` (the row 167a controls sheet), `kit/icons` (with the chevrons along the reading direction and a missing symbol's placeholder) | `--direction ltr\|rtl` |
 | `kit/gallery` (every control family; its sheet shows each state) | `--state rest\|held-button\|held-switch\|held-slider\|held-segment\|disabled`, `--control-size mini\|small\|regular\|large\|extra-large`, `--compact on\|off`, `--backdrop flat\|busy`, `--direction ltr\|rtl` |
 | `kit/scroll` (an overlay scroll view: at rest, pulled past its top edge, its bar shown, fading and hidden after a wheel step) | `--direction ltr\|rtl`, `--phase rest\|stretch\|shown\|fading\|hidden` |

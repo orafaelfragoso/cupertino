@@ -1,5 +1,5 @@
-//! The column view on CupertinoKit: the chain of folders of [`crate::columns`] side by side in a row that scrolls
-//! sideways, each column a list of its folder's items, and a preview of the selected file at the end.
+//! The column view on CupertinoKit: the chain of folders of [`crate::columns`] side by side, drawn by Kit's
+//! [`FileColumns`], and a preview of the selected file at the end.
 //!
 //! The column of the folder the window shows is the window's [`Browser`]: its selection, rename, drag, context menu and
 //! type-to-select are the ones of the other views. The other columns are listings of their own, opened as the window's
@@ -16,59 +16,34 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use cupertino_kit::controls::{
-    FilePreview, Icon, IconDirection, Image, ImageFit, ImageSource, ListView, PreviewContent,
-    PreviewStyle, ScrollView, Scroller, Selection, Stack, Text, TextRole,
-};
+use cupertino_kit::controls::{FilePreview, PreviewContent, PreviewStyle, Stack};
 use cupertino_kit::core::{
-    Change, Element, Event, EventCx, Key, MeasureCx, PaintCx, Phase, Propagation, SemanticsCx,
-    Widget,
+    Change, Element, Event, EventCx, Key, MeasureCx, PaintCx, Propagation, SemanticsCx, Widget,
 };
 use cupertino_kit::geometry::{Insets, Point, Rect, Size};
 use cupertino_kit::layout::{
-    Align, Axis, Constraints, ContainerKind, Justify, LayoutDirection, LayoutSpec, Measured,
-    ScrollState, SizeSpec,
+    Align, Axis, Constraints, ContainerKind, LayoutSpec, Measured, ScrollState, SizeSpec,
 };
-use cupertino_kit::platform::{KeyEvent, Keysym, Mods, MouseButton, PointerEvent};
-use cupertino_kit::prelude::{Button, ButtonRole, ButtonStyle, Spacer};
+use cupertino_kit::prelude::{Button, ButtonRole, ButtonStyle};
 use cupertino_kit::render::{Paint, PaintOp, Shape};
-use cupertino_kit::text::{AttributedText, TextStyle};
 use cupertino_kit::theme::{ColorRole, StateVariant};
 
-use super::list::RowCell;
-use super::view::{self, popup_key, row_key};
+use super::view::{self, popup_key};
 use super::{BrowserWindow, Event as WindowEvent, Message, Popup, Session, NO_SCROLL};
 use crate::browser::Browser;
-use crate::columns::{self, ChainLayout, ColumnChain, PREVIEW_WIDTH, ROW_HEIGHT};
+use crate::columns::{self, ChainLayout, ColumnChain, PREVIEW_WIDTH};
 use crate::metrics::window as window_metrics;
 use crate::model::DirectoryModel;
 use crate::places::window_title;
 use crate::preview::{self as file_preview, PreviewKind};
-use crate::Entry;
+use cupertino_kit::files::columns::{column_key, FileColumn, FileColumns, ROW_HEIGHT, ROW_ICON};
+use cupertino_kit::files::entry::Entry;
+use cupertino_kit::files::list::row_key;
 
-/// The side of a row's icon.
-const ROW_ICON: f64 = 16.0;
-/// From a row's selection to its icon, and from its chevron to the selection's far end.
-const ROW_LEAD: f64 = 8.0;
-/// The side of the chevron that ends a folder's row.
-const CHEVRON: f64 = 9.0;
-/// How far from a column's trailing edge a press resizes it.
-const GRIP: f64 = 4.0;
-/// The width of the line between two columns.
-const DIVIDER: f64 = 1.0;
-/// From a column's sides to a row's selection, which the highlight of a folder of the chain matches.
-const SELECTION_INSET: f64 = 10.0;
-/// From a list row's content box to the selection drawn around it: the list's content inset less
-/// [`SELECTION_INSET`], none as the two are the same.
-const HIGHLIGHT_OUTSET: f64 = 0.0;
-/// The highlight's corner radius, the column rows' selection's.
-const HIGHLIGHT_RADIUS: f64 = 8.0;
 /// The side of an icon in the preview column.
 const PREVIEW_ICON: f64 = 128.0;
 /// The label of the preview column's actions button.
 const MORE: &str = "More…";
-const LEFT: Keysym = Keysym(0xff51);
-const RIGHT: Keysym = Keysym(0xff53);
 
 /// The columns of a window, beyond its browser's.
 pub(super) struct ColumnsView {
@@ -308,303 +283,77 @@ pub(super) fn view(session: &Session, id: u64, win: &BrowserWindow) -> Element<M
     let cols = &win.columns;
     let chain = cols.chain(browser);
     let layout = cols.layout(&chain, win.scroll.viewport.width);
-    let mut children = Vec::new();
-    let mut place = 0;
+    let width = |place: usize| layout.columns.get(place).map_or(0.0, |c| c.1);
+    let mut columns = Vec::new();
     for (i, folder) in chain.folders.iter().enumerate() {
         let column = if folder == browser.dir() {
             active_column(session, id, win)
         } else {
             let next = chain.folders.get(i + 1).or(chain.child.as_ref());
-            match cols.listings.get(folder) {
-                Some(listing) => other_column(
-                    session,
-                    id,
-                    cols,
-                    folder,
-                    listing.entries(),
-                    next,
-                    view::under_row(win),
-                ),
-                None => Element::new(Spacer { min: 0.0 }),
-            }
+            other_column(session, cols, folder, next)
         };
-        children.push(frame(id, place, &layout, column, folder));
-        place += 1;
+        columns.push((column, width(columns.len())));
     }
     if let Some(child) = &chain.child {
-        let column = match cols.listings.get(child) {
-            Some(listing) => other_column(
-                session,
-                id,
-                cols,
-                child,
-                listing.entries(),
-                None,
-                view::under_row(win),
-            ),
-            None => Element::new(Spacer { min: 0.0 }),
-        };
-        children.push(frame(id, place, &layout, column, child));
-        place += 1;
+        let column = other_column(session, cols, child, None);
+        columns.push((column, width(columns.len())));
     }
     if let Some(entry) = chain.preview.and_then(|i| browser.entries().get(i)) {
-        let width = layout.columns.get(place).map_or(PREVIEW_WIDTH, |c| c.1);
-        // the preview starts below the toolbar row
-        let pane = Element::new(Stack {
-            axis: Axis::Vertical,
-            padding: Insets {
-                top: view::under_row(win),
-                ..Insets::ZERO
-            },
-            spacing: 0.0,
-            align: Align::Stretch,
-            children: vec![preview_pane(session, id, win, entry).fill()],
-        });
-        children.push(pane.key("preview").width(width));
+        let width = layout
+            .columns
+            .get(columns.len())
+            .map_or(PREVIEW_WIDTH, |c| c.1);
+        let preview = FileColumn::Preview(preview_pane(session, id, win, entry));
+        columns.push((preview, width));
     }
-    let content = Element::new(Stack {
-        axis: Axis::Horizontal,
-        padding: Insets::ZERO,
-        spacing: 0.0,
-        align: Align::Stretch,
-        children,
-    })
-    .width(layout.content);
-    Element::from(ScrollView {
-        content,
-        state: win.scroll,
-        horizontal: true,
-        vertical: false,
-        scroller: Scroller::Overlay,
-        on_scroll: Box::new(move |s| Message::Window(id, WindowEvent::Scroll(s))),
-    })
-    .key("columns")
-}
-
-/// The column at `place` of the chain, `layout` wide, with the divider after it that resizes it.
-fn frame(
-    id: u64,
-    place: usize,
-    layout: &ChainLayout,
-    column: Element<Message>,
-    folder: &Path,
-) -> Element<Message> {
-    let width = layout.columns.get(place).map_or(0.0, |c| c.1);
-    Element::new(ColumnFrame {
+    let icons = Rc::clone(&session.icons);
+    Element::from(FileColumns {
         window: id,
-        index: place,
-        width,
-        children: vec![column.fill(), Element::new(Divider).width(DIVIDER)],
+        columns,
+        content: layout.content,
+        scroll: win.scroll,
+        lead: view::under_row(win),
+        icon: Rc::new(move |entry| icons.icon(entry, ROW_ICON)),
+        on_event: super::view_events(id),
     })
-    .key(column_key(folder))
-    .width(width)
-}
-
-/// The key of the column of `folder`.
-fn column_key(folder: &Path) -> Key {
-    Key::from(format!("column/{}", folder.display()))
 }
 
 /// The column of the folder the window shows: the browser's items, selection and rename.
-fn active_column(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
+fn active_column(session: &Session, id: u64, win: &BrowserWindow) -> FileColumn<Message> {
     let browser = &win.browser;
     let dir = browser.dir().to_path_buf();
-    let entries: Rc<[Entry]> = browser.entries().into();
-    let names: Rc<[String]> = entries.iter().map(|e| e.name.clone()).collect();
-    let selection = view::shown_selection(win);
-    let cell_selection = selection.clone();
-    let presses = Rc::clone(&win.list_presses);
-    let icons = Rc::clone(&session.icons);
-    let rename = win.rename.as_ref().map(|r| {
-        (
-            r.edit.index(),
-            r.edit.text().to_owned(),
-            r.revision,
-            r.selection.clone(),
-        )
-    });
-    let keys = Rc::clone(&entries);
-    let folder = dir.clone();
-    let list = ListView {
+    FileColumn::Shown {
         label: window_title(&dir, &session.places),
-        count: entries.len(),
-        row_height: ROW_HEIGHT,
+        items: browser.entries().into(),
         scroll: win.columns.scroll(&dir),
-        selection,
-        multiple: true,
-        initial: false,
-        row: Box::new(move |row, selected| {
-            let entry = &entries[row];
-            let name = match rename.as_ref().filter(|r| r.0 == row) {
-                Some((_, value, revision, range)) => {
-                    view::name_field(id, value.clone(), *revision, range.clone())
-                }
-                None => name_text(entry.name.clone(), selected),
-            };
-            let named = Element::new(Stack {
-                axis: Axis::Horizontal,
-                padding: Insets::ZERO,
-                spacing: crate::window::metrics::PATH_ICON_GAP,
-                align: Align::Center,
-                children: vec![icon(icons.icon(entry, ROW_ICON)), name.fill()],
-            })
-            .fill();
-            let cell = Element::new(RowCell {
-                window: id,
-                index: row,
-                name: true,
-                label: Some(entry.name.clone()),
-                selection: cell_selection.clone(),
-                presses: Rc::clone(&presses),
-                children: vec![named],
-            })
-            .fill();
-            row_content(cell, entry.is_dir, selected)
-        }),
-        key: Some(Box::new(move |row| row_key(id, &keys[row].path))),
-        type_select: Some(Box::new(move |row| names[row].clone())),
-        on_scroll: Box::new(move |s| {
-            Message::Window(id, WindowEvent::ColumnScroll(folder.clone(), s))
-        }),
-        on_select: Some(Box::new(move |s| {
-            Message::Window(id, WindowEvent::Select(s))
-        })),
-        double_click_activates: false,
-        on_activate: Some(Box::new(move |i| Message::Window(id, WindowEvent::Open(i)))),
-    };
-    Element::new(ColumnKeys {
-        window: id,
-        children: vec![list
-            .rounded_element(SELECTION_INSET, HIGHLIGHT_RADIUS, view::under_row(win))
-            .fill()],
-    })
+        selection: view::shown_selection(win),
+        name_field: view::name_field_of(id, win),
+        presses: win.list_presses.clone(),
+        folder: dir,
+    }
 }
 
-/// The column of a folder other than the one shown, `entries` its items; the row of `next`, the folder of the next
-/// column, is highlighted.
+/// The column of a folder other than the one shown, which the row of `next`, the folder of the next column, is
+/// highlighted in; empty until its listing has its items.
 fn other_column(
     session: &Session,
-    id: u64,
     cols: &ColumnsView,
     folder: &Path,
-    entries: &[Entry],
     next: Option<&PathBuf>,
-    under: f64,
-) -> Element<Message> {
-    let highlighted = next.and_then(|n| entries.iter().position(|e| &e.path == n));
-    let entries: Rc<[Entry]> = entries.into();
-    let names: Rc<[String]> = entries.iter().map(|e| e.name.clone()).collect();
-    let keys = Rc::clone(&entries);
-    let icons = Rc::clone(&session.icons);
-    let picked = folder.to_path_buf();
-    let pressed = folder.to_path_buf();
-    let scrolled = folder.to_path_buf();
-    let list = ListView {
-        label: window_title(folder, &session.places),
-        count: entries.len(),
-        row_height: ROW_HEIGHT,
-        scroll: cols.scroll(folder),
-        selection: Selection::new([], highlighted, highlighted),
-        multiple: false,
-        initial: false,
-        row: Box::new(move |row, _| {
-            let entry = &entries[row];
-            let named = Element::new(Stack {
-                axis: Axis::Horizontal,
-                padding: Insets::ZERO,
-                spacing: crate::window::metrics::PATH_ICON_GAP,
-                align: Align::Center,
-                children: vec![
-                    icon(icons.icon(entry, ROW_ICON)),
-                    name_text(entry.name.clone(), false).fill(),
-                ],
-            })
-            .fill();
-            let content = row_content(named, entry.is_dir, false);
-            Element::new(PickCell {
-                message: Message::Window(
-                    id,
-                    WindowEvent::ColumnPick {
-                        folder: pressed.clone(),
-                        index: row,
-                        secondary: true,
-                    },
-                ),
-                highlighted: highlighted == Some(row),
-                children: vec![content],
-            })
-            .fill()
-        }),
-        key: Some(Box::new(move |row| row_key(id, &keys[row].path))),
-        type_select: Some(Box::new(move |row| names[row].clone())),
-        on_scroll: Box::new(move |s| {
-            Message::Window(id, WindowEvent::ColumnScroll(scrolled.clone(), s))
-        }),
-        on_select: Some(Box::new(move |s: Selection| {
-            Message::Window(
-                id,
-                WindowEvent::ColumnPick {
-                    folder: picked.clone(),
-                    index: s.cursor().unwrap_or(0),
-                    secondary: false,
-                },
-            )
-        })),
-        double_click_activates: false,
-        on_activate: None,
+) -> FileColumn<Message> {
+    let Some(listing) = cols.listings.get(folder) else {
+        return FileColumn::Empty {
+            folder: folder.to_path_buf(),
+        };
     };
-    list.rounded_element(SELECTION_INSET, HIGHLIGHT_RADIUS, under)
-}
-
-/// A row: its icon and name, then a folder's chevron at the far end.
-fn row_content(named: Element<Message>, folder: bool, selected: bool) -> Element<Message> {
-    let mut children = vec![named];
-    if folder {
-        children.push(Element::new(Icon {
-            name: "symbol.chevron.right".into(),
-            size: CHEVRON,
-            direction: IconDirection::Semantic,
-            label: None,
-            tint: Some(if selected {
-                ColorRole::SelectedControlText
-            } else {
-                ColorRole::SecondaryText
-            }),
-        }));
+    let entries = listing.entries();
+    FileColumn::Other {
+        folder: folder.to_path_buf(),
+        label: window_title(folder, &session.places),
+        highlighted: next.and_then(|n| entries.iter().position(|e| &e.path == n)),
+        items: entries.into(),
+        scroll: cols.scroll(folder),
     }
-    Element::new(Stack {
-        axis: Axis::Horizontal,
-        padding: Insets {
-            top: 0.0,
-            left: ROW_LEAD,
-            bottom: 0.0,
-            right: ROW_LEAD,
-        },
-        spacing: crate::window::metrics::PATH_ICON_GAP,
-        align: Align::Center,
-        children,
-    })
-    .fill()
-}
-
-fn icon(sources: Vec<ImageSource>) -> Element<Message> {
-    Element::new(Image {
-        sources,
-        size: Size::new(ROW_ICON, ROW_ICON),
-        fit: ImageFit::Contain,
-        radius: 0.0,
-        label: None,
-    })
-}
-
-fn name_text(name: String, selected: bool) -> Element<Message> {
-    Element::new(Text {
-        content: AttributedText::plain(name, TextStyle::new(13.0)),
-        role: TextRole::Body,
-        wrap: false,
-        secondary: false,
-        selected,
-    })
 }
 
 /// The preview column of the selected file `entry`, which the gallery shows beside its pictures too.
@@ -675,212 +424,6 @@ pub(super) fn preview_content(
     content.unwrap_or_else(|| PreviewContent::Icon(session.icons.icon(entry, icon)))
 }
 
-fn no_measure() -> Measured {
-    Measured {
-        size: Size::ZERO,
-        baseline: None,
-    }
-}
-
-fn filling(axis: Axis) -> LayoutSpec {
-    LayoutSpec {
-        width: SizeSpec::Fill,
-        height: SizeSpec::Fill,
-        flex: cupertino_kit::layout::Flex::grow(1.0),
-        ..LayoutSpec::new(ContainerKind::Stack {
-            axis,
-            spacing: 0.0,
-            align: Align::Stretch,
-            justify: Justify::Start,
-        })
-    }
-}
-
-/// Left and Right in the column of the folder shown, which the list leaves alone.
-struct ColumnKeys {
-    window: u64,
-    children: Vec<Element<Message>>,
-}
-
-impl Widget<Message> for ColumnKeys {
-    type State = ();
-
-    fn layout(&self) -> LayoutSpec {
-        filling(Axis::Vertical)
-    }
-
-    fn take_children(&mut self) -> Vec<Element<Message>> {
-        std::mem::take(&mut self.children)
-    }
-
-    fn state(&self) {}
-
-    fn update(&self, _: &Self, _: &mut ()) -> Change {
-        Change::None
-    }
-
-    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
-        no_measure()
-    }
-
-    fn event(&self, _: &mut (), event: &Event, cx: &mut EventCx<'_, Message>) -> Propagation {
-        if cx.phase() == Phase::Capture {
-            return Propagation::Continue;
-        }
-        let Event::Key(
-            KeyEvent {
-                keysym,
-                mods,
-                pressed: true,
-                ..
-            },
-            _,
-        ) = event
-        else {
-            return Propagation::Continue;
-        };
-        if !mods.is_empty() {
-            return Propagation::Continue;
-        }
-        let (forward, back) = match cx.env().direction {
-            LayoutDirection::Ltr => (RIGHT, LEFT),
-            LayoutDirection::Rtl => (LEFT, RIGHT),
-        };
-        let by = match *keysym {
-            k if k == forward => 1,
-            k if k == back => -1,
-            _ => return Propagation::Continue,
-        };
-        cx.emit(Message::Window(self.window, WindowEvent::ColumnStep(by)));
-        Propagation::Stop
-    }
-
-    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
-
-    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
-}
-
-/// A column and its divider; a press on the divider, or just before it, drags it to resize the column.
-struct ColumnFrame {
-    window: u64,
-    index: usize,
-    /// The column's width as shown.
-    width: f64,
-    children: Vec<Element<Message>>,
-}
-
-/// A divider being dragged: where the press was, the column's width then, and whether Option was held.
-#[derive(Default)]
-struct Resizing {
-    from: Option<(f64, f64, bool)>,
-}
-
-impl Widget<Message> for ColumnFrame {
-    type State = Resizing;
-
-    fn layout(&self) -> LayoutSpec {
-        LayoutSpec {
-            width: SizeSpec::Fixed(self.width),
-            ..filling(Axis::Horizontal)
-        }
-    }
-
-    fn take_children(&mut self) -> Vec<Element<Message>> {
-        std::mem::take(&mut self.children)
-    }
-
-    fn state(&self) -> Resizing {
-        Resizing::default()
-    }
-
-    fn update(&self, old: &Self, _: &mut Resizing) -> Change {
-        if self.width != old.width {
-            Change::Layout
-        } else {
-            Change::None
-        }
-    }
-
-    fn measure(&self, _: &Resizing, _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
-        no_measure()
-    }
-
-    fn event(
-        &self,
-        state: &mut Resizing,
-        event: &Event,
-        cx: &mut EventCx<'_, Message>,
-    ) -> Propagation {
-        let rtl = cx.env().direction == LayoutDirection::Rtl;
-        match *event {
-            Event::Pointer(
-                PointerEvent::Button {
-                    position,
-                    button: MouseButton::Left,
-                    pressed: true,
-                    mods,
-                    ..
-                },
-                _,
-            ) if cx.phase() == Phase::Capture => {
-                let Some(bounds) = cx.bounds() else {
-                    return Propagation::Continue;
-                };
-                let edge = if rtl { bounds.min_x() } else { bounds.max_x() };
-                if (position.x - edge).abs() > GRIP {
-                    return Propagation::Continue;
-                }
-                state.from = Some((position.x, self.width, mods.contains(Mods::ALT)));
-                cx.capture_pointer();
-                Propagation::Stop
-            }
-            Event::Pointer(PointerEvent::Motion { position }, _) => {
-                let Some((from, width, all)) = state.from else {
-                    return Propagation::Continue;
-                };
-                let moved = if rtl {
-                    from - position.x
-                } else {
-                    position.x - from
-                };
-                cx.emit(Message::Window(
-                    self.window,
-                    WindowEvent::ColumnResize {
-                        index: self.index,
-                        width: width + moved,
-                        all,
-                    },
-                ));
-                Propagation::Stop
-            }
-            Event::Pointer(
-                PointerEvent::Button {
-                    button: MouseButton::Left,
-                    pressed: false,
-                    ..
-                },
-                _,
-            ) if state.from.is_some() => {
-                state.from = None;
-                cx.release_pointer();
-                cx.emit(Message::Window(self.window, WindowEvent::ColumnResized));
-                Propagation::Stop
-            }
-            Event::Cancel => {
-                if state.from.take().is_some() {
-                    cx.emit(Message::Window(self.window, WindowEvent::ColumnResized));
-                }
-                Propagation::Continue
-            }
-            _ => Propagation::Continue,
-        }
-    }
-
-    fn paint(&self, _: &Resizing, _: &mut PaintCx<'_>) {}
-
-    fn semantics(&self, _: &Resizing, _: &mut SemanticsCx<'_>) {}
-}
-
 /// The side of the More button's glyph: a ring holding three dots in a row.
 const MORE_GLYPH: f64 = 18.0;
 
@@ -938,164 +481,6 @@ impl Widget<Message> for MoreGlyph {
                     radius: dot / 2.0,
                 },
                 paint: Paint::Solid(ink),
-            });
-        }
-    }
-
-    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
-}
-
-/// The line between two columns.
-struct Divider;
-
-impl Widget<Message> for Divider {
-    type State = ();
-
-    fn layout(&self) -> LayoutSpec {
-        LayoutSpec {
-            width: SizeSpec::Fixed(DIVIDER),
-            height: SizeSpec::Fill,
-            ..LayoutSpec::new(ContainerKind::Leaf)
-        }
-    }
-
-    fn state(&self) {}
-
-    fn update(&self, _: &Self, _: &mut ()) -> Change {
-        Change::None
-    }
-
-    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
-        Measured {
-            size: Size::new(DIVIDER, 0.0),
-            baseline: None,
-        }
-    }
-
-    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, Message>) -> Propagation {
-        Propagation::Continue
-    }
-
-    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
-        let size = cx.size();
-        let color = cx
-            .env()
-            .theme
-            .colors
-            .get(ColorRole::Separator, StateVariant::NORMAL);
-        if let Some(color) = color {
-            cx.push(PaintOp::Fill {
-                shape: Shape::Rect(Rect::new(0.0, 0.0, size.width, size.height)),
-                paint: Paint::Solid(color),
-            });
-        }
-    }
-
-    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
-}
-
-/// A row of a column other than the folder shown's: a secondary press on it shows its folder with it selected before
-/// the context menu opens, and the row of the next folder of the chain is highlighted.
-struct PickCell {
-    message: Message,
-    highlighted: bool,
-    children: Vec<Element<Message>>,
-}
-
-impl Widget<Message> for PickCell {
-    type State = ();
-
-    fn layout(&self) -> LayoutSpec {
-        filling(Axis::Horizontal)
-    }
-
-    fn take_children(&mut self) -> Vec<Element<Message>> {
-        std::mem::take(&mut self.children)
-    }
-
-    fn state(&self) {}
-
-    fn update(&self, old: &Self, _: &mut ()) -> Change {
-        if self.highlighted != old.highlighted {
-            Change::Paint
-        } else {
-            Change::None
-        }
-    }
-
-    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
-        no_measure()
-    }
-
-    fn event(&self, _: &mut (), event: &Event, cx: &mut EventCx<'_, Message>) -> Propagation {
-        if cx.phase() == Phase::Capture {
-            return Propagation::Continue;
-        }
-        let secondary = match *event {
-            Event::Pointer(
-                PointerEvent::Button {
-                    button: MouseButton::Right,
-                    pressed: true,
-                    ..
-                },
-                _,
-            ) => true,
-            Event::Pointer(
-                PointerEvent::Button {
-                    button: MouseButton::Left,
-                    pressed: true,
-                    mods,
-                    ..
-                },
-                _,
-            ) => mods.contains(Mods::CTRL),
-            _ => false,
-        };
-        if secondary {
-            cx.emit(self.message.clone());
-            if let Event::Pointer(PointerEvent::Button { position, .. }, _) = *event {
-                if let Message::Window(id, _) = self.message {
-                    if !matches!(
-                        event,
-                        Event::Pointer(
-                            PointerEvent::Button {
-                                button: MouseButton::Right,
-                                ..
-                            },
-                            _
-                        )
-                    ) {
-                        // Ctrl with a press is the secondary click
-                        cx.emit(Message::Window(id, WindowEvent::ContextMenu(position)));
-                        return Propagation::Stop;
-                    }
-                }
-            }
-        }
-        Propagation::Continue
-    }
-
-    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
-        if !self.highlighted {
-            return;
-        }
-        let size = cx.size();
-        let color = cx.env().theme.colors.get(
-            ColorRole::SecondarySelectedControlFill,
-            StateVariant::NORMAL,
-        );
-        if let Some(color) = color {
-            cx.push(PaintOp::Fill {
-                shape: Shape::RoundedRect {
-                    rect: Rect::new(
-                        -HIGHLIGHT_OUTSET,
-                        0.0,
-                        size.width + 2.0 * HIGHLIGHT_OUTSET,
-                        size.height,
-                    ),
-                    radius: HIGHLIGHT_RADIUS,
-                },
-                paint: Paint::Solid(color),
             });
         }
     }

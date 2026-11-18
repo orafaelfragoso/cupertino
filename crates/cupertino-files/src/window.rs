@@ -3,6 +3,7 @@
 
 use crate::format::available_size;
 use crate::places::{recents_place, Place, PlaceKind};
+use cupertino_kit::files::{applications, recents};
 use std::path::{Path, PathBuf};
 
 /// Window chrome metrics.
@@ -46,10 +47,10 @@ pub enum ViewMode {
 /// instead.
 pub fn path_chain(dir: &Path, places: &[Place]) -> Vec<(PathBuf, String)> {
     let mut chain = Vec::new();
-    if dir == crate::recents::location() {
+    if dir == recents::location() {
         return vec![(dir.to_path_buf(), recents_place().name)];
     }
-    if dir == crate::applications::location() {
+    if dir == applications::location() {
         return vec![(dir.to_path_buf(), crate::places::APPLICATIONS_NAME.into())];
     }
     for folder in dir.ancestors() {

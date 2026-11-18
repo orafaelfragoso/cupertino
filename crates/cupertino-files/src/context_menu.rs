@@ -5,9 +5,9 @@
 //! * Two rows stand for a set of choices: the tag row of seven colours and the row of the four view modes.
 
 use crate::menu_bar::MenuAction;
-use crate::sort::SortKey;
-use crate::tags::TagColor;
 use crate::window::ViewMode;
+use cupertino_kit::files::sort::SortKey;
+use cupertino_kit::files::tags::TagColor;
 
 /// The modifier keys that select an alternate row.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

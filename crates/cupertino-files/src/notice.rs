@@ -14,8 +14,8 @@ use zbus::message::Type;
 use zbus::zvariant::Value;
 use zbus::MatchRule;
 
-use crate::operations::DropAction;
-use crate::rename::{NameError, MAX_NAME_BYTES};
+use cupertino_kit::files::operations::DropAction;
+use cupertino_kit::files::rename::{NameError, MAX_NAME_BYTES};
 
 const NOTIFICATIONS: &str = "org.freedesktop.Notifications";
 const APP_NAME: &str = "Files";

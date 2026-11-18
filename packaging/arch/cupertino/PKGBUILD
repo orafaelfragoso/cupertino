@@ -161,7 +161,7 @@ package_cupertino-data() {
 # installed, else the toolkit uses its built-in fallbacks.
 package_cupertino-kit() {
   pkgdesc='CupertinoKit C SDK: the libcupertinokit shared library, its header and pkg-config file'
-  license=('MPL-2.0' 'MIT' 'OFL-1.1')
+  license=('MPL-2.0' 'GPL-3.0-or-later' 'MIT' 'OFL-1.1')
   depends=('glibc' 'gcc-libs' 'libxkbcommon')
   optdepends=('cupertino-data: the fonts and icons of the desktop'
               'cupertino: the desktop theme')
@@ -180,6 +180,7 @@ package_cupertino-kit() {
   chmod 644 "$pkgdir/usr/lib/pkgconfig/cupertinokit.pc"
   _build_record cupertino-kit cupertino-server "$pkgdir/usr/share/cupertino-kit/build-info.json"
   install -Dm644 crates/cupertino-ui-abi/LICENSE "$lic/MPL-2.0"
+  install -Dm644 LICENSE "$lic/GPL-3.0-or-later"
   install -Dm644 crates/cupertino-assets/fonts/OFL.txt "$lic/OFL.txt"
   install -Dm644 packaging/licenses/THIRD-PARTY-LICENSES "$lic/THIRD-PARTY-LICENSES"
   install -Dm644 packaging/licenses/THIRD-PARTY-NOTICES "$lic/THIRD-PARTY-NOTICES"

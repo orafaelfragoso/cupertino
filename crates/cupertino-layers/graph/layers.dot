@@ -415,11 +415,13 @@ digraph "layers" {
   "cupertino-ui-abi" -> "cupertino-kit";
   "cupertino-ui-abi" -> "cupertino-ui-core";
   "cupertino-ui-abi" -> "cupertino-ui-test";
+  "cupertino-ui-controls" -> "cupertino-assets" [label="dev"];
   "cupertino-ui-controls" -> "cupertino-geometry";
   "cupertino-ui-controls" -> "cupertino-menu-model";
   "cupertino-ui-controls" -> "cupertino-theme";
   "cupertino-ui-controls" -> "cupertino-ui-core";
   "cupertino-ui-controls" -> "cupertino-ui-render";
+  "cupertino-ui-controls" -> "cupertino-ui-test" [label="dev"];
   "cupertino-ui-controls" -> "cupertino-ui-text";
   "cupertino-ui-core" -> "cupertino-animation";
   "cupertino-ui-core" -> "cupertino-app-protocols";

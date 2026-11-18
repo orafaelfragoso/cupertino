@@ -1733,11 +1733,13 @@ dependencies = [
 name = "cupertino-ui-controls"
 version = "0.1.0"
 dependencies = [
+ "cupertino-assets",
  "cupertino-geometry",
  "cupertino-menu-model",
  "cupertino-theme",
  "cupertino-ui-core",
  "cupertino-ui-render",
+ "cupertino-ui-test",
  "cupertino-ui-text",
 ]
 

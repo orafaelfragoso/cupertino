@@ -16,7 +16,7 @@ Updated by the lead at every merge.
 | | |
 |---|---|
 | Current wave | 4 |
-| Running tasks | W4.12, W4.T (`kit`, `ui-controls`, `ui-files`) |
+| Running tasks | W4.12 |
 | Enforced layers | foundation, system, graphics, models, protocol, transport, testing (126 remaining-work lines) |
 | Waiting on the owner | nothing |
 | Last closed wave | 3 |
@@ -857,7 +857,7 @@ commit and ends as W4.8's do.
 - [x] (1d306b71b) `cursor decorations glass`: 47 public tests; the crates had none in `src/`.
 - [x] (0b521768b) `ui-abi ui-core ui-render ui-text ui-test ui-wayland`: 70 public tests (9, 16, 10, 23, 6, 6), with
       the agreement test of the two renderers; the crates had none in `src/`. `ui-core` takes `ui-test` as a dev-dependency.
-- [ ] `kit`, `ui-controls` and `ui-files`, starting once W4.8 is merged. The views' tests are written in W4.8's steps 4 to 6 and W4.12's steps bring their own; in `ui-files`
+- [x] (c8532f77c) `kit`, `ui-controls` and `ui-files`: 12, 40 and 39 public tests more (34, 40, 62), once W4.8 was merged. The views' tests are written in W4.8's steps 4 to 6 and W4.12's steps bring their own; in `ui-files`
       W4.T writes what is left, in files W4.12 does not own: `layout::icon`, natural order and sort, the types of `mime`, tags read
       and written, name checks and free names, `name_edit`, `open` against a fixture of applications, and the
       operations that are not a transfer (a folder made, an alias, a rename).
@@ -1300,3 +1300,9 @@ One line per change to a decision or approval of a design: date, number, what, w
   as built. `ui-controls`' `TableView` and `ListView` handlers return a message, so for the events they report a view's
   `on_event` must answer `Some`; Files maps every event, and W6.11, the first caller that answers `None`, makes those
   handlers return `Option<M>`. The capture sample folder is kept between runs so its birth times repeat.
+- 2026-11-18: owner, after W4.8: the C SDK's closure holds `cupertino-ui-files` and `cupertino-trash` through Kit, so
+  the SDK package declares GPL-3.0-or-later with MPL-2.0 and ships its text; the licences are reconciled when they are
+  redefined (D28).
+- 2026-11-18: lead, W4.T: `kit::image` names `OutputTransform`, which `orient` takes, so a program reaches it through
+  Kit while `kit::geometry` keeps point, size, rectangle and insets. The tests found that `new_folder_with` moves the
+  items after a failing one; W4.12 fixes it with its transfers.

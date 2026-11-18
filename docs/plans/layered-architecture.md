@@ -49,7 +49,7 @@ the [decision log](#decision-log), never changed silently in a task.
 | D5 | Shared caches in a Kit process (font database, glyph cache, icon cache, design catalogue) take one of three forms: immutable after start; append-only, with immutable entries behind `Arc` and a lock held only for the map insert; or owned by one service thread reached by messages. No other form. | A panic in one instance can then never leave a cache half-changed for the others. | W4.5 and W6.1 build them in these forms only. | Plan |
 | D6 | One concurrency model for every Kit program: the UI thread runs Kit's event loop; slow work (files, bus calls, decoding) goes through Kit's task API, whose results come back to the UI thread as messages. Each process has two pools: one for CPU work, sized to the cores, and one for I/O, where every task carries a deadline its caller names, a task past it is reported with the instance that started it, and one instance holds at most a quarter of the pool, so a blocked mount cannot starve the other components. Each instance's bus connection is ticked by its own UI loop (no executor thread of its own). In `shell` and `apps` crates, Clippy's `disallowed-methods` bans `std::thread::spawn`, `block_on`, `std::fs` and blocking bus calls: files and bus calls go through `kit::task` and Kit's async bus API, so a UI thread has no blocking call within reach. `system` crates offer blocking functions and start no threads; callers run them as tasks. The compositor keeps its own event loop. | A blocking call on a UI thread is how a desktop freezes; every program inventing its own threads is how panics escape and resources leak. | `kit::task` and the bus integration in W4.5; the `clippy.toml` of each `shell` and `apps` crate is generated from one list by `cupertino-layers`, which checks they match (W0.2); each component and app task removes its own threads and `block_on` calls. | Plan |
 | D7 | Motion comes from the design catalogue only. Kit's API names motions from the catalogue; a program that needs a new motion adds it to the catalogue. On the wire, motions travel as numbers (curve or spring parameters). | One source of motion; a host with a different catalogue still animates correctly. | Kit exposes no constructor for curves or springs from numbers (W4.7). | Owner (single source), plan (form) |
-| D8 | Files on screen are a Kit family: the views (icon grid, list, columns, the open and save panel) and the operations behind them (open, rename, trash, copy and move with progress, places, thumbnails, notices). Files, the desktop component and the shell's file chooser use it. | One implementation of the most-used views on the desktop, and one of the file operations users depend on. | Files' views and operations, the portal's chooser (`file_chooser.rs`, `dialog/`) and the file picker's model meet in `cupertino-ui-controls`; where two copies meet one stays (W4.8). | Plan |
+| D8 | Files on screen are a Kit family: the views (icon grid, list, columns, the open and save panel) and the operations behind them (open, rename, trash, copy and move with progress, places, thumbnails, notices). Files, the desktop component and the shell's file chooser use it. | One implementation of the most-used views on the desktop, and one of the file operations users depend on. | Files' views and operations, the portal's chooser (`file_chooser.rs`, `dialog/`) and the file picker's model meet in `cupertino-ui-files`, reached through Kit as `kit::files`: the views and operations in W4.8 and W4.12, the open and save panel in W6.11; where two copies meet one stays. | Plan |
 
 ### Processes
 
@@ -133,7 +133,7 @@ Further rules:
 
 | Never a dependency of a `shell` or `apps` crate | Reached through |
 |---|---|
-| `cupertino-ui-core`, `cupertino-ui-controls`, `cupertino-ui-text`, `cupertino-ui-render`, `cupertino-ui-wayland`, `cupertino-ui-test`, `cupertino-ui-abi`, `cupertino-theme`, `cupertino-animation`, `cupertino-raster-math`, `cupertino-gpu`, `cupertino-wayland-client`, `cupertino-app-protocols` | `cupertino-kit` |
+| `cupertino-ui-core`, `cupertino-ui-controls`, `cupertino-ui-files`, `cupertino-ui-text`, `cupertino-ui-render`, `cupertino-ui-wayland`, `cupertino-ui-test`, `cupertino-ui-abi`, `cupertino-theme`, `cupertino-animation`, `cupertino-raster-math`, `cupertino-gpu`, `cupertino-wayland-client`, `cupertino-app-protocols` | `cupertino-kit` |
 | `cupertino-shell-client`, `cupertino-protocols` | `cupertino-kit-shell` (for `shell` crates only) |
 
 `cupertino-kit` must not expose: Wayland objects or any transport type, raw surfaces, GPU objects, curve or spring
@@ -257,7 +257,7 @@ Every crate that exists today, and where it goes. "Keep" means it stays a crate 
 | `cupertino-controlcenter` | shell | keep; a component | shell | W6.5 |
 | `cupertino-cursor` | render | keep | render | W4.1 |
 | `cupertino-decorations` | render | merged into `cupertino-server-render` once only the server uses it (D32) | — | W4.1, W6.16 |
-| `cupertino-defaults` | foundation | keep (D27) | system | W1.3 |
+| `cupertino-defaults` | foundation | keep (D27); gains `user_dirs`, the one reader of `user-dirs.dirs` | system | W1.3, W4.12 |
 | `cupertino-devices` | platform | keep; absorbs `cupertino-evdev` | platform | W2.3, W2.4 |
 | `cupertino-diagnostic-events` | foundation | keep; absorbs `cupertino-build-info` and `cupertino-profile`; per-instance state (D3) | system | W1.3, W4.5 |
 | `cupertino-diagnostics` | tools | merged into `cupertino-cli`; the deprecated `cupertino-diagnose` program goes (D32) | — | W6.15, W7.3 |
@@ -266,7 +266,7 @@ Every crate that exists today, and where it goes. "Keep" means it stays a crate 
 | `cupertino-effects` | models | keep; its raster helper becomes dev-only | models | W2.3 |
 | `cupertino-evdev` | platform | merged into `cupertino-devices` (D32) | — | W2.4 |
 | `cupertino-filepicker` | foundation | merged into `cupertino-ui-controls` | — | W1.5 |
-| `cupertino-files` | apps | keep; its file views move to Kit (D8); its desktop mode moves to `cupertino-shell-desktop` | apps | W4.8, W6.10, W7.1 |
+| `cupertino-files` | apps | keep; its views and operations move to `cupertino-ui-files` (D8); its desktop mode moves to `cupertino-shell-desktop` | apps | W4.8, W4.12, W6.10, W7.1 |
 | `cupertino-geometry` | foundation | keep | foundation | W1.6 |
 | `cupertino-glass` | render | keep | render | W4.1 |
 | `cupertino-glyph` | foundation | merged into `cupertino-raster-math` (D32) | — | W2.4 |
@@ -277,7 +277,7 @@ Every crate that exists today, and where it goes. "Keep" means it stays a crate 
 | `cupertino-input` | models | keep | models | W2.3 |
 | `cupertino-key-bindings` | foundation | merged into `cupertino-keyboard` | — | W1.1 |
 | `cupertino-keyboard` | foundation | keep; absorbs `cupertino-modifiers` and `cupertino-key-bindings`; loses its I/O | foundation | W1.1 |
-| `cupertino-kit` | ui | keep; the facade; absorbs `cupertino-capture` behind its `test` feature | ui | W4.5–W4.7, W4.11 |
+| `cupertino-kit` | ui | keep; the facade; absorbs `cupertino-capture` behind its `test` feature; names the file family as `kit::files` | ui | W4.5–W4.8, W4.11, W4.12 |
 | `cupertino-launcher` | shell | keep; a component | shell | W6.6 |
 | `cupertino-layers` | tools | keep; the target rules | tools | W0.2 |
 | `cupertino-login` | shell | keep; login and lock screens only | shell | W6.13 |
@@ -293,7 +293,7 @@ Every crate that exists today, and where it goes. "Keep" means it stays a crate 
 | `cupertino-peer` | platform | keep; resolves callers to components (D20) | system | W1.3, W5.2 |
 | `cupertino-pipewire` | platform | merged into new `cupertino-audiod` once only it uses it (D32) | — | W5.9, W6.16 |
 | `cupertino-polkit-agent` | shell | merged into new `cupertino-prompts` | — | W6.14 |
-| `cupertino-portal` | shell | keep; no interface of its own (D11); absorbs `cupertino-screencast` | services | W6.11 |
+| `cupertino-portal` | shell | keep; no interface of its own (D11); absorbs `cupertino-screencast`; reads the user directories through `cupertino-defaults` | services | W4.12, W6.11 |
 | `cupertino-powerd` | services | keep | services | W5.11 |
 | `cupertino-profile` | foundation | merged into `cupertino-diagnostic-events` (D32) | — | W1.3 |
 | `cupertino-protocol-app` | transport | merged into `cupertino-wayland-client` | — | W3.2 |
@@ -317,7 +317,7 @@ Every crate that exists today, and where it goes. "Keep" means it stays a crate 
 | `cupertino-typeahead` | foundation | merged into `cupertino-ui-controls` | — | W1.5 |
 | `cupertino-ui-abi` | ui | keep | ui | W4.6 |
 | `cupertino-ui-atspi` | ui | merged into `cupertino-ui-wayland` | — | W4.4 |
-| `cupertino-ui-controls` | ui | keep; absorbs `cupertino-typeahead` and `cupertino-filepicker`; gains the file views (D8) | ui | W1.5, W4.8 |
+| `cupertino-ui-controls` | ui | keep; absorbs `cupertino-typeahead` and `cupertino-filepicker`; its `filepicker::places` goes | ui | W1.5, W4.12 |
 | `cupertino-ui-core` | ui | keep; absorbs `cupertino-ui-layout` and `cupertino-ui-platform` | ui | W4.2 |
 | `cupertino-ui-gpu` | ui | merged into `cupertino-ui-render` | — | W4.3 |
 | `cupertino-ui-layout` | ui | merged into `cupertino-ui-core` | — | W4.2 |
@@ -338,6 +338,7 @@ New crates:
 | Crate | Layer | Task |
 |---|---|---|
 | `cupertino-session-tests` | testing | W1.4 |
+| `cupertino-ui-files` | ui; the file views and the operations behind them (D8) | W4.8, W4.12, W6.10, W6.11 |
 | `cupertino-kit-shell` | shellkit | W5.10 |
 | `cupertino-audiod` | services; absorbs `cupertino-alsa` and `cupertino-pipewire` | W5.9, W6.16 |
 | `cupertino-server-backend` | core | W5.6 |
@@ -350,7 +351,7 @@ New crates:
 | `cupertino-shell-dialogs` | shell | W6.11 |
 | `cupertino-prompts` | shell | W6.14 |
 
-Count: 90 crates today (the four test crates are already gone), 30 merged away or deleted, 12 new: 72 at the end. Every crate left meets one of D32's reasons.
+Count: 90 crates today (the four test crates are already gone), 30 merged away or deleted, 13 new: 73 at the end. Every crate left meets one of D32's reasons.
 
 ## Rules for implementers
 
@@ -742,17 +743,42 @@ ui-wayland`. **After** W4.2.
        (0dd10df1b, approved 2026-11-17)
 2. [x] (6c9431f4c) The approved API, and nothing else.
 
-#### W4.8 File views in Kit (L)
+#### W4.8 File views in Kit (L, no behaviour change)
 
-**Owns** `ui-controls`; the view and operation code of `files` (`kit/` views, `operations`, `open`, `rename`,
-`name_edit`, `trash`, `thumbnail`, `places`, `notice`); `portal` (`file_chooser.rs`, `dialog/`). **After** W4.7.
+**Owns** `ui-files`; `files`; `kit` (the `files` list of `lib.rs`, the README's module table); `layers` (`FACADES`);
+the `ui` row of `docs/src/architecture.md`. **Touches** the manifests of `files kit`. **After** W4.7, W4.11.
 
-1. [ ] The views (icon grid, list, columns) and the operations of D8 move from `cupertino-files` to
-       `cupertino-ui-controls`, reached through Kit.
-2. [ ] The open and save panel is built from the portal's chooser and the file picker's model on those views; where
-       two copies of the same logic meet, one stays (listed in the report).
-3. [ ] Files and the portal use them from Kit; behaviour and look unchanged (review sheet, Files and chooser
-       captures).
+The design is "File views (proposal)" in `crates/cupertino-ui-controls/README.md`, approved in the
+[decision log](#decision-log). No step changes a behaviour or a look, so none has a review sheet. The proof is the same
+pixels (`files_capture`'s sheets written with `--out` before and after each step, at 1× and 2×, light and dark, are the
+same files) and the views' tests in `crates/cupertino-ui-files/tests/`, driven through the headless driver. Each step
+is one commit and ends with `cargo xtask ci --profile agent --base <B>`, the layers check and the graph and
+remaining-work list written again; a step that changes `Cargo.lock` checks its crates by name. Everything that changes
+a behaviour is W4.12.
+
+1. [ ] **The proof's captures** (no behaviour change, S). `files_capture` gains a held press and a secondary press,
+       `--view gallery`, `--state rename|ring|band` and `files/desktop`. Done when: two runs at the base give the same
+       files; what could not be captured is named.
+2. [ ] **One geometry** (no behaviour change, S). In Files, `geom`'s `Point`, `Size` and `Rect` go: the layouts, the
+       desktop arrangement and their callers use `cupertino-geometry`, a `foundation` crate Files depends on by name.
+       `Direction` stays. Done when: `geom` holds `Direction` alone and no function turns one rectangle type into the
+       other; `cargo check -p cupertino-files` passes without features; same pixels.
+3. [ ] **The crate, its values and operations** (move, M). `cupertino-ui-files` (`ui`) holds the modules `entry`,
+       `natural`, `sort`, `mime`, `tags`, `applications`, `recents`, `geom`, `layout::icon`, `rename`, `name_edit`,
+       `open`, `operations` and `item_art`, and the views' `metrics`; `kit::files` lists what callers name; Files, its
+       example and its bench name them from Kit. Done when: `git diff -M` shows the bodies unchanged; no glob in Kit's
+       lists; `FACADES` and the `ui` row name the crate; the remaining-work line
+       `cupertino-files -> cupertino-ui-text` leaves the list; same pixels.
+4. [ ] **Icon grid** (no behaviour change, M). `grid`, `band`, `clicks` and `Grab` are `IconGrid<M>` with `ViewEvent`;
+       Files maps the events. Done when: Files' `Event` and `update` are untouched; `tests/icon-grid.rs`; same pixels.
+5. [ ] **List** (no behaviour change, M). `list` and the list's assembly are `FileList<M>`. Done when: as 4,
+       `tests/file-list.rs`.
+6. [ ] **Columns** (no behaviour change, M). The column widgets and assembly are `FileColumns<M>`; the chain, its
+       layout and its listings stay in Files. Done when: as 4, `tests/file-columns.rs`;
+       `rg 'Session|BrowserWindow' crates/cupertino-ui-files/src` finds nothing.
+
+From step 3 `cupertino-files` depends on `cupertino-kit` whether or not its `app` feature is on; the feature stays
+until W7.1.
 
 #### W4.9 Host and transaction protocols: specification (M, design, no code)
 
@@ -787,16 +813,57 @@ W4.7 step 1 (its approved types).
 - [x] (b2ea34e41) The capture command's shared part is a module of `cupertino-kit` behind the `test` feature, beside the headless
       backend; the examples enable the feature as a dev-dependency.
 
+#### W4.12 File services as work (L, behaviour change)
+
+**Owns** `ui-files`; `files`; `kit` (`file_icons.rs`, the `files` and `filepicker` lists of `lib.rs`, the README);
+`ui-controls` (`filepicker::places`); `defaults` (`user_dirs`); `portal` (where `dialog.rs` takes its places from,
+`pictures` in `screenshot.rs`). **Touches** the manifests of `ui-files files kit portal`. **After** W4.8.
+
+Every behaviour change of the file family is here, and none is in W4.8. The design is "File views (proposal)" in
+`crates/cupertino-ui-controls/README.md` (places and user directories, slow work, a folder that does not open, mounts
+that do not answer, transfers). The family starts no thread and touches no file on the UI thread. Each step is one
+commit and ends as W4.8's do.
+
+1. [ ] **Places and user directories: one copy** (S). `cupertino_defaults::user_dirs`; Files' `places` is the
+       family's, with `chooser_places`; `filepicker::places` goes; the portal's chooser and `pictures` use them. Done
+       when: `rg parse_user_dirs crates` finds only `cupertino-screenshot`; a test of `user_dirs` in
+       `crates/cupertino-defaults/tests/` (a relative `XDG_CONFIG_HOME` among its rows); a test that `chooser_places`
+       gives the rows the chooser has now; the portal's diff holds no drawing code; same pixels in Files.
+2. [ ] **Listings as work** (L). `model` is the family's, with no thread, and the `directory` bench comes with it; the
+       browser waits for a model's first update; the session keeps the models whose work runs. Done when: no
+       `std::thread` and no `notify` in the model; `tests/model.rs`: `Opened` then batches; `OpenFailed` with its kind
+       for a missing folder, a file and a folder without read permission, with and without a watch; a created,
+       renamed and removed item seen through the watch the first work registered; works one at a time and in order;
+       `follow` ends when its model is dropped with no event. In Files: a failed go, Back, Forward and Parent leave
+       the listing and the history as they are and post the notice; a folder asked for again while its work runs
+       opens no second model. Same pixels.
+3. [ ] **Thumbnails and item icons** (M). `thumbnail_service` and `item_icons` are the family's, as jobs;
+       `file_icons.rs` comes down from `cupertino-kit`, whose `kit::file_icons` names the same items. Done when: no
+       `std::thread` in them; `tests/thumbnails.rs`: wanted first, two at once, the budget, a failure kept, a decoder's
+       panic kept as a failure; same pixels, thumbnails included.
+4. [ ] **Notices** (S). `notice` is the family's, on the program's connection. Until W7.1 Files makes its session
+       connection before its loop starts and hands its async half to `Notices`. Done when: no `std::thread` and no
+       `zbus::blocking` in it; `tests/notices.rs` against a stand-in service on a peer connection: order kept, a click
+       back with its tag and token, `sent` ends.
+5. [ ] **Transfers in slices** (M). `operations::Transfer`; `transfer`, `duplicate_with` and `drop_into` loop over it.
+       Done when: `tests/transfer.rs`: a tree copied and moved slice by slice with its progress, a move across two
+       file systems, a stop that removes the item being copied, a source that changed while it was copied left where
+       it was, the results the blocking functions give now.
+
 #### W4.T Tests of wave 4's crates
 
-`cursor decorations glass kit ui-core ui-controls ui-text ui-render ui-wayland ui-test ui-abi`, as in W1.T.
+`cursor decorations glass kit ui-core ui-controls ui-files ui-text ui-render ui-wayland ui-test ui-abi`, as in W1.T.
 
 - [x] (1d306b71b) `cursor decorations glass`: 47 public tests; the crates had none in `src/`.
-- [ ] The `ui` crates and `kit`, once W4.8 is merged; `ui-render` gains the agreement test of its two renderers.
+- [ ] The `ui` crates and `kit`, starting once W4.8 is merged; `ui-render` gains the agreement test of its two
+      renderers. The views' tests are written in W4.8's steps 4 to 6 and W4.12's steps bring their own; in `ui-files`
+      W4.T writes what is left, in files W4.12 does not own: `layout::icon`, natural order and sort, the types of `mime`, tags read
+      and written, name checks and free names, `name_edit`, `open` against a fixture of applications, and the
+      operations that are not a transfer (a folder made, an alias, a rename).
 
 #### W4.close (lead)
 
-- [ ] `ENFORCED` gains `Render`, `Ui`. Docs and gates as in W1.close.
+- [ ] After W4.12: `ENFORCED` gains `Render`, `Ui`. Docs and gates as in W1.close.
 
 ### Wave 5: compositor, services, the shell toolkit
 
@@ -964,14 +1031,14 @@ At most three at a time, in this order:
 | Task | Component | Notes | After |
 |---|---|---|---|
 | W6.3 | `notifications` | D21; before the checkpoint | W6.1 |
-| W6.4 | `screenshot` | not a component: a separate Kit program started on demand (D10); same checklist minus the host items; gains the colour picker (from `cupertino-portal`'s `pick_overlay.rs`) and the screen-sharing picker | W6.2, W5.5 |
+| W6.4 | `screenshot` | not a component: a separate Kit program started on demand (D10); same checklist minus the host items; gains the colour picker (from `cupertino-portal`'s `pick_overlay.rs`) and the screen-sharing picker; reads the user directories through `cupertino_defaults::user_dirs`, which replaces its own parser | W6.2, W5.5 |
 | W6.5 | `controlcenter` | audio through `cupertino-audiod`, power through `Session1` | W6.2, W5.4, W5.9 |
 | W6.6 | `launcher` | | W6.2 |
 | W6.7 | `menubar` | | W6.2 |
-| W6.8 | `dock` and new `shell-overview` | owns the `protocols` edits `shell-host.md` gives W6.8; the overview's chrome and gestures move out of the dock; windows are holes; transitions are gesture-bound transactions | W6.2, W5.5 |
+| W6.8 | `dock` and new `shell-overview` | owns the `protocols` edits `shell-host.md` gives W6.8; the overview's chrome and gestures move out of the dock; windows are holes; transitions are gesture-bound transactions; reads the user directories through `cupertino_defaults::user_dirs`, which replaces its own parser | W6.2, W5.5 |
 | W6.9 | `windowmanager` | owns the `protocols` edits `shell-host.md` gives W6.9; gains a surface for the stage strip; placements as transactions | W6.2, W5.5 |
-| W6.10 | new `shell-desktop` | the desktop items, from `cupertino-files --desktop`, on Kit's file views | W6.2, W4.8 |
-| W6.11 | new `shell-dialogs`, `portal` as a service | `cupertino-screencast` becomes a module of the portal; file and application chooser in the component; the screenshot and global-shortcut consent dialogs in `cupertino-prompts`; the colour and sharing pickers in `cupertino-screenshot`; private bus interfaces between them, in `contracts.yaml`; the portal has no `#[cfg(test)]` left, since `services` is closed | W6.2, W6.4, W6.14 |
+| W6.10 | new `shell-desktop` | the desktop items, from `cupertino-files --desktop`, on `kit::files` with its own item view: `desktop`, `kit::desktop` and `metrics::desktop` leave Files; its listing, item icons, names, rename, operations, open, notices and `places::desktop_folder` are the family's; its file work runs as tasks, transfers slice by slice, the first caller to do so | W6.2, W4.12 |
+| W6.11 | new `shell-dialogs`, `portal` as a service | `cupertino-screencast` becomes a module of the portal; file and application chooser in the component; the screenshot and global-shortcut consent dialogs in `cupertino-prompts`; the colour and sharing pickers in `cupertino-screenshot`; private bus interfaces between them, in `contracts.yaml`; the portal has no `#[cfg(test)]` left, since `services` is closed; the chooser reads its places and its folders as tasks; the open and save panel is a view of `kit::files` (the sidebar of places, a `FileList`, the Save As field, the filters and choices, the buttons) built from the chooser's model and the picker, which lists the family's `Entry` in the family's order, so `filepicker::Entry` and its reader go and `filepicker` may join `cupertino-ui-files`; a look and behaviour change shown on a review sheet of the panel before and after, open and save, light and dark, for the owner; the component gains a capture example | W6.2, W6.4, W6.14, W4.12 |
 
 #### W6.12 Overlays leave the server (M, behaviour change)
 
@@ -1039,11 +1106,14 @@ Every crate of wave 6, as in W1.T.
 
 #### W7.1 `cupertino-files` through Kit (M)
 
-**Owns** `files`. **After** W6.close. Desktop mode is gone (W6.10).
+**Owns** `files`. **After** W6.close. Desktop mode is gone (W6.10). Files' own threads become tasks and its transfers
+run slice by slice; `udisks` and the session connection go through `kit::bus::connect`; its `notify` watch of the
+places goes; its `clippy.toml` arrives.
 
 #### W7.2 `cupertino-settings` through Kit (M)
 
-**Owns** `settings`. **After** W6.close. Displays through `Displays1`, power through `Session1`.
+**Owns** `settings`. **After** W6.close. Displays through `Displays1`, power through `Session1`. Its chooser sheet (`Chooser` in `cupertino-settings/src/sheet.rs`)
+is the open and save panel of `kit::files`.
 
 #### W7.3 Conformance of `tools` (S)
 
@@ -1215,3 +1285,7 @@ One line per change to a decision or approval of a design: date, number, what, w
   mounts that do not answer stop Files' I/O until one answers, and Files never opens the same one twice. It amends the
   W4.7 API: Kit gains `kit::files` and loses `filepicker::places`. A folder Files cannot read keeps today's behaviour,
   the window stays where it is and posts the notice.
+- 2026-11-18: lead, W4.8: `cupertino-ui-files` exists for D32's fourth reason: `cupertino-ui-controls` is 28 005 lines,
+  the family about 8 800 with fourteen dependencies of its own, and the two split at the controls' public items. The Kit
+  API of W4.7 is amended: `kit::files` is added, `kit::filepicker::places` (`session_places`, `parse_user_dirs`,
+  `Place`) goes, and `kit::file_icons` names the same items from another crate.

@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 
-use crate::places::{follow_trash, Place};
+use cupertino_kit::files::places::{follow_trash, Place};
 
 /// What reads the session's places again: the standard ones, without the removable media.
 pub type PlacesSource = Box<dyn Fn() -> io::Result<Vec<Place>>>;

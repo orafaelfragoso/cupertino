@@ -10,8 +10,8 @@
 //!   worker threads;
 //! * [`layout`]: the list layout engine with the measured metrics of [`metrics`];
 //! * [`format`]: how sizes and dates read;
-//! * [`places`], [`history`], [`browser`]: the sidebar's standard places, back / forward history and
-//!   the state of one browser window; [`window`]: its size limits, view modes, path bar and status bar text;
+//! * [`history`], [`browser`]: back / forward history and the state of one browser window (the sidebar's places are
+//!   the family's, `cupertino_kit::files::places`); [`window`]: its size limits, view modes, path bar and status bar text;
 //! * [`context_menu`], [`menu_spec`], [`menu_bar`]: the rows of the context menus and the menus of the menu bar;
 //! * [`desktop`]: where the desktop folder's items sit on the desktop, and what keeps their places;
 //! * [`search_field`]: the toolbar search field's width;
@@ -38,7 +38,6 @@ pub mod metrics;
 pub mod model;
 #[cfg(feature = "app")]
 pub mod notice;
-pub mod places;
 pub mod preview;
 pub mod search_field;
 pub mod selection;

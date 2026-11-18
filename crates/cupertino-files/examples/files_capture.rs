@@ -30,12 +30,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use cupertino_files::kit::desktop::{self, Desktop, Screen};
 use cupertino_files::kit::{prepare, Files, Start};
 use cupertino_files::notice::Notices;
-use cupertino_files::places::{folder_icons, standard_places, Medium, Place};
 use cupertino_files::trash::Trash;
 use cupertino_files::window::ViewMode;
 use cupertino_icons::thumbnail::Thumbnailer;
 use cupertino_kit::core::{Application, Role, RuntimeOptions};
 use cupertino_kit::file_icons::FileIcons;
+use cupertino_kit::files::places::{folder_icons, standard_places, Medium, Place};
 use cupertino_kit::geometry::{Point, Size};
 use cupertino_kit::platform::{
     KeyEvent, Keysym, Mods, MouseButton, PointerEvent, SystemAppearance, Timestamp, WindowId,

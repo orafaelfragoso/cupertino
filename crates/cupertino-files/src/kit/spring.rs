@@ -108,7 +108,7 @@ impl BrowserWindow {
         };
         let dir = origin.visit.dir().to_path_buf();
         if let Err(e) = self.browser.return_to(origin.visit) {
-            let name = crate::places::window_title(&dir, &session.places);
+            let name = cupertino_kit::files::places::window_title(&dir, &session.places);
             session.notices.post(notice::unopened(&name, &e));
             return;
         }

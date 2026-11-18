@@ -21,8 +21,8 @@ use cupertino_kit::prelude::*;
 use percent_encoding::percent_decode_str;
 
 use super::{BrowserWindow, Event, Message, Session};
-use crate::places::PlaceKind;
 use cupertino_kit::files::operations::{self, DropAction};
+use cupertino_kit::files::places::PlaceKind;
 
 /// The type dropped files are read in.
 pub(super) const URI_LIST: &str = "text/uri-list";
@@ -149,7 +149,7 @@ fn item_under(keys: &[Key], rows: &HashMap<Key, u64>) -> Option<(Key, u64)> {
 
 /// Where a drop on the sidebar's `place` puts the items: into the trash, or into the folder; none for a place that
 /// takes no items (Recents, Network, Applications).
-fn place_destination(place: &crate::places::Place) -> Option<Destination> {
+fn place_destination(place: &cupertino_kit::files::places::Place) -> Option<Destination> {
     match place.kind {
         PlaceKind::Trash => Some(Destination::Trash),
         PlaceKind::Recents | PlaceKind::Network | PlaceKind::Applications => None,

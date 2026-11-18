@@ -306,6 +306,15 @@ pub mod files {
         };
     }
 
+    /// The places of a file browser's sidebar and of a file chooser's.
+    pub mod places {
+        pub use cupertino_ui_files::places::{
+            chooser_places, desktop_folder, folder_icons, follow_trash, recents_place,
+            removable_holding, session_places, standard_places, window_title, Medium, Place,
+            PlaceGroup, PlaceKind, SessionPlaces, Volume, APPLICATIONS_NAME,
+        };
+    }
+
     /// The virtual folder of the recently used files.
     pub mod recents {
         pub use cupertino_ui_files::recents::{location, recent_entries, XBEL_NAME};
@@ -343,11 +352,4 @@ pub mod filepicker {
     pub use cupertino_ui_controls::filepicker::{
         Entry, Key, Listing, Mode, Outcome, Picker, Request,
     };
-
-    /// The folders of a chooser's sidebar: the home folder and the user directories of `user-dirs.dirs`.
-    pub mod places {
-        pub use cupertino_ui_controls::filepicker::places::{
-            parse_user_dirs, session_places, Place,
-        };
-    }
 }

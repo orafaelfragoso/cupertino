@@ -62,7 +62,6 @@ use crate::instance::Service;
 use crate::menu_bar::{self, MenuAction, MenuState};
 use crate::menu_spec::{self, Background, Subject};
 use crate::notice::{self, Action, Notices};
-use crate::places::{removable_holding, Place};
 use crate::preview::Browse;
 use crate::search_field::{self, SearchWidth};
 use crate::settings::ColumnId;
@@ -80,6 +79,7 @@ use cupertino_kit::files::open::{
     command_with, default_app_id, open_command, open_with, OpenError,
 };
 use cupertino_kit::files::operations::{self, DropAction};
+use cupertino_kit::files::places::{removable_holding, Place};
 use cupertino_kit::files::sort::SortSpec;
 use cupertino_kit::files::tags::{self, TagColor};
 use cupertino_kit::files::{ColumnEvent, ViewEvent};
@@ -2319,7 +2319,7 @@ impl BrowserWindow {
             .then(|| self.columns.chain(&self.browser).child)
             .flatten();
         let dir = child.as_deref().unwrap_or(self.browser.dir());
-        crate::places::window_title(dir, &session.places)
+        cupertino_kit::files::places::window_title(dir, &session.places)
     }
 
     /// After each event: the column view follows the folder and the selection, the preview window follows a single
@@ -2497,7 +2497,7 @@ impl BrowserWindow {
             Step::Forward => self.browser.history().forward_target(),
             Step::Parent => self.browser.dir().parent(),
         }
-        .map(|p| crate::places::window_title(p, &session.places));
+        .map(|p| cupertino_kit::files::places::window_title(p, &session.places));
         let outcome = match step {
             Step::Back => self.browser.back(),
             Step::Forward => self.browser.forward(),
@@ -2714,7 +2714,8 @@ impl BrowserWindow {
                 menu_spec::item_menu(&subject, &self.selection_apps(session)),
             )
         } else {
-            let label = crate::places::window_title(self.browser.dir(), &session.places);
+            let label =
+                cupertino_kit::files::places::window_title(self.browser.dir(), &session.places);
             (label, self.background_items(session, in_trash))
         };
         self.context = Some(context::OpenMenu {
@@ -2768,7 +2769,7 @@ impl BrowserWindow {
                 true,
             ));
         }
-        if place.kind == crate::places::PlaceKind::Trash {
+        if place.kind == cupertino_kit::files::places::PlaceKind::Trash {
             items.push(crate::context_menu::MenuItem::separator());
             items.push(crate::context_menu::MenuItem::command(
                 "Empty Trash",

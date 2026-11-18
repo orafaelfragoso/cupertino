@@ -34,11 +34,11 @@ use crate::browser::Browser;
 use crate::columns::{self, ChainLayout, ColumnChain, PREVIEW_WIDTH};
 use crate::metrics::window as window_metrics;
 use crate::model::DirectoryModel;
-use crate::places::window_title;
 use crate::preview::{self as file_preview, PreviewKind};
 use cupertino_kit::files::columns::{column_key, FileColumn, FileColumns, ROW_HEIGHT, ROW_ICON};
 use cupertino_kit::files::entry::Entry;
 use cupertino_kit::files::list::row_key;
+use cupertino_kit::files::places::window_title;
 
 /// The side of an icon in the preview column.
 const PREVIEW_ICON: f64 = 128.0;

@@ -9,6 +9,7 @@ layer = "ui"
 
 [dependencies]
 cupertino-apps = { path = "../cupertino-apps" }
+cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-theme = { path = "../cupertino-theme" }
 cupertino-trash = { path = "../cupertino-trash" }
@@ -25,3 +26,4 @@ libc = "0.2"
 [dev-dependencies]
 cupertino-assets = { path = "../cupertino-assets" }
 cupertino-ui-test = { path = "../cupertino-ui-test" }
+tempfile = "3"

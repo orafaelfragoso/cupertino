@@ -15,8 +15,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use cupertino_defaults::user_dirs;
 use cupertino_diagnostic_events::{self as diag, Severity, Value as Field};
-use cupertino_kit::filepicker::places::parse_user_dirs;
 use tiny_skia::{BlendMode, FilterQuality, Pixmap, PixmapPaint, Transform};
 use zbus::message::Header;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
@@ -639,19 +639,19 @@ impl LocalTime {
     }
 }
 
-/// The directory screenshots are written to: `XDG_PICTURES_DIR` of `$XDG_CONFIG_HOME/user-dirs.dirs` (else
-/// `~/.config/user-dirs.dirs`), else `~/Pictures`.
+/// The directory screenshots are written to: `XDG_PICTURES_DIR` of the user directories
+/// ([`cupertino_defaults::user_dirs::read`]), else `~/Pictures`; a file that cannot be read is one line on standard
+/// error.
 pub fn pictures() -> PathBuf {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
         .unwrap_or_else(|| PathBuf::from("/"));
-    let config = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute())
-        .unwrap_or_else(|| home.join(".config"));
-    let text = std::fs::read_to_string(config.join("user-dirs.dirs")).unwrap_or_default();
-    parse_user_dirs(&text, &home)
+    let assigned = user_dirs::read(&home).unwrap_or_else(|e| {
+        eprintln!("cupertino-portal: cannot read the user directories: {e}");
+        Vec::new()
+    });
+    assigned
         .into_iter()
         .rev()
         .find(|(name, _)| name == "PICTURES")

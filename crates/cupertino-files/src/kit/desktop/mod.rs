@@ -47,7 +47,6 @@ use super::item_icons::ItemIcons;
 use crate::desktop::{self as arrangement, Arrangement, DesktopPrefs, Grid, Slot};
 use crate::metrics::desktop as m;
 use crate::notice::{self, Action, Notices};
-use crate::places::{desktop_folder, session_places};
 use crate::trash::Trash;
 use crate::{DirectoryModel, ModelOptions};
 use cupertino_icons::thumbnail::Thumbnailer;
@@ -58,6 +57,7 @@ use cupertino_kit::files::open::{
     command_with, default_app_id, open_command, open_with, OpenError,
 };
 use cupertino_kit::files::operations::{self, DropAction};
+use cupertino_kit::files::places::{desktop_folder, session_places};
 use cupertino_kit::files::sort::{sort_entries, SortKey, SortSpec};
 
 /// What the desktop's windows are called by the roles: `cupertino-desktop@OUTPUT`.

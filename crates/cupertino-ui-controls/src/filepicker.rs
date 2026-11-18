@@ -4,8 +4,6 @@ use std::path::{Path, PathBuf};
 
 use crate::typeahead::TypeAhead;
 
-pub mod places;
-
 /// What the picker chooses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Mode {

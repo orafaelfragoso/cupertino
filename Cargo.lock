@@ -1768,6 +1768,7 @@ version = "0.1.0"
 dependencies = [
  "cupertino-apps",
  "cupertino-assets",
+ "cupertino-defaults",
  "cupertino-geometry",
  "cupertino-theme",
  "cupertino-trash",
@@ -1779,6 +1780,7 @@ dependencies = [
  "libc",
  "mime_guess",
  "serde",
+ "tempfile",
  "tree_magic_mini",
  "xattr",
 ]

@@ -18,6 +18,7 @@ public items: the family builds on them and `cupertino-ui-controls` gains no dep
 | `natural`, `sort` | name collation (case-, width-insensitive, numeric, localized) and ordering | `NameKey`, `compare_names`, `type_select_key`; `SortSpec { key, ascending, folders_first }`, `SortKey`, `sort_entries`, `insertion_index`, `compare` |
 | `mime`, `tags` | metadata | `detect`, `entry_mime`, `kind_group` (`KindGroup`), `kind_description`; `read_tags` / `write_tags` (`user.xdg.tags`), `add_tag`, `remove_tag`, `parse_tag_list`, `TagColor` (seven label colours), `parse_reference_tags` |
 | `applications`, `recents` | the two virtual folders | `location`, `application_dirs`, `session_entries`, `any_installed`; `location`, `recent_entries`, `parse_xbel` and `XBEL_NAME` (`cupertino_apps::recent`'s) |
+| `places` | the places of a sidebar, over the user directories of `cupertino_defaults::user_dirs` | `Place` (name, path, `PlaceGroup`, `PlaceKind` with its symbols and folder icon; `Volume`, `Medium` of a removable file system), `standard_places` (a file browser's sidebar: the home folder, Applications, Desktop, Documents, Downloads, the computer, the network, Trash), `chooser_places` (a file chooser's: Home, then Desktop, Documents, Downloads, Music, Pictures and Videos where they exist), `session_places` (`SessionPlaces`: the running session's, with `folder_icons`), `desktop_folder`, `recents_place`, `follow_trash`, `removable_holding`, `window_title`, `computer_name`, `network_root` |
 | `layout::icon`, `geom` | icon view | `ideal_cell_size`, `max_title_lines`, `layout` (flow / justified, 32 pt section headers), `strip` (a gallery's row), `IconLayout::{hit, hits_in_rect, neighbour}`, `FreeGrid`, in `cupertino-geometry`'s points, sizes and rectangles; `Direction` |
 | `rename`, `name_edit` | names | `RenameTrigger` (a press on the only selected item's name renames it after the double-click interval), `validate_name`, `needs_extension_warning`, `initial_selection`, `unique_name`, `NameError`; `NameEdit::{field, field_mut, commit}` |
 | `open` | opening files | `open_command` (default application of `mimeapps.list` through `cupertino-apps`; `Terminal=true` under `--terminal`), `command_with`, `open_with` (Open With list: default first, rest by name), `application_at`, `default_app_id`, `OpenError` |
@@ -38,8 +39,8 @@ The views' tests drive each view in a window on the headless window system throu
 
 ## Design
 
-The views below are built as the design the owner approved for the family (W4.8 in the plan). The slow work, the
-places and the transfers in slices that follow them are W4.12's design, not built yet.
+The views below are built as the design the owner approved for the family (W4.8 in the plan), and so are the places.
+The slow work and the transfers in slices that follow them are W4.12's design, not built yet.
 
 ### What shapes it
 

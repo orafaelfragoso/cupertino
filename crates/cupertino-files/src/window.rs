@@ -2,7 +2,7 @@
 //! shows the folder, the folders of its path bar and the text of its status bar. The window itself is [`crate::kit`].
 
 use crate::format::available_size;
-use crate::places::{recents_place, Place, PlaceKind};
+use cupertino_kit::files::places::{recents_place, Place, PlaceKind, APPLICATIONS_NAME};
 use cupertino_kit::files::{applications, recents};
 use std::path::{Path, PathBuf};
 
@@ -51,7 +51,7 @@ pub fn path_chain(dir: &Path, places: &[Place]) -> Vec<(PathBuf, String)> {
         return vec![(dir.to_path_buf(), recents_place().name)];
     }
     if dir == applications::location() {
-        return vec![(dir.to_path_buf(), crate::places::APPLICATIONS_NAME.into())];
+        return vec![(dir.to_path_buf(), APPLICATIONS_NAME.into())];
     }
     for folder in dir.ancestors() {
         if let Some(place) = places.iter().find(|p| {

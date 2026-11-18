@@ -2487,7 +2487,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         if !effects.animate.is_empty() {
             w.animate.extend(effects.animate);
             w.repaint();
-            if w.failed.is_none() {
+            // a window whose frame is away asks for the next once it is back ([`WindowEvent::Shown`])
+            if w.failed.is_none() && w.in_flight.is_none() {
                 self.system.request_frame(w.id);
             }
         }

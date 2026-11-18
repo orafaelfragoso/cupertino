@@ -22,8 +22,9 @@ use cupertino_ui_core::platform::{
     ConfigureId, CursorShape, DragImage, DragProgress, DragRequest, DragToken, DrawInto,
     DropAction, DropAnswer, DropEvent, DropToken, GlassRegion, GlassStyle, GlassTone, KeyEvent,
     Keysym, Lent, MaterialRegion, MenuDescription, PlatformError, PlatformEvent, PopupSpec,
-    PresentOutcome, RaisedLayer, RendererClass, ScrollBars, Shown, Submission, Submitted,
-    SystemAppearance, Timestamp, WindowEvent, WindowId, WindowRequest, WindowSpec, WindowSystem,
+    PresentOutcome, RaisedChange, RaisedLayer, RendererClass, ScrollBars, Shown, Submission,
+    Submitted, SystemAppearance, Timestamp, WindowEvent, WindowId, WindowRequest, WindowSpec,
+    WindowSystem,
 };
 use cupertino_ui_render::render_thread;
 use cupertino_ui_render::{CpuFrame, MemoryTarget, RenderError, RenderFrameId};
@@ -2119,6 +2120,10 @@ impl WindowSystem for WaylandWindowSystem {
     /// windows (shared memory in the other byte order, a renderer that draws into no memory) are declined.
     fn submit(&mut self, window: WindowId, frame: &Submission) -> Result<Submitted, PlatformError> {
         let surface = self.window_mut(window)?.surface;
+        // a frame that changes its layers is drawn on the UI thread, its layers with it
+        if !matches!(frame.raised, RaisedChange::Kept) || frame.surface_layers.is_some() {
+            return Ok(Submitted::Declined);
+        }
         let on_gpu = self.gpu.draws(surface);
         let into_memory = !on_gpu
             && self.gpu.on_shm(surface)

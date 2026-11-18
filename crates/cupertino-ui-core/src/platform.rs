@@ -558,7 +558,8 @@ pub enum PresentOutcome {
 pub type SharedRenderer = Arc<Mutex<Box<dyn UiRenderer<Frame = CpuFrame> + Send>>>;
 
 /// A window's next frame, recorded on the UI thread, for the window system to draw and show away from it
-/// ([`WindowSystem::submit`]).
+/// ([`WindowSystem::submit`]), with the changes of its raised layer and its surface layers, which the window system
+/// draws and commits before the frame, so they show with it.
 #[derive(Clone)]
 pub struct Submission {
     pub renderer: SharedRenderer,
@@ -569,6 +570,11 @@ pub struct Submission {
     pub width: u32,
     pub height: u32,
     pub damage: DamageRegion,
+    /// What the frame does with the window's raised layer ([`WindowSystem::present_layer`]).
+    pub raised: RaisedChange,
+    /// Every surface layer the window shows with the frame, back to front
+    /// ([`WindowSystem::present_surface_layers`]); `None` when they are shown as they are.
+    pub surface_layers: Option<Vec<SubmittedLayer>>,
 }
 
 impl Submission {
@@ -583,32 +589,80 @@ impl Submission {
             damage: &self.damage,
         }
     }
+
+    /// The repaint of `layer`, one of the submission's layers, it asks of the layer's renderer.
+    pub fn layer_request<'a>(&'a self, layer: &'a LayerList) -> RenderRequest<'a> {
+        RenderRequest {
+            list: &layer.list,
+            resources: &self.resources,
+            scale: self.scale,
+            width: layer.width,
+            height: layer.height,
+            damage: &layer.damage,
+        }
+    }
+}
+
+/// A layer drawn with a window's frame ([`Submission::raised`], [`Submission::surface_layers`]): its display list,
+/// recorded on the UI thread, the renderer that draws it (the layer's own, shared as the window's is), its size in
+/// pixels and what changed since that renderer's last frame.
+#[derive(Clone)]
+pub struct LayerList {
+    pub renderer: SharedRenderer,
+    pub list: Arc<DisplayList>,
+    pub width: u32,
+    pub height: u32,
+    pub damage: DamageRegion,
+}
+
+/// What a submitted frame does with its window's raised layer ([`Submission::raised`]).
+#[derive(Clone)]
+pub enum RaisedChange {
+    /// Leaves it as it is shown.
+    Kept,
+    /// Hides it.
+    Hidden,
+    /// Shows `layer`, drawn over the window's content from its top edge, as wide as the window and `height` whole
+    /// points tall ([`RaisedLayer`]).
+    Drawn { height: u32, layer: LayerList },
+}
+
+/// A surface layer of a submitted frame ([`SurfaceLayer`]): its key, layout and look, and `layer`, its frame to draw,
+/// `None` when its pixels have not changed since it was last shown.
+#[derive(Clone)]
+pub struct SubmittedLayer {
+    pub key: u64,
+    pub rect: Rect,
+    pub look: SurfaceLayerLook,
+    pub layer: Option<LayerList>,
 }
 
 /// What [`WindowSystem::submit`] did with a frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Submitted {
     /// The window system draws and shows it away from the UI thread: [`WindowEvent::Shown`] says how that went, sent
-    /// once the window system let go of the renderer, and the window neither draws another frame nor reaches its
-    /// renderer until then.
+    /// once the window system let go of the renderers, and the window neither draws another frame nor reaches its
+    /// renderer or its layers' until then.
     Taken,
-    /// No buffer is free, or the window waits for its configure or for a frame of the size it asks for: the frame
-    /// was not drawn and the next one draws all of it.
+    /// No buffer is free, or the window waits for its configure or for a frame of the size it asks for: neither the
+    /// frame nor its layers were drawn, and the next frame draws all of them.
     NotReady,
-    /// The window system does not take frames this way now: draw the frame on the UI thread and present it
-    /// ([`WindowSystem::present_into`], [`WindowSystem::present`]).
+    /// The window system does not take frames this way now: draw the frame and its layers on the UI thread and
+    /// present them ([`WindowSystem::present_surface_layers`], [`WindowSystem::present_layer`],
+    /// [`WindowSystem::present_into`], [`WindowSystem::present`]).
     Declined,
 }
 
 /// How a frame [`WindowSystem::submit`] took was shown ([`WindowEvent::Shown`]).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Shown {
-    /// Committed: the window may draw its next frame when the compositor asks for it.
+    /// Committed, its layers before it: the window may draw its next frame when the compositor asks for it.
     Presented(RenderFrameId),
-    /// Not shown (no buffer was free in the end, the device was lost, the surface fell back to another path): the
-    /// next frame draws all of it.
+    /// Not shown, nor its layers (no buffer was free in the end, the device was lost, the surface fell back to another
+    /// path): the next frame draws all of them.
     NotReady,
-    /// The renderer failed to draw it; the next frame draws all of it.
+    /// A renderer failed to draw it or one of its layers, and none of them was shown; the next frame draws all of
+    /// them.
     Failed(RenderError),
 }
 
@@ -1019,8 +1073,10 @@ pub trait WindowSystem {
     /// Takes `frame` to draw and show away from the UI thread: drawn on the process's render thread (a window drawn on
     /// the GPU) or on the CPU pool (one drawn into its shared-memory buffers), and committed by the thread that drew
     /// it, which acknowledges the window's latest configure as `submit` is called, attaches the buffer and commits, in
-    /// that order. A window system that does not draw this way declines (the default), and the window draws and
-    /// presents the frame itself.
+    /// that order. The frame's raised layer and surface layers ([`Submission::raised`],
+    /// [`Submission::surface_layers`]) are drawn there too and committed before it, so they show with it. A window
+    /// system that does not draw this way declines (the default), and the window draws and presents the frame and its
+    /// layers itself.
     fn submit(&mut self, window: WindowId, frame: &Submission) -> Result<Submitted, PlatformError> {
         let _ = (window, frame);
         Ok(Submitted::Declined)

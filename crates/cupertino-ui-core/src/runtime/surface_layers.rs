@@ -1,13 +1,18 @@
 //! A window's surface layers ([`Widget::surface_layer`](crate::Widget::surface_layer)): the marked subtrees leave the
 //! window's paint for lists of their own, each drawn at its layout size into a frame of its own, with its own damage,
-//! and handed to the window system with the window's frame
-//! ([`WindowSystem::present_surface_layers`](crate::platform::WindowSystem::present_surface_layers)). The
+//! and handed to the window system with the window's frame ([`Submission::surface_layers`](crate::platform::Submission),
+//! or [`WindowSystem::present_surface_layers`](crate::platform::WindowSystem::present_surface_layers) where it declines
+//! the frame). The
 //! compositor places and animates them; the application changes their properties with
 //! [`WindowRequest::Layer`](crate::platform::WindowRequest). Layout, input and semantics never see the split.
 
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
-use crate::platform::{PresentOutcome, SurfaceLayer, SurfaceLayerLook, WindowId, WindowSystem};
+use crate::platform::{
+    LayerList, PresentOutcome, SharedRenderer, SubmittedLayer, SurfaceLayer, SurfaceLayerLook,
+    WindowId, WindowSystem,
+};
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_ui_render::{
     CpuFrame, DamageRegion, DisplayList, PaintNodeId, PaintResources, RenderRequest, UiRenderer,
@@ -143,8 +148,8 @@ pub(crate) fn split(painting: &mut Painting, marks: &[Marked]) -> Vec<LayerPaint
 pub(crate) struct LayerState {
     pub(crate) damage: DamageTracker,
     /// Made on the layer's first frame.
-    pub(crate) renderer: Option<Box<dyn UiRenderer<Frame = CpuFrame> + Send>>,
-    pub(crate) list: DisplayList,
+    pub(crate) renderer: Option<SharedRenderer>,
+    pub(crate) list: Arc<DisplayList>,
     /// The rect and look it was last shown with.
     pub(crate) shown: Option<(Rect, SurfaceLayerLook)>,
 }
@@ -166,8 +171,8 @@ impl SurfaceLayers {
 
     /// Lets the renderers go of the layers they keep, as a window nobody sees does.
     pub(crate) fn drop_kept(&mut self) {
-        for r in self.layers.values_mut().filter_map(|l| l.renderer.as_mut()) {
-            r.drop_layers();
+        for r in self.layers.values().filter_map(|l| l.renderer.as_ref()) {
+            super::held(r).drop_layers();
         }
     }
 
@@ -214,72 +219,114 @@ impl SurfaceLayers {
         Prepared { paints, changed }
     }
 
-    /// Draws the layers of `prepared` that changed and hands them all to the window system for `window`'s next
-    /// present, at `scale`. A layer's renderer is made by `renderers` on its first frame.
-    pub(crate) fn present(
+    /// The layers of `prepared` as a submitted frame carries them ([`Submission::surface_layers`]): each that changed
+    /// with its list to draw at `scale` by its renderer, which `renderers` makes on the layer's first frame.
+    ///
+    /// [`Submission::surface_layers`]: crate::platform::Submission::surface_layers
+    pub(crate) fn submitted(
         &mut self,
         prepared: Prepared,
+        scale: f64,
+        renderers: &mut dyn FnMut() -> Box<dyn UiRenderer<Frame = CpuFrame> + Send>,
+    ) -> Vec<SubmittedLayer> {
+        prepared
+            .paints
+            .into_iter()
+            .map(|(paint, damage)| {
+                let state = self.layers.entry(paint.key).or_default();
+                state.list = Arc::new(paint.list);
+                let layer = damage.map(|damage| LayerList {
+                    renderer: Arc::clone(
+                        state
+                            .renderer
+                            .get_or_insert_with(|| Arc::new(Mutex::new(renderers()))),
+                    ),
+                    list: Arc::clone(&state.list),
+                    width: super::physical(paint.rect.width(), scale).max(1),
+                    height: super::physical(paint.rect.height(), scale).max(1),
+                    damage,
+                });
+                SubmittedLayer {
+                    key: paint.key,
+                    rect: paint.rect,
+                    look: paint.look,
+                    layer,
+                }
+            })
+            .collect()
+    }
+
+    /// Draws the frames of `layers` on this thread and hands them all to the window system for `window`'s next
+    /// present, with `resources` at `scale`: the layers of a frame the window system declined.
+    pub(crate) fn present(
+        &mut self,
+        layers: &[SubmittedLayer],
         system: &mut (impl WindowSystem + ?Sized),
         window: WindowId,
+        resources: &Arc<PaintResources>,
         scale: f64,
-        resources: &PaintResources,
-        renderers: &mut dyn FnMut() -> Box<dyn UiRenderer<Frame = CpuFrame> + Send>,
     ) -> Result<PresentOutcome, UiError> {
-        let mut drawn = Vec::with_capacity(prepared.paints.len());
-        for (paint, damage) in prepared.paints {
-            let state = self.layers.entry(paint.key).or_default();
-            state.list = paint.list;
-            let id = match damage {
-                Some(damage) => {
-                    let renderer = state.renderer.get_or_insert_with(&mut *renderers);
+        let mut drawn = Vec::with_capacity(layers.len());
+        for l in layers {
+            drawn.push(match &l.layer {
+                Some(layer) => {
+                    let mut renderer = super::held(&layer.renderer);
                     let id = renderer
                         .render(&RenderRequest {
-                            list: &state.list,
+                            list: &layer.list,
                             resources,
                             scale,
-                            width: super::physical(paint.rect.width(), scale).max(1),
-                            height: super::physical(paint.rect.height(), scale).max(1),
-                            damage: &damage,
+                            width: layer.width,
+                            height: layer.height,
+                            damage: &layer.damage,
                         })
                         .map_err(UiError::Render)?;
-                    Some(id)
+                    Some((renderer, id))
                 }
                 None => None,
-            };
-            drawn.push((paint.key, paint.rect, paint.look, id));
+            });
         }
-        let mut layers = Vec::with_capacity(drawn.len());
-        for &(key, rect, look, id) in &drawn {
-            let frame = match (id, self.layers.get(&key).and_then(|s| s.renderer.as_ref())) {
-                (Some(id), Some(r)) => Some(r.frame(id).map_err(UiError::Render)?),
-                _ => None,
+        let mut frames = Vec::with_capacity(layers.len());
+        for (l, drawn) in layers.iter().zip(&drawn) {
+            let frame = match drawn {
+                Some((renderer, id)) => Some(renderer.frame(*id).map_err(UiError::Render)?),
+                None => None,
             };
-            layers.push(SurfaceLayer {
-                key,
-                rect,
-                look,
+            frames.push(SurfaceLayer {
+                key: l.key,
+                rect: l.rect,
+                look: l.look,
                 frame,
             });
         }
         let outcome = system
-            .present_surface_layers(window, &layers)
+            .present_surface_layers(window, &frames)
             .map_err(UiError::Platform)?;
-        drop(layers);
-        if outcome == PresentOutcome::NotReady {
-            self.shown.clear();
-            for s in self.layers.values_mut() {
-                s.shown = None;
-                s.damage.invalidate();
-            }
-            return Ok(outcome);
+        drop(frames);
+        match outcome {
+            PresentOutcome::Presented => self.shown(&shows(layers)),
+            PresentOutcome::NotReady => self.not_shown(),
         }
-        self.shown = drawn.iter().map(|d| d.0).collect();
-        for (key, rect, look, _) in drawn {
+        Ok(outcome)
+    }
+
+    /// The window system shows these layers, each key with its rect and look, back to front.
+    pub(crate) fn shown(&mut self, shown: &[(u64, Rect, SurfaceLayerLook)]) {
+        self.shown = shown.iter().map(|s| s.0).collect();
+        for &(key, rect, look) in shown {
             if let Some(s) = self.layers.get_mut(&key) {
                 s.shown = Some((rect, look));
             }
         }
-        Ok(outcome)
+    }
+
+    /// The window system showed none of the layers it was handed: the next frame hands them all again, drawn whole.
+    pub(crate) fn not_shown(&mut self) {
+        self.shown.clear();
+        for s in self.layers.values_mut() {
+            s.shown = None;
+            s.damage.invalidate();
+        }
     }
 
     /// Takes every layer away, as when the window shows a colour instead of a frame.
@@ -294,11 +341,12 @@ impl SurfaceLayers {
         system
             .present_surface_layers(window, &[])
             .map_err(UiError::Platform)?;
-        self.shown.clear();
-        for s in self.layers.values_mut() {
-            s.shown = None;
-            s.damage.invalidate();
-        }
+        self.not_shown();
         Ok(())
     }
+}
+
+/// What showing `layers` shows: each key with its rect and look.
+pub(crate) fn shows(layers: &[SubmittedLayer]) -> Vec<(u64, Rect, SurfaceLayerLook)> {
+    layers.iter().map(|l| (l.key, l.rect, l.look)).collect()
 }

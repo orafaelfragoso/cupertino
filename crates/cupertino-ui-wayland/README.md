@@ -175,8 +175,9 @@ the render thread (`gpu_present::Draw`); one drawing into shared memory in ABGR8
 in shared memory never waits for the render thread, which may be making a device's programs),
 acknowledging the configure, attaching and committing in that order, after it sent the frame back; the next dispatch
 reads it (before what the compositor said of it) and tells the runtime `WindowEvent::Shown`. Until then the window
-draws no other frame, and freeing a surface's GPU buffers waits for the render thread's work before it. The raised
-layer, the surface layers, a solid colour and shared memory in ARGB8888 still present on the UI thread.
+draws no other frame, and freeing a surface's GPU buffers waits for the render thread's work before it. A frame that
+changes its raised layer or its surface layers is declined, and the runtime draws and presents it with them on the UI
+thread; a solid colour and shared memory in ARGB8888 still present there too.
 
 `examples/gpu-window.rs` is the presenter's check window, a client for `cupertino-server`:
 `--frames`, `--reset-every`, `--purge-every`, `--losses`, `--renderer` (frames drawn by the GPU renderer and copied

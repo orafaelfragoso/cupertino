@@ -96,8 +96,10 @@ all on one thread.
   the window system lends (`WindowSystem::present_into`), so it has no copy and its raster paints what the buffer
   missed too; where none is lent the frame is drawn into the renderer's own image and presented with `present`.
   A window system that draws frames away from the UI thread takes them first (`WindowSystem::submit`: the display
-  list, resources and damage with the window's shared renderer); the window then
-  draws nothing until `WindowEvent::Shown` says how the frame went, and the turn counts no raster for it. `pool::cpu`
+  list, resources and damage with the window's shared renderer, and the changes of its raised layer and surface
+  layers, `Submission::raised` and `Submission::surface_layers`, each layer's list with a renderer of its own shared
+  the same way, which the window system draws and commits before the frame); the window then
+  draws nothing until `WindowEvent::Shown` says how the frame went, and its layers count as shown only then, and the turn counts no raster for it. `pool::cpu`
   is the process's CPU pool (up to a thread per core, `kit-cpu-N`, each started when work finds the others busy) that
   such frames and the toolkit's CPU tasks run on; a window's frames go to one lane (`pool::cpu_for`), one thread
   for all of them, the lanes sharing at most `pool::FRAME_LANES` (4) threads.
@@ -240,8 +242,9 @@ all on one thread.
   (`Capabilities::surface_layers`): after each paint the runtime moves the marked subtrees out of the window's list
   into lists of their own at their layer's origin (`runtime/surface_layers.rs`; a mark inside a marked subtree draws in
   the outer layer, and a subtree's root leaves its ancestors' clips and groups to the layer's shape and properties),
-  keeps a damage tracker and a renderer per layer, draws a layer only where it changed, at its layout size, and hands
-  the frames to the window system with the window's (`present_surface_layers`). The application moves, fades, scales
+  keeps a damage tracker and a renderer per layer, and hands a layer that changed to the window system with the
+  window's frame, to be drawn only where it changed, at its layout size (`Submission::surface_layers`), or, where the
+  window system declines the frame, draws it and hands it the frames (`present_surface_layers`). The application moves, fades, scales
   and blurs a layer with `WindowRequest::Layer`, which draws no frame; once the window's layers' last running
   animation ends, the window's root hears `Event::LayersSettled`. Layout, input and semantics keep the layout.
   Without the capability the subtree paints in place.
@@ -389,7 +392,8 @@ With `Capabilities::raised_layer` a window may show a raised layer over its cont
 `RaisedLayer` frame from the window's top edge, as wide as the window): the materials marked `MaterialRegion::raised`
 lie between the two and read the content below them, so content that scrolls under a toolbar row shows through the
 row's glass without covering it. The layer is presented with the window's next `present` and `None` hides it; without
-the capability a layer is `Unsupported`.
+the capability a layer is `Unsupported`. A window system that takes frames (`WindowSystem::submit`) gets the layer with
+the frame instead (`Submission::raised`, `RaisedChange`: kept, hidden, or drawn from a `LayerList`).
 
 With `Capabilities::surface_layers` a window may show marked parts of it in surfaces of their own that the compositor
 places and animates (`WindowSystem::present_surface_layers`): each `SurfaceLayer` has a key, its rect in the window,
@@ -397,7 +401,8 @@ its look (`SurfaceLayerLook`: glass style, glass group and spacing, corner radiu
 `LayerEdge`, a line the compositor draws along the outside of the glass's outline, in a group each shape's outline cut by the others, at
 a width in points that stays as the layer scales, where `Capabilities::surface_layer_edges` says it can) and its frame at
 its rect's size, or `None` when unchanged; the list is shown with the window's next `present`, back to front over its
-content, and a key left out goes. `WindowRequest::Layer { key, changes }` sets or animates a layer's properties
+content, and a key left out goes. A window system that takes frames gets the list with the frame instead
+(`Submission::surface_layers`, each a `SubmittedLayer` whose `LayerList` it draws). `WindowRequest::Layer { key, changes }` sets or animates a layer's properties
 (`LayerChange`, `LayerProperty`: x, y, width, height, opacity, scale, corner radius, content blur, along a
 `LayerCurve`, or with `LayerChange::through` through values the application works out itself at even steps of a
 duration) on the compositor's clock without a frame. Without the capability an empty list is all a window system

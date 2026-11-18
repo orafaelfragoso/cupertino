@@ -1789,6 +1789,7 @@ dependencies = [
  "tiny-skia",
  "tree_magic_mini",
  "xattr",
+ "zbus",
 ]
 
 [[package]]

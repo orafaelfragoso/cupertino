@@ -315,6 +315,14 @@ pub mod files {
         pub use cupertino_ui_files::name_edit::NameEdit;
     }
 
+    /// Failures as notifications, posted by a future on the program's bus connection.
+    pub mod notice {
+        pub use cupertino_ui_files::notice::{
+            bad_name, escape, explained, failure, finished, shown, unopened, Action, Click, Notice,
+            Notices,
+        };
+    }
+
     /// The order of names.
     pub mod natural {
         pub use cupertino_ui_files::natural::{compare_names, type_select_key, NameKey};

@@ -60,7 +60,6 @@ use crate::context_menu::{common_apps, AppChoice, Command as MenuCommand};
 use crate::instance::Service;
 use crate::menu_bar::{self, MenuAction, MenuState};
 use crate::menu_spec::{self, Background, Subject};
-use crate::notice::{self, Action, Notices};
 use crate::preview::Browse;
 use crate::search_field::{self, SearchWidth};
 use crate::settings::ColumnId;
@@ -75,6 +74,7 @@ use cupertino_kit::files::grid::Grab;
 use cupertino_kit::files::item_icons::ItemIcons;
 use cupertino_kit::files::list::{row_key, Presses, RowGrab};
 use cupertino_kit::files::name_edit::NameEdit;
+use cupertino_kit::files::notice::{self, Action, Notices};
 use cupertino_kit::files::open::{
     command_with, default_app_id, open_command, open_with, OpenError,
 };
@@ -128,6 +128,23 @@ pub struct Start {
     look_up: LookUp,
     /// The listings the windows let go of while their work runs.
     listings: Listings,
+    /// What posts the notices on the session bus, on the UI loop.
+    posting: Option<Posting>,
+}
+
+/// The future that posts a program's notices and hears their clicks, run on its UI loop.
+pub type Posting = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
+
+/// The notices of the session bus, on a connection made here, before the loop starts, and what posts them; notices
+/// that are logged without a session bus.
+pub fn session_notices() -> (Notices, Option<Posting>) {
+    match Connection::session() {
+        Ok(session) => {
+            let (notices, posting) = Notices::on(session.into_inner());
+            (notices, Some(Box::pin(posting)))
+        }
+        Err(_) => (Notices::logged(), None),
+    }
 }
 
 impl Start {
@@ -205,7 +222,13 @@ impl Start {
             activation: None,
             look_up: Arc::new(remote::look_up_item),
             listings: Listings::default(),
+            posting: None,
         }
+    }
+
+    /// The notices posted by `posting` ([`session_notices`]), which Files runs on its loop.
+    pub fn with_posting(self, posting: Option<Posting>) -> Start {
+        Start { posting, ..self }
     }
 
     /// The same start without its first window, as [`Start::idle`] makes it.
@@ -415,7 +438,7 @@ pub struct Model {
     windows: BTreeMap<u64, BrowserWindow>,
     next_window: u64,
     session: Session,
-    /// Files asked to exit: the messages left in that turn neither wait for the notices again nor exit again.
+    /// Files exits once its notices are sent: the messages until then do not start that wait again.
     exiting: bool,
     /// Files started without a window and waits for the first call it serves, until [`CALL_WAIT`] passes.
     awaiting_call: bool,
@@ -609,11 +632,14 @@ pub enum Message {
     /// The window with this key is shown: raise it, with the activation token of the launch that asked for it.
     Raise(WindowKey, Option<String>),
     /// A notice of a file operation's end was clicked; none once no click can come any more.
-    Noticed(Option<crate::notice::Click>),
+    Noticed(Option<notice::Click>),
     /// [`CALL_WAIT`] passed since Files started without a window.
     CallWaitOver,
-    /// A listing's work or watch, or a thumbnail's job, ended; what it brought wakes the windows.
+    /// A listing's work or watch, a thumbnail's job or the posting of the notices ended; what it brought wakes the
+    /// windows.
     Worked,
+    /// Files exits: the notices posted are sent, or [`EXIT_NOTICES`] passed first.
+    NoticesSent,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -896,6 +922,12 @@ impl Application for Files {
             commands.push(woken(instance.woken(), Message::Remote));
         }
         commands.extend(model.session.notice_clicks());
+        if let Some(posting) = start.posting {
+            commands.push(Command::Perform(Box::pin(async move {
+                posting.await;
+                Message::Worked
+            })));
+        }
         if model.session.volumes.is_some() {
             commands.push(woken(&model.session.media_woken, Message::Media));
         }
@@ -961,6 +993,7 @@ impl Model {
                 Vec::new()
             }
             Message::Worked => Vec::new(),
+            Message::NoticesSent => vec![Command::Exit],
             Message::Raise(key, token) => {
                 vec![Command::Window(key, WindowRequest::Activate(token))]
             }
@@ -1069,7 +1102,7 @@ impl Model {
 
     /// Exit once no browser window is open, no file operation runs and the progress window lists nothing, after the
     /// notices posted are sent.
-    fn exit_when_done(&mut self) -> Option<Command<Message>> {
+    fn exit_when_done(&mut self) -> Vec<Command<Message>> {
         let jobs = &self.session.jobs;
         if self.exiting
             || self.awaiting_call
@@ -1078,13 +1111,22 @@ impl Model {
             || !jobs.running.is_empty()
             || jobs.visible()
         {
-            return None;
+            return Vec::new();
         }
         self.exiting = true;
         // first, so a launch racing the exit is refused at once and starts a Files of its own
         self.session.instance = None;
-        self.session.notices.flush(EXIT_NOTICES);
-        Some(Command::Exit)
+        let sent = self.session.notices.sent();
+        vec![
+            Command::Perform(Box::pin(async move {
+                sent.await;
+                Message::NoticesSent
+            })),
+            Command::After {
+                delay: EXIT_NOTICES,
+                message: Message::NoticesSent,
+            },
+        ]
     }
 }
 

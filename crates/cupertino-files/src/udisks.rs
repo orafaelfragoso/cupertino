@@ -23,8 +23,8 @@ use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 use zbus::MatchRule;
 
 use crate::format::human_size;
-use crate::notice::{escape, shown, Notice, Notices};
 use cupertino_kit::files::natural::compare_names;
+use cupertino_kit::files::notice::{escape, shown, Notice, Notices};
 use cupertino_kit::files::places::{Medium, Place};
 
 pub const UDISKS_NAME: &str = "org.freedesktop.UDisks2";

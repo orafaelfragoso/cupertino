@@ -28,11 +28,14 @@ async-channel = "2"
 async-io = "2"
 futures-lite = "2"
 inotify = { version = "0.11", default-features = false }
+zbus = { version = "5", default-features = false, features = ["async-io"] }
 
 [dev-dependencies]
 cupertino-ui-test = { path = "../cupertino-ui-test" }
 tempfile = "3"
 tiny-skia = "0.12"
+# a peer connection to a stand-in notification service
+zbus = { version = "5", default-features = false, features = ["async-io", "p2p"] }
 
 [[bench]]
 name = "directory"

@@ -45,7 +45,6 @@ use self::roles::{DesktopRoles, RoleNote};
 use self::view::{BandLook, Desk, ItemView};
 use crate::desktop::{self as arrangement, Arrangement, DesktopPrefs, Grid, Slot};
 use crate::metrics::desktop as m;
-use crate::notice::{self, Action, Notices};
 use crate::trash::Trash;
 use cupertino_icons::thumbnail::Thumbnailer;
 use cupertino_kit::files::entry::Entry;
@@ -53,6 +52,7 @@ use cupertino_kit::files::geom::Direction;
 use cupertino_kit::files::item_icons::ItemIcons;
 use cupertino_kit::files::model::{DirectoryModel, ModelDelta, ModelOptions, WORK_DEADLINE};
 use cupertino_kit::files::name_edit::NameEdit;
+use cupertino_kit::files::notice::{self, Action, Notices};
 use cupertino_kit::files::open::{
     command_with, default_app_id, open_command, open_with, OpenError,
 };
@@ -127,7 +127,8 @@ pub enum Message {
     Woken,
     /// What woke the desktop is gone.
     Unheard,
-    /// The listing's work or watch, or a thumbnail's job, ended; what it brought wakes the desktop.
+    /// The listing's work or watch, a thumbnail's job or the posting of the notices ended; what it brought wakes the
+    /// desktop.
     Worked,
     /// A press landed on the desktop.
     Pressed,
@@ -278,7 +279,7 @@ impl Model {
             made: None,
             pasteboard: Vec::new(),
             trash: Trash::new(),
-            notices: Notices::start(None),
+            notices: Notices::logged(),
         }
     }
 
@@ -1206,7 +1207,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         screens,
         notes,
         arrangement::location(),
-        || Notices::start(zbus::blocking::Connection::session().ok()),
+        super::session_notices,
     );
     cupertino_kit::app::run_on::<Desktop>(system, start)?;
     Ok(())
@@ -1214,7 +1215,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
 /// The desktop of `folder` on `screens`, listed and watched, its items typed with `types` and drawn with `file_icons`
 /// and `thumbnails`, its arrangement kept in `prefs_file`, its failures posted on what `notices` starts, hearing the
-/// roles' `notes`; and the commands that hear its listing and its roles.
+/// roles' `notes`; and the commands that hear its listing and its roles and post its notices.
 #[allow(clippy::too_many_arguments)]
 fn listed(
     folder: PathBuf,
@@ -1224,7 +1225,7 @@ fn listed(
     screens: Vec<Screen>,
     notes: async_channel::Receiver<Message>,
     prefs_file: Option<PathBuf>,
-    notices: impl FnOnce() -> Notices,
+    notices: impl FnOnce() -> (Notices, Option<super::Posting>),
 ) -> (Model, Vec<Command<Message>>) {
     let (wake, woken) = async_channel::bounded(1);
     let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
@@ -1246,8 +1247,15 @@ fn listed(
     model.woken = woken;
     model.screens = screens;
     model.icons = Some(ItemIcons::new(file_icons, Some(thumbnails), wake));
-    model.notices = notices();
+    let (notices, posting) = notices();
+    model.notices = notices;
     let mut commands = vec![listen(&model.woken), hear(&model.notes)];
+    commands.extend(posting.map(|posting| {
+        Command::Perform(Box::pin(async move {
+            posting.await;
+            Message::Worked
+        }))
+    }));
     model.menu_bar = cupertino_assets::theme::load()
         .map(|theme| theme.shapes.menu_bar_height)
         .unwrap_or_else(|_| cupertino_theme::ShapeTokens::default().menu_bar_height)
@@ -1280,7 +1288,7 @@ pub fn prepare(
         screens,
         notes,
         None,
-        || Notices::start(None),
+        || (Notices::logged(), None),
     );
     START.with(|s| *s.borrow_mut() = Some(start));
 }

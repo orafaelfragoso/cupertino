@@ -85,7 +85,8 @@ and captures. `pack_has(name)` says whether an asset pack ships a raster or SVG 
 app with its own art for a name can still let a pack's icon win. Files and the portal's file chooser draw their rows
 with it. The items are the file family's (`cupertino-ui-files`' `file_icons`); `kit::file_icons` names them for the apps
 that draw file icons without the rest of the family. `kit::files` also names the family's `thumbnail_service`, whose
-`ThumbnailJob` a program runs with `task::io` within `JOB_DEADLINE`, and `item_icons`.
+`ThumbnailJob` a program runs with `task::io` within `JOB_DEADLINE`, `item_icons`, and `notice`, whose
+`Notices::on` gives the future that posts a program's notices on its bus connection.
 
 Each example runs on Cupertino headless and on headless Mutter, with these app ids and sizes: Counter (`org.cupertino.examples.Counter`, 200×64), Forms (`org.cupertino.examples.Forms`, 280×180), Virtual List (`org.cupertino.examples.VirtualList`, 480×600) and Editor (`org.cupertino.examples.Editor`, 480×320).
 

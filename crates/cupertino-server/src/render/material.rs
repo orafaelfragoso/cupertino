@@ -485,7 +485,9 @@ pub struct MaterialGl {
     tick: u64,
     pub stats: MaterialStats,
     /// Time the glass passes (the frame-rate benchmark only): with GPU timer queries ([`MaterialGl::gpu_timers`]) the
-    /// GPU measures each pass; without them the GPU is waited for around each, which stalls the pipeline.
+    /// GPU measures each pass; without them the GPU is waited for around each, which stalls the pipeline. Only
+    /// `--frame-stats` sets it, which takes the headless backend: these waits without a deadline are the benchmark's
+    /// own and never run in a session.
     pub timing: bool,
     /// The context has GPU timer queries.
     pub gpu_timers: bool,

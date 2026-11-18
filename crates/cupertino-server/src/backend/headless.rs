@@ -393,7 +393,9 @@ pub fn render(state: &mut Cupertino) {
                 // the commands are issued: what follows waits for the GPU
                 let submit = rendering.elapsed();
                 if timing {
-                    // the GPU's work belongs to the frame's time: wait for it
+                    // the GPU's work belongs to the frame's time: wait for it, without a deadline, as the benchmark
+                    // always has so its measurements stay comparable; only `--frame-stats` times frames, and it
+                    // takes the headless backend, so no session waits here
                     let st = &*state;
                     let timer = st.frame_stats.as_ref().and_then(|s| s.timer.as_ref());
                     let _wait = tracing::trace_span!("server.gpu_wait").entered();

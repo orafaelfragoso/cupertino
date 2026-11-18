@@ -317,11 +317,15 @@ impl Queue {
                         instance.io_running().fetch_add(1, Ordering::Relaxed);
                     }
                 }
-                if let Some((deadline, site)) = job.deadline {
+                // a deadline past what the clock reaches never comes: the task is never overdue
+                let due = job.deadline.and_then(|(deadline, site)| {
+                    Some((Instant::now().checked_add(deadline)?, deadline, site))
+                });
+                if let Some((due, deadline, site)) = due {
                     state.running.push(Running {
                         id,
                         instance: job.instance.clone(),
-                        due: Instant::now() + deadline,
+                        due,
                         deadline,
                         site,
                         reported: false,

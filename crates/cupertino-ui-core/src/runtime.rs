@@ -3245,7 +3245,6 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             width,
             height,
             damage: damage.clone(),
-            configure: w.ack,
         };
         let submitted = tracing::trace_span!("ui.submit")
             .in_scope(|| self.system.submit(w.id, &submission))

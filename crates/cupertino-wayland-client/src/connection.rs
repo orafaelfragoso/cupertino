@@ -2114,6 +2114,7 @@ pub struct DetachedBuffer {
 }
 
 impl DetachedBuffer {
+    /// The buffer's size and format, as its lease had them.
     pub fn layout(&self) -> BufferLayout {
         self.layout
     }
@@ -2123,6 +2124,8 @@ impl DetachedBuffer {
         self.missed.as_deref()
     }
 
+    /// The pixels to draw the frame into, from any thread; [`Commit::commit`](crate::Commit::commit) shows them, and
+    /// [`Connection::buffer_shown`] or [`Connection::buffer_unused`] gives the buffer back.
     pub fn pixels_mut(&mut self) -> &mut [u8] {
         &mut self.map[..]
     }

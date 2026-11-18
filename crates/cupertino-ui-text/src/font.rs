@@ -3,7 +3,7 @@ use crate::{FaceId, FontId, FontStyle, FontVariation, FontWeight, TextError};
 use harfrust::font::{Font, Variation};
 use harfrust::Tag;
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use swash::{FontDataRef, StringId, Style};
 
 const WEIGHT_AXIS: [u8; 4] = *b"wght";
@@ -71,8 +71,9 @@ pub struct FontIndex {
     instances: RwLock<Instances>,
     /// Kept per font, weight and the number of faces the list was made from: a face added later makes a new list.
     fallbacks: RwLock<HashMap<FallbackKey, Arc<[FontId]>>>,
-    /// Asked one question at a time; it keeps nothing the index relies on.
-    system: Option<Mutex<Box<dyn SystemFonts>>>,
+    /// Asked from any thread with no lock held, the answer kept under the locks below; it keeps nothing the index
+    /// relies on.
+    system: Option<Box<dyn SystemFonts>>,
     /// The installed faces asked for so far, and the face each became (`None` for a file that did not load).
     system_faces: RwLock<HashMap<FontFile, Option<FaceId>>>,
     /// Characters and families the installed fonts were asked for and had nothing new for.
@@ -144,7 +145,7 @@ impl FontIndex {
     /// Lets the index load installed fonts: a family no registered face has, and, after every registered face, a face
     /// for a character none of them draws. Installed faces load once, when first needed.
     pub fn set_system_fonts(&mut self, system: Box<dyn SystemFonts>) {
-        self.system = Some(Mutex::new(system));
+        self.system = Some(system);
         self.system_misses
             .get_mut()
             .unwrap_or_else(PoisonError::into_inner)
@@ -156,12 +157,7 @@ impl FontIndex {
         &self,
         ask: impl FnOnce(&dyn SystemFonts) -> Option<FontFile>,
     ) -> Option<FontFile> {
-        let system = self
-            .system
-            .as_ref()?
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        ask(system.as_ref())
+        ask(self.system.as_deref()?)
     }
 
     /// The installed face of `family`, loaded on first use; `None` without installed fonts or such a family.

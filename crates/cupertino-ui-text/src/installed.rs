@@ -15,7 +15,7 @@ pub struct FontFile {
 }
 
 /// The fonts installed on the system, asked for a face only where the registered faces have none.
-pub trait SystemFonts: Send {
+pub trait SystemFonts: Send + Sync {
     /// A face of the installed family `family`; `None` when no installed family has that name.
     fn family(&self, family: &str, weight: FontWeight, style: FontStyle) -> Option<FontFile>;
     /// A face that draws `ch`, the one the system prefers for the language `lang` (a BCP 47 tag) where several do.

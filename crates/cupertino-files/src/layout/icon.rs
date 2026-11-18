@@ -6,8 +6,9 @@
 //! constants are as designed; font metrics (character
 //! width of "0" rounded up, line height) come from the caller because they depend on the font.
 
-use crate::geom::{Direction, Point, Rect, Size};
+use crate::geom::Direction;
 use crate::metrics::icon_view as m;
+use cupertino_geometry::{Point, Rect, Size};
 
 /// Font measures the cell computation needs.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -95,10 +96,7 @@ impl IconParams {
 
     /// Icon box: the icon plus its padding.
     pub fn icon_box(&self) -> Size {
-        Size {
-            w: self.icon_size + self.pad(),
-            h: self.icon_size + self.pad(),
-        }
+        Size::new(self.icon_size + self.pad(), self.icon_size + self.pad())
     }
 }
 
@@ -135,7 +133,7 @@ pub fn max_text_size(p: &IconParams) -> (f64, f64, f64) {
         w0 = (w0 - min_chars * cw) / 100.0 * p.grid_spacing + min_chars * cw;
     }
     if p.label_on_bottom {
-        w0 = w0.max(p.icon_box().w);
+        w0 = w0.max(p.icon_box().width);
     }
     let mut h = 0.0;
     if p.title_enabled {
@@ -158,7 +156,7 @@ pub fn ideal_cell_size(p: &IconParams) -> Size {
     let b = p.icon_box();
     let (w, h);
     if !p.title_enabled && !p.subtitle_enabled {
-        (w, h) = (b.w, b.h);
+        (w, h) = (b.width, b.height);
     } else {
         let (_, text_h, text_w) = max_text_size(p);
         let g = if p.prefs.gap == 0 {
@@ -168,13 +166,13 @@ pub fn ideal_cell_size(p: &IconParams) -> Size {
         } as f64;
         if p.label_on_bottom {
             w = text_w;
-            h = b.h + m::BOTTOM_LABEL_PAD.0 + text_h + g + m::BOTTOM_LABEL_PAD.1;
+            h = b.height + m::BOTTOM_LABEL_PAD.0 + text_h + g + m::BOTTOM_LABEL_PAD.1;
         } else {
-            w = b.w + text_w + m::RIGHT_LABEL_PAD;
-            let block = text_h.max(b.h);
+            w = b.width + text_w + m::RIGHT_LABEL_PAD;
+            let block = text_h.max(b.height);
             h = if p.icon_size > m::MIN_ICON {
                 block + 3.0 * g
-            } else if b.h <= text_h + g {
+            } else if b.height <= text_h + g {
                 block + 2.0 * g
             } else {
                 block + (g as u32 / 2) as f64
@@ -184,7 +182,7 @@ pub fn ideal_cell_size(p: &IconParams) -> Size {
     let (mut w, mut h) = (w.ceil(), h.ceil());
     w += w % 2.0;
     h += h % 2.0;
-    Size { w, h }
+    Size::new(w, h)
 }
 
 /// Horizontal and vertical spacing between cells of the arranged (flow) layout. The two numbers
@@ -240,13 +238,13 @@ pub const TOP_MARGIN: f64 = m::GRID_INSET.1;
 pub fn layout(p: &IconParams, width: f64, sections: &[SectionSpec], flow: Flow) -> IconLayout {
     let cell = ideal_cell_size(p);
     let spacing = inter_item_spacing(p.icon_size, p.label_on_bottom);
-    let avail = (width - 2.0 * MARGIN).max(cell.w);
-    let columns = (((avail + spacing.0) / (cell.w + spacing.0)).floor() as usize).max(1);
+    let avail = (width - 2.0 * MARGIN).max(cell.width);
+    let columns = (((avail + spacing.0) / (cell.width + spacing.0)).floor() as usize).max(1);
     let lead = match flow {
         Flow::Leading => MARGIN,
         Flow::Justified => {
             let free =
-                (avail - columns as f64 * cell.w - (columns as f64 - 1.0) * spacing.0).max(0.0);
+                (avail - columns as f64 * cell.width - (columns as f64 - 1.0) * spacing.0).max(0.0);
             MARGIN + free / (columns as f64 + 1.0)
         }
     };
@@ -254,7 +252,7 @@ pub fn layout(p: &IconParams, width: f64, sections: &[SectionSpec], flow: Flow) 
         Flow::Leading => spacing.0,
         Flow::Justified => {
             let free =
-                (avail - columns as f64 * cell.w - (columns as f64 - 1.0) * spacing.0).max(0.0);
+                (avail - columns as f64 * cell.width - (columns as f64 - 1.0) * spacing.0).max(0.0);
             spacing.0 + free / (columns as f64 + 1.0)
         }
     };
@@ -270,17 +268,17 @@ pub fn layout(p: &IconParams, width: f64, sections: &[SectionSpec], flow: Flow) 
         for k in 0..s.count {
             let (col, row) = (k % columns, k / columns);
             let frame = Rect::new(
-                lead + col as f64 * (cell.w + gap_x),
-                y + row as f64 * (cell.h + spacing.1),
-                cell.w,
-                cell.h,
+                lead + col as f64 * (cell.width + gap_x),
+                y + row as f64 * (cell.height + spacing.1),
+                cell.width,
+                cell.height,
             );
             cells.push(cell_parts(p, index, frame, cell));
             index += 1;
         }
         let rows = s.count.div_ceil(columns);
         if rows > 0 {
-            y += rows as f64 * cell.h + (rows as f64 - 1.0) * spacing.1 + spacing.1;
+            y += rows as f64 * cell.height + (rows as f64 - 1.0) * spacing.1 + spacing.1;
         }
     }
     IconLayout {
@@ -289,10 +287,7 @@ pub fn layout(p: &IconParams, width: f64, sections: &[SectionSpec], flow: Flow) 
         columns,
         cells,
         headers,
-        content: Size {
-            w: width,
-            h: y + TOP_MARGIN,
-        },
+        content: Size::new(width, y + TOP_MARGIN),
     }
 }
 
@@ -312,11 +307,11 @@ pub fn strip(p: &IconParams, count: usize) -> IconLayout {
     let cell = ideal_cell_size(&p);
     let cells = (0..count)
         .map(|index| {
-            let x = STRIP_SPACING + index as f64 * (cell.w + STRIP_SPACING);
-            let frame = Rect::new(x, STRIP_INSET, cell.w, cell.h);
+            let x = STRIP_SPACING + index as f64 * (cell.width + STRIP_SPACING);
+            let frame = Rect::new(x, STRIP_INSET, cell.width, cell.height);
             let mut parts = cell_parts(&p, index, frame, cell);
             // no name: an empty label under the picture, which nothing hits
-            parts.label_frame = Rect::new(frame.x, frame.bottom(), 0.0, 0.0);
+            parts.label_frame = Rect::new(frame.x(), frame.max_y(), 0.0, 0.0);
             parts
         })
         .collect();
@@ -326,10 +321,10 @@ pub fn strip(p: &IconParams, count: usize) -> IconLayout {
         columns: count.max(1),
         cells,
         headers: Vec::new(),
-        content: Size {
-            w: STRIP_SPACING + count as f64 * (cell.w + STRIP_SPACING),
-            h: cell.h + 2.0 * STRIP_INSET,
-        },
+        content: Size::new(
+            STRIP_SPACING + count as f64 * (cell.width + STRIP_SPACING),
+            cell.height + 2.0 * STRIP_INSET,
+        ),
     }
 }
 
@@ -339,17 +334,17 @@ pub fn cell_parts(p: &IconParams, index: usize, frame: Rect, cell: Size) -> Icon
     let (_, text_h, text_w) = max_text_size(p);
     let icon_sz = p.icon_size;
     if p.label_on_bottom {
-        let box_x = frame.x + (cell.w - b.w) / 2.0;
+        let box_x = frame.x() + (cell.width - b.width) / 2.0;
         let icon_frame = Rect::new(
-            box_x + (b.w - icon_sz) / 2.0,
-            frame.y + (b.h - icon_sz) / 2.0,
+            box_x + (b.width - icon_sz) / 2.0,
+            frame.y() + (b.height - icon_sz) / 2.0,
             icon_sz,
             icon_sz,
         );
-        let lw = (text_w - m::LABEL_WIDTH_PAD).min(cell.w);
+        let lw = (text_w - m::LABEL_WIDTH_PAD).min(cell.width);
         let label_frame = Rect::new(
-            frame.x + (cell.w - lw) / 2.0,
-            frame.y + b.h + m::BOTTOM_LABEL_PAD.0,
+            frame.x() + (cell.width - lw) / 2.0,
+            frame.y() + b.height + m::BOTTOM_LABEL_PAD.0,
             lw,
             text_h,
         );
@@ -361,14 +356,14 @@ pub fn cell_parts(p: &IconParams, index: usize, frame: Rect, cell: Size) -> Icon
         }
     } else {
         let icon_frame = Rect::new(
-            frame.x + (b.w - icon_sz) / 2.0,
-            frame.y + (cell.h - icon_sz) / 2.0,
+            frame.x() + (b.width - icon_sz) / 2.0,
+            frame.y() + (cell.height - icon_sz) / 2.0,
             icon_sz,
             icon_sz,
         );
         let label_frame = Rect::new(
-            frame.x + b.w + m::RIGHT_LABEL_PAD,
-            frame.y + (cell.h - text_h) / 2.0,
+            frame.x() + b.width + m::RIGHT_LABEL_PAD,
+            frame.y() + (cell.height - text_h) / 2.0,
             text_w - m::LABEL_WIDTH_PAD,
             text_h,
         );
@@ -443,30 +438,30 @@ impl FreeGrid {
         }
     }
     pub fn dimensions(&self) -> (usize, usize) {
-        let w = self.bounds.w - 2.0 * self.margin;
-        let h = self.bounds.h - 2.0 * self.margin;
+        let w = self.bounds.width() - 2.0 * self.margin;
+        let h = self.bounds.height() - 2.0 * self.margin;
         (
-            ((w / self.cell.w).floor() as usize).max(1),
-            ((h / self.cell.h).floor() as usize).max(1),
+            ((w / self.cell.width).floor() as usize).max(1),
+            ((h / self.cell.height).floor() as usize).max(1),
         )
     }
     /// Grid location nearest to `pt` (column, row), clamped to the grid.
     pub fn nearest(&self, pt: Point) -> (usize, usize) {
         let (cols, rows) = self.dimensions();
-        let c = ((pt.x - self.bounds.x - self.margin) / self.cell.w)
+        let c = ((pt.x - self.bounds.x() - self.margin) / self.cell.width)
             .round()
             .clamp(0.0, cols as f64 - 1.0);
-        let r = ((pt.y - self.bounds.y - self.margin) / self.cell.h)
+        let r = ((pt.y - self.bounds.y() - self.margin) / self.cell.height)
             .round()
             .clamp(0.0, rows as f64 - 1.0);
         (c as usize, r as usize)
     }
     pub fn cell_frame(&self, col: usize, row: usize) -> Rect {
         Rect::new(
-            self.bounds.x + self.margin + col as f64 * self.cell.w,
-            self.bounds.y + self.margin + row as f64 * self.cell.h,
-            self.cell.w,
-            self.cell.h,
+            self.bounds.x() + self.margin + col as f64 * self.cell.width,
+            self.bounds.y() + self.margin + row as f64 * self.cell.height,
+            self.cell.width,
+            self.cell.height,
         )
     }
 }

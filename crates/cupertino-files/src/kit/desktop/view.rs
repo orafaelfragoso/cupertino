@@ -43,10 +43,6 @@ fn seconds(at: Timestamp) -> f64 {
     at.0 as f64 / 1e9
 }
 
-fn rect(r: crate::geom::Rect) -> Rect {
-    Rect::new(r.x, r.y, r.w, r.h)
-}
-
 fn no_measure() -> Measured {
     Measured {
         size: Size::ZERO,
@@ -172,12 +168,7 @@ impl Desk {
     /// Where item `index`'s name is, in the window, with the room of its capsule.
     fn label_rect(&self, index: usize, env: &Environment) -> Rect {
         let item = &self.items[index];
-        let frames = item_frames(crate::geom::Rect::new(
-            item.cell.min_x(),
-            item.cell.min_y(),
-            item.cell.width(),
-            item.cell.height(),
-        ));
+        let frames = item_frames(item.cell);
         let size = laid_out(env, &item.name).map_or(Size::ZERO, |l| l.size());
         let (px, py) = m::LABEL_PAD;
         Rect::new(
@@ -190,15 +181,7 @@ impl Desk {
 
     fn icon_rect(&self, index: usize) -> Rect {
         let cell = self.items[index].cell;
-        rect(
-            item_frames(crate::geom::Rect::new(
-                cell.min_x(),
-                cell.min_y(),
-                cell.width(),
-                cell.height(),
-            ))
-            .backdrop,
-        )
+        item_frames(cell).backdrop
     }
 
     /// The item whose icon or name is under `position`, and whether it was the name.

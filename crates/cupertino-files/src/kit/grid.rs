@@ -32,7 +32,7 @@ use super::band::{self, Band};
 use super::clicks::Clicks;
 use super::dragged::Grab;
 use super::{Event as WindowEvent, Message};
-use crate::geom::{self, Direction};
+use crate::geom::Direction;
 use crate::layout::icon::{IconLayout, IconParams};
 use crate::metrics::{drag, selection as sel};
 
@@ -275,10 +275,6 @@ struct Press {
 /// What an assistive Click on item `index` reports: the item selected alone, unless it already is.
 type Pick = Rc<dyn Fn(usize) -> Option<Message>>;
 
-fn rect(r: geom::Rect) -> Rect {
-    Rect::new(r.x, r.y, r.w, r.h)
-}
-
 fn no_measure() -> Measured {
     Measured {
         size: Size::ZERO,
@@ -310,10 +306,10 @@ impl IconGrid {
             let first = match self.strip {
                 true => cells
                     .iter()
-                    .position(|c| c.frame.x + c.frame.w > self.scroll.offset.x),
+                    .position(|c| c.frame.x() + c.frame.width() > self.scroll.offset.x),
                 false => cells
                     .iter()
-                    .position(|c| c.frame.y + c.frame.h > self.scroll.offset.y),
+                    .position(|c| c.frame.y() + c.frame.height() > self.scroll.offset.y),
             };
             first.or(cells.len().checked_sub(1))
         })
@@ -324,12 +320,12 @@ impl IconGrid {
         let (room, pitch, per) = match self.strip {
             true => (
                 self.scroll.viewport.width,
-                self.layout.cell.w + self.layout.spacing.0,
+                self.layout.cell.width + self.layout.spacing.0,
                 1,
             ),
             false => (
                 self.scroll.viewport.height - self.lead,
-                self.layout.cell.h + self.layout.spacing.1,
+                self.layout.cell.height + self.layout.spacing.1,
                 self.layout.columns,
             ),
         };
@@ -343,11 +339,11 @@ impl IconGrid {
             true => {
                 let left = self.scroll.offset.x - OVERSCAN;
                 let right = self.scroll.offset.x + self.scroll.viewport.width + OVERSCAN;
-                Box::new(move |c| c.frame.x + c.frame.w >= left && c.frame.x <= right)
+                Box::new(move |c| c.frame.x() + c.frame.width() >= left && c.frame.x() <= right)
             }
             false => {
                 let (top, bottom) = self.band();
-                Box::new(move |c| c.frame.y + c.frame.h >= top && c.frame.y <= bottom)
+                Box::new(move |c| c.frame.y() + c.frame.height() >= top && c.frame.y() <= bottom)
             }
         };
         self.layout
@@ -371,8 +367,11 @@ impl IconGrid {
         let (top, bottom) = self.band();
         let cells = &self.layout.cells;
         (
-            cells.iter().filter(|c| c.frame.y + c.frame.h < top).count(),
-            cells.iter().filter(|c| c.frame.y <= bottom).count(),
+            cells
+                .iter()
+                .filter(|c| c.frame.y() + c.frame.height() < top)
+                .count(),
+            cells.iter().filter(|c| c.frame.y() <= bottom).count(),
         )
     }
 
@@ -385,14 +384,17 @@ impl IconGrid {
             cells
                 .iter()
                 .rev()
-                .filter(|c| c.frame.y + c.frame.h < top && c.frame.y + c.frame.h >= top - AHEAD)
+                .filter(|c| {
+                    c.frame.y() + c.frame.height() < top
+                        && c.frame.y() + c.frame.height() >= top - AHEAD
+                })
                 .take(AHEAD_NAMES)
                 .map(|c| c.index)
                 .collect()
         } else {
             cells
                 .iter()
-                .filter(|c| c.frame.y > bottom && c.frame.y <= bottom + AHEAD)
+                .filter(|c| c.frame.y() > bottom && c.frame.y() <= bottom + AHEAD)
                 .take(AHEAD_NAMES)
                 .map(|c| c.index)
                 .collect()
@@ -401,17 +403,14 @@ impl IconGrid {
     }
 
     /// `position` in the window as a point of the layout, which is laid out left to right.
-    fn layout_point(&self, position: Point, cx: &EventCx<'_, Message>) -> Option<geom::Point> {
+    fn layout_point(&self, position: Point, cx: &EventCx<'_, Message>) -> Option<Point> {
         let bounds = cx.bounds()?;
         let x = position.x - bounds.min_x();
         let x = match cx.env().direction {
             LayoutDirection::Ltr => x,
             LayoutDirection::Rtl => bounds.size.width - x,
         };
-        Some(geom::Point {
-            x,
-            y: position.y - bounds.min_y(),
-        })
+        Some(Point::new(x, position.y - bounds.min_y()))
     }
 
     /// The item whose icon or name is under a pointer at `position`, in window coordinates.
@@ -455,12 +454,9 @@ impl IconGrid {
         } else {
             rect.min_x()
         };
-        let hits = self.layout.hits_in_rect(&geom::Rect {
-            x,
-            y: rect.min_y(),
-            w: rect.width(),
-            h: rect.height(),
-        });
+        let hits =
+            self.layout
+                .hits_in_rect(&Rect::new(x, rect.min_y(), rect.width(), rect.height()));
         cx.emit(Message::Window(self.window, WindowEvent::Band(Some(rect))));
         self.select(band.select(&hits), cx);
     }
@@ -561,11 +557,7 @@ impl IconGrid {
     fn grab(&self, press: &Press, cx: &EventCx<'_, Message>) -> Option<Grab> {
         let bounds = cx.bounds()?;
         let cell = self.layout.cells.get(press.index)?;
-        let (frame, icon, label) = (
-            rect(cell.frame),
-            rect(cell.icon_frame),
-            rect(cell.label_frame),
-        );
+        let (frame, icon, label) = (cell.frame, cell.icon_frame, cell.label_frame);
         // the folder may have changed under a held press
         if press.dragged.iter().any(|&i| i >= self.items.len()) {
             return None;
@@ -640,8 +632,8 @@ impl Widget<Message> for IconGrid {
     fn layout(&self) -> LayoutSpec {
         if self.strip {
             return LayoutSpec {
-                width: SizeSpec::Fixed(self.layout.content.w.max(self.scroll.viewport.width)),
-                height: SizeSpec::Fixed(self.layout.content.h),
+                width: SizeSpec::Fixed(self.layout.content.width.max(self.scroll.viewport.width)),
+                height: SizeSpec::Fixed(self.layout.content.height),
                 ..LayoutSpec::new(ContainerKind::Absolute)
             };
         }
@@ -651,7 +643,7 @@ impl Widget<Message> for IconGrid {
             height: SizeSpec::Fixed(
                 self.layout
                     .content
-                    .h
+                    .height
                     .max(self.scroll.viewport.height - self.lead),
             ),
             ..LayoutSpec::new(ContainerKind::Absolute)
@@ -661,7 +653,7 @@ impl Widget<Message> for IconGrid {
     fn take_children(&mut self) -> Vec<Element<Message>> {
         let at = self.at();
         let pick = self.pick();
-        let side = self.params.icon_box().w;
+        let side = self.params.icon_box().width;
         let icon_size = self.params.icon_size;
         let band = self.band.map(band::view);
         self.built()
@@ -671,9 +663,9 @@ impl Widget<Message> for IconGrid {
                 let selected = self.selection.contains(index);
                 let ringed = self.ringed.contains(index);
                 let stop = at == Some(index);
-                let frame = rect(cell.frame);
-                let icon = rect(cell.icon_frame);
-                let label = rect(cell.label_frame);
+                let frame = cell.frame;
+                let icon = cell.icon_frame;
+                let label = cell.label_frame;
                 let mark = cell_mark(
                     self.revision,
                     index,
@@ -984,7 +976,7 @@ impl Widget<Message> for IconGrid {
             };
             let content =
                 AttributedText::plain(item.name.clone(), TextStyle::new(names.text_size as f32));
-            let room = cell.label_frame.w - NAME_INSETS.left - NAME_INSETS.right;
+            let room = cell.label_frame.width() - NAME_INSETS.left - NAME_INSETS.right;
             let lines = Some(names.max_lines);
             if let Some(laid) = laid_out_name(cx.env(), &content, lines, room) {
                 laid_out_name(cx.env(), &content, lines, laid.size().width);

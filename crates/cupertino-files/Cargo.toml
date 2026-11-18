@@ -31,6 +31,7 @@ cupertino-keyboard = { path = "../cupertino-keyboard" }
 cupertino-apps = { path = "../cupertino-apps" }
 cupertino-theme = { path = "../cupertino-theme", optional = true }
 cupertino-defaults = { path = "../cupertino-defaults" }
+cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-trash = { path = "../cupertino-trash" }
 cupertino-ui-text = { path = "../cupertino-ui-text" }
 cupertino-kit = { path = "../cupertino-kit", optional = true }

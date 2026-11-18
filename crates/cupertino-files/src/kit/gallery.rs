@@ -74,7 +74,7 @@ pub(super) fn shown(win: &BrowserWindow, margin: f64) -> (Vec<usize>, f64) {
     let shown = layout
         .cells
         .iter()
-        .filter(|c| c.frame.x + c.frame.w >= left && c.frame.x <= right)
+        .filter(|c| c.frame.x() + c.frame.width() >= left && c.frame.x() <= right)
         .map(|c| c.index)
         .collect();
     (shown, params.icon_size)
@@ -185,7 +185,7 @@ fn stage(
 /// Every item's picture in a row, which scrolls sideways.
 fn strip(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
     let (params, layout) = strip_layout(win);
-    let height = layout.content.h;
+    let height = layout.content.height;
     let items: Rc<[crate::Entry]> = win.browser.entries().into();
     let item_icons = Rc::clone(&session.icons);
     let side = params.icon_size;

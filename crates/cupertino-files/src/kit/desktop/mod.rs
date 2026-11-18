@@ -566,7 +566,7 @@ impl Model {
                     (at, self.grid(), self.prefs.arrangement)
                 {
                     let taken = self.slots.iter().copied().collect();
-                    let near = grid.nearest(crate::geom::Point { x: at.x, y: at.y });
+                    let near = grid.nearest(at);
                     if let (Some(slot), Some(name)) = (
                         grid.nearest_free(near, &taken),
                         path.file_name().map(|n| n.to_string_lossy().into_owned()),
@@ -739,10 +739,6 @@ impl Model {
         if indices.is_empty() {
             return;
         }
-        let delta = crate::geom::Point {
-            x: delta.x,
-            y: delta.y,
-        };
         self.slots = arrangement::dropped(&self.slots, &indices, delta, &grid);
         self.keep_slots();
     }
@@ -909,7 +905,7 @@ impl Model {
                     path: entry.path.clone(),
                     name: entry.name.clone(),
                     is_dir: entry.is_dir,
-                    cell: Rect::new(cell.x, cell.y, cell.w, cell.h),
+                    cell,
                     icon: self
                         .icons
                         .as_ref()

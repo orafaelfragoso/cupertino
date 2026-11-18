@@ -69,7 +69,7 @@ pub mod window_prefs;
 
 pub use browser::{Activation, Browser};
 pub use entry::{Entry, Kind};
-pub use geom::{Direction, Point, Rect, Size};
+pub use geom::Direction;
 pub use model::{DirectoryModel, ModelDelta, ModelOptions};
 pub use selection::{Modifiers, Selection};
 pub use settings::{FolderKey, SettingsStore, ViewSettings, ViewStyle};

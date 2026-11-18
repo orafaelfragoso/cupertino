@@ -1175,7 +1175,7 @@ pub(super) fn shown(win: &BrowserWindow) -> (Vec<usize>, f64) {
             let shown = layout
                 .cells
                 .iter()
-                .filter(|c| c.frame.y + c.frame.h >= top && c.frame.y <= bottom)
+                .filter(|c| c.frame.y() + c.frame.height() >= top && c.frame.y() <= bottom)
                 .map(|c| c.index)
                 .collect();
             (shown, params.icon_size)

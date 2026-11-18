@@ -20,7 +20,7 @@ use cupertino_kit::platform::{DropAction as Offered, Mods};
 use cupertino_kit::prelude::*;
 use percent_encoding::percent_decode_str;
 
-use super::{view, BrowserWindow, Event, Message, Session};
+use super::{BrowserWindow, Event, Message, Session};
 use crate::places::PlaceKind;
 use cupertino_kit::files::operations::{self, DropAction};
 
@@ -71,7 +71,7 @@ pub(super) fn folder(
             .entries()
             .iter()
             .enumerate()
-            .map(|(i, e)| (view::row_key(id, &e.path), i as u64))
+            .map(|(i, e)| (cupertino_kit::files::list::row_key(id, &e.path), i as u64))
             .chain(
                 columns
                     .into_iter()

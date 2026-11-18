@@ -101,7 +101,11 @@ pub(super) fn target(layout: &IconLayout, from: usize, step: Step, page: usize) 
 
 /// The item after (or before, `back`) item `from` in the order of `names`, by name: the first (or last) without one, and
 /// the same at the end.
-pub fn by_name<S: AsRef<str>>(names: &[S], from: Option<usize>, back: bool) -> Option<usize> {
+pub(super) fn by_name<S: AsRef<str>>(
+    names: &[S],
+    from: Option<usize>,
+    back: bool,
+) -> Option<usize> {
     let mut order: Vec<usize> = (0..names.len()).collect();
     order.sort_by(|&a, &b| compare_names(names[a].as_ref(), names[b].as_ref()));
     let at = from.and_then(|f| order.iter().position(|&i| i == f));

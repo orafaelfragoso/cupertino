@@ -18,10 +18,10 @@ use cupertino_kit::prelude::Command;
 use cupertino_kit::text::{AttributedText, TextStyle};
 use percent_encoding::{percent_encode, AsciiSet, NON_ALPHANUMERIC};
 
-use super::list::RowGrab;
 use super::{Event as WindowEvent, Message};
 use cupertino_kit::files::entry::Entry;
 use cupertino_kit::files::grid::{self, Grab};
+use cupertino_kit::files::list::RowGrab;
 
 /// How opaque the image of dragged items is: the folder under the pointer shows through it.
 pub(super) const OPACITY: f32 = 0.8;

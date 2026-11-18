@@ -11,7 +11,6 @@ mod drops;
 mod gallery;
 mod item_icons;
 mod jobs;
-mod list;
 mod peek;
 mod places;
 mod progress;
@@ -28,7 +27,6 @@ mod view;
 
 pub use drops::Destination;
 pub use jobs::{JobEvent, PROGRESS_WINDOW_DELAY};
-pub use list::RowGrab;
 pub use peek::PeekEvent;
 pub use places::PlacesSource;
 pub use remote::{LookUp, LOOK_UP_DEADLINE, MAX_LOOK_UPS};
@@ -76,6 +74,7 @@ use crate::window_prefs::WindowPrefs;
 use cupertino_icons::thumbnail::Thumbnailer;
 use cupertino_kit::files::entry::{Entry, Kind};
 use cupertino_kit::files::grid::Grab;
+use cupertino_kit::files::list::{row_key, Presses, RowGrab};
 use cupertino_kit::files::name_edit::NameEdit;
 use cupertino_kit::files::open::{
     command_with, default_app_id, open_command, open_with, OpenError,
@@ -344,9 +343,13 @@ fn view_events(id: u64) -> Rc<dyn Fn(ViewEvent) -> Option<Message>> {
             ViewEvent::SecondaryPress(index) => Event::SecondaryPress(index),
             ViewEvent::ContextMenu(at) => Event::ContextMenu(at),
             ViewEvent::DragOut(grab) => Event::DragOut(grab),
+            ViewEvent::DragRows(grab) => Event::DragRows(grab),
             ViewEvent::Band(band) => Event::Band(band),
             ViewEvent::Scroll(scroll) => Event::Scroll(scroll),
             ViewEvent::Rename(index) => Event::RenameItem(index),
+            ViewEvent::FocusRow(index) => Event::FocusRow(index),
+            ViewEvent::Sort(sort) => Event::Sort(sort),
+            ViewEvent::Toggle(toggle) => Event::Toggle(toggle),
         };
         Some(Message::Window(id, event))
     })
@@ -518,7 +521,7 @@ struct BrowserWindow {
     /// The rubber band being drawn over the items, in the view's content.
     band: Option<cupertino_kit::geometry::Rect>,
     /// The presses on the list's rows, which its rows and its frame share.
-    list_presses: list::SharedPresses,
+    list_presses: Presses,
     /// What the window's live region reads last ([`announce`]).
     announcement: announce::Announcement,
     /// The keyboard is on the folder's items.
@@ -1526,7 +1529,7 @@ impl Model {
                 let Some(entry) = window.browser.entries().get(index) else {
                     return Vec::new();
                 };
-                let key = view::row_key(id, &entry.path);
+                let key = row_key(id, &entry.path);
                 let mut alone = Selection::new([], None, None);
                 alone.select_only(index);
                 window.select(&alone, session);
@@ -1839,7 +1842,7 @@ impl Model {
                 window.browser.collapse_all();
                 window.band = None;
                 // a press or a band of the list ends with it: its nodes go without a release
-                *window.list_presses.borrow_mut() = Default::default();
+                window.list_presses = Presses::default();
                 window.view = view;
                 window.scroll.offset = cupertino_kit::geometry::Point::ZERO;
                 // the gallery shows an item: the first, when none is selected
@@ -2442,7 +2445,7 @@ impl BrowserWindow {
         self.peek = None;
         self.tag_editor = None;
         self.share = None;
-        *self.list_presses.borrow_mut() = Default::default();
+        self.list_presses = Presses::default();
         let polled = self.browser.poll();
         for error in polled.errors {
             eprintln!("cupertino-files: {error}");
@@ -3026,7 +3029,7 @@ impl BrowserWindow {
         };
         let key = match self.view {
             ViewMode::Icons | ViewMode::Gallery => view::item_key(id, index),
-            _ => view::row_key(id, path),
+            _ => row_key(id, path),
         };
         vec![Command::Perform(Box::pin(async move {
             Message::Window(id, Event::FocusKey(key))
@@ -3039,7 +3042,7 @@ impl BrowserWindow {
         if !self.browser.entries().iter().any(|e| e.path == path) {
             return Vec::new();
         }
-        let key = view::row_key(id, path);
+        let key = row_key(id, path);
         vec![Command::Perform(Box::pin(async move {
             Message::Window(id, Event::FollowKey(key))
         }))]

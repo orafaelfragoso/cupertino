@@ -180,16 +180,6 @@ pub mod files {
         };
     }
 
-    /// The rubber band, which the list draws as the grid does.
-    pub mod band {
-        pub use cupertino_ui_files::band::{follow, view, Band};
-    }
-
-    /// What a press on an item means besides selecting it, in the list as in the grid.
-    pub mod clicks {
-        pub use cupertino_ui_files::clicks::Clicks;
-    }
-
     /// An item of a folder.
     pub mod entry {
         pub use cupertino_ui_files::entry::{Entry, Kind};
@@ -203,7 +193,14 @@ pub mod files {
     /// The folder as a grid of icons.
     pub mod grid {
         pub use cupertino_ui_files::grid::{
-            by_name, cell_index, cell_key, laid_out_name, name, Grab, IconGrid, ItemIcon, NameShape,
+            cell_index, cell_key, laid_out_name, name, Grab, IconGrid, ItemIcon, NameShape,
+        };
+    }
+
+    /// The folder as an outline table, and the row cell the column view Files draws shares with it.
+    pub mod list {
+        pub use cupertino_ui_files::list::{
+            row_key, FileList, Presses, RowCell, RowGrab, ROW_HEIGHT, ROW_ICON,
         };
     }
 

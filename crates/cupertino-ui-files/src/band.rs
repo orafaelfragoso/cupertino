@@ -30,7 +30,7 @@ pub(super) const AUTOSCROLL_NS: u64 = (marquee::AUTOSCROLL_INTERVAL * 1e9) as u6
 
 /// A band being drawn.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Band {
+pub(super) struct Band {
     /// Where the press was, in the content, so it stays on the items while they scroll.
     pub origin: Point,
     /// Where the pointer is, in the window.
@@ -108,7 +108,7 @@ pub(super) fn scrolled(scroll: ScrollState, dy: f64) -> Option<ScrollState> {
 
 /// What a view does when a band's pointer moves or its edge timer fires: the next scroll when the pointer is in an
 /// edge's zone, and the wake for the step after it.
-pub fn follow<M>(
+pub(super) fn follow<M>(
     on_event: &Rc<dyn Fn(ViewEvent) -> Option<M>>,
     scroll: ScrollState,
     pointer: Point,
@@ -197,6 +197,6 @@ impl<M: 'static> Widget<M> for BandView {
 }
 
 /// The band's element over a view's items.
-pub fn view<M: 'static>(rect: Rect) -> Element<M> {
+pub(super) fn view<M: 'static>(rect: Rect) -> Element<M> {
     Element::new(BandView { rect }).key("band")
 }

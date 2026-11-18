@@ -1,7 +1,8 @@
-//! What the list view does beyond the toolkit's outline table: a press on empty space under the rows, or on a row's
-//! blank part (anywhere but its icon and the text of its name) that then moves, draws a rubber band ([`super::band`]), which scrolls the rows at
+//! The folder as an outline table ([`FileList`]), and what the list does beyond the toolkit's outline table: a press on
+//! empty space under the rows, or on a row's
+//! blank part (anywhere but its icon and the text of its name) that then moves, draws a rubber band ([`crate::band`]), which scrolls the rows at
 //! the view's top and bottom edges; a double click opens a row, a press on the name of the only selected row renames it after
-//! the double-click interval ([`super::clicks`]), a press with Ctrl held opens the context menu, a press that moves
+//! the double-click interval ([`crate::clicks`]), a press with Ctrl held opens the context menu, a press that moves
 //! drags the selected rows out of the window, and Tab and Shift+Tab on a row select the next and the previous item by
 //! name ([`tab`]); past the last (or before the first) they move the keyboard on to the next control, so the list never
 //! holds it. Tab on a column header goes to the next header, or into the rows from the last, as any control's does.
@@ -11,29 +12,53 @@
 //! presses under the rows, the band's pointer and the timers. The presses' state is shared between them ([`Presses`]),
 //! as a press on one row and the next press on another count together.
 
-use std::cell::RefCell;
+use std::cell::{Ref, RefCell, RefMut};
+use std::path::Path;
 use std::rc::Rc;
 
-use cupertino_kit::controls::Selection;
-use cupertino_kit::core::{
-    Change, Element, Event, EventCx, MeasureCx, PaintCx, Phase, Propagation, SemanticsCx, Widget,
+use cupertino_geometry::{Insets, Point, Rect, Size};
+use cupertino_ui_controls::{
+    striped_element, Column, Image, ImageFit, OutlineTable, Selection, SortOrder, Spacer, Stack,
+    TableView, Text, TextRole, TreeItem,
 };
-use cupertino_kit::geometry::{Point, Rect, Size};
-use cupertino_kit::layout::{
+use cupertino_ui_core::layout::{
     Align, Axis, Constraints, ContainerKind, Flex, Justify, LayoutDirection, LayoutSpec, Measured,
     ScrollState, SizeSpec,
 };
-use cupertino_kit::platform::{KeyEvent, Keysym, Mods, MouseButton, PointerEvent};
-use cupertino_kit::text::{AttributedText, FontWeight, ParagraphStyle, TextStyle};
+use cupertino_ui_core::platform::{KeyEvent, Keysym, Mods, MouseButton, PointerEvent};
+use cupertino_ui_core::{
+    Change, Element, Event, EventCx, Key, MeasureCx, PaintCx, Phase, Propagation, SemanticsCx,
+    Widget,
+};
+use cupertino_ui_text::{AttributedText, FontWeight, ParagraphStyle, TextStyle};
 
-use super::{view_events, Event as WindowEvent, Message};
-use cupertino_kit::files::band::{self, Band};
-use cupertino_kit::files::clicks::Clicks;
-use cupertino_kit::files::grid::by_name;
-use cupertino_kit::files::metrics::drag;
+use crate::band::{self, Band};
+use crate::clicks::Clicks;
+use crate::entry::Entry;
+use crate::grid::{by_name, ItemIcon};
+use crate::metrics::{drag, list_view};
+use crate::ViewEvent;
 
 const TAB: Keysym = Keysym(0xff09);
 const LEFT_TAB: Keysym = Keysym(0xfe20);
+
+/// The side of a row's icon, in points.
+pub const ROW_ICON: f64 = list_view::ICON_SIZE_DEFAULT as f64;
+/// A row: the icon size over the row padding.
+pub const ROW_HEIGHT: f64 = ROW_ICON + list_view::ROW_PADDING;
+/// Between a row's icon and its name.
+const NAME_GAP: f64 = 4.0;
+/// From a name cell's leading edge to its text: the item's icon and the gap after it.
+const NAME_TEXT_X: f64 = ROW_ICON + NAME_GAP;
+/// The program's message for each event a view reports, or none.
+type OnEvent<M> = Rc<dyn Fn(ViewEvent) -> Option<M>>;
+
+/// Hand `event` to the program through `on_event`, as its message if it has one for it.
+fn emit<M>(on_event: &OnEvent<M>, event: ViewEvent, cx: &mut EventCx<'_, M>) {
+    if let Some(message) = on_event(event) {
+        cx.emit(message);
+    }
+}
 
 /// A press on a row that may become a drag.
 struct RowPress {
@@ -64,16 +89,29 @@ struct BlankPress {
 
 /// The state of the list's presses, shared by its cells and its frame.
 #[derive(Default)]
-pub(super) struct Presses {
+struct PressState {
     clicks: Clicks,
     press: Option<RowPress>,
     blank: Option<BlankPress>,
     band: Option<Band>,
 }
 
-pub(super) type SharedPresses = Rc<RefCell<Presses>>;
+/// The presses a list's rows and its frame share, or a column's: the program keeps one a window between views, so a
+/// press on one row and the next press on another count together. A clone is the same presses.
+#[derive(Clone, Default)]
+pub struct Presses(Rc<RefCell<PressState>>);
 
-/// A row dragged out of the list: what [`super::dragged::rows`] draws.
+impl Presses {
+    fn borrow(&self) -> Ref<'_, PressState> {
+        self.0.borrow()
+    }
+
+    fn borrow_mut(&self) -> RefMut<'_, PressState> {
+        self.0.borrow_mut()
+    }
+}
+
+/// Rows of the list, or of the shown folder's column, pressed and moved far enough to drag them.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RowGrab {
     /// The dragged rows, the pressed one first.
@@ -106,26 +144,26 @@ fn pressed(selection: &Selection, index: usize, mods: Mods) -> Selection {
 }
 
 /// One cell of row `index`: its presses.
-pub(super) struct RowCell {
-    pub window: u64,
+pub struct RowCell<M> {
     pub index: usize,
     /// The row's first cell, which holds its name.
     pub name: bool,
     /// The name the first cell shows, which tells where its text ends; `None` in the other cells.
     pub label: Option<String>,
     pub selection: Selection,
-    pub presses: SharedPresses,
-    pub children: Vec<Element<Message>>,
+    pub presses: Presses,
+    pub children: Vec<Element<M>>,
+    pub on_event: Rc<dyn Fn(ViewEvent) -> Option<M>>,
 }
 
-impl RowCell {
-    fn emit(&self, event: WindowEvent, cx: &mut EventCx<'_, Message>) {
-        cx.emit(Message::Window(self.window, event));
+impl<M: 'static> RowCell<M> {
+    fn emit(&self, event: ViewEvent, cx: &mut EventCx<'_, M>) {
+        emit(&self.on_event, event, cx);
     }
 
     /// Whether `position` lands on the row's icon or the text of its name, rather than on the blank part of the name
     /// cell past them (a cell other than the name's is all blank).
-    fn on_name(&self, position: Point, cx: &EventCx<'_, Message>) -> bool {
+    fn on_name(&self, position: Point, cx: &EventCx<'_, M>) -> bool {
         if !self.name {
             return false;
         }
@@ -144,8 +182,7 @@ impl RowCell {
         ) else {
             return true;
         };
-        let end =
-            (super::view::NAME_TEXT_X + paragraph.layout(None).size().width).min(bounds.width());
+        let end = (NAME_TEXT_X + paragraph.layout(None).size().width).min(bounds.width());
         let from_leading = match cx.env().direction {
             LayoutDirection::Ltr => position.x - bounds.min_x(),
             LayoutDirection::Rtl => bounds.max_x() - position.x,
@@ -153,12 +190,12 @@ impl RowCell {
         from_leading <= end
     }
 
-    fn press(&self, position: Point, mods: Mods, cx: &mut EventCx<'_, Message>) -> Propagation {
+    fn press(&self, position: Point, mods: Mods, cx: &mut EventCx<'_, M>) -> Propagation {
         if mods.contains(Mods::CTRL) {
             // Ctrl with a press is the secondary click
             self.presses.borrow_mut().clicks.cancel();
-            self.emit(WindowEvent::SecondaryPress(Some(self.index)), cx);
-            self.emit(WindowEvent::ContextMenu(position), cx);
+            self.emit(ViewEvent::SecondaryPress(Some(self.index)), cx);
+            self.emit(ViewEvent::ContextMenu(position), cx);
             return Propagation::Stop;
         }
         let index = self.index;
@@ -169,7 +206,7 @@ impl RowCell {
         if presses.clicks.press(index, on_name, sole, plain, cx.now()) {
             presses.press = None;
             drop(presses);
-            self.emit(WindowEvent::Open(index), cx);
+            self.emit(ViewEvent::Open(index), cx);
             return Propagation::Stop;
         }
         presses.clicks.arm(cx);
@@ -212,7 +249,7 @@ impl RowCell {
         Propagation::Continue
     }
 
-    fn moved(&self, position: Point, cx: &mut EventCx<'_, Message>) -> Propagation {
+    fn moved(&self, position: Point, cx: &mut EventCx<'_, M>) -> Propagation {
         let mut presses = self.presses.borrow_mut();
         if let Some(blank) = presses.blank.as_mut().filter(|b| !b.moved) {
             if (position.x - blank.at.x).hypot(position.y - blank.at.y) < drag::START_DISTANCE {
@@ -236,7 +273,7 @@ impl RowCell {
         drop(presses);
         cx.release_pointer();
         if let Some(selection) = press.restore {
-            self.emit(WindowEvent::Select(selection), cx);
+            self.emit(ViewEvent::Select(selection), cx);
         }
         let grab = RowGrab {
             indices: press.dragged,
@@ -244,12 +281,12 @@ impl RowCell {
             cell: press.cell,
             rtl: cx.env().direction == LayoutDirection::Rtl,
         };
-        self.emit(WindowEvent::DragRows(grab), cx);
+        self.emit(ViewEvent::DragRows(grab), cx);
         Propagation::Stop
     }
 }
 
-impl Widget<Message> for RowCell {
+impl<M: 'static> Widget<M> for RowCell<M> {
     type State = ();
 
     fn layout(&self) -> LayoutSpec {
@@ -266,7 +303,7 @@ impl Widget<Message> for RowCell {
         }
     }
 
-    fn take_children(&mut self) -> Vec<Element<Message>> {
+    fn take_children(&mut self) -> Vec<Element<M>> {
         std::mem::take(&mut self.children)
     }
 
@@ -280,7 +317,7 @@ impl Widget<Message> for RowCell {
         no_measure()
     }
 
-    fn event(&self, _: &mut (), event: &Event, cx: &mut EventCx<'_, Message>) -> Propagation {
+    fn event(&self, _: &mut (), event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
         if cx.phase() == Phase::Capture {
             return Propagation::Continue;
         }
@@ -305,7 +342,7 @@ impl Widget<Message> for RowCell {
                 _,
             ) => {
                 self.presses.borrow_mut().clicks.cancel();
-                self.emit(WindowEvent::SecondaryPress(Some(self.index)), cx);
+                self.emit(ViewEvent::SecondaryPress(Some(self.index)), cx);
                 Propagation::Continue
             }
             Event::Pointer(PointerEvent::Motion { position }, _) => self.moved(position, cx),
@@ -340,9 +377,7 @@ impl Widget<Message> for RowCell {
             Event::Wake(now) => {
                 let mut presses = self.presses.borrow_mut();
                 let held = presses.press.is_some();
-                presses
-                    .clicks
-                    .wake(&view_events(self.window), now, held, cx);
+                presses.clicks.wake(&self.on_event, now, held, cx);
                 Propagation::Continue
             }
             Event::Cancel => {
@@ -362,28 +397,28 @@ impl Widget<Message> for RowCell {
 }
 
 /// The list's table with what no row takes: presses under the rows, the band and the timers.
-pub(super) struct Gestures {
-    pub window: u64,
-    pub count: usize,
-    pub row_height: f64,
-    pub scroll: ScrollState,
-    pub selection: Selection,
-    pub presses: SharedPresses,
+struct Gestures<M> {
+    count: usize,
+    row_height: f64,
+    scroll: ScrollState,
+    selection: Selection,
+    presses: Presses,
     /// The band being drawn, in the rows' content.
-    pub band: Option<Rect>,
+    band: Option<Rect>,
     /// From the frame's top to the first row's at rest: the header, and the toolbar row over it when the list fills
     /// the pane under the row.
-    pub lead: f64,
-    pub children: Vec<Element<Message>>,
+    lead: f64,
+    children: Vec<Element<M>>,
+    on_event: OnEvent<M>,
 }
 
-impl Gestures {
-    fn emit(&self, event: WindowEvent, cx: &mut EventCx<'_, Message>) {
-        cx.emit(Message::Window(self.window, event));
+impl<M: 'static> Gestures<M> {
+    fn emit(&self, event: ViewEvent, cx: &mut EventCx<'_, M>) {
+        emit(&self.on_event, event, cx);
     }
 
     /// Where the rows' content starts in the window: under the header (and the row over it), moved up by the scroll.
-    fn content_origin(&self, cx: &EventCx<'_, Message>) -> Option<Point> {
+    fn content_origin(&self, cx: &EventCx<'_, M>) -> Option<Point> {
         let bounds = cx.bounds()?;
         Some(Point::new(
             bounds.min_x(),
@@ -392,7 +427,7 @@ impl Gestures {
     }
 
     /// The rows' part of the frame, in the window.
-    fn shown(&self, cx: &EventCx<'_, Message>) -> Option<Rect> {
+    fn shown(&self, cx: &EventCx<'_, M>) -> Option<Rect> {
         let bounds = cx.bounds()?;
         Some(Rect::new(
             bounds.min_x(),
@@ -404,7 +439,7 @@ impl Gestures {
 
     /// Show `band` and select the rows it crosses: the window hears of the band before its selection, so it holds the
     /// selection's count until the band is let go.
-    fn draw_band(&self, band: &Band, cx: &mut EventCx<'_, Message>) {
+    fn draw_band(&self, band: &Band, cx: &mut EventCx<'_, M>) {
         let Some(origin) = self.content_origin(cx) else {
             return;
         };
@@ -413,16 +448,16 @@ impl Gestures {
         let past = ((rect.max_y() / self.row_height).ceil().max(0.0) as usize).min(self.count);
         let hits: Vec<usize> = (first..past).collect();
         let next = band.select(&hits);
-        self.emit(WindowEvent::Band(Some(rect)), cx);
+        self.emit(ViewEvent::Band(Some(rect)), cx);
         if next != self.selection {
-            self.emit(WindowEvent::Select(next), cx);
+            self.emit(ViewEvent::Select(next), cx);
         }
     }
 
     /// What the list sees before the table and its rows do, which take keys and presses for themselves: a key, a scroll
     /// or a press anywhere (a triangle's too) cancels a pending rename, and Ctrl with a press on the rows is the
     /// secondary click wherever it lands in a row, its triangle and margins included.
-    fn capture(&self, event: &Event, cx: &mut EventCx<'_, Message>) -> Propagation {
+    fn capture(&self, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
         match *event {
             Event::Key(ref key, _) if key.pressed => self.presses.borrow_mut().clicks.cancel(),
             Event::Pointer(PointerEvent::Scroll { .. }, _) => {
@@ -446,8 +481,8 @@ impl Gestures {
                         let row = ((position.y - origin.y) / self.row_height).floor();
                         (row >= 0.0 && (row as usize) < self.count).then_some(row as usize)
                     });
-                    self.emit(WindowEvent::SecondaryPress(row), cx);
-                    self.emit(WindowEvent::ContextMenu(position), cx);
+                    self.emit(ViewEvent::SecondaryPress(row), cx);
+                    self.emit(ViewEvent::ContextMenu(position), cx);
                     return Propagation::Stop;
                 }
             }
@@ -456,14 +491,14 @@ impl Gestures {
         Propagation::Continue
     }
 
-    fn follow(&self, pointer: Point, cx: &mut EventCx<'_, Message>) {
+    fn follow(&self, pointer: Point, cx: &mut EventCx<'_, M>) {
         if let Some(shown) = self.shown(cx) {
-            band::follow(&view_events(self.window), self.scroll, pointer, shown, cx);
+            band::follow(&self.on_event, self.scroll, pointer, shown, cx);
         }
     }
 }
 
-impl Widget<Message> for Gestures {
+impl<M: 'static> Widget<M> for Gestures<M> {
     type State = ();
 
     fn layout(&self) -> LayoutSpec {
@@ -475,7 +510,7 @@ impl Widget<Message> for Gestures {
         }
     }
 
-    fn take_children(&mut self) -> Vec<Element<Message>> {
+    fn take_children(&mut self) -> Vec<Element<M>> {
         let mut children = std::mem::take(&mut self.children);
         if let Some(rect) = self.band {
             // the band moves with the rows, under the header
@@ -514,7 +549,7 @@ impl Widget<Message> for Gestures {
         no_measure()
     }
 
-    fn event(&self, _: &mut (), event: &Event, cx: &mut EventCx<'_, Message>) -> Propagation {
+    fn event(&self, _: &mut (), event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
         if cx.phase() == Phase::Capture {
             return self.capture(event, cx);
         }
@@ -534,8 +569,8 @@ impl Widget<Message> for Gestures {
                     return Propagation::Continue;
                 }
                 if mods.contains(Mods::CTRL) {
-                    self.emit(WindowEvent::SecondaryPress(None), cx);
-                    self.emit(WindowEvent::ContextMenu(position), cx);
+                    self.emit(ViewEvent::SecondaryPress(None), cx);
+                    self.emit(ViewEvent::ContextMenu(position), cx);
                     return Propagation::Stop;
                 }
                 let Some(origin) = self.content_origin(cx) else {
@@ -545,7 +580,7 @@ impl Widget<Message> for Gestures {
                 presses.clicks.press_empty();
                 let toggles = mods.contains(Mods::SHIFT) || mods.contains(Mods::PRIMARY);
                 if !toggles && !self.selection.is_empty() {
-                    self.emit(WindowEvent::Select(Selection::new([], None, None)), cx);
+                    self.emit(ViewEvent::Select(Selection::new([], None, None)), cx);
                 }
                 let base = if toggles {
                     self.selection.clone()
@@ -593,16 +628,14 @@ impl Widget<Message> for Gestures {
                     return Propagation::Continue;
                 }
                 cx.release_pointer();
-                self.emit(WindowEvent::Band(None), cx);
+                self.emit(ViewEvent::Band(None), cx);
                 Propagation::Stop
             }
             Event::Wake(now) => {
                 {
                     let mut presses = self.presses.borrow_mut();
                     let held = presses.press.is_some();
-                    presses
-                        .clicks
-                        .wake(&view_events(self.window), now, held, cx);
+                    presses.clicks.wake(&self.on_event, now, held, cx);
                 }
                 let band = self.presses.borrow().band.clone();
                 if let Some(band) = band {
@@ -617,7 +650,7 @@ impl Widget<Message> for Gestures {
                 presses.clicks.cancel();
                 presses.blank = None;
                 if presses.band.take().is_some() {
-                    self.emit(WindowEvent::Band(None), cx);
+                    self.emit(ViewEvent::Band(None), cx);
                 }
                 Propagation::Continue
             }
@@ -630,14 +663,15 @@ impl Widget<Message> for Gestures {
     fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
 }
 
-/// What Tab (or Shift+Tab) on a row of the list of window `window` does: it selects the next (or previous) item by
-/// `names` and gives it the keyboard ([`WindowEvent::FocusRow`]); past the last (or before the first) it leaves the
-/// key to go on to the next control. The table offers only its rows' keys, so a column header's Tab never comes here.
-pub(super) fn tab(
-    window: u64,
+/// What Tab (or Shift+Tab) on a row of the list does: it selects the next (or previous) item by `names` and gives it
+/// the keyboard ([`ViewEvent::FocusRow`], reported through `on_event`); past the last (or before the first) it leaves
+/// the key to go on to the next control. The table offers only its rows' keys, so a column header's Tab never comes
+/// here.
+fn tab<M>(
+    on_event: OnEvent<M>,
     names: Rc<[String]>,
     cursor: Option<usize>,
-) -> impl Fn(usize, &KeyEvent) -> Option<Message> {
+) -> impl Fn(usize, &KeyEvent) -> Option<M> {
     move |at, key| {
         let mods = key.mods;
         let plain = !mods.contains(Mods::CTRL)
@@ -648,7 +682,7 @@ pub(super) fn tab(
         }
         let back = key.keysym == LEFT_TAB || mods.contains(Mods::SHIFT);
         let to = tab_to(&names, cursor, at, back)?;
-        Some(Message::Window(window, WindowEvent::FocusRow(to)))
+        on_event(ViewEvent::FocusRow(to))
     }
 }
 
@@ -664,19 +698,230 @@ fn tab_to(names: &[String], cursor: Option<usize>, at: usize, back: bool) -> Opt
     (to != cursor.unwrap_or(at)).then_some(to)
 }
 
-/// The band's layer over the table: it places the band, and lets every press through.
-struct BandLayer {
-    children: Vec<Element<Message>>,
+/// What the table reports through a handler that must give a message, which a [`FileList`]'s `on_event` gives for each.
+const TABLE_EVENTS: &str =
+    "a file list's on_event gives a message for Select, Open, Sort, Toggle and Scroll, which its table reports";
+
+/// The folder as an outline table: a header, a row an item with its icon and name first, folders that open in place,
+/// the band and the presses of its rows. It becomes an element with `Element::from`.
+pub struct FileList<M> {
+    /// Tells the rows' keys from those of the program's other windows.
+    pub window: u64,
+    /// The accessible name.
+    pub label: String,
+    /// The rows' items in order: an open folder's items follow its row.
+    pub items: Rc<[Entry]>,
+    /// Each row's place in the outline; a row past its end is a top-level row without children.
+    pub outline: Rc<[TreeItem]>,
+    /// The columns, the name's first: a table's `Column`, a title and a width.
+    pub columns: Vec<Column>,
+    /// The text of an item in column `column`, from 1; the name's cell is the item's icon and name.
+    #[allow(clippy::type_complexity)]
+    pub text: Rc<dyn Fn(&Entry, usize) -> String>,
+    pub sort: Option<(usize, SortOrder)>,
+    pub icon: ItemIcon,
+    pub multiple: bool,
+    pub scroll: ScrollState,
+    pub selection: Selection,
+    /// The items a context menu is open on, which wear a ring.
+    pub ringed: Selection,
+    /// The rubber band being drawn, in the rows' content.
+    pub band: Option<Rect>,
+    /// From the pane's top to the header at rest: the toolbar row over it when the list fills the pane under the row.
+    pub lead: f64,
+    /// The row whose name is being edited, and the field that stands in its place; the field's messages are the
+    /// program's own.
+    #[allow(clippy::type_complexity)]
+    pub name_field: Option<(usize, Rc<dyn Fn() -> Element<M>>)>,
+    pub presses: Presses,
+    /// The program's message for each event the list reports, or none. The table reports `Select`, `Open`, `Sort`,
+    /// `Toggle` and `Scroll` through handlers that must give one, so the function gives a message for each of those.
+    pub on_event: Rc<dyn Fn(ViewEvent) -> Option<M>>,
 }
 
-impl Widget<Message> for BandLayer {
+impl<M: Clone + 'static> From<FileList<M>> for Element<M> {
+    fn from(list: FileList<M>) -> Element<M> {
+        let FileList {
+            window: id,
+            label,
+            items: entries,
+            outline: items,
+            columns,
+            text,
+            sort,
+            icon,
+            multiple,
+            scroll,
+            selection: selected,
+            ringed,
+            band,
+            lead,
+            name_field,
+            presses,
+            on_event,
+        } = list;
+        // the table asks only for the rows it shows, so their text and icons are made then
+        let names: Rc<[String]> = entries.iter().map(|e| e.name.clone()).collect();
+        let type_names = Rc::clone(&names);
+        let paths = Rc::clone(&entries);
+        let cell_selection = selected.clone();
+        let cell_presses = presses.clone();
+        let cell_events = Rc::clone(&on_event);
+        let table = TableView {
+            label,
+            columns,
+            sort,
+            on_sort: Some(report(&on_event, ViewEvent::Sort)),
+            count: entries.len(),
+            row_height: ROW_HEIGHT,
+            scroll,
+            selection: selected.clone(),
+            multiple,
+            cell: Box::new(move |row, column, selected| {
+                if let Some((_, field)) = name_field.as_ref().filter(|r| r.0 == row && column == 0)
+                {
+                    return field();
+                }
+                let content = match column {
+                    0 => entries[row].name.clone(),
+                    _ => text(&entries[row], column),
+                };
+                // a stack that fills the cell gives the text its width, so a long one ends in an ellipsis
+                let cell = Element::new(Stack {
+                    axis: Axis::Vertical,
+                    padding: Insets::ZERO,
+                    spacing: 0.0,
+                    align: Align::Stretch,
+                    children: vec![
+                        Element::new(Spacer { min: 0.0 }),
+                        cell_text_element(content, column, selected),
+                        Element::new(Spacer { min: 0.0 }),
+                    ],
+                })
+                .fill();
+                // the name follows the item's icon
+                let cell = match column {
+                    0 => Element::new(Stack {
+                        axis: Axis::Horizontal,
+                        padding: Insets::ZERO,
+                        spacing: NAME_GAP,
+                        align: Align::Center,
+                        children: vec![item_image(icon(&entries[row]), ROW_ICON), cell],
+                    })
+                    .fill(),
+                    _ => cell,
+                };
+                Element::new(RowCell {
+                    index: row,
+                    name: column == 0,
+                    label: (column == 0).then(|| entries[row].name.clone()),
+                    selection: cell_selection.clone(),
+                    presses: cell_presses.clone(),
+                    children: vec![cell],
+                    on_event: Rc::clone(&cell_events),
+                })
+                .fill()
+            }),
+            type_select: Some(Box::new(move |row| type_names[row].clone())),
+            on_scroll: report(&on_event, ViewEvent::Scroll),
+            on_select: Some(report(&on_event, ViewEvent::Select)),
+            double_click_activates: false,
+            on_activate: Some(report(&on_event, ViewEvent::Open)),
+            on_row_key: Some(Box::new(tab(
+                Rc::clone(&on_event),
+                names,
+                selected.cursor(),
+            ))),
+            header_top: lead,
+        };
+        let count = table.count;
+        let table = striped_element(
+            OutlineTable {
+                table,
+                // the outline follows the entries; a row it does not know yet is a top-level one
+                item: Box::new(move |row| {
+                    items.get(row).copied().unwrap_or(TreeItem {
+                        level: 0,
+                        expanded: None,
+                        position: row,
+                        siblings: count,
+                    })
+                }),
+                key: Some(Box::new(move |row| row_key(id, &paths[row].path))),
+                on_toggle: Some(report(&on_event, ViewEvent::Toggle)),
+            },
+            ringed,
+        )
+        .key("items");
+        Element::new(Gestures {
+            count,
+            row_height: ROW_HEIGHT,
+            scroll,
+            selection: selected,
+            presses,
+            band,
+            lead: lead + list_view::HEADER_HEIGHT,
+            children: vec![table],
+            on_event,
+        })
+        .key("list")
+    }
+}
+
+/// The table's handler that reports its values as `event` through `on_event`.
+fn report<T: 'static, M: 'static>(
+    on_event: &OnEvent<M>,
+    event: fn(T) -> ViewEvent,
+) -> Box<dyn Fn(T) -> M> {
+    let on_event = Rc::clone(on_event);
+    Box::new(move |value| on_event(event(value)).expect(TABLE_EVENTS))
+}
+
+/// The key of the list's row for the item at `path` in window `id`: its focus follows the item while folders open
+/// and close above it.
+pub fn row_key(id: u64, path: &Path) -> Key {
+    Key::from(format!("row/{id}/{}", path.display()))
+}
+
+/// An item's icon or thumbnail, `side` points square.
+fn item_image<M: 'static>(
+    sources: Vec<cupertino_ui_controls::ImageSource>,
+    side: f64,
+) -> Element<M> {
+    Element::new(Image {
+        sources,
+        size: Size::new(side, side),
+        fit: ImageFit::Contain,
+        radius: 0.0,
+        label: None,
+    })
+}
+
+/// A list cell's text: the name in the label colour and the other columns in the secondary one, and every column of a
+/// selected row in the theme's selected control text colour, which reads on the selection's fill.
+fn cell_text_element<M: 'static>(content: String, column: usize, selected: bool) -> Element<M> {
+    Element::new(Text {
+        content: AttributedText::plain(content, TextStyle::new(13.0)),
+        role: TextRole::Body,
+        wrap: false,
+        secondary: column != 0,
+        selected,
+    })
+}
+
+/// The band's layer over the table: it places the band, and lets every press through.
+struct BandLayer<M> {
+    children: Vec<Element<M>>,
+}
+
+impl<M: 'static> Widget<M> for BandLayer<M> {
     type State = ();
 
     fn layout(&self) -> LayoutSpec {
         LayoutSpec::new(ContainerKind::Absolute)
     }
 
-    fn take_children(&mut self) -> Vec<Element<Message>> {
+    fn take_children(&mut self) -> Vec<Element<M>> {
         std::mem::take(&mut self.children)
     }
 
@@ -691,7 +936,7 @@ impl Widget<Message> for BandLayer {
         no_measure()
     }
 
-    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, Message>) -> Propagation {
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
         Propagation::Continue
     }
 

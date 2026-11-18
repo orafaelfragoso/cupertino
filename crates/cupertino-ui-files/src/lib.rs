@@ -6,21 +6,22 @@
 //! * [`rename`], [`name_edit`]: name checks, free names and the name being edited; [`open`]: default applications and
 //!   the Open With list; [`operations`]: new folders, renames, aliases, copies and moves, as blocking functions;
 //! * [`item_art`]: the art of the common items;
-//! * [`grid`]: the folder as a grid of icons ([`grid::IconGrid`]), which reports through [`ViewEvent`];
-//!   [`band`], [`clicks`]: the rubber band and what a press on an item means besides selecting it.
+//! * [`grid`]: the folder as a grid of icons ([`grid::IconGrid`]), and [`list`]: as an outline table
+//!   ([`list::FileList`]), which report through [`ViewEvent`].
 
 use cupertino_geometry::{Point, Rect};
-use cupertino_ui_controls::Selection;
+use cupertino_ui_controls::{Selection, SortOrder, TreeToggle};
 use cupertino_ui_core::layout::ScrollState;
 
 pub mod applications;
-pub mod band;
-pub mod clicks;
+mod band;
+mod clicks;
 pub mod entry;
 pub mod geom;
 pub mod grid;
 pub mod item_art;
 pub mod layout;
+pub mod list;
 pub mod metrics;
 pub mod mime;
 pub mod name_edit;
@@ -46,10 +47,18 @@ pub enum ViewEvent {
     ContextMenu(Point),
     /// A press on items of the grid went far enough to drag them.
     DragOut(grid::Grab),
+    /// A press on rows of the list went far enough to drag them.
+    DragRows(list::RowGrab),
     /// The rubber band being drawn, in the view's content; `None` once it is let go.
     Band(Option<Rect>),
-    /// The view scrolled: a band held past its edge.
+    /// The view scrolled: its scroll view, or a band held past its edge.
     Scroll(ScrollState),
     /// A press on the name of the only selected item had no second press: edit the name of item `index`.
     Rename(usize),
+    /// Tab chose row `index` of the list.
+    FocusRow(usize),
+    /// A column header of the list was chosen.
+    Sort((usize, SortOrder)),
+    /// A folder's row of the list opens or closes.
+    Toggle(TreeToggle),
 }

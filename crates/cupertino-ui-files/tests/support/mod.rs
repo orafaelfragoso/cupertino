@@ -5,7 +5,7 @@ use std::num::NonZeroU32;
 use std::sync::Arc;
 
 use cupertino_assets::BUILTIN_FONT;
-use cupertino_geometry::{Point, Size};
+use cupertino_geometry::{Point, Rect, Size};
 use cupertino_theme::ui::{Appearance, ThemePreferences, ThemeTokens};
 use cupertino_ui_core::layout::LayoutDirection;
 use cupertino_ui_core::platform::{
@@ -13,7 +13,7 @@ use cupertino_ui_core::platform::{
     WindowEvent, WindowId, WindowSpec, WindowStates,
 };
 use cupertino_ui_core::{
-    Application, CommandRegistry, Element, Key, PlaceholderIcons, RuntimeOptions, Window,
+    Application, CommandRegistry, Element, Key, PlaceholderIcons, Role, RuntimeOptions, Window,
     WindowBackground, WindowKey,
 };
 use cupertino_ui_render::{CpuConfig, CpuRenderer};
@@ -124,6 +124,22 @@ impl<A: Application> View<A> {
 
     pub fn model(&self) -> &A::Model {
         self.driver.runtime().model()
+    }
+
+    /// The bounds of the node named `name`, of role `role` when one is given, the one furthest along when several are.
+    pub fn bounds_of(&self, role: Option<Role>, name: &str) -> Option<Rect> {
+        let snapshot = self.driver.runtime().snapshot(self.window)?;
+        snapshot
+            .accessibility
+            .iter()
+            .filter(|(_, n)| role.is_none_or(|r| n.role == r) && n.name.as_deref() == Some(name))
+            .map(|(_, n)| n.bounds)
+            .max_by(|a, b| a.min_x().total_cmp(&b.min_x()))
+    }
+
+    /// The middle of the node [`View::bounds_of`] finds.
+    pub fn center_of(&self, role: Option<Role>, name: &str) -> Option<Point> {
+        self.bounds_of(role, name).map(|bounds| bounds.center())
     }
 
     /// Run the window, handing it the frames it asks for, until it rests.

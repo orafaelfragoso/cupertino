@@ -35,8 +35,7 @@ use cupertino_kit::render::{Paint, PaintOp, Shape};
 use cupertino_kit::text::{AttributedText, TextStyle};
 use cupertino_kit::theme::{ColorRole, StateVariant};
 
-use super::list::RowCell;
-use super::view::{self, popup_key, row_key};
+use super::view::{self, popup_key};
 use super::{BrowserWindow, Event as WindowEvent, Message, Popup, Session, NO_SCROLL};
 use crate::browser::Browser;
 use crate::columns::{self, ChainLayout, ColumnChain, PREVIEW_WIDTH, ROW_HEIGHT};
@@ -45,6 +44,7 @@ use crate::model::DirectoryModel;
 use crate::places::window_title;
 use crate::preview::{self as file_preview, PreviewKind};
 use cupertino_kit::files::entry::Entry;
+use cupertino_kit::files::list::{row_key, RowCell};
 
 /// The side of a row's icon.
 const ROW_ICON: f64 = 16.0;
@@ -413,7 +413,8 @@ fn active_column(session: &Session, id: u64, win: &BrowserWindow) -> Element<Mes
     let names: Rc<[String]> = entries.iter().map(|e| e.name.clone()).collect();
     let selection = view::shown_selection(win);
     let cell_selection = selection.clone();
-    let presses = Rc::clone(&win.list_presses);
+    let presses = win.list_presses.clone();
+    let on_event = super::view_events(id);
     let icons = Rc::clone(&session.icons);
     let rename = win.rename.as_ref().map(|r| {
         (
@@ -450,13 +451,13 @@ fn active_column(session: &Session, id: u64, win: &BrowserWindow) -> Element<Mes
             })
             .fill();
             let cell = Element::new(RowCell {
-                window: id,
                 index: row,
                 name: true,
                 label: Some(entry.name.clone()),
                 selection: cell_selection.clone(),
-                presses: Rc::clone(&presses),
+                presses: presses.clone(),
                 children: vec![named],
+                on_event: Rc::clone(&on_event),
             })
             .fill();
             row_content(cell, entry.is_dir, selected)

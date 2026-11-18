@@ -18,7 +18,7 @@ fn seconds(at: Timestamp) -> f64 {
 
 /// The presses of a view, in its node state.
 #[derive(Debug, Default)]
-pub struct Clicks {
+pub(super) struct Clicks {
     /// The item last pressed, and when.
     last: Option<(usize, f64)>,
     rename: RenameTrigger,

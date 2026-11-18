@@ -380,7 +380,7 @@ fn item_key(id: u64, win: &BrowserWindow, entry: &Entry) -> Key {
                 .position(|e| e.path == entry.path);
             super::view::item_key(id, index.unwrap_or(usize::MAX))
         }
-        _ => super::view::row_key(id, &entry.path),
+        _ => cupertino_kit::files::list::row_key(id, &entry.path),
     }
 }
 

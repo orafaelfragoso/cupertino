@@ -8,11 +8,11 @@ mod support;
 use cupertino_kit::controls::{FrameClock, WINDOW_CONTENT_INSET};
 use cupertino_kit::core::CommandRegistry;
 use cupertino_kit::geometry::Size;
-use cupertino_kit::platform::{
-    DecorationMode, PlatformEvent, Shown, Submission, Submitted, Timestamp, WindowEvent, WindowId,
-    WindowStates,
-};
+use cupertino_kit::platform::{DecorationMode, Timestamp, WindowId};
 use cupertino_kit::prelude::*;
+use cupertino_ui_core::platform::{
+    PlatformEvent, Shown, Submission, Submitted, WindowEvent, WindowStates,
+};
 use cupertino_ui_test::{Returns, TestDriver};
 use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex, PoisonError};

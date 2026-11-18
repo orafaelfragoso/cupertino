@@ -54,6 +54,10 @@ name = "children"
 required-features = ["test"]
 
 [[test]]
+name = "frame-away"
+required-features = ["test"]
+
+[[test]]
 name = "submitted-panic"
 required-features = ["test"]
 

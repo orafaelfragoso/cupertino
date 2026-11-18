@@ -16,9 +16,9 @@ Updated by the lead at every merge.
 | | |
 |---|---|
 | Current wave | 4 |
-| Running tasks | W4.7 step 2, check of the W4.9 rework |
+| Running tasks | W4.6 step 5, W4.8, W4.10 |
 | Enforced layers | foundation, system, graphics, models, protocol, transport, testing (126 remaining-work lines) |
-| Waiting on the owner | W4.6 step 4: the measured cost and review item S5 |
+| Waiting on the owner | nothing |
 | Last closed wave | 3 |
 
 ## Contents
@@ -726,7 +726,10 @@ ui-wayland`. **After** W4.2.
 2. [x] (bcf681ad2) Presenting and committing move to the render thread in D4's order; UI threads hand over recorded display lists
        with their configure serials; CPU surfaces are rasterised on the CPU pool; the heartbeat reaches the watchdog.
 3. [x] (bcf681ad2) Device loss handled once per process.
-4. [ ] Frame timings and per-process PSS of Files and Settings no worse than W0.1 (lead compares with a profile).
+4. [x] (086ac720e) Frame timings and per-process PSS of Files and Settings no worse than W0.1 (lead compares with a profile);
+       the owner accepts the render thread's 1–4 MiB and 2–3 threads per process.
+5. [ ] The raised layer, surface layers and declined frames are drawn and committed through the render thread's hand-over,
+       layers before their parent, no blocking round trip on the UI thread (review item S5, owner: in wave 4).
 
 #### W4.7 Kit's public API (L, design then code)
 
@@ -737,7 +740,7 @@ ui-wayland`. **After** W4.2.
        is refused per the must-not-expose list. Reviewed by a reviewer who did not write it and approved by the owner;
        approval in the [decision log](#decision-log).
        (0dd10df1b, approved 2026-11-17)
-2. [ ] The approved API, and nothing else.
+2. [x] (6c9431f4c) The approved API, and nothing else.
 
 #### W4.8 File views in Kit (L)
 
@@ -756,19 +759,19 @@ ui-wayland`. **After** W4.2.
 **Owns** new `docs/architecture/shell-host.md`, the protocol XML in `crates/cupertino-protocols/protocols/`. **After**
 W4.7 step 1 (its approved types).
 
-- [ ] The host protocol: the host role; the component list sent by the server; asking for a component connection; bus
+- [x] (4659cd095) The host protocol: the host role; the component list sent by the server; asking for a component connection; bus
       name announcement (D20); busy, responsive, unresponsive and lost events, and the host's restart request (D16,
       D17); separate hosts and the bridge of the host bus (D18, D26).
-- [ ] The component list: its schema in the `shell` section of `compositor.json` (which components run, which run
+- [x] (4659cd095) The component list: its schema in the `shell` section of `compositor.json` (which components run, which run
       alone; a user file may turn a component off but names no commands or roles), a table of every component with its
       roles and bus names, how `dev_folder` points the server at a development build of the host, the built-in programs
       the server still starts, and `greeter.json` for the login session.
-- [ ] The transaction protocol meeting [Transactions](#transactions), every question answered.
-- [ ] `cupertino-kit-shell`'s API: `Component`, layer surfaces and roles, lock surfaces, the surfaces of the
+- [x] (4659cd095) The transaction protocol meeting [Transactions](#transactions), every question answered.
+- [x] (4659cd095) `cupertino-kit-shell`'s API: `Component`, layer surfaces and roles, lock surfaces, the surfaces of the
       privileged programs (prompts, screenshot) and capture, window and application list, the window manager's
       protocol, holes, holds (what a restarted component takes over), transactions, gesture binding, the host bus
       (D26), the host's thread and child-process API.
-- [ ] Reviewed and approved as in W4.7.
+- [x] (4659cd095) Reviewed and approved as in W4.7; approval in the decision log.
 
 #### W4.10 Protocol bindings (S)
 
@@ -1027,6 +1030,8 @@ Every crate of wave 6, as in W1.T.
 #### W6.close (lead)
 
 - [ ] `ENFORCED` gains `Shell`. Old binaries are gone from packaging and `contracts.yaml`.
+- [ ] `cupertino-shell-v1.xml` loses `session_agent` and `agent_trust`, whose last reader goes in W6.13 (shell-host.md,
+      "Edits of the existing protocol files").
 - [ ] Memory measured against W0.1; numbers in [Measurements](#measurements).
 - [ ] `docs/src/architecture.md`'s process table matches [Processes](#processes). Gates as in W4.close.
 
@@ -1185,3 +1190,17 @@ One line per change to a decision or approval of a design: date, number, what, w
   time halved); 1–4 MiB more PSS and 2–3 threads more, the render thread and the pools. Waiting on the owner: accept
   that cost, and whether the raised layer, surface layers and declined frames (review item S5, L, 3–5 days) move to
   the render thread now or stay on the UI thread as a recorded exception.
+- 2026-11-18: owner, W4.6: accepts the render thread's cost measured in step 4 (1–4 MiB of PSS and 2–3 threads per
+  process, frame times no worse) and closes the step; review item S5 (the raised layer, surface layers and declined
+  frames through the render thread's hand-over) is done in wave 4, as W4.6 step 5, not left as an exception.
+- 2026-11-18: lead, W4.9: the rework (4659cd095) makes every change of the review, checked item by item by a second
+  reviewer. Its two departures from the lead's list follow from the review's own interim rule (`cupertino-login` is
+  the session agent until W6.13): the menu bar keeps the `session_agent` feed and its `org.cupertino.Login1` read until
+  W6.13, and W6.close removes `session_agent` and `agent_trust` from `cupertino-shell-v1.xml`. The owner's approval of
+  2026-11-18 therefore holds. Left to W5.2: the `kind` error's summary does not name a separate host's `bus_dropped`
+  for another component, and an installed host with a version mismatch is restarted with back-off and never given up.
+- 2026-11-18: lead, W4.7 step 2 (6c9431f4c): the `test` feature and `kit::test` arrive with the module lists; the
+  unused `app::run_on_with_appearance` stays a temporary exposure with the other `run_on*`; Kit's tests that drive the
+  headless backend or name renderer internals require `test`; `kit::controls` lists only items with callers;
+  `render::picture` hands its callback `None` for a picture it cannot draw; `kit::image` refuses pictures over 2²⁶
+  pixels; `system_color` answers from the theme Kit started on and reads no file.

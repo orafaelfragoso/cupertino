@@ -583,11 +583,10 @@ fn start(
     hand_over(&mut command, &stream);
     end_with_server(&mut command);
     match command.spawn() {
-        Ok(mut child) => {
+        Ok(child) => {
             if let Err(e) = bind_holder(&state, child.id()) {
                 tracing::warn!(name = spec.name, error = %e, "binding the shell process to its connection failed: ending it");
-                let _ = child.kill();
-                let _ = child.wait();
+                crate::shell_connection::end_unbound(child);
                 return retry("bind", &program, e.to_string());
             }
             let source = if from_dev_folder {

@@ -6,7 +6,7 @@
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
-use std::process::Command;
+use std::process::{Child, Command};
 use std::sync::Arc;
 
 use smithay::reexports::wayland_server::DisplayHandle;
@@ -63,6 +63,23 @@ pub fn bind_holder(state: &ClientState, pid: u32) -> std::io::Result<()> {
         .holder
         .set(Holder::Process(handle))
         .map_err(|_| std::io::Error::other("the connection already has a holder"))
+}
+
+/// A program whose holder could not be bound has no permissions. End it and reap it away from
+/// the compositor: even after SIGKILL a child in a kernel wait need not exit at once.
+pub(crate) fn end_unbound(mut child: Child) {
+    let pid = child.id();
+    let _ = child.kill();
+    if let Err(e) = std::thread::Builder::new()
+        .name("unbound-child".into())
+        .spawn(move || {
+            if let Err(e) = child.wait() {
+                tracing::warn!(pid, error = %e, "could not reap the unbound process");
+            }
+        })
+    {
+        tracing::warn!(pid, error = %e, "could not start a reaper for the unbound process");
+    }
 }
 
 /// Pass `stream` to the process `command` starts as `WAYLAND_SOCKET`.

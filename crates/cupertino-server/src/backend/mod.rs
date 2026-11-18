@@ -16,6 +16,7 @@ pub mod headless;
 pub mod input;
 #[cfg(feature = "udev")]
 pub mod record;
+mod stalls;
 #[cfg(feature = "udev")]
 pub mod udev;
 #[cfg(feature = "winit")]

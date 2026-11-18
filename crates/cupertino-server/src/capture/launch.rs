@@ -94,8 +94,7 @@ impl Cupertino {
                 let pid = child.id();
                 if let Err(e) = bind_holder(&state, pid) {
                     tracing::warn!(pid, error = %e, "binding the screenshot process to its connection failed: ending it");
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    crate::shell_connection::end_unbound(child);
                     drop(stream);
                     return;
                 }

@@ -3,16 +3,18 @@
 //! buffers, with a built-in arrow as the fallback; and shake to locate, which grows the cursor
 //! while the pointer is shaken (`cupertino_input::ShakeDetector`).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::mpsc;
 use std::time::Duration;
 
 use cupertino_assets::CursorTheme;
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::element::memory::MemoryRenderBuffer;
 use smithay::input::pointer::CursorIcon;
+use smithay::reexports::calloop::ping::make_ping;
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
-use smithay::reexports::calloop::RegistrationToken;
+use smithay::reexports::calloop::{LoopHandle, RegistrationToken};
 use smithay::utils::{Logical, Physical, Point, Transform};
 use xcursor::parser::{parse_xcursor, Image};
 
@@ -75,6 +77,10 @@ pub struct CursorLoader {
     theme: Option<CursorTheme>,
     size: u32,
     colors: CursorColors,
+    default_images: Vec<Image>,
+    requests: Option<mpsc::Sender<&'static str>>,
+    ready: mpsc::Receiver<(&'static str, Option<Vec<Image>>)>,
+    pending: HashSet<&'static str>,
     cache: HashMap<&'static str, Vec<Image>>,
     buffers: HashMap<BufferKey, CursorBuffer>,
 }
@@ -149,29 +155,68 @@ pub fn recolor(pixels: &mut [u8], colors: CursorColors) {
 
 impl CursorLoader {
     /// The asset packs' `theme`, at the nominal size `XCURSOR_SIZE` (default 24), drawn in `colors`. Without a theme,
-    /// or with one that has neither a `default` nor a `left_ptr` cursor (reported on stderr), the cursors are the
+    /// or with one that has neither a `default` nor a `left_ptr` cursor (logged), the cursors are the
     /// built-in procedural set (`cupertino-cursor`), and the clients the server starts keep their own cursor theme.
-    pub fn load(theme: Option<CursorTheme>, colors: CursorColors) -> Self {
+    pub fn load(
+        mut theme: Option<CursorTheme>,
+        colors: CursorColors,
+        handle: &LoopHandle<'static, Cupertino>,
+    ) -> Self {
         let size = std::env::var("XCURSOR_SIZE")
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(24);
-        let mut loader = Self {
+        let default_images = theme.as_ref().and_then(|t| {
+            Self::read(Some(t), size, "default").or_else(|| Self::read(Some(t), size, "left_ptr"))
+        });
+        if default_images.is_none() {
+            if let Some(t) = theme.take() {
+                tracing::warn!(
+                    theme = t.name,
+                    "cursor theme has no default cursor; drawing the built-in cursors"
+                );
+            }
+        }
+        let default_images = default_images
+            .or_else(|| Self::read(None, size, "default"))
+            .unwrap_or_else(|| vec![fallback_arrow(size)]);
+        let (requests, rx) = mpsc::channel();
+        let (results, ready) = mpsc::channel();
+        let reading_theme = theme.clone();
+        let requests = make_ping().and_then(|(wake, source)| {
+            let token = handle.insert_source(source, |(), _, state| state.request_redraw())
+                .map_err(|e| std::io::Error::other(e.to_string()))?;
+            match std::thread::Builder::new()
+                .name("cursor-images".into())
+                .spawn(move || {
+                    for name in rx {
+                        if results
+                            .send((name, Self::read(reading_theme.as_ref(), size, name)))
+                            .is_err()
+                        {
+                            break;
+                        }
+                        wake.ping();
+                    }
+                }) {
+                Ok(_) => Ok(requests),
+                Err(e) => {
+                    handle.remove(token);
+                    Err(e)
+                }
+            }
+        }).inspect_err(|e| tracing::warn!(error = %e, "cannot start the cursor reader; using the default cursor")).ok();
+        Self {
             theme,
             size,
             colors,
+            default_images,
+            requests,
+            ready,
+            pending: HashSet::new(),
             cache: HashMap::new(),
             buffers: HashMap::new(),
-        };
-        if let Some(t) = loader.theme.as_ref().filter(|_| {
-            ["default", "left_ptr"]
-                .iter()
-                .all(|n| loader.read(n).is_none())
-        }) {
-            eprintln!("cupertino-server: the cursor theme {:?} in {} has no `default` or `left_ptr` cursor; drawing the built-in cursors", t.name, t.search_dir.display());
-            loader.theme = None;
         }
-        loader
     }
 
     /// Draw the cursors in `colors` from now on (`cursor_fill`, `cursor_outline` changed): the images are
@@ -193,24 +238,24 @@ impl CursorLoader {
 
     /// The images of the cursor `name`: the file of the theme (aliases are symlinks inside the theme), or without a
     /// theme the procedural cursor. `None` when the theme has no such file or the procedural set no such cursor.
-    fn read(&self, name: &str) -> Option<Vec<Image>> {
-        let Some(theme) = self.theme.as_ref() else {
-            return self.procedural(name);
+    fn read(theme: Option<&CursorTheme>, size: u32, name: &str) -> Option<Vec<Image>> {
+        let Some(theme) = theme else {
+            return Self::procedural(size, name);
         };
         let path: PathBuf = theme
             .search_dir
             .join(&theme.name)
             .join("cursors")
             .join(name);
-        parse_xcursor(&std::fs::read(path).ok()?)
+        parse_xcursor(&std::fs::read(path).ok()?).filter(|images| !images.is_empty())
     }
 
     /// The procedural cursor `name` at one, two and four times the nominal size (output scales and the cursor scale
     /// pick from them as from a theme's sizes).
-    fn procedural(&self, name: &str) -> Option<Vec<Image>> {
+    fn procedural(size: u32, name: &str) -> Option<Vec<Image>> {
         let kind = cupertino_cursor::procedural::Kind::from_name(name)?;
         let mut options = cupertino_cursor::theme::BuildOptions::new(PathBuf::new());
-        options.sizes = vec![self.size, self.size * 2, self.size * 4];
+        options.sizes = vec![size, size * 2, size * 4];
         let file = cupertino_cursor::theme::procedural_cursor(kind, &options, Vec::new())
             .to_xcursor()
             .unwrap_or_else(|e| panic!("procedural cursor {name}: {e}"));
@@ -228,30 +273,45 @@ impl CursorLoader {
         (f64::from(self.size) * scale).round() as u32
     }
 
-    fn images(&mut self, icon: CursorIcon) -> &Vec<Image> {
-        let name = icon.name();
-        if !self.cache.contains_key(name) {
-            let mut imgs = self
-                .read(name)
-                .or_else(|| self.read("default"))
-                .or_else(|| self.read("left_ptr"))
-                .unwrap_or_else(|| vec![fallback_arrow(self.size)]);
-            if self.colors != CursorColors::DEFAULT {
-                for img in &mut imgs {
-                    recolor(&mut img.pixels_rgba, self.colors);
-                }
+    fn cache_images(&mut self, name: &'static str, images: Option<Vec<Image>>) {
+        let mut images = images.unwrap_or_else(|| self.default_images.clone());
+        if self.colors != CursorColors::DEFAULT {
+            for image in &mut images {
+                recolor(&mut image.pixels_rgba, self.colors);
             }
-            self.cache.insert(name, imgs);
         }
-        &self.cache[name]
+        self.cache.insert(name, images);
+    }
+
+    /// While a new shape is being read the default arrow remains usable. Each name can be queued
+    /// only once, even when a mounted theme stops answering.
+    fn ready_name(&mut self, icon: CursorIcon) -> &'static str {
+        while let Ok((name, images)) = self.ready.try_recv() {
+            self.pending.remove(name);
+            self.cache_images(name, images);
+        }
+        let name = icon.name();
+        if self.cache.contains_key(name) {
+            return name;
+        }
+        let default = CursorIcon::Default.name();
+        if name != default && self.pending.insert(name) {
+            if let Some(reader) = &self.requests {
+                let _ = reader.send(name);
+            }
+        }
+        if !self.cache.contains_key(default) {
+            self.cache_images(default, None);
+        }
+        default
     }
 
     /// Frame for `icon` drawn `pixels` tall (nominal size times cursor scale times output scale)
     /// at animation time `time`: the smallest image of the theme at least that size, else the
     /// largest, so the renderer scales down where it can.
     pub fn frame(&mut self, icon: CursorIcon, pixels: u32, time: Duration) -> CursorFrame {
-        let name = icon.name();
-        let index = pick_frame(self.images(icon), pixels, time.as_millis() as u32);
+        let name = self.ready_name(icon);
+        let index = pick_frame(&self.cache[name], pixels, time.as_millis() as u32);
         // the image stays in the cache: only its pixels' first frame makes a buffer of them
         let img = &self.cache[name][index];
         let key = (name, index);

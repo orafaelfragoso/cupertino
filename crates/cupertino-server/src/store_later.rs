@@ -4,6 +4,7 @@
 
 use std::sync::mpsc;
 use std::sync::OnceLock;
+use std::time::Duration;
 
 type Job = Box<dyn FnOnce() + Send>;
 
@@ -25,24 +26,25 @@ fn writer() -> Option<&'static mpsc::Sender<Job>> {
         .as_ref()
 }
 
-/// Run `job` on the settings writer's thread after the writes asked before it; on this thread when there is none.
+/// Run `job` after earlier writes. Without the settings writer the change lasts for this session only.
 pub fn store_later(job: impl FnOnce() + Send + 'static) {
-    let job: Job = Box::new(job);
-    match writer() {
-        Some(writer) => {
-            if let Err(mpsc::SendError(job)) = writer.send(job) {
-                job();
-            }
-        }
-        None => job(),
+    if !writer().is_some_and(|writer| writer.send(Box::new(job)).is_ok()) {
+        tracing::error!(
+            "the settings writer is unavailable: the change lasts until the server stops"
+        );
     }
 }
 
-/// Wait until every write asked before this call has finished.
+/// How long a flush waits before leaving remaining writes to the settings writer.
+const FLUSH_WAIT: Duration = Duration::from_secs(2);
+
+/// Wait for earlier writes for up to two seconds. A slow write continues in the background.
 pub fn flush() {
     let (done, finished) = mpsc::sync_channel(1);
     store_later(move || {
         let _ = done.send(());
     });
-    let _ = finished.recv();
+    if finished.recv_timeout(FLUSH_WAIT) == Err(mpsc::RecvTimeoutError::Timeout) {
+        tracing::warn!("settings writes have not finished by the flush deadline");
+    }
 }

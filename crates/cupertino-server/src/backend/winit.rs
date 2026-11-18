@@ -100,6 +100,7 @@ pub(crate) fn head_op(
 }
 
 fn pump(state: &mut Cupertino, events: &mut WinitEventLoop) -> bool {
+    let _pump = tracing::trace_span!("server.winit_events").entered();
     let status = events.dispatch_new_events(|event| match event {
         WinitEvent::Resized { size, .. } => {
             let head = match state.backend.as_mut() {
@@ -147,6 +148,7 @@ fn render_inner(state: &mut Cupertino, w: &mut WinitBackend) {
     {
         return;
     }
+    let _frame = tracing::trace_span!("server.output_frame", output = idx).entered();
     let Some(composed) = state.compose_for_present(w.graphics.renderer(), idx) else {
         // without a scene (no render resources or no mode yet) nothing is drawn, but callbacks still go out
         let time = Duration::from(state.clock.now());
@@ -206,6 +208,7 @@ pub fn run(
     mut events: WinitEventLoop,
     deadline: Option<std::time::Instant>,
 ) {
+    let recorder = super::stalls::Recorder::start(event_loop.handle());
     while state.running {
         if !pump(state, &mut events) {
             break;
@@ -227,6 +230,7 @@ pub fn run(
             break;
         }
     }
+    drop(recorder);
     if let Some(Backend::Winit(w)) = state.backend.as_mut() {
         if let Some(res) = state.render.as_ref() {
             res.destroy(w.graphics.renderer());

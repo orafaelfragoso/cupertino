@@ -461,6 +461,7 @@ pub fn run(
     event_loop: &mut EventLoop<'static, Cupertino>,
     deadline: Option<Instant>,
 ) -> Result<()> {
+    let recorder = super::stalls::Recorder::start(event_loop.handle());
     while state.running {
         let now = state.frame_now();
         let frames = (0..state.outputs.len())
@@ -475,6 +476,7 @@ pub fn run(
             break;
         }
     }
+    drop(recorder);
     if let Some(Backend::Headless(h)) = state.backend.as_mut() {
         if let Some(res) = state.render.as_ref() {
             res.destroy(&mut h.renderer);

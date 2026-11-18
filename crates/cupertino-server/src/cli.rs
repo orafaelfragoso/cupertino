@@ -354,6 +354,7 @@ fn schedule(
         .handle()
         .insert_source(timer, move |_, _, state| {
             if let Some(f) = f.take() {
+                let _step = tracing::trace_span!("server.scripted_step", after).entered();
                 f(state);
             }
             TimeoutAction::Drop
@@ -501,10 +502,9 @@ fn schedule_script(cli: &Cli, event_loop: &EventLoop<'static, Cupertino>) -> Res
         })?;
     }
     for (t, path) in cli.window_lists.iter().cloned() {
-        schedule(event_loop, t, move |state| {
-            if let Err(e) = std::fs::write(&path, window_list(state)) {
-                tracing::warn!(error = %e, path = %path.display(), "writing the window list failed");
-            }
+        schedule(event_loop, t, move |state| match window_list(state) {
+            Ok(list) => state.snapshot_writes.window_list(path, list),
+            Err(e) => state.snapshot_writes.failed(e),
         })?;
     }
     for (t, path) in cli.shots.iter().cloned() {
@@ -556,7 +556,7 @@ fn scripted_scroll(dy: f64, usec: u64) -> crate::events::AxisInput {
 }
 
 /// The windows of `state`, back to front, one JSON object a line ([`window_line`]).
-fn window_list(state: &Cupertino) -> String {
+fn window_list(state: &Cupertino) -> Result<String> {
     state
         .wm
         .windows()
@@ -584,7 +584,15 @@ fn window_list(state: &Cupertino) -> String {
             });
             window_line(app, &w.title, frame, buttons)
         })
-        .collect()
+        .try_fold(String::new(), |mut list, line| {
+            let limit = crate::frame::snapshot_writes::SAMPLE_BYTES;
+            anyhow::ensure!(
+                line.len() <= limit - list.len(),
+                "window list exceeds {limit} bytes"
+            );
+            list.push_str(&line);
+            Ok(list)
+        })
 }
 
 /// One window of the window list: its application, title, frame in logical points and, when the server draws its
@@ -1081,7 +1089,7 @@ pub fn run(cli: Cli) -> Result<()> {
             streak.unwrap_or(1)
         ));
     }
-    Ok(())
+    state.snapshot_writes.finish()
 }
 
 /// Start the session bus worker unless `CUPERTINO_NO_DBUS` is set; failures only disable the

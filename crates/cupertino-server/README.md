@@ -109,6 +109,13 @@ Full-desktop screenshots come from a headless run (`--headless --screenshot OUT.
 
 ## Architecture
 
+With `CUPERTINO_PROFILE` set, each backend records `server.turn` from waking until it next waits.
+Turns longer than 4 ms carry `stall: true`; inspect the spans inside the turn to distinguish client
+dispatch, model ticks and frame work. Time asleep waiting for an event is outside these spans.
+
+The default cursor is prepared before the loop starts. Other cursor shapes are read or generated on
+a worker on first use; the arrow stays visible until the worker wakes the compositor to redraw.
+
 ```
 backend (winit | udev | headless)  ──input──▶  events.rs ─▶ input.rs (KeyRouter, Action, ActionPlan)
         │                                          │                         │

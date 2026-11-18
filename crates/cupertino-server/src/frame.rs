@@ -30,6 +30,9 @@ use cupertino_scene::renderer::{Failure, RenderFailure};
 use cupertino_scene::SceneKind;
 use smithay::backend::renderer::damage::OutputDamageTracker;
 
+#[path = "frame/snapshot-writes.rs"]
+pub(crate) mod snapshot_writes;
+
 /// Frame callbacks are throttled to this interval for surfaces that are not on screen.
 pub const HIDDEN_FRAME_THROTTLE: Duration = Duration::from_secs(1);
 
@@ -525,20 +528,26 @@ impl Cupertino {
         if paths.is_empty() {
             return;
         }
-        match self.draw_output_image(renderer, idx, true, true) {
-            Ok(img) => {
-                for p in paths {
-                    if self.exit_after_screenshot && self.output_screenshots.is_empty() {
-                        self.running = false;
-                        self.loop_signal.stop();
-                    }
-                    match crate::render::screenshot::save_png(&img, &p) {
-                        Ok(()) => tracing::info!(path = %p.display(), "screenshot written"),
-                        Err(e) => tracing::error!(error = %e, "writing screenshot failed"),
-                    }
-                }
-            }
-            Err(e) => tracing::error!(error = %e, "screenshot render failed"),
+        // Reject an oversized readback before allocating a framebuffer or copying its pixels on the loop.
+        let oversized = self.outputs[idx].output.current_mode().is_some_and(|mode| {
+            i64::from(mode.size.w) * i64::from(mode.size.h)
+                > (snapshot_writes::SAMPLE_BYTES / 4) as i64
+        });
+        let sample = if oversized {
+            Err(anyhow::anyhow!("output exceeds screenshot size limit"))
+        } else {
+            self.draw_output_image(renderer, idx, true, true)
+        };
+        match sample {
+            Ok(image) => self.snapshot_writes.image(paths, image),
+            Err(e) => self
+                .snapshot_writes
+                .failed(e.context("rendering screenshot")),
+        }
+        if self.exit_after_screenshot && self.output_screenshots.is_empty() {
+            // The CLI drains the writer after the backend loop, also on a timed exit.
+            self.running = false;
+            self.loop_signal.stop();
         }
     }
 

@@ -781,6 +781,7 @@ pub struct Cupertino {
     pub next_window: u64,
     pub next_output: u64,
     pub screenshot_requests: Vec<std::path::PathBuf>,
+    pub(crate) snapshot_writes: crate::frame::snapshot_writes::Writes,
     pub exit_after_screenshot: bool,
     /// Each screenshot is written for every output: the first output's at the path asked for, every other one's beside
     /// it with the output's name added (`--extra-output` runs).
@@ -873,6 +874,7 @@ impl Cupertino {
             .insert_source(
                 Generic::new(display, Interest::READ, Mode::Level),
                 |_, display, state| {
+                    let _dispatch = tracing::trace_span!("server.wayland_dispatch").entered();
                     // Safety: the display is never dropped while the source is installed.
                     unsafe {
                         display
@@ -975,7 +977,11 @@ impl Cupertino {
         let overlays = Overlays::new(&config, &decor.decorations().config.typography, assets)?;
         let caps = CapsDebounce::new(config.keyboard.caps, config.keyboard.caps_switch_hold());
         let key_filters = crate::kbd_filters::KeyFilters::new(&config.keyboard);
-        let cursor_loader = CursorLoader::load(assets.cursor_theme(), config.pointer.cursor_colors);
+        let cursor_loader = CursorLoader::load(
+            assets.cursor_theme(),
+            config.pointer.cursor_colors,
+            &loop_handle,
+        );
         let with_bridge = overlays.accent.has_table();
         let text_input_state = with_bridge
             .then(|| smithay::wayland::text_input::TextInputManagerState::new::<Self>(&dh));
@@ -1126,6 +1132,7 @@ impl Cupertino {
             next_window: 1,
             next_output: 1,
             screenshot_requests: Vec::new(),
+            snapshot_writes: Default::default(),
             exit_after_screenshot: false,
             screenshot_each_output: false,
             output_screenshots: Vec::new(),
@@ -2276,6 +2283,7 @@ impl Cupertino {
 
     /// Advance the model to now and apply the resulting effects.
     pub fn tick(&mut self) {
+        let _tick = tracing::trace_span!("server.tick").entered();
         self.flush_publications();
         self.refresh_control();
         self.forget_gone_processes();

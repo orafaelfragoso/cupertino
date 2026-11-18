@@ -52,24 +52,17 @@ const FILE_INFO: u64 =
     (3 << 30) | ((std::mem::size_of::<FileInfo>() as u64) << 16) | (0x3e << 8) | 4;
 
 fn file_info(fd: BorrowedFd<'_>, info: &mut FileInfo) -> bool {
-    loop {
-        // SAFETY: `FILE_INFO` encodes the size of `FileInfo`, which is laid out as the kernel's structure; `info`
-        // lives across the call, and the fence array its pointer names (when not null) holds `num_fences` entries.
-        let r = unsafe {
-            libc::ioctl(
-                fd.as_raw_fd(),
-                FILE_INFO as libc::c_ulong,
-                info as *mut FileInfo,
-            )
-        };
-        if r == 0 {
-            return true;
-        }
-        let e = std::io::Error::last_os_error();
-        if !matches!(e.raw_os_error(), Some(libc::EINTR) | Some(libc::EAGAIN)) {
-            return false;
-        }
-    }
+    // The timestamp is optional. An unavailable sample is not worth retrying on the frame thread.
+    // SAFETY: `FILE_INFO` encodes the size of `FileInfo`, which is laid out as the kernel's structure; `info`
+    // lives across the call, and the fence array its pointer names (when not null) holds `num_fences` entries.
+    let result = unsafe {
+        libc::ioctl(
+            fd.as_raw_fd(),
+            FILE_INFO as libc::c_ulong,
+            info as *mut FileInfo,
+        )
+    };
+    result == 0
 }
 
 /// When every fence of the sync file `fd` had signalled, on the monotonic clock: `None` while one has not, when one

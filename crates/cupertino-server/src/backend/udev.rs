@@ -853,6 +853,7 @@ pub fn run(
         return Err(anyhow!("no connected output"));
     }
 
+    let recorder = super::stalls::Recorder::start(event_loop.handle());
     while state.running {
         event_loop
             .dispatch(Some(loop_timeout(state, deadline)), state)
@@ -865,6 +866,7 @@ pub fn run(
             break;
         }
     }
+    drop(recorder);
     if let (Some(Backend::Udev(u)), Some(res)) = (state.backend.as_mut(), state.render.as_ref()) {
         res.destroy(u.renderer());
     }

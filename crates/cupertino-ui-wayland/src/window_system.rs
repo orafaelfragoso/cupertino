@@ -34,15 +34,15 @@ use cupertino_wayland_client::app::{
 };
 use cupertino_wayland_client::{
     BufferFormat, Capability, ClipboardOffer, Connection, DragActions, DragEvent, DragIcon,
-    DragOffer, DragSource, DragSourceEvent, Error, Event, KeyboardEvent, PixelRect, Popup, ReadId,
-    SurfaceId, TokenRequest, Toplevel, ToplevelConfig,
+    DragOffer, DragSource, DragSourceEvent, Error, Event, KeyboardEvent, Popup, ReadId, SurfaceId,
+    TokenRequest, Toplevel, ToplevelConfig,
 };
 use rustix::time::ClockId;
 
 use crate::convert::{self, InputTimeline};
-use crate::gpu_path::{GpuPath, GpuRenderers, Prepared, Presented};
+use crate::gpu_path::{GpuPath, GpuRenderers, Prepared};
 use crate::gpu_present::PresentError;
-use crate::hand_over::{self, copy_frame, Back, Drew, Failure, Of, Part, Target};
+use crate::hand_over::{self, Back, Drew, Failure, Of, Part, Target};
 use crate::pixels::rgba_to_argb8888;
 use crate::presentations::Presentations;
 use crate::roles::{RoleEvent, SurfaceRoles};
@@ -69,6 +69,13 @@ struct Finished {
     window: WindowId,
     backs: Vec<Back>,
     panic: Option<Box<dyn Any + Send>>,
+}
+
+/// What the thread a submitted frame was handed to sends back, in this order.
+enum FromJob {
+    Finished(Finished),
+    /// Every commit of the window's frame went out, or none was to: the window may draw again.
+    Sent(WindowId),
 }
 
 /// How often a window waiting for a GPU buffer looks at its release points.
@@ -106,9 +113,6 @@ struct IncomingDrop {
     offer: DragOffer,
 }
 
-/// More rectangles than this carried between presents become one for the whole frame.
-const MAX_CARRIED: usize = 64;
-
 /// The most backdrops `cupertino_app_effects_v1` lets one surface hold. The compositor ends the connection of a client
 /// that asks for more, so a request past it is refused here and the runtime paints fills instead.
 const MAX_BACKDROPS_PER_SURFACE: usize = 64;
@@ -136,14 +140,17 @@ struct Window {
     size: (u32, u32),
     min_size: Option<Size>,
     max_size: Option<Size>,
-    /// Damage of frames that were not presented, carried into the next present.
-    carried: Vec<PixelRect>,
     /// The pixel size of the frame shown last; a frame of another size changes all of the window.
     shown: Option<(u32, u32)>,
     /// A frame callback is outstanding: the compositor will say when to draw.
     frame_pending: bool,
-    /// A frame [`WindowSystem::submit`] took is not back yet: it commits with a frame callback, which paces the next.
+    /// A frame [`WindowSystem::submit`] took is not back yet, or its commits are not all sent: it commits with a frame
+    /// callback, which paces the next, and nothing the next frame sends from the UI thread may go out before them.
     away: bool,
+    /// How the frame away was shown, once it is back: the runtime hears it once the frame's commits are sent.
+    drawn: Option<Shown>,
+    /// A commit without a buffer was asked for while a frame was away, sent once the frame's commits are.
+    state_owed: bool,
     /// The last present was not ready; the next frame waits for this.
     stalled: Option<Stall>,
     /// The surface layers whose present found no free buffer: a window stalled on a buffer waits for theirs too.
@@ -174,17 +181,12 @@ struct Window {
     layer: Option<LayerSurface>,
 }
 
-/// The subsurface of a window's raised layer ([`WindowSystem::present_layer`]): at the window's top left corner, as wide
-/// as the window, over its content, and taking no input.
+/// The subsurface of a window's raised layer ([`Submission::raised`]): at the window's top left corner, as wide as the
+/// window, over its content, and taking no input.
 struct LayerSurface {
     surface: SurfaceId,
-    /// Damage of layer frames that were not shown, carried into the next.
-    carried: Vec<PixelRect>,
     /// The pixel size of the layer frame shown last.
     shown: Option<(u32, u32)>,
-    /// A frame was committed that waits for the window's commit, as a synchronized subsurface's does: the compositor
-    /// holds its buffer until then.
-    waiting: bool,
 }
 
 /// A toplevel's menus as the runtime asked for them, and their publication.
@@ -345,10 +347,8 @@ impl Wake for WakeHandle {
 /// The Wayland window system. Physical modifier keys become logical ones through `profile`.
 pub struct WaylandWindowSystem {
     conn: Connection,
-    /// The time copying frames into buffers took since the runtime last asked, while it times frames.
-    copy_time: Option<Duration>,
     /// Frames drawn away from the UI thread ([`WindowSystem::submit`]) come back here, read on each dispatch.
-    finished: (Sender<Finished>, Receiver<Finished>),
+    finished: (Sender<FromJob>, Receiver<FromJob>),
     semantics: Option<cupertino_wayland_client::app::Semantics>,
     semantic_surfaces: HashMap<WindowId, cupertino_wayland_client::app::SemanticSurface>,
     /// The desktop-control actions that came with a grab serial, while a popup of their window may still grab with it.
@@ -386,7 +386,7 @@ pub struct WaylandWindowSystem {
     gpu: GpuPath,
     /// The windows' presentations the compositor animates ([`WindowRequest::Present`]).
     presentations: Presentations,
-    /// The windows' surface layers ([`WindowSystem::present_surface_layers`]).
+    /// The windows' surface layers ([`Submission::surface_layers`]).
     surface_layers: crate::surface_layers::SurfaceLayers,
 }
 
@@ -514,7 +514,6 @@ impl WaylandWindowSystem {
         let gpu = GpuPath::start(&mut conn, class);
         let mut system = WaylandWindowSystem {
             conn,
-            copy_time: None,
             semantics,
             semantic_surfaces: HashMap::new(),
             action_grabs: ActionGrabs::default(),
@@ -706,10 +705,11 @@ impl WaylandWindowSystem {
             size,
             min_size: None,
             max_size: None,
-            carried: Vec::new(),
             shown: None,
             frame_pending: false,
             away: false,
+            drawn: None,
+            state_owed: false,
             stalled: None,
             busy_layers: Vec::new(),
             frame_wanted: false,
@@ -945,11 +945,9 @@ impl WaylandWindowSystem {
         result
     }
 
-    /// The subsurface of `window`'s raised layer, made the first time it is needed. Its shapes and frames are in the
-    /// window's coordinates, as it lies at the window's top left corner.
     /// Hand `changes` to the presentation of `window`, a surface with a role from [`SurfaceRoles`] or, where the
-    /// compositor presents popups, a popup; a window that showed a frame commits them at once without a buffer, one that
-    /// did not with its first frame.
+    /// compositor presents popups, a popup; a window that showed a frame commits them without a buffer
+    /// ([`Self::commit_state`]), one that did not with its first frame.
     fn present_changes(
         &mut self,
         window: WindowId,
@@ -970,9 +968,22 @@ impl WaylandWindowSystem {
                     .set_input_region(surface, region.as_deref())
                     .map_err(platform_error)?;
             }
-            self.conn.commit_state(surface).map_err(platform_error)?;
+            self.commit_state(window)?;
         }
         Ok(())
+    }
+
+    /// Commits `window` without a buffer, so what was sent for it applies at once, or, while a frame of it is away,
+    /// once that frame's commits are sent ([`Self::sent`]): sent before them, it would apply what the UI thread sent
+    /// with that frame (its regions, its layers' values, its raised layer hidden) ahead of the frame.
+    fn commit_state(&mut self, window: WindowId) -> Result<(), PlatformError> {
+        let w = self.window_mut(window)?;
+        if w.away {
+            w.state_owed = true;
+            return Ok(());
+        }
+        let surface = w.surface;
+        self.conn.commit_state(surface).map_err(platform_error)
     }
 
     /// Whether what `window` shows is its layout: no animation of its presentation or its surface layers runs.
@@ -987,8 +998,8 @@ impl WaylandWindowSystem {
             .is_some_and(cupertino_wayland_client::app::Layers::blurs_content)
     }
 
-    /// Sends `changes` to `window`'s surface layer `key` and commits the window without a buffer when it shows a frame,
-    /// so they apply at once; a layer not made yet takes them with its first values.
+    /// Sends `changes` to `window`'s surface layer `key` and commits the window without a buffer when it shows a frame
+    /// ([`Self::commit_state`]), so they apply; a layer not made yet takes them with its first values.
     fn change_surface_layer(
         &mut self,
         window: WindowId,
@@ -998,14 +1009,15 @@ impl WaylandWindowSystem {
         if !self.surface_layers_drawn() {
             return Err(PlatformError::Unsupported);
         }
-        let w = self.window(window)?;
-        let (surface, shown) = (w.surface, w.shown.is_some());
+        let shown = self.window(window)?.shown.is_some();
         if self.surface_layers.change(window, key, changes)? && shown {
-            self.conn.commit_state(surface).map_err(platform_error)?;
+            self.commit_state(window)?;
         }
         Ok(())
     }
 
+    /// The subsurface of `window`'s raised layer, made the first time it is needed. Its shapes and frames are in the
+    /// window's coordinates, as it lies at the window's top left corner.
     fn layer_surface(&mut self, window: WindowId) -> Result<SurfaceId, PlatformError> {
         if !layers_drawn(&self.conn, self.effects.as_ref().map(|(e, _)| e)) {
             return Err(PlatformError::Unsupported);
@@ -1017,9 +1029,7 @@ impl WaylandWindowSystem {
         let surface = self.conn.subsurface(w.surface).map_err(platform_error)?;
         self.window_mut(window)?.layer = Some(LayerSurface {
             surface,
-            carried: Vec::new(),
             shown: None,
-            waiting: false,
         });
         Ok(surface)
     }
@@ -1028,7 +1038,6 @@ impl WaylandWindowSystem {
     fn hide_layer(&mut self, window: WindowId) -> Result<(), PlatformError> {
         if let Some(shown) = self.window_mut(window)?.layer.as_mut() {
             if shown.shown.take().is_some() {
-                shown.carried.clear();
                 let surface = shown.surface;
                 self.conn
                     .unmap_subsurface(surface)
@@ -1083,25 +1092,6 @@ impl WaylandWindowSystem {
                     .shown
             }
         }
-    }
-
-    /// Takes the damage carried for `window`'s surface `of`, to draw with its next frame.
-    fn take_carried(&mut self, window: WindowId, of: Of) -> Vec<PixelRect> {
-        let carried = match of {
-            Of::Window => self.window_mut(window).ok().map(|w| &mut w.carried),
-            Of::Raised => self
-                .window_mut(window)
-                .ok()
-                .and_then(|w| w.layer.as_mut())
-                .map(|l| &mut l.carried),
-            Of::Layer(key) => self
-                .surface_layers
-                .shown_mut(window)
-                .iter_mut()
-                .find(|s| s.key == key)
-                .map(|s| &mut s.carried),
-        };
-        carried.map(std::mem::take).unwrap_or_default()
     }
 
     /// A buffer of `surface` for a frame of `pixels` drawn for `preferred` (points), `resized` when the compositor takes
@@ -1235,7 +1225,8 @@ impl WaylandWindowSystem {
 
     /// `window`'s frame went to the render thread or the CPU pool, which commits it with a frame callback: the next
     /// frame waits for that callback, a frame queued as due at once before the submit and one the window asks for
-    /// while the frame is away too, so the window is not handed frames it cannot draw until the frame is back.
+    /// while the frame is away too, so the window is not handed frames it cannot draw until the frame is back and its
+    /// commits are sent.
     fn submitted(&mut self, window: WindowId) -> Result<Submitted, PlatformError> {
         let folded = self.fold_due_frame(window);
         let w = self.window_mut(window)?;
@@ -1268,9 +1259,6 @@ impl WaylandWindowSystem {
             w.in_flight.push_back(id);
         }
         w.shown = Some(size);
-        if let Some(layer) = w.layer.as_mut() {
-            layer.waiting = false;
-        }
         let surface = w.surface;
         // a process of the size and repaint rule's class counts what its windows present
         let now = self.now().0;
@@ -1278,23 +1266,19 @@ impl WaylandWindowSystem {
         Ok(())
     }
 
-    /// A submitted frame is back from the render thread or the CPU pool: its surfaces' buffers and GPU state brought
-    /// up to date, what its layers show recorded, and the runtime told how it was shown.
-    fn finish(
-        &mut self,
-        finished: Finished,
-        events: &mut Vec<PlatformEvent>,
-    ) -> Result<(), PlatformError> {
+    /// A submitted frame is back from the render thread or the CPU pool, before its commits go out: its surfaces'
+    /// buffers and GPU state brought up to date, what its layers show recorded, its next frame paced, and how it was
+    /// shown kept for the runtime ([`Self::sent`]).
+    fn finish(&mut self, finished: Finished) -> Result<(), PlatformError> {
         let Finished {
             window,
             backs,
             panic,
         } = finished;
-        if let Ok(w) = self.window_mut(window) {
-            w.away = false;
-        }
         let mut presented = None;
         let mut failed = None;
+        // the first error of the connection, returned once every buffer of the frame went back
+        let mut broken = None;
         for back in backs {
             let drawn = match back.drew {
                 Drew::Gpu(drawn) => {
@@ -1306,9 +1290,9 @@ impl WaylandWindowSystem {
                             (Err(Shown::Failed(e)), Err(PresentError::Resized))
                         }
                     };
-                    self.gpu
-                        .finish(&mut self.conn, back.surface, drawn)
-                        .map_err(platform_error)?;
+                    if let Err(e) = self.gpu.finish(&mut self.conn, back.surface, drawn) {
+                        broken.get_or_insert(platform_error(e));
+                    }
                     shown
                 }
                 Drew::Shm(buffer, Ok((id, damage))) => {
@@ -1356,6 +1340,9 @@ impl WaylandWindowSystem {
         if let Some(panic) = panic {
             std::panic::resume_unwind(panic)
         }
+        if let Some(e) = broken {
+            return Err(e);
+        }
         // a window destroyed meanwhile hears nothing
         if self.window_mut(window).is_err() {
             return Ok(());
@@ -1368,45 +1355,33 @@ impl WaylandWindowSystem {
             }
             (None, None) => Shown::NotReady,
         };
-        if !matches!(shown, Shown::Presented(_)) {
-            self.apply_layer(window)?;
-        }
-        events.push(PlatformEvent::Window {
-            window,
-            event: WindowEvent::Shown(shown),
-        });
+        self.window_mut(window)?.drawn = Some(shown);
         Ok(())
     }
 
-    /// Keep `damage` for the next present.
-    fn carry(
+    /// The commits of `window`'s frame are sent: the window may draw again, and the runtime hears how the frame was
+    /// shown. Told only now, the runtime sends nothing of its next frame from the UI thread (a raised layer hidden, a
+    /// solid colour) ahead of these commits. A commit without a buffer asked for meanwhile goes now: what it applies
+    /// may have gone out after the frame's own commit.
+    fn sent(
         &mut self,
         window: WindowId,
-        damage: Vec<PixelRect>,
-        frame: &CpuFrame,
+        events: &mut Vec<PlatformEvent>,
     ) -> Result<(), PlatformError> {
-        let w = self.window_mut(window)?;
-        w.carried.extend(damage);
-        bound(&mut w.carried, frame.width, frame.height);
-        self.apply_layer(window)
-    }
-
-    /// The window's frame was not shown after its raised layer committed one: the window commits what it shows again,
-    /// so the layer's frame applies and the compositor lets go of the buffer it showed before. Left waiting, the layer
-    /// would draw each next frame into another buffer until the compositor held them all, and the window, whose frame
-    /// goes after its layer's, would never commit again.
-    fn apply_layer(&mut self, window: WindowId) -> Result<(), PlatformError> {
-        let w = self.window_mut(window)?;
-        let surface = w.surface;
-        let shown = w.shown.is_some();
-        let Some(layer) = w.layer.as_mut().filter(|l| l.waiting) else {
+        let Ok(w) = self.window_mut(window) else {
             return Ok(());
         };
-        if !shown {
-            return Ok(());
+        w.away = false;
+        if let Some(shown) = w.drawn.take() {
+            events.push(PlatformEvent::Window {
+                window,
+                event: WindowEvent::Shown(shown),
+            });
         }
-        layer.waiting = false;
-        self.conn.commit_state(surface).map_err(platform_error)
+        if std::mem::take(&mut w.state_owed) {
+            self.commit_state(window)?;
+        }
+        Ok(())
     }
 
     /// When a presented frame turned visible, `time_ns` on the compositor's presentation clock, on the window system's
@@ -2234,16 +2209,6 @@ impl WindowSystem for WaylandWindowSystem {
         self.window(window).ok().and_then(|w| w.activated)
     }
 
-    fn time_copies(&mut self, on: bool) {
-        self.copy_time = on.then_some(Duration::ZERO);
-    }
-
-    fn take_copy_time(&mut self) -> Duration {
-        self.copy_time
-            .as_mut()
-            .map_or(Duration::ZERO, std::mem::take)
-    }
-
     fn request_frame(&mut self, window: WindowId) {
         let now = self.now();
         let Ok(w) = self.window_mut(window) else {
@@ -2266,17 +2231,13 @@ impl WindowSystem for WaylandWindowSystem {
     /// window, acknowledging the configure that was the latest when the frame was submitted. No frame is declined.
     fn submit(&mut self, window: WindowId, frame: &Submission) -> Result<Submitted, PlatformError> {
         let (surface, logical) = self.before_present(window)?;
-        // what applies with the window's commit: the surface layers' values and the raised layer hidden or placed
+        // what applies with the window's commit: the surface layers' values and the raised layer placed
         if let Some(layers) = &frame.surface_layers {
             let wanted: Vec<_> = layers.iter().map(|l| (l.key, l.rect, l.look)).collect();
             self.sync_surface_layers(window, &wanted)?;
         }
         let raised = match &frame.raised {
-            RaisedChange::Kept => None,
-            RaisedChange::Hidden => {
-                self.hide_layer(window)?;
-                None
-            }
+            RaisedChange::Kept | RaisedChange::Hidden => None,
             RaisedChange::Drawn { height, layer } => {
                 let layer_surface = self.layer_surface(window)?;
                 let width = self.window(window)?.size.0;
@@ -2321,7 +2282,6 @@ impl WindowSystem for WaylandWindowSystem {
             let w = self.window_mut(window)?;
             w.stalled = Some(Stall::Buffer);
             w.busy_layers = busy.into_iter().filter(|&s| s != surface).collect();
-            self.apply_layer(window)?;
             return Ok(Submitted::NotReady);
         }
         // the window's buffer first: a configure of another size stops the frame before any layer's is taken
@@ -2348,7 +2308,6 @@ impl WindowSystem for WaylandWindowSystem {
                     for (s, target) in targets {
                         self.release_target(s, target);
                     }
-                    self.apply_layer(window)?;
                     return Ok(submitted);
                 }
             }
@@ -2357,15 +2316,23 @@ impl WindowSystem for WaylandWindowSystem {
         for ((of, s, _, list), (_, target)) in drawn.into_iter().zip(targets.into_iter().rev()) {
             let pixels = (list.width, list.height);
             let resized = self.shown_size(window, of) != Some(pixels);
-            let carried = self.take_carried(window, of);
             parts.push(Part {
                 of,
                 surface: s,
                 list,
-                carried,
                 resized,
                 target,
             });
+        }
+        // the raised layer hidden as the frame is handed over: after every commit of the window's frame before, which
+        // were sent before it could draw this one, and before this frame's, whose window commit applies it
+        if matches!(frame.raised, RaisedChange::Hidden) {
+            if let Err(e) = self.hide_layer(window) {
+                for part in parts {
+                    self.release_target(part.surface, part.target);
+                }
+                return Err(e);
+            }
         }
         let on_render_thread = parts.iter().any(|p| matches!(p.target, Target::Gpu(_)));
         let (tx, waker) = (self.finished.0.clone(), self.conn.waker());
@@ -2375,14 +2342,15 @@ impl WindowSystem for WaylandWindowSystem {
         let job = move || {
             let _scope = scope.as_ref().map(diag::Scope::enter);
             let drawing = hand_over::draw(parts, &submission);
-            let _ = tx.send(Finished {
+            let _ = tx.send(FromJob::Finished(Finished {
                 window,
                 backs: drawing.backs,
                 panic: drawing.panic,
-            });
-            waker.wake();
+            }));
             // a commit that cannot be flushed fails the window system's next read of the connection
             let _ = drawing.commits.send();
+            let _ = tx.send(FromJob::Sent(window));
+            waker.wake();
         };
         if on_render_thread {
             render_thread::hand_over(job);
@@ -2394,225 +2362,42 @@ impl WindowSystem for WaylandWindowSystem {
         self.submitted(window)
     }
 
-    /// The transport acknowledges the latest configure with every frame, so `configure` needs no request of its own; a
-    /// frame drawn at another size than the latest configure asks is not ready.
+    /// No frame is presented from the UI thread: [`WindowSystem::submit`] takes every one.
     fn present(
         &mut self,
-        window: WindowId,
-        frame: &CpuFrame,
+        _window: WindowId,
+        _frame: &CpuFrame,
         _configure: Option<ConfigureId>,
     ) -> Result<PresentOutcome, PlatformError> {
-        let (surface, size) = self.before_present(window)?;
-        let w = self.window_mut(window)?;
-        let resized = w.shown != Some((frame.width, frame.height));
-        let mut damage = std::mem::take(&mut w.carried);
-        damage.extend(frame.damage.iter().map(|r| PixelRect {
-            x: r.x,
-            y: r.y,
-            width: r.width,
-            height: r.height,
-        }));
-        let copying = self.copy_time.is_some().then(Instant::now);
-        let on_gpu = self
-            .gpu
-            .present(&mut self.conn, surface, size, frame, &damage, resized)
-            .map_err(platform_error)?;
-        if let (Some(total), Some(since)) = (self.copy_time.as_mut(), copying) {
-            *total += since.elapsed();
-        }
-        let shown = match on_gpu {
-            Presented::Gpu => Ok(()),
-            Presented::Busy => Err(Some(Stall::Buffer)),
-            Presented::Resized => Err(None),
-            Presented::Shm => {
-                let copy_time = self.copy_time.as_mut();
-                copy_and_present(
-                    &mut self.conn,
-                    surface,
-                    size,
-                    frame,
-                    &damage,
-                    resized,
-                    copy_time,
-                )?
-            }
-        };
-        match shown {
-            Ok(()) => {
-                self.presented_frame(window, frame.id, (frame.width, frame.height))?;
-                Ok(PresentOutcome::Presented)
-            }
-            Err(stall) => {
-                self.carry(window, damage, frame)?;
-                self.window_mut(window)?.stalled = stall;
-                Ok(PresentOutcome::NotReady)
-            }
-        }
+        Err(PlatformError::Unsupported)
     }
 
-    /// The layer's subsurface commits now, synchronized: what it shows applies with the window's next commit.
+    /// Hides the layer's subsurface with the window's next commit, a solid colour's; a layer to show goes with a
+    /// submitted frame ([`Submission::raised`]).
     fn present_layer(
         &mut self,
         window: WindowId,
         layer: Option<RaisedLayer<'_>>,
     ) -> Result<PresentOutcome, PlatformError> {
-        let Some(layer) = layer else {
-            self.hide_layer(window)?;
-            return Ok(PresentOutcome::Presented);
-        };
-        // the layer's commit is cached until the window's own applies it, and the compositor holds its buffer until
-        // then: committed while the window has no buffer to present into, it would be committed again frame after
-        // frame until the compositor held every buffer of the layer, and the window, whose frame waits for its layer,
-        // would never commit again
-        let parent = self.window(window)?.surface;
-        if !self.surface_can_present(parent) {
-            // the runtime draws the layer whole when it is ready
-            self.window_mut(window)?.stalled = Some(Stall::Buffer);
-            return Ok(PresentOutcome::NotReady);
+        if layer.is_some() {
+            return Err(PlatformError::Unsupported);
         }
-        let surface = self.layer_surface(window)?;
-        let width = self.window(window)?.size.0;
-        let size = (width, layer.height);
-        self.conn
-            .place_subsurface(surface, (0, 0), size)
-            .map_err(platform_error)?;
-        let frame = layer.frame;
-        let state = self.window_mut(window)?.layer.as_mut().expect("made above");
-        let resized = state.shown != Some((frame.width, frame.height));
-        let mut damage = std::mem::take(&mut state.carried);
-        damage.extend(frame.damage.iter().map(|r| PixelRect {
-            x: r.x,
-            y: r.y,
-            width: r.width,
-            height: r.height,
-        }));
-        // on the GPU the layer's frame is drawn into the subsurface's own buffers from its texture, as a window's is
-        let copying = self.copy_time.is_some().then(Instant::now);
-        let on_gpu = self
-            .gpu
-            .present(&mut self.conn, surface, size, frame, &damage, resized)
-            .map_err(platform_error)?;
-        if let (Some(total), Some(since)) = (self.copy_time.as_mut(), copying) {
-            *total += since.elapsed();
-        }
-        let shown = match on_gpu {
-            Presented::Gpu => Ok(()),
-            Presented::Busy => Err(Some(Stall::Buffer)),
-            Presented::Resized => Err(None),
-            Presented::Shm => {
-                let copy_time = self.copy_time.as_mut();
-                copy_and_present(
-                    &mut self.conn,
-                    surface,
-                    size,
-                    frame,
-                    &damage,
-                    resized,
-                    copy_time,
-                )?
-            }
-        };
-        match shown {
-            Ok(()) => {
-                let state = self.window_mut(window)?.layer.as_mut().expect("made above");
-                state.shown = Some((frame.width, frame.height));
-                state.waiting = true;
-                Ok(PresentOutcome::Presented)
-            }
-            Err(stall) => {
-                let w = self.window_mut(window)?;
-                // a layer waiting for a buffer stalls its window, which goes on once both have one
-                w.stalled = stall;
-                let state = w.layer.as_mut().expect("made above");
-                state.carried.extend(damage);
-                bound(&mut state.carried, frame.width, frame.height);
-                Ok(PresentOutcome::NotReady)
-            }
-        }
+        self.hide_layer(window)?;
+        Ok(PresentOutcome::Presented)
     }
 
-    /// The layers' values go with the window's next commit; each frame commits its layer's surface now, which the
-    /// compositor shows as soon as it arrives.
+    /// Takes every layer away with the window's next commit, a solid colour's; layers to show go with a submitted
+    /// frame ([`Submission::surface_layers`]).
     fn present_surface_layers(
         &mut self,
         window: WindowId,
         layers: &[cupertino_ui_core::platform::SurfaceLayer<'_>],
     ) -> Result<PresentOutcome, PlatformError> {
-        let wanted: Vec<_> = layers.iter().map(|l| (l.key, l.rect, l.look)).collect();
-        self.sync_surface_layers(window, &wanted)?;
-        let mut ready = true;
-        let mut stall = None;
-        let mut busy = Vec::new();
-        for layer in layers {
-            let Some(frame) = layer.frame else { continue };
-            let Some(state) = self
-                .surface_layers
-                .shown_mut(window)
-                .iter_mut()
-                .find(|s| s.key == layer.key)
-            else {
-                continue;
-            };
-            let (surface, size) = (state.surface, state.size());
-            let resized = state.shown != Some((frame.width, frame.height));
-            let mut damage = std::mem::take(&mut state.carried);
-            damage.extend(frame.damage.iter().map(|r| PixelRect {
-                x: r.x,
-                y: r.y,
-                width: r.width,
-                height: r.height,
-            }));
-            let copying = self.copy_time.is_some().then(Instant::now);
-            let on_gpu = self
-                .gpu
-                .present(&mut self.conn, surface, size, frame, &damage, resized)
-                .map_err(platform_error)?;
-            let shown = match on_gpu {
-                Presented::Gpu => Ok(()),
-                Presented::Busy => Err(Some(Stall::Buffer)),
-                Presented::Resized => Err(None),
-                Presented::Shm => copy_and_present(
-                    &mut self.conn,
-                    surface,
-                    size,
-                    frame,
-                    &damage,
-                    resized,
-                    self.copy_time.as_mut(),
-                )?,
-            };
-            if let (Some(total), Some(since)) = (self.copy_time.as_mut(), copying) {
-                *total += since.elapsed();
-            }
-            let state = self
-                .surface_layers
-                .shown_mut(window)
-                .iter_mut()
-                .find(|s| s.key == layer.key)
-                .expect("found above");
-            match shown {
-                Ok(()) => state.shown = Some((frame.width, frame.height)),
-                Err(waits) => {
-                    state.carried.extend(damage);
-                    bound(&mut state.carried, frame.width, frame.height);
-                    ready = false;
-                    if waits == Some(Stall::Buffer) {
-                        busy.push(surface);
-                    }
-                    stall = stall.or(waits);
-                }
-            }
+        if !layers.is_empty() {
+            return Err(PlatformError::Unsupported);
         }
-        if ready {
-            return Ok(PresentOutcome::Presented);
-        }
-        // a layer with no free buffer stalls its window, as a raised layer does: the frame the runtime asks for again
-        // comes once the window and every layer have a buffer, not at once, which would draw every layer again and
-        // again while the compositor holds their buffers
-        let w = self.window_mut(window)?;
-        w.stalled = stall;
-        w.busy_layers = busy;
-        Ok(PresentOutcome::NotReady)
+        self.sync_surface_layers(window, &[])?;
+        Ok(PresentOutcome::Presented)
     }
 
     /// One pixel of `color` the compositor stretches over the window ([`Connection::present_solid`]), with the input
@@ -2643,9 +2428,7 @@ impl WindowSystem for WaylandWindowSystem {
         match self.conn.present_solid(surface, size, color.to_array()) {
             Ok(()) => {
                 self.await_frame_callback(window)?;
-                let w = self.window_mut(window)?;
-                w.shown = None;
-                w.carried.clear();
+                self.window_mut(window)?.shown = None;
                 Ok(PresentOutcome::Presented)
             }
             Err(Error::NotConfigured) => {
@@ -2693,8 +2476,11 @@ impl WindowSystem for WaylandWindowSystem {
             .wait(if ready { Some(Duration::ZERO) } else { timeout })
             .map_err(platform_error)?;
         // the frames drawn away from the UI thread, before what the compositor said of them
-        while let Ok(finished) = self.finished.1.try_recv() {
-            self.finish(finished, events)?;
+        while let Ok(back) = self.finished.1.try_recv() {
+            match back {
+                FromJob::Finished(finished) => self.finish(finished)?,
+                FromJob::Sent(window) => self.sent(window, events)?,
+            }
         }
         for event in wire {
             self.translate(event, events);
@@ -2784,64 +2570,4 @@ fn actions(bar: &MenuBar) -> BTreeSet<ActionName> {
         walk(menu, &mut out);
     }
     out
-}
-
-/// Copy `damage` of `frame`, and whatever the buffer missed (all of it when that is unknown), into a buffer of `surface`
-/// and present it, telling the compositor that `damage` changed, or everything when the window was `resized`. When it
-/// is not presented, what the window waits for: a free buffer or its first configure; nothing for a frame drawn at
-/// another size than the surface asks for, which a frame at that size replaces.
-fn copy_and_present(
-    conn: &mut Connection,
-    surface: SurfaceId,
-    size: (u32, u32),
-    frame: &CpuFrame,
-    damage: &[PixelRect],
-    resized: bool,
-    copy_time: Option<&mut Duration>,
-) -> Result<Result<(), Option<Stall>>, PlatformError> {
-    // a frame drawn on a GPU is read back; one that cannot be (its device lost) is not shown, and the frames after
-    // the switch back to the CPU replace it
-    let Ok(frame) = frame.in_memory() else {
-        return Ok(Err(None));
-    };
-    let frame = &*frame;
-    // in the renderer's byte order where the compositor takes it, so the frame's bytes are copied as they are
-    let format = if conn.offers(BufferFormat::Abgr8888) {
-        BufferFormat::Abgr8888
-    } else {
-        BufferFormat::Argb8888
-    };
-    let leased = tracing::trace_span!("wl.lease").in_scope(|| conn.lease(surface, size, format));
-    let mut lease = match leased {
-        Ok(lease) => lease,
-        Err(Error::NoFreeBuffer) => return Ok(Err(Some(Stall::Buffer))),
-        Err(Error::NotConfigured) => return Ok(Err(Some(Stall::Configure))),
-        Err(e) => return Err(platform_error(e)),
-    };
-    let layout = lease.layout();
-    if (layout.width(), layout.height()) != (frame.width, frame.height) {
-        return Ok(Err(None));
-    }
-    let missed = lease.missed().map(<[PixelRect]>::to_vec);
-    let copying = copy_time.is_some().then(Instant::now);
-    let changed = copy_frame(frame, lease.pixels_mut(), layout, missed.as_deref(), damage);
-    if let (Some(total), Some(since)) = (copy_time, copying) {
-        *total += since.elapsed();
-    }
-    tracing::trace_span!("wl.commit")
-        .in_scope(|| lease.present_damage((!resized).then_some(&changed[..])))
-        .map_err(platform_error)?;
-    Ok(Ok(()))
-}
-
-/// Replace more than [`MAX_CARRIED`] rectangles by one for the whole `width` × `height` frame.
-fn bound(carried: &mut Vec<PixelRect>, width: u32, height: u32) {
-    if carried.len() > MAX_CARRIED {
-        *carried = vec![PixelRect {
-            x: 0,
-            y: 0,
-            width,
-            height,
-        }];
-    }
 }

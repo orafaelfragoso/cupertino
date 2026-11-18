@@ -1,10 +1,10 @@
 //! A submitted frame drawn and committed away from the UI thread ([`WindowSystem::submit`]). Each surface it draws (its
 //! surface layers, its raised layer, then the window's own) has a buffer prepared on the UI thread, a GPU buffer to draw
 //! into ([`Draw`]) or a shared-memory buffer detached with the commit that shows it, and is drawn by its renderer on
-//! the thread the frame is handed to. Once every surface is drawn the frame goes back to the UI thread and the surfaces
-//! commit in that order, the layers before the window: a synchronized subsurface's commit waits for the window's, and
-//! the window's commit applies the layers' values, so the compositor shows them all together. When one surface cannot
-//! be drawn, none commits.
+//! the thread the frame is handed to. Once every surface is drawn, that thread tells the UI thread how each was drawn
+//! and then commits them itself in that order, the layers before the window: a synchronized subsurface's commit waits
+//! for the window's, and the window's commit applies the layers' values, so the compositor shows them all together.
+//! When one surface cannot be drawn, none commits.
 //!
 //! [`WindowSystem::submit`]: cupertino_ui_core::platform::WindowSystem::submit
 
@@ -53,8 +53,6 @@ pub(crate) struct Part {
     pub(crate) of: Of,
     pub(crate) surface: SurfaceId,
     pub(crate) list: LayerList,
-    /// The damage of the surface's frames that were not shown, drawn and shown with this one.
-    pub(crate) carried: Vec<PixelRect>,
     /// The frame is of another size than the one the surface shows: the compositor takes all of it as changed.
     pub(crate) resized: bool,
     pub(crate) target: Target,
@@ -135,7 +133,6 @@ pub(crate) fn draw(parts: Vec<Part>, submission: &Submission) -> Drawing {
             of,
             surface,
             list,
-            carried,
             resized,
             target,
         } = part;
@@ -144,9 +141,8 @@ pub(crate) fn draw(parts: Vec<Part>, submission: &Submission) -> Drawing {
             Target::Gpu(_) if stopped => Drew::Gpu(Err(left_unshown())),
             Target::Shm(buffer, _) if stopped => Drew::Shm(buffer, Err(left_unshown())),
             Target::Gpu(draw) => {
-                let drawn = catch_unwind(AssertUnwindSafe(|| {
-                    draw_gpu(draw, of, &list, submission, &carried)
-                }));
+                let drawn =
+                    catch_unwind(AssertUnwindSafe(|| draw_gpu(draw, of, &list, submission)));
                 match drawn {
                     Ok(Ok((id, drawn))) => {
                         let from_texture = drawn.from_texture;
@@ -162,7 +158,7 @@ pub(crate) fn draw(parts: Vec<Part>, submission: &Submission) -> Drawing {
             }
             Target::Shm(mut buffer, commit) => {
                 let drawn = catch_unwind(AssertUnwindSafe(|| {
-                    draw_shm(&mut buffer, of, &list, submission, &carried, resized)
+                    draw_shm(&mut buffer, of, &list, submission, resized)
                 }));
                 match drawn {
                     Ok(Ok((id, damage))) => {
@@ -203,37 +199,31 @@ pub(crate) fn draw(parts: Vec<Part>, submission: &Submission) -> Drawing {
     }
 }
 
-/// Draws `list` with its renderer and then into the GPU buffer of `draw`, with the damage `carried`.
+/// Draws `list` with its renderer and then into the GPU buffer of `draw`.
 fn draw_gpu(
     draw: Draw,
     of: Of,
     list: &LayerList,
     submission: &Submission,
-    carried: &[PixelRect],
 ) -> Result<(RenderFrameId, Drawn), Failure> {
     let mut renderer = list.renderer.lock().unwrap_or_else(PoisonError::into_inner);
     let id = tracing::trace_span!("ui.raster", layer = of.name())
         .in_scope(|| renderer.render(&submission.layer_request(list)))
         .map_err(Failure::Render)?;
     let frame = renderer.frame(id).map_err(Failure::Render)?;
-    let damage: Vec<PixelRect> = carried
-        .iter()
-        .copied()
-        .chain(frame.damage.iter().map(wire_rect))
-        .collect();
+    let damage: Vec<PixelRect> = frame.damage.iter().map(wire_rect).collect();
     let drawn = draw.draw(frame, &damage).map_err(Failure::Present)?;
     Ok((id, drawn))
 }
 
-/// Draws `list` into the shared-memory `buffer`, with what the buffer missed and the damage `carried`: straight into
-/// it where the renderer draws into memory in the buffer's byte order, else into the renderer's own image and copied.
-/// The frame's id and the damage to commit (`None` for all of it, a `resized` frame).
+/// Draws `list` into the shared-memory `buffer`, with what the buffer missed: straight into it where the renderer
+/// draws into memory in the buffer's byte order, else into the renderer's own image and copied. The frame's id and
+/// the damage to commit (`None` for all of it, a `resized` frame).
 fn draw_shm(
     buffer: &mut DetachedBuffer,
     of: Of,
     list: &LayerList,
     submission: &Submission,
-    carried: &[PixelRect],
     resized: bool,
 ) -> Result<(RenderFrameId, Option<Vec<PixelRect>>), Failure> {
     let layout = buffer.layout();
@@ -246,15 +236,10 @@ fn draw_shm(
         && layout.stride() == width as usize * 4
         && renderer.draws_into_memory();
     if into_memory {
-        // what the buffer misses: the frames shown in the others since it held one and those not shown
-        let missed: Option<Vec<_>> = buffer.missed().map(|missed| {
-            missed
-                .iter()
-                .chain(carried)
-                .filter_map(inside)
-                .map(render_rect)
-                .collect()
-        });
+        // what the buffer misses: the frames shown in the others since it held one
+        let missed: Option<Vec<_>> = buffer
+            .missed()
+            .map(|missed| missed.iter().filter_map(inside).map(render_rect).collect());
         let stride = layout.stride();
         let (id, drawn) = raster
             .in_scope(|| {
@@ -268,10 +253,9 @@ fn draw_shm(
                 )
             })
             .map_err(Failure::Render)?;
-        let changed = carried
+        let changed = drawn
             .iter()
-            .copied()
-            .chain(drawn.iter().map(wire_rect))
+            .map(wire_rect)
             .filter_map(|r| inside(&r))
             .collect();
         return Ok((id, (!resized).then_some(changed)));
@@ -286,11 +270,7 @@ fn draw_shm(
     if (frame.width, frame.height) != (width, height) {
         return Err(left_unshown());
     }
-    let damage: Vec<PixelRect> = carried
-        .iter()
-        .copied()
-        .chain(frame.damage.iter().map(wire_rect))
-        .collect();
+    let damage: Vec<PixelRect> = frame.damage.iter().map(wire_rect).collect();
     let missed = buffer.missed().map(<[PixelRect]>::to_vec);
     let changed = copy_frame(
         &frame,
@@ -304,7 +284,7 @@ fn draw_shm(
 
 /// Copies `damage` of `frame`, and what the buffer `missed` (all of it when that is unknown), into the buffer's
 /// `pixels` of `layout`, converted to its byte order; the damage inside the frame, as the compositor is told it.
-pub(crate) fn copy_frame(
+fn copy_frame(
     frame: &CpuFrame,
     pixels: &mut [u8],
     layout: BufferLayout,

@@ -130,6 +130,14 @@ pub struct SurfaceLayer<'a> {
     /// The layer's layout, in the window's points: where it starts, and the size its frame is drawn at.
     pub rect: Rect,
     pub look: SurfaceLayerLook,
-    /// Its frame, `rect`'s size at the window's scale; `None` when it has not changed since it was last shown.
+    /// Its frame, its size in whole points ([`surface_layer_size`]) at the window's scale; `None` when it has not
+    /// changed since it was last shown.
     pub frame: Option<&'a CpuFrame>,
+}
+
+/// The size a surface layer laid out at `rect` is drawn at, in whole points: each side rounded, and at least one point.
+/// Its frame and its buffers are this size at the window's scale, rounded to whole pixels as a window's are.
+pub fn surface_layer_size(rect: Rect) -> (u32, u32) {
+    let side = |points: f64| points.round().max(1.0) as u32;
+    (side(rect.width()), side(rect.height()))
 }

@@ -1,33 +1,35 @@
-//! A window with one surface layer, presented through the toolkit's window system: the window's frame is grey all
-//! over, the layer's frame red at [`LAYER`] in the window, and once both are shown the layer fades out on the
-//! compositor's clock ([`FADE`]) while its content blur goes up and back down through samples ([`BLUR_SAMPLES`]), and
-//! the window draws nothing more. Development check of the surface layers' presenter, run by the server's tests.
+//! A window with one surface layer, submitted to the toolkit's window system ([`WindowSystem::submit`]), which draws
+//! the window's frame and the layer's away from the UI thread and commits the layer before the window: the window's
+//! frame is grey all over, the layer's frame red at [`LAYER`] in the window, and once both are shown the layer fades
+//! out on the compositor's clock ([`FADE`]) while its content blur goes up and back down through samples
+//! ([`BLUR_SAMPLES`]), and the window draws nothing more. Development check of the surface layers' presenter.
 //!
 //! `surface-layers --report PATH [--renderer]`
 //!
 //! With `--renderer` (and the GPU path turned on, `CUPERTINO_RENDERER=gpu`) there is no fade: once the process draws
-//! on the GPU, the layer's frame is drawn by the toolkit's GPU renderer on the presenter's device, [`GPU_FRAMES`]
-//! times, each handed over as a layer frame, which the presenter copies from the renderer's texture into the layer's
-//! own buffers.
+//! on the GPU, the layer's frame is drawn by the toolkit's GPU renderer on the render thread, [`GPU_FRAMES`] times,
+//! each with a window frame, and copied from the renderer's texture into the layer's own buffers.
 //!
 //! The report has one `key value` line per fact: whether the window system shows surface layers, the window's frames
-//! presented, the layer frames handed over (and those the GPU renderer drew), and `faded 1` once the fade was asked
-//! for (or the GPU frames are all handed over). It is written then and again when the window closes.
+//! shown, the layer frames shown with them (and those the GPU renderer drew), and `faded 1` once the fade was asked
+//! for (or the GPU frames are all shown). It is written then and again when the window closes.
 
 use std::process::ExitCode;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use cupertino_geometry::{Rect, Size};
 use cupertino_keyboard::modifiers::Profile;
 use cupertino_ui_core::platform::{
-    DecorationMode, LayerChange, LayerProperty, PlatformEvent, PresentOutcome, RendererKind,
-    SurfaceLayer, SurfaceLayerLook, WindowEvent, WindowRequest, WindowSpec, WindowSystem,
+    surface_layer_size, DecorationMode, LayerChange, LayerList, LayerProperty, PlatformEvent,
+    RaisedChange, RendererKind, SharedRenderer, Shown, Submission, Submitted, SubmittedLayer,
+    SurfaceLayerLook, WindowEvent, WindowRequest, WindowSpec, WindowSystem,
 };
-use cupertino_ui_render::gpu::{GpuConfig, WindowRenderer};
+use cupertino_ui_render::gpu::GpuConfig;
 use cupertino_ui_render::{
     Color, CpuFrame, DamageRegion, DisplayList, Paint, PaintNode, PaintNodeId, PaintOp,
-    PaintResources, PaintRevision, PixelFormat, PixelRect, RenderFrameId, RenderRequest, Shape,
-    Transform, UiRenderer,
+    PaintResources, PaintRevision, PixelFormat, PixelRect, RenderError, RenderFrameId,
+    RenderRequest, Shape, Transform, UiRenderer,
 };
 use cupertino_ui_text::{GlyphKey, GlyphRasterizer, RasterGlyph, TextError};
 use cupertino_ui_wayland::WaylandWindowSystem;
@@ -49,22 +51,49 @@ const GPU_FRAMES: u32 = 8;
 const LINGER: Duration = Duration::from_millis(1500);
 const LIMIT: Duration = Duration::from_secs(30);
 
-fn frame(id: u64, width: u32, height: u32, colour: [u8; 4]) -> CpuFrame {
-    CpuFrame {
-        id: RenderFrameId(id),
-        width,
-        height,
-        stride: width * 4,
-        format: PixelFormat::Rgba8Premultiplied,
-        pixels: colour.repeat((width * height) as usize),
-        damage: vec![PixelRect {
-            x: 0,
-            y: 0,
+/// A renderer that fills every frame with one colour, as the CPU renderer hands frames over.
+struct Fill {
+    colour: [u8; 4],
+    frame: Option<CpuFrame>,
+}
+
+impl UiRenderer for Fill {
+    type Frame = CpuFrame;
+
+    fn render(&mut self, request: &RenderRequest<'_>) -> Result<RenderFrameId, RenderError> {
+        let id = RenderFrameId(self.frame.as_ref().map_or(1, |f| f.id.0 + 1));
+        let (width, height) = (request.width, request.height);
+        self.frame = Some(CpuFrame {
+            id,
             width,
             height,
-        }],
-        device: None,
+            stride: width * 4,
+            format: PixelFormat::Rgba8Premultiplied,
+            pixels: self.colour.repeat((width * height) as usize),
+            damage: vec![PixelRect {
+                x: 0,
+                y: 0,
+                width,
+                height,
+            }],
+            device: None,
+        });
+        Ok(id)
     }
+
+    fn frame(&self, id: RenderFrameId) -> Result<&CpuFrame, RenderError> {
+        self.frame
+            .as_ref()
+            .filter(|f| f.id == id)
+            .ok_or(RenderError::UnknownFrame(id))
+    }
+}
+
+fn fill(colour: [u8; 4]) -> SharedRenderer {
+    Arc::new(Mutex::new(Box::new(Fill {
+        colour,
+        frame: None,
+    })))
 }
 
 /// The toolkit renderer's text needs no glyphs here.
@@ -119,6 +148,42 @@ fn write(report: &std::path::Path, layers: bool, seen: &Seen) -> Result<(), Stri
     std::fs::write(report, text).map_err(|e| e.to_string())
 }
 
+/// The window's frame at `scale` and `size`, with the layer drawn by `layer` when there is one.
+fn submission(
+    window: &SharedRenderer,
+    layer: Option<&SharedRenderer>,
+    scale: f64,
+    size: Size,
+) -> Submission {
+    let px = |v: f64| (v * scale).round() as u32;
+    let surface_layers = layer.map(|renderer| {
+        let (width, height) = surface_layer_size(LAYER);
+        vec![SubmittedLayer {
+            key: LAYER_KEY,
+            rect: LAYER,
+            look: SurfaceLayerLook::default(),
+            layer: Some(LayerList {
+                renderer: Arc::clone(renderer),
+                list: Arc::new(red_list()),
+                width: px(f64::from(width)),
+                height: px(f64::from(height)),
+                damage: DamageRegion::Full,
+            }),
+        }]
+    });
+    Submission {
+        renderer: Arc::clone(window),
+        list: Arc::new(DisplayList::default()),
+        resources: Arc::new(PaintResources::default()),
+        scale,
+        width: px(size.width),
+        height: px(size.height),
+        damage: DamageRegion::Full,
+        raised: RaisedChange::Kept,
+        surface_layers,
+    }
+}
+
 fn run(report: &std::path::Path, on_gpu: bool) -> Result<(), String> {
     let mut ws =
         WaylandWindowSystem::connect(Profile::cupertino()).map_err(|e| format!("{e:?}"))?;
@@ -135,13 +200,18 @@ fn run(report: &std::path::Path, on_gpu: bool) -> Result<(), String> {
             input_region: None,
         })
         .map_err(|e| format!("{e:?}"))?;
+    let grey = fill(GREY);
+    let red = fill(RED);
     let mut scale = 1.0_f64;
     let mut seen = Seen::default();
     let mut finished: Option<Instant> = None;
-    // the latest configure and size, drawn once both the window and its layer were shown
-    let mut configure = None;
+    // the latest size, drawn once the window is configured; a frame away (whether its layer is the GPU renderer's) is
+    // shown before the next is submitted
+    let mut configured = false;
     let mut size = WINDOW;
-    let mut drawing: Option<WindowRenderer<NoGlyphs>> = None;
+    let mut away: Option<bool> = None;
+    let mut due = false;
+    let mut drawing: Option<SharedRenderer> = None;
     let start = Instant::now();
     let mut events = Vec::new();
     loop {
@@ -154,20 +224,32 @@ fn run(report: &std::path::Path, on_gpu: bool) -> Result<(), String> {
         events.clear();
         ws.dispatch(Some(Duration::from_millis(10)), &mut events)
             .map_err(|e| format!("{e:?}"))?;
-        let mut frame_due = false;
         for event in events.drain(..) {
             match event {
                 PlatformEvent::RendererChanged(RendererKind::Gpu) if on_gpu => {
-                    drawing = ws.gpu_renderers().renderer(GpuConfig::default(), NoGlyphs);
+                    drawing = ws
+                        .gpu_renderers()
+                        .renderer(GpuConfig::default(), NoGlyphs)
+                        .map(|r| -> SharedRenderer { Arc::new(Mutex::new(Box::new(r))) });
                 }
                 PlatformEvent::RendererChanged(RendererKind::Cpu) => drawing = None,
                 PlatformEvent::Window { event, .. } => match event {
                     WindowEvent::Scale(s) => scale = s,
                     WindowEvent::Configure(c) => {
                         size = c.size.unwrap_or(WINDOW);
-                        configure = Some(c.id);
+                        configured = true;
+                        due |= seen.frames == 0;
                     }
-                    WindowEvent::Frame(_) => frame_due = true,
+                    WindowEvent::Frame(_) => due = true,
+                    WindowEvent::Shown(shown) => {
+                        if let (Shown::Presented(_), Some(with_gpu)) = (shown, away) {
+                            seen.frames += 1;
+                            seen.layer_frames += u32::from(layers);
+                            seen.gpu_frames += u32::from(with_gpu);
+                        }
+                        away = None;
+                        ws.request_frame(window);
+                    }
                     WindowEvent::CloseRequested => {
                         seen.done = finished.is_some();
                         return write(report, layers, &seen);
@@ -177,8 +259,10 @@ fn run(report: &std::path::Path, on_gpu: bool) -> Result<(), String> {
                 _ => {}
             }
         }
-        let px = |v: f64| (v * scale).round() as u32;
-        if seen.frames > 0 && finished.is_none() && frame_due {
+        if away.is_some() || !configured || !due || finished.is_some() {
+            continue;
+        }
+        if seen.frames > 0 {
             if !on_gpu {
                 // the first frame is shown: fade the layer out, drawing nothing
                 if layers {
@@ -207,77 +291,43 @@ fn run(report: &std::path::Path, on_gpu: bool) -> Result<(), String> {
                 write(report, layers, &seen)?;
                 continue;
             }
-            // on the GPU: the layer drawn by the GPU renderer, the window's frame again for the next frame callback
-            if let Some(r) = drawing.as_mut() {
-                let (w, h) = (px(LAYER.width()), px(LAYER.height()));
-                let id = r
-                    .render(&RenderRequest {
-                        list: &red_list(),
-                        resources: &PaintResources::default(),
-                        scale,
-                        width: w,
-                        height: h,
-                        damage: &DamageRegion::Full,
-                    })
-                    .map_err(|e| format!("the GPU renderer: {e:?}"))?;
-                let drawn = r.frame(id).map_err(|e| format!("its frame: {e:?}"))?;
-                let shown = ws
-                    .present_surface_layers(
-                        window,
-                        &[SurfaceLayer {
-                            key: LAYER_KEY,
-                            rect: LAYER,
-                            look: SurfaceLayerLook::default(),
-                            frame: Some(drawn),
-                        }],
-                    )
-                    .map_err(|e| format!("{e:?}"))?;
-                if shown == PresentOutcome::Presented && drawn.device.is_some() {
-                    seen.gpu_frames += 1;
-                }
-                if seen.gpu_frames >= GPU_FRAMES {
-                    finished = Some(Instant::now());
-                    seen.done = true;
-                    write(report, layers, &seen)?;
-                }
-            }
-            let content = frame(3, px(size.width), px(size.height), GREY);
-            ws.present(window, &content, None)
-                .map_err(|e| format!("{e:?}"))?;
-            ws.request_frame(window);
-            continue;
-        }
-        // drawn until the window's frame and the layer's are both shown, at the window's latest scale
-        let Some(id) = configure.filter(|_| seen.frames == 0) else {
-            continue;
-        };
-        let content = frame(1, px(size.width), px(size.height), GREY);
-        let red = frame(2, px(LAYER.width()), px(LAYER.height()), RED);
-        if layers && seen.layer_frames == 0 {
-            let shown = ws
-                .present_surface_layers(
-                    window,
-                    &[SurfaceLayer {
-                        key: LAYER_KEY,
-                        rect: LAYER,
-                        look: SurfaceLayerLook::default(),
-                        frame: Some(&red),
-                    }],
-                )
-                .map_err(|e| format!("{e:?}"))?;
-            if shown != PresentOutcome::Presented {
+            if seen.gpu_frames >= GPU_FRAMES {
+                finished = Some(Instant::now());
+                seen.done = true;
+                write(report, layers, &seen)?;
                 continue;
             }
-            seen.layer_frames += 1;
+            // on the GPU: the layer drawn by the GPU renderer with each window frame, once the process draws there
+            let Some(gpu) = drawing.as_ref() else {
+                continue;
+            };
+            let frame = submission(&grey, layers.then_some(gpu), scale, size);
+            submit(&mut ws, window, &frame, &mut due, &mut away, layers)?;
+            continue;
         }
-        let shown = ws
-            .present(window, &content, Some(id))
-            .map_err(|e| format!("{e:?}"))?;
-        if shown == PresentOutcome::Presented {
-            seen.frames += 1;
-            ws.request_frame(window);
-        }
+        // drawn until the window's frame and the layer's are shown, at the window's latest scale
+        let frame = submission(&grey, layers.then_some(&red), scale, size);
+        submit(&mut ws, window, &frame, &mut due, &mut away, false)?;
     }
+}
+
+/// Submits `frame` of `window`: away (with whether its layer is the GPU renderer's, `gpu`) once taken, else due again
+/// with the next frame the window system hands it.
+fn submit(
+    ws: &mut WaylandWindowSystem,
+    window: cupertino_ui_core::platform::WindowId,
+    frame: &Submission,
+    due: &mut bool,
+    away: &mut Option<bool>,
+    gpu: bool,
+) -> Result<(), String> {
+    *due = false;
+    match ws.submit(window, frame).map_err(|e| format!("{e:?}"))? {
+        Submitted::Taken => *away = Some(gpu),
+        Submitted::NotReady => ws.request_frame(window),
+        Submitted::Declined => return Err("the window system declined the frame".into()),
+    }
+    Ok(())
 }
 
 fn main() -> ExitCode {

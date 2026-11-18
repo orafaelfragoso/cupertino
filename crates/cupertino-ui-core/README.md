@@ -243,7 +243,8 @@ all on one thread.
   into lists of their own at their layer's origin (`runtime/surface_layers.rs`; a mark inside a marked subtree draws in
   the outer layer, and a subtree's root leaves its ancestors' clips and groups to the layer's shape and properties),
   keeps a damage tracker and a renderer per layer, and hands a layer that changed to the window system with the
-  window's frame, to be drawn only where it changed, at its layout size (`Submission::surface_layers`), or, where the
+  window's frame, to be drawn only where it changed, at its layout size in whole points (`surface_layer_size`, the size
+  the window system's buffers of the layer are) and the window's scale (`Submission::surface_layers`), or, where the
   window system declines the frame, draws it and hands it the frames (`present_surface_layers`). The application moves, fades, scales
   and blurs a layer with `WindowRequest::Layer`, which draws no frame; once the window's layers' last running
   animation ends, the window's root hears `Event::LayersSettled`. Layout, input and semantics keep the layout.
@@ -400,7 +401,7 @@ places and animates (`WindowSystem::present_surface_layers`): each `SurfaceLayer
 its look (`SurfaceLayerLook`: glass style, glass group and spacing, corner radius, masks to its shape, and a
 `LayerEdge`, a line the compositor draws along the outside of the glass's outline, in a group each shape's outline cut by the others, at
 a width in points that stays as the layer scales, where `Capabilities::surface_layer_edges` says it can) and its frame at
-its rect's size, or `None` when unchanged; the list is shown with the window's next `present`, back to front over its
+its rect's size in whole points (`surface_layer_size`: each side rounded, at least one point), or `None` when unchanged; the list is shown with the window's next `present`, back to front over its
 content, and a key left out goes. A window system that takes frames gets the list with the frame instead
 (`Submission::surface_layers`, each a `SubmittedLayer` whose `LayerList` it draws). `WindowRequest::Layer { key, changes }` sets or animates a layer's properties
 (`LayerChange`, `LayerProperty`: x, y, width, height, opacity, scale, corner radius, content blur, along a

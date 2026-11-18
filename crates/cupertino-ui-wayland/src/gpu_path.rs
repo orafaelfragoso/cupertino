@@ -18,9 +18,8 @@ use cupertino_ui_render::gpu::{GpuConfig, GpuRenderer, WindowRenderer};
 use cupertino_ui_render::render_thread::{
     self, Claim, Ready, Resident, Status, WarmTiming, DEVICE_HANG,
 };
-use cupertino_ui_render::CpuFrame;
 use cupertino_ui_text::GlyphRasterizer;
-use cupertino_wayland_client::{Connection, PixelRect, SurfaceId, Waker};
+use cupertino_wayland_client::{Connection, SurfaceId, Waker};
 
 use crate::gpu_present::{Draw, GpuDevice, GpuSurface, PresentError, SurfaceStats};
 use crate::renderer::{
@@ -121,18 +120,6 @@ enum SurfaceKind {
     Gpu(GpuSurface),
     /// A buffer could not be made or imported: shared memory from now on.
     Fallback,
-}
-
-/// What [`GpuPath::present`] did.
-pub enum Presented {
-    /// Shown from a GPU buffer.
-    Gpu,
-    /// Not for the GPU (the window system or the surface draws into shared memory): present it there.
-    Shm,
-    /// Every buffer is the compositor's still.
-    Busy,
-    /// The frame is not of the size the surface asks for now.
-    Resized,
 }
 
 /// What [`GpuPath::prepare`] did.
@@ -462,38 +449,6 @@ impl GpuPath {
         match self.state {
             State::On(_) => matches!(self.surfaces.get(&surface), Some(SurfaceKind::Fallback)),
             _ => true,
-        }
-    }
-
-    /// Present `frame` of `surface` on the GPU if the window system and the surface draw there.
-    #[allow(clippy::too_many_arguments)]
-    pub fn present(
-        &mut self,
-        conn: &mut Connection,
-        surface: SurfaceId,
-        preferred: (u32, u32),
-        frame: &CpuFrame,
-        damage: &[PixelRect],
-        whole: bool,
-    ) -> Result<Presented, cupertino_wayland_client::Error> {
-        let State::On(gpu) = &self.state else {
-            return Ok(Presented::Shm);
-        };
-        let kind = self
-            .surfaces
-            .entry(surface)
-            .or_insert_with(|| SurfaceKind::Gpu(GpuSurface::default()));
-        let SurfaceKind::Gpu(s) = kind else {
-            return Ok(Presented::Shm);
-        };
-        match s.present(gpu, conn, surface, preferred, frame, damage, whole) {
-            Ok(()) => Ok(Presented::Gpu),
-            Err(PresentError::Busy) => Ok(Presented::Busy),
-            Err(PresentError::Resized) => Ok(Presented::Resized),
-            Err(e) => {
-                self.failed(conn, surface, e)?;
-                Ok(Presented::Shm)
-            }
         }
     }
 

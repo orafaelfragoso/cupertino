@@ -591,40 +591,6 @@ impl GpuSurface {
         });
     }
 
-    /// Show `frame` on `surface` now: [`GpuSurface::prepare`]d, drawn and committed. A frame that cannot be drawn
-    /// leaves the surface without buffers, allocated again for the next.
-    #[allow(clippy::too_many_arguments)]
-    pub fn present(
-        &mut self,
-        gpu: &GpuDevice,
-        conn: &mut Connection,
-        surface: SurfaceId,
-        preferred: (u32, u32),
-        frame: &CpuFrame,
-        damage: &[PixelRect],
-        whole: bool,
-    ) -> Result<(), PresentError> {
-        let draw = self.prepare(
-            gpu,
-            conn,
-            surface,
-            preferred,
-            (frame.width, frame.height),
-            whole,
-        )?;
-        match draw.draw(frame, damage) {
-            Ok(drawn) => {
-                self.drawn(drawn.from_texture);
-                drawn.commit()?;
-                Ok(())
-            }
-            Err(e) => {
-                self.free(Some(gpu), conn);
-                Err(e)
-            }
-        }
-    }
-
     /// Everything a frame of `pixels` (drawn for `preferred`, `whole` when the compositor must take all of it) needs
     /// to be drawn into a free buffer of `surface` and committed, on any thread ([`Draw::draw`]): the buffer chosen
     /// (allocated, in size steps, when none serves), its sync points and the commit made. The buffer counts as drawn

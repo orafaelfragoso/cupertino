@@ -1,5 +1,6 @@
 //! A window's surface layers ([`Widget::surface_layer`](crate::Widget::surface_layer)): the marked subtrees leave the
-//! window's paint for lists of their own, each drawn at its layout size into a frame of its own, with its own damage,
+//! window's paint for lists of their own, each drawn at its layout size in whole points
+//! ([`surface_layer_size`](crate::platform::surface_layer_size)) into a frame of its own, with its own damage,
 //! and handed to the window system with the window's frame ([`Submission::surface_layers`](crate::platform::Submission),
 //! or [`WindowSystem::present_surface_layers`](crate::platform::WindowSystem::present_surface_layers) where it declines
 //! the frame). The
@@ -10,8 +11,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use crate::platform::{
-    LayerList, PresentOutcome, SharedRenderer, SubmittedLayer, SurfaceLayer, SurfaceLayerLook,
-    WindowId, WindowSystem,
+    surface_layer_size, LayerList, PresentOutcome, SharedRenderer, SubmittedLayer, SurfaceLayer,
+    SurfaceLayerLook, WindowId, WindowSystem,
 };
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_ui_render::{
@@ -235,6 +236,7 @@ impl SurfaceLayers {
             .map(|(paint, damage)| {
                 let state = self.layers.entry(paint.key).or_default();
                 state.list = Arc::new(paint.list);
+                let (width, height) = surface_layer_size(paint.rect);
                 let layer = damage.map(|damage| LayerList {
                     renderer: Arc::clone(
                         state
@@ -242,8 +244,8 @@ impl SurfaceLayers {
                             .get_or_insert_with(|| Arc::new(Mutex::new(renderers()))),
                     ),
                     list: Arc::clone(&state.list),
-                    width: super::physical(paint.rect.width(), scale).max(1),
-                    height: super::physical(paint.rect.height(), scale).max(1),
+                    width: super::physical(f64::from(width), scale).max(1),
+                    height: super::physical(f64::from(height), scale).max(1),
                     damage,
                 });
                 SubmittedLayer {

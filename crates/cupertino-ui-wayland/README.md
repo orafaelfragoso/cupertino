@@ -50,7 +50,9 @@ Windows and popups map one to one onto the transport's toplevels and popups; des
 A window with a role from `SurfaceRoles` (a shell's layer surface) may hand transitions of its presentation to the
 compositor when it offers `cupertino_layers_v1` version 2 (`Capabilities::present_animation`): each
 `WindowRequest::Present` goes to the window's presentation, made on its first change (`presentations.rs`), and is
-committed at once without a buffer, or with the window's first frame when it has not drawn one. The compositor runs the
+committed at once without a buffer, or with the window's first frame when it has not drawn one. While a frame of the
+window is away (`WindowSystem::submit`) that commit waits until the frame's commits are sent, so it never applies
+what the UI thread sent with the frame ahead of the frame. The compositor runs the
 offset, opacity and scale on its clock, with the session's time scale and Reduce Motion; the window draws nothing for
 it. The animations a change starts are followed through `finished`, `replaced` and `settled`
 (`WaylandWindowSystem::presentation_settled`). Without the global, or on a toplevel, the request is refused
@@ -60,8 +62,8 @@ there, and an input region asked for meanwhile goes with the commit, so a closin
 From version 4 a window has surface layers (`Capabilities::surface_layers`, `surface_layers.rs`): each `SurfaceLayer`
 is a `wl_surface` made a `cupertino_layer_v1` of the window's surface, drawn from buffers of its own at the window's
 scale (shared memory, or dmabufs from the GPU renderer's texture as a window's are), its rect and look sent as the
-layer's values with the window's next commit, and `WindowRequest::Layer` changes sent as its requests (committed at once
-without a buffer when the window shows a frame, or with the layer's first values); while such an animation moves a
+layer's values with the window's next commit, and `WindowRequest::Layer` changes sent as its requests (committed
+without a buffer when the window shows a frame, as a presentation's are, or with the layer's first values); while such an animation moves a
 layer's x, y, width or height, a frame that declares the layer's rect again sends none of the parts it moves (a value
 sent would replace the animation) and sends them with the first frame after it ended; their animations count for
 `presentation_settled`, and a window whose layers' last running animation ends hears `WindowEvent::LayersSettled` once,
@@ -77,24 +79,23 @@ at the time it was read, and the ones after keep the compositor's spacing. A but
 input serial.
 
 Where the compositor lists ABGR8888, a submitted frame in shared memory is drawn straight into the buffer it leases
-(`hand_over.rs`): the CPU renderer paints the frame's damage, the damage of frames that were not presented and what
-the buffer missed, or all of it when its pixels are unknown, into the buffer, and nothing is copied; a buffer the frame
-does not use (its drawing failed) goes back unattached. The window system lends no buffer to the UI thread
-(`present_into` is not taken). Elsewhere, and for a frame of the GPU renderer read back, the frame is copied from the
-renderer's own image, as `present` copies the renderer's frame (premultiplied RGBA) into a leased buffer, byte for byte as
-ABGR8888 where the compositor lists that format and converted to ARGB8888 otherwise: its damage, the damage of
-frames that were not presented, and what the buffer missed, or all of it when the buffer's pixels are unknown. The
-compositor is told only the frame's damage and the carried damage, or all of the window when the frame changed size.
-No free buffer, no configure yet, or a frame at another size than the latest configure asks for is `NotReady`, and the
-damage is carried (more than 64 rectangles become the whole frame). The transport acknowledges the latest configure
-with every frame. A window's input region (`WindowSpec::input_region`, then `WindowRequest::SetInputRegion`) is sent with
+(`hand_over.rs`): the CPU renderer paints the frame's damage and what the buffer missed, or all of it when its pixels
+are unknown, into the buffer, and nothing is copied; a buffer the frame does not use (its drawing failed) goes back
+unattached. The window system lends no buffer to the UI thread (`present_into` is not taken) and presents no frame
+from it (`present`, and `present_layer` and `present_surface_layers` with a frame, are `PlatformError::Unsupported`).
+Elsewhere, and for a frame of the GPU renderer read back, the renderer's frame (premultiplied RGBA) is copied from its
+own image into the buffer, byte for byte as ABGR8888 where the compositor lists that format and converted to ARGB8888
+otherwise: its damage and what the buffer missed, or all of it when the buffer's pixels are unknown. The compositor is
+told only the frame's damage, or all of the surface when the frame changed size. No free buffer, no configure yet, or
+a frame at another size than the latest configure asks for is `NotReady`, and the runtime draws the next frame whole.
+The transport acknowledges the latest configure with every frame. A window's input region (`WindowSpec::input_region`, then `WindowRequest::SetInputRegion`) is sent with
 the next present that follows a change, rounded outwards to whole points; a window that never sets one takes input over
 its whole surface. A window's opaque region (`WindowRequest::SetOpaqueRegion`) goes with the next frame presented
-after it changes, rounded inwards to whole points, and an empty one sends none. A raised layer (`present_layer`) is drawn into a synchronized subsurface at the window's top left
+after it changes, rounded inwards to whole points, and an empty one sends none. A raised layer (`Submission::raised`) is drawn into a synchronized subsurface at the window's top left
 corner, as wide as the window, at its scale and with an empty input region; its raised materials go to the
 subsurface's backdrops (`cupertino_app_effects_v1` version 11), so the compositor draws them between the subsurface and
-the window's content. Its frame copies only its own damage and what its buffer missed, and it commits before the
-window, so it applies with the window's next commit. The capability needs the transport's subsurfaces and version 11
+the window's content. Its frame draws only its own damage and what its buffer missed, and it commits before the
+window, so it applies with the window's commit; `present_layer(None)` hides it with a solid colour's. The capability needs the transport's subsurfaces and version 11
 of the effects global. `request_frame` answers at once when no frame callback is outstanding, else with the callback; a
 callback nobody asked for is not reported. On a compositor with `wp_presentation`, each presented frame is reported as
 `Presented` with the time it turned visible, moved from the compositor's presentation clock onto the window system's
@@ -171,10 +172,10 @@ A window's frame is drawn and committed away from the UI thread (`WindowSystem::
 layer and surface layers with it: the window system takes the frame's display list, resources, damage and the
 window's renderer (shared, `SharedRenderer`), and each changed layer's list and renderer (`LayerList`). On the UI
 thread it sends what applies with the window's commit (the surface layers' values, made or gone, and the raised layer
-placed or hidden), makes sure every surface the frame draws has a free buffer (else the frame is `NotReady` and the
-window waits for all of them), prepares each surface's commit (a free buffer chosen or allocated, its sync points, the
-configure the window's answers: `Connection::gpu_commit`, `BufferLease::detach`), the window's first, and hands the
-rest over. A frame with a surface on the GPU is drawn on the render thread (`gpu_present::Draw`); one all in shared
+placed), makes sure every surface the frame draws has a free buffer (else the frame is `NotReady` and the window waits
+for all of them), prepares each surface's commit (a free buffer chosen or allocated, its sync points, the configure the
+window's answers: `Connection::gpu_commit`, `BufferLease::detach`), the window's first, hides the raised layer where the
+frame hides it, and hands the rest over. A frame with a surface on the GPU is drawn on the render thread (`gpu_present::Draw`); one all in shared
 memory on the CPU pool (`cupertino_ui_core::pool`), one lane per window, into the buffers it detached: straight into
 them where the renderer draws into memory in ABGR8888, else into the renderer's own image and copied (converted to
 ARGB8888, or read back from the GPU). Once every surface is drawn, the thread that drew them sends the frame back and
@@ -182,13 +183,10 @@ commits the surface layers, then the raised layer's subsurface, then the window,
 and committing in that order; a surface that cannot be drawn, or a renderer that panics, leaves the whole frame
 uncommitted, and the panic goes on in the instance that submitted it. A frame in shared memory never waits for the
 render thread, which may be making a device's programs. The next dispatch reads the frame back (before what the
-compositor said of it), gives the buffers back and tells the runtime `WindowEvent::Shown`. Until then the window draws
-no other frame, and freeing a surface's GPU buffers waits for the render thread's work before it. No frame is
+compositor said of it) and gives the buffers back; once the thread says the frame's commits are sent, the runtime
+hears `WindowEvent::Shown`. Until then the window draws no other frame, so nothing its next frame sends from the UI
+thread (a raised layer hidden, a solid colour) goes out before them, and freeing a surface's GPU buffers waits for the render thread's work before it. No frame is
 declined; only a solid colour (`present_solid`) is still shown from the UI thread.
-
-`examples/gpu-window.rs` is the presenter's check window, a client for `cupertino-server`:
-`--frames`, `--reset-every`, `--purge-every`, `--losses`, `--renderer` (frames drawn by the GPU renderer and copied
-from its texture), and a `key value` report of what it did.
 
 ## Menus (`menus`)
 

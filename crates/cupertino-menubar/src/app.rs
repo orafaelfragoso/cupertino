@@ -490,7 +490,7 @@ fn watch_conf(
         .collect();
     match ConfigWatcher::new(files) {
         Ok(watch) => {
-            let follow = watch.follow(move |event| {
+            let follow = cupertino_kit::task::follow_settings(watch, move |event| {
                 // the receivers are gone only while the process exits
                 if tx.send(event).is_ok() {
                     let _ = wakes.try_send(Wake::Conf);

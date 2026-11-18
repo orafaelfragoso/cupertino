@@ -96,9 +96,11 @@ all on one thread.
   the window system lends (`WindowSystem::present_into`), so it has no copy and its raster paints what the buffer
   missed too; where none is lent the frame is drawn into the renderer's own image and presented with `present`.
   A window system that draws frames away from the UI thread takes them first (`WindowSystem::submit`: the display
-  list, resources and damage with the window's shared renderer and the configure the frame answers); the window then
+  list, resources and damage with the window's shared renderer); the window then
   draws nothing until `WindowEvent::Shown` says how the frame went, and the turn counts no raster for it. `pool::cpu`
-  is the process's CPU pool (a thread per core, `kit-cpu-N`) that such frames and the toolkit's CPU tasks run on.
+  is the process's CPU pool (up to a thread per core, `kit-cpu-N`, each started when work finds the others busy) that
+  such frames and the toolkit's CPU tasks run on; a window's frames go to one lane (`pool::cpu_for`), one thread
+  for all of them, the lanes sharing at most `pool::FRAME_LANES` (4) threads.
   The sink gets one `FrameTiming` a turn that presented; without a sink no clock is read.
 - **Scroll motion.** `kinetic::ScrollMotion` is a pure model of a scroll view's content over the time it is given:
   a finger's drag, the kinetic motion its lift leaves (exponential decay), the stretch past an edge (a resistance

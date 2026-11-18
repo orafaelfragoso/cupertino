@@ -569,8 +569,6 @@ pub struct Submission {
     pub width: u32,
     pub height: u32,
     pub damage: DamageRegion,
-    /// The configure the frame answers, acknowledged with its commit.
-    pub configure: Option<ConfigureId>,
 }
 
 impl Submission {
@@ -590,8 +588,9 @@ impl Submission {
 /// What [`WindowSystem::submit`] did with a frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Submitted {
-    /// The window system draws and shows it away from the UI thread: [`WindowEvent::Shown`] says how that went, and
-    /// the window draws no other frame until then.
+    /// The window system draws and shows it away from the UI thread: [`WindowEvent::Shown`] says how that went, sent
+    /// once the window system let go of the renderer, and the window neither draws another frame nor reaches its
+    /// renderer until then.
     Taken,
     /// No buffer is free, or the window waits for its configure or for a frame of the size it asks for: the frame
     /// was not drawn and the next one draws all of it.
@@ -1018,9 +1017,10 @@ pub trait WindowSystem {
         None
     }
     /// Takes `frame` to draw and show away from the UI thread: drawn on the process's render thread (a window drawn on
-    /// the GPU) or on the CPU pool (one drawn into its shared-memory buffers), and committed by the render thread,
-    /// which acknowledges the frame's configure, attaches the buffer and commits, in that order. A window system that
-    /// does not draw this way declines (the default), and the window draws and presents the frame itself.
+    /// the GPU) or on the CPU pool (one drawn into its shared-memory buffers), and committed by the thread that drew
+    /// it, which acknowledges the window's latest configure as `submit` is called, attaches the buffer and commits, in
+    /// that order. A window system that does not draw this way declines (the default), and the window draws and
+    /// presents the frame itself.
     fn submit(&mut self, window: WindowId, frame: &Submission) -> Result<Submitted, PlatformError> {
         let _ = (window, frame);
         Ok(Submitted::Declined)

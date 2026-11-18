@@ -19,7 +19,7 @@ pub use clock::{ManualClock, TimeWentBackwards};
 pub use driver::{DriverError, TestDriver};
 pub use headless::{
     HeadlessWindowSystem, IncomingDrag, PresentedFrame, PresentedLayer, PresentedSurfaceLayer,
-    SolidPresent, StartedDrag,
+    Returns, SolidPresent, StartedDrag, Submit,
 };
 pub use inspector::Inspector;
 pub use look::{appearance_name, LookError, LOOK_APPEARANCES, LOOK_DIR, LOOK_SCALE};

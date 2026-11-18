@@ -75,3 +75,50 @@ fn a_commit_from_another_thread_acknowledges_its_configure_before_it_attaches_an
         ]
     );
 }
+
+#[test]
+fn a_commit_dropped_unsent_leaves_the_crop_of_the_last_magnified_frame_for_the_next_to_unset() {
+    let (server, mut conn) = Harness::start(Offer {
+        scaling: true,
+        ..Offer::NONE
+    });
+    let window = window(&mut conn);
+    let surface = window.surface();
+    let mut zoomed = conn
+        .lease(surface, (16, 16), BufferFormat::Argb8888)
+        .unwrap();
+    assert!(zoomed.set_zoom(2.0), "the surface has a viewport");
+    zoomed.present().unwrap();
+    conn.roundtrip().unwrap();
+    assert!(
+        server
+            .presents()
+            .iter()
+            .any(|p| p.starts_with("SetSource 4 4")),
+        "{:?}",
+        server.presents()
+    );
+
+    // a frame at full size, its commit dropped unsent
+    let (buffer, commit) = conn
+        .lease(surface, (16, 16), BufferFormat::Argb8888)
+        .unwrap()
+        .detach()
+        .unwrap();
+    drop(commit);
+    conn.buffer_unused(buffer);
+
+    let before = server.presents().len();
+    conn.lease(surface, (16, 16), BufferFormat::Argb8888)
+        .unwrap()
+        .present()
+        .unwrap();
+    conn.roundtrip().unwrap();
+    assert!(
+        server.presents()[before..]
+            .iter()
+            .any(|p| p == "SetSource -1 -1 -1 -1"),
+        "the next frame shows the whole buffer again: {:?}",
+        &server.presents()[before..]
+    );
+}

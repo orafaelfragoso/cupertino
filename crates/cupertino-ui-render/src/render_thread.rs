@@ -13,7 +13,7 @@
 //! and the next [`request`] makes a new one.
 //!
 //! A device someone else made and lends (the server's) is not the render thread's: a [`crate::gpu::GpuRenderer`] made
-//! on it draws on the lender's thread, as before.
+//! on it draws on the lender's thread.
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -437,7 +437,8 @@ pub struct Claim {
 impl Drop for Claim {
     fn drop(&mut self) {
         let thread = handle();
-        let warm_up = {
+        // the devices asked for until now go; one asked for after, by a claim made meanwhile, stays
+        let (warm_up, generation) = {
             let mut state = lock(&thread.shared.state);
             state.claims -= 1;
             if state.claims > 0 || thread.id.is_none() {
@@ -445,7 +446,7 @@ impl Drop for Claim {
             }
             state.phase = Phase::Idle;
             state.wakes.clear();
-            state.warm_up.take()
+            (state.warm_up.take(), state.generation)
         };
         thread.shared.changed.notify_all();
         if let Some(mut warm_up) = warm_up {
@@ -454,7 +455,9 @@ impl Drop for Claim {
         }
         let (tx, rx) = mpsc::sync_channel(1);
         thread.send(job(move |on| {
-            on.on = None;
+            if on.generation().is_some_and(|g| g <= generation) {
+                on.on = None;
+            }
             let _ = tx.send(());
         }));
         if rx.recv_timeout(RELEASE_WAIT).is_err() {
@@ -717,6 +720,7 @@ fn warm(node: Option<&Path>, cache: Option<&Path>, signals: &WarmSignals) -> Res
 /// On the render thread: takes the device the warm-up of `generation` made, unless another was asked for since or
 /// the last claim went meanwhile, and wakes those who asked.
 fn attach(on: &mut RenderThread, generation: u64, made: Result<Warm, String>) {
+    let _attach = tracing::trace_span!("gpu.attach").entered();
     let shared = &handle().shared;
     let current = {
         let state = lock(&shared.state);

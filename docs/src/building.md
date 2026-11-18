@@ -656,7 +656,8 @@ A slow frame then shows which part of it grew, without adding timing prints. The
   made; the CPU renderer: `cpu.raster` per layer with its plan, scroll layers and paint;
 - the Wayland presenter: lease (with allocations), copy, commit, submit and the fence wait or finish; a submitted
   frame's raster and copy, submit and commit on the render thread's track (`kit-render`), or its raster on a CPU
-  pool thread's (`kit-cpu-N`) and its commit on the render thread's; and the GPU warm-up (`gpu.warm`: `gpu.device`,
+  pool thread's (`kit-cpu-N`) with its commit; the device taken on the render thread (`gpu.attach`) and the
+  surfaces' programs made there (`gpu.surface_programs`); and the GPU warm-up (`gpu.warm`: `gpu.device`,
   `gpu.program_turn`, the programs and their first draws, `gpu.programs.prime`) on the warm-up thread's track
   (`gpu-warm-up`);
 - the compositor: each output's frame (`server.output_frame`), its scene, its render (lower, supersample, draw) with the

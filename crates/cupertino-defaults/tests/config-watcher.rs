@@ -200,19 +200,22 @@ fn a_loop_that_polls_the_descriptor_reads_each_quiet_burst_without_waiting() {
 }
 
 #[test]
-fn a_followed_watch_reports_through_its_callback_from_the_loop_that_polls_it() {
+fn a_loop_that_polls_futures_waits_for_a_quiet_burst_and_rereads_the_files_elsewhere() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("a.conf");
-    let watcher = ConfigWatcher::new(vec![file.clone()]).unwrap();
+    let mut watcher = ConfigWatcher::new(vec![file.clone()]).unwrap();
+    // the files were read as the watch began: the first wait is over at once and the reread finds nothing new
+    assert!(async_io::block_on(watcher.quiet()));
+    assert!(watcher.reread().is_empty());
     let (tx, rx) = channel();
     std::thread::spawn(move || {
-        let on = std::thread::current().id();
-        async_io::block_on(watcher.follow::<()>(move |event| {
-            let _ = tx.send((event, std::thread::current().id() == on));
-        }))
+        let quiet = async_io::block_on(watcher.quiet());
+        // the reread on another thread than the loop's, as a pool runs it
+        let events = std::thread::spawn(move || watcher.reread()).join().unwrap();
+        let _ = tx.send((quiet, events));
     });
     std::fs::write(&file, "1").unwrap();
-    let (event, on_the_loop) = rx.recv_timeout(REPORT).expect("a report");
-    assert_eq!(event, WatchEvent::Changed(vec![file]));
-    assert!(on_the_loop, "the callback runs where the future is polled");
+    let (quiet, events) = rx.recv_timeout(REPORT).expect("a quiet burst");
+    assert!(quiet);
+    assert_eq!(events, [WatchEvent::Changed(vec![file])]);
 }

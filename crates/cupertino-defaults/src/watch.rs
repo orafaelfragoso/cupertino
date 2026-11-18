@@ -10,8 +10,9 @@
 //!
 //! The watcher starts no thread: the loop of the process that holds it drives it. A loop that polls file descriptors
 //! (the server's calloop) waits for the watcher's descriptor ([`AsFd`]) and for [`ConfigWatcher::quiet_at`], and
-//! calls [`ConfigWatcher::read`], which never waits; a loop that polls futures (a Kit program's) runs
-//! [`ConfigWatcher::follow`]; a thread of the caller's own waits in [`ConfigWatcher::wait`].
+//! calls [`ConfigWatcher::read`], which never waits; a loop that polls futures (a Kit program's) waits in
+//! [`ConfigWatcher::quiet`], which reads no file, and has [`ConfigWatcher::reread`] read them on a thread that may
+//! wait; a thread of the caller's own waits in [`ConfigWatcher::wait`].
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::io;
@@ -66,8 +67,10 @@ pub struct ConfigWatcher {
     last: BTreeMap<PathBuf, Option<Vec<u8>>>,
     /// When the burst under way is quiet, and the files are compared.
     quiet_at: Option<Instant>,
-    /// The descriptor [`ConfigWatcher::changes`] waits on, once it has.
+    /// The descriptor [`ConfigWatcher::quiet`] waits on, once it has.
     ready: Option<async_io::Async<OwnedFd>>,
+    /// The failures of the notification not reported yet.
+    failures: Vec<WatchEvent>,
 }
 
 /// What the kernel's notification says.
@@ -145,6 +148,7 @@ impl ConfigWatcher {
             // the files were read before the watch began: a change in between shows at the first read
             quiet_at: Some(Instant::now()),
             ready: None,
+            failures: Vec::new(),
         })
     }
 
@@ -158,13 +162,24 @@ impl ConfigWatcher {
     /// `now` changed, once, with any failure of the notification. Empty while a burst is under way and when nothing
     /// changed.
     pub fn read(&mut self, now: Instant) -> Vec<WatchEvent> {
-        let mut out = Vec::new();
+        self.take(now);
+        if self.quiet_at.is_some_and(|at| at <= now) {
+            self.reread()
+        } else {
+            std::mem::take(&mut self.failures)
+        }
+    }
+
+    /// Takes the events the kernel holds, without waiting and without reading any watched file: a burst under way is
+    /// timed, and a failure kept for the next report.
+    fn take(&mut self, now: Instant) {
         for msg in self.inbox.take() {
             let touched = match msg {
                 Msg::Changed { path, appeared } => {
                     if appeared && self.dirs.contains(&path) {
                         if let Err(e) = self.inbox.add(&path) {
-                            out.push(WatchEvent::Error(format!("{}: {e}", path.display())));
+                            self.failures
+                                .push(WatchEvent::Error(format!("{}: {e}", path.display())));
                         }
                     }
                     self.files.contains(&path) || self.dirs.contains(&path)
@@ -172,7 +187,7 @@ impl ConfigWatcher {
                 Msg::Lost => true,
                 // a notification error may have lost events: every file is compared
                 Msg::Failed(e) => {
-                    out.push(WatchEvent::Error(e));
+                    self.failures.push(WatchEvent::Error(e));
                     true
                 }
             };
@@ -180,10 +195,15 @@ impl ConfigWatcher {
                 self.quiet_at = Some(now + COALESCE);
             }
         }
-        if self.quiet_at.is_some_and(|at| at <= now) {
-            self.quiet_at = None;
-            compare(&self.files, &mut self.last, &mut out);
-        }
+    }
+
+    /// Reads the watched files and reports each one whose contents changed since the last report, once, after any
+    /// failure of the notification since then; the burst under way, if any, is over. It reads files: a loop that
+    /// polls futures runs it on a thread that may wait, after [`ConfigWatcher::quiet`].
+    pub fn reread(&mut self) -> Vec<WatchEvent> {
+        self.quiet_at = None;
+        let mut out = std::mem::take(&mut self.failures);
+        compare(&self.files, &mut self.last, &mut out);
         out
     }
 
@@ -205,16 +225,19 @@ impl ConfigWatcher {
         }
     }
 
-    /// The next report, waited for without blocking: the future is woken when the descriptor is readable or the burst
-    /// is quiet. `None` once the notification failed for good, after its failure was reported.
-    pub async fn changes(&mut self) -> Option<Vec<WatchEvent>> {
+    /// Waits without blocking, and without reading any watched file, until a burst of events is quiet or the
+    /// notification failed: [`ConfigWatcher::reread`] then reports what changed. The future is woken when the
+    /// descriptor is readable or the burst is quiet. `false` once the notification failed for good and its failure was
+    /// reported: nothing more comes.
+    pub async fn quiet(&mut self) -> bool {
         loop {
-            let events = self.read(Instant::now());
-            if !events.is_empty() {
-                return Some(events);
+            let now = Instant::now();
+            self.take(now);
+            if self.quiet_at.is_some_and(|at| at <= now) || !self.failures.is_empty() {
+                return true;
             }
             if self.inbox.broken {
-                return None;
+                return false;
             }
             if self.ready.is_none() {
                 let ready = self
@@ -227,14 +250,14 @@ impl ConfigWatcher {
                     Ok(ready) => self.ready = Some(ready),
                     Err(e) => {
                         self.inbox.broken = true;
-                        return Some(vec![WatchEvent::Error(format!(
-                            "waiting for file events: {e}"
-                        ))]);
+                        self.failures
+                            .push(WatchEvent::Error(format!("waiting for file events: {e}")));
+                        return true;
                     }
                 }
             }
             let Some(ready) = &self.ready else {
-                return None;
+                return false;
             };
             let readable = async {
                 if let Err(e) = ready.readable().await {
@@ -254,18 +277,6 @@ impl ConfigWatcher {
                 None => readable.await,
             }
         }
-    }
-
-    /// Calls `report` with each report, where the future is polled: the future a loop that polls futures runs for as
-    /// long as the files are followed. It never ends, so it stands for a task of any output; once the notification
-    /// failed for good, after its failure was reported, it only waits.
-    pub async fn follow<T>(mut self, mut report: impl FnMut(WatchEvent)) -> T {
-        while let Some(events) = self.changes().await {
-            for event in events {
-                report(event);
-            }
-        }
-        std::future::pending().await
     }
 }
 

@@ -26,11 +26,14 @@ entered, else for the process's own (named by the program, its events the proces
 panic hook stay one per process, installed by `main`.
 
 Work that would hold up a UI thread goes to the process's pools as a command (`kit::task`): `task::cpu` on a pool of
-one thread a core, `task::io` on a pool of `task::IO_THREADS` for blocking work with the deadline the caller names.
+up to a thread a core, `task::io` on a pool of up to `task::IO_THREADS` for blocking work with the deadline the caller
+names; a pool starts a thread only when work finds every one it started busy.
 Each runs for the instance that asked, its result comes back to that UI thread as a message, one instance runs at most
 `task::IO_SHARE` I/O tasks at once, an I/O task still running past its deadline is reported once
 (`toolkit.task.overdue`, with its instance, deadline and call site), and a task's panic is its instance's and is raised
-again on the UI thread. `kit::bus::connect` opens a D-Bus connection whose work the UI loop polls, with no executor
+again on the UI thread. `task::follow_settings` follows settings files (`cupertino_defaults::watch::ConfigWatcher`):
+the UI loop only waits for each burst of changes to be quiet, and the files are read on the I/O pool (deadline
+`task::SETTINGS_READ_DEADLINE`, 2 s). `kit::bus::connect` opens a D-Bus connection whose work the UI loop polls, with no executor
 thread: the connection comes as one message and its close as another. `kit::time` reads the session's local time
 (`local`, `now`) and turns a local date and time back into a moment (`from_local`), daylight saving time included.
 `kit::spawn` starts a program for the instance the thread runs for, and the instance's UI loop reaps it on its first

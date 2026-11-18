@@ -53,6 +53,9 @@ pkgname = cupertino-git
 	optdepends = wayland: nested session inside another Wayland desktop
 	optdepends = foot: terminal for the nested try-out
 	optdepends = iwd: wireless backend when cupertino-netd is enabled
+	optdepends = wireplumber: PipeWire device and volume controls
+	optdepends = libpulse: pactl for stereo balance
+	optdepends = pipewire-pulse: stereo balance on PipeWire outputs
 	optdepends = xwayland-satellite>=0.8: X11 app support
 	optdepends = xorg-xwayland: X11 app support
 	provides = cupertino

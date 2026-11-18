@@ -20,8 +20,6 @@ cupertino-icons = { path = "../cupertino-icons" }
 cupertino-theme = { path = "../cupertino-theme" }
 cupertino-keyboard = { path = "../cupertino-keyboard" }
 cupertino-wayland-client = { path = "../cupertino-wayland-client" }
-cupertino-alsa = { path = "../cupertino-alsa" }
-cupertino-pipewire = { path = "../cupertino-pipewire" }
 wayland-client = "0.31"
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 libc = "0.2"

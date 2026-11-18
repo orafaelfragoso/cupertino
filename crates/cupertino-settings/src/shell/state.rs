@@ -246,6 +246,7 @@ pub struct State {
     pub(crate) slide: Option<SliderDrag>,
     pub(crate) start: std::time::Instant,
     pub(crate) refreshed: f64,
+    pub(super) audio: super::audio::Audio,
     pub(crate) scanned: f64,
     /// When the battery's charge history was last read.
     pub(crate) history_read: f64,
@@ -361,6 +362,7 @@ impl State {
             slide: None,
             start: std::time::Instant::now(),
             refreshed: f64::NEG_INFINITY,
+            audio: Default::default(),
             scanned: f64::NEG_INFINITY,
             history_read: f64::NEG_INFINITY,
             picking_exclusion: false,
@@ -561,6 +563,20 @@ impl State {
         changed
     }
 
+    pub(super) fn refresh_sound(&mut self, now: f64) {
+        self.refreshed = now;
+        if self.level.is_none() {
+            self.audio.read(self.live.tab == 1);
+        }
+        if self.live.tab == 1 {
+            self.services.start_meter();
+            self.live.input_level = self.services.meter_level();
+        } else {
+            self.services.stop_meter();
+            self.live.input_level = 0.0;
+        }
+    }
+
     /// Read the live services of the pane shown again; draw again when something changed. The battery is read on the
     /// first refresh too, whatever the pane: whether there is one names the Battery row.
     pub(crate) fn refresh(&mut self, now: f64) -> Result<()> {
@@ -593,24 +609,7 @@ impl State {
         match self.content_pane {
             PaneId::Focus => self.live.focus = self.services.focus(),
             PaneId::Notifications => self.live.notifying_apps = self.services.notifying_apps(),
-            PaneId::Sound => {
-                if self.level.is_none() {
-                    self.live.volume = self.services.volume();
-                    self.live.outputs = self.services.outputs();
-                    self.live.balance = self.services.balance();
-                    if self.live.tab == 1 {
-                        self.live.inputs = self.services.inputs();
-                        self.live.input_volume = self.services.input_volume();
-                    }
-                }
-                if self.live.tab == 1 {
-                    self.services.start_meter();
-                    self.live.input_level = self.services.meter_level();
-                } else {
-                    self.services.stop_meter();
-                    self.live.input_level = 0.0;
-                }
-            }
+            PaneId::Sound => self.refresh_sound(now),
             PaneId::Keyboard => self.live.keyboard_backlight = self.services.keyboard_backlight(),
             PaneId::Vpn => self.live.vpns = self.services.vpns(),
             PaneId::Displays => {
@@ -657,6 +656,10 @@ impl State {
         self.scanned = f64::NEG_INFINITY;
         self.history_read = f64::NEG_INFINITY;
         self.live.tab = 0;
+        if to == PaneId::Sound {
+            self.refresh_sound(self.now());
+            return Ok(());
+        }
         if to == PaneId::Users {
             self.live.users = crate::system::users();
         }
@@ -801,13 +804,16 @@ impl State {
         self.errors.retain(|(e, _)| *e != id);
         // read-modify-write: the files as they are now, so the store changes the user's key only and puts back no
         // value another writer changed since the last read
-        if let Err(e) = self.settings.reload(&self.paths) {
-            eprintln!("cupertino-settings: the settings could not be read: {e}");
-            self.errors
-                .push((id, "The settings could not be read.".to_string()));
-            return Ok(());
+        // Sound controls change only the session mixer; no file or accessibility bus read is needed.
+        if self.content_pane != PaneId::Sound {
+            if let Err(e) = self.settings.reload(&self.paths) {
+                eprintln!("cupertino-settings: the settings could not be read: {e}");
+                self.errors
+                    .push((id, "The settings could not be read.".to_string()));
+                return Ok(());
+            }
+            self.sync_accessibility();
         }
-        self.sync_accessibility();
         let before = self.settings.clone();
         let effects = panes::change(id, value, &mut self.settings, &self.live);
         // restoring `before` on a failure undoes the whole commit only while a commit has one effect
@@ -841,6 +847,10 @@ impl State {
                     Ok(())
                 }
                 Effect::Service(call) => self.service_call(Some(id), &call),
+                Effect::Audio(change) => {
+                    self.audio.write(id, change);
+                    Ok(())
+                }
                 Effect::AskPicture { folder } => {
                     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
                     let start = home
@@ -886,7 +896,12 @@ impl State {
                 Effect::Tab(tab) => {
                     self.live.tab = tab;
                     let now = self.now();
-                    self.refresh(now).map_err(|e| e.to_string())
+                    if self.content_pane == PaneId::Sound {
+                        self.refresh_sound(now);
+                        Ok(())
+                    } else {
+                        self.refresh(now).map_err(|e| e.to_string())
+                    }
                 }
                 Effect::AskExclusion => {
                     let start = std::env::var_os("HOME")
@@ -1613,12 +1628,16 @@ impl State {
     /// Write the level slider `id` at `v`.
     pub(crate) fn level_write(&mut self, id: ControlId, v: f64) -> Result<()> {
         for effect in panes::change(id, Value::Fraction(v), &mut self.settings, &self.live) {
-            if let Effect::Service(call) = effect {
-                if let Err(e) = self.services.call(&call) {
-                    eprintln!("cupertino-settings: {e}");
-                    self.errors.retain(|(e, _)| *e != id);
-                    self.errors.push((id, e));
+            match effect {
+                Effect::Audio(change) => self.audio.write(id, change),
+                Effect::Service(call) => {
+                    if let Err(e) = self.services.call(&call) {
+                        eprintln!("cupertino-settings: {e}");
+                        self.errors.retain(|(e, _)| *e != id);
+                        self.errors.push((id, e));
+                    }
                 }
+                _ => {}
             }
         }
         Ok(())

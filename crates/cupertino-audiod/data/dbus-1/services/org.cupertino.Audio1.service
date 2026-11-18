@@ -1,0 +1,3 @@
+[D-BUS Service]
+Name=org.cupertino.Audio1
+Exec=/usr/bin/cupertino-audiod

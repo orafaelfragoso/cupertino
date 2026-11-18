@@ -93,6 +93,9 @@ package_cupertino-git() {
   optdepends=('wayland: nested session inside another Wayland desktop'
               'foot: terminal for the nested try-out'
               'iwd: wireless backend when cupertino-netd is enabled'
+              'wireplumber: PipeWire device and volume controls'
+              'libpulse: pactl for stereo balance'
+              'pipewire-pulse: stereo balance on PipeWire outputs'
               'xwayland-satellite>=0.8: X11 app support'
               'xorg-xwayland: X11 app support')
   backup=('etc/cupertino/login.conf' 'etc/cupertino/greeter.json' 'etc/cupertino/compositor.json'
@@ -103,7 +106,7 @@ package_cupertino-git() {
   for name in cupertino-server cupertino-dock cupertino-menubar cupertino-launcher cupertino-notifications \
               cupertino-controlcenter cupertino-osd cupertino-screenshot cupertino-control cupertino-windowmanager \
               cupertino-login cupertino-polkit-agent cupertino-keyring-prompter cupertino-portal cupertino-files \
-              cupertino-settings cupertino-sessiond cupertino-netd cupertino-btd cupertino-powerd cupertino-diagnose \
+              cupertino-settings cupertino-sessiond cupertino-netd cupertino-btd cupertino-powerd cupertino-audiod cupertino-diagnose \
               cupertino; do
     install -Dm755 "$bin/$name" "$pkgdir/usr/bin/$name"
   done
@@ -118,6 +121,7 @@ package_cupertino-git() {
     "$pkgdir/usr/share/xdg-desktop-portal/portals/cupertino.portal"
   # the session bus starts Files for a "show in folder" call when it is not running
   install -Dm644 -t "$pkgdir/usr/share/dbus-1/services" \
+    crates/cupertino-audiod/data/dbus-1/services/org.cupertino.Audio1.service \
     crates/cupertino-files/data/dbus-1/services/org.cupertino.Files.FileManager1.service
   # the apps' desktop entries (the menu bar and the dock take an app's name and icon from them) and the default apps
   install -Dm644 -t "$pkgdir/usr/share/applications" \

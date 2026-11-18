@@ -664,6 +664,17 @@
   source: crates/cupertino-controlcenter/src/control.rs
   source_match: "org.cupertino.ControlPanel1"
   note: Toggle only changes the UI; refused to a sandboxed caller or one the bus cannot name
+- name: org.cupertino.Audio1
+  kind: dbus-interface
+  version: 1
+  bus: session
+  bus_name: org.cupertino.Audio1
+  owner_crate: cupertino-audiod
+  owner_area: services
+  scope: public
+  source: crates/cupertino-audiod/src/main.rs
+  source_match: "org.cupertino.Audio1"
+  note: /org/cupertino/Audio1 serves ListDevices, SetDefault, GetVolume, SetVolume, GetBalance and SetBalance. Activated by /usr/share/dbus-1/services/org.cupertino.Audio1.service.
 - name: org.cupertino.Settings1
   kind: dbus-interface
   version: 1
@@ -1027,6 +1038,14 @@
   owner_area: design
   scope: public
   source: crates/cupertino-assets/src/bin/cupertino-assets.rs
+- name: cupertino-audiod
+  kind: binary
+  version: 0.1.0
+  shipped: yes
+  owner_crate: cupertino-audiod
+  owner_area: services
+  scope: public
+  source: crates/cupertino-audiod/src/main.rs
 - name: cupertino-btd
   kind: binary
   version: 0.1.0

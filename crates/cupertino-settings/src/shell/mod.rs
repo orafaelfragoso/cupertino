@@ -3,6 +3,7 @@
 //! dialogs and its menus on the desktop's menu bar. What the window shows and does lives in [`state`]; this module only
 //! shows it.
 
+mod audio;
 mod form;
 mod sheets;
 pub mod state;
@@ -220,6 +221,8 @@ pub struct Shell {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Message {
+    AudioRead(audio::Snapshot),
+    AudioWritten(ControlId, std::result::Result<(), String>),
     Select(usize),
     Navigate(Navigation),
     Split(SplitLayout),
@@ -335,6 +338,35 @@ impl Shell {
 
     fn handle(&mut self, message: Message) -> Result<Vec<Command<Message>>> {
         match message {
+            Message::AudioRead(snapshot) => {
+                let state = &mut self.state;
+                state.audio.done();
+                if state.content_pane == PaneId::Sound
+                    && state.level.is_none()
+                    && !state.audio.has_writes()
+                    && snapshot.input == (state.live.tab == 1)
+                {
+                    if snapshot.input {
+                        state.live.inputs = snapshot.devices;
+                        state.live.input_volume = snapshot.volume;
+                    } else {
+                        state.live.outputs = snapshot.devices;
+                        state.live.volume = snapshot.volume;
+                        state.live.balance = snapshot.balance;
+                    }
+                }
+            }
+            Message::AudioWritten(id, result) => {
+                let state = &mut self.state;
+                state.audio.done();
+                state.errors.retain(|(row, _)| *row != id);
+                if let Err(error) = result {
+                    state.errors.push((id, error));
+                }
+                if state.content_pane == PaneId::Sound {
+                    state.audio.read(state.live.tab == 1);
+                }
+            }
             Message::Select(i) => {
                 let rows: Vec<PaneId> = self.shown_groups().into_iter().flatten().collect();
                 if let Some(&pane) = rows.get(i) {
@@ -509,6 +541,8 @@ impl Shell {
                 let listening = self.state.meter_running();
                 if listening && now - self.state.refreshed < state::POLL {
                     self.state.refresh_meter();
+                } else if self.state.content_pane == PaneId::Sound {
+                    self.state.refresh_sound(now);
                 } else if self.state.level.is_none() {
                     let apps = |state: &state::State| {
                         crate::panes::notification_apps(&state.settings, &state.live)
@@ -748,6 +782,7 @@ impl Application for SettingsApp {
             rewatch_armed: false,
         };
         commands.extend(shell.arm_refresh());
+        commands.extend(shell.state.audio.command(&shell.state.services.session));
         (shell, commands)
     }
 
@@ -759,6 +794,7 @@ impl Application for SettingsApp {
         // a pane that polls is read again on a timer; the others wait for their change signals
         commands.extend(shell.arm_refresh());
         commands.extend(shell.arm_rewatch());
+        commands.extend(shell.state.audio.command(&shell.state.services.session));
         commands
     }
 

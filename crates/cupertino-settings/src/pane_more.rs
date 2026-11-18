@@ -8,7 +8,7 @@ use crate::controls::{Chart, Control, Value, MUTE_BELOW};
 use crate::live::{
     BatteryExtras, ChargePoint, Interface, KnownNetwork, Live, Monitor, Reading, Vpn, Wifi,
 };
-use crate::panes::{row, Backend, Call, ControlId, Effect, Row, Section};
+use crate::panes::{row, AudioChange, Backend, Call, ControlId, Effect, Row, Section};
 use crate::settings::{File, Settings};
 
 /// A control of the panes of this module.
@@ -890,19 +890,22 @@ pub fn change(more: More, value: Value, settings: &mut Settings, live: &Live) ->
         More::ChartSpan => vec![Effect::ChartSpan(index == 1)],
         More::Tab => vec![Effect::Tab(index)],
         More::InputDevice => match live.inputs.get(index) {
-            Some(input) => vec![Effect::Service(Call::SetInput(input.id))],
+            Some(input) => vec![Effect::Audio(AudioChange::SetInput(input.id))],
             None => Vec::new(),
         },
-        More::InputVolume => vec![Effect::Service(Call::SetInputVolume {
+        More::InputVolume => vec![Effect::Audio(AudioChange::SetInputVolume {
             level: fraction,
             muted: fraction < MUTE_BELOW,
         })],
         More::InputMute => {
             let level = live.input_volume.ready().map_or(0.0, |v| v.level);
-            vec![Effect::Service(Call::SetInputVolume { level, muted: on })]
+            vec![Effect::Audio(AudioChange::SetInputVolume {
+                level,
+                muted: on,
+            })]
         }
         More::InputLevel => Vec::new(),
-        More::Balance => vec![Effect::Service(Call::SetBalance(
+        More::Balance => vec![Effect::Audio(AudioChange::SetBalance(
             (fraction * 2.0 - 1.0).clamp(-1.0, 1.0),
         ))],
         More::Refresh(i) => {

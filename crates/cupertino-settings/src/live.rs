@@ -77,17 +77,17 @@ pub struct Mouse {
     pub stored: bool,
 }
 
-/// The output volume of the mixer's master.
+/// The level and mute state of a default audio device.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Volume {
     pub level: f64,
     pub muted: bool,
 }
 
-/// A sound output the system can play to (a PipeWire sink).
+/// A selectable audio device reported by Audio1.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Output {
-    /// The id `wpctl set-default` takes.
+    /// The id `Audio1.SetDefault` takes.
     pub id: u32,
     pub name: String,
     /// Whether applications play to it now.

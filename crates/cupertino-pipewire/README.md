@@ -31,5 +31,6 @@ PipeWire library is linked. Layer: `platform`.
   event mode, so readings are polled, off the UI thread.
 - `wpctl` prints two decimals, so a level reads back rounded to a hundredth.
 
-The Sound pane lists the sinks and sets the default one when there are two or more. The overlay, the control panel and the Sound pane use the default sink, and use the ALSA master (`cupertino-alsa`)
-when no PipeWire daemon answers.
+`cupertino-audiod` uses the sink and source controls for the Sound pane over `org.cupertino.Audio1`.
+The service, volume overlay and control panel use the default sink, with the ALSA playback master
+(`cupertino-alsa`) available when PipeWire does not answer.

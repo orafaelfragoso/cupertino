@@ -236,6 +236,8 @@ pub enum Effect {
     SetSystemAccessibility,
     /// A call on a live service.
     Service(Call),
+    /// A session Audio1 operation, queued without waiting for the bus.
+    Audio(AudioChange),
     /// Ask for a folder (`folder`) or a picture in the chooser.
     AskPicture { folder: bool },
     /// Ask for a resolution of the mouse `key` called `name` in a sheet.
@@ -269,17 +271,28 @@ pub enum Effect {
     Refuse(String),
 }
 
-/// A call on a live service.
+/// A change to the default audio devices.
 #[derive(Clone, Debug, PartialEq)]
-pub enum Call {
-    SetDoNotDisturb(bool),
-    SetDoNotDisturbFor(String),
+pub enum AudioChange {
     SetVolume {
         level: f64,
         muted: bool,
     },
     /// Make the PipeWire sink with this id the output applications play to.
     SetOutput(u32),
+    SetInput(u32),
+    SetInputVolume {
+        level: f64,
+        muted: bool,
+    },
+    SetBalance(f64),
+}
+
+/// A call on a live service.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Call {
+    SetDoNotDisturb(bool),
+    SetDoNotDisturbFor(String),
     SetBrightness(f64),
     /// Set the display on `connector` to `scale` panel pixels per point (an output configuration of the server).
     SetDisplayScale {
@@ -318,14 +331,6 @@ pub enum Call {
     },
     /// Turn the power-saving profile on or off.
     SetLowPower(bool),
-    /// Make the PipeWire source with this id the input applications record from.
-    SetInput(u32),
-    SetInputVolume {
-        level: f64,
-        muted: bool,
-    },
-    /// Set the output's balance, -1 (left) to 1 (right).
-    SetBalance(f64),
     SetKeyboardBacklight(f64),
     SetBluetoothPowered(bool),
     Pair(String),
@@ -3094,20 +3099,20 @@ pub fn change(id: ControlId, value: Value, settings: &mut Settings, live: &Live)
         ControlId::Volume => {
             let level = fraction_of(value);
             // a level below the mute threshold mutes; any other level unmutes
-            vec![Effect::Service(Call::SetVolume {
+            vec![Effect::Audio(AudioChange::SetVolume {
                 level,
                 muted: level < MUTE_BELOW,
             })]
         }
         ControlId::Mute => {
             let level = live.volume.ready().map_or(0.0, |v| v.level);
-            vec![Effect::Service(Call::SetVolume {
+            vec![Effect::Audio(AudioChange::SetVolume {
                 level,
                 muted: bool_of(value),
             })]
         }
         ControlId::Output => match live.outputs.get(index_of(value)) {
-            Some(output) => vec![Effect::Service(Call::SetOutput(output.id))],
+            Some(output) => vec![Effect::Audio(AudioChange::SetOutput(output.id))],
             None => Vec::new(),
         },
         ControlId::Brightness => vec![Effect::Service(Call::SetBrightness(fraction_of(value)))],

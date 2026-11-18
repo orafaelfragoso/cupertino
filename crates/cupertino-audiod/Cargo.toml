@@ -1,0 +1,21 @@
+[package]
+name = "cupertino-audiod"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Session audio service for the default devices, volume, mute and stereo balance"
+
+[package.metadata.cupertino]
+layer = "services"
+
+[dependencies]
+cupertino-alsa = { path = "../cupertino-alsa" }
+cupertino-pipewire = { path = "../cupertino-pipewire" }
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[[example]]
+name = "audio-backend-stand-in"
+path = "../cupertino-pipewire/examples/wpctl-stand-in.rs"

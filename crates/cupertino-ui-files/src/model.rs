@@ -436,13 +436,7 @@ impl DirectoryModel {
                 self.asked.clear();
                 out.push(ModelDelta::OpenFailed { kind, error });
             }
-            Msg::Batch(mut b) => {
-                // a change read during the enumeration may have listed an item already
-                if !self.entries.is_empty() {
-                    let listed: std::collections::HashSet<&str> =
-                        self.entries.iter().map(|e| e.name.as_str()).collect();
-                    b.retain(|e| !listed.contains(e.name.as_str()));
-                }
+            Msg::Batch(b) => {
                 let old = std::mem::take(&mut self.entries);
                 self.entries = if old.is_empty() {
                     b

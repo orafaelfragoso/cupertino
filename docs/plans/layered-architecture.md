@@ -1313,3 +1313,6 @@ One line per change to a decision or approval of a design: date, number, what, w
   session's kept models; a program takes a model's watch before its first work. `new_folder_with` stops at the first
   failure, as it says. The transfer tests use `/dev/shm` as a second file system.
 - 2026-11-18: lead, W4.close: `render` and `ui` join `ENFORCED`; neither had a remaining-work line.
+- 2026-11-18: lead, review of W4.12, fixed in 0b0494e58: a window that takes a kept model is woken, so a folder whose
+  work ended first is shown; a listing's panic fails its model instead of Files; a kept model whose work runs is not
+  replaced; a watch whose queue overflowed lists its folder again; no name set is built per batch on the UI thread.

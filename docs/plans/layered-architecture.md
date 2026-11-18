@@ -16,9 +16,9 @@ Updated by the lead at every merge.
 | | |
 |---|---|
 | Current wave | 4 |
-| Running tasks | W4.6 step 5, the W4.8 design |
+| Running tasks | W4.8, the review of W4.6 step 5, the plan edits of the W4.8 design |
 | Enforced layers | foundation, system, graphics, models, protocol, transport, testing (126 remaining-work lines) |
-| Waiting on the owner | the W4.8 design, when written |
+| Waiting on the owner | nothing |
 | Last closed wave | 3 |
 
 ## Contents
@@ -1208,3 +1208,10 @@ One line per change to a decision or approval of a design: date, number, what, w
   take its session and window state, its operations need its core (`Entry`, places, udisks) and start threads, the
   portal's chooser draws rows of its own, and the two `places` copies differ. W4.8 needs a design approved like W4.7
   step 1 before code; an architect writes it in `crates/cupertino-ui-controls/README.md`.
+- 2026-11-18: owner approves the W4.8 design, "File views (proposal)" in `crates/cupertino-ui-controls/README.md`
+  (written by one architect, reviewed by another, revised), with its nine defaults: the views are widgets generic over
+  the program's message in a `ui` crate of their own, `cupertino-ui-files`; W4.8 moves and changes no behaviour; W4.12
+  holds every behaviour change (places, listings as work, thumbnails, notices, transfers in slices); four folders on
+  mounts that do not answer stop Files' I/O until one answers, and Files never opens the same one twice. It amends the
+  W4.7 API: Kit gains `kit::files` and loses `filepicker::places`. A folder Files cannot read keeps today's behaviour,
+  the window stays where it is and posts the notice.

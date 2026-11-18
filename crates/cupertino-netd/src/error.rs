@@ -11,7 +11,7 @@ use crate::dhcp::message::DecodeError;
 #[derive(Debug)]
 pub enum Error {
     /// Netlink, rfkill or the packet socket failed.
-    Netlink(cupertino_netlink::Error),
+    Netlink(crate::netlink::Error),
     /// Reading or writing a file failed.
     Io { path: PathBuf, source: io::Error },
     /// A system call failed; `call` names it.
@@ -106,8 +106,8 @@ pub fn start_failed(step: &'static str, error: &Error) {
     .emit();
 }
 
-impl From<cupertino_netlink::Error> for Error {
-    fn from(source: cupertino_netlink::Error) -> Self {
+impl From<crate::netlink::Error> for Error {
+    fn from(source: crate::netlink::Error) -> Self {
         Self::Netlink(source)
     }
 }

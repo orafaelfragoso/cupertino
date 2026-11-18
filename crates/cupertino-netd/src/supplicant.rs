@@ -4,7 +4,7 @@
 
 use std::os::fd::BorrowedFd;
 
-use cupertino_netlink::{Security, Ssid};
+use crate::netlink::{Security, Ssid};
 
 use crate::error::Result;
 

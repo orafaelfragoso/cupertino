@@ -14,10 +14,10 @@
 use std::collections::BTreeMap;
 use std::net::Ipv4Addr;
 
-use cupertino_netlink::nl80211::ScanResult;
-use cupertino_netlink::rfkill::WlanSwitches;
-use cupertino_netlink::rtnetlink::{Link, LinkClass};
-use cupertino_netlink::{MacAddr, Security, Ssid};
+use crate::netlink::nl80211::ScanResult;
+use crate::netlink::rfkill::WlanSwitches;
+use crate::netlink::rtnetlink::{Link, LinkClass};
+use crate::netlink::{MacAddr, Security, Ssid};
 
 use crate::dhcp::client::Lease;
 use crate::supplicant::{ConnectFailure, KnownNetwork, SupplicantEvent};

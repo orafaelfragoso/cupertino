@@ -3,7 +3,7 @@
 use std::net::Ipv4Addr;
 use std::os::fd::{AsFd, BorrowedFd};
 
-use cupertino_netlink::packet::{build_udp_packet, parse_udp_packet, PacketSocket, UdpDatagram};
+use crate::netlink::packet::{build_udp_packet, parse_udp_packet, PacketSocket, UdpDatagram};
 
 use super::message::{CLIENT_PORT, SERVER_PORT};
 use crate::error::Error;

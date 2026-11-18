@@ -1,0 +1,81 @@
+//! The two Bluetooth socket address layouts the kernel uAPI defines and rustix does not wrap.
+//!
+//! rustix has no Bluetooth address types, but it lets a crate implement [`SocketAddrArg`] for its
+//! own. That trait is `unsafe` to implement because the kernel reads the bytes; each impl below
+//! hands rustix a pointer to a stack array of exactly the size and layout of the C struct, so this
+//! file holds the only `unsafe` in the `bluetooth` module.
+#![allow(unsafe_code)]
+
+use rustix::net::addr::{SocketAddrArg, SocketAddrLen, SocketAddrOpaque};
+
+use super::address::{Address, AddressType};
+
+/// `AF_BLUETOOTH` (`include/linux/socket.h`).
+pub(super) const AF_BLUETOOTH: u16 = 31;
+
+/// The controller number that means "no controller" in `struct sockaddr_hci` (`HCI_DEV_NONE`,
+/// `include/net/bluetooth/hci_sock.h`).
+const HCI_DEV_NONE: u16 = 0xFFFF;
+
+/// `HCI_CHANNEL_CONTROL`, the management channel (`include/net/bluetooth/hci_sock.h`).
+const HCI_CHANNEL_CONTROL: u16 = 3;
+
+/// The address of the management control channel: `struct sockaddr_hci` with `hci_dev` =
+/// `HCI_DEV_NONE` and `hci_channel` = `HCI_CHANNEL_CONTROL`.
+pub(super) struct SocketAddrControl;
+
+impl SocketAddrControl {
+    /// The 6 bytes of `struct sockaddr_hci { u16 family; u16 dev; u16 channel; }`.
+    pub(super) fn to_bytes(&self) -> [u8; 6] {
+        let mut out = [0u8; 6];
+        out[0..2].copy_from_slice(&AF_BLUETOOTH.to_ne_bytes());
+        out[2..4].copy_from_slice(&HCI_DEV_NONE.to_ne_bytes());
+        out[4..6].copy_from_slice(&HCI_CHANNEL_CONTROL.to_ne_bytes());
+        out
+    }
+}
+
+// SAFETY: `with_sockaddr` passes a pointer to `bytes`, which is live for the call, with its exact
+// length, and the bytes are `struct sockaddr_hci`.
+unsafe impl SocketAddrArg for SocketAddrControl {
+    unsafe fn with_sockaddr<R>(
+        &self,
+        f: impl FnOnce(*const SocketAddrOpaque, SocketAddrLen) -> R,
+    ) -> R {
+        let bytes = self.to_bytes();
+        f(bytes.as_ptr().cast(), bytes.len() as SocketAddrLen)
+    }
+}
+
+/// An L2CAP socket address: `struct sockaddr_l2` (`include/net/bluetooth/l2cap.h`).
+pub(super) struct SocketAddrL2 {
+    pub(super) psm: u16,
+    pub(super) address: Address,
+    pub(super) cid: u16,
+    pub(super) kind: AddressType,
+}
+
+impl SocketAddrL2 {
+    /// The 14 bytes of `struct sockaddr_l2 { u16 family; le16 psm; bdaddr_t bdaddr; le16 cid; u8
+    /// bdaddr_type; }` including its trailing pad byte. `bdaddr_t` is the address in wire order.
+    pub(super) fn to_bytes(&self) -> [u8; 14] {
+        let mut out = [0u8; 14];
+        out[0..2].copy_from_slice(&AF_BLUETOOTH.to_ne_bytes());
+        out[2..4].copy_from_slice(&self.psm.to_le_bytes());
+        out[4..10].copy_from_slice(&self.address.to_wire());
+        out[10..12].copy_from_slice(&self.cid.to_le_bytes());
+        out[12] = self.kind.to_wire();
+        out
+    }
+}
+
+// SAFETY: as for `SocketAddrControl`; the bytes are `struct sockaddr_l2`.
+unsafe impl SocketAddrArg for SocketAddrL2 {
+    unsafe fn with_sockaddr<R>(
+        &self,
+        f: impl FnOnce(*const SocketAddrOpaque, SocketAddrLen) -> R,
+    ) -> R {
+        let bytes = self.to_bytes();
+        f(bytes.as_ptr().cast(), bytes.len() as SocketAddrLen)
+    }
+}

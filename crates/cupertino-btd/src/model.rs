@@ -13,8 +13,8 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use cupertino_bluetooth::reply::{parse_connections, parse_device, parse_settings, ControllerInfo};
-use cupertino_bluetooth::{
+use crate::bluetooth::reply::{parse_connections, parse_device, parse_settings, ControllerInfo};
+use crate::bluetooth::{
     Address, AddressTypes, ClassOfDevice, Command, ControllerIndex, DeviceId, Event, IoCapability,
     Opcode, Packet, Settings, Status,
 };
@@ -1095,7 +1095,7 @@ impl Model {
                 "reading the controller list failed: {status}"
             )));
         }
-        match cupertino_bluetooth::reply::parse_index_list(data) {
+        match crate::bluetooth::reply::parse_index_list(data) {
             Ok(indexes) => {
                 for index in indexes
                     .into_iter()

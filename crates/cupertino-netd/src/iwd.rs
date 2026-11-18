@@ -23,7 +23,7 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 
-use cupertino_netlink::Ssid;
+use crate::netlink::Ssid;
 use cupertino_peer::signal::{from_owner, Owner};
 use rustix::event::{eventfd, EventfdFlags};
 use rustix::io::{read, write, Errno};

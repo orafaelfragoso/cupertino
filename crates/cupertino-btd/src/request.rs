@@ -3,7 +3,7 @@
 
 use std::fmt;
 
-use cupertino_bluetooth::{Address, Command, ControllerIndex, DeviceId, Status};
+use crate::bluetooth::{Address, Command, ControllerIndex, DeviceId, Status};
 
 use crate::device::{DeviceInfo, DeviceRef};
 use crate::keys::KeySet;

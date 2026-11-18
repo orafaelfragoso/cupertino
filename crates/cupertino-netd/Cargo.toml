@@ -16,7 +16,6 @@ app = ["dbus"]
 [dependencies]
 cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events" }
 async-channel = { version = "2", optional = true }
-cupertino-netlink = { path = "../cupertino-netlink" }
 cupertino-peer = { path = "../cupertino-peer", optional = true }
 cupertino-seat = { path = "../cupertino-seat", optional = true }
 rustix = { version = "1", features = ["event", "fs", "net", "rand"] }

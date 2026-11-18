@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use cupertino_bluetooth::{
+use crate::bluetooth::{
     Address, Command, ControlSocket, ControllerIndex, DeviceId, Drained, Error, Link, Result,
     OPEN_CALL,
 };

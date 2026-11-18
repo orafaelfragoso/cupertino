@@ -1,6 +1,7 @@
 //! The Bluetooth daemon, replacing the BlueZ daemon for what the shell needs: the adapter's power,
 //! discovery, the list of nearby and paired devices, pairing, connecting and forgetting.
 //!
+//! - [`bluetooth`]: the kernel management interface and L2CAP links.
 //! - [`device`]: a remote device, its icon class and the merge of discovery reports.
 //! - [`pairing`]: the pairing state machine.
 //! - [`model`]: the adapters and devices as a pure model that turns kernel events and requests
@@ -11,6 +12,7 @@
 //! - `auth`, `daemon` and `interfaces` (feature `dbus`): who may write, the loop that runs the
 //!   model, and `org.cupertino.Bluetooth1` on the bus.
 
+pub mod bluetooth;
 pub mod device;
 pub mod error;
 pub mod keys;

@@ -1,5 +1,6 @@
 //! The network daemon for the desktop, replacing NetworkManager for what apps and the shell use.
 //!
+//! - [`netlink`]: the kernel network interfaces and their message codecs.
 //! - [`model`]: pure state of devices, connections and the scan list.
 //! - [`dhcp`]: the DHCPv4 codec, the client state machine and its packet-socket transport.
 //! - [`dns`]: the resolver file written from DHCP.
@@ -20,6 +21,7 @@ pub mod engine;
 pub mod error;
 pub mod host;
 pub mod model;
+pub mod netlink;
 pub mod nm;
 pub mod snapshot;
 pub mod supplicant;

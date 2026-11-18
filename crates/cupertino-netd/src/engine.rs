@@ -12,12 +12,12 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::os::fd::BorrowedFd;
 use std::path::PathBuf;
 
-use cupertino_netlink::nl80211::{Event as WirelessEvent, ScanDump};
-use cupertino_netlink::rfkill::{Event as RfkillEvent, WlanSwitches};
-use cupertino_netlink::rtnetlink::{
+use crate::netlink::nl80211::{Event as WirelessEvent, ScanDump};
+use crate::netlink::rfkill::{Event as RfkillEvent, WlanSwitches};
+use crate::netlink::rtnetlink::{
     AddressChange, Family, Link, RouteChange, RouteEvent, PROTOCOL_DHCP,
 };
-use cupertino_netlink::{Security, Ssid};
+use crate::netlink::{Security, Ssid};
 
 use crate::dhcp::client::{Action, Client, ClientConfig, Timestamp};
 use crate::dhcp::message::Message;
@@ -577,7 +577,7 @@ impl<H: Host, S: Supplicant> Engine<H, S> {
             Ok(dump) => {
                 // the access points that did decode still count
                 self.errors.extend(dump.errors.into_iter().map(|source| {
-                    Error::Netlink(cupertino_netlink::Error::Parse {
+                    Error::Netlink(crate::netlink::Error::Parse {
                         origin: "scan results",
                         source,
                     })

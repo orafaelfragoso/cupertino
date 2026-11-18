@@ -11,8 +11,8 @@
 
 use std::sync::Arc;
 
+use crate::netlink::Security;
 use cupertino_diagnostic_events::{self as diag, AddressKind, Severity, Value};
-use cupertino_netlink::Security;
 use zbus::fdo;
 use zbus::message::Header;
 use zbus::object_server::SignalEmitter;

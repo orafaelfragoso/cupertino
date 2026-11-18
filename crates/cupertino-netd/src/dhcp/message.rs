@@ -10,7 +10,7 @@
 use std::fmt;
 use std::net::Ipv4Addr;
 
-use cupertino_netlink::MacAddr;
+use crate::netlink::MacAddr;
 
 pub const SERVER_PORT: u16 = 67;
 pub const CLIENT_PORT: u16 = 68;

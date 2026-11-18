@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use cupertino_bluetooth::{Address, AddressType, ClassOfDevice, DeviceId, Eir, MajorClass, Uuid};
+use crate::bluetooth::{Address, AddressType, ClassOfDevice, DeviceId, Eir, MajorClass, Uuid};
 
 /// What a device is, for the icon the shell draws. The classification reads the GAP appearance
 /// first (low energy devices send it) and the class of device second. Both tables are as designed:
@@ -162,7 +162,7 @@ pub struct DeviceRef {
 }
 
 impl std::str::FromStr for DeviceRef {
-    type Err = cupertino_bluetooth::ParseError;
+    type Err = crate::bluetooth::ParseError;
 
     /// `AA:BB:CC:DD:EE:FF` or `AA:BB:CC:DD:EE:FF/bredr` (`le-public`, `le-random`).
     fn from_str(text: &str) -> Result<Self, Self::Err> {

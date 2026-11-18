@@ -9,7 +9,7 @@ use crate::keys::KeyStoreError;
 #[derive(Debug)]
 pub enum Error {
     /// The management socket failed.
-    Bluetooth(cupertino_bluetooth::Error),
+    Bluetooth(crate::bluetooth::Error),
     /// The stored keys could not be read or written.
     Keys(KeyStoreError),
     /// A D-Bus call or the bus connection failed; `what` names the step.
@@ -100,8 +100,8 @@ impl std::error::Error for Error {
     }
 }
 
-impl From<cupertino_bluetooth::Error> for Error {
-    fn from(source: cupertino_bluetooth::Error) -> Self {
+impl From<crate::bluetooth::Error> for Error {
+    fn from(source: crate::bluetooth::Error) -> Self {
         Self::Bluetooth(source)
     }
 }

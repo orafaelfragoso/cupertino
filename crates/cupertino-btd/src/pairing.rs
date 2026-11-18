@@ -12,7 +12,7 @@
 
 use std::time::Duration;
 
-use cupertino_bluetooth::{Command, DeviceId, Status};
+use crate::bluetooth::{Command, DeviceId, Status};
 
 /// How long a pairing may take before it is cancelled. approximate: the user has to read a code
 /// off one screen and confirm it on another; the specification bounds only the link-layer steps

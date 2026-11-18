@@ -32,7 +32,7 @@ use std::io::{self, Write as _};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
-use cupertino_bluetooth::{
+use crate::bluetooth::{
     Address, AddressType, DeviceId, KeyValue, LinkKey, LinkKeyType, LongTermKey, LongTermKeyType,
 };
 

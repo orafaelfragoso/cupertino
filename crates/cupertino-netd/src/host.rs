@@ -2,9 +2,9 @@
 
 use std::path::Path;
 
-use cupertino_netlink::nl80211::{is_unsupported, Nl80211, ScanDump};
-use cupertino_netlink::rfkill::{Kind, Rfkill};
-use cupertino_netlink::rtnetlink::{AddressChange, Link, RouteChange, RouteSocket};
+use crate::netlink::nl80211::{is_unsupported, Nl80211, ScanDump};
+use crate::netlink::rfkill::{Kind, Rfkill};
+use crate::netlink::rtnetlink::{AddressChange, Link, RouteChange, RouteSocket};
 use rustix::io::Errno;
 use rustix::rand::{getrandom, GetRandomFlags};
 
@@ -35,12 +35,12 @@ impl SystemHost {
         };
         let rfkill = match Rfkill::open(rfkill_path) {
             Ok(rfkill) => Ok(rfkill),
-            Err(cupertino_netlink::Error::Device {
+            Err(crate::netlink::Error::Device {
                 source: Errno::NOENT,
                 ..
             }) => Err(Errno::NOENT),
             Err(
-                error @ cupertino_netlink::Error::Device {
+                error @ crate::netlink::Error::Device {
                     source: Errno::ACCESS,
                     ..
                 },
@@ -108,8 +108,8 @@ impl Host for SystemHost {
     fn set_wireless_blocked(&mut self, blocked: bool) -> Result<()> {
         match &self.rfkill {
             Ok(rfkill) => Ok(rfkill.set_soft_block(Kind::Wlan, blocked)?),
-            Err(source) => Err(Error::Netlink(cupertino_netlink::Error::Device {
-                path: cupertino_netlink::rfkill::DEVICE.into(),
+            Err(source) => Err(Error::Netlink(crate::netlink::Error::Device {
+                path: crate::netlink::rfkill::DEVICE.into(),
                 call: "open",
                 source: *source,
             })),

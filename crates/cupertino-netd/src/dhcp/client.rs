@@ -13,7 +13,7 @@
 use std::net::Ipv4Addr;
 use std::time::Duration;
 
-use cupertino_netlink::MacAddr;
+use crate::netlink::MacAddr;
 
 use super::message::{Message, MessageType};
 

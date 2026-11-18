@@ -188,6 +188,34 @@ fn works_run_one_at_a_time_in_the_order_asked() {
 }
 
 #[test]
+fn a_watch_that_lost_changes_lists_the_folder_again() {
+    // the most events the kernel queues for a watch: the ones after are lost
+    let queued: usize = std::fs::read_to_string("/proc/sys/fs/inotify/max_queued_events")
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    for name in ["a", "b"] {
+        std::fs::write(dir.path().join(name), b"").unwrap();
+    }
+    let (mut model, woken) = model(dir.path(), options(true, 256));
+    let watch = model.take_watch().expect("a watch");
+    run_all(&mut model);
+    assert_eq!(names(&model), ["a", "b"]);
+
+    // while the watch is not followed, two items whose permissions change in turn fill its queue
+    let turns = [("a", 0o600), ("b", 0o600), ("a", 0o644), ("b", 0o644)];
+    for (name, mode) in turns.into_iter().cycle().take(queued + 2) {
+        std::fs::set_permissions(dir.path().join(name), std::fs::Permissions::from_mode(mode))
+            .unwrap();
+    }
+    std::fs::write(dir.path().join("late"), b"").unwrap();
+    let _ended = follow(watch);
+    until(&mut model, &woken, |m| names(m) == ["a", "b", "late"]);
+}
+
+#[test]
 fn a_listing_whose_work_panics_leaves_the_model_failed() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("item"), b"").unwrap();

@@ -9,8 +9,9 @@
 //!
 //! The first work checks that the folder is one, registers the watch, opens the folder and lists it in batches
 //! (`ModelOptions::batch_size`, 256 by default: approximate, the design batch size is not known); a later work reads
-//! the items a change named, or lists a virtual folder again. Ordering is the one of [`crate::sort`]; hidden files
-//! (leading dot) are omitted unless `show_hidden` is set (default off, preference default of the design).
+//! the items a change named, or lists the folder again: a virtual folder that changed, or any folder whose watch lost
+//! changes. Ordering is the one of [`crate::sort`]; hidden files (leading dot) are omitted unless `show_hidden` is set
+//! (default off, preference default of the design).
 
 use crate::entry::Entry;
 use crate::sort::{compare, insertion_index, sort_entries, SortSpec};
@@ -122,7 +123,7 @@ enum Msg {
     Opened,
     OpenFailed(io::ErrorKind, String),
     Batch(Vec<Entry>),
-    /// The whole listing again (a virtual folder listed again).
+    /// The whole listing again (a folder listed again).
     Replace(Vec<Entry>),
     Done,
     Error(String),
@@ -130,10 +131,12 @@ enum Msg {
     Read(Vec<(String, Option<Entry>)>),
     /// The folder itself is gone.
     Gone,
-    /// The watch heard of changes to `paths`, and to the watched folders `itself`.
+    /// The watch heard of changes to `paths`, and to the watched folders `itself`; `overflowed` when the kernel's
+    /// queue overflowed and changes were lost.
     Changed {
         paths: Vec<PathBuf>,
         itself: Vec<PathBuf>,
+        overflowed: bool,
     },
 }
 
@@ -195,7 +198,7 @@ enum Job {
         names: BTreeSet<String>,
         itself: bool,
     },
-    /// List a virtual folder again.
+    /// List the folder again.
     Relist,
 }
 
@@ -323,8 +326,8 @@ impl DirectoryModel {
     /// The model's next blocking work; `None` while one of its works is out, and when none waits. A model runs one
     /// work at a time, in the order asked: a change is applied on top of the one before it. The first work checks
     /// that the folder is one, registers its watch, opens it and then lists it in batches (for Applications it walks
-    /// the application folders and registers each); a later one reads the items a change named, or lists a virtual
-    /// folder again.
+    /// the application folders and registers each); a later one reads the items a change named, or lists the folder
+    /// again (a virtual folder that changed, or any folder whose watch lost changes).
     pub fn take_work(&mut self) -> Option<ModelWork> {
         let mut state = self.shared.lock();
         if state.working {
@@ -473,15 +476,22 @@ impl DirectoryModel {
                 }
             }
             Msg::Gone => out.push(ModelDelta::DirectoryGone),
-            Msg::Changed { paths, itself } => self.changed(&paths, !itself.is_empty()),
+            Msg::Changed {
+                paths,
+                itself,
+                overflowed,
+            } => self.changed(&paths, !itself.is_empty(), overflowed),
         }
     }
 
     /// The watch heard of changes to `paths`, and to a watched folder itself when `itself`: the work that reads them
-    /// is asked for.
-    fn changed(&mut self, paths: &[PathBuf], itself: bool) {
+    /// is asked for. When `overflowed`, changes were lost, and the folder is listed again.
+    fn changed(&mut self, paths: &[PathBuf], itself: bool, overflowed: bool) {
         if self.opened == Some(false) {
             return;
+        }
+        if overflowed {
+            return self.relist();
         }
         match &self.source {
             Source::Folder => {
@@ -515,7 +525,7 @@ impl DirectoryModel {
         }
     }
 
-    /// Ask for the virtual folder to be listed again, once for every change heard before that work is taken.
+    /// Ask for the folder to be listed again, once for every change heard before that work is taken.
     fn relist(&mut self) {
         if !matches!(self.asked.back(), Some(Job::Relist)) {
             self.asked.push_back(Job::Relist);
@@ -748,7 +758,13 @@ impl ModelWork {
 
     fn relist(&self) {
         match &self.source {
-            Source::Folder => {}
+            Source::Folder => match enumerate_blocking(&self.dir, &self.opts) {
+                Ok(entries) => self.shared.send(Msg::Replace(entries)),
+                Err(_) if !self.dir.is_dir() => self.shared.send(Msg::Gone),
+                Err(e) => self
+                    .shared
+                    .send(Msg::Error(format!("{}: {e}", self.dir.display()))),
+            },
             Source::Recents(xbel) => match recents::recent_entries(xbel) {
                 Ok(entries) => self.shared.send(Msg::Replace(self.typed(entries))),
                 Err(e) => self
@@ -847,7 +863,7 @@ impl ModelWatch {
 
 /// Hand every event the kernel has for the watch to the model as one change, and wake it.
 fn take_events(inotify: &mut Inotify, buffer: &mut [u8], shared: &Shared) -> io::Result<()> {
-    let (mut paths, mut itself) = (Vec::new(), Vec::new());
+    let (mut paths, mut itself, mut overflowed) = (Vec::new(), Vec::new(), false);
     loop {
         let events = match inotify.read_events(buffer) {
             Ok(events) => events,
@@ -857,6 +873,11 @@ fn take_events(inotify: &mut Inotify, buffer: &mut [u8], shared: &Shared) -> io:
         };
         let mut state = shared.lock();
         for event in events {
+            if event.mask.contains(EventMask::Q_OVERFLOW) {
+                // the kernel's queue was full: the events after it are lost, whichever folder they were of
+                overflowed = true;
+                continue;
+            }
             let id = event.wd.get_watch_descriptor_id();
             if event.mask.contains(EventMask::IGNORED) {
                 // the folder went, and its watch with it
@@ -872,8 +893,12 @@ fn take_events(inotify: &mut Inotify, buffer: &mut [u8], shared: &Shared) -> io:
             }
         }
     }
-    if !paths.is_empty() || !itself.is_empty() {
-        shared.send(Msg::Changed { paths, itself });
+    if overflowed || !paths.is_empty() || !itself.is_empty() {
+        shared.send(Msg::Changed {
+            paths,
+            itself,
+            overflowed,
+        });
     }
     Ok(())
 }

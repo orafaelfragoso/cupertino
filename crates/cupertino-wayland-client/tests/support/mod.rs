@@ -79,6 +79,9 @@ pub struct Offer {
     pub scaling: bool,
     /// Whether `wl_subcompositor` is offered.
     pub subsurfaces: bool,
+    /// The whole scale the server prefers for every surface it makes (`wl_surface.preferred_buffer_scale`); `None`
+    /// prefers none.
+    pub scale: Option<i32>,
 }
 
 impl Offer {
@@ -92,6 +95,7 @@ impl Offer {
         releases: false,
         scaling: false,
         subsurfaces: false,
+        scale: None,
     };
 
     /// Only the standard protocols.
@@ -104,6 +108,7 @@ impl Offer {
         releases: false,
         scaling: false,
         subsurfaces: false,
+        scale: None,
     };
 }
 
@@ -183,6 +188,8 @@ pub struct Server {
     serial: u32,
     /// Whether a buffer replaced on its surface is released ([`Offer::releases`]).
     releases: bool,
+    /// The scale preferred for every surface ([`Offer::scale`]).
+    scale: Option<i32>,
     /// The buffer each surface attached since its last commit, and the one it shows.
     pending: HashMap<ObjectId, Option<WlBuffer>>,
     shown: HashMap<ObjectId, WlBuffer>,
@@ -253,6 +260,7 @@ impl Harness {
         let (client_end, server_end) = UnixStream::pair().unwrap();
         let server = Server {
             releases: offer.releases,
+            scale: offer.scale,
             ..Server::default()
         };
         let requests = server.requests.clone();
@@ -611,7 +619,7 @@ impl Dispatch<WlSurface, ()> for Server {
 
 impl Dispatch<WlCompositor, ()> for Server {
     fn request(
-        _: &mut Server,
+        server: &mut Server,
         _: &Client,
         _: &WlCompositor,
         request: wl_compositor::Request,
@@ -621,7 +629,10 @@ impl Dispatch<WlCompositor, ()> for Server {
     ) {
         match request {
             wl_compositor::Request::CreateSurface { id } => {
-                init.init(id, ());
+                let surface = init.init(id, ());
+                if let Some(scale) = server.scale {
+                    surface.preferred_buffer_scale(scale);
+                }
             }
             wl_compositor::Request::CreateRegion { id } => {
                 init.init(id, ());

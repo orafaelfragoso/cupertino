@@ -21,9 +21,9 @@ use std::time::{Duration, Instant};
 use cupertino_geometry::{Rect, Size};
 use cupertino_keyboard::modifiers::Profile;
 use cupertino_ui_core::platform::{
-    DecorationMode, LayerChange, LayerList, LayerProperty, PlatformEvent, RaisedChange,
-    RendererKind, SharedRenderer, Shown, Submission, Submitted, SubmittedLayer, SurfaceLayerLook,
-    WindowEvent, WindowRequest, WindowSpec, WindowSystem,
+    surface_layer_size, DecorationMode, LayerChange, LayerList, LayerProperty, PlatformEvent,
+    RaisedChange, RendererKind, SharedRenderer, Shown, Submission, Submitted, SubmittedLayer,
+    SurfaceLayerLook, WindowEvent, WindowRequest, WindowSpec, WindowSystem,
 };
 use cupertino_ui_render::gpu::GpuConfig;
 use cupertino_ui_render::{
@@ -157,6 +157,7 @@ fn submission(
 ) -> Submission {
     let px = |v: f64| (v * scale).round() as u32;
     let surface_layers = layer.map(|renderer| {
+        let (width, height) = surface_layer_size(LAYER);
         vec![SubmittedLayer {
             key: LAYER_KEY,
             rect: LAYER,
@@ -164,8 +165,8 @@ fn submission(
             layer: Some(LayerList {
                 renderer: Arc::clone(renderer),
                 list: Arc::new(red_list()),
-                width: px(LAYER.width()),
-                height: px(LAYER.height()),
+                width: px(f64::from(width)),
+                height: px(f64::from(height)),
                 damage: DamageRegion::Full,
             }),
         }]

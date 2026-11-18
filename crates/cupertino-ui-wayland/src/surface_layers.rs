@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 
 use cupertino_geometry::Rect;
 use cupertino_ui_core::platform::{
-    LayerChange, LayerProperty, PlatformError, SurfaceLayerLook, WindowId,
+    surface_layer_size, LayerChange, LayerProperty, PlatformError, SurfaceLayerLook, WindowId,
 };
 use cupertino_wayland_client::app::{AppEvent, Layer, LayerId, LayerProperty as Wire, Layers};
 use cupertino_wayland_client::{Connection, ExternalRole, SurfaceId};
@@ -110,10 +110,7 @@ pub(crate) struct Shown {
 impl Shown {
     /// The layer's size in whole points, as its buffers are drawn at.
     pub(crate) fn size(&self) -> (u32, u32) {
-        (
-            self.rect.width().round().max(1.0) as u32,
-            self.rect.height().round().max(1.0) as u32,
-        )
+        surface_layer_size(self.rect)
     }
 }
 

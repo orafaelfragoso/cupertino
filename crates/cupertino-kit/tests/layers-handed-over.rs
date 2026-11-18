@@ -27,6 +27,7 @@ use cupertino_kit::theme::Color;
 use cupertino_kit::Instance;
 use cupertino_ui_render::{CpuFrame, MemoryTarget, PixelRect, RenderError, RenderFrameId};
 use cupertino_ui_wayland::WaylandWindowSystem;
+use std::cell::Cell;
 use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::ThreadId;
@@ -38,8 +39,14 @@ const LAYER_KEY: u64 = 7;
 /// The side of each square, in points.
 const SIDE: f64 = 24.0;
 
-/// A square of one colour: raised, in a surface layer of its own, or neither.
+thread_local! {
+    /// The side of the square in the surface layer, in points, on this thread's runtime.
+    static LAYER_SIDE: Cell<f64> = const { Cell::new(SIDE) };
+}
+
+/// A square of one colour, `side` points large: raised, in a surface layer of its own, or neither.
 struct Square {
+    side: f64,
     raised: bool,
     layer: Option<u64>,
     color: Color,
@@ -50,8 +57,8 @@ impl<M: 'static> Widget<M> for Square {
 
     fn layout(&self) -> LayoutSpec {
         LayoutSpec {
-            width: SizeSpec::Fixed(SIDE),
-            height: SizeSpec::Fixed(SIDE),
+            width: SizeSpec::Fixed(self.side),
+            height: SizeSpec::Fixed(self.side),
             ..LayoutSpec::new(ContainerKind::Leaf)
         }
     }
@@ -64,7 +71,7 @@ impl<M: 'static> Widget<M> for Square {
 
     fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
         Measured {
-            size: Size::new(SIDE, SIDE),
+            size: Size::new(self.side, self.side),
             baseline: None,
         }
     }
@@ -75,7 +82,7 @@ impl<M: 'static> Widget<M> for Square {
 
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
         cx.push(PaintOp::Fill {
-            shape: Shape::Rect(Rect::new(0.0, 0.0, SIDE, SIDE)),
+            shape: Shape::Rect(Rect::new(0.0, 0.0, self.side, self.side)),
             paint: Paint::Solid(self.color),
         });
     }
@@ -110,8 +117,9 @@ impl Application for Layered {
     }
 
     fn view(_: &()) -> Vec<Window<()>> {
-        let square = |raised, layer, color| {
+        let square = |raised, layer: Option<u64>, color| {
             Element::new(Square {
+                side: layer.map_or(SIDE, |_| LAYER_SIDE.get()),
                 raised,
                 layer,
                 color,
@@ -193,15 +201,18 @@ fn layered(
     Runtime::new(system, options)
 }
 
+/// What a server needs to offer surface layers, raised layers and shared memory in the renderer's byte order.
+const LAYERING: wire::Offer = wire::Offer {
+    layers: Some(6),
+    app_effects: Some(21),
+    releases: true,
+    subsurfaces: true,
+    ..wire::Offer::NONE
+};
+
 /// A server that offers surface layers, raised layers and shared memory in the renderer's byte order.
 fn layering_server() -> (wire::Harness, cupertino_wayland_client::Connection) {
-    wire::Harness::start(wire::Offer {
-        layers: Some(6),
-        app_effects: Some(21),
-        releases: true,
-        subsurfaces: true,
-        ..wire::Offer::NONE
-    })
+    wire::Harness::start(LAYERING)
 }
 
 impl UiRenderer for Noted {
@@ -268,6 +279,24 @@ fn a_raised_layer_and_a_surface_layer_commit_before_their_window_in_its_hand_ove
     assert!(
         threads.iter().all(|&t| t != ui),
         "every frame was drawn away from the UI thread: {threads:?}"
+    );
+}
+
+#[test]
+fn a_surface_layer_of_a_fractional_size_is_drawn_at_the_size_its_buffers_are() {
+    // at scale 2 a layer 24.4 points large is drawn at 24 whole points, as its surface's buffers are
+    LAYER_SIDE.set(24.4);
+    let (server, conn) = wire::Harness::start(wire::Offer {
+        scale: Some(2),
+        ..LAYERING
+    });
+    let threads = Arc::new(Mutex::new(Vec::new()));
+    let mut runtime = layered(conn, &threads, false, true);
+    commits_reach(&server, &mut runtime, 3);
+    assert_eq!(
+        server.commits()[..3],
+        ["layer", "subsurface", "window"],
+        "the layer and its window show"
     );
 }
 

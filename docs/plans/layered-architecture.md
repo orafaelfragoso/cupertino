@@ -16,7 +16,7 @@ Updated by the lead at every merge.
 | | |
 |---|---|
 | Current wave | 4 |
-| Running tasks | W4.8, the review of W4.6 step 5, the plan edits of the W4.8 design |
+| Running tasks | W4.8 |
 | Enforced layers | foundation, system, graphics, models, protocol, transport, testing (126 remaining-work lines) |
 | Waiting on the owner | nothing |
 | Last closed wave | 3 |
@@ -729,7 +729,7 @@ ui-wayland`. **After** W4.2.
 3. [x] (bcf681ad2) Device loss handled once per process.
 4. [x] (086ac720e) Frame timings and per-process PSS of Files and Settings no worse than W0.1 (lead compares with a profile);
        the owner accepts the render thread's 1–4 MiB and 2–3 threads per process.
-5. [ ] The raised layer, surface layers and declined frames are drawn and committed through the render thread's hand-over,
+5. [x] (ba9ad4825, 48ba844f1) The raised layer, surface layers and declined frames are drawn and committed through the render thread's hand-over,
        layers before their parent, no blocking round trip on the UI thread (review item S5, owner: in wave 4).
 
 #### W4.7 Kit's public API (L, design then code)
@@ -1289,3 +1289,9 @@ One line per change to a decision or approval of a design: date, number, what, w
   the family about 8 800 with fourteen dependencies of its own, and the two split at the controls' public items. The Kit
   API of W4.7 is amended: `kit::files` is added, `kit::filepicker::places` (`session_places`, `parse_user_dirs`,
   `Place`) goes, and `kit::file_icons` names the same items from another crate.
+- 2026-11-18: lead, W4.6 step 5 (ba9ad4825; review fixes 48ba844f1): a frame's surfaces are drawn in one job and
+  committed surface layers, raised layer, window; a window stays away until the job's commits are sent, and a state
+  commit asked for meanwhile is sent after them; one rounding rule sizes a surface layer's drawing and buffers; the
+  UI-thread drawing path of the Wayland window system is gone with the `gpu-window` example. The raised layer's hide is
+  sent by the UI thread at the hand-over, after the previous frame's commits; a frame that then fails to draw leaves
+  the hide to take effect with the window's next commit.

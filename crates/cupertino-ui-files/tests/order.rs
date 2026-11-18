@@ -46,7 +46,7 @@ fn names_order_by_punctuation_then_numbers_by_value_then_letters_whatever_their_
         ),
         (
             "case does not decide before the letters do",
-            "apple",
+            "apricot",
             "Banana",
             Ordering::Less,
         ),

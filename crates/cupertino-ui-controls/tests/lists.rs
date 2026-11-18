@@ -17,7 +17,7 @@ use cupertino_ui_text::{AttributedText, TextStyle};
 use support::{Scene, View, DOWN, END, HOME, LEFT, RETURN, RIGHT, SIZE, UP};
 
 const NAMES: [&str; 8] = [
-    "apple",
+    "apricot",
     "banana",
     "blueberry",
     "cherry",
@@ -231,7 +231,7 @@ fn return_and_a_double_click_open_the_row_under_the_keyboard_or_the_pointer() {
 #[test]
 fn typing_selects_the_next_row_that_starts_with_it_and_a_pause_starts_the_search_over() {
     let mut view = View::<Names<true>>::open();
-    let at = row(&view, "apple");
+    let at = row(&view, "apricot");
     view.click(at, Mods::NONE);
     let steps = [
         ("b", 0.0, 1),

@@ -9,7 +9,7 @@ use cupertino_ui_controls::typeahead::{TypeAhead, RESET_AFTER};
 #[test]
 fn typing_finds_the_next_item_that_starts_with_it_and_a_pause_starts_the_text_over() {
     let titles = [
-        Some("Apple"),
+        Some("Apricot"),
         Some("Avocado"),
         None,
         Some("Banana"),

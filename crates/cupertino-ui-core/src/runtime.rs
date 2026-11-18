@@ -17,10 +17,11 @@ use crate::paint::{raised_nodes, same_environment, PaintInput, Painter};
 use crate::platform::{
     ActivationRequest, Backdrop, ClipboardData, ClipboardKind, ClipboardToken, ConfigureId,
     ConstraintAdjust, DragImage, DragProgress, DragRequest, DragToken, DropAction, DropToken,
-    GlassTone, KeyEvent, Keysym, Lent, MaterialRegion, MenuDescription, Mods, MouseButton,
-    PlatformError, PlatformEvent, PointerEvent, PopupEdge, PopupSpec, PresentOutcome, RaisedLayer,
-    SharedRenderer, Shown, Submission, Submitted, SystemAppearance, Timestamp, TouchEvent,
-    WindowEvent, WindowId, WindowRequest, WindowSpec, WindowSystem,
+    GlassTone, KeyEvent, Keysym, LayerList, Lent, MaterialRegion, MenuDescription, Mods,
+    MouseButton, PlatformError, PlatformEvent, PointerEvent, PopupEdge, PopupSpec, PresentOutcome,
+    RaisedChange, RaisedLayer, SharedRenderer, Shown, Submission, Submitted, SurfaceLayerLook,
+    SystemAppearance, Timestamp, TouchEvent, WindowEvent, WindowId, WindowRequest, WindowSpec,
+    WindowSystem,
 };
 use crate::pointer::Pointer;
 use crate::route::{hit_test, Geometry, Route};
@@ -111,6 +112,15 @@ impl<M> WindowState<M> {
         self.configured && self.frame_ready && self.in_flight.is_none()
     }
 
+    /// Lets the renderers of the window and its layers go of the layers they keep, as a window nobody sees does.
+    fn drop_layers(&mut self) {
+        held(&self.renderer).drop_layers();
+        if let Some(layer) = &self.layer.renderer {
+            held(layer).drop_layers();
+        }
+        self.surface_layers.drop_kept();
+    }
+
     /// Something in the window changed: lay it out and paint it again.
     fn invalidate(&mut self) {
         self.dirty = true;
@@ -162,8 +172,8 @@ impl<M> WindowState<M> {
 struct LayerState {
     damage: DamageTracker,
     /// Made on the first frame that shows a layer.
-    renderer: Option<Box<dyn UiRenderer<Frame = CpuFrame> + Send>>,
-    list: DisplayList,
+    renderer: Option<SharedRenderer>,
+    list: Arc<DisplayList>,
     /// The height in whole points of the layer the window system shows, while it shows one.
     shown: Option<u32>,
 }
@@ -291,11 +301,11 @@ struct WindowState<M> {
     /// The images the display list draws.
     resources: Arc<PaintResources>,
     renderer: SharedRenderer,
-    /// The frame the window system took ([`WindowSystem::submit`]) and has not said yet how it was shown, with the
-    /// configure it answers.
-    in_flight: Option<Option<ConfigureId>>,
-    /// The renderer lets go of its layers once the frame in flight is shown: the UI thread never waits for the
-    /// renderer while a frame of it is away, since the renderer may wait for the render thread that draws the frame.
+    /// The frame the window system took ([`WindowSystem::submit`]) and has not said yet how it was shown.
+    in_flight: Option<InFlight>,
+    /// The renderers of the window and its layers let go of the layers they keep once the frame in flight is shown:
+    /// the UI thread never waits for a renderer while a frame of it is away, since the renderer may wait for the
+    /// render thread that draws the frame.
     layers_owed: bool,
     /// The error of the last frame, until one renders and presents; animations wait for that.
     failed: Option<UiError>,
@@ -329,6 +339,16 @@ struct WindowState<M> {
     clipboard_text: bool,
     /// A control of the window has a popup of its own open.
     owned_popup: bool,
+}
+
+/// A frame the window system took ([`WindowSystem::submit`]): what the window shows once it says the frame was shown.
+struct InFlight {
+    /// The configure the frame answers.
+    ack: Option<ConfigureId>,
+    /// The height of the raised layer shown with it, `None` for none, where the frame changes the layer.
+    raised: Option<Option<u32>>,
+    /// The surface layers shown with it, each key with its rect and look, where the frame changes them.
+    surface_layers: Option<Vec<(u64, Rect, SurfaceLayerLook)>>,
 }
 
 /// How long the colours of a window that becomes active take to cross from the inactive ones, in nanoseconds.
@@ -1706,12 +1726,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                     if w.in_flight.is_some() {
                         w.layers_owed = true;
                     } else {
-                        held(&w.renderer).drop_layers();
+                        w.drop_layers();
                     }
-                    if let Some(layer) = w.layer.renderer.as_mut() {
-                        layer.drop_layers();
-                    }
-                    w.surface_layers.drop_kept();
                 }
                 w.size = size;
                 w.ack = Some(c.id);
@@ -1762,11 +1778,11 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 return Ok(());
             }
             WindowEvent::Shown(shown) => {
-                let Some(answered) = w.in_flight.take() else {
+                let Some(flight) = w.in_flight.take() else {
                     return Ok(());
                 };
                 if std::mem::take(&mut w.layers_owed) {
-                    held(&w.renderer).drop_layers();
+                    w.drop_layers();
                 }
                 match shown {
                     Shown::Presented(id) => {
@@ -1775,8 +1791,14 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                         }
                         w.failed = None;
                         // a configure that arrived meanwhile waits for the next frame
-                        if w.ack == answered {
+                        if w.ack == flight.ack {
                             w.ack = None;
+                        }
+                        if let Some(height) = flight.raised {
+                            w.layer.shown = height;
+                        }
+                        if let Some(layers) = &flight.surface_layers {
+                            w.surface_layers.shown(layers);
                         }
                         w.owed = false;
                         w.committed = true;
@@ -1788,6 +1810,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                         w.dirty = true;
                         w.owed = true;
                         w.damage.invalidate();
+                        w.layer.damage.invalidate();
+                        w.surface_layers.not_shown();
                     }
                     Shown::Failed(e) => {
                         let error = UiError::Render(e);
@@ -1795,6 +1819,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                         w.invalidate();
                         w.dirty = false;
                         w.invalidate_damage();
+                        w.surface_layers.not_shown();
                         if w.failed.as_ref() != Some(&error) {
                             if let Some(report) = &mut self.options.on_window_error {
                                 report(w.id, &error);
@@ -3168,77 +3193,34 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         }
         let scale = w.env.scale;
         let width = physical(w.size.width, scale);
-        // the surface layers first: they show with the content's commit
-        if surface.changed {
-            let rastering = mark(&self.frame_timing);
-            let _surface_layers = tracing::trace_span!("ui.surface_layers").entered();
-            let shown = w.surface_layers.present(
-                surface,
-                &mut self.system,
-                w.id,
-                scale,
-                &w.resources,
-                &mut self.options.renderers,
-            )?;
-            lap(&mut self.frame_timing, Phase::Raster, rastering);
-            if shown == PresentOutcome::NotReady {
-                w.frame_ready = false;
-                w.dirty = true;
-                w.invalidate_damage();
-                self.system.request_frame(w.id);
-                return Ok(());
-            }
-        }
-        // the raised layer next: it shows with the content's commit
-        if layer_changed {
-            let shown = match (painting.layer, layer_height, layer_damage) {
-                (Some(layer), Some(height), Some(damage)) => {
-                    w.layer.list = layer.list;
-                    let rastering = mark(&self.frame_timing);
-                    let raster_span = tracing::trace_span!("ui.raster", layer = "raised").entered();
-                    let renderer = w
-                        .layer
-                        .renderer
-                        .get_or_insert_with(&mut self.options.renderers);
-                    let id = renderer
-                        .render(&RenderRequest {
-                            list: &w.layer.list,
-                            resources: &w.resources,
-                            scale,
-                            width,
-                            height: physical(f64::from(height), scale),
-                            damage: &damage,
-                        })
-                        .map_err(UiError::Render)?;
-                    let frame = renderer.frame(id).map_err(UiError::Render)?;
-                    drop(raster_span);
-                    lap(&mut self.frame_timing, Phase::Raster, rastering);
-                    let committing = mark(&self.frame_timing);
-                    let shown = tracing::trace_span!("ui.present", layer = "raised")
-                        .in_scope(|| {
-                            self.system
-                                .present_layer(w.id, Some(RaisedLayer { frame, height }))
-                        })
-                        .map_err(UiError::Platform)?;
-                    handed_over(&mut self.frame_timing, &mut self.system, committing);
-                    shown
-                }
-                _ => self
-                    .system
-                    .present_layer(w.id, None)
-                    .map_err(UiError::Platform)?,
-            };
-            if shown == PresentOutcome::NotReady {
-                w.frame_ready = false;
-                w.dirty = true;
-                w.invalidate_damage();
-                w.layer.shown = None;
-                self.system.request_frame(w.id);
-                return Ok(());
-            }
-            w.layer.shown = layer_height;
-        }
         let height = physical(w.size.height, scale);
+        // the surface layers and the raised layer go with the frame, drawn and shown before it
+        let surface_layers = surface.changed.then(|| {
+            w.surface_layers
+                .submitted(surface, scale, &mut self.options.renderers)
+        });
+        let raised = match (layer_changed, painting.layer, layer_height, layer_damage) {
+            (false, ..) => RaisedChange::Kept,
+            (true, Some(layer), Some(layer_height), Some(damage)) => {
+                w.layer.list = Arc::new(layer.list);
+                let renderers = &mut self.options.renderers;
+                let renderer = w
+                    .layer
+                    .renderer
+                    .get_or_insert_with(|| Arc::new(Mutex::new(renderers())));
+                RaisedChange::Drawn {
+                    height: layer_height,
+                    layer: LayerList {
+                        renderer: Arc::clone(renderer),
+                        list: Arc::clone(&w.layer.list),
+                        width,
+                        height: physical(f64::from(layer_height), scale),
+                        damage,
+                    },
+                }
+            }
+            (true, ..) => RaisedChange::Hidden,
+        };
         // the frame drawn and committed away from the UI thread where the window system takes it that way
         let submitting = mark(&self.frame_timing);
         let submission = Submission {
@@ -3249,21 +3231,31 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             width,
             height,
             damage: damage.clone(),
+            raised,
+            surface_layers,
         };
         let submitted = tracing::trace_span!("ui.submit")
             .in_scope(|| self.system.submit(w.id, &submission))
             .map_err(UiError::Platform)?;
-        drop(submission);
         match submitted {
             Submitted::Taken => {
                 lap(&mut self.frame_timing, Phase::Commit, submitting);
-                w.in_flight = Some(w.ack);
+                w.in_flight = Some(InFlight {
+                    ack: w.ack,
+                    raised: layer_changed.then_some(layer_height),
+                    surface_layers: submission
+                        .surface_layers
+                        .as_deref()
+                        .map(surface_layers::shows),
+                });
                 w.frame_ready = false;
                 return Ok(());
             }
-            // nothing was drawn, and the tracker has already taken the frame's damage
+            // nothing was drawn, and the trackers have already taken the frame's damage
             Submitted::NotReady => {
                 w.damage.invalidate();
+                w.layer.damage.invalidate();
+                w.surface_layers.not_shown();
                 w.frame_ready = false;
                 w.dirty = true;
                 w.owed = true;
@@ -3271,6 +3263,67 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 return Ok(());
             }
             Submitted::Declined => {}
+        }
+        // declined: the surface layers drawn here first, then the raised layer; both show with the content's commit
+        if let Some(layers) = &submission.surface_layers {
+            let rastering = mark(&self.frame_timing);
+            let _surface_layers = tracing::trace_span!("ui.surface_layers").entered();
+            let shown =
+                w.surface_layers
+                    .present(layers, &mut self.system, w.id, &w.resources, scale)?;
+            lap(&mut self.frame_timing, Phase::Raster, rastering);
+            if shown == PresentOutcome::NotReady {
+                w.frame_ready = false;
+                w.dirty = true;
+                w.invalidate_damage();
+                self.system.request_frame(w.id);
+                return Ok(());
+            }
+        }
+        let shown = match &submission.raised {
+            RaisedChange::Kept => None,
+            RaisedChange::Hidden => Some(
+                self.system
+                    .present_layer(w.id, None)
+                    .map_err(UiError::Platform)?,
+            ),
+            RaisedChange::Drawn {
+                height: layer_height,
+                layer,
+            } => {
+                let rastering = mark(&self.frame_timing);
+                let raster_span = tracing::trace_span!("ui.raster", layer = "raised").entered();
+                let mut renderer = held(&layer.renderer);
+                let id = renderer
+                    .render(&submission.layer_request(layer))
+                    .map_err(UiError::Render)?;
+                let frame = renderer.frame(id).map_err(UiError::Render)?;
+                drop(raster_span);
+                lap(&mut self.frame_timing, Phase::Raster, rastering);
+                let committing = mark(&self.frame_timing);
+                let raised = RaisedLayer {
+                    frame,
+                    height: *layer_height,
+                };
+                let shown = tracing::trace_span!("ui.present", layer = "raised")
+                    .in_scope(|| self.system.present_layer(w.id, Some(raised)))
+                    .map_err(UiError::Platform)?;
+                handed_over(&mut self.frame_timing, &mut self.system, committing);
+                Some(shown)
+            }
+        };
+        drop(submission);
+        match shown {
+            Some(PresentOutcome::NotReady) => {
+                w.frame_ready = false;
+                w.dirty = true;
+                w.invalidate_damage();
+                w.layer.shown = None;
+                self.system.request_frame(w.id);
+                return Ok(());
+            }
+            Some(PresentOutcome::Presented) => w.layer.shown = layer_height,
+            None => {}
         }
         let rastering = mark(&self.frame_timing);
         let mut renderer = held(&w.renderer);
@@ -3480,7 +3533,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
     /// the window's content; empty while it shows no layer.
     pub fn layer_display_list(&self, window: WindowId) -> Option<DisplayList> {
         let w = self.windows.iter().find(|w| w.id == window)?;
-        Some(w.layer.list.clone())
+        Some((*w.layer.list).clone())
     }
 
     /// The windows the application has open, in its view's order.

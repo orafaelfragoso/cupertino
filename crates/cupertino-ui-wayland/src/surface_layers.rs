@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 
 use cupertino_geometry::Rect;
 use cupertino_ui_core::platform::{
-    LayerChange, LayerProperty, PlatformError, SurfaceLayer, SurfaceLayerLook, WindowId,
+    LayerChange, LayerProperty, PlatformError, SurfaceLayerLook, WindowId,
 };
 use cupertino_wayland_client::app::{AppEvent, Layer, LayerId, LayerProperty as Wire, Layers};
 use cupertino_wayland_client::{Connection, ExternalRole, PixelRect, SurfaceId};
@@ -135,7 +135,8 @@ pub(crate) struct SurfaceLayers {
 }
 
 impl SurfaceLayers {
-    /// Makes `window`'s layers those of `wanted`, in their order: a new key makes a surface and a layer of `parent`,
+    /// Makes `window`'s layers those of `wanted` (each key with its rect and look), in their order: a new key makes a
+    /// surface and a layer of `parent`,
     /// a key no longer wanted goes (its surface returned, for the caller to let go of its buffers before destroying
     /// it), and a rect or look that changed is sent.
     pub(crate) fn sync(
@@ -144,13 +145,13 @@ impl SurfaceLayers {
         layers: &Layers,
         window: WindowId,
         parent: SurfaceId,
-        wanted: &[SurfaceLayer<'_>],
+        wanted: &[(u64, Rect, SurfaceLayerLook)],
     ) -> Result<Vec<SurfaceId>, PlatformError> {
         let was = self.settled(window);
         let shown = self.windows.entry(window).or_default();
         let mut gone = Vec::new();
         shown.retain(|s| {
-            let keep = wanted.iter().any(|w| w.key == s.key);
+            let keep = wanted.iter().any(|w| w.0 == s.key);
             if !keep {
                 gone.push(s.surface);
                 // what it ran goes with it, so it keeps its window from coming to rest no longer
@@ -160,8 +161,8 @@ impl SurfaceLayers {
             }
             keep
         });
-        for w in wanted {
-            let i = match shown.iter().position(|s| s.key == w.key) {
+        for &(key, rect, look) in wanted {
+            let i = match shown.iter().position(|s| s.key == key) {
                 Some(i) => i,
                 None => {
                     let surface = conn.external_surface(|_, _, _| LayerRole(parent));
@@ -172,7 +173,7 @@ impl SurfaceLayers {
                         ));
                     };
                     shown.push(Shown {
-                        key: w.key,
+                        key,
                         surface,
                         layer,
                         rect: Rect::ZERO,
@@ -192,10 +193,10 @@ impl SurfaceLayers {
             // replace it
             let moving = moving_parts(&self.moving, s.layer.id());
             let place = [
-                w.rect.x(),
-                w.rect.y(),
-                w.rect.width().max(0.0),
-                w.rect.height().max(0.0),
+                rect.x(),
+                rect.y(),
+                rect.width().max(0.0),
+                rect.height().max(0.0),
             ];
             let parts = place_to_send(&mut s.told, moving, place);
             for (p, v) in [Wire::X, Wire::Y, Wire::Width, Wire::Height]
@@ -206,9 +207,8 @@ impl SurfaceLayers {
                     s.layer.set(p, v).map_err(protocol_error)?;
                 }
             }
-            s.rect = w.rect;
-            if s.look != w.look {
-                let look = w.look;
+            s.rect = rect;
+            if s.look != look {
                 if look.radius != s.look.radius {
                     s.layer
                         .set(Wire::CornerRadius, look.radius.max(0.0))
@@ -236,7 +236,7 @@ impl SurfaceLayers {
                 s.look = look;
             }
             // the changes asked for before the layer was made go with its first values
-            if let Some(changes) = self.pending.remove(&(window, w.key)) {
+            if let Some(changes) = self.pending.remove(&(window, key)) {
                 self.owners.insert(s.layer.id(), window);
                 send(
                     &s.layer,

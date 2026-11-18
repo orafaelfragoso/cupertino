@@ -222,6 +222,17 @@ impl FrameScheduler {
         count
     }
 
+    /// The frame was not ready to show at `time` (another GPU had not finished it), which is no failure: the output
+    /// stays damaged, and is not drawn again before one `refresh` later.
+    pub fn not_ready(&mut self, time: Duration, refresh: Duration) {
+        let count = self.failed.map_or(0, |f| f.count);
+        self.failed = Some(FailedFrames {
+            count,
+            retry_at: time + refresh,
+        });
+        self.damaged = true;
+    }
+
     /// Whether the output may draw at `time`: not before the retry time of a frame that failed.
     pub fn retry_due(&self, time: Duration) -> bool {
         self.failed.is_none_or(|f| time >= f.retry_at)
@@ -229,7 +240,10 @@ impl FrameScheduler {
 
     /// A frame was drawn, which ends a run of failed frames; returns how many failed before it.
     pub fn drawn(&mut self) -> Option<u32> {
-        self.failed.take().map(|f| f.count)
+        self.failed
+            .take()
+            .map(|f| f.count)
+            .filter(|&count| count > 0)
     }
 
     pub fn composed(&mut self) {

@@ -95,6 +95,8 @@ struct Surface {
     drm_output: DrmSurfaceOutput,
     /// On a card that does not render: the copies of the render GPU's frames it shows.
     copy: Option<FrameCopy<DrmDeviceFd>>,
+    /// The client buffers the copy's late frame was drawn from, kept until it is shown ([`copy::Brought::Late`]).
+    late_buffers: Vec<Buffer>,
     /// A frame was queued and its vblank has not arrived yet.
     pending: bool,
     refresh: Duration,
@@ -1318,6 +1320,7 @@ fn add_surface(
             output: id,
             drm_output,
             copy: None,
+            late_buffers: Vec::new(),
             pending: false,
             refresh,
             latch: LateLatch::default(),
@@ -1489,7 +1492,9 @@ fn retire_pending_frame(surface: &mut Surface) {
 
 /// Drop the frame waiting for its vblank on `surface` by clearing its CRTC, before `what`. The commit is blocking: a
 /// driver that lost the flip may hold it until its own timeout (up to 3 s on nvidia-drm), so the time it took is
-/// logged. Returns whether the frame is gone.
+/// logged. The driver's timeout is the only deadline: a commit that does not block would need the flip's completion
+/// handled as an event, which Smithay's DRM compositor does not offer for a clear and which needs testing on the drivers
+/// that lose flips, so the wait stays and is bounded by the driver. Returns whether the frame is gone.
 fn drop_pending_frame(surface: &mut Surface, what: &str) -> bool {
     let started = Instant::now();
     let cleared = surface.drm_output.with_compositor(|c| c.clear());
@@ -1672,6 +1677,19 @@ struct Drawn {
     buffers: Vec<Buffer>,
     /// What tells when the GPU finished the frame.
     fence: RenderFence,
+    /// How the frame of a display of another card stands to the scene.
+    copy: CopyFrame,
+}
+
+/// How the frame of a display of another card stands to the scene ([`copy::Brought`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CopyFrame {
+    /// Drawn from the scene as it is, or not a copy.
+    Current,
+    /// The render GPU has not finished it: nothing is queued, and it is brought at the next refresh.
+    Late,
+    /// The frame that was late, now shown: the scene may have changed since it was composed, so it is drawn again.
+    Stale,
 }
 
 impl Drawn {
@@ -1681,6 +1699,7 @@ impl Drawn {
         failed: None,
         buffers: Vec::new(),
         fence: RenderFence::WithinCpu,
+        copy: CopyFrame::Current,
     };
 
     /// The outcome of a render of the scene of output `idx` from `buffers`.
@@ -1704,6 +1723,7 @@ impl Drawn {
                     failed: None,
                     buffers,
                     fence: RenderFence::WithinCpu,
+                    copy: CopyFrame::Current,
                 }
             }
             Err(e) => {
@@ -1819,6 +1839,11 @@ fn render_surface(
         Some(e) => state.frame_failed(idx, time, refresh, &e),
         None => state.send_frames(idx, time),
     }
+    match drawn.copy {
+        CopyFrame::Current => {}
+        CopyFrame::Late => state.outputs[idx].scheduler.not_ready(time, refresh),
+        CopyFrame::Stale => state.outputs[idx].scheduler.damage(),
+    }
     None
 }
 
@@ -1894,6 +1919,25 @@ fn draw_copy(
             slot.insert(FrameCopy::new(allocator, size, scale, via))
         }
     };
+    // a frame the render GPU had not finished goes before another is drawn
+    if let Some(brought) = copy.bring_late(&mut render.renderer, &mut card.renderer) {
+        let Ok(brought) = brought else {
+            return Some(Err(Unsupported));
+        };
+        let buffers = std::mem::take(&mut surface.late_buffers);
+        return Some(Ok(show_copy(
+            state,
+            idx,
+            surface,
+            &mut card.renderer,
+            brought,
+            buffers,
+            &mut u.renderer_lost,
+            CopyFrame::Stale,
+        )));
+    }
+    surface.late_buffers.clear();
+    let copy = surface.copy.as_mut()?;
     let mut target = match copy.acquire(&mut render.renderer) {
         Ok(acquired) => acquired,
         Err(_) if copy.via() == Via::Unsupported => return Some(Err(Unsupported)),
@@ -1943,32 +1987,28 @@ fn draw_copy(
         Ok(_) => Ok(None),
         Err(e) => Err(e),
     };
-    let mut fence = RenderFence::WithinCpu;
     let result = match drawn {
         Ok(Some((damage, sync))) => {
-            let copied = match copy.bring(
+            let brought = match copy.bring(
                 &mut render.renderer,
                 &mut card.renderer,
                 target,
                 sync,
                 &damage,
             ) {
-                Ok(copied) => copied,
+                Ok(brought) => brought,
                 Err(Unsupported) => return Some(Err(Unsupported)),
             };
-            surface
-                .drm_output
-                .render_frame(&mut card.renderer, &[copied], CLEAR, FrameFlags::DEFAULT)
-                .map(|r| {
-                    fence = RenderFence::of(
-                        crate::render::gles::primary_sync(&r.primary_element).as_ref(),
-                    );
-                    !r.is_empty
-                })
-                .map_err(|e| match e {
-                    RenderFrameError::PrepareFrame(e) => RenderError::Rendering(e.into()),
-                    RenderFrameError::RenderFrame(e) => RenderError::Target(format!("{e:?}")),
-                })
+            return Some(Ok(show_copy(
+                state,
+                idx,
+                surface,
+                &mut card.renderer,
+                brought,
+                buffers,
+                &mut u.renderer_lost,
+                CopyFrame::Current,
+            )));
         }
         Ok(_) => Ok(false),
         // the render GPU cannot draw into the copy's buffer: the next frame tries another kind, or the display goes
@@ -1981,9 +2021,54 @@ fn draw_copy(
         }
         Err(e) => Err(e),
     };
-    let mut drawn = Drawn::of(state, idx, result, buffers, &mut u.renderer_lost);
+    Some(Ok(Drawn::of(
+        state,
+        idx,
+        result,
+        buffers,
+        &mut u.renderer_lost,
+    )))
+}
+
+/// Queue on `surface` the frame `brought` from the render GPU, drawn by its card's `renderer` from the client
+/// `buffers`; a late frame keeps them until it is brought again. `copy` is how the frame stands to the scene.
+#[allow(clippy::too_many_arguments)]
+fn show_copy(
+    state: &mut Cupertino,
+    idx: usize,
+    surface: &mut Surface,
+    renderer: &mut GlesRenderer,
+    brought: copy::Brought,
+    buffers: Vec<Buffer>,
+    lost: &mut bool,
+    copy: CopyFrame,
+) -> Drawn {
+    let frame = match brought {
+        copy::Brought::Frame(frame) => frame,
+        copy::Brought::Late => {
+            surface.late_buffers = buffers;
+            return Drawn {
+                copy: CopyFrame::Late,
+                ..Drawn::NOTHING
+            };
+        }
+    };
+    let mut fence = RenderFence::WithinCpu;
+    let result = surface
+        .drm_output
+        .render_frame(renderer, &[frame], CLEAR, FrameFlags::DEFAULT)
+        .map(|r| {
+            fence = RenderFence::of(crate::render::gles::primary_sync(&r.primary_element).as_ref());
+            !r.is_empty
+        })
+        .map_err(|e| match e {
+            RenderFrameError::PrepareFrame(e) => RenderError::Rendering(e.into()),
+            RenderFrameError::RenderFrame(e) => RenderError::Target(format!("{e:?}")),
+        });
+    let mut drawn = Drawn::of(state, idx, result, buffers, lost);
     drawn.fence = fence;
-    Some(Ok(drawn))
+    drawn.copy = copy;
+    drawn
 }
 
 fn frame_finish(

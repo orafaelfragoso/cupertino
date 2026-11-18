@@ -1750,12 +1750,14 @@ dependencies = [
  "async-task",
  "cupertino-animation",
  "cupertino-app-protocols",
+ "cupertino-assets",
  "cupertino-defaults",
  "cupertino-geometry",
  "cupertino-keyboard",
  "cupertino-menu-model",
  "cupertino-theme",
  "cupertino-ui-render",
+ "cupertino-ui-test",
  "cupertino-ui-text",
  "gungraun",
  "rustix 1.1.6",
@@ -1815,6 +1817,7 @@ version = "0.1.0"
 dependencies = [
  "accesskit",
  "accesskit_unix",
+ "cupertino-app-protocols",
  "cupertino-diagnostic-events",
  "cupertino-geometry",
  "cupertino-gpu",
@@ -1829,6 +1832,8 @@ dependencies = [
  "tiny-skia",
  "tracing",
  "unicode-segmentation",
+ "wayland-protocols",
+ "wayland-server",
  "zbus",
 ]
 

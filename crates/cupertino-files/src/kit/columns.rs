@@ -243,7 +243,9 @@ impl ColumnsView {
     fn go_with(&mut self, browser: &mut Browser, listing: DirectoryModel, name: &str) -> bool {
         match browser.go_with(listing, Some(name)) {
             Some(left) => {
-                self.listings.insert(left.dir().to_path_buf(), left);
+                if let Some(replaced) = self.listings.insert(left.dir().to_path_buf(), left) {
+                    self.kept.let_go(replaced);
+                }
                 true
             }
             None => false,

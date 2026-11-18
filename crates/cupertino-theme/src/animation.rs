@@ -1,42 +1,219 @@
-//! Animation presets loaded from the theme data (`animations.json`), converted into `cupertino-animation` types, and
-//! the design's timing-function table ([`TimingPreset`]).
+//! The motion catalogue: the design's named easings ([`Easing`]), springs ([`SpringPreset`]) and motions
+//! ([`Timing`]), the presets loaded from the theme data (`animations.json`) and the design's timing-function table
+//! ([`TimingPreset`]). A motion is named, never built from numbers outside this crate; a crate that evaluates its
+//! numbers or sends them to the compositor reads them out.
 
 use crate::error::{Error, Result};
 use cupertino_animation::cosine_ease;
-use cupertino_animation::{CubicBezier, Curve, Momentum, RubberBand, Spring, SpringParams};
+use cupertino_animation::{
+    CubicBezier, Curve, LayerCurve, Momentum, RubberBand, Spring, SpringParams,
+};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
-/// An easing referenced by name: a cubic bézier of the timing table or the cosine S-curve (`0.5 − 0.5·cos(π·x)`), which is
-/// not a bézier.
+/// The cubic Bézier the catalogue gives for the cosine ease where a Bézier is required (the compositor's curves and
+/// [`Curve`]): within 3·10⁻⁴ of the cosine everywhere.
+const COSINE_EASE_FIT: CubicBezier = CubicBezier::new(0.364, 0.0, 0.636, 1.0);
+
+/// A timing function of the design catalogue: a cubic Bézier of the timing table or of a named motion, or the cosine
+/// S-curve (`0.5 − 0.5·cos(π·x)`), which is not a Bézier.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Easing {
+pub struct Easing(Shape);
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Shape {
     Bezier(CubicBezier),
-    CosineEase,
+    Cosine,
 }
 
 impl Easing {
-    /// Eased progress for linear progress `x ∈ [0, 1]`.
+    /// The table's `ease` entry: a gentle start and a long settle.
+    pub const EASE: Easing = Easing(Shape::Bezier(EASE_CURVE));
+    /// The table's `linear` entry: constant speed from start to end.
+    pub const LINEAR: Easing = Easing(Shape::Bezier(LINEAR_CURVE));
+    /// The table's `ease-in` entry: starts slowly and ends at full speed.
+    pub const EASE_IN: Easing = Easing(Shape::Bezier(EASE_IN_CURVE));
+    /// The table's `ease-out` entry: starts at full speed and slows to a stop.
+    pub const EASE_OUT: Easing = Easing(Shape::Bezier(EASE_OUT_CURVE));
+    /// The table's `ease-in-out` entry: starts and ends slowly, symmetric about the midpoint.
+    pub const EASE_IN_OUT: Easing = Easing(Shape::Bezier(EASE_IN_OUT_CURVE));
+    /// The cosine S-curve `0.5 − 0.5·cos(π·x)`.
+    pub const COSINE: Easing = Easing(Shape::Cosine);
+
+    /// Eased progress for linear progress from 0 to 1.
     pub fn eval(&self, x: f64) -> f64 {
-        match self {
-            Self::Bezier(b) => b.eval(x),
-            Self::CosineEase => cosine_ease(x),
+        match self.0 {
+            Shape::Bezier(b) => b.eval(x),
+            Shape::Cosine => cosine_ease(x),
         }
     }
 
+    /// This easing over `seconds`.
+    pub fn over(self, seconds: f64) -> Timing {
+        Timing(Motion::Eased {
+            easing: self,
+            seconds,
+        })
+    }
+
+    /// The control points, for a crate that sends or evaluates them; `None` for the cosine ease.
     pub fn as_bezier(&self) -> Option<CubicBezier> {
-        match self {
-            Self::Bezier(b) => Some(*b),
-            Self::CosineEase => None,
+        match self.0 {
+            Shape::Bezier(b) => Some(b),
+            Shape::Cosine => None,
+        }
+    }
+
+    /// The Bézier given where one is required: the cosine ease as [`COSINE_EASE_FIT`].
+    fn bezier(self) -> CubicBezier {
+        self.as_bezier().unwrap_or(COSINE_EASE_FIT)
+    }
+}
+
+/// A spring of the design catalogue.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SpringPreset(SpringForm);
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum SpringForm {
+    /// Mass, stiffness and damping.
+    Physical(SpringParams),
+    /// The period of the undamped oscillation in seconds and the damping ratio (1 critically damped, below 1
+    /// bouncing), as the compositor's springs take them.
+    Ratio { response: f64, damping: f64 },
+}
+
+impl SpringPreset {
+    /// The design's default spring (the timing table's `spring` entry): mass 1, stiffness 100, damping 10.
+    pub const DEFAULT: SpringPreset = SpringPreset(SpringForm::Physical(DEFAULT_SPRING));
+    /// The control panel's fade-in: a critically damped rise at 28 radians per second, so its undamped period is a
+    /// turn at that rate.
+    pub const CONTROL_PANEL_OPEN: SpringPreset = SpringPreset(SpringForm::Ratio {
+        response: std::f64::consts::TAU / 28.0,
+        damping: 1.0,
+    });
+    /// The launcher panel's scale as it opens, with a little bounce.
+    pub const LAUNCHER_OPEN: SpringPreset = SpringPreset(SpringForm::Ratio {
+        response: 0.30,
+        damping: 0.74,
+    });
+    /// A popover growing out of its anchor.
+    pub const POPOVER_OPEN: SpringPreset = SpringPreset(SpringForm::Ratio {
+        response: 0.29,
+        damping: 0.82,
+    });
+
+    /// The spring's numbers, for a crate that sends or evaluates them.
+    pub fn params(&self) -> SpringParams {
+        match self.0 {
+            SpringForm::Physical(params) => params,
+            SpringForm::Ratio { response, damping } => SpringParams::from_ratio(response, damping),
+        }
+    }
+
+    /// The spring as the compositor takes it: its undamped period and its damping ratio.
+    fn layer_curve(self) -> LayerCurve {
+        match self.0 {
+            SpringForm::Ratio { response, damping } => LayerCurve::Spring { response, damping },
+            SpringForm::Physical(p) => LayerCurve::Spring {
+                response: p.perceptual_duration(),
+                damping: p.damping / (2.0 * (p.stiffness * p.mass).sqrt()),
+            },
         }
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct SpringPreset {
-    pub params: SpringParams,
-    /// `(perceptual duration, bounce)` when the preset is defined that way.
-    pub perceptual: Option<(f64, f64)>,
+/// How a value moves: an easing over a duration, or a spring.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Timing(Motion);
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Motion {
+    Eased { easing: Easing, seconds: f64 },
+    Spring(SpringPreset),
+}
+
+impl From<SpringPreset> for Timing {
+    fn from(spring: SpringPreset) -> Timing {
+        Timing(Motion::Spring(spring))
+    }
+}
+
+impl Timing {
+    /// The control panel's fade-out over 0.18 s: it falls away quickly at first and slows towards the end, a cubic
+    /// Bézier through the ends of an exponential fall, fitted to it within a two-thousandth everywhere.
+    pub const CONTROL_PANEL_CLOSE: Timing = Timing(Motion::Eased {
+        // control points in 256ths, as the wire carries them
+        easing: Easing(Shape::Bezier(CubicBezier::new(
+            0.234375, 0.7421875, 0.54296875, 0.92578125,
+        ))),
+        seconds: 0.18,
+    });
+    /// A popover shrinking into its anchor over 0.22 s: `1 - (1 - t)²` as a cubic Bézier.
+    pub const POPOVER_CLOSE: Timing = Timing(Motion::Eased {
+        easing: Easing(Shape::Bezier(CubicBezier::new(
+            1.0 / 3.0,
+            2.0 / 3.0,
+            2.0 / 3.0,
+            1.0,
+        ))),
+        seconds: 0.22,
+    });
+    /// A closing menu's fade over 0.236 s: `1 - (1 - t)³` as a cubic Bézier.
+    pub const MENU_CLOSE: Timing = Timing(Motion::Eased {
+        easing: Easing(Shape::Bezier(CubicBezier::new(
+            1.0 / 3.0,
+            1.0,
+            2.0 / 3.0,
+            1.0,
+        ))),
+        seconds: 0.236,
+    });
+
+    /// Progress `seconds` after the start: 0 at the start, 1 at rest; a spring may pass 1.
+    pub fn value(self, seconds: f64) -> f64 {
+        match self.0 {
+            Motion::Eased {
+                easing,
+                seconds: duration,
+            } => easing.eval(if duration <= 0.0 {
+                1.0
+            } else {
+                seconds / duration
+            }),
+            Motion::Spring(spring) => Spring::new(spring.params()).value(seconds),
+        }
+    }
+
+    /// Seconds until rest: an easing's duration, a spring's settling time.
+    pub fn duration(self) -> f64 {
+        match self.0 {
+            Motion::Eased { seconds, .. } => seconds,
+            Motion::Spring(spring) => Spring::new(spring.params()).settling_duration(),
+        }
+    }
+
+    /// The numbers, for a crate that evaluates them: the cosine ease as the catalogue's Bézier fit to it.
+    pub fn curve(self) -> Curve {
+        match self.0 {
+            Motion::Eased { easing, seconds } => Curve::Timed {
+                duration: seconds,
+                bezier: easing.bezier(),
+            },
+            Motion::Spring(spring) => Curve::Spring(spring.params()),
+        }
+    }
+
+    /// The numbers the compositor runs: the cosine ease as the catalogue's Bézier fit to it.
+    pub fn layer_curve(self) -> LayerCurve {
+        match self.0 {
+            Motion::Eased { easing, seconds } => LayerCurve::Timed {
+                duration: seconds,
+                bezier: easing.bezier(),
+            },
+            Motion::Spring(spring) => spring.layer_curve(),
+        }
+    }
 }
 
 /// Dock-related timing values.
@@ -139,24 +316,19 @@ impl AnimationPresets {
                         stiffness,
                         damping,
                         initial_velocity,
-                    } => SpringPreset {
-                        params: SpringParams {
-                            mass,
-                            stiffness,
-                            damping,
-                            initial_velocity,
-                            allows_overdamping: false,
-                        },
-                        perceptual: None,
+                    } => SpringParams {
+                        mass,
+                        stiffness,
+                        damping,
+                        initial_velocity,
+                        allows_overdamping: false,
                     },
                     RawSpring::Perceptual {
                         perceptual_duration,
                         bounce,
-                    } => SpringPreset {
-                        params: SpringParams::from_perceptual(perceptual_duration, bounce),
-                        perceptual: Some((perceptual_duration, bounce)),
-                    },
+                    } => SpringParams::from_perceptual(perceptual_duration, bounce),
                 };
+                let preset = SpringPreset(SpringForm::Physical(preset));
                 (name, preset)
             })
             .collect();
@@ -165,13 +337,13 @@ impl AnimationPresets {
             if !raw.cosine_ease {
                 return Err(Error::NotFound("cosine_ease".into()));
             }
-            Easing::CosineEase
+            Easing::COSINE
         } else {
-            Easing::Bezier(*timing.get(curve_name).ok_or_else(|| {
+            Easing(Shape::Bezier(*timing.get(curve_name).ok_or_else(|| {
                 Error::Invalid(format!(
                     "unknown easing {curve_name} in dock.autohide.curve"
                 ))
-            })?)
+            })?))
         };
         let dock = DockAnimation {
             fish_speed: raw.dock.fish_speed,
@@ -220,14 +392,14 @@ impl AnimationPresets {
     /// Easing by name: the timing functions plus `cosine_ease`.
     pub fn easing(&self, name: &str) -> Option<Easing> {
         if name == "cosine_ease" {
-            return self.cosine_ease.then_some(Easing::CosineEase);
+            return self.cosine_ease.then_some(Easing::COSINE);
         }
-        self.timing(name).map(Easing::Bezier)
+        self.timing(name).map(|b| Easing(Shape::Bezier(b)))
     }
 
     /// Spring by name: `reference_default`, `window_move_resize_snap`, `overview_toggle`.
     pub fn spring(&self, name: &str) -> Option<SpringParams> {
-        self.springs.get(name).map(|s| s.params)
+        self.springs.get(name).map(SpringPreset::params)
     }
 
     pub fn spring_preset(&self, name: &str) -> Option<&SpringPreset> {

@@ -3,7 +3,7 @@
 
 use std::ops::Range;
 
-use cupertino_kit::theme::EASE_IN_OUT_CURVE;
+use cupertino_kit::motion::Easing;
 
 use crate::user::User;
 
@@ -37,7 +37,7 @@ pub const SWITCH_DURATION: f64 = 0.5;
 /// How far the switch is `elapsed` seconds after it began, 0 to 1: the opacity of the screen it shows.
 pub fn switched(elapsed: f64) -> f64 {
     let t = (elapsed / SWITCH_DURATION).clamp(0.0, 1.0);
-    EASE_IN_OUT_CURVE.eval(t)
+    Easing::EASE_IN_OUT.eval(t)
 }
 
 /// Tiles per page for an output of `width` x `height` points.

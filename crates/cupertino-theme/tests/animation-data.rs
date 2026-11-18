@@ -51,7 +51,11 @@ fn timing_functions_and_easings_are_looked_up_by_name() {
         ("missing", None),
     ] {
         assert_eq!(p.timing(name), curve, "{name}");
-        assert_eq!(p.easing(name), curve.map(Easing::Bezier), "{name}");
+        assert_eq!(
+            p.easing(name).map(|e| e.as_bezier()),
+            curve.map(Some),
+            "{name}"
+        );
     }
     let mut names: Vec<&str> = p.timing_names().collect();
     names.sort_unstable();
@@ -59,7 +63,7 @@ fn timing_functions_and_easings_are_looked_up_by_name() {
         names,
         ["default", "easeIn", "easeInEaseOut", "easeOut", "linear"]
     );
-    assert_eq!(p.easing("cosine_ease"), Some(Easing::CosineEase));
+    assert_eq!(p.easing("cosine_ease"), Some(Easing::COSINE));
     let without = AnimationPresets::from_str(&doc("easeOut", false, "[]")).unwrap();
     assert_eq!(without.easing("cosine_ease"), None, "only with the flag");
 }
@@ -68,42 +72,40 @@ fn timing_functions_and_easings_are_looked_up_by_name() {
 fn easings_evaluate_their_curve() {
     let cosine = |t: f64| 0.5 - 0.5 * (std::f64::consts::PI * t).cos();
     for (easing, t, expected) in [
-        (Easing::CosineEase, 0.0, 0.0),
-        (Easing::CosineEase, 0.25, cosine(0.25)),
-        (Easing::CosineEase, 0.5, 0.5),
-        (Easing::CosineEase, 1.0, 1.0),
-        (Easing::Bezier(LINEAR_CURVE), 0.3, 0.3),
+        (Easing::COSINE, 0.0, 0.0),
+        (Easing::COSINE, 0.25, cosine(0.25)),
+        (Easing::COSINE, 0.5, 0.5),
+        (Easing::COSINE, 1.0, 1.0),
+        (Easing::LINEAR, 0.3, 0.3),
     ] {
         assert!(
             (easing.eval(t) - expected).abs() < 1e-6,
             "{easing:?} at {t}"
         );
     }
-    assert_eq!(Easing::CosineEase.as_bezier(), None);
-    assert_eq!(Easing::Bezier(LINEAR_CURVE).as_bezier(), Some(LINEAR_CURVE));
+    assert_eq!(Easing::COSINE.as_bezier(), None);
+    assert_eq!(Easing::LINEAR.as_bezier(), Some(LINEAR_CURVE));
 }
 
 #[test]
 fn springs_are_physical_or_perceptual_and_looked_up_by_name() {
     let p = good();
-    let stiff = p.spring_preset("stiff").unwrap();
-    assert_eq!(stiff.perceptual, None);
+    let stiff = p.spring_preset("stiff").unwrap().params();
     assert_eq!(
         (
-            stiff.params.mass,
-            stiff.params.stiffness,
-            stiff.params.damping,
-            stiff.params.initial_velocity
+            stiff.mass,
+            stiff.stiffness,
+            stiff.damping,
+            stiff.initial_velocity
         ),
         (1.0, 100.0, 10.0, 0.0)
     );
-    assert!(!stiff.params.allows_overdamping);
-    let soft = p.spring_preset("soft").unwrap();
-    assert_eq!(soft.perceptual, Some((0.35, 0.0)));
-    assert_eq!(soft.params, SpringParams::from_perceptual(0.35, 0.0));
+    assert!(!stiff.allows_overdamping);
+    let soft = p.spring_preset("soft").unwrap().params();
+    assert_eq!(soft, SpringParams::from_perceptual(0.35, 0.0));
     for (name, spring) in [
-        ("stiff", Some(stiff.params)),
-        ("soft", Some(soft.params)),
+        ("stiff", Some(stiff)),
+        ("soft", Some(soft)),
         ("missing", None),
     ] {
         assert_eq!(p.spring(name), spring, "{name}");
@@ -128,8 +130,8 @@ fn the_dock_section_is_read_and_its_curve_names_an_easing() {
         (42.0, 270.0, 350.0, 3.0, 0.22, 0.3)
     );
     for (curve, cosine, easing) in [
-        ("cosine_ease", true, Easing::CosineEase),
-        ("easeOut", false, Easing::Bezier(EASE_OUT_CURVE)),
+        ("cosine_ease", true, Easing::COSINE),
+        ("easeOut", false, Easing::EASE_OUT),
     ] {
         let p = AnimationPresets::from_str(&doc(curve, cosine, "[]")).unwrap();
         assert_eq!(p.dock.autohide_curve, easing, "{curve}");

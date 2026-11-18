@@ -8,6 +8,7 @@ description = "CupertinoKit, the Cupertino UI toolkit: the one crate application
 layer = "ui"
 
 [dependencies]
+cupertino-animation = { path = "../cupertino-animation" }
 cupertino-apps = { path = "../cupertino-apps" }
 cupertino-assets = { path = "../cupertino-assets" }
 cupertino-defaults = { path = "../cupertino-defaults" }

@@ -3,10 +3,11 @@
 //! `hidden -> shown` on a toggle; `shown -> hiding` on a dismissal; `hiding -> hidden` after the fade-out (derived from the
 //! observers). A toggle while hiding opens the panel again.
 //!
-//! The fades are the same whether the panel draws them frame by frame or the compositor runs them on its clock
-//! ([`OPEN_CURVE`], [`CLOSE_CURVE`]).
-
-use cupertino_animation::{CubicBezier, LayerCurve};
+//! The fades are the same whether the panel draws them frame by frame or the compositor runs them on its clock, on the
+//! design catalogue's `SpringPreset::CONTROL_PANEL_OPEN` (the critically damped rise of `OPEN_RATE`, a spring of
+//! damping ratio 1 whose undamped period is a turn at that rate, which follows `rise` to [`OPEN_SECONDS`] and then
+//! settles the last hundredth smoothly instead of at once) and `Timing::CONTROL_PANEL_CLOSE` (`fall` over
+//! [`FADE_SECONDS`] as a cubic Bézier through its ends, fitted to it within a two-thousandth everywhere).
 
 /// How long the panel takes to fade out: it falls away quickly at first and slows towards the end.
 pub const FADE_SECONDS: f64 = 0.18;
@@ -16,22 +17,6 @@ const FADE_TAU: f64 = 0.06;
 pub const OPEN_SECONDS: f64 = 0.23;
 /// Rate of the fade-in's critically damped curve, in radians per second.
 const OPEN_RATE: f64 = 28.0;
-
-/// The fade-in as the compositor runs it: the critically damped rise of `OPEN_RATE`, a spring of damping ratio 1
-/// whose undamped period is a turn at that rate. It follows `rise` to [`OPEN_SECONDS`] and then settles the last
-/// hundredth smoothly instead of at once.
-pub const OPEN_CURVE: LayerCurve = LayerCurve::Spring {
-    response: std::f64::consts::TAU / OPEN_RATE,
-    damping: 1.0,
-};
-
-/// The fade-out as the compositor runs it: `fall` over [`FADE_SECONDS`] as a cubic Bezier through its ends, fitted to
-/// it within a two-thousandth everywhere.
-pub const CLOSE_CURVE: LayerCurve = LayerCurve::Timed {
-    duration: FADE_SECONDS,
-    // control points in 256ths, as the wire carries them
-    bezier: CubicBezier::new(0.234375, 0.7421875, 0.54296875, 0.92578125),
-};
 
 /// How far a critically damped rise of [`OPEN_RATE`] has come after `t` seconds, 0 to 1; 1 from [`OPEN_SECONDS`] on.
 fn rise(t: f64) -> f64 {

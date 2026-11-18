@@ -372,7 +372,7 @@ fn send(
 ) -> Result<(), PlatformError> {
     for change in changes {
         let property = wire(change.property);
-        match (change.curve, &change.samples) {
+        match (change.curve.map(|c| c.layer_curve()), &change.samples) {
             (None, _) => layer.set(property, change.to),
             (Some(curve), samples) => {
                 *next_serial = next_serial.wrapping_add(1);

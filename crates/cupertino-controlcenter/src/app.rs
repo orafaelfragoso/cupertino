@@ -11,7 +11,7 @@ use cupertino_controlcenter::backend::{
 use cupertino_controlcenter::control;
 use cupertino_controlcenter::controller::{Backends, Controller};
 use cupertino_controlcenter::layout::{BAR_MARGIN, SHADOW_TOP};
-use cupertino_controlcenter::lifecycle::{Phase, CLOSE_CURVE, OPEN_CURVE};
+use cupertino_controlcenter::lifecycle::Phase;
 use cupertino_controlcenter::model::{Device, Network, Output, VolumeState, WifiStatus};
 use cupertino_controlcenter::motion::Expansion;
 use cupertino_controlcenter::radios::{Radio, Radios};
@@ -26,6 +26,7 @@ use cupertino_controlcenter::view::{
 use cupertino_keyboard::modifiers::Profile;
 use cupertino_kit::controls::FrameClock;
 use cupertino_kit::core::{Application, Command, Element, Key, Window, WindowKey};
+use cupertino_kit::motion::{SpringPreset, Timing};
 use cupertino_kit::platform::{
     PresentChange, PresentProperty, SystemAppearance, WindowRequest, WindowSpec, WindowSystem,
 };
@@ -721,11 +722,17 @@ fn fade(told: Phase, phase: Phase, reduce_motion: bool) -> Option<Vec<PresentCha
     };
     match (told, phase) {
         _ if reduce_motion || told == phase => None,
-        (Phase::Hidden, Phase::Shown) => {
-            Some(vec![opacity(0.0, None), opacity(1.0, Some(OPEN_CURVE))])
+        (Phase::Hidden, Phase::Shown) => Some(vec![
+            opacity(0.0, None),
+            opacity(1.0, Some(SpringPreset::CONTROL_PANEL_OPEN.into())),
+        ]),
+        (Phase::Hiding, Phase::Shown) => Some(vec![opacity(
+            1.0,
+            Some(SpringPreset::CONTROL_PANEL_OPEN.into()),
+        )]),
+        (Phase::Shown, Phase::Hiding) => {
+            Some(vec![opacity(0.0, Some(Timing::CONTROL_PANEL_CLOSE))])
         }
-        (Phase::Hiding, Phase::Shown) => Some(vec![opacity(1.0, Some(OPEN_CURVE))]),
-        (Phase::Shown, Phase::Hiding) => Some(vec![opacity(0.0, Some(CLOSE_CURVE))]),
         _ => None,
     }
 }

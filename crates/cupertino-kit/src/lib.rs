@@ -6,6 +6,7 @@ pub mod bus;
 pub mod file_icons;
 mod icons;
 mod instance;
+pub mod motion;
 pub mod task;
 pub mod time;
 

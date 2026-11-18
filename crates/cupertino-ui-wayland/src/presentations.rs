@@ -86,8 +86,13 @@ impl Presentations {
                     self.next_serial = self.next_serial.wrapping_add(1);
                     let serial = self.next_serial;
                     p.running.insert(serial, change.property);
-                    p.layer
-                        .animate(serial, prop, change.to, curve, change.velocity)
+                    p.layer.animate(
+                        serial,
+                        prop,
+                        change.to,
+                        curve.layer_curve(),
+                        change.velocity,
+                    )
                 }
             };
             sent.map_err(|e| PlatformError::Protocol(e.to_string()))?;

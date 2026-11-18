@@ -1,5 +1,5 @@
 // cupertino-layers --graph
-// 71 crates, 317 internal dependencies
+// 71 crates, 318 internal dependencies
 // per layer: foundation 5, graphics 2, models 6, system 8, platform 7, protocol 3, transport 2, render 3, ui 8, shellkit 0, core 1, services 4, shell 12, apps 2, tools 6, testing 2
 // forbidden normal edge cupertino-control (shell) -> cupertino-shell-client (transport)
 // forbidden normal edge cupertino-control (shell) -> cupertino-wayland-client (transport)
@@ -169,7 +169,6 @@ digraph "layers" {
   "cupertino-control" -> "cupertino-shell-client" [color=red];
   "cupertino-control" -> "cupertino-wayland-client" [color=red];
   "cupertino-controlcenter" -> "cupertino-alsa" [color=red];
-  "cupertino-controlcenter" -> "cupertino-animation";
   "cupertino-controlcenter" -> "cupertino-assets";
   "cupertino-controlcenter" -> "cupertino-defaults";
   "cupertino-controlcenter" -> "cupertino-diagnostic-events";
@@ -233,6 +232,7 @@ digraph "layers" {
   "cupertino-icons" -> "cupertino-defaults";
   "cupertino-input" -> "cupertino-animation";
   "cupertino-input" -> "cupertino-keyboard";
+  "cupertino-kit" -> "cupertino-animation";
   "cupertino-kit" -> "cupertino-app-protocols" [label="dev"];
   "cupertino-kit" -> "cupertino-apps";
   "cupertino-kit" -> "cupertino-assets";
@@ -453,6 +453,7 @@ digraph "layers" {
   "cupertino-ui-wayland" -> "cupertino-gpu";
   "cupertino-ui-wayland" -> "cupertino-keyboard";
   "cupertino-ui-wayland" -> "cupertino-menu-model";
+  "cupertino-ui-wayland" -> "cupertino-theme" [label="dev"];
   "cupertino-ui-wayland" -> "cupertino-ui-core";
   "cupertino-ui-wayland" -> "cupertino-ui-render";
   "cupertino-ui-wayland" -> "cupertino-ui-text";

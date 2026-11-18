@@ -24,16 +24,14 @@
 //!
 //! The model is pure: every value is sampled at a time passed in.
 
-use cupertino_animation::{AnimatedValue, CubicBezier, Curve, Spring, SpringParams};
-use cupertino_kit::theme::{EASE_IN_OUT_CURVE, EASE_OUT_CURVE, LINEAR_CURVE};
+use cupertino_animation::{AnimatedValue, Curve, Spring, SpringParams};
+use cupertino_kit::motion::{Easing, SpringPreset, Timing};
 
 /// The enclosure fading in when the launcher opens, in seconds.
 pub const OPEN_FADE: f64 = 0.10;
-/// The scale the enclosure starts at when the launcher opens, and the spring that settles it to 1 about its centre:
-/// its response in seconds and its damping ratio (under 1: it undershoots a little).
+/// The scale the enclosure starts at when the launcher opens; the catalogue's `SpringPreset::LAUNCHER_OPEN`, whose
+/// damping ratio is under 1 so it undershoots a little, settles it to 1 about its centre.
 pub const ENTER_SCALE: f64 = 1.1;
-pub const OPEN_RESPONSE: f64 = 0.30;
-pub const OPEN_DAMPING: f64 = 0.74;
 /// The content fading out when a scope folds; the enclosure starts contracting after it.
 pub const FOLD_FADE: f64 = 0.05;
 /// The enclosure's spring between shapes: its response and damping ratio when it grows and when it shrinks. Both
@@ -147,7 +145,7 @@ struct Fade {
     to: f64,
     start: f64,
     duration: f64,
-    ease: CubicBezier,
+    ease: Easing,
 }
 
 impl Fade {
@@ -157,7 +155,7 @@ impl Fade {
             to: value,
             start: 0.0,
             duration: 0.0,
-            ease: LINEAR_CURVE,
+            ease: Easing::LINEAR,
         }
     }
 
@@ -174,7 +172,7 @@ impl Fade {
     }
 
     /// Head for `to` from the value presented at `now`, starting `delay` later and taking `duration`.
-    fn retarget(&mut self, to: f64, now: f64, delay: f64, duration: f64, ease: CubicBezier) {
+    fn retarget(&mut self, to: f64, now: f64, delay: f64, duration: f64, ease: Easing) {
         let from = self.value(now);
         *self = Fade {
             from,
@@ -350,19 +348,17 @@ impl Motion {
         } else {
             self.shape_to(shape, now, 0.0);
         }
-        self.alpha.retarget(1.0, now, 0.0, OPEN_FADE, LINEAR_CURVE);
-        self.blur.retarget(0.0, now, 0.0, 0.0, LINEAR_CURVE);
+        self.alpha
+            .retarget(1.0, now, 0.0, OPEN_FADE, Easing::LINEAR);
+        self.blur.retarget(0.0, now, 0.0, 0.0, Easing::LINEAR);
         if self.reduce {
             self.scale.set_immediately(1.0);
         } else {
             if !closing {
                 self.scale.set_immediately(ENTER_SCALE);
             }
-            self.scale.animate_to(
-                1.0,
-                Curve::Spring(SpringParams::from_ratio(OPEN_RESPONSE, OPEN_DAMPING)),
-                now,
-            );
+            self.scale
+                .animate_to(1.0, Timing::from(SpringPreset::LAUNCHER_OPEN).curve(), now);
         }
         self.header = (header, header);
         self.dip = None;
@@ -375,12 +371,12 @@ impl Motion {
             // reopened while closing, it comes back alongside the enclosure
             if closing {
                 self.content
-                    .retarget(1.0, now, 0.0, OPEN_FADE, LINEAR_CURVE);
+                    .retarget(1.0, now, 0.0, OPEN_FADE, Easing::LINEAR);
             } else {
                 self.content = Fade::at(1.0);
             }
         } else {
-            self.content.retarget(0.0, now, 0.0, 0.0, LINEAR_CURVE);
+            self.content.retarget(0.0, now, 0.0, 0.0, Easing::LINEAR);
         }
         // the buttons start inside the field and bud out as it opens
         if !closing {
@@ -396,25 +392,22 @@ impl Motion {
     /// The panel goes at `now`: it grows a little, its content blurs and it fades out.
     pub fn hide(&mut self, now: f64) {
         self.alpha
-            .retarget(0.0, now, 0.0, CLOSE_DURATION, EASE_OUT_CURVE);
+            .retarget(0.0, now, 0.0, CLOSE_DURATION, Easing::EASE_OUT);
         if !self.reduce {
             self.scale.animate_to(
                 CLOSE_SCALE,
-                Curve::Timed {
-                    duration: CLOSE_DURATION,
-                    bezier: EASE_OUT_CURVE,
-                },
+                Easing::EASE_OUT.over(CLOSE_DURATION).curve(),
                 now,
             );
             self.blur
-                .retarget(1.0, now, 0.0, CLOSE_DURATION, EASE_OUT_CURVE);
+                .retarget(1.0, now, 0.0, CLOSE_DURATION, Easing::EASE_OUT);
         }
     }
 
     /// A scope folds into the search field's `compact` shape at `now`.
     pub fn fold(&mut self, compact: Shape, now: f64) {
         self.content
-            .retarget(0.0, now, 0.0, FOLD_FADE, LINEAR_CURVE);
+            .retarget(0.0, now, 0.0, FOLD_FADE, Easing::LINEAR);
         let wait = if self.reduce { 0.0 } else { FOLD_FADE };
         self.switch_header(Header::Search, now, now + wait);
         self.shape_to(compact, now, wait);
@@ -444,7 +437,8 @@ impl Motion {
         } else {
             (UNFOLD_CONTENT_DELAY, UNFOLD_CONTENT_FADE)
         };
-        self.content.retarget(1.0, now, delay, fade, EASE_OUT_CURVE);
+        self.content
+            .retarget(1.0, now, delay, fade, Easing::EASE_OUT);
         self.dip = (header == Header::Files && from_field && !self.reduce).then_some(now);
     }
 
@@ -487,8 +481,13 @@ impl Motion {
         self.split
             .animate_to(1.0, spring(SPLIT_RESPONSE, SPLIT_DAMPING), now + delay);
         self.sharp = Fade::at(0.0);
-        self.sharp
-            .retarget(1.0, now, delay + GLYPH_DELAY, GLYPH_SHARPEN, EASE_OUT_CURVE);
+        self.sharp.retarget(
+            1.0,
+            now,
+            delay + GLYPH_DELAY,
+            GLYPH_SHARPEN,
+            Easing::EASE_OUT,
+        );
     }
 
     /// The buttons merge back into the field.
@@ -499,10 +498,7 @@ impl Motion {
             self.sharp = Fade::at(0.0);
             return;
         }
-        let timed = Curve::Timed {
-            duration: MERGE_DURATION,
-            bezier: EASE_OUT_CURVE,
-        };
+        let timed = Easing::EASE_OUT.over(MERGE_DURATION).curve();
         self.field.animate_to(0.0, timed, now);
         self.split.animate_to(0.0, timed, now);
     }
@@ -566,7 +562,7 @@ impl Motion {
         }
         if t < DIP_IN {
             let x = t / DIP_IN;
-            return -DIP_DEPTH * EASE_IN_OUT_CURVE.eval(x);
+            return -DIP_DEPTH * Easing::EASE_IN_OUT.eval(x);
         }
         let back = Spring::new(SpringParams::from_ratio(DIP_RESPONSE, 1.0)).value(t - DIP_IN);
         -DIP_DEPTH * (1.0 - back)

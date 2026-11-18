@@ -988,7 +988,6 @@ dependencies = [
  "async-channel",
  "async-io",
  "cupertino-alsa",
- "cupertino-animation",
  "cupertino-assets",
  "cupertino-defaults",
  "cupertino-diagnostic-events",
@@ -1229,6 +1228,7 @@ dependencies = [
 name = "cupertino-kit"
 version = "0.1.0"
 dependencies = [
+ "cupertino-animation",
  "cupertino-app-protocols",
  "cupertino-apps",
  "cupertino-assets",
@@ -1830,6 +1830,7 @@ dependencies = [
  "cupertino-gpu",
  "cupertino-keyboard",
  "cupertino-menu-model",
+ "cupertino-theme",
  "cupertino-ui-core",
  "cupertino-ui-render",
  "cupertino-ui-text",

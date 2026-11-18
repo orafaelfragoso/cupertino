@@ -855,7 +855,9 @@ commit and ends as W4.8's do.
 `cursor decorations glass kit ui-core ui-controls ui-files ui-text ui-render ui-wayland ui-test ui-abi`, as in W1.T.
 
 - [x] (1d306b71b) `cursor decorations glass`: 47 public tests; the crates had none in `src/`.
-- [ ] The `ui` crates and `kit`, starting once W4.8 is merged; `ui-render` gains the agreement test of its two
+- [x] (0b521768b) `ui-abi ui-core ui-render ui-text ui-test ui-wayland`: 70 public tests (9, 16, 10, 23, 6, 6), with
+      the agreement test of the two renderers; the crates had none in `src/`. `ui-core` takes `ui-test` as a dev-dependency.
+- [ ] `kit`, `ui-controls` and `ui-files`, starting once W4.8 is merged; `ui-render` gains the agreement test of its two
       renderers. The views' tests are written in W4.8's steps 4 to 6 and W4.12's steps bring their own; in `ui-files`
       W4.T writes what is left, in files W4.12 does not own: `layout::icon`, natural order and sort, the types of `mime`, tags read
       and written, name checks and free names, `name_edit`, `open` against a fixture of applications, and the

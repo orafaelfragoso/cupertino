@@ -9,7 +9,9 @@ layer = "ui"
 
 [dependencies]
 cupertino-apps = { path = "../cupertino-apps" }
+cupertino-assets = { path = "../cupertino-assets" }
 cupertino-defaults = { path = "../cupertino-defaults" }
+cupertino-icons = { path = "../cupertino-icons" }
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-theme = { path = "../cupertino-theme" }
 cupertino-trash = { path = "../cupertino-trash" }
@@ -28,9 +30,9 @@ futures-lite = "2"
 inotify = { version = "0.11", default-features = false }
 
 [dev-dependencies]
-cupertino-assets = { path = "../cupertino-assets" }
 cupertino-ui-test = { path = "../cupertino-ui-test" }
 tempfile = "3"
+tiny-skia = "0.12"
 
 [[bench]]
 name = "directory"

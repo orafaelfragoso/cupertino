@@ -7,7 +7,8 @@
 //! * [`layout`]: the icon layout, with the measured metrics of [`metrics`]; [`geom`]: the direction a key moves in it;
 //! * [`rename`], [`name_edit`]: name checks, free names and the name being edited; [`open`]: default applications and
 //!   the Open With list; [`operations`]: new folders, renames, aliases, copies and moves, as blocking functions;
-//! * [`item_art`]: the art of the common items;
+//! * [`item_art`]: the art of the common items; [`file_icons`]: the icon of an item's type; [`thumbnail_service`]: the
+//!   thumbnails of the items in view, made by jobs the program runs; [`item_icons`]: what a view draws for an item;
 //! * [`grid`]: the folder as a grid of icons ([`grid::IconGrid`]), [`list`]: as an outline table
 //!   ([`list::FileList`]), and [`columns`]: a chain of folders side by side ([`columns::FileColumns`]), which report
 //!   through [`ViewEvent`].
@@ -23,9 +24,11 @@ mod band;
 mod clicks;
 pub mod columns;
 pub mod entry;
+pub mod file_icons;
 pub mod geom;
 pub mod grid;
 pub mod item_art;
+pub mod item_icons;
 pub mod layout;
 pub mod list;
 pub mod metrics;
@@ -40,6 +43,7 @@ pub mod recents;
 pub mod rename;
 pub mod sort;
 pub mod tags;
+pub mod thumbnail_service;
 
 /// What a file view reports. The program gives each view one function that turns an event into its message, or into
 /// none.

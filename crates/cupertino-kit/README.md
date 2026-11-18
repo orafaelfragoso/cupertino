@@ -83,7 +83,9 @@ special folder's own icon; and the alias badge of a symbolic link, drawn into th
 packs and the icon theme, `without_host` a given pack alone and `builtin` the built-in assets (placeholders), for tests
 and captures. `pack_has(name)` says whether an asset pack ships a raster or SVG file of its own for an icon name, so an
 app with its own art for a name can still let a pack's icon win. Files and the portal's file chooser draw their rows
-with it.
+with it. The items are the file family's (`cupertino-ui-files`' `file_icons`); `kit::file_icons` names them for the apps
+that draw file icons without the rest of the family. `kit::files` also names the family's `thumbnail_service`, whose
+`ThumbnailJob` a program runs with `task::io` within `JOB_DEADLINE`, and `item_icons`.
 
 Each example runs on Cupertino headless and on headless Mutter, with these app ids and sizes: Counter (`org.cupertino.examples.Counter`, 200×64), Forms (`org.cupertino.examples.Forms`, 280×180), Virtual List (`org.cupertino.examples.VirtualList`, 480×600) and Editor (`org.cupertino.examples.Editor`, 480×320).
 

@@ -43,7 +43,6 @@ use cupertino_ui_wayland::WaylandWindowSystem;
 use self::layer::DesktopShell;
 use self::roles::{DesktopRoles, RoleNote};
 use self::view::{BandLook, Desk, ItemView};
-use super::item_icons::ItemIcons;
 use crate::desktop::{self as arrangement, Arrangement, DesktopPrefs, Grid, Slot};
 use crate::metrics::desktop as m;
 use crate::notice::{self, Action, Notices};
@@ -51,6 +50,7 @@ use crate::trash::Trash;
 use cupertino_icons::thumbnail::Thumbnailer;
 use cupertino_kit::files::entry::Entry;
 use cupertino_kit::files::geom::Direction;
+use cupertino_kit::files::item_icons::ItemIcons;
 use cupertino_kit::files::model::{DirectoryModel, ModelDelta, ModelOptions, WORK_DEADLINE};
 use cupertino_kit::files::name_edit::NameEdit;
 use cupertino_kit::files::open::{
@@ -59,6 +59,7 @@ use cupertino_kit::files::open::{
 use cupertino_kit::files::operations::{self, DropAction};
 use cupertino_kit::files::places::{desktop_folder, session_places};
 use cupertino_kit::files::sort::{sort_entries, SortKey, SortSpec};
+use cupertino_kit::files::thumbnail_service::JOB_DEADLINE;
 
 /// What the desktop's windows are called by the roles: `cupertino-desktop@OUTPUT`.
 pub const APP_ID: &str = "cupertino-desktop";
@@ -126,8 +127,8 @@ pub enum Message {
     Woken,
     /// What woke the desktop is gone.
     Unheard,
-    /// The listing's work or watch ended; what it read wakes the desktop.
-    Listed,
+    /// The listing's work or watch, or a thumbnail's job, ended; what it brought wakes the desktop.
+    Worked,
     /// A press landed on the desktop.
     Pressed,
     Select(Vec<PathBuf>),
@@ -612,22 +613,27 @@ impl Model {
         }
     }
 
-    /// The listing's watch and its next work, as a future on the UI loop and an I/O task.
-    fn listing_work(&mut self) -> Vec<Command<Message>> {
-        let Some(listing) = self.listing.as_mut() else {
-            return Vec::new();
-        };
-        let watch = listing.take_watch().map(|watch| {
-            let follow = watch.follow();
-            Command::Perform(Box::pin(async move {
-                follow.await;
-                Message::Listed
-            }))
-        });
-        let work = listing.take_work().map(|work| {
-            cupertino_kit::task::io(WORK_DEADLINE, move || work.run(), |()| Message::Listed)
-        });
-        watch.into_iter().chain(work).collect()
+    /// The listing's watch and its next work, and the thumbnails' jobs, as a future on the UI loop and I/O tasks.
+    fn io_work(&mut self) -> Vec<Command<Message>> {
+        let mut commands = Vec::new();
+        if let Some(listing) = self.listing.as_mut() {
+            commands.extend(listing.take_watch().map(|watch| {
+                let follow = watch.follow();
+                Command::Perform(Box::pin(async move {
+                    follow.await;
+                    Message::Worked
+                }))
+            }));
+            commands.extend(listing.take_work().map(|work| {
+                cupertino_kit::task::io(WORK_DEADLINE, move || work.run(), |()| Message::Worked)
+            }));
+        }
+        if let Some(icons) = &self.icons {
+            commands.extend(std::iter::from_fn(|| icons.take_job()).map(|job| {
+                cupertino_kit::task::io(JOB_DEADLINE, move || job.run(), |()| Message::Worked)
+            }));
+        }
+        commands
     }
 
     fn command(&mut self, command: DeskCommand) -> Vec<Command<Message>> {
@@ -1021,10 +1027,10 @@ impl Application for Desktop {
                 // a thumbnail that came shows at the next view
                 let mut commands = model.rename_made();
                 commands.push(listen(&model.woken));
-                commands.extend(model.listing_work());
+                commands.extend(model.io_work());
                 return commands;
             }
-            Message::Unheard | Message::Listed => {}
+            Message::Unheard | Message::Worked => {}
             Message::DroppedIn(dropped) => return model.dropped_in(dropped),
             Message::Pressed => {
                 model.menu = None;
@@ -1246,7 +1252,7 @@ fn listed(
         .map(|theme| theme.shapes.menu_bar_height)
         .unwrap_or_else(|_| cupertino_theme::ShapeTokens::default().menu_bar_height)
         .ceil();
-    commands.extend(model.listing_work());
+    commands.extend(model.io_work());
     (model, commands)
 }
 

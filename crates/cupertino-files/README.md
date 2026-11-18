@@ -179,7 +179,7 @@ selected, from the first or last by name, or the one after it when the keyboard 
 before the first item the keyboard goes on to the next or previous control. In the list, Tab on a column header goes to
 the next header and from the last into the rows; the table hands Files only its rows' keys (`TableView::on_row_key`).
 
-**Item images** (`kit::item_icons`). Each item in the icon view, the list view and a drag image wears the icon of its
+**Item images** (the family's `item_icons`, `kit::files::item_icons`). Each item in the icon view, the list view and a drag image wears the icon of its
 type from the asset packs and the host icon theme, through the toolkit's `cupertino_kit::file_icons::FileIcons`: the
 icon of the type's kind or of its nearest ancestor's (PDF, image, audio, video, archive, text, program; an office
 document packed in a zip is not an archive), else the generic document icon, else the packs' placeholder. Folders, text files, other documents and archives that
@@ -188,15 +188,16 @@ text files, a zipper for archives), drawn in code at 1× and 2×; a pack's own i
 folder and the user directories wear their own folder icons (`places::folder_icons`), and a symbolic link the alias
 badge in its bottom-left corner. Each icon is drawn at 1× and 2× and keeps its image for the life of the process.
 A PNG, JPEG or WebP picture shows its thumbnail once it is made (a symbolic link keeps its type's icon and badge).
-`thumbnail_service::ThumbnailService` makes thumbnails on two worker threads, never on the UI thread: after each
+The family's `thumbnail_service::ThumbnailService` hands out the making of each thumbnail as a job, which Files runs as
+an I/O task (`kit::task::io`, two at once, `JOB_DEADLINE` 5 s), never on the UI thread: after each
 message a window says which items are in view or within 200 pt of it (`view::shown`), and the service drops what no
-window wants any more before a worker starts it. A worker takes the thumbnail from the freedesktop cache
+window wants any more before a job starts it. A job takes the thumbnail from the freedesktop cache
 (`$XDG_CACHE_HOME/thumbnails`, `Thumbnailer::from_env("cupertino-files")`, the rules of `cupertino-icons`' `thumbnail`: valid
 for the file's modification time and size, a failure remembered under `fail/cupertino-files/`, nothing under the cache
 itself thumbnailed) or creates it there, then decodes it at 2 pixels a point (128 for the icon view's 64 pt, 32 for
 the list's 16 pt). Beyond those in view, at most 32 MiB of decoded thumbnails stay in memory, the least recently drawn
 going first; a window showing more keeps them all rather than making them again. A decoder that panics fails its
-file, not the worker, and quitting does not wait for a decode that hangs (a stalled network mount). When a picture changes on disk, the watcher's new modification time and size make it wanted
+file, not the task, and quitting does not wait for a decode that hangs (a stalled network mount). When a picture changes on disk, the watcher's new modification time and size make it wanted
 again; the old thumbnail shows until the new one is made, and a file that failed is tried again once it changes.
 `Start::with_file_icons` and `Start::with_thumbnails` give a window the session's icons and cache (`main.rs` does);
 without them every icon is the built-in placeholder and no thumbnail is made.
@@ -462,8 +463,7 @@ and `metrics::{icon_view, list_view, column_view, timing, selection, marquee, dr
 | `window`, `format` | the window's wording and metrics | `metrics`, `ViewMode`, `path_chain`, `status_text`; `human_size`, `available_size`, `relative_date` |
 | `udisks` (feature `app`) | removable media | `devices` (the listed file systems and locked containers of udisks' managed objects), `Volumes::{watch, poll, mount, unlock, eject}` → `Report`, `Media` (the listed devices and the busy ones), `Passphrase`, `holders`, `notice` (a failure's notification text) |
 | `notice` (feature `app`) | failures as notifications | `failure`, `unopened`, `bad_name`, `finished` (an operation that ended unseen) → `Notice`; `Notices::{start, post, flush}`; `shown`, `escape`, `explained` (an error as a sentence for a window) |
-| `kit` (feature `app`) | the window on CupertinoKit; driven headless through `cupertino_kit::test` | `prepare(Start::open(folder, places, types, recents, notices, applications, terminal))`, with `with_file_icons`, `with_thumbnails`, `with_places_source`, `with_instance` and `with_activation_token`, then `run` or a `TestDriver<Files>`; `view_events` (the file views' events as the window's), `toolbar` (pop-up buttons, path bar folders), `sidebar` (material, keyboard watch), `places` (live places), `transfer` (the worker of a file operation: `Work` → `Outcome`), `jobs` (the file operations of the process and when the progress window shows; `PROGRESS_WINDOW_DELAY`, `Start::with_progress_delay`), `progress` (the progress window, and the click on a window's row that shows it), `remote` (what the calls of later launches and of the desktop do), `context` (context menus), `search` (the field's slot and "No Results"), `dragged` (drag images), `drops` (drops onto folders, places, the path bar and the folder shown), `spring` (spring-loaded folders and the way back), `item_icons` (items' icons, thumbnails and previews), `columns` (the column view), `gallery` (the gallery), `peek` (the preview window), `tabs` (the tab bar and a tab's parked state), `tag_editor` (the tags popover), `desktop` (the desktop: `run`, and `prepare` for a `TestDriver<Desktop>`) |
-| `thumbnail_service` | thumbnails of the items in view | `ThumbnailService::{new, want, forget, get, queued, memory}`, `Stamp`, `has_thumbnail`, `MEMORY_BUDGET`, `WORKERS` |
+| `kit` (feature `app`) | the window on CupertinoKit; driven headless through `cupertino_kit::test` | `prepare(Start::open(folder, places, types, recents, notices, applications, terminal))`, with `with_file_icons`, `with_thumbnails`, `with_places_source`, `with_instance` and `with_activation_token`, then `run` or a `TestDriver<Files>`; `view_events` (the file views' events as the window's), `toolbar` (pop-up buttons, path bar folders), `sidebar` (material, keyboard watch), `places` (live places), `transfer` (the worker of a file operation: `Work` → `Outcome`), `jobs` (the file operations of the process and when the progress window shows; `PROGRESS_WINDOW_DELAY`, `Start::with_progress_delay`), `progress` (the progress window, and the click on a window's row that shows it), `remote` (what the calls of later launches and of the desktop do), `context` (context menus), `search` (the field's slot and "No Results"), `dragged` (drag images), `drops` (drops onto folders, places, the path bar and the folder shown), `spring` (spring-loaded folders and the way back), `columns` (the column view), `gallery` (the gallery), `peek` (the preview window), `tabs` (the tab bar and a tab's parked state), `tag_editor` (the tags popover), `desktop` (the desktop: `run`, and `prepare` for a `TestDriver<Desktop>`) |
 | `instance` (feature `app`) | one process per session | `Service::serve` (the names, `org.freedesktop.Application` and `org.freedesktop.FileManager1`; `take` the waiting `Call`s), `serve_or_forward` → `Launch::{Serve, Forwarded}`, `Target::{of_argument, of_uri, uri, folder}`, `Request`, `Action`, `take_activation_token`, `FORWARD_TIMEOUT`, `BUS_NAME`, `OBJECT_PATH` |
 | `main` (feature `app`) | the binary | arguments, the hand-over to a running Files, the session's places, types, associations and buses, then `kit::run` |
 

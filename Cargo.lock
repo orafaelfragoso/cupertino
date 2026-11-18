@@ -1772,6 +1772,7 @@ dependencies = [
  "cupertino-assets",
  "cupertino-defaults",
  "cupertino-geometry",
+ "cupertino-icons",
  "cupertino-theme",
  "cupertino-trash",
  "cupertino-ui-controls",
@@ -1785,6 +1786,7 @@ dependencies = [
  "mime_guess",
  "serde",
  "tempfile",
+ "tiny-skia",
  "tree_magic_mini",
  "xattr",
 ]

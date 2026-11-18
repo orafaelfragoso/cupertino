@@ -2,7 +2,6 @@
 //! items an application names, one by one, and [`prelude`] has what a typical application names.
 
 pub mod bus;
-pub mod file_icons;
 mod icons;
 pub mod image;
 mod instance;
@@ -15,6 +14,15 @@ pub mod test;
 pub mod time;
 
 pub use instance::{spawn, Entered, Instance};
+
+/// Icons of files and folders, for the apps that list them: the icon of a file's type from the asset packs and the host
+/// icon theme, a special folder's own icon, and the alias badge of a symbolic link, as the renditions an
+/// [`Image`](crate::controls::Image) picks from.
+pub mod file_icons {
+    pub use cupertino_ui_files::file_icons::{
+        document_icon_name, FileIcons, FILE_ICON_NAMES, RENDITION_SCALES,
+    };
+}
 
 /// Running an application on the session's Wayland display.
 pub mod app {
@@ -207,6 +215,19 @@ pub mod files {
     /// The art of the common items.
     pub mod item_art {
         pub use cupertino_ui_files::item_art::{draw, Art};
+    }
+
+    /// What a file view draws for an item: its thumbnail, the family's art or its type's icon.
+    pub mod item_icons {
+        pub use cupertino_ui_files::item_icons::ItemIcons;
+    }
+
+    /// The thumbnails of the items in view, made by jobs the program runs.
+    pub mod thumbnail_service {
+        pub use cupertino_ui_files::thumbnail_service::{
+            has_thumbnail, Stamp, Thumbnail, ThumbnailJob, ThumbnailService, JOBS, JOB_DEADLINE,
+            MEMORY_BUDGET, THUMBNAIL_TYPES,
+        };
     }
 
     /// The icon layout.

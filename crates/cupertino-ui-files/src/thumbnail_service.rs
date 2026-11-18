@@ -1,31 +1,33 @@
 //! Thumbnails of the items a window shows, made off the UI thread. A window says which of its items are in view
-//! ([`ThumbnailService::want`]); worker threads take them from the freedesktop thumbnail cache ([`cupertino_icons::thumbnail`])
-//! or create them there, decode them to pixels and call the wake function. A request no window wants any more is
-//! dropped before a worker starts it, so scrolling past a folder costs nothing.
+//! ([`ThumbnailService::want`]); the program takes the next to make as a job ([`ThumbnailService::take_job`]) and runs
+//! it on an I/O thread ([`ThumbnailJob::run`], within [`JOB_DEADLINE`]), which takes it from the freedesktop thumbnail
+//! cache ([`cupertino_icons::thumbnail`]) or creates it there, decodes it to pixels and calls the wake function. A
+//! request no window wants any more is dropped before a job starts it, so scrolling past a folder costs nothing.
 //!
 //! The decoded thumbnails stay in memory up to a byte budget: past it those no window wants go, the least recently
 //! drawn first; those in view stay, so a window showing more than the budget holds is not made again and again. A
 //! thumbnail is made for one [`Stamp`] of its file: when the file changes, the window wants it with the new stamp and
-//! it is made again, while the old one is still drawn. A file that cannot be thumbnailed, or whose decoder panics, is
+//! it is made again, while the old one is still drawn. A file that cannot be thumbnailed, or whose making panics, is
 //! not tried again until it changes. Nothing under the cache directory itself is thumbnailed. Dropping the service
 //! does not wait for the files being decoded.
 
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
-use std::thread::JoinHandle;
-use std::time::SystemTime;
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, SystemTime};
 
+use crate::entry::Entry;
 use cupertino_icons::thumbnail::{Pixels, ThumbError, ThumbSize, Thumbnailer};
-use cupertino_kit::files::entry::Entry;
 
 /// The types whose thumbnails are made: the formats the thumbnail cache decodes.
 pub const THUMBNAIL_TYPES: [&str; 3] = ["image/png", "image/jpeg", "image/webp"];
 /// How many bytes of decoded thumbnails a process keeps beyond those in view: 512 thumbnails of 128 pixels a side.
 pub const MEMORY_BUDGET: usize = 32 << 20;
-/// How many threads make thumbnails: decoding is the cost, and two keep the UI's own core free.
-pub const WORKERS: usize = 2;
+/// How many thumbnails are made at once: decoding is the cost, and two keep the UI's own core free.
+pub const JOBS: usize = 2;
+/// How long making one thumbnail should take: reading a picture of a local disk and decoding it.
+pub const JOB_DEADLINE: Duration = Duration::from_secs(5);
 
 /// Whether items of type `mime` get a thumbnail.
 pub fn has_thumbnail(mime: &str) -> bool {
@@ -108,7 +110,6 @@ struct State {
     /// The bytes of the ready thumbnails.
     bytes: usize,
     clock: u64,
-    stop: bool,
 }
 
 impl State {
@@ -161,7 +162,6 @@ type Make = dyn Fn(&Path, ThumbSize, u32) -> Result<Pixels, ThumbError> + Send +
 
 struct Shared {
     state: Mutex<State>,
-    work: Condvar,
     /// The cache directory, whose own files get no thumbnail.
     root: PathBuf,
     make: Box<Make>,
@@ -174,105 +174,114 @@ impl Shared {
     fn lock(&self) -> MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
     }
+}
 
-    fn run(&self) {
-        loop {
-            let (key, stamp) = {
-                let mut state = self.lock();
-                loop {
-                    if state.stop {
-                        return;
-                    }
-                    if let Some((key, stamp)) = state.queue.pop_front() {
-                        // under the same lock, so a want meanwhile does not queue it again
-                        state.working.insert(key.clone(), stamp);
-                        break (key, stamp);
-                    }
-                    state = self.work.wait(state).unwrap_or_else(|e| e.into_inner());
+/// The making of one thumbnail, which the program runs off its UI thread ([`ThumbnailService::take_job`]).
+pub struct ThumbnailJob {
+    shared: Arc<Shared>,
+    key: Key,
+    stamp: Stamp,
+    /// The job ran: dropping it hands nothing back.
+    ran: bool,
+}
+
+impl ThumbnailJob {
+    /// Blocking: reads and decodes. It catches a panic of the making, as of a decoder, and keeps it as the file's
+    /// failure, so the panic is not the program's.
+    pub fn run(mut self) {
+        let shared = Arc::clone(&self.shared);
+        let key = &self.key;
+        let size = ThumbSize::for_icon(f64::from(key.edge), 1.0);
+        let made = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let pixels = (shared.make)(&key.path, size, key.edge)?;
+            Ok::<_, ThumbError>((pixels, (shared.ids)()))
+        }))
+        .map_err(|_| ())
+        .and_then(|made| made.map_err(|_| ()));
+        let mut state = shared.lock();
+        state.working.remove(key);
+        let done = match made {
+            Ok((pixels, id)) => {
+                state.clock += 1;
+                Done::Ready {
+                    stamp: self.stamp,
+                    thumbnail: Arc::new(Thumbnail {
+                        id,
+                        width: pixels.width,
+                        height: pixels.height,
+                        rgba: Arc::from(pixels.rgba),
+                    }),
+                    used: state.clock,
                 }
-            };
-            let size = ThumbSize::for_icon(f64::from(key.edge), 1.0);
-            // a decoder that panics on a file fails that file and keeps the worker
-            let made = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                (self.make)(&key.path, size, key.edge)
-            }))
-            .map_err(|_| ())
-            .and_then(|made| made.map_err(|_| ()));
-            let mut state = self.lock();
-            state.working.remove(&key);
-            let done = match made {
-                Ok(pixels) => {
-                    state.clock += 1;
-                    Done::Ready {
-                        stamp,
-                        thumbnail: Arc::new(Thumbnail {
-                            id: (self.ids)(),
-                            width: pixels.width,
-                            height: pixels.height,
-                            rgba: Arc::from(pixels.rgba),
-                        }),
-                        used: state.clock,
-                    }
-                }
-                Err(_) => Done::Failed { stamp },
-            };
-            state.insert(key.clone(), done);
-            state.evict(self.budget, &key);
-            drop(state);
-            (self.wake)();
-        }
+            }
+            Err(()) => Done::Failed { stamp: self.stamp },
+        };
+        state.insert(key.clone(), done);
+        state.evict(shared.budget, key);
+        drop(state);
+        self.ran = true;
+        (shared.wake)();
     }
 }
 
-/// Makes the thumbnails windows want on worker threads; dropping it stops them.
+impl Drop for ThumbnailJob {
+    /// A job dropped without running goes back to the queue's front while a window wants it.
+    fn drop(&mut self) {
+        if self.ran {
+            return;
+        }
+        let mut state = self.shared.lock();
+        state.working.remove(&self.key);
+        if state.wants(&self.key, self.stamp) {
+            state.queue.push_front((self.key.clone(), self.stamp));
+        }
+        drop(state);
+        (self.shared.wake)();
+    }
+}
+
+/// Keeps the thumbnails windows want, and hands out the making of each as a job.
 pub struct ThumbnailService {
     shared: Arc<Shared>,
-    workers: Vec<JoinHandle<()>>,
 }
 
 impl ThumbnailService {
-    /// A service writing to `thumbnailer`'s cache with `workers` threads, keeping at most `budget` bytes of pixels.
-    /// It calls `wake` when a thumbnail is made or failed, and takes each thumbnail's id from `ids`.
+    /// A service writing to `thumbnailer`'s cache, keeping at most `budget` bytes of pixels. It calls `wake` when a
+    /// job waits to be taken and when a thumbnail is made or failed, and takes each thumbnail's id from `ids`.
     pub fn new(
         thumbnailer: Thumbnailer,
-        workers: usize,
         budget: usize,
         wake: Arc<dyn Fn() + Send + Sync>,
         ids: Arc<dyn Fn() -> u64 + Send + Sync>,
     ) -> ThumbnailService {
         let root = thumbnailer.root().to_path_buf();
         let make = Box::new(move |path: &Path, size, edge| thumbnailer.pixels(path, size, edge));
-        Self::with_make(root, make, workers, budget, wake, ids)
-    }
-
-    /// A service whose workers make each thumbnail with `make`, nothing under `root` thumbnailed.
-    fn with_make(
-        root: PathBuf,
-        make: Box<Make>,
-        workers: usize,
-        budget: usize,
-        wake: Arc<dyn Fn() + Send + Sync>,
-        ids: Arc<dyn Fn() -> u64 + Send + Sync>,
-    ) -> ThumbnailService {
         let shared = Arc::new(Shared {
             state: Mutex::new(State::default()),
-            work: Condvar::new(),
             root,
             make,
             budget,
             wake,
             ids,
         });
-        let workers = (0..workers)
-            .map(|n| {
-                let shared = Arc::clone(&shared);
-                std::thread::Builder::new()
-                    .name(format!("thumbnails-{n}"))
-                    .spawn(move || shared.run())
-                    .expect("a thumbnail thread starts")
-            })
-            .collect();
-        ThumbnailService { shared, workers }
+        ThumbnailService { shared }
+    }
+
+    /// The next thumbnail to make, while fewer than [`JOBS`] are being made.
+    pub fn take_job(&self) -> Option<ThumbnailJob> {
+        let mut state = self.shared.lock();
+        if state.working.len() >= JOBS {
+            return None;
+        }
+        let (key, stamp) = state.queue.pop_front()?;
+        // under the same lock, so a want meanwhile does not queue it again
+        state.working.insert(key.clone(), stamp);
+        Some(ThumbnailJob {
+            shared: Arc::clone(&self.shared),
+            key,
+            stamp,
+            ran: false,
+        })
     }
 
     /// Window `window` shows `items` at `edge` device pixels, most wanted first: they are made in that order, before
@@ -311,8 +320,10 @@ impl ThumbnailService {
         for key in failed {
             state.done.remove(&key);
         }
-        if !state.queue.is_empty() {
-            self.shared.work.notify_all();
+        let waits = !state.queue.is_empty() && state.working.len() < JOBS;
+        drop(state);
+        if waits {
+            (self.shared.wake)();
         }
     }
 
@@ -351,7 +362,7 @@ impl ThumbnailService {
         matches!(self.shared.lock().done.get(&key), Some(Done::Failed { .. }))
     }
 
-    /// The files waiting for a worker, the next first.
+    /// The files waiting for a job, the next first.
     pub fn queued(&self) -> Vec<PathBuf> {
         let state = self.shared.lock();
         state.queue.iter().map(|(k, _)| k.path.clone()).collect()
@@ -360,16 +371,6 @@ impl ThumbnailService {
     /// The bytes of pixels the ready thumbnails hold.
     pub fn memory(&self) -> usize {
         self.shared.lock().bytes
-    }
-}
-
-impl Drop for ThumbnailService {
-    /// The workers stop once their current file is done, and are not waited for: a read that hangs on a stalled
-    /// network mount must not keep the application from exiting.
-    fn drop(&mut self) {
-        self.shared.lock().stop = true;
-        self.shared.work.notify_all();
-        self.workers.clear();
     }
 }
 

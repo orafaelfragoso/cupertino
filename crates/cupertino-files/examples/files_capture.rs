@@ -386,7 +386,7 @@ impl Capture {
             named_center(driver, window, ITEM).is_some()
         })
         .map_err(|e| e.unwrap_or_else(|| format!("listing {} never ended", self.home.display())))?;
-        // the pictures' thumbnails are made on worker threads: wait until the window draws each it shows, of which
+        // the pictures' thumbnails are made by I/O tasks: wait until the window draws each it shows, of which
         // the gallery's strip shows the first
         let in_view = match view {
             ViewMode::Gallery => 1,

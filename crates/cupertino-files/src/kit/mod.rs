@@ -9,7 +9,6 @@ pub mod desktop;
 mod dragged;
 mod drops;
 mod gallery;
-mod item_icons;
 mod jobs;
 mod peek;
 mod places;
@@ -73,6 +72,7 @@ use crate::window_prefs::WindowPrefs;
 use cupertino_icons::thumbnail::Thumbnailer;
 use cupertino_kit::files::entry::{Entry, Kind};
 use cupertino_kit::files::grid::Grab;
+use cupertino_kit::files::item_icons::ItemIcons;
 use cupertino_kit::files::list::{row_key, Presses, RowGrab};
 use cupertino_kit::files::name_edit::NameEdit;
 use cupertino_kit::files::open::{
@@ -82,6 +82,7 @@ use cupertino_kit::files::operations::{self, DropAction};
 use cupertino_kit::files::places::{removable_holding, Place};
 use cupertino_kit::files::sort::SortSpec;
 use cupertino_kit::files::tags::{self, TagColor};
+use cupertino_kit::files::thumbnail_service::JOB_DEADLINE;
 use cupertino_kit::files::{ColumnEvent, ViewEvent};
 
 /// Identifier of the window for the server, as the desktop entry names it.
@@ -462,7 +463,7 @@ struct Session {
     places_source: Option<PlacesSource>,
     places_watch: places::PlacesWatch,
     /// The items' icons and thumbnails, shared with the list's rows, which ask for them as they show.
-    icons: Rc<item_icons::ItemIcons>,
+    icons: Rc<ItemIcons>,
     /// What wakes when a thumbnail is made.
     thumbnails_woken: async_channel::Receiver<()>,
     /// The items a drag out of a window carries, until it is dropped or ends: a drop held open while it copies does not
@@ -479,7 +480,7 @@ struct Session {
     /// The fixed-pitch family the previews set text files in.
     text_family: Option<String>,
     /// Counts the messages that may change what the windows show, any but a window's scroll and the end of a listing's
-    /// work (what it read wakes the window): views made at the same
+    /// or a thumbnail's work (what it brought wakes the windows): views made at the same
     /// revision may keep what they built ([`cupertino_kit::core::Element::kept`]).
     view_revision: u64,
     /// The listings the windows let go of while their work runs, which the next request for their folders takes.
@@ -611,8 +612,8 @@ pub enum Message {
     Noticed(Option<crate::notice::Click>),
     /// [`CALL_WAIT`] passed since Files started without a window.
     CallWaitOver,
-    /// A listing's work or watch ended; what it read wakes its window.
-    Listed,
+    /// A listing's work or watch, or a thumbnail's job, ended; what it brought wakes the windows.
+    Worked,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -830,7 +831,7 @@ impl Application for Files {
             FileIcons::builtin(types, HashMap::new())
         });
         let icons = Rc::new(
-            item_icons::ItemIcons::new(file_icons, start.thumbnails, thumbnails_wake)
+            ItemIcons::new(file_icons, start.thumbnails, thumbnails_wake)
                 .with_app_icons(start.app_icons),
         );
         let mut model = Model {
@@ -901,14 +902,14 @@ impl Application for Files {
         if model.session.icons.thumbnails() {
             commands.push(woken(&model.session.thumbnails_woken, Message::Thumbnails));
         }
-        commands.extend(model.listing_work());
+        commands.extend(model.io_work());
         (model, commands)
     }
 
     fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
         if !matches!(
             message,
-            Message::Window(_, Event::Scroll(_)) | Message::Listed
+            Message::Window(_, Event::Scroll(_)) | Message::Worked
         ) {
             model.session.view_revision += 1;
         }
@@ -920,7 +921,7 @@ impl Application for Files {
         let mut commands = model.handle(message);
         commands.extend(model.follow_peeks(recheck));
         commands.extend(model.session.look_at_trash());
-        commands.extend(model.listing_work());
+        commands.extend(model.io_work());
         commands.extend(model.exit_when_done());
         commands
     }
@@ -959,7 +960,7 @@ impl Model {
                 self.awaiting_call = false;
                 Vec::new()
             }
-            Message::Listed => Vec::new(),
+            Message::Worked => Vec::new(),
             Message::Raise(key, token) => {
                 vec![Command::Window(key, WindowRequest::Activate(token))]
             }
@@ -1027,9 +1028,9 @@ impl Model {
         commands
     }
 
-    /// The work and the watches of every window's listings, as I/O tasks and futures on the UI loop, and the session's
-    /// kept listings whose work ended let go.
-    fn listing_work(&mut self) -> Vec<Command<Message>> {
+    /// The work and the watches of every window's listings and the thumbnails' jobs, as I/O tasks and futures on the
+    /// UI loop, and the session's kept listings whose work ended let go.
+    fn io_work(&mut self) -> Vec<Command<Message>> {
         self.session.listings.sweep();
         let (mut works, mut watches) = (Vec::new(), Vec::new());
         for window in self.windows.values_mut() {
@@ -1050,17 +1051,20 @@ impl Model {
             let follow = watch.follow();
             Command::Perform(Box::pin(async move {
                 follow.await;
-                Message::Listed
+                Message::Worked
             }))
         });
         let run = works.into_iter().map(|work| {
             cupertino_kit::task::io(
                 cupertino_kit::files::model::WORK_DEADLINE,
                 move || work.run(),
-                |()| Message::Listed,
+                |()| Message::Worked,
             )
         });
-        watched.chain(run).collect()
+        let thumbnails = std::iter::from_fn(|| self.session.icons.take_job()).map(|job| {
+            cupertino_kit::task::io(JOB_DEADLINE, move || job.run(), |()| Message::Worked)
+        });
+        watched.chain(run).chain(thumbnails).collect()
     }
 
     /// Exit once no browser window is open, no file operation runs and the progress window lists nothing, after the

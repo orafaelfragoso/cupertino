@@ -1,12 +1,12 @@
 //! File manager: the core, and with the `app` feature the `cupertino-files` window process on CupertinoKit
 //! ([`kit`]). The items, their order, types and tags, the icon layout, opening, renaming and the file operations are
-//! Kit's file family (`cupertino_kit::files`), and so are a folder's listing and its places.
+//! Kit's file family (`cupertino_kit::files`), and so are a folder's listing, its places, the items' icons and their
+//! thumbnails.
 //!
 //! * [`group`]: the date buckets dates read in;
 //! * [`settings`]: per-folder view state and its store;
 //! * [`selection`], [`typeselect`]: interaction logic;
-//! * [`trash`]: freedesktop-compliant trash; [`thumbnail_service`]: the thumbnails of the items in view, made on
-//!   worker threads;
+//! * [`trash`]: freedesktop-compliant trash;
 //! * [`layout`]: the list layout engine with the measured metrics of [`metrics`];
 //! * [`format`]: how sizes and dates read;
 //! * [`history`], [`browser`]: back / forward history and the state of one browser window (the sidebar's places are
@@ -42,7 +42,6 @@ pub mod selection;
 pub mod settings;
 pub mod spring;
 pub mod tab_strip;
-pub mod thumbnail_service;
 pub use cupertino_trash as trash;
 pub mod typeselect;
 #[cfg(feature = "app")]

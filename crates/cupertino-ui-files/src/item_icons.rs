@@ -1,31 +1,32 @@
-//! What the window draws for each item: a picture's thumbnail once it is made ([`ThumbnailService`]), else Files' own
-//! art for a folder, a text file, another document or an archive ([`crate::item_art`]) unless an asset pack ships an
-//! icon of its own for that kind, else the icon of the item's type from the asset packs and the icon theme
-//! ([`FileIcons`]), with the alias badge on a symbolic link.
-//! Each window says which of its items are in view, so only those get thumbnails.
+//! What a file view draws for each item: a picture's thumbnail once it is made ([`ThumbnailService`]), else the
+//! family's own art for a folder, a text file, another document or an archive ([`crate::item_art`]) unless an asset
+//! pack ships an icon of its own for that kind, else the icon of the item's type from the asset packs and the icon
+//! theme ([`FileIcons`]), with the alias badge on a symbolic link.
+//! Each window says which of its items are in view, so only those get thumbnails; the program runs the making of each
+//! as a job ([`ItemIcons::take_job`]).
 
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use cupertino_kit::controls::ImageSource;
-use cupertino_kit::core::next_resource_id;
-use cupertino_kit::file_icons::{FileIcons, RENDITION_SCALES};
-use cupertino_kit::render::{ImageResource, PixelFormat, ResourceId};
+use cupertino_ui_controls::ImageSource;
+use cupertino_ui_core::next_resource_id;
+use cupertino_ui_render::{ImageResource, PixelFormat, ResourceId};
 
 use cupertino_icons::{SystemIcons, ThemeIcons};
 
 /// The icon of an application whose own the icon themes lack.
 const GENERIC_APPLICATION: &str = "application.generic";
 
+use crate::entry::{Entry, Kind};
+use crate::file_icons::{FileIcons, RENDITION_SCALES};
+use crate::item_art::{self, Art};
+use crate::mime;
 use crate::thumbnail_service::{
-    has_thumbnail, Stamp, Thumbnail, ThumbnailService, MEMORY_BUDGET, WORKERS,
+    has_thumbnail, Stamp, Thumbnail, ThumbnailJob, ThumbnailService, MEMORY_BUDGET,
 };
 use cupertino_icons::thumbnail::Thumbnailer;
-use cupertino_kit::files::entry::{Entry, Kind};
-use cupertino_kit::files::item_art::{self, Art};
-use cupertino_kit::files::mime;
 
 /// Thumbnails are made for this many device pixels a point, so they stay sharp on a 2× display; a 1× display draws
 /// them shrunk.
@@ -38,7 +39,7 @@ const TEXT_PAGES: u64 = 8;
 type ArtKey = (Art, u64, u64);
 
 /// The icons of the items of every window.
-pub(super) struct ItemIcons {
+pub struct ItemIcons {
     files: RefCell<FileIcons>,
     thumbnails: Option<ThumbnailService>,
     /// The art drawn so far, kept for the life of the process so a repainted cell names the same pixels.
@@ -84,8 +85,8 @@ fn source(thumbnail: &Thumbnail) -> ImageSource {
 
 impl ItemIcons {
     /// Icons drawn with `files`, and thumbnails kept in `thumbnails`' cache when there is one; `wake` is called when a
-    /// thumbnail is made.
-    pub(super) fn new(
+    /// thumbnail's job waits to be taken and when a thumbnail is made.
+    pub fn new(
         files: FileIcons,
         thumbnails: Option<Thumbnailer>,
         wake: Arc<dyn Fn() + Send + Sync>,
@@ -94,7 +95,7 @@ impl ItemIcons {
         Self {
             files: RefCell::new(files),
             thumbnails: thumbnails
-                .map(|cache| ThumbnailService::new(cache, WORKERS, MEMORY_BUDGET, wake, ids)),
+                .map(|cache| ThumbnailService::new(cache, MEMORY_BUDGET, wake, ids)),
             art: RefCell::new(HashMap::new()),
             packed: RefCell::new(HashMap::new()),
             apps: None,
@@ -104,7 +105,7 @@ impl ItemIcons {
 
     /// Applications drawn with the icons their entries name, looked up in `themes`, else with `system`'s generic
     /// application icon.
-    pub(super) fn with_app_icons(self, themes: Option<(ThemeIcons, SystemIcons)>) -> Self {
+    pub fn with_app_icons(self, themes: Option<(ThemeIcons, SystemIcons)>) -> Self {
         Self {
             apps: themes.map(RefCell::new),
             ..self
@@ -131,7 +132,7 @@ impl ItemIcons {
                 let pixmap = own.unwrap_or_else(|| system.raster(GENERIC_APPLICATION, px).clone());
                 ImageSource {
                     id: next_resource_id(),
-                    image: cupertino_kit::render::ImageResource {
+                    image: ImageResource {
                         revision: 1,
                         width: pixmap.width(),
                         height: pixmap.height(),
@@ -147,12 +148,17 @@ impl ItemIcons {
     }
 
     /// Whether the windows' items get thumbnails.
-    pub(super) fn thumbnails(&self) -> bool {
+    pub fn thumbnails(&self) -> bool {
         self.thumbnails.is_some()
     }
 
+    /// The next thumbnail to make, for the program to run off its UI thread ([`ThumbnailService::take_job`]).
+    pub fn take_job(&self) -> Option<ThumbnailJob> {
+        self.thumbnails.as_ref()?.take_job()
+    }
+
     /// The renditions of `entry`'s image `points` square: its thumbnail, else its type's icon.
-    pub(super) fn icon(&self, entry: &Entry, points: f64) -> Vec<ImageSource> {
+    pub fn icon(&self, entry: &Entry, points: f64) -> Vec<ImageSource> {
         let thumbnail = self
             .thumbnails
             .as_ref()
@@ -223,12 +229,7 @@ impl ItemIcons {
     }
 
     /// Window `window` shows `entries` with icons `points` square, the first most wanted.
-    pub(super) fn want<'a>(
-        &self,
-        window: u64,
-        entries: impl IntoIterator<Item = &'a Entry>,
-        points: f64,
-    ) {
+    pub fn want<'a>(&self, window: u64, entries: impl IntoIterator<Item = &'a Entry>, points: f64) {
         if let Some(service) = &self.thumbnails {
             let items = entries
                 .into_iter()
@@ -239,7 +240,7 @@ impl ItemIcons {
     }
 
     /// Window `window` closed.
-    pub(super) fn forget(&self, window: u64) {
+    pub fn forget(&self, window: u64) {
         if let Some(service) = &self.thumbnails {
             service.forget(window);
             service.forget(previews(window));
@@ -248,7 +249,7 @@ impl ItemIcons {
 
     /// The thumbnail of `entry` `points` square once it is made: a picture's preview, which has no icon to fall back
     /// on.
-    pub(super) fn thumbnail(&self, entry: &Entry, points: f64) -> Option<ImageSource> {
+    pub fn thumbnail(&self, entry: &Entry, points: f64) -> Option<ImageSource> {
         let service = self
             .thumbnails
             .as_ref()
@@ -259,11 +260,7 @@ impl ItemIcons {
 
     /// The picture a preview shows of `entry` `points` square: `Some` with its thumbnail once made, `Some(None)` when
     /// none will come (the file has none, or making it failed), `None` while it is being made.
-    pub(super) fn preview_picture(
-        &self,
-        entry: &Entry,
-        points: f64,
-    ) -> Option<Option<ImageSource>> {
+    pub fn preview_picture(&self, entry: &Entry, points: f64) -> Option<Option<ImageSource>> {
         let Some(service) = self.thumbnails.as_ref().filter(|_| shows_thumbnail(entry)) else {
             return Some(None);
         };
@@ -277,7 +274,7 @@ impl ItemIcons {
 
     /// Window `window` previews `entries` `points` square, besides the items it shows: the preview column's and the
     /// preview window's pictures.
-    pub(super) fn want_previews<'a>(
+    pub fn want_previews<'a>(
         &self,
         window: u64,
         entries: impl IntoIterator<Item = &'a Entry>,

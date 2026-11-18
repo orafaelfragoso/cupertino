@@ -17,7 +17,7 @@ Updated by the lead at every merge.
 |---|---|
 | Current wave | 5 |
 | Running tasks | none |
-| Enforced layers | foundation, system, graphics, models, protocol, transport, render, ui, testing (122 remaining-work lines) |
+| Enforced layers | foundation, system, graphics, models, protocol, transport, render, ui, testing (111 remaining-work lines in the working tree) |
 | Waiting on the owner | nothing |
 | Last closed wave | 4 |
 
@@ -872,15 +872,44 @@ Tasks owning `cupertino-server` run one at a time, in the order W5.1, W5.2, W5.3
 starts when W5.2, W5.5, W5.9 and W5.10 are merged; the server split continues beside it, since no shell crate depends
 on a server crate.
 
+**Implementation checkpoint (unmerged).** W5.9, W5.11 and W5.12 are in the working tree. W5.10 has
+window and layer key hooks, the host message catalogue and display clocks; bus delivery, the runtime,
+role and transaction requests, and per-component identity are still outstanding. The identity resolver
+comes from W5.2. The shared transaction limit constants specified in `shell-host.md` still need an
+assigned task in `cupertino-protocols`. Task boxes are ticked at merge.
+
 #### W5.1 The compositor never waits without a deadline (M, behaviour change)
 
-**Owns** `server`. **After** W4.close.
+**Owns** `server`; `seat` for deadlines on the logind calls made from the compositor loop. **After** W4.close.
 
 - [ ] A stall recorder: with `CUPERTINO_PROFILE`, any turn of the compositor's loop longer than 4 ms is logged with what
       it ran. Recorded in the report over the common interactions, before and after.
 - [ ] Every wait found by the recorder, and by `rg -n 'recv\(|join\(|wait\(|block_on|blocking::|std::fs::'
       crates/cupertino-server/src` on the loop's thread, has a deadline and a fallback or moves off the thread.
 - [ ] Program test: a client and a shell component that stop answering do not delay the compositor's frames.
+
+Implemented in the working tree: active-turn profiling on all three backends, bounded logind calls
+with ordered cleanup of late replies, cursor reads and scripted output off the loop, and a headless
+test that observes another client's frame callbacks while a mapped application and a supervised shell
+observer stop dispatching. The local profile (720×480, opening and closing overview and moving the
+pointer) recorded 57 turns before the cursor change, longest 249.6 ms (241.3 ms composing the scene),
+and 90 afterwards, longest 26.3 ms. These are individual headless runs, not hardware performance baselines.
+
+Decided (owner delegated to the lead, 2026-11-18):
+
+- `KeymapFile::with_fd` in vendored Smithay writes a temporary file on the loop for legacy
+  `wl_keyboard` recipients and when the sealed file is unavailable. W5.1 owns a narrow Smithay patch,
+  with its patch metadata, that prepares the legacy descriptor when the keymap changes instead.
+- `is_portal_prompt` protects consent dialogs from desktop control. A window with the prompt app ID
+  stays protected while the identity comparison is indeterminate (timed out or unavailable); only a
+  verified mismatch makes it an ordinary window.
+
+Remaining audit:
+
+- Live settings, process and launch checks, and GPU waits still need work. In particular,
+  `CopiedFrame::draw` can enter Smithay's blocking sync-point fallback across GPUs, and headless
+  `--frame-stats` intentionally finishes GPU work on the frame thread. Keep benchmark measurements
+  comparable when changing those waits.
 
 #### W5.2 Host protocol, server side (L, behaviour change)
 
@@ -956,9 +985,32 @@ keep their sound code until W6.5 and W6.2 move them to the service; W6.16 then f
 - [ ] Settings' sound pane calls the service; Settings no longer depends on `cupertino-alsa` or `cupertino-pipewire`.
 - [ ] Packaging and `contracts.yaml` list the binary, the activation file and the interface.
 
+**Audio1 wire contract.** On the session bus, the name and interface are
+`org.cupertino.Audio1`, at `/org/cupertino/Audio1`. The bus activates `/usr/bin/cupertino-audiod`.
+These methods cover the sound controls; audio playback and the input level meter stay with their clients.
+
+| Method | In | Out | Meaning |
+|---|---|---|---|
+| `ListDevices` | `s` direction | `a(usb)` | Ordered `(id, name, default)` rows for `input` or `output`; empty when the backend has no selectable devices. |
+| `SetDefault` | `su` direction, id | — | Select a device from the current list for that direction. |
+| `GetVolume` | `s` direction | `db` level, muted | Read the default device. |
+| `SetVolume` | `sdb` direction, level, muted | `db` level, muted | Apply both values, returning the resulting state (hardware may round the level). |
+| `GetBalance` | — | `d` balance | Read the default output's stereo balance. |
+| `SetBalance` | `d` balance | — | Set the default output's stereo balance. |
+
+Levels are finite in `[0, 1]`, balance in `[-1, 1]` (0 is centred). The service serialises mixer
+operations. It prefers PipeWire, with the existing ALSA playback fallback; no ALSA capture fallback.
+An invalid direction or number returns `org.freedesktop.DBus.Error.InvalidArgs`.
+A missing device (including a stale ID from a previous listing) or a backend I/O failure returns
+`org.freedesktop.DBus.Error.Failed`; an unsupported operation (e.g. balance on a mono device)
+returns `org.freedesktop.DBus.Error.NotSupported`. The client's next read sees external changes;
+v1 adds no change signal. A mute switch that cannot represent the requested state returns
+`NotSupported`; reading a master with no switch reports muted at zero.
+
 #### W5.10 `cupertino-kit-shell` (L)
 
-**Owns** new `kit-shell`. **After** W4.10, W4.7.
+**Owns** new `kit-shell`; `ui-core` and `ui-wayland` for window keys at role creation and shell access
+to resolved window and layer surfaces before commit, internal to the toolkit. **After** W4.10, W4.7.
 
 - [ ] The API of W4.9 over the generated bindings; nothing beyond it.
 
@@ -1316,3 +1368,7 @@ One line per change to a decision or approval of a design: date, number, what, w
 - 2026-11-18: lead, review of W4.12, fixed in 0b0494e58: a window that takes a kept model is woken, so a folder whose
   work ended first is shown; a listing's panic fails its model instead of Files; a kept model whose work runs is not
   replaced; a watch whose queue overflowed lists its folder again; no name set is built per batch on the UI thread.
+- 2026-11-18: owner: W5.1 may change `cupertino-seat` to bound logind waits, preserving the pause handshake;
+  W5.10 may change `cupertino-ui-core` and `cupertino-ui-wayland` to carry window keys and resolve window and
+  layer surfaces before commit without exposing Wayland objects through the facades. The owner approved
+  the W5.9 wire contract for implementation, including the input controls and playback fallback.

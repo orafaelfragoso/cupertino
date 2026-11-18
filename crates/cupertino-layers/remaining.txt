@@ -14,11 +14,8 @@ apps facade cupertino-files -> cupertino-wayland-client normal
 apps facade cupertino-settings -> cupertino-theme normal
 apps facade cupertino-settings -> cupertino-wayland-client normal
 apps forbidden_edge cupertino-files -> cupertino-wayland-client normal
-apps forbidden_edge cupertino-settings -> cupertino-alsa normal
-apps forbidden_edge cupertino-settings -> cupertino-pipewire normal
 apps forbidden_edge cupertino-settings -> cupertino-wayland-client normal
 platform external_crate cupertino-seat -> smithay normal
-shell disallowed_methods cupertino-control clippy.toml
 shell disallowed_methods cupertino-controlcenter clippy.toml
 shell disallowed_methods cupertino-dock clippy.toml
 shell disallowed_methods cupertino-launcher clippy.toml
@@ -30,9 +27,6 @@ shell disallowed_methods cupertino-polkit-agent clippy.toml
 shell disallowed_methods cupertino-portal clippy.toml
 shell disallowed_methods cupertino-screenshot clippy.toml
 shell disallowed_methods cupertino-windowmanager clippy.toml
-shell external_crate cupertino-control -> image normal
-shell external_crate cupertino-control -> wayland-client normal
-shell external_crate cupertino-control -> wayland-protocols normal
 shell external_crate cupertino-dock -> tiny-skia normal
 shell external_crate cupertino-login -> image normal
 shell external_crate cupertino-login -> tiny-skia normal
@@ -46,9 +40,6 @@ shell external_crate cupertino-screenshot -> tiny-skia normal
 shell external_crate cupertino-screenshot -> wayland-client normal
 shell external_crate cupertino-screenshot -> wayland-protocols normal
 shell external_crate cupertino-windowmanager -> wayland-client normal
-shell facade cupertino-control -> cupertino-app-protocols normal
-shell facade cupertino-control -> cupertino-shell-client normal
-shell facade cupertino-control -> cupertino-wayland-client normal
 shell facade cupertino-controlcenter -> cupertino-shell-client normal
 shell facade cupertino-controlcenter -> cupertino-ui-wayland normal
 shell facade cupertino-controlcenter -> cupertino-wayland-client normal
@@ -92,8 +83,6 @@ shell facade cupertino-screenshot -> cupertino-shell-client normal
 shell facade cupertino-screenshot -> cupertino-ui-wayland normal
 shell facade cupertino-screenshot -> cupertino-wayland-client normal
 shell facade cupertino-windowmanager -> cupertino-protocols normal
-shell forbidden_edge cupertino-control -> cupertino-shell-client normal
-shell forbidden_edge cupertino-control -> cupertino-wayland-client normal
 shell forbidden_edge cupertino-controlcenter -> cupertino-alsa normal
 shell forbidden_edge cupertino-controlcenter -> cupertino-pipewire normal
 shell forbidden_edge cupertino-controlcenter -> cupertino-shell-client normal

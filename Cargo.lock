@@ -916,10 +916,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "cupertino-bluetooth"
+name = "cupertino-audiod"
 version = "0.1.0"
 dependencies = [
- "rustix 1.1.6",
+ "cupertino-alsa",
+ "cupertino-pipewire",
+ "tempfile",
+ "zbus",
 ]
 
 [[package]]
@@ -927,7 +930,6 @@ name = "cupertino-btd"
 version = "0.1.0"
 dependencies = [
  "async-channel",
- "cupertino-bluetooth",
  "cupertino-diagnostic-events",
  "cupertino-seat",
  "rustix 1.1.6",
@@ -1243,6 +1245,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cupertino-kit-shell"
+version = "0.1.0"
+dependencies = [
+ "cupertino-shell-client",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "cupertino-launcher"
 version = "0.1.0"
 dependencies = [
@@ -1359,20 +1370,12 @@ version = "0.1.0"
 dependencies = [
  "async-channel",
  "cupertino-diagnostic-events",
- "cupertino-netlink",
  "cupertino-peer",
  "cupertino-seat",
  "rustix 1.1.6",
  "tempfile",
  "zbus",
  "zeroize",
-]
-
-[[package]]
-name = "cupertino-netlink"
-version = "0.1.0"
-dependencies = [
- "rustix 1.1.6",
 ]
 
 [[package]]
@@ -1662,7 +1665,6 @@ version = "0.1.0"
 dependencies = [
  "async-channel",
  "async-io",
- "cupertino-alsa",
  "cupertino-apps",
  "cupertino-assets",
  "cupertino-defaults",
@@ -1672,7 +1674,6 @@ dependencies = [
  "cupertino-keyboard",
  "cupertino-kit",
  "cupertino-menu-model",
- "cupertino-pipewire",
  "cupertino-radios",
  "cupertino-theme",
  "cupertino-wayland-client",

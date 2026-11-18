@@ -1,8 +1,6 @@
 // cupertino-layers --graph
-// 71 crates, 333 internal dependencies
-// per layer: foundation 5, graphics 2, models 6, system 8, platform 7, protocol 3, transport 2, render 3, ui 9, shellkit 0, core 1, services 4, shell 12, apps 2, tools 6, testing 1
-// forbidden normal edge cupertino-control (shell) -> cupertino-shell-client (transport)
-// forbidden normal edge cupertino-control (shell) -> cupertino-wayland-client (transport)
+// 71 crates, 332 internal dependencies
+// per layer: foundation 5, graphics 2, models 6, system 8, platform 5, protocol 3, transport 2, render 3, ui 9, shellkit 1, core 1, services 6, shell 11, apps 2, tools 6, testing 1
 // forbidden normal edge cupertino-controlcenter (shell) -> cupertino-alsa (platform)
 // forbidden normal edge cupertino-controlcenter (shell) -> cupertino-pipewire (platform)
 // forbidden normal edge cupertino-controlcenter (shell) -> cupertino-shell-client (transport)
@@ -32,8 +30,6 @@
 // forbidden normal edge cupertino-portal (shell) -> cupertino-wayland-client (transport)
 // forbidden normal edge cupertino-screenshot (shell) -> cupertino-shell-client (transport)
 // forbidden normal edge cupertino-screenshot (shell) -> cupertino-wayland-client (transport)
-// forbidden normal edge cupertino-settings (apps) -> cupertino-alsa (platform)
-// forbidden normal edge cupertino-settings (apps) -> cupertino-pipewire (platform)
 // forbidden normal edge cupertino-settings (apps) -> cupertino-wayland-client (transport)
 digraph "layers" {
   node [shape=box];
@@ -71,11 +67,9 @@ digraph "layers" {
     "cupertino-trash";
   }
   subgraph "cluster_platform" {
-    label="platform (7)";
+    label="platform (5)";
     "cupertino-alsa";
-    "cupertino-bluetooth";
     "cupertino-devices";
-    "cupertino-netlink";
     "cupertino-pipewire";
     "cupertino-screencast";
     "cupertino-seat";
@@ -109,20 +103,25 @@ digraph "layers" {
     "cupertino-ui-text";
     "cupertino-ui-wayland";
   }
+  subgraph "cluster_shellkit" {
+    label="shellkit (1)";
+    "cupertino-kit-shell";
+  }
   subgraph "cluster_core" {
     label="core (1)";
     "cupertino-server";
   }
   subgraph "cluster_services" {
-    label="services (4)";
+    label="services (6)";
+    "cupertino-audiod";
     "cupertino-btd";
+    "cupertino-control";
     "cupertino-netd";
     "cupertino-powerd";
     "cupertino-sessiond";
   }
   subgraph "cluster_shell" {
-    label="shell (12)";
-    "cupertino-control";
+    label="shell (11)";
     "cupertino-controlcenter";
     "cupertino-dock";
     "cupertino-launcher";
@@ -154,7 +153,8 @@ digraph "layers" {
     "cupertino-session-tests";
   }
   "cupertino-assets" -> "cupertino-theme";
-  "cupertino-btd" -> "cupertino-bluetooth";
+  "cupertino-audiod" -> "cupertino-alsa";
+  "cupertino-audiod" -> "cupertino-pipewire";
   "cupertino-btd" -> "cupertino-diagnostic-events";
   "cupertino-btd" -> "cupertino-seat";
   "cupertino-cli" -> "cupertino-assets";
@@ -165,8 +165,8 @@ digraph "layers" {
   "cupertino-control" -> "cupertino-app-protocols";
   "cupertino-control" -> "cupertino-control-model";
   "cupertino-control" -> "cupertino-peer";
-  "cupertino-control" -> "cupertino-shell-client" [color=red];
-  "cupertino-control" -> "cupertino-wayland-client" [color=red];
+  "cupertino-control" -> "cupertino-shell-client";
+  "cupertino-control" -> "cupertino-wayland-client";
   "cupertino-controlcenter" -> "cupertino-alsa" [color=red];
   "cupertino-controlcenter" -> "cupertino-assets";
   "cupertino-controlcenter" -> "cupertino-defaults";
@@ -248,6 +248,7 @@ digraph "layers" {
   "cupertino-kit" -> "cupertino-ui-text";
   "cupertino-kit" -> "cupertino-ui-wayland";
   "cupertino-kit" -> "cupertino-wayland-client" [label="dev"];
+  "cupertino-kit-shell" -> "cupertino-shell-client";
   "cupertino-launcher" -> "cupertino-animation";
   "cupertino-launcher" -> "cupertino-apps";
   "cupertino-launcher" -> "cupertino-assets";
@@ -296,7 +297,6 @@ digraph "layers" {
   "cupertino-menubar" -> "cupertino-ui-wayland";
   "cupertino-menubar" -> "cupertino-wayland-client" [color=red];
   "cupertino-netd" -> "cupertino-diagnostic-events";
-  "cupertino-netd" -> "cupertino-netlink";
   "cupertino-netd" -> "cupertino-peer";
   "cupertino-netd" -> "cupertino-seat";
   "cupertino-notifications" -> "cupertino-animation";
@@ -390,7 +390,6 @@ digraph "layers" {
   "cupertino-sessiond" -> "cupertino-login-ipc";
   "cupertino-sessiond" -> "cupertino-peer";
   "cupertino-sessiond" -> "cupertino-seat";
-  "cupertino-settings" -> "cupertino-alsa" [color=red];
   "cupertino-settings" -> "cupertino-apps";
   "cupertino-settings" -> "cupertino-assets";
   "cupertino-settings" -> "cupertino-defaults";
@@ -400,7 +399,6 @@ digraph "layers" {
   "cupertino-settings" -> "cupertino-keyboard";
   "cupertino-settings" -> "cupertino-kit";
   "cupertino-settings" -> "cupertino-menu-model";
-  "cupertino-settings" -> "cupertino-pipewire" [color=red];
   "cupertino-settings" -> "cupertino-radios";
   "cupertino-settings" -> "cupertino-theme";
   "cupertino-settings" -> "cupertino-wayland-client" [color=red];

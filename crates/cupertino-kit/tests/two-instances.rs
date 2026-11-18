@@ -9,12 +9,10 @@ use cupertino_diagnostic_events::{self as diag, Record};
 use cupertino_kit::controls::WINDOW_CONTENT_INSET;
 use cupertino_kit::core::CommandRegistry;
 use cupertino_kit::geometry::Size;
-use cupertino_kit::platform::{
-    DecorationMode, MouseButton, PointerEvent, Timestamp, WindowEvent, WindowId, WindowStates,
-};
+use cupertino_kit::platform::{DecorationMode, MouseButton, PointerEvent, Timestamp, WindowId};
 use cupertino_kit::prelude::*;
+use cupertino_kit::test::{TestDriver, WindowEvent, WindowStates};
 use cupertino_kit::Instance;
-use cupertino_ui_test::TestDriver;
 use std::num::NonZeroU32;
 use std::sync::mpsc;
 

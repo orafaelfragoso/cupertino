@@ -54,7 +54,7 @@ zbus = { version = "5", default-features = false, features = ["async-io", "block
 zeroize = { version = "1", optional = true }
 
 [dev-dependencies]
-cupertino-ui-test = { path = "../cupertino-ui-test" }
+cupertino-kit = { path = "../cupertino-kit", features = ["test"] }
 cupertino-capture = { path = "../cupertino-capture" }
 tiny-skia = "0.12"
 tempfile = "3"

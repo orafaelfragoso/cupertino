@@ -82,7 +82,7 @@ pub enum PresentProperty {
 pub struct PresentChange {
     pub property: PresentProperty,
     pub to: f64,
-    pub curve: Option<cupertino_animation::LayerCurve>,
+    pub curve: Option<cupertino_theme::animation::Timing>,
     pub velocity: f64,
 }
 

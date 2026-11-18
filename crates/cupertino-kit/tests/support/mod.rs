@@ -2,13 +2,13 @@
 //! and wake it.
 
 use cupertino_assets::BUILTIN_FONT;
-use cupertino_kit::core::{Application, PlaceholderIcons, RuntimeOptions};
+use cupertino_kit::core::{Application, RuntimeOptions};
 use cupertino_kit::layout::LayoutDirection;
-use cupertino_kit::platform::{Capabilities, Timestamp};
+use cupertino_kit::platform::Timestamp;
 use cupertino_kit::render::{CpuConfig, CpuRenderer};
-use cupertino_kit::text::{FontIndex, GlyphRaster, TextSystem};
+use cupertino_kit::test::{Capabilities, FontIndex, ManualClock, PlaceholderIcons, TestDriver};
+use cupertino_kit::text::{GlyphRaster, TextSystem};
 use cupertino_kit::theme::{Appearance, ThemePreferences, ThemeTokens};
-use cupertino_ui_test::{ManualClock, TestDriver};
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::{Duration, Instant};

@@ -988,7 +988,6 @@ dependencies = [
  "async-channel",
  "async-io",
  "cupertino-alsa",
- "cupertino-animation",
  "cupertino-assets",
  "cupertino-defaults",
  "cupertino-diagnostic-events",
@@ -1124,7 +1123,6 @@ dependencies = [
  "cupertino-menu-model",
  "cupertino-theme",
  "cupertino-trash",
- "cupertino-ui-test",
  "cupertino-ui-text",
  "cupertino-ui-wayland",
  "cupertino-wayland-client",
@@ -1229,6 +1227,7 @@ dependencies = [
 name = "cupertino-kit"
 version = "0.1.0"
 dependencies = [
+ "cupertino-animation",
  "cupertino-app-protocols",
  "cupertino-apps",
  "cupertino-assets",
@@ -1246,6 +1245,7 @@ dependencies = [
  "cupertino-ui-text",
  "cupertino-ui-wayland",
  "cupertino-wayland-client",
+ "image",
  "libc",
  "rustix 1.1.6",
  "tiny-skia",
@@ -1285,6 +1285,7 @@ version = "0.1.0"
 dependencies = [
  "serde_json",
  "spdx",
+ "toml",
 ]
 
 [[package]]
@@ -1308,7 +1309,6 @@ dependencies = [
  "cupertino-raster-math",
  "cupertino-seat",
  "cupertino-shell-client",
- "cupertino-ui-test",
  "cupertino-ui-wayland",
  "cupertino-wayland-client",
  "gungraun",
@@ -1735,6 +1735,7 @@ name = "cupertino-ui-abi"
 version = "0.1.0"
 dependencies = [
  "cupertino-kit",
+ "cupertino-ui-core",
  "cupertino-ui-test",
  "object",
  "rustix 1.1.6",
@@ -1830,6 +1831,7 @@ dependencies = [
  "cupertino-gpu",
  "cupertino-keyboard",
  "cupertino-menu-model",
+ "cupertino-theme",
  "cupertino-ui-core",
  "cupertino-ui-render",
  "cupertino-ui-text",

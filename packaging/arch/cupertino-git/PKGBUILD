@@ -46,9 +46,9 @@ build() {
     esac
   done
   export RUSTFLAGS
-  cargo build --frozen --release --workspace --all-features --bins
+  cargo build-programs --frozen
   # libcupertinokit.so, the C SDK's library: the cdylib of cupertino-ui-abi, which no binary links
-  cargo build --frozen --release -p cupertino-ui-abi --lib --all-features
+  cargo build --frozen --release -p cupertino-ui-abi --lib
   # The manual pages and the completions of the cupertino command, written by the binary just built from its registry;
   # the pages are dated by makepkg's SOURCE_DATE_EPOCH.
   local cli="${CARGO_TARGET_DIR:-target}/release/cupertino" gen="$srcdir/gen" shell

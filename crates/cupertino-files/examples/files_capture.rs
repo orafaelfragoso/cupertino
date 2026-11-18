@@ -33,12 +33,11 @@ use cupertino_kit::core::Role;
 use cupertino_kit::file_icons::FileIcons;
 use cupertino_kit::geometry::{Point, Size};
 use cupertino_kit::platform::{
-    Capabilities, KeyEvent, Keysym, Mods, MouseButton, PointerEvent, SystemAppearance, Timestamp,
-    WindowEvent, WindowId, WindowStates,
+    KeyEvent, Keysym, Mods, MouseButton, PointerEvent, SystemAppearance, Timestamp, WindowId,
 };
 use cupertino_kit::render::{PaintOp, PixelFormat};
+use cupertino_kit::test::{Capabilities, ManualClock, TestDriver, WindowEvent, WindowStates};
 use cupertino_kit::theme::ThemeTokens;
-use cupertino_ui_test::{ManualClock, TestDriver};
 use tiny_skia::{IntRect, IntSize, Pixmap};
 
 /// The sample home folder's name, the window's title.
@@ -289,7 +288,7 @@ impl Capture {
         .with_clock(sample_now);
         prepare(start);
         let mut options = cupertino_kit::app::options().map_err(|e| e.to_string())?;
-        let preferences = cupertino_kit::app::preferences(&SystemAppearance {
+        let preferences = cupertino_kit::test::preferences(&SystemAppearance {
             dark: look.dark,
             increase_contrast: look.increase_contrast,
             reduce_transparency: look.reduce_transparency,

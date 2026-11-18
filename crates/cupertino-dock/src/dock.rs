@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use crate::ease::{cosine_ease, EasedValue};
 use cupertino_animation::{AnimatedValue, Curve};
-use cupertino_kit::theme::EASE_IN_OUT_CURVE;
+use cupertino_kit::motion::Easing;
 use cupertino_wm::geometry::{Point, Rect};
 use cupertino_wm::ids::WindowId;
 
@@ -253,10 +253,7 @@ fn push_section<'a>(
 }
 
 fn presence_curve(cfg: &DockConfig) -> Curve {
-    Curve::Timed {
-        duration: cfg.tile_presence_s,
-        bezier: EASE_IN_OUT_CURVE,
-    }
+    Easing::EASE_IN_OUT.over(cfg.tile_presence_s).curve()
 }
 
 impl Dock {
@@ -1387,14 +1384,8 @@ impl Dock {
             0.0
         };
         if d.look.target() != target {
-            d.look.animate_to(
-                target,
-                Curve::Timed {
-                    duration: LOOK_S,
-                    bezier: EASE_IN_OUT_CURVE,
-                },
-                now,
-            );
+            d.look
+                .animate_to(target, Easing::EASE_IN_OUT.over(LOOK_S).curve(), now);
         }
     }
 

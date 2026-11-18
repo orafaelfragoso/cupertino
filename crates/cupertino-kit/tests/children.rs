@@ -47,7 +47,7 @@ fn a_program_started_for_an_instance_is_reaped_by_its_loop_once_it_ended() {
     let mut driver = support::driver::<Idle>(support::text_system());
     driver
         .runtime_mut()
-        .set_each_turn(cupertino_kit::app::each_turn());
+        .set_each_turn(cupertino_kit::test::each_turn());
     let mut command = Process::new("sh");
     command
         .arg("-c")

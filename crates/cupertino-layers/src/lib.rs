@@ -3,7 +3,8 @@
 //! further rules are checks of their own: no layer reaches up through a chain of dependencies, `foundation` and
 //! `models` sources stay pure, `system` crates start no threads ([`THREADLESS_LAYERS`]), components stay apart, the window-system boundaries ([`WINDOW_SYSTEM`]) hold, `shell`
 //! and `apps` crates reach the toolkit through its facades ([`FACADES`]), external crates stay in their layers
-//! ([`EXTERNAL_CRATES`]) and every crate declares a licence.
+//! ([`EXTERNAL_CRATES`]), every crate declares a licence, only dev-dependencies turn on the toolkit's test feature
+//! ([`TEST_FEATURE`]) and the alias that builds the programs names every other feature ([`PROGRAMS_ALIAS`]).
 //!
 //! Problems that today's crates still have are listed in the committed remaining-work file ([`REMAINING`]): the check
 //! fails on a problem the file does not list and on a line that is no longer a problem, and the lines of the layers in
@@ -289,6 +290,15 @@ pub const FACADES: &[Facade] = &[
     },
 ];
 
+/// The toolkit's feature for program tests, as package and feature: only a dev-dependency may turn it on, never a
+/// normal or build dependency or a feature, so no program is built with it.
+pub const TEST_FEATURE: (&str, &str) = ("cupertino-kit", "test");
+
+/// The Cargo alias in the workspace's `.cargo/config.toml` that builds the programs as they are packaged: it names
+/// every feature of the workspace's packages with `--features`, `default` aside (on without being named), except
+/// [`TEST_FEATURE`].
+pub const PROGRAMS_ALIAS: &str = "build-programs";
+
 /// External crates that only some layers may depend on directly. A name ending in `*` stands for every crate it
 /// starts.
 #[derive(Clone, Copy, Debug)]
@@ -461,6 +471,21 @@ pub enum Problem {
     StaleGraph(String),
     /// A `shell` or `apps` crate whose `clippy.toml` is missing or differs from the list of disallowed methods.
     DisallowedMethods { krate: String, layer: Layer },
+    /// A normal or build dependency, or a feature, of `krate` that turns on the test feature (`feature`, as
+    /// `package/feature`); `how` names it.
+    TestFeature {
+        krate: String,
+        feature: String,
+        how: String,
+    },
+    /// The alias that builds the programs (`alias`) in the workspace's `.cargo/config.toml` is missing, or does not
+    /// name exactly the workspace's features but the test feature: those it leaves out, and those it names that are
+    /// not among them (`--all-features` included).
+    ProgramFeatures {
+        alias: String,
+        missing: Vec<String>,
+        extra: Vec<String>,
+    },
 }
 
 impl Problem {
@@ -480,6 +505,8 @@ impl Problem {
             Problem::EnforcedRemaining(_) => "enforced_remaining",
             Problem::StaleGraph(_) => "stale_graph",
             Problem::DisallowedMethods { .. } => "disallowed_methods",
+            Problem::TestFeature { .. } => "test_feature",
+            Problem::ProgramFeatures { .. } => "program_features",
         }
     }
 
@@ -496,10 +523,12 @@ impl Problem {
             Problem::Impure { krate, .. }
             | Problem::StartsThread { krate, .. }
             | Problem::UndeclaredLicence { krate, .. }
-            | Problem::DisallowedMethods { krate, .. } => krate,
-            Problem::StaleRemaining(_) | Problem::EnforcedRemaining(_) | Problem::StaleGraph(_) => {
-                "cupertino-layers"
-            }
+            | Problem::DisallowedMethods { krate, .. }
+            | Problem::TestFeature { krate, .. } => krate,
+            Problem::StaleRemaining(_)
+            | Problem::EnforcedRemaining(_)
+            | Problem::StaleGraph(_)
+            | Problem::ProgramFeatures { .. } => "cupertino-layers",
         }
     }
 
@@ -641,6 +670,25 @@ impl fmt::Display for Problem {
                 f,
                 "{krate} ({layer}) has no clippy.toml with the disallowed methods: remove its banned calls, then \
                  cargo run -q -p cupertino-layers -- --write-clippy {krate}"
+            ),
+            Problem::TestFeature {
+                krate,
+                feature,
+                how,
+            } => write!(
+                f,
+                "{krate} turns on {feature} with {how}: only a dev-dependency may, so that no program is built with it"
+            ),
+            Problem::ProgramFeatures {
+                alias,
+                missing,
+                extra,
+            } => write!(
+                f,
+                ".cargo/config.toml: the alias {alias} must name every feature of the workspace's packages but the \
+                 test feature, as --features=PACKAGE/FEATURE; it leaves out [{}] and names [{}]",
+                missing.join(", "),
+                extra.join(", ")
             ),
         }
     }

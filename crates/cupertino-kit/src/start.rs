@@ -6,13 +6,13 @@ use cupertino_assets::{Assets, FontRole, FontSource, BUILTIN_FONT};
 use cupertino_defaults::appearance::{AppearanceSettings, Highlight};
 use cupertino_defaults::watch::{ConfigWatcher, WatchEvent};
 use cupertino_keyboard::modifiers::Profile;
-use cupertino_theme::ui::{Appearance, ColorTokens, ThemePreferences, ThemeTokens};
-use cupertino_theme::Theme;
+use cupertino_theme::ui::{Appearance, Color, ColorTokens, ThemePreferences, ThemeTokens};
+use cupertino_theme::{DesignTokens, Theme};
 use cupertino_ui_core::layout::LayoutDirection;
 use cupertino_ui_core::platform::{PlatformError, SystemAppearance, WindowSystem};
 use cupertino_ui_core::{
-    Application, Command, EachTurn, MonotonicClock, Runtime, RuntimeOptions, ThemeForAppearance,
-    UiError,
+    Application, Command, EachTurn, Environment, MonotonicClock, Runtime, RuntimeOptions,
+    ThemeForAppearance, UiError,
 };
 use cupertino_ui_render::gpu::GpuConfig;
 use cupertino_ui_render::{CpuConfig, CpuRenderer};
@@ -28,7 +28,7 @@ use std::io::{self, Read};
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use crate::{Entered, Instance};
 
@@ -160,10 +160,10 @@ pub fn run_lock_screen_on_with<A: Application>(
 }
 
 /// Names the file that [`Timed::timed`] appends the timing of each scroll to.
-pub const SCROLL_TIMING_ENV: &str = "CUPERTINO_SCROLL_TIMING";
+const SCROLL_TIMING_ENV: &str = "CUPERTINO_SCROLL_TIMING";
 
 /// Names the file that [`Timed::timed`] appends the phases of each frame to; every process of a session may share it.
-pub const FRAME_TIMING_ENV: &str = "CUPERTINO_FRAME_TIMING";
+const FRAME_TIMING_ENV: &str = "CUPERTINO_FRAME_TIMING";
 
 /// A runtime that reports how long scrolls take to reach the screen when [`SCROLL_TIMING_ENV`] names an absolute path:
 /// one JSON object a line per scroll event, its stages in nanoseconds (`input`, `handled`, `updated`, `submitted`,
@@ -171,7 +171,7 @@ pub const FRAME_TIMING_ENV: &str = "CUPERTINO_FRAME_TIMING";
 /// the phases of every frame there ([`frame_timing_json`]), one line per frame written whole, so the processes of a
 /// session can share the file, each with the renderer `renderers` drew it with. Without the variables the runtime keeps
 /// no timing.
-pub trait Timed {
+trait Timed {
     fn timed(self, renderers: GpuRenderers) -> Self;
 }
 
@@ -274,7 +274,7 @@ fn json_string(text: &str) -> String {
 
 /// One line of the frame timing report: the process, the renderer it drew the frame with (`cpu` or `gpu`), the turn's
 /// start on the monotonic clock and each phase, in nanoseconds, then the frames the turn presented.
-pub fn frame_timing_json(
+fn frame_timing_json(
     t: &cupertino_ui_core::FrameTiming,
     pid: u32,
     program: &str,
@@ -299,7 +299,7 @@ pub fn frame_timing_json(
 }
 
 /// One line of the scroll timing report.
-pub fn scroll_timing_json(t: &cupertino_ui_core::ScrollTiming) -> String {
+fn scroll_timing_json(t: &cupertino_ui_core::ScrollTiming) -> String {
     let ns = |t: Option<cupertino_ui_core::platform::Timestamp>| {
         t.map_or("null".to_string(), |t| t.0.to_string())
     };
@@ -327,9 +327,33 @@ pub fn options() -> Result<RuntimeOptions, AppError> {
     options_and_theme(start_preferences(None)).map(|(options, _)| options)
 }
 
+/// The theme, text system and symbols an application of this system lays out with, in the light appearance with motion
+/// on, for a program that measures text before it has a window. [`run`] makes its own and follows the session.
+pub fn environment() -> Result<Environment, AppError> {
+    let options = options()?;
+    Ok(Environment {
+        theme: options.theme,
+        text: options.text,
+        direction: options.direction,
+        scale: 1.0,
+        icons: options.icons,
+    })
+}
+
+/// The named colours of the theme data the process's applications start on, kept from the first start that read them;
+/// the installed data is the same for every instance.
+static SYSTEM_COLORS: OnceLock<DesignTokens> = OnceLock::new();
+
+/// The colour the theme data names `name` (`system-green`) in `appearance`, a high contrast appearance taking its base
+/// appearance's colour where it names none. `None` for a name the data does not have, and until an application of the
+/// process started on the installed theme data ([`run`] and the functions beside it, [`environment`]).
+pub fn system_color(name: &str, appearance: Appearance) -> Option<Color> {
+    SYSTEM_COLORS.get()?.color(appearance, name)
+}
+
 /// The theme preferences an application starts with: the session's when the window system knows them, else light with
 /// motion on.
-pub fn start_preferences(appearance: Option<SystemAppearance>) -> ThemePreferences {
+fn start_preferences(appearance: Option<SystemAppearance>) -> ThemePreferences {
     preferences(&appearance.unwrap_or_default())
 }
 
@@ -499,7 +523,10 @@ impl Personal {
 /// desktop's data, and says why on stderr.
 fn start_theme(preferences: ThemePreferences) -> Result<(ThemeTokens, Option<Theme>), AppError> {
     let cupertino = cupertino_assets::theme::load().and_then(|data| {
-        ThemeTokens::cupertino(&data, preferences).map(|theme| (theme, Some(data)))
+        ThemeTokens::cupertino(&data, preferences).map(|theme| {
+            SYSTEM_COLORS.get_or_init(|| data.tokens.clone());
+            (theme, Some(data))
+        })
     });
     cupertino.or_else(|e| {
         eprintln!("cupertino-kit: no Cupertino theme ({e}); using the neutral theme");

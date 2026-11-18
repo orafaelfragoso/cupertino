@@ -190,12 +190,7 @@ fn run(report: &std::path::Path, on_gpu: bool) -> Result<(), String> {
                                 LayerChange::new(
                                     LayerProperty::Opacity,
                                     0.0,
-                                    Some(cupertino_ui_core::platform::LayerCurve::Timed {
-                                        duration: FADE,
-                                        bezier: cupertino_ui_core::platform::CubicBezier::new(
-                                            0.0, 0.0, 1.0, 1.0,
-                                        ),
-                                    }),
+                                    Some(cupertino_theme::animation::Easing::LINEAR.over(FADE)),
                                 ),
                                 LayerChange::through(
                                     LayerProperty::ContentBlur,

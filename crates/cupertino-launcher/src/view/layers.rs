@@ -33,9 +33,7 @@ use super::modes::{JOIN_CONTAINER, JOIN_SPACING};
 use super::{
     edge_alpha, edge_outside, enclosure_radius, enclosure_rect, mode_rects_of, Input, EDGE_WIDTH,
 };
-use crate::motion::{
-    Frame, Header, Motion, CLOSE_BLUR, CLOSE_DURATION, OPEN_DAMPING, OPEN_FADE, OPEN_RESPONSE,
-};
+use crate::motion::{Frame, Header, Motion, CLOSE_BLUR, CLOSE_DURATION, OPEN_FADE};
 use cupertino_kit::controls::CaretBlink;
 use cupertino_kit::core::{
     Change, Element, Event, EventCx, MeasureCx, PaintCx, Propagation, SemanticsCx,
@@ -43,10 +41,10 @@ use cupertino_kit::core::{
 };
 use cupertino_kit::geometry::{Point, Rect, Size};
 use cupertino_kit::layout::{Constraints, ContainerKind, LayoutSpec, Measured, SizeSpec};
+use cupertino_kit::motion::{Easing, SpringPreset, Timing};
 use cupertino_kit::platform::{
-    GlassStyle, LayerChange, LayerCurve, LayerEdge, LayerProperty, SurfaceLayerLook,
+    GlassStyle, LayerChange, LayerEdge, LayerProperty, SurfaceLayerLook,
 };
-use cupertino_kit::theme::{EASE_OUT_CURVE, LINEAR_CURVE};
 use std::cell::Cell;
 use std::sync::Arc;
 
@@ -650,10 +648,7 @@ pub fn close_changes(
     to: &Frame,
     modes: usize,
 ) -> Vec<(u64, Vec<LayerChange>)> {
-    let curve = Some(LayerCurve::Timed {
-        duration: CLOSE_DURATION,
-        bezier: EASE_OUT_CURVE,
-    });
+    let curve = Some(Easing::EASE_OUT.over(CLOSE_DURATION));
     let go = |property, value: f64| LayerChange::new(property, value, curve);
     let fade = || go(LayerProperty::Opacity, 0.0);
     let (rest, end) = (enclosure_rect(extent, from), enclosure_rect(extent, to));
@@ -733,14 +728,8 @@ pub fn open_changes(
     motion: &Motion,
     start: f64,
 ) -> Vec<(u64, Vec<LayerChange>)> {
-    let spring = Some(LayerCurve::Spring {
-        response: OPEN_RESPONSE,
-        damping: OPEN_DAMPING,
-    });
-    let fade = Some(LayerCurve::Timed {
-        duration: OPEN_FADE,
-        bezier: LINEAR_CURVE,
-    });
+    let spring = Some(Timing::from(SpringPreset::LAUNCHER_OPEN));
+    let fade = Some(Easing::LINEAR.over(OPEN_FADE));
     // a property set where the open starts and moved to where it rests along `curve`
     let from_to = |out: &mut Vec<LayerChange>, property, a: f64, b: f64, curve| {
         if a != b {
@@ -846,10 +835,7 @@ pub fn field_open_changes(
     caret: Option<CaretBlink>,
 ) -> Vec<(u64, Vec<LayerChange>)> {
     let count = rest.modes.count;
-    let fade = Some(LayerCurve::Timed {
-        duration: OPEN_FADE,
-        bezier: LINEAR_CURVE,
-    });
+    let fade = Some(Easing::LINEAR.over(OPEN_FADE));
     let opacity = |out: &mut Vec<LayerChange>| {
         out.push(LayerChange::new(LayerProperty::Opacity, first.alpha, None));
         out.push(LayerChange::new(LayerProperty::Opacity, rest.alpha, fade));

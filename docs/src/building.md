@@ -25,7 +25,9 @@ a build-only operation. `--all-features` alone does not select test targets, but
 dependencies, so prefer the production features needed by the package.
 
 `cargo build-programs` builds every program of the workspace in release mode (an alias for `cargo build --locked
---release --workspace --all-features --bins`).
+--release --workspace --bins` that names every feature of the workspace's packages with `--features`, except
+`cupertino-kit/test`, which only dev-dependencies turn on; `cupertino-layers` checks the list). The package recipes
+build with it.
 
 Validate changes separately with `cargo xtask ci --profile agent`, which checks the crates you changed (see
 [Tests](#tests)).

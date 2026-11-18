@@ -11,14 +11,14 @@ mod wire;
 use cupertino_diagnostic_events::{self as diag, Record};
 use cupertino_keyboard::modifiers::Profile;
 use cupertino_kit::controls::WINDOW_CONTENT_INSET;
-use cupertino_kit::core::{CommandRegistry, Runtime};
+use cupertino_kit::core::CommandRegistry;
 use cupertino_kit::geometry::Size;
 use cupertino_kit::platform::DecorationMode;
 use cupertino_kit::prelude::*;
-use cupertino_kit::render::{
-    CpuFrame, MemoryTarget, PixelRect, RenderError, RenderFrameId, RenderRequest, UiRenderer,
-};
+use cupertino_kit::render::{RenderRequest, UiRenderer};
+use cupertino_kit::test::Runtime;
 use cupertino_kit::Instance;
+use cupertino_ui_render::{CpuFrame, MemoryTarget, PixelRect, RenderError, RenderFrameId};
 use cupertino_ui_wayland::WaylandWindowSystem;
 use std::num::NonZeroU32;
 use std::sync::mpsc;

@@ -298,12 +298,12 @@ read.
 ### Tracy
 
 The client is behind the `tracy` feature, which takes effect only with `--cfg cupertino_tracy` as well: every package
-and CI build uses `--all-features`, which turns the feature on, and the cfg keeps the client (and its C++ library, which
-listens for the profiler) out of them. A build that streams to Tracy, in a target folder of its own since the flag
+build (`cargo build-programs`) and CI build turns the feature on, and the cfg keeps the client (and its C++ library,
+which listens for the profiler) out of them. A build that streams to Tracy, in a target folder of its own since the flag
 rebuilds every crate:
 
 ```sh
-RUSTFLAGS="--cfg cupertino_tracy" cargo build --release --workspace --all-features --bins --target-dir target/tracy
+RUSTFLAGS="--cfg cupertino_tracy" cargo build-programs --target-dir target/tracy
 BIN_DIR=target/tracy/release CUPERTINO_PROFILE=tracy target/tracy/release/cupertino-server --headless --spawn cupertino-files
 ```
 

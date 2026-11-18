@@ -21,11 +21,9 @@ use std::sync::Arc;
 use cupertino_capture::{App, Look, Request, State};
 use cupertino_kit::core::{Application, Command, Key, Window, WindowKey};
 use cupertino_kit::geometry::Size;
-use cupertino_kit::platform::{
-    Capabilities, KeyEvent, Keysym, Mods, SystemAppearance, Timestamp, WindowEvent, WindowId,
-    WindowStates,
-};
+use cupertino_kit::platform::{KeyEvent, Keysym, Mods, SystemAppearance, Timestamp, WindowId};
 use cupertino_kit::render::PixelFormat;
+use cupertino_kit::test::{Capabilities, ManualClock, TestDriver, WindowEvent, WindowStates};
 use cupertino_kit::text::TextSystem;
 use cupertino_kit::theme::ThemeTokens;
 use cupertino_login::model::LockScreen;
@@ -41,7 +39,6 @@ use cupertino_login::view::{
     GREETER_TITLE, LOCKED_TITLE, LOCK_APP_ID,
 };
 use cupertino_login::wallpaper::Source;
-use cupertino_ui_test::{ManualClock, TestDriver};
 use tiny_skia::{IntSize, Pixmap};
 
 const TURNS: u32 = 10_000;
@@ -346,7 +343,7 @@ impl App for Login {
 
 fn draw(look: Look, scale: f32, wallpaper: Source, field: FieldState) -> Result<Pixmap, String> {
     let mut options = cupertino_kit::app::options().map_err(|e| e.to_string())?;
-    let preferences = cupertino_kit::app::preferences(&SystemAppearance {
+    let preferences = cupertino_kit::test::preferences(&SystemAppearance {
         dark: look.dark,
         increase_contrast: look.increase_contrast,
         reduce_transparency: look.reduce_transparency,
@@ -369,7 +366,7 @@ fn draw(look: Look, scale: f32, wallpaper: Source, field: FieldState) -> Result<
     driver
         .runtime_mut()
         .set_theme_for(Box::new(move |appearance: &SystemAppearance| {
-            let preferences = cupertino_kit::app::preferences(appearance);
+            let preferences = cupertino_kit::test::preferences(appearance);
             Arc::new(ThemeTokens::cupertino(&theme, preferences).expect("the theme loaded once"))
         }));
     driver.run_until_idle(turns).map_err(|e| fail(&e))?;

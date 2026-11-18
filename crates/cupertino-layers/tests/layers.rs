@@ -6,7 +6,7 @@ use common::{run_in, stderr, stdout, Fixture};
 use cupertino_layers::Layer::{
     Apps, Core, Foundation, Graphics, Models, Protocol, Services, Shell, System, Testing, Ui,
 };
-use cupertino_layers::{Layer, Policy, POLICY};
+use cupertino_layers::{Layer, Policy, Problem, POLICY};
 
 const NONE: &[&str] = &[];
 
@@ -525,6 +525,102 @@ fn write_clippy_writes_the_named_shell_and_apps_crates() {
         assert!(stderr(&out).contains("is not a shell or apps crate"));
     }
     assert_eq!(exists(&fx), [false, false, false]);
+}
+
+// the toolkit's test feature
+
+/// `(kind, crate, what)` of each problem `fx` has that no line lists.
+fn unlisted(fx: &Fixture) -> Vec<(&'static str, String, String)> {
+    fx.check()
+        .unlisted()
+        .map(|p| match p {
+            Problem::TestFeature { krate, how, .. } => (p.kind(), krate.clone(), how.clone()),
+            Problem::ProgramFeatures { missing, extra, .. } => {
+                (p.kind(), missing.join(","), extra.join(","))
+            }
+            p => (p.kind(), p.from().to_owned(), p.to_string()),
+        })
+        .collect()
+}
+
+#[test]
+fn only_a_dev_dependency_turns_on_the_toolkits_test_feature() {
+    let fx = Fixture::new("test-feature")
+        .krate("cupertino-kit", Ui, &[])
+        .feature("cupertino-kit", "test", &[])
+        .feature("cupertino-kit", "default", &["test"])
+        .krate("a", Apps, &[("dev", "cupertino-kit")])
+        .dep_features("a", "cupertino-kit", &["test"])
+        .krate("s", Shell, &[("normal", "cupertino-kit")])
+        .dep_features("s", "cupertino-kit", &["test"])
+        .krate("b", Apps, &[("build", "cupertino-kit")])
+        .dep_features("b", "cupertino-kit", &["test"])
+        .krate("f", Apps, &[("normal", "cupertino-kit")])
+        .feature("f", "app", &["cupertino-kit/test"])
+        .build();
+    let mut problems = unlisted(&fx);
+    problems.sort();
+    let problem = |krate: &str, how: &str| ("test_feature", krate.to_owned(), how.to_owned());
+    assert_eq!(
+        problems,
+        [
+            problem("b", "a build dependency"),
+            problem("cupertino-kit", "its feature `default`"),
+            problem("f", "its feature `app`"),
+            problem("s", "a normal dependency"),
+        ]
+    );
+}
+
+#[test]
+fn the_programs_alias_names_every_feature_but_the_test_feature() {
+    let alias =
+        |words: &str| format!("[alias]\nbuild-programs = \"build --release --bins {words}\"\n");
+    let rows = [
+        (
+            "every feature but the test feature",
+            alias("--features=a/app --features d/dbus,d/udev"),
+            None,
+        ),
+        (
+            "a feature left out",
+            alias("--features=a/app -F d/dbus"),
+            Some(("d/udev", "")),
+        ),
+        (
+            "the test feature named",
+            alias("--features=a/app,d/dbus,d/udev,cupertino-kit/test"),
+            Some(("", "cupertino-kit/test")),
+        ),
+        (
+            "every feature",
+            alias("--all-features"),
+            Some(("a/app,d/dbus,d/udev", "--all-features")),
+        ),
+        (
+            "no alias",
+            "[build]\njobs = 1\n".to_owned(),
+            Some(("a/app,d/dbus,d/udev", "")),
+        ),
+    ];
+    for (row, config, expected) in rows {
+        let fx = Fixture::new("programs-alias")
+            .krate("cupertino-kit", Ui, &[])
+            .feature("cupertino-kit", "test", &[])
+            .krate("a", Apps, &[])
+            .feature("a", "app", &[])
+            .krate("d", Core, &[])
+            .feature("d", "default", &["dbus"])
+            .feature("d", "dbus", &[])
+            .feature("d", "udev", &[])
+            .cargo_config(&config)
+            .build();
+        let expected: Vec<_> = expected
+            .into_iter()
+            .map(|(missing, extra)| ("program_features", missing.to_owned(), extra.to_owned()))
+            .collect();
+        assert_eq!(unlisted(&fx), expected, "{row}");
+    }
 }
 
 // the repository

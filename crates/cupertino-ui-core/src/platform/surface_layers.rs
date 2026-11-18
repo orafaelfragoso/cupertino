@@ -44,7 +44,7 @@ pub enum LayerProperty {
 pub struct LayerChange {
     pub property: LayerProperty,
     pub to: f64,
-    pub curve: Option<cupertino_animation::LayerCurve>,
+    pub curve: Option<cupertino_theme::animation::Timing>,
     pub velocity: f64,
     /// The property's values at even steps of a timed `curve`'s duration (its Bézier unused), the first at its start
     /// and the last, `to`, at its end, in a straight line between two: a motion the application works out itself (a
@@ -57,7 +57,7 @@ impl LayerChange {
     pub fn new(
         property: LayerProperty,
         to: f64,
-        curve: Option<cupertino_animation::LayerCurve>,
+        curve: Option<cupertino_theme::animation::Timing>,
     ) -> LayerChange {
         LayerChange {
             property,
@@ -73,10 +73,7 @@ impl LayerChange {
         LayerChange {
             property,
             to: values.last().map_or(0.0, |&v| f64::from(v)),
-            curve: Some(cupertino_animation::LayerCurve::Timed {
-                duration,
-                bezier: cupertino_animation::CubicBezier::new(0.0, 0.0, 1.0, 1.0),
-            }),
+            curve: Some(cupertino_theme::animation::Easing::LINEAR.over(duration)),
             velocity: 0.0,
             samples: Some(values),
         }

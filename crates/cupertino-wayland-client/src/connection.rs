@@ -452,8 +452,6 @@ struct Surface {
     wl: WlSurface,
     role: Role,
     viewport: Option<WpViewport>,
-    /// The viewport shows a crop of the buffer: the last frame was magnified ([`BufferLease::set_zoom`]).
-    zoomed: bool,
     /// The one-pixel buffer of the colour the surface last showed all over ([`Connection::present_solid`]), with that
     /// colour as the protocol takes it (premultiplied, each component scaled to the whole `u32` range).
     solid: Option<(WlBuffer, [u32; 4])>,
@@ -496,30 +494,17 @@ impl Surface {
     /// one, showing the `source` rectangle of the buffer (pixels) when given and all of it otherwise; else by a whole
     /// buffer scale, which shows all of it.
     fn scaling(
-        &mut self,
+        &self,
         logical: (u32, u32),
         scale: Scale,
         source: Option<(f64, f64, f64, f64)>,
     ) -> Result<commit::Scaling, Error> {
         match (&self.viewport, scale.integer()) {
-            (Some(viewport), _) => {
-                let source = match source {
-                    Some(source) => {
-                        self.zoomed = true;
-                        Some(source)
-                    }
-                    None if self.zoomed => {
-                        self.zoomed = false;
-                        Some((-1.0, -1.0, -1.0, -1.0))
-                    }
-                    None => None,
-                };
-                Ok(commit::Scaling::Viewport {
-                    viewport: viewport.clone(),
-                    source,
-                    destination: logical,
-                })
-            }
+            (Some(viewport), _) => Ok(commit::Scaling::Viewport {
+                viewport: viewport.clone(),
+                crop: source,
+                destination: logical,
+            }),
             (None, _) if source.is_some() => Err(Error::Protocol(
                 "a cropped frame on a surface without a viewport",
             )),
@@ -1597,7 +1582,10 @@ impl Connection {
     /// applies, and the buffer it shows stays. Nothing goes before the surface has shown a buffer.
     pub fn commit_state(&mut self, surface: SurfaceId) -> Result<(), Error> {
         let surf = self.state.surface_mut(surface)?;
+        // after a commit another thread is sending, not in the middle of it
+        let shared = commit::lock(&surf.shared);
         surf.wl.commit();
+        drop(shared);
         self.flush()
     }
 
@@ -1609,8 +1597,10 @@ impl Connection {
                 "unmap_subsurface on a surface that is not a subsurface",
             ));
         }
+        let shared = commit::lock(&surf.shared);
         surf.wl.attach(None, 0, 0);
         surf.wl.commit();
+        drop(shared);
         // the buffers it showed are the compositor's until it releases them; what they hold is still known
         self.flush()
     }
@@ -1758,7 +1748,10 @@ impl Connection {
         }
         s.drop_syncobj(surface)?;
         let surf = s.surface_mut(surface)?;
-        let acked = commit::lock(&surf.shared).serials.present()?;
+        // held until the commit is sent, as a commit from another thread holds it
+        let shared = Arc::clone(&surf.shared);
+        let mut shared = commit::lock(&shared);
+        let acked = shared.serials.present()?;
         if let Some(serial) = acked {
             match &surf.role {
                 Role::Toplevel { xdg, .. } | Role::Popup { xdg, .. } => xdg.ack_configure(serial),
@@ -1781,9 +1774,9 @@ impl Connection {
         let viewport = surf
             .viewport
             .get_or_insert_with(|| viewporter.get_viewport(wl, &qh, ()));
-        if surf.zoomed {
+        if shared.zoomed {
             viewport.set_source(-1.0, -1.0, -1.0, -1.0);
-            surf.zoomed = false;
+            shared.zoomed = false;
         }
         viewport.set_destination(clamp_i32(logical.0), clamp_i32(logical.1));
         surf.wl.set_buffer_scale(1);
@@ -1794,6 +1787,7 @@ impl Connection {
         }
         surf.wl.frame(&qh, surface);
         surf.wl.commit();
+        drop(shared);
         // the pixel it replaced is no longer attached
         if let Some(old) = replaced {
             old.destroy();
@@ -2379,7 +2373,6 @@ impl State {
             wl,
             role,
             viewport,
-            zoomed: false,
             solid: None,
             fractional,
             fractional_scale: None,
@@ -2389,6 +2382,7 @@ impl State {
             shared: Arc::new(std::sync::Mutex::new(commit::Shared {
                 serials,
                 gone: false,
+                zoomed: false,
             })),
             slots: Vec::new(),
             next_slot: 0,

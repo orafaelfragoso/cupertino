@@ -33,6 +33,14 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
+use wayland_protocols::wp::fractional_scale::v1::server::{
+    wp_fractional_scale_manager_v1::{self, WpFractionalScaleManagerV1},
+    wp_fractional_scale_v1::WpFractionalScaleV1,
+};
+use wayland_protocols::wp::viewporter::server::{
+    wp_viewport::{self, WpViewport},
+    wp_viewporter::{self, WpViewporter},
+};
 use wayland_protocols::xdg::shell::server::{
     xdg_surface::{self, XdgSurface},
     xdg_toplevel::XdgToplevel,
@@ -64,6 +72,9 @@ pub struct Offer {
     /// Whether the server offers `abgr8888` shared memory and releases each buffer once a later commit of its surface
     /// replaces it, as a compositor showing the frames does; otherwise it keeps every buffer it was given.
     pub releases: bool,
+    /// Whether the viewporter and fractional scaling are offered, so surfaces have viewports; each source rectangle
+    /// a viewport is given is one of [`Harness::presents`].
+    pub scaling: bool,
 }
 
 impl Offer {
@@ -75,6 +86,7 @@ impl Offer {
         semantics: Some(2),
         shell: true,
         releases: false,
+        scaling: false,
     };
 
     /// Only the standard protocols.
@@ -85,6 +97,7 @@ impl Offer {
         semantics: None,
         shell: true,
         releases: false,
+        scaling: false,
     };
 }
 
@@ -334,6 +347,10 @@ fn serve(
         handle.create_global::<Server, XdgWmBase, ()>(6, ());
     }
     handle.create_global::<Server, WlSeat, ()>(7, ());
+    if offer.scaling {
+        handle.create_global::<Server, WpViewporter, ()>(1, ());
+        handle.create_global::<Server, WpFractionalScaleManagerV1, ()>(1, ());
+    }
     if let Some(v) = offer.layers {
         handle.create_global::<Server, CupertinoLayersV1, ()>(v, ());
     }
@@ -393,8 +410,65 @@ global!(
     CupertinoLayersV1,
     CupertinoAppEffectsV1,
     CupertinoScrollV1,
-    CupertinoSemanticsV1
+    CupertinoSemanticsV1,
+    WpViewporter,
+    WpFractionalScaleManagerV1
 );
+
+impl Dispatch<WpViewporter, ()> for Server {
+    fn request(
+        _: &mut Server,
+        _: &Client,
+        _: &WpViewporter,
+        request: wp_viewporter::Request,
+        _: &(),
+        _: &DisplayHandle,
+        init: &mut DataInit<'_, Server>,
+    ) {
+        if let wp_viewporter::Request::GetViewport { id, .. } = request {
+            init.init(id, ());
+        }
+    }
+}
+
+/// A viewport's source rectangle is part of the presents a test reads back.
+impl Dispatch<WpViewport, ()> for Server {
+    fn request(
+        server: &mut Server,
+        _: &Client,
+        _: &WpViewport,
+        request: wp_viewport::Request,
+        _: &(),
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Server>,
+    ) {
+        if let wp_viewport::Request::SetSource {
+            x,
+            y,
+            width,
+            height,
+        } = request
+        {
+            server.present(&format!("SetSource {x} {y} {width} {height}"));
+        }
+    }
+}
+
+impl Dispatch<WpFractionalScaleManagerV1, ()> for Server {
+    fn request(
+        _: &mut Server,
+        _: &Client,
+        _: &WpFractionalScaleManagerV1,
+        request: wp_fractional_scale_manager_v1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        init: &mut DataInit<'_, Server>,
+    ) {
+        if let wp_fractional_scale_manager_v1::Request::GetFractionalScale { id, .. } = request {
+            init.init(id, ());
+        }
+    }
+}
 
 /// Shared memory, `abgr8888` listed when the server shows frames ([`Offer::releases`]).
 impl GlobalDispatch<WlShm, bool> for Server {
@@ -443,7 +517,14 @@ macro_rules! ignore {
         }
     )*};
 }
-ignore!(WlRegion, WlBuffer, WlPointer, XdgToplevel, WlCallback);
+ignore!(
+    WlRegion,
+    WlBuffer,
+    WlPointer,
+    XdgToplevel,
+    WlCallback,
+    WpFractionalScaleV1
+);
 
 impl Dispatch<WlSurface, ()> for Server {
     fn request(

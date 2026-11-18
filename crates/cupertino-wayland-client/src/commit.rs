@@ -26,6 +26,10 @@ pub(crate) struct Shared {
     pub(crate) serials: Serials,
     /// The surface was destroyed: a commit made before sends nothing.
     pub(crate) gone: bool,
+    /// The viewport shows a crop of the buffer: the frame committed last was magnified
+    /// ([`BufferLease::set_zoom`](crate::BufferLease::set_zoom)). Only a commit sent changes it, so one dropped unsent
+    /// leaves the crop for the next to unset.
+    pub(crate) zoomed: bool,
 }
 
 pub(crate) type SharedState = Arc<Mutex<Shared>>;
@@ -52,11 +56,11 @@ impl Ack {
 
 /// How the buffer is scaled onto the surface.
 pub(crate) enum Scaling {
-    /// By the surface's viewport: the source rectangle to set (`None` leaves it, all `-1` unsets it) and the
-    /// destination in points.
+    /// By the surface's viewport: the crop of the buffer it shows (pixels; `None` for all of it) and the destination
+    /// in points.
     Viewport {
         viewport: WpViewport,
-        source: Option<(f64, f64, f64, f64)>,
+        crop: Option<(f64, f64, f64, f64)>,
         destination: (u32, u32),
     },
     /// By a whole buffer scale.
@@ -120,12 +124,21 @@ impl Commit {
             match &self.scaling {
                 Scaling::Viewport {
                     viewport,
-                    source,
+                    crop,
                     destination,
                 } => {
                     self.wl.set_buffer_scale(1);
-                    if let Some((x, y, w, h)) = *source {
-                        viewport.set_source(x, y, w, h);
+                    match *crop {
+                        Some((x, y, w, h)) => {
+                            viewport.set_source(x, y, w, h);
+                            shared.zoomed = true;
+                        }
+                        // the crop the last frame sent goes
+                        None if shared.zoomed => {
+                            viewport.set_source(-1.0, -1.0, -1.0, -1.0);
+                            shared.zoomed = false;
+                        }
+                        None => {}
                     }
                     viewport.set_destination(clamp_i32(destination.0), clamp_i32(destination.1));
                 }

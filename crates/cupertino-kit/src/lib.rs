@@ -335,11 +335,12 @@ pub mod files {
         };
     }
 
-    /// New folders, renames, aliases, copies and moves, as blocking functions.
+    /// New folders, renames, aliases, copies and moves, as blocking functions, and a copy or a move in slices.
     pub mod operations {
         pub use cupertino_ui_files::operations::{
             drop_action, drop_into, duplicate, duplicate_with, is_cancelled, make_alias,
             new_folder, rename_item, same_volume, stopped, transfer, Cancel, DropAction, Progress,
+            Transfer, TransferSlice, SLICE, SLICE_DEADLINE,
         };
     }
 

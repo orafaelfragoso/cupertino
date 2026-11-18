@@ -23,7 +23,7 @@ public items: the family builds on them and `cupertino-ui-controls` gains no dep
 | `layout::icon`, `geom` | icon view | `ideal_cell_size`, `max_title_lines`, `layout` (flow / justified, 32 pt section headers), `strip` (a gallery's row), `IconLayout::{hit, hits_in_rect, neighbour}`, `FreeGrid`, in `cupertino-geometry`'s points, sizes and rectangles; `Direction` |
 | `rename`, `name_edit` | names | `RenameTrigger` (a press on the only selected item's name renames it after the double-click interval), `validate_name`, `needs_extension_warning`, `initial_selection`, `unique_name`, `NameError`; `NameEdit::{field, field_mut, commit}` |
 | `open` | opening files | `open_command` (default application of `mimeapps.list` through `cupertino-apps`; `Terminal=true` under `--terminal`), `command_with`, `open_with` (Open With list: default first, rest by name), `application_at`, `default_app_id`, `OpenError` |
-| `operations` | file changes, blocking functions the program runs off its UI thread | `rename_item` (no replace), `new_folder`, `new_folder_with`, `make_alias`, `duplicate`, `drop_action`, `same_volume`, `drop_into` (move or copy, `name copy` on a clash), `transfer` (the same for a list of items, with `Progress` and a `Cancel`), `duplicate_with`, `stopped`, `is_cancelled` |
+| `operations` | file changes, blocking functions the program runs off its UI thread | `rename_item` (no replace), `new_folder`, `new_folder_with`, `make_alias`, `duplicate`, `drop_action`, `same_volume`, `drop_into` (move or copy, `name copy` on a clash), `transfer` (the same for a list of items, with `Progress` and a `Cancel`), `duplicate_with`, `stopped`, `is_cancelled`; `Transfer::{into_folder, duplicate, take_slice, progress, cancel, results}`, a copy or a move in slices: a `TransferSlice` copies until the first megabyte or item that ends past `SLICE` (a tenth of a second), within `SLICE_DEADLINE` (10 s), and `transfer`, `drop_into` and `duplicate_with` run its slices one after the other. `new_folder_with` stops at the first item that fails |
 | `file_icons` | the icon of an item's type, as image renditions | `FileIcons::{discover, new, builtin, without_host, name, pack_has, images, database}`, `RENDITION_SCALES`, `document_icon_name`, `FILE_ICON_NAMES` |
 | `thumbnail_service` | the thumbnails of the items in view, made by jobs the program runs | `ThumbnailService::{new, want, forget, get, failed, queued, memory, take_job}` (a `ThumbnailJob` while fewer than `JOBS`, two, are being made; `ThumbnailJob::run` reads and decodes, and keeps a panic as the file's failure), `Stamp`, `Thumbnail`, `has_thumbnail`, `MEMORY_BUDGET`, `JOB_DEADLINE` (5 s) |
 | `item_icons` | what a view draws for an item | `ItemIcons::{new, with_app_icons, icon, thumbnail, preview_picture, want, want_previews, forget, thumbnails, take_job}`: a picture's thumbnail, the family's art, an application's own icon, else its type's icon |
@@ -66,9 +66,9 @@ The views' tests drive each view in a window on the headless window system throu
 
 ## Design
 
-The views below are built as the design the owner approved for the family (W4.8 in the plan), and so are the places
-a folder's listing and the thumbnails as work, and the notices on the program's connection. The transfers in slices
-that follow them are W4.12's design, not built yet.
+The views below are built as the design the owner approved for the family (W4.8 in the plan), and so is what follows
+them (W4.12): the places, a folder's listing and the thumbnails as work, the notices on the program's connection and
+the transfers in slices.
 
 ### What shapes it
 

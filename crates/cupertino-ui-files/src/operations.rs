@@ -1,5 +1,7 @@
 //! What the window changes on disk besides the trash (`trash`): renaming in place, creating a folder and dropping
-//! items into a folder. Nothing here overwrites: a clash renames the arriving item (drops) or fails (renames).
+//! items into a folder. Nothing here overwrites: a clash renames the arriving item (drops) or fails (renames). A copy
+//! or a move runs in slices ([`Transfer`]), which the blocking functions ([`transfer`], [`drop_into`],
+//! [`duplicate_with`]) run one after the other.
 
 use crate::rename::unique_name;
 use cupertino_trash as trash;
@@ -9,7 +11,8 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 /// Name of a new folder, then with ` 2`, ` 3` … after it. (the design's default name; the numbering is
 /// approximate).
@@ -75,11 +78,11 @@ pub fn duplicate_with(
     cancel: &Cancel,
     progress: &mut dyn FnMut(&Progress),
 ) -> Vec<io::Result<PathBuf>> {
-    let items: Vec<(&Path, Option<&Path>)> = paths
+    let items = paths
         .iter()
-        .map(|path| (path.as_path(), path.parent()))
+        .map(|path| (path.clone(), path.parent().map(Path::to_path_buf)))
         .collect();
-    transfer_each(&items, DropAction::Copy, cancel, progress)
+    Transfer::new(items, DropAction::Copy, cancel.clone()).run_all(progress)
 }
 
 /// Make a symbolic link to `path` named `name alias` (then `name alias 2` …) in its folder and return it. The link
@@ -112,8 +115,10 @@ pub fn make_alias(path: &Path) -> io::Result<PathBuf> {
 /// folder and what moved stay.
 pub fn new_folder_with(dir: &Path, items: &[PathBuf]) -> io::Result<PathBuf> {
     let folder = new_folder(dir)?;
-    for moved in drop_into(items, &folder, DropAction::Move) {
-        moved?;
+    for item in items {
+        for moved in drop_into(std::slice::from_ref(item), &folder, DropAction::Move) {
+            moved?;
+        }
     }
     Ok(folder)
 }
@@ -244,89 +249,163 @@ fn weight(path: &Path, cancel: &Cancel) -> u64 {
     }
 }
 
-/// A copy's progress and its stop.
-struct Copying<'a> {
-    cancel: &'a Cancel,
-    /// Takes the bytes done since the last call.
-    advance: &'a mut dyn FnMut(u64),
+/// What is left of copying one item, a step at a time: the tree is walked depth first, each folder made before its
+/// items and given its source's permissions after them, each file copied a chunk at a time.
+struct ItemCopy {
+    /// Where the item arrives: the first item made, so the copy's to remove when it fails.
+    target: PathBuf,
+    /// For a move across volumes, the item's trash record, if it is in a trash: the originals are removed once the
+    /// copy is made.
+    moving: Option<Option<trash::TrashedItem>>,
+    /// The steps left, the next last.
+    steps: Vec<Step>,
+    /// The file being copied.
+    file: Option<OpenFile>,
+    copied: Vec<Copied>,
 }
 
-fn copy_new_with(from: &Path, to: &Path, copying: &mut Copying<'_>) -> io::Result<Vec<Copied>> {
-    let mut copied = Vec::new();
-    match copy_tree(from, to, &mut copied, copying) {
-        Ok(()) => Ok(copied),
-        Err(e) => {
-            // the first item copied is `to` itself: made by this copy, so it is this copy's to remove
-            if !copied.is_empty() {
-                let _ = remove_made(to);
+enum Step {
+    /// Copy the item at `.0` to `.1`.
+    Visit(PathBuf, PathBuf),
+    /// The items of the folder made at `.0` are copied: give it its source's permissions.
+    Seal(PathBuf, fs::Permissions),
+}
+
+/// A file being copied: its source and copy open, what the source was, and the buffer of its chunks.
+struct OpenFile {
+    source: fs::File,
+    target: fs::File,
+    meta: fs::Metadata,
+    buffer: Vec<u8>,
+}
+
+impl ItemCopy {
+    fn new(from: &Path, to: PathBuf, moving: Option<Option<trash::TrashedItem>>) -> ItemCopy {
+        ItemCopy {
+            steps: vec![Step::Visit(from.to_path_buf(), to.clone())],
+            target: to,
+            moving,
+            file: None,
+            copied: Vec::new(),
+        }
+    }
+
+    /// One step, `advance` taking the bytes it did; the item's result once it is copied (and, for a move, its originals
+    /// removed) or has failed, which removes what the copy made.
+    fn step(
+        &mut self,
+        cancel: &Cancel,
+        advance: &mut dyn FnMut(u64),
+    ) -> Option<io::Result<PathBuf>> {
+        match self.copy_step(cancel, advance) {
+            Ok(false) => None,
+            Ok(true) => Some(self.made()),
+            Err(e) => {
+                self.file = None;
+                // the first item copied is the target itself: made by this copy, so it is this copy's to remove
+                if !self.copied.is_empty() {
+                    let _ = remove_made(&self.target);
+                }
+                Some(Err(e))
             }
-            Err(e)
         }
     }
-}
 
-fn copy_tree(
-    from: &Path,
-    to: &Path,
-    copied: &mut Vec<Copied>,
-    copying: &mut Copying<'_>,
-) -> io::Result<()> {
-    copying.cancel.check()?;
-    let meta = fs::symlink_metadata(from)?;
-    let kind = meta.file_type();
-    if kind.is_symlink() {
-        std::os::unix::fs::symlink(fs::read_link(from)?, to)?;
-        copied.push(Copied {
-            path: from.to_path_buf(),
-            meta,
-        });
-        (copying.advance)(1);
-    } else if kind.is_dir() {
-        let permissions = meta.permissions();
-        fs::create_dir(to)?;
-        copied.push(Copied {
-            path: from.to_path_buf(),
-            meta,
-        });
-        (copying.advance)(1);
-        for child in fs::read_dir(from)? {
-            let child = child?;
-            copy_tree(&child.path(), &to.join(child.file_name()), copied, copying)?;
+    /// The copy is made: a move removes its originals.
+    fn made(&mut self) -> io::Result<PathBuf> {
+        if let Some(trashed) = self.moving.take() {
+            remove_copied(&self.copied)?;
+            if let Some(item) = trashed {
+                trash::forget(&item);
+            }
         }
-        fs::set_permissions(to, permissions)?;
-    } else if kind.is_file() {
-        let mut source = fs::File::open(from)?;
-        let mut target = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(to)?;
-        copied.push(Copied {
-            path: from.to_path_buf(),
-            meta: meta.clone(),
-        });
-        let mut buffer = vec![0; COPY_CHUNK.min(meta.len() as usize).max(1)];
-        loop {
-            let read = match source.read(&mut buffer) {
-                Ok(0) => break,
-                Ok(read) => read,
-                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-                Err(e) => return Err(e),
-            };
-            target.write_all(&buffer[..read])?;
-            (copying.advance)(read as u64);
-            copying.cancel.check()?;
-        }
-        if meta.len() == 0 {
-            (copying.advance)(1);
-        }
-        target.set_permissions(meta.permissions())?;
-    } else {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "neither a file, a folder nor a link",
-        ));
+        Ok(self.target.clone())
     }
-    Ok(())
+
+    /// Copy one chunk of the file being copied, or take the next step; whether the copy is made.
+    fn copy_step(&mut self, cancel: &Cancel, advance: &mut dyn FnMut(u64)) -> io::Result<bool> {
+        cancel.check()?;
+        if let Some(file) = self.file.as_mut() {
+            let read = loop {
+                match file.source.read(&mut file.buffer) {
+                    Ok(read) => break read,
+                    Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(e) => return Err(e),
+                }
+            };
+            if read > 0 {
+                file.target.write_all(&file.buffer[..read])?;
+                advance(read as u64);
+                cancel.check()?;
+                return Ok(false);
+            }
+            if file.meta.len() == 0 {
+                advance(1);
+            }
+            file.target.set_permissions(file.meta.permissions())?;
+            self.file = None;
+            return Ok(self.steps.is_empty());
+        }
+        match self.steps.pop() {
+            None => return Ok(true),
+            Some(Step::Seal(to, permissions)) => fs::set_permissions(&to, permissions)?,
+            Some(Step::Visit(from, to)) => self.visit(&from, &to, advance)?,
+        }
+        Ok(self.steps.is_empty() && self.file.is_none())
+    }
+
+    /// Make `to` as a copy of the item at `from`: a link and a folder at once (the folder's items as steps), a file
+    /// opened to be copied chunk by chunk.
+    fn visit(&mut self, from: &Path, to: &Path, advance: &mut dyn FnMut(u64)) -> io::Result<()> {
+        let meta = fs::symlink_metadata(from)?;
+        let kind = meta.file_type();
+        if kind.is_symlink() {
+            std::os::unix::fs::symlink(fs::read_link(from)?, to)?;
+            self.copied.push(Copied {
+                path: from.to_path_buf(),
+                meta,
+            });
+            advance(1);
+        } else if kind.is_dir() {
+            let permissions = meta.permissions();
+            fs::create_dir(to)?;
+            self.copied.push(Copied {
+                path: from.to_path_buf(),
+                meta,
+            });
+            advance(1);
+            let mut children = Vec::new();
+            for child in fs::read_dir(from)? {
+                let child = child?;
+                children.push(Step::Visit(child.path(), to.join(child.file_name())));
+            }
+            self.steps.push(Step::Seal(to.to_path_buf(), permissions));
+            self.steps.extend(children.into_iter().rev());
+        } else if kind.is_file() {
+            let source = fs::File::open(from)?;
+            let target = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(to)?;
+            self.copied.push(Copied {
+                path: from.to_path_buf(),
+                meta: meta.clone(),
+            });
+            let buffer = vec![0; COPY_CHUNK.min(meta.len() as usize).max(1)];
+            self.file = Some(OpenFile {
+                source,
+                target,
+                meta,
+                buffer,
+            });
+        } else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "neither a file, a folder nor a link",
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Remove what a failed copy made at `path`, without following links.
@@ -425,7 +504,8 @@ pub fn drop_into(sources: &[PathBuf], dest: &Path, action: DropAction) -> Vec<io
 }
 
 /// [`drop_into`] that reports its [`Progress`] to `progress` as it goes and stops at `cancel`: the item being copied
-/// is removed again and the items after it are left where they are, each with an error [`is_cancelled`] tells.
+/// is removed again and the items after it are left where they are, each with an error [`is_cancelled`] tells. It
+/// runs a [`Transfer`]'s slices one after the other.
 pub fn transfer(
     sources: &[PathBuf],
     dest: &Path,
@@ -433,64 +513,271 @@ pub fn transfer(
     cancel: &Cancel,
     progress: &mut dyn FnMut(&Progress),
 ) -> Vec<io::Result<PathBuf>> {
-    let items: Vec<(&Path, Option<&Path>)> =
-        sources.iter().map(|s| (s.as_path(), Some(dest))).collect();
-    transfer_each(&items, action, cancel, progress)
+    let items = sources
+        .iter()
+        .map(|s| (s.clone(), Some(dest.to_path_buf())))
+        .collect();
+    Transfer::new(items, action, cancel.clone()).run_all(progress)
 }
 
-/// Move or copy each item into its folder (`None`: an item with no folder, which fails), as [`transfer`] does, with
-/// one [`Progress`] over them all.
-fn transfer_each(
-    items: &[(&Path, Option<&Path>)],
+/// How long a slice of a [`Transfer`] copies before it gives its I/O turn back: it ends at the first megabyte or item
+/// that ends past it.
+pub const SLICE: Duration = Duration::from_millis(100);
+
+/// How long one slice should take: a megabyte, or a few items, of a disk that answers.
+pub const SLICE_DEADLINE: Duration = Duration::from_secs(10);
+
+/// A copy or a move that runs in slices, so it holds an I/O turn for [`SLICE`] at a time: the program runs each slice
+/// off its UI thread, within [`SLICE_DEADLINE`]. Its results are the ones of [`drop_into`] and [`duplicate`].
+pub struct Transfer {
+    shared: Arc<Mutex<Shared>>,
+    cancel: Cancel,
+}
+
+/// What a transfer and its slice share.
+struct Shared {
+    /// What is left, while no slice holds it; `None` while one does and once the transfer ended.
+    state: Option<State>,
+    progress: Progress,
+    /// The results, once the transfer ended, until they are taken.
+    results: Option<Vec<io::Result<PathBuf>>>,
+}
+
+/// One slice of a [`Transfer`] ([`Transfer::take_slice`]).
+pub struct TransferSlice {
+    shared: Arc<Mutex<Shared>>,
+    cancel: Cancel,
+    state: Option<State>,
+}
+
+/// Where a transfer is.
+struct State {
+    /// Each item and the folder it goes into; `None`: an item with no folder, which fails.
+    items: Vec<(PathBuf, Option<PathBuf>)>,
     action: DropAction,
-    cancel: &Cancel,
-    progress: &mut dyn FnMut(&Progress),
-) -> Vec<io::Result<PathBuf>> {
-    let weights: Vec<u64> = items.iter().map(|(s, _)| weight(s, cancel)).collect();
-    let mut done = Progress {
-        total_bytes: weights.iter().sum(),
-        total_items: items.len(),
-        ..Progress::default()
-    };
-    let mut results = Vec::with_capacity(items.len());
-    for (&(source, dest), weight) in items.iter().zip(weights) {
-        if cancel.is_cancelled() {
-            results.push(Err(cancelled()));
-            continue;
-        }
-        let before = done.bytes;
-        done.current = source.file_name().map(|n| n.to_string_lossy().into_owned());
-        progress(&done);
-        let result = {
-            let mut advance = |bytes: u64| {
-                // a file that grew while it was copied counts no further than it weighed
-                done.bytes = (done.bytes + bytes).min(before + weight);
-                progress(&done);
-            };
-            let mut copying = Copying {
-                cancel,
-                advance: &mut advance,
-            };
-            match dest {
-                Some(dest) => drop_one(source, dest, action, &mut copying),
-                None => Err(io::Error::from(io::ErrorKind::InvalidInput)),
-            }
-        };
-        done.bytes = before + weight;
-        done.items += 1;
-        done.current = None;
-        progress(&done);
-        results.push(result);
+    /// The bytes each item weighs, as far as they are weighed.
+    weights: Vec<u64>,
+    phase: Phase,
+    done: Progress,
+    results: Vec<io::Result<PathBuf>>,
+}
+
+enum Phase {
+    /// The items are weighed, one at a time.
+    Weighing,
+    /// Item `index` is transferred: begun when its copy is under way, which started at `before` bytes.
+    Moving {
+        index: usize,
+        before: u64,
+        copy: Option<Box<ItemCopy>>,
+    },
+    Ended,
+}
+
+/// What beginning an item gave: its result, or a copy to make.
+enum Begun {
+    Ended(io::Result<PathBuf>),
+    Copy(Box<ItemCopy>),
+}
+
+fn lock(shared: &Mutex<Shared>) -> std::sync::MutexGuard<'_, Shared> {
+    shared
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+impl Transfer {
+    /// Move or copy `sources` into the folder `dest`, as [`drop_into`] does.
+    pub fn into_folder(sources: Vec<PathBuf>, dest: PathBuf, action: DropAction) -> Transfer {
+        let items = sources
+            .into_iter()
+            .map(|s| (s, Some(dest.clone())))
+            .collect();
+        Transfer::new(items, action, Cancel::default())
     }
-    results
+
+    /// Copy each of `paths` next to itself, as [`duplicate`] does.
+    pub fn duplicate(paths: Vec<PathBuf>) -> Transfer {
+        let items = paths
+            .into_iter()
+            .map(|p| {
+                let parent = p.parent().map(Path::to_path_buf);
+                (p, parent)
+            })
+            .collect();
+        Transfer::new(items, DropAction::Copy, Cancel::default())
+    }
+
+    fn new(items: Vec<(PathBuf, Option<PathBuf>)>, action: DropAction, cancel: Cancel) -> Transfer {
+        let state = State {
+            weights: Vec::with_capacity(items.len()),
+            done: Progress {
+                total_items: items.len(),
+                ..Progress::default()
+            },
+            results: Vec::with_capacity(items.len()),
+            items,
+            action,
+            phase: Phase::Weighing,
+        };
+        Transfer {
+            shared: Arc::new(Mutex::new(Shared {
+                progress: state.done.clone(),
+                state: Some(state),
+                results: None,
+            })),
+            cancel,
+        }
+    }
+
+    /// The next slice; `None` while one is out and once the transfer has ended.
+    pub fn take_slice(&mut self) -> Option<TransferSlice> {
+        let state = lock(&self.shared).state.take()?;
+        Some(TransferSlice {
+            shared: Arc::clone(&self.shared),
+            cancel: self.cancel.clone(),
+            state: Some(state),
+        })
+    }
+
+    /// How far it has come, as of the last slice.
+    pub fn progress(&self) -> Progress {
+        lock(&self.shared).progress.clone()
+    }
+
+    /// Stops it: the next slice removes the item being copied and ends the transfer, the items after it left where
+    /// they are, each with an error [`is_cancelled`] tells.
+    pub fn cancel(&mut self) {
+        self.cancel.cancel();
+    }
+
+    /// One result a source, in order, once it has ended.
+    pub fn results(&mut self) -> Option<Vec<io::Result<PathBuf>>> {
+        lock(&self.shared).results.take()
+    }
+
+    /// Run every slice here, `progress` hearing each step.
+    fn run_all(mut self, progress: &mut dyn FnMut(&Progress)) -> Vec<io::Result<PathBuf>> {
+        while let Some(slice) = self.take_slice() {
+            slice.run_with(progress);
+        }
+        self.results().unwrap_or_default()
+    }
 }
 
-fn drop_one(
-    source: &Path,
-    dest: &Path,
-    action: DropAction,
-    copying: &mut Copying<'_>,
-) -> io::Result<PathBuf> {
+impl TransferSlice {
+    /// Blocking: copies until the first megabyte or item that ends past [`SLICE`].
+    pub fn run(self) {
+        self.run_with(&mut |_| {});
+    }
+
+    fn run_with(mut self, progress: &mut dyn FnMut(&Progress)) {
+        let Some(mut state) = self.state.take() else {
+            return;
+        };
+        let start = Instant::now();
+        while state.step(&self.cancel, progress) && start.elapsed() < SLICE {}
+        let mut shared = lock(&self.shared);
+        shared.progress = state.done.clone();
+        match state.phase {
+            Phase::Ended => shared.results = Some(std::mem::take(&mut state.results)),
+            _ => shared.state = Some(state),
+        }
+    }
+}
+
+impl Drop for TransferSlice {
+    /// A slice dropped without running hands the transfer back as it was.
+    fn drop(&mut self) {
+        if let Some(state) = self.state.take() {
+            lock(&self.shared).state = Some(state);
+        }
+    }
+}
+
+impl State {
+    /// One step: weigh an item, begin one, copy a chunk or an item of it, or end it; `false` once the transfer ended.
+    fn step(&mut self, cancel: &Cancel, progress: &mut dyn FnMut(&Progress)) -> bool {
+        match &mut self.phase {
+            Phase::Weighing => {
+                if let Some((source, _)) = self.items.get(self.weights.len()) {
+                    self.weights.push(weight(source, cancel));
+                }
+                if self.weights.len() == self.items.len() {
+                    self.done.total_bytes = self.weights.iter().sum();
+                    self.phase = Phase::Moving {
+                        index: 0,
+                        before: 0,
+                        copy: None,
+                    };
+                }
+                true
+            }
+            Phase::Moving {
+                index,
+                before,
+                copy,
+            } => {
+                let at = *index;
+                let Some((source, dest)) = self.items.get(at) else {
+                    self.phase = Phase::Ended;
+                    return false;
+                };
+                let weight = self.weights[at];
+                let ended = match copy {
+                    Some(item) => {
+                        let (done, before) = (&mut self.done, *before);
+                        item.step(cancel, &mut |bytes| {
+                            // a file that grew while it was copied counts no further than it weighed
+                            done.bytes = (done.bytes + bytes).min(before + weight);
+                            progress(done);
+                        })
+                    }
+                    None if cancel.is_cancelled() => {
+                        self.results.push(Err(cancelled()));
+                        *index += 1;
+                        return true;
+                    }
+                    None => {
+                        *before = self.done.bytes;
+                        self.done.current =
+                            source.file_name().map(|n| n.to_string_lossy().into_owned());
+                        progress(&self.done);
+                        match begin(source, dest.as_deref(), self.action) {
+                            Begun::Ended(result) => Some(result),
+                            Begun::Copy(item) => {
+                                *copy = Some(item);
+                                None
+                            }
+                        }
+                    }
+                };
+                if let Some(result) = ended {
+                    self.done.bytes = *before + weight;
+                    self.done.items += 1;
+                    self.done.current = None;
+                    progress(&self.done);
+                    self.results.push(result);
+                    *index += 1;
+                    *copy = None;
+                }
+                true
+            }
+            Phase::Ended => false,
+        }
+    }
+}
+
+/// Begin moving or copying `source` into the folder `dest`: a move within a volume is done at once, a copy and a move
+/// across volumes are a copy to make.
+fn begin(source: &Path, dest: Option<&Path>, action: DropAction) -> Begun {
+    let Some(dest) = dest else {
+        return Begun::Ended(Err(io::Error::from(io::ErrorKind::InvalidInput)));
+    };
+    prepare(source, dest, action).unwrap_or_else(|e| Begun::Ended(Err(e)))
+}
+
+fn prepare(source: &Path, dest: &Path, action: DropAction) -> io::Result<Begun> {
     if inside(dest, source) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -498,7 +785,7 @@ fn drop_one(
         ));
     }
     if action == DropAction::Move && source.parent() == Some(dest) {
-        return Ok(source.to_path_buf());
+        return Ok(Begun::Ended(Ok(source.to_path_buf())));
     }
     let name = source
         .file_name()
@@ -516,19 +803,18 @@ fn drop_one(
             let trashed = trash::trashed_item(source);
             match rename_no_replace(source, &target) {
                 // across volumes no rename reaches: copy, then remove the originals once the whole copy is made
-                Err(e) if e.raw_os_error() == Some(libc::EXDEV) => {
-                    let copied = copy_new_with(source, &target, copying)?;
-                    remove_copied(&copied)?;
+                Err(e) if e.raw_os_error() == Some(libc::EXDEV) => Ok(Begun::Copy(Box::new(
+                    ItemCopy::new(source, target, Some(trashed)),
+                ))),
+                moved => {
+                    moved?;
+                    if let Some(item) = trashed {
+                        trash::forget(&item);
+                    }
+                    Ok(Begun::Ended(Ok(target)))
                 }
-                moved => moved?,
-            }
-            if let Some(item) = trashed {
-                trash::forget(&item);
             }
         }
-        DropAction::Copy => {
-            copy_new_with(source, &target, copying)?;
-        }
+        DropAction::Copy => Ok(Begun::Copy(Box::new(ItemCopy::new(source, target, None)))),
     }
-    Ok(target)
 }

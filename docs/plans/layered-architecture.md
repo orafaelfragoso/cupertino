@@ -16,7 +16,7 @@ Updated by the lead at every merge.
 | | |
 |---|---|
 | Current wave | 4 |
-| Running tasks | W4.6 step 4 (measurement after the review fixes), W4.7 step 2, review of W4.9 |
+| Running tasks | W4.6 step 4 (UI loop turns at start-up, measured 5× those before W4.6), W4.7 step 2, W4.9 rework after review |
 | Enforced layers | foundation, system, graphics, models, protocol, transport, testing (126 remaining-work lines) |
 | Waiting on the owner | nothing |
 | Last closed wave | 3 |

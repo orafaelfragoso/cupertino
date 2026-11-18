@@ -1245,6 +1245,7 @@ dependencies = [
  "cupertino-ui-text",
  "cupertino-ui-wayland",
  "cupertino-wayland-client",
+ "image",
  "libc",
  "rustix 1.1.6",
  "tiny-skia",

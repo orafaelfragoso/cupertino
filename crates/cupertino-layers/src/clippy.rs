@@ -1,11 +1,13 @@
 //! The `clippy.toml` of every `shell` and `apps` crate: Clippy's `disallowed-methods`, so that a UI thread has no
-//! blocking call within reach.
+//! blocking call within reach and the theme data is read only by the toolkit.
 
 const THREADS: &str =
     "start work through the toolkit's task API, which reports its panics and results";
 const BLOCK_ON: &str = "await through the toolkit's task API instead of blocking the UI thread";
 const FILES: &str = "run file access as a task of the toolkit's task API, off the UI thread";
 const BUS: &str = "use the toolkit's async bus API, ticked by the UI loop";
+const THEME_DATA: &str =
+    "name a theme colour with the toolkit's theme::system_color, or paint with the theme a widget is given";
 
 /// The methods a `shell` or `apps` crate must not call, with the reason Clippy prints.
 pub const DISALLOWED_METHODS: &[(&str, &str)] = &[
@@ -74,6 +76,7 @@ pub const DISALLOWED_METHODS: &[(&str, &str)] = &[
     ("zbus::blocking::Proxy::receive_signal", BUS),
     ("zbus::blocking::proxy::Builder::build", BUS),
     ("zbus::blocking::MessageIterator::for_match_rule", BUS),
+    ("cupertino_assets::theme::load", THEME_DATA),
 ];
 
 /// The `clippy.toml` that every `shell` and `apps` crate holds next to its manifest, made from `methods`.

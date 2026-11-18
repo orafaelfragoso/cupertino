@@ -6,13 +6,13 @@ use cupertino_assets::{Assets, FontRole, FontSource, BUILTIN_FONT};
 use cupertino_defaults::appearance::{AppearanceSettings, Highlight};
 use cupertino_defaults::watch::{ConfigWatcher, WatchEvent};
 use cupertino_keyboard::modifiers::Profile;
-use cupertino_theme::ui::{Appearance, ColorTokens, ThemePreferences, ThemeTokens};
-use cupertino_theme::Theme;
+use cupertino_theme::ui::{Appearance, Color, ColorTokens, ThemePreferences, ThemeTokens};
+use cupertino_theme::{DesignTokens, Theme};
 use cupertino_ui_core::layout::LayoutDirection;
 use cupertino_ui_core::platform::{PlatformError, SystemAppearance, WindowSystem};
 use cupertino_ui_core::{
-    Application, Command, EachTurn, MonotonicClock, Runtime, RuntimeOptions, ThemeForAppearance,
-    UiError,
+    Application, Command, EachTurn, Environment, MonotonicClock, Runtime, RuntimeOptions,
+    ThemeForAppearance, UiError,
 };
 use cupertino_ui_render::gpu::GpuConfig;
 use cupertino_ui_render::{CpuConfig, CpuRenderer};
@@ -28,7 +28,7 @@ use std::io::{self, Read};
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use crate::{Entered, Instance};
 
@@ -327,6 +327,30 @@ pub fn options() -> Result<RuntimeOptions, AppError> {
     options_and_theme(start_preferences(None)).map(|(options, _)| options)
 }
 
+/// The theme, text system and symbols an application of this system lays out with, in the light appearance with motion
+/// on, for a program that measures text before it has a window. [`run`] makes its own and follows the session.
+pub fn environment() -> Result<Environment, AppError> {
+    let options = options()?;
+    Ok(Environment {
+        theme: options.theme,
+        text: options.text,
+        direction: options.direction,
+        scale: 1.0,
+        icons: options.icons,
+    })
+}
+
+/// The named colours of the theme data the process's applications start on, kept from the first start that read them;
+/// the installed data is the same for every instance.
+static SYSTEM_COLORS: OnceLock<DesignTokens> = OnceLock::new();
+
+/// The colour the theme data names `name` (`system-green`) in `appearance`, a high contrast appearance taking its base
+/// appearance's colour where it names none. `None` for a name the data does not have, and until an application of the
+/// process started on the installed theme data ([`run`] and the functions beside it, [`environment`]).
+pub fn system_color(name: &str, appearance: Appearance) -> Option<Color> {
+    SYSTEM_COLORS.get()?.color(appearance, name)
+}
+
 /// The theme preferences an application starts with: the session's when the window system knows them, else light with
 /// motion on.
 fn start_preferences(appearance: Option<SystemAppearance>) -> ThemePreferences {
@@ -499,7 +523,10 @@ impl Personal {
 /// desktop's data, and says why on stderr.
 fn start_theme(preferences: ThemePreferences) -> Result<(ThemeTokens, Option<Theme>), AppError> {
     let cupertino = cupertino_assets::theme::load().and_then(|data| {
-        ThemeTokens::cupertino(&data, preferences).map(|theme| (theme, Some(data)))
+        ThemeTokens::cupertino(&data, preferences).map(|theme| {
+            SYSTEM_COLORS.get_or_init(|| data.tokens.clone());
+            (theme, Some(data))
+        })
     });
     cupertino.or_else(|e| {
         eprintln!("cupertino-kit: no Cupertino theme ({e}); using the neutral theme");

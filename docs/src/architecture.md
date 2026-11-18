@@ -92,7 +92,7 @@ Further rules:
 - External crates stay in their layers: Smithay in `core` only; the image, Wayland client, `xkbcommon`,
   `wayland-server`, `zbus` and system-call crates in the layers `cupertino-layers` lists for them.
 - Every `shell` and `apps` crate holds the `clippy.toml` that `cupertino-layers` writes, which disallows starting
-  threads, `block_on`, `std::fs` and blocking bus calls.
+  threads, `block_on`, `std::fs`, blocking bus calls and reading the theme data.
 - Every crate declares a licence.
 
 `cargo run -p cupertino-layers` checks them all. The problems that crates still have are listed one per line in

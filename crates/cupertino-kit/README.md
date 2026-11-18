@@ -61,6 +61,13 @@ phase: `update`, `view`, `layout`, `paint`, `raster`, `copy` (into the shared bu
 (`Runtime::with_frame_timing`). Without the variable nothing is timed.
 `app::mono_family` names the asset packs' fixed-pitch family, which the text system loads with the interface face, for
 text that lines up by character (a file's contents); `None` when no pack names one.
+`app::environment` gives the theme, text system and symbols a program measures text with before it has a window.
+`theme::system_color(name, appearance)` is a colour the theme data names (`system-green`), from the data the process's
+first application started on; `None` before that. `render::picture` draws paint operations, text included, into an
+`ImageResource` on the CPU pool and gives it to the UI thread as a message. `kit::image` decodes PNG and JPEG within
+the size the caller allows, resizes, crops, turns a picture upright and encodes PNG and JPEG: plain functions on
+`ImageResource`s that a program runs with `task::cpu`, each refusing a picture of more pixels than a window drawn on the
+CPU has.
 
 The widgets' icons are the asset packs' symbols. `Icons::application`, the icon an alert shows, is the icon named by
 the `Icon=` of the desktop entry whose id is the running program's file name (`cupertino-files.desktop` for

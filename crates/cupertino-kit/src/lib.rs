@@ -4,8 +4,10 @@
 pub mod bus;
 pub mod file_icons;
 mod icons;
+pub mod image;
 mod instance;
 pub mod motion;
+mod picture;
 mod start;
 pub mod task;
 #[cfg(feature = "test")]
@@ -16,7 +18,7 @@ pub use instance::{spawn, Entered, Instance};
 
 /// Running an application on the session's Wayland display.
 pub mod app {
-    pub use crate::start::{mono_family, run, AppError};
+    pub use crate::start::{environment, mono_family, run, AppError};
 
     /// Running on a window system a desktop shell set up with its surface roles, and the runtime's options of an
     /// application on this system: named until their last callers start through the shell's toolkit.
@@ -67,8 +69,9 @@ pub mod layout {
     };
 }
 
-/// What a picture is made of.
+/// What a picture is made of, and pictures a program draws.
 pub mod render {
+    pub use crate::picture::picture;
     pub use cupertino_ui_render::{
         Effect, FillRule, GradientStop, ImageResource, Paint, PaintOp, PathVerb, PixelFormat,
         ResourceId, Sampling, Shape, Transform,
@@ -102,8 +105,9 @@ pub mod text {
     }
 }
 
-/// The theme a widget is painted with.
+/// The theme a widget is painted with, and the colours the theme data names.
 pub mod theme {
+    pub use crate::start::system_color;
     pub use cupertino_theme::ui::{
         Appearance, Color, ColorRole, ColorTokens, ControlFamily, ControlMetrics, ControlSize,
         FocusRing, InteractionVariant, Motion, StateVariant, Surface, ThemePreferences,

@@ -1000,6 +1000,9 @@ pub trait WindowSystem {
         let _ = parent;
         true
     }
+    /// The view's key for the immediately following `create_window` or `create_popup` attempt. A backend that
+    /// assigns roles by key takes it here; the key identifies the window independently of its title and app id.
+    fn opening(&mut self, _key: &crate::WindowKey) {}
     fn create_window(&mut self, spec: &WindowSpec) -> Result<WindowId, PlatformError>;
     fn create_popup(
         &mut self,

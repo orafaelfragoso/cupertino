@@ -47,6 +47,9 @@ callback's time, for an animation clock, is `FrameCallback::time` of the transpo
 ## The window system
 
 Windows and popups map one to one onto the transport's toplevels and popups; destroying a window destroys its popups.
+`SurfaceRoles::opening` receives each window's view key before role selection. `before_commit` lets an extension send
+state for that key on the actual window and keyed layer surfaces before a frame or a state-only commit. It sees kept
+layers as well as newly created ones and is not called for a submitted frame still waiting for a buffer.
 A window with a role from `SurfaceRoles` (a shell's layer surface) may hand transitions of its presentation to the
 compositor when it offers `cupertino_layers_v1` version 2 (`Capabilities::present_animation`): each
 `WindowRequest::Present` goes to the window's presentation, made on its first change (`presentations.rs`), and is

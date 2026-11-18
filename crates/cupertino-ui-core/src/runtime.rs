@@ -1033,6 +1033,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                     w
                 }
                 None => {
+                    self.system.opening(&key);
                     let id = self
                         .system
                         .create_window(&spec)
@@ -1537,6 +1538,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             self.tree.unmount(root);
             return Ok(None);
         };
+        self.system.opening(&key);
         let id = match self.system.create_popup(parent.id, &placed) {
             Ok(id) => id,
             Err(e) => {

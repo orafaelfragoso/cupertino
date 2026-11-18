@@ -25,6 +25,7 @@ use cupertino_ui_core::platform::{
     Submitted, SurfaceLayerLook, SystemAppearance, Timestamp, WindowEvent, WindowId, WindowRequest,
     WindowSpec, WindowSystem,
 };
+use cupertino_ui_core::WindowKey;
 use cupertino_ui_render::render_thread;
 use cupertino_ui_render::{CpuFrame, RenderFrameId};
 use cupertino_ui_text::TextInputState;
@@ -133,6 +134,7 @@ fn too_many_backdrops() -> PlatformError {
 
 struct Window {
     id: WindowId,
+    key: Option<WindowKey>,
     surface: SurfaceId,
     kind: Kind,
     parent: Option<WindowId>,
@@ -382,6 +384,8 @@ pub struct WaylandWindowSystem {
     roles: Option<Box<dyn SurfaceRoles>>,
     /// Names the configures of surfaces with a role from [`SurfaceRoles`], which carry no serial of their own.
     role_configures: u32,
+    /// Taken on the next opening attempt, whether it succeeds or not. Only a backend with role extensions needs it.
+    opening_key: Option<WindowKey>,
     /// The process's renderer and, while it draws on the GPU, every surface's GPU buffers.
     gpu: GpuPath,
     /// The windows' presentations the compositor animates ([`WindowRequest::Present`]).
@@ -538,6 +542,7 @@ impl WaylandWindowSystem {
             appearance: SystemAppearance::default(),
             roles: None,
             role_configures: 0,
+            opening_key: None,
             menus: AppMenus::default(),
             gpu,
             presentations,
@@ -683,6 +688,7 @@ impl WaylandWindowSystem {
 
     fn add(
         &mut self,
+        key: Option<WindowKey>,
         surface: SurfaceId,
         kind: Kind,
         parent: Option<WindowId>,
@@ -699,6 +705,7 @@ impl WaylandWindowSystem {
         }
         self.windows.push(Window {
             id,
+            key,
             surface,
             kind,
             parent,
@@ -727,6 +734,32 @@ impl WaylandWindowSystem {
             layer: None,
         });
         id
+    }
+
+    fn opening_role(&mut self) -> Option<WindowKey> {
+        let key = self.opening_key.take();
+        if let Some(roles) = &mut self.roles {
+            roles.opening(key.as_ref());
+        }
+        key
+    }
+
+    /// For a frame, the role extension sends its state after the buffer preflight, before the worker may commit.
+    fn role_commit(&mut self, window: WindowId, new_frame: bool) {
+        let Some(roles) = &mut self.roles else { return };
+        let Some(w) = self.windows.iter().find(|w| w.id == window) else {
+            return;
+        };
+        if let Some(key) = &w.key {
+            let layers = self.surface_layers.shown_mut(window);
+            roles.before_commit(
+                &mut self.conn,
+                key,
+                w.surface,
+                &mut layers.iter().map(|s| (s.key, s.surface)),
+                new_frame,
+            );
+        }
     }
 
     fn set_menus(
@@ -983,6 +1016,7 @@ impl WaylandWindowSystem {
             return Ok(());
         }
         let surface = w.surface;
+        self.role_commit(window, false);
         self.conn.commit_state(surface).map_err(platform_error)
     }
 
@@ -1827,14 +1861,27 @@ impl WindowSystem for WaylandWindowSystem {
         }
     }
 
+    fn opening(&mut self, key: &WindowKey) {
+        if self.roles.is_some() {
+            self.opening_key = Some(key.clone());
+        }
+    }
+
     fn create_window(&mut self, spec: &WindowSpec) -> Result<WindowId, PlatformError> {
+        let key = self.opening_role();
         if let Some(surface) = self
             .roles
             .as_mut()
             .and_then(|roles| roles.create(&mut self.conn, spec))
         {
             let surface = surface.map_err(platform_error)?;
-            let id = self.add(surface, Kind::External, None, convert::whole(spec.size));
+            let id = self.add(
+                key,
+                surface,
+                Kind::External,
+                None,
+                convert::whole(spec.size),
+            );
             self.window_mut(id)?.input_region = spec.input_region.clone().map(Some);
             return Ok(id);
         }
@@ -1859,6 +1906,7 @@ impl WindowSystem for WaylandWindowSystem {
                 .map_err(|e| PlatformError::Protocol(e.to_string()))?;
         }
         let id = self.add(
+            key,
             toplevel.surface(),
             Kind::Toplevel(toplevel),
             None,
@@ -1880,6 +1928,7 @@ impl WindowSystem for WaylandWindowSystem {
         parent: WindowId,
         spec: &PopupSpec,
     ) -> Result<WindowId, PlatformError> {
+        let key = self.opening_role();
         let surface = self.window(parent)?.surface;
         let placement = convert::placement(spec);
         // a menu a desktop-control action shows grabs with the serial the action came with, not a stale or missing one
@@ -1898,6 +1947,7 @@ impl WindowSystem for WaylandWindowSystem {
             self.action_grabs.spend(serial);
         }
         Ok(self.add(
+            key,
             popup.surface(),
             Kind::Popup(popup),
             Some(parent),
@@ -2334,6 +2384,7 @@ impl WindowSystem for WaylandWindowSystem {
                 return Err(e);
             }
         }
+        self.role_commit(window, true);
         let on_render_thread = parts.iter().any(|p| matches!(p.target, Target::Gpu(_)));
         let (tx, waker) = (self.finished.0.clone(), self.conn.waker());
         // what the frame records, a panic too, is the submitting instance's
@@ -2412,6 +2463,17 @@ impl WindowSystem for WaylandWindowSystem {
         if !self.conn.capabilities().contains(Capability::SolidColor) {
             return Err(PlatformError::Unsupported);
         }
+        if self.roles.is_some() {
+            let w = self.window(window)?;
+            match self.conn.frame_size(w.surface, w.size) {
+                Ok(_) => {}
+                Err(Error::NotConfigured) => {
+                    self.window_mut(window)?.stalled = Some(Stall::Configure);
+                    return Ok(PresentOutcome::NotReady);
+                }
+                Err(e) => return Err(platform_error(e)),
+            }
+        }
         let w = self.window_mut(window)?;
         let (surface, size) = (w.surface, w.size);
         if let Some(b) = w.backdrop.as_mut().filter(|b| b.shaped != Some(size)) {
@@ -2425,6 +2487,7 @@ impl WindowSystem for WaylandWindowSystem {
                 .set_input_region(surface, region.as_deref())
                 .map_err(platform_error)?;
         }
+        self.role_commit(window, true);
         match self.conn.present_solid(surface, size, color.to_array()) {
             Ok(()) => {
                 self.await_frame_callback(window)?;

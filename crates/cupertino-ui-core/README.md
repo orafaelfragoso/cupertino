@@ -8,7 +8,8 @@ records when asked); never on a server, shell or private-protocol crate.
 
 An `Application` keeps its state in a model, describes its windows as `Element` trees in `view`, and changes the model
 only in `update`, from messages. The runtime owns the model, one node tree for every window, and the window system,
-all on one thread.
+all on one thread. When a view opens a window or popup, the runtime gives its `WindowKey` to `WindowSystem::opening`
+before creating it, so a backend can select its role even when several windows have identical specs.
 
 ## Public API
 

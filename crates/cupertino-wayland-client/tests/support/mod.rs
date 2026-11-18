@@ -26,6 +26,7 @@ use cupertino_app_protocols::server::semantics::{
 };
 use cupertino_wayland_client::app::AppEvent;
 use cupertino_wayland_client::{Connection, Decorations, Event, Toplevel, ToplevelConfig};
+use std::collections::HashMap;
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -37,6 +38,7 @@ use wayland_protocols::xdg::shell::server::{
     xdg_toplevel::XdgToplevel,
     xdg_wm_base::{self, XdgWmBase},
 };
+use wayland_server::backend::ObjectId;
 use wayland_server::protocol::{
     wl_buffer::WlBuffer,
     wl_callback::WlCallback,
@@ -59,6 +61,9 @@ pub struct Offer {
     pub semantics: Option<u32>,
     /// Whether the window shell (`xdg_wm_base`) is offered; a client cannot connect without it.
     pub shell: bool,
+    /// Whether the server offers `abgr8888` shared memory and releases each buffer once a later commit of its surface
+    /// replaces it, as a compositor showing the frames does; otherwise it keeps every buffer it was given.
+    pub releases: bool,
 }
 
 impl Offer {
@@ -69,6 +74,7 @@ impl Offer {
         scroll: Some(1),
         semantics: Some(2),
         shell: true,
+        releases: false,
     };
 
     /// Only the standard protocols.
@@ -78,6 +84,7 @@ impl Offer {
         scroll: None,
         semantics: None,
         shell: true,
+        releases: false,
     };
 }
 
@@ -151,6 +158,11 @@ pub struct Server {
     /// The windows, in creation order, with the `xdg_surface` each configures through.
     pub toplevels: Vec<(XdgToplevel, XdgSurface)>,
     serial: u32,
+    /// Whether a buffer replaced on its surface is released ([`Offer::releases`]).
+    releases: bool,
+    /// The buffer each surface attached since its last commit, and the one it shows.
+    pending: HashMap<ObjectId, Option<WlBuffer>>,
+    shown: HashMap<ObjectId, WlBuffer>,
 }
 
 impl Server {
@@ -171,6 +183,15 @@ impl Server {
         let serial = self.next_serial();
         let (toplevel, surface) = &self.toplevels[index];
         toplevel.configure(0, 0, Vec::new());
+        surface.configure(serial);
+        serial
+    }
+
+    /// Configure window `index` again at `width` × `height` points, returning the serial.
+    pub fn resize(&mut self, index: usize, width: i32, height: i32) -> u32 {
+        let serial = self.next_serial();
+        let (toplevel, surface) = &self.toplevels[index];
+        toplevel.configure(width, height, Vec::new());
         surface.configure(serial);
         serial
     }
@@ -206,7 +227,10 @@ impl Harness {
         offer: Offer,
     ) -> (Harness, Result<Connection, cupertino_wayland_client::Error>) {
         let (client_end, server_end) = UnixStream::pair().unwrap();
-        let server = Server::default();
+        let server = Server {
+            releases: offer.releases,
+            ..Server::default()
+        };
         let requests = server.requests.clone();
         let presents = server.presents.clone();
         let publications = server.publications.clone();
@@ -305,7 +329,7 @@ fn serve(
     let mut display = wayland_server::Display::<Server>::new().unwrap();
     let mut handle = display.handle();
     handle.create_global::<Server, WlCompositor, ()>(6, ());
-    handle.create_global::<Server, WlShm, ()>(1, ());
+    handle.create_global::<Server, WlShm, bool>(1, offer.releases);
     if offer.shell {
         handle.create_global::<Server, XdgWmBase, ()>(6, ());
     }
@@ -365,13 +389,29 @@ macro_rules! global {
 }
 global!(
     WlCompositor,
-    WlShm,
     XdgWmBase,
     CupertinoLayersV1,
     CupertinoAppEffectsV1,
     CupertinoScrollV1,
     CupertinoSemanticsV1
 );
+
+/// Shared memory, `abgr8888` listed when the server shows frames ([`Offer::releases`]).
+impl GlobalDispatch<WlShm, bool> for Server {
+    fn bind(
+        _: &mut Server,
+        _: &DisplayHandle,
+        _: &Client,
+        resource: New<WlShm>,
+        abgr: &bool,
+        init: &mut DataInit<'_, Server>,
+    ) {
+        let shm = init.init(resource, ());
+        if *abgr {
+            shm.format(wl_shm::Format::Abgr8888);
+        }
+    }
+}
 
 impl GlobalDispatch<WlSeat, ()> for Server {
     fn bind(
@@ -409,7 +449,7 @@ impl Dispatch<WlSurface, ()> for Server {
     fn request(
         server: &mut Server,
         _: &Client,
-        _: &WlSurface,
+        surface: &WlSurface,
         request: wl_surface::Request,
         _: &(),
         _: &DisplayHandle,
@@ -421,8 +461,21 @@ impl Dispatch<WlSurface, ()> for Server {
             }
             // the damage a client reports is part of what a test can read back
             damage @ wl_surface::Request::DamageBuffer { .. } => server.record(damage),
-            wl_surface::Request::Attach { .. } => server.present("Attach"),
-            wl_surface::Request::Commit => server.present("Commit"),
+            wl_surface::Request::Attach { buffer, .. } => {
+                server.present("Attach");
+                server.pending.insert(surface.id(), buffer);
+            }
+            wl_surface::Request::Commit => {
+                server.present("Commit");
+                // a later buffer replaces the one shown, which goes back to the client
+                if let Some(Some(buffer)) = server.pending.remove(&surface.id()) {
+                    if let Some(old) = server.shown.insert(surface.id(), buffer.clone()) {
+                        if server.releases && old != buffer {
+                            old.release();
+                        }
+                    }
+                }
+            }
             _ => {}
         }
     }

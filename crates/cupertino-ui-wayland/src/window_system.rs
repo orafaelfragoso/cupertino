@@ -1,7 +1,9 @@
 //! CupertinoKit's [`WindowSystem`] on the transport: one [`Connection`], its windows and popups, and the renderer's
 //! frames copied into the transport's buffers.
 
+use std::any::Any;
 use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, PoisonError};
@@ -11,7 +13,7 @@ use std::time::{Duration, Instant};
 use crate::action_grab::ActionGrabs;
 
 use crate::menus::{AppMenus, WindowMenus};
-use cupertino_diagnostic_events::profile as timeline;
+use cupertino_diagnostic_events::{self as diag, profile as timeline};
 use cupertino_geometry::{Rect, Size};
 use cupertino_keyboard::modifiers::Profile;
 use cupertino_menu_model::{ActionName, Command, Entry, Menu, MenuBar};
@@ -76,6 +78,9 @@ enum Drew {
         DetachedBuffer,
         Result<(RenderFrameId, Option<Vec<PixelRect>>), RenderError>,
     ),
+    /// The renderer panicked: the shared-memory buffer it drew into, if any, and the panic, which goes on on the UI
+    /// thread that submitted the frame.
+    Panicked(Option<DetachedBuffer>, Box<dyn Any + Send>),
 }
 
 /// Why a frame submitted on the GPU was not shown.
@@ -1176,6 +1181,18 @@ impl WaylandWindowSystem {
                 self.conn.buffer_unused(buffer);
                 Shown::Failed(e)
             }
+            // the frame's buffers go back, and the panic is the submitting instance's, as a task's is
+            Drew::Panicked(buffer, panic) => {
+                match buffer {
+                    Some(buffer) => self.conn.buffer_unused(buffer),
+                    None => {
+                        let _ =
+                            self.gpu
+                                .finish(&mut self.conn, surface, Err(PresentError::Resized));
+                    }
+                }
+                std::panic::resume_unwind(panic)
+            }
         };
         // a window destroyed meanwhile hears nothing
         if self.window_mut(window).is_err() {
@@ -2098,6 +2115,8 @@ impl WindowSystem for WaylandWindowSystem {
         let resized = w.shown != Some(size);
         let carried = std::mem::take(&mut w.carried);
         let (tx, waker) = (self.finished.0.clone(), self.conn.waker());
+        // what the frame records, a panic too, is the submitting instance's
+        let scope = diag::Scope::current();
         let submission = frame.clone();
         if on_gpu {
             let prepared = self
@@ -2125,32 +2144,35 @@ impl WindowSystem for WaylandWindowSystem {
                 }
             };
             render_thread::hand_over(move || {
-                let mut renderer = submission
-                    .renderer
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner);
-                let drawn = tracing::trace_span!("ui.raster", layer = "content")
-                    .in_scope(|| renderer.render(&submission.request()))
-                    .map_err(Failure::Render)
-                    .and_then(|id| {
-                        let frame = renderer.frame(id).map_err(Failure::Render)?;
-                        let damage: Vec<PixelRect> = carried
-                            .into_iter()
-                            .chain(frame.damage.iter().map(wire_rect))
-                            .collect();
-                        let drawn = draw.draw(frame, &damage).map_err(Failure::Present)?;
-                        Ok((id, drawn))
-                    });
-                drop(renderer);
+                let _scope = scope.as_ref().map(diag::Scope::enter);
+                let drawn = catch_unwind(AssertUnwindSafe(|| {
+                    let mut renderer = submission
+                        .renderer
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner);
+                    tracing::trace_span!("ui.raster", layer = "content")
+                        .in_scope(|| renderer.render(&submission.request()))
+                        .map_err(Failure::Render)
+                        .and_then(|id| {
+                            let frame = renderer.frame(id).map_err(Failure::Render)?;
+                            let damage: Vec<PixelRect> = carried
+                                .into_iter()
+                                .chain(frame.damage.iter().map(wire_rect))
+                                .collect();
+                            let drawn = draw.draw(frame, &damage).map_err(Failure::Present)?;
+                            Ok((id, drawn))
+                        })
+                }));
                 let (drew, commit) = match drawn {
-                    Ok((id, drawn)) => (Ok((id, drawn.from_texture)), Some(drawn)),
-                    Err(e) => (Err(e), None),
+                    Ok(Ok((id, drawn))) => (Drew::Gpu(Ok((id, drawn.from_texture))), Some(drawn)),
+                    Ok(Err(e)) => (Drew::Gpu(Err(e)), None),
+                    Err(panic) => (Drew::Panicked(None, panic), None),
                 };
                 let _ = tx.send(Finished {
                     window,
                     surface,
                     size,
-                    drew: Drew::Gpu(drew),
+                    drew,
                 });
                 waker.wake();
                 if let Some(drawn) = commit {
@@ -2184,6 +2206,7 @@ impl WindowSystem for WaylandWindowSystem {
         }
         let (mut buffer, commit) = lease.detach().map_err(platform_error)?;
         cupertino_ui_core::pool::cpu(move || {
+            let _scope = scope.as_ref().map(diag::Scope::enter);
             let inside = |r: &PixelRect| clip(*r, size.0, size.1);
             // what the buffer misses: the frames shown in the others since it held one and those not shown
             let missed: Option<Vec<_>> = buffer.missed().map(|missed| {
@@ -2195,7 +2218,7 @@ impl WindowSystem for WaylandWindowSystem {
                     .collect()
             });
             let stride = buffer.layout().stride();
-            let drawn = {
+            let drawn = catch_unwind(AssertUnwindSafe(|| {
                 let mut renderer = submission
                     .renderer
                     .lock()
@@ -2210,6 +2233,19 @@ impl WindowSystem for WaylandWindowSystem {
                         },
                     )
                 })
+            }));
+            let drawn = match drawn {
+                Ok(drawn) => drawn,
+                Err(panic) => {
+                    let _ = tx.send(Finished {
+                        window,
+                        surface,
+                        size,
+                        drew: Drew::Panicked(Some(buffer), panic),
+                    });
+                    waker.wake();
+                    return;
+                }
             };
             let (id, drawn) = match drawn {
                 Ok(drawn) => drawn,
@@ -2233,6 +2269,7 @@ impl WindowSystem for WaylandWindowSystem {
                 .collect();
             let damage = (!resized).then_some(changed);
             render_thread::hand_over(move || {
+                let _scope = scope.as_ref().map(diag::Scope::enter);
                 let _ = tx.send(Finished {
                     window,
                     surface,

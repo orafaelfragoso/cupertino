@@ -1229,6 +1229,7 @@ dependencies = [
 name = "cupertino-kit"
 version = "0.1.0"
 dependencies = [
+ "cupertino-app-protocols",
  "cupertino-apps",
  "cupertino-assets",
  "cupertino-capture",
@@ -1244,8 +1245,12 @@ dependencies = [
  "cupertino-ui-test",
  "cupertino-ui-text",
  "cupertino-ui-wayland",
+ "cupertino-wayland-client",
  "libc",
+ "rustix 1.1.6",
  "tiny-skia",
+ "wayland-protocols",
+ "wayland-server",
  "zbus",
 ]
 

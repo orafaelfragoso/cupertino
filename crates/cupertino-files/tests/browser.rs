@@ -138,33 +138,62 @@ fn a_folder_that_does_not_open_leaves_the_listing_and_the_history_and_says_so() 
     }
 }
 
-#[test]
-fn a_folder_asked_for_again_while_its_work_runs_takes_the_model_it_had() {
-    let root = tempfile::tempdir().unwrap();
-    for dir in ["a", "b"] {
-        std::fs::create_dir(root.path().join(dir)).unwrap();
-    }
-    std::fs::write(root.path().join("b/item"), b"").unwrap();
-    let mut browser = browser(&root.path().join("a"), &Listings::default());
+/// A browser on `a` that asked for `b` and holds the first work of its model, which does not come back yet.
+fn asking(a: &Path, b: &Path, listings: &Listings) -> (Browser, Vec<ModelWork>) {
+    let mut browser = browser(a, listings);
     settle(&mut browser);
-
-    // the first work of b is out and does not come back yet
-    assert!(!browser.go(root.path().join("b"), None));
+    assert!(!browser.go(b.to_path_buf(), None));
     let hung = take(&mut browser);
     assert_eq!(hung.len(), 1);
-    // the window stays on its own folder, then asks for b again
-    assert!(browser.go(root.path().join("a"), None));
-    assert!(!browser.go(root.path().join("b"), None));
-    assert!(take(&mut browser).is_empty(), "b opened again");
+    (browser, hung)
+}
 
-    for work in hung {
-        work.run();
+#[test]
+fn a_folder_asked_for_again_while_its_work_runs_takes_the_model_it_had() {
+    /// What a row leaves: a browser that asked for b again, the work of the model it had and works held out.
+    type Row = fn(&Path, &Path, &Listings) -> (Browser, Vec<ModelWork>, Vec<ModelWork>);
+    let rows: [(&str, Row); 2] = [
+        ("the same window", |a, b, listings| {
+            let (mut browser, hung) = asking(a, b, listings);
+            // the window stays on its own folder, then asks for b again
+            assert!(browser.go(a.to_path_buf(), None));
+            assert!(!browser.go(b.to_path_buf(), None));
+            (browser, hung, Vec::new())
+        }),
+        ("a second model let go after it", |a, b, listings| {
+            let (mut first, hung) = asking(a, b, listings);
+            let (mut second, held) = asking(a, b, listings);
+            first.stop_waiting();
+            second.stop_waiting();
+            let mut third = browser(a, listings);
+            settle(&mut third);
+            assert!(!third.go(b.to_path_buf(), None));
+            (third, hung, held)
+        }),
+    ];
+    for (row, asked_again) in rows {
+        let root = tempfile::tempdir().unwrap();
+        let (a, b) = (root.path().join("a"), root.path().join("b"));
+        for dir in [&a, &b] {
+            std::fs::create_dir(dir).unwrap();
+        }
+        std::fs::write(b.join("item"), b"").unwrap();
+        let (mut browser, hung, _held) = asked_again(&a, &b, &Listings::default());
+        assert!(take(&mut browser).is_empty(), "{row}: b opened again");
+
+        for work in hung {
+            work.run();
+        }
+        let polled = browser.poll();
+        assert_eq!(
+            (polled.entered, polled.unopened),
+            (Some(Asked::Go), None),
+            "{row}"
+        );
+        assert_eq!(browser.dir(), b, "{row}");
+        settle(&mut browser);
+        assert_eq!(names(&browser), ["item"], "{row}");
     }
-    let polled = browser.poll();
-    assert_eq!((polled.entered, polled.unopened), (Some(Asked::Go), None));
-    assert_eq!(browser.dir(), root.path().join("b"));
-    settle(&mut browser);
-    assert_eq!(names(&browser), ["item"]);
 }
 
 #[test]
@@ -179,11 +208,7 @@ fn a_folder_kept_after_its_work_ended_wakes_the_window_that_takes_it() {
         let listings = Listings::default();
 
         // a window lets b go while its first work runs, and the work ends before the session sweeps its listings
-        let mut first = browser(&a, &listings);
-        settle(&mut first);
-        assert!(!first.go(b.clone(), None));
-        let hung = take(&mut first);
-        assert_eq!(hung.len(), 1);
+        let (mut first, hung) = asking(&a, &b, &listings);
         first.stop_waiting();
         for work in hung {
             work.run();

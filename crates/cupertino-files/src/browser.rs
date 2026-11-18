@@ -35,7 +35,7 @@ use cupertino_kit::files::model::{
 use cupertino_kit::files::recents;
 use cupertino_kit::files::sort::{SortKey, SortSpec};
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{hash_map, HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -124,10 +124,20 @@ impl Request {
 pub struct Listings(Rc<RefCell<HashMap<PathBuf, DirectoryModel>>>);
 
 impl Listings {
-    /// Keep `model` while its work runs; it is dropped otherwise.
+    /// Keep `model` while its work runs, unless a model of its folder whose work runs is kept already; it is dropped
+    /// otherwise.
     pub fn let_go(&self, model: DirectoryModel) {
-        if model.is_working() {
-            self.0.borrow_mut().insert(model.dir().to_path_buf(), model);
+        if !model.is_working() {
+            return;
+        }
+        match self.0.borrow_mut().entry(model.dir().to_path_buf()) {
+            hash_map::Entry::Occupied(kept) if kept.get().is_working() => {}
+            hash_map::Entry::Occupied(mut kept) => {
+                kept.insert(model);
+            }
+            hash_map::Entry::Vacant(free) => {
+                free.insert(model);
+            }
         }
     }
 

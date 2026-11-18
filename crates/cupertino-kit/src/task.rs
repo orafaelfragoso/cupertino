@@ -11,6 +11,7 @@
 //! The pools are the process's, started on first use and shared by every instance.
 
 use crate::Instance;
+use cupertino_defaults::watch::{ConfigWatcher, WatchEvent};
 use cupertino_diagnostic_events::{self as diag, Severity, Value};
 use cupertino_ui_core::Command;
 use std::collections::VecDeque;
@@ -70,8 +71,19 @@ where
     T: Send + 'static,
     M: Send + 'static,
 {
+    let outcome = outcome(submit, deadline, work);
+    Command::Perform(Box::pin(async move { done(outcome.await) }))
+}
+
+/// The result of `work`, run on a pool by `submit` once the future is first polled, for the instance of the calling
+/// thread; its panic goes on where the future is polled.
+fn outcome<T: Send + 'static>(
+    submit: fn(Job),
+    deadline: Option<(Duration, &'static Location<'static>)>,
+    work: impl FnOnce() -> T + Send + 'static,
+) -> impl Future<Output = T> + Send {
     let instance = Instance::current();
-    Command::Perform(Box::pin(async move {
+    async move {
         let slot = Arc::new(Slot::default());
         let filled = Arc::clone(&slot);
         submit(Job {
@@ -83,9 +95,37 @@ where
             }),
         });
         match slot.wait().await {
-            Ok(value) => done(value),
+            Ok(value) => value,
             Err(panic) => std::panic::resume_unwind(panic),
         }
+    }
+}
+
+/// How long reading the followed settings files should take ([`follow_settings`]): a settings file is a few lines on
+/// a local disk.
+pub const SETTINGS_READ_DEADLINE: Duration = Duration::from_secs(2);
+
+/// Follows the settings files `watch` watches while the application runs: the UI thread only waits for each burst of
+/// changes to be quiet ([`ConfigWatcher::quiet`]), the files are read on the I/O pool ([`ConfigWatcher::reread`]), and
+/// `report` hears each report on the UI thread. The task never ends, so it stands for a task of any message; once the
+/// notification failed for good, after its failure was reported, it only waits.
+#[track_caller]
+pub fn follow_settings<M: Send + 'static>(
+    mut watch: ConfigWatcher,
+    mut report: impl FnMut(WatchEvent) + Send + 'static,
+) -> Command<M> {
+    let site = Location::caller();
+    Command::Perform(Box::pin(async move {
+        while watch.quiet().await {
+            let events;
+            (watch, events) = outcome(io_submit, Some((SETTINGS_READ_DEADLINE, site)), move || {
+                let events = watch.reread();
+                (watch, events)
+            })
+            .await;
+            events.into_iter().for_each(&mut report);
+        }
+        std::future::pending().await
     }))
 }
 

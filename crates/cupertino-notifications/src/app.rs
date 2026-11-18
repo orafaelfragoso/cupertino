@@ -587,9 +587,9 @@ fn load_policy(last: Option<&NotificationSettings>) -> NotificationSettings {
 fn watch_policy(notes: async_channel::Sender<Note>) -> Option<Command<Message>> {
     let path = NotificationSettings::path()?;
     match ConfigWatcher::new(vec![path.clone()]) {
-        Ok(watch) => Some(Command::Perform(Box::pin(watch.follow(move |_| {
+        Ok(watch) => Some(cupertino_kit::task::follow_settings(watch, move |_| {
             let _ = notes.try_send(Note::Policy);
-        })))),
+        })),
         Err(e) => {
             eprintln!(
                 "cupertino-notifications: cannot watch {}: {e}; changes apply at the next start",

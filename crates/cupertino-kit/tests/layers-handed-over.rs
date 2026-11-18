@@ -1,7 +1,8 @@
 //! A window with a raised layer and a surface layer, drawn through the Wayland window system on a protocol server of
 //! its own: the layers are drawn with the window's frame away from the UI thread, and commit before the window in the
 //! same hand-over, so the compositor shows them together; a layer's renderer that panics there panics the instance
-//! that submitted the frame, as the window's own renderer does.
+//! that submitted the frame, as the window's own renderer does. A frame the renderer cannot draw straight into the
+//! window's buffers is drawn away from the UI thread too, and copied into them there.
 
 #[allow(dead_code)]
 mod support;
@@ -154,6 +155,8 @@ struct Noted {
     inner: Box<dyn UiRenderer<Frame = CpuFrame> + Send>,
     threads: Arc<Mutex<Vec<ThreadId>>>,
     breaks: bool,
+    /// Whether it draws into memory, where the CPU renderer it wraps does.
+    into_memory: bool,
 }
 
 impl Noted {
@@ -167,12 +170,13 @@ impl Noted {
     }
 }
 
-/// A runtime of [`Layered`] on `server`'s connection whose renderers note the threads they draw on into `threads`;
-/// with `breaking`, the surface layer's renderer panics as it draws.
+/// A runtime of [`Layered`] on the connection `conn` whose renderers note the threads they draw on into `threads`;
+/// with `breaking`, the surface layer's renderer panics as it draws, and without `into_memory` none draws into memory.
 fn layered(
     conn: cupertino_wayland_client::Connection,
     threads: &Arc<Mutex<Vec<ThreadId>>>,
     breaking: bool,
+    into_memory: bool,
 ) -> Runtime<Layered, WaylandWindowSystem> {
     let mut options = support::options(support::text_system());
     let mut cpu = options.renderers;
@@ -182,6 +186,7 @@ fn layered(
             inner: cpu(),
             threads: Arc::clone(&noted),
             breaks: breaking,
+            into_memory,
         })
     });
     let system = WaylandWindowSystem::new(conn, Profile::cupertino());
@@ -212,7 +217,7 @@ impl UiRenderer for Noted {
     }
 
     fn draws_into_memory(&self) -> bool {
-        self.inner.draws_into_memory()
+        self.into_memory && self.inner.draws_into_memory()
     }
 
     fn render_into(
@@ -247,7 +252,7 @@ fn commits_reach(
 fn a_raised_layer_and_a_surface_layer_commit_before_their_window_in_its_hand_over() {
     let (server, conn) = layering_server();
     let threads = Arc::new(Mutex::new(Vec::new()));
-    let mut runtime = layered(conn, &threads, false);
+    let mut runtime = layered(conn, &threads, false, true);
     commits_reach(&server, &mut runtime, 3);
     assert_eq!(
         server.commits()[..3],
@@ -275,7 +280,7 @@ fn a_panic_drawing_a_layer_away_from_the_ui_thread_is_the_submitting_instances()
             let _layered = Instance::new("layered").enter();
             let (server, conn) = layering_server();
             let threads = Arc::new(Mutex::new(Vec::new()));
-            let mut runtime = layered(conn, &threads, true);
+            let mut runtime = layered(conn, &threads, true, true);
             commits_reach(&server, &mut runtime, 1);
         })
         .unwrap();
@@ -296,4 +301,25 @@ fn a_panic_drawing_a_layer_away_from_the_ui_thread_is_the_submitting_instances()
         thread.is_some_and(|t| t.starts_with("kit-cpu")),
         "recorded on the pool thread that drew the layer: {thread:?}"
     );
+}
+
+#[test]
+fn a_frame_not_drawn_straight_into_its_buffer_is_drawn_and_copied_away_from_the_ui_thread() {
+    // (whether the server takes buffers in the renderer's byte order, whether the renderer draws into memory)
+    for (abgr, into_memory) in [(false, true), (true, false)] {
+        let (server, conn) = wire::Harness::start(wire::Offer {
+            releases: abgr,
+            ..wire::Offer::NONE
+        });
+        let threads = Arc::new(Mutex::new(Vec::new()));
+        let mut runtime = layered(conn, &threads, false, into_memory);
+        commits_reach(&server, &mut runtime, 1);
+        assert_eq!(server.commits(), ["window"], "{abgr} {into_memory}");
+        let ui = std::thread::current().id();
+        let threads = threads.lock().unwrap_or_else(PoisonError::into_inner);
+        assert!(
+            !threads.is_empty() && threads.iter().all(|&t| t != ui),
+            "the frame was drawn away from the UI thread ({abgr} {into_memory}): {threads:?}"
+        );
+    }
 }

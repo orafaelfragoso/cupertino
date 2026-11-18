@@ -5,7 +5,7 @@ use std::any::Any;
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, PoisonError};
+use std::sync::Arc;
 use std::task::{Wake, Waker};
 use std::time::{Duration, Instant};
 
@@ -18,15 +18,15 @@ use cupertino_keyboard::modifiers::Profile;
 use cupertino_menu_model::{ActionName, Command, Entry, Menu, MenuBar};
 use cupertino_ui_core::platform::{
     ActivationRequest, Backdrop, Capabilities, ClipboardData, ClipboardKind, ClipboardToken, Color,
-    ConfigureId, CursorShape, DragImage, DragProgress, DragRequest, DragToken, DrawInto,
-    DropAction, DropAnswer, DropEvent, DropToken, GlassRegion, GlassStyle, GlassTone, KeyEvent,
-    Keysym, LayerList, Lent, MaterialRegion, MenuDescription, PlatformError, PlatformEvent,
-    PopupSpec, PresentOutcome, RaisedChange, RaisedLayer, RendererClass, ScrollBars, Shown,
-    Submission, Submitted, SurfaceLayerLook, SystemAppearance, Timestamp, WindowEvent, WindowId,
-    WindowRequest, WindowSpec, WindowSystem,
+    ConfigureId, CursorShape, DragImage, DragProgress, DragRequest, DragToken, DropAction,
+    DropAnswer, DropEvent, DropToken, GlassRegion, GlassStyle, GlassTone, KeyEvent, Keysym,
+    LayerList, MaterialRegion, MenuDescription, PlatformError, PlatformEvent, PopupSpec,
+    PresentOutcome, RaisedChange, RaisedLayer, RendererClass, ScrollBars, Shown, Submission,
+    Submitted, SurfaceLayerLook, SystemAppearance, Timestamp, WindowEvent, WindowId, WindowRequest,
+    WindowSpec, WindowSystem,
 };
 use cupertino_ui_render::render_thread;
-use cupertino_ui_render::{CpuFrame, MemoryTarget, RenderFrameId};
+use cupertino_ui_render::{CpuFrame, RenderFrameId};
 use cupertino_ui_text::TextInputState;
 use cupertino_wayland_client::app::{
     AppEffects, AppEvent, Appearance as AppearanceObserver, Backdrop as Material, BackdropId,
@@ -42,9 +42,7 @@ use rustix::time::ClockId;
 use crate::convert::{self, InputTimeline};
 use crate::gpu_path::{GpuPath, GpuRenderers, Prepared, Presented};
 use crate::gpu_present::PresentError;
-use crate::hand_over::{
-    self, clip, copy_frame, render_rect, wire_rect, Back, Drew, Failure, Of, Part, Target,
-};
+use crate::hand_over::{self, copy_frame, Back, Drew, Failure, Of, Part, Target};
 use crate::pixels::rgba_to_argb8888;
 use crate::presentations::Presentations;
 use crate::roles::{RoleEvent, SurfaceRoles};
@@ -2262,26 +2260,11 @@ impl WindowSystem for WaylandWindowSystem {
         }
     }
 
-    /// A window drawn on the GPU has its frame drawn on the render thread into a free buffer; one drawn into shared
-    /// memory in the renderer's byte order has it drawn on the CPU pool into the buffer it leases. Its surface layers
-    /// and raised layer are drawn with it, each into a buffer of its own surface ([`hand_over`]). The thread that drew
-    /// the frame commits the layers and then the window, acknowledging the configure that was the latest when the frame
-    /// was submitted. Other windows (shared memory in the other byte order, a renderer that draws into no memory) are
-    /// declined.
+    /// A frame with a surface on the GPU is drawn on the render thread into free buffers; one all in shared memory is
+    /// drawn on the CPU pool into the buffers it leases. Its surface layers and raised layer are drawn with it, each into
+    /// a buffer of its own surface ([`hand_over`]). The thread that drew the frame commits the layers and then the
+    /// window, acknowledging the configure that was the latest when the frame was submitted. No frame is declined.
     fn submit(&mut self, window: WindowId, frame: &Submission) -> Result<Submitted, PlatformError> {
-        let surface = self.window_mut(window)?.surface;
-        let on_gpu = self.gpu.draws(surface);
-        let into_memory = !on_gpu
-            && self.gpu.on_shm(surface)
-            && self.conn.offers(BufferFormat::Abgr8888)
-            && frame
-                .renderer
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .draws_into_memory();
-        if !on_gpu && !into_memory {
-            return Ok(Submitted::Declined);
-        }
         let (surface, logical) = self.before_present(window)?;
         // what applies with the window's commit: the surface layers' values and the raised layer hidden or placed
         if let Some(layers) = &frame.surface_layers {
@@ -2347,11 +2330,6 @@ impl WindowSystem for WaylandWindowSystem {
             let pixels = (list.width, list.height);
             let resized = self.shown_size(window, *of) != Some(pixels);
             let target = match self.prepare_target(*s, *preferred, pixels, resized) {
-                // the window fell back to shared memory: drawn on the UI thread this time
-                Ok(Ok(Target::Shm(buffer, commit))) if *of == Of::Window && !into_memory => {
-                    self.release_target(*s, Target::Shm(buffer, commit));
-                    Err(Submitted::Declined)
-                }
                 Ok(Ok(target)) => Ok(target),
                 Ok(Err(stall)) => {
                     self.window_mut(window)?.stalled = stall;
@@ -2468,95 +2446,6 @@ impl WindowSystem for WaylandWindowSystem {
                 self.carry(window, damage, frame)?;
                 self.window_mut(window)?.stalled = stall;
                 Ok(PresentOutcome::NotReady)
-            }
-        }
-    }
-
-    /// A surface presenting from shared memory in the renderer's byte order (`abgr8888`, where the compositor lists it)
-    /// has its frame drawn into the buffer it leases, what the buffer missed and the damage carried drawn with it, and
-    /// nothing copied; in the other byte order, or from GPU buffers, the frame is drawn and presented as before.
-    fn present_into(
-        &mut self,
-        window: WindowId,
-        size: (u32, u32),
-        _configure: Option<ConfigureId>,
-        damage: &[cupertino_ui_render::PixelRect],
-        draw: &mut DrawInto<'_>,
-    ) -> Result<Lent, PlatformError> {
-        let surface = self.window_mut(window)?.surface;
-        if !self.gpu.on_shm(surface) || !self.conn.offers(BufferFormat::Abgr8888) {
-            return Ok(Lent::No);
-        }
-        let (surface, logical) = self.before_present(window)?;
-        let w = self.window_mut(window)?;
-        let resized = w.shown != Some(size);
-        let carried = std::mem::take(&mut w.carried);
-        let inside = |r: &PixelRect| clip(*r, size.0, size.1);
-        let leasing = tracing::trace_span!("wl.lease").entered();
-        let leased = self.conn.lease(surface, logical, BufferFormat::Abgr8888);
-        drop(leasing);
-        let leased = match leased {
-            Ok(mut lease) => {
-                let layout = lease.layout();
-                if (layout.width(), layout.height()) != size
-                    || layout.stride() != size.0 as usize * 4
-                {
-                    Err(None)
-                } else {
-                    // what the buffer misses: the frames shown in the others since it held one and those not shown
-                    let missed: Option<Vec<_>> = lease.missed().map(|missed| {
-                        missed
-                            .iter()
-                            .chain(&carried)
-                            .filter_map(inside)
-                            .map(render_rect)
-                            .collect()
-                    });
-                    let drawn = draw(MemoryTarget {
-                        pixels: lease.pixels_mut(),
-                        stride: layout.stride(),
-                        missed: missed.as_deref(),
-                    });
-                    match drawn {
-                        Some((id, drawn)) => {
-                            let changed: Vec<PixelRect> = carried
-                                .iter()
-                                .copied()
-                                .chain(drawn.iter().map(wire_rect))
-                                .filter_map(|r| inside(&r))
-                                .collect();
-                            tracing::trace_span!("wl.commit")
-                                .in_scope(|| {
-                                    lease.present_damage((!resized).then_some(&changed[..]))
-                                })
-                                .map_err(platform_error)?;
-                            Ok(id)
-                        }
-                        // drawing failed: the lease goes back unattached, its pixels unknown
-                        None => Err(None),
-                    }
-                }
-            }
-            Err(Error::NoFreeBuffer) => Err(Some(Stall::Buffer)),
-            Err(Error::NotConfigured) => Err(Some(Stall::Configure)),
-            Err(e) => {
-                self.window_mut(window)?.carried = carried;
-                return Err(platform_error(e));
-            }
-        };
-        match leased {
-            Ok(id) => {
-                self.presented_frame(window, id, size)?;
-                Ok(Lent::Drawn(PresentOutcome::Presented))
-            }
-            Err(stall) => {
-                let w = self.window_mut(window)?;
-                w.carried = carried;
-                w.carried.extend(damage.iter().map(wire_rect));
-                bound(&mut w.carried, size.0, size.1);
-                w.stalled = stall;
-                self.apply_layer(window)?;
-                Ok(Lent::Drawn(PresentOutcome::NotReady))
             }
         }
     }

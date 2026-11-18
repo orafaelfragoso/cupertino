@@ -76,11 +76,12 @@ now): the first one, and any that would land in the future or more than a second
 at the time it was read, and the ones after keep the compositor's spacing. A button's serial is the transport's latest
 input serial.
 
-Where the compositor lists ABGR8888, a surface presenting from shared memory takes its frame drawn straight into the
-buffer it leases (`present_into`): the CPU renderer paints the frame's damage, the damage of frames that were not
-presented and what the buffer missed, or all of it when its pixels are unknown, into the buffer, and nothing is copied;
-a lease the frame does not use (its drawing failed) goes back unattached. Elsewhere, and for a frame of the GPU
-renderer read back, `present` copies the renderer's frame (premultiplied RGBA) into a leased buffer, byte for byte as
+Where the compositor lists ABGR8888, a submitted frame in shared memory is drawn straight into the buffer it leases
+(`hand_over.rs`): the CPU renderer paints the frame's damage, the damage of frames that were not presented and what
+the buffer missed, or all of it when its pixels are unknown, into the buffer, and nothing is copied; a buffer the frame
+does not use (its drawing failed) goes back unattached. The window system lends no buffer to the UI thread
+(`present_into` is not taken). Elsewhere, and for a frame of the GPU renderer read back, the frame is copied from the
+renderer's own image, as `present` copies the renderer's frame (premultiplied RGBA) into a leased buffer, byte for byte as
 ABGR8888 where the compositor lists that format and converted to ARGB8888 otherwise: its damage, the damage of
 frames that were not presented, and what the buffer missed, or all of it when the buffer's pixels are unknown. The
 compositor is told only the frame's damage and the carried damage, or all of the window when the frame changed size.
@@ -182,9 +183,8 @@ and committing in that order; a surface that cannot be drawn, or a renderer that
 uncommitted, and the panic goes on in the instance that submitted it. A frame in shared memory never waits for the
 render thread, which may be making a device's programs. The next dispatch reads the frame back (before what the
 compositor said of it), gives the buffers back and tells the runtime `WindowEvent::Shown`. Until then the window draws
-no other frame, and freeing a surface's GPU buffers waits for the render thread's work before it. A solid colour, and
-a window whose own frame goes to shared memory in ARGB8888 or by a renderer that draws into no memory, still present
-on the UI thread.
+no other frame, and freeing a surface's GPU buffers waits for the render thread's work before it. No frame is
+declined; only a solid colour (`present_solid`) is still shown from the UI thread.
 
 `examples/gpu-window.rs` is the presenter's check window, a client for `cupertino-server`:
 `--frames`, `--reset-every`, `--purge-every`, `--losses`, `--renderer` (frames drawn by the GPU renderer and copied

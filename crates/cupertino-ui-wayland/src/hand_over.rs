@@ -340,7 +340,7 @@ pub(crate) fn copy_frame(
 }
 
 /// A renderer's rectangle of pixels as the transport's.
-pub(crate) fn wire_rect(r: &cupertino_ui_render::PixelRect) -> PixelRect {
+fn wire_rect(r: &cupertino_ui_render::PixelRect) -> PixelRect {
     PixelRect {
         x: r.x,
         y: r.y,
@@ -350,7 +350,7 @@ pub(crate) fn wire_rect(r: &cupertino_ui_render::PixelRect) -> PixelRect {
 }
 
 /// The transport's rectangle of pixels as a renderer's.
-pub(crate) fn render_rect(r: PixelRect) -> cupertino_ui_render::PixelRect {
+fn render_rect(r: PixelRect) -> cupertino_ui_render::PixelRect {
     cupertino_ui_render::PixelRect {
         x: r.x,
         y: r.y,
@@ -360,7 +360,7 @@ pub(crate) fn render_rect(r: PixelRect) -> cupertino_ui_render::PixelRect {
 }
 
 /// `r` cut to a `width` × `height` buffer; `None` when nothing is left.
-pub(crate) fn clip(r: PixelRect, width: u32, height: u32) -> Option<PixelRect> {
+fn clip(r: PixelRect, width: u32, height: u32) -> Option<PixelRect> {
     let (x1, y1) = (
         r.x.saturating_add(r.width).min(width),
         r.y.saturating_add(r.height).min(height),

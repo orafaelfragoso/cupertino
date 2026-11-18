@@ -16,9 +16,9 @@ Updated by the lead at every merge.
 | | |
 |---|---|
 | Current wave | 4 |
-| Running tasks | W4.6 step 4 (UI loop turns at start-up, measured 5× those before W4.6), W4.7 step 2, W4.9 rework after review |
+| Running tasks | W4.7 step 2, check of the W4.9 rework |
 | Enforced layers | foundation, system, graphics, models, protocol, transport, testing (126 remaining-work lines) |
-| Waiting on the owner | nothing |
+| Waiting on the owner | W4.6 step 4: the measured cost and review item S5 |
 | Last closed wave | 3 |
 
 ## Contents
@@ -1179,3 +1179,9 @@ One line per change to a decision or approval of a design: date, number, what, w
 - 2026-11-18: owner approves W4.9 in advance of its rework, on the condition that the reworked specification makes
   every change the review asked for and none of its decisions for approval departs from the reviewer's position; a
   decision that departs comes back to the owner alone. W4.10 starts when the rework is merged.
+- 2026-11-18: lead, W4.6 step 4: a window whose frame is away is handed no frame until it is back (086ac720e), so
+  frame callbacks no longer turn its loop over at start-up. Against 368eac681 (3 runs each, Settings GPU and CPU,
+  Files CPU): frame times, raster time and frame events no worse; one cheap turn more per frame for `Shown` (UI thread
+  time halved); 1–4 MiB more PSS and 2–3 threads more, the render thread and the pools. Waiting on the owner: accept
+  that cost, and whether the raised layer, surface layers and declined frames (review item S5, L, 3–5 days) move to
+  the render thread now or stay on the UI thread as a recorded exception.

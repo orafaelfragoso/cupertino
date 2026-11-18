@@ -66,7 +66,9 @@ pub(crate) enum Failure {
     Present(PresentError),
 }
 
-/// A surface whose frame was ready but not shown, because another surface of the frame was not drawn.
+/// A surface's frame not shown for no error of its renderer: another surface of the frame was not drawn, its renderer
+/// panicked, or its frame could not be read back or is of another size than its buffer. The window's next frame draws
+/// all of it.
 fn left_unshown() -> Failure {
     Failure::Present(PresentError::Resized)
 }
@@ -80,6 +82,7 @@ pub(crate) struct Back {
     pub(crate) drew: Drew,
 }
 
+/// What drawing a surface's frame came to.
 pub(crate) enum Drew {
     /// Into a GPU buffer: the frame's id and whether it was copied from its renderer's texture.
     Gpu(Result<(RenderFrameId, bool), Failure>),
@@ -91,21 +94,21 @@ pub(crate) enum Drew {
 }
 
 /// The commit of a drawn surface.
-enum Send {
+enum Unsent {
     Gpu(Drawn),
     Shm(Commit, Option<Vec<PixelRect>>),
 }
 
 /// The commits of a frame whose surfaces were all drawn, in the order they go out.
-pub(crate) struct Commits(Vec<Send>);
+pub(crate) struct Commits(Vec<Unsent>);
 
 impl Commits {
     /// Sends them, the layers' before the window's.
     pub(crate) fn send(self) -> Result<(), WlError> {
         for send in self.0 {
             match send {
-                Send::Gpu(drawn) => drawn.commit()?,
-                Send::Shm(commit, damage) => tracing::trace_span!("wl.commit")
+                Unsent::Gpu(drawn) => drawn.commit()?,
+                Unsent::Shm(commit, damage) => tracing::trace_span!("wl.commit")
                     .in_scope(|| commit.commit(damage.as_deref()))?,
             }
         }
@@ -116,7 +119,7 @@ impl Commits {
 /// A frame's surfaces drawn: how each went, the panic of a renderer that panicked, and the commits to send.
 pub(crate) struct Drawing {
     pub(crate) backs: Vec<Back>,
-    pub(crate) panic: Option<Box<dyn Any + std::marker::Send>>,
+    pub(crate) panic: Option<Box<dyn Any + Send>>,
     pub(crate) commits: Commits,
 }
 
@@ -147,7 +150,7 @@ pub(crate) fn draw(parts: Vec<Part>, submission: &Submission) -> Drawing {
                 match drawn {
                     Ok(Ok((id, drawn))) => {
                         let from_texture = drawn.from_texture;
-                        sends.push(Send::Gpu(drawn));
+                        sends.push(Unsent::Gpu(drawn));
                         Drew::Gpu(Ok((id, from_texture)))
                     }
                     Ok(Err(e)) => Drew::Gpu(Err(e)),
@@ -163,7 +166,7 @@ pub(crate) fn draw(parts: Vec<Part>, submission: &Submission) -> Drawing {
                 }));
                 match drawn {
                     Ok(Ok((id, damage))) => {
-                        sends.push(Send::Shm(commit, damage.clone()));
+                        sends.push(Unsent::Shm(commit, damage.clone()));
                         Drew::Shm(buffer, Ok((id, damage)))
                     }
                     Ok(Err(e)) => Drew::Shm(buffer, Err(e)),

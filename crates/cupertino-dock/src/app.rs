@@ -987,15 +987,14 @@ fn watch_conf(
 ) -> Option<Command<Message>> {
     let path = path?;
     match ConfigWatcher::new(vec![path.clone()]) {
-        Ok(watch) => Some(cupertino_kit::task::follow_settings(
-            watch,
-            move |event| match event {
+        Ok(watch) => Some(Command::Perform(Box::pin(
+            cupertino_kit::task::follow_settings(watch, move |event| match event {
                 WatchEvent::Changed(_) => {
                     let _ = messages.try_send(Message::ConfChanged);
                 }
                 WatchEvent::Error(e) => eprintln!("{PROCESS}: watching dock.conf failed: {e}"),
-            },
-        )),
+            }),
+        ))),
         Err(e) => {
             eprintln!(
                 "{PROCESS}: cannot watch {}: {e}; changes apply at the next start",

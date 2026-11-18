@@ -412,7 +412,9 @@ impl State {
             .flatten()
             .map(|watch| {
                 let to_loop = self.notify.clone();
-                let follow = watch.follow(move |event| to_loop(Background::Files(event)));
+                let follow = cupertino_kit::task::follow_settings(watch, move |event| {
+                    to_loop(Background::Files(event))
+                });
                 Box::pin(follow) as std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send>>
             })
             .collect()

@@ -496,7 +496,7 @@ fn watch_conf(
                     let _ = wakes.try_send(Wake::Conf);
                 }
             });
-            (Some(follow), rx)
+            (Some(Command::Perform(Box::pin(follow))), rx)
         }
         Err(e) => {
             eprintln!(

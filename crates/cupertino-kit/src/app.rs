@@ -458,12 +458,15 @@ impl Personal {
         let watch = self.watch.take()?;
         let changed = Arc::clone(&self.inner.changed);
         let waker = self.waker.clone();
-        Some(crate::task::follow_settings(watch, move |event| {
-            if matches!(event, WatchEvent::Changed(_)) {
-                changed.store(true, Ordering::Release);
-                waker.wake_by_ref();
-            }
-        }))
+        Some(Command::Perform(Box::pin(crate::task::follow_settings(
+            watch,
+            move |event| {
+                if matches!(event, WatchEvent::Changed(_)) {
+                    changed.store(true, Ordering::Release);
+                    waker.wake_by_ref();
+                }
+            },
+        ))))
     }
 
     /// The theme for the appearance the application starts in.

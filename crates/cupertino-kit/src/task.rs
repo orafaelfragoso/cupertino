@@ -108,15 +108,16 @@ pub const SETTINGS_READ_DEADLINE: Duration = Duration::from_secs(2);
 
 /// Follows the settings files `watch` watches while the application runs: the UI thread only waits for each burst of
 /// changes to be quiet ([`ConfigWatcher::quiet`]), the files are read on the I/O pool ([`ConfigWatcher::reread`]), and
-/// `report` hears each report on the UI thread. The task never ends, so it stands for a task of any message; once the
-/// notification failed for good, after its failure was reported, it only waits.
+/// `report` hears each report where the future is polled: the UI thread, which runs it as a task
+/// (`Command::Perform`). It never ends, so it stands for a task of any output; once the notification failed for good,
+/// after its failure was reported, it only waits.
 #[track_caller]
-pub fn follow_settings<M: Send + 'static>(
+pub fn follow_settings<T: 'static>(
     mut watch: ConfigWatcher,
     mut report: impl FnMut(WatchEvent) + Send + 'static,
-) -> Command<M> {
+) -> impl Future<Output = T> + Send + 'static {
     let site = Location::caller();
-    Command::Perform(Box::pin(async move {
+    async move {
         while watch.quiet().await {
             let events;
             (watch, events) = outcome(io_submit, Some((SETTINGS_READ_DEADLINE, site)), move || {
@@ -127,7 +128,7 @@ pub fn follow_settings<M: Send + 'static>(
             events.into_iter().for_each(&mut report);
         }
         std::future::pending().await
-    }))
+    }
 }
 
 /// A value another thread gives, waited for by a future on the UI thread: a task's outcome, a bus connection's

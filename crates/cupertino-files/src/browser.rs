@@ -1,6 +1,13 @@
 //! State of one browser window without a toolkit: the folder shown (a live [`DirectoryModel`]), the
 //! back / forward [`History`], the [`Selection`] kept on the same items across changes of the listing,
-//! the sort order and type-select. The window process feeds it input and draws what it holds.
+//! the sort order and type-select. The window process feeds it input, runs the work of its models
+//! ([`Browser::take_work`]) and draws what it holds.
+//!
+//! A folder asked for (go, Back, Forward, the enclosing folder, a way back) is shown once its model's first update
+//! says it opened ([`Polled::entered`]): until then the window keeps the listing and the history it has, and a folder
+//! that does not open leaves them as they are ([`Polled::unopened`]). A second request while one waits takes its
+//! place. A model let go while its work runs is kept by the session's [`Listings`], and the next request for its
+//! folder takes it instead of opening the folder again.
 //!
 //! Behaviour (reference, unless noted): opening a folder replaces the window's folder; going
 //! to the enclosing folder selects the folder the window came from; the folder of a window that is
@@ -10,23 +17,28 @@
 //! further folders in new windows or tabs, which this window does not have).
 //!
 //! The list shows folders as an outline: expanding a folder lists its items under it one level
-//! deeper, from a live model of its own opened only then (lazy, in batches like the window's). Collapsing
+//! deeper, from a live model of its own opened only then (lazy, in batches like the window's), the row closed until
+//! that model opens. Collapsing
 //! forgets the expanded folders inside it, and a selection inside moves to the collapsed folder
 //! (the outline view convention); going to another folder or leaving the list collapses everything
 //! (the design keeps expansion state per window, its persistence is not known).
 
 use crate::history::History;
 use crate::layout::list::RowSpec;
-use crate::model::{DirectoryModel, ModelDelta, ModelOptions, Notify, DEFAULT_BATCH};
 use crate::selection::{Modifiers, MouseDown, Selection};
 use crate::typeselect::{Outcome, TypeSelect};
 use cupertino_apps::MimeDatabase;
 use cupertino_kit::files::entry::{Entry, Kind};
+use cupertino_kit::files::model::{
+    DirectoryModel, ModelDelta, ModelOptions, ModelWatch, ModelWork, Notify, DEFAULT_BATCH,
+};
 use cupertino_kit::files::recents;
 use cupertino_kit::files::sort::{SortKey, SortSpec};
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -46,11 +58,101 @@ pub struct Polled {
     pub changed: bool,
     /// Errors the model reported (reading the folder, the watch); the listing stays as it was.
     pub errors: Vec<String>,
+    /// The folder a request asked for opened and is shown now: what asked for it.
+    pub entered: Option<Asked>,
+    /// The folder a request asked for could not be opened: the listing and the history stay as they were.
+    pub unopened: Option<Unopened>,
+}
+
+/// What asked for a folder.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Asked {
+    /// [`Browser::go`] and [`Browser::go_with`].
+    Go,
+    Back,
+    Forward,
+    Parent,
+    /// [`Browser::return_to`].
+    Return,
+}
+
+/// A folder asked for that could not be opened, and why.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Unopened {
+    pub asked: Asked,
+    pub dir: PathBuf,
+    pub error: String,
+}
+
+/// A request for a folder, until its model's first update.
+enum Request {
+    Go(Option<Select>),
+    Back,
+    Forward,
+    /// The enclosing folder, selecting the folder of this name the window came from.
+    Parent(String),
+    Return(Visit),
+    /// The nearest folder above the folder shown, which is gone.
+    Enclosing,
+}
+
+/// An item to select once the folder a request asked for is shown.
+enum Select {
+    /// The item of this name, once listed; none when the listing is complete without it.
+    Listed(String),
+    /// The item at this path, as soon as the listing shows it.
+    Appears(PathBuf),
+}
+
+impl Request {
+    fn asked(&self) -> Option<Asked> {
+        match self {
+            Request::Go(_) => Some(Asked::Go),
+            Request::Back => Some(Asked::Back),
+            Request::Forward => Some(Asked::Forward),
+            Request::Parent(_) => Some(Asked::Parent),
+            Request::Return(_) => Some(Asked::Return),
+            Request::Enclosing => None,
+        }
+    }
+}
+
+/// The models the windows of a session let go of while their work runs, by folder: a request for one of those
+/// folders takes its model instead of opening the folder again, so a folder that does not answer holds one I/O turn
+/// however often it is asked for. A clone is the same listings.
+#[derive(Clone, Default)]
+pub struct Listings(Rc<RefCell<HashMap<PathBuf, DirectoryModel>>>);
+
+impl Listings {
+    /// Keep `model` while its work runs; it is dropped otherwise.
+    pub fn let_go(&self, model: DirectoryModel) {
+        if model.is_working() {
+            self.0.borrow_mut().insert(model.dir().to_path_buf(), model);
+        }
+    }
+
+    /// The model of `dir` kept, unless it failed to open.
+    fn take(&self, dir: &Path) -> Option<DirectoryModel> {
+        self.0
+            .borrow_mut()
+            .remove(dir)
+            .filter(|model| model.opened() != Some(false))
+    }
+
+    /// Drop the models whose work ended.
+    pub fn sweep(&self) {
+        self.0.borrow_mut().retain(|_, model| model.is_working());
+    }
 }
 
 pub struct Browser {
     history: History,
     model: DirectoryModel,
+    /// The folder asked for, until its model's first update, and what asked for it.
+    waiting: Option<(DirectoryModel, Request)>,
+    /// What a request whose model had opened already brought, told at the next poll.
+    entered: Option<Asked>,
+    listings: Listings,
     selection: Selection,
     sort: SortSpec,
     /// Given to every model of the window: sets `queued`, then tells the window.
@@ -66,6 +168,8 @@ pub struct Browser {
     focus_moved: bool,
     /// The folders shown expanded, each with its own live model, by path.
     expanded: HashMap<PathBuf, DirectoryModel>,
+    /// The folders asked to show expanded, until their models' first update.
+    expanding: HashMap<PathBuf, DirectoryModel>,
     /// The listing with the items of expanded folders under them; empty while nothing is expanded, when
     /// [`Browser::entries`] is the folder's own listing.
     rows: Vec<Entry>,
@@ -145,14 +249,14 @@ fn model_options(sort: SortSpec, types: &Option<Arc<MimeDatabase>>) -> ModelOpti
     }
 }
 
-/// A live model of `dir`, or of the Recents list `recents_file` when `dir` is [`recents::RECENTS`].
+/// A live model of `dir`, or of the Recents list `recents_file` when `dir` is [`recents::location`].
 fn open_model(
     dir: &Path,
     sort: SortSpec,
     recents_file: &Path,
     types: &Option<Arc<MimeDatabase>>,
     notify: Notify,
-) -> io::Result<DirectoryModel> {
+) -> DirectoryModel {
     if dir == recents::location() {
         DirectoryModel::open_recents(
             recents_file.to_path_buf(),
@@ -166,31 +270,64 @@ fn open_model(
             notify,
         )
     } else {
-        DirectoryModel::open_notifying(dir, model_options(sort, types), notify)
+        DirectoryModel::open(dir, model_options(sort, types), notify)
     }
+}
+
+/// The model of `dir` that `listings` kept, made the browser's: it wakes the browser through `notify` (marking
+/// `queued`, so what it read meanwhile is applied at the next poll) and lists in `sort` order.
+fn taken(
+    listings: &Listings,
+    dir: &Path,
+    sort: SortSpec,
+    notify: &Notify,
+    queued: &AtomicBool,
+) -> Option<DirectoryModel> {
+    let mut model = listings.take(dir)?;
+    model.set_notify(Arc::clone(notify));
+    if model.options().sort != sort {
+        model.set_sort(sort);
+    }
+    queued.store(true, Ordering::SeqCst);
+    Some(model)
+}
+
+/// Whether `dir` is a virtual folder (Recents, Applications), not a directory of the file system.
+fn virtual_folder(dir: &Path) -> bool {
+    dir == recents::location() || dir == cupertino_kit::files::applications::location()
 }
 
 impl Browser {
     /// A window on `start` listed in `sort` order, its Recents folder from the bookmark file `recents_file`, its items
-    /// typed with the MIME database `types` ([`ModelOptions::types`]); `notify` runs on other threads whenever there is
-    /// something to [`Browser::poll`].
+    /// typed with the MIME database `types` ([`ModelOptions::types`]), the models it lets go of while their work runs
+    /// kept in `listings`; `notify` runs on other threads whenever there is something to [`Browser::poll`]. A folder
+    /// of the file system is tried here, on the caller's thread: on an error (no such folder, not a folder, no
+    /// permission) there is no window.
     pub fn open(
         start: PathBuf,
         sort: SortSpec,
         recents_file: PathBuf,
         types: Option<Arc<MimeDatabase>>,
         notify: Notify,
+        listings: Listings,
     ) -> io::Result<Self> {
+        if !virtual_folder(&start) {
+            std::fs::read_dir(&start)?;
+        }
         let queued = Arc::new(AtomicBool::new(false));
         let flag = queued.clone();
         let notify: Notify = Arc::new(move || {
             flag.store(true, Ordering::SeqCst);
             notify();
         });
-        let model = open_model(&start, sort, &recents_file, &types, notify.clone())?;
+        let model = taken(&listings, &start, sort, &notify, &queued)
+            .unwrap_or_else(|| open_model(&start, sort, &recents_file, &types, notify.clone()));
         Ok(Browser {
             history: History::new(start),
             model,
+            waiting: None,
+            entered: None,
+            listings,
             selection: Selection::new(),
             sort,
             notify,
@@ -200,6 +337,7 @@ impl Browser {
             awaited: None,
             focus_moved: false,
             expanded: HashMap::new(),
+            expanding: HashMap::new(),
             rows: Vec::new(),
             outline: Vec::new(),
             recents_file,
@@ -214,8 +352,57 @@ impl Browser {
     /// The folder is not a directory of the file system (Recents, Applications): it has no enclosing folder and no
     /// free space.
     pub fn is_virtual(&self) -> bool {
-        self.dir() == recents::location()
-            || self.dir() == cupertino_kit::files::applications::location()
+        virtual_folder(self.dir())
+    }
+
+    /// A live model of `dir` for this browser: the one the session kept for it, else a new one.
+    fn listing(&self, dir: &Path) -> DirectoryModel {
+        taken(&self.listings, dir, self.sort, &self.notify, &self.queued).unwrap_or_else(|| {
+            open_model(
+                dir,
+                self.sort,
+                &self.recents_file,
+                &self.types,
+                self.notify.clone(),
+            )
+        })
+    }
+
+    /// The work and the watches of the browser's models, for the program to run: the folder shown, the one asked
+    /// for and the expanded folders.
+    pub fn take_work(&mut self) -> (Vec<ModelWork>, Vec<ModelWatch>) {
+        let models = std::iter::once(&mut self.model)
+            .chain(self.waiting.as_mut().map(|(model, _)| model))
+            .chain(self.expanded.values_mut())
+            .chain(self.expanding.values_mut());
+        let (mut works, mut watches) = (Vec::new(), Vec::new());
+        for model in models {
+            watches.extend(model.take_watch());
+            works.extend(model.take_work());
+        }
+        (works, watches)
+    }
+
+    /// Let go of `models`: those whose work runs go to the session's listings.
+    fn let_go(&self, models: impl IntoIterator<Item = DirectoryModel>) {
+        for model in models {
+            self.listings.let_go(model);
+        }
+    }
+
+    /// Let go of the expanded folders `gone` names, and of those asked to expand.
+    fn drop_expanded(&mut self, gone: impl Fn(&Path) -> bool) {
+        let paths: Vec<PathBuf> = self
+            .expanded
+            .keys()
+            .chain(self.expanding.keys())
+            .filter(|p| gone(p.as_path()))
+            .cloned()
+            .collect();
+        for path in paths {
+            let models = [self.expanded.remove(&path), self.expanding.remove(&path)];
+            self.let_go(models.into_iter().flatten());
+        }
     }
 
     /// Number of the folder's own items (not those of expanded folders), or of those the search finds.
@@ -246,7 +433,7 @@ impl Browser {
         }
         let kept = self.selection_paths();
         self.filter = filter;
-        self.expanded.clear();
+        self.drop_expanded(|_| true);
         self.rebuild();
         self.restore_selection(kept);
     }
@@ -356,7 +543,17 @@ impl Browser {
                 &mut outline,
                 &mut reached,
             );
-            self.expanded.retain(|path, _| reached.contains(path));
+            let gone: Vec<PathBuf> = self
+                .expanded
+                .keys()
+                .filter(|path| !reached.contains(*path))
+                .cloned()
+                .collect();
+            for path in gone {
+                if let Some(model) = self.expanded.remove(&path) {
+                    self.listings.let_go(model);
+                }
+            }
             if self.expanded.is_empty() {
                 rows.clear();
             }
@@ -365,27 +562,35 @@ impl Browser {
         self.outline = outline;
     }
 
-    /// Expand folder row `index` (its disclosure triangle, or Right): its items load under it. `Ok(false)` when
-    /// the row is not a folder or is expanded already.
-    pub fn expand(&mut self, index: usize) -> io::Result<bool> {
+    /// Expand folder row `index` (its disclosure triangle, or Right): its items load under it once its model opens,
+    /// the row closed until then; one that does not open is a [`Polled::errors`] line. `false` when the row is not a
+    /// folder or is expanded, or asked to be, already.
+    pub fn expand(&mut self, index: usize) -> bool {
         let Some(e) = self.entries().get(index).filter(|e| {
             self.filter.is_none()
                 && e.kind == Kind::Directory
                 && !self.expanded.contains_key(&e.path)
+                && !self.expanding.contains_key(&e.path)
         }) else {
-            return Ok(false);
+            return false;
         };
         let path = e.path.clone();
-        let model = DirectoryModel::open_notifying(
-            &path,
-            model_options(self.sort, &self.types),
-            self.notify.clone(),
-        )?;
+        let model = self.listing(&path);
+        match model.opened() {
+            Some(true) => self.show_expanded(path, model),
+            _ => {
+                self.expanding.insert(path, model);
+            }
+        }
+        true
+    }
+
+    /// Show the items of the expanded folder at `path`, which `model` lists, under its row.
+    fn show_expanded(&mut self, path: PathBuf, model: DirectoryModel) {
         let kept = self.selection_paths();
         self.expanded.insert(path, model);
         self.rebuild();
         self.restore_selection(kept);
-        Ok(true)
     }
 
     /// Collapse folder row `index` and every folder expanded inside it; selected items inside give their selection to
@@ -407,7 +612,7 @@ impl Browser {
         }
         let up = |p: Option<PathBuf>| p.map(|p| if inside(&p) { path.clone() } else { p });
         let (anchor, focus) = (up(anchor), up(focus));
-        self.expanded.retain(|p, _| !p.starts_with(&path));
+        self.drop_expanded(|p| p.starts_with(&path));
         self.rebuild();
         self.restore_selection((kept, anchor, focus));
         true
@@ -415,11 +620,11 @@ impl Browser {
 
     /// Show only the folder's own items (another view than the list).
     pub fn collapse_all(&mut self) {
-        if self.expanded.is_empty() {
+        if self.expanded.is_empty() && self.expanding.is_empty() {
             return;
         }
         let kept = self.selection_paths();
-        self.expanded.clear();
+        self.drop_expanded(|_| true);
         self.rebuild();
         self.restore_selection(kept);
     }
@@ -437,50 +642,118 @@ impl Browser {
         std::mem::take(&mut self.focus_moved)
     }
 
-    /// Replace the model with one on `to`; the history is the caller's.
-    fn show(&mut self, to: &Path) -> io::Result<()> {
-        let model = open_model(
-            to,
-            self.sort,
-            &self.recents_file,
-            &self.types,
-            self.notify.clone(),
-        )?;
-        self.replace_model(model);
-        Ok(())
+    /// Ask for the folder `dir` for `request`: its model, or the one already asked for when it is the same folder,
+    /// waits for its first update in place of any other request. A model the session kept that opened already is
+    /// shown at once, and the next poll tells it.
+    fn ask(&mut self, dir: &Path, request: Request) {
+        let model = match self.waiting.take() {
+            Some((model, _)) if model.dir() == dir => model,
+            Some((model, _)) => {
+                self.listings.let_go(model);
+                self.listing(dir)
+            }
+            None => self.listing(dir),
+        };
+        if model.opened() == Some(true) {
+            self.entered = self.enter(model, request);
+            (self.notify)();
+        } else {
+            self.waiting = Some((model, request));
+        }
+    }
+
+    /// Forget the request waiting, if any.
+    pub fn stop_waiting(&mut self) {
+        if let Some((model, _)) = self.waiting.take() {
+            self.listings.let_go(model);
+        }
+    }
+
+    /// Show the folder `model` lists, which opened, for `request`, and do what the request asks once it is shown;
+    /// what asked for it.
+    fn enter(&mut self, model: DirectoryModel, request: Request) -> Option<Asked> {
+        let to = model.dir().to_path_buf();
+        let asked = request.asked();
+        let left = self.replace_model(model);
+        self.listings.let_go(left);
+        // what the listing queued before it was shown is applied at the next poll
+        self.queued.store(true, Ordering::SeqCst);
+        match request {
+            Request::Go(select) => {
+                self.history.visit(to);
+                match select {
+                    Some(Select::Listed(name)) => {
+                        self.select_when_listed = Some(name);
+                        self.select_pending();
+                    }
+                    Some(Select::Appears(path)) => self.select_when_appears(path),
+                    None => {}
+                }
+            }
+            Request::Back => {
+                self.history.back();
+            }
+            Request::Forward => {
+                self.history.forward();
+            }
+            Request::Parent(name) => {
+                self.history.visit(to);
+                self.select_when_listed = Some(name);
+                self.select_pending();
+            }
+            Request::Return(visit) => {
+                self.history = visit.history;
+                self.reopen = visit.expanded;
+                self.reselect = Some(visit.selection);
+                self.reselect_pending();
+            }
+            Request::Enclosing => self.history.visit(to),
+        }
+        asked
+    }
+
+    /// Whether a folder asked for waits for its model's first update.
+    pub fn is_waiting(&self) -> bool {
+        self.waiting.is_some()
     }
 
     /// A live listing of `dir` opened as the window's own folders are, in its sort order and waking it when it changes:
     /// a column of the column view, which [`Browser::go_with`] can show without reading the folder again.
-    pub fn open_listing(&self, dir: &Path) -> io::Result<DirectoryModel> {
-        open_model(
-            dir,
-            self.sort,
-            &self.recents_file,
-            &self.types,
-            self.notify.clone(),
-        )
+    pub fn open_listing(&self, dir: &Path) -> DirectoryModel {
+        self.listing(dir)
     }
 
-    /// Show the folder `model` lists, a listing of [`Browser::open_listing`], as far as it has read it, and select the
-    /// item named `select` once it is listed; the listing of the folder left is given back.
-    pub fn go_with(&mut self, model: DirectoryModel, select: Option<&str>) -> DirectoryModel {
+    /// Show the folder `model` lists, a listing of [`Browser::open_listing`], and select the item named `select` once
+    /// it is listed. A listing that opened is shown at once, as far as it has read it, and the listing of the folder
+    /// left is given back; one that has not waits for its first update as a request does ([`Asked::Go`]).
+    pub fn go_with(
+        &mut self,
+        model: DirectoryModel,
+        select: Option<&str>,
+    ) -> Option<DirectoryModel> {
+        let select = select.map(|name| Select::Listed(name.to_owned()));
+        if model.opened() != Some(true) {
+            self.stop_waiting();
+            self.waiting = Some((model, Request::Go(select)));
+            return None;
+        }
+        self.stop_waiting();
         let to = model.dir().to_path_buf();
         let left = self.replace_model(model);
         // what the listing queued before it was the window's own is applied at the next poll
         self.queued.store(true, Ordering::SeqCst);
         self.history.visit(to);
-        if let Some(name) = select {
-            self.select_when_listed = Some(name.to_owned());
+        if let Some(Select::Listed(name)) = select {
+            self.select_when_listed = Some(name);
             self.select_pending();
         }
-        left
+        Some(left)
     }
 
     /// Put `model` in place of the folder's model, forgetting what belonged to the old one; the old model.
     fn replace_model(&mut self, model: DirectoryModel) -> DirectoryModel {
         let old = std::mem::replace(&mut self.model, model);
-        self.expanded.clear();
+        self.drop_expanded(|_| true);
         self.filter = None;
         self.rebuild();
         self.selection.clear();
@@ -505,16 +778,20 @@ impl Browser {
     }
 
     /// Go back to `visit` as it was: its folder with its history, its folders expanded again as the listing reaches
-    /// them, and its selection once they are listed. On an error the window stays where it is.
-    pub fn return_to(&mut self, visit: Visit) -> io::Result<()> {
+    /// them, and its selection once they are listed. `true` when its folder is the one shown, which it is at once;
+    /// another folder is asked for ([`Asked::Return`]).
+    pub fn return_to(&mut self, visit: Visit) -> bool {
         if visit.dir() != self.dir() {
-            self.show(visit.dir())?;
+            let dir = visit.dir().to_path_buf();
+            self.ask(&dir, Request::Return(visit));
+            return false;
         }
+        self.stop_waiting();
         self.history = visit.history;
         self.reopen = visit.expanded;
         self.reselect = Some(visit.selection);
         self.reselect_pending();
-        Ok(())
+        true
     }
 
     /// Expand again the folders [`Browser::return_to`] waits for that the listing shows; once every folder shown has
@@ -539,13 +816,12 @@ impl Browser {
             let path = self.reopen.remove(at);
             let index = self.entries().iter().position(|e| e.path == path);
             if let Some(index) = index {
-                if let Err(e) = self.expand(index) {
-                    eprintln!("cupertino-files: cannot open {} again: {e}", path.display());
-                }
+                self.expand(index);
             }
         }
-        let reading =
-            self.model.is_loading() || self.expanded.values().any(DirectoryModel::is_loading);
+        let reading = self.model.is_loading()
+            || !self.expanding.is_empty()
+            || self.expanded.values().any(DirectoryModel::is_loading);
         if !reading {
             self.reopen.clear();
         }
@@ -585,63 +861,68 @@ impl Browser {
         }
     }
 
-    /// Show the folder `to`. On an error (no such folder, no permission) the window stays where it is.
-    pub fn go(&mut self, to: PathBuf) -> io::Result<()> {
+    /// Show the folder `to`, selecting the item at `select` as soon as the listing shows it. `true` when `to` is the
+    /// folder shown, which it stays on (any other request is forgotten); another folder is asked for ([`Asked::Go`]).
+    pub fn go(&mut self, to: PathBuf, select: Option<PathBuf>) -> bool {
         if to == self.dir() {
-            return Ok(());
+            self.stop_waiting();
+            if let Some(path) = select {
+                self.select_when_appears(path);
+            }
+            return true;
         }
-        self.show(&to)?;
-        self.history.visit(to);
-        Ok(())
+        self.ask(&to, Request::Go(select.map(Select::Appears)));
+        false
     }
 
-    /// Go back; `false` when there is nothing to go back to.
-    pub fn back(&mut self) -> io::Result<bool> {
+    /// Go back ([`Asked::Back`]); `false` when there is nothing to go back to.
+    pub fn back(&mut self) -> bool {
         let Some(to) = self.history.back_target().map(Path::to_path_buf) else {
-            return Ok(false);
+            return false;
         };
-        self.show(&to)?;
-        self.history.back();
-        Ok(true)
+        self.ask(&to, Request::Back);
+        true
     }
 
-    /// Go forward; `false` when nothing was gone back from.
-    pub fn forward(&mut self) -> io::Result<bool> {
+    /// Go forward ([`Asked::Forward`]); `false` when nothing was gone back from.
+    pub fn forward(&mut self) -> bool {
         let Some(to) = self.history.forward_target().map(Path::to_path_buf) else {
-            return Ok(false);
+            return false;
         };
-        self.show(&to)?;
-        self.history.forward();
-        Ok(true)
+        self.ask(&to, Request::Forward);
+        true
     }
 
-    /// Go to the enclosing folder and select the one the window came from; `false` at the root.
-    pub fn parent(&mut self) -> io::Result<bool> {
+    /// Go to the enclosing folder and select the one the window came from ([`Asked::Parent`]); `false` at the root.
+    pub fn parent(&mut self) -> bool {
         if self.is_virtual() {
-            return Ok(false);
+            return false;
         }
         let here = self.dir().to_path_buf();
         let (Some(parent), Some(name)) = (here.parent(), here.file_name()) else {
-            return Ok(false);
+            return false;
         };
-        self.go(parent.to_path_buf())?;
-        self.select_when_listed = Some(name.to_string_lossy().into_owned());
-        self.select_pending();
-        Ok(true)
+        let name = name.to_string_lossy().into_owned();
+        self.ask(parent, Request::Parent(name));
+        true
     }
 
-    /// Apply what the model's threads queued, keeping the selection on the same items.
+    /// Apply what the models' work and watches queued, keeping the selection on the same items: a folder asked for
+    /// that opened is shown, and one that did not is told.
     pub fn poll(&mut self) -> Polled {
         // cheap when nothing arrived: the window polls after every batch of input events
         if !self.queued.swap(false, Ordering::SeqCst) {
             return Polled::default();
         }
+        let mut polled = Polled {
+            entered: self.entered.take(),
+            ..Polled::default()
+        };
+        polled.changed = polled.entered.is_some();
+        self.poll_waiting(&mut polled);
         let kept = self.selection_paths();
         let deltas = self.model.poll();
-        let mut polled = Polled {
-            changed: !deltas.is_empty(),
-            errors: Vec::new(),
-        };
+        polled.changed |= !deltas.is_empty();
         let mut reordered = false;
         let mut gone = false;
         for delta in deltas {
@@ -650,9 +931,13 @@ impl Browser {
                 | ModelDelta::Inserted { .. }
                 | ModelDelta::Removed { .. }
                 | ModelDelta::Moved { .. } => reordered = true,
-                ModelDelta::LoadComplete { .. } | ModelDelta::Changed { .. } => {}
+                ModelDelta::Opened
+                | ModelDelta::LoadComplete { .. }
+                | ModelDelta::Changed { .. } => {}
                 ModelDelta::DirectoryGone => gone = true,
-                ModelDelta::Error(e) => polled.errors.push(e),
+                ModelDelta::OpenFailed { error, .. } | ModelDelta::Error(error) => {
+                    polled.errors.push(error)
+                }
             }
         }
         // an expanded folder that is gone also leaves its parent's listing, which drops it in the rebuild
@@ -664,24 +949,25 @@ impl Browser {
                     | ModelDelta::Inserted { .. }
                     | ModelDelta::Removed { .. }
                     | ModelDelta::Moved { .. } => reordered = true,
-                    ModelDelta::LoadComplete { .. }
+                    ModelDelta::Opened
+                    | ModelDelta::OpenFailed { .. }
+                    | ModelDelta::LoadComplete { .. }
                     | ModelDelta::Changed { .. }
                     | ModelDelta::DirectoryGone => {}
                     ModelDelta::Error(e) => polled.errors.push(format!("{}: {e}", path.display())),
                 }
             }
         }
+        reordered |= self.poll_expanding(&mut polled);
         if polled.changed {
             self.rebuild();
         }
         if gone {
             match self.nearest_existing_ancestor() {
-                Some(to) => match self.go(to) {
-                    Ok(()) => return polled,
-                    Err(e) => polled
-                        .errors
-                        .push(format!("cannot open the enclosing folder: {e}")),
-                },
+                Some(to) => {
+                    self.ask(&to, Request::Enclosing);
+                    return polled;
+                }
                 None => polled
                     .errors
                     .push("the folder and every folder above it are gone".into()),
@@ -694,6 +980,78 @@ impl Browser {
         self.select_awaited();
         self.reselect_pending();
         polled
+    }
+
+    /// Show the folder asked for once its model opened, or tell that it did not.
+    fn poll_waiting(&mut self, polled: &mut Polled) {
+        let Some((model, _)) = self.waiting.as_mut() else {
+            return;
+        };
+        let mut opened = None;
+        for delta in model.poll() {
+            match delta {
+                ModelDelta::Opened => opened = Some(Ok(())),
+                ModelDelta::OpenFailed { error, .. } => opened = Some(Err(error)),
+                ModelDelta::Error(e) => polled.errors.push(e),
+                _ => {}
+            }
+        }
+        let Some(opened) = opened else {
+            return;
+        };
+        let (model, request) = self.waiting.take().expect("a request waits");
+        match opened {
+            Ok(()) => {
+                polled.changed = true;
+                polled.entered = self.enter(model, request);
+            }
+            Err(error) => {
+                let dir = model.dir().to_path_buf();
+                self.listings.let_go(model);
+                match request.asked() {
+                    Some(asked) => polled.unopened = Some(Unopened { asked, dir, error }),
+                    None => polled
+                        .errors
+                        .push(format!("cannot open the enclosing folder: {error}")),
+                }
+            }
+        }
+    }
+
+    /// Show the items of the folders asked to expand whose models opened under their rows; whether any did. One that
+    /// did not open stays closed and is told.
+    fn poll_expanding(&mut self, polled: &mut Polled) -> bool {
+        let mut done = Vec::new();
+        for (path, model) in &mut self.expanding {
+            for delta in model.poll() {
+                match delta {
+                    ModelDelta::Opened => done.push((path.clone(), Ok(()))),
+                    ModelDelta::OpenFailed { error, .. } => done.push((path.clone(), Err(error))),
+                    ModelDelta::Error(e) => polled.errors.push(format!("{}: {e}", path.display())),
+                    _ => {}
+                }
+            }
+        }
+        let mut shown = false;
+        for (path, opened) in done {
+            let Some(model) = self.expanding.remove(&path) else {
+                continue;
+            };
+            match opened {
+                Ok(()) => {
+                    self.expanded.insert(path, model);
+                    polled.changed = true;
+                    shown = true;
+                }
+                Err(error) => {
+                    self.listings.let_go(model);
+                    polled
+                        .errors
+                        .push(format!("cannot open the folder's row: {error}"));
+                }
+            }
+        }
+        shown
     }
 
     fn nearest_existing_ancestor(&self) -> Option<PathBuf> {
@@ -815,8 +1173,11 @@ impl Browser {
             ascending,
             ..self.sort
         };
-        self.model.set_sort(self.sort);
-        for model in self.expanded.values_mut() {
+        let models = std::iter::once(&mut self.model)
+            .chain(self.waiting.as_mut().map(|(model, _)| model))
+            .chain(self.expanded.values_mut())
+            .chain(self.expanding.values_mut());
+        for model in models {
             model.set_sort(self.sort);
         }
         self.rebuild();
@@ -885,6 +1246,25 @@ impl Browser {
             }
         }
         out
+    }
+}
+
+impl Drop for Browser {
+    /// The browser's models whose work runs go to the session's listings.
+    fn drop(&mut self) {
+        // a model never asked for work stands in for the folder shown, which is let go
+        let empty = DirectoryModel::open(
+            PathBuf::new(),
+            ModelOptions {
+                watch: false,
+                ..ModelOptions::default()
+            },
+            Arc::new(|| {}),
+        );
+        let shown = std::mem::replace(&mut self.model, empty);
+        self.stop_waiting();
+        self.drop_expanded(|_| true);
+        self.listings.let_go(shown);
     }
 }
 

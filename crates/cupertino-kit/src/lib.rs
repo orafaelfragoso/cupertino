@@ -2,7 +2,6 @@
 //! items an application names, one by one, and [`prelude`] has what a typical application names.
 
 pub mod bus;
-pub mod file_icons;
 mod icons;
 pub mod image;
 mod instance;
@@ -15,6 +14,15 @@ pub mod test;
 pub mod time;
 
 pub use instance::{spawn, Entered, Instance};
+
+/// Icons of files and folders, for the apps that list them: the icon of a file's type from the asset packs and the host
+/// icon theme, a special folder's own icon, and the alias badge of a symbolic link, as the renditions an
+/// [`Image`](crate::controls::Image) picks from.
+pub mod file_icons {
+    pub use cupertino_ui_files::file_icons::{
+        document_icon_name, FileIcons, FILE_ICON_NAMES, RENDITION_SCALES,
+    };
+}
 
 /// Running an application on the session's Wayland display.
 pub mod app {
@@ -209,6 +217,19 @@ pub mod files {
         pub use cupertino_ui_files::item_art::{draw, Art};
     }
 
+    /// What a file view draws for an item: its thumbnail, the family's art or its type's icon.
+    pub mod item_icons {
+        pub use cupertino_ui_files::item_icons::ItemIcons;
+    }
+
+    /// The thumbnails of the items in view, made by jobs the program runs.
+    pub mod thumbnail_service {
+        pub use cupertino_ui_files::thumbnail_service::{
+            has_thumbnail, Stamp, Thumbnail, ThumbnailJob, ThumbnailService, JOBS, JOB_DEADLINE,
+            MEMORY_BUDGET, THUMBNAIL_TYPES,
+        };
+    }
+
     /// The icon layout.
     pub mod layout {
         /// The icon view's layout.
@@ -276,6 +297,14 @@ pub mod files {
         }
     }
 
+    /// A folder's items as a sorted list that follows its changes, read by work the program runs.
+    pub mod model {
+        pub use cupertino_ui_files::model::{
+            DirectoryModel, ModelDelta, ModelOptions, ModelWatch, ModelWork, Notify, DEFAULT_BATCH,
+            WORK_DEADLINE,
+        };
+    }
+
     /// An item's type.
     pub mod mime {
         pub use cupertino_ui_files::mime::{entry_mime, kind_description, kind_group, KindGroup};
@@ -284,6 +313,14 @@ pub mod files {
     /// The name being edited.
     pub mod name_edit {
         pub use cupertino_ui_files::name_edit::NameEdit;
+    }
+
+    /// Failures as notifications, posted by a future on the program's bus connection.
+    pub mod notice {
+        pub use cupertino_ui_files::notice::{
+            bad_name, escape, explained, failure, finished, shown, unopened, Action, Click, Notice,
+            Notices,
+        };
     }
 
     /// The order of names.
@@ -298,11 +335,21 @@ pub mod files {
         };
     }
 
-    /// New folders, renames, aliases, copies and moves, as blocking functions.
+    /// New folders, renames, aliases, copies and moves, as blocking functions, and a copy or a move in slices.
     pub mod operations {
         pub use cupertino_ui_files::operations::{
             drop_action, drop_into, duplicate, duplicate_with, is_cancelled, make_alias,
             new_folder, rename_item, same_volume, stopped, transfer, Cancel, DropAction, Progress,
+            Transfer, TransferSlice, SLICE, SLICE_DEADLINE,
+        };
+    }
+
+    /// The places of a file browser's sidebar and of a file chooser's.
+    pub mod places {
+        pub use cupertino_ui_files::places::{
+            chooser_places, desktop_folder, folder_icons, follow_trash, recents_place,
+            removable_holding, session_places, standard_places, window_title, Medium, Place,
+            PlaceGroup, PlaceKind, SessionPlaces, Volume, APPLICATIONS_NAME,
         };
     }
 
@@ -343,11 +390,4 @@ pub mod filepicker {
     pub use cupertino_ui_controls::filepicker::{
         Entry, Key, Listing, Mode, Outcome, Picker, Request,
     };
-
-    /// The folders of a chooser's sidebar: the home folder and the user directories of `user-dirs.dirs`.
-    pub mod places {
-        pub use cupertino_ui_controls::filepicker::places::{
-            parse_user_dirs, session_places, Place,
-        };
-    }
 }

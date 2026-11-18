@@ -9,13 +9,14 @@
 //! * The computer's name is the pretty host name of `/etc/machine-info` (machine-info(5),
 //!   the name the design shows is the user-facing computer name), else the host name.
 //!
-//! The user directories come from `$XDG_CONFIG_HOME/user-dirs.dirs` (xdg-user-dirs:
-//! `XDG_<NAME>_DIR="$HOME/<path>"` or an absolute path; a directory set to `$HOME` itself is disabled;
-//! the desktop defaults to `$HOME/Desktop` when the file does not name it). The group titles are
+//! The user directories come from `user-dirs.dirs` ([`cupertino_defaults::user_dirs`]; a directory set to `$HOME`
+//! itself is disabled; the desktop defaults to `$HOME/Desktop` when the file does not name it). The group titles are
 //! the design sidebar's; the order of the user directories is approximate (the design lists
-//! Desktop, Documents and Downloads and has no Linux counterpart for the others).
+//! Desktop, Documents and Downloads and has no Linux counterpart for the others). A file chooser's sidebar lists the
+//! home folder and every user directory ([`chooser_places`]).
 
-use cupertino_kit::files::{applications, recents};
+use crate::{applications, recents};
+use cupertino_defaults::user_dirs;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -51,7 +52,7 @@ pub enum PlaceKind {
     /// The network locations the session has mounted ([`network_root`]).
     Network,
     Trash,
-    /// A file system of a removable drive (`crate::udisks`), in this state, on this kind of medium.
+    /// A file system of a removable drive the program lists, in this state, on this kind of medium.
     Removable(Volume, Medium),
 }
 
@@ -224,30 +225,6 @@ const USER_DIRS: [(&str, &str, PlaceKind); 6] = [
     ("VIDEOS", "Videos", PlaceKind::Videos),
 ];
 
-/// The `XDG_<NAME>_DIR` assignments of a `user-dirs.dirs` file as `(NAME, path)`, `$HOME` expanded
-/// against `home`. Lines that are comments, malformed or relative without `$HOME/` are skipped, as
-/// xdg-user-dirs does.
-pub fn parse_user_dirs(text: &str, home: &Path) -> Vec<(String, PathBuf)> {
-    text.lines()
-        .filter_map(|line| {
-            let line = line.trim();
-            let (key, value) = line.split_once('=')?;
-            let name = key.trim().strip_prefix("XDG_")?.strip_suffix("_DIR")?;
-            let value = value.trim().strip_prefix('"')?.strip_suffix('"')?;
-            let path = if value == "$HOME" {
-                home.to_path_buf()
-            } else if let Some(rest) = value.strip_prefix("$HOME/") {
-                home.join(rest)
-            } else if value.starts_with('/') {
-                PathBuf::from(value)
-            } else {
-                return None;
-            };
-            Some((name.to_string(), path))
-        })
-        .collect()
-}
-
 /// The name of the Applications place, and the title of a window showing it.
 pub const APPLICATIONS_NAME: &str = "Applications";
 
@@ -399,6 +376,29 @@ pub fn standard_places(
     places
 }
 
+/// The places of a file chooser's sidebar with this `home` and user directory assignments: the home folder as
+/// "Home", then Desktop, Documents, Downloads, Music, Pictures and Videos where they exist, all under Favorites. A user
+/// directory that is disabled (set to the home folder) is left out, and the desktop defaults to `Desktop` in `home`.
+pub fn chooser_places(home: &Path, user_dirs: &[(String, PathBuf)]) -> Vec<Place> {
+    let mut places = vec![Place {
+        name: "Home".into(),
+        path: home.to_path_buf(),
+        group: PlaceGroup::Favorites,
+        kind: PlaceKind::Home,
+    }];
+    places.extend(
+        user_folders(home, user_dirs)
+            .into_iter()
+            .map(|(path, name, kind)| Place {
+                name: name.into(),
+                path,
+                group: PlaceGroup::Favorites,
+                kind,
+            }),
+    );
+    places
+}
+
 /// The folder the network locations of the session appear in, as the session's GIO volume monitor mounts them: the
 /// `gvfs` folder of the runtime directory, which holds one folder per mounted share or server. `None` without the
 /// runtime directory or while no GVFS daemon has made the folder, so a session with no network service has no row.
@@ -457,18 +457,16 @@ pub fn folder_icons(
     icons
 }
 
-/// The desktop folder of the running session: the one `user-dirs.dirs` in the configuration directory names, else
-/// `Desktop` in `home`.
+/// The desktop folder of the running session: the one `user-dirs.dirs` names ([`user_dirs::read`]), else `Desktop` in
+/// `home`.
 pub fn desktop_folder(home: &Path) -> PathBuf {
-    let assigned = cupertino_defaults::config_home()
-        .and_then(|config| std::fs::read_to_string(config.join("user-dirs.dirs")).ok())
-        .and_then(|text| {
-            parse_user_dirs(&text, home)
-                .into_iter()
-                .rev()
-                .find(|(key, _)| key == "DESKTOP")
-                .map(|(_, path)| path)
-        });
+    let assigned = user_dirs::read(home).ok().and_then(|assigned| {
+        assigned
+            .into_iter()
+            .rev()
+            .find(|(key, _)| key == "DESKTOP")
+            .map(|(_, path)| path)
+    });
     assigned.unwrap_or_else(|| home.join("Desktop"))
 }
 
@@ -479,21 +477,11 @@ pub struct SessionPlaces {
     pub folder_icons: Vec<(PathBuf, &'static str)>,
 }
 
-/// The places of the running session: `user-dirs.dirs` from the configuration directory (a missing
-/// file assigns nothing), the home trash of [`crate::trash::Trash`], the applications folder of the
+/// The places of the running session: `user-dirs.dirs` as [`user_dirs::read`] finds it (a missing
+/// file assigns nothing), the home trash of [`cupertino_trash::Trash`], the applications folder of the
 /// system data folders `data_dirs` and the [`computer_name`].
 pub fn session_places(home: &Path, data_dirs: &[PathBuf]) -> io::Result<SessionPlaces> {
-    let config = cupertino_defaults::config_home().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::NotFound,
-            "neither XDG_CONFIG_HOME nor HOME is set",
-        )
-    })?;
-    let user_dirs = match std::fs::read_to_string(config.join("user-dirs.dirs")) {
-        Ok(text) => parse_user_dirs(&text, home),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
-        Err(e) => return Err(e),
-    };
+    let user_dirs = user_dirs::read(home)?;
     // the place lists the applications of every data folder, the user's own included
     let applications = (applications_folder(data_dirs).is_some()
         || applications::any_installed(&applications::application_dirs()))
@@ -501,7 +489,7 @@ pub fn session_places(home: &Path, data_dirs: &[PathBuf]) -> io::Result<SessionP
     let places = standard_places(
         home,
         &user_dirs,
-        &crate::trash::Trash::new().home_trash().join("files"),
+        &cupertino_trash::Trash::new().home_trash().join("files"),
         applications,
         &computer_name()?,
     );

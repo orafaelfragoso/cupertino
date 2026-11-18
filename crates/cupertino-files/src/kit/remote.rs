@@ -20,7 +20,7 @@ use cupertino_kit::prelude::*;
 
 use super::{progress, window_key, woken, Message, Model};
 use crate::instance::{Action, Call, Request, Target};
-use crate::notice::{Action as Failed, Click};
+use cupertino_kit::files::notice::{Action as Failed, Click};
 
 /// Raise the window `key` with `token` once it has been shown: at once when it already has, else after its first frame,
 /// so the compositor finds a mapped window for the token.

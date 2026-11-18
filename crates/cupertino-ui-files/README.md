@@ -18,10 +18,16 @@ public items: the family builds on them and `cupertino-ui-controls` gains no dep
 | `natural`, `sort` | name collation (case-, width-insensitive, numeric, localized) and ordering | `NameKey`, `compare_names`, `type_select_key`; `SortSpec { key, ascending, folders_first }`, `SortKey`, `sort_entries`, `insertion_index`, `compare` |
 | `mime`, `tags` | metadata | `detect`, `entry_mime`, `kind_group` (`KindGroup`), `kind_description`; `read_tags` / `write_tags` (`user.xdg.tags`), `add_tag`, `remove_tag`, `parse_tag_list`, `TagColor` (seven label colours), `parse_reference_tags` |
 | `applications`, `recents` | the two virtual folders | `location`, `application_dirs`, `session_entries`, `any_installed`; `location`, `recent_entries`, `parse_xbel` and `XBEL_NAME` (`cupertino_apps::recent`'s) |
+| `places` | the places of a sidebar, over the user directories of `cupertino_defaults::user_dirs` | `Place` (name, path, `PlaceGroup`, `PlaceKind` with its symbols and folder icon; `Volume`, `Medium` of a removable file system), `standard_places` (a file browser's sidebar: the home folder, Applications, Desktop, Documents, Downloads, the computer, the network, Trash), `chooser_places` (a file chooser's: Home, then Desktop, Documents, Downloads, Music, Pictures and Videos where they exist), `session_places` (`SessionPlaces`: the running session's, with `folder_icons`), `desktop_folder`, `recents_place`, `follow_trash`, `removable_holding`, `window_title`, `computer_name`, `network_root` |
+| `model` | a folder's items as a sorted list that follows its changes, read by work the program runs | `DirectoryModel::{open, open_recents, open_applications}` (touch no file), `take_work` (one `ModelWork` at a time, in the order asked: the first checks, watches, opens and lists the folder in batches, a later one reads the items a change named or lists a virtual folder again), `take_watch` (`ModelWatch::follow`, a future that waits on an inotify descriptor through `async-io`'s reactor and ends when its model drops), `poll` → `ModelDelta` (`Opened` or `OpenFailed { kind, error }` first, then `Reloaded`, `LoadComplete`, `Inserted`, `Removed`, `Changed`, `Moved`, `DirectoryGone`, `Error`), `opened`, `is_working`, `set_notify`, `set_sort`, `entries`; `ModelOptions`, `Notify`, `WORK_DEADLINE` (10 s), `enumerate_blocking` |
 | `layout::icon`, `geom` | icon view | `ideal_cell_size`, `max_title_lines`, `layout` (flow / justified, 32 pt section headers), `strip` (a gallery's row), `IconLayout::{hit, hits_in_rect, neighbour}`, `FreeGrid`, in `cupertino-geometry`'s points, sizes and rectangles; `Direction` |
 | `rename`, `name_edit` | names | `RenameTrigger` (a press on the only selected item's name renames it after the double-click interval), `validate_name`, `needs_extension_warning`, `initial_selection`, `unique_name`, `NameError`; `NameEdit::{field, field_mut, commit}` |
 | `open` | opening files | `open_command` (default application of `mimeapps.list` through `cupertino-apps`; `Terminal=true` under `--terminal`), `command_with`, `open_with` (Open With list: default first, rest by name), `application_at`, `default_app_id`, `OpenError` |
-| `operations` | file changes, blocking functions the program runs off its UI thread | `rename_item` (no replace), `new_folder`, `new_folder_with`, `make_alias`, `duplicate`, `drop_action`, `same_volume`, `drop_into` (move or copy, `name copy` on a clash), `transfer` (the same for a list of items, with `Progress` and a `Cancel`), `duplicate_with`, `stopped`, `is_cancelled` |
+| `operations` | file changes, blocking functions the program runs off its UI thread | `rename_item` (no replace), `new_folder`, `new_folder_with`, `make_alias`, `duplicate`, `drop_action`, `same_volume`, `drop_into` (move or copy, `name copy` on a clash), `transfer` (the same for a list of items, with `Progress` and a `Cancel`), `duplicate_with`, `stopped`, `is_cancelled`; `Transfer::{into_folder, duplicate, take_slice, progress, cancel, results}`, a copy or a move in slices: a `TransferSlice` copies until the first megabyte or item that ends past `SLICE` (a tenth of a second), within `SLICE_DEADLINE` (10 s), and `transfer`, `drop_into` and `duplicate_with` run its slices one after the other. `new_folder_with` stops at the first item that fails |
+| `file_icons` | the icon of an item's type, as image renditions | `FileIcons::{discover, new, builtin, without_host, name, pack_has, images, database}`, `RENDITION_SCALES`, `document_icon_name`, `FILE_ICON_NAMES` |
+| `thumbnail_service` | the thumbnails of the items in view, made by jobs the program runs | `ThumbnailService::{new, want, forget, get, failed, queued, memory, take_job}` (a `ThumbnailJob` while fewer than `JOBS`, two, are being made; `ThumbnailJob::run` reads and decodes, and keeps a panic as the file's failure), `Stamp`, `Thumbnail`, `has_thumbnail`, `MEMORY_BUDGET`, `JOB_DEADLINE` (5 s) |
+| `item_icons` | what a view draws for an item | `ItemIcons::{new, with_app_icons, icon, thumbnail, preview_picture, want, want_previews, forget, thumbnails, take_job}`: a picture's thumbnail, the family's art, an application's own icon, else its type's icon |
+| `notice` | failures as notifications | `failure`, `unopened`, `bad_name`, `finished` (an operation that ended unseen) → `Notice`; `Notices::{logged, on, post, post_clickable, clicks, sent}` (`on` gives the future that posts them in order on the program's connection and hears their clicks, `Click`); `shown`, `escape`, `explained` (an error as a sentence for a window) |
 | `item_art` | the common items' art | `Art::{for_icon}` (folder, text, document, archive), `draw(art, px, seed)` (premultiplied RGBA) |
 | `metrics` | the views' measured values | `icon_view`, `list_view`, `column_view`, `timing`, `selection`, `marquee`, `drag` |
 | `grid` | the folder as a grid of icons with their names | `IconGrid<M>` (the content of the program's scroll view), `ItemIcon`, `NameShape`, `Grab`, `name` and `laid_out_name` (an item's name as the grid draws and lays it out), `cell_key`, `cell_index` |
@@ -31,15 +37,38 @@ public items: the family builds on them and `cupertino-ui-controls` gains no dep
 | the crate's root | what a view reports | `ViewEvent`, `ColumnEvent` |
 
 The family starts no thread and touches no file on its own: the functions that read or write files are blocking
-functions their caller runs, and only `operations` and the tag functions write, into locations the caller gives.
+functions their caller runs, or work a value hands out that its caller runs (a model's `ModelWork`, a
+`ThumbnailJob`), or a future it runs on its loop (a model's watch, the notices' posting), and only
+`operations` and the tag functions write, into locations the caller gives. A program runs a model like this:
+
+```rust
+use std::sync::Arc;
+use cupertino_ui_files::model::{DirectoryModel, ModelDelta, ModelOptions};
+
+let options = ModelOptions { watch: false, ..ModelOptions::default() };
+let mut model = DirectoryModel::open("/home/user/Pictures", options, Arc::new(|| {}));
+// a program hands each work to `kit::task::io` and polls when `notify` wakes it
+while let Some(work) = model.take_work() {
+    work.run();
+    for delta in model.poll() {
+        if let ModelDelta::LoadComplete { count } = delta {
+            println!("{count} items");
+        }
+    }
+}
+```
+
+`cargo bench -p cupertino-ui-files --bench directory` times the order of 50 000 names, the icon layout and a model's
+listing of 50 000 files.
 
 The views' tests drive each view in a window on the headless window system through its public items
 (`tests/icon-grid.rs`, `tests/file-list.rs`, `tests/file-columns.rs`).
 
 ## Design
 
-The views below are built as the design the owner approved for the family (W4.8 in the plan). The slow work, the
-places and the transfers in slices that follow them are W4.12's design, not built yet.
+The views below are built as the design the owner approved for the family (W4.8 in the plan), and so is what follows
+them (W4.12): the places, a folder's listing and the thumbnails as work, the notices on the program's connection and
+the transfers in slices.
 
 ### What shapes it
 

@@ -1,13 +1,14 @@
 //! Dependency-free benchmark: enumerate and sort 50 000 entries, collation keys, layouts.
 //!
-//! `cargo bench -p cupertino-files --bench directory`
+//! `cargo bench -p cupertino-ui-files --bench directory`
 
-use cupertino_files::model::{enumerate_blocking, DirectoryModel, ModelOptions};
-use cupertino_kit::files::entry::Entry;
-use cupertino_kit::files::layout::icon::{self, FontMetrics, IconParams, SectionSpec};
-use cupertino_kit::files::natural::NameKey;
-use cupertino_kit::files::sort::{sort_entries, SortKey, SortSpec};
+use cupertino_ui_files::entry::Entry;
+use cupertino_ui_files::layout::icon::{self, FontMetrics, IconParams, SectionSpec};
+use cupertino_ui_files::model::{enumerate_blocking, DirectoryModel, ModelOptions};
+use cupertino_ui_files::natural::NameKey;
+use cupertino_ui_files::sort::{sort_entries, SortKey, SortSpec};
 use std::hint::black_box;
+use std::sync::Arc;
 use std::time::Instant;
 
 fn time<T>(name: &str, mut f: impl FnMut() -> T) -> T {
@@ -116,9 +117,12 @@ fn main() {
                 watch: false,
                 ..Default::default()
             },
-        )
-        .unwrap();
-        m.wait_loaded();
+            Arc::new(|| {}),
+        );
+        while let Some(work) = m.take_work() {
+            work.run();
+            m.poll();
+        }
         m.len()
     });
     std::fs::remove_dir_all(&dir).unwrap();

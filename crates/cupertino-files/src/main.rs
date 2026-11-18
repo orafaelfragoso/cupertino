@@ -12,12 +12,11 @@ use std::sync::Arc;
 use cupertino_apps::{Locale, MimeApps, MimeDatabase, Visibility, XdgDirs};
 use cupertino_files::instance::{self, Launch, LaunchError, Request, Service, Target};
 use cupertino_files::kit::{self, Start};
-use cupertino_files::notice::Notices;
-use cupertino_files::places::{session_places, SessionPlaces};
 use cupertino_files::trash::Trash;
 use cupertino_files::window_prefs;
 use cupertino_icons::thumbnail::Thumbnailer;
 use cupertino_kit::file_icons::FileIcons;
+use cupertino_kit::files::places::{session_places, SessionPlaces};
 use cupertino_kit::files::recents;
 
 const USAGE: &str = "usage: cupertino-files [--terminal PROGRAM] [FOLDER | file:///FOLDER | trash:///] | --desktop | \
@@ -193,7 +192,7 @@ fn start(options: Options, service: Option<Service>, token: Option<String>) -> i
     // one database for the Kind column, the icons and what opens an item, so all name the same type
     let types = Arc::new(MimeDatabase::load(&dirs.all_data_dirs()).map_err(other)?);
     let icons = FileIcons::discover((*types).clone(), folder_icons.into_iter().collect());
-    let notices = Notices::start(zbus::blocking::Connection::session().ok());
+    let (notices, posting) = kit::session_notices();
     let assets = cupertino_assets::Assets::discover();
     let system = zbus::blocking::Connection::system()
         .map_err(|e| eprintln!("cupertino-files: no removable media: {e}"))
@@ -230,6 +229,7 @@ fn start(options: Options, service: Option<Service>, token: Option<String>) -> i
                     cupertino_icons::SystemIcons::new(&assets),
                 )
                 .with_thumbnails(Thumbnailer::from_env(kit::APP_ID))
+                .with_posting(posting)
                 .with_places_source(source, watched)
                 .with_instance(service)
                 .with_activation_token(token);

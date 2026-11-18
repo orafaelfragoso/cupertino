@@ -20,11 +20,11 @@ use cupertino_kit::text::{AttributedText, TextStyle};
 use super::columns;
 use super::view::{name_field, shown_selection, under_row};
 use super::{BrowserWindow, Event as WindowEvent, Message, Session};
-use crate::places::window_title;
 use crate::settings::GalleryViewSettings;
 use cupertino_kit::files::entry::Entry;
 use cupertino_kit::files::grid::{IconGrid, ItemIcon};
 use cupertino_kit::files::layout::icon::{self, FontMetrics, IconLayout, IconParams};
+use cupertino_kit::files::places::window_title;
 
 /// Room around the large picture and its name.
 const STAGE_INSETS: Insets = Insets {

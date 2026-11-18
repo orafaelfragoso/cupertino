@@ -13,26 +13,6 @@ cargo run -p cupertino-files --example files_capture -- files/window --view list
 cargo run -p cupertino-files --example files_capture -- files/sidebar --devices removable --scale 2   # the sidebar with a mounted, a busy and an unmounted device
 cargo run -p cupertino-files --example files_capture -- files/window --view gallery --state ring   # the view's item ringed under its context menu (also rename, band)
 cargo run -p cupertino-files --example files_capture -- files/desktop   # the desktop's items over a flat fill
-cargo bench -p cupertino-files --bench directory                # 50k entries
-```
-
-Library example:
-
-```rust
-use cupertino_files::{DirectoryModel, ModelOptions, ModelDelta};
-use cupertino_files::layout::icon::{self, FontMetrics, IconParams, SectionSpec};
-
-let mut model = DirectoryModel::open("/home/user/Pictures", ModelOptions::default())?;
-loop {
-    for delta in model.poll_timeout(std::time::Duration::from_millis(16)) {
-        if let ModelDelta::LoadComplete { count } = delta { println!("{count} items"); }
-    }
-    let p = IconParams::new(64, 54, 12, true, false, FontMetrics::estimate(12.0));
-    let layout = icon::layout(&p, 1200.0, &[SectionSpec { title: None, count: model.len() }], icon::Flow::Leading);
-    // draw layout.cells[i].{frame, icon_frame, label_frame}; model.entries()[i] is the item
-    # break;
-}
-# Ok::<(), std::io::Error>(())
 ```
 
 ### The window
@@ -122,7 +102,17 @@ window is kept in `$XDG_CONFIG_HOME/cupertino/files/window.json` (`window_prefs`
 or the next, starts with it (the icon view without the bars at first). The path bar names the folder chain from the root (or from Trash / Recents), each
 folder with its icon, and a click on one, or Space or Return on it, goes there (each folder is a Tab stop, and the bar
 reads as the group "Path"); the status bar reads "N items, X available" (`statvfs` of the
-folder, read again whenever the listing changes and after a transfer). Changes on disk appear live. The sidebar shows
+folder, read again whenever the listing changes and after a transfer). Changes on disk appear live. A folder's listing
+is the family's model (`kit::files::model`), its work run as I/O tasks (`kit::task::io`) one at a time, its watch
+followed on the UI loop. A folder gone to (a place, the path bar, an item opened, Back, Forward, Enclosing Folder, the
+way back of a drag) is shown once its listing says it opened: until then the window keeps the folder it shows and
+answers, and a folder that does not open (missing, not a folder, no read permission) leaves the window and its history
+where they are and posts the notice. A second request while one waits takes its place. A listing let go while its work
+runs (a request replaced, a window, a tab or a column closed) is kept by the process until its work ends, and the next
+request for its folder takes it, so a folder on a mount that does not answer holds one I/O turn however often it is
+asked for. An expanded row of the list and a column of the column view stay closed and empty until their listings open.
+A new window or tab reads its folder once on the window's thread before it opens, and is not opened when that fails.
+The sidebar shows
 the theme's sidebar material where the compositor can draw it, and its opaque fill without desktop effects or under
 Reduce Transparency (Kit's sidebar panel glass).
 
@@ -176,7 +166,7 @@ closed closes the window. The bar reads as a list of tabs, each with its place a
 item has it. A row puts its tag on every selected item or takes it off, and a name typed in the field and Return puts a
 tag of that name on them (commas part several, as the attribute keeps them); typing narrows the rows. Tags are kept
 in the `user.xdg.tags` extended attribute, a symbolic link's on the item it points to (the system keeps no user
-attributes on a link), and every listing reads them on its own thread. The sidebar lists under Tags the colours and names in use, and one chosen shows the folder's items
+attributes on a link), and every listing reads them in its work. The sidebar lists under Tags the colours and names in use, and one chosen shows the folder's items
 that carry it.
 
 **Pointer and keyboard in the views.** A press on empty space and a drag draw a rubber band (`cupertino_kit::files::band`): the items it
@@ -189,7 +179,7 @@ selected, from the first or last by name, or the one after it when the keyboard 
 before the first item the keyboard goes on to the next or previous control. In the list, Tab on a column header goes to
 the next header and from the last into the rows; the table hands Files only its rows' keys (`TableView::on_row_key`).
 
-**Item images** (`kit::item_icons`). Each item in the icon view, the list view and a drag image wears the icon of its
+**Item images** (the family's `item_icons`, `kit::files::item_icons`). Each item in the icon view, the list view and a drag image wears the icon of its
 type from the asset packs and the host icon theme, through the toolkit's `cupertino_kit::file_icons::FileIcons`: the
 icon of the type's kind or of its nearest ancestor's (PDF, image, audio, video, archive, text, program; an office
 document packed in a zip is not an archive), else the generic document icon, else the packs' placeholder. Folders, text files, other documents and archives that
@@ -198,15 +188,16 @@ text files, a zipper for archives), drawn in code at 1× and 2×; a pack's own i
 folder and the user directories wear their own folder icons (`places::folder_icons`), and a symbolic link the alias
 badge in its bottom-left corner. Each icon is drawn at 1× and 2× and keeps its image for the life of the process.
 A PNG, JPEG or WebP picture shows its thumbnail once it is made (a symbolic link keeps its type's icon and badge).
-`thumbnail_service::ThumbnailService` makes thumbnails on two worker threads, never on the UI thread: after each
+The family's `thumbnail_service::ThumbnailService` hands out the making of each thumbnail as a job, which Files runs as
+an I/O task (`kit::task::io`, two at once, `JOB_DEADLINE` 5 s), never on the UI thread: after each
 message a window says which items are in view or within 200 pt of it (`view::shown`), and the service drops what no
-window wants any more before a worker starts it. A worker takes the thumbnail from the freedesktop cache
+window wants any more before a job starts it. A job takes the thumbnail from the freedesktop cache
 (`$XDG_CACHE_HOME/thumbnails`, `Thumbnailer::from_env("cupertino-files")`, the rules of `cupertino-icons`' `thumbnail`: valid
 for the file's modification time and size, a failure remembered under `fail/cupertino-files/`, nothing under the cache
 itself thumbnailed) or creates it there, then decodes it at 2 pixels a point (128 for the icon view's 64 pt, 32 for
 the list's 16 pt). Beyond those in view, at most 32 MiB of decoded thumbnails stay in memory, the least recently drawn
 going first; a window showing more keeps them all rather than making them again. A decoder that panics fails its
-file, not the worker, and quitting does not wait for a decode that hangs (a stalled network mount). When a picture changes on disk, the watcher's new modification time and size make it wanted
+file, not the task, and quitting does not wait for a decode that hangs (a stalled network mount). When a picture changes on disk, the watcher's new modification time and size make it wanted
 again; the old thumbnail shows until the new one is made, and a file that failed is tried again once it changes.
 `Start::with_file_icons` and `Start::with_thumbnails` give a window the session's icons and cache (`main.rs` does);
 without them every icon is the built-in placeholder and no thumbnail is made.
@@ -348,7 +339,9 @@ off by a closed window. Each operation runs once; its outcome is handed over onc
 
 **Failures.** A failure of something a person did (open, a new folder, make alias, show original, put back, tags,
 rename, a name that can't be used, copy and paste of text, move to the trash, a drop that cannot be taken) is one transient notification from "Files" on
-the session bus (`org.freedesktop.Notifications`), posted in order from a thread of its own (`notice`). It names one
+the session bus (`org.freedesktop.Notifications`), posted in order by one future on the window's loop (the family's
+`notice`, `kit::files::notice`) on the session connection `main` makes before the loop starts. As it exits, Files
+waits for the notices posted to be sent (`Notices::sent`), at most `EXIT_NOTICES` (2 s), without blocking. It names one
 item, or counts several, and its body is the first error, with control and bidirectional formatting characters removed,
 cut at 256 characters and escaped, because the body is markup. Without a session bus, or when a post fails, that notice
 is written to stderr instead, with the reason. Failures that only explain the window (an entry that can't be read, the
@@ -454,7 +447,6 @@ and `metrics::{icon_view, list_view, column_view, timing, selection, marquee, dr
 
 | Module | Role | Main items |
 |---|---|---|
-| `model` | async directory model | `DirectoryModel::open(dir, ModelOptions)`, `poll` / `poll_timeout` → `Vec<ModelDelta>` (`Reloaded`, `LoadComplete`, `Inserted`, `Removed`, `Changed`, `Moved`, `DirectoryGone`), `enumerate_blocking`, `set_sort` |
 | `group` | the date buckets dates read in | `date_bucket` |
 | `settings` | per-folder view state | `ViewSettings` (icon / list / column / gallery), `ViewStyle`, `default_columns`, `SettingsStore` (atomic JSON, keyed by device + inode), `FolderKey` |
 | `selection` | selection model | `Selection::{mouse_down, mouse_up, click_empty, move_focus, on_insert, on_remove, on_move}`, `Modifiers` |
@@ -464,17 +456,15 @@ and `metrics::{icon_view, list_view, column_view, timing, selection, marquee, dr
 | `trash` | freedesktop Trash 1.0 | `Trash::{trash, trash_unsized, list, list_all, list_volumes, trash_dirs, restore, delete, empty, purge_older_than}`, `PendingSize`, `Emptied`, `Look`; home and mount-point trash (Empty Trash takes both: the home trash first, then the volumes that answer; the windows read no volume on their own thread, so whether a volume's trash holds something, for the Empty button and the Trash place's Empty Trash, is what the last look on a thread of its own found), `.trashinfo`, `directorysizes`; `trashed_item`, `forget` (an item moved out of a trash) |
 | `thumbnail` | freedesktop thumbnail cache | `Thumbnailer::{lookup, lookup_at_least, create, get_or_create}`, `ThumbSize::for_icon`, `file_uri`, failure markers |
 | `layout::list` | list view | `row_height`, `layout` (columns, rows with level and expanded state, disclosure, indentation), `ListLayout::{row_at, visible_rows}` |
-| `history`, `places` | navigation state | `History::{visit, back, forward}`; `standard_places` (the home folder, Applications, Desktop, Documents, Downloads, the computer, Trash), `recents_place`, `folder_icons`, `session_places` (`SessionPlaces`), `computer_name`, `applications_folder` |
-| `browser` | one window's folder | `Browser::{open, go, back, forward, parent, poll, sort_by, press, release, move_focus, select_all, type_text, activation, outline, expand, collapse, collapse_all, available_space, visit, return_to, is_loading}`: model, history (a `Visit` to go back to, with its selection), the list's outline of expanded folders, selection by path across reloads, nearest-ancestor fallback for a deleted folder |
+| `history` | navigation state | `History::{visit, back, forward}`; the sidebar's places are the family's (`kit::files::places`: `standard_places`, `recents_place`, `folder_icons`, `session_places`) |
+| `browser` | one window's folder | `Browser::{open, go, back, forward, parent, go_with, return_to, stop_waiting, is_waiting, poll, take_work, sort_by, press, release, move_focus, select_all, type_text, activation, outline, expand, collapse, collapse_all, available_space, visit, is_loading}`: the family's models (`take_work` hands out their work and watches), history (a `Visit` to go back to, with its selection), a folder asked for shown once it opens (`Polled::entered`, `Polled::unopened` with what `Asked` for it), the list's outline of expanded folders, selection by path across reloads, nearest-ancestor fallback for a deleted folder; `Listings`, the listings a session keeps while their work runs |
 | `window_prefs` | the view and bars kept between windows | `WindowPrefs::{parse, text, load, save}`, `location`, `column_width` |
 | `columns` | the column view's chain | `ColumnChain::{follow, folders, width, resize, widths}`, `layout` → `ChainLayout` (where each column sits and the scroll that keeps the last whole), `DEFAULT_WIDTH`, `MIN_WIDTH`, `MAX_WIDTH`, `PREVIEW_WIDTH` |
 | `preview` | what a preview shows | `kind` → `PreviewKind`, `read_text` / `text_of` (`TEXT_LIMIT`), `summary`, `details`, `Browse` (the items gone through, `step`), `Motion` (the window's open and close, `at` → `MotionFrame`), `WINDOW_SIZE` |
 | `tab_strip` | a window's tabs | `TabStrip::{open, close, select, cycle, move_to, order, active_id}`, `tab_frames`, `drop_place` |
 | `window`, `format` | the window's wording and metrics | `metrics`, `ViewMode`, `path_chain`, `status_text`; `human_size`, `available_size`, `relative_date` |
 | `udisks` (feature `app`) | removable media | `devices` (the listed file systems and locked containers of udisks' managed objects), `Volumes::{watch, poll, mount, unlock, eject}` → `Report`, `Media` (the listed devices and the busy ones), `Passphrase`, `holders`, `notice` (a failure's notification text) |
-| `notice` (feature `app`) | failures as notifications | `failure`, `unopened`, `bad_name`, `finished` (an operation that ended unseen) → `Notice`; `Notices::{start, post, flush}`; `shown`, `escape`, `explained` (an error as a sentence for a window) |
-| `kit` (feature `app`) | the window on CupertinoKit; driven headless through `cupertino_kit::test` | `prepare(Start::open(folder, places, types, recents, notices, applications, terminal))`, with `with_file_icons`, `with_thumbnails`, `with_places_source`, `with_instance` and `with_activation_token`, then `run` or a `TestDriver<Files>`; `view_events` (the file views' events as the window's), `toolbar` (pop-up buttons, path bar folders), `sidebar` (material, keyboard watch), `places` (live places), `transfer` (the worker of a file operation: `Work` → `Outcome`), `jobs` (the file operations of the process and when the progress window shows; `PROGRESS_WINDOW_DELAY`, `Start::with_progress_delay`), `progress` (the progress window, and the click on a window's row that shows it), `remote` (what the calls of later launches and of the desktop do), `context` (context menus), `search` (the field's slot and "No Results"), `dragged` (drag images), `drops` (drops onto folders, places, the path bar and the folder shown), `spring` (spring-loaded folders and the way back), `item_icons` (items' icons, thumbnails and previews), `columns` (the column view), `gallery` (the gallery), `peek` (the preview window), `tabs` (the tab bar and a tab's parked state), `tag_editor` (the tags popover), `desktop` (the desktop: `run`, and `prepare` for a `TestDriver<Desktop>`) |
-| `thumbnail_service` | thumbnails of the items in view | `ThumbnailService::{new, want, forget, get, queued, memory}`, `Stamp`, `has_thumbnail`, `MEMORY_BUDGET`, `WORKERS` |
+| `kit` (feature `app`) | the window on CupertinoKit; driven headless through `cupertino_kit::test` | `prepare(Start::open(folder, places, types, recents, notices, applications, terminal))`, with `with_file_icons`, `with_thumbnails`, `with_places_source`, `with_instance` and `with_activation_token`, then `run` or a `TestDriver<Files>`; `view_events` (the file views' events as the window's), `toolbar` (pop-up buttons, path bar folders), `sidebar` (material, keyboard watch), `places` (live places), `transfer` (the worker of a file operation: `Work` → `Outcome`), `jobs` (the file operations of the process and when the progress window shows; `PROGRESS_WINDOW_DELAY`, `Start::with_progress_delay`), `progress` (the progress window, and the click on a window's row that shows it), `remote` (what the calls of later launches and of the desktop do), `context` (context menus), `search` (the field's slot and "No Results"), `dragged` (drag images), `drops` (drops onto folders, places, the path bar and the folder shown), `spring` (spring-loaded folders and the way back), `columns` (the column view), `gallery` (the gallery), `peek` (the preview window), `tabs` (the tab bar and a tab's parked state), `tag_editor` (the tags popover), `desktop` (the desktop: `run`, and `prepare` for a `TestDriver<Desktop>`) |
 | `instance` (feature `app`) | one process per session | `Service::serve` (the names, `org.freedesktop.Application` and `org.freedesktop.FileManager1`; `take` the waiting `Call`s), `serve_or_forward` → `Launch::{Serve, Forwarded}`, `Target::{of_argument, of_uri, uri, folder}`, `Request`, `Action`, `take_activation_token`, `FORWARD_TIMEOUT`, `BUS_NAME`, `OBJECT_PATH` |
 | `main` (feature `app`) | the binary | arguments, the hand-over to a running Files, the session's places, types, associations and buses, then `kit::run` |
 

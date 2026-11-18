@@ -1768,9 +1768,13 @@ dependencies = [
 name = "cupertino-ui-files"
 version = "0.1.0"
 dependencies = [
+ "async-channel",
+ "async-io",
  "cupertino-apps",
  "cupertino-assets",
+ "cupertino-defaults",
  "cupertino-geometry",
+ "cupertino-icons",
  "cupertino-theme",
  "cupertino-trash",
  "cupertino-ui-controls",
@@ -1778,11 +1782,16 @@ dependencies = [
  "cupertino-ui-render",
  "cupertino-ui-test",
  "cupertino-ui-text",
+ "futures-lite",
+ "inotify",
  "libc",
  "mime_guess",
  "serde",
+ "tempfile",
+ "tiny-skia",
  "tree_magic_mini",
  "xattr",
+ "zbus",
 ]
 
 [[package]]

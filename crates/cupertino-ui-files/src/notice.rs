@@ -1,21 +1,21 @@
 //! Failures a person caused, reported as notifications on the session bus (feature `app`). A [`Notice`] is worded by
-//! the action that failed ([`failure`]) or by the removable media calls; [`Notices`] posts each from one thread, in
-//! order, so the window never waits on the bus. A notice that can't be posted is logged instead, once. A notice posted
-//! with a tag ([`Notices::post_clickable`]) can be clicked: the click comes back as a [`Click`] ([`Notices::clicks`]).
+//! the action that failed ([`failure`]) or by the removable media calls; [`Notices`] posts each in order from one future
+//! the program runs on its UI loop, on the bus connection it gives, so the window never waits on the bus. A notice that
+//! can't be posted is logged instead, once. A notice posted with a tag ([`Notices::post_clickable`]) can be clicked:
+//! the click comes back as a [`Click`] ([`Notices::clicks`]).
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Display;
+use std::future::Future;
 use std::path::Path;
-use std::sync::mpsc::{self, Sender};
-use std::sync::{Arc, Mutex, PoisonError};
 
-use zbus::blocking::{Connection, MessageIterator};
+use futures_lite::StreamExt;
 use zbus::message::Type;
 use zbus::zvariant::Value;
-use zbus::MatchRule;
+use zbus::{Connection, MatchRule, Message, MessageStream};
 
-use cupertino_kit::files::operations::DropAction;
-use cupertino_kit::files::rename::{NameError, MAX_NAME_BYTES};
+use crate::operations::DropAction;
+use crate::rename::{NameError, MAX_NAME_BYTES};
 
 const NOTIFICATIONS: &str = "org.freedesktop.Notifications";
 const APP_NAME: &str = "Files";
@@ -202,80 +202,41 @@ pub struct Click {
     pub token: Option<String>,
 }
 
-/// What the notices' thread is asked.
+/// What the posting future is asked.
 enum Post {
     /// A notice, clickable when it has a tag.
     Notice(Notice, Option<u64>),
     /// Answer once every notice before this one was posted.
-    Flush(mpsc::SyncSender<()>),
+    Sent(async_channel::Sender<()>),
 }
 
-/// The notices of one process, posted in order on a thread of their own.
+/// The notices of one program, posted in order by one future on its UI loop.
 #[derive(Clone)]
 pub struct Notices {
-    sender: Option<Sender<Post>>,
+    sender: Option<async_channel::Sender<Post>>,
     clicks: Option<async_channel::Receiver<Click>>,
 }
 
 impl Notices {
-    /// Post on `session`, or log every notice when there is no session bus.
-    pub fn start(session: Option<Connection>) -> Notices {
-        let Some(session) = session else {
-            return Notices {
-                sender: None,
-                clicks: None,
-            };
-        };
-        let (sender, posts) = mpsc::channel::<Post>();
-        let (clicked, clicks) = async_channel::unbounded();
-        let spawned = std::thread::Builder::new()
-            .name("notices".into())
-            .spawn(move || {
-                // the clicks are listened for from the first clickable notice on
-                let mut clickable: Option<Clickable> = None;
-                for post in posts {
-                    match post {
-                        Post::Notice(notice, tag) => {
-                            let listening = tag.and_then(|tag| {
-                                if clickable.is_none() {
-                                    clickable = Clickable::listen(&session, clicked.clone())
-                                        .map_err(|e| {
-                                            eprintln!(
-                                                "cupertino-files: notices can't be clicked: {e}"
-                                            )
-                                        })
-                                        .ok();
-                                }
-                                clickable.as_ref().map(|c| (c, tag))
-                            });
-                            match notify(&session, &notice, listening.is_some()) {
-                                Ok(id) => {
-                                    if let Some((clickable, tag)) = listening {
-                                        clickable.posted(id, tag);
-                                    }
-                                }
-                                Err(e) => log(&notice, &e),
-                            }
-                        }
-                        Post::Flush(done) => {
-                            let _ = done.send(());
-                        }
-                    }
-                }
-            });
-        match spawned {
-            Ok(_) => Notices {
-                sender: Some(sender),
-                clicks: Some(clicks),
-            },
-            Err(e) => {
-                eprintln!("cupertino-files: notices will be logged, not posted: {e}");
-                Notices {
-                    sender: None,
-                    clicks: None,
-                }
-            }
+    /// Notices that are logged, not posted: the session has no bus.
+    pub fn logged() -> Notices {
+        Notices {
+            sender: None,
+            clicks: None,
         }
+    }
+
+    /// Notices posted on `session` in order, and the future that posts them and hears their clicks, which the program
+    /// runs on its UI loop. It touches no file and makes no blocking call; it ends once every [`Notices`] of it is
+    /// dropped.
+    pub fn on(session: Connection) -> (Notices, impl Future<Output = ()> + Send + 'static) {
+        let (sender, posts) = async_channel::unbounded();
+        let (clicked, clicks) = async_channel::unbounded();
+        let notices = Notices {
+            sender: Some(sender),
+            clicks: Some(clicks),
+        };
+        (notices, post_all(session, posts, clicked))
     }
 
     pub fn post(&self, notice: Notice) {
@@ -295,24 +256,91 @@ impl Notices {
     fn send(&self, notice: Notice, tag: Option<u64>) {
         match &self.sender {
             Some(sender) => {
-                if let Err(mpsc::SendError(Post::Notice(notice, _))) =
-                    sender.send(Post::Notice(notice, tag))
-                {
-                    log(&notice, &"the notice thread ended");
+                if let Err(e) = sender.try_send(Post::Notice(notice, tag)) {
+                    if let Post::Notice(notice, _) = e.into_inner() {
+                        log(&notice, &"the notices are no longer posted");
+                    }
                 }
             }
             None => log(&notice, &"no session bus"),
         }
     }
 
-    /// Wait up to `timeout` until every notice posted so far has been sent: the process is about to exit.
-    pub fn flush(&self, timeout: std::time::Duration) {
-        let Some(sender) = &self.sender else {
-            return;
+    /// Ends once every notice posted so far is sent: at once for notices that are logged.
+    pub fn sent(&self) -> impl Future<Output = ()> + Send + 'static {
+        let (done, wait) = async_channel::bounded(1);
+        let asked = self
+            .sender
+            .as_ref()
+            .is_some_and(|sender| sender.try_send(Post::Sent(done)).is_ok());
+        async move {
+            if asked {
+                let _ = wait.recv().await;
+            }
+        }
+    }
+}
+
+/// What the posting future waits for next.
+enum Next {
+    Post(Option<Post>),
+    Signal(Option<zbus::Result<Message>>),
+}
+
+/// Post every notice `posts` brings on `session`, in order, and hand each click on a clickable one to `clicked`: the
+/// clicks are listened for from the first clickable notice on. Ends once `posts` has no sender left.
+async fn post_all(
+    session: Connection,
+    posts: async_channel::Receiver<Post>,
+    clicked: async_channel::Sender<Click>,
+) {
+    let mut signals: Option<MessageStream> = None;
+    let mut unclickable = false;
+    let mut tags = Tags::default();
+    loop {
+        let next = match signals.as_mut() {
+            Some(stream) => {
+                futures_lite::future::or(async { Next::Post(posts.recv().await.ok()) }, async {
+                    Next::Signal(stream.next().await)
+                })
+                .await
+            }
+            None => Next::Post(posts.recv().await.ok()),
         };
-        let (done, sent) = mpsc::sync_channel(1);
-        if sender.send(Post::Flush(done)).is_ok() {
-            let _ = sent.recv_timeout(timeout);
+        match next {
+            Next::Post(None) => return,
+            Next::Post(Some(Post::Sent(done))) => {
+                let _ = done.try_send(());
+            }
+            Next::Post(Some(Post::Notice(notice, tag))) => {
+                if tag.is_some() && signals.is_none() && !unclickable {
+                    match listen(&session).await {
+                        Ok(stream) => signals = Some(stream),
+                        Err(e) => {
+                            eprintln!("cupertino-files: notices can't be clicked: {e}");
+                            unclickable = true;
+                        }
+                    }
+                }
+                let tag = tag.filter(|_| signals.is_some());
+                match notify(&session, &notice, tag.is_some()).await {
+                    Ok(id) => {
+                        if let Some(tag) = tag {
+                            tags.posted(id, tag);
+                        }
+                    }
+                    Err(e) => log(&notice, &e),
+                }
+            }
+            Next::Signal(Some(Ok(message))) => {
+                if let Some(click) = tags.heard(&message) {
+                    if clicked.try_send(click).is_err() {
+                        signals = None;
+                        unclickable = true;
+                    }
+                }
+            }
+            Next::Signal(_) => signals = None,
         }
     }
 }
@@ -324,85 +352,62 @@ struct Tags {
     tokens: HashMap<u32, String>,
 }
 
-/// The clicks of the clickable notices, heard on a thread of their own.
-struct Clickable {
-    tags: Arc<Mutex<Tags>>,
-}
-
-impl Clickable {
-    /// Listen on `session` to the notification service's signals, handing each click on a clickable notice to `clicked`.
-    fn listen(
-        session: &Connection,
-        clicked: async_channel::Sender<Click>,
-    ) -> zbus::Result<Clickable> {
-        let signals = MessageIterator::for_match_rule(
-            MatchRule::builder()
-                .msg_type(Type::Signal)
-                .sender(NOTIFICATIONS)?
-                .interface(NOTIFICATIONS)?
-                .path(NOTIFICATIONS_PATH)?
-                .build(),
-            session,
-            None,
-        )?;
-        let tags = Arc::new(Mutex::new(Tags::default()));
-        let heard = Arc::clone(&tags);
-        std::thread::Builder::new()
-            .name("notice-clicks".into())
-            .spawn(move || {
-                for message in signals {
-                    let Ok(message) = message else { break };
-                    let header = message.header();
-                    let member = header.member().map(|m| m.as_str()).unwrap_or_default();
-                    let mut tags = heard.lock().unwrap_or_else(PoisonError::into_inner);
-                    match member {
-                        "ActivationToken" => {
-                            if let Ok((id, token)) = message.body().deserialize::<(u32, String)>() {
-                                if tags.tags.contains_key(&id) {
-                                    tags.tokens.insert(id, token);
-                                }
-                            }
-                        }
-                        "ActionInvoked" => {
-                            let Ok((id, _key)) = message.body().deserialize::<(u32, String)>()
-                            else {
-                                continue;
-                            };
-                            if let Some(&tag) = tags.tags.get(&id) {
-                                let token = tags.tokens.remove(&id);
-                                if clicked.send_blocking(Click { tag, token }).is_err() {
-                                    break;
-                                }
-                            }
-                        }
-                        "NotificationClosed" => {
-                            if let Ok((id, _reason)) = message.body().deserialize::<(u32, u32)>() {
-                                tags.tags.remove(&id);
-                                tags.tokens.remove(&id);
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            })
-            .map_err(|e| zbus::Error::Failure(e.to_string()))?;
-        Ok(Clickable { tags })
+impl Tags {
+    /// The notice the service numbered `id` was posted with `tag`.
+    fn posted(&mut self, id: u32, tag: u64) {
+        self.tags.insert(id, tag);
+        while self.tags.len() > MAX_CLICKABLE {
+            if let Some((old, _)) = self.tags.pop_first() {
+                self.tokens.remove(&old);
+            }
+        }
     }
 
-    /// The notice the service numbered `id` was posted with `tag`.
-    fn posted(&self, id: u32, tag: u64) {
-        let mut tags = self.tags.lock().unwrap_or_else(PoisonError::into_inner);
-        tags.tags.insert(id, tag);
-        while tags.tags.len() > MAX_CLICKABLE {
-            if let Some((old, _)) = tags.tags.pop_first() {
-                tags.tokens.remove(&old);
+    /// What the notification service's signal `message` says of the clickable notices: the click on one, if it is
+    /// one.
+    fn heard(&mut self, message: &Message) -> Option<Click> {
+        let header = message.header();
+        let member = header.member().map(|m| m.as_str()).unwrap_or_default();
+        match member {
+            "ActivationToken" => {
+                if let Ok((id, token)) = message.body().deserialize::<(u32, String)>() {
+                    if self.tags.contains_key(&id) {
+                        self.tokens.insert(id, token);
+                    }
+                }
+                None
             }
+            "ActionInvoked" => {
+                let (id, _key) = message.body().deserialize::<(u32, String)>().ok()?;
+                let tag = *self.tags.get(&id)?;
+                let token = self.tokens.remove(&id);
+                Some(Click { tag, token })
+            }
+            "NotificationClosed" => {
+                if let Ok((id, _reason)) = message.body().deserialize::<(u32, u32)>() {
+                    self.tags.remove(&id);
+                    self.tokens.remove(&id);
+                }
+                None
+            }
+            _ => None,
         }
     }
 }
 
+/// The notification service's signals on `session`.
+async fn listen(session: &Connection) -> zbus::Result<MessageStream> {
+    let rule = MatchRule::builder()
+        .msg_type(Type::Signal)
+        .sender(NOTIFICATIONS)?
+        .interface(NOTIFICATIONS)?
+        .path(NOTIFICATIONS_PATH)?
+        .build();
+    MessageStream::for_match_rule(rule, session, None).await
+}
+
 /// Post `notice`, with a default action when it is `clickable`; the service's id of it.
-fn notify(session: &Connection, notice: &Notice, clickable: bool) -> zbus::Result<u32> {
+async fn notify(session: &Connection, notice: &Notice, clickable: bool) -> zbus::Result<u32> {
     let actions: Vec<&str> = if clickable {
         vec![DEFAULT_ACTION, DEFAULT_LABEL]
     } else {
@@ -413,22 +418,24 @@ fn notify(session: &Connection, notice: &Notice, clickable: bool) -> zbus::Resul
         ("desktop-entry", Value::from(DESKTOP_ENTRY)),
     ]);
     // -1: the notification service decides how long the banner stays
-    let reply = session.call_method(
-        Some(NOTIFICATIONS),
-        NOTIFICATIONS_PATH,
-        Some(NOTIFICATIONS),
-        "Notify",
-        &(
-            APP_NAME,
-            0u32,
-            notice.icon,
-            notice.summary.as_str(),
-            notice.body.as_str(),
-            actions,
-            hints,
-            -1i32,
-        ),
-    )?;
+    let reply = session
+        .call_method(
+            Some(NOTIFICATIONS),
+            NOTIFICATIONS_PATH,
+            Some(NOTIFICATIONS),
+            "Notify",
+            &(
+                APP_NAME,
+                0u32,
+                notice.icon,
+                notice.summary.as_str(),
+                notice.body.as_str(),
+                actions,
+                hints,
+                -1i32,
+            ),
+        )
+        .await?;
     reply.body().deserialize::<u32>()
 }
 

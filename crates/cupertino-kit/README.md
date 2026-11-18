@@ -2,7 +2,7 @@
 
 CupertinoKit, the Cupertino UI toolkit: the one crate applications depend on. Each module lists the toolkit items
 an application names, one by one ([Public API](#public-api)), and it has a `prelude`. `typeahead` (`TypeAhead`) and `filepicker` (`Picker` and its `Mode`, `Key`,
-`Request`, `Listing`, `Entry` and `Outcome`; `places` with `session_places`, `parse_user_dirs` and `Place`) name the
+`Request`, `Listing`, `Entry` and `Outcome`) name the
 type-to-select and file chooser model of `cupertino-ui-controls`. The `test` feature, enabled only in
 dev-dependencies, adds `kit::test`: the headless backend and what a driver is built from. MPL-2.0.
 
@@ -83,7 +83,10 @@ special folder's own icon; and the alias badge of a symbolic link, drawn into th
 packs and the icon theme, `without_host` a given pack alone and `builtin` the built-in assets (placeholders), for tests
 and captures. `pack_has(name)` says whether an asset pack ships a raster or SVG file of its own for an icon name, so an
 app with its own art for a name can still let a pack's icon win. Files and the portal's file chooser draw their rows
-with it.
+with it. The items are the file family's (`cupertino-ui-files`' `file_icons`); `kit::file_icons` names them for the apps
+that draw file icons without the rest of the family. `kit::files` also names the family's `thumbnail_service`, whose
+`ThumbnailJob` a program runs with `task::io` within `JOB_DEADLINE`, `item_icons`, and `notice`, whose
+`Notices::on` gives the future that posts a program's notices on its bus connection.
 
 Each example runs on Cupertino headless and on headless Mutter, with these app ids and sizes: Counter (`org.cupertino.examples.Counter`, 200×64), Forms (`org.cupertino.examples.Forms`, 280×180), Virtual List (`org.cupertino.examples.VirtualList`, 480×600) and Editor (`org.cupertino.examples.Editor`, 480×320).
 
@@ -130,7 +133,7 @@ What `shell` and `apps` crates name from the toolkit, where each item is in Kit,
 | `kit::theme` | `ThemeTokens` and the types of its fields (`ThemePreferences`, `ColorTokens`, `ControlMetrics`, `TypeScale`, `FocusRing`, `Motion`), `Appearance`, `Color`, `ColorRole`, `StateVariant`, `InteractionVariant`, `ControlFamily`, `ControlSize`, `TypeRole`, `Surface`, `BAR_GLASS_MATERIAL`, `GLASS_MATERIAL`, `CARET_PHASE_MS`, and `system_color(name, appearance) -> Option<Color>`, a colour the theme data names (`system-green`) |
 | `kit::controls` | every control of `cupertino-ui-controls` with its option types (states, handlers, styles, `SortOrder`) and layout constants, and the helpers programs paint with (`caret_blinking`, `caret_opacity`, `paint_glass_edge`, `striped_element`, `unobscured_insets`) |
 | `kit::filepicker`, `kit::typeahead` | the file chooser's model and type-to-select |
-| `kit::files` | the file family of `cupertino-ui-files`, in modules named as its own, each listing what Files names: `entry` (`Entry`, `Kind`), `natural`, `sort`, `mime`, `tags`, `applications`, `recents`, `geom` (`Direction`), `layout::icon`, `rename`, `name_edit`, `open`, `operations`, `item_art`, and the views' `metrics` (`icon_view`, `list_view`, `column_view`, `timing`, `selection`, `marquee`, `drag`); the views: `ViewEvent`, `grid` (`IconGrid`), `list` (`FileList`), `columns` (`FileColumns`), `ColumnEvent` |
+| `kit::files` | the file family of `cupertino-ui-files`, in modules named as its own, each listing what Files and the portal's chooser name: `entry` (`Entry`, `Kind`), `natural`, `sort`, `mime`, `tags`, `applications`, `recents`, `places` (the sidebar's `standard_places` and the chooser's `chooser_places`, over the user directories of `cupertino_defaults::user_dirs`), `model` (`DirectoryModel`, whose `ModelWork` a program runs with `task::io` within `WORK_DEADLINE` and whose `ModelWatch` it follows with `Command::Perform`), `geom` (`Direction`), `layout::icon`, `rename`, `name_edit`, `open`, `operations` (with `Transfer`, a copy or a move whose `TransferSlice`s a program runs with `task::io` within `SLICE_DEADLINE`), `notice`, `thumbnail_service`, `item_icons`, `item_art`, and the views' `metrics` (`icon_view`, `list_view`, `column_view`, `timing`, `selection`, `marquee`, `drag`); the views: `ViewEvent`, `grid` (`IconGrid`), `list` (`FileList`), `columns` (`FileColumns`), `ColumnEvent` |
 | `kit::geometry` | `Point`, `Size`, `Rect`, `Insets` |
 | `kit::motion` | [Motion](#motion) |
 | `kit::image` | `decode` (PNG and JPEG within the side the caller allows), `resize`, `crop`, `orient` (upright from an `OutputTransform`, which the module names), `encode_png`, `encode_jpeg`, and `ImageError`: plain functions on `render::ImageResource` that a program runs as a `task::cpu`, each refusing a picture of more pixels than a window drawn on the CPU has |

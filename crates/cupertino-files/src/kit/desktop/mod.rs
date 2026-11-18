@@ -2,8 +2,8 @@
 //! surface of every output that lies over the wallpaper and under every window ([`roles`]). What it draws and what its
 //! presses mean is [`view`]; where the items sit is [`crate::desktop`].
 //!
-//! * The folder is listed and watched as a browser window's is ([`DirectoryModel`]); the icons are the browser's
-//!   ([`ItemIcons`]), pictures shown by their thumbnails.
+//! * The folder is listed and watched as a browser window's is ([`DirectoryModel`], its work run as I/O tasks); the
+//!   icons are the browser's ([`ItemIcons`]), pictures shown by their thumbnails.
 //! * Its context menus are the toolkit's: on items Open, Open With, Move to Trash, Rename, Duplicate, Make Alias and
 //!   Copy; on the desktop New Folder, Paste, Change Wallpaper…, Sort By and Clean Up.
 //! * Keys, once a press gave the desktop the keyboard: Return renames the only selected item, Primary+O and
@@ -43,22 +43,23 @@ use cupertino_ui_wayland::WaylandWindowSystem;
 use self::layer::DesktopShell;
 use self::roles::{DesktopRoles, RoleNote};
 use self::view::{BandLook, Desk, ItemView};
-use super::item_icons::ItemIcons;
 use crate::desktop::{self as arrangement, Arrangement, DesktopPrefs, Grid, Slot};
 use crate::metrics::desktop as m;
-use crate::notice::{self, Action, Notices};
-use crate::places::{desktop_folder, session_places};
 use crate::trash::Trash;
-use crate::{DirectoryModel, ModelOptions};
 use cupertino_icons::thumbnail::Thumbnailer;
 use cupertino_kit::files::entry::Entry;
 use cupertino_kit::files::geom::Direction;
+use cupertino_kit::files::item_icons::ItemIcons;
+use cupertino_kit::files::model::{DirectoryModel, ModelDelta, ModelOptions, WORK_DEADLINE};
 use cupertino_kit::files::name_edit::NameEdit;
+use cupertino_kit::files::notice::{self, Action, Notices};
 use cupertino_kit::files::open::{
     command_with, default_app_id, open_command, open_with, OpenError,
 };
 use cupertino_kit::files::operations::{self, DropAction};
+use cupertino_kit::files::places::{desktop_folder, session_places};
 use cupertino_kit::files::sort::{sort_entries, SortKey, SortSpec};
+use cupertino_kit::files::thumbnail_service::JOB_DEADLINE;
 
 /// What the desktop's windows are called by the roles: `cupertino-desktop@OUTPUT`.
 pub const APP_ID: &str = "cupertino-desktop";
@@ -126,6 +127,9 @@ pub enum Message {
     Woken,
     /// What woke the desktop is gone.
     Unheard,
+    /// The listing's work or watch, a thumbnail's job or the posting of the notices ended; what it brought wakes the
+    /// desktop.
+    Worked,
     /// A press landed on the desktop.
     Pressed,
     Select(Vec<PathBuf>),
@@ -275,7 +279,7 @@ impl Model {
             made: None,
             pasteboard: Vec::new(),
             trash: Trash::new(),
-            notices: Notices::start(None),
+            notices: Notices::logged(),
         }
     }
 
@@ -588,15 +592,49 @@ impl Model {
         }
     }
 
-    /// Take what the listing has waiting.
+    /// Take what the listing has waiting. A folder that does not open is said on standard error and listed no more.
     fn poll(&mut self) {
-        let changed = self
-            .listing
-            .as_mut()
-            .is_some_and(|listing| !listing.poll().is_empty());
-        if changed {
+        let Some(listing) = self.listing.as_mut() else {
+            return;
+        };
+        let deltas = listing.poll();
+        if let Some(error) = deltas.iter().find_map(|delta| match delta {
+            ModelDelta::OpenFailed { error, .. } => Some(error),
+            _ => None,
+        }) {
+            eprintln!(
+                "cupertino-files: cannot list {}: {error}",
+                self.folder.display()
+            );
+            self.listing = None;
+            return;
+        }
+        if !deltas.is_empty() {
             self.relist();
         }
+    }
+
+    /// The listing's watch and its next work, and the thumbnails' jobs, as a future on the UI loop and I/O tasks.
+    fn io_work(&mut self) -> Vec<Command<Message>> {
+        let mut commands = Vec::new();
+        if let Some(listing) = self.listing.as_mut() {
+            commands.extend(listing.take_watch().map(|watch| {
+                let follow = watch.follow();
+                Command::Perform(Box::pin(async move {
+                    follow.await;
+                    Message::Worked
+                }))
+            }));
+            commands.extend(listing.take_work().map(|work| {
+                cupertino_kit::task::io(WORK_DEADLINE, move || work.run(), |()| Message::Worked)
+            }));
+        }
+        if let Some(icons) = &self.icons {
+            commands.extend(std::iter::from_fn(|| icons.take_job()).map(|job| {
+                cupertino_kit::task::io(JOB_DEADLINE, move || job.run(), |()| Message::Worked)
+            }));
+        }
+        commands
     }
 
     fn command(&mut self, command: DeskCommand) -> Vec<Command<Message>> {
@@ -990,9 +1028,10 @@ impl Application for Desktop {
                 // a thumbnail that came shows at the next view
                 let mut commands = model.rename_made();
                 commands.push(listen(&model.woken));
+                commands.extend(model.io_work());
                 return commands;
             }
-            Message::Unheard => {}
+            Message::Unheard | Message::Worked => {}
             Message::DroppedIn(dropped) => return model.dropped_in(dropped),
             Message::Pressed => {
                 model.menu = None;
@@ -1168,7 +1207,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         screens,
         notes,
         arrangement::location(),
-        || Notices::start(zbus::blocking::Connection::session().ok()),
+        super::session_notices,
     );
     cupertino_kit::app::run_on::<Desktop>(system, start)?;
     Ok(())
@@ -1176,7 +1215,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
 /// The desktop of `folder` on `screens`, listed and watched, its items typed with `types` and drawn with `file_icons`
 /// and `thumbnails`, its arrangement kept in `prefs_file`, its failures posted on what `notices` starts, hearing the
-/// roles' `notes`; and the commands that hear its listing and its roles.
+/// roles' `notes`; and the commands that hear its listing and its roles and post its notices.
 #[allow(clippy::too_many_arguments)]
 fn listed(
     folder: PathBuf,
@@ -1186,7 +1225,7 @@ fn listed(
     screens: Vec<Screen>,
     notes: async_channel::Receiver<Message>,
     prefs_file: Option<PathBuf>,
-    notices: impl FnOnce() -> Notices,
+    notices: impl FnOnce() -> (Notices, Option<super::Posting>),
 ) -> (Model, Vec<Command<Message>>) {
     let (wake, woken) = async_channel::bounded(1);
     let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
@@ -1197,26 +1236,31 @@ fn listed(
         types: Some(types),
         ..ModelOptions::default()
     };
-    let listing = DirectoryModel::open_notifying(folder.clone(), options, Arc::clone(&wake))
-        .map_err(|e| eprintln!("cupertino-files: cannot list {}: {e}", folder.display()))
-        .ok();
+    let listing = DirectoryModel::open(folder.clone(), options, Arc::clone(&wake));
     let mut model = Model::empty(folder, notes);
     model.prefs = prefs_file
         .as_deref()
         .map(DesktopPrefs::load)
         .unwrap_or_default();
     model.prefs_file = prefs_file;
-    model.listing = listing;
+    model.listing = Some(listing);
     model.woken = woken;
     model.screens = screens;
     model.icons = Some(ItemIcons::new(file_icons, Some(thumbnails), wake));
-    model.notices = notices();
-    let commands = vec![listen(&model.woken), hear(&model.notes)];
+    let (notices, posting) = notices();
+    model.notices = notices;
+    let mut commands = vec![listen(&model.woken), hear(&model.notes)];
+    commands.extend(posting.map(|posting| {
+        Command::Perform(Box::pin(async move {
+            posting.await;
+            Message::Worked
+        }))
+    }));
     model.menu_bar = cupertino_assets::theme::load()
         .map(|theme| theme.shapes.menu_bar_height)
         .unwrap_or_else(|_| cupertino_theme::ShapeTokens::default().menu_bar_height)
         .ceil();
-    model.poll();
+    commands.extend(model.io_work());
     (model, commands)
 }
 
@@ -1244,7 +1288,7 @@ pub fn prepare(
         screens,
         notes,
         None,
-        || Notices::start(None),
+        || (Notices::logged(), None),
     );
     START.with(|s| *s.borrow_mut() = Some(start));
 }

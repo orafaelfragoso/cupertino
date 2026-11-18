@@ -91,6 +91,14 @@ fn a_folder_made_around_items_holds_them_and_an_item_that_fails_is_reported() {
         listing(&scratch.path().join("untitled folder 2")),
         ["c.txt"]
     );
+
+    // the first failure stops the moves: the items after it stay where they are
+    let d = scratch.file("d.txt", b"d");
+    let missing = scratch.path().join("missing.txt");
+    let failed = new_folder_with(scratch.path(), &[missing, d.clone()]).unwrap_err();
+    assert_eq!(failed.kind(), ErrorKind::NotFound);
+    assert!(listing(&scratch.path().join("untitled folder 3")).is_empty());
+    assert_eq!(fs::read(&d).unwrap(), b"d");
 }
 
 #[test]

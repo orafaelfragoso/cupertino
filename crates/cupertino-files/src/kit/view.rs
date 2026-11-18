@@ -38,8 +38,6 @@ use crate::format::{human_size, relative_date};
 use crate::layout::list::RowSpec;
 use crate::menu_bar::MenuAction;
 use crate::metrics::{sidebar, trash, window as window_metrics};
-use crate::places::{window_title, PlaceGroup};
-use crate::places::{PlaceKind, Volume};
 use crate::settings::{default_columns, ColumnId, IconViewSettings};
 use crate::udisks::Passphrase;
 use crate::window::{metrics, path_chain, status_text, ViewMode};
@@ -51,6 +49,8 @@ use cupertino_kit::files::layout::icon::{
 use cupertino_kit::files::list::{FileList, ROW_HEIGHT, ROW_ICON};
 use cupertino_kit::files::metrics::list_view;
 use cupertino_kit::files::mime;
+use cupertino_kit::files::places::{window_title, PlaceGroup};
+use cupertino_kit::files::places::{PlaceKind, Volume};
 use cupertino_kit::files::sort::SortKey;
 use cupertino_kit::files::tags::TagColor;
 

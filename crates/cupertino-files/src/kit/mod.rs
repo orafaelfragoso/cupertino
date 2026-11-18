@@ -9,7 +9,6 @@ pub mod desktop;
 mod dragged;
 mod drops;
 mod gallery;
-mod item_icons;
 mod jobs;
 mod peek;
 mod places;
@@ -56,13 +55,11 @@ use cupertino_menu_model::ActionName;
 use zbus::blocking::Connection;
 use zbus::zvariant::OwnedObjectPath;
 
-use crate::browser::{Activation, Browser};
+use crate::browser::{Activation, Asked, Browser, Listings, Polled};
 use crate::context_menu::{common_apps, AppChoice, Command as MenuCommand};
 use crate::instance::Service;
 use crate::menu_bar::{self, MenuAction, MenuState};
 use crate::menu_spec::{self, Background, Subject};
-use crate::notice::{self, Action, Notices};
-use crate::places::{removable_holding, Place};
 use crate::preview::Browse;
 use crate::search_field::{self, SearchWidth};
 use crate::settings::ColumnId;
@@ -74,14 +71,18 @@ use crate::window_prefs::WindowPrefs;
 use cupertino_icons::thumbnail::Thumbnailer;
 use cupertino_kit::files::entry::{Entry, Kind};
 use cupertino_kit::files::grid::Grab;
+use cupertino_kit::files::item_icons::ItemIcons;
 use cupertino_kit::files::list::{row_key, Presses, RowGrab};
 use cupertino_kit::files::name_edit::NameEdit;
+use cupertino_kit::files::notice::{self, Action, Notices};
 use cupertino_kit::files::open::{
     command_with, default_app_id, open_command, open_with, OpenError,
 };
 use cupertino_kit::files::operations::{self, DropAction};
+use cupertino_kit::files::places::{removable_holding, Place};
 use cupertino_kit::files::sort::SortSpec;
 use cupertino_kit::files::tags::{self, TagColor};
+use cupertino_kit::files::thumbnail_service::JOB_DEADLINE;
 use cupertino_kit::files::{ColumnEvent, ViewEvent};
 
 /// Identifier of the window for the server, as the desktop entry names it.
@@ -125,6 +126,25 @@ pub struct Start {
     activation: Option<String>,
     /// What tells, on a look-up thread, whether an item a call names exists.
     look_up: LookUp,
+    /// The listings the windows let go of while their work runs.
+    listings: Listings,
+    /// What posts the notices on the session bus, on the UI loop.
+    posting: Option<Posting>,
+}
+
+/// The future that posts a program's notices and hears their clicks, run on its UI loop.
+pub type Posting = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
+
+/// The notices of the session bus, on a connection made here, before the loop starts, and what posts them; notices
+/// that are logged without a session bus.
+pub fn session_notices() -> (Notices, Option<Posting>) {
+    match Connection::session() {
+        Ok(session) => {
+            let (notices, posting) = Notices::on(session.into_inner());
+            (notices, Some(Box::pin(posting)))
+        }
+        Err(_) => (Notices::logged(), None),
+    }
 }
 
 impl Start {
@@ -141,9 +161,11 @@ impl Start {
         terminal: Option<Vec<String>>,
         system: Option<Connection>,
     ) -> io::Result<Start> {
-        let first = open_browser(folder, types.clone(), recents.clone())?;
+        let listings = Listings::default();
+        let first = open_browser(folder, types.clone(), recents.clone(), listings.clone())?;
         Ok(Start {
             first: Some(first),
+            listings,
             ..Start::idle(
                 places,
                 types,
@@ -199,7 +221,14 @@ impl Start {
             instance: None,
             activation: None,
             look_up: Arc::new(remote::look_up_item),
+            listings: Listings::default(),
+            posting: None,
         }
+    }
+
+    /// The notices posted by `posting` ([`session_notices`]), which Files runs on its loop.
+    pub fn with_posting(self, posting: Option<Posting>) -> Start {
+        Start { posting, ..self }
     }
 
     /// The same start without its first window, as [`Start::idle`] makes it.
@@ -378,6 +407,7 @@ fn open_browser(
     folder: PathBuf,
     types: Option<Arc<MimeDatabase>>,
     recents: PathBuf,
+    listings: Listings,
 ) -> io::Result<(Browser, async_channel::Receiver<()>, Wake)> {
     let (wake, woken) = wake_channel();
     let browser = Browser::open(
@@ -386,6 +416,7 @@ fn open_browser(
         recents,
         types,
         Arc::clone(&wake),
+        listings,
     )?;
     Ok((browser, woken, wake))
 }
@@ -407,7 +438,7 @@ pub struct Model {
     windows: BTreeMap<u64, BrowserWindow>,
     next_window: u64,
     session: Session,
-    /// Files asked to exit: the messages left in that turn neither wait for the notices again nor exit again.
+    /// Files exits once its notices are sent: the messages until then do not start that wait again.
     exiting: bool,
     /// Files started without a window and waits for the first call it serves, until [`CALL_WAIT`] passes.
     awaiting_call: bool,
@@ -455,7 +486,7 @@ struct Session {
     places_source: Option<PlacesSource>,
     places_watch: places::PlacesWatch,
     /// The items' icons and thumbnails, shared with the list's rows, which ask for them as they show.
-    icons: Rc<item_icons::ItemIcons>,
+    icons: Rc<ItemIcons>,
     /// What wakes when a thumbnail is made.
     thumbnails_woken: async_channel::Receiver<()>,
     /// The items a drag out of a window carries, until it is dropped or ends: a drop held open while it copies does not
@@ -471,9 +502,12 @@ struct Session {
     tag_colors: tag_editor::TagColors,
     /// The fixed-pitch family the previews set text files in.
     text_family: Option<String>,
-    /// Counts the messages that may change what the windows show, any but a window's scroll: views made at the same
+    /// Counts the messages that may change what the windows show, any but a window's scroll and the end of a listing's
+    /// or a thumbnail's work (what it brought wakes the windows): views made at the same
     /// revision may keep what they built ([`cupertino_kit::core::Element::kept`]).
     view_revision: u64,
+    /// The listings the windows let go of while their work runs, which the next request for their folders takes.
+    listings: Listings,
 }
 
 /// One browser window.
@@ -535,6 +569,8 @@ struct BrowserWindow {
     /// The key of the sidebar row a click or the arrows last chose since the window last went to another folder: the
     /// row the sidebar's keyboard is on, when it is not the selected one.
     sidebar_row: Option<Key>,
+    /// The sidebar row of the place whose folder the window asked for, which is the sidebar's row once it opens.
+    place_asked: Option<Key>,
     /// The rubber band being drawn over the items, in the view's content.
     band: Option<cupertino_kit::geometry::Rect>,
     /// The presses on the list's rows, which its rows and its frame share.
@@ -596,9 +632,14 @@ pub enum Message {
     /// The window with this key is shown: raise it, with the activation token of the launch that asked for it.
     Raise(WindowKey, Option<String>),
     /// A notice of a file operation's end was clicked; none once no click can come any more.
-    Noticed(Option<crate::notice::Click>),
+    Noticed(Option<notice::Click>),
     /// [`CALL_WAIT`] passed since Files started without a window.
     CallWaitOver,
+    /// A listing's work or watch, a thumbnail's job or the posting of the notices ended; what it brought wakes the
+    /// windows.
+    Worked,
+    /// Files exits: the notices posted are sent, or [`EXIT_NOTICES`] passed first.
+    NoticesSent,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -816,7 +857,7 @@ impl Application for Files {
             FileIcons::builtin(types, HashMap::new())
         });
         let icons = Rc::new(
-            item_icons::ItemIcons::new(file_icons, start.thumbnails, thumbnails_wake)
+            ItemIcons::new(file_icons, start.thumbnails, thumbnails_wake)
                 .with_app_icons(start.app_icons),
         );
         let mut model = Model {
@@ -859,6 +900,7 @@ impl Application for Files {
                 tag_colors: tag_editor::tag_colors(),
                 text_family: cupertino_kit::app::mono_family(),
                 view_revision: 0,
+                listings: start.listings,
             },
         };
         let mut commands = vec![woken(&model.session.places_watch.woken, Message::Places)];
@@ -880,17 +922,27 @@ impl Application for Files {
             commands.push(woken(instance.woken(), Message::Remote));
         }
         commands.extend(model.session.notice_clicks());
+        if let Some(posting) = start.posting {
+            commands.push(Command::Perform(Box::pin(async move {
+                posting.await;
+                Message::Worked
+            })));
+        }
         if model.session.volumes.is_some() {
             commands.push(woken(&model.session.media_woken, Message::Media));
         }
         if model.session.icons.thumbnails() {
             commands.push(woken(&model.session.thumbnails_woken, Message::Thumbnails));
         }
+        commands.extend(model.io_work());
         (model, commands)
     }
 
     fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
-        if !matches!(message, Message::Window(_, Event::Scroll(_))) {
+        if !matches!(
+            message,
+            Message::Window(_, Event::Scroll(_)) | Message::Worked
+        ) {
             model.session.view_revision += 1;
         }
         let recheck = match &message {
@@ -901,6 +953,7 @@ impl Application for Files {
         let mut commands = model.handle(message);
         commands.extend(model.follow_peeks(recheck));
         commands.extend(model.session.look_at_trash());
+        commands.extend(model.io_work());
         commands.extend(model.exit_when_done());
         commands
     }
@@ -939,6 +992,8 @@ impl Model {
                 self.awaiting_call = false;
                 Vec::new()
             }
+            Message::Worked => Vec::new(),
+            Message::NoticesSent => vec![Command::Exit],
             Message::Raise(key, token) => {
                 vec![Command::Window(key, WindowRequest::Activate(token))]
             }
@@ -1006,9 +1061,48 @@ impl Model {
         commands
     }
 
+    /// The work and the watches of every window's listings and the thumbnails' jobs, as I/O tasks and futures on the
+    /// UI loop, and the session's kept listings whose work ended let go.
+    fn io_work(&mut self) -> Vec<Command<Message>> {
+        self.session.listings.sweep();
+        let (mut works, mut watches) = (Vec::new(), Vec::new());
+        for window in self.windows.values_mut() {
+            let browsers = std::iter::once((&mut window.browser, &mut window.columns)).chain(
+                window
+                    .parked
+                    .values_mut()
+                    .map(|tab| (&mut tab.browser, &mut tab.columns)),
+            );
+            for (browser, columns) in browsers {
+                for (w, f) in [browser.take_work(), columns.take_work()] {
+                    works.extend(w);
+                    watches.extend(f);
+                }
+            }
+        }
+        let watched = watches.into_iter().map(|watch| {
+            let follow = watch.follow();
+            Command::Perform(Box::pin(async move {
+                follow.await;
+                Message::Worked
+            }))
+        });
+        let run = works.into_iter().map(|work| {
+            cupertino_kit::task::io(
+                cupertino_kit::files::model::WORK_DEADLINE,
+                move || work.run(),
+                |()| Message::Worked,
+            )
+        });
+        let thumbnails = std::iter::from_fn(|| self.session.icons.take_job()).map(|job| {
+            cupertino_kit::task::io(JOB_DEADLINE, move || job.run(), |()| Message::Worked)
+        });
+        watched.chain(run).chain(thumbnails).collect()
+    }
+
     /// Exit once no browser window is open, no file operation runs and the progress window lists nothing, after the
     /// notices posted are sent.
-    fn exit_when_done(&mut self) -> Option<Command<Message>> {
+    fn exit_when_done(&mut self) -> Vec<Command<Message>> {
         let jobs = &self.session.jobs;
         if self.exiting
             || self.awaiting_call
@@ -1017,13 +1111,22 @@ impl Model {
             || !jobs.running.is_empty()
             || jobs.visible()
         {
-            return None;
+            return Vec::new();
         }
         self.exiting = true;
         // first, so a launch racing the exit is refused at once and starts a Files of its own
         self.session.instance = None;
-        self.session.notices.flush(EXIT_NOTICES);
-        Some(Command::Exit)
+        let sent = self.session.notices.sent();
+        vec![
+            Command::Perform(Box::pin(async move {
+                sent.await;
+                Message::NoticesSent
+            })),
+            Command::After {
+                delay: EXIT_NOTICES,
+                message: Message::NoticesSent,
+            },
+        ]
     }
 }
 
@@ -1097,13 +1200,14 @@ impl Model {
             pressed_place: None,
             sidebar_focused: false,
             sidebar_row: None,
+            place_asked: None,
             band: None,
             list_presses: Default::default(),
             announcement: announce::Announcement::default(),
             items_focused: false,
             focus_when_listed: None,
             springing: spring::Springing::default(),
-            columns: columns::ColumnsView::new(prefs.column_width),
+            columns: columns::ColumnsView::new(prefs.column_width, self.session.listings.clone()),
             texts: peek::Texts::default(),
             peek: None,
             tag_editor: None,
@@ -1129,6 +1233,7 @@ impl Model {
             folder.clone(),
             session.types.clone(),
             session.recents.clone(),
+            session.listings.clone(),
         ) {
             Ok((browser, woken, wake)) => {
                 let id = self.next_window;
@@ -1365,7 +1470,7 @@ impl Model {
                 // a cancelled drag takes the window it came from back to where it was
                 if progress == DragProgress::Cancelled {
                     if let Some(window) = self.windows.get_mut(&id) {
-                        window.spring_back(&self.session);
+                        window.spring_back();
                     }
                 }
                 return Vec::new();
@@ -1396,9 +1501,8 @@ impl Model {
         match event {
             Event::Woken => {
                 let polled = window.browser.poll();
-                for error in polled.errors {
-                    eprintln!("cupertino-files: {error}");
-                }
+                let changed = polled.changed;
+                window.polled(polled, session);
                 let columns = window.columns.poll();
                 window.texts.poll();
                 // the tabs not shown follow their folders too
@@ -1409,7 +1513,7 @@ impl Model {
                     }
                     tab.columns.poll();
                 }
-                if polled.changed || columns {
+                if changed || columns {
                     window.now = (window.clock)();
                     window.read_available();
                     session.learn_tags(window.browser.entries());
@@ -1455,12 +1559,10 @@ impl Model {
             Event::AskEmptyTrash => window.ask_empty_trash(session),
             Event::EmptyTrashCancelled => window.confirm_empty = false,
             Event::SpringOver(folder) => return window.spring_over(id, folder),
-            Event::SpringDue(generation, step) => {
-                return window.spring_due(id, generation, step, session)
-            }
-            Event::DragLeft => window.spring_back(session),
-            Event::Navigate(Navigation::Back) => window.step(Step::Back, session),
-            Event::Navigate(Navigation::Forward) => window.step(Step::Forward, session),
+            Event::SpringDue(generation, step) => return window.spring_due(id, generation, step),
+            Event::DragLeft => window.spring_back(),
+            Event::Navigate(Navigation::Back) => window.step(Step::Back),
+            Event::Navigate(Navigation::Forward) => window.step(Step::Forward),
             Event::Select(selection) => window.select(&selection, session),
             Event::Open(index) => {
                 if !window.browser.selection().contains(index) {
@@ -1538,9 +1640,7 @@ impl Model {
                 if !toggle.expanded {
                     return window.collapse(id, toggle.index);
                 }
-                if let Err(e) = window.browser.expand(toggle.index) {
-                    eprintln!("cupertino-files: cannot open the folder's row: {e}");
-                }
+                window.browser.expand(toggle.index);
             }
             Event::FocusRow(index) => {
                 let Some(entry) = window.browser.entries().get(index) else {
@@ -1559,7 +1659,7 @@ impl Model {
             Event::Popup(popup) => window.open_popup(popup, session),
             Event::PathSegment(path) => {
                 if path != window.browser.dir() {
-                    window.go(path, session);
+                    window.go(path);
                 }
             }
             Event::RenameItem(index) => {
@@ -1828,14 +1928,13 @@ impl Model {
                     None => Some(SplitPane::Leading),
                 }
             }
-            MenuAction::Back => window.step(Step::Back, session),
-            MenuAction::Forward => window.step(Step::Forward, session),
-            MenuAction::EnclosingFolder => window.step(Step::Parent, session),
-            MenuAction::Recents => window.go(
-                cupertino_kit::files::recents::location().to_path_buf(),
-                session,
-            ),
-            MenuAction::Home => window.go(session.home.clone(), session),
+            MenuAction::Back => window.step(Step::Back),
+            MenuAction::Forward => window.step(Step::Forward),
+            MenuAction::EnclosingFolder => window.step(Step::Parent),
+            MenuAction::Recents => {
+                window.go(cupertino_kit::files::recents::location().to_path_buf())
+            }
+            MenuAction::Home => window.go(session.home.clone()),
             MenuAction::MoveToTrash => window.trash_selection(session),
             MenuAction::PutBack => window.put_back(session),
             MenuAction::NewFolder => match operations::new_folder(window.browser.dir()) {
@@ -2010,10 +2109,10 @@ impl Model {
             session.show_media();
             for ((&id, window), held) in self.windows.iter_mut().zip(held) {
                 if held && !session.media.holds(window.browser.dir()) {
-                    window.go(session.home.clone(), session);
+                    window.go(session.home.clone());
                 }
                 if let Some((_, at)) = arrived.iter().rev().find(|(w, _)| *w == id) {
-                    window.go(at.clone(), session);
+                    window.go(at.clone());
                 }
                 let gone = window
                     .unlock
@@ -2041,7 +2140,10 @@ impl Model {
         let row = view::place_key(session, index);
         if let Some(folder) = place.folder() {
             let folder = folder.to_path_buf();
-            window.go(folder, session);
+            window.go(folder);
+            if window.browser.is_waiting() {
+                window.place_asked = Some(row.clone());
+            }
             window.sidebar_row = Some(row);
             return Vec::new();
         }
@@ -2127,7 +2229,7 @@ impl Model {
             .collect();
         for window in self.windows.values_mut() {
             if mounts.iter().any(|m| window.browser.dir().starts_with(m)) {
-                window.go(session.home.clone(), session);
+                window.go(session.home.clone());
             }
         }
         if let Some(volumes) = &session.volumes {
@@ -2319,7 +2421,7 @@ impl BrowserWindow {
             .then(|| self.columns.chain(&self.browser).child)
             .flatten();
         let dir = child.as_deref().unwrap_or(self.browser.dir());
-        crate::places::window_title(dir, &session.places)
+        cupertino_kit::files::places::window_title(dir, &session.places)
     }
 
     /// After each event: the column view follows the folder and the selection, the preview window follows a single
@@ -2385,11 +2487,14 @@ impl BrowserWindow {
             session.recents.clone(),
             session.types.clone(),
             Arc::clone(&self.wake),
+            session.listings.clone(),
         );
         let browser = match opened {
             Ok(browser) => browser,
             Err(e) => return session.failed(Action::Open, &[self.browser.dir()], &e),
         };
+        // the tab parked forgets a folder it asked for
+        self.browser.stop_waiting();
         let shown = self.tabs.active_id();
         let mut tab = tabs::Tab {
             browser,
@@ -2402,7 +2507,10 @@ impl BrowserWindow {
             search_revision: 0,
             available: self.available,
             mounted_read_only: self.mounted_read_only,
-            columns: columns::ColumnsView::new(self.columns.chain.default_width()),
+            columns: columns::ColumnsView::new(
+                self.columns.chain.default_width(),
+                session.listings.clone(),
+            ),
         };
         self.tabs.open();
         self.swap_tab(&mut tab);
@@ -2433,6 +2541,8 @@ impl BrowserWindow {
         let Some(mut tab) = self.parked.remove(&id) else {
             return;
         };
+        // the tab parked forgets a folder it asked for
+        self.browser.stop_waiting();
         self.swap_tab(&mut tab);
         self.parked.insert(shown, tab);
         self.left_tab();
@@ -2484,31 +2594,55 @@ impl BrowserWindow {
         }
     }
 
-    fn go(&mut self, to: PathBuf, session: &Session) {
-        match self.browser.go(to.clone()) {
-            Ok(()) => self.entered(),
-            Err(e) => session.failed(Action::Open, &[&to], &e),
+    /// Go to the folder `to`: at once when it is the folder shown, else once it opens ([`BrowserWindow::polled`]).
+    fn go(&mut self, to: PathBuf) {
+        self.go_selecting(to, None);
+    }
+
+    /// [`BrowserWindow::go`], selecting the item at `select` as soon as the listing shows it.
+    fn go_selecting(&mut self, to: PathBuf, select: Option<PathBuf>) {
+        self.place_asked = None;
+        if self.browser.go(to, select) {
+            self.entered();
         }
     }
 
-    fn step(&mut self, step: Step, session: &Session) {
-        let target = match step {
-            Step::Back => self.browser.history().back_target(),
-            Step::Forward => self.browser.history().forward_target(),
-            Step::Parent => self.browser.dir().parent(),
-        }
-        .map(|p| crate::places::window_title(p, &session.places));
-        let outcome = match step {
+    fn step(&mut self, step: Step) {
+        self.place_asked = None;
+        match step {
             Step::Back => self.browser.back(),
             Step::Forward => self.browser.forward(),
             Step::Parent => self.browser.parent(),
         };
-        match outcome {
-            Ok(true) => self.entered(),
-            Ok(false) => {}
-            Err(e) => session
-                .notices
-                .post(notice::unopened(target.as_deref().unwrap_or_default(), &e)),
+    }
+
+    /// What the browser's poll brought besides its listing: its errors on standard error, a folder asked for that
+    /// opened entered, and the notice of one that did not, which leaves the window where it is: a folder gone to is
+    /// "couldn't be opened" by its name, one of the history or the enclosing folder by its title.
+    fn polled(&mut self, polled: Polled, session: &Session) {
+        for error in polled.errors {
+            eprintln!("cupertino-files: {error}");
+        }
+        if let Some(asked) = polled.entered {
+            let row = self.place_asked.take().filter(|_| asked == Asked::Go);
+            self.spring_entered(asked);
+            if row.is_some() {
+                self.sidebar_row = row;
+            }
+        }
+        if let Some(unopened) = polled.unopened {
+            self.place_asked = None;
+            self.spring_unopened();
+            match unopened.asked {
+                Asked::Go => session.failed(Action::Open, &[&unopened.dir], &unopened.error),
+                Asked::Back | Asked::Forward | Asked::Parent | Asked::Return => {
+                    let name =
+                        cupertino_kit::files::places::window_title(&unopened.dir, &session.places);
+                    session
+                        .notices
+                        .post(notice::unopened(&name, &unopened.error));
+                }
+            }
         }
     }
 
@@ -2610,10 +2744,7 @@ impl BrowserWindow {
         let Some(parent) = target.parent().map(Path::to_path_buf) else {
             return;
         };
-        self.go(parent.clone(), session);
-        if self.browser.dir() == parent {
-            self.browser.select_when_appears(target);
-        }
+        self.go_selecting(parent, Some(target));
     }
 
     /// Move the selected items to the trash; the listing drops them when the watcher reports it.
@@ -2676,7 +2807,7 @@ impl BrowserWindow {
         let Activation { folder, files } = self.browser.activation();
         let commands = session.open_paths(id, files, None);
         if let Some(folder) = folder {
-            self.go(folder, session);
+            self.go(folder);
         }
         commands
     }
@@ -2714,7 +2845,8 @@ impl BrowserWindow {
                 menu_spec::item_menu(&subject, &self.selection_apps(session)),
             )
         } else {
-            let label = crate::places::window_title(self.browser.dir(), &session.places);
+            let label =
+                cupertino_kit::files::places::window_title(self.browser.dir(), &session.places);
             (label, self.background_items(session, in_trash))
         };
         self.context = Some(context::OpenMenu {
@@ -2768,7 +2900,7 @@ impl BrowserWindow {
                 true,
             ));
         }
-        if place.kind == crate::places::PlaceKind::Trash {
+        if place.kind == cupertino_kit::files::places::PlaceKind::Trash {
             items.push(crate::context_menu::MenuItem::separator());
             items.push(crate::context_menu::MenuItem::command(
                 "Empty Trash",

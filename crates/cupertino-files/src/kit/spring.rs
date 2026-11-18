@@ -9,9 +9,8 @@ use std::path::PathBuf;
 use cupertino_kit::layout::ScrollState;
 use cupertino_kit::prelude::Command;
 
-use super::{BrowserWindow, Event, Message, Session, ViewMode};
-use crate::browser::Visit;
-use crate::notice;
+use super::{BrowserWindow, Event, Message, ViewMode};
+use crate::browser::{Asked, Visit};
 use crate::spring::{SpringLoad, Sprung, Step, Timer};
 
 /// The spring-loading of one window.
@@ -20,6 +19,10 @@ pub(super) struct Springing {
     dwell: SpringLoad<PathBuf>,
     /// What the window showed when a drag first opened a folder in it.
     origin: Option<Origin>,
+    /// The folder a dwell asked the window to open, until it opens, and what the window showed then.
+    asked: Option<(PathBuf, Origin)>,
+    /// What comes back with the way back the drag's end asked for, until that folder opens.
+    returning: Option<Back>,
     /// The scroll position to give back once the listing of the folder gone back to is complete.
     scroll_back: Option<ScrollState>,
     /// Counts the folders a drag opened: the folder's drop target is keyed by it, so the drag is asked anew where it
@@ -30,6 +33,12 @@ pub(super) struct Springing {
 #[derive(Debug)]
 struct Origin {
     visit: Visit,
+    back: Back,
+}
+
+/// What comes back with the way back besides the folder.
+#[derive(Debug)]
+struct Back {
     view: ViewMode,
     scroll: ScrollState,
     /// The search field's text.
@@ -71,29 +80,26 @@ impl BrowserWindow {
             .collect()
     }
 
-    /// The timer of a dwell in window `id` is due: the folder flashes, or opens.
+    /// The timer of a dwell in window `id` is due: the folder flashes, or is asked for, to open once it does.
     pub(super) fn spring_due(
         &mut self,
         id: u64,
         generation: u64,
         step: Step,
-        session: &Session,
     ) -> Vec<Command<Message>> {
         match self.springing.dwell.due(generation, step) {
             Some(Sprung::Flash(_, timer)) => vec![after(id, timer)],
             Some(Sprung::Open(folder)) => {
                 let origin = Origin {
                     visit: self.browser.visit(),
-                    view: self.view,
-                    scroll: self.scroll,
-                    search: self.search.clone(),
+                    back: Back {
+                        view: self.view,
+                        scroll: self.scroll,
+                        search: self.search.clone(),
+                    },
                 };
-                let before = self.browser.dir().to_path_buf();
-                self.go(folder, session);
-                if self.browser.dir() != before {
-                    self.springing.origin.get_or_insert(origin);
-                    self.springing.opened += 1;
-                }
+                self.springing.asked = Some((folder.clone(), origin));
+                self.go(folder);
                 Vec::new()
             }
             None => Vec::new(),
@@ -101,27 +107,54 @@ impl BrowserWindow {
     }
 
     /// The drag left the window or was cancelled: back to what the window showed before a drag opened a folder.
-    pub(super) fn spring_back(&mut self, session: &Session) {
+    pub(super) fn spring_back(&mut self) {
         self.springing.dwell.cancel();
-        let Some(origin) = self.springing.origin.take() else {
+        self.springing.asked = None;
+        let Some(Origin { visit, back }) = self.springing.origin.take() else {
             return;
         };
-        let dir = origin.visit.dir().to_path_buf();
-        if let Err(e) = self.browser.return_to(origin.visit) {
-            let name = crate::places::window_title(&dir, &session.places);
-            session.notices.post(notice::unopened(&name, &e));
+        if self.browser.return_to(visit) {
+            self.entered();
+            self.returned(back);
+        } else {
+            self.springing.returning = Some(back);
+        }
+    }
+
+    /// The window shows the folder of a request, which it entered: the folder a dwell opened, or the one the drag's
+    /// end went back to.
+    pub(super) fn spring_entered(&mut self, asked: Asked) {
+        self.entered();
+        if asked == Asked::Return {
+            if let Some(back) = self.springing.returning.take() {
+                self.returned(back);
+            }
             return;
         }
-        self.entered();
-        if !origin.search.is_empty() {
+        let opened = self.springing.asked.take();
+        if let Some((_, origin)) = opened.filter(|(folder, _)| folder == self.browser.dir()) {
+            self.springing.origin.get_or_insert(origin);
+            self.springing.opened += 1;
+        }
+    }
+
+    /// The folder of a request did not open: a dwell opened nothing, and the way back stays where it is.
+    pub(super) fn spring_unopened(&mut self) {
+        self.springing.asked = None;
+        self.springing.returning = None;
+    }
+
+    /// The window is back where the drag found it: its search, its view and its scroll position come back.
+    fn returned(&mut self, back: Back) {
+        if !back.search.is_empty() {
             // the search comes back with its text in the field
-            self.browser.set_filter(&origin.search);
-            self.search = origin.search;
+            self.browser.set_filter(&back.search);
+            self.search = back.search;
             self.search_revision += 1;
             self.follow_search();
         }
-        self.view = origin.view;
-        self.springing.scroll_back = Some(origin.scroll);
+        self.view = back.view;
+        self.springing.scroll_back = Some(back.scroll);
         self.spring_settle();
     }
 

@@ -1,6 +1,6 @@
 //! Icons of files and folders, for the apps that list them: the icon of a file's type from the asset packs and the host
 //! icon theme ([`cupertino_icons::document`]), a special folder's own icon, and the alias badge of a symbolic link, as
-//! the renditions an [`Image`](crate::controls::Image) picks from.
+//! the renditions an [`Image`](cupertino_ui_controls::Image) picks from.
 //!
 //! A type gets the icon of its kind or of its nearest ancestor's kind ([`document_icon_name`]), then
 //! `document.generic`, then the placeholder the packs draw for a name none of them provides.

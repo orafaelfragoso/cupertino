@@ -3,7 +3,7 @@
 
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
@@ -19,8 +19,8 @@ use cupertino_kit::core::{
     MeasureCx, PaintCx, Phase, Propagation, SemanticsCx, Shortcut, Widget,
 };
 use cupertino_kit::file_icons::FileIcons;
-use cupertino_kit::filepicker::places::{session_places, Place};
 use cupertino_kit::filepicker::{Listing, Request};
+use cupertino_kit::files::places::{chooser_places, Place};
 use cupertino_kit::geometry::{Insets, Point, Size};
 use cupertino_kit::layout::{Constraints, ContainerKind, LayoutSpec, Measured, ScrollState};
 use cupertino_kit::platform::{DecorationMode, ForeignParent, Keysym, Mods};
@@ -428,6 +428,15 @@ fn home() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/"))
 }
 
+/// The user directories of the session with this `home`: none, after a line on standard error, when `user-dirs.dirs`
+/// cannot be read.
+fn user_dirs(home: &Path) -> Vec<(String, PathBuf)> {
+    cupertino_defaults::user_dirs::read(home).unwrap_or_else(|e| {
+        eprintln!("cupertino-portal: cannot read the user directories: {e}");
+        Vec::new()
+    })
+}
+
 impl Model {
     fn dialog(&mut self, id: u64) -> Option<&mut Dialog> {
         self.open.iter_mut().find(|d| d.id == id)
@@ -622,7 +631,7 @@ impl Application for Dialogs {
     fn init() -> (Model, Vec<Command<Message>>) {
         let home = home();
         let mut model = Model {
-            places: session_places(&home),
+            places: chooser_places(&home, &user_dirs(&home)),
             home,
             next: 0,
             open: Vec::new(),
@@ -1084,10 +1093,10 @@ fn sidebar(d: &Dialog, places: &[Place]) -> Element<Message> {
     }
     let rows: Vec<(&'static str, String)> = places
         .iter()
-        .map(|p| (p.symbol, p.name.to_owned()))
+        .map(|p| (p.kind.symbol(), p.name.clone()))
         .collect();
     let names: Vec<String> = rows.iter().map(|(_, n)| n.clone()).collect();
-    let keys: Vec<&'static str> = places.iter().map(|p| p.name).collect();
+    let keys = names.clone();
     let list = Element::from(ListView {
         label: "Places".into(),
         count: rows.len(),
@@ -1097,7 +1106,7 @@ fn sidebar(d: &Dialog, places: &[Place]) -> Element<Message> {
         multiple: false,
         initial: false,
         row: Box::new(move |i, selected| row(symbol(rows[i].0), rows[i].1.clone(), selected)),
-        key: Some(Box::new(move |i| Key::from(keys[i]))),
+        key: Some(Box::new(move |i| Key::from(keys[i].clone()))),
         type_select: Some(Box::new(move |i| names[i].clone())),
         on_scroll: Box::new(move |s| Message::PlacesScroll(id, s)),
         on_select: Some(Box::new(move |s: Selection| {

@@ -30,15 +30,15 @@ use cupertino_kit::theme::{ColorRole, StateVariant};
 
 use super::view::{self, popup_key};
 use super::{BrowserWindow, Event as WindowEvent, Message, Popup, Session, NO_SCROLL};
-use crate::browser::Browser;
+use crate::browser::{Browser, Listings};
 use crate::columns::{self, ChainLayout, ColumnChain, PREVIEW_WIDTH};
 use crate::metrics::window as window_metrics;
-use crate::model::DirectoryModel;
-use crate::places::window_title;
 use crate::preview::{self as file_preview, PreviewKind};
 use cupertino_kit::files::columns::{column_key, FileColumn, FileColumns, ROW_HEIGHT, ROW_ICON};
 use cupertino_kit::files::entry::Entry;
 use cupertino_kit::files::list::row_key;
+use cupertino_kit::files::model::{DirectoryModel, ModelDelta, ModelWatch, ModelWork};
+use cupertino_kit::files::places::window_title;
 
 /// The side of an icon in the preview column.
 const PREVIEW_ICON: f64 = 128.0;
@@ -49,7 +49,10 @@ const MORE: &str = "More…";
 pub(super) struct ColumnsView {
     pub chain: ColumnChain,
     /// The listings of the chain's other folders, by folder: those before the folder shown, and the selected folder.
+    /// A column whose listing has not opened is empty, and one that did not open stays so.
     listings: HashMap<PathBuf, DirectoryModel>,
+    /// Where a listing let go of while its work runs is kept.
+    kept: Listings,
     /// How far each column is scrolled, by folder.
     scrolls: HashMap<PathBuf, ScrollState>,
     /// What the chain's sideways scroll was last put at the end for.
@@ -111,10 +114,12 @@ impl Chain {
 }
 
 impl ColumnsView {
-    pub fn new(default_width: f64) -> ColumnsView {
+    /// The columns of a window whose listings are kept in `kept` when let go while their work runs.
+    pub fn new(default_width: f64, kept: Listings) -> ColumnsView {
         ColumnsView {
             chain: ColumnChain::new(default_width),
             listings: HashMap::new(),
+            kept,
             scrolls: HashMap::new(),
             pinned: None,
             preview_scroll: NO_SCROLL,
@@ -139,8 +144,17 @@ impl ColumnsView {
             .filter(|f| *f != browser.dir())
             .chain(chain.child.as_deref())
             .collect();
-        self.listings
-            .retain(|dir, _| wanted.contains(&dir.as_path()));
+        let gone: Vec<PathBuf> = self
+            .listings
+            .keys()
+            .filter(|dir| !wanted.contains(&dir.as_path()))
+            .cloned()
+            .collect();
+        for dir in gone {
+            if let Some(listing) = self.listings.remove(&dir) {
+                self.kept.let_go(listing);
+            }
+        }
         let folders: Vec<&Path> = chain.folders.iter().map(PathBuf::as_path).collect();
         self.scrolls.retain(|dir, _| {
             folders.contains(&dir.as_path()) || chain.child.as_deref() == Some(dir)
@@ -152,12 +166,8 @@ impl ColumnsView {
                 }
                 continue;
             }
-            match browser.open_listing(dir) {
-                Ok(listing) => {
-                    self.listings.insert(dir.to_path_buf(), listing);
-                }
-                Err(e) => eprintln!("cupertino-files: cannot list {}: {e}", dir.display()),
-            }
+            self.listings
+                .insert(dir.to_path_buf(), browser.open_listing(dir));
         }
         let (widths, _) = chain.widths(&self.chain);
         let pin = Pin {
@@ -183,13 +193,28 @@ impl ColumnsView {
         columns::layout(&widths, fixed, viewport)
     }
 
-    /// Apply what the listings' threads queued; whether any changed.
+    /// Apply what the listings' work and watches queued; whether any changed.
     pub fn poll(&mut self) -> bool {
         let mut changed = false;
-        for listing in self.listings.values_mut() {
-            changed |= !listing.poll().is_empty();
+        for (dir, listing) in &mut self.listings {
+            for delta in listing.poll() {
+                if let ModelDelta::OpenFailed { error, .. } = &delta {
+                    eprintln!("cupertino-files: cannot list {}: {error}", dir.display());
+                }
+                changed = true;
+            }
         }
         changed
+    }
+
+    /// The work and the watches of the listings, for the program to run.
+    pub fn take_work(&mut self) -> (Vec<ModelWork>, Vec<ModelWatch>) {
+        let (mut works, mut watches) = (Vec::new(), Vec::new());
+        for listing in self.listings.values_mut() {
+            watches.extend(listing.take_watch());
+            works.extend(listing.take_work());
+        }
+        (works, watches)
     }
 
     /// The column of `folder` scrolled.
@@ -210,21 +235,32 @@ impl ColumnsView {
             self.listings.insert(folder.to_path_buf(), listing);
             return false;
         };
-        let left = browser.go_with(listing, Some(&name));
-        self.listings.insert(left.dir().to_path_buf(), left);
-        true
+        self.go_with(browser, listing, &name)
+    }
+
+    /// Show `listing`'s folder in `browser`, selecting the item `name`; whether it is shown at once, the listing left
+    /// becoming a column's, or waits for its first update.
+    fn go_with(&mut self, browser: &mut Browser, listing: DirectoryModel, name: &str) -> bool {
+        match browser.go_with(listing, Some(name)) {
+            Some(left) => {
+                self.listings.insert(left.dir().to_path_buf(), left);
+                true
+            }
+            None => false,
+        }
     }
 
     /// Right (`by` 1): into the selected folder, selecting its first item; Left (-1): back to the folder before,
-    /// selecting the folder left. The item selected then, or `None` when there is nowhere to go.
+    /// selecting the folder left. The item selected then, or `None` when there is nowhere to go or the folder before
+    /// is not listed yet, which the window then shows once it is.
     pub fn step(&mut self, browser: &mut Browser, by: isize) -> Option<PathBuf> {
         if by > 0 {
             let child = self.chain(browser).child?;
             let first = self.listings.get(&child)?.entries().first()?.name.clone();
             let listing = self.listings.remove(&child)?;
-            let left = browser.go_with(listing, Some(&first));
-            self.listings.insert(left.dir().to_path_buf(), left);
-            return Some(child.join(first));
+            return self
+                .go_with(browser, listing, &first)
+                .then(|| child.join(first));
         }
         let dir = browser.dir().to_path_buf();
         let root = self.chain.root()?;
@@ -234,15 +270,14 @@ impl ColumnsView {
         let parent = dir.parent()?.to_path_buf();
         let name = dir.file_name()?.to_string_lossy().into_owned();
         let listing = match self.listings.remove(&parent) {
+            Some(listing) if listing.opened() == Some(false) => {
+                self.listings.insert(parent, listing);
+                return None;
+            }
             Some(listing) => listing,
-            None => browser
-                .open_listing(&parent)
-                .map_err(|e| eprintln!("cupertino-files: cannot list {}: {e}", parent.display()))
-                .ok()?,
+            None => browser.open_listing(&parent),
         };
-        let left = browser.go_with(listing, Some(&name));
-        self.listings.insert(left.dir().to_path_buf(), left);
-        Some(dir)
+        self.go_with(browser, listing, &name).then_some(dir)
     }
 
     /// The folders of the rows of the columns other than the browser's, by row key, for drops.
@@ -274,6 +309,15 @@ impl ColumnsView {
         let first = (top / ROW_HEIGHT).floor() as usize;
         let last = ((bottom / ROW_HEIGHT).ceil() as usize).min(count);
         (first.min(last)..last).collect()
+    }
+}
+
+impl Drop for ColumnsView {
+    /// The listings whose work runs are kept.
+    fn drop(&mut self) {
+        for (_, listing) in self.listings.drain() {
+            self.kept.let_go(listing);
+        }
     }
 }
 
@@ -341,7 +385,8 @@ fn other_column(
     folder: &Path,
     next: Option<&PathBuf>,
 ) -> FileColumn<Message> {
-    let Some(listing) = cols.listings.get(folder) else {
+    let listed = cols.listings.get(folder);
+    let Some(listing) = listed.filter(|listing| listing.opened() != Some(false)) else {
         return FileColumn::Empty {
             folder: folder.to_path_buf(),
         };

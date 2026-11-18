@@ -21,7 +21,7 @@
 //! them; `--backdrop flat|busy` draws them over the window's background or over hard-edged colour bands. Its sheet
 //! shows each state.
 //!
-//! `cargo run -p cupertino-kit --example kit_capture -- kit/controls --scale 2` (the flags are `cupertino-capture`'s)
+//! `cargo run -p cupertino-kit --example kit_capture -- kit/controls --scale 2` (the flags are `cupertino_kit::test::capture`'s)
 //!
 //! The fonts, symbols and theme are the system's, as an application's ([`cupertino_kit::app::options`]). The clock
 //! stands still, so every control shows its resting look, but for the gallery's held states.
@@ -40,7 +40,6 @@ use std::num::NonZeroU32;
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use cupertino_capture::{App, Look, Request, State};
 use cupertino_kit::controls::{
     unobscured_insets, CalendarDate, Canvas, CheckBox, ColorWell, ComboBox, DatePicker, Icon,
     IconDirection, NavigationStack, PopUpButton, Progress, PullDownButton, RadioGroup, ScrollView,
@@ -55,6 +54,7 @@ use cupertino_kit::platform::{
 };
 use cupertino_kit::prelude::*;
 use cupertino_kit::render::{GradientStop, Paint, PaintOp, PixelFormat, Shape};
+use cupertino_kit::test::capture::{App, Look, Request, State};
 use cupertino_kit::test::{Capabilities, ManualClock, TestDriver, WindowEvent, WindowStates};
 use cupertino_kit::text::{AttributedText, ContentPurpose, TextStyle};
 use cupertino_kit::theme::{Color, ColorRole, ControlSize, ThemeTokens};
@@ -1223,5 +1223,5 @@ impl App for Capture {
 }
 
 fn main() -> ExitCode {
-    cupertino_capture::run(|| cupertino_capture::assets().map(|_| Capture))
+    cupertino_kit::test::capture::run(|| cupertino_kit::test::capture::assets().map(|_| Capture))
 }

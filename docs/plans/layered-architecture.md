@@ -16,9 +16,9 @@ Updated by the lead at every merge.
 | | |
 |---|---|
 | Current wave | 4 |
-| Running tasks | W4.6 step 5, W4.8, W4.10 |
+| Running tasks | W4.6 step 5, the W4.8 design |
 | Enforced layers | foundation, system, graphics, models, protocol, transport, testing (126 remaining-work lines) |
-| Waiting on the owner | nothing |
+| Waiting on the owner | the W4.8 design, when written |
 | Last closed wave | 3 |
 
 ## Contents
@@ -777,14 +777,14 @@ W4.7 step 1 (its approved types).
 
 **Owns** the scanner invocations in `cupertino-protocols`. **After** W4.9.
 
-- [ ] Client and server bindings for the three protocols (host, transaction, overview) are generated and compile; nothing uses them yet.
+- [x] (d3e39b518) Client and server bindings for the three protocols (host, transaction, overview) are generated and compile; nothing uses them yet.
 
 #### W4.11 `cupertino-kit` absorbs `cupertino-capture` (S)
 
 **Owns** `capture`, `kit` (`Cargo.toml`, the new module). **Touches** the capture examples of `login files kit`.
 **After** W4.7.
 
-- [ ] The capture command's shared part is a module of `cupertino-kit` behind the `test` feature, beside the headless
+- [x] (b2ea34e41) The capture command's shared part is a module of `cupertino-kit` behind the `test` feature, beside the headless
       backend; the examples enable the feature as a dev-dependency.
 
 #### W4.T Tests of wave 4's crates
@@ -1204,3 +1204,7 @@ One line per change to a decision or approval of a design: date, number, what, w
   headless backend or name renderer internals require `test`; `kit::controls` lists only items with callers;
   `render::picture` hands its callback `None` for a picture it cannot draw; `kit::image` refuses pictures over 2²⁶
   pixels; `system_color` answers from the theme Kit started on and reads no file.
+- 2026-11-18: lead, W4.8: the implementer stopped before any change: Files' views emit the app's own messages and
+  take its session and window state, its operations need its core (`Entry`, places, udisks) and start threads, the
+  portal's chooser draws rows of its own, and the two `places` copies differ. W4.8 needs a design approved like W4.7
+  step 1 before code; an architect writes it in `crates/cupertino-ui-controls/README.md`.

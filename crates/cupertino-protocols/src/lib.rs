@@ -1,5 +1,6 @@
 //! Generated bindings of the private `protocols/cupertino-shell-v1.xml`, `protocols/cupertino-screenshot-v1.xml`,
-//! `protocols/cupertino-control-v1.xml` and `protocols/cupertino-global-shortcuts-v1.xml`: enable
+//! `protocols/cupertino-control-v1.xml`, `protocols/cupertino-global-shortcuts-v1.xml`, `protocols/cupertino-host-v1.xml`,
+//! `protocols/cupertino-transaction-v1.xml` and `protocols/cupertino-overview-v1.xml`: enable
 //! `client` in shell processes and `server` in the display server. The public protocols are `cupertino-app-protocols`,
 //! re-exported here as `app_effects` and `scroll`.
 
@@ -11,6 +12,9 @@ const _: &[u8] = include_bytes!("../protocols/cupertino-shell-v1.xml");
 const _: &[u8] = include_bytes!("../protocols/cupertino-screenshot-v1.xml");
 const _: &[u8] = include_bytes!("../protocols/cupertino-control-v1.xml");
 const _: &[u8] = include_bytes!("../protocols/cupertino-global-shortcuts-v1.xml");
+const _: &[u8] = include_bytes!("../protocols/cupertino-overview-v1.xml");
+const _: &[u8] = include_bytes!("../protocols/cupertino-transaction-v1.xml");
+const _: &[u8] = include_bytes!("../protocols/cupertino-host-v1.xml");
 
 #[cfg(feature = "client")]
 pub mod client {
@@ -76,6 +80,51 @@ pub mod client {
         use self::__interfaces::*;
 
         wayland_scanner::generate_client_code!("protocols/cupertino-global-shortcuts-v1.xml");
+    }
+
+    /// Bindings of `protocols/cupertino-overview-v1.xml`, in a module of their own because each scanner run defines the
+    /// same helper items.
+    pub mod overview {
+        use wayland_client;
+        use wayland_client::protocol::*;
+
+        pub mod __interfaces {
+            use wayland_client::protocol::__interfaces::*;
+            wayland_scanner::generate_interfaces!("protocols/cupertino-overview-v1.xml");
+        }
+        use self::__interfaces::*;
+
+        wayland_scanner::generate_client_code!("protocols/cupertino-overview-v1.xml");
+    }
+
+    /// Bindings of `protocols/cupertino-transaction-v1.xml`, in a module of their own because each scanner run defines the
+    /// same helper items.
+    pub mod transaction {
+        use wayland_client;
+        use wayland_client::protocol::*;
+
+        pub mod __interfaces {
+            use wayland_client::protocol::__interfaces::*;
+            wayland_scanner::generate_interfaces!("protocols/cupertino-transaction-v1.xml");
+        }
+        use self::__interfaces::*;
+
+        wayland_scanner::generate_client_code!("protocols/cupertino-transaction-v1.xml");
+    }
+
+    /// Bindings of `protocols/cupertino-host-v1.xml`, in a module of their own because each scanner run defines the
+    /// same helper items.
+    pub mod host {
+        use wayland_client;
+        use wayland_client::protocol::*;
+
+        pub mod __interfaces {
+            use wayland_client::protocol::__interfaces::*;
+            wayland_scanner::generate_interfaces!("protocols/cupertino-host-v1.xml");
+        }
+        use self::__interfaces::*;
+
+        wayland_scanner::generate_client_code!("protocols/cupertino-host-v1.xml");
     }
 
     pub use cupertino_app_protocols::client::{app_effects, layers, scroll, semantics};
@@ -145,6 +194,51 @@ pub mod server {
         use self::__interfaces::*;
 
         wayland_scanner::generate_server_code!("protocols/cupertino-global-shortcuts-v1.xml");
+    }
+
+    /// Bindings of `protocols/cupertino-overview-v1.xml`, in a module of their own because each scanner run defines the
+    /// same helper items.
+    pub mod overview {
+        use wayland_server;
+        use wayland_server::protocol::*;
+
+        pub mod __interfaces {
+            use wayland_server::protocol::__interfaces::*;
+            wayland_scanner::generate_interfaces!("protocols/cupertino-overview-v1.xml");
+        }
+        use self::__interfaces::*;
+
+        wayland_scanner::generate_server_code!("protocols/cupertino-overview-v1.xml");
+    }
+
+    /// Bindings of `protocols/cupertino-transaction-v1.xml`, in a module of their own because each scanner run defines the
+    /// same helper items.
+    pub mod transaction {
+        use wayland_server;
+        use wayland_server::protocol::*;
+
+        pub mod __interfaces {
+            use wayland_server::protocol::__interfaces::*;
+            wayland_scanner::generate_interfaces!("protocols/cupertino-transaction-v1.xml");
+        }
+        use self::__interfaces::*;
+
+        wayland_scanner::generate_server_code!("protocols/cupertino-transaction-v1.xml");
+    }
+
+    /// Bindings of `protocols/cupertino-host-v1.xml`, in a module of their own because each scanner run defines the
+    /// same helper items.
+    pub mod host {
+        use wayland_server;
+        use wayland_server::protocol::*;
+
+        pub mod __interfaces {
+            use wayland_server::protocol::__interfaces::*;
+            wayland_scanner::generate_interfaces!("protocols/cupertino-host-v1.xml");
+        }
+        use self::__interfaces::*;
+
+        wayland_scanner::generate_server_code!("protocols/cupertino-host-v1.xml");
     }
 
     pub use cupertino_app_protocols::server::{app_effects, layers, scroll, semantics};

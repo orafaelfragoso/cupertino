@@ -76,11 +76,12 @@ now): the first one, and any that would land in the future or more than a second
 at the time it was read, and the ones after keep the compositor's spacing. A button's serial is the transport's latest
 input serial.
 
-Where the compositor lists ABGR8888, a surface presenting from shared memory takes its frame drawn straight into the
-buffer it leases (`present_into`): the CPU renderer paints the frame's damage, the damage of frames that were not
-presented and what the buffer missed, or all of it when its pixels are unknown, into the buffer, and nothing is copied;
-a lease the frame does not use (its drawing failed) goes back unattached. Elsewhere, and for a frame of the GPU
-renderer read back, `present` copies the renderer's frame (premultiplied RGBA) into a leased buffer, byte for byte as
+Where the compositor lists ABGR8888, a submitted frame in shared memory is drawn straight into the buffer it leases
+(`hand_over.rs`): the CPU renderer paints the frame's damage, the damage of frames that were not presented and what
+the buffer missed, or all of it when its pixels are unknown, into the buffer, and nothing is copied; a buffer the frame
+does not use (its drawing failed) goes back unattached. The window system lends no buffer to the UI thread
+(`present_into` is not taken). Elsewhere, and for a frame of the GPU renderer read back, the frame is copied from the
+renderer's own image, as `present` copies the renderer's frame (premultiplied RGBA) into a leased buffer, byte for byte as
 ABGR8888 where the compositor lists that format and converted to ARGB8888 otherwise: its damage, the damage of
 frames that were not presented, and what the buffer missed, or all of it when the buffer's pixels are unknown. The
 compositor is told only the frame's damage and the carried damage, or all of the window when the frame changed size.
@@ -166,17 +167,24 @@ the own fence and a buffer is reused one commit after its release (three buffers
 or that the compositor refuses moves the surface to shared memory for good; the transport destroys its syncobj
 surface object before the first shared-memory attach.
 
-A window's content frame is drawn and committed away from the UI thread (`WindowSystem::submit`): the window system
-takes the frame's display list, resources, damage and the window's renderer (shared, `SharedRenderer`), prepares the
-commit on the UI thread (a free buffer chosen or allocated, its sync points, the configure it answers:
-`Connection::gpu_commit`, `BufferLease::detach`) and hands the rest over. A window on the GPU has its frame drawn on
-the render thread (`gpu_present::Draw`); one drawing into shared memory in ABGR8888 has it drawn on the CPU pool
-(`cupertino_ui_core::pool`), one task per surface, into the buffer it detached. The thread that drew it commits (a frame
-in shared memory never waits for the render thread, which may be making a device's programs),
-acknowledging the configure, attaching and committing in that order, after it sent the frame back; the next dispatch
-reads it (before what the compositor said of it) and tells the runtime `WindowEvent::Shown`. Until then the window
-draws no other frame, and freeing a surface's GPU buffers waits for the render thread's work before it. The raised
-layer, the surface layers, a solid colour and shared memory in ARGB8888 still present on the UI thread.
+A window's frame is drawn and committed away from the UI thread (`WindowSystem::submit`, `hand_over.rs`), its raised
+layer and surface layers with it: the window system takes the frame's display list, resources, damage and the
+window's renderer (shared, `SharedRenderer`), and each changed layer's list and renderer (`LayerList`). On the UI
+thread it sends what applies with the window's commit (the surface layers' values, made or gone, and the raised layer
+placed or hidden), makes sure every surface the frame draws has a free buffer (else the frame is `NotReady` and the
+window waits for all of them), prepares each surface's commit (a free buffer chosen or allocated, its sync points, the
+configure the window's answers: `Connection::gpu_commit`, `BufferLease::detach`), the window's first, and hands the
+rest over. A frame with a surface on the GPU is drawn on the render thread (`gpu_present::Draw`); one all in shared
+memory on the CPU pool (`cupertino_ui_core::pool`), one lane per window, into the buffers it detached: straight into
+them where the renderer draws into memory in ABGR8888, else into the renderer's own image and copied (converted to
+ARGB8888, or read back from the GPU). Once every surface is drawn, the thread that drew them sends the frame back and
+commits the surface layers, then the raised layer's subsurface, then the window, acknowledging the configure, attaching
+and committing in that order; a surface that cannot be drawn, or a renderer that panics, leaves the whole frame
+uncommitted, and the panic goes on in the instance that submitted it. A frame in shared memory never waits for the
+render thread, which may be making a device's programs. The next dispatch reads the frame back (before what the
+compositor said of it), gives the buffers back and tells the runtime `WindowEvent::Shown`. Until then the window draws
+no other frame, and freeing a surface's GPU buffers waits for the render thread's work before it. No frame is
+declined; only a solid colour (`present_solid`) is still shown from the UI thread.
 
 `examples/gpu-window.rs` is the presenter's check window, a client for `cupertino-server`:
 `--frames`, `--reset-every`, `--purge-every`, `--losses`, `--renderer` (frames drawn by the GPU renderer and copied

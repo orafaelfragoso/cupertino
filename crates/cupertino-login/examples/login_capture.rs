@@ -1,5 +1,5 @@
 //! The lock screen and the login screen drawn to PNGs for look checks:
-//! `cargo run -p cupertino-login --example login_capture -- SURFACE [flags]` (crates/cupertino-capture/README.md).
+//! `cargo run -p cupertino-login --example login_capture -- SURFACE [flags]` (crates/cupertino-kit/README.md).
 //!
 //! Surfaces: `lock` (the lock screen), `picker` (the login screen's accounts) and `password` (the login screen asking
 //! the chosen account's password). `--field empty|typed|help` shows the password field empty, with a password typed
@@ -18,11 +18,11 @@ use std::num::NonZeroU32;
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use cupertino_capture::{App, Look, Request, State};
 use cupertino_kit::core::{Application, Command, Key, Window, WindowKey};
 use cupertino_kit::geometry::Size;
 use cupertino_kit::platform::{KeyEvent, Keysym, Mods, SystemAppearance, Timestamp, WindowId};
 use cupertino_kit::render::PixelFormat;
+use cupertino_kit::test::capture::{App, Look, Request, State};
 use cupertino_kit::test::{Capabilities, ManualClock, TestDriver, WindowEvent, WindowStates};
 use cupertino_kit::text::TextSystem;
 use cupertino_kit::theme::ThemeTokens;
@@ -438,8 +438,8 @@ fn draw(look: Look, scale: f32, wallpaper: Source, field: FieldState) -> Result<
 }
 
 fn main() -> ExitCode {
-    cupertino_capture::run(|| {
-        cupertino_capture::assets()?;
+    cupertino_kit::test::capture::run(|| {
+        cupertino_kit::test::capture::assets()?;
         Ok(Login {
             wallpapers: [None, None],
         })

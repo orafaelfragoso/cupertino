@@ -51,7 +51,7 @@ Rules and feature configurations are in `.config/validation.toml`. The root mani
 ## Running the desktop
 
 - Nested: `cargo run -p cupertino-server -- --winit --spawn foot` with `XDG_DATA_DIRS="$PWD/crates/cupertino-files/data:$PWD/crates/cupertino-settings/data:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"`.
-- One surface in light and dark at any scale: `cargo run -p APP --example APP_capture -- SURFACE [flags]` (`crates/cupertino-capture/README.md`). Never capture with your real `HOME`.
+- One surface in light and dark at any scale: `cargo run -p APP --example APP_capture -- SURFACE [flags]` (`crates/cupertino-kit/README.md`). Never capture with your real `HOME`.
 - Release build of every program: `cargo build-programs`. Packages: `makepkg -si` in `packaging/arch/cupertino`.
 
 ## Installed-session development

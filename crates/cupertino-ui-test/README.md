@@ -98,7 +98,8 @@ thumbnail, a file read) wakes it, or the timeout passes, which only guards again
 counts, so none is lost between draining the runtime and waiting: a test drains, checks its condition, and waits only
 when it does not hold yet.
 
-The headless window system declines every submitted frame, so the runtime draws and presents it itself.
+The headless window system declines every submitted frame, so the runtime draws and presents it itself, its raised
+layer and surface layers with it (`present_layer`, `present_surface_layers`, `layers`, `surface_layers`).
 `HeadlessWindowSystem::set_submit(submit)` takes them instead, as a window system that draws them on other threads
-does: `submit` gets each window's `Submission` and a `Returns`, whose `send` queues the window's `WindowEvent::Shown`
+does: `submit` gets each window's `Submission` (the changes of its layers in it) and a `Returns`, whose `send` queues the window's `WindowEvent::Shown`
 (or any event) from any thread for the next dispatch and wakes the runtime.

@@ -81,3 +81,15 @@ required-features = ["test"]
 [[test]]
 name = "layers-handed-over"
 required-features = ["test"]
+
+[[test]]
+name = "capture"
+required-features = ["test"]
+
+[[test]]
+name = "preferences"
+required-features = ["test"]
+
+[[test]]
+name = "settings"
+required-features = ["test"]

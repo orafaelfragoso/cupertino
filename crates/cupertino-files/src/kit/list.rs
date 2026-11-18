@@ -26,10 +26,10 @@ use cupertino_kit::layout::{
 use cupertino_kit::platform::{KeyEvent, Keysym, Mods, MouseButton, PointerEvent};
 use cupertino_kit::text::{AttributedText, FontWeight, ParagraphStyle, TextStyle};
 
-use super::band::{self, Band};
-use super::clicks::Clicks;
-use super::grid::by_name;
-use super::{Event as WindowEvent, Message};
+use super::{view_events, Event as WindowEvent, Message};
+use cupertino_kit::files::band::{self, Band};
+use cupertino_kit::files::clicks::Clicks;
+use cupertino_kit::files::grid::by_name;
 use cupertino_kit::files::metrics::drag;
 
 const TAB: Keysym = Keysym(0xff09);
@@ -340,7 +340,9 @@ impl Widget<Message> for RowCell {
             Event::Wake(now) => {
                 let mut presses = self.presses.borrow_mut();
                 let held = presses.press.is_some();
-                presses.clicks.wake(self.window, now, held, cx);
+                presses
+                    .clicks
+                    .wake(&view_events(self.window), now, held, cx);
                 Propagation::Continue
             }
             Event::Cancel => {
@@ -456,7 +458,7 @@ impl Gestures {
 
     fn follow(&self, pointer: Point, cx: &mut EventCx<'_, Message>) {
         if let Some(shown) = self.shown(cx) {
-            band::follow(self.window, self.scroll, pointer, shown, cx);
+            band::follow(&view_events(self.window), self.scroll, pointer, shown, cx);
         }
     }
 }
@@ -598,7 +600,9 @@ impl Widget<Message> for Gestures {
                 {
                     let mut presses = self.presses.borrow_mut();
                     let held = presses.press.is_some();
-                    presses.clicks.wake(self.window, now, held, cx);
+                    presses
+                        .clicks
+                        .wake(&view_events(self.window), now, held, cx);
                 }
                 let band = self.presses.borrow().band.clone();
                 if let Some(band) = band {

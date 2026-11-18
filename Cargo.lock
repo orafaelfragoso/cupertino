@@ -1765,8 +1765,14 @@ name = "cupertino-ui-files"
 version = "0.1.0"
 dependencies = [
  "cupertino-apps",
+ "cupertino-assets",
  "cupertino-geometry",
+ "cupertino-theme",
  "cupertino-trash",
+ "cupertino-ui-controls",
+ "cupertino-ui-core",
+ "cupertino-ui-render",
+ "cupertino-ui-test",
  "cupertino-ui-text",
  "libc",
  "mime_guess",

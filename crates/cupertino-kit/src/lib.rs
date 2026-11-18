@@ -171,11 +171,23 @@ pub mod prelude {
 /// The file family: a folder's items, their order, types, tags and names, the icon layout, opening, renaming and the
 /// file operations, and the measured metrics of the file views.
 pub mod files {
+    pub use cupertino_ui_files::ViewEvent;
+
     /// The virtual folder of the installed applications.
     pub mod applications {
         pub use cupertino_ui_files::applications::{
             any_installed, application_dirs, location, session_entries,
         };
+    }
+
+    /// The rubber band, which the list draws as the grid does.
+    pub mod band {
+        pub use cupertino_ui_files::band::{follow, view, Band};
+    }
+
+    /// What a press on an item means besides selecting it, in the list as in the grid.
+    pub mod clicks {
+        pub use cupertino_ui_files::clicks::Clicks;
     }
 
     /// An item of a folder.
@@ -186,6 +198,13 @@ pub mod files {
     /// The direction a key moves the keyboard in a layout.
     pub mod geom {
         pub use cupertino_ui_files::geom::Direction;
+    }
+
+    /// The folder as a grid of icons.
+    pub mod grid {
+        pub use cupertino_ui_files::grid::{
+            by_name, cell_index, cell_key, laid_out_name, name, Grab, IconGrid, ItemIcon, NameShape,
+        };
     }
 
     /// The art of the common items.
@@ -239,17 +258,12 @@ pub mod files {
 
         /// The selection's look.
         pub mod selection {
-            pub use cupertino_ui_files::metrics::selection::{
-                BUBBLE_BORDER_ALPHA, BUBBLE_BORDER_MAX, BUBBLE_DIVISOR, BUBBLE_RADIUS_RATIO,
-                CONTEXT_RING,
-            };
+            pub use cupertino_ui_files::metrics::selection::CONTEXT_RING;
         }
 
         /// The rubber band.
         pub mod marquee {
-            pub use cupertino_ui_files::metrics::marquee::{
-                AUTOSCROLL_INTERVAL, BORDER_WIDTH, EDGE_ZONE, MAX_STEP,
-            };
+            pub use cupertino_ui_files::metrics::marquee::BORDER_WIDTH;
         }
 
         /// Dragging items.

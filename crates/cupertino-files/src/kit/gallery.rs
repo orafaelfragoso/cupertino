@@ -18,12 +18,12 @@ use cupertino_kit::layout::{
 use cupertino_kit::text::{AttributedText, TextStyle};
 
 use super::columns;
-use super::grid::{IconGrid, ItemIcon};
 use super::view::{name_field, shown_selection, under_row};
 use super::{BrowserWindow, Event as WindowEvent, Message, Session};
 use crate::places::window_title;
 use crate::settings::GalleryViewSettings;
 use cupertino_kit::files::entry::Entry;
+use cupertino_kit::files::grid::{IconGrid, ItemIcon};
 use cupertino_kit::files::layout::icon::{self, FontMetrics, IconLayout, IconParams};
 
 /// Room around the large picture and its name.
@@ -208,6 +208,7 @@ fn strip(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
         names: None,
         revision: session.view_revision,
         strip: true,
+        on_event: super::view_events(id),
     });
     let scroll = Element::from(ScrollView {
         content: grid,

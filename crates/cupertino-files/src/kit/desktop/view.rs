@@ -31,8 +31,8 @@ use cupertino_kit::theme::{Color, ColorRole, InteractionVariant, StateVariant};
 
 use super::Message;
 use crate::desktop::{backdrop_radius, item_frames};
-use crate::kit::grid::laid_out_name;
 use crate::metrics::desktop as m;
+use cupertino_kit::files::grid::laid_out_name;
 use cupertino_kit::files::metrics::{drag, timing::DOUBLE_CLICK_INTERVAL};
 use cupertino_kit::files::rename::{RenameEvent, RenameTrigger};
 

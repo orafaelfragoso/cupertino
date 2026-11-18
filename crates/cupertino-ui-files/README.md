@@ -24,6 +24,15 @@ public items: the family builds on them and `cupertino-ui-controls` gains no dep
 | `operations` | file changes, blocking functions the program runs off its UI thread | `rename_item` (no replace), `new_folder`, `new_folder_with`, `make_alias`, `duplicate`, `drop_action`, `same_volume`, `drop_into` (move or copy, `name copy` on a clash), `transfer` (the same for a list of items, with `Progress` and a `Cancel`), `duplicate_with`, `stopped`, `is_cancelled` |
 | `item_art` | the common items' art | `Art::{for_icon}` (folder, text, document, archive), `draw(art, px, seed)` (premultiplied RGBA) |
 | `metrics` | the views' measured values | `icon_view`, `list_view`, `column_view`, `timing`, `selection`, `marquee`, `drag` |
+| `grid` | the folder as a grid of icons with their names | `IconGrid<M>` (the content of the program's scroll view), `ItemIcon`, `NameShape`, `Grab`, `name` and `laid_out_name` (an item's name as the grid draws and lays it out), `cell_key`, `cell_index` |
+| `band`, `clicks` | the rubber band, and what a press on an item means besides selecting it (a double click opens, a press on the only selected item's name renames it after the double-click interval) | `Band`, `follow`, `view`; `Clicks`, which the list in Files still uses until it joins the family |
+| the crate's root | what a view reports | `ViewEvent` |
+
+A view is a widget with public fields, generic over the program's message `M`, as every control is. It takes plain
+values (the items, the selection, the scroll state, a function for an item's icon and one for what stands under an
+icon), never a model, a session or a window, and reports through one function, `on_event`, which turns each
+`ViewEvent` into the program's message or answers `None` for an event the program has no use for: nothing is sent
+for it.
 
 The family starts no thread and touches no file on its own: the functions that read or write files are blocking
 functions their caller runs, and only `operations` and the tag functions write, into locations the caller gives.

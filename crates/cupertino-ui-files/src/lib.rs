@@ -5,11 +5,20 @@
 //! * [`layout`]: the icon layout, with the measured metrics of [`metrics`]; [`geom`]: the direction a key moves in it;
 //! * [`rename`], [`name_edit`]: name checks, free names and the name being edited; [`open`]: default applications and
 //!   the Open With list; [`operations`]: new folders, renames, aliases, copies and moves, as blocking functions;
-//! * [`item_art`]: the art of the common items.
+//! * [`item_art`]: the art of the common items;
+//! * [`grid`]: the folder as a grid of icons ([`grid::IconGrid`]), which reports through [`ViewEvent`];
+//!   [`band`], [`clicks`]: the rubber band and what a press on an item means besides selecting it.
+
+use cupertino_geometry::{Point, Rect};
+use cupertino_ui_controls::Selection;
+use cupertino_ui_core::layout::ScrollState;
 
 pub mod applications;
+pub mod band;
+pub mod clicks;
 pub mod entry;
 pub mod geom;
+pub mod grid;
 pub mod item_art;
 pub mod layout;
 pub mod metrics;
@@ -22,3 +31,25 @@ pub mod recents;
 pub mod rename;
 pub mod sort;
 pub mod tags;
+
+/// What a file view reports. The program gives each view one function that turns an event into its message, or into
+/// none.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ViewEvent {
+    /// The selection a press, a key, the band or typing made.
+    Select(Selection),
+    /// Open item `index`: a double click or Return.
+    Open(usize),
+    /// A secondary press on item `index`, or on empty space.
+    SecondaryPress(Option<usize>),
+    /// Open the context menu at this point of the window.
+    ContextMenu(Point),
+    /// A press on items of the grid went far enough to drag them.
+    DragOut(grid::Grab),
+    /// The rubber band being drawn, in the view's content; `None` once it is let go.
+    Band(Option<Rect>),
+    /// The view scrolled: a band held past its edge.
+    Scroll(ScrollState),
+    /// A press on the name of the only selected item had no second press: edit the name of item `index`.
+    Rename(usize),
+}

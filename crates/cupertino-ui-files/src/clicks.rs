@@ -3,12 +3,14 @@
 //! renaming it once the interval passes without another press ([`RenameTrigger`]). A drag, a key, a scroll or another
 //! folder cancels the rename.
 
-use cupertino_kit::core::EventCx;
-use cupertino_kit::platform::Timestamp;
+use std::rc::Rc;
 
-use super::{Event as WindowEvent, Message};
-use cupertino_kit::files::metrics::timing::DOUBLE_CLICK_INTERVAL;
-use cupertino_kit::files::rename::{RenameEvent, RenameTrigger};
+use cupertino_ui_core::platform::Timestamp;
+use cupertino_ui_core::EventCx;
+
+use crate::metrics::timing::DOUBLE_CLICK_INTERVAL;
+use crate::rename::{RenameEvent, RenameTrigger};
+use crate::ViewEvent;
 
 fn seconds(at: Timestamp) -> f64 {
     at.0 as f64 / 1e9
@@ -16,7 +18,7 @@ fn seconds(at: Timestamp) -> f64 {
 
 /// The presses of a view, in its node state.
 #[derive(Debug, Default)]
-pub(super) struct Clicks {
+pub struct Clicks {
     /// The item last pressed, and when.
     last: Option<(usize, f64)>,
     rename: RenameTrigger,
@@ -65,21 +67,29 @@ impl Clicks {
     }
 
     /// Ask the view's node to wake once a pending rename is due.
-    pub fn arm(&self, cx: &mut EventCx<'_, Message>) {
+    pub fn arm<M>(&self, cx: &mut EventCx<'_, M>) {
         if let Some(deadline) = self.rename.deadline() {
             // the trigger fires strictly after its interval
             cx.wake_at(Timestamp((deadline * 1e9) as u64 + 1));
         }
     }
 
-    /// At a wake at `now`: start the rename that is due, in the window `window`. While the press is `held` it waits:
-    /// the press may still become a drag, and the release [arms](Self::arm) it again.
-    pub fn wake(&mut self, window: u64, now: Timestamp, held: bool, cx: &mut EventCx<'_, Message>) {
+    /// At a wake at `now`: start the rename that is due, reported through `on_event`. While the press is `held` it
+    /// waits: the press may still become a drag, and the release [arms](Self::arm) it again.
+    pub fn wake<M>(
+        &mut self,
+        on_event: &Rc<dyn Fn(ViewEvent) -> Option<M>>,
+        now: Timestamp,
+        held: bool,
+        cx: &mut EventCx<'_, M>,
+    ) {
         if held {
             return;
         }
         if let Some(RenameEvent::Begin(index)) = self.rename.poll(seconds(now)) {
-            cx.emit(Message::Window(window, WindowEvent::RenameItem(index)));
+            if let Some(message) = on_event(ViewEvent::Rename(index)) {
+                cx.emit(message);
+            }
         }
     }
 }

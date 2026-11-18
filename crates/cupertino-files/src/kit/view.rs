@@ -29,7 +29,6 @@ use super::columns;
 use super::context::Secondary;
 use super::drops;
 use super::gallery;
-use super::grid::{self, IconGrid};
 use super::jobs::Job;
 use super::list::{self, Gestures, RowCell};
 use super::progress::{self, ShowsProgress};
@@ -47,6 +46,7 @@ use crate::settings::{default_columns, ColumnId, IconViewSettings};
 use crate::udisks::Passphrase;
 use crate::window::{metrics, path_chain, status_text, ViewMode};
 use cupertino_kit::files::entry::Entry;
+use cupertino_kit::files::grid::{self, IconGrid};
 use cupertino_kit::files::layout::icon::{
     self, Flow, FontMetrics, IconLayout, IconParams, SectionSpec,
 };
@@ -1246,6 +1246,7 @@ fn icons(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
         }),
         revision: session.view_revision,
         strip: false,
+        on_event: super::view_events(id),
     });
     // the grid starts below the toolbar row, and scrolls under it
     let content = Element::new(Stack {

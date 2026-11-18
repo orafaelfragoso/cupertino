@@ -143,7 +143,7 @@ fn item_under(keys: &[Key], rows: &HashMap<Key, u64>) -> Option<(Key, u64)> {
         .find_map(|key| Some((key.clone(), *rows.get(key)?)));
     row.or_else(|| {
         keys.iter()
-            .find_map(|key| Some((key.clone(), super::grid::cell_index(key)?)))
+            .find_map(|key| Some((key.clone(), cupertino_kit::files::grid::cell_index(key)?)))
     })
 }
 

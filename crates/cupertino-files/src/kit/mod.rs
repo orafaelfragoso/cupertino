@@ -3,15 +3,12 @@
 //! runs.
 
 mod announce;
-mod band;
-mod clicks;
 mod columns;
 mod context;
 pub mod desktop;
 mod dragged;
 mod drops;
 mod gallery;
-mod grid;
 mod item_icons;
 mod jobs;
 mod list;
@@ -29,7 +26,6 @@ mod toolbar;
 mod transfer;
 mod view;
 
-pub use dragged::Grab;
 pub use drops::Destination;
 pub use jobs::{JobEvent, PROGRESS_WINDOW_DELAY};
 pub use list::RowGrab;
@@ -79,6 +75,7 @@ use crate::window::ViewMode;
 use crate::window_prefs::WindowPrefs;
 use cupertino_icons::thumbnail::Thumbnailer;
 use cupertino_kit::files::entry::{Entry, Kind};
+use cupertino_kit::files::grid::Grab;
 use cupertino_kit::files::name_edit::NameEdit;
 use cupertino_kit::files::open::{
     command_with, default_app_id, open_command, open_with, OpenError,
@@ -86,6 +83,7 @@ use cupertino_kit::files::open::{
 use cupertino_kit::files::operations::{self, DropAction};
 use cupertino_kit::files::sort::SortSpec;
 use cupertino_kit::files::tags::{self, TagColor};
+use cupertino_kit::files::ViewEvent;
 
 /// Identifier of the window for the server, as the desktop entry names it.
 pub const APP_ID: &str = "cupertino-files";
@@ -335,6 +333,23 @@ fn wake_channel() -> (Wake, async_channel::Receiver<()>) {
         let _ = wake.try_send(());
     });
     (wake, woken)
+}
+
+/// What window `id`'s file views report, as its messages: each event to the window's `Event` for it.
+fn view_events(id: u64) -> Rc<dyn Fn(ViewEvent) -> Option<Message>> {
+    Rc::new(move |event| {
+        let event = match event {
+            ViewEvent::Select(selection) => Event::Select(selection),
+            ViewEvent::Open(index) => Event::Open(index),
+            ViewEvent::SecondaryPress(index) => Event::SecondaryPress(index),
+            ViewEvent::ContextMenu(at) => Event::ContextMenu(at),
+            ViewEvent::DragOut(grab) => Event::DragOut(grab),
+            ViewEvent::Band(band) => Event::Band(band),
+            ViewEvent::Scroll(scroll) => Event::Scroll(scroll),
+            ViewEvent::Rename(index) => Event::RenameItem(index),
+        };
+        Some(Message::Window(id, event))
+    })
 }
 
 /// The browser of `folder`, what wakes when its model has changes waiting, and what wakes it: the window's other tabs

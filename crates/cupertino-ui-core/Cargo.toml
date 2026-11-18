@@ -23,6 +23,8 @@ rustix = { version = "1", features = ["time"] }
 tracing = "0.1"
 
 [dev-dependencies]
+cupertino-assets = { path = "../cupertino-assets" }
+cupertino-ui-test = { path = "../cupertino-ui-test" }
 gungraun = "=0.20.0"
 
 [[bench]]

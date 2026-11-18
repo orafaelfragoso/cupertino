@@ -296,6 +296,7 @@ impl GpuDevice {
     ) -> Result<GpuDevice, GpuError> {
         let generation = ready.generation;
         let programs = render_thread::run(move |on| {
+            let _programs = tracing::trace_span!("gpu.surface_programs").entered();
             let programs = Programs::new(on.device_of(generation)?)?;
             Ok::<_, GpuError>(Resident::new(on, programs))
         })?;

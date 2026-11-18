@@ -2092,8 +2092,8 @@ impl WindowSystem for WaylandWindowSystem {
     }
 
     /// A window drawn on the GPU has its frame drawn on the render thread into a free buffer; one drawn into shared
-    /// memory in the renderer's byte order has it drawn on the CPU pool into the buffer it leases. Either way the
-    /// render thread commits it, acknowledging the configure that was the latest when the frame was submitted. Other
+    /// memory in the renderer's byte order has it drawn on the CPU pool into the buffer it leases. The thread that drew
+    /// it commits it, acknowledging the configure that was the latest when the frame was submitted. Other
     /// windows (shared memory in the other byte order, a renderer that draws into no memory) are declined.
     fn submit(&mut self, window: WindowId, frame: &Submission) -> Result<Submitted, PlatformError> {
         let surface = self.window_mut(window)?.surface;
@@ -2268,18 +2268,16 @@ impl WindowSystem for WaylandWindowSystem {
                 .filter_map(|r| inside(&r))
                 .collect();
             let damage = (!resized).then_some(changed);
-            render_thread::hand_over(move || {
-                let _scope = scope.as_ref().map(diag::Scope::enter);
-                let _ = tx.send(Finished {
-                    window,
-                    surface,
-                    size,
-                    drew: Drew::Shm(buffer, Ok((id, damage.clone()))),
-                });
-                waker.wake();
-                let _ =
-                    tracing::trace_span!("wl.commit").in_scope(|| commit.commit(damage.as_deref()));
+            // committed by the pool thread that drew it: a frame in shared memory waits for nothing the render thread
+            // does, such as the programs of a device being made
+            let _ = tx.send(Finished {
+                window,
+                surface,
+                size,
+                drew: Drew::Shm(buffer, Ok((id, damage.clone()))),
             });
+            waker.wake();
+            let _ = tracing::trace_span!("wl.commit").in_scope(|| commit.commit(damage.as_deref()));
         });
         Ok(Submitted::Taken)
     }

@@ -1017,10 +1017,10 @@ pub trait WindowSystem {
         None
     }
     /// Takes `frame` to draw and show away from the UI thread: drawn on the process's render thread (a window drawn on
-    /// the GPU) or on the CPU pool (one drawn into its shared-memory buffers), and committed by the render thread,
-    /// which acknowledges the window's latest configure as `submit` is called, attaches the buffer and commits, in that
-    /// order. A window system that
-    /// does not draw this way declines (the default), and the window draws and presents the frame itself.
+    /// the GPU) or on the CPU pool (one drawn into its shared-memory buffers), and committed by the thread that drew
+    /// it, which acknowledges the window's latest configure as `submit` is called, attaches the buffer and commits, in
+    /// that order. A window system that does not draw this way declines (the default), and the window draws and
+    /// presents the frame itself.
     fn submit(&mut self, window: WindowId, frame: &Submission) -> Result<Submitted, PlatformError> {
         let _ = (window, frame);
         Ok(Submitted::Declined)

@@ -171,7 +171,8 @@ takes the frame's display list, resources, damage and the window's renderer (sha
 commit on the UI thread (a free buffer chosen or allocated, its sync points, the configure it answers:
 `Connection::gpu_commit`, `BufferLease::detach`) and hands the rest over. A window on the GPU has its frame drawn on
 the render thread (`gpu_present::Draw`); one drawing into shared memory in ABGR8888 has it drawn on the CPU pool
-(`cupertino_ui_core::pool`), one task per surface, into the buffer it detached. Either way the render thread commits,
+(`cupertino_ui_core::pool`), one task per surface, into the buffer it detached. The thread that drew it commits (a frame
+in shared memory never waits for the render thread, which may be making a device's programs),
 acknowledging the configure, attaching and committing in that order, after it sent the frame back; the next dispatch
 reads it (before what the compositor said of it) and tells the runtime `WindowEvent::Shown`. Until then the window
 draws no other frame, and freeing a surface's GPU buffers waits for the render thread's work before it. The raised

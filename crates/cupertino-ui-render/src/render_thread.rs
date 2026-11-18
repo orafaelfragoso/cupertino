@@ -720,6 +720,7 @@ fn warm(node: Option<&Path>, cache: Option<&Path>, signals: &WarmSignals) -> Res
 /// On the render thread: takes the device the warm-up of `generation` made, unless another was asked for since or
 /// the last claim went meanwhile, and wakes those who asked.
 fn attach(on: &mut RenderThread, generation: u64, made: Result<Warm, String>) {
+    let _attach = tracing::trace_span!("gpu.attach").entered();
     let shared = &handle().shared;
     let current = {
         let state = lock(&shared.state);

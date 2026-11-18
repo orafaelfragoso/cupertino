@@ -2,19 +2,25 @@
 //! leaves the window where it was, and a folder asked for again while its work runs takes the model it had.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use cupertino_files::browser::{Asked, Browser, Listings, Polled};
-use cupertino_kit::files::model::ModelWork;
+use cupertino_kit::files::model::{ModelWork, Notify};
 use cupertino_kit::files::sort::SortSpec;
 
 fn browser(start: &Path, listings: &Listings) -> Browser {
+    woken_browser(start, listings, Arc::new(|| {}))
+}
+
+/// A browser that calls `notify` whenever there is something to poll.
+fn woken_browser(start: &Path, listings: &Listings, notify: Notify) -> Browser {
     Browser::open(
         start.to_path_buf(),
         SortSpec::default(),
         start.join("recently-used.xbel"),
         None,
-        Arc::new(|| {}),
+        notify,
         listings.clone(),
     )
     .unwrap()
@@ -159,4 +165,52 @@ fn a_folder_asked_for_again_while_its_work_runs_takes_the_model_it_had() {
     assert_eq!(browser.dir(), root.path().join("b"));
     settle(&mut browser);
     assert_eq!(names(&browser), ["item"]);
+}
+
+#[test]
+fn a_folder_kept_after_its_work_ended_wakes_the_window_that_takes_it() {
+    for row in ["open", "go"] {
+        let root = tempfile::tempdir().unwrap();
+        let (a, b) = (root.path().join("a"), root.path().join("b"));
+        for dir in [&a, &b] {
+            std::fs::create_dir(dir).unwrap();
+        }
+        std::fs::write(b.join("item"), b"").unwrap();
+        let listings = Listings::default();
+
+        // a window lets b go while its first work runs, and the work ends before the session sweeps its listings
+        let mut first = browser(&a, &listings);
+        settle(&mut first);
+        assert!(!first.go(b.clone(), None));
+        let hung = take(&mut first);
+        assert_eq!(hung.len(), 1);
+        first.stop_waiting();
+        for work in hung {
+            work.run();
+        }
+
+        let woken = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&woken);
+        let notify: Notify = Arc::new(move || {
+            count.fetch_add(1, Ordering::SeqCst);
+        });
+        let mut second = match row {
+            "open" => woken_browser(&b, &listings, notify),
+            _ => {
+                let mut second = woken_browser(&a, &listings, notify);
+                settle(&mut second);
+                woken.store(0, Ordering::SeqCst);
+                assert!(!second.go(b.clone(), None));
+                second
+            }
+        };
+        assert!(woken.load(Ordering::SeqCst) > 0, "{row}: not woken");
+        assert!(take(&mut second).is_empty(), "{row}: b opened again");
+
+        let polled = second.poll();
+        let entered = (row == "go").then_some(Asked::Go);
+        assert_eq!((polled.entered, polled.unopened), (entered, None), "{row}");
+        assert_eq!(second.dir(), b, "{row}");
+        assert_eq!(names(&second), ["item"], "{row}");
+    }
 }

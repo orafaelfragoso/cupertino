@@ -274,21 +274,20 @@ fn open_model(
     }
 }
 
-/// The model of `dir` that `listings` kept, made the browser's: it wakes the browser through `notify` (marking
-/// `queued`, so what it read meanwhile is applied at the next poll) and lists in `sort` order.
+/// The model of `dir` that `listings` kept, made the browser's: it wakes the browser through `notify`, which is
+/// called here too, so what it read meanwhile is applied at the next poll, and lists in `sort` order.
 fn taken(
     listings: &Listings,
     dir: &Path,
     sort: SortSpec,
     notify: &Notify,
-    queued: &AtomicBool,
 ) -> Option<DirectoryModel> {
     let mut model = listings.take(dir)?;
     model.set_notify(Arc::clone(notify));
     if model.options().sort != sort {
         model.set_sort(sort);
     }
-    queued.store(true, Ordering::SeqCst);
+    notify();
     Some(model)
 }
 
@@ -320,7 +319,7 @@ impl Browser {
             flag.store(true, Ordering::SeqCst);
             notify();
         });
-        let model = taken(&listings, &start, sort, &notify, &queued)
+        let model = taken(&listings, &start, sort, &notify)
             .unwrap_or_else(|| open_model(&start, sort, &recents_file, &types, notify.clone()));
         Ok(Browser {
             history: History::new(start),
@@ -357,7 +356,7 @@ impl Browser {
 
     /// A live model of `dir` for this browser: the one the session kept for it, else a new one.
     fn listing(&self, dir: &Path) -> DirectoryModel {
-        taken(&self.listings, dir, self.sort, &self.notify, &self.queued).unwrap_or_else(|| {
+        taken(&self.listings, dir, self.sort, &self.notify).unwrap_or_else(|| {
             open_model(
                 dir,
                 self.sort,

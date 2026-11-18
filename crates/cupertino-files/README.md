@@ -13,26 +13,6 @@ cargo run -p cupertino-files --example files_capture -- files/window --view list
 cargo run -p cupertino-files --example files_capture -- files/sidebar --devices removable --scale 2   # the sidebar with a mounted, a busy and an unmounted device
 cargo run -p cupertino-files --example files_capture -- files/window --view gallery --state ring   # the view's item ringed under its context menu (also rename, band)
 cargo run -p cupertino-files --example files_capture -- files/desktop   # the desktop's items over a flat fill
-cargo bench -p cupertino-files --bench directory                # 50k entries
-```
-
-Library example:
-
-```rust
-use cupertino_files::{DirectoryModel, ModelOptions, ModelDelta};
-use cupertino_files::layout::icon::{self, FontMetrics, IconParams, SectionSpec};
-
-let mut model = DirectoryModel::open("/home/user/Pictures", ModelOptions::default())?;
-loop {
-    for delta in model.poll_timeout(std::time::Duration::from_millis(16)) {
-        if let ModelDelta::LoadComplete { count } = delta { println!("{count} items"); }
-    }
-    let p = IconParams::new(64, 54, 12, true, false, FontMetrics::estimate(12.0));
-    let layout = icon::layout(&p, 1200.0, &[SectionSpec { title: None, count: model.len() }], icon::Flow::Leading);
-    // draw layout.cells[i].{frame, icon_frame, label_frame}; model.entries()[i] is the item
-    # break;
-}
-# Ok::<(), std::io::Error>(())
 ```
 
 ### The window
@@ -122,7 +102,17 @@ window is kept in `$XDG_CONFIG_HOME/cupertino/files/window.json` (`window_prefs`
 or the next, starts with it (the icon view without the bars at first). The path bar names the folder chain from the root (or from Trash / Recents), each
 folder with its icon, and a click on one, or Space or Return on it, goes there (each folder is a Tab stop, and the bar
 reads as the group "Path"); the status bar reads "N items, X available" (`statvfs` of the
-folder, read again whenever the listing changes and after a transfer). Changes on disk appear live. The sidebar shows
+folder, read again whenever the listing changes and after a transfer). Changes on disk appear live. A folder's listing
+is the family's model (`kit::files::model`), its work run as I/O tasks (`kit::task::io`) one at a time, its watch
+followed on the UI loop. A folder gone to (a place, the path bar, an item opened, Back, Forward, Enclosing Folder, the
+way back of a drag) is shown once its listing says it opened: until then the window keeps the folder it shows and
+answers, and a folder that does not open (missing, not a folder, no read permission) leaves the window and its history
+where they are and posts the notice. A second request while one waits takes its place. A listing let go while its work
+runs (a request replaced, a window, a tab or a column closed) is kept by the process until its work ends, and the next
+request for its folder takes it, so a folder on a mount that does not answer holds one I/O turn however often it is
+asked for. An expanded row of the list and a column of the column view stay closed and empty until their listings open.
+A new window or tab reads its folder once on the window's thread before it opens, and is not opened when that fails.
+The sidebar shows
 the theme's sidebar material where the compositor can draw it, and its opaque fill without desktop effects or under
 Reduce Transparency (Kit's sidebar panel glass).
 
@@ -176,7 +166,7 @@ closed closes the window. The bar reads as a list of tabs, each with its place a
 item has it. A row puts its tag on every selected item or takes it off, and a name typed in the field and Return puts a
 tag of that name on them (commas part several, as the attribute keeps them); typing narrows the rows. Tags are kept
 in the `user.xdg.tags` extended attribute, a symbolic link's on the item it points to (the system keeps no user
-attributes on a link), and every listing reads them on its own thread. The sidebar lists under Tags the colours and names in use, and one chosen shows the folder's items
+attributes on a link), and every listing reads them in its work. The sidebar lists under Tags the colours and names in use, and one chosen shows the folder's items
 that carry it.
 
 **Pointer and keyboard in the views.** A press on empty space and a drag draw a rubber band (`cupertino_kit::files::band`): the items it
@@ -454,7 +444,6 @@ and `metrics::{icon_view, list_view, column_view, timing, selection, marquee, dr
 
 | Module | Role | Main items |
 |---|---|---|
-| `model` | async directory model | `DirectoryModel::open(dir, ModelOptions)`, `poll` / `poll_timeout` → `Vec<ModelDelta>` (`Reloaded`, `LoadComplete`, `Inserted`, `Removed`, `Changed`, `Moved`, `DirectoryGone`), `enumerate_blocking`, `set_sort` |
 | `group` | the date buckets dates read in | `date_bucket` |
 | `settings` | per-folder view state | `ViewSettings` (icon / list / column / gallery), `ViewStyle`, `default_columns`, `SettingsStore` (atomic JSON, keyed by device + inode), `FolderKey` |
 | `selection` | selection model | `Selection::{mouse_down, mouse_up, click_empty, move_focus, on_insert, on_remove, on_move}`, `Modifiers` |
@@ -465,7 +454,7 @@ and `metrics::{icon_view, list_view, column_view, timing, selection, marquee, dr
 | `thumbnail` | freedesktop thumbnail cache | `Thumbnailer::{lookup, lookup_at_least, create, get_or_create}`, `ThumbSize::for_icon`, `file_uri`, failure markers |
 | `layout::list` | list view | `row_height`, `layout` (columns, rows with level and expanded state, disclosure, indentation), `ListLayout::{row_at, visible_rows}` |
 | `history` | navigation state | `History::{visit, back, forward}`; the sidebar's places are the family's (`kit::files::places`: `standard_places`, `recents_place`, `folder_icons`, `session_places`) |
-| `browser` | one window's folder | `Browser::{open, go, back, forward, parent, poll, sort_by, press, release, move_focus, select_all, type_text, activation, outline, expand, collapse, collapse_all, available_space, visit, return_to, is_loading}`: model, history (a `Visit` to go back to, with its selection), the list's outline of expanded folders, selection by path across reloads, nearest-ancestor fallback for a deleted folder |
+| `browser` | one window's folder | `Browser::{open, go, back, forward, parent, go_with, return_to, stop_waiting, is_waiting, poll, take_work, sort_by, press, release, move_focus, select_all, type_text, activation, outline, expand, collapse, collapse_all, available_space, visit, is_loading}`: the family's models (`take_work` hands out their work and watches), history (a `Visit` to go back to, with its selection), a folder asked for shown once it opens (`Polled::entered`, `Polled::unopened` with what `Asked` for it), the list's outline of expanded folders, selection by path across reloads, nearest-ancestor fallback for a deleted folder; `Listings`, the listings a session keeps while their work runs |
 | `window_prefs` | the view and bars kept between windows | `WindowPrefs::{parse, text, load, save}`, `location`, `column_width` |
 | `columns` | the column view's chain | `ColumnChain::{follow, folders, width, resize, widths}`, `layout` → `ChainLayout` (where each column sits and the scroll that keeps the last whole), `DEFAULT_WIDTH`, `MIN_WIDTH`, `MAX_WIDTH`, `PREVIEW_WIDTH` |
 | `preview` | what a preview shows | `kind` → `PreviewKind`, `read_text` / `text_of` (`TEXT_LIMIT`), `summary`, `details`, `Browse` (the items gone through, `step`), `Motion` (the window's open and close, `at` → `MotionFrame`), `WINDOW_SIZE` |

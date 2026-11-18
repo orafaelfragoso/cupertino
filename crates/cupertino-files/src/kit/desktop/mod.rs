@@ -2,8 +2,8 @@
 //! surface of every output that lies over the wallpaper and under every window ([`roles`]). What it draws and what its
 //! presses mean is [`view`]; where the items sit is [`crate::desktop`].
 //!
-//! * The folder is listed and watched as a browser window's is ([`DirectoryModel`]); the icons are the browser's
-//!   ([`ItemIcons`]), pictures shown by their thumbnails.
+//! * The folder is listed and watched as a browser window's is ([`DirectoryModel`], its work run as I/O tasks); the
+//!   icons are the browser's ([`ItemIcons`]), pictures shown by their thumbnails.
 //! * Its context menus are the toolkit's: on items Open, Open With, Move to Trash, Rename, Duplicate, Make Alias and
 //!   Copy; on the desktop New Folder, Paste, Change Wallpaper…, Sort By and Clean Up.
 //! * Keys, once a press gave the desktop the keyboard: Return renames the only selected item, Primary+O and
@@ -48,10 +48,10 @@ use crate::desktop::{self as arrangement, Arrangement, DesktopPrefs, Grid, Slot}
 use crate::metrics::desktop as m;
 use crate::notice::{self, Action, Notices};
 use crate::trash::Trash;
-use crate::{DirectoryModel, ModelOptions};
 use cupertino_icons::thumbnail::Thumbnailer;
 use cupertino_kit::files::entry::Entry;
 use cupertino_kit::files::geom::Direction;
+use cupertino_kit::files::model::{DirectoryModel, ModelDelta, ModelOptions, WORK_DEADLINE};
 use cupertino_kit::files::name_edit::NameEdit;
 use cupertino_kit::files::open::{
     command_with, default_app_id, open_command, open_with, OpenError,
@@ -126,6 +126,8 @@ pub enum Message {
     Woken,
     /// What woke the desktop is gone.
     Unheard,
+    /// The listing's work or watch ended; what it read wakes the desktop.
+    Listed,
     /// A press landed on the desktop.
     Pressed,
     Select(Vec<PathBuf>),
@@ -588,15 +590,44 @@ impl Model {
         }
     }
 
-    /// Take what the listing has waiting.
+    /// Take what the listing has waiting. A folder that does not open is said on standard error and listed no more.
     fn poll(&mut self) {
-        let changed = self
-            .listing
-            .as_mut()
-            .is_some_and(|listing| !listing.poll().is_empty());
-        if changed {
+        let Some(listing) = self.listing.as_mut() else {
+            return;
+        };
+        let deltas = listing.poll();
+        if let Some(error) = deltas.iter().find_map(|delta| match delta {
+            ModelDelta::OpenFailed { error, .. } => Some(error),
+            _ => None,
+        }) {
+            eprintln!(
+                "cupertino-files: cannot list {}: {error}",
+                self.folder.display()
+            );
+            self.listing = None;
+            return;
+        }
+        if !deltas.is_empty() {
             self.relist();
         }
+    }
+
+    /// The listing's watch and its next work, as a future on the UI loop and an I/O task.
+    fn listing_work(&mut self) -> Vec<Command<Message>> {
+        let Some(listing) = self.listing.as_mut() else {
+            return Vec::new();
+        };
+        let watch = listing.take_watch().map(|watch| {
+            let follow = watch.follow();
+            Command::Perform(Box::pin(async move {
+                follow.await;
+                Message::Listed
+            }))
+        });
+        let work = listing.take_work().map(|work| {
+            cupertino_kit::task::io(WORK_DEADLINE, move || work.run(), |()| Message::Listed)
+        });
+        watch.into_iter().chain(work).collect()
     }
 
     fn command(&mut self, command: DeskCommand) -> Vec<Command<Message>> {
@@ -990,9 +1021,10 @@ impl Application for Desktop {
                 // a thumbnail that came shows at the next view
                 let mut commands = model.rename_made();
                 commands.push(listen(&model.woken));
+                commands.extend(model.listing_work());
                 return commands;
             }
-            Message::Unheard => {}
+            Message::Unheard | Message::Listed => {}
             Message::DroppedIn(dropped) => return model.dropped_in(dropped),
             Message::Pressed => {
                 model.menu = None;
@@ -1197,26 +1229,24 @@ fn listed(
         types: Some(types),
         ..ModelOptions::default()
     };
-    let listing = DirectoryModel::open_notifying(folder.clone(), options, Arc::clone(&wake))
-        .map_err(|e| eprintln!("cupertino-files: cannot list {}: {e}", folder.display()))
-        .ok();
+    let listing = DirectoryModel::open(folder.clone(), options, Arc::clone(&wake));
     let mut model = Model::empty(folder, notes);
     model.prefs = prefs_file
         .as_deref()
         .map(DesktopPrefs::load)
         .unwrap_or_default();
     model.prefs_file = prefs_file;
-    model.listing = listing;
+    model.listing = Some(listing);
     model.woken = woken;
     model.screens = screens;
     model.icons = Some(ItemIcons::new(file_icons, Some(thumbnails), wake));
     model.notices = notices();
-    let commands = vec![listen(&model.woken), hear(&model.notes)];
+    let mut commands = vec![listen(&model.woken), hear(&model.notes)];
     model.menu_bar = cupertino_assets::theme::load()
         .map(|theme| theme.shapes.menu_bar_height)
         .unwrap_or_else(|_| cupertino_theme::ShapeTokens::default().menu_bar_height)
         .ceil();
-    model.poll();
+    commands.extend(model.listing_work());
     (model, commands)
 }
 

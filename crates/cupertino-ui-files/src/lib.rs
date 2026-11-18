@@ -3,6 +3,7 @@
 //! * [`entry`]: an item of a folder; [`natural`], [`sort`]: the order of names and of items;
 //! * [`mime`], [`tags`]: an item's type and its tags; [`applications`], [`recents`]: the two virtual folders;
 //! * [`places`]: the places of a file browser's sidebar and of a file chooser's, over the user directories;
+//! * [`model`]: a folder's items as a sorted list that follows its changes, read by work the program runs;
 //! * [`layout`]: the icon layout, with the measured metrics of [`metrics`]; [`geom`]: the direction a key moves in it;
 //! * [`rename`], [`name_edit`]: name checks, free names and the name being edited; [`open`]: default applications and
 //!   the Open With list; [`operations`]: new folders, renames, aliases, copies and moves, as blocking functions;
@@ -29,6 +30,7 @@ pub mod layout;
 pub mod list;
 pub mod metrics;
 pub mod mime;
+pub mod model;
 pub mod name_edit;
 pub mod natural;
 pub mod open;

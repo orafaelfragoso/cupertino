@@ -1,8 +1,7 @@
 //! File manager: the core, and with the `app` feature the `cupertino-files` window process on CupertinoKit
 //! ([`kit`]). The items, their order, types and tags, the icon layout, opening, renaming and the file operations are
-//! Kit's file family (`cupertino_kit::files`).
+//! Kit's file family (`cupertino_kit::files`), and so are a folder's listing and its places.
 //!
-//! * [`model`]: asynchronous directory model (batched enumeration, change watching, deltas);
 //! * [`group`]: the date buckets dates read in;
 //! * [`settings`]: per-folder view state and its store;
 //! * [`selection`], [`typeselect`]: interaction logic;
@@ -35,7 +34,6 @@ pub mod layout;
 pub mod menu_bar;
 pub mod menu_spec;
 pub mod metrics;
-pub mod model;
 #[cfg(feature = "app")]
 pub mod notice;
 pub mod preview;
@@ -53,6 +51,5 @@ pub mod window;
 pub mod window_prefs;
 
 pub use browser::{Activation, Browser};
-pub use model::{DirectoryModel, ModelDelta, ModelOptions};
 pub use selection::{Modifiers, Selection};
 pub use settings::{FolderKey, SettingsStore, ViewSettings, ViewStyle};

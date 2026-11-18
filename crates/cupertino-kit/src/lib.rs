@@ -276,6 +276,14 @@ pub mod files {
         }
     }
 
+    /// A folder's items as a sorted list that follows its changes, read by work the program runs.
+    pub mod model {
+        pub use cupertino_ui_files::model::{
+            DirectoryModel, ModelDelta, ModelOptions, ModelWatch, ModelWork, Notify, DEFAULT_BATCH,
+            WORK_DEADLINE,
+        };
+    }
+
     /// An item's type.
     pub mod mime {
         pub use cupertino_ui_files::mime::{entry_mime, kind_description, kind_group, KindGroup};

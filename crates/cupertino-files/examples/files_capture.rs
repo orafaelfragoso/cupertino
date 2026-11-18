@@ -381,7 +381,7 @@ impl Capture {
         prepare(start);
         let turns = NonZeroU32::new(TURNS).expect("a turn budget");
         let (mut driver, window) = started::<Files>(look, scale, size, turns)?;
-        // the folder is listed on a thread of its own
+        // the folder is listed by I/O tasks
         wait_until(&mut driver, window, turns, LISTING, |driver| {
             named_center(driver, window, ITEM).is_some()
         })
@@ -459,6 +459,12 @@ impl Capture {
                         PointerEvent::Motion { position: to },
                     ];
                     send(&mut driver, window, pointer, turns).map_err(|e| fail(&e))?;
+                }
+                Step::Shown(name) => {
+                    wait_until(&mut driver, window, turns, LISTING, |driver| {
+                        item_center(driver, name).is_some()
+                    })
+                    .map_err(|e| e.unwrap_or_else(|| format!("{name}: never shown")))?;
                 }
             }
             settle(&mut driver, window, turns).map_err(|e| fail(&e))?;
@@ -694,6 +700,8 @@ enum Step {
     Choose(&'static str),
     /// A press at `from` in the window, held, and a move onto the item named `over`.
     Band { from: Point, over: String },
+    /// A wait until the window shows the item of this name: a folder gone to opens once its listing's work says so.
+    Shown(&'static str),
 }
 
 /// The middle of the node named `name` in the window.
@@ -878,6 +886,7 @@ impl App for Capture {
                 Step::Key(0x74, Mods::PRIMARY),
                 Step::Click("Documents"),
                 Step::Key(0xff54, Mods::PRIMARY),
+                Step::Shown(DOCUMENTS[0].0),
             ],
             _ => return Err(format!("{}: no such surface", r.surface)),
         };

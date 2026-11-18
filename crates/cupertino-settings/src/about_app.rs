@@ -73,8 +73,8 @@ pub fn run(activation: String) -> Result<()> {
     let screen = about
         .read_displays()
         .map_err(|e| format!("cannot list the displays: {e}"))?;
-    let options = cupertino_kit::app::options()?;
-    let mut layout = layout(&about, &options.text, &options.theme);
+    let env = cupertino_kit::app::environment()?;
+    let mut layout = layout(&about, &env.text, &env.theme);
     if let Some(height) = screen {
         layout.fit(height);
     }

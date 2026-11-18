@@ -383,37 +383,48 @@ the window's shortcuts for now.
 
 ## File views (proposal)
 
-The design of W4.8 (D8 in `docs/plans/layered-architecture.md`), for the owner's approval: what the file family of
-this crate is, what stays in Files, how its slow work runs, and the steps that get there. Nothing here is in the code
-until its step lands. [Decisions for approval](#decisions-for-approval) is the short list.
+The design of W4.8 (D8 in `docs/plans/layered-architecture.md`), for the owner's approval: what the file family is,
+what stays in Files, how its slow work runs, and the two tasks that get there. The family is a crate of its own in
+`ui`, `cupertino-ui-files`; this section stands here until that crate has its README. Nothing here is in the code
+until its step lands. [Decisions for approval](#decisions-for-approval) is the short list and
+[Edits of the plan](#edits-of-the-plan) what an approval changes there.
 
 ### What shapes it
 
 - Files' views emit Files' own message (`Message::Window(id, Event)`, 62 events) and its column view reads the app's
-  session and window. A view of this crate knows neither, so the views do not come over with their bodies as they are.
+  session and window. A view in Kit knows neither, so the views do not come over with their bodies as they are.
 - A `shell` crate cannot depend on `cupertino-files`. What the desktop component (W6.10) and the dialogs component
   (W6.11) share with Files is in Kit before they start, and it starts no thread: in the shell host a thread is the
   host's to start, so that its panic is the component's.
-- `kit::task` and its pools are in `cupertino-kit`, above this crate, so nothing here starts a task. The family gives
-  blocking functions and futures, and the program runs them (`kit::task::io`, `Command::Perform`), as it runs a
-  `filepicker::Request`.
+- `kit::task` and its pools are in `cupertino-kit`, above the `cupertino-ui-*` crates, so nothing in the family
+  starts a task. It gives blocking functions and futures, and the program runs them (`kit::task::io`,
+  `Command::Perform`), as it runs a `filepicker::Request`.
 - An application's message is `Clone + Send`, so it cannot carry an open folder or a watch. A model keeps the queue
   its work fills, and the message only says there is something to `poll`.
 
 ### The family
 
-`cupertino_ui_controls::files` holds the views, the values they show and the operations behind them. Kit names it as
+`cupertino-ui-files` holds the views, the values they show and the operations behind them. It builds its views from
+this crate's controls by their public items alone, and this crate gains no dependency. Kit names the family as
 `kit::files`, item by item, under the rules of its *Public API*: what Files, the desktop code and the portal name,
-and the types those signatures name. `kit::filepicker` and `kit::file_icons` keep their paths.
+and the types those signatures name. A `shell` or `apps` crate never depends on `cupertino-ui-files` by name
+(Facades). `kit::filepicker` and `kit::file_icons` keep their paths.
+
+It is a crate for D32's fourth reason. This crate is 28 005 lines; the family is about 8 800 more and brings
+dependencies no control needs: `cupertino-apps`, `cupertino-assets`, `cupertino-icons`, `cupertino-trash`,
+`cupertino-defaults`, `zbus`, `inotify`, `async-io`, `async-channel`, `serde`, `libc`, `xattr`, `tree_magic_mini`,
+`mime_guess`. The two split where Files' views already stand: outside the controls, naming only what Kit lists.
 
 ### The views
 
-A view is a widget with public fields, generic over the program's message `M`, as every control of this crate is. It
-takes plain values (the items, the selection, the scroll state, a function for an item's icon and one for the field a
-name is edited in), never a model, a session or a window. The three report through one event type and one function.
+A view is a widget with public fields, generic over the program's message `M`, as every control is. It takes plain
+values (the items, the selection, the scroll state, a function for an item's icon and one for the field a name is
+edited in), never a model, a session or a window. The three report through one event type and one function, which
+answers `None` for an event the program has no use for.
 
 ```rust
-/// What a file view reports. The program gives each view one function that turns an event into its message.
+/// What a file view reports. The program gives each view one function that turns an event into its message, or
+/// into none.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ViewEvent {
     /// The selection a press, a key, the band or typing made.
@@ -459,6 +470,11 @@ pub enum ColumnEvent {
     Resized,
 }
 
+/// The presses a list's rows and its frame share, or a column's: the program keeps one a window between views. A
+/// clone is the same presses. Nothing of it is public.
+#[derive(Clone, Default)]
+pub struct Presses(/* private */);
+
 /// The folder as a grid of icons with their names: the content of the program's scroll view. Its fields are the ones
 /// Files' grid has, and `on_event`; its body differs only where it emits.
 pub struct IconGrid<M> {
@@ -481,7 +497,7 @@ pub struct IconGrid<M> {
     pub names: Option<NameShape>,
     pub revision: u64,
     pub strip: bool,
-    pub on_event: Rc<dyn Fn(ViewEvent) -> M>,
+    pub on_event: Rc<dyn Fn(ViewEvent) -> Option<M>>,
 }
 
 /// The folder as an outline table: a header, a row an item with its icon and name first, folders that open in place,
@@ -509,9 +525,8 @@ pub struct FileList<M> {
     /// The row whose name is being edited, and the field that stands in its place; the field's messages are the
     /// program's own.
     pub name_field: Option<(usize, Rc<dyn Fn() -> Element<M>>)>,
-    /// The presses its rows and its frame share: the program keeps one a window between views.
-    pub presses: SharedPresses,
-    pub on_event: Rc<dyn Fn(ViewEvent) -> M>,
+    pub presses: Presses,
+    pub on_event: Rc<dyn Fn(ViewEvent) -> Option<M>>,
 }
 
 /// A chain of folders side by side in a row that scrolls sideways, a divider after each column that resizes it.
@@ -519,11 +534,14 @@ pub struct FileColumns<M> {
     pub window: u64,
     /// The columns in order, each as wide as the program lays it out.
     pub columns: Vec<(FileColumn<M>, f64)>,
+    /// The width of the chain's content, which is the columns' widths together or more: a chain scrolled to a whole
+    /// column keeps room after its last one.
+    pub content: f64,
     /// The chain's sideways scroll, reported as `ViewEvent::Scroll`; a column's own is `ColumnEvent::Scroll`.
     pub scroll: ScrollState,
     pub lead: f64,
     pub icon: ItemIcon,
-    pub on_event: Rc<dyn Fn(ViewEvent) -> M>,
+    pub on_event: Rc<dyn Fn(ViewEvent) -> Option<M>>,
 }
 
 pub enum FileColumn<M> {
@@ -535,7 +553,7 @@ pub enum FileColumn<M> {
         scroll: ScrollState,
         selection: Selection,
         name_field: Option<(usize, Rc<dyn Fn() -> Element<M>>)>,
-        presses: SharedPresses,
+        presses: Presses,
     },
     /// Another folder of the chain; the row of the chain's next folder is highlighted.
     Other { folder: PathBuf, label: String, items: Rc<[Entry]>, scroll: ScrollState, highlighted: Option<usize> },
@@ -548,18 +566,17 @@ pub enum FileColumn<M> {
 
 `FileList` and `FileColumns` become elements with `Element::from`. Public beside them: `name` and `laid_out_name` (an
 item's name as the grid draws and lays it out, which the desktop's items use), `NameShape`, `ItemIcon`, `Grab`,
-`RowGrab`, `Presses` and `SharedPresses` (opaque), and the keys `cell_key`, `cell_index`, `row_key` and `column_key`.
-The widgets the views are made of (cells, name boxes, row cells, the band, the click and rename timing, the column
-frame and its divider) are private.
+`RowGrab`, and the keys `cell_key`, `cell_index`, `row_key` and `column_key`. The widgets the views are made of
+(cells, name boxes, row cells, the band, the click and rename timing, the column frame and its divider) are private.
 
 Files keeps what is its own around them: the scroll view and the kept layouts around the grid, the gallery, the drag
-images and commands (`dragged`), the drop targets, the chain's listings and navigation (`ColumnsView`, the `columns`
-chain), the preview pane and window, the name field. Its `Event` and its `update` do not change: one function maps
-the family's events onto the events it has.
+images and commands (`dragged`), the drop targets, the chain's listings, layout and navigation (`ColumnsView`, the
+`columns` chain, whose `ChainLayout` gives the widths and the content width), the preview pane and window, the name
+field. Its `Event` and its `update` do not change: one function maps the family's events onto the events it has.
 
 ```rust
 // cupertino-files
-fn view_events(id: u64) -> Rc<dyn Fn(ViewEvent) -> Message> {
+fn view_events(id: u64) -> Rc<dyn Fn(ViewEvent) -> Option<Message>> {
     Rc::new(move |event| {
         let event = match event {
             ViewEvent::Select(selection) => Event::Select(selection),
@@ -567,16 +584,16 @@ fn view_events(id: u64) -> Rc<dyn Fn(ViewEvent) -> Message> {
             ViewEvent::Column(ColumnEvent::Step(by)) => Event::ColumnStep(by),
             // one arm an event, each to the `Event` Files has for it
         };
-        Message::Window(id, event)
+        Some(Message::Window(id, event))
     })
 }
 
-// the chooser, once its rows are a `FileList` (W6.11): the four messages it has
+// the chooser, once its rows are a `FileList` (W6.11): three of the messages it has
 Rc::new(move |event| match event {
-    ViewEvent::Select(rows) => Message::Select(id, rows),
-    ViewEvent::Open(row) => Message::Open(id, row),
-    ViewEvent::Scroll(scroll) => Message::Scroll(id, scroll),
-    _ => Message::Ignore,
+    ViewEvent::Select(rows) => Some(Message::Select(id, rows)),
+    ViewEvent::Open(row) => Some(Message::Open(id, row)),
+    ViewEvent::Scroll(scroll) => Some(Message::Scroll(id, scroll)),
+    _ => None,
 })
 ```
 
@@ -585,18 +602,18 @@ Rc::new(move |event| match event {
 To the family goes what a view names, what the desktop component needs, and what those two stand on. What only Files
 uses stays a module of Files (D32).
 
-| Files' module | Goes to `files` as | Because |
-|---|---|---|
-| `entry`, `natural` | the same | the views' item and the order of names |
-| `sort`, `mime`, `tags`, `applications`, `recents` | the same | the listing sorts, types and tags its items and lists the two virtual folders |
-| `model` | the same, without threads ([Slow work](#slow-work)) | Files and the desktop list folders |
-| `layout::icon`; `metrics::{icon_view, list_view, column_view, timing, selection, marquee, drag}` | the same | the views' layout and design values |
-| `geom` | `Direction` alone | its `Point`, `Size` and `Rect` are `cupertino-geometry`'s, which this crate draws with |
-| `kit::{grid, list, band, clicks}`; the widgets and assembly of `kit::columns`; the list's assembly of `kit::view`; `Grab` of `kit::dragged` | `grid`, `list`, `columns` | the views |
-| `rename`, `name_edit`, `open`, `operations` | the same | D8's operations; blocking functions as they are |
-| `places` | the same, the user directories read through `cupertino-defaults` ([Places](#places-and-user-directories)) | Files' sidebar, the chooser's, the desktop's folder |
-| `notice` | the same, on the program's bus connection | Files and the desktop post failures |
-| `thumbnail_service`, `item_art`, `kit::item_icons` | the same, as jobs; `file_icons` comes down from `cupertino-kit` beside them | Files and the desktop draw the same icons and thumbnails |
+| Files' module | In `cupertino-ui-files` as | Because | Task |
+|---|---|---|---|
+| `entry`, `natural` | the same | the views' item and the order of names | W4.8 |
+| `sort`, `mime`, `tags`, `applications`, `recents` | the same | the listing sorts, types and tags its items and lists the two virtual folders | W4.8 |
+| `layout::icon`; `metrics::{icon_view, list_view, column_view, timing, selection, marquee, drag}` | the same | the views' layout and design values | W4.8 |
+| `geom` | `Direction` alone | its `Point`, `Size` and `Rect` are `cupertino-geometry`'s, which the controls draw with | W4.8 |
+| `rename`, `name_edit`, `open`, `operations`, `item_art` | the same | D8's operations as the blocking functions they are; the art of the common items | W4.8 |
+| `kit::{grid, list, band, clicks}`; the widgets and assembly of `kit::columns`; the list's assembly of `kit::view`; `Grab` of `kit::dragged` | `grid`, `list`, `columns` | the views | W4.8 |
+| `places` | the same, the user directories read through `cupertino-defaults` ([Places](#places-and-user-directories)) | Files' sidebar, the chooser's, the desktop's folder | W4.12 |
+| `model` | the same, without threads ([Slow work](#slow-work)) | Files and the desktop list folders | W4.12 |
+| `thumbnail_service`, `kit::item_icons` | the same, as jobs; `file_icons` comes down from `cupertino-kit` beside them | Files and the desktop draw the same icons and thumbnails | W4.12 |
+| `notice` | the same, on the program's bus connection | Files and the desktop post failures | W4.12 |
 
 Stay in Files: `browser`, `history`, `selection`, `typeselect`, `settings`, `layout::list`, `columns` (the chain),
 `preview`, `format`, `group`, `window`, `window_prefs`, `tab_strip`, `search_field`, `spring`, `context_menu`,
@@ -605,39 +622,56 @@ media, which no other program lists. `desktop`, `kit::desktop` and `metrics::des
 `cupertino-shell-desktop`. There is no `trash` module to bring: `cupertino-trash` is a `system` crate, and the
 family's operations and places call it by its name.
 
-The family is about 8 800 lines; this crate is 28 005 without it. It brings these dependencies: `cupertino-apps`,
-`cupertino-assets`, `cupertino-icons`, `cupertino-trash`, `cupertino-defaults`, `zbus`, `inotify`, `async-io`,
-`async-channel`, `serde`, `libc`, `xattr`, `tree_magic_mini`, `mime_guess`. Every Kit program links all of them but
-`cupertino-trash` and the last three through `cupertino-kit` already.
-
 ### Slow work
 
-The family starts no thread and its values on the UI thread read no file. Work is one of three things: a blocking
-function the program runs with `kit::task::io`; a job a value hands out (`take_work`, `take_job`) that the program
-runs the same way and that leaves its result in the value's queue; or a future that waits without reading a file,
-which the program runs with `Command::Perform` on its UI loop (a folder's watch, the notices on the bus connection).
+The family starts no thread, and its values on the UI thread touch no file: no read, no `stat`, no watch
+registration. Work is one of three things: a blocking function the program runs with `kit::task::io`; a job a value
+hands out (`take_work`, `take_job`, `take_slice`) that the program runs the same way and that leaves its result in
+the value's queue; or a future that waits without touching a file, which the program runs with `Command::Perform` on
+its UI loop (a folder's watch, the notices on the bus connection).
 
 ```rust
 impl DirectoryModel {
-    /// A model of `dir`. It reads nothing: `notify` wakes the program whenever there is something to `poll`.
+    /// A model of `dir`. It touches no file: `notify` wakes the program whenever there is something to `poll`.
     pub fn open(dir: impl Into<PathBuf>, opts: ModelOptions, notify: Notify) -> DirectoryModel;
-    /// The blocking work the model has waiting: listing the folder in batches, reading the items a change named,
-    /// listing a virtual folder again.
+    /// The model's next blocking work; `None` while one of its works is out, and when none waits. A model runs one
+    /// work at a time, in the order asked: a change is applied on top of the one before it. The first work checks
+    /// that the folder is one, registers its watch, opens it and then lists it in batches (for Applications it
+    /// walks the application folders and registers each); a later one reads the items a change named, or lists a
+    /// virtual folder again.
     pub fn take_work(&mut self) -> Option<ModelWork>;
-    /// The folder's watch, once; `None` without `opts.watch`.
+    /// The folder's watch, once; `None` without `opts.watch`. Its descriptor is made here and holds no folder until
+    /// the first work registers one.
     pub fn take_watch(&mut self) -> Option<ModelWatch>;
 }
-impl ModelWork { pub fn run(self); }
+impl ModelWork {
+    /// Blocking. What it read is in the model's queue when it returns.
+    pub fn run(self);
+}
 impl ModelWatch {
-    /// Hands each burst of changed names to the model and wakes it, until the model is dropped.
-    pub async fn follow(self);
+    /// Waits on the descriptor, hands each burst of changed names to the model and wakes it. It touches no file. It
+    /// ends as soon as its model is dropped, with no event needed, and closes the descriptor.
+    pub fn follow(self) -> impl Future<Output = ()> + Send + 'static;
+}
+
+pub enum ModelDelta {
+    /// The folder is a folder, is watched and can be read: the first update of a model that opens.
+    Opened,
+    /// The folder could not be opened (it is missing, is not a folder, gives no read permission, cannot be
+    /// reached): the model's first and only update, with the error's kind and its text.
+    OpenFailed { kind: io::ErrorKind, error: String },
+    // the others as they are; `Error(String)` stays a read that fails once the folder is open
 }
 
 impl ThumbnailService {
     /// The next thumbnail to make, while fewer than `JOBS` (two, the count `WORKERS` holds) are being made.
     pub fn take_job(&self) -> Option<ThumbnailJob>;
 }
-impl ThumbnailJob { pub fn run(self); }
+impl ThumbnailJob {
+    /// Blocking: reads and decodes. It catches a decoder's panic, as the worker does, and keeps it as the file's
+    /// failure, so the panic is not the instance's.
+    pub fn run(self);
+}
 
 impl Notices {
     /// Notices that are logged, not posted: the session has no bus.
@@ -647,24 +681,94 @@ impl Notices {
     /// Ends once every notice posted so far is sent.
     pub fn sent(&self) -> impl Future<Output = ()> + Send + 'static;
 }
+
+/// A copy or a move that runs in slices, so it holds an I/O turn for `operations::SLICE` at a time.
+pub struct Transfer(/* private */);
+impl Transfer {
+    pub fn into_folder(sources: Vec<PathBuf>, dest: PathBuf, action: DropAction) -> Transfer;
+    pub fn duplicate(paths: Vec<PathBuf>) -> Transfer;
+    /// The next slice; `None` while one is out and once the transfer has ended.
+    pub fn take_slice(&mut self) -> Option<TransferSlice>;
+    /// How far it has come, as of the last slice.
+    pub fn progress(&self) -> Progress;
+    /// Stops it: the next slice removes the item being copied and ends the transfer.
+    pub fn cancel(&mut self);
+    /// One result a source, in order, once it has ended.
+    pub fn results(&mut self) -> Option<Vec<io::Result<PathBuf>>>;
+}
+impl TransferSlice {
+    /// Blocking: copies until the first megabyte or item that ends past `SLICE`.
+    pub fn run(self);
+}
 ```
 
 `open_recents` and `open_applications` have the same form; `poll`, `entries`, `set_sort`, `want`, `forget`, `get`,
-`post`, `post_clickable` and `clicks` keep their signatures.
+`post`, `post_clickable` and `clicks` keep their signatures. `transfer`, `duplicate_with` and `drop_into` stay, as a
+loop over a `Transfer`'s slices.
 
 | Now, in Files | In the family | What changes for the person |
 |---|---|---|
-| `model`: a thread a folder that lists it; the `notify` crate's thread for changes; the items a change names are read in `poll`, on the UI thread; `open` reads the folder's metadata there; dropping a model waits for its thread | `take_work`, run as `kit::task::io`; `ModelWatch::follow` waits on an inotify descriptor through the reactor the bus connection waits on, as the settings watch does | A folder that cannot be opened is the model's first `ModelDelta::Error`, not an error of `open`: Files goes back to the folder it showed and posts the notice it posts now. A change shows one turn of the loop later. Closing a window never waits for a listing. |
+| `model`: a thread a folder that lists it; the `notify` crate's thread for changes; on the UI thread, `open` reads the folder's metadata and registers the watch (for Applications a walk of every application folder), and `poll` reads the items a change names; dropping a model waits for its thread | `take_work`, run as `kit::task::io`, one at a time a model; `ModelWatch::follow` waits on an inotify descriptor through the reactor the bus connection waits on, as the settings watch does | The window stays on the folder it shows, and answers, until the folder asked for opens ([below](#a-folder-that-does-not-open)). A change shows one turn of the loop later. Closing a window never waits for a listing. |
 | `thumbnail_service`: two worker threads | `take_job`, run as `kit::task::io`, two at once | None at rest. A decoder's panic still marks the file as failed. |
 | `notice`: one thread that posts with blocking calls, one that hears clicks; `flush` blocks the exit | one future on the UI loop, on the connection the program gives; `sent` instead of `flush` | Files exits when `sent` ends or after `EXIT_NOTICES`, without blocking. |
-| `operations`, `open`, `places`: blocking functions | as they are | None. |
+| `operations`: `transfer` copies a whole tree in one call, on its caller's thread | `Transfer`, a slice a task | None in Files until W7.1, whose transfer thread runs the same loop. |
+| `open`, `places`, the other `operations`: blocking functions | as they are | None. |
 
-One instance runs at most `task::IO_SHARE` (four) of these at once and its others wait their turn, where each has a
-thread of its own now: a folder on a mount that does not answer holds its turn, and Kit reports it once
-(`toolkit.task.overdue`). The deadlines are named constants beside the work: 10 s for a model's work, 5 s for a
-thumbnail.
+The deadlines are named constants beside the work: 10 s for a model's work, 5 s for a thumbnail, 10 s for a slice;
+`SLICE` is a tenth of a second.
 
-Not in this task, because their threads are their callers': a transfer's thread (`kit/transfer.rs`), the preview
+A `Command::Perform` future lives until it ends or the application's executor is dropped, and a user has 128 inotify
+instances by default. So `follow` does not wait for a file event to learn its model is gone: the model's drop closes
+a channel the future waits on beside the descriptor.
+
+#### A folder that does not open
+
+`open` cannot fail, so the browser decides at the model's first update. It keeps the listing it shows until the model
+of the folder asked for gives that update. `Opened` puts the model in its place, and only then does the history take
+the folder and the window count as entered. `OpenFailed` drops the model and posts the notice a failed go, Back,
+Forward or Parent posts now, with the error's text. A failed open therefore adds no history entry and shows no empty
+folder, as now. A second request while one waits takes its place. A column of the column view and an open row of the
+list wait the same way: the column stays empty and the row closed until their model opens.
+
+A folder without read permission does not open, as now. Files watches every folder it lists, and registering the
+watch fails with `EACCES` before anything is read (`start` in `model.rs`), so the window stays where it is with the
+notice. In the family the first work reports it as `OpenFailed` with `PermissionDenied`; the notice then words the
+kernel's error, where it words the watch crate's now. A model opened without a watch reports the same, where its
+folder shows empty with an `Error` now: no caller of the family shows a folder it cannot read as an empty one.
+
+#### Mounts that do not answer
+
+Any step of a model's work can hang on a mount that does not answer: the open check, the watch registration, the
+read of the folder, and the `stat` of each item, which follows symbolic links (`Entry::from_path`), so a folder on a
+healthy disk hangs too when it holds a link into such a mount. A thumbnail's read and a slice hang the same way.
+
+One instance runs at most `task::IO_SHARE` (four) I/O tasks at once, and Files is one instance for all its windows.
+Each hung work holds a turn until the kernel gives up. With four held, Files lists nothing, makes no thumbnail, reads
+no change and copies nothing, in any window, until one comes back; its windows still draw and answer. Now each
+listing has a thread of its own, so other folders go on, and closing a window on a hung folder blocks the UI thread
+instead.
+
+What limits it:
+
+- A model runs one work at a time, so a hung folder holds one turn however many changes it is told of.
+- Files does not open a folder twice while it hangs. A model that is let go while its work runs or is overdue (a
+  request replaced, a window or a tab closed, a column gone) is kept by its folder in the session, and the next
+  request for that folder takes it instead of opening another. It leaves when its work ends.
+- Kit reports each overdue work once (`toolkit.task.overdue`), with the instance and the call.
+
+What remains: four folders that hang at once stop Files' I/O, and two windows that wait for the same hung folder hold
+a turn each. A larger share for a program that is the only instance of its process is Kit's to give
+(`task::IO_SHARE`, W4.5), not this family's.
+
+#### Transfers
+
+A copy is not one I/O task: it would hold a turn for minutes and pass any deadline its caller could name. A
+`Transfer` copies in slices and gives its turn back between them, so listings and thumbnails go on beside it and a
+stop takes effect at the next slice. Moving to the trash and emptying it are an item a task: `cupertino-trash`'s
+functions take one item each. The desktop component (W6.10) is the first caller that runs a `Transfer` as tasks;
+Files follows in W7.1.
+
+Not in these tasks, because their threads are their callers': Files' transfer thread (`kit/transfer.rs`), the preview
 window's read, the look-ups, the single-instance service, the places watch and `udisks` are Files' until W7.1; the
 desktop's `desktop-files` and `trash-sizes` threads are W6.10's; the chooser's `read` and `arm` threads are W6.11's.
 
@@ -678,9 +782,13 @@ natural order with the sort the program gives), and both need the owner's eye on
 
 - Wave 4 shares what is the same already: the places (below) and the row icons (`file_icons`).
 - W6.11, which moves the chooser into `cupertino-shell-dialogs` and gives it a capture example, gains a step: the
-  panel's rows are a `FileList`, the picker lists the family's `Entry` in the family's order, and `filepicker::Entry`
-  and its reader go (the second pair of copies, which meets only then). It is a look and behaviour change, shown on a
-  review sheet of the panel before and after, open and save, light and dark, for the owner.
+  panel is a view of `kit::files` (the sidebar of places, a `FileList`, the Save As field, the filters and choices,
+  the buttons), built from the chooser's model and the picker, which lists the family's `Entry` in the family's
+  order; `filepicker::Entry` and its reader go (the second pair of copies, which meets only then), and `filepicker`
+  may join `cupertino-ui-files`. It is a look and behaviour change, shown on a review sheet of the panel before and
+  after, open and save, light and dark, for the owner.
+- Settings' chooser sheet (`Chooser` in `cupertino-settings/src/sheet.rs`), which draws rows of its own on the same
+  `Picker`, moves onto that view in W7.2.
 - What a single-selection list does with a band, and whether the panel's sidebar is Files' sidebar, are settled on
   that sheet.
 
@@ -695,95 +803,160 @@ never uses Kit (W6.11), so the one reader is below Kit, beside `config_home`:
 pub mod user_dirs {
     /// The `XDG_<NAME>_DIR` assignments of a `user-dirs.dirs` text as `(NAME, path)`, `$HOME` expanded against `home`.
     pub fn parse(text: &str, home: &Path) -> Vec<(String, PathBuf)>;
-    /// The assignments of `user-dirs.dirs` in `config_home()`: none when the file is missing, an error when it cannot
-    /// be read or neither `XDG_CONFIG_HOME` nor `HOME` is set. It reads a file.
+    /// The assignments of the session's `user-dirs.dirs`: in `$XDG_CONFIG_HOME` when that is an absolute path, else
+    /// in `.config` of `home`. A relative `XDG_CONFIG_HOME` is not valid and is passed over, as the base directory
+    /// specification says. None when the file is missing; an error when it is there and cannot be read. It reads a
+    /// file.
     pub fn read(home: &Path) -> io::Result<Vec<(String, PathBuf)>>;
 }
 ```
 
-Files' `places` stays, as `files::places`: its `Place` (name, path, group, kind), `standard_places`, `folder_icons`,
-`desktop_folder`, `session_places`. `filepicker::places` goes, with its `Place`, `places` and `session_places`. The
-two lists differ and both stay, over one table of user directories: `standard_places` is Files' sidebar, and
-`chooser_places(home, &assigned) -> Vec<Place>` is the chooser's (Home, then Desktop, Documents, Downloads, Music,
-Pictures and Videos where they exist), with the names and symbols its rows have now.
+Files' `places` stays, as the family's `places`: its `Place` (name, path, group, kind), `standard_places`,
+`folder_icons`, `desktop_folder`, `session_places`. `filepicker::places` goes, with its `Place`, `places` and
+`session_places`. The two lists differ and both stay, over one table of user directories: `standard_places` is Files'
+sidebar, and `chooser_places(home, &assigned) -> Vec<Place>` is the chooser's (Home, then Desktop, Documents,
+Downloads, Music, Pictures and Videos where they exist), with the names and symbols its rows have now.
 
 | Caller | Effect |
 |---|---|
-| Files | None: its rules are the ones kept (a missing file assigns nothing, an unreadable one is an error at start). |
-| The portal's chooser | The same rows. `XDG_CONFIG_HOME` follows `config_home()`, the rule of every settings file: a relative value is used, which `filepicker::places` ignores. A file that cannot be read is one line on standard error and the sidebar of a missing file; `filepicker::places` says nothing. |
-| The portal's screenshot directory | Reads `cupertino_defaults::user_dirs`; the same two changes; `~/Pictures` when nothing is assigned or readable. |
+| Files | A relative `XDG_CONFIG_HOME` is passed over for this file, where Files uses it now. A missing file assigns nothing and an unreadable one is an error at start, as now. |
+| The portal's chooser | The same rows and the same `XDG_CONFIG_HOME` rule. A file that cannot be read is one line on standard error and the sidebar of a missing file; `filepicker::places` says nothing. |
+| The portal's screenshot directory | Reads `cupertino_defaults::user_dirs`; the same line; `~/Pictures` when nothing is assigned or readable. |
 | Settings' sheet | None: it names `filepicker::Picker`, not the places. |
 | `cupertino-screenshot`, the dock | None now. Their copies go in W6.4 and W6.8, which own those crates. |
 
-### Steps of W4.8
+`config_home()` keeps its rule for the settings files, where a relative value is used; whether it follows the
+specification too is not these tasks' to change.
 
-**Owns** `ui-controls` (`files`); `files`; `kit` (the `files` and `filepicker` lists of `lib.rs`, `file_icons.rs`,
-the README's module table); `defaults` (`user_dirs`); `portal` (where `dialog.rs` takes its places from, `pictures`
-in `screenshot.rs`). **Touches** the manifests of `ui-controls files kit portal`. **After** W4.7, W4.11. Size L, nine
-steps, one commit each.
+### The two tasks
 
-The proof of a step that changes no behaviour is the same pixels: every sheet of `files_capture` (`files/window`,
-`files/sidebar`, `files/preview`, `files/popover`, `files/tabs`) and `files/window --view columns --selected
-Documents/notes.txt`, at 1× and 2×, written with `--out` before and after, and `diff -r` of the two folders is empty.
-No step of this task changes a look, so none needs a review sheet; the panel's is W6.11's.
+W4.8 changes no behaviour and no look. Everything that changes behaviour is W4.12, a task of its own after it and
+before W6.10. Each step is one commit and ends with `cargo xtask ci --profile agent --base <B>`, the layers check and
+the graph and remaining-work list written again; a step that changes `Cargo.lock` checks its crates by name, as the
+plan's rules say.
+
+#### Proof
+
+- **The same pixels.** `files_capture` clicks and types: it has no held press, no secondary press, no gallery and no
+  desktop. W4.8's first step gives it those, and captures every sheet twice at the base: a surface whose two runs
+  differ is named in the report and left out. From then on a step's sheets, written with `--out` before and after at
+  1× and 2×, light and dark, are the same files (`diff -r` is empty). The sheets: `files/window` in the icon, list,
+  column and gallery views, each at rest, with an item selected, with a name being edited (`--state rename`), with a
+  ring under an open context menu (`--state ring`) and with a band held over items (`--state band`); `files/sidebar`,
+  `files/preview`, `files/popover`, `files/tabs`; and `files/desktop`, the desktop's items over a flat fill.
+- **What a capture cannot show.** The drag's image and the glass under the toolbar and the menus, which the
+  compositor draws; anything that is time (the delay before a rename, the band following the pointer past an edge,
+  type-to-select); where the keyboard goes. A state the headless window system cannot reach is named in the step's
+  report.
+- **Tests.** `cupertino-files` and this crate have no `tests/`, so pixels alone would carry the view steps. Each of
+  them writes its view's tests in `crates/cupertino-ui-files/tests/`, driven through the headless driver: the
+  selection a press, a key, the band and typing make; open; the rename press and its delay; Tab by name; a drag
+  starting; the secondary press and the menu's point; for the columns, pick, step and resize. They are the W4.T
+  tests of the views, written where the views change hands.
+- No step of either task changes a look, so neither has a review sheet; the panel's is W6.11's.
+
+#### W4.8 File views in Kit (L)
+
+**Owns** `ui-files`; `files`; `kit` (the `files` list of `lib.rs`, the README's module table); `layers` (`FACADES`);
+the `ui` row of `docs/src/architecture.md`. **Touches** the manifests of `files kit`. **After** W4.7, W4.11.
 
 | # | Step | Kind, size | Done when |
 |---|---|---|---|
-| 1 | **One geometry.** In Files, `geom`'s `Point`, `Size` and `Rect` go: the layouts, the desktop arrangement and their callers use `kit::geometry`. `Direction` stays. | no behaviour change, S | `geom` holds `Direction` alone and no function turns one rectangle type into the other; same pixels. |
-| 2 | **Values and operations.** `entry natural sort mime tags applications recents geom layout::icon rename name_edit open operations item_art` and the views' `metrics` are modules of `files`; `kit::files` lists what callers name; Files, its example and its bench name them from Kit. | move, M | `git diff -M` shows the bodies unchanged; no glob in Kit's lists; the remaining-work line `cupertino-files -> cupertino-ui-text` leaves the list; same pixels. |
-| 3 | **Places and user directories: one copy.** `cupertino_defaults::user_dirs`; Files' `places` is `files::places` with `chooser_places`; `filepicker::places` goes; the portal's chooser and `pictures` use them. | behaviour change (the portal: [Places](#places-and-user-directories)), S | `rg parse_user_dirs crates` finds only `cupertino-screenshot`; a test of `user_dirs` in `crates/cupertino-defaults/tests/`; a test that `chooser_places` gives the rows the chooser has now; the portal's diff holds no drawing code; same pixels in Files. |
-| 4 | **Icon grid.** `grid`, `band`, `clicks` and `Grab` are `files::IconGrid<M>` with `ViewEvent`; Files maps the events. | no behaviour change, M | Files' `Event` and `update` are untouched; same pixels. |
-| 5 | **List.** `list` and the list's assembly are `files::FileList<M>`. | no behaviour change, M | as 4. |
-| 6 | **Columns.** The column widgets and assembly are `files::FileColumns<M>`; the chain and its listings stay in Files. | no behaviour change, M | as 4; `rg 'Session\|BrowserWindow' crates/cupertino-ui-controls/src` finds nothing. |
-| 7 | **Listings as work.** `model` is `files::model` in the form above; the `directory` bench comes with it; Files runs the work and the watch, and goes back from a folder that does not open. | behaviour change, M | no `std::thread` and no `notify` in `files::model`; `tests/files-model.rs`: batches, a created, renamed and removed item seen through the watch, a folder that cannot be read as the first delta, a dropped model that ends its work; same pixels. |
-| 8 | **Thumbnails and item icons.** `thumbnail_service` and `item_icons` are in `files` as jobs; `file_icons.rs` comes down from `cupertino-kit`, whose `kit::file_icons` names the same items. | behaviour change, M | no `std::thread` in them; `tests/files-thumbnails.rs`: wanted first, two at once, the budget, a failure kept; same pixels, thumbnails included. |
-| 9 | **Notices.** `notice` is `files::notice` on the program's connection. | behaviour change, S | no `std::thread` and no `zbus::blocking` in it; `tests/files-notices.rs` against a stand-in service on a peer connection: order kept, a click back with its tag and token, `sent` ends. |
+| 1 | **The proof's captures.** `files_capture` gains a held press and a secondary press, `--view gallery`, `--state rename\|ring\|band` and `files/desktop`. | no behaviour change, S | two runs at the base give the same files; what could not be captured is named. |
+| 2 | **One geometry.** In Files, `geom`'s `Point`, `Size` and `Rect` go: the layouts, the desktop arrangement and their callers use `cupertino-geometry`, a `foundation` crate Files depends on by name. `Direction` stays. | no behaviour change, S | `geom` holds `Direction` alone and no function turns one rectangle type into the other; `cargo check -p cupertino-files` passes without features; same pixels. |
+| 3 | **The crate, its values and operations.** `cupertino-ui-files` (`ui`) with `entry natural sort mime tags applications recents geom layout::icon rename name_edit open operations item_art` and the views' `metrics`; `kit::files` lists what callers name; Files, its example and its bench name them from Kit. | move, M | `git diff -M` shows the bodies unchanged; no glob in Kit's lists; `FACADES` and the `ui` row name the crate; the remaining-work line `cupertino-files -> cupertino-ui-text` leaves the list; same pixels. |
+| 4 | **Icon grid.** `grid`, `band`, `clicks` and `Grab` are `IconGrid<M>` with `ViewEvent`; Files maps the events. | no behaviour change, M | Files' `Event` and `update` are untouched; `tests/icon-grid.rs`; same pixels. |
+| 5 | **List.** `list` and the list's assembly are `FileList<M>`. | no behaviour change, M | as 4, `tests/file-list.rs`. |
+| 6 | **Columns.** The column widgets and assembly are `FileColumns<M>`; the chain, its layout and its listings stay in Files. | no behaviour change, M | as 4, `tests/file-columns.rs`; `rg 'Session\|BrowserWindow' crates/cupertino-ui-files/src` finds nothing. |
 
-Steps 1 to 6 change no behaviour and 7 to 9 do; the lead may run 7 to 9 as a task of its own after 1 to 6. Every
-step ends with `cargo xtask ci --profile agent --base <B>`, the layers check and the graph and remaining-work list
-written again. From step 2 `cupertino-files` depends on `cupertino-kit` whether or not its `app` feature is on; the
-feature stays until W7.1. Until W7.1, too, Files makes its session connection before its loop starts and hands its
-async half to `Notices`.
+From step 3 `cupertino-files` depends on `cupertino-kit` whether or not its `app` feature is on; the feature stays
+until W7.1.
+
+#### W4.12 File services as work (L, behaviour change)
+
+**Owns** `ui-files`; `files`; `kit` (`file_icons.rs`, the `files` and `filepicker` lists of `lib.rs`, the README);
+`ui-controls` (`filepicker::places`); `defaults` (`user_dirs`); `portal` (where `dialog.rs` takes its places from,
+`pictures` in `screenshot.rs`). **Touches** the manifests of `ui-files files kit portal`. **After** W4.8.
+
+| # | Step | Size | Done when |
+|---|---|---|---|
+| 1 | **Places and user directories: one copy.** `cupertino_defaults::user_dirs`; Files' `places` is the family's, with `chooser_places`; `filepicker::places` goes; the portal's chooser and `pictures` use them. Changes: [Places](#places-and-user-directories). | S | `rg parse_user_dirs crates` finds only `cupertino-screenshot`; a test of `user_dirs` in `crates/cupertino-defaults/tests/` (a relative `XDG_CONFIG_HOME` among its rows); a test that `chooser_places` gives the rows the chooser has now; the portal's diff holds no drawing code; same pixels in Files. |
+| 2 | **Listings as work.** `model` is the family's, in the form above, and the `directory` bench comes with it; the browser waits for a model's first update; the session keeps the models whose work runs. Changes: [Slow work](#slow-work). | L | no `std::thread` and no `notify` in the model; `tests/model.rs`: `Opened` then batches; `OpenFailed` with its kind for a missing folder, a file and a folder without read permission, with and without a watch; a created, renamed and removed item seen through the watch the first work registered; works one at a time and in order; `follow` ends when its model is dropped with no event. In Files: a failed go, Back, Forward and Parent leave the listing and the history as they are and post the notice; a folder asked for again while its work runs opens no second model. Same pixels. |
+| 3 | **Thumbnails and item icons.** `thumbnail_service` and `item_icons` are the family's, as jobs; `file_icons.rs` comes down from `cupertino-kit`, whose `kit::file_icons` names the same items. | M | no `std::thread` in them; `tests/thumbnails.rs`: wanted first, two at once, the budget, a failure kept, a decoder's panic kept as a failure; same pixels, thumbnails included. |
+| 4 | **Notices.** `notice` is the family's, on the program's connection. Until W7.1 Files makes its session connection before its loop starts and hands its async half to `Notices`. | S | no `std::thread` and no `zbus::blocking` in it; `tests/notices.rs` against a stand-in service on a peer connection: order kept, a click back with its tag and token, `sent` ends. |
+| 5 | **Transfers in slices.** `operations::Transfer`; `transfer`, `duplicate_with` and `drop_into` loop over it. | M | `tests/transfer.rs`: a tree copied and moved slice by slice with its progress, a move across two file systems, a stop that removes the item being copied, a source that changed while it was copied left where it was, the results the blocking functions give now. |
 
 ### What the later tasks take
 
-- **W6.10** (`cupertino-shell-desktop`): `desktop`, `kit::desktop` and `metrics::desktop` leave Files for the
-  component, which names `kit::files` for its listing, item icons, names, rename, operations, open, notices and
-  `places::desktop_folder`, and runs its file work as tasks. It keeps its own item view: "on Kit's file views" reads
-  "on `kit::files`".
-- **W6.11** (`cupertino-shell-dialogs`): the panel step above; the chooser reads its places and its folders as tasks.
-- **W7.1** (Files through Kit): Files' own threads become tasks, `udisks` and the session connection go through
-  `kit::bus::connect`, its `notify` watch of the places goes, its `clippy.toml` arrives. A transfer run as one
-  `kit::task::io` holds one of the instance's four turns for as long as it copies; W7.1 says how many run at once.
+- **W6.10** (`cupertino-shell-desktop`, after W4.12): `desktop`, `kit::desktop` and `metrics::desktop` leave Files for
+  the component, which names `kit::files` for its listing, item icons, names, rename, operations, open, notices and
+  `places::desktop_folder`. It runs its file work as tasks, a `Transfer` slice by slice, the first caller to do so.
+  It keeps its own item view: "on Kit's file views" reads "on `kit::files`".
+- **W6.11** (`cupertino-shell-dialogs`, after W4.12): the panel step above; the chooser reads its places and its
+  folders as tasks.
+- **W7.1** (Files through Kit): Files' own threads become tasks, its transfers run slice by slice, `udisks` and the
+  session connection go through `kit::bus::connect`, its `notify` watch of the places goes, its `clippy.toml`
+  arrives.
+- **W7.2**: Settings' chooser sheet is the panel of `kit::files`.
 - **W6.4**, **W6.8**: `cupertino-screenshot` and the dock read `cupertino_defaults::user_dirs`.
 
 ### What W4.T tests
 
-Once step 9 is merged, the `ui` part of W4.T writes this crate's tests with the family in them, one a behaviour:
-each view driven through `kit::test` (selection by press, keys, band and typing; open; the rename press; Tab by
-name; a drag starting; the events of a column), `layout::icon`, natural order and sort, name checks and free names,
-the operations on a temporary folder (copy and move with progress and a stop, duplicate, alias, a folder of items),
-`open` against a fixture of applications, the two lists of places, and a notice's words. The tests of steps 3 and 7
-to 9 are there already. Files' own modules are W7.T's.
+The `ui` part of W4.T starts once W4.8 is merged. The views' tests are there from W4.8's steps 4 to 6, and W4.12's
+steps bring their own. In `cupertino-ui-files` W4.T writes what is left, in files W4.12 does not own: `layout::icon`,
+natural order and sort, the types of `mime`, tags read and written, name checks and free names, `name_edit`, `open`
+against a fixture of applications, and the operations that are not a transfer (a folder made, an alias, a rename).
+Files' own modules are W7.T's.
+
+### Edits of the plan
+
+The lead makes these when the design is approved.
+
+- **D8**: the family meets in `cupertino-ui-files`, not in `cupertino-ui-controls`; the open and save panel joins it
+  in W6.11, not in W4.8.
+- **Crate map**: `cupertino-ui-files | ui | W4.8` among the crates added, 73 at the end; `cupertino-ui-controls`
+  loses "gains the file views (D8)", and its `filepicker::places` goes (W4.12); `cupertino-files`' views and
+  operations move to `cupertino-ui-files` (W4.8, W4.12, W6.10, W7.1); `cupertino-defaults` gains `user_dirs` (W4.12).
+- **Facades**: `cupertino-ui-files` joins the crates reached through `cupertino-kit`.
+- **Decision log**: `cupertino-ui-files` exists for D32's fourth reason (`cupertino-ui-controls` is 28 005 lines, the
+  family about 8 800 with fourteen dependencies of its own, and the two split at the controls' public items). The Kit
+  API of W4.7 is amended: `kit::files` is added, `kit::filepicker::places` (`session_places`, `parse_user_dirs`,
+  `Place`) goes, `kit::file_icons` names the same items from another crate. The owner's answers to
+  [Decisions for approval](#decisions-for-approval).
+- **W4.8**: the title keeps "File views in Kit (L)"; Owns, After and the six steps above replace its three; its
+  panel step and its "review sheet, Files and chooser captures" go, since no look changes: the proof is the same
+  pixels and the views' tests.
+- **W4.12** is added, "File services as work (L, behaviour change)", after W4.8; W4.close waits for it.
+- **W4.T**: `ui-files` joins its crates; its `ui` part starts once W4.8 is merged.
+- **W6.10**: after W4.12; "on Kit's file views" reads "on `kit::files`, with its own item view"; it runs transfers
+  slice by slice.
+- **W6.11**: after W4.12; gains the panel step (look and behaviour change, review sheet) and the chooser's capture
+  example; `filepicker` may join `cupertino-ui-files`.
+- **W7.1**, **W7.2**, **W6.4**, **W6.8**: as [What the later tasks take](#what-the-later-tasks-take).
 
 ### Decisions for approval
 
-1. **The views' boundary (A).** The three views are widgets generic over the program's message, reporting through
-   `ViewEvent` and one function; the list and the columns come assembled, not as their parts; the chain's listings,
-   the preview pane and the name field stay with the program. Default: yes. The types above are the whole of it.
-2. **Where the family is (B).** A module of `cupertino-ui-controls`, as D8 and the crate map say, with the lines and
-   dependencies named above. The other course is a crate of its own in `ui` (`cupertino-ui-files`, D32's fourth
-   reason: this crate is past 25 000 lines and the views already name the controls only by their public items), which
-   needs a row in the crate map and a line in the decision log. Default: the module.
-3. **What stays in Files (B).** Everything one program uses, `udisks` included. Default: yes.
-4. **Threads (C).** The family starts none and reads no file on the UI thread; the behaviour changes of
-   [Slow work](#slow-work) are accepted, the four turns an instance has among them. Default: yes.
-5. **The panel's look (D).** Unchanged in wave 4; its rows become a `FileList` in W6.11, on a review sheet.
-   Default: yes. The other course builds it in wave 4, in a file three later tasks take apart, with no capture to
-   show it.
-6. **Places (E).** One reader of the user directories in `cupertino-defaults`; Files' places and rules stay; the
-   portal takes Files' `XDG_CONFIG_HOME` rule and reports an unreadable file. Default: yes. The other course keeps
-   the reader in Kit, and the portal copies it again when it stops using Kit.
-7. **Wave 4 holds all nine steps**, with the Owns list above (`kit`, `defaults` and all of `files` beside the plan's),
-   so Kit's file API is settled and tested once; only the callers' own work is left to W6.10, W6.11 and W7.1.
-   Default: yes.
+Each has the default the lead proposes. Four changed in review and two were added there.
+
+1. **The views' boundary.** The three views are widgets generic over the program's message. They report through
+   `ViewEvent` and one function, which may answer with no message. The list and the columns come assembled; the
+   chain's listings and layout, the preview pane and the name field stay with the program. Default: yes.
+2. **A crate of its own** (changed in review). The family is `cupertino-ui-files`, in `ui`, not a module of
+   `cupertino-ui-controls`: 73 crates at the end. Default: yes.
+3. **What stays in Files.** Everything one program uses, `udisks` included. Default: yes.
+4. **No threads** (changed in review). The family starts none and touches no file on the UI thread, watch
+   registration included. A model runs one work at a time. A folder that does not open, one without read permission
+   among them, leaves the window where it is with the notice it gets now. Default: yes.
+5. **Mounts that do not answer** (added in review). Files' I/O takes turns, four at once for all its windows, so four
+   folders hung at once stop its listings, thumbnails and copies until one comes back; the windows still answer, and
+   closing one does not block. Files never opens the same hung folder twice. Default: accept this. The other
+   course is a larger share for Files, which Kit's runtime would give.
+6. **Transfers in slices** (added in review). A copy or a move gives its I/O turn back every tenth of a second
+   instead of holding it to the end. Default: yes.
+7. **The panel's look.** Unchanged in wave 4. In W6.11 it becomes a view of `kit::files` on a `FileList`, on a review
+   sheet, and Settings' sheet moves onto it in W7.2. Default: yes.
+8. **Places** (changed in review). One reader of the user directories, in `cupertino-defaults`. It passes over a
+   relative `XDG_CONFIG_HOME`, as the specification says, which is the portal's rule now and not Files'. It reports
+   an unreadable file. Default: yes.
+9. **Two tasks** (changed in review). W4.8 changes no behaviour (six steps). W4.12 holds every behaviour change
+   (five steps), after W4.8 and before W6.10; W4.T's `ui` part starts after W4.8. Default: yes.

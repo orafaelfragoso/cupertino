@@ -1176,3 +1176,6 @@ One line per change to a decision or approval of a design: date, number, what, w
   surfaces keep their holes, claims and placements; staging keeps layer commits; the bridge is a socket pair the
   server passes. W4.9 gives three protocol files, and W5.5, W6.8 and W6.9 own the edits of the existing protocol files
   the specification gives them.
+- 2026-11-18: owner approves W4.9 in advance of its rework, on the condition that the reworked specification makes
+  every change the review asked for and none of its decisions for approval departs from the reviewer's position; a
+  decision that departs comes back to the owner alone. W4.10 starts when the rework is merged.

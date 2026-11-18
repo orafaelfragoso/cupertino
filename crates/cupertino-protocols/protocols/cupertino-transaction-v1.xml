@@ -1,0 +1,425 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="cupertino_transaction_v1">
+  <copyright>
+    SPDX-License-Identifier: MIT OR Apache-2.0
+  </copyright>
+
+  <description summary="changes of several components that the server starts on one frame, and holes for windows">
+    A transaction groups changes of one or more participants and starts them on the same
+    presented frame. A participant is a connection of a shell component; the server takes part
+    with the window changes a participant asks of it. The changes themselves are described with
+    the protocols that carry them already: a surface's content and the values, animations and
+    looks of its layers and its presentation (cupertino_layers_v1) travel in the surface's
+    commit, and a window change is a request on a role object. A transaction holds those commits
+    and requests back and applies them together. Motion is never streamed: an animation is a
+    target with the parameters of a timed curve or a spring, which the server evaluates on the
+    clock of the transaction's output with the functions the toolkit evaluates.
+
+    A transaction may be bound to a touchpad gesture the server recognises: the gesture's
+    progress then stands in for time, and the release settles the transaction along a spring
+    with the gesture's velocity, with no message between the processes while the fingers move.
+
+    A hole is a layer of a component's surface in which the server draws a window, a minimized
+    window's picture or a workspace, moving, scaling, fading and clipped with that layer.
+
+    The protocol is private and unstable: interfaces may change without a version bump.
+  </description>
+
+  <interface name="cupertino_transaction_manager_v1" version="1">
+    <description summary="makes transactions and holes">
+      Global singleton, offered only on a connection the server handed out for a component
+      (cupertino_host_component_v1.connection). A transaction is named by the component that
+      created it and a serial that component chose, so the creator tells another component the
+      name without waiting for the server.
+    </description>
+
+    <enum name="error">
+      <entry name="serial" value="0" summary="the connection already has a transaction of that serial that has not ended"/>
+      <entry name="too_many" value="1" summary="the connection holds 16 transactions that have not ended, or 256 holes"/>
+      <entry name="invalid_surface" value="2" summary="the surface belongs to another client or is gone"/>
+      <entry name="role" value="3" summary="the surface is not a layer of cupertino_layers_v1, or already has a hole"/>
+      <entry name="permission" value="4" summary="the connection does not hold the role the request needs"/>
+      <entry name="component" value="5" summary="not a name of the server's component table"/>
+    </enum>
+
+    <request name="destroy" type="destructor">
+      <description summary="unbind the global">
+        Transactions and holes created through this global stay valid.
+      </description>
+    </request>
+
+    <request name="create">
+      <description summary="start describing a transaction">
+        Creates the transaction named by this connection's component and serial, on the clock of
+        output: the times of the transaction are presentation times of that output. The
+        connection is its creator and its first participant. Posts the serial error while the
+        connection has a transaction of that serial that has not ended, and too_many when it
+        holds 16 of them.
+      </description>
+      <arg name="id" type="new_id" interface="cupertino_transaction_v1"/>
+      <arg name="serial" type="uint"/>
+      <arg name="output" type="object" interface="wl_output"/>
+    </request>
+
+    <request name="join">
+      <description summary="take part in another component's transaction">
+        Makes this connection a participant of the transaction that component created with
+        serial. What the participant stages and asks for joins that transaction as its own part.
+
+        The name may arrive before the creator's create: a join that finds no such transaction
+        waits for it, at most 100 milliseconds, and the participant may stage and submit
+        meanwhile; when none came, the participant's part starts as a transaction of its own. A
+        join to a transaction that has started is late (see cupertino_transaction_v1). The
+        server remembers a transaction for 10 seconds after it ended: a join in that time
+        applies the participant's part with every animation at its end.
+
+        Posts the component error for a name that is not a component's.
+      </description>
+      <arg name="id" type="new_id" interface="cupertino_transaction_v1"/>
+      <arg name="component" type="string"/>
+      <arg name="serial" type="uint"/>
+    </request>
+
+    <request name="get_hole">
+      <description summary="draw a window in a layer">
+        Makes a layer of this client (a surface with a cupertino_layer_v1 object) a hole: the
+        server draws the hole's source in the layer's bounds, below the layer's own content and
+        above its glass. Needs the windows role. Posts invalid_surface for a surface of another
+        client, role for a surface that is not a layer or already has a hole, permission
+        without the windows role, and too_many when the connection holds 256 holes.
+      </description>
+      <arg name="id" type="new_id" interface="cupertino_hole_v1"/>
+      <arg name="surface" type="object" interface="wl_surface"/>
+    </request>
+  </interface>
+
+  <interface name="cupertino_transaction_v1" version="1">
+    <description summary="one participant's part of a transaction">
+      Each participant has an object of its own for the transaction. Through it the participant
+      stages surfaces, brackets window changes and submits.
+
+      Staging. From stage on, the commits of the surface are not applied: the server keeps them,
+      a later one added to the earlier ones in order, as a synchronized subsurface's state is
+      kept. Everything a commit applies is kept with it: the buffer, the damage, the state of
+      the surface's layers, presentation and holes that is double-buffered on it, and the cached
+      state of its subsurfaces. The frame callbacks of a kept commit are answered as if it had
+      been applied, so the participant keeps its pace; its presentation feedback follows the
+      frame that first shows it. A surface is staged in one transaction at a time.
+
+      Window changes. Between begin_window_changes and end_window_changes, the requests this
+      connection makes on its role objects that change windows are kept as well:
+      activate_window, restore_window, activate_app, app_command, switch_workspace,
+      move_workspace, add_workspace, remove_workspace, move_window, move_to_workspace,
+      window_command and a window manager's commit with its placements. The server carries them
+      out at the transaction's start, and the animations it runs for them (a window restored,
+      raised or placed, a workspace switched) start there. Any other request is carried out when
+      it arrives.
+
+      Ready. A participant is ready when it has sent submit and each surface it staged has
+      committed at least once since. A participant that has not sent submit 100 milliseconds
+      after it created or joined is taken as having sent it.
+
+      Start. The transaction starts on the first frame of its output that the server prepares
+      after its creator and every component the creator expects are ready, and at the latest on
+      the first frame prepared after the deadline, counted from the creator's submit. A
+      component that is stopped, lost, unresponsive or reported busy is not waited for. On that
+      frame the server applies the kept commits of every ready participant and carries out
+      their window changes. The start time is the presentation time of that frame. Every
+      animation the transaction starts counts its time from the start time, on every output: an
+      output shows the transaction on its first frame presented at or after the start time,
+      with each animation as far along as that frame's own presentation time says. When the
+      transaction's output is gone or shows no frame, the start time is the server's clock when
+      the transaction became ready or the deadline passed.
+
+      Late. A participant that becomes ready after the start joins then: its kept commits are
+      applied and its window changes carried out on the next frame, and each animation they
+      start runs as if it had started at the start time, from the value and velocity its
+      property had then, so it is as far along as the others; one whose end has passed is at its
+      end. A late animation of a property that a transaction with a later start time animates is
+      dropped: the later transaction keeps the property.
+
+      One property, two transactions. An animation started by a later transaction replaces the
+      earlier one of the same property from the value and velocity shown at the later start, as
+      cupertino_layer_v1 retargets, and its client hears replaced there. The earlier transaction
+      goes on with its other animations.
+
+      End. The transaction ends when every animation its parts started has finished or been
+      replaced and every window change has been carried out; each participant hears finished.
+
+      Reduced motion. While reduce_motion is on, animations follow cupertino_layer_v1: those of
+      the spatial properties are at their target in their first frame and opacity animates as
+      asked, and the server's own window changes take their reduced form. The start, the
+      deadline and the late rule are the same.
+
+      A participant's connection ending. What the participant had kept and not applied is
+      dropped, and the transaction does not wait for it. What had started ends with its
+      surfaces: on a surface the server holds (cupertino_component_v1.persist) every animation
+      is at its end at once, and a transient surface is dismissed with its animations and
+      holes. The other participants' parts are not touched. When the creator of a transaction
+      bound to a gesture goes, the binding ends: a gesture under way is settled back to the
+      start.
+    </description>
+
+    <enum name="error">
+      <entry name="creator" value="0" summary="a request only the creator may make came from another participant"/>
+      <entry name="submitted" value="1" summary="stage, expect, set_deadline, bind_gesture, bind_reverse_gesture or begin_window_changes after submit"/>
+      <entry name="invalid_surface" value="2" summary="the surface belongs to another client, is gone or has no role"/>
+      <entry name="staged" value="3" summary="the surface is staged in a transaction that has not started"/>
+      <entry name="bracket" value="4" summary="begin_window_changes inside a bracket, end_window_changes outside one, or submit inside one"/>
+      <entry name="invalid_spring" value="5" summary="a spring response outside 0.01 to 10 seconds or a damping ratio outside 0.05 to 4"/>
+      <entry name="invalid_gesture" value="6" summary="not an entry of gesture, or a reverse binding without a binding"/>
+      <entry name="permission" value="7" summary="the connection does not hold the role the request needs"/>
+      <entry name="too_many" value="8" summary="more than 32 staged surfaces or 16 expected components"/>
+      <entry name="component" value="9" summary="not a name of the server's component table"/>
+    </enum>
+
+    <request name="destroy" type="destructor">
+      <description summary="let go of the transaction">
+        Before the participant's submit this withdraws its part: its kept commits are applied at
+        once, as ordinary commits, its kept window changes are carried out at once, and the
+        transaction does not wait for it. After submit the part stays in the transaction and
+        only the events end. Destroying the creator's object of a transaction bound to a gesture
+        also ends its bindings: a gesture under way is settled back to the start.
+      </description>
+    </request>
+
+    <request name="expect">
+      <description summary="wait for another component's part">
+        The creator names a component whose part belongs at the start: the transaction waits for
+        that component to join and be ready, until the deadline. Posts creator from another
+        participant, component for a name that is not a component's and too_many for a 17th
+        name.
+      </description>
+      <arg name="component" type="string"/>
+    </request>
+
+    <request name="set_deadline">
+      <description summary="how long the start waits for the expected components">
+        The longest time, counted from the creator's submit, that the start waits. Without this
+        request it is one frame interval of the transaction's output plus 4 milliseconds. A
+        deadline over 100 milliseconds is held at 100. Posts creator from another participant.
+      </description>
+      <arg name="milliseconds" type="uint"/>
+    </request>
+
+    <request name="stage">
+      <description summary="keep a surface's commits for the transaction">
+        The surface is one with a role (a layer shell surface, a window or a popup), not a
+        layer: a layer's state travels in its parent's commit. From this request until the
+        participant's part is applied, the surface's commits are kept (see the interface). Posts
+        invalid_surface, staged when the surface is staged in a transaction that has not
+        started, and too_many for a 33rd surface.
+      </description>
+      <arg name="surface" type="object" interface="wl_surface"/>
+    </request>
+
+    <request name="begin_window_changes">
+      <description summary="keep the window changes that follow">
+        Opens the bracket: the window changes this connection asks for on its role objects from
+        here to end_window_changes are kept for the transaction, in order. A role request that
+        fails its own checks is refused when it arrives, as outside a bracket. Posts bracket
+        inside an open bracket.
+      </description>
+    </request>
+
+    <request name="end_window_changes">
+      <description summary="close the bracket">
+        Posts bracket without an open bracket.
+      </description>
+    </request>
+
+    <enum name="gesture">
+      <entry name="swipe_up" value="0" summary="a three- or four-finger swipe up"/>
+      <entry name="swipe_down" value="1" summary="a three- or four-finger swipe down"/>
+      <entry name="pinch" value="2" summary="a four-finger pinch in"/>
+      <entry name="spread" value="3" summary="a four-finger spread"/>
+    </enum>
+
+    <request name="bind_gesture">
+      <description summary="let a gesture drive the transaction">
+        The transaction does not start when it is ready: it waits, armed, for the gesture on its
+        output. Needs the overview role; only the creator binds. While a transaction is armed
+        for a gesture on an output, that gesture goes to it and is not reported to the dock.
+
+        When the server's recogniser claims the gesture, the transaction starts with the
+        participants that are ready (gesture_began): their kept commits are applied and the
+        values they set take effect, and every animation they start is tracked. A tracked
+        animation shows its start value plus the gesture's progress times the way to its target,
+        whatever its curve; an animation through samples shows the sample at that progress. The
+        progress is the recogniser's, 0 where the gesture began and 1 for a whole gesture, held
+        between the two.
+
+        When the fingers lift, the recogniser decides whether the gesture is completed or
+        reverted (gesture_ended), and the server moves the progress to 1 or back to 0 along the
+        spring of this request, starting from the gesture's velocity: response is the period of
+        the undamped spring in seconds, damping its damping ratio. The window changes of the
+        transaction are carried out when the progress comes to rest at 1, and dropped when it
+        comes to rest at 0. At rest every participant hears finished.
+
+        A participant that becomes ready while the gesture is under way joins at the progress
+        shown then. While reduce_motion is on, the progress drives opacity alone: a spatial
+        property keeps its start value until the progress comes to rest at 1 and takes its
+        target there.
+
+        An armed transaction keeps the commits of its staged surfaces until the gesture begins,
+        so it suits a surface that shows nothing before; the participant stages again to
+        describe another start. Posts creator, permission, invalid_gesture, invalid_spring, and
+        submitted after submit.
+      </description>
+      <arg name="gesture" type="uint" enum="gesture"/>
+      <arg name="response" type="fixed"/>
+      <arg name="damping" type="fixed"/>
+    </request>
+
+    <request name="bind_reverse_gesture">
+      <description summary="let a second gesture drive the transaction back">
+        Once the transaction has come to rest completed, this gesture on its output drives the
+        same properties back: its progress runs from 1 towards 0, between the values they show
+        at rest and the values they had when the first gesture began, and the release settles
+        along the same spring. Reverted, the transaction is over and its bindings end; completed
+        again, the reverse gesture stays armed. Window changes are not undone. The binding lasts
+        until the creator destroys its object or cancels. Posts invalid_gesture without a
+        bind_gesture before it, and the errors of bind_gesture.
+      </description>
+      <arg name="gesture" type="uint" enum="gesture"/>
+    </request>
+
+    <request name="submit">
+      <description summary="the participant's part is described">
+        Nothing more is staged or bracketed for this participant. Posts bracket inside an open
+        bracket.
+      </description>
+    </request>
+
+    <request name="cancel">
+      <description summary="give the transaction up">
+        From a participant that is not the creator, cancel is destroy without the object going
+        away. From the creator it ends the transaction for everyone. Before the start, every
+        participant's kept commits are applied at once as ordinary commits and its kept window
+        changes carried out at once, each part by itself: a participant that wants its change
+        undone commits the opposite before it cancels. After the start, every animation the
+        transaction started stops at the value shown on the next frame, and its client hears
+        replaced with that value; window changes that were carried out stay. An armed
+        transaction is disarmed as before the start; one whose gesture is under way is settled
+        back to its start. Every participant hears finished with cancelled.
+      </description>
+    </request>
+
+    <event name="started">
+      <description summary="the transaction started">
+        Sent to each participant when its part is applied: the start time, as the presentation
+        clock gives it (the clock of wp_presentation), which is the time every animation of the
+        transaction counts from. A late participant gets the original start time. Not sent for a
+        transaction bound to a gesture, which sends gesture_began.
+      </description>
+      <arg name="tv_sec_hi" type="uint" summary="high 32 bits of the seconds"/>
+      <arg name="tv_sec_lo" type="uint" summary="low 32 bits of the seconds"/>
+      <arg name="tv_nsec" type="uint" summary="nanoseconds"/>
+    </event>
+
+    <event name="gesture_began">
+      <description summary="the bound gesture drives the transaction">
+        Sent to each participant: the gesture of bind_gesture, or of bind_reverse_gesture, began
+        on the transaction's output. A participant that has not staged its part does so on this
+        event and joins at the progress shown.
+      </description>
+      <arg name="gesture" type="uint" enum="gesture"/>
+    </event>
+
+    <enum name="outcome">
+      <entry name="completed" value="0" summary="at its end: every change reached its target"/>
+      <entry name="reverted" value="1" summary="a gesture took it back to its start"/>
+      <entry name="cancelled" value="2" summary="the creator cancelled it"/>
+    </enum>
+
+    <event name="gesture_ended">
+      <description summary="the fingers lifted">
+        The transaction settles towards outcome, completed or reverted, along the binding's
+        spring; finished follows when it is at rest.
+      </description>
+      <arg name="outcome" type="uint" enum="outcome"/>
+    </event>
+
+    <event name="finished">
+      <description summary="the transaction is at rest">
+        Sent to each participant when the transaction ended, and for a transaction bound to a
+        gesture each time it comes to rest. After completed with a reverse binding the
+        transaction stays, for that gesture; after reverted or cancelled it is over.
+      </description>
+      <arg name="outcome" type="uint" enum="outcome"/>
+    </event>
+  </interface>
+
+  <interface name="cupertino_hole_v1" version="1">
+    <description summary="a layer in which the server draws a window">
+      The hole fills its layer's bounds as the layer is shown and moves, scales, fades and is
+      clipped with it; the layer's animations are the hole's. Its source is drawn to fit the
+      bounds with its proportions kept, centred. The pixels are the server's: the component
+      never receives them, and a capture of the screen leaves out of a hole whatever it leaves
+      out of the source's own place.
+
+      The state of a hole is double-buffered with its layer's: it applies on the commit of the
+      layer's parent, and a staged parent carries it into the transaction. A hole takes no
+      input: pointer and touch go to the parent surface, and the component decides what a press
+      on the hole means.
+    </description>
+
+    <enum name="error">
+      <entry name="invalid_source" value="0" summary="not an entry of source"/>
+      <entry name="permission" value="1" summary="the connection does not hold the role the request needs"/>
+    </enum>
+
+    <enum name="source">
+      <entry name="none" value="0" summary="nothing is drawn"/>
+      <entry name="window" value="1" summary="a window as it shows, with its decorations and its shadow, live"/>
+      <entry name="thumbnail" value="2" summary="a minimized window as it last showed, without its shadow"/>
+      <entry name="workspace" value="3" summary="a workspace as it is: its wallpaper and its windows, live"/>
+    </enum>
+
+    <request name="destroy" type="destructor">
+      <description summary="remove the hole">
+        The hole goes with the next commit of its layer's parent, and its claim with it.
+      </description>
+    </request>
+
+    <request name="set_source">
+      <description summary="what the hole shows">
+        id is a window id, the same as the feeds of the role objects give, or a workspace id.
+        An id that names nothing draws nothing: the window may have just closed. The workspace
+        source needs the overview role. Posts invalid_source and permission.
+      </description>
+      <arg name="source" type="uint" enum="source"/>
+      <arg name="id" type="uint"/>
+    </request>
+
+    <request name="set_claim">
+      <description summary="take the window off its own place">
+        1 claims the window of a window source: from the commit that applies it the window is
+        drawn in this hole alone, not at its own frame, and takes no pointer or touch input. 0,
+        the initial state, leaves the window where it is. A hole that sets the claim in the
+        commit that first shows it, with its layer at the window's frame, takes the window over
+        without a change on screen. Needs the overview or the window manager role.
+
+        A window has one claim in force: the latest; an earlier claim of another hole shows
+        nothing until the later one ends. When the claim ends with a commit of the component
+        (set_claim 0, or the hole or its layer destroyed), the window is drawn at its own frame
+        from that commit. When it ends any other way (the surface is dismissed, the connection
+        ends), the server moves the window from where the hole showed it to its own frame along
+        its return motion, so no window jumps.
+
+        Posts permission without one of the roles.
+      </description>
+      <arg name="claim" type="uint"/>
+    </request>
+
+    <event name="source_closed">
+      <description summary="the hole's window or workspace is gone">
+        The window closed, or the workspace was removed. A window source keeps the window's
+        last picture and fades it out where the hole lies, along the server's closing animation;
+        after that, and for a workspace at once, the hole draws nothing. A thumbnail source is
+        also closed when its window stops being minimized. The component lays its surface out
+        again without the hole.
+      </description>
+    </event>
+  </interface>
+</protocol>

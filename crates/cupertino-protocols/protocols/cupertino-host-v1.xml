@@ -1,0 +1,369 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="cupertino_host_v1">
+  <copyright>
+    SPDX-License-Identifier: MIT OR Apache-2.0
+  </copyright>
+
+  <description summary="private protocol between the Cupertino server, a shell host and its components">
+    A shell host is a process that runs components of the shell, each on a thread and a
+    connection of its own. The server starts the host on a connection that holds the host role
+    and nothing else, tells it which components it runs, and hands it one connection per
+    component on request; a component's roles are bound to that connection and end with it. The
+    host reports what it observes of each component (busy, unresponsive, lost, failed), and the
+    server decides what follows: when a component starts again, when it stops, and which host
+    runs it. A component holds its roles in one host at a time.
+
+    The protocol is private and unstable: interfaces may change without a version bump.
+  </description>
+
+  <interface name="cupertino_host_v1" version="1">
+    <description summary="a shell host">
+      Global singleton, offered only to a connection the server made for a host process it
+      started. The connection holds the host role alone: it sees this global and the core
+      globals, and none of the roles of the components.
+
+      Right after binding the server sends kind, then the component list: one component event
+      for each component this host runs, followed by done. Whenever the list changes the whole
+      list is sent again, and each list replaces the one before. For a component of the list
+      the host creates its object with get_component and asks for its connection. A component
+      that left the list is stopped by the host, which then destroys its object.
+
+      A host is shared or separate. The shared host runs every component that no separate host
+      runs, and serves the host bus, the message bus of the components, on a socket of its own
+      (serve_bus). A separate host runs one component and reaches the host bus through that
+      socket (bus). A session has at most one shared host; while components run, it has exactly
+      one, also when its list is empty.
+    </description>
+
+    <enum name="error">
+      <entry name="component" value="0" summary="the host already holds an object for that component"/>
+      <entry name="kind" value="1" summary="a request only the shared host may make came from a separate one"/>
+      <entry name="path" value="2" summary="the bus socket path is not absolute or is over 107 bytes"/>
+    </enum>
+
+    <enum name="kind">
+      <entry name="shared" value="0" summary="runs the components no separate host runs and serves the host bus"/>
+      <entry name="separate" value="1" summary="runs one component and reaches the host bus through the shared host"/>
+    </enum>
+
+    <request name="destroy" type="destructor">
+      <description summary="unbind the host global">
+        Component objects created through this global stay valid.
+      </description>
+    </request>
+
+    <event name="kind">
+      <description summary="what this host is">
+        Sent once, before the first list.
+      </description>
+      <arg name="kind" type="uint" enum="kind"/>
+    </event>
+
+    <event name="component">
+      <description summary="a component this host runs">
+        The name is one of the server's component table (at most 32 bytes of lower-case ASCII
+        letters). The components sent since the last done are the whole list. A name the host
+        does not hold a component for is answered with get_component and unavailable.
+      </description>
+      <arg name="name" type="string"/>
+    </event>
+
+    <event name="done">
+      <description summary="end of a component list">
+        A list may be empty: the host then runs no component. A separate host whose list is
+        empty exits successfully once its component has stopped.
+      </description>
+    </event>
+
+    <request name="get_component">
+      <description summary="the host's object for one component">
+        Creates the object the host reports the component's state on and receives its
+        connection on. A name that is not in the host's current list is not an error, since the
+        list may have just changed: the object is inert, its connect is never answered, and the
+        host destroys it when the next list arrives without the name. Posts the component error
+        when the host already holds an object for the name.
+      </description>
+      <arg name="id" type="new_id" interface="cupertino_host_component_v1"/>
+      <arg name="name" type="string"/>
+    </request>
+
+    <request name="request_restart">
+      <description summary="ask to be restarted at a quiet moment">
+        The host holds a thread it cannot end (a component that was lost) and asks to be started
+        afresh. The server answers with restart once the seat has had no input for two seconds
+        and no component of this host holds a grab or shows a transient surface. A restart asked
+        for this way is not counted as a crash of the host. Asking again before the answer
+        changes nothing.
+      </description>
+    </request>
+
+    <event name="restart">
+      <description summary="the quiet moment came">
+        The answer to request_restart: the host stops its components and exits. The server
+        starts it again at once, with the list it has then. The persistent surfaces of its
+        components are held meanwhile (cupertino_component_v1.persist).
+      </description>
+    </event>
+
+    <request name="serve_bus">
+      <description summary="where the shared host serves the host bus">
+        The absolute path of a listening Unix stream socket in the runtime directory that the
+        shared host made (mode 0600). The server passes it to every separate host. Sent again
+        when the host serves another socket; the earlier path is then void. Posts the kind error
+        from a separate host and the path error for a path that is not absolute or is over 107
+        bytes.
+      </description>
+      <arg name="path" type="string"/>
+    </request>
+
+    <event name="bus_peer">
+      <description summary="a separate host may join the host bus">
+        Sent to the shared host for each separate host, after serve_bus and again after each
+        later serve_bus: the separate host that runs component may connect to the socket and
+        present token, 32 lower-case hexadecimal digits the server drew at random. The shared
+        host accepts a token once and accepts no connection without one.
+      </description>
+      <arg name="component" type="string"/>
+      <arg name="token" type="string"/>
+    </event>
+
+    <event name="bus_peer_gone">
+      <description summary="a separate host ended">
+        The token of the separate host that ran component is void, and the shared host closes
+        the connection it made with it.
+      </description>
+      <arg name="component" type="string"/>
+    </event>
+
+    <event name="bus">
+      <description summary="where a separate host reaches the host bus">
+        Sent to a separate host once the shared host serves the bus, and again whenever it
+        serves another socket: connect to path and present token. Until it arrives, and while
+        no shared host runs, the component's messages to other components wait in the separate
+        host.
+      </description>
+      <arg name="path" type="string"/>
+      <arg name="token" type="string"/>
+    </event>
+  </interface>
+
+  <interface name="cupertino_host_component_v1" version="1">
+    <description summary="one component, as its host sees it">
+      The host asks for the component's connection with connect and starts the component when
+      connection arrives. While the component runs, the host watches whether its loop returns
+      to its wait and reports busy, unresponsive, responsive and lost. When the component ends
+      without being asked to, the host reports failed and asks for a connection again; the
+      server decides when it comes.
+
+      The server keeps the component's failures: they outlive this object and the host. A
+      component that failed starts again no sooner than 0.25 seconds after the failure, a time
+      that doubles with each failure up to 8 seconds and starts over once the component ran for
+      60 seconds. Five failures within 60 seconds stop it (stopped) until the person asks for a
+      restart or logs in again.
+    </description>
+
+    <enum name="error">
+      <entry name="cause" value="0" summary="not an entry of failure"/>
+    </enum>
+
+    <request name="destroy" type="destructor">
+      <description summary="give the component up">
+        Sent once the component has stopped, when a list leaves it out or the host exits.
+        The server closes the component's connection if it is open.
+      </description>
+    </request>
+
+    <request name="connect">
+      <description summary="ask for the component's connection">
+        The host has no running instance of the component and is ready to start one. The server
+        first closes any connection it holds for the component in this host, then
+        answers with connection when the component may start, or with stopped. One answer is
+        outstanding at most: asking again before it arrives changes nothing.
+      </description>
+    </request>
+
+    <event name="connection">
+      <description summary="the component's connection">
+        The client end of a connection that holds the component's roles and no other, valid
+        while this host process lives. The host starts the component on it. The descriptor is
+        close-on-exec and must stay so: no child of the host inherits it.
+      </description>
+      <arg name="fd" type="fd"/>
+    </event>
+
+    <enum name="stop_reason">
+      <entry name="gave_up" value="0" summary="five failures within 60 seconds"/>
+    </enum>
+
+    <event name="stopped">
+      <description summary="the component stays stopped">
+        Sent in place of connection: the server starts the component no more by itself. The
+        persistent surfaces the server held for it are released. A connection event follows
+        when the person asks for a restart of the component.
+      </description>
+      <arg name="reason" type="uint" enum="stop_reason"/>
+    </event>
+
+    <event name="restart">
+      <description summary="stop the component and start it again">
+        The person asked for a restart of the component while it runs: the host stops it, as
+        for a component that leaves the list, and sends connect. Not counted as a failure.
+      </description>
+    </event>
+
+    <request name="busy">
+      <description summary="the component's loop has not returned to its wait">
+        The host's watchdog found the component's loop out of its wait at one of its checks
+        (every 0.5 seconds, after a start-up grace of 10 seconds). The server stops waiting for
+        the component where it would: a transaction that expects it starts without it.
+      </description>
+    </request>
+
+    <request name="unresponsive">
+      <description summary="the component has been busy for two seconds">
+        The server releases the component's grabs, dismisses its transient surfaces, returns
+        the keyboard focus to the window that had it and sends the component no input. Its
+        persistent surfaces keep their place and their picture.
+      </description>
+    </request>
+
+    <request name="responsive">
+      <description summary="the component's loop is back in its wait">
+        Ends busy and unresponsive: the component gets input again, and what it shows from then
+        is shown.
+      </description>
+    </request>
+
+    <request name="lost">
+      <description summary="the component has been busy for ten seconds">
+        The host has shut the component's sockets down and keeps its thread, which it cannot
+        end. The server holds the component's persistent surfaces, takes the component out of
+        this host's list and starts it alone in a separate host, where it stays for the rest of
+        the session or until the person asks for a restart of the component. A shared host
+        follows with request_restart.
+      </description>
+    </request>
+
+    <enum name="failure">
+      <entry name="panic" value="0" summary="the component, one of its tasks or one of its helper threads panicked"/>
+      <entry name="error" value="1" summary="its loop ended with an error: a protocol error or a connection that closed"/>
+      <entry name="exit" value="2" summary="its loop returned without being asked to stop"/>
+    </enum>
+
+    <request name="failed">
+      <description summary="the component ended without being asked to">
+        The host has torn the component down and shut its sockets. The server counts the
+        failure, whatever its cause, and holds the component's persistent surfaces. Posts the
+        cause error for a value that is not an entry of failure.
+      </description>
+      <arg name="cause" type="uint" enum="failure"/>
+    </request>
+
+    <request name="unavailable">
+      <description summary="this host has no such component">
+        The host was built without the component. The server leaves it stopped in this host
+        and logs it; it is not counted as a failure.
+      </description>
+    </request>
+  </interface>
+
+  <interface name="cupertino_component_v1" version="1">
+    <description summary="what a component tells the server about itself">
+      Global singleton, offered only on a connection the server handed out through
+      cupertino_host_component_v1.connection. Right after binding the server sends component,
+      then one hold event for each surface it holds from the component's earlier instance,
+      followed by done.
+    </description>
+
+    <enum name="error">
+      <entry name="invalid_surface" value="0" summary="the surface belongs to another client, is gone or is not a layer shell surface"/>
+      <entry name="mapped" value="1" summary="the surface already committed a buffer"/>
+      <entry name="key" value="2" summary="a key that is empty, over 64 bytes, or already names another surface of the connection"/>
+      <entry name="name" value="3" summary="not a unique bus name"/>
+    </enum>
+
+    <request name="destroy" type="destructor">
+      <description summary="unbind the global">
+        The announced bus name and the persistent surfaces stay as they are.
+      </description>
+    </request>
+
+    <event name="component">
+      <description summary="the component this connection belongs to">
+        The name of the component whose roles the connection holds.
+      </description>
+      <arg name="name" type="string"/>
+    </event>
+
+    <event name="hold">
+      <description summary="a surface held from the earlier instance">
+        The server keeps the last picture and the reserved space of a persistent surface of this
+        component whose connection ended. key is the key that surface was persisted with.
+      </description>
+      <arg name="key" type="string"/>
+    </event>
+
+    <event name="done">
+      <description summary="end of the holds"/>
+    </event>
+
+    <request name="announce_bus_name">
+      <description summary="the component's connection to the session bus">
+        The unique name (":1.42") of the bus connection the component owns its well-known names
+        on. The server asks the bus daemon for the process behind that name and accepts it when
+        it is the host process this connection was handed to; the answer is bus_name. From then
+        on the server takes a bus call from that name as this component's, and a call from
+        another connection of the same process as not this component's. Announcing again
+        replaces the name. Posts the name error for a string that is not a unique bus name.
+      </description>
+      <arg name="name" type="string"/>
+    </request>
+
+    <enum name="bus_name_result">
+      <entry name="accepted" value="0" summary="the name belongs to this component's host"/>
+      <entry name="refused" value="1" summary="the name belongs to another process, or the bus did not answer in time"/>
+    </enum>
+
+    <event name="bus_name">
+      <description summary="the answer to announce_bus_name">
+        Sent once for each announcement. A refused name leaves the component without a bus
+        identity: the server treats its bus calls as an unknown caller's.
+      </description>
+      <arg name="name" type="string"/>
+      <arg name="result" type="uint" enum="bus_name_result"/>
+    </event>
+
+    <request name="persist">
+      <description summary="make a layer shell surface persistent">
+        A surface is transient unless it is persisted. When the component's connection ends, or
+        the component is reported unresponsive, the server dismisses its transient surfaces at
+        once. A persistent surface is held instead when the connection ends: its last picture
+        stays where it is with its reserved space, every animation of its layers at its end,
+        and takes no input.
+
+        key names the surface among the component's persistent surfaces on its output and is
+        the same for each instance of the component. When this connection persists a surface
+        with the key of a hold on the same output, that surface takes the hold over: with its
+        first commit that attaches a buffer, in the same frame, the held picture goes and the
+        surface shows in its place, and the reserved space passes to it without the usable area
+        changing in between.
+
+        Sent before the surface's first commit that attaches a buffer. Posts invalid_surface for
+        a surface that is not a layer shell surface of this client, mapped for one that already
+        committed a buffer, and key for an empty key, one over 64 bytes or one another surface
+        of the connection has on the same output.
+      </description>
+      <arg name="surface" type="object" interface="wl_surface"/>
+      <arg name="key" type="string"/>
+    </request>
+
+    <request name="ready">
+      <description summary="the component has shown what it shows at start">
+        Every hold of the earlier instance that no surface took over ends: its picture goes and
+        its space is given back. Without this request the server ends those holds 10 seconds
+        after it handed the connection out. A restart the person asked for is answered when
+        this request arrives.
+      </description>
+    </request>
+  </interface>
+</protocol>

@@ -1,0 +1,182 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="cupertino_overview_v1">
+  <copyright>
+    SPDX-License-Identifier: MIT OR Apache-2.0
+  </copyright>
+
+  <description summary="the windows and workspaces of an output, for the component that shows the overview">
+    The overview is a component's: it draws a surface over the output, shows each window in a
+    hole of that surface (cupertino_hole_v1), claims the windows while it is open and moves them
+    with transactions (cupertino_transaction_v1), bound to the gestures that open and close it.
+    The server keeps no overview of its own. Through this protocol it tells the component which
+    windows and workspaces the output has and when the person asks for the overview, and takes
+    what the component picked.
+
+    The protocol is private and unstable: interfaces may change without a version bump.
+  </description>
+
+  <interface name="cupertino_overview_manager_v1" version="1">
+    <description summary="makes the overview objects">
+      Global singleton, offered only to a connection that holds the overview role.
+    </description>
+
+    <enum name="error">
+      <entry name="role" value="0" summary="the output is gone or already has an overview object"/>
+      <entry name="permission" value="1" summary="the connection does not hold the overview role"/>
+    </enum>
+
+    <request name="destroy" type="destructor">
+      <description summary="unbind the global">
+        Overview objects created through this global stay valid.
+      </description>
+    </request>
+
+    <request name="get_overview">
+      <description summary="follow the windows and workspaces of an output">
+        Makes the client the overview of the output. It needs no surface. Posts the role error
+        when the output is gone or already has an overview object, and permission when the
+        connection does not hold the overview role, which is checked on every request.
+      </description>
+      <arg name="id" type="new_id" interface="cupertino_overview_v1"/>
+      <arg name="output" type="object" interface="wl_output"/>
+    </request>
+  </interface>
+
+  <interface name="cupertino_overview_v1" version="1">
+    <description summary="the overview of one output">
+      Events come in groups ended by a done event; the client applies a group at once. The first
+      group, sent right after the object is created, has the area, every window and every
+      workspace. Coordinates are the output's logical coordinates, with the origin at the
+      output's top-left corner. Window ids are the server's, the same as the dock's and the
+      window manager's; workspace ids are stable for a workspace's lifetime.
+
+      The windows are the top-level windows without a parent on the output's current workspace
+      or on every workspace, minimized ones included, of applications that are not hidden.
+    </description>
+
+    <request name="destroy" type="destructor">
+      <description summary="give up the overview of the output"/>
+    </request>
+
+    <event name="area">
+      <description summary="the area the windows are laid out in">
+        The output from its top edge down to the bottom of its usable area, across the usable
+        width: clear of the dock, and over the menu bar. Sent in the first group and on every
+        change.
+      </description>
+      <arg name="x" type="int"/>
+      <arg name="y" type="int"/>
+      <arg name="width" type="int"/>
+      <arg name="height" type="int"/>
+    </event>
+
+    <enum name="window_state" bitfield="true">
+      <entry name="minimized" value="1"/>
+      <entry name="active" value="2" summary="the key window of the session"/>
+    </enum>
+
+    <event name="window">
+      <description summary="a window appeared or changed">
+        Application id (the desktop entry id when known), title, frame and state of a window.
+        The frame is where the window rests on the desktop, with its server-side decorations and
+        without its shadow: the bounds a hole at the window's own place has. For a minimized
+        window it is the frame it had before it was minimized. Sent when the window joins the
+        set and again whenever one of these changes. The application id and the title are each
+        cut to at most 1024 bytes at a UTF-8 character boundary.
+      </description>
+      <arg name="id" type="uint"/>
+      <arg name="app_id" type="string"/>
+      <arg name="title" type="string"/>
+      <arg name="x" type="int"/>
+      <arg name="y" type="int"/>
+      <arg name="width" type="int"/>
+      <arg name="height" type="int"/>
+      <arg name="state" type="uint" enum="window_state"/>
+    </event>
+
+    <event name="window_closed">
+      <description summary="a window left the set">
+        It closed, went to another output or workspace, or its application was hidden.
+      </description>
+      <arg name="id" type="uint"/>
+    </event>
+
+    <event name="workspace">
+      <description summary="a workspace of the output">
+        One workspace of the output, in order; current is 1 for the one on screen. A group that
+        has workspace events lists every workspace: they replace the earlier list.
+      </description>
+      <arg name="id" type="uint"/>
+      <arg name="current" type="uint"/>
+    </event>
+
+    <enum name="mode">
+      <entry name="all" value="0" summary="every window of the current workspace, with the workspaces"/>
+      <entry name="app" value="1" summary="the windows of one application"/>
+    </enum>
+
+    <event name="toggle">
+      <description summary="the person asked for the overview">
+        The overview shortcut, a hot corner or a named action asks for the overview of this
+        output in mode: the component opens it, or closes it when it is open. app_id is the
+        application of the app mode, the active one, and empty in the all mode. Not sent while
+        the session is locked or a lock is pending. A gesture reaches the component through the
+        transaction it bound to it, not through this event.
+      </description>
+      <arg name="mode" type="uint" enum="mode"/>
+      <arg name="app_id" type="string"/>
+    </event>
+
+    <event name="done">
+      <description summary="end of a group of events"/>
+    </event>
+
+    <request name="activate_window">
+      <description summary="a window was picked">
+        Show the window: restore it when it is minimized, raise and focus it. A window change:
+        inside the bracket of a transaction it is carried out at the transaction's start. An id
+        that is not a window of the set when the request is carried out is ignored, and so is
+        every request while the session is locked.
+      </description>
+      <arg name="id" type="uint"/>
+    </request>
+
+    <request name="switch_workspace">
+      <description summary="go to a workspace of the output">
+        Switches the output to the workspace. A window change. An unknown id is ignored: the
+        workspace may have just been removed.
+      </description>
+      <arg name="id" type="uint"/>
+    </request>
+
+    <request name="add_workspace">
+      <description summary="append a workspace to the output"/>
+    </request>
+
+    <request name="remove_workspace">
+      <description summary="remove a workspace of the output">
+        Its windows move to the workspace before it, else the one after. The last regular
+        workspace, a full-screen one and an unknown id are ignored.
+      </description>
+      <arg name="id" type="uint"/>
+    </request>
+
+    <request name="move_workspace">
+      <description summary="reorder a workspace of the output">
+        Moves the workspace to position index (0-based) among the output's workspaces; an index
+        past the end moves it last. A full-screen workspace and an unknown id are ignored.
+      </description>
+      <arg name="id" type="uint"/>
+      <arg name="index" type="uint"/>
+    </request>
+
+    <request name="move_window">
+      <description summary="move a window to a workspace of the output">
+        The window leaves the set, which is sent again. A window change. An id that is not in
+        the set, an unknown workspace, a full-screen workspace and the current one are ignored.
+      </description>
+      <arg name="id" type="uint"/>
+      <arg name="workspace" type="uint"/>
+    </request>
+  </interface>
+</protocol>

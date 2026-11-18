@@ -16,7 +16,7 @@ Updated by the lead at every merge.
 | | |
 |---|---|
 | Current wave | 4 |
-| Running tasks | W4.6 step 4 (measurement), fixes from the wave 4 review, W4.9 |
+| Running tasks | W4.6 step 4 (measurement after the review fixes), W4.7 step 2, review of W4.9 |
 | Enforced layers | foundation, system, graphics, models, protocol, transport, testing (126 remaining-work lines) |
 | Waiting on the owner | nothing |
 | Last closed wave | 3 |
@@ -1164,3 +1164,9 @@ One line per change to a decision or approval of a design: date, number, what, w
   reviewer, checked by another), with its defaults for the open questions. Temporary exposures it names: the four
   `app::run_on*` functions until W6.16, and the renderers and glyph rasters until W6.5, W6.8 and W6.13. Release builds
   list their features instead of `--all-features`, and `cupertino-kit/test` only enters through dev-dependencies.
+- 2026-11-17: lead, review of W4.1–W4.6: fixed in b0078b474 — a suspended configure during a frame in flight
+  deadlocked the UI and render threads; a panic while a handed-over frame was drawn froze its window; commits from the
+  UI thread were not serialised with the render thread's; a dropped commit lost its viewport unset; a device claim
+  dropped a device another instance asked for; the settings watch read files on the UI thread. W4.6's measurement
+  found more memory and slower CPU raster on the pool and a held frame at the GPU switch; the pools now start threads
+  on demand and keep a window's frames on one lane, and a CPU frame no longer waits for the GPU device.

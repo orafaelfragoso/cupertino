@@ -215,7 +215,7 @@ alone does not show the surfaces as they look.
 
 | Surface | States |
 |---|---|
-| `files/window`, `files/sidebar` (the sidebar column of the window) | `--view icon\|list`, `--selected NAME`, `--devices removable` (a mounted, a busy and an unmounted device in the sidebar) |
+| `files/window`, `files/sidebar` (the sidebar column of the window), `files/preview`, `files/popover`, `files/tabs`, `files/desktop` (the desktop's items over a flat fill) | `--view icon\|list\|columns\|gallery`, `--selected NAME`, `--state rename\|ring\|band` (the view's item renamed from its context menu, ringed under its open context menu, or under a band held over it), `--devices removable` (a mounted, a busy and an unmounted device in the sidebar); `files/desktop` has none |
 | `kit/controls` (the row 167a controls sheet), `kit/icons` (with the chevrons along the reading direction and a missing symbol's placeholder) | `--direction ltr\|rtl` |
 | `kit/gallery` (every control family; its sheet shows each state) | `--state rest\|held-button\|held-switch\|held-slider\|held-segment\|disabled`, `--control-size mini\|small\|regular\|large\|extra-large`, `--compact on\|off`, `--backdrop flat\|busy`, `--direction ltr\|rtl` |
 | `kit/scroll` (an overlay scroll view: at rest, pulled past its top edge, its bar shown, fading and hidden after a wheel step) | `--direction ltr\|rtl`, `--phase rest\|stretch\|shown\|fading\|hidden` |

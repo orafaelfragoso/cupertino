@@ -953,10 +953,13 @@ impl Application for Desktop {
     /// Full screen but static: it repaints when its icons change, so a GPU context would only cost memory.
     const RENDERER: cupertino_kit::core::RendererClass = cupertino_kit::core::RendererClass::Cpu;
 
-    /// A desktop that lists nothing and no output feeds; [`run`] starts the process's one.
+    /// The desktop [`prepare`] gave the thread, else one that lists nothing and no output feeds; [`run`] starts the
+    /// process's one.
     fn init() -> (Model, Vec<Command<Message>>) {
-        let model = Model::empty(PathBuf::new(), async_channel::unbounded().1);
-        (model, Vec::new())
+        START.with(|s| s.borrow_mut().take()).unwrap_or_else(|| {
+            let model = Model::empty(PathBuf::new(), async_channel::unbounded().1);
+            (model, Vec::new())
+        })
     }
 
     fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
@@ -1158,7 +1161,34 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         surfaces: Vec::new(),
         notes: notes_in,
     });
+    let start = listed(
+        folder,
+        types,
+        file_icons,
+        Thumbnailer::from_env(super::APP_ID),
+        screens,
+        notes,
+        arrangement::location(),
+        || Notices::start(zbus::blocking::Connection::session().ok()),
+    );
+    cupertino_kit::app::run_on::<Desktop>(system, start)?;
+    Ok(())
+}
 
+/// The desktop of `folder` on `screens`, listed and watched, its items typed with `types` and drawn with `file_icons`
+/// and `thumbnails`, its arrangement kept in `prefs_file`, its failures posted on what `notices` starts, hearing the
+/// roles' `notes`; and the commands that hear its listing and its roles.
+#[allow(clippy::too_many_arguments)]
+fn listed(
+    folder: PathBuf,
+    types: Arc<MimeDatabase>,
+    file_icons: FileIcons,
+    thumbnails: Thumbnailer,
+    screens: Vec<Screen>,
+    notes: async_channel::Receiver<Message>,
+    prefs_file: Option<PathBuf>,
+    notices: impl FnOnce() -> Notices,
+) -> (Model, Vec<Command<Message>>) {
     let (wake, woken) = async_channel::bounded(1);
     let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
         // a wake already waiting covers this change too
@@ -1171,7 +1201,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let listing = DirectoryModel::open_notifying(folder.clone(), options, Arc::clone(&wake))
         .map_err(|e| eprintln!("cupertino-files: cannot list {}: {e}", folder.display()))
         .ok();
-    let prefs_file = arrangement::location();
     let mut model = Model::empty(folder, notes);
     model.prefs = prefs_file
         .as_deref()
@@ -1181,20 +1210,44 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     model.listing = listing;
     model.woken = woken;
     model.screens = screens;
-    model.icons = Some(ItemIcons::new(
-        file_icons,
-        Some(Thumbnailer::from_env(super::APP_ID)),
-        wake,
-    ));
-    model.notices = Notices::start(zbus::blocking::Connection::session().ok());
+    model.icons = Some(ItemIcons::new(file_icons, Some(thumbnails), wake));
+    model.notices = notices();
     let commands = vec![listen(&model.woken), hear(&model.notes)];
     model.menu_bar = cupertino_assets::theme::load()
         .map(|theme| theme.shapes.menu_bar_height)
         .unwrap_or_else(|_| cupertino_theme::ShapeTokens::default().menu_bar_height)
         .ceil();
     model.poll();
-    cupertino_kit::app::run_on::<Desktop>(system, (model, commands))?;
-    Ok(())
+    (model, commands)
+}
+
+thread_local! {
+    static START: std::cell::RefCell<Option<(Model, Vec<Command<Message>>)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Give the next [`Desktop`] the thread starts the items of `folder` on `screens`, typed with `types`, drawn with
+/// `file_icons` and their thumbnails made in `thumbnails`, without roles, a kept arrangement or a session bus: how a
+/// driver of the headless window system shows the desktop.
+pub fn prepare(
+    folder: PathBuf,
+    screens: Vec<Screen>,
+    types: Arc<MimeDatabase>,
+    file_icons: FileIcons,
+    thumbnails: Thumbnailer,
+) {
+    let notes = async_channel::unbounded().1;
+    let start = listed(
+        folder,
+        types,
+        file_icons,
+        thumbnails,
+        screens,
+        notes,
+        None,
+        || Notices::start(None),
+    );
+    START.with(|s| *s.borrow_mut() = Some(start));
 }
 
 /// The desktop's `content` taking a `text/uri-list` dropped from another application ([`Message::DroppedIn`]).

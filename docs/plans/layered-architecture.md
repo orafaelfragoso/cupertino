@@ -15,11 +15,11 @@ Updated by the lead at every merge.
 
 | | |
 |---|---|
-| Current wave | 4 |
-| Running tasks | W4.12 |
-| Enforced layers | foundation, system, graphics, models, protocol, transport, testing (126 remaining-work lines) |
+| Current wave | 5 |
+| Running tasks | none |
+| Enforced layers | foundation, system, graphics, models, protocol, transport, render, ui, testing (122 remaining-work lines) |
 | Waiting on the owner | nothing |
-| Last closed wave | 3 |
+| Last closed wave | 4 |
 
 ## Contents
 
@@ -824,12 +824,12 @@ Every behaviour change of the file family is here, and none is in W4.8. The desi
 that do not answer, transfers). The family starts no thread and touches no file on the UI thread. Each step is one
 commit and ends as W4.8's do.
 
-1. [ ] **Places and user directories: one copy** (S). `cupertino_defaults::user_dirs`; Files' `places` is the
+1. [x] (3150110cb) **Places and user directories: one copy** (S). `cupertino_defaults::user_dirs`; Files' `places` is the
        family's, with `chooser_places`; `filepicker::places` goes; the portal's chooser and `pictures` use them. Done
        when: `rg parse_user_dirs crates` finds only `cupertino-screenshot`; a test of `user_dirs` in
        `crates/cupertino-defaults/tests/` (a relative `XDG_CONFIG_HOME` among its rows); a test that `chooser_places`
        gives the rows the chooser has now; the portal's diff holds no drawing code; same pixels in Files.
-2. [ ] **Listings as work** (L). `model` is the family's, with no thread, and the `directory` bench comes with it; the
+2. [x] (f7d5aecef) **Listings as work** (L). `model` is the family's, with no thread, and the `directory` bench comes with it; the
        browser waits for a model's first update; the session keeps the models whose work runs. Done when: no
        `std::thread` and no `notify` in the model; `tests/model.rs`: `Opened` then batches; `OpenFailed` with its kind
        for a missing folder, a file and a folder without read permission, with and without a watch; a created,
@@ -837,15 +837,15 @@ commit and ends as W4.8's do.
        `follow` ends when its model is dropped with no event. In Files: a failed go, Back, Forward and Parent leave
        the listing and the history as they are and post the notice; a folder asked for again while its work runs
        opens no second model. Same pixels.
-3. [ ] **Thumbnails and item icons** (M). `thumbnail_service` and `item_icons` are the family's, as jobs;
+3. [x] (d254cd890) **Thumbnails and item icons** (M). `thumbnail_service` and `item_icons` are the family's, as jobs;
        `file_icons.rs` comes down from `cupertino-kit`, whose `kit::file_icons` names the same items. Done when: no
        `std::thread` in them; `tests/thumbnails.rs`: wanted first, two at once, the budget, a failure kept, a decoder's
        panic kept as a failure; same pixels, thumbnails included.
-4. [ ] **Notices** (S). `notice` is the family's, on the program's connection. Until W7.1 Files makes its session
+4. [x] (14b11f2f2) **Notices** (S). `notice` is the family's, on the program's connection. Until W7.1 Files makes its session
        connection before its loop starts and hands its async half to `Notices`. Done when: no `std::thread` and no
        `zbus::blocking` in it; `tests/notices.rs` against a stand-in service on a peer connection: order kept, a click
        back with its tag and token, `sent` ends.
-5. [ ] **Transfers in slices** (M). `operations::Transfer`; `transfer`, `duplicate_with` and `drop_into` loop over it.
+5. [x] (553298259) **Transfers in slices** (M). `operations::Transfer`; `transfer`, `duplicate_with` and `drop_into` loop over it.
        Done when: `tests/transfer.rs`: a tree copied and moved slice by slice with its progress, a move across two
        file systems, a stop that removes the item being copied, a source that changed while it was copied left where
        it was, the results the blocking functions give now.
@@ -864,7 +864,7 @@ commit and ends as W4.8's do.
 
 #### W4.close (lead)
 
-- [ ] After W4.12: `ENFORCED` gains `Render`, `Ui`. Docs and gates as in W1.close.
+- [x] (CLOSE) After W4.12: `ENFORCED` gains `Render`, `Ui`. Docs and gates as in W1.close.
 
 ### Wave 5: compositor, services, the shell toolkit
 
@@ -1306,3 +1306,9 @@ One line per change to a decision or approval of a design: date, number, what, w
 - 2026-11-18: lead, W4.T: `kit::image` names `OutputTransform`, which `orient` takes, so a program reaches it through
   Kit while `kit::geometry` keeps point, size, rectangle and insets. The tests found that `new_folder_with` moves the
   items after a failing one; W4.12 fixes it with its transfers.
+- 2026-11-18: lead, W4.12 (23eb8b006): Files reads a new window's or tab's folder once on its UI thread before opening
+  it, keeping today's "no window and a notice" and the start-up exit; a hung folder can still hold that moment, and
+  W7.1 moves it to a task with Files' other threads. The model gains `is_working`, `opened` and `set_notify` for the
+  session's kept models; a program takes a model's watch before its first work. `new_folder_with` stops at the first
+  failure, as it says. The transfer tests use `/dev/shm` as a second file system.
+- 2026-11-18: lead, W4.close: `render` and `ui` join `ENFORCED`; neither had a remaining-work line.

@@ -195,6 +195,8 @@ pub const ENFORCED: &[Layer] = &[
     Layer::System,
     Layer::Protocol,
     Layer::Transport,
+    Layer::Render,
+    Layer::Ui,
     Layer::Testing,
 ];
 

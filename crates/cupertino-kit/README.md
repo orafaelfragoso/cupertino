@@ -133,7 +133,7 @@ What `shell` and `apps` crates name from the toolkit, where each item is in Kit,
 | `kit::files` | the file family of `cupertino-ui-files`, in modules named as its own, each listing what Files names: `entry` (`Entry`, `Kind`), `natural`, `sort`, `mime`, `tags`, `applications`, `recents`, `geom` (`Direction`), `layout::icon`, `rename`, `name_edit`, `open`, `operations`, `item_art`, and the views' `metrics` (`icon_view`, `list_view`, `column_view`, `timing`, `selection`, `marquee`, `drag`); the views: `ViewEvent`, `grid` (`IconGrid`), `list` (`FileList`), `columns` (`FileColumns`), `ColumnEvent` |
 | `kit::geometry` | `Point`, `Size`, `Rect`, `Insets` |
 | `kit::motion` | [Motion](#motion) |
-| `kit::image` | `decode` (PNG and JPEG within the side the caller allows), `resize`, `crop`, `orient` (upright from a `cupertino_geometry::OutputTransform`), `encode_png`, `encode_jpeg`, and `ImageError`: plain functions on `render::ImageResource` that a program runs as a `task::cpu`, each refusing a picture of more pixels than a window drawn on the CPU has |
+| `kit::image` | `decode` (PNG and JPEG within the side the caller allows), `resize`, `crop`, `orient` (upright from an `OutputTransform`, which the module names), `encode_png`, `encode_jpeg`, and `ImageError`: plain functions on `render::ImageResource` that a program runs as a `task::cpu`, each refusing a picture of more pixels than a window drawn on the CPU has |
 | `kit::task`, `kit::bus`, `kit::time`, `kit::file_icons`, `kit::spawn`, `kit::Instance`, `kit::Entered`, `kit::prelude` | as above |
 | `kit::test` | [The `test` feature](#the-test-feature) |
 

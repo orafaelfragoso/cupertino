@@ -3,7 +3,7 @@
 //! [`task::cpu`](crate::task::cpu), never on its UI thread. A picture made here is premultiplied RGBA with rows of
 //! four bytes a pixel; one given may be premultiplied or straight.
 
-use cupertino_geometry::OutputTransform;
+pub use cupertino_geometry::OutputTransform;
 use cupertino_ui_render::{ImageResource, PixelFormat};
 use image::codecs::jpeg::JpegEncoder;
 use image::codecs::png::PngEncoder;

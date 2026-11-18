@@ -147,7 +147,7 @@ fn a_crop_takes_the_pixels_of_its_area_whatever_the_row_padding_and_refuses_one_
 
 #[test]
 fn a_picture_held_turned_by_an_output_transform_comes_out_upright() {
-    use cupertino_geometry::OutputTransform as T;
+    use cupertino_kit::image::OutputTransform as T;
     // the upright picture is [[P, Q], [R, S]]; each transform's buffer holds it turned that way
     let upright = [[P, Q], [R, S]];
     let buffers: [(T, [[[u8; 4]; 2]; 2]); 8] = [

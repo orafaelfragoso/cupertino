@@ -149,6 +149,8 @@ struct Window {
     away: bool,
     /// How the frame away was shown, once it is back: the runtime hears it once the frame's commits are sent.
     drawn: Option<Shown>,
+    /// A commit without a buffer was asked for while a frame was away, sent once the frame's commits are.
+    state_owed: bool,
     /// The last present was not ready; the next frame waits for this.
     stalled: Option<Stall>,
     /// The surface layers whose present found no free buffer: a window stalled on a buffer waits for theirs too.
@@ -707,6 +709,7 @@ impl WaylandWindowSystem {
             frame_pending: false,
             away: false,
             drawn: None,
+            state_owed: false,
             stalled: None,
             busy_layers: Vec::new(),
             frame_wanted: false,
@@ -942,11 +945,9 @@ impl WaylandWindowSystem {
         result
     }
 
-    /// The subsurface of `window`'s raised layer, made the first time it is needed. Its shapes and frames are in the
-    /// window's coordinates, as it lies at the window's top left corner.
     /// Hand `changes` to the presentation of `window`, a surface with a role from [`SurfaceRoles`] or, where the
-    /// compositor presents popups, a popup; a window that showed a frame commits them at once without a buffer, one that
-    /// did not with its first frame.
+    /// compositor presents popups, a popup; a window that showed a frame commits them without a buffer
+    /// ([`Self::commit_state`]), one that did not with its first frame.
     fn present_changes(
         &mut self,
         window: WindowId,
@@ -967,9 +968,22 @@ impl WaylandWindowSystem {
                     .set_input_region(surface, region.as_deref())
                     .map_err(platform_error)?;
             }
-            self.conn.commit_state(surface).map_err(platform_error)?;
+            self.commit_state(window)?;
         }
         Ok(())
+    }
+
+    /// Commits `window` without a buffer, so what was sent for it applies at once, or, while a frame of it is away,
+    /// once that frame's commits are sent ([`Self::sent`]): sent before them, it would apply what the UI thread sent
+    /// with that frame (its regions, its layers' values, its raised layer hidden) ahead of the frame.
+    fn commit_state(&mut self, window: WindowId) -> Result<(), PlatformError> {
+        let w = self.window_mut(window)?;
+        if w.away {
+            w.state_owed = true;
+            return Ok(());
+        }
+        let surface = w.surface;
+        self.conn.commit_state(surface).map_err(platform_error)
     }
 
     /// Whether what `window` shows is its layout: no animation of its presentation or its surface layers runs.
@@ -984,8 +998,8 @@ impl WaylandWindowSystem {
             .is_some_and(cupertino_wayland_client::app::Layers::blurs_content)
     }
 
-    /// Sends `changes` to `window`'s surface layer `key` and commits the window without a buffer when it shows a frame,
-    /// so they apply at once; a layer not made yet takes them with its first values.
+    /// Sends `changes` to `window`'s surface layer `key` and commits the window without a buffer when it shows a frame
+    /// ([`Self::commit_state`]), so they apply; a layer not made yet takes them with its first values.
     fn change_surface_layer(
         &mut self,
         window: WindowId,
@@ -995,14 +1009,15 @@ impl WaylandWindowSystem {
         if !self.surface_layers_drawn() {
             return Err(PlatformError::Unsupported);
         }
-        let w = self.window(window)?;
-        let (surface, shown) = (w.surface, w.shown.is_some());
+        let shown = self.window(window)?.shown.is_some();
         if self.surface_layers.change(window, key, changes)? && shown {
-            self.conn.commit_state(surface).map_err(platform_error)?;
+            self.commit_state(window)?;
         }
         Ok(())
     }
 
+    /// The subsurface of `window`'s raised layer, made the first time it is needed. Its shapes and frames are in the
+    /// window's coordinates, as it lies at the window's top left corner.
     fn layer_surface(&mut self, window: WindowId) -> Result<SurfaceId, PlatformError> {
         if !layers_drawn(&self.conn, self.effects.as_ref().map(|(e, _)| e)) {
             return Err(PlatformError::Unsupported);
@@ -1341,10 +1356,15 @@ impl WaylandWindowSystem {
 
     /// The commits of `window`'s frame are sent: the window may draw again, and the runtime hears how the frame was
     /// shown. Told only now, the runtime sends nothing of its next frame from the UI thread (a raised layer hidden, a
-    /// solid colour) ahead of these commits.
-    fn sent(&mut self, window: WindowId, events: &mut Vec<PlatformEvent>) {
+    /// solid colour) ahead of these commits. A commit without a buffer asked for meanwhile goes now: what it applies
+    /// may have gone out after the frame's own commit.
+    fn sent(
+        &mut self,
+        window: WindowId,
+        events: &mut Vec<PlatformEvent>,
+    ) -> Result<(), PlatformError> {
         let Ok(w) = self.window_mut(window) else {
-            return;
+            return Ok(());
         };
         w.away = false;
         if let Some(shown) = w.drawn.take() {
@@ -1353,6 +1373,10 @@ impl WaylandWindowSystem {
                 event: WindowEvent::Shown(shown),
             });
         }
+        if std::mem::take(&mut w.state_owed) {
+            self.commit_state(window)?;
+        }
+        Ok(())
     }
 
     /// When a presented frame turned visible, `time_ns` on the compositor's presentation clock, on the window system's
@@ -2450,7 +2474,7 @@ impl WindowSystem for WaylandWindowSystem {
         while let Ok(back) = self.finished.1.try_recv() {
             match back {
                 FromJob::Finished(finished) => self.finish(finished)?,
-                FromJob::Sent(window) => self.sent(window, events),
+                FromJob::Sent(window) => self.sent(window, events)?,
             }
         }
         for event in wire {

@@ -50,7 +50,9 @@ Windows and popups map one to one onto the transport's toplevels and popups; des
 A window with a role from `SurfaceRoles` (a shell's layer surface) may hand transitions of its presentation to the
 compositor when it offers `cupertino_layers_v1` version 2 (`Capabilities::present_animation`): each
 `WindowRequest::Present` goes to the window's presentation, made on its first change (`presentations.rs`), and is
-committed at once without a buffer, or with the window's first frame when it has not drawn one. The compositor runs the
+committed at once without a buffer, or with the window's first frame when it has not drawn one. While a frame of the
+window is away (`WindowSystem::submit`) that commit waits until the frame's commits are sent, so it never applies
+what the UI thread sent with the frame ahead of the frame. The compositor runs the
 offset, opacity and scale on its clock, with the session's time scale and Reduce Motion; the window draws nothing for
 it. The animations a change starts are followed through `finished`, `replaced` and `settled`
 (`WaylandWindowSystem::presentation_settled`). Without the global, or on a toplevel, the request is refused
@@ -60,8 +62,8 @@ there, and an input region asked for meanwhile goes with the commit, so a closin
 From version 4 a window has surface layers (`Capabilities::surface_layers`, `surface_layers.rs`): each `SurfaceLayer`
 is a `wl_surface` made a `cupertino_layer_v1` of the window's surface, drawn from buffers of its own at the window's
 scale (shared memory, or dmabufs from the GPU renderer's texture as a window's are), its rect and look sent as the
-layer's values with the window's next commit, and `WindowRequest::Layer` changes sent as its requests (committed at once
-without a buffer when the window shows a frame, or with the layer's first values); while such an animation moves a
+layer's values with the window's next commit, and `WindowRequest::Layer` changes sent as its requests (committed
+without a buffer when the window shows a frame, as a presentation's are, or with the layer's first values); while such an animation moves a
 layer's x, y, width or height, a frame that declares the layer's rect again sends none of the parts it moves (a value
 sent would replace the animation) and sends them with the first frame after it ended; their animations count for
 `presentation_settled`, and a window whose layers' last running animation ends hears `WindowEvent::LayersSettled` once,

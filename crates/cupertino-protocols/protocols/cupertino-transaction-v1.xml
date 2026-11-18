@@ -22,20 +22,28 @@
     A hole is a layer of a component's surface in which the server draws a window, a minimized
     window's picture or a workspace, moving, scaling, fading and clipped with that layer.
 
-    The protocol is private and unstable: interfaces may change without a version bump.
+    The protocol is private: the server and the hosts are built from one source. Every change
+    of a message raises the version of its interface, and a message added after version 1
+    carries the version that added it. A host binds an interface only at the version it was
+    built with (cupertino_host_v1).
   </description>
 
   <interface name="cupertino_transaction_manager_v1" version="1">
     <description summary="makes transactions and holes">
       Global singleton, offered only on a connection the server handed out for a component
       (cupertino_host_component_v1.connection). A transaction is named by the component that
-      created it and a serial that component chose, so the creator tells another component the
-      name without waiting for the server.
+      created it, the instance number of that component's connection
+      (cupertino_component_v1.component) and a serial that instance chose, so the creator tells
+      another component the name without waiting for the server, and the names of a restarted
+      component never meet the names of the instance before.
+
+      A connection takes part in at most 16 transactions that have not ended, the ones it
+      created and the ones it joined counted together.
     </description>
 
     <enum name="error">
       <entry name="serial" value="0" summary="the connection already has a transaction of that serial that has not ended"/>
-      <entry name="too_many" value="1" summary="the connection holds 16 transactions that have not ended, or 256 holes"/>
+      <entry name="too_many" value="1" summary="the connection takes part in 16 transactions that have not ended, or holds 256 holes"/>
       <entry name="invalid_surface" value="2" summary="the surface belongs to another client or is gone"/>
       <entry name="role" value="3" summary="the surface is not a layer of cupertino_layers_v1, or already has a hole"/>
       <entry name="permission" value="4" summary="the connection does not hold the role the request needs"/>
@@ -50,11 +58,11 @@
 
     <request name="create">
       <description summary="start describing a transaction">
-        Creates the transaction named by this connection's component and serial, on the clock of
-        output: the times of the transaction are presentation times of that output. The
-        connection is its creator and its first participant. Posts the serial error while the
-        connection has a transaction of that serial that has not ended, and too_many when it
-        holds 16 of them.
+        Creates the transaction named by this connection's component, its instance number and
+        serial, on the clock of output: the times of the transaction are presentation times of
+        that output. The connection is its creator and its first participant. Posts the serial
+        error while the connection has a transaction of that serial that has not ended, and
+        too_many when it takes part in 16 transactions that have not ended.
       </description>
       <arg name="id" type="new_id" interface="cupertino_transaction_v1"/>
       <arg name="serial" type="uint"/>
@@ -63,21 +71,30 @@
 
     <request name="join">
       <description summary="take part in another component's transaction">
-        Makes this connection a participant of the transaction that component created with
-        serial. What the participant stages and asks for joins that transaction as its own part.
+        Makes this connection a participant of the transaction that instance of component
+        created with serial. What the participant stages and asks for joins that transaction as
+        its own part. A joined transaction counts towards the 16 of the connection.
 
         The name may arrive before the creator's create: a join that finds no such transaction
         waits for it, at most 100 milliseconds, and the participant may stage and submit
-        meanwhile; when none came, the participant's part starts as a transaction of its own. A
-        join to a transaction that has started is late (see cupertino_transaction_v1). The
-        server remembers a transaction for 10 seconds after it ended: a join in that time
-        applies the participant's part with every animation at its end.
+        meanwhile; when none came, the participant's part starts as a transaction of its own, on
+        the clock of output. When the creator's transaction is there, its output is the
+        transaction's and the output of this request is not read. A join to a transaction that
+        has started is late (see cupertino_transaction_v1). The server remembers a transaction
+        for 10 seconds after it ended: a join in that time applies the participant's part with
+        every animation at its end. An instance number other than that of the component's
+        running connection names a transaction of an earlier instance, which this rule covers
+        when it ended within 10 seconds; otherwise the part starts as a transaction of its own
+        at once.
 
-        Posts the component error for a name that is not a component's.
+        Posts the component error for a name that is not a component's and too_many when the
+        connection takes part in 16 transactions that have not ended.
       </description>
       <arg name="id" type="new_id" interface="cupertino_transaction_v1"/>
       <arg name="component" type="string"/>
+      <arg name="instance" type="uint"/>
       <arg name="serial" type="uint"/>
+      <arg name="output" type="object" interface="wl_output"/>
     </request>
 
     <request name="get_hole">
@@ -102,9 +119,19 @@
       a later one added to the earlier ones in order, as a synchronized subsurface's state is
       kept. Everything a commit applies is kept with it: the buffer, the damage, the state of
       the surface's layers, presentation and holes that is double-buffered on it, and the cached
-      state of its subsurfaces. The frame callbacks of a kept commit are answered as if it had
-      been applied, so the participant keeps its pace; its presentation feedback follows the
-      frame that first shows it. A surface is staged in one transaction at a time.
+      state of its subsurfaces. The commits of the surface's layer surfaces are kept as well, a
+      layer made while the surface is staged included: a layer's content, which otherwise
+      applies on the layer surface's own commit without waiting for its parent
+      (cupertino_layers_v1), applies with the part and not before. A surface is staged in one
+      transaction at a time.
+
+      Kept commits and the client's pace. The frame callbacks of a kept commit are answered on
+      the frame clock of the surface's output: with the next frame of that output, as for a
+      commit that was shown, and no more than once for each frame, so a client that draws keeps
+      the output's pace. A kept buffer that a later kept commit of the same surface replaces is
+      released at once, so a client with two or three buffers goes on drawing. The presentation
+      feedback of a kept commit follows the frame that first shows it, and is discarded for a
+      commit that a later one replaced.
 
       Window changes. Between begin_window_changes and end_window_changes, the requests this
       connection makes on its role objects that change windows are kept as well:
@@ -113,11 +140,16 @@
       window_command and a window manager's commit with its placements. The server carries them
       out at the transaction's start, and the animations it runs for them (a window restored,
       raised or placed, a workspace switched) start there. Any other request is carried out when
-      it arrives.
+      it arrives. The role requests are the connection's, so a connection has one open bracket
+      at most, whichever of its transactions opened it.
 
       Ready. A participant is ready when it has sent submit and each surface it staged has
       committed at least once since. A participant that has not sent submit 100 milliseconds
-      after it created or joined is taken as having sent it.
+      after it created or joined is taken as having sent it. A part does not wait without end:
+      100 milliseconds after its submit, a participant with a staged surface that has not
+      committed is ready as it stands. That surface leaves the part and commits as usual from
+      then, and the rest of the part, the kept commits of its other surfaces and its window
+      changes, is applied.
 
       Start. The transaction starts on the first frame of its output that the server prepares
       after its creator and every component the creator expects are ready, and at the latest on
@@ -154,10 +186,10 @@
       A participant's connection ending. What the participant had kept and not applied is
       dropped, and the transaction does not wait for it. What had started ends with its
       surfaces: on a surface the server holds (cupertino_component_v1.persist) every animation
-      is at its end at once, and a transient surface is dismissed with its animations and
-      holes. The other participants' parts are not touched. When the creator of a transaction
-      bound to a gesture goes, the binding ends: a gesture under way is settled back to the
-      start.
+      is at its end at once and the holes and claims stay, and a transient surface is dismissed
+      with its animations and holes. The other participants' parts are not touched. When the
+      creator of a transaction bound to a gesture goes, the binding ends: a gesture under way is
+      settled back to the start.
     </description>
 
     <enum name="error">
@@ -165,7 +197,7 @@
       <entry name="submitted" value="1" summary="stage, expect, set_deadline, bind_gesture, bind_reverse_gesture or begin_window_changes after submit"/>
       <entry name="invalid_surface" value="2" summary="the surface belongs to another client, is gone or has no role"/>
       <entry name="staged" value="3" summary="the surface is staged in a transaction that has not started"/>
-      <entry name="bracket" value="4" summary="begin_window_changes inside a bracket, end_window_changes outside one, or submit inside one"/>
+      <entry name="bracket" value="4" summary="begin_window_changes while the connection has an open bracket, end_window_changes on an object that opened none, or submit inside one"/>
       <entry name="invalid_spring" value="5" summary="a spring response outside 0.01 to 10 seconds or a damping ratio outside 0.05 to 4"/>
       <entry name="invalid_gesture" value="6" summary="not an entry of gesture, or a reverse binding without a binding"/>
       <entry name="permission" value="7" summary="the connection does not hold the role the request needs"/>
@@ -176,10 +208,11 @@
     <request name="destroy" type="destructor">
       <description summary="let go of the transaction">
         Before the participant's submit this withdraws its part: its kept commits are applied at
-        once, as ordinary commits, its kept window changes are carried out at once, and the
-        transaction does not wait for it. After submit the part stays in the transaction and
-        only the events end. Destroying the creator's object of a transaction bound to a gesture
-        also ends its bindings: a gesture under way is settled back to the start.
+        once, as ordinary commits, its kept window changes are carried out at once, an open
+        bracket of this object is closed, and the transaction does not wait for it. After submit
+        the part stays in the transaction and only the events end. Destroying the creator's
+        object of a transaction bound to a gesture also ends its bindings: a gesture under way
+        is settled back to the start.
       </description>
     </request>
 
@@ -205,10 +238,11 @@
     <request name="stage">
       <description summary="keep a surface's commits for the transaction">
         The surface is one with a role (a layer shell surface, a window or a popup), not a
-        layer: a layer's state travels in its parent's commit. From this request until the
-        participant's part is applied, the surface's commits are kept (see the interface). Posts
-        invalid_surface, staged when the surface is staged in a transaction that has not
-        started, and too_many for a 33rd surface.
+        layer: a layer's state travels in its parent's commit, and the commits of the layers of
+        a staged surface are kept with it. From this request until the participant's part is
+        applied, the commits of the surface and of its layer surfaces are kept (see the
+        interface). Posts invalid_surface, staged when the surface is staged in a transaction
+        that has not started, and too_many for a 33rd surface.
       </description>
       <arg name="surface" type="object" interface="wl_surface"/>
     </request>
@@ -218,13 +252,14 @@
         Opens the bracket: the window changes this connection asks for on its role objects from
         here to end_window_changes are kept for the transaction, in order. A role request that
         fails its own checks is refused when it arrives, as outside a bracket. Posts bracket
-        inside an open bracket.
+        while the connection has an open bracket, on this object or on another of its
+        transactions.
       </description>
     </request>
 
     <request name="end_window_changes">
       <description summary="close the bracket">
-        Posts bracket without an open bracket.
+        Posts bracket when this object opened no bracket that is open.
       </description>
     </request>
 
@@ -241,13 +276,20 @@
         output. Needs the overview role; only the creator binds. While a transaction is armed
         for a gesture on an output, that gesture goes to it and is not reported to the dock.
 
-        When the server's recogniser claims the gesture, the transaction starts with the
-        participants that are ready (gesture_began): their kept commits are applied and the
-        values they set take effect, and every animation they start is tracked. A tracked
-        animation shows its start value plus the gesture's progress times the way to its target,
-        whatever its curve; an animation through samples shows the sample at that progress. The
-        progress is the recogniser's, 0 where the gesture began and 1 for a whole gesture, held
-        between the two.
+        A touchpad gesture belongs to one output: the output under the pointer at the moment
+        the server's recogniser claims the gesture, until the fingers lift. One binding takes
+        the gesture. When several wait for the same gesture on that output, the server picks at
+        that moment: first a reverse binding (bind_reverse_gesture) of a transaction at rest
+        completed, the one that completed last; then a binding of an armed transaction, the one
+        armed last. The bindings passed over stay as they are and take a later gesture. A
+        gesture under way is never handed from one binding to another.
+
+        When the recogniser claims the gesture, the transaction starts with the participants
+        that are ready (gesture_began): their kept commits are applied and the values they set
+        take effect, and every animation they start is tracked. A tracked animation shows its
+        start value plus the gesture's progress times the way to its target, whatever its curve;
+        an animation through samples shows the sample at that progress. The progress is the
+        recogniser's, 0 where the gesture began and 1 for a whole gesture, held between the two.
 
         When the fingers lift, the recogniser decides whether the gesture is completed or
         reverted (gesture_ended), and the server moves the progress to 1 or back to 0 along the
@@ -278,8 +320,10 @@
         at rest and the values they had when the first gesture began, and the release settles
         along the same spring. Reverted, the transaction is over and its bindings end; completed
         again, the reverse gesture stays armed. Window changes are not undone. The binding lasts
-        until the creator destroys its object or cancels. Posts invalid_gesture without a
-        bind_gesture before it, and the errors of bind_gesture.
+        until the creator destroys its object or cancels. While the transaction rests completed,
+        this binding comes before the binding of any armed transaction for the same gesture on
+        the output (see bind_gesture). Posts invalid_gesture without a bind_gesture before it,
+        and the errors of bind_gesture.
       </description>
       <arg name="gesture" type="uint" enum="gesture"/>
     </request>
@@ -362,6 +406,10 @@
       layer's parent, and a staged parent carries it into the transaction. A hole takes no
       input: pointer and touch go to the parent surface, and the component decides what a press
       on the hole means.
+
+      A hole of a surface the server holds (cupertino_component_v1.persist) stays with it: it
+      goes on drawing its source and keeps its claim until a surface takes the hold over or the
+      hold ends.
     </description>
 
     <enum name="error">
@@ -397,15 +445,22 @@
         1 claims the window of a window source: from the commit that applies it the window is
         drawn in this hole alone, not at its own frame, and takes no pointer or touch input. 0,
         the initial state, leaves the window where it is. A hole that sets the claim in the
-        commit that first shows it, with its layer at the window's frame, takes the window over
+        commit that first shows it, with its layer where the window shows, takes the window over
         without a change on screen. Needs the overview or the window manager role.
 
-        A window has one claim in force: the latest; an earlier claim of another hole shows
-        nothing until the later one ends. When the claim ends with a commit of the component
-        (set_claim 0, or the hole or its layer destroyed), the window is drawn at its own frame
-        from that commit. When it ends any other way (the surface is dismissed, the connection
-        ends), the server moves the window from where the hole showed it to its own frame along
-        its return motion, so no window jumps.
+        The claims of a window stack in the order their commits applied them. The latest is in
+        force: the window is drawn in its hole. Every claim below it is suspended, and its hole
+        draws nothing meanwhile. When the claim in force ends, the one below it is in force
+        again and the window is drawn in that hole; when none is left, the window is at its own
+        frame. So where a window shows without a claim is the hole of the claim below it, or its
+        own frame. The overview's claim over the stage strip's is such a stack.
+
+        When a claim ends with a commit of the component (set_claim 0, or the hole or its layer
+        destroyed), the window is drawn where it shows without that claim from that commit. When
+        it ends any other way (the surface is dismissed, the connection ends and the surface is
+        not held), the server moves the window there from where the hole showed it along its
+        return motion, so no window jumps. A suspended claim that ends changes nothing on
+        screen.
 
         Posts permission without one of the roles.
       </description>

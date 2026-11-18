@@ -17,6 +17,7 @@ mod damage;
 mod error;
 pub mod gpu_path;
 pub mod gpu_present;
+mod hand_over;
 pub mod menus;
 mod pixels;
 pub mod popup;

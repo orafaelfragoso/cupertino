@@ -56,6 +56,8 @@ use wayland_server::protocol::{
     wl_seat::{self, Capability, WlSeat},
     wl_shm::{self, WlShm},
     wl_shm_pool::{self, WlShmPool},
+    wl_subcompositor::{self, WlSubcompositor},
+    wl_subsurface::WlSubsurface,
     wl_surface::{self, WlSurface},
 };
 use wayland_server::{Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource};
@@ -75,6 +77,8 @@ pub struct Offer {
     /// Whether the viewporter and fractional scaling are offered, so surfaces have viewports; each source rectangle
     /// a viewport is given is one of [`Harness::presents`].
     pub scaling: bool,
+    /// Whether `wl_subcompositor` is offered.
+    pub subsurfaces: bool,
 }
 
 impl Offer {
@@ -87,6 +91,7 @@ impl Offer {
         shell: true,
         releases: false,
         scaling: false,
+        subsurfaces: false,
     };
 
     /// Only the standard protocols.
@@ -98,6 +103,7 @@ impl Offer {
         shell: true,
         releases: false,
         scaling: false,
+        subsurfaces: false,
     };
 }
 
@@ -160,6 +166,10 @@ pub struct Server {
     requests: Arc<Mutex<Vec<String>>>,
     /// The configure acknowledgements, attaches and commits of the windows, as text, in the order received.
     presents: Arc<Mutex<Vec<String>>>,
+    /// The commits that showed a buffer, each as the role of its surface, in the order received.
+    commits: Arc<Mutex<Vec<String>>>,
+    /// The role of each surface given one: `window`, `subsurface` or `layer`.
+    roles: HashMap<ObjectId, &'static str>,
     publications: Publications,
     replies: Arc<Mutex<Vec<String>>>,
     pub layers: Vec<CupertinoLayerV1>,
@@ -221,6 +231,7 @@ type Job = Box<dyn FnOnce(&mut Server) + Send>;
 pub struct Harness {
     requests: Arc<Mutex<Vec<String>>>,
     presents: Arc<Mutex<Vec<String>>>,
+    commits: Arc<Mutex<Vec<String>>>,
     pub publications: Publications,
     pub replies: Arc<Mutex<Vec<String>>>,
     jobs: Sender<Job>,
@@ -246,6 +257,7 @@ impl Harness {
         };
         let requests = server.requests.clone();
         let presents = server.presents.clone();
+        let commits = server.commits.clone();
         let publications = server.publications.clone();
         let replies = server.replies.clone();
         let (jobs, inbox) = channel::<Job>();
@@ -257,6 +269,7 @@ impl Harness {
             Harness {
                 requests,
                 presents,
+                commits,
                 publications,
                 replies,
                 jobs,
@@ -283,6 +296,12 @@ impl Harness {
     /// The configure acknowledgements, attaches and commits of the windows received so far, as text, in order.
     pub fn presents(&self) -> Vec<String> {
         self.presents.lock().unwrap().clone()
+    }
+
+    /// The commits that showed a buffer received so far, each as the role of its surface (`window`, `subsurface`,
+    /// `layer`, or `surface` for one without these), in order.
+    pub fn commits(&self) -> Vec<String> {
+        self.commits.lock().unwrap().clone()
     }
 
     /// The requests of the Cupertino protocols received so far, as text.
@@ -347,6 +366,9 @@ fn serve(
         handle.create_global::<Server, XdgWmBase, ()>(6, ());
     }
     handle.create_global::<Server, WlSeat, ()>(7, ());
+    if offer.subsurfaces {
+        handle.create_global::<Server, WlSubcompositor, ()>(1, ());
+    }
     if offer.scaling {
         handle.create_global::<Server, WpViewporter, ()>(1, ());
         handle.create_global::<Server, WpFractionalScaleManagerV1, ()>(1, ());
@@ -406,6 +428,7 @@ macro_rules! global {
 }
 global!(
     WlCompositor,
+    WlSubcompositor,
     XdgWmBase,
     CupertinoLayersV1,
     CupertinoAppEffectsV1,
@@ -523,8 +546,26 @@ ignore!(
     WlPointer,
     XdgToplevel,
     WlCallback,
-    WpFractionalScaleV1
+    WpFractionalScaleV1,
+    WlSubsurface
 );
+
+impl Dispatch<WlSubcompositor, ()> for Server {
+    fn request(
+        server: &mut Server,
+        _: &Client,
+        _: &WlSubcompositor,
+        request: wl_subcompositor::Request,
+        _: &(),
+        _: &DisplayHandle,
+        init: &mut DataInit<'_, Server>,
+    ) {
+        if let wl_subcompositor::Request::GetSubsurface { id, surface, .. } = request {
+            init.init(id, ());
+            server.roles.insert(surface.id(), "subsurface");
+        }
+    }
+}
 
 impl Dispatch<WlSurface, ()> for Server {
     fn request(
@@ -550,6 +591,12 @@ impl Dispatch<WlSurface, ()> for Server {
                 server.present("Commit");
                 // a later buffer replaces the one shown, which goes back to the client
                 if let Some(Some(buffer)) = server.pending.remove(&surface.id()) {
+                    let role = server.roles.get(&surface.id()).copied();
+                    server
+                        .commits
+                        .lock()
+                        .unwrap()
+                        .push(role.unwrap_or("surface").to_owned());
                     if let Some(old) = server.shown.insert(surface.id(), buffer.clone()) {
                         if server.releases && old != buffer {
                             old.release();
@@ -634,7 +681,7 @@ impl Dispatch<WlSeat, ()> for Server {
 
 impl Dispatch<XdgWmBase, ()> for Server {
     fn request(
-        _: &mut Server,
+        server: &mut Server,
         _: &Client,
         _: &XdgWmBase,
         request: xdg_wm_base::Request,
@@ -642,8 +689,9 @@ impl Dispatch<XdgWmBase, ()> for Server {
         _: &DisplayHandle,
         init: &mut DataInit<'_, Server>,
     ) {
-        if let xdg_wm_base::Request::GetXdgSurface { id, .. } = request {
+        if let xdg_wm_base::Request::GetXdgSurface { id, surface } = request {
             init.init(id, ());
+            server.roles.insert(surface.id(), "window");
         }
     }
 }
@@ -682,7 +730,8 @@ impl Dispatch<CupertinoLayersV1, ()> for Server {
         init: &mut DataInit<'_, Server>,
     ) {
         match request {
-            cupertino_layers_v1::Request::GetLayer { id, .. } => {
+            cupertino_layers_v1::Request::GetLayer { id, surface, .. } => {
+                server.roles.insert(surface.id(), "layer");
                 let layer = init.init(id, ());
                 server.layers.push(layer);
                 server.note("get_layer");

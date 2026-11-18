@@ -76,3 +76,7 @@ required-features = ["test"]
 [[test]]
 name = "picture"
 required-features = ["test"]
+
+[[test]]
+name = "layers-handed-over"
+required-features = ["test"]

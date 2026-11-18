@@ -9,7 +9,7 @@ logic and layout metrics a native file manager (and a desktop-icon layer) needs.
 ```sh
 cargo run -p cupertino-files --features app -- [--terminal PROGRAM] [FOLDER | file:///FOLDER | trash:///]  # the window (default $HOME), in a running session
 cargo clippy -p cupertino-files --all-targets
-cargo run -p cupertino-files --example files_capture -- files/window --view list   # a window or its sidebar on a sample home folder (crates/cupertino-capture)
+cargo run -p cupertino-files --example files_capture -- files/window --view list   # a window or its sidebar on a sample home folder (`kit::test::capture`)
 cargo run -p cupertino-files --example files_capture -- files/sidebar --devices removable --scale 2   # the sidebar with a mounted, a busy and an unmounted device
 cargo bench -p cupertino-files --bench directory                # 50k entries
 ```

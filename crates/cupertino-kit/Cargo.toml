@@ -9,7 +9,7 @@ layer = "ui"
 
 [features]
 # `cupertino_kit::test`, the headless backend for program tests; enabled only in dev-dependencies
-test = ["dep:cupertino-ui-test"]
+test = ["dep:cupertino-ui-test", "dep:tiny-skia"]
 
 [dependencies]
 cupertino-animation = { path = "../cupertino-animation" }
@@ -27,12 +27,12 @@ cupertino-ui-render = { path = "../cupertino-ui-render" }
 cupertino-ui-text = { path = "../cupertino-ui-text" }
 cupertino-ui-test = { path = "../cupertino-ui-test", optional = true }
 cupertino-ui-wayland = { path = "../cupertino-ui-wayland" }
+tiny-skia = { version = "0.12", optional = true }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 libc = "0.2"
 zbus = { version = "5", default-features = false, features = ["async-io"] }
 
 [dev-dependencies]
-cupertino-capture = { path = "../cupertino-capture" }
 tiny-skia = "0.12"
 # the transport's in-process protocol server, which the submitted-frame tests draw on
 cupertino-app-protocols = { path = "../cupertino-app-protocols", features = ["client", "server"] }

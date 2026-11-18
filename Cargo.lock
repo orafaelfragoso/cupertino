@@ -936,14 +936,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cupertino-capture"
-version = "0.1.0"
-dependencies = [
- "cupertino-assets",
- "tiny-skia",
-]
-
-[[package]]
 name = "cupertino-cli"
 version = "0.1.0"
 dependencies = [
@@ -1114,7 +1106,6 @@ dependencies = [
  "async-channel",
  "cupertino-apps",
  "cupertino-assets",
- "cupertino-capture",
  "cupertino-defaults",
  "cupertino-diagnostic-events",
  "cupertino-icons",
@@ -1231,7 +1222,6 @@ dependencies = [
  "cupertino-app-protocols",
  "cupertino-apps",
  "cupertino-assets",
- "cupertino-capture",
  "cupertino-defaults",
  "cupertino-diagnostic-events",
  "cupertino-geometry",
@@ -1296,7 +1286,6 @@ dependencies = [
  "async-io",
  "cupertino-apps",
  "cupertino-assets",
- "cupertino-capture",
  "cupertino-defaults",
  "cupertino-diagnostic-events",
  "cupertino-geometry",

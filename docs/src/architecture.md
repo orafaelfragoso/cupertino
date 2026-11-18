@@ -75,7 +75,7 @@ as dev-dependencies, and only dev-dependencies point at a `testing` crate. The c
 | `shell` | `cupertino-control`, `cupertino-controlcenter`, `cupertino-dock`, `cupertino-launcher`, `cupertino-login`, `cupertino-menubar`, `cupertino-notifications`, `cupertino-osd`, `cupertino-polkit-agent`, `cupertino-portal`, `cupertino-screenshot`, `cupertino-windowmanager` | `foundation`, `models`, `system`, `protocol`, `ui`, `shellkit`, `shell` |
 | `apps` | `cupertino-files`, `cupertino-settings` | `foundation`, `models`, `system`, `protocol`, `ui` |
 | `tools` | `cupertino-cli`, `cupertino-diagnostics`, `cupertino-gpu-shaders`, `cupertino-gpu-slice`, `cupertino-layers`, `xtask` | every layer except `core`, `shell`, `services`, `apps`, `testing` |
-| `testing` (test harnesses, tests that start programs from more than one crate) | `cupertino-capture`, `cupertino-session-tests` | every layer |
+| `testing` (test harnesses, tests that start programs from more than one crate) | `cupertino-session-tests` | every layer |
 
 Further rules:
 

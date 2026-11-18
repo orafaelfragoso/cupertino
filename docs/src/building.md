@@ -563,7 +563,7 @@ cargo run -p cupertino-files --example files_capture -- files/sidebar --drop-pla
 cargo run -p cupertino-kit --example kit_capture -- kit/controls --scale 2
 ```
 
-It writes one PNG per state and appearance into `captures` under `$CARGO_TARGET_DIR`, else under the workspace's `target` (`--out` changes it) and prints each path. The flags, the file names and the surfaces are in `crates/cupertino-capture/README.md`. It needs an asset pack and exits 2 without one.
+It writes one PNG per state and appearance into `captures` under `$CARGO_TARGET_DIR`, else under the workspace's `target` (`--out` changes it) and prints each path. The flags, the file names and the surfaces are in `crates/cupertino-kit/README.md`. It needs an asset pack and exits 2 without one.
 
 ## The shell processes
 

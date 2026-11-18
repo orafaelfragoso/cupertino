@@ -1308,7 +1308,8 @@ One line per change to a decision or approval of a design: date, number, what, w
   items after a failing one; W4.12 fixes it with its transfers.
 - 2026-11-18: lead, W4.12 (23eb8b006): Files reads a new window's or tab's folder once on its UI thread before opening
   it, keeping today's "no window and a notice" and the start-up exit; a hung folder can still hold that moment, and
-  W7.1 moves it to a task with Files' other threads. The model gains `is_working`, `opened` and `set_notify` for the
+  W7.1 moves it to a task with Files' other threads. So do two older reads on the UI thread: the free space of a
+  listing (`statvfs`, the mount's read-only flag) and the nearest existing ancestor of a folder that is gone. The model gains `is_working`, `opened` and `set_notify` for the
   session's kept models; a program takes a model's watch before its first work. `new_folder_with` stops at the first
   failure, as it says. The transfer tests use `/dev/shm` as a second file system.
 - 2026-11-18: lead, W4.close: `render` and `ui` join `ENFORCED`; neither had a remaining-work line.

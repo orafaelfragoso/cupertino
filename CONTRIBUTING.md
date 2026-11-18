@@ -20,7 +20,7 @@ The rules are in `.config/validation.toml`. Notes:
 - Shell and app crates build their process code behind the `app` feature; the validation passes it.
 - Dev builds optimise the crates where a CPU-drawn frame spends its time (`[profile.dev.package.*]` in `Cargo.toml`): the 2D rasteriser, the font readers, shaper and glyph rasteriser, the SVG and PNG coders and `cupertino-ui-render`. Unoptimised, a 2x frame takes several times as long. Debug assertions and overflow checks stay on.
 - Run the compositor nested while you work: `cargo run -p cupertino-server -- --winit --spawn foot`. Export `XDG_DATA_DIRS="$PWD/crates/cupertino-files/data:$PWD/crates/cupertino-settings/data:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"` first, or the menu bar and dock show `Cupertino-files` and a generic icon (see [Building](docs/src/building.md)).
-- One surface in light and dark at any scale: `cargo run -p cupertino-files --example files_capture -- files/window --scale 2` (see `crates/cupertino-capture/README.md`). Never capture with your real `HOME`.
+- One surface in light and dark at any scale: `cargo run -p cupertino-files --example files_capture -- files/window --scale 2` (see `crates/cupertino-kit/README.md`). Never capture with your real `HOME`.
 - A release build of every program is `cargo build-programs`; Arch packages are `makepkg -si` in `packaging/arch/cupertino`.
 - To try the full desktop from a text console, see [Building and running](docs/src/building.md#the-whole-desktop-on-a-tty).
 

@@ -4,7 +4,7 @@
 //! into Documents. The window is the Kit window ([`cupertino_files::kit`]) drawn on the headless window system with the
 //! CPU renderer.
 //!
-//! `cargo run -p cupertino-files --example files_capture -- files/window --view list --scale 2` (the flags are `cupertino-capture`'s)
+//! `cargo run -p cupertino-files --example files_capture -- files/window --view list --scale 2` (the flags are `cupertino_kit::test::capture`'s)
 //!
 //! State flags: `--view icon|list|columns` (default icon), `--selected PATH` (the item, selected: a path under the home
 //! folder, its folders shown on the way in the column view) and `--devices removable`
@@ -22,7 +22,6 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use cupertino_capture::{App, Look, Request, State};
 use cupertino_files::kit::{prepare, Files, Start};
 use cupertino_files::notice::Notices;
 use cupertino_files::places::{folder_icons, standard_places, Medium, Place};
@@ -36,6 +35,7 @@ use cupertino_kit::platform::{
     KeyEvent, Keysym, Mods, MouseButton, PointerEvent, SystemAppearance, Timestamp, WindowId,
 };
 use cupertino_kit::render::{PaintOp, PixelFormat};
+use cupertino_kit::test::capture::{App, Look, Request, State};
 use cupertino_kit::test::{Capabilities, ManualClock, TestDriver, WindowEvent, WindowStates};
 use cupertino_kit::theme::ThemeTokens;
 use tiny_skia::{IntRect, IntSize, Pixmap};
@@ -715,5 +715,5 @@ impl App for Capture {
 }
 
 fn main() -> ExitCode {
-    cupertino_capture::run(Capture::new)
+    cupertino_kit::test::capture::run(Capture::new)
 }

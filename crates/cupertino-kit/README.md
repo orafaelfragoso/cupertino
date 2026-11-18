@@ -95,7 +95,7 @@ it (see `cupertino-ui-controls`).
 
 `cargo run -p cupertino-kit --example kit_capture -- kit/controls` and `kit/icons` draw the row 167a controls sheet and a grid of system symbols (`--direction rtl` mirrors them),
 and `kit/scroll` a scroll view at rest, stretched and with its bar shown, fading and hidden (`--phase`), `kit/under-toolbar` a
-page scrolling under a toolbar row drawn in a layer over it (`--phase rest|shown|hidden`), headless, in light and dark at any scale (`examples/kit_capture.rs`, `crates/cupertino-capture`). `kit/counter`, `kit/forms`,
+page scrolling under a toolbar row drawn in a layer over it (`--phase rest|shown|hidden`), headless, in light and dark at any scale (`examples/kit_capture.rs`, `kit::test::capture`). `kit/counter`, `kit/forms`,
 `kit/virtual-list` and `kit/editor` draw the examples' windows as they open. `kit/gallery` draws every control family
 side by side, `--state rest|held-button|held-switch|held-slider|held-segment|disabled` holding the pointer down on one
 or disabling them all, at `--control-size mini|small|regular|large|extra-large` and `--compact on|off`, over
@@ -170,18 +170,61 @@ that turns it on.
 | In `kit::test` | Items |
 |---|---|
 | The headless backend (`cupertino-ui-test`) | `TestDriver`, `ManualClock`, `HeadlessWindowSystem`, and `StepStatus`, what a driver's steps return |
+| The capture command's shared part | the `capture` module: `App`, `Look`, `Request`, `State`, `Options`, `run` and the rest of its public items |
 | What a driver is built from and reads | `Runtime`, `preferences`, `Capabilities`, `WindowEvent`, `WindowStates`, `PlaceholderIcons`, `FontIndex`, `each_turn` |
 
 The capture examples of `files`, `login` and `kit` and `login`'s benches name it; Kit's tests and `kit_capture` are
 built with the feature (`required-features`), and name the renderer's internals they test (`CpuFrame`, `render_thread`,
-the window system's `Submitted` and `Shown`) from the lower crates directly. `kit::test::capture` (`cupertino-capture`)
-comes with W4.11.
+the window system's `Submitted` and `Shown`) from the lower crates directly. `kit::test::capture` is the shared part of the capture examples (below).
 
 **Release builds.** `cargo build-programs` (`.cargo/config.toml`) builds the programs with every feature of the
 workspace's packages, each named as `--features=PACKAGE/FEATURE`, except `cupertino-kit/test`; both package recipes
 (`packaging/arch/cupertino`, `packaging/arch/cupertino-git`) build with it, and `cupertino-ui-abi`'s library without
 `--all-features`. `cupertino-layers` checks that the alias names exactly those features, so a feature added to a
 program is never left out of the packages.
+
+### The capture command
+
+`kit::test::capture`, with the `test` feature: the flags of every app's capture example, the names of the PNGs it
+writes and the contact sheet. `cupertino-files`, `cupertino-kit` and `cupertino-login` use it in
+`examples/<app>_capture.rs`, which draw their surfaces with their own painters on sample data.
+
+```
+cargo run -p CRATE --example APP_capture -- APP/SURFACE [--scale N] [--appearance light|dark|both]
+              [--increase-contrast] [--reduce-transparency] [--size WxH] [--out DIR] [--sheet] [--STATE-FLAG VALUE]...
+cargo run -p CRATE --example APP_capture -- APP    # lists the surfaces of APP
+```
+
+`CRATE` is `cupertino-files`, `cupertino-kit` or `cupertino-login`; `APP` is `files`, `kit` or `login`.
+
+| Flag | Effect |
+|---|---|
+| `--scale N` | device pixels per point (default 1) |
+| `--appearance` | `light`, `dark` or `both` (default) |
+| `--increase-contrast`, `--reduce-transparency` | the session's display options |
+| `--size WxH` | the window size in points instead of the surface's default |
+| `--out DIR` | where the PNGs go (created); the default is `captures` in `$CARGO_TARGET_DIR`, else in the workspace's `target` |
+| `--sheet` | every state the app lists for the surface, and one contact sheet: states as columns, appearances as rows; refused with a state flag |
+| `--STATE-FLAG VALUE` | a state of the surface; each app names its own (`--login saving`, `--view list`) |
+
+One PNG per state and appearance: `<app>-<surface>[-<flag>-<value>]...-<light|dark>[-hc][-rt]@<scale>x.png`, the value in
+lower case with other characters than letters and digits as `-` (`settings-accessibility-login-saving-dark@2x.png`).
+The sheet is `<app>-<surface>-sheet[-hc][-rt]@<scale>x.png`. The command prints each path it writes. It exits 2 with a
+message for an unknown surface, flag or state value and when no asset pack is found: a capture with the built-in font
+alone does not show the surfaces as they look.
+
+| Surface | States |
+|---|---|
+| `files/window`, `files/sidebar` (the sidebar column of the window) | `--view icon\|list`, `--selected NAME`, `--devices removable` (a mounted, a busy and an unmounted device in the sidebar) |
+| `kit/controls` (the row 167a controls sheet), `kit/icons` (with the chevrons along the reading direction and a missing symbol's placeholder) | `--direction ltr\|rtl` |
+| `kit/gallery` (every control family; its sheet shows each state) | `--state rest\|held-button\|held-switch\|held-slider\|held-segment\|disabled`, `--control-size mini\|small\|regular\|large\|extra-large`, `--compact on\|off`, `--backdrop flat\|busy`, `--direction ltr\|rtl` |
+| `kit/scroll` (an overlay scroll view: at rest, pulled past its top edge, its bar shown, fading and hidden after a wheel step) | `--direction ltr\|rtl`, `--phase rest\|stretch\|shown\|fading\|hidden` |
+| `kit/under-toolbar` (a page that scrolls under a toolbar row drawn in a layer over it, set off by the scroll edge: at rest, just after a wheel step and after the bar has faded) | `--direction ltr\|rtl`, `--phase rest\|shown\|hidden` |
+| `login/lock`, `login/picker`, `login/password` (the lock screen, and the login screen's accounts and password screen, at 2560 x 1440 points unless `--size` says otherwise, on a wallpaper made for the capture) | `--field empty\|typed\|help` (not the picker: the password typed shows its dots and the submit button; help, after failed attempts, the help button, its line and the message); the picker: `--selection none\|shown` (no selection as it opens, or the first tile selected), `--users three\|one` (three accounts and "Other…", or one account alone) |
+
+The sidebar material is the server's, so a flat fill of the window background stands in for it. The home folder and
+the pictures are example data, not the machine's. Files draws at a fixed clock (2026-01-01 15:00
+UTC), so a command gives the same pixels on every run.
 
 ### Temporary exposures
 

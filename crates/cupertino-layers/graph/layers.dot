@@ -1,6 +1,6 @@
 // cupertino-layers --graph
-// 71 crates, 319 internal dependencies
-// per layer: foundation 5, graphics 2, models 6, system 8, platform 7, protocol 3, transport 2, render 3, ui 8, shellkit 0, core 1, services 4, shell 12, apps 2, tools 6, testing 2
+// 70 crates, 315 internal dependencies
+// per layer: foundation 5, graphics 2, models 6, system 8, platform 7, protocol 3, transport 2, render 3, ui 8, shellkit 0, core 1, services 4, shell 12, apps 2, tools 6, testing 1
 // forbidden normal edge cupertino-control (shell) -> cupertino-shell-client (transport)
 // forbidden normal edge cupertino-control (shell) -> cupertino-wayland-client (transport)
 // forbidden normal edge cupertino-controlcenter (shell) -> cupertino-alsa (platform)
@@ -149,15 +149,13 @@ digraph "layers" {
     "xtask";
   }
   subgraph "cluster_testing" {
-    label="testing (2)";
-    "cupertino-capture";
+    label="testing (1)";
     "cupertino-session-tests";
   }
   "cupertino-assets" -> "cupertino-theme";
   "cupertino-btd" -> "cupertino-bluetooth";
   "cupertino-btd" -> "cupertino-diagnostic-events";
   "cupertino-btd" -> "cupertino-seat";
-  "cupertino-capture" -> "cupertino-assets";
   "cupertino-cli" -> "cupertino-assets";
   "cupertino-cli" -> "cupertino-defaults";
   "cupertino-cli" -> "cupertino-diagnostic-events";
@@ -208,7 +206,6 @@ digraph "layers" {
   "cupertino-effects" -> "cupertino-theme";
   "cupertino-files" -> "cupertino-apps";
   "cupertino-files" -> "cupertino-assets";
-  "cupertino-files" -> "cupertino-capture" [label="dev"];
   "cupertino-files" -> "cupertino-defaults";
   "cupertino-files" -> "cupertino-diagnostic-events";
   "cupertino-files" -> "cupertino-icons";
@@ -236,7 +233,6 @@ digraph "layers" {
   "cupertino-kit" -> "cupertino-app-protocols" [label="dev"];
   "cupertino-kit" -> "cupertino-apps";
   "cupertino-kit" -> "cupertino-assets";
-  "cupertino-kit" -> "cupertino-capture" [label="dev"];
   "cupertino-kit" -> "cupertino-defaults";
   "cupertino-kit" -> "cupertino-diagnostic-events";
   "cupertino-kit" -> "cupertino-geometry";
@@ -266,7 +262,6 @@ digraph "layers" {
   "cupertino-login" -> "cupertino-apps";
   "cupertino-login" -> "cupertino-assets";
   "cupertino-login" -> "cupertino-assets" [label="dev"];
-  "cupertino-login" -> "cupertino-capture" [label="dev"];
   "cupertino-login" -> "cupertino-defaults";
   "cupertino-login" -> "cupertino-diagnostic-events";
   "cupertino-login" -> "cupertino-geometry";

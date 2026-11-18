@@ -590,8 +590,9 @@ impl Submission {
 /// What [`WindowSystem::submit`] did with a frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Submitted {
-    /// The window system draws and shows it away from the UI thread: [`WindowEvent::Shown`] says how that went, and
-    /// the window draws no other frame until then.
+    /// The window system draws and shows it away from the UI thread: [`WindowEvent::Shown`] says how that went, sent
+    /// once the window system let go of the renderer, and the window neither draws another frame nor reaches its
+    /// renderer until then.
     Taken,
     /// No buffer is free, or the window waits for its configure or for a frame of the size it asks for: the frame
     /// was not drawn and the next one draws all of it.

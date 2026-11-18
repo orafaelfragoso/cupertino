@@ -288,6 +288,9 @@ struct WindowState<M> {
     /// The frame the window system took ([`WindowSystem::submit`]) and has not said yet how it was shown, with the
     /// configure it answers.
     in_flight: Option<Option<ConfigureId>>,
+    /// The renderer lets go of its layers once the frame in flight is shown: the UI thread never waits for the
+    /// renderer while a frame of it is away, since the renderer may wait for the render thread that draws the frame.
+    layers_owed: bool,
     /// The error of the last frame, until one renders and presents; animations wait for that.
     failed: Option<UiError>,
     popup: Option<PopupState<M>>,
@@ -1434,6 +1437,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             resources: Arc::default(),
             renderer: Arc::new(Mutex::new((self.options.renderers)())),
             in_flight: None,
+            layers_owed: false,
             failed: None,
             popup: None,
             opening_press: None,
@@ -1696,7 +1700,11 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 let shown_active = w.active || w.keyboard_in_popup;
                 // a window nobody sees (minimized, or covered whole) keeps its frame and lets go of its layers
                 if c.states.suspended {
-                    held(&w.renderer).drop_layers();
+                    if w.in_flight.is_some() {
+                        w.layers_owed = true;
+                    } else {
+                        held(&w.renderer).drop_layers();
+                    }
                     if let Some(layer) = w.layer.renderer.as_mut() {
                         layer.drop_layers();
                     }
@@ -1754,6 +1762,9 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 let Some(answered) = w.in_flight.take() else {
                     return Ok(());
                 };
+                if std::mem::take(&mut w.layers_owed) {
+                    held(&w.renderer).drop_layers();
+                }
                 match shown {
                     Shown::Presented(id) => {
                         if let Some(t) = &mut self.frame_timing {
@@ -4004,7 +4015,8 @@ fn appearance_of(theme: &ThemeTokens) -> SystemAppearance {
     }
 }
 
-/// The window's renderer, waiting for a frame the window system draws with it away from the UI thread to finish.
+/// The window's renderer, reached only while no frame of it is in flight (a renderer on the GPU waits for the render
+/// thread, which may be drawing that frame with the renderer).
 fn held(renderer: &SharedRenderer) -> MutexGuard<'_, Box<dyn UiRenderer<Frame = CpuFrame> + Send>> {
     renderer.lock().unwrap_or_else(PoisonError::into_inner)
 }

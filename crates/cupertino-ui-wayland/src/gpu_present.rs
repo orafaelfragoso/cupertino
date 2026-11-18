@@ -500,9 +500,10 @@ impl GpuSurface {
         size: (u32, u32),
     ) -> Result<(), PresentError> {
         let (generation, modifiers) = (gpu.generation, gpu.modifiers.clone());
-        let mut guard = held(&self.images);
-        let images: &mut Option<Resident<Images>> = &mut guard;
+        // the images are locked only on the render thread, so no thread waits for it while holding them
+        let images = &self.images;
         let dmabuf = render_thread::run(move |on| {
+            let mut images = held(images);
             let device = on.device_of(generation)?;
             let image = device.allocate_dmabuf(&DmabufDesc {
                 size,
@@ -523,7 +524,6 @@ impl GpuSurface {
             Ok(image.dmabuf)
         })
         .map_err(gpu_error);
-        drop(guard);
         let dmabuf = dmabuf?;
         let planes = dmabuf
             .planes
@@ -582,10 +582,12 @@ impl GpuSurface {
 
     /// Free the texture of the buffer allocated last, whose `wl_buffer` could not be made.
     fn free_last(&mut self) {
-        let mut images = held(&self.images);
-        if let Some(images) = images.as_mut() {
-            render_thread::run(|on| images.get_mut(on).free_last());
-        }
+        let images = &self.images;
+        render_thread::run(|on| {
+            if let Some(images) = held(images).as_mut() {
+                images.get_mut(on).free_last();
+            }
+        });
     }
 
     /// Show `frame` on `surface` now: [`GpuSurface::prepare`]d, drawn and committed. A frame that cannot be drawn
@@ -804,13 +806,13 @@ impl Draw {
             acquire,
             commit,
         } = self;
-        let mut images = held(&images);
-        let images: &mut Option<Resident<Images>> = &mut images;
         let (width, height, stride) = (frame.width, frame.height, frame.stride as usize);
         let frame_pixels: &[u8] = &frame.pixels;
         let fence = render_thread::run(|on| {
             let device = on.device_of(generation).map_err(gpu_error)?;
             let programs = programs.get(on);
+            // locked on the render thread only, as everywhere the images are reached
+            let mut images = held(&images);
             let images = images
                 .as_mut()
                 .expect("a surface with buffers has their images")

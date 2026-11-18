@@ -5,8 +5,8 @@ use cupertino_ui_core::platform::{
     ActivationRequest, Capabilities, ClipboardData, ClipboardKind, ClipboardToken, Color,
     Configure, ConfigureId, CursorShape, DragRequest, DragToken, DropAction, DropAnswer, DropEvent,
     DropToken, MenuDescription, Mods, PlatformError, PlatformEvent, PointerEvent, PopupSpec,
-    PresentOutcome, Timestamp, TouchEvent, WindowEvent, WindowId, WindowRequest, WindowSpec,
-    WindowStates, WindowSystem, WmCapabilities,
+    PresentOutcome, Submission, Submitted, Timestamp, TouchEvent, WindowEvent, WindowId,
+    WindowRequest, WindowSpec, WindowStates, WindowSystem, WmCapabilities,
 };
 use cupertino_ui_render::{CpuFrame, PixelFormat, PixelRect, RenderFrameId};
 use cupertino_ui_text::TextInputState;
@@ -175,6 +175,37 @@ impl Wake for Woken {
     }
 }
 
+/// How a test takes frames away from the UI thread ([`HeadlessWindowSystem::set_submit`]): given the window, the frame
+/// and where to send the window's [`WindowEvent::Shown`] from any thread, it says what it did with the frame.
+pub type Submit = Box<dyn FnMut(WindowId, &Submission, &Returns) -> Submitted + Send>;
+
+/// Where events sent from other threads wait for the window system's next dispatch ([`Submit`]).
+#[derive(Clone, Debug, Default)]
+pub struct Returns {
+    events: Arc<Mutex<VecDeque<PlatformEvent>>>,
+    woken: Arc<Woken>,
+}
+
+impl Returns {
+    /// Queue `event` for the next dispatch and wake the runtime.
+    pub fn send(&self, event: PlatformEvent) {
+        self.events
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push_back(event);
+        self.woken.wake_by_ref();
+    }
+}
+
+/// The test's [`Submit`], which has no debug form of its own.
+struct Submitter(Submit);
+
+impl std::fmt::Debug for Submitter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Submitter")
+    }
+}
+
 /// Desktop control as the window system sees it: whether it watches the windows, what they publish and the actions it
 /// routes to them.
 #[derive(Debug, Default)]
@@ -220,6 +251,9 @@ pub struct HeadlessWindowSystem {
     control: DesktopControl,
     pub(crate) dispatch_one: bool,
     woken: Arc<Woken>,
+    /// Takes frames away from the UI thread; none declines them all.
+    submit: Option<Submitter>,
+    returns: Returns,
 }
 
 impl Default for HeadlessWindowSystem {
@@ -230,6 +264,7 @@ impl Default for HeadlessWindowSystem {
 
 impl HeadlessWindowSystem {
     pub fn new(capabilities: Capabilities) -> Self {
+        let woken = Arc::<Woken>::default();
         Self {
             capabilities,
             windows: BTreeMap::new(),
@@ -247,8 +282,19 @@ impl HeadlessWindowSystem {
             input: true,
             control: DesktopControl::default(),
             dispatch_one: false,
-            woken: Arc::default(),
+            submit: None,
+            returns: Returns {
+                events: Arc::default(),
+                woken: Arc::clone(&woken),
+            },
+            woken,
         }
+    }
+
+    /// Take the windows' frames with `submit` ([`WindowSystem::submit`]) instead of declining them, as a window system
+    /// that draws them on other threads does.
+    pub fn set_submit(&mut self, submit: Submit) {
+        self.submit = Some(Submitter(submit));
     }
 
     /// Blocks until the runtime's waker is woken (by a task finishing on another thread), or `timeout` passes, which
@@ -1127,6 +1173,13 @@ impl WindowSystem for HeadlessWindowSystem {
         _timeout: Option<Duration>,
         events: &mut Vec<PlatformEvent>,
     ) -> Result<(), PlatformError> {
+        self.queue.extend(
+            self.returns
+                .events
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .drain(..),
+        );
         let count = if self.dispatch_one {
             self.queue.len().min(1)
         } else {
@@ -1138,5 +1191,13 @@ impl WindowSystem for HeadlessWindowSystem {
 
     fn waker(&self) -> Waker {
         Waker::from(Arc::clone(&self.woken))
+    }
+
+    fn submit(&mut self, window: WindowId, frame: &Submission) -> Result<Submitted, PlatformError> {
+        self.window(window)?;
+        Ok(match &mut self.submit {
+            Some(Submitter(submit)) => submit(window, frame, &self.returns),
+            None => Submitted::Declined,
+        })
     }
 }

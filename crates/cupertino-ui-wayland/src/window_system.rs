@@ -1277,6 +1277,8 @@ impl WaylandWindowSystem {
         } = finished;
         let mut presented = None;
         let mut failed = None;
+        // the first error of the connection, returned once every buffer of the frame went back
+        let mut broken = None;
         for back in backs {
             let drawn = match back.drew {
                 Drew::Gpu(drawn) => {
@@ -1288,9 +1290,9 @@ impl WaylandWindowSystem {
                             (Err(Shown::Failed(e)), Err(PresentError::Resized))
                         }
                     };
-                    self.gpu
-                        .finish(&mut self.conn, back.surface, drawn)
-                        .map_err(platform_error)?;
+                    if let Err(e) = self.gpu.finish(&mut self.conn, back.surface, drawn) {
+                        broken.get_or_insert(platform_error(e));
+                    }
                     shown
                 }
                 Drew::Shm(buffer, Ok((id, damage))) => {
@@ -1337,6 +1339,9 @@ impl WaylandWindowSystem {
         // the frame's buffers went back, and the panic is the submitting instance's, as a task's is
         if let Some(panic) = panic {
             std::panic::resume_unwind(panic)
+        }
+        if let Some(e) = broken {
+            return Err(e);
         }
         // a window destroyed meanwhile hears nothing
         if self.window_mut(window).is_err() {

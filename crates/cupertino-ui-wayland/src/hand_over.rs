@@ -1,10 +1,10 @@
 //! A submitted frame drawn and committed away from the UI thread ([`WindowSystem::submit`]). Each surface it draws (its
 //! surface layers, its raised layer, then the window's own) has a buffer prepared on the UI thread, a GPU buffer to draw
 //! into ([`Draw`]) or a shared-memory buffer detached with the commit that shows it, and is drawn by its renderer on
-//! the thread the frame is handed to. Once every surface is drawn the frame goes back to the UI thread and the surfaces
-//! commit in that order, the layers before the window: a synchronized subsurface's commit waits for the window's, and
-//! the window's commit applies the layers' values, so the compositor shows them all together. When one surface cannot
-//! be drawn, none commits.
+//! the thread the frame is handed to. Once every surface is drawn, that thread tells the UI thread how each was drawn
+//! and then commits them itself in that order, the layers before the window: a synchronized subsurface's commit waits
+//! for the window's, and the window's commit applies the layers' values, so the compositor shows them all together.
+//! When one surface cannot be drawn, none commits.
 //!
 //! [`WindowSystem::submit`]: cupertino_ui_core::platform::WindowSystem::submit
 

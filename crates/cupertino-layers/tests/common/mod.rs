@@ -17,6 +17,10 @@ struct Krate {
     deps: Vec<(String, String)>,
     files: Vec<(String, String)>,
     clippy: bool,
+    /// Its features: name and what each turns on.
+    features: Vec<(String, Vec<String>)>,
+    /// The features it turns on in a dependency, by the dependency's name.
+    dep_features: Vec<(String, Vec<String>)>,
 }
 
 pub struct Fixture {
@@ -24,6 +28,7 @@ pub struct Fixture {
     root: PathBuf,
     crates: Vec<Krate>,
     remaining: Option<String>,
+    cargo_config: Option<String>,
 }
 
 impl Fixture {
@@ -38,6 +43,7 @@ impl Fixture {
             base,
             crates: Vec::new(),
             remaining: None,
+            cargo_config: None,
         }
     }
 
@@ -54,6 +60,8 @@ impl Fixture {
                 .collect(),
             files: Vec::new(),
             clippy: matches!(layer, Layer::Shell | Layer::Apps),
+            features: Vec::new(),
+            dep_features: Vec::new(),
         });
         self
     }
@@ -82,6 +90,30 @@ impl Fixture {
     /// The crate has no `clippy.toml`.
     pub fn no_clippy(mut self, name: &str) -> Fixture {
         self.named(name).clippy = false;
+        self
+    }
+
+    /// A feature of crate `name` that turns on `enables`.
+    pub fn feature(mut self, name: &str, feature: &str, enables: &[&str]) -> Fixture {
+        self.named(name).features.push((
+            feature.to_owned(),
+            enables.iter().map(|e| (*e).to_owned()).collect(),
+        ));
+        self
+    }
+
+    /// Crate `name` turns on `features` of its dependency `to`, in every kind it depends on it.
+    pub fn dep_features(mut self, name: &str, to: &str, features: &[&str]) -> Fixture {
+        self.named(name).dep_features.push((
+            to.to_owned(),
+            features.iter().map(|f| (*f).to_owned()).collect(),
+        ));
+        self
+    }
+
+    /// The workspace's `.cargo/config.toml`.
+    pub fn cargo_config(mut self, content: &str) -> Fixture {
+        self.cargo_config = Some(content.to_owned());
         self
     }
 
@@ -140,7 +172,19 @@ impl Fixture {
                         externals.push(to.clone());
                         format!("{}ext/{to}", "../".repeat(3))
                     };
-                    m.push_str(&format!("{to} = {{ path = \"{path}\" }}\n"));
+                    let features = k
+                        .dep_features
+                        .iter()
+                        .find(|(d, _)| d == to)
+                        .map(|(_, f)| format!(", features = {f:?}"))
+                        .unwrap_or_default();
+                    m.push_str(&format!("{to} = {{ path = \"{path}\"{features} }}\n"));
+                }
+            }
+            if !k.features.is_empty() {
+                m.push_str("[features]\n");
+                for (feature, enables) in &k.features {
+                    m.push_str(&format!("{feature} = {enables:?}\n"));
                 }
             }
             write(dir.join("Cargo.toml"), &m);
@@ -161,6 +205,9 @@ impl Fixture {
                 &format!("[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n"),
             );
             write(dir.join("src/lib.rs"), "");
+        }
+        if let Some(config) = &self.cargo_config {
+            write(self.root.join(".cargo/config.toml"), config);
         }
         if let Some(lines) = &self.remaining {
             write(self.root.join(cupertino_layers::REMAINING), lines);

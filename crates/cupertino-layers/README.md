@@ -25,7 +25,8 @@ it in the profiles that have `layers = true`.
 
 ## The rules
 
-All rules are constants in `src/lib.rs`; nothing is read from a configuration file.
+All rules are constants in `src/lib.rs`; besides the manifests and sources, only the programs' alias in
+`.cargo/config.toml` is read, to be checked.
 
 `RULES` is the layer table, from the bottom. A crate depends only on the layers its row allows, in normal, build and
 dev dependencies. Every crate may also have `testing` crates as dev-dependencies, and only dev-dependencies point at a
@@ -85,6 +86,16 @@ The further rules, each a check with its own problem kind:
   layers they are allowed as dev-dependencies only. Other external crates are not restricted.
 - `undeclared_licence`: every crate declares a `license` that is a licence expression, or a `license-file`.
 - `disallowed_methods`: every `shell` and `apps` crate holds the generated `clippy.toml` (below).
+- `test_feature`: only a dev-dependency turns on `TEST_FEATURE` (`cupertino-kit/test`, the toolkit's backend for
+  program tests): a normal or build dependency that names it, or a feature of any package that turns it on, is a
+  problem, so no program is built with it.
+- `program_features`: the alias `PROGRAMS_ALIAS` (`build-programs`) in the workspace's `.cargo/config.toml`, which
+  builds the programs as they are packaged, names every feature of the workspace's packages with `--features`
+  (`default` aside), except `TEST_FEATURE`, so a feature added to a program is never left out of the packages. A
+  workspace without that file has no alias to check.
+
+`test_feature` and `program_features` problems are never listed in the remaining-work file: they fail the check until
+they are fixed.
 
 Test placement (no test code in a crate's `src/`) is checked by the gate of `cargo xtask ci`, not here.
 

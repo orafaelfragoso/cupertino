@@ -864,7 +864,7 @@ commit and ends as W4.8's do.
 
 #### W4.close (lead)
 
-- [x] (CLOSE) After W4.12: `ENFORCED` gains `Render`, `Ui`. Docs and gates as in W1.close.
+- [x] (5a5256558) After W4.12: `ENFORCED` gains `Render`, `Ui`. Docs and gates as in W1.close.
 
 ### Wave 5: compositor, services, the shell toolkit
 

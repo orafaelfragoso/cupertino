@@ -16,7 +16,7 @@ Updated by the lead at every merge.
 | | |
 |---|---|
 | Current wave | 4 |
-| Running tasks | W4.8 |
+| Running tasks | W4.12, W4.T (`kit`, `ui-controls`, `ui-files`) |
 | Enforced layers | foundation, system, graphics, models, protocol, transport, testing (126 remaining-work lines) |
 | Waiting on the owner | nothing |
 | Last closed wave | 3 |
@@ -756,24 +756,24 @@ is one commit and ends with `cargo xtask ci --profile agent --base <B>`, the lay
 remaining-work list written again; a step that changes `Cargo.lock` checks its crates by name. Everything that changes
 a behaviour is W4.12.
 
-1. [ ] **The proof's captures** (no behaviour change, S). `files_capture` gains a held press and a secondary press,
+1. [x] (5339bf52e) **The proof's captures** (no behaviour change, S). `files_capture` gains a held press and a secondary press,
        `--view gallery`, `--state rename|ring|band` and `files/desktop`. Done when: two runs at the base give the same
        files; what could not be captured is named.
-2. [ ] **One geometry** (no behaviour change, S). In Files, `geom`'s `Point`, `Size` and `Rect` go: the layouts, the
+2. [x] (1e628defc) **One geometry** (no behaviour change, S). In Files, `geom`'s `Point`, `Size` and `Rect` go: the layouts, the
        desktop arrangement and their callers use `cupertino-geometry`, a `foundation` crate Files depends on by name.
        `Direction` stays. Done when: `geom` holds `Direction` alone and no function turns one rectangle type into the
        other; `cargo check -p cupertino-files` passes without features; same pixels.
-3. [ ] **The crate, its values and operations** (move, M). `cupertino-ui-files` (`ui`) holds the modules `entry`,
+3. [x] (e84e7bc78) **The crate, its values and operations** (move, M). `cupertino-ui-files` (`ui`) holds the modules `entry`,
        `natural`, `sort`, `mime`, `tags`, `applications`, `recents`, `geom`, `layout::icon`, `rename`, `name_edit`,
        `open`, `operations` and `item_art`, and the views' `metrics`; `kit::files` lists what callers name; Files, its
        example and its bench name them from Kit. Done when: `git diff -M` shows the bodies unchanged; no glob in Kit's
        lists; `FACADES` and the `ui` row name the crate; the remaining-work line
        `cupertino-files -> cupertino-ui-text` leaves the list; same pixels.
-4. [ ] **Icon grid** (no behaviour change, M). `grid`, `band`, `clicks` and `Grab` are `IconGrid<M>` with `ViewEvent`;
+4. [x] (3aebca350) **Icon grid** (no behaviour change, M). `grid`, `band`, `clicks` and `Grab` are `IconGrid<M>` with `ViewEvent`;
        Files maps the events. Done when: Files' `Event` and `update` are untouched; `tests/icon-grid.rs`; same pixels.
-5. [ ] **List** (no behaviour change, M). `list` and the list's assembly are `FileList<M>`. Done when: as 4,
+5. [x] (7e2a2adc5) **List** (no behaviour change, M). `list` and the list's assembly are `FileList<M>`. Done when: as 4,
        `tests/file-list.rs`.
-6. [ ] **Columns** (no behaviour change, M). The column widgets and assembly are `FileColumns<M>`; the chain, its
+6. [x] (fe4fa305d) **Columns** (no behaviour change, M). The column widgets and assembly are `FileColumns<M>`; the chain, its
        layout and its listings stay in Files. Done when: as 4, `tests/file-columns.rs`;
        `rg 'Session|BrowserWindow' crates/cupertino-ui-files/src` finds nothing.
 
@@ -1039,7 +1039,7 @@ At most three at a time, in this order:
 | W6.8 | `dock` and new `shell-overview` | owns the `protocols` edits `shell-host.md` gives W6.8; the overview's chrome and gestures move out of the dock; windows are holes; transitions are gesture-bound transactions; reads the user directories through `cupertino_defaults::user_dirs`, which replaces its own parser | W6.2, W5.5 |
 | W6.9 | `windowmanager` | owns the `protocols` edits `shell-host.md` gives W6.9; gains a surface for the stage strip; placements as transactions | W6.2, W5.5 |
 | W6.10 | new `shell-desktop` | the desktop items, from `cupertino-files --desktop`, on `kit::files` with its own item view: `desktop`, `kit::desktop` and `metrics::desktop` leave Files; its listing, item icons, names, rename, operations, open, notices and `places::desktop_folder` are the family's; its file work runs as tasks, transfers slice by slice, the first caller to do so | W6.2, W4.12 |
-| W6.11 | new `shell-dialogs`, `portal` as a service | `cupertino-screencast` becomes a module of the portal; file and application chooser in the component; the screenshot and global-shortcut consent dialogs in `cupertino-prompts`; the colour and sharing pickers in `cupertino-screenshot`; private bus interfaces between them, in `contracts.yaml`; the portal has no `#[cfg(test)]` left, since `services` is closed; the chooser reads its places and its folders as tasks; the open and save panel is a view of `kit::files` (the sidebar of places, a `FileList`, the Save As field, the filters and choices, the buttons) built from the chooser's model and the picker, which lists the family's `Entry` in the family's order, so `filepicker::Entry` and its reader go and `filepicker` may join `cupertino-ui-files`; a look and behaviour change shown on a review sheet of the panel before and after, open and save, light and dark, for the owner; the component gains a capture example | W6.2, W6.4, W6.14, W4.12 |
+| W6.11 | new `shell-dialogs`, `portal` as a service | `cupertino-screencast` becomes a module of the portal; file and application chooser in the component; the screenshot and global-shortcut consent dialogs in `cupertino-prompts`; the colour and sharing pickers in `cupertino-screenshot`; private bus interfaces between them, in `contracts.yaml`; the portal has no `#[cfg(test)]` left, since `services` is closed; the chooser reads its places and its folders as tasks; the open and save panel is a view of `kit::files` (the sidebar of places, a `FileList`, the Save As field, the filters and choices, the buttons) built from the chooser's model and the picker, which lists the family's `Entry` in the family's order, so `filepicker::Entry` and its reader go and `filepicker` may join `cupertino-ui-files`; a look and behaviour change shown on a review sheet of the panel before and after, open and save, light and dark, for the owner; the component gains a capture example; `ui-controls`' `TableView` and `ListView` handlers return `Option<M>`, so a view of `kit::files` honours an `on_event` that answers `None` | W6.2, W6.4, W6.14, W4.12 |
 
 #### W6.12 Overlays leave the server (M, behaviour change)
 
@@ -1296,3 +1296,7 @@ One line per change to a decision or approval of a design: date, number, what, w
   UI-thread drawing path of the Wayland window system is gone with the `gpu-window` example. The raised layer's hide is
   sent by the UI thread at the hand-over, after the previous frame's commits; a frame that then fails to draw leaves
   the hide to take effect with the window's next commit.
+- 2026-11-18: lead, W4.8 (cb79d18c5): the design's section lives in `crates/cupertino-ui-files/README.md`, the views
+  as built. `ui-controls`' `TableView` and `ListView` handlers return a message, so for the events they report a view's
+  `on_event` must answer `Some`; Files maps every event, and W6.11, the first caller that answers `None`, makes those
+  handlers return `Option<M>`. The capture sample folder is kept between runs so its birth times repeat.

@@ -27,6 +27,8 @@ use cupertino_app_protocols::server::semantics::{
 use cupertino_wayland_client::app::AppEvent;
 use cupertino_wayland_client::{Connection, Decorations, Event, Toplevel, ToplevelConfig};
 use std::collections::HashMap;
+use std::fs::File;
+use std::os::unix::fs::FileExt;
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -60,7 +62,9 @@ use wayland_server::protocol::{
     wl_subsurface::WlSubsurface,
     wl_surface::{self, WlSurface},
 };
-use wayland_server::{Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource};
+use wayland_server::{
+    Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource, WEnum,
+};
 
 /// The versions of the Cupertino protocols the server offers; `None` leaves a global out.
 #[derive(Clone, Copy)]
@@ -85,6 +89,9 @@ pub struct Offer {
     /// Whether the server answers a surface's frame callbacks with its next commit, as a compositor that shows every
     /// frame at once does; otherwise it never answers them.
     pub frames: bool,
+    /// The role (as in [`Harness::commits`]) of the surfaces whose replaced buffers the server keeps, as a compositor
+    /// still drawing them does, until [`Server::release_kept`]; the others' it releases as [`Offer::releases`] says.
+    pub keeps: Option<&'static str>,
 }
 
 impl Offer {
@@ -100,6 +107,7 @@ impl Offer {
         subsurfaces: false,
         scale: None,
         frames: false,
+        keeps: None,
     };
 
     /// Only the standard protocols.
@@ -114,6 +122,7 @@ impl Offer {
         subsurfaces: false,
         scale: None,
         frames: false,
+        keeps: None,
     };
 }
 
@@ -170,6 +179,9 @@ pub fn wait_app_events(
 /// The snapshots a semantic surface published, each with the epoch it was sent for.
 pub type Publications = Arc<Mutex<Vec<(u64, Result<Snapshot, String>)>>>;
 
+/// The centre pixel of each buffer committed, as RGBA, with the role of its surface ([`Harness::centres`]).
+type Centres = Arc<Mutex<Vec<(String, [u8; 4])>>>;
+
 /// What the server holds between dispatches.
 #[derive(Default)]
 pub struct Server {
@@ -203,6 +215,24 @@ pub struct Server {
     /// The buffer each surface attached since its last commit, and the one it shows.
     pending: HashMap<ObjectId, Option<WlBuffer>>,
     shown: HashMap<ObjectId, WlBuffer>,
+    /// The role whose replaced buffers are kept ([`Offer::keeps`]), and those kept.
+    keeps: Option<&'static str>,
+    kept: Vec<WlBuffer>,
+    /// The memory of each shared-memory pool, and where in its pool each buffer lies.
+    pools: HashMap<ObjectId, File>,
+    buffers: HashMap<ObjectId, Placed>,
+    /// The centre pixel of each buffer committed ([`Harness::centres`]).
+    centres: Centres,
+}
+
+/// Where a shared-memory buffer lies in its pool, and its layout.
+struct Placed {
+    pool: ObjectId,
+    offset: i32,
+    width: i32,
+    height: i32,
+    stride: i32,
+    format: WEnum<wl_shm::Format>,
 }
 
 impl Server {
@@ -216,6 +246,30 @@ impl Server {
 
     fn present(&self, text: &str) {
         self.presents.lock().unwrap().push(text.to_owned());
+    }
+
+    /// Releases the buffers kept ([`Offer::keeps`]), as a compositor that stopped drawing them does.
+    pub fn release_kept(&mut self) {
+        for buffer in self.kept.drain(..) {
+            buffer.release();
+        }
+    }
+
+    /// The centre pixel of `buffer`, as RGBA; `None` for a buffer that is not in shared memory or of another format.
+    fn centre(&self, buffer: &WlBuffer) -> Option<[u8; 4]> {
+        let placed = self.buffers.get(&buffer.id())?;
+        let pool = self.pools.get(&placed.pool)?;
+        let at = placed.offset + placed.height / 2 * placed.stride + placed.width / 2 * 4;
+        let mut pixel = [0; 4];
+        pool.read_exact_at(&mut pixel, u64::try_from(at).ok()?)
+            .ok()?;
+        let [a, b, c, d] = pixel;
+        match placed.format {
+            // little-endian 0xAARRGGBB
+            WEnum::Value(wl_shm::Format::Argb8888) => Some([c, b, a, d]),
+            WEnum::Value(wl_shm::Format::Abgr8888) => Some(pixel),
+            _ => None,
+        }
     }
 
     /// Configure window `index` again, returning the serial.
@@ -250,6 +304,7 @@ pub struct Harness {
     presents: Arc<Mutex<Vec<String>>>,
     commits: Arc<Mutex<Vec<String>>>,
     every_commit: Arc<Mutex<Vec<String>>>,
+    centres: Centres,
     pub publications: Publications,
     pub replies: Arc<Mutex<Vec<String>>>,
     jobs: Sender<Job>,
@@ -273,12 +328,14 @@ impl Harness {
             releases: offer.releases,
             scale: offer.scale,
             frames: offer.frames,
+            keeps: offer.keeps,
             ..Server::default()
         };
         let requests = server.requests.clone();
         let presents = server.presents.clone();
         let commits = server.commits.clone();
         let every_commit = server.every_commit.clone();
+        let centres = server.centres.clone();
         let publications = server.publications.clone();
         let replies = server.replies.clone();
         let (jobs, inbox) = channel::<Job>();
@@ -292,6 +349,7 @@ impl Harness {
                 presents,
                 commits,
                 every_commit,
+                centres,
                 publications,
                 replies,
                 jobs,
@@ -330,6 +388,12 @@ impl Harness {
     /// showed a buffer, followed by ` unmapped` for one that attached none and ` state` for one that attached nothing.
     pub fn every_commit(&self) -> Vec<String> {
         self.every_commit.lock().unwrap().clone()
+    }
+
+    /// The centre pixel of each shared-memory buffer committed so far, as RGBA, with the role of its surface (as in
+    /// [`Harness::commits`]), in order.
+    pub fn centres(&self) -> Vec<(String, [u8; 4])> {
+        self.centres.lock().unwrap().clone()
     }
 
     /// The requests of the Cupertino protocols received so far, as text.
@@ -639,8 +703,18 @@ impl Dispatch<WlSurface, ()> for Server {
                 // a later buffer replaces the one shown, which goes back to the client
                 if let Some(Some(buffer)) = attached {
                     server.commits.lock().unwrap().push(role.to_owned());
-                    if let Some(old) = server.shown.insert(surface.id(), buffer.clone()) {
-                        if server.releases && old != buffer {
+                    if let Some(pixel) = server.centre(&buffer) {
+                        server
+                            .centres
+                            .lock()
+                            .unwrap()
+                            .push((role.to_owned(), pixel));
+                    }
+                    let replaced = server.shown.insert(surface.id(), buffer.clone());
+                    if let Some(old) = replaced.filter(|old| *old != buffer) {
+                        if server.keeps == Some(role) {
+                            server.kept.push(old);
+                        } else if server.releases {
                             old.release();
                         }
                     }
@@ -682,7 +756,7 @@ impl Dispatch<WlCompositor, ()> for Server {
 
 impl Dispatch<WlShm, ()> for Server {
     fn request(
-        _: &mut Server,
+        server: &mut Server,
         _: &Client,
         _: &WlShm,
         request: wl_shm::Request,
@@ -690,24 +764,44 @@ impl Dispatch<WlShm, ()> for Server {
         _: &DisplayHandle,
         init: &mut DataInit<'_, Server>,
     ) {
-        if let wl_shm::Request::CreatePool { id, .. } = request {
-            init.init(id, ());
+        if let wl_shm::Request::CreatePool { id, fd, .. } = request {
+            let pool = init.init(id, ());
+            server.pools.insert(pool.id(), File::from(fd));
         }
     }
 }
 
 impl Dispatch<WlShmPool, ()> for Server {
     fn request(
-        _: &mut Server,
+        server: &mut Server,
         _: &Client,
-        _: &WlShmPool,
+        pool: &WlShmPool,
         request: wl_shm_pool::Request,
         _: &(),
         _: &DisplayHandle,
         init: &mut DataInit<'_, Server>,
     ) {
-        if let wl_shm_pool::Request::CreateBuffer { id, .. } = request {
-            init.init(id, ());
+        if let wl_shm_pool::Request::CreateBuffer {
+            id,
+            offset,
+            width,
+            height,
+            stride,
+            format,
+        } = request
+        {
+            let buffer = init.init(id, ());
+            server.buffers.insert(
+                buffer.id(),
+                Placed {
+                    pool: pool.id(),
+                    offset,
+                    width,
+                    height,
+                    stride,
+                    format,
+                },
+            );
         }
     }
 }

@@ -1,10 +1,10 @@
-//! Windows' surface layers ([`WindowSystem::present_surface_layers`]): each a `wl_surface` made a `cupertino_layer_v1`
-//! of the window's surface, its frame copied into buffers of its own, its rect and look sent as the layer's values,
-//! and the application's changes ([`WindowRequest::Layer`]) sent as the layer's requests, so they apply with the
-//! window's next commit. Layers need version 4 of the global (content blur): below it a window has none and the
+//! Windows' surface layers ([`Submission::surface_layers`]): each a `wl_surface` made a `cupertino_layer_v1` of the
+//! window's surface, its frame drawn into buffers of its own with the window's, its rect and look sent as the layer's
+//! values, and the application's changes ([`WindowRequest::Layer`]) sent as the layer's requests, so they apply with
+//! the window's next commit. Layers need version 4 of the global (content blur): below it a window has none and the
 //! runtime paints marked subtrees in place. From version 5 a layer's look carries the edge along its glass.
 //!
-//! [`WindowSystem::present_surface_layers`]: cupertino_ui_core::platform::WindowSystem::present_surface_layers
+//! [`Submission::surface_layers`]: cupertino_ui_core::platform::Submission::surface_layers
 //! [`WindowRequest::Layer`]: cupertino_ui_core::platform::WindowRequest
 
 use std::collections::{HashMap, HashSet};
@@ -14,7 +14,7 @@ use cupertino_ui_core::platform::{
     LayerChange, LayerProperty, PlatformError, SurfaceLayerLook, WindowId,
 };
 use cupertino_wayland_client::app::{AppEvent, Layer, LayerId, LayerProperty as Wire, Layers};
-use cupertino_wayland_client::{Connection, ExternalRole, PixelRect, SurfaceId};
+use cupertino_wayland_client::{Connection, ExternalRole, SurfaceId};
 
 // a change through samples the toolkit takes is one the wire carries
 const _: () = assert!(
@@ -103,8 +103,6 @@ pub(crate) struct Shown {
     /// Its x, y, width and height as the compositor was last told them ([`place_to_send`]).
     told: [Option<i64>; 4],
     look: SurfaceLayerLook,
-    /// Damage of frames that were not shown, carried into the next.
-    pub(crate) carried: Vec<PixelRect>,
     /// The pixel size of the frame shown last.
     pub(crate) shown: Option<(u32, u32)>,
 }
@@ -182,7 +180,6 @@ impl SurfaceLayers {
                             radius: -1.0,
                             ..SurfaceLayerLook::default()
                         },
-                        carried: Vec::new(),
                         shown: None,
                     });
                     shown.len() - 1

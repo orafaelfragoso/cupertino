@@ -3,8 +3,8 @@
 //! logind signals arrive on reader threads (the blocking `zbus` API has no pollable
 //! descriptor) and cross to the loop through a calloop channel, so every state change and every
 //! callback runs on the loop thread. One thread reads the session's signals, the other waits for
-//! logind's bus name to leave the process the session was found on. The method calls (`TakeDevice`, `ReleaseDevice`,
-//! `PauseDeviceComplete`, `SwitchTo`) are blocking calls made on the thread that uses the session.
+//! logind's bus name to leave the process the session was found on. A single worker calls logind
+//! in order; the thread that uses the session waits only until each request's deadline.
 //!
 //! # Differences from Smithay's libseat session
 //!
@@ -35,17 +35,18 @@ use smithay::reexports::calloop::channel::{channel, Channel, Event as ChannelEve
 use smithay::reexports::calloop::{
     self, EventSource, Poll, PostAction, Readiness, Token, TokenFactory,
 };
-use zbus::blocking::MessageIterator;
+use zbus::blocking::{Connection, MessageIterator};
 
+use crate::calls::Calls;
 use crate::error::Error;
 use crate::logind::{self, Logind, SessionLookup};
 use crate::state::{Input, Machine, Output, Transition};
 
 /// What the reader threads and [`Session::close`] send to the loop.
-type Delivery = Result<Input, Error>;
+pub(crate) type Delivery = Result<Input, Error>;
 
 struct Shared {
-    logind: Logind,
+    logind: Calls,
     machine: Machine,
     sender: Sender<Delivery>,
 }
@@ -72,23 +73,8 @@ impl LogindSession {
     /// Fails when the session already has a controller or the caller is not allowed to control it.
     pub fn new() -> Result<(Self, LogindNotifier), Error> {
         let lookup = SessionLookup::from_environment()?;
-        let conn = logind::connect()?;
-        let session = logind::locate(&conn, &lookup)?;
-        let signals = logind::subscribe(&conn, &session)?;
-        let owner_changes = logind::watch_owner(&conn, &session)?;
-        let (logind, active, seat) = Logind::take_control(&conn, &session)?;
-
         let (sender, channel) = channel();
-        let reader_sender = sender.clone();
-        std::thread::Builder::new()
-            .name("cupertino-seat-signals".to_owned())
-            .spawn(move || read_signals(signals, reader_sender))
-            .map_err(Error::Thread)?;
-        let owner_sender = sender.clone();
-        std::thread::Builder::new()
-            .name("cupertino-seat-owner".to_owned())
-            .spawn(move || watch_owner(owner_changes, owner_sender))
-            .map_err(Error::Thread)?;
+        let (logind, active, seat) = Calls::start(lookup, sender.clone())?;
 
         let shared = Rc::new(RefCell::new(Shared {
             logind,
@@ -107,10 +93,31 @@ impl LogindSession {
     }
 }
 
+pub(crate) fn listen(
+    conn: &Connection,
+    lookup: &SessionLookup,
+    sender: Sender<Delivery>,
+) -> Result<(Logind, bool, String), Error> {
+    let session = logind::locate(conn, lookup)?;
+    let signals = logind::subscribe(conn, &session)?;
+    let owner_changes = logind::watch_owner(conn, &session)?;
+    let control = Logind::take_control(conn, &session)?;
+    let reader_sender = sender.clone();
+    std::thread::Builder::new()
+        .name("cupertino-seat-signals".to_owned())
+        .spawn(move || read_signals(signals, reader_sender))
+        .map_err(Error::Thread)?;
+    std::thread::Builder::new()
+        .name("cupertino-seat-owner".to_owned())
+        .spawn(move || watch_owner(owner_changes, sender))
+        .map_err(Error::Thread)?;
+    Ok(control)
+}
+
 /// Forwards decoded signals until the stream ends or the loop side is gone. A signal that does
 /// not decode (a `PauseDevice` type or a property change this crate does not know) is logged and
-/// skipped: it cannot be acted on, and the session stays usable. The thread blocks in the
-/// iterator, so it outlives the notifier until the next signal or the end of the connection.
+/// skipped: it cannot be acted on, and the session stays usable. Closing the controller
+/// connection wakes the iterator on teardown.
 fn read_signals(signals: MessageIterator, sender: Sender<Delivery>) {
     for message in signals {
         let delivery = match message {
@@ -178,8 +185,9 @@ impl Session for LogindSession {
         let dev = device_number(path)?;
         let shared = self.upgrade()?;
         let mut shared = shared.borrow_mut();
+        shared.machine.check_available(dev)?;
         if shared.machine.is_unreleased(dev) {
-            shared.logind.release_device(dev)?;
+            shared.logind.release_device(dev, true)?;
             shared.machine.confirm_release(dev);
         }
         let (fd, inactive) = shared.logind.take_device(dev)?;
@@ -195,7 +203,7 @@ impl Session for LogindSession {
         let mut shared = shared.borrow_mut();
         let released = shared.machine.release(fd.as_raw_fd())?;
         if released.notify_logind {
-            shared.logind.release_device(released.dev)?;
+            shared.logind.release_device(released.dev, false)?;
             shared.machine.confirm_release(released.dev);
         }
         // The released device may have been the last one the paused session waited for.
@@ -239,7 +247,14 @@ impl LogindNotifier {
                     let mut shared = self.shared.borrow_mut();
                     // False when the callback closed the device: logind needs no answer then.
                     if shared.machine.ack_pause(dev) {
-                        shared.logind.pause_device_complete(dev)?;
+                        match shared.logind.pause_device_complete(dev) {
+                            Err(error) if error.unanswered() => {
+                                // The holder is already quiescent. Only logind can resume it;
+                                // retrying this acknowledgement could answer a later pause.
+                                tracing::warn!(%dev, %error, "pause acknowledgement unanswered; staying paused");
+                            }
+                            other => other?,
+                        }
                     }
                 }
             }

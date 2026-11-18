@@ -41,6 +41,29 @@ pub enum Error {
 }
 
 impl Error {
+    /// No reply arrived in time, either at our own deadline or as reported by the bus.
+    pub(crate) fn unanswered(&self) -> bool {
+        let Self::Bus { source, .. } = self else {
+            return false;
+        };
+        match &**source {
+            zbus::Error::InputOutput(e) => e.kind() == io::ErrorKind::TimedOut,
+            zbus::Error::MethodError(name, _, _) => matches!(
+                name.as_str(),
+                "org.freedesktop.DBus.Error.NoReply"
+                    | "org.freedesktop.DBus.Error.Timeout"
+                    | "org.freedesktop.DBus.Error.TimedOut"
+            ),
+            zbus::Error::FDO(e) => matches!(
+                &**e,
+                zbus::fdo::Error::NoReply(_)
+                    | zbus::fdo::Error::Timeout(_)
+                    | zbus::fdo::Error::TimedOut(_)
+            ),
+            _ => false,
+        }
+    }
+
     /// The adapter for `map_err` on a D-Bus call: names the step that failed. The `zbus` error is
     /// boxed because it is large and would bloat every `Result` of this crate.
     pub(crate) fn bus(what: &'static str) -> impl Fn(zbus::Error) -> Self + Copy {

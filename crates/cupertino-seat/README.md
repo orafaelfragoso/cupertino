@@ -18,10 +18,17 @@ Pure Rust over `zbus` (blocking API, no `-sys` crate); no libseat, no libsystemd
 - **Session lookup.** `XDG_SESSION_ID` when set (`GetSession`), else the process id (`GetSessionByPID`). A failing lookup
   is an error, not a retry with the other method. Calls and the signal subscription are bound to logind's unique bus name,
   so no other peer can pause or resume the session.
+- **Compositor deadlines.** One worker owns the controller connection and makes the calls in order. The loop waits at
+  most 2 s per request, including queueing and writing to the bus, and 10 s for the whole startup. A missed deadline
+  returns an error; a queued open or VT switch that has already expired is skipped. A release or pause acknowledgement
+  still goes out in order. Giving up the notifier waits at most 2 s for `ReleaseControl` and disconnect; if necessary
+  the worker finishes teardown after the notifier has returned. Disconnect also relinquishes a `TakeControl` that
+  logind accepted without answering.
 - **Pause.** The session is reported paused on the first `PauseDevice` of any held device (logind sends those before
   `Active` turns false). `PauseDeviceComplete` for a `"pause"` type goes out after the loop callback returned, and not for
   a device the callback already closed. `"force"` needs no answer. `"gone"` keeps the entry until the holder closes the
-  descriptor, which then skips `ReleaseDevice`.
+  descriptor, which then skips `ReleaseDevice`. If the acknowledgement goes unanswered, the holder is already paused:
+  the notifier logs the timeout and continues listening for logind to resume it.
 - **Resume.** The descriptor of `ResumeDevice` is dropped. For a DRM node it is the open file the holder already has,
   master again. For an input node it is a new open file while the holder's stays revoked, so the holder closes input
   devices on `Event::PauseSession` and opens them again on `Event::ActivateSession`, which follows once `Active` is true
@@ -29,7 +36,9 @@ Pure Rust over `zbus` (blocking API, no `-sys` crate); no libseat, no libsystemd
 - **Inactive start.** A session that starts inactive reports nothing until it activates, so check `is_active` before
   opening devices.
 - **Release.** `close` forgets the device first and closes the descriptor even when `ReleaseDevice` fails. The next `open`
-  of that device retries the release before `TakeDevice`.
+  of that device retries the release before `TakeDevice`. If `TakeDevice` itself times out, the worker releases the
+  device even if its descriptor never arrives: logind may already have granted it. A failed cleanup is retried before
+  the next take; `DeviceNotTaken` confirms that a retried or compensating release has nothing left to do.
 - **Differences from Smithay's libseat session:** the acknowledgement timing and the strict `close` (see the module docs
   of `session`). `open` ignores its flags, as libseat's does.
 - **Signal readers.** One thread reads the session's signals into a calloop channel, logging and skipping a signal that does

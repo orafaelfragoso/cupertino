@@ -154,11 +154,7 @@ impl Machine {
         self.phase == Phase::Paused
     }
 
-    /// Records a device logind just handed out as descriptor number `fd`. `inactive` is the flag
-    /// `TakeDevice` returned. A gone entry for the same device number is replaced, because logind
-    /// allows taking a device again once it was reported gone; a descriptor handed out for the
-    /// replaced entry is then no longer recognised by [`Machine::release`].
-    pub fn take(&mut self, dev: DevT, fd: RawFd, inactive: bool) -> Result<(), Error> {
+    pub(crate) fn check_available(&self, dev: DevT) -> Result<(), Error> {
         if self
             .devices
             .get(&dev)
@@ -166,6 +162,15 @@ impl Machine {
         {
             return Err(Error::AlreadyTaken(dev));
         }
+        Ok(())
+    }
+
+    /// Records a device logind just handed out as descriptor number `fd`. `inactive` is the flag
+    /// `TakeDevice` returned. A gone entry for the same device number is replaced, because logind
+    /// allows taking a device again once it was reported gone; a descriptor handed out for the
+    /// replaced entry is then no longer recognised by [`Machine::release`].
+    pub fn take(&mut self, dev: DevT, fd: RawFd, inactive: bool) -> Result<(), Error> {
+        self.check_available(dev)?;
         let state = if inactive {
             DeviceState::Paused
         } else {

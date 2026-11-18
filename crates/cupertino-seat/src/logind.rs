@@ -303,7 +303,7 @@ impl Logind {
         proxy
             .call::<_, _, ()>("TakeControl", &(false,))
             .map_err(Error::bus("TakeControl"))?;
-        // From here on the control is ours and released by `Drop`, also when a later step fails.
+        // Until the handle is built, disconnecting the controller releases control on failure.
         let (seat_name, seat_path): (String, OwnedObjectPath) = property(&proxy, "Seat")?;
         let active = property(&proxy, "Active")?;
         let seat = proxy_for(conn, &session.owner, seat_path.into_inner(), SEAT_INTERFACE)?;
@@ -332,6 +332,19 @@ impl Logind {
         self.session
             .call("ReleaseDevice", &(dev.major(), dev.minor()))
             .map_err(Error::bus("ReleaseDevice"))
+    }
+
+    /// Confirm a release whose outcome was lost. logind may have done it before the reply timed out.
+    pub(crate) fn reconcile_release(&self, dev: DevT) -> Result<(), Error> {
+        match self.release_device(dev) {
+            Err(Error::Bus { source, .. })
+                if matches!(&*source, zbus::Error::MethodError(name, _, _)
+                    if name.as_str() == "org.freedesktop.login1.DeviceNotTaken") =>
+            {
+                Ok(())
+            }
+            other => other,
+        }
     }
 
     /// `Session.PauseDeviceComplete(major, minor)`: the answer to `PauseDevice("pause")`.

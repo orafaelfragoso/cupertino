@@ -5,6 +5,7 @@
 //! device bookkeeping lives in [`state`] as a pure state machine; [`logind`] is the thin D-Bus
 //! layer. See [`session`] for how this differs from Smithay's libseat session.
 
+mod calls;
 pub mod error;
 pub mod logind;
 pub mod session;

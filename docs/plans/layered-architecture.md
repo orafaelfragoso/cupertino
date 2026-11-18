@@ -16,9 +16,9 @@ Updated by the lead at every merge.
 | | |
 |---|---|
 | Current wave | 4 |
-| Running tasks | W4.6 step 4 (measurement) |
+| Running tasks | W4.6 step 4 (measurement), fixes from the wave 4 review, W4.9 |
 | Enforced layers | foundation, system, graphics, models, protocol, transport, testing (126 remaining-work lines) |
-| Waiting on the owner | approval of W4.7 step 1, the Kit API proposal in `crates/cupertino-kit/README.md` |
+| Waiting on the owner | nothing |
 | Last closed wave | 3 |
 
 ## Contents
@@ -732,10 +732,11 @@ ui-wayland`. **After** W4.2.
 
 **Owns** `kit`. **After** W4.6.
 
-1. [ ] A written proposal in `crates/cupertino-kit/README.md`: every item `shell` and `apps` crates use today from
+1. [x] A written proposal in `crates/cupertino-kit/README.md`: every item `shell` and `apps` crates use today from
        Kit-private crates, where each goes in Kit, the motion API by catalogue names (D7), the `test` feature, and what
        is refused per the must-not-expose list. Reviewed by a reviewer who did not write it and approved by the owner;
        approval in the [decision log](#decision-log).
+       (0dd10df1b, approved 2026-11-17)
 2. [ ] The approved API, and nothing else.
 
 #### W4.8 File views in Kit (L)
@@ -1159,3 +1160,7 @@ One line per change to a decision or approval of a design: date, number, what, w
 - 2026-11-17: lead, W4.6: the profile writer is a blocking function its callers (the window system and the server)
   run on a thread of their own, so `system` is in `ENFORCED` again. A trace whose program starts no writer is written
   when it closes.
+- 2026-11-17: owner approves W4.7 step 1, the Kit API proposal in `crates/cupertino-kit/README.md` (written by one
+  reviewer, checked by another), with its defaults for the open questions. Temporary exposures it names: the four
+  `app::run_on*` functions until W6.16, and the renderers and glyph rasters until W6.5, W6.8 and W6.13. Release builds
+  list their features instead of `--all-features`, and `cupertino-kit/test` only enters through dev-dependencies.

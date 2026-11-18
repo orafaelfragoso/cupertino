@@ -15,6 +15,7 @@
 //! the design sidebar's; the order of the user directories is approximate (the design lists
 //! Desktop, Documents and Downloads and has no Linux counterpart for the others).
 
+use cupertino_kit::files::{applications, recents};
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -182,10 +183,10 @@ impl Place {
 /// What a window showing `dir` is titled: the place's name for the trash, Recents and Applications, else the folder's
 /// name.
 pub fn window_title(dir: &Path, places: &[Place]) -> String {
-    if dir == crate::recents::location() {
+    if dir == recents::location() {
         return recents_place().name;
     }
-    if dir == crate::applications::location() {
+    if dir == applications::location() {
         return APPLICATIONS_NAME.into();
     }
     if let Some(place) = places.iter().find(|p| {
@@ -326,7 +327,7 @@ fn user_folders(
 pub fn recents_place() -> Place {
     Place {
         name: "Recents".into(),
-        path: crate::recents::location().to_path_buf(),
+        path: recents::location().to_path_buf(),
         group: PlaceGroup::Favorites,
         kind: PlaceKind::Recents,
     }
@@ -495,8 +496,8 @@ pub fn session_places(home: &Path, data_dirs: &[PathBuf]) -> io::Result<SessionP
     };
     // the place lists the applications of every data folder, the user's own included
     let applications = (applications_folder(data_dirs).is_some()
-        || crate::applications::any_installed(&crate::applications::application_dirs()))
-    .then(crate::applications::location);
+        || applications::any_installed(&applications::application_dirs()))
+    .then(applications::location);
     let places = standard_places(
         home,
         &user_dirs,

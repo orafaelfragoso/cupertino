@@ -44,7 +44,7 @@ use crate::metrics::window as window_metrics;
 use crate::model::DirectoryModel;
 use crate::places::window_title;
 use crate::preview::{self as file_preview, PreviewKind};
-use crate::Entry;
+use cupertino_kit::files::entry::Entry;
 
 /// The side of a row's icon.
 const ROW_ICON: f64 = 16.0;

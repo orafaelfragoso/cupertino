@@ -20,7 +20,7 @@ use percent_encoding::{percent_encode, AsciiSet, NON_ALPHANUMERIC};
 
 use super::list::RowGrab;
 use super::{grid, Event as WindowEvent, Message};
-use crate::Entry;
+use cupertino_kit::files::entry::Entry;
 
 /// How opaque the image of dragged items is: the folder under the pointer shows through it.
 pub(super) const OPACITY: f32 = 0.8;

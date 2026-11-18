@@ -168,6 +168,153 @@ pub mod prelude {
     };
 }
 
+/// The file family: a folder's items, their order, types, tags and names, the icon layout, opening, renaming and the
+/// file operations, and the measured metrics of the file views.
+pub mod files {
+    /// The virtual folder of the installed applications.
+    pub mod applications {
+        pub use cupertino_ui_files::applications::{
+            any_installed, application_dirs, location, session_entries,
+        };
+    }
+
+    /// An item of a folder.
+    pub mod entry {
+        pub use cupertino_ui_files::entry::{Entry, Kind};
+    }
+
+    /// The direction a key moves the keyboard in a layout.
+    pub mod geom {
+        pub use cupertino_ui_files::geom::Direction;
+    }
+
+    /// The art of the common items.
+    pub mod item_art {
+        pub use cupertino_ui_files::item_art::{draw, Art};
+    }
+
+    /// The icon layout.
+    pub mod layout {
+        /// The icon view's layout.
+        pub mod icon {
+            pub use cupertino_ui_files::layout::icon::{
+                layout, max_title_lines, strip, Flow, FontMetrics, IconCell, IconLayout,
+                IconParams, LabelPrefs, SectionSpec,
+            };
+        }
+    }
+
+    /// The measured metrics of the file views.
+    pub mod metrics {
+        /// The icon view.
+        pub mod icon_view {
+            pub use cupertino_ui_files::metrics::icon_view::{
+                GRID_SPACING_DEFAULT, GRID_SPACING_MAX, GRID_SPACING_MIN, ICON_SIZE_DEFAULT,
+                ICON_SIZE_MAX, ICON_SIZE_MIN, TEXT_SIZE_DEFAULT, TEXT_SIZE_MAX, TEXT_SIZE_MIN,
+            };
+        }
+
+        /// The list view.
+        pub mod list_view {
+            pub use cupertino_ui_files::metrics::list_view::{
+                HEADER_HEIGHT, ICON_SIZE_DEFAULT, ICON_SIZE_MAX, ICON_SIZE_MIN, INDENT_FLAT,
+                INDENT_PER_LEVEL, INTERCELL, INTERCELL_TEMPLATE, ROW_PADDING, TEXT_SIZE_DEFAULT,
+                TEXT_SIZE_MAX, TEXT_SIZE_MIN,
+            };
+        }
+
+        /// The column view.
+        pub mod column_view {
+            pub use cupertino_ui_files::metrics::column_view::{
+                MIN_WIDTH, PREFERRED_WIDTH, PREVIEW_PANE_WIDTH, ROW_EXTRA,
+            };
+        }
+
+        /// Timings.
+        pub mod timing {
+            pub use cupertino_ui_files::metrics::timing::{
+                DOUBLE_CLICK_INTERVAL, TYPE_SELECT_MIN_TIMEOUT,
+            };
+        }
+
+        /// The selection's look.
+        pub mod selection {
+            pub use cupertino_ui_files::metrics::selection::{
+                BUBBLE_BORDER_ALPHA, BUBBLE_BORDER_MAX, BUBBLE_DIVISOR, BUBBLE_RADIUS_RATIO,
+                CONTEXT_RING,
+            };
+        }
+
+        /// The rubber band.
+        pub mod marquee {
+            pub use cupertino_ui_files::metrics::marquee::{
+                AUTOSCROLL_INTERVAL, BORDER_WIDTH, EDGE_ZONE, MAX_STEP,
+            };
+        }
+
+        /// Dragging items.
+        pub mod drag {
+            pub use cupertino_ui_files::metrics::drag::START_DISTANCE;
+        }
+    }
+
+    /// An item's type.
+    pub mod mime {
+        pub use cupertino_ui_files::mime::{entry_mime, kind_description, kind_group, KindGroup};
+    }
+
+    /// The name being edited.
+    pub mod name_edit {
+        pub use cupertino_ui_files::name_edit::NameEdit;
+    }
+
+    /// The order of names.
+    pub mod natural {
+        pub use cupertino_ui_files::natural::{compare_names, type_select_key, NameKey};
+    }
+
+    /// Default applications and the Open With list.
+    pub mod open {
+        pub use cupertino_ui_files::open::{
+            application_at, command_with, default_app_id, open_command, open_with, OpenError,
+        };
+    }
+
+    /// New folders, renames, aliases, copies and moves, as blocking functions.
+    pub mod operations {
+        pub use cupertino_ui_files::operations::{
+            drop_action, drop_into, duplicate, duplicate_with, is_cancelled, make_alias,
+            new_folder, rename_item, same_volume, stopped, transfer, Cancel, DropAction, Progress,
+        };
+    }
+
+    /// The virtual folder of the recently used files.
+    pub mod recents {
+        pub use cupertino_ui_files::recents::{location, recent_entries, XBEL_NAME};
+    }
+
+    /// Name checks, free names and when a press renames.
+    pub mod rename {
+        pub use cupertino_ui_files::rename::{
+            NameError, RenameEvent, RenameTrigger, MAX_NAME_BYTES,
+        };
+    }
+
+    /// The order of a folder's items.
+    pub mod sort {
+        pub use cupertino_ui_files::sort::{
+            compare, insertion_index, sort_entries, SortKey, SortSpec,
+        };
+    }
+
+    /// An item's tags.
+    pub mod tags {
+        pub use cupertino_ui_files::tags::{
+            add_tag, parse_tag_list, read_tags, remove_tag, TagColor,
+        };
+    }
+}
+
 /// Type-to-select for the items of a menu or a pop-up list.
 pub mod typeahead {
     pub use cupertino_ui_controls::typeahead::TypeAhead;

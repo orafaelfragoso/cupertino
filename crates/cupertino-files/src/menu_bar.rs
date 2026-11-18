@@ -8,8 +8,8 @@ use cupertino_menu_model::standard::{self, Features};
 use cupertino_menu_model::{ActionName, Chord, Entry, Item, Menu, MenuBar, Scope};
 
 use crate::menu_spec::sort_choices;
-use crate::sort::SortKey;
 use crate::window::ViewMode;
+use cupertino_kit::files::sort::SortKey;
 
 /// What a menu item asks of the window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

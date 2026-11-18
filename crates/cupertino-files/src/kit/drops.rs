@@ -21,8 +21,8 @@ use cupertino_kit::prelude::*;
 use percent_encoding::percent_decode_str;
 
 use super::{view, BrowserWindow, Event, Message, Session};
-use crate::operations::{self, DropAction};
 use crate::places::PlaceKind;
+use cupertino_kit::files::operations::{self, DropAction};
 
 /// The type dropped files are read in.
 pub(super) const URI_LIST: &str = "text/uri-list";
@@ -249,8 +249,9 @@ fn shown(session: &Session, dir: &Path) -> Option<Destination> {
     if dir == session.trash.home_trash().join("files") {
         return Some(Destination::Trash);
     }
-    (dir != crate::recents::location() && dir != crate::applications::location())
-        .then(|| Destination::Folder(dir.to_path_buf()))
+    (dir != cupertino_kit::files::recents::location()
+        && dir != cupertino_kit::files::applications::location())
+    .then(|| Destination::Folder(dir.to_path_buf()))
 }
 
 /// The place a drag over `to` lands on, and the action it shows: none on one of this application's dragged folders,

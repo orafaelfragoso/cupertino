@@ -1,6 +1,6 @@
 // cupertino-layers --graph
-// 70 crates, 316 internal dependencies
-// per layer: foundation 5, graphics 2, models 6, system 8, platform 7, protocol 3, transport 2, render 3, ui 8, shellkit 0, core 1, services 4, shell 12, apps 2, tools 6, testing 1
+// 71 crates, 320 internal dependencies
+// per layer: foundation 5, graphics 2, models 6, system 8, platform 7, protocol 3, transport 2, render 3, ui 9, shellkit 0, core 1, services 4, shell 12, apps 2, tools 6, testing 1
 // forbidden normal edge cupertino-control (shell) -> cupertino-shell-client (transport)
 // forbidden normal edge cupertino-control (shell) -> cupertino-wayland-client (transport)
 // forbidden normal edge cupertino-controlcenter (shell) -> cupertino-alsa (platform)
@@ -98,11 +98,12 @@ digraph "layers" {
     "cupertino-glass";
   }
   subgraph "cluster_ui" {
-    label="ui (8)";
+    label="ui (9)";
     "cupertino-kit";
     "cupertino-ui-abi";
     "cupertino-ui-controls";
     "cupertino-ui-core";
+    "cupertino-ui-files";
     "cupertino-ui-render";
     "cupertino-ui-test";
     "cupertino-ui-text";
@@ -216,7 +217,6 @@ digraph "layers" {
   "cupertino-files" -> "cupertino-menu-model";
   "cupertino-files" -> "cupertino-theme";
   "cupertino-files" -> "cupertino-trash";
-  "cupertino-files" -> "cupertino-ui-text";
   "cupertino-files" -> "cupertino-ui-wayland";
   "cupertino-files" -> "cupertino-wayland-client" [color=red];
   "cupertino-glass" -> "cupertino-assets";
@@ -242,6 +242,7 @@ digraph "layers" {
   "cupertino-kit" -> "cupertino-theme";
   "cupertino-kit" -> "cupertino-ui-controls";
   "cupertino-kit" -> "cupertino-ui-core";
+  "cupertino-kit" -> "cupertino-ui-files";
   "cupertino-kit" -> "cupertino-ui-render";
   "cupertino-kit" -> "cupertino-ui-test";
   "cupertino-kit" -> "cupertino-ui-text";
@@ -429,6 +430,10 @@ digraph "layers" {
   "cupertino-ui-core" -> "cupertino-theme";
   "cupertino-ui-core" -> "cupertino-ui-render";
   "cupertino-ui-core" -> "cupertino-ui-text";
+  "cupertino-ui-files" -> "cupertino-apps";
+  "cupertino-ui-files" -> "cupertino-geometry";
+  "cupertino-ui-files" -> "cupertino-trash";
+  "cupertino-ui-files" -> "cupertino-ui-text";
   "cupertino-ui-render" -> "cupertino-geometry";
   "cupertino-ui-render" -> "cupertino-gpu";
   "cupertino-ui-render" -> "cupertino-raster-math";

@@ -139,7 +139,7 @@ const LISTED_MAGIC: [&str; 5] = [
 
 /// Rules a file is excused from, by path.
 const GATE_EXEMPT: [(&str, &str); 7] = [
-    ("crates/cupertino-files/src/mime.rs", "evidence class"),
+    ("crates/cupertino-ui-files/src/mime.rs", "evidence class"),
     ("crates/cupertino-theme/src/evidence.rs", "evidence class"),
     // The vendored smithay release, unchanged: an EGL error code and comments about Rust references.
     (

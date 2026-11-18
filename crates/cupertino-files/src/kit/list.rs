@@ -30,7 +30,7 @@ use super::band::{self, Band};
 use super::clicks::Clicks;
 use super::grid::by_name;
 use super::{Event as WindowEvent, Message};
-use crate::metrics::drag;
+use cupertino_kit::files::metrics::drag;
 
 const TAB: Keysym = Keysym(0xff09);
 const LEFT_TAB: Keysym = Keysym(0xfe20);

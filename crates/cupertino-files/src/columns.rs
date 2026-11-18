@@ -14,7 +14,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::metrics::column_view;
+use cupertino_kit::files::metrics::column_view;
 
 /// The width a column starts at.
 pub const DEFAULT_WIDTH: f64 = column_view::PREFERRED_WIDTH;

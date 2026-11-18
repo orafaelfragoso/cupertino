@@ -9,8 +9,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use crate::format::human_size;
-use crate::operations::{self, Cancel, DropAction, Progress};
 use crate::trash::Trash;
+use cupertino_kit::files::operations::{self, Cancel, DropAction, Progress};
 
 /// How often a running transfer wakes the application to show its progress.
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(50);

@@ -28,9 +28,9 @@ use cupertino_kit::theme::{Color, ColorRole, StateVariant};
 use super::peek::{Glyph, GlyphButton};
 use super::{columns, Event as WindowEvent, Message};
 use crate::browser::Browser;
-use crate::metrics::drag;
 use crate::tab_strip::{drop_place, TabId};
 use crate::window::ViewMode;
+use cupertino_kit::files::metrics::drag;
 
 /// The height of the track the tabs share, and of the tab shown inside it.
 const TRACK_HEIGHT: f64 = 28.0;

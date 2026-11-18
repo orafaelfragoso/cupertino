@@ -38,16 +38,22 @@ use super::sidebar::FocusWatch;
 use super::toolbar::{PathBar, PathSegment};
 use super::{window_key, BrowserWindow, Event, Message, Popup, Session, Unlock, COLUMNS};
 use crate::format::{human_size, relative_date};
-use crate::layout::icon::{self, Flow, FontMetrics, IconLayout, IconParams, SectionSpec};
 use crate::layout::list::RowSpec;
 use crate::menu_bar::MenuAction;
-use crate::metrics::{list_view, sidebar, trash, window as window_metrics};
+use crate::metrics::{sidebar, trash, window as window_metrics};
 use crate::places::{window_title, PlaceGroup};
 use crate::places::{PlaceKind, Volume};
 use crate::settings::{default_columns, ColumnId, IconViewSettings};
 use crate::udisks::Passphrase;
 use crate::window::{metrics, path_chain, status_text, ViewMode};
-use crate::{mime, Entry, SortKey};
+use cupertino_kit::files::entry::Entry;
+use cupertino_kit::files::layout::icon::{
+    self, Flow, FontMetrics, IconLayout, IconParams, SectionSpec,
+};
+use cupertino_kit::files::metrics::list_view;
+use cupertino_kit::files::mime;
+use cupertino_kit::files::sort::SortKey;
+use cupertino_kit::files::tags::TagColor;
 
 pub(super) const SIDEBAR_WIDTH: f64 = sidebar::DEFAULT_WIDTH;
 /// The side of a list row's icon, in points.
@@ -309,7 +315,7 @@ fn sidebar_tags(session: &Session) -> Vec<String> {
         .map(str::to_owned);
     let others = known
         .iter()
-        .filter(|k| crate::tags::TagColor::from_title(k).is_none())
+        .filter(|k| TagColor::from_title(k).is_none())
         .cloned();
     colours.chain(others).collect()
 }
@@ -366,7 +372,7 @@ pub(super) fn share_popover(
     let first = selected.first()?;
     let subject = match selected.as_slice() {
         [one] => {
-            let kind = crate::mime::kind_description(&crate::mime::entry_mime(one));
+            let kind = mime::kind_description(&mime::entry_mime(one));
             let mut chars = kind.chars();
             let kind = chars
                 .next()
@@ -920,7 +926,7 @@ fn list(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
         });
     let now = win.now;
     // the table asks only for the rows it shows, so their text and icons are made then
-    let entries: Rc<[crate::Entry]> = browser.entries().into();
+    let entries: Rc<[Entry]> = browser.entries().into();
     let names: Rc<[String]> = browser.entries().iter().map(|e| e.name.clone()).collect();
     let type_names = Rc::clone(&names);
     let item_icons = Rc::clone(&session.icons);
@@ -1201,7 +1207,7 @@ fn icons(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
     let text_size = params.text_size;
     // the whole lines the layout gives a name; a name past them ends in an ellipsis
     let lines = icon::max_title_lines(&params).floor().max(1.0) as u32;
-    let items: Rc<[crate::Entry]> = browser.entries().into();
+    let items: Rc<[Entry]> = browser.entries().into();
     let item_icons = Rc::clone(&session.icons);
     let side = params.icon_size;
     let icon: grid::ItemIcon = Rc::new(move |e| item_icons.icon(e, side));
@@ -1306,7 +1312,7 @@ fn path_bar(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message>
         .into_iter()
         .enumerate()
         .flat_map(|(i, (path, name))| {
-            let recents = path == crate::recents::location();
+            let recents = path == cupertino_kit::files::recents::location();
             let place = session.places.iter().find(|p| p.path == path);
             let symbol = match place {
                 _ if recents => PlaceKind::Recents.symbol(),

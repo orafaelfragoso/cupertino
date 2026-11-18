@@ -14,10 +14,10 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Map, Value};
 
-use crate::geom::Direction;
 use crate::metrics::desktop as m;
-use crate::sort::SortKey;
 use cupertino_geometry::{Insets, Point, Rect};
+use cupertino_kit::files::geom::Direction;
+use cupertino_kit::files::sort::SortKey;
 
 /// A cell of the grid: `column` 0 is the rightmost, `row` 0 the top one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]

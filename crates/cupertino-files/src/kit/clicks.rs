@@ -7,8 +7,8 @@ use cupertino_kit::core::EventCx;
 use cupertino_kit::platform::Timestamp;
 
 use super::{Event as WindowEvent, Message};
-use crate::metrics::timing::DOUBLE_CLICK_INTERVAL;
-use crate::rename::{RenameEvent, RenameTrigger};
+use cupertino_kit::files::metrics::timing::DOUBLE_CLICK_INTERVAL;
+use cupertino_kit::files::rename::{RenameEvent, RenameTrigger};
 
 fn seconds(at: Timestamp) -> f64 {
     at.0 as f64 / 1e9

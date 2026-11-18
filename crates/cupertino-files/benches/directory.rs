@@ -2,11 +2,11 @@
 //!
 //! `cargo bench -p cupertino-files --bench directory`
 
-use cupertino_files::entry::Entry;
-use cupertino_files::layout::icon::{self, FontMetrics, IconParams, SectionSpec};
 use cupertino_files::model::{enumerate_blocking, DirectoryModel, ModelOptions};
-use cupertino_files::natural::NameKey;
-use cupertino_files::sort::{sort_entries, SortKey, SortSpec};
+use cupertino_kit::files::entry::Entry;
+use cupertino_kit::files::layout::icon::{self, FontMetrics, IconParams, SectionSpec};
+use cupertino_kit::files::natural::NameKey;
+use cupertino_kit::files::sort::{sort_entries, SortKey, SortSpec};
 use std::hint::black_box;
 use std::time::Instant;
 

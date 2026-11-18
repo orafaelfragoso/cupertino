@@ -45,17 +45,20 @@ use self::roles::{DesktopRoles, RoleNote};
 use self::view::{BandLook, Desk, ItemView};
 use super::item_icons::ItemIcons;
 use crate::desktop::{self as arrangement, Arrangement, DesktopPrefs, Grid, Slot};
-use crate::geom::Direction;
 use crate::metrics::desktop as m;
-use crate::name_edit::NameEdit;
 use crate::notice::{self, Action, Notices};
-use crate::open::{command_with, default_app_id, open_command, open_with, OpenError};
-use crate::operations::{self, DropAction};
 use crate::places::{desktop_folder, session_places};
-use crate::sort::{sort_entries, SortKey, SortSpec};
 use crate::trash::Trash;
-use crate::{DirectoryModel, Entry, ModelOptions};
+use crate::{DirectoryModel, ModelOptions};
 use cupertino_icons::thumbnail::Thumbnailer;
+use cupertino_kit::files::entry::Entry;
+use cupertino_kit::files::geom::Direction;
+use cupertino_kit::files::name_edit::NameEdit;
+use cupertino_kit::files::open::{
+    command_with, default_app_id, open_command, open_with, OpenError,
+};
+use cupertino_kit::files::operations::{self, DropAction};
+use cupertino_kit::files::sort::{sort_entries, SortKey, SortSpec};
 
 /// What the desktop's windows are called by the roles: `cupertino-desktop@OUTPUT`.
 pub const APP_ID: &str = "cupertino-desktop";

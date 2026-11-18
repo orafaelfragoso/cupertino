@@ -1,7 +1,7 @@
 # cupertino-files
 
-File-manager core with no window-system or toolkit dependency, plus the file manager itself: the `cupertino-files`
-binary (feature `app`) runs it as a CupertinoKit application (`kit`). The library implements the data, interaction
+File-manager core on Kit's file family (`cupertino_kit::files`), with or without the `app` feature, plus the file
+manager itself: the `cupertino-files` binary (feature `app`) runs it as a CupertinoKit application (`kit`). The library implements the data, interaction
 logic and layout metrics a native file manager (and a desktop-icon layer) needs.
 
 ## Usage
@@ -447,25 +447,25 @@ which the dock tile, the switcher and the launcher draw (`cupertino-icons`).
 
 ### Modules and API
 
+The items of a folder, their order, types and tags, the icon layout, renaming, opening, the file operations and the
+views' metrics are Kit's file family (`cupertino_kit::files`, from `cupertino-ui-files`): `entry`, `natural`, `sort`,
+`mime`, `tags`, `applications`, `recents`, `layout::icon`, `rename`, `name_edit`, `open`, `operations`, `item_art`
+and `metrics::{icon_view, list_view, column_view, timing, selection, marquee, drag}`. Files' own modules:
+
 | Module | Role | Main items |
 |---|---|---|
 | `model` | async directory model | `DirectoryModel::open(dir, ModelOptions)`, `poll` / `poll_timeout` → `Vec<ModelDelta>` (`Reloaded`, `LoadComplete`, `Inserted`, `Removed`, `Changed`, `Moved`, `DirectoryGone`), `enumerate_blocking`, `set_sort` |
-| `natural`, `sort`, `group` | name collation (case-, width-insensitive, numeric, localized), ordering, the date buckets dates read in | `NameKey`, `compare_names`, `SortSpec { key, ascending, folders_first }`, `sort_entries`, `insertion_index`, `date_bucket` |
+| `group` | the date buckets dates read in | `date_bucket` |
 | `settings` | per-folder view state | `ViewSettings` (icon / list / column / gallery), `ViewStyle`, `default_columns`, `SettingsStore` (atomic JSON, keyed by device + inode), `FolderKey` |
 | `selection` | selection model | `Selection::{mouse_down, mouse_up, click_empty, move_focus, on_insert, on_remove, on_move}`, `Modifiers` |
-| `rename`, `typeselect`, `spring` | interaction logic | `RenameTrigger`, `validate_name`, `needs_extension_warning`, `initial_selection`, `unique_name`; `TypeSelect::{type_text, tab}`; `SpringLoad::{hover, due, cancel, flashing}` (a drag's dwell over folders, with `SPRING_DELAY` and `SPRING_FLASH`) |
+| `typeselect`, `spring` | interaction logic | `TypeSelect::{type_text, tab}`; `SpringLoad::{hover, due, cancel, flashing}` (a drag's dwell over folders, with `SPRING_DELAY` and `SPRING_FLASH`) |
 | `context_menu`, `menu_spec` | context menus | `menu_spec::{item_menu, background_menu, condense}` (the rows in order), `MenuItem`, `Command`, `common_apps` (the Open With list of a selection) |
 | `menu_bar`, `search_field` | the menu bar and the search field | `menu_bar(MenuState)`, `MenuAction` (`chord`: its keys), `glyphs`, `chords`, `enabled`; `SearchWidth::{want, tick, follow_toolbar, width}`, `open_width` |
-| `name_edit`, `operations` | rename in place and file changes | `NameEdit::{field, field_mut, commit}`; `rename_item` (no replace), `new_folder`, `drop_action`, `drop_into` (move or copy, `name copy` on a clash), `transfer` (the same for a list of items, with `Progress` and a `Cancel`), `duplicate_with` (Duplicate with them), `stopped` |
 | `trash` | freedesktop Trash 1.0 | `Trash::{trash, trash_unsized, list, list_all, list_volumes, trash_dirs, restore, delete, empty, purge_older_than}`, `PendingSize`, `Emptied`, `Look`; home and mount-point trash (Empty Trash takes both: the home trash first, then the volumes that answer; the windows read no volume on their own thread, so whether a volume's trash holds something, for the Empty button and the Trash place's Empty Trash, is what the last look on a thread of its own found), `.trashinfo`, `directorysizes`; `trashed_item`, `forget` (an item moved out of a trash) |
 | `thumbnail` | freedesktop thumbnail cache | `Thumbnailer::{lookup, lookup_at_least, create, get_or_create}`, `ThumbSize::for_icon`, `file_uri`, failure markers |
-| `tags`, `mime` | metadata | `read_tags` / `write_tags` (`user.xdg.tags`), `TagColor` (seven label colours), `parse_reference_tags`; `detect`, `kind_group`, `kind_description` |
-| `open` | opening files | `open_command` (default application of `mimeapps.list` through `cupertino-apps`; `Terminal=true` under `--terminal`), `command_with`, `open_with` (Open With list: default first, rest by name), `OpenError` |
-| `layout::icon` | icon view | `ideal_cell_size`, `max_title_lines`, `layout` (flow / justified, 32 pt section headers), `IconLayout::{hit, hits_in_rect, neighbour}`, `FreeGrid` |
 | `layout::list` | list view | `row_height`, `layout` (columns, rows with level and expanded state, disclosure, indentation), `ListLayout::{row_at, visible_rows}` |
-| `history`, `places`, `recents` | navigation state | `History::{visit, back, forward}`; `standard_places` (the home folder, Applications, Desktop, Documents, Downloads, the computer, Trash), `recents_place`, `folder_icons`, `session_places` (`SessionPlaces`), `computer_name`, `applications_folder`; `recents::{parse_xbel, recent_entries}` (the bookmark file is read with `cupertino_apps::recent`, which `parse_xbel` and `XBEL_NAME` re-export) |
+| `history`, `places` | navigation state | `History::{visit, back, forward}`; `standard_places` (the home folder, Applications, Desktop, Documents, Downloads, the computer, Trash), `recents_place`, `folder_icons`, `session_places` (`SessionPlaces`), `computer_name`, `applications_folder` |
 | `browser` | one window's folder | `Browser::{open, go, back, forward, parent, poll, sort_by, press, release, move_focus, select_all, type_text, activation, outline, expand, collapse, collapse_all, available_space, visit, return_to, is_loading}`: model, history (a `Visit` to go back to, with its selection), the list's outline of expanded folders, selection by path across reloads, nearest-ancestor fallback for a deleted folder |
-| `item_art` | Files' own item images | `Art::{for_icon}` (folder, text, document, archive), `draw(art, px, seed)` (premultiplied RGBA) |
 | `window_prefs` | the view and bars kept between windows | `WindowPrefs::{parse, text, load, save}`, `location`, `column_width` |
 | `columns` | the column view's chain | `ColumnChain::{follow, folders, width, resize, widths}`, `layout` → `ChainLayout` (where each column sits and the scroll that keeps the last whole), `DEFAULT_WIDTH`, `MIN_WIDTH`, `MAX_WIDTH`, `PREVIEW_WIDTH`, `ROW_HEIGHT` |
 | `preview` | what a preview shows | `kind` → `PreviewKind`, `read_text` / `text_of` (`TEXT_LIMIT`), `summary`, `details`, `Browse` (the items gone through, `step`), `Motion` (the window's open and close, `at` → `MotionFrame`), `WINDOW_SIZE` |
@@ -480,7 +480,8 @@ which the dock tile, the switcher and the launcher draw (`cupertino-icons`).
 
 ### Measured defaults
 
-Values live in `metrics.rs`.
+Values live in `metrics.rs`, and the views' (icon, list and column views, timing, selection, band, drag) in
+`cupertino-ui-files`' `metrics.rs`.
 
 | Area | Value |
 |---|---|

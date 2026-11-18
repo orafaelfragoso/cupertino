@@ -5,9 +5,9 @@
 //! height: 20 pt for the default 16 pt icon and 13 pt font (derived from the font metrics). Columns
 //! abut; a cell's text keeps its own inset from the column edge (the renderer's).
 
-use crate::metrics::list_view as m;
 use crate::settings::{ColumnDesc, ColumnId};
 use cupertino_geometry::Rect;
+use cupertino_kit::files::metrics::list_view as m;
 
 pub fn row_height(icon_size: u32, font_line: f64) -> f64 {
     (icon_size as f64).max(font_line.ceil()) + m::ROW_PADDING

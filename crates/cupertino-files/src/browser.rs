@@ -15,15 +15,15 @@
 //! (the outline view convention); going to another folder or leaving the list collapses everything
 //! (the design keeps expansion state per window, its persistence is not known).
 
-use crate::entry::{Entry, Kind};
 use crate::history::History;
 use crate::layout::list::RowSpec;
 use crate::model::{DirectoryModel, ModelDelta, ModelOptions, Notify, DEFAULT_BATCH};
-use crate::recents;
 use crate::selection::{Modifiers, MouseDown, Selection};
-use crate::sort::{SortKey, SortSpec};
 use crate::typeselect::{Outcome, TypeSelect};
 use cupertino_apps::MimeDatabase;
+use cupertino_kit::files::entry::{Entry, Kind};
+use cupertino_kit::files::recents;
+use cupertino_kit::files::sort::{SortKey, SortSpec};
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -159,9 +159,9 @@ fn open_model(
             model_options(sort, types),
             notify,
         )
-    } else if dir == crate::applications::location() {
+    } else if dir == cupertino_kit::files::applications::location() {
         DirectoryModel::open_applications(
-            crate::applications::application_dirs(),
+            cupertino_kit::files::applications::application_dirs(),
             model_options(sort, types),
             notify,
         )
@@ -214,7 +214,8 @@ impl Browser {
     /// The folder is not a directory of the file system (Recents, Applications): it has no enclosing folder and no
     /// free space.
     pub fn is_virtual(&self) -> bool {
-        self.dir() == recents::location() || self.dir() == crate::applications::location()
+        self.dir() == recents::location()
+            || self.dir() == cupertino_kit::files::applications::location()
     }
 
     /// Number of the folder's own items (not those of expanded folders), or of those the search finds.
@@ -274,7 +275,7 @@ impl Browser {
     /// Whether the folder's file system is mounted read-only; see [`mounted_read_only`]. Applications lists what is
     /// installed: nothing is made, renamed or moved there.
     pub fn read_only(&self) -> io::Result<bool> {
-        if self.dir() == crate::applications::location() {
+        if self.dir() == cupertino_kit::files::applications::location() {
             return Ok(true);
         }
         match self.is_virtual() {

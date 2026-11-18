@@ -27,7 +27,7 @@ use cupertino_kit::theme::{Appearance, Color, ColorRole, StateVariant};
 use super::view::popup_key;
 use super::{window_key, Event as WindowEvent, Message, Popup, NO_SCROLL};
 use crate::context_menu::TAG_ROW_ORDER;
-use crate::tags::TagColor;
+use cupertino_kit::files::tags::TagColor;
 
 /// The popover's width.
 const WIDTH: f64 = 217.0;

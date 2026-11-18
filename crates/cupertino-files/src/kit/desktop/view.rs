@@ -33,8 +33,8 @@ use super::Message;
 use crate::desktop::{backdrop_radius, item_frames};
 use crate::kit::grid::laid_out_name;
 use crate::metrics::desktop as m;
-use crate::metrics::{drag, timing::DOUBLE_CLICK_INTERVAL};
-use crate::rename::{RenameEvent, RenameTrigger};
+use cupertino_kit::files::metrics::{drag, timing::DOUBLE_CLICK_INTERVAL};
+use cupertino_kit::files::rename::{RenameEvent, RenameTrigger};
 
 /// The grey of the backdrop behind a selected icon, before its opacity.
 const BACKDROP_GREY: f32 = 0.35;
@@ -631,7 +631,7 @@ impl Widget<Message> for Cell {
         if self.ringed {
             let theme = cx.env().theme.clone();
             if let Some(accent) = theme.colors.get(ColorRole::ControlFill, selected_variant()) {
-                let ring = crate::metrics::selection::CONTEXT_RING;
+                let ring = cupertino_kit::files::metrics::selection::CONTEXT_RING;
                 cx.push(PaintOp::Stroke {
                     shape: Shape::RoundedRect {
                         rect: backdrop.outset(-ring / 2.0),
@@ -802,7 +802,7 @@ impl Widget<Message> for BandView {
                 paint: Paint::Solid(faded(fill)),
             });
         }
-        let width = crate::metrics::marquee::BORDER_WIDTH;
+        let width = cupertino_kit::files::metrics::marquee::BORDER_WIDTH;
         let border = colors.get(ColorRole::PlaceholderText, StateVariant::NORMAL);
         if let Some(border) = border.filter(|_| size.width >= width && size.height >= width) {
             cx.push(PaintOp::Stroke {

@@ -8,10 +8,11 @@
 //! Ordering is the one of [`crate::sort`]; hidden files (leading dot) are omitted unless
 //! `show_hidden` is set (default off, preference default of the design).
 
-use crate::entry::Entry;
-use crate::recents;
-use crate::sort::{compare, insertion_index, sort_entries, SortSpec};
 use cupertino_apps::MimeDatabase;
+use cupertino_kit::files::entry::Entry;
+use cupertino_kit::files::recents;
+use cupertino_kit::files::sort::{compare, insertion_index, sort_entries, SortSpec};
+use cupertino_kit::files::{applications, tags};
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -126,7 +127,7 @@ pub struct DirectoryModel {
 fn stat_entry(path: PathBuf, read_tags: bool, types: Option<&MimeDatabase>) -> io::Result<Entry> {
     let mut e = typed(Entry::from_path(path)?, types);
     if read_tags {
-        e.tags = crate::tags::read_tags(&e.path).unwrap_or_default();
+        e.tags = tags::read_tags(&e.path).unwrap_or_default();
     }
     Ok(e)
 }
@@ -267,7 +268,7 @@ impl DirectoryModel {
 
     /// The Applications folder ([`crate::applications`]) of the application folders `dirs`, most important first:
     /// listed in one batch, and listed again whenever an entry in one of them changes when `opts.watch` is set. Its
-    /// [`DirectoryModel::dir`] is [`crate::applications::APPLICATIONS`].
+    /// [`DirectoryModel::dir`] is [`applications::APPLICATIONS`].
     pub fn open_applications(
         dirs: Vec<PathBuf>,
         opts: ModelOptions,
@@ -275,7 +276,7 @@ impl DirectoryModel {
     ) -> io::Result<Self> {
         let (tx, rx) = channel();
         let mut model = DirectoryModel {
-            dir: crate::applications::location().to_path_buf(),
+            dir: applications::location().to_path_buf(),
             opts: opts.clone(),
             entries: Vec::new(),
             rx,
@@ -295,7 +296,7 @@ impl DirectoryModel {
             let (lsink, listed, spec) = (sink.clone(), dirs.clone(), opts.sort);
             std::thread::spawn(move || {
                 relist_when_stale(&stale, || {
-                    let mut entries = crate::applications::session_entries(&listed);
+                    let mut entries = applications::session_entries(&listed);
                     sort_entries(&mut entries, &spec);
                     lsink.send(Msg::Replace(entries));
                 });
@@ -321,7 +322,7 @@ impl DirectoryModel {
         }
         let spec = opts.sort;
         model.worker = Some(std::thread::spawn(move || {
-            let mut entries = crate::applications::session_entries(&dirs);
+            let mut entries = applications::session_entries(&dirs);
             sort_entries(&mut entries, &spec);
             sink.send(Msg::Batch(entries));
             sink.send(Msg::Done);

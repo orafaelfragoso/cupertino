@@ -32,9 +32,11 @@ use super::band::{self, Band};
 use super::clicks::Clicks;
 use super::dragged::Grab;
 use super::{Event as WindowEvent, Message};
-use crate::geom::Direction;
-use crate::layout::icon::{IconLayout, IconParams};
-use crate::metrics::{drag, selection as sel};
+use cupertino_kit::files::entry::Entry;
+use cupertino_kit::files::geom::Direction;
+use cupertino_kit::files::layout::icon::{IconCell, IconLayout, IconParams};
+use cupertino_kit::files::metrics::{drag, selection as sel};
+use cupertino_kit::files::natural::compare_names;
 
 const RETURN: Keysym = Keysym(0xff0d);
 const KP_ENTER: Keysym = Keysym(0xff8d);
@@ -106,7 +108,7 @@ pub(super) fn by_name<S: AsRef<str>>(
     back: bool,
 ) -> Option<usize> {
     let mut order: Vec<usize> = (0..names.len()).collect();
-    order.sort_by(|&a, &b| crate::natural::compare_names(names[a].as_ref(), names[b].as_ref()));
+    order.sort_by(|&a, &b| compare_names(names[a].as_ref(), names[b].as_ref()));
     let at = from.and_then(|f| order.iter().position(|&i| i == f));
     let next = match (at, back) {
         (None, false) => 0,
@@ -154,7 +156,7 @@ pub(super) fn cell_index(key: &Key) -> Option<u64> {
 
 /// The renditions of an item's icon or thumbnail, made only for the items a grid builds or drags: a folder of thousands
 /// of items makes a few hundred icons a view, not one for each item.
-pub(super) type ItemIcon = Rc<dyn Fn(&crate::Entry) -> Vec<ImageSource>>;
+pub(super) type ItemIcon = Rc<dyn Fn(&Entry) -> Vec<ImageSource>>;
 
 /// The content of the grid's scroll view: as tall as every cell, holding the cells that are built.
 pub(super) struct IconGrid {
@@ -165,7 +167,7 @@ pub(super) struct IconGrid {
     pub layout: Rc<IconLayout>,
     pub params: IconParams,
     /// The items, in the layout's order, and how each one's icon is made.
-    pub items: Rc<[crate::Entry]>,
+    pub items: Rc<[Entry]>,
     pub icon: ItemIcon,
     pub scroll: ScrollState,
     pub selection: Selection,
@@ -211,7 +213,7 @@ struct Walk {
     band: (f64, f64),
     back: bool,
     layout: Weak<IconLayout>,
-    items: Weak<[crate::Entry]>,
+    items: Weak<[Entry]>,
     revision: u64,
     names: NameShape,
     scale: f64,
@@ -335,7 +337,7 @@ impl IconGrid {
     /// The cells to build, in order: those near the viewport and the keyboard's.
     fn built(&self) -> Vec<usize> {
         let at = self.at();
-        let near: Box<dyn Fn(&crate::layout::icon::IconCell) -> bool> = match self.strip {
+        let near: Box<dyn Fn(&IconCell) -> bool> = match self.strip {
             true => {
                 let left = self.scroll.offset.x - OVERSCAN;
                 let right = self.scroll.offset.x + self.scroll.viewport.width + OVERSCAN;

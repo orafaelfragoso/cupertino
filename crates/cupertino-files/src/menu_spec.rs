@@ -11,9 +11,9 @@
 //! * The Sort By and Group By submenus list the keys a folder can be ordered and grouped by.
 
 use crate::context_menu::{AppChoice, Command, ItemKind, MenuItem, Mods};
-use crate::sort::{SortKey, SortSpec};
-use crate::tags::TagColor;
 use crate::window::ViewMode;
+use cupertino_kit::files::sort::{SortKey, SortSpec};
+use cupertino_kit::files::tags::TagColor;
 
 /// The menus a row can belong to, as bits: the selected items' menu and the empty space's.
 pub const CONTEXT_ITEMS: u32 = 1;

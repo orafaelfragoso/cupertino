@@ -19,12 +19,13 @@ use cupertino_icons::{SystemIcons, ThemeIcons};
 /// The icon of an application whose own the icon themes lack.
 const GENERIC_APPLICATION: &str = "application.generic";
 
-use crate::item_art::{self, Art};
 use crate::thumbnail_service::{
     has_thumbnail, Stamp, Thumbnail, ThumbnailService, MEMORY_BUDGET, WORKERS,
 };
-use crate::{mime, Entry, Kind};
 use cupertino_icons::thumbnail::Thumbnailer;
+use cupertino_kit::files::entry::{Entry, Kind};
+use cupertino_kit::files::item_art::{self, Art};
+use cupertino_kit::files::mime;
 
 /// Thumbnails are made for this many device pixels a point, so they stay sharp on a 2× display; a 1× display draws
 /// them shrunk.

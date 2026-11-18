@@ -67,22 +67,25 @@ use crate::context_menu::{common_apps, AppChoice, Command as MenuCommand};
 use crate::instance::Service;
 use crate::menu_bar::{self, MenuAction, MenuState};
 use crate::menu_spec::{self, Background, Subject};
-use crate::name_edit::NameEdit;
 use crate::notice::{self, Action, Notices};
-use crate::open::{command_with, default_app_id, open_command, open_with, OpenError};
-use crate::operations::{self, DropAction};
 use crate::places::{removable_holding, Place};
 use crate::preview::Browse;
 use crate::search_field::{self, SearchWidth};
 use crate::settings::ColumnId;
 use crate::tab_strip::{TabId, TabStrip};
-use crate::tags::{self, TagColor};
 use crate::trash::Trash;
 use crate::udisks::{Media, Passphrase, Report, Volumes};
 use crate::window::ViewMode;
 use crate::window_prefs::WindowPrefs;
-use crate::SortSpec;
 use cupertino_icons::thumbnail::Thumbnailer;
+use cupertino_kit::files::entry::{Entry, Kind};
+use cupertino_kit::files::name_edit::NameEdit;
+use cupertino_kit::files::open::{
+    command_with, default_app_id, open_command, open_with, OpenError,
+};
+use cupertino_kit::files::operations::{self, DropAction};
+use cupertino_kit::files::sort::SortSpec;
+use cupertino_kit::files::tags::{self, TagColor};
 
 /// Identifier of the window for the server, as the desktop entry names it.
 pub const APP_ID: &str = "cupertino-files";
@@ -1793,7 +1796,10 @@ impl Model {
             MenuAction::Back => window.step(Step::Back, session),
             MenuAction::Forward => window.step(Step::Forward, session),
             MenuAction::EnclosingFolder => window.step(Step::Parent, session),
-            MenuAction::Recents => window.go(crate::recents::location().to_path_buf(), session),
+            MenuAction::Recents => window.go(
+                cupertino_kit::files::recents::location().to_path_buf(),
+                session,
+            ),
             MenuAction::Home => window.go(session.home.clone(), session),
             MenuAction::MoveToTrash => window.trash_selection(session),
             MenuAction::PutBack => window.put_back(session),
@@ -2151,7 +2157,7 @@ impl Session {
     }
 
     /// The tags `entries` carry join those the sidebar lists.
-    fn learn_tags(&self, entries: &[crate::Entry]) {
+    fn learn_tags(&self, entries: &[Entry]) {
         let mut known = self.known_tags.borrow_mut();
         for tag in entries.iter().flat_map(|e| &e.tags) {
             if !known.contains(tag) {
@@ -2305,13 +2311,13 @@ impl BrowserWindow {
             look.follow_app(session, &current);
         }
         let (previewed, _) = self.previewed();
-        let previewed: Vec<crate::Entry> = previewed.cloned().collect();
+        let previewed: Vec<Entry> = previewed.cloned().collect();
         self.texts.follow(&previewed, &self.wake);
     }
 
     /// The items previewed: the preview column's file, the gallery's item and the preview window's item, and the side
     /// of their pictures in points.
-    fn previewed(&self) -> (impl Iterator<Item = &crate::Entry>, f64) {
+    fn previewed(&self) -> (impl Iterator<Item = &Entry>, f64) {
         let entries = self.browser.entries();
         let column = (self.view == ViewMode::Columns)
             .then(|| self.columns.chain(&self.browser).preview)
@@ -2535,7 +2541,8 @@ impl BrowserWindow {
     /// The folder's items can be copied out but not moved: an application's entry in Applications, a file on a
     /// read-only medium.
     fn items_stay(&self, session: &Session) -> bool {
-        self.browser.dir() == crate::applications::location() || self.read_only(session)
+        self.browser.dir() == cupertino_kit::files::applications::location()
+            || self.read_only(session)
     }
 
     fn read_only(&self, session: &Session) -> bool {
@@ -2835,7 +2842,7 @@ impl BrowserWindow {
     /// What the menu of the selection depends on.
     fn subject(&self, in_trash: bool) -> Subject {
         let entries = self.browser.entries();
-        let selected: Vec<&crate::Entry> = self
+        let selected: Vec<&Entry> = self
             .browser
             .selection()
             .indices()
@@ -2849,7 +2856,7 @@ impl BrowserWindow {
             count: selected.len(),
             name: selected.first().map(|e| e.name.clone()).unwrap_or_default(),
             all_folders: selected.iter().all(|e| e.is_dir),
-            single_link: selected.len() == 1 && selected[0].kind == crate::Kind::Symlink,
+            single_link: selected.len() == 1 && selected[0].kind == Kind::Symlink,
             in_trash,
             tags_on,
         }
@@ -2889,7 +2896,7 @@ impl BrowserWindow {
     /// together.
     fn toggle_tag(&self, color: TagColor, session: &Session) {
         let entries = self.browser.entries();
-        let selected: Vec<&crate::Entry> = self
+        let selected: Vec<&Entry> = self
             .browser
             .selection()
             .indices()
@@ -2911,7 +2918,7 @@ impl BrowserWindow {
     /// Take the tag `name` off every selected item when each carries it, else add it to those without it.
     fn toggle_named_tag(&self, name: &str, session: &Session) {
         let entries = self.browser.entries();
-        let selected: Vec<&crate::Entry> = self
+        let selected: Vec<&Entry> = self
             .browser
             .selection()
             .indices()
@@ -3153,7 +3160,7 @@ impl BrowserWindow {
         MenuState {
             count: selected.len(),
             all_folders: !selected.is_empty() && selected.iter().all(|e| e.is_dir),
-            single_link: matches!(selected.as_slice(), [e] if e.kind == crate::Kind::Symlink),
+            single_link: matches!(selected.as_slice(), [e] if e.kind == Kind::Symlink),
             in_trash: self.browser.dir() == session.trash.home_trash().join("files"),
             path_bar: self.path_bar,
             status_bar: self.status_bar,
@@ -3234,12 +3241,12 @@ fn dropped(
 }
 
 /// Whether `entry` carries the tag `name`.
-fn carries(entry: &crate::Entry, name: &str) -> bool {
+fn carries(entry: &Entry, name: &str) -> bool {
     entry.tags.iter().any(|t| t.eq_ignore_ascii_case(name))
 }
 
 /// Whether `entry` has the tag of `color`.
-fn has_tag(entry: &crate::Entry, color: TagColor) -> bool {
+fn has_tag(entry: &Entry, color: TagColor) -> bool {
     entry
         .tags
         .iter()

@@ -21,7 +21,7 @@ use cupertino_kit::render::{Paint, PaintOp, Shape};
 use cupertino_kit::theme::{ColorRole, StateVariant};
 
 use super::{Event as WindowEvent, Message};
-use crate::metrics::marquee;
+use cupertino_kit::files::metrics::marquee;
 
 /// The time between two steps of the scroll at an edge, in nanoseconds.
 pub(super) const AUTOSCROLL_NS: u64 = (marquee::AUTOSCROLL_INTERVAL * 1e9) as u64;

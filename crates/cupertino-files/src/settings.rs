@@ -5,8 +5,8 @@
 //! applies the integrity check of the design (out-of-range values are rejected there; this
 //! implementation clamps instead, which is a deliberate simplification).
 
-use crate::metrics::{column_view, icon_view, list_view};
-use crate::sort::{SortKey, SortSpec};
+use cupertino_kit::files::metrics::{column_view, icon_view, list_view};
+use cupertino_kit::files::sort::{SortKey, SortSpec};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::io;

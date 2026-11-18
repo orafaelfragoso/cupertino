@@ -9,7 +9,6 @@ apps external_crate cupertino-files -> wayland-protocols-wlr normal
 apps external_crate cupertino-settings -> wayland-client normal
 apps external_crate cupertino-settings -> wayland-protocols-wlr normal
 apps facade cupertino-files -> cupertino-theme normal
-apps facade cupertino-files -> cupertino-ui-text normal
 apps facade cupertino-files -> cupertino-ui-wayland normal
 apps facade cupertino-files -> cupertino-wayland-client normal
 apps facade cupertino-settings -> cupertino-theme normal

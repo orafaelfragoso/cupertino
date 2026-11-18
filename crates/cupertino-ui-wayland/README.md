@@ -170,10 +170,10 @@ A window's frame is drawn and committed away from the UI thread (`WindowSystem::
 layer and surface layers with it: the window system takes the frame's display list, resources, damage and the
 window's renderer (shared, `SharedRenderer`), and each changed layer's list and renderer (`LayerList`). On the UI
 thread it sends what applies with the window's commit (the surface layers' values, made or gone, and the raised layer
-placed or hidden), makes sure every surface the frame draws has a free buffer (else the frame is `NotReady` and the
-window waits for all of them), prepares each surface's commit (a free buffer chosen or allocated, its sync points, the
-configure the window's answers: `Connection::gpu_commit`, `BufferLease::detach`), the window's first, and hands the
-rest over. A frame with a surface on the GPU is drawn on the render thread (`gpu_present::Draw`); one all in shared
+placed), makes sure every surface the frame draws has a free buffer (else the frame is `NotReady` and the window waits
+for all of them), prepares each surface's commit (a free buffer chosen or allocated, its sync points, the configure the
+window's answers: `Connection::gpu_commit`, `BufferLease::detach`), the window's first, hides the raised layer where the
+frame hides it, and hands the rest over. A frame with a surface on the GPU is drawn on the render thread (`gpu_present::Draw`); one all in shared
 memory on the CPU pool (`cupertino_ui_core::pool`), one lane per window, into the buffers it detached: straight into
 them where the renderer draws into memory in ABGR8888, else into the renderer's own image and copied (converted to
 ARGB8888, or read back from the GPU). Once every surface is drawn, the thread that drew them sends the frame back and
@@ -181,8 +181,9 @@ commits the surface layers, then the raised layer's subsurface, then the window,
 and committing in that order; a surface that cannot be drawn, or a renderer that panics, leaves the whole frame
 uncommitted, and the panic goes on in the instance that submitted it. A frame in shared memory never waits for the
 render thread, which may be making a device's programs. The next dispatch reads the frame back (before what the
-compositor said of it), gives the buffers back and tells the runtime `WindowEvent::Shown`. Until then the window draws
-no other frame, and freeing a surface's GPU buffers waits for the render thread's work before it. No frame is
+compositor said of it) and gives the buffers back; once the thread says the frame's commits are sent, the runtime
+hears `WindowEvent::Shown`. Until then the window draws no other frame, so nothing its next frame sends from the UI
+thread (a raised layer hidden, a solid colour) goes out before them, and freeing a surface's GPU buffers waits for the render thread's work before it. No frame is
 declined; only a solid colour (`present_solid`) is still shown from the UI thread.
 
 ## Menus (`menus`)

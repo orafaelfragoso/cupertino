@@ -82,6 +82,9 @@ pub struct Offer {
     /// The whole scale the server prefers for every surface it makes (`wl_surface.preferred_buffer_scale`); `None`
     /// prefers none.
     pub scale: Option<i32>,
+    /// Whether the server answers a surface's frame callbacks with its next commit, as a compositor that shows every
+    /// frame at once does; otherwise it never answers them.
+    pub frames: bool,
 }
 
 impl Offer {
@@ -96,6 +99,7 @@ impl Offer {
         scaling: false,
         subsurfaces: false,
         scale: None,
+        frames: false,
     };
 
     /// Only the standard protocols.
@@ -109,6 +113,7 @@ impl Offer {
         scaling: false,
         subsurfaces: false,
         scale: None,
+        frames: false,
     };
 }
 
@@ -173,6 +178,11 @@ pub struct Server {
     presents: Arc<Mutex<Vec<String>>>,
     /// The commits that showed a buffer, each as the role of its surface, in the order received.
     commits: Arc<Mutex<Vec<String>>>,
+    /// Every commit, as the role of its surface and what it did ([`Harness::every_commit`]), in the order received.
+    every_commit: Arc<Mutex<Vec<String>>>,
+    /// The frame callbacks each surface asked for since its last commit, answered with it ([`Offer::frames`]).
+    callbacks: HashMap<ObjectId, Vec<WlCallback>>,
+    frames: bool,
     /// The role of each surface given one: `window`, `subsurface` or `layer`.
     roles: HashMap<ObjectId, &'static str>,
     publications: Publications,
@@ -239,6 +249,7 @@ pub struct Harness {
     requests: Arc<Mutex<Vec<String>>>,
     presents: Arc<Mutex<Vec<String>>>,
     commits: Arc<Mutex<Vec<String>>>,
+    every_commit: Arc<Mutex<Vec<String>>>,
     pub publications: Publications,
     pub replies: Arc<Mutex<Vec<String>>>,
     jobs: Sender<Job>,
@@ -261,11 +272,13 @@ impl Harness {
         let server = Server {
             releases: offer.releases,
             scale: offer.scale,
+            frames: offer.frames,
             ..Server::default()
         };
         let requests = server.requests.clone();
         let presents = server.presents.clone();
         let commits = server.commits.clone();
+        let every_commit = server.every_commit.clone();
         let publications = server.publications.clone();
         let replies = server.replies.clone();
         let (jobs, inbox) = channel::<Job>();
@@ -278,6 +291,7 @@ impl Harness {
                 requests,
                 presents,
                 commits,
+                every_commit,
                 publications,
                 replies,
                 jobs,
@@ -310,6 +324,12 @@ impl Harness {
     /// `layer`, or `surface` for one without these), in order.
     pub fn commits(&self) -> Vec<String> {
         self.commits.lock().unwrap().clone()
+    }
+
+    /// Every commit received so far, in order, as the role of its surface (as in [`Harness::commits`]) for one that
+    /// showed a buffer, followed by ` unmapped` for one that attached none and ` state` for one that attached nothing.
+    pub fn every_commit(&self) -> Vec<String> {
+        self.every_commit.lock().unwrap().clone()
     }
 
     /// The requests of the Cupertino protocols received so far, as text.
@@ -587,7 +607,14 @@ impl Dispatch<WlSurface, ()> for Server {
     ) {
         match request {
             wl_surface::Request::Frame { callback } => {
-                init.init(callback, ());
+                let callback = init.init(callback, ());
+                if server.frames {
+                    server
+                        .callbacks
+                        .entry(surface.id())
+                        .or_default()
+                        .push(callback);
+                }
             }
             // the damage a client reports is part of what a test can read back
             damage @ wl_surface::Request::DamageBuffer { .. } => server.record(damage),
@@ -597,19 +624,30 @@ impl Dispatch<WlSurface, ()> for Server {
             }
             wl_surface::Request::Commit => {
                 server.present("Commit");
+                let role = server
+                    .roles
+                    .get(&surface.id())
+                    .copied()
+                    .unwrap_or("surface");
+                let attached = server.pending.remove(&surface.id());
+                let what = match &attached {
+                    Some(Some(_)) => role.to_owned(),
+                    Some(None) => format!("{role} unmapped"),
+                    None => format!("{role} state"),
+                };
+                server.every_commit.lock().unwrap().push(what);
                 // a later buffer replaces the one shown, which goes back to the client
-                if let Some(Some(buffer)) = server.pending.remove(&surface.id()) {
-                    let role = server.roles.get(&surface.id()).copied();
-                    server
-                        .commits
-                        .lock()
-                        .unwrap()
-                        .push(role.unwrap_or("surface").to_owned());
+                if let Some(Some(buffer)) = attached {
+                    server.commits.lock().unwrap().push(role.to_owned());
                     if let Some(old) = server.shown.insert(surface.id(), buffer.clone()) {
                         if server.releases && old != buffer {
                             old.release();
                         }
                     }
+                }
+                // a time the client reads as none it knows, so it takes its own
+                for callback in server.callbacks.remove(&surface.id()).unwrap_or_default() {
+                    callback.done(0);
                 }
             }
             _ => {}

@@ -42,6 +42,8 @@ const SIDE: f64 = 24.0;
 thread_local! {
     /// The side of the square in the surface layer, in points, on this thread's runtime.
     static LAYER_SIDE: Cell<f64> = const { Cell::new(SIDE) };
+    /// Whether the raised square is raised, as this thread's runtime lays it out.
+    static RAISED: Cell<bool> = const { Cell::new(true) };
 }
 
 /// A square of one colour, `side` points large: raised, in a surface layer of its own, or neither.
@@ -90,7 +92,7 @@ impl<M: 'static> Widget<M> for Square {
     fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
 
     fn raised(&self, _: &()) -> bool {
-        self.raised
+        self.raised && RAISED.get()
     }
 
     fn surface_layer(&self, _: &()) -> Option<SurfaceLayerMark> {
@@ -279,6 +281,62 @@ fn a_raised_layer_and_a_surface_layer_commit_before_their_window_in_its_hand_ove
     assert!(
         threads.iter().all(|&t| t != ui),
         "every frame was drawn away from the UI thread: {threads:?}"
+    );
+}
+
+/// Runs `runtime` until `done` holds for what the server saw of every commit, and returns that.
+fn every_commit_until(
+    server: &wire::Harness,
+    runtime: &mut Runtime<Layered, WaylandWindowSystem>,
+    done: impl Fn(&[String]) -> bool,
+) -> Vec<String> {
+    let end = Instant::now() + support::PATIENCE;
+    loop {
+        let seen = server.every_commit();
+        if done(&seen) {
+            return seen;
+        }
+        runtime.step(NonZeroU32::new(64).unwrap()).unwrap();
+        assert!(Instant::now() < end, "the server saw {seen:?}");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+#[test]
+fn a_raised_layer_hidden_by_the_frame_a_configure_brings_stays_hidden() {
+    let (server, conn) = wire::Harness::start(wire::Offer {
+        frames: true,
+        ..LAYERING
+    });
+    let threads = Arc::new(Mutex::new(Vec::new()));
+    let mut runtime = layered(conn, &threads, false, true);
+    // the first frame, which shows the raised layer, is away when the configure of the frame that hides it arrives
+    let end = Instant::now() + support::PATIENCE;
+    while threads
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .is_empty()
+    {
+        runtime.step(NonZeroU32::new(1).unwrap()).unwrap();
+        assert!(Instant::now() < end, "the first frame is drawn");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    RAISED.set(false);
+    server.run(|s| {
+        s.resize(0, 200, 140);
+    });
+    let hidden = |seen: &[String]| seen.iter().position(|c| c == "subsurface unmapped");
+    let seen = every_commit_until(&server, &mut runtime, |seen| {
+        hidden(seen).is_some_and(|at| seen[at..].iter().any(|c| c == "window"))
+    });
+    let at = hidden(&seen).unwrap();
+    assert!(
+        seen[..at].iter().any(|c| c == "subsurface"),
+        "the first frame shows the raised layer: {seen:?}"
+    );
+    assert!(
+        !seen[at..].iter().any(|c| c == "subsurface"),
+        "no frame of the raised layer commits after the frame that hides it: {seen:?}"
     );
 }
 

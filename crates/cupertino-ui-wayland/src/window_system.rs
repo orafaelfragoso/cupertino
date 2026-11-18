@@ -71,6 +71,13 @@ struct Finished {
     panic: Option<Box<dyn Any + Send>>,
 }
 
+/// What the thread a submitted frame was handed to sends back, in this order.
+enum FromJob {
+    Finished(Finished),
+    /// Every commit of the window's frame went out, or none was to: the window may draw again.
+    Sent(WindowId),
+}
+
 /// How often a window waiting for a GPU buffer looks at its release points.
 const GPU_RELEASE_POLL: Duration = Duration::from_millis(2);
 
@@ -137,8 +144,11 @@ struct Window {
     shown: Option<(u32, u32)>,
     /// A frame callback is outstanding: the compositor will say when to draw.
     frame_pending: bool,
-    /// A frame [`WindowSystem::submit`] took is not back yet: it commits with a frame callback, which paces the next.
+    /// A frame [`WindowSystem::submit`] took is not back yet, or its commits are not all sent: it commits with a frame
+    /// callback, which paces the next, and nothing the next frame sends from the UI thread may go out before them.
     away: bool,
+    /// How the frame away was shown, once it is back: the runtime hears it once the frame's commits are sent.
+    drawn: Option<Shown>,
     /// The last present was not ready; the next frame waits for this.
     stalled: Option<Stall>,
     /// The surface layers whose present found no free buffer: a window stalled on a buffer waits for theirs too.
@@ -336,7 +346,7 @@ impl Wake for WakeHandle {
 pub struct WaylandWindowSystem {
     conn: Connection,
     /// Frames drawn away from the UI thread ([`WindowSystem::submit`]) come back here, read on each dispatch.
-    finished: (Sender<Finished>, Receiver<Finished>),
+    finished: (Sender<FromJob>, Receiver<FromJob>),
     semantics: Option<cupertino_wayland_client::app::Semantics>,
     semantic_surfaces: HashMap<WindowId, cupertino_wayland_client::app::SemanticSurface>,
     /// The desktop-control actions that came with a grab serial, while a popup of their window may still grab with it.
@@ -696,6 +706,7 @@ impl WaylandWindowSystem {
             shown: None,
             frame_pending: false,
             away: false,
+            drawn: None,
             stalled: None,
             busy_layers: Vec::new(),
             frame_wanted: false,
@@ -1199,7 +1210,8 @@ impl WaylandWindowSystem {
 
     /// `window`'s frame went to the render thread or the CPU pool, which commits it with a frame callback: the next
     /// frame waits for that callback, a frame queued as due at once before the submit and one the window asks for
-    /// while the frame is away too, so the window is not handed frames it cannot draw until the frame is back.
+    /// while the frame is away too, so the window is not handed frames it cannot draw until the frame is back and its
+    /// commits are sent.
     fn submitted(&mut self, window: WindowId) -> Result<Submitted, PlatformError> {
         let folded = self.fold_due_frame(window);
         let w = self.window_mut(window)?;
@@ -1239,21 +1251,15 @@ impl WaylandWindowSystem {
         Ok(())
     }
 
-    /// A submitted frame is back from the render thread or the CPU pool: its surfaces' buffers and GPU state brought
-    /// up to date, what its layers show recorded, and the runtime told how it was shown.
-    fn finish(
-        &mut self,
-        finished: Finished,
-        events: &mut Vec<PlatformEvent>,
-    ) -> Result<(), PlatformError> {
+    /// A submitted frame is back from the render thread or the CPU pool, before its commits go out: its surfaces'
+    /// buffers and GPU state brought up to date, what its layers show recorded, its next frame paced, and how it was
+    /// shown kept for the runtime ([`Self::sent`]).
+    fn finish(&mut self, finished: Finished) -> Result<(), PlatformError> {
         let Finished {
             window,
             backs,
             panic,
         } = finished;
-        if let Ok(w) = self.window_mut(window) {
-            w.away = false;
-        }
         let mut presented = None;
         let mut failed = None;
         for back in backs {
@@ -1329,11 +1335,24 @@ impl WaylandWindowSystem {
             }
             (None, None) => Shown::NotReady,
         };
-        events.push(PlatformEvent::Window {
-            window,
-            event: WindowEvent::Shown(shown),
-        });
+        self.window_mut(window)?.drawn = Some(shown);
         Ok(())
+    }
+
+    /// The commits of `window`'s frame are sent: the window may draw again, and the runtime hears how the frame was
+    /// shown. Told only now, the runtime sends nothing of its next frame from the UI thread (a raised layer hidden, a
+    /// solid colour) ahead of these commits.
+    fn sent(&mut self, window: WindowId, events: &mut Vec<PlatformEvent>) {
+        let Ok(w) = self.window_mut(window) else {
+            return;
+        };
+        w.away = false;
+        if let Some(shown) = w.drawn.take() {
+            events.push(PlatformEvent::Window {
+                window,
+                event: WindowEvent::Shown(shown),
+            });
+        }
     }
 
     /// When a presented frame turned visible, `time_ns` on the compositor's presentation clock, on the window system's
@@ -2183,17 +2202,13 @@ impl WindowSystem for WaylandWindowSystem {
     /// window, acknowledging the configure that was the latest when the frame was submitted. No frame is declined.
     fn submit(&mut self, window: WindowId, frame: &Submission) -> Result<Submitted, PlatformError> {
         let (surface, logical) = self.before_present(window)?;
-        // what applies with the window's commit: the surface layers' values and the raised layer hidden or placed
+        // what applies with the window's commit: the surface layers' values and the raised layer placed
         if let Some(layers) = &frame.surface_layers {
             let wanted: Vec<_> = layers.iter().map(|l| (l.key, l.rect, l.look)).collect();
             self.sync_surface_layers(window, &wanted)?;
         }
         let raised = match &frame.raised {
-            RaisedChange::Kept => None,
-            RaisedChange::Hidden => {
-                self.hide_layer(window)?;
-                None
-            }
+            RaisedChange::Kept | RaisedChange::Hidden => None,
             RaisedChange::Drawn { height, layer } => {
                 let layer_surface = self.layer_surface(window)?;
                 let width = self.window(window)?.size.0;
@@ -2280,6 +2295,16 @@ impl WindowSystem for WaylandWindowSystem {
                 target,
             });
         }
+        // the raised layer hidden as the frame is handed over: after every commit of the window's frame before, which
+        // were sent before it could draw this one, and before this frame's, whose window commit applies it
+        if matches!(frame.raised, RaisedChange::Hidden) {
+            if let Err(e) = self.hide_layer(window) {
+                for part in parts {
+                    self.release_target(part.surface, part.target);
+                }
+                return Err(e);
+            }
+        }
         let on_render_thread = parts.iter().any(|p| matches!(p.target, Target::Gpu(_)));
         let (tx, waker) = (self.finished.0.clone(), self.conn.waker());
         // what the frame records, a panic too, is the submitting instance's
@@ -2288,14 +2313,15 @@ impl WindowSystem for WaylandWindowSystem {
         let job = move || {
             let _scope = scope.as_ref().map(diag::Scope::enter);
             let drawing = hand_over::draw(parts, &submission);
-            let _ = tx.send(Finished {
+            let _ = tx.send(FromJob::Finished(Finished {
                 window,
                 backs: drawing.backs,
                 panic: drawing.panic,
-            });
-            waker.wake();
+            }));
             // a commit that cannot be flushed fails the window system's next read of the connection
             let _ = drawing.commits.send();
+            let _ = tx.send(FromJob::Sent(window));
+            waker.wake();
         };
         if on_render_thread {
             render_thread::hand_over(job);
@@ -2421,8 +2447,11 @@ impl WindowSystem for WaylandWindowSystem {
             .wait(if ready { Some(Duration::ZERO) } else { timeout })
             .map_err(platform_error)?;
         // the frames drawn away from the UI thread, before what the compositor said of them
-        while let Ok(finished) = self.finished.1.try_recv() {
-            self.finish(finished, events)?;
+        while let Ok(back) = self.finished.1.try_recv() {
+            match back {
+                FromJob::Finished(finished) => self.finish(finished)?,
+                FromJob::Sent(window) => self.sent(window, events),
+            }
         }
         for event in wire {
             self.translate(event, events);

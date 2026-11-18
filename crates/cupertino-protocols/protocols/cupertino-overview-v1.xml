@@ -12,7 +12,10 @@
     windows and workspaces the output has and when the person asks for the overview, and takes
     what the component picked.
 
-    The protocol is private and unstable: interfaces may change without a version bump.
+    The protocol is private: the server and the hosts are built from one source. Every change
+    of a message raises the version of its interface, and a message added after version 1
+    carries the version that added it. A host binds an interface only at the version it was
+    built with (cupertino_host_v1).
   </description>
 
   <interface name="cupertino_overview_manager_v1" version="1">
@@ -46,9 +49,11 @@
     <description summary="the overview of one output">
       Events come in groups ended by a done event; the client applies a group at once. The first
       group, sent right after the object is created, has the area, every window and every
-      workspace. Coordinates are the output's logical coordinates, with the origin at the
-      output's top-left corner. Window ids are the server's, the same as the dock's and the
-      window manager's; workspace ids are stable for a workspace's lifetime.
+      workspace. Coordinates are global logical coordinates, the space the outputs are arranged
+      in and the one cupertino_window_manager_v1 uses: the component subtracts the output's
+      origin to place a frame on a surface of the output. Window ids are the server's, the same
+      as the dock's and the window manager's; workspace ids are stable for a workspace's
+      lifetime.
 
       The windows are the top-level windows without a parent on the output's current workspace
       or on every workspace, minimized ones included, of applications that are not hidden.
@@ -78,11 +83,14 @@
     <event name="window">
       <description summary="a window appeared or changed">
         Application id (the desktop entry id when known), title, frame and state of a window.
-        The frame is where the window rests on the desktop, with its server-side decorations and
-        without its shadow: the bounds a hole at the window's own place has. For a minimized
-        window it is the frame it had before it was minimized. Sent when the window joins the
-        set and again whenever one of these changes. The application id and the title are each
-        cut to at most 1024 bytes at a UTF-8 character boundary.
+        The frame is where the window shows without a claim of this connection, with its
+        server-side decorations and without its shadow: its own frame on the desktop, or, for a
+        window another connection claims (a window of the stage strip), the bounds at rest of
+        the hole that claims it. A hole of the overview that opens or closes there takes the
+        window over, or gives it back, without a jump (cupertino_hole_v1.set_claim). For a
+        minimized window it is the frame it had before it was minimized. Sent when the window
+        joins the set and again whenever one of these changes. The application id and the title
+        are each cut to at most 1024 bytes at a UTF-8 character boundary.
       </description>
       <arg name="id" type="uint"/>
       <arg name="app_id" type="string"/>
@@ -101,13 +109,20 @@
       <arg name="id" type="uint"/>
     </event>
 
+    <enum name="workspace_state" bitfield="true">
+      <entry name="current" value="1" summary="the workspace on screen"/>
+      <entry name="full_screen" value="2" summary="the workspace of a full-screen window: it is not removed or reordered and takes no other window"/>
+    </enum>
+
     <event name="workspace">
       <description summary="a workspace of the output">
-        One workspace of the output, in order; current is 1 for the one on screen. A group that
-        has workspace events lists every workspace: they replace the earlier list.
+        One workspace of the output, in order, with its state. A group that has workspace events
+        lists every workspace: they replace the earlier list. The full_screen bit names the
+        workspaces that remove_workspace, move_workspace and move_window leave alone, so the
+        component offers none of them for those.
       </description>
       <arg name="id" type="uint"/>
-      <arg name="current" type="uint"/>
+      <arg name="state" type="uint" enum="workspace_state"/>
     </event>
 
     <enum name="mode">

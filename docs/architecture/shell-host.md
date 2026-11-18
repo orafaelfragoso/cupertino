@@ -14,6 +14,10 @@ it are in `docs/plans/layered-architecture.md`. The wire is three protocol files
 The XML states each message exactly. This file states what the parts do together, the configuration, and the Rust
 API. A change to the behaviour changes this file first, in its own reviewed change.
 
+Every change of a message raises the version of its interface, and a message added after version 1 carries the
+version that added it (`since`). A host speaks the versions it was built with and no other
+([Versions](#versions)).
+
 ## Contents
 
 1. [Processes and connections](#processes-and-connections)
@@ -21,7 +25,8 @@ API. A change to the behaviour changes this file first, in its own reviewed chan
 3. [The host protocol](#the-host-protocol)
 4. [Transactions](#transactions)
 5. [`cupertino-kit-shell`](#cupertino-kit-shell)
-6. [Decisions for approval](#decisions-for-approval)
+6. [Edits of the existing protocol files](#edits-of-the-existing-protocol-files)
+7. [Decisions for approval](#decisions-for-approval)
 
 ## Processes and connections
 
@@ -49,7 +54,7 @@ API. A change to the behaviour changes this file first, in its own reviewed chan
 | `window_manager` | arrange the windows of an output (`cupertino_window_manager_v1`); claim windows in holes | `windowmanager` |
 | `overview` | follow an output's windows and workspaces (`cupertino_overview_v1`); claim windows in holes; show workspaces in holes; bind gestures to transactions | `overview` |
 | `windows` | show windows and minimized windows' pictures in holes (`cupertino_hole_v1`) | `dock`, `overview`, `windowmanager` |
-| `session_agent` | receive the session's requests for its panels (`log_out_requested`); be the session agent for `org.cupertino.Session1` | `agent` |
+| `session_agent` | receive the session's requests for its panels (`log_out_requested`); be the session agent for `org.cupertino.Session1` | `agent`; *(until W6.13)* `cupertino-login` |
 | `session_lock` | take the session lock (`ext_session_lock_v1`); receive `lock_requested` | `cupertino-login` |
 | `prompt` | draw prompt surfaces: above every other surface, left out of captures, no application holding the pointer or the shortcuts meanwhile | `cupertino-prompts` |
 | `consent` | answer desktop-control consent (`cupertino_control_authority_v1`) | `cupertino-prompts` |
@@ -85,6 +90,8 @@ roles or its bus names. The host holds the same names, each bound to its compone
 - The server sends a host's list in the table's order, and the host starts its components in that order.
 - A component owns its well-known names on its own bus connection and announces that connection's unique name to the
   server ([Identity](#identity)).
+- *(until W6.13)* No host holds `agent`: `cupertino-login` is the session agent
+  ([Programs the server starts itself](#programs-the-server-starts-itself)).
 - `cupertino shell list` names components by the first column; `cupertino shell restart NAME` takes the same names
   and the names of the programs under [Programs the server starts itself](#programs-the-server-starts-itself).
 
@@ -103,23 +110,36 @@ roles or its bus names. The host holds the same names, each bound to its compone
 
 | Key | Value | System file | A file of the person |
 |---|---|---|---|
-| `components` | names of the table: the components of the session | sets the list | refused, with a logged problem |
+| `components` | names of the table: the components of the session; every component of the table when the key is absent | sets the list | refused, with a logged problem |
 | `off` | names of the table: components that do not run | applies | applies |
 | `alone` | names of the table: components that each run in a separate host (D18) | applies; the packaged file leaves it empty | applies |
-| `processes` *(until W6.close)* | `[{"name", "command", "roles"}]`: supervised processes that are not components, with the rules the list has before the host exists | names processes with roles, under an install root | removes or reorders entries, adds none with roles |
+| `processes` *(until W6.close)* | `[{"name", "command", "roles"}]`: supervised processes, with the rules the list has before the host exists | names processes with roles, under an install root | removes or reorders entries, adds none with roles |
 
 - The components that run are `components` minus `off`. A name that is not in the table is a logged problem and is
   left out; the other names apply.
-- `off` and `alone` of the person's file take the place of the system file's, key by key. Neither file names a
-  command, a role or a bus name: `shell` holds names of the table and nothing else.
+- `off` and `alone` of the person's file take the place of the system file's, key by key. `components`, `off` and
+  `alone` hold names of the table and nothing else: no command, no role, no bus name.
 - Which file is the system file comes from the layer, as for every privileged key: `/etc/cupertino/compositor.json`
   and `/etc/cupertino/greeter.json`, named exactly.
 - The section is live. When a file changes, the server works out the components of each host again and sends each
   host its list. A component turned off is stopped and its holds end; one turned on starts; one that enters or leaves
   `alone` stops in the host it ran in and starts in the other, its persistent surfaces held in between.
-- A system file without a `shell` section runs no component, and the server says so in its log.
-- *(until W6.close)* A name is a component (`components`) or a process (`processes`), never both: a process entry
-  whose name is in `components` is refused with a logged problem. Each component's own task moves its name.
+- A system file without a `shell` section runs every component of the table.
+- The login session runs no component, whatever its file says ([`greeter.json`](#greeterjson)).
+
+*(until W6.close)* The two forms of the section and the two ways a name runs:
+
+- A `shell` that is an array is the list of supervised processes, the form of a file written for a server without
+  hosts: the server reads it as `{"processes": ARRAY}`, so `components` is every component of the table. A package
+  update leaves an edited `/etc/cupertino/compositor.json` in that form, and the session starts whole with it.
+- A name may be a component and have a process entry. The host comes first: the server lists the component to its
+  host, and starts the process entry only when the host program is not installed or the host answers `unavailable`
+  for the name. Otherwise the entry is left alone, with one logged note. So one file serves every build between the
+  first component in the host and the last.
+- `off` turns a name off whichever way it runs.
+- A process entry named like a program of [Programs the server starts itself](#programs-the-server-starts-itself)
+  (`login` in the installed files) is left alone with a logged note: the server starts that program itself.
+- After W6.close the array form is a logged problem and counts as no `shell` section.
 
 ### Development builds
 
@@ -132,6 +152,9 @@ the system file sets it.
   older than the installed `cupertino-shell`.
 - When the file is absent or refused, the component runs as the rest of the configuration says, in the installed
   host; a refusal is logged with its reason.
+- A host from the folder that was built with another version of an interface it uses does not run its component
+  ([Versions](#versions)): the server logs the versions and runs the component in the installed host, until
+  `cupertino shell restart NAME` tries the folder again.
 - Only a component whose roles are all in the allow-list may be named: `session`, `menu_bar`, `dock`,
   `window_manager`, `overview`, `windows`. A name with another role (`agent`) or outside the table is ignored with a
   warning.
@@ -150,7 +173,7 @@ programs are (installed under an install root, owned by root, not writable by ot
 |---|---|---|---|---|
 | `host` | `/usr/bin/cupertino-shell` | user | while a component runs | `host` |
 | `host-NAME` | `/usr/bin/cupertino-shell --only NAME`, or the development folder's | user | while component NAME runs alone | `host` |
-| `login` | `/usr/bin/cupertino-login` | user | always: the lock screen | `session`, `session_lock` |
+| `login` | `/usr/bin/cupertino-login` | user | always: the lock screen | `session`, `session_lock`; *(until W6.13)* `session_agent` |
 | `login` | `/usr/bin/cupertino-login --greeter` | login | always: the login screen | `session` |
 | `prompts` | `/usr/bin/cupertino-prompts` | user, on the hardware | always | `session`, `prompt`, `consent` |
 | `portal` | `/usr/bin/cupertino-portal` | user, on the hardware | always | `capture`, `global_shortcuts` |
@@ -159,10 +182,21 @@ programs are (installed under an install root, owned by root, not writable by ot
 
 - A host is restarted when it exits, whatever its status: never sooner than 1 s after its last start, a time that
   doubles with each exit up to 30 s and starts over after a run of 60 s. The server never gives a host up. An exit
-  the server asked for (`restart`, an empty list of a separate host) is not counted.
+  the server expects (after `restart`, after `lost` from a separate host, an empty list of a separate host) is not
+  counted.
+- A host that the server expects to exit and that has not exited after 2 s is killed through its pidfd.
 - The other programs keep the restart policy of the supervised processes: restarted after a failure with the same
   throttle, left stopped after a successful exit.
+- The server holds a pidfd of every program of the table from its start. A bus caller is one of them when the bus
+  daemon gives the caller's process as that one and it has not exited ([Identity](#identity)).
 - `cupertino-audiod` is started by the bus at first use, never by the server.
+- W5.5 makes `login` a row of this table: the server starts `cupertino-login` itself in both sessions, and no file
+  lists it.
+- *(until W6.13)* `cupertino-login` is the session agent. It holds `session_agent` beside `session_lock`, receives
+  `log_out_requested`, and `org.cupertino.Session1` takes its calls as the agent's by its process. The menu bar reads
+  the session menu's state from `org.cupertino.Login1` of the process the server names (`session_agent` of
+  `cupertino_menu_bar_v1`). W6.13 gives the role to the `agent` component alone, which publishes that state on the
+  host bus ([The host bus](#the-host-bus)).
 - *(until W6.14)* `polkit-agent` and `keyring-prompter` are started in the place of `prompts`, each with the `prompt`
   role, and the consent authority is offered to the `session_lock` role.
 
@@ -179,9 +213,12 @@ The login session's server reads `/etc/cupertino/greeter.json`, which the login 
 
 - No host starts. The server starts `cupertino-login --greeter` with the `session` role, as the table above says, and
   none of the user session's other programs.
+- The login session's server runs no component whatever the file holds: it reads `components` as empty, also when the
+  key is absent or the section is an array, and logs a `components` that names one.
 - The login screen draws layer surfaces through `cupertino-kit-shell` and has no lock surface: nothing is locked.
 - Every other key of `compositor.json` is valid in the file. A `dev_folder` key names no component that runs, so it
   has no effect.
+- W5.5 writes the packaged file in this form.
 
 ## The host protocol
 
@@ -191,34 +228,85 @@ The login session's server reads `/etc/cupertino/greeter.json`, which the login 
 2. The host binds `cupertino_host_v1` and gets `kind`, then its list: a `component` event for each name, then `done`.
 3. For each name the host calls `get_component` and `connect`. The server answers `connection` with a descriptor:
    the client end of a connection that holds the component's roles. The host starts the component's thread on it.
-4. The component binds `cupertino_component_v1`, gets its name and its holds, announces its bus name, persists its
-   persistent surfaces before their first buffer, and sends `ready` once it shows what it shows at start.
+4. The component binds `cupertino_component_v1`, gets its name, its instance number and its holds, announces its bus
+   connection, persists its persistent surfaces before their first buffer, and sends `ready` once it shows what it
+   shows at start.
 5. A list is sent again in whole whenever it changes. The host stops a component that left the list, then destroys
    its object; it asks for the connection of one that joined.
 
-A host that was built without a listed component answers `unavailable`: the server logs it and leaves the component
-stopped in that host.
+- A host that was built without a listed component answers `unavailable` with the reason `absent`: the server logs
+  it and leaves the component stopped in that host.
+- `get_component` with a name outside the table is a protocol error, so a host holds at most one object for each row
+  of the table. An object for a name of the table that is not in the host's list is inert: its `connect` waits. It
+  becomes live when a later list holds the name, and the waiting `connect` is answered then.
+- The instance number counts the connections the server handed out for the component in this session, from 1. It
+  tells one instance's transactions from another's ([Parts](#parts)).
+
+### Versions
+
+A host is built with one version of each interface of `cupertino-protocols` it uses, and the server offers one
+version of each. `cupertino-kit-shell` compares the two before it binds anything: on the host's connection for
+`cupertino_host_v1`, on a component's connection for every global the component binds.
+
+| Where the versions differ | The host | The server |
+|---|---|---|
+| On the host's connection | exits with status 76, bound to nothing | logs both versions |
+| On a component's connection | starts no component on it and sends `unavailable` with the reason `version` | logs it and leaves the component stopped in that host |
+
+- A host of the development folder that ends either way gives its component back to the installed host: the server
+  runs the component as the configuration says without the folder, until `cupertino shell restart NAME`.
+- The installed host and the server come from one package, so their versions differ only between a package update
+  and the next login. The server restarts such a host under the host policy and logs the versions each time.
 
 ### Identity
 
-- A component opens its own connection to the session bus, owns its well-known names there, and sends
-  `announce_bus_name` with the connection's unique name on its Wayland connection.
-- The server asks the bus daemon for the process behind that name and accepts it when it is the host process the
-  component's connection was handed to. The answer is `bus_name`, `accepted` or `refused`.
-- From then on `org.cupertino.Session1` judges a caller by component: a call from the announced name of `agent` is the
-  session agent's; a call from another connection of the same process is not.
-- `cupertino-peer` resolves a bus caller for every other service in two steps: the caller's process, which must be
-  a host (`ShellHosts` of `org.cupertino.Session1` lists the hosts' processes), and the component, the one whose
-  well-known names of the table the caller's connection owns. A component in a separate host resolves the same way.
-  A caller that is a host and owns no name of the table resolves to no component.
+A component is known on the session bus by the unique name of its own bus connection, which it proves to the server.
+
+1. The component opens its connection to the session bus and sends `announce_bus_name` with the connection's unique
+   name on its Wayland connection.
+2. The server answers `bus_nonce`: 128 random bits drawn for that announcement, which travel on that component's
+   Wayland connection and nowhere else.
+3. The component calls `org.cupertino.Session1.AnnounceComponent(nonce)` from the announced bus connection.
+4. The server accepts when the call's sender is the announced name, the nonce is that announcement's, unused and at
+   most 5 s old, the bus daemon gives the sender's process as the host process the component's connection was handed
+   to, and the name is accepted for no other component. A nonce is good for one call, whatever its answer.
+5. The answer is `bus_name`, `accepted` or `refused`, and the method returns or fails with it. No call within 5 s is
+   a refusal.
+
+- A unique name is one component's. An announcement of a name that is accepted for another component is refused,
+  and the other component keeps it. Sharing a process proves nothing: a component of the shared host that announces
+  another's name cannot make the call from that name.
+- Announcing again takes the component's accepted name away until the fresh announcement is accepted.
+- Before the acceptance, and after a refusal, the server takes a call from the component's bus connection as an
+  unknown caller's.
+- `cupertino-kit-shell` makes the announcement and the call when the component opens its session bus connection
+  (`bus::session`) and hands the connection to the component after the answer, so no call of the component precedes
+  its identity. A component never sees a nonce.
+
+Who a bus caller is:
+
+| Caller | Known by | To |
+|---|---|---|
+| A component | its accepted unique name | the server: a call from the accepted name of `agent` is the session agent's, and a call from another connection of the same process is not |
+| A component | `ComponentOf(name)` of `org.cupertino.Session1`, which answers from the accepted names: the component's name, or nothing | another component or a service, through `cupertino-peer` |
+| A shell host, whichever component | `ShellHosts` of `org.cupertino.Session1`: the hosts' process ids and start times | a service that asks only whether the shell calls |
+| The server | the owner of `org.cupertino.Session1`, a name the server owns before it starts a program and gives up to nobody | a component: the check that takes the place of "my parent process" |
+| `cupertino-login`, `cupertino-prompts`, `cupertino-screenshot`, `cupertino-portal`, `cupertino-control` | the process the server started, by the pidfd it holds | the server, as `caller::authorize` of `cupertino-server` judges its agents |
+
+- `cupertino-peer` resolves a caller in this order: the owner of `org.cupertino.Session1` is the server; a caller
+  whose process is a host (`ShellHosts`) is the component `ComponentOf` names for its unique name, or no component;
+  any other caller is no part of the shell. A component in a separate host resolves the same way.
+- `ComponentOf` answers any caller: it tells which unique name is which component, and nothing else.
+- The programs the server starts itself bind no `cupertino_component_v1` and announce nothing: each is a process of
+  its own, so its process is its identity.
 - No check compares process relations. Component sockets are close-on-exec: a program a component starts inherits
   neither its Wayland connection nor its bus connection.
 
 ### Failures and restarts
 
 A component fails when it panics (its own thread, one of its tasks or a helper thread), when its loop ends with an
-error, or when its loop returns without being asked. The host tears it down inside `catch_unwind`, shuts its sockets,
-and sends `failed` and then `connect`.
+error, when its loop returns without being asked, or when it is lost to a hang ([Hangs](#hangs)). For the first
+three the host tears it down inside `catch_unwind`, shuts its sockets, and sends `failed` and then `connect`.
 
 | Rule (D16) | Value | Kept by |
 |---|---|---|
@@ -226,15 +314,18 @@ and sends `failed` and then `connect`.
 | Each further failure | the time doubles, up to 8 s | `cupertino-server` |
 | The time starts over | after the component ran 60 s | `cupertino-server` |
 | The component stops | five failures within 60 s | `cupertino-server` |
+| A loss in that count | the run of an instance that is lost within 60 s of its start is left out of the 60 s | `cupertino-server` |
 | A stopped component starts again | `cupertino shell restart NAME`, or the next login | `cupertino-server` |
 
 - The server keeps the counts, so they outlive the host. It answers `connect` with `connection` when the time has
   passed, or with `stopped` when it gave up.
-- On `stopped` the host publishes `ComponentStopped` on the host bus, and the notifications component tells the
-  person.
+- A loss takes 10 s or more to be declared, so five of them never fall within 60 s of the clock. Leaving the lost
+  run out of the 60 s stops a component that hangs at every start after its fifth loss.
+- When the server gives a component up, in whichever host it ran, it tells the shared host (`component_stopped`).
+  The shared host publishes `ComponentStopped` on the host bus, and the notifications component tells the person.
 - `cupertino shell restart NAME` of a running component reaches its host as `restart` on the component's object: the
-  host stops the component and sends `connect`. It is not a failure, and the command is answered when the component
-  sends `ready`.
+  host stops the component and sends `connect`. It is not a failure. The command is answered when the component
+  sends `ready`, and after 10 s without it with an error that names the component as started and not ready.
 
 ### Hangs
 
@@ -243,17 +334,25 @@ the records every 0.5 s, after a start-up grace of 10 s for each component.
 
 | The loop has been out of its wait | The host sends | The server |
 |---|---|---|
-| at one check | `busy` | stops waiting for the component: a transaction that expects it starts without it |
+| for 0.5 s: at two checks in a row, with no return between them | `busy` | stops waiting for the component: a transaction that expects it starts without it |
 | for 2 s | `unresponsive` | releases its grabs, dismisses its transient surfaces, returns the focus to the window that had it, sends it no input |
 | and returns | `responsive` | sends it input again |
-| for 10 s | `lost` | holds its persistent surfaces, takes it out of the host's list, starts it alone in a separate host |
+| for 10 s | `lost` | counts a failure, holds its persistent surfaces, takes it out of the host's list, starts it alone in a separate host |
 
+- A loop caught in the middle of a turn at one check is not busy: a transaction's deadline bounds the wait for it
+  anyway, and a working component is never reported.
 - Before `lost` the host shuts the component's sockets down with `shutdown(2)` on descriptors it keeps for that
   purpose. It closes the component's descriptors only when the thread has ended, so none is reused under it.
+- With the sockets, the host cuts the component off inside the process: it leaves the host bus (nothing it
+  publishes is delivered, its retained messages go, its queue is dropped), and the results of its tasks and helper
+  threads are dropped unread. A lost thread that wakes reaches nothing.
 - After `lost` a shared host sends `request_restart`. The server answers `restart` once the seat has had no input for
-  2 s and no component of the host holds a grab or shows a transient surface; the host stops its components and
-  exits, and the server starts it again at once. That exit is not counted as a crash.
-- The lost component stays in its separate host for the rest of the session, or until `cupertino shell restart NAME`
+  2 s and no component of the host holds a grab or shows a transient surface, and at the latest 60 s after the
+  request; the host stops its components and exits, and the server starts it again at once. That exit is not counted
+  as a crash.
+- After `lost` a separate host exits at once, without waiting for the thread. The server kills one that has not
+  exited after 2 s, and starts a separate host for the component again when the failure's restart time has passed.
+- The lost component stays in a separate host for the rest of the session, or until `cupertino shell restart NAME`
   puts it back in the shared host.
 - The render thread reports to the same watchdog. A render thread out of its wait for 10 s is a hang of the whole
   process: the host exits with failure and the server restarts it.
@@ -266,19 +365,35 @@ of the component and names the surface on its output).
 | When | Persistent surfaces | Transient surfaces |
 |---|---|---|
 | The component is reported unresponsive | keep their place and their live picture, without input | dismissed at once; focus returns to the window that had it |
-| Its connection ends (failure, restart, lost, host exit) | held: the last picture and the reserved space stay, every animation at its end, without input | dismissed at once; their holes go and each claimed window returns to its frame along the server's return motion |
-| The component is declared stopped (`stopped`, turned off) | the holds end: the picture goes and the space is given back | |
+| Its connection ends (failure, restart, lost, host exit) | held: the last picture and the reserved space stay, every animation at its end, without input; their holes and claims stay | dismissed at once; their holes go and each claimed window returns along the server's return motion to where it shows without the claim |
+| The component is declared stopped (`stopped`, turned off) | the holds end: the picture goes and the space is given back; held claims and placements end, and each window returns to its frame along the server's return motion | |
+
+What is held with a persistent surface:
+
+- **Its holes and claims.** A hole of a held surface draws its source as before: a window live, a minimized
+  window's picture, a workspace live. A claim of a held hole stays in force, so the window stays in the hole and
+  takes no input there. The stage strip and the dock's minimized windows look the same through a restart.
+- **The component's placements.** The placements a window manager committed
+  (`cupertino_window_manager_v1.set_placement`) are held while a hold of that component lasts on the output: a
+  window placed `hidden` stays hidden. No window comes back on screen because its window manager restarts.
+- A hole whose window closes while it is held fades the window out as a live hole does, then draws nothing.
 
 What a restarted component takes over:
 
 - A surface it persists with the key of a hold on the same output takes the hold over. With that surface's first
   buffer, in the same frame, the held picture goes and the surface shows in its place; the reserved space passes to
   it with no change of the usable area in between, so no window moves and nothing flashes.
+- In that frame the held surface's holes and claims go and the holes and claims of that commit apply, and the held
+  placements of the output give way to the placements the instance committed before it: until that frame the
+  server keeps the instance's placement commits for the output and does not apply them. An instance that has
+  committed no placement by then leaves the held ones in force until its first `commit`.
+- When the surface that takes over has another exclusive zone than the held one, the usable area changes once, in
+  that frame, as for any change of an exclusive zone.
 - Nothing else. Role objects are made afresh and the server sends each feed from its start; what the instance before
   knew is gone unless the component stored it (D21). The component hears which keys are held (`hold`), so it knows it
   takes over and shows its surfaces without their opening motion.
-- `ready` ends every hold no surface took over. Without it the server ends them 10 s after it handed the connection
-  out.
+- `ready` ends every hold no surface took over, with its holes, claims and placements. Without it the server ends
+  them 10 s after it handed the connection out.
 
 ### Separate hosts
 
@@ -286,9 +401,11 @@ What a restarted component takes over:
   development folder, and for a component that was lost.
 - After three crashes of the shared host within 60 s, the server starts every component in a separate host for the
   rest of the session, so an abort, a stack overflow, an exhausted memory or a driver fault costs one component.
-- While any component runs there is one shared host, also when its list is empty: it serves the host bus.
+- While any component runs there is one shared host, also when its list is empty: it is the hub of the host bus.
 - A separate host whose list becomes empty stops its component and exits successfully; the server does not start it
   again.
+- A separate host never keeps a thread it cannot end: after `lost` it exits at once, and the server kills it when it
+  does not ([Hangs](#hangs)).
 
 ### The host bus and its bridge
 
@@ -297,47 +414,65 @@ and heard, never awaited.
 
 - Inside a host the bus is in memory: a publication goes to the queue of every component that follows its topic and
   wakes that component's loop.
-- The shared host serves the bus on a Unix stream socket in `$XDG_RUNTIME_DIR` (mode 0600), a path of its choosing
-  that it removes when it exits, and tells the server with `serve_bus`.
-- For each separate host the server draws a token of 128 random bits and sends it to both sides: `bus_peer` to the
-  shared host, `bus` with the path to the separate host. The separate host connects and presents the token; the
-  shared host accepts each token once and closes a connection that presents none within 1 s. `bus_peer_gone` voids a
-  token and closes its connection.
-- When the shared host starts again it serves another socket; the server sends every separate host the path and a
-  fresh token. Messages a separate host publishes meanwhile wait in it, the newest 256 kept.
+- A separate host reaches the bus through a bridge to the shared host: a Unix stream socket pair the server makes.
+  The server sends one end to the shared host (`bus_peer`, with the component's name) and the other to the separate
+  host (`bus`). No path, no token: the descriptor is the peer, and no other process can connect.
+- The server sends a fresh pair, one event to each side, when either host starts again and when either side says
+  its end closed or failed (`bus_dropped`), no sooner than 1 s after the pair before. Each side closes the end it
+  held. `bus_peer_gone` tells the shared host that a separate host ended.
+- Messages a separate host publishes while it has no bridge wait in it, the newest 256 kept.
 
 | Bridge rule | Value |
 |---|---|
 | Frame | a `u32` little-endian length, then JSON with a `type` tag; unknown tags and fields are errors |
 | Largest frame | 64 KiB |
-| First frame from the separate host | `{"type": "hello", "version": 1, "component": NAME, "token": TOKEN}` |
-| Answer | `{"type": "welcome", "version": 1}`, then every retained message, or the connection closes |
-| Afterwards, both ways | `{"type": "message", "from": NAME, "message": MESSAGE}` |
+| First frame from the separate host | `{"type": "hello", "version": 1, "component": NAME}` |
+| Answer | `{"type": "welcome", "version": 1}`, then every retained message; or the bridge closes |
+| After `welcome`, from the separate host | every retained message of its component, again |
+| Afterwards, both ways | `{"type": "message", "from": SENDER, "message": MESSAGE}`; `SENDER` is a component's name or `host` |
 
-The shared host forwards a message from a bridge to its own components and to the other bridges, and never back to
-its sender. A retained message stays with the bus until its publisher stops ([The host bus](#the-host-bus)).
+What the shared host checks on a bridge:
+
+- `hello.component` is the component the server named for that descriptor, and `version` is its own.
+- `from` of every message is that component.
+- No message of the `Host` topic comes over a bridge: the shared host alone publishes on it, as `host`.
+
+A bridge that fails a check is closed and logged, and the shared host reports it with `bus_dropped`. The shared host
+forwards a message from a bridge to its own components and to the other bridges, and never back to its sender. A
+retained message stays with the bus until its publisher stops ([The host bus](#the-host-bus)).
 
 ## Transactions
 
 ### Parts
 
 A transaction has a creator and any number of other participants, each a component connection with a
-`cupertino_transaction_v1` object of its own. It is named by its creator's component and a serial the creator chose,
-so the creator publishes the name on the host bus in the same turn that creates it, and another component joins by
-name.
+`cupertino_transaction_v1` object of its own. It is named by its creator's component, that component's instance
+number and a serial the instance chose, so the creator publishes the name on the host bus in the same turn that
+creates it, and another component joins by name. The instance number keeps the names of a restarted component apart
+from the names of the instance before, which the server remembers for 10 s.
 
 A participant's part is made of two things:
 
 | Part | How it joins | What it carries |
 |---|---|---|
-| Staged surfaces | `stage(surface)`: the surface's commits are kept from then on | the buffer and damage; the values, animations and looks of its layers and its presentation (`cupertino_layers_v1`); the state of its holes |
+| Staged surfaces | `stage(surface)`: the commits of the surface and of its layer surfaces are kept from then on | the buffer and damage; the values, animations and looks of its layers and its presentation (`cupertino_layers_v1`); the content of its layers; the state of its holes |
 | Window changes | the role requests between `begin_window_changes` and `end_window_changes` | the server's own changes of windows, with the animations it runs for them |
 
 - Motion is described once. An animation in a kept commit is a target with the numbers of a timed curve, a spring or
   samples; the toolkit takes the numbers from the catalogue's `Timing` (D7) and the server evaluates them with
   `cupertino-animation`. Nothing is sent per frame.
-- Kept commits of one surface add up in order, so the surface's state never goes backwards. Their frame callbacks are
-  answered as if they had been applied, so a component's frame pace does not wait for the transaction.
+- Kept commits of one surface add up in order, so the surface's state never goes backwards.
+- A layer's content applies on the layer surface's own commit, without waiting for its parent (`cupertino_layers_v1`).
+  While the parent is staged, the commits of its layer surfaces are kept with the parent's and applied with the
+  part, also for a layer made while the parent is staged. So a title or a label drawn in a layer shows on the start
+  frame and not before.
+- The frame callbacks of a kept commit are answered on the frame clock of the surface's output: with the next frame
+  of that output, once for each frame, as for a commit that was shown. A component that draws keeps the output's
+  pace and never runs ahead of it.
+- A kept buffer that a later kept commit of the same surface replaces is released at once, so a surface with two or
+  three buffers goes on drawing while its commits are kept.
+- A connection has one open bracket at most, whichever of its transactions opened it: the role requests belong to
+  the connection, so a second bracket could not tell its requests from the first's.
 - The requests that count as window changes:
 
 | Role object | Window changes |
@@ -351,6 +486,10 @@ A participant's part is made of two things:
 
 - A participant is ready when it sent `submit` and each surface it staged has committed since. One that has not
   submitted 100 ms after it created or joined is taken as submitted.
+- A part never waits without end. 100 ms after its `submit`, a participant with a staged surface that has not
+  committed is ready as it stands: that surface leaves the part, and the rest (the kept commits of its other
+  surfaces, its window changes) applies. `cupertino-kit-shell` commits a staged window in the update that submits,
+  also when the view draws nothing that differs, so a part of a Kit window is ready with its `submit`.
 - The transaction starts on the first frame of its output that the server prepares after the creator and every
   component it expects (`expect`) are ready, and at the latest on the first frame prepared after the deadline. The
   deadline counts from the creator's `submit`: one frame interval of the output plus 4 ms unless `set_deadline` gives
@@ -361,7 +500,11 @@ A participant's part is made of two things:
   runs as if it had started then, from the value and velocity its property had then. An animation whose end has
   passed is at its end.
 - A join by name that reaches the server before the creator's `create` waits for it, at most 100 ms, then starts as a
-  transaction of its own. A join within 10 s after the transaction ended applies with every animation at its end.
+  transaction of its own, on the clock of the output the join names. When the `create` is there, the creator's output
+  is the transaction's and the join's is not read.
+- A join within 10 s after the transaction ended applies with every animation at its end.
+- A connection takes part in at most 16 transactions that have not ended, the ones it created and the ones it
+  joined counted together.
 
 ### Gestures
 
@@ -379,9 +522,21 @@ swipe up, swipe down, pinch, spread. It needs the `overview` role.
 
 - The progress, its velocity and the rule that decides completed or reverted are the recogniser's
   (`cupertino-input`), the same for every binding.
+- A touchpad gesture belongs to the output under the pointer at the moment the recogniser claims it, and stays with
+  that output until the fingers lift.
 - `bind_reverse_gesture(gesture)` keeps a completed transaction for a second gesture, which drives the same
   properties from their values at rest back to the values they had when the first gesture began. Reverted, the
   transaction is over. The binding lasts until the creator destroys its object.
+- One binding takes a gesture. When several bindings wait for the same gesture on the same output, the server picks
+  at the moment the recogniser claims the gesture:
+
+  | Order | Binding | Among several |
+  |---|---|---|
+  | 1 | a reverse binding of a transaction at rest completed: what is on screen is taken back first | the transaction that completed last |
+  | 2 | a binding of an armed transaction | the transaction armed last |
+
+  The bindings passed over stay as they are and take a later gesture. A gesture under way is never handed from one
+  binding to another.
 - An armed transaction keeps its staged surfaces from showing later commits, so it suits a surface that shows nothing
   before the gesture. A participant whose surface draws all the time joins on `gesture_began` and shows at the
   progress reached.
@@ -403,11 +558,19 @@ A hole is a layer (`cupertino_layer_v1`) of a component's surface in which the s
 - A component never receives a hole's pixels. A capture leaves out of a hole what it leaves out at the source's own
   place.
 - `set_claim` takes a window off its own place: it is drawn in the hole alone and gets no pointer or touch input.
-  A hole that claims in the commit that first shows it, with its layer at the window's frame, takes the window over
-  with no change on screen. Claims need the `overview` or the `window_manager` role. The latest claim of a window is
-  in force.
-- A claim that the component ends with a commit puts the window at its frame from that commit. A claim that ends any
-  other way returns the window from where the hole showed it to its frame along the server's return motion.
+  A hole that claims in the commit that first shows it, with its layer where the window shows, takes the window over
+  with no change on screen. Claims need the `overview` or the `window_manager` role.
+- The claims of a window stack in the order they were applied. The latest is in force: the window is drawn in its
+  hole. Every claim below it is suspended, and its hole draws nothing meanwhile.
+- When the claim in force ends, the one below it is in force again and the window is drawn in that hole. The window
+  is back at its own frame when no claim is left. So where a window shows without a claim is the hole of the claim
+  below, or its own frame.
+- A claim that the component ends with a commit puts the window where it shows without that claim, from that
+  commit. A claim that ends any other way (the surface is dismissed, the connection ends without a hold) moves the
+  window there from where the hole showed it, along the server's return motion.
+- The overview over the stage strip is this stack: the strip's claim of a window is suspended while the overview
+  claims it, and the window is in the strip again from the commit that ends the overview's claim. The overview's
+  feed gives each window's frame as where it shows without the overview's claim, so the closing motion ends there.
 - A parent surface holds at most 64 layers and a connection 256 (`cupertino_layers_v1`), so one surface shows at
   most 64 holes.
 
@@ -420,7 +583,7 @@ the window manager's surface, and a window of a group the strip does not show is
 | # | Requirement | Met by |
 |---|---|---|
 | 1 | One clock | the start time is a presentation time of the transaction's output; every animation counts from it |
-| 2 | Several participants, one frame | parts are kept and applied together on the start frame; the server's window changes are a part |
+| 2 | Several participants, one frame | parts are kept and applied together on the start frame: a staged surface's commits, the commits of its layer surfaces, and the server's window changes |
 | 3 | Motion described, not streamed | animations travel as `cupertino_layers_v1` curves, springs and samples in kept commits |
 | 4 | Deadline; late parts join at the original start time | [Start, deadline and late parts](#start-deadline-and-late-parts) |
 | 5 | Gesture binding | [Gestures](#gestures) |
@@ -430,11 +593,11 @@ the window manager's surface, and a window of a group the strip does not show is
 
 | Question | Answer |
 |---|---|
-| A participant that dies mid-flight | What it had kept and not applied is dropped, and the transaction does not wait for it. On its held surfaces every animation is at its end at once; its transient surfaces are dismissed with their holes, and each claimed window returns to its frame along the server's return motion. The other parts go on. When the creator of a gesture-bound transaction dies, the binding ends and a gesture under way settles back to the start. |
+| A participant that dies mid-flight | What it had kept and not applied is dropped, and the transaction does not wait for it. On its held surfaces every animation is at its end at once, and their holes and claims stay ([Holds](#holds)); its transient surfaces are dismissed with their holes, and each claimed window returns along the server's return motion to where it shows without the claim. The other parts go on. When the creator of a gesture-bound transaction dies, the binding ends and a gesture under way settles back to the start. |
 | Cancellation | The creator's `cancel` ends the transaction for all. Before the start each part is applied at once, by itself, as ordinary commits and requests; a participant that wants its change undone commits the opposite first. After the start every animation stops at the value shown on the next frame and its client hears `replaced`; window changes carried out stay. A gesture under way settles back to its start. `cancel` or `destroy` from another participant withdraws that participant's part alone. Every participant hears `finished(cancelled)`. |
 | Two transactions on one property | The animation of the later start time takes the property from the value and velocity shown at that start, and the earlier animation's client hears `replaced`. A late part never takes a property back from a transaction that started after its own. |
 | Outputs with different clocks | A transaction has one output, named at `create`, and one start time. Another output shows the transaction on its first frame presented at or after the start time, each animation as far along as that frame's own presentation time says. When the output is gone or shows no frame, the start time is the server's clock at the moment the transaction was ready or its deadline passed. |
-| How a transaction latches with surface commits | `stage` keeps the surface's commits whole (buffer, damage, layer, presentation and hole state, subsurfaces' cached state) until the participant's part is applied, later commits added to earlier ones. The part is applied on the start frame, or on the frame after the participant became ready when it is late. After that the surface commits as usual. |
+| How a transaction latches with surface commits | `stage` keeps the surface's commits whole (buffer, damage, layer, presentation and hole state, subsurfaces' cached state) and the commits of its layer surfaces (their content) until the participant's part is applied, later commits added to earlier ones and a replaced buffer released. Frame callbacks of kept commits are answered with the output's frames. The part is applied on the start frame, or on the frame after the participant became ready when it is late; a staged surface that has not committed 100 ms after `submit` leaves the part. After that the surface and its layers commit as usual. |
 | Reduced motion | The layer protocol's rule holds inside a transaction: spatial animations are at their target in their first frame and opacity animates as asked, and the server's window changes take their reduced form. A component describes the reduced form of its own change, a fade. Under a gesture the progress drives opacity alone; spatial properties take their target when the progress rests at 1. |
 | A hole whose window closes | The hole keeps the window's last picture and fades it out where it lies, along the server's closing animation, then draws nothing. The component hears `source_closed` and lays out without the hole. |
 
@@ -448,9 +611,11 @@ before it sends.
 | Deadline without `set_deadline` | one frame interval + 4 ms |
 | Longest deadline | 100 ms |
 | A participant is taken as submitted | 100 ms after it created or joined |
+| A part is ready as it stands | 100 ms after its `submit` |
 | A join waits for its transaction | 100 ms |
 | An ended transaction is remembered | 10 s |
-| Transactions of a connection that have not ended | 16 |
+| Transactions of a connection that have not ended, created and joined | 16 |
+| Open brackets of a connection | 1 |
 | Staged surfaces of a participant | 32 |
 | Expected components | 16 |
 | Holes of a connection | 256 |
@@ -471,6 +636,8 @@ windows are Kit windows, motion is `kit::motion`, slow work is `kit::task`.
   goes out before the component's loop next waits. Called on a thread that runs no component, it does nothing and
   logs once.
 - Nothing blocks. An answer arrives as an `Event`, which the component turns into a message.
+- `hosting` is `cupertino-shell`'s alone: `cupertino-layers` fails any other crate that names
+  `cupertino_kit_shell::hosting`.
 
 ### Modules
 
@@ -482,13 +649,13 @@ windows are Kit windows, motion is `kit::motion`, slow work is `kit::task`.
 | `design` | `MenuBar`, `menu_bar` |
 | `menu_bar`, `dock`, `window_manager`, `overview` | each role's feed and requests |
 | `transaction` | `Id`, `Transaction`, `Handle`, `Gesture`, `Outcome`, `Event`, `create`, `join` |
-| `bus` | `Message` and its value types, `Topic`, `publish`, `follow`; `session` (the session bus connection) |
+| `bus` | `Message` and its value types, `Topic`, `Sender`, `publish`, `follow`; `session` (the session bus connection), `Caller`, `caller` |
 | `host` | `thread`, `Stop`, `spawn` |
 | `lock` | `lock`, `unlock`, `Event` |
 | `consent` | `bind`, `set_window`, `answer`, `stop`, `Request`, `App`, `Answer`, `Run`, `Event` |
 | `capture` | `windows`, `once`, `follow`, `Source`, `Options`, `Window`, `Follow`, `Event` |
 | `test_clock` | `display_unix_seconds`, `display_now`, `motion_settled` |
-| `hosting` | the host program's side: `Host`, `HostEvent`, `Kind`, `Liveness`, `Failure`, `Connection`, `Runtime`, `Running`, `Ended` |
+| `hosting` | the host program's side: `Host`, `HostEvent`, `Kind`, `Liveness`, `Failure`, `Unavailable`, `Connection`, `Runtime`, `Running`, `Ended` |
 
 ### Components and programs
 
@@ -610,8 +777,9 @@ pub enum Event {
     WindowManager(OutputId, window_manager::Update),
     Overview(OutputId, overview::Update),
     Transaction(transaction::Event),
-    Bus { from: ComponentName, message: bus::Message },
-    /// The session bus accepted or refused the component's announced name.
+    Bus { from: bus::Sender, message: bus::Message },
+    /// The server accepted or refused the component's announced bus connection. It arrives before `bus::session`
+    /// hands the connection over.
     BusIdentity { accepted: bool },
     Lock(lock::Event),
     Consent(consent::Event),
@@ -676,7 +844,14 @@ pub mod design {
 
 - Appearance and display options reach a component as they reach an application: `platform::SystemAppearance` and
   the theme its widgets are painted with.
-- An `OutputId` is the same in every component of a session, so it travels in a bus message.
+- An `OutputId` is the registry name of the output's `wl_output` global, which the server gives every connection
+  alike. It is the same in every component of a session, so it travels in a bus message.
+- It names the output while the output is plugged in. An output that is unplugged and plugged in again is another
+  output: `Event::Outputs` says that the one went and the other came, and the server may give the number of an
+  output that is gone to a later one. A component keeps nothing under an `OutputId` that `outputs::get` does not
+  know, drops a bus message that names one, and knows a monitor again by `Output::name`.
+- `Output::geometry` and every frame of a feed are in one space: global logical points, the space the outputs are
+  arranged in. A component subtracts its output's origin to lay a frame out on a surface of that output.
 
 ### Windows and applications
 
@@ -696,17 +871,23 @@ interface, with the request's name.
 | Module | Feed | Requests |
 |---|---|---|
 | `dock` | the window and application list: windows (application id, title, minimized, active), icons, launching and resident applications, attention, applications that do not respond; the application switcher; hot corners; `Engage`, `ToggleAppGrid`, `ToggleAutoHide`, `ForceQuitDialog` | `activate_app`, `activate_window`, `restore_window`, `set_minimize_target`, `force_quit_app`, `app_command`, `run_action`, `switcher_select`, `switcher_activate`, `switcher_cancel`, `switch_workspace`, `add_workspace`, `remove_workspace`, `move_workspace` |
-| `menu_bar` | the active application and its windows, its menus, the window's state and controls, shortcuts, the backdrop bands, the screen capture state, the session agent | `set_menu_open`, `window_command`, `activate_window`, `move_to_workspace`, `session_action`, `edit`, `force_quit_app` |
+| `menu_bar` | the active application and its windows, its menus, the window's state and controls, shortcuts, the backdrop bands, the screen capture state; *(until W6.13)* the session agent's process | `set_menu_open`, `window_command`, `activate_window`, `move_to_workspace`, `session_action`, `edit`, `force_quit_app` |
 | `window_manager` | the usable area and the arranged windows with their frames; `ToggleStage` | `place(ServerWindowId, Placement)`, `commit`, `activate_window`; `Placement` is `Stage` or `Hidden` |
-| `overview` | the area, the windows of the workspace with their frames, the workspaces; `Toggle { mode, app_id }` | `activate_window`, `switch_workspace`, `add_workspace`, `remove_workspace`, `move_workspace`, `move_window` |
+| `overview` | the area, the windows of the workspace with their frames, the workspaces, each with whether it is the current one and whether it is a full-screen one; `Toggle { mode, app_id }` | `activate_window`, `switch_workspace`, `add_workspace`, `remove_workspace`, `move_workspace`, `move_window` |
 
 - The types keep the names they have in `cupertino-shell-client` (`DockUpdate`, `DockChange`, `DockWindow`,
   `MenuBarUpdate`, `ActiveApp`, `AppWindow`, `Shortcuts`, `WindowCommand`, `EditAction`, `SessionAction` and the
   rest of that crate's list), inside their role's module. An output in a feed is an `OutputId`, and an image
   (a window's icon) is a `render::ImageResource`.
+- The session menu's state (the person's name, what the session can carry out) is no part of the menu bar's feed:
+  the `agent` component publishes it as `bus::Message::SessionMenu`, and the menu bar takes it from that sender
+  alone. *(until W6.13)* The agent is `cupertino-login`, a program outside the host bus: the feed names its
+  process, and the menu bar reads the state from `org.cupertino.Login1` of that process.
 - A minimized window's picture is a hole (`HoleSource::Thumbnail`), not an image in the feed. The dock's overview
   messages and the window manager's strip placement have no function: the overview is `overview`, and the strip is
   holes.
+- A request that names a full-screen workspace where the server takes none (`remove_workspace`, `move_workspace`,
+  `move_window`) does nothing: the feed's flag lets the component offer no such choice.
 - The object of a role exists while a window with that role does (`Role::MenuBar`, `Role::Dock`); the window
   manager's and the overview's exist for every output from the component's start.
 
@@ -732,18 +913,24 @@ pub fn holds() -> Vec<String>;
   what lies over the window (a title, a highlight).
 - The crate persists a surface whose `Surface::persistent` is set before its first frame, and sends `ready` once
   every persistent window of the first view has presented a frame.
+- A window that takes a hold over shows its holes, its claims and, for the window manager, its placements in its
+  first frame: the server swaps them for the held ones in that frame ([Holds](#holds)). A window manager commits
+  its placements in the update that first shows its window, so both arrive together.
 
 ### Transactions
 
 ```rust
 pub mod transaction {
+    /// A transaction's name: the creator, the instance of the creator the server numbered, and a serial that
+    /// instance chose.
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-    pub struct Id { pub component: ComponentName, pub serial: u32 }
+    pub struct Id { pub component: ComponentName, pub instance: u32, pub serial: u32 }
 
     /// Creates a transaction on the clock of `output`.
     pub fn create(output: OutputId) -> Transaction;
-    /// Joins the transaction another component created.
-    pub fn join(id: Id) -> Transaction;
+    /// Joins the transaction another component created. `output` is the creator's: the part starts on its clock
+    /// when the creator's transaction never comes.
+    pub fn join(id: Id, output: OutputId) -> Transaction;
 
     /// A part being described. Dropped without `submit`, it is withdrawn.
     pub struct Transaction(/* private */);
@@ -789,8 +976,11 @@ pub mod transaction {
   `motion::Timing`, in the commands its update returns. `stage` only says which transaction the change belongs to.
 - The crate sends `stage` for a window while none of the window's frames is handed over and not yet committed, so
   the next commit is the frame that carries the change.
-- A creator tells the other participants with `bus::Message::Transaction { id, scene }` in the same update. A
-  component that hears it calls `join(id)`, stages its window and submits.
+- The crate commits each staged window in the update that submits, also when the view draws nothing that differs:
+  a part is ready with its `submit` and never waits for a frame that does not come.
+- `window_changes` opens the connection's one bracket and closes it before it returns.
+- A creator tells the other participants with `bus::Message::Transaction { id, output, scene }` in the same update.
+  A component that hears it calls `join(id, output)`, stages its window and submits.
 - `Started::at` is on the clock of `platform::Timestamp`, so a component that draws something in step evaluates the
   same `Timing` from it.
 
@@ -798,28 +988,43 @@ pub mod transaction {
 
 ```rust
 pub mod bus {
-    /// What components say to each other. Serialised with a `type` tag; unknown tags and fields are errors.
+    /// What components say to each other. Serialised with a `type` tag; unknown tags and fields are errors. Every
+    /// variant is a struct variant, which the tag needs.
     #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
     pub enum Message {
-        /// From the host: the server stopped `component` after repeated failures.
+        /// From the host alone: the server stopped `component` after repeated failures.
         ComponentStopped { component: ComponentName },
         /// Open the panel, or close it when it is open.
         TogglePanel { panel: Panel, output: Option<OutputId> },
         /// Retained. Whether a panel is shown, and where.
         PanelShown { panel: Panel, shown: bool, output: Option<OutputId> },
-        SetDoNotDisturb(DoNotDisturb),
+        /// Turn do not disturb on or off; `lifetime` is the identifier of one of the durations offered.
+        SetDoNotDisturb { on: bool, lifetime: Option<String> },
         /// Retained. Whether do not disturb is in effect, and the durations offered (identifier, title).
         DoNotDisturbChanged { on: bool, lifetimes: Vec<(String, String)> },
+        /// Retained, from `agent`. The session menu's state: the person's name and what the session can carry out.
+        SessionMenu {
+            user_name: String,
+            lock: bool,
+            log_out: bool,
+            switch_user: bool,
+            sleep: bool,
+            restart: bool,
+            shut_down: bool,
+        },
         /// Show a level without changing it.
         ShowOsd { kind: OsdKind, level: f64 },
-        /// Join a transaction.
-        Transaction { id: transaction::Id, scene: Scene },
+        /// Join a transaction of `output`.
+        Transaction { id: transaction::Id, output: OutputId, scene: Scene },
     }
     pub enum Panel { ControlPanel, NotificationCenter, Launcher, Applications }
-    pub enum DoNotDisturb { Off, On, For(String) }
     pub enum OsdKind { Volume, Mute, Brightness, KeyboardBrightness }
     pub enum Scene { OverviewOpening, OverviewClosing, StageSwitch }
-    pub enum Topic { Host, Panels, DoNotDisturb, Osd, Transactions }
+    pub enum Topic { Host, Panels, DoNotDisturb, Session, Osd, Transactions }
+
+    /// Who published a message. Its serialised form is a string: the component's name, or `host`.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    pub enum Sender { Host, Component(ComponentName) }
 
     impl Message {
         pub fn topic(&self) -> Topic;
@@ -827,28 +1032,61 @@ pub mod bus {
         pub fn retained(&self) -> bool;
     }
 
-    /// Sends `message` to every component that follows its topic, the sender excepted.
+    /// Sends `message` to every component that follows its topic, the sender excepted. A message of `Topic::Host`
+    /// is the host's to publish: from a component it is dropped and logged.
     pub fn publish(message: Message);
     /// Follows `topics`: their messages arrive as `Event::Bus`, the retained ones at once.
     pub fn follow(topics: &[Topic]);
 
     /// The component's connection to the session bus, as `kit::bus::connect` gives one, on a socket the host can
-    /// shut. Its unique name is announced to the server when it is made; the answer is `Event::BusIdentity`.
+    /// shut. The crate announces it to the server and proves it (`AnnounceComponent`); `Event::BusIdentity` says
+    /// how that went, and `connected` gets the connection after it, accepted or not.
     pub fn session<M: Send + 'static>(
         connected: impl FnOnce(zbus::Result<zbus::Connection>) -> M + Send + 'static,
         closed: M,
     ) -> Vec<Command<M>>;
+
+    /// Who sent a call to the component's bus connection.
+    pub enum Caller {
+        /// The server: the owner of `org.cupertino.Session1`.
+        Server,
+        /// A component, by the name the server accepted for it.
+        Component(ComponentName),
+        /// Anyone else, a host's connection without an accepted name included.
+        Other,
+    }
+    /// Resolves `sender` through `cupertino-peer`. Awaited in a bus handler, on the bus's executor, never on the
+    /// component's thread.
+    pub async fn caller(connection: &zbus::Connection, sender: &zbus::names::UniqueName<'_>) -> Caller;
 }
 ```
 
 - A publication never waits and has no reply. A component that needs an answer follows the topic the answer is
   published on.
+- A message's sender is set by the bus, never by the publisher: the component whose thread published it, the
+  component of the bridge it came over, or the host. A component trusts a message by its `from`: the menu bar takes
+  `SessionMenu` from `Sender::Component(ComponentName::AGENT)` alone.
 - The bus keeps the latest retained message of each publisher and variant (and of each `panel`), and drops it when
   its publisher stops.
 - A queue holds 256 messages for a component; a component that does not empty its queue loses the oldest, and the
   host logs it once.
+- A component makes no call of its own before its identity is settled: `session` hands the connection over after
+  the server's answer, and a call the server would take as an unknown caller's is never sent early. With
+  `BusIdentity { accepted: false }` the component has a connection the server gives no component's rights.
+- A component accepts the server as a caller by `Caller::Server` and another component by `Caller::Component`. No
+  component compares process ids or asks for its parent.
 - Programs outside the hosts are reached through the session bus or the server's protocols, never through this bus.
-- The catalogue is the seven messages above. A message joins it with a change of this file.
+- The catalogue is the eight messages above. A message joins it with a change of this file.
+
+What the components read of each other goes over this bus and not over their session bus interfaces:
+
+| Reader | What | Message | Publisher |
+|---|---|---|---|
+| `menubar` | the session menu's state; *(until W6.13)* read from `org.cupertino.Login1` | `SessionMenu` | `agent` |
+| `menubar` | do not disturb and its durations | `DoNotDisturbChanged` | `notifications` |
+| `menubar` | which panels are open, and where | `PanelShown` | `controlcenter`, `notifications`, `launcher` |
+| `notifications` | a component the server stopped | `ComponentStopped` | the host |
+| any | open or close a panel, set do not disturb, show a level | `TogglePanel`, `SetDoNotDisturb`, `ShowOsd` | the component that asks |
 
 ### Threads and child processes
 
@@ -879,7 +1117,9 @@ pub mod host {
 
 - A helper thread is for work that waits without end (a watch, a device). Work that ends is a `kit::task`.
 - When a component stops, the host sets the stop of each of its helpers and joins them for 1 s. A helper that has
-  not ended by then is kept like a lost component's thread, and a shared host asks for a restart.
+  not ended by then is kept like a lost component's thread, cut off from the bus and its result dropped, and the
+  host asks for a restart (`request_restart`): a shared host gets it at the next quiet moment, a separate host at
+  once.
 - A child inherits no component socket. In a program of its own (`run`), `spawn` hands the child to the program's
   Kit instance, which reaps it.
 
@@ -966,27 +1206,37 @@ pub mod hosting {
     /// The host's connection (`WAYLAND_SOCKET`, `host` role).
     pub struct Host(/* private */);
     impl Host {
+        /// `Error::Version` when the server offers another version of `cupertino_host_v1` than the crate was built
+        /// with: the host exits with `EXIT_VERSION`.
         pub fn connect() -> Result<Host, Error>;
         /// Waits for events at most `timeout`. The host's main thread is no UI thread: it may wait.
         pub fn wait(&mut self, timeout: Duration) -> Result<Vec<HostEvent>, Error>;
-        /// `get_component` and `connect`; `connect` again for a component that has its object.
+        /// `get_component` and `connect`; `connect` again for a component that has its object. `name` is one the
+        /// server listed, so it is a name of the server's table.
         pub fn connect_component(&mut self, name: &str);
-        pub fn unavailable(&mut self, name: &str);
+        pub fn unavailable(&mut self, name: &str, reason: Unavailable);
         /// Destroys the component's object.
         pub fn release(&mut self, name: &str);
         pub fn report(&mut self, component: ComponentName, state: Liveness);
         pub fn failed(&mut self, component: ComponentName, cause: Failure);
         pub fn request_restart(&mut self);
     }
+    /// The status a host exits with when the server's version of the host protocol is not its own.
+    pub const EXIT_VERSION: i32 = 76;
     pub enum Kind { Shared, Separate }
     pub enum Liveness { Busy, Unresponsive, Responsive, Lost }
     pub enum Failure { Panic, Error, Exit }
+    pub enum Unavailable { Absent, Version }
     pub enum HostEvent {
         Kind(Kind),
         /// A whole list, as sent.
         Components(Vec<String>),
         Connection { component: ComponentName, connection: Connection },
+        /// The answer to a connect: the server starts the component no more by itself.
         Stopped { component: ComponentName },
+        /// To the shared host: the server gave `component` up, in whichever host. The host publishes
+        /// `bus::Message::ComponentStopped`.
+        ComponentStopped { component: ComponentName },
         RestartComponent { component: ComponentName },
         /// The quiet moment came: stop and exit.
         Restart,
@@ -998,11 +1248,14 @@ pub mod hosting {
     /// the reaper of child processes.
     pub struct Runtime(/* private */);
     impl Runtime {
-        /// A shared host serves the bus and tells the server; a separate one joins it when the server says where.
+        /// A shared host is the hub of the bus; a separate one joins it over the socket the server passes.
         pub fn for_host(host: &mut Host, kind: Kind, environment: Environment) -> Result<Runtime, Error>;
-        /// Starts `entry` on a thread of its own (8 MiB stack) on `connection`.
-        pub fn start(&self, entry: &'static Entry, connection: Connection) -> Running;
-        /// Publishes on the host bus as the host.
+        /// Starts `entry` on a thread of its own (8 MiB stack) on `connection`. `Error::Version` when the
+        /// connection offers another version of an interface the component binds than the crate was built with:
+        /// no thread starts, and the host answers `unavailable` with `Unavailable::Version`.
+        pub fn start(&self, entry: &'static Entry, connection: Connection) -> Result<Running, Error>;
+        /// Publishes on the host bus as the host. In a separate host a message of `Topic::Host` is dropped and
+        /// logged: the shared host alone publishes on that topic.
         pub fn publish(&self, message: bus::Message);
         /// How long the render thread has been out of its wait.
         pub fn render_busy_for(&self) -> Option<Duration>;
@@ -1015,7 +1268,9 @@ pub mod hosting {
         pub fn busy_for(&self) -> Option<Duration>;
         /// Asks its loop to end; teardown runs inside `catch_unwind`.
         pub fn stop(&self);
-        /// Shuts its Wayland and bus sockets down (`shutdown(2)`); the descriptors close when the thread has ended.
+        /// Cuts the component off. Its Wayland and bus sockets are shut down (`shutdown(2)`; the descriptors close
+        /// when the thread has ended). It leaves the host bus: nothing it publishes is delivered, its retained
+        /// messages go, its queue is dropped. The results of its tasks and helper threads are dropped unread.
         pub fn shut(&self);
         /// How it ended, once its thread and its helper threads have.
         pub fn ended(&mut self) -> Option<Ended>;
@@ -1024,27 +1279,62 @@ pub mod hosting {
 }
 ```
 
-- `Runtime` handles the bridge by itself: `serve_bus`, `bus`, `bus_peer` and `bus_peer_gone` never reach the host's
-  code.
+- `Runtime` handles the bridge by itself: `bus_peer`, `bus`, `bus_peer_gone` and `bus_dropped` never reach the
+  host's code.
+- A component the host started again publishes on the bus as itself from its first turn; the instance that was shut
+  is no publisher, so the two never speak side by side.
 - A panic in a component's thread, task or helper is caught at the thread's top; the state it leaves is dropped
   inside `catch_unwind`, and a second panic there leaks it. `ended` then gives `Failed(Failure::Panic)`.
-- The host's constants (check every 0.5 s, grace 10 s, unresponsive 2 s, lost 10 s, helper join 1 s) are named in
-  `cupertino-shell`; the restart and hold constants in `cupertino-server`.
+- The host's constants (check every 0.5 s, busy after 0.5 s, grace 10 s, unresponsive 2 s, lost 10 s, helper join
+  1 s, the exit status 76) are named in `cupertino-shell` and `cupertino-kit-shell`; the restart, hold, quiet-moment
+  and kill constants in `cupertino-server`.
+
+## Edits of the existing protocol files
+
+This specification changes messages of `cupertino-shell-v1.xml`, which holds the session, menu bar, dock and window
+manager interfaces. Each edit belongs to the task that builds what it describes, raises the version of
+`cupertino_shell_v1` (26 before the first), and lands with the server code that implements it.
+
+| Task | Interface | Edit |
+|---|---|---|
+| W5.5 | the protocol's description | the sentence that lets interfaces change without a version bump goes: every change raises the version |
+| W5.5 | `cupertino_session_v1` | `log_out_requested` is sent to the connection that holds the `session_agent` role, not the `session_lock` role |
+| W5.5 | `cupertino_menu_bar_v1` | `session_agent` names a process only while the agent is a program of its own; its trust is `none` when a component is the agent |
+| W5.5 | `cupertino_window_manager_v1` | when the connection of a window manager that is a component ends, its placements are held with its holds and replaced by the instance that takes the hold over ([Holds](#holds)); "every window is drawn and hit at its own frame again at once" holds for `destroy` and for the end of the holds; `commit` and `activate_window` are window changes inside a bracket |
+| W5.5 | `cupertino_dock_v1`, `cupertino_menu_bar_v1` | the requests of [Parts](#parts) are window changes inside a bracket |
+| W6.8 | `cupertino_dock_v1` | the overview leaves the dock: the events `overview_window`, `overview_workspace`, `overview_changed`, `overview_closed`, the enum `overview_mode` and the requests `overview_frame`, `overview_select`, `overview_close`, `overview_drag`, `overview_move_window`, `overview_workspace_frame` go, with the overview paragraph of the interface's description |
+| W6.8 | `cupertino_dock_v1` | `window_thumbnail` goes: a minimized window's picture is a `thumbnail` hole |
+| W6.8 | `cupertino_dock_v1` | `gesture` is sent only for a gesture no transaction is bound to on the output |
+| W6.8 | `cupertino_shell_v1` | `get_dock`: the clause on the origin of windows entering the overview goes |
+| W6.9 | `cupertino_window_manager_v1` | the strip leaves the server: the `strip` entry of `placement`, the rectangle of `set_placement`, `strip_pressed` and the strip half of `invalid_placement` go; the description says that a strip window is a claimed hole of the window manager's surface and that the server draws no strip |
+| W6.9 | `cupertino_shell_v1` | `get_window_manager`: the window manager has a surface of its own for the strip, an ordinary layer surface it persists |
+| W6.close | `cupertino_menu_bar_v1` | `session_agent` and `agent_trust` go with the process path: from W6.13 no client reads them |
+
+- W5.5's edits add to what the server does; the messages W6.8 and W6.9 remove keep working until those tasks, as
+  the server keeps drawing its own overview and strip until then.
+- W5.2 builds the holds, the roles and the identity that these descriptions name; the descriptions follow in W5.5,
+  the first task after it that owns the file.
+- Window frames of `cupertino_window_manager_v1` are in global logical coordinates, as those of
+  `cupertino_overview_v1` are: no edit.
 
 ## Decisions for approval
 
 Each is the default this specification takes where the plan leaves the choice open. Approving the specification
-approves them.
+approves them. A mark says what changed after review: *(changed)* for another default, *(extended)* for a default
+that keeps its choice and gains a rule, no mark for a default that stands as it was reviewed.
 
 1. **A third protocol file.** The overview component needs a role object of its own, since the dock holds the dock's.
    Default: `cupertino-overview-v1.xml`, with holes and transactions in place of the dock's overview frames, drags
    and workspace pictures. W4.10 generates bindings for three files.
-2. **The `shell` schema.** Default: `components` (system file only), `off` and `alone` (either file), and `processes`
-   until W6.close for the processes that are not components yet. Rejected: one list of objects with a mode for each
-   name, which lets a person's file restate the system's list.
+2. **The `shell` schema.** *(extended)* Default: `components` (system file only), `off` and `alone` (either file),
+   and `processes` until W6.close. Until W6.close an array is read as `processes`, a system file without the section
+   or without `components` runs every component of the table, and a name with both a component and a process entry
+   runs in the host, or as the process when the host has no such component. Rejected: one list of objects with a
+   mode for each name, which lets a person's file restate the system's list.
 3. **`alone` in a person's file.** Default: allowed, since it names no command and no role and costs memory only.
-4. **Roles.** Default: `host`, `overview`, `windows`, `session_agent` and `consent` join the server's roles; the
-   development folder's allow-list gains `overview` and `windows`, and `agent` never starts from it.
+4. **Roles.** *(extended)* Default: `host`, `overview`, `windows`, `session_agent` and `consent` join the server's
+   roles; the development folder's allow-list gains `overview` and `windows`, and `agent` never starts from it.
+   Until W6.13 `cupertino-login` holds `session_agent` and is the session agent.
 5. **Bus names.** Default: `org.cupertino.SessionAgent1` for `agent` and `org.cupertino.Dialogs1` for `dialogs`; the
    components without a service (`dock`, `desktop`, `windowmanager`, `overview`) own none.
 6. **`osd`'s role for the switcher and the picker.** Left to the design note of W6.12, which adds it to the tables
@@ -1053,39 +1343,64 @@ approves them.
    restart command runs one rebuilt component. Rejected: a development build of the shared host, which would put
    `agent` in a build from the folder or need a second shared host.
 8. **`cupertino-login` is started by the server**, not listed: the lock screen in a user session, the login screen in
-   the login session. A person's file cannot turn it off.
-9. **What counts as a failure.** Default: a panic, a loop that ends with an error and a loop that returns unasked all
-   count towards D16's five.
-10. **`busy`.** Default: sent at the first watchdog check that finds the loop out of its wait; the server's only
-    reaction is not to wait for the component.
+   the login session. A person's file cannot turn it off. *(extended)* W5.5 makes the change and writes
+   `greeter.json`.
+9. **What counts as a failure.** *(extended)* Default: a panic, a loop that ends with an error, a loop that returns
+   unasked and a loss to a hang all count towards D16's five. The run of an instance lost within 60 s of its start
+   is left out of the 60 s, so a component that hangs at every start is stopped.
+10. **`busy`.** *(changed)* Default: sent when the loop has been out of its wait for a whole check interval, 0.5 s,
+    not at one check that catches it mid-turn; the server's only reaction is not to wait for the component.
 11. **One shared host always.** Default: while any component runs there is a shared host, with an empty list when
-    every component runs alone, because D26 has the shared host serve the bus.
-12. **The bridge's trust.** Default: D26's socket in `$XDG_RUNTIME_DIR`, with a one-time token the server gives both
-    sides. Alternative: the server hands both hosts the two ends of a socket pair, which needs no path and no token
-    and changes D26's wording.
-13. **How `cupertino-peer` finds the hosts.** Default: `ShellHosts` of `org.cupertino.Session1`, the hosts' process
-    ids and start times.
-14. **Holds.** Default: a surface is persistent by `persist` with a key; a held surface's animations are at their end
-    at once; holds that nothing took over end on `ready`, or 10 s after the connection was handed out.
-15. **The latch.** Default: `stage` keeps whole commits and adds later ones; frame callbacks of kept commits are
-    answered at once; window changes join by a bracket around the role objects' own requests. Rejected: a second set of
-    animation requests on the transaction, which repeats `cupertino_layers_v1`.
-16. **Naming a transaction.** Default: the creator's component and a serial it chose, so no round trip precedes the
-    invitation; a join waits 100 ms for a `create` that has not arrived.
-17. **Gesture binding.** Default: the progress is linear in every property, one spring settles all of them, window
-    changes are carried out at rest at 1, a reverse gesture is a second binding of the same transaction, and binding
-    needs the `overview` role.
+    every component runs alone, because the shared host is the hub of the host bus.
+12. **The bridge's trust.** *(changed)* Default: the server makes a socket pair for each separate host and passes one
+    end to each side; a fresh pair follows a restart or a dropped bridge. No path, no token, no time limit on the
+    first frame. The shared host checks the component and the sender of every frame and alone publishes on the
+    `Host` topic. Rejected: a socket in `$XDG_RUNTIME_DIR` with a one-time token.
+13. **Who a bus caller is.** *(changed)* Default: a component proves its bus connection with a nonce the server
+    sends on its Wayland connection and it returns through `Session1.AnnounceComponent`; a name is one component's.
+    The server answers which component a unique name is (`ComponentOf`), from the accepted names. `ShellHosts`
+    (process ids and start times) says only whether a caller is a shell host. The server is the owner of
+    `org.cupertino.Session1`. The programs outside the host are known by their process. Rejected: resolving a
+    component by the well-known names its connection owns.
+14. **Holds.** *(extended)* Default: a surface is persistent by `persist` with a key; a held surface's animations are
+    at their end at once; a held surface keeps its holes and claims, and a window manager's placements are held with
+    its holds; the surface that takes a hold over replaces all of them in one frame; holds that nothing took over
+    end on `ready`, or 10 s after the connection was handed out.
+15. **The latch.** *(changed)* Default: `stage` keeps whole commits and adds later ones, with the commits of the
+    surface's layer surfaces; frame callbacks of kept commits are answered on the output's frame clock; a kept
+    buffer that a later kept commit replaces is released; a staged surface that has not committed 100 ms after
+    `submit` leaves its part; window changes join by a bracket around the role objects' own requests, one open
+    bracket for a connection. Rejected: a second set of animation requests on the transaction, which repeats
+    `cupertino_layers_v1`.
+16. **Naming a transaction.** *(changed)* Default: the creator's component, the instance number the server gave
+    that instance, and a serial it chose, so no round trip precedes the invitation and a restarted component's names
+    never meet the ones before; a join waits 100 ms for a `create` that has not arrived, then starts on the clock of
+    the output it names; joins count towards the 16 transactions of a connection.
+17. **Gesture binding.** *(extended)* Default: the progress is linear in every property, one spring settles all of
+    them, window changes are carried out at rest at 1, a reverse gesture is a second binding of the same transaction,
+    and binding needs the `overview` role. A gesture belongs to the output under the pointer when it is claimed.
+    Among several bindings for it, a reverse binding of a transaction at rest comes first, the last completed; then
+    the transaction armed last.
 18. **Cancellation.** Default: before the start the parts are applied separately, never dropped, so no surface's
     state differs from what its client believes; after the start animations stop where they are shown.
-19. **Holes.** Default: a hole is a whole layer, fitted and centred; claims are a hole's, the latest in force; a
-    third source, `workspace`, serves the overview's workspace pictures; one surface shows at most 64 holes, the
-    layer protocol's limit for a parent.
-20. **Tiling.** Default: the server's window model decides tiled frames; the window manager component decides the
-    stage and reaches windows through placements, claims and `activate_window`.
-21. **The bus catalogue.** Default: the seven messages listed; panels, do not disturb and the level display go over
-    the bus between components, and their session bus interfaces stay for other programs.
-22. **Where the host's mechanisms live.** Default: thread creation, sockets, the bridge and the host protocol's
-    client are `cupertino_kit_shell::hosting`, because a `shell` crate may start no thread; `cupertino-shell` holds
-    the policy and its constants.
-23. **Limits of the two protocols.** Default: one module of named constants in `cupertino-protocols`, as
+19. **Holes.** *(extended)* Default: a hole is a whole layer, fitted and centred; a third source, `workspace`, serves
+    the overview's workspace pictures; one surface shows at most 64 holes, the layer protocol's limit for a parent.
+    The claims of a window stack: the latest is in force, the ones below are suspended and come back in order when
+    it ends.
+20. **Tiling.** *(extended)* Default: the server's window model decides tiled frames; the window manager component
+    decides the stage and reaches windows through placements, claims and `activate_window`. The edits of
+    `cupertino-shell-v1.xml` belong to W5.5, W6.8 and W6.9
+    ([Edits of the existing protocol files](#edits-of-the-existing-protocol-files)).
+21. **The bus catalogue.** *(changed)* Default: the eight messages listed; panels, do not disturb, the level display
+    and the session menu's state go over the bus between components, and their session bus interfaces stay for other
+    programs. `SessionMenu` from `agent` takes the place of the menu bar's reads of `org.cupertino.Login1` and of
+    the process the server named for it. The host alone publishes on the `Host` topic.
+22. **Where the host's mechanisms live.** *(extended)* Default: thread creation, sockets, the bridge and the host
+    protocol's client are `cupertino_kit_shell::hosting`, because a `shell` crate may start no thread;
+    `cupertino-shell` holds the policy and its constants. `cupertino-layers` lets `cupertino-shell` alone name
+    `hosting`.
+23. **Limits of the protocols.** Default: one module of named constants in `cupertino-protocols`, as
     `cupertino_app_protocols::layers` is for the layer protocol.
+24. **Versions.** *(changed)* Default: every change of a message raises its interface's version; no interface
+    changes without it. A host binds only the versions it was built with: a host of the development folder that
+    finds another gives its component back to the installed host.

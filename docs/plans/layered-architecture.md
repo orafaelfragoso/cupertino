@@ -16,7 +16,7 @@ Updated by the lead at every merge.
 | | |
 |---|---|
 | Current wave | 4 |
-| Running tasks | W4.6 step 5, W4.11, the W4.8 design |
+| Running tasks | W4.6 step 5, the W4.8 design |
 | Enforced layers | foundation, system, graphics, models, protocol, transport, testing (126 remaining-work lines) |
 | Waiting on the owner | the W4.8 design, when written |
 | Last closed wave | 3 |
@@ -784,7 +784,7 @@ W4.7 step 1 (its approved types).
 **Owns** `capture`, `kit` (`Cargo.toml`, the new module). **Touches** the capture examples of `login files kit`.
 **After** W4.7.
 
-- [ ] The capture command's shared part is a module of `cupertino-kit` behind the `test` feature, beside the headless
+- [x] (b2ea34e41) The capture command's shared part is a module of `cupertino-kit` behind the `test` feature, beside the headless
       backend; the examples enable the feature as a dev-dependency.
 
 #### W4.T Tests of wave 4's crates

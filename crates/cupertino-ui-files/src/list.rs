@@ -46,8 +46,8 @@ const LEFT_TAB: Keysym = Keysym(0xfe20);
 pub const ROW_ICON: f64 = list_view::ICON_SIZE_DEFAULT as f64;
 /// A row: the icon size over the row padding.
 pub const ROW_HEIGHT: f64 = ROW_ICON + list_view::ROW_PADDING;
-/// Between a row's icon and its name.
-const NAME_GAP: f64 = 4.0;
+/// Between a row's icon and its name, in the list and in the column view.
+pub(crate) const NAME_GAP: f64 = 4.0;
 /// From a name cell's leading edge to its text: the item's icon and the gap after it.
 const NAME_TEXT_X: f64 = ROW_ICON + NAME_GAP;
 /// The program's message for each event a view reports, or none.
@@ -144,7 +144,7 @@ fn pressed(selection: &Selection, index: usize, mods: Mods) -> Selection {
 }
 
 /// One cell of row `index`: its presses.
-pub struct RowCell<M> {
+pub(crate) struct RowCell<M> {
     pub index: usize,
     /// The row's first cell, which holds its name.
     pub name: bool,

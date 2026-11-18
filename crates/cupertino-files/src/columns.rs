@@ -24,8 +24,6 @@ pub const MIN_WIDTH: f64 = column_view::MIN_WIDTH;
 pub const MAX_WIDTH: f64 = 1000.0;
 /// The width of the preview column at the end of the chain.
 pub const PREVIEW_WIDTH: f64 = 240.0;
-/// The height of a row: the 16 pt icon and the row's padding.
-pub const ROW_HEIGHT: f64 = 16.0 + column_view::ROW_EXTRA;
 
 /// The folders of the column view and their widths.
 #[derive(Clone, Debug, PartialEq)]

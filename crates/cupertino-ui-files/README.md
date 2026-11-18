@@ -25,24 +25,21 @@ public items: the family builds on them and `cupertino-ui-controls` gains no dep
 | `item_art` | the common items' art | `Art::{for_icon}` (folder, text, document, archive), `draw(art, px, seed)` (premultiplied RGBA) |
 | `metrics` | the views' measured values | `icon_view`, `list_view`, `column_view`, `timing`, `selection`, `marquee`, `drag` |
 | `grid` | the folder as a grid of icons with their names | `IconGrid<M>` (the content of the program's scroll view), `ItemIcon`, `NameShape`, `Grab`, `name` and `laid_out_name` (an item's name as the grid draws and lays it out), `cell_key`, `cell_index` |
-| `list` | the folder as an outline table: a header, a row an item with its icon and name first, folders that open in place, the band and the presses of its rows | `FileList<M>` (an element with `Element::from`), `Presses` (what a list's rows and its frame share: the program keeps one a window between views), `RowGrab`, `row_key`, `ROW_HEIGHT`, `ROW_ICON`; `RowCell`, a row's cell and its presses, which the column view in Files still uses until it joins the family |
+| `list` | the folder as an outline table: a header, a row an item with its icon and name first, folders that open in place, the band and the presses of its rows | `FileList<M>` (an element with `Element::from`), `Presses` (what a list's rows and its frame share, or a column's: the program keeps one a window between views), `RowGrab`, `row_key`, `ROW_HEIGHT`, `ROW_ICON` |
+| `columns` | a chain of folders side by side in a row that scrolls sideways, a divider after each column that resizes it | `FileColumns<M>` (an element with `Element::from`), `FileColumn` (the folder shown, another folder, one not listed yet, and the program's preview at the end), `column_key`, `ROW_HEIGHT`, `ROW_ICON` |
 | `band`, `clicks` (private) | the rubber band of the grid and the list, and what a press on an item means besides selecting it: a double click opens, a press on the only selected item's name renames it after the double-click interval | |
-| the crate's root | what a view reports | `ViewEvent` |
-
-A view is a widget with public fields, generic over the program's message `M`, as every control is. It takes plain
-values (the items, the selection, the scroll state, a function for an item's icon and one for what stands under an
-icon), never a model, a session or a window, and reports through one function, `on_event`, which turns each
-`ViewEvent` into the program's message or answers `None` for an event the program has no use for: nothing is sent
-for it. The list's table reports `Select`, `Open`, `Sort`, `Toggle` and `Scroll` through handlers that must give a
-message, so a list's function gives one for each of those.
+| the crate's root | what a view reports | `ViewEvent`, `ColumnEvent` |
 
 The family starts no thread and touches no file on its own: the functions that read or write files are blocking
 functions their caller runs, and only `operations` and the tag functions write, into locations the caller gives.
 
+The views' tests drive each view in a window on the headless window system through its public items
+(`tests/icon-grid.rs`, `tests/file-list.rs`, `tests/file-columns.rs`).
+
 ## Design
 
-The rest of this README is the design the owner approved for the family (W4.8 in the plan): the views come in W4.8's
-steps 4 to 6, the slow work and the places in W4.12.
+The views below are built as the design the owner approved for the family (W4.8 in the plan). The slow work, the
+places and the transfers in slices that follow them are W4.12's design, not built yet.
 
 ### What shapes it
 
@@ -62,7 +59,10 @@ steps 4 to 6, the slow work and the places in W4.12.
 A view is a widget with public fields, generic over the program's message `M`, as every control is. It takes plain
 values (the items, the selection, the scroll state, a function for an item's icon and one for the field a name is
 edited in), never a model, a session or a window. The three report through one event type and one function, which
-answers `None` for an event the program has no use for.
+answers `None` for an event the program has no use for: nothing is sent for it. The toolkit's table and lists the
+list and the columns are made of report `Select`, `Open`, `Sort`, `Toggle`, `Scroll` and a column's `Scroll` and
+`Pick` through handlers that must give a message, so a list's or a column view's function gives one for each of
+those.
 
 ```rust
 /// What a file view reports. The program gives each view one function that turns an event into its message, or

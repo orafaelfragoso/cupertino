@@ -6,8 +6,11 @@
 //! * [`rename`], [`name_edit`]: name checks, free names and the name being edited; [`open`]: default applications and
 //!   the Open With list; [`operations`]: new folders, renames, aliases, copies and moves, as blocking functions;
 //! * [`item_art`]: the art of the common items;
-//! * [`grid`]: the folder as a grid of icons ([`grid::IconGrid`]), and [`list`]: as an outline table
-//!   ([`list::FileList`]), which report through [`ViewEvent`].
+//! * [`grid`]: the folder as a grid of icons ([`grid::IconGrid`]), [`list`]: as an outline table
+//!   ([`list::FileList`]), and [`columns`]: a chain of folders side by side ([`columns::FileColumns`]), which report
+//!   through [`ViewEvent`].
+
+use std::path::PathBuf;
 
 use cupertino_geometry::{Point, Rect};
 use cupertino_ui_controls::{Selection, SortOrder, TreeToggle};
@@ -16,6 +19,7 @@ use cupertino_ui_core::layout::ScrollState;
 pub mod applications;
 mod band;
 mod clicks;
+pub mod columns;
 pub mod entry;
 pub mod geom;
 pub mod grid;
@@ -47,7 +51,7 @@ pub enum ViewEvent {
     ContextMenu(Point),
     /// A press on items of the grid went far enough to drag them.
     DragOut(grid::Grab),
-    /// A press on rows of the list went far enough to drag them.
+    /// A press on rows of the list, or of the shown folder's column, went far enough to drag them.
     DragRows(list::RowGrab),
     /// The rubber band being drawn, in the view's content; `None` once it is let go.
     Band(Option<Rect>),
@@ -61,4 +65,26 @@ pub enum ViewEvent {
     Sort((usize, SortOrder)),
     /// A folder's row of the list opens or closes.
     Toggle(TreeToggle),
+    /// The column view's own events.
+    Column(ColumnEvent),
+}
+
+/// What the column view reports besides what every view does.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ColumnEvent {
+    /// The column of this folder scrolled.
+    Scroll(PathBuf, ScrollState),
+    /// Row `index` of the column of `folder`, a folder other than the one shown, was chosen; `secondary` when a
+    /// secondary press chose it, whose context menu follows.
+    Pick {
+        folder: PathBuf,
+        index: usize,
+        secondary: bool,
+    },
+    /// Right (1) or Left (-1) in the column of the folder shown.
+    Step(isize),
+    /// A divider was dragged to make column `index` `width` wide; `all` with Option held.
+    Resize { index: usize, width: f64, all: bool },
+    /// The divider was let go.
+    Resized,
 }

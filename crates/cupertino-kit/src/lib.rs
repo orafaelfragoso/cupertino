@@ -171,12 +171,19 @@ pub mod prelude {
 /// The file family: a folder's items, their order, types, tags and names, the icon layout, opening, renaming and the
 /// file operations, and the measured metrics of the file views.
 pub mod files {
-    pub use cupertino_ui_files::ViewEvent;
+    pub use cupertino_ui_files::{ColumnEvent, ViewEvent};
 
     /// The virtual folder of the installed applications.
     pub mod applications {
         pub use cupertino_ui_files::applications::{
             any_installed, application_dirs, location, session_entries,
+        };
+    }
+
+    /// A chain of folders side by side.
+    pub mod columns {
+        pub use cupertino_ui_files::columns::{
+            column_key, FileColumn, FileColumns, ROW_HEIGHT, ROW_ICON,
         };
     }
 
@@ -197,13 +204,6 @@ pub mod files {
         };
     }
 
-    /// The folder as an outline table, and the row cell the column view Files draws shares with it.
-    pub mod list {
-        pub use cupertino_ui_files::list::{
-            row_key, FileList, Presses, RowCell, RowGrab, ROW_HEIGHT, ROW_ICON,
-        };
-    }
-
     /// The art of the common items.
     pub mod item_art {
         pub use cupertino_ui_files::item_art::{draw, Art};
@@ -218,6 +218,13 @@ pub mod files {
                 IconParams, LabelPrefs, SectionSpec,
             };
         }
+    }
+
+    /// The folder as an outline table.
+    pub mod list {
+        pub use cupertino_ui_files::list::{
+            row_key, FileList, Presses, RowGrab, ROW_HEIGHT, ROW_ICON,
+        };
     }
 
     /// The measured metrics of the file views.
@@ -242,7 +249,7 @@ pub mod files {
         /// The column view.
         pub mod column_view {
             pub use cupertino_ui_files::metrics::column_view::{
-                MIN_WIDTH, PREFERRED_WIDTH, PREVIEW_PANE_WIDTH, ROW_EXTRA,
+                MIN_WIDTH, PREFERRED_WIDTH, PREVIEW_PANE_WIDTH,
             };
         }
 

@@ -82,7 +82,7 @@ use cupertino_kit::files::open::{
 use cupertino_kit::files::operations::{self, DropAction};
 use cupertino_kit::files::sort::SortSpec;
 use cupertino_kit::files::tags::{self, TagColor};
-use cupertino_kit::files::ViewEvent;
+use cupertino_kit::files::{ColumnEvent, ViewEvent};
 
 /// Identifier of the window for the server, as the desktop entry names it.
 pub const APP_ID: &str = "cupertino-files";
@@ -350,6 +350,23 @@ fn view_events(id: u64) -> Rc<dyn Fn(ViewEvent) -> Option<Message>> {
             ViewEvent::FocusRow(index) => Event::FocusRow(index),
             ViewEvent::Sort(sort) => Event::Sort(sort),
             ViewEvent::Toggle(toggle) => Event::Toggle(toggle),
+            ViewEvent::Column(ColumnEvent::Scroll(folder, scroll)) => {
+                Event::ColumnScroll(folder, scroll)
+            }
+            ViewEvent::Column(ColumnEvent::Pick {
+                folder,
+                index,
+                secondary,
+            }) => Event::ColumnPick {
+                folder,
+                index,
+                secondary,
+            },
+            ViewEvent::Column(ColumnEvent::Step(by)) => Event::ColumnStep(by),
+            ViewEvent::Column(ColumnEvent::Resize { index, width, all }) => {
+                Event::ColumnResize { index, width, all }
+            }
+            ViewEvent::Column(ColumnEvent::Resized) => Event::ColumnResized,
         };
         Some(Message::Window(id, event))
     })

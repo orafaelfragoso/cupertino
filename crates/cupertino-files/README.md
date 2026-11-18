@@ -126,7 +126,7 @@ folder, read again whenever the listing changes and after a transfer). Changes o
 the theme's sidebar material where the compositor can draw it, and its opaque fill without desktop effects or under
 Reduce Transparency (Kit's sidebar panel glass).
 
-**Column view** (`columns`, `kit::columns`). The folders from the one the window opened on down to the selection stand
+**Column view** (`columns`, `kit::columns`, drawn by `cupertino_kit::files::columns`). The folders from the one the window opened on down to the selection stand
 side by side in a chain that scrolls sideways, each a list of 22 pt rows with the item's 16 pt icon, its name and a
 chevron on folders; a folder's row stays highlighted in grey (in the accent while its column has the keyboard) and the
 column after it lists it. The chain scrolls to keep its last column whole in view. Up and Down move in the column shown,
@@ -467,7 +467,7 @@ and `metrics::{icon_view, list_view, column_view, timing, selection, marquee, dr
 | `history`, `places` | navigation state | `History::{visit, back, forward}`; `standard_places` (the home folder, Applications, Desktop, Documents, Downloads, the computer, Trash), `recents_place`, `folder_icons`, `session_places` (`SessionPlaces`), `computer_name`, `applications_folder` |
 | `browser` | one window's folder | `Browser::{open, go, back, forward, parent, poll, sort_by, press, release, move_focus, select_all, type_text, activation, outline, expand, collapse, collapse_all, available_space, visit, return_to, is_loading}`: model, history (a `Visit` to go back to, with its selection), the list's outline of expanded folders, selection by path across reloads, nearest-ancestor fallback for a deleted folder |
 | `window_prefs` | the view and bars kept between windows | `WindowPrefs::{parse, text, load, save}`, `location`, `column_width` |
-| `columns` | the column view's chain | `ColumnChain::{follow, folders, width, resize, widths}`, `layout` → `ChainLayout` (where each column sits and the scroll that keeps the last whole), `DEFAULT_WIDTH`, `MIN_WIDTH`, `MAX_WIDTH`, `PREVIEW_WIDTH`, `ROW_HEIGHT` |
+| `columns` | the column view's chain | `ColumnChain::{follow, folders, width, resize, widths}`, `layout` → `ChainLayout` (where each column sits and the scroll that keeps the last whole), `DEFAULT_WIDTH`, `MIN_WIDTH`, `MAX_WIDTH`, `PREVIEW_WIDTH` |
 | `preview` | what a preview shows | `kind` → `PreviewKind`, `read_text` / `text_of` (`TEXT_LIMIT`), `summary`, `details`, `Browse` (the items gone through, `step`), `Motion` (the window's open and close, `at` → `MotionFrame`), `WINDOW_SIZE` |
 | `tab_strip` | a window's tabs | `TabStrip::{open, close, select, cycle, move_to, order, active_id}`, `tab_frames`, `drop_place` |
 | `window`, `format` | the window's wording and metrics | `metrics`, `ViewMode`, `path_chain`, `status_text`; `human_size`, `available_size`, `relative_date` |

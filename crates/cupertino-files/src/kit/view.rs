@@ -919,13 +919,6 @@ fn list(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
         });
     let now = win.now;
     let item_icons = Rc::clone(&session.icons);
-    let name_field = win.rename.as_ref().map(|r| {
-        let (value, revision, selection) =
-            (r.edit.text().to_owned(), r.revision, r.selection.clone());
-        let field: Rc<dyn Fn() -> Element<Message>> =
-            Rc::new(move || name_field(id, value.clone(), revision, selection.clone()));
-        (r.edit.index(), field)
-    });
     Element::from(FileList {
         window: id,
         label: window_title(browser.dir(), &session.places),
@@ -941,9 +934,24 @@ fn list(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
         ringed: ringed_items(win),
         band: win.band,
         lead: under_row(win),
-        name_field,
+        name_field: name_field_of(id, win),
         presses: win.list_presses.clone(),
         on_event: super::view_events(id),
+    })
+}
+
+/// The row whose name window `id` edits, and the field that stands in its name, for the list and the column view.
+#[allow(clippy::type_complexity)]
+pub(super) fn name_field_of(
+    id: u64,
+    win: &BrowserWindow,
+) -> Option<(usize, Rc<dyn Fn() -> Element<Message>>)> {
+    win.rename.as_ref().map(|r| {
+        let (value, revision, selection) =
+            (r.edit.text().to_owned(), r.revision, r.selection.clone());
+        let field: Rc<dyn Fn() -> Element<Message>> =
+            Rc::new(move || name_field(id, value.clone(), revision, selection.clone()));
+        (r.edit.index(), field)
     })
 }
 

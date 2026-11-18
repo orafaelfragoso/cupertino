@@ -25,6 +25,7 @@ const TURNS: u32 = 1000;
 
 pub const RETURN: Keysym = Keysym(0xff0d);
 pub const TAB: Keysym = Keysym(0xff09);
+pub const LEFT: Keysym = Keysym(0xff51);
 pub const RIGHT: Keysym = Keysym(0xff53);
 pub const DOWN: Keysym = Keysym(0xff54);
 pub const HOME: Keysym = Keysym(0xff50);

@@ -1,11 +1,13 @@
 //! A window suspended while its frame is away on a busy render thread: the UI thread does not wait for the renderer
-//! the render thread draws the frame with, and the renderer lets go of its layers once the frame is shown.
+//! the render thread draws the frame with, nor turns its loop over while the window waits for the frame, and the
+//! renderer lets go of its layers once the frame is shown.
 
 #[allow(dead_code)]
 mod support;
 
 use cupertino_kit::controls::WINDOW_CONTENT_INSET;
 use cupertino_kit::core::CommandRegistry;
+use cupertino_kit::core::StepStatus;
 use cupertino_kit::geometry::Size;
 use cupertino_kit::platform::{
     Capabilities, DecorationMode, PlatformEvent, Shown, Submitted, Timestamp, WindowEvent,
@@ -238,7 +240,12 @@ fn a_window_suspended_while_its_frame_waits_for_a_busy_render_thread_goes_on() {
                 .window_system_mut()
                 .configure(window, Some(Size::new(240.0, 96.0)), suspended)
                 .unwrap();
-            driver.run_until_idle(turns()).unwrap();
+            let rested = driver.run_until_idle(turns()).unwrap();
+            // the configure leaves the window waiting for its frame, not turning the loop over and over
+            assert!(
+                !matches!(rested, StepStatus::BudgetExhausted(_)),
+                "{rested:?}"
+            );
             handled.send(dropped.load(Ordering::SeqCst)).unwrap();
             settle(&mut driver, &frames, &mut at);
             dropped.load(Ordering::SeqCst)

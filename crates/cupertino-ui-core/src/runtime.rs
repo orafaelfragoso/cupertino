@@ -105,6 +105,12 @@ impl HeldKey {
 }
 
 impl<M> WindowState<M> {
+    /// Whether the window may draw a frame now: configured, the compositor ready for one, and no frame of it away
+    /// ([`WindowSystem::submit`]). A window that may not waits, and the loop with it, for what lets it.
+    fn may_draw(&self) -> bool {
+        self.configured && self.frame_ready && self.in_flight.is_none()
+    }
+
     /// Something in the window changed: lay it out and paint it again.
     fn invalidate(&mut self) {
         self.dirty = true;
@@ -717,10 +723,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             || self.executor.has_ready()
             || self.accessibility_behind()
             || self.semantics_behind()
-            || self
-                .windows
-                .iter()
-                .any(|w| w.dirty && w.configured && w.frame_ready)
+            || self.windows.iter().any(|w| w.dirty && w.may_draw())
     }
 
     fn pending(&self) -> Pending {
@@ -730,7 +733,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             frames: self
                 .windows
                 .iter()
-                .filter(|w| w.dirty && !(w.configured && w.frame_ready))
+                .filter(|w| w.dirty && !w.may_draw())
                 .count(),
             animating: self.windows.iter().any(|w| !w.animate.is_empty()),
             next_wake: self.next_wake(),
@@ -2955,7 +2958,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         }
 
         // a window whose last frame is still being drawn or committed away from the UI thread draws no other
-        if !(w.configured && w.frame_ready) || w.in_flight.is_some() {
+        if !w.may_draw() {
             return Ok(());
         }
         if let (WindowBackground::Solid(color), false) = (w.background, w.solid_refused) {

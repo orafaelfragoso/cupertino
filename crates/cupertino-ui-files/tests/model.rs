@@ -4,6 +4,7 @@
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -184,6 +185,35 @@ fn works_run_one_at_a_time_in_the_order_asked() {
     assert_eq!(model.poll(), [ModelDelta::Inserted { index: 0 }]);
     assert_eq!(names(&model), ["a"]);
     until(&mut model, &woken, |m| names(m) == ["a", "b"]);
+}
+
+#[test]
+fn a_listing_whose_work_panics_leaves_the_model_failed() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("item"), b"").unwrap();
+    // the work panics the first time it tells the model's consumer
+    let armed = Arc::new(AtomicBool::new(true));
+    let notify = Arc::new(move || {
+        if armed.swap(false, Ordering::SeqCst) {
+            panic!("the consumer is not there");
+        }
+    });
+    let mut model = DirectoryModel::open(dir.path(), options(false, 256), notify);
+    let deltas = run_all(&mut model);
+    assert!(
+        matches!(
+            deltas.last(),
+            Some(ModelDelta::OpenFailed {
+                kind: io::ErrorKind::Other,
+                ..
+            })
+        ),
+        "{deltas:?}"
+    );
+    assert_eq!(model.opened(), Some(false));
+    assert!(!model.is_loading());
+    assert!(!model.is_working());
+    assert!(model.take_work().is_none());
 }
 
 #[test]

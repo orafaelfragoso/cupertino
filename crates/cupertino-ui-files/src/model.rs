@@ -574,14 +574,24 @@ pub struct ModelWork {
 }
 
 impl ModelWork {
-    /// Blocking. What it read is in the model's queue when it returns.
+    /// Blocking. What it read is in the model's queue when it returns. It catches a panic of the work, so the panic is
+    /// not the program's: the first work then leaves [`ModelDelta::OpenFailed`], a later one [`ModelDelta::Error`].
     pub fn run(self) {
-        match (&self.job, &self.source) {
-            (Job::Open, Source::Folder) => self.open_folder(),
-            (Job::Open, Source::Recents(xbel)) => self.open_recents(xbel),
-            (Job::Open, Source::Applications(dirs)) => self.open_applications(dirs),
-            (Job::Read { names, itself }, _) => self.read(names, *itself),
-            (Job::Relist, _) => self.relist(),
+        let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            match (&self.job, &self.source) {
+                (Job::Open, Source::Folder) => self.open_folder(),
+                (Job::Open, Source::Recents(xbel)) => self.open_recents(xbel),
+                (Job::Open, Source::Applications(dirs)) => self.open_applications(dirs),
+                (Job::Read { names, itself }, _) => self.read(names, *itself),
+                (Job::Relist, _) => self.relist(),
+            }
+        }));
+        if ran.is_err() {
+            let error = format!("{}: the folder could not be read", self.dir.display());
+            self.shared.send(match self.job {
+                Job::Open => Msg::OpenFailed(io::ErrorKind::Other, error),
+                Job::Read { .. } | Job::Relist => Msg::Error(error),
+            });
         }
     }
 

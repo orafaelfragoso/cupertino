@@ -2205,7 +2205,8 @@ impl WindowSystem for WaylandWindowSystem {
             return Ok(Submitted::NotReady);
         }
         let (mut buffer, commit) = lease.detach().map_err(platform_error)?;
-        cupertino_ui_core::pool::cpu(move || {
+        // the window's frames on one thread, where what its renderer uses stays warm
+        cupertino_ui_core::pool::cpu_for(u64::from(window.0), move || {
             let _scope = scope.as_ref().map(diag::Scope::enter);
             let inside = |r: &PixelRect| clip(*r, size.0, size.1);
             // what the buffer misses: the frames shown in the others since it held one and those not shown

@@ -26,7 +26,8 @@ entered, else for the process's own (named by the program, its events the proces
 panic hook stay one per process, installed by `main`.
 
 Work that would hold up a UI thread goes to the process's pools as a command (`kit::task`): `task::cpu` on a pool of
-one thread a core, `task::io` on a pool of `task::IO_THREADS` for blocking work with the deadline the caller names.
+up to a thread a core, `task::io` on a pool of up to `task::IO_THREADS` for blocking work with the deadline the caller
+names; a pool starts a thread only when work finds every one it started busy.
 Each runs for the instance that asked, its result comes back to that UI thread as a message, one instance runs at most
 `task::IO_SHARE` I/O tasks at once, an I/O task still running past its deadline is reported once
 (`toolkit.task.overdue`, with its instance, deadline and call site), and a task's panic is its instance's and is raised

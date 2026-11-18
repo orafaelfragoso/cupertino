@@ -1,14 +1,15 @@
 //! Slow work off the UI thread. A task runs on one of the process's two pools and its result comes back to the UI thread
-//! that asked, as a message: [`cpu`] for work that computes (decoding, layout of a large document), on a pool with a
-//! thread per core; [`io`] for work that waits (files, a device, a slow call), on a pool of [`IO_THREADS`], where every
-//! task names the time it should take and is reported when it takes longer. One instance runs at most [`IO_SHARE`]
+//! that asked, as a message: [`cpu`] for work that computes (decoding, layout of a large document), on a pool of up to a
+//! thread per core; [`io`] for work that waits (files, a device, a slow call), on a pool of up to [`IO_THREADS`], where
+//! every task names the time it should take and is reported when it takes longer. One instance runs at most [`IO_SHARE`]
 //! tasks on the I/O pool at once; its others wait their turn, so a blocked mount stalls only the instance that met it.
 //!
 //! A task runs for the [`Instance`] whose thread asked for it: its diagnostic events are that instance's. A task that
 //! panics is recorded by the process's panic hook as the instance's panic, and the panic goes on in the UI thread that
 //! waits for its result, as if that thread had panicked itself.
 //!
-//! The pools are the process's, started on first use and shared by every instance.
+//! The pools are the process's, shared by every instance; each starts a thread only when work finds every one it
+//! started busy, up to its size.
 
 use crate::Instance;
 use cupertino_defaults::watch::{ConfigWatcher, WatchEvent};
@@ -206,17 +207,18 @@ fn io_submit(job: Job) {
     io_pool().submit(job);
 }
 
-/// The process's I/O pool: [`IO_THREADS`] threads, [`IO_SHARE`] for one instance at most.
+/// The process's I/O pool: up to [`IO_THREADS`] threads, started as work needs them, [`IO_SHARE`] for one instance at
+/// most.
 fn io_pool() -> &'static Pool {
     static IO: OnceLock<Pool> = OnceLock::new();
     IO.get_or_init(|| Pool::start("kit-io", IO_THREADS, Some(IO_SHARE)))
 }
 
-/// Threads that take jobs from one queue.
+/// Threads that take jobs from one queue, each started when a job finds every started one busy, up to `threads`.
 struct Pool {
+    name: &'static str,
+    threads: usize,
     queue: Arc<Queue>,
-    /// Whether a thread could be started; without one, jobs run on the thread that hands them over.
-    started: bool,
 }
 
 struct Queue {
@@ -234,6 +236,9 @@ struct QueueState {
     /// whether they were reported overdue.
     running: Vec<Running>,
     next: u64,
+    /// The threads started, and how many of them wait for a job.
+    started: usize,
+    idle: usize,
 }
 
 struct Running {
@@ -246,42 +251,57 @@ struct Running {
 }
 
 impl Pool {
-    fn start(name: &str, threads: usize, share: Option<usize>) -> Pool {
+    fn start(name: &'static str, threads: usize, share: Option<usize>) -> Pool {
         let queue = Arc::new(Queue {
             state: Mutex::default(),
             changed: Condvar::new(),
             share,
         });
-        let mut started = false;
-        for i in 0..threads {
-            let queue = Arc::clone(&queue);
-            let spawned = std::thread::Builder::new()
-                .name(format!("{name}-{i}"))
-                .spawn(move || queue.work());
-            match spawned {
-                Ok(_) => started = true,
-                Err(e) => eprintln!("cupertino-kit: cannot start a {name} thread: {e}"),
-            }
+        Pool {
+            name,
+            threads,
+            queue,
         }
-        if share.is_some() && started {
-            let queue = Arc::clone(&queue);
-            if let Err(e) = std::thread::Builder::new()
-                .name(format!("{name}-deadlines"))
-                .spawn(move || queue.watch())
-            {
-                eprintln!("cupertino-kit: cannot start the {name} deadline thread: {e}");
-            }
-        }
-        Pool { queue, started }
     }
 
+    /// Queues `job`, starting a thread for it when none waits for one and the pool has room; with no thread at all,
+    /// the job runs on the thread that hands it over.
     fn submit(&self, job: Job) {
-        if !self.started {
+        let mut state = lock(&self.queue.state);
+        if state.idle == 0 && state.started < self.threads {
+            let index = state.started;
+            let queue = Arc::clone(&self.queue);
+            match std::thread::Builder::new()
+                .name(format!("{}-{index}", self.name))
+                .spawn(move || queue.work())
+            {
+                Ok(_) => {
+                    state.started += 1;
+                    // the thread that reports overdue jobs, with the first that runs them
+                    if index == 0 && self.queue.share.is_some() {
+                        let queue = Arc::clone(&self.queue);
+                        if let Err(e) = std::thread::Builder::new()
+                            .name(format!("{}-deadlines", self.name))
+                            .spawn(move || queue.watch())
+                        {
+                            eprintln!(
+                                "cupertino-kit: cannot start the {} deadline thread: {e}",
+                                self.name
+                            );
+                        }
+                    }
+                }
+                Err(e) => eprintln!("cupertino-kit: cannot start a {} thread: {e}", self.name),
+            }
+        }
+        if state.started == 0 {
+            drop(state);
             let _entered = job.instance.as_ref().map(Instance::enter);
             (job.run)();
             return;
         }
-        lock(&self.queue.state).waiting.push_back(job);
+        state.waiting.push_back(job);
+        drop(state);
         self.queue.changed.notify_all();
     }
 }
@@ -304,10 +324,12 @@ impl Queue {
                     if let Some(at) = state.waiting.iter().position(|job| self.may_start(job)) {
                         break at;
                     }
+                    state.idle += 1;
                     state = self
                         .changed
                         .wait(state)
                         .unwrap_or_else(PoisonError::into_inner);
+                    state.idle -= 1;
                 };
                 let job = state.waiting.remove(at).expect("the position found");
                 let id = state.next;

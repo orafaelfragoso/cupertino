@@ -774,7 +774,7 @@ W4.7 step 1 (its approved types).
 
 **Owns** the scanner invocations in `cupertino-protocols`. **After** W4.9.
 
-- [ ] Client and server bindings for both protocols are generated and compile; nothing uses them yet.
+- [ ] Client and server bindings for the three protocols (host, transaction, overview) are generated and compile; nothing uses them yet.
 
 #### W4.11 `cupertino-kit` absorbs `cupertino-capture` (S)
 
@@ -846,7 +846,8 @@ W5.3.
 #### W5.5 What the components need from the server (M)
 
 **Owns** `server` (`config`, `capture/launch`, `shell`, `window_manager`), `defaults` (the `shell` section of
-`compositor.rs`). **After** W5.4.
+`compositor.rs`), `protocols` (the edits of `cupertino-shell-v1.xml` that `docs/architecture/shell-host.md` gives
+W5.5). **After** W5.4.
 
 - [ ] The component list of W4.9: the server starts a component through the host when the list says so, and as its own
       process otherwise. Each component task of wave 6 switches its own entry; W6.close removes the process path. This
@@ -964,8 +965,8 @@ At most three at a time, in this order:
 | W6.5 | `controlcenter` | audio through `cupertino-audiod`, power through `Session1` | W6.2, W5.4, W5.9 |
 | W6.6 | `launcher` | | W6.2 |
 | W6.7 | `menubar` | | W6.2 |
-| W6.8 | `dock` and new `shell-overview` | the overview's chrome and gestures move out of the dock; windows are holes; transitions are gesture-bound transactions | W6.2, W5.5 |
-| W6.9 | `windowmanager` | gains a surface for the stage strip; placements as transactions | W6.2, W5.5 |
+| W6.8 | `dock` and new `shell-overview` | owns the `protocols` edits `shell-host.md` gives W6.8; the overview's chrome and gestures move out of the dock; windows are holes; transitions are gesture-bound transactions | W6.2, W5.5 |
+| W6.9 | `windowmanager` | owns the `protocols` edits `shell-host.md` gives W6.9; gains a surface for the stage strip; placements as transactions | W6.2, W5.5 |
 | W6.10 | new `shell-desktop` | the desktop items, from `cupertino-files --desktop`, on Kit's file views | W6.2, W4.8 |
 | W6.11 | new `shell-dialogs`, `portal` as a service | `cupertino-screencast` becomes a module of the portal; file and application chooser in the component; the screenshot and global-shortcut consent dialogs in `cupertino-prompts`; the colour and sharing pickers in `cupertino-screenshot`; private bus interfaces between them, in `contracts.yaml`; the portal has no `#[cfg(test)]` left, since `services` is closed | W6.2, W6.4, W6.14 |
 
@@ -1170,3 +1171,8 @@ One line per change to a decision or approval of a design: date, number, what, w
   dropped a device another instance asked for; the settings watch read files on the UI thread. W4.6's measurement
   found more memory and slower CPU raster on the pool and a held frame at the GPU switch; the pools now start threads
   on demand and keep a window's frames on one lane, and a CPU frame no longer waits for the GPU device.
+- 2026-11-17: lead, review of W4.9: the specification is reworked before the owner sees it — a separate host exits on
+  `lost`, which counts toward the give-up; bus identity is proven with a nonce and duplicates are refused; held
+  surfaces keep their holes, claims and placements; staging keeps layer commits; the bridge is a socket pair the
+  server passes. W4.9 gives three protocol files, and W5.5, W6.8 and W6.9 own the edits of the existing protocol files
+  the specification gives them.

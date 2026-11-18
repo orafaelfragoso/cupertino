@@ -160,6 +160,8 @@ struct Window {
     shown: Option<(u32, u32)>,
     /// A frame callback is outstanding: the compositor will say when to draw.
     frame_pending: bool,
+    /// A frame [`WindowSystem::submit`] took is not back yet: it commits with a frame callback, which paces the next.
+    away: bool,
     /// The last present was not ready; the next frame waits for this.
     stalled: Option<Stall>,
     /// The surface layers whose present found no free buffer: a window stalled on a buffer waits for theirs too.
@@ -725,6 +727,7 @@ impl WaylandWindowSystem {
             carried: Vec::new(),
             shown: None,
             frame_pending: false,
+            away: false,
             stalled: None,
             busy_layers: Vec::new(),
             frame_wanted: false,
@@ -1053,7 +1056,7 @@ impl WaylandWindowSystem {
         let w = &mut self.windows[i];
         w.stalled = None;
         w.busy_layers.clear();
-        !w.frame_pending && std::mem::take(&mut w.frame_wanted)
+        !w.frame_pending && !w.away && std::mem::take(&mut w.frame_wanted)
     }
 
     fn send_size_limits(&mut self, window: WindowId) -> Result<Result<(), Error>, PlatformError> {
@@ -1098,15 +1101,31 @@ impl WaylandWindowSystem {
     /// at once before the commit (one the window asked for while handling the callback that let it draw) is folded
     /// into it, so the window draws once for each frame the compositor shows, not twice.
     fn await_frame_callback(&mut self, window: WindowId) -> Result<(), PlatformError> {
-        let before = self.queued.len();
-        self.queued.retain(|event| {
-            !matches!(event, PlatformEvent::Window { window: w, event: WindowEvent::Frame(_) } if *w == window)
-        });
-        let folded = self.queued.len() < before;
+        let folded = self.fold_due_frame(window);
         let w = self.window_mut(window)?;
         w.frame_pending = true;
         w.frame_wanted |= folded;
         Ok(())
+    }
+
+    /// `window`'s frame went to the render thread or the CPU pool, which commits it with a frame callback: the next
+    /// frame waits for that callback, a frame queued as due at once before the submit and one the window asks for
+    /// while the frame is away too, so the window is not handed frames it cannot draw until the frame is back.
+    fn submitted(&mut self, window: WindowId) -> Result<Submitted, PlatformError> {
+        let folded = self.fold_due_frame(window);
+        let w = self.window_mut(window)?;
+        w.away = true;
+        w.frame_wanted |= folded;
+        Ok(Submitted::Taken)
+    }
+
+    /// Takes the frames queued as due at once for `window` back; whether there was one.
+    fn fold_due_frame(&mut self, window: WindowId) -> bool {
+        let before = self.queued.len();
+        self.queued.retain(|event| {
+            !matches!(event, PlatformEvent::Window { window: w, event: WindowEvent::Frame(_) } if *w == window)
+        });
+        self.queued.len() < before
     }
 
     /// `window` presented frame `id` of `size` pixels: its feedback awaited, its next frame paced, and the size and
@@ -1160,6 +1179,9 @@ impl WaylandWindowSystem {
             size,
             drew,
         } = finished;
+        if let Ok(w) = self.window_mut(window) {
+            w.away = false;
+        }
         let shown = match drew {
             Drew::Gpu(drawn) => {
                 let (shown, drawn) = match drawn {
@@ -2080,7 +2102,7 @@ impl WindowSystem for WaylandWindowSystem {
         let Ok(w) = self.window_mut(window) else {
             return;
         };
-        if w.frame_pending || w.stalled.is_some() {
+        if w.frame_pending || w.away || w.stalled.is_some() {
             w.frame_wanted = true;
         } else {
             let id = w.id;
@@ -2180,7 +2202,7 @@ impl WindowSystem for WaylandWindowSystem {
                     let _ = drawn.commit();
                 }
             });
-            return Ok(Submitted::Taken);
+            return self.submitted(window);
         }
         let leased = tracing::trace_span!("wl.lease")
             .in_scope(|| self.conn.lease(surface, logical, BufferFormat::Abgr8888));
@@ -2280,7 +2302,7 @@ impl WindowSystem for WaylandWindowSystem {
             waker.wake();
             let _ = tracing::trace_span!("wl.commit").in_scope(|| commit.commit(damage.as_deref()));
         });
-        Ok(Submitted::Taken)
+        self.submitted(window)
     }
 
     /// The transport acknowledges the latest configure with every frame, so `configure` needs no request of its own; a

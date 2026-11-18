@@ -1,7 +1,7 @@
 # cupertino-protocols
 
 The private Wayland protocols between the Cupertino server and its shell processes, with generated bindings:
-`protocols/cupertino-shell-v1.xml`, `protocols/cupertino-screenshot-v1.xml`, `protocols/cupertino-control-v1.xml` and `protocols/cupertino-global-shortcuts-v1.xml`. The public protocols any client may bind
+`protocols/cupertino-shell-v1.xml`, `protocols/cupertino-screenshot-v1.xml`, `protocols/cupertino-control-v1.xml`, `protocols/cupertino-global-shortcuts-v1.xml`, `protocols/cupertino-host-v1.xml`, `protocols/cupertino-transaction-v1.xml` and `protocols/cupertino-overview-v1.xml` (modules `host`, `transaction` and `overview`, not used yet). The public protocols any client may bind
 live in `cupertino-app-protocols` (MPL-2.0); `client::{app_effects, scroll}` and `server::{app_effects, scroll}` re-export
 them, so the server names every protocol through this crate. Depends on `cupertino-app-protocols`.
 

@@ -1,11 +1,5 @@
 {
-  "shell": [
-    {
-      "name": "login",
-      "command": [
-        "/usr/bin/cupertino-login",
-        "--greeter"
-      ]
-    }
-  ]
+  "shell": {
+    "components": []
+  }
 }

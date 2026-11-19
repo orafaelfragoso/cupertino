@@ -218,13 +218,28 @@ fn a_shell_process_has_the_roles_the_file_lists_and_the_session_role_by_default(
     );
     assert!(p.is_empty(), "{p:?}");
     let shell = s.shell.unwrap();
-    assert_eq!(shell[0].name, "bar");
+    let procs = shell.processes.unwrap();
+    assert_eq!(procs[0].name, "bar");
     assert_eq!(
-        shell[0].roles,
+        procs[0].roles,
         [ShellRoleName::MenuBar, ShellRoleName::Session]
     );
-    assert_eq!(shell[1].roles, [ShellRoleName::Session]);
-    assert_eq!(shell[1].command, ["x", "y"]);
+    assert_eq!(procs[1].roles, [ShellRoleName::Session]);
+    assert_eq!(procs[1].command, ["x", "y"]);
+
+    // Object form (`shell-host.md`): components, off, alone, processes.
+    let (obj, p2) = parse(
+        r#"{"shell": {"components": ["menubar", "dock"], "off": ["dock"], "alone": ["menubar"]}}"#,
+    );
+    assert!(p2.is_empty(), "{p2:?}");
+    let sec = obj.shell.unwrap();
+    assert_eq!(
+        sec.components.as_deref(),
+        Some(&["menubar".to_string(), "dock".to_string()][..])
+    );
+    assert_eq!(sec.off.as_deref(), Some(&["dock".to_string()][..]));
+    assert_eq!(sec.alone.as_deref(), Some(&["menubar".to_string()][..]));
+    assert!(sec.processes.is_none());
 }
 
 #[test]
@@ -240,6 +255,7 @@ fn only_the_shells_own_chrome_may_start_from_the_development_folder() {
     };
     for (roles, allowed) in [
         (vec![ShellRoleName::Dock, ShellRoleName::Session], true),
+        (vec![ShellRoleName::Overview, ShellRoleName::Windows], true),
         (vec![ShellRoleName::Dock, ShellRoleName::SessionLock], false),
         (vec![ShellRoleName::Clipboard], false),
         (vec![ShellRoleName::SessionLock], false),

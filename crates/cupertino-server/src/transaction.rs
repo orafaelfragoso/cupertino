@@ -78,6 +78,7 @@ pub enum QueuedWindowChange {
         window: WindowId,
         workspace: WorkspaceId,
     },
+    CommitWindowManager(OutputId),
     RequestRedraw,
 }
 
@@ -873,6 +874,9 @@ impl Cupertino {
             }
             QueuedWindowChange::MoveWindowToWorkspace { window, workspace } => {
                 self.command(cupertino_wm::Command::MoveWindowToWorkspace { window, workspace });
+            }
+            QueuedWindowChange::CommitWindowManager(output) => {
+                self.commit_placements(output);
             }
             QueuedWindowChange::RequestRedraw => self.request_redraw(),
         }

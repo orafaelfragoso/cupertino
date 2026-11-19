@@ -204,6 +204,21 @@ impl ScrollBarsName {
     }
 }
 
+/// Known shell host component names (in canonical table order, `docs/architecture/shell-host.md`).
+pub const SHELL_COMPONENTS: [&str; 11] = [
+    "menubar",
+    "dock",
+    "desktop",
+    "windowmanager",
+    "overview",
+    "launcher",
+    "notifications",
+    "controlcenter",
+    "osd",
+    "agent",
+    "dialogs",
+];
+
 /// A role of the shell protocol a process the server starts can be given.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShellRoleName {
@@ -212,6 +227,10 @@ pub enum ShellRoleName {
     MenuBar,
     Dock,
     WindowManager,
+    /// Follow an output's windows and workspaces (`cupertino_overview_v1`), claim windows and bind gestures.
+    Overview,
+    /// Bind window/thumbnail holes (`cupertino_transaction_manager_v1.get_hole`).
+    Windows,
     /// Take the session lock (`ext-session-lock`): the lock screen.
     SessionLock,
     /// Use data control: read and set the selections without focus (a clipboard history).
@@ -219,11 +238,13 @@ pub enum ShellRoleName {
 }
 
 impl ShellRoleName {
-    pub const ALL: [ShellRoleName; 6] = [
+    pub const ALL: [ShellRoleName; 8] = [
         ShellRoleName::Session,
         ShellRoleName::MenuBar,
         ShellRoleName::Dock,
         ShellRoleName::WindowManager,
+        ShellRoleName::Overview,
+        ShellRoleName::Windows,
         ShellRoleName::SessionLock,
         ShellRoleName::Clipboard,
     ];
@@ -234,6 +255,8 @@ impl ShellRoleName {
             ShellRoleName::MenuBar => "menu_bar",
             ShellRoleName::Dock => "dock",
             ShellRoleName::WindowManager => "window_manager",
+            ShellRoleName::Overview => "overview",
+            ShellRoleName::Windows => "windows",
             ShellRoleName::SessionLock => "session_lock",
             ShellRoleName::Clipboard => "clipboard",
         }
@@ -244,7 +267,8 @@ impl ShellRoleName {
     }
 
     /// Whether a process holding this role may still start from the development folder: the roles of the session's
-    /// own chrome. The lock screen's and data control's may not, nor may any role added later.
+    /// own chrome (`session`, `menu_bar`, `dock`, `window_manager`, `overview`, `windows`). The lock screen's,
+    /// session agent's and data control's may not.
     pub fn allows_dev_folder(self) -> bool {
         matches!(
             self,
@@ -252,8 +276,24 @@ impl ShellRoleName {
                 | ShellRoleName::MenuBar
                 | ShellRoleName::Dock
                 | ShellRoleName::WindowManager
+                | ShellRoleName::Overview
+                | ShellRoleName::Windows
         )
     }
+}
+
+/// The `shell` section of `compositor.json` (`docs/architecture/shell-host.md`): host components
+/// (`components`, `off`, `alone`) and legacy supervised `processes` (until W6.close).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ShellSection {
+    /// Host components enabled for the session (system file only; absent means all [`SHELL_COMPONENTS`]).
+    pub components: Option<Vec<String>>,
+    /// Host components turned off (applies in system or user file).
+    pub off: Option<Vec<String>>,
+    /// Host components running in separate host processes (applies in system or user file).
+    pub alone: Option<Vec<String>>,
+    /// Legacy supervised shell processes (accepted until W6.close, including from the top-level array form).
+    pub processes: Option<Vec<ShellEntry>>,
 }
 
 impl ShellEntry {
@@ -336,7 +376,7 @@ pub struct CompositorSettings {
     pub wallpaper_dark: Option<String>,
     /// Absolute paths of the folders of pictures the user added in Settings (the server does not read them).
     pub wallpaper_folders: Option<Vec<String>>,
-    pub shell: Option<Vec<ShellEntry>>,
+    pub shell: Option<ShellSection>,
     pub screenshot: Option<Vec<String>>,
     pub dev_folder: Option<DevFolder>,
 }
@@ -394,6 +434,69 @@ fn strings(v: &Value) -> Result<Vec<String>, String> {
         .iter()
         .map(|s| string(s).map(str::to_string))
         .collect()
+}
+
+fn shell_section(v: &Value) -> Result<ShellSection, String> {
+    if v.is_array() {
+        return Ok(ShellSection {
+            components: None,
+            off: None,
+            alone: None,
+            processes: Some(shell_entries(v)?),
+        });
+    }
+    let obj = v
+        .as_object()
+        .ok_or_else(|| format!("expected a shell object or list of processes, got {v}"))?;
+    let components = obj.get("components").map(strings).transpose()?;
+    let off = obj.get("off").map(strings).transpose()?;
+    let alone = obj.get("alone").map(strings).transpose()?;
+    let processes = obj.get("processes").map(shell_entries).transpose()?;
+    Ok(ShellSection {
+        components,
+        off,
+        alone,
+        processes,
+    })
+}
+
+fn shell_entries_value(list: &[ShellEntry]) -> Value {
+    Value::Array(
+        list.iter()
+            .map(|e| {
+                let mut m = Map::new();
+                m.insert("name".into(), Value::String(e.name.clone()));
+                m.insert("command".into(), strings_value(&e.command));
+                m.insert(
+                    "roles".into(),
+                    Value::Array(
+                        e.roles
+                            .iter()
+                            .map(|r| Value::String(r.name().into()))
+                            .collect(),
+                    ),
+                );
+                Value::Object(m)
+            })
+            .collect(),
+    )
+}
+
+fn shell_section_value(section: &ShellSection) -> Value {
+    let mut m = Map::new();
+    if let Some(c) = &section.components {
+        m.insert("components".into(), strings_value(c));
+    }
+    if let Some(o) = &section.off {
+        m.insert("off".into(), strings_value(o));
+    }
+    if let Some(a) = &section.alone {
+        m.insert("alone".into(), strings_value(a));
+    }
+    if let Some(p) = &section.processes {
+        m.insert("processes".into(), shell_entries_value(p));
+    }
+    Value::Object(m)
 }
 
 fn shell_entries(v: &Value) -> Result<Vec<ShellEntry>, String> {
@@ -674,25 +777,7 @@ const KEYS: &[JsonKey] = &[
     json_key!(wallpaper_folders, absolute_paths, |l: &Vec<String>| {
         strings_value(l)
     }),
-    json_key!(shell, shell_entries, |list: &Vec<ShellEntry>| Value::Array(
-        list.iter()
-            .map(|e| {
-                let mut m = Map::new();
-                m.insert("name".into(), Value::String(e.name.clone()));
-                m.insert("command".into(), strings_value(&e.command));
-                m.insert(
-                    "roles".into(),
-                    Value::Array(
-                        e.roles
-                            .iter()
-                            .map(|r| Value::String(r.name().into()))
-                            .collect(),
-                    ),
-                );
-                Value::Object(m)
-            })
-            .collect()
-    )),
+    json_key!(shell, shell_section, shell_section_value),
     json_key!(
         screenshot,
         |v: &Value| strings(v).and_then(|c| if c.is_empty() {

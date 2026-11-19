@@ -5,12 +5,12 @@
   </copyright>
 
   <description summary="private protocol between the Cupertino server and its shell processes">
-    Roles the server gives only to the shell processes it starts (menu bar, dock, window manager,
-    session observer). Applications use cupertino_app_effects_v1 instead. The protocol is unstable until phase 1 of
-     ends: interfaces may change without a version bump until then.
+    Roles the server gives only to the shell processes and host components it starts (menu bar,
+    dock, window manager, session observer). Applications use cupertino_app_effects_v1 instead.
+    Every change of a message raises the version of its interface.
   </description>
 
-  <interface name="cupertino_shell_v1" version="26">
+  <interface name="cupertino_shell_v1" version="27">
     <description summary="shell services of the server">
       Global singleton, offered only to the processes the server started for a shell role, on a
       connection of their own. Each request needs the role it creates: a connection that holds
@@ -100,8 +100,11 @@
       animates every window from where it is drawn to its committed placement, draws strip
       windows as live thumbnails scaled into their rectangle, keeps strip and hidden windows out
       of pointer hit testing and reports presses on strip windows. A window starts on the stage
-      and returns to it when it leaves the arranged set. When the object is destroyed, also when
-      the client dies, every window is drawn and hit at its own frame again at once.
+      and returns to it when it leaves the arranged set. When the connection of a window manager
+      that is a component ends, its placements are held with its holds and replaced by the
+      instance that takes the hold over; otherwise, on explicit destroy and when holds end, every
+      window is drawn and hit at its own frame again at once. `commit` and `activate_window` are
+      window changes inside a transaction bracket (`cupertino_transaction_v1`).
     </description>
 
     <request name="destroy" type="destructor">
@@ -269,9 +272,9 @@
     </event>
 
     <event name="log_out_requested" since="9">
-      <description summary="the server asks the login process to ask whether to log out">
-        Sent only to the connection that holds the session lock role, for the log out shortcut and
-        the session menu: the client shows its log out confirmation as if it had been asked on
+      <description summary="the server asks the session agent to ask whether to log out">
+        Sent only to the connection that holds the session_agent role, for the log out shortcut
+        and the session menu: the client shows its log out confirmation as if it had been asked on
         its own control interface, which a process on the session bus cannot take over.
       </description>
     </event>
@@ -412,11 +415,12 @@
 
     <event name="session_agent" since="8">
       <description summary="which process is the session agent">
-        Names the process that may answer as the session agent (`org.cupertino.Login1`): the server
-        started it. The bar takes the session menu's state (the user name and what the machine
-        allows) only from the owner of that bus name when it is this process, so a client that
-        took the name first cannot write the menu. pid is 0 unless trust is process. Sent in a
-        group of its own, ended by done, after the first group and whenever it changes.
+        Names the process that may answer as the session agent (`org.cupertino.Login1`) only while
+        the agent is a program of its own; its trust is `none` when a component is the agent. The
+        bar takes the session menu's state (the user name and what the machine allows) only from
+        the owner of that bus name when it is this process, so a client that took the name first
+        cannot write the menu. pid is 0 unless trust is process. Sent in a group of its own, ended
+        by done, after the first group and whenever it changes.
       </description>
       <arg name="trust" type="uint" enum="agent_trust"/>
       <arg name="pid" type="uint"/>

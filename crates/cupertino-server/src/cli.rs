@@ -961,11 +961,16 @@ pub fn run(cli: Cli) -> Result<()> {
     if mode != Mode::Headless {
         start_xwayland(&mut state);
     }
-    // the built-in processes belong to a user's session on the hardware: not to the login screen, nor to nested and
-    // offscreen runs
-    if mode == Mode::Udev && !login_screen {
-        let programs = BuiltIn::ALL.map(|b| (b, b.installed()));
-        state.supervisor.add_built_ins(programs, Instant::now());
+    // the built-in processes belong to a user's session on the hardware; the login session starts only `login --greeter`
+    if mode == Mode::Udev {
+        if login_screen {
+            state
+                .supervisor
+                .add_login_greeter(BuiltIn::Login.installed(), Instant::now());
+        } else {
+            let programs = BuiltIn::ALL.map(|b| (b, b.installed()));
+            state.supervisor.add_built_ins(programs, Instant::now());
+        }
     }
     if let Some(program) = &cli.control_program {
         state.supervisor.add_built_ins(

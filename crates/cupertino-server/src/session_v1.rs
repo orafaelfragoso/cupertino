@@ -86,16 +86,27 @@ impl SessionObservers {
         told
     }
 
-    /// Ask the login process to ask whether to log out, the way [`Self::lock_requested`] asks for the lock.
+    /// Ask the session agent to ask whether to log out (`ShellRole::SessionAgent`; falls back to
+    /// `ShellRole::SessionLock` when a legacy process entry did not list `session_agent`).
     pub fn log_out_requested(&self) -> bool {
         let mut told = false;
         for observer in self.observers.iter().filter(|o| {
             o.version() >= 9
                 && o.client()
-                    .is_some_and(|c| authorized(&c, ShellRole::SessionLock))
+                    .is_some_and(|c| authorized(&c, ShellRole::SessionAgent))
         }) {
             observer.log_out_requested();
             told = true;
+        }
+        if !told {
+            for observer in self.observers.iter().filter(|o| {
+                o.version() >= 9
+                    && o.client()
+                        .is_some_and(|c| authorized(&c, ShellRole::SessionLock))
+            }) {
+                observer.log_out_requested();
+                told = true;
+            }
         }
         told
     }

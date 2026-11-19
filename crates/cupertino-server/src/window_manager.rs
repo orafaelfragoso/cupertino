@@ -495,7 +495,7 @@ impl Cupertino {
     }
 
     /// `commit`: retarget every window whose pending placement differs from its current one.
-    fn commit_placements(&mut self, output: OutputId) {
+    pub(crate) fn commit_placements(&mut self, output: OutputId) {
         let now = self.now();
         let Some(m) = self
             .window_managers
@@ -646,7 +646,14 @@ impl Dispatch<CupertinoWindowManagerV1, WindowManagerData> for Cupertino {
                     m.pending.insert(id, target);
                 }
             }
-            cupertino_window_manager_v1::Request::Commit => state.commit_placements(output),
+            cupertino_window_manager_v1::Request::Commit => {
+                if !state.transactions.enqueue_window_change(
+                    &client.id(),
+                    crate::transaction::QueuedWindowChange::CommitWindowManager(output),
+                ) {
+                    state.commit_placements(output);
+                }
+            }
             cupertino_window_manager_v1::Request::ActivateWindow { id } => {
                 let window = WindowId(u64::from(id));
                 if !state.transactions.enqueue_window_change(
@@ -657,13 +664,23 @@ impl Dispatch<CupertinoWindowManagerV1, WindowManagerData> for Cupertino {
                     state.focus_window_by_input(window);
                 }
             }
-            // `Destroy` is handled in `destroyed`
+            cupertino_window_manager_v1::Request::Destroy => {
+                state
+                    .window_managers
+                    .managers
+                    .retain(|m| &m.resource != resource);
+                state
+                    .window_managers
+                    .placed
+                    .retain(|_, p| p.output != output);
+                state.request_redraw();
+            }
             _ => {}
         }
     }
 
-    /// The role ends with the object, also when its client dies: every window is back at its own
-    /// frame at once.
+    /// The role ends with the object; when a component window manager disconnects with active holds,
+    /// keep its placements held until the replacement takes over or holds end (W5.5).
     fn destroyed(
         state: &mut Self,
         _: ClientId,
@@ -671,14 +688,29 @@ impl Dispatch<CupertinoWindowManagerV1, WindowManagerData> for Cupertino {
         data: &WindowManagerData,
     ) {
         let Some(output) = data.output else { return };
+        let keep_for_hold = resource
+            .client()
+            .and_then(|c| {
+                c.get_data::<crate::state::ClientState>()
+                    .and_then(|s| s.component)
+            })
+            .is_some_and(|c| {
+                state
+                    .hosts
+                    .held_surfaces()
+                    .iter()
+                    .any(|h| h.component == c.name)
+            });
         state
             .window_managers
             .managers
             .retain(|m| &m.resource != resource);
-        state
-            .window_managers
-            .placed
-            .retain(|_, p| p.output != output);
+        if !keep_for_hold {
+            state
+                .window_managers
+                .placed
+                .retain(|_, p| p.output != output);
+        }
         state.request_redraw();
     }
 }

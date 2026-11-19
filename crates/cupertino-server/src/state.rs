@@ -832,6 +832,8 @@ pub struct Cupertino {
     pub hosts: crate::host::HostManager,
     /// Coordinated shell transitions, gesture bindings and window/workspace holes (`cupertino_transaction_manager_v1`).
     pub transactions: crate::transaction::TransactionManager,
+    /// Overview component observers per output (`cupertino_overview_manager_v1`, `cupertino_overview_v1`).
+    pub overviews: crate::overview_v1::Overviews,
     pub supervisor: Supervisor,
     /// What wakes the supervision of the shell processes and the satellite.
     pub supervision_wakeups: crate::supervisor::Wakeups,
@@ -1045,6 +1047,7 @@ impl Cupertino {
         let app_effects_v1 = AppEffectsV1Global::new(&dh);
         let hosts = crate::host::HostManager::new(&dh);
         let transactions = crate::transaction::TransactionManager::new(&dh);
+        let overviews = crate::overview_v1::Overviews::new(&dh);
         let capture = crate::capture::Capture::new(&dh);
         let control = crate::control::Control::new(&dh);
         let global_shortcuts = crate::global_shortcuts::GlobalShortcuts::new(&dh);
@@ -1195,6 +1198,7 @@ impl Cupertino {
             app_effects_v1,
             hosts,
             transactions,
+            overviews,
             supervisor,
             supervision_wakeups: Default::default(),
             xwayland: None,
@@ -1347,6 +1351,7 @@ impl Cupertino {
             self.note_departures(id, &identity, from);
         }
         self.end_popup_grab_on(id);
+        self.overviews.remove_output(id);
         self.output_screenshots.retain(|(o, _)| *o != id);
         // the overview of this output has nothing left to show on; one open elsewhere takes the windows that arrive
         if self.shell.overview.as_ref().is_some_and(|o| o.output == id) {
@@ -1568,6 +1573,7 @@ impl Cupertino {
             .wm
             .handle(Command::SetUsableArea { output: id, usable }, now);
         self.apply_effects(fx);
+        self.refresh_overview_v1();
         let fx = self.wm.handle(
             Command::SetDockZone {
                 output: id,
@@ -1890,6 +1896,7 @@ impl Cupertino {
             residents_changed |= self.docks.client_gone(id);
             self.host_client_disconnected(id);
             self.transactions.client_disconnected(id);
+            self.overviews.client_disconnected(id);
         }
         let mapped = &self.mapped_clients;
         self.mapped_processes
@@ -2617,6 +2624,7 @@ impl Cupertino {
         if redraw {
             self.request_redraw();
             self.refresh_overview_windows();
+            self.refresh_overview_v1();
             self.refresh_menu_bars();
             self.refresh_docks();
             self.refresh_window_managers();

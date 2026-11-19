@@ -53,6 +53,7 @@ pub mod logging;
 pub mod menu_bar;
 pub mod output_depth;
 pub mod overlays;
+pub mod overview_v1;
 pub mod owner_check;
 pub mod pointer_constraints;
 pub mod policy;

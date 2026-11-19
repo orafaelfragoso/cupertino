@@ -78,13 +78,13 @@ enum ReloadPayload {
     Compositor {
         path: PathBuf,
         system: bool,
-        after: Option<CompositorSettings>,
+        after: Option<Box<CompositorSettings>>,
         /// Verified `dev_folder` from root-only system file check (when `system` is true).
         dev_folder: Option<Result<Option<DevFolder>, String>>,
     },
     Keyboard {
         path: PathBuf,
-        after: Option<KeyboardConf>,
+        after: Option<Box<KeyboardConf>>,
         decoded: Option<HashMap<String, DecodedSource>>,
         accent_table: Option<AccentTable>,
     },
@@ -380,6 +380,7 @@ impl Cupertino {
                 dev_folder,
             } => {
                 if let Some(after) = after {
+                    let after = *after;
                     let (system_before, user_before) = (
                         self.live.files.system.clone(),
                         self.live.files.compositor.clone(),
@@ -430,6 +431,7 @@ impl Cupertino {
                 let Some(after) = after else {
                     return;
                 };
+                let after = *after;
                 let before = self.live.files.keyboard.clone();
                 self.live.files.keyboard = after.clone();
                 self.apply_keyboard_change_preloaded(&before, &after, decoded, accent_table);
@@ -814,7 +816,7 @@ fn read_off_loop(
             ReloadPayload::Compositor {
                 path,
                 system,
-                after,
+                after: after.map(Box::new),
                 dev_folder,
             }
         }
@@ -884,7 +886,7 @@ fn read_off_loop(
             };
             ReloadPayload::Keyboard {
                 path,
-                after,
+                after: after.map(Box::new),
                 decoded,
                 accent_table,
             }

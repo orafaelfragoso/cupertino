@@ -70,6 +70,8 @@ impl From<ShellRoleName> for ShellRole {
             ShellRoleName::MenuBar => ShellRole::MenuBar,
             ShellRoleName::Dock => ShellRole::Dock,
             ShellRoleName::WindowManager => ShellRole::WindowManager,
+            ShellRoleName::Overview => ShellRole::Overview,
+            ShellRoleName::Windows => ShellRole::Windows,
             ShellRoleName::SessionLock => ShellRole::SessionLock,
             ShellRoleName::Clipboard => ShellRole::DataControl,
         }

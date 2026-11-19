@@ -55,17 +55,20 @@ pub enum BuiltIn {
     KeyringPrompter,
     /// The native local desktop controller; each run still needs session consent.
     DesktopControl,
+    /// The lock screen / login screen program (`cupertino-login`); started by the server in both user and login sessions (W5.5).
+    Login,
 }
 
 /// The bus name the portal's backend owns once it serves.
 pub const PORTAL_BUS_NAME: &str = "org.freedesktop.impl.portal.desktop.cupertino";
 
 impl BuiltIn {
-    pub const ALL: [BuiltIn; 4] = [
+    pub const ALL: [BuiltIn; 5] = [
         BuiltIn::Portal,
         BuiltIn::PolkitAgent,
         BuiltIn::KeyringPrompter,
         BuiltIn::DesktopControl,
+        BuiltIn::Login,
     ];
 
     /// Name in log lines.
@@ -75,6 +78,7 @@ impl BuiltIn {
             BuiltIn::PolkitAgent => "polkit-agent",
             BuiltIn::KeyringPrompter => "keyring-prompter",
             BuiltIn::DesktopControl => "desktop-control",
+            BuiltIn::Login => "login",
         }
     }
 
@@ -84,16 +88,19 @@ impl BuiltIn {
             BuiltIn::PolkitAgent => "cupertino-polkit-agent",
             BuiltIn::KeyringPrompter => "cupertino-keyring-prompter",
             BuiltIn::DesktopControl => "cupertino-control",
+            BuiltIn::Login => "cupertino-login",
         }
     }
 
     /// The role of the process's connection; the portal holds [`ShellRole::GlobalShortcuts`] besides
+    /// and login holds [`ShellRole::Session`], [`ShellRole::SessionLock`], and (until W6.13) [`ShellRole::SessionAgent`]
     /// ([`BuiltIn::process`]).
     pub const fn role(self) -> ShellRole {
         match self {
             BuiltIn::Portal => ShellRole::Capture,
             BuiltIn::PolkitAgent | BuiltIn::KeyringPrompter => ShellRole::Prompt,
             BuiltIn::DesktopControl => ShellRole::DesktopControl,
+            BuiltIn::Login => ShellRole::SessionLock,
         }
     }
 
@@ -125,8 +132,23 @@ impl BuiltIn {
             roles: match self {
                 // the portal also binds the shortcuts the person allows applications
                 BuiltIn::Portal => vec![self.role(), ShellRole::GlobalShortcuts],
+                // until W6.13, cupertino-login holds session_agent beside session_lock
+                BuiltIn::Login => vec![
+                    ShellRole::Session,
+                    ShellRole::SessionLock,
+                    ShellRole::SessionAgent,
+                ],
                 _ => vec![self.role()],
             },
+        }
+    }
+
+    /// The supervised process that runs `cupertino-login --greeter` in a login session (session role only).
+    pub fn login_greeter_process(program: &Path) -> ShellProcess {
+        ShellProcess {
+            name: BuiltIn::Login.name().to_string(),
+            command: vec![program.display().to_string(), "--greeter".into()],
+            roles: vec![ShellRole::Session],
         }
     }
 
@@ -191,11 +213,13 @@ pub fn may_run_built_in(file: (u32, u32), bin: (u32, u32), root_owner: u32, user
 /// bar, the dock, the window manager and the processes that only follow the session). A process holding any other role
 /// (the lock screen and login, capture, the authentication prompt, data control, desktop control, or a role added
 /// later) always starts its installed program: this is a list of what is allowed, not of what is refused.
-pub const DEV_FOLDER_ROLES: [ShellRole; 4] = [
+pub const DEV_FOLDER_ROLES: [ShellRole; 6] = [
     ShellRole::Session,
     ShellRole::MenuBar,
     ShellRole::Dock,
     ShellRole::WindowManager,
+    ShellRole::Overview,
+    ShellRole::Windows,
 ];
 
 /// Whether a shell process with `roles` may start from the development folder: all of its roles are
@@ -504,7 +528,13 @@ pub struct Config {
     pub appearance: Appearance,
     pub window: WindowStyle,
     pub shell: ShellConfig,
-    /// Shell processes supervised by the server (`shell` in the JSON file); none by default.
+    /// Shell host components configured for the session (`shell.components`, system file only; defaults to all 11).
+    pub shell_components: Vec<String>,
+    /// Shell host components disabled (`shell.off`).
+    pub shell_off: Vec<String>,
+    /// Shell host components running in separate host processes (`shell.alone`).
+    pub shell_alone: Vec<String>,
+    /// Legacy shell processes supervised by the server (`shell.processes` or legacy array form); none by default.
     pub shell_processes: Vec<ShellProcess>,
     pub keybindings: KeyBindings,
     pub effects: crate::fx::EffectsConfig,
@@ -683,6 +713,12 @@ impl Default for Config {
             appearance: Appearance::Light,
             window: WindowStyle::default(),
             shell: ShellConfig::default(),
+            shell_components: cupertino_defaults::compositor::SHELL_COMPONENTS
+                .into_iter()
+                .map(String::from)
+                .collect(),
+            shell_off: Vec::new(),
+            shell_alone: Vec::new(),
             shell_processes: Vec::new(),
             keybindings: KeyBindings::from_shortcuts(
                 &crate::kbd::default_shortcut_map("cupertino").0,
@@ -1039,67 +1075,101 @@ impl Config {
     /// is refused; the rest of the file applies.
     pub fn apply_privileged(&mut self, f: &CompositorSettings, trust: LayerTrust) -> Vec<String> {
         let mut problems = Vec::new();
-        if let Some(list) = &f.shell {
-            let list: Vec<_> = list
-                .iter()
-                .filter(|e| {
-                    let built_in = BuiltIn::ALL
-                        .into_iter()
-                        .find(|b| b.named_by(&e.name, &e.command));
-                    if let Some(b) = built_in {
-                        problems.push(format!(
-                            "shell: {}: the server starts the {} process itself",
-                            e.name,
-                            b.name()
-                        ));
+        if let Some(section) = &f.shell {
+            let filter_known =
+                |names: &[String], key: &str, problems: &mut Vec<String>| -> Vec<String> {
+                    let mut out = Vec::new();
+                    for name in names {
+                        if crate::host::component_spec(name).is_some() {
+                            if !out.contains(name) {
+                                out.push(name.clone());
+                            }
+                        } else {
+                            problems.push(format!("shell.{key}: unknown component {name:?}"));
+                        }
                     }
-                    built_in.is_none()
-                })
-                .collect();
-            let entry = |e: &cupertino_defaults::compositor::ShellEntry| ShellProcess {
-                name: e.name.clone(),
-                command: e.command.clone(),
-                roles: e.roles.iter().copied().map(ShellRole::from).collect(),
-            };
-            self.shell_processes = match trust {
-                LayerTrust::Dev => list.into_iter().map(entry).collect(),
-                LayerTrust::System => list
-                    .into_iter()
+                    out
+                };
+            if let Some(components) = &section.components {
+                match trust {
+                    LayerTrust::System | LayerTrust::Dev => {
+                        self.shell_components =
+                            filter_known(components, "components", &mut problems);
+                    }
+                    LayerTrust::User => problems.push(
+                        "shell.components: only the system configuration sets the component list"
+                            .to_string(),
+                    ),
+                }
+            }
+            if let Some(off) = &section.off {
+                self.shell_off = filter_known(off, "off", &mut problems);
+            }
+            if let Some(alone) = &section.alone {
+                self.shell_alone = filter_known(alone, "alone", &mut problems);
+            }
+            if let Some(list) = &section.processes {
+                let list: Vec<_> = list
+                    .iter()
                     .filter(|e| {
-                        let allowed = e.roles.is_empty() || is_installed_program(&e.command);
-                        if !allowed {
+                        let built_in = BuiltIn::ALL
+                            .into_iter()
+                            .find(|b| b.named_by(&e.name, &e.command));
+                        if let Some(b) = built_in {
                             problems.push(format!(
-                                "shell: {}: a process with roles must be a program installed under {}",
+                                "shell: {}: the server starts the {} process itself",
                                 e.name,
-                                installed_roots().map(|r| r.display().to_string()).collect::<Vec<_>>().join(" or ")
+                                b.name()
                             ));
                         }
-                        allowed
+                        built_in.is_none()
                     })
-                    .map(entry)
-                    .collect(),
-                LayerTrust::User => list
-                    .into_iter()
-                    .filter_map(|e| {
-                        let known = self.shell_processes.iter().find(|p| p.name == e.name);
-                        match (known, e.roles.is_empty()) {
-                            (Some(known), _) => {
-                                if known.command != e.command
-                                    || known.roles != e.roles.iter().copied().map(ShellRole::from).collect::<Vec<_>>()
-                                {
-                                    problems.push(format!("shell: {}: the user configuration cannot change a shell process of the system", e.name));
+                    .collect();
+                let entry = |e: &cupertino_defaults::compositor::ShellEntry| ShellProcess {
+                    name: e.name.clone(),
+                    command: e.command.clone(),
+                    roles: e.roles.iter().copied().map(ShellRole::from).collect(),
+                };
+                self.shell_processes = match trust {
+                    LayerTrust::Dev => list.into_iter().map(entry).collect(),
+                    LayerTrust::System => list
+                        .into_iter()
+                        .filter(|e| {
+                            let allowed = e.roles.is_empty() || is_installed_program(&e.command);
+                            if !allowed {
+                                problems.push(format!(
+                                    "shell: {}: a process with roles must be a program installed under {}",
+                                    e.name,
+                                    installed_roots().map(|r| r.display().to_string()).collect::<Vec<_>>().join(" or ")
+                                ));
+                            }
+                            allowed
+                        })
+                        .map(entry)
+                        .collect(),
+                    LayerTrust::User => list
+                        .into_iter()
+                        .filter_map(|e| {
+                            let known = self.shell_processes.iter().find(|p| p.name == e.name);
+                            match (known, e.roles.is_empty()) {
+                                (Some(known), _) => {
+                                    if known.command != e.command
+                                        || known.roles != e.roles.iter().copied().map(ShellRole::from).collect::<Vec<_>>()
+                                    {
+                                        problems.push(format!("shell: {}: the user configuration cannot change a shell process of the system", e.name));
+                                    }
+                                    Some(known.clone())
                                 }
-                                Some(known.clone())
+                                (None, true) => Some(entry(e)),
+                                (None, false) => {
+                                    problems.push(format!("shell: {}: the user configuration cannot add a process with roles", e.name));
+                                    None
+                                }
                             }
-                            (None, true) => Some(entry(e)),
-                            (None, false) => {
-                                problems.push(format!("shell: {}: the user configuration cannot add a process with roles", e.name));
-                                None
-                            }
-                        }
-                    })
-                    .collect(),
-            };
+                        })
+                        .collect(),
+                };
+            }
         }
         if let Some(command) = &f.screenshot {
             match trust {
@@ -1136,5 +1206,52 @@ impl Config {
 
     pub fn is_dark(&self) -> bool {
         self.appearance.is_dark()
+    }
+
+    /// Components that should run in the session: `shell_components` minus `shell_off`, empty in the login session.
+    pub fn active_shell_components(&self, login_screen: bool) -> Vec<&'static str> {
+        if login_screen {
+            return Vec::new();
+        }
+        self.shell_components
+            .iter()
+            .filter(|name| !self.shell_off.contains(name))
+            .filter_map(|name| crate::host::component_spec(name).map(|s| s.name))
+            .collect()
+    }
+
+    /// Components that run in a separate host (`shell_alone` or eligible `dev_folder`).
+    pub fn alone_host_components(&self, login_screen: bool) -> Vec<&'static str> {
+        let dev_list: &[String] = self
+            .dev_folder
+            .as_ref()
+            .map(|d| d.components.as_slice())
+            .unwrap_or(&[]);
+        self.active_shell_components(login_screen)
+            .into_iter()
+            .filter(|&name| {
+                self.shell_alone.iter().any(|a| a == name)
+                    || (dev_list.iter().any(|d| d == name)
+                        && crate::host::component_spec(name)
+                            .is_some_and(|s| may_start_from_dev_folder(s.roles)))
+            })
+            .collect()
+    }
+
+    /// Components that run in the shared host (`active_shell_components` minus `alone_host_components`).
+    pub fn shared_host_components(&self, login_screen: bool) -> Vec<&'static str> {
+        let alone = self.alone_host_components(login_screen);
+        self.active_shell_components(login_screen)
+            .into_iter()
+            .filter(|name| !alone.contains(name))
+            .collect()
+    }
+
+    /// Fallback legacy supervised process entry for `name` when the host is unavailable or not installed (until W6.close).
+    pub fn process_fallback_for(&self, name: &str) -> Option<&ShellProcess> {
+        if self.shell_off.iter().any(|o| o == name) {
+            return None;
+        }
+        self.shell_processes.iter().find(|p| p.name == name)
     }
 }

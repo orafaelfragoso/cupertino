@@ -220,6 +220,21 @@ impl Supervisor {
     /// Supervise the built-in processes from `programs`, each at the first [`Supervisor::poll`] at or after `now`. One
     /// whose program is not installed (no path, or nothing at it) is logged once and never started. The program is
     /// checked before every start ([`check_built_in`]): a refused start waits out the throttle, like a failed one.
+    /// Add `cupertino-login --greeter` as a built-in process for the login session (W5.5).
+    pub fn add_login_greeter(&mut self, program: Option<PathBuf>, now: Instant) {
+        match program.filter(|p| p.symlink_metadata().is_ok()) {
+            Some(program) => self.procs.push(Supervised::new(
+                BuiltIn::login_greeter_process(&program),
+                now,
+                true,
+            )),
+            None => tracing::info!(
+                name = BuiltIn::Login.name(),
+                "not installed: the greeter login process is not started"
+            ),
+        }
+    }
+
     pub fn add_built_ins(
         &mut self,
         programs: impl IntoIterator<Item = (BuiltIn, Option<PathBuf>)>,

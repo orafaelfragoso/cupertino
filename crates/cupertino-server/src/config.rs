@@ -653,6 +653,28 @@ impl PointerSettings {
     }
 }
 
+impl cupertino_server_input::events::PointerAccelConfig for PointerSettings {
+    fn mouse_speed(&self) -> f64 {
+        self.mouse_speed
+    }
+
+    fn trackpad_speed(&self) -> f64 {
+        self.trackpad_speed
+    }
+
+    fn mouse_dpi(&self, key: &str) -> Option<u32> {
+        self.mouse_dpi.get(key).copied()
+    }
+
+    fn mouse_acceleration(&self) -> bool {
+        self.mouse_acceleration
+    }
+
+    fn trackpad_acceleration(&self) -> bool {
+        self.trackpad_acceleration
+    }
+}
+
 impl Default for PointerSettings {
     fn default() -> Self {
         let speed = cupertino_input::DEFAULT_TRACKING_SPEED;

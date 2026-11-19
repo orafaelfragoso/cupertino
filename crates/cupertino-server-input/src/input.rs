@@ -5,7 +5,7 @@
 //!
 //! Flow: backend key event → [`KeyRouter::key`] → [`KeyOutcome::Consumed`] with an [`ActionPlan`]
 //! (model commands + shell operations) or [`KeyOutcome::Forward`] to the focused client.
-//! Pointer routing lives in `state.rs` (`Cupertino::pointer_*`) and uses the same plan type.
+//! Pointer routing lives in the compositor state and uses the same plan type.
 
 use std::collections::HashMap;
 
@@ -1211,7 +1211,7 @@ impl KeyRouter {
         }
         // while the session is locked no shortcut of the desktop or its applications acts: every key goes to the lock
         // screen, but the switch to another console. The screen reader's Super+Alt+S is not a binding here: it is matched
-        // before the router (`Cupertino::screen_reader_key`) and acts while the session is locked too, on purpose, so a
+        // before the router (`screen_reader_key`) and acts while the session is locked too, on purpose, so a
         // person who needs the reader to unlock can turn it on at the lock screen.
         if ctx.locked {
             return match self.lookup(&ev) {
@@ -1244,7 +1244,7 @@ impl KeyRouter {
         }
         // the open switcher takes every key but the modifiers: its own keys act on it, the others
         // do nothing (the design turns the other global shortcuts off while it is up)
-        if ctx.switcher_open && !crate::overlays::is_modifier_sym(sym) {
+        if ctx.switcher_open && !crate::overlay_types::is_modifier_sym(sym) {
             self.suppressed.insert(sym, None);
             return KeyOutcome::Consumed(switcher_key(sym, ev.mods, ev.repeat).unwrap_or_default());
         }

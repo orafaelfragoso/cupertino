@@ -1617,6 +1617,7 @@ dependencies = [
  "cupertino-protocols",
  "cupertino-scene",
  "cupertino-server-backend",
+ "cupertino-server-input",
  "cupertino-server-render",
  "cupertino-theme",
  "cupertino-wm",
@@ -1632,7 +1633,6 @@ dependencies = [
  "tracing-subscriber",
  "wayland-backend",
  "wayland-client",
- "wayland-protocols-misc",
  "wayland-protocols-plasma",
  "wayland-protocols-wlr",
  "wayland-scanner",
@@ -1656,6 +1656,25 @@ dependencies = [
  "rustix 1.1.6",
  "smithay",
  "tracing",
+ "zbus",
+]
+
+[[package]]
+name = "cupertino-server-input"
+version = "0.1.0"
+dependencies = [
+ "cupertino-defaults",
+ "cupertino-geometry",
+ "cupertino-input",
+ "cupertino-keyboard",
+ "cupertino-protocols",
+ "cupertino-wm",
+ "libc",
+ "serde_json",
+ "smithay",
+ "tracing",
+ "wayland-client",
+ "wayland-protocols-misc",
  "zbus",
 ]
 

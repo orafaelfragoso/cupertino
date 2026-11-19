@@ -133,17 +133,7 @@ pub enum BusOut {
     Settings(SessionSettings),
 }
 
-/// One connected mouse as the `Mice` property lists it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MouseEntry {
-    /// `cupertino_defaults::compositor::mouse_dpi_key` of the device.
-    pub key: String,
-    pub name: String,
-    /// The resolution in use, in dots per inch.
-    pub dpi: u32,
-    /// The user stored the resolution (`mouse_dpi`), as opposed to the hardware database or the default.
-    pub stored: bool,
-}
+pub use cupertino_server_input::events::MouseEntry;
 
 /// The values of the properties.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

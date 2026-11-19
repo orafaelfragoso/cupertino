@@ -7,6 +7,7 @@ pub mod accessibility;
 pub use cupertino_server_backend::{
     acquire_waits, drm_trace, latch, output_depth, schedule, software_render, sync_file,
 };
+pub use cupertino_server_input::{input, kbd};
 pub use cupertino_server_render::{decor, frame_fill, fx, popup_linger, toolkit_programs};
 pub mod activation_env;
 pub mod app_effects_v1;
@@ -39,9 +40,7 @@ pub mod handlers;
 pub mod host;
 pub mod hung;
 pub mod idle;
-pub mod input;
 pub mod input_method;
-pub mod kbd;
 pub mod kbd_filters;
 pub mod kbd_ui;
 pub mod layers_v1;

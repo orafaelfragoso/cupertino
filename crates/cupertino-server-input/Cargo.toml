@@ -1,0 +1,28 @@
+[package]
+name = "cupertino-server-input"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Compositor input primitives: key routing, keyboard layouts and filters, input-method bridge, pointer acceleration, constraints, and hung-client liveness"
+
+[package.metadata.cupertino]
+layer = "core"
+
+[dependencies]
+cupertino-defaults = { path = "../cupertino-defaults" }
+cupertino-geometry = { path = "../cupertino-geometry" }
+cupertino-input = { path = "../cupertino-input" }
+cupertino-keyboard = { path = "../cupertino-keyboard" }
+cupertino-protocols = { path = "../cupertino-protocols", features = ["server"] }
+cupertino-wm = { path = "../cupertino-wm" }
+libc = "0.2"
+serde_json = "1"
+tracing = "0.1"
+wayland-client = "0.31"
+wayland-protocols-misc = { version = "0.3", features = ["client"] }
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
+
+[dependencies.smithay]
+version = "0.7"
+default-features = false
+features = ["wayland_frontend"]

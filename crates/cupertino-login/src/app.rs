@@ -1453,8 +1453,21 @@ impl SessionApp {
     }
 
     /// Sleep at once; log out, restart and shut down after the applications have quit, with the "Open my windows again" choice
-    /// `reopen`.
+    /// `reopen`. Routes through `org.cupertino.Session1` (D13), falling back to the legacy local sequence only if
+    /// `Session1` is unavailable.
     fn carry_out(&mut self, now: f64, action: Action, reopen: bool) -> Result<()> {
+        let forwarded = match action {
+            Action::Sleep => session::sleep(&self.session_bus),
+            Action::LogOut => session::log_out(&self.session_bus),
+            Action::Restart => session::restart(&self.session_bus),
+            Action::ShutDown => session::shut_down(&self.session_bus),
+        };
+        if forwarded.is_ok() {
+            if action != Action::Sleep {
+                self.logging_out = true;
+            }
+            return Ok(());
+        }
         if action == Action::Sleep {
             return self.request_power(Power::Sleep);
         }

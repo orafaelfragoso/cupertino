@@ -1125,6 +1125,7 @@ fn start_dbus(state: &mut Cupertino) {
     crate::power::start_power_bus(state);
     crate::localed::start(state);
     crate::quit::start_session_service(state);
+    crate::displays::service::start_displays_service(state);
 }
 
 #[cfg(not(feature = "dbus"))]

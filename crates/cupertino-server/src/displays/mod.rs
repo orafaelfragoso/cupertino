@@ -13,6 +13,7 @@ pub mod management;
 pub mod placement;
 pub mod power;
 pub mod recovery;
+pub mod service;
 pub mod surface_output;
 
 use std::path::PathBuf;
@@ -156,6 +157,7 @@ pub struct Displays {
     pub departed: Vec<recovery::Departure>,
     pub(crate) managers: Vec<management::Manager>,
     pub(crate) powers: Vec<power::PowerObject>,
+    pub(crate) bus_signals: Option<async_channel::Sender<service::DisplaysBusOut>>,
     _management: GlobalId,
     _power: GlobalId,
 }
@@ -172,6 +174,7 @@ impl Displays {
             departed: Vec::new(),
             managers: Vec::new(),
             powers: Vec::new(),
+            bus_signals: None,
             _management: management::create_global(dh),
             _power: power::create_global(dh),
         }
@@ -838,6 +841,7 @@ impl Cupertino {
         }
         if std::mem::take(&mut self.displays.dirty) {
             management::done(self);
+            self.notify_displays_bus_changed();
         }
     }
 

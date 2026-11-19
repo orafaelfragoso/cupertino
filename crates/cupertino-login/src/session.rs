@@ -11,6 +11,40 @@ const BUS_NAME: &str = "org.cupertino.Session1";
 const OBJECT_PATH: &str = "/org/cupertino/Session1";
 const INTERFACE: &str = "org.cupertino.Session1";
 
+/// Ask `org.cupertino.Session1` to quit applications and end the session (D13).
+pub fn log_out(session: &Connection) -> zbus::Result<()> {
+    session
+        .call_method(Some(BUS_NAME), OBJECT_PATH, Some(INTERFACE), "LogOut", &())
+        .map(drop)
+}
+
+/// Ask `org.cupertino.Session1` to quit applications and restart the computer (D13).
+pub fn restart(session: &Connection) -> zbus::Result<()> {
+    session
+        .call_method(Some(BUS_NAME), OBJECT_PATH, Some(INTERFACE), "Restart", &())
+        .map(drop)
+}
+
+/// Ask `org.cupertino.Session1` to quit applications and shut down the computer (D13).
+pub fn shut_down(session: &Connection) -> zbus::Result<()> {
+    session
+        .call_method(
+            Some(BUS_NAME),
+            OBJECT_PATH,
+            Some(INTERFACE),
+            "ShutDown",
+            &(),
+        )
+        .map(drop)
+}
+
+/// Ask `org.cupertino.Session1` to put the computer to sleep (D13).
+pub fn sleep(session: &Connection) -> zbus::Result<()> {
+    session
+        .call_method(Some(BUS_NAME), OBJECT_PATH, Some(INTERFACE), "Sleep", &())
+        .map(drop)
+}
+
 /// Ask the most recently used application with windows to quit; `("", 0)` when none is left.
 pub fn quit_next_application(session: &Connection) -> zbus::Result<(String, u32)> {
     session

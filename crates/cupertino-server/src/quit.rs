@@ -46,6 +46,45 @@ use cupertino_wm::{AppId, Command, WindowId};
 pub const BUS_NAME: &str = "org.cupertino.Session1";
 pub const OBJECT_PATH: &str = "/org/cupertino/Session1";
 
+/// Time an application gets to quit during a session-ending sequence before an interrupt is signalled, in seconds.
+pub const QUIT_TIMEOUT_S: f64 = 45.0;
+/// Pause between one application quitting and asking the next, in seconds.
+pub const NEXT_APPLICATION_S: f64 = 0.1;
+
+/// Session-ending or power action orchestrated by `org.cupertino.Session1` (D13).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionAction {
+    /// End the user session through `cupertino-sessiond` (`org.cupertino.LoginManager1.LogOut`).
+    LogOut,
+    /// Reboot the machine through logind (`Reboot`).
+    Restart,
+    /// Power off the machine through logind (`PowerOff`).
+    ShutDown,
+    /// Suspend the machine through logind (`Suspend`) without quitting applications.
+    Sleep,
+}
+
+/// Phase of a running session-ending application-quit sequence.
+#[derive(Clone, Debug, PartialEq)]
+enum SequenceStep {
+    /// Ready to ask the next application with windows to quit.
+    Asking,
+    /// Waiting for `app` to close all its windows since `since` (model seconds).
+    Waiting { app: String, since: f64 },
+    /// `app` did not quit within [`QUIT_TIMEOUT_S`]; waiting for cancel, retry, force quit, or self-quit.
+    Interrupted { app: String },
+    /// Waiting until `at` (model seconds) before asking the next application.
+    Next { at: f64 },
+}
+
+/// Active quit-applications-then-act sequence owned by `Session1`.
+#[derive(Clone, Debug)]
+pub struct SessionSequence {
+    pub action: SessionAction,
+    step: SequenceStep,
+    pub quit_apps: Vec<String>,
+}
+
 /// The application being quit.
 #[derive(Debug)]
 struct Quitting {
@@ -56,19 +95,40 @@ struct Quitting {
 }
 
 /// State of the quit sequence and the link to the bus thread.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct Quit {
     quitting: Option<Quitting>,
+    /// Running session-ending sequence (`LogOut`, `Restart`, `ShutDown`) after quitting applications (D13).
+    pub(crate) sequence: Option<SessionSequence>,
+    /// Optional sink invoked instead of system-bus `LoginManager1`/logind calls (used by headless tests).
+    pub action_sink: Option<Box<dyn FnMut(SessionAction) + Send>>,
     /// What the bus thread is to emit; `None` until it runs.
     pub(crate) signals: Option<async_channel::Sender<BusOut>>,
     /// What the session interface's properties read, shared with the bus thread; `None` until it runs.
     pub(crate) properties: Option<Arc<Mutex<SessionSettings>>>,
 }
 
+impl std::fmt::Debug for Quit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Quit")
+            .field("quitting", &self.quitting)
+            .field("sequence", &self.sequence)
+            .field("has_action_sink", &self.action_sink.is_some())
+            .finish()
+    }
+}
+
 /// What the compositor tells the bus thread.
 #[derive(Debug)]
 pub enum BusOut {
     ApplicationQuit(String),
+    /// An application did not quit within [`QUIT_TIMEOUT_S`]: `(app_id, quit_status)`.
+    QuitInterrupted {
+        app_id: String,
+        reason: String,
+    },
+    /// The application whose interrupt panel was shown has now quit.
+    QuitInterruptClosed,
     /// The appearance, the accessibility settings or the mice changed: the values now.
     Settings(SessionSettings),
 }
@@ -150,6 +210,16 @@ pub enum Call {
     ComponentOf(String, async_channel::Sender<Result<String, Reject>>),
     /// PIDs and start ticks of currently connected shell host processes (D20).
     ShellHosts(async_channel::Sender<Result<Vec<(u32, u64)>, Reject>>),
+    /// Start a session-ending or power action (`LogOut`, `Restart`, `ShutDown`, `Sleep`), quitting apps first (D13).
+    SessionAction(
+        SessionAction,
+        Caller,
+        async_channel::Sender<Result<(), Reject>>,
+    ),
+    /// Cancel an in-progress session-ending quit sequence.
+    CancelSessionAction(Caller, async_channel::Sender<Result<(), Reject>>),
+    /// Retry asking the next application after an interrupt during a session-ending quit sequence.
+    RetrySessionAction(Caller, async_channel::Sender<Result<(), Reject>>),
 }
 
 /// A supervised process on the bus: name, state, pid, start ticks, start time in seconds since 1970, program, from the
@@ -376,25 +446,161 @@ impl Cupertino {
         Ok(self.force_quit_application(identity))
     }
 
-    /// Announce the end of the application being quit once its last toplevel is gone; called from [`Cupertino::tick`].
-    pub fn tick_quit(&mut self) {
-        let Some(q) = &self.quit.quitting else { return };
-        if self
-            .windows
-            .iter()
-            .any(|e| self.wm.window(e.id).is_some_and(|w| w.app == q.app))
-        {
-            return;
+    /// Start a session action (`LogOut`, `Restart`, `ShutDown`, `Sleep`) per D13.
+    ///
+    /// `Sleep` executes immediately without quitting applications; `LogOut`, `Restart`, and `ShutDown` quit
+    /// applications one by one (45 s timeout, 0.1 s between applications) and then ask `cupertino-sessiond` or
+    /// logind. Fails while the session is locked.
+    pub fn request_session_action(&mut self, action: SessionAction) -> Result<(), Refusal> {
+        if self.session_lock.is_active() {
+            return Err(Refusal::Failed("the session is locked".into()));
         }
-        let identity = self.quit.quitting.take().expect("checked above").identity;
-        tracing::info!(app = identity, "log out: the application quit");
-        if let Some(signals) = &self.quit.signals {
-            if signals.try_send(BusOut::ApplicationQuit(identity)).is_err() {
-                tracing::warn!(
-                    "the session bus thread has stopped: cannot announce that the application quit"
-                );
+        if action == SessionAction::Sleep {
+            self.dispatch_session_action(SessionAction::Sleep);
+            return Ok(());
+        }
+        self.quit.sequence = Some(SessionSequence {
+            action,
+            step: SequenceStep::Asking,
+            quit_apps: Vec::new(),
+        });
+        self.advance_session_sequence();
+        Ok(())
+    }
+
+    /// Cancel an active session-ending quit sequence so the session continues.
+    pub fn cancel_session_action(&mut self) {
+        self.quit.sequence = None;
+        self.quit.quitting = None;
+    }
+
+    /// Retry quitting applications after an interrupt panel.
+    pub fn retry_session_action(&mut self) {
+        if let Some(seq) = &mut self.quit.sequence {
+            if matches!(seq.step, SequenceStep::Interrupted { .. }) {
+                seq.step = SequenceStep::Asking;
+                self.advance_session_sequence();
             }
         }
+    }
+
+    /// Whether a session-ending quit sequence is active, and which action it targets.
+    pub fn pending_session_action(&self) -> Option<SessionAction> {
+        self.quit.sequence.as_ref().map(|s| s.action)
+    }
+
+    /// Carry out `action` once applications have quit (or immediately for `Sleep`). Runs system-bus IPC on a
+    /// background thread so the compositor loop never blocks.
+    fn dispatch_session_action(&mut self, action: SessionAction) {
+        if let Some(sink) = self.quit.action_sink.as_mut() {
+            sink(action);
+            return;
+        }
+        let spawned = std::thread::Builder::new()
+            .name("session-action".into())
+            .spawn(move || execute_system_session_action(action));
+        if let Err(e) = spawned {
+            tracing::error!(?action, error = %e, "cannot spawn session action thread");
+        }
+    }
+
+    fn advance_session_sequence(&mut self) {
+        let now = self.now();
+        loop {
+            let Some(seq) = &self.quit.sequence else {
+                return;
+            };
+            match &seq.step {
+                SequenceStep::Asking => {
+                    let (app, windows) = self.quit_next_application();
+                    if app.is_empty() || windows == 0 {
+                        let action = self.quit.sequence.take().expect("checked above").action;
+                        tracing::info!(?action, "session sequence: all applications quit");
+                        self.dispatch_session_action(action);
+                        return;
+                    }
+                    if let Some(seq) = &mut self.quit.sequence {
+                        seq.quit_apps.push(app.clone());
+                        seq.step = SequenceStep::Waiting { app, since: now };
+                    }
+                    return;
+                }
+                SequenceStep::Next { at } if now >= *at => {
+                    if let Some(seq) = &mut self.quit.sequence {
+                        seq.step = SequenceStep::Asking;
+                    }
+                }
+                SequenceStep::Waiting { app, since } if now - since >= QUIT_TIMEOUT_S => {
+                    let app = app.clone();
+                    let reason = self.quit_status(&app).to_owned();
+                    tracing::warn!(
+                        app,
+                        reason,
+                        "session sequence: application did not quit within timeout"
+                    );
+                    if let Some(seq) = &mut self.quit.sequence {
+                        seq.step = SequenceStep::Interrupted { app: app.clone() };
+                    }
+                    if let Some(signals) = &self.quit.signals {
+                        let _ = signals.try_send(BusOut::QuitInterrupted {
+                            app_id: app,
+                            reason,
+                        });
+                    }
+                    return;
+                }
+                _ => return,
+            }
+        }
+    }
+
+    /// Announce the end of the application being quit once its last toplevel is gone, and drive any active
+    /// `Session1` quit sequence; called from [`Cupertino::tick`].
+    pub fn tick_quit(&mut self) {
+        let now = self.now();
+        if let Some(q) = &self.quit.quitting {
+            let still_open = self
+                .windows
+                .iter()
+                .any(|e| self.wm.window(e.id).is_some_and(|w| w.app == q.app));
+            if !still_open {
+                let identity = self.quit.quitting.take().expect("checked above").identity;
+                tracing::info!(app = identity, "log out: the application quit");
+                if let Some(signals) = &self.quit.signals {
+                    if signals
+                        .try_send(BusOut::ApplicationQuit(identity.clone()))
+                        .is_err()
+                    {
+                        tracing::warn!(
+                            "the session bus thread has stopped: cannot announce that the application quit"
+                        );
+                    }
+                }
+                let mut closed_interrupt = false;
+                if let Some(seq) = &mut self.quit.sequence {
+                    match &seq.step {
+                        SequenceStep::Waiting { app, .. } if app == &identity => {
+                            seq.step = SequenceStep::Next {
+                                at: now + NEXT_APPLICATION_S,
+                            };
+                        }
+                        SequenceStep::Interrupted { app } if app == &identity => {
+                            seq.step = SequenceStep::Next {
+                                at: now + NEXT_APPLICATION_S,
+                            };
+                            closed_interrupt = true;
+                        }
+                        _ => {}
+                    }
+                }
+                if closed_interrupt {
+                    if let Some(signals) = &self.quit.signals {
+                        let _ = signals.try_send(BusOut::QuitInterruptClosed);
+                    }
+                }
+            }
+        }
+        self.advance_session_sequence();
     }
 
     /// The values of the session interface's properties.
@@ -587,6 +793,91 @@ impl Cupertino {
             }
             Call::ShellHosts(reply) => {
                 let _ = reply.try_send(Ok(self.hosts.shell_host_processes()));
+            }
+            Call::SessionAction(action, caller, reply) => {
+                let method = match action {
+                    SessionAction::LogOut => "LogOut",
+                    SessionAction::Restart => "Restart",
+                    SessionAction::ShutDown => "ShutDown",
+                    SessionAction::Sleep => "Sleep",
+                };
+                let answer = self
+                    .authorize_call(method, &caller, Need::SettingsClient)
+                    .map_err(Reject::Caller)
+                    .and_then(|()| self.request_session_action(action).map_err(Reject::Refusal));
+                let _ = reply.try_send(answer);
+            }
+            Call::CancelSessionAction(caller, reply) => {
+                let answer = self
+                    .authorize_call("CancelSessionAction", &caller, Need::SettingsClient)
+                    .map(|()| self.cancel_session_action())
+                    .map_err(Reject::Caller);
+                let _ = reply.try_send(answer);
+            }
+            Call::RetrySessionAction(caller, reply) => {
+                let answer = self
+                    .authorize_call("RetrySessionAction", &caller, Need::SettingsClient)
+                    .map(|()| self.retry_session_action())
+                    .map_err(Reject::Caller);
+                let _ = reply.try_send(answer);
+            }
+        }
+    }
+}
+
+/// System-bus execution of a completed `Session1` action (D13): `LogOut` asks `cupertino-sessiond`
+/// (`org.cupertino.LoginManager1.LogOut`, falling back to logind `TerminateSession`), and `Restart`, `ShutDown`,
+/// `Sleep` ask `org.freedesktop.login1.Manager`.
+fn execute_system_session_action(action: SessionAction) {
+    let conn = match zbus::blocking::Connection::system() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!(?action, error = %e, "session action: cannot connect to system bus");
+            return;
+        }
+    };
+    match action {
+        SessionAction::LogOut => {
+            let lm = conn.call_method(
+                Some("org.cupertino.LoginManager1"),
+                "/org/cupertino/LoginManager1",
+                Some("org.cupertino.LoginManager1"),
+                "LogOut",
+                &(),
+            );
+            if let Err(e) = lm {
+                tracing::warn!(
+                    error = %e,
+                    "session action: LoginManager1.LogOut failed, falling back to logind TerminateSession"
+                );
+                if let Ok(session_id) = std::env::var("XDG_SESSION_ID") {
+                    if let Err(err) = conn.call_method(
+                        Some("org.freedesktop.login1"),
+                        "/org/freedesktop/login1",
+                        Some("org.freedesktop.login1.Manager"),
+                        "TerminateSession",
+                        &(session_id,),
+                    ) {
+                        tracing::error!(error = %err, "session action: logind TerminateSession failed");
+                    }
+                }
+            }
+        }
+        SessionAction::Restart | SessionAction::ShutDown | SessionAction::Sleep => {
+            let method = match action {
+                SessionAction::Restart => "Reboot",
+                SessionAction::ShutDown => "PowerOff",
+                SessionAction::Sleep => "Suspend",
+                SessionAction::LogOut => unreachable!(),
+            };
+            if let Err(e) = conn.call_method(
+                Some("org.freedesktop.login1"),
+                "/org/freedesktop/login1",
+                Some("org.freedesktop.login1.Manager"),
+                method,
+                &(false,),
+            ) {
+                tracing::error!(?action, method, error = %e, "session action: logind call failed");
             }
         }
     }
@@ -794,6 +1085,64 @@ impl Session1 {
         self.ask(Call::ShellHosts).await
     }
 
+    async fn log_out(
+        &self,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &zbus::Connection,
+    ) -> Result<(), CallError> {
+        let caller = caller_of(&header, connection).await;
+        self.ask(|tx| Call::SessionAction(SessionAction::LogOut, caller, tx))
+            .await
+    }
+
+    async fn restart(
+        &self,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &zbus::Connection,
+    ) -> Result<(), CallError> {
+        let caller = caller_of(&header, connection).await;
+        self.ask(|tx| Call::SessionAction(SessionAction::Restart, caller, tx))
+            .await
+    }
+
+    async fn shut_down(
+        &self,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &zbus::Connection,
+    ) -> Result<(), CallError> {
+        let caller = caller_of(&header, connection).await;
+        self.ask(|tx| Call::SessionAction(SessionAction::ShutDown, caller, tx))
+            .await
+    }
+
+    async fn sleep(
+        &self,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &zbus::Connection,
+    ) -> Result<(), CallError> {
+        let caller = caller_of(&header, connection).await;
+        self.ask(|tx| Call::SessionAction(SessionAction::Sleep, caller, tx))
+            .await
+    }
+
+    async fn cancel_session_action(
+        &self,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &zbus::Connection,
+    ) -> Result<(), CallError> {
+        let caller = caller_of(&header, connection).await;
+        self.ask(|tx| Call::CancelSessionAction(caller, tx)).await
+    }
+
+    async fn retry_session_action(
+        &self,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &zbus::Connection,
+    ) -> Result<(), CallError> {
+        let caller = caller_of(&header, connection).await;
+        self.ask(|tx| Call::RetrySessionAction(caller, tx)).await
+    }
+
     #[zbus(property)]
     async fn appearance(&self) -> String {
         self.settings
@@ -826,6 +1175,16 @@ impl Session1 {
 
     #[zbus(signal)]
     async fn application_quit(emitter: &SignalEmitter<'_>, app_id: &str) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    async fn quit_interrupted(
+        emitter: &SignalEmitter<'_>,
+        app_id: &str,
+        reason: &str,
+    ) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    async fn quit_interrupt_closed(emitter: &SignalEmitter<'_>) -> zbus::Result<()>;
 }
 
 /// Serve `org.cupertino.Session1` on the session bus from a thread of its own. Failures (no bus, the name owned by
@@ -914,6 +1273,10 @@ async fn serve_session(
             BusOut::ApplicationQuit(app_id) => {
                 Session1::application_quit(&emitter, &app_id).await?
             }
+            BusOut::QuitInterrupted { app_id, reason } => {
+                Session1::quit_interrupted(&emitter, &app_id, &reason).await?
+            }
+            BusOut::QuitInterruptClosed => Session1::quit_interrupt_closed(&emitter).await?,
             BusOut::Settings(now) => {
                 let before = std::mem::replace(emitted, now.clone());
                 let iface = served.get().await;

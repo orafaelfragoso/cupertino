@@ -200,6 +200,7 @@ impl CompositorHandler for Cupertino {
         self.host_surface_committed(surface);
         self.layer_committed(surface);
         self.layers_committed(surface);
+        self.transaction_surface_committed(surface);
         self.surface_output_committed(surface);
         self.request_redraw_for(surface);
     }

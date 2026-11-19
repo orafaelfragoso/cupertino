@@ -1589,9 +1589,23 @@ impl Cupertino {
     }
 
     fn gesture_output_event(&mut self, out: GestureOutput) {
+        use cupertino_protocols::server::transaction::cupertino_transaction_v1::Gesture as TxGesture;
+        let map_gesture = |kind: GestureKind| match kind {
+            GestureKind::Overview => Some(TxGesture::SwipeUp),
+            GestureKind::AppOverview => Some(TxGesture::SwipeDown),
+            GestureKind::AppGrid => Some(TxGesture::Pinch),
+            GestureKind::ShowDesktop => Some(TxGesture::Spread),
+            GestureKind::WorkspaceSwitch => None,
+        };
         match out {
             GestureOutput::Begin { kind, .. } => {
                 self.cancel_forwarded_gesture();
+                if let (Some(output), Some(wire)) = (self.pointer_output(), map_gesture(kind)) {
+                    if self.transaction_gesture_begin(output, wire) {
+                        self.gesture_output = Some(output);
+                        return;
+                    }
+                }
                 if kind == GestureKind::WorkspaceSwitch {
                     self.gesture_output = self.pointer_output();
                     if let Some(output) = self.gesture_output {
@@ -1599,22 +1613,36 @@ impl Cupertino {
                     }
                 }
             }
-            GestureOutput::Update {
-                kind: GestureKind::WorkspaceSwitch,
-                progress,
-                ..
-            } => {
+            GestureOutput::Update { kind, progress, .. } => {
                 if let Some(output) = self.gesture_output {
-                    // progress is positive towards the next workspace; the model's fraction is the
-                    // displacement of the content (positive = to the right)
-                    self.command(Command::WorkspaceGestureUpdate {
-                        output,
-                        fraction: -progress,
-                    });
+                    if self.transaction_gesture_update(output, progress.abs()) {
+                        return;
+                    }
+                }
+                if kind == GestureKind::WorkspaceSwitch {
+                    if let Some(output) = self.gesture_output {
+                        // progress is positive towards the next workspace; the model's fraction is the
+                        // displacement of the content (positive = to the right)
+                        self.command(Command::WorkspaceGestureUpdate {
+                            output,
+                            fraction: -progress,
+                        });
+                    }
                 }
             }
-            GestureOutput::End { kind, outcome, .. } => {
+            GestureOutput::End {
+                kind,
+                outcome,
+                velocity,
+                ..
+            } => {
                 let commit = outcome == GestureOutcome::Commit;
+                if let Some(output) = self.gesture_output {
+                    if self.transaction_gesture_end(output, commit, velocity) {
+                        self.gesture_output = None;
+                        return;
+                    }
+                }
                 match kind {
                     GestureKind::WorkspaceSwitch => {
                         if let Some(output) = self.gesture_output.take() {

@@ -159,6 +159,7 @@ impl Cupertino {
             decor: &mut self.decor,
             menu_bars: &self.menu_bars,
             hosts: &self.hosts,
+            transactions: &self.transactions,
             window_managers: &self.window_managers,
             overlays: &mut self.overlays,
             fx: &self.fx,

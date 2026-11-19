@@ -830,6 +830,8 @@ pub struct Cupertino {
     pub app_effects_v1: AppEffectsV1Global,
     /// Shell hosts (`cupertino_host_v1`), per-component connections, liveness, holds and bus identity.
     pub hosts: crate::host::HostManager,
+    /// Coordinated shell transitions, gesture bindings and window/workspace holes (`cupertino_transaction_manager_v1`).
+    pub transactions: crate::transaction::TransactionManager,
     pub supervisor: Supervisor,
     /// What wakes the supervision of the shell processes and the satellite.
     pub supervision_wakeups: crate::supervisor::Wakeups,
@@ -1042,6 +1044,7 @@ impl Cupertino {
         let shell_v1 = ShellV1Global::new(&dh);
         let app_effects_v1 = AppEffectsV1Global::new(&dh);
         let hosts = crate::host::HostManager::new(&dh);
+        let transactions = crate::transaction::TransactionManager::new(&dh);
         let capture = crate::capture::Capture::new(&dh);
         let control = crate::control::Control::new(&dh);
         let global_shortcuts = crate::global_shortcuts::GlobalShortcuts::new(&dh);
@@ -1191,6 +1194,7 @@ impl Cupertino {
             shell_v1,
             app_effects_v1,
             hosts,
+            transactions,
             supervisor,
             supervision_wakeups: Default::default(),
             xwayland: None,
@@ -1885,6 +1889,7 @@ impl Cupertino {
             self.mapped_clients.remove(id);
             residents_changed |= self.docks.client_gone(id);
             self.host_client_disconnected(id);
+            self.transactions.client_disconnected(id);
         }
         let mapped = &self.mapped_clients;
         self.mapped_processes
@@ -1999,7 +2004,10 @@ impl Cupertino {
         Some(
             list.into_iter()
                 .rev()
-                .filter(|(id, _, _)| !self.window_managers.passes_input(*id))
+                .filter(|(id, _, _)| {
+                    !self.window_managers.passes_input(*id)
+                        && !self.transactions.is_window_claimed(*id)
+                })
                 .filter_map(|(id, slide, _)| {
                     let entry = self.entry(id)?;
                     let (plan, _) = crate::render::scene::plan_for(
@@ -2392,7 +2400,9 @@ impl Cupertino {
         self.flush_publications();
         self.refresh_control();
         self.forget_gone_processes();
-        self.tick_hosts(std::time::Instant::now());
+        let wall_now = std::time::Instant::now();
+        self.tick_hosts(wall_now);
+        self.tick_transactions(wall_now);
         let now = self.now();
         self.tick_session_lock();
         self.idle.refresh_inhibition();
@@ -2548,6 +2558,7 @@ impl Cupertino {
                     }
                 }
                 Effect::WindowDestroyed { window } => {
+                    self.transactions.notify_window_closed(window);
                     if let Some(h) = self.entry(window).and_then(|e| e.foreign.clone()) {
                         h.send_closed();
                     }
@@ -2573,12 +2584,22 @@ impl Cupertino {
                         self.close_overview();
                     }
                 }
-                Effect::WorkspaceCreated { .. }
-                | Effect::WorkspaceRemoved { .. }
-                | Effect::WorkspacesReordered { .. } => self.send_overview_to_docks(),
+                Effect::WorkspaceRemoved { workspace, .. } => {
+                    self.transactions.notify_workspace_removed(workspace);
+                    self.send_overview_to_docks();
+                }
+                Effect::WorkspaceCreated { .. } | Effect::WorkspacesReordered { .. } => {
+                    self.send_overview_to_docks()
+                }
+                Effect::WindowStateChanged { window, from, to } => {
+                    if from == cupertino_wm::LifecycleState::Minimized
+                        && to != cupertino_wm::LifecycleState::Minimized
+                    {
+                        self.transactions.notify_window_unminimized(window);
+                    }
+                }
                 Effect::Activate { .. }
                 | Effect::AppRegistered { .. }
-                | Effect::WindowStateChanged { .. }
                 | Effect::Attention { .. }
                 | Effect::Raise { .. }
                 | Effect::SetVisible { .. }

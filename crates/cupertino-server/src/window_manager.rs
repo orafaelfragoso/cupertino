@@ -649,7 +649,11 @@ impl Dispatch<CupertinoWindowManagerV1, WindowManagerData> for Cupertino {
             cupertino_window_manager_v1::Request::Commit => state.commit_placements(output),
             cupertino_window_manager_v1::Request::ActivateWindow { id } => {
                 let window = WindowId(u64::from(id));
-                if state.wm.window(window).is_some() {
+                if !state.transactions.enqueue_window_change(
+                    &client.id(),
+                    crate::transaction::QueuedWindowChange::ActivateWindow(window),
+                ) && state.wm.window(window).is_some()
+                {
                     state.focus_window_by_input(window);
                 }
             }

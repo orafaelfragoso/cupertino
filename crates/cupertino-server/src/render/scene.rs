@@ -543,6 +543,8 @@ pub struct SceneParams<'a> {
     pub menu_bars: &'a crate::menu_bar::MenuBars,
     /// Shell host holds rendered while a component restarts (D19).
     pub hosts: &'a crate::host::HostManager,
+    /// Active transactions and window/workspace holes (W5.3).
+    pub transactions: &'a crate::transaction::TransactionManager,
     /// Stage placements: strip thumbnails and hidden windows.
     pub window_managers: &'a crate::window_manager::WindowManagers,
     pub overlays: &'a mut crate::overlays::Overlays,
@@ -3333,6 +3335,9 @@ fn desktop_scene(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>, stack: &m
         // the windows whose ghost was drawn with them
         let mut with_their_window: Vec<WindowId> = Vec::new();
         for (id, slide, workspace_opacity) in list.into_iter().rev() {
+            if p.transactions.is_window_claimed(id) {
+                continue;
+            }
             let Some(entry) = p.windows.iter().find(|w| w.id == id) else {
                 continue;
             };

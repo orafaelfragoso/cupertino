@@ -84,6 +84,7 @@ pub mod suspended;
 pub mod sync_file;
 pub mod toolkit_programs;
 pub mod toplevel_icon;
+pub mod transaction;
 pub mod window_manager;
 pub mod xwayland;
 

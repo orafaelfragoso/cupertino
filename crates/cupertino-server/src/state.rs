@@ -106,6 +106,10 @@ pub struct ClientState {
     /// connection the server made itself, whose process is its holder instead ([`ClientState::process`]). The owner of a
     /// bus name the client hands the server is checked against that process (`crate::owner_check`).
     pub peer: Option<cupertino_peer::ProcessHandle>,
+    /// The process behind the connection, read off the loop once it is known ([`ClientState::process_facts`]).
+    pub process_lookup: Arc<crate::process::ProcessLookup>,
+    /// How many of the client's process lookup threads are alive (`crate::process::CONNECTION_LOOKUP_LIMIT`).
+    pub process_lookups: crate::process::Alive,
     /// How many of the client's owner identification threads are alive (`crate::dbus::CLIENT_IDENTIFY_LIMIT`).
     pub owner_identifying: crate::dbus::Identifying,
     /// The commits of the client held back until their buffers are ready ([`crate::acquire_waits`]).
@@ -138,6 +142,8 @@ impl Default for ClientState {
             backdrops: std::sync::Arc::default(),
             sandboxed: false,
             peer: None,
+            process_lookup: Arc::default(),
+            process_lookups: Arc::default(),
             owner_identifying: std::sync::Arc::default(),
             acquire_waits: std::sync::Arc::default(),
             gone: std::sync::OnceLock::new(),
@@ -160,10 +166,46 @@ impl ClientState {
             Holder::Detached(_) => cupertino_peer::ProcessHandle::open(std::process::id()).ok(),
         }
     }
+
+    /// Start reading the process behind the connection off the loop ([`crate::process::read_facts`]), once it is known
+    /// ([`ClientState::process`]) and unless a reading started already.
+    pub fn look_up_process(&self) {
+        if !self.process_lookup.is_unstarted() {
+            return;
+        }
+        let Some(process) = self.process() else {
+            return;
+        };
+        self.process_lookup.start(
+            crate::process::Lookups::shared(),
+            (
+                &self.process_lookups,
+                crate::process::CONNECTION_LOOKUP_LIMIT,
+            ),
+            move || crate::process::read_facts(&process),
+        );
+    }
+
+    /// The process behind the connection, read once off the loop ([`ClientState::look_up_process`]); the first use while
+    /// it is read waits until [`crate::process::IDENTITY_WAIT`] has passed. `None` when it is not known, could not be
+    /// named or was not read in time: it then names no process and allows nothing.
+    pub fn process_facts(&self) -> Option<Arc<crate::process::ProcessFacts>> {
+        self.process_facts_until(std::time::Instant::now() + crate::process::IDENTITY_WAIT)
+    }
+
+    /// [`ClientState::process_facts`], waiting until `deadline` at most.
+    pub fn process_facts_until(
+        &self,
+        deadline: std::time::Instant,
+    ) -> Option<Arc<crate::process::ProcessFacts>> {
+        self.look_up_process();
+        self.process_lookup.wait_until(deadline)
+    }
 }
 
 /// Add the client on `stream` with `state`, which keeps a handle of the server's end of the socket
-/// ([`ClientState::socket`]) to shut it down when the connection ends.
+/// ([`ClientState::socket`]) to shut it down when the connection ends. The process that connected, when the socket names
+/// it ([`ClientState::peer`]), is read off the loop from now ([`ClientState::look_up_process`]).
 pub fn insert_client(
     display: &DisplayHandle,
     stream: std::os::unix::net::UnixStream,
@@ -172,6 +214,9 @@ pub fn insert_client(
     state.socket = std::sync::Mutex::new(Some(stream.try_clone()?.into()));
     let state = Arc::new(state);
     display.clone().insert_client(stream, state.clone())?;
+    if state.peer.is_some() {
+        state.look_up_process();
+    }
     Ok(state)
 }
 
@@ -214,9 +259,12 @@ impl ClientData for ClientState {
 /// client closed it, or the server gave up on a client that read nothing for too long, [`CLIENT_EVENT_BUFFER`]), at
 /// DEBUG for any other client.
 fn log_disconnect(state: &ClientState, client: &ClientId, reason: &DisconnectReason) {
-    let process = state.process();
-    let pid = process.as_ref().map(|p| p.pid);
-    let program = process.as_ref().and_then(process_program);
+    let facts = state.process_lookup.known();
+    let pid = match &facts {
+        Some(facts) => Some(facts.process.0),
+        None => state.process().map(|p| p.pid),
+    };
+    let program = facts.as_deref().and_then(program_name);
     let program = program.as_deref().unwrap_or("unknown");
     match reason {
         DisconnectReason::ProtocolError(error) => tracing::warn!(
@@ -245,13 +293,17 @@ fn log_disconnect(state: &ClientState, client: &ClientId, reason: &DisconnectRea
     }
 }
 
-/// The program name of `process` (`/proc/<pid>/exe`), while the descriptor still holds it.
-fn process_program(process: &cupertino_peer::ProcessHandle) -> Option<String> {
-    let exe = std::fs::read_link(format!("/proc/{}/exe", process.pid)).ok()?;
-    if process.has_exited() {
-        return None;
-    }
-    Some(exe.file_name()?.to_string_lossy().into_owned())
+/// The file name of the program a connection's process was read to run ([`crate::process::ProcessFacts::program`]); a
+/// diagnostic names it, never waiting for `/proc`.
+pub fn program_name(facts: &crate::process::ProcessFacts) -> Option<String> {
+    Some(
+        facts
+            .program
+            .as_ref()?
+            .file_name()?
+            .to_string_lossy()
+            .into_owned(),
+    )
 }
 
 /// The window model's minimize and restore timing for the minimize effect of `effects`: the effect generators carry their

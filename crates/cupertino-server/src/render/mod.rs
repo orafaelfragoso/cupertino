@@ -29,7 +29,7 @@ pub mod reduce;
 pub mod scene;
 pub mod screenshot;
 pub mod shader_rect;
-pub mod snapshots;
+pub use cupertino_server_render::render::snapshots;
 pub mod supersample;
 pub mod ui;
 pub mod uploads;

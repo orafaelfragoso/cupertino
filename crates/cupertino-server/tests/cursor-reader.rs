@@ -36,7 +36,7 @@ fn a_slow_cursor_file_leaves_the_arrow_visible_then_wakes_the_loop_to_redraw() {
         rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
     )
     .unwrap();
-    let events = EventLoop::try_new().unwrap();
+    let events = EventLoop::<()>::try_new().unwrap();
     let mut loader = CursorLoader::load(
         Some(CursorTheme {
             name: "Slow".into(),
@@ -44,6 +44,7 @@ fn a_slow_cursor_file_leaves_the_arrow_visible_then_wakes_the_loop_to_redraw() {
         }),
         CursorColors::DEFAULT,
         &events.handle(),
+        |_| {},
     );
 
     // Nobody has opened the FIFO for writing: a synchronous load would not return.

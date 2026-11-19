@@ -1621,6 +1621,7 @@ dependencies = [
  "cupertino-raster-math",
  "cupertino-scene",
  "cupertino-server-backend",
+ "cupertino-server-render",
  "cupertino-theme",
  "cupertino-wm",
  "image",
@@ -1661,6 +1662,24 @@ dependencies = [
  "smithay",
  "tracing",
  "zbus",
+]
+
+[[package]]
+name = "cupertino-server-render"
+version = "0.1.0"
+dependencies = [
+ "cupertino-assets",
+ "cupertino-cursor",
+ "cupertino-effects",
+ "cupertino-geometry",
+ "cupertino-gpu",
+ "cupertino-input",
+ "cupertino-scene",
+ "cupertino-theme",
+ "cupertino-wm",
+ "smithay",
+ "tracing",
+ "xcursor",
 ]
 
 [[package]]

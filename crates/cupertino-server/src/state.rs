@@ -1064,6 +1064,7 @@ impl Cupertino {
             assets.cursor_theme(),
             config.pointer.cursor_colors,
             &loop_handle,
+            |state: &mut Self| state.request_redraw(),
         );
         let with_bridge = overlays.accent.has_table();
         let text_input_state = with_bridge

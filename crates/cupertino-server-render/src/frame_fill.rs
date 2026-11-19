@@ -1,6 +1,5 @@
 //! Whether a window whose client draws its own frame is an opaque rectangle, up to corners of its own no rounder than
-//! the window's: only such a window gets the compositor's rounded corners, outline and shadow
-//! ([`crate::state::WindowEntry::styled`]). A frameless transparent window (an overlay, a floating widget, a pill-shaped
+//! the window's: only such a window gets the compositor's rounded corners, outline and shadow. A frameless transparent window (an overlay, a floating widget, a pill-shaped
 //! bar) is left as it draws itself, with no box drawn around it.
 //!
 //! The client's opaque region says so first: browsers and toolkits that draw their own title bar declare their frame

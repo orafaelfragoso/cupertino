@@ -1,0 +1,27 @@
+[package]
+name = "cupertino-server-render"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Compositor rendering primitives: scene lowering, GLES passes, window chrome, cursors, effects, and snapshots"
+
+[package.metadata.cupertino]
+layer = "core"
+
+[dependencies]
+cupertino-assets = { path = "../cupertino-assets" }
+cupertino-cursor = { path = "../cupertino-cursor" }
+cupertino-effects = { path = "../cupertino-effects" }
+cupertino-geometry = { path = "../cupertino-geometry" }
+cupertino-gpu = { path = "../cupertino-gpu" }
+cupertino-input = { path = "../cupertino-input" }
+cupertino-scene = { path = "../cupertino-scene" }
+cupertino-theme = { path = "../cupertino-theme" }
+cupertino-wm = { path = "../cupertino-wm" }
+tracing = "0.1"
+xcursor = "0.3"
+
+[dependencies.smithay]
+version = "0.7"
+default-features = false
+features = ["desktop", "renderer_gl", "wayland_frontend"]

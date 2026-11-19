@@ -45,7 +45,7 @@ impl Waits {
     }
 }
 
-/// One client's waits, kept in its [`ClientState`](crate::state::ClientState).
+/// One client's waits, kept in its per-client state.
 #[derive(Debug, Default)]
 pub struct AcquireWaits {
     waits: Mutex<Waits>,

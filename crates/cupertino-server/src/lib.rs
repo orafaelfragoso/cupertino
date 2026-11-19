@@ -4,7 +4,9 @@
 //! See the crate README for the architecture and the integration points.
 
 pub mod accessibility;
-pub mod acquire_waits;
+pub use cupertino_server_backend::{
+    acquire_waits, drm_trace, latch, output_depth, schedule, software_render, sync_file,
+};
 pub mod activation_env;
 pub mod app_effects_v1;
 pub mod authorization;
@@ -26,7 +28,6 @@ pub mod displays;
 pub mod dock;
 pub mod dock_thumbnail;
 pub mod drag_return;
-pub mod drm_trace;
 pub mod events;
 pub mod file_limit;
 pub mod force_quit;
@@ -45,13 +46,11 @@ pub mod input_method;
 pub mod kbd;
 pub mod kbd_filters;
 pub mod kbd_ui;
-pub mod latch;
 pub mod layers_v1;
 pub mod live;
 pub mod localed;
 pub mod logging;
 pub mod menu_bar;
-pub mod output_depth;
 pub mod overlays;
 pub mod overview_v1;
 pub mod owner_check;
@@ -66,7 +65,6 @@ pub mod quit;
 pub mod render;
 pub mod restart_policy;
 pub mod runtime_info;
-pub mod schedule;
 pub mod screen_reader;
 pub mod scroll_v1;
 pub mod session;
@@ -77,12 +75,10 @@ pub mod shell_connection;
 pub mod shell_ctl;
 pub mod shell_v1;
 pub mod shortcut_inhibit;
-pub mod software_render;
 pub mod state;
 pub mod store_later;
 pub mod supervisor;
 pub mod suspended;
-pub mod sync_file;
 pub mod toolkit_programs;
 pub mod toplevel_icon;
 pub mod transaction;

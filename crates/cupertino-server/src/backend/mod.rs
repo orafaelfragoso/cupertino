@@ -14,7 +14,6 @@ pub mod copy;
 pub mod headless;
 #[cfg(feature = "udev")]
 pub mod input;
-#[cfg(feature = "udev")]
 pub mod record;
 mod stalls;
 #[cfg(feature = "udev")]

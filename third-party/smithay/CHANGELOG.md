@@ -25,6 +25,11 @@ they sent (`MemoryUploads`), so a compositor can count its own uploads per frame
 
 ### Bugfixes
 
+`KeymapFile` prepares the unsealed legacy keymap descriptor when the keymap is created or changed
+(an unsealed memfd re-opened read-only on Linux, falling back to an unlinked temporary file), so
+`KeymapFile::with_fd` does not write a temporary file during keymap delivery to legacy `wl_keyboard`
+(< v7) or input-method recipients.
+
 Remove four unused tracing imports, cast the SIGBUS handler through a pointer before its integer representation,
 and advance swapchain buffer ages with compare/exchange instead of deprecated `fetch_update`. Age zero and overflow
 handling and sequentially consistent ordering are preserved without raising the declared Rust version.

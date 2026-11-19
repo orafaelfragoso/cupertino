@@ -321,6 +321,15 @@ impl Cupertino {
     /// Apply `keyboard.conf` to the seat: repeat info for clients, the layouts of the input sources (the system
     /// layouts as groups of one keymap, the generated keymaps of the `decoded:` sources).
     pub fn apply_keyboard_settings(&mut self) {
+        self.apply_keyboard_settings_with_decoded(None);
+    }
+
+    /// Like [`Self::apply_keyboard_settings`], taking `decoded:` layouts already read off the compositor loop when
+    /// `preloaded` is `Some` so no layout file is read on the loop thread.
+    pub fn apply_keyboard_settings_with_decoded(
+        &mut self,
+        preloaded: Option<std::collections::HashMap<String, crate::kbd::DecodedSource>>,
+    ) {
         let Some(keyboard) = self.seat.get_keyboard() else {
             return;
         };
@@ -329,25 +338,32 @@ impl Cupertino {
         // layouts that do not compile leave the keymap as it was (logged)
         self.set_system_keymap();
         self.keep_release_chord_typeable();
-        let (kb, level3) = (
-            self.config.keyboard.layout_keyboard,
-            self.config.keyboard.decoded_level3(),
-        );
-        for spec in self.config.keyboard.sources.clone() {
-            let Some(path) = spec.decoded.as_ref() else {
-                continue;
-            };
-            match crate::kbd::generate_decoded(path, kb, level3) {
-                Ok(source) => {
-                    tracing::info!(
-                        source = spec.id,
-                        layout = source.label,
-                        "decoded layout loaded"
-                    );
-                    self.overlays.inputs.decoded.insert(spec.id.clone(), source);
-                }
-                Err(e) => {
-                    tracing::error!(source = spec.id, error = %e, "decoded layout not loaded; the source cannot be selected")
+        match preloaded {
+            Some(decoded) => {
+                self.overlays.inputs.decoded = decoded;
+            }
+            None => {
+                let (kb, level3) = (
+                    self.config.keyboard.layout_keyboard,
+                    self.config.keyboard.decoded_level3(),
+                );
+                for spec in self.config.keyboard.sources.clone() {
+                    let Some(path) = spec.decoded.as_ref() else {
+                        continue;
+                    };
+                    match crate::kbd::generate_decoded(path, kb, level3) {
+                        Ok(source) => {
+                            tracing::info!(
+                                source = spec.id,
+                                layout = source.label,
+                                "decoded layout loaded"
+                            );
+                            self.overlays.inputs.decoded.insert(spec.id.clone(), source);
+                        }
+                        Err(e) => {
+                            tracing::error!(source = spec.id, error = %e, "decoded layout not loaded; the source cannot be selected")
+                        }
+                    }
                 }
             }
         }
@@ -423,12 +439,13 @@ impl Cupertino {
             keyboard.sources.clear();
         }
         keyboard.use_system_layout();
+        let decoded = std::mem::take(&mut self.overlays.inputs.decoded);
         self.overlays.inputs = crate::kbd::InputSources::new(self.config.keyboard.sources.clone());
         self.caps = crate::kbd::CapsDebounce::new(
             self.config.keyboard.caps,
             self.config.keyboard.caps_switch_hold(),
         );
-        self.apply_keyboard_settings();
+        self.apply_keyboard_settings_with_decoded(Some(decoded));
     }
 
     // ---- input sources -----------------------------------------------------------------------

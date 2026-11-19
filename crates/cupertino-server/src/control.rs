@@ -672,11 +672,17 @@ impl Cupertino {
             }
         }
     }
+    /// Record where remembered desktop-control answers live so writes go there even before the first off-loop read
+    /// completes.
+    pub(crate) fn set_desktop_control_store_path(&mut self, path: PathBuf) {
+        self.control.store_path = Some(path);
+    }
+
     /// Read the remembered answers from `path` and follow them: a run that lost a service it holds from them is revoked,
     /// and a run awaiting an answer for a service now turned off is refused. A file that is refused allows nothing.
     pub fn reload_desktop_control(&mut self, path: &Path) {
         self.control.store_path = Some(path.to_path_buf());
-        self.control.store = match DesktopControlConf::load(path) {
+        let store = match DesktopControlConf::load(path) {
             Ok((conf, problems)) => {
                 for problem in problems {
                     tracing::warn!(path = %path.display(), line = problem.line, problem = problem.message, "desktop control: ignoring a line");
@@ -688,6 +694,13 @@ impl Cupertino {
                 DesktopControlConf::default()
             }
         };
+        self.apply_desktop_control_store(store);
+    }
+
+    /// Apply a verified desktop-control store (or an empty store while a reload is pending or refused), revoking any
+    /// active run that lost a remembered service and refusing any waiting run whose service is now denied.
+    pub fn apply_desktop_control_store(&mut self, store: DesktopControlConf) {
+        self.control.store = store;
         for i in 0..self.control.runs.len() {
             let run = &self.control.runs[i];
             let Identity::Named(requester) = &run.identity else {

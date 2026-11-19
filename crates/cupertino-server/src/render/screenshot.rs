@@ -1,10 +1,12 @@
 //! Offscreen rendering of an output to an image (`--screenshot PATH`, headless mode, tests).
 
 use std::path::Path;
+use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use image::RgbaImage;
 use smithay::backend::allocator::Fourcc;
+use smithay::backend::egl::fence::EGLFence;
 use smithay::backend::renderer::damage::OutputDamageTracker;
 use smithay::backend::renderer::element::RenderElement;
 use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture};
@@ -12,6 +14,36 @@ use smithay::backend::renderer::{Bind, Color32F, ExportMem, Offscreen};
 use smithay::utils::{Buffer, Physical, Rectangle, Size, Transform};
 
 use super::CupertinoElement;
+
+/// How long an offscreen screenshot or window-capture readback waits for the GPU before aborting, so the compositor
+/// loop never blocks indefinitely on a stalled GPU.
+pub const READBACK_WAIT: Duration = Duration::from_millis(200);
+
+/// Wait at most `wait` for GPU work already queued on `renderer` to complete before a CPU pixel readback.
+/// Returns `Ok(())` once signalled (or if the EGL display does not support fences), and an error if `wait` expires.
+pub fn wait_for_readback(renderer: &mut GlesRenderer, wait: Duration) -> Result<()> {
+    renderer
+        .with_context(|_| ())
+        .map_err(|e| anyhow!("activate renderer context for readback fence: {e}"))?;
+    let fence = match EGLFence::create(renderer.egl_context().display()) {
+        Ok(fence) => fence,
+        Err(_) => return Ok(()),
+    };
+    renderer
+        .with_context(|gl| unsafe { gl.Flush() })
+        .map_err(|e| anyhow!("flush renderer for readback fence: {e}"))?;
+    if fence
+        .client_wait(Some(wait), true)
+        .map_err(|e| anyhow!("waiting for readback fence: {e}"))?
+    {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "offscreen GPU readback did not finish within {} ms",
+            wait.as_millis()
+        ))
+    }
+}
 
 /// Render `elements` (front to back) into a texture of `size` and read it back as RGBA.
 ///
@@ -48,6 +80,11 @@ pub fn render_to_image_transformed<E: RenderElement<GlesRenderer>>(
         tracker
             .render_output(renderer, &mut target, 0, elements, clear)
             .map_err(|e| anyhow!("render offscreen: {e:?}"))?;
+        drop(target);
+        wait_for_readback(renderer, READBACK_WAIT)?;
+        let target = renderer
+            .bind(&mut texture)
+            .map_err(|e| anyhow!("rebind offscreen buffer for readback: {e}"))?;
         renderer
             .copy_framebuffer(&target, Rectangle::from_size(buf_size), Fourcc::Abgr8888)
             .map_err(|e| anyhow!("read back framebuffer: {e}"))?

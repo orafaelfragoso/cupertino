@@ -85,6 +85,13 @@ prefixed, applied without fuzz.
      connectors, a resumed session), where a flip alone can be refused for a primary plane format the driver changes
      only in a modeset. The login screen hands the display to the desktop this way with no black frame between.
    - Files: `CHANGELOG.md`, `src/backend/drm/compositor/mod.rs`.
+9. `patches/0009-keymap-prebuild-legacy-fd.patch`
+   - What: `KeymapFile` prepares the unsealed legacy keymap descriptor in `new` and `change_keymap` (an unsealed memfd
+     re-opened read-only on Linux, with a temporary-file fallback) so `KeymapFile::with_fd` never writes a temporary
+     file on the compositor loop during keymap delivery.
+   - Why: legacy `wl_keyboard` (< v7) and input-method keymap deliveries wrote a fresh temporary file in
+     `XDG_RUNTIME_DIR` on every send from the compositor thread.
+   - Files: `CHANGELOG.md`, `src/input/keyboard/keymap_file.rs`.
 
 ## Changing the tree
 

@@ -496,6 +496,10 @@ impl Cupertino {
             .flatten()
             .context("the window could not be rendered")?;
         let size = texture.size();
+        crate::render::screenshot::wait_for_readback(
+            renderer,
+            crate::render::screenshot::READBACK_WAIT,
+        )?;
         let mapping = renderer
             .copy_texture(&texture, Rectangle::from_size(size), Fourcc::Abgr8888)
             .map_err(|e| anyhow!("reading the window back: {e}"))?;

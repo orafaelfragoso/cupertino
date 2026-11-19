@@ -219,3 +219,44 @@ fn a_loop_that_polls_futures_waits_for_a_quiet_burst_and_rereads_the_files_elsew
     assert!(quiet);
     assert_eq!(events, [WatchEvent::Changed(vec![file])]);
 }
+
+#[test]
+fn permission_changes_with_unchanged_bytes_are_reported_and_poll_touched_never_reads_files() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("policy.conf");
+    std::fs::write(&file, "same").unwrap();
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+    let rx = watch(vec![file.clone()]);
+    nothing(&rx, "initial state");
+
+    // chmod without changing bytes must report a change so policy files re-verify permissions
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(changed(&rx), std::slice::from_ref(&file));
+
+    // poll_touched reports immediate and quiet touched paths without opening/reading the file
+    let mut watcher = ConfigWatcher::new(vec![file.clone()]).unwrap();
+    let _ = watcher.poll_touched(Instant::now());
+    std::fs::write(&file, "updated").unwrap();
+    let mut fd = libc::pollfd {
+        fd: watcher.as_fd().as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    // Safety: `fd` is an initialised pollfd that outlives the call, and the count says it is one.
+    assert_eq!(
+        unsafe { libc::poll(&mut fd, 1, REPORT.as_millis() as i32) },
+        1
+    );
+    let now = Instant::now();
+    let first = watcher.poll_touched(now);
+    assert_eq!(first.immediate, vec![file.clone()]);
+    assert!(first.quiet.is_empty());
+    let quiet = watcher.quiet_at().expect("quiet deadline armed");
+    let second = watcher.poll_touched(quiet);
+    assert!(second.immediate.is_empty());
+    assert_eq!(second.quiet, vec![file]);
+    assert_eq!(watcher.quiet_at(), None);
+}

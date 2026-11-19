@@ -17,20 +17,94 @@
 //! | `data-control.conf` | the allowed applications; a client no longer allowed is disconnected (`crate::data_control`) | — |
 //! | `desktop-control.conf` | each app's remembered desktop control and capture answers; a run whose app lost a service it uses is revoked (`crate::control`) | — |
 
+use std::collections::HashMap;
 use std::os::fd::AsFd;
 use std::path::PathBuf;
 use std::time::Instant;
 
+use cupertino_defaults::accessibility::AccessibilitySettings;
+use cupertino_defaults::appearance::AppearanceSettings;
 use cupertino_defaults::compositor::CompositorSettings;
+use cupertino_defaults::data_control::{DataControlConf, Entry as DataControlEntry};
+use cupertino_defaults::desktop_control::DesktopControlConf;
 use cupertino_defaults::keyboard::KeyboardSettings as KeyboardConf;
 use cupertino_defaults::power::PowerSettings;
 use cupertino_defaults::watch::{ConfigWatcher, WatchEvent};
+use cupertino_keyboard::AccentTable;
+use smithay::reexports::calloop::channel::{self, Channel, Event as ChannelEvent, Sender};
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{Interest, Mode, PostAction};
 
-use crate::config::{Config, SettingsFiles};
+use crate::config::{Config, DevFolder, SettingsFiles};
+use crate::kbd::DecodedSource;
+use crate::process::{Alive, Lookups};
 use crate::state::Cupertino;
+
+/// How many concurrent off-loop read threads may be alive per watched file kind (so a stalled mount
+/// cannot leak unbounded threads while a transient slow read does not block a newer change).
+const SETTINGS_READ_LIMIT: usize = 2;
+
+/// The watched settings and policy files, one slot each for ordering and concurrency limits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(usize)]
+enum ReloadKind {
+    UserCompositor = 0,
+    SystemCompositor = 1,
+    Keyboard = 2,
+    Power = 3,
+    SystemAccessibility = 4,
+    DataControl = 5,
+    DesktopControl = 6,
+    Appearance = 7,
+}
+
+impl ReloadKind {
+    const COUNT: usize = 8;
+
+    fn idx(self) -> usize {
+        self as usize
+    }
+}
+
+/// Result of an off-loop settings or policy file read, returned to the compositor loop over a channel.
+struct ReloadDone {
+    kind: ReloadKind,
+    generation: u64,
+    payload: ReloadPayload,
+}
+
+enum ReloadPayload {
+    Compositor {
+        path: PathBuf,
+        system: bool,
+        after: Option<CompositorSettings>,
+        /// Verified `dev_folder` from root-only system file check (when `system` is true).
+        dev_folder: Option<Result<Option<DevFolder>, String>>,
+    },
+    Keyboard {
+        path: PathBuf,
+        after: Option<KeyboardConf>,
+        decoded: Option<HashMap<String, DecodedSource>>,
+        accent_table: Option<AccentTable>,
+    },
+    Power {
+        path: PathBuf,
+        after: Option<PowerSettings>,
+    },
+    SystemAccessibility {
+        settings: AccessibilitySettings,
+    },
+    DataControl {
+        allowed: Vec<DataControlEntry>,
+    },
+    DesktopControl {
+        store: DesktopControlConf,
+    },
+    Appearance {
+        settings: AppearanceSettings,
+    },
+}
 
 /// Where the watched files are; `None` when neither `XDG_CONFIG_HOME` nor `HOME` names a settings directory.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -82,22 +156,47 @@ pub struct LiveSettings {
     watcher: Option<ConfigWatcher>,
     /// Whether a timer waits for the burst of file changes under way to be quiet.
     quiet_timer: bool,
+    /// Channel back to the compositor loop for off-loop settings and policy reads.
+    reloaded: Option<Sender<ReloadDone>>,
+    /// Per-file-kind monotonic generation so slower older reads never overwrite newer ones.
+    generations: [u64; ReloadKind::COUNT],
+    /// Per-file-kind active reader count, bounded by [`SETTINGS_READ_LIMIT`].
+    readers: [Alive; ReloadKind::COUNT],
 }
 
 impl Cupertino {
     /// Watch the settings files at `paths`, `files` being what was read from them at start. A watch that cannot be set
-    /// up is logged: the files then apply at the next start only.
+    /// up is logged: the files then apply at the next start only. All post-startup reads and policy verifications run
+    /// off the compositor loop; policy files grant no privileges while their read is pending or fails.
     pub fn start_settings_watch(&mut self, files: SettingsFiles, paths: SettingsPaths) {
         self.live.files = files;
         self.live.paths = paths.clone();
-        self.live.appearance = cupertino_defaults::appearance::AppearanceSettings::path();
+        self.live.appearance = AppearanceSettings::path();
         self.apply_shell_options();
         self.apply_titlebar_double_click();
-        if let Some(path) = &paths.data_control {
-            self.reload_data_control(path);
-        }
         if let Some(path) = &paths.desktop_control {
-            self.reload_desktop_control(path);
+            self.set_desktop_control_store_path(path.clone());
+        }
+        let (tx, rx): (Sender<ReloadDone>, Channel<ReloadDone>) = channel::channel();
+        match self.loop_handle.insert_source(rx, |event, _, state| {
+            if let ChannelEvent::Msg(done) = event {
+                state.apply_reload_done(done);
+            }
+        }) {
+            Ok(_) => self.live.reloaded = Some(tx),
+            Err(e) => {
+                tracing::warn!(error = %e, "cannot register the settings reload channel: live reloads disabled");
+                return;
+            }
+        }
+        // Start initial policy verification off the loop; privileges remain empty until verified.
+        if let Some(path) = paths.data_control.clone() {
+            self.revoke_pending_policy(ReloadKind::DataControl);
+            self.dispatch_reload(ReloadKind::DataControl, path);
+        }
+        if let Some(path) = paths.desktop_control.clone() {
+            self.revoke_pending_policy(ReloadKind::DesktopControl);
+            self.dispatch_reload(ReloadKind::DesktopControl, path);
         }
         let watched: Vec<PathBuf> = [
             paths.compositor,
@@ -123,7 +222,7 @@ impl Cupertino {
                 return;
             }
         };
-        // the loop waits on a descriptor of the watch's own; the watch stays here, where its reads reach it
+        // the loop waits on a descriptor of the watch's own; it drains kernel events without reading files
         let readable = watcher.as_fd().try_clone_to_owned().and_then(|fd| {
             self.loop_handle
                 .insert_source(
@@ -138,7 +237,7 @@ impl Cupertino {
         match readable {
             Ok(_) => {
                 self.live.watcher = Some(watcher);
-                // a change made while the watch was set up is read now
+                // drain any kernel events that arrived while setting up the watch
                 self.read_settings();
             }
             Err(e) => {
@@ -147,16 +246,73 @@ impl Cupertino {
         }
     }
 
-    /// Apply what the watch of the settings files reports now, without waiting, and wake when the burst under way is
-    /// quiet.
+    /// Map a watched path to its [`ReloadKind`].
+    fn reload_kind_for(&self, path: &std::path::Path) -> Option<ReloadKind> {
+        if self.live.paths.compositor.as_deref() == Some(path) {
+            Some(ReloadKind::UserCompositor)
+        } else if self.live.paths.system.as_deref() == Some(path) {
+            Some(ReloadKind::SystemCompositor)
+        } else if self.live.paths.keyboard.as_deref() == Some(path) {
+            Some(ReloadKind::Keyboard)
+        } else if self.live.paths.power.as_deref() == Some(path) {
+            Some(ReloadKind::Power)
+        } else if self.live.paths.system_accessibility.as_deref() == Some(path) {
+            Some(ReloadKind::SystemAccessibility)
+        } else if self.live.paths.data_control.as_deref() == Some(path) {
+            Some(ReloadKind::DataControl)
+        } else if self.live.paths.desktop_control.as_deref() == Some(path) {
+            Some(ReloadKind::DesktopControl)
+        } else if self.live.appearance.as_deref() == Some(path) {
+            Some(ReloadKind::Appearance)
+        } else {
+            None
+        }
+    }
+
+    /// Revoke privileges granted by a policy file as soon as a change is observed, so an
+    /// unverifiable or stalled policy file never grants privileges while its read is pending.
+    fn revoke_pending_policy(&mut self, kind: ReloadKind) {
+        match kind {
+            ReloadKind::DataControl => self.set_data_control_allowed(Vec::new()),
+            ReloadKind::DesktopControl => {
+                self.apply_desktop_control_store(DesktopControlConf::default());
+            }
+            ReloadKind::SystemAccessibility => {
+                self.set_system_accessibility(AccessibilitySettings::default());
+            }
+            ReloadKind::SystemCompositor => {
+                self.supervisor.set_dev_folder(None);
+                self.config.dev_folder = None;
+            }
+            ReloadKind::UserCompositor
+            | ReloadKind::Keyboard
+            | ReloadKind::Power
+            | ReloadKind::Appearance => {}
+        }
+    }
+
+    /// Drain kernel watch events without reading any watched file on the compositor loop, revoke
+    /// pending policy privileges immediately, and dispatch quiet bursts to off-loop reader threads.
     fn read_settings(&mut self) {
         let Some(watcher) = self.live.watcher.as_mut() else {
             return;
         };
-        let events = watcher.read(Instant::now());
+        let polled = watcher.poll_touched(Instant::now());
         let quiet_at = watcher.quiet_at();
-        for event in events {
-            self.on_settings_event(event);
+        for failure in polled.failures {
+            if let WatchEvent::Error(e) = failure {
+                tracing::warn!(error = %e, "watching the settings files failed: later changes may apply at the next start only");
+            }
+        }
+        for path in polled.immediate {
+            if let Some(kind) = self.reload_kind_for(&path) {
+                self.revoke_pending_policy(kind);
+            }
+        }
+        for path in polled.quiet {
+            if let Some(kind) = self.reload_kind_for(&path) {
+                self.dispatch_reload(kind, path);
+            }
         }
         if let Some(at) = quiet_at.filter(|_| !self.live.quiet_timer) {
             let armed = self
@@ -175,54 +331,148 @@ impl Cupertino {
         }
     }
 
-    fn on_settings_event(&mut self, event: WatchEvent) {
-        let paths = match event {
-            WatchEvent::Error(e) => {
-                tracing::warn!(error = %e, "watching the settings files failed: later changes may apply at the next start only");
-                return;
-            }
-            WatchEvent::Changed(paths) => paths,
+    /// Spawn an off-loop reader for `kind` at `path` with a fresh generation number.
+    fn dispatch_reload(&mut self, kind: ReloadKind, path: PathBuf) {
+        let Some(tx) = self.live.reloaded.clone() else {
+            return;
         };
-        for path in paths {
-            if self.live.paths.compositor.as_ref() == Some(&path) {
-                self.reload_compositor(&path, false);
-            } else if self.live.paths.system.as_ref() == Some(&path) {
-                self.reload_compositor(&path, true);
-            } else if self.live.paths.keyboard.as_ref() == Some(&path) {
-                self.reload_keyboard(&path);
-            } else if self.live.paths.power.as_ref() == Some(&path) {
-                self.reload_power(&path);
-            } else if self.live.paths.system_accessibility.as_ref() == Some(&path) {
-                // a file that is gone, or refused (logged), leaves the machine's defaults off
-                let system =
-                    crate::accessibility::read_system_accessibility(&path).unwrap_or_default();
-                self.set_system_accessibility(system);
-                self.live.reloads += 1;
-            } else if self.live.paths.data_control.as_ref() == Some(&path) {
-                self.reload_data_control(&path);
-                self.live.reloads += 1;
-            } else if self.live.paths.desktop_control.as_ref() == Some(&path) {
-                self.reload_desktop_control(&path);
-                self.live.reloads += 1;
-            } else if self.live.appearance.as_ref() == Some(&path) {
-                self.reload_appearance_settings();
-                self.live.reloads += 1;
-            }
+        let slot = kind.idx();
+        self.live.generations[slot] = self.live.generations[slot].wrapping_add(1);
+        let generation = self.live.generations[slot];
+        let owner = &self.live.readers[slot];
+        let system_before = self.live.files.system.clone();
+        let user_before = self.live.files.compositor.clone();
+        let keyboard_before = self.live.files.keyboard.clone();
+        let keyboard_system = self.config.keyboard.system.clone();
+        let power_before = self.live.files.power;
+        let started = Lookups::shared().spawn(Some((owner, SETTINGS_READ_LIMIT)), move || {
+            let payload = read_off_loop(
+                kind,
+                path,
+                system_before,
+                user_before,
+                keyboard_before,
+                keyboard_system,
+                power_before,
+            );
+            let _ = tx.send(ReloadDone {
+                kind,
+                generation,
+                payload,
+            });
+        });
+        if !started {
+            tracing::warn!(?kind, "no thread available to read changed settings file");
+            self.revoke_pending_policy(kind);
         }
     }
 
-    /// Follow `appearance.conf` again: windows take a tint of the wallpaper or not, and a double click on a title bar
-    /// zooms, minimises or does nothing.
-    fn reload_appearance_settings(&mut self) {
-        let settings = cupertino_defaults::appearance::AppearanceSettings::current();
-        tracing::info!(
-            tint_windows = settings.tint_windows,
-            double_click = ?settings.titlebar_double_click,
-            "appearance settings reloaded"
-        );
-        self.config.apply_appearance_settings(&settings);
-        self.apply_titlebar_double_click();
-        self.request_redraw();
+    /// Apply the result of an off-loop read on the compositor loop, discarding stale generations.
+    fn apply_reload_done(&mut self, done: ReloadDone) {
+        if done.generation != self.live.generations[done.kind.idx()] {
+            return;
+        }
+        match done.payload {
+            ReloadPayload::Compositor {
+                path,
+                system,
+                after,
+                dev_folder,
+            } => {
+                if let Some(after) = after {
+                    let (system_before, user_before) = (
+                        self.live.files.system.clone(),
+                        self.live.files.compositor.clone(),
+                    );
+                    if system {
+                        self.live.files.system = after;
+                    } else {
+                        self.live.files.compositor = after;
+                    }
+                    let (system_after, user_after) = (
+                        self.live.files.system.clone(),
+                        self.live.files.compositor.clone(),
+                    );
+                    self.apply_compositor_layers(
+                        (&system_before, &user_before),
+                        (&system_after, &user_after),
+                    );
+                    self.live.reloads += 1;
+                    tracing::info!(path = %path.display(), "configuration reloaded");
+                }
+                if system {
+                    match dev_folder {
+                        Some(Ok(folder)) => {
+                            if folder.is_none() {
+                                tracing::info!("the development folder is gone: every shell process starts its installed program from its next start");
+                            }
+                            self.supervisor.set_dev_folder(folder.as_ref());
+                            self.config.dev_folder = folder;
+                        }
+                        Some(Err(e)) => {
+                            tracing::error!(path = %path.display(), error = %e, "the development folder of the changed system configuration is refused");
+                            self.supervisor.set_dev_folder(None);
+                            self.config.dev_folder = None;
+                        }
+                        None => {
+                            self.supervisor.set_dev_folder(None);
+                            self.config.dev_folder = None;
+                        }
+                    }
+                }
+            }
+            ReloadPayload::Keyboard {
+                path,
+                after,
+                decoded,
+                accent_table,
+            } => {
+                let Some(after) = after else {
+                    return;
+                };
+                let before = self.live.files.keyboard.clone();
+                self.live.files.keyboard = after.clone();
+                self.apply_keyboard_change_preloaded(&before, &after, decoded, accent_table);
+                self.live.reloads += 1;
+                tracing::info!(path = %path.display(), "keyboard settings reloaded");
+            }
+            ReloadPayload::Power { path, after } => {
+                let Some(after) = after else {
+                    return;
+                };
+                let before = self.live.files.power;
+                self.live.files.power = after;
+                if after != before {
+                    self.config.power = after;
+                    self.power.set_settings(after);
+                }
+                self.live.reloads += 1;
+                tracing::info!(path = %path.display(), "power settings reloaded");
+            }
+            ReloadPayload::SystemAccessibility { settings } => {
+                self.set_system_accessibility(settings);
+                self.live.reloads += 1;
+            }
+            ReloadPayload::DataControl { allowed } => {
+                self.set_data_control_allowed(allowed);
+                self.live.reloads += 1;
+            }
+            ReloadPayload::DesktopControl { store } => {
+                self.apply_desktop_control_store(store);
+                self.live.reloads += 1;
+            }
+            ReloadPayload::Appearance { settings } => {
+                tracing::info!(
+                    tint_windows = settings.tint_windows,
+                    double_click = ?settings.titlebar_double_click,
+                    "appearance settings reloaded"
+                );
+                self.config.apply_appearance_settings(&settings);
+                self.apply_titlebar_double_click();
+                self.request_redraw();
+                self.live.reloads += 1;
+            }
+        }
     }
 
     /// Hand the title bar's double click action to the decorations.
@@ -266,78 +516,6 @@ impl Cupertino {
         } else {
             0.0
         };
-    }
-
-    /// Re-read one layer of `compositor.json`, the system file or the user's, and apply what changed in the result.
-    fn reload_compositor(&mut self, path: &std::path::Path, system: bool) {
-        let layers = |files: &SettingsFiles| {
-            if system {
-                files.system.clone()
-            } else {
-                files.compositor.clone()
-            }
-        };
-        let before = layers(&self.live.files);
-        let (after, problems) = match CompositorSettings::load(path, Some(&before)) {
-            Ok(read) => read,
-            Err(e) => {
-                // as at start, a system file that is broken is an error: it holds the shell list of the whole desktop
-                if system {
-                    tracing::error!(path = %path.display(), error = %e, "cannot read the changed system configuration: the running settings stay");
-                } else {
-                    tracing::warn!(path = %path.display(), error = %e, "cannot read the changed configuration: the running settings stay");
-                }
-                return;
-            }
-        };
-        for p in problems {
-            if system {
-                tracing::error!(path = %path.display(), key = p.key, error = %p.message, "invalid system configuration: the key keeps its value");
-            } else {
-                tracing::warn!(path = %path.display(), key = p.key, error = %p.message, "invalid configuration: the key keeps its value");
-            }
-        }
-        let (system_before, user_before) = (
-            self.live.files.system.clone(),
-            self.live.files.compositor.clone(),
-        );
-        if system {
-            self.live.files.system = after;
-        } else {
-            self.live.files.compositor = after;
-        }
-        let (system_after, user_after) = (
-            self.live.files.system.clone(),
-            self.live.files.compositor.clone(),
-        );
-        self.apply_compositor_layers((&system_before, &user_before), (&system_after, &user_after));
-        if system && system_before.dev_folder != system_after.dev_folder {
-            self.reload_dev_folder(path);
-        }
-        self.live.reloads += 1;
-        tracing::info!(path = %path.display(), "configuration reloaded");
-    }
-
-    /// Read the development folder of the system file at `path` again, through the check that only root could have
-    /// written the file, and give it to the supervisor for each shell process's next start. A file that fails the check
-    /// leaves the folder as it was.
-    fn reload_dev_folder(&mut self, path: &std::path::Path) {
-        let declared = match crate::config::read_system_file(path) {
-            Ok(text) => text.and_then(|text| CompositorSettings::parse(&text, None).0.dev_folder),
-            Err(e) => {
-                tracing::error!(path = %path.display(), error = %e, "the development folder of the changed system configuration is refused: it stays as it was");
-                return;
-            }
-        };
-        let folder = declared.map(|f| crate::config::DevFolder {
-            path: f.path.into(),
-            components: f.components,
-        });
-        if folder.is_none() {
-            tracing::info!("the development folder is gone: every shell process starts its installed program from its next start");
-        }
-        self.supervisor.set_dev_folder(folder.as_ref());
-        self.config.dev_folder = folder;
     }
 
     /// Apply the keys whose value differs between `before` and `after`, the values the user's `compositor.json` held
@@ -463,26 +641,20 @@ impl Cupertino {
         self.request_redraw();
     }
 
-    fn reload_keyboard(&mut self, path: &std::path::Path) {
-        let before = self.live.files.keyboard.clone();
-        let (after, problems) = match KeyboardConf::load(path, Some(&before)) {
-            Ok(read) => read,
-            Err(e) => {
-                tracing::warn!(path = %path.display(), error = %e, "cannot read the changed keyboard settings: the running settings stay");
-                return;
-            }
-        };
-        for p in problems {
-            tracing::warn!(path = %path.display(), line = p.line, error = %p.message, "invalid keyboard setting: the key keeps its value");
-        }
-        self.live.files.keyboard = after.clone();
-        self.apply_keyboard_change(&before, &after);
-        self.live.reloads += 1;
-        tracing::info!(path = %path.display(), "keyboard settings reloaded");
-    }
-
     /// Apply the keys whose value differs between `before` and `after`, the values `keyboard.conf` held.
     pub fn apply_keyboard_change(&mut self, before: &KeyboardConf, after: &KeyboardConf) {
+        self.apply_keyboard_change_preloaded(before, after, None, None);
+    }
+
+    /// Like [`Self::apply_keyboard_change`], taking decoded layouts and accent table already read off the compositor
+    /// loop so live reloads perform no filesystem reads on the loop thread.
+    fn apply_keyboard_change_preloaded(
+        &mut self,
+        before: &KeyboardConf,
+        after: &KeyboardConf,
+        preloaded_decoded: Option<HashMap<String, DecodedSource>>,
+        preloaded_accent: Option<AccentTable>,
+    ) {
         let mut target = crate::kbd::KeyboardSettings {
             system: self.config.keyboard.system.clone(),
             ..crate::kbd::KeyboardSettings::default()
@@ -526,6 +698,21 @@ impl Cupertino {
         take!(accent_table => accent.table);
         take!(accent_keyboards => accent.keyboards);
         take!(accent_disabled_apps => accent.disabled_apps);
+        if changed!(
+            accent_picker,
+            accent_table,
+            accent_keyboards,
+            accent_disabled_apps
+        ) {
+            let bridge = self.overlays.accent.bridge;
+            self.overlays.accent = match preloaded_accent {
+                Some(table) => {
+                    crate::kbd_ui::AccentUi::with_table(&self.config.keyboard.accent, table)
+                }
+                None => crate::kbd_ui::AccentUi::new(&self.config.keyboard.accent),
+            };
+            self.overlays.accent.bridge = bridge;
+        }
         if changed!(modifier_profile) {
             // the profile has its own shortcut table: build the bindings again, as at start
             let (rebuilt, _) = Config::from_layers(
@@ -565,7 +752,7 @@ impl Cupertino {
             self.overlays.inputs =
                 crate::kbd::InputSources::new(self.config.keyboard.sources.clone());
             // the repeat too, and the keymap of the new sources
-            self.apply_keyboard_settings();
+            self.apply_keyboard_settings_with_decoded(preloaded_decoded);
         } else if changed!(repeat_delay_ms, repeat_interval_ms, slow_keys) {
             if let Some(keyboard) = self.seat.get_keyboard() {
                 let info = self.config.keyboard.repeat_info();
@@ -573,25 +760,185 @@ impl Cupertino {
             }
         }
     }
+}
 
-    fn reload_power(&mut self, path: &std::path::Path) {
-        let before = self.live.files.power;
-        let (after, problems) = match PowerSettings::load(path, Some(&before)) {
-            Ok(read) => read,
-            Err(e) => {
-                tracing::warn!(path = %path.display(), error = %e, "cannot read the changed power settings: the running settings stay");
-                return;
+/// Read, parse and verify a changed settings or policy file off the compositor loop.
+fn read_off_loop(
+    kind: ReloadKind,
+    path: PathBuf,
+    system_before: CompositorSettings,
+    user_before: CompositorSettings,
+    keyboard_before: KeyboardConf,
+    keyboard_system: crate::localed::SystemLayout,
+    power_before: PowerSettings,
+) -> ReloadPayload {
+    match kind {
+        ReloadKind::UserCompositor | ReloadKind::SystemCompositor => {
+            let system = kind == ReloadKind::SystemCompositor;
+            let before = if system { &system_before } else { &user_before };
+            let after = match CompositorSettings::load(&path, Some(before)) {
+                Ok((after, problems)) => {
+                    for p in problems {
+                        if system {
+                            tracing::error!(path = %path.display(), key = p.key, error = %p.message, "invalid system configuration: the key keeps its value");
+                        } else {
+                            tracing::warn!(path = %path.display(), key = p.key, error = %p.message, "invalid configuration: the key keeps its value");
+                        }
+                    }
+                    Some(after)
+                }
+                Err(e) => {
+                    if system {
+                        tracing::error!(path = %path.display(), error = %e, "cannot read the changed system configuration: the running settings stay");
+                    } else {
+                        tracing::warn!(path = %path.display(), error = %e, "cannot read the changed configuration: the running settings stay");
+                    }
+                    None
+                }
+            };
+            let dev_folder = if system {
+                Some(
+                    crate::config::read_system_file(&path)
+                        .map(|text| {
+                            text.and_then(|t| CompositorSettings::parse(&t, None).0.dev_folder)
+                                .map(|f| DevFolder {
+                                    path: f.path.into(),
+                                    components: f.components,
+                                })
+                        })
+                        .map_err(|e| e.to_string()),
+                )
+            } else {
+                None
+            };
+            ReloadPayload::Compositor {
+                path,
+                system,
+                after,
+                dev_folder,
             }
-        };
-        for p in problems {
-            tracing::warn!(path = %path.display(), line = p.line, error = %p.message, "invalid power setting: the key keeps its value");
         }
-        self.live.files.power = after;
-        if after != before {
-            self.config.power = after;
-            self.power.set_settings(after);
+        ReloadKind::Keyboard => {
+            let after = match KeyboardConf::load(&path, Some(&keyboard_before)) {
+                Ok((after, problems)) => {
+                    for p in problems {
+                        tracing::warn!(path = %path.display(), line = p.line, error = %p.message, "invalid keyboard setting: the key keeps its value");
+                    }
+                    Some(after)
+                }
+                Err(e) => {
+                    tracing::warn!(path = %path.display(), error = %e, "cannot read the changed keyboard settings: the running settings stay");
+                    None
+                }
+            };
+            let (decoded, accent_table) = match &after {
+                Some(conf) => {
+                    let mut target = crate::kbd::KeyboardSettings {
+                        system: keyboard_system,
+                        ..crate::kbd::KeyboardSettings::default()
+                    };
+                    target.apply_file(conf);
+                    target.use_system_layout();
+                    let (kb, level3) = (target.layout_keyboard, target.decoded_level3());
+                    let mut map = HashMap::new();
+                    for spec in &target.sources {
+                        let Some(decoded_path) = spec.decoded.as_ref() else {
+                            continue;
+                        };
+                        match crate::kbd::generate_decoded(decoded_path, kb, level3) {
+                            Ok(source) => {
+                                tracing::info!(
+                                    source = spec.id,
+                                    layout = source.label,
+                                    "decoded layout loaded"
+                                );
+                                map.insert(spec.id.clone(), source);
+                            }
+                            Err(e) => {
+                                tracing::error!(source = spec.id, error = %e, "decoded layout not loaded; the source cannot be selected");
+                            }
+                        }
+                    }
+                    let table = target
+                        .accent
+                        .table
+                        .as_ref()
+                        .and_then(|p| {
+                            std::fs::read_to_string(p)
+                                .map_err(|e| {
+                                    tracing::warn!(path = %p.display(), error = %e, "accent table not read")
+                                })
+                                .ok()
+                        })
+                        .and_then(|text| {
+                            let kbs: Vec<&str> =
+                                target.accent.keyboards.iter().map(String::as_str).collect();
+                            AccentTable::from_json(&text, &kbs)
+                                .map_err(|e| tracing::warn!(error = %e, "accent table is not valid"))
+                                .ok()
+                        })
+                        .unwrap_or_default();
+                    (Some(map), Some(table))
+                }
+                None => (None, None),
+            };
+            ReloadPayload::Keyboard {
+                path,
+                after,
+                decoded,
+                accent_table,
+            }
         }
-        self.live.reloads += 1;
-        tracing::info!(path = %path.display(), "power settings reloaded");
+        ReloadKind::Power => {
+            let after = match PowerSettings::load(&path, Some(&power_before)) {
+                Ok((after, problems)) => {
+                    for p in problems {
+                        tracing::warn!(path = %path.display(), line = p.line, error = %p.message, "invalid power setting: the key keeps its value");
+                    }
+                    Some(after)
+                }
+                Err(e) => {
+                    tracing::warn!(path = %path.display(), error = %e, "cannot read the changed power settings: the running settings stay");
+                    None
+                }
+            };
+            ReloadPayload::Power { path, after }
+        }
+        ReloadKind::SystemAccessibility => ReloadPayload::SystemAccessibility {
+            settings: crate::accessibility::read_system_accessibility(&path).unwrap_or_default(),
+        },
+        ReloadKind::DataControl => {
+            let allowed = match DataControlConf::load(&path) {
+                Ok((conf, problems)) => {
+                    for problem in problems {
+                        tracing::warn!(path = %path.display(), line = problem.line, problem = problem.message, "data control: ignoring a line");
+                    }
+                    conf.allowed
+                }
+                Err(e) => {
+                    tracing::error!(path = %path.display(), error = %e, "data control: the file is refused, no application is allowed");
+                    Vec::new()
+                }
+            };
+            ReloadPayload::DataControl { allowed }
+        }
+        ReloadKind::DesktopControl => {
+            let store = match DesktopControlConf::load(&path) {
+                Ok((conf, problems)) => {
+                    for problem in problems {
+                        tracing::warn!(path = %path.display(), line = problem.line, problem = problem.message, "desktop control: ignoring a line");
+                    }
+                    conf
+                }
+                Err(e) => {
+                    tracing::error!(path = %path.display(), error = %e, "desktop control: the file is refused, no app is allowed");
+                    DesktopControlConf::default()
+                }
+            };
+            ReloadPayload::DesktopControl { store }
+        }
+        ReloadKind::Appearance => ReloadPayload::Appearance {
+            settings: AppearanceSettings::current(),
+        },
     }
 }

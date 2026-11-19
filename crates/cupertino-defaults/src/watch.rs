@@ -58,13 +58,35 @@ pub enum WatchEvent {
     Error(String),
 }
 
+/// What [`ConfigWatcher::poll_touched`] observed from the kernel without reading any watched file.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PollTouched {
+    /// Watched files touched by events drained in this call (before the burst is quiet).
+    pub immediate: Vec<PathBuf>,
+    /// Watched files whose burst is now quiet and are ready to be read off the loop.
+    pub quiet: Vec<PathBuf>,
+    /// Notification failures since the last call.
+    pub failures: Vec<WatchEvent>,
+}
+
+/// Ownership, mode and symlink state of a file and its parent directory, so permission or
+/// ownership changes with identical bytes still trigger a report while `mtime`-only `touch` does not.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct FileSnapshot {
+    bytes: Option<Vec<u8>>,
+    meta: Option<(u32, u32, u32, bool)>,
+    parent: Option<(u32, u32, u32)>,
+}
+
 /// Watches settings files while it lives.
 pub struct ConfigWatcher {
     inbox: Inotified,
     files: Vec<PathBuf>,
     dirs: BTreeSet<PathBuf>,
-    /// The contents of each file at the last report.
-    last: BTreeMap<PathBuf, Option<Vec<u8>>>,
+    /// The contents and metadata of each file at the last report.
+    last: BTreeMap<PathBuf, FileSnapshot>,
+    /// Watched files touched by inotify since the last quiet drain (`poll_touched`).
+    dirty: BTreeSet<PathBuf>,
     /// When the burst under way is quiet, and the files are compared.
     quiet_at: Option<Instant>,
     /// The descriptor [`ConfigWatcher::quiet`] waits on, once it has.
@@ -84,10 +106,27 @@ enum Msg {
     Failed(String),
 }
 
-/// The contents of `path` as the watcher compares them: `None` when the file does not exist.
-fn snapshot(path: &Path) -> io::Result<Option<Vec<u8>>> {
+/// Ownership and mode of `path` (`None` when absent or unreadable), plus whether it is a symlink.
+fn meta_of(path: &Path) -> Option<(u32, u32, u32, bool)> {
+    use std::os::unix::fs::MetadataExt;
+    let m = std::fs::symlink_metadata(path).ok()?;
+    Some((m.uid(), m.gid(), m.mode(), m.file_type().is_symlink()))
+}
+
+/// Ownership and mode of `path`'s parent directory, if any.
+fn parent_meta(path: &Path) -> Option<(u32, u32, u32)> {
+    use std::os::unix::fs::MetadataExt;
+    let parent = path.parent().filter(|p| !p.as_os_str().is_empty())?;
+    let m = std::fs::symlink_metadata(parent).ok()?;
+    Some((m.uid(), m.gid(), m.mode()))
+}
+
+/// The contents and metadata of `path` as the watcher compares them.
+fn snapshot(path: &Path) -> io::Result<FileSnapshot> {
     use std::io::Read;
     use std::os::unix::fs::OpenOptionsExt;
+    let meta = meta_of(path);
+    let parent = parent_meta(path);
     let mut file = match std::fs::OpenOptions::new()
         .read(true)
         // without O_NONBLOCK a FIFO put at a watched path would block the open until a writer came
@@ -95,12 +134,22 @@ fn snapshot(path: &Path) -> io::Result<Option<Vec<u8>>> {
         .open(path)
     {
         Ok(file) => file,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            return Ok(FileSnapshot {
+                bytes: None,
+                meta,
+                parent,
+            })
+        }
         Err(e) => return Err(e),
     };
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)?;
-    Ok(Some(bytes))
+    Ok(FileSnapshot {
+        bytes: Some(bytes),
+        meta,
+        parent,
+    })
 }
 
 /// The directory a file is watched through.
@@ -131,13 +180,13 @@ impl ConfigWatcher {
     /// Their parents are watched too, so a settings directory that is removed and created again is watched again. The
     /// files are read now; a change made before the watches were set is reported by the first read.
     pub fn new(files: Vec<PathBuf>) -> io::Result<Self> {
-        let mut last: BTreeMap<PathBuf, Option<Vec<u8>>> = BTreeMap::new();
-        for f in &files {
-            last.insert(f.clone(), snapshot(f)?);
-        }
         let dirs: BTreeSet<PathBuf> = files.iter().map(|f| dir_of(f)).collect();
         for dir in &dirs {
             std::fs::create_dir_all(dir)?;
+        }
+        let mut last: BTreeMap<PathBuf, FileSnapshot> = BTreeMap::new();
+        for f in &files {
+            last.insert(f.clone(), snapshot(f)?);
         }
         let inbox = Inotified::new(masks(&dirs))?;
         Ok(Self {
@@ -145,6 +194,7 @@ impl ConfigWatcher {
             files,
             dirs,
             last,
+            dirty: BTreeSet::new(),
             // the files were read before the watch began: a change in between shows at the first read
             quiet_at: Some(Instant::now()),
             ready: None,
@@ -162,7 +212,7 @@ impl ConfigWatcher {
     /// `now` changed, once, with any failure of the notification. Empty while a burst is under way and when nothing
     /// changed.
     pub fn read(&mut self, now: Instant) -> Vec<WatchEvent> {
-        self.take(now);
+        let _ = self.take(now);
         if self.quiet_at.is_some_and(|at| at <= now) {
             self.reread()
         } else {
@@ -170,9 +220,34 @@ impl ConfigWatcher {
         }
     }
 
+    /// Takes the events the kernel holds without waiting and without reading any watched file.
+    /// Reports watched files touched in this poll (`immediate`), watched files whose burst is now
+    /// quiet (`quiet`), and any notification failures (`failures`).
+    pub fn poll_touched(&mut self, now: Instant) -> PollTouched {
+        let immediate = self.take(now);
+        let quiet = if self.quiet_at.is_some_and(|at| at <= now) {
+            self.quiet_at = None;
+            let dirty = std::mem::take(&mut self.dirty);
+            self.files
+                .iter()
+                .filter(|f| dirty.contains(*f))
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        };
+        PollTouched {
+            immediate,
+            quiet,
+            failures: std::mem::take(&mut self.failures),
+        }
+    }
+
     /// Takes the events the kernel holds, without waiting and without reading any watched file: a burst under way is
-    /// timed, and a failure kept for the next report.
-    fn take(&mut self, now: Instant) {
+    /// timed, touched watched files are recorded in `dirty` (and returned in `self.files` order), and a failure is kept
+    /// for the next report.
+    fn take(&mut self, now: Instant) -> Vec<PathBuf> {
+        let mut newly_touched: BTreeSet<PathBuf> = BTreeSet::new();
         for msg in self.inbox.take() {
             let touched = match msg {
                 Msg::Changed { path, appeared } => {
@@ -182,12 +257,28 @@ impl ConfigWatcher {
                                 .push(WatchEvent::Error(format!("{}: {e}", path.display())));
                         }
                     }
-                    self.files.contains(&path) || self.dirs.contains(&path)
+                    if self.files.contains(&path) {
+                        newly_touched.insert(path);
+                        true
+                    } else if self.dirs.contains(&path) {
+                        for f in &self.files {
+                            if dir_of(f) == path {
+                                newly_touched.insert(f.clone());
+                            }
+                        }
+                        true
+                    } else {
+                        false
+                    }
                 }
-                Msg::Lost => true,
+                Msg::Lost => {
+                    newly_touched.extend(self.files.iter().cloned());
+                    true
+                }
                 // a notification error may have lost events: every file is compared
                 Msg::Failed(e) => {
                     self.failures.push(WatchEvent::Error(e));
+                    newly_touched.extend(self.files.iter().cloned());
                     true
                 }
             };
@@ -195,6 +286,14 @@ impl ConfigWatcher {
                 self.quiet_at = Some(now + COALESCE);
             }
         }
+        for path in &newly_touched {
+            self.dirty.insert(path.clone());
+        }
+        self.files
+            .iter()
+            .filter(|f| newly_touched.contains(*f))
+            .cloned()
+            .collect()
     }
 
     /// Reads the watched files and reports each one whose contents changed since the last report, once, after any
@@ -202,6 +301,7 @@ impl ConfigWatcher {
     /// polls futures runs it on a thread that may wait, after [`ConfigWatcher::quiet`].
     pub fn reread(&mut self) -> Vec<WatchEvent> {
         self.quiet_at = None;
+        self.dirty.clear();
         let mut out = std::mem::take(&mut self.failures);
         compare(&self.files, &mut self.last, &mut out);
         out
@@ -389,10 +489,10 @@ impl Inotified {
     }
 }
 
-/// Report each of `files` whose contents differ from `last`, and remember them.
+/// Report each of `files` whose contents or metadata differ from `last`, and remember them.
 fn compare(
     files: &[PathBuf],
-    last: &mut BTreeMap<PathBuf, Option<Vec<u8>>>,
+    last: &mut BTreeMap<PathBuf, FileSnapshot>,
     out: &mut Vec<WatchEvent>,
 ) {
     let mut changed = Vec::new();

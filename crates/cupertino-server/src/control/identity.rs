@@ -1,43 +1,51 @@
 //! The app a run comes from ([`cupertino_control_model::identity`]): the process table is `/proc`, read a bounded line
-//! per process, and the display clients are this server's connections, named by [`Cupertino::process_of`]. It runs once
-//! per run, when the controller names its peer, never while input is routed.
+//! per process, and the display clients are this server's connections, named by the process each was read to have
+//! ([`crate::state::ClientState::process_facts`]). It runs once per run, when the controller names its peer, never while
+//! input is routed. The walk through the process table runs on a thread the loop waits for until
+//! [`crate::process::CHECK_WAIT`] has passed; one that does not answer by then names no app, and neither does a walk
+//! that reaches a connection whose process was not read in time.
 
 use super::Requester;
+use crate::process::{Lookups, CHECK_WAIT, IDENTITY_WAIT};
 use crate::state::{ClientState, Cupertino};
 use cupertino_control_model::identity::{self, ClientKind, ProcessInfo, Responsible, Unidentified};
 use cupertino_defaults::desktop_control::App;
 use smithay::reexports::wayland_server::{Client, Resource};
+use std::cell::Cell;
 use std::path::PathBuf;
+use std::time::Instant;
 
 /// What a link to a deleted executable ends with; the path still names the program the process started as.
 const DELETED: &str = " (deleted)";
+
+/// The display clients as the walk sees them.
+struct Clients {
+    /// Each client whose process is named, with what it is.
+    named: Vec<((u32, u64), ClientKind)>,
+    /// The process ids of the clients whose process was not read in time: a walk that reaches one names nothing.
+    unnamed: Vec<u32>,
+}
+
+/// What the walk found.
+enum Found {
+    Desktop(String),
+    Executable(PathBuf),
+}
 
 impl Cupertino {
     /// The app of the requester `pid` that started at `start`.
     pub(super) fn control_identify(&self, pid: u32, start: u64) -> Result<Requester, Unidentified> {
         let clients = self.control_client_kinds();
-        let client = |pid: u32, start: u64| {
-            let mut found = clients
-                .iter()
-                .filter(|(p, _)| *p == (pid, start))
-                .peekable();
-            found.peek()?;
-            let mut entries = Vec::new();
-            for (_, kind) in found {
-                match kind {
-                    ClientKind::App(e) => entries.extend(e.iter().cloned()),
-                    // one connection of the process that is not an app's makes the process none
-                    other => return Some(other.clone()),
-                }
-            }
-            Some(ClientKind::App(entries))
+        let walked = Lookups::shared().run(None, CHECK_WAIT, move || walk(pid, start, &clients));
+        let Some(found) = walked else {
+            tracing::warn!(
+                pid,
+                "desktop control: the process table was not read in time, the run names no app"
+            );
+            return Err(Unidentified::NoParent);
         };
-        let process = |pid: u32| {
-            crate::process::parent_and_start(pid)
-                .map(|(parent, start)| ProcessInfo { parent, start })
-        };
-        match identity::responsible(pid, start, process, client)? {
-            Responsible::Desktop(id) => {
+        match found? {
+            Found::Desktop(id) => {
                 let name = self
                     .desktop
                     .entries
@@ -49,8 +57,7 @@ impl Cupertino {
                     name,
                 })
             }
-            Responsible::Executable { pid, start } => {
-                let path = executable(pid, start).ok_or(Unidentified::NoParent)?;
+            Found::Executable(path) => {
                 let name = path
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
@@ -63,8 +70,9 @@ impl Cupertino {
         }
     }
 
-    /// Every connected client this server can name a process for, with what it is.
-    fn control_client_kinds(&self) -> Vec<((u32, u64), ClientKind)> {
+    /// Every connected client with what it is: named by the process it was read to have, waiting for the readings under
+    /// way until one deadline together, else by its process id alone.
+    fn control_client_kinds(&self) -> Clients {
         let backend = self.display_handle.backend_handle();
         let mut ids = Vec::new();
         backend.with_all_clients(|id| ids.push(id));
@@ -72,7 +80,11 @@ impl Cupertino {
             .xwayland
             .as_ref()
             .and_then(crate::xwayland::XWayland::pid);
-        let mut kinds = Vec::new();
+        let deadline = Instant::now() + IDENTITY_WAIT;
+        let mut clients = Clients {
+            named: Vec::new(),
+            unnamed: Vec::new(),
+        };
         for id in ids {
             let mut object = None;
             let _ = backend.with_all_objects_for(id.clone(), |o| {
@@ -81,18 +93,34 @@ impl Cupertino {
             let Some(client) = object.and_then(|o| self.display_handle.get_client(o).ok()) else {
                 continue;
             };
-            let Some(process) = (self.process_of)(&self.display_handle, &client) else {
+            let Some(data) = client.get_data::<ClientState>() else {
+                // not a connection of this server's making: its process is the socket's, never read
+                if let Ok(credentials) = client.get_credentials(&self.display_handle) {
+                    clients.unnamed.extend(u32::try_from(credentials.pid).ok());
+                }
                 continue;
             };
-            let kind = match client.get_data::<ClientState>() {
-                Some(data) if data.internal || !data.capabilities.is_empty() => ClientKind::Shell,
-                None => ClientKind::Shell,
-                Some(_) if satellite == Some(process.0) => ClientKind::Xwayland,
-                Some(_) => ClientKind::App(self.control_client_entries(&client)),
+            if data.internal {
+                // the server's own connection: the server is a shell process of the walk ([`walk`])
+                continue;
+            }
+            let Some(facts) = data.process_facts_until(deadline) else {
+                clients
+                    .unnamed
+                    .extend(data.process().map(|process| process.pid));
+                continue;
             };
-            kinds.push((process, kind));
+            let process = facts.process;
+            let kind = if !data.capabilities.is_empty() {
+                ClientKind::Shell
+            } else if satellite == Some(process.0) {
+                ClientKind::Xwayland
+            } else {
+                ClientKind::App(self.control_client_entries(&client))
+            };
+            clients.named.push((process, kind));
         }
-        kinds
+        clients
     }
 
     /// The desktop entry ids the app ids of `client`'s windows name.
@@ -106,6 +134,55 @@ impl Cupertino {
                 Some(self.desktop.find(&app.identity)?.id.clone())
             })
             .collect()
+    }
+}
+
+/// The app of the requester `pid` that started at `start` among `clients`, reading `/proc`: off the loop. The server's own
+/// process is a shell process.
+fn walk(pid: u32, start: u64, clients: &Clients) -> Result<Found, Unidentified> {
+    let own = std::process::id();
+    let own_start = crate::process::parent_and_start(own).map(|(_, start)| start);
+    let unnamed = Cell::new(false);
+    let client = |pid: u32, start: u64| {
+        if clients.unnamed.contains(&pid) {
+            unnamed.set(true);
+            return Some(ClientKind::Shell);
+        }
+        if pid == own && own_start == Some(start) {
+            return Some(ClientKind::Shell);
+        }
+        let mut found = clients
+            .named
+            .iter()
+            .filter(|(p, _)| *p == (pid, start))
+            .peekable();
+        found.peek()?;
+        let mut entries = Vec::new();
+        for (_, kind) in found {
+            match kind {
+                ClientKind::App(e) => entries.extend(e.iter().cloned()),
+                // one connection of the process that is not an app's makes the process none
+                other => return Some(other.clone()),
+            }
+        }
+        Some(ClientKind::App(entries))
+    };
+    let process = |pid: u32| {
+        crate::process::parent_and_start(pid).map(|(parent, start)| ProcessInfo { parent, start })
+    };
+    let responsible = identity::responsible(pid, start, process, client)?;
+    if unnamed.get() {
+        tracing::warn!(
+            pid,
+            "desktop control: the run's ancestry reaches a client whose process was not read in time, it names no app"
+        );
+        return Err(Unidentified::NoParent);
+    }
+    match responsible {
+        Responsible::Desktop(id) => Ok(Found::Desktop(id)),
+        Responsible::Executable { pid, start } => executable(pid, start)
+            .map(Found::Executable)
+            .ok_or(Unidentified::NoParent),
     }
 }
 

@@ -275,14 +275,9 @@ pub fn refuse<R: Resource>(object: &R, role: ShellRole) {
     );
 }
 
-/// The name of the program behind `client` (`/proc/<pid>/exe`), which names it in a diagnostic event; `None` when its
-/// process is not known or has gone.
+/// The name of the program behind `client` as its connection's process was read ([`ClientState::process_facts`]), which
+/// names it in a diagnostic event; `None` when its process is not known or not read yet. A refusal never waits for it.
 fn program_of(client: &Client) -> Option<String> {
-    let process = client.get_data::<ClientState>()?.process()?;
-    let exe = std::fs::read_link(format!("/proc/{}/exe", process.pid)).ok()?;
-    // the answer names the process only while it is the one the descriptor holds
-    if process.has_exited() {
-        return None;
-    }
-    Some(exe.file_name()?.to_string_lossy().into_owned())
+    let facts = client.get_data::<ClientState>()?.process_lookup.known()?;
+    crate::state::program_name(&facts)
 }

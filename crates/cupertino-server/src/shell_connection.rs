@@ -56,13 +56,15 @@ pub fn shell_process_connection(
 /// Bind the connection to the process started for it: its capabilities end when the process exits, so a connection
 /// kept open by anything else (a descriptor passed on, a leftover child) holds nothing. The child has not been waited
 /// for yet, so its pid cannot belong to another process. A connection that is not bound holds nothing; when binding
-/// fails the caller ends the process.
+/// fails the caller ends the process. The process is read off the loop from now ([`ClientState::look_up_process`]).
 pub fn bind_holder(state: &ClientState, pid: u32) -> std::io::Result<()> {
     let handle = ProcessHandle::open(pid)?;
     state
         .holder
         .set(Holder::Process(handle))
-        .map_err(|_| std::io::Error::other("the connection already has a holder"))
+        .map_err(|_| std::io::Error::other("the connection already has a holder"))?;
+    state.look_up_process();
+    Ok(())
 }
 
 /// A program whose holder could not be bound has no permissions. End it and reap it away from

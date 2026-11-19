@@ -9,6 +9,10 @@
 //! for by name ([`Supervisor::request_restart`]) ends the process with SIGTERM, then SIGKILL after
 //! [`RESTART_STOP_GRACE`], and starts it again at once, whatever its exit status; the request is answered once it runs.
 //!
+//! The checks of a program before a start, and the reading of a started process's start time, run on threads the loop
+//! waits for until a deadline ([`crate::process::CHECK_WAIT`]); a check that does not answer by then refuses the program.
+//! The process itself is spawned from the loop's thread, whose end kills it ([`end_with_server`]).
+//!
 //! Each exit and each start that fails is also a diagnostic event: `server.shell.exited` (restarted),
 //! `server.shell.gave_up` (not restarted) and `server.shell.start_failed`.
 
@@ -550,13 +554,17 @@ fn start(
         )
     };
     if built_in {
-        if let Err(reason) = check_built_in(Path::new(installed)) {
+        let program = PathBuf::from(installed);
+        let checked = checked_in_time(move || check_built_in(&program));
+        if let Err(reason) = checked {
             tracing::warn!(name = spec.name, %reason, "the built-in program is not started");
             return retry("program_check", Path::new(installed), reason);
         }
     }
     let from_dev = dev_folder.and_then(|folder| {
-        match dev_folder_program(folder, installed, rustix::process::getuid().as_raw()) {
+        let (folder, program) = (folder.to_path_buf(), installed.clone());
+        let user = rustix::process::getuid().as_raw();
+        match checked_in_time(move || dev_folder_program(&folder, &program, user)) {
             Ok(program) => program,
             Err(reason) => {
                 tracing::warn!(name = spec.name, %reason, "the development folder's program is refused: the installed program starts");
@@ -595,8 +603,11 @@ fn start(
                 "installed"
             };
             tracing::info!(name = spec.name, pid = child.id(), program = %program.display(), source, "shell process started");
+            let pid = child.id();
             let launch = Launch {
-                start_ticks: start_ticks(child.id()),
+                start_ticks: crate::process::Lookups::shared()
+                    .run(None, crate::process::CHECK_WAIT, move || start_ticks(pid))
+                    .flatten(),
                 program,
                 from_dev_folder,
             };
@@ -614,6 +625,16 @@ fn start(
             retry("spawn", &program, e.to_string())
         }
     }
+}
+
+/// The answer of the program check `check`, run on a thread the loop waits for until [`crate::process::CHECK_WAIT`] has
+/// passed: a program on a file system that stalls is refused, not waited for, and checked again at the next start.
+fn checked_in_time<T: Send + 'static>(
+    check: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    crate::process::Lookups::shared()
+        .run(None, crate::process::CHECK_WAIT, check)
+        .unwrap_or_else(|| Err("the program was not checked in time".into()))
 }
 
 /// Kill the process `command` starts when the server's thread that starts it ends, however it ends: a server killed or

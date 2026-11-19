@@ -7,7 +7,8 @@
 //! `/proc` while the pidfd shows the process still running, must be the path of an entry, and either the entry's pin
 //! must match the running file, or only root can change the file at that path and it is the running file. A client
 //! without a pidfd (Linux before 6.5) is refused. The rule runs where the globals are offered and bound, so a refused
-//! client neither sees nor binds them.
+//! client neither sees nor binds them. Its reads of `/proc` and of the programs run off the loop, which waits for them
+//! until a deadline and refuses the client when they do not answer by then ([`crate::process`]).
 //!
 //! The file is read at start and on every change. A client seen as allowed that no longer is after a change is
 //! disconnected: the protocol has no way to end its data control objects.
@@ -50,7 +51,10 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// Whether the client of `data` may use data control while `allowed` are the allowed programs.
+/// Whether the client of `data` may use data control while `allowed` are the allowed programs. The program its process
+/// was read to run at connection ([`ClientState::process_facts`]) must be the path of an entry; the program it runs now
+/// is then checked on a thread the loop waits for until [`crate::process::CHECK_WAIT`] has passed. A process not read
+/// in time, and a check that does not answer in time, allow nothing.
 fn may_control(data: &ClientState, allowed: &[Entry]) -> bool {
     if data.granted().contains(ShellRole::DataControl) {
         return true;
@@ -61,13 +65,38 @@ fn may_control(data: &ClientState, allowed: &[Entry]) -> bool {
     let Some(process) = data.peer.as_ref().and_then(|p| p.try_clone().ok()) else {
         return false;
     };
-    match running_program(process, Path::new("/proc")) {
-        Some(running) => {
-            let allows = allows(allowed, &running);
-            tracing::debug!(program = %running.exe.display(), allows, "data control: an application asks");
+    let Some(read) = data.process_facts().and_then(|f| f.program.clone()) else {
+        return false;
+    };
+    let candidates: Vec<Entry> = allowed
+        .iter()
+        .filter(|e| e.program == read)
+        .cloned()
+        .collect();
+    if candidates.is_empty() {
+        return false;
+    }
+    let checked = crate::process::Lookups::shared().run(
+        Some((
+            &data.process_lookups,
+            crate::process::CONNECTION_LOOKUP_LIMIT,
+        )),
+        crate::process::CHECK_WAIT,
+        move || {
+            running_program(process, Path::new("/proc"))
+                .map(|running| (allows(&candidates, &running), running.exe))
+        },
+    );
+    match checked {
+        Some(Some((allows, exe))) => {
+            tracing::debug!(program = %exe.display(), allows, "data control: an application asks");
             allows
         }
-        None => false,
+        Some(None) => false,
+        None => {
+            tracing::warn!(program = %read.display(), "data control: the application's program was not checked in time, it is refused");
+            false
+        }
     }
 }
 

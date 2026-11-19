@@ -1248,9 +1248,15 @@ dependencies = [
 name = "cupertino-kit-shell"
 version = "0.1.0"
 dependencies = [
+ "cupertino-kit",
+ "cupertino-peer",
+ "cupertino-protocols",
  "cupertino-shell-client",
  "serde",
  "serde_json",
+ "tracing",
+ "wayland-client",
+ "zbus",
 ]
 
 [[package]]

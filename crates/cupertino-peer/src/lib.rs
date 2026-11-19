@@ -21,8 +21,11 @@
 //! [`signal`] tells who sent a signal, on either bus. [`lookup::Lookup`] asks who called on a connection of its own, for a
 //! service that must not wait on the connection that reads its calls.
 
+pub mod component;
 pub mod lookup;
 pub mod signal;
+
+pub use component::{resolve_component, ComponentCaller};
 
 use std::io::Read;
 use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};

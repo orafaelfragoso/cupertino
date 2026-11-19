@@ -67,4 +67,18 @@ impl Lookup {
             Err(_) => Caller::Anonymous,
         }
     }
+
+    /// Resolve `sender` to the server, a shell component, or another caller (D20) using this lookup connection.
+    pub async fn component_caller(&self, sender: &UniqueName<'_>) -> crate::ComponentCaller {
+        let caller = self.caller(sender).await;
+        crate::component::resolve_identified_at(
+            &self.connection,
+            crate::component::SESSION_BUS_NAME,
+            crate::component::SESSION_OBJECT_PATH,
+            crate::component::SESSION_INTERFACE,
+            sender,
+            &caller,
+        )
+        .await
+    }
 }

@@ -10,7 +10,8 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::Duration;
 
-use cupertino_seat::{Error, LogindSession};
+use cupertino_seat::Error;
+use cupertino_server_backend::session::{LogindSession, SessionError};
 use rustix::fs::OFlags;
 use smithay::backend::session::{Event, Session};
 use smithay::reexports::calloop::EventLoop;
@@ -99,8 +100,8 @@ impl Peer {
     }
 }
 
-fn timed_out<T: std::fmt::Debug>(result: Result<T, Error>, method: &str) {
-    let error = result.unwrap_err();
+fn timed_out<T: std::fmt::Debug>(result: Result<T, SessionError>, method: &str) {
+    let SessionError(error) = result.unwrap_err();
     assert!(
         matches!(&error, Error::Bus { what, source } if *what == method
         && matches!(&**source, zbus::Error::InputOutput(e) if e.kind() == ErrorKind::TimedOut)),
@@ -186,7 +187,10 @@ fn unanswered_calls_leave_no_orphan_device_and_pause_is_acknowledged_only_after_
             rustix::fs::fstat(&fd).unwrap().st_rdev,
             rustix::fs::stat(null).unwrap().st_rdev
         );
-        assert!(matches!(open(&mut session), Err(Error::AlreadyTaken(_))));
+        assert!(matches!(
+            open(&mut session),
+            Err(SessionError(Error::AlreadyTaken(_)))
+        ));
         let mut loop_ = EventLoop::try_new().unwrap();
         let callback = observed.clone();
         loop_
@@ -211,7 +215,10 @@ fn unanswered_calls_leave_no_orphan_device_and_pause_is_acknowledged_only_after_
         timed_out(session.change_vt(7), "SwitchTo");
         observed.send("switch timed out").unwrap();
         drop(loop_);
-        assert!(matches!(open(&mut session), Err(Error::SessionLost)));
+        assert!(matches!(
+            open(&mut session),
+            Err(SessionError(Error::SessionLost))
+        ));
         observed.send("notifier dropped").unwrap();
     });
     peer.locate();

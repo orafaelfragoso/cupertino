@@ -15,7 +15,6 @@ apps facade cupertino-settings -> cupertino-theme normal
 apps facade cupertino-settings -> cupertino-wayland-client normal
 apps forbidden_edge cupertino-files -> cupertino-wayland-client normal
 apps forbidden_edge cupertino-settings -> cupertino-wayland-client normal
-platform external_crate cupertino-seat -> smithay normal
 shell disallowed_methods cupertino-controlcenter clippy.toml
 shell disallowed_methods cupertino-dock clippy.toml
 shell disallowed_methods cupertino-launcher clippy.toml

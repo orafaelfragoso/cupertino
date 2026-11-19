@@ -335,7 +335,7 @@ impl Logind {
     }
 
     /// Confirm a release whose outcome was lost. logind may have done it before the reply timed out.
-    pub(crate) fn reconcile_release(&self, dev: DevT) -> Result<(), Error> {
+    pub fn reconcile_release(&self, dev: DevT) -> Result<(), Error> {
         match self.release_device(dev) {
             Err(Error::Bus { source, .. })
                 if matches!(&*source, zbus::Error::MethodError(name, _, _)

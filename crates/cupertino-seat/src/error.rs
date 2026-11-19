@@ -5,7 +5,6 @@ use std::path::PathBuf;
 
 use cupertino_devices::DevT;
 use rustix::io::Errno;
-use smithay::backend::session::AsErrno;
 
 /// Every failure of this crate.
 #[derive(Debug)]
@@ -42,7 +41,7 @@ pub enum Error {
 
 impl Error {
     /// No reply arrived in time, either at our own deadline or as reported by the bus.
-    pub(crate) fn unanswered(&self) -> bool {
+    pub fn unanswered(&self) -> bool {
         let Self::Bus { source, .. } = self else {
             return false;
         };
@@ -66,7 +65,7 @@ impl Error {
 
     /// The adapter for `map_err` on a D-Bus call: names the step that failed. The `zbus` error is
     /// boxed because it is large and would bloat every `Result` of this crate.
-    pub(crate) fn bus(what: &'static str) -> impl Fn(zbus::Error) -> Self + Copy {
+    pub fn bus(what: &'static str) -> impl Fn(zbus::Error) -> Self + Copy {
         move |source| Self::Bus {
             what,
             source: Box::new(source),
@@ -100,15 +99,6 @@ impl std::error::Error for Error {
         match self {
             Self::Bus { source, .. } => Some(source.as_ref()),
             Self::Thread(source) => Some(source),
-            _ => None,
-        }
-    }
-}
-
-impl AsErrno for Error {
-    fn as_errno(&self) -> Option<i32> {
-        match self {
-            Self::Stat { errno, .. } => Some(errno.raw_os_error()),
             _ => None,
         }
     }

@@ -37,7 +37,7 @@ use cupertino_input::{
     SwipeAxis, TouchContact, Touchpad, TouchpadButton, TouchpadEvent, TouchpadFrame,
     TouchpadGeometry, TouchpadSettings, SWIPE_COMPLETE_MM,
 };
-use cupertino_seat::LogindSession;
+use cupertino_server_backend::session::LogindSession;
 use smithay::backend::input::{
     AbsolutePositionEvent, Axis, AxisRelativeDirection, AxisSource, ButtonState, Device,
     DeviceCapability, Event, GestureBeginEvent, GestureEndEvent, GesturePinchBeginEvent,

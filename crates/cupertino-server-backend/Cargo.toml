@@ -1,0 +1,21 @@
+[package]
+name = "cupertino-server-backend"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Compositor backend primitives: logind Smithay session, scheduling, display heads, DRM/EGL helpers, and evdev input"
+
+[package.metadata.cupertino]
+layer = "core"
+
+[dependencies]
+cupertino-devices = { path = "../cupertino-devices" }
+cupertino-seat = { path = "../cupertino-seat" }
+rustix = { version = "1", features = ["fs"] }
+tracing = "0.1"
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
+
+[dependencies.smithay]
+version = "0.7"
+default-features = false
+features = ["backend_session"]

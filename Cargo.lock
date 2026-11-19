@@ -1586,7 +1586,6 @@ version = "0.1.0"
 dependencies = [
  "cupertino-devices",
  "rustix 1.1.6",
- "smithay",
  "tracing",
  "zbus",
 ]
@@ -1621,7 +1620,7 @@ dependencies = [
  "cupertino-protocols",
  "cupertino-raster-math",
  "cupertino-scene",
- "cupertino-seat",
+ "cupertino-server-backend",
  "cupertino-theme",
  "cupertino-wm",
  "image",
@@ -1642,6 +1641,18 @@ dependencies = [
  "wayland-scanner",
  "wayland-server",
  "xcursor",
+ "zbus",
+]
+
+[[package]]
+name = "cupertino-server-backend"
+version = "0.1.0"
+dependencies = [
+ "cupertino-devices",
+ "cupertino-seat",
+ "rustix 1.1.6",
+ "smithay",
+ "tracing",
  "zbus",
 ]
 

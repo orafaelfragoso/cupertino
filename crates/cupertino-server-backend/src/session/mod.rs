@@ -1,49 +1,61 @@
-//! [`LogindSession`] and [`LogindNotifier`]: the Smithay [`Session`] and its calloop event source.
-//!
-//! logind signals arrive on reader threads (the blocking `zbus` API has no pollable
-//! descriptor) and cross to the loop through a calloop channel, so every state change and every
-//! callback runs on the loop thread. One thread reads the session's signals, the other waits for
-//! logind's bus name to leave the process the session was found on. A single worker calls logind
-//! in order; the thread that uses the session waits only until each request's deadline.
-//!
-//! # Differences from Smithay's libseat session
-//!
-//! - **Pause handshake.** libseat acknowledges a disable before the loop callback runs. Here
-//!   `PauseDeviceComplete` is sent after the callback returned, so the holder has stopped using
-//!   the devices when logind is told they are free. A device the holder closed in the callback is
-//!   not acknowledged (logind sends no more signals for it).
-//! - **Resumed descriptors are dropped.** For a DRM node logind's `ResumeDevice` names the open
-//!   file the holder already has, which is DRM master again. For an input node it is a new open
-//!   file and the holder's stays revoked, so the holder closes input devices on
-//!   [`Event::PauseSession`] and opens them again on [`Event::ActivateSession`], which is reported
-//!   once every paused device was resumed.
-//! - **Strict close.** [`Session::close`] on a descriptor not handed out here is an error.
-//! - **`flags` of `open` are ignored**, as in Smithay's libseat session: logind opens the device
-//!   itself.
-//! - **Inactive start.** A session that starts inactive reports no event until it activates:
-//!   check [`Session::is_active`] before opening devices.
+//! [`LogindSession`] and [`LogindNotifier`]: the Smithay [`Session`] and its calloop event source
+//! over `cupertino-seat`.
+
+mod calls;
 
 use std::cell::RefCell;
+use std::fmt;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::path::Path;
 use std::rc::{Rc, Weak};
 
 use cupertino_devices::DevT;
+use cupertino_seat::error::Error as SeatError;
+use cupertino_seat::logind::{self, Logind, SessionLookup};
+use cupertino_seat::state::{Input, Machine, Output, Transition};
 use rustix::fs::{stat, FileType, OFlags};
-use smithay::backend::session::{Event, Session};
+use smithay::backend::session::{AsErrno, Event, Session};
 use smithay::reexports::calloop::channel::{channel, Channel, Event as ChannelEvent, Sender};
 use smithay::reexports::calloop::{
     self, EventSource, Poll, PostAction, Readiness, Token, TokenFactory,
 };
 use zbus::blocking::{Connection, MessageIterator};
 
-use crate::calls::Calls;
-use crate::error::Error;
-use crate::logind::{self, Logind, SessionLookup};
-use crate::state::{Input, Machine, Output, Transition};
+use self::calls::Calls;
+
+/// Wrapper around [`cupertino_seat::Error`] implementing Smithay's [`AsErrno`].
+#[derive(Debug)]
+pub struct SessionError(pub SeatError);
+
+impl fmt::Display for SessionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl std::error::Error for SessionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.0.source()
+    }
+}
+
+impl From<SeatError> for SessionError {
+    fn from(error: SeatError) -> Self {
+        Self(error)
+    }
+}
+
+impl AsErrno for SessionError {
+    fn as_errno(&self) -> Option<i32> {
+        match &self.0 {
+            SeatError::Stat { errno, .. } => Some(errno.raw_os_error()),
+            _ => None,
+        }
+    }
+}
 
 /// What the reader threads and [`Session::close`] send to the loop.
-pub(crate) type Delivery = Result<Input, Error>;
+pub(crate) type Delivery = Result<Input, SeatError>;
 
 struct Shared {
     logind: Calls,
@@ -52,7 +64,7 @@ struct Shared {
 }
 
 /// A session under the control of this process. Clones share one session; every call fails with
-/// [`Error::SessionLost`] once the [`LogindNotifier`] is dropped.
+/// [`SeatError::SessionLost`] once the [`LogindNotifier`] is dropped.
 #[derive(Clone)]
 pub struct LogindSession {
     shared: Weak<RefCell<Shared>>,
@@ -67,11 +79,9 @@ pub struct LogindNotifier {
 }
 
 impl LogindSession {
-    /// Finds this process's session (`XDG_SESSION_ID`, else the process id; see
-    /// [`SessionLookup`]), takes control of it and starts listening for its signals.
-    ///
-    /// Fails when the session already has a controller or the caller is not allowed to control it.
-    pub fn new() -> Result<(Self, LogindNotifier), Error> {
+    /// Finds this process's session (`XDG_SESSION_ID`, else the process id), takes control of it
+    /// and starts listening for its signals.
+    pub fn new() -> Result<(Self, LogindNotifier), SessionError> {
         let lookup = SessionLookup::from_environment()?;
         let (sender, channel) = channel();
         let (logind, active, seat) = Calls::start(lookup, sender.clone())?;
@@ -88,8 +98,10 @@ impl LogindSession {
         Ok((session, LogindNotifier { shared, channel }))
     }
 
-    fn upgrade(&self) -> Result<Rc<RefCell<Shared>>, Error> {
-        self.shared.upgrade().ok_or(Error::SessionLost)
+    fn upgrade(&self) -> Result<Rc<RefCell<Shared>>, SessionError> {
+        self.shared
+            .upgrade()
+            .ok_or_else(|| SessionError(SeatError::SessionLost))
     }
 }
 
@@ -97,7 +109,7 @@ pub(crate) fn listen(
     conn: &Connection,
     lookup: &SessionLookup,
     sender: Sender<Delivery>,
-) -> Result<(Logind, bool, String), Error> {
+) -> Result<(Logind, bool, String), SeatError> {
     let session = logind::locate(conn, lookup)?;
     let signals = logind::subscribe(conn, &session)?;
     let owner_changes = logind::watch_owner(conn, &session)?;
@@ -106,18 +118,14 @@ pub(crate) fn listen(
     std::thread::Builder::new()
         .name("cupertino-seat-signals".to_owned())
         .spawn(move || read_signals(signals, reader_sender))
-        .map_err(Error::Thread)?;
+        .map_err(SeatError::Thread)?;
     std::thread::Builder::new()
         .name("cupertino-seat-owner".to_owned())
         .spawn(move || watch_owner(owner_changes, sender))
-        .map_err(Error::Thread)?;
+        .map_err(SeatError::Thread)?;
     Ok(control)
 }
 
-/// Forwards decoded signals until the stream ends or the loop side is gone. A signal that does
-/// not decode (a `PauseDevice` type or a property change this crate does not know) is logged and
-/// skipped: it cannot be acted on, and the session stays usable. Closing the controller
-/// connection wakes the iterator on teardown.
 fn read_signals(signals: MessageIterator, sender: Sender<Delivery>) {
     for message in signals {
         let delivery = match message {
@@ -129,41 +137,38 @@ fn read_signals(signals: MessageIterator, sender: Sender<Delivery>) {
                     continue;
                 }
             },
-            Err(source) => Err(Error::bus("reading a session signal")(source)),
+            Err(source) => Err(SeatError::bus("reading a session signal")(source)),
         };
         let failed = delivery.is_err();
         if sender.send(delivery).is_err() || failed {
             return;
         }
     }
-    if sender.send(Err(Error::SignalsEnded)).is_err() {
+    if sender.send(Err(SeatError::SignalsEnded)).is_err() {
         tracing::debug!("the session was dropped before the signal stream ended");
     }
 }
 
-/// Reports [`Error::SignalsEnded`] when logind leaves the bus name the session is bound to, or
-/// when the stream fails. Blocks like [`read_signals`].
 fn watch_owner(
     mut owner_changes: impl Iterator<Item = zbus::Result<zbus::Message>>,
     sender: Sender<Delivery>,
 ) {
     let delivery = match owner_changes.next() {
-        Some(Err(source)) => Err(Error::bus("watching logind's bus name")(source)),
-        Some(Ok(_)) | None => Err(Error::SignalsEnded),
+        Some(Err(source)) => Err(SeatError::bus("watching logind's bus name")(source)),
+        Some(Ok(_)) | None => Err(SeatError::SignalsEnded),
     };
     if sender.send(delivery).is_err() {
         tracing::debug!("the session was dropped before logind's bus name changed");
     }
 }
 
-/// `dev_t` of a character device node.
-fn device_number(path: &Path) -> Result<DevT, Error> {
-    let status = stat(path).map_err(|errno| Error::Stat {
+fn device_number(path: &Path) -> Result<DevT, SeatError> {
+    let status = stat(path).map_err(|errno| SeatError::Stat {
         path: path.to_owned(),
         errno,
     })?;
     if FileType::from_raw_mode(status.st_mode) != FileType::CharacterDevice {
-        return Err(Error::NotCharDevice(path.to_owned()));
+        return Err(SeatError::NotCharDevice(path.to_owned()));
     }
     Ok(DevT::from_raw(status.st_rdev))
 }
@@ -176,12 +181,9 @@ fn event_of(transition: Transition) -> Event {
 }
 
 impl Session for LogindSession {
-    type Error = Error;
+    type Error = SessionError;
 
-    /// `TakeDevice` for the device number of `path`, after retrying a `ReleaseDevice` of the same
-    /// device that failed in [`Session::close`]. A descriptor returned while the session is
-    /// inactive is paused until the session activates.
-    fn open(&mut self, path: &Path, _flags: OFlags) -> Result<OwnedFd, Error> {
+    fn open(&mut self, path: &Path, _flags: OFlags) -> Result<OwnedFd, SessionError> {
         let dev = device_number(path)?;
         let shared = self.upgrade()?;
         let mut shared = shared.borrow_mut();
@@ -195,10 +197,7 @@ impl Session for LogindSession {
         Ok(fd)
     }
 
-    /// `ReleaseDevice` for the device behind `fd`, then closes `fd`. A device that was reported
-    /// gone is only forgotten. When `ReleaseDevice` fails the descriptor is still closed and the
-    /// release is retried by the next [`Session::open`] of the device.
-    fn close(&mut self, fd: OwnedFd) -> Result<(), Error> {
+    fn close(&mut self, fd: OwnedFd) -> Result<(), SessionError> {
         let shared = self.upgrade()?;
         let mut shared = shared.borrow_mut();
         let released = shared.machine.release(fd.as_raw_fd())?;
@@ -206,24 +205,21 @@ impl Session for LogindSession {
             shared.logind.release_device(released.dev, false)?;
             shared.machine.confirm_release(released.dev);
         }
-        // The released device may have been the last one the paused session waited for.
         if shared.machine.is_waiting_to_activate() {
             shared
                 .sender
                 .send(Ok(Input::Recheck))
-                .map_err(|_| Error::SessionLost)?;
+                .map_err(|_| SessionError(SeatError::SessionLost))?;
         }
         Ok(())
     }
 
-    /// `Seat.SwitchTo(vt)`.
-    fn change_vt(&mut self, vt: i32) -> Result<(), Error> {
-        let vt = u32::try_from(vt).map_err(|_| Error::InvalidVt(vt))?;
-        self.upgrade()?.borrow().logind.switch_to(vt)
+    fn change_vt(&mut self, vt: i32) -> Result<(), SessionError> {
+        let vt = u32::try_from(vt).map_err(|_| SessionError(SeatError::InvalidVt(vt)))?;
+        self.upgrade()?.borrow().logind.switch_to(vt)?;
+        Ok(())
     }
 
-    /// Whether the session is running. False once the notifier is gone, because the trait has
-    /// no way to report the lost session here.
     fn is_active(&self) -> bool {
         self.shared
             .upgrade()
@@ -236,21 +232,20 @@ impl Session for LogindSession {
 }
 
 impl LogindNotifier {
-    /// Applies one input and carries out its outputs in order. No borrow of the shared state is
-    /// held while `callback` runs: the holder calls back into the session from there.
-    fn apply<F: FnMut(Event, &mut ())>(&self, input: Input, callback: &mut F) -> Result<(), Error> {
+    fn apply<F: FnMut(Event, &mut ())>(
+        &self,
+        input: Input,
+        callback: &mut F,
+    ) -> Result<(), SessionError> {
         let outputs = self.shared.borrow_mut().machine.step(input);
         for output in outputs {
             match output {
                 Output::Transition(transition) => callback(event_of(transition), &mut ()),
                 Output::CompletePause(dev) => {
                     let mut shared = self.shared.borrow_mut();
-                    // False when the callback closed the device: logind needs no answer then.
                     if shared.machine.ack_pause(dev) {
                         match shared.logind.pause_device_complete(dev) {
                             Err(error) if error.unanswered() => {
-                                // The holder is already quiescent. Only logind can resume it;
-                                // retrying this acknowledgement could answer a later pause.
                                 tracing::warn!(%dev, %error, "pause acknowledgement unanswered; staying paused");
                             }
                             other => other?,
@@ -267,19 +262,17 @@ impl EventSource for LogindNotifier {
     type Event = Event;
     type Metadata = ();
     type Ret = ();
-    type Error = Error;
+    type Error = SessionError;
 
     fn process_events<F>(
         &mut self,
         readiness: Readiness,
         token: Token,
         mut callback: F,
-    ) -> Result<PostAction, Error>
+    ) -> Result<PostAction, SessionError>
     where
         F: FnMut(Event, &mut ()),
     {
-        // `Shared` holds a sender, so the channel cannot close while this notifier exists: a
-        // reader thread that ends reports it with an explicit error delivery.
         let mut deliveries = Vec::new();
         self.channel
             .process_events(readiness, token, |event, _| {
@@ -287,7 +280,7 @@ impl EventSource for LogindNotifier {
                     deliveries.push(delivery);
                 }
             })
-            .map_err(|_| Error::SessionLost)?;
+            .map_err(|_| SessionError(SeatError::SessionLost))?;
         for delivery in deliveries {
             self.apply(delivery?, &mut callback)?;
         }

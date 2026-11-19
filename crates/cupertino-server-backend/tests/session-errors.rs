@@ -1,10 +1,12 @@
-//! Which errors carry an errno for Smithay.
+//! Which session errors carry an errno for Smithay.
+
+use std::path::PathBuf;
 
 use cupertino_devices::DevT;
 use cupertino_seat::Error;
+use cupertino_server_backend::session::SessionError;
 use rustix::io::Errno;
 use smithay::backend::session::AsErrno;
-use std::path::PathBuf;
 
 #[test]
 fn only_a_stat_failure_carries_its_errno_for_smithay() {
@@ -18,6 +20,6 @@ fn only_a_stat_failure_carries_its_errno_for_smithay() {
         (Error::UnknownFd(1), None),
         (Error::AlreadyTaken(DevT::new(1, 1)), None),
     ] {
-        assert_eq!(error.as_errno(), expected, "{error:?}");
+        assert_eq!(SessionError(error).as_errno(), expected);
     }
 }

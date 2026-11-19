@@ -154,7 +154,7 @@ impl Machine {
         self.phase == Phase::Paused
     }
 
-    pub(crate) fn check_available(&self, dev: DevT) -> Result<(), Error> {
+    pub fn check_available(&self, dev: DevT) -> Result<(), Error> {
         if self
             .devices
             .get(&dev)

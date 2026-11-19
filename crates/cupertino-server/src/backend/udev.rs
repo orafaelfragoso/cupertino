@@ -18,7 +18,7 @@ use cupertino_devices::{Action, DevT, DeviceEvent, Monitor, Subsystem, SEAT0};
 use cupertino_scene::renderer::{
     Completion as _, Failure, RenderFailure as _, RenderStatus, Renderer,
 };
-use cupertino_seat::LogindSession;
+use cupertino_server_backend::session::LogindSession;
 use cupertino_wm::OutputId;
 use smithay::backend::allocator::gbm::{GbmAllocator, GbmBufferFlags, GbmDevice};
 use smithay::backend::drm::compositor::{FrameError, FrameFlags, RenderFrameError};

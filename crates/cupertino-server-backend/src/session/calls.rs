@@ -9,12 +9,12 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender};
 use std::time::{Duration, Instant};
 
 use cupertino_devices::DevT;
+use cupertino_seat::logind::SessionLookup;
+use cupertino_seat::Error;
 use smithay::reexports::calloop::channel::Sender as LoopSender;
 use zbus::blocking::{connection::Builder, Connection};
 
-use crate::logind::SessionLookup;
-use crate::session::{listen, Delivery};
-use crate::Error;
+use super::{listen, Delivery};
 
 /// The compositor's bus patience for a single operation, including giving up control on exit.
 const CALL_WAIT: Duration = Duration::from_secs(2);
@@ -64,8 +64,6 @@ impl Calls {
                 match Builder::system().and_then(|b| b.method_timeout(CALL_WAIT).build()) {
                     Ok(conn) => {
                         serve(&conn, lookup, events, ready, queue);
-                        // The signal readers also own this connection. Even a lost TakeControl or
-                        // ReleaseControl reply must not keep the session or its devices claimed.
                         if let Err(error) = conn.close() {
                             tracing::warn!(%error, "closing the logind controller connection");
                         }
@@ -94,7 +92,6 @@ impl Calls {
         request: impl FnOnce(Instant, Answer<T>) -> Request,
     ) -> Result<T, Error> {
         let until = Instant::now() + CALL_WAIT;
-        // Rendezvous, not a buffered reply: a successful send means the loop took ownership.
         let (answer, rx) = mpsc::sync_channel(0);
         self.requests
             .as_ref()
@@ -156,8 +153,6 @@ fn serve(
         return;
     }
 
-    // Only abandoned takes whose compensating release failed. Retry before another TakeDevice;
-    // dropping control also releases these if the loop never opens the device again.
     let mut lost = HashSet::new();
     for request in queue {
         match request {

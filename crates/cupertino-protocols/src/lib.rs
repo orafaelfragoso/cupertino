@@ -6,6 +6,8 @@
 
 #![allow(clippy::all)]
 
+pub mod transaction;
+
 // The scanner macros read the XML without telling rustc; including it puts it in the dep-info that caches such as
 // sccache key on, so an edited protocol regenerates the bindings.
 const _: &[u8] = include_bytes!("../protocols/cupertino-shell-v1.xml");

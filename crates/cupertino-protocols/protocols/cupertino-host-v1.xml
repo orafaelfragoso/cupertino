@@ -47,7 +47,7 @@
 
     <enum name="error">
       <entry name="component" value="0" summary="the host already holds an object for that component"/>
-      <entry name="kind" value="1" summary="a request only one kind of host may make came from the other"/>
+      <entry name="kind" value="1" summary="a request only one kind of host may make came from the other, or a separate host named another component in bus_dropped"/>
       <entry name="name" value="2" summary="not a name of the server's component table"/>
     </enum>
 

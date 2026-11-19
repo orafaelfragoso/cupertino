@@ -17,7 +17,7 @@ fn shape(messages: &'static [MessageDesc]) -> Shape {
 
 #[test]
 fn every_interface_agrees_between_client_and_server_and_dates_its_messages_within_its_version() {
-    let pairs: [(&Interface, &Interface); 10] = [
+    let pairs: [(&Interface, &Interface); 18] = [
         (
             client::cupertino_dock_v1::CupertinoDockV1::interface(),
             server::cupertino_dock_v1::CupertinoDockV1::interface(),
@@ -58,6 +58,38 @@ fn every_interface_agrees_between_client_and_server_and_dates_its_messages_withi
             client::global_shortcuts::cupertino_global_shortcuts_v1::CupertinoGlobalShortcutsV1::interface(),
             server::global_shortcuts::cupertino_global_shortcuts_v1::CupertinoGlobalShortcutsV1::interface(),
         ),
+        (
+            client::host::cupertino_host_v1::CupertinoHostV1::interface(),
+            server::host::cupertino_host_v1::CupertinoHostV1::interface(),
+        ),
+        (
+            client::host::cupertino_host_component_v1::CupertinoHostComponentV1::interface(),
+            server::host::cupertino_host_component_v1::CupertinoHostComponentV1::interface(),
+        ),
+        (
+            client::host::cupertino_component_v1::CupertinoComponentV1::interface(),
+            server::host::cupertino_component_v1::CupertinoComponentV1::interface(),
+        ),
+        (
+            client::transaction::cupertino_transaction_manager_v1::CupertinoTransactionManagerV1::interface(),
+            server::transaction::cupertino_transaction_manager_v1::CupertinoTransactionManagerV1::interface(),
+        ),
+        (
+            client::transaction::cupertino_transaction_v1::CupertinoTransactionV1::interface(),
+            server::transaction::cupertino_transaction_v1::CupertinoTransactionV1::interface(),
+        ),
+        (
+            client::transaction::cupertino_hole_v1::CupertinoHoleV1::interface(),
+            server::transaction::cupertino_hole_v1::CupertinoHoleV1::interface(),
+        ),
+        (
+            client::overview::cupertino_overview_manager_v1::CupertinoOverviewManagerV1::interface(),
+            server::overview::cupertino_overview_manager_v1::CupertinoOverviewManagerV1::interface(),
+        ),
+        (
+            client::overview::cupertino_overview_v1::CupertinoOverviewV1::interface(),
+            server::overview::cupertino_overview_v1::CupertinoOverviewV1::interface(),
+        ),
     ];
     for (client, server) in pairs {
         let name = client.name;
@@ -83,4 +115,40 @@ fn every_interface_agrees_between_client_and_server_and_dates_its_messages_withi
             );
         }
     }
+}
+
+#[test]
+fn transaction_limit_constants_match_protocol_xml() {
+    use cupertino_protocols::transaction;
+
+    let xml = include_str!("../protocols/cupertino-transaction-v1.xml");
+    assert!(xml.contains(&format!(
+        "{} milliseconds",
+        transaction::DEFAULT_DEADLINE_EXTRA_MS
+    )));
+    assert!(xml.contains(&format!("{} milliseconds", transaction::MAX_DEADLINE_MS)));
+    assert!(xml.contains(&format!("{} seconds", transaction::ENDED_RETENTION_SECS)));
+    assert!(xml.contains(&format!(
+        "{} transactions",
+        transaction::MAX_ACTIVE_TRANSACTIONS
+    )));
+    assert!(xml.contains(&format!(
+        "{} staged surfaces",
+        transaction::MAX_STAGED_SURFACES
+    )));
+    assert!(xml.contains(&format!(
+        "{} expected components",
+        transaction::MAX_EXPECTED_COMPONENTS
+    )));
+    assert!(xml.contains(&format!("{} holes", transaction::MAX_HOLES_PER_CONNECTION)));
+    assert!(xml.contains(&format!(
+        "{} to {} seconds",
+        transaction::SPRING_RESPONSE.0,
+        transaction::SPRING_RESPONSE.1 as u32
+    )));
+    assert!(xml.contains(&format!(
+        "{} to {}",
+        transaction::SPRING_DAMPING.0,
+        transaction::SPRING_DAMPING.1 as u32
+    )));
 }

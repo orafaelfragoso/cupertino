@@ -3041,20 +3041,7 @@ pub fn new_output(
 
 /// The rectangle of an output in the global logical space: its mode turned by `transform`, divided
 /// by `scale`, at `position`.
-pub fn output_rect(
-    mode: OutputMode,
-    scale: f64,
-    transform: Transform,
-    position: (i32, i32),
-) -> Rect {
-    let size = transform.transform_size(mode.size);
-    Rect::new(
-        f64::from(position.0),
-        f64::from(position.1),
-        (f64::from(size.w) / scale).round(),
-        (f64::from(size.h) / scale).round(),
-    )
-}
+pub use cupertino_server_backend::displays::output_rect;
 
 /// Size constraints of a toplevel from its cached state (zero means unset).
 /// The client's size limits (`size_hints`) as limits of the frame the window model resizes: the `insets` around the

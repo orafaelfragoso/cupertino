@@ -1649,9 +1649,12 @@ name = "cupertino-server-backend"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "cupertino-defaults",
  "cupertino-devices",
  "cupertino-diagnostic-events",
+ "cupertino-displays",
  "cupertino-seat",
+ "cupertino-wm",
  "libc",
  "rustix 1.1.6",
  "smithay",

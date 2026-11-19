@@ -10,9 +10,12 @@ layer = "core"
 
 [dependencies]
 anyhow = "1"
+cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-devices = { path = "../cupertino-devices" }
 cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events" }
+cupertino-displays = { path = "../cupertino-displays" }
 cupertino-seat = { path = "../cupertino-seat" }
+cupertino-wm = { path = "../cupertino-wm" }
 libc = "0.2"
 rustix = { version = "1", features = ["fs"] }
 tracing = "0.1"
@@ -21,4 +24,4 @@ zbus = { version = "5", default-features = false, features = ["async-io", "block
 [dependencies.smithay]
 version = "0.7"
 default-features = false
-features = ["backend_egl", "backend_session", "renderer_gl"]
+features = ["backend_egl", "backend_session", "renderer_gl", "wayland_frontend"]

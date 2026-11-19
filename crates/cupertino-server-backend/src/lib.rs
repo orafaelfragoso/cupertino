@@ -4,6 +4,7 @@
 //! Depends on no other server crate.
 
 pub mod acquire_waits;
+pub mod displays;
 pub mod drm_trace;
 pub mod frame_stats;
 pub mod gpu_reset;

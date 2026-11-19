@@ -1594,11 +1594,8 @@ dependencies = [
 name = "cupertino-server"
 version = "0.1.0"
 dependencies = [
- "accesskit",
- "accesskit_unix",
  "anyhow",
  "async-channel",
- "bytemuck",
  "clap",
  "cupertino-animation",
  "cupertino-app-protocols",
@@ -1618,7 +1615,6 @@ dependencies = [
  "cupertino-keyboard",
  "cupertino-peer",
  "cupertino-protocols",
- "cupertino-raster-math",
  "cupertino-scene",
  "cupertino-server-backend",
  "cupertino-server-render",
@@ -1641,7 +1637,6 @@ dependencies = [
  "wayland-protocols-wlr",
  "wayland-scanner",
  "wayland-server",
- "xcursor",
  "zbus",
 ]
 
@@ -1668,16 +1663,29 @@ dependencies = [
 name = "cupertino-server-render"
 version = "0.1.0"
 dependencies = [
+ "accesskit",
+ "accesskit_unix",
+ "anyhow",
+ "bytemuck",
  "cupertino-assets",
  "cupertino-cursor",
+ "cupertino-decorations",
+ "cupertino-defaults",
  "cupertino-effects",
  "cupertino-geometry",
+ "cupertino-glass",
  "cupertino-gpu",
  "cupertino-input",
+ "cupertino-raster-math",
  "cupertino-scene",
+ "cupertino-server-backend",
  "cupertino-theme",
  "cupertino-wm",
+ "image",
+ "libc",
+ "rustix 1.1.6",
  "smithay",
+ "tiny-skia",
  "tracing",
  "xcursor",
 ]

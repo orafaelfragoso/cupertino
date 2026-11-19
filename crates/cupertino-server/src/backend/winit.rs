@@ -166,11 +166,37 @@ fn render_inner(state: &mut Cupertino, w: &mut WinitBackend) {
         return;
     };
     let mut resources = GlesResources::new(res, cache, composed.resources);
+    struct WinitSurface<'a>(&'a mut WinitGraphicsBackend<GlesRenderer>);
+
+    impl crate::render::gles::WindowGraphics for WinitSurface<'_> {
+        fn renderer(&mut self) -> &mut GlesRenderer {
+            self.0.renderer()
+        }
+
+        fn render_bound(
+            &mut self,
+            draw: &mut dyn FnMut(
+                &mut GlesRenderer,
+                &mut smithay::backend::renderer::gles::GlesTarget<'_>,
+            ) -> Result<
+                crate::render::gles::GlesCompletion,
+                crate::render::gles::RenderError,
+            >,
+        ) -> Result<crate::render::gles::GlesCompletion, crate::render::gles::RenderError> {
+            let (renderer, mut framebuffer) = self
+                .0
+                .bind()
+                .map_err(|e| crate::render::gles::RenderError::Target(e.to_string()))?;
+            draw(renderer, &mut framebuffer)
+        }
+    }
+
+    let mut surface = WinitSurface(&mut w.graphics);
     let result = Gles.render(
         &composed.frame,
         &mut resources,
         GlesTarget::Window {
-            graphics: &mut w.graphics,
+            graphics: &mut surface,
             tracker,
             age,
             clear: CLEAR,

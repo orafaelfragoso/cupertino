@@ -8,11 +8,10 @@ use std::time::Duration;
 use cupertino_effects::Mesh;
 use cupertino_geometry::{CornerStyle, Point, Rect};
 use cupertino_scene::{
-    AlphaMode, BufferCrop, Clip, ContentDamage, FrameId, GlassId, GlassPass, GlobalRect, ImageId,
-    ImageMapping, ImageRole, LayerStack, MaterialPass, MaterialStage, Output, OutputId,
-    OutputInvalidation, OutputPoint, OutputRect, PhysicalSize, Placement, RecipeId, ResourceKey,
-    SceneFrame, SceneId, SceneItem, SceneKind, SceneLayer, SnapshotId, Source, SurfaceId,
-    SurfaceRole,
+    AlphaMode, BufferCrop, Clip, ContentDamage, FrameId, GlassId, GlassPass, ImageId, ImageMapping,
+    ImageRole, LayerStack, MaterialPass, MaterialStage, Output, OutputInvalidation, OutputPoint,
+    OutputRect, Placement, RecipeId, ResourceKey, SceneFrame, SceneId, SceneItem, SceneKind,
+    SceneLayer, SnapshotId, Source, SurfaceId, SurfaceRole,
 };
 use smithay::backend::renderer::element::memory::MemoryRenderBuffer;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
@@ -23,7 +22,6 @@ type DevicePoint = smithay::utils::Point<i32, Physical>;
 
 use super::material::glass::GlassContainer;
 use super::material::GpuRecipe;
-use super::scene::SceneParams;
 use super::snapshots::{SnapshotLease, SnapshotOwner};
 
 /// Straight opaque black; the render target clears with its own colour.
@@ -386,25 +384,7 @@ impl Composition {
         }
     }
 
-    /// Flatten into the frame of the output described by `p`.
-    pub fn finish(self, p: &SceneParams<'_>) -> Composed {
-        let output = Output {
-            id: OutputId(p.output_id.0),
-            rect: GlobalRect(from_rect(p.rect)),
-            physical_size: PhysicalSize {
-                width: p.output_px.0,
-                height: p.output_px.1,
-            },
-            scale: p.scale,
-            // a frame drawn above the display's scale is drawn upright; the final pass turns it
-            transform: match p.panel {
-                Some(_) => cupertino_scene::Transform::Normal,
-                None => transform(p.output.current_transform()),
-            },
-        };
-        self.finish_with(output, Duration::from_secs_f64(p.now.max(0.0)))
-    }
-
+    /// Flatten into the frame of `output` at `timestamp`.
     pub fn finish_with(self, output: Output, timestamp: Duration) -> Composed {
         let frame = SceneFrame::new(
             output,
@@ -521,7 +501,7 @@ pub fn corner_style(continuous: bool) -> CornerStyle {
     }
 }
 
-fn transform(t: smithay::utils::Transform) -> cupertino_scene::Transform {
+pub fn transform(t: smithay::utils::Transform) -> cupertino_scene::Transform {
     use cupertino_scene::Transform as T;
     use smithay::utils::Transform as S;
     match t {

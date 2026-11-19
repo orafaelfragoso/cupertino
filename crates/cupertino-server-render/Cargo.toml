@@ -9,19 +9,39 @@ description = "Compositor rendering primitives: scene lowering, GLES passes, win
 layer = "core"
 
 [dependencies]
+accesskit = "0.25"
+accesskit_unix = "0.24"
+anyhow = "1"
+bytemuck = { version = "1", features = ["derive"] }
 cupertino-assets = { path = "../cupertino-assets" }
 cupertino-cursor = { path = "../cupertino-cursor" }
+cupertino-decorations = { path = "../cupertino-decorations" }
+cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-effects = { path = "../cupertino-effects" }
 cupertino-geometry = { path = "../cupertino-geometry" }
+cupertino-glass = { path = "../cupertino-glass" }
 cupertino-gpu = { path = "../cupertino-gpu" }
 cupertino-input = { path = "../cupertino-input" }
+cupertino-raster-math = { path = "../cupertino-raster-math" }
 cupertino-scene = { path = "../cupertino-scene" }
+cupertino-server-backend = { path = "../cupertino-server-backend" }
 cupertino-theme = { path = "../cupertino-theme" }
 cupertino-wm = { path = "../cupertino-wm" }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+libc = "0.2"
+rustix = { version = "1", features = ["event", "fs"] }
+tiny-skia = "0.12"
 tracing = "0.1"
 xcursor = "0.3"
 
 [dependencies.smithay]
 version = "0.7"
 default-features = false
-features = ["desktop", "renderer_gl", "wayland_frontend"]
+features = [
+    "backend_drm",
+    "backend_egl",
+    "backend_gbm",
+    "desktop",
+    "renderer_gl",
+    "wayland_frontend",
+]

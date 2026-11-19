@@ -10,7 +10,6 @@ use cupertino_scene::renderer::{Completion, Failure, RenderFailure, RenderStatus
 use cupertino_scene::{Output, SceneFrame};
 use image::RgbaImage;
 use smithay::backend::allocator::dmabuf::Dmabuf;
-#[cfg(feature = "udev")]
 use smithay::backend::drm::compositor::RenderFrameError;
 use smithay::backend::renderer::damage::OutputDamageTracker;
 use smithay::backend::renderer::gles::{GlesError, GlesRenderer, GlesTexture};
@@ -20,15 +19,29 @@ use smithay::backend::SwapBuffersError;
 use smithay::utils::{Physical, Rectangle, Size};
 
 use super::compose::{Composed, FrameResources};
+use super::core::{finalize_materials, RenderResources};
 use super::lower::{lower, Lowering};
 use super::material::SharedMaterial;
 use super::mesh::{capture, SharedMesh};
 use super::programs::Programs;
-use super::scene::{finalize_materials, RenderResources};
 use super::screenshot::render_shown_image;
 use super::shader_rect::ElementCache;
 use super::snapshots::Snapshots;
 use super::CupertinoElement;
+
+/// A nested window surface whose framebuffer can be bound on demand after offscreen supersampling.
+pub trait WindowGraphics {
+    /// The GLES renderer backing the window.
+    fn renderer(&mut self) -> &mut GlesRenderer;
+    /// Bind the window's framebuffer and invoke `draw` with the bound renderer and framebuffer.
+    fn render_bound(
+        &mut self,
+        draw: &mut dyn FnMut(
+            &mut GlesRenderer,
+            &mut smithay::backend::renderer::gles::GlesTarget<'_>,
+        ) -> Result<GlesCompletion, RenderError>,
+    ) -> Result<GlesCompletion, RenderError>;
+}
 
 /// The GLES renderer. It holds nothing: the device is in the target, the programs and caches in the resources.
 #[derive(Default)]
@@ -208,18 +221,16 @@ pub enum GlesTarget<'a> {
         clear: Color32F,
     },
     /// The window of the nested backend, drawn through the output's damage tracker at the buffer's `age`.
-    #[cfg(feature = "winit")]
     Window {
-        graphics: &'a mut smithay::backend::winit::WinitGraphicsBackend<GlesRenderer>,
+        graphics: &'a mut dyn WindowGraphics,
         tracker: &'a mut OutputDamageTracker,
         age: usize,
         clear: Color32F,
     },
     /// A display output of the DRM compositor, which draws, tracks damage and chooses planes itself.
-    #[cfg(feature = "udev")]
     Drm {
         renderer: &'a mut GlesRenderer,
-        output: &'a mut crate::backend::udev::DrmSurfaceOutput,
+        output: &'a mut cupertino_server_backend::backend::DrmSurfaceOutput,
         clear: Color32F,
     },
     /// A fresh offscreen image of the output as it is shown, upright at the output's device size (a quarter-turned
@@ -247,7 +258,7 @@ pub enum GlesCompletion {
     /// planes it put elements on; `sync`, what the primary plane waits for, `None` when an element is scanned out on it.
     Direct {
         empty: bool,
-        planes: crate::drm_trace::Planes,
+        planes: cupertino_server_backend::drm_trace::Planes,
         sync: Option<SyncPoint>,
     },
     Image(RgbaImage),
@@ -334,7 +345,6 @@ fn output_transform(t: cupertino_scene::Transform) -> smithay::utils::Transform 
     }
 }
 
-#[cfg(feature = "udev")]
 pub use cupertino_server_backend::backend::primary_sync;
 
 impl Renderer for Gles {
@@ -394,7 +404,6 @@ impl Renderer for Gles {
                     })
                     .map_err(tracked)
             }
-            #[cfg(feature = "winit")]
             GlesTarget::Window {
                 graphics,
                 tracker,
@@ -404,20 +413,19 @@ impl Renderer for Gles {
                 // a supersampled frame is drawn into its offscreen frame before the window's is bound
                 let fin =
                     Gles::final_elements(graphics.renderer(), scene, resources, clear, false)?;
-                let (renderer, mut framebuffer) = graphics
-                    .bind()
-                    .map_err(|e| RenderError::Target(e.to_string()))?;
-                let _frame = resources.programs.passes.frame();
-                let _draw =
-                    tracing::trace_span!("server.draw", elements = fin.elements.len()).entered();
-                tracker
-                    .render_output(renderer, &mut framebuffer, age, &fin.elements, clear)
-                    .map(|r| GlesCompletion::Drawn {
-                        damage: r.damage.cloned(),
-                    })
-                    .map_err(tracked)
+                let passes = &resources.programs.passes;
+                graphics.render_bound(&mut |renderer, framebuffer| {
+                    let _frame = passes.frame();
+                    let _draw = tracing::trace_span!("server.draw", elements = fin.elements.len())
+                        .entered();
+                    tracker
+                        .render_output(renderer, framebuffer, age, &fin.elements, clear)
+                        .map(|r| GlesCompletion::Drawn {
+                            damage: r.damage.cloned(),
+                        })
+                        .map_err(tracked)
+                })
             }
-            #[cfg(feature = "udev")]
             GlesTarget::Drm {
                 renderer,
                 output,
@@ -437,7 +445,7 @@ impl Renderer for Gles {
                     )
                     .map(|r| GlesCompletion::Direct {
                         empty: r.is_empty,
-                        planes: crate::drm_trace::Planes {
+                        planes: cupertino_server_backend::drm_trace::Planes {
                             direct_scanout: matches!(
                                 r.primary_element,
                                 smithay::backend::drm::compositor::PrimaryPlaneElement::Element(_)

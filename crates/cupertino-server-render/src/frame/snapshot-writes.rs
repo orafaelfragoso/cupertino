@@ -14,7 +14,7 @@ use image::{ImageFormat, RgbaImage};
 /// Number of snapshots the worker can hold besides the one it is writing.
 const QUEUE: usize = 4;
 /// Largest retained sample (room for an 8K RGBA output); all paths of an output share the one image.
-pub(crate) const SAMPLE_BYTES: usize = 128 * 1024 * 1024;
+pub const SAMPLE_BYTES: usize = 128 * 1024 * 1024;
 /// Time allowed for a FIFO reader to open its end or to make progress writing the file.
 const OUTPUT_WAIT: Duration = Duration::from_secs(3);
 /// Interval between attempts to open a FIFO with no reader.
@@ -33,25 +33,25 @@ struct Worker {
 }
 
 #[derive(Default)]
-pub(crate) struct Writes {
+pub struct Writes {
     worker: Option<Worker>,
     error: Option<anyhow::Error>,
 }
 
 impl Writes {
-    pub(crate) fn failed(&mut self, error: anyhow::Error) {
+    pub fn failed(&mut self, error: anyhow::Error) {
         tracing::error!(%error, "scripted output failed");
         self.error.get_or_insert(error);
     }
 
-    pub(crate) fn image(&mut self, paths: Vec<PathBuf>, image: RgbaImage) {
+    pub fn image(&mut self, paths: Vec<PathBuf>, image: RgbaImage) {
         if image.len() > SAMPLE_BYTES {
             return self.failed(anyhow!("screenshot exceeds {SAMPLE_BYTES} bytes"));
         }
         self.queue(Sample::Image(paths, image));
     }
 
-    pub(crate) fn window_list(&mut self, path: PathBuf, list: String) {
+    pub fn window_list(&mut self, path: PathBuf, list: String) {
         self.queue(Sample::List(path, list));
     }
 
@@ -69,7 +69,7 @@ impl Writes {
     }
 
     /// Called only after the backend loop exits. Dropping the sender is the end marker, even for a full queue.
-    pub(crate) fn finish(&mut self) -> Result<()> {
+    pub fn finish(&mut self) -> Result<()> {
         if let Some(Worker { send, done }) = self.worker.take() {
             drop(send);
             done.recv_timeout(DRAIN_WAIT)

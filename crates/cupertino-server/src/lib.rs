@@ -7,7 +7,7 @@ pub mod accessibility;
 pub use cupertino_server_backend::{
     acquire_waits, drm_trace, latch, output_depth, schedule, software_render, sync_file,
 };
-pub use cupertino_server_render::{frame_fill, fx, popup_linger, toolkit_programs};
+pub use cupertino_server_render::{decor, frame_fill, fx, popup_linger, toolkit_programs};
 pub mod activation_env;
 pub mod app_effects_v1;
 pub mod authorization;
@@ -21,7 +21,6 @@ pub mod control;
 pub mod cursor;
 pub mod data_control;
 pub mod dbus;
-pub mod decor;
 pub mod decor_access;
 pub mod desktop;
 pub mod display_power;

@@ -494,7 +494,7 @@ pub struct MaterialGl {
     /// The timer queries of the passes timed and not yet read.
     timers: PassTimers,
     /// What the glass passes took since the benchmark last cleared it.
-    pub glass_time: crate::frame_stats::GlassTime,
+    pub glass_time: cupertino_server_backend::frame_stats::GlassTime,
     failure: Option<String>,
     glass: glass::GlassGl,
 }

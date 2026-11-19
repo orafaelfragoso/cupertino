@@ -1,5 +1,5 @@
 // cupertino-layers --graph
-// 73 crates, 353 internal dependencies
+// 73 crates, 357 internal dependencies
 // per layer: foundation 5, graphics 2, models 6, system 8, platform 5, protocol 3, transport 2, render 3, ui 9, shellkit 1, core 3, services 6, shell 11, apps 2, tools 6, testing 1
 // forbidden normal edge cupertino-controlcenter (shell) -> cupertino-alsa (platform)
 // forbidden normal edge cupertino-controlcenter (shell) -> cupertino-pipewire (platform)
@@ -371,7 +371,7 @@ digraph "layers" {
   "cupertino-server" -> "cupertino-app-protocols";
   "cupertino-server" -> "cupertino-assets";
   "cupertino-server" -> "cupertino-control-model";
-  "cupertino-server" -> "cupertino-cursor";
+  "cupertino-server" -> "cupertino-cursor" [label="dev"];
   "cupertino-server" -> "cupertino-decorations";
   "cupertino-server" -> "cupertino-defaults";
   "cupertino-server" -> "cupertino-devices";
@@ -386,7 +386,6 @@ digraph "layers" {
   "cupertino-server" -> "cupertino-peer";
   "cupertino-server" -> "cupertino-protocols";
   "cupertino-server" -> "cupertino-protocols" [label="dev"];
-  "cupertino-server" -> "cupertino-raster-math";
   "cupertino-server" -> "cupertino-scene";
   "cupertino-server" -> "cupertino-server-backend";
   "cupertino-server" -> "cupertino-server-render";
@@ -401,11 +400,16 @@ digraph "layers" {
   "cupertino-server-backend" -> "cupertino-wm";
   "cupertino-server-render" -> "cupertino-assets";
   "cupertino-server-render" -> "cupertino-cursor";
+  "cupertino-server-render" -> "cupertino-decorations";
+  "cupertino-server-render" -> "cupertino-defaults";
   "cupertino-server-render" -> "cupertino-effects";
   "cupertino-server-render" -> "cupertino-geometry";
+  "cupertino-server-render" -> "cupertino-glass";
   "cupertino-server-render" -> "cupertino-gpu";
   "cupertino-server-render" -> "cupertino-input";
+  "cupertino-server-render" -> "cupertino-raster-math";
   "cupertino-server-render" -> "cupertino-scene";
+  "cupertino-server-render" -> "cupertino-server-backend";
   "cupertino-server-render" -> "cupertino-theme";
   "cupertino-server-render" -> "cupertino-wm";
   "cupertino-sessiond" -> "cupertino-defaults";

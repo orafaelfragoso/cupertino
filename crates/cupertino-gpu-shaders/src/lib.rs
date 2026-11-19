@@ -295,10 +295,11 @@ pub struct SourceSet {
 
 /// Every set of programs the build step generates: `cupertino-gpu`'s, the backdrop and material programs of
 /// `cupertino-glass`, which the compositor draws too, and the compositor's own rectangle passes (shadow, rounded
-/// rectangle, wallpaper, in `crates/cupertino-server/shaders/passes/`), with the same shared module ahead of each.
+/// rectangle, wallpaper, in `crates/cupertino-server-render/shaders/passes/`), with the same shared module ahead of each.
 pub fn sets() -> Vec<SourceSet> {
     let glass = Path::new(env!("CARGO_MANIFEST_DIR")).join("../cupertino-glass/shaders");
-    let passes = Path::new(env!("CARGO_MANIFEST_DIR")).join("../cupertino-server/shaders/passes");
+    let passes =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../cupertino-server-render/shaders/passes");
     vec![
         SourceSet {
             dir: source_dir(),

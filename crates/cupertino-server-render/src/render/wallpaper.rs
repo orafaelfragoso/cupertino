@@ -826,7 +826,7 @@ impl Wallpapers {
         if none {
             self.forget(output);
             self.tint = None;
-            self.procedural(output, crate::render::scene::wallpaper_tint(dark));
+            self.procedural(output, super::core::wallpaper_tint(dark));
             return None;
         }
         self.update_keyed(
@@ -841,7 +841,7 @@ impl Wallpapers {
         // no candidate could be used and none is being read: the procedural wallpaper stays
         if !state.in_flight && state.shown.is_none() {
             self.tint = None;
-            self.procedural(output, crate::render::scene::wallpaper_tint(dark));
+            self.procedural(output, super::core::wallpaper_tint(dark));
             return None;
         }
         match state.shown.as_ref().filter(|s| s.px == px) {
@@ -866,7 +866,7 @@ impl Wallpapers {
     }
 
     /// The procedural wallpaper shows on `output`: the colour under its bar is the wallpaper's average colour
-    /// ([`crate::render::scene::wallpaper_tint`]) through the bar's colour operations, handed out when it differs from
+    /// ([`super::core::wallpaper_tint`]) through the bar's colour operations, handed out when it differs from
     /// the last one.
     fn procedural(&mut self, output: u64, tint: [f32; 3]) {
         let bands = BarBands::even(apply_color_ops(tint, &self.bar_ops));

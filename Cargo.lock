@@ -1653,6 +1653,7 @@ dependencies = [
  "cupertino-devices",
  "cupertino-diagnostic-events",
  "cupertino-displays",
+ "cupertino-input",
  "cupertino-seat",
  "cupertino-wm",
  "libc",

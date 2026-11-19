@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
 
+use crate::session::LogindSession;
 use anyhow::{anyhow, Context, Result};
 use cupertino_devices::evdev::codes::{
     is_button, ABS_MT_POSITION_X, ABS_MT_POSITION_Y, ABS_MT_PRESSURE, ABS_MT_SLOT, ABS_X, ABS_Y,
@@ -37,7 +38,6 @@ use cupertino_input::{
     SwipeAxis, TouchContact, Touchpad, TouchpadButton, TouchpadEvent, TouchpadFrame,
     TouchpadGeometry, TouchpadSettings, SWIPE_COMPLETE_MM,
 };
-use cupertino_server_backend::session::LogindSession;
 use smithay::backend::input::{
     AbsolutePositionEvent, Axis, AxisRelativeDirection, AxisSource, ButtonState, Device,
     DeviceCapability, Event, GestureBeginEvent, GestureEndEvent, GesturePinchBeginEvent,
@@ -53,7 +53,17 @@ use smithay::reexports::calloop::{Interest, LoopHandle, Mode, PostAction, Regist
 use smithay::reexports::rustix::fs::OFlags;
 use smithay::reexports::rustix::io::Errno;
 
-use crate::state::Cupertino;
+/// Compositor hooks called by the evdev input backend as devices open, emit events, and close.
+pub trait EvdevHost: 'static {
+    /// Current compositor monotonic clock time.
+    fn evdev_clock_now(&self) -> Duration;
+    /// Whether natural scrolling is enabled for touchpads (`touchpad == true`) or mice (`false`).
+    fn evdev_natural_scrolling_for(&self, touchpad: bool) -> bool;
+    /// Mark a resynced already-pressed keycode so accessibility key filters pass it through.
+    fn evdev_pass_unfiltered_key(&mut self, code: u32);
+    /// Deliver one translated evdev input event to the compositor.
+    fn evdev_process_input_event(&mut self, event: InputEvent<EvdevBackend>);
+}
 
 const SYSFS: &str = "/sys";
 
@@ -1077,17 +1087,20 @@ struct ArmedTimer {
     deadline: f64,
 }
 
-pub struct Inputs {
-    handle: LoopHandle<'static, Cupertino>,
+pub struct Inputs<S: 'static> {
+    handle: LoopHandle<'static, S>,
     session: LogindSession,
     devices: HashMap<DevT, Opened>,
     timer: Option<ArmedTimer>,
 }
 
-pub type SharedInputs = Rc<RefCell<Inputs>>;
+pub type SharedInputs<S> = Rc<RefCell<Inputs<S>>>;
 
 /// An empty device table; [`open_all`] fills it.
-pub fn new_inputs(handle: LoopHandle<'static, Cupertino>, session: LogindSession) -> SharedInputs {
+pub fn new_inputs<S: EvdevHost>(
+    handle: LoopHandle<'static, S>,
+    session: LogindSession,
+) -> SharedInputs<S> {
     Rc::new(RefCell::new(Inputs {
         handle,
         session,
@@ -1096,20 +1109,20 @@ pub fn new_inputs(handle: LoopHandle<'static, Cupertino>, session: LogindSession
     }))
 }
 
-fn now(state: &Cupertino) -> Duration {
-    Duration::from(state.clock.now())
+fn now<S: EvdevHost>(state: &S) -> Duration {
+    state.evdev_clock_now()
 }
 
-fn deliver(state: &mut Cupertino, events: Vec<Event_>) {
+fn deliver<S: EvdevHost>(state: &mut S, events: Vec<Event_>) {
     for event in events {
         // A key that was already down is state, not a keystroke: it bypasses the accessibility filters (sticky keys
         // would latch the modifiers of the chord that switched to this session).
         if let InputEvent::Keyboard { event: key } = &event {
             if key.resynced && key.state == KeyState::Pressed {
-                state.key_filters.pass_unfiltered(key.code);
+                state.evdev_pass_unfiltered_key(key.code);
             }
         }
-        state.process_input_event(event);
+        state.evdev_process_input_event(event);
     }
 }
 
@@ -1134,7 +1147,7 @@ fn read(
 }
 
 /// Opens every input node and announces it.
-pub fn open_all(shared: &SharedInputs, state: &mut Cupertino) -> Result<()> {
+pub fn open_all<S: EvdevHost>(shared: &SharedInputs<S>, state: &mut S) -> Result<()> {
     let nodes = enumerate(Path::new(SYSFS), Subsystem::Input)
         .map_err(|e| anyhow!("listing input devices: {e}"))?;
     for node in &nodes {
@@ -1144,7 +1157,7 @@ pub fn open_all(shared: &SharedInputs, state: &mut Cupertino) -> Result<()> {
 }
 
 /// Closes every device, releasing what they hold, for a session that is paused.
-pub fn close_all(shared: &SharedInputs, state: &mut Cupertino) {
+pub fn close_all<S: EvdevHost>(shared: &SharedInputs<S>, state: &mut S) {
     let devnums: Vec<DevT> = shared.borrow().devices.keys().copied().collect();
     for devnum in devnums {
         close_device(shared, devnum, true, state);
@@ -1152,7 +1165,7 @@ pub fn close_all(shared: &SharedInputs, state: &mut Cupertino) {
 }
 
 /// Kernel uevent for the `input` subsystem: a node appeared or went away.
-pub fn hotplug(shared: &SharedInputs, event: &DeviceEvent, state: &mut Cupertino) {
+pub fn hotplug<S: EvdevHost>(shared: &SharedInputs<S>, event: &DeviceEvent, state: &mut S) {
     let Some(devnum) = event.devnum else { return };
     match event.action {
         Action::Added if event.devnode.as_deref().is_some_and(is_event_node) => {
@@ -1253,7 +1266,7 @@ fn diff_nodes(open: &[NodeKey], present: &[NodeKey]) -> NodeDiff {
 
 /// Brings the open devices in line with the nodes that exist, after uevents were lost: opens the
 /// new ones and closes the gone ones.
-pub fn resync(shared: &SharedInputs, state: &mut Cupertino) {
+pub fn resync<S: EvdevHost>(shared: &SharedInputs<S>, state: &mut S) {
     let nodes = match enumerate(Path::new(SYSFS), Subsystem::Input) {
         Ok(nodes) => nodes,
         Err(e) => {
@@ -1307,7 +1320,7 @@ fn is_event_node(devnode: &Path) -> bool {
         .is_some_and(|number| number.parse::<u32>().is_ok())
 }
 
-fn open_reporting(shared: &SharedInputs, node: &SysDevice, state: &mut Cupertino) {
+fn open_reporting<S: EvdevHost>(shared: &SharedInputs<S>, node: &SysDevice, state: &mut S) {
     if let Err(e) = open_device(shared, node, state) {
         tracing::error!(device = node.sysname(), error = %format!("{e:#}"), "skipping input device");
     }
@@ -1315,7 +1328,11 @@ fn open_reporting(shared: &SharedInputs, node: &SysDevice, state: &mut Cupertino
 
 /// Opens one node through the session and registers it with the loop. A node the compositor routes
 /// nothing from, one that is already open, or any node while the session is paused, is skipped.
-fn open_device(shared: &SharedInputs, node: &SysDevice, state: &mut Cupertino) -> Result<()> {
+fn open_device<S: EvdevHost>(
+    shared: &SharedInputs<S>,
+    node: &SysDevice,
+    state: &mut S,
+) -> Result<()> {
     let devnum = node.devnum().context("the node has no device number")?;
     let devnode = node
         .devnode()
@@ -1342,7 +1359,7 @@ fn open_device(shared: &SharedInputs, node: &SysDevice, state: &mut Cupertino) -
         node,
         class,
         &fd,
-        state.config.pointer.natural_scrolling_for(class.touchpad),
+        state.evdev_natural_scrolling_for(class.touchpad),
     ) {
         Ok((evdev, translator, mut events)) => {
             let device = translator.device.clone();
@@ -1393,11 +1410,11 @@ fn register(
     Ok((evdev, translator, events))
 }
 
-fn insert_device(
-    shared: &SharedInputs,
+fn insert_device<S: EvdevHost>(
+    shared: &SharedInputs<S>,
     devnum: DevT,
     evdev: EvdevDevice,
-    handle: &LoopHandle<'static, Cupertino>,
+    handle: &LoopHandle<'static, S>,
 ) -> Result<RegistrationToken> {
     let shared = shared.clone();
     handle
@@ -1413,11 +1430,11 @@ fn insert_device(
 }
 
 /// The device became readable.
-fn read_ready(
-    shared: &SharedInputs,
+fn read_ready<S: EvdevHost>(
+    shared: &SharedInputs<S>,
     devnum: DevT,
     evdev: &mut EvdevDevice,
-    state: &mut Cupertino,
+    state: &mut S,
 ) -> PostAction {
     let mut events = Vec::new();
     let result = {
@@ -1429,7 +1446,7 @@ fn read_ready(
         let touchpad = opened.translator.device.0.class.touchpad;
         opened
             .translator
-            .set_natural_scrolling(state.config.pointer.natural_scrolling_for(touchpad));
+            .set_natural_scrolling(state.evdev_natural_scrolling_for(touchpad));
         read(evdev, &mut opened.translator, &mut events)
     };
     match result {
@@ -1457,7 +1474,12 @@ fn read_ready(
 
 /// Removes a device, releases what it held and announces its removal. `remove_source` is false
 /// when called from the device's own loop callback, which removes the source by its return value.
-fn close_device(shared: &SharedInputs, devnum: DevT, remove_source: bool, state: &mut Cupertino) {
+fn close_device<S: EvdevHost>(
+    shared: &SharedInputs<S>,
+    devnum: DevT,
+    remove_source: bool,
+    state: &mut S,
+) {
     let (opened, mut session, handle) = {
         let mut inputs = shared.borrow_mut();
         let Some(opened) = inputs.devices.remove(&devnum) else {
@@ -1479,7 +1501,7 @@ fn close_device(shared: &SharedInputs, devnum: DevT, remove_source: bool, state:
 }
 
 /// Makes sure a timer fires when the earliest touchpad deadline passes.
-fn arm_timer(shared: &SharedInputs, state: &Cupertino) {
+fn arm_timer<S: EvdevHost>(shared: &SharedInputs<S>, state: &S) {
     let mut inputs = shared.borrow_mut();
     let Some(deadline) = inputs
         .devices

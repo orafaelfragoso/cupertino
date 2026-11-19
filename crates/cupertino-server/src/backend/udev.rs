@@ -24,7 +24,7 @@ use smithay::backend::allocator::gbm::{GbmAllocator, GbmBufferFlags, GbmDevice};
 use smithay::backend::drm::compositor::{FrameError, FrameFlags, RenderFrameError};
 use smithay::backend::drm::exporter::gbm::GbmFramebufferExporter;
 use smithay::backend::drm::output::{
-    DrmOutput, DrmOutputManager, DrmOutputManagerError, DrmOutputRenderElements,
+    DrmOutputManager, DrmOutputManagerError, DrmOutputRenderElements,
 };
 use smithay::backend::drm::{
     DrmDevice, DrmDeviceFd, DrmDeviceNotifier, DrmError, DrmEvent, DrmEventTime, DrmNode, NodeType,
@@ -36,7 +36,6 @@ use smithay::backend::renderer::sync::SyncPoint;
 use smithay::backend::renderer::utils::Buffer;
 use smithay::backend::renderer::Color32F;
 use smithay::backend::session::{Event as SessionEvent, Session};
-use smithay::desktop::utils::OutputPresentationFeedback;
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::{
     EventLoop, Interest, LoopHandle, Mode, PostAction, RegistrationToken,
@@ -61,34 +60,20 @@ use crate::latch::{FrameTimes, LateLatch};
 use crate::output_depth::Depth;
 use crate::render::gles::{Gles, GlesCompletion, GlesResources, GlesTarget, RenderError};
 use crate::render::scene::RenderResources;
-use crate::schedule::{Overdue, PresentationId};
+use crate::schedule::Overdue;
 use crate::software_render;
 use crate::state::Cupertino;
 use crate::sync_file::RenderFence;
+pub use cupertino_server_backend::backend::{DrmSurfaceOutput, Frame};
 
 const CLEAR: Color32F = Color32F::new(0.05, 0.05, 0.07, 1.0);
 
-/// The DRM output of one display, as the renderer draws to it.
-pub(crate) type DrmSurfaceOutput =
-    DrmOutput<GbmAllocator<DrmDeviceFd>, GbmFramebufferExporter<DrmDeviceFd>, Frame, DrmDeviceFd>;
 type Manager = DrmOutputManager<
     GbmAllocator<DrmDeviceFd>,
     GbmFramebufferExporter<DrmDeviceFd>,
     Frame,
     DrmDeviceFd,
 >;
-
-/// What a queued flip carries to its vblank.
-pub struct Frame {
-    /// The scheduler's id for it.
-    id: PresentationId,
-    feedback: OutputPresentationFeedback,
-    /// The client buffers it was drawn from. Dropping the last handle of one signals its explicit-sync release point,
-    /// which must wait until the GPU finished reading it: once the flip is done, the frame drawn from it is finished.
-    _buffers: Vec<Buffer>,
-    /// Its number in the DRM trace, when the trace is on ([`crate::drm_trace::DrmTrace::queued`]).
-    trace: Option<u64>,
-}
 
 struct Surface {
     output: OutputId,
@@ -1800,7 +1785,7 @@ fn render_surface(
         let frame = Frame {
             id,
             feedback,
-            _buffers: drawn.buffers,
+            buffers: drawn.buffers,
             trace,
         };
         let queued = tracing::trace_span!("server.submit")
@@ -2058,7 +2043,7 @@ fn show_copy(
         .drm_output
         .render_frame(renderer, &[frame], CLEAR, FrameFlags::DEFAULT)
         .map(|r| {
-            fence = RenderFence::of(crate::render::gles::primary_sync(&r.primary_element).as_ref());
+            fence = RenderFence::of(super::primary_sync(&r.primary_element).as_ref());
             !r.is_empty
         })
         .map_err(|e| match e {

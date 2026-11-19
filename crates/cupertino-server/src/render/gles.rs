@@ -334,23 +334,8 @@ fn output_transform(t: cupertino_scene::Transform) -> smithay::utils::Transform 
     }
 }
 
-/// What the primary plane of a DRM frame waits for before it is shown: the render's sync point, `None` when an element
-/// is scanned out on the plane and nothing was drawn.
 #[cfg(feature = "udev")]
-pub fn primary_sync<B, F, E>(
-    primary: &smithay::backend::drm::compositor::PrimaryPlaneElement<'_, B, F, E>,
-) -> Option<SyncPoint>
-where
-    B: smithay::backend::allocator::Buffer,
-    F: smithay::backend::drm::Framebuffer,
-{
-    match primary {
-        smithay::backend::drm::compositor::PrimaryPlaneElement::Swapchain(e) => {
-            Some(e.sync.clone())
-        }
-        smithay::backend::drm::compositor::PrimaryPlaneElement::Element(_) => None,
-    }
-}
+pub use cupertino_server_backend::backend::primary_sync;
 
 impl Renderer for Gles {
     type Resources<'a> = GlesResources<'a>;

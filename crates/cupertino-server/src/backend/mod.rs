@@ -1,25 +1,47 @@
 //! Backends: nested winit window (development), DRM/KMS on a TTY (`udev` feature) and an
 //! offscreen EGL device (headless tests and screenshots).
 
-use smithay::backend::drm::DrmNode;
-use smithay::backend::egl::{EGLContext, EGLDevice};
-use smithay::backend::renderer::gles::{Capability, GlesError, GlesRenderer};
+use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::renderer::{ImportDma, ImportMemWl};
 use smithay::wayland::dmabuf::DmabufFeedbackBuilder;
 
 use crate::state::Cupertino;
 
 #[cfg(feature = "udev")]
-pub mod copy;
-pub mod headless;
+pub use cupertino_server_backend::backend::copy;
 #[cfg(feature = "udev")]
-pub mod input;
+pub use cupertino_server_backend::backend::input;
+pub use cupertino_server_backend::backend::{
+    gles_renderer, loop_wait, primary_sync, render_node, stalls, DrmSurfaceOutput, Frame, REST_WAIT,
+};
+pub mod headless;
 pub mod record;
-mod stalls;
 #[cfg(feature = "udev")]
 pub mod udev;
 #[cfg(feature = "winit")]
 pub mod winit;
+
+#[cfg(feature = "udev")]
+impl cupertino_server_backend::backend::input::EvdevHost for Cupertino {
+    fn evdev_clock_now(&self) -> std::time::Duration {
+        std::time::Duration::from(self.clock.now())
+    }
+
+    fn evdev_natural_scrolling_for(&self, touchpad: bool) -> bool {
+        self.config.pointer.natural_scrolling_for(touchpad)
+    }
+
+    fn evdev_pass_unfiltered_key(&mut self, code: u32) {
+        self.key_filters.pass_unfiltered(code);
+    }
+
+    fn evdev_process_input_event(
+        &mut self,
+        event: smithay::backend::input::InputEvent<input::EvdevBackend>,
+    ) {
+        self.process_input_event(event);
+    }
+}
 
 pub enum Backend {
     #[cfg(feature = "winit")]
@@ -73,29 +95,6 @@ pub fn shows_nothing(state: &Cupertino) -> bool {
     state.backend.as_ref().is_some_and(Backend::shows_nothing)
 }
 
-/// A GLES renderer on `context` without GL fences.
-///
-/// Fences only order work between shared contexts, and every backend owns one unshared context,
-/// so they add nothing. Some drivers also keep memory for every fence ever created, even after it
-/// is deleted, so a fence per texture upload and per draw grows the server without bound.
-///
-/// # Safety
-///
-/// `context` must be used by this renderer alone, as for [`GlesRenderer::new`].
-pub unsafe fn gles_renderer(context: EGLContext) -> Result<GlesRenderer, GlesError> {
-    let capabilities = unsafe { GlesRenderer::supported_capabilities(&context) }?
-        .into_iter()
-        .filter(|c| *c != Capability::Fencing);
-    unsafe { GlesRenderer::with_capabilities(context, capabilities) }
-}
-
-/// The render node of the EGL display `renderer` draws on, if it has one.
-pub fn render_node(renderer: &GlesRenderer) -> Option<DrmNode> {
-    EGLDevice::device_for_display(renderer.egl_context().display())
-        .ok()
-        .and_then(|d| d.try_get_render_node().ok().flatten())
-}
-
 /// Create the dmabuf global (with default feedback when the render node is known) and publish the
 /// shm formats of `renderer`; with a render node and [`Cupertino::program_cache_base`], start making the toolkit's GPU
 /// programs into that cache ([`crate::toolkit_programs`]).
@@ -122,24 +121,6 @@ pub fn init_buffers(state: &mut Cupertino, renderer: &GlesRenderer) {
     ) {
         state.toolkit_programs = crate::toolkit_programs::start(path, base);
     }
-}
-
-/// The longest a main loop sleeps with nothing due. Every piece of time-driven work names its deadline (the tick's calls
-/// are audited for it), and events, frames and the end of a run wake the loop themselves, so on
-/// a desktop where nothing happens the loop sleeps; this is only a backstop against a deadline left unnamed, which then
-/// runs a minute late instead of never.
-pub(crate) const REST_WAIT: std::time::Duration = std::time::Duration::from_secs(60);
-
-/// How long a main loop sleeps: until the first of `waits` (a frame, the tick's work, the end of the run), at most
-/// [`REST_WAIT`].
-pub(crate) fn loop_wait(
-    waits: impl IntoIterator<Item = Option<std::time::Duration>>,
-) -> std::time::Duration {
-    waits
-        .into_iter()
-        .flatten()
-        .min()
-        .map_or(REST_WAIT, |wait| wait.min(REST_WAIT))
 }
 
 /// How long until [`Cupertino::tick`] has time-driven work ([`Cupertino::next_tick_deadline`]), in wall time; a passed

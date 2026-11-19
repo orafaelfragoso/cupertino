@@ -11,8 +11,6 @@ use smithay::reexports::calloop::{
 };
 use tracing::span::EnteredSpan;
 
-use crate::state::Cupertino;
-
 /// How long a turn may be busy before the timeline marks it as a stall.
 const STALL: Duration = Duration::from_millis(4);
 
@@ -79,14 +77,15 @@ impl EventSource for Turn {
     }
 }
 
-pub(super) struct Recorder {
-    handle: LoopHandle<'static, Cupertino>,
+/// Records active compositor turns while held; removes the loop source on drop.
+pub struct Recorder<D: 'static> {
+    handle: LoopHandle<'static, D>,
     token: RegistrationToken,
 }
 
-impl Recorder {
+impl<D: 'static> Recorder<D> {
     /// Record only the running loop, including the work before its first wait and after its last.
-    pub(super) fn start(handle: LoopHandle<'static, Cupertino>) -> Option<Self> {
+    pub fn start(handle: LoopHandle<'static, D>) -> Option<Self> {
         if !std::env::var_os(profile::ENV).is_some_and(|v| !v.is_empty()) {
             return None;
         }
@@ -100,7 +99,7 @@ impl Recorder {
     }
 }
 
-impl Drop for Recorder {
+impl<D: 'static> Drop for Recorder<D> {
     fn drop(&mut self) {
         self.handle.remove(self.token);
     }

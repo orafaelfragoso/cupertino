@@ -541,6 +541,8 @@ pub struct SceneParams<'a> {
     pub shell: &'a mut Shell,
     pub decor: &'a mut Decor,
     pub menu_bars: &'a crate::menu_bar::MenuBars,
+    /// Shell host holds rendered while a component restarts (D19).
+    pub hosts: &'a crate::host::HostManager,
     /// Stage placements: strip thumbnails and hidden windows.
     pub window_managers: &'a crate::window_manager::WindowManagers,
     pub overlays: &'a mut crate::overlays::Overlays,
@@ -2257,6 +2259,33 @@ fn layer_elements(
             }
             out.extend(pieces);
         }
+    }
+    // Held persistent surfaces whose component connection ended keep their last picture until takeover or ready (D19).
+    for hold in p.hosts.held_surfaces_on(p.output_id, layer) {
+        let Some(pic) = &hold.picture else {
+            continue;
+        };
+        let src = smithay::utils::Rectangle::<f64, Logical>::from_size(
+            (f64::from(pic.size.0), f64::from(pic.size.1)).into(),
+        );
+        out.push(Piece::Image(Box::new(Picture {
+            buffer: pic.buffer.clone().into(),
+            kind: SceneKind::LayerContent,
+            index: 0,
+            role: ImageRole::Standalone,
+            buffer_px: pic.size,
+            src,
+            size: (hold.geometry.size.w, hold.geometry.size.h),
+            placement: Placement {
+                origin: OutputPoint(cupertino_geometry::Point::new(
+                    f64::from(hold.geometry.loc.x),
+                    f64::from(hold.geometry.loc.y),
+                )),
+                ..Placement::IDENTITY
+            },
+            opacity: 1.0,
+            clip: Clip::None,
+        })));
     }
     out
 }

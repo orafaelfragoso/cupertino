@@ -197,6 +197,7 @@ impl CompositorHandler for Cupertino {
 
         self.lock_surface_committed(surface);
         self.toplevel_committed(surface);
+        self.host_surface_committed(surface);
         self.layer_committed(surface);
         self.layers_committed(surface);
         self.surface_output_committed(surface);
@@ -1147,6 +1148,7 @@ impl WlrLayerShellHandler for Cupertino {
             layer.map(|l| (o.clone(), l))
         });
         if let Some((output, layer)) = found {
+            self.host_layer_destroyed(&output, &layer);
             layer_map_for_output(&output).unmap_layer(&layer);
             self.layer_keyboard_exclusivity(surface.wl_surface(), false);
             self.menu_bar_surface_gone(surface.wl_surface());

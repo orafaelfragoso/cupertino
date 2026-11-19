@@ -125,6 +125,8 @@ pub struct ClientState {
     /// [`CLIENT_EVENT_BUFFER`]) is otherwise left with an open socket that never speaks again until it writes, and one
     /// waiting for a frame callback waits for good.
     pub socket: std::sync::Mutex<Option<std::os::fd::OwnedFd>>,
+    /// Set when this connection was handed out to a shell component through `cupertino_host_component_v1.connection`.
+    pub component: Option<crate::host::ComponentConnection>,
 }
 
 /// The clients that mapped a toplevel and have disconnected since the last tick.
@@ -149,6 +151,7 @@ impl Default for ClientState {
             gone: std::sync::OnceLock::new(),
             kit: std::sync::atomic::AtomicBool::new(false),
             socket: std::sync::Mutex::new(None),
+            component: None,
         }
     }
 }
@@ -209,15 +212,34 @@ impl ClientState {
 pub fn insert_client(
     display: &DisplayHandle,
     stream: std::os::unix::net::UnixStream,
-    mut state: ClientState,
+    state: ClientState,
 ) -> std::io::Result<Arc<ClientState>> {
+    let (_, data) = insert_client_pair(display, stream, state)?;
+    Ok(data)
+}
+
+/// Like [`insert_client`], returning the inserted Wayland [`Client`] handle.
+pub fn insert_client_handle(
+    display: &DisplayHandle,
+    stream: std::os::unix::net::UnixStream,
+    state: ClientState,
+) -> std::io::Result<smithay::reexports::wayland_server::Client> {
+    let (client, _) = insert_client_pair(display, stream, state)?;
+    Ok(client)
+}
+
+fn insert_client_pair(
+    display: &DisplayHandle,
+    stream: std::os::unix::net::UnixStream,
+    mut state: ClientState,
+) -> std::io::Result<(smithay::reexports::wayland_server::Client, Arc<ClientState>)> {
     state.socket = std::sync::Mutex::new(Some(stream.try_clone()?.into()));
     let state = Arc::new(state);
-    display.clone().insert_client(stream, state.clone())?;
+    let client = display.clone().insert_client(stream, state.clone())?;
     if state.peer.is_some() {
         state.look_up_process();
     }
-    Ok(state)
+    Ok((client, state))
 }
 
 /// The process that connected `stream`, held by the pidfd the kernel names for the socket.
@@ -806,6 +828,8 @@ pub struct Cupertino {
     pub displays: crate::displays::Displays,
     pub shell_v1: ShellV1Global,
     pub app_effects_v1: AppEffectsV1Global,
+    /// Shell hosts (`cupertino_host_v1`), per-component connections, liveness, holds and bus identity.
+    pub hosts: crate::host::HostManager,
     pub supervisor: Supervisor,
     /// What wakes the supervision of the shell processes and the satellite.
     pub supervision_wakeups: crate::supervisor::Wakeups,
@@ -1017,6 +1041,7 @@ impl Cupertino {
         let displays = crate::displays::Displays::new(&dh);
         let shell_v1 = ShellV1Global::new(&dh);
         let app_effects_v1 = AppEffectsV1Global::new(&dh);
+        let hosts = crate::host::HostManager::new(&dh);
         let capture = crate::capture::Capture::new(&dh);
         let control = crate::control::Control::new(&dh);
         let global_shortcuts = crate::global_shortcuts::GlobalShortcuts::new(&dh);
@@ -1165,6 +1190,7 @@ impl Cupertino {
             displays,
             shell_v1,
             app_effects_v1,
+            hosts,
             supervisor,
             supervision_wakeups: Default::default(),
             xwayland: None,
@@ -1504,7 +1530,7 @@ impl Cupertino {
         } else {
             0.0
         };
-        let zone = {
+        let mut zone = {
             let map = layer_map_for_output(&o.output);
             let z = map.non_exclusive_zone();
             (z.size.w > 0 && z.size.h > 0).then(|| {
@@ -1516,6 +1542,18 @@ impl Cupertino {
                 )
             })
         };
+        if let Some(held) = self.hosts.held_non_exclusive_zone(id, o.rect) {
+            zone = Some(match zone {
+                Some(z) => {
+                    let x0 = z.x.max(held.x);
+                    let y0 = z.y.max(held.y);
+                    let x1 = (z.x + z.w).min(held.x + held.w);
+                    let y1 = (z.y + z.h).min(held.y + held.h);
+                    Rect::new(x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0))
+                }
+                None => held,
+            });
+        }
         shell::usable_area(o.rect, menu, zone)
     }
 
@@ -1846,6 +1884,7 @@ impl Cupertino {
         for id in &gone {
             self.mapped_clients.remove(id);
             residents_changed |= self.docks.client_gone(id);
+            self.host_client_disconnected(id);
         }
         let mapped = &self.mapped_clients;
         self.mapped_processes
@@ -2215,6 +2254,13 @@ impl Cupertino {
             // (an overlay strip with an empty region) must not hide the surfaces below it
             for l in layers {
                 for surface in crate::authorization::layers_stacked(&map, *l).rev() {
+                    if surface
+                        .wl_surface()
+                        .client()
+                        .is_some_and(|c| self.hosts.is_client_unresponsive(&c))
+                    {
+                        continue;
+                    }
                     if *l == Layer::Top
                         && covered
                         && crate::render::scene::gives_way(surface, &self.menu_bars)
@@ -2247,6 +2293,13 @@ impl Cupertino {
             let map = layer_map_for_output(&out.output);
             for l in [Layer::Top, Layer::Bottom, Layer::Background] {
                 for surface in crate::authorization::layers_stacked(&map, l).rev() {
+                    if surface
+                        .wl_surface()
+                        .client()
+                        .is_some_and(|c| self.hosts.is_client_unresponsive(&c))
+                    {
+                        continue;
+                    }
                     if l == Layer::Top
                         && covered
                         && crate::render::scene::gives_way(surface, &self.menu_bars)
@@ -2339,6 +2392,7 @@ impl Cupertino {
         self.flush_publications();
         self.refresh_control();
         self.forget_gone_processes();
+        self.tick_hosts(std::time::Instant::now());
         let now = self.now();
         self.tick_session_lock();
         self.idle.refresh_inhibition();
@@ -2592,6 +2646,13 @@ impl Cupertino {
     /// authentication prompt is shown only the prompt. A popup grab whose chain `surface` is outside of ends first, its
     /// menus dismissed ([`Cupertino::end_popup_grab_for_focus`]).
     pub fn set_keyboard_focus(&mut self, surface: Option<WlSurface>) {
+        if surface
+            .as_ref()
+            .and_then(|s| s.client())
+            .is_some_and(|c| self.hosts.is_client_unresponsive(&c))
+        {
+            return;
+        }
         if surface
             .as_ref()
             .is_some_and(|s| self.control_sensitive_focus(s))

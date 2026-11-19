@@ -45,6 +45,16 @@ pub enum ShellRole {
     /// Bind the shortcuts the person allowed applications through the desktop portal ([`crate::global_shortcuts`]):
     /// their chords go to this connection instead of the focused client.
     GlobalShortcuts,
+    /// Be a shell host (`cupertino_host_v1`), receiving the component list and requesting per-component connections.
+    Host,
+    /// Bind `cupertino_overview_manager_v1` and gesture-bound transactions (`cupertino_transaction_v1.bind_gesture`).
+    Overview,
+    /// Bind window/thumbnail/workspace holes (`cupertino_transaction_manager_v1.get_hole`).
+    Windows,
+    /// Act as the session agent (`cupertino_session_v1.log_out_requested`, session power/quit panels).
+    SessionAgent,
+    /// Show desktop-control, screenshot and global-shortcut consent prompts.
+    Consent,
 }
 
 impl ShellRole {
@@ -197,7 +207,17 @@ pub mod role {
         )+};
     }
 
-    roles!(Session, MenuBar, Dock, WindowManager);
+    roles!(
+        Session,
+        MenuBar,
+        Dock,
+        WindowManager,
+        Host,
+        Overview,
+        Windows,
+        SessionAgent,
+        Consent,
+    );
 }
 
 /// The proof that a connection held role `R` when its request came in. Only [`permit`] makes one, so a function that

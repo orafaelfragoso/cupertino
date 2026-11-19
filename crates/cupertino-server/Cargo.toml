@@ -81,3 +81,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 version = "0.7"
 default-features = false
 features = ["desktop", "wayland_frontend", "backend_egl", "backend_drm", "backend_gbm", "renderer_gl"]
+
+[dev-dependencies]
+cupertino-protocols = { path = "../cupertino-protocols", features = ["client"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }

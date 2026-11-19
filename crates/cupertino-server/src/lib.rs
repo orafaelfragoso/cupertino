@@ -37,6 +37,7 @@ pub mod fx;
 pub mod global_shortcuts;
 pub mod gpu_reset;
 pub mod handlers;
+pub mod host;
 pub mod hung;
 pub mod idle;
 pub mod input;

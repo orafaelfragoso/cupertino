@@ -139,6 +139,17 @@ pub enum Call {
         Option<u32>,
         async_channel::Sender<Result<ProcessInfo, Reject>>,
     ),
+    /// Prove ownership of an announced component session-bus unique name using the Wayland nonce (D20).
+    AnnounceComponent {
+        sender: String,
+        nonce: String,
+        caller: Caller,
+        reply: async_channel::Sender<Result<(), Reject>>,
+    },
+    /// Resolve an accepted session-bus unique name to its component name, or empty string when none (D20).
+    ComponentOf(String, async_channel::Sender<Result<String, Reject>>),
+    /// PIDs and start ticks of currently connected shell host processes (D20).
+    ShellHosts(async_channel::Sender<Result<Vec<(u32, u64)>, Reject>>),
 }
 
 /// A supervised process on the bus: name, state, pid, start ticks, start time in seconds since 1970, program, from the
@@ -555,6 +566,28 @@ impl Cupertino {
                     });
                 let _ = reply.try_send(answer);
             }
+            Call::AnnounceComponent {
+                sender,
+                nonce,
+                caller,
+                reply,
+            } => {
+                let answer = self
+                    .verify_component_bus_nonce(&sender, &caller, &nonce)
+                    .map_err(Reject::Caller);
+                let _ = reply.try_send(answer);
+            }
+            Call::ComponentOf(unique_name, reply) => {
+                let name = self
+                    .hosts
+                    .component_of_bus_name(&unique_name)
+                    .unwrap_or("")
+                    .to_owned();
+                let _ = reply.try_send(Ok(name));
+            }
+            Call::ShellHosts(reply) => {
+                let _ = reply.try_send(Ok(self.hosts.shell_host_processes()));
+            }
         }
     }
 }
@@ -731,6 +764,34 @@ impl Session1 {
             .ask(|tx| Call::RestartShellProcess(name, caller, user, tx))
             .await?;
         Ok(shell_process_record(&process))
+    }
+
+    async fn announce_component(
+        &self,
+        nonce: String,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &zbus::Connection,
+    ) -> Result<(), CallError> {
+        let sender = header
+            .sender()
+            .map(|s| s.as_str().to_owned())
+            .unwrap_or_default();
+        let caller = caller_of(&header, connection).await;
+        self.ask(|reply| Call::AnnounceComponent {
+            sender,
+            nonce,
+            caller,
+            reply,
+        })
+        .await
+    }
+
+    async fn component_of(&self, unique_name: String) -> Result<String, CallError> {
+        self.ask(|tx| Call::ComponentOf(unique_name, tx)).await
+    }
+
+    async fn shell_hosts(&self) -> Result<Vec<(u32, u64)>, CallError> {
+        self.ask(Call::ShellHosts).await
     }
 
     #[zbus(property)]

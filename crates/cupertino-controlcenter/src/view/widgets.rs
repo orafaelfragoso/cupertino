@@ -133,8 +133,9 @@ pub(super) struct Board<M> {
     pub(super) height: f64,
     /// The outline of what the soft shadow goes around, relative to the grid's corner.
     pub(super) shadow: Rect,
-    /// No detail view is moving, so the outline is one the panel shows again and again.
-    pub(super) resting: bool,
+    /// The pictures of the shadow's bands the panel keeps, among them perhaps the one of this outline at the window's
+    /// scale.
+    pub(super) bands: Vec<Bands>,
     /// The tiles' outlines, relative to the grid's corner, that the shadow is cut away over by their opacity.
     pub(super) cutouts: Vec<Cutout>,
     pub(super) on_outside: Option<M>,
@@ -164,7 +165,7 @@ impl<M: Clone + 'static> Widget<M> for Board<M> {
         if self.alpha != old.alpha
             || self.height != old.height
             || self.shadow != old.shadow
-            || self.resting != old.resting
+            || self.bands != old.bands
             || self.cutouts != old.cutouts
         {
             Change::Paint
@@ -227,12 +228,14 @@ impl<M: Clone + 'static> Widget<M> for Board<M> {
                 })
                 .collect();
             // the shadow fades out by the menu bar's edge above the modules and never reaches into the bar
-            let bar_edge = SHADOW_TOP - f64::from(BAR_MARGIN);
-            let rect = self.shadow.translate(GRID_ORIGIN.x, GRID_ORIGIN.y);
+            let (rect, top_reach) = outline(self.shadow);
             cx.push(PaintOp::PushClip(Shape::Rect(Rect::new(
-                -1.0e4, bar_edge, 2.0e4, 2.0e4,
+                -1.0e4,
+                bar_edge(),
+                2.0e4,
+                2.0e4,
             ))));
-            shadow(cx, rect, rect.y() - bar_edge, &cutouts, self.resting);
+            shadow(cx, rect, top_reach, &cutouts, &self.bands);
             cx.push(PaintOp::PopClip);
         }
     }

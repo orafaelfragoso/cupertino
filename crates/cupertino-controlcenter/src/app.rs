@@ -889,6 +889,7 @@ impl Application for Panel {
             controls,
             model.controller.arrangement(),
             model.presentation(now),
+            &view::BandPictures::default(),
             input,
         );
         // what moves steps once per frame the compositor gives the panel's window, never on a timer of its own

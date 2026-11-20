@@ -13,12 +13,15 @@ use std::cell::RefCell;
 use std::num::NonZeroU32;
 use std::process::ExitCode;
 use std::sync::Arc;
+use std::time::Duration;
 
 use cupertino_controlcenter::arrangement::Arrangement;
 use cupertino_controlcenter::model::{
     Controls, Detail, Device, Media, Network, Output, Reading, VolumeState, WifiStatus,
 };
-use cupertino_controlcenter::view::{self, Editing, Input, Opened, Presentation};
+use cupertino_controlcenter::view::{
+    self, BandPictures, Bands, BandsWanted, Editing, Input, Opened, Presentation,
+};
 use cupertino_kit::core::{Application, Command, Window};
 use cupertino_kit::platform::{SystemAppearance, Timestamp, WindowId};
 use cupertino_kit::test::capture::{presented, App, Look, Pixmap, Request, State};
@@ -29,6 +32,8 @@ use cupertino_kit::theme::ThemeTokens;
 const TURNS: u32 = 10_000;
 /// The frames the window may ask for before it rests.
 const FRAMES: usize = 16;
+/// How long the picture of the shadow's bands may take to come back from the CPU pool.
+const PATIENCE: Duration = Duration::from_secs(30);
 /// The detail views a capture may show, by their flag values.
 const DETAILS: [(&str, Option<Detail>); 5] = [
     ("none", None),
@@ -41,34 +46,71 @@ const DETAILS: [(&str, Option<Detail>); 5] = [
 const MOVING_PROGRESS: f64 = 0.5;
 
 thread_local! {
-    /// What the next capture's window shows.
-    static SHOWN: RefCell<Option<(Controls, Presentation)>> = const { RefCell::new(None) };
+    /// What the next capture's window shows, at what scale.
+    static SHOWN: RefCell<Option<(Controls, Presentation, f64)>> = const { RefCell::new(None) };
 }
 
-/// The panel's window showing [`SHOWN`].
+/// The panel's window showing [`SHOWN`], with the picture of its shadow's bands drawn as the panel draws it.
 struct Shown;
 
-impl Application for Shown {
-    type Model = (Controls, Presentation);
-    type Message = Input;
+/// What the capture's window shows.
+struct Shot {
+    controls: Controls,
+    presentation: Presentation,
+    bands: BandPictures,
+    /// The picture of the bands is still being drawn.
+    drawing: bool,
+}
 
-    fn init() -> ((Controls, Presentation), Vec<Command<Input>>) {
-        let shown = SHOWN
+/// What the capture's window hears.
+#[derive(Clone, Debug)]
+enum Heard {
+    /// The capture takes no input; what the panel would do is dropped.
+    Input(#[allow(dead_code)] Input),
+    Bands(Option<Bands>),
+}
+
+impl Application for Shown {
+    type Model = Shot;
+    type Message = Heard;
+
+    // the capture draws its picture with the system's text, outside any session
+    #[allow(clippy::disallowed_methods)]
+    fn init() -> (Shot, Vec<Command<Heard>>) {
+        let (controls, presentation, scale) = SHOWN
             .with_borrow_mut(Option::take)
             .expect("a panel for the capture");
-        (shown, Vec::new())
+        let wanted: Option<BandsWanted> =
+            view::bands_wanted(&controls, &Arrangement::default(), presentation, scale);
+        let command = wanted
+            .zip(cupertino_kit::app::environment().ok())
+            .map(|(wanted, env)| wanted.draw(&env, Heard::Bands));
+        let shot = Shot {
+            controls,
+            presentation,
+            bands: BandPictures::default(),
+            drawing: command.is_some(),
+        };
+        (shot, command.into_iter().collect())
     }
 
-    fn update(_: &mut (Controls, Presentation), _: Input) -> Vec<Command<Input>> {
+    fn update(shot: &mut Shot, heard: Heard) -> Vec<Command<Heard>> {
+        if let Heard::Bands(bands) = heard {
+            shot.drawing = false;
+            if let Some(bands) = bands {
+                shot.bands.keep(bands);
+            }
+        }
         Vec::new()
     }
 
-    fn view((controls, presentation): &(Controls, Presentation)) -> Vec<Window<Input>> {
+    fn view(shot: &Shot) -> Vec<Window<Heard>> {
         vec![view::arranged(
-            controls,
+            &shot.controls,
             &Arrangement::default(),
-            *presentation,
-            std::convert::identity,
+            shot.presentation,
+            &shot.bands,
+            Heard::Input,
         )]
     }
 }
@@ -184,7 +226,7 @@ impl App for Panel {
             edit: editing.then(Editing::default),
             ..Presentation::SHOWN
         };
-        SHOWN.set(Some((controls(), presentation)));
+        SHOWN.set(Some((controls(), presentation, f64::from(request.scale))));
         draw(request.look, request.scale)
     }
 }
@@ -217,6 +259,12 @@ fn draw(look: Look, scale: f32) -> Result<Pixmap, String> {
             Arc::new(ThemeTokens::cupertino(&theme, preferences).expect("the theme loaded once"))
         }));
     driver.run_until_idle(turns).map_err(|e| fail(&e))?;
+    while driver.runtime().model().drawing {
+        if !driver.window_system_mut().wait_for_wake(PATIENCE) {
+            return Err("the picture of the shadow's bands never came back".to_owned());
+        }
+        driver.run_until_idle(turns).map_err(|e| fail(&e))?;
+    }
     let window: WindowId = driver
         .runtime()
         .windows()

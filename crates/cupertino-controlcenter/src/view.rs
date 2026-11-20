@@ -10,14 +10,13 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::Arc;
 
 use cupertino_kit::controls::{Icon, IconDirection, PressCatcher};
 use cupertino_kit::core::next_resource_id;
 use cupertino_kit::core::{
-    AccessibleStates, AccessibleValue, Action, ActionData, Change, Checked, CommandRegistry,
-    Element, Environment, Event, EventCx, Glass, Key, MeasureCx, PaintCx, Phase, Propagation, Role,
-    SemanticsCx, Shortcut, Widget, Window, WindowBackground, WindowKey,
+    AccessibleStates, AccessibleValue, Action, ActionData, Change, Checked, Command,
+    CommandRegistry, Element, Environment, Event, EventCx, Glass, Key, MeasureCx, PaintCx, Phase,
+    Propagation, Role, SemanticsCx, Shortcut, Widget, Window, WindowBackground, WindowKey,
 };
 use cupertino_kit::geometry::{Point, Rect, Size};
 use cupertino_kit::layout::{
@@ -28,13 +27,10 @@ use cupertino_kit::platform::{
     DecorationMode, Keysym, Mods, MouseButton, PointerEvent, WindowSpec,
 };
 use cupertino_kit::render::{
-    CpuConfig, CpuRenderer, DamageRegion, DisplayList, FillRule, ImageResource, Paint, PaintNode,
-    PaintNodeId, PaintOp, PaintResources, PaintRevision, PathVerb, PixelFormat, RenderRequest,
-    ResourceId, Sampling, Shape, Transform, UiRenderer,
+    self, FillRule, ImageResource, Paint, PaintOp, PathVerb, ResourceId, Sampling, Shape,
 };
 use cupertino_kit::text::{
-    AttributedText, FontWeight, GlyphKey, GlyphRasterizer, ParagraphLayout, ParagraphStyle,
-    RasterGlyph, TextAlign, TextError, TextStyle, Wrap,
+    AttributedText, FontWeight, ParagraphLayout, ParagraphStyle, TextAlign, TextStyle, Wrap,
 };
 use cupertino_kit::theme::{Appearance, Color, ColorRole, StateVariant};
 
@@ -55,6 +51,8 @@ use builder::*;
 use label::*;
 use shadow::*;
 use widgets::*;
+
+pub use shadow::{BandPictures, Bands, BandsWanted};
 
 /// The `app_id` of the panel's window, which gives it its layer surface.
 pub const APP_ID: &str = "cupertino-controlcenter";
@@ -389,17 +387,52 @@ fn finite_alpha(alpha: f64) -> f64 {
 pub fn panel<M: Clone + 'static>(
     controls: &Controls,
     presentation: Presentation,
+    bands: &BandPictures,
     to: fn(Input) -> M,
 ) -> Window<M> {
-    arranged(controls, &Arrangement::default(), presentation, to)
+    arranged(controls, &Arrangement::default(), presentation, bands, to)
+}
+
+/// The shadow's bands the panel of `arrangement` at `presentation` lays on a display of `scale`, for a picture of them
+/// to be drawn ([`BandsWanted::draw`]) and given back to [`arranged`] in `bands`: `None` while a detail view is
+/// moving, as an outline that changes every frame is filled in place, its picture costing as much and not used again.
+/// The panel shows no bands with Reduce Transparency or Increase Contrast, which the caller knows.
+pub fn bands_wanted(
+    controls: &Controls,
+    arrangement: &Arrangement,
+    presentation: Presentation,
+    scale: f64,
+) -> Option<BandsWanted> {
+    let presentation = Presentation {
+        detail: presentation.detail.filter(|_| presentation.edit.is_none()),
+        ..presentation
+    };
+    let resting = presentation
+        .detail
+        .is_none_or(|o| o.progress <= 0.0 || o.progress >= 1.0);
+    if !resting {
+        return None;
+    }
+    let builder: Builder<'_, Input> = Builder {
+        controls,
+        arrangement,
+        presentation,
+        to: std::convert::identity,
+        map: Rc::new(RefCell::new(Vec::new())),
+        inert: false,
+    };
+    let (rect, top_reach) = outline(builder.shadow());
+    BandsWanted::new(rect, top_reach, scale)
 }
 
 /// The panel's window: the tiles of `arrangement` at `presentation`. Escape collapses an open detail view, else
-/// dismisses the panel; while the controls are edited it cancels the edit.
+/// dismisses the panel; while the controls are edited it cancels the edit. The shadow's bands are laid from `bands`
+/// when it holds a picture of them at the window's scale, else filled in place.
 pub fn arranged<M: Clone + 'static>(
     controls: &Controls,
     arrangement: &Arrangement,
     presentation: Presentation,
+    bands: &BandPictures,
     to: fn(Input) -> M,
 ) -> Window<M> {
     // the controls are edited on the grid: no view is open then
@@ -469,9 +502,7 @@ pub fn arranged<M: Clone + 'static>(
             alpha: presentation.alpha,
             height: builder.height(),
             shadow: builder.shadow(),
-            resting: presentation
-                .detail
-                .is_none_or(|o| o.progress <= 0.0 || o.progress >= 1.0),
+            bands: bands.all(),
             cutouts: builder.cutouts(),
             on_outside: (!editing).then(|| to(away(Via::Pointer))),
             children: builder.board(),

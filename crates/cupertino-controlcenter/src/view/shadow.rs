@@ -101,7 +101,7 @@ pub(super) fn shadow(
     rect: Rect,
     top_reach: f64,
     cutouts: &[Cutout],
-    resting: bool,
+    pictures: &[Bands],
 ) {
     let edge = shadow_at(0.0);
     let black = |alpha: f64| Paint::Solid(Color::new(0.0, 0.0, 0.0, alpha as f32));
@@ -165,15 +165,7 @@ pub(super) fn shadow(
         }
         cx.push(PaintOp::PopClip);
     }
-    let scale = cx.env().scale;
-    match band_image(rect, top_reach, scale, resting) {
-        Some((id, image, dst)) => cx.image(id, &image, dst, Sampling::Nearest),
-        None => {
-            for op in bands(rect, top_reach) {
-                cx.push(op);
-            }
-        }
-    }
+    lay_bands(cx, rect, top_reach, pictures);
 }
 
 /// The shadow's bands around `rect`: rings that never overlap, each filled at the darkening of its middle.
@@ -202,151 +194,164 @@ pub(super) fn bands(rect: Rect, top_reach: f64) -> Vec<PaintOp> {
     ops
 }
 
-/// How many pictures of the shadow's bands the process keeps: the panel at rest with no view and with a view open.
-/// Each is the window's size in device pixels, some 2.5 MiB at scale 1.5.
-pub(super) const BAND_IMAGES: usize = 2;
+/// How many pictures of the shadow's bands the panel keeps: the panel at rest with no view and with a view open. Each
+/// is the window's size in device pixels, some 2.5 MiB at scale 1.5.
+const BAND_PICTURES: usize = 2;
 
-/// What a band picture is made for: the outline's corners, the top reach and the scale, as bits.
-pub(super) type BandKey = [u64; 6];
-
-/// A picture of the shadow's bands at the window's device pixels, one texel per pixel, and where it goes.
-pub(super) struct BandImage {
-    pub(super) key: BandKey,
-    pub(super) id: ResourceId,
-    pub(super) image: ImageResource,
-    pub(super) dst: Rect,
+/// The outline the soft shadow goes around, from the window's corner, and how far above it the shadow reaches: it
+/// fades out by the menu bar's edge above the modules and never reaches into the bar. `shadow` is the outline from the
+/// grid's corner.
+pub(super) fn outline(shadow: Rect) -> (Rect, f64) {
+    let rect = shadow.translate(GRID_ORIGIN.x, GRID_ORIGIN.y);
+    (rect, rect.y() - bar_edge())
 }
 
-thread_local! {
-    /// The band pictures made, the latest used last.
-    static BAND_IMAGES_KEPT: RefCell<Vec<BandImage>> = const { RefCell::new(Vec::new()) };
+/// Where the menu bar's edge lies in the window: the shadow is clipped there.
+pub(super) fn bar_edge() -> f64 {
+    SHADOW_TOP - f64::from(BAR_MARGIN)
 }
 
-/// Glyphs for the bands' renderer, which draws none.
-pub(super) struct NoGlyphs;
+/// What a picture of the bands is made for: the outline's corners, the top reach and the scale, as bits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct BandKey([u64; 6]);
 
-impl GlyphRasterizer for NoGlyphs {
-    fn rasterize(&mut self, _: &GlyphKey) -> Result<Option<RasterGlyph>, TextError> {
-        Ok(None)
+impl BandKey {
+    fn of(rect: Rect, top_reach: f64, scale: f64) -> BandKey {
+        BandKey([
+            rect.min_x().to_bits(),
+            rect.min_y().to_bits(),
+            rect.max_x().to_bits(),
+            rect.max_y().to_bits(),
+            top_reach.to_bits(),
+            scale.to_bits(),
+        ])
     }
 }
 
-/// The shadow's bands around `rect` as one picture of the window's device pixels at `scale`, drawn by the CPU
-/// renderer the panel's class draws with, so the picture laid over one texel per pixel has the pixels the bands filled
-/// in place have, to within two steps of rounding. A whole frame of the panel then lays one picture instead of filling some 26 rings each as large as the
-/// window, which cost a frame most of its time; a panel opened again, whose window and renderer are new, finds the
-/// picture. A picture is made only while the panel is `resting`: an outline that changes every frame (a detail view's
-/// motion) is filled in place, as making its picture would cost the same and not be used again. The panel is the
-/// window's root, so its points are the window's.
-pub(super) fn band_image(
+/// A picture of the shadow's bands around one outline, at the device pixels of one scale, one texel per pixel, and
+/// where it goes in the window. Laying it over gives the pixels the bands filled in place have, to within rounding: a
+/// frame of the panel then lays one picture instead of filling some 26 rings each as large as the window, which cost a
+/// frame most of its time.
+#[derive(Clone, Debug)]
+pub struct Bands {
+    key: BandKey,
+    id: ResourceId,
+    image: ImageResource,
+    dst: Rect,
+}
+
+impl PartialEq for Bands {
+    fn eq(&self, other: &Bands) -> bool {
+        self.id == other.id
+    }
+}
+
+/// The bands of a panel at rest, to be drawn into a picture ([`BandsWanted::draw`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BandsWanted {
+    key: BandKey,
     rect: Rect,
     top_reach: f64,
     scale: f64,
-    resting: bool,
-) -> Option<(ResourceId, ImageResource, Rect)> {
-    let key: BandKey = [
-        rect.min_x().to_bits(),
-        rect.min_y().to_bits(),
-        rect.max_x().to_bits(),
-        rect.max_y().to_bits(),
-        top_reach.to_bits(),
-        scale.to_bits(),
-    ];
-    BAND_IMAGES_KEPT.with_borrow_mut(|kept| {
-        if let Some(i) = kept.iter().position(|b| b.key == key) {
-            let b = kept.remove(i);
-            let found = (b.id, b.image.clone(), b.dst);
-            kept.push(b);
-            return Some(found);
-        }
-        if !resting {
-            return None;
-        }
-        let made = draw_bands(rect, top_reach, scale)?;
-        let found = (made.id, made.image.clone(), made.dst);
-        kept.push(BandImage { key, ..made });
-        if kept.len() > BAND_IMAGES {
-            kept.remove(0);
-        }
-        Some(found)
-    })
 }
 
-/// Draws the bands around `rect` into a picture of the device pixels they reach at `scale`.
-pub(super) fn draw_bands(rect: Rect, top_reach: f64, scale: f64) -> Option<BandImage> {
-    if !(scale.is_finite() && scale > 0.0) {
-        return None;
-    }
-    let (outer, _) = band_outline(rect, SHADOW_REACH, top_reach);
-    let (x0, y0) = (
-        (outer.min_x() * scale).floor(),
-        (outer.min_y() * scale).floor(),
-    );
-    let (x1, y1) = (
-        (outer.max_x() * scale).ceil(),
-        (outer.max_y() * scale).ceil(),
-    );
-    let (width, height) = (x1 - x0, y1 - y0);
-    if !(width >= 1.0 && height >= 1.0 && width * height <= f64::from(1u32 << 26)) {
-        return None;
-    }
-    let (width, height) = (width as u32, height as u32);
-    // the picture's first pixel is the window's pixel (x0, y0): the bands move by whole device pixels into it
-    let at = Point::new(x0 / scale, y0 / scale);
-    let node = PaintNode {
-        layer: None,
-        id: PaintNodeId(1),
-        parent: None,
-        revision: PaintRevision(1),
-        transform: Transform([1.0, 0.0, 0.0, 1.0, -at.x, -at.y]),
-        clip: None,
-        group: None,
-        bounds: Rect::new(
-            0.0,
-            0.0,
-            f64::from(width) / scale,
-            f64::from(height) / scale,
-        ),
-        hit: Rect::new(0.0, 0.0, 0.0, 0.0),
-        ops: bands(rect, top_reach),
-    };
-    let list = DisplayList { nodes: vec![node] };
-    let mut renderer = CpuRenderer::new(
-        CpuConfig {
-            max_pixels: 1 << 26,
-            glyph_cache_bytes: 0,
-            image_cache_bytes: 0,
-            font_smoothing: true,
-        },
-        NoGlyphs,
-    );
-    let frame = renderer
-        .render(&RenderRequest {
-            list: &list,
-            resources: &PaintResources::default(),
+impl BandsWanted {
+    /// The bands around `rect`, reaching `top_reach` above it, at `scale`; `None` for a scale no display has.
+    pub(super) fn new(rect: Rect, top_reach: f64, scale: f64) -> Option<BandsWanted> {
+        (scale.is_finite() && scale > 0.0).then(|| BandsWanted {
+            key: BandKey::of(rect, top_reach, scale),
+            rect,
+            top_reach,
             scale,
-            width,
-            height,
-            damage: &DamageRegion::Full,
         })
-        .ok()?;
-    let frame = renderer.frame(frame).ok()?;
-    Some(BandImage {
-        key: [0; 6],
-        id: next_resource_id(),
-        image: ImageResource {
-            revision: 1,
-            width,
-            height,
-            stride: frame.stride,
-            format: PixelFormat::Rgba8Premultiplied,
-            pixels: Arc::from(frame.pixels.as_slice()),
-        },
-        dst: Rect::new(
-            at.x,
-            at.y,
-            f64::from(width) / scale,
-            f64::from(height) / scale,
-        ),
-    })
+    }
+
+    /// Draws the bands into a picture of the device pixels they reach, on the CPU pool, and gives it to `done` on the
+    /// UI thread; `None` when the picture could not be drawn.
+    pub fn draw<M: Send + 'static>(
+        &self,
+        env: &Environment,
+        done: impl FnOnce(Option<Bands>) -> M + Send + 'static,
+    ) -> Command<M> {
+        let BandsWanted {
+            key,
+            rect,
+            top_reach,
+            scale,
+        } = *self;
+        let (outer, _) = band_outline(rect, SHADOW_REACH, top_reach);
+        let (x0, y0) = (
+            (outer.min_x() * scale).floor(),
+            (outer.min_y() * scale).floor(),
+        );
+        let (x1, y1) = (
+            (outer.max_x() * scale).ceil(),
+            (outer.max_y() * scale).ceil(),
+        );
+        // the picture's first pixel is the window's pixel (x0, y0): the bands move by whole device pixels into it
+        let at = Point::new(x0 / scale, y0 / scale);
+        let size = Size::new((x1 - x0) / scale, (y1 - y0) / scale);
+        let ops = bands(rect.translate(-at.x, -at.y), top_reach);
+        render::picture(env, ops, size, scale, move |image| {
+            done(image.map(|image| Bands {
+                key,
+                id: next_resource_id(),
+                dst: Rect::new(
+                    at.x,
+                    at.y,
+                    f64::from(image.width) / scale,
+                    f64::from(image.height) / scale,
+                ),
+                image,
+            }))
+        })
+    }
+}
+
+/// The pictures of the bands the panel keeps, the latest used last.
+#[derive(Clone, Debug, Default)]
+pub struct BandPictures {
+    kept: Vec<Bands>,
+}
+
+impl BandPictures {
+    /// Whether `wanted` has no picture yet; a picture kept for it becomes the latest used.
+    pub fn wants(&mut self, wanted: &BandsWanted) -> bool {
+        match self.kept.iter().position(|b| b.key == wanted.key) {
+            Some(i) => {
+                let found = self.kept.remove(i);
+                self.kept.push(found);
+                false
+            }
+            None => true,
+        }
+    }
+
+    /// Keeps `bands`, letting the picture used longest ago go past [`BAND_PICTURES`].
+    pub fn keep(&mut self, bands: Bands) {
+        self.kept.retain(|b| b.key != bands.key);
+        self.kept.push(bands);
+        if self.kept.len() > BAND_PICTURES {
+            self.kept.remove(0);
+        }
+    }
+
+    /// The pictures kept, for the board to find the one of its outline and scale.
+    pub(super) fn all(&self) -> Vec<Bands> {
+        self.kept.clone()
+    }
+}
+
+/// Lays the bands around `rect`: the picture of them at the window's scale when `pictures` has one, else filled in
+/// place.
+fn lay_bands(cx: &mut PaintCx<'_>, rect: Rect, top_reach: f64, pictures: &[Bands]) {
+    let key = BandKey::of(rect, top_reach, cx.env().scale);
+    match pictures.iter().find(|b| b.key == key) {
+        Some(b) => cx.image(b.id, &b.image, b.dst, Sampling::Nearest),
+        None => {
+            for op in bands(rect, top_reach) {
+                cx.push(op);
+            }
+        }
+    }
 }

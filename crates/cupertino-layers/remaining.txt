@@ -3,17 +3,10 @@
 apps disallowed_methods cupertino-files clippy.toml
 apps disallowed_methods cupertino-settings clippy.toml
 apps external_crate cupertino-files -> tiny-skia dev
-apps external_crate cupertino-files -> wayland-client normal
-apps external_crate cupertino-files -> wayland-protocols normal
-apps external_crate cupertino-files -> wayland-protocols-wlr normal
 apps external_crate cupertino-settings -> wayland-client normal
 apps external_crate cupertino-settings -> wayland-protocols-wlr normal
-apps facade cupertino-files -> cupertino-theme normal
-apps facade cupertino-files -> cupertino-ui-wayland normal
-apps facade cupertino-files -> cupertino-wayland-client normal
 apps facade cupertino-settings -> cupertino-theme normal
 apps facade cupertino-settings -> cupertino-wayland-client normal
-apps forbidden_edge cupertino-files -> cupertino-wayland-client normal
 apps forbidden_edge cupertino-settings -> cupertino-wayland-client normal
 shell disallowed_methods cupertino-dock clippy.toml
 shell disallowed_methods cupertino-launcher clippy.toml

@@ -65,6 +65,20 @@ fn a_chosen_menu_row_flashes_off_for_two_frames_then_on_for_four() {
 }
 
 #[test]
+fn the_desktop_band_fades_in_over_three_twentieths_and_out_over_a_fifth_of_a_second_at_constant_speed(
+) {
+    for (fade, seconds) in [
+        (Timing::DESKTOP_BAND_FADE_IN, 0.15),
+        (Timing::DESKTOP_BAND_FADE_OUT, 0.2),
+    ] {
+        assert_eq!(fade, Easing::LINEAR.over(seconds));
+        for share in [0.0, 0.25, 0.5, 1.0] {
+            assert!((fade.value(seconds * share) - share).abs() < 1e-9);
+        }
+    }
+}
+
+#[test]
 fn a_named_motion_reads_out_as_the_curves_that_run_it() {
     let tau = std::f64::consts::TAU;
     for (timing, layer) in [

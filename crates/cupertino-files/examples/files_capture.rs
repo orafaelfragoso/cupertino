@@ -1,10 +1,8 @@
 //! The Files surfaces for look checks: `files/window`, a browser window (920 × 436 at 1×) on a sample home folder,
 //! and `files/sidebar`, the sidebar column of that window; `files/preview`, the preview window Space opens on the
 //! selection; `files/popover`, the tags popover of the selection; `files/tabs`, the window with a second tab gone
-//! into Documents; and `files/desktop`, the desktop's items (640 × 400) over a flat fill, `--state select|rename|drag`
-//! (`notes.txt` clicked, renamed with Return once clicked, or pressed and held [`DESKTOP_DRAG`] away). The windows are the Kit
-//! windows ([`cupertino_files::kit`], [`cupertino_files::kit::desktop`]) drawn on the headless window system with the
-//! CPU renderer.
+//! into Documents. The windows are the Kit windows ([`cupertino_files::kit`]) drawn on the headless window system with
+//! the CPU renderer.
 //!
 //! `cargo run -p cupertino-files --example files_capture -- files/window --view list --scale 2` (the flags are `cupertino_kit::test::capture`'s)
 //!
@@ -28,7 +26,6 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use cupertino_files::kit::desktop::{self, Desktop, Screen};
 use cupertino_files::kit::{prepare, Files, Start};
 use cupertino_files::trash::Trash;
 use cupertino_files::window::ViewMode;
@@ -100,12 +97,6 @@ fn sample_now() -> SystemTime {
 
 /// The window's size at 1×, in points.
 const WINDOW: (f64, f64) = (920.0, 436.0);
-/// The desktop's output, in points: the size of its one window.
-const SCREEN: (f64, f64) = (640.0, 400.0);
-/// What the desktop's items are drawn over where the wallpaper would be: a mid grey.
-const DESKTOP_FILL: [u8; 3] = [96, 112, 128];
-/// How far a held press on a desktop item moves before the capture of `--state drag`, in points.
-const DESKTOP_DRAG: (f64, f64) = (-220.0, -60.0);
 /// The item a view's states act on, and the gallery's, whose picture its strip shows in view.
 const ITEM: &str = "notes.txt";
 const GALLERY_ITEM: &str = "IMG_0042.png";
@@ -295,75 +286,6 @@ impl Capture {
             .collect();
         let icons = FileIcons::discover(types.clone(), folders);
         Ok((types, icons))
-    }
-
-    /// The desktop's items on the sample home folder's Desktop, drawn in `look` at `scale` over [`DESKTOP_FILL`], after
-    /// `state` acted on [`ITEM`].
-    fn desktop(&self, look: Look, scale: f32, state: Option<&str>) -> Result<Pixmap, String> {
-        let fail = |e: &dyn std::fmt::Debug| format!("the headless window system: {e:?}");
-        let (types, icons) = self.icons(&self.places)?;
-        let screen = Screen {
-            key: 1,
-            width: SCREEN.0,
-            height: SCREEN.1,
-        };
-        desktop::prepare(
-            self.home.join("Desktop"),
-            vec![screen],
-            Arc::new(types),
-            icons,
-            Thumbnailer::new(self.root.join("cache"), "cupertino-files"),
-        );
-        let turns = NonZeroU32::new(TURNS).expect("a turn budget");
-        let (mut driver, window) =
-            started::<Desktop>(look, scale, Size::new(SCREEN.0, SCREEN.1), turns)?;
-        wait_until(&mut driver, window, turns, LISTING, |driver| {
-            DESKTOP
-                .iter()
-                .chain([&DESKTOP_FOLDER])
-                .all(|name| named_center(driver, window, name).is_some())
-        })
-        .map_err(|e| e.unwrap_or_else(|| "the desktop's listing never ended".into()))?;
-        wait_until(&mut driver, window, turns, THUMBNAILS, |driver| {
-            thumbnails_drawn(driver, window) >= 1
-        })
-        .map_err(|e| e.unwrap_or_else(|| "the desktop's thumbnail was never drawn".into()))?;
-        settle(&mut driver, window, turns).map_err(|e| fail(&e))?;
-        if let Some(state) = state {
-            let at = named_center(&driver, window, ITEM).ok_or("the desktop shows no notes.txt")?;
-            match state {
-                "select" => click(&mut driver, window, at, turns),
-                "rename" => click(&mut driver, window, at, turns)
-                    .and_then(|()| key(&mut driver, window, 0xff0d, Mods::NONE, turns)),
-                _ => {
-                    let to = Point::new(at.x + DESKTOP_DRAG.0, at.y + DESKTOP_DRAG.1);
-                    let pointer = [
-                        PointerEvent::Motion { position: at },
-                        button(at, MouseButton::Left, true),
-                        PointerEvent::Motion { position: to },
-                    ];
-                    send(&mut driver, window, pointer, turns)
-                }
-            }
-            .map_err(|e| fail(&e))?;
-        }
-        if !settle(&mut driver, window, turns).map_err(|e| fail(&e))? {
-            return Err("the desktop keeps asking for frames".into());
-        }
-        let mut pm = presented(&mut driver, window)?;
-        let [r, g, b] = DESKTOP_FILL;
-        let mut fill = Pixmap::new(pm.width(), pm.height()).ok_or("the desktop is empty")?;
-        fill.fill(tiny_skia::Color::from_rgba8(r, g, b, 255));
-        fill.draw_pixmap(
-            0,
-            0,
-            pm.as_ref(),
-            &tiny_skia::PixmapPaint::default(),
-            tiny_skia::Transform::identity(),
-            None,
-        );
-        std::mem::swap(&mut pm, &mut fill);
-        Ok(pm)
     }
 
     /// The window on the sample home folder in `view` with `places`, `selected` selected, drawn in `look` at `scale`;
@@ -856,7 +778,6 @@ impl App for Capture {
             "preview".into(),
             "popover".into(),
             "tabs".into(),
-            "desktop".into(),
         ]
     }
 
@@ -886,30 +807,11 @@ impl App for Capture {
                     ]
                 })
                 .collect(),
-            "desktop" => ["select", "rename", "drag"]
-                .into_iter()
-                .map(|value| state("state", value))
-                .chain([State::new()])
-                .collect(),
             _ => vec![State::new(), state("devices", "removable")],
         }
     }
 
     fn capture(&mut self, r: &Request<'_>) -> Result<Pixmap, String> {
-        if r.surface == "desktop" {
-            return match r.state.first() {
-                None => self.desktop(r.look, r.scale, None),
-                Some((flag, value))
-                    if flag == "state"
-                        && ["select", "rename", "drag"].contains(&value.as_str()) =>
-                {
-                    self.desktop(r.look, r.scale, Some(value))
-                }
-                Some((flag, value)) => Err(format!(
-                    "files/desktop: --{flag} {value}: only --state select, rename or drag"
-                )),
-            };
-        }
         // the preview window opens with Space on the selection; the tags popover from the toolbar's Tags button
         let mut then: Vec<Step> = match r.surface {
             "window" | "sidebar" => Vec::new(),

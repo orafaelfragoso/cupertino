@@ -203,6 +203,9 @@ struct PersistedSurface {
     mapped: bool,
     /// The picture taken as its `wl_surface` went, when that came before the end of its layer role.
     last_picture: Option<HeldPicture>,
+    /// Where the surface lay on its output as its `wl_surface` went: by the end of its layer role the surface has no
+    /// buffer, and the layer map no size for it.
+    last_geometry: Option<Rectangle<i32, Logical>>,
 }
 
 /// The last picture of a held persistent surface (D19), taken once as its hold starts.

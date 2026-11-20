@@ -437,7 +437,11 @@ impl Cupertino {
             return;
         };
         let map = layer_map_for_output(output);
-        let Some(geometry) = map.layer_geometry(layer) else {
+        let Some(geometry) = persisted
+            .last_geometry
+            .take()
+            .or_else(|| map.layer_geometry(layer))
+        else {
             return;
         };
         let (wlr_layer, anchor, exclusive_zone, margin) = with_states(surface, |states| {
@@ -1327,6 +1331,7 @@ impl Dispatch<CupertinoComponentV1, ComponentGlobalData> for Cupertino {
                         output: output_id,
                         mapped: false,
                         last_picture: None,
+                        last_geometry: None,
                     },
                 );
             }

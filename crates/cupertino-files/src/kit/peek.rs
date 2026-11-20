@@ -284,8 +284,8 @@ impl Peek {
         }
     }
 
-    /// The item shown changed to `path`: its application's name is read again, from `session`'s associations.
-    pub fn follow_app(&mut self, session: &Session, path: &Path) {
+    /// The item shown changed to `path` (a folder when `is_dir`, as its listing tells): its application's name is read again, from `session`'s associations.
+    pub fn follow_app(&mut self, session: &Session, path: &Path, is_dir: bool) {
         if self.app.as_ref().is_some_and(|(p, _)| p == path) {
             return;
         }
@@ -297,7 +297,7 @@ impl Peek {
             if application_at(apps, path).is_some() {
                 return None;
             }
-            open_with(apps, path, path.is_dir())
+            open_with(apps, path, is_dir)
                 .into_iter()
                 .find(|item| item.is_default)
                 .map(|item| item.entry.name.clone())

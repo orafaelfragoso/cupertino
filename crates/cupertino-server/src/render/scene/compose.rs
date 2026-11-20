@@ -552,100 +552,125 @@ pub(super) fn overview_pictures(p: &mut SceneParams<'_>, alpha: f32) -> Vec<Piec
     };
     let pictures = session.pictures.clone();
     let current = p.wm.current_workspace(p.output_id);
-    let out_rect = p.rect;
+    let (output, out_rect) = (p.output_id, p.rect);
     let mut out = Vec::new();
     for (workspace, frame) in pictures {
-        let k = frame.w / out_rect.w.max(1.0);
-        let local_frame = local(frame, &out_rect);
-        // windows of the workspace, front first
-        if Some(workspace) != current {
-            let order: Vec<WindowId> = p.wm.stacking_order().to_vec();
-            for id in order.iter().rev() {
-                let Some(w) = p.wm.window(*id) else { continue };
-                if w.output != p.output_id
-                    || w.workspace != workspace
-                    || w.sticky
-                    || w.state().is_minimized()
-                    || w.state().is_dead()
-                {
-                    continue;
-                }
-                let Some(entry) = p.windows.iter().find(|e| e.id == *id) else {
-                    continue;
-                };
-                if p.for_capture && crate::control::protected_surface(entry.surface()) {
-                    continue;
-                }
-                let g = w.geometry();
-                let visual = cupertino_wm::Rect::new(
-                    frame.x + (g.x - out_rect.x) * k,
-                    frame.y + (g.y - out_rect.y) * k,
-                    g.w * k,
-                    g.h * k,
-                );
-                let geo = entry.window.geometry();
-                let ins = entry.insets();
-                let plan = WindowPlan {
-                    visual,
-                    scale_x: visual.w / (f64::from(geo.size.w) + ins.horizontal()).max(1.0),
-                    scale_y: visual.h / (f64::from(geo.size.h) + ins.vertical()).max(1.0),
-                    opacity: f64::from(alpha),
-                    shadow: 0.0,
-                    exact: false,
-                    corner: None,
-                    corner_cap: None,
-                };
-                let deco = window_decorations(p, entry, &plan, false);
-                out.extend(window_elements(p, entry, &plan, false, false, deco));
-            }
-        }
-        // the wallpaper, scaled into the frame
-        let index = 1 + workspace.0;
-        match wallpaper_element(p) {
-            Piece::Image(mut picture) => {
-                picture.index = index;
-                picture.size = (
-                    local_frame.size.w.round() as i32,
-                    local_frame.size.h.round() as i32,
-                );
-                picture.placement.origin = OutputPoint(cupertino_geometry::Point::new(
-                    local_frame.loc.x,
-                    local_frame.loc.y,
-                ));
-                picture.opacity = alpha;
-                out.push(Piece::Image(picture));
-            }
-            _ => {
-                let colours = match p.config.wallpaper_color {
-                    Some(c) => {
-                        let rgb = c.map(|c| f32::from(c) / 255.0);
-                        [[rgb[0], rgb[1], rgb[2], 1.0]; 4]
-                    }
-                    None => wallpaper_colours(p.config.is_dark()),
-                };
-                out.push(Piece::item(item(
-                    SceneKind::Wallpaper,
-                    index,
-                    Source::Wallpaper {
-                        rect: output_rect(local_frame),
-                        colours,
-                    },
-                    f64::from(alpha),
-                )));
-            }
-        }
-        // the opaque black backing
-        out.push(rrect_item(
-            SceneKind::OverviewDim,
-            index,
-            local_frame,
-            0.0,
-            false,
-            [0.0, 0.0, 0.0, 1.0],
-            None,
+        let windows = Some(workspace) != current;
+        out.extend(workspace_picture(
+            p,
+            (workspace, output, out_rect),
+            frame,
             alpha,
+            windows,
+            1 + workspace.0,
         ));
     }
+    out
+}
+
+/// The live picture of `workspace` on `output` (whose rectangle is `out_rect`), front to back: an opaque black backing,
+/// the wallpaper and, with `windows`, the workspace's windows but the claimed ones (drawn in their holes alone), all
+/// scaled from the output into `frame` (global logical points), at `alpha`. Its backing and wallpaper pieces take
+/// `index`.
+pub(super) fn workspace_picture(
+    p: &mut SceneParams<'_>,
+    (workspace, output, out_rect): (cupertino_wm::WorkspaceId, OutputId, Rect),
+    frame: Rect,
+    alpha: f32,
+    windows: bool,
+    index: u64,
+) -> Vec<Piece> {
+    let mut out = Vec::new();
+    let k = frame.w / out_rect.w.max(1.0);
+    let local_frame = local(frame, &p.rect);
+    // windows of the workspace, front first
+    if windows {
+        let order: Vec<WindowId> = p.wm.stacking_order().to_vec();
+        for id in order.iter().rev() {
+            let Some(w) = p.wm.window(*id) else { continue };
+            if w.output != output
+                || w.workspace != workspace
+                || w.sticky
+                || w.state().is_minimized()
+                || w.state().is_dead()
+                || p.transactions.is_window_claimed(*id)
+            {
+                continue;
+            }
+            let Some(entry) = p.windows.iter().find(|e| e.id == *id) else {
+                continue;
+            };
+            if p.for_capture && crate::control::protected_surface(entry.surface()) {
+                continue;
+            }
+            let g = w.geometry();
+            let visual = cupertino_wm::Rect::new(
+                frame.x + (g.x - out_rect.x) * k,
+                frame.y + (g.y - out_rect.y) * k,
+                g.w * k,
+                g.h * k,
+            );
+            let geo = entry.window.geometry();
+            let ins = entry.insets();
+            let plan = WindowPlan {
+                visual,
+                scale_x: visual.w / (f64::from(geo.size.w) + ins.horizontal()).max(1.0),
+                scale_y: visual.h / (f64::from(geo.size.h) + ins.vertical()).max(1.0),
+                opacity: f64::from(alpha),
+                shadow: 0.0,
+                exact: false,
+                corner: None,
+                corner_cap: None,
+            };
+            let deco = window_decorations(p, entry, &plan, false);
+            out.extend(window_elements(p, entry, &plan, false, false, deco));
+        }
+    }
+    // the wallpaper, scaled into the frame
+    match wallpaper_element(p) {
+        Piece::Image(mut picture) => {
+            picture.index = index;
+            picture.size = (
+                local_frame.size.w.round() as i32,
+                local_frame.size.h.round() as i32,
+            );
+            picture.placement.origin = OutputPoint(cupertino_geometry::Point::new(
+                local_frame.loc.x,
+                local_frame.loc.y,
+            ));
+            picture.opacity = alpha;
+            out.push(Piece::Image(picture));
+        }
+        _ => {
+            let colours = match p.config.wallpaper_color {
+                Some(c) => {
+                    let rgb = c.map(|c| f32::from(c) / 255.0);
+                    [[rgb[0], rgb[1], rgb[2], 1.0]; 4]
+                }
+                None => wallpaper_colours(p.config.is_dark()),
+            };
+            out.push(Piece::item(item(
+                SceneKind::Wallpaper,
+                index,
+                Source::Wallpaper {
+                    rect: output_rect(local_frame),
+                    colours,
+                },
+                f64::from(alpha),
+            )));
+        }
+    }
+    // the opaque black backing
+    out.push(rrect_item(
+        SceneKind::OverviewDim,
+        index,
+        local_frame,
+        0.0,
+        false,
+        [0.0, 0.0, 0.0, 1.0],
+        None,
+        alpha,
+    ));
     out
 }
 
@@ -925,6 +950,8 @@ fn desktop_scene(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>, stack: &m
             }
             front_to_back.extend(window_elements(p, entry, &plan, active, true, deco));
         }
+        // the picture of a claimed window that closed fades out in the hole that claimed it alone
+        with_their_window.extend(p.transactions.closing_in_claims());
         let mut ghosts: Vec<Piece> = closing_elements(p, &with_their_window);
         ghosts.append(&mut front_to_back);
         ghosts.append(&mut strip);

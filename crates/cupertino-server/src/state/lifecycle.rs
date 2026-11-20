@@ -101,6 +101,7 @@ impl Cupertino {
         let ms = |t: u64| t as f64 / 1000.0;
         [
             self.control_deadline(),
+            self.transaction_deadline(),
             self.hung.next_deadline(),
             self.force_quits.next_deadline(),
             self.display_power_deadline(),

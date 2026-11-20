@@ -636,6 +636,7 @@ pub(super) fn layer_elements(
             clip: Clip::None,
         }));
     }
+    out.extend(held_hole_pieces(p, layer));
     out
 }
 

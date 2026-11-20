@@ -1,7 +1,8 @@
 //! Server-side transactions, gesture-bound transactions, and window/workspace holes
 //! (`cupertino_transaction_manager_v1`, `cupertino_transaction_v1`, `cupertino_hole_v1`).
 
-use std::collections::HashMap;
+use std::cell::Cell;
+use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
 use cupertino_animation::{LayerCurve, LayerProperty};
@@ -22,19 +23,25 @@ use cupertino_protocols::transaction::{
 use cupertino_wm::{OutputId, WindowId, WorkspaceId};
 use smithay::output::Output;
 use smithay::reexports::wayland_server::backend::{ClientId, GlobalId, ObjectId};
+use smithay::reexports::wayland_server::protocol::wl_callback::WlCallback;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{
     Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource, WEnum,
 };
+use smithay::utils::{Logical, Rectangle};
 use smithay::wayland::compositor::get_role;
 
 use crate::authorization::{authorized, ShellRole};
-use crate::host::component_spec;
+use crate::host::{component_spec, HeldSurface};
 use crate::layers_v1::LAYER_ROLE;
 use crate::state::{ClientState, Cupertino};
 
 /// Protocol version offered for `cupertino_transaction_manager_v1`.
 pub const TRANSACTION_PROTOCOL_VERSION: u32 = 1;
+
+/// How many holes deep the scene draws sources: a window drawn in a hole draws its own layers, and a hole among them
+/// draws nothing, so no source draws itself and a frame never recurses.
+pub const MAX_HOLE_NESTING: u8 = 1;
 
 /// Unique key of a transaction across components and restarts (`component`, `instance`, `serial`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -101,6 +108,8 @@ struct Participant {
     staged: Vec<StagedSurface>,
     window_changes: Vec<QueuedWindowChange>,
     ready: bool,
+    /// When the part became ready: a late part waits for a frame of the transaction's output from then on.
+    ready_since: Option<Instant>,
     applied: bool,
     withdrawn: bool,
 }
@@ -108,6 +117,12 @@ struct Participant {
 impl Participant {
     fn all_staged_committed(&self) -> bool {
         self.staged.iter().all(|s| s.committed)
+    }
+
+    /// The part is ready at `now`, unless it already was.
+    fn mark_ready(&mut self, now: Instant) {
+        self.ready = true;
+        self.ready_since.get_or_insert(now);
     }
 }
 
@@ -168,6 +183,9 @@ struct TransactionRecord {
     expected: Vec<&'static str>,
     /// Explicit deadline in ms requested by `set_deadline`, clamped to [`MAX_DEADLINE_MS`].
     deadline_ms: Option<u32>,
+    /// When the creator and every expected component were ready (or the deadline passed): the transaction starts on
+    /// the next frame of its output that the server prepares.
+    ready_at: Option<start::ReadyMark>,
     phase: TxPhase,
     gesture: Option<GestureBinding>,
     participants: Vec<Participant>,
@@ -194,6 +212,41 @@ pub struct HoleRecord {
     pub committed_source: HoleSource,
     pub pending_claim: bool,
     pub committed_claim: bool,
+    /// The source and claim each commit of the layer surface carries, in commit order, taken as it is made (its
+    /// pre-commit hook) and applied as it applies, so a kept commit applies the hole state it was made with.
+    pub queued: VecDeque<(HoleSource, bool)>,
+    /// The window whose picture fades out in the hole after it closed ([`ClosedSource`]).
+    pub closing: Option<ClosedSource>,
+    /// The component whose connection made the hole.
+    pub component: &'static str,
+    /// Where the scene last drew the hole of a layer shell surface's layer: its output and bounds (output-local
+    /// points), which a hold keeps ([`HeldHole`]).
+    pub shown: Cell<Option<(OutputId, Rectangle<f64, Logical>)>>,
+    /// The hole stays on a held surface after its connection ended ([`HeldHole`]).
+    pub held: Option<HeldHole>,
+}
+
+/// A hole of a persistent surface held after its component's connection ended (D19): the surface shows its last
+/// picture, and the hole goes on drawing its source live where it last showed, its claim kept, until the hold ends.
+#[derive(Clone, Debug)]
+pub struct HeldHole {
+    /// The hold's persistence key.
+    pub key: String,
+    pub output: OutputId,
+    /// The hole's bounds as it last showed, output-local points.
+    pub bounds: Rectangle<f64, Logical>,
+}
+
+/// A hole's window that closed: the hole keeps the window's last picture and fades it out where it lies, along the
+/// server's closing animation, then draws nothing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ClosedSource {
+    pub window: WindowId,
+    /// The window's frame, decorations included, in logical points, as it was when it closed: its picture is fitted in
+    /// the hole as the window was.
+    pub size: (f64, f64),
+    /// The hole held the claim in force: the window's picture fades out there alone, not at its own frame.
+    pub claimed: bool,
 }
 
 /// Server-side manager for transactions, gesture bindings, and holes.
@@ -217,6 +270,14 @@ pub struct TransactionManager {
     window_claims: HashMap<WindowId, Vec<HoleId>>,
     /// Active gesture transaction per output while tracking or settling.
     active_gesture_tx: HashMap<OutputId, TxId>,
+    /// The kept commits of each staged surface, by the staged surface's object id ([`staging`]).
+    holds: HashMap<ObjectId, staging::StageHold>,
+    /// The frames of windows that are closing, until their holes hear it ([`TransactionManager::window_closing`]).
+    closing_frames: HashMap<WindowId, (f64, f64)>,
+    /// Frame callbacks of kept commits, answered with the next frame of their output.
+    held_callbacks: Vec<(OutputId, WlCallback)>,
+    /// How many hole sources the scene is drawing inside each other ([`TransactionManager::enter_hole`]).
+    hole_depth: Cell<u8>,
 }
 
 impl TransactionManager {
@@ -239,6 +300,10 @@ impl TransactionManager {
             hole_by_surface: HashMap::new(),
             window_claims: HashMap::new(),
             active_gesture_tx: HashMap::new(),
+            holds: HashMap::new(),
+            closing_frames: HashMap::new(),
+            held_callbacks: Vec::new(),
+            hole_depth: Cell::new(0),
         }
     }
 
@@ -276,10 +341,40 @@ impl TransactionManager {
         self.holes.get(hid)
     }
 
-    /// All committed holes currently targeting `window` or any source (for scene rendering).
+    /// The hole of the layer surface `layer_surface_id`, if it has one: what the scene draws in its bounds.
     pub fn hole_for_layer(&self, layer_surface_id: &ObjectId) -> Option<&HoleRecord> {
         let hid = self.hole_by_surface.get(layer_surface_id)?;
         self.holes.get(hid)
+    }
+
+    /// Whether the claim of hole `hole` (its [`HoleRecord::id`]) on `window` is the one in force: the window is drawn in
+    /// that hole. A claim below it is suspended, and its hole draws nothing.
+    pub fn claim_in_force(&self, window: WindowId, hole: u64) -> bool {
+        self.active_claim_for(window).is_some_and(|h| h.id == hole)
+    }
+
+    /// The windows whose closing picture fades out in the hole that claimed them, and so not at their own frame.
+    pub fn closing_in_claims(&self) -> Vec<WindowId> {
+        self.holes
+            .values()
+            .filter_map(|h| h.closing.filter(|c| c.claimed).map(|c| c.window))
+            .collect()
+    }
+
+    /// The scene starts drawing a hole's source; `false` (and nothing to undo) when it is already as deep inside other
+    /// holes' sources as [`MAX_HOLE_NESTING`] allows. Each `true` is followed by [`TransactionManager::leave_hole`].
+    pub fn enter_hole(&self) -> bool {
+        let depth = self.hole_depth.get();
+        if depth >= MAX_HOLE_NESTING {
+            return false;
+        }
+        self.hole_depth.set(depth + 1);
+        true
+    }
+
+    /// The scene finished drawing a hole's source.
+    pub fn leave_hole(&self) {
+        self.hole_depth.set(self.hole_depth.get().saturating_sub(1));
     }
 
     /// Whether `client_id` currently has an open window-change bracket; if so, enqueue `change` and return `true`.
@@ -359,14 +454,34 @@ impl TransactionManager {
         }
     }
 
-    /// Notify holes whose source window closed, removing its claims and emitting `source_closed`.
+    /// The frame of `window`, decorations included, in logical points, as it closes ([`notify_window_closed`]).
+    ///
+    /// [`notify_window_closed`]: TransactionManager::notify_window_closed
+    pub fn window_closing(&mut self, window: WindowId, size: (f64, f64)) {
+        self.closing_frames.insert(window, size);
+    }
+
+    /// Notify holes whose source window closed, removing its claims and emitting `source_closed`. A hole that drew the
+    /// window fades its last picture out there, fitted as the window's frame was when it closed
+    /// ([`TransactionManager::window_closing`], [`ClosedSource`]); a hole whose claim was suspended draws nothing.
     pub fn notify_window_closed(&mut self, window: WindowId) {
-        self.window_claims.remove(&window);
-        for hole in self.holes.values_mut() {
+        let size = self.closing_frames.remove(&window);
+        let in_force = self
+            .window_claims
+            .remove(&window)
+            .and_then(|stack| stack.last().copied());
+        for (&hid, hole) in &mut self.holes {
             if matches!(
                 hole.committed_source,
                 HoleSource::Window(w) | HoleSource::Thumbnail(w) if w == window
             ) {
+                let claimed = hole.committed_claim && in_force == Some(hid);
+                let suspended = hole.committed_claim && !claimed;
+                hole.closing = size.filter(|_| !suspended).map(|size| ClosedSource {
+                    window,
+                    size,
+                    claimed,
+                });
                 hole.committed_source = HoleSource::None;
                 hole.committed_claim = false;
                 hole.resource.source_closed();
@@ -394,25 +509,52 @@ impl TransactionManager {
         }
     }
 
-    /// Clean up all transaction parts, brackets, staged surfaces and holes owned by a disconnected client.
-    pub fn client_disconnected(&mut self, client_id: &ClientId) {
+    /// Clean up all transaction parts, brackets, staged surfaces and holes owned by a disconnected client. A hole that
+    /// last showed on one of the component's surfaces the server now holds (`held`) stays there, drawing its source
+    /// and keeping its claim, until the hold ends ([`TransactionManager::drop_ended_holds`]).
+    pub fn client_disconnected(&mut self, client_id: &ClientId, held: &[HeldSurface]) {
         self.open_brackets.remove(client_id);
 
-        // Remove holes owned by this client and pop them from claim stacks.
+        // Remove holes owned by this client and pop them from claim stacks, but the held ones.
         let gone_holes: Vec<HoleId> = self
             .holes
             .iter()
             .filter_map(|(&hid, h)| (h.client_id == *client_id).then_some(hid))
             .collect();
+        let mut dropped = Vec::new();
         for hid in gone_holes {
-            if let Some(h) = self.holes.remove(&hid) {
-                self.hole_by_surface.remove(&h.layer_surface_id);
-                for stack in self.window_claims.values_mut() {
-                    stack.retain(|&id| id != hid);
-                }
+            let Some(h) = self.holes.get_mut(&hid) else {
+                continue;
+            };
+            self.hole_by_surface.remove(&h.layer_surface_id);
+            h.queued.clear();
+            h.held = h.shown.get().and_then(|(output, bounds)| {
+                let centre = (
+                    bounds.loc.x + bounds.size.w / 2.0,
+                    bounds.loc.y + bounds.size.h / 2.0,
+                );
+                let mine = || {
+                    held.iter()
+                        .filter(|s| s.component == h.component && s.output == output)
+                };
+                // the held surface the hole lay on; one whose geometry is not known is the component's only hold there
+                let on = mine()
+                    .find(|s| s.geometry.to_f64().contains(centre))
+                    .or_else(|| {
+                        let mut only = mine().filter(|s| s.geometry.is_empty());
+                        only.next().filter(|_| only.next().is_none())
+                    });
+                on.map(|s| HeldHole {
+                    key: s.key.clone(),
+                    output,
+                    bounds,
+                })
+            });
+            if h.held.is_none() {
+                dropped.push(hid);
             }
         }
-        self.window_claims.retain(|_, stack| !stack.is_empty());
+        self.drop_holes(&dropped);
 
         // Withdraw unapplied parts and settle active gestures if their creator disconnected.
         let mut creator_gone_txs = Vec::new();
@@ -446,6 +588,42 @@ impl TransactionManager {
             }
         }
     }
+
+    /// Remove holes `gone` and their claims.
+    fn drop_holes(&mut self, gone: &[HoleId]) {
+        for hid in gone {
+            if let Some(h) = self.holes.remove(hid) {
+                self.hole_by_surface.remove(&h.layer_surface_id);
+                for stack in self.window_claims.values_mut() {
+                    stack.retain(|id| id != hid);
+                }
+            }
+        }
+        self.window_claims.retain(|_, stack| !stack.is_empty());
+    }
+
+    /// End the holes of holds that ended (`held` is what the server still holds): the component took its surface over
+    /// again, or the hold was given up. Their claims end with them.
+    pub fn drop_ended_holds(&mut self, held: &[HeldSurface]) {
+        let ended: Vec<HoleId> = self
+            .holes
+            .iter()
+            .filter(|(_, h)| {
+                h.held.as_ref().is_some_and(|hh| {
+                    !held.iter().any(|s| {
+                        s.component == h.component && s.key == hh.key && s.output == hh.output
+                    })
+                })
+            })
+            .map(|(&hid, _)| hid)
+            .collect();
+        self.drop_holes(&ended);
+    }
+
+    /// The holes of held surfaces ([`HeldHole`]).
+    pub fn held_holes(&self) -> impl Iterator<Item = &HoleRecord> {
+        self.holes.values().filter(|h| h.held.is_some())
+    }
 }
 
 /// Convert monotonic duration to `(tv_sec_hi, tv_sec_lo, tv_nsec)` matching `wp_presentation`.
@@ -455,31 +633,12 @@ fn split_timestamp(d: Duration) -> (u32, u32, u32) {
 }
 
 impl Cupertino {
-    /// Called from `CompositorHandler::commit`: marks staged surfaces committed and applies pending hole state for
-    /// layer surfaces owned by `surface`.
+    /// Called from `CompositorHandler::commit`, as a commit of `surface` applies: the hole state it carries applies with it.
+    /// A staged surface's commit counts towards its part when it is made, in its pre-commit hook
+    /// ([`Cupertino::transaction_pre_commit`]), since a kept commit applies only with the part.
     pub fn transaction_surface_committed(&mut self, surface: &WlSurface) {
-        let sid = surface.id();
-
-        // 1. Apply double-buffered hole state if this surface itself is a hole layer (or has child hole layers).
-        if let Some(&hid) = self.transactions.hole_by_surface.get(&sid) {
+        if let Some(&hid) = self.transactions.hole_by_surface.get(&surface.id()) {
             self.commit_hole(hid);
-        }
-
-        // 2. Mark staged surface committed in its participant part.
-        let owner = self.transactions.staged_surface_owner.get(&sid).copied();
-        if let Some((tx_id, pid)) = owner {
-            if let Some(tx) = self.transactions.transactions.get_mut(&tx_id) {
-                if let Some(p) = tx.participants.iter_mut().find(|p| p.id == pid) {
-                    for s in &mut p.staged {
-                        if s.surface_id == sid {
-                            s.committed = true;
-                        }
-                    }
-                    if p.submitted_at.is_some() && p.all_staged_committed() {
-                        p.ready = true;
-                    }
-                }
-            }
         }
     }
 
@@ -489,8 +648,16 @@ impl Cupertino {
         };
         let old_source = hole.committed_source;
         let old_claim = hole.committed_claim;
-        hole.committed_source = hole.pending_source;
-        hole.committed_claim = hole.pending_claim;
+        let (source, claim) = hole
+            .queued
+            .pop_front()
+            .unwrap_or((hole.pending_source, hole.pending_claim));
+        hole.committed_source = source;
+        hole.committed_claim = claim;
+        // a new source takes the hole over from the picture of a window that closed
+        if source != HoleSource::None {
+            hole.closing = None;
+        }
         let new_source = hole.committed_source;
         let new_claim = hole.committed_claim;
 
@@ -542,6 +709,8 @@ impl Cupertino {
             }
         }
         self.transactions.active_gesture_tx.insert(output, tx_id);
+        // the parts applied: their kept commits apply with them
+        self.release_left_holds();
         self.request_redraw();
         true
     }
@@ -626,242 +795,6 @@ impl Cupertino {
         true
     }
 
-    /// Advance all pending, started, late-joining, and gesture-settling transactions.
-    pub fn tick_transactions(&mut self, now: Instant) {
-        let model_now = self.now();
-        let clock_dur = Duration::from(self.clock.now());
-        let (tv_sec_hi, tv_sec_lo, tv_nsec) = split_timestamp(clock_dur);
-
-        // 1. Auto-submit after 100 ms, commit grace after 100 ms, and orphan join promotion after 100 ms.
-        let mut to_start: Vec<TxId> = Vec::new();
-        let mut late_apply: Vec<(TxId, u64)> = Vec::new();
-        let mut settled_gestures: Vec<(TxId, OutputId, WireOutcome, bool)> = Vec::new();
-        let mut expired_ended: Vec<TxId> = Vec::new();
-
-        for (&tx_id, tx) in &mut self.transactions.transactions {
-            // Prune retained ended transactions older than 10s.
-            if let TxPhase::Ended { ended_at, .. } = tx.phase {
-                if now.saturating_duration_since(ended_at)
-                    >= Duration::from_secs(ENDED_RETENTION_SECS)
-                {
-                    expired_ended.push(tx_id);
-                }
-                continue;
-            }
-
-            // Promote orphan join if creator never arrived within JOIN_WAIT_MS.
-            if let Some(until) = tx.orphan_join_until {
-                if now >= until {
-                    tx.orphan_join_until = None;
-                    if let Some(first) = tx.participants.first_mut() {
-                        first.is_creator = true;
-                    }
-                }
-            }
-
-            // Participant auto-submit & commit grace.
-            for p in &mut tx.participants {
-                if p.withdrawn {
-                    continue;
-                }
-                if p.submitted_at.is_none()
-                    && now.saturating_duration_since(p.created_at)
-                        >= Duration::from_millis(AUTO_SUBMIT_MS.into())
-                {
-                    p.submitted_at = Some(now);
-                    if p.all_staged_committed() {
-                        p.ready = true;
-                    }
-                }
-                if let Some(sub_at) = p.submitted_at {
-                    if !p.ready
-                        && now.saturating_duration_since(sub_at)
-                            >= Duration::from_millis(COMMIT_GRACE_MS.into())
-                    {
-                        // Drop uncommitted staged surfaces from this part; rest becomes ready.
-                        p.staged.retain(|s| {
-                            if !s.committed {
-                                self.transactions.staged_surface_owner.remove(&s.surface_id);
-                                false
-                            } else {
-                                true
-                            }
-                        });
-                        p.ready = true;
-                    }
-                }
-                if p.ready && !p.applied && matches!(tx.phase, TxPhase::Started { .. }) {
-                    late_apply.push((tx_id, p.id));
-                }
-            }
-
-            match tx.phase {
-                TxPhase::Pending => {
-                    if tx.orphan_join_until.is_some() {
-                        continue;
-                    }
-                    let Some(creator) = tx
-                        .participants
-                        .iter()
-                        .find(|p| p.is_creator && !p.withdrawn)
-                    else {
-                        continue;
-                    };
-                    if !creator.ready {
-                        continue;
-                    }
-                    let all_expected_ready = tx.expected.iter().all(|&comp| {
-                        self.hosts.component_not_waited_for(comp)
-                            || tx
-                                .participants
-                                .iter()
-                                .any(|p| p.component == comp && p.ready && !p.withdrawn)
-                    });
-                    let deadline_ms = tx.deadline_ms.unwrap_or_else(|| {
-                        let frame_ms = self
-                            .outputs
-                            .iter()
-                            .find(|o| o.id == tx.output)
-                            .and_then(|o| o.output.current_mode())
-                            .map(|m| (1_000_000 / m.refresh.max(1)) as u32)
-                            .unwrap_or(16);
-                        (frame_ms + DEFAULT_DEADLINE_EXTRA_MS).min(MAX_DEADLINE_MS)
-                    });
-                    let deadline_passed = creator.submitted_at.is_some_and(|s| {
-                        now.saturating_duration_since(s)
-                            >= Duration::from_millis(deadline_ms.into())
-                    });
-                    if all_expected_ready || deadline_passed {
-                        if tx.gesture.is_some() {
-                            tx.phase = TxPhase::Armed;
-                        } else {
-                            to_start.push(tx_id);
-                        }
-                    }
-                }
-                TxPhase::GestureSettling => {
-                    if let Some(binding) = &tx.gesture {
-                        if let Some(settle) = &binding.settle {
-                            if !settle.property.is_animating(model_now) {
-                                let at_one = (settle.property.target() - 1.0).abs() < 0.5;
-                                settled_gestures.push((tx_id, tx.output, settle.outcome, at_one));
-                            }
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        // 2. Start ready transactions on one shared presentation timestamp.
-        let mut window_changes = Vec::new();
-        for tx_id in to_start {
-            if let Some(tx) = self.transactions.transactions.get_mut(&tx_id) {
-                tx.phase = TxPhase::Started {
-                    tv_sec_hi,
-                    tv_sec_lo,
-                    tv_nsec,
-                    start_model_s: model_now,
-                };
-                for p in &mut tx.participants {
-                    if p.ready && !p.applied && !p.withdrawn {
-                        p.applied = true;
-                        for s in &p.staged {
-                            self.transactions.staged_surface_owner.remove(&s.surface_id);
-                        }
-                        window_changes.extend(std::mem::take(&mut p.window_changes));
-                        if let Some(res) = &p.resource {
-                            res.started(tv_sec_hi, tv_sec_lo, tv_nsec);
-                        }
-                    }
-                }
-            }
-            self.request_redraw();
-        }
-
-        // 3. Apply late joiners in step using the transaction's original start timestamp.
-        for (tx_id, pid) in late_apply {
-            if let Some(tx) = self.transactions.transactions.get_mut(&tx_id) {
-                let TxPhase::Started {
-                    tv_sec_hi,
-                    tv_sec_lo,
-                    tv_nsec,
-                    ..
-                } = tx.phase
-                else {
-                    continue;
-                };
-                if let Some(p) = tx.participants.iter_mut().find(|p| p.id == pid) {
-                    if p.ready && !p.applied && !p.withdrawn {
-                        p.applied = true;
-                        for s in &p.staged {
-                            self.transactions.staged_surface_owner.remove(&s.surface_id);
-                        }
-                        window_changes.extend(std::mem::take(&mut p.window_changes));
-                        if let Some(res) = &p.resource {
-                            res.started(tv_sec_hi, tv_sec_lo, tv_nsec);
-                        }
-                    }
-                }
-            }
-            self.request_redraw();
-        }
-
-        // 4. Finish settled gestures.
-        for (tx_id, output, outcome, at_one) in settled_gestures {
-            self.transactions.active_gesture_tx.remove(&output);
-            self.transactions.next_seq += 1;
-            let seq = self.transactions.next_seq;
-            if let Some(tx) = self.transactions.transactions.get_mut(&tx_id) {
-                let keep_reverse = at_one
-                    && tx
-                        .gesture
-                        .as_ref()
-                        .is_some_and(|g| g.reverse_gesture.is_some());
-                if let Some(g) = &mut tx.gesture {
-                    g.settle = None;
-                    g.tracking_progress = None;
-                    if keep_reverse {
-                        g.completed_seq = Some(seq);
-                    }
-                }
-                for p in &mut tx.participants {
-                    if !p.withdrawn {
-                        if at_one {
-                            window_changes.extend(std::mem::take(&mut p.window_changes));
-                        } else {
-                            p.window_changes.clear();
-                        }
-                        if let Some(res) = &p.resource {
-                            res.finished(outcome);
-                        }
-                    }
-                }
-                tx.phase = if keep_reverse {
-                    TxPhase::RestingCompleted
-                } else {
-                    TxPhase::Ended {
-                        ended_at: now,
-                        outcome,
-                    }
-                };
-            }
-            self.request_redraw();
-        }
-
-        // 5. Execute queued window changes.
-        for change in window_changes {
-            self.apply_queued_window_change(change);
-        }
-
-        // 6. Drop expired ended transactions.
-        for tx_id in expired_ended {
-            if let Some(tx) = self.transactions.transactions.remove(&tx_id) {
-                self.transactions.by_key.remove(&tx.key);
-            }
-        }
-    }
-
     fn apply_queued_window_change(&mut self, change: QueuedWindowChange) {
         match change {
             QueuedWindowChange::ActivateWindow(id) => {
@@ -884,3 +817,5 @@ impl Cupertino {
 }
 
 mod dispatch;
+mod staging;
+mod start;

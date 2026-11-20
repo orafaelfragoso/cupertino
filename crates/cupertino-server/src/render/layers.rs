@@ -347,6 +347,15 @@ pub fn layer_pieces(
             clip,
             only: None,
         }));
+        // a hole's source, which the server draws in the layer's bounds as shown, behind the layer's own content
+        let on_shell_surface = place.kind == SceneKind::LayerContent;
+        out.extend(super::scene::hole_pieces(
+            p,
+            &l.surface,
+            shown,
+            opacity,
+            on_shell_surface,
+        ));
         // late content: the placeholder where the content does not reach
         if l.placeholder[3] > 0.0 {
             for [x, y, w, h] in uncovered(l.content, l.width, l.height) {

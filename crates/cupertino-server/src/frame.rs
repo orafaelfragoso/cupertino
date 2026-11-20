@@ -233,6 +233,8 @@ impl Cupertino {
         renderer: &mut GlesRenderer,
         idx: usize,
     ) -> Option<Composed> {
+        // the transactions due on this output start on this frame, their kept commits applied before it is composed
+        self.transactions_frame(idx);
         self.note_scene_built(idx);
         let (now, refresh) = (self.frame_now(), self.refresh_of(idx));
         self.outputs[idx].scheduler.cycle(now, refresh);

@@ -106,6 +106,7 @@ impl Dispatch<CupertinoTransactionManagerV1, ()> for Cupertino {
                                 staged: Vec::new(),
                                 window_changes: Vec::new(),
                                 ready: false,
+                                ready_since: None,
                                 applied: false,
                                 withdrawn: false,
                             });
@@ -146,6 +147,7 @@ impl Dispatch<CupertinoTransactionManagerV1, ()> for Cupertino {
                         orphan_join_until: None,
                         expected: Vec::new(),
                         deadline_ms: None,
+                        ready_at: None,
                         phase: TxPhase::Pending,
                         gesture: None,
                         participants: vec![Participant {
@@ -159,6 +161,7 @@ impl Dispatch<CupertinoTransactionManagerV1, ()> for Cupertino {
                             staged: Vec::new(),
                             window_changes: Vec::new(),
                             ready: false,
+                            ready_since: None,
                             applied: false,
                             withdrawn: false,
                         }],
@@ -218,6 +221,7 @@ impl Dispatch<CupertinoTransactionManagerV1, ()> for Cupertino {
                             staged: Vec::new(),
                             window_changes: Vec::new(),
                             ready: false,
+                            ready_since: None,
                             applied: false,
                             withdrawn: false,
                         });
@@ -249,6 +253,7 @@ impl Dispatch<CupertinoTransactionManagerV1, ()> for Cupertino {
                         orphan_join_until: Some(now + Duration::from_millis(JOIN_WAIT_MS.into())),
                         expected: Vec::new(),
                         deadline_ms: None,
+                        ready_at: None,
                         phase: TxPhase::Pending,
                         gesture: None,
                         participants: vec![Participant {
@@ -262,6 +267,7 @@ impl Dispatch<CupertinoTransactionManagerV1, ()> for Cupertino {
                             staged: Vec::new(),
                             window_changes: Vec::new(),
                             ready: false,
+                            ready_since: None,
                             applied: false,
                             withdrawn: false,
                         }],
@@ -315,6 +321,11 @@ impl Dispatch<CupertinoTransactionManagerV1, ()> for Cupertino {
                         committed_source: HoleSource::None,
                         pending_claim: false,
                         committed_claim: false,
+                        queued: VecDeque::new(),
+                        closing: None,
+                        component: conn.name,
+                        shown: Cell::new(None),
+                        held: None,
                     },
                 );
             }
@@ -390,6 +401,8 @@ impl Dispatch<CupertinoTransactionV1, TransactionObjectData> for Cupertino {
                 for change in flush_changes {
                     state.apply_queued_window_change(change);
                 }
+                // a part withdrawn or cancelled before it applied: its kept commits apply now, as ordinary commits
+                state.release_left_holds();
             }
             cupertino_transaction_v1::Request::Expect { component } => {
                 if !data.is_creator {
@@ -618,7 +631,7 @@ impl Dispatch<CupertinoTransactionV1, TransactionObjectData> for Cupertino {
                         if p.submitted_at.is_none() {
                             p.submitted_at = Some(now);
                             if p.all_staged_committed() {
-                                p.ready = true;
+                                p.mark_ready(now);
                             }
                         }
                     }
@@ -687,6 +700,8 @@ impl Dispatch<CupertinoTransactionV1, TransactionObjectData> for Cupertino {
                 for change in flush_changes {
                     state.apply_queued_window_change(change);
                 }
+                // a part withdrawn or cancelled before it applied: its kept commits apply now, as ordinary commits
+                state.release_left_holds();
             }
             _ => {}
         }

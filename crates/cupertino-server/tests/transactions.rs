@@ -1953,3 +1953,131 @@ fn a_held_surface_shows_its_layers_and_gives_way_as_the_live_one() {
         "a held surface that gives way is not drawn over a full-screen window"
     );
 }
+
+/// The kinds of everything the output draws, front to back, a run of one kind counted once.
+fn scene_order(rig: &mut Rig) -> Vec<cupertino_scene::SceneKind> {
+    let mut backend = rig.state.backend.take().unwrap();
+    let composed = rig
+        .state
+        .compose_output(backend.renderer(), 0, false)
+        .expect("the render resources are loaded");
+    rig.state.backend = Some(backend);
+    let mut kinds: Vec<_> = composed
+        .frame
+        .items()
+        .iter()
+        .map(|(_, item)| item.id.kind)
+        .collect();
+    kinds.dedup();
+    kinds
+}
+
+#[test]
+fn a_held_surface_draws_its_hole_between_its_layer_s_content_and_glass_as_live() {
+    let mut rig = Rig::headless((480, 300));
+    rig.state.fixed_time = Some(rig.state.now());
+    let (_wconn, _wq, _wst, _wsurf, _toplevel, wid) = rig.magenta_window((100, 80));
+    let surface_rect = (0, 0, 160, 120);
+    let hole_rect = (20, 20, 120, 80);
+    let (hconn, mut hq, mut hst) = rig.connect_host(&["overview"]);
+    let (_hov, oconn, mut oq, mut ost) = rig.spawn_component(&hconn, &mut hq, &mut hst, "overview");
+    // a persisted surface at the output's top left drawing green all over, with one layer over the middle of it that is
+    // a hole claiming the window and has clear glass of its own
+    let qh = oq.handle();
+    let parent = ost.compositor.as_ref().unwrap().create_surface(&qh, ());
+    let shell_surface = ost.layer_shell.as_ref().unwrap().get_layer_surface(
+        &parent,
+        ost.output.as_ref(),
+        zwlr_layer_shell_v1::Layer::Top,
+        "strip".into(),
+        &qh,
+        (),
+    );
+    shell_surface
+        .set_anchor(zwlr_layer_surface_v1::Anchor::Top | zwlr_layer_surface_v1::Anchor::Left);
+    shell_surface.set_size(160, 120);
+    ost.component_global
+        .as_ref()
+        .unwrap()
+        .persist(&parent, "strip".into());
+    parent.commit();
+    for _ in 0..4 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    let green = shm_buffer(ost.shm.as_ref().unwrap(), &qh, (160, 120), GREEN);
+    parent.attach(Some(&green), 0, 0);
+    parent.damage_buffer(0, 0, 160, 120);
+    let child = ost.compositor.as_ref().unwrap().create_surface(&qh, ());
+    let layer = ost
+        .layers
+        .as_ref()
+        .unwrap()
+        .get_layer(&child, &parent, &qh, ());
+    let (x, y, w, h) = hole_rect;
+    for (property, value) in [
+        (cupertino_layer_v1::Property::X, x),
+        (cupertino_layer_v1::Property::Y, y),
+        (cupertino_layer_v1::Property::Width, w),
+        (cupertino_layer_v1::Property::Height, h),
+    ] {
+        layer.set_value(property, f64::from(value));
+    }
+    // regular glass (cupertino_backdrop_v1.glass_style), at its size
+    layer.set_glass(0, 1.0);
+    let hole = ost.tx_manager.as_ref().unwrap().get_hole(&child, &qh, ());
+    hole.set_source(HoleWireSource::Window, wid.0 as u32);
+    hole.set_claim(1);
+    let clear = shm_buffer(ost.shm.as_ref().unwrap(), &qh, (w as i32, h as i32), CLEAR);
+    child.attach(Some(&clear), 0, 0);
+    child.damage_buffer(0, 0, w as i32, h as i32);
+    child.commit();
+    parent.commit();
+    for _ in 0..6 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    // frames of the output show the hole where it lies
+    for _ in 0..4 {
+        rig.pump();
+    }
+    let live_order = scene_order(&mut rig);
+    let live = rig.image();
+    let inside = (x + 8, y + 8, w - 16, h - 16);
+    let area = (inside.2 * inside.3) as usize;
+    assert!(
+        green_in(&live, inside) < area / 4,
+        "live, the window drawn in the hole covers the surface's own content, under the hole's glass"
+    );
+
+    // the surface's layer role ends, then its connection: the server holds it, the hole and its claim with it
+    shell_surface.destroy();
+    for _ in 0..3 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    drop((hole, layer, child, green, clear, parent));
+    drop(ost);
+    drop(oq);
+    drop(oconn);
+    for _ in 0..6 {
+        rig.pump();
+    }
+    assert_eq!(
+        rig.state.hosts.held_surfaces().len(),
+        1,
+        "the surface is held"
+    );
+    assert!(
+        rig.state.transactions.is_window_claimed(wid),
+        "the held hole keeps its claim"
+    );
+    assert_eq!(
+        scene_order(&mut rig),
+        live_order,
+        "the held surface draws its layer's content, its hole and its glass in the live order"
+    );
+    let held = rig.image();
+    assert!(
+        largest_difference(&live, &held, surface_rect) <= HELD_PICTURE_TOLERANCE,
+        "the held surface shows what the live one showed: the window in the hole under the hole's glass, over the \
+         surface's own content"
+    );
+}

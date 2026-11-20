@@ -259,7 +259,8 @@ pub struct HeldBackdrops {
     surface: Vec<BackdropArea>,
 }
 
-/// The glass a held surface drew among its content ([`HeldBackdrops`]).
+/// What a held surface drew live among its content ([`HeldBackdrops`]): the glass of its layers and subsurfaces, and
+/// the holes of its layers.
 #[derive(Clone)]
 enum HeldGlass {
     /// The glass of one of its layers, and how the layer made it of its backdrop (lens, blur ramp, edge, shadow, the
@@ -273,9 +274,23 @@ enum HeldGlass {
         areas: Vec<BackdropArea>,
         bound: Rectangle<f64, Logical>,
     },
+    /// The hole of one of its layers (the layer's `wl_surface`), whose source the server goes on drawing live where the
+    /// live layer drew it, behind the layer's own content and in front of its glass ([`super::holes::held_hole_in_slot`]).
+    Hole(smithay::reexports::wayland_server::backend::ObjectId),
 }
 
 impl HeldBackdrops {
+    /// The layers (their `wl_surface`s) whose holes are drawn between the slices of the picture.
+    fn holes(&self) -> Vec<smithay::reexports::wayland_server::backend::ObjectId> {
+        self.between
+            .iter()
+            .filter_map(|g| match g {
+                HeldGlass::Hole(layer) => Some(layer.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// The backdrops of `surface` itself, for a picture taken without a renderer to draw its layers with.
     pub fn of_surface(surface: &WlSurface) -> Self {
         Self {
@@ -324,7 +339,8 @@ fn piece_kind(piece: &Piece) -> SceneKind {
 /// (global logical points), for the picture of its hold (D19): its surface tree and its layers' content, front to back,
 /// cut at each glass its layers and subsurfaces draw among them into slices, each a new texture covering `area` (`None`
 /// for a slice with nothing in it). The backdrops they draw are left out of the slices and returned, to be drawn live
-/// between them ([`HeldBackdrops`]); so are its holes, whose sources the server draws live behind the held picture.
+/// between them ([`HeldBackdrops`]); so are its layers' holes, the picture cut directly behind each one's layer content,
+/// where the server draws the hole's source live.
 pub fn capture_held_surface(
     renderer: &mut GlesRenderer,
     p: &mut SceneParams<'_>,
@@ -370,6 +386,8 @@ pub fn capture_held_surface(
     if nested {
         p.transactions.leave_hole();
     }
+    // a layer's hole lies directly behind the layer's content: the picture is cut there too, to draw it live there
+    let layers = held_hole_marks(p, layers, &mut between);
     let mut slices: Vec<Vec<Piece>> = vec![Vec::new()];
     for piece in layers.into_iter().chain(tree) {
         if is_held_glass_mark(&piece) {
@@ -401,6 +419,41 @@ pub fn capture_held_surface(
         surface: surface_backdrops(surface, origin),
     };
     Some((textures, held))
+}
+
+/// The pieces of a held surface's layers (`layers`, front to back, glass marks among them) with a mark directly behind
+/// the content of each layer that is a hole, where the live layer draws its hole's source; each hole marked takes its
+/// place among the glass (`between`) in the order of the marks.
+fn held_hole_marks(
+    p: &SceneParams<'_>,
+    layers: Vec<Piece>,
+    between: &mut Vec<HeldGlass>,
+) -> Vec<Piece> {
+    use smithay::reexports::wayland_server::Resource;
+    let mut glass = std::mem::take(between).into_iter();
+    let mut out = Vec::with_capacity(layers.len());
+    for piece in layers {
+        if is_held_glass_mark(&piece) {
+            between.extend(glass.next());
+            out.push(piece);
+            continue;
+        }
+        let hole = match &piece {
+            Piece::Tree(t) => p
+                .transactions
+                .hole_for_layer(&t.surface.id())
+                .map(|_| t.surface.id()),
+            _ => None,
+        };
+        out.push(piece);
+        if let Some(layer) = hole {
+            between.push(HeldGlass::Hole(layer));
+            out.push(held_glass_mark());
+        }
+    }
+    // the glass of the subsurfaces, marked after the layers
+    between.extend(glass);
+    out
 }
 
 /// One slice of a held surface's picture drawn into a new texture, with caches of its own.
@@ -796,7 +849,8 @@ fn bar_shown(p: &SceneParams<'_>, look: Option<crate::menu_bar::BarLook>) -> (f6
 /// The held persistent surfaces of `layer` whose component connection ended (D19), front to back, as the live
 /// surfaces drew them: each one's last picture with its backdrops drawn live among its slices, a held menu bar offset
 /// and faded as the output's menu bar shows, and nothing of a surface that gives way while a full-screen window covers
-/// the output (`covered`); then their holes, behind the pictures. The backdrop captures of a held menu bar go to
+/// the output (`covered`). A hole of their layers is drawn live where the live layer drew it, between the slices of the
+/// picture; one whose place the picture does not know, behind the pictures. The backdrop captures of a held menu bar go to
 /// `captures`.
 fn held_elements(
     p: &mut SceneParams<'_>,
@@ -827,6 +881,11 @@ fn held_elements(
             key: &hold.key,
             dy,
             opacity,
+            placed: hold
+                .picture
+                .as_ref()
+                .map(|picture| picture.backdrops.holes())
+                .unwrap_or_default(),
         });
         let Some(picture) = &hold.picture else {
             continue;
@@ -852,12 +911,13 @@ fn held_elements(
                 vec![Some(held_memory_piece(buffer, *size, index, at, opacity))]
             }
         };
+        let on = shown.last().expect("the hold was just noted");
         out.extend(held_picture_pieces(
             p,
             slices,
             &picture.backdrops,
             (at.x, at.y),
-            opacity,
+            on,
             menu_bar,
             captures,
         ));
@@ -872,6 +932,8 @@ pub(super) struct HeldShown<'a> {
     pub key: &'a str,
     pub dy: f64,
     pub opacity: f32,
+    /// The layers (their `wl_surface`s) whose holes its picture draws among its slices ([`HeldBackdrops`]).
+    pub placed: Vec<smithay::reexports::wayland_server::backend::ObjectId>,
 }
 
 /// The index of the pictures of the held surface `hold`, apart from those of every other held surface.
@@ -883,15 +945,16 @@ fn held_picture_index(hold: &crate::host::HeldSurface) -> u64 {
 }
 
 /// A held surface's picture (`slices`, front to back) and the backdrops it drew ([`HeldBackdrops`]), its top-left
-/// corner at `at` (output-local points), front to back as the live surface draws them: each glass of its layers and
-/// subsurfaces between the slices it lay between, made live as the live surface makes it, then its own backdrops (a
+/// corner at `at` (output-local points), shown as `on` says, front to back as the live surface draws them: each glass
+/// of its layers and subsurfaces between the slices it lay between, made live as the live surface makes it, and each
+/// hole of its layers there too, its source drawn live, then its own backdrops (a
 /// menu bar's through [`bar_backdrop_elements`], its captures going to `captures`).
 fn held_picture_pieces(
     p: &mut SceneParams<'_>,
     slices: Vec<Option<Piece>>,
     held: &HeldBackdrops,
     at: (f64, f64),
-    opacity: f32,
+    on: &HeldShown<'_>,
     menu_bar: bool,
     captures: &mut Vec<Piece>,
 ) -> Vec<Piece> {
@@ -905,6 +968,7 @@ fn held_picture_pieces(
             })
             .collect()
     };
+    let opacity = on.opacity;
     let mut out = Vec::new();
     let mut glass = held.between.iter();
     for slice in slices {
@@ -920,6 +984,9 @@ fn held_picture_pieces(
                     backdrop_elements(p, &moved(areas), opacity, WindowState::Active),
                     bound,
                 ));
+            }
+            Some(HeldGlass::Hole(layer)) => {
+                out.extend(super::holes::held_hole_in_slot(p, on, layer));
             }
             None => {}
         }

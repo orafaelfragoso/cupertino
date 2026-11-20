@@ -186,19 +186,41 @@ enum Op {
 
 /// An animation queued in a parent's state and not yet applied, wherever that state is (pending, or cached by a
 /// commit not yet applied): it counts against its client's [`MAX_ANIMATIONS`] until it is applied or dropped with
-/// the state.
-struct Queued(Arc<AtomicUsize>);
+/// the state. One that a later commit's request of the same layer and property makes moot before it applies
+/// ([`LayerOps::follow`]) no longer counts, and is answered `replaced` with the next tick ([`Layers::superseded`]).
+struct Queued {
+    count: Arc<AtomicUsize>,
+    /// The layer object it animates, which hears `replaced` once it is superseded.
+    layer: CupertinoLayerV1,
+    superseded: Superseded,
+}
+
+/// Animations a later request superseded before they applied, to be answered `replaced`: the layer object, the
+/// animation's serial and its property.
+type Superseded = Arc<Mutex<Vec<(CupertinoLayerV1, u32, usize)>>>;
 
 impl Queued {
-    fn new(count: &Arc<AtomicUsize>) -> Self {
+    fn new(count: &Arc<AtomicUsize>, layer: &CupertinoLayerV1, superseded: &Superseded) -> Self {
         count.fetch_add(1, Ordering::Relaxed);
-        Self(count.clone())
+        Self {
+            count: count.clone(),
+            layer: layer.clone(),
+            superseded: superseded.clone(),
+        }
+    }
+
+    /// Answer the animation `serial` of property `prop` as replaced with the next tick, and count it no longer.
+    fn supersede(self, serial: u32, prop: usize) {
+        self.superseded
+            .lock()
+            .unwrap()
+            .push((self.layer.clone(), serial, prop));
     }
 }
 
 impl Drop for Queued {
     fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::Relaxed);
+        self.count.fetch_sub(1, Ordering::Relaxed);
     }
 }
 
@@ -218,16 +240,23 @@ pub struct LayerOps {
     ops: Vec<(u64, Op)>,
 }
 
+impl Op {
+    /// The property a value, an animation or a cancel is of.
+    fn property(&self) -> Option<usize> {
+        match self {
+            Op::Set(p, _) | Op::Cancel(p) | Op::Animate { prop: p, .. } => Some(*p),
+            _ => None,
+        }
+    }
+}
+
 impl LayerOps {
     /// Queue `op` of the layer `serial`, dropping what it makes moot: an earlier value of the same property or an
     /// earlier look of the same kind, and a cancel that repeats one with no animation of the property between. So
     /// requests repeated without a commit do not pile up.
     fn push(&mut self, serial: u64, op: Op) {
         use std::mem::discriminant;
-        let of = |o: &Op| match o {
-            Op::Set(p, _) | Op::Cancel(p) | Op::Animate { prop: p, .. } => Some(*p),
-            _ => None,
-        };
+        let of = Op::property;
         match &op {
             Op::Set(prop, _) => self
                 .ops
@@ -256,6 +285,80 @@ impl LayerOps {
         }
         self.ops.push((serial, op));
     }
+
+    /// Queue `op` of the layer `serial`, a request of a later commit than those queued, dropping what it makes moot
+    /// once the requests apply together: what a value replaces (an earlier value, animation or cancel of the
+    /// property), an earlier animation of the property that an animation or a cancel replaces, a cancel that follows a
+    /// value or a cancel of the property with no animation between, an earlier look of the same kind, and every
+    /// request of a layer destroyed, its creation among them. A dropped animation is answered `replaced`
+    /// ([`Queued::supersede`]). The requests then apply as they would one commit after another, except that an
+    /// animation never shown leaves no motion for the next to take up, and what one parent keeps is bounded by its
+    /// layers however many commits merge into it ([`Cacheable::merge_into`]).
+    fn follow(&mut self, serial: u64, op: Op) {
+        use std::mem::discriminant;
+        let ours = |s: u64| s == serial;
+        match &op {
+            Op::Create { .. } => {}
+            Op::Destroy => {
+                let created = self
+                    .ops
+                    .iter()
+                    .any(|(s, o)| ours(*s) && matches!(o, Op::Create { .. }));
+                self.drop_where(|s, _| ours(s));
+                if created {
+                    return;
+                }
+            }
+            Op::Set(prop, _) => {
+                let prop = Some(*prop);
+                self.drop_where(|s, o| ours(s) && o.property() == prop);
+            }
+            Op::Animate { prop, .. } => {
+                let prop = *prop;
+                self.drop_where(|s, o| {
+                    ours(s) && matches!(o, Op::Animate { prop: p, .. } if *p == prop)
+                });
+            }
+            Op::Cancel(prop) => {
+                let prop = *prop;
+                self.drop_where(|s, o| {
+                    ours(s) && matches!(o, Op::Animate { prop: p, .. } if *p == prop)
+                });
+                // what is left of the property is a value or a cancel, which this one would repeat
+                if self
+                    .ops
+                    .iter()
+                    .any(|(s, o)| ours(*s) && o.property() == Some(prop))
+                {
+                    return;
+                }
+            }
+            look => {
+                let kind = discriminant(look);
+                self.drop_where(|s, o| ours(s) && discriminant(o) == kind);
+            }
+        }
+        self.ops.push((serial, op));
+    }
+
+    /// Drop the requests `moot` picks, answering an animation among them `replaced`.
+    fn drop_where(&mut self, moot: impl Fn(u64, &Op) -> bool) {
+        let mut kept = Vec::with_capacity(self.ops.len());
+        for (s, op) in std::mem::take(&mut self.ops) {
+            if !moot(s, &op) {
+                kept.push((s, op));
+            } else if let Op::Animate {
+                serial,
+                prop,
+                _queued: queued,
+                ..
+            } = op
+            {
+                queued.supersede(serial, prop);
+            }
+        }
+        self.ops = kept;
+    }
 }
 
 impl Cacheable for LayerOps {
@@ -263,8 +366,12 @@ impl Cacheable for LayerOps {
         std::mem::take(self)
     }
 
+    /// A later commit's requests follow these ([`LayerOps::follow`]), as they do when a commit merges into one a
+    /// transaction keeps (Smithay's coalescing blocker) or a cached state applies.
     fn merge_into(self, into: &mut Self, _: &DisplayHandle) {
-        into.ops.extend(self.ops);
+        for (serial, op) in self.ops {
+            into.follow(serial, op);
+        }
     }
 }
 
@@ -278,6 +385,15 @@ struct Waiting {
     velocity: f64,
     samples: Option<Arc<[f32]>>,
     since: f64,
+}
+
+/// The value property `prop` of a new layer starts at: opacity and scale at 1, the rest at 0.
+fn initial(prop: usize) -> f64 {
+    if prop == 4 || prop == 5 {
+        1.0
+    } else {
+        0.0
+    }
 }
 
 /// A committed layer of a parent.
@@ -311,9 +427,7 @@ pub struct LayerModel {
 
 impl LayerModel {
     fn new(serial: u64, surface: WlSurface, resource: CupertinoLayerV1, whole: bool) -> Self {
-        // opacity and scale start at 1, the rest at 0
-        let props =
-            std::array::from_fn(|i| LayerProperty::new(if i == 4 || i == 5 { 1.0 } else { 0.0 }));
+        let props = std::array::from_fn(|i| LayerProperty::new(initial(i)));
         Self {
             serial,
             surface,
@@ -551,6 +665,8 @@ pub struct Layers {
     held: HashMap<ClientId, usize>,
     /// Animations each client has queued and not yet applied ([`Queued`]).
     queued: HashMap<ClientId, Arc<AtomicUsize>>,
+    /// Queued animations a later request made moot before they applied, answered `replaced` with the next tick.
+    superseded: Superseded,
 }
 
 impl Layers {
@@ -560,6 +676,7 @@ impl Layers {
             parents: Vec::new(),
             held: HashMap::new(),
             queued: HashMap::new(),
+            superseded: Superseded::default(),
         }
     }
 
@@ -603,9 +720,10 @@ impl Layers {
                 .sum::<usize>()
     }
 
-    /// A count of `client`'s animation, held while it is queued.
-    fn queue_animation(&mut self, client: &ClientId) -> Queued {
-        Queued::new(self.queued.entry(client.clone()).or_default())
+    /// A count of `client`'s animation of `layer`, held while it is queued.
+    fn queue_animation(&mut self, client: &ClientId, layer: &CupertinoLayerV1) -> Queued {
+        let count = self.queued.entry(client.clone()).or_default();
+        Queued::new(count, layer, &self.superseded)
     }
 }
 
@@ -778,8 +896,10 @@ impl Cupertino {
         })
     }
 
-    /// Start animations no frame showed in time, and send `finished` and `settled`.
+    /// Start animations no frame showed in time, and send `finished`, `settled` and the `replaced` of animations
+    /// superseded before they applied.
     pub fn tick_layers(&mut self, now: f64) {
+        self.answer_superseded(now);
         self.layers.parents.retain(|p| p.is_alive());
         let mut redraw = false;
         let reduce_motion = self.display_options().reduce_motion;
@@ -809,6 +929,31 @@ impl Cupertino {
         }
         if redraw {
             self.request_redraw();
+        }
+    }
+
+    /// Answer each animation a later request superseded before it applied `replaced`, with what its layer shows at
+    /// `now` (where a layer not yet applied starts), the start of the motion that follows.
+    fn answer_superseded(&mut self, now: f64) {
+        let superseded = std::mem::take(&mut *self.layers.superseded.lock().unwrap());
+        for (layer, serial, prop) in superseded {
+            let Some(data) = layer.data::<LayerData>().filter(|_| layer.is_alive()) else {
+                continue;
+            };
+            let shown = data
+                .parent
+                .as_ref()
+                .filter(|p| p.is_alive())
+                .and_then(|parent| {
+                    with_parent(parent, |layers| {
+                        layers
+                            .iter()
+                            .find(|l| l.serial == data.serial)
+                            .map(|l| (l.value(prop, now), l.props[prop].velocity(now)))
+                    })
+                });
+            let (value, velocity) = shown.unwrap_or((initial(prop), 0.0));
+            layer.replaced(serial, value, velocity);
         }
     }
 }
@@ -1104,7 +1249,7 @@ impl Dispatch<CupertinoLayerV1, LayerData> for Cupertino {
                     format!("a client has at most {MAX_ANIMATIONS} animations"),
                 );
             }
-            let queued = state.layers.queue_animation(&data.client);
+            let queued = state.layers.queue_animation(&data.client, layer);
             data.queue(Op::Animate {
                 serial,
                 prop,
@@ -1191,7 +1336,7 @@ impl Dispatch<CupertinoLayerV1, LayerData> for Cupertino {
                     .map(|&v| held(prop, f64::from(v)) as f32)
                     .collect();
                 let to = f64::from(*values.last().expect("two samples at least"));
-                let queued = state.layers.queue_animation(&data.client);
+                let queued = state.layers.queue_animation(&data.client, layer);
                 data.queue(Op::Animate {
                     serial,
                     prop,

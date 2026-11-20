@@ -417,10 +417,12 @@ impl TransactionManager {
             if p.withdrawn {
                 continue;
             }
-            for s in &p.staged {
-                self.staged_surface_owner.remove(&s.surface_id);
+            // a surface staged again since (its part applied, it joined a newer transaction) stays in that one
+            for s in p.staged.drain(..) {
+                if self.staged_surface_owner.get(&s.surface_id) == Some(&(tx_id, p.id)) {
+                    self.staged_surface_owner.remove(&s.surface_id);
+                }
             }
-            p.staged.clear();
             if before_start {
                 changes.extend(std::mem::take(&mut p.window_changes));
             } else {

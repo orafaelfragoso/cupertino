@@ -60,6 +60,14 @@ pub trait Cacheable: Default {
     fn commit(&mut self, dh: &DisplayHandle) -> Self;
     /// Merge a state update into the current state
     fn merge_into(self, into: &mut Self, dh: &DisplayHandle);
+    /// Merge the state of a later commit into an earlier state of the same surface that a coalescing
+    /// blocker holds ([`add_coalescing_blocker`](super::add_coalescing_blocker))
+    ///
+    /// The default merges as [`Cacheable::merge_into`]. A state that would grow with each merged commit
+    /// bounds what it keeps here, as a blocked surface may merge any number of commits.
+    fn merge_coalesced(self, into: &mut Self, dh: &DisplayHandle) {
+        self.merge_into(into, dh)
+    }
 }
 
 /// Double buffered cached state of type `T`
@@ -140,7 +148,7 @@ impl<T: Cacheable + 'static> Cache for Mutex<CachedState<T>> {
         while me.cache.get(first).is_some_and(|&(s, _)| s <= to) {
             let (_, state) = me.cache.remove(first).unwrap();
             match collapsed.as_mut() {
-                Some(into) => state.merge_into(into, dh),
+                Some(into) => state.merge_coalesced(into, dh),
                 None => collapsed = Some(state),
             }
         }
@@ -245,8 +253,8 @@ impl MultiCache {
 
     /// Merge the cached states from commit id `from` to `to` into one, identified by `to`
     ///
-    /// Each state is merged into the one before it with `Cacheable::merge_into`, as applying them
-    /// in order would merge them into the current state, so the merged state applies as they would.
+    /// Each state is merged into the one before it with `Cacheable::merge_coalesced`, as applying
+    /// them in order would merge them into the current state, so the merged state applies as they would.
     pub(crate) fn collapse(&self, from: Serial, to: Serial, dh: &DisplayHandle) {
         for cache in &self.caches {
             cache.collapse(from, to, dh);

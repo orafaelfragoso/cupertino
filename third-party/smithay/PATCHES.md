@@ -96,13 +96,16 @@ prefixed, applied without fuzz.
    - What: `compositor::add_coalescing_blocker` adds a blocker that, while pending, has the surface's later commits
      merged into the state it blocks instead of queued as states of their own: `TransactionQueue` merges the new
      transaction into the last queued one it shares a surface with (keeping per-surface commit order), and
-     `MultiCache` merges the surface's cached states between the two commit ids with `Cacheable::merge_into`, which
-     releases a replaced buffer, adds up damage and discards superseded presentation feedback. Released blockers of
-     the merged transactions are dropped. `add_blocker` and every other commit are unchanged.
+     `MultiCache` merges the surface's cached states between the two commit ids with `Cacheable::merge_coalesced`
+     (a new trait method that defaults to `Cacheable::merge_into`), which releases a replaced buffer, adds up damage
+     (`SurfaceAttributes` keeps at most `MAX_COALESCED_DAMAGE` rectangles, past which its damage becomes the
+     bounding rectangle of each coordinate space) and discards superseded presentation feedback. Released blockers of
+     the merged transactions are dropped. `add_blocker`, `merge_into` and every other commit are unchanged.
    - Why: the compositor keeps a staged surface's commits until its transaction part applies, for as long as a
-     gesture waits; kept as separate states, each held its buffer until then.
-   - Files: `CHANGELOG.md`, `src/wayland/compositor/cache.rs`, `src/wayland/compositor/mod.rs`,
-     `src/wayland/compositor/transaction.rs`, `src/wayland/compositor/tree.rs`.
+     gesture waits; kept as separate states, each held its buffer until then, and merged, damage must not grow with
+     every commit.
+   - Files: `CHANGELOG.md`, `src/wayland/compositor/cache.rs`, `src/wayland/compositor/handlers.rs`,
+     `src/wayland/compositor/mod.rs`, `src/wayland/compositor/transaction.rs`, `src/wayland/compositor/tree.rs`.
 
 ## Changing the tree
 

@@ -21,8 +21,10 @@ use std::process::Command;
 use cupertino_input::ScreenshotRequest;
 use cupertino_peer::ProcessHandle;
 use smithay::desktop::layer_map_for_output;
+use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
+use smithay::reexports::wayland_server::Resource;
 
-use crate::authorization::{ClientCapabilitySet, ShellRole};
+use crate::authorization::{ClientCapabilitySet, Holder, ShellRole};
 use crate::shell_connection::{bind_holder, connect_bound_client, connect_client, hand_over};
 use crate::state::{ClientState, Cupertino};
 
@@ -93,6 +95,27 @@ impl Cupertino {
             &self.display_handle,
             ClientState::detached(capture_capabilities()),
         )
+    }
+
+    /// Whether `surface` is drawn by a screenshot process the server started and still holds: on the connection the
+    /// server made for it (its holder) or on one the process opened itself (the connection's peer). Known by the
+    /// process the server holds the pidfd of, never by a title, an app id or a namespace, so every surface of the
+    /// program is one, whatever it draws (`crate::control` keeps desktop control away from them).
+    pub fn is_screenshot_surface(&self, surface: &WlSurface) -> bool {
+        let Some(client) = surface.client() else {
+            return false;
+        };
+        let Some(data) = client.get_data::<ClientState>() else {
+            return false;
+        };
+        let holder = match data.holder.get() {
+            Some(Holder::Process(process)) => Some(process),
+            _ => None,
+        };
+        holder
+            .into_iter()
+            .chain(data.peer.as_ref())
+            .any(|process| self.capture.launched.holds(process))
     }
 
     /// Whether a screenshot overlay or toolbar is on an output.

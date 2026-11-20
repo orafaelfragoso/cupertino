@@ -13,15 +13,21 @@ const MAX_KEY_CODE: u32 = 255;
 const MAX_AXIS_POINTS: f64 = 4096.0;
 
 impl Cupertino {
-    fn control_protected_input(
+    /// Whether desktop control keeps away from `root`, the root surface of a window or a layer surface: a protected
+    /// session panel, the authentication prompt (the polkit agent's and the keyring prompter's surfaces), the lock
+    /// screen and login, the portal's prompts, and every surface of a screenshot program the server started (its
+    /// capture overlay, the colour picker and the Share Screen chooser, [`Cupertino::is_screenshot_surface`]). Its input
+    /// does not reach them, observation does not list them and actions do not reach their publications.
+    pub(super) fn control_protected(
         &self,
-        surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+        root: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
     ) -> bool {
         use smithay::reexports::wayland_server::Resource;
-        protected_surface(surface)
-            || crate::authorization::is_prompt(surface)
-            || self.is_portal_prompt(surface)
-            || surface.client().is_some_and(|client| {
+        protected_surface(root)
+            || crate::authorization::is_prompt(root)
+            || self.is_portal_prompt(root)
+            || self.is_screenshot_surface(root)
+            || root.client().is_some_and(|client| {
                 crate::authorization::authorized(
                     &client,
                     crate::authorization::ShellRole::SessionLock,
@@ -87,14 +93,14 @@ impl Cupertino {
             .pointer
             .grab_start_data()
             .and_then(|g| g.focus)
-            .is_some_and(|(s, _)| self.control_protected_input(&self.shell_surface_root(&s)))
+            .is_some_and(|(s, _)| self.control_protected(&self.shell_surface_root(&s)))
         {
             return Err(session::Refusal::Blocked);
         }
         let point = Point::from((g.rect.0 + x, g.rect.1 + y));
         if self
             .surface_under(point)
-            .is_some_and(|(s, _)| self.control_protected_input(&self.shell_surface_root(&s)))
+            .is_some_and(|(s, _)| self.control_protected(&self.shell_surface_root(&s)))
         {
             return Err(session::Refusal::Blocked);
         }
@@ -117,7 +123,7 @@ impl Cupertino {
             .ok_or(session::Refusal::OutsideScope)?;
         if let Some(focus) = self.seat.get_keyboard().and_then(|k| k.current_focus()) {
             let root = self.shell_surface_root(&focus);
-            if self.control_protected_input(&root) {
+            if self.control_protected(&root) {
                 return Err(session::Refusal::Blocked);
             }
             if let Some(id) = self.window_id_for_surface(&root) {

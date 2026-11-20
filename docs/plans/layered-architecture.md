@@ -16,9 +16,9 @@ Updated by the lead at every merge.
 | | |
 |---|---|
 | Current wave | 6 |
-| Running tasks | W6.2 follow-up: where the host's heap goes; the host's profile timeline |
+| Running tasks | none |
 | Enforced layers | foundation, system, graphics, models, platform, protocol, transport, render, ui, shellkit, core, services, testing (110 remaining-work lines; zero outside `shell` and `apps`) |
-| Waiting on the owner | W6.2 no-go (0.81 of the two processes' PSS against the 0.60 limit): go on, change the limit, or fix first |
+| Waiting on the owner | W6.2 no-go: 0.70 of the two processes' PSS after the D5 fix, against the 0.60 limit; go on and judge the limit at W6.close, change it, or stop |
 | Last closed wave | 5 |
 
 ## Contents
@@ -1452,3 +1452,9 @@ One line per change to a decision or approval of a design: date, number, what, w
   asks the `notifications` component, resolved through `ComponentOf`; a component gets `Event::Appearance`; the
   notification list is kept in `$XDG_RUNTIME_DIR/cupertino/notifications-<display>.json`; a swipe's spring-back starts
   from rest and the cards' rise ends when its spring settles.
+- 2026-11-20: lead, after W6.2 (`f9da62d81`): Kit builds the text system with its fonts, the icon set and the theme
+  data once per process, and connections share a compiled xkb keymap per keymap text, as D5 asks; Inter is loaded once.
+  The host with `osd` and `notifications` drops from 23 204 to 20 117 kB idle (anonymous 8 500 to 5 124 kB), 0.70 of
+  the two processes. Left per process outside Kit: `cupertino-kit-shell`'s `design.rs` loads the theme data again,
+  and the menu bar and control panel call `theme::load()` themselves (their W6 tasks); `SystemIcons` holds its lock
+  while drawing and `PackIcons` keeps a second copy of the pixels, not one of D5's forms.

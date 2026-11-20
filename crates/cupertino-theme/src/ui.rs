@@ -403,6 +403,9 @@ pub enum Surface {
     /// The band a toolbar row lays over a page scrolled under it: what passes under the row shows blurred through a
     /// veil of the window's colour; opaque with reduced transparency and in high contrast.
     ToolbarBand,
+    /// The menu bar's strip in the menu bar material, which the compositor draws opaque with Reduce Transparency; the
+    /// bar shows it only then and when the person asks for a backdrop of the bar's own, and no surface otherwise.
+    MenuBar,
 }
 
 /// How a surface paints: the compositor material to ask for, if any, and the opaque fill to paint where there is none.
@@ -472,6 +475,7 @@ impl ThemeTokens {
             Surface::WindowBackground => ("WindowBackground", true),
             Surface::TextBackground => ("TextBackground", true),
             Surface::ToolbarBand => ("ToolbarBand", false),
+            Surface::MenuBar => ("MenuBar", true),
         };
         let material = match surface {
             Surface::DockIndicator => kept.then_some(material),

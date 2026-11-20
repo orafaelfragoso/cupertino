@@ -29,6 +29,9 @@ pub static OSD: Entry = Entry::of::<cupertino_osd::Osd>();
 /// The banners and the notification list (`cupertino-notifications`).
 pub static NOTIFICATIONS: Entry = Entry::of::<cupertino_notifications::Notifications>();
 
+/// The menu bar of every output (`cupertino-menubar`).
+pub static MENUBAR: Entry = Entry::of::<cupertino_menubar::MenuBar>();
+
 /// The components this build of the host runs. A component the server lists that is not here is answered
 /// `unavailable` (`absent`), and the server runs it the way the rest of its configuration says.
-pub static COMPONENTS: [&Entry; 2] = [&OSD, &NOTIFICATIONS];
+pub static COMPONENTS: [&Entry; 3] = [&OSD, &NOTIFICATIONS, &MENUBAR];

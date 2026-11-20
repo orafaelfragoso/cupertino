@@ -1,9 +1,10 @@
-//! Session bus worker of the `cupertino-menubar` process: serves the status notifier watcher, loads menu trees (DBusMenu and GMenuModel exporters)
-//! and follows their changes, reads status items and relays activations.
+//! Session bus worker of the menu bar: serves the status notifier watcher, loads menu trees (DBusMenu and GMenuModel
+//! exporters) and follows their changes, reads status items and relays activations.
 //!
-//! Everything runs on one background thread that drives `zbus` futures. The process talks to it
-//! through [`Worker::send`] and reads [`Event`]s from a channel; each event wakes the process's
-//! loop. A bus call that fails is reported on stderr with what it was for; the bars carry on.
+//! Everything runs as tasks of the session connection's executor, which Kit runs on the component's UI thread between
+//! its frames; nothing in them waits but for the bus. The component talks to the worker through [`Worker::send`] and
+//! hears its [`Event`]s on a channel. A bus call that fails is reported on stderr with what it was for; the bars carry
+//! on.
 
 use crate::dbus::dbusmenu::DBusMenuClient;
 use crate::dbus::gtk::{GtkChange, GtkMenuClient};
@@ -17,7 +18,6 @@ use futures_util::stream::BoxStream;
 use futures_util::StreamExt;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::Duration;
 use zbus::Connection;
@@ -36,14 +36,7 @@ const GTK_RELOADS: u8 = 2;
 
 pub use crate::follow::Waits;
 
-/// The interface of the notification process (`cupertino-notifications`, its `dbus` module).
-const CENTRE_NAME: &str = "org.cupertino.NotificationCenter1";
-const CENTRE_PATH: &str = "/org/cupertino/NotificationCenter1";
-/// The interface of the control panel process (`cupertino-controlcenter`, its `control` module).
-const PANEL_NAME: &str = "org.cupertino.ControlPanel1";
-const PANEL_PATH: &str = "/org/cupertino/ControlPanel1";
-
-/// What the process asks of the worker.
+/// What the component asks of the worker.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Request {
     /// Load the whole tree of a DBusMenu exporter and follow its changes until it is released: every change is
@@ -76,10 +69,6 @@ pub enum Request {
         x: i32,
         y: i32,
     },
-    /// Open or close the list of the notification process.
-    ToggleCentre,
-    /// Open or close the control panel process.
-    TogglePanel,
     /// Own `com.canonical.AppMenu.Registrar` while a bar exists, so toolkits keep their own menu bar otherwise.
     AppMenuRegistrar(bool),
     /// Forget registered menus, by connection and window: their X11 windows are gone.
@@ -87,7 +76,7 @@ pub enum Request {
 }
 
 /// What the worker reports.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum Event {
     /// A menu tree arrived from an exporter: the first, or the tree after a change. A status item's menu comes this
     /// way too, under the item's service and the path of its menu.
@@ -116,9 +105,6 @@ pub enum StartError {
     /// The status notifier watcher could not be served; `NameTaken` means another process owns
     /// `org.kde.StatusNotifierWatcher`.
     Watcher(zbus::Error),
-    Thread(std::io::Error),
-    /// The worker thread ended before it reported.
-    Died,
 }
 
 impl fmt::Display for StartError {
@@ -128,15 +114,13 @@ impl fmt::Display for StartError {
                 write!(f, "another process owns {}", sni::WATCHER_NAME)
             }
             Self::Watcher(e) => write!(f, "cannot serve {}: {e}", sni::WATCHER_NAME),
-            Self::Thread(e) => write!(f, "cannot start the session bus worker: {e}"),
-            Self::Died => write!(f, "the session bus worker ended while starting"),
         }
     }
 }
 
 impl std::error::Error for StartError {}
 
-/// The worker thread is gone, so requests cannot be served any more.
+/// The worker's tasks are gone, so requests cannot be served any more.
 #[derive(Debug)]
 pub struct WorkerGone;
 
@@ -171,19 +155,16 @@ enum Work {
     GtkFlush(GtkMenuProps),
 }
 
-/// Sends events to the process and wakes its loop.
+/// Sends events to the component.
 #[derive(Clone)]
 pub(crate) struct Out {
-    events: mpsc::Sender<Event>,
-    wake: Arc<dyn Fn() + Send + Sync>,
+    events: async_channel::Sender<Event>,
 }
 
 impl Out {
     pub(crate) fn emit(&self, event: Event) {
-        // a closed channel means the process is shutting down and nobody needs the event
-        if self.events.send(event).is_ok() {
-            (self.wake)();
-        }
+        // a closed channel means the component is ending and nobody needs the event; an unbounded one is never full
+        let _ = self.events.try_send(event);
     }
 }
 
@@ -202,41 +183,41 @@ pub(crate) fn report(context: &str, error: impl fmt::Display) {
     eprintln!("cupertino-menubar: {context}: {error}");
 }
 
-/// Handle on the worker thread.
+/// Handle on the worker: its loop runs as long as this lives.
 pub struct Worker {
     work: async_channel::Sender<Work>,
+    _run: zbus::Task<()>,
 }
 
 impl Worker {
-    /// Start the worker on `conn` and wait until it serves the watcher. `wake`
-    /// is called after every event.
-    pub fn start(
+    /// Start the worker on `conn`, once it serves the watcher; its events come on the channel returned.
+    pub async fn start(
         conn: Connection,
-        wake: impl Fn() + Send + Sync + 'static,
-    ) -> Result<(Worker, mpsc::Receiver<Event>), StartError> {
-        Self::start_with(conn, Waits::default(), wake)
+    ) -> Result<(Worker, async_channel::Receiver<Event>), StartError> {
+        Self::start_with(conn, Waits::default()).await
     }
 
     /// [`Worker::start`] with other waits for the answers of menu exporters.
-    pub fn start_with(
+    pub async fn start_with(
         conn: Connection,
         waits: Waits,
-        wake: impl Fn() + Send + Sync + 'static,
-    ) -> Result<(Worker, mpsc::Receiver<Event>), StartError> {
+    ) -> Result<(Worker, async_channel::Receiver<Event>), StartError> {
         let (work_tx, work_rx) = async_channel::unbounded();
-        let (events_tx, events_rx) = mpsc::channel();
-        let (started_tx, started_rx) = mpsc::sync_channel(1);
-        let out = Out {
-            events: events_tx,
-            wake: Arc::new(wake),
-        };
-        let tx = work_tx.clone();
-        std::thread::Builder::new()
-            .name("cupertino-dbus".into())
-            .spawn(move || zbus::block_on(run(conn, work_rx, tx, out, waits, started_tx)))
-            .map_err(StartError::Thread)?;
-        started_rx.recv().map_err(|_| StartError::Died)??;
-        Ok((Worker { work: work_tx }, events_rx))
+        let (events_tx, events_rx) = async_channel::unbounded();
+        let out = Out { events: events_tx };
+        let registrar = serve(&conn, &work_tx, &out).await?;
+        let executor = conn.executor().clone();
+        let run = executor.spawn(
+            run(conn, work_rx, work_tx.clone(), out, waits, registrar),
+            "cupertino-menubar-worker",
+        );
+        Ok((
+            Worker {
+                work: work_tx,
+                _run: run,
+            },
+            events_rx,
+        ))
     }
 
     pub fn send(&self, request: Request) -> Result<(), WorkerGone> {
@@ -246,19 +227,25 @@ impl Worker {
     }
 }
 
-/// Move the events of a blocking channel into the worker's queue.
+/// Move the events of a channel into the worker's queue, as a task of `conn`'s executor.
 fn forward<T: Send + 'static>(
-    rx: mpsc::Receiver<T>,
+    conn: &Connection,
+    rx: async_channel::Receiver<T>,
     tx: async_channel::Sender<Work>,
     wrap: fn(T) -> Work,
 ) {
-    std::thread::spawn(move || {
-        while let Ok(event) = rx.recv() {
-            if tx.send_blocking(wrap(event)).is_err() {
-                break;
-            }
-        }
-    });
+    conn.executor()
+        .spawn(
+            async move {
+                while let Ok(event) = rx.recv().await {
+                    if tx.send(wrap(event)).await.is_err() {
+                        break;
+                    }
+                }
+            },
+            "cupertino-menubar-forward",
+        )
+        .detach();
 }
 
 async fn run(
@@ -267,21 +254,8 @@ async fn run(
     tx: async_channel::Sender<Work>,
     out: Out,
     waits: Waits,
-    started: mpsc::SyncSender<Result<(), StartError>>,
+    registrar: Option<registrar::Registrar>,
 ) {
-    // the caller holds the receiver until this is read
-    let report_start = |result| {
-        started
-            .send(result)
-            .expect("the starting thread waits for the report")
-    };
-    let registrar = match serve(&conn, &tx, &out).await {
-        Ok(registrar) => {
-            report_start(Ok(()));
-            registrar
-        }
-        Err(e) => return report_start(Err(e)),
-    };
     let mut gtk: HashMap<GtkMenuProps, GtkMenuClient> = HashMap::new();
     // the task that forwards each exporter's changes; replacing or dropping it ends the subscription
     let mut follows: HashMap<GtkMenuProps, zbus::Task<()>> = HashMap::new();
@@ -543,7 +517,7 @@ async fn serve(
     let (_service, events) = WatcherService::start(conn)
         .await
         .map_err(StartError::Watcher)?;
-    forward(events, tx.clone(), Work::Watcher);
+    forward(conn, events, tx.clone(), Work::Watcher);
     let out = out.clone();
     let changed: registrar::Changed = Arc::new(move |list| out.emit(Event::Registrations(list)));
     match registrar::serve(conn, changed).await {
@@ -742,23 +716,6 @@ fn handle(
             },
             "cupertino-status-activate",
         ),
-        Request::ToggleCentre => executor.spawn(
-            async move {
-                if let Err(e) = conn
-                    .call_method(
-                        Some(CENTRE_NAME),
-                        CENTRE_PATH,
-                        Some(CENTRE_NAME),
-                        "ToggleCentre",
-                        &(),
-                    )
-                    .await
-                {
-                    report("cannot toggle the notification centre", e);
-                }
-            },
-            "cupertino-toggle-centre",
-        ),
         Request::AppMenuRegistrar(_)
         | Request::ForgetRegistrations(_)
         | Request::FetchDbusMenu(_)
@@ -766,23 +723,6 @@ fn handle(
         | Request::AboutToShow { .. } => {
             unreachable!("the worker's loop handles the registrar and the followed menus")
         }
-        Request::TogglePanel => executor.spawn(
-            async move {
-                if let Err(e) = conn
-                    .call_method(
-                        Some(PANEL_NAME),
-                        PANEL_PATH,
-                        Some(PANEL_NAME),
-                        "Toggle",
-                        &(),
-                    )
-                    .await
-                {
-                    report("cannot toggle the control panel", e);
-                }
-            },
-            "cupertino-toggle-panel",
-        ),
     };
     task.detach();
 }

@@ -351,6 +351,9 @@ fn surfaces_pick_their_material_from_the_appearance_and_options() {
         (reduced(Light), Surface::DockBar, Some("Dock")),
         (prefs(Light), Surface::ToolbarBand, Some("ToolbarBand")),
         (reduced(Light), Surface::ToolbarBand, None),
+        (prefs(Light), Surface::MenuBar, Some("MenuBar")),
+        (reduced(Dark), Surface::MenuBar, Some("MenuBar")),
+        (prefs(DarkHighContrast), Surface::MenuBar, Some("MenuBar")),
         (
             prefs(LightHighContrast),
             Surface::Sidebar,

@@ -56,6 +56,15 @@ fn the_on_screen_displays_fade_at_constant_speed_over_seven_tenths_of_a_second()
 }
 
 #[test]
+fn a_chosen_menu_row_flashes_off_for_two_frames_then_on_for_four() {
+    let at_60_hz = |timing: Timing| (timing.duration() * 60.0).round();
+    assert_eq!(Timing::MENU_CHOICE_OFF, Easing::LINEAR.over(0.034));
+    assert_eq!(Timing::MENU_CHOICE_ON, Easing::LINEAR.over(0.067));
+    assert_eq!(at_60_hz(Timing::MENU_CHOICE_OFF), 2.0);
+    assert_eq!(at_60_hz(Timing::MENU_CHOICE_ON), 4.0);
+}
+
+#[test]
 fn a_named_motion_reads_out_as_the_curves_that_run_it() {
     let tau = std::f64::consts::TAU;
     for (timing, layer) in [

@@ -18,11 +18,12 @@
 //! * [`tone`]: the colours of the bar and its menus, and the tone and scrim of the bar's text over the wallpaper.
 //! * [`dbus`]: DBusMenu client, StatusNotifier watcher / item client,
 //!   GMenuModel reader.
-//! * the logic of the `cupertino-menubar` process (one bar per output as a client
-//!   of the server): [`feed`] (what the bars show, from the server's groups and the bus),
+//! * the menu bar as a component of the shell host ([`MenuBar`], [`component`]: one bar per output on the
+//!   server's `menu_bar` role): [`feed`] (what the bars show, from the server's groups and the bus),
 //!   [`routing`] (keys and controller effects to actions), [`popups`] (placement of the menus'
-//!   popups), [`view`] (the bar and its menus as CupertinoKit windows), [`desktop`] (application names),
-//!   [`worker`] (the session bus thread), [`follow`] (a DBusMenu exporter's tree kept current), [`extras_bus`] (the system services behind the extras) and [`x11`] (the X
+//!   popups), [`view`] (the bar and its menus as CupertinoKit windows), [`icons`] (the rows' and status items'
+//!   icons, loaded on the I/O pool), [`desktop`] (application names),
+//!   [`worker`] (the session bus tasks), [`follow`] (a DBusMenu exporter's tree kept current), [`extras_bus`] (the system services behind the extras) and [`x11`] (the X
 //!   server of the X11 bridge, for menus X11 programs register).
 //!
 //! the bar structure and the interaction model are as designed behaviour of the
@@ -49,12 +50,16 @@ pub mod source;
 pub mod tone;
 pub mod wakeup;
 
+pub mod component;
 pub mod desktop;
 pub mod extras_bus;
 pub mod feed;
 pub mod follow;
+pub mod icons;
 pub mod popups;
 pub mod routing;
 pub mod view;
 pub mod worker;
 pub mod x11;
+
+pub use component::MenuBar;

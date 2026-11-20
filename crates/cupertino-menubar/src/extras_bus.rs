@@ -1,10 +1,8 @@
 //! The services behind the bar's own status items: the network and the Bluetooth adapter through whichever service
 //! owns them (`cupertino-radios`: `cupertino-netd` and `cupertino-btd`, else NetworkManager and BlueZ, the discovery
 //! and readings Settings and the control panel use), the UPower display device and manager (`cupertino-powerd`) on
-//! the system bus, and the do-not-disturb state of `org.cupertino.NotificationCenter1` (`cupertino-notifications`) on
-//! the session bus. It also reads whether the control panel (`org.cupertino.ControlPanel1`,
-//! `cupertino-controlcenter`) and the notification centre's list are open and on which output, so the bar highlights
-//! the item that opened them.
+//! the system bus, and the session agent's entries for the system menu (`org.cupertino.Login1`) on the session bus.
+//! Do not disturb and the panels that are open come from the host bus, not from here (`crate::component`).
 //!
 //! One task reads every service into an [`Extras`] and sends it to the process whenever it differs from the last one
 //! sent. It reads again after any signal on the services' objects (property changes, the network list, devices), when a
@@ -12,8 +10,9 @@
 //! every action. Properties are read from the service every time, never from a cache. A service that cannot be read
 //! hides its item; why is reported on stderr once per new reason.
 //!
-//! The radios are read and changed with calls that wait for their answers, each on a thread of its own, so the
-//! task's executor, which also carries the session bus, never waits for the system bus. Each radio has one reading
+//! The radios are read and changed with calls that wait for their answers, each a task of Kit's I/O pool
+//! (`cupertino_kit::task::io`), so the task's executor, which also carries the session bus and runs on the
+//! component's UI thread, never waits for the system bus. Each radio has one reading
 //! under way at a time ([`Reader`]); a request that comes meanwhile is kept, the newest one, and read when that one
 //! ends. The task waits a moment for a reading it started ([`Waits::fresh`]), which services that answer as they
 //! should need less than; a reading that takes longer leaves the item as it was and is taken when it ends, and one
@@ -32,9 +31,10 @@
 //! bound.
 
 use crate::extras::{
-    BatteryState, BluetoothDevice, BluetoothState, ExtraAction, Extras, FocusLifetime, FocusState,
-    OpenPanels, Passphrase, SessionCaps, SessionState, WifiLink, WifiNetwork, WifiState,
+    BatteryState, BluetoothDevice, BluetoothState, ExtraAction, Extras, Passphrase, SessionCaps,
+    SessionState, WifiLink, WifiNetwork, WifiState,
 };
+use cupertino_kit::core::Command as Task;
 use cupertino_radios::watch::Radio;
 use cupertino_radios::{BluetoothBackend, NetworkBackend};
 use futures_util::future::{select, Either};
@@ -43,7 +43,6 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::pin;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use zbus::message::Type;
@@ -59,10 +58,6 @@ const UPOWER_NAME: &str = "org.freedesktop.UPower";
 const UPOWER_PATH: &str = "/org/freedesktop/UPower";
 const UPOWER_DISPLAY_DEVICE_PATH: &str = "/org/freedesktop/UPower/devices/DisplayDevice";
 const UPOWER_DEVICE_INTERFACE: &str = "org.freedesktop.UPower.Device";
-const CENTRE_NAME: &str = "org.cupertino.NotificationCenter1";
-const CENTRE_PATH: &str = "/org/cupertino/NotificationCenter1";
-const PANEL_NAME: &str = "org.cupertino.ControlPanel1";
-const PANEL_PATH: &str = "/org/cupertino/ControlPanel1";
 
 /// `org.freedesktop.UPower.Device.State` of a charging battery.
 const UPOWER_STATE_CHARGING: u32 = 1;
@@ -131,16 +126,19 @@ struct Queue {
     due: Arc<AtomicU8>,
     /// The session agent the next read takes.
     agent: Arc<Mutex<SessionAgent>>,
+    /// The executor of the session connection, on the component's UI thread: the radios' calls are awaited there.
+    executor: zbus::Executor<'static>,
 }
 
 impl Queue {
-    fn new() -> (Queue, async_channel::Receiver<Command>) {
+    fn new(executor: zbus::Executor<'static>) -> (Queue, async_channel::Receiver<Command>) {
         let (commands, rx) = async_channel::bounded(QUEUE);
         let queue = Queue {
             commands,
             refresh_waiting: Arc::new(AtomicBool::new(false)),
             due: Arc::new(AtomicU8::new(0)),
             agent: Arc::new(Mutex::new(SessionAgent::None)),
+            executor,
         };
         (queue, rx)
     }
@@ -216,44 +214,27 @@ pub struct ExtrasBus {
 }
 
 impl ExtrasBus {
-    /// Start the task on the executor of `session`, with the system bus; `wake` is called after every new [`Extras`].
+    /// Start the task on the executor of `session`, with the system bus `system` gives; every new [`Extras`] comes
+    /// on the channel returned.
     pub fn start(
         session: Connection,
-        wake: impl Fn() + Send + Sync + 'static,
-    ) -> (ExtrasBus, mpsc::Receiver<Extras>) {
-        Self::with_system(session, Connection::system(), wake)
-    }
-
-    /// [`ExtrasBus::start`] with the system bus `system` connects to.
-    pub fn with_system(
-        session: Connection,
         system: impl Future<Output = zbus::Result<Connection>> + Send + 'static,
-        wake: impl Fn() + Send + Sync + 'static,
-    ) -> (ExtrasBus, mpsc::Receiver<Extras>) {
-        Self::with_waits(session, system, Waits::default(), wake)
+    ) -> (ExtrasBus, async_channel::Receiver<Extras>) {
+        Self::with_waits(session, system, Waits::default())
     }
 
-    /// [`ExtrasBus::with_system`] waiting for the radios as `waits` says.
+    /// [`ExtrasBus::start`] waiting for the radios as `waits` says.
     pub fn with_waits(
         session: Connection,
         system: impl Future<Output = zbus::Result<Connection>> + Send + 'static,
         waits: Waits,
-        wake: impl Fn() + Send + Sync + 'static,
-    ) -> (ExtrasBus, mpsc::Receiver<Extras>) {
-        let (queue, rx) = Queue::new();
-        let (out, events) = mpsc::channel();
+    ) -> (ExtrasBus, async_channel::Receiver<Extras>) {
         let executor = session.executor().clone();
+        let (queue, rx) = Queue::new(executor.clone());
+        let (out, events) = async_channel::unbounded();
         executor
             .spawn(
-                run(
-                    session,
-                    system,
-                    waits,
-                    queue.clone(),
-                    rx,
-                    out,
-                    Arc::new(wake),
-                ),
+                run(session, system, waits, queue.clone(), rx, out),
                 "cupertino-extras",
             )
             .detach();
@@ -303,30 +284,6 @@ impl Reasons {
             }
         }
     }
-
-    /// As [`Reasons::note`], for whether a panel is open: one that cannot be read is taken as closed.
-    fn note_panel(
-        &mut self,
-        what: &'static str,
-        result: zbus::Result<Option<String>>,
-    ) -> Option<String> {
-        match result {
-            Ok(value) => {
-                self.0.remove(what);
-                value
-            }
-            Err(e) => {
-                let reason = e.to_string();
-                if self.0.get(what) != Some(&reason) {
-                    eprintln!(
-                        "cupertino-menubar: cannot tell whether the {what} is open: {reason}"
-                    );
-                    self.0.insert(what, reason);
-                }
-                None
-            }
-        }
-    }
 }
 
 async fn run(
@@ -335,8 +292,7 @@ async fn run(
     waits: Waits,
     queue: Queue,
     rx: async_channel::Receiver<Command>,
-    out: mpsc::Sender<Extras>,
-    wake: Arc<dyn Fn() + Send + Sync>,
+    out: async_channel::Sender<Extras>,
 ) {
     let system = match system.await {
         Ok(system) => Some(system),
@@ -369,10 +325,8 @@ async fn run(
             eprintln!("cupertino-menubar: cannot follow the network and Bluetooth services: {e}");
         }
     }
-    // the radios' calls wait for their answers, so they run on threads of their own with this handle
+    // the radios' calls wait for their answers, so they run on the I/O pool with this handle
     let radios: Option<zbus::blocking::Connection> = system.clone().map(Into::into);
-    follow(&session, CENTRE_NAME, CENTRE_PATH, &queue).await;
-    follow(&session, PANEL_NAME, PANEL_PATH, &queue).await;
     follow(&session, LOGIN_NAME, LOGIN_PATH, &queue).await;
 
     let mut reasons = Reasons::default();
@@ -403,11 +357,10 @@ async fn run(
         )
         .await;
         if last.as_ref() != Some(&extras) {
-            // a closed channel means the process is shutting down
-            if out.send(extras.clone()).is_err() {
+            // a closed channel means the component is ending
+            if out.send(extras.clone()).await.is_err() {
                 return;
             }
-            wake();
             last = Some(extras);
         }
         // a reading under way that hides its item when it is not answered, or the list due after a scan, wakes
@@ -427,7 +380,7 @@ async fn run(
         for command in std::iter::once(command).chain(std::iter::from_fn(|| rx.try_recv().ok())) {
             match command {
                 Command::Act(action) => {
-                    if let Err(e) = act(radios.as_ref(), &session, &action, &queue).await {
+                    if let Err(e) = act(radios.as_ref(), &action, &queue).await {
                         eprintln!("cupertino-menubar: {action:?} failed: {e}");
                     }
                 }
@@ -538,28 +491,6 @@ async fn read_all(
         extras.wifi_link.joins = refused.0;
         extras.bluetooth = reasons.note("Bluetooth", reads.bluetooth());
     }
-    extras.focus = reasons.note("Focus", absent_if_not_running(read_focus(session).await));
-    extras.panels = OpenPanels {
-        control_panel: reasons.note_panel(
-            "control panel",
-            absent_if_not_running(
-                read_panel(session, PANEL_NAME, PANEL_PATH, "Shown", "Output").await,
-            ),
-        ),
-        centre: reasons.note_panel(
-            "notification centre",
-            absent_if_not_running(
-                read_panel(
-                    session,
-                    CENTRE_NAME,
-                    CENTRE_PATH,
-                    "CentreShown",
-                    "CentreOutput",
-                )
-                .await,
-            ),
-        ),
-    };
     extras.session = reasons.note(
         "system menu",
         absent_if_not_running(read_session(session, agent, previous).await),
@@ -628,28 +559,22 @@ async fn read_session(
     }))
 }
 
-/// Run `f`, which waits for the system bus, on a thread of its own, and wait for it without holding the executor.
-async fn off_thread<T: Send + 'static>(
-    f: impl FnOnce() -> T + Send + 'static,
-) -> Result<T, String> {
-    let (done, result) = async_channel::bounded(1);
-    std::thread::Builder::new()
-        .name("cupertino-extras-radios".into())
-        .spawn(move || {
-            let _ = done.send_blocking(f());
-        })
-        .map_err(|e| format!("cannot start a thread for the system bus: {e}"))?;
-    result
-        .recv()
-        .await
-        .map_err(|_| "the thread for the system bus ended without an answer".to_owned())
+/// Run `f`, which waits for the system bus, on Kit's I/O pool, and wait for it without holding the executor. A call
+/// should take no longer than the radios' own call timeout; one that does is reported by the pool. Its panic goes on
+/// where this is awaited: the component's UI thread, which the host then restarts.
+async fn on_io_pool<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    let task = match cupertino_kit::task::io(cupertino_radios::CALL_TIMEOUT, f, |value| value) {
+        Task::Perform(task) => task,
+        _ => unreachable!("an I/O task is a future to perform"),
+    };
+    task.await
 }
 
-/// One reading at a time on a thread of its own.
+/// One reading at a time on the I/O pool.
 struct Reader<T> {
     /// The reading under way: where its result arrives, and when it started.
     under_way: Option<(async_channel::Receiver<T>, Instant)>,
-    /// The task waits for the reading under way: it takes the result itself, so the thread need not wake it.
+    /// The task waits for the reading under way: it takes the result itself, so the reading need not wake it.
     awaited: Arc<AtomicBool>,
 }
 
@@ -665,22 +590,23 @@ impl<T: Send + 'static> Reader<T> {
         self.under_way.is_some()
     }
 
-    /// Start `read` on a thread; the task is woken through `queue` when it ends, unless it waits for it then.
+    /// Start `read` on the I/O pool; the task is woken through `queue` when it ends, unless it waits for it then.
     fn start(&mut self, queue: &Queue, read: impl FnOnce() -> T + Send + 'static) {
         let (done, result) = async_channel::bounded(1);
-        let (queue, awaited) = (queue.clone(), self.awaited.clone());
-        let started = std::thread::Builder::new()
-            .name("cupertino-extras-radios".into())
-            .spawn(move || {
-                let _ = done.send_blocking(read());
-                if !awaited.load(Ordering::Acquire) {
-                    let _ = queue.refresh();
-                }
-            });
-        match started {
-            Ok(_) => self.under_way = Some((result, Instant::now())),
-            Err(e) => eprintln!("cupertino-menubar: cannot start a thread for the system bus: {e}"),
-        }
+        let (notify, awaited) = (queue.clone(), self.awaited.clone());
+        queue
+            .executor
+            .spawn(
+                async move {
+                    let _ = done.send(on_io_pool(read).await).await;
+                    if !awaited.load(Ordering::Acquire) {
+                        let _ = notify.refresh();
+                    }
+                },
+                "cupertino-extras-read",
+            )
+            .detach();
+        self.under_way = Some((result, Instant::now()));
     }
 
     /// The result of the reading under way, waiting `wait` for it; `None` while it has not ended.
@@ -698,7 +624,7 @@ impl<T: Send + 'static> Reader<T> {
             // a reading that ended between the wait and the flag woke nobody
             taken = taken.or_else(|| result.try_recv().ok());
         }
-        // a thread that ended without a result (it panicked) is no longer under way either
+        // a reading that ended without a result (the component is ending) is no longer under way either
         if taken.is_some() || result.is_closed() {
             self.under_way = None;
         }
@@ -1025,35 +951,6 @@ async fn read_battery(conn: &Connection) -> zbus::Result<Option<BatteryState>> {
     }))
 }
 
-async fn read_focus(conn: &Connection) -> zbus::Result<Option<FocusState>> {
-    let centre = proxy(conn, CENTRE_NAME, CENTRE_PATH, CENTRE_NAME).await?;
-    let active: bool = centre.get_property("DoNotDisturb").await?;
-    let rows: Vec<(String, String)> = centre.get_property("FocusLifetimes").await?;
-    Ok(Some(FocusState {
-        active,
-        lifetimes: rows
-            .into_iter()
-            .map(|(id, title)| FocusLifetime { id, title })
-            .collect(),
-    }))
-}
-
-/// The output a panel is open on (its connector name, empty while the panel does not know it), read from its
-/// `shown` and `output` properties; `None` while it is closed.
-async fn read_panel(
-    conn: &Connection,
-    name: &'static str,
-    path: &'static str,
-    shown: &'static str,
-    output: &'static str,
-) -> zbus::Result<Option<String>> {
-    let panel = proxy(conn, name, path, name).await?;
-    if !panel.get_property::<bool>(shown).await? {
-        return Ok(None);
-    }
-    Ok(Some(panel.get_property::<String>(output).await?))
-}
-
 fn no_system_bus() -> zbus::Error {
     zbus::Error::Failure("there is no system bus".to_owned())
 }
@@ -1085,16 +982,16 @@ async fn join(
     let system = system
         .ok_or_else(|| "There is no connection to the network service.".to_owned())?
         .clone();
-    off_thread(move || {
+    on_io_pool(move || {
         network(&system)
             .and_then(|backend| backend.join(&system, &ssid, passphrase.as_str()))
             .map_err(|e| cupertino_radios::refusal(&e))
     })
-    .await?
+    .await
 }
 
-/// Carry out `call` on a thread of its own without waiting for its answer, so the bar's other items are read
-/// meanwhile; a failure is reported, and the radios of `due` are read again when it ends.
+/// Carry out `call` on the I/O pool without waiting for its answer, so the bar's other items are read meanwhile; a
+/// failure is reported, and the radios of `due` are read again when it ends.
 fn on_radios(
     system: Option<&zbus::blocking::Connection>,
     queue: &Queue,
@@ -1102,20 +999,23 @@ fn on_radios(
     what: &'static str,
     call: impl FnOnce(&zbus::blocking::Connection) -> zbus::Result<()> + Send + 'static,
 ) -> zbus::Result<()> {
-    let (system, queue) = (system.ok_or_else(no_system_bus)?.clone(), queue.clone());
-    std::thread::Builder::new()
-        .name("cupertino-extras-radios".into())
-        .spawn(move || {
-            if let Err(e) = call(&system) {
-                eprintln!(
-                    "cupertino-menubar: cannot {what}: {}",
-                    cupertino_radios::refusal(&e)
-                );
-            }
-            let _ = queue.radios_due(due);
-        })
-        .map(drop)
-        .map_err(|e| zbus::Error::Failure(format!("cannot start a thread for the system bus: {e}")))
+    let (system, notify) = (system.ok_or_else(no_system_bus)?.clone(), queue.clone());
+    queue
+        .executor
+        .spawn(
+            async move {
+                if let Err(e) = on_io_pool(move || call(&system)).await {
+                    eprintln!(
+                        "cupertino-menubar: cannot {what}: {}",
+                        cupertino_radios::refusal(&e)
+                    );
+                }
+                let _ = notify.radios_due(due);
+            },
+            "cupertino-extras-radios",
+        )
+        .detach();
+    Ok(())
 }
 
 /// Connect or disconnect the Bluetooth device `id` without waiting: a service may answer only once the link is up or
@@ -1127,37 +1027,43 @@ fn link_device(
     connect: bool,
     queue: &Queue,
 ) -> zbus::Result<()> {
-    let (system, id, queue) = (
+    let (system, id, notify) = (
         system.ok_or_else(no_system_bus)?.clone(),
         id.to_owned(),
         queue.clone(),
     );
-    std::thread::Builder::new()
-        .name("cupertino-extras-link".into())
-        .spawn(move || {
-            let done = bluetooth(&system).and_then(|backend| {
-                if connect {
-                    backend.connect(&system, &id)
-                } else {
-                    backend.disconnect(&system, &id)
+    queue
+        .executor
+        .spawn(
+            async move {
+                let device = id.clone();
+                let done = on_io_pool(move || {
+                    bluetooth(&system).and_then(|backend| {
+                        if connect {
+                            backend.connect(&system, &device)
+                        } else {
+                            backend.disconnect(&system, &device)
+                        }
+                    })
+                })
+                .await;
+                if let Err(e) = done {
+                    let action = if connect { "connect" } else { "disconnect" };
+                    eprintln!(
+                        "cupertino-menubar: cannot {action} the Bluetooth device {id}: {}",
+                        cupertino_radios::refusal(&e)
+                    );
                 }
-            });
-            if let Err(e) = done {
-                let action = if connect { "connect" } else { "disconnect" };
-                eprintln!(
-                    "cupertino-menubar: cannot {action} the Bluetooth device {id}: {}",
-                    cupertino_radios::refusal(&e)
-                );
-            }
-            let _ = queue.radios_due(DUE_BLUETOOTH);
-        })
-        .map(drop)
-        .map_err(|e| zbus::Error::Failure(format!("cannot start the device's call: {e}")))
+                let _ = notify.radios_due(DUE_BLUETOOTH);
+            },
+            "cupertino-extras-link",
+        )
+        .detach();
+    Ok(())
 }
 
 async fn act(
     system: Option<&zbus::blocking::Connection>,
-    session: &Connection,
     action: &ExtraAction,
     queue: &Queue,
 ) -> zbus::Result<()> {
@@ -1169,18 +1075,10 @@ async fn act(
         ExtraAction::System(_) => Err(zbus::Error::Failure(
             "system menu actions are carried out by the bar".to_owned(),
         )),
-        ExtraAction::SetDoNotDisturb(on) => {
-            proxy(session, CENTRE_NAME, CENTRE_PATH, CENTRE_NAME)
-                .await?
-                .call("SetDoNotDisturb", &(*on,))
-                .await
-        }
-        ExtraAction::DoNotDisturbFor(id) => {
-            proxy(session, CENTRE_NAME, CENTRE_PATH, CENTRE_NAME)
-                .await?
-                .call("SetDoNotDisturbFor", &(id,))
-                .await
-        }
+        // the notifications component hears do not disturb over the host bus (`SetDoNotDisturb`)
+        ExtraAction::SetDoNotDisturb(_) | ExtraAction::DoNotDisturbFor(_) => Err(
+            zbus::Error::Failure("do not disturb goes over the host bus".to_owned()),
+        ),
         ExtraAction::SetWifiEnabled(on) => {
             let on = *on;
             // a radio switched on scans: the networks it finds are read when the scan has had time to end

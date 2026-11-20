@@ -19,10 +19,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 
-use cupertino_assets::Assets;
 use cupertino_defaults::accessibility::DisplayOptions;
 use cupertino_defaults::menubar::ShownItems;
-use cupertino_icons::{SystemIcons, ThemeIcons};
 use cupertino_keyboard::modifiers::Profile;
 use cupertino_kit::core::{Application, Command, Window};
 use cupertino_kit::geometry::Size;
@@ -41,14 +39,14 @@ use cupertino_menubar::extras::{
 use cupertino_menubar::fallback::{self, HELP_MENU, HELP_SEARCH, SEARCH_PLACEHOLDER};
 use cupertino_menubar::feed::{BarFeed, Shared, StatusState};
 use cupertino_menubar::geom;
+use cupertino_menubar::icons::Loader;
 use cupertino_menubar::item::{ItemId, MenuItem, Shortcut, Toggle};
 use cupertino_menubar::layout::{panel, BarContent, BarMetrics, SlotKey, TextMeasure};
 use cupertino_menubar::popups;
 use cupertino_menubar::tone::{Backdrop, BarTone, SlotTones};
 use cupertino_menubar::view::{
-    self, BarFont, BarId, BarScene, Input, KitMeasure, PromptPhase, PromptScene, RowIcons,
+    self, BarFont, BarId, BarScene, KitMeasure, PromptPhase, PromptScene, RowIcons,
 };
-use tiny_skia::{PixmapPaint, Transform};
 
 /// The app's part of the surface and file names.
 const NAME: &str = "menubar";
@@ -118,28 +116,59 @@ struct Scene {
     solid: bool,
     size: Size,
     icons: Rc<RowIcons>,
+    /// Told when a paint asks for a row icon that is not loaded yet.
+    icons_wanted: async_channel::Receiver<()>,
     prompt: Option<(geom::Point, Passphrase)>,
 }
 
+/// What the capture's windows are told: the view's input, which changes nothing, or that a paint asked for row icons.
+#[derive(Clone, Debug)]
+enum Shown {
+    Input,
+    IconsWanted,
+}
+
+/// The next time a paint asks for row icons.
+fn icons_wanted(wanted: &async_channel::Receiver<()>) -> Command<Shown> {
+    let wanted = wanted.clone();
+    Command::Perform(Box::pin(async move {
+        let _ = wanted.recv().await;
+        Shown::IconsWanted
+    }))
+}
+
 /// The windows of [`NEXT`].
-struct Shown;
+struct Capture;
 
-impl Application for Shown {
+impl Application for Capture {
     type Model = Scene;
-    type Message = Input;
+    type Message = Shown;
 
-    fn init() -> (Scene, Vec<Command<Input>>) {
+    fn init() -> (Scene, Vec<Command<Shown>>) {
         let scene = NEXT
             .with_borrow_mut(Option::take)
             .expect("a scene for the capture");
-        (scene, Vec::new())
+        let listen = icons_wanted(&scene.icons_wanted);
+        (scene, vec![listen])
     }
 
-    fn update(_: &mut Scene, _: Input) -> Vec<Command<Input>> {
-        Vec::new()
+    /// The row icons a paint asked for are loaded the way the component loads them, here at once.
+    fn update(scene: &mut Scene, message: Shown) -> Vec<Command<Shown>> {
+        match message {
+            Shown::Input => Vec::new(),
+            Shown::IconsWanted => {
+                let loader = Loader::default();
+                for request in scene.icons.take_wanted() {
+                    scene
+                        .icons
+                        .loaded(request.key, loader.row_icon(&request).as_ref());
+                }
+                vec![icons_wanted(&scene.icons_wanted)]
+            }
+        }
     }
 
-    fn view(scene: &Scene) -> Vec<Window<Input>> {
+    fn view(scene: &Scene) -> Vec<Window<Shown>> {
         view::windows(
             &BarScene {
                 bar: BarId(0),
@@ -160,38 +189,27 @@ impl Application for Shown {
                     phase: PromptPhase::Editing,
                 }),
             },
-            std::convert::identity,
+            |_| Shown::Input,
         )
     }
 }
 
-/// The font, the metrics and the text measure of the bar and its menus, made from the theme and the text system as
-/// the process makes them.
-fn bar_type(
-    theme: &cupertino_theme::theme::Theme,
-    text: &Arc<TextSystem>,
-) -> (BarFont, BarMetrics, Box<dyn TextMeasure>) {
+/// The font, the metrics and the text measure of the bar and its menus, made from the menu bar's design and the text
+/// system as the component makes them.
+fn bar_type(text: &Arc<TextSystem>) -> (BarFont, BarMetrics, Box<dyn TextMeasure>) {
+    let design = cupertino_kit_shell::design::menu_bar();
     let metrics = BarMetrics {
-        height: theme.shapes.menu_bar_height,
-        selection_corner_radius: theme.shapes.menu_bar_selection_corner_radius,
-        selection_inset_y: BarMetrics::item_inset_y(theme.shapes.menu_bar_height),
+        height: design.height,
+        selection_corner_radius: design.selection_radius,
+        selection_inset_y: BarMetrics::item_inset_y(design.height),
         ..BarMetrics::default()
     };
-    let font = BarFont::new(theme.tokens.typography());
+    let font = BarFont::of(&design);
     let measure = KitMeasure {
         text: Arc::clone(text),
         font,
     };
     (font, metrics, Box::new(measure))
-}
-
-/// The icons of the menu rows, from the asset packs as the process loads them.
-fn row_icons() -> Rc<RowIcons> {
-    let assets = Assets::discover();
-    Rc::new(RowIcons::new(
-        ThemeIcons::new(&assets),
-        SystemIcons::new(&assets),
-    ))
 }
 
 /// The value of state flag `flag`, or the first of `values`; an error unless it is one of them.
@@ -425,13 +443,8 @@ fn type_help(controller: &mut MenuController) -> Result<(), String> {
 }
 
 /// The scene of `surface`: the controller driven to where the surface shows, with fixed times.
-fn scene(
-    surface: &str,
-    theme: &cupertino_theme::theme::Theme,
-    text: &Arc<TextSystem>,
-    tone: (BarTone, bool),
-) -> Result<Scene, String> {
-    let (font, metrics, measure) = bar_type(theme, text);
+fn scene(surface: &str, text: &Arc<TextSystem>, tone: (BarTone, bool)) -> Result<Scene, String> {
+    let (font, metrics, measure) = bar_type(text);
     let height = metrics.height;
     let mut shared = Shared::default();
     let content = content(&mut shared);
@@ -478,6 +491,7 @@ fn scene(
             ))
         }
     }
+    let (wanted, icons_wanted) = async_channel::bounded(1);
     Ok(Scene {
         controller,
         shared,
@@ -485,7 +499,8 @@ fn scene(
         tone: tone.0,
         solid: tone.1,
         size: Size::new(OUTPUT_WIDTH, height),
-        icons: row_icons(),
+        icons: Rc::new(RowIcons::new(wanted)),
+        icons_wanted,
         prompt,
     })
 }
@@ -532,7 +547,7 @@ fn picture_height(bar: Size, sizes: &[Size], places: &[geom::Point]) -> f64 {
 
 /// Run `window` at `scale`, `size` points large (or as placed), until it rests.
 fn settle(
-    driver: &mut TestDriver<Shown>,
+    driver: &mut TestDriver<Capture>,
     window: WindowId,
     scale: f32,
     size: Option<Size>,
@@ -589,13 +604,13 @@ fn draw(surface: &str, state: &State, look: Look, scale: f32) -> Result<Pixmap, 
         differentiate_without_color: false,
     };
     let (rgb, tone, solid) = wallpaper(wallpaper_name, display);
-    let scene = scene(surface, &theme, &options.text, (tone, solid))?;
+    let scene = scene(surface, &options.text, (tone, solid))?;
     let places = places(&scene);
     let bar_size = scene.size;
     NEXT.set(Some(scene));
     let turns = NonZeroU32::new(TURNS).expect("a turn budget");
     let fail = |e: &dyn std::fmt::Debug| format!("the headless window system: {e:?}");
-    let mut driver = TestDriver::<Shown>::new(
+    let mut driver = TestDriver::<Capture>::new(
         Capabilities::default(),
         options,
         ManualClock::new(Timestamp(0)),
@@ -643,20 +658,42 @@ fn compose(
 ) -> Result<Pixmap, String> {
     let px = |points: f64| (points * f64::from(scale)).round() as u32;
     let mut canvas = Pixmap::new(px(size.0), px(size.1)).ok_or("the picture is empty")?;
-    canvas.fill(tiny_skia::Color::from_rgba8(rgb[0], rgb[1], rgb[2], 255));
+    for pixel in canvas.data_mut().as_chunks_mut::<4>().0 {
+        *pixel = [rgb[0], rgb[1], rgb[2], 255];
+    }
     let at = |p: &geom::Point| (px(p.x) as i32, px(p.y) as i32);
     let origins = std::iter::once((0, 0)).chain(places.iter().map(at));
-    for (picture, (x, y)) in pictures.iter().zip(origins) {
-        canvas.draw_pixmap(
-            x,
-            y,
-            picture.as_ref(),
-            &PixmapPaint::default(),
-            Transform::identity(),
-            None,
-        );
+    for (picture, origin) in pictures.iter().zip(origins) {
+        over(&mut canvas, picture, origin);
     }
     Ok(canvas)
+}
+
+/// `picture` drawn over `canvas` with its top-left corner at `origin`: premultiplied source-over, each channel
+/// `s + (d * (255 - sa) + 255) / 256` as the renderer's 8-bit pipeline rounds it.
+fn over(canvas: &mut Pixmap, picture: &Pixmap, origin: (i32, i32)) {
+    let (width, height) = (canvas.width() as i32, canvas.height() as i32);
+    let source = picture.data();
+    let target = canvas.data_mut();
+    for y in 0..picture.height() as i32 {
+        let ty = origin.1 + y;
+        if !(0..height).contains(&ty) {
+            continue;
+        }
+        for x in 0..picture.width() as i32 {
+            let tx = origin.0 + x;
+            if !(0..width).contains(&tx) {
+                continue;
+            }
+            let s = (y * picture.width() as i32 + x) as usize * 4;
+            let t = (ty * width + tx) as usize * 4;
+            let inverse = 255 - u16::from(source[s + 3]);
+            for c in 0..4 {
+                let d = u16::from(target[t + c]);
+                target[t + c] = (u16::from(source[s + c]) + ((d * inverse + 255) >> 8)) as u8;
+            }
+        }
+    }
 }
 
 /// Writes `image` as the PNG `name` in `out`.

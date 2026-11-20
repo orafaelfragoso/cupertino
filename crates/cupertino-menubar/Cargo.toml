@@ -3,12 +3,11 @@ name = "cupertino-menubar"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
-description = "Menu bar for the Cupertino desktop: menu model and layout, interaction state machine, a D-Bus layer (DBusMenu, status notifier items, GMenuModel) and the `cupertino-menubar` process"
+description = "Menu bar for the Cupertino desktop: menu model and layout, interaction state machine, a D-Bus layer (DBusMenu, status notifier items, GMenuModel) and the menu bar component of the shell host"
 [package.metadata.cupertino]
 layer = "shell"
 
 [dependencies]
-cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events" }
 cupertino-apps = { path = "../cupertino-apps" }
 cupertino-assets = { path = "../cupertino-assets" }
 cupertino-defaults = { path = "../cupertino-defaults" }
@@ -18,28 +17,16 @@ cupertino-peer = { path = "../cupertino-peer" }
 cupertino-radios = { path = "../cupertino-radios", features = ["dbus"] }
 cupertino-icons = { path = "../cupertino-icons" }
 cupertino-kit = { path = "../cupertino-kit" }
-cupertino-shell-client = { path = "../cupertino-shell-client" }
-cupertino-ui-text = { path = "../cupertino-ui-text" }
+cupertino-kit-shell = { path = "../cupertino-kit-shell" }
 zeroize = "1"
-cupertino-theme = { path = "../cupertino-theme" }
-cupertino-ui-wayland = { path = "../cupertino-ui-wayland" }
-cupertino-wayland-client = { path = "../cupertino-wayland-client" }
 async-channel = "2"
 async-io = "2"
-tiny-skia = "0.12"
 x11rb = { version = "0.13", default-features = false }
 zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 cupertino-kit = { path = "../cupertino-kit", features = ["test"] }
-
-[[bin]]
-name = "cupertino-menubar"
-path = "src/main.rs"
-
-[[example]]
-name = "fake-login"
 
 [[example]]
 name = "menubar_capture"

@@ -11,7 +11,7 @@
 //! Registered item strings are `service + path` (for example `:1.52/StatusNotifierItem`); a bare
 //! service name means the default path `/StatusNotifierItem`, a bare path means the sender.
 
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex};
 
 use futures_util::{Stream, StreamExt};
 use zbus::message::Header;
@@ -56,7 +56,7 @@ pub enum WatcherEvent {
 struct WatcherState {
     items: Vec<String>,
     hosts: Vec<String>,
-    tx: mpsc::Sender<WatcherEvent>,
+    tx: async_channel::Sender<WatcherEvent>,
 }
 
 struct WatcherObject {
@@ -81,7 +81,7 @@ impl WatcherObject {
                 false
             } else {
                 s.items.push(id.clone());
-                let _ = s.tx.send(WatcherEvent::ItemRegistered {
+                let _ = s.tx.try_send(WatcherEvent::ItemRegistered {
                     id: id.clone(),
                     service: svc,
                     path,
@@ -152,8 +152,8 @@ impl WatcherService {
     /// Serve the watcher on `conn` and claim `org.kde.StatusNotifierWatcher`.
     pub async fn start(
         conn: &Connection,
-    ) -> zbus::Result<(WatcherService, mpsc::Receiver<WatcherEvent>)> {
-        let (tx, rx) = mpsc::channel();
+    ) -> zbus::Result<(WatcherService, async_channel::Receiver<WatcherEvent>)> {
+        let (tx, rx) = async_channel::unbounded();
         let shared = Arc::new(Mutex::new(WatcherState {
             items: Vec::new(),
             hosts: Vec::new(),
@@ -192,8 +192,9 @@ impl WatcherService {
                                 .collect();
                             s.items.retain(|i| !removed.contains(i));
                             for id in &removed {
-                                let _ =
-                                    s.tx.send(WatcherEvent::ItemUnregistered { id: id.clone() });
+                                let _ = s
+                                    .tx
+                                    .try_send(WatcherEvent::ItemUnregistered { id: id.clone() });
                             }
                             removed
                         };
@@ -235,6 +236,7 @@ impl WatcherService {
 pub type ToolTip = (String, Vec<(i32, i32, Vec<u8>)>, String, String);
 
 #[proxy(
+    gen_blocking = false,
     interface = "org.kde.StatusNotifierWatcher",
     default_service = "org.kde.StatusNotifierWatcher",
     default_path = "/StatusNotifierWatcher"
@@ -316,7 +318,11 @@ impl WatcherClient {
     }
 }
 
-#[proxy(interface = "org.kde.StatusNotifierItem", assume_defaults = false)]
+#[proxy(
+    gen_blocking = false,
+    interface = "org.kde.StatusNotifierItem",
+    assume_defaults = false
+)]
 pub trait StatusNotifierItem {
     fn activate(&self, x: i32, y: i32) -> zbus::Result<()>;
 

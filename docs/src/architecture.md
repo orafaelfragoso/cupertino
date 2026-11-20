@@ -17,9 +17,8 @@ A crash in a shell process never takes the desktop down.
 | Process | Owns |
 |---|---|
 | `cupertino-server` | compositing, window policy, input routing, cursor, materials (backdrop rendering), the menu bar layer and its auto-hide, window snapping, supervision of the shell processes |
-| `cupertino-shell` | the shell host: the shell's components, each on a thread of its own, a failed one restarted alone; today the on-screen displays (`osd`: volume, brightness and keyboard-backlight overlays) and the banners and the notification list (`notifications`, `org.freedesktop.Notifications`, the list kept across a restart) |
+| `cupertino-shell` | the shell host: the shell's components, each on a thread of its own, a failed one restarted alone; today the on-screen displays (`osd`: volume, brightness and keyboard-backlight overlays), the banners and the notification list (`notifications`, `org.freedesktop.Notifications`, the list kept across a restart) and the menu bar (`menubar`: status items and application menus, DBusMenu, StatusNotifierItem, GMenuModel) |
 | `cupertino-dock` | the bar, application switcher, overview, workspaces, hot corners, trackpad gestures |
-| `cupertino-menubar` | status items and application menus (DBusMenu, StatusNotifierItem, GMenuModel) |
 | `cupertino-controlcenter` | the control panel and its modules |
 | `cupertino-launcher` | the search and launch panel, and the application browser |
 | `cupertino-windowmanager` | the stage and tiling policy (off by default) |

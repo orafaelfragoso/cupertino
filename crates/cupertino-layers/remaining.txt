@@ -19,7 +19,6 @@ shell disallowed_methods cupertino-controlcenter clippy.toml
 shell disallowed_methods cupertino-dock clippy.toml
 shell disallowed_methods cupertino-launcher clippy.toml
 shell disallowed_methods cupertino-login clippy.toml
-shell disallowed_methods cupertino-menubar clippy.toml
 shell disallowed_methods cupertino-polkit-agent clippy.toml
 shell disallowed_methods cupertino-portal clippy.toml
 shell disallowed_methods cupertino-screenshot clippy.toml
@@ -27,7 +26,6 @@ shell disallowed_methods cupertino-windowmanager clippy.toml
 shell external_crate cupertino-dock -> tiny-skia normal
 shell external_crate cupertino-login -> image normal
 shell external_crate cupertino-login -> tiny-skia normal
-shell external_crate cupertino-menubar -> tiny-skia normal
 shell external_crate cupertino-polkit-agent -> tiny-skia normal
 shell external_crate cupertino-portal -> tiny-skia normal
 shell external_crate cupertino-portal -> wayland-client normal
@@ -53,11 +51,6 @@ shell facade cupertino-login -> cupertino-raster-math normal
 shell facade cupertino-login -> cupertino-shell-client normal
 shell facade cupertino-login -> cupertino-ui-wayland normal
 shell facade cupertino-login -> cupertino-wayland-client normal
-shell facade cupertino-menubar -> cupertino-shell-client normal
-shell facade cupertino-menubar -> cupertino-theme normal
-shell facade cupertino-menubar -> cupertino-ui-text normal
-shell facade cupertino-menubar -> cupertino-ui-wayland normal
-shell facade cupertino-menubar -> cupertino-wayland-client normal
 shell facade cupertino-polkit-agent -> cupertino-shell-client normal
 shell facade cupertino-polkit-agent -> cupertino-theme normal
 shell facade cupertino-polkit-agent -> cupertino-ui-core normal
@@ -84,8 +77,6 @@ shell forbidden_edge cupertino-login -> cupertino-raster-math normal
 shell forbidden_edge cupertino-login -> cupertino-seat normal
 shell forbidden_edge cupertino-login -> cupertino-shell-client normal
 shell forbidden_edge cupertino-login -> cupertino-wayland-client normal
-shell forbidden_edge cupertino-menubar -> cupertino-shell-client normal
-shell forbidden_edge cupertino-menubar -> cupertino-wayland-client normal
 shell forbidden_edge cupertino-polkit-agent -> cupertino-decorations normal
 shell forbidden_edge cupertino-polkit-agent -> cupertino-shell-client normal
 shell forbidden_edge cupertino-polkit-agent -> cupertino-wayland-client normal

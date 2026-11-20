@@ -19,16 +19,17 @@ use crate::layout::{
     Slot, SlotKey, TextMeasure, SYSTEM_MARK_PT,
 };
 use crate::search::{self, Match};
+use cupertino_kit::motion::Timing;
+use cupertino_kit::text::{KeyInput, Keymap, Response, TextBuffer, TextFieldKeys};
 use cupertino_kit::typeahead::TypeAhead;
 use cupertino_menu_model::tracking::{
     Edge, Release, SubmenuAim, Tracking, Under, SUBMENU_OPEN_DELAY,
 };
-use cupertino_ui_text::{KeyInput, Keymap, Response, TextBuffer, TextFieldKeys};
 use std::time::Instant;
 
-/// How long the highlight of a chosen row stays off, then on, before the choice is made, in seconds.
-pub const FLASH_OFF: f64 = 0.034;
-pub const FLASH_ON: f64 = 0.067;
+/// How long the highlight of a chosen row stays off, then on, before the choice is made: the catalogue's motions.
+const FLASH_OFF: Timing = Timing::MENU_CHOICE_OFF;
+const FLASH_ON: Timing = Timing::MENU_CHOICE_ON;
 
 /// Identifier of the synthetic root item of the app menu.
 pub const APP_MENU_ROOT: ItemId = ItemId(i32::MIN);
@@ -94,7 +95,7 @@ pub struct ControllerConfig {
     pub click_outside_passthrough: bool,
     /// Hovering another title while a menu is open switches to it.
     pub hover_switch: bool,
-    /// A chosen row flashes ([`FLASH_OFF`], [`FLASH_ON`]) before the choice is made; off, it is made at once.
+    /// A chosen row flashes ([`Timing::MENU_CHOICE_OFF`], [`Timing::MENU_CHOICE_ON`]) before the choice is made; off, it is made at once.
     pub flash_choice: bool,
 }
 
@@ -155,11 +156,11 @@ struct Flash {
 
 impl Flash {
     fn lights(&self) -> f64 {
-        self.start + FLASH_OFF
+        self.start + FLASH_OFF.duration()
     }
 
     fn ends(&self) -> f64 {
-        self.start + FLASH_OFF + FLASH_ON
+        self.start + FLASH_OFF.duration() + FLASH_ON.duration()
     }
 }
 

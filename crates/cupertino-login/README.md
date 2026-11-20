@@ -67,7 +67,7 @@ Every trigger goes through the same request, which does nothing when the session
 **Who may send a signal.** A bus daemon hands a process every signal addressed to its unique name whatever its match rules say,
 and zbus filters a rule's sender only when it is a unique name (or the daemon's own name), so each signal is checked when it
 arrives (`cupertino_peer::signal`). logind's `Lock` is bound to logind's unique name (the reply to the session lookup). `PrepareForSleep`,
-the session manager's `Unlock`, the server's `QuitInterrupted` and `QuitInterruptClosed` (on the session bus) and the power daemon's battery changes count only from the connection that owns
+the session manager's `Unlock`, the server's `QuitInterrupted`, `QuitInterruptClosed` and `SessionActionFailed` (on the session bus) and the power daemon's battery changes count only from the connection that owns
 the sender's well-known name at that moment; a `NameOwnerChanged` (the manager or the power daemon coming and going) only from
 the bus daemon. Anything else is logged (`... not sent by ... was ignored`) and dropped: another user could otherwise unlock the
 screen or lock it, or a program in the session hurry the log out along (a forged `NameOwnerChanged` is also dropped by
@@ -112,6 +112,7 @@ The lines go to stderr. The greeter logs the same `authentication failed` and
 | `cupertino-login: Session1 is carrying out the <log-out\|restart\|shut-down>` | `Session1` took the action; it quits the applications. |
 | `cupertino-login: the <action> did not start: Session1 did not take it: <error>` | No `Session1` (or it refused): nothing is quit, a notification says so. |
 | `cupertino-login: Session1 did not take the sleep: <error>; asking for it directly` | The session manager or logind is asked instead. |
+| `cupertino-login: Session1 could not finish the <action>: <reason>` | `SessionActionFailed`: logind or the session manager refused the last step; the agent is idle again, the saved list is dropped and a notification gives the reason. |
 | `cupertino-login: application did not quit: <app_id> (<reason>)` | `QuitInterrupted`: 45 s passed; interrupt panel shows. |
 | `cupertino-login: the application quit after all` | `QuitInterruptClosed`: the panel closes. |
 | `cupertino-login: force quit: <app_id> (<n> processes)` | Force Quit pressed. |
@@ -315,9 +316,9 @@ in the checkbox row, which has the focus when the panel shows.
   restart and shut down first quit the applications, then the server asks the manager to log out (`LogOut`: the login
   screen takes the console first, then the session ends, so the desktop goes straight to the login screen; logind's
   `TerminateSession` when the manager does not take it) or logind to `Reboot` or `PowerOff`. Only a sleep `Session1` does
-  not take is asked for by the agent itself: the session manager (`RequestPower`), or logind's `Suspend` without one. A restart or shut down logind refuses (another user's session is open, a block inhibitor) is logged by the server and
-  the session goes on; the agent is not told yet, so the saved list stays and the power-button panel stays off until the
-  agent restarts. A sleep the manager or logind refuses is logged by the agent; any other failed sleep call ends the
+  not take is asked for by the agent itself: the session manager (`RequestPower`), or logind's `Suspend` without one. A restart or shut down logind refuses (another user's session is open, a block inhibitor) is logged by the server, which emits `SessionActionFailed(action, reason)`: the agent leaves its
+  logging-out state (the power-button panel and log out work again), drops the saved list and posts "<action> did not
+  start" with the reason, and the session goes on. A sleep the manager or logind refuses is logged by the agent; any other failed sleep call ends the
   process.
 - The words are in `panel::Kind::text`. The countdown is `panel::format_countdown`: seconds up to a minute ("60 seconds"),
   above that full units, at most two, with a no-break space between each number and its unit.

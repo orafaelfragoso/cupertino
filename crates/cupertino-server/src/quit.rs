@@ -23,6 +23,7 @@
 //! | `Sleep` | logind's `Suspend` at once: no application quits |
 //! | `OpenApplications -> as` | the identities of the applications that have toplevels, in the order a log out would quit them: what the session agent saves for "Open my windows again" before it asks for the log out. Only the session agent may call it |
 //! | `QuitInterrupted(s app_id, s reason)` signal | an application did not quit within 45 s, with its `QuitStatus` as the reason; the sequence waits for an answer |
+//! | `SessionActionFailed(s action, s reason)` signal | the final step of `LogOut`, `Restart`, `ShutDown` or `Sleep` was refused or failed (another user logged in, an inhibitor, polkit denied it, no bus): `action` is the method name, `reason` the error. Sent once per failed action and only by the server; Session1 is idle again, so a later request works |
 //! | `QuitInterruptClosed` signal | the application of the last `QuitInterrupted` quit after all: the sequence goes on |
 //! | `RetrySessionAction` | after `QuitInterrupted`: ask the applications to quit again, from the most recently used |
 //! | `CancelSessionAction` | end the sequence: the session goes on, the applications that quit stay closed |
@@ -74,6 +75,18 @@ pub enum SessionAction {
     Sleep,
 }
 
+impl SessionAction {
+    /// The name of the method that asks for it, and what `SessionActionFailed` carries.
+    pub fn method_name(self) -> &'static str {
+        match self {
+            SessionAction::LogOut => "LogOut",
+            SessionAction::Restart => "Restart",
+            SessionAction::ShutDown => "ShutDown",
+            SessionAction::Sleep => "Sleep",
+        }
+    }
+}
+
 /// Phase of a running session-ending application-quit sequence.
 #[derive(Clone, Debug, PartialEq)]
 enum SequenceStep {
@@ -104,6 +117,9 @@ struct Quitting {
     asked: Vec<WindowId>,
 }
 
+/// A stand-in for the final step of an action that answers whether it worked.
+pub type ActionResultSink = Box<dyn FnMut(SessionAction) -> Result<(), String> + Send>;
+
 /// State of the quit sequence and the link to the bus thread.
 #[derive(Default)]
 pub struct Quit {
@@ -112,6 +128,9 @@ pub struct Quit {
     pub(crate) sequence: Option<SessionSequence>,
     /// Optional sink invoked instead of system-bus `LoginManager1`/logind calls (used by headless tests).
     pub action_sink: Option<Box<dyn FnMut(SessionAction) + Send>>,
+    /// Like `action_sink`, but answers whether the final step worked; an `Err` is signalled as `SessionActionFailed`
+    /// (used by headless tests in place of logind). Tried before `action_sink`.
+    pub action_result_sink: Option<ActionResultSink>,
     /// What the bus thread is to emit; `None` until it runs.
     pub(crate) signals: Option<async_channel::Sender<BusOut>>,
     /// What the session interface's properties read, shared with the bus thread; `None` until it runs.
@@ -149,6 +168,11 @@ pub enum BusOut {
     },
     /// The application whose interrupt panel was shown has now quit.
     QuitInterruptClosed,
+    /// The final step of a session action was refused or failed: `action` is [`SessionAction::method_name`].
+    SessionActionFailed {
+        action: String,
+        reason: String,
+    },
     /// The appearance, the accessibility settings or the mice changed: the values now.
     Settings(SessionSettings),
 }
@@ -536,13 +560,22 @@ impl Cupertino {
     /// Carry out `action` once applications have quit (or immediately for `Sleep`). Runs system-bus IPC on a
     /// background thread so the compositor loop never blocks.
     fn dispatch_session_action(&mut self, action: SessionAction) {
+        if let Some(sink) = self.quit.action_result_sink.as_mut() {
+            let result = sink(action);
+            signal_action_result(self.quit.signals.as_ref(), action, result);
+            return;
+        }
         if let Some(sink) = self.quit.action_sink.as_mut() {
             sink(action);
             return;
         }
+        let signals = self.quit.signals.clone();
         let spawned = std::thread::Builder::new()
             .name("session-action".into())
-            .spawn(move || execute_system_session_action(action));
+            .spawn(move || {
+                let result = execute_system_session_action(action);
+                signal_action_result(signals.as_ref(), action, result);
+            });
         if let Err(e) = spawned {
             tracing::error!(?action, error = %e, "cannot spawn session action thread");
         }
@@ -847,14 +880,8 @@ impl Cupertino {
                 let _ = reply.try_send(Ok(self.hosts.shell_host_processes()));
             }
             Call::SessionAction(action, caller, reply) => {
-                let method = match action {
-                    SessionAction::LogOut => "LogOut",
-                    SessionAction::Restart => "Restart",
-                    SessionAction::ShutDown => "ShutDown",
-                    SessionAction::Sleep => "Sleep",
-                };
                 let answer = self
-                    .authorize_call(method, &caller, Need::SettingsClient)
+                    .authorize_call(action.method_name(), &caller, Need::SettingsClient)
                     .map_err(Reject::Caller)
                     .and_then(|()| self.request_session_action(action).map_err(Reject::Refusal));
                 let _ = reply.try_send(answer);
@@ -877,17 +904,29 @@ impl Cupertino {
     }
 }
 
+/// Log a failed final step of a session action and tell the session agent (`SessionActionFailed`); nothing for a success.
+fn signal_action_result(
+    signals: Option<&async_channel::Sender<BusOut>>,
+    action: SessionAction,
+    result: Result<(), String>,
+) {
+    let Err(reason) = result else { return };
+    tracing::error!(?action, reason, "session action: refused or failed");
+    if let Some(signals) = signals {
+        let _ = signals.try_send(BusOut::SessionActionFailed {
+            action: action.method_name().to_owned(),
+            reason,
+        });
+    }
+}
+
 /// System-bus execution of a completed `Session1` action (D13): `LogOut` asks `cupertino-sessiond`
 /// (`org.cupertino.LoginManager1.LogOut`, falling back to logind `TerminateSession`), and `Restart`, `ShutDown`,
 /// `Sleep` ask `org.freedesktop.login1.Manager`.
-fn execute_system_session_action(action: SessionAction) {
-    let conn = match zbus::blocking::Connection::system() {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!(?action, error = %e, "session action: cannot connect to system bus");
-            return;
-        }
-    };
+/// The error text says why it did not happen.
+fn execute_system_session_action(action: SessionAction) -> Result<(), String> {
+    let conn = zbus::blocking::Connection::system()
+        .map_err(|e| format!("cannot connect to the system bus: {e}"))?;
     match action {
         SessionAction::LogOut => {
             let lm = conn.call_method(
@@ -902,18 +941,18 @@ fn execute_system_session_action(action: SessionAction) {
                     error = %e,
                     "session action: LoginManager1.LogOut failed, falling back to logind TerminateSession"
                 );
-                if let Ok(session_id) = std::env::var("XDG_SESSION_ID") {
-                    if let Err(err) = conn.call_method(
-                        Some("org.freedesktop.login1"),
-                        "/org/freedesktop/login1",
-                        Some("org.freedesktop.login1.Manager"),
-                        "TerminateSession",
-                        &(session_id,),
-                    ) {
-                        tracing::error!(error = %err, "session action: logind TerminateSession failed");
-                    }
-                }
+                let session_id = std::env::var("XDG_SESSION_ID")
+                    .map_err(|_| format!("{e}; and the session id is not known"))?;
+                conn.call_method(
+                    Some("org.freedesktop.login1"),
+                    "/org/freedesktop/login1",
+                    Some("org.freedesktop.login1.Manager"),
+                    "TerminateSession",
+                    &(session_id,),
+                )
+                .map_err(|err| format!("{e}; logind TerminateSession: {err}"))?;
             }
+            Ok(())
         }
         SessionAction::Restart | SessionAction::ShutDown | SessionAction::Sleep => {
             let method = match action {
@@ -922,15 +961,15 @@ fn execute_system_session_action(action: SessionAction) {
                 SessionAction::Sleep => "Suspend",
                 SessionAction::LogOut => unreachable!(),
             };
-            if let Err(e) = conn.call_method(
+            conn.call_method(
                 Some("org.freedesktop.login1"),
                 "/org/freedesktop/login1",
                 Some("org.freedesktop.login1.Manager"),
                 method,
                 &(false,),
-            ) {
-                tracing::error!(?action, method, error = %e, "session action: logind call failed");
-            }
+            )
+            .map(drop)
+            .map_err(|e| format!("logind {method}: {e}"))
         }
     }
 }
@@ -1245,6 +1284,13 @@ impl Session1 {
     ) -> zbus::Result<()>;
 
     #[zbus(signal)]
+    async fn session_action_failed(
+        emitter: &SignalEmitter<'_>,
+        action: &str,
+        reason: &str,
+    ) -> zbus::Result<()>;
+
+    #[zbus(signal)]
     async fn quit_interrupt_closed(emitter: &SignalEmitter<'_>) -> zbus::Result<()>;
 }
 
@@ -1337,6 +1383,9 @@ async fn serve_session(
                 Session1::quit_interrupted(&emitter, &app_id, &reason).await?
             }
             BusOut::QuitInterruptClosed => Session1::quit_interrupt_closed(&emitter).await?,
+            BusOut::SessionActionFailed { action, reason } => {
+                Session1::session_action_failed(&emitter, &action, &reason).await?
+            }
             BusOut::Settings(now) => {
                 let before = std::mem::replace(emitted, now.clone());
                 let iface = served.get().await;

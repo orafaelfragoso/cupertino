@@ -327,6 +327,9 @@ impl Session {
                     Some(format!("QuitInterrupted {app_id} {reason}"))
                 }
                 BusOut::QuitInterruptClosed => Some("QuitInterruptClosed".into()),
+                BusOut::SessionActionFailed { action, reason } => {
+                    Some(format!("SessionActionFailed {action} {reason}"))
+                }
                 BusOut::Settings(_) => None,
             })
             .collect()
@@ -376,6 +379,49 @@ fn shm_buffer(
     );
     pool.destroy();
     buffer
+}
+
+#[test]
+fn session1_refused_final_action_signals_once_and_leaves_the_session_idle() {
+    let mut s = Session::new();
+    let attempts = Arc::new(Mutex::new(Vec::<SessionAction>::new()));
+    let seen = Arc::clone(&attempts);
+    // a stand-in logind: the first request is refused, the later ones work
+    s.state.quit.action_result_sink = Some(Box::new(move |action| {
+        let mut seen = seen.lock().unwrap();
+        seen.push(action);
+        if seen.len() == 1 {
+            Err("logind Reboot: another user is logged in".to_owned())
+        } else {
+            Ok(())
+        }
+    }));
+    s.emitted();
+
+    s.state
+        .request_session_action(SessionAction::Restart)
+        .unwrap();
+    s.settle(&mut []);
+    assert_eq!(
+        s.emitted(),
+        vec!["SessionActionFailed Restart logind Reboot: another user is logged in"],
+        "the refusal is signalled once"
+    );
+    assert!(
+        s.state.pending_session_action().is_none(),
+        "Session1 is idle again"
+    );
+
+    s.state
+        .request_session_action(SessionAction::ShutDown)
+        .unwrap();
+    s.settle(&mut []);
+    assert_eq!(
+        *attempts.lock().unwrap(),
+        vec![SessionAction::Restart, SessionAction::ShutDown],
+        "a later request is carried out"
+    );
+    assert!(s.emitted().is_empty(), "a success signals no failure");
 }
 
 #[test]

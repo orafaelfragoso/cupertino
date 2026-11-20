@@ -84,9 +84,12 @@ pub enum Interrupt {
     Interrupted { app: String, reason: String },
     /// `QuitInterruptClosed`: the application quit after all; the sequence goes on.
     Closed,
+    /// `SessionActionFailed`: the final step of `action` (`LogOut`, `Restart`, `ShutDown` or `Sleep`) was refused or
+    /// failed for `reason`; Session1 is idle and the session goes on.
+    ActionFailed { action: String, reason: String },
 }
 
-/// Pass each `QuitInterrupted` and `QuitInterruptClosed` to `notify` from a reader thread; it gets an error once when
+/// Pass each `QuitInterrupted`, `QuitInterruptClosed` and `SessionActionFailed` to `notify` from a reader thread; it gets an error once when
 /// the stream breaks, and nothing after that.
 pub fn watch_interrupts(
     session: &Connection,
@@ -113,6 +116,10 @@ pub fn watch_interrupts(
                             Some(Interrupt::Interrupted { app, reason })
                         }
                         Some("QuitInterruptClosed") => Some(Interrupt::Closed),
+                        Some("SessionActionFailed") => {
+                            let (action, reason) = m.body().deserialize::<(String, String)>()?;
+                            Some(Interrupt::ActionFailed { action, reason })
+                        }
                         // `ApplicationQuit`: the sequence is the server's
                         _ => None,
                     })

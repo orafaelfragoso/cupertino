@@ -81,7 +81,7 @@ pub enum Bus {
     Failed(String),
     /// The power daemon's display device changed, or its watch stopped (the warnings stop; the lock screen goes on).
     Battery(std::result::Result<upower::Report, String>),
-    /// The server's `QuitInterrupted` or `QuitInterruptClosed`.
+    /// The server's `QuitInterrupted`, `QuitInterruptClosed` or `SessionActionFailed`.
     Quit(session::Interrupt),
     /// What the notification daemon lets the lock screen show now ([`lock_notices`]).
     LockNotices(Vec<Notice>),
@@ -1503,6 +1503,10 @@ impl SessionApp {
     /// why), or it quit after all (the panel closes). On a locked session nobody can answer the panel: the action is
     /// cancelled.
     fn quit_signal(&mut self, interrupt: session::Interrupt) -> Result<()> {
+        if let session::Interrupt::ActionFailed { action, reason } = interrupt {
+            self.action_failed(&action, &reason);
+            return Ok(());
+        }
         let Some(quitting) = &mut self.quitting else {
             eprintln!("cupertino-login: quit signal ignored: no action of this agent is under way");
             return Ok(());
@@ -1512,6 +1516,7 @@ impl SessionApp {
                 eprintln!("cupertino-login: the application quit after all");
                 quitting.interrupt = None;
             }
+            session::Interrupt::ActionFailed { .. } => unreachable!("answered above"),
             session::Interrupt::Interrupted { app, reason } => {
                 let reason = Reason::of_status(&reason);
                 eprintln!("cupertino-login: application did not quit: {app} ({reason:?})");
@@ -1526,6 +1531,30 @@ impl SessionApp {
             }
         }
         Ok(())
+    }
+
+    /// The server's final step of an action was refused or failed (`SessionActionFailed`: another user is logged in, an
+    /// inhibitor, polkit denied it): the session goes on, so the log-out state is left, the saved list is dropped and the
+    /// person is told why.
+    fn action_failed(&mut self, action: &str, reason: &str) {
+        eprintln!("cupertino-login: Session1 could not finish the {action}: {reason}");
+        self.logging_out = false;
+        self.quitting = None;
+        self.discard_saved_applications();
+        let summary = match action {
+            "LogOut" => "Log out did not start",
+            "Restart" => "Restart did not start",
+            "ShutDown" => "Shut down did not start",
+            "Sleep" => "Sleep did not start",
+            other => {
+                eprintln!("cupertino-login: SessionActionFailed names an unknown action: {other}");
+                "The action did not start"
+            }
+        };
+        let body = format!("{reason}. The session goes on.");
+        if let Err(e) = session::report_failure(&self.session_bus, summary, &body) {
+            eprintln!("cupertino-login: cannot show that the {action} did not start: {e}");
+        }
     }
 
     fn interrupt_shown(&self) -> bool {

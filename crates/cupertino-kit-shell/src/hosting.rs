@@ -293,6 +293,11 @@ impl Host {
         std::env::remove_var("WAYLAND_SOCKET");
         // Safety: WAYLAND_SOCKET was exclusively handed to this host process by the server.
         let owned = unsafe { OwnedFd::from_raw_fd(raw_fd) };
+        // the server cleared close-on-exec so the fd survived its exec; set again, no program the host starts
+        // inherits the host-role connection
+        rustix::io::fcntl_setfd(&owned, rustix::io::FdFlags::CLOEXEC).map_err(|e| {
+            Error::Protocol(format!("WAYLAND_SOCKET cannot be closed on exec: {e}"))
+        })?;
         Self::from_stream(UnixStream::from(owned))
     }
 

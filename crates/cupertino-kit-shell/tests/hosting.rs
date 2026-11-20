@@ -1,6 +1,7 @@
 //! The hosting runtime through its public interface against a stand-in server: a helper thread's panic fails its
 //! component, a helper that ignores its stop gets its host restarted, a helper's result wakes the task that waits for
-//! it, a component's children are reaped as they end, and a host whose server connection closed hears an error.
+//! it, a component's children are reaped as they end, a host whose server connection closed hears an error, and no
+//! program a host starts inherits its connection.
 
 mod support;
 
@@ -231,6 +232,30 @@ fn a_helper_result_wakes_its_task_and_a_helper_panic_unwinds_it() {
     });
     let panic = unwound.expect_err("the task unwinds with the helper's panic");
     assert_eq!(panic.downcast_ref::<&str>(), Some(&"helper"));
+}
+
+#[test]
+fn no_program_a_host_starts_inherits_its_connection() {
+    use std::os::fd::{AsRawFd, BorrowedFd};
+
+    let (_server, host_end) = Server::start(Kind::Shared, &[]);
+    // the server hands the connection over with close-on-exec cleared, so the fd survives its exec
+    rustix::io::fcntl_setfd(&host_end, rustix::io::FdFlags::empty()).unwrap();
+    let fd = host_end.as_raw_fd();
+    let mut host = connect_host(host_end);
+    wait_for(&mut host, |event| matches!(event, HostEvent::Components(_)));
+    // Safety: `host` owns the fd and lives to the end of the test.
+    let flags = rustix::io::fcntl_getfd(unsafe { BorrowedFd::borrow_raw(fd) }).unwrap();
+    assert!(flags.contains(rustix::io::FdFlags::CLOEXEC));
+    let inherited = std::process::Command::new("test")
+        .arg("-e")
+        .arg(format!("/proc/self/fd/{fd}"))
+        .status()
+        .expect("test runs");
+    assert!(
+        !inherited.success(),
+        "a child of the host holds its host-role connection"
+    );
 }
 
 #[test]

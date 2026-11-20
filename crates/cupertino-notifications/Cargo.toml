@@ -41,12 +41,16 @@ unicode-segmentation = "1.13"
 zbus = { version = "5", optional = true }
 
 [dev-dependencies]
+cupertino-kit = { path = "../cupertino-kit", features = ["test"] }
 zbus = { version = "5", features = ["p2p"] }
 
 [[bin]]
 name = "cupertino-notifications"
 path = "src/main.rs"
 required-features = ["app"]
+
+[[example]]
+name = "notifications_capture"
 
 [[example]]
 name = "notification-daemon"

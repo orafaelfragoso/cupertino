@@ -1,5 +1,6 @@
 //! The hosting runtime through its public interface against a stand-in server: a helper thread's panic fails its
-//! component, a helper that ignores its stop gets its host restarted, a helper's result wakes the task that waits for
+//! component, a panic in a component's teardown after a panic of its loop is caught, a component's end wakes its host's
+//! wait, a helper that ignores its stop gets its host restarted, a helper's result wakes the task that waits for
 //! it, a component's children are reaped as they end, a host whose server connection closed hears an error, and no
 //! program a host starts inherits its connection.
 
@@ -106,6 +107,54 @@ component!(Stuck, ComponentName::LAUNCHER, || {
     Vec::new()
 });
 
+/// A model whose drop panics: dropped while its thread unwinds, it would abort the process.
+struct Brittle;
+
+impl Drop for Brittle {
+    fn drop(&mut self) {
+        panic!("the model panics as it is dropped");
+    }
+}
+
+/// Panics as it handles its first message, and its model panics again in the teardown.
+struct Twice;
+
+impl Application for Twice {
+    type Model = Brittle;
+    type Message = ();
+
+    fn init() -> (Brittle, Vec<Command<()>>) {
+        (Brittle, vec![Command::Perform(Box::pin(async {}))])
+    }
+
+    fn update(_: &mut Brittle, (): ()) -> Vec<Command<()>> {
+        panic!("the control panel panics as it handles a message");
+    }
+
+    fn view(_: &Brittle) -> Vec<Window<()>> {
+        Vec::new()
+    }
+}
+
+impl Program for Twice {
+    fn surface(_: &Brittle, _: &WindowKey) -> Surface {
+        Surface {
+            role: Role::Window,
+            persistent: None,
+            holes: Vec::new(),
+        }
+    }
+
+    fn event(_: Event) -> Option<()> {
+        None
+    }
+}
+
+impl Component for Twice {
+    const NAME: ComponentName = ComponentName::CONTROLCENTER;
+}
+
+static TWICE: Entry = Entry::of::<Twice>();
 static PLACING: Entry = Entry::of::<Placing>();
 static STUCK: Entry = Entry::of::<Stuck>();
 static PANICKING: Entry = Entry::of::<Panicking>();
@@ -184,6 +233,48 @@ fn a_helper_panic_fails_its_component_and_a_child_is_reaped_when_it_ends() {
         window_manager.ended().is_some()
     });
 
+    drop(server);
+}
+
+#[test]
+fn a_panic_in_a_components_teardown_after_its_loop_panicked_is_caught() {
+    let (server, host_end) = Server::start(Kind::Shared, &["controlcenter"]);
+    let mut host = connect_host(host_end);
+    wait_for(&mut host, |event| matches!(event, HostEvent::Components(_)));
+    let environment = cupertino_kit::app::environment().expect("toolkit environment");
+    let runtime = Runtime::for_host(&mut host, Kind::Shared, environment).unwrap();
+    let connection = component_connection(&mut host, "controlcenter");
+    let mut panel = runtime.start(&TWICE, connection).unwrap();
+    // the model outlives the unwind of the loop, so its drop panics outside it and the process goes on
+    eventually("the control panel ends", || panel.ended().is_some());
+    assert_eq!(panel.ended(), Some(Ended::Failed(Failure::Panic)));
+    drop(server);
+}
+
+#[test]
+fn a_components_end_wakes_its_hosts_wait() {
+    let (server, host_end) = Server::start(Kind::Shared, &["osd"]);
+    let mut host = connect_host(host_end);
+    wait_for(&mut host, |event| matches!(event, HostEvent::Components(_)));
+    let environment = cupertino_kit::app::environment().expect("toolkit environment");
+    let runtime = Runtime::for_host(&mut host, Kind::Shared, environment).unwrap();
+    let connection = component_connection(&mut host, "osd");
+    let asked = Instant::now();
+    let mut osd = runtime.start(&PANICKING, connection).unwrap();
+    // the server says nothing more: only the component's end ends a wait before its time
+    let ended = loop {
+        host.wait(PATIENCE).expect("the host's connection stays up");
+        if let Some(ended) = osd.ended() {
+            break ended;
+        }
+        assert!(asked.elapsed() < PATIENCE, "the osd did not end");
+    };
+    assert_eq!(ended, Ended::Failed(Failure::Panic));
+    assert!(
+        asked.elapsed() < PATIENCE / 2,
+        "the wait returned as the component ended, after {:?}",
+        asked.elapsed()
+    );
     drop(server);
 }
 

@@ -4,14 +4,21 @@
 
 use std::fmt;
 
+use cupertino_kit::motion::{Easing, Timing};
+
 /// Segments of the meter (16 segments).
 pub const SEGMENTS: usize = 16;
 
 /// Width of one segment in points (9 x 6).
 pub const SEGMENT_WIDTH: u32 = 9;
 
-/// Linear fade after the hold, in seconds (alpha `1 - t / 0.7`, 0.7 s).
+/// How long the fade after the hold takes, in seconds (alpha `1 - t / 0.7`, 0.7 s): the duration of [`fade`].
 pub const FADE_SECONDS: f64 = 0.7;
+
+/// The fade after the hold: the catalogue's linear easing over [`FADE_SECONDS`].
+pub fn fade() -> Timing {
+    Easing::LINEAR.over(FADE_SECONDS)
+}
 
 /// Below this level a volume shows the muted glyph.
 pub const MUTE_BELOW: f64 = 0.001;
@@ -201,8 +208,8 @@ struct Shown {
     hold: f64,
 }
 
-/// The lifetime of the overlay: a show gives alpha 1 for the hold time the sender supplies, then a linear
-/// fade over [`FADE_SECONDS`], then nothing. A new show replaces the one on screen at any point and restarts the hold
+/// The lifetime of the overlay: a show gives alpha 1 for the hold time the sender supplies, then the [`fade`],
+/// then nothing. A new show replaces the one on screen at any point and restarts the hold
 /// (all four overlays share one priority, so the design rule "a lower priority never replaces a visible one"
 /// never rejects here).
 #[derive(Clone, Copy, Debug, Default)]
@@ -230,7 +237,7 @@ impl Hud {
         match self.shown {
             None => Phase::Hidden,
             Some(shown) if now < shown.at + shown.hold => Phase::Holding,
-            Some(shown) if now < shown.at + shown.hold + FADE_SECONDS => Phase::Fading,
+            Some(shown) if now < shown.at + shown.hold + fade().duration() => Phase::Fading,
             Some(_) => Phase::Hidden,
         }
     }
@@ -247,7 +254,7 @@ impl Hud {
             }),
             Phase::Fading => Some(View {
                 overlay: shown.overlay,
-                alpha: 1.0 - faded / FADE_SECONDS,
+                alpha: 1.0 - fade().value(faded).clamp(0.0, 1.0),
             }),
         }
     }

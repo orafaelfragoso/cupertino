@@ -9,6 +9,8 @@ pub mod capture;
 mod component;
 pub mod consent;
 mod context;
+#[cfg(debug_assertions)]
+mod crash;
 pub mod design;
 pub mod dock;
 pub mod host;
@@ -256,6 +258,7 @@ fn run_as<P: Program>(environment: Environment, lock_screen: bool) -> Result<(),
     };
     context::install(ctx);
     let ran = runtime::run_program::<P>(lock_screen);
+    drop(runtime::take_state());
     drop(context::take());
     ran
 }

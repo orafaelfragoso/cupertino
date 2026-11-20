@@ -104,9 +104,10 @@ package_cupertino-git() {
   cd "$_srcname"
   local bin="${CARGO_TARGET_DIR:-target}/release" gen="$srcdir/gen" lic="$pkgdir/usr/share/licenses/cupertino" name
   for name in cupertino-server cupertino-dock cupertino-menubar cupertino-launcher cupertino-notifications \
-              cupertino-controlcenter cupertino-osd cupertino-screenshot cupertino-control cupertino-windowmanager \
+              cupertino-controlcenter cupertino-screenshot cupertino-control cupertino-windowmanager \
               cupertino-login cupertino-polkit-agent cupertino-keyring-prompter cupertino-portal cupertino-files \
               cupertino-settings cupertino-sessiond cupertino-netd cupertino-btd cupertino-powerd cupertino-audiod cupertino-diagnose \
+              cupertino-shell \
               cupertino; do
     install -Dm755 "$bin/$name" "$pkgdir/usr/bin/$name"
   done

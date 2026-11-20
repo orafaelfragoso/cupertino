@@ -54,11 +54,17 @@ pub(super) fn session<M: Send + 'static>(
             tracing::warn!(error = %e, "the host keeps no handle to the component's bus socket")
         }
     }
+    #[cfg(debug_assertions)]
+    let serving = crate::crash::Serving::of_thread();
     kit_bus::connect_on(
         stream,
         move |connection| async move {
             if let Ok(bus) = &connection {
                 let accepted = prove(&link, bus).await;
+                #[cfg(debug_assertions)]
+                if let Some(serving) = serving {
+                    crate::crash::serve(bus, serving).await;
+                }
                 inbox.push(Event::BusIdentity { accepted });
             }
             connected(connection)

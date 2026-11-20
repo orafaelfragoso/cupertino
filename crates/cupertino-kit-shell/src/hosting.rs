@@ -21,7 +21,7 @@ use cupertino_protocols::client::host::cupertino_host_component_v1::{
 use cupertino_protocols::client::host::cupertino_host_v1::{
     self, CupertinoHostV1, Kind as WireKind,
 };
-use rustix::event::{poll, PollFd, PollFlags};
+use rustix::event::{poll, EventfdFlags, PollFd, PollFlags};
 use rustix::time::Timespec;
 use wayland_client::backend::WaylandError;
 use wayland_client::protocol::wl_registry;
@@ -280,6 +280,30 @@ pub struct Host {
     queue: EventQueue<HostDispatchState>,
     state: HostDispatchState,
     components: HashMap<String, CupertinoHostComponentV1>,
+    /// Signalled as a component of a runtime made from this host ends, so [`Host::wait`] returns then.
+    ends: Arc<Ends>,
+}
+
+/// An event descriptor a component's thread signals as it ends, which the host's wait reads.
+struct Ends(OwnedFd);
+
+impl Ends {
+    fn new() -> Result<Ends, Error> {
+        rustix::event::eventfd(0, EventfdFlags::CLOEXEC | EventfdFlags::NONBLOCK)
+            .map(Ends)
+            .map_err(|e| Error::Protocol(format!("no event descriptor for the host's wait: {e}")))
+    }
+
+    /// A component ended: the host's wait returns.
+    fn signal(&self) {
+        let _ = rustix::io::write(&self.0, &1u64.to_ne_bytes());
+    }
+
+    /// Takes the signals given so far.
+    fn clear(&self) {
+        let mut count = [0u8; 8];
+        let _ = rustix::io::read(&self.0, &mut count);
+    }
 }
 
 impl Host {
@@ -330,11 +354,13 @@ impl Host {
             queue,
             state,
             components: HashMap::new(),
+            ends: Arc::new(Ends::new()?),
         })
     }
 
-    /// Wait up to `timeout` for host protocol events. A connection the server closed, or that failed, is an error:
-    /// the host has no server to run components for.
+    /// Wait up to `timeout` for host protocol events; it returns sooner, with what came meanwhile, as a component
+    /// started on a runtime of this host ends, so the host reads [`Running::ended`] then. A connection the server
+    /// closed, or that failed, is an error: the host has no server to run components for.
     pub fn wait(&mut self, timeout: Duration) -> Result<Vec<HostEvent>, Error> {
         let failed =
             |e: &dyn std::fmt::Display| Error::Protocol(format!("host connection failed: {e}"));
@@ -351,14 +377,21 @@ impl Host {
         }
         if let Some(guard) = self.conn.prepare_read() {
             let fd = guard.connection_fd();
-            let mut fds = [PollFd::new(&fd, PollFlags::IN)];
+            let mut fds = [
+                PollFd::new(&fd, PollFlags::IN),
+                PollFd::new(&self.ends.0, PollFlags::IN),
+            ];
             let timeout = Timespec::try_from(timeout).unwrap_or(Timespec {
                 tv_sec: i64::MAX,
                 tv_nsec: 0,
             });
-            match poll(&mut fds, Some(&timeout)) {
+            let polled = poll(&mut fds, Some(&timeout));
+            if !fds[1].revents().is_empty() {
+                self.ends.clear();
+            }
+            match polled {
                 // readable, hung up or failed: the read says which
-                Ok(n) if n > 0 => match guard.read() {
+                Ok(_) if !fds[0].revents().is_empty() => match guard.read() {
                     Ok(_) => {}
                     Err(WaylandError::Io(e)) if e.kind() == std::io::ErrorKind::WouldBlock => {}
                     Err(e) => return Err(failed(&e)),
@@ -460,6 +493,8 @@ pub struct Runtime {
     /// How a component's helper that ignores its stop asks for the host's restart.
     restart: Option<Restart>,
     reaper: Option<Arc<Reaper>>,
+    /// What a component's thread signals as it ends ([`Host::wait`]).
+    ends: Arc<Ends>,
 }
 
 /// The host's `request_restart`, which a component's handle can send without the host.
@@ -492,6 +527,7 @@ impl Runtime {
                 conn: host.conn.clone(),
             }),
             reaper: Reaper::new(),
+            ends: Arc::clone(&host.ends),
         })
     }
 
@@ -541,6 +577,7 @@ impl Runtime {
             busy: Arc::clone(&busy_since),
         };
         let t_ended = Arc::clone(&ended);
+        let t_ends = Arc::clone(&self.ends);
         let t_bus = Arc::clone(&self.bus);
         let t_fault = Arc::clone(&fault);
 
@@ -555,7 +592,11 @@ impl Runtime {
                     (entry.runner)(&hosting, connection)
                 }));
 
-                // Drop component context inside catch_unwind so teardown panics never abort the host.
+                // the component's state is dropped after the unwind, each part inside catch_unwind: a panic in its
+                // teardown is caught and leaks what was left, and never aborts the host
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    drop(crate::runtime::take_state());
+                }));
                 let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     drop(context::take());
                 }));
@@ -577,6 +618,7 @@ impl Runtime {
                 if let Ok(mut slot) = t_ended.lock() {
                     *slot = Some(final_state);
                 }
+                t_ends.signal();
             })
             .map_err(|e| {
                 self.bus.unregister(sub_id, component);

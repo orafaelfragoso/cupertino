@@ -17,10 +17,10 @@ A crash in a shell process never takes the desktop down.
 | Process | Owns |
 |---|---|
 | `cupertino-server` | compositing, window policy, input routing, cursor, materials (backdrop rendering), the menu bar layer and its auto-hide, window snapping, supervision of the shell processes |
+| `cupertino-shell` | the shell host: the shell's components, each on a thread of its own, a failed one restarted alone; today the on-screen displays (`osd`: volume, brightness and keyboard-backlight overlays) |
 | `cupertino-dock` | the bar, application switcher, overview, workspaces, hot corners, trackpad gestures |
 | `cupertino-menubar` | status items and application menus (DBusMenu, StatusNotifierItem, GMenuModel) |
 | `cupertino-controlcenter` | the control panel and its modules |
-| `cupertino-osd` | volume, brightness and keyboard-backlight overlays |
 | `cupertino-notifications` | banners, the notification list, `org.freedesktop.Notifications` |
 | `cupertino-launcher` | the search and launch panel, and the application browser |
 | `cupertino-windowmanager` | the stage and tiling policy (off by default) |
@@ -73,7 +73,7 @@ as dev-dependencies, and only dev-dependencies point at a `testing` crate. The c
 | `shellkit` (the shell's extension of the toolkit) | `cupertino-kit-shell` | `foundation`, `system`, `protocol`, `transport`, `ui` |
 | `core` (the compositor) | `cupertino-server`, `cupertino-server-backend`, `cupertino-server-input`, `cupertino-server-render` | `foundation`, `graphics`, `models`, `system`, `platform`, `protocol`, `render`, `core` |
 | `services` (processes with no interface of their own) | `cupertino-audiod`, `cupertino-btd`, `cupertino-control`, `cupertino-netd`, `cupertino-powerd`, `cupertino-sessiond` | `foundation`, `models`, `system`, `platform`, `protocol`, `transport`, `services` |
-| `shell` | `cupertino-controlcenter`, `cupertino-dock`, `cupertino-launcher`, `cupertino-login`, `cupertino-menubar`, `cupertino-notifications`, `cupertino-osd`, `cupertino-polkit-agent`, `cupertino-portal`, `cupertino-screenshot`, `cupertino-windowmanager` | `foundation`, `models`, `system`, `protocol`, `ui`, `shellkit`, `shell` |
+| `shell` | `cupertino-controlcenter`, `cupertino-dock`, `cupertino-launcher`, `cupertino-login`, `cupertino-menubar`, `cupertino-notifications`, `cupertino-osd`, `cupertino-polkit-agent`, `cupertino-portal`, `cupertino-screenshot`, `cupertino-shell`, `cupertino-windowmanager` | `foundation`, `models`, `system`, `protocol`, `ui`, `shellkit`, `shell` |
 | `apps` | `cupertino-files`, `cupertino-settings` | `foundation`, `models`, `system`, `protocol`, `ui` |
 | `tools` | `cupertino-cli`, `cupertino-diagnostics`, `cupertino-gpu-shaders`, `cupertino-gpu-slice`, `cupertino-layers`, `xtask` | every layer except `core`, `shell`, `services`, `apps`, `testing` |
 | `testing` (test harnesses, tests that start programs from more than one crate) | `cupertino-session-tests` | every layer |

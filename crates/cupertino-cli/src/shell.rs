@@ -1,6 +1,6 @@
 //! `cupertino shell …`: the shell processes the running desktop's server supervises (the dock, the menu bar, the
 //! launcher…), listed and restarted one at a time through the server's `org.cupertino.Session1` interface on the
-//! session bus.
+//! session bus, and a component of a development build of the shell host made to panic on its own bus connection.
 
 use crate::{Arg, Args, Command, Context, Failure, FailureKind, Group, Reply, Run, Stability};
 use cupertino_diagnostics::dev_builds::older_than_installed;
@@ -27,6 +27,16 @@ const NAME: Arg = Arg::positional(
     "name",
     "the name of the process, as `cupertino shell list` shows it",
 );
+
+/// Where `shell crash` makes the component panic.
+const CRASH_POINTS: &[&str] = &["dispatch", "paint", "helper"];
+
+const AT: Arg = Arg::option(
+    "at",
+    "where the component panics: as its loop dispatches (dispatch, the default), as it next paints (paint), or on a \
+     helper thread (helper)",
+)
+.values(CRASH_POINTS);
 
 const COMMANDS: &[Command] = &[
     Command {
@@ -107,6 +117,34 @@ const COMMANDS: &[Command] = &[
         stability: Stability::Preview,
         args: &[NAME],
         run: Run::Once(use_installed),
+    },
+    Command {
+        path: &["shell", "crash"],
+        summary: "Makes a component of a development build of the shell host panic, to try how the host contains it",
+        description: "Finds the component <name>'s own session bus connection (the unique name the server's \
+                      ComponentOf of org.cupertino.Session1 answers with that component) and calls \
+                      org.cupertino.ShellComponentDebug1.Crash on it, which only a development (debug) build of \
+                      cupertino-shell serves. The component then panics where --at says: as its loop next \
+                      dispatches the shell's events (dispatch, the default), as it next paints a window (paint), or \
+                      on a helper thread it starts at once (helper). Its host tears it down and the server starts it \
+                      again after its restart time, as for any failure; five failures within a minute stop it until \
+                      `cupertino shell restart <name>`.\n\n\
+                      A component that runs nowhere, or has no accepted bus connection, fails with exit code 2 \
+                      (unknown_component); one that runs in a release build of the shell host with exit code 8 \
+                      (not_development_build). The other failures are those of `shell list`.",
+        examples: &[
+            (
+                "cupertino shell crash osd",
+                "Make the on-screen displays panic as their loop next dispatches.",
+            ),
+            (
+                "cupertino shell crash osd --at paint",
+                "Make them panic as they next draw.",
+            ),
+        ],
+        stability: Stability::Preview,
+        args: &[NAME, AT],
+        run: Run::Once(crash),
     },
 ];
 
@@ -238,12 +276,8 @@ fn bus_address(cx: &Context) -> Result<String, Failure> {
     ))
 }
 
-/// Calls `method` of the server with `body` and reads its answer as `T`.
-fn call<B, T>(cx: &Context, method: &str, body: &B) -> Result<T, Failure>
-where
-    B: serde::Serialize + zbus::zvariant::DynamicType,
-    T: for<'d> serde::Deserialize<'d> + zbus::zvariant::Type,
-{
+/// A connection to the session bus.
+fn session_bus(cx: &Context) -> Result<zbus::blocking::Connection, Failure> {
     let address = bus_address(cx)?;
     let unavailable = |e: zbus::Error| {
         Failure::new(
@@ -252,9 +286,30 @@ where
             format!("cannot connect to the session bus at {address}: {e}"),
         )
     };
-    let connection = zbus::blocking::connection::Builder::address(address.as_str())
+    zbus::blocking::connection::Builder::address(address.as_str())
         .and_then(|b| b.method_timeout(CALL_TIMEOUT).build())
-        .map_err(unavailable)?;
+        .map_err(unavailable)
+}
+
+/// Calls `method` of the server with `body` and reads its answer as `T`.
+fn call<B, T>(cx: &Context, method: &str, body: &B) -> Result<T, Failure>
+where
+    B: serde::Serialize + zbus::zvariant::DynamicType,
+    T: for<'d> serde::Deserialize<'d> + zbus::zvariant::Type,
+{
+    call_on(&session_bus(cx)?, method, body)
+}
+
+/// [`call`] on `connection`.
+fn call_on<B, T>(
+    connection: &zbus::blocking::Connection,
+    method: &str,
+    body: &B,
+) -> Result<T, Failure>
+where
+    B: serde::Serialize + zbus::zvariant::DynamicType,
+    T: for<'d> serde::Deserialize<'d> + zbus::zvariant::Type,
+{
     let reply = connection
         .call_method(Some(SERVER), SERVER_PATH, Some(SERVER), method, body)
         .map_err(|e| refusal(method, e))?;
@@ -430,4 +485,101 @@ fn use_installed(args: &Args, cx: &Context) -> Result<Reply, Failure> {
     };
     let _ = writeln!(human, "{name} restarted: {}", process.running());
     Ok(Reply::new(&UsedInstalled { removed, process }, human))
+}
+
+/// The object and interface a development build of a shell component serves on its own bus connection.
+const CRASH_PATH: &str = "/org/cupertino/ShellComponentDebug1";
+const CRASH_INTERFACE: &str = "org.cupertino.ShellComponentDebug1";
+
+/// The bus driver, which lists the connections of the bus.
+const BUS_DRIVER: &str = "org.freedesktop.DBus";
+
+#[derive(Serialize)]
+struct Crashed {
+    component: String,
+    at: String,
+    /// The component's own connection, which took the call.
+    connection: String,
+}
+
+/// The unique name of `component`'s own bus connection: the connection the server's `ComponentOf` names it for.
+fn component_connection(
+    connection: &zbus::blocking::Connection,
+    component: &str,
+) -> Result<String, Failure> {
+    let names: Vec<String> = connection
+        .call_method(
+            Some(BUS_DRIVER),
+            "/org/freedesktop/DBus",
+            Some(BUS_DRIVER),
+            "ListNames",
+            &(),
+        )
+        .and_then(|reply| reply.body().deserialize())
+        .map_err(|e| {
+            Failure::new(
+                FailureKind::Unavailable,
+                "no_session_bus",
+                format!("the session bus does not list its connections: {e}"),
+            )
+        })?;
+    for name in names.into_iter().filter(|name| name.starts_with(':')) {
+        let of: String = call_on(connection, "ComponentOf", &(name.as_str(),))?;
+        if of == component {
+            return Ok(name);
+        }
+    }
+    Err(Failure::usage(
+        "unknown_component",
+        format!(
+            "no component named {component:?} runs with an accepted bus connection; see `cupertino shell list`"
+        ),
+    ))
+}
+
+fn crash(args: &Args, cx: &Context) -> Result<Reply, Failure> {
+    let name = args.value("name").expect("<name> is a positional argument");
+    let at = args.value("at").unwrap_or(CRASH_POINTS[0]);
+    let connection = session_bus(cx)?;
+    let owner = component_connection(&connection, name)?;
+    connection
+        .call_method(
+            Some(owner.as_str()),
+            CRASH_PATH,
+            Some(CRASH_INTERFACE),
+            "Crash",
+            &(at,),
+        )
+        .map_err(|e| match &e {
+            zbus::Error::MethodError(error, _, _)
+                if matches!(
+                    error.as_str(),
+                    "org.freedesktop.DBus.Error.UnknownObject"
+                        | "org.freedesktop.DBus.Error.UnknownInterface"
+                        | "org.freedesktop.DBus.Error.UnknownMethod"
+                ) =>
+            {
+                Failure::new(
+                    FailureKind::Unsupported,
+                    "not_development_build",
+                    format!(
+                        "{name} runs in a release build of the shell host, which takes no crash"
+                    ),
+                )
+            }
+            _ => Failure::new(
+                FailureKind::Temporary,
+                "no_answer",
+                format!("{name} did not take the crash: {e}"),
+            ),
+        })?;
+    let human = format!("{name} asked to panic ({at}) on its connection {owner}\n");
+    Ok(Reply::new(
+        &Crashed {
+            component: name.to_owned(),
+            at: at.to_owned(),
+            connection: owner,
+        },
+        human,
+    ))
 }

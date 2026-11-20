@@ -1,5 +1,5 @@
 //! The overlay's window as CupertinoKit draws it: the glyph and the 16-segment meter over the HUD material, faded as
-//! one layer with the material.
+//! one layer with the material, and while it fades a pacer that asks for each of the display's frames.
 
 use cupertino_kit::controls::{Canvas, Icon, IconDirection, Stack};
 use cupertino_kit::core::{
@@ -164,16 +164,64 @@ impl<M: 'static> Widget<M> for Meter {
     }
 }
 
-/// The overlay's content: the glyph and the meter, faded by `alpha` as one layer.
-fn content<M: 'static>(overlay: &Overlay, alpha: f64) -> Element<M> {
+/// Sends its message at every frame the compositor gives the window, from its first paint: the fade advances with the
+/// display's frames. It draws nothing and takes no room.
+struct Pacer<M> {
+    frame: M,
+}
+
+impl<M: Clone + 'static> Widget<M> for Pacer<M> {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: SizeSpec::Fixed(0.0),
+            height: SizeSpec::Fixed(0.0),
+            ..LayoutSpec::new(ContainerKind::Leaf)
+        }
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        // painted again with each new view, so it asks for the next frame
+        Change::Paint
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::ZERO,
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
+        if let Event::AnimationFrame(_) = event {
+            cx.emit(self.frame.clone());
+            cx.request_animation_frame();
+        }
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        cx.request_animation_frame();
+    }
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
+/// The overlay's content: the glyph and the meter, faded by `alpha` as one layer, and the pacer sending `frame` when
+/// there is one.
+fn content<M: Clone + 'static>(overlay: &Overlay, alpha: f64, frame: Option<M>) -> Element<M> {
     let label = accessible_name(overlay.kind());
     let side = f64::from(WINDOW_SIZE);
     let meter_top = layout::meter().y() - GLYPH_TOP - GLYPH_SIZE;
+    let pacer = frame.map(|frame| Element::new(Pacer { frame }));
     Element::new(Canvas {
         size: Some(Size::new(side, side)),
         label: label.to_owned(),
         paint: Box::new(move |cx| cx.set_group(alpha.clamp(0.0, 1.0) as f32, Vec::new())),
-        children: vec![Element::new(Stack {
+        children: std::iter::once(Element::new(Stack {
             axis: Axis::Vertical,
             padding: Insets {
                 top: GLYPH_TOP,
@@ -194,13 +242,15 @@ fn content<M: 'static>(overlay: &Overlay, alpha: f64) -> Element<M> {
                     name: meter_name(overlay.kind(), overlay.level()),
                 }),
             ],
-        })],
+        }))
+        .chain(pacer)
+        .collect(),
     })
 }
 
 /// The overlay's one window: always open, so a show needs no new surface. While hidden it draws nothing and has no
-/// material.
-pub fn window<M: Clone + 'static>(view: Option<View>) -> Window<M> {
+/// material. It takes no input. `frame` is sent at every frame of the display while it is given, for a fade.
+pub fn window<M: Clone + 'static>(view: Option<View>, frame: Option<M>) -> Window<M> {
     let side = f64::from(WINDOW_SIZE);
     let (title, background, content) = match view {
         Some(View { overlay, alpha }) => (
@@ -210,7 +260,7 @@ pub fn window<M: Clone + 'static>(view: Option<View>) -> Window<M> {
                 radius: CORNER_RADIUS,
                 alpha,
             },
-            content(&overlay, alpha),
+            content(&overlay, alpha, frame),
         ),
         None => (
             "Volume and brightness",
@@ -234,7 +284,8 @@ pub fn window<M: Clone + 'static>(view: Option<View>) -> Window<M> {
             max_size: None,
             decorations: DecorationMode::None,
             foreign_parent: None,
-            input_region: None,
+            // the window ignores the pointer
+            input_region: Some(Vec::new()),
         },
         shortcuts: CommandRegistry::new(),
         on_close: None,

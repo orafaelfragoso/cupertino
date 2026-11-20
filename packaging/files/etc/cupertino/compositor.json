@@ -1,13 +1,18 @@
 {
-  "shell": [
-    {"name": "dock", "command": ["/usr/bin/cupertino-dock"], "roles": ["session", "dock"]},
-    {"name": "menubar", "command": ["/usr/bin/cupertino-menubar"], "roles": ["session", "menu_bar"]},
-    {"name": "launcher", "command": ["/usr/bin/cupertino-launcher"]},
-    {"name": "notifications", "command": ["/usr/bin/cupertino-notifications"]},
-    {"name": "controlcenter", "command": ["/usr/bin/cupertino-controlcenter"]},
-    {"name": "osd", "command": ["/usr/bin/cupertino-osd"]},
-    {"name": "desktop", "command": ["/usr/bin/cupertino-files", "--desktop"]},
-    {"name": "windowmanager", "command": ["/usr/bin/cupertino-windowmanager"], "roles": ["window_manager"]},
-    {"name": "login", "command": ["/usr/bin/cupertino-login"], "roles": ["session", "session_lock"]}
-  ]
+  "shell": {
+    "components": ["menubar", "dock", "desktop", "windowmanager", "overview", "launcher",
+                   "notifications", "controlcenter", "osd", "agent", "dialogs"],
+    "off": [],
+    "alone": [],
+    "processes": [
+      {"name": "dock", "command": ["/usr/bin/cupertino-dock"], "roles": ["session", "dock"]},
+      {"name": "menubar", "command": ["/usr/bin/cupertino-menubar"], "roles": ["session", "menu_bar"]},
+      {"name": "launcher", "command": ["/usr/bin/cupertino-launcher"]},
+      {"name": "notifications", "command": ["/usr/bin/cupertino-notifications"]},
+      {"name": "controlcenter", "command": ["/usr/bin/cupertino-controlcenter"]},
+      {"name": "desktop", "command": ["/usr/bin/cupertino-files", "--desktop"]},
+      {"name": "windowmanager", "command": ["/usr/bin/cupertino-windowmanager"], "roles": ["window_manager"]},
+      {"name": "login", "command": ["/usr/bin/cupertino-login"], "roles": ["session", "session_lock"]}
+    ]
+  }
 }

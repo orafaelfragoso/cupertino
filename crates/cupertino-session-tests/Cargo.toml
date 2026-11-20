@@ -12,13 +12,18 @@ layer = "testing"
 [dev-dependencies]
 calloop = "0.14"
 cupertino-assets = { path = "../cupertino-assets" }
+cupertino-cli = { path = "../cupertino-cli" }
 cupertino-kit = { path = "../cupertino-kit" }
 cupertino-kit-shell = { path = "../cupertino-kit-shell" }
+cupertino-osd = { path = "../cupertino-osd" }
 cupertino-server = { path = "../cupertino-server" }
+cupertino-shell = { path = "../cupertino-shell" }
 cupertino-ui-render = { path = "../cupertino-ui-render" }
 cupertino-wm = { path = "../cupertino-wm" }
 image = { version = "0.25", default-features = false }
+serde = "1"
 rustix = { version = "1", features = ["fs", "process"] }
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client"] }
 wayland-server = "0.31"
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }

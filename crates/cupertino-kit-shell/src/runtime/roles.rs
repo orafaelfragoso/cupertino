@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 use cupertino_kit::core::WindowKey;
 use cupertino_kit::geometry::Rect;
+use cupertino_kit::platform::SystemAppearance;
 use cupertino_kit::prelude::WindowSpec;
 use cupertino_protocols::client::cupertino_shell_v1::CupertinoShellV1;
 use cupertino_protocols::client::cupertino_window_manager_v1::CupertinoWindowManagerV1;
@@ -27,6 +28,7 @@ use cupertino_shell_client::{
     SessionLockManager, SessionState, Shell, ShellEvent,
 };
 use cupertino_ui_wayland::{RoleEvent, SurfaceRoles};
+use cupertino_wayland_client::app::AppEvent;
 use cupertino_wayland_client::{
     Connection, Error as WireError, Event as WireEvent, ExtensionEvent, SurfaceId,
 };
@@ -120,6 +122,9 @@ pub(crate) struct ShellRoles {
     busy: Option<Arc<Mutex<Option<Instant>>>>,
     pub(super) globals: Globals,
     observed: SessionState,
+    /// The session's appearance and display options as the program was last told them ([`Event::Appearance`]);
+    /// `None` until [`ShellRoles::start_appearance`].
+    appearance: Option<SystemAppearance>,
     /// The key of the window about to open.
     opening: Option<WindowKey>,
     pub(super) windows: Vec<Win>,
@@ -190,6 +195,7 @@ impl ShellRoles {
             busy: binding.busy,
             globals,
             observed: SessionState::default(),
+            appearance: None,
             opening: None,
             windows: Vec::new(),
             ready_sent: false,
@@ -649,6 +655,35 @@ impl ShellRoles {
         self.inbox.push(event);
     }
 
+    /// Tells the program the session's appearance and display options the window system started on, the ones its
+    /// theme starts on, and from now on each change of them.
+    pub(crate) fn start_appearance(&mut self, appearance: SystemAppearance) {
+        self.appearance = Some(appearance);
+        self.inbox.push(Event::Appearance(appearance));
+    }
+
+    /// Takes the session's appearance or display options from `event` as the window system does, and tells the
+    /// program when they changed.
+    fn follow_appearance(&mut self, event: &AppEvent) {
+        let Some(mut appearance) = self.appearance else {
+            return;
+        };
+        match event {
+            AppEvent::Appearance { dark } => appearance.dark = *dark,
+            AppEvent::DisplayOptions(options) => {
+                appearance.increase_contrast = options.increase_contrast;
+                appearance.reduce_transparency = options.reduce_transparency;
+                appearance.reduce_motion = options.reduce_motion;
+            }
+            AppEvent::SteadyCaret { on } => appearance.steady_caret = *on,
+            _ => return,
+        }
+        if self.appearance != Some(appearance) {
+            self.appearance = Some(appearance);
+            self.inbox.push(Event::Appearance(appearance));
+        }
+    }
+
     fn set_busy(&self, busy: Option<Instant>) {
         if let Some(record) = &self.busy {
             *record.lock().unwrap_or_else(PoisonError::into_inner) = busy;
@@ -682,6 +717,9 @@ impl SurfaceRoles for ShellRoles {
     }
 
     fn event(&mut self, event: &ExtensionEvent) -> Option<RoleEvent> {
+        if let Some(event) = event.downcast_ref::<AppEvent>() {
+            self.follow_appearance(event);
+        }
         if let Some(change) = self.observed.apply(event) {
             if let SessionChange::Lock { locked } = change {
                 let _ = context::with_ctx_mut(|ctx| ctx.locked = locked);

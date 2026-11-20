@@ -28,8 +28,8 @@ use crate::control::{self, Call, ServeError, Served, Shown, Signal};
 use crate::notification::{Expire, Hints, NotifyInput};
 use crate::store::Restored;
 use crate::view::{
-    self, banner_key, centre_key, centre_root_key, CardMetrics, DisplayProbe, Fold, HostAction,
-    Input, Ui, CENTRE_TITLE, SHADOW_MARGIN,
+    self, banner_key, centre_key, centre_root_key, CardMetrics, Fold, HostAction, Input, Ui,
+    CENTRE_TITLE, SHADOW_MARGIN,
 };
 
 mod calls;
@@ -93,6 +93,8 @@ pub enum Message {
     /// Move the focus to this node, now that the view shows it: with its ring (`true`), or as a click moves it.
     Focus(Key, bool),
     Locked(bool),
+    /// The session's Reduce Motion is on (`true`) or off, as at start and on every change.
+    ReduceMotion(bool),
     Outputs,
     /// The server closed a banner's or the list's surface: its output went away.
     SurfaceClosed,
@@ -141,7 +143,6 @@ pub struct Model {
     center: RefCell<NotificationCenter>,
     ui: Ui,
     metrics: CardMetrics,
-    display: DisplayProbe,
     /// The start of the model's clock.
     start: Instant,
     /// Seconds since the Unix epoch at the model's 0.
@@ -189,13 +190,6 @@ impl Model {
 
     fn center(&mut self) -> &mut NotificationCenter {
         self.center.get_mut()
-    }
-
-    /// The motions follow the session's Reduce Motion as the windows last drew with it.
-    fn follow_display(&mut self) {
-        if let Some(reduce) = self.display.reduce_motion() {
-            self.center().config.motion.reduce_motion = reduce;
-        }
     }
 
     fn reduce_motion(&self) -> bool {
@@ -611,7 +605,6 @@ impl Application for Notifications {
             center: RefCell::new(NotificationCenter::new(config)),
             ui: Ui::default(),
             metrics: CardMetrics::new(environment.theme, environment.text),
-            display: DisplayProbe::default(),
             start: Instant::now(),
             offset: control::unix_now().map_or(0.0, |unix| unix as f64),
             calls: async_channel::unbounded(),
@@ -648,7 +641,6 @@ impl Application for Notifications {
     }
 
     fn update(model: &mut Model, message: Message) -> Vec<Do<Message>> {
-        model.follow_display();
         let mut commands = match message {
             Message::Input(input) => model.input(input),
             Message::Call(call) => {
@@ -694,6 +686,10 @@ impl Application for Notifications {
                 model.lock(locked);
                 Vec::new()
             }
+            Message::ReduceMotion(reduce) => {
+                model.center().config.motion.reduce_motion = reduce;
+                Vec::new()
+            }
             Message::Outputs => {
                 model.follow_outputs();
                 Vec::new()
@@ -724,21 +720,14 @@ impl Application for Notifications {
         // the windows that hear a press outside the open list come first: they lie under it
         let mut windows = view::catchers(&center, &model.ui, &numbers, Message::Input);
         windows.extend(
-            view::windows(
-                &mut center,
-                &model.ui,
-                &model.metrics,
-                &model.display,
-                now,
-                Message::Input,
-            )
-            .into_iter()
-            .map(|mut window| {
-                window.key = in_generation(window.key, model.surfaces);
-                // a surface the server closed is made again
-                window.on_close = Some(Message::SurfaceClosed);
-                window
-            }),
+            view::windows(&mut center, &model.ui, &model.metrics, now, Message::Input)
+                .into_iter()
+                .map(|mut window| {
+                    window.key = in_generation(window.key, model.surfaces);
+                    // a surface the server closed is made again
+                    window.on_close = Some(Message::SurfaceClosed);
+                    window
+                }),
         );
         for window in &windows {
             places.insert(window.key.clone(), place_of(window));
@@ -822,6 +811,8 @@ impl Program for Notifications {
     fn event(event: Event) -> Option<Message> {
         match event {
             Event::Session(session::Change::Locked(locked)) => Some(Message::Locked(locked)),
+            // the motions follow the session's Reduce Motion
+            Event::Appearance(appearance) => Some(Message::ReduceMotion(appearance.reduce_motion)),
             Event::Outputs => Some(Message::Outputs),
             Event::Bus { message, .. } => Some(Message::Bus(message)),
             // a closed window's `on_close` makes it anew

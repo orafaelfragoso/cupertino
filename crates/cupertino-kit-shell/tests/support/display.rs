@@ -1,10 +1,16 @@
 //! The display side of the stand-in: the globals a component's Kit loop binds on its connection (compositor, shared
-//! memory, the window shell, a seat, one output, the layer shell, `cupertino_shell_v1` and the transaction manager), so
-//! a component runs on it as on a server. A layer surface is configured at its first commit, every commit answers the
+//! memory, the window shell, a seat, one output, the layer shell, `cupertino_shell_v1`, the transaction manager and the
+//! app effects' appearance observer), so a component runs on it as on a server. A layer surface is configured at its first commit, every commit answers the
 //! surface's frame callbacks, and what the stand-in saw goes to [`Seen`].
 
 use std::collections::HashMap;
 
+use cupertino_protocols::server::app_effects::cupertino_app_effects_v1::{
+    self, CupertinoAppEffectsV1,
+};
+use cupertino_protocols::server::app_effects::cupertino_appearance_v1::{
+    CupertinoAppearanceV1, DisplayOption,
+};
 use cupertino_protocols::server::cupertino_dock_v1::CupertinoDockV1;
 use cupertino_protocols::server::cupertino_menu_bar_v1::CupertinoMenuBarV1;
 use cupertino_protocols::server::cupertino_session_v1::{self, CupertinoSessionV1};
@@ -44,6 +50,9 @@ pub struct Offer {
     pub shell: u32,
     /// `zwlr_layer_shell_v1`.
     pub layer_shell: u32,
+    /// `cupertino_app_effects_v1`: the appearance observer's appearance and display options, and nothing else the
+    /// stand-in answers.
+    pub app_effects: u32,
 }
 
 impl Offer {
@@ -51,6 +60,7 @@ impl Offer {
     pub const CURRENT: Offer = Offer {
         shell: 26,
         layer_shell: 4,
+        app_effects: 1,
     };
 }
 
@@ -85,6 +95,33 @@ pub(super) fn create_globals(handle: &mut DisplayHandle, offer: Offer) {
     handle.create_global::<State, ZwlrLayerShellV1, ()>(offer.layer_shell, ());
     handle.create_global::<State, CupertinoShellV1, ()>(offer.shell, ());
     handle.create_global::<State, CupertinoTransactionManagerV1, ()>(1, ());
+    handle.create_global::<State, CupertinoAppEffectsV1, ()>(offer.app_effects, ());
+}
+
+/// The session's display options as the stand-in tells them, and the appearance observers it tells them to.
+pub(super) struct Appearance {
+    options: DisplayOption,
+    observers: Vec<CupertinoAppearanceV1>,
+}
+
+impl Default for Appearance {
+    fn default() -> Self {
+        Appearance {
+            options: DisplayOption::empty(),
+            observers: Vec::new(),
+        }
+    }
+}
+
+impl Appearance {
+    /// The session's display options are `options` from now on: every live observer hears them.
+    pub(super) fn set_display_options(&mut self, options: DisplayOption) {
+        self.options = options;
+        self.observers.retain(|observer| observer.is_alive());
+        for observer in &self.observers {
+            observer.display_options(options);
+        }
+    }
 }
 
 impl State {
@@ -160,7 +197,8 @@ plain_global!(
     XdgWmBase,
     ZwlrLayerShellV1,
     CupertinoShellV1,
-    CupertinoTransactionManagerV1
+    CupertinoTransactionManagerV1,
+    CupertinoAppEffectsV1
 );
 
 macro_rules! ignore_requests {
@@ -191,7 +229,8 @@ ignore_requests!(
     CupertinoMenuBarV1,
     CupertinoDockV1,
     CupertinoTransactionV1,
-    CupertinoHoleV1
+    CupertinoHoleV1,
+    CupertinoAppearanceV1
 );
 
 impl GlobalDispatch<WlShm, ()> for State {
@@ -465,6 +504,26 @@ impl Dispatch<CupertinoTransactionManagerV1, ()> for State {
                 init.init(id, ());
             }
             _ => {}
+        }
+    }
+}
+
+impl Dispatch<CupertinoAppEffectsV1, ()> for State {
+    fn request(
+        state: &mut Self,
+        _: &Client,
+        _: &CupertinoAppEffectsV1,
+        request: cupertino_app_effects_v1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        init: &mut DataInit<'_, Self>,
+    ) {
+        // the light appearance, then the display options, as a server answers a new observer
+        if let cupertino_app_effects_v1::Request::GetAppearance { id } = request {
+            let observer = init.init(id, ());
+            observer.appearance(0);
+            observer.display_options(state.appearance.options);
+            state.appearance.observers.push(observer);
         }
     }
 }

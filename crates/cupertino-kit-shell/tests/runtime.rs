@@ -2,8 +2,9 @@
 //! `cupertino_protocols::transaction`, design values, the component table, entry registration, safe no-op requests
 //! outside a component thread, and the runtime's loop against the stand-in server: a component and a program of its
 //! own run on Kit's UI loop on their connection, draw their view on the role it names, carry out the requests their
-//! commands queue, persist their surfaces and say `ready`; a component needing a newer global is refused before it
-//! starts; a busy loop and a busy render thread are reported.
+//! commands queue, persist their surfaces and say `ready`; a component is told the session's display options at start
+//! and on every change; a component needing a newer global is refused before it starts; a busy loop and a busy render
+//! thread are reported.
 
 mod support;
 
@@ -16,7 +17,7 @@ use cupertino_kit::core::{
 };
 use cupertino_kit::geometry::Size;
 use cupertino_kit::layout::{Align, Axis};
-use cupertino_kit::platform::{DecorationMode, WindowSpec};
+use cupertino_kit::platform::{DecorationMode, SystemAppearance, WindowSpec};
 use cupertino_kit_shell::bus::{Message, OsdKind};
 use cupertino_kit_shell::hosting::{Ended, Host, HostEvent, Kind, Runtime, EXIT_VERSION};
 use cupertino_kit_shell::{
@@ -25,7 +26,8 @@ use cupertino_kit_shell::{
 };
 use support::display::Offer;
 use support::{
-    component_connection, connect_host, environment_lock, eventually, wait_for, Seen, Server,
+    component_connection, connect_host, environment_lock, eventually, wait_for, DisplayOption,
+    Seen, Server,
 };
 
 /// The namespace of the test component's layer surface.
@@ -199,6 +201,48 @@ impl Component for Stalling {
     const NAME: ComponentName = ComponentName::NOTIFICATIONS;
 }
 
+/// What the following component was told of the session's appearance and display options, in order.
+static TOLD: Mutex<Vec<SystemAppearance>> = Mutex::new(Vec::new());
+
+/// A component with no window that keeps what it is told of the session's appearance and display options.
+struct Following;
+
+impl Application for Following {
+    type Model = ();
+    type Message = SystemAppearance;
+
+    fn init() -> ((), Vec<Command<SystemAppearance>>) {
+        ((), Vec::new())
+    }
+
+    fn update(_: &mut (), appearance: SystemAppearance) -> Vec<Command<SystemAppearance>> {
+        TOLD.lock().unwrap().push(appearance);
+        Vec::new()
+    }
+
+    fn view(_: &()) -> Vec<Window<SystemAppearance>> {
+        Vec::new()
+    }
+}
+
+impl Program for Following {
+    fn surface(_: &(), _: &WindowKey) -> Surface {
+        overlay_surface("test-following", None)
+    }
+
+    fn event(event: Event) -> Option<SystemAppearance> {
+        match event {
+            Event::Appearance(appearance) => Some(appearance),
+            _ => None,
+        }
+    }
+}
+
+impl Component for Following {
+    const NAME: ComponentName = ComponentName::LAUNCHER;
+}
+
+static FOLLOWING: Entry = Entry::of::<Following>();
 static OVERLAY: Entry = Entry::of::<Overlay>();
 static DOCK: Entry = Entry::of::<Dock>();
 static STALLING: Entry = Entry::of::<Stalling>();
@@ -253,6 +297,58 @@ fn a_component_draws_its_view_runs_its_commands_and_says_ready() {
     }));
     // the loop waits for what comes next, out of its busy record
     eventually("the loop waits", || running.busy_for().is_none());
+
+    running.stop();
+    eventually("the component stops", || {
+        running.ended() == Some(Ended::Stopped)
+    });
+    drop(server);
+}
+
+#[test]
+fn a_component_is_told_the_display_options_at_start_and_on_every_change() {
+    let (server, host_end) = Server::start(Kind::Shared, &["launcher"]);
+    // the session starts with Reduce Motion on
+    server.set_display_options(DisplayOption::ReduceMotion);
+    let (mut host, runtime) = host_and_runtime(host_end);
+    let connection = component_connection(&mut host, "launcher");
+    let mut running = runtime.start(&FOLLOWING, connection).unwrap();
+    let told = || TOLD.lock().unwrap().clone();
+    let reduce_motion = || told().iter().map(|a| a.reduce_motion).collect::<Vec<_>>();
+
+    eventually("the component is told Reduce Motion at start", || {
+        reduce_motion() == [true]
+    });
+    assert!(
+        !told()[0].dark && !told()[0].increase_contrast,
+        "{:?}",
+        told()
+    );
+
+    server.set_display_options(DisplayOption::empty());
+    eventually("the component is told Reduce Motion went off", || {
+        reduce_motion() == [true, false]
+    });
+
+    server.set_display_options(DisplayOption::ReduceMotion | DisplayOption::IncreaseContrast);
+    eventually("the component is told Reduce Motion came back", || {
+        reduce_motion() == [true, false, true]
+    });
+    assert!(told()[2].increase_contrast, "{:?}", told());
+
+    // the same options again are no change: the next one told is the one after them
+    server.set_display_options(DisplayOption::ReduceMotion | DisplayOption::IncreaseContrast);
+    server.set_display_options(DisplayOption::ReduceTransparency);
+    eventually("the component is told the next change", || {
+        told().len() >= 4
+    });
+    let last = told()[3];
+    assert!(
+        !last.reduce_motion && !last.increase_contrast && last.reduce_transparency,
+        "{:?}",
+        told()
+    );
+    assert_eq!(told().len(), 4, "{:?}", told());
 
     running.stop();
     eventually("the component stops", || {

@@ -65,7 +65,7 @@ use crate::notification::{
 use crate::stack::GroupStack;
 use controls::{CardControl, Kind};
 pub use motion::{Gap, Removal, Rise, Slide, SLIDE_DISTANCE};
-pub use roots::{centre_root_key, DisplayProbe};
+pub use roots::centre_root_key;
 use roots::{CentreRoot, Strip};
 
 /// The `app_id` of every window of the process.
@@ -830,7 +830,6 @@ pub fn windows<M: Clone + 'static>(
     center: &mut NotificationCenter,
     ui: &Ui,
     metrics: &CardMetrics,
-    display: &DisplayProbe,
     now: f64,
     map: fn(Input) -> M,
 ) -> Vec<Window<M>> {
@@ -839,7 +838,7 @@ pub fn windows<M: Clone + 'static>(
     }
     let width = strip_width(&center.config.layout, &center.config.swipe);
     if ui.centre_shown(now) {
-        return vec![centre_window(center, ui, metrics, display, width, now, map)];
+        return vec![centre_window(center, ui, metrics, width, now, map)];
     }
     // the room above a banner's card is the shadow's reach, or what the output has above it
     let room = center.config.layout.top_inset.min(SHADOW_MARGIN);
@@ -871,7 +870,6 @@ pub fn windows<M: Clone + 'static>(
                 p.leaving || quiet,
                 width,
                 &age(n.timestamp, now),
-                display,
                 map,
             ))
         })
@@ -1143,7 +1141,6 @@ fn banner_window<M: Clone + 'static>(
     unannounced: bool,
     width: f64,
     age: &str,
-    display: &DisplayProbe,
     map: fn(Input) -> M,
 ) -> Window<M> {
     let size = Size::new(width, card.min_y() + card.height() + SHADOW_MARGIN);
@@ -1158,7 +1155,6 @@ fn banner_window<M: Clone + 'static>(
         id: n.id,
         card,
         map,
-        display: display.clone(),
         children: vec![Element::new(Card {
             opacity,
             // a bridge announces a live node by its name alone, as it appears or is renamed: the name is everything
@@ -1188,12 +1184,10 @@ fn banner_window<M: Clone + 'static>(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 fn centre_window<M: Clone + 'static>(
     center: &NotificationCenter,
     ui: &Ui,
     metrics: &CardMetrics,
-    display: &DisplayProbe,
     width: f64,
     now: f64,
     map: fn(Input) -> M,
@@ -1719,7 +1713,6 @@ fn centre_window<M: Clone + 'static>(
         map,
         menu_open: ui.menu_open,
         revealed: ui.revealed.is_some(),
-        display: display.clone(),
         children,
     })
     .key(centre_root_key());

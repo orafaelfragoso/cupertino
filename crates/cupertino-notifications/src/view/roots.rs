@@ -1,8 +1,5 @@
 //! The roots of the windows' content: a banner's strip, which follows the pointer for hover and the swipe, and the
-//! centre's root, which closes the centre. Both report the display options the windows draw with ([`DisplayProbe`]).
-
-use std::cell::Cell;
-use std::rc::Rc;
+//! centre's root, which closes the centre.
 
 use cupertino_kit::core::{
     Change, Element, Event, EventCx, Key, MeasureCx, PaintCx, Phase, Propagation, Role,
@@ -25,30 +22,12 @@ pub fn centre_root_key() -> Key {
     Key::from(CENTRE_ROOT)
 }
 
-/// Whether the windows draw with Reduce Motion, as they last painted. The session's display options reach the
-/// windows' theme, not the component's model, so the windows report them here and the model's motions follow the
-/// report; `None` until a window painted.
-#[derive(Clone, Debug, Default)]
-pub struct DisplayProbe(Rc<Cell<Option<bool>>>);
-
-impl DisplayProbe {
-    /// Reduce Motion as the windows last drew with it, if one painted.
-    pub fn reduce_motion(&self) -> Option<bool> {
-        self.0.get()
-    }
-
-    fn report(&self, cx: &PaintCx<'_>) {
-        self.0.set(Some(cx.env().theme.preferences.reduce_motion));
-    }
-}
-
 /// A banner's window content: the card and the pointer handling of the banner, hover and swipe.
 pub(super) struct Strip<M> {
     pub(super) id: u32,
     /// The card's resting rect at this frame, window coordinates.
     pub(super) card: Rect,
     pub(super) map: fn(Input) -> M,
-    pub(super) display: DisplayProbe,
     pub(super) children: Vec<Element<M>>,
 }
 
@@ -162,9 +141,7 @@ impl<M: 'static> Widget<M> for Strip<M> {
         }
     }
 
-    fn paint(&self, _: &StripState, cx: &mut PaintCx<'_>) {
-        self.display.report(cx);
-    }
+    fn paint(&self, _: &StripState, _: &mut PaintCx<'_>) {}
 
     fn semantics(&self, _: &StripState, _: &mut SemanticsCx<'_>) {}
 }
@@ -177,7 +154,6 @@ pub(super) struct CentreRoot<M> {
     pub(super) menu_open: bool,
     /// A card is revealed: the pointer moving over no card, or leaving the window, hides its buttons again.
     pub(super) revealed: bool,
-    pub(super) display: DisplayProbe,
     pub(super) children: Vec<Element<M>>,
 }
 
@@ -247,9 +223,7 @@ impl<M: 'static> Widget<M> for CentreRoot<M> {
         }
     }
 
-    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
-        self.display.report(cx);
-    }
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
 
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
         cx.role(Role::Group);

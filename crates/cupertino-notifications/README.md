@@ -59,8 +59,8 @@ was announced), the id the next one takes, and do not disturb (a duration that e
   the bars, the dock and the windows. The component learns the outputs from `cupertino-kit-shell` (`outputs::all`); while
   the server has none there is no window, and a window whose surface the server closed is made anew. They go as a close begins, so the sliding list is never
   in the way of the next press.
-- **Display options.** Reduce Motion, as the windows last drew with it (`view::DisplayProbe`), sets
-  `Motion::reduce_motion`: banners fade in place and a group expands and collapses at
+- **Display options.** Reduce Motion, as `cupertino-kit-shell` tells it at start and on every change
+  (`Event::Appearance`), sets `Motion::reduce_motion`: banners fade in place and a group expands and collapses at
   once; unfolding a body and scrolling have no animation of their own beyond the scroll view's. Kit follows the appearance,
   Reduce Transparency and Increase Contrast itself: under either the cards keep their glass, drawn with the compositor's recipe
   for it, and with Increase Contrast a card lays an outline and a rim over it, no line of which is thinner than a device

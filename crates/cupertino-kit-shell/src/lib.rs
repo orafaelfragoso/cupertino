@@ -30,6 +30,7 @@ use std::fmt;
 
 use cupertino_kit::core::{Application, Environment, WindowKey};
 use cupertino_kit::geometry::Size;
+use cupertino_kit::platform::SystemAppearance;
 use serde::{Deserialize, Serialize};
 
 pub use component::ComponentName;
@@ -213,6 +214,9 @@ pub struct Hole {
 #[derive(Debug)]
 pub enum Event {
     Session(session::Change),
+    /// The session's appearance and display options (Reduce Motion, Reduce Transparency, Increase Contrast, the
+    /// steady caret), the ones a Kit application's theme follows: once at start and on every change.
+    Appearance(SystemAppearance),
     /// An output appeared, disappeared, or changed: read [`outputs::all`].
     Outputs,
     /// The server closed or dismissed `WindowKey`.

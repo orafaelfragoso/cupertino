@@ -6,17 +6,56 @@
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex, Once};
+use std::os::unix::net::UnixStream;
+use std::sync::{Arc, Mutex, Once, PoisonError};
 use std::time::Duration;
 
 use cupertino_kit::core::{Environment, WindowKey};
 use cupertino_kit::geometry::Rect;
 
 use crate::bus::{BusHub, Message, Topic};
-use crate::host::HelperHandle;
+use crate::capture::Captures;
+use crate::host::{Fault, HelperHandle, Reaper};
+use crate::link::ComponentLink;
 use crate::outputs::{Output, OutputId};
 use crate::transaction::{Gesture, Id as TxId};
-use crate::{ComponentName, ServerWindowId, WorkspaceId};
+use crate::{ComponentName, Event, ServerWindowId, WorkspaceId};
+
+/// The sockets of a component the host shuts down when it cuts the component off (`hosting::Running::shut`), other
+/// than its Wayland connection: its session-bus connections.
+pub(crate) type Sockets = Arc<Mutex<Vec<UnixStream>>>;
+
+/// Keeps `socket`, a handle to one of the component's sockets, for the host to shut.
+pub(crate) fn keep_socket(sockets: &Sockets, socket: UnixStream) {
+    sockets
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push(socket);
+}
+
+/// Shell events that reach the component from outside its loop's own protocol objects (`Event::BusIdentity`),
+/// waiting for the loop to hand them to [`crate::Program::event`].
+#[derive(Default)]
+pub(crate) struct Inbox {
+    events: Mutex<VecDeque<Event>>,
+}
+
+impl Inbox {
+    pub(crate) fn push(&self, event: Event) {
+        self.events
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push_back(event);
+    }
+
+    pub(crate) fn drain(&self) -> Vec<Event> {
+        self.events
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .drain(..)
+            .collect()
+    }
+}
 
 /// Queued outgoing protocol action flushed before the component's event loop waits.
 #[derive(Clone, Debug)]
@@ -212,6 +251,11 @@ pub(crate) enum ShellRequest {
         run: crate::consent::Run,
     },
     CaptureWindows,
+    CaptureOnce {
+        id: u32,
+        source: crate::capture::Source,
+        options: crate::capture::Options,
+    },
     CaptureFollowStart {
         id: u32,
         source: crate::capture::Source,
@@ -232,11 +276,21 @@ pub(crate) struct ComponentContext {
     pub next_tx_serial: u32,
     pub next_watch_id: u64,
     pub next_follow_id: u32,
+    pub next_capture_id: u32,
     pub outgoing: VecDeque<ShellRequest>,
     pub bus: Option<Arc<BusHub>>,
     pub bus_subscriber_id: Option<u64>,
     pub helpers: Arc<Mutex<Vec<HelperHandle>>>,
-    pub children: Arc<Mutex<Vec<std::process::Child>>>,
+    /// What the component's helpers tell its host; `None` outside a host.
+    pub fault: Option<Arc<Fault>>,
+    /// The host's reaper of child processes; `None` outside a host.
+    pub reaper: Option<Arc<Reaper>>,
+    /// The component's `cupertino_component_v1`; `None` outside a host.
+    pub link: Option<Arc<ComponentLink>>,
+    pub sockets: Sockets,
+    pub inbox: Arc<Inbox>,
+    /// The single-frame captures waiting for their frame.
+    pub captures: Captures,
 }
 
 impl Default for ComponentContext {
@@ -251,11 +305,17 @@ impl Default for ComponentContext {
             next_tx_serial: 1,
             next_watch_id: 1,
             next_follow_id: 1,
+            next_capture_id: 1,
             outgoing: VecDeque::new(),
             bus: None,
             bus_subscriber_id: None,
             helpers: Arc::new(Mutex::new(Vec::new())),
-            children: Arc::new(Mutex::new(Vec::new())),
+            fault: None,
+            reaper: None,
+            link: None,
+            sockets: Sockets::default(),
+            inbox: Arc::default(),
+            captures: Captures::default(),
         }
     }
 }
@@ -506,6 +566,13 @@ pub(crate) fn trace_request(req: &ShellRequest) {
             tracing::trace!(run = run.raw(), "shell: consent.stop");
         }
         ShellRequest::CaptureWindows => tracing::trace!("shell: capture.windows"),
+        ShellRequest::CaptureOnce {
+            id,
+            source,
+            options,
+        } => {
+            tracing::trace!(id, ?source, ?options, "shell: capture.once");
+        }
         ShellRequest::CaptureFollowStart {
             id,
             source,

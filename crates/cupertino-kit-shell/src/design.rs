@@ -1,15 +1,9 @@
 //! Shell design values from the active theme data (`docs/architecture/shell-host.md#the-session-outputs-and-design-values`).
 
-use cupertino_kit::text::{FontWeight, TextStyle};
+use std::sync::OnceLock;
 
-/// Default menu bar height in logical points.
-pub const MENU_BAR_HEIGHT_PT: f64 = 24.0;
-/// Default menu bar selection pill corner radius in logical points.
-pub const MENU_BAR_SELECTION_RADIUS_PT: f64 = 4.0;
-/// Default menu bar item font size in logical points.
-pub const MENU_BAR_FONT_SIZE_PT: f64 = 13.0;
-/// Cap height over the em used to centre menu bar titles vertically.
-pub const MENU_BAR_CAP_HEIGHT_RATIO: f64 = 0.71;
+use cupertino_kit::text::{FontWeight, TextStyle};
+use cupertino_theme::{ShapeTokens, Typography};
 
 /// The menu bar's values from the theme data.
 #[derive(Clone, Debug, PartialEq)]
@@ -24,17 +18,33 @@ pub struct MenuBar {
     pub cap_height: f64,
 }
 
-/// Current theme values for the menu bar.
+/// Current theme values for the menu bar: its height and the corner radius of a pressed title's highlight from the
+/// theme's shapes, the titles' and the application name's type from its typography, and the cap height of its font.
+/// The theme data is read once per process; without it the theme's built-in values stand.
 pub fn menu_bar() -> MenuBar {
-    let mut item = TextStyle::new(MENU_BAR_FONT_SIZE_PT as f32);
-    item.weight = FontWeight::SEMIBOLD;
-    let mut app_name = TextStyle::new(MENU_BAR_FONT_SIZE_PT as f32);
-    app_name.weight = FontWeight::BOLD;
+    static MENU_BAR: OnceLock<MenuBar> = OnceLock::new();
+    MENU_BAR
+        .get_or_init(|| match cupertino_assets::theme::load() {
+            Ok(theme) => from_theme(&theme.shapes, theme.tokens.typography()),
+            Err(e) => {
+                tracing::warn!(error = %e, "no theme data; the menu bar takes the built-in values");
+                from_theme(&ShapeTokens::default(), &Typography::default())
+            }
+        })
+        .clone()
+}
+
+fn from_theme(shapes: &ShapeTokens, typography: &Typography) -> MenuBar {
+    let style = |theme: cupertino_theme::typography::TextStyle| {
+        let mut style = TextStyle::new(theme.size as f32);
+        style.weight = FontWeight(theme.weight);
+        style
+    };
     MenuBar {
-        height: MENU_BAR_HEIGHT_PT,
-        selection_radius: MENU_BAR_SELECTION_RADIUS_PT,
-        item,
-        app_name,
-        cap_height: MENU_BAR_CAP_HEIGHT_RATIO,
+        height: shapes.menu_bar_height,
+        selection_radius: shapes.menu_bar_selection_corner_radius,
+        item: style(typography.menu_bar_item()),
+        app_name: style(typography.menu_bar_app_name()),
+        cap_height: typography.metrics.cap_height / typography.metrics.units_per_em,
     }
 }

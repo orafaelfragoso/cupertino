@@ -1,16 +1,15 @@
 //! The host program's side (`cupertino-shell` alone; `docs/architecture/shell-host.md#the-host-program's-side`).
 //!
 //! Manages the host Wayland connection (`cupertino_host_v1`, `cupertino_host_component_v1`),
-//! per-component threads on an 8 MiB stack with `catch_unwind` isolation, the shared host bus,
-//! and graceful or forced shutdown (`shut` calls `shutdown(SHUT_RDWR)` on sockets and removes
-//! the component from the host bus).
+//! per-component threads on an 8 MiB stack with `catch_unwind` isolation, the shared host bus and its bridges
+//! between hosts, and graceful or forced shutdown (`shut` calls `shutdown(SHUT_RDWR)` on the component's Wayland and
+//! bus sockets and removes the component from the host bus).
 
 use std::collections::HashMap;
-use std::io::Write;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::{FromRawFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -22,12 +21,16 @@ use cupertino_protocols::client::host::cupertino_host_component_v1::{
 use cupertino_protocols::client::host::cupertino_host_v1::{
     self, CupertinoHostV1, Kind as WireKind,
 };
+use rustix::event::{poll, PollFd, PollFlags};
+use rustix::time::Timespec;
+use wayland_client::backend::WaylandError;
 use wayland_client::protocol::wl_registry;
 use wayland_client::{Connection as WlConnection, Dispatch, EventQueue, QueueHandle, WEnum};
 
-use crate::bus::{read_bridge_frame, write_bridge_frame, BusHub, Message, Sender};
-use crate::context::{self, ComponentContext};
-use crate::host::HELPER_JOIN_TIMEOUT;
+use crate::bus::{bridge, BusHub, Message};
+use crate::context::{self, ComponentContext, Inbox, Sockets};
+use crate::host::{Fault, Reaper, HELPER_JOIN_TIMEOUT};
+use crate::link::ComponentLink;
 use crate::{ComponentName, Entry, Error};
 
 /// Protocol version of `cupertino_host_v1` this crate was built with.
@@ -83,18 +86,28 @@ pub enum Unavailable {
 
 /// A component's Wayland connection handed from the server through the host protocol.
 pub struct Connection {
+    /// The socket, kept to shut it down.
     stream: UnixStream,
+    /// The connection the component's objects live on, once [`Runtime::start`] opened it.
+    wayland: Option<WlConnection>,
 }
 
 impl Connection {
     pub(crate) fn from_fd(fd: OwnedFd) -> Self {
         Self {
             stream: UnixStream::from(fd),
+            wayland: None,
         }
     }
 
     pub(crate) fn try_clone(&self) -> std::io::Result<UnixStream> {
         self.stream.try_clone()
+    }
+
+    /// The Wayland connection the component's `cupertino_component_v1` lives on, for the queues of its loop.
+    #[allow(dead_code)] // the component loop's window system takes it over (`Connection::from_wayland`)
+    pub(crate) fn wayland(&self) -> Option<&WlConnection> {
+        self.wayland.as_ref()
     }
 
     pub(crate) fn shutdown(&self) {
@@ -130,10 +143,11 @@ pub enum HostEvent {
 struct HostDispatchState {
     host_global: Option<CupertinoHostV1>,
     server_host_version: Option<u32>,
+    kind: Option<Kind>,
     pending_components: Vec<String>,
     events: Vec<HostEvent>,
-    bus_hub: Option<Arc<BusHub>>,
-    bridge_sockets: Vec<Arc<Mutex<UnixStream>>>,
+    /// The host bus, there from the connection's start: the server sends the bridges' ends as soon as it binds.
+    bus: Arc<BusHub>,
 }
 
 impl Dispatch<wl_registry::WlRegistry, ()> for HostDispatchState {
@@ -142,7 +156,7 @@ impl Dispatch<wl_registry::WlRegistry, ()> for HostDispatchState {
         reg: &wl_registry::WlRegistry,
         event: wl_registry::Event,
         _: &(),
-        _: &WlConnection,
+        conn: &WlConnection,
         qh: &QueueHandle<Self>,
     ) {
         if let wl_registry::Event::Global {
@@ -154,8 +168,9 @@ impl Dispatch<wl_registry::WlRegistry, ()> for HostDispatchState {
             if interface == "cupertino_host_v1" {
                 state.server_host_version = Some(version);
                 if version == HOST_PROTOCOL_VERSION {
-                    state.host_global =
-                        Some(reg.bind::<CupertinoHostV1, _, _>(name, version, qh, ()));
+                    let host = reg.bind::<CupertinoHostV1, _, _>(name, version, qh, ());
+                    state.bus.bridges().set_reporter(host.clone(), conn.clone());
+                    state.host_global = Some(host);
                 }
             }
         }
@@ -180,6 +195,8 @@ impl Dispatch<CupertinoHostV1, ()> for HostDispatchState {
                     WireKind::Separate => Kind::Separate,
                     _ => return,
                 };
+                state.kind = Some(kind);
+                state.bus.bridges().set_kind(kind);
                 state.events.push(HostEvent::Kind(kind));
             }
             cupertino_host_v1::Event::Component { name } => {
@@ -187,6 +204,12 @@ impl Dispatch<CupertinoHostV1, ()> for HostDispatchState {
             }
             cupertino_host_v1::Event::Done => {
                 let list = std::mem::take(&mut state.pending_components);
+                if state.kind == Some(Kind::Separate) {
+                    // the bridge's hello names the one component a separate host runs
+                    if let Some(own) = list.iter().find_map(|name| ComponentName::from_name(name)) {
+                        bridge::set_own(&state.bus, own);
+                    }
+                }
                 state.events.push(HostEvent::Components(list));
             }
             cupertino_host_v1::Event::ComponentStopped { name } => {
@@ -197,22 +220,21 @@ impl Dispatch<CupertinoHostV1, ()> for HostDispatchState {
             cupertino_host_v1::Event::Restart => {
                 state.events.push(HostEvent::Restart);
             }
-            cupertino_host_v1::Event::Bus { fd } | cupertino_host_v1::Event::BusPeer { fd, .. } => {
-                let stream = UnixStream::from(fd);
-                if let Ok(reader_stream) = stream.try_clone() {
-                    let hub = state.bus_hub.clone();
-                    let _ = std::thread::Builder::new()
-                        .name("host-bus-bridge".into())
-                        .spawn(move || {
-                            let mut reader = reader_stream;
-                            while let Ok(env) = read_bridge_frame(&mut reader) {
-                                if let Some(hub) = &hub {
-                                    hub.deliver_bridged(env.from, env.message);
-                                }
-                            }
-                        });
+            cupertino_host_v1::Event::Bus { fd } => {
+                bridge::uplink(&state.bus, UnixStream::from(fd));
+            }
+            cupertino_host_v1::Event::BusPeer { component, fd } => {
+                match ComponentName::from_name(&component) {
+                    Some(component) => bridge::peer(&state.bus, component, UnixStream::from(fd)),
+                    None => {
+                        tracing::warn!(component, "bus_peer for a component of no table; closed")
+                    }
                 }
-                state.bridge_sockets.push(Arc::new(Mutex::new(stream)));
+            }
+            cupertino_host_v1::Event::BusPeerGone { component } => {
+                if let Some(component) = ComponentName::from_name(&component) {
+                    bridge::peer_gone(&state.bus, component);
+                }
             }
             _ => {}
         }
@@ -305,24 +327,43 @@ impl Host {
         })
     }
 
-    /// Wait up to `timeout` for host protocol events.
+    /// Wait up to `timeout` for host protocol events. A connection the server closed, or that failed, is an error:
+    /// the host has no server to run components for.
     pub fn wait(&mut self, timeout: Duration) -> Result<Vec<HostEvent>, Error> {
-        let _ = self.conn.flush();
-        let _ = self.queue.dispatch_pending(&mut self.state);
+        let failed =
+            |e: &dyn std::fmt::Display| Error::Protocol(format!("host connection failed: {e}"));
+        match self.conn.flush() {
+            Ok(()) => {}
+            Err(WaylandError::Io(e)) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(e) => return Err(failed(&e)),
+        }
+        self.queue
+            .dispatch_pending(&mut self.state)
+            .map_err(|e| failed(&e))?;
         if !self.state.events.is_empty() {
             return Ok(std::mem::take(&mut self.state.events));
         }
         if let Some(guard) = self.conn.prepare_read() {
-            let fd = guard.connection_fd().as_raw_fd();
-            let mut pfd = libc_pollfd(fd);
-            let ms = timeout.as_millis().min(i32::MAX as u128) as i32;
-            if poll_readable(&mut pfd, ms) {
-                let _ = guard.read();
+            let fd = guard.connection_fd();
+            let mut fds = [PollFd::new(&fd, PollFlags::IN)];
+            let timeout = Timespec::try_from(timeout).unwrap_or(Timespec {
+                tv_sec: i64::MAX,
+                tv_nsec: 0,
+            });
+            match poll(&mut fds, Some(&timeout)) {
+                // readable, hung up or failed: the read says which
+                Ok(n) if n > 0 => match guard.read() {
+                    Ok(_) => {}
+                    Err(WaylandError::Io(e)) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                    Err(e) => return Err(failed(&e)),
+                },
+                Ok(_) | Err(rustix::io::Errno::INTR) => {}
+                Err(e) => return Err(failed(&e)),
             }
         }
         self.queue
             .dispatch_pending(&mut self.state)
-            .map_err(|e| Error::Protocol(format!("host dispatch failed: {e}")))?;
+            .map_err(|e| failed(&e))?;
         Ok(std::mem::take(&mut self.state.events))
     }
 
@@ -399,37 +440,10 @@ impl Host {
         }
     }
 
-    pub(crate) fn attach_bus_hub(&mut self, hub: Arc<BusHub>) {
-        self.state.bus_hub = Some(hub);
+    /// The host bus, whose bridges the connection's events open from its start.
+    pub(crate) fn bus(&self) -> Arc<BusHub> {
+        Arc::clone(&self.state.bus)
     }
-
-    pub(crate) fn bridge_sockets(&self) -> Vec<Arc<Mutex<UnixStream>>> {
-        self.state.bridge_sockets.clone()
-    }
-}
-
-#[repr(C)]
-struct PollFd {
-    fd: i32,
-    events: i16,
-    revents: i16,
-}
-
-fn libc_pollfd(fd: i32) -> PollFd {
-    PollFd {
-        fd,
-        events: 0x0001, // POLLIN
-        revents: 0,
-    }
-}
-
-fn poll_readable(pfd: &mut PollFd, timeout_ms: i32) -> bool {
-    extern "C" {
-        fn poll(fds: *mut PollFd, nfds: usize, timeout: i32) -> i32;
-    }
-    // Safety: `pfd` points to one valid `PollFd` for the duration of the syscall.
-    let rc = unsafe { poll(pfd as *mut PollFd, 1, timeout_ms) };
-    rc > 0 && (pfd.revents & 0x0001) != 0
 }
 
 /// Shared host runtime: environment, host bus, render-thread watch, and child-process reaper.
@@ -437,66 +451,75 @@ pub struct Runtime {
     kind: Kind,
     environment: Environment,
     bus: Arc<BusHub>,
-    bridges: Arc<Mutex<Vec<Arc<Mutex<UnixStream>>>>>,
     render_busy_since: Arc<Mutex<Option<Instant>>>,
-    children: Arc<Mutex<Vec<std::process::Child>>>,
+    reaper: Option<Arc<Reaper>>,
 }
 
 impl Runtime {
-    /// Construct a host runtime bound to `host`'s bus bridges and `environment`.
+    /// Construct a host runtime on `host`'s bus, whose bridges `host` opens as the server sends their ends.
     pub fn for_host(
         host: &mut Host,
         kind: Kind,
         environment: Environment,
     ) -> Result<Runtime, Error> {
-        let bus = Arc::new(BusHub::new());
-        host.attach_bus_hub(Arc::clone(&bus));
-        let bridges = Arc::new(Mutex::new(host.bridge_sockets()));
         Ok(Self {
             kind,
             environment,
-            bus,
-            bridges,
+            bus: host.bus(),
             render_busy_since: Arc::new(Mutex::new(None)),
-            children: Arc::new(Mutex::new(Vec::new())),
+            reaper: Reaper::new(),
         })
     }
 
-    /// Start `entry` on its own 8 MiB thread bound to `connection`.
+    /// Start `entry` on its own 8 MiB thread bound to `connection`. `Error::Version` when the connection offers
+    /// another version of `cupertino_component_v1` than this crate was built with: no thread starts.
     pub fn start(&self, entry: &'static Entry, connection: Connection) -> Result<Running, Error> {
         let component = entry.name();
+        let socket = connection
+            .try_clone()
+            .map_err(|e| Error::Protocol(format!("clone component socket failed: {e}")))?;
+        let (link, opened) = ComponentLink::open(socket)?;
+        let connection = Connection {
+            wayland: Some(link.connection().clone()),
+            ..connection
+        };
+        let conn_for_shut = connection
+            .try_clone()
+            .map_err(|e| Error::Protocol(format!("clone component socket failed: {e}")))?;
         let sub_id = self.bus.register(component);
         let stop_flag = Arc::new(AtomicBool::new(false));
         let busy_since = Arc::new(Mutex::new(None::<Instant>));
         let ended = Arc::new(Mutex::new(None::<Ended>));
         let helpers = Arc::new(Mutex::new(Vec::new()));
-        let conn_for_shut = connection
-            .try_clone()
-            .map_err(|e| Error::Protocol(format!("clone component socket failed: {e}")))?;
+        let fault = Arc::new(Fault::new(Arc::clone(&stop_flag)));
+        let sockets = Sockets::default();
 
+        let ctx = ComponentContext {
+            component: Some(component),
+            instance: opened.instance,
+            holds: opened.holds,
+            environment: Some(self.environment.clone()),
+            bus: Some(Arc::clone(&self.bus)),
+            bus_subscriber_id: Some(sub_id),
+            helpers: Arc::clone(&helpers),
+            fault: Some(Arc::clone(&fault)),
+            reaper: self.reaper.clone(),
+            link: Some(link),
+            sockets: Arc::clone(&sockets),
+            inbox: Arc::new(Inbox::default()),
+            ..ComponentContext::default()
+        };
         let t_stop = Arc::clone(&stop_flag);
         let t_busy = Arc::clone(&busy_since);
         let t_ended = Arc::clone(&ended);
         let t_bus = Arc::clone(&self.bus);
-        let t_helpers = Arc::clone(&helpers);
-        let t_children = Arc::clone(&self.children);
-        let env = self.environment.clone();
+        let t_fault = Arc::clone(&fault);
 
         let builder = std::thread::Builder::new()
             .name(format!("shell-{}", component.as_str()))
             .stack_size(COMPONENT_STACK_BYTES);
         let handle = builder
             .spawn(move || {
-                let mut ctx = ComponentContext {
-                    component: Some(component),
-                    environment: Some(env),
-                    bus: Some(Arc::clone(&t_bus)),
-                    bus_subscriber_id: Some(sub_id),
-                    helpers: Arc::clone(&t_helpers),
-                    children: t_children,
-                    ..ComponentContext::default()
-                };
-                ctx.instance = 1;
                 context::install(ctx);
 
                 let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -511,6 +534,7 @@ impl Runtime {
                 t_bus.unregister(sub_id, component);
 
                 let final_state = match outcome {
+                    _ if t_fault.panicked() => Ended::Failed(Failure::Panic),
                     Ok(Ok(())) => Ended::Stopped,
                     Ok(Err(_)) => Ended::Failed(Failure::Error),
                     Err(_) => Ended::Failed(Failure::Panic),
@@ -519,7 +543,10 @@ impl Runtime {
                     *slot = Some(final_state);
                 }
             })
-            .map_err(|e| Error::Protocol(format!("spawn component thread failed: {e}")))?;
+            .map_err(|e| {
+                self.bus.unregister(sub_id, component);
+                Error::Protocol(format!("spawn component thread failed: {e}"))
+            })?;
 
         Ok(Running {
             component,
@@ -530,6 +557,8 @@ impl Runtime {
             ended,
             helpers,
             socket: conn_for_shut,
+            sockets,
+            fault,
             handle: Some(handle),
         })
     }
@@ -541,15 +570,8 @@ impl Runtime {
             tracing::warn!("separate host may not publish Topic::Host; dropped");
             return;
         }
-        self.bus.publish_from_host(allow_host, message.clone());
-        if let Ok(bridges) = self.bridges.lock() {
-            for sock in bridges.iter() {
-                if let Ok(mut s) = sock.lock() {
-                    let _ = write_bridge_frame(&mut *s, Sender::Host, &message);
-                    let _ = s.flush();
-                }
-            }
-        }
+        // the bus hands it to the bridges as well
+        self.bus.publish_from_host(allow_host, message);
     }
 
     /// How long the shared render thread has been out of its wait, if currently busy.
@@ -578,6 +600,9 @@ pub struct Running {
     ended: Arc<Mutex<Option<Ended>>>,
     helpers: Arc<Mutex<Vec<crate::host::HelperHandle>>>,
     socket: UnixStream,
+    /// The component's session-bus sockets (`bus::session`).
+    sockets: Sockets,
+    fault: Arc<Fault>,
     handle: Option<JoinHandle<()>>,
 }
 
@@ -600,14 +625,22 @@ impl Running {
         }
     }
 
-    /// Cut the component off immediately: shut down its Wayland socket, remove it from the host
-    /// bus and drop its retained messages, and signal its helpers to stop.
+    /// Cut the component off immediately: shut down its Wayland socket and its session-bus sockets, remove it from
+    /// the host bus and drop its retained messages, drop its helpers' results unread, and signal its helpers to stop.
     pub fn shut(&self) {
+        self.fault.cut();
         self.stop();
         let _ = self.socket.shutdown(std::net::Shutdown::Both);
+        for socket in self
+            .sockets
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+        {
+            let _ = socket.shutdown(std::net::Shutdown::Both);
+        }
         self.bus.unregister(self.sub_id, self.component);
     }
-
     /// Return how the component ended once its thread and helpers have finished.
     pub fn ended(&mut self) -> Option<Ended> {
         let state = self.ended.lock().ok().and_then(|s| *s)?;

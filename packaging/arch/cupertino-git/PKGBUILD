@@ -107,6 +107,7 @@ package_cupertino-git() {
               cupertino-controlcenter cupertino-osd cupertino-screenshot cupertino-control cupertino-windowmanager \
               cupertino-login cupertino-polkit-agent cupertino-keyring-prompter cupertino-portal cupertino-files \
               cupertino-settings cupertino-sessiond cupertino-netd cupertino-btd cupertino-powerd cupertino-audiod cupertino-diagnose \
+              cupertino-shell \
               cupertino; do
     install -Dm755 "$bin/$name" "$pkgdir/usr/bin/$name"
   done

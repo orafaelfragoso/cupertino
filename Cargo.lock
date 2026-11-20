@@ -1727,6 +1727,7 @@ dependencies = [
  "cupertino-kit",
  "cupertino-kit-shell",
  "cupertino-server",
+ "cupertino-shell",
  "cupertino-ui-render",
  "cupertino-wm",
  "image",
@@ -1776,6 +1777,15 @@ dependencies = [
  "wayland-protocols-wlr",
  "zbus",
  "zeroize",
+]
+
+[[package]]
+name = "cupertino-shell"
+version = "0.1.0"
+dependencies = [
+ "cupertino-diagnostic-events",
+ "cupertino-kit",
+ "cupertino-kit-shell",
 ]
 
 [[package]]

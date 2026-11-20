@@ -15,6 +15,7 @@ cupertino-assets = { path = "../cupertino-assets" }
 cupertino-kit = { path = "../cupertino-kit" }
 cupertino-kit-shell = { path = "../cupertino-kit-shell" }
 cupertino-server = { path = "../cupertino-server" }
+cupertino-shell = { path = "../cupertino-shell" }
 cupertino-ui-render = { path = "../cupertino-ui-render" }
 cupertino-wm = { path = "../cupertino-wm" }
 image = { version = "0.25", default-features = false }

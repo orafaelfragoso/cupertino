@@ -10,6 +10,7 @@ mod protocols;
 mod requests;
 mod roles;
 
+use std::any::Any;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::future::poll_fn;
@@ -82,7 +83,8 @@ struct Hosted<P, R>(PhantomData<(P, R)>);
 
 /// The model of [`Hosted`]: the program's own, and what its loop shares.
 struct HostedModel<P: Program> {
-    inner: P::Model,
+    /// The program's model, also held by the thread's [`STATE`], so a panic that unwinds the loop does not drop it.
+    inner: Rc<RefCell<P::Model>>,
     shared: Rc<RefCell<Shared>>,
     feed: Feed,
 }
@@ -145,6 +147,8 @@ impl<P: Program> HostedModel<P> {
     /// The program's model from its [`Application::init`], on the calling thread's context.
     fn start(shared: Rc<RefCell<Shared>>) -> (Self, Vec<Command<P::Message>>) {
         let (inner, mut commands) = P::init();
+        let inner = Rc::new(RefCell::new(inner));
+        STATE.with(|state| *state.borrow_mut() = Some(Rc::clone(&inner) as Rc<dyn Any>));
         let feed = Feed::of_thread();
         feed.arm::<P>(&mut commands);
         (
@@ -169,16 +173,17 @@ impl<P: Program, R: Residence + 'static> Application for Hosted<P, R> {
     }
 
     fn update(model: &mut Self::Model, message: Self::Message) -> Vec<Command<Self::Message>> {
-        let mut commands = P::update(&mut model.inner, message);
+        let mut commands = P::update(&mut model.inner.borrow_mut(), message);
         model.feed.arm::<P>(&mut commands);
         commands
     }
 
     fn view(model: &Self::Model) -> Vec<Window<Self::Message>> {
-        let windows = P::view(&model.inner);
+        let inner = model.inner.borrow();
+        let windows = P::view(&inner);
         let surfaces: HashMap<WindowKey, Surface> = windows
             .iter()
-            .map(|w| (w.key.clone(), P::surface(&model.inner, &w.key)))
+            .map(|w| (w.key.clone(), P::surface(&inner, &w.key)))
             .collect();
         let mut shared = model.shared.borrow_mut();
         if shared.awaiting.is_none() {
@@ -193,6 +198,18 @@ impl<P: Program, R: Residence + 'static> Application for Hosted<P, R> {
         shared.surfaces = surfaces;
         windows
     }
+}
+
+thread_local! {
+    /// The model of the program the thread runs, outside the frames a panic of its loop unwinds
+    /// (`shell-host.md#the-host-programs-side`): its host drops it with [`take_state`] once the loop ended, inside
+    /// `catch_unwind`, so a panic in its teardown is caught and leaks what was left of it.
+    static STATE: RefCell<Option<Rc<dyn Any>>> = const { RefCell::new(None) };
+}
+
+/// The model of the program the calling thread ran, for its host to drop.
+pub(crate) fn take_state() -> Option<Rc<dyn Any>> {
+    STATE.with(|state| state.borrow_mut().take())
 }
 
 /// Runs component `C` on `connection` until its host stops it or its loop ends; the calling thread is the component's,

@@ -1079,7 +1079,7 @@ Every component task has this shape:
 1. [x] Component threads, shared runtime, panic containment, the busy watchdog, helper-thread and child-process API,
        the host bus (`5972aa43e`).
 2. [x] `--only` (D18) and `cupertino shell crash <component>` in development builds (`5972aa43e`).
-3. [x] (`5972aa43e`, `78a55c4a8`) The pilot: the on-screen displays run in the host, sound through `cupertino-audiod`, with the component
+3. [x] (`5972aa43e`, `588f56fe2`) The pilot: the on-screen displays run in the host, sound through `cupertino-audiod`, with the component
        checklist above met and every program test passing.
 
 #### W6.2 Memory checkpoint (lead)

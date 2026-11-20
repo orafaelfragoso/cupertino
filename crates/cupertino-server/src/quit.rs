@@ -1,13 +1,16 @@
-//! `org.cupertino.Session1` on the session bus: quitting the applications before a log out, which the session agent
-//! (`cupertino-login`) calls between the confirmed log out and logind's `TerminateSession`, and the session settings the
-//! server alone writes (the appearance and `accessibility.conf`), which the settings application sets here.
+//! `org.cupertino.Session1` on the session bus: log out, restart, shut down and sleep (D13), quitting the applications
+//! before the first three, which the session agent (`cupertino-login`) asks for once the person confirmed, and the
+//! session settings the server alone writes (the appearance and `accessibility.conf`), which the settings application
+//! sets here.
 //!
 //! The design quits the foreground applications one at a time: it brings the application forward so that a save
 //! sheet is visible, sends it the quit event, and gives it 45 s before the interrupt panel shows; the next application
-//! follows 0.1 s after one quits. The timers are the agent's; this side does the Wayland part:
+//! follows 0.1 s after one quits. The sequence and its timers are this side's ([`QUIT_TIMEOUT_S`],
+//! [`NEXT_APPLICATION_S`]); the session agent shows the interrupt panel on `QuitInterrupted` and answers it with
+//! `RetrySessionAction`, `CancelSessionAction` or `ForceQuitApplication`. Sleep quits nothing.
 //!
 //! Every mutating method checks its caller ([`crate::caller`]): the process behind the connection, from the bus
-//! daemon's `ProcessFD`. `QuitNextApplication`, `QuitStatus` and `ForceQuitApplication` are for the session agent the server
+//! daemon's `ProcessFD`. `QuitNextApplication`, `QuitStatus`, `ForceQuitApplication` and `OpenApplications` are for the session agent the server
 //! supervises; `SetAppearance` and `SetAccessibility` for the settings application (a known program under `/usr`) and
 //! that agent; `ListShellProcesses` and `RestartShellProcess` for any unsandboxed process of the user the server runs as
 //! (the `cupertino shell` commands), by the user id the bus daemon gives for the connection. A caller without a process descriptor, a Flatpak or a Snap is refused, with an error name of its own
@@ -16,9 +19,16 @@
 //!
 //! | Member | What it does |
 //! |---|---|
+//! | `LogOut`, `Restart`, `ShutDown` | quit the applications one at a time (the most recently used first, 45 s each, the next 0.1 s after one quits), then end the session through `cupertino-sessiond` (`LoginManager1.LogOut`, logind's `TerminateSession` when it does not answer) or ask logind to `Reboot` or `PowerOff`. Refused (`Failed`) while the session is locked |
+//! | `Sleep` | logind's `Suspend` at once: no application quits |
+//! | `OpenApplications -> as` | the identities of the applications that have toplevels, in the order a log out would quit them: what the session agent saves for "Open my windows again" before it asks for the log out. Only the session agent may call it |
+//! | `QuitInterrupted(s app_id, s reason)` signal | an application did not quit within 45 s, with its `QuitStatus` as the reason; the sequence waits for an answer |
+//! | `QuitInterruptClosed` signal | the application of the last `QuitInterrupted` quit after all: the sequence goes on |
+//! | `RetrySessionAction` | after `QuitInterrupted`: ask the applications to quit again, from the most recently used |
+//! | `CancelSessionAction` | end the sequence: the session goes on, the applications that quit stay closed |
 //! | `QuitNextApplication -> (s app_id, u windows)` | activates the most recently used application that has toplevels and sends `close` to each of them (`xdg_toplevel.close`); `("", 0) when no application has a window |
 //! | `QuitStatus(s app_id) -> s` | why the application asked to quit is still there: `not-responding` (a client behind its windows does not answer), `kept-windows` (it answers and has exactly the windows it was asked to close), `closing` (it closed some or opened another), `gone` (no window left). Only the session agent may call it |
-//! | `ForceQuitApplication(s app_id) -> u` | sends SIGKILL to the client processes of that application's toplevels, by the rules of Force Quit; returns how many processes. Only the session agent may call it |
+//! | `ForceQuitApplication(s app_id) -> u` | sends SIGKILL to the client processes of that application's toplevels, by the rules of Force Quit; returns how many processes. The application whose `QuitInterrupted` is answered this way gets another 45 s to go. Only the session agent may call it |
 //! | `ApplicationQuit(s app_id) signal | the last toplevel of the application being quit went away |
 //! | `SetAppearance(s appearance)` | `light` or `dark`: stored as `appearance` in `compositor.json`, then applied at once; `auto` is refused with `NotSupported` (no time-of-day or location backend), anything else with `InvalidArgs`; a failed store, or no settings directory to store in, changes nothing (`Failed`) |
 //! | `SetAccessibility(s key, s value)` | one key of `accessibility.conf` with a value as the file writes it (`reduce_motion` `on`, `color_filter` `tint 0.5`, ...): applied and stored like the key actions; an unknown key or bad value is `InvalidArgs` |
@@ -106,6 +116,16 @@ pub struct Quit {
     pub(crate) signals: Option<async_channel::Sender<BusOut>>,
     /// What the session interface's properties read, shared with the bus thread; `None` until it runs.
     pub(crate) properties: Option<Arc<Mutex<SessionSettings>>>,
+}
+
+impl Quit {
+    /// Where [`BusOut`] goes from now on: the bus thread emits it as signals and property changes. A later call takes
+    /// the place of an earlier one.
+    pub fn subscribe(&mut self) -> async_channel::Receiver<BusOut> {
+        let (signals, out) = async_channel::unbounded::<BusOut>();
+        self.signals = Some(signals);
+        out
+    }
 }
 
 impl std::fmt::Debug for Quit {
@@ -200,6 +220,8 @@ pub enum Call {
     ComponentOf(String, async_channel::Sender<Result<String, Reject>>),
     /// PIDs and start ticks of currently connected shell host processes (D20).
     ShellHosts(async_channel::Sender<Result<Vec<(u32, u64)>, Reject>>),
+    /// The identities of the applications with toplevels, in quit order (`OpenApplications`).
+    OpenApplications(Caller, async_channel::Sender<Result<Vec<String>, Reject>>),
     /// Start a session-ending or power action (`LogOut`, `Restart`, `ShutDown`, `Sleep`), quitting apps first (D13).
     SessionAction(
         SessionAction,
@@ -300,6 +322,14 @@ impl Cupertino {
         (identity, windows)
     }
 
+    /// `OpenApplications`: the identities of the applications that have toplevels, in the order a log out quits them.
+    pub fn open_applications(&self) -> Vec<String> {
+        self.apps_with_windows()
+            .into_iter()
+            .filter_map(|app| self.app_identity_of(app))
+            .collect()
+    }
+
     /// `QuitStatus`: why `identity`, asked to quit, is still there. `not-responding` while a client behind its windows
     /// does not answer; `gone` when it has no window left; `kept-windows` when it still has exactly the windows it was
     /// asked to close, which is how an application that declines to quit looks; `closing` otherwise (it closed some, or
@@ -348,6 +378,16 @@ impl Cupertino {
         let processes = self.app_processes(app, identity);
         for (_, process) in &processes {
             (self.send_signal)(process, crate::force_quit::SIGKILL);
+        }
+        // the answer to its interrupt: it gets another full timeout to go away, and interrupts again if it does not
+        let now = self.now();
+        if let Some(seq) = &mut self.quit.sequence {
+            if matches!(&seq.step, SequenceStep::Interrupted { app } if app == identity) {
+                seq.step = SequenceStep::Waiting {
+                    app: identity.to_owned(),
+                    since: now,
+                };
+            }
         }
         tracing::info!(
             app = identity,
@@ -705,6 +745,13 @@ impl Cupertino {
                     .map_err(Reject::Caller);
                 let _ = reply.try_send(answer);
             }
+            Call::OpenApplications(caller, reply) => {
+                let answer = self
+                    .authorize_call("OpenApplications", &caller, Need::SessionAgent)
+                    .map(|()| self.open_applications())
+                    .map_err(Reject::Caller);
+                let _ = reply.try_send(answer);
+            }
             Call::ForceQuit(identity, caller, reply) => {
                 let answer = self
                     .force_quit_application_for(&caller, &identity)
@@ -999,6 +1046,15 @@ impl Session1 {
         self.ask(|tx| Call::ForceQuit(app_id, caller, tx)).await
     }
 
+    async fn open_applications(
+        &self,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &zbus::Connection,
+    ) -> Result<Vec<String>, CallError> {
+        let caller = caller_of(&header, connection).await;
+        self.ask(|tx| Call::OpenApplications(caller, tx)).await
+    }
+
     async fn set_appearance(
         &self,
         appearance: String,
@@ -1194,8 +1250,7 @@ pub fn start_session_service_on(state: &mut Cupertino, address: Option<String>) 
         tracing::warn!(error = %e, "cannot serve the session interface");
         return;
     }
-    let (signals, signals_rx) = async_channel::unbounded::<BusOut>();
-    state.quit.signals = Some(signals);
+    let signals_rx = state.quit.subscribe();
     let settings = Arc::new(Mutex::new(state.session_settings()));
     state.quit.properties = Some(Arc::clone(&settings));
     // the values the change signals were last emitted for

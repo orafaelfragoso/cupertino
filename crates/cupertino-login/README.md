@@ -67,7 +67,7 @@ Every trigger goes through the same request, which does nothing when the session
 **Who may send a signal.** A bus daemon hands a process every signal addressed to its unique name whatever its match rules say,
 and zbus filters a rule's sender only when it is a unique name (or the daemon's own name), so each signal is checked when it
 arrives (`cupertino_peer::signal`). logind's `Lock` is bound to logind's unique name (the reply to the session lookup). `PrepareForSleep`,
-the session manager's `Unlock`, the server's `ApplicationQuit` (on the session bus) and the power daemon's battery changes count only from the connection that owns
+the session manager's `Unlock`, the server's `QuitInterrupted` and `QuitInterruptClosed` (on the session bus) and the power daemon's battery changes count only from the connection that owns
 the sender's well-known name at that moment; a `NameOwnerChanged` (the manager or the power daemon coming and going) only from
 the bus daemon. Anything else is logged (`... not sent by ... was ignored`) and dropped: another user could otherwise unlock the
 screen or lock it, or a program in the session hurry the log out along (a forged `NameOwnerChanged` is also dropped by
@@ -104,18 +104,18 @@ The lines go to stderr. The greeter logs the same `authentication failed` and
 | `cupertino-login: session announced again to the restarted session manager` | The manager's bus name got a new owner (it restarted or crashed): the agent calls `SessionReady` again so the manager knows whom to send `Unlock`. |
 | `cupertino-login: panel shown: <log-out\|restart\|shut-down\|power-button> | A panel appeared. |
 | `cupertino-login: panel cancelled` | Escape, Cancel, the lock, another panel or the server. |
-| `cupertino-login: panel confirmed: <log-out\|restart\|shut-down\|sleep> | Return, a confirming button, `r` or `s`, or the countdown end; the manager call follows. |
+| `cupertino-login: panel confirmed: <log-out\|restart\|shut-down\|sleep> | Return, a confirming button, `r` or `s`, or the countdown end; the `Session1` call follows. |
 | `cupertino-login: power key down`, `cupertino-login: power key up` | Server forwarded the key to an unlocked session. |
 | `cupertino-login: power button: sleep` | Release in 0.35 s to 1.5 s with `--power-button-sleeps-system true`. |
 | `cupertino-login: power button hold ignored: a panel or a log-out is running` | Held 1.5 s during a panel or a confirmed log-out. |
 | `cupertino-login: panel request ignored: the session is locked` | Request during the lock. |
-| `cupertino-login: quitting application: <app_id> (<n> windows) | Server asked to quit an application. |
-| `cupertino-login: application quit: <app_id> | Last window gone. |
-| `cupertino-login: application did not quit: <app_id> | 45 s passed; interrupt panel shows. |
-| `cupertino-login: force quit: <app_id> (<n> processes) | Force Quit pressed. |
+| `cupertino-login: Session1 is carrying out the <log-out\|restart\|shut-down>` | `Session1` took the action; it quits the applications. |
+| `cupertino-login: the <action> did not start: Session1 did not take it: <error>` | No `Session1` (or it refused): nothing is quit, a notification says so. |
+| `cupertino-login: Session1 did not take the sleep: <error>; asking for it directly` | The session manager or logind is asked instead. |
+| `cupertino-login: application did not quit: <app_id> (<reason>)` | `QuitInterrupted`: 45 s passed; interrupt panel shows. |
+| `cupertino-login: the application quit after all` | `QuitInterruptClosed`: the panel closes. |
+| `cupertino-login: force quit: <app_id> (<n> processes)` | Force Quit pressed. |
 | `cupertino-login: <log-out\|restart\|shut-down> cancelled while quitting the applications` | Cancel, Escape or a lock on the interrupt panel. |
-| `cupertino-login: no application left: <log-out\|restart\|shut-down> | the manager's `LogOut` (log out; logind's `TerminateSession` when the manager does not take it) or `RequestPower` follows. |
-| `cupertino-login: applications not quit before the <action>: <error> | `org.cupertino.Session1` did not answer; the call follows. |
 | `cupertino-login: low battery: <Low\|Critical> at <p> %, notification <id> | Warning posted. |
 | `cupertino-login: low battery cleared, notification <id> withdrawn` | Level back to none. |
 | `cupertino-login: login item started: <id>`, `cupertino-login: login item skipped: <id>: <reason> | At start, per entry. |
@@ -311,13 +311,14 @@ in the checkbox row, which has the focus when the panel shows.
 - The checkbox starts at the choice the person last confirmed (on until then). A click on the box or its label, Space, or a
   click from assistive technology (a `CheckBox` node with its checked state) flips it; the countdown goes on. Confirming
   remembers the choice, cancelling forgets a change. See [Reopening applications](#reopening-applications).
-- Sleep asks the session manager at once (`RequestPower`, see below). Without a session manager on the bus (a session another display manager such as GDM or SDDM started) restart, shut down and sleep call logind's `Reboot`, `PowerOff` and `Suspend` instead (not interactive: what the person may not do, or what an inhibitor blocks, is refused and logged like the manager's refusals). Log out, restart and shut down first quit the applications
-  (below); then log out asks the manager (`LogOut`: the login screen takes the console first, then the session ends, so the
-  desktop goes straight to the login screen), or calls logind's `TerminateSession` with this process's session id when the
-  manager does not take it (no manager, or one that did not start the session), and restart and shut down ask the
-  manager. The manager refuses a restart or shut down while another user's session is open and the caller is no administrator
-  (`OtherUsersLoggedIn`), and while a program holds a block inhibitor (`Inhibited`): the agent logs the refusal and the session
-  goes on. Any other failed call ends the process.
+- Every confirmed action goes to the server's `org.cupertino.Session1` (below). Sleep quits no application; log out,
+  restart and shut down first quit the applications, then the server asks the manager to log out (`LogOut`: the login
+  screen takes the console first, then the session ends, so the desktop goes straight to the login screen; logind's
+  `TerminateSession` when the manager does not take it) or logind to `Reboot` or `PowerOff`. Only a sleep `Session1` does
+  not take is asked for by the agent itself: the session manager (`RequestPower`), or logind's `Suspend` without one. A restart or shut down logind refuses (another user's session is open, a block inhibitor) is logged by the server and
+  the session goes on; the agent is not told yet, so the saved list stays and the power-button panel stays off until the
+  agent restarts. A sleep the manager or logind refuses is logged by the agent; any other failed sleep call ends the
+  process.
 - The words are in `panel::Kind::text`. The countdown is `panel::format_countdown`: seconds up to a minute ("60 seconds"),
   above that full units, at most two, with a no-break space between each number and its unit.
 
@@ -328,34 +329,40 @@ an answer.
 
 ### Quit sequence
 
-Before a confirmed log out, restart or shut down the agent calls the server's `org.cupertino.Session1.QuitNextApplication
-(`crates/cupertino-server/README.md`). The server brings the most recently used application with windows forward, asks
-each of its windows to close, and emits `ApplicationQuit(app_id) when the last one is gone. The agent times it
-(`logout::LogOut`): 45 s per application, the next asked 0.1 s after one quits, the logind call once the answer is
-`("", 0).
+A confirmed log out, restart or shut down goes to the server's `org.cupertino.Session1` (`LogOut`, `Restart`,
+`ShutDown`; D13, `crates/cupertino-server/README.md`), which quits the applications and then carries out the action: it
+brings the most recently used application with windows forward, asks each of its windows to close, gives it 45 s, asks
+the next 0.1 s after one quits, and once none is left asks `cupertino-sessiond` to end the session or logind to restart
+or power off. Sleep goes to `Session1.Sleep`, which quits no application; when `Session1` does not take it (not on the
+bus, or the session is locked) the agent asks the session manager or logind directly, as `Session1` would.
 
-An application still there after 45 s brings the interrupt panel (`interrupt`), on the same regular glass with 26 pt
-corners as the confirmation it interrupts: content 413 pt wide and at least 128 high, a 64 pt icon at (20, 13), the
-title (bold 13) at (102, 13) and the info line 10 pt under it, both wrapping at 293 pt in 16 pt lines, the buttons 12 pt
-under the info line (y 83 at the least) as 28 pt capsules 8 pt apart, ending at the text column's end. Like the
-confirmation panels it moves when its background is dragged and is no modal dialog. The agent asks the server why the
-application is still there (`QuitStatus(app_id)`) and words the panel by the answer:
+Just before it asks for a log out, restart or shut down, the agent reads the applications open now
+(`OpenApplications`, in the order they will quit) and saves them once for the next login
+([Reopening applications](#reopening-applications)). A cancelled sequence, or a request `Session1` did not take, drops
+the saved list again, since the session goes on.
+
+Without `org.cupertino.Session1` (another compositor, the server's bus thread down) the agent quits nothing and does
+nothing: it logs the failure and posts a notification ("Log out did not start", "Restart did not start", "Shut down did
+not start") and the session goes on.
+
+An application still there after 45 s makes the server emit `QuitInterrupted(app_id, reason)`, which brings the interrupt
+panel (`interrupt`), on the same regular glass with 26 pt corners as the confirmation it interrupts: content 413 pt wide
+and at least 128 high, a 64 pt icon at (20, 13), the title (bold 13) at (102, 13) and the info line 10 pt under it, both
+wrapping at 293 pt in 16 pt lines, the buttons 12 pt under the info line (y 83 at the least) as 28 pt capsules 8 pt
+apart, ending at the text column's end. Like the confirmation panels it moves when its background is dragged and is no
+modal dialog. The panel is worded by the reason, the application's quit status:
 
 - `kept-windows`: the application cancelled the log out. Try Again (the default) and Cancel.
-- `closing` (or no answer): it did not finish quitting. Force Quit, Cancel and Try Again.
+- `closing`: it did not finish quitting. Force Quit, Cancel and Try Again.
 - `not-responding`: it does not respond. Force Quit, Cancel and Try Again.
 
-- Try Again or Return asks the applications to quit again, from the one still there.
-- Cancel or Escape ends the sequence and the session goes on. The applications that quit stay closed.
+- Try Again or Return calls `RetrySessionAction`: the applications are asked to quit again, from the most recently used.
+- Cancel or Escape calls `CancelSessionAction`: the sequence ends and the session goes on. The applications that quit
+  stay closed.
 - Force Quit asks first (Cancel, focused, goes back; Return presses nothing); its Force Quit calls
-  `ForceQuitApplication(app_id)` (SIGKILL to the processes of its windows) and gives it another 45 s.
-- An application that quits while its panel is up closes the panel. A lock while the panel is up cancels the log out.
-- Without `org.cupertino.Session1` on the bus (another compositor) the agent logs it and goes straight to the call.
-
-- While the applications quit, the agent records the identity the server names for each (`QuitNextApplication`'s `app_id`).
-  Once none is left, and before the logind call or the power request, it saves them for the next login
-  ([Reopening applications](#reopening-applications)). A cancelled sequence saves nothing; a restart or shut down the
-  manager or logind refuses drops what was saved, since the session goes on.
+  `ForceQuitApplication(app_id)` (SIGKILL to the processes of its windows), and the server gives it another 45 s.
+- An application that quits while its panel is up closes the panel (`QuitInterruptClosed`). A lock while the panel is
+  up, or an interrupt that comes while the session is locked, cancels the action.
 
 ### Low battery
 
@@ -402,7 +409,7 @@ greeter has no session agent and takes no inhibitor, so a hold there shows nothi
 With "Open my windows again after I log in" on, the applications open at a log out, restart or shut down start again at the
 next login (`restore`).
 
-**What is saved.** The identities the quit sequence recorded, in that order, each resolved to an installed desktop entry of
+**What is saved.** The identities `Session1` names as open (`OpenApplications`) just before the agent asks for the action, in quit order, each resolved to an installed desktop entry of
 the XDG application directories: the entry whose desktop file ID is the identity (with or without `.desktop`), else the first
 whose `StartupWMClass` is it, ignoring case. Left out, each with a log line (`application not saved for the next login:
 <identity>: <reason>`): an application without an entry, an entry hidden from listings (`NoDisplay`, `Hidden`, `OnlyShowIn`,
@@ -630,7 +637,6 @@ network users).
 | `user` | `User::current` (account, full name, picture), `User::from_row` (a row of the manager's list), `initials`, `format_time` |
 | `panel` | `Kind`, `Action`, `Decision`, `Panel`, `PanelCheckbox`: the countdown, the keys, the button and checkbox frames and the words of the confirmation panels and the power-button panel |
 | `power_button` | `PowerButton`, `Effect`: the power key's hold timing |
-| `logout` | `LogOut`, `Do`: the timing of the quit sequence |
 | `interrupt` | `Frames`, `Choice`, `title`, `info`, `press`: the interrupt panel |
 | `low_battery` | `LowBattery`, `Level`, `Notice`, `Action`: which notification to post, replace or withdraw |
 | `autostart` | `directories`, `list`, `parse`, `exec_argv`, `claim_run`: the XDG autostart entries |
@@ -643,7 +649,7 @@ network users).
 | `login_wallpaper` | `choose` (the wallpaper the settings show), `render` (the JPEG for the login screen), `store`, `keep_current` (the writing thread) |
 | `lock_notices` | `Notice`, `from_rows`, `cap`, the cards' column and heights, `shown`, `more_text`; with feature `dbus`, `fetch` and `watch`: the notifications the daemon lists for the lock screen |
 | `upower` (feature `dbus`) | `watch` (the display device's `WarningLevel` and `Percentage`), `post` and `close` (the notification calls) |
-| `session` (feature `dbus`) | `quit_next_application`, `force_quit_application`, `watch_quit`: the server's `org.cupertino.Session1` |
+| `session` (feature `dbus`) | `log_out`, `restart`, `shut_down`, `sleep`, `open_applications`, `retry_session_action`, `cancel_session_action`, `force_quit_application`, `watch_interrupts` (`Interrupt`), `report_failure`: the server's `org.cupertino.Session1` and the notice when it does not take an action |
 | `auth` (feature `app`) | `Authenticator`: PAM on a worker thread |
 | `manager` (feature `app`) | `Connection`, `Message`: the greeter's connection to the session manager and the thread that reads its events |
 

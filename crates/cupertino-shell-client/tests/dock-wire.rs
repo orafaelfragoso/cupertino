@@ -9,9 +9,8 @@ use cupertino_protocols::server::cupertino_dock_v1::{
 };
 use cupertino_shell_client::{
     Anchor, AppCommand, Corner, Dock, DockChange, DockWindow, Error, Gesture,
-    KeyboardInteractivity, Layer, LayerShell, LayerSurfaceConfig, Margin, OverviewMode,
-    OverviewWindow, OverviewWorkspace, Shell, ShellEvent, ThumbnailImage, WindowIconImage,
-    MAX_WINDOW_THUMBNAIL,
+    KeyboardInteractivity, Layer, LayerShell, LayerSurfaceConfig, Margin, Shell, ShellEvent,
+    WindowIconImage,
 };
 use std::os::fd::AsFd;
 use support::{pixel_file, Offer, Seen, Wire};
@@ -170,7 +169,6 @@ fn each_event_is_one_change_in_its_group_and_an_empty_group_is_not_reported() {
         ] {
             dock.gesture(gesture);
         }
-        dock.overview_closed();
         dock.done();
         dock.done();
     });
@@ -211,7 +209,6 @@ fn each_event_is_one_change_in_its_group_and_an_empty_group_is_not_reported() {
                 DockChange::Gesture(Gesture::SwipeDown),
                 DockChange::Gesture(Gesture::Pinch),
                 DockChange::Gesture(Gesture::Spread),
-                DockChange::OverviewClosed,
             ],
         ]
     );
@@ -264,74 +261,6 @@ fn the_switcher_names_the_output_the_entries_and_the_selection() {
     assert!(
         fails_the_connection(&mut wire),
         "a switcher change without its output"
-    );
-}
-
-#[test]
-fn the_overview_carries_its_mode_area_windows_and_workspaces() {
-    let (mut wire, _dock) = ready(Offer::all());
-    wire.server(|s| {
-        let dock = &s.docks[0];
-        dock.overview_window(7, 10, 20, 300, 200);
-        dock.overview_window(8, -5, 0, 100, 50);
-        dock.overview_workspace(1, 1);
-        dock.overview_workspace(2, 0);
-        dock.overview_changed(
-            wire_dock::OverviewMode::All,
-            String::new(),
-            0,
-            30,
-            1920,
-            1050,
-        );
-        dock.overview_window(9, 0, 0, 10, 10);
-        dock.overview_changed(
-            wire_dock::OverviewMode::App,
-            "org.example.A".into(),
-            0,
-            0,
-            800,
-            600,
-        );
-        dock.done();
-    });
-    assert_eq!(
-        changes(&mut wire),
-        [vec![
-            DockChange::OverviewChanged {
-                mode: OverviewMode::All,
-                area: Rect::new(0.0, 30.0, 1920.0, 1050.0),
-                windows: vec![
-                    OverviewWindow {
-                        id: 7,
-                        frame: Rect::new(10.0, 20.0, 300.0, 200.0)
-                    },
-                    OverviewWindow {
-                        id: 8,
-                        frame: Rect::new(-5.0, 0.0, 100.0, 50.0)
-                    },
-                ],
-                workspaces: vec![
-                    OverviewWorkspace {
-                        id: 1,
-                        current: true
-                    },
-                    OverviewWorkspace {
-                        id: 2,
-                        current: false
-                    },
-                ],
-            },
-            DockChange::OverviewChanged {
-                mode: OverviewMode::App("org.example.A".into()),
-                area: Rect::new(0.0, 0.0, 800.0, 600.0),
-                windows: vec![OverviewWindow {
-                    id: 9,
-                    frame: Rect::new(0.0, 0.0, 10.0, 10.0)
-                }],
-                workspaces: vec![],
-            },
-        ]]
     );
 }
 
@@ -395,51 +324,6 @@ fn a_window_icon_is_its_file_read_whole_or_no_image() {
 }
 
 #[test]
-fn a_window_thumbnail_is_its_file_read_whole_or_no_image() {
-    let max = MAX_WINDOW_THUMBNAIL;
-    let ramp: Vec<u8> = (0..4 * 3 * 4).collect();
-    let rows: Vec<(&str, u32, u32, Vec<u8>, bool)> = vec![
-        ("a thumbnail", 4, 3, ramp, true),
-        ("the largest side", max, 1, vec![1; max as usize * 4], true),
-        ("no width", 0, 3, vec![], false),
-        ("no height", 3, 0, vec![], false),
-        ("a file of the wrong length", 2, 2, vec![0; 15], false),
-        (
-            "too wide",
-            max + 1,
-            1,
-            vec![0; (max as usize + 1) * 4],
-            false,
-        ),
-        (
-            "too tall",
-            1,
-            max + 1,
-            vec![0; (max as usize + 1) * 4],
-            false,
-        ),
-    ];
-    for (row, width, height, bytes, has_image) in rows {
-        let sent = bytes.clone();
-        let (mut wire, _dock) = dock_with(Offer::all(), move |dock| {
-            let file = pixel_file(&sent);
-            dock.window_thumbnail(6, width, height, file.as_fd());
-            dock.done();
-        });
-        let DockChange::WindowThumbnail(thumbnail) = only_change(&mut wire) else {
-            panic!("{row}: not a thumbnail");
-        };
-        assert_eq!(thumbnail.id, 6, "{row}");
-        let expected = has_image.then_some(ThumbnailImage {
-            width,
-            height,
-            argb: bytes,
-        });
-        assert!(thumbnail.image == expected, "{row}");
-    }
-}
-
-#[test]
 fn the_requests_of_the_dock_carry_their_arguments() {
     let (mut wire, dock) = ready(Offer::all());
 
@@ -447,8 +331,6 @@ fn the_requests_of_the_dock_carry_their_arguments() {
     dock.force_quit_app("org.example.B");
     assert!(dock.activate_window(11));
     dock.switcher_cancel();
-    dock.overview_select(12);
-    dock.overview_close();
     dock.switch_workspace(3);
     dock.add_workspace();
     dock.remove_workspace(4);
@@ -466,22 +348,20 @@ fn the_requests_of_the_dock_carry_their_arguments() {
     assert!(matches!(&requests[1], Request::ForceQuitApp { app_id } if app_id == "org.example.B"));
     assert!(matches!(requests[2], Request::ActivateWindow { id: 11 }));
     assert!(matches!(requests[3], Request::SwitcherCancel));
-    assert!(matches!(requests[4], Request::OverviewSelect { id: 12 }));
-    assert!(matches!(requests[5], Request::OverviewClose));
-    assert!(matches!(requests[6], Request::SwitchWorkspace { id: 3 }));
-    assert!(matches!(requests[7], Request::AddWorkspace));
-    assert!(matches!(requests[8], Request::RemoveWorkspace { id: 4 }));
-    assert!(matches!(&requests[9], Request::RunAction { name } if name == "toggle-overview"));
-    assert!(matches!(requests[10], Request::SwitcherSelect { index: 2 }));
+    assert!(matches!(requests[4], Request::SwitchWorkspace { id: 3 }));
+    assert!(matches!(requests[5], Request::AddWorkspace));
+    assert!(matches!(requests[6], Request::RemoveWorkspace { id: 4 }));
+    assert!(matches!(&requests[7], Request::RunAction { name } if name == "toggle-overview"));
+    assert!(matches!(requests[8], Request::SwitcherSelect { index: 2 }));
     assert!(matches!(
-        requests[11],
+        requests[9],
         Request::SwitcherActivate { index: 1 }
     ));
     assert!(matches!(
-        requests[12],
+        requests[10],
         Request::MoveWorkspace { id: 5, index: 0 }
     ));
-    let commands: Vec<u32> = requests[13..]
+    let commands: Vec<u32> = requests[11..]
         .iter()
         .map(|r| match r {
             Request::AppCommand { app_id, command } if app_id == "org.example.A" => {
@@ -494,19 +374,12 @@ fn the_requests_of_the_dock_carry_their_arguments() {
 }
 
 #[test]
-fn a_rectangle_is_sent_as_the_whole_points_around_it_and_an_empty_workspace_frame_as_zeros() {
+fn a_rectangle_is_sent_as_the_whole_points_around_it() {
     let (mut wire, dock) = ready(Offer::all());
     let rect = Rect::new(0.5, 0.25, 10.0, 10.0);
 
     dock.restore_window(3, &rect).unwrap();
     dock.set_minimize_target(&rect).unwrap();
-    dock.overview_frame(4, &rect).unwrap();
-    dock.overview_drag(5, &rect).unwrap();
-    dock.overview_workspace_frame(6, &rect).unwrap();
-    dock.overview_workspace_frame(2, &Rect::new(5.0, 5.0, 0.0, 10.0))
-        .unwrap();
-    dock.overview_workspace_frame(2, &Rect::new(5.0, 5.0, 10.0, -1.0))
-        .unwrap();
     wire.events();
 
     let requests = dock_requests(&wire);
@@ -529,49 +402,7 @@ fn a_rectangle_is_sent_as_the_whole_points_around_it_and_an_empty_workspace_fram
             height: 11
         }
     ));
-    assert!(matches!(
-        requests[2],
-        Request::OverviewFrame {
-            id: 4,
-            x: 0,
-            y: 0,
-            width: 11,
-            height: 11
-        }
-    ));
-    assert!(matches!(
-        requests[3],
-        Request::OverviewDrag {
-            id: 5,
-            x: 0,
-            y: 0,
-            width: 11,
-            height: 11
-        }
-    ));
-    assert!(matches!(
-        requests[4],
-        Request::OverviewWorkspaceFrame {
-            workspace: 6,
-            x: 0,
-            y: 0,
-            width: 11,
-            height: 11
-        }
-    ));
-    for request in &requests[5..] {
-        assert!(matches!(
-            request,
-            Request::OverviewWorkspaceFrame {
-                workspace: 2,
-                x: 0,
-                y: 0,
-                width: 0,
-                height: 0
-            }
-        ));
-    }
-    assert_eq!(requests.len(), 7);
+    assert_eq!(requests.len(), 2);
 }
 
 #[test]
@@ -586,12 +417,6 @@ fn a_shape_the_wire_cannot_carry_is_refused_and_nothing_is_sent() {
         for (request, result) in [
             ("restore_window", dock.restore_window(1, &bad)),
             ("set_minimize_target", dock.set_minimize_target(&bad)),
-            ("overview_frame", dock.overview_frame(1, &bad)),
-            ("overview_drag", dock.overview_drag(1, &bad)),
-            (
-                "overview_workspace_frame",
-                dock.overview_workspace_frame(1, &bad),
-            ),
         ] {
             assert!(
                 matches!(result, Err(Error::InvalidShape)),
@@ -617,40 +442,14 @@ fn a_shape_the_wire_cannot_carry_is_refused_and_nothing_is_sent() {
 
 #[test]
 fn a_request_newer_than_the_server_is_not_sent() {
-    let rect = Rect::new(0.0, 0.0, 10.0, 10.0);
-    for version in [22, 23, 25, 26] {
+    for version in [25, 26, 28] {
         let (mut wire, dock) = ready(Offer::shell(version));
-        dock.overview_drag(1, &rect).unwrap();
-        dock.overview_move_window(8, 2);
-        dock.overview_workspace_frame(2, &rect).unwrap();
         assert_eq!(dock.activate_window(3), version >= 26, "version {version}");
         wire.events();
-        let requests = dock_requests(&wire);
-        let sent = |matches: fn(&Request) -> bool| requests.iter().any(matches);
-        let drags = version >= 23;
         assert_eq!(
-            sent(|r| matches!(r, Request::OverviewDrag { .. })),
-            drags,
-            "version {version}: overview_drag"
-        );
-        assert_eq!(
-            sent(|r| matches!(
-                r,
-                Request::OverviewMoveWindow {
-                    id: 8,
-                    workspace: 2
-                }
-            )),
-            drags,
-            "version {version}: overview_move_window"
-        );
-        assert_eq!(
-            sent(|r| matches!(r, Request::OverviewWorkspaceFrame { .. })),
-            drags,
-            "version {version}: overview_workspace_frame"
-        );
-        assert_eq!(
-            sent(|r| matches!(r, Request::ActivateWindow { id: 3 })),
+            dock_requests(&wire)
+                .iter()
+                .any(|r| matches!(r, Request::ActivateWindow { id: 3 })),
             version >= 26,
             "version {version}: activate_window"
         );

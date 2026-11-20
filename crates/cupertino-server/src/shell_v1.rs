@@ -13,6 +13,10 @@ use smithay::reexports::wayland_server::{
 use crate::authorization::{capabilities, permit, role};
 use crate::state::Cupertino;
 
+/// The version of `cupertino_shell_v1` the server offers: 28 took the overview and the pictures of minimized windows
+/// out of the dock object, which the overview component and its holes replace.
+const SHELL_VERSION: u32 = 28;
+
 /// Registers the `cupertino_shell_v1` global.
 pub struct ShellV1Global {
     _global: GlobalId,
@@ -21,7 +25,7 @@ pub struct ShellV1Global {
 impl ShellV1Global {
     pub fn new(dh: &DisplayHandle) -> Self {
         Self {
-            _global: dh.create_global::<Cupertino, CupertinoShellV1, ()>(27, ()),
+            _global: dh.create_global::<Cupertino, CupertinoShellV1, ()>(SHELL_VERSION, ()),
         }
     }
 }

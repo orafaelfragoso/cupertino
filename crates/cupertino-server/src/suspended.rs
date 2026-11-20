@@ -5,7 +5,7 @@
 //! goes as soon as any part of the window shows again.
 //!
 //! Being covered is decided conservatively, as a window told it is suspended while it shows would look stale: only a
-//! window at rest (no animation, not moved or resized, at full opacity, no overview, stage or desktop reveal on its
+//! window at rest (no animation, not moved or resized, at full opacity, no claimed hole, stage or desktop reveal on its
 //! output) covers, and only with the region its client said is opaque, its corners cut by the window's corner radius
 //! and cut to its output. A window with a popup open is never covered. Nothing is decided while the session is locked.
 //!
@@ -153,11 +153,12 @@ impl Cupertino {
             let list =
                 crate::render::scene::windows_on_output(&self.wm, o.id, o.rect.w, transition, now);
             drawn.extend(list.iter().map(|(id, _, _)| *id));
-            // windows drawn elsewhere than at their frame: nothing on this output is covered
-            if self.shell.overview_on(o.id).is_some()
-                || self.window_managers.stage_active(o.id)
-                || desk
-            {
+            // windows drawn elsewhere than at their frame (in a hole that claims one, as the overview does, on the
+            // stage or aside for the desktop): nothing on this output is covered
+            let claimed = list
+                .iter()
+                .any(|(id, _, _)| self.transactions.is_window_claimed(*id));
+            if claimed || self.window_managers.stage_active(o.id) || desk {
                 continue;
             }
             let mut covers: Vec<Rect> = Vec::new();

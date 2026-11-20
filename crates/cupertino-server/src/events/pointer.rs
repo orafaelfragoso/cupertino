@@ -57,7 +57,7 @@ impl Cupertino {
         pos: Point<f64, Logical>,
         rel: Option<&RelativeMotionEvent>,
     ) -> bool {
-        if !self.wm.is_moving() || self.shell.overview_open() {
+        if !self.wm.is_moving() {
             return false;
         }
         let (Some(rel), Some(top)) = (rel, self.output_at(pos).map(|o| o.rect.y)) else {
@@ -155,10 +155,14 @@ impl Cupertino {
                 modifiers: m,
             });
             if self.window_drag_reached_top(pos, rel.as_ref()) {
-                // the window stays where it was taken and the overview opens on its output
+                // the window stays where it was taken and the overview component of its output opens
                 self.command(Command::PointerRelease);
                 if let Some(output) = self.output_at(pos).map(|o| o.id) {
-                    self.open_overview(output, cupertino_wm::overview::OverviewMode::Overview);
+                    self.ask_overview(
+                        output,
+                        cupertino_protocols::server::overview::cupertino_overview_v1::Mode::All,
+                        "",
+                    );
                 }
             }
             if !self.wm.is_interacting() {
@@ -179,12 +183,7 @@ impl Cupertino {
             return;
         }
 
-        // in the overview the windows are the dock's to hit-test; `surface_under` skips them
-        let target = if self.shell.overview_open() {
-            None
-        } else {
-            self.window_target_on_top(pos)
-        };
+        let target = self.window_target_on_top(pos);
         self.update_decor_hover(target.as_ref());
         let under = self.surface_under(pos);
         self.send_pointer_motion(under, pos, time, rel);
@@ -224,7 +223,7 @@ impl Cupertino {
 
     /// A pointer button event (also used by scripted input).
     ///
-    /// A press the server consumes (overview, decorations, a model move or resize) never reaches a client, so its release
+    /// A press the server consumes (decorations, a model move or resize) never reaches a client, so its release
     /// is consumed too; every other press and release goes to `pointer.button`, whose implicit grab keeps a client's
     /// release with the client that got the press.
     pub fn pointer_button(&mut self, button: u32, state: ButtonState, time: u32) {
@@ -349,11 +348,6 @@ impl Cupertino {
             return !self
                 .surface_under(pos)
                 .is_some_and(|(surface, _)| self.is_switcher_panel(&surface));
-        }
-        if self.shell.overview_open() {
-            // a shell surface (the dock's overview layer) takes the press; anything else is the
-            // server's own pick, so the overview works without a dock
-            return self.surface_under(pos).is_none() && self.overview_click(pos);
         }
         if button == BTN_LEFT && self.window_manager_press(pos) {
             return true;
@@ -755,8 +749,7 @@ impl Cupertino {
                             self.command(Command::WorkspaceGestureEnd { output });
                         }
                     }
-                    // the dock of the output maps the gesture to its action; without a dock the
-                    // server still leaves an open overview
+                    // the dock of the output maps a gesture no transaction is bound to to its action
                     GestureKind::Overview
                     | GestureKind::AppOverview
                     | GestureKind::AppGrid
@@ -769,11 +762,8 @@ impl Cupertino {
                             GestureKind::AppGrid => DockGesture::Pinch,
                             _ => DockGesture::Spread,
                         };
-                        let sent = self
-                            .pointer_output()
-                            .is_some_and(|output| self.docks.gesture(output, gesture));
-                        if !sent && self.shell.overview_open() {
-                            self.close_overview();
+                        if let Some(output) = self.pointer_output() {
+                            self.docks.gesture(output, gesture);
                         }
                     }
                     _ => {}

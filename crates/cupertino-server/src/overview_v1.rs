@@ -1,6 +1,6 @@
-//! Server side of `cupertino_overview_manager_v1` and `cupertino_overview_v1` (W5.5):
-//! feeds an output's layout area, arranged windows, workspaces and toggle requests to the
-//! overview component while keeping the existing server-drawn overview working until W6.8.
+//! Server side of `cupertino_overview_manager_v1` and `cupertino_overview_v1`: feeds an output's layout area, its
+//! windows, its workspaces and the person's requests to open or leave the overview (`toggle`) to the overview
+//! component, which draws the overview with holes and transactions. The server draws no overview of its own.
 
 use std::collections::HashMap;
 

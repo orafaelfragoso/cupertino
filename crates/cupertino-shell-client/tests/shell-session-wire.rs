@@ -36,6 +36,7 @@ fn the_shell_binds_from_version_nine_and_never_below() {
         (Some(9), true),
         (Some(20), true),
         (Some(26), true),
+        (Some(28), true),
     ] {
         let mut wire = Wire::new(Offer {
             shell: offered,

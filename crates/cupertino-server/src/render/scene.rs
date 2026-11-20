@@ -1,4 +1,4 @@
-//! Per-output scene construction: wallpaper → layer surfaces → (overview backdrop) → workspace
+//! Per-output scene construction: wallpaper → layer surfaces → workspace
 //! windows with shadows → shell UI (menu bar, extensions) → layer overlays →
 //! cursor, ordered by [`SceneLayer`].
 
@@ -44,7 +44,6 @@ use crate::app_effects_v1::{
 use crate::config::Config;
 use crate::decor::{Decor, DecorInput};
 use crate::fx::{Effects, IntoGeom};
-use crate::shell::Shell;
 use crate::state::{Shrink, WindowEntry};
 use crate::window_manager::Look;
 use cupertino_glass::glass::{Container, GlassShape};
@@ -163,7 +162,6 @@ pub struct SceneParams<'a> {
     pub display: DisplayOptions,
     /// Colour filter, invert and contrast pass over the whole output (`Accessibility::display_filter`).
     pub display_filter: Option<Rc<GpuRecipe>>,
-    pub shell: &'a mut Shell,
     pub decor: &'a mut Decor,
     pub menu_bars: &'a crate::menu_bar::MenuBars,
     /// Shell host holds rendered while a component restarts (D19).

@@ -126,7 +126,7 @@ impl Component for Overlay {
     const NAME: ComponentName = ComponentName::OSD;
 }
 
-/// A dock that draws nothing: it needs `cupertino_shell_v1` 26.
+/// A dock that draws nothing: it needs `cupertino_shell_v1` 28.
 struct Dock;
 
 impl Application for Dock {
@@ -360,7 +360,7 @@ fn a_component_is_told_the_display_options_at_start_and_on_every_change() {
 #[test]
 fn a_component_needing_newer_globals_is_refused_before_it_starts() {
     let older_shell = Offer {
-        shell: 25,
+        shell: 27,
         ..Offer::CURRENT
     };
     let (server, host_end) = Server::start_offering(Kind::Shared, &["dock"], older_shell);
@@ -370,8 +370,8 @@ fn a_component_needing_newer_globals_is_refused_before_it_starts() {
         Err(error) => assert_eq!(
             error,
             Error::Version {
-                expected: 26,
-                found: 25
+                expected: 28,
+                found: 27
             }
         ),
         Ok(_) => panic!("a dock started on a server whose shell is older than it needs"),

@@ -10,8 +10,9 @@ use crate::{ComponentName, Error};
 pub(crate) const SHELL_SESSION_VERSION: u32 = 20;
 /// `cupertino_shell_v1` as the menu bar reads it: how the server passes chords to the active client came with 25.
 pub(crate) const SHELL_MENU_BAR_VERSION: u32 = 25;
-/// `cupertino_shell_v1` as the dock speaks it: showing one window (`activate_window`) came with 26.
-pub(crate) const SHELL_DOCK_VERSION: u32 = 26;
+/// `cupertino_shell_v1` as the dock speaks it: the dock's messages without the overview and the pictures of minimized
+/// windows came with 28, which moved the opcodes of the later ones, so a dock never runs on an older server.
+pub(crate) const SHELL_DOCK_VERSION: u32 = 28;
 /// `zwlr_layer_shell_v1`: on-demand keyboard interactivity came with version 4.
 pub(crate) const LAYER_SHELL_VERSION: u32 = 4;
 /// `cupertino_transaction_manager_v1`, which every component's connection sees.

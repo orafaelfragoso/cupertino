@@ -10,7 +10,7 @@
     Every change of a message raises the version of its interface.
   </description>
 
-  <interface name="cupertino_shell_v1" version="27">
+  <interface name="cupertino_shell_v1" version="28">
     <description summary="shell services of the server">
       Global singleton, offered only to the processes the server started for a shell role, on a
       connection of their own. Each request needs the role it creates: a connection that holds
@@ -20,7 +20,9 @@
       cupertino_app_effects_v1 protocol, which any client may use, and removes their requests here. Version 6 adds the
       session_action request of the menu bar object, version 7 the lock_requested event of the session object, version 8 the session_agent event of the menu bar
       object, version 9 the log_out_requested event of the session object, version 10 the window list, the shortcuts and the further
-      window commands of the menu bar object, version 11 its edit request, version 12 its engage_help event, version 13 its force_quit_app request, version 14 its backdrop_luminance event, version 15 its window_controls event, version 16 its window_full_screen event, version 17 the window_icon event of the dock object, version 18 its engage event, version 19 its app_resident event, version 20 the activate_app request and app_activation event of the session object, version 21 the backdrop_bands event of the menu bar object, version 22 the window_thumbnail event of the dock object, version 23 its overview_drag, overview_move_window and overview_workspace_frame requests, version 24 the active_client event of the menu bar object, version 25 its active_client_keys event, version 26 the activate_window request of the dock object. An object this global
+      window commands of the menu bar object, version 11 its edit request, version 12 its engage_help event, version 13 its force_quit_app request, version 14 its backdrop_luminance event, version 15 its window_controls event, version 16 its window_full_screen event, version 17 the window_icon event of the dock object, version 18 its engage event, version 19 its app_resident event, version 20 the activate_app request and app_activation event of the session object, version 21 the backdrop_bands event of the menu bar object, version 22 the window_thumbnail event of the dock object, version 23 its overview_drag, overview_move_window and overview_workspace_frame requests, version 24 the active_client event of the menu bar object, version 25 its active_client_keys event, version 26 the activate_window request of the dock object. Version 28 removes the overview's
+      events, enum and requests and the window_thumbnail event of the dock object: the overview
+      component (cupertino_overview_v1) and its holes take their place. An object this global
       creates has the version the global was bound at, so the since of each message of those
       objects is the shell version that added it.
     </description>
@@ -56,8 +58,8 @@
         owns the dock's presentation: tile layout, magnification, bounces, auto-hide and its
         reserved area (through the layer surface's exclusive zone). The server tells it which
         windows exist and takes its activation requests. The area of the surface's committed
-        backdrops is the dock's rectangle for the server, for example the origin of windows
-        entering the overview, so the surface may be larger than the bar.
+        backdrops is the dock's rectangle for the server, so the surface may be larger than the
+        bar.
         Posts the role error when the surface is not a layer surface of that output, already has
         a role, or the output already has a dock.
       </description>
@@ -704,7 +706,7 @@
     </request>
   </interface>
 
-  <interface name="cupertino_dock_v1" version="26">
+  <interface name="cupertino_dock_v1" version="28">
     <description summary="the dock of one output">
       Events describe the windows of the session and the application switcher. They come in
       groups ended by a done event; the client applies a group at once. The first group, sent
@@ -720,13 +722,8 @@
       (switcher_cancel). The panel is a layer surface of namespace cupertino-dock-switcher; a
       press anywhere else cancels the switch when it is released.
 
-      The overview (all windows, or one application's) is shared the same way: the server owns
-      its transition, the windows' frames and their animation, and closes it on Escape, on a
-      workspace switch and when the dock goes away; the dock lays the windows out (overview_frame),
-      draws the workspaces bar, the highlight and the titles, and sends what the pointer and the
-      keys picked. Hot corners and touchpad gestures are detected by the server and mapped to
-      their action by the dock (hot_corner, gesture, run_action). Overview coordinates are the
-      output's logical coordinates (origin at the output's top-left corner).
+      Hot corners and touchpad gestures are detected by the server and mapped to their action by
+      the dock (hot_corner, gesture, run_action).
     </description>
 
     <request name="destroy" type="destructor">
@@ -818,60 +815,6 @@
       <arg name="committed" type="uint"/>
     </event>
 
-    <enum name="overview_mode">
-      <entry name="all" value="0" summary="every window of the current workspace, with the workspaces bar"/>
-      <entry name="app" value="1" summary="the windows of one application, minimized ones in a lower row"/>
-    </enum>
-
-    <event name="overview_window">
-      <description summary="a window of the open overview">
-        One window the overview shows, with its frame on the desktop (for a minimized window: its
-        frame before it minimized). The windows sent since the last done, up to the
-        overview_changed that ends them, are the whole set; they replace any earlier one. Their
-        ids are those of the window events.
-      </description>
-      <arg name="id" type="uint"/>
-      <arg name="x" type="int"/>
-      <arg name="y" type="int"/>
-      <arg name="width" type="int"/>
-      <arg name="height" type="int"/>
-    </event>
-
-    <event name="overview_workspace">
-      <description summary="a workspace of the output">
-        One workspace of the dock's output, in order; current is 1 for the one on screen. Sent in
-        the same group as the overview_window events and closed by the same overview_changed.
-        Workspace ids are the server's, stable for a workspace's lifetime.
-      </description>
-      <arg name="id" type="uint"/>
-      <arg name="current" type="uint"/>
-    </event>
-
-    <event name="overview_changed">
-      <description summary="the overview opened or its contents changed">
-        Closes the overview_window and overview_workspace lists before it in the group. Sent when
-        the overview opens on the dock's output, whenever its window set or the workspaces change
-        while it is open, and to a dock that binds while it is open. app_id is the application of
-        the app mode, empty in the all mode. The rectangle is the area the windows are laid out
-        in: the output minus the menu bar and the layer-shell exclusive zones. The dock answers
-        with one overview_frame per window; until it does, a window stays at its desktop frame.
-      </description>
-      <arg name="mode" type="uint" enum="overview_mode"/>
-      <arg name="app_id" type="string"/>
-      <arg name="x" type="int"/>
-      <arg name="y" type="int"/>
-      <arg name="width" type="int"/>
-      <arg name="height" type="int"/>
-    </event>
-
-    <event name="overview_closed">
-      <description summary="the overview is leaving">
-        The server started the close transition: the windows return to their desktop frames. The
-        dock removes its chrome. Sent after a selection, Escape, a workspace switch or an
-        overview_close, and when the overview ends for any other reason.
-      </description>
-    </event>
-
     <enum name="corner">
       <entry name="top_left" value="0"/>
       <entry name="top_right" value="1"/>
@@ -897,7 +840,9 @@
     <event name="gesture">
       <description summary="a touchpad gesture committed on the dock's output">
         The server's recognizer committed a gesture that is not the workspace swipe (which the
-        server carries out itself). The dock maps it to its action as for hot_corner.
+        server carries out itself) and that no transaction is bound to on the output
+        (cupertino_transaction_v1.bind_gesture, whose transaction then follows it instead). The
+        dock maps it to its action as for hot_corner.
       </description>
       <arg name="kind" type="uint" enum="gesture"/>
     </event>
@@ -977,25 +922,6 @@
       <arg name="resident" type="uint" summary="1 while resident, 0 once it is no longer"/>
     </event>
 
-    <event name="window_thumbnail" since="22">
-      <description summary="a picture of a minimized window">
-        The window as it showed when it minimized: its decorations and its popups without its
-        shadow, scaled down to fit within 256 pixels on its longer side, its shape kept, from a
-        picture drawn at the scale of the window's output. The server draws it soon after the
-        window minimized and sends it after the window's window event, in a group of its own or
-        with other changes. It sends width and height 0 once the window is no longer minimized.
-        A dock that binds is sent the picture of every minimized window that has one. A window
-        whose surface is protected from capture, or that cannot be drawn, gets none.
-
-        pixels is a sealed file of exactly width * height * 4 bytes: wl_shm argb8888
-        (premultiplied alpha, little-endian), rows packed. It is empty when width or height is 0.
-      </description>
-      <arg name="id" type="uint"/>
-      <arg name="width" type="uint"/>
-      <arg name="height" type="uint"/>
-      <arg name="pixels" type="fd"/>
-    </event>
-
     <event name="done">
       <description summary="end of a group of events"/>
     </event>
@@ -1054,36 +980,10 @@
       <arg name="index" type="uint"/>
     </request>
 
-    <request name="overview_frame">
-      <description summary="where a window of the overview goes">
-        The frame the window takes in the open overview; the server animates it there (and back
-        to its desktop frame on close). A new frame for a window that has one moves it with the
-        reflow spring. An id that is not in the overview, or a request while none is open, is
-        ignored: the set may have just changed.
-      </description>
-      <arg name="id" type="uint"/>
-      <arg name="x" type="int"/>
-      <arg name="y" type="int"/>
-      <arg name="width" type="int"/>
-      <arg name="height" type="int"/>
-    </request>
-
-    <request name="overview_select">
-      <description summary="a window was picked in the overview">
-        Leaves the overview and activates the window (a minimized one is restored). Ignored for an
-        id that is not in the overview.
-      </description>
-      <arg name="id" type="uint"/>
-    </request>
-
-    <request name="overview_close">
-      <description summary="leave the overview without a pick"/>
-    </request>
-
     <request name="switch_workspace">
       <description summary="go to a workspace of the dock's output">
-        Switches the output to the workspace, leaving an open overview first. An unknown id is
-        ignored: the workspace may have just been removed.
+        Switches the output to the workspace. An unknown id is ignored: the workspace may have
+        just been removed.
       </description>
       <arg name="id" type="uint"/>
     </request>
@@ -1145,44 +1045,6 @@
       <description summary="the pointer was released on the panel off the entries">
         Ends the open switch without activating anything; ignored while no switcher is open.
       </description>
-    </request>
-
-    <request name="overview_drag" since="23">
-      <description summary="a window of the overview follows the pointer">
-        The person drags the window: it is drawn at this frame at once, above the dock's
-        overview surface, until the next overview_frame for it (which takes it back with the
-        reflow spring), an overview_move_window or the end of the overview. An id that is not
-        in the overview, or a request while none is open, is ignored.
-      </description>
-      <arg name="id" type="uint"/>
-      <arg name="x" type="int"/>
-      <arg name="y" type="int"/>
-      <arg name="width" type="int"/>
-      <arg name="height" type="int"/>
-    </request>
-
-    <request name="overview_move_window" since="23">
-      <description summary="a window of the overview was dropped on a workspace">
-        Moves the window to the workspace of the dock's output; it leaves the overview, which
-        is sent again. An id that is not in the overview, an unknown workspace, a full-screen
-        workspace or the current one is ignored.
-      </description>
-      <arg name="id" type="uint"/>
-      <arg name="workspace" type="uint"/>
-    </request>
-
-    <request name="overview_workspace_frame" since="23">
-      <description summary="where a workspace's live picture is drawn">
-        While the overview is open, the server draws the workspace as it is (an opaque black
-        backing, the wallpaper and its windows, scaled) in this frame, over the dock's overview
-        surface's material and under its content. Width or height 0 removes the picture. The
-        pictures go when the overview closes. An unknown workspace is ignored.
-      </description>
-      <arg name="workspace" type="uint"/>
-      <arg name="x" type="int"/>
-      <arg name="y" type="int"/>
-      <arg name="width" type="int"/>
-      <arg name="height" type="int"/>
     </request>
 
     <request name="activate_window" since="26">

@@ -550,9 +550,9 @@ fn dock_edge(target: Rect, screen: &Rect) -> DockEdge {
 }
 
 /// The layer-shell `top` surfaces of `output` that [`give_way`] do so to a full-screen window in front of it: the dock
-/// and panels are neither drawn nor hit while it covers the output, except in the overview.
-pub fn top_layer_covered(wm: &Wm, shell: &crate::shell::Shell, output: OutputId) -> bool {
-    !shell.overview_open() && wm.fullscreen_front(output).is_some()
+/// and panels are neither drawn nor hit while it covers the output.
+pub fn top_layer_covered(wm: &Wm, output: OutputId) -> bool {
+    wm.fullscreen_front(output).is_some()
 }
 
 /// The window of `output` whose popups lie above every window and the bars ([`SceneLayer::Popups`]): the key window,
@@ -718,7 +718,7 @@ pub(super) fn layer_elements(
     let map = layer_map_for_output(p.output);
     let scale = Scale::from(p.scale);
     let mut out: Vec<Piece> = Vec::new();
-    let covered = layer == Layer::Top && top_layer_covered(p.wm, p.shell, p.output_id);
+    let covered = layer == Layer::Top && top_layer_covered(p.wm, p.output_id);
     // later surfaces are drawn on top of earlier ones
     for surface in crate::authorization::layers_stacked(&map, layer).rev() {
         if p.for_capture
@@ -733,10 +733,9 @@ pub(super) fn layer_elements(
         let Some(geo) = map.layer_geometry(surface) else {
             continue;
         };
-        // a menu bar is offset and faded by its presentation (hide, reveal, inactive output), and gives way to an
-        // overview of its output
+        // a menu bar is offset and faded by its presentation (hide, reveal, inactive output)
         let look = p.menu_bars.look(surface.wl_surface(), p.rect.y, p.now);
-        let (dy, opacity) = bar_shown(p, look);
+        let (dy, opacity) = bar_shown(look);
         // the surface's own presentation (cupertino_layers_v1 version 2) moves, scales and fades all it draws
         let shown =
             crate::layers_v1::presentation(surface.wl_surface(), p.now, p.display.reduce_motion);
@@ -834,10 +833,6 @@ pub(super) fn layer_elements(
                 zoomed.rect(bound),
             )
         }));
-        if layer == Layer::Overlay && surface.namespace() == crate::dock::OVERVIEW_NAMESPACE {
-            // the workspaces' live pictures lie on the chrome's band, under what it draws
-            out.extend(overview_pictures(p, opacity));
-        }
         let backdrops = zoomed.areas(surface_backdrops(surface.wl_surface(), origin));
         if look.is_some() {
             out.extend(bar_backdrop_elements(p, &backdrops, opacity, captures));
@@ -855,16 +850,9 @@ pub(super) fn layer_elements(
     out
 }
 
-/// How a menu bar of the output shows, given its `look`: its offset and opacity, faded with an overview of its
-/// output; `(0, 1)` for any other surface.
-fn bar_shown(p: &SceneParams<'_>, look: Option<crate::menu_bar::BarLook>) -> (f64, f32) {
-    let overview_bar = p
-        .shell
-        .overview
-        .as_ref()
-        .filter(|o| o.output == p.output_id)
-        .map_or(1.0, |o| o.menu_bar_alpha(p.now) as f32);
-    look.map_or((0.0, 1.0), |l| (l.dy, l.alpha * overview_bar))
+/// How a menu bar of the output shows, given its `look`: its offset and opacity; `(0, 1)` for any other surface.
+fn bar_shown(look: Option<crate::menu_bar::BarLook>) -> (f64, f32) {
+    look.map_or((0.0, 1.0), |l| (l.dy, l.alpha))
 }
 
 /// The held persistent surfaces of `layer` whose component connection ended (D19), front to back, as the live
@@ -893,7 +881,7 @@ fn held_elements(
         let look = menu_bar
             .then(|| p.menu_bars.look_on(hold.output, p.rect.y, p.now))
             .flatten();
-        let (dy, opacity) = bar_shown(p, look);
+        let (dy, opacity) = bar_shown(look);
         if opacity <= 0.0 {
             continue;
         }

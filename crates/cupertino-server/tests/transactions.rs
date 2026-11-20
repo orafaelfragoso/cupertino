@@ -121,6 +121,8 @@ struct CompClient {
     source_closed: usize,
     /// The serials of the layer animations the server answered `replaced`, in the order it did.
     layer_replaced: Vec<u32>,
+    /// What the server answered `replaced` with, in the order it did: the serial, the value and the velocity.
+    layer_replaced_with: Vec<(u32, f64, f64)>,
     /// The buffers the server released, in the order it did.
     released: Vec<wayland_client::backend::ObjectId>,
 }
@@ -304,8 +306,14 @@ impl Dispatch<CupertinoLayerV1, ()> for CompClient {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if let cupertino_layer_v1::Event::Replaced { serial, .. } = event {
+        if let cupertino_layer_v1::Event::Replaced {
+            serial,
+            value,
+            velocity,
+        } = event
+        {
             state.layer_replaced.push(serial);
+            state.layer_replaced_with.push((serial, value, velocity));
         }
     }
 }
@@ -2024,6 +2032,74 @@ fn a_transaction_cancelled_after_its_part_applied_leaves_its_surface_to_a_newer_
         2,
         "the newer part applies its commit with its gesture"
     );
+}
+
+#[test]
+fn a_value_or_cancel_answers_the_animations_still_waiting_to_start_replaced() {
+    use cupertino_layer_v1::Property;
+    let mut rig = Rig::new();
+    // a model clock that stands still, and no frame that shows a commit: an applied animation waits to start
+    rig.state.fixed_time = Some(30.0);
+    let (hconn, mut hq, mut hst) = rig.connect_host(&["overview"]);
+    let (_hov, oconn, mut oq, mut ost) = rig.spawn_component(&hconn, &mut hq, &mut hst, "overview");
+    let (surf, _shell) = rig.create_layer_surface(&oconn, &mut oq, &mut ost, "strip");
+    let server_strip = server_layer_surface(&rig, "strip");
+    let oqh = oq.handle();
+    let child = ost.compositor.as_ref().unwrap().create_surface(&oqh, ());
+    let layer = ost
+        .layers
+        .as_ref()
+        .unwrap()
+        .get_layer(&child, &surf, &oqh, ());
+    surf.commit();
+    for _ in 0..2 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    assert_eq!(layers_of(&server_strip), 1);
+    let timed = |serial: u32, to: f64| {
+        layer.animate_timed(serial, Property::X, to, 200, 0.25, 0.1, 0.25, 1.0);
+    };
+
+    // an animation that waits to start, then a value of its property
+    timed(3, 40.0);
+    surf.commit();
+    rig.pump_comp(&oconn, &mut oq, &mut ost);
+    let waiting = |rig: &Rig| {
+        cupertino_server::layers_v1::with_parent(&server_strip, |layers| {
+            layers[0].animating(rig.state.now())
+        })
+    };
+    assert!(waiting(&rig), "the animation waits for a frame to show it");
+    layer.set_value(Property::X, 10.0);
+    surf.commit();
+    for _ in 0..2 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    assert_eq!(
+        ost.layer_replaced_with,
+        vec![(3, 0.0, 0.0)],
+        "the value replaces the waiting animation, answered with what was shown"
+    );
+
+    // another, then a cancel
+    timed(4, 80.0);
+    surf.commit();
+    rig.pump_comp(&oconn, &mut oq, &mut ost);
+    assert!(waiting(&rig), "the animation waits for a frame to show it");
+    layer.cancel(Property::X);
+    surf.commit();
+    for _ in 0..2 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    assert_eq!(
+        ost.layer_replaced_with,
+        vec![(3, 0.0, 0.0), (4, 10.0, 0.0)],
+        "the cancel replaces the waiting animation, answered with what was shown"
+    );
+    assert!(!waiting(&rig), "nothing waits or runs any more");
+    let target =
+        cupertino_server::layers_v1::with_parent(&server_strip, |layers| layers[0].target(0));
+    assert_eq!(target, 10.0, "x rests where it was shown");
 }
 
 /// `surf`'s component creates transaction `serial` and stages `surf` in it with a commit that makes a layer, a commit

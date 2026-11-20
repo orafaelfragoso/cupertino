@@ -156,6 +156,22 @@ impl LayerModel {
         }
     }
 
+    /// End the animations of `prop` still waiting to start, from commits that applied before, at `now`: `replaced`
+    /// with what is shown, where the motion that follows starts.
+    fn replace_waiting(&mut self, prop: usize, now: f64) {
+        if !self.waiting.iter().any(|w| w.prop == prop) {
+            return;
+        }
+        let (value, velocity) = (self.value(prop, now), self.props[prop].velocity(now));
+        for w in std::mem::take(&mut self.waiting) {
+            if w.prop == prop {
+                self.resource.replaced(w.serial, value, velocity);
+            } else {
+                self.waiting.push(w);
+            }
+        }
+    }
+
     /// The value of `prop` shown at `now`, [`held`] in its range: an animation that overshoots does not take the layer
     /// past it.
     pub fn value(&self, prop: usize, now: f64) -> f64 {
@@ -214,8 +230,8 @@ impl LayerModel {
             Op::Create { .. } | Op::Destroy => {}
             Op::Set(prop, v) => {
                 self.fix_size(prop);
-                self.waiting.retain(|w| w.prop != prop);
                 self.replace(prop, now);
+                self.replace_waiting(prop, now);
                 self.props[prop].set(v);
             }
             Op::Animate {
@@ -236,9 +252,9 @@ impl LayerModel {
                 since: now,
             }),
             Op::Cancel(prop) => {
-                self.waiting.retain(|w| w.prop != prop);
                 let shown = self.props[prop].value(now);
                 self.replace(prop, now);
+                self.replace_waiting(prop, now);
                 self.props[prop].set(shown);
             }
             Op::Glass(g) => self.glass = g,

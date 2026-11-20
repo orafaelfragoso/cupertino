@@ -1721,6 +1721,18 @@ dependencies = [
 [[package]]
 name = "cupertino-session-tests"
 version = "0.1.0"
+dependencies = [
+ "cupertino-assets",
+ "cupertino-kit",
+ "cupertino-kit-shell",
+ "cupertino-server",
+ "cupertino-ui-render",
+ "image",
+ "rustix 1.1.6",
+ "smithay",
+ "wayland-client",
+ "wayland-protocols",
+]
 
 [[package]]
 name = "cupertino-sessiond"

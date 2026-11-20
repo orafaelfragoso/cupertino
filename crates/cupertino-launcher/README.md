@@ -240,7 +240,7 @@ D-Bus activatable application.
 
 | Method | Effect |
 |---|---|
-| `Toggle` | Shows the search field or hides whatever is up. The server calls it for `Super+Space`. Only the server (the owner of `org.cupertino.Session1`) and the launcher component itself may: any other caller, another component of the host included, gets `org.freedesktop.DBus.Error.AccessDenied`. |
+| `Toggle` | Shows the search field or hides whatever is up. The server calls it for `Super+Space`, from its bus worker's connection. Only the server (the shell host's parent process) and the launcher component itself (its own connection) may: any other caller, another component of the host included, is refused with `org.cupertino.Error.UntrustedCaller` (`AnonymousCaller`, `FlatpakCaller`, `SnapCaller`), `cupertino_peer::CallerError`, the caller named off the UI thread. |
 | `ToggleApplications` | Opens the application browser, unfolds the search field into it, or closes it. The server calls it for the Dock's app-grid action; the same callers are allowed. |
 
 A call from a shell (`gdbus call ... --method org.cupertino.Launcher1.Toggle`) is refused for that reason; press

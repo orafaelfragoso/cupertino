@@ -714,7 +714,7 @@
   scope: shell-private
   source: crates/cupertino-launcher/src/control.rs
   source_match: "org.cupertino.Launcher1"
-  note: served by the launcher component in the cupertino-shell binary, on the component's own connection; Toggle and ToggleApplications accept only the server (the owner of org.cupertino.Session1) and the launcher component itself, any other caller gets AccessDenied
+  note: served by the launcher component in the cupertino-shell binary, on the component's own connection; Toggle and ToggleApplications accept only the server (the shell host's parent process, as the server calls from its bus worker's connection) and the launcher component itself (its own connection), any other caller is refused with an org.cupertino.Error name
 - name: org.cupertino.ControlPanel1
   kind: dbus-interface
   version: 1

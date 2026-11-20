@@ -48,6 +48,8 @@ pub use host::ComponentHost;
 const NAMESPACE: &str = "cupertino-launcher";
 /// How long reading a settings file or the launch history should take: one small file.
 const READ_DEADLINE: Duration = Duration::from_secs(2);
+/// How long naming a caller should take: a few small files of `/proc`.
+const CALLER_DEADLINE: Duration = Duration::from_secs(1);
 /// How long finding the terminal should take: a look along `PATH`.
 const TERMINAL_DEADLINE: Duration = Duration::from_secs(2);
 
@@ -111,6 +113,8 @@ pub enum Shell {
     Saved,
     /// A read that a newer one replaced before it started: nothing to tell.
     Replaced,
+    /// A caller was named for the call that waited for it.
+    Judged,
 }
 
 impl From<Shell> for Message {
@@ -139,6 +143,8 @@ pub struct State {
     told: Option<(bool, Option<OutputId>)>,
     /// The output size the model was last told.
     size: Option<Size>,
+    /// The component's session bus connection, which serves `org.cupertino.Launcher1`.
+    session: Option<zbus::Connection>,
 }
 
 /// The top margin of the panel's window on an output `height` points tall: the panel at [`TOP_FRACTION`] of the
@@ -330,6 +336,8 @@ impl State {
     fn shell(&mut self, shell: Shell) -> Vec<Command<Message>> {
         match shell {
             Shell::Session(Some(connection)) => {
+                // the connection lives while the component holds it
+                self.session = Some(connection.clone());
                 let calls = self.calls.0.clone();
                 vec![Command::Perform(Box::pin(async move {
                     let served = control::serve(&connection, calls).await;
@@ -346,7 +354,7 @@ impl State {
                 eprintln!("cupertino-launcher: no session bus connection");
                 vec![Command::Exit]
             }
-            Shell::Served(Ok(())) | Shell::Saved | Shell::Replaced => Vec::new(),
+            Shell::Served(Ok(())) | Shell::Saved | Shell::Replaced | Shell::Judged => Vec::new(),
             Shell::Served(Err(e)) => {
                 eprintln!(
                     "cupertino-launcher: {} is not served: {e}",
@@ -356,7 +364,19 @@ impl State {
             }
             Shell::Call(call) => {
                 let mut commands = vec![hear(&self.calls.1, Shell::Call)];
-                commands.extend(self.toggle(call == Call::Applications, None));
+                match call {
+                    Call::Judge { credentials, reply } => commands.push(task::io(
+                        CALLER_DEADLINE,
+                        move || {
+                            let caller = control::judge(credentials.as_deref());
+                            // the call waits on the receiver; one that went away needs no answer
+                            let _ = reply.try_send(Arc::new(caller));
+                        },
+                        |()| Message::Shell(Shell::Judged),
+                    )),
+                    Call::Toggle => commands.extend(self.toggle(false, None)),
+                    Call::Applications => commands.extend(self.toggle(true, None)),
+                }
                 commands
             }
             Shell::Toggle(browse, output) => self.toggle(browse, output),
@@ -466,6 +486,7 @@ impl Application for Launcher {
             output: None,
             told: None,
             size: None,
+            session: None,
         };
         let mut commands = bus::session(
             |connection| Message::Shell(Shell::Session(connection.ok())),

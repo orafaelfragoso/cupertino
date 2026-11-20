@@ -725,7 +725,7 @@
   scope: public
   source: crates/cupertino-controlcenter/src/control.rs
   source_match: "org.cupertino.ControlPanel1"
-  note: Toggle only changes the UI; refused to a sandboxed caller or one the bus cannot name
+  note: served by the controlcenter component in the cupertino-shell binary, on the component's own connection; Toggle only changes the UI; refused to a sandboxed caller or one the bus cannot name
 - name: org.cupertino.Audio1
   kind: dbus-interface
   version: 1
@@ -1116,14 +1116,6 @@
   owner_area: services
   scope: system
   source: crates/cupertino-btd/src/main.rs
-- name: cupertino-controlcenter
-  kind: binary
-  version: 0.1.0
-  shipped: yes
-  owner_crate: cupertino-controlcenter
-  owner_area: apps
-  scope: shell-private
-  source: crates/cupertino-controlcenter/src/main.rs
 - name: cupertino-cursor
   kind: binary
   version: 0.1.0
@@ -1204,7 +1196,7 @@
   owner_area: apps
   scope: shell-private
   source: crates/cupertino-shell/src/main.rs
-  note: the shell host the server starts on a connection with the host role alone; runs the listed components, each on a thread of its own; holds the osd (cupertino-osd) and notifications (cupertino-notifications) components
+  note: the shell host the server starts on a connection with the host role alone; runs the listed components, each on a thread of its own; holds the osd (cupertino-osd), notifications (cupertino-notifications) and controlcenter (cupertino-controlcenter) components
 - name: cupertino-control
   kind: binary
   version: 0.1.0

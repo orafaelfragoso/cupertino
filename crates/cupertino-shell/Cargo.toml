@@ -19,5 +19,6 @@ path = "src/main.rs"
 cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events" }
 cupertino-kit = { path = "../cupertino-kit" }
 cupertino-kit-shell = { path = "../cupertino-kit-shell" }
+cupertino-controlcenter = { path = "../cupertino-controlcenter" }
 cupertino-notifications = { path = "../cupertino-notifications" }
 cupertino-osd = { path = "../cupertino-osd" }

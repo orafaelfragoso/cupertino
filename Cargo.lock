@@ -1772,6 +1772,7 @@ dependencies = [
 name = "cupertino-shell"
 version = "0.1.0"
 dependencies = [
+ "cupertino-controlcenter",
  "cupertino-diagnostic-events",
  "cupertino-kit",
  "cupertino-kit-shell",

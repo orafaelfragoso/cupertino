@@ -194,7 +194,7 @@ const MAX_FILE_LINES: usize = 1500;
 const SIZE_LIMITED: [&str; 2] = ["crates/*/src/**", "xtask/src/**"];
 /// Legacy Wave 6–7 (`shell` and `apps`) files still awaiting their wave's refactor, capped at their current line count
 /// so they may never grow; entries must be removed once split under [`MAX_FILE_LINES`].
-const LARGE_FILE_CAPS: [(&str, usize); 14] = [
+const LARGE_FILE_CAPS: [(&str, usize); 12] = [
     ("crates/cupertino-dock/src/dock.rs", 1536),
     ("crates/cupertino-dock/src/kit.rs", 3346),
     ("crates/cupertino-files/src/kit/mod.rs", 3377),

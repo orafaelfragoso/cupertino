@@ -1,7 +1,6 @@
-//! Where a display's pixels are, for screenshots, screen sharing and the colour picker: a copied buffer turned back
-//! upright by the transform it carries ([`OutputTransform`], shared with the rest of the desktop), a display's place in
-//! the compositor's space when the server reports no logical geometry, and the pixel of a display's upright image
-//! under a point of that space.
+//! Where a display's pixels are, for screenshots and screen sharing: a copied buffer turned back upright by the
+//! transform it carries ([`OutputTransform`], shared with the rest of the desktop), and a display's place in the
+//! compositor's space when the server reports no logical geometry.
 
 use cupertino_geometry::{OutputTransform, Point, Size};
 use tiny_skia::Pixmap;
@@ -80,28 +79,4 @@ pub fn logical_size(mode: (u32, u32), transform: OutputTransform, scale: f64) ->
     let scale = if scale > 0.0 { scale } else { 1.0 };
     let side = |px: u32| (f64::from(px) / scale).round() as i32;
     (side(width), side(height))
-}
-
-/// The pixel of a display's upright image of `image` pixels under `point` of the compositor's logical space, for a
-/// display at `placement`; `None` when the point is outside the display. A display at a scale above 1 has several
-/// pixels for each point: the one whose area holds the point.
-pub fn pixel_under(
-    placement: Placement,
-    image: (u32, u32),
-    point: (f64, f64),
-) -> Option<(u32, u32)> {
-    let (left, top) = (
-        f64::from(placement.position.0),
-        f64::from(placement.position.1),
-    );
-    let (width, height) = (f64::from(placement.size.0), f64::from(placement.size.1));
-    if width <= 0.0 || height <= 0.0 || image.0 == 0 || image.1 == 0 {
-        return None;
-    }
-    let (u, v) = ((point.0 - left) / width, (point.1 - top) / height);
-    if !(0.0..1.0).contains(&u) || !(0.0..1.0).contains(&v) {
-        return None;
-    }
-    let px = |t: f64, n: u32| ((t * f64::from(n)).floor() as u32).min(n - 1);
-    Some((px(u, image.0), px(v, image.1)))
 }

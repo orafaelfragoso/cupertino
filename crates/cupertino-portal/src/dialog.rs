@@ -1,4 +1,4 @@
-//! The file-chooser, app-chooser, screen-sharing and screenshot windows: one for each open request, drawn with CupertinoKit. The D-Bus side
+//! The file-chooser, app-chooser, screenshot and keyboard-shortcut windows: one for each open request, drawn with CupertinoKit. The D-Bus side
 //! hands its events to the [`inbox`]; [`Dialogs`] is resident and keeps running while no dialog is open.
 
 use std::cell::RefCell;
@@ -34,7 +34,6 @@ use crate::chooser::{Accept, Chooser};
 use crate::consent::Arming;
 use crate::file_chooser::{self, Answer, Kind, Reply};
 use crate::global_shortcuts::{self, Refusal};
-use crate::screen_cast::{self, Source};
 use crate::screenshot;
 
 const ROW_HEIGHT: f64 = 24.0;
@@ -78,7 +77,7 @@ const DESCRIPTION_CHARS: usize = 80;
 const SHORTCUT_LINE_CHARS: usize = 56;
 /// A prompt window's title bar is only its control buttons, over the top of its glass panel.
 const PROMPT_DECORATIONS: DecorationMode = DecorationMode::Unified;
-/// Side of the requesting app's icon in the screen-sharing and screenshot windows.
+/// Side of the requesting app's icon in the screenshot and keyboard-shortcut windows.
 const APP_ICON: f64 = 32.0;
 const RETURN: Keysym = Keysym(0xff0d);
 const ESCAPE: Keysym = Keysym(0xff1b);
@@ -90,7 +89,6 @@ const TARGET_CHARS: usize = 80;
 /// What the D-Bus side asks of the dialogs.
 pub enum Event {
     FileChooser(file_chooser::Event),
-    ScreenCast(screen_cast::Event),
     AppChooser(app_chooser::Event),
     Screenshot(screenshot::Event),
     GlobalShortcuts(global_shortcuts::Event),
@@ -105,12 +103,6 @@ impl From<global_shortcuts::Event> for Event {
 impl From<file_chooser::Event> for Event {
     fn from(event: file_chooser::Event) -> Self {
         Event::FileChooser(event)
-    }
-}
-
-impl From<screen_cast::Event> for Event {
-    fn from(event: screen_cast::Event) -> Self {
-        Event::ScreenCast(event)
     }
 }
 
@@ -211,7 +203,6 @@ pub struct Model {
     places: Vec<Place>,
     next: u64,
     open: Vec<Dialog>,
-    pickers: Vec<Picker>,
     apps: Vec<AppPicker>,
     app_icons: AppIcons,
     /// The icons of the file chooser's rows, by the items' types.
@@ -281,22 +272,6 @@ struct Dialog {
     replace: Option<PathBuf>,
 }
 
-/// The chooser of what a screen-sharing request shares.
-struct Picker {
-    id: u64,
-    handle: OwnedObjectPath,
-    reply: screen_cast::Reply,
-    ask: screen_cast::Ask,
-    rows: Selection,
-    scroll: ScrollState,
-    /// The person ticked to let the app restore the share.
-    remember: bool,
-    /// The arming delay has passed: a row can be picked and shared.
-    armed: bool,
-    /// From the window's first presented frame; `None` before it.
-    arming: Option<Arming>,
-}
-
 /// The question whether an app may take a screenshot.
 struct Consent {
     id: u64,
@@ -326,17 +301,6 @@ struct ShortcutConsent {
 /// by the clock too.
 fn ready(armed: bool, arming: Option<Arming>) -> bool {
     armed && arming.is_some_and(|a| a.armed(Instant::now()))
-}
-
-impl Picker {
-    fn chosen(&self) -> Option<&Source> {
-        self.rows.cursor().and_then(|i| self.ask.sources.get(i))
-    }
-
-    /// Whether the window takes a pick: armed by its message, and the delay has passed by the clock too.
-    fn ready(&self) -> bool {
-        ready(self.armed, self.arming)
-    }
 }
 
 /// The chooser of the app that opens a link or a file.
@@ -384,9 +348,6 @@ pub enum Message {
     Replace(u64),
     KeepEditing(u64),
     Cancel(u64),
-    PickerScroll(u64, ScrollState),
-    PickerSelect(u64, Selection),
-    Share(u64),
     AppScroll(u64, ScrollState),
     AppSelect(u64, Selection),
     OpenWith(u64),
@@ -403,8 +364,6 @@ pub enum Message {
     Shown(u64),
     /// The arming delay of consent window `0` has passed.
     Armed(u64),
-    /// The person ticked or unticked remembering the share of chooser `0`.
-    Remember(u64, bool),
 }
 
 const NO_SCROLL: ScrollState = ScrollState {
@@ -442,10 +401,6 @@ impl Model {
         self.open.iter_mut().find(|d| d.id == id)
     }
 
-    fn picker(&mut self, id: u64) -> Option<&mut Picker> {
-        self.pickers.iter_mut().find(|p| p.id == id)
-    }
-
     fn app_picker(&mut self, id: u64) -> Option<&mut AppPicker> {
         self.apps.iter_mut().find(|a| a.id == id)
     }
@@ -477,28 +432,6 @@ impl Model {
                 }
                 Event::FileChooser(file_chooser::Event::Close { handle }) => {
                     self.open.retain(|d| d.handle != handle)
-                }
-                Event::ScreenCast(screen_cast::Event::Ask { handle, ask, reply }) => {
-                    let id = self.next;
-                    self.next += 1;
-                    self.app_icons.load_names(ask.app_icon.as_deref());
-                    // nothing is chosen until the person picks a row after the arming delay, so keys meant for the
-                    // app cannot share
-                    commands.push(arm_when_shown(id, picker_window_key(id)));
-                    self.pickers.push(Picker {
-                        id,
-                        handle,
-                        reply,
-                        ask: *ask,
-                        rows: Selection::default(),
-                        scroll: NO_SCROLL,
-                        remember: false,
-                        armed: false,
-                        arming: None,
-                    });
-                }
-                Event::ScreenCast(screen_cast::Event::Close { handle }) => {
-                    self.pickers.retain(|p| p.handle != handle)
                 }
                 Event::AppChooser(app_chooser::Event::Ask { handle, ask, reply }) => {
                     self.app_icons.load(&ask.choices);
@@ -575,13 +508,6 @@ impl Model {
         }
     }
 
-    /// End chooser `id` with `answer`.
-    fn finish_picker(&mut self, id: u64, answer: screen_cast::Answer) {
-        if let Some(i) = self.pickers.iter().position(|p| p.id == id) {
-            self.pickers.remove(i).reply.send(answer);
-        }
-    }
-
     /// End app chooser `id` with `answer`.
     fn finish_app(&mut self, id: u64, answer: app_chooser::Answer) {
         if let Some(i) = self.apps.iter().position(|a| a.id == id) {
@@ -635,7 +561,6 @@ impl Application for Dialogs {
             home,
             next: 0,
             open: Vec::new(),
-            pickers: Vec::new(),
             apps: Vec::new(),
             app_icons: AppIcons {
                 theme: ThemeIcons::new(&Assets::discover()),
@@ -764,7 +689,6 @@ impl Application for Dialogs {
             }
             Message::Cancel(id) => {
                 model.finish(id, Answer::Cancelled);
-                model.finish_picker(id, screen_cast::Answer::Cancelled);
                 model.finish_app(id, app_chooser::Answer::Cancelled);
                 model.finish_consent(id, screenshot::Answer::Cancelled);
                 model.finish_shortcuts(id, global_shortcuts::Answer::Dismissed);
@@ -786,61 +710,26 @@ impl Application for Dialogs {
                     model.finish_shortcuts(id, global_shortcuts::Answer::Allowed)
                 }
             }
-            Message::PickerScroll(id, scroll) => {
-                if let Some(p) = model.picker(id) {
-                    p.scroll = scroll;
-                }
-            }
-            Message::PickerSelect(id, rows) => {
-                // a row is not picked before the window is armed: a key typed for the app moves nothing
-                if let Some(p) = model.picker(id).filter(|p| p.ready()) {
-                    p.rows = rows;
-                }
-            }
-            Message::Share(id) => {
-                let chosen = model
-                    .picker(id)
-                    .filter(|p| p.ready())
-                    .and_then(|p| Some((p.chosen()?.clone(), p.remember && p.ask.offer_remember)));
-                if let Some((source, remember)) = chosen {
-                    model.finish_picker(id, screen_cast::Answer::Chosen { source, remember });
-                }
-            }
-            Message::Remember(id, on) => {
-                if let Some(p) = model.picker(id).filter(|p| p.ready()) {
-                    p.remember = on;
-                }
-            }
             Message::Shown(id) => {
                 let arming = Arming::new(Instant::now());
-                let picker = model.picker(id).filter(|p| p.arming.is_none());
-                let shown = match picker {
-                    Some(p) => {
-                        p.arming = Some(arming);
-                        true
-                    }
-                    None => model
-                        .consents
-                        .iter_mut()
-                        .find(|c| c.id == id && c.arming.is_none())
-                        .map(|c| c.arming = Some(arming))
-                        .or_else(|| {
-                            model
-                                .shortcut_consents
-                                .iter_mut()
-                                .find(|c| c.id == id && c.arming.is_none())
-                                .map(|c| c.arming = Some(arming))
-                        })
-                        .is_some(),
-                };
+                let shown = model
+                    .consents
+                    .iter_mut()
+                    .find(|c| c.id == id && c.arming.is_none())
+                    .map(|c| c.arming = Some(arming))
+                    .or_else(|| {
+                        model
+                            .shortcut_consents
+                            .iter_mut()
+                            .find(|c| c.id == id && c.arming.is_none())
+                            .map(|c| c.arming = Some(arming))
+                    })
+                    .is_some();
                 if shown {
                     commands.push(arm(id, arming));
                 }
             }
             Message::Armed(id) => {
-                if let Some(p) = model.picker(id) {
-                    p.armed = true;
-                }
                 if let Some(c) = model.consents.iter_mut().find(|c| c.id == id) {
                     c.armed = true;
                 }
@@ -910,12 +799,6 @@ impl Application for Dialogs {
             .open
             .iter()
             .map(|d| window(d, &model.places, &model.file_icons))
-            .chain(
-                model
-                    .pickers
-                    .iter()
-                    .map(|p| picker_window(p, &model.app_icons)),
-            )
             .chain(model.apps.iter().map(|a| app_window(a, &model.app_icons)))
             .chain(
                 model
@@ -1453,30 +1336,6 @@ fn foreign_parent(parent_window: &str, modal: bool) -> Option<ForeignParent> {
     })
 }
 
-/// A source as its row shows it: the display's description or connector name, the window's title and app.
-fn source_row(source: &Source) -> (&'static str, String) {
-    match source {
-        Source::Display {
-            name, description, ..
-        } => (
-            "symbol.desktop",
-            if description.is_empty() {
-                name.clone()
-            } else {
-                description.clone()
-            },
-        ),
-        Source::Window { title, app_id, .. } => (
-            "symbol.applications",
-            match (title.is_empty(), app_id.is_empty()) {
-                (false, false) => format!("{title} ({app_id})"),
-                (false, true) => title.clone(),
-                (true, _) => app_id.clone(),
-            },
-        ),
-    }
-}
-
 /// The requesting app's icon at [`APP_ICON`], else the applications symbol.
 fn app_icon(icon: Option<&str>, app_icons: &AppIcons) -> Element<Message> {
     match icon.and_then(|name| app_icons.named(name)) {
@@ -1526,117 +1385,6 @@ fn app_header(icon: Option<&str>, app_icons: &AppIcons, prompt: String) -> Eleme
     })
 }
 
-/// What the screen-sharing window asks: the app by its name, else an unnamed app.
-fn share_prompt(ask: &screen_cast::Ask) -> String {
-    let app = match &ask.app_name {
-        Some(name) => format!("“{name}” wants to share your screen."),
-        None => "An application wants to share your screen.".to_owned(),
-    };
-    if ask.sources.is_empty() {
-        format!("{app} There is no display or window to share.")
-    } else {
-        format!("{app} Choose a display or a window.")
-    }
-}
-
-fn picker_window(p: &Picker, app_icons: &AppIcons) -> Window<Message> {
-    let id = p.id;
-    let rows: Vec<(&'static str, String)> = p.ask.sources.iter().map(source_row).collect();
-    let names: Vec<String> = rows.iter().map(|(_, n)| n.clone()).collect();
-    let list = Element::from(ListView {
-        label: "Displays and Windows".into(),
-        count: rows.len(),
-        row_height: ROW_HEIGHT,
-        scroll: p.scroll,
-        selection: p.rows.clone(),
-        multiple: false,
-        initial: false,
-        row: Box::new(move |i, selected| row(symbol(rows[i].0), rows[i].1.clone(), selected)),
-        key: Some(Box::new(|i| Key::Int(i as u64))),
-        type_select: Some(Box::new(move |i| names[i].clone())),
-        on_scroll: Box::new(move |s| Message::PickerScroll(id, s)),
-        on_select: Some(Box::new(move |s| Message::PickerSelect(id, s))),
-        // Return reaches the window's shortcut, which a held key's repeats do not send
-        double_click_activates: true,
-        on_activate: None,
-    })
-    .key("sources");
-    let header = app_header(p.ask.app_icon.as_deref(), app_icons, share_prompt(&p.ask));
-    let remember = p.ask.offer_remember.then(|| {
-        let app = p.ask.app_name.as_deref().unwrap_or("the app");
-        Element::new(CheckBox {
-            label: format!("Let “{app}” share it again without asking"),
-            checked: if p.remember {
-                Checked::True
-            } else {
-                Checked::False
-            },
-            enabled: p.armed,
-            on_toggle: Some(Box::new(move |on: bool| Message::Remember(id, on))),
-        })
-        .key("remember")
-    });
-    let bar = bar_row(
-        remember.into_iter().collect(),
-        vec![
-            deny_button(id, p.armed),
-            button(
-                "Share".to_owned(),
-                ButtonRole::Default,
-                p.armed && p.chosen().is_some(),
-                Message::Share(id),
-            )
-            .key("share"),
-        ],
-    );
-    Window {
-        key: picker_window_key(id),
-        spec: WindowSpec {
-            title: "Share Screen".to_owned(),
-            app_id: crate::PROMPT_APP_ID.into(),
-            size: PICKER_SIZE,
-            min_size: Some(PICKER_MIN_SIZE),
-            max_size: None,
-            decorations: PROMPT_DECORATIONS,
-            foreign_parent: foreign_parent(&p.ask.parent_window, false),
-            input_region: None,
-        },
-        // Return presses the focused button, Cancel when the window opens; with the focus in the list it is the default
-        // button once a row is picked and the window is armed. Only a fresh press of Return shares, never a key held
-        // since before. Escape cancels wherever the focus is
-        shortcuts: CommandRegistry::new()
-            .with_fresh(
-                Shortcut {
-                    mods: Mods::NONE,
-                    keysym: RETURN,
-                },
-                Message::Share(id),
-            )
-            .with(
-                Shortcut {
-                    mods: Mods::NONE,
-                    keysym: ESCAPE,
-                },
-                Message::Cancel(id),
-            ),
-        on_close: Some(Message::Cancel(id)),
-        background: PANEL_WINDOW_BACKGROUND,
-        popup: None,
-        menus: None,
-        content: prompt_content(vec![
-            header,
-            Element::new(Separator {
-                axis: Axis::Horizontal,
-            }),
-            list,
-            Element::new(Separator {
-                axis: Axis::Horizontal,
-            }),
-            bar,
-        ]),
-    }
-}
-
 /// `target` as the app chooser's prompt names it: at most [`TARGET_CHARS`] characters, the rest left out.
 fn shortened(target: &str) -> String {
     match target.char_indices().nth(TARGET_CHARS) {
@@ -1647,10 +1395,6 @@ fn shortened(target: &str) -> String {
 
 fn app_window_key(id: u64) -> WindowKey {
     WindowKey(Key::Str(format!("apps-{id}").into()))
-}
-
-fn picker_window_key(id: u64) -> WindowKey {
-    WindowKey(Key::Str(format!("picker-{id}").into()))
 }
 
 fn consent_window_key(id: u64) -> WindowKey {

@@ -75,7 +75,8 @@ ext-foreign-toplevel-list-v1).
 - `CreateSession` adds an `org.freedesktop.impl.portal.Session` object at the session handle. `SelectSources` takes
   `types` (monitor, window or both), `cursor_mode` (hidden or embedded), `persist_mode` (0, 1 or 2; another value is
   `InvalidArgs`) and `restore_data`; `multiple` is read but one source is shared.
-- `Start` shows a window, "“<app>” wants to share your screen. Choose a display or a window.", the app named and drawn
+- `Start` asks the screenshot program to choose (`org.cupertino.Screenshot1.SelectSources`, see below), which shows a
+  window, "“<app>” wants to share your screen. Choose a display or a window.", the app named and drawn
   by its desktop entry (`<app id>.desktop`: `Name=` and an `Icon=` that is an icon name) else shown as its id, or as
   "An application" for an empty id. It lists the displays and the windows, by title and app id, with nothing
   selected. When the app asked to persist and has an id, a check box "Let “<app>” share it again without asking" is
@@ -190,24 +191,31 @@ captured unless the person agrees.
   is created new (never replacing a file) and readable by its owner only (`0600`).
 - The answer is `0` with `uri` (`file://`, escaped); Cancel or closing the window is `1`; `Close` on the request takes
   the window down and answers `2`, and so does a capture or a write that fails.
-- `PickColor` lets the person pick the colour of one pixel on any display. One frame of every display is copied at once
-  and frozen under an overlay layer surface on each display (namespace `cupertino-portal-color-picker`), the pointer
+- `PickColor` lets the person pick the colour of one pixel on any display, in the screenshot program
+  (`org.cupertino.Screenshot1.PickColor`, see below). One frame of every display is copied at once
+  and frozen under an overlay layer surface on each display (namespace `cupertino-screenshot-color-picker`), the pointer
   hidden. A crosshair marks the pixel under the pointer and a loupe beside it shows the 11 × 11 pixels round it, ten
   points each, the middle one outlined; it moves to the other side of the pointer near an edge. A click picks: its
   press must come on the overlay at least 500 ms after it appeared, and its release takes the pixel under the pointer
   then, both on overlays on screen for at least 500 ms, counted for each overlay from the frame callback of its first
   frame; so a button held from before or a click meant for what was under the pointer picks nothing. Escape cancels.
-- Every display has an overlay for the whole pick. The pick does not start when the server has a display that was not
-  copied (one plugged in after the copy), and any display added, unplugged or moved during the pick ends it with `2`:
-  a display without an overlay would pass a click to the app under it. A second `PickColor` while one runs answers
-  `2` at once, before any display is copied for it.
+- Every display has an overlay for the whole pick: any display added, unplugged or moved from the copy until the pick
+  ends ends it with `2`, since a display without an overlay would pass a click to the app under it. A second
+  `PickColor` while one runs answers `2` at once, before the screenshot program is asked.
 - The pick is the consent, so no window asks first: the app learns one colour and only of a pixel the person clicked.
   The answer is `0` with `color`, `(ddd)` red, green and blue in sRGB from 0 to 1 (the display's 8-bit value over
   255); Escape is `1`; `Close` on the request takes the overlay down and answers `2`, as do displays that change
-  during the pick, a copy that fails, a pick while another one runs, and a server without a layer shell.
+  during the pick, a copy that fails, a pick while another one runs, and a screenshot program that does not start.
 - The same callers and bounds as the file chooser apply: only the frontend calls, at most 16 screenshots and 4 for one
   app id are pending, the app id and the parent window are at most 1024 bytes, and the app's name loses control and
   bidirectional-override characters.
+
+**The screenshot program.** The colour picker and the screen-sharing chooser are `cupertino-screenshot`'s
+(`crates/cupertino-screenshot`), so one copy of each exists. For each call the portal asks the server to start it
+(`org.cupertino.Session1.StartScreenshot`, which only the portal may call; nothing happens when it runs), waits for it
+to own `org.cupertino.Screenshot1` (at most 10 s, `screenshot_tool::START_TIMEOUT`), then calls `PickColor` or
+`SelectSources` on it, and `Close` when the frontend closes the request first. The program accepts only the portal's
+calls; it exits when it has had nothing to do for 30 s.
 
 Known limitations: no window or area target and no pointer in the image. A picked colour is the copied pixel's value,
 without the display's colour profile, and the picker has no keyboard movement of the pointer.
@@ -238,8 +246,9 @@ to the portal before the focused client sees it, so that client gets neither the
   without a key, the reason (`it needs ⌃, ⌥ or ⌘`, `its key is a modifier key`, `the system uses it`, `“<app>” uses it`,
   `it names no key`, `another shortcut here uses it`); a description is cut to 80 characters. The window grows with
   the first eight rows and the list scrolls past them, so every shortcut can be read before Allow. Its app id is
-  `org.cupertino.Portal.Prompt`, as the screen-sharing and screenshot windows' are: the server keeps desktop
-  control's input and actions off a window of this process with that id. Don't Allow has the focus; Allow is enabled
+  `org.cupertino.Portal.Prompt`, as the screenshot window's is: the server keeps desktop control's input and actions
+  off a window of this process with that id. The screen-sharing chooser has that id too, but is the screenshot
+  program's window, which the server does not count as the portal's yet. Don't Allow has the focus; Allow is enabled
   only 500 ms after the first frame is on screen, as in the screenshot window. Allow answers `0` with `shortcuts`
   (each with `description` and `trigger_description`) and Don't Allow `1`, both remembered for the app id in
   `global-shortcuts.conf` (`cupertino-defaults::global_shortcuts`, mode `0600`, `allow = <app id> <key>…` with the

@@ -1,6 +1,7 @@
 //! `org.freedesktop.impl.portal.ScreenCast`: `CreateSession`, `SelectSources` and `Start`, and the
-//! `org.freedesktop.impl.portal.Session` object of each session. `Start` becomes an [`Ask`] for the dialog, which answers
-//! with the source the person chose through its [`Reply`]; the capture side then shares that source as a PipeWire
+//! `org.freedesktop.impl.portal.Session` object of each session. `Start` becomes an [`Ask`] for the screenshot program's
+//! chooser ([`crate::screenshot_tool::select_sources`]), which answers with the source the person chose; the capture
+//! side then shares that source as a PipeWire
 //! stream ([`Capture::Start`]) until the session is closed ([`Capture::Stop`]) or the share ends on its own, which closes
 //! the session. While a share runs, a menu-bar item ([`crate::sharing`]) names who shares what and stops it.
 //!
@@ -26,6 +27,7 @@ use zbus::{interface, Connection};
 use crate::consent::identify;
 use crate::file_chooser::plain;
 use crate::request::{answered, from_frontend, Exported, PortalError, Response, FRONTEND};
+use crate::screenshot_tool::{self, Answer as Chosen};
 use crate::session::Session;
 use crate::sharing::{Indicator, Shown};
 use crate::PORTAL_PATH;
@@ -196,26 +198,6 @@ pub struct Ask {
     pub offer_remember: bool,
 }
 
-/// How the chooser ended.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Answer {
-    /// Share `source`; `remember` when the person ticked to let the app restore it.
-    Chosen {
-        source: Source,
-        remember: bool,
-    },
-    Cancelled,
-}
-
-/// The chooser's answer to one [`Ask`].
-pub struct Reply(pub(crate) async_channel::Sender<Answer>);
-
-impl Reply {
-    pub fn send(self, answer: Answer) {
-        let _ = self.0.try_send(answer);
-    }
-}
-
 /// A shared source as the frontend reads it from `Start`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Stream {
@@ -238,18 +220,6 @@ impl Started {
     pub fn send(self, started: Result<Stream, String>) {
         let _ = self.0.try_send(started);
     }
-}
-
-/// What the dialog side is told.
-pub enum Event {
-    /// Show a chooser for the call at `handle`.
-    Ask {
-        handle: OwnedObjectPath,
-        ask: Box<Ask>,
-        reply: Reply,
-    },
-    /// The frontend closed the call at `handle`, or its session: take its chooser down without answering.
-    Close { handle: OwnedObjectPath },
 }
 
 /// What the capture side is told.
@@ -551,7 +521,6 @@ fn start_unless_ended(
 /// The object on the bus.
 pub struct ScreenCast {
     sources: Box<dyn Fn() -> Vec<Source> + Send + Sync>,
-    events: Box<dyn Fn(Event) + Send + Sync>,
     shares: Shares,
     sessions: Sessions,
     applications: Vec<PathBuf>,
@@ -561,17 +530,15 @@ pub struct ScreenCast {
 }
 
 impl ScreenCast {
-    /// `sources` lists what can be shared now; `events` reaches the dialog side and `shares` the capture side. Nothing
+    /// `sources` lists what can be shared now and `shares` reaches the capture side; the screenshot program chooses. Nothing
     /// is read from or written to a file until [`ScreenCast::with_grants`] names one, and apps are shown by their ids
     /// until [`ScreenCast::with_applications`] names where their desktop entries are.
     pub fn new(
         sources: impl Fn() -> Vec<Source> + Send + Sync + 'static,
-        events: impl Fn(Event) + Send + Sync + 'static,
         shares: impl Fn(Capture) + Send + Sync + 'static,
     ) -> Self {
         Self {
             sources: Box::new(sources),
-            events: Box::new(events),
             shares: Arc::new(shares),
             sessions: Arc::default(),
             applications: Vec::new(),
@@ -651,8 +618,8 @@ impl ScreenCast {
         })
     }
 
-    /// Ask the chooser what to share: the source and whether the person ticked to remember it, else how the call
-    /// answers when it ends without a source.
+    /// Ask the screenshot program's chooser what to share: the source and whether the person ticked to remember it, else
+    /// how the call answers when it ends without a source.
     async fn choose(
         &self,
         connection: &Connection,
@@ -662,35 +629,42 @@ impl ScreenCast {
         ask: Ask,
     ) -> Result<Result<(Source, bool), u32>, PortalError> {
         let request = Exported::at(connection, handle.as_ref()).await?;
-        let (reply, answer) = async_channel::bounded(1);
-        (self.events)(Event::Ask {
-            handle: handle.clone(),
-            ask: Box::new(ask),
-            reply: Reply(reply),
-        });
-        let answer = futures_lite::future::or(async { Some(answer.recv().await.ok()) }, async {
-            futures_lite::future::or(request.closed(), async {
-                let _ = closed.recv().await;
-            })
-            .await;
-            None
-        })
+        let answer = futures_lite::future::or(
+            async {
+                Some(screenshot_tool::select_sources(connection, handle.as_str(), &ask).await)
+            },
+            async {
+                futures_lite::future::or(request.closed(), async {
+                    let _ = closed.recv().await;
+                })
+                .await;
+                None
+            },
+        )
         .await;
         request.remove().await;
+        let chosen = |index: usize| ask.sources.get(index).cloned();
         Ok(match answer {
-            Some(Some(Answer::Chosen { source, remember })) => Ok((source, remember)),
-            Some(Some(Answer::Cancelled)) => {
+            Some(Ok(Chosen::Done((index, remember)))) => match chosen(index) {
+                Some(source) => Ok((source, remember)),
+                None => {
+                    self.set_phase(session, Phase::Created);
+                    Err(Response::Other as u32)
+                }
+            },
+            Some(Ok(Chosen::Cancelled)) => {
                 self.set_phase(session, Phase::Created);
                 Err(Response::Cancelled as u32)
             }
-            Some(None) => {
+            Some(Ok(Chosen::Failed)) | Some(Err(_)) => {
+                if let Some(Err(reason)) = &answer {
+                    eprintln!("cupertino-portal: the chooser for {handle} failed: {reason}");
+                }
                 self.set_phase(session, Phase::Created);
                 Err(Response::Other as u32)
             }
             None => {
-                (self.events)(Event::Close {
-                    handle: handle.clone(),
-                });
+                screenshot_tool::close(connection, handle.as_str()).await;
                 Err(Response::Other as u32)
             }
         })

@@ -14,7 +14,6 @@ use cupertino_portal::capture::Capture;
 use cupertino_portal::dialog::{inbox, Dialogs};
 use cupertino_portal::file_chooser::FileChooser;
 use cupertino_portal::global_shortcuts::GlobalShortcuts;
-use cupertino_portal::pick_overlay::PickOverlay;
 use cupertino_portal::screen_cast::ScreenCast;
 use cupertino_portal::screenshot::{self, Screenshot};
 use cupertino_portal::settings::{Appearance, Service};
@@ -50,7 +49,7 @@ fn fold(mut appearance: Appearance, events: &[Event]) -> Appearance {
     appearance
 }
 
-/// The file-chooser, app-chooser, screen-sharing and screenshot windows; a dialog that cannot be shown ends the process.
+/// The file-chooser, app-chooser, screenshot and keyboard-shortcut windows; a dialog that cannot be shown ends the process.
 fn dialogs() {
     if let Err(e) = cupertino_kit::app::run::<Dialogs>() {
         eprintln!("cupertino-portal: {e}");
@@ -71,15 +70,6 @@ fn run() -> Result<()> {
     let mut capture = Capture::bind(&mut conn, received, shots)
         .inspect_err(|e| eprintln!("cupertino-portal: no screen sharing or screenshots: {e}"))
         .ok();
-    let (picks, picked) = mpsc::channel();
-    // without a layer shell PickColor answers that it failed
-    let mut picker = capture
-        .is_some()
-        .then(|| PickOverlay::bind(&mut conn, picked))
-        .flatten();
-    if capture.is_some() && picker.is_none() {
-        eprintln!("cupertino-portal: no colour picking: the server lacks zwlr_layer_shell_v1");
-    }
     let (keys_sender, keys_requested) = mpsc::channel();
     // without the global the portal serves no shortcuts, and the frontend asks another backend
     let mut shortcut_keys = ShortcutKeys::bind(&mut conn, keys_requested);
@@ -114,7 +104,6 @@ fn run() -> Result<()> {
         let waker = conn.waker();
         ScreenCast::new(
             move || sources.lock().unwrap_or_else(|e| e.into_inner()).clone(),
-            |event| inbox().push(event),
             move |request| {
                 let _ = requests.send(request);
                 waker.wake();
@@ -124,7 +113,7 @@ fn run() -> Result<()> {
         .with_grants(ScreenSharingConf::path())
         .serve(&bus)?;
         let waker = conn.waker();
-        let mut screenshot = Screenshot::new(
+        let screenshot = Screenshot::new(
             cupertino_apps::entry::xdg_application_dirs(),
             screenshot::pictures,
             |event| inbox().push(event),
@@ -133,13 +122,6 @@ fn run() -> Result<()> {
                 waker.wake();
             },
         );
-        if picker.is_some() {
-            let waker = conn.waker();
-            screenshot = screenshot.with_picker(move |event| {
-                let _ = picks.send(event);
-                waker.wake();
-            });
-        }
         bus.object_server().at(PORTAL_PATH, screenshot)?;
     }
     let shortcuts = match shortcut_keys {
@@ -169,9 +151,6 @@ fn run() -> Result<()> {
     bus.request_name(BUS_NAME)?;
     loop {
         let events = conn.wait(capture.as_ref().and_then(Capture::timeout))?;
-        if let Some(picker) = &mut picker {
-            picker.update(&mut conn, &events);
-        }
         if let Some(capture) = &mut capture {
             capture.update(&conn, &events);
         }

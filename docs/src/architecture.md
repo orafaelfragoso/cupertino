@@ -25,10 +25,10 @@ A crash in a shell process never takes the desktop down.
 | `cupertino-windowmanager` | the stage and tiling policy (off by default) |
 | `cupertino-login` | the login screen, the lock screen (`ext-session-lock`) and the session agent |
 | `cupertino-sessiond` | the root-owned half of login: the login screen's socket, PAM in a worker per attempt, logind sessions and virtual terminals, fast user switching, power, auto login |
-| `cupertino-screenshot` | screen, window and selection capture, toolbar, floating thumbnail |
+| `cupertino-screenshot` | screen, window and selection capture, toolbar, floating thumbnail; with `--serve`, started for the portal, the colour picker and the screen-sharing chooser (`org.cupertino.Screenshot1`) |
 | `cupertino-polkit-agent` | the session's polkit authentication agent and its prompt |
 | `cupertino-keyring-prompter` | the keyring's password prompt, drawn as the authentication prompt is (a second binary of the `cupertino-polkit-agent` crate, which has no crate of its own) |
-| `cupertino-portal` | the xdg-desktop-portal backend: file chooser, screen sharing, screenshots and colour picking, app chooser, appearance settings |
+| `cupertino-portal` | the xdg-desktop-portal backend: file chooser, screen sharing, screenshots and colour picking (the choosing and picking in `cupertino-screenshot`), app chooser, appearance settings |
 | `cupertino-control` | desktop control for local agents: output-scoped observation, capture, pointer and keyboard runs, each with the person's consent per app, and its MCP stdio bridge (`--mcp`) |
 | `cupertino-files` | the file manager, and with `--desktop` the items of the Desktop folder on the desktop |
 | `cupertino-settings` | the settings app |

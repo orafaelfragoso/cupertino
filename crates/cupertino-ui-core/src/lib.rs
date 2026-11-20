@@ -406,6 +406,14 @@ pub enum Command<M> {
     /// frame (a [`WindowRequest::Present`] then starts with the window). Nowhere when the view has no such window.
     Window(WindowKey, WindowRequest),
     SetClipboard(String),
+    /// Puts `data` on the clipboard, one entry per MIME type a reader may ask for (a picture as `image/png` bytes, a
+    /// name for it as `text/plain;charset=utf-8`), in place of what it held. `replaced` is sent once another client's
+    /// selection takes its place, or the system drops it; never when the application puts something else on the
+    /// clipboard first.
+    SetClipboardData {
+        data: Vec<ClipboardData>,
+        replaced: Option<M>,
+    },
     /// Asks for an activation token for `window`, to hand to the application `app_id` names when it is started; the
     /// token is `None` when the window is gone or the compositor gives none.
     ActivationToken {

@@ -94,3 +94,7 @@ required-features = ["test"]
 [[test]]
 name = "settings"
 required-features = ["test"]
+
+[[test]]
+name = "clipboard"
+required-features = ["test"]

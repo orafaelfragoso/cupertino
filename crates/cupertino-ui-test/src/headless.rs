@@ -235,7 +235,10 @@ pub struct HeadlessWindowSystem {
     next_configure: u32,
     next_token: u64,
     queue: VecDeque<PlatformEvent>,
-    clipboards: HashMap<ClipboardKind, ClipboardData>,
+    /// What each clipboard holds, one entry per MIME type.
+    clipboards: HashMap<ClipboardKind, Vec<ClipboardData>>,
+    /// The clipboards whose data the application under test set and no other application replaced since.
+    owned_clipboards: HashSet<ClipboardKind>,
     drags: Vec<StartedDrag>,
     incoming: Vec<IncomingDrag>,
     /// The reads of drops, which a test driver does not attribute to a focused field.
@@ -273,6 +276,7 @@ impl HeadlessWindowSystem {
             next_token: 1,
             queue: VecDeque::new(),
             clipboards: HashMap::new(),
+            owned_clipboards: HashSet::new(),
             drags: Vec::new(),
             incoming: Vec::new(),
             drop_reads: HashSet::new(),
@@ -680,18 +684,24 @@ impl HeadlessWindowSystem {
         Ok(&self.window(window)?.solids)
     }
 
-    pub fn clipboard(&self, kind: ClipboardKind) -> Option<&ClipboardData> {
-        self.clipboards.get(&kind)
+    /// What the clipboard of `kind` holds, one entry per MIME type; empty when it holds nothing.
+    pub fn clipboard(&self, kind: ClipboardKind) -> &[ClipboardData] {
+        self.clipboards.get(&kind).map_or(&[], Vec::as_slice)
     }
 
     /// Another application copied `data`, or with `None` cleared the clipboard: it is what a read answers from now
-    /// on, and the application under test is told what the clipboard offers.
+    /// on, the application under test is told that its own data was replaced when the clipboard held it, and what the
+    /// clipboard offers.
     pub fn offer_clipboard(&mut self, kind: ClipboardKind, data: Option<ClipboardData>) {
         let mimes = data.as_ref().map(|d| vec![d.mime.clone()]);
         match data {
-            Some(data) => self.clipboards.insert(kind, data),
+            Some(data) => self.clipboards.insert(kind, vec![data]),
             None => self.clipboards.remove(&kind),
         };
+        if self.owned_clipboards.remove(&kind) {
+            self.queue
+                .push_back(PlatformEvent::ClipboardReplaced { kind });
+        }
         self.queue
             .push_back(PlatformEvent::ClipboardOffered { kind, mimes });
     }
@@ -941,8 +951,9 @@ impl WindowSystem for HeadlessWindowSystem {
         }
     }
 
-    fn set_clipboard(&mut self, kind: ClipboardKind, data: ClipboardData) {
+    fn set_clipboard(&mut self, kind: ClipboardKind, data: Vec<ClipboardData>) {
         self.clipboards.insert(kind, data);
+        self.owned_clipboards.insert(kind);
     }
 
     /// With [`Capabilities::drag_and_drop`], keeps the drag and takes the pointer from the window with a leave, as a
@@ -1023,7 +1034,7 @@ impl WindowSystem for HeadlessWindowSystem {
         let data = self
             .clipboards
             .get(&kind)
-            .filter(|d| d.mime == mime)
+            .and_then(|held| held.iter().find(|d| d.mime == mime))
             .cloned();
         self.queue
             .push_back(PlatformEvent::Clipboard { token, data });

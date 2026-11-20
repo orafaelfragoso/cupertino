@@ -29,7 +29,9 @@ protection by token until the reply arrives. A protected request stays redacted 
 a public request stays public if focus later becomes protected. Unknown clipboard tokens fail before their content
 is recorded. The low-level `Trace::record` is crate-private; callers supply no arrival-time protection flag.
 Core does not yet route clipboard replies to widgets: this API exercises the headless clipboard and trace contract,
-not application paste delivery.
+not application paste delivery. `HeadlessWindowSystem::clipboard(kind)` lists what the application put on the clipboard,
+one entry per MIME type, and `offer_clipboard(kind, data)` is another application's copy: when the clipboard held the
+application's own data, it hears `PlatformEvent::ClipboardReplaced` first.
 
 `Trace::replay` validates the trace and returns ordered, timestamped events; protected entries require matching
 `SecureInputs` fixtures. Advance the driver to each recorded time and enqueue each event. Recreate compositor

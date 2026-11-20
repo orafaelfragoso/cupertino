@@ -7,7 +7,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use cupertino_kit::core::WindowKey;
 use cupertino_kit::geometry::Rect;
@@ -27,7 +27,9 @@ use cupertino_shell_client::{
     SessionLockManager, SessionState, Shell, ShellEvent,
 };
 use cupertino_ui_wayland::{RoleEvent, SurfaceRoles};
-use cupertino_wayland_client::{Connection, Error as WireError, ExtensionEvent, SurfaceId};
+use cupertino_wayland_client::{
+    Connection, Error as WireError, Event as WireEvent, ExtensionEvent, SurfaceId,
+};
 
 use super::globals;
 use super::protocols::{OverviewData, Quiet, WindowManagerData, Wire};
@@ -205,7 +207,26 @@ impl ShellRoles {
             captures: super::capture::Capturing::bind(conn),
         };
         roles.follow_outputs(conn, false);
+        roles.read_answers(conn);
         roles
+    }
+
+    /// Read what the server answers the bindings with at once (the session's state, each output's window manager
+    /// and overview feed): the window system made on the connection next reads the events waiting there before these
+    /// roles are its own, and would drop them.
+    fn read_answers(&mut self, conn: &mut Connection) {
+        if conn.roundtrip().is_err() {
+            return;
+        }
+        let Ok(events) = conn.wait(Some(Duration::ZERO)) else {
+            return;
+        };
+        for event in events {
+            // no window is open yet: what the window system reads before its first window concerns the roles alone
+            if let WireEvent::Extension(extension) = event {
+                let _ = SurfaceRoles::event(self, &extension);
+            }
+        }
     }
 
     /// The outputs as the program reads them ([`crate::outputs::all`]), and the window manager and overview objects of

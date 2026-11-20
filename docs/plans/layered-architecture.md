@@ -732,6 +732,8 @@ ui-wayland`. **After** W4.2.
        the owner accepts the render thread's 1–4 MiB and 2–3 threads per process.
 5. [x] (ba9ad4825, 48ba844f1) The raised layer, surface layers and declined frames are drawn and committed through the render thread's hand-over,
        layers before their parent, no blocking round trip on the UI thread (review item S5, owner: in wave 4).
+- [x] After the wave 5 review (2026-11-20): the heartbeat had no reader; `cupertino-kit-shell`'s `render_busy_for()` now
+      reads it and the loop keeps its own busy record (`735a36e5b`).
 
 #### W4.7 Kit's public API (L, design then code)
 
@@ -850,6 +852,9 @@ commit and ends as W4.8's do.
        Done when: `tests/transfer.rs`: a tree copied and moved slice by slice with its progress, a move across two
        file systems, a stop that removes the item being copied, a source that changed while it was copied left where
        it was, the results the blocking functions give now.
+- [x] After the wave 5 review (2026-11-20): the reads the log left on the UI thread (a new window's folder, the
+      listing's free space and read-only state, the nearest existing ancestor, the places, a drop target's mount state, the
+      places watch) are Kit I/O work (`49388d26c`, `5b6282e21`).
 
 #### W4.T Tests of wave 4's crates
 
@@ -908,6 +913,11 @@ Decided (owner delegated to the lead, 2026-11-18):
 4. [x] Holds (D19) (`ed93458f4`).
 5. [x] Program test with a stand-in host: a dropped component keeps the menu bar's space and picture; a
        transient surface is dismissed and focus returns; an unresponsive component gets no input (`ed93458f4`).
+6. [x] After the wave 5 review (2026-11-20): no picture taken per commit; held pictures for any buffer type; input
+       recorded for the quiet moment; an expected exit after the kill grace is no crash; bus nonces fail closed;
+       window-manager placements held to the takeover frame and released at ready, timeout or give-up; the program
+       test covers a real window, a dropped transient, `lost`, a separate host's bridge and `request_restart`
+       (`445993843`).
 
 #### W5.3 Transactions, server side (L, behaviour change)
 
@@ -918,6 +928,9 @@ Decided (owner delegated to the lead, 2026-11-18):
 3. [x] Holes from window content and thumbnails (`86b033e18`).
 4. [x] Program tests: two participants start on one frame; a late one joins in step; a gesture settles with its
        velocity (`86b033e18`).
+5. [x] After the wave 5 review (2026-11-20): holes draw their source (window, thumbnail, workspace, the closing
+       fade), a claimed window only there; staged commits are held by commit blockers until their part applies;
+       transactions start at the presentation time of their output's frame (`de69c1ccf`).
 
 #### W5.4 `Session1` and `Displays1` (M, behaviour change)
 
@@ -929,6 +942,10 @@ W5.3.
       removes them (`6c07193a6`).
 - [x] `Displays1`: what Settings configures today through output management (D14) (`6c07193a6`).
 - [x] `docs/architecture/contracts.yaml` lists both (`6c07193a6`).
+- [x] After the wave 5 review (2026-11-20): `Login1.Sleep` goes through `Session1`; the restore list is saved
+      from `Session1.OpenApplications` before the forward; the session agent answers `QuitInterrupted` with its
+      panel; login's own quitting (`logout.rs`) is gone; `SessionActionFailed` tells the agent of a refused final
+      step (`a9ffd5bf7`, `ca7a02502`, `eb53c0aa8`, `ae7ed3105`).
 
 #### W5.5 What the components need from the server (M)
 
@@ -942,6 +959,10 @@ W5.5). **After** W5.4.
 - [x] `cupertino-screenshot` is started on demand (`723b6e3cf`).
 - [x] The server side of the overview transition and of the stage strip (transactions, holes, the window manager's
       surface); the server keeps drawing its own until W6.8 and W6.9 switch to the components (`723b6e3cf`).
+- [x] After the wave 5 review (2026-11-20): the supervisor starts the shared host and `cupertino-shell --only NAME`
+      hosts over a passed socket, restarts them with the 1 s to 30 s backoff, falls back to process entries when the
+      host is missing, refuses or answers `unavailable`, applies the `shell` section live, and routes
+      `cupertino shell restart` through the host (`8f65b3227`).
 
 #### W5.6 to W5.8 Server split (D25)
 
@@ -1000,6 +1021,11 @@ v1 adds no change signal. A mute switch that cannot represent the requested stat
 to resolved window and layer surfaces before commit, internal to the toolkit. **After** W4.10, W4.7.
 
 - [x] The API of W4.9 over the generated bindings; nothing beyond it (`b3a5ef200`, `7d22339a2`).
+- [x] After the wave 5 review (2026-11-20): the bus bridge's handshake, replay, sender checks and `bus_dropped`;
+      D20's identity on a bus socket the host can shut; helpers woken by their result and failing the component on a
+      panic; the child reaper; `Host::wait` errors (`54638e6eb`, `e2b3b8e18`). The runtime runs the component on
+      Kit's loop on its own connection: roles, persist and `ready`, every request, version refusal, the busy
+      watchdog, `run` and `run_lock_screen` (`735a36e5b`).
 
 #### W5.11 Conformance of `services` (S)
 
@@ -1378,3 +1404,20 @@ One line per change to a decision or approval of a design: date, number, what, w
   (zero remaining-work lines across all 13 enforced layers; 110 remaining lines live solely in `shell` and `apps`).
   `cupertino-layers` now also enforces D25's core crate dependency direction (`CORE_DIRECTION`) and restricts
   `cupertino_kit_shell::hosting` in `src/` to `cupertino-shell` (and `cupertino-kit-shell` itself).
+- 2026-11-20: lead, review of waves 0-5 after the owner found stubs in W5.10 and W5.5. W5.2, W5.3, W5.4, W5.5 and
+  W5.10 were ticked with parts missing (the kit-shell runtime a 5 ms loop, no host ever started, holes not drawn, no
+  staging, the restore list lost on the `Session1` path); W4.6's heartbeat had no reader and W4.12 left reads on the
+  UI thread. Each is closed under its task above. Calls made: a host program that is refused or cannot start is not
+  retried until `cupertino shell restart host` or a change of the `shell` section; process entries listed in `off`
+  no longer run; the component version table is shell 20 (menu bar 25, dock 26), layer shell 4, transaction and
+  overview managers 1; a Files window whose first folder cannot be read opens, posts its notice and closes; a drag's
+  first hover over an unread folder counts it writable. Every `shell` crate forbids `unsafe` ahead of its W6 task
+  (`988c5e8d0`): local time and formatting in `kit::time`, accounts in `kit::account`, the host name and
+  addresses in `kit::host`, hardening in `kit::process`, the zeroing allocator in `cupertino-login-ipc`, zeroed
+  pixel buffers in `kit::render`; the screenshot reads its memfd instead of mapping it. W5.6's displays remainder
+  (`service`, `management`, `power`, `recovery`, `placement`, `surface_output`) and the `impl Cupertino` glue
+  files (`frame_stats`, `gpu_reset`, `hung`, `input_method`, `kbd_filters`, `kbd_ui`, `cursor`, `decor_access`,
+  `drag_return`, `global_shortcuts`, `pointer_constraints`, `shortcut_inhibit`, `events`) stay in
+  `cupertino-server`: they name the server's state. Still open, needing the installed session: W0.1's installed
+  frame timings and the PSS of login, the polkit agent and the keyring prompter (read as root), and W5.6-W5.8's
+  frame timings on the hardware.

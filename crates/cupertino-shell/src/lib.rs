@@ -23,6 +23,9 @@ use cupertino_kit_shell::Entry;
 
 pub use host::run;
 
+/// The on-screen displays (`cupertino-osd`).
+pub static OSD: Entry = Entry::of::<cupertino_osd::Osd>();
+
 /// The components this build of the host runs. A component the server lists that is not here is answered
 /// `unavailable` (`absent`), and the server runs it the way the rest of its configuration says.
-pub static COMPONENTS: [&Entry; 0] = [];
+pub static COMPONENTS: [&Entry; 1] = [&OSD];

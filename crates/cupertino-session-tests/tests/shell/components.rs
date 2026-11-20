@@ -10,6 +10,8 @@
 //! - `menubar`: a persistent layer window at the output's top left whose colour turns from [`GREEN`] to [`YELLOW`]
 //!   and back every [`TICK`]; it opens its session bus connection and reports its unique name with its instance.
 //!
+//! - `osd`: the real on-screen displays of `cupertino-osd`, as `cupertino-shell` runs them.
+//!
 //! What a component reports goes to the report file ([`report`]) as one line.
 
 use std::io::Write;
@@ -538,4 +540,12 @@ pub static CONTROLCENTER: Entry = Entry::of::<ControlCenter>();
 pub static LAUNCHER: Entry = Entry::of::<Launcher>();
 
 /// The components this host was built with.
-pub static ENTRIES: [&Entry; 5] = [&MENUBAR, &DOCK, &NOTIFICATIONS, &CONTROLCENTER, &LAUNCHER];
+/// The test components and the real on-screen displays (`cupertino_shell::OSD`).
+pub static ENTRIES: [&Entry; 6] = [
+    &MENUBAR,
+    &DOCK,
+    &NOTIFICATIONS,
+    &CONTROLCENTER,
+    &LAUNCHER,
+    &cupertino_shell::OSD,
+];

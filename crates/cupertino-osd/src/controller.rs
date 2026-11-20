@@ -1,10 +1,10 @@
-//! Carries out a command (change a level, then show it) on the backends and the model.
+//! What a command asks of the levels and what the overlay then shows: the sender's rules, as pure functions of the
+//! levels read before the press. [`crate::effects`] reads and writes the levels and calls these in between.
 
 use std::fmt;
 
-use crate::backend::{BackendError, Backlight, Volume, VolumeState};
-use crate::model::{Hud, Kind, Overlay, Phase, View};
-use crate::sender::{hold_seconds, step_level};
+use crate::model::{InvalidLevel, Kind, Overlay};
+use crate::sender::step_level;
 
 /// What a sender asks of the overlay.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -39,7 +39,8 @@ pub enum Command {
 }
 
 impl Command {
-    fn name(&self) -> &'static str {
+    /// What the command is called in a log line.
+    pub fn name(&self) -> &'static str {
         match self {
             Command::VolumeStep { .. } => "volume step",
             Command::ToggleMute => "mute toggle",
@@ -49,188 +50,117 @@ impl Command {
             Command::Show(_) => "show",
         }
     }
+
+    /// Whether the command changes a backlight, through the system bus.
+    pub fn backlight(&self) -> bool {
+        matches!(
+            self,
+            Command::BrightnessStep { .. } | Command::KeyboardBrightnessStep { .. }
+        )
+    }
+}
+
+/// A volume, output or input.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VolumeState {
+    /// Level, 0 to 1.
+    pub level: f64,
+    /// Whether it is muted.
+    pub muted: bool,
+}
+
+/// What a command did: the overlay to show and whether it changed a value, which sets the hold.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Shown {
+    pub overlay: Overlay,
+    pub changed: bool,
 }
 
 /// A command whose effect failed; nothing was shown.
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct EffectError {
-    command: &'static str,
-    source: BackendError,
+    pub command: &'static str,
+    pub reason: String,
 }
 
 impl fmt::Display for EffectError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} failed, nothing shown: {}", self.command, self.source)
+        write!(f, "{} failed, nothing shown: {}", self.command, self.reason)
     }
 }
 
-impl std::error::Error for EffectError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(self.source.as_ref())
+impl std::error::Error for EffectError {}
+
+/// The volume one volume key press asks for: a new level of 0 or less mutes, and a new level above 0 unmutes.
+pub fn volume_step(before: VolumeState, direction: i32, fine: bool) -> VolumeState {
+    let level = step_level(before.level, direction, fine);
+    VolumeState {
+        level,
+        muted: level <= 0.0,
     }
 }
 
-/// The overlay model together with the things it changes.
-pub struct Controller {
-    hud: Hud,
-    volume: Box<dyn Volume>,
-    microphone: Box<dyn Volume>,
-    display: Box<dyn Backlight>,
-    keyboard: Box<dyn Backlight>,
+/// The volume the mute key asks for: it toggles, but at volume 0 the result is always muted.
+pub fn mute_toggle(before: VolumeState) -> VolumeState {
+    VolumeState {
+        level: before.level,
+        muted: before.level <= 0.0 || !before.muted,
+    }
 }
 
-/// What a command did: the overlay to show and whether it changed a value, which sets the hold.
-struct Effect {
-    overlay: Overlay,
-    changed: bool,
+/// The input volume the microphone mute key asks for: a plain toggle.
+pub fn microphone_toggle(before: VolumeState) -> VolumeState {
+    VolumeState {
+        level: before.level,
+        muted: !before.muted,
+    }
 }
 
-/// The overlay of a volume after a change: muted shows the mute glyph with an empty meter.
-fn volume_overlay(state: VolumeState) -> Result<Overlay, BackendError> {
-    Ok(if state.muted {
-        Overlay::new(Kind::Mute, 0.0)?
+/// The overlay of an output volume: muted shows the mute glyph with an empty meter.
+pub fn volume_overlay(state: VolumeState) -> Result<Overlay, InvalidLevel> {
+    if state.muted {
+        Overlay::new(Kind::Mute, 0.0)
     } else {
-        Overlay::new(Kind::Volume, state.level)?
-    })
+        Overlay::new(Kind::Volume, state.level)
+    }
 }
 
-/// One volume key press: a new level of 0 or less mutes, and a new level above 0 unmutes.
-fn step_volume(
-    volume: &mut dyn Volume,
+/// The overlay of an input volume: muted shows the slashed microphone with an empty meter.
+pub fn microphone_overlay(state: VolumeState) -> Result<Overlay, InvalidLevel> {
+    if state.muted {
+        Overlay::new(Kind::MicrophoneMute, 0.0)
+    } else {
+        Overlay::new(Kind::Microphone, state.level)
+    }
+}
+
+/// The raw value for `level` (a fraction of `max`) within `floor..=max`. A change of level always moves at least one
+/// raw unit from `current`, in the direction of `level`, unless that end is reached.
+pub fn linear_raw(current: u32, max: u32, level: f64, floor: u32) -> u32 {
+    let exact = level * f64::from(max);
+    let wanted = exact.round().clamp(f64::from(floor), f64::from(max)) as u32;
+    if wanted != current {
+        return wanted;
+    }
+    if exact > f64::from(current) {
+        (current + 1).min(max)
+    } else if exact < f64::from(current) {
+        current.saturating_sub(1).max(floor)
+    } else {
+        current
+    }
+}
+
+/// The raw value one backlight key press asks for, from `current` of `max` and no lower than `floor`; `None` when
+/// the press asks for the level it has.
+pub fn backlight_step(
+    current: u32,
+    max: u32,
+    floor: u32,
     direction: i32,
     fine: bool,
-) -> Result<Effect, BackendError> {
-    let before = volume.state()?;
-    let target = step_level(before.level, direction, fine);
-    let level = if target == before.level {
-        target
-    } else {
-        volume.set_level(target)?
-    };
-    let muted = target <= 0.0;
-    if muted != before.muted {
-        volume.set_muted(muted)?;
-    }
-    Ok(Effect {
-        overlay: volume_overlay(VolumeState { level, muted })?,
-        changed: level != before.level || muted != before.muted,
-    })
-}
-
-/// The mute key: toggles, but at volume 0 the result is always muted.
-fn toggle_mute(volume: &mut dyn Volume) -> Result<Effect, BackendError> {
-    let before = volume.state()?;
-    let muted = before.level <= 0.0 || !before.muted;
-    if muted != before.muted {
-        volume.set_muted(muted)?;
-    }
-    Ok(Effect {
-        overlay: volume_overlay(VolumeState {
-            level: before.level,
-            muted,
-        })?,
-        changed: muted != before.muted,
-    })
-}
-
-/// The microphone mute key: a plain toggle; muted shows the slashed microphone with an empty meter.
-fn toggle_microphone(microphone: &mut dyn Volume) -> Result<Effect, BackendError> {
-    let before = microphone.state()?;
-    let muted = !before.muted;
-    microphone.set_muted(muted)?;
-    Ok(Effect {
-        overlay: if muted {
-            Overlay::new(Kind::MicrophoneMute, 0.0)?
-        } else {
-            Overlay::new(Kind::Microphone, before.level)?
-        },
-        changed: true,
-    })
-}
-
-/// One backlight key press.
-fn step_backlight(
-    backlight: &mut dyn Backlight,
-    kind: Kind,
-    direction: i32,
-    fine: bool,
-) -> Result<Effect, BackendError> {
-    let before = backlight.level()?;
+) -> Option<u32> {
+    let before = f64::from(current) / f64::from(max);
     let target = step_level(before, direction, fine);
-    let level = if target == before {
-        target
-    } else {
-        backlight.set_level(target)?
-    };
-    Ok(Effect {
-        overlay: Overlay::new(kind, level)?,
-        changed: level != before,
-    })
-}
-
-impl Controller {
-    /// A controller over the four backends.
-    pub fn new(
-        volume: Box<dyn Volume>,
-        microphone: Box<dyn Volume>,
-        display: Box<dyn Backlight>,
-        keyboard: Box<dyn Backlight>,
-    ) -> Self {
-        Self {
-            hud: Hud::new(),
-            volume,
-            microphone,
-            display,
-            keyboard,
-        }
-    }
-
-    /// Carry out `command` at `now` (seconds on the caller's monotonic clock). On success the overlay shows the new
-    /// level and its hold restarts, 4 s after a press that changed a value and 1 s after one that changed nothing; on
-    /// failure the overlay is unchanged and the reason is returned.
-    pub fn apply(&mut self, now: f64, command: Command) -> Result<(), EffectError> {
-        let effect = match command {
-            Command::VolumeStep { direction, fine } => {
-                step_volume(self.volume.as_mut(), direction, fine)
-            }
-            Command::ToggleMute => toggle_mute(self.volume.as_mut()),
-            Command::ToggleMicrophoneMute => toggle_microphone(self.microphone.as_mut()),
-            Command::BrightnessStep { direction, fine } => {
-                step_backlight(self.display.as_mut(), Kind::Brightness, direction, fine)
-            }
-            Command::KeyboardBrightnessStep { direction, fine } => step_backlight(
-                self.keyboard.as_mut(),
-                Kind::KeyboardBrightness,
-                direction,
-                fine,
-            ),
-            // the control panel changed the level itself, so the changed-value hold applies
-            Command::Show(overlay) => Ok(Effect {
-                overlay,
-                changed: true,
-            }),
-        }
-        .map_err(|source| EffectError {
-            command: command.name(),
-            source,
-        })?;
-        self.hud
-            .show(now, effect.overlay, hold_seconds(effect.changed));
-        Ok(())
-    }
-
-    /// What to draw at `now`.
-    pub fn view(&self, now: f64) -> Option<View> {
-        self.hud.view(now)
-    }
-
-    /// The lifetime phase at `now`.
-    pub fn phase(&self, now: f64) -> Phase {
-        self.hud.phase(now)
-    }
-
-    /// Seconds until the fade starts; `None` unless holding.
-    pub fn until_fade(&self, now: f64) -> Option<f64> {
-        self.hud.until_fade(now)
-    }
+    (target != before).then(|| linear_raw(current, max, target, floor))
 }

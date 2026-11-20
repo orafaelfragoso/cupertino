@@ -1,15 +1,15 @@
-//! Volume, brightness and keyboard-backlight overlay for a Wayland compositor.
+//! The on-screen displays of the Cupertino desktop: the volume, brightness and keyboard-backlight overlay, a component
+//! of the shell host (`cupertino-shell`).
 //!
 //! * [`model`]: the overlay kinds, the 16-segment fill rule and the show / hold / fade lifetime (`Hud`).
 //! * [`sender`]: the design sender's level steps and hold times (one place) and the display floor deviation.
-//! * [`backend`]: the output volume (the default PipeWire sink through `cupertino-pipewire`, else the ALSA master) and
-//!   the backlights, behind traits, with in-memory stand-ins.
-//! * [`controller`]: carries out a `Command` on the backends and shows the result.
+//! * [`controller`]: what a command asks of the levels and what the overlay shows, as pure functions.
+//! * [`effects`]: the levels changed through the services that own them, `org.cupertino.Audio1` on the session bus and
+//!   the backlights on the system bus.
+//! * [`control`]: `org.cupertino.Osd1`, served on the component's own bus connection.
 //! * [`layout`]: the geometry of the 200 x 200 window.
-//! * feature `dbus`: [`control`] (the `org.cupertino.Osd1` bus interface) and [`system`] (the display and keyboard
-//!   backlights through the power daemon on the system bus).
-//! * feature `app`: [`view`] (the overlay's window in CupertinoKit) and the `cupertino-osd` process (that window on a
-//!   layer surface as a client of the server).
+//! * [`view`]: the overlay's window in CupertinoKit.
+//! * [`Osd`]: the component.
 //!
 //! Window size, corner radius, position, meter geometry, the partial-segment rule and the fade are taken from the
 //! reference analysis; colours, glyph placement and the
@@ -17,21 +17,15 @@
 
 #![forbid(unsafe_code)]
 
-pub mod backend;
-#[cfg(feature = "dbus")]
+mod component;
 pub mod control;
 pub mod controller;
+pub mod effects;
 pub mod layout;
 pub mod model;
 pub mod sender;
-#[cfg(feature = "dbus")]
-pub mod system;
-#[cfg(feature = "app")]
 pub mod view;
 
-pub use backend::{
-    AlsaVolume, BackendError, Backlight, MemoryBacklight, MemoryVolume, SessionMicrophone,
-    SessionVolume, Volume, VolumeState,
-};
-pub use controller::{Command, Controller, EffectError};
+pub use component::{Message, Model, Osd};
+pub use controller::{Command, EffectError, Shown, VolumeState};
 pub use model::{segments, Fill, Hud, Kind, Overlay, Phase, View};

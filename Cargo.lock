@@ -1422,17 +1422,13 @@ name = "cupertino-osd"
 version = "0.1.0"
 dependencies = [
  "async-channel",
- "async-io",
- "cupertino-alsa",
- "cupertino-diagnostic-events",
+ "cupertino-assets",
  "cupertino-geometry",
- "cupertino-keyboard",
  "cupertino-kit",
+ "cupertino-kit-shell",
  "cupertino-peer",
- "cupertino-pipewire",
- "cupertino-shell-client",
- "cupertino-ui-wayland",
- "cupertino-wayland-client",
+ "serde",
+ "tiny-skia",
  "zbus",
 ]
 
@@ -1727,12 +1723,14 @@ dependencies = [
  "cupertino-cli",
  "cupertino-kit",
  "cupertino-kit-shell",
+ "cupertino-osd",
  "cupertino-server",
  "cupertino-shell",
  "cupertino-ui-render",
  "cupertino-wm",
  "image",
  "rustix 1.1.6",
+ "serde",
  "wayland-client",
  "wayland-protocols",
  "wayland-server",
@@ -1788,6 +1786,7 @@ dependencies = [
  "cupertino-diagnostic-events",
  "cupertino-kit",
  "cupertino-kit-shell",
+ "cupertino-osd",
 ]
 
 [[package]]

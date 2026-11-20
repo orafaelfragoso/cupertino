@@ -21,7 +21,6 @@ shell disallowed_methods cupertino-launcher clippy.toml
 shell disallowed_methods cupertino-login clippy.toml
 shell disallowed_methods cupertino-menubar clippy.toml
 shell disallowed_methods cupertino-notifications clippy.toml
-shell disallowed_methods cupertino-osd clippy.toml
 shell disallowed_methods cupertino-polkit-agent clippy.toml
 shell disallowed_methods cupertino-portal clippy.toml
 shell disallowed_methods cupertino-screenshot clippy.toml
@@ -30,6 +29,7 @@ shell external_crate cupertino-dock -> tiny-skia normal
 shell external_crate cupertino-login -> image normal
 shell external_crate cupertino-login -> tiny-skia normal
 shell external_crate cupertino-menubar -> tiny-skia normal
+shell external_crate cupertino-osd -> tiny-skia dev
 shell external_crate cupertino-polkit-agent -> tiny-skia normal
 shell external_crate cupertino-portal -> tiny-skia normal
 shell external_crate cupertino-portal -> wayland-client normal
@@ -65,9 +65,6 @@ shell facade cupertino-notifications -> cupertino-shell-client normal
 shell facade cupertino-notifications -> cupertino-theme normal
 shell facade cupertino-notifications -> cupertino-ui-wayland normal
 shell facade cupertino-notifications -> cupertino-wayland-client normal
-shell facade cupertino-osd -> cupertino-shell-client normal
-shell facade cupertino-osd -> cupertino-ui-wayland normal
-shell facade cupertino-osd -> cupertino-wayland-client normal
 shell facade cupertino-polkit-agent -> cupertino-shell-client normal
 shell facade cupertino-polkit-agent -> cupertino-theme normal
 shell facade cupertino-polkit-agent -> cupertino-ui-core normal
@@ -98,10 +95,6 @@ shell forbidden_edge cupertino-menubar -> cupertino-shell-client normal
 shell forbidden_edge cupertino-menubar -> cupertino-wayland-client normal
 shell forbidden_edge cupertino-notifications -> cupertino-shell-client normal
 shell forbidden_edge cupertino-notifications -> cupertino-wayland-client normal
-shell forbidden_edge cupertino-osd -> cupertino-alsa normal
-shell forbidden_edge cupertino-osd -> cupertino-pipewire normal
-shell forbidden_edge cupertino-osd -> cupertino-shell-client normal
-shell forbidden_edge cupertino-osd -> cupertino-wayland-client normal
 shell forbidden_edge cupertino-polkit-agent -> cupertino-decorations normal
 shell forbidden_edge cupertino-polkit-agent -> cupertino-shell-client normal
 shell forbidden_edge cupertino-polkit-agent -> cupertino-wayland-client normal

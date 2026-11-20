@@ -12,6 +12,10 @@
 //! - A component of this development build asked to crash on its bus connection
 //!   (`org.cupertino.ShellComponentDebug1`) by `cupertino shell crash` panics as its loop dispatches, as it paints
 //!   and on a helper thread, and is started again alone each time.
+//! - The on-screen displays (`cupertino-osd`) own `org.cupertino.Osd1` on their own connection and draw what `Show`
+//!   asks; a panic injected as they paint, as their loop dispatches and on a helper thread restarts them alone, fifty
+//!   times, while the dock keeps drawing and the host's anonymous memory stays flat; a caller other than the server cannot step
+//!   a level.
 
 #[path = "shell/components.rs"]
 mod components;
@@ -24,6 +28,7 @@ mod rig;
 
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader};
+use std::path::PathBuf;
 use std::process::{Child, Command as Process, Stdio};
 
 use cupertino_server::host::{HostKind, Liveness};
@@ -198,10 +203,28 @@ fn a_component_the_server_runs_alone_runs_in_a_host_started_with_only() {
 /// A session bus of the test's own, whose address the hosts and the command inherit, and the address.
 struct Bus(Child, String);
 
+/// A session bus that starts no service: nothing the components call reaches a program of the machine.
+const BUS_CONFIG: &str = r#"<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <type>session</type>
+  <listen>unix:tmpdir=/tmp</listen>
+  <auth>EXTERNAL</auth>
+  <policy context="default">
+    <allow send_destination="*" eavesdrop="true"/>
+    <allow eavesdrop="true"/>
+    <allow own="*"/>
+  </policy>
+</busconfig>
+"#;
+
 impl Bus {
     fn start() -> Bus {
+        let config = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("shell-bus.conf");
+        std::fs::write(&config, BUS_CONFIG).expect("the bus's configuration");
         let mut daemon = Process::new("dbus-daemon")
-            .args(["--session", "--nofork", "--print-address=1"])
+            .arg(format!("--config-file={}", config.display()))
+            .args(["--nofork", "--print-address=1"])
             .stdout(Stdio::piped())
             .spawn()
             .expect("dbus-daemon runs");
@@ -300,4 +323,240 @@ fn a_crash_asked_for_on_a_components_connection_restarts_it_alone() {
         "{}",
         out.stderr
     );
+}
+
+/// The area of the on-screen displays: their window, centred at the bottom, `BOTTOM_MARGIN` above the edge.
+fn osd_area() -> Area {
+    let side = cupertino_osd::layout::WINDOW_SIZE as i32;
+    Area::new(
+        (OUTPUT_SIZE.0 - side) / 2,
+        OUTPUT_SIZE.1 - cupertino_osd::layout::BOTTOM_MARGIN - side,
+        side,
+        side,
+    )
+}
+
+/// How many pixels of `area` differ between `a` and `b`.
+fn changed(a: &image::RgbaImage, b: &image::RgbaImage, area: Area) -> usize {
+    let mut n = 0;
+    for y in area.y..area.y + area.h {
+        for x in area.x..area.x + area.w {
+            let (p, q) = (
+                a.get_pixel(x as u32, y as u32),
+                b.get_pixel(x as u32, y as u32),
+            );
+            if p.0[..3] != q.0[..3] {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
+/// The connection that owns `org.cupertino.Osd1` now.
+fn osd_owner(session: &zbus::blocking::Connection) -> Option<String> {
+    let dbus = zbus::blocking::fdo::DBusProxy::new(session).ok()?;
+    let name = zbus::names::BusName::try_from(cupertino_osd::control::BUS_NAME).ok()?;
+    dbus.get_name_owner(name)
+        .ok()
+        .map(|owner| owner.to_string())
+}
+
+/// Calls `method` of `org.cupertino.Osd1` with `body`.
+fn osd_call<B>(session: &zbus::blocking::Connection, method: &str, body: &B) -> zbus::Result<()>
+where
+    B: serde::Serialize + zbus::zvariant::DynamicType,
+{
+    session
+        .call_method(
+            Some(cupertino_osd::control::BUS_NAME),
+            cupertino_osd::control::OBJECT_PATH,
+            Some(cupertino_osd::control::BUS_NAME),
+            method,
+            body,
+        )
+        .map(drop)
+}
+
+/// The host process's memory, in KiB: its resident set, its proportional set and its anonymous memory (its heap and
+/// stacks, which a leak grows; unlike the other two it does not change with what other processes map of the same
+/// files).
+#[derive(Clone, Copy)]
+struct Memory {
+    rss: u64,
+    pss: u64,
+    anonymous: u64,
+}
+
+impl std::fmt::Display for Memory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Rss {} KiB, Pss {} KiB, Anonymous {} KiB",
+            self.rss, self.pss, self.anonymous
+        )
+    }
+}
+
+fn memory(pid: u32) -> Memory {
+    let rollup =
+        std::fs::read_to_string(format!("/proc/{pid}/smaps_rollup")).expect("the host's memory");
+    let field = |name: &str| -> u64 {
+        rollup
+            .lines()
+            .find_map(|line| line.strip_prefix(name))
+            .and_then(|kib| kib.trim().trim_end_matches("kB").trim().parse().ok())
+            .unwrap_or_else(|| panic!("the host's {name}"))
+    };
+    Memory {
+        rss: field("Rss:"),
+        pss: field("Pss:"),
+        anonymous: field("Anonymous:"),
+    }
+}
+
+/// Crashes injected into the on-screen displays, after which each restarts alone.
+const OSD_RESTARTS: u32 = 50;
+/// Crashes after which the server gives a component up (D16: five within a minute); a restart the person asks for
+/// then starts it again and forgets them.
+const CRASHES_IN_A_ROW: u32 = 5;
+/// Restarts after which the host's memory is measured the first time: the host's first allocations of a component
+/// (its caches, the allocator's arenas) are made by then.
+const WARM_RESTARTS: u32 = 10;
+/// How much the host's anonymous memory may grow between that measurement and the last restart, in KiB: well below
+/// what one leaked instance holds (its 8 MiB stack, its window's buffers).
+const ANONYMOUS_GROWTH_KIB: u64 = 4 * 1024;
+
+#[test]
+fn the_on_screen_displays_restart_alone_after_injected_panics_and_the_host_stays_flat() {
+    let bus = Bus::start();
+    let mut rig = Rig::new("osd", &["dock", "osd"], &[]);
+    cupertino_server::quit::start_session_service_on(&mut rig.state, Some(bus.1.clone()));
+    let session = zbus::blocking::Connection::session().expect("the test's bus");
+    rig.until("the dock draws and the displays own their name", |rig| {
+        dock_colour(rig).is_some() && osd_owner(&session).is_some()
+    });
+    let host = rig.host_pid(HostKind::Shared).unwrap();
+
+    // Show draws the overlay
+    let before = rig.image();
+    osd_call(&session, "Show", &("volume", 0.75)).expect("Show is open to every caller");
+    rig.until("the overlay shows", |rig| {
+        changed(&before, &rig.image(), osd_area()) > osd_area().covered() / 2
+    });
+
+    // a caller that is not the server steps nothing; the server answers who it is as its loop turns
+    let mut refused = Process::new("dbus-send")
+        .args([
+            "--session",
+            "--print-reply",
+            "--dest=org.cupertino.Osd1",
+            "/org/cupertino/Osd1",
+            "org.cupertino.Osd1.VolumeStep",
+            "int32:1",
+            "boolean:false",
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("dbus-send runs");
+    let mut status = None;
+    rig.until("the step is answered", |_| {
+        status = refused.try_wait().unwrap();
+        status.is_some()
+    });
+    let mut stderr = String::new();
+    std::io::Read::read_to_string(&mut refused.stderr.take().unwrap(), &mut stderr).unwrap();
+    assert!(!status.unwrap().success());
+    assert!(stderr.contains("AccessDenied"), "{stderr}");
+
+    let first = memory(host);
+    let mut colours = HashSet::new();
+    let first_instance = rig.state.hosts.component_instance("osd");
+    let mut warm = None;
+    for crash in 0..OSD_RESTARTS {
+        let at = ["paint", "dispatch", "helper"][crash as usize % 3];
+        let mut owner = None;
+        rig.until("the displays own their name", |_| {
+            owner = osd_owner(&session);
+            owner.is_some()
+        });
+        let owner = owner.unwrap();
+        session
+            .call_method(
+                Some(owner.as_str()),
+                "/org/cupertino/ShellComponentDebug1",
+                Some("org.cupertino.ShellComponentDebug1"),
+                "Crash",
+                &(at,),
+            )
+            .unwrap_or_else(|e| panic!("the displays take a crash at {at}: {e}"));
+        if at == "paint" {
+            // what they draw next panics
+            osd_call(&session, "Show", &("brightness", 0.5)).expect("Show");
+        }
+        if (crash + 1) % CRASHES_IN_A_ROW == 0 {
+            rig.until(
+                &format!("the server gives the displays up after a crash at {at}"),
+                |rig| {
+                    colours.extend(dock_colour(rig));
+                    rig.state.hosts.component_gave_up("osd")
+                },
+            );
+            let rx = rig.restart("osd");
+            rig.answer(&rx).expect("the displays start again");
+        }
+        // each crash, or the restart after the last of a row, starts one instance
+        let instance = first_instance + crash + 1;
+        rig.until(
+            &format!("the displays start again after a crash at {at}"),
+            |rig| {
+                colours.extend(dock_colour(rig));
+                rig.state.hosts.component_instance("osd") == instance
+                    && rig.state.hosts.component_connected("osd")
+            },
+        );
+        if crash + 1 == WARM_RESTARTS {
+            warm = Some(memory(host));
+        }
+    }
+    rig.until("the displays own their name again", |_| {
+        osd_owner(&session).is_some()
+    });
+    let (warm, last) = (warm.unwrap(), memory(host));
+    eprintln!(
+        "host memory before the first crash: {first}; after {WARM_RESTARTS} restarts: {warm}; after \
+         {OSD_RESTARTS}: {last}"
+    );
+
+    assert_eq!(
+        rig.host_pid(HostKind::Shared),
+        Some(host),
+        "the host went on"
+    );
+    assert_eq!(
+        rig.state.hosts.component_instance("dock"),
+        1,
+        "the dock was never restarted"
+    );
+    assert_eq!(
+        colours,
+        HashSet::from(["red", "blue"]),
+        "the dock kept drawing while the displays started again"
+    );
+    assert!(!rig.state.hosts.component_gave_up("osd"));
+    assert!(
+        last.anonymous <= warm.anonymous + ANONYMOUS_GROWTH_KIB,
+        "the host's anonymous memory grew from {} KiB to {} KiB over {} restarts",
+        warm.anonymous,
+        last.anonymous,
+        OSD_RESTARTS - WARM_RESTARTS
+    );
+
+    // and the restarted displays draw
+    let before = rig.image();
+    osd_call(&session, "Show", &("mute", 0.0)).expect("Show");
+    rig.until("the restarted overlay shows", |rig| {
+        changed(&before, &rig.image(), osd_area()) > osd_area().covered() / 2
+    });
 }

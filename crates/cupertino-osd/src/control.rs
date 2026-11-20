@@ -1,14 +1,17 @@
-//! `org.cupertino.Osd1`: the control interface of the `cupertino-osd` process. The server calls the step methods for
-//! the volume, brightness and keyboard-backlight keys; the control panel calls `Show` after it changed a level itself.
+//! `org.cupertino.Osd1`: the control interface of the on-screen displays, served on the component's own session bus
+//! connection, which owns the name. The server calls the step methods for the volume, brightness and keyboard-backlight
+//! keys; the control panel calls `Show` after it changed a level itself.
 //!
-//! The step methods change hardware levels, so they check their caller (`cupertino-peer`): only the server, which started
-//! this process, and this process itself may call them; any other caller, a sandboxed or anonymous one included, gets an
-//! error of `org.cupertino.Error.*` and nothing changes. `Show` only draws the overlay and stays open to every caller.
+//! The step methods change levels, so they check their caller: only the server may call them (D20: the owner of
+//! `org.cupertino.Session1`, or another connection of that process); any other caller, a sandboxed or anonymous one
+//! included, gets `org.freedesktop.DBus.Error.AccessDenied` and nothing changes. `Show` only draws the overlay and
+//! stays open to every caller.
 
-use cupertino_peer::{check_call, CallerError, Relation};
-use zbus::fdo;
-use zbus::fdo::{RequestNameFlags, RequestNameReply};
-use zbus::{connection, Connection};
+use cupertino_kit_shell::bus::{self, Caller};
+use cupertino_peer::{identify, Caller as Peer};
+use zbus::fdo::{self, RequestNameFlags, RequestNameReply};
+use zbus::names::{BusName, UniqueName};
+use zbus::Connection;
 
 use crate::controller::Command;
 use crate::model::{Kind, Overlay};
@@ -17,11 +20,11 @@ use crate::model::{Kind, Overlay};
 pub const BUS_NAME: &str = "org.cupertino.Osd1";
 pub const OBJECT_PATH: &str = "/org/cupertino/Osd1";
 
-/// Who may change a level.
-const SERVER: &[Relation] = &[Relation::Itself, Relation::Parent];
+/// The server's own bus name (D20).
+const SERVER_NAME: &str = "org.cupertino.Session1";
 
 struct Control {
-    on_command: Box<dyn Fn(Command) + Send + Sync>,
+    commands: async_channel::Sender<Command>,
 }
 
 fn invalid(message: String) -> fdo::Error {
@@ -36,6 +39,60 @@ fn check_direction(direction: i32) -> fdo::Result<i32> {
     Ok(direction)
 }
 
+/// Whether `sender` is the server: the owner of [`SERVER_NAME`] (`bus::caller`), or another connection of the
+/// process that owns it, as the server's own calls of the shell come from a connection of their own.
+async fn from_server(connection: &Connection, sender: &UniqueName<'_>) -> bool {
+    if bus::caller(connection, sender).await == Caller::Server {
+        return true;
+    }
+    let Ok(dbus) = fdo::DBusProxy::new(connection).await else {
+        return false;
+    };
+    let Ok(name) = BusName::from_static_str(SERVER_NAME) else {
+        return false;
+    };
+    let Ok(owner) = dbus.get_name_owner(name).await else {
+        return false;
+    };
+    match (
+        identify(connection, sender).await,
+        identify(connection, &owner.into()).await,
+    ) {
+        (Peer::Process(caller), Peer::Process(server)) => {
+            caller.sandbox.is_none() && caller.process.is(&server.process)
+        }
+        _ => false,
+    }
+}
+
+impl Control {
+    /// Hands `command` to the component when the server sent it.
+    async fn accept_from_server(
+        &self,
+        header: &zbus::message::Header<'_>,
+        connection: &Connection,
+        command: Command,
+    ) -> fdo::Result<()> {
+        let allowed = match header.sender() {
+            Some(sender) => from_server(connection, sender).await,
+            None => false,
+        };
+        if !allowed {
+            return Err(fdo::Error::AccessDenied(format!(
+                "only the server may ask for a {}",
+                command.name()
+            )));
+        }
+        self.send(command);
+        Ok(())
+    }
+
+    fn send(&self, command: Command) {
+        // the component holds the receiver for as long as the interface is served
+        let _ = self.commands.try_send(command);
+    }
+}
+
 #[zbus::interface(name = "org.cupertino.Osd1")]
 impl Control {
     /// Raise (`direction` > 0) or lower the volume one press; `fine` is a Shift+Alt press.
@@ -44,57 +101,31 @@ impl Control {
         direction: i32,
         fine: bool,
         #[zbus(header)] header: zbus::message::Header<'_>,
-        #[zbus(connection)] connection: &zbus::Connection,
-    ) -> Result<(), CallerError> {
-        check_call(
-            connection,
-            &header,
-            "org.cupertino.Osd1",
-            "VolumeStep",
-            SERVER,
-        )
-        .await?;
-        (self.on_command)(Command::VolumeStep {
-            direction: check_direction(direction)?,
-            fine,
-        });
-        Ok(())
+        #[zbus(connection)] connection: &Connection,
+    ) -> fdo::Result<()> {
+        let direction = check_direction(direction)?;
+        self.accept_from_server(&header, connection, Command::VolumeStep { direction, fine })
+            .await
     }
 
     /// Mute, or unmute when muted.
     async fn toggle_mute(
         &self,
         #[zbus(header)] header: zbus::message::Header<'_>,
-        #[zbus(connection)] connection: &zbus::Connection,
-    ) -> Result<(), CallerError> {
-        check_call(
-            connection,
-            &header,
-            "org.cupertino.Osd1",
-            "ToggleMute",
-            SERVER,
-        )
-        .await?;
-        (self.on_command)(Command::ToggleMute);
-        Ok(())
+        #[zbus(connection)] connection: &Connection,
+    ) -> fdo::Result<()> {
+        self.accept_from_server(&header, connection, Command::ToggleMute)
+            .await
     }
 
     /// Mute the microphone, or unmute it when muted.
     async fn toggle_microphone_mute(
         &self,
         #[zbus(header)] header: zbus::message::Header<'_>,
-        #[zbus(connection)] connection: &zbus::Connection,
-    ) -> Result<(), CallerError> {
-        check_call(
-            connection,
-            &header,
-            "org.cupertino.Osd1",
-            "ToggleMicrophoneMute",
-            SERVER,
-        )
-        .await?;
-        (self.on_command)(Command::ToggleMicrophoneMute);
-        Ok(())
+        #[zbus(connection)] connection: &Connection,
+    ) -> fdo::Result<()> {
+        self.accept_from_server(&header, connection, Command::ToggleMicrophoneMute)
+            .await
     }
 
     /// Raise or lower the display brightness one press.
@@ -103,21 +134,15 @@ impl Control {
         direction: i32,
         fine: bool,
         #[zbus(header)] header: zbus::message::Header<'_>,
-        #[zbus(connection)] connection: &zbus::Connection,
-    ) -> Result<(), CallerError> {
-        check_call(
-            connection,
+        #[zbus(connection)] connection: &Connection,
+    ) -> fdo::Result<()> {
+        let direction = check_direction(direction)?;
+        self.accept_from_server(
             &header,
-            "org.cupertino.Osd1",
-            "BrightnessStep",
-            SERVER,
+            connection,
+            Command::BrightnessStep { direction, fine },
         )
-        .await?;
-        (self.on_command)(Command::BrightnessStep {
-            direction: check_direction(direction)?,
-            fine,
-        });
-        Ok(())
+        .await
     }
 
     /// Raise or lower the keyboard backlight one press.
@@ -126,58 +151,44 @@ impl Control {
         direction: i32,
         fine: bool,
         #[zbus(header)] header: zbus::message::Header<'_>,
-        #[zbus(connection)] connection: &zbus::Connection,
-    ) -> Result<(), CallerError> {
-        check_call(
-            connection,
+        #[zbus(connection)] connection: &Connection,
+    ) -> fdo::Result<()> {
+        let direction = check_direction(direction)?;
+        self.accept_from_server(
             &header,
-            "org.cupertino.Osd1",
-            "KeyboardBrightnessStep",
-            SERVER,
+            connection,
+            Command::KeyboardBrightnessStep { direction, fine },
         )
-        .await?;
-        (self.on_command)(Command::KeyboardBrightnessStep {
-            direction: check_direction(direction)?,
-            fine,
-        });
-        Ok(())
+        .await
     }
 
-    /// Show `kind` (`volume`, `mute`, `brightness` or `keyboard-brightness`) at `level` (0 to 1) without changing
-    /// anything; for a sender that changed the level itself.
+    /// Show `kind` (`volume`, `mute`, `brightness`, `keyboard-brightness`, `microphone` or `microphone-mute`) at
+    /// `level` (0 to 1) without changing anything; for a sender that changed the level itself.
     fn show(&self, kind: &str, level: f64) -> fdo::Result<()> {
         let kind =
             Kind::from_name(kind).ok_or_else(|| invalid(format!("unknown overlay {kind:?}")))?;
         let overlay = Overlay::new(kind, level).map_err(|e| invalid(e.to_string()))?;
-        (self.on_command)(Command::Show(overlay));
+        self.send(Command::Show(overlay));
         Ok(())
     }
 }
 
-/// Export the interface at [`OBJECT_PATH`] and claim [`BUS_NAME`] on the bus `builder` connects to. `on_command` runs
-/// on the bus thread for every accepted call. The interface is served while the returned connection lives. Fails with
-/// `zbus::Error::NameTaken` when another overlay owns the name.
-pub fn serve(
-    builder: connection::Builder<'static>,
-    on_command: impl Fn(Command) + Send + Sync + 'static,
-) -> zbus::Result<Connection> {
-    zbus::block_on(async {
-        let connection = builder
-            .serve_at(
-                OBJECT_PATH,
-                Control {
-                    on_command: Box::new(on_command),
-                },
-            )?
-            .build()
-            .await?;
-        // after the object exists, so no call finds the name without it; never queue behind the owner
-        match connection
-            .request_name_with_flags(BUS_NAME, RequestNameFlags::DoNotQueue.into())
-            .await?
-        {
-            RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner => Ok(connection),
-            RequestNameReply::Exists | RequestNameReply::InQueue => Err(zbus::Error::NameTaken),
-        }
-    })
+/// Exports the interface at [`OBJECT_PATH`] on `connection` and claims [`BUS_NAME`] on it; every accepted call goes
+/// to `commands`. Fails with `zbus::Error::NameTaken` when another overlay owns the name.
+pub async fn serve(
+    connection: &Connection,
+    commands: async_channel::Sender<Command>,
+) -> zbus::Result<()> {
+    connection
+        .object_server()
+        .at(OBJECT_PATH, Control { commands })
+        .await?;
+    // after the object exists, so no call finds the name without it; never queue behind the owner
+    match connection
+        .request_name_with_flags(BUS_NAME, RequestNameFlags::DoNotQueue.into())
+        .await?
+    {
+        RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner => Ok(()),
+        RequestNameReply::Exists | RequestNameReply::InQueue => Err(zbus::Error::NameTaken),
+    }
 }

@@ -24,11 +24,12 @@ is entered on a thread (`enter`, until the guard drops; `Instance::current` give
 events are recorded in its scope (`cupertino_diagnostic_events::Scope`: its panic is `<area>.panic`); each window
 system keeps its own renderer choice, while the device and its losses are the process's. Every `app::run` runs for the instance the calling thread
 entered, else for the process's own (named by the program, its events the process's). The diagnostic emitter and the
-panic hook stay one per process, installed by `main`. The text system, with the asset packs' fonts, and the packs'
-icons are the process's too: the first instance to start (`app::environment` or any `app::run`) makes them and every
-other starts on them (D5). Their caches only take whole entries that never change, under locks held just to look one up
-or put one in, so a panic in one instance leaves them whole for the others, and their budgets (two generations of 512
-shaped paragraphs, `SHARED_RASTER_BYTES` of glyph rasters) are the whole process's.
+panic hook stay one per process, installed by `main`. The installed theme data, the text system with the asset packs'
+fonts, and the packs' icons are the process's too: the first instance to start (`app::environment` or any `app::run`)
+reads them and every other starts on them (D5). The theme data never changes once read; the caches only take whole
+entries that never change, under locks held just to look one up or put one in, so a panic in one instance leaves them
+whole for the others, and their budgets (two generations of 512 shaped paragraphs, `SHARED_RASTER_BYTES` of glyph
+rasters) are the whole process's.
 
 Work that would hold up a UI thread goes to the process's pools as a command (`kit::task`): `task::cpu` on a pool of
 up to a thread a core, `task::io` on a pool of up to `task::IO_THREADS` for blocking work with the deadline the caller

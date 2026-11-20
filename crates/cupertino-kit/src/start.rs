@@ -7,7 +7,7 @@ use cupertino_defaults::appearance::{AppearanceSettings, Highlight};
 use cupertino_defaults::watch::{ConfigWatcher, WatchEvent};
 use cupertino_keyboard::modifiers::Profile;
 use cupertino_theme::ui::{Appearance, Color, ColorTokens, ThemePreferences, ThemeTokens};
-use cupertino_theme::{DesignTokens, Theme};
+use cupertino_theme::Theme;
 use cupertino_ui_core::layout::LayoutDirection;
 use cupertino_ui_core::platform::{PlatformError, SystemAppearance, WindowSystem};
 use cupertino_ui_core::{
@@ -23,7 +23,7 @@ use std::cell::Cell;
 use std::fmt;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use crate::shared::Shared;
 use crate::{Entered, Instance};
@@ -359,15 +359,17 @@ pub fn environment() -> Result<Environment, AppError> {
     })
 }
 
-/// The named colours of the theme data the process's applications start on, kept from the first start that read them;
-/// the installed data is the same for every instance.
-static SYSTEM_COLORS: OnceLock<DesignTokens> = OnceLock::new();
-
 /// The colour the theme data names `name` (`system-green`) in `appearance`, a high contrast appearance taking its base
 /// appearance's colour where it names none. `None` for a name the data does not have, and until an application of the
-/// process started on the installed theme data ([`run`] and the functions beside it, [`environment`]).
+/// process started on the installed theme data ([`run`] and the functions beside it, [`environment`]), which every
+/// instance of the process shares.
 pub fn system_color(name: &str, appearance: Appearance) -> Option<Color> {
-    SYSTEM_COLORS.get()?.color(appearance, name)
+    Shared::made()?
+        .theme
+        .as_ref()
+        .ok()?
+        .tokens
+        .color(appearance, name)
 }
 
 /// The theme preferences an application starts with: the session's when the window system knows them, else light with
@@ -416,7 +418,7 @@ struct Personal {
 }
 
 struct PersonalInner {
-    theme: Option<Theme>,
+    theme: Option<Arc<Theme>>,
     start: Arc<ThemeTokens>,
     settings: Cell<AppearanceSettings>,
     /// The session's appearance the theme was last made for.
@@ -475,7 +477,7 @@ impl Personal {
     /// application starts with and `first` the session's appearance.
     fn follow(
         waker: std::task::Waker,
-        theme: Option<Theme>,
+        theme: Option<Arc<Theme>>,
         start: &Arc<ThemeTokens>,
         first: SystemAppearance,
     ) -> Self {
@@ -538,14 +540,16 @@ impl Personal {
     }
 }
 
-/// The Cupertino theme from the installed theme data, else the neutral one: an application starts without the
-/// desktop's data, and says why on stderr.
-fn start_theme(preferences: ThemePreferences) -> Result<(ThemeTokens, Option<Theme>), AppError> {
-    let cupertino = cupertino_assets::theme::load().and_then(|data| {
-        ThemeTokens::cupertino(&data, preferences).map(|theme| {
-            SYSTEM_COLORS.get_or_init(|| data.tokens.clone());
-            (theme, Some(data))
-        })
+/// The Cupertino theme from the process's theme data (`data`, [`Shared::theme`]), else the neutral one: an application
+/// starts without the desktop's data, and says why on stderr.
+fn start_theme(
+    preferences: ThemePreferences,
+    data: &Result<Arc<Theme>, String>,
+) -> Result<(ThemeTokens, Option<Arc<Theme>>), AppError> {
+    let cupertino = data.clone().and_then(|data| {
+        ThemeTokens::cupertino(&data, preferences)
+            .map(|theme| (theme, Some(data)))
+            .map_err(|e| e.to_string())
     });
     cupertino.or_else(|e| {
         eprintln!("cupertino-kit: no Cupertino theme ({e}); using the neutral theme");
@@ -592,13 +596,13 @@ fn renderers_on_gpu(options: &mut RuntimeOptions, gpu: GpuRenderers) {
     });
 }
 
-/// The runtime options of an instance that starts in `preferences`, with the installed theme data: its own theme, on
-/// the process's text system and icons ([`Shared`]).
+/// The runtime options of an instance that starts in `preferences`, with the theme data: its own theme, on the
+/// process's theme data, text system and icons ([`Shared`]).
 fn options_and_theme(
     preferences: ThemePreferences,
-) -> Result<(RuntimeOptions, Option<Theme>), AppError> {
-    let (theme, data) = start_theme(preferences)?;
-    let shared = Shared::get(&theme.type_scale.family);
+) -> Result<(RuntimeOptions, Option<Arc<Theme>>), AppError> {
+    let shared = Shared::get();
+    let (theme, data) = start_theme(preferences, &shared.theme)?;
     let text = Arc::clone(&shared.text);
     let glyphs = Arc::clone(&text);
     let options = RuntimeOptions {

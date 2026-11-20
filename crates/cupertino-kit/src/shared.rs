@@ -1,18 +1,22 @@
-//! What every Kit instance of a process shares (D5), made once by the first instance that starts: the text system with
-//! the asset packs' fonts, and the packs' icons. Their caches only take whole entries that never change afterwards,
-//! under locks held only to look one up or put one in, so a panic in one instance never leaves them half-changed for
-//! the others; nothing that differs between instances lives here.
+//! What every Kit instance of a process shares (D5), made once by the first instance that starts: the installed theme
+//! data, which never changes once read, and the text system with the asset packs' fonts and the packs' icons, whose
+//! caches only take whole entries that never change afterwards, under locks held only to look one up or put one in. A
+//! panic in one instance therefore never leaves any of them half-changed for the others; nothing that differs between
+//! instances lives here.
 
 use crate::icons::PackIcons;
 use cupertino_assets::{Assets, FontRole, FontSource, BUILTIN_FONT};
+use cupertino_theme::Theme;
 use cupertino_ui_text::{FontIndex, FontStyle, FontWeight, InstalledFonts, TextSystem};
 use std::fs::File;
 use std::io::{self, Read};
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
-/// The text system and the icons of the process's Kit instances.
+/// The theme data, the text system and the icons of the process's Kit instances.
 pub(crate) struct Shared {
+    /// The installed theme data with its material recipes, or why it could not be read.
+    pub(crate) theme: Result<Arc<Theme>, String>,
     /// The asset packs' fonts, the built-in Inter and the installed fonts, with the caches of shaped paragraphs and
     /// glyph rasters every instance's windows lay out and draw with.
     pub(crate) text: Arc<TextSystem>,
@@ -23,19 +27,29 @@ pub(crate) struct Shared {
 static SHARED: OnceLock<Shared> = OnceLock::new();
 
 impl Shared {
-    /// The process's, made by the first caller, whose `theme_family` (the family its theme sets text in) is the UI
-    /// family when no asset pack names one; the installed theme data, and so the family, is the same for every
-    /// instance.
-    pub(crate) fn get(theme_family: &str) -> &'static Shared {
-        SHARED.get_or_init(|| Shared::load(theme_family))
+    /// The process's, made by the first caller.
+    pub(crate) fn get() -> &'static Shared {
+        SHARED.get_or_init(Shared::load)
     }
 
-    fn load(theme_family: &str) -> Self {
+    /// The process's once an instance made it.
+    pub(crate) fn made() -> Option<&'static Shared> {
+        SHARED.get()
+    }
+
+    /// Reads the theme data and the asset packs. UI text is set in the packs' interface family, else in the theme
+    /// data's, else in the built-in Inter.
+    fn load() -> Self {
+        let theme = cupertino_assets::theme::load()
+            .map(Arc::new)
+            .map_err(|e| e.to_string());
         let assets = Assets::discover();
         let (fonts, builtin) = fonts(&assets);
-        let preferred = [assets.font_family(FontRole::Ui), Some(theme_family)];
+        let theme_family = theme.as_ref().ok().map(|t| t.tokens.typography().family);
+        let preferred = [assets.font_family(FontRole::Ui), theme_family];
         let family = ui_family(&fonts, preferred.into_iter().flatten(), builtin.as_deref());
         Shared {
+            theme,
             text: Arc::new(TextSystem::new(fonts, &family)),
             icons: Arc::new(PackIcons::new(&assets)),
         }

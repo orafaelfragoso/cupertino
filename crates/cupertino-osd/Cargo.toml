@@ -12,7 +12,6 @@ async-channel = "2"
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-kit = { path = "../cupertino-kit" }
 cupertino-kit-shell = { path = "../cupertino-kit-shell" }
-cupertino-peer = { path = "../cupertino-peer" }
 serde = "1"
 zbus = { version = "5", default-features = false, features = ["async-io"] }
 

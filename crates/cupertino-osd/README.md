@@ -84,9 +84,8 @@ of `cupertino-kit-shell`, announced to the server, D20). When another connection
 and its host reports a failure. The interface lives in `control` (`BUS_NAME`, `OBJECT_PATH`, `serve`).
 
 Callers: `VolumeStep`, `ToggleMute`, `ToggleMicrophoneMute`, `BrightnessStep` and `KeyboardBrightnessStep` change
-levels, so only the server may call them: the owner of `org.cupertino.Session1` (`bus::caller`), or another
-connection of that process, unsandboxed, since the server's calls of the shell come from a connection of their own. Any
-other caller gets `org.freedesktop.DBus.Error.AccessDenied` and nothing changes. `Show` only draws the overlay, so it
+levels, so only the server may call them: the connection that owns `org.cupertino.Session1` (`bus::caller`),
+from which the server sends them. Any other caller, another connection of the server's process included, gets `org.freedesktop.DBus.Error.AccessDenied` and nothing changes. `Show` only draws the overlay, so it
 stays open to every caller (the control panel uses it). A component may also publish `ShowOsd` on the host bus, which
 shows the same way.
 

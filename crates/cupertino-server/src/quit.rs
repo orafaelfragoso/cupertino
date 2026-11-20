@@ -136,9 +136,33 @@ pub struct Quit {
     pub(crate) signals: Option<async_channel::Sender<BusOut>>,
     /// What the session interface's properties read, shared with the bus thread; `None` until it runs.
     pub(crate) properties: Option<Arc<Mutex<SessionSettings>>>,
+    /// The connection that owns [`BUS_NAME`] while the bus thread serves it.
+    pub(crate) connection: SessionConnection,
+}
+
+/// The connection that owns [`BUS_NAME`], shared with the bus thread: `None` while the name is not served. The
+/// server's calls that a shell component takes only from the server go out on it (D20: the owner of the name is the
+/// server, and no other connection of its process is).
+pub type SessionConnection = Arc<Mutex<Option<zbus::Connection>>>;
+
+/// Empties the shared [`SessionConnection`] when the connection it holds stops serving.
+struct Serving<'a>(&'a SessionConnection);
+
+impl Drop for Serving<'_> {
+    fn drop(&mut self) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
 }
 
 impl Quit {
+    /// The connection that owns [`BUS_NAME`] now; `None` while it is not served.
+    pub fn session_connection(&self) -> Option<zbus::Connection> {
+        self.connection
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
     /// Where [`BusOut`] goes from now on: the bus thread emits it as signals and property changes. A later call takes
     /// the place of an earlier one.
     pub fn subscribe(&mut self) -> async_channel::Receiver<BusOut> {
@@ -1359,12 +1383,13 @@ pub fn start_session_service_on(state: &mut Cupertino, address: Option<String>) 
     state.quit.properties = Some(Arc::clone(&settings));
     // the values the change signals were last emitted for
     let mut emitted = state.session_settings();
+    let connection = Arc::clone(&state.quit.connection);
     let spawned = std::thread::Builder::new().name("session-service".into()).spawn(move || {
         // when the bus connection drops, connect again after a growing pause and claim the name again
         let mut pause = crate::dbus::RECONNECT_FIRST;
         let mut served_before = false;
         loop {
-            let ended = zbus::block_on(serve_session(&address, &calls, &settings, &signals_rx, &mut emitted));
+            let ended = zbus::block_on(serve_session(&address, &calls, &settings, &signals_rx, &mut emitted, &connection));
             match ended {
                 Ok(true) => break,
                 Ok(false) => {
@@ -1397,6 +1422,7 @@ async fn serve_session(
     settings: &Arc<Mutex<SessionSettings>>,
     signals_rx: &async_channel::Receiver<BusOut>,
     emitted: &mut SessionSettings,
+    connection: &SessionConnection,
 ) -> zbus::Result<bool> {
     let iface = Session1 {
         calls: std::sync::Mutex::new(calls.clone()),
@@ -1412,6 +1438,8 @@ async fn serve_session(
         .object_server()
         .interface::<_, Session1>(OBJECT_PATH)
         .await?;
+    *connection.lock().unwrap_or_else(|e| e.into_inner()) = Some(conn.clone());
+    let _serving = Serving(connection);
     loop {
         let out = match crate::dbus::either(signals_rx.recv(), conn.closed()).await {
             crate::dbus::Either::First(Ok(out)) => out,

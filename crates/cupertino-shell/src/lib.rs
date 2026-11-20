@@ -44,4 +44,11 @@ pub static AGENT: Entry = Entry::of::<cupertino_shell_agent::Agent>();
 
 /// The components this build of the host runs. A component the server lists that is not here is answered
 /// `unavailable` (`absent`), and the server runs it the way the rest of its configuration says.
-pub static COMPONENTS: [&Entry; 6] = [&OSD, &NOTIFICATIONS, &CONTROLCENTER, &MENUBAR, &LAUNCHER, &AGENT];
+pub static COMPONENTS: [&Entry; 6] = [
+    &OSD,
+    &NOTIFICATIONS,
+    &CONTROLCENTER,
+    &MENUBAR,
+    &LAUNCHER,
+    &AGENT,
+];

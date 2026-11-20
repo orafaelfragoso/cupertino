@@ -20,7 +20,6 @@ shell disallowed_methods cupertino-dock clippy.toml
 shell disallowed_methods cupertino-launcher clippy.toml
 shell disallowed_methods cupertino-login clippy.toml
 shell disallowed_methods cupertino-menubar clippy.toml
-shell disallowed_methods cupertino-notifications clippy.toml
 shell disallowed_methods cupertino-polkit-agent clippy.toml
 shell disallowed_methods cupertino-portal clippy.toml
 shell disallowed_methods cupertino-screenshot clippy.toml
@@ -60,9 +59,6 @@ shell facade cupertino-menubar -> cupertino-theme normal
 shell facade cupertino-menubar -> cupertino-ui-text normal
 shell facade cupertino-menubar -> cupertino-ui-wayland normal
 shell facade cupertino-menubar -> cupertino-wayland-client normal
-shell facade cupertino-notifications -> cupertino-shell-client normal
-shell facade cupertino-notifications -> cupertino-ui-wayland normal
-shell facade cupertino-notifications -> cupertino-wayland-client normal
 shell facade cupertino-polkit-agent -> cupertino-shell-client normal
 shell facade cupertino-polkit-agent -> cupertino-theme normal
 shell facade cupertino-polkit-agent -> cupertino-ui-core normal
@@ -91,8 +87,6 @@ shell forbidden_edge cupertino-login -> cupertino-shell-client normal
 shell forbidden_edge cupertino-login -> cupertino-wayland-client normal
 shell forbidden_edge cupertino-menubar -> cupertino-shell-client normal
 shell forbidden_edge cupertino-menubar -> cupertino-wayland-client normal
-shell forbidden_edge cupertino-notifications -> cupertino-shell-client normal
-shell forbidden_edge cupertino-notifications -> cupertino-wayland-client normal
 shell forbidden_edge cupertino-polkit-agent -> cupertino-decorations normal
 shell forbidden_edge cupertino-polkit-agent -> cupertino-shell-client normal
 shell forbidden_edge cupertino-polkit-agent -> cupertino-wayland-client normal

@@ -1781,6 +1781,7 @@ dependencies = [
  "cupertino-diagnostic-events",
  "cupertino-kit",
  "cupertino-kit-shell",
+ "cupertino-notifications",
  "cupertino-osd",
 ]
 

@@ -124,6 +124,17 @@ impl Participant {
         self.ready = true;
         self.ready_since.get_or_insert(now);
     }
+
+    /// Let go of the surfaces the part staged, its part of transaction `tx_id`: each it still owns leaves `owners`, so
+    /// its kept commits apply ([`Cupertino::release_left_holds`]), and one staged since in a newer transaction (once
+    /// this part applied) stays in that one.
+    fn leave_staged(&mut self, tx_id: TxId, owners: &mut HashMap<ObjectId, (TxId, u64)>) {
+        for s in self.staged.drain(..) {
+            if owners.get(&s.surface_id) == Some(&(tx_id, self.id)) {
+                owners.remove(&s.surface_id);
+            }
+        }
+    }
 }
 
 /// Gesture binding state attached to a transaction by `bind_gesture` / `bind_reverse_gesture`.
@@ -417,12 +428,7 @@ impl TransactionManager {
             if p.withdrawn {
                 continue;
             }
-            // a surface staged again since (its part applied, it joined a newer transaction) stays in that one
-            for s in p.staged.drain(..) {
-                if self.staged_surface_owner.get(&s.surface_id) == Some(&(tx_id, p.id)) {
-                    self.staged_surface_owner.remove(&s.surface_id);
-                }
-            }
+            p.leave_staged(tx_id, &mut self.staged_surface_owner);
             if before_start {
                 changes.extend(std::mem::take(&mut p.window_changes));
             } else {
@@ -620,10 +626,7 @@ impl TransactionManager {
                 if p.client_id == *client_id {
                     p.withdrawn = true;
                     p.resource = None;
-                    for s in &p.staged {
-                        self.staged_surface_owner.remove(&s.surface_id);
-                    }
-                    p.staged.clear();
+                    p.leave_staged(tx.id, &mut self.staged_surface_owner);
                     p.window_changes.clear();
                     if p.is_creator && tx.gesture.is_some() {
                         creator_gone_txs.push(tx.id);
@@ -758,9 +761,7 @@ impl Cupertino {
                     }
                     if p.ready && !p.applied {
                         p.applied = true;
-                        for s in &p.staged {
-                            self.transactions.staged_surface_owner.remove(&s.surface_id);
-                        }
+                        p.leave_staged(tx_id, &mut self.transactions.staged_surface_owner);
                     }
                 }
             }

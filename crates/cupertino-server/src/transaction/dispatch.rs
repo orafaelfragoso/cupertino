@@ -366,13 +366,10 @@ impl Dispatch<CupertinoTransactionV1, TransactionObjectData> for Cupertino {
                         p.resource = None;
                         if p.submitted_at.is_none() {
                             p.withdrawn = true;
-                            for s in &p.staged {
-                                state
-                                    .transactions
-                                    .staged_surface_owner
-                                    .remove(&s.surface_id);
-                            }
-                            p.staged.clear();
+                            p.leave_staged(
+                                data.tx_id,
+                                &mut state.transactions.staged_surface_owner,
+                            );
                             flush_changes = std::mem::take(&mut p.window_changes);
                             if state
                                 .transactions
@@ -659,13 +656,10 @@ impl Dispatch<CupertinoTransactionV1, TransactionObjectData> for Cupertino {
                             .find(|p| p.id == data.participant_id)
                         {
                             p.withdrawn = true;
-                            for s in &p.staged {
-                                state
-                                    .transactions
-                                    .staged_surface_owner
-                                    .remove(&s.surface_id);
-                            }
-                            p.staged.clear();
+                            p.leave_staged(
+                                data.tx_id,
+                                &mut state.transactions.staged_surface_owner,
+                            );
                             flush_changes = std::mem::take(&mut p.window_changes);
                         }
                     }

@@ -862,6 +862,9 @@ pub enum PlatformEvent {
         token: ClipboardToken,
         data: Option<ClipboardData>,
     },
+    /// The selection of `kind` this client set ([`WindowSystem::set_clipboard`]) is no longer its own: another
+    /// client's replaced it, or the system dropped it.
+    ClipboardReplaced { kind: ClipboardKind },
     /// What the clipboard now offers, by MIME type; `None` when it was cleared.
     ClipboardOffered {
         kind: ClipboardKind,
@@ -1015,7 +1018,9 @@ pub trait WindowSystem {
     fn set_text_input(&mut self, window: WindowId, state: Option<&TextInputState>);
     /// `None` hides the pointer over the window.
     fn set_cursor(&mut self, window: WindowId, shape: Option<CursorShape>);
-    fn set_clipboard(&mut self, kind: ClipboardKind, data: ClipboardData);
+    /// Makes `data` this client's selection of `kind`, one entry per MIME type it is offered in; until another client's
+    /// replaces it ([`PlatformEvent::ClipboardReplaced`]) or this client sets another.
+    fn set_clipboard(&mut self, kind: ClipboardKind, data: Vec<ClipboardData>);
     fn read_clipboard(&mut self, kind: ClipboardKind, mime: &str) -> ClipboardToken;
     /// Asks for a token for the application whose desktop entry is `app_id`, when known, so the desktop can tell
     /// what is starting. The answer always arrives, as [`PlatformEvent::ActivationToken`].

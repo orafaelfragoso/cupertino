@@ -2,13 +2,26 @@
 //! capture is a session of `ext_image_copy_capture_v1` on the source the program names, into a buffer in shared
 //! memory, read once its frame is ready. A single capture ([`crate::capture::once`]) ends with its first frame; a
 //! followed one ([`crate::capture::follow`]) asks for the next frame after each.
+//!
+//! A ready frame is read on Kit's I/O pool ([`cupertino_kit::task::io`]), not on the UI thread: the pixels are copied
+//! out of shared memory, put in the toolkit's byte order, cut to the capture's region and turned upright by the
+//! transform the frame was sent in. The connection's waker wakes the loop when the read is done, and the next
+//! [`Capturing::pump`] hands the image to the program; a capture asks for its next frame only after that, so its
+//! frames arrive in order.
 
 use std::collections::HashMap;
 use std::fs::File;
+use std::future::Future;
 use std::os::fd::AsFd;
 use std::os::unix::fs::FileExt;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex, PoisonError};
+use std::task::{Context, Poll, Wake, Waker};
+use std::time::Duration;
 
+use cupertino_kit::core::Command;
+use cupertino_kit::geometry::{Rect, Size};
+use cupertino_kit::image::OutputTransform;
 use cupertino_kit::render::{ImageResource, PixelFormat};
 use cupertino_wayland_client::{Connection, ExtensionEvent, State};
 use rustix::fs::{memfd_create, MemfdFlags};
@@ -49,6 +62,10 @@ use crate::{Error, Event};
 /// Bytes per pixel of the shared-memory formats a capture is read in (`argb8888`, `xrgb8888`).
 const BYTES_PER_PIXEL: u32 = 4;
 
+/// How long reading a ready frame on the I/O pool should take: copying, reordering and turning the pixels of a large
+/// output (about 33 million pixels at 8K) from memory. A read past it is reported as overdue and goes on.
+const READ_DEADLINE: Duration = Duration::from_secs(2);
+
 /// A capture, by the program's id of it and whether it follows the source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) enum Key {
@@ -65,7 +82,11 @@ enum Wire {
         size: (u32, u32),
         formats: Vec<wl_shm::Format>,
     },
-    Ready(Key),
+    /// The frame was copied, in a buffer holding the source's picture turned by `transform`.
+    Ready {
+        key: Key,
+        transform: OutputTransform,
+    },
     Failed(Key),
     Stopped(Key),
 }
@@ -79,8 +100,12 @@ struct SessionData {
     constraints: Mutex<Constraints>,
 }
 
-/// User data of a frame.
-struct FrameData(Key);
+/// User data of a frame: its capture, and the transform its buffer holds the picture in (`transform`, sent before
+/// `ready`).
+struct FrameData {
+    key: Key,
+    transform: Mutex<OutputTransform>,
+}
 
 /// User data of the objects with no events the capture needs.
 struct Quiet;
@@ -102,6 +127,33 @@ struct Copy {
     format: wl_shm::Format,
 }
 
+/// The image a ready frame gives, read on the I/O pool.
+type Reading = Pin<Box<dyn Future<Output = Result<ImageResource, Error>> + Send>>;
+
+/// What a read of a ready frame needs, moved to the I/O pool.
+struct Frame {
+    file: File,
+    size: (u32, u32),
+    format: wl_shm::Format,
+    transform: OutputTransform,
+    region: Option<Rect>,
+    /// The size of the source in logical points; see [`Capture::logical`].
+    logical: Option<(f64, f64)>,
+}
+
+/// Wakes the connection's loop when a read finishes, so the next [`Capturing::pump`] takes its image.
+struct LoopWaker(cupertino_wayland_client::Waker);
+
+impl Wake for LoopWaker {
+    fn wake(self: Arc<Self>) {
+        self.0.wake();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.0.wake();
+    }
+}
+
 /// One capture's session and its frame in flight.
 struct Capture {
     session: ExtImageCopyCaptureSessionV1,
@@ -111,6 +163,8 @@ struct Capture {
     logical: Option<(f64, f64)>,
     constraints: Option<((u32, u32), Vec<wl_shm::Format>)>,
     copy: Option<Copy>,
+    /// The read of the last ready frame, until it gives its image.
+    reading: Option<Reading>,
     /// The next frame is to be asked for.
     wanted: bool,
 }
@@ -124,6 +178,8 @@ pub(crate) struct Capturing {
     shm: Option<WlShm>,
     captures: HashMap<Key, Capture>,
     revision: u64,
+    /// What a finished read wakes: the connection's loop.
+    waker: Waker,
 }
 
 impl Capturing {
@@ -156,6 +212,7 @@ impl Capturing {
             manager,
             captures: HashMap::new(),
             revision: 0,
+            waker: Waker::from(Arc::new(LoopWaker(conn.waker()))),
         }
     }
 
@@ -230,6 +287,7 @@ impl Capturing {
                 logical,
                 constraints: None,
                 copy: None,
+                reading: None,
                 wanted: true,
             },
         ) {
@@ -263,8 +321,9 @@ impl Capturing {
         }
     }
 
-    /// Takes `event` when it is one of the captures' and hands what it finished to the program; false for any other.
-    pub(super) fn event(&mut self, event: &ExtensionEvent, inbox: &Inbox) -> bool {
+    /// Takes `event` when it is one of the captures': a ready frame starts its read, which [`Capturing::pump`] hands
+    /// to the program; false for any other.
+    pub(super) fn event(&mut self, event: &ExtensionEvent) -> bool {
         let Some(wire) = event.downcast_ref::<Wire>() else {
             return false;
         };
@@ -275,21 +334,21 @@ impl Capturing {
                     capture.wanted = true;
                 }
             }
-            Wire::Ready(key) => {
-                let read = self.captures.get_mut(key).and_then(|capture| {
-                    let copy = capture.copy.take()?;
-                    capture.wanted = true;
-                    Some((read_copy(&copy, capture), copy))
-                });
-                if let Some((image, copy)) = read {
-                    copy.frame.destroy();
-                    copy.buffer.destroy();
-                    self.revision += 1;
-                    let image = image.map(|mut image| {
-                        image.revision = self.revision;
-                        image
-                    });
-                    self.deliver(*key, image, inbox);
+            Wire::Ready { key, transform } => {
+                if let Some(capture) = self.captures.get_mut(key) {
+                    if let Some(copy) = capture.copy.take() {
+                        // the server wrote the frame: the pixels are in the file, which the read takes
+                        copy.frame.destroy();
+                        copy.buffer.destroy();
+                        capture.reading = Some(start_read(Frame {
+                            file: copy.file,
+                            size: copy.size,
+                            format: copy.format,
+                            transform: *transform,
+                            region: capture.options.region,
+                            logical: capture.logical,
+                        }));
+                    }
                 }
             }
             Wire::Failed(key) => {
@@ -342,15 +401,17 @@ impl Capturing {
         }
     }
 
-    /// Asks for the frames the captures want, into buffers of the constraints the server gave.
-    pub(super) fn pump(&mut self, conn: &Connection) {
+    /// Hands the program the images of the reads that finished, then asks for the frames the captures want, into
+    /// buffers of the constraints the server gave.
+    pub(super) fn pump(&mut self, conn: &Connection, inbox: &Inbox) {
+        self.take_reads(inbox);
         let Some(shm) = self.shm.clone() else {
             return;
         };
         let qh = conn.queue_handle();
         let mut failed = Vec::new();
         for (key, capture) in &mut self.captures {
-            if !capture.wanted || capture.copy.is_some() {
+            if !capture.wanted || capture.copy.is_some() || capture.reading.is_some() {
                 continue;
             }
             let Some((size, formats)) = capture.constraints.clone() else {
@@ -368,6 +429,41 @@ impl Capturing {
             self.end(key, Err(e));
         }
     }
+
+    /// Delivers the image of every read that finished; a capture whose read finished wants its next frame.
+    fn take_reads(&mut self, inbox: &Inbox) {
+        let mut context = Context::from_waker(&self.waker);
+        let mut read = Vec::new();
+        for (key, capture) in &mut self.captures {
+            let Some(reading) = capture.reading.as_mut() else {
+                continue;
+            };
+            if let Poll::Ready(image) = reading.as_mut().poll(&mut context) {
+                capture.reading = None;
+                capture.wanted = true;
+                read.push((*key, image));
+            }
+        }
+        for (key, image) in read {
+            self.revision += 1;
+            let revision = self.revision;
+            let image = image.map(|mut image| {
+                image.revision = revision;
+                image
+            });
+            self.deliver(key, image, inbox);
+        }
+    }
+}
+
+/// Starts reading `frame` on Kit's I/O pool; the read begins when the returned future is first polled.
+fn start_read(frame: Frame) -> Reading {
+    let Command::Perform(reading) =
+        cupertino_kit::task::io(READ_DEADLINE, move || read(frame), |image| image)
+    else {
+        unreachable!("an I/O task is performed")
+    };
+    reading
 }
 
 fn destroy(capture: Capture) {
@@ -413,7 +509,13 @@ fn new_copy(
         Quiet,
     );
     pool.destroy();
-    let frame = session.create_frame(qh, FrameData(key));
+    let frame = session.create_frame(
+        qh,
+        FrameData {
+            key,
+            transform: Mutex::new(OutputTransform::Normal),
+        },
+    );
     frame.attach_buffer(&buffer);
     frame.damage_buffer(0, 0, width as i32, height as i32);
     frame.capture();
@@ -426,15 +528,23 @@ fn new_copy(
     })
 }
 
-/// The copied frame as an image, cropped to the capture's region.
-fn read_copy(copy: &Copy, capture: &Capture) -> Result<ImageResource, Error> {
-    let (width, height) = copy.size;
-    let stride = (width * BYTES_PER_PIXEL) as usize;
-    let mut pixels = vec![0u8; stride * height as usize];
-    copy.file
-        .read_exact_at(&mut pixels, 0)
-        .map_err(|e| Error::Protocol(format!("capture buffer: {e}")))?;
-    let opaque = copy.format == wl_shm::Format::Xrgb8888;
+/// The copied frame as an upright image of the capture's region: read from shared memory, in the toolkit's byte order,
+/// the region's pixels cut from the buffer and turned upright. Runs on the I/O pool.
+fn read(frame: Frame) -> Result<ImageResource, Error> {
+    let stride = (frame.size.0 * BYTES_PER_PIXEL) as usize;
+    let area = area_in_buffer(&frame)
+        .ok_or_else(|| Error::Protocol("the region covers none of the source".into()))?;
+    let (x, y, w, h) = area;
+    let row = (w * BYTES_PER_PIXEL) as usize;
+    let mut pixels = vec![0u8; row * h as usize];
+    for (line, out) in (y..y + h).zip(pixels.chunks_exact_mut(row)) {
+        let offset = line as usize * stride + (x * BYTES_PER_PIXEL) as usize;
+        frame
+            .file
+            .read_exact_at(out, offset as u64)
+            .map_err(|e| Error::Protocol(format!("capture buffer: {e}")))?;
+    }
+    let opaque = frame.format == wl_shm::Format::Xrgb8888;
     // `argb8888` is B, G, R, A in memory on a little-endian machine
     for pixel in pixels.as_chunks_mut::<{ BYTES_PER_PIXEL as usize }>().0 {
         pixel.swap(0, 2);
@@ -442,41 +552,53 @@ fn read_copy(copy: &Copy, capture: &Capture) -> Result<ImageResource, Error> {
             pixel[3] = u8::MAX;
         }
     }
-    let (x, y, w, h) = crop(capture, copy.size);
-    let mut cropped = Vec::with_capacity((w * h * BYTES_PER_PIXEL) as usize);
-    for row in y..y + h {
-        let start = row as usize * stride + (x * BYTES_PER_PIXEL) as usize;
-        cropped.extend_from_slice(&pixels[start..start + (w * BYTES_PER_PIXEL) as usize]);
-    }
-    Ok(ImageResource {
+    let cut = ImageResource {
         revision: 0,
         width: w,
         height: h,
         stride: w * BYTES_PER_PIXEL,
         format: PixelFormat::Rgba8Premultiplied,
-        pixels: cropped.into(),
-    })
+        pixels: pixels.into(),
+    };
+    if frame.transform == OutputTransform::Normal {
+        return Ok(cut);
+    }
+    cupertino_kit::image::orient(&cut, frame.transform)
+        .map_err(|e| Error::Protocol(format!("capture buffer: {e}")))
 }
 
-/// The buffer pixels of the capture's region, the whole frame without one.
-fn crop(capture: &Capture, (width, height): (u32, u32)) -> (u32, u32, u32, u32) {
-    let Some(region) = capture.options.region else {
-        return (0, 0, width, height);
+/// The pixels of the buffer (x, y, width, height) that the frame's region covers, the whole buffer without one. The
+/// region is in the source's logical points, over its upright picture: its edges are rounded to whole upright pixels at
+/// as many pixels per point as the upright picture has over the logical size (one without a logical size), cut to the
+/// picture, and found in the buffer that holds the picture turned. `None` when nothing of the source is left.
+fn area_in_buffer(frame: &Frame) -> Option<(u32, u32, u32, u32)> {
+    let Some(region) = frame.region else {
+        return Some((0, 0, frame.size.0, frame.size.1));
     };
-    let scale = capture
+    let (uw, uh) = frame.transform.turn_pixels(frame.size);
+    let (uw, uh) = (f64::from(uw), f64::from(uh));
+    let (lw, lh) = frame
         .logical
-        .filter(|(w, _)| *w > 0.0)
-        .map_or(1.0, |(w, _)| f64::from(width) / w);
-    let clamp = |v: f64, max: u32| (v.max(0.0).round() as u32).min(max);
-    let x = clamp(region.x() * scale, width);
-    let y = clamp(region.y() * scale, height);
-    let w = clamp(region.width() * scale, width - x)
-        .max(1)
-        .min(width - x);
-    let h = clamp(region.height() * scale, height - y)
-        .max(1)
-        .min(height - y);
-    (x, y, w, h)
+        .filter(|(w, h)| *w > 0.0 && *h > 0.0)
+        .unwrap_or((uw, uh));
+    let (sx, sy) = (uw / lw, uh / lh);
+    let px = |v: f64, s: f64, max: f64| (v * s).round().clamp(0.0, max);
+    let upright = Rect::from_ltrb(
+        px(region.min_x(), sx, uw),
+        px(region.min_y(), sy, uh),
+        px(region.max_x(), sx, uw),
+        px(region.max_y(), sy, uh),
+    );
+    if upright.width() < 1.0 || upright.height() < 1.0 {
+        return None;
+    }
+    let r = frame.transform.buffer_rect(&upright, Size::new(uw, uh));
+    Some((
+        r.min_x() as u32,
+        r.min_y() as u32,
+        r.width() as u32,
+        r.height() as u32,
+    ))
 }
 
 macro_rules! quiet {
@@ -588,9 +710,24 @@ impl Dispatch<ExtImageCopyCaptureFrameV1, FrameData> for State {
         _: &WlConnection,
         _: &QueueHandle<Self>,
     ) {
+        let mut transform = data
+            .transform
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         match event {
-            frame::Event::Ready => state.emit(Wire::Ready(data.0)),
-            frame::Event::Failed { .. } => state.emit(Wire::Failed(data.0)),
+            frame::Event::Transform {
+                transform: WEnum::Value(wire),
+            } => {
+                *transform = OutputTransform::from_wayland(u32::from(wire)).unwrap_or_default();
+            }
+            frame::Event::Ready => {
+                let transform = *transform;
+                state.emit(Wire::Ready {
+                    key: data.key,
+                    transform,
+                });
+            }
+            frame::Event::Failed { .. } => state.emit(Wire::Failed(data.key)),
             _ => {}
         }
     }

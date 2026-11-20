@@ -497,6 +497,9 @@ pub struct Runtime<A: Application, W: WindowSystem> {
     refused_popups: Vec<WindowKey>,
     /// The kind of text the clipboard offers, when it holds text.
     clipboard_text: Option<String>,
+    /// What the application hears once another client's selection replaces the data it put on the clipboard
+    /// ([`Command::SetClipboardData`]).
+    clipboard_replaced: Option<A::Message>,
     /// The clipboard reads under way for a paste, each with the window and the node that asked.
     pastes: HashMap<ClipboardToken, (WindowKey, NodeId)>,
     /// The popup a control opened for itself, while it is open.
@@ -559,6 +562,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             semantic_finishing: Vec::new(),
             refused_popups: Vec::new(),
             clipboard_text: None,
+            clipboard_replaced: None,
             pastes: HashMap::new(),
             owned_dismissed: None,
             owned: None,
@@ -876,7 +880,14 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             }
             Command::SetClipboard(text) => {
                 Self::set_clipboard(&mut self.system, text);
+                self.clipboard_replaced = None;
                 self.clipboard_offers(Some(&[TEXT_MIMES[0].to_owned()]));
+            }
+            Command::SetClipboardData { data, replaced } => {
+                let mimes: Vec<String> = data.iter().map(|d| d.mime.clone()).collect();
+                self.system.set_clipboard(ClipboardKind::Clipboard, data);
+                self.clipboard_replaced = replaced;
+                self.clipboard_offers(Some(&mimes));
             }
             Command::ActivationToken {
                 window,

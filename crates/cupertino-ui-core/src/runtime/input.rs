@@ -28,6 +28,12 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 }
                 return Ok(());
             }
+            PlatformEvent::ClipboardReplaced { kind } => {
+                if kind == ClipboardKind::Clipboard {
+                    self.messages.extend(self.clipboard_replaced.take());
+                }
+                return Ok(());
+            }
             PlatformEvent::ClipboardOffered { kind, mimes } => {
                 if kind == ClipboardKind::Clipboard {
                     self.clipboard_offers(mimes.as_deref());
@@ -1014,10 +1020,10 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
     pub(super) fn set_clipboard(system: &mut W, text: String) {
         system.set_clipboard(
             ClipboardKind::Clipboard,
-            ClipboardData {
+            vec![ClipboardData {
                 mime: "text/plain;charset=utf-8".into(),
                 bytes: text.into_bytes(),
-            },
+            }],
         );
     }
 

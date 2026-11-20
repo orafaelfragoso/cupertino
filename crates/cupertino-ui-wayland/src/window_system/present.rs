@@ -399,6 +399,12 @@ impl WaylandWindowSystem {
                 });
                 return;
             }
+            Event::SelectionLost => {
+                out.push(PlatformEvent::ClipboardReplaced {
+                    kind: ClipboardKind::Clipboard,
+                });
+                return;
+            }
             Event::Received { id, data } => {
                 if let Some(at) = self.reads.iter().position(|(r, _, _)| *r == id) {
                     let (_, token, mime) = self.reads.swap_remove(at);

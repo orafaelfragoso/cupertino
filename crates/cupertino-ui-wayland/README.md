@@ -109,8 +109,9 @@ size, with its backdrop shaped and its input region sent as for a present. It ac
 for a frame callback; a frame presented later is whole. Without `Capability::SolidColor` it is
 `PlatformError::Unsupported` and the runtime draws the window instead; without a configure it is `NotReady`.
 
-A clipboard read finishes before `read_clipboard` returns (the transport's one-second limit) and its data arrives with
-the next `dispatch`. Not offered yet, so their flags are false: touch, the primary selection, and the desktop's
+`set_clipboard` offers its data in each of its MIME types as the selection, and the transport's `SelectionLost` (another
+client's selection replaced it) arrives as `PlatformEvent::ClipboardReplaced`. A clipboard read finishes before
+`read_clipboard` returns (the transport's one-second limit) and its data arrives with the next `dispatch`. Not offered yet, so their flags are false: touch, the primary selection, and the desktop's
 effects protocol, which an extension binds through `connection`. Drags go out (`drag_and_drop` with the clipboard and
 a seat): `start_drag` hands the transport the data, the actions and the image as a `DragIcon` in `wl_shm`'s byte order,
 one drag at a time (a new one cancels the last), and reports the drag source's events as `PlatformEvent::Drag`.

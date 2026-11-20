@@ -1100,6 +1100,7 @@ impl Dispatch<WlDataSource, ()> for State {
             wl_data_source::Event::Cancelled => {
                 if own.is_some() {
                     state.clipboard.own = None;
+                    state.events.push(Event::SelectionLost);
                 }
                 source.destroy();
             }

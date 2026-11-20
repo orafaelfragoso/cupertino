@@ -291,12 +291,15 @@ Who a bus caller is:
 | A component | `ComponentOf(name)` of `org.cupertino.Session1`, which answers from the accepted names: the component's name, or nothing | another component or a service, through `cupertino-peer` |
 | A shell host, whichever component | `ShellHosts` of `org.cupertino.Session1`: the hosts' process ids and start times | a service that asks only whether the shell calls |
 | The server | the owner of `org.cupertino.Session1`, a name the server owns before it starts a program and gives up to nobody | a component: the check that takes the place of "my parent process" |
-| `cupertino-login`, `cupertino-prompts`, `cupertino-screenshot`, `cupertino-portal`, `cupertino-control` | the process the server started, by the pidfd it holds | the server, as `caller::authorize` of `cupertino-server` judges its agents |
+| `cupertino-login`, `cupertino-prompts`, `cupertino-screenshot`, `cupertino-portal`, `cupertino-control` | the process the server started, by the pidfd it holds | the server, as `caller::authorize` of `cupertino-server` judges its agents and `StartScreenshot` the portal |
+| A program the server starts itself | `ProgramOf(name)` of `org.cupertino.Session1`, which the server answers from the pidfds it holds: the program's name in [Programs the server starts itself](#programs-the-server-starts-itself) (`portal`, `login`, `desktop-control`, `screenshot`, ...), or nothing | a service, through `cupertino-peer`: the screenshot program takes the portal's calls alone |
 
 - `cupertino-peer` resolves a caller in this order: the owner of `org.cupertino.Session1` is the server; a caller
   whose process is a host (`ShellHosts`) is the component `ComponentOf` names for its unique name, or no component;
-  any other caller is no part of the shell. A component in a separate host resolves the same way.
-- `ComponentOf` answers any caller: it tells which unique name is which component, and nothing else.
+  any other caller is the program `ProgramOf` names for its unique name, or no part of the shell. A component in a
+  separate host resolves the same way.
+- `ComponentOf` and `ProgramOf` answer any caller: they tell which unique name is which component or program, and
+  nothing else. `ProgramOf` names a program only while its process runs, and never a host or a component.
 - The programs the server starts itself bind no `cupertino_component_v1` and announce nothing: each is a process of
   its own, so its process is its identity.
 - No check compares process relations. Component sockets are close-on-exec: a program a component starts inherits

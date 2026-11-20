@@ -194,6 +194,7 @@ pub async fn caller(connection: &zbus::Connection, sender: &zbus::names::UniqueN
         ComponentCaller::Component(name) => ComponentName::from_name(&name)
             .map(Caller::Component)
             .unwrap_or(Caller::Other),
-        ComponentCaller::Other => Caller::Other,
+        // a program the server started itself is no component
+        ComponentCaller::Program(_) | ComponentCaller::Other => Caller::Other,
     }
 }

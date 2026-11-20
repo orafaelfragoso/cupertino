@@ -269,6 +269,10 @@ pub enum Event {
     },
     /// Another selection was set, or it was cleared.
     Selection(Option<ClipboardOffer>),
+    /// The selection this client set with [`Connection::set_selection`] is no longer its own: another client's
+    /// replaced it, or the compositor dropped it (`wl_data_source.cancelled`). A selection this client replaces itself
+    /// gives none.
+    SelectionLost,
     /// Another client's drag over a surface of this client.
     Drag {
         surface: SurfaceId,

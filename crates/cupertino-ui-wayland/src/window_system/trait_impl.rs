@@ -420,9 +420,10 @@ impl WindowSystem for WaylandWindowSystem {
         };
     }
 
-    fn set_clipboard(&mut self, kind: ClipboardKind, data: ClipboardData) {
+    fn set_clipboard(&mut self, kind: ClipboardKind, data: Vec<ClipboardData>) {
         if kind == ClipboardKind::Clipboard {
-            let _ = self.conn.set_selection(vec![(data.mime, data.bytes)]);
+            let contents = data.into_iter().map(|d| (d.mime, d.bytes)).collect();
+            let _ = self.conn.set_selection(contents);
         }
     }
 

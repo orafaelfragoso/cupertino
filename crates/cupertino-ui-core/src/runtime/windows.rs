@@ -365,6 +365,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
     pub(super) fn apply_owned(&mut self, i: usize, effects: &mut Effects<A::Message>) {
         if let Some(text) = effects.clipboard.take() {
             Self::set_clipboard(&mut self.system, text);
+            self.clipboard_replaced = None;
             self.clipboard_offers(Some(&[TEXT_MIMES[0].to_owned()]));
         }
         if let Some(node) = effects.paste.take() {

@@ -34,8 +34,8 @@ pub(crate) fn hole_pieces(
 }
 
 /// The holes of the persistent surfaces held on the output after their component's connection ended (D19) that show
-/// (`shown`), front to back: each draws its source live where it last showed, behind the surface's last picture, moved
-/// and faded as its surface shows.
+/// (`shown`) and whose pictures do not draw them among their slices (`HeldShown::placed`), front to back: each draws
+/// its source live where it last showed, behind the surface's last picture, moved and faded as its surface shows.
 pub(crate) fn held_hole_pieces(
     p: &mut SceneParams<'_>,
     shown: &[layers::HeldShown<'_>],
@@ -43,22 +43,54 @@ pub(crate) fn held_hole_pieces(
     let transactions = p.transactions;
     let mut out = Vec::new();
     for hole in transactions.held_holes() {
-        let Some(held) = hole.held.as_ref() else {
+        let Some(on) = shown.iter().find(|on| holds(on, hole)) else {
             continue;
         };
-        let Some(on) = shown
-            .iter()
-            .find(|s| s.component == hole.component && s.key == held.key)
-        else {
-            continue;
-        };
-        if held.output == p.output_id {
-            let b = held.bounds;
-            let bounds = Rectangle::new((b.loc.x, b.loc.y + on.dy).into(), b.size);
-            out.extend(source_pieces(p, hole, bounds, on.opacity));
+        if !on.placed.contains(&hole.layer_surface_id) {
+            out.extend(held_source_pieces(p, on, hole));
         }
     }
     out
+}
+
+/// The hole of the layer `layer` (its `wl_surface`) of the held surface shown as `on`, drawn live where it last
+/// showed, moved and faded as its surface shows: what the surface's picture draws at the layer's place among its slices,
+/// behind the layer's content and in front of its glass, as the live layer drew it.
+pub(super) fn held_hole_in_slot(
+    p: &mut SceneParams<'_>,
+    on: &layers::HeldShown<'_>,
+    layer: &smithay::reexports::wayland_server::backend::ObjectId,
+) -> Vec<Piece> {
+    let transactions = p.transactions;
+    let Some(hole) = transactions
+        .held_holes()
+        .find(|hole| hole.layer_surface_id == *layer && holds(on, hole))
+    else {
+        return Vec::new();
+    };
+    held_source_pieces(p, on, hole)
+}
+
+/// Whether `hole` lies on the held surface shown as `on`.
+fn holds(on: &layers::HeldShown<'_>, hole: &crate::transaction::HoleRecord) -> bool {
+    hole.held
+        .as_ref()
+        .is_some_and(|held| on.component == hole.component && on.key == held.key)
+}
+
+/// The source of the held hole `hole` where it last showed on its held surface, shown as `on`; nothing on another
+/// output.
+fn held_source_pieces(
+    p: &mut SceneParams<'_>,
+    on: &layers::HeldShown<'_>,
+    hole: &crate::transaction::HoleRecord,
+) -> Vec<Piece> {
+    let Some(held) = hole.held.as_ref().filter(|held| held.output == p.output_id) else {
+        return Vec::new();
+    };
+    let b = held.bounds;
+    let bounds = Rectangle::new((b.loc.x, b.loc.y + on.dy).into(), b.size);
+    source_pieces(p, hole, bounds, on.opacity)
 }
 
 /// The pieces of `hole`'s source fitted and centred in `bounds` (output-local points) at `opacity`.

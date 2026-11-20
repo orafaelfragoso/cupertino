@@ -108,7 +108,42 @@ impl Cupertino {
             }
             self.hosts.left_alone = plan.left_alone;
         }
+        self.release_unhosted_holds();
         crate::cli::schedule_supervision(self);
+    }
+
+    /// Whether a host runs `component`: the plan puts it in one, or a host the supervisor did not start
+    /// ([`Cupertino::attach_host_connection`]) and that is not ending has it in its list. A component no host runs is
+    /// turned off or runs as its process entry: nothing of it is held.
+    pub(super) fn component_hosted(&self, component: &str) -> bool {
+        self.hosts.planned_host(component).is_some()
+            || self.hosts.hosts.values().any(|h| {
+                !h.spawned && h.expected_exit_kill_at.is_none() && h.components.contains(&component)
+            })
+    }
+
+    /// End what is held for the components no host runs any more (turned off, or gone back to their process entries):
+    /// their held pictures, reserved space and holes, and the window manager's held placements on every output.
+    fn release_unhosted_holds(&mut self) {
+        let mut held: Vec<&'static str> = self.hosts.holds.iter().map(|h| h.component).collect();
+        if !self.hosts.held_wm_outputs.is_empty() {
+            held.push("windowmanager");
+        }
+        held.sort_unstable();
+        held.dedup();
+        for component in held {
+            if self.component_hosted(component) {
+                continue;
+            }
+            self.release_component_holds(component);
+            if component == "windowmanager" {
+                // no instance takes anything over, so placements awaiting a first commit end too
+                let outputs: Vec<OutputId> = self.hosts.held_wm_outputs.keys().copied().collect();
+                for out in outputs {
+                    self.end_held_wm_placements(out);
+                }
+            }
+        }
     }
 
     /// What the plan needs to know about the hosts.
@@ -204,7 +239,9 @@ impl Cupertino {
         component: &'static str,
         reply: RestartReply,
     ) -> Option<RestartReply> {
-        let was = self.hosts.planned_host(component)?;
+        let Some(was) = self.hosts.planned_host(component) else {
+            return Some(reply);
+        };
         self.hosts.absent.remove(component);
         self.hosts.dev_given_back.remove(component);
         let answer = std::sync::Arc::new(std::sync::Mutex::new(PendingAnswer {
@@ -431,6 +468,13 @@ impl Launcher for ServerLauncher<'_> {
     fn host_ended(&mut self, host_id: u64, status: ExitStatus, from_dev_folder: bool) -> bool {
         self.state
             .host_process_ended(host_id, status, from_dev_folder)
+    }
+
+    fn host_unbound(&mut self, host_id: u64, from_dev_folder: bool) {
+        // the host never ran: its connection's end is no crash
+        self.state.expect_host_exit(host_id);
+        self.state
+            .host_process_ended(host_id, ExitStatus::default(), from_dev_folder);
     }
 
     fn host_refused(&mut self, kind: HostKind, host_id: Option<u64>, reason: &str) {

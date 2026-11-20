@@ -5,7 +5,10 @@
 //! - An unresponsive component receives no pointer or keyboard input until `responsive`.
 //! - Bus-identity nonce verification accepts the announced unique name from the host process and refuses wrong sender
 //!   or duplicate component claims.
-//! - Five failures within 60 s stop the component (`stopped(gave_up)` + `component_stopped`) and release holds.
+//! - Five failures within 60 s stop the component (`stopped(gave_up)` + `component_stopped`) and release holds; a
+//!   restart then hands its host a connection.
+//! - An instance that ends before its first buffer leaves the older hold as it was.
+//! - `lost` and `failed` count only from the host that runs the component.
 //! - Keyboard focus returns to the window that had it when a component with a transient surface turns unresponsive
 //!   and when its connection drops; the dropped transient leaves no hold.
 //! - `lost` takes a component out of the shared host's list and asks for a separate host for it; a separate host
@@ -921,7 +924,21 @@ fn host_holds_keep_space_and_picture_transients_dismiss_and_unresponsive_blocks_
         .stopped
         .contains(&("launcher".to_string(), StopReason::GaveUp)));
 
-    let _ = Duration::from_secs(0);
+    // 8. A restart the person asks for answers the host's `connect` it heard `stopped` for with a connection.
+    assert!(host_state.connections.iter().all(|(n, _)| n != "launcher"));
+    assert!(state.request_component_restart("launcher", None));
+    pump(
+        &mut event_loop,
+        &mut state,
+        &host_conn,
+        &mut host_queue,
+        &mut host_state,
+    );
+    assert!(!state.hosts.component_gave_up("launcher"));
+    assert!(
+        host_state.connections.iter().any(|(n, _)| n == "launcher"),
+        "the restarted component gets its connection"
+    );
 }
 
 /// One client connection of a test: its socket, queue and state.
@@ -1514,5 +1531,129 @@ fn window_manager_placements_stay_held_until_takeover_or_the_hold_timeout() {
     assert!(
         !rig.state.window_managers.passes_input(window_id),
         "the held placement ended: the window returns to its frame"
+    );
+}
+
+/// Map a persisted top bar of `height` reserving `zone` for `side`, with a buffer when `buffer` holds.
+fn bar(
+    rig: &mut Rig,
+    side: &mut Side<ComponentClientState>,
+    height: u32,
+    zone: i32,
+    buffer: bool,
+) -> (
+    wl_surface::WlSurface,
+    zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
+    Option<(std::fs::File, wl_shm_pool::WlShmPool, wl_buffer::WlBuffer)>,
+) {
+    let qh = side.queue.handle();
+    let surface = side
+        .client
+        .compositor
+        .as_ref()
+        .unwrap()
+        .create_surface(&qh, ());
+    let layer = side.client.layer_shell.as_ref().unwrap().get_layer_surface(
+        &surface,
+        None,
+        zwlr_layer_shell_v1::Layer::Top,
+        "menubar".into(),
+        &qh,
+        (),
+    );
+    layer.set_anchor(
+        zwlr_layer_surface_v1::Anchor::Top
+            | zwlr_layer_surface_v1::Anchor::Left
+            | zwlr_layer_surface_v1::Anchor::Right,
+    );
+    layer.set_size(800, height);
+    layer.set_exclusive_zone(zone);
+    side.client
+        .component_global
+        .as_ref()
+        .unwrap()
+        .persist(&surface, "bar".into());
+    surface.commit();
+    rig.pump(side);
+    let buffer = buffer.then(|| {
+        let buffer = make_shm_buffer(side.client.shm.as_ref().unwrap(), &qh, 800, height as i32);
+        surface.attach(Some(&buffer.2), 0, 0);
+        surface.commit();
+        buffer
+    });
+    rig.pump(side);
+    (surface, layer, buffer)
+}
+
+#[test]
+fn an_instance_that_ends_before_its_first_buffer_keeps_the_older_hold() {
+    let mut rig = Rig::new();
+    let mut host = rig.host(HostKind::Shared, &["menubar"]);
+    let menubar_hc = rig.component_object(&mut host, "menubar");
+    let mut first = rig.component(&mut host, "menubar");
+    let first_bar = bar(&mut rig, &mut first, 28, 28, true);
+    assert_eq!(rig.state.usable_area(rig.output_id).y, 28.0);
+    drop(first_bar);
+    drop(first);
+    rig.settle();
+    assert_eq!(rig.state.hosts.held_surfaces().len(), 1);
+    let geometry = rig.state.hosts.held_surfaces()[0].geometry;
+
+    // a new instance persists the bar again, taller, and ends before it shows a buffer
+    menubar_hc.connect();
+    rig.pump(&mut host);
+    let mut second = rig.component(&mut host, "menubar");
+    assert_eq!(second.client.holds, vec!["bar"]);
+    let second_bar = bar(&mut rig, &mut second, 50, 50, false);
+    drop(second_bar);
+    drop(second);
+    rig.settle();
+    let held = rig.state.hosts.held_surfaces();
+    assert_eq!(held.len(), 1, "the older hold stays");
+    assert!(held[0].picture.is_some(), "with its picture");
+    assert_eq!(held[0].geometry, geometry, "and its geometry");
+    assert_eq!(
+        rig.state.usable_area(rig.output_id).y,
+        28.0,
+        "and its reserved space"
+    );
+}
+
+#[test]
+fn lost_and_failed_count_only_from_the_host_that_runs_the_component() {
+    let mut rig = Rig::new();
+    let mut shared = rig.host(HostKind::Shared, &["menubar", "osd"]);
+    let _osd_hc = rig.component_object(&mut shared, "osd");
+    let _osd = rig.component(&mut shared, "osd");
+
+    // another host holds an object for it, but the shared host runs it
+    let mut other = rig.host(HostKind::Separate("osd"), &["osd"]);
+    let qh = other.queue.handle();
+    let stray = other
+        .client
+        .host
+        .as_ref()
+        .unwrap()
+        .get_component("osd".into(), &qh, "osd".into());
+    rig.pump(&mut other);
+    for _ in 0..5 {
+        stray.failed(Failure::Panic);
+    }
+    stray.lost();
+    rig.pump(&mut other);
+    rig.pump(&mut shared);
+    assert!(
+        !rig.state.hosts.component_gave_up("osd"),
+        "another host's failures are not counted"
+    );
+    assert_eq!(
+        rig.state.hosts.component_liveness("osd"),
+        Liveness::Responsive
+    );
+    assert!(!rig.state.hosts.component_separate_for_session("osd"));
+    assert!(rig.state.hosts.component_connected("osd"));
+    assert_eq!(
+        shared.client.done_count, 1,
+        "the shared host keeps its list"
     );
 }

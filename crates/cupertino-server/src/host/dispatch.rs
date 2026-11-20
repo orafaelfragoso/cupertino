@@ -96,14 +96,19 @@ impl Cupertino {
             rec.failures.clear();
             rec.consecutive_failures = 0;
             rec.backoff_until = None;
-            // Find the host waiting on this component and answer connect.
+            // the host that heard `stopped` in place of a connection is owed one now
             let host_id = self
                 .hosts
                 .hosts
                 .values()
-                .find(|h| h.components.contains(&component))
+                .find(|h| {
+                    h.components.contains(&component) && h.component_objects.contains_key(component)
+                })
                 .map(|h| h.id);
             if let Some(hid) = host_id {
+                if let Some(host) = self.hosts.hosts.get_mut(&hid) {
+                    host.connect_pending.insert(component);
+                }
                 self.try_answer_component_connect(hid, component, now);
             }
             return true;
@@ -401,8 +406,9 @@ impl Cupertino {
     }
 
     /// Called from `WlrLayerShellHandler::layer_destroyed` BEFORE unmapping `layer` from `output`:
-    /// if the surface was persisted and its component is not stopped, capture it into a [`HeldSurface`] so its
-    /// reserved space and last picture stay until takeover or `ready`/timeout.
+    /// if the surface was persisted and showed a buffer, and a host runs its component, which is not stopped, capture
+    /// it into a [`HeldSurface`] so its reserved space and last picture stay until takeover or `ready`/timeout. A
+    /// surface that never showed leaves an older hold of its key as it was.
     pub fn host_layer_destroyed(
         &mut self,
         output: &smithay::output::Output,
@@ -418,7 +424,8 @@ impl Cupertino {
             .components
             .get(persisted.component)
             .is_some_and(|r| r.gave_up);
-        if gave_up {
+        // a surface that never showed keeps the older hold; a stopped component, or one no host runs, holds nothing
+        if gave_up || !persisted.mapped || !self.component_hosted(persisted.component) {
             return;
         }
         // the picture taken as the `wl_surface` went, or, while it still shows, one taken now
@@ -690,6 +697,24 @@ impl Cupertino {
             if let Some(shared) = self.shared_host_resource() {
                 shared.component_stopped(component.to_string());
             }
+        }
+    }
+
+    /// Whether host `host_id` runs `component`: the host of its connection, or, while it has none, a host whose list
+    /// holds it.
+    fn host_runs_component(&self, host_id: u64, component: &'static str) -> bool {
+        match self
+            .hosts
+            .components
+            .get(component)
+            .and_then(|r| r.active.as_ref())
+        {
+            Some((_, active)) => *active == host_id,
+            None => self
+                .hosts
+                .hosts
+                .get(&host_id)
+                .is_some_and(|h| h.components.contains(&component)),
         }
     }
 
@@ -1052,6 +1077,17 @@ impl Dispatch<CupertinoHostComponentV1, HostComponentData> for Cupertino {
                     }
                 }
                 state.refocus_pointer();
+            }
+            // only the host that runs the component can say it was lost or failed
+            cupertino_host_component_v1::Request::Lost
+            | cupertino_host_component_v1::Request::Failed { .. }
+                if !state.host_runs_component(data.host_id, component) =>
+            {
+                tracing::debug!(
+                    component,
+                    host = data.host_id,
+                    "a host that does not run the component reports on it: ignored"
+                );
             }
             cupertino_host_component_v1::Request::Lost => {
                 if let Some(rec) = state.hosts.components.get_mut(component) {

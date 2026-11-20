@@ -21,7 +21,7 @@ use cupertino_kit::render::ImageResource;
 use cupertino_kit::test::capture::{self, Look, Options, State};
 use cupertino_kit::test::{Capabilities, ManualClock, TestDriver, WindowStates};
 use cupertino_kit::theme::ThemeTokens;
-use cupertino_notifications::view::{self, CardMetrics, Input, Ui};
+use cupertino_notifications::view::{self, CardMetrics, DisplayProbe, Input, Ui};
 use cupertino_notifications::{CenterConfig, NotificationCenter, NotifyInput, Urgency};
 
 /// The app's part of the surface and file names.
@@ -81,6 +81,7 @@ impl Application for Shown {
             &mut center,
             &model.ui,
             &model.metrics,
+            &DisplayProbe::default(),
             NOW,
             std::convert::identity,
         )

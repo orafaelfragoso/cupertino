@@ -81,10 +81,8 @@ pub fn end(lifetime: Lifetime, now: i64, calendar: &dyn LocalCalendar) -> i64 {
 
 /// The session's calendar through the C library (`localtime_r` and `mktime`, daylight saving time resolved by the
 /// time zone rules).
-#[cfg(feature = "dbus")]
 pub struct SystemCalendar;
 
-#[cfg(feature = "dbus")]
 impl SystemCalendar {
     fn local(unix: i64) -> cupertino_kit::time::LocalTime {
         cupertino_kit::time::local(cupertino_kit::time::from_unix(unix))
@@ -92,7 +90,6 @@ impl SystemCalendar {
     }
 }
 
-#[cfg(feature = "dbus")]
 impl LocalCalendar for SystemCalendar {
     fn hour(&self, unix: i64) -> u8 {
         Self::local(unix).hour

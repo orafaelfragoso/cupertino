@@ -28,6 +28,9 @@ use cupertino_kit::motion::{SpringPreset, Timing};
 use std::borrow::Cow;
 use std::collections::VecDeque;
 
+mod saved;
+pub use saved::Kept;
+
 /// What a notification without its preview says in place of its title.
 pub const REDACTED_TITLE: &str = "Notification";
 

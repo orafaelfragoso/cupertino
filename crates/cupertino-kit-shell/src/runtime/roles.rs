@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use cupertino_kit::core::WindowKey;
-use cupertino_kit::geometry::Rect;
+use cupertino_kit::geometry::{Rect, Size};
 use cupertino_kit::platform::SystemAppearance;
 use cupertino_kit::prelude::WindowSpec;
 use cupertino_protocols::client::cupertino_shell_v1::CupertinoShellV1;
@@ -506,6 +506,12 @@ impl ShellRoles {
                     },
                     None => size,
                 };
+                let window = win.key.clone();
+                let points = Size::new(f64::from(size.0), f64::from(size.1));
+                self.inbox.push(Event::Configured {
+                    window,
+                    size: points,
+                });
                 Some(RoleEvent::Configure { surface, size })
             }
             &ShellEvent::Closed(surface) => {

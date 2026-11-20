@@ -8,7 +8,8 @@
 //!   clicked and Primary+Backspace is moved to the trash.
 //! - A panic injected as it paints, as its loop dispatches and on a helper thread restarts it alone, fifty times, while
 //!   the dock keeps drawing and the host's anonymous memory stays flat; while it restarts the server holds its picture,
-//!   and every restarted desktop draws its item again.
+//!   and every restarted desktop takes its place with its item: the item shows on every turn of a restart, unless the
+//!   server gave the desktop up and held nothing.
 
 #[path = "shell/components.rs"]
 #[allow(dead_code)]
@@ -98,10 +99,10 @@ fn dock_colour(rig: &mut Rig) -> Option<&'static str> {
     }
 }
 
-/// The desktop's grid on the test's output, below the menu bar's room, as the desktop lays it out.
+/// The desktop's grid on the test's output, as the desktop lays it out in the area the server configures it to: the
+/// whole output, since the test runs no menu bar and its dock reserves no space.
 fn grid() -> Grid {
-    let top = cupertino_kit_shell::design::menu_bar().height.ceil();
-    Grid::new(f64::from(OUTPUT_SIZE.0), f64::from(OUTPUT_SIZE.1), top)
+    Grid::new(f64::from(OUTPUT_SIZE.0), f64::from(OUTPUT_SIZE.1), 0.0)
 }
 
 fn area(rect: Rect) -> Area {
@@ -417,6 +418,11 @@ fn the_desktop_restarts_alone_holding_its_picture_after_injected_panics() {
         let mut watch = |rig: &mut Rig| {
             colours.extend(dock_colour(rig));
             assert_eq!(rig.state.usable_area(output), usable);
+            // the held picture shows the item until the new instance's first frame, which shows it too
+            assert!(
+                gives_up || ground.shows_icon(rig, first),
+                "the item went while the desktop restarted after a crash at {at}"
+            );
             held |= rig
                 .state
                 .hosts

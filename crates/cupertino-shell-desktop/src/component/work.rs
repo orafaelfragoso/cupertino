@@ -46,14 +46,13 @@ const WALLPAPER_PANE: &str = "wallpaper";
 const URI_LIST: &str = "text/uri-list";
 
 /// What the start read for the session: the desktop folder, made when missing; the file types; the items' icons with
-/// the user directories' folder icons; the kept arrangement and where it is kept; the menu bar's room.
+/// the user directories' folder icons; the kept arrangement and where it is kept.
 pub struct Session {
     pub folder: PathBuf,
     pub types: Arc<MimeDatabase>,
     pub file_icons: FileIcons,
     pub prefs: DesktopPrefs,
     pub prefs_file: Option<PathBuf>,
-    pub menu_bar: f64,
 }
 
 /// The start's reads, handed to the UI thread once: the first to [`Started::take`] them has them.
@@ -104,7 +103,6 @@ fn read_session() -> Result<Session, String> {
         file_icons,
         prefs,
         prefs_file,
-        menu_bar: cupertino_kit_shell::design::menu_bar().height.ceil(),
     })
 }
 

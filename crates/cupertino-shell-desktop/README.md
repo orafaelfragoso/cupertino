@@ -12,7 +12,7 @@ and a thread of its own, with its own Wayland and session bus connections, when 
 |---|---|
 | `arrangement` | Where the items sit without a toolkit: the `Grid` that starts at the top right corner below the menu bar's room and fills each column downwards before the next one to its left; `arrange` (each item in its kept cell, the rest in the first free ones, the overflow piled on the last), `dropped` (a drag moves the items as many cells as the held one, each to the nearest free cell), `cleaned` (Clean Up), `neighbour` (the arrow keys), `item_frames` (backdrop, icon and name in a cell) and `DesktopPrefs`, what is kept between sessions in `$XDG_CONFIG_HOME/cupertino/files/desktop.json` (`location`, the file the desktop kept when it was part of Files). |
 | `metrics` | The measured sizes: icon, grid pitches, backdrop, name capsule and its shadow, the dragged items' opacity. |
-| `Desktop` (`component`) | The component: one `Layer::Bottom` layer surface on every output (namespace `cupertino-desktop`, anchored to all four edges, exclusive zone -1 so it covers the whole output, the grid keeping the menu bar's room), persistent so the server holds its picture while the component restarts (D19), taking the keyboard once a press lands on it. The items show on the main display (the first output the server lists); the others show the empty desktop that takes presses and the context menu. |
+| `Desktop` (`component`) | The component: one `Layer::Bottom` layer surface on every output (namespace `cupertino-desktop`, anchored to all four edges, exclusive zone 0 so the server configures it to the area the menu bar, the dock and other surfaces leave, `Event::Configured`, and the grid lays the items out within it; drawn headless by `prepare`, with no server, the grid keeps the menu bar's room itself), persistent so the server holds its picture while the component restarts (D19), taking the keyboard once a press lands on it. The items show on the main display (the first output the server lists); the others show the empty desktop that takes presses and the context menu. |
 | `view` | What each desktop draws and what its presses mean: the icons (thumbnails for pictures), the selected icon's backdrop and the accent capsule of a selected name, the rubber band (fading in and out with the catalogue's `Timing::DESKTOP_BAND_FADE_IN` and `DESKTOP_BAND_FADE_OUT`), the dragged items, the rename field; click, Shift / Primary click, double click, the band, a drag of the selection, a secondary press for the context menu. |
 
 `prepare` gives a driver of the headless window system the desktop of a folder on one screen of a given size, without
@@ -44,9 +44,10 @@ the shell's roles, a kept arrangement or a session bus (the capture uses it).
 ## What a restart loses
 
 A failed component is started again alone by its host (D16). While it is down the server keeps each desktop's last
-picture (the persistent layer surface, D19); the new instance draws over it once its first frame is ready. Until its
-start's reads come back (the folder listed, the icons found) that first frame shows the empty desktop, and the items
-appear as the listing arrives. Kept across a restart: the items and their cells (`desktop.json`, written after each
+picture (the persistent layer surface, D19); the new instance takes its place with its first frame. It shows no window
+until its start's reads came back and the folder's first listing is in (or the folder cannot be listed), and it is not
+`ready` before (`Program::showing`, `shell-host.md#holes-and-holds`), so the held picture stays until a first frame that has the items;
+the server's 10 s end the hold if the listing takes longer. Kept across a restart: the items and their cells (`desktop.json`, written after each
 change) and the files themselves. It loses:
 
 - the selection, the rubber band and a drag under way;

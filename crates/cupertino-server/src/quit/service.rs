@@ -12,7 +12,10 @@ use super::{
     SessionSettings, ShellProcessRecord, BUS_NAME, OBJECT_PATH,
 };
 use crate::caller::{identify, Asker, Caller, Denial, Sandbox};
+use crate::capture::launch::SERVICE_NAME;
 use crate::state::Cupertino;
+use cupertino_peer::ProcessHandle;
+use zbus::export::futures_core::Stream;
 
 struct Session1 {
     calls: std::sync::Mutex<channel::Sender<Call>>,
@@ -264,7 +267,10 @@ impl Session1 {
         #[zbus(connection)] connection: &zbus::Connection,
     ) -> Result<(), CallError> {
         let caller = caller_of(&header, connection).await;
-        self.ask(|tx| Call::StartScreenshot(caller, tx)).await
+        // asked after the call came, so a service that dropped the name before the portal called is seen without it
+        let owner = screenshot_service_owner(connection).await;
+        self.ask(|tx| Call::StartScreenshot(caller, owner, tx))
+            .await
     }
 
     async fn log_out(
@@ -439,6 +445,43 @@ pub fn start_session_service_on(state: &mut Cupertino, address: Option<String>) 
     }
 }
 
+/// The process that owns the screenshot service's bus name (`SERVICE_NAME`) now, as the daemon names it; `None` when
+/// no connection owns it or the daemon names no process for the owner.
+async fn screenshot_service_owner(connection: &zbus::Connection) -> Option<ProcessHandle> {
+    let dbus = zbus::fdo::DBusProxy::new(connection).await.ok()?;
+    let name = zbus::names::BusName::try_from(SERVICE_NAME).ok()?;
+    let owner = dbus.get_name_owner(name).await.ok()?;
+    process_of_name(&dbus, owner.into_inner()).await
+}
+
+/// The process the daemon names for the connection `name`: by the descriptor it passes, else by its process id. No
+/// `/proc` of the process is read, so a process cannot stall the session's bus thread with it.
+async fn process_of_name(
+    dbus: &zbus::fdo::DBusProxy<'_>,
+    name: zbus::names::UniqueName<'_>,
+) -> Option<ProcessHandle> {
+    let credentials = dbus.get_connection_credentials(name.into()).await.ok()?;
+    if let Some(fd) = credentials.process_fd() {
+        let fd = std::os::fd::AsFd::as_fd(fd).try_clone_to_owned().ok()?;
+        return ProcessHandle::from_pidfd(fd).ok();
+    }
+    ProcessHandle::open(credentials.process_id()?).ok()
+}
+
+/// Hand each new owner of the screenshot service's bus name to the compositor (`Call::ScreenshotServiceOwner`).
+async fn follow_screenshot_service(
+    dbus: &zbus::fdo::DBusProxy<'_>,
+    change: zbus::fdo::NameOwnerChanged,
+    calls: &channel::Sender<Call>,
+) {
+    let Ok(args) = change.args() else { return };
+    let owner = match args.new_owner().as_ref() {
+        Some(owner) => process_of_name(dbus, owner.clone()).await,
+        None => None,
+    };
+    let _ = calls.send(Call::ScreenshotServiceOwner(owner));
+}
+
 /// Serve the interface on one connection until it closes (`Ok(false)`) or nothing can send signals any more (`Ok(true)`).
 async fn serve_session(
     address: &Option<String>,
@@ -454,7 +497,6 @@ async fn serve_session(
     };
     let conn = crate::dbus::bus(address.as_deref())?
         .serve_at(OBJECT_PATH, iface)?
-        .name(BUS_NAME)?
         .build()
         .await?;
     let emitter = SignalEmitter::new(&conn, OBJECT_PATH)?;
@@ -462,13 +504,35 @@ async fn serve_session(
         .object_server()
         .interface::<_, Session1>(OBJECT_PATH)
         .await?;
+    // the screenshot service's name is followed from its owner now, before the session's name is up: a caller that
+    // finds the session served is answered knowing every owner since
+    let dbus = zbus::fdo::DBusProxy::new(&conn).await?;
+    let mut owners = dbus
+        .receive_name_owner_changed_with_args(&[(0, SERVICE_NAME)])
+        .await?;
+    let owner = screenshot_service_owner(&conn).await;
+    let _ = calls.send(Call::ScreenshotServiceOwner(owner));
+    conn.request_name(BUS_NAME).await?;
     *connection.lock().unwrap_or_else(|e| e.into_inner()) = Some(conn.clone());
     let _serving = Serving(connection);
     loop {
-        let out = match crate::dbus::either(signals_rx.recv(), conn.closed()).await {
+        let owner_changed =
+            std::future::poll_fn(|cx| std::pin::Pin::new(&mut owners).poll_next(cx));
+        let out = match crate::dbus::either(
+            signals_rx.recv(),
+            crate::dbus::either(owner_changed, conn.closed()),
+        )
+        .await
+        {
             crate::dbus::Either::First(Ok(out)) => out,
             crate::dbus::Either::First(Err(_)) => return Ok(true),
-            crate::dbus::Either::Second(()) => return Ok(false),
+            crate::dbus::Either::Second(crate::dbus::Either::First(Some(change))) => {
+                follow_screenshot_service(&dbus, change, calls).await;
+                continue;
+            }
+            // the daemon's stream of the name's owners ends with the connection
+            crate::dbus::Either::Second(crate::dbus::Either::First(None)) => return Ok(false),
+            crate::dbus::Either::Second(crate::dbus::Either::Second(())) => return Ok(false),
         };
         match out {
             BusOut::ApplicationQuit(app_id) => {

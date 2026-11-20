@@ -173,13 +173,7 @@ impl Cupertino {
         index: usize,
         handle: u64,
     ) -> Option<(wire::Window, [f64; 2])> {
-        if protected_surface(surface)
-            || crate::authorization::is_prompt(surface)
-            || self.is_portal_prompt(surface)
-            || surface
-                .client()
-                .is_some_and(|c| authorized(&c, ShellRole::SessionLock))
-        {
+        if self.control_protected(surface) {
             return None;
         }
         let output = self.control.runs[index].output.as_ref()?.upgrade()?;

@@ -14,6 +14,12 @@
 //! [`SERVE_ARG`], on a connection of the same roles, started unless one started so still runs. The server holds a pidfd
 //! of every screenshot process it started, so a bus caller is known as the screenshot program ([`PROGRAM`]) by its
 //! process while it runs ([`Cupertino::program_of`]).
+//!
+//! A service that goes away drops its bus name ([`SERVICE_NAME`]) before its pidfd is readable: the name ends with its
+//! bus connection, as its descriptors close, and the process is reaped later. The portal sees the name go and asks for
+//! the service again in between. So a service process the server saw own the name and no longer owning it, as the bus
+//! told it ([`Cupertino::screenshot_service_owner`]) or as it stands when the call comes, does not count as running:
+//! it is on its way out, and a new one is started. One that has not owned the name yet still starts, and counts.
 
 use std::os::unix::net::UnixStream;
 use std::process::Command;
@@ -21,8 +27,10 @@ use std::process::Command;
 use cupertino_input::ScreenshotRequest;
 use cupertino_peer::ProcessHandle;
 use smithay::desktop::layer_map_for_output;
+use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
+use smithay::reexports::wayland_server::Resource;
 
-use crate::authorization::{ClientCapabilitySet, ShellRole};
+use crate::authorization::{ClientCapabilitySet, Holder, ShellRole};
 use crate::shell_connection::{bind_holder, connect_bound_client, connect_client, hand_over};
 use crate::state::{ClientState, Cupertino};
 
@@ -32,8 +40,11 @@ pub const OVERLAY_NAMESPACE: &str = "cupertino-screenshot";
 /// The server's name for the screenshot program, as `Session1.ProgramOf` answers it.
 pub const PROGRAM: &str = "screenshot";
 
-/// The argument that starts the screenshot program as the portal's service (`org.cupertino.Screenshot1`).
+/// The argument that starts the screenshot program as the portal's service ([`SERVICE_NAME`]).
 pub const SERVE_ARG: &str = "--serve";
+
+/// The bus name the screenshot program owns while it serves the portal (`cupertino-screenshot`'s `control::BUS_NAME`).
+pub const SERVICE_NAME: &str = "org.cupertino.Screenshot1";
 
 /// The arguments that select `request`'s mode in the screenshot process.
 pub fn mode_args(request: ScreenshotRequest) -> &'static [&'static str] {
@@ -59,29 +70,64 @@ enum Mode {
     Serve,
 }
 
+/// What the server knows of a service process's hold on [`SERVICE_NAME`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Name {
+    /// Not seen owning it yet: the process is still starting.
+    Unseen,
+    /// Seen owning it.
+    Owned,
+    /// Seen owning it and then not: the service is going away (see the module documentation).
+    Dropped,
+}
+
+/// A screenshot process the server started.
+#[derive(Debug)]
+struct Started {
+    process: ProcessHandle,
+    mode: Mode,
+    name: Name,
+}
+
 /// The screenshot processes the server started and has not seen exit, each held by a pidfd opened before it could be
 /// reaped. One that exited is dropped at the next start.
 #[derive(Debug, Default)]
 pub struct Launched {
-    running: Vec<(ProcessHandle, Mode)>,
+    running: Vec<Started>,
 }
 
 impl Launched {
     /// Whether `process` is a screenshot process the server started that still runs.
     pub(crate) fn holds(&self, process: &ProcessHandle) -> bool {
-        self.running.iter().any(|(held, _)| held.is(process))
+        self.running.iter().any(|s| s.process.is(process))
     }
 
-    /// Whether a screenshot process started as the portal's service still runs.
+    /// Whether a screenshot process started as the portal's service still runs and has not dropped its name.
     fn serving(&self) -> bool {
         self.running
             .iter()
-            .any(|(held, mode)| *mode == Mode::Serve && !held.has_exited())
+            .any(|s| s.mode == Mode::Serve && s.name != Name::Dropped && !s.process.has_exited())
+    }
+
+    /// [`SERVICE_NAME`] is owned by `owner`, or by no process the server can name.
+    fn owner_is(&mut self, owner: Option<&ProcessHandle>) {
+        for started in self.running.iter_mut().filter(|s| s.mode == Mode::Serve) {
+            let owns = owner.is_some_and(|owner| started.process.is(owner));
+            started.name = match (started.name, owns) {
+                (_, true) => Name::Owned,
+                (Name::Owned | Name::Dropped, false) => Name::Dropped,
+                (Name::Unseen, false) => Name::Unseen,
+            };
+        }
     }
 
     fn add(&mut self, process: ProcessHandle, mode: Mode) {
-        self.running.retain(|(held, _)| !held.has_exited());
-        self.running.push((process, mode));
+        self.running.retain(|s| !s.process.has_exited());
+        self.running.push(Started {
+            process,
+            mode,
+            name: Name::Unseen,
+        });
     }
 }
 
@@ -93,6 +139,27 @@ impl Cupertino {
             &self.display_handle,
             ClientState::detached(capture_capabilities()),
         )
+    }
+
+    /// Whether `surface` is drawn by a screenshot process the server started and still holds: on the connection the
+    /// server made for it (its holder) or on one the process opened itself (the connection's peer). Known by the
+    /// process the server holds the pidfd of, never by a title, an app id or a namespace, so every surface of the
+    /// program is one, whatever it draws (`crate::control` keeps desktop control away from them).
+    pub fn is_screenshot_surface(&self, surface: &WlSurface) -> bool {
+        let Some(client) = surface.client() else {
+            return false;
+        };
+        let Some(data) = client.get_data::<ClientState>() else {
+            return false;
+        };
+        let holder = match data.holder.get() {
+            Some(Holder::Process(process)) => Some(process),
+            _ => None,
+        };
+        holder
+            .into_iter()
+            .chain(data.peer.as_ref())
+            .any(|process| self.capture.launched.holds(process))
     }
 
     /// Whether a screenshot overlay or toolbar is on an output.
@@ -120,12 +187,23 @@ impl Cupertino {
         }
     }
 
+    /// The bus says [`SERVICE_NAME`] is now owned by `owner`, or by no process the server can name (no owner): a service
+    /// process seen owning it that no longer does is going away.
+    pub fn screenshot_service_owner(&mut self, owner: Option<&ProcessHandle>) {
+        self.capture.launched.owner_is(owner);
+    }
+
     /// `StartScreenshot`: start the screenshot program as the portal's service ([`SERVE_ARG`]) unless one started so
-    /// still runs. `Ok` once it runs; the error says why it did not start.
-    pub fn start_serving_screenshot(&mut self) -> Result<(), String> {
+    /// still runs and has not dropped [`SERVICE_NAME`]; `owner` is the name's owner when the call came, as for
+    /// [`Cupertino::screenshot_service_owner`]. `Ok` once it runs; the error says why it did not start.
+    pub fn start_serving_screenshot(
+        &mut self,
+        owner: Option<&ProcessHandle>,
+    ) -> Result<(), String> {
         if self.login_screen {
             return Err("the login screen starts no programs".into());
         }
+        self.capture.launched.owner_is(owner);
         if self.capture.launched.serving() {
             return Ok(());
         }

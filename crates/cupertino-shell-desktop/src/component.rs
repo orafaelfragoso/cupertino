@@ -72,7 +72,8 @@ const THUMBNAILS_OF: u64 = 0;
 /// The desktops.
 pub struct Desktop;
 
-/// An output the desktop shows on: its number, which names its windows, the server's output, and its size in points.
+/// An output the desktop shows on: its number, which names its windows, the server's output, its size in points, and
+/// the area the server configured its window to.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Screen {
     number: u64,
@@ -80,6 +81,9 @@ struct Screen {
     output: Option<OutputId>,
     width: f64,
     height: f64,
+    /// The output less the space the menu bar, the dock and other surfaces reserve, as the server configured the
+    /// window (`Event::Configured`); `None` until it did.
+    area: Option<Size>,
 }
 
 /// What a picked row or a key asks the desktop to do.
@@ -113,6 +117,8 @@ pub enum Message {
     Outputs,
     /// The server closed a window.
     Closed(WindowKey),
+    /// The server configured a window to this size.
+    Configured(WindowKey, Size),
     /// The listing or a thumbnail has news.
     Woken,
     /// What woke the desktop is gone.
@@ -207,8 +213,11 @@ pub struct Model {
     screens: Vec<Screen>,
     /// The number the next screen's windows take.
     next_screen: u64,
-    /// The room the menu bar keeps at the top of each output.
+    /// The room the menu bar keeps at the top of an output whose server reserves none ([`prepare`]).
     menu_bar: f64,
+    /// The desktops show: once the folder's first listing is in, so that a restarted desktop takes the place of the
+    /// one the server holds with its items (`shell-host.md#holds`), never an empty desktop first.
+    shown: bool,
     prefs: DesktopPrefs,
     prefs_file: Option<PathBuf>,
     /// The arrangement is being written; it changed since the write began.
@@ -283,6 +292,7 @@ impl Model {
             screens: Vec::new(),
             next_screen: 0,
             menu_bar: 0.0,
+            shown: false,
             prefs: DesktopPrefs::default(),
             prefs_file: None,
             saving: false,
@@ -336,9 +346,32 @@ impl Model {
         self.screens.first().copied()
     }
 
+    /// The main display's grid: within the area the server configured, or, without the shell's roles, the whole
+    /// screen under the menu bar's room; none until the server configured the window.
     fn grid(&self) -> Option<Grid> {
         let main = self.main()?;
-        Some(Grid::new(main.width, main.height, self.menu_bar))
+        match (main.area, main.output) {
+            (Some(area), _) => Some(Grid::new(area.width, area.height, 0.0)),
+            (None, None) => Some(Grid::new(main.width, main.height, self.menu_bar)),
+            (None, Some(_)) => None,
+        }
+    }
+
+    /// The server configured window `key` to `size`: a desktop lays its items out in it.
+    fn configured(&mut self, key: &WindowKey, size: Size) {
+        let Some(screen) = self.screens.iter_mut().find(|s| desk_key(s.number) == *key) else {
+            return;
+        };
+        if screen.area != Some(size) {
+            screen.area = Some(size);
+            self.relist();
+        }
+    }
+
+    /// Show the desktops once the folder's first listing is in, or once it cannot be listed.
+    fn reveal(&mut self) {
+        self.shown |=
+            self.folder.is_some() && self.listing.as_ref().is_none_or(|l| !l.is_loading());
     }
 
     /// The screen the server's outputs are now, each keeping its number while its output stays.
@@ -348,11 +381,11 @@ impl Model {
             let Some(geometry) = output.geometry else {
                 continue;
             };
-            let number = match self.screens.iter().find(|s| s.output == Some(output.id)) {
-                Some(screen) => screen.number,
+            let (number, area) = match self.screens.iter().find(|s| s.output == Some(output.id)) {
+                Some(screen) => (screen.number, screen.area),
                 None => {
                     self.next_screen += 1;
-                    self.next_screen
+                    (self.next_screen, None)
                 }
             };
             screens.push(Screen {
@@ -360,6 +393,7 @@ impl Model {
                 output: Some(output.id),
                 width: geometry.width(),
                 height: geometry.height(),
+                area,
             });
         }
         let shown = |n: u64| screens.iter().any(|s| s.number == n);
@@ -379,6 +413,8 @@ impl Model {
             self.next_screen += 1;
             let number = self.next_screen;
             let old = std::mem::replace(&mut self.screens[i].number, number);
+            // the new window is configured anew
+            self.screens[i].area = None;
             if self.menu.as_ref().is_some_and(|menu| menu.output == old) {
                 self.menu = None;
             }
@@ -702,6 +738,7 @@ impl Model {
             Message::Started(started) => return self.started(started),
             Message::Outputs => self.follow_outputs(),
             Message::Closed(key) => self.closed(&key),
+            Message::Configured(key, size) => self.configured(&key, size),
             Message::Woken => {
                 self.poll();
                 // a thumbnail that came shows at the next view
@@ -809,7 +846,6 @@ impl Model {
                 return vec![Command::Exit];
             }
         };
-        self.menu_bar = session.menu_bar;
         self.prefs = session.prefs;
         self.prefs_file = session.prefs_file;
         self.list(
@@ -847,8 +883,10 @@ pub fn prepare(
         output: None,
         width: size.width,
         height: size.height,
+        area: None,
     }];
     model.menu_bar = cupertino_kit_shell::design::menu_bar().height.ceil();
+    model.shown = true;
     START.with(|s| *s.borrow_mut() = Some(model));
 }
 
@@ -880,11 +918,15 @@ impl Application for Desktop {
 
     fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
         let mut commands = model.handle(message);
+        model.reveal();
         commands.extend(model.write_prefs());
         commands
     }
 
     fn view(model: &Model) -> Vec<Window<Message>> {
+        if !model.shown {
+            return Vec::new();
+        }
         let items: std::rc::Rc<[ItemView]> = model.items().into();
         let empty: std::rc::Rc<[ItemView]> = Vec::new().into();
         let main = model.main().map(|s| s.number);
@@ -911,7 +953,9 @@ impl Application for Desktop {
                 spec: WindowSpec {
                     title: DESKTOP_NAME.into(),
                     app_id: format!("{APP_ID}@{}", screen.number),
-                    size: Size::new(screen.width, screen.height),
+                    size: screen
+                        .area
+                        .unwrap_or(Size::new(screen.width, screen.height)),
                     min_size: None,
                     max_size: None,
                     decorations: DecorationMode::None,
@@ -953,9 +997,9 @@ impl Application for Desktop {
 }
 
 impl Program for Desktop {
-    /// A desktop is a layer surface under the windows, over the whole of its output (the menu bar's room kept by the
-    /// grid), taking the keyboard once a press lands on it; the server holds its picture while the component restarts.
-    /// Its context menu is a Kit popup of it.
+    /// A desktop is a layer surface under the windows, over the area of its output the menu bar, the dock and other
+    /// surfaces leave (exclusive zone 0), taking the keyboard once a press lands on it; the server holds its picture
+    /// while the component restarts. Its context menu is a Kit popup of it.
     fn surface(model: &Model, key: &WindowKey) -> Surface {
         let Some(screen) = model.screens.iter().find(|s| desk_key(s.number) == *key) else {
             return Surface {
@@ -977,8 +1021,8 @@ impl Program for Desktop {
                 },
                 size: Size::new(0.0, 0.0),
                 margin: Margin::default(),
-                // the whole output: the grid keeps the menu bar's room itself
-                exclusive_zone: -1,
+                // within the space other surfaces reserve, which the items stay clear of
+                exclusive_zone: 0,
                 keyboard: Keyboard::OnDemand,
             }),
             persistent: Some(HOLD),
@@ -986,10 +1030,16 @@ impl Program for Desktop {
         }
     }
 
+    /// Once the folder's first listing is in: until then the server holds the picture of the instance before.
+    fn showing(model: &Model) -> bool {
+        model.shown
+    }
+
     fn event(event: Event) -> Option<Message> {
         match event {
             Event::Outputs => Some(Message::Outputs),
             Event::Closed(key) => Some(Message::Closed(key)),
+            Event::Configured { window, size } => Some(Message::Configured(window, size)),
             _ => None,
         }
     }

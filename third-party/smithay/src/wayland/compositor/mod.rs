@@ -553,6 +553,28 @@ pub fn add_blocker(surface: &WlSurface, blocker: impl Blocker + Send + 'static) 
     PrivateSurfaceData::add_blocker(surface, blocker)
 }
 
+/// Adds a blocker for the currently queued up state changes of the given surface, as [`add_blocker`],
+/// that also merges the surface's later commits into the state it blocks.
+///
+/// While this blocker is pending, a later commit of the surface (with the cached state of its
+/// synchronized subsurfaces) is not kept as a state of its own behind the blocked one: it is merged
+/// into the blocked state, as a state merges into the one it follows ([`Cacheable::merge_into`]). A
+/// replaced buffer is released at once, damage accumulates, superseded presentation feedback is
+/// discarded, and other double-buffered state takes the newer value. The blockers of a merged commit
+/// hold the state it is merged into. Once the blockers are released, the surface applies the newest
+/// state, with one call to [`CompositorHandler::commit`], so what a blocked surface keeps does not
+/// grow with its commits.
+///
+/// A commit that shares a surface with a transaction queued after the blocked one (a subsurface that
+/// committed desynchronized in between) is merged into the last such transaction instead, so every
+/// state still applies after the earlier states of its surface.
+///
+/// Added to a synchronized subsurface, the blocker goes with the subsurface's state into its parent's
+/// next commit, and merges the later commits of the parent (and of the subsurface with it) from there.
+pub fn add_coalescing_blocker(surface: &WlSurface, blocker: impl Blocker + Send + 'static) {
+    PrivateSurfaceData::add_coalescing_blocker(surface, blocker)
+}
+
 /// Handler trait for compositor
 pub trait CompositorHandler {
     /// [CompositorState] getter

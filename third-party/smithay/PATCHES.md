@@ -92,6 +92,17 @@ prefixed, applied without fuzz.
    - Why: legacy `wl_keyboard` (< v7) and input-method keymap deliveries wrote a fresh temporary file in
      `XDG_RUNTIME_DIR` on every send from the compositor thread.
    - Files: `CHANGELOG.md`, `src/input/keyboard/keymap_file.rs`.
+10. `patches/0010-coalescing-blocker.patch`
+   - What: `compositor::add_coalescing_blocker` adds a blocker that, while pending, has the surface's later commits
+     merged into the state it blocks instead of queued as states of their own: `TransactionQueue` merges the new
+     transaction into the last queued one it shares a surface with (keeping per-surface commit order), and
+     `MultiCache` merges the surface's cached states between the two commit ids with `Cacheable::merge_into`, which
+     releases a replaced buffer, adds up damage and discards superseded presentation feedback. Released blockers of
+     the merged transactions are dropped. `add_blocker` and every other commit are unchanged.
+   - Why: the compositor keeps a staged surface's commits until its transaction part applies, for as long as a
+     gesture waits; kept as separate states, each held its buffer until then.
+   - Files: `CHANGELOG.md`, `src/wayland/compositor/cache.rs`, `src/wayland/compositor/mod.rs`,
+     `src/wayland/compositor/transaction.rs`, `src/wayland/compositor/tree.rs`.
 
 ## Changing the tree
 

@@ -35,7 +35,6 @@ use crate::authorization::{authorized, ShellRole};
 use crate::host::{component_spec, HeldSurface};
 use crate::layers_v1::LAYER_ROLE;
 use crate::state::{ClientState, Cupertino};
-pub use staging::{MAX_KEPT_COMMITS, PACED_KEPT_COMMITS};
 
 /// Protocol version offered for `cupertino_transaction_manager_v1`.
 pub const TRANSACTION_PROTOCOL_VERSION: u32 = 1;
@@ -214,8 +213,8 @@ pub struct HoleRecord {
     pub pending_claim: bool,
     pub committed_claim: bool,
     /// The source and claim each commit of the layer surface carries, in commit order, taken as it is made (its
-    /// pre-commit hook) and applied as it applies, so a kept commit applies the hole state it was made with; a part keeps
-    /// at most [`MAX_KEPT_COMMITS`] commits of a surface, so the queue stays as short.
+    /// pre-commit hook) and applied as it applies, so a kept commit applies the hole state it was made with; a commit
+    /// merged into a kept one replaces the state that one carries, so the queue stays as short as the kept commits.
     pub queued: VecDeque<(HoleSource, bool)>,
     /// The window whose picture fades out in the hole after it closed ([`ClosedSource`]).
     pub closing: Option<ClosedSource>,

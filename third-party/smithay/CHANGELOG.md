@@ -23,6 +23,12 @@ they sent (`MemoryUploads`), so a compositor can count its own uploads per frame
 
 `RescaleRenderElement::element_mut` gives the re-scaled element, to change it in place.
 
+`compositor::add_coalescing_blocker` adds a blocker, as `add_blocker`, that while pending merges the surface's later
+commits into the state it blocks, with the cached state of its synchronized subsurfaces, as a state merges into the
+one it follows: a replaced buffer is released at once, damage accumulates, superseded presentation feedback is
+discarded, and the rest of the double-buffered state takes the newer value. The surface then applies the newest
+state once, so what a surface keeps while blocked does not grow with its commits.
+
 ### Bugfixes
 
 `KeymapFile` prepares the unsealed legacy keymap descriptor when the keymap is created or changed

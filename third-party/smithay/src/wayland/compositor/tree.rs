@@ -191,6 +191,12 @@ impl PrivateSurfaceData {
             .add_blocker(blocker)
     }
 
+    pub fn add_coalescing_blocker(surface: &WlSurface, blocker: impl Blocker + Send + 'static) {
+        Self::lock_user_data(surface)
+            .pending_transaction
+            .add_coalescing_blocker(blocker)
+    }
+
     pub fn remove_pre_commit_hook(surface: &WlSurface, hook_id: HookId) {
         Self::lock_user_data(surface)
             .pre_commit_hooks
@@ -320,13 +326,17 @@ impl PrivateSurfaceData {
             let tx = std::mem::take(&mut my_data.pending_transaction);
             let mut queue_guard = state.client_compositor_state(&client).queue.lock().unwrap();
             let queue = queue_guard.get_or_insert_with(TransactionQueue::default);
-            queue.append(tx.finalize());
+            let collapse = queue.coalesce_or_append(tx.finalize(), surface);
             // release the mutex, as applying the transaction will try to lock it
             std::mem::drop(my_data);
             // trigger the queue
             let transactions = queue.take_ready();
             // release the queue lock
             std::mem::drop(queue_guard);
+            // a state merged into an earlier one of its surface: their cached states become one
+            for (surface, from, to) in collapse {
+                Self::with_states(&surface, |states| states.cached_state.collapse(from, to, dh));
+            }
             // apply might call commit, which might call blocker_cleared, so we need to free the queue before applying
             for transaction in transactions {
                 transaction.apply(dh, state)

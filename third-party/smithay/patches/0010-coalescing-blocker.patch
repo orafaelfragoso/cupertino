@@ -1,0 +1,292 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 96c50b2fa..273b5995d 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -23,6 +23,12 @@ they sent (`MemoryUploads`), so a compositor can count its own uploads per frame
+ 
+ `RescaleRenderElement::element_mut` gives the re-scaled element, to change it in place.
+ 
++`compositor::add_coalescing_blocker` adds a blocker, as `add_blocker`, that while pending merges the surface's later
++commits into the state it blocks, with the cached state of its synchronized subsurfaces, as a state merges into the
++one it follows: a replaced buffer is released at once, damage accumulates, superseded presentation feedback is
++discarded, and the rest of the double-buffered state takes the newer value. The surface then applies the newest
++state once, so what a surface keeps while blocked does not grow with its commits.
++
+ ### Bugfixes
+ 
+ `KeymapFile` prepares the unsealed legacy keymap descriptor when the keymap is created or changed
+diff --git a/src/wayland/compositor/cache.rs b/src/wayland/compositor/cache.rs
+index 8eb3f6737..ae0722251 100644
+--- a/src/wayland/compositor/cache.rs
++++ b/src/wayland/compositor/cache.rs
+@@ -95,6 +95,7 @@ impl<T> CachedState<T> {
+ trait Cache: Downcast {
+     fn commit(&self, commit_id: Option<Serial>, dh: &DisplayHandle);
+     fn apply_state(&self, commit_id: Serial, dh: &DisplayHandle);
++    fn collapse(&self, from: Serial, to: Serial, dh: &DisplayHandle);
+ }
+ 
+ impl_downcast!(Cache);
+@@ -127,6 +128,26 @@ impl<T: Cacheable + 'static> Cache for Mutex<CachedState<T>> {
+             me.cache.pop_front().unwrap().1.merge_into(&mut me.current, dh);
+         }
+     }
++
++    fn collapse(&self, from: Serial, to: Serial, dh: &DisplayHandle) {
++        let mut guard = self.lock().unwrap();
++        let me = &mut *guard;
++        // the cached states are in commit order: those from `from` to `to` follow each other
++        let Some(first) = me.cache.iter().position(|&(s, _)| s >= from) else {
++            return;
++        };
++        let mut collapsed: Option<T> = None;
++        while me.cache.get(first).is_some_and(|&(s, _)| s <= to) {
++            let (_, state) = me.cache.remove(first).unwrap();
++            match collapsed.as_mut() {
++                Some(into) => state.merge_into(into, dh),
++                None => collapsed = Some(state),
++            }
++        }
++        if let Some(state) = collapsed {
++            me.cache.insert(first, (to, state));
++        }
++    }
+ }
+ 
+ /// A typemap-like container for double-buffered values
+@@ -221,4 +242,14 @@ impl MultiCache {
+             cache.apply_state(commit_id, dh);
+         }
+     }
++
++    /// Merge the cached states from commit id `from` to `to` into one, identified by `to`
++    ///
++    /// Each state is merged into the one before it with `Cacheable::merge_into`, as applying them
++    /// in order would merge them into the current state, so the merged state applies as they would.
++    pub(crate) fn collapse(&self, from: Serial, to: Serial, dh: &DisplayHandle) {
++        for cache in &self.caches {
++            cache.collapse(from, to, dh);
++        }
++    }
+ }
+diff --git a/src/wayland/compositor/mod.rs b/src/wayland/compositor/mod.rs
+index dc053391f..2ab014ab4 100644
+--- a/src/wayland/compositor/mod.rs
++++ b/src/wayland/compositor/mod.rs
+@@ -553,6 +553,28 @@ pub fn add_blocker(surface: &WlSurface, blocker: impl Blocker + Send + 'static)
+     PrivateSurfaceData::add_blocker(surface, blocker)
+ }
+ 
++/// Adds a blocker for the currently queued up state changes of the given surface, as [`add_blocker`],
++/// that also merges the surface's later commits into the state it blocks.
++///
++/// While this blocker is pending, a later commit of the surface (with the cached state of its
++/// synchronized subsurfaces) is not kept as a state of its own behind the blocked one: it is merged
++/// into the blocked state, as a state merges into the one it follows ([`Cacheable::merge_into`]). A
++/// replaced buffer is released at once, damage accumulates, superseded presentation feedback is
++/// discarded, and other double-buffered state takes the newer value. The blockers of a merged commit
++/// hold the state it is merged into. Once the blockers are released, the surface applies the newest
++/// state, with one call to [`CompositorHandler::commit`], so what a blocked surface keeps does not
++/// grow with its commits.
++///
++/// A commit that shares a surface with a transaction queued after the blocked one (a subsurface that
++/// committed desynchronized in between) is merged into the last such transaction instead, so every
++/// state still applies after the earlier states of its surface.
++///
++/// Added to a synchronized subsurface, the blocker goes with the subsurface's state into its parent's
++/// next commit, and merges the later commits of the parent (and of the subsurface with it) from there.
++pub fn add_coalescing_blocker(surface: &WlSurface, blocker: impl Blocker + Send + 'static) {
++    PrivateSurfaceData::add_coalescing_blocker(surface, blocker)
++}
++
+ /// Handler trait for compositor
+ pub trait CompositorHandler {
+     /// [CompositorState] getter
+diff --git a/src/wayland/compositor/transaction.rs b/src/wayland/compositor/transaction.rs
+index 059b8f805..a12145f90 100644
+--- a/src/wayland/compositor/transaction.rs
++++ b/src/wayland/compositor/transaction.rs
+@@ -112,6 +112,8 @@ impl Blocker for Barrier {
+ struct TransactionState {
+     surfaces: Vec<(Weak<WlSurface>, Serial)>,
+     blockers: Vec<Box<dyn Blocker + Send>>,
++    // blockers that, while pending, have later commits of the transaction's surfaces merged into it
++    coalescing: Vec<Box<dyn Blocker + Send>>,
+ }
+ 
+ impl TransactionState {
+@@ -165,6 +167,10 @@ impl PendingTransaction {
+         self.with_inner_state(|state| state.blockers.push(Box::new(blocker) as Box<_>))
+     }
+ 
++    pub(crate) fn add_coalescing_blocker<B: Blocker + Send + 'static>(&self, blocker: B) {
++        self.with_inner_state(|state| state.coalescing.push(Box::new(blocker) as Box<_>))
++    }
++
+     pub(crate) fn is_same_as(&self, other: &PendingTransaction) -> bool {
+         let ptr1 = self.with_inner_state(|state| state as *const _);
+         let ptr2 = other.with_inner_state(|state| state as *const _);
+@@ -201,6 +207,7 @@ impl PendingTransaction {
+                 }
+             }
+             state.blockers.extend(my_state.blockers);
++            state.coalescing.extend(my_state.coalescing);
+         });
+     }
+ 
+@@ -213,8 +220,16 @@ impl PendingTransaction {
+             };
+             match inner {
+                 TransactionInner::Data(TransactionState {
+-                    surfaces, blockers, ..
+-                }) => return Transaction { surfaces, blockers },
++                    surfaces,
++                    blockers,
++                    coalescing,
++                }) => {
++                    return Transaction {
++                        surfaces,
++                        blockers,
++                        coalescing,
++                    }
++                }
+                 TransactionInner::Fused(into) => self.inner = into,
+             }
+         }
+@@ -225,6 +240,7 @@ impl PendingTransaction {
+ pub(crate) struct Transaction {
+     surfaces: Vec<(Weak<WlSurface>, Serial)>,
+     blockers: Vec<Box<dyn Blocker + Send>>,
++    coalescing: Vec<Box<dyn Blocker + Send>>,
+ }
+ 
+ impl fmt::Debug for Box<dyn Blocker + Send> {
+@@ -251,6 +267,7 @@ impl Transaction {
+         use BlockerState::*;
+         self.blockers
+             .iter()
++            .chain(&self.coalescing)
+             .fold(Released, |acc, blocker| match (acc, blocker.state()) {
+                 (Cancelled, _) | (_, Cancelled) => Cancelled,
+                 (Pending, _) | (_, Pending) => Pending,
+@@ -258,6 +275,51 @@ impl Transaction {
+             })
+     }
+ 
++    /// Whether this transaction holds a state of `surface` and a coalescing blocker that is pending
++    fn coalesces(&self, surface: &WlSurface) -> bool {
++        self.coalescing
++            .iter()
++            .any(|blocker| blocker.state() == BlockerState::Pending)
++            && self.surfaces.iter().any(|(s, _)| s == surface)
++    }
++
++    /// Whether this transaction and `other` hold states of a same surface that is alive
++    fn shares_surface_with(&self, other: &Transaction) -> bool {
++        self.surfaces
++            .iter()
++            .filter(|(s, _)| s.is_alive())
++            .any(|(s, _)| other.surfaces.iter().any(|(o, _)| o == s))
++    }
++
++    /// Merge `other`, a transaction made after this one, into this one
++    ///
++    /// Each surface of `other` takes the newer of the two serials. Released blockers are dropped, as they
++    /// no longer hold anything. Returns the surfaces both transactions hold a state of, with the serial
++    /// of this transaction's state and that of the newer one, whose cached states are to be merged
++    /// into one.
++    fn merge(&mut self, other: Transaction) -> Vec<(WlSurface, Serial, Serial)> {
++        let mut collapse = Vec::new();
++        for (surface, id) in other.surfaces {
++            let Ok(surface) = surface.upgrade() else {
++                continue;
++            };
++            if let Some(place) = self.surfaces.iter_mut().find(|(s, _)| *s == surface) {
++                if place.1 < id {
++                    collapse.push((surface, place.1, id));
++                    place.1 = id;
++                }
++            } else {
++                self.surfaces.push((surface.downgrade(), id));
++            }
++        }
++        let held = |blocker: &Box<dyn Blocker + Send>| blocker.state() != BlockerState::Released;
++        self.blockers.retain(held);
++        self.blockers.extend(other.blockers.into_iter().filter(held));
++        self.coalescing.retain(held);
++        self.coalescing.extend(other.coalescing.into_iter().filter(held));
++        collapse
++    }
++
+     pub(crate) fn apply<C: CompositorHandler + 'static>(self, dh: &DisplayHandle, state: &mut C) {
+         for (surface, id) in self.surfaces {
+             let Ok(surface) = surface.upgrade() else {
+@@ -286,8 +348,31 @@ pub(crate) struct TransactionQueue {
+ }
+ 
+ impl TransactionQueue {
+-    pub(crate) fn append(&mut self, t: Transaction) {
++    /// Queue `t`, the transaction a commit of `surface` made
++    ///
++    /// While a queued transaction holding a state of `surface` has a pending coalescing blocker, `t` is
++    /// merged into the last queued transaction it shares a surface with, so its states still apply after
++    /// every earlier state of their surfaces; otherwise it is appended. Returns, for each surface whose
++    /// state was merged into an earlier one, the serials of the earlier state and of the newer one: the
++    /// cached states between them are to be merged into one
++    /// ([`MultiCache::collapse`](super::cache::MultiCache::collapse)).
++    pub(crate) fn coalesce_or_append(
++        &mut self,
++        t: Transaction,
++        surface: &WlSurface,
++    ) -> Vec<(WlSurface, Serial, Serial)> {
++        if self.transactions.iter().any(|queued| queued.coalesces(surface)) {
++            if let Some(into) = self
++                .transactions
++                .iter_mut()
++                .rev()
++                .find(|queued| queued.shares_surface_with(&t))
++            {
++                return into.merge(t);
++            }
++        }
+         self.transactions.push(t);
++        Vec::new()
+     }
+ 
+     pub(crate) fn take_ready(&mut self) -> Vec<Transaction> {
+diff --git a/src/wayland/compositor/tree.rs b/src/wayland/compositor/tree.rs
+index 798bf356b..14c6aef26 100644
+--- a/src/wayland/compositor/tree.rs
++++ b/src/wayland/compositor/tree.rs
+@@ -191,6 +191,12 @@ impl PrivateSurfaceData {
+             .add_blocker(blocker)
+     }
+ 
++    pub fn add_coalescing_blocker(surface: &WlSurface, blocker: impl Blocker + Send + 'static) {
++        Self::lock_user_data(surface)
++            .pending_transaction
++            .add_coalescing_blocker(blocker)
++    }
++
+     pub fn remove_pre_commit_hook(surface: &WlSurface, hook_id: HookId) {
+         Self::lock_user_data(surface)
+             .pre_commit_hooks
+@@ -320,13 +326,17 @@ impl PrivateSurfaceData {
+             let tx = std::mem::take(&mut my_data.pending_transaction);
+             let mut queue_guard = state.client_compositor_state(&client).queue.lock().unwrap();
+             let queue = queue_guard.get_or_insert_with(TransactionQueue::default);
+-            queue.append(tx.finalize());
++            let collapse = queue.coalesce_or_append(tx.finalize(), surface);
+             // release the mutex, as applying the transaction will try to lock it
+             std::mem::drop(my_data);
+             // trigger the queue
+             let transactions = queue.take_ready();
+             // release the queue lock
+             std::mem::drop(queue_guard);
++            // a state merged into an earlier one of its surface: their cached states become one
++            for (surface, from, to) in collapse {
++                Self::with_states(&surface, |states| states.cached_state.collapse(from, to, dh));
++            }
+             // apply might call commit, which might call blocker_cleared, so we need to free the queue before applying
+             for transaction in transactions {
+                 transaction.apply(dh, state)

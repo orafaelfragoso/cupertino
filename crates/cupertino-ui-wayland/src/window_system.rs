@@ -465,6 +465,18 @@ fn drag_icon(image: &DragImage) -> Result<DragIcon, PlatformError> {
     .ok_or_else(|| PlatformError::Protocol("a drag image the transport cannot show".into()))
 }
 
+/// Switches the frame timeline `CUPERTINO_PROFILE` asks for on, once for the process, and starts the thread that writes
+/// it: the first window system of a process does, whether it connected itself or was handed its connection, and a
+/// later one finds the subscriber installed and does nothing. Each span carries the name of the thread that ran it, so
+/// the trace tells the components of one process apart.
+fn start_timeline() {
+    if timeline::init() {
+        let _ = std::thread::Builder::new()
+            .name(timeline::WRITER_THREAD.into())
+            .spawn(timeline::write_traces);
+    }
+}
+
 fn platform_error(e: Error) -> PlatformError {
     match e {
         Error::Disconnected(d) => PlatformError::Disconnected(d.to_string()),
@@ -487,12 +499,6 @@ impl WaylandWindowSystem {
         profile: Profile,
         class: RendererClass,
     ) -> Result<WaylandWindowSystem, PlatformError> {
-        // the frame timeline `CUPERTINO_PROFILE` asks for, from the process's first frame
-        if timeline::init() {
-            let _ = std::thread::Builder::new()
-                .name(timeline::WRITER_THREAD.into())
-                .spawn(timeline::write_traces);
-        }
         Connection::connect()
             .map(|conn| WaylandWindowSystem::new_as(conn, profile, class))
             .map_err(platform_error)
@@ -509,6 +515,7 @@ impl WaylandWindowSystem {
         profile: Profile,
         class: RendererClass,
     ) -> WaylandWindowSystem {
+        start_timeline();
         let effects = AppEffects::bind(&mut conn).map(|effects| {
             let observer = effects.appearance(&conn);
             (effects, observer)

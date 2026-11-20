@@ -705,23 +705,10 @@ const UNWATCHED_POLL: Duration = Duration::from_millis(100);
 /// Start due processes, reap exited ones, and arm what wakes the next pass: a pidfd per running child, readable when it
 /// exits, and a timer at the earliest restart. While every child runs, nothing wakes the loop for them.
 pub(crate) fn supervise(state: &mut Cupertino) {
-    let socket = state
-        .socket_name
-        .clone()
-        .expect("the server listens on a socket when it supervises shell processes");
-    let display = state.display_handle.clone();
     if let Some(x) = &mut state.xwayland {
         x.poll(&state.loop_handle, Instant::now());
     }
-    let x11 = state.xwayland.as_ref().map(|x| x.display());
-    state
-        .supervisor
-        .poll(Instant::now(), &socket, x11, &mut |spec| {
-            crate::shell_connection::connect_bound_client(
-                &display,
-                crate::shell_connection::shell_process_state(&spec.roles),
-            )
-        });
+    state.supervise_shell(Instant::now());
     let trust = state.login_trust();
     if let Some(dbus) = &state.dbus {
         dbus.set_login(trust);
@@ -782,6 +769,11 @@ fn watch_exit(
             },
         )
         .map_err(|e| std::io::Error::other(e.to_string()))
+}
+
+/// Make sure a supervision pass runs at once, for processes or hosts that were added or ended.
+pub(crate) fn schedule_supervision(state: &mut Cupertino) {
+    arm_supervision_timer(state, Instant::now());
 }
 
 /// Make sure a supervision pass runs at `at`: an armed timer that fires sooner is kept, a later one is replaced.
@@ -978,6 +970,14 @@ pub fn run(cli: Cli) -> Result<()> {
             Instant::now(),
         );
     }
+    // the components run in the shell's hosts when the host program is there, else as their process entries
+    state
+        .supervisor
+        .set_host_program(crate::host::find_host_program(
+            state.config.dev_shell,
+            login_screen,
+        ));
+    state.apply_shell_plan();
     start_shell_supervision(&state, &event_loop)?;
     state.overlays.hold_modifiers = cli.hold_modifiers;
     state.connect_input_method();

@@ -10,7 +10,7 @@
 //!
 //! | File | Applied at once | At the next start |
 //! |---|---|---|
-//! | `compositor.json` | appearance, tracking speeds, acceleration, scroll direction, cursor size, colours and shake, minimize effect, closing animation, hot corner size and dwell, corner radius, scroll bars, key bindings, terminals, the fractional scale mode; `dev_folder` of the system file, read again through its root-only check, for each shell process's next start | `decorations` (new windows only), `menu_bar_height`, `show_menu_bar`, `shell`, `screenshot` (privileged processes: read at start) |
+//! | `compositor.json` | appearance, tracking speeds, acceleration, scroll direction, cursor size, colours and shake, minimize effect, closing animation, hot corner size and dwell, corner radius, scroll bars, key bindings, terminals, the fractional scale mode; `shell` (components, `off`, `alone`, process entries: the hosts and processes follow at once, `crate::host`); `dev_folder` of the system file, read again through its root-only check, for each shell process's next start and the hosts of its components | `decorations` (new windows only), `menu_bar_height`, `show_menu_bar`, `screenshot` (privileged process: read at start) |
 //! | `keyboard.conf` | every key: repeat, caps lock, filters, rewrite, accent picker, input sources and layouts (the keymap is rebuilt) | — |
 //! | `power.conf` | every key (the countdown in progress continues with the new timers) | — |
 //! | `/etc/cupertino/accessibility.conf` | its keys, for an account without an `accessibility.conf` of its own and the login screen (`crate::accessibility`) | — |
@@ -420,6 +420,8 @@ impl Cupertino {
                             self.config.dev_folder = None;
                         }
                     }
+                    // the folder's components run alone from it, or back in the installed host
+                    self.apply_shell_plan();
                 }
             }
             ReloadPayload::Keyboard {
@@ -635,12 +637,42 @@ impl Cupertino {
             self.config.window.decorations = target.window.decorations;
             tracing::info!("`decorations` changed: windows that open from now on follow it, open windows keep theirs");
         }
-        if changed!(menu_bar_height, show_menu_bar, shell) {
-            tracing::info!(
-                "`menu_bar_height`, `show_menu_bar` and `shell` apply at the next start"
-            );
+        if changed!(shell) {
+            self.apply_shell_section(after.0, after.1);
+        }
+        if changed!(menu_bar_height, show_menu_bar) {
+            tracing::info!("`menu_bar_height` and `show_menu_bar` apply at the next start");
         }
         self.request_redraw();
+    }
+
+    /// Take the `shell` section of the system file `system` and the person's file `user` again (`docs/architecture/shell-host.md`,
+    /// *The `shell` section*): each layer by its trust, as at start, and then the hosts and processes follow it at once
+    /// ([`Cupertino::apply_shell_plan`]).
+    pub fn apply_shell_section(&mut self, system: &CompositorSettings, user: &CompositorSettings) {
+        use crate::config::LayerTrust;
+        let dev = self.config.dev_shell;
+        let system_trust = if dev {
+            LayerTrust::Dev
+        } else {
+            LayerTrust::System
+        };
+        let user_trust = self.live.paths.compositor.as_deref().map_or(
+            if dev {
+                LayerTrust::Dev
+            } else {
+                LayerTrust::User
+            },
+            |path| crate::config::layer_trust(path, dev),
+        );
+        for problem in self
+            .config
+            .apply_shell_layers(system, user, (system_trust, user_trust))
+        {
+            tracing::warn!(error = %problem, "invalid configuration: the key keeps its default");
+        }
+        tracing::info!("the `shell` section changed: the components and processes follow it");
+        self.apply_shell_plan();
     }
 
     /// Apply the keys whose value differs between `before` and `after`, the values `keyboard.conf` held.

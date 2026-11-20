@@ -13,7 +13,7 @@ use cupertino_protocols::server::host::cupertino_component_v1::{
     self, BusNameResult, CupertinoComponentV1, Error as ComponentError,
 };
 use cupertino_protocols::server::host::cupertino_host_component_v1::{
-    self, CupertinoHostComponentV1, Error as HostComponentError, StopReason,
+    self, CupertinoHostComponentV1, Error as HostComponentError, StopReason, UnavailableReason,
 };
 use cupertino_protocols::server::host::cupertino_host_v1::{
     self, CupertinoHostV1, Error as HostError, Kind as WireHostKind,
@@ -69,6 +69,9 @@ pub const EXPECTED_EXIT_KILL_GRACE: Duration = Duration::from_secs(2);
 pub const BRIDGE_THROTTLE: Duration = Duration::from_secs(1);
 /// Maximum length in bytes of a `cupertino_component_v1.persist` surface key.
 pub const MAX_PERSIST_KEY_BYTES: usize = 64;
+/// The exit status of a host that found another version of `cupertino_host_v1` than it was built with
+/// (`docs/architecture/shell-host.md`, *Versions*).
+pub const HOST_VERSION_EXIT_STATUS: i32 = 76;
 
 /// Static definition of one component in the server's component table.
 #[derive(Clone, Copy, Debug)]
@@ -250,6 +253,13 @@ pub struct HeldSurface {
 struct HostEntry {
     id: u64,
     kind: HostKind,
+    /// The host's Wayland connection.
+    client: ClientId,
+    /// The host process started from the development folder.
+    from_dev_folder: bool,
+    /// The supervisor started the host ([`Cupertino::apply_shell_plan`] keeps its list), not a caller of
+    /// [`Cupertino::attach_host_connection`].
+    spawned: bool,
     /// Components currently assigned to this host in table order.
     components: Vec<&'static str>,
     /// Bound `cupertino_host_v1` resource, once the host binds the global.
@@ -310,7 +320,8 @@ struct ComponentRecord {
     /// Whether this component has received `ready` for its current instance.
     ready: bool,
     /// Pending `cupertino shell restart` completion callbacks waiting for `ready`.
-    restart_waiters: Vec<(Instant, RestartWaiter)>,
+    /// Each with its deadline and the instance at the request: only the `ready` of a later instance answers it.
+    restart_waiters: Vec<(Instant, u32, RestartWaiter)>,
 }
 
 /// Server-side manager for shell hosts, per-component connections, liveness, holds, and bus identity.
@@ -333,8 +344,32 @@ pub struct HostManager {
     pub all_separate_for_session: bool,
     /// Last time seat input occurred (for shared-host `request_restart` quiet-moment check).
     last_input_at: Instant,
-    /// Separate-host component names the server needs spawned externally (drained by supervisor/tests).
-    pub requested_separate_hosts: Vec<&'static str>,
+    /// Components a host was built without (`unavailable` with `absent`): they run as their process entries.
+    absent: HashSet<&'static str>,
+    /// Components a host of the development folder gave back to the installed host, until a restart asks for them.
+    dev_given_back: HashSet<&'static str>,
+    /// Whether each host connection that ended was expected to end, until the supervisor reaps its process.
+    ended: HashMap<u64, bool>,
+    /// The list the shared host gets, from the last plan.
+    planned_shared: Vec<&'static str>,
+    /// The components of the last plan that run in a separate host.
+    planned_separate: Vec<&'static str>,
+    /// The process entries of hosted components that were logged as left alone.
+    left_alone: Vec<String>,
+    /// What the hosts said changes where the components run: the plan is worked out again after the supervision pass.
+    pub(crate) plan_dirty: bool,
+}
+
+/// One host connection as the server sees it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HostView {
+    pub kind: HostKind,
+    /// Its list, in the table's order.
+    pub components: Vec<&'static str>,
+    /// Its process, once the server bound the connection to it.
+    pub pid: Option<u32>,
+    /// It bound `cupertino_host_v1`.
+    pub bound: bool,
 }
 
 impl HostManager {
@@ -360,7 +395,56 @@ impl HostManager {
             shared_host_crashes: Vec::new(),
             all_separate_for_session: false,
             last_input_at: Instant::now(),
-            requested_separate_hosts: Vec::new(),
+            absent: HashSet::new(),
+            dev_given_back: HashSet::new(),
+            ended: HashMap::new(),
+            planned_shared: Vec::new(),
+            planned_separate: Vec::new(),
+            left_alone: Vec::new(),
+            plan_dirty: false,
+        }
+    }
+
+    /// The host connections, in the order they were made.
+    pub fn host_views(&self) -> Vec<HostView> {
+        let mut hosts: Vec<&HostEntry> = self.hosts.values().collect();
+        hosts.sort_by_key(|h| h.id);
+        hosts
+            .into_iter()
+            .map(|h| HostView {
+                kind: h.kind,
+                components: h.components.clone(),
+                pid: h.process.as_ref().map(|p| p.pid),
+                bound: h.resource.is_some(),
+            })
+            .collect()
+    }
+
+    /// Whether `component` has a connection a host was handed for it.
+    pub fn component_connected(&self, component: &str) -> bool {
+        self.components
+            .get(component)
+            .is_some_and(|r| r.active.is_some())
+    }
+
+    /// The instance number the server last handed out for `component`, 0 before the first.
+    pub fn component_instance(&self, component: &str) -> u32 {
+        self.components.get(component).map_or(0, |r| r.instance)
+    }
+
+    /// Whether a host answered `unavailable` with `absent` for `component`, so it runs as its process entry.
+    pub fn component_absent(&self, component: &str) -> bool {
+        self.absent.contains(component)
+    }
+
+    /// The host `component` runs in by the last plan, if any.
+    pub fn planned_host(&self, component: &str) -> Option<HostKind> {
+        if let Some(&name) = self.planned_separate.iter().find(|c| **c == component) {
+            Some(HostKind::Separate(name))
+        } else {
+            self.planned_shared
+                .contains(&component)
+                .then_some(HostKind::Shared)
         }
     }
 
@@ -638,3 +722,6 @@ fn backoff_for(consecutive_failures: u32) -> Duration {
 
 mod dispatch;
 mod picture;
+mod spawn;
+
+pub use spawn::find_host_program;

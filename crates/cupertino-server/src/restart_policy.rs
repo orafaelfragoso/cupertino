@@ -72,6 +72,26 @@ pub fn with_exit_status(event: Event<'_>, status: ExitStatus) -> Event<'_> {
     }
 }
 
+/// Decision for a shell host that exited, after it was last started at `last_start`: whatever its status it starts
+/// again, at once when the server `expected` the exit (not counted), else never sooner than the throttle after its last
+/// start, which grows with each such exit and starts over after a run of [`STABLE_AFTER`]. A host is never given up.
+pub fn decide_host(
+    expected: bool,
+    last_start: Instant,
+    now: Instant,
+    backoff: &mut Backoff,
+) -> Decision {
+    if expected {
+        return Decision::RestartNow;
+    }
+    let earliest = last_start + backoff.next_interval(now.saturating_duration_since(last_start));
+    if earliest <= now {
+        Decision::RestartNow
+    } else {
+        Decision::RestartAt(earliest)
+    }
+}
+
 /// Decision for a process that exited with `status`, after it was last started at `last_start`.
 pub fn decide(
     status: ExitStatus,

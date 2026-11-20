@@ -1,9 +1,9 @@
 //! The session process: the lock screen and the session agent, a CupertinoKit application. It locks the session on a
 //! request, shows one lock screen window per output ([`view::screen`]), sends the attempts to PAM and unlocks only when
 //! the state machine has reached [`Phase::Unlocked`], which only an accepted attempt (or the session manager's proof
-//! of a fast user switch) does. The agent shows the confirmation panel for log out, restart and shut down, has the
-//! server quit the applications one at a time ([`logout`], with the interrupt panel when one does not quit) and then
-//! carries out what was confirmed through logind.
+//! of a fast user switch) does. The agent shows the confirmation panel for log out, restart and shut down and asks the
+//! server's `org.cupertino.Session1` to carry out what was confirmed; the server quits the applications first, and the
+//! agent shows the interrupt panel when one does not quit.
 //!
 //! The lock itself lives in [`LoginRoles`]: they take the session lock before the first lock surface and unlock once
 //! this application stopped wanting the lock and the lock windows are gone. Bus threads, PAM and the roles talk to the
@@ -26,7 +26,6 @@ use cupertino_login::interrupt::{Choice, Reason, Stage};
 use cupertino_login::lock_notices::{self, Notice};
 use cupertino_login::login_manager::{LoginManager, Power};
 use cupertino_login::logind::{Inhibitor, Logind, Signal};
-use cupertino_login::logout::{self, LogOut};
 use cupertino_login::low_battery::{self, LowBattery};
 use cupertino_login::model::{
     AuthOutcome, LockScreen, Phase, HIDE_AFTER, HIDE_AFTER_EXPLICIT_LOCK,
@@ -82,8 +81,8 @@ pub enum Bus {
     Failed(String),
     /// The power daemon's display device changed, or its watch stopped (the warnings stop; the lock screen goes on).
     Battery(std::result::Result<upower::Report, String>),
-    /// The server's `ApplicationQuit`: the last window of the application being quit went away.
-    ApplicationQuit(String),
+    /// The server's `QuitInterrupted` or `QuitInterruptClosed`.
+    Quit(session::Interrupt),
     /// What the notification daemon lets the lock screen show now ([`lock_notices`]).
     LockNotices(Vec<Notice>),
     /// The wallpaper of the lock of this number is ready.
@@ -144,17 +143,12 @@ struct PanelState {
     frames: Frames,
 }
 
-/// A confirmed log out, restart or shut down while the applications are quit.
+/// A confirmed log out, restart or shut down that `org.cupertino.Session1` carries out, quitting the applications first.
 struct Quitting {
-    sequence: LogOut,
     /// What follows once no application is left.
     then: Action,
     /// The interrupt panel on screen.
     interrupt: Option<Interrupted>,
-    /// The "Open my windows again" choice the panel was confirmed with.
-    reopen: bool,
-    /// The identities the server named as it asked each application to quit, in that order.
-    quit: Vec<String>,
 }
 
 /// The interrupt panel on screen: the application it asks about, why it is still there, and which question it asks.
@@ -382,10 +376,10 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
     let outputs = roles::outputs(conn);
     let session_bus = control.connection();
     let quit = send(&bus);
-    session::watch_quit(&session_bus, move |app| {
-        quit(match app {
-            Ok(app) => Bus::ApplicationQuit(app),
-            Err(e) => Bus::Failed(format!("reading ApplicationQuit: {e}")),
+    session::watch_interrupts(&session_bus, move |interrupt| {
+        quit(match interrupt {
+            Ok(interrupt) => Bus::Quit(interrupt),
+            Err(e) => Bus::Failed(format!("reading the Session1 quit signals: {e}")),
         })
     })?;
     let notices = send(&bus);
@@ -844,7 +838,7 @@ impl SessionApp {
     }
 
     /// Seconds until the application next has something to do by itself: a frame of a fade, the shake or the spinner,
-    /// the screen's next change, the clock's minute, the panel's countdown, a held power key or the quit sequence.
+    /// the screen's next change, the clock's minute, the panel's countdown or a held power key.
     fn next_wakeup(&self, now: f64) -> Option<f64> {
         let screen = self.lock.as_ref().map(|lock| {
             let s = &lock.screen;
@@ -867,11 +861,7 @@ impl SessionApp {
         });
         let panel = self.panel.as_ref().and_then(|p| p.panel.next_wakeup(now));
         let power_key = self.power_button.next_wakeup(now);
-        let quitting = self
-            .quitting
-            .as_ref()
-            .and_then(|q| q.sequence.next_wakeup(now));
-        [screen, panel, power_key, quitting]
+        [screen, panel, power_key]
             .into_iter()
             .flatten()
             .reduce(f64::min)
@@ -881,13 +871,13 @@ impl SessionApp {
         match bus {
             Bus::Lock { explicit } => self.request_lock(now, explicit)?,
             Bus::Panel(kind) => self.show_panel(now, kind)?,
-            Bus::LogOutNow => self.log_out_now(now)?,
+            Bus::LogOutNow => self.log_out_now()?,
             Bus::PowerKey(pressed) => self.power_key(now, pressed)?,
             Bus::SwitchToLoginWindow => {
                 self.switch_pending = true;
                 self.request_lock(now, false)?;
             }
-            Bus::Sleep => self.request_power(Power::Sleep)?,
+            Bus::Sleep => self.sleep()?,
             Bus::Unlock => match &mut self.lock {
                 Some(lock) => {
                     eprintln!("cupertino-login: unlocked by a fast user switch");
@@ -921,13 +911,7 @@ impl SessionApp {
                     held.wallpaper = Some(source);
                 }
             }
-            Bus::ApplicationQuit(app) => {
-                if let Some(quitting) = &mut self.quitting {
-                    eprintln!("cupertino-login: application quit: {app}");
-                    let step = quitting.sequence.quit(now, &app);
-                    self.follow(now, step)?;
-                }
-            }
+            Bus::Quit(interrupt) => self.quit_signal(interrupt)?,
         }
         Ok(())
     }
@@ -1051,7 +1035,7 @@ impl SessionApp {
                 }
                 return Ok(());
             }
-            Input::Interrupt(choice) if self.interrupt_shown() => return self.choose(now, choice),
+            Input::Interrupt(choice) if self.interrupt_shown() => return self.choose(choice),
             Input::MovePanel(by) => {
                 let (x, y) = self.panel_drag.get();
                 self.panel_drag.set((x + by.x, y + by.y));
@@ -1080,8 +1064,6 @@ impl SessionApp {
 
     /// Carry out what the timers ask for and follow the lock.
     fn housekeeping(&mut self, now: f64) -> Result<()> {
-        let step = self.quitting.as_mut().and_then(|q| q.sequence.tick(now));
-        self.follow(now, step)?;
         if std::mem::take(&mut self.idled) {
             self.request_lock(now, false)?;
         }
@@ -1204,7 +1186,7 @@ impl SessionApp {
             self.decide(Decision::Cancel)?;
         }
         if self.interrupt_shown() {
-            self.choose(now, Choice::Cancel)?;
+            self.choose(Choice::Cancel)?;
         }
         // the lock screen swallows a key that is down
         self.power_button.reset();
@@ -1309,7 +1291,7 @@ impl SessionApp {
     /// Log out without asking (the log out now shortcut): the applications quit first as after a confirmed log out, with
     /// the "Open my windows again" choice last stored. An open panel closes as if cancelled. Ignored on a locked session, which
     /// has nobody to see it, and while a log out, restart or shut down is already under way.
-    fn log_out_now(&mut self, now: f64) -> Result<()> {
+    fn log_out_now(&mut self) -> Result<()> {
         if self.lock.is_some() {
             eprintln!("cupertino-login: log out now ignored: the session is locked");
             return Ok(());
@@ -1326,10 +1308,10 @@ impl SessionApp {
             .as_deref()
             .map_or(restore::REOPEN_DEFAULT, restore::choice);
         eprintln!("cupertino-login: log out without the panel");
-        self.carry_out(now, Action::LogOut, reopen)
+        self.carry_out(Action::LogOut, reopen)
     }
 
-    /// Close the panel with `decision`; an action is carried out through logind. Confirming a log out, restart or shut
+    /// Close the panel with `decision`; an action is carried out through `org.cupertino.Session1`. Confirming a log out, restart or shut
     /// down remembers the panel's "Open my windows again" choice; cancelling forgets a change to it.
     fn decide(&mut self, decision: Decision) -> Result<()> {
         let PanelState { panel, .. } = self
@@ -1343,13 +1325,13 @@ impl SessionApp {
                 if action != Action::Sleep {
                     self.remember_choice(panel.reopen());
                 }
-                self.carry_out(self.now(), action, panel.reopen())?;
+                self.carry_out(action, panel.reopen())?;
             }
         }
         Ok(())
     }
 
-    /// Store the "Open my windows again" choice, with no list yet: the list follows once the applications have quit.
+    /// Store the "Open my windows again" choice, with no list yet: the list follows just before the action is asked for.
     fn remember_choice(&self, reopen: bool) {
         let Some(path) = &self.restore_path else {
             return;
@@ -1360,15 +1342,16 @@ impl SessionApp {
         }
     }
 
-    /// Save the applications that were open, for the next login, just before the session ends ([`restore`]).
-    fn save_open_applications(&self, reopen: bool, quit: &[String]) {
+    /// Save the applications open now (`open`, in quit order), for the next login, just before the action that ends the
+    /// session is asked for ([`restore`]).
+    fn save_open_applications(&self, reopen: bool, open: &[String]) {
         let Some(path) = &self.restore_path else {
             return eprintln!(
                 "cupertino-login: applications not saved: neither XDG_STATE_HOME nor HOME is set"
             );
         };
         let (apps, skipped) = if reopen {
-            restore::saved_list(quit.iter().map(String::as_str), &Applications::from_env())
+            restore::saved_list(open.iter().map(String::as_str), &Applications::from_env())
         } else {
             (Vec::new(), Vec::new())
         };
@@ -1407,18 +1390,6 @@ impl SessionApp {
         }
     }
 
-    /// End the session: the session manager shows the login screen first and then ends it, so the session's picture goes
-    /// straight to the login screen. A session the manager did not start (or an older manager) is ended through logind.
-    fn log_out(&mut self) -> Result<()> {
-        match self.manager.log_out() {
-            Ok(()) => Ok(()),
-            Err(e) => {
-                eprintln!("cupertino-login: the session manager did not log out: {e}; asking logind to end the session");
-                Ok(self.logind.terminate_session()?)
-            }
-        }
-    }
-
     /// Ask the session manager to restart, shut down or sleep. A refusal (another user's session is open, an inhibitor) is
     /// reported and the session goes on; any other failure ends the process, which the server restarts.
     fn request_power(&mut self, action: Power) -> Result<()> {
@@ -1452,78 +1423,106 @@ impl SessionApp {
         Ok(())
     }
 
-    /// Sleep at once; log out, restart and shut down after the applications have quit, with the "Open my windows again" choice
-    /// `reopen`. Routes through `org.cupertino.Session1` (D13), falling back to the legacy local sequence only if
-    /// `Session1` is unavailable.
-    fn carry_out(&mut self, now: f64, action: Action, reopen: bool) -> Result<()> {
+    /// Sleep through `org.cupertino.Session1`, which quits no application. When it does not take the request (it is not on
+    /// the bus, or it refuses while the session is locked), the session manager or logind is asked directly, as Session1
+    /// itself would: a sleep has nothing to quit first.
+    fn sleep(&mut self) -> Result<()> {
+        match session::sleep(&self.session_bus) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                eprintln!(
+                    "cupertino-login: Session1 did not take the sleep: {e}; asking for it directly"
+                );
+                self.request_power(Power::Sleep)
+            }
+        }
+    }
+
+    /// Carry out a confirmed action through `org.cupertino.Session1` (D13), which quits the applications first (sleep quits
+    /// none). Before a log out, restart or shut down the applications open now are saved for the next login, once, with the
+    /// "Open my windows again" choice `reopen`. Without Session1 nothing is quit and nothing happens: the person is told and
+    /// the session goes on.
+    fn carry_out(&mut self, action: Action, reopen: bool) -> Result<()> {
+        if action == Action::Sleep {
+            return self.sleep();
+        }
+        let open = match session::open_applications(&self.session_bus) {
+            Ok(open) => open,
+            Err(e) => {
+                self.not_carried_out(action, &e);
+                return Ok(());
+            }
+        };
+        self.save_open_applications(reopen, &open);
         let forwarded = match action {
-            Action::Sleep => session::sleep(&self.session_bus),
             Action::LogOut => session::log_out(&self.session_bus),
             Action::Restart => session::restart(&self.session_bus),
             Action::ShutDown => session::shut_down(&self.session_bus),
+            Action::Sleep => unreachable!("answered above"),
         };
-        if forwarded.is_ok() {
-            if action != Action::Sleep {
-                self.logging_out = true;
-            }
+        if let Err(e) = forwarded {
+            self.discard_saved_applications();
+            self.not_carried_out(action, &e);
             return Ok(());
         }
-        if action == Action::Sleep {
-            return self.request_power(Power::Sleep);
-        }
+        eprintln!(
+            "cupertino-login: Session1 is carrying out the {}",
+            action.log_name()
+        );
         self.logging_out = true;
-        let (sequence, step) = LogOut::start();
         self.quitting = Some(Quitting {
-            sequence,
             then: action,
             interrupt: None,
-            reopen,
-            quit: Vec::new(),
         });
-        self.follow(now, Some(step))
+        Ok(())
     }
 
-    /// Do what the quit sequence asks for, and what that leads to.
-    fn follow(&mut self, now: f64, mut step: Option<logout::Do>) -> Result<()> {
-        while let Some(next) = step.take() {
-            let quitting = self
-                .quitting
-                .as_mut()
-                .expect("the quit sequence only asks while it runs");
-            match next {
-                logout::Do::AskNext => match session::quit_next_application(&self.session_bus) {
-                    Ok((app, windows)) => {
-                        if !app.is_empty() {
-                            eprintln!(
-                                "cupertino-login: quitting application: {app} ({windows} windows)"
-                            );
-                            quitting.quit.push(app.clone());
-                        }
-                        step = quitting.sequence.answered(now, &app, windows);
-                    }
-                    Err(e) => {
-                        eprintln!(
-                            "cupertino-login: applications not quit before the {}: {e}",
-                            quitting.then.log_name()
-                        );
-                        step = Some(logout::Do::Terminate);
-                    }
-                },
-                logout::Do::Terminate => {
-                    let Quitting {
-                        then, reopen, quit, ..
-                    } = self.quitting.take().expect("checked above");
-                    eprintln!("cupertino-login: no application left: {}", then.log_name());
-                    self.save_open_applications(reopen, &quit);
-                    match then {
-                        Action::LogOut => self.log_out()?,
-                        Action::Restart => self.request_power(Power::Restart)?,
-                        Action::ShutDown => self.request_power(Power::ShutDown)?,
-                        Action::Sleep => unreachable!("sleep does not quit the applications"),
-                    }
+    /// `org.cupertino.Session1` did not take `action`: log it and tell the person; the session goes on.
+    fn not_carried_out(&mut self, action: Action, error: &zbus::Error) {
+        eprintln!(
+            "cupertino-login: the {} did not start: Session1 did not take it: {error}",
+            action.log_name()
+        );
+        self.logging_out = false;
+        self.quitting = None;
+        let summary = match action {
+            Action::LogOut | Action::Sleep => "Log out did not start",
+            Action::Restart => "Restart did not start",
+            Action::ShutDown => "Shut down did not start",
+        };
+        let body = "The window server did not take the request, so no application was quit. The session goes on.";
+        if let Err(e) = session::report_failure(&self.session_bus, summary, body) {
+            eprintln!(
+                "cupertino-login: cannot show that the {} did not start: {e}",
+                action.log_name()
+            );
+        }
+    }
+
+    /// The server's word on the applications it is quitting: one did not quit in time (the interrupt panel shows, with
+    /// why), or it quit after all (the panel closes). On a locked session nobody can answer the panel: the action is
+    /// cancelled.
+    fn quit_signal(&mut self, interrupt: session::Interrupt) -> Result<()> {
+        let Some(quitting) = &mut self.quitting else {
+            eprintln!("cupertino-login: quit signal ignored: no action of this agent is under way");
+            return Ok(());
+        };
+        match interrupt {
+            session::Interrupt::Closed => {
+                eprintln!("cupertino-login: the application quit after all");
+                quitting.interrupt = None;
+            }
+            session::Interrupt::Interrupted { app, reason } => {
+                let reason = Reason::of_status(&reason);
+                eprintln!("cupertino-login: application did not quit: {app} ({reason:?})");
+                quitting.interrupt = Some(Interrupted {
+                    app,
+                    reason,
+                    stage: Stage::Ask,
+                });
+                if self.lock.is_some() {
+                    self.choose(Choice::Cancel)?;
                 }
-                logout::Do::Interrupt(app) => self.show_interrupt(now, app)?,
-                logout::Do::CloseInterrupt => quitting.interrupt = None,
             }
         }
         Ok(())
@@ -1535,86 +1534,59 @@ impl SessionApp {
             .is_some_and(|q| q.interrupt.is_some())
     }
 
-    /// Show the interrupt panel for `app` on the first output, with why the server says it is still there. On a locked
-    /// session there is nobody to answer it: the sequence is cancelled.
-    fn show_interrupt(&mut self, now: f64, app: String) -> Result<()> {
-        if self.lock.is_some() {
-            eprintln!("cupertino-login: application did not quit: {app}");
-            return self.choose(now, Choice::Cancel);
-        }
-        let reason = match session::quit_status(&self.session_bus, &app) {
-            Ok(status) => Reason::of_status(&status),
-            Err(e) => {
-                eprintln!("cupertino-login: the quit status of {app} is unknown: {e}");
-                Reason::FailedToQuit
-            }
-        };
-        eprintln!("cupertino-login: application did not quit: {app} ({reason:?})");
-        if self.outputs.is_empty() {
-            return Err("the server has no output".into());
-        }
-        self.quitting
-            .as_mut()
-            .expect("the interrupt panel belongs to a quit sequence")
-            .interrupt = Some(Interrupted {
-            app,
-            reason,
-            stage: Stage::Ask,
-        });
-        Ok(())
-    }
-
-    /// The answer on the interrupt panel: Try Again asks the applications to quit again, Cancel ends the sequence and
-    /// the session goes on, Force Quit asks whether to force the application, and the answer to that either goes back
-    /// to the first question or kills the application, which then has another full timeout to go away.
-    fn choose(&mut self, now: f64, choice: Choice) -> Result<()> {
+    /// The answer on the interrupt panel: Try Again asks the server to quit the applications again, Cancel ends the
+    /// action and the session goes on, Force Quit asks whether to force the application, and the answer to that either
+    /// goes back to the first question or kills the application, which the server then gives another full timeout.
+    fn choose(&mut self, choice: Choice) -> Result<()> {
         let quitting = self
             .quitting
             .as_mut()
             .expect("a choice is only made while the applications are quit");
+        let Some(shown) = &mut quitting.interrupt else {
+            return Ok(());
+        };
         match choice {
             Choice::ForceQuit | Choice::Back => {
-                if let Some(shown) = &mut quitting.interrupt {
-                    shown.stage = if choice == Choice::ForceQuit && shown.reason.offers_force_quit()
-                    {
-                        Stage::ConfirmForceQuit
-                    } else {
-                        Stage::Ask
-                    };
-                }
+                shown.stage = if choice == Choice::ForceQuit && shown.reason.offers_force_quit() {
+                    Stage::ConfirmForceQuit
+                } else {
+                    Stage::Ask
+                };
                 return Ok(());
             }
             Choice::TryAgain | Choice::Cancel | Choice::ConfirmForceQuit => {}
         }
-        quitting.interrupt = None;
+        let shown = quitting.interrupt.take().expect("checked above");
+        let then = quitting.then;
         match choice {
             Choice::TryAgain => {
-                eprintln!(
-                    "cupertino-login: trying the {} again",
-                    quitting.then.log_name()
-                );
-                let step = quitting.sequence.try_again();
-                return self.follow(now, step);
+                eprintln!("cupertino-login: trying the {} again", then.log_name());
+                if let Err(e) = session::retry_session_action(&self.session_bus) {
+                    self.discard_saved_applications();
+                    self.not_carried_out(then, &e);
+                }
             }
             Choice::Cancel => {
-                let quitting = self.quitting.take().expect("checked above");
+                self.quitting = None;
                 self.logging_out = false;
+                // the session goes on: the list saved for the next login is not started after some later end of it
+                self.discard_saved_applications();
                 eprintln!(
                     "cupertino-login: {} cancelled while quitting the applications",
-                    quitting.then.log_name()
+                    then.log_name()
                 );
+                if let Err(e) = session::cancel_session_action(&self.session_bus) {
+                    eprintln!("cupertino-login: Session1 did not take the cancel: {e}");
+                }
             }
             Choice::ConfirmForceQuit => {
-                let app = quitting
-                    .sequence
-                    .force_quit(now)
-                    .expect("Force Quit is only offered on the interrupt panel");
-                // a failure leaves the sequence waiting: the panel comes back when the timeout runs out again
-                match session::force_quit_application(&self.session_bus, &app) {
-                    Ok(processes) => {
-                        eprintln!("cupertino-login: force quit: {app} ({processes} processes)")
-                    }
-                    Err(e) => eprintln!("cupertino-login: force quit of {app} failed: {e}"),
+                // a failure leaves the server waiting: the panel comes back when the timeout runs out again
+                match session::force_quit_application(&self.session_bus, &shown.app) {
+                    Ok(processes) => eprintln!(
+                        "cupertino-login: force quit: {} ({processes} processes)",
+                        shown.app
+                    ),
+                    Err(e) => eprintln!("cupertino-login: force quit of {} failed: {e}", shown.app),
                 }
             }
             Choice::ForceQuit | Choice::Back => unreachable!("answered above"),
@@ -1647,7 +1619,7 @@ impl SessionApp {
         match effect {
             Effect::Sleep => {
                 eprintln!("cupertino-login: power button: sleep");
-                self.request_power(Power::Sleep)?;
+                self.sleep()?;
             }
             Effect::ShowPanel if self.panel.is_some() || self.logging_out => eprintln!(
                 "cupertino-login: power button hold ignored: a panel or a log-out is running"

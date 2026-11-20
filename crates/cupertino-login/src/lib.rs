@@ -16,8 +16,7 @@
 //! * [`spinner`]: the frames and spoke opacities of the progress spinner.
 //! * [`status`]: what the status items at the top right of the lock and login screens show, read every few seconds.
 //! * [`panel`]: the confirmation panel's countdown, keys, button frames and words.
-//! * [`logout`]: the timing of quitting the applications one at a time before the session ends.
-//! * [`interrupt`]: the panel that shows when an application does not quit: Cancel or Force Quit.
+//! * [`interrupt`]: the panel that shows when an application does not quit: Try Again, Cancel or Force Quit.
 //! * [`restore`]: reopening applications at the next login: the saved choice and list, and starting the list once.
 //! * [`low_battery`]: which low-battery notification to post, replace or withdraw as the warning level changes.
 //! * [`user`]: the user's name and picture, and the clock text.
@@ -27,7 +26,7 @@
 //!   preparation and the call that ends the session), [`login_manager`] (the session manager's `org.cupertino.LoginManager1`: power
 //!   actions, inhibitor locks, the session's announcement) and
 //!   [`upower`] (the display device's warning level and the notification calls) and [`session`] (the server's
-//!   `org.cupertino.Session1`, which quits the applications).
+//!   `org.cupertino.Session1`, which carries out the log out, restart, shut down and sleep and quits the applications).
 //! * feature `app`: [`auth`] (PAM), [`manager`] (the greeter's connection to the session manager) and the `cupertino-login`
 //!   process.
 //!
@@ -49,7 +48,6 @@ pub mod login_manager;
 pub mod login_wallpaper;
 #[cfg(feature = "dbus")]
 pub mod logind;
-pub mod logout;
 pub mod low_battery;
 #[cfg(feature = "app")]
 pub mod manager;

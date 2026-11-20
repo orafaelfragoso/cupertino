@@ -1,5 +1,5 @@
 //! The panel that interrupts a log out, restart or shut down when an application has not quit in time
-//! ([`crate::logout::QUIT_TIMEOUT_S`]), with words for why: the application stopped it (it kept its windows), it did not
+//! (the server's 45 s, `org.cupertino.Session1`), with words for why: the application stopped it (it kept its windows), it did not
 //! finish quitting, or it does not respond. Try Again asks the applications to quit again, Cancel stops the log out,
 //! and Force Quit (when the application failed or hangs) asks a second, smaller question before it kills the
 //! application and the log out goes on. Pure: frames, words and keys.

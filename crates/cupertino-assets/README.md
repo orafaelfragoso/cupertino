@@ -99,7 +99,7 @@ Inter has no keypad Enter symbol (U+2324), so the menu bar names that key `Enter
 | `Assets::read_pack(dir) | one pack and the problems it reports; fails only on an unreadable manifest, invalid JSON or an unsupported version |
 | `Assets::open(dir) | the strict check of one pack: no problem at all |
 | `Assets::icon_sources(&name, px) | every source of the packs for the name, with its pack, in trial order: `IconSource::{Raster, Svg, Symbol, Theme} |
-| `Assets::fonts | `FontSource::File` of every pack in order, then `FontSource::Builtin`; `Assets::font_family(role) is the family of the first pack that assigns the role |
+| `Assets::fonts | `FontSource::File` of every pack in order, then `FontSource::Builtin`; a pack file with the built-in font's very bytes is `FontSource::Builtin` in the place of the first such file, listed once; `Assets::font_family(role) is the family of the first pack that assigns the role |
 | `Assets::cursor_theme | `Some(CursorTheme { name, search_dir }) of the first pack whose theme is found |
 | `Assets::wallpaper_path(dark) | the first pack's picture for the appearance |
 | `Assets::credits`, `Assets::roots | the packs' directories, names and credits files |

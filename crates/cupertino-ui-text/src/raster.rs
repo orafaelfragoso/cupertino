@@ -143,7 +143,7 @@ fn load<'a>(
 ) -> Result<&'a Loaded, TextError> {
     if let Entry::Vacant(entry) = loaded.entry(font) {
         let source = system.font_source(font)?;
-        let reference = FontRef::from_index(&source.data, source.index as usize)
+        let reference = FontRef::from_index((*source.data).as_ref(), source.index as usize)
             .ok_or(TextError::InvalidFont("font".into()))?;
         let (offset, key) = (reference.offset, reference.key);
         entry.insert(Loaded {
@@ -183,7 +183,7 @@ impl GlyphRaster {
         } = self;
         let loaded = load(system, loaded, key.font)?;
         let font = FontRef {
-            data: &loaded.source.data,
+            data: (*loaded.source.data).as_ref(),
             offset: loaded.offset,
             key: loaded.key,
         };

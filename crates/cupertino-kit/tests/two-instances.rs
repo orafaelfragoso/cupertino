@@ -1,6 +1,7 @@
-//! Two Kit instances in one process, each on a UI thread of its own on the headless window system and sharing the
-//! process's text system: each draws its window and takes its pointer input apart from the other, and when one panics
-//! the panic is that instance's and the other goes on taking input and drawing.
+//! Two Kit instances in one process, each on a UI thread of its own on the headless window system and drawing with the
+//! text system and icons every instance of the process shares (`app::environment`): each draws its window and takes
+//! its pointer input apart from the other, and when one panics the panic is that instance's and the other goes on
+//! taking input and drawing with the same caches.
 
 #[allow(dead_code)]
 mod support;
@@ -12,9 +13,10 @@ use cupertino_kit::geometry::Size;
 use cupertino_kit::platform::{DecorationMode, MouseButton, PointerEvent, Timestamp, WindowId};
 use cupertino_kit::prelude::*;
 use cupertino_kit::test::{TestDriver, WindowEvent, WindowStates};
-use cupertino_kit::Instance;
+use cupertino_kit::text::TextSystem;
+use cupertino_kit::{app, Instance};
 use std::num::NonZeroU32;
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc};
 
 /// The time between two frames the test hands a window, in nanoseconds: long enough for a press to finish animating.
 const FRAME_STEP: u64 = 500_000_000;
@@ -115,9 +117,10 @@ struct Shown<A: Application> {
 }
 
 impl<A: Application> Shown<A> {
-    /// Opens the application's window, configured and drawn until it rests.
+    /// Opens the application's window on the process's shared text system and icons, configured and drawn until it
+    /// rests.
     fn open() -> Self {
-        let mut driver = support::driver::<A>(support::text_system());
+        let mut driver = support::driver_in::<A>(app::environment().unwrap());
         driver.run_until_idle(turns()).unwrap();
         let window = driver.runtime().windows()[0].1;
         let active = WindowStates {
@@ -205,7 +208,9 @@ fn turns() -> NonZeroU32 {
 #[test]
 fn two_instances_draw_and_take_input_apart_and_a_panic_in_one_leaves_the_other_drawing() {
     diag::init(diag::component!(), "kit_test", diag::Sink::Memory);
-    let (fragile_drawn, drawn) = mpsc::channel::<()>();
+    // the built-in font alone, whatever packs the machine has
+    std::env::set_var(cupertino_assets::SEARCH_PATH_ENV, "");
+    let (fragile_drawn, drawn) = mpsc::channel::<Arc<TextSystem>>();
     let (go_on, steady_waits) = mpsc::channel::<()>();
     let fragile = std::thread::Builder::new()
         .name("fragile-ui".into())
@@ -215,7 +220,9 @@ fn two_instances_draw_and_take_input_apart_and_a_panic_in_one_leaves_the_other_d
             let rest = shown.drawn();
             assert_ne!(shown.press(), rest, "the first press is drawn");
             assert_eq!(*shown.driver.runtime().model(), 1);
-            fragile_drawn.send(()).unwrap();
+            fragile_drawn
+                .send(app::environment().unwrap().text)
+                .unwrap();
             shown.press();
         })
         .unwrap();
@@ -243,10 +250,11 @@ fn two_instances_draw_and_take_input_apart_and_a_panic_in_one_leaves_the_other_d
                         .len(),
                 );
             }
-            (*shown.driver.runtime().model(), frames)
+            let text = app::environment().unwrap().text;
+            (*shown.driver.runtime().model(), frames, text)
         })
         .unwrap();
-    drawn
+    let fragile_text = drawn
         .recv()
         .expect("the fragile instance drew its first press");
     let payload = fragile.join().expect_err("the fragile instance panics");
@@ -267,7 +275,8 @@ fn two_instances_draw_and_take_input_apart_and_a_panic_in_one_leaves_the_other_d
         Some("fragile-ui")
     );
     go_on.send(()).unwrap();
-    let (presses, frames) = steady.join().expect("the steady instance goes on");
+    let (presses, frames, steady_text) = steady.join().expect("the steady instance goes on");
+    assert!(Arc::ptr_eq(&fragile_text, &steady_text), "one text system");
     assert_eq!(presses, 4);
     assert!(frames.windows(2).all(|w| w[0] < w[1]), "{frames:?}");
 }

@@ -613,16 +613,34 @@ impl Assets {
     }
 
     /// The fonts to load, in order: the font files of every pack in lookup order (those that exist), then the built-in
-    /// font, always last, so that it also serves the characters the packs' faces lack. A pack whose fonts could not be
-    /// listed (reported when it was read) contributes none.
+    /// font, last, so that it also serves the characters the packs' faces lack. A pack's file that holds the built-in
+    /// font's very bytes (the default pack ships it) is the built-in font, listed once, in the place of the first such
+    /// file: the font then loads once, from the bytes the program holds. A pack whose fonts could not be listed (reported
+    /// when it was read) contributes none.
     pub fn fonts(&self) -> Vec<FontSource> {
-        let files = self.packs.iter().flat_map(|p| {
-            p.fonts
-                .iter()
-                .filter(|f| f.is_file())
-                .cloned()
-                .map(FontSource::File)
-        });
-        files.chain([FontSource::Builtin]).collect()
+        let mut fonts = Vec::new();
+        let mut builtin = false;
+        let files = self
+            .packs
+            .iter()
+            .flat_map(|p| p.fonts.iter().filter(|f| f.is_file()));
+        for file in files {
+            if !holds_builtin_font(file) {
+                fonts.push(FontSource::File(file.clone()));
+            } else if !builtin {
+                builtin = true;
+                fonts.push(FontSource::Builtin);
+            }
+        }
+        if !builtin {
+            fonts.push(FontSource::Builtin);
+        }
+        fonts
     }
+}
+
+/// Whether the file at `path` holds the bytes of [`BUILTIN_FONT`]; only a file of its size is read.
+fn holds_builtin_font(path: &Path) -> bool {
+    std::fs::metadata(path).is_ok_and(|m| m.len() == BUILTIN_FONT.len() as u64)
+        && std::fs::read(path).is_ok_and(|bytes| bytes == BUILTIN_FONT)
 }

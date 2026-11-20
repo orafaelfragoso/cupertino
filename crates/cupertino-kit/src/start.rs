@@ -2,12 +2,12 @@
 //! built-in Inter, the renderer of the application's class (the GPU renderer once the process draws there) and the
 //! monotonic clock.
 
-use cupertino_assets::{Assets, FontRole, FontSource, BUILTIN_FONT};
+use cupertino_assets::{Assets, FontRole};
 use cupertino_defaults::appearance::{AppearanceSettings, Highlight};
 use cupertino_defaults::watch::{ConfigWatcher, WatchEvent};
 use cupertino_keyboard::modifiers::Profile;
 use cupertino_theme::ui::{Appearance, Color, ColorTokens, ThemePreferences, ThemeTokens};
-use cupertino_theme::{DesignTokens, Theme};
+use cupertino_theme::Theme;
 use cupertino_ui_core::layout::LayoutDirection;
 use cupertino_ui_core::platform::{PlatformError, SystemAppearance, WindowSystem};
 use cupertino_ui_core::{
@@ -16,20 +16,16 @@ use cupertino_ui_core::{
 };
 use cupertino_ui_render::gpu::GpuConfig;
 use cupertino_ui_render::{CpuConfig, CpuRenderer};
-use cupertino_ui_text::{
-    FontIndex, FontStyle, FontWeight, GlyphRaster, InstalledFonts, TextSystem,
-};
+use cupertino_ui_text::GlyphRaster;
 use cupertino_ui_wayland::atspi::AtspiAdapter;
 use cupertino_ui_wayland::{GpuRenderers, WaylandWindowSystem};
 use std::cell::Cell;
 use std::fmt;
-use std::fs::File;
-use std::io::{self, Read};
-use std::path::Path;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
+use crate::shared::Shared;
 use crate::{Entered, Instance};
 
 /// The most nodes one application's tree holds.
@@ -363,15 +359,17 @@ pub fn environment() -> Result<Environment, AppError> {
     })
 }
 
-/// The named colours of the theme data the process's applications start on, kept from the first start that read them;
-/// the installed data is the same for every instance.
-static SYSTEM_COLORS: OnceLock<DesignTokens> = OnceLock::new();
-
 /// The colour the theme data names `name` (`system-green`) in `appearance`, a high contrast appearance taking its base
 /// appearance's colour where it names none. `None` for a name the data does not have, and until an application of the
-/// process started on the installed theme data ([`run`] and the functions beside it, [`environment`]).
+/// process started on the installed theme data ([`run`] and the functions beside it, [`environment`]), which every
+/// instance of the process shares.
 pub fn system_color(name: &str, appearance: Appearance) -> Option<Color> {
-    SYSTEM_COLORS.get()?.color(appearance, name)
+    Shared::made()?
+        .theme
+        .as_ref()
+        .ok()?
+        .tokens
+        .color(appearance, name)
 }
 
 /// The theme preferences an application starts with: the session's when the window system knows them, else light with
@@ -420,7 +418,7 @@ struct Personal {
 }
 
 struct PersonalInner {
-    theme: Option<Theme>,
+    theme: Option<Arc<Theme>>,
     start: Arc<ThemeTokens>,
     settings: Cell<AppearanceSettings>,
     /// The session's appearance the theme was last made for.
@@ -479,7 +477,7 @@ impl Personal {
     /// application starts with and `first` the session's appearance.
     fn follow(
         waker: std::task::Waker,
-        theme: Option<Theme>,
+        theme: Option<Arc<Theme>>,
         start: &Arc<ThemeTokens>,
         first: SystemAppearance,
     ) -> Self {
@@ -542,14 +540,16 @@ impl Personal {
     }
 }
 
-/// The Cupertino theme from the installed theme data, else the neutral one: an application starts without the
-/// desktop's data, and says why on stderr.
-fn start_theme(preferences: ThemePreferences) -> Result<(ThemeTokens, Option<Theme>), AppError> {
-    let cupertino = cupertino_assets::theme::load().and_then(|data| {
-        ThemeTokens::cupertino(&data, preferences).map(|theme| {
-            SYSTEM_COLORS.get_or_init(|| data.tokens.clone());
-            (theme, Some(data))
-        })
+/// The Cupertino theme from the process's theme data (`data`, [`Shared::theme`]), else the neutral one: an application
+/// starts without the desktop's data, and says why on stderr.
+fn start_theme(
+    preferences: ThemePreferences,
+    data: &Result<Arc<Theme>, String>,
+) -> Result<(ThemeTokens, Option<Arc<Theme>>), AppError> {
+    let cupertino = data.clone().and_then(|data| {
+        ThemeTokens::cupertino(&data, preferences)
+            .map(|theme| (theme, Some(data)))
+            .map_err(|e| e.to_string())
     });
     cupertino.or_else(|e| {
         eprintln!("cupertino-kit: no Cupertino theme ({e}); using the neutral theme");
@@ -596,23 +596,19 @@ fn renderers_on_gpu(options: &mut RuntimeOptions, gpu: GpuRenderers) {
     });
 }
 
+/// The runtime options of an instance that starts in `preferences`, with the theme data: its own theme, on the
+/// process's theme data, text system and icons ([`Shared`]).
 fn options_and_theme(
     preferences: ThemePreferences,
-) -> Result<(RuntimeOptions, Option<Theme>), AppError> {
-    let (theme, data) = start_theme(preferences)?;
-    let assets = Assets::discover();
-    let (fonts, builtin) = fonts(&assets);
-    let preferred = [
-        assets.font_family(FontRole::Ui),
-        Some(&*theme.type_scale.family),
-    ];
-    let family = ui_family(&fonts, preferred.into_iter().flatten(), builtin.as_deref());
-    let text = Arc::new(TextSystem::new(fonts, &family));
+) -> Result<(RuntimeOptions, Option<Arc<Theme>>), AppError> {
+    let shared = Shared::get();
+    let (theme, data) = start_theme(preferences, &shared.theme)?;
+    let text = Arc::clone(&shared.text);
     let glyphs = Arc::clone(&text);
     let options = RuntimeOptions {
         theme: Arc::new(theme),
         text,
-        icons: Arc::new(crate::icons::PackIcons::new(&assets)),
+        icons: Arc::<crate::icons::PackIcons>::clone(&shared.icons),
         direction: LayoutDirection::Ltr,
         node_limit: NODE_LIMIT,
         renderers: Box::new(move || {
@@ -633,84 +629,4 @@ fn options_and_theme(
         })),
     };
     Ok((options, data))
-}
-
-/// The largest font file read; the biggest real collections are a few tens of megabytes.
-const MAX_FONT_BYTES: u64 = 64 << 20;
-
-/// A regular file of at most [`MAX_FONT_BYTES`], so a pack entry that names a device, a pipe or a huge file never
-/// stalls or exhausts an application at start.
-fn read_font(path: &Path) -> io::Result<Vec<u8>> {
-    let too_big = || {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            "not a regular file of at most 64 MiB",
-        )
-    };
-    let meta = std::fs::metadata(path)?;
-    if !meta.is_file() || meta.len() > MAX_FONT_BYTES {
-        return Err(too_big());
-    }
-    let file = File::open(path)?;
-    let meta = file.metadata()?;
-    if !meta.is_file() || meta.len() > MAX_FONT_BYTES {
-        return Err(too_big());
-    }
-    let mut data = Vec::with_capacity(meta.len() as usize);
-    file.take(MAX_FONT_BYTES + 1).read_to_end(&mut data)?;
-    if data.len() as u64 > MAX_FONT_BYTES {
-        return Err(too_big());
-    }
-    Ok(data)
-}
-
-/// The first of `preferred` that names a loaded face, else `builtin`: UI text never falls to whichever face happened
-/// to load first.
-fn ui_family<'a>(
-    fonts: &FontIndex,
-    mut preferred: impl Iterator<Item = &'a str>,
-    builtin: Option<&'a str>,
-) -> String {
-    preferred
-        .find(|family| {
-            fonts
-                .match_face(family, FontWeight::REGULAR, FontStyle::Normal)
-                .is_some()
-        })
-        .or(builtin)
-        .unwrap_or_default()
-        .to_owned()
-}
-
-/// The asset packs' fonts, then the built-in Inter, with the family Inter registered under, and the installed fonts
-/// for the characters and families none of them has. A file that cannot be read or parsed is skipped with a message.
-fn fonts(assets: &Assets) -> (FontIndex, Option<String>) {
-    let mut index = FontIndex::new();
-    let mut builtin = None;
-    for source in assets.fonts() {
-        let data = match &source {
-            FontSource::File(path) => match read_font(path) {
-                Ok(data) => data,
-                Err(e) => {
-                    eprintln!("cupertino-kit: skipping the font {}: {e}", path.display());
-                    continue;
-                }
-            },
-            FontSource::Builtin => BUILTIN_FONT.to_vec(),
-        };
-        match index.add_font(Arc::new(data)) {
-            Ok(faces) if matches!(source, FontSource::Builtin) => {
-                builtin = faces
-                    .first()
-                    .and_then(|&face| index.family(face))
-                    .map(|family| family.to_string());
-            }
-            Ok(_) => {}
-            Err(e) => eprintln!("cupertino-kit: skipping the font {}: {e:?}", source.label()),
-        }
-    }
-    if let Some(installed) = InstalledFonts::new() {
-        index.set_system_fonts(Box::new(installed));
-    }
-    (index, builtin)
 }

@@ -2,6 +2,7 @@
 //! a message, one instance holds at most its share of the I/O pool, an I/O task past its deadline is reported with its
 //! instance, and a task's panic is the instance's.
 
+#[allow(dead_code)]
 mod support;
 
 use cupertino_diagnostic_events::{self as diag, Record};

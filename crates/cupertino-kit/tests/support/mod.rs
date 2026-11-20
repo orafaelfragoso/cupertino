@@ -2,7 +2,7 @@
 //! and wake it.
 
 use cupertino_assets::BUILTIN_FONT;
-use cupertino_kit::core::{Application, RuntimeOptions};
+use cupertino_kit::core::{Application, Environment, RuntimeOptions};
 use cupertino_kit::layout::LayoutDirection;
 use cupertino_kit::platform::Timestamp;
 use cupertino_kit::render::{CpuConfig, CpuRenderer};
@@ -53,6 +53,17 @@ pub fn options(text: Arc<TextSystem>) -> RuntimeOptions {
         clock: Arc::new(ManualClock::new(Timestamp(0))),
         on_window_error: None,
     }
+}
+
+/// A driver drawing with `environment`'s text system and icons, in the neutral light theme.
+pub fn driver_in<A: Application>(environment: Environment) -> TestDriver<A> {
+    let mut options = options(environment.text);
+    options.icons = environment.icons;
+    TestDriver::new(
+        Capabilities::default(),
+        options,
+        ManualClock::new(Timestamp(0)),
+    )
 }
 
 pub fn driver<A: Application>(text: Arc<TextSystem>) -> TestDriver<A> {

@@ -28,6 +28,7 @@ use cupertino_wayland_client::app::AppEvent;
 use cupertino_wayland_client::{Connection, Decorations, Event, Toplevel, ToplevelConfig};
 use std::collections::HashMap;
 use std::fs::File;
+use std::os::fd::AsFd;
 use std::os::unix::fs::FileExt;
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -53,6 +54,7 @@ use wayland_server::protocol::{
     wl_buffer::WlBuffer,
     wl_callback::WlCallback,
     wl_compositor::{self, WlCompositor},
+    wl_keyboard::{self, WlKeyboard},
     wl_pointer::WlPointer,
     wl_region::WlRegion,
     wl_seat::{self, Capability, WlSeat},
@@ -92,6 +94,8 @@ pub struct Offer {
     /// The role (as in [`Harness::commits`]) of the surfaces whose replaced buffers the server keeps, as a compositor
     /// still drawing them does, until [`Server::release_kept`]; the others' it releases as [`Offer::releases`] says.
     pub keeps: Option<&'static str>,
+    /// Whether the seat has a keyboard, through which [`Server::keymap`] and [`Server::type_key`] send.
+    pub keyboard: bool,
 }
 
 impl Offer {
@@ -108,6 +112,7 @@ impl Offer {
         scale: None,
         frames: false,
         keeps: None,
+        keyboard: false,
     };
 
     /// Only the standard protocols.
@@ -123,6 +128,7 @@ impl Offer {
         scale: None,
         frames: false,
         keeps: None,
+        keyboard: false,
     };
 }
 
@@ -223,6 +229,11 @@ pub struct Server {
     buffers: HashMap<ObjectId, Placed>,
     /// The centre pixel of each buffer committed ([`Harness::centres`]).
     centres: Centres,
+    /// The surfaces, in creation order.
+    surfaces: Vec<WlSurface>,
+    /// The keyboards the client asked for ([`Offer::keyboard`]), and whether they entered the first surface.
+    keyboards: Vec<WlKeyboard>,
+    key_focus: bool,
 }
 
 /// Where a shared-memory buffer lies in its pool, and its layout.
@@ -246,6 +257,41 @@ impl Server {
 
     fn present(&self, text: &str) {
         self.presents.lock().unwrap().push(text.to_owned());
+    }
+
+    /// Sends the keymap `text` to every keyboard, in a memory file of its own with the terminating NUL, as a
+    /// compositor does.
+    pub fn keymap(&mut self, text: &str) {
+        let fd = rustix::fs::memfd_create("keymap", rustix::fs::MemfdFlags::CLOEXEC).unwrap();
+        let file = File::from(fd);
+        let bytes = [text.as_bytes(), &[0]].concat();
+        file.write_all_at(&bytes, 0).unwrap();
+        for keyboard in &self.keyboards {
+            keyboard.keymap(
+                wl_keyboard::KeymapFormat::XkbV1,
+                file.as_fd(),
+                bytes.len() as u32,
+            );
+        }
+    }
+
+    /// Presses and releases the evdev key `code` on every keyboard, the first surface focused first.
+    pub fn type_key(&mut self, code: u32) {
+        let surface = self.surfaces.first().expect("a surface to focus").clone();
+        let focus = !std::mem::replace(&mut self.key_focus, true);
+        for keyboard in &self.keyboards {
+            if focus {
+                self.serial += 1;
+                keyboard.enter(self.serial, &surface, Vec::new());
+            }
+            for state in [
+                wl_keyboard::KeyState::Pressed,
+                wl_keyboard::KeyState::Released,
+            ] {
+                self.serial += 1;
+                keyboard.key(self.serial, 0, code, state);
+            }
+        }
     }
 
     /// Releases the buffers kept ([`Offer::keeps`]), as a compositor that stopped drawing them does.
@@ -457,7 +503,7 @@ fn serve(
     if offer.shell {
         handle.create_global::<Server, XdgWmBase, ()>(6, ());
     }
-    handle.create_global::<Server, WlSeat, ()>(7, ());
+    handle.create_global::<Server, WlSeat, bool>(7, offer.keyboard);
     if offer.subsurfaces {
         handle.create_global::<Server, WlSubcompositor, ()>(1, ());
     }
@@ -602,17 +648,21 @@ impl GlobalDispatch<WlShm, bool> for Server {
     }
 }
 
-impl GlobalDispatch<WlSeat, ()> for Server {
+impl GlobalDispatch<WlSeat, bool> for Server {
     fn bind(
         _: &mut Server,
         _: &DisplayHandle,
         _: &Client,
         resource: New<WlSeat>,
-        _: &(),
+        keyboard: &bool,
         init: &mut DataInit<'_, Server>,
     ) {
         let seat = init.init(resource, ());
-        seat.capabilities(Capability::Pointer);
+        if *keyboard {
+            seat.capabilities(Capability::Pointer | Capability::Keyboard);
+        } else {
+            seat.capabilities(Capability::Pointer);
+        }
     }
 }
 
@@ -636,6 +686,7 @@ ignore!(
     WlRegion,
     WlBuffer,
     WlPointer,
+    WlKeyboard,
     XdgToplevel,
     WlCallback,
     WpFractionalScaleV1,
@@ -745,6 +796,7 @@ impl Dispatch<WlCompositor, ()> for Server {
                 if let Some(scale) = server.scale {
                     surface.preferred_buffer_scale(scale);
                 }
+                server.surfaces.push(surface);
             }
             wl_compositor::Request::CreateRegion { id } => {
                 init.init(id, ());
@@ -808,7 +860,7 @@ impl Dispatch<WlShmPool, ()> for Server {
 
 impl Dispatch<WlSeat, ()> for Server {
     fn request(
-        _: &mut Server,
+        server: &mut Server,
         _: &Client,
         _: &WlSeat,
         request: wl_seat::Request,
@@ -816,8 +868,15 @@ impl Dispatch<WlSeat, ()> for Server {
         _: &DisplayHandle,
         init: &mut DataInit<'_, Server>,
     ) {
-        if let wl_seat::Request::GetPointer { id } = request {
-            init.init(id, ());
+        match request {
+            wl_seat::Request::GetPointer { id } => {
+                init.init(id, ());
+            }
+            wl_seat::Request::GetKeyboard { id } => {
+                let keyboard = init.init(id, ());
+                server.keyboards.push(keyboard);
+            }
+            _ => {}
         }
     }
 }

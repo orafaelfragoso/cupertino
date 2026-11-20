@@ -5,7 +5,7 @@ mod common;
 use common::{manifest, write};
 use cupertino_assets::{
     parse_credits, pictures_in, AssetError, Assets, CursorTheme, FontRole, FontSource, IconName,
-    IconSource, PackReport, BUILTIN_UI_FAMILY,
+    IconSource, PackReport, BUILTIN_FONT, BUILTIN_UI_FAMILY,
 };
 use std::path::Path;
 
@@ -457,6 +457,31 @@ fn fonts_list_each_packs_existing_files_once_in_lookup_order_then_the_built_in_f
         .collect();
     assert_eq!(load(&[a.path(), b.path()]).fonts(), expected);
     assert_eq!(Assets::builtin().fonts(), vec![FontSource::Builtin]);
+}
+
+#[test]
+fn a_pack_file_holding_the_built_in_font_is_the_built_in_font_listed_once_in_its_place() {
+    let a = pack_with(
+        r#"{"version": 2, "fonts": {"ui": {"family": "Inter Variable",
+            "files": ["u.ttf", "inter.ttf", "same-size.ttf"]}}}"#,
+        &["u.ttf"],
+    );
+    std::fs::write(a.path().join("inter.ttf"), BUILTIN_FONT).unwrap();
+    std::fs::write(a.path().join("same-size.ttf"), vec![0; BUILTIN_FONT.len()]).unwrap();
+    let b = pack_with(
+        r#"{"version": 2, "fonts": {"ui": {"family": "B", "files": ["copy.ttf", "b.ttf"]}}}"#,
+        &["b.ttf"],
+    );
+    std::fs::write(b.path().join("copy.ttf"), BUILTIN_FONT).unwrap();
+    assert_eq!(
+        load(&[a.path(), b.path()]).fonts(),
+        vec![
+            FontSource::File(a.path().join("u.ttf")),
+            FontSource::Builtin,
+            FontSource::File(a.path().join("same-size.ttf")),
+            FontSource::File(b.path().join("b.ttf")),
+        ]
+    );
 }
 
 // ---- cursors ----

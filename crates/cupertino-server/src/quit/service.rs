@@ -11,7 +11,7 @@ use super::{
     shell_process_record, BusOut, Call, Refusal, Reject, Serving, SessionAction, SessionConnection,
     SessionSettings, ShellProcessRecord, BUS_NAME, OBJECT_PATH,
 };
-use crate::caller::{identify, Caller, Denial, Sandbox};
+use crate::caller::{identify, Asker, Caller, Denial, Sandbox};
 use crate::state::Cupertino;
 
 struct Session1 {
@@ -86,6 +86,14 @@ async fn caller_of(header: &zbus::message::Header<'_>, connection: &zbus::Connec
     }
 }
 
+/// The caller of a method and the connection it came on, from the header of its message.
+async fn asker_of(header: &zbus::message::Header<'_>, connection: &zbus::Connection) -> Asker {
+    Asker {
+        caller: caller_of(header, connection).await,
+        sender: header.sender().map(|s| s.as_str().to_owned()),
+    }
+}
+
 /// The caller of a method and the user id the bus daemon gives for its connection, from one answer of the daemon.
 async fn caller_and_user_of(
     header: &zbus::message::Header<'_>,
@@ -116,7 +124,7 @@ impl Session1 {
         #[zbus(header)] header: zbus::message::Header<'_>,
         #[zbus(connection)] connection: &zbus::Connection,
     ) -> Result<(String, u32), CallError> {
-        let caller = caller_of(&header, connection).await;
+        let caller = asker_of(&header, connection).await;
         self.ask(|tx| Call::QuitNext(caller, tx)).await
     }
 
@@ -126,7 +134,7 @@ impl Session1 {
         #[zbus(header)] header: zbus::message::Header<'_>,
         #[zbus(connection)] connection: &zbus::Connection,
     ) -> Result<String, CallError> {
-        let caller = caller_of(&header, connection).await;
+        let caller = asker_of(&header, connection).await;
         self.ask(|tx| Call::QuitStatus(app_id, caller, tx)).await
     }
 
@@ -136,7 +144,7 @@ impl Session1 {
         #[zbus(header)] header: zbus::message::Header<'_>,
         #[zbus(connection)] connection: &zbus::Connection,
     ) -> Result<u32, CallError> {
-        let caller = caller_of(&header, connection).await;
+        let caller = asker_of(&header, connection).await;
         self.ask(|tx| Call::ForceQuit(app_id, caller, tx)).await
     }
 
@@ -145,7 +153,7 @@ impl Session1 {
         #[zbus(header)] header: zbus::message::Header<'_>,
         #[zbus(connection)] connection: &zbus::Connection,
     ) -> Result<Vec<String>, CallError> {
-        let caller = caller_of(&header, connection).await;
+        let caller = asker_of(&header, connection).await;
         self.ask(|tx| Call::OpenApplications(caller, tx)).await
     }
 
@@ -154,7 +162,7 @@ impl Session1 {
         #[zbus(header)] header: zbus::message::Header<'_>,
         #[zbus(connection)] connection: &zbus::Connection,
     ) -> Result<(bool, String, String, String), CallError> {
-        let caller = caller_of(&header, connection).await;
+        let caller = asker_of(&header, connection).await;
         let pending = self.ask(|tx| Call::PendingInterrupt(caller, tx)).await?;
         Ok(match pending {
             Some((action, app, reason)) => (true, action.to_owned(), app, reason),
@@ -168,7 +176,7 @@ impl Session1 {
         #[zbus(header)] header: zbus::message::Header<'_>,
         #[zbus(connection)] connection: &zbus::Connection,
     ) -> Result<(), CallError> {
-        let caller = caller_of(&header, connection).await;
+        let caller = asker_of(&header, connection).await;
         self.ask(|tx| Call::SetAppearance(appearance, caller, tx))
             .await
     }
@@ -180,7 +188,7 @@ impl Session1 {
         #[zbus(header)] header: zbus::message::Header<'_>,
         #[zbus(connection)] connection: &zbus::Connection,
     ) -> Result<(), CallError> {
-        let caller = caller_of(&header, connection).await;
+        let caller = asker_of(&header, connection).await;
         self.ask(|tx| Call::SetAccessibility(key, value, caller, tx))
             .await
     }
@@ -264,7 +272,7 @@ impl Session1 {
         #[zbus(header)] header: zbus::message::Header<'_>,
         #[zbus(connection)] connection: &zbus::Connection,
     ) -> Result<(), CallError> {
-        let caller = caller_of(&header, connection).await;
+        let caller = asker_of(&header, connection).await;
         self.ask(|tx| Call::SessionAction(SessionAction::LogOut, caller, tx))
             .await
     }
@@ -274,7 +282,7 @@ impl Session1 {
         #[zbus(header)] header: zbus::message::Header<'_>,
         #[zbus(connection)] connection: &zbus::Connection,
     ) -> Result<(), CallError> {
-        let caller = caller_of(&header, connection).await;
+        let caller = asker_of(&header, connection).await;
         self.ask(|tx| Call::SessionAction(SessionAction::Restart, caller, tx))
             .await
     }
@@ -284,7 +292,7 @@ impl Session1 {
         #[zbus(header)] header: zbus::message::Header<'_>,
         #[zbus(connection)] connection: &zbus::Connection,
     ) -> Result<(), CallError> {
-        let caller = caller_of(&header, connection).await;
+        let caller = asker_of(&header, connection).await;
         self.ask(|tx| Call::SessionAction(SessionAction::ShutDown, caller, tx))
             .await
     }
@@ -294,7 +302,7 @@ impl Session1 {
         #[zbus(header)] header: zbus::message::Header<'_>,
         #[zbus(connection)] connection: &zbus::Connection,
     ) -> Result<(), CallError> {
-        let caller = caller_of(&header, connection).await;
+        let caller = asker_of(&header, connection).await;
         self.ask(|tx| Call::SessionAction(SessionAction::Sleep, caller, tx))
             .await
     }
@@ -304,8 +312,17 @@ impl Session1 {
         #[zbus(header)] header: zbus::message::Header<'_>,
         #[zbus(connection)] connection: &zbus::Connection,
     ) -> Result<(), CallError> {
-        let caller = caller_of(&header, connection).await;
+        let caller = asker_of(&header, connection).await;
         self.ask(|tx| Call::CancelSessionAction(caller, tx)).await
+    }
+
+    async fn switch_to_login_window(
+        &self,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &zbus::Connection,
+    ) -> Result<(), CallError> {
+        let caller = asker_of(&header, connection).await;
+        self.ask(|tx| Call::SwitchToLoginWindow(caller, tx)).await
     }
 
     async fn retry_session_action(
@@ -313,7 +330,7 @@ impl Session1 {
         #[zbus(header)] header: zbus::message::Header<'_>,
         #[zbus(connection)] connection: &zbus::Connection,
     ) -> Result<(), CallError> {
-        let caller = caller_of(&header, connection).await;
+        let caller = asker_of(&header, connection).await;
         self.ask(|tx| Call::RetrySessionAction(caller, tx)).await
     }
 

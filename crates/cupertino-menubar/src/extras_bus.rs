@@ -1,8 +1,8 @@
 //! The services behind the bar's own status items: the network and the Bluetooth adapter through whichever service
 //! owns them (`cupertino-radios`: `cupertino-netd` and `cupertino-btd`, else NetworkManager and BlueZ, the discovery
 //! and readings Settings and the control panel use), the UPower display device and manager (`cupertino-powerd`) on
-//! the system bus, and the session agent's entries for the system menu (`org.cupertino.Login1`) on the session bus.
-//! Do not disturb and the panels that are open come from the host bus, not from here (`crate::component`).
+//! the system bus. Do not disturb, the panels that are open and the session agent's entries for the system menu
+//! (`SessionMenu`) come from the host bus, not from here (`crate::component`).
 //!
 //! One task reads every service into an [`Extras`] and sends it to the process whenever it differs from the last one
 //! sent. It reads again after any signal on the services' objects (property changes, the network list, devices), when a
@@ -25,14 +25,13 @@
 //!
 //! The task's queue is bounded ([`QUEUE`]). Any peer on a bus can send this process signals, so a refresh is queued
 //! only when none waits already: the read that a waiting refresh causes starts after the new signal arrived, so it
-//! sees what the signal announced. The session agent is a value the next read takes, not a queued command, so a
-//! newer agent replaces an older one and is never lost. An action waits in the queue; should the queue be full (the
+//! sees what the signal announced. An action waits in the queue; should the queue be full (the
 //! task is stuck on a service that does not answer), the action is dropped and reported rather than queued without
 //! bound.
 
 use crate::extras::{
-    BatteryState, BluetoothDevice, BluetoothState, ExtraAction, Extras, Passphrase, SessionCaps,
-    SessionState, WifiLink, WifiNetwork, WifiState,
+    BatteryState, BluetoothDevice, BluetoothState, ExtraAction, Extras, Passphrase, WifiLink,
+    WifiNetwork, WifiState,
 };
 use cupertino_kit::core::Command as Task;
 use cupertino_radios::watch::Radio;
@@ -43,18 +42,15 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::pin;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use zbus::message::Type;
-use zbus::names::UniqueName;
 use zbus::proxy::{Builder, CacheProperties};
 use zbus::{Connection, MatchRule, MessageStream, OwnedMatchRule, Proxy};
 
 use crate::spawned::{Spawned, Spawner};
 use crate::worker::WorkerGone;
 
-const LOGIN_NAME: &str = "org.cupertino.Login1";
-const LOGIN_PATH: &str = "/org/cupertino/Login1";
 const UPOWER_NAME: &str = "org.freedesktop.UPower";
 const UPOWER_PATH: &str = "/org/freedesktop/UPower";
 const UPOWER_DISPLAY_DEVICE_PATH: &str = "/org/freedesktop/UPower/devices/DisplayDevice";
@@ -109,17 +105,6 @@ enum Command {
     },
 }
 
-/// Which process may answer as the session agent, as the server names it. Nothing is trusted until it does.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum SessionAgent {
-    #[default]
-    None,
-    /// The owner of `org.cupertino.Login1` must be this process.
-    Process(u32),
-    /// A development run: whoever owns the name.
-    Any,
-}
-
 /// The task's queue, as the process and the signal followers fill it.
 #[derive(Clone)]
 struct Queue {
@@ -129,8 +114,6 @@ struct Queue {
     /// The radios whose reading is out of date (`DUE_NETWORK`, `DUE_BLUETOOTH`, `DUE_LIST`), until the task takes
     /// them.
     due: Arc<AtomicU8>,
-    /// The session agent the next read takes.
-    agent: Arc<Mutex<SessionAgent>>,
     /// Starts the task's own tasks on the session connection's executor, on the component's UI thread: the radios'
     /// calls are awaited there.
     spawner: Spawner,
@@ -143,7 +126,6 @@ impl Queue {
             commands,
             refresh_waiting: Arc::new(AtomicBool::new(false)),
             due: Arc::new(AtomicU8::new(0)),
-            agent: Arc::new(Mutex::new(SessionAgent::None)),
             spawner,
         };
         (queue, rx)
@@ -203,15 +185,6 @@ impl Queue {
             Err(async_channel::TrySendError::Closed(_)) => Err(WorkerGone),
         }
     }
-
-    fn set_agent(&self, agent: SessionAgent) -> Result<(), WorkerGone> {
-        *self.agent.lock().unwrap_or_else(|e| e.into_inner()) = agent;
-        self.refresh()
-    }
-
-    fn agent(&self) -> SessionAgent {
-        *self.agent.lock().unwrap_or_else(|e| e.into_inner())
-    }
 }
 
 /// Handle on the extras task: it and every task it started run as long as this lives.
@@ -240,7 +213,7 @@ impl ExtrasBus {
         let (queue, rx) = Queue::new(tasks.spawner(session.executor()));
         let (out, events) = async_channel::unbounded();
         queue.spawner.spawn(
-            run(session, system, waits, queue.clone(), rx, out),
+            run(system, waits, queue.clone(), rx, out),
             "cupertino-extras",
         );
         (
@@ -255,11 +228,6 @@ impl ExtrasBus {
     /// Read every service again (the duration rows change with the hour).
     pub fn refresh(&self) -> Result<(), WorkerGone> {
         self.queue.radios_due(DUE_NETWORK | DUE_BLUETOOTH)
-    }
-
-    /// Name the process that is the session agent; the system menu is read again.
-    pub fn session_agent(&self, agent: SessionAgent) -> Result<(), WorkerGone> {
-        self.queue.set_agent(agent)
     }
 
     /// Join the network `ssid` with `passphrase`. The outcome shows in [`WifiLink`]: the device's state, its failure,
@@ -298,7 +266,6 @@ impl Reasons {
 }
 
 async fn run(
-    session: Connection,
     system: impl Future<Output = zbus::Result<Connection>>,
     waits: Waits,
     queue: Queue,
@@ -327,7 +294,6 @@ async fn run(
     }
     // the radios' calls wait for their answers, so they run on the I/O pool with this handle
     let radios: Option<zbus::blocking::Connection> = system.clone().map(Into::into);
-    follow(&session, LOGIN_NAME, LOGIN_PATH, &queue).await;
 
     let mut reasons = Reasons::default();
     let mut last: Option<Extras> = None;
@@ -339,23 +305,10 @@ async fn run(
         .due
         .fetch_or(DUE_NETWORK | DUE_BLUETOOTH, Ordering::AcqRel);
     loop {
-        let previous = last
-            .as_ref()
-            .and_then(|e| e.session.as_ref())
-            .map(|s| s.caps);
         if let Some(reads) = reads.as_mut() {
             reads.read(&queue).await;
         }
-        let extras = read_all(
-            system.as_ref(),
-            reads.as_ref(),
-            &session,
-            queue.agent(),
-            previous,
-            &refused,
-            &mut reasons,
-        )
-        .await;
+        let extras = read_all(system.as_ref(), reads.as_ref(), &refused, &mut reasons).await;
         if last.as_ref() != Some(&extras) {
             // a closed channel means the component is ending
             if out.send(extras.clone()).await.is_err() {
@@ -503,16 +456,10 @@ fn absent_if_not_running<T>(result: zbus::Result<Option<T>>) -> zbus::Result<Opt
 async fn read_all(
     system: Option<&Connection>,
     reads: Option<&RadioReads>,
-    session: &Connection,
-    agent: SessionAgent,
-    previous: Option<SessionCaps>,
     refused: &(u32, Option<String>),
     reasons: &mut Reasons,
 ) -> Extras {
-    let mut extras = Extras {
-        lock_without_agent: agent != SessionAgent::None,
-        ..Extras::default()
-    };
+    let mut extras = Extras::default();
     if let Some(system) = system {
         extras.battery = reasons.note("battery", absent_if_not_running(read_battery(system).await));
     }
@@ -523,72 +470,7 @@ async fn read_all(
         extras.wifi_link.joins = refused.0;
         extras.bluetooth = reasons.note("Bluetooth", reads.bluetooth());
     }
-    extras.session = reasons.note(
-        "system menu",
-        absent_if_not_running(read_session(session, agent, previous).await),
-    );
     extras
-}
-
-/// The unique name of the session agent: the owner of its bus name when that is the process the server named. A
-/// client that took the name first is not the agent and gets no say in the menu.
-async fn agent_owner(
-    conn: &Connection,
-    agent: SessionAgent,
-) -> zbus::Result<Option<UniqueName<'static>>> {
-    if agent == SessionAgent::None {
-        return Ok(None);
-    }
-    let bus = zbus::fdo::DBusProxy::new(conn).await?;
-    let owner = match bus.get_name_owner(LOGIN_NAME.try_into()?).await {
-        Ok(owner) => owner.into_inner(),
-        Err(zbus::fdo::Error::NameHasNoOwner(_)) => return Ok(None),
-        Err(e) => return Err(e.into()),
-    };
-    let SessionAgent::Process(expected) = agent else {
-        return Ok(Some(owner));
-    };
-    let caller = cupertino_peer::identify(conn, &owner).await;
-    if caller.pid() == Some(expected) {
-        return Ok(Some(owner));
-    }
-    eprintln!(
-        "cupertino-menubar: the owner of {LOGIN_NAME} ({owner}, process {:?}) is not the session agent (process {expected}): the system menu is not read from it",
-        caller.pid()
-    );
-    Ok(None)
-}
-
-/// The session agent's entries for the system menu; `None` without the agent. Only `Locked` has to be there: the
-/// other properties are newer, and a missing one reads as the default (every entry possible, the name from `$USER`).
-async fn read_session(
-    conn: &Connection,
-    agent: SessionAgent,
-    previous: Option<SessionCaps>,
-) -> zbus::Result<Option<SessionState>> {
-    let Some(owner) = agent_owner(conn, agent).await? else {
-        return Ok(None);
-    };
-    let login: Proxy<'static> = Builder::new(conn)
-        .destination(owner)?
-        .path(LOGIN_PATH)?
-        .interface(LOGIN_NAME)?
-        .cache_properties(CacheProperties::No)
-        .build()
-        .await?;
-    let _locked: bool = login.get_property("Locked").await?;
-    let user_name: String = login
-        .get_property("UserName")
-        .await
-        .ok()
-        .filter(|name: &String| !name.is_empty())
-        .or_else(|| std::env::var("USER").ok())
-        .unwrap_or_default();
-    let capabilities: Option<HashMap<String, bool>> = login.get_property("Capabilities").await.ok();
-    Ok(Some(SessionState {
-        user_name,
-        caps: session_caps(capabilities.as_ref(), previous),
-    }))
 }
 
 /// Run `f`, which waits for the system bus, on Kit's I/O pool, and wait for it without holding the executor. A call
@@ -1141,27 +1023,5 @@ async fn act(
         }
         ExtraAction::ConnectDevice(id) => link_device(system, id, true, queue),
         ExtraAction::DisconnectDevice(id) => link_device(system, id, false, queue),
-    }
-}
-
-/// The system menu's session entries from the agent's `Capabilities`. A capability the agent does not report is not
-/// offered (drawn disabled). A map that could not be read (the agent still starting, a timeout) is no answer: the
-/// entries stay as the last read gave them (`previous`), and with none yet every entry is offered, so Lock and Log Out
-/// stay reachable; the agent and logind still refuse what is not allowed.
-fn session_caps(
-    capabilities: Option<&HashMap<String, bool>>,
-    previous: Option<SessionCaps>,
-) -> SessionCaps {
-    let Some(capabilities) = capabilities else {
-        return previous.unwrap_or_default();
-    };
-    let can = |key: &str| capabilities.get(key).copied().unwrap_or(false);
-    SessionCaps {
-        sleep: can("sleep"),
-        restart: can("restart"),
-        shut_down: can("shut-down"),
-        log_out: can("log-out"),
-        switch_user: can("switch-user"),
-        lock: can("lock"),
     }
 }

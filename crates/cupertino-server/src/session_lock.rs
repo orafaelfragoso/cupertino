@@ -95,6 +95,11 @@ impl SessionLock {
         !matches!(self.state, LockState::Unlocked)
     }
 
+    /// Whether the lock screen covers the session: the lock client was told the session is locked, or left it locked.
+    pub fn covers(&self) -> bool {
+        matches!(self.state, LockState::Locked { .. } | LockState::Orphaned)
+    }
+
     /// Whether the compositor still holds back a system sleep until every output shows a covered frame.
     pub fn holds_sleep(&self) -> bool {
         self.sleep_waiting
@@ -402,6 +407,7 @@ impl Cupertino {
         locker.lock();
         self.session_lock.state = LockState::Locked { owner, client };
         tracing::info!("session locked");
+        self.session_locked_for_switch();
     }
 
     /// React to the lock client disappearing: a lock that was never confirmed is dropped, a confirmed one
@@ -459,6 +465,8 @@ impl Cupertino {
     /// Back to normal drawing and focus; the window that was active when the lock began is active again.
     fn restore_after_lock(&mut self) {
         self.session_lock.state = LockState::Unlocked;
+        // a switch to the login window asked for this lock went nowhere
+        self.quit.switch_pending = false;
         self.sessions.lock(false);
         for o in &mut self.outputs {
             o.lock = OutputLock::default();

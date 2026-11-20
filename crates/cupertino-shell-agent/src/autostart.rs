@@ -75,6 +75,10 @@ impl Environment {
     }
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "runs on the I/O pool (kit::task::io)"
+)]
 fn is_executable(p: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
@@ -107,6 +111,10 @@ pub struct Found {
 
 /// The `.desktop` files of `dirs` (most important first) with the shadowed ones removed. A missing directory has no
 /// entries; a file or directory that cannot be read is an error.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "runs on the I/O pool (kit::task::io)"
+)]
 pub fn list(dirs: &[PathBuf]) -> std::io::Result<Vec<Found>> {
     let mut found: HashMap<String, Found> = HashMap::new();
     for (index, dir) in dirs.iter().enumerate() {
@@ -374,6 +382,10 @@ pub fn exec_argv(exec: &str, fields: &Fields) -> Result<Vec<String>, String> {
 /// Claim the session's single autostart run: creates `<runtime dir>/cupertino-autostart-<session id>` and returns true,
 /// or returns false when it exists (the agent was restarted in the same session). The runtime directory is the user's and
 /// goes away with the last session, and session ids are unique per boot.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "runs on the I/O pool (kit::task::io)"
+)]
 pub fn claim_run(runtime_dir: &Path, session_id: &str) -> std::io::Result<bool> {
     let marker = runtime_dir.join(format!("cupertino-autostart-{session_id}"));
     match std::fs::OpenOptions::new()

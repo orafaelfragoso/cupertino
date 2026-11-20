@@ -24,3 +24,4 @@ cupertino-launcher = { path = "../cupertino-launcher" }
 cupertino-menubar = { path = "../cupertino-menubar" }
 cupertino-notifications = { path = "../cupertino-notifications" }
 cupertino-osd = { path = "../cupertino-osd" }
+cupertino-shell-agent = { path = "../cupertino-shell-agent" }

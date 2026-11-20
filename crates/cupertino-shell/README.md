@@ -57,7 +57,7 @@ any other failure. A release build has no such interface.
 |---|---|
 | `run` | the host program: its connection, its components and what follows each event, each end and each watchdog pass |
 | `watchdog` | `liveness` and `render_hung`: what a loop or the render thread out of its wait for a time stands for |
-| `COMPONENTS` | the components this build runs: `osd` ([`OSD`], `cupertino-osd`), `notifications` ([`NOTIFICATIONS`], `cupertino-notifications`), `controlcenter` ([`CONTROLCENTER`], `cupertino-controlcenter`), `menubar` ([`MENUBAR`], `cupertino-menubar`) and `launcher` ([`LAUNCHER`], `cupertino-launcher`) |
+| `COMPONENTS` | the components this build runs: `osd` ([`OSD`], `cupertino-osd`), `notifications` ([`NOTIFICATIONS`], `cupertino-notifications`), `controlcenter` ([`CONTROLCENTER`], `cupertino-controlcenter`), `menubar` ([`MENUBAR`], `cupertino-menubar`), `launcher` ([`LAUNCHER`], `cupertino-launcher`) and `agent` ([`AGENT`], `cupertino-shell-agent`) |
 
 ## Tests
 

@@ -230,7 +230,7 @@ fn shell_section_rules_and_builtin_login() {
 
     let user_login = BuiltIn::Login.process(std::path::Path::new("/usr/bin/cupertino-login"));
     assert!(user_login.roles.contains(&ShellRole::SessionLock));
-    assert!(user_login.roles.contains(&ShellRole::SessionAgent));
+    assert!(!user_login.roles.contains(&ShellRole::SessionAgent));
     let greeter = BuiltIn::login_greeter_process(std::path::Path::new("/usr/bin/cupertino-login"));
     assert_eq!(greeter.roles, vec![ShellRole::Session]);
     assert!(greeter.command.iter().any(|a| a == "--greeter"));

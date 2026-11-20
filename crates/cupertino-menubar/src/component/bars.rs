@@ -18,7 +18,6 @@ use cupertino_kit_shell::{menu_bar, Keyboard, ServerWindowId};
 use super::{fail, Message, Model, PROCESS};
 use crate::controller::{MenuController, Mode, Outcome};
 use crate::extras::{ExtraAction, Passphrase, SessionAction};
-use crate::extras_bus::SessionAgent;
 use crate::feed::BarFeed;
 use crate::geom::{Point, Rect};
 use crate::layout::{panel, SlotKey};
@@ -296,19 +295,6 @@ impl Model {
             bar.backdrop = Some(backdrop);
             // a new wallpaper: each item takes its tone afresh, at once
             bar.retone(tone_display);
-        }
-        if let Some(agent) = update.session_agent {
-            let agent = match agent {
-                menu_bar::SessionAgent::None => SessionAgent::None,
-                menu_bar::SessionAgent::Process(pid) => SessionAgent::Process(pid),
-                menu_bar::SessionAgent::Any => SessionAgent::Any,
-            };
-            self.services.agent = agent;
-            if let Some(extras) = &self.services.extras {
-                if let Err(e) = extras.session_agent(agent) {
-                    return fail(e);
-                }
-            }
         }
         if update.shortcuts.is_some() {
             let style = self.shared.chords.style();

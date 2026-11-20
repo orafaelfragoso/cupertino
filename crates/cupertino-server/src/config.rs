@@ -98,9 +98,9 @@ impl BuiltIn {
         }
     }
 
-    /// The role of the process's connection; the portal holds [`ShellRole::GlobalShortcuts`] besides
-    /// and login holds [`ShellRole::Session`], [`ShellRole::SessionLock`], and (until W6.13) [`ShellRole::SessionAgent`]
-    /// ([`BuiltIn::process`]).
+    /// The role of the process's connection; the portal holds [`ShellRole::GlobalShortcuts`] besides and login
+    /// [`ShellRole::Session`] besides [`ShellRole::SessionLock`] ([`BuiltIn::process`]). The session agent is the `agent`
+    /// component a host runs, never a process of its own.
     pub const fn role(self) -> ShellRole {
         match self {
             BuiltIn::Portal => ShellRole::Capture,
@@ -139,12 +139,8 @@ impl BuiltIn {
             roles: match self {
                 // the portal also binds the shortcuts the person allows applications
                 BuiltIn::Portal => vec![self.role(), ShellRole::GlobalShortcuts],
-                // until W6.13, cupertino-login holds session_agent beside session_lock
-                BuiltIn::Login => vec![
-                    ShellRole::Session,
-                    ShellRole::SessionLock,
-                    ShellRole::SessionAgent,
-                ],
+                // the lock screen follows the session (its lock and idle events) beside its own role
+                BuiltIn::Login => vec![ShellRole::Session, ShellRole::SessionLock],
                 _ => vec![self.role()],
             },
         }
@@ -1250,10 +1246,6 @@ impl Config {
     }
 }
 
-/// The components no host holds until W6.13: `cupertino-login` is the session agent meanwhile
-/// (`docs/architecture/shell-host.md`, *Components*).
-pub const NOT_HOSTED: [&str; 1] = ["agent"];
-
 /// What the server knows about the hosts when it works out where the components run ([`Config::shell_plan`]).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct HostFacts {
@@ -1297,7 +1289,7 @@ impl ShellPlan {
 impl Config {
     /// Where the components run (`docs/architecture/shell-host.md`, *The component list*): the components of the
     /// session ([`Config::active_shell_components`]) run in a host when the host program is there, except
-    /// [`NOT_HOSTED`] and the ones a host was built without; those of `alone`, of the development folder and the
+    /// the ones a host was built without; those of `alone`, of the development folder and the
     /// isolated ones each in a separate host, the others in the shared host. A process entry of a component runs only
     /// when no host runs the component, and an entry turned `off` never runs.
     pub fn shell_plan(&self, login_screen: bool, facts: &HostFacts) -> ShellPlan {
@@ -1306,7 +1298,7 @@ impl Config {
             active
                 .iter()
                 .copied()
-                .filter(|name| !NOT_HOSTED.contains(name) && !facts.absent.contains(name))
+                .filter(|name| !facts.absent.contains(name))
                 .collect()
         } else {
             Vec::new()

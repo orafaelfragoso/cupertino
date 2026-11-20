@@ -535,7 +535,7 @@ fn the_launcher_opens_from_the_server_and_restarts_alone_hidden_after_injected_p
     std::env::set_var("HOME", private_dir("home"));
     let mut rig = Rig::new("launcher", &["dock", "launcher"], &[]);
     cupertino_server::quit::start_session_service_on(&mut rig.state, Some(bus.1.clone()));
-    rig.state.dbus = cupertino_server::dbus::DbusHandle::start_on(Some(bus.1.clone()), || {});
+    rig.state.dbus = cupertino_server::dbus::DbusHandle::start_on(Some(bus.1.clone()));
     let session = Connection::session().expect("the test's bus");
     rig.until("the dock draws and the launcher owns its name", |rig| {
         dock_colour(rig).is_some() && owner(&session).is_some()

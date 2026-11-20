@@ -659,7 +659,7 @@
   scope: shell-private
   source: crates/cupertino-login/src/control.rs
   source_match: "org.cupertino.Login1"
-  note: callers: the server and the login process itself (cupertino-peer)
+  note: Lock alone, which the server calls while no lock screen is connected to ask through cupertino_session_v1; callers: the server and the login process itself (cupertino-peer)
 - name: org.cupertino.LoginManager1
   kind: dbus-interface
   version: 1
@@ -681,7 +681,7 @@
   scope: shell-private
   source: crates/cupertino-server/src/quit.rs
   source_match: "org.cupertino.Session1"
-  note: methods are caller-checked; LogOut, Restart, ShutDown and Sleep quit applications first and ask cupertino-sessiond or logind (D13); AnnounceComponent, ComponentOf and ShellHosts provide D20 bus identity, and ProgramOf names the program the server started itself (by the pidfd it holds) that owns a unique name, empty for others; ListShellProcesses and RestartShellProcess answer only an unsandboxed process of the session's own user; StartScreenshot starts cupertino-screenshot --serve on a connection with the session and capture roles unless one started so runs, for the portal the server started alone (by its process)
+  note: methods are caller-checked; LogOut, Restart, ShutDown and Sleep (the session agent's: the agent component's accepted connection, or the server's own shortcuts) quit applications first, Sleep none and ask cupertino-sessiond or logind (D13); AnnounceComponent, ComponentOf and ShellHosts provide D20 bus identity, and ProgramOf names the program the server started itself (by the pidfd it holds) that owns a unique name, empty for others; ListShellProcesses and RestartShellProcess answer only an unsandboxed process of the session's own user; StartScreenshot starts cupertino-screenshot --serve on a connection with the session and capture roles unless one started so runs, for the portal the server started alone (by its process); SwitchToLoginWindow locks the session and asks cupertino-sessiond for the login window
 - name: org.cupertino.ShellComponentDebug1
   kind: dbus-interface
   version: 1
@@ -814,6 +814,17 @@
   source: crates/cupertino-screenshot/src/control.rs
   source_match: "org.cupertino.Screenshot1"
   note: served by cupertino-screenshot --serve, which the server starts for the portal (Session1.StartScreenshot); PickColor, SelectSources and Close accept only the program the server started as portal (Session1.ProgramOf); called by cupertino-portal for the colour picker and the screen-sharing choice
+- name: org.cupertino.SessionAgent1
+  kind: dbus-interface
+  version: 1
+  bus: session
+  bus_name: org.cupertino.SessionAgent1
+  owner_crate: cupertino-shell-agent
+  owner_area: apps
+  scope: shell-private
+  source: crates/cupertino-shell-agent/src/control.rs
+  source_match: "org.cupertino.SessionAgent1"
+  note: served by the agent component in the cupertino-shell binary, on the component's own connection; RequestLogOut, RequestRestart, RequestShutDown, RequestPowerDialog, PowerKey and RefreshCapabilities accept only the server (cupertino_kit_shell::bus::caller)
 - name: org.cupertino.Bluetooth1
   kind: dbus-interface
   version: 1

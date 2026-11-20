@@ -9,8 +9,6 @@
 //! this application stopped wanting the lock and the lock windows are gone. Bus threads, PAM and the roles talk to the
 //! application through channels that [`listen`] turns into messages.
 
-mod session_actions;
-
 use crate::options::SessionOptions;
 use crate::roles::{self, Heard, LockWish, LoginRoles};
 use crate::screen::{self, Result, Timer, FRAME};
@@ -18,24 +16,15 @@ use cupertino_defaults::login::ScreenSettings;
 use cupertino_keyboard::modifiers::Profile;
 use cupertino_kit::core::{Application, Command, Key, Window, WindowKey};
 use cupertino_kit::geometry::Size;
-use cupertino_kit::text::TextSystem;
 use cupertino_login::auth::{self, Authenticator};
-use cupertino_login::autostart;
-use cupertino_login::capabilities::{Answer, Capabilities, Inputs};
 use cupertino_login::control::{self, Request};
 use cupertino_login::hint::FailedAttempts;
-use cupertino_login::interrupt::{Choice, Reason, Stage};
 use cupertino_login::lock_notices::{self, Notice};
-use cupertino_login::login_manager::{LoginManager, Power};
+use cupertino_login::login_manager::LoginManager;
 use cupertino_login::logind::{Inhibitor, Logind, Signal};
-use cupertino_login::low_battery::{self, LowBattery};
 use cupertino_login::model::{
     AuthOutcome, LockScreen, Phase, HIDE_AFTER, HIDE_AFTER_EXPLICIT_LOCK,
 };
-use cupertino_login::panel::{Action, Decision, Frames, Kind, Panel};
-use cupertino_login::power_button::{Effect, PowerButton};
-use cupertino_login::probe;
-use cupertino_login::restore::{self, Applications, SessionMark, Taken};
 use cupertino_login::status::{self, StatusItems};
 use cupertino_login::user::User;
 use cupertino_login::view::{
@@ -43,36 +32,21 @@ use cupertino_login::view::{
     Screen, Status, LOCKED_TITLE, LOCK_APP_ID,
 };
 use cupertino_login::wallpaper::{self, Source};
-use cupertino_login::{session, upower};
 use cupertino_shell_client::{
     IdleNotifier, IdleWatch, LayerShell, Session as ShellSession, SessionLockManager, Shell,
 };
 use cupertino_ui_wayland::{SurfaceRoles, WaylandWindowSystem};
 use cupertino_wayland_client::Event;
 use std::cell::RefCell;
-use std::collections::HashSet;
-use std::path::{Path, PathBuf};
-use std::process::{Command as Process, Stdio};
 use std::rc::Rc;
-use std::sync::{mpsc, Arc};
+use std::sync::Arc;
 use std::time::Instant;
 
 /// What the bus and authentication threads tell the application.
 #[derive(Clone, Debug)]
 pub enum Bus {
-    /// `Lock` or `LockNow` on the control interface, logind's `Lock` signal or the preparation for sleep; `explicit` when the
-    /// person asked (`LockNow`).
+    /// `Lock` on the control interface, logind's `Lock` signal or the preparation for sleep.
     Lock { explicit: bool },
-    /// `RequestLogOut`, `RequestRestart` or `RequestShutDown` on the control interface.
-    Panel(Kind),
-    /// `LogOutNow` on the control interface: log out without the panel.
-    LogOutNow,
-    /// `PowerKey` on the control interface: the power key went down (`true`) or up.
-    PowerKey(bool),
-    /// `SwitchToLoginWindow` on the control interface: lock, then hand the console to the login screen.
-    SwitchToLoginWindow,
-    /// `Sleep` on the control interface: sleep without a panel.
-    Sleep,
     /// The session manager's `Unlock`: the person at the login screen proved this session's password.
     Unlock,
     /// The session manager's bus name has an owner again: it restarted and does not know this session's agent.
@@ -81,10 +55,6 @@ pub enum Bus {
     Auth(auth::Event),
     /// A reader thread broke; the process exits so that the server restarts it.
     Failed(String),
-    /// The power daemon's display device changed, or its watch stopped (the warnings stop; the lock screen goes on).
-    Battery(std::result::Result<upower::Report, String>),
-    /// The server's `QuitInterrupted`, `QuitInterruptClosed` or `SessionActionFailed`.
-    Quit(session::Interrupt),
     /// What the notification daemon lets the lock screen show now ([`lock_notices`]).
     LockNotices(Vec<Notice>),
     /// The wallpaper of the lock of this number is ready.
@@ -138,31 +108,7 @@ struct DesktopControlPanel {
 /// Device pixels of the app icon renditions the consent panel loads: its 64 pt icon at scales 1 and 2.
 const CONTROL_ICON_PX: [u32; 2] = [64, 128];
 
-/// The confirmation panel on screen.
-struct PanelState {
-    panel: Panel,
-    /// Where its parts sit; its size is the window's.
-    frames: Frames,
-}
-
-/// A confirmed log out, restart or shut down that `org.cupertino.Session1` carries out, quitting the applications first.
-struct Quitting {
-    /// What follows once no application is left.
-    then: Action,
-    /// The interrupt panel on screen.
-    interrupt: Option<Interrupted>,
-}
-
-/// The interrupt panel on screen: the application it asks about, why it is still there, and which question it asks.
-struct Interrupted {
-    app: String,
-    reason: Reason,
-    stage: Stage,
-}
-
 pub struct SessionApp {
-    /// Asks the probe thread to read logind and the session manager again.
-    refresh: mpsc::Sender<()>,
     bus: async_channel::Receiver<Bus>,
     heard: async_channel::Receiver<Heard>,
     /// The lock as the roles and this application share it.
@@ -193,7 +139,6 @@ pub struct SessionApp {
     outputs: Vec<(u32, Size)>,
     caps_lock: bool,
     metrics: Metrics,
-    text: Arc<TextSystem>,
     clock: Clock,
     timer: Timer,
     user: User,
@@ -201,39 +146,20 @@ pub struct SessionApp {
     logind: Logind,
     /// The session manager: power actions and inhibitor locks.
     manager: LoginManager,
-    control: control::Service,
+    /// Keeps `org.cupertino.Login1` on the bus.
+    _control: control::Service,
     /// Held while the session is unlocked, so the system cannot sleep before the lock is up.
     inhibitor: Option<Inhibitor>,
-    /// Held for the whole run: logind does not power off on the power key, [`SessionApp::power_key`] decides what it
-    /// does.
-    _power_key: Inhibitor,
-    /// The hold timing of the power key.
-    power_button: PowerButton,
     start: Instant,
     lock: Option<Lock>,
-    /// `SwitchToLoginWindow` is waiting for the server to confirm the lock.
-    switch_pending: bool,
-    panel: Option<PanelState>,
     desktop_control: Option<DesktopControlPanel>,
     /// The app the next consent request of this epoch names (authority version 2).
     control_app: Option<(u64, cupertino_shell_client::ConsentApp)>,
     control_wish: Rc<RefCell<roles::ControlWish>>,
-    /// How far the person dragged the session panel since the roles last moved it.
-    panel_drag: roles::PanelDrag,
-    /// A confirmed log-out is running: the power button panel does not show over it.
-    logging_out: bool,
-    /// The applications are being quit before a confirmed action.
-    quitting: Option<Quitting>,
-    /// The file of the "Open my windows again" choice and list ([`restore`]); `None` without a state or home directory.
-    restore_path: Option<PathBuf>,
     /// Wrong passwords typed at the lock screens of this run.
     failed: FailedAttempts,
     /// `RetriesUntilHint`, see [`FailedAttempts::help_shown`].
     retries_until_hint: u32,
-    /// The low-battery notification on screen.
-    low_battery: LowBattery,
-    /// The session bus, for the notifications and the server's `org.cupertino.Session1`.
-    session_bus: zbus::blocking::Connection,
     /// The notifications the lock screen shows, as the daemon last listed them; shown only while locked.
     lock_notices: Vec<Notice>,
 }
@@ -278,46 +204,22 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
     };
 
     let request = send(&bus);
-    // `RefreshCapabilities` goes to the probe thread, not through the application: the menu's question must not wait
-    let (refresh, refresh_requests) = mpsc::channel::<()>();
-    let refresh_from_bus = refresh.clone();
-    let on_request = Arc::new(move |request_made| {
-        if request_made == Request::RefreshCapabilities {
-            // the probe thread is gone only while the process ends
-            let _ = refresh_from_bus.send(());
-            return;
-        }
-        request(match request_made {
-            Request::Lock { explicit } => Bus::Lock { explicit },
-            Request::Panel(kind) => Bus::Panel(kind),
-            Request::LogOutNow => Bus::LogOutNow,
-            Request::PowerKey { pressed } => Bus::PowerKey(pressed),
-            Request::SwitchToLoginWindow => Bus::SwitchToLoginWindow,
-            Request::Sleep => Bus::Sleep,
-            Request::RefreshCapabilities => unreachable!("handled above"),
-        })
-    });
+    let on_request = Arc::new(move |Request::Lock| request(Bus::Lock { explicit: false }));
     let served = on_request.clone();
-    let control = match control::serve(
-        zbus::connection::Builder::session()?,
-        user.display.clone(),
-        Capabilities::default(),
-        move |request| served(request),
-    ) {
+    let control = match control::serve(zbus::connection::Builder::session()?, move |request| {
+        served(request)
+    }) {
         Ok(control) => control,
         // Another process took the name first. Quitting would leave the session with no lock screen at all; instead this
         // process runs on the server's private connection, which carries the lock request, and on logind's signals.
         Err(zbus::Error::NameTaken) => {
             eprintln!(
-                "cupertino-login: error: another process owns org.cupertino.Login1; the menus, the power key and the panels \
-                 that come over the session bus do not reach this process, the lock still does"
+                "cupertino-login: error: another process owns org.cupertino.Login1; a lock asked for over the session bus \
+                 does not reach this process, the lock request of the server's connection still does"
             );
-            control::serve_unnamed(
-                zbus::connection::Builder::session()?,
-                user.display.clone(),
-                Capabilities::default(),
-                move |request| on_request(request),
-            )?
+            control::serve_unnamed(zbus::connection::Builder::session()?, move |request| {
+                on_request(request)
+            })?
         }
         Err(e) => return Err(Box::new(e)),
     };
@@ -337,10 +239,6 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
     status::poll(None, ScreenSettings::load().show_input_menu, move |items| {
         status_items.send_blocking(Bus::Status(items)).is_ok()
     })?;
-    let battery = send(&bus);
-    upower::watch(logind.connection(), move |report| {
-        battery(Bus::Battery(report.map_err(|e| e.to_string())))
-    })?;
     let manager = LoginManager::connect()?;
     let unlock = send(&bus);
     manager.watch_unlock(move |signal| {
@@ -357,7 +255,6 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
         })
     })?;
     let inhibitor = Some(logind.inhibit_sleep()?);
-    let power_key = logind.block_power_key()?;
 
     let attempt = send(&bus);
     // the attempts' outcomes are the only thing this thread says; PAM's delay after a failure holds the outcome back
@@ -377,13 +274,6 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
     };
     let outputs = roles::outputs(conn);
     let session_bus = control.connection();
-    let quit = send(&bus);
-    session::watch_interrupts(&session_bus, move |interrupt| {
-        quit(match interrupt {
-            Ok(interrupt) => Bus::Quit(interrupt),
-            Err(e) => Bus::Failed(format!("reading the Session1 quit signals: {e}")),
-        })
-    })?;
     let notices = send(&bus);
     // the lock screen works without the notifications: a watch that cannot start is reported, not fatal
     if let Err(e) = lock_notices::watch(&session_bus, move |list| notices(Bus::LockNotices(list))) {
@@ -391,9 +281,6 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
     }
     let bus_sender = bus.clone();
     drop(bus);
-    let login_items = start_login_items(&logind);
-    let restore_path = restore::state_path_from_env();
-    reopen_applications(restore_path.as_deref(), &logind, &login_items);
     // the login screen shows this session's wallpaper after it
     cupertino_login::login_wallpaper::keep_current();
     // a session the manager did not start (one on a getty, for the tests) is not known to it; that is reported, not fatal
@@ -401,9 +288,6 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
         Ok(()) => eprintln!("cupertino-login: session announced to the session manager"),
         Err(e) => eprintln!("cupertino-login: {e}"),
     }
-    spawn_capability_probe(refresh_requests, &logind, &manager, &control)?;
-    // the probe reads once at the start
-    let _ = refresh.send(());
 
     let (heard, heard_messages) = async_channel::unbounded();
     // the session is locked as this process starts: its lock screen went away without unlocking (it crashed and the server
@@ -415,7 +299,6 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
     }
     let wish = Rc::new(RefCell::new(LockWish::default()));
     let control_wish = Rc::new(RefCell::new(roles::ControlWish::default()));
-    let panel_drag = roles::PanelDrag::default();
     let mut roles = LoginRoles::new(
         layer_shell,
         lock_manager,
@@ -423,8 +306,7 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
         Rc::clone(&wish),
         heard,
     )
-    .with_control(authority, Rc::clone(&control_wish))
-    .with_panel_drag(Rc::clone(&panel_drag));
+    .with_control(authority, Rc::clone(&control_wish));
     // what the server said before the roles listened: a lock request that came with the connection
     for event in early {
         if let Event::Extension(event) = event {
@@ -434,11 +316,9 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
     let system = system.with_roles(roles);
     let failure = Rc::new(RefCell::new(None));
     let ended = Rc::clone(&failure);
-    let power_button = PowerButton::new(options.power_button_sleeps_system);
     let retries_until_hint = options.retries_until_hint;
     cupertino_kit::app::run_lock_screen_on_with::<SessionApp>(system, move |runtime| {
         let app = SessionApp {
-            refresh,
             bus: bus_messages,
             heard: heard_messages,
             wish,
@@ -460,32 +340,21 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
             outputs,
             caps_lock: false,
             metrics: Metrics::of(&runtime.text),
-            text: Arc::clone(&runtime.text),
             clock: Clock::default(),
             timer: Timer::default(),
             user,
             authenticator,
             logind,
             manager,
-            control,
+            _control: control,
             inhibitor,
-            _power_key: power_key,
-            power_button,
             start: Instant::now(),
             lock: None,
-            switch_pending: false,
-            panel: None,
             desktop_control: None,
             control_app: None,
             control_wish,
-            panel_drag,
-            logging_out: false,
-            quitting: None,
-            restore_path,
             failed: FailedAttempts::default(),
             retries_until_hint,
-            low_battery: LowBattery::new(),
-            session_bus,
             lock_notices: Vec::new(),
         };
         let commands = vec![
@@ -502,160 +371,6 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
     Err(reason
         .unwrap_or_else(|| "the lock screen ended".to_owned())
         .into())
-}
-
-/// Start the session's login items (XDG autostart, [`autostart`]) one after the other, once per session: a restarted agent
-/// finds the run claimed and starts nothing. Problems are reported and leave the lock screen running. Returns the IDs
-/// (file names) of the items started.
-fn start_login_items(logind: &Logind) -> HashSet<String> {
-    let mut started = HashSet::new();
-    let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR").filter(|d| !d.is_empty()) else {
-        eprintln!("cupertino-login: login items not started: XDG_RUNTIME_DIR is not set, so a second run cannot be told apart");
-        return started;
-    };
-    match autostart::claim_run(Path::new(&runtime), logind.session_id()) {
-        Ok(true) => {}
-        Ok(false) => {
-            eprintln!("cupertino-login: login items ran already in this session");
-            return started;
-        }
-        Err(e) => {
-            eprintln!("cupertino-login: login items not started: {e}");
-            return started;
-        }
-    }
-    let config_home = std::env::var_os("XDG_CONFIG_HOME")
-        .filter(|d| !d.is_empty())
-        .map(std::path::PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config")));
-    let dirs = autostart::directories(config_home, std::env::var("XDG_CONFIG_DIRS").ok());
-    let found = match autostart::list(&dirs) {
-        Ok(found) => found,
-        Err(e) => {
-            eprintln!("cupertino-login: login items not started: {e}");
-            return started;
-        }
-    };
-    let env = autostart::Environment::from_process();
-    for entry in found {
-        match autostart::parse(&entry.id, &entry.path, &entry.text, &env) {
-            Ok(item) => {
-                if start_login_item(&item) {
-                    started.insert(item.id);
-                }
-            }
-            Err(skip) => eprintln!(
-                "cupertino-login: login item skipped: {}: {skip:?}",
-                entry.id
-            ),
-        }
-    }
-    started
-}
-
-/// Start the applications the last session saved to reopen ([`restore`]), each once and only once: the list is emptied
-/// on disk before anything starts, and an application a login item started already is not started again.
-fn reopen_applications(path: Option<&Path>, logind: &Logind, login_items: &HashSet<String>) {
-    let Some(path) = path else {
-        return eprintln!(
-            "cupertino-login: applications not reopened: neither XDG_STATE_HOME nor HOME is set"
-        );
-    };
-    let current = SessionMark::current(logind.session_id());
-    let ids = match restore::take_at_login(path, current.as_ref()) {
-        Ok(Taken::Start(ids)) => ids,
-        Ok(Taken::Nothing) => return,
-        Ok(Taken::Disabled) => {
-            return eprintln!("cupertino-login: applications not reopened: the choice is off")
-        }
-        Ok(Taken::SameSession) => {
-            return eprintln!(
-                "cupertino-login: applications not reopened: the list was saved in this session"
-            )
-        }
-        Err(e) => {
-            return eprintln!(
-            "cupertino-login: applications not reopened: the saved list could not be emptied: {e}"
-        )
-        }
-    };
-    let report = restore::launch(
-        &ids,
-        &Applications::from_env(),
-        login_items,
-        |_, command| {
-            let mut command = command.to_command();
-            command.stdin(Stdio::null());
-            cupertino_kit::spawn("cupertino-login", command)
-        },
-    );
-    for id in &report.started {
-        eprintln!("cupertino-login: application reopened: {id}");
-    }
-    for (id, skip) in &report.skipped {
-        eprintln!("cupertino-login: application not reopened: {id}: {skip:?}");
-    }
-}
-
-/// Run one login item detached from the application; its exit is reaped on a thread. False when it did not start.
-fn start_login_item(item: &autostart::Item) -> bool {
-    let mut command = Process::new(&item.argv[0]);
-    command.args(&item.argv[1..]).stdin(Stdio::null());
-    if let Some(dir) = &item.dir {
-        command.current_dir(dir);
-    }
-    match command.spawn() {
-        Ok(mut child) => {
-            eprintln!("cupertino-login: login item started: {}", item.id);
-            let id = item.id.clone();
-            std::thread::spawn(move || {
-                if let Err(e) = child.wait() {
-                    eprintln!("cupertino-login: login item {id}: {e}");
-                }
-            });
-            true
-        }
-        Err(e) => {
-            eprintln!("cupertino-login: login item {} did not start: {e}", item.id);
-            false
-        }
-    }
-}
-
-/// Start the thread that keeps `Capabilities` current ([`probe`]).
-fn spawn_capability_probe(
-    requests: mpsc::Receiver<()>,
-    logind: &Logind,
-    manager: &LoginManager,
-    control: &control::Service,
-) -> Result<()> {
-    let (logind, manager, control) = (logind.clone(), manager.clone(), control.clone());
-    std::thread::Builder::new()
-        .name("login-capabilities".into())
-        .spawn(move || {
-            let answer = |action: Power| match logind.can(action) {
-                Ok(answer) => answer,
-                Err(e) => {
-                    eprintln!("cupertino-login: {e}");
-                    Answer::NotAvailable
-                }
-            };
-            probe::run(
-                requests,
-                || Inputs {
-                    can_suspend: answer(Power::Sleep),
-                    can_reboot: answer(Power::Restart),
-                    can_power_off: answer(Power::ShutDown),
-                    session_manager: manager.is_present(),
-                },
-                |capabilities| {
-                    if let Err(e) = control.set_capabilities(capabilities) {
-                        eprintln!("cupertino-login: publishing the capabilities: {e}");
-                    }
-                },
-            )
-        })?;
-    Ok(())
 }
 
 impl Application for SessionApp {
@@ -783,36 +498,11 @@ impl Application for SessionApp {
                 ));
             }
         }
-        if app.lock.is_none() && app.panel.is_none() && !app.logging_out {
+        if app.lock.is_none() {
             if let Some(control) = app.desktop_control.as_ref().filter(|c| c.phase == 1) {
                 windows.push(view::desktop_control(
                     WindowKey(Key::from("desktop-control")),
                     &control.request,
-                    Message::Input,
-                ));
-            }
-        }
-        if let Some(panel) = &app.panel {
-            windows.push(view::panel(
-                WindowKey(Key::from("panel")),
-                panel.panel.kind(),
-                panel.panel.seconds_left(now),
-                panel.panel.reopen(),
-                &panel.frames,
-                Message::Input,
-            ));
-        }
-        if let Some(quitting) = &app.quitting {
-            if let Some(shown) = &quitting.interrupt {
-                windows.push(view::interrupt(
-                    WindowKey(Key::from("interrupt")),
-                    view::InterruptView {
-                        app: &shown.app,
-                        reason: shown.reason,
-                        stage: shown.stage,
-                        action: quitting.then,
-                        text: &app.text,
-                    },
                     Message::Input,
                 ));
             }
@@ -829,18 +519,12 @@ impl Lock {
 }
 
 impl SessionApp {
-    /// Ask for a fresh reading of the menu's capabilities; the probe thread answers on its own.
-    fn refresh_capabilities(&self) {
-        // the thread is gone only while the process ends
-        let _ = self.refresh.send(());
-    }
-
     fn now(&self) -> f64 {
         self.start.elapsed().as_secs_f64()
     }
 
     /// Seconds until the application next has something to do by itself: a frame of a fade, the shake or the spinner,
-    /// the screen's next change, the clock's minute, the panel's countdown or a held power key.
+    /// the screen's next change or the clock's minute.
     fn next_wakeup(&self, now: f64) -> Option<f64> {
         let screen = self.lock.as_ref().map(|lock| {
             let s = &lock.screen;
@@ -861,25 +545,12 @@ impl SessionApp {
                 by_screen
             }
         });
-        let panel = self.panel.as_ref().and_then(|p| p.panel.next_wakeup(now));
-        let power_key = self.power_button.next_wakeup(now);
-        [screen, panel, power_key]
-            .into_iter()
-            .flatten()
-            .reduce(f64::min)
+        screen
     }
 
     fn bus_message(&mut self, now: f64, bus: Bus) -> Result<()> {
         match bus {
             Bus::Lock { explicit } => self.request_lock(now, explicit)?,
-            Bus::Panel(kind) => self.show_panel(now, kind)?,
-            Bus::LogOutNow => self.log_out_now()?,
-            Bus::PowerKey(pressed) => self.power_key(now, pressed)?,
-            Bus::SwitchToLoginWindow => {
-                self.switch_pending = true;
-                self.request_lock(now, false)?;
-            }
-            Bus::Sleep => self.sleep()?,
             Bus::Unlock => match &mut self.lock {
                 Some(lock) => {
                     eprintln!("cupertino-login: unlocked by a fast user switch");
@@ -887,18 +558,14 @@ impl SessionApp {
                 }
                 None => eprintln!("cupertino-login: unlock ignored: the session is not locked"),
             },
-            Bus::ManagerRestarted => {
-                self.refresh_capabilities();
-                match self.manager.session_ready() {
-                    Ok(()) => eprintln!(
-                        "cupertino-login: session announced again to the restarted session manager"
-                    ),
-                    Err(e) => eprintln!("cupertino-login: {e}"),
-                }
-            }
+            Bus::ManagerRestarted => match self.manager.session_ready() {
+                Ok(()) => eprintln!(
+                    "cupertino-login: session announced again to the restarted session manager"
+                ),
+                Err(e) => eprintln!("cupertino-login: {e}"),
+            },
             Bus::Auth(event) => self.handle_auth(now, event)?,
             Bus::Failed(reason) => return Err(reason.into()),
-            Bus::Battery(report) => self.battery(report),
             Bus::Status(items) => self.status = items,
             // a list that comes while the session is not locked is a late one: it never shows
             Bus::LockNotices(list) => {
@@ -913,7 +580,6 @@ impl SessionApp {
                     held.wallpaper = Some(source);
                 }
             }
-            Bus::Quit(interrupt) => self.quit_signal(interrupt)?,
         }
         Ok(())
     }
@@ -939,7 +605,6 @@ impl SessionApp {
             }
             // this process is the one that holds the lock
             Heard::LockRequested { explicit } => self.request_lock(now, explicit)?,
-            Heard::LogOutRequested => self.show_panel(now, Kind::LogOut)?,
             Heard::Display {
                 reduce_motion,
                 increase_contrast,
@@ -979,7 +644,7 @@ impl SessionApp {
                             .take()
                             .filter(|(e, _)| *e == epoch)
                             .map(|(_, app)| requesting_app(app));
-                        if self.lock.is_some() || self.panel.is_some() || self.logging_out {
+                        if self.lock.is_some() {
                             // nobody can answer now: this request is refused, nothing is remembered
                             self.control_wish.borrow_mut().action =
                                 Some((epoch, ControlChoice::Dismiss));
@@ -1018,32 +683,13 @@ impl SessionApp {
         Ok(())
     }
 
-    /// What the person did on the lock screen or a panel.
+    /// What the person did on the lock screen or the consent panel.
     fn input(&mut self, now: f64, input: Input) -> Result<()> {
-        match input {
-            Input::DesktopControl(choice) => {
-                if let Some(control) = &self.desktop_control {
-                    self.control_wish.borrow_mut().action = Some((control.epoch, choice));
-                }
-                return Ok(());
+        if let Input::DesktopControl(choice) = input {
+            if let Some(control) = &self.desktop_control {
+                self.control_wish.borrow_mut().action = Some((control.epoch, choice));
             }
-            Input::Decide(decision) if self.panel.is_some() => return self.decide(decision),
-            Input::Reopen(on) => {
-                // the panel's checkbox; the power-button panel has none and keeps the saved choice
-                if let Some(panel) = &mut self.panel {
-                    if panel.panel.reopen() != on {
-                        panel.panel.toggle_reopen();
-                    }
-                }
-                return Ok(());
-            }
-            Input::Interrupt(choice) if self.interrupt_shown() => return self.choose(choice),
-            Input::MovePanel(by) => {
-                let (x, y) = self.panel_drag.get();
-                self.panel_drag.set((x + by.x, y + by.y));
-                return Ok(());
-            }
-            _ => {}
+            return Ok(());
         }
         let Some(lock) = &mut self.lock else {
             return Ok(());
@@ -1069,12 +715,6 @@ impl SessionApp {
         if std::mem::take(&mut self.idled) {
             self.request_lock(now, false)?;
         }
-        if let Some(effect) = self.power_button.tick(now) {
-            self.power_effect(now, effect)?;
-        }
-        if let Some(decision) = self.panel.as_ref().and_then(|p| p.panel.tick(now)) {
-            self.decide(decision)?;
-        }
         let Some(lock) = &mut self.lock else {
             return Ok(());
         };
@@ -1088,14 +728,6 @@ impl SessionApp {
                 eprintln!("cupertino-login: locked");
             }
             _ => {}
-        }
-        // the screen is locked before the console leaves it: what the next person sees of this session is its lock screen
-        if self.switch_pending && lock.confirmed {
-            self.switch_pending = false;
-            match self.manager.switch_to_login_window() {
-                Ok(()) => eprintln!("cupertino-login: switching to the login window"),
-                Err(e) => eprintln!("cupertino-login: {e}"),
-            }
         }
         if lock.shown.is_none() && (lock.wallpaper.is_some() || now - lock.asked >= WALLPAPER_WAIT)
         {
@@ -1138,60 +770,15 @@ impl SessionApp {
         }
     }
 
-    /// Post, replace or withdraw the low-battery notification. The notification service may be missing or fail: that is
-    /// reported and the warning is tried again at the next change.
-    fn battery(&mut self, report: std::result::Result<upower::Report, String>) {
-        let battery = match report {
-            Ok(upower::Report::Battery(battery)) => battery,
-            Ok(upower::Report::NoDaemon(reason)) => {
-                eprintln!("cupertino-login: no battery warnings: {reason}");
-                return;
-            }
-            Err(reason) => {
-                eprintln!("cupertino-login: battery warnings stopped: {reason}");
-                return;
-            }
-        };
-        match self.low_battery.report(battery.level, battery.percentage) {
-            Some(low_battery::Action::Post { replaces, notice }) => {
-                match upower::post(&self.session_bus, replaces, &notice) {
-                    Ok(id) => {
-                        self.low_battery.posted(id);
-                        eprintln!(
-                            "cupertino-login: low battery: {:?} at {:.0} %, notification {id}",
-                            battery.level, battery.percentage
-                        );
-                    }
-                    Err(e) => eprintln!("cupertino-login: {e}"),
-                }
-            }
-            Some(low_battery::Action::Close(id)) => match upower::close(&self.session_bus, id) {
-                Ok(()) => {
-                    eprintln!("cupertino-login: low battery cleared, notification {id} withdrawn")
-                }
-                Err(e) => eprintln!("cupertino-login: {e}"),
-            },
-            None => {}
-        }
-    }
-
     /// Lock the session: the roles take the lock and every output gets its lock screen window. `explicit`: the person
     /// asked, so the lock screen hides after 5 s without input instead of 30 s. Does nothing when the session is locked
-    /// already; a panel that is open is cancelled, since the lock screen takes the keyboard.
+    /// already.
     fn request_lock(&mut self, now: f64, explicit: bool) -> Result<()> {
         if let Some(lock) = &mut self.lock {
             // the system is about to sleep, or the session is locked again: the field starts empty
             lock.screen.clear_field();
             return Ok(());
         }
-        if self.panel.is_some() {
-            self.decide(Decision::Cancel)?;
-        }
-        if self.interrupt_shown() {
-            self.choose(Choice::Cancel)?;
-        }
-        // the lock screen swallows a key that is down
-        self.power_button.reset();
         let mut screen = LockScreen::new(
             now,
             if explicit {
@@ -1220,7 +807,6 @@ impl SessionApp {
         self.read_wallpaper(self.locks);
         self.wish.borrow_mut().wanted = true;
         self.clock = screen::clock(self.hours)?;
-        self.control.set_locked(true)?;
         Ok(())
     }
 
@@ -1259,112 +845,8 @@ impl SessionApp {
             return Err("the session unlocked before the server confirmed the lock".into());
         }
         self.wish.borrow_mut().wanted = false;
-        self.control.set_locked(false)?;
         eprintln!("cupertino-login: unlocked");
         self.inhibitor = Some(self.logind.inhibit_sleep()?);
-        Ok(())
-    }
-
-    /// Show the confirmation panel for `kind` on the first output, in place of one that is open. The control interface
-    /// refuses the request on a locked session; one that arrives between the lock and the property change is ignored.
-    fn show_panel(&mut self, now: f64, kind: Kind) -> Result<()> {
-        if self.lock.is_some() {
-            eprintln!("cupertino-login: panel request ignored: the session is locked");
-            return Ok(());
-        }
-        if self.panel.is_some() {
-            self.decide(Decision::Cancel)?;
-        }
-        if self.outputs.is_empty() {
-            return Err("the server has no output".into());
-        }
-        let reopen = self
-            .restore_path
-            .as_deref()
-            .map_or(restore::REOPEN_DEFAULT, restore::choice);
-        self.panel = Some(PanelState {
-            panel: Panel::new(kind, now, reopen),
-            frames: view::panel_frames(kind, &self.text),
-        });
-        eprintln!("cupertino-login: panel shown: {}", kind.log_name());
-        Ok(())
-    }
-
-    /// Log out without asking (the log out now shortcut): the applications quit first as after a confirmed log out, with
-    /// the "Open my windows again" choice last stored. An open panel closes as if cancelled. Ignored on a locked session, which
-    /// has nobody to see it, and while a log out, restart or shut down is already under way.
-    fn log_out_now(&mut self) -> Result<()> {
-        if self.lock.is_some() {
-            eprintln!("cupertino-login: log out now ignored: the session is locked");
-            return Ok(());
-        }
-        if self.logging_out {
-            eprintln!("cupertino-login: log out now ignored: the session is already ending");
-            return Ok(());
-        }
-        if self.panel.is_some() {
-            self.decide(Decision::Cancel)?;
-        }
-        let reopen = self
-            .restore_path
-            .as_deref()
-            .map_or(restore::REOPEN_DEFAULT, restore::choice);
-        eprintln!("cupertino-login: log out without the panel");
-        self.carry_out(Action::LogOut, reopen)
-    }
-
-    /// Close the panel with `decision`; an action is carried out through `org.cupertino.Session1`. Confirming a log out, restart or shut
-    /// down remembers the panel's "Open my windows again" choice; cancelling forgets a change to it.
-    fn decide(&mut self, decision: Decision) -> Result<()> {
-        let PanelState { panel, .. } = self
-            .panel
-            .take()
-            .expect("a decision is only made on an open panel");
-        match decision {
-            Decision::Cancel => eprintln!("cupertino-login: panel cancelled"),
-            Decision::Do(action) => {
-                eprintln!("cupertino-login: panel confirmed: {}", action.log_name());
-                if action != Action::Sleep {
-                    self.remember_choice(panel.reopen());
-                }
-                self.carry_out(action, panel.reopen())?;
-            }
-        }
-        Ok(())
-    }
-
-    /// The power key went down or up (`PowerKey` on the control interface). The lock screen swallows both.
-    fn power_key(&mut self, now: f64, pressed: bool) -> Result<()> {
-        if self.lock.is_some() {
-            self.power_button.reset();
-            return Ok(());
-        }
-        eprintln!(
-            "cupertino-login: power key {}",
-            if pressed { "down" } else { "up" }
-        );
-        if pressed {
-            self.power_button.press(now);
-            return Ok(());
-        }
-        match self.power_button.release(now) {
-            Some(effect) => self.power_effect(now, effect),
-            None => Ok(()),
-        }
-    }
-
-    /// Carry out what the hold timing asks for. The panel does not show over another panel or a running log-out.
-    fn power_effect(&mut self, now: f64, effect: Effect) -> Result<()> {
-        match effect {
-            Effect::Sleep => {
-                eprintln!("cupertino-login: power button: sleep");
-                self.sleep()?;
-            }
-            Effect::ShowPanel if self.panel.is_some() || self.logging_out => eprintln!(
-                "cupertino-login: power button hold ignored: a panel or a log-out is running"
-            ),
-            Effect::ShowPanel => self.show_panel(now, Kind::PowerButton)?,
-        }
         Ok(())
     }
 }

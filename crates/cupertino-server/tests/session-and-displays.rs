@@ -14,6 +14,7 @@ use std::time::Duration;
 use cupertino_assets::Assets;
 use cupertino_peer::Caller;
 use cupertino_server::backend::headless::{self, HeadlessDisplay};
+use cupertino_server::caller::Asker;
 use cupertino_server::displays::service::{parse_transform, transform_name, DisplaysCall};
 use cupertino_server::quit::{
     BusOut, Call, Refusal, Reject, SessionAction, NEXT_APPLICATION_S, QUIT_TIMEOUT_S,
@@ -82,7 +83,10 @@ fn session1_actions_dispatch_when_no_apps_open_and_reject_anonymous_callers() {
     let (tx, rx) = async_channel::bounded(1);
     state.on_quit_call(Call::SessionAction(
         SessionAction::LogOut,
-        Caller::Anonymous,
+        Asker {
+            caller: Caller::Anonymous,
+            sender: None,
+        },
         tx,
     ));
     let res = rx.try_recv().unwrap();
@@ -619,7 +623,13 @@ fn session1_pending_interrupt_names_the_action_application_and_reason_only_while
         rx.try_recv().unwrap()
     };
     assert!(matches!(
-        ask(&mut s, Caller::Anonymous),
+        ask(
+            &mut s,
+            Asker {
+                caller: Caller::Anonymous,
+                sender: None
+            }
+        ),
         Err(Reject::Caller(_))
     ));
     assert_eq!(

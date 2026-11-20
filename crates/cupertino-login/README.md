@@ -1,21 +1,22 @@
 # cupertino-login
 
-The lock screen, the greeter and the session agent of the Cupertino desktop, in one process. It stands in for the design's
-login window. The lock screen locks the session on request, shows the clock, the user and a password field on one lock surface
-per output, and unlocks only after PAM accepts the password. The greeter is the same screen as the login screen of the session
-manager (`cupertino-sessiond`), with a user picker. The session agent shows the confirmation panels for log out, restart and shut down.
+The lock screen and the greeter of the Cupertino desktop, in one process. It stands in for the design's login window. The
+lock screen locks the session on request, shows the clock, the user and a password field on one lock surface per output, and
+unlocks only after PAM accepts the password. The greeter is the same screen as the login screen of the session manager
+(`cupertino-sessiond`), with a user picker. The session agent (the log out, restart and shut down panels, the power key,
+login items and reopened applications, the session menu's state) is the shell host's `agent` component,
+`cupertino-shell-agent`.
 
 ## Contents
 
-[Running](#running) · [Lock screen](#lock-screen) · [Session agent](#session-agent) ·
-[Reopening applications](#reopening-applications) · [Greeter](#greeter) ·
+[Running](#running) · [Lock screen](#lock-screen) · [Login1](#login1) · [Greeter](#greeter) ·
 [Values applied](#reference-values-applied) · [Open issues](#open-issues) · [Modules](#modules) · [Checks by hand](#checks-by-hand)
 
 Every screen and panel is drawn with CupertinoKit: `view` builds the Kit windows (the lock screen, the greeter's picker, name
-and password screens and power menu, the confirmation panels and the interrupt panel) from the pure models, and Kit's runtime
+and password screens and power menu, the desktop-control consent panel) from the pure models, and Kit's runtime
 draws them, routes their keys and publishes them to assistive technology. The crate has no compositor dependency:
 `cupertino-seat` supplies the logind lookup, and it builds against Smithay's session trait. The state machine (`model`), layout
-(`layout`), panels (`panel`, `interrupt`), views (`view`) and user and clock helpers (`user`) are separate from the process, so
+(`layout`), views (`view`) and user and clock helpers (`user`) are separate from the process, so
 the screen can be driven on Kit's headless window system without it. Sizes, positions, the shake, the fades and the hide timer
 follow the analysis. Items marked approximate are authored and replaceable.
 
@@ -26,7 +27,7 @@ manager through `cupertino-login-ipc` (`models/`), and the manager runs the auth
 ## Running
 
 Feature `app` builds the binary: a CupertinoKit application on `cupertino-ui-wayland`'s window system, whose surface roles
-(`roles`, the binary's) make the lock windows `ext-session-lock-v1` lock surfaces and the greeter, panel and interrupt windows
+(`roles`, the binary's) make the lock windows `ext-session-lock-v1` lock surfaces and the greeter and consent windows
 layer-shell overlays. It needs the server's `ext_session_lock_manager_v1` and `ext_idle_notifier_v1` globals besides the
 toolkit's usual ones. The session runs on `cupertino_kit::app::run_lock_screen_on_with`, whose AT-SPI adapter is not muted
 while the session is locked (the lock screen is what a person hears then); the greeter on `run_on_with`. The server starts
@@ -38,7 +39,7 @@ and restarts it through the `shell` key of its configuration:
 
 ```
 cargo build -p cupertino-login --features app
-cupertino-login [--idle-timeout SECONDS] [--retries-until-hint N] [--power-button-sleeps-system BOOL]
+cupertino-login [--idle-timeout SECONDS] [--retries-until-hint N]
 cupertino-login --greeter
 ```
 
@@ -46,7 +47,6 @@ cupertino-login --greeter
 |---|---|---|---|
 | `--idle-timeout SECONDS` | lock screen | absent | Lock after the seat has been idle this long; at least 1. Absent means no idle lock of its own: the server asks for the lock after the display sleep. Refused with `--greeter`. |
 | `--retries-until-hint N` | lock screen | 0 | `RetriesUntilHint`: failures until the password help shows. 0 shows it at 3. The greeter gets the setting from the session manager (`retries-until-hint` in `login.conf`). |
-| `--power-button-sleeps-system BOOL` | lock screen | `false` | `PowerButtonSleepsSystem`, `true` or `false`; `false` is the design's default. See Power key. |
 | `--greeter` | | off | Run as the login screen of the session manager. Takes no other option: the accounts, the power items, the hint setting and the session command are the manager's (`/etc/cupertino/login.conf`, see `cupertino-sessiond`). |
 
 `XDG_SESSION_ID` names the logind session (else the process id, as in `cupertino-seat`). The greeter reads `CUPERTINO_LOGIN_SOCK`, the path of the manager's socket.
@@ -57,20 +57,19 @@ Every trigger goes through the same request, which does nothing when the session
 
 | Trigger | How |
 |---|---|
-| `org.cupertino.Login1.Lock | Method on the session bus. The server asks for the lock over its own connection (`cupertino_session_v1.lock_requested`), not by this method; a log out the server asks for arrives the same way (`log_out_requested`) and shows the same panel as `RequestLogOut`. A second process cannot take the name: the lock screen then runs without it and logs an error. |
+| `org.cupertino.Login1.Lock | Method on the session bus. The server asks for the lock over its own connection (`cupertino_session_v1.lock_requested`), and by this method only while no lock screen is connected to ask. A second process cannot take the name: the lock screen then runs without it and logs an error. |
 | logind `Lock` | Signal on this process's session: `loginctl lock-session`. |
 | `PrepareForSleep(true) | The process holds a `sleep` **delay** inhibitor while the session is unlocked, drops it when the server confirms the lock, and takes it again after the unlock. |
-| `LockNow | The lock shortcut (a lock the person asked for, request type 8): the same lock, but the interface hides after 5 s without input instead of 30 s. |
+| lock shortcut | A lock the person asked for (request type 8, `lock_requested` with `explicit`): the same lock, but the interface hides after 5 s without input instead of 30 s. |
 | display sleep | The server's idle policy calls `Lock` once the display has slept for the password delay (`power.conf`, below). |
 | idle | With `--idle-timeout` only: `ext-idle-notify-v1`, which honours idle inhibitors. |
 
 **Who may send a signal.** A bus daemon hands a process every signal addressed to its unique name whatever its match rules say,
 and zbus filters a rule's sender only when it is a unique name (or the daemon's own name), so each signal is checked when it
 arrives (`cupertino_peer::signal`). logind's `Lock` is bound to logind's unique name (the reply to the session lookup). `PrepareForSleep`,
-the session manager's `Unlock`, the server's `QuitInterrupted`, `QuitInterruptClosed` and `SessionActionFailed` (on the session bus) and the power daemon's battery changes count only from the connection that owns
-the sender's well-known name at that moment; a `NameOwnerChanged` (the manager or the power daemon coming and going) only from
-the bus daemon. Anything else is logged (`... not sent by ... was ignored`) and dropped: another user could otherwise unlock the
-screen or lock it, or a program in the session hurry the log out along (a forged `NameOwnerChanged` is also dropped by
+and the session manager's `Unlock` count only from the connection that owns the sender's well-known name at that moment; a
+`NameOwnerChanged` (the manager coming and going) only from the bus daemon. Anything else is logged (`... not sent by ... was ignored`) and dropped: another user could otherwise unlock the
+screen or lock it (a forged `NameOwnerChanged` is also dropped by
 zbus's own filter; the check does not rely on it).
 
 **Idle lock.** The design locks when the display sleeps (request type 5) once the password
@@ -99,28 +98,8 @@ The lines go to stderr. The greeter logs the same `authentication failed` and
 | `cupertino-login: power items: <titles> | The power menu's titles, at start and when `Users` arrives: `Restart…, Shut Down…, Sleep` while a user session is open, else without the ellipsis. |
 | `cupertino-login: power action authorised` | The administrator's password was accepted for a restart or shut down (see the power menu); the manager carries the action out, or sends `power action refused` and `reset`. |
 | `cupertino-login: power action refused: <reason> | The manager sent `PowerRefused` for a greeter menu item. |
-| `cupertino-login: <Restart\|ShutDown\|Sleep> refused: <error> | The manager refused the agent's `RequestPower` (another user's session is open, an inhibitor); the session goes on. |
 | `cupertino-login: session announced to the session manager` | `SessionReady` was accepted at start (the manager started this session); a manager that does not know the session logs the refusal instead. |
-| `cupertino-login: session announced again to the restarted session manager` | The manager's bus name got a new owner (it restarted or crashed): the agent calls `SessionReady` again so the manager knows whom to send `Unlock`. |
-| `cupertino-login: panel shown: <log-out\|restart\|shut-down\|power-button> | A panel appeared. |
-| `cupertino-login: panel cancelled` | Escape, Cancel, the lock, another panel or the server. |
-| `cupertino-login: panel confirmed: <log-out\|restart\|shut-down\|sleep> | Return, a confirming button, `r` or `s`, or the countdown end; the `Session1` call follows. |
-| `cupertino-login: power key down`, `cupertino-login: power key up` | Server forwarded the key to an unlocked session. |
-| `cupertino-login: power button: sleep` | Release in 0.35 s to 1.5 s with `--power-button-sleeps-system true`. |
-| `cupertino-login: power button hold ignored: a panel or a log-out is running` | Held 1.5 s during a panel or a confirmed log-out. |
-| `cupertino-login: panel request ignored: the session is locked` | Request during the lock. |
-| `cupertino-login: Session1 is carrying out the <log-out\|restart\|shut-down>` | `Session1` took the action; it quits the applications. |
-| `cupertino-login: the <action> did not start: Session1 did not take it: <error>` | No `Session1` (or it refused): nothing is quit, a notification says so. |
-| `cupertino-login: Session1 did not take the sleep: <error>; asking for it directly` | The session manager or logind is asked instead. |
-| `cupertino-login: Session1 could not finish the <action>: <reason>` | `SessionActionFailed`: logind or the session manager refused the last step; the agent is idle again, the saved list is dropped and a notification gives the reason. |
-| `cupertino-login: application did not quit: <app_id> (<reason>)` | `QuitInterrupted`: 45 s passed; interrupt panel shows. |
-| `cupertino-login: the application quit after all` | `QuitInterruptClosed`: the panel closes. |
-| `cupertino-login: force quit: <app_id> (<n> processes)` | Force Quit pressed. |
-| `cupertino-login: <log-out\|restart\|shut-down> cancelled while quitting the applications` | Cancel, Escape or a lock on the interrupt panel. |
-| `cupertino-login: low battery: <Low\|Critical> at <p> %, notification <id> | Warning posted. |
-| `cupertino-login: low battery cleared, notification <id> withdrawn` | Level back to none. |
-| `cupertino-login: login item started: <id>`, `cupertino-login: login item skipped: <id>: <reason> | At start, per entry. |
-| `cupertino-login: login items ran already in this session` | Restarted agent. |
+| `cupertino-login: session announced again to the restarted session manager` | The manager's bus name got a new owner (it restarted or crashed): the lock screen calls `SessionReady` again so the manager knows whom to send `Unlock`. |
 
 ## Lock screen
 
@@ -244,37 +223,20 @@ password stack accepted the password and unlocks the user's keyring with it when
 `cupertino-sessiond`'s README, "Secret Service"). A new drawing of this screen keeps passing the typed password to
 `Authenticator`: that is where the keyring is unlocked, not in the UI.
 
-## Session agent
+## Login1
 
-The process that holds the lock screen is also the session agent. It serves `org.cupertino.Login1` on the session bus, at path
-`/org/cupertino/Login1`.
-
-Every method checks its caller (`cupertino-peer`): only the server, this process's parent, and this process itself may call.
-The server also starts the applications, so a process with the same parent is refused. The menu bar does not call this
-interface: it sends `cupertino_menu_bar_v1.session_action` and the server calls on its behalf (it needs the menu bar role,
-the least privilege that fits). An anonymous, sandboxed (Flatpak, Snap) or unrelated caller gets
-`org.cupertino.Error.AnonymousCaller`, `FlatpakCaller`, `SnapCaller` or `UntrustedCaller`, one warning is logged and nothing
-happens. The properties stay readable by every caller.
-
-| Member | Meaning |
-|---|---|
-| `Lock | Lock the session (the display slept, logind asked). |
-| `LockNow | Lock the session because the person asked for it (the lock shortcut); the interface hides after 5 s without input. |
-| `RequestLogOut`, `RequestRestart`, `RequestShutDown | Show the confirmation panel and return at once. Fail with `org.freedesktop.DBus.Error.Failed` while the session is locked. |
-| `LogOutNow | Log out without the panel (the server's `Super+Alt+Shift+q`): the applications quit first as after a confirmed log out, with the "Open my windows again" choice last stored. An open panel closes as cancelled; ignored while a log out is under way. Fails while the session is locked. |
-| `Sleep | Lock and put the computer to sleep, without a panel (the sleep preparation locks first). Fails while the session is locked. |
-| `RefreshCapabilities | Read logind's policy and the session manager again; returns at once and `PropertiesChanged` for `Capabilities` follows when something changed. The menu calls it when it opens. Allowed on a locked session. |
-| `RequestPowerDialog | Show the power panel (Restart, Sleep, Cancel, Shut Down), the one a held power button shows. Fails while the session is locked. |
-| `SwitchToLoginWindow | Fast user switching: lock the session, and once the server confirms the lock, ask the session manager to give the console to the login screen (`cupertino-login: switching to the login window`). A session that is locked already switches at once. |
-| `PowerKey(pressed: b) | The power key went down or up; the process times the hold. Takes effect on an unlocked session only and never fails. |
-| `Locked` (`b`, read only, `PropertiesChanged`) | True from the request for the lock until the unlock. |
-| `UserName` (`s`, read only) | The account's full name, else its login: the menu's "Log Out <name>…". Cleaned as untrusted text: control and bidirectional-override characters dropped, at most 64 characters. |
-| `Capabilities` (`a{sb}`, read only, `PropertiesChanged`) | `sleep`, `restart`, `shut-down` (logind's `CanSuspend`, `CanReboot`, `CanPowerOff` answer yes or challenge), `log-out` and `lock` (always), `switch-user` (the session manager is on the system bus). Read at start, when the manager's name gets an owner and on every `RefreshCapabilities`, on a thread of its own (`probe`: the questions to logind never hold the agent's loop; requests in a burst are one read); what is off is logged with the reason when it changes (`cupertino-login: menu item off: …`). A manager that goes away is noticed at the next refresh. |
+The lock screen serves `org.cupertino.Login1` on the session bus, at path `/org/cupertino/Login1`, with one method:
+`Lock`, which locks the session or does nothing when it is locked already. The server calls it only while no lock screen
+is connected to ask through `cupertino_session_v1`. It checks its caller (`cupertino-peer`): only the server, this
+process's parent, and this process itself may call. An anonymous, sandboxed (Flatpak, Snap) or unrelated caller gets
+`org.cupertino.Error.AnonymousCaller`, `FlatpakCaller`, `SnapCaller` or `UntrustedCaller`, one warning is logged and
+nothing happens. The session agent's panels, the power key and the session menu's state are the `agent` component's
+(`org.cupertino.SessionAgent1` and `SessionMenu` on the host bus, `cupertino-shell-agent`).
 
 ### The login screen's wallpaper
 
 The login screen shows each user's wallpaper behind that user, and the login screen's account cannot read the homes, so the
-agent leaves a copy (`login_wallpaper`): at the start of the session, and again whenever the compositor's settings file
+lock screen leaves a copy (`login_wallpaper`): at the start of the session, and again whenever the compositor's settings file
 changes (`cupertino-defaults::watch`), on a thread of its own, it writes the wallpaper the session shows (a solid colour when
 `wallpaper_color` is set, else `wallpaper_dark` in a dark appearance when it is set, else `wallpaper`) as a JPEG to
 `~/.local/state/cupertino/login-wallpaper.jpg` (always under `$HOME`, where the session manager looks): a PNG or JPEG decoded
@@ -283,159 +245,6 @@ changes (`cupertino-defaults::watch`), on a thread of its own, it writes the wal
 Without a wallpaper of the user's own, or with one that does not decode, the file is removed and the login screen shows its
 own. The manager copies the file for the login screen when it lists the users (see `cupertino-sessiond`'s README,
 "Wallpapers").
-
-### Confirmation panel
-
-A layer-shell surface on the overlay layer, anchored at the top-left corner of the first output and placed by its margins:
-centred when it shows, with exclusive keyboard. Pressing on its background (not on a control) and dragging moves it, the
-margins following the pointer and kept on the output. It is no modal dialog: a press outside it gives the keyboard back
-to what was under the press, and the panel then takes the keyboard on demand, when it is pressed again. The server draws
-the glass's shadow deeper while the panel has the keyboard (24 pt blur, 10 pt down, black at 0.7, 0.8 in the dark
-appearance) than while it does not (16 pt, 4 pt down, 0.55 and 0.65). The countdown is 60 s.
-
-The panel is an alert on glass with 26 pt corners, as wide as its checkbox row needs on one line (the label, its 22 pt
-box and gap, and the 22 pt text inset on either side) and at least 260 pt. The height follows the vertical chain: 20 pt,
-the 64 pt icon (drawn by the panel: a power symbol, a circling arrow for restart, a door with an arrow for log out) at the
-text column's leading edge, 16 pt, the title (bold 13 on 16 pt lines, wrapped in the text column), 10 pt, the info line
-(13 on 16 pt lines, tabular figures), 16 pt, the "Open my windows again after I log in" checkbox (a 16 pt row), 16 pt, the
-buttons, 16 pt. Each element sits at the previous one's bottom edge, using the line counts the theme's text system
-measures (`view::panel_frames`; the info line at the most lines it takes while counting down, so the size stays put). The
-buttons are 28 pt capsules: Cancel and the confirming button side by side 8 pt apart, sharing the row between the 16 pt
-side padding. The panel is a Kit window (`view::panel`): an alert dialog on regular glass (the popover surface's fill
-where the desktop shows none), Kit capsule buttons at the frames (the default one with the accent), and Kit's `CheckBox`
-in the checkbox row, which has the focus when the panel shows.
-
-- A second request replaces the open panel, and a lock closes it.
-- Return does the default action, Escape cancels, a button click does that button's, and the end of the countdown does the
-  default action. Tab moves the focus through the checkbox and the buttons; assistive technology clicks a button.
-- The checkbox starts at the choice the person last confirmed (on until then). A click on the box or its label, Space, or a
-  click from assistive technology (a `CheckBox` node with its checked state) flips it; the countdown goes on. Confirming
-  remembers the choice, cancelling forgets a change. See [Reopening applications](#reopening-applications).
-- Every confirmed action goes to the server's `org.cupertino.Session1` (below). Sleep quits no application; log out,
-  restart and shut down first quit the applications, then the server asks the manager to log out (`LogOut`: the login
-  screen takes the console first, then the session ends, so the desktop goes straight to the login screen; logind's
-  `TerminateSession` when the manager does not take it) or logind to `Reboot` or `PowerOff`. Only a sleep `Session1` does
-  not take is asked for by the agent itself: the session manager (`RequestPower`), or logind's `Suspend` without one. A restart or shut down logind refuses (another user's session is open, a block inhibitor) is logged by the server, which emits `SessionActionFailed(action, reason)`: the agent leaves its
-  logging-out state (the power-button panel and log out work again), drops the saved list and posts "<action> did not
-  start" with the reason, and the session goes on. A sleep the manager or logind refuses is logged by the agent; any other failed sleep call ends the
-  process.
-- The words are in `panel::Kind::text`. The countdown is `panel::format_countdown`: seconds up to a minute ("60 seconds"),
-  above that full units, at most two, with a no-break space between each number and its unit.
-
-**Power-button panel.** `panel::Kind::PowerButton`, the same alert with the power icon and the checkbox, four capsules
-stacked full width 6 pt apart, 16 pt under the checkbox: Shut Down (the default, Return), Restart (`r`), Sleep (`s`) and
-Cancel (Escape) last. The title is the Shut Down panel's. There is no info line and no countdown, so the panel waits for
-an answer.
-
-### Quit sequence
-
-A confirmed log out, restart or shut down goes to the server's `org.cupertino.Session1` (`LogOut`, `Restart`,
-`ShutDown`; D13, `crates/cupertino-server/README.md`), which quits the applications and then carries out the action: it
-brings the most recently used application with windows forward, asks each of its windows to close, gives it 45 s, asks
-the next 0.1 s after one quits, and once none is left asks `cupertino-sessiond` to end the session or logind to restart
-or power off. Sleep goes to `Session1.Sleep`, which quits no application; when `Session1` does not take it (not on the
-bus, or the session is locked) the agent asks the session manager or logind directly, as `Session1` would.
-
-Just before it asks for a log out, restart or shut down, the agent reads the applications open now
-(`OpenApplications`, in the order they will quit) and saves them once for the next login
-([Reopening applications](#reopening-applications)). A cancelled sequence, or a request `Session1` did not take, drops
-the saved list again, since the session goes on.
-
-Without `org.cupertino.Session1` (another compositor, the server's bus thread down) the agent quits nothing and does
-nothing: it logs the failure and posts a notification ("Log out did not start", "Restart did not start", "Shut down did
-not start") and the session goes on.
-
-An application still there after 45 s makes the server emit `QuitInterrupted(app_id, reason)`, which brings the interrupt
-panel (`interrupt`), on the same regular glass with 26 pt corners as the confirmation it interrupts: content 413 pt wide
-and at least 128 high, a 64 pt icon at (20, 13), the title (bold 13) at (102, 13) and the info line 10 pt under it, both
-wrapping at 293 pt in 16 pt lines, the buttons 12 pt under the info line (y 83 at the least) as 28 pt capsules 8 pt
-apart, ending at the text column's end. Like the confirmation panels it moves when its background is dragged and is no
-modal dialog. The server sends the signal once, so an agent that starts while an interrupt waits (it restarted) asks `PendingInterrupt` once its signals are subscribed, and one that gets an interrupt it did not start asks it too: the panel is worded as the action it names (a log out when the call fails). The panel is worded by the reason, the application's quit status:
-
-- `kept-windows`: the application cancelled the log out. Try Again (the default) and Cancel.
-- `closing`: it did not finish quitting. Force Quit, Cancel and Try Again.
-- `not-responding`: it does not respond. Force Quit, Cancel and Try Again.
-
-- Try Again or Return calls `RetrySessionAction`: the applications are asked to quit again, from the most recently used.
-- Cancel or Escape calls `CancelSessionAction`: the sequence ends and the session goes on. The applications that quit
-  stay closed.
-- Force Quit asks first (Cancel, focused, goes back; Return presses nothing); its Force Quit calls
-  `ForceQuitApplication(app_id)` (SIGKILL to the processes of its windows), and the server gives it another 45 s.
-- An application that quits while its panel is up closes the panel (`QuitInterruptClosed`). A lock while the panel is
-  up, or an interrupt that comes while the session is locked, cancels the action.
-
-### Low battery
-
-The agent reads `WarningLevel` and `Percentage` of UPower's display device on the system bus (served by `cupertino-powerd`,
-which decides the level) and follows their changes and the daemon leaving and coming back. At `low` (3) and `critical` (4) it
-posts a notification through `org.freedesktop.Notifications` (app name "Battery", icon `battery-low` / `battery-empty`, urgency
-1 / 2), replacing the one it posted for the previous level. When the level drops back to `none` (external power) it withdraws it
-(`low_battery::LowBattery`). A missing notification service or power daemon is logged, and the lock screen goes on.
-
-### Login items
-
-At start the agent runs the XDG autostart entries once per logind session. A marker `$XDG_RUNTIME_DIR/cupertino-autostart-<session>`
-claims the run, so a restarted agent starts nothing. The directories are `$XDG_CONFIG_DIRS/autostart` (default `/etc/xdg`) then
-`$XDG_CONFIG_HOME/autostart` (default `~/.config`). A user entry with the same file name shadows a system one. System items
-start first, then the user's, each set by file name.
-
-An entry is skipped when it is not `Type=Application`, has `Hidden=true` or `X-GNOME-Autostart-enabled=false`, has an
-`OnlyShowIn` without, or a `NotShowIn` with, one of the desktops in `XDG_CURRENT_DESKTOP`, has a `TryExec` that is not found or
-`Terminal=true` (no terminal to start it in), or has an `Exec` that does not parse. The field codes are expanded or dropped as
-the Desktop Entry spec says. Each item is spawned with `Path` as its directory and stdin closed, and its exit is reaped on a
-thread.
-
-### Power key
-
-At start the process takes a logind `handle-power-key` **block** inhibitor and holds it, so logind does not power off on the key.
-The server binds the key (`XF86PowerOff`) to the `power-key` action, calls `PowerKey(true)` on its press and `PowerKey(false) on
-its release, in that order, and drops the repeats of a held key (`crates/cupertino-server/README.md`). The timing is
-the pure state machine `power_button::PowerButton`, fed with the calls and the process's clock:
-
-| Key held | `--power-button-sleeps-system` off (default) | on |
-|---|---|---|
-| released within 0.35 s | nothing | nothing |
-| released between 0.35 s and 1.5 s | nothing | sleep (`Suspend(false)) |
-| 1.5 s, still down | the power-button panel shows | the power-button panel shows |
-
-The panel does not show over another panel or a log-out that was confirmed; the hold is logged and dropped. Once the panel is up
-the release does nothing. With the session locked the press and the release are ignored and a key that was down is forgotten
-('s lock assertions). A release at or after 1.5 s shows the panel even when the loop has not yet seen the timer fire. The
-greeter has no session agent and takes no inhibitor, so a hold there shows nothing: the server logs a warning that nobody owns
-`org.cupertino.Login1`, and logind handles the key by its own configuration.
-
-## Reopening applications
-
-With "Open my windows again after I log in" on, the applications open at a log out, restart or shut down start again at the
-next login (`restore`).
-
-**What is saved.** The identities `Session1` names as open (`OpenApplications`) just before the agent asks for the action, in quit order, each resolved to an installed desktop entry of
-the XDG application directories: the entry whose desktop file ID is the identity (with or without `.desktop`), else the first
-whose `StartupWMClass` is it, ignoring case. Left out, each with a log line (`application not saved for the next login:
-<identity>: <reason>`): an application without an entry, an entry hidden from listings (`NoDisplay`, `Hidden`, `OnlyShowIn`,
-`NotShowIn`, a failing `TryExec`), one with `Terminal=true`, one whose `Exec` does not split, and the shell's own programs
-(`restore::SHELL_PROGRAMS`: the server, the session manager and every shell process and daemon, matched by identity, desktop
-file ID and the program of `Exec`). An entry two identities resolve to is saved once; at most 64 are kept.
-
-**The file.** `$XDG_STATE_HOME/cupertino/restore` (default `~/.local/state/cupertino/restore`), replaced atomically, mode
-0600. It holds the format version, the choice (`reopen = true|false`), the boot (`/proc/sys/kernel/random/boot_id`) and logind
-session the list was saved in, and `app = <desktop file ID>` lines. Only desktop file IDs of letters, digits, `.`, `-` and `_`
-ending in `.desktop` are read; never a path or a command. A missing file is the choice on and no list; a malformed line is
-skipped, and a file of another version keeps only the choice. Without a boot ID the list is not saved.
-
-**At login.** After the login items, the agent reads the list and writes the file back without it, keeping the choice, *before*
-it starts anything; when that write fails nothing is started (`the saved list could not be emptied`). So a crash, a restart of
-the agent and an unexpected end of the session never start a list twice, and a session that ends without a confirmed panel
-(a crash, a power cut, `Super+Shift+Q` while the agent restarts) leaves no list. Dropped without starting anything: a list
-saved with the choice off, and a list saved in this very boot and session (the agent restarted after a refused restart, then a
-failure). Each ID is looked up again among the installed entries and started through its `Exec` with the file field codes
-dropped, without a terminal or an activation token, stdin closed, the exit reaped on a thread (`cupertino-apps`'s `exec` and
-`launch::spawn`). Not started, each logged as `application not reopened: <id>: <reason>`: a removed or now hidden entry, a
-shell program, a duplicate, an ID a login item started already (same file name) and a start that fails; the others go on.
-
-**Windows and documents.** The agent starts applications; it does not restore windows, their places or the documents in
-them, and Wayland gives it no way to. An application that wants to come back as it was keeps that state itself and restores
-it when it starts.
 
 ## Greeter
 
@@ -575,8 +384,6 @@ network users).
 | Hiding the user | `hide-user-avatar-and-name` in `login.conf` leaves out the avatar and the name on both screens |
 | Large clock | `large-clock = false` in `login.conf` leaves out the date and the large time on both screens |
 | Idle lock | after the display sleep plus the password delay, timed by the server |
-| Quit sequence | one application at a time, 45 s each, the next 0.1 s after one quits; interrupt panel 413 x 128 |
-| Login items | global items before the user's, one after the other |
 | Longest password | 512 bytes |
 | Password help | failed attempts are counted per user and restart at 1 when another user fails; with `RetriesUntilHint` R = 0 (absent) the help shows at 3 failures and without hint text, with R > 0 at R failures (`hint::FailedAttempts`); the shake plays on every failure |
 | Picker | grid rows and columns by n = min(M, count), M = 25 above 1024 x 768 else 12, 5 x 5 for 25 and outside 1 … 24; item i at page i / M, column k % columns, row k / columns; users sorted by case-insensitive name, then "Other…" |
@@ -588,17 +395,13 @@ network users).
 
 | Item | Value | Where |
 |---|---|---|
-| Wallpaper | The lock screen shows the session's wallpaper: the compositor settings' colour, else `wallpaper_dark` in the dark appearance and `wallpaper` otherwise, else the default picture of the assets. The login screen shows the selected user's copy, which the session agent writes and the manager hands on as `UserRow.wallpaper` (`/var/lib/cupertino-login/wallpapers/<uid>.jpg`); it is read at most `MAX_WALLPAPER_BYTES` large, a file that does not decode falls back, and a new file (another inode, size or time) is read again. Without either, a drawn gradient (approximate). A picture is decoded once on a thread of its own, PNG or JPEG of at most 8192 pixels a side, scaled to cover the output and centred; the lock screen shows black until it is in, at most 0.5 s; the login screen shows nothing (the display stays black) until the first user's wallpaper is in, at most 1 s, and its decoding starts before its first frame (the first account, the one first selected; the manager does not say who logged in last). The screen's picture is made once per output size, scale and wallpaper and kept: a frame lays again only the 256 pt squares of it under what changed | `wallpaper`, `view::widgets::Ground` |
+| Wallpaper | The lock screen shows the session's wallpaper: the compositor settings' colour, else `wallpaper_dark` in the dark appearance and `wallpaper` otherwise, else the default picture of the assets. The login screen shows the selected user's copy, which the lock screen writes and the manager hands on as `UserRow.wallpaper` (`/var/lib/cupertino-login/wallpapers/<uid>.jpg`); it is read at most `MAX_WALLPAPER_BYTES` large, a file that does not decode falls back, and a new file (another inode, size or time) is read again. Without either, a drawn gradient (approximate). A picture is decoded once on a thread of its own, PNG or JPEG of at most 8192 pixels a side, scaled to cover the output and centred; the lock screen shows black until it is in, at most 0.5 s; the login screen shows nothing (the display stays black) until the first user's wallpaper is in, at most 1 s, and its decoding starts before its first frame (the first account, the one first selected; the manager does not say who logged in last). The screen's picture is made once per output size, scale and wallpaper and kept: a frame lays again only the 256 pt squares of it under what changed | `wallpaper`, `view::widgets::Ground` |
 | Password and name fields | Kit's chromeless `BareSecureField` (its text centred; while it is empty the caret stands just before the centred placeholder, approximate) and `BareField` in the capsule, 10 pt from its leading edge and clear of the 18 pt trailing slot; dots and caret white, the password's placeholder white 0.5 (the name field's in the secondary label colour). The screen's text and fields always take the dark appearance (`PaintCx::pin_appearance`), whatever the session's. | `view::screen`, `view::widgets::FieldFrame` |
 | Consent panel | An alert on regular glass: 260 pt wide, 26 pt corners, padding 22 pt above and 16 pt around, the icon 64 pt and the text 6 pt further in, the title Bold 13 and the message 13 pt 10 pt apart, Don't Allow and Allow as 28 pt capsules 8 pt apart. The surface is 260 x 520 pt, the alert centred in it. | `view::desktop_control`, `view::widgets::AlertBody` |
 | Initials, text | Grey fill, initials 0.4 of the avatar; white text of the theme's family. | `view::widgets::AVATAR_FILL`, `view::INITIALS_SIZE` |
 | Picture | `~/.face` as PNG, cropped to a circle. A file that does not decode is an error; a missing one means initials. | `user` |
-| Confirmation panels | An alert like the consent panel without an icon: 260 pt wide on regular glass with 26 pt corners, padding 22 pt above and 16 pt around, the text 6 pt further in, 28 pt capsule buttons 8 pt apart. | `panel`, `view::panel`, `view::widgets::AlertBody` |
 | Administrator | Members of `wheel` in `/etc/group`; the design's admin group has no counterpart. | `users::ADMIN_GROUP` in `cupertino-sessiond` |
-| Checkbox row | 12 pt below the info line, 18 pt high on one line and 16 pt per line when its label wraps in the text column, 16 pt above the buttons. The power-button panel has none, so its buttons sit 16 pt below its title. | `panel::INFO_CHECKBOX_GAP`, `panel::CHECKBOX_HEIGHT`, `panel::CHECKBOX_LINE`, `panel::TEXT_BUTTONS_GAP` |
 | Field placeholders and names | Plain English: "Enter Password", "Name"; the fields are named "Password" and "Name" for assistive technology. | `view::PASSWORD_PLACEHOLDER`, `view::NAME_PLACEHOLDER` |
-| Countdown formatter | A zero unit is dropped; two units join with ", ". The reference output was not captured. | `panel::format_countdown` |
-| Panel text | Kit text: the title as body text in Bold, the info line as body text, wrapped at the text column. | `view::panel` |
 | Caps lock glyph | The arrow-over-bar cut-out is ours; gives path constants but not their order. Named "Caps Lock is on" for assistive technology. | `view::widgets::CAPS_GLYPH` |
 | Spinner size and cap | 16 pt square in the 18 pt slot (intrinsic size not in the payload read); round caps at both ends, the design has a flat inner end. Named "Checking the password". | `view::widgets::SPINNER_SIZE` |
 | Notification cards | 344 pt wide at the top right (16 pt margin, 44 pt from the top), 8 pt apart, 16 pt corners, 12 pt padding, on the field's control material and tint made from the screen's own picture (one piece of it for the column), application 12 pt, title and body 13 pt, two body lines. | `lock_notices`, `view::widgets::NoticeCard` |
@@ -608,12 +411,6 @@ network users).
 | Login screen without a wallpaper | A solid deep blue (18, 23, 51), not the drawn gradient: where the user has no copy, it does not decode, or it is not read within 1 s. | `wallpaper::LOGIN_FALLBACK` |
 | Power item and menu | 22 pt square, 20 pt from the trailing edge, centred in the 33 pt bar; a ring with a 60 degree gap and a stem, 5.5 pt radius, 1.6 pt stroke. The menu is Kit's menu below the item. | `layout`, `view::widgets::POWER_*`, `view::power_menu` |
 | Status glyphs | Wi-Fi: a dot and three arcs, the arcs past the signal's bars (the menu bar's: from -55 dBm 3, from -67 dBm 2, else 1) at white 0.3, all of them with the radio off or joined to nothing; battery: a 22 x 11 pt outlined body with a cap filled to the charge (red at 20 % or less while not charging) and a bolt while it charges; accessibility: a ring with a figure. The input source's short name is the first of the person's input sources, else the default xkb layout, else "US". | `status`, `view::widgets` |
-| Interrupt panel buttons, words | Cancel 83 pt at x 204, Force Quit 100 pt at x 295, capsules 28 pt high and 8 pt apart, ending with the text column; no default button (Return does nothing). The words are ours; the design fills them in at run time. | `interrupt` |
-| Quit order | Most recently used first; the design walks its process list from the end, order not read. | server `quit.rs` |
-| Force Quit | No confirmation sheet. SIGKILL to the processes of the application's windows. | server `quit.rs` |
-| Low-battery words | Ours; the design text is not in the strings read. | `low_battery` |
-| Login items | Started through `Command` without an activation token (no input event to ask for one). The design's delayed list (10 s) has no XDG counterpart. | `app` |
-| Reopened applications | Started without an activation token, after the login items, all at once. On until the person turns it off; the power-button panel has no checkbox and uses the saved choice. | `restore`, `app` |
 
 **Text.** All text is laid out and drawn by Kit's text system in points, at the output's scale.
 
@@ -631,25 +428,15 @@ network users).
 | `layout` | `Layout`: the frames and baselines of the screen in points |
 | `power` | `Action`, `Menu`, `MenuKey`: the power menu's items and its selection |
 | `picker` | `Picker` (`new` takes the accounts and whether "Other…" shows; `NoTiles` when nothing is left), `Tile`, `Grid`, `cell_of`, `max_per_page`, `NameEntry` |
-| `view` | The Kit views: `screen` (lock and greeter password and name screens), `picker`, `power_menu`, `panel`, `interrupt`, `full_screen`, `panel_frames`; `Input`, the messages they send; `Typed`, a submitted password |
+| `view` | The Kit views: `screen` (lock and greeter password and name screens), `picker`, `power_menu`, `desktop_control`, `full_screen`; `Input`, the messages they send; `Typed`, a submitted password |
 | `spinner` | the spinner's frame, head spoke and spoke opacities |
 | `status` | `StatusItems`, `WifiState`, `BatteryState`, `signal_bars`, `input_label`, `os_version`, `host_text`; with feature `dbus`, `poll`: what the status items show |
 | `user` | `User::current` (account, full name, picture), `User::from_row` (a row of the manager's list), `initials`, `format_time` |
-| `panel` | `Kind`, `Action`, `Decision`, `Panel`, `PanelCheckbox`: the countdown, the keys, the button and checkbox frames and the words of the confirmation panels and the power-button panel |
-| `power_button` | `PowerButton`, `Effect`: the power key's hold timing |
-| `interrupt` | `Frames`, `Choice`, `title`, `info`, `press`: the interrupt panel |
-| `low_battery` | `LowBattery`, `Level`, `Notice`, `Action`: which notification to post, replace or withdraw |
-| `autostart` | `directories`, `list`, `parse`, `exec_argv`, `claim_run`: the XDG autostart entries |
-| `restore` | `SavedState`, `parse`, `to_text`, `load`, `store`, `save`, `discard`, `choice`, `state_path`, `Applications` (`restorable`, `by_id`), `saved_list`, `take_at_login`, `launch`, `SessionMark`: reopening applications at the next login |
-| `control` (feature `dbus`) | the `org.cupertino.Login1` interface (`serve`, `Service::set_locked`, `Service::set_capabilities`) |
-| `probe` | `run`: the thread that reads logind and the manager on request and publishes the capabilities |
-| `capabilities` | `Capabilities`, `Inputs`, `Answer`: which menu actions work, from logind's answers and the manager's presence |
-| `logind` (feature `dbus`) | the session's `Lock` and `PrepareForSleep` signals, the sleep and power key inhibitors, `TerminateSession` |
-| `login_manager` (feature `dbus`) | the manager's `org.cupertino.LoginManager1`: `request_power`, `session_ready`, `switch_to_login_window`, `watch_unlock` (the manager's unicast `Unlock`; `Error::refusal` names the expected refusals) |
+| `control` (feature `dbus`) | the `org.cupertino.Login1` interface (`serve`, `serve_unnamed`): `Lock` alone |
+| `logind` (feature `dbus`) | the session's `Lock` and `PrepareForSleep` signals and the sleep inhibitor |
+| `login_manager` (feature `dbus`) | the manager's `org.cupertino.LoginManager1`: `session_ready`, `watch_unlock` (the manager's unicast `Unlock`), `watch_owner` |
 | `login_wallpaper` | `choose` (the wallpaper the settings show), `render` (the JPEG for the login screen), `store`, `keep_current` (the writing thread) |
 | `lock_notices` | `Notice`, `from_rows`, `cap`, the cards' column and heights, `shown`, `more_text`; with feature `dbus`, `fetch`, `serves_lock_screen` and `watch`: the notifications the notifications component lists for the lock screen |
-| `upower` (feature `dbus`) | `watch` (the display device's `WarningLevel` and `Percentage`), `post` and `close` (the notification calls) |
-| `session` (feature `dbus`) | `log_out`, `restart`, `shut_down`, `sleep`, `open_applications`, `pending_interrupt`, `retry_session_action`, `cancel_session_action`, `force_quit_application`, `watch_interrupts` (`Interrupt`), `report_failure`: the server's `org.cupertino.Session1` and the notice when it does not take an action |
 | `auth` (feature `app`) | `Authenticator`: PAM on a worker thread |
 | `manager` (feature `app`) | `Connection`, `Message`: the greeter's connection to the session manager and the thread that reads its events |
 

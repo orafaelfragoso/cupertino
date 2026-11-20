@@ -2,9 +2,9 @@
 //! persistent surface the server holds with its last picture while the component restarts (D19), drawn by
 //! [`crate::view`]; its menus are Kit popups of the bar. The server's menu-bar feed, the outputs, the appearance and
 //! the lock arrive as shell events; the session bus work (the status notifier watcher, the menu exporters, the
-//! registrar, the session agent's entries) runs on the component's own session connection
-//! ([`crate::worker`], [`crate::extras_bus`]), the radios and the battery on its system connection; do not disturb
-//! and the panels that are open come over the host bus, and the bar's toggles and do not disturb go out on it.
+//! registrar) runs on the component's own session connection ([`crate::worker`], [`crate::extras_bus`]), the radios
+//! and the battery on its system connection; do not disturb, the panels that are open and the session agent's
+//! entries (`SessionMenu`) come over the host bus, and the bar's toggles and do not disturb go out on it.
 //!
 //! Nothing here waits on the UI thread: the bus work is the connections' tasks, which Kit runs between frames; the
 //! settings files, the desktop entries, Recent Items, the icons, the application associations and the X server of the
@@ -32,8 +32,8 @@ use cupertino_kit_shell::{
 
 use crate::clock::ClockSettings;
 use crate::desktop::AppName;
-use crate::extras::{Extras, FocusLifetime, FocusState, OpenPanels};
-use crate::extras_bus::{ExtrasBus, SessionAgent};
+use crate::extras::{Extras, FocusLifetime, FocusState, OpenPanels, SessionCaps, SessionState};
+use crate::extras_bus::ExtrasBus;
 use crate::feed::{Shared, X11Query};
 use crate::icons::{Loader, Pixels};
 use crate::layout::{BarMetrics, SlotKey};
@@ -155,8 +155,6 @@ struct Services {
     /// Requests made before the worker serves, sent once it does.
     waiting: Vec<Request>,
     extras: Option<ExtrasBus>,
-    /// The session agent the server named last, for the extras' task.
-    agent: SessionAgent,
     /// Where Recent Items is read from; `None` when the session's directories are not known.
     recent: Option<Arc<RecentSources>>,
 }
@@ -219,9 +217,10 @@ pub struct Model {
     /// The latest reading of each status item's icon, by item id: an older one that ends later is not shown.
     status_reads: HashMap<String, u64>,
     next_status_read: u64,
-    /// Do not disturb and the open panels, as the host bus last told them.
+    /// Do not disturb, the open panels and the session agent's entries, as the host bus last told them.
     focus: Option<FocusState>,
     panels: OpenPanels,
+    session: Option<SessionState>,
 }
 
 /// The next message on `channel`, as `message` makes it.
@@ -354,24 +353,63 @@ impl Model {
                     self.panels.centre = None;
                 } else if component == ComponentName::CONTROLCENTER {
                     self.panels.control_panel = None;
+                } else if component == ComponentName::AGENT {
+                    return self.session_menu(None);
                 } else {
                     return Vec::new();
                 }
             }
-            // The session menu's entries: the session agent publishes them once it is a component of the host, and
-            // then this is where they replace the bar's reading of `org.cupertino.Login1` (`crate::extras_bus`), which
-            // gives them until then.
-            Published::SessionMenu { .. } => return Vec::new(),
+            // the session agent's entries for the system menu, from the agent alone
+            Published::SessionMenu {
+                user_name,
+                lock,
+                log_out,
+                switch_user,
+                sleep,
+                restart,
+                shut_down,
+            } if from == Sender::Component(ComponentName::AGENT) => {
+                let caps = SessionCaps {
+                    sleep,
+                    restart,
+                    shut_down,
+                    log_out,
+                    switch_user,
+                    lock,
+                };
+                return self.session_menu(Some(SessionState { user_name, caps }));
+            }
             _ => return Vec::new(),
         }
         self.keep_host_state();
         self.refresh()
     }
 
+    /// The session agent's entries as it published them, `None` once the host gave it up: an open system menu then
+    /// closes, as its session items would do nothing.
+    fn session_menu(&mut self, session: Option<SessionState>) -> Vec<Do<Message>> {
+        let gone = self.session.is_some() && session.is_none();
+        self.session = session;
+        self.keep_host_state();
+        let mut commands = Vec::new();
+        if gone {
+            for i in 0..self.bars.len() {
+                if let Some(outcome) = self.bars[i].controller.close_slot(&SlotKey::System) {
+                    commands.extend(self.apply(i, outcome));
+                }
+            }
+        }
+        commands.extend(self.refresh());
+        commands
+    }
+
     /// Put what the host bus told into the extras the bars show.
     fn keep_host_state(&mut self) {
         self.shared.extras.focus.clone_from(&self.focus);
         self.shared.extras.panels = self.panels.clone();
+        self.shared.extras.session.clone_from(&self.session);
+        // the server locks through the lock screen whether or not the agent runs
+        self.shared.extras.lock_without_agent = true;
     }
 
     /// The bars and their windows for every output the server has described, once `menubar.conf` is read.
@@ -465,6 +503,7 @@ impl Application for MenuBar {
             next_status_read: 0,
             focus: None,
             panels: OpenPanels::default(),
+            session: None,
         };
         model.services.recent = tasks::recent_sources().map(Arc::new);
         bus::follow(&[

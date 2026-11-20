@@ -10,8 +10,7 @@
 
 use cupertino_geometry::Rect;
 
-use crate::model::Key;
-use crate::panel::{Action, CANCEL_LABEL};
+use crate::panel::{Action, Key, CANCEL_LABEL};
 
 /// Content width, and the least content height: a two-line title and a one-line info line.
 pub const WIDTH: f64 = 413.0;

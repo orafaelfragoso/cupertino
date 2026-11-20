@@ -1,6 +1,6 @@
-//! The session agent's calls to the session manager's bus interface `org.cupertino.LoginManager1` (system bus): restart, shut
-//! down and sleep, and the announcement that the session's agent is up. The manager authorises every call by the caller's
-//! process; nothing here falls back to logind.
+//! The lock screen's calls to the session manager's bus interface `org.cupertino.LoginManager1` (system bus): the
+//! announcement that the session is up, and the manager's `Unlock` after a fast user switch and its restarts. The
+//! manager authorises every call by the caller's process.
 
 use std::fmt;
 
@@ -11,71 +11,12 @@ use zbus::MatchRule;
 
 const BUS_NAME: &str = "org.cupertino.LoginManager1";
 const OBJECT_PATH: &str = "/org/cupertino/LoginManager1";
-/// The prefix of the names of the errors the interface answers with.
-const ERROR_PREFIX: &str = "org.cupertino.LoginManager1.Error.";
-
-/// What the manager is asked to do to the machine.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Power {
-    Restart,
-    ShutDown,
-    Sleep,
-}
-
-impl Power {
-    fn word(self) -> &'static str {
-        match self {
-            Power::Restart => "restart",
-            Power::ShutDown => "shut-down",
-            Power::Sleep => "sleep",
-        }
-    }
-}
 
 /// Why the manager did not do what it was asked: it refused, or the call failed.
 #[derive(Debug)]
 pub struct Error {
     what: &'static str,
     source: Box<zbus::Error>,
-}
-
-/// A refusal the manager answers with by name; each is an expected outcome, not a fault.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Refusal {
-    /// Another user's session is open and the caller may not end it.
-    OtherUsersLoggedIn,
-    /// A program holds a block inhibitor on the operation.
-    Inhibited,
-    /// The caller is not the person at the console, or the login settings forbid the operation.
-    AccessDenied,
-}
-
-impl Error {
-    /// The manager is not on the bus: the call found no owner of its name (a session another display manager started, or a
-    /// manager that is not running).
-    pub fn manager_absent(&self) -> bool {
-        let zbus::Error::MethodError(name, _, _) = self.source.as_ref() else {
-            return false;
-        };
-        matches!(
-            name.as_str(),
-            "org.freedesktop.DBus.Error.ServiceUnknown"
-                | "org.freedesktop.DBus.Error.NameHasNoOwner"
-        )
-    }
-
-    /// The refusal this error is, or `None` for a failure (no manager on the bus, a broken connection, a failed operation).
-    pub fn refusal(&self) -> Option<Refusal> {
-        let zbus::Error::MethodError(name, _, _) = self.source.as_ref() else {
-            return None;
-        };
-        match name.as_str().strip_prefix(ERROR_PREFIX)? {
-            "OtherUsersLoggedIn" => Some(Refusal::OtherUsersLoggedIn),
-            "Inhibited" => Some(Refusal::Inhibited),
-            "AccessDenied" => Some(Refusal::AccessDenied),
-            _ => None,
-        }
-    }
 }
 
 impl fmt::Display for Error {
@@ -100,56 +41,6 @@ impl LoginManager {
             source: Box::new(zbus::Error::Failure(e.to_string())),
         })?;
         Ok(LoginManager { connection })
-    }
-
-    /// Restart, shut down or sleep the computer.
-    pub fn request_power(&self, action: Power) -> Result<(), Error> {
-        let what = "asking the session manager for a power action";
-        self.connection
-            .call_method(
-                Some(BUS_NAME),
-                OBJECT_PATH,
-                Some(BUS_NAME),
-                "RequestPower",
-                &(action.word(),),
-            )
-            .map(drop)
-            .map_err(|source| Error {
-                what,
-                source: Box::new(source),
-            })
-    }
-
-    /// Whether the manager owns its name on the bus now.
-    pub fn is_present(&self) -> bool {
-        self.connection
-            .call_method(
-                Some("org.freedesktop.DBus"),
-                "/org/freedesktop/DBus",
-                Some("org.freedesktop.DBus"),
-                "NameHasOwner",
-                &(BUS_NAME,),
-            )
-            .ok()
-            .and_then(|reply| reply.body().deserialize::<bool>().ok())
-            .unwrap_or(false)
-    }
-
-    /// The login screen takes the console (`SwitchToLoginWindow`); the caller has locked its screen first.
-    pub fn switch_to_login_window(&self) -> Result<(), Error> {
-        self.connection
-            .call_method(
-                Some(BUS_NAME),
-                OBJECT_PATH,
-                Some(BUS_NAME),
-                "SwitchToLoginWindow",
-                &(),
-            )
-            .map(drop)
-            .map_err(|source| Error {
-                what: "switching to the login window",
-                source: Box::new(source),
-            })
     }
 
     /// Call `notify` on a reader thread for every `Unlock` the manager sends this process, and once with the error when the
@@ -273,17 +164,6 @@ impl LoginManager {
             .map(drop)
             .map_err(|source| Error {
                 what: "announcing the session",
-                source: Box::new(source),
-            })
-    }
-
-    /// End this session, whose applications have quit (`LogOut`): the manager shows the login screen first, then ends it.
-    pub fn log_out(&self) -> Result<(), Error> {
-        self.connection
-            .call_method(Some(BUS_NAME), OBJECT_PATH, Some(BUS_NAME), "LogOut", &())
-            .map(drop)
-            .map_err(|source| Error {
-                what: "logging out",
                 source: Box::new(source),
             })
     }

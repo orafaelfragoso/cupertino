@@ -2,8 +2,6 @@
 //! from logind's answers to `CanSuspend`, `CanReboot` and `CanPowerOff` and from whether the session manager is there. Pure:
 //! no bus.
 
-use std::collections::HashMap;
-
 /// logind's answer to a `Can…` question: `"yes"`, `"challenge"` (allowed after authentication), `"no"` or `"na"` (the
 /// machine cannot).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,16 +38,6 @@ pub struct Inputs {
     /// `cupertino-sessiond` is on the system bus: it alone can hand the console to the login screen.
     pub session_manager: bool,
 }
-
-/// The keys of the `Capabilities` property, in the order of [`Capabilities::entries`].
-pub const KEYS: [&str; 6] = [
-    "sleep",
-    "restart",
-    "shut-down",
-    "log-out",
-    "switch-user",
-    "lock",
-];
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Capabilities {
@@ -92,24 +80,5 @@ impl Capabilities {
             reasons.push("switch-user: no session manager on the system bus".into());
         }
         reasons
-    }
-
-    pub fn entries(&self) -> [(&'static str, bool); 6] {
-        [
-            (KEYS[0], self.sleep),
-            (KEYS[1], self.restart),
-            (KEYS[2], self.shut_down),
-            (KEYS[3], self.log_out),
-            (KEYS[4], self.switch_user),
-            (KEYS[5], self.lock),
-        ]
-    }
-
-    /// The value of the `Capabilities` property.
-    pub fn to_map(&self) -> HashMap<String, bool> {
-        self.entries()
-            .into_iter()
-            .map(|(key, on)| (key.to_string(), on))
-            .collect()
     }
 }

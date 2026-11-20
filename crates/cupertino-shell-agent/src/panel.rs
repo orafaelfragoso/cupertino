@@ -4,7 +4,15 @@
 
 use cupertino_geometry::Rect;
 
-use crate::model::Key;
+/// A key the panels take, as the window's keys say it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Key {
+    /// A typed character; control characters are not keys of the panels.
+    Char(char),
+    Backspace,
+    Return,
+    Escape,
+}
 
 /// Seconds until the action is performed without an answer (confirmation countdown, ticking 1.0 s).
 pub const COUNTDOWN_SECONDS: f64 = 60.0;

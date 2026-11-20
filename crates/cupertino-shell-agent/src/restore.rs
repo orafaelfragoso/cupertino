@@ -46,8 +46,9 @@ const FORMAT_VERSION: &str = "1";
 /// Where the kernel names the current boot.
 pub const BOOT_ID_PATH: &str = "/proc/sys/kernel/random/boot_id";
 
-/// The programs of the shell itself, by file name. An application whose desktop entry or identity is one of these is
-/// never saved or started, whatever its entry says.
+/// The programs of the shell itself, by file name: the host that runs the components (`cupertino-shell`) and each
+/// component's own name, which is its windows' identity. An application whose desktop entry or identity is one of
+/// these is never saved or started, whatever its entry says.
 pub const SHELL_PROGRAMS: &[&str] = &[
     "cupertino-btd",
     "cupertino-controlcenter",
@@ -65,6 +66,8 @@ pub const SHELL_PROGRAMS: &[&str] = &[
     "cupertino-screenshot",
     "cupertino-server",
     "cupertino-sessiond",
+    "cupertino-shell",
+    "cupertino-shell-agent",
     "cupertino-windowmanager",
 ];
 
@@ -78,6 +81,10 @@ pub struct SessionMark {
 impl SessionMark {
     /// This boot (from [`BOOT_ID_PATH`]) and `session`; `None` when the boot cannot be read or either is not a plain
     /// identifier.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "runs on the I/O pool (kit::task::io)"
+    )]
     pub fn current(session: &str) -> Option<SessionMark> {
         let boot = std::fs::read_to_string(BOOT_ID_PATH).ok()?;
         SessionMark::new(boot.trim(), session)
@@ -224,7 +231,7 @@ pub fn parse(text: &str) -> (SavedState, Vec<Problem>) {
 /// The file's text for `state`.
 pub fn to_text(state: &SavedState) -> String {
     let mut text = format!(
-        "# Applications to reopen at the next login, written by cupertino-login.\nversion = {FORMAT_VERSION}\nreopen = {}\n",
+        "# Applications to reopen at the next login, written by the session agent.\nversion = {FORMAT_VERSION}\nreopen = {}\n",
         state.reopen
     );
     if let Some(mark) = state.saved_in.as_ref().filter(|_| !state.apps.is_empty()) {
@@ -246,6 +253,10 @@ pub fn to_text(state: &SavedState) -> String {
 }
 
 /// The state at `path`; a missing file is the defaults. The problems of a malformed file are returned beside it.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "runs on the I/O pool (kit::task::io)"
+)]
 pub fn load(path: &Path) -> io::Result<(SavedState, Vec<Problem>)> {
     match std::fs::read_to_string(path) {
         Ok(text) => Ok(parse(&text)),

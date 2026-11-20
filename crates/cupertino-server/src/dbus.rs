@@ -1,5 +1,6 @@
-//! Session bus worker: relays the shell toggles (notification centre, launcher, control panel), the lock request and
-//! the power key (login process) to the processes that own them. The media keys go to the on-screen displays from the
+//! Session bus worker: relays the shell toggles (notification centre, launcher, control panel) and the lock request
+//! (the lock screen's `org.cupertino.Login1`) to the processes that own them. The session agent's requests go from
+//! the connection that owns `org.cupertino.Session1` instead ([`crate::session_agent`]). The media keys go to the on-screen displays from the
 //! connection that owns `org.cupertino.Session1` instead ([`crate::quit::SessionConnection`]), the one connection
 //! `cupertino_osd::control` takes for the server (D20).
 //!
@@ -38,39 +39,9 @@ pub enum Toggle {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
     Toggle(Toggle),
-    /// Lock the session through `cupertino-login`: the display slept for the password delay (lock request type 5 of the design).
+    /// Lock the session through the lock screen's `org.cupertino.Login1` while no lock screen is connected to ask
+    /// over the server's own connection: `Lock`, its one method, for every lock request.
     Lock,
-    /// Lock the session on the person's request (the lock shortcut; lock request type 8, whose lock screen hides after 5 s).
-    LockNow,
-    /// Ask `cupertino-login` whether to log out (its confirmation panel).
-    LogOut,
-    /// Have `cupertino-login` log out without its panel: the applications still quit first.
-    LogOutNow,
-    /// Open `cupertino-login`'s power panel.
-    PowerDialog,
-    /// The menu bar's entries, forwarded by the server: sleep without a panel, the restart and shut down panels, the
-    /// switch to the login window, and reading what the machine allows again.
-    Sleep,
-    Restart,
-    ShutDown,
-    SwitchUser,
-    RefreshCapabilities,
-    /// The power key went down (`true`) or up; `cupertino-login` times the hold.
-    PowerKey {
-        pressed: bool,
-    },
-}
-
-fn login_call(
-    method: &'static str,
-) -> (&'static str, &'static str, &'static str, &'static str, Body) {
-    (
-        "org.cupertino.Login1",
-        "/org/cupertino/Login1",
-        "org.cupertino.Login1",
-        method,
-        Body::Empty,
-    )
 }
 
 /// Arguments of a control method.
@@ -79,8 +50,6 @@ enum Body {
     Empty,
     /// Direction (+1 or -1) and the fine flag of the overlay's step methods.
     Step(i32, bool),
-    /// Whether the power key went down (`PowerKey`).
-    Pressed(bool),
 }
 
 /// Bus name, object path and interface of the on-screen displays (`cupertino_osd::control`).
@@ -125,7 +94,7 @@ fn send_osd(conn: &zbus::Connection, key: OsdKey, fine: bool) {
                         )
                         .await
                     }
-                    Body::Empty | Body::Pressed(_) => {
+                    Body::Empty => {
                         conn.call_method(Some(name), path, Some(interface), method, &())
                             .await
                     }
@@ -179,45 +148,11 @@ impl Request {
                 "Lock",
                 Body::Empty,
             ),
-            Request::LockNow => (
-                "org.cupertino.Login1",
-                "/org/cupertino/Login1",
-                "org.cupertino.Login1",
-                "LockNow",
-                Body::Empty,
-            ),
-            Request::LogOut => (
-                "org.cupertino.Login1",
-                "/org/cupertino/Login1",
-                "org.cupertino.Login1",
-                "RequestLogOut",
-                Body::Empty,
-            ),
-            Request::PowerDialog => (
-                "org.cupertino.Login1",
-                "/org/cupertino/Login1",
-                "org.cupertino.Login1",
-                "RequestPowerDialog",
-                Body::Empty,
-            ),
-            Request::LogOutNow => login_call("LogOutNow"),
-            Request::Sleep => login_call("Sleep"),
-            Request::Restart => login_call("RequestRestart"),
-            Request::ShutDown => login_call("RequestShutDown"),
-            Request::SwitchUser => login_call("SwitchToLoginWindow"),
-            Request::RefreshCapabilities => login_call("RefreshCapabilities"),
-            Request::PowerKey { pressed } => (
-                "org.cupertino.Login1",
-                "/org/cupertino/Login1",
-                "org.cupertino.Login1",
-                "PowerKey",
-                Body::Pressed(pressed),
-            ),
         }
     }
 }
 
-/// Who may own `org.cupertino.Login1`: the lock, log out and power key requests go to nobody else.
+/// Who may own `org.cupertino.Login1`: the lock request goes to nobody else.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LoginTrust {
     /// No login process is supervised: no owner of the name is trusted.
@@ -310,29 +245,15 @@ pub struct DbusHandle {
 #[derive(Clone, Default)]
 struct ShellCalls(std::sync::Arc<(AtomicUsize, AtomicUsize)>);
 
-/// Runs on the worker thread when the login process, the one that shows the log out panel, is not on the bus.
-pub type LoginMissing = std::sync::Arc<dyn Fn() + Send + Sync>;
-
 impl DbusHandle {
     /// Start the worker.
     pub fn start() -> Option<DbusHandle> {
-        Self::start_with(|| {})
+        Self::start_on(None)
     }
 
-    /// Start the worker; `login_missing` runs on it when a log out request finds nobody to ask (no `org.cupertino.Login1`
-    /// on the bus), so the caller can do what a session without a login process does.
-    pub fn start_with(login_missing: impl Fn() + Send + Sync + 'static) -> Option<DbusHandle> {
-        Self::start_on(None, login_missing)
-    }
-
-    /// Start the worker on the bus at `address`, the session bus when `None`; `login_missing` as for
-    /// [`start_with`](Self::start_with).
-    pub fn start_on(
-        address: Option<String>,
-        login_missing: impl Fn() + Send + Sync + 'static,
-    ) -> Option<DbusHandle> {
+    /// Start the worker on the bus at `address`, the session bus when `None`.
+    pub fn start_on(address: Option<String>) -> Option<DbusHandle> {
         let (tx, rx) = async_channel::unbounded::<Job>();
-        let login_missing: LoginMissing = std::sync::Arc::new(login_missing);
         let login = std::sync::Arc::new(std::sync::Mutex::new(LoginTrust::Nobody));
         let worker_login = login.clone();
         let identifying = std::sync::Arc::new(AtomicUsize::new(0));
@@ -341,14 +262,7 @@ impl DbusHandle {
         let spawned = std::thread::Builder::new()
             .name("cupertino-dbus".into())
             .spawn(move || {
-                zbus::block_on(worker(
-                    address,
-                    rx,
-                    login_missing,
-                    worker_login,
-                    identifying,
-                    worker_calls,
-                ))
+                zbus::block_on(worker(address, rx, worker_login, identifying, worker_calls))
             });
         match spawned {
             Ok(_) => Some(DbusHandle { tx, login, calls }),
@@ -540,7 +454,6 @@ pub(crate) async fn either<A: std::future::Future, B: std::future::Future>(
 async fn worker(
     address: Option<String>,
     rx: async_channel::Receiver<Job>,
-    login_missing: LoginMissing,
     login: SharedLoginTrust,
     identifying: Identifying,
     calls: ShellCalls,
@@ -557,17 +470,7 @@ async fn worker(
                     tracing::info!("the session bus is back: the shell toggles, the session interface and the watches resume");
                 }
                 pause = RECONNECT_FIRST;
-                match serve(
-                    &conn,
-                    &rx,
-                    &login_missing,
-                    &login,
-                    &identifying,
-                    &calls,
-                    &mut keep,
-                )
-                .await
-                {
+                match serve(&conn, &rx, &login, &identifying, &calls, &mut keep).await {
                     Ended::NoMoreJobs => return,
                     Ended::Closed => {
                         tracing::warn!("the session bus connection dropped: connecting again")
@@ -681,7 +584,6 @@ fn spawn_publish(
 async fn serve(
     conn: &zbus::Connection,
     rx: &async_channel::Receiver<Job>,
-    login_missing: &LoginMissing,
     login: &SharedLoginTrust,
     identifying: &Identifying,
     calls: &ShellCalls,
@@ -712,12 +614,7 @@ async fn serve(
             Either::Second(()) => return Ended::Closed,
         };
         let conn = conn.clone();
-        let (login_missing, login, identifying, calls) = (
-            login_missing.clone(),
-            login.clone(),
-            identifying.clone(),
-            calls.clone(),
-        );
+        let (login, identifying, calls) = (login.clone(), identifying.clone(), calls.clone());
         let what = match job {
             Job::Call(what) => what,
             Job::WatchOwner(name, changed) => {
@@ -757,22 +654,16 @@ async fn serve(
                 continue;
             }
         };
-        // a key's press and release must arrive in the order they happened, so those calls are awaited in turn
-        if matches!(what, Request::PowerKey { .. }) {
-            call(&conn, what, &login_missing, &login).await;
-            calls.0 .1.fetch_add(1, Ordering::SeqCst);
-        } else {
-            conn.executor()
-                .clone()
-                .spawn(
-                    async move {
-                        call(&conn, what, &login_missing, &login).await;
-                        calls.0 .1.fetch_add(1, Ordering::SeqCst);
-                    },
-                    "cupertino-shell-call",
-                )
-                .detach();
-        }
+        conn.executor()
+            .clone()
+            .spawn(
+                async move {
+                    call(&conn, what, &login).await;
+                    calls.0 .1.fetch_add(1, Ordering::SeqCst);
+                },
+                "cupertino-shell-call",
+            )
+            .detach();
     }
 }
 
@@ -994,19 +885,10 @@ fn trusts(trust: LoginTrust, owner: &Caller) -> bool {
 }
 
 /// Make the call of `what` and log a failure.
-async fn call(
-    conn: &zbus::Connection,
-    what: Request,
-    login_missing: &LoginMissing,
-    login: &SharedLoginTrust,
-) {
+async fn call(conn: &zbus::Connection, what: Request, login: &SharedLoginTrust) {
     let (name, path, interface, method, body) = what.call();
-    // an owner that is not the login process gets nothing, and a log out is not the end of the session then: the name
-    // being taken is not the same as nobody to ask
+    // an owner that is not the lock screen gets nothing
     let Some(destination) = destination(conn, name, login).await else {
-        if matches!(what, Request::LogOut | Request::LogOutNow) {
-            post_notice(conn, LogOutDropped::OwnerNotTheLoginProcess).await;
-        }
         return;
     };
     let destination = Some(destination.as_str());
@@ -1025,93 +907,10 @@ async fn call(
             )
             .await
         }
-        Body::Pressed(pressed) => {
-            conn.call_method(destination, path, Some(interface), method, &pressed)
-                .await
-        }
     };
     if let Err(e) = sent {
-        if matches!(what, Request::LogOut | Request::LogOutNow) && is_nobody_there(&e) {
-            let trust = *login
-                .lock()
-                .expect("no thread panics while holding the login trust");
-            // a supervised login process that has not taken its name yet (it is starting or restarting) is still the
-            // one to ask: only a session without a login process ends
-            if let LoginTrust::Agent(pid) = trust {
-                tracing::warn!(pid, "the login process has not taken its bus name yet: the log out request is dropped");
-                post_notice(conn, LogOutDropped::LoginProcessNotReady).await;
-            } else {
-                tracing::warn!("no login process on the bus: the log out shortcut ends the server");
-                login_missing();
-            }
-            return;
-        }
         tracing::warn!(?what, name, error = %e, "cannot reach the shell process");
     }
-}
-
-/// Why a log out request reached nobody and the session goes on.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LogOutDropped {
-    /// A process other than the login process owns `org.cupertino.Login1`.
-    OwnerNotTheLoginProcess,
-    /// The login process is supervised but has not taken its name yet (it is starting or restarting).
-    LoginProcessNotReady,
-}
-
-impl LogOutDropped {
-    /// The summary and the body of the notice that tells the person.
-    pub fn text(self) -> (&'static str, &'static str) {
-        match self {
-            LogOutDropped::OwnerNotTheLoginProcess => (
-                "Log out did not start",
-                "Another program has taken the name of the login service, so the request was not sent. The session goes on.",
-            ),
-            LogOutDropped::LoginProcessNotReady => (
-                "Log out did not start",
-                "The login service is not ready yet. Try again in a moment.",
-            ),
-        }
-    }
-}
-
-/// Tell the person a log out request was dropped: a banner from the notification service. Nothing else shows it, and a
-/// shortcut that does nothing looks like a broken one. A session without a notification service only has the log.
-pub async fn post_notice(conn: &zbus::Connection, dropped: LogOutDropped) {
-    let (summary, body) = dropped.text();
-    // urgency 1 is normal; the banner is not kept in the centre
-    let hints = std::collections::HashMap::from([
-        ("urgency", zbus::zvariant::Value::U8(1)),
-        ("transient", zbus::zvariant::Value::Bool(true)),
-    ]);
-    let actions: Vec<&str> = Vec::new();
-    // sent without waiting for a reply: whoever owns the name answers it, and a squatter that never does must not hold
-    // anything up
-    let sent = async {
-        let message =
-            zbus::message::Message::method_call("/org/freedesktop/Notifications", "Notify")?
-                .destination("org.freedesktop.Notifications")?
-                .interface("org.freedesktop.Notifications")?
-                .with_flags(zbus::message::Flags::NoReplyExpected)?
-                .build(&("Cupertino", 0u32, "", summary, body, actions, hints, -1i32))?;
-        conn.send(&message).await
-    }
-    .await;
-    if let Err(e) = sent {
-        tracing::warn!(error = %e, "cannot show that the log out request was dropped");
-    }
-}
-
-/// Whether a call failed because nobody owns the name it went to.
-fn is_nobody_there(e: &zbus::Error) -> bool {
-    matches!(
-        e,
-        zbus::Error::MethodError(name, ..)
-            if matches!(
-                name.as_str(),
-                "org.freedesktop.DBus.Error.ServiceUnknown" | "org.freedesktop.DBus.Error.NameHasNoOwner"
-            )
-    )
 }
 
 impl crate::state::Cupertino {
@@ -1150,54 +949,44 @@ impl crate::state::Cupertino {
     pub fn lock_session_now(&mut self) {
         self.revoke_controls(cupertino_control_model::Revocation::Locked);
         if !self.sessions.lock_requested(true) {
-            self.shell_call(Request::LockNow);
+            self.shell_call(Request::Lock);
         }
     }
 
-    /// Ask the login process whether to log out. The private connection of the lock screen carries the request while one
-    /// is connected, so a process that took `org.cupertino.Login1` first cannot turn it into the end of the session. A
-    /// session without a login process (no session bus, or nobody owns the name: a headless or capture run) ends the
-    /// server instead, as the shortcut did before there was a panel.
+    /// Ask the session agent whether to log out (its confirmation panel). The session's `log_out_requested` carries the
+    /// request while an agent follows the session over the server's own Wayland connection; else it goes to the agent
+    /// on the session bus ([`crate::session_agent`]), and a session without an agent component ends the server, as the
+    /// shortcut did before there was a panel.
     pub fn log_out_session(&mut self) {
         if self.sessions.log_out_requested() {
             return;
         }
-        if !self.dbus.as_ref().is_some_and(|d| d.send(Request::LogOut)) {
-            tracing::warn!("no login process to ask: the log out shortcut ends the server");
-            self.quit_compositor();
-        }
+        self.ask_session_agent(crate::session_agent::AgentRequest::LogOut);
     }
 
-    /// Have the login process log out without its confirmation panel (the log out now shortcut). It goes over the session
-    /// bus to the login process the server trusts; without one to ask the server ends, as for [`Self::log_out_session`].
+    /// Log out without the confirmation panel (the log out now shortcut): `Session1`'s own log out, which quits the
+    /// applications first.
     pub fn log_out_session_now(&mut self) {
-        if !self
-            .dbus
-            .as_ref()
-            .is_some_and(|d| d.send(Request::LogOutNow))
-        {
-            tracing::warn!("no login process to ask: the log out now shortcut ends the server");
-            self.quit_compositor();
+        if let Err(refusal) = self.request_session_action(crate::quit::SessionAction::LogOut) {
+            tracing::warn!(?refusal, "the log out now shortcut is refused");
         }
     }
 
-    /// A menu bar entry of the session menu: the server asks the login process on the menu bar's behalf, because the login
-    /// process answers only the server.
-    pub fn menu_bar_session_action(&mut self, action: Request) {
-        if action == Request::LogOut {
-            return self.log_out_session();
+    /// Sleep at once (the menu bar's Sleep): `Session1`'s own sleep.
+    pub fn sleep_session(&mut self) {
+        if let Err(refusal) = self.request_session_action(crate::quit::SessionAction::Sleep) {
+            tracing::warn!(?refusal, "sleep is refused");
         }
-        self.shell_call(action);
     }
 
-    /// Open the login process's power panel.
+    /// Open the session agent's power panel.
     pub fn power_dialog(&mut self) {
-        self.shell_call(Request::PowerDialog);
+        self.ask_session_agent(crate::session_agent::AgentRequest::PowerDialog);
     }
 
-    /// Tell the login process the power key went down or up.
+    /// Tell the session agent the power key went down or up.
     pub fn power_key(&mut self, pressed: bool) {
-        self.shell_call(Request::PowerKey { pressed });
+        self.ask_session_agent(crate::session_agent::AgentRequest::PowerKey { pressed });
     }
 
     /// Forward a media key to the on-screen displays, which change the level and show it. The call goes out on the

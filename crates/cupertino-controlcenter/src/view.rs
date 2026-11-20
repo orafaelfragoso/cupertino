@@ -58,6 +58,11 @@ pub use shadow::{BandPictures, Bands, BandsWanted};
 pub const APP_ID: &str = "cupertino-controlcenter";
 /// The key of the panel's window, which the compositor's fades name.
 pub const PANEL_KEY: &str = "panel";
+/// The key of the catcher's window.
+pub const CATCHER_KEY: &str = "catcher";
+/// The key of the panel's content, which holds the focus while the panel is shown, so it hears the keyboard leave the
+/// window.
+pub const PANEL_ROOT: &str = "panel.root";
 /// The `app_id` of the catcher's window.
 pub const CATCHER_APP_ID: &str = "cupertino-controlcenter.catcher";
 /// What assistive technology calls the panel.
@@ -505,8 +510,10 @@ pub fn arranged<M: Clone + 'static>(
             bands: bands.all(),
             cutouts: builder.cutouts(),
             on_outside: (!editing).then(|| to(away(Via::Pointer))),
+            on_inactive: presentation.input.then(|| to(Input::Dismiss)),
             children: builder.board(),
-        }),
+        })
+        .key(Key::from(PANEL_ROOT)),
         popup: None,
         menus: None,
     }
@@ -516,7 +523,7 @@ pub fn arranged<M: Clone + 'static>(
 /// anywhere on it dismisses the panel and goes no further.
 pub fn catcher<M: Clone + 'static>(to: fn(Input) -> M) -> Window<M> {
     Window::from(PressCatcher {
-        key: WindowKey(Key::from("catcher")),
+        key: WindowKey(Key::from(CATCHER_KEY)),
         title: TITLE.to_owned(),
         app_id: CATCHER_APP_ID.to_owned(),
         on_press: to(Input::Dismiss),

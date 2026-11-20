@@ -6,31 +6,22 @@ display and sound tiles with their levels, and an Edit Controls capsule under th
 of these controls show and in which order. A press or a level drag acts on the system services. Wi-Fi, Bluetooth, display and sound open a detail view with their networks, devices, keyboard backlight
 or outputs. A click outside the tiles closes the panel.
 
-The crate has no Smithay dependency. The model (`model`, `arrangement`, `layout`, `lifecycle`, `motion`, `controller`), the backends
-(`backend`, `system`), the bus interface (`control`) and the CupertinoKit view (`view`) are separate, so a host can drive
-the panel without the process. The `cupertino-controlcenter` process is that host for the desktop.
+The crate is a library: one component, `ControlCenter`, which the shell host (`cupertino-shell`) runs on a thread of
+its own as `controlcenter` of the server's component table. The model (`model`, `arrangement`, `layout`, `lifecycle`,
+`motion`, `controller`) is pure, with injected time; the effects (`effects`) and the bus interface (`control`) use
+zbus's async API on the component's UI loop and the toolkit's I/O pool; the windows (`view`) are drawn by CupertinoKit.
 
 ## Running
 
-Feature `app` builds the binary: the panel as a CupertinoKit (`cupertino-kit`) window on a layer surface, as a client of
-`cupertino-server`, as `cupertino-osd` does. `cupertino-shell-client` gives the windows their layer surfaces through the
-`SurfaceRoles` of `cupertino-ui-wayland`.
-The server starts and restarts it through the `shell` key of its configuration, and a `control-panel` key binding and hot-corner
-action call `Toggle()`. The entry is `{"name": "controlcenter", "command": ["cupertino-controlcenter"]}` in the list below.
-
-```json
-{"shell": [{"name": "controlcenter", "command": ["cupertino-controlcenter"]}]}
-```
+The server lists `controlcenter` to the shell host, which runs it; nothing starts it on its own. `compositor.json` names it
+among the `components` of its `shell` section (`docs/architecture/shell-host.md`), and `alone` runs it in a host of its
+own (`cupertino-shell --only controlcenter`). A development build of the host makes it panic on request
+(`cupertino shell crash controlcenter --at paint|dispatch|helper`). The server's `control-panel` key binding and hot-corner
+action call `Toggle`, and so does the menu bar's status item.
 
 ```
-cargo build -p cupertino-controlcenter --features app
-cupertino-controlcenter [--fake-backends] [--alsa-card N]
+cargo run -p cupertino-controlcenter --example controlcenter_capture -- controlcenter/panel --sheet   # every view, light and dark
 ```
-
-| Option or variable | Default | Effect |
-|---|---|---|
-| `--fake-backends` | off | In-memory radios, microphone, dock setting, keyboard backlight, focus mode, brightness, volume, outputs and media player instead of the machine's, and a lock and settings launcher that only record what they are asked. For trying the panel and for headless runs. |
-| `--alsa-card N` | the default PipeWire sink, else the best master of all cards (rule in `cupertino-alsa`) | Use the master volume of sound card `N`. |
 
 The panel follows the session's appearance: light glass with dark text and symbols in the light appearance, dark glass
 with light ones in the dark appearance. It follows the display options as they change: Increase
@@ -39,12 +30,28 @@ dark appearance, light grey with a mid grey rim in the light one); Reduce Transp
 the tiles opaque on one opaque panel; Reduce Motion replaces the growth of a detail view with a cross-fade. Icons are the
 symbols of the asset directory (`symbol.*`), loaded by the kit.
 
+## What a restart loses
+
+A failed component is started again alone by its host (D16, D21). The control panel keeps nothing of its own across a
+restart but the controls the person chose, which are stored in `control-panel.conf` as Done is pressed:
+
+- an open panel goes, with the detail view open in it and an edit of the controls not yet done; the next toggle opens
+  the panel on its grid;
+- a level being dragged stops where its last write left it;
+- the readings it holds, which it takes again as it starts, the pictures of the shadow's bands, which it draws again as
+  it next opens, and its bus connections;
+- a `Toggle` of `org.cupertino.ControlPanel1` made while the name has no owner (from the failure until the new instance
+  owns it) is refused by the bus, so the key press or the click does nothing.
+
+What the tiles show lives in the services (the radios, `cupertino-audiod`, the power daemon, UPower, the media players,
+the dock's settings and do not disturb in the notifications), so a restart changes none of it.
+
 ## How it works
 
 **Windows.** `view::panel` is one transparent surface (`layout::SURFACE`) with no background of its own: the 308 x 500 pt window (`layout::WINDOW`) inside a transparent margin of 122 pt left and below it (24 pt above, to the output's edge on the right) where the soft shadow around the tiles is drawn, a darkening of about 9 % at the tiles' edge that fades out over 130 pt
 to the sides and below, and above the tiles within the 20 pt up to the menu bar's edge, so nothing of it reaches into the
 bar and it shows no edge where the bar begins. Between the tiles it keeps the 9 %; under a fading tile it lies at the
-share the tile's glass lets through, so it follows a detail view's motion without a jump. The shadow's 26 bands are drawn once, while the panel rests, into a picture of the window's device pixels that the process keeps (two at most: with no view and with one open) and every later frame and opening lays over one texel per pixel, within 2/255 of the bands filled in place; a detail view's moving outline is filled in place. A whole opening frame at 1.5 takes some 3 ms on the new renderer each opening makes, against 14 ms with the bands filled. Only the window's rectangle takes input, and nothing while the panel fades out.
+share the tile's glass lets through, so it follows a detail view's motion without a jump. The shadow's 26 bands are drawn once, while the panel rests, into a picture of the window's device pixels that the component keeps (two at most: with no view and with one open) and every later frame and opening lays over one texel per pixel, within 2/255 of the bands filled in place; a detail view's moving outline is filled in place. A whole opening frame at 1.5 takes some 3 ms on the new renderer each opening makes, against 14 ms with the bands filled; the picture is drawn on the toolkit's CPU pool (`BandsWanted::draw`), at the scale of the card's output, or at each output's while the server places the card. Only the window's rectangle takes input, and nothing while the panel fades out.
 Each tile asks the compositor for module glass under its own outline (`PaintCx::glass`, `Glass::module`): capsules and circles with round
 ends, the media tile and an open detail view with 32 pt corners, the display and sound tiles with 24 pt corners. The tiles
 join one glass container with an 8 pt blend, less than the 12 pt between them, so tiles at rest stay apart and a
@@ -58,10 +65,10 @@ appearance), 8 pt around the grid and the Edit Controls capsule, closing in to a
 Increase Contrast each tile fills grey 0.463 inside a 0.5 pt rim of grey 0.341 (0.86 inside 0.45 in the light
 appearance), with no glass. A tile the window cannot show glass under fills a translucent grey of its appearance
 instead. `view::catcher` (Kit's `PressCatcher`, which the notification centre uses too) is a transparent window with no drawing
-(`WindowBackground::INPUT_ONLY`: one transparent pixel stretched over the output) that takes a left or right press anywhere on it. The process's `PanelRoles` gives the panel (`view::APP_ID`) an overlay
+(`WindowBackground::INPUT_ONLY`: one transparent pixel stretched over the output) that takes a left or right press anywhere on it. The component's `Program::surface` gives the card (`view::PANEL_KEY`) an overlay
 layer surface anchored top and right, with an exclusive zone of -1 and margins that put the window 6 pt from the right edge
 and 12 pt below the bar, so the tiles sit 14 pt from the edge and 20 pt below the bar, 44 pt from the top of the output. The bar reserves no layer zone, so
-the top margin adds the theme's menu bar height. The catcher (`view::CATCHER_APP_ID`) gets a top layer surface just below
+the top margin adds the theme's menu bar height, which the component reads from the theme on the I/O pool as it starts (`cupertino_kit_shell::design::menu_bar`); a toggle before it is known opens the panel once it is. The catcher (`view::CATCHER_KEY`) gets a top layer surface just below
 it, over the whole output.
 
 **Tiles.** A capsule shows a 36 pt badge 14 pt in from its leading and top edges, white with the symbol in the accent
@@ -85,12 +92,12 @@ Transparency or Increase Contrast, or where the window shows no glass, the track
 opens its detail view. A press on a tile away from its controls does nothing; a press between the tiles dismisses the
 panel.
 
-**Detail views.** The tile grows into the view on a critically damped spring (response 0.35 s, settled by 0.6 s,
-`motion::spring`): its frame moves from its cell to the top of the grid, 292 pt wide and as high as its list (at most the
+**Detail views.** The tile grows into the view on the catalogue's critically damped spring of the control panel's detail views
+(`SpringPreset::CONTROL_PANEL_DETAIL`: response 0.35 s, settled by 0.6 s; `motion::spring`): its frame moves from its cell to the top of the grid, 292 pt wide and as high as its list (at most the
 grid's 444 pt), its corners go to 32 pt, the other tiles and Edit Controls fade out over the first quarter of the motion
 (the glass lies under all of the window's content, so the growing tile cannot hide what it passes over), and the tile's
 content gives way to the view's at halfway. Closing runs the same way back, from wherever the motion is. With Reduce
-Motion the tile fades out in place and the view fades in at its place over 0.2 s. The view shows the module's switch or level, a heading, the list
+Motion the tile fades out in place and the view fades in at its place over 0.2 s (`Timing::CONTROL_PANEL_DETAIL_FADE`, linear; `motion::fade`). The view shows the module's switch or level, a heading, the list
 (Wi-Fi networks with a check on the connected one and a lock on secured ones; Bluetooth devices; the keyboard backlight;
 sound outputs with a check on the current one) and a row that opens the module's settings page. Escape or a press
 outside the view closes it; a second Escape dismisses the panel, also while the view is still closing. When the keyboard or assistive technology opened the
@@ -140,25 +147,23 @@ else Done) and to an added tile. Each remove mark ("Remove Wi-Fi") and each chip
 and Cancel and Done are buttons.
 
 **Session.** A hidden panel has no window. A toggle opens the panel and the catcher, with no detail view open. A dismissal
-closes the catcher at once and fades the panel, whose window closes when the fade ends. When the compositor presents
-shell surfaces (`cupertino_layers_v1` version 2) it runs both fades on its clock as the card's presentation
-(`lifecycle::OPEN_CURVE`, the same critically damped rise as a spring, and `lifecycle::CLOSE_CURVE`, the fall as a cubic
-Bezier within a two-thousandth of it): the card draws at full opacity and commits no buffer while it fades. Otherwise
-the card draws each step of the fade itself. While the panel is shown its window asks for **exclusive** keyboard interactivity, so it is the key window as soon as it
-opens, from the menu bar, a shortcut or a hot corner. It asks for it again when a toggle
-during the fade shows the panel again. It asks for none from the start of the fade. Another exclusive surface (the launcher)
-that takes the keyboard from the shown panel dismisses the panel. On `locked` a shown panel starts closing too.
+closes the catcher at once and fades the panel, whose window closes when the fade ends. The compositor runs both fades on
+its clock as the card's presentation (`WindowRequest::Present`), on the catalogue's `SpringPreset::CONTROL_PANEL_OPEN`
+(`lifecycle::open`, a critically damped rise) and `Timing::CONTROL_PANEL_CLOSE` (`lifecycle::close`, quick at first and
+slowing towards the end): the card draws at full opacity and commits no buffer while it fades. With Reduce Motion it
+appears and goes at once. While the panel is shown the card's surface asks for **exclusive** keyboard interactivity, so it
+is the key window as soon as it opens, from the menu bar, a shortcut or a hot corner. It asks for it again when a toggle
+during the fade shows the panel again, and for none from the start of the fade. The card's content holds the focus while
+the panel is shown (`view::PANEL_ROOT`), so another exclusive surface (the launcher) that takes the keyboard from it
+dismisses the panel. When the session locks, a shown panel starts closing too.
 
-**Outputs.** The panel and the catcher are always on the same output. A panel that opens with nothing open names no
-output: the server opens both surfaces on its active output, the one the person works on (where the pointer last moved or
-the keyboard last went; the menu bar clicked is on it), in the same pass. The surfaces are then told that output
-(`wl_surface.enter`), and a surface that opens while the other is still open names it (`SharedOutput` in `src/app.rs`):
-a toggle during the fade opens the new catcher on the fading card's output, even when the person has moved to another
-output meanwhile. When that output goes (a display unplugged), the panel is **dismissed**, not moved: the server closes its
-surfaces, or the output leaves the list the process sees (`Request::OutputGone`), and either hides the panel at once,
-without the fade, dropping a drag in progress (`Controller::vanish`). The server takes back the panel's keyboard for the
-key window. The next toggle opens the panel on an output that exists. The process does not need an output to start or to
-keep running: a toggle with no output at all opens surfaces the server closes again at once, so nothing shows. Moving the
+**Outputs.** The panel and the catcher are always on the same output. A `TogglePanel` publication of the host bus names
+the output to open on; a `Toggle` call names none, and the server opens both surfaces on its active output, the one the
+person works on (where the pointer last moved or the keyboard last went; the menu bar clicked is on it), in the same
+pass. A toggle during the fade shows the panel again on the fading card's output. When that output goes (a display
+unplugged), the panel is **dismissed**, not moved: the server closes its surfaces, or the output leaves the server's list,
+and either hides the panel at once, without the fade, dropping a drag in progress (`Controller::vanish`). The next toggle
+opens the panel on an output that exists. The component does not need an output to start or to keep running. Moving the
 open panel to the remaining output was not chosen: it would need new surfaces placed while the person's attention is on
 the display change, and a dismissal is what any other loss of the panel's place does (a lock, another exclusive panel).
 
@@ -171,53 +176,57 @@ slot's position.
 
 ## Protocols / D-Bus it speaks
 
-The process owns `org.cupertino.ControlPanel1` at `/org/cupertino/ControlPanel1` on the session bus. A second panel cannot take
-the name and exits with failure. The interface lives in `control` (`BUS_NAME`, `OBJECT_PATH`, `serve`, whose `Served`
-publishes the properties). The process's surface roles publish them before every wait of the loop, from whether the
-catcher is open and which output the panel's surfaces were told. A process that ends drops the name, which the menu bar
-takes as not shown.
+The component owns `org.cupertino.ControlPanel1` at `/org/cupertino/ControlPanel1` on its own session bus connection
+(D20). A second panel cannot take the name, and the component stops with failure. The interface lives in `control`
+(`BUS_NAME`, `OBJECT_PATH`, `serve`, whose `Served` announces the properties); the component tells it, and the host
+bus (`PanelShown`), whether the panel is shown and on which output whenever that changes. A component that stops drops
+the name, which the menu bar takes as not shown.
 
 | Method | Effect |
 |---|---|
 | `Shown` property (`b`) | Whether the panel is shown: from the toggle that opens it until its dismissal starts the fade, whatever dismissed it. `PropertiesChanged` announces every change. The menu bar highlights its control panel item while it is true. |
-| `Output` property (`s`) | The connector name (`wl_output.name`) of the output the shown panel is on, so the menu bar highlights the item on that output's bar; empty while hidden or before the panel's surfaces are told their output. |
-| `Toggle` | Opens the panel (reading every backend first), or starts closing it when it is open. Refused to a Flatpak, a Snap and a caller the bus cannot name (`org.cupertino.Error.FlatpakCaller`, `SnapCaller`, `AnonymousCaller`; `cupertino_peer::check_call`). Any unsandboxed process of the person may call it: the menu bar is a caller, and it is no relation of the panel (the server started both), so it cannot be told apart from another process of the person, as for `org.cupertino.NotificationCenter1`. |
+| `Output` property (`s`) | The connector name (`wl_output.name`) of the output the shown panel is on, so the menu bar highlights the item on that output's bar: the output a `TogglePanel` named, else the server's only output; empty while hidden, and while the server places the panel on one of several outputs. |
+| `Toggle` | Opens the panel, or starts closing it when it is open. Refused to a Flatpak, a Snap and a caller the bus cannot name (`org.cupertino.Error.FlatpakCaller`, `SnapCaller`, `AnonymousCaller`; `cupertino_peer::Caller::require_relation`), named from its `/proc` entries on the I/O pool. Any unsandboxed process of the person may call it: the menu bar is a caller, and it is no relation of the shell host, so it cannot be told apart from another process of the person, as for `org.cupertino.NotificationCenter1`. |
 
 ```
 gdbus call --session --dest org.cupertino.ControlPanel1 --object-path /org/cupertino/ControlPanel1 --method org.cupertino.ControlPanel1.Toggle
 ```
 
-The backends below also speak `org.cupertino.Network1` or NetworkManager, `org.cupertino.Bluetooth1` or BlueZ,
+The effects below also speak `org.cupertino.Network1` or NetworkManager, `org.cupertino.Bluetooth1` or BlueZ,
 `org.cupertino.Power1`, `org.freedesktop.UPower.KbdBacklight` and `org.freedesktop.login1` on the system bus, and
-`org.cupertino.NotificationCenter1`, `org.cupertino.Osd1` and `org.mpris.MediaPlayer2.*` on the session bus.
+`org.cupertino.Audio1` and `org.mpris.MediaPlayer2.*` on the session bus. On the host bus the component follows
+`TogglePanel` for `ControlPanel` and `DoNotDisturbChanged`, and publishes `PanelShown`, `SetDoNotDisturb` and `ShowOsd`.
 
 ### Backends
 
 A failure disables the tile with the reason and logs it on stderr as `cupertino-controlcenter: <what>: <reason>`. There is no
-silent default. The panel reads again every second while open. It logs a failure when it starts or its reason changes, and
-`<what>: available again` when it recovers, not on every retry. Each connection is made on first use and again after a
-failure. Properties are read from the service every time, never from a cache.
+silent default. The component reads every source as it starts, as the panel opens, and again every second while it is
+open, since the sound service sends no change signal. It logs a failure when it starts or its reason changes, and
+`<what>: available again` when it recovers, not on every retry. One reading of a source is under way at a time; a
+reading that started before a change of its source, or that is asked for while the change is under way, waits for the
+change to end, so a tile never shows what the service had before. The system bus connection is made as the component
+starts and again on the next use after it closed. Properties are read from the service every time, never from a cache.
 
-| Module | Real backend | Fake (`--fake-backends`, tests) |
-|---|---|---|
-| Wi-Fi | `radios::RadioWifi`: the network service found on the system bus at each reading (`cupertino-radios`: `org.cupertino.Network1`, else NetworkManager), its radio switch (read, write) and the network of the first Wi-Fi device while it is connected; no service, no Wi-Fi device or a service that does not answer is a disabled tile with the reason; the view asks for a scan, lists the networks in range and joins with no passphrase, which only a network the service knows or an open one accepts (a new secured network needs the passphrase the Wi-Fi settings ask for, so its row is not pressable) | `MemoryWifi` |
-| Bluetooth | `radios::RadioBluetooth`: the Bluetooth service found at each reading (`org.cupertino.Bluetooth1`, else BlueZ), its adapter (none, or a service that does not answer, is a disabled tile) and power switch (read, write); the view lists the paired devices by name and connects or disconnects one without waiting, since a service may answer only when the link is up | `MemoryBluetooth` |
-| Microphone | `backend::PipewireMicrophone`: the mute of the default PipeWire source (`cupertino-pipewire`); on means it records | `MemorySwitch` |
-| Now playing | `system::MprisPlayer`: the `org.mpris.MediaPlayer2.*` players on the session bus, the playing one first, else the first with a title; `Metadata` (`xesam:title`, `xesam:artist`), `PlaybackStatus`, `CanGoPrevious`, `CanGoNext`, `CanPlay`, `CanPause`; `Previous`, `PlayPause`, `Next`. Each call to a player waits at most 200 ms (`system::PLAYER_TIMEOUT`), so a player that hangs is passed over. No player is "Not Playing", not a failure | `MemoryMedia` |
-| Dock hiding | `backend::DockHiding`: the `autohide` key of the dock's settings file (`cupertino_defaults::dock`), which the dock follows | `MemorySwitch` |
-| Lock screen | `system::LogindLock`: `GetSessionByPID` of this process, then `Lock` on that session | `RecordingLock` |
-| Mute | the volume backend's mute (see Volume); unmuting a level of 0 restores 0.25 | the volume's |
-| Keyboard brightness | `system::UpowerKeyboard`: `org.freedesktop.UPower.KbdBacklight` (`GetBrightness`, `GetMaxBrightness`, `SetBrightness`, off or the maximum); a machine without one shows the tile disabled | `MemorySwitch` |
-| Focus mode | `org.cupertino.NotificationCenter1` on the session bus (`cupertino-notifications`): the `DoNotDisturb` property and `SetDoNotDisturb(b)`; on, the capsule reads "Do Not Disturb" | `MemorySwitch` |
-| Display brightness | `system::PowerdBrightness`: `org.cupertino.Power1` (`GetBrightness`, `GetMaxBrightness`, `SetBrightness`), raw value mapped linearly onto 0 to 1, never below raw 1 | `MemoryBrightness` |
-| Volume | `backend::SessionVolume`: the default PipeWire sink through `cupertino-pipewire` (`wpctl`), the level `wpctl get-volume` reports, the sinks as outputs and `set-default` to choose one; when no PipeWire daemon answers a read, `backend::AlsaVolume`: `cupertino-alsa` master selection (`Master::open_default`, the same as the overlay), level and mute switch, with the card's master as the only output; opened on first use and again after a failure | `MemoryVolume` |
-| Settings rows | `backend::SettingsLauncher`: starts `cupertino-settings --pane <page>` (`wifi`, `bluetooth`, `displays`, `sound`) | `RecordingLauncher` |
-| Controls shown | `backend::StoredLayout`: the `controls` key of `control-panel.conf` (`cupertino_defaults::control_panel`, `$CUPERTINO_CONTROL_PANEL_CONF`), read at every reading and written by Done; a file that cannot be read keeps the controls shown and is logged, one that cannot be written drops the edit and is logged | `MemoryLayout` |
-| Overlay | `system::SessionOverlay`: `org.cupertino.Osd1.Show(kind, level)` on the session bus, after a slider drag ends (`volume`, `mute` for a muted output, `brightness`) | `RecordingOverlay` |
+| Module | Through |
+|---|---|
+| Wi-Fi | the network service found on the system bus at each reading (`cupertino-radios`: `org.cupertino.Network1`, else NetworkManager), its radio switch (read, write) and the network of the first Wi-Fi device while it is connected; no service, no Wi-Fi device or a service that does not answer is a disabled tile with the reason; the view asks for a scan, lists the networks in range and joins with no passphrase, which only a network the service knows or an open one accepts (a new secured network needs the passphrase the Wi-Fi settings ask for, so its row is not pressable) |
+| Bluetooth | the Bluetooth service found at each reading (`org.cupertino.Bluetooth1`, else BlueZ), its adapter (none, or a service that does not answer, is a disabled tile) and power switch (read, write); the view lists the paired devices by name and connects or disconnects one; the device's row shows the outcome when the call ends, which BlueZ answers only once the link is up or has failed |
+| Microphone | `org.cupertino.Audio1`: `GetVolume("input")`, on when the default source is not muted; a press sets its mute with `SetVolume` at the level it has |
+| Now playing | the `org.mpris.MediaPlayer2.*` players on the session bus (`ListNames`, then `GetAll` of each player's `org.mpris.MediaPlayer2.Player`, all at once), the playing one first, else the first by name with a title; `Metadata` (`xesam:title`, `xesam:artist`), `PlaybackStatus`, `CanGoPrevious`, `CanGoNext`, `CanPlay`, `CanPause`; `Previous`, `PlayPause`, `Next`. A reading or a button ends after 400 ms (`effects::PLAYER_DEADLINE`), so a player that hangs is passed over. No player is "Not Playing", not a failure |
+| Dock hiding | the `autohide` key of the dock's settings file (`cupertino_defaults::dock`), which the dock follows; read and written on the I/O pool |
+| Lock screen | logind: `GetSessionByPID` of the shell host, then `Lock` on that session |
+| Mute | the volume's mute (see Volume); unmuting a level of 0 restores 0.25 |
+| Keyboard brightness | `org.freedesktop.UPower.KbdBacklight` (`GetBrightness`, `GetMaxBrightness`, `SetBrightness`, off or the maximum); a machine without one shows the tile disabled |
+| Focus mode | do not disturb of the notifications component, on the host bus: the retained `DoNotDisturbChanged` shows it, and a press publishes `SetDoNotDisturb` with no duration; on, the capsule reads "Do Not Disturb"; while the notifications component is stopped the capsule is disabled |
+| Display brightness | `org.cupertino.Power1` (`GetBrightness`, `GetMaxBrightness`, `SetBrightness`), raw value mapped linearly onto 0 to 1, never below raw 1 |
+| Volume | `org.cupertino.Audio1` of `cupertino-audiod` (`GetVolume("output")`, `SetVolume`, which answers the level reached); the Sound view's outputs are `ListDevices("output")` and `SetDefault` chooses one. The service picks the PipeWire default sink, else the ALSA master |
+| Settings rows | starts `cupertino-settings --pane <page>` (`wifi`, `bluetooth`, `displays`, `sound`) through the host, which reaps it |
+| Controls shown | the `controls` key of `control-panel.conf` (`cupertino_defaults::control_panel`, `$CUPERTINO_CONTROL_PANEL_CONF`), read at every reading and written by Done, on the I/O pool; a file that cannot be read keeps the controls shown and is logged, one that cannot be written drops the edit and is logged |
+| Overlay | `ShowOsd` on the host bus after a slider drag ends (`Volume`, `Mute` for a muted output, `Brightness`) |
 
 The modules are the ones a service backs. Sharing and screen mirroring have no service, and the session refuses an
 appearance change from anyone but the settings application, so the panel has no tiles for them; the battery lives in
-the menu bar.
+the menu bar. The panel has no power controls: restart, shut down, sleep and log out are the session menu's.
 
 ### Behaviour
 
@@ -248,12 +257,12 @@ the menu bar.
 | Reduce Transparency | tiles grey 0.114, panel grey 0.302 with 40 pt corners and 8 pt padding |
 | Increase Contrast | tiles grey 0.463, 0.5 pt rim grey 0.341 |
 | Detail view | 64 pt header, 28 pt heading, 32 pt rows (at most 9), 9 pt separator, 32 pt settings row, 8 pt bottom (`layout::detail`) |
-| Detail motion | critically damped spring, response 0.35 s, settled at 0.6 s; content hands over at halfway; Reduce Motion: 0.2 s linear cross-fade (`motion`) |
-| Fade | in over 0.23 s on a critically damped curve, with no scale or movement; out over 0.18 s, ease-out; with Reduce Motion both are instant; input stops at the start of the fade-out |
+| Detail motion | `SpringPreset::CONTROL_PANEL_DETAIL`, critically damped, response 0.35 s, settled at 0.6 s; content hands over at halfway; Reduce Motion: `Timing::CONTROL_PANEL_DETAIL_FADE`, 0.2 s linear cross-fade (`motion`) |
+| Fade | in on `SpringPreset::CONTROL_PANEL_OPEN`, a critically damped curve, with no scale or movement; out on `Timing::CONTROL_PANEL_CLOSE` over 0.18 s; with Reduce Motion both are instant; input stops at the start of the fade-out |
 | Lifecycle | hidden, shown, hiding, hidden; a toggle while hiding reopens; the output going hides at once |
 | Volume writes | linear 0 to 1, mute below 0.001, throttle 16.7 ms with the latest value kept |
 | Level keys | a sixteenth per arrow step |
-| Display floor | raw value 1 (a slider never turns the screen off) (`system`) |
+| Display floor | raw value 1 (a slider never turns the screen off) (`effects`) |
 | Refresh while open | 1 s (`controller::REFRESH_INTERVAL`) |
 
 ## Open issues
@@ -273,26 +282,21 @@ the menu bar.
 | `model` | `Module` (reading order), `Detail`, `Slider`, `Reading` (value or reason), `Controls`, `TileState`, `VolumeState`, `Media`, `MediaCommand`, `Network`, `Device`, `Output`, `speaker_icon` |
 | `arrangement` | `Arrangement`: the shown modules in order (`from_ids`, `ids`, `shown`, `available`), `add`, `remove`, `move_to`, `step`, `move_near`, and where the order puts each tile (`places`, `frame`, `rows`, `height`) |
 | `layout` | the grid in points (`ROW`, `COLUMN`, `GAP`, `WINDOW`, `INSET`), each module's `frame` (with every module shown) and `outline`, the Edit Controls frame under the tiles, the parts of the editing state (`editing`), and the detail view's parts, `detail_frame` and `morph` |
-| `lifecycle` | `Lifecycle`, `Phase`, `FADE_SECONDS` with injected time |
-| `motion` | `spring`, `Expansion` (a detail view opening or closing, reversible, with Reduce Motion) and `visibility` with injected time |
-| `backend` | the traits (`Wifi`, `Bluetooth`, `Switch`, `Brightness`, `Volume`, `MediaPlayer`, `SessionLock`, `Launcher`, `OverlayNotifier`, `LayoutStore`), `SessionVolume`, `AlsaVolume`, `PipewireMicrophone`, `DockHiding`, `StoredLayout`, `SettingsLauncher`, `Unavailable`, the `Memory*` stand-ins and `Recording` |
-| `radios` (feature `dbus`) | `Radios` (the system bus the radios are read on, `on_change`, `waiting`), `Radio`, `RadioWifi`, `RadioBluetooth`, `FRESH_WAIT`, `SWITCH_WAIT` |
-| `system` (feature `dbus`) | `NotificationFocusMode`, `PowerdBrightness`, `UpowerKeyboard`, `LogindLock`, `MprisPlayer`, `SessionOverlay` |
-| `controller` | `Controller`: lifecycle, readings, presses, the open detail view and its list, joins, connections, outputs, media commands, settings, the controls shown and their editing (`edit_controls`, `edit_remove`, `edit_add`, `edit_step`, `edit_move_near`, `finish_edit`, `cancel_edit`), throttled level writes, refresh timer; `Backends` |
-| `control` (feature `dbus`) | the `org.cupertino.ControlPanel1` interface (`serve`) |
-| `view` (feature `app`) | the CupertinoKit windows: `arranged` (the tiles of an `Arrangement` at a `Presentation`; `panel` with every module), `Editing` and `Held` (the editing state and the tile the pointer holds), `catcher`, `Input` (what the user did), `Via`, `focus_key`, `edit_key`, `APP_ID`, `CATCHER_APP_ID`, `TITLE` |
+| `lifecycle` | `Lifecycle`, `Phase`, the fades `open` and `close`, with injected time |
+| `motion` | `spring`, `fade`, `Expansion` (a detail view opening or closing, reversible, with Reduce Motion) and `visibility` with injected time |
+| `controller` | `Controller`: lifecycle, readings, presses, the open detail view and its list, joins, connections, outputs, media commands, settings, the controls shown and their editing (`edit_controls`, `edit_remove`, `edit_add`, `edit_step`, `edit_move_near`, `finish_edit`, `cancel_edit`), throttled level writes and the refresh, as the `Effect`s (`Read` of a `Source`, `Change`) it asks for and the outcomes it is given (`read`, `changed`) |
+| `effects` (private) | what the effects do on the buses and the I/O pool |
+| `control` | the `org.cupertino.ControlPanel1` interface (`serve`, `Served`, `Presence`, `Call`, `judge`) |
+| `view` | the CupertinoKit windows: `arranged` (the tiles of an `Arrangement` at a `Presentation`; `panel` with every module), `bands_wanted` and `BandPictures` (the pictures of the shadow's bands), `Editing` and `Held` (the editing state and the tile the pointer holds), `catcher`, `Input` (what the user did), `Via`, `focus_key`, `edit_key`, `PANEL_KEY`, `CATCHER_KEY`, `PANEL_ROOT`, `TITLE` |
+| `component` (private) | `ControlCenter`, the component |
 
-The Wi-Fi and Bluetooth backends share one connection to the system bus (`radios::Radios`) and follow the services'
-change signals on it (`cupertino_radios::watch`): a signal, or a service starting or stopping, has a shown panel read
-that radio again at once (`Controller::radios_changed`), and no other backend, so a radio switched in Settings or a
-device that connects shows without waiting for the periodic reading. A burst of signals asks for one reading, and a
-Bluetooth device's signal strength while the adapter discovers asks for none.
+The Wi-Fi and Bluetooth readings follow the services' change signals on the component's system bus connection
+(`cupertino_radios::watch`): a signal, or a service starting or stopping, has a shown panel read that radio again at once
+(`Controller::radios_changed`), and no other source, so a radio switched in Settings or a device that connects shows
+without waiting for the next reading. A burst of signals asks for one reading, and a Bluetooth device's signal strength
+while the adapter discovers asks for none.
 
-The panel's thread never waits for a service. The connection is made, and every reading and switch carried out, on
-threads of their own, and no lock is held across a call on the bus. A reading the panel asks for is waited for
-`FRESH_WAIT` (100 ms), a switch's answer for `SWITCH_WAIT` (250 ms), which services that answer as they should need
-less than. A reading that takes longer leaves the tile with its last reading (unavailable, "waiting for the network
-service", while there is none) and has the panel read again when it arrives; one reading of a kind is under way at a
-time, and a request that comes meanwhile has it taken once more when it ends. A service that does not answer fails
-its reading after the bounded wait of `cupertino-radios` (3 s), and its tile is unavailable with "the network service
-does not answer" until a reading succeeds.
+The UI thread never waits for a service. The bus calls are futures of the UI loop; the radios' calls, which wait for
+their answers, and the settings files run on the toolkit's I/O pool. A service that does not answer fails its reading
+after the bounded wait of `cupertino-radios` (3 s), and its tile is unavailable with "the network service does not
+answer" until a reading succeeds.

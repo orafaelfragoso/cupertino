@@ -139,6 +139,8 @@ pub(super) struct Board<M> {
     /// The tiles' outlines, relative to the grid's corner, that the shadow is cut away over by their opacity.
     pub(super) cutouts: Vec<Cutout>,
     pub(super) on_outside: Option<M>,
+    /// What the panel hears when its window loses the keyboard while the focus is on the board or within it.
+    pub(super) on_inactive: Option<M>,
     pub(super) children: Vec<Element<M>>,
 }
 
@@ -195,6 +197,19 @@ impl<M: Clone + 'static> Widget<M> for Board<M> {
                     cx.emit(outside.clone());
                 }
                 Propagation::Stop
+            }
+            // the window lost the keyboard: the focus on the board heard it, or the focus on a control within it
+            Event::WindowActive(false) => {
+                if let Some(inactive) = &self.on_inactive {
+                    cx.emit(inactive.clone());
+                }
+                Propagation::Continue
+            }
+            Event::FocusWithin { gained: false, .. } if !cx.window_active() => {
+                if let Some(inactive) = &self.on_inactive {
+                    cx.emit(inactive.clone());
+                }
+                Propagation::Continue
             }
             _ => Propagation::Continue,
         }

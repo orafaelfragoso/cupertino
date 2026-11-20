@@ -980,20 +980,14 @@ name = "cupertino-controlcenter"
 version = "0.1.0"
 dependencies = [
  "async-channel",
- "async-io",
- "cupertino-alsa",
  "cupertino-assets",
  "cupertino-defaults",
- "cupertino-diagnostic-events",
  "cupertino-geometry",
- "cupertino-keyboard",
  "cupertino-kit",
+ "cupertino-kit-shell",
  "cupertino-peer",
- "cupertino-pipewire",
  "cupertino-radios",
- "cupertino-shell-client",
- "cupertino-ui-wayland",
- "cupertino-wayland-client",
+ "serde",
  "zbus",
 ]
 

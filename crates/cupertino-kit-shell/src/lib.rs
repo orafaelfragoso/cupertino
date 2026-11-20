@@ -84,6 +84,13 @@ pub trait Program: Application {
     fn surface(model: &Self::Model, window: &WindowKey) -> Surface;
     /// Convert a shell event into an application message, or `None` to ignore it.
     fn event(event: Event) -> Option<Self::Message>;
+    /// Whether the view shows what the program has to show. Until it does, no view counts as the first, so `ready`
+    /// waits and the server keeps holding the surfaces of the instance before (`holds`). A program that shows nothing
+    /// until it has read what it shows says so until then; every view counts by default.
+    fn showing(model: &Self::Model) -> bool {
+        let _ = model;
+        true
+    }
 }
 
 /// A part of the shell that runs inside a host process (`cupertino-shell`).
@@ -221,6 +228,13 @@ pub enum Event {
     Outputs,
     /// The server closed or dismissed `WindowKey`.
     Closed(WindowKey),
+    /// The server configured the layer or lock surface of `window` to `size`, in points: the size the window is laid
+    /// out at, the area its anchors and margins leave it within the space other surfaces reserve. With every configure,
+    /// before the frame drawn at that size.
+    Configured {
+        window: WindowKey,
+        size: Size,
+    },
     /// The window or workspace of the hole on `layer` of `window` closed.
     HoleClosed {
         window: WindowKey,

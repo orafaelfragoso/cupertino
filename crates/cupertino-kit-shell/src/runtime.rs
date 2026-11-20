@@ -201,7 +201,9 @@ impl<P: Program, R: Residence + 'static> Application for Hosted<P, R> {
             .map(|w| (w.key.clone(), P::surface(&inner, &w.key)))
             .collect();
         let mut shared = model.shared.borrow_mut();
-        if shared.awaiting.is_none() {
+        // the first view is the first that shows what the program has to show: `ready` before it would end the holds
+        // and leave their place empty until it comes
+        if shared.awaiting.is_none() && P::showing(&inner) {
             shared.awaiting = Some(
                 surfaces
                     .iter()

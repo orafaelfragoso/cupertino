@@ -3,7 +3,9 @@
 //! outside a component thread, and the runtime's loop against the stand-in server: a component and a program of its
 //! own run on Kit's UI loop on their connection, draw their view on the role it names, carry out the requests their
 //! commands queue, persist their surfaces and say `ready`; a component is told the session's display options at start
-//! and on every change; a component needing a newer global is refused before it starts; a busy loop and a busy render
+//! and on every change; a component that shows nothing until it has what to show says `ready` only once a view of it
+//! shows it (`Program::showing`), so the server holds the surfaces of the instance before until then, and hears the
+//! size the server configured its layer surface to; a component needing a newer global is refused before it starts; a busy loop and a busy render
 //! thread are reported.
 
 mod support;
@@ -242,6 +244,94 @@ impl Component for Following {
     const NAME: ComponentName = ComponentName::LAUNCHER;
 }
 
+/// The layer surface the revealing component persists, and what it was told of its configured sizes, in order.
+const REVEALED: &str = "revealed";
+static CONFIGURED: Mutex<Vec<(WindowKey, Size)>> = Mutex::new(Vec::new());
+/// Whether Reduce Motion was on in each appearance the revealing component was told, in order.
+static REVEALING_TOLD: Mutex<Vec<bool>> = Mutex::new(Vec::new());
+
+/// A component that shows nothing until the session turns Reduce Motion on, then a persistent layer surface stretched
+/// over the output: as a component whose first view waits for what it shows, and says so (`Program::showing`).
+struct Revealing;
+
+#[derive(Clone, Debug)]
+enum RevealingMessage {
+    Appearance(SystemAppearance),
+    Configured(WindowKey, Size),
+}
+
+impl Application for Revealing {
+    type Model = bool;
+    type Message = RevealingMessage;
+
+    fn init() -> (bool, Vec<Command<RevealingMessage>>) {
+        (false, Vec::new())
+    }
+
+    fn update(shown: &mut bool, message: RevealingMessage) -> Vec<Command<RevealingMessage>> {
+        match message {
+            RevealingMessage::Appearance(appearance) => {
+                REVEALING_TOLD
+                    .lock()
+                    .unwrap()
+                    .push(appearance.reduce_motion);
+                *shown |= appearance.reduce_motion;
+            }
+            RevealingMessage::Configured(key, size) => CONFIGURED.lock().unwrap().push((key, size)),
+        }
+        Vec::new()
+    }
+
+    fn view(shown: &bool) -> Vec<Window<RevealingMessage>> {
+        if *shown {
+            vec![overlay_window(REVEALED)]
+        } else {
+            Vec::new()
+        }
+    }
+}
+
+impl Program for Revealing {
+    fn surface(_: &bool, _: &WindowKey) -> Surface {
+        Surface {
+            role: Role::Layer(LayerSpec {
+                namespace: REVEALED,
+                output: None,
+                layer: Layer::Bottom,
+                anchor: Anchor {
+                    top: true,
+                    bottom: true,
+                    left: true,
+                    right: true,
+                },
+                size: Size::new(0.0, 0.0),
+                margin: Margin::default(),
+                exclusive_zone: 0,
+                keyboard: Keyboard::None,
+            }),
+            persistent: Some(REVEALED),
+            holes: Vec::new(),
+        }
+    }
+
+    fn showing(shown: &bool) -> bool {
+        *shown
+    }
+
+    fn event(event: Event) -> Option<RevealingMessage> {
+        match event {
+            Event::Appearance(appearance) => Some(RevealingMessage::Appearance(appearance)),
+            Event::Configured { window, size } => Some(RevealingMessage::Configured(window, size)),
+            _ => None,
+        }
+    }
+}
+
+impl Component for Revealing {
+    const NAME: ComponentName = ComponentName::DESKTOP;
+}
+
+static REVEALING: Entry = Entry::of::<Revealing>();
 static FOLLOWING: Entry = Entry::of::<Following>();
 static OVERLAY: Entry = Entry::of::<Overlay>();
 static DOCK: Entry = Entry::of::<Dock>();
@@ -349,6 +439,53 @@ fn a_component_is_told_the_display_options_at_start_and_on_every_change() {
         told()
     );
     assert_eq!(told().len(), 4, "{:?}", told());
+
+    running.stop();
+    eventually("the component stops", || {
+        running.ended() == Some(Ended::Stopped)
+    });
+    drop(server);
+}
+
+#[test]
+fn a_component_is_ready_once_it_shows_what_it_has_to_show() {
+    let (server, host_end) = Server::start(Kind::Shared, &["desktop"]);
+    let (mut host, runtime) = host_and_runtime(host_end);
+    let connection = component_connection(&mut host, "desktop");
+    let mut running = runtime.start(&REVEALING, connection).unwrap();
+    let desktop = || "desktop".to_owned();
+    // the server holds a surface of the instance before (the stand-in holds one of every component); the turn that
+    // tells the component the session's appearance at start draws a view of nothing, before the next change is read
+    eventually("the component hears the session's appearance", || {
+        *REVEALING_TOLD.lock().unwrap() == [false]
+    });
+
+    // its first views show nothing; the one that shows the persistent surface counts
+    server.set_display_options(DisplayOption::ReduceMotion);
+    let seen = server.seen_until(|seen| seen.contains(&Seen::Ready(desktop())));
+    let persisted = position(&seen, |s| {
+        *s == Seen::Persisted {
+            component: desktop(),
+            key: REVEALED.into(),
+        }
+    });
+    let drawn = position(&seen, |s| {
+        *s == Seen::Drawn {
+            component: desktop(),
+            namespace: REVEALED.into(),
+        }
+    });
+    let ready = position(&seen, |s| *s == Seen::Ready(desktop()));
+    assert!(persisted < drawn && drawn < ready, "{seen:?}");
+    let (width, height) = support::display::OUTPUT_SIZE;
+    assert_eq!(
+        *CONFIGURED.lock().unwrap(),
+        [(
+            WindowKey(Key::from(REVEALED)),
+            Size::new(f64::from(width), f64::from(height))
+        )],
+        "the size the server configured the stretched surface to"
+    );
 
     running.stop();
     eventually("the component stops", || {

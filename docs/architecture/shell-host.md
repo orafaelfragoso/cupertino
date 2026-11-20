@@ -662,6 +662,9 @@ pub trait Program: cupertino_kit::core::Application {
     fn surface(model: &Self::Model, window: &WindowKey) -> Surface;
     /// What the shell said, as a message of the program; `None` for what it does not follow.
     fn event(event: Event) -> Option<Self::Message>;
+    /// Whether the view shows what the program has to show; until it does, no view counts as the first (`ready`).
+    /// Every view counts by default.
+    fn showing(model: &Self::Model) -> bool { true }
 }
 
 /// A part of the shell that runs in a host.
@@ -766,6 +769,10 @@ pub enum Event {
     /// An output came, went or changed: read `outputs::all()`.
     Outputs,
     Closed(WindowKey),
+    /// The server configured the layer or lock surface of `window` to `size`, in points: the area its anchors and
+    /// margins leave it within the space other surfaces reserve, which the window is laid out at. With every configure,
+    /// before the frame drawn at that size.
+    Configured { window: WindowKey, size: Size },
     /// The window or workspace of the hole on `layer` of `window` is gone.
     HoleClosed { window: WindowKey, layer: u64 },
     MenuBar(WindowKey, Box<menu_bar::Update>),
@@ -910,7 +917,9 @@ pub fn holds() -> Vec<String>;
 - A hole's layer changes place with `WindowRequest::Layer`, as any surface layer does; the layer's widget paints
   what lies over the window (a title, a highlight).
 - The crate persists a surface whose `Surface::persistent` is set before its first frame, and sends `ready` once
-  every persistent window of the first view has presented a frame.
+  every persistent window of the first view has presented a frame. The first view is the first for which
+  `Program::showing` holds: a component that shows nothing until it has what to show (the desktop, until its folder is
+  listed) says so, and the held pictures stay in place until then; the server's 10 s end them if it never shows.
 - A window that takes a hold over shows its holes, its claims and, for the window manager, its placements in its
   first frame: the server swaps them for the held ones in that frame ([Holds](#holds)). A window manager commits
   its placements in the update that first shows its window, so both arrive together.

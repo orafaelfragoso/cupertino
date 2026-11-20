@@ -98,6 +98,9 @@ pub trait Launcher {
     /// The process of host `host_id` exited with `status`; whether the server expected the exit, which is then not
     /// counted.
     fn host_ended(&mut self, host_id: u64, status: ExitStatus, from_dev_folder: bool) -> bool;
+    /// The connection of host `host_id` could not be bound to its process, which is ended unbound: the host never ran,
+    /// so the end of its connection is expected and counts as no crash; the next start makes another connection.
+    fn host_unbound(&mut self, host_id: u64, from_dev_folder: bool);
     /// A host of `kind` could not be started for `reason` and is not tried again; `host_id` is the connection made for
     /// it, if one was.
     fn host_refused(&mut self, kind: HostKind, host_id: Option<u64>, reason: &str);
@@ -984,8 +987,7 @@ fn start(
     if let Err(e) = bound {
         tracing::warn!(name = spec.name, error = %e, "binding the shell process to its connection failed: ending it");
         if let Some(id) = host_id {
-            // the host never ran: its end is no crash, and the next start makes another connection
-            launcher.host_ended(id, std::process::ExitStatus::default(), from_dev_folder);
+            launcher.host_unbound(id, from_dev_folder);
         }
         crate::shell_connection::end_unbound(child);
         return retry("bind", &program, e.to_string());

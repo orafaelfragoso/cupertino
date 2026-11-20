@@ -8,9 +8,14 @@
 //! - a host that exits is started again no sooner than 1 s after its last start, then 2 s, and an exit the server
 //!   expected (`cupertino shell restart host`) is not counted;
 //! - a change of the `shell` section moves a component to a separate host and turns it off, at once;
-//! - `cupertino shell restart NAME` of a hosted component goes through its host and is answered once it is ready.
+//! - `cupertino shell restart NAME` of a hosted component goes through its host and is answered once it is ready; of a
+//!   component that runs as its process entry it restarts the process;
+//! - a component turned off holds nothing any more: what was held for it, its reserved space too, ends at once;
+//! - a host whose connection cannot be bound to its process never ran: the server hears it as such, not as an exit.
 
+use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
+use std::process::ExitStatus;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -18,8 +23,11 @@ use cupertino_assets::Assets;
 use cupertino_defaults::compositor::CompositorSettings;
 use cupertino_server::config::ShellProcess;
 use cupertino_server::host::{HostKind, HostView, COMPONENTS};
+use cupertino_server::shell_connection::BoundConnection;
 use cupertino_server::state::new_output;
-use cupertino_server::supervisor::{HostProgram, ProcessInfo, ProcessState, RestartError};
+use cupertino_server::supervisor::{
+    HostProgram, Launcher, ProcessInfo, ProcessState, RestartError, Supervisor,
+};
 use cupertino_server::{Config, Cupertino};
 use smithay::output::{Mode as OutputMode, PhysicalProperties, Subpixel};
 use smithay::reexports::calloop::EventLoop;
@@ -68,6 +76,7 @@ fn process_entry(name: &str) -> ShellProcess {
 struct Rig {
     event_loop: EventLoop<'static, Cupertino>,
     state: Cupertino,
+    output_id: cupertino_wm::OutputId,
     /// When the first supervision pass ran: the start of what it started.
     started: Instant,
 }
@@ -86,7 +95,7 @@ impl Rig {
             &Assets::builtin(),
         )
         .expect("server starts");
-        state.add_output(new_output(
+        let output_id = state.add_output(new_output(
             "headless-1",
             PhysicalProperties {
                 size: (300, 200).into(),
@@ -115,6 +124,7 @@ impl Rig {
         Self {
             event_loop,
             state,
+            output_id,
             started,
         }
     }
@@ -395,6 +405,11 @@ fn a_change_of_the_shell_section_moves_and_stops_a_component_at_once() {
     rig.until("menubar runs in the shared host", |s| {
         host_up(s, HostKind::Shared) && s.hosts.component_connected("menubar")
     });
+    let bar = f64::from(stand_in::BAR_HEIGHT);
+    let output = rig.output_id;
+    rig.until("the menu bar reserves its space", |s| {
+        s.usable_area(output).y == bar
+    });
     let settings = |json: &str| CompositorSettings::parse(json, None).0;
     let none = CompositorSettings::default();
 
@@ -406,19 +421,119 @@ fn a_change_of_the_shell_section_moves_and_stops_a_component_at_once() {
         host_up(s, HostKind::Separate("menubar")) && s.hosts.component_connected("menubar")
     });
     assert!(running(&rig.state, "host-menubar"));
+    rig.until("the separate host's menu bar took the bar over", |s| {
+        s.hosts.held_surfaces().is_empty() && s.usable_area(output).y == bar
+    });
     assert!(!rig
         .host(HostKind::Shared)
         .unwrap()
         .components
         .contains(&"menubar"));
 
-    // `off`: its separate host gets an empty list, exits and is not started again
+    // its host ends: the bar is held, the space it reserves too (no pass starts the host again meanwhile)
+    if let Some((token, _)) = rig.state.supervision_wakeups.timer.take() {
+        rig.state.loop_handle.remove(token);
+    }
+    kill_and_wait(rig.process("host-menubar").unwrap().pid.unwrap());
+    rig.until("the menu bar is held", |s| {
+        s.hosts.held_surfaces().len() == 1
+    });
+    assert_eq!(rig.state.usable_area(output).y, bar);
+
+    // `off`: what was held for it ends at once; its separate host is not started again
     let off = settings(r#"{"shell": {"off": ["menubar"]}}"#);
     rig.state
         .apply_compositor_layers((&none, &alone), (&none, &off));
+    assert!(
+        rig.state.hosts.held_surfaces().is_empty(),
+        "a component turned off holds nothing"
+    );
+    assert_eq!(
+        rig.state.usable_area(output).y,
+        0.0,
+        "its reserved space ends with it"
+    );
     rig.until("the separate host is gone", |s| {
         process(s, "host-menubar").is_none() && host(s, HostKind::Separate("menubar")).is_none()
     });
     assert!(!rig.state.hosts.component_connected("menubar"));
     assert!(running(&rig.state, "host"), "the shared host runs on");
+}
+
+#[test]
+fn restarting_a_component_that_runs_as_its_process_restarts_the_process() {
+    let config = Config {
+        shell_processes: vec![process_entry("dock")],
+        ..Config::default()
+    };
+    let mut rig = Rig::new(config, None);
+    rig.until("the dock runs as its process", |s| running(s, "dock"));
+    let before = rig.process("dock").unwrap().pid;
+    let rx = restart(&mut rig, "dock");
+    let info = answer(&mut rig, &rx).expect("the process runs again");
+    assert_eq!(info.name, "dock");
+    assert_ne!(info.pid, before, "a fresh process");
+    assert_eq!(rig.process("dock").unwrap().pid, info.pid);
+}
+
+/// A launcher whose hosts' connections cannot be bound: it records what the supervisor tells it.
+#[derive(Default)]
+struct BindRefused {
+    ended: Vec<u64>,
+    unbound: Vec<u64>,
+}
+
+/// The id [`BindRefused`] gives every host connection.
+const UNBOUND_HOST: u64 = 7;
+
+impl Launcher for BindRefused {
+    fn connect(&mut self, _: &ShellProcess) -> std::io::Result<BoundConnection> {
+        Err(std::io::Error::other("no plain processes here"))
+    }
+
+    fn connect_host(&mut self, _: HostKind) -> std::io::Result<(UnixStream, u64)> {
+        let (client_end, _server_end) = UnixStream::pair()?;
+        Ok((client_end, UNBOUND_HOST))
+    }
+
+    fn host_started(&mut self, _: u64, _: u32, _: bool) -> std::io::Result<()> {
+        Err(std::io::Error::other("binding refused"))
+    }
+
+    fn host_ended(&mut self, host_id: u64, _: ExitStatus, _: bool) -> bool {
+        self.ended.push(host_id);
+        false
+    }
+
+    fn host_unbound(&mut self, host_id: u64, _: bool) {
+        self.unbound.push(host_id);
+    }
+
+    fn host_refused(&mut self, kind: HostKind, _: Option<u64>, reason: &str) {
+        panic!("the host {kind:?} was refused: {reason}");
+    }
+}
+
+#[test]
+fn a_host_whose_connection_cannot_be_bound_never_ran() {
+    let now = Instant::now();
+    let mut supervisor = Supervisor::new(&[], now);
+    let (program, args) = stand_in();
+    supervisor.set_host_program(Some(HostProgram {
+        path: program,
+        args,
+        checked: false,
+    }));
+    supervisor.reconcile(&[], &[(HostKind::Shared, None)], now);
+    let mut launcher = BindRefused::default();
+    supervisor.poll(now, None, None, &mut launcher);
+    assert_eq!(
+        launcher.unbound,
+        vec![UNBOUND_HOST],
+        "the server hears that the host never ran"
+    );
+    assert!(
+        launcher.ended.is_empty(),
+        "and no exit it would count as a crash"
+    );
 }

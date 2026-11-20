@@ -4,21 +4,38 @@
 //! "built without" ([`BUILT_WITHOUT`]), starts a component again when the server asks for a restart, exits when the
 //! server sends `restart`, and exits successfully as a separate host whose list became empty.
 //!
+//! The menu bar ([`PERSISTING`]) maps a persisted bar reserving [`BAR_HEIGHT`] at the top of its output before it says
+//! it is ready, so what the server holds for it can be looked at.
+//!
 //! With `--process` it is a plain shell process instead: it holds its connection until the server closes it.
 
 use std::collections::HashMap;
+use std::io::Write;
+use std::os::fd::AsFd;
 use std::os::unix::net::UnixStream;
 
-use cupertino_protocols::client::host::cupertino_component_v1::{self, CupertinoComponentV1};
+use cupertino_protocols::client::host::cupertino_component_v1::CupertinoComponentV1;
 use cupertino_protocols::client::host::cupertino_host_component_v1::{
     self, CupertinoHostComponentV1, UnavailableReason,
 };
 use cupertino_protocols::client::host::cupertino_host_v1::{self, CupertinoHostV1, Kind};
-use wayland_client::protocol::wl_registry;
+use wayland_client::protocol::{
+    wl_buffer, wl_compositor, wl_registry, wl_shm, wl_shm_pool, wl_surface,
+};
 use wayland_client::{Connection, Dispatch, QueueHandle, WEnum};
+use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
 /// The components this stand-in host was built without: it answers `unavailable` with `absent` for each.
 const BUILT_WITHOUT: [&str; 1] = ["dialogs"];
+
+/// The components that map a persisted bar before they say they are ready.
+const PERSISTING: [&str; 1] = ["menubar"];
+
+/// The key a persisting component persists its bar under.
+const BAR_KEY: &str = "bar";
+
+/// The height of a persisting component's bar in logical pixels, and the space it reserves at the top of its output.
+pub const BAR_HEIGHT: u32 = 28;
 
 /// Be the host, or with `--process` a plain shell process, on the connection of `WAYLAND_SOCKET`.
 pub fn run() {
@@ -155,28 +172,112 @@ impl Dispatch<CupertinoHostComponentV1, String> for Host {
     }
 }
 
-/// A component on its own connection: it binds `cupertino_component_v1`, says it is ready, and runs until the server
-/// closes the connection.
+/// A component on its own connection: it binds `cupertino_component_v1`, maps its bar if it is one of
+/// [`PERSISTING`], says it is ready, and runs until the server closes the connection.
 fn run_component(name: &str, socket: UnixStream) {
     let Ok(conn) = Connection::from_socket(socket) else {
         return;
     };
     let mut queue = conn.new_event_queue::<Component>();
-    let _registry = conn.display().get_registry(&queue.handle(), ());
+    let qh = queue.handle();
+    let _registry = conn.display().get_registry(&qh, ());
     let mut component = Component::default();
     if queue.roundtrip(&mut component).is_err() {
         return;
     }
-    match &component.object {
-        Some(object) => object.ready(),
-        None => eprintln!("stand-in host: {name} sees no cupertino_component_v1"),
-    }
+    let Some(object) = component.object.clone() else {
+        eprintln!("stand-in host: {name} sees no cupertino_component_v1");
+        return;
+    };
+    let _bar = if PERSISTING.contains(&name) {
+        match map_bar(name, &object, &mut queue, &mut component) {
+            Some(bar) => Some(bar),
+            None => return,
+        }
+    } else {
+        None
+    };
+    object.ready();
     while queue.blocking_dispatch(&mut component).is_ok() {}
+}
+
+/// What a mapped bar needs kept alive.
+struct Bar {
+    _surface: wl_surface::WlSurface,
+    _layer: zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
+    _buffer: (std::fs::File, wl_shm_pool::WlShmPool, wl_buffer::WlBuffer),
+}
+
+/// Map a bar across the top of the output, persisted under [`BAR_KEY`] and reserving [`BAR_HEIGHT`].
+fn map_bar(
+    name: &str,
+    object: &CupertinoComponentV1,
+    queue: &mut wayland_client::EventQueue<Component>,
+    component: &mut Component,
+) -> Option<Bar> {
+    let qh = queue.handle();
+    let (Some(compositor), Some(shm), Some(layer_shell)) = (
+        component.compositor.clone(),
+        component.shm.clone(),
+        component.layer_shell.clone(),
+    ) else {
+        eprintln!("stand-in host: {name} cannot map its bar");
+        return None;
+    };
+    let surface = compositor.create_surface(&qh, ());
+    let layer = layer_shell.get_layer_surface(
+        &surface,
+        None,
+        zwlr_layer_shell_v1::Layer::Top,
+        name.into(),
+        &qh,
+        (),
+    );
+    layer.set_anchor(
+        zwlr_layer_surface_v1::Anchor::Top
+            | zwlr_layer_surface_v1::Anchor::Left
+            | zwlr_layer_surface_v1::Anchor::Right,
+    );
+    layer.set_size(0, BAR_HEIGHT);
+    layer.set_exclusive_zone(BAR_HEIGHT as i32);
+    object.persist(&surface, BAR_KEY.into());
+    surface.commit();
+    queue.roundtrip(component).ok()?;
+    let width = component.width.filter(|w| *w > 0)? as i32;
+    let height = BAR_HEIGHT as i32;
+    let stride = width * 4;
+    let size = (stride * height) as usize;
+    let path = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("stand-in-bar-{}-{name}.bin", std::process::id()));
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&path)
+        .ok()?;
+    let _ = std::fs::remove_file(&path);
+    file.write_all(&vec![0x7f; size]).ok()?;
+    let pool = shm.create_pool(file.as_fd(), size as i32, &qh, ());
+    let buffer = pool.create_buffer(0, width, height, stride, wl_shm::Format::Argb8888, &qh, ());
+    surface.attach(Some(&buffer), 0, 0);
+    surface.commit();
+    queue.roundtrip(component).ok()?;
+    Some(Bar {
+        _surface: surface,
+        _layer: layer,
+        _buffer: (file, pool, buffer),
+    })
 }
 
 #[derive(Default)]
 struct Component {
     object: Option<CupertinoComponentV1>,
+    compositor: Option<wl_compositor::WlCompositor>,
+    shm: Option<wl_shm::WlShm>,
+    layer_shell: Option<zwlr_layer_shell_v1::ZwlrLayerShellV1>,
+    /// The width the bar was configured to.
+    width: Option<u32>,
 }
 
 impl Dispatch<wl_registry::WlRegistry, ()> for Component {
@@ -189,24 +290,48 @@ impl Dispatch<wl_registry::WlRegistry, ()> for Component {
         qh: &QueueHandle<Self>,
     ) {
         if let wl_registry::Event::Global {
-            name, interface, ..
+            name,
+            interface,
+            version,
         } = event
         {
-            if interface == "cupertino_component_v1" {
-                state.object = Some(registry.bind::<CupertinoComponentV1, _, _>(name, 1, qh, ()));
+            match interface.as_str() {
+                "cupertino_component_v1" => {
+                    state.object = Some(registry.bind(name, 1, qh, ()));
+                }
+                "wl_compositor" => {
+                    state.compositor = Some(registry.bind(name, version.min(6), qh, ()))
+                }
+                "wl_shm" => state.shm = Some(registry.bind(name, 1, qh, ())),
+                "zwlr_layer_shell_v1" => {
+                    state.layer_shell = Some(registry.bind(name, version.min(4), qh, ()));
+                }
+                _ => {}
             }
         }
     }
 }
 
-impl Dispatch<CupertinoComponentV1, ()> for Component {
+impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for Component {
     fn event(
-        _: &mut Self,
-        _: &CupertinoComponentV1,
-        _: cupertino_component_v1::Event,
+        state: &mut Self,
+        layer: &zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
+        event: zwlr_layer_surface_v1::Event,
         _: &(),
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
+        if let zwlr_layer_surface_v1::Event::Configure { serial, width, .. } = event {
+            layer.ack_configure(serial);
+            state.width = Some(width);
+        }
     }
 }
+
+wayland_client::delegate_noop!(Component: ignore CupertinoComponentV1);
+wayland_client::delegate_noop!(Component: ignore wl_compositor::WlCompositor);
+wayland_client::delegate_noop!(Component: ignore wl_surface::WlSurface);
+wayland_client::delegate_noop!(Component: ignore wl_shm::WlShm);
+wayland_client::delegate_noop!(Component: ignore wl_shm_pool::WlShmPool);
+wayland_client::delegate_noop!(Component: ignore wl_buffer::WlBuffer);
+wayland_client::delegate_noop!(Component: ignore zwlr_layer_shell_v1::ZwlrLayerShellV1);

@@ -38,6 +38,7 @@
 //! | `ListShellProcesses -> a(ssuttsbss)` | every process the server supervises, in start order, as `(name, state, pid, start_ticks, started, program, from_dev_folder, installed, dev_program)`: `state` is `running`, `stopping`, `waiting` or `stopped`; `pid`, `start_ticks` (field 22 of `/proc/PID/stat`), `started` (seconds since 1970) are 0 and `program` empty while it does not run; `from_dev_folder` says the program is the development folder's; `installed` is the configured program and `dev_program` the development folder's file it would start, empty when the folder does not apply. Only an unsandboxed process of the session's own user may call it |
 //! | `RestartShellProcess(s name) -> (ssuttsbss)` | ends the process (SIGTERM, then SIGKILL after `crate::supervisor::RESTART_STOP_GRACE`) and starts it again at once, the development folder resolved again; answers once it runs, with the same record. A component that runs in a host is restarted through its host and answered once it is ready, with its host's record under its name; `host` and `host-NAME` name the hosts. An unknown name is `InvalidArgs`, a start that failed `Failed`. Only an unsandboxed process of the session's own user may call it |
 //! | `StartScreenshot` | starts the screenshot program as the portal's service: the `screenshot` key's command with `--serve`, on a connection the server makes with the `session` and `capture` roles ([`crate::capture::launch`]), unless one it started so still runs; returns once it runs, and the portal then waits for `org.cupertino.Screenshot1` on the bus. `Failed` on the login screen or when it cannot start. Only the portal the server started may call it |
+//! | `ProgramOf(s unique_name) -> s` | the program the server started itself that owns the connection `unique_name`, by the server's own name for it (`portal`, `login`, `desktop-control`, `polkit-agent`, `keyring-prompter`, `screenshot`): the connection's process, as the bus daemon gives it, is one the server holds the pidfd of and it has not exited ([`Cupertino::program_of`]); empty for any other connection, a host's and its components' included, and for a name that is not a unique name. Open to every caller: it tells which connection is which program, and nothing else |
 //! | `Appearance` property `s` | `light` or `dark`, the session's appearance (with `PropertiesChanged`) |
 //! | `Accessibility` property `a{ss}` | every key of `accessibility.conf` with its value (with `PropertiesChanged`) |
 //! | `Mice` property `a(ssub)` | read-only: the connected mice that have moved, scrolled or clicked (no touchpads, no keyboard's unused pointer interface), each as `(key, name, dpi, stored)`: the `mouse_dpi` key of `compositor.json` (`vendor:product:name`, hex ids), the device name, the resolution in use (the stored one, else the hardware database's, else 1000) and whether it is the stored one; changes with `PropertiesChanged` on a mouse's first use or removal and on a change of `mouse_dpi` |
@@ -292,6 +293,9 @@ pub enum Call {
     RetrySessionAction(Caller, async_channel::Sender<Result<(), Reject>>),
     /// Start the screenshot program as the portal's service (`StartScreenshot`).
     StartScreenshot(Caller, async_channel::Sender<Result<(), Reject>>),
+    /// The program the server started itself whose process owns a bus connection, empty for any other (`ProgramOf`):
+    /// the connection's process as the bus daemon gives it.
+    ProgramOf(Caller, async_channel::Sender<Result<String, Reject>>),
 }
 
 /// An interrupt of a quit sequence that waits for an answer: the interrupted action's method name, the application
@@ -1002,6 +1006,10 @@ impl Cupertino {
                     .map(|()| self.retry_session_action())
                     .map_err(Reject::Caller);
                 let _ = reply.try_send(answer);
+            }
+            Call::ProgramOf(process, reply) => {
+                let name = self.program_of(&process).unwrap_or("").to_owned();
+                let _ = reply.try_send(Ok(name));
             }
             Call::StartScreenshot(caller, reply) => {
                 let answer = self

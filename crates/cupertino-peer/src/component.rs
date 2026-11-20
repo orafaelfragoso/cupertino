@@ -1,11 +1,14 @@
-//! Resolving a session bus caller to the server or a shell host component (D20).
+//! Resolving a session bus caller to the server, a shell host component or a program the server started itself (D20).
 //!
 //! Callers are resolved without comparing process parent/child relations:
 //! 1. The unique name that owns `org.cupertino.Session1` is [`ComponentCaller::Server`].
 //! 2. A caller whose process `(pid, start_ticks)` matches one of `org.cupertino.Session1.ShellHosts` is asked of
 //!    `org.cupertino.Session1.ComponentOf(unique_name)`: a non-empty answer is [`ComponentCaller::Component`], empty is
 //!    [`ComponentCaller::Other`].
-//! 3. Any other caller (or an answer that fails or is anonymous) is [`ComponentCaller::Other`].
+//! 3. Any other caller with a process is asked of `org.cupertino.Session1.ProgramOf(unique_name)`, which the server
+//!    answers from the pidfds it holds of the programs it started: a non-empty answer is [`ComponentCaller::Program`],
+//!    empty is [`ComponentCaller::Other`].
+//! 4. An anonymous caller, or one whose answer fails, is [`ComponentCaller::Other`].
 
 use std::io::Read;
 use std::path::Path;
@@ -31,6 +34,10 @@ pub enum ComponentCaller {
     Server,
     /// An accepted shell component, named by its component table name (e.g. `"menubar"`, `"agent"`).
     Component(String),
+    /// A program the server started itself, by the server's name for it (`"portal"`, `"login"`, `"desktop-control"`,
+    /// `"screenshot"`, ...), as `ProgramOf` answers: a service that only the portal may ask checks for
+    /// `Program("portal")`.
+    Program(String),
     /// Neither the server nor an accepted component of a running shell host.
     Other,
 }
@@ -54,14 +61,16 @@ fn read_start_ticks(proc_root: &Path, pid: u32) -> Option<u64> {
     after_name.split_whitespace().nth(19)?.parse().ok()
 }
 
-/// Pure decision step of D20 component resolution, given the Session1 owner, the caller's unique name and
-/// `(pid, start_ticks)`, the running `ShellHosts` list, and the `ComponentOf` answer when consulted.
+/// Pure decision step of D20 caller resolution, given the Session1 owner, the caller's unique name and
+/// `(pid, start_ticks)` (`None` for a caller with no process), the running `ShellHosts` list, and the answers of
+/// `ComponentOf` and `ProgramOf`, each asked only when its step is reached (`None` when the call failed).
 pub fn classify_caller(
     session_owner: Option<&str>,
     sender: &str,
     caller_process: Option<(u32, u64)>,
     shell_hosts: &[(u32, u64)],
     component_of: impl FnOnce() -> Option<String>,
+    program_of: impl FnOnce() -> Option<String>,
 ) -> ComponentCaller {
     if session_owner == Some(sender) {
         return ComponentCaller::Server;
@@ -69,11 +78,17 @@ pub fn classify_caller(
     let Some(proc_id) = caller_process else {
         return ComponentCaller::Other;
     };
-    if !shell_hosts.contains(&proc_id) {
-        return ComponentCaller::Other;
+    if shell_hosts.contains(&proc_id) {
+        named(component_of(), ComponentCaller::Component)
+    } else {
+        named(program_of(), ComponentCaller::Program)
     }
-    match component_of() {
-        Some(name) if !name.is_empty() => ComponentCaller::Component(name),
+}
+
+/// `make` of a non-empty answer, [`ComponentCaller::Other`] of an empty or failed one.
+fn named(answer: Option<String>, make: fn(String) -> ComponentCaller) -> ComponentCaller {
+    match answer {
+        Some(name) if !name.is_empty() => make(name),
         _ => ComponentCaller::Other,
     }
 }
@@ -139,10 +154,8 @@ pub async fn resolve_identified_at(
         Caller::Unclassified(p) => p,
         Caller::Anonymous => return ComponentCaller::Other,
     };
-    let Some(start) = process_start_ticks(process) else {
-        return ComponentCaller::Other;
-    };
-    let caller_proc = (process.pid, start);
+    // a process whose start time cannot be read is no host's
+    let start = process_start_ticks(process);
 
     let Ok(proxy) = zbus::Proxy::new(connection, target_name, object_path, interface).await else {
         return ComponentCaller::Other;
@@ -150,14 +163,18 @@ pub async fn resolve_identified_at(
     let Ok(hosts): zbus::Result<Vec<(u32, u64)>> = proxy.call("ShellHosts", &()).await else {
         return ComponentCaller::Other;
     };
-    if !hosts.contains(&caller_proc) || process.has_exited() {
+    if process.has_exited() {
         return ComponentCaller::Other;
     }
-    match proxy
-        .call::<_, _, String>("ComponentOf", &(sender.as_str(),))
+    let host = start.is_some_and(|start| hosts.contains(&(process.pid, start)));
+    let method = if host { "ComponentOf" } else { "ProgramOf" };
+    let answer = proxy
+        .call::<_, _, String>(method, &(sender.as_str(),))
         .await
-    {
-        Ok(name) if !name.is_empty() => ComponentCaller::Component(name),
-        _ => ComponentCaller::Other,
+        .ok();
+    if host {
+        named(answer, ComponentCaller::Component)
+    } else {
+        named(answer, ComponentCaller::Program)
     }
 }

@@ -1,22 +1,30 @@
 //! The programs the server starts itself are known by their processes (`docs/architecture/shell-host.md`, *Identity*):
 //! - `org.cupertino.Session1.StartScreenshot` is the portal's alone: it starts the screenshot program with `--serve` on
-//!   a connection of its own, once while that one runs, again after it exited, and never on the login screen.
+//!   a connection of its own, once while that one runs, again after it exited, and never on the login screen;
+//! - `ProgramOf` names the program the server started itself behind a connection's process, the portal and the
+//!   screenshot program here, while it runs, and nothing for any other process;
+//! - both are on the bus, where `cupertino-peer` resolves a caller the server names no program as no part of the shell.
 //!
 //! This test binary stands in for both programs. Hard-linked as `cupertino-portal` under an install root of the
 //! test's own, the supervisor starts it as the portal with no arguments, so every test of the binary starts in it and
 //! first holds the portal's connection there ([`as_started_program`]). Started with [`STAND_IN`] it is the screenshot
 //! program ([`screenshot_stand_in`]).
 
+use std::io::{BufRead, BufReader};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::Once;
+use std::process::{Child, Command as Process, Stdio};
+use std::sync::{mpsc, Once};
 use std::time::{Duration, Instant};
 
 use cupertino_assets::Assets;
+use cupertino_peer::component::{resolve_component, ComponentCaller};
 use cupertino_peer::{Caller, Denial, ProcessHandle};
 use cupertino_server::capture::launch::SERVE_ARG;
 use cupertino_server::config::BuiltIn;
-use cupertino_server::quit::{Call, Refusal, Reject};
+use cupertino_server::quit::{
+    start_session_service_on, Call, Refusal, Reject, BUS_NAME, OBJECT_PATH,
+};
 use cupertino_server::{Config, Cupertino};
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
@@ -121,7 +129,7 @@ impl Drop for Root {
 
 /// A server that runs the portal stand-in and starts this binary as its screenshot program.
 struct Rig {
-    _event_loop: EventLoop<'static, Cupertino>,
+    event_loop: EventLoop<'static, Cupertino>,
     state: Cupertino,
     _root: Root,
 }
@@ -148,7 +156,7 @@ impl Rig {
             .add_built_ins([(BuiltIn::Portal, Some(root.portal()))], Instant::now());
         state.supervise_shell(Instant::now());
         Rig {
-            _event_loop: event_loop,
+            event_loop,
             state,
             _root: root,
         }
@@ -160,6 +168,22 @@ impl Rig {
             .supervisor
             .pid_of(BuiltIn::Portal.name())
             .unwrap_or_else(|| panic!("the portal runs: {:?}", self.state.supervisor.processes()))
+    }
+
+    /// One turn of the server's loop: the calls the bus thread handed over are answered.
+    fn turn(&mut self) {
+        let _ = self
+            .event_loop
+            .dispatch(Some(Duration::from_millis(10)), &mut self.state);
+    }
+
+    fn program_of(&mut self, process: Caller) -> String {
+        let (reply, answer) = async_channel::bounded(1);
+        self.state.on_quit_call(Call::ProgramOf(process, reply));
+        answer
+            .try_recv()
+            .expect("answered at once")
+            .expect("ProgramOf answers every caller")
     }
 
     fn start_screenshot(&mut self, caller: Caller) -> Result<(), Reject> {
@@ -253,4 +277,130 @@ fn only_the_portal_starts_the_screenshot_service_once_while_it_runs() {
         Err(Reject::Refusal(Refusal::Failed(_)))
     ));
     assert!(serving().is_empty(), "the login screen starts no programs");
+}
+
+#[test]
+fn the_server_names_the_programs_it_started_by_their_processes() {
+    as_started_program();
+    let mut rig = Rig::new("names");
+    let portal = rig.portal();
+    assert_eq!(rig.program_of(caller(portal)), "portal");
+    assert_eq!(
+        rig.program_of(caller(std::process::id())),
+        "",
+        "a process the server did not start is no program"
+    );
+    assert_eq!(rig.program_of(Caller::Anonymous), "");
+
+    rig.start_screenshot(caller(portal)).unwrap();
+    let screenshot = serving()[0];
+    let held = caller(screenshot);
+    assert_eq!(rig.program_of(caller(screenshot)), "screenshot");
+    end(screenshot);
+    assert_eq!(
+        rig.program_of(held),
+        "",
+        "a program that exited is no program"
+    );
+}
+
+/// A private session bus daemon, stopped when dropped, and its address.
+struct Daemon(Child, String);
+
+impl Daemon {
+    fn start() -> Daemon {
+        // a socket's path is short: the daemon draws a name of its own in the temporary directory
+        let mut child = Process::new("dbus-daemon")
+            .args(["--session", "--nofork", "--print-address=1"])
+            .arg(format!(
+                "--address=unix:tmpdir={}",
+                std::env::temp_dir().display()
+            ))
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("dbus-daemon runs");
+        let mut address = String::new();
+        BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut address)
+            .unwrap();
+        assert!(!address.trim().is_empty(), "dbus-daemon gives its address");
+        let address = address.trim().to_owned();
+        Daemon(child, address)
+    }
+}
+
+impl Drop for Daemon {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// What a caller of no program the server started hears on the bus.
+#[derive(Debug, PartialEq)]
+struct Heard {
+    program_of: Result<String, String>,
+    start_screenshot: Result<(), String>,
+    resolved: ComponentCaller,
+}
+
+/// Ask the server's `Session1` on the bus at `address` about the asking connection itself, once the server owns it.
+fn ask_on_the_bus(address: &str) -> Heard {
+    let conn = zbus::blocking::connection::Builder::address(address)
+        .unwrap()
+        .build()
+        .unwrap();
+    let dbus = zbus::blocking::fdo::DBusProxy::new(&conn).unwrap();
+    let mut owners = dbus
+        .receive_name_owner_changed_with_args(&[(0, BUS_NAME)])
+        .unwrap();
+    if !dbus.name_has_owner(BUS_NAME.try_into().unwrap()).unwrap() {
+        owners.next();
+    }
+    let own = conn.unique_name().unwrap().to_owned();
+    let session = zbus::blocking::Proxy::new(&conn, BUS_NAME, OBJECT_PATH, BUS_NAME).unwrap();
+    let error_name = |e: zbus::Error| match e {
+        zbus::Error::MethodError(name, _, _) => name.to_string(),
+        other => other.to_string(),
+    };
+    Heard {
+        program_of: session
+            .call::<_, _, String>("ProgramOf", &(own.as_str(),))
+            .map_err(error_name),
+        start_screenshot: session
+            .call::<_, _, ()>("StartScreenshot", &())
+            .map_err(error_name),
+        resolved: zbus::block_on(resolve_component(conn.inner(), &own)),
+    }
+}
+
+#[test]
+fn program_of_and_start_screenshot_answer_on_the_bus() {
+    as_started_program();
+    let daemon = Daemon::start();
+    let mut rig = Rig::new("bus");
+    start_session_service_on(&mut rig.state, Some(daemon.1.clone()));
+    let (heard, hearing) = mpsc::channel();
+    let address = daemon.1.clone();
+    std::thread::spawn(move || heard.send(ask_on_the_bus(&address)));
+    let deadline = Instant::now() + WAIT;
+    let heard = loop {
+        if let Ok(heard) = hearing.try_recv() {
+            break heard;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for the bus calls"
+        );
+        rig.turn();
+    };
+    assert_eq!(
+        heard,
+        Heard {
+            program_of: Ok(String::new()),
+            start_screenshot: Err("org.cupertino.Session1.Error.UntrustedCaller".into()),
+            resolved: ComponentCaller::Other,
+        }
+    );
+    assert!(serving().is_empty(), "a refused call starts nothing");
 }

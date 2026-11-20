@@ -238,6 +238,18 @@ impl Session1 {
         self.ask(Call::ShellHosts).await
     }
 
+    async fn program_of(
+        &self,
+        unique_name: String,
+        #[zbus(connection)] connection: &zbus::Connection,
+    ) -> Result<String, CallError> {
+        let process = match zbus::names::UniqueName::try_from(unique_name.as_str()) {
+            Ok(name) => identify(connection, &name).await,
+            Err(_) => Caller::Anonymous,
+        };
+        self.ask(|tx| Call::ProgramOf(process, tx)).await
+    }
+
     async fn start_screenshot(
         &self,
         #[zbus(header)] header: zbus::message::Header<'_>,

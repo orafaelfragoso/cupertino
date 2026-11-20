@@ -47,6 +47,13 @@ nothing; the caller is the process behind its connection.
   would wait for good. `FromOwner::owner` gives the owner it follows, for a method call from the same service. Users:
   `cupertino-login`, `cupertino-sessiond`, `cupertino-netd`, `cupertino-polkit-agent` and the server's power watchers.
 
+* `component::resolve_component(connection, sender) -> ComponentCaller`: who a caller is to the shell, asked of
+  `org.cupertino.Session1` and never by comparing processes (D20): the owner of that name is `Server`; a caller whose
+  process is a shell host (`ShellHosts`, by pid and start time) is the `Component` `ComponentOf` names for its unique
+  name; any other caller with a process is the `Program` `ProgramOf` names (the server's name of a program it started
+  itself, from the pidfd it holds: `portal`, `login`, `desktop-control`, `screenshot`, ...), so a service checks "only
+  the portal may ask" as `Program("portal")`; everything else is `Other`. `classify_caller` is the same decision on
+  given answers.
 * `lookup::Lookup`: asks the bus daemon who callers are on a connection of its own (`Lookup::connect(address)`), never on
   the one that reads a service's calls, with at most `MAX_IN_FLIGHT` (8) questions out at once and an `ANSWER_DEADLINE`
   (5 s) on each: `credentials(sender)` and `caller(sender)`. Each answer carries the caller's process descriptor, and a bus

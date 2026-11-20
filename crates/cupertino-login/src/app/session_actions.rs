@@ -10,6 +10,10 @@ use cupertino_login::panel::Action;
 use cupertino_login::restore::{self, Applications, SessionMark};
 use cupertino_login::session;
 
+/// The action an interrupt this agent did not start is worded as (the interrupt panel's "The log out stopped..."):
+/// `QuitInterrupted` does not name the action, and Session1 has no method that does.
+const ADOPTED_ACTION: Action = Action::LogOut;
+
 impl SessionApp {
     /// Store the "Open my windows again" choice, with no list yet: the list follows just before the action is asked for.
     pub(super) fn remember_choice(&self, reopen: bool) {
@@ -182,15 +186,27 @@ impl SessionApp {
     /// The server's word on the applications it is quitting: one did not quit in time (the interrupt panel shows, with
     /// why), or it quit after all (the panel closes). On a locked session nobody can answer the panel: the action is
     /// cancelled.
+    ///
+    /// The server sends an interrupt once and waits for its answer, so one this agent did not start (it started again
+    /// in the middle of a sequence, or another caller Session1 lets end the session asked for it) is adopted: the panel
+    /// shows and is answered as for its own, worded as [`ADOPTED_ACTION`].
     pub(super) fn quit_signal(&mut self, interrupt: session::Interrupt) -> Result<()> {
         if let session::Interrupt::ActionFailed { action, reason } = interrupt {
             self.action_failed(&action, &reason);
             return Ok(());
         }
-        let Some(quitting) = &mut self.quitting else {
-            eprintln!("cupertino-login: quit signal ignored: no action of this agent is under way");
-            return Ok(());
-        };
+        if self.quitting.is_none() {
+            if interrupt == session::Interrupt::Closed {
+                eprintln!("cupertino-login: quit signal ignored: no action is under way");
+                return Ok(());
+            }
+            eprintln!("cupertino-login: adopting an interrupted action this agent did not start");
+            self.logging_out = true;
+        }
+        let quitting = self.quitting.get_or_insert(Quitting {
+            then: ADOPTED_ACTION,
+            interrupt: None,
+        });
         match interrupt {
             session::Interrupt::Closed => {
                 eprintln!("cupertino-login: the application quit after all");

@@ -257,8 +257,11 @@ pub struct HeldBackdrops {
     subsurfaces: Vec<(Vec<BackdropArea>, Rectangle<f64, Logical>)>,
     /// The glass of each of its layers, front to back, with the container and opacity the layer made of it (its lens,
     /// blur ramp, edge, shadow and light), when the glass pass drew it.
-    layers: Vec<(Vec<BackdropArea>, Option<(Rc<GlassContainer>, f32)>)>,
+    layers: Vec<(Vec<BackdropArea>, Option<MadeGlass>)>,
 }
+
+/// The glass a layer made of its backdrop as the live surface drew it, and its opacity.
+type MadeGlass = (Rc<GlassContainer>, f32);
 
 impl HeldBackdrops {
     /// The backdrops of `surface` itself, for a picture taken without a renderer to draw its layers with.

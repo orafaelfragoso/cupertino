@@ -39,6 +39,7 @@ impl Cupertino {
                 connect_pending: HashSet::new(),
                 restart_requested_at: None,
                 expected_exit_kill_at: None,
+                kill_sent: false,
                 process,
                 start_ticks,
                 last_bridge_at: None,
@@ -266,12 +267,13 @@ impl Cupertino {
             }
         }
 
-        // 6. Kill expected-exit hosts past their 2s grace.
+        // 6. Kill expected-exit hosts past their 2s grace, once. The deadline stays set: the exit that follows is
+        //    still expected, not a crash (D16). A host whose holder is detached names the server's own process.
         for host in self.hosts.hosts.values_mut() {
-            if host.expected_exit_kill_at.is_some_and(|at| now >= at) {
-                host.expected_exit_kill_at = None;
+            if !host.kill_sent && host.expected_exit_kill_at.is_some_and(|at| now >= at) {
+                host.kill_sent = true;
                 if let Some(proc) = &host.process {
-                    if !proc.has_exited() {
+                    if !proc.has_exited() && proc.pid != std::process::id() {
                         tracing::warn!(
                             pid = proc.pid,
                             "killing shell host that did not exit in time"
@@ -340,10 +342,13 @@ impl Cupertino {
         false
     }
 
-    /// Called from `CompositorHandler::commit` / `layer_committed` when a layer surface commits.
-    /// Captures shm pixel snapshot for persisted surfaces and performs atomic hold takeover on first buffer commit.
+    /// Called from `CompositorHandler::commit` for every surface: a persisted surface's first buffer commit takes its
+    /// hold over atomically. Any other surface costs one lookup; no picture is taken on a commit.
     pub fn host_surface_committed(&mut self, surface: &WlSurface) {
         let surface_id = surface.id();
+        if !self.hosts.persisted.contains_key(&surface_id) {
+            return;
+        }
         let has_buffer = with_states(surface, |states| {
             states
                 .data_map
@@ -360,14 +365,10 @@ impl Cupertino {
         if !has_buffer {
             return;
         }
-        let picture = HostManager::capture_shm_picture(surface);
         let takeover = {
             let Some(persisted) = self.hosts.persisted.get_mut(&surface_id) else {
                 return;
             };
-            if picture.is_some() {
-                persisted.last_picture = picture;
-            }
             if !persisted.mapped {
                 persisted.mapped = true;
                 Some((persisted.component, persisted.output, persisted.key.clone()))
@@ -382,6 +383,9 @@ impl Cupertino {
                 .retain(|h| !(h.component == component && h.output == output && h.key == key));
             if self.hosts.holds.len() != before {
                 tracing::debug!(component, %key, "held surface taken over atomically on first buffer commit");
+                if component == "windowmanager" {
+                    self.take_over_wm_placements(output);
+                }
                 self.request_redraw();
             }
         }
@@ -397,7 +401,7 @@ impl Cupertino {
     ) {
         let surface = layer.wl_surface();
         let surface_id = surface.id();
-        let Some(persisted) = self.hosts.persisted.remove(&surface_id) else {
+        let Some(mut persisted) = self.hosts.persisted.remove(&surface_id) else {
             return;
         };
         let gave_up = self
@@ -408,6 +412,11 @@ impl Cupertino {
         if gave_up {
             return;
         }
+        // the picture taken as the `wl_surface` went, or, while it still shows, one taken now
+        let picture = persisted
+            .last_picture
+            .take()
+            .or_else(|| self.capture_held_picture(surface));
         let Some(output_id) = self.output_by_wl(output).map(|o| o.id) else {
             return;
         };
@@ -420,9 +429,6 @@ impl Cupertino {
             let cur = guard.current();
             (cur.layer, cur.anchor, cur.exclusive_zone, cur.margin)
         });
-        let picture = persisted
-            .last_picture
-            .or_else(|| HostManager::capture_shm_picture(surface));
         // Replace any older hold with the same (component, output, key).
         self.hosts.holds.retain(|h| {
             !(h.component == persisted.component && h.output == output_id && h.key == persisted.key)
@@ -440,12 +446,13 @@ impl Cupertino {
             held_since: Instant::now(),
         });
         if persisted.component == "windowmanager" {
-            self.hosts.held_wm_outputs.insert(output_id);
+            self.hosts.hold_wm_placements(output_id);
         }
         self.request_redraw();
     }
 
-    /// Release all holds owned by `component` and refresh usable areas on affected outputs.
+    /// Release all holds owned by `component` (`ready`, the hold timeout, give-up) and refresh usable areas on
+    /// affected outputs. For the window manager, placements held on an output no surface took over end with them.
     pub fn release_component_holds(&mut self, component: &'static str) {
         let mut outputs = HashSet::new();
         self.hosts.holds.retain(|h| {
@@ -457,8 +464,15 @@ impl Cupertino {
             }
         });
         if component == "windowmanager" {
-            for &out in &outputs {
-                self.hosts.held_wm_outputs.remove(&out);
+            let held: Vec<OutputId> = self
+                .hosts
+                .held_wm_outputs
+                .iter()
+                .filter(|(_, s)| **s == WmPlacementHold::Held)
+                .map(|(o, _)| *o)
+                .collect();
+            for out in held {
+                self.end_held_wm_placements(out);
             }
         }
         for out in outputs {
@@ -654,6 +668,13 @@ impl Cupertino {
         if gave_up_now {
             tracing::warn!(component, "component hit 5 failures within 60s: giving up");
             self.release_component_holds(component);
+            if component == "windowmanager" {
+                // stopped: no instance takes anything over, so placements awaiting a first commit end too
+                let outputs: Vec<OutputId> = self.hosts.held_wm_outputs.keys().copied().collect();
+                for out in outputs {
+                    self.end_held_wm_placements(out);
+                }
+            }
             if let Some(shared) = self.shared_host_resource() {
                 shared.component_stopped(component.to_string());
             }
@@ -1157,6 +1178,14 @@ impl Dispatch<CupertinoComponentV1, ComponentGlobalData> for Cupertino {
                 if let Some(rec) = state.hosts.components.get_mut(data.component) {
                     // Re-announcing immediately revokes any prior accepted bus name.
                     rec.accepted_bus_name = None;
+                    rec.pending_nonce = None;
+                }
+                let Some(nonce) = nonce else {
+                    // fail closed: without a random nonce the name cannot be verified
+                    resource.bus_name(name, BusNameResult::Refused);
+                    return;
+                };
+                if let Some(rec) = state.hosts.components.get_mut(data.component) {
                     rec.pending_nonce = Some(PendingBusNonce {
                         name,
                         nonce: nonce.clone(),

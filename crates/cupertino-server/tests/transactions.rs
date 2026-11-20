@@ -3401,3 +3401,111 @@ fn a_part_ready_while_a_bound_gesture_is_under_way_joins_at_the_progress_shown()
     assert_eq!(bst.finished, vec![Outcome::Completed]);
     assert_eq!(bst.layer_finished, vec![7]);
 }
+
+#[test]
+fn a_bound_gesture_whose_creator_destroys_its_object_under_way_settles_back_to_its_start() {
+    let mut g = GestureRig::new(false, false);
+    let output = g.rig.output_id;
+    assert!(g.rig.state.transaction_gesture_begin(output, swipe_up()));
+    assert!(g.rig.state.transaction_gesture_update(output, 0.6));
+    g.pump(3);
+    g.tx.destroy();
+    g.pump(2);
+    let later = GESTURE_T0 + 3.0;
+    at_time(&mut g.rig, later);
+    g.pump(4);
+    let (x, opacity) = g.shown(later);
+    assert!(
+        close(x, 0.0) && close(opacity, 0.0),
+        "the binding ended with the object: the layer is back at its start: x {x}, opacity {opacity}"
+    );
+    let mut replaced = g.ost.layer_replaced_with.clone();
+    replaced.sort_by_key(|r| r.0);
+    assert_eq!(
+        replaced,
+        vec![(MOVE_SERIAL, 0.0, 0.0), (FADE_SERIAL, 0.0, 0.0)]
+    );
+    assert!(
+        g.ost.finished.is_empty(),
+        "the destroyed object hears nothing"
+    );
+    assert!(
+        g.rig.state.transaction_gesture_end(output, true, 2.0),
+        "the rest of the gesture is the transaction's"
+    );
+    assert!(
+        !g.rig.state.transaction_gesture_begin(output, swipe_up()),
+        "the binding ended"
+    );
+}
+
+#[test]
+fn a_bound_gesture_whose_creator_s_connection_ends_under_way_settles_a_joiner_s_layers_back() {
+    use cupertino_layer_v1::Property;
+    let g = GestureRig::new(false, false);
+    let GestureRig {
+        mut rig,
+        oconn,
+        oq,
+        ost,
+        host: (hconn, mut hq, mut hst),
+        tx,
+        _layer,
+        ..
+    } = g;
+    let output = rig.output_id;
+    let (_hbar, bconn, mut bq, mut bst) = rig.spawn_component(&hconn, &mut hq, &mut hst, "menubar");
+    let (bar_surf, _bar_shell) = rig.create_layer_surface(&bconn, &mut bq, &mut bst, "bar");
+    let server_bar = server_layer_surface(&rig, "bar");
+    // the menu bar's part, ready before the gesture, moves its layer 200 points
+    let bqh = bq.handle();
+    let joined = bst.tx_manager.as_ref().unwrap().join(
+        "overview".into(),
+        ost.instance.unwrap(),
+        1,
+        bst.output.as_ref().unwrap(),
+        &bqh,
+        (),
+    );
+    joined.stage(&bar_surf);
+    let child = bst.compositor.as_ref().unwrap().create_surface(&bqh, ());
+    let layer = bst
+        .layers
+        .as_ref()
+        .unwrap()
+        .get_layer(&child, &bar_surf, &bqh, ());
+    layer.animate_timed(7, Property::X, 200.0, SLOW_MS, 0.0, 0.0, 1.0, 1.0);
+    bar_surf.commit();
+    joined.submit();
+    for _ in 0..4 {
+        rig.pump_comp(&bconn, &mut bq, &mut bst);
+    }
+    assert!(rig.state.transaction_gesture_begin(output, swipe_up()));
+    assert!(rig.state.transaction_gesture_update(output, 0.5));
+    for _ in 0..3 {
+        rig.pump_comp(&bconn, &mut bq, &mut bst);
+    }
+    assert!(close(shown_layer(&rig, &server_bar, GESTURE_T0).0, 100.0));
+
+    // the overview's connection ends with the fingers on the touchpad
+    drop((tx, _layer, ost, oq, oconn));
+    for _ in 0..4 {
+        rig.pump_comp(&bconn, &mut bq, &mut bst);
+    }
+    let later = GESTURE_T0 + 3.0;
+    at_time(&mut rig, later);
+    for _ in 0..4 {
+        rig.pump_comp(&bconn, &mut bq, &mut bst);
+    }
+    let bar_x = shown_layer(&rig, &server_bar, later).0;
+    assert!(
+        close(bar_x, 0.0),
+        "the joiner's layer settled back to its start: x {bar_x}"
+    );
+    assert_eq!(bst.finished, vec![Outcome::Cancelled]);
+    assert_eq!(bst.layer_replaced_with, vec![(7, 0.0, 0.0)]);
+    assert!(
+        rig.state.transaction_gesture_end(output, true, 2.0),
+        "the rest of the gesture is the transaction's"
+    );
+}

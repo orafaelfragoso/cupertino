@@ -3,10 +3,13 @@
 
 mod support;
 
-use cupertino_ui_core::platform::{Mods, WindowEvent};
-use cupertino_ui_core::{Key, UiError};
-use cupertino_ui_test::DriverError;
-use support::{row, Msg, Row, Shown, ENTER, F12, LEFT_TAB, TAB};
+use std::cell::Cell;
+use std::rc::Rc;
+
+use cupertino_ui_core::platform::{Capabilities, Mods, WindowEvent};
+use cupertino_ui_core::{Key, Runtime, UiError};
+use cupertino_ui_test::{DriverError, HeadlessWindowSystem};
+use support::{options, row, turns, Lab, Msg, Row, Shown, ENTER, F12, LEFT_TAB, TAB};
 
 /// The serial in a probe's name: the state its node was made with.
 fn serial(name: &str) -> u32 {
@@ -281,4 +284,23 @@ fn windows_open_and_close_with_the_view_and_a_close_request_goes_to_the_applicat
     let mut asked = Shown::open();
     asked.send(Msg::Exit);
     assert!(asked.driver.runtime().exited(), "so does a command to exit");
+}
+
+#[test]
+fn the_runtime_ends_on_the_turn_its_exit_condition_holds() {
+    let asked = Rc::new(Cell::new(false));
+    let condition = Rc::clone(&asked);
+    let mut runtime: Runtime<Lab, HeadlessWindowSystem> = Runtime::new(
+        HeadlessWindowSystem::new(Capabilities::default()),
+        options(1000),
+    )
+    .with_exit_when(Box::new(move || condition.get()));
+    runtime.step(turns()).unwrap();
+    assert!(
+        !runtime.exited(),
+        "it runs while the condition does not hold"
+    );
+    asked.set(true);
+    runtime.step(turns()).unwrap();
+    assert!(runtime.exited(), "it ends on the next turn once it holds");
 }

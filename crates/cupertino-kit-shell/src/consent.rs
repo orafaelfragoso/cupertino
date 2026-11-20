@@ -9,6 +9,10 @@ use crate::context::{self, ShellRequest};
 pub struct Run(u32);
 
 impl Run {
+    pub(crate) const fn new(raw: u32) -> Self {
+        Self(raw)
+    }
+
     pub(crate) const fn raw(self) -> u32 {
         self.0
     }

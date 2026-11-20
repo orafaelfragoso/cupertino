@@ -753,6 +753,9 @@ impl WindowSystem for WaylandWindowSystem {
             .conn
             .wait(if ready { Some(Duration::ZERO) } else { timeout })
             .map_err(platform_error)?;
+        if let Some(roles) = self.roles.as_mut() {
+            roles.woke();
+        }
         // the frames drawn away from the UI thread, before what the compositor said of them
         while let Ok(back) = self.finished.1.try_recv() {
             match back {

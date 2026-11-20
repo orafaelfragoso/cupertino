@@ -8,6 +8,7 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::os::unix::net::UnixStream;
 use std::sync::{Arc, Mutex, Once, PoisonError};
+use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
 use cupertino_kit::core::{Environment, WindowKey};
@@ -33,27 +34,53 @@ pub(crate) fn keep_socket(sockets: &Sockets, socket: UnixStream) {
         .push(socket);
 }
 
-/// Shell events that reach the component from outside its loop's own protocol objects (`Event::BusIdentity`),
-/// waiting for the loop to hand them to [`crate::Program::event`].
+/// The shell's events for the component (its protocol objects', `Event::BusIdentity`), waiting for the loop to hand them
+/// to [`crate::Program::event`]. The task that waits for them is woken by each push, and by [`Inbox::wake`].
 #[derive(Default)]
 pub(crate) struct Inbox {
-    events: Mutex<VecDeque<Event>>,
+    state: Mutex<InboxState>,
+}
+
+#[derive(Default)]
+struct InboxState {
+    events: VecDeque<Event>,
+    /// The task waiting for the next event.
+    waker: Option<Waker>,
 }
 
 impl Inbox {
-    pub(crate) fn push(&self, event: Event) {
-        self.events
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push_back(event);
+    fn lock(&self) -> std::sync::MutexGuard<'_, InboxState> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    pub(crate) fn drain(&self) -> Vec<Event> {
-        self.events
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .drain(..)
-            .collect()
+    pub(crate) fn push(&self, event: Event) {
+        let waker = {
+            let mut state = self.lock();
+            state.events.push_back(event);
+            state.waker.take()
+        };
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+    }
+
+    /// Wakes the task waiting for an event without giving it one: the loop it runs in takes a turn.
+    pub(crate) fn wake(&self) {
+        if let Some(waker) = self.lock().waker.take() {
+            waker.wake();
+        }
+    }
+
+    /// The next event, or `Pending` with `cx`'s task woken by the next push.
+    pub(crate) fn poll_next(&self, cx: &mut Context<'_>) -> Poll<Event> {
+        let mut state = self.lock();
+        match state.events.pop_front() {
+            Some(event) => Poll::Ready(event),
+            None => {
+                state.waker = Some(cx.waker().clone());
+                Poll::Pending
+            }
+        }
     }
 }
 
@@ -297,7 +324,8 @@ impl Default for ComponentContext {
     fn default() -> Self {
         Self {
             component: None,
-            instance: 1,
+            // a program of its own has no instance: the server knows it by its process
+            instance: 0,
             environment: None,
             holds: Vec::new(),
             locked: false,
@@ -361,229 +389,6 @@ pub(crate) fn with_ctx_mut<R>(f: impl FnOnce(&mut ComponentContext) -> R) -> Opt
 /// Drain queued outgoing shell requests for flushing to the component's Wayland connection.
 pub(crate) fn drain_outgoing() -> Vec<ShellRequest> {
     with_ctx_mut(|ctx| ctx.outgoing.drain(..).collect()).unwrap_or_default()
-}
-
-/// Trace-inspect a drained outgoing request (used by the component loop when flushing requests).
-pub(crate) fn trace_request(req: &ShellRequest) {
-    match req {
-        ShellRequest::SessionActivateApp { serial, desktop_id } => {
-            tracing::trace!(serial, desktop_id, "shell: session.activate_app");
-        }
-        ShellRequest::SessionWatchIdle { id, after } => {
-            tracing::trace!(id, ?after, "shell: session.watch_idle");
-        }
-        ShellRequest::SessionUnwatchIdle { id } => {
-            tracing::trace!(id, "shell: session.unwatch_idle");
-        }
-        ShellRequest::MenuBarSetOpen { window, open } => {
-            tracing::trace!(?window, open, "shell: menu_bar.set_menu_open");
-        }
-        ShellRequest::MenuBarWindowCommand { window, command } => {
-            tracing::trace!(?window, ?command, "shell: menu_bar.window_command");
-        }
-        ShellRequest::MenuBarActivateWindow { window, id } => {
-            tracing::trace!(?window, ?id, "shell: menu_bar.activate_window");
-        }
-        ShellRequest::MenuBarMoveToWorkspace { window, workspace } => {
-            tracing::trace!(?window, workspace, "shell: menu_bar.move_to_workspace");
-        }
-        ShellRequest::MenuBarSessionAction { window, action } => {
-            tracing::trace!(?window, ?action, "shell: menu_bar.session_action");
-        }
-        ShellRequest::MenuBarEdit { window, action } => {
-            tracing::trace!(?window, ?action, "shell: menu_bar.edit");
-        }
-        ShellRequest::MenuBarForceQuitApp { window, app_id } => {
-            tracing::trace!(?window, app_id, "shell: menu_bar.force_quit_app");
-        }
-        ShellRequest::DockActivateApp { window, app_id } => {
-            tracing::trace!(?window, app_id, "shell: dock.activate_app");
-        }
-        ShellRequest::DockActivateWindow { window, id } => {
-            tracing::trace!(?window, ?id, "shell: dock.activate_window");
-        }
-        ShellRequest::DockRestoreWindow { window, id } => {
-            tracing::trace!(?window, ?id, "shell: dock.restore_window");
-        }
-        ShellRequest::DockSetMinimizeTarget { window, id, rect } => {
-            tracing::trace!(?window, ?id, ?rect, "shell: dock.set_minimize_target");
-        }
-        ShellRequest::DockForceQuitApp { window, app_id } => {
-            tracing::trace!(?window, app_id, "shell: dock.force_quit_app");
-        }
-        ShellRequest::DockAppCommand {
-            window,
-            app_id,
-            command,
-        } => {
-            tracing::trace!(?window, app_id, ?command, "shell: dock.app_command");
-        }
-        ShellRequest::DockRunAction { window, action } => {
-            tracing::trace!(?window, action, "shell: dock.run_action");
-        }
-        ShellRequest::DockSwitcherSelect { window, index } => {
-            tracing::trace!(?window, index, "shell: dock.switcher_select");
-        }
-        ShellRequest::DockSwitcherActivate { window } => {
-            tracing::trace!(?window, "shell: dock.switcher_activate");
-        }
-        ShellRequest::DockSwitcherCancel { window } => {
-            tracing::trace!(?window, "shell: dock.switcher_cancel");
-        }
-        ShellRequest::DockSwitchWorkspace { window, workspace } => {
-            tracing::trace!(?window, ?workspace, "shell: dock.switch_workspace");
-        }
-        ShellRequest::DockAddWorkspace { window } => {
-            tracing::trace!(?window, "shell: dock.add_workspace");
-        }
-        ShellRequest::DockRemoveWorkspace { window, workspace } => {
-            tracing::trace!(?window, ?workspace, "shell: dock.remove_workspace");
-        }
-        ShellRequest::DockMoveWorkspace {
-            window,
-            workspace,
-            index,
-        } => {
-            tracing::trace!(?window, ?workspace, index, "shell: dock.move_workspace");
-        }
-        ShellRequest::WindowManagerPlace {
-            output,
-            window,
-            placement,
-        } => {
-            tracing::trace!(
-                output = output.raw(),
-                ?window,
-                ?placement,
-                "shell: wm.place"
-            );
-        }
-        ShellRequest::WindowManagerCommit { output } => {
-            tracing::trace!(output = output.raw(), "shell: wm.commit");
-        }
-        ShellRequest::WindowManagerActivateWindow { output, window } => {
-            tracing::trace!(output = output.raw(), ?window, "shell: wm.activate_window");
-        }
-        ShellRequest::OverviewActivateWindow { output, window } => {
-            tracing::trace!(
-                output = output.raw(),
-                ?window,
-                "shell: overview.activate_window"
-            );
-        }
-        ShellRequest::OverviewSwitchWorkspace { output, workspace } => {
-            tracing::trace!(
-                output = output.raw(),
-                ?workspace,
-                "shell: overview.switch_workspace"
-            );
-        }
-        ShellRequest::OverviewAddWorkspace { output } => {
-            tracing::trace!(output = output.raw(), "shell: overview.add_workspace");
-        }
-        ShellRequest::OverviewRemoveWorkspace { output, workspace } => {
-            tracing::trace!(
-                output = output.raw(),
-                ?workspace,
-                "shell: overview.remove_workspace"
-            );
-        }
-        ShellRequest::OverviewMoveWorkspace {
-            output,
-            workspace,
-            index,
-        } => {
-            tracing::trace!(
-                output = output.raw(),
-                ?workspace,
-                index,
-                "shell: overview.move_workspace"
-            );
-        }
-        ShellRequest::OverviewMoveWindow {
-            output,
-            window,
-            workspace,
-        } => {
-            tracing::trace!(
-                output = output.raw(),
-                ?window,
-                ?workspace,
-                "shell: overview.move_window"
-            );
-        }
-        ShellRequest::TxCreate { id, output } => {
-            tracing::trace!(?id, output = output.raw(), "shell: tx.create");
-        }
-        ShellRequest::TxJoin { id, output } => {
-            tracing::trace!(?id, output = output.raw(), "shell: tx.join");
-        }
-        ShellRequest::TxExpect { id, component } => {
-            tracing::trace!(?id, ?component, "shell: tx.expect");
-        }
-        ShellRequest::TxDeadline { id, deadline } => {
-            tracing::trace!(?id, ?deadline, "shell: tx.deadline");
-        }
-        ShellRequest::TxStage { id, window } => {
-            tracing::trace!(?id, ?window, "shell: tx.stage");
-        }
-        ShellRequest::TxBeginWindowChanges { id } => {
-            tracing::trace!(?id, "shell: tx.begin_window_changes");
-        }
-        ShellRequest::TxEndWindowChanges { id } => {
-            tracing::trace!(?id, "shell: tx.end_window_changes");
-        }
-        ShellRequest::TxBindGesture {
-            id,
-            gesture,
-            response,
-            damping,
-        } => {
-            tracing::trace!(?id, ?gesture, response, damping, "shell: tx.bind_gesture");
-        }
-        ShellRequest::TxBindReverseGesture { id, gesture } => {
-            tracing::trace!(?id, ?gesture, "shell: tx.bind_reverse_gesture");
-        }
-        ShellRequest::TxSubmit { id } => {
-            tracing::trace!(?id, "shell: tx.submit");
-        }
-        ShellRequest::TxCancel { id } => {
-            tracing::trace!(?id, "shell: tx.cancel");
-        }
-        ShellRequest::TxDestroy { id } => {
-            tracing::trace!(?id, "shell: tx.destroy");
-        }
-        ShellRequest::LockRequest => tracing::trace!("shell: lock.lock"),
-        ShellRequest::LockUnlock => tracing::trace!("shell: lock.unlock"),
-        ShellRequest::ConsentBind => tracing::trace!("shell: consent.bind"),
-        ShellRequest::ConsentSetWindow { window } => {
-            tracing::trace!(?window, "shell: consent.set_window");
-        }
-        ShellRequest::ConsentAnswer { run, answer } => {
-            tracing::trace!(run = run.raw(), ?answer, "shell: consent.answer");
-        }
-        ShellRequest::ConsentStop { run } => {
-            tracing::trace!(run = run.raw(), "shell: consent.stop");
-        }
-        ShellRequest::CaptureWindows => tracing::trace!("shell: capture.windows"),
-        ShellRequest::CaptureOnce {
-            id,
-            source,
-            options,
-        } => {
-            tracing::trace!(id, ?source, ?options, "shell: capture.once");
-        }
-        ShellRequest::CaptureFollowStart {
-            id,
-            source,
-            options,
-        } => {
-            tracing::trace!(id, ?source, ?options, "shell: capture.follow_start");
-        }
-        ShellRequest::CaptureFollowStop { id } => {
-            tracing::trace!(id, "shell: capture.follow_stop");
-        }
-    }
 }
 
 /// Enqueue a protocol request on the calling thread's component context.

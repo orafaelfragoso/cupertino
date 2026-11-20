@@ -20,7 +20,13 @@ The shell's extension to CupertinoKit (`shellkit` layer). Exposes zero Wayland o
 | `capture` | Screen/window capture requests: `windows`, `once`, `follow` |
 | `transaction` | Cross-component compositor transaction handles, deadlines, and window/workspace holes |
 | `bus` | Host-internal retained pub/sub bus (`Message`, `Sender`), its bridge between hosts (hello/welcome handshake, retained replay, sender checks, `bus_dropped`), the component's session-bus connection with its D20 identity (`session`, `Event::BusIdentity`), and bus-caller resolution (`caller` via `cupertino-peer`) |
-| `hosting` | Shell host runtime (`Host`, `Runtime`, `Running`, `EXIT_VERSION`): the component's `cupertino_component_v1` (instance, holds, bus-name announcement), the bridges' ends, and `shut` of the Wayland and bus sockets; restricted by `cupertino-layers` to `cupertino-shell` only |
+| `hosting` | Shell host runtime (`Host`, `Runtime`, `Running`, `EXIT_VERSION`): the component's `cupertino_component_v1` (instance, holds, bus-name announcement, `persist`, `ready`), a component refused with `Error::Version` before it starts when a global it binds is older than it needs, the loop's and the render thread's busy records (`busy_for`, `render_busy_for`), a helper that ignores its stop for `HELPER_JOIN_TIMEOUT` asking for the host's restart, the bridges' ends, and `shut` of the Wayland and bus sockets; restricted by `cupertino-layers` to `cupertino-shell` only |
 | `test_clock` | Clocks for component rendering, including the debug build's fixed display clock |
+
+A component (`Entry::of`) and a program of its own (`run`, `run_lock_screen`) run on Kit's UI loop, on the component's own
+connection or the one the server gave the program: each window gets the role `Program::surface` names (layer, menu bar,
+dock or lock surface, persisted before its first buffer; `ready` once the first view's persistent windows were shown),
+the requests the program queued go out before the loop waits, and what the shell and the host bus say reaches
+`Program::event`. Captures are `ext_image_copy_capture_v1` sessions read from shared memory.
 
 The [shell host specification](../../docs/architecture/shell-host.md#cupertino-kit-shell) describes the full component interface.

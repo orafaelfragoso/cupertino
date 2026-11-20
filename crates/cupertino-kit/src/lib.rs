@@ -31,7 +31,8 @@ pub mod app {
     /// Running on a window system a desktop shell set up with its surface roles, and the runtime's options of an
     /// application on this system: named until their last callers start through the shell's toolkit.
     pub use crate::start::{
-        options, run_lock_screen_on_with, run_on, run_on_with, run_on_with_appearance,
+        options, run_lock_screen_on_with, run_lock_screen_on_with_until, run_on, run_on_with,
+        run_on_with_appearance, run_on_with_until,
     };
 }
 
@@ -42,9 +43,9 @@ pub mod core {
         glass_outline, next_resource_id, session_scroll_bars, AccessibleStates, AccessibleValue,
         Action, ActionData, Application, Change, Checked, Command, CommandRegistry, Drag,
         DragPreview, DropOver, DropPlace, DropTarget, Dropped, Element, Environment, Event,
-        EventCx, FocusTarget, Glass, GlassStyle, IconImage, Icons, IdleCx, Key, Live, MeasureCx,
-        Menus, PaintCx, Phase, Popup, PopupAnchor, Propagation, Relation, RendererClass, Role,
-        SemanticsCx, Shortcut, SurfaceLayerMark, Widget, Window, WindowBackground, WindowKey,
+        EventCx, ExitWhen, FocusTarget, Glass, GlassStyle, IconImage, Icons, IdleCx, Key, Live,
+        MeasureCx, Menus, PaintCx, Phase, Popup, PopupAnchor, Propagation, Relation, RendererClass,
+        Role, SemanticsCx, Shortcut, SurfaceLayerMark, Widget, Window, WindowBackground, WindowKey,
         MAX_MATERIALS,
     };
 

@@ -21,6 +21,7 @@ use cupertino_protocols::client::host::cupertino_component_v1::{
 };
 use wayland_client::backend::WaylandError;
 use wayland_client::protocol::wl_registry;
+use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_client::{Connection as WlConnection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum};
 
 use crate::Error;
@@ -35,12 +36,16 @@ pub(crate) struct Opened {
     pub instance: u32,
     /// The keys of the persistent surfaces the server holds from the instance before.
     pub holds: Vec<String>,
+    /// The version the connection's registry offers each global at, by interface name.
+    pub globals: HashMap<String, u32>,
 }
 
 #[derive(Default)]
 struct LinkState {
     /// The version the registry offers `cupertino_component_v1` at.
     offered: Option<u32>,
+    /// The version the registry offers each global at, by interface name.
+    globals: HashMap<String, u32>,
     object: Option<CupertinoComponentV1>,
     instance: u32,
     holds: Vec<String>,
@@ -99,6 +104,7 @@ impl ComponentLink {
         let opened = Opened {
             instance: state.instance,
             holds: std::mem::take(&mut state.holds),
+            globals: std::mem::take(&mut state.globals),
         };
         let readable = conn
             .backend()
@@ -156,6 +162,31 @@ impl ComponentLink {
             })
         })
         .await
+    }
+
+    /// Persists the layer surface `surface` under `key` (`persist`), before its first buffer.
+    pub(crate) fn persist(&self, surface: &WlSurface, key: &str) {
+        if let Some(object) = self.lock().state.object.clone() {
+            object.persist(surface, key.to_owned());
+        }
+    }
+
+    /// Tells the server the component shows what it shows at start (`ready`).
+    pub(crate) fn ready(&self) {
+        if let Some(object) = self.lock().state.object.clone() {
+            object.ready();
+        }
+    }
+
+    /// Handles what the component's loop read for the link's queue, as that loop does on each turn: the waits of the
+    /// bus tasks find their answers there, and a failed connection fails them.
+    pub(crate) fn dispatch_pending(&self) {
+        let mut guard = self.lock();
+        let Inner { queue, state } = &mut *guard;
+        if let Err(e) = queue.dispatch_pending(state) {
+            tracing::warn!(error = %e, "component connection failed");
+            state.failed = true;
+        }
     }
 
     /// Dispatches the link's queue until `check` has its value, reading the connection when it turns readable.
@@ -223,6 +254,8 @@ impl Dispatch<wl_registry::WlRegistry, ()> for LinkState {
             version,
         } = event
         {
+            let offered = state.globals.entry(interface.clone()).or_insert(version);
+            *offered = (*offered).max(version);
             if interface == CupertinoComponentV1::interface().name {
                 state.offered = Some(version);
                 if version == COMPONENT_PROTOCOL_VERSION && state.object.is_none() {

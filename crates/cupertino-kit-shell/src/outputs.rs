@@ -11,6 +11,11 @@ use crate::context;
 pub struct OutputId(u32);
 
 impl OutputId {
+    /// The output of the `wl_output` registry name `raw` (internal to the crate).
+    pub(crate) const fn from_raw(raw: u32) -> Self {
+        Self(raw)
+    }
+
     /// Raw registry global name (internal to the crate).
     pub(crate) const fn raw(self) -> u32 {
         self.0

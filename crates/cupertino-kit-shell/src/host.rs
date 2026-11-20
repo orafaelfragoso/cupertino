@@ -4,13 +4,13 @@ mod reaper;
 
 use std::any::Any;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use cupertino_kit::core::Command;
 
-use crate::context;
+use crate::context::{self, Inbox};
 use crate::oneshot::Oneshot;
 
 pub(crate) use reaper::Reaper;
@@ -81,6 +81,42 @@ impl Stop {
 pub(crate) struct HelperHandle {
     pub stop: Stop,
     pub handle: Option<JoinHandle<()>>,
+    /// Set as the helper's thread ends.
+    pub finished: Arc<Finished>,
+}
+
+/// Whether a helper thread ended, which its host waits for without polling.
+#[derive(Default)]
+pub(crate) struct Finished {
+    done: Mutex<bool>,
+    cv: Condvar,
+}
+
+impl Finished {
+    fn set(&self) {
+        *self.done.lock().unwrap_or_else(PoisonError::into_inner) = true;
+        self.cv.notify_all();
+    }
+
+    /// Waits for the helper's end until `deadline`; whether it ended.
+    pub(crate) fn wait_until(&self, deadline: Instant) -> bool {
+        let done = self.done.lock().unwrap_or_else(PoisonError::into_inner);
+        let timeout = deadline.saturating_duration_since(Instant::now());
+        let (done, _) = self
+            .cv
+            .wait_timeout_while(done, timeout, |done| !*done)
+            .unwrap_or_else(PoisonError::into_inner);
+        *done
+    }
+}
+
+/// Marks its helper finished when the helper's thread drops it, however the thread ends.
+struct FinishOnDrop(Arc<Finished>);
+
+impl Drop for FinishOnDrop {
+    fn drop(&mut self) {
+        self.0.set();
+    }
 }
 
 /// What a component's helper threads tell its host: a helper's panic is the component's failure
@@ -91,20 +127,24 @@ pub(crate) struct Fault {
     cut: AtomicBool,
     /// The component loop's stop flag: a failed component ends its loop.
     stop: Arc<AtomicBool>,
+    /// The component's inbox, woken so its loop sees the stop.
+    inbox: Arc<Inbox>,
 }
 
 impl Fault {
-    pub(crate) fn new(stop: Arc<AtomicBool>) -> Self {
+    pub(crate) fn new(stop: Arc<AtomicBool>, inbox: Arc<Inbox>) -> Self {
         Self {
             panicked: AtomicBool::new(false),
             cut: AtomicBool::new(false),
             stop,
+            inbox,
         }
     }
 
     fn helper_panicked(&self) {
         self.panicked.store(true, Ordering::SeqCst);
         self.stop.store(true, Ordering::SeqCst);
+        self.inbox.wake();
     }
 
     /// The host cut the component off: what its helpers still give goes unread.
@@ -112,7 +152,7 @@ impl Fault {
         self.cut.store(true, Ordering::SeqCst);
     }
 
-    fn is_cut(&self) -> bool {
+    pub(crate) fn is_cut(&self) -> bool {
         self.cut.load(Ordering::SeqCst)
     }
 
@@ -139,10 +179,13 @@ pub fn thread<T: Send + 'static, M: Send + 'static>(
     let result = Arc::new(Oneshot::<std::thread::Result<T>>::default());
     let filled = Arc::clone(&result);
     let waiting_fault = fault.clone();
+    let finished = Arc::new(Finished::default());
+    let finish = FinishOnDrop(Arc::clone(&finished));
 
     let spawned = std::thread::Builder::new()
         .name(name.into())
         .spawn(move || {
+            let _finish = finish;
             let outcome =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(&worker_stop)));
             if outcome.is_err() {
@@ -161,6 +204,7 @@ pub fn thread<T: Send + 'static, M: Send + 'static>(
                     list.push(HelperHandle {
                         stop,
                         handle: Some(handle),
+                        finished,
                     });
                 }
             }

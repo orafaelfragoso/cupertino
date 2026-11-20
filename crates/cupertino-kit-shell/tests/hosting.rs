@@ -1,10 +1,11 @@
 //! The hosting runtime through its public interface against a stand-in server: a helper thread's panic fails its
-//! component, a helper's result wakes the task that waits for it, a component's children are reaped as they end, and
-//! a host whose server connection closed hears an error.
+//! component, a helper that ignores its stop gets its host restarted, a helper's result wakes the task that waits for
+//! it, a component's children are reaped as they end, and a host whose server connection closed hears an error.
 
 mod support;
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -14,7 +15,8 @@ use cupertino_kit_shell::outputs::OutputId;
 use cupertino_kit_shell::{holds, host, transaction};
 use cupertino_kit_shell::{Component, ComponentName, Entry, Event, Program, Role, Surface};
 use support::{
-    component_connection, connect_host, eventually, wait_for, Server, HELD, INSTANCE, PATIENCE,
+    component_connection, connect_host, eventually, wait_for, Seen, Server, HELD, INSTANCE,
+    PATIENCE,
 };
 
 static SPAWNED: AtomicBool = AtomicBool::new(false);
@@ -86,7 +88,25 @@ component!(Placing, ComponentName::WINDOWMANAGER, || {
     Vec::new()
 });
 
+/// What the stuck helper waits for instead of its stop.
+static STUCK_GATE: Mutex<Option<Receiver<()>>> = Mutex::new(None);
+
+component!(Stuck, ComponentName::LAUNCHER, || {
+    let gate = STUCK_GATE.lock().unwrap().take();
+    let _task = host::thread(
+        "stuck",
+        move |_| {
+            if let Some(gate) = gate {
+                let _ = gate.recv_timeout(PATIENCE);
+            }
+        },
+        |()| (),
+    );
+    Vec::new()
+});
+
 static PLACING: Entry = Entry::of::<Placing>();
+static STUCK: Entry = Entry::of::<Stuck>();
 static PANICKING: Entry = Entry::of::<Panicking>();
 static SPAWNING: Entry = Entry::of::<Spawning>();
 
@@ -163,6 +183,29 @@ fn a_helper_panic_fails_its_component_and_a_child_is_reaped_when_it_ends() {
         window_manager.ended().is_some()
     });
 
+    drop(server);
+}
+
+#[test]
+fn a_helper_that_ignores_its_stop_gets_its_host_restarted() {
+    let (server, host_end) = Server::start(Kind::Shared, &["launcher"]);
+    let mut host = connect_host(host_end);
+    wait_for(&mut host, |event| matches!(event, HostEvent::Components(_)));
+    let environment = cupertino_kit::app::environment().expect("toolkit environment");
+    let runtime = Runtime::for_host(&mut host, Kind::Shared, environment).unwrap();
+    let (release, gate) = mpsc::channel::<()>();
+    *STUCK_GATE.lock().unwrap() = Some(gate);
+    let connection = component_connection(&mut host, "launcher");
+    let mut launcher = runtime.start(&STUCK, connection).unwrap();
+    launcher.stop();
+    let asked = Instant::now();
+    eventually("the launcher ends", || launcher.ended().is_some());
+    assert!(
+        asked.elapsed() >= host::HELPER_JOIN_TIMEOUT,
+        "the host waited for the helper"
+    );
+    server.expect(|seen| *seen == Seen::RestartRequested);
+    release.send(()).unwrap();
     drop(server);
 }
 

@@ -31,6 +31,7 @@ use crate::bus::{bridge, BusHub, Message};
 use crate::context::{self, ComponentContext, Inbox, Sockets};
 use crate::host::{Fault, Reaper, HELPER_JOIN_TIMEOUT};
 use crate::link::ComponentLink;
+use crate::runtime::{Hosting, Ran};
 use crate::{ComponentName, Entry, Error};
 
 /// Protocol version of `cupertino_host_v1` this crate was built with.
@@ -451,8 +452,23 @@ pub struct Runtime {
     kind: Kind,
     environment: Environment,
     bus: Arc<BusHub>,
-    render_busy_since: Arc<Mutex<Option<Instant>>>,
+    /// How a component's helper that ignores its stop asks for the host's restart.
+    restart: Option<Restart>,
     reaper: Option<Arc<Reaper>>,
+}
+
+/// The host's `request_restart`, which a component's handle can send without the host.
+#[derive(Clone)]
+struct Restart {
+    host: CupertinoHostV1,
+    conn: WlConnection,
+}
+
+impl Restart {
+    fn request(&self) {
+        self.host.request_restart();
+        let _ = self.conn.flush();
+    }
 }
 
 impl Runtime {
@@ -466,19 +482,24 @@ impl Runtime {
             kind,
             environment,
             bus: host.bus(),
-            render_busy_since: Arc::new(Mutex::new(None)),
+            restart: host.state.host_global.clone().map(|host_global| Restart {
+                host: host_global,
+                conn: host.conn.clone(),
+            }),
             reaper: Reaper::new(),
         })
     }
 
-    /// Start `entry` on its own 8 MiB thread bound to `connection`. `Error::Version` when the connection offers
-    /// another version of `cupertino_component_v1` than this crate was built with: no thread starts.
+    /// Start `entry` on its own 8 MiB thread bound to `connection`, its loop Kit's UI loop on that connection.
+    /// `Error::Version` when the connection offers another version of `cupertino_component_v1` than this crate was
+    /// built with, or a global the component binds older than it needs or not at all: no thread starts.
     pub fn start(&self, entry: &'static Entry, connection: Connection) -> Result<Running, Error> {
         let component = entry.name();
         let socket = connection
             .try_clone()
             .map_err(|e| Error::Protocol(format!("clone component socket failed: {e}")))?;
         let (link, opened) = ComponentLink::open(socket)?;
+        crate::runtime::check_globals(component, &opened.globals)?;
         let connection = Connection {
             wayland: Some(link.connection().clone()),
             ..connection
@@ -491,7 +512,8 @@ impl Runtime {
         let busy_since = Arc::new(Mutex::new(None::<Instant>));
         let ended = Arc::new(Mutex::new(None::<Ended>));
         let helpers = Arc::new(Mutex::new(Vec::new()));
-        let fault = Arc::new(Fault::new(Arc::clone(&stop_flag)));
+        let inbox = Arc::new(Inbox::default());
+        let fault = Arc::new(Fault::new(Arc::clone(&stop_flag), Arc::clone(&inbox)));
         let sockets = Sockets::default();
 
         let ctx = ComponentContext {
@@ -506,11 +528,13 @@ impl Runtime {
             reaper: self.reaper.clone(),
             link: Some(link),
             sockets: Arc::clone(&sockets),
-            inbox: Arc::new(Inbox::default()),
+            inbox: Arc::clone(&inbox),
             ..ComponentContext::default()
         };
-        let t_stop = Arc::clone(&stop_flag);
-        let t_busy = Arc::clone(&busy_since);
+        let hosting = Hosting {
+            stop: Arc::clone(&stop_flag),
+            busy: Arc::clone(&busy_since),
+        };
         let t_ended = Arc::clone(&ended);
         let t_bus = Arc::clone(&self.bus);
         let t_fault = Arc::clone(&fault);
@@ -523,7 +547,7 @@ impl Runtime {
                 context::install(ctx);
 
                 let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    (entry.runner)(&t_stop, &t_busy, connection)
+                    (entry.runner)(&hosting, connection)
                 }));
 
                 // Drop component context inside catch_unwind so teardown panics never abort the host.
@@ -535,8 +559,14 @@ impl Runtime {
 
                 let final_state = match outcome {
                     _ if t_fault.panicked() => Ended::Failed(Failure::Panic),
-                    Ok(Ok(())) => Ended::Stopped,
-                    Ok(Err(_)) => Ended::Failed(Failure::Error),
+                    Ok(Ok(Ran::Stopped)) => Ended::Stopped,
+                    // the host cut the component off: its loop failing on the closed socket is the host's doing
+                    Ok(Err(_)) if t_fault.is_cut() => Ended::Stopped,
+                    Ok(Ok(Ran::Exited)) => Ended::Failed(Failure::Exit),
+                    Ok(Err(e)) => {
+                        tracing::error!(component = component.as_str(), error = %e, "component failed");
+                        Ended::Failed(Failure::Error)
+                    }
                     Err(_) => Ended::Failed(Failure::Panic),
                 };
                 if let Ok(mut slot) = t_ended.lock() {
@@ -554,6 +584,8 @@ impl Runtime {
             bus: Arc::clone(&self.bus),
             stop_flag,
             busy_since,
+            inbox,
+            restart: self.restart.clone(),
             ended,
             helpers,
             socket: conn_for_shut,
@@ -574,12 +606,10 @@ impl Runtime {
         self.bus.publish_from_host(allow_host, message);
     }
 
-    /// How long the shared render thread has been out of its wait, if currently busy.
+    /// How long the process's render thread has been out of its wait, if currently busy: every component of the
+    /// host draws through it, so one out of it for [`LOST_THRESHOLD`] is a hang of the whole host.
     pub fn render_busy_for(&self) -> Option<Duration> {
-        self.render_busy_since
-            .lock()
-            .ok()
-            .and_then(|s| s.map(|t| t.elapsed()))
+        cupertino_ui_render::render_thread::heartbeat().busy_for
     }
 }
 
@@ -597,6 +627,9 @@ pub struct Running {
     bus: Arc<BusHub>,
     stop_flag: Arc<AtomicBool>,
     busy_since: Arc<Mutex<Option<Instant>>>,
+    /// The component's inbox, woken so its loop sees a stop.
+    inbox: Arc<Inbox>,
+    restart: Option<Restart>,
     ended: Arc<Mutex<Option<Ended>>>,
     helpers: Arc<Mutex<Vec<crate::host::HelperHandle>>>,
     socket: UnixStream,
@@ -618,6 +651,7 @@ impl Running {
     /// Ask the component's loop and helper threads to stop cleanly.
     pub fn stop(&self) {
         self.stop_flag.store(true, Ordering::SeqCst);
+        self.inbox.wake();
         if let Ok(helpers) = self.helpers.lock() {
             for h in helpers.iter() {
                 h.stop.trigger();
@@ -647,21 +681,35 @@ impl Running {
         if let Some(handle) = self.handle.take() {
             let _ = handle.join();
         }
-        // Join helper threads up to HELPER_JOIN_TIMEOUT (`shell-host.md#threads-and-child-processes`).
+        // Join helper threads up to HELPER_JOIN_TIMEOUT (`shell-host.md#threads-and-child-processes`): each helper's
+        // end wakes the wait for it. One still running then is left behind, and the host asks for its restart, the
+        // only way to be rid of a thread.
         let deadline = Instant::now() + HELPER_JOIN_TIMEOUT;
-        if let Ok(mut helpers) = self.helpers.lock() {
-            for h in helpers.iter_mut() {
+        let mut stuck = 0;
+        {
+            let mut helpers = self.helpers.lock().unwrap_or_else(PoisonError::into_inner);
+            for h in helpers.iter() {
                 h.stop.trigger();
             }
             for h in helpers.iter_mut() {
-                if let Some(jh) = h.handle.take() {
-                    while !jh.is_finished() && Instant::now() < deadline {
-                        std::thread::sleep(Duration::from_millis(5));
-                    }
-                    if jh.is_finished() {
-                        let _ = jh.join();
-                    }
+                let Some(jh) = h.handle.take() else {
+                    continue;
+                };
+                if h.finished.wait_until(deadline) {
+                    let _ = jh.join();
+                } else {
+                    stuck += 1;
                 }
+            }
+        }
+        if stuck > 0 {
+            tracing::error!(
+                component = self.component.as_str(),
+                stuck,
+                "helper threads ignored their stop; the host asks to restart"
+            );
+            if let Some(restart) = &self.restart {
+                restart.request();
             }
         }
         Some(state)

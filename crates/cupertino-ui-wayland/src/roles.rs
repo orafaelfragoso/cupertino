@@ -58,6 +58,16 @@ pub trait SurfaceRoles {
     fn prepare(&mut self, conn: &mut Connection) {
         let _ = conn;
     }
+
+    /// Called in every dispatch once the window system's wait ended, before what it read is handled: with
+    /// [`SurfaceRoles::prepare`] it brackets the time the loop spends out of its wait (a watchdog's record).
+    fn woke(&mut self) {}
+
+    /// The compositor answered the frame callback of `surface`, one of the application's windows: the frame it
+    /// committed last is presented.
+    fn frame_done(&mut self, surface: SurfaceId) {
+        let _ = surface;
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

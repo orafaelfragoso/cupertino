@@ -51,8 +51,8 @@ pub use paint::{overlay_id, MAX_MATERIALS};
 pub use personal::{personal, set_personal, Personal};
 pub use pointer::SCROLL_IDLE_NS;
 pub use runtime::{
-    EachTurn, PersonalRefresh, RendererFactory, Runtime, RuntimeOptions, SurfaceLayerMark,
-    ThemeForAppearance, WindowErrorHandler,
+    EachTurn, ExitWhen, PersonalRefresh, RendererFactory, Runtime, RuntimeOptions,
+    SurfaceLayerMark, ThemeForAppearance, WindowErrorHandler,
 };
 pub use scroll::session_scroll_bars;
 pub use scroll_timing::{ScrollLatency, ScrollTiming, ScrollTimingSink};

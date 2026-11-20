@@ -43,8 +43,8 @@ impl Cupertino {
     }
 
     /// The picture of the layer surface `surface` as its output shows it: its surface tree and its layers' content drawn
-    /// by the renderer into a texture (shm, dmabuf or any buffer the renderer imports), with the backdrops they draw
-    /// kept to be drawn live; without a renderer a copy of its shm pixels, with its own backdrops.
+    /// by the renderer into textures (shm, dmabuf or any buffer the renderer imports), cut at each glass they draw, with
+    /// the backdrops they draw kept to be drawn live between and behind them; without a renderer a copy of its shm pixels, with its own backdrops.
     pub(super) fn capture_held_picture(&mut self, surface: &WlSurface) -> Option<HeldPicture> {
         let (idx, area) = self.outputs.iter().enumerate().find_map(|(i, o)| {
             let map = layer_map_for_output(&o.output);
@@ -59,10 +59,10 @@ impl Cupertino {
             Some((i, area))
         })?;
         let menu_bar = self.menu_bars.has_surface(surface);
-        if let Some((snapshot, backdrops)) = self.capture_layer_texture(surface, idx, area) {
+        if let Some((slices, backdrops)) = self.capture_layer_texture(surface, idx, area) {
             return Some(HeldPicture {
                 content: HeldContent::Texture {
-                    snapshot: Rc::new(snapshot),
+                    slices: slices.into(),
                     size: (area.w as i32, area.h as i32),
                 },
                 backdrops,
@@ -77,23 +77,27 @@ impl Cupertino {
     }
 
     /// Draw the surface tree of `surface` and its layers' content, its top-left corner at the corner of `area` (global
-    /// logical points), at the scale of output `idx` into a snapshot texture, with the backdrops they draw; `None`
-    /// without a renderer.
+    /// logical points), at the scale of output `idx` into snapshot textures, one per slice between the glass they draw
+    /// (front to back, `None` for an empty slice), with the backdrops they draw; `None` without a renderer.
     fn capture_layer_texture(
         &mut self,
         surface: &WlSurface,
         idx: usize,
         area: Rect,
     ) -> Option<(
-        crate::render::snapshots::SnapshotOwner,
+        Vec<Option<crate::render::snapshots::SnapshotOwner>>,
         crate::render::scene::HeldBackdrops,
     )> {
         let mut backend = self.backend.take()?;
         let captured = self
             .with_scene(backend.renderer(), idx, |renderer, mut p| {
-                let (texture, backdrops) =
+                let (textures, backdrops) =
                     crate::render::scene::capture_held_surface(renderer, &mut p, surface, area)?;
-                Some((p.res.snapshots.insert(texture), backdrops))
+                let slices = textures
+                    .into_iter()
+                    .map(|t| t.map(|t| p.res.snapshots.insert(t)))
+                    .collect();
+                Some((slices, backdrops))
             })
             .flatten();
         self.backend = Some(backend);

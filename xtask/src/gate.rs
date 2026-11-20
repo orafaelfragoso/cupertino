@@ -207,7 +207,7 @@ const LARGE_FILE_CAPS: [(&str, usize); 15] = [
     ("crates/cupertino-menubar/src/view.rs", 1915),
     ("crates/cupertino-notifications/src/center.rs", 1511),
     ("crates/cupertino-notifications/src/view.rs", 3641),
-    ("crates/cupertino-portal/src/dialog.rs", 1999),
+    ("crates/cupertino-portal/src/dialog.rs", 1743),
     ("crates/cupertino-settings/src/panes.rs", 3251),
     ("crates/cupertino-settings/src/shell/state.rs", 1738),
 ];

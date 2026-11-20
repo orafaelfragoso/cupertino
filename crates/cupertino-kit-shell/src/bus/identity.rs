@@ -73,6 +73,7 @@ async fn prove(link: &ComponentLink, bus: &zbus::Connection) -> bool {
         return false;
     };
     let Some(nonce) = link.announce(&name).await else {
+        // refused without a nonce, or the connection failed: the component is not proved, and gets its connection
         return false;
     };
     let call = bus

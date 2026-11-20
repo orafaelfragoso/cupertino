@@ -142,9 +142,11 @@ macro_rules! component {
 
 component!(Agent, ComponentName::AGENT);
 component!(Dialogs, ComponentName::DIALOGS);
+component!(Notifications, ComponentName::NOTIFICATIONS);
 
 static AGENT: Entry = Entry::of::<Agent>();
 static DIALOGS: Entry = Entry::of::<Dialogs>();
+static NOTIFICATIONS: Entry = Entry::of::<Notifications>();
 
 /// A private session bus daemon, stopped when dropped.
 struct Daemon(Child);
@@ -197,7 +199,7 @@ fn identity(name: ComponentName) -> Option<bool> {
 #[test]
 fn a_component_proves_its_bus_name_before_it_gets_its_connection() {
     let _daemon = Daemon::start();
-    let (server, host_end) = Server::start(Kind::Shared, &["agent", "dialogs"]);
+    let (server, host_end) = Server::start(Kind::Shared, &["agent", "dialogs", support::NO_NONCE]);
     let session = async_io::block_on(async {
         zbus::connection::Builder::session()?
             .name("org.cupertino.Session1")?
@@ -248,6 +250,26 @@ fn a_component_proves_its_bus_name_before_it_gets_its_connection() {
         "a refused component still gets its connection, after the answer"
     );
     assert_eq!(identity(ComponentName::DIALOGS), Some(false));
+
+    // a name the server refuses without a nonce (it fails closed) ends the proof: the component hears it is
+    // refused and still gets its connection
+    let connection = component_connection(&mut host, support::NO_NONCE);
+    let mut notifications = runtime.start(&NOTIFICATIONS, connection).unwrap();
+    eventually(
+        "the notifications get their connection and their identity",
+        || {
+            connected(ComponentName::NOTIFICATIONS).is_some()
+                && identity(ComponentName::NOTIFICATIONS).is_some()
+        },
+    );
+    let (refused, _) = connected(ComponentName::NOTIFICATIONS).unwrap();
+    assert!(
+        refused.is_ok(),
+        "a refused component still gets its connection"
+    );
+    assert_eq!(identity(ComponentName::NOTIFICATIONS), Some(false));
+    notifications.stop();
+    eventually("the notifications stop", || notifications.ended().is_some());
 
     // a shut component's bus connection is cut off: the bus daemon drops its name
     let has_owner = |name: &str| -> bool {

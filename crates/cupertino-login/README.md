@@ -171,24 +171,23 @@ that are not modal (below).
 
 ### Notifications
 
-While the session is locked the lock screen shows the notifications the notification daemon (`cupertino-notifications`)
-lists for it: the daemon's `org.cupertino.NotificationCenter1.LockScreenNotifications` on the session bus, read again at
-each `LockScreenChanged` signal (which carries nothing) and whenever the daemon's bus name changes owner
-(`lock_notices::watch`; no daemon is an empty list). A `LockScreenChanged` counts only from the name's owner
+While the session is locked the lock screen shows the notifications the notifications component (`notifications`, run by
+`cupertino-shell`) lists for it: its `org.cupertino.NotificationCenter1.LockScreenNotifications` on the session bus, read
+again at each `LockScreenChanged` signal (which carries nothing) and whenever the bus name changes owner
+(`lock_notices::watch`; no owner is an empty list). A `LockScreenChanged` counts only from the name's owner
 (`cupertino_peer::signal::from_owner`), and the signal readers never wait on the bus: a signal only asks a read thread
-for a read, at most one waiting, so a flood of signals cannot fill a stream and stop the connection. The name alone is not trusted, as any process
-of the user can own it while the daemon is not running: `lock_notices::fetch` asks the bus for the name's owner and its
-credentials, and asks that connection only when it is an unsandboxed process running `cupertino-notifications` from the
-lock screen's own directory, or from a directory of `PATH` (searched as the server searches it for the shell processes it
-starts, links resolved) when only root can change that file and every directory above it
-(`cupertino_defaults::system::only_root_can_change`; `lock_notices::daemon_programs`): a program the user put in a
-`PATH` directory of their own does not count. A daemon configured by an absolute path elsewhere, outside `PATH` and the
-lock screen's directory, is not found and the list stays empty (the conservative choice). Any other owner is not asked and
-the list is empty, so no other program can put words on the lock screen. The daemon decides what may show (Settings >
+for a read, at most one waiting, so a flood of signals cannot fill a stream and stop the connection. The name alone is not
+trusted, as any process of the user can own it while the component is not running: `lock_notices::fetch` asks the bus for
+the name's owner and asks that connection only when the server resolves it to the component
+`lock_notices::NOTIFICATIONS_COMPONENT` (D20, per component and never by process relations or program paths:
+`lock_notices::serves_lock_screen` through `cupertino_peer::component::resolve_component`, the caller's process among
+`org.cupertino.Session1.ShellHosts` and `ComponentOf` naming `notifications` for that connection). Any other owner, the
+server and another component of the same host included, is not asked and the list is empty, so no other program can put
+words on the lock screen. The component decides what may show (Settings >
 Notifications): only arrivals since the lock, only from applications allowed on the lock screen, and without previews
 the title is "Notification" and the body empty, so the rest of a notification never reaches this process, its windows
 or what assistive technology reads. The process keeps at most `MAX_NOTICES` (20) and cuts each text again to its cap
-(application 64, title 256, body 256 characters, ending in an ellipsis), whatever the daemon sent. The list is dropped at
+(application 64, title 256, body 256 characters, ending in an ellipsis), whatever the component sent. The list is dropped at
 the unlock.
 
 The cards stand in a column at the top right of each lock window, 344 pt wide, 16 pt from the right edge and 44 pt from
@@ -648,7 +647,7 @@ network users).
 | `logind` (feature `dbus`) | the session's `Lock` and `PrepareForSleep` signals, the sleep and power key inhibitors, `TerminateSession` |
 | `login_manager` (feature `dbus`) | the manager's `org.cupertino.LoginManager1`: `request_power`, `session_ready`, `switch_to_login_window`, `watch_unlock` (the manager's unicast `Unlock`; `Error::refusal` names the expected refusals) |
 | `login_wallpaper` | `choose` (the wallpaper the settings show), `render` (the JPEG for the login screen), `store`, `keep_current` (the writing thread) |
-| `lock_notices` | `Notice`, `from_rows`, `cap`, the cards' column and heights, `shown`, `more_text`; with feature `dbus`, `fetch` and `watch`: the notifications the daemon lists for the lock screen |
+| `lock_notices` | `Notice`, `from_rows`, `cap`, the cards' column and heights, `shown`, `more_text`; with feature `dbus`, `fetch`, `serves_lock_screen` and `watch`: the notifications the notifications component lists for the lock screen |
 | `upower` (feature `dbus`) | `watch` (the display device's `WarningLevel` and `Percentage`), `post` and `close` (the notification calls) |
 | `session` (feature `dbus`) | `log_out`, `restart`, `shut_down`, `sleep`, `open_applications`, `pending_interrupt`, `retry_session_action`, `cancel_session_action`, `force_quit_application`, `watch_interrupts` (`Interrupt`), `report_failure`: the server's `org.cupertino.Session1` and the notice when it does not take an action |
 | `auth` (feature `app`) | `Authenticator`: PAM on a worker thread |

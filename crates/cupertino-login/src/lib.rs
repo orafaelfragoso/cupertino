@@ -6,7 +6,7 @@
 //! * [`autostart`]: the XDG autostart entries (login items) the session agent starts once per session.
 //! * [`hint`]: when failed attempts bring up the password help.
 //! * [`layout`]: where the clock, avatar, name and password field sit, in points.
-//! * [`lock_notices`]: the notifications the lock screen shows, as the notification daemon lists them, and their cards'
+//! * [`lock_notices`]: the notifications the lock screen shows, as the notifications component lists them, and their cards'
 //!   frames; with feature `dbus`, reading and following the list.
 //! * [`login_wallpaper`]: the copy of the session's wallpaper the session agent leaves for the login screen.
 //! * [`picker`]: the greeter's user tiles, grid, selection and the name typed for "Other…".

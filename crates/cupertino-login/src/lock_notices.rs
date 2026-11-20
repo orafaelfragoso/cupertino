@@ -1,25 +1,23 @@
-//! The notifications the lock screen shows: what the notification daemon lists for it, and where the cards sit.
+//! The notifications the lock screen shows: what the notifications component lists for it, and where the cards sit.
 //!
-//! The daemon (`cupertino-notifications`) decides what may show: while the session is locked, its
-//! `org.cupertino.NotificationCenter1.LockScreenNotifications` lists the notifications that arrived since the lock
-//! from applications allowed on the lock screen, each as its application, a title and a body. The title is
-//! "Notification" and the body empty unless the application's previews are always shown, so the rest of a
-//! notification never reaches this process, its windows or the tree assistive technology reads. The daemon says when
-//! the list changed with the signal `LockScreenChanged`, which carries nothing; [`watch`] then asks for the list
-//! again, and again when the daemon's bus name changes owner. Each text is cut again here to its cap, whatever the
-//! daemon sent.
+//! The notifications component (`notifications`, run by `cupertino-shell`) decides what may show: while the session is
+//! locked, its `org.cupertino.NotificationCenter1.LockScreenNotifications` lists the notifications that arrived since the
+//! lock from applications allowed on the lock screen, each as its application, a title and a body. The title is
+//! "Notification" and the body empty unless the application's previews are always shown, so the rest of a notification
+//! never reaches this process, its windows or the tree assistive technology reads. The component says when the list
+//! changed with the signal `LockScreenChanged`, which carries nothing; [`watch`] then asks for the list again, and again
+//! when the bus name changes owner. Each text is cut again here to its cap, whatever the component sent.
 //!
-//! Any process of the user could own the daemon's bus name while the daemon is not running, so the name alone is not
-//! trusted: [`fetch`] asks the bus for the name's owner, reads the owner's process from the credentials the bus gives
-//! and asks that very connection only when the process is unsandboxed and runs one of the daemon's programs
-//! ([`daemon_programs`]): `cupertino-notifications` from this program's own directory, or found on `PATH` the way the
-//! server finds the shell processes it starts, when only root can change that file and the directories above it (so a
-//! program the user put in a `PATH` directory of their own does not count). Any other owner gets no question and the list
-//! is empty, so no other program can put words on the lock screen.
+//! Any process of the user could own the bus name while the component is not running, so the name alone is not trusted
+//! (D20: checks are per component, never by process relations or program paths): [`fetch`] asks the bus for the name's
+//! owner and asks that very connection only when the server resolves it to the component [`NOTIFICATIONS_COMPONENT`]
+//! ([`serves_lock_screen`]: `cupertino_peer::component`, the server's `ShellHosts` and `ComponentOf`). Any other owner,
+//! another component of the same host included, gets no question and the list is empty, so no other program can put
+//! words on the lock screen.
 
 use cupertino_geometry::Rect;
 
-/// One notification on the lock screen, as the daemon gave it.
+/// One notification on the lock screen, as the notifications component gave it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Notice {
     pub id: u32,
@@ -145,88 +143,40 @@ pub fn more_text(n: usize) -> String {
     }
 }
 
-/// The file name of the daemon's program.
-pub const DAEMON: &str = "cupertino-notifications";
-
-/// The program the daemon runs as `/proc` names it when it is installed beside this one: [`DAEMON`] in the directory of
-/// `own`, this program's path. A program replaced on disk while it runs is named with " (deleted)" after its path; that
-/// mark is not part of the directory or the name compared.
-pub fn daemon_program(own: &std::path::Path) -> std::path::PathBuf {
-    own.with_file_name(DAEMON)
-}
-
-/// Every program the daemon may run, as `/proc` names a program (links resolved): [`daemon_program`] of `own`, then
-/// [`DAEMON`] in each directory of `path` (the `PATH` variable, searched as the server searches it for the shell
-/// processes it starts) where the file exists and `trusted` accepts it. The lock screen trusts only a file that root
-/// alone can change ([`cupertino_defaults::system::only_root_can_change`]).
-pub fn daemon_programs(
-    own: &std::path::Path,
-    path: Option<&std::ffi::OsStr>,
-    trusted: impl Fn(&std::path::Path) -> bool,
-) -> Vec<std::path::PathBuf> {
-    let mut programs = vec![daemon_program(own)];
-    for dir in path.map(std::env::split_paths).into_iter().flatten() {
-        // a relative entry names a directory of whoever starts the lock screen: not looked in
-        if !dir.is_absolute() {
-            continue;
-        }
-        let Ok(program) = std::fs::canonicalize(dir.join(DAEMON)) else {
-            continue;
-        };
-        if program.is_file() && trusted(&program) && !programs.contains(&program) {
-            programs.push(program);
-        }
-    }
-    programs
-}
-
-/// `exe` as `/proc/<pid>/exe` names it, without the mark of a program replaced on disk since it started.
-pub fn live_path(exe: &std::path::Path) -> std::path::PathBuf {
-    let text = exe.as_os_str().to_string_lossy();
-    match text.strip_suffix(" (deleted)") {
-        Some(path) => std::path::PathBuf::from(path),
-        None => exe.to_path_buf(),
-    }
-}
+/// The shell component whose bus connection alone may answer the lock screen's list, by its name in the server's
+/// component table (`ComponentOf`).
+pub const NOTIFICATIONS_COMPONENT: &str = "notifications";
 
 #[cfg(feature = "dbus")]
-pub use bus::{fetch, fetch_served_by, watch};
+pub use bus::{fetch, serves_lock_screen, watch};
 
 #[cfg(feature = "dbus")]
 mod bus {
-    use super::{daemon_programs, from_rows, live_path, Notice};
+    use super::{from_rows, Notice, NOTIFICATIONS_COMPONENT};
+    use cupertino_peer::component::{resolve_component, ComponentCaller};
     use cupertino_peer::signal::{from_owner, sent_by_bus};
-    use cupertino_peer::Caller;
-    use std::path::Path;
     use zbus::blocking::fdo::DBusProxy;
     use zbus::blocking::{Connection, MessageIterator};
     use zbus::message::Type;
-    use zbus::names::BusName;
+    use zbus::names::{BusName, UniqueName};
     use zbus::MatchRule;
 
     const BUS_NAME: &str = "org.cupertino.NotificationCenter1";
     const OBJECT_PATH: &str = "/org/cupertino/NotificationCenter1";
     const INTERFACE: &str = "org.cupertino.NotificationCenter1";
 
-    /// The list the daemon gives the lock screen now, asked only of the real daemon ([`fetch_served_by`] with
-    /// [`daemon_programs`] of this program and `PATH`). No daemon on the bus is an empty list.
-    pub fn fetch(session: &Connection) -> zbus::Result<Vec<Notice>> {
-        let own = std::env::current_exe()
-            .map_err(|e| zbus::Error::Failure(format!("this program's path: {e}")))?;
-        let programs = daemon_programs(
-            &live_path(&own),
-            std::env::var_os("PATH").as_deref(),
-            cupertino_defaults::system::only_root_can_change,
-        );
-        fetch_served_by(session, &programs)
+    /// Whether the server resolves the connection `owner` to the component [`NOTIFICATIONS_COMPONENT`] (D20). The
+    /// server itself, another component of a shell host and any other connection are not. Waits for the bus, so it is
+    /// called only from the lock screen's reader thread.
+    pub fn serves_lock_screen(session: &Connection, owner: &UniqueName<'_>) -> bool {
+        let caller = zbus::block_on(resolve_component(session.inner(), owner));
+        matches!(caller, ComponentCaller::Component(name) if name == NOTIFICATIONS_COMPONENT)
     }
 
-    /// The list, asked of the owner of the daemon's name only when it is an unsandboxed process running one of
-    /// `programs`; any other owner is an error and is not asked. No owner is an empty list.
-    pub fn fetch_served_by(
-        session: &Connection,
-        programs: &[std::path::PathBuf],
-    ) -> zbus::Result<Vec<Notice>> {
+    /// The list the notifications component gives the lock screen now, asked of the owner of its bus name only when
+    /// that connection is the component's ([`serves_lock_screen`]); any other owner is an error and is not asked. No
+    /// owner is an empty list.
+    pub fn fetch(session: &Connection) -> zbus::Result<Vec<Notice>> {
         let dbus = DBusProxy::new(session)?;
         let name = BusName::try_from(BUS_NAME)?;
         let owner = match dbus.get_name_owner(name) {
@@ -234,22 +184,9 @@ mod bus {
             Err(zbus::fdo::Error::NameHasNoOwner(_)) => return Ok(Vec::new()),
             Err(e) => return Err(e.into()),
         };
-        let credentials =
-            dbus.get_connection_credentials(BusName::from(owner.clone().into_inner()))?;
-        let runs_program = match Caller::from_credentials(&credentials, Path::new("/proc")) {
-            Caller::Process(process) => {
-                process.sandbox.is_none()
-                    && process
-                        .exe
-                        .as_deref()
-                        .map(live_path)
-                        .is_some_and(|exe| programs.contains(&exe))
-            }
-            Caller::Anonymous | Caller::Unclassified(_) => false,
-        };
-        if !runs_program {
+        if !serves_lock_screen(session, &owner) {
             return Err(zbus::Error::Failure(format!(
-                "{BUS_NAME} is owned by a process that runs none of {programs:?}"
+                "{BUS_NAME} is owned by {owner}, which is not the {NOTIFICATIONS_COMPONENT} component"
             )));
         }
         // the owner's own connection, so a new owner of the name cannot answer in its place
@@ -272,8 +209,8 @@ mod bus {
         }
     }
 
-    /// Pass the list to `on_list` now, at every `LockScreenChanged` from the owner of the daemon's name and when the name
-    /// changes owner. A list that cannot be read is reported and passed on as empty, so nothing stale stays shown.
+    /// Pass the list to `on_list` now, at every `LockScreenChanged` from the owner of the component's name and when the
+    /// name changes owner. A list that cannot be read is reported and passed on as empty, so nothing stale stays shown.
     ///
     /// The readers of the signals never wait on the bus: a signal only asks a thread of its own for a read, with at most
     /// one asked for while one runs. A stream that fills stops the connection, the replies to the read included, and the
@@ -298,7 +235,7 @@ mod bus {
             .add_arg(BUS_NAME)?
             .build();
         let changes = from_owner(session, BUS_NAME, changed, |_| {
-            eprintln!("cupertino-login: a LockScreenChanged not sent by the notification daemon was ignored")
+            eprintln!("cupertino-login: a LockScreenChanged not sent by the notifications component was ignored")
         })?;
         let owners = MessageIterator::for_match_rule(owner, session, None)?.filter(|message| {
             // zbus filters the rule's sender already; this does not rely on it

@@ -9,7 +9,7 @@ layer = "shell"
 
 [features]
 default = []
-dbus = ["dep:zbus", "dep:cupertino-seat", "dep:cupertino-radios"]
+dbus = ["dep:zbus", "dep:cupertino-seat", "dep:cupertino-radios", "dep:cupertino-peer"]
 # the `cupertino-login` process: the lock screen, greeter and session agent as a client of the server
 app = [
     "dbus",
@@ -22,7 +22,6 @@ app = [
     "dep:cupertino-ui-wayland",
     "dep:cupertino-wayland-client",
     "dep:pam-client2",
-    "dep:cupertino-peer",
 ]
 
 [dependencies]

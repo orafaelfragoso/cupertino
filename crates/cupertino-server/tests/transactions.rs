@@ -30,9 +30,9 @@ use cupertino_protocols::client::transaction::cupertino_transaction_v1::{
 use cupertino_server::authorization::{Holder, DETACHED_LIFETIME};
 use cupertino_server::host::HostKind;
 use cupertino_server::state::{insert_client, new_output, ClientState};
-use cupertino_server::transaction::{MAX_KEPT_COMMITS, PACED_KEPT_COMMITS};
 use cupertino_server::{Config, Cupertino};
 use cupertino_wm::{OutputId, WindowId};
+use smithay::backend::renderer::utils::with_renderer_surface_state;
 use smithay::desktop::layer_map_for_output;
 use smithay::output::{Mode as OutputMode, PhysicalProperties, Subpixel};
 use smithay::reexports::calloop::EventLoop;
@@ -44,7 +44,7 @@ use smithay::utils::Transform;
 use wayland_client::protocol::{
     wl_buffer, wl_callback, wl_compositor, wl_output, wl_registry, wl_shm, wl_shm_pool, wl_surface,
 };
-use wayland_client::{Connection, Dispatch, EventQueue, QueueHandle, WEnum};
+use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum};
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
 #[derive(Default)]
@@ -119,6 +119,8 @@ struct CompClient {
     gesture_ended: Vec<Outcome>,
     finished: Vec<Outcome>,
     source_closed: usize,
+    /// The buffers the server released, in the order it did.
+    released: Vec<wayland_client::backend::ObjectId>,
 }
 
 impl Dispatch<wl_registry::WlRegistry, ()> for CompClient {
@@ -209,7 +211,21 @@ impl Dispatch<wl_output::WlOutput, ()> for CompClient {
 
 wayland_client::delegate_noop!(CompClient: ignore wl_shm::WlShm);
 wayland_client::delegate_noop!(CompClient: ignore wl_shm_pool::WlShmPool);
-wayland_client::delegate_noop!(CompClient: ignore wl_buffer::WlBuffer);
+
+impl Dispatch<wl_buffer::WlBuffer, ()> for CompClient {
+    fn event(
+        state: &mut Self,
+        buffer: &wl_buffer::WlBuffer,
+        event: wl_buffer::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let wl_buffer::Event::Release = event {
+            state.released.push(buffer.id());
+        }
+    }
+}
 
 impl Dispatch<wl_callback::WlCallback, ()> for CompClient {
     fn event(
@@ -682,6 +698,11 @@ wayland_client::delegate_noop!(WinClient: ignore wl_buffer::WlBuffer);
 /// One colour in `wl_shm` ARGB8888 memory order (blue, green, red, alpha): an opaque magenta, which neither the
 /// wallpaper nor a window's frame shows.
 const MAGENTA: [u8; 4] = [255, 0, 255, 255];
+/// How many commits drawn on frame callbacks a test keeps in an armed part: well past a component's two or three buffers.
+const KEPT_FRAMES: usize = 12;
+/// How many commits of a new buffer each a test keeps in an armed part without waiting for frame callbacks: more than a
+/// component's commits of a long gesture would pile up in kept states of their own.
+const KEPT_BUFFERS: usize = 100;
 /// A clear pixel.
 const CLEAR: [u8; 4] = [0, 0, 0, 0];
 /// Model seconds a test steps its fixed clock by for a closing window's fade to have ended: well past the closing
@@ -1592,7 +1613,7 @@ fn armed_overview_part(
 }
 
 #[test]
-fn an_armed_part_paces_the_frame_callbacks_of_its_kept_commits() {
+fn an_armed_part_answers_the_frame_callbacks_of_its_kept_commits_every_frame() {
     let mut rig = Rig::new();
     let (hconn, mut hq, mut hst) = rig.connect_host(&["overview"]);
     let (_hov, oconn, mut oq, mut ost) = rig.spawn_component(&hconn, &mut hq, &mut hst, "overview");
@@ -1600,25 +1621,22 @@ fn an_armed_part_paces_the_frame_callbacks_of_its_kept_commits() {
     let server_strip = server_layer_surface(&rig, "strip");
     let (_tx, _child, _layer) = armed_overview_part(&mut rig, (&oconn, &mut oq, &mut ost), &surf);
     let oqh = oq.handle();
-    // the component draws on its frame callbacks while the transaction waits for its gesture
-    let drawn = PACED_KEPT_COMMITS + 3;
+    // the component draws on its frame callbacks while the transaction waits for its gesture, for long
     let mut callbacks = Vec::new();
-    for _ in 0..drawn {
+    for drawn in 1..=KEPT_FRAMES {
         callbacks.push(surf.frame(&oqh, ()));
         surf.commit();
         for _ in 0..2 {
             rig.pump_comp(&oconn, &mut oq, &mut ost);
         }
+        assert_eq!(
+            ost.frames, drawn,
+            "a kept commit's frame callback is answered with the output's next frame"
+        );
     }
     assert_eq!(layers_of(&server_strip), 0, "every commit is kept");
-    // the commit that staged it carried no callback: the paced ones are among the first kept
-    assert_eq!(
-        ost.frames,
-        PACED_KEPT_COMMITS - 1,
-        "past the paced commits the callbacks wait for the part"
-    );
 
-    // the gesture applies the part: its kept commits apply and the waiting callbacks are answered with the next frame
+    // the gesture applies the part
     assert!(rig.state.transaction_gesture_begin(
         rig.output_id,
         cupertino_protocols::server::transaction::cupertino_transaction_v1::Gesture::SwipeUp
@@ -1627,43 +1645,133 @@ fn an_armed_part_paces_the_frame_callbacks_of_its_kept_commits() {
         rig.pump_comp(&oconn, &mut oq, &mut ost);
     }
     assert_eq!(layers_of(&server_strip), 1, "the kept commits applied");
-    assert_eq!(ost.frames, drawn, "every frame callback is answered");
+    assert_eq!(
+        ost.frames, KEPT_FRAMES,
+        "every frame callback was answered once"
+    );
 }
 
 #[test]
-fn an_armed_part_keeps_a_bounded_number_of_commits() {
+fn an_armed_part_merges_later_commits_into_its_kept_one() {
     let mut rig = Rig::new();
     let (hconn, mut hq, mut hst) = rig.connect_host(&["overview"]);
     let (_hov, oconn, mut oq, mut ost) = rig.spawn_component(&hconn, &mut hq, &mut hst, "overview");
     let (surf, _shell) = rig.create_layer_surface(&oconn, &mut oq, &mut ost, "strip");
     let server_strip = server_layer_surface(&rig, "strip");
     let (_tx, _child, _layer) = armed_overview_part(&mut rig, (&oconn, &mut oq, &mut ost), &surf);
-    // a component that commits without waiting for its frame callbacks: the staging commit and more, up to the cap
-    for _ in 1..MAX_KEPT_COMMITS {
+    let oqh = oq.handle();
+    // a component that commits a new buffer each time without waiting for its frame callbacks, many times
+    let size = |i: usize| (100 + i as i32, 40);
+    let mut buffers = Vec::new();
+    for i in 0..KEPT_BUFFERS {
+        let buffer = shm_buffer(ost.shm.as_ref().unwrap(), &oqh, size(i), GREEN);
+        surf.attach(Some(&buffer), 0, 0);
+        surf.damage_buffer(0, 0, size(i).0, size(i).1);
         surf.commit();
+        buffers.push(buffer);
+        if i % 8 == 0 {
+            rig.pump_comp(&oconn, &mut oq, &mut ost);
+        }
     }
-    for _ in 0..2 {
+    for _ in 0..3 {
         rig.pump_comp(&oconn, &mut oq, &mut ost);
     }
-    assert_eq!(
-        layers_of(&server_strip),
-        0,
-        "up to {MAX_KEPT_COMMITS} commits are kept"
+    assert_eq!(layers_of(&server_strip), 0, "every commit is kept");
+    let (latest, replaced) = buffers.split_last().unwrap();
+    for buffer in replaced {
+        assert!(
+            ost.released.contains(&buffer.id()),
+            "a buffer a later kept commit replaced is released at once"
+        );
+    }
+    assert!(
+        !ost.released.contains(&latest.id()),
+        "the newest buffer is kept for the part"
     );
-    surf.commit();
-    for _ in 0..2 {
+    assert_eq!(
+        ost.released.len(),
+        KEPT_BUFFERS - 1,
+        "each replaced buffer is released once"
+    );
+
+    // the surface is still in the part: the gesture applies the newest state
+    assert!(rig.state.transaction_gesture_begin(
+        rig.output_id,
+        cupertino_protocols::server::transaction::cupertino_transaction_v1::Gesture::SwipeUp
+    ));
+    for _ in 0..3 {
         rig.pump_comp(&oconn, &mut oq, &mut ost);
     }
     assert_eq!(
         layers_of(&server_strip),
         1,
-        "a commit past them takes the surface out of the part, its kept commits applying in order"
+        "the layer made in the first kept commit applies with the newest one"
     );
-    // the transaction is still armed for its gesture, the surface out of it
+    let shown = with_renderer_surface_state(&server_strip, |s| s.buffer_size()).flatten();
+    let (w, h) = size(KEPT_BUFFERS - 1);
+    assert_eq!(
+        shown,
+        Some((w, h).into()),
+        "the part's start shows the newest buffer"
+    );
+    assert!(
+        !ost.released.contains(&latest.id()),
+        "the newest buffer is the surface's"
+    );
+}
+
+#[test]
+fn a_hole_layer_merged_into_its_kept_commit_applies_the_newest_hole_state() {
+    let mut rig = Rig::new();
+    let (hconn, mut hq, mut hst) = rig.connect_host(&["overview"]);
+    let (_hov, oconn, mut oq, mut ost) = rig.spawn_component(&hconn, &mut hq, &mut hst, "overview");
+    let (surf, _shell) = rig.create_layer_surface(&oconn, &mut oq, &mut ost, "strip");
+    let (_tx, child, _layer) = armed_overview_part(&mut rig, (&oconn, &mut oq, &mut ost), &surf);
+    let oqh = oq.handle();
+    let hole = ost.tx_manager.as_ref().unwrap().get_hole(&child, &oqh, ());
+    // the hole layer's kept commit claims one window, and the commits merged into it another
+    let (first, newest, after) = (WindowId(41), WindowId(42), WindowId(43));
+    hole.set_source(HoleWireSource::Window, first.0 as u32);
+    hole.set_claim(1);
+    child.commit();
+    for _ in 0..KEPT_FRAMES {
+        hole.set_source(HoleWireSource::Window, newest.0 as u32);
+        child.commit();
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    assert!(
+        !rig.state.transactions.is_window_claimed(first)
+            && !rig.state.transactions.is_window_claimed(newest),
+        "the hole layer's commits are kept"
+    );
+
     assert!(rig.state.transaction_gesture_begin(
         rig.output_id,
         cupertino_protocols::server::transaction::cupertino_transaction_v1::Gesture::SwipeUp
     ));
+    for _ in 0..3 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    assert!(
+        rig.state.transactions.is_window_claimed(newest),
+        "the part applies the newest hole state"
+    );
+    assert!(
+        !rig.state.transactions.is_window_claimed(first),
+        "the hole state a merged commit replaced never applies"
+    );
+
+    // after the part, the hole layer's next commit applies its own hole state at once
+    hole.set_source(HoleWireSource::Window, after.0 as u32);
+    child.commit();
+    for _ in 0..2 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    assert!(
+        rig.state.transactions.is_window_claimed(after)
+            && !rig.state.transactions.is_window_claimed(newest),
+        "an unstaged commit applies its own hole state"
+    );
 }
 
 /// One colour in `wl_shm` ARGB8888 memory order: an opaque green, which neither the wallpaper nor a window shows.

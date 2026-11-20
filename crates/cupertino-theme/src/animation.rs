@@ -149,6 +149,11 @@ impl Timing {
         ))),
         seconds: 0.18,
     });
+    /// The on-screen displays' fade after their hold: constant speed over 0.7 s, so the alpha falls as `1 - t / 0.7`.
+    pub const OSD_FADE: Timing = Timing(Motion::Eased {
+        easing: Easing::LINEAR,
+        seconds: 0.7,
+    });
     /// A popover shrinking into its anchor over 0.22 s: `1 - (1 - t)²` as a cubic Bézier.
     pub const POPOVER_CLOSE: Timing = Timing(Motion::Eased {
         easing: Easing(Shape::Bezier(CubicBezier::new(

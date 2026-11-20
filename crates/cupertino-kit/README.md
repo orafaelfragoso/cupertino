@@ -161,7 +161,7 @@ or a `From` that takes numbers.
 - `Easing`: `EASE`, `LINEAR`, `EASE_IN`, `EASE_OUT`, `EASE_IN_OUT` (the timing table) and `COSINE`; `eval`, `over(seconds)
   -> Timing` (a duration with a named shape; a spring never takes a number) and `as_bezier`.
 - `SpringPreset`: `DEFAULT`, `CONTROL_PANEL_OPEN`, `LAUNCHER_OPEN`, `POPOVER_OPEN`; `params`.
-- `Timing`: `CONTROL_PANEL_CLOSE`, `POPOVER_CLOSE`, `MENU_CLOSE`, and `From<SpringPreset>`; `value(seconds)`,
+- `Timing`: `CONTROL_PANEL_CLOSE`, `OSD_FADE`, `POPOVER_CLOSE`, `MENU_CLOSE`, and `From<SpringPreset>`; `value(seconds)`,
   `duration`, `curve` and `layer_curve`.
 - `Animated<T: Animatable>`: a value that moves to a target and keeps its velocity when the target changes (`new`,
   `value`, `velocity`, `target`, `is_animating`, `set_immediately`, `cancel`, `track`, `animate_to(to, Timing, now)`,
@@ -183,7 +183,7 @@ that turns it on.
 | In `kit::test` | Items |
 |---|---|
 | The headless backend (`cupertino-ui-test`) | `TestDriver`, `ManualClock`, `HeadlessWindowSystem`, and `StepStatus`, what a driver's steps return |
-| The capture command's shared part | the `capture` module: `App`, `Look`, `Request`, `State`, `Options`, `run` and the rest of its public items |
+| The capture command's shared part | the `capture` module: `App`, `Look`, `Request`, `State`, `Options`, `run`, `Pixmap` (the picture `App::capture` draws), `presented` (a headless window's last frame as that picture, premultiplied) and the rest of its public items |
 | What a driver is built from and reads | `Runtime`, `preferences`, `Capabilities`, `WindowEvent`, `WindowStates`, `PlaceholderIcons`, `FontIndex`, `each_turn` |
 
 The capture examples of `files`, `login` and `kit` and `login`'s benches name it; Kit's tests and `kit_capture` are

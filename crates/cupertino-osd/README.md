@@ -84,9 +84,8 @@ of `cupertino-kit-shell`, announced to the server, D20). When another connection
 and its host reports a failure. The interface lives in `control` (`BUS_NAME`, `OBJECT_PATH`, `serve`).
 
 Callers: `VolumeStep`, `ToggleMute`, `ToggleMicrophoneMute`, `BrightnessStep` and `KeyboardBrightnessStep` change
-levels, so only the server may call them: the owner of `org.cupertino.Session1` (`bus::caller`), or another
-connection of that process, unsandboxed, since the server's calls of the shell come from a connection of their own. Any
-other caller gets `org.freedesktop.DBus.Error.AccessDenied` and nothing changes. `Show` only draws the overlay, so it
+levels, so only the server may call them: the connection that owns `org.cupertino.Session1` (`bus::caller`),
+from which the server sends them. Any other caller, another connection of the server's process included, gets `org.freedesktop.DBus.Error.AccessDenied` and nothing changes. `Show` only draws the overlay, so it
 stays open to every caller (the control panel uses it). A component may also publish `ShowOsd` on the host bus, which
 shows the same way.
 
@@ -127,7 +126,7 @@ The server calls the interface for these keys. Shift+Alt held makes the press fi
 | Corner radius | 18 pt |
 | Meter | 16 segments of 9 x 6 pt at pitch 10, in a 161 x 8 container at (20, 20) bottom-left, so segment `i` is at x = 20 + 10 i + 1, y = 173 top-left |
 | Fill | `v = level * 16`; `floor(v)` full segments; the next one `(int)(frac * 9 + 0.5) points wide (0 is empty, 9 is full) |
-| Fade (`model::fade`) | the catalogue's linear easing (`Easing::LINEAR`) over 0.7 s (`FADE_SECONDS`): alpha `1 - t / 0.7`, after a hold the sender supplies; a new show restarts at alpha 1 |
+| Fade (`model::fade`) | the catalogue's `Timing::OSD_FADE`, constant speed over 0.7 s: alpha `1 - t / 0.7`, after a hold the sender supplies; a new show restarts at alpha 1 |
 | Step of one press (`sender::COARSE_STEPS`, `FINE_STEPS`, `step_level`) | snap `q = floor((v + 1/128) * 64) / 64`, then up `floor(16 (q + 1/16)) / 16`, down `ceil(16 (q - 1/16)) / 16`; clamp 0 to 1; all three kinds |
 | Step with Shift+Alt held (`sender::FINE_STEPS`) | the same formulas with 1/64: up `floor(64 (q + 1/64)) / 64`, down `ceil(64 (q - 1/64)) / 64` |
 | Volume and mute | a new level <= 0 mutes; a volume key unmutes when the new level is > 0; the mute key toggles but at volume 0 the result is muted; muted shows the mute glyph with an empty meter, unmuted the level glyph |

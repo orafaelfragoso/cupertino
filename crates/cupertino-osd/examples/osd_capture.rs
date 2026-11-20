@@ -14,13 +14,11 @@ use std::sync::Arc;
 
 use cupertino_kit::core::{Application, Command, Window};
 use cupertino_kit::platform::{SystemAppearance, Timestamp, WindowId};
-use cupertino_kit::render::PixelFormat;
-use cupertino_kit::test::capture::{App, Look, Request, State};
+use cupertino_kit::test::capture::{presented, App, Look, Pixmap, Request, State};
 use cupertino_kit::test::{Capabilities, ManualClock, TestDriver, WindowStates};
 use cupertino_kit::theme::ThemeTokens;
 use cupertino_osd::model::{Kind, Overlay, View};
 use cupertino_osd::view;
-use tiny_skia::{IntSize, Pixmap};
 
 /// The runtime turns a frame may take.
 const TURNS: u32 = 10_000;
@@ -155,26 +153,7 @@ fn draw(look: Look, scale: f32) -> Result<Pixmap, String> {
             .frame_ready(window, Timestamp(0))
             .map_err(|e| fail(&e))?;
     }
-    let system = driver.runtime().window_system();
-    let frame = system
-        .frames(window)
-        .map_err(|e| fail(&e))?
-        .last()
-        .ok_or("the window presented no frame")?;
-    let mut pixels = match system.composited(window) {
-        Ok(Some(composited)) => composited,
-        _ => frame.pixels.clone(),
-    };
-    if frame.format == PixelFormat::Rgba8 {
-        for px in pixels.as_chunks_mut::<4>().0 {
-            let a = u16::from(px[3]);
-            for c in &mut px[..3] {
-                *c = ((u16::from(*c) * a + 127) / 255) as u8;
-            }
-        }
-    }
-    let size = IntSize::from_wh(frame.width, frame.height).ok_or("the frame is empty")?;
-    Pixmap::from_vec(pixels, size).ok_or_else(|| "the frame's pixels do not fill it".to_string())
+    presented(driver.runtime().window_system(), window)
 }
 
 fn main() -> ExitCode {

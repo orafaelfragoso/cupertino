@@ -1426,9 +1426,7 @@ dependencies = [
  "cupertino-geometry",
  "cupertino-kit",
  "cupertino-kit-shell",
- "cupertino-peer",
  "serde",
- "tiny-skia",
  "zbus",
 ]
 

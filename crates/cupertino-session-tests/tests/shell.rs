@@ -16,6 +16,9 @@
 //!   asks; a panic injected as they paint, as their loop dispatches and on a helper thread restarts them alone, fifty
 //!   times, while the dock keeps drawing and the host's anonymous memory stays flat; a caller other than the server cannot step
 //!   a level.
+//! - A media key the server forwards steps the volume through `org.cupertino.Audio1` and the displays show it; the
+//!   server sends it from the connection that owns `org.cupertino.Session1`, and another connection of the server's
+//!   process is refused like any other caller.
 
 #[path = "shell/components.rs"]
 mod components;
@@ -30,6 +33,8 @@ use std::collections::HashSet;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Child, Command as Process, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use cupertino_server::host::{HostKind, Liveness};
 
@@ -559,4 +564,92 @@ fn the_on_screen_displays_restart_alone_after_injected_panics_and_the_host_stays
     rig.until("the restarted overlay shows", |rig| {
         changed(&before, &rig.image(), osd_area()) > osd_area().covered() / 2
     });
+}
+
+/// A stand-in for `cupertino-audiod`'s `org.cupertino.Audio1`: one volume for both directions, and how many times it
+/// was set.
+struct Audio {
+    level: Arc<Mutex<f64>>,
+    sets: Arc<AtomicUsize>,
+}
+
+#[zbus::interface(name = "org.cupertino.Audio1")]
+impl Audio {
+    fn get_volume(&self, _direction: &str) -> (f64, bool) {
+        (*self.level.lock().unwrap(), false)
+    }
+
+    fn set_volume(&self, _direction: &str, level: f64, muted: bool) -> (f64, bool) {
+        *self.level.lock().unwrap() = level;
+        self.sets.fetch_add(1, Ordering::SeqCst);
+        (level, muted)
+    }
+}
+
+/// The output volume the stand-in sound service starts at.
+const START_VOLUME: f64 = 0.25;
+
+#[test]
+fn a_media_key_from_the_server_steps_the_volume_and_another_connection_of_its_process_cannot() {
+    let bus = Bus::start();
+    let level = Arc::new(Mutex::new(START_VOLUME));
+    let sets = Arc::new(AtomicUsize::new(0));
+    let _audiod = zbus::blocking::connection::Builder::session()
+        .and_then(|b| b.name("org.cupertino.Audio1"))
+        .and_then(|b| {
+            b.serve_at(
+                "/org/cupertino/Audio1",
+                Audio {
+                    level: level.clone(),
+                    sets: sets.clone(),
+                },
+            )
+        })
+        .and_then(|b| b.build())
+        .expect("the stand-in sound service owns its name");
+    let mut rig = Rig::new("osd-step", &["dock", "osd"], &[]);
+    cupertino_server::quit::start_session_service_on(&mut rig.state, Some(bus.1.clone()));
+    let session = zbus::blocking::Connection::session().expect("the test's bus");
+    rig.until(
+        "the dock draws, the displays own their name and the server its own",
+        |rig| {
+            dock_colour(rig).is_some()
+                && osd_owner(&session).is_some()
+                && rig.state.quit.session_connection().is_some()
+        },
+    );
+
+    // this test runs in the server's process: a connection of its own is not the one that owns Session1
+    let before = rig.image();
+    let other = std::thread::spawn(|| {
+        let connection = zbus::blocking::Connection::session().expect("another connection");
+        osd_call(&connection, "VolumeStep", &(1i32, false))
+    });
+    rig.until("the step from another connection is answered", |_| {
+        other.is_finished()
+    });
+    let refused = other.join().unwrap().expect_err("the step is refused");
+    assert!(
+        matches!(&refused, zbus::Error::MethodError(name, _, _) if name.as_str() == "org.freedesktop.DBus.Error.AccessDenied"),
+        "{refused}"
+    );
+    assert_eq!(sets.load(Ordering::SeqCst), 0, "the volume did not change");
+    assert_eq!(
+        changed(&before, &rig.image(), osd_area()),
+        0,
+        "nothing is shown"
+    );
+
+    // the server's media key steps the volume and the displays show it
+    rig.state
+        .osd_key(cupertino_server::input::OsdKey::VolumeUp, false);
+    rig.until("the server's step is shown", |rig| {
+        sets.load(Ordering::SeqCst) == 1
+            && changed(&before, &rig.image(), osd_area()) > osd_area().covered() / 2
+    });
+    assert!(
+        *level.lock().unwrap() > START_VOLUME,
+        "the volume went up from {START_VOLUME} to {}",
+        level.lock().unwrap()
+    );
 }

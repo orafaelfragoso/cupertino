@@ -4,7 +4,7 @@
 
 use std::fmt;
 
-use cupertino_kit::motion::{Easing, Timing};
+use cupertino_kit::motion::Timing;
 
 /// Segments of the meter (16 segments).
 pub const SEGMENTS: usize = 16;
@@ -12,12 +12,9 @@ pub const SEGMENTS: usize = 16;
 /// Width of one segment in points (9 x 6).
 pub const SEGMENT_WIDTH: u32 = 9;
 
-/// How long the fade after the hold takes, in seconds (alpha `1 - t / 0.7`, 0.7 s): the duration of [`fade`].
-pub const FADE_SECONDS: f64 = 0.7;
-
-/// The fade after the hold: the catalogue's linear easing over [`FADE_SECONDS`].
+/// The fade after the hold: the catalogue's `Timing::OSD_FADE`, constant speed over 0.7 s (alpha `1 - t / 0.7`).
 pub fn fade() -> Timing {
-    Easing::LINEAR.over(FADE_SECONDS)
+    Timing::OSD_FADE
 }
 
 /// Below this level a volume shows the muted glyph.

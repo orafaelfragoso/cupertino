@@ -2,15 +2,14 @@
 //! connection, which owns the name. The server calls the step methods for the volume, brightness and keyboard-backlight
 //! keys; the control panel calls `Show` after it changed a level itself.
 //!
-//! The step methods change levels, so they check their caller: only the server may call them (D20: the owner of
-//! `org.cupertino.Session1`, or another connection of that process); any other caller, a sandboxed or anonymous one
-//! included, gets `org.freedesktop.DBus.Error.AccessDenied` and nothing changes. `Show` only draws the overlay and
+//! The step methods change levels, so they check their caller: only the server may call them (D20: the connection that
+//! owns `org.cupertino.Session1`, from which the server sends them); any other caller, another connection of the
+//! server's process, a sandboxed or anonymous one included, gets `org.freedesktop.DBus.Error.AccessDenied` and nothing
+//! changes. `Show` only draws the overlay and
 //! stays open to every caller.
 
 use cupertino_kit_shell::bus::{self, Caller};
-use cupertino_peer::{identify, Caller as Peer};
 use zbus::fdo::{self, RequestNameFlags, RequestNameReply};
-use zbus::names::{BusName, UniqueName};
 use zbus::Connection;
 
 use crate::controller::Command;
@@ -19,9 +18,6 @@ use crate::model::{Kind, Overlay};
 /// Name, path and interface of the control interface (the server calls it by these strings).
 pub const BUS_NAME: &str = "org.cupertino.Osd1";
 pub const OBJECT_PATH: &str = "/org/cupertino/Osd1";
-
-/// The server's own bus name (D20).
-const SERVER_NAME: &str = "org.cupertino.Session1";
 
 struct Control {
     commands: async_channel::Sender<Command>,
@@ -39,32 +35,6 @@ fn check_direction(direction: i32) -> fdo::Result<i32> {
     Ok(direction)
 }
 
-/// Whether `sender` is the server: the owner of [`SERVER_NAME`] (`bus::caller`), or another connection of the
-/// process that owns it, as the server's own calls of the shell come from a connection of their own.
-async fn from_server(connection: &Connection, sender: &UniqueName<'_>) -> bool {
-    if bus::caller(connection, sender).await == Caller::Server {
-        return true;
-    }
-    let Ok(dbus) = fdo::DBusProxy::new(connection).await else {
-        return false;
-    };
-    let Ok(name) = BusName::from_static_str(SERVER_NAME) else {
-        return false;
-    };
-    let Ok(owner) = dbus.get_name_owner(name).await else {
-        return false;
-    };
-    match (
-        identify(connection, sender).await,
-        identify(connection, &owner.into()).await,
-    ) {
-        (Peer::Process(caller), Peer::Process(server)) => {
-            caller.sandbox.is_none() && caller.process.is(&server.process)
-        }
-        _ => false,
-    }
-}
-
 impl Control {
     /// Hands `command` to the component when the server sent it.
     async fn accept_from_server(
@@ -74,7 +44,7 @@ impl Control {
         command: Command,
     ) -> fdo::Result<()> {
         let allowed = match header.sender() {
-            Some(sender) => from_server(connection, sender).await,
+            Some(sender) => bus::caller(connection, sender).await == Caller::Server,
             None => false,
         };
         if !allowed {

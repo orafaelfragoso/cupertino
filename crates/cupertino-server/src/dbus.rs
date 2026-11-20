@@ -1,5 +1,7 @@
-//! Session bus worker: relays the shell toggles (notification centre, launcher, control panel), the media keys
-//! (overlay process), the lock request and the power key (login process) to the processes that own them.
+//! Session bus worker: relays the shell toggles (notification centre, launcher, control panel), the lock request and
+//! the power key (login process) to the processes that own them. The media keys go to the on-screen displays from the
+//! connection that owns `org.cupertino.Session1` instead ([`crate::quit::SessionConnection`]), the one connection
+//! `cupertino_osd::control` takes for the server (D20).
 //!
 //! Everything runs on one background thread that drives `zbus` futures; the compositor talks to it
 //! through [`DbusHandle::send`]. Without a session bus the worker ends after logging and the
@@ -36,11 +38,6 @@ pub enum Toggle {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
     Toggle(Toggle),
-    /// A media key for `cupertino-osd`; `fine` is the Shift+Alt step.
-    Osd {
-        key: OsdKey,
-        fine: bool,
-    },
     /// Lock the session through `cupertino-login`: the display slept for the password delay (lock request type 5 of the design).
     Lock,
     /// Lock the session on the person's request (the lock shortcut; lock request type 8, whose lock screen hides after 5 s).
@@ -86,18 +83,66 @@ enum Body {
     Pressed(bool),
 }
 
-/// Bus name, object path and interface of the overlay process (`cupertino_osd::control`).
+/// Bus name, object path and interface of the on-screen displays (`cupertino_osd::control`).
 const OSD: (&str, &str, &str) = (
     "org.cupertino.Osd1",
     "/org/cupertino/Osd1",
     "org.cupertino.Osd1",
 );
 
+/// The method and arguments of `org.cupertino.Osd1` for a media key; `fine` is the Shift+Alt step.
+fn osd_call(key: OsdKey, fine: bool) -> (&'static str, Body) {
+    match key {
+        OsdKey::VolumeUp => ("VolumeStep", Body::Step(1, fine)),
+        OsdKey::VolumeDown => ("VolumeStep", Body::Step(-1, fine)),
+        OsdKey::Mute => ("ToggleMute", Body::Empty),
+        OsdKey::MicMute => ("ToggleMicrophoneMute", Body::Empty),
+        OsdKey::BrightnessUp => ("BrightnessStep", Body::Step(1, fine)),
+        OsdKey::BrightnessDown => ("BrightnessStep", Body::Step(-1, fine)),
+        OsdKey::KeyboardBrightnessUp => ("KeyboardBrightnessStep", Body::Step(1, fine)),
+        OsdKey::KeyboardBrightnessDown => ("KeyboardBrightnessStep", Body::Step(-1, fine)),
+    }
+}
+
+/// Calls the media key's method of the on-screen displays on `conn`, the connection that owns
+/// `org.cupertino.Session1`, in a task of its executor, and logs a failure.
+fn send_osd(conn: &zbus::Connection, key: OsdKey, fine: bool) {
+    let (name, path, interface) = OSD;
+    let (method, body) = osd_call(key, fine);
+    let conn = conn.clone();
+    conn.executor()
+        .clone()
+        .spawn(
+            async move {
+                let sent = match body {
+                    Body::Step(direction, fine) => {
+                        conn.call_method(
+                            Some(name),
+                            path,
+                            Some(interface),
+                            method,
+                            &(direction, fine),
+                        )
+                        .await
+                    }
+                    Body::Empty | Body::Pressed(_) => {
+                        conn.call_method(Some(name), path, Some(interface), method, &())
+                            .await
+                    }
+                };
+                if let Err(e) = sent {
+                    tracing::warn!(?key, error = %e, "cannot reach the on-screen displays");
+                }
+            },
+            "cupertino-osd-key",
+        )
+        .detach();
+}
+
 impl Request {
     /// Bus name, object path, interface, method and arguments of the control interface of the process
     /// (`cupertino_notifications::dbus`, `cupertino_launcher::control`, `cupertino_controlcenter::control`, `cupertino_osd::control`; the lock request goes to the login process).
     fn call(self) -> (&'static str, &'static str, &'static str, &'static str, Body) {
-        let (name, path, interface) = OSD;
         match self {
             Request::Toggle(Toggle::NotificationCentre) => (
                 "org.cupertino.NotificationCenter1",
@@ -168,21 +213,6 @@ impl Request {
                 "PowerKey",
                 Body::Pressed(pressed),
             ),
-            Request::Osd { key, fine } => {
-                let (method, body) = match key {
-                    OsdKey::VolumeUp => ("VolumeStep", Body::Step(1, fine)),
-                    OsdKey::VolumeDown => ("VolumeStep", Body::Step(-1, fine)),
-                    OsdKey::Mute => ("ToggleMute", Body::Empty),
-                    OsdKey::MicMute => ("ToggleMicrophoneMute", Body::Empty),
-                    OsdKey::BrightnessUp => ("BrightnessStep", Body::Step(1, fine)),
-                    OsdKey::BrightnessDown => ("BrightnessStep", Body::Step(-1, fine)),
-                    OsdKey::KeyboardBrightnessUp => ("KeyboardBrightnessStep", Body::Step(1, fine)),
-                    OsdKey::KeyboardBrightnessDown => {
-                        ("KeyboardBrightnessStep", Body::Step(-1, fine))
-                    }
-                };
-                (name, path, interface, method, body)
-            }
         }
     }
 }
@@ -1170,9 +1200,17 @@ impl crate::state::Cupertino {
         self.shell_call(Request::PowerKey { pressed });
     }
 
-    /// Forward a media key to the overlay process, which changes the level and shows it.
+    /// Forward a media key to the on-screen displays, which change the level and show it. The call goes out on the
+    /// connection that owns `org.cupertino.Session1`, as the displays take a step only from that one (D20); while the
+    /// session interface is not served the key does nothing.
     pub fn osd_key(&mut self, key: OsdKey, fine: bool) {
-        self.shell_call(Request::Osd { key, fine });
+        match self.quit.session_connection() {
+            Some(conn) => send_osd(&conn, key, fine),
+            None => tracing::warn!(
+                ?key,
+                "the session interface is not served: the media key does not reach the on-screen displays"
+            ),
+        }
     }
 
     fn shell_call(&mut self, what: Request) {

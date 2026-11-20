@@ -413,7 +413,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 /// each with [`SharedKeymap::count`] held; every other call made on the keymap only reads it.
 struct SharedKeymap {
     keymap: xkb::Keymap,
-    /// Held while the reference count of `keymap` changes.
+    /// Held while `keymap`'s reference count changes.
     count: Mutex<()>,
 }
 

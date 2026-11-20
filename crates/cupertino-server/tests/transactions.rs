@@ -683,6 +683,9 @@ wayland_client::delegate_noop!(WinClient: ignore wl_buffer::WlBuffer);
 const MAGENTA: [u8; 4] = [255, 0, 255, 255];
 /// A clear pixel.
 const CLEAR: [u8; 4] = [0, 0, 0, 0];
+/// Model seconds a test steps its fixed clock by for a closing window's fade to have ended: well past the closing
+/// animation's length.
+const PAST_CLOSING_FADE: f64 = 5.0;
 
 /// A `width` × `height` buffer of one colour `pixel` (ARGB8888 memory order).
 fn shm_buffer<D>(
@@ -1316,7 +1319,9 @@ fn a_claimed_window_shows_in_its_hole_alone_and_fades_out_there() {
         "the claimed window is drawn in its hole"
     );
 
-    // the window closes: its last picture fades out in the hole alone, then the hole draws nothing
+    // the window closes: its last picture fades out in the hole alone, then the hole draws nothing. The model clock
+    // stands still from here, so however long the loop turns take the fade is still under way when it is looked at.
+    rig.state.fixed_time = Some(rig.state.now());
     rig.state.fx.cfg.closing = true;
     toplevel.destroy();
     wsurf.destroy();
@@ -1335,7 +1340,7 @@ fn a_claimed_window_shows_in_its_hole_alone_and_fades_out_there() {
         magenta_in(&image, hole_rect) > 0,
         "its last picture fades out in the hole"
     );
-    std::thread::sleep(Duration::from_millis(1500));
+    rig.state.fixed_time = rig.state.fixed_time.map(|t| t + PAST_CLOSING_FADE);
     for _ in 0..3 {
         rig.pump_comp(&oconn, &mut oq, &mut ost);
     }

@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 
 use cupertino_kit_shell::hosting::{Connection, Host, HostEvent, Kind};
 use cupertino_kit_shell::ComponentName;
+pub use cupertino_protocols::server::app_effects::cupertino_appearance_v1::DisplayOption;
 use cupertino_protocols::server::host::cupertino_component_v1::{
     self as component_v1, BusNameResult, CupertinoComponentV1,
 };
@@ -83,6 +84,8 @@ enum Ask {
     Bus(OwnedFd),
     BusPeerGone(String),
     CloseHost,
+    /// The session's display options change to these.
+    DisplayOptions(DisplayOption),
     /// A connection of a client of its own, as the server gives a program it starts.
     Client(Sender<UnixStream>),
     /// `AnnounceComponent(nonce)` from `sender`: answers whether it is accepted, and sends `bus_name`.
@@ -141,6 +144,7 @@ struct State {
     display: display::Surfaces,
     /// The layer surface of each surface that has one.
     layer_resources: HashMap<ObjectId, ZwlrLayerSurfaceV1>,
+    appearance: display::Appearance,
 }
 
 struct Data;
@@ -221,6 +225,12 @@ impl Server {
         self.asks.send(Ask::Client(reply)).unwrap();
         end.recv_timeout(PATIENCE)
             .expect("the stand-in makes a client")
+    }
+
+    /// The session's display options change to `options`: each appearance observer hears them, and one made later
+    /// starts on them.
+    pub fn set_display_options(&self, options: DisplayOption) {
+        self.asks.send(Ask::DisplayOptions(options)).unwrap();
     }
 
     /// Closes the host's connection, as a server that went away.
@@ -304,6 +314,7 @@ fn serve(
         seen,
         display: display::Surfaces::default(),
         layer_resources: HashMap::new(),
+        appearance: display::Appearance::default(),
     };
     ready.send(host_end).unwrap();
     while !quit.load(std::sync::atomic::Ordering::SeqCst) {
@@ -352,6 +363,7 @@ fn answer(state: &mut State, ask: Ask) {
             }
         }
         Ask::Client(_) => {}
+        Ask::DisplayOptions(options) => state.appearance.set_display_options(options),
         Ask::CloseHost => {
             if let Some(socket) = state.host_socket.take() {
                 let _ = socket.shutdown(std::net::Shutdown::Both);

@@ -249,8 +249,10 @@ pub(crate) fn run_component<C: Component>(
             busy: Some(Arc::clone(&hosting.busy)),
         },
     );
-    let system =
-        WaylandWindowSystem::new_as(conn, Profile::cupertino(), C::RENDERER).with_roles(roles);
+    let system = with_roles(
+        WaylandWindowSystem::new_as(conn, Profile::cupertino(), C::RENDERER),
+        roles,
+    );
     let stop = Arc::clone(&hosting.stop);
     let ran = cupertino_kit::app::run_on_with_until::<Hosted<C, AsComponent>>(
         system,
@@ -279,8 +281,10 @@ pub(crate) fn run_program<P: Program>(lock_screen: bool) -> Result<(), Error> {
             busy: None,
         },
     );
-    let system =
-        WaylandWindowSystem::new_as(conn, Profile::cupertino(), P::RENDERER).with_roles(roles);
+    let system = with_roles(
+        WaylandWindowSystem::new_as(conn, Profile::cupertino(), P::RENDERER),
+        roles,
+    );
     let start = |_: &_| HostedModel::start(shared);
     let ran = if lock_screen {
         cupertino_kit::app::run_lock_screen_on_with::<Hosted<P, AsProgram>>(system, start)
@@ -288,6 +292,14 @@ pub(crate) fn run_program<P: Program>(lock_screen: bool) -> Result<(), Error> {
         cupertino_kit::app::run_on_with::<Hosted<P, AsProgram>>(system, start)
     };
     ran.map_err(|e| Error::Protocol(format!("the program's loop failed: {e}")))
+}
+
+/// `system` opening the program's windows with `roles`, which tell the program the session's appearance and display
+/// options the window system started on ([`Event::Appearance`]): light with motion on where the server tells none, as
+/// Kit's theme starts there too.
+fn with_roles(system: WaylandWindowSystem, mut roles: roles::ShellRoles) -> WaylandWindowSystem {
+    roles.start_appearance(system.appearance().unwrap_or_default());
+    system.with_roles(roles)
 }
 
 /// The loop is out of its wait from now on.

@@ -17,7 +17,7 @@ The server lists `controlcenter` to the shell host, which runs it; nothing start
 among the `components` of its `shell` section (`docs/architecture/shell-host.md`), and `alone` runs it in a host of its
 own (`cupertino-shell --only controlcenter`). A development build of the host makes it panic on request
 (`cupertino shell crash controlcenter --at paint|dispatch|helper`). The server's `control-panel` key binding and hot-corner
-action call `Toggle`, and so does the menu bar's status item.
+action call `Toggle`; the menu bar's status item opens it over the host bus (`TogglePanel`).
 
 ```
 cargo run -p cupertino-controlcenter --example controlcenter_capture -- controlcenter/panel --sheet   # every view, light and dark
@@ -171,7 +171,7 @@ the display change, and a dismissal is what any other loss of the panel's place 
 edited Escape cancels the edit and the panel stays). A detail view's settings row opens the settings application and
 dismisses the panel.
 
-**Menu bar.** A click on the control panel slot calls `Toggle`. The panel anchors to the top right and does not take the
+**Menu bar.** A click on the control panel slot publishes `TogglePanel` on the host bus with its output. The panel anchors to the top right and does not take the
 slot's position.
 
 ## Protocols / D-Bus it speaks
@@ -186,11 +186,10 @@ the name, which the menu bar takes as not shown.
 |---|---|
 | `Shown` property (`b`) | Whether the panel is shown: from the toggle that opens it until its dismissal starts the fade, whatever dismissed it. `PropertiesChanged` announces every change. The menu bar highlights its control panel item while it is true. |
 | `Output` property (`s`) | The connector name (`wl_output.name`) of the output the shown panel is on, so the menu bar highlights the item on that output's bar: the output a `TogglePanel` named, else the server's only output; empty while hidden, and while the server places the panel on one of several outputs. |
-| `Toggle` | Opens the panel, or starts closing it when it is open. Refused to a Flatpak, a Snap and a caller the bus cannot name (`org.cupertino.Error.FlatpakCaller`, `SnapCaller`, `AnonymousCaller`; `cupertino_peer::Caller::require_relation`), named from its `/proc` entries on the I/O pool. Any unsandboxed process of the person may call it: the menu bar is a caller, and it is no relation of the shell host, so it cannot be told apart from another process of the person, as for `org.cupertino.NotificationCenter1`. |
+| `Toggle` | Opens the panel, or starts closing it when it is open. Only the server may call it: the connection that owns `org.cupertino.Session1` (D20), from which the server sends it; the check asks the bus daemon who owns that name and reads nothing else. Any other caller, another connection of the server's process and the components of the shell host included, is refused with `org.cupertino.Error.UntrustedCaller` (`cupertino_peer::CallerError`) and nothing changes. |
 
-```
-gdbus call --session --dest org.cupertino.ControlPanel1 --object-path /org/cupertino/ControlPanel1 --method org.cupertino.ControlPanel1.Toggle
-```
+A call from a shell (`gdbus call ... --method org.cupertino.ControlPanel1.Toggle`) is refused for that reason; use the
+`control-panel` key binding, or pass `--action 2:control-panel` to a scripted server.
 
 The effects below also speak `org.cupertino.Network1` or NetworkManager, `org.cupertino.Bluetooth1` or BlueZ,
 `org.cupertino.Power1`, `org.freedesktop.UPower.KbdBacklight` and `org.freedesktop.login1` on the system bus, and
@@ -271,10 +270,11 @@ the menu bar. The panel has no power controls: restart, shut down, sleep and log
 reading of a source at a time, a reading from before a change put off until the change ended, refused changes, the
 throttled writes of a dragged level and the overlay on release, presses, the detail views' lists, editing and the
 stored layout, the refresh and the fade-out's end), `lifecycle.rs` the fades and the detail motion on the catalogue's
-curves and their reversals, `arrangement.rs` the grid's order and `control.rs` how a caller is named.
+curves and their reversals and `arrangement.rs` the grid's order.
 `crates/cupertino-session-tests/tests/shell-controlcenter.rs` runs the component in `cupertino-shell`'s host against
 the real server, headless, on a bus of its own: the component owns `org.cupertino.ControlPanel1` on a connection of its
-own, `Toggle` opens the panel on the sole output where it draws, and fifty panics injected as it paints, as its loop
+own, a `Toggle` from another connection of the server's process is refused, the server's toggle opens the panel on the
+sole output where it draws, and fifty panics injected as it paints, as its loop
 dispatches and on a helper thread each restart it alone and closed while the dock keeps drawing and the host's memory
 stays flat. `examples/controlcenter_capture.rs` draws the panel and its detail views for look checks.
 

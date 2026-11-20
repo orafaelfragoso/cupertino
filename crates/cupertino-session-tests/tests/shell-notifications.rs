@@ -4,7 +4,9 @@
 //! with [`host::MARK`] among its arguments it runs the host with the test dock of `shell/components.rs` and the real
 //! notifications component (`cupertino_shell::NOTIFICATIONS`).
 //! - The component owns `org.freedesktop.Notifications` and `org.cupertino.NotificationCenter1` on its own connection
-//!   and keeps its list, not a transient notification, in a file of mode 0600 in the runtime directory.
+//!   and keeps its list, not a transient notification, in a file of mode 0600 in the runtime directory; its list opens
+//!   for the server's toggle, from the connection that owns `org.cupertino.Session1`, and `ToggleCentre` from another
+//!   connection of the server's process is refused.
 //! - A panic injected as it paints, as its loop dispatches and on a helper thread restarts it alone, fifty times, while
 //!   the dock keeps drawing and the host's anonymous memory stays flat; after each restart the list is back, without
 //!   the transient notification.
@@ -274,6 +276,28 @@ fn the_notifications_restart_alone_with_their_list_after_injected_panics() {
     );
     let host = rig.host_pid(HostKind::Shared).unwrap();
 
+    // the list opens for the server alone: the test's own connection, of the server's process but not the one that
+    // owns Session1, is refused
+    let bus_call = session.clone();
+    let refused = aside(&mut rig, "the other connection is answered", move || {
+        bus_call
+            .call_method(
+                Some(CENTRE_BUS_NAME),
+                CENTRE_OBJECT_PATH,
+                Some(CENTRE_BUS_NAME),
+                "ToggleCentre",
+                &(),
+            )
+            .map(drop)
+    })
+    .expect_err("a ToggleCentre from another connection of the server's process is refused");
+    assert!(
+        refused
+            .to_string()
+            .contains("org.cupertino.Error.UntrustedCaller"),
+        "the refusal names why: {refused}"
+    );
+
     // one notification for the list, one transient one that never enters it
     let bus_call = session.clone();
     let ids = aside(&mut rig, "the notifications are answered", move || {
@@ -328,19 +352,8 @@ fn the_notifications_restart_alone_with_their_list_after_injected_panics() {
         })
         .unwrap_or_else(|e| panic!("the notifications take a crash at {at}: {e}"));
         if at == "paint" {
-            // what they draw next panics: the list, opened
-            let bus_call = session.clone();
-            let _ = aside(&mut rig, "the list is asked to open", move || {
-                bus_call
-                    .call_method(
-                        Some(CENTRE_BUS_NAME),
-                        CENTRE_OBJECT_PATH,
-                        Some(CENTRE_BUS_NAME),
-                        "ToggleCentre",
-                        &(),
-                    )
-                    .map(drop)
-            });
+            // what they draw next panics: the list, opened by the server's toggle
+            rig.state.toggle_notification_center();
         }
         if (crash + 1) % CRASHES_IN_A_ROW == 0 {
             rig.until(

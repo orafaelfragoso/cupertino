@@ -3,8 +3,9 @@
 //! D19, D20). The server's supervisor starts this test binary as `cupertino-shell`: with [`host::MARK`] among its
 //! arguments it runs the host with the test dock of `shell/components.rs` and the real launcher component
 //! (`cupertino_shell::LAUNCHER`).
-//! - The component owns `org.cupertino.Launcher1` on a connection of its own in the host's process; a process that is
-//!   neither the server nor the launcher is refused, and the panel stays hidden.
+//! - The component owns `org.cupertino.Launcher1` on a connection of its own in the host's process; a caller that is
+//!   not the connection that owns `org.cupertino.Session1`, another process or another connection of the server's
+//!   process, is refused, and the panel stays hidden.
 //! - The server's launcher action (`toggle_launcher`, what `Super+Space` runs) shows the panel at the output's top
 //!   centre, which takes the keyboard from the window that had it.
 //! - A component dropped while the panel shows takes the panel with it, and the keyboard returns to that window.
@@ -433,7 +434,7 @@ fn still(rig: &mut Rig) -> image::RgbaImage {
 }
 
 /// Open the panel, or hide it, as the server's launcher action does (`Super+Space`, the hot corner): a call of
-/// `Toggle` from the server's bus worker.
+/// `Toggle` from the connection that owns `org.cupertino.Session1`.
 fn launcher_action(rig: &mut Rig) {
     rig.state.toggle_launcher();
 }
@@ -535,7 +536,6 @@ fn the_launcher_opens_from_the_server_and_restarts_alone_hidden_after_injected_p
     std::env::set_var("HOME", private_dir("home"));
     let mut rig = Rig::new("launcher", &["dock", "launcher"], &[]);
     cupertino_server::quit::start_session_service_on(&mut rig.state, Some(bus.1.clone()));
-    rig.state.dbus = cupertino_server::dbus::DbusHandle::start_on(Some(bus.1.clone()));
     let session = Connection::session().expect("the test's bus");
     rig.until("the dock draws and the launcher owns its name", |rig| {
         dock_colour(rig).is_some() && owner(&session).is_some()
@@ -560,6 +560,24 @@ fn the_launcher_opens_from_the_server_and_restarts_alone_hidden_after_injected_p
     let refused = refused.expect("a call from another process is refused");
     assert!(
         refused.contains("org.cupertino.Error."),
+        "the refusal names why: {refused}"
+    );
+    // and so is one from the test's own connection, of the server's process but not the one that owns Session1
+    let bus_call = session.clone();
+    let refused = aside(
+        &mut rig,
+        "the server's other connection is answered",
+        move || {
+            bus_call
+                .call_method(Some(BUS_NAME), OBJECT_PATH, Some(BUS_NAME), "Toggle", &())
+                .map(drop)
+        },
+    )
+    .expect_err("a call from another connection of the server's process is refused");
+    assert!(
+        refused
+            .to_string()
+            .contains("org.cupertino.Error.UntrustedCaller"),
         "the refusal names why: {refused}"
     );
     for _ in 0..20 {

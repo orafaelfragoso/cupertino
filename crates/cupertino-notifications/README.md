@@ -192,7 +192,7 @@ notification or a restart.
 | `CloseNotification` | Removes the notification from stack and centre (`NotificationClosed`, reason 3; unknown ids are ignored, and so are ids the caller may not change). |
 | `GetCapabilities` | Configurable: `actions body body-markup persistence`. `icon-static` stays off until the cards draw `image-data`. |
 | `GetServerInformation` | Name `cupertino-notifications`, spec version `1.2`. |
-| `ToggleCentre | Opens the list or closes it. Same caller check as `SetDoNotDisturb`. |
+| `ToggleCentre | Opens the list or closes it. Only the server may call it: the connection that owns `org.cupertino.Session1` (D20), from which the server sends its `notification-center` action; the check asks the bus daemon who owns that name. Any other caller, another connection of the server's process and the components of the shell host included, is refused with `org.cupertino.Error.UntrustedCaller`. The menu bar's clock opens the list over the host bus (`TogglePanel`). |
 | `SetDoNotDisturb(b) | Turns do not disturb on (until turned off) or off. The caller is checked (`cupertino-peer`): a Flatpak, a Snap or a caller the bus cannot name is refused with an `org.cupertino.Error.*` name and nothing changes; other processes of the user may call it. |
 | `SetDoNotDisturbFor(s) (same caller check) | Turns it on for one of the `FocusLifetimes` rows (`a(ss): identifier and title, in menu order). |
 | `DoNotDisturb` property | Tells whether it is in effect, with change signals, also when a duration runs out. The menu bar's Focus item shows these rows. |

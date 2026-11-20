@@ -46,8 +46,6 @@ use crate::view::{
 const NAMESPACE: &str = "cupertino-controlcenter";
 /// The settings application, which a detail view's last row opens on its page.
 const SETTINGS: &str = "cupertino-settings";
-/// How long naming a caller should take: a few small files of `/proc`.
-const CALLER_DEADLINE: Duration = Duration::from_secs(1);
 /// How long reading the menu bar's height from the theme should take: one small file, once per process.
 const THEME_DEADLINE: Duration = Duration::from_secs(2);
 /// What the focus capsule says while the notifications component, which owns do not disturb, is stopped.
@@ -146,8 +144,6 @@ pub enum Message {
     SystemClosed,
     /// A call of the bus interface.
     Call(Call),
-    /// A caller was named for the call that waited.
-    Judged,
     /// Open the panel or close it: on this output, or the server's active one.
     Toggle(Option<OutputId>),
     Input(Input),
@@ -437,15 +433,6 @@ impl Model {
     fn call(&mut self, call: Call) -> Vec<Do<Message>> {
         let mut commands = vec![listen(&self.calls.1)];
         match call {
-            Call::Judge { credentials, reply } => commands.push(task::io(
-                CALLER_DEADLINE,
-                move || {
-                    let caller = control::judge(credentials.as_deref());
-                    // the call waits on the receiver; one that went away needs no answer
-                    let _ = reply.try_send(Arc::new(caller));
-                },
-                |()| Message::Judged,
-            )),
             Call::Toggle => commands.extend(self.toggle(None)),
         }
         commands
@@ -919,7 +906,7 @@ impl Application for ControlCenter {
             Message::Timer(timer) if timer != model.timer => return Vec::new(),
             Message::Timer(_) => model.step(),
             Message::Frame if model.animating => model.step(),
-            Message::Frame | Message::Judged | Message::Announced => return Vec::new(),
+            Message::Frame | Message::Announced => return Vec::new(),
             Message::RadiosFollowed(Ok(())) => return Vec::new(),
             Message::Deadline(id) => {
                 // the calls waiting on it end now

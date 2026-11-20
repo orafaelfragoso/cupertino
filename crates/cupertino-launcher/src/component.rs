@@ -48,8 +48,6 @@ pub use host::ComponentHost;
 const NAMESPACE: &str = "cupertino-launcher";
 /// How long reading a settings file or the launch history should take: one small file.
 const READ_DEADLINE: Duration = Duration::from_secs(2);
-/// How long naming a caller should take: a few small files of `/proc`.
-const CALLER_DEADLINE: Duration = Duration::from_secs(1);
 /// How long finding the terminal should take: a look along `PATH`.
 const TERMINAL_DEADLINE: Duration = Duration::from_secs(2);
 
@@ -113,8 +111,6 @@ pub enum Shell {
     Saved,
     /// A read that a newer one replaced before it started: nothing to tell.
     Replaced,
-    /// A caller was named for the call that waited for it.
-    Judged,
 }
 
 impl From<Shell> for Message {
@@ -354,7 +350,7 @@ impl State {
                 eprintln!("cupertino-launcher: no session bus connection");
                 vec![Command::Exit]
             }
-            Shell::Served(Ok(())) | Shell::Saved | Shell::Replaced | Shell::Judged => Vec::new(),
+            Shell::Served(Ok(())) | Shell::Saved | Shell::Replaced => Vec::new(),
             Shell::Served(Err(e)) => {
                 eprintln!(
                     "cupertino-launcher: {} is not served: {e}",
@@ -365,15 +361,6 @@ impl State {
             Shell::Call(call) => {
                 let mut commands = vec![hear(&self.calls.1, Shell::Call)];
                 match call {
-                    Call::Judge { credentials, reply } => commands.push(task::io(
-                        CALLER_DEADLINE,
-                        move || {
-                            let caller = control::judge(credentials.as_deref());
-                            // the call waits on the receiver; one that went away needs no answer
-                            let _ = reply.try_send(Arc::new(caller));
-                        },
-                        |()| Message::Shell(Shell::Judged),
-                    )),
                     Call::Toggle => commands.extend(self.toggle(false, None)),
                     Call::Applications => commands.extend(self.toggle(true, None)),
                 }

@@ -200,7 +200,7 @@ impl SessionApp {
     /// The server sends an interrupt once and waits for its answer, so one this agent did not start (it started again
     /// in the middle of a sequence, or another caller Session1 lets end the session asked for it) is adopted: the panel
     /// shows and is answered as for its own, worded as the action `PendingInterrupt` names ([`FALLBACK_ACTION`] when it
-    /// does not answer).
+    /// does not answer); one `PendingInterrupt` says is no longer pending is ignored.
     pub(super) fn quit_signal(&mut self, interrupt: session::Interrupt) -> Result<()> {
         if let session::Interrupt::ActionFailed { action, reason } = interrupt {
             self.action_failed(&action, &reason);
@@ -219,7 +219,13 @@ impl SessionApp {
                     );
                     FALLBACK_ACTION
                 }),
-                Ok(None) => FALLBACK_ACTION,
+                Ok(None) => {
+                    // the sequence ended (another caller cancelled it) after the signal was sent: nothing to answer
+                    eprintln!(
+                        "cupertino-login: quit signal ignored: Session1 has no interrupt pending"
+                    );
+                    return Ok(());
+                }
                 Err(e) => {
                     eprintln!("cupertino-login: PendingInterrupt did not answer: {e}");
                     FALLBACK_ACTION

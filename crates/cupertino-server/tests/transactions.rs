@@ -119,6 +119,8 @@ struct CompClient {
     gesture_ended: Vec<Outcome>,
     finished: Vec<Outcome>,
     source_closed: usize,
+    /// The serials of the layer animations the server answered `replaced`, in the order it did.
+    layer_replaced: Vec<u32>,
     /// The buffers the server released, in the order it did.
     released: Vec<wayland_client::backend::ObjectId>,
 }
@@ -295,13 +297,16 @@ impl Dispatch<CupertinoLayersV1, ()> for CompClient {
 
 impl Dispatch<CupertinoLayerV1, ()> for CompClient {
     fn event(
-        _: &mut Self,
+        state: &mut Self,
         _: &CupertinoLayerV1,
-        _: cupertino_layer_v1::Event,
+        event: cupertino_layer_v1::Event,
         _: &(),
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
+        if let cupertino_layer_v1::Event::Replaced { serial, .. } = event {
+            state.layer_replaced.push(serial);
+        }
     }
 }
 
@@ -1772,6 +1777,126 @@ fn a_hole_layer_merged_into_its_kept_commit_applies_the_newest_hole_state() {
             && !rig.state.transactions.is_window_claimed(newest),
         "an unstaged commit applies its own hole state"
     );
+}
+
+/// Commits of an armed part that each animate the same layer property: more than a client may have animations.
+const ANIMATED_COMMITS: u32 = 1000;
+
+#[test]
+fn an_armed_part_keeps_the_newest_animation_of_a_layer_property_however_often_it_commits() {
+    let mut rig = Rig::new();
+    let (hconn, mut hq, mut hst) = rig.connect_host(&["overview"]);
+    let (_hov, oconn, mut oq, mut ost) = rig.spawn_component(&hconn, &mut hq, &mut hst, "overview");
+    let (surf, _shell) = rig.create_layer_surface(&oconn, &mut oq, &mut ost, "strip");
+    let server_strip = server_layer_surface(&rig, "strip");
+    let (_tx, _child, layer) = armed_overview_part(&mut rig, (&oconn, &mut oq, &mut ost), &surf);
+    // a component that moves a layer with each commit while its part waits for the gesture
+    for serial in 0..ANIMATED_COMMITS {
+        layer.animate_timed(
+            serial,
+            cupertino_layer_v1::Property::X,
+            f64::from(serial),
+            200,
+            0.25,
+            0.1,
+            0.25,
+            1.0,
+        );
+        surf.commit();
+        if serial % 16 == 0 {
+            rig.pump_comp(&oconn, &mut oq, &mut ost);
+        }
+    }
+    for _ in 0..3 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    assert!(
+        oconn.protocol_error().is_none(),
+        "the kept animations stay under the client's limit"
+    );
+    assert_eq!(layers_of(&server_strip), 0, "every commit is kept");
+    let newest = ANIMATED_COMMITS - 1;
+    assert_eq!(
+        ost.layer_replaced,
+        (0..newest).collect::<Vec<_>>(),
+        "each animation a later one superseded before it applied is answered replaced, once"
+    );
+
+    assert!(rig.state.transaction_gesture_begin(
+        rig.output_id,
+        cupertino_protocols::server::transaction::cupertino_transaction_v1::Gesture::SwipeUp
+    ));
+    for _ in 0..3 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    let target =
+        cupertino_server::layers_v1::with_parent(&server_strip, |layers| layers[0].target(0));
+    assert_eq!(
+        target,
+        f64::from(newest),
+        "the part applies the newest animation"
+    );
+    assert!(
+        !ost.layer_replaced.contains(&newest),
+        "the newest animation runs"
+    );
+}
+
+#[test]
+fn an_armed_part_applies_its_merged_layer_requests_as_one_commit_after_another() {
+    use cupertino_layer_v1::Property;
+    let mut rig = Rig::new();
+    let (hconn, mut hq, mut hst) = rig.connect_host(&["overview"]);
+    let (_hov, oconn, mut oq, mut ost) = rig.spawn_component(&hconn, &mut hq, &mut hst, "overview");
+    let (surf, _shell) = rig.create_layer_surface(&oconn, &mut oq, &mut ost, "strip");
+    let server_strip = server_layer_surface(&rig, "strip");
+    let (_tx, _child, layer) = armed_overview_part(&mut rig, (&oconn, &mut oq, &mut ost), &surf);
+    let timed = |serial: u32, property: Property, to: f64| {
+        layer.animate_timed(serial, property, to, 200, 0.25, 0.1, 0.25, 1.0);
+    };
+    // a value, an animation from it, and a later value that replaces the animation
+    layer.set_value(Property::Opacity, 0.5);
+    surf.commit();
+    timed(7, Property::Opacity, 1.0);
+    surf.commit();
+    layer.set_value(Property::Opacity, 0.25);
+    surf.commit();
+    // an animation a later cancel stops
+    timed(8, Property::Y, 30.0);
+    surf.commit();
+    layer.cancel(Property::Y);
+    surf.commit();
+    // a value, then an animation from it
+    layer.set_value(Property::X, 10.0);
+    surf.commit();
+    timed(9, Property::X, 40.0);
+    surf.commit();
+    for _ in 0..3 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    assert_eq!(layers_of(&server_strip), 0, "every commit is kept");
+    assert_eq!(
+        ost.layer_replaced,
+        vec![7, 8],
+        "the animations a later value or cancel replaced are answered replaced"
+    );
+
+    assert!(rig.state.transaction_gesture_begin(
+        rig.output_id,
+        cupertino_protocols::server::transaction::cupertino_transaction_v1::Gesture::SwipeUp
+    ));
+    for _ in 0..3 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    let targets = cupertino_server::layers_v1::with_parent(&server_strip, |layers| {
+        [4, 1, 0].map(|prop| layers[0].target(prop))
+    });
+    assert_eq!(
+        targets,
+        [0.25, 0.0, 40.0],
+        "the opacity rests at its newest value, y where it was, and x animates to its newest target"
+    );
+    assert_eq!(ost.layer_replaced, vec![7, 8], "the kept animation runs");
 }
 
 /// Commits of an armed part that each damage a pixel of their own: far more than a kept state holds rectangles.

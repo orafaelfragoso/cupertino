@@ -1421,3 +1421,19 @@ One line per change to a decision or approval of a design: date, number, what, w
   `cupertino-server`: they name the server's state. Still open, needing the installed session: W0.1's installed
   frame timings and the PSS of login, the polkit agent and the keyring prompter (read as root), and W5.6-W5.8's
   frame timings on the hardware.
+- 2026-11-20: lead, two read-only reviews of the merged result. Fixed what they confirmed: `cupertino shell restart`
+  of a component that runs as its process; holds end when a component leaves every host; a given-up component gets a
+  connection on restart; an instance ended before its first buffer keeps the older hold; `lost` and `failed` count
+  only from the component's host; a bind failure is no crash; the host-role descriptor is close-on-exec in the host; a
+  refused bus announcement ends the proof; a transaction whose creator withdraws before it starts is cancelled; held
+  pictures draw as live (slices cut at glass, holes and vibrant layers, each over its own bounds, glass rebuilt every
+  frame); held shm pictures keep their colour order; ended surfaces are drawn from their renderer state for the hold;
+  `Session1.PendingInterrupt` and `SessionActionFailed` keep the session agent in step; Files reads folder-ness from
+  the listing and resolves Show Original off the UI thread. Staging merges a staged surface's later commits into its
+  kept one through vendored Smithay patch 0010 (`add_coalescing_blocker`; damage past 16 rectangles collapses to
+  its bounds), replaced buffers released at once and frame callbacks answered every frame, and merged layer requests
+  apply as one commit after another (a dropped animation is answered `replaced` on the next tick). Calls made: a held
+  vibrant layer is a white-coverage slice drawn at the shader's lift (`HELD_VIBRANT_LIFT` mirrors `VIBRANT_LIFT` in
+  `clip.frag`; change both together); `kit::time` formats in the process's `LC_TIME`, the C locale while no
+  program sets one. `cupertino-session-tests/tests/shell-host.rs` runs kit-shell's host and components against the
+  real server headless.

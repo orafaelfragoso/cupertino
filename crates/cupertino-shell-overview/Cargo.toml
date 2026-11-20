@@ -1,0 +1,23 @@
+[package]
+name = "cupertino-shell-overview"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Overview of the Cupertino desktop, a component of the shell host: the windows in holes of a surface over the output, the desktops band and the selection, opened and closed with transactions bound to the gestures"
+[package.metadata.cupertino]
+layer = "shell"
+
+[dependencies]
+async-channel = "2"
+cupertino-defaults = { path = "../cupertino-defaults" }
+cupertino-kit = { path = "../cupertino-kit" }
+cupertino-kit-shell = { path = "../cupertino-kit-shell" }
+cupertino-wm = { path = "../cupertino-wm" }
+zbus = { version = "5", default-features = false, features = ["async-io"] }
+
+[dev-dependencies]
+cupertino-assets = { path = "../cupertino-assets" }
+cupertino-kit = { path = "../cupertino-kit", features = ["test"] }
+
+[[example]]
+name = "overview_capture"

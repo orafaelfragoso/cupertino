@@ -347,6 +347,32 @@ impl Easing {
     )));
 }
 
+/// The motions of the overview.
+impl SpringPreset {
+    /// The windows moving into the overview and back to their places, and the chrome fading with them, whether a
+    /// shortcut or a gesture's release drives them: critically damped, its undamped period 0.25 s (the overview's
+    /// open and close spring in `cupertino_wm::overview`).
+    pub const OVERVIEW_OPEN: SpringPreset = SpringPreset(SpringForm::Ratio {
+        response: 0.25,
+        damping: 1.0,
+    });
+    /// A window of the open overview moving to its new place when the set of windows or the desktops band changes:
+    /// critically damped, 0.2 s (the reflow of `cupertino_wm::overview`).
+    pub const OVERVIEW_REFLOW: SpringPreset = SpringPreset(SpringForm::Ratio {
+        response: 0.2,
+        damping: 1.0,
+    });
+}
+
+/// The motions of the overview.
+impl Timing {
+    /// The overview fading in and out in place of its motion with Reduce Motion: ease-in-out over 0.2 s.
+    pub const OVERVIEW_FADE: Timing = Timing(Motion::Eased {
+        easing: Easing::EASE_IN_OUT,
+        seconds: 0.2,
+    });
+}
+
 /// The motions of the notification banners and the notification list.
 impl SpringPreset {
     /// A banner springing back to rest after a leftward swipe: mass 1, stiffness 100, damping 100, a damping ratio of

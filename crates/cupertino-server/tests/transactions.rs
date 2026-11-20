@@ -30,6 +30,7 @@ use cupertino_protocols::client::transaction::cupertino_transaction_v1::{
 use cupertino_server::authorization::{Holder, DETACHED_LIFETIME};
 use cupertino_server::host::HostKind;
 use cupertino_server::state::{insert_client, new_output, ClientState};
+use cupertino_server::transaction::{MAX_KEPT_COMMITS, PACED_KEPT_COMMITS};
 use cupertino_server::{Config, Cupertino};
 use cupertino_wm::{OutputId, WindowId};
 use smithay::desktop::layer_map_for_output;
@@ -1555,4 +1556,112 @@ fn a_transaction_whose_creator_disconnects_before_it_starts_ends_cancelled() {
         1,
         "the joiner's kept commit applies at once"
     );
+}
+
+/// The overview's surface of namespace `namespace`, staged in a transaction armed for a swipe up, with one layer made
+/// while it is staged. Returns the transaction and the layer's objects.
+fn armed_overview_part(
+    rig: &mut Rig,
+    (oconn, oq, ost): (&Connection, &mut EventQueue<CompClient>, &mut CompClient),
+    surf: &wl_surface::WlSurface,
+) -> (
+    CupertinoTransactionV1,
+    wl_surface::WlSurface,
+    CupertinoLayerV1,
+) {
+    let oqh = oq.handle();
+    let tx = ost
+        .tx_manager
+        .as_ref()
+        .unwrap()
+        .create(1, ost.output.as_ref().unwrap(), &oqh, ());
+    tx.bind_gesture(Gesture::SwipeUp, 0.45, 1.0);
+    tx.stage(surf);
+    let child = ost.compositor.as_ref().unwrap().create_surface(&oqh, ());
+    let layer = ost
+        .layers
+        .as_ref()
+        .unwrap()
+        .get_layer(&child, surf, &oqh, ());
+    surf.commit();
+    tx.submit();
+    for _ in 0..4 {
+        rig.pump_comp(oconn, oq, ost);
+    }
+    (tx, child, layer)
+}
+
+#[test]
+fn an_armed_part_paces_the_frame_callbacks_of_its_kept_commits() {
+    let mut rig = Rig::new();
+    let (hconn, mut hq, mut hst) = rig.connect_host(&["overview"]);
+    let (_hov, oconn, mut oq, mut ost) = rig.spawn_component(&hconn, &mut hq, &mut hst, "overview");
+    let (surf, _shell) = rig.create_layer_surface(&oconn, &mut oq, &mut ost, "strip");
+    let server_strip = server_layer_surface(&rig, "strip");
+    let (_tx, _child, _layer) = armed_overview_part(&mut rig, (&oconn, &mut oq, &mut ost), &surf);
+    let oqh = oq.handle();
+    // the component draws on its frame callbacks while the transaction waits for its gesture
+    let drawn = PACED_KEPT_COMMITS + 3;
+    let mut callbacks = Vec::new();
+    for _ in 0..drawn {
+        callbacks.push(surf.frame(&oqh, ()));
+        surf.commit();
+        for _ in 0..2 {
+            rig.pump_comp(&oconn, &mut oq, &mut ost);
+        }
+    }
+    assert_eq!(layers_of(&server_strip), 0, "every commit is kept");
+    // the commit that staged it carried no callback: the paced ones are among the first kept
+    assert_eq!(
+        ost.frames,
+        PACED_KEPT_COMMITS - 1,
+        "past the paced commits the callbacks wait for the part"
+    );
+
+    // the gesture applies the part: its kept commits apply and the waiting callbacks are answered with the next frame
+    assert!(rig.state.transaction_gesture_begin(
+        rig.output_id,
+        cupertino_protocols::server::transaction::cupertino_transaction_v1::Gesture::SwipeUp
+    ));
+    for _ in 0..3 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    assert_eq!(layers_of(&server_strip), 1, "the kept commits applied");
+    assert_eq!(ost.frames, drawn, "every frame callback is answered");
+}
+
+#[test]
+fn an_armed_part_keeps_a_bounded_number_of_commits() {
+    let mut rig = Rig::new();
+    let (hconn, mut hq, mut hst) = rig.connect_host(&["overview"]);
+    let (_hov, oconn, mut oq, mut ost) = rig.spawn_component(&hconn, &mut hq, &mut hst, "overview");
+    let (surf, _shell) = rig.create_layer_surface(&oconn, &mut oq, &mut ost, "strip");
+    let server_strip = server_layer_surface(&rig, "strip");
+    let (_tx, _child, _layer) = armed_overview_part(&mut rig, (&oconn, &mut oq, &mut ost), &surf);
+    // a component that commits without waiting for its frame callbacks: the staging commit and more, up to the cap
+    for _ in 1..MAX_KEPT_COMMITS {
+        surf.commit();
+    }
+    for _ in 0..2 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    assert_eq!(
+        layers_of(&server_strip),
+        0,
+        "up to {MAX_KEPT_COMMITS} commits are kept"
+    );
+    surf.commit();
+    for _ in 0..2 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    assert_eq!(
+        layers_of(&server_strip),
+        1,
+        "a commit past them takes the surface out of the part, its kept commits applying in order"
+    );
+    // the transaction is still armed for its gesture, the surface out of it
+    assert!(rig.state.transaction_gesture_begin(
+        rig.output_id,
+        cupertino_protocols::server::transaction::cupertino_transaction_v1::Gesture::SwipeUp
+    ));
 }

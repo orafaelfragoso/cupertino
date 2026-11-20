@@ -1,7 +1,8 @@
 //! The component's bus interfaces, served on its own session bus connection, which owns their names (D20):
 //! `org.freedesktop.Notifications` (version 1.2 of the specification, plus the `ActivationToken` signal of 1.3)
-//! and `org.cupertino.NotificationCenter1`, through which the menu bar opens the list, the control panel switches do
-//! not disturb and the lock screen reads what it may show.
+//! and `org.cupertino.NotificationCenter1`, through which the server opens the list (`ToggleCentre`, which only the
+//! connection that owns `org.cupertino.Session1` may call), the settings app switches do not disturb and the lock
+//! screen reads what it may show.
 //!
 //! The handlers run on the component's UI thread, which ticks the connection, and do no work of their own there:
 //! each call goes to the model as a [`Call`], with where its answer goes. The model names the caller from the
@@ -18,8 +19,10 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use cupertino_peer::{own_parent, same_instance, Caller, CallerError, Identified, Relation};
+use cupertino_peer::component::SESSION_BUS_NAME;
+use cupertino_peer::{same_instance, Caller, CallerError, Denial, Identified};
 use zbus::fdo::{ConnectionCredentials, RequestNameFlags, RequestNameReply};
+use zbus::names::BusName;
 use zbus::object_server::SignalEmitter;
 use zbus::zvariant::{OwnedValue, Value};
 use zbus::Connection;
@@ -56,11 +59,6 @@ impl Default for ServerInfo {
         }
     }
 }
-
-/// Who may open the list, switch do not disturb or read the lock screen's list: any unsandboxed process of the person
-/// (the menu bar, the control panel, the lock screen and the settings app are not this process's parent); a Flatpak,
-/// a Snap or a caller the bus cannot name may not.
-const SHELL_CALLERS: &[Relation] = &[Relation::Itself, Relation::Parent, Relation::Other];
 
 /// Whether `caller` may replace or close a notification that `origin` sent (`None`: an unsandboxed process, or one the
 /// bus could not name). An unsandboxed caller may change any; a sandboxed one only what its own sandbox instance sent
@@ -350,8 +348,9 @@ impl Link {
         }
     }
 
-    /// Refuse the caller of `method` unless it is unsandboxed and stands in one of [`SHELL_CALLERS`] to this process.
-    /// A refusal is logged with the method, never with the arguments.
+    /// Refuse the caller of `method` unless it is an unsandboxed process of the person (the settings app, the lock
+    /// screen); a Flatpak, a Snap or a caller the bus cannot name may not. A refusal is logged with the method, never
+    /// with the arguments.
     async fn guard(
         &self,
         connection: &Connection,
@@ -359,15 +358,38 @@ impl Link {
         method: &'static str,
     ) -> Result<(), CallerError> {
         let caller = self.caller(connection, header).await;
-        caller
-            .require_relation(std::process::id(), own_parent(), SHELL_CALLERS)
-            .map_err(|denial| {
-                eprintln!(
-                    "cupertino-notifications: {CENTRE_BUS_NAME}.{method}: the caller is refused: {denial:?}"
-                );
-                denial.into()
-            })
+        match caller.unsandboxed() {
+            Ok(_) => Ok(()),
+            Err(denial) => Err(refused(method, denial)),
+        }
     }
+
+    /// Refuse the caller of `method` unless it is the server: its sender owns `org.cupertino.Session1` (D20), and no
+    /// other connection, of the server's process or a component of the shell host, is. A refusal is logged with the
+    /// method.
+    async fn server_only(
+        connection: &Connection,
+        header: &zbus::message::Header<'_>,
+        method: &'static str,
+    ) -> Result<(), CallerError> {
+        let owner = async {
+            let dbus = zbus::fdo::DBusProxy::new(connection).await.ok()?;
+            let session = BusName::try_from(SESSION_BUS_NAME).ok()?;
+            dbus.get_name_owner(session).await.ok()
+        };
+        match (header.sender(), owner.await) {
+            (Some(sender), Some(owner)) if owner.as_str() == sender.as_str() => Ok(()),
+            _ => Err(refused(method, Denial::Untrusted)),
+        }
+    }
+}
+
+/// The error a caller of `method` refused for `denial` gets, logged with the method.
+fn refused(method: &str, denial: Denial) -> CallerError {
+    eprintln!(
+        "cupertino-notifications: {CENTRE_BUS_NAME}.{method}: the caller is refused: {denial:?}"
+    );
+    denial.into()
 }
 
 /// The credentials the bus gives for the sender of a call with `header`; `None` when it gives none.
@@ -488,13 +510,14 @@ struct CentreControl {
 
 #[zbus::interface(name = "org.cupertino.NotificationCenter1")]
 impl CentreControl {
-    /// Open the notification list, or close it when it is open.
+    /// Open the notification list, or close it when it is open. Only the server may: the menu bar's clock opens it
+    /// over the host bus (`TogglePanel`).
     async fn toggle_centre(
         &self,
         #[zbus(header)] header: zbus::message::Header<'_>,
         #[zbus(connection)] connection: &Connection,
     ) -> Result<(), CallerError> {
-        self.link.guard(connection, &header, "ToggleCentre").await?;
+        Link::server_only(connection, &header, "ToggleCentre").await?;
         self.link.send(Call::Toggle);
         Ok(())
     }

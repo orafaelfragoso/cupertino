@@ -714,7 +714,7 @@
   scope: shell-private
   source: crates/cupertino-launcher/src/control.rs
   source_match: "org.cupertino.Launcher1"
-  note: served by the launcher component in the cupertino-shell binary, on the component's own connection; Toggle and ToggleApplications accept only the server (the shell host's parent process, as the server calls from its bus worker's connection) and the launcher component itself (its own connection), any other caller is refused with an org.cupertino.Error name
+  note: served by the launcher component in the cupertino-shell binary, on the component's own connection; Toggle and ToggleApplications accept only the server (the connection that owns org.cupertino.Session1, from which the server calls, D20), any other caller is refused with an org.cupertino.Error name
 - name: org.cupertino.ControlPanel1
   kind: dbus-interface
   version: 1
@@ -725,7 +725,7 @@
   scope: public
   source: crates/cupertino-controlcenter/src/control.rs
   source_match: "org.cupertino.ControlPanel1"
-  note: served by the controlcenter component in the cupertino-shell binary, on the component's own connection; Toggle only changes the UI; refused to a sandboxed caller or one the bus cannot name
+  note: served by the controlcenter component in the cupertino-shell binary, on the component's own connection; Toggle accepts only the server (the connection that owns org.cupertino.Session1, D20); the Shown and Output properties are open to any caller
 - name: org.cupertino.Audio1
   kind: dbus-interface
   version: 1
@@ -929,7 +929,7 @@
   scope: public
   source: crates/cupertino-notifications/src/control.rs
   source_match: "org.cupertino.NotificationCenter1"
-  note: served by the notifications component in the cupertino-shell binary, on the component's own connection; every method refuses sandboxed and unnamed callers
+  note: served by the notifications component in the cupertino-shell binary, on the component's own connection; ToggleCentre accepts only the server (the connection that owns org.cupertino.Session1, D20); every other method refuses sandboxed and unnamed callers
 - name: com.canonical.AppMenu.Registrar
   kind: dbus-interface
   version: n/a

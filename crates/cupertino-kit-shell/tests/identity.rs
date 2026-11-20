@@ -1,13 +1,12 @@
 //! A component's session-bus identity (D20, `shell-host.md#identity`) against a private bus daemon, a stand-in of
 //! `org.cupertino.Session1` and the stand-in server: `bus::session` announces the connection's unique name on the
 //! component's Wayland connection, returns the server's nonce from that bus connection, says the server's answer as
-//! `Event::BusIdentity`, and only then hands the connection over; `Running::shut` cuts the connection off.
+//! `Event::BusIdentity`, and only then hands the connection over; a development build's debug interface answers on the
+//! connection before the announcement does; `Running::shut` cuts the connection off.
 
 mod support;
 
-use std::future::Future;
 use std::io::{BufRead, BufReader};
-use std::pin::Pin;
 use std::process::{Child, Command as Process, Stdio};
 use std::sync::Mutex;
 
@@ -28,6 +27,12 @@ static CONNECTED: Mutex<Vec<Connected>> = Mutex::new(Vec::new());
 static IDENTITY: Mutex<Vec<(ComponentName, bool)>> = Mutex::new(Vec::new());
 /// The connections, kept open.
 static KEPT: Mutex<Vec<zbus::Connection>> = Mutex::new(Vec::new());
+/// Each announcing bus name, and whether its debug interface answered before the stand-in answered the announcement.
+static DEBUG_SERVED: Mutex<Vec<(String, bool)>> = Mutex::new(Vec::new());
+
+/// The object path of a development build's debug interface, and the interface.
+const DEBUG_PATH: &str = "/org/cupertino/ShellComponentDebug1";
+const DEBUG_INTERFACE: &str = "org.cupertino.ShellComponentDebug1";
 
 /// The stand-in server accepts every component but the dialogs.
 fn accept(component: &str) -> bool {
@@ -44,8 +49,23 @@ impl Session {
         &self,
         nonce: String,
         #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &zbus::Connection,
     ) -> zbus::fdo::Result<()> {
         let sender = header.sender().map(|s| s.to_string()).unwrap_or_default();
+        // a caller that finds the component by the name about to be accepted reaches its debug interface already
+        let debug = connection
+            .call_method(
+                Some(sender.as_str()),
+                DEBUG_PATH,
+                Some("org.freedesktop.DBus.Introspectable"),
+                "Introspect",
+                &(),
+            )
+            .await
+            .ok()
+            .and_then(|reply| reply.body().deserialize::<String>().ok())
+            .is_some_and(|xml| xml.contains(DEBUG_INTERFACE));
+        DEBUG_SERVED.lock().unwrap().push((sender.clone(), debug));
         JUDGED.lock().unwrap().push(sender.clone());
         if self.judge.judge(&sender, &nonce, accept) {
             Ok(())
@@ -57,10 +77,10 @@ impl Session {
     }
 }
 
-/// The task a test component's loop would run: the connection made, proved and handed over, beside the
-/// connection's own work. This crate's component loop runs no tasks yet, so the component runs them in its `init`.
-fn connect_in_init(name: ComponentName) {
-    let commands = bus::session(
+/// The tasks a test component's `init` gives its loop: the connection made, proved and handed over, beside the
+/// connection's own work, which the loop runs for as long as the component runs.
+fn connect_in_init(name: ComponentName) -> Vec<Command<()>> {
+    bus::session(
         move |connection| {
             let unique = connection.map(|connection| {
                 let unique = connection
@@ -79,20 +99,7 @@ fn connect_in_init(name: ComponentName) {
                 .push((name, unique.map_err(|e| e.to_string()), judged));
         },
         (),
-    );
-    let mut tasks: Vec<Pin<Box<dyn Future<Output = ()> + Send>>> = commands
-        .into_iter()
-        .filter_map(|command| match command {
-            Command::Perform(task) => Some(task),
-            _ => None,
-        })
-        .collect();
-    let mut run = tasks.pop().expect("the connection's work");
-    let mut connect = tasks.pop().expect("the connection made");
-    async_io::block_on(std::future::poll_fn(|cx| {
-        let _ = run.as_mut().poll(cx);
-        connect.as_mut().poll(cx)
-    }));
+    )
 }
 
 macro_rules! component {
@@ -104,8 +111,7 @@ macro_rules! component {
             type Message = ();
 
             fn init() -> ((), Vec<Command<()>>) {
-                connect_in_init($name);
-                ((), Vec::new())
+                ((), connect_in_init($name))
             }
 
             fn update(_: &mut (), _: ()) -> Vec<Command<()>> {
@@ -230,6 +236,15 @@ fn a_component_proves_its_bus_name_before_it_gets_its_connection() {
         "the agent got its connection before its identity was settled"
     );
     assert_eq!(identity(ComponentName::AGENT), Some(true));
+    // a development build serves the debug interface before it announces the name, so no call that finds the
+    // component by its accepted name comes before the interface
+    assert!(
+        DEBUG_SERVED
+            .lock()
+            .unwrap()
+            .contains(&(unique.clone(), cfg!(debug_assertions))),
+        "the agent's debug interface is served as its announcement is judged"
+    );
     // the name announced on the agent's Wayland connection is its bus connection's
     server.expect(|seen| {
         matches!(seen, Seen::Announced { component, name, .. } if component == "agent" && *name == unique)

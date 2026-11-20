@@ -1,8 +1,8 @@
-//! Session bus worker: relays the shell toggles (notification centre, launcher, control panel) and the lock request
-//! (the lock screen's `org.cupertino.Login1`) to the processes that own them. The session agent's requests go from
-//! the connection that owns `org.cupertino.Session1` instead ([`crate::session_agent`]). The media keys go to the on-screen displays from the
-//! connection that owns `org.cupertino.Session1` instead ([`crate::quit::SessionConnection`]), the one connection
-//! `cupertino_osd::control` takes for the server (D20).
+//! Session bus worker: relays the lock request (the lock screen's `org.cupertino.Login1`) to the process that owns it.
+//! The calls on the shell components' bus interfaces (the notification centre's, the launcher's and the control panel's
+//! toggles, the on-screen displays' media keys) go from the connection that owns `org.cupertino.Session1` instead
+//! ([`crate::quit::SessionConnection`]), the one connection each component takes for the server (D20), and so do the
+//! session agent's requests ([`crate::session_agent`]).
 //!
 //! Everything runs on one background thread that drives `zbus` futures; the compositor talks to it
 //! through [`DbusHandle::send`]. Without a session bus the worker ends after logging and the
@@ -22,7 +22,7 @@ use zbus::names::{BusName, OwnedUniqueName};
 use crate::caller::{identify, Caller};
 use crate::input::OsdKey;
 
-/// What the worker asks a shell process to toggle.
+/// What the server asks a shell component to toggle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Toggle {
     /// The notification centre list of `cupertino-notifications`.
@@ -38,7 +38,6 @@ pub enum Toggle {
 /// One call the worker makes on a shell process.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
-    Toggle(Toggle),
     /// Lock the session through the lock screen's `org.cupertino.Login1` while no lock screen is connected to ask
     /// over the server's own connection: `Lock`, its one method, for every lock request.
     Lock,
@@ -52,12 +51,48 @@ enum Body {
     Step(i32, bool),
 }
 
-/// Bus name, object path and interface of the on-screen displays (`cupertino_osd::control`).
-const OSD: (&str, &str, &str) = (
+/// Bus name, object path and interface of a shell component's bus interface.
+type Interface = (&'static str, &'static str, &'static str);
+
+/// The on-screen displays' interface (`cupertino_osd::control`).
+const OSD: Interface = (
     "org.cupertino.Osd1",
     "/org/cupertino/Osd1",
     "org.cupertino.Osd1",
 );
+
+/// The notification centre's interface (`cupertino_notifications::control`).
+const NOTIFICATION_CENTRE: Interface = (
+    "org.cupertino.NotificationCenter1",
+    "/org/cupertino/NotificationCenter1",
+    "org.cupertino.NotificationCenter1",
+);
+
+/// The launcher's interface (`cupertino_launcher::control`).
+const LAUNCHER: Interface = (
+    "org.cupertino.Launcher1",
+    "/org/cupertino/Launcher1",
+    "org.cupertino.Launcher1",
+);
+
+/// The control panel's interface (`cupertino_controlcenter::control`).
+const CONTROL_PANEL: Interface = (
+    "org.cupertino.ControlPanel1",
+    "/org/cupertino/ControlPanel1",
+    "org.cupertino.ControlPanel1",
+);
+
+impl Toggle {
+    /// The interface of the component that toggles, and the method.
+    fn call(self) -> (Interface, &'static str) {
+        match self {
+            Toggle::NotificationCentre => (NOTIFICATION_CENTRE, "ToggleCentre"),
+            Toggle::Launcher => (LAUNCHER, "Toggle"),
+            Toggle::Applications => (LAUNCHER, "ToggleApplications"),
+            Toggle::ControlPanel => (CONTROL_PANEL, "Toggle"),
+        }
+    }
+}
 
 /// The method and arguments of `org.cupertino.Osd1` for a media key; `fine` is the Shift+Alt step.
 fn osd_call(key: OsdKey, fine: bool) -> (&'static str, Body) {
@@ -73,11 +108,15 @@ fn osd_call(key: OsdKey, fine: bool) -> (&'static str, Body) {
     }
 }
 
-/// Calls the media key's method of the on-screen displays on `conn`, the connection that owns
-/// `org.cupertino.Session1`, in a task of its executor, and logs a failure.
-fn send_osd(conn: &zbus::Connection, key: OsdKey, fine: bool) {
-    let (name, path, interface) = OSD;
-    let (method, body) = osd_call(key, fine);
+/// Calls `method` of the shell component's interface with `body` on `conn`, the connection that owns
+/// `org.cupertino.Session1`, in a task of its executor, and logs a failure with `what`.
+fn send_to_component(
+    conn: &zbus::Connection,
+    (name, path, interface): Interface,
+    method: &'static str,
+    body: Body,
+    what: impl std::fmt::Debug + Send + 'static,
+) {
     let conn = conn.clone();
     conn.executor()
         .clone()
@@ -100,47 +139,18 @@ fn send_osd(conn: &zbus::Connection, key: OsdKey, fine: bool) {
                     }
                 };
                 if let Err(e) = sent {
-                    tracing::warn!(?key, error = %e, "cannot reach the on-screen displays");
+                    tracing::warn!(?what, name, error = %e, "cannot reach the shell component");
                 }
             },
-            "cupertino-osd-key",
+            "cupertino-component-call",
         )
         .detach();
 }
 
 impl Request {
-    /// Bus name, object path, interface, method and arguments of the control interface of the process
-    /// (`cupertino_notifications::dbus`, `cupertino_launcher::control`, `cupertino_controlcenter::control`, `cupertino_osd::control`; the lock request goes to the login process).
+    /// Bus name, object path, interface, method and arguments of the call: the lock request goes to the login process.
     fn call(self) -> (&'static str, &'static str, &'static str, &'static str, Body) {
         match self {
-            Request::Toggle(Toggle::NotificationCentre) => (
-                "org.cupertino.NotificationCenter1",
-                "/org/cupertino/NotificationCenter1",
-                "org.cupertino.NotificationCenter1",
-                "ToggleCentre",
-                Body::Empty,
-            ),
-            Request::Toggle(Toggle::Launcher) => (
-                "org.cupertino.Launcher1",
-                "/org/cupertino/Launcher1",
-                "org.cupertino.Launcher1",
-                "Toggle",
-                Body::Empty,
-            ),
-            Request::Toggle(Toggle::Applications) => (
-                "org.cupertino.Launcher1",
-                "/org/cupertino/Launcher1",
-                "org.cupertino.Launcher1",
-                "ToggleApplications",
-                Body::Empty,
-            ),
-            Request::Toggle(Toggle::ControlPanel) => (
-                "org.cupertino.ControlPanel1",
-                "/org/cupertino/ControlPanel1",
-                "org.cupertino.ControlPanel1",
-                "Toggle",
-                Body::Empty,
-            ),
             Request::Lock => (
                 "org.cupertino.Login1",
                 "/org/cupertino/Login1",
@@ -914,25 +924,39 @@ async fn call(conn: &zbus::Connection, what: Request, login: &SharedLoginTrust) 
 }
 
 impl crate::state::Cupertino {
-    /// Ask the notification process to open or close its centre list.
+    /// Ask the notifications component to open or close its centre list.
     pub fn toggle_notification_center(&mut self) {
-        self.shell_call(Request::Toggle(Toggle::NotificationCentre));
+        self.toggle_component(Toggle::NotificationCentre);
     }
 
-    /// Ask the launcher process to show or hide its panel.
+    /// Ask the launcher component to show or hide its panel.
     pub fn toggle_launcher(&mut self) {
-        self.shell_call(Request::Toggle(Toggle::Launcher));
+        self.toggle_component(Toggle::Launcher);
     }
 
-    /// Ask the launcher process to show or hide its application browser (the app-grid action: its shortcut, the
+    /// Ask the launcher component to show or hide its application browser (the app-grid action: its shortcut, the
     /// Dock's hot corner or gesture).
     pub fn toggle_applications(&mut self) {
-        self.shell_call(Request::Toggle(Toggle::Applications));
+        self.toggle_component(Toggle::Applications);
     }
 
-    /// Ask the control panel process to show or hide its panel.
+    /// Ask the control panel component to show or hide its panel.
     pub fn toggle_control_panel(&mut self) {
-        self.shell_call(Request::Toggle(Toggle::ControlPanel));
+        self.toggle_component(Toggle::ControlPanel);
+    }
+
+    /// Ask a component to toggle what `toggle` names, on the connection that owns `org.cupertino.Session1`, as the
+    /// component takes the call only from that one (D20); while the session interface is not served the toggle does
+    /// nothing.
+    fn toggle_component(&mut self, toggle: Toggle) {
+        let (interface, method) = toggle.call();
+        match self.quit.session_connection() {
+            Some(conn) => send_to_component(&conn, interface, method, Body::Empty, toggle),
+            None => tracing::warn!(
+                ?toggle,
+                "the session interface is not served: the toggle does not reach the shell component"
+            ),
+        }
     }
 
     /// Ask the login process to lock the session. The server's private connection to the lock screen carries the request;
@@ -994,7 +1018,10 @@ impl crate::state::Cupertino {
     /// session interface is not served the key does nothing.
     pub fn osd_key(&mut self, key: OsdKey, fine: bool) {
         match self.quit.session_connection() {
-            Some(conn) => send_osd(&conn, key, fine),
+            Some(conn) => {
+                let (method, body) = osd_call(key, fine);
+                send_to_component(&conn, OSD, method, body, key);
+            }
             None => tracing::warn!(
                 ?key,
                 "the session interface is not served: the media key does not reach the on-screen displays"

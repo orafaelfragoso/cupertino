@@ -1,26 +1,26 @@
 //! `org.cupertino.ControlPanel1`: the control panel's bus interface, served on the component's own session bus
-//! connection, which owns the name (D20). The server (its shortcut) and the menu bar (its status item) call `Toggle`.
-//! The menu bar is no relation of the shell host, so `Toggle` answers any unsandboxed process of the person and refuses
-//! a Flatpak, a Snap and a caller the bus cannot name, as `org.cupertino.NotificationCenter1` does for the same callers.
+//! connection, which owns the name (D20). The server calls `Toggle` for its shortcut, from the connection that owns
+//! `org.cupertino.Session1`, and only that connection may: any other caller, another connection of the server's process
+//! and the components of the shell host included, is refused with `org.cupertino.Error.UntrustedCaller`. The menu bar's
+//! status item opens the panel over the host bus (`TogglePanel`).
 //!
 //! Its properties `Shown` and `Output` tell whether the panel is shown and on which output (the connector name, empty
 //! while it is hidden or not known), with `PropertiesChanged` on every change, so the menu bar highlights the control
 //! panel's item on that output's bar while the panel is open. A component that stops drops the name, which a reader
 //! takes as not shown.
 //!
-//! The handlers run on the component's UI thread, which ticks the connection, and do no work of their own there: a
-//! call goes to the model as a [`Call`], and the model names the caller from the credentials the bus gave for it off
-//! the UI thread ([`judge`]), since that reads the caller's `/proc` entries.
+//! The handlers run on the component's UI thread, which ticks the connection: the check asks the bus daemon who owns
+//! `org.cupertino.Session1` and reads nothing else, and an accepted call goes to the model as a [`Call`].
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use cupertino_peer::{own_parent, Caller, CallerError, Relation};
-use zbus::fdo::{ConnectionCredentials, RequestNameFlags, RequestNameReply};
+use cupertino_peer::component::SESSION_BUS_NAME;
+use cupertino_peer::{CallerError, Denial};
+use zbus::fdo::{RequestNameFlags, RequestNameReply};
 use zbus::message::Header;
-use zbus::names::InterfaceName;
+use zbus::names::{BusName, InterfaceName};
 use zbus::object_server::SignalEmitter;
 use zbus::zvariant::Value;
 use zbus::Connection;
@@ -29,13 +29,6 @@ use zbus::Connection;
 pub const BUS_NAME: &str = "org.cupertino.ControlPanel1";
 pub const OBJECT_PATH: &str = "/org/cupertino/ControlPanel1";
 const INTERFACE: &str = "org.cupertino.ControlPanel1";
-
-/// The `/proc` the callers are read from.
-const PROC: &str = "/proc";
-
-/// Who may toggle the panel: the server (the host's parent), the menu bar (no relation) and the host's own components;
-/// never a sandboxed or anonymous caller.
-const CALLERS: &[Relation] = &[Relation::Itself, Relation::Parent, Relation::Other];
 
 /// How the panel is shown, as its properties say.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -50,21 +43,8 @@ pub struct Presence {
 /// A call of the interface, handed to the model.
 #[derive(Clone, Debug)]
 pub enum Call {
-    /// Name the caller of the credentials (`None`: the bus gave none) for the call that waits on `reply`.
-    Judge {
-        credentials: Option<Arc<ConnectionCredentials>>,
-        reply: async_channel::Sender<Arc<Caller>>,
-    },
     /// Open the panel, or dismiss it when it is open.
     Toggle,
-}
-
-/// The caller of `credentials`, read from its `/proc` entries: for the I/O pool, never the UI thread.
-pub fn judge(credentials: Option<&ConnectionCredentials>) -> Caller {
-    match credentials {
-        Some(credentials) => Caller::from_credentials(credentials, Path::new(PROC)),
-        None => Caller::Anonymous,
-    }
 }
 
 struct Control {
@@ -81,51 +61,39 @@ impl Control {
         // the model holds the receiver for as long as the interface is served
         let _ = self.calls.try_send(call);
     }
-
-    /// The caller of a call with `header`, named by the model; anonymous when the bus or the model gave no answer.
-    async fn caller(&self, connection: &Connection, header: &Header<'_>) -> Arc<Caller> {
-        let credentials = credentials(connection, header).await;
-        let (reply, answer) = async_channel::bounded(1);
-        self.send(Call::Judge { credentials, reply });
-        answer
-            .recv()
-            .await
-            .unwrap_or_else(|_| Arc::new(Caller::Anonymous))
-    }
 }
 
-/// The credentials the bus gives for the sender of a call with `header`; `None` when it gives none.
-async fn credentials(
-    connection: &Connection,
-    header: &Header<'_>,
-) -> Option<Arc<ConnectionCredentials>> {
-    let sender = header.sender()?;
-    let proxy = zbus::fdo::DBusProxy::new(connection).await.ok()?;
-    proxy
-        .get_connection_credentials(sender.clone().into())
+/// Whether the call with `header` comes from the server: its sender owns `org.cupertino.Session1` (D20). A call
+/// without a sender, or one the bus daemon cannot say the owner for, is not the server's.
+async fn from_server(connection: &Connection, header: &Header<'_>) -> bool {
+    let Some(sender) = header.sender() else {
+        return false;
+    };
+    let Ok(dbus) = zbus::fdo::DBusProxy::new(connection).await else {
+        return false;
+    };
+    let Ok(session) = BusName::try_from(SESSION_BUS_NAME) else {
+        return false;
+    };
+    dbus.get_name_owner(session)
         .await
-        .ok()
-        .map(Arc::new)
+        .is_ok_and(|owner| owner.as_str() == sender.as_str())
 }
 
 #[zbus::interface(name = "org.cupertino.ControlPanel1")]
 impl Control {
-    /// Open the panel, or dismiss it when it is open. Refused to a sandboxed or anonymous caller; a refusal is logged
-    /// with the method.
+    /// Open the panel, or dismiss it when it is open. Only the server may; a refusal is logged with the method.
     async fn toggle(
         &self,
         #[zbus(header)] header: Header<'_>,
         #[zbus(connection)] connection: &Connection,
     ) -> Result<(), CallerError> {
-        let caller = self.caller(connection, &header).await;
-        caller
-            .require_relation(std::process::id(), own_parent(), CALLERS)
-            .map_err(|denial| {
-                eprintln!(
-                    "cupertino-controlcenter: {BUS_NAME}.Toggle: the caller is refused: {denial:?}"
-                );
-                CallerError::from(denial)
-            })?;
+        if !from_server(connection, &header).await {
+            eprintln!(
+                "cupertino-controlcenter: {BUS_NAME}.Toggle: the caller is refused: it is not the server"
+            );
+            return Err(CallerError::from(Denial::Untrusted));
+        }
         self.send(Call::Toggle);
         Ok(())
     }

@@ -3,8 +3,10 @@
 //! (`docs/architecture/shell-host.md`, D16, D21). The server's supervisor starts this test binary as `cupertino-shell`:
 //! with [`host::MARK`] among its arguments it runs the host with the test dock of `shell/components.rs` and the real
 //! control panel component (`cupertino_shell::CONTROLCENTER`).
-//! - The component owns `org.cupertino.ControlPanel1` on a connection of its own in the host's process; `Toggle`
-//!   opens the panel, which draws at the output's top right, and its `Shown` and `Output` properties say so.
+//! - The component owns `org.cupertino.ControlPanel1` on a connection of its own in the host's process; `Toggle` from
+//!   another connection of the server's process than the one that owns `org.cupertino.Session1` is refused, and the
+//!   server's toggle (`toggle_control_panel`, its shortcut) opens the panel, which draws at the output's top right,
+//!   and its `Shown` and `Output` properties say so.
 //! - A panic injected as it paints, as its loop dispatches and on a helper thread restarts it alone, fifty times, while
 //!   the dock keeps drawing and the host's anonymous memory stays flat; each restart comes back on a new connection with
 //!   the panel closed, which is what a restart loses.
@@ -205,7 +207,7 @@ fn owner(session: &Connection) -> Option<(String, u32)> {
     Some((owner.to_string(), pid))
 }
 
-/// `Toggle` on the control panel.
+/// `Toggle` on the control panel from `session`.
 fn toggle(session: &Connection) -> zbus::Result<()> {
     session
         .call_method(Some(BUS_NAME), OBJECT_PATH, Some(BUS_NAME), "Toggle", &())
@@ -282,10 +284,27 @@ fn the_control_panel_restarts_alone_closed_after_injected_panics() {
     assert_eq!(pid, host, "the name is owned in the host's process");
     assert_eq!(shown(&session), Some(false), "the panel starts closed");
 
-    // Toggle opens the panel on the sole output, and it draws at the top right
+    // the test's own connection is one of the server's process, not the one that owns Session1: it is refused
     let closed = rig.image();
     let bus_call = session.clone();
-    aside(&mut rig, "Toggle is answered", move || toggle(&bus_call)).expect("Toggle");
+    let refused = aside(&mut rig, "the other connection is answered", move || {
+        toggle(&bus_call)
+    })
+    .expect_err("a Toggle from another connection of the server's process is refused");
+    assert!(
+        refused
+            .to_string()
+            .contains("org.cupertino.Error.UntrustedCaller"),
+        "the refusal names why: {refused}"
+    );
+    assert_eq!(
+        shown(&session),
+        Some(false),
+        "the refused call opens nothing"
+    );
+
+    // the server's toggle opens the panel on the sole output, and it draws at the top right
+    rig.state.toggle_control_panel();
     rig.until("the panel says it is shown", |_| {
         shown(&session) == Some(true)
     });
@@ -324,10 +343,7 @@ fn the_control_panel_restarts_alone_closed_after_injected_panics() {
         .unwrap_or_else(|e| panic!("the control panel takes a crash at {at}: {e}"));
         if at == "paint" {
             // what it draws next panics: the panel, opened
-            let bus_call = session.clone();
-            let _ = aside(&mut rig, "the panel is asked to open", move || {
-                toggle(&bus_call)
-            });
+            rig.state.toggle_control_panel();
         }
         if (crash + 1) % CRASHES_IN_A_ROW == 0 {
             rig.until(
@@ -400,8 +416,7 @@ fn the_control_panel_restarts_alone_closed_after_injected_panics() {
     rig.until("the closed panel's area settles", |rig| {
         changed(rig, &closed) == 0
     });
-    let bus_call = session.clone();
-    aside(&mut rig, "Toggle is answered", move || toggle(&bus_call)).expect("Toggle");
+    rig.state.toggle_control_panel();
     rig.until("the restarted panel draws at the top right", |rig| {
         shown(&session) == Some(true) && changed(rig, &closed) >= PANEL_PIXELS
     });

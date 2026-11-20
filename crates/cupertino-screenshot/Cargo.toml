@@ -8,12 +8,15 @@ description = "Screenshot tool of the Cupertino desktop: full-screen, window and
 layer = "shell"
 
 [dependencies]
+async-channel = "2"
 cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events" }
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-kit = { path = "../cupertino-kit" }
 cupertino-kit-shell = { path = "../cupertino-kit-shell" }
+cupertino-peer = { path = "../cupertino-peer" }
 rustix = { version = "1", features = ["fs"] }
+zbus = { version = "5", default-features = false, features = ["async-io"] }
 
 [dev-dependencies]
 cupertino-assets = { path = "../cupertino-assets" }

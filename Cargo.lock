@@ -1560,13 +1560,16 @@ dependencies = [
 name = "cupertino-screenshot"
 version = "0.1.0"
 dependencies = [
+ "async-channel",
  "cupertino-assets",
  "cupertino-defaults",
  "cupertino-diagnostic-events",
  "cupertino-geometry",
  "cupertino-kit",
  "cupertino-kit-shell",
+ "cupertino-peer",
  "rustix 1.1.6",
+ "zbus",
 ]
 
 [[package]]

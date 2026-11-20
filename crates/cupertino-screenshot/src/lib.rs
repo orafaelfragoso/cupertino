@@ -13,16 +13,23 @@
 //! * [`controller`]: one run from the overlay to the delivered capture.
 //! * [`files`]: the settings file and the captures written as PNG files, on the I/O pool.
 //! * [`shot`]: one capture from a shortcut, the program `cupertino-screenshot --mode` runs.
+//! * [`color_picker`], [`share_picker`]: the colour pick over the outputs and the choice of what a screen share shows.
+//! * [`control`]: `org.cupertino.Screenshot1`, which only the portal may call.
+//! * [`serve`]: the portal's service, the program `cupertino-screenshot --serve` runs.
 
 #![forbid(unsafe_code)]
 
+pub mod color_picker;
+pub mod control;
 pub mod controller;
 pub mod filename;
 pub mod files;
 pub mod pick;
 pub mod selection;
+pub mod serve;
 pub mod session;
 pub mod settings;
+pub mod share_picker;
 pub mod shot;
 pub mod thumbnail;
 pub mod toolbar;

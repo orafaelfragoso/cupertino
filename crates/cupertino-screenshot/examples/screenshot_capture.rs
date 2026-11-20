@@ -9,6 +9,9 @@
 //! - `toolbar`: the toolbar; `--mode` is `selection` (the default), `window` or `screen`.
 //! - `options-menu`: the toolbar's Options menu, open.
 //! - `thumbnail`: the floating thumbnail of a capture of the output, with the room for its shadow.
+//! - `color-picker`: the colour picker's overlay on the output's copy; `--pointer` is `centre` (the default) or
+//!   `edge`, where the loupe moves to the pointer's other side.
+//! - `share-picker`: the choice of what a screen share shows, for an app that may be remembered, before it is armed.
 //!
 //! The overlay is transparent where it shows the screen, so it is drawn over a checkerboard of the capture's own. The
 //! fonts, symbols and theme are the system's, as the program's, under a home of the capture's own
@@ -20,16 +23,19 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use cupertino_geometry::{Point, Rect, Size};
+use cupertino_kit::core::next_resource_id;
 use cupertino_kit::core::{Application, Command, Window};
 use cupertino_kit::platform::{SystemAppearance, Timestamp};
 use cupertino_kit::render::{ImageResource, PixelFormat};
 use cupertino_kit::test::capture::{presented, App, Look, Pixmap, Request, State};
 use cupertino_kit::test::{Capabilities, ManualClock, TestDriver, WindowStates};
 use cupertino_kit::theme::ThemeTokens;
+use cupertino_screenshot::color_picker::{self, Display, PickInput, Picking};
 use cupertino_screenshot::controller::Controller;
 use cupertino_screenshot::pick::PickWindow;
 use cupertino_screenshot::session::Style;
 use cupertino_screenshot::settings::{Mode, Settings};
+use cupertino_screenshot::share_picker::{self, Ask, Picker, Source};
 use cupertino_screenshot::view::{Input, PointerInput};
 
 /// The runtime turns a frame may take.
@@ -44,31 +50,63 @@ const OUTPUT: Rect = Rect::new(0.0, 0.0, 1280.0, 800.0);
 const CHECKER: f32 = 16.0;
 const CHECKER_TONES: [u8; 2] = [200, 150];
 
-thread_local! {
-    /// The run whose windows the next capture shows.
-    static SHOWN: RefCell<Option<Controller>> = const { RefCell::new(None) };
+/// What a capture shows: a capture's run, a colour pick or a sharing choice.
+enum Scene {
+    Shot(Box<Controller>),
+    Pick(Picking),
+    Share(Picker),
 }
 
-/// The windows of the run in [`SHOWN`].
+thread_local! {
+    /// The scene whose windows the next capture shows.
+    static SHOWN: RefCell<Option<Scene>> = const { RefCell::new(None) };
+}
+
+/// The messages of the windows in [`SHOWN`], which change nothing.
+#[derive(Clone, Debug)]
+#[expect(
+    dead_code,
+    reason = "a capture acts on none but the sharing list's scrolling"
+)]
+enum Shot {
+    Input(Input),
+    Pick(PickInput),
+    Share(share_picker::Input),
+}
+
+/// The windows of the scene in [`SHOWN`].
 struct Shown;
 
 impl Application for Shown {
     type Model = ();
-    type Message = Input;
+    type Message = Shot;
 
-    fn init() -> ((), Vec<Command<Input>>) {
+    fn init() -> ((), Vec<Command<Shot>>) {
         ((), Vec::new())
     }
 
-    fn update(_: &mut (), _: Input) -> Vec<Command<Input>> {
+    /// A sharing choice follows its list's scrolling, which sets the rows it shows; nothing else changes.
+    fn update(_: &mut (), message: Shot) -> Vec<Command<Shot>> {
+        if let Shot::Share(input @ share_picker::Input::Scroll(..)) = message {
+            SHOWN.with_borrow_mut(|scene| {
+                if let Some(Scene::Share(picker)) = scene {
+                    picker.input(input);
+                }
+            });
+        }
         Vec::new()
     }
 
-    fn view(_: &()) -> Vec<Window<Input>> {
-        SHOWN.with_borrow(|run| {
-            run.as_ref()
-                .map(|c| c.windows(0.0, |i| i))
-                .unwrap_or_default()
+    fn view(_: &()) -> Vec<Window<Shot>> {
+        SHOWN.with_borrow(|scene| match scene {
+            Some(Scene::Shot(c)) => c.windows(0.0, Shot::Input),
+            Some(Scene::Pick(p)) => p
+                .view(0, true)
+                .map(|v| color_picker::overlay(color_picker::overlay_key(0), v, Shot::Pick))
+                .into_iter()
+                .collect(),
+            Some(Scene::Share(p)) => vec![share_picker::window(p, Shot::Share)],
+            None => Vec::new(),
         })
     }
 }
@@ -176,18 +214,26 @@ struct Screenshot;
 
 impl App for Screenshot {
     const NAME: &'static str = "screenshot";
-    const STATE_FLAGS: &'static [&'static str] = &["overlay", "mode"];
+    const STATE_FLAGS: &'static [&'static str] = &["overlay", "mode", "pointer"];
 
     fn surfaces(&self) -> Vec<String> {
-        ["overlay", "toolbar", "options-menu", "thumbnail"]
-            .map(String::from)
-            .to_vec()
+        [
+            "overlay",
+            "toolbar",
+            "options-menu",
+            "thumbnail",
+            "color-picker",
+            "share-picker",
+        ]
+        .map(String::from)
+        .to_vec()
     }
 
     fn sheet_states(&self, surface: &str) -> Vec<State> {
         let states: &[(&str, &[&str])] = match surface {
             "overlay" => &[("overlay", &["drawn", "dragging", "crosshair", "window"])],
             "toolbar" => &[("mode", &["selection", "window", "screen"])],
+            "color-picker" => &[("pointer", &["centre", "edge"])],
             _ => &[],
         };
         match states.first() {
@@ -226,15 +272,49 @@ impl App for Screenshot {
                 c.shots(Ok(vec![picture]), Some(small), 0.0);
                 (c, "thumbnail", true)
             }
+            "color-picker" => {
+                let pointer = match flag(request, "pointer", "centre") {
+                    "centre" => Point::new(640.0, 400.0),
+                    "edge" => Point::new(1250.0, 780.0),
+                    other => return Err(format!("--pointer {other}: centre or edge")),
+                };
+                let mut picking = Picking::new(vec![Display {
+                    rect: OUTPUT,
+                    image: picture(),
+                    id: next_resource_id(),
+                }]);
+                picking.moved(pointer);
+                SHOWN.set(Some(Scene::Pick(picking)));
+                return draw("pick/0", request.look, request.scale);
+            }
+            "share-picker" => {
+                SHOWN.set(Some(Scene::Share(Picker::new(0, share_ask()))));
+                return draw("share/0", request.look, request.scale);
+            }
             other => return Err(format!("no surface {other}")),
         };
-        SHOWN.set(Some(controller));
+        SHOWN.set(Some(Scene::Shot(Box::new(controller))));
         let picture = draw(key, request.look, request.scale)?;
         Ok(if backdrop {
             over_checkerboard(&picture, request.scale)
         } else {
             picture
         })
+    }
+}
+
+/// A request of an app that names itself, for a display and two windows, one without its app.
+fn share_ask() -> Ask {
+    Ask {
+        app_name: Some("Viewer".into()),
+        app_icon: None,
+        parent_window: String::new(),
+        sources: vec![
+            Source::display("DP-1", "Dell P2723QE"),
+            Source::window("Notes", "org.example.Notes"),
+            Source::window("Terminal", ""),
+        ],
+        offer_remember: true,
     }
 }
 
@@ -300,7 +380,9 @@ fn draw(key: &str, look: Look, scale: f32) -> Result<Pixmap, String> {
                 continue;
             }
             configured.push(id);
-            let size = format!("{:?}", k.0).contains("overlay/").then_some(output);
+            let name = format!("{:?}", k.0);
+            // an overlay takes its output's size
+            let size = (name.contains("overlay/") || name.contains("pick/")).then_some(output);
             let system = driver.window_system_mut();
             system
                 .enqueue_window(

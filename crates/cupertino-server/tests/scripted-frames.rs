@@ -37,6 +37,17 @@ use wayland_server::Resource;
 const SETUP: Duration = Duration::from_secs(20);
 /// A fresh frame has to arrive before a stalled write could time out.
 const FRAME_WAIT: Duration = Duration::from_secs(2);
+/// Seconds after the server starts at which it writes the window list into the blocked FIFO. The server's script runs
+/// on the wall clock from its start, so this is the time the supervised shell and its two clients have to map on a
+/// loaded builder (they took up to 2.6 s with the workspace's tests running at 64 jobs).
+const LIST_AT: f64 = 6.0;
+/// Seconds after the window list at which the server writes the screenshot into the other blocked FIFO.
+const SHOT_AFTER_LIST: f64 = 0.5;
+/// Seconds after the window list at which the server writes the second window list to a plain file: the time the test
+/// has to rename the frame client once the first list's writer opened the FIFO.
+const LATER_LIST_AFTER_LIST: f64 = 2.0;
+/// Seconds after the second window list at which the server writes its last screenshot and exits.
+const LAST_SHOT_AFTER_LATER_LIST: f64 = 0.5;
 
 fn readable(fd: &impl AsFd, wait: Duration) -> bool {
     poll(
@@ -375,20 +386,22 @@ fn unresponsive_peers_and_scripted_outputs_do_not_stop_frames() {
     let shot = Pipe::new(dir.join("frame.png"));
     let shell = json!([{"name":"test-shell", "roles":["session"], "command":[std::env::current_exe().unwrap(),
         "--exact", "unresponsive_peers_and_scripted_outputs_do_not_stop_frames", "--nocapture"]}]);
+    let later = LIST_AT + LATER_LIST_AFTER_LIST;
     let mut server = Session(
         home.server(shell)
             .arg("--window-list")
-            .arg(format!("1.5:{}", list.path.display()))
+            .arg(format!("{LIST_AT}:{}", list.path.display()))
             .arg("--window-list")
-            .arg(format!("3.5:{}", dir.join("later").display()))
+            .arg(format!("{later}:{}", dir.join("later").display()))
             .arg("--shot")
-            .arg(format!("2:{}", shot.path.display()))
-            .args([
-                "--screenshot-after",
-                "4",
-                "--exit-after-screenshot",
-                "--screenshot",
-            ])
+            .arg(format!(
+                "{}:{}",
+                LIST_AT + SHOT_AFTER_LIST,
+                shot.path.display()
+            ))
+            .arg("--screenshot-after")
+            .arg((later + LAST_SHOT_AFTER_LATER_LIST).to_string())
+            .args(["--exit-after-screenshot", "--screenshot"])
             .arg(dir.join("last.png"))
             .env("CUPERTINO_FRAME_TEST_HOME", dir)
             .spawn()

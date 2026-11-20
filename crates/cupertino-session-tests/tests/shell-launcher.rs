@@ -534,6 +534,9 @@ fn the_launcher_opens_from_the_server_and_restarts_alone_hidden_after_injected_p
     std::env::set_var("XDG_DATA_HOME", private_dir("data"));
     std::env::set_var("XDG_CACHE_HOME", private_dir("cache"));
     std::env::set_var("HOME", private_dir("home"));
+    // the host's allocator makes an arena per thread up to a cap, and each restart's threads may add one, so the memory
+    // measured below would still be growing toward that cap when it is measured; two arenas make it the instances'
+    std::env::set_var("MALLOC_ARENA_MAX", "2");
     let mut rig = Rig::new("launcher", &["dock", "launcher"], &[]);
     cupertino_server::quit::start_session_service_on(&mut rig.state, Some(bus.1.clone()));
     let session = Connection::session().expect("the test's bus");

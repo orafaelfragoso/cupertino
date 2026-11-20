@@ -2026,6 +2026,190 @@ fn a_transaction_cancelled_after_its_part_applied_leaves_its_surface_to_a_newer_
     );
 }
 
+/// `surf`'s component creates transaction `serial` and stages `surf` in it with a commit that makes a layer, a commit
+/// the transaction keeps until it applies. With `armed` (the overview) it is armed for a pinch, otherwise it is not
+/// submitted yet. Returns the transaction and the layer's objects.
+fn newer_part_kept(
+    rig: &mut Rig,
+    serial: u32,
+    armed: bool,
+    (conn, q, st): (&Connection, &mut EventQueue<CompClient>, &mut CompClient),
+    surf: &wl_surface::WlSurface,
+) -> (
+    CupertinoTransactionV1,
+    wl_surface::WlSurface,
+    CupertinoLayerV1,
+) {
+    let qh = q.handle();
+    let tx = st
+        .tx_manager
+        .as_ref()
+        .unwrap()
+        .create(serial, st.output.as_ref().unwrap(), &qh, ());
+    if armed {
+        tx.bind_gesture(Gesture::Pinch, 0.45, 1.0);
+    }
+    tx.stage(surf);
+    let child = st.compositor.as_ref().unwrap().create_surface(&qh, ());
+    let layer = st.layers.as_ref().unwrap().get_layer(&child, surf, &qh, ());
+    surf.commit();
+    if armed {
+        tx.submit();
+    }
+    for _ in 0..2 {
+        rig.pump_comp(conn, q, st);
+    }
+    (tx, child, layer)
+}
+
+#[test]
+fn a_joiner_that_cancels_after_its_part_started_leaves_its_surface_to_a_newer_transaction() {
+    let mut rig = Rig::new();
+    let (hconn, mut hq, mut hst) = rig.connect_host(&["dock", "overview"]);
+    let (_hdock, dconn, mut dq, mut dst) = rig.spawn_component(&hconn, &mut hq, &mut hst, "dock");
+    let (_hov, oconn, mut oq, mut ost) = rig.spawn_component(&hconn, &mut hq, &mut hst, "overview");
+    let (strip, _shell) = rig.create_layer_surface(&oconn, &mut oq, &mut ost, "strip");
+    let server_strip = server_layer_surface(&rig, "strip");
+    let (dqh, oqh) = (dq.handle(), oq.handle());
+
+    // the dock's transaction, which the overview joins with its surface staged and a commit that makes a layer
+    let tx = dst
+        .tx_manager
+        .as_ref()
+        .unwrap()
+        .create(1, dst.output.as_ref().unwrap(), &dqh, ());
+    tx.expect("overview".into());
+    tx.set_deadline(100);
+    rig.pump_comp(&dconn, &mut dq, &mut dst);
+    let joined = ost.tx_manager.as_ref().unwrap().join(
+        "dock".into(),
+        dst.instance.unwrap(),
+        1,
+        ost.output.as_ref().unwrap(),
+        &oqh,
+        (),
+    );
+    joined.stage(&strip);
+    let child = ost.compositor.as_ref().unwrap().create_surface(&oqh, ());
+    let _layer = ost
+        .layers
+        .as_ref()
+        .unwrap()
+        .get_layer(&child, &strip, &oqh, ());
+    strip.commit();
+    joined.submit();
+    tx.submit();
+    for _ in 0..4 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+        rig.pump_comp(&dconn, &mut dq, &mut dst);
+    }
+    assert_eq!(ost.started.len(), 1, "the transaction started");
+    assert_eq!(layers_of(&server_strip), 1, "the overview's part applied");
+
+    // the overview stages its surface again, in a transaction armed for a pinch, and withdraws from the first one
+    let (_newer, _child2, _layer2) =
+        newer_part_kept(&mut rig, 2, true, (&oconn, &mut oq, &mut ost), &strip);
+    assert_eq!(
+        layers_of(&server_strip),
+        1,
+        "the newer part keeps its commit"
+    );
+    joined.cancel();
+    for _ in 0..3 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    assert_eq!(
+        layers_of(&server_strip),
+        1,
+        "the surface stays staged in the newer transaction, its commit kept"
+    );
+    assert!(rig.state.transaction_gesture_begin(
+        rig.output_id,
+        cupertino_protocols::server::transaction::cupertino_transaction_v1::Gesture::Pinch
+    ));
+    for _ in 0..3 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    assert_eq!(
+        layers_of(&server_strip),
+        2,
+        "the newer part applies its commit with its gesture"
+    );
+}
+
+#[test]
+fn a_joiner_that_cancels_after_its_part_applied_with_a_gesture_leaves_its_surface_to_a_newer_transaction(
+) {
+    let mut rig = Rig::new();
+    let (hconn, mut hq, mut hst) = rig.connect_host(&["overview", "menubar"]);
+    let (_hov, oconn, mut oq, mut ost) = rig.spawn_component(&hconn, &mut hq, &mut hst, "overview");
+    let (_hbar, bconn, mut bq, mut bst) = rig.spawn_component(&hconn, &mut hq, &mut hst, "menubar");
+    let (strip, _shell) = rig.create_layer_surface(&oconn, &mut oq, &mut ost, "strip");
+    let (bar_surf, _bar_shell) = rig.create_layer_surface(&bconn, &mut bq, &mut bst, "bar");
+    let server_bar = server_layer_surface(&rig, "bar");
+    let (_armed, _child, _layer) =
+        armed_overview_part(&mut rig, (&oconn, &mut oq, &mut ost), &strip);
+
+    // the menu bar joins the armed transaction with its surface staged and a commit that makes a layer
+    let bqh = bq.handle();
+    let joined = bst.tx_manager.as_ref().unwrap().join(
+        "overview".into(),
+        ost.instance.unwrap(),
+        1,
+        bst.output.as_ref().unwrap(),
+        &bqh,
+        (),
+    );
+    joined.stage(&bar_surf);
+    let child = bst.compositor.as_ref().unwrap().create_surface(&bqh, ());
+    let _layer = bst
+        .layers
+        .as_ref()
+        .unwrap()
+        .get_layer(&child, &bar_surf, &bqh, ());
+    bar_surf.commit();
+    joined.submit();
+    for _ in 0..3 {
+        rig.pump_comp(&bconn, &mut bq, &mut bst);
+    }
+    assert_eq!(layers_of(&server_bar), 0, "the joiner's commit is kept");
+    assert!(rig.state.transaction_gesture_begin(
+        rig.output_id,
+        cupertino_protocols::server::transaction::cupertino_transaction_v1::Gesture::SwipeUp
+    ));
+    for _ in 0..3 {
+        rig.pump_comp(&bconn, &mut bq, &mut bst);
+    }
+    assert_eq!(
+        layers_of(&server_bar),
+        1,
+        "the joiner's part applied with the gesture"
+    );
+
+    // the menu bar stages its surface again, in a transaction of its own, and withdraws from the gesture's
+    let (newer, _child2, _layer2) =
+        newer_part_kept(&mut rig, 2, false, (&bconn, &mut bq, &mut bst), &bar_surf);
+    assert_eq!(layers_of(&server_bar), 1, "the newer part keeps its commit");
+    joined.cancel();
+    for _ in 0..2 {
+        rig.pump_comp(&bconn, &mut bq, &mut bst);
+    }
+    assert_eq!(
+        layers_of(&server_bar),
+        1,
+        "the surface stays staged in the newer transaction, its commit kept"
+    );
+    newer.submit();
+    for _ in 0..4 {
+        rig.pump_comp(&bconn, &mut bq, &mut bst);
+    }
+    assert_eq!(
+        layers_of(&server_bar),
+        2,
+        "the newer part applies its commit when it starts"
+    );
+}
+
 /// One colour in `wl_shm` ARGB8888 memory order: an opaque green, which neither the wallpaper nor a window shows.
 const GREEN: [u8; 4] = [0, 255, 0, 255];
 

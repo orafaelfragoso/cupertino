@@ -57,6 +57,7 @@ fn advance_parts(
     now: Instant,
     owners: &mut HashMap<ObjectId, (TxId, u64)>,
 ) {
+    let tx_id = tx.id;
     for p in &mut tx.participants {
         if p.withdrawn {
             continue;
@@ -75,8 +76,9 @@ fn advance_parts(
                 && now.saturating_duration_since(sub_at)
                     >= Duration::from_millis(COMMIT_GRACE_MS.into())
             {
+                let pid = p.id;
                 p.staged.retain(|s| {
-                    if !s.committed {
+                    if !s.committed && owners.get(&s.surface_id) == Some(&(tx_id, pid)) {
                         owners.remove(&s.surface_id);
                     }
                     s.committed
@@ -122,18 +124,17 @@ fn start_due(
     all_expected_ready || deadline_passed
 }
 
-/// Apply part `p` with start time `ts`: its kept commits leave the hold ([`Cupertino::release_left_holds`]), its window
-/// changes go to `changes` and it hears `started`.
+/// Apply part `p` of `tx_id` with start time `ts`: its staged surfaces leave it, so their kept commits leave the hold
+/// ([`Cupertino::release_left_holds`]), its window changes go to `changes` and it hears `started`.
 fn apply_part(
     p: &mut Participant,
+    tx_id: TxId,
     owners: &mut HashMap<ObjectId, (TxId, u64)>,
     changes: &mut Vec<QueuedWindowChange>,
     (tv_sec_hi, tv_sec_lo, tv_nsec): (u32, u32, u32),
 ) {
     p.applied = true;
-    for s in &p.staged {
-        owners.remove(&s.surface_id);
-    }
+    p.leave_staged(tx_id, owners);
     changes.extend(std::mem::take(&mut p.window_changes));
     if let Some(res) = &p.resource {
         res.started(tv_sec_hi, tv_sec_lo, tv_nsec);
@@ -161,13 +162,8 @@ impl Cupertino {
             // Prune retained ended transactions older than 10s.
             if let TxPhase::Ended { ended_at, .. } = tx.phase {
                 // an ended transaction keeps no commits: what was staged and not applied applies as it stands
-                let owners = &mut self.transactions.staged_surface_owner;
                 for p in &mut tx.participants {
-                    for s in p.staged.drain(..) {
-                        if owners.get(&s.surface_id) == Some(&(tx_id, p.id)) {
-                            owners.remove(&s.surface_id);
-                        }
-                    }
+                    p.leave_staged(tx_id, &mut self.transactions.staged_surface_owner);
                 }
                 if now.saturating_duration_since(ended_at)
                     >= Duration::from_secs(ENDED_RETENTION_SECS)
@@ -341,6 +337,7 @@ impl Cupertino {
             if p.ready && !p.applied && !p.withdrawn {
                 apply_part(
                     p,
+                    tx_id,
                     &mut self.transactions.staged_surface_owner,
                     &mut changes,
                     (tv_sec_hi, tv_sec_lo, tv_nsec),
@@ -370,6 +367,7 @@ impl Cupertino {
             if p.ready && !p.applied && !p.withdrawn {
                 apply_part(
                     p,
+                    tx_id,
                     &mut self.transactions.staged_surface_owner,
                     &mut changes,
                     (tv_sec_hi, tv_sec_lo, tv_nsec),

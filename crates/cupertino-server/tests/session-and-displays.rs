@@ -577,7 +577,7 @@ fn session1_interrupt_then_cancel_keeps_the_session_and_sleep_quits_nothing() {
         "the application keeps its window"
     );
 
-    // sleep quits no application (as on macOS) and is carried out at once
+    // sleep quits no application and is carried out at once
     s.state
         .request_session_action(SessionAction::Sleep)
         .unwrap();

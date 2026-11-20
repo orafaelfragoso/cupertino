@@ -155,6 +155,7 @@ impl Cupertino {
         // the holes of a hold that ended go with it
         self.transactions
             .drop_ended_holds(self.hosts.held_surfaces());
+        self.end_abandoned_transactions(now);
 
         for (&tx_id, tx) in &mut self.transactions.transactions {
             // Prune retained ended transactions older than 10s.
@@ -179,7 +180,8 @@ impl Cupertino {
             if let Some(until) = tx.orphan_join_until {
                 if now >= until {
                     tx.orphan_join_until = None;
-                    if let Some(first) = tx.participants.first_mut() {
+                    // the first participant still in it; with none the transaction is abandoned
+                    if let Some(first) = tx.participants.iter_mut().find(|p| !p.withdrawn) {
                         first.is_creator = true;
                     }
                 }
@@ -295,6 +297,24 @@ impl Cupertino {
         }
         self.release_left_holds();
         self.answer_held_callbacks(output, frame_now);
+    }
+
+    /// End as cancelled every transaction not started whose creator withdrew ([`TransactionManager::abandoned`]):
+    /// every other participant hears `finished(cancelled)`, its part applies at once by itself, kept commits and window
+    /// changes, and the transaction no longer counts towards a connection's [`MAX_ACTIVE_TRANSACTIONS`].
+    pub(super) fn end_abandoned_transactions(&mut self, now: Instant) {
+        let abandoned = self.transactions.abandoned();
+        if abandoned.is_empty() {
+            return;
+        }
+        let mut changes = Vec::new();
+        for tx_id in abandoned {
+            changes.extend(self.transactions.end_cancelled(tx_id, now));
+        }
+        for change in changes {
+            self.apply_queued_window_change(change);
+        }
+        self.release_left_holds();
     }
 
     /// Start `tx_id` at `at` (the presentation clock; `model_s` on the model clock): every ready participant's part

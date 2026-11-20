@@ -1402,3 +1402,157 @@ fn a_held_surface_keeps_its_hole_drawing_live() {
         "the held hole goes on drawing the window live"
     );
 }
+
+/// The server's surface of the component's layer shell surface of namespace `namespace`.
+fn server_layer_surface(
+    rig: &Rig,
+    namespace: &str,
+) -> smithay::reexports::wayland_server::protocol::wl_surface::WlSurface {
+    layer_map_for_output(&rig.state.outputs[0].output)
+        .layers()
+        .find(|l| l.namespace() == namespace)
+        .map(|l| l.wl_surface().clone())
+        .expect("the component's layer shell surface")
+}
+
+/// How many `cupertino_layers_v1` layers the server's surface `parent` has applied.
+fn layers_of(
+    parent: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+) -> usize {
+    cupertino_server::layers_v1::with_parent(parent, |layers| layers.len())
+}
+
+/// The dock creates transaction `serial` expecting the menu bar, which joins and stages its surface with a commit that
+/// makes a layer and submits: the commit is kept. Returns the dock's transaction, the menu bar's and its layer's objects.
+fn menu_bar_part_kept(
+    rig: &mut Rig,
+    serial: u32,
+    (dconn, dq, dst): (&Connection, &mut EventQueue<CompClient>, &mut CompClient),
+    (bconn, bq, bst): (&Connection, &mut EventQueue<CompClient>, &mut CompClient),
+    bar_surf: &wl_surface::WlSurface,
+) -> (
+    CupertinoTransactionV1,
+    CupertinoTransactionV1,
+    wl_surface::WlSurface,
+    CupertinoLayerV1,
+) {
+    let (dqh, bqh) = (dq.handle(), bq.handle());
+    let tx =
+        dst.tx_manager
+            .as_ref()
+            .unwrap()
+            .create(serial, dst.output.as_ref().unwrap(), &dqh, ());
+    tx.expect("menubar".into());
+    tx.set_deadline(100);
+    rig.pump_comp(dconn, dq, dst);
+    let tx_bar = bst.tx_manager.as_ref().unwrap().join(
+        "dock".into(),
+        dst.instance.unwrap(),
+        serial,
+        bst.output.as_ref().unwrap(),
+        &bqh,
+        (),
+    );
+    tx_bar.stage(bar_surf);
+    let child = bst.compositor.as_ref().unwrap().create_surface(&bqh, ());
+    let layer = bst
+        .layers
+        .as_ref()
+        .unwrap()
+        .get_layer(&child, bar_surf, &bqh, ());
+    bar_surf.commit();
+    tx_bar.submit();
+    for _ in 0..3 {
+        rig.pump_comp(bconn, bq, bst);
+    }
+    (tx, tx_bar, child, layer)
+}
+
+#[test]
+fn a_transaction_whose_creator_withdraws_before_submit_ends_cancelled() {
+    let mut rig = Rig::new();
+    let (hconn, mut hq, mut hst) = rig.connect_host(&["dock", "menubar"]);
+    let (_hdock, dconn, mut dq, mut dst) = rig.spawn_component(&hconn, &mut hq, &mut hst, "dock");
+    let (_hbar, bconn, mut bq, mut bst) = rig.spawn_component(&hconn, &mut hq, &mut hst, "menubar");
+    let (bar_surf, _bar_layer) = rig.create_layer_surface(&bconn, &mut bq, &mut bst, "bar");
+    let server_bar = server_layer_surface(&rig, "bar");
+    let (tx, _tx_bar, _child, _layer) = menu_bar_part_kept(
+        &mut rig,
+        8,
+        (&dconn, &mut dq, &mut dst),
+        (&bconn, &mut bq, &mut bst),
+        &bar_surf,
+    );
+    assert_eq!(layers_of(&server_bar), 0, "the joiner's commit is kept");
+    assert!(bst.finished.is_empty());
+
+    // the creator destroys its part before it submitted: nothing would start the transaction any more
+    tx.destroy();
+    for _ in 0..3 {
+        rig.pump_comp(&dconn, &mut dq, &mut dst);
+        rig.pump_comp(&bconn, &mut bq, &mut bst);
+    }
+    assert_eq!(
+        bst.finished,
+        vec![Outcome::Cancelled],
+        "the joiner hears the transaction ended as cancelled"
+    );
+    assert!(bst.started.is_empty(), "it never started");
+    assert_eq!(
+        layers_of(&server_bar),
+        1,
+        "the joiner's kept commit applies at once, as an ordinary commit"
+    );
+    // the joiner's surface is no longer staged: it commits as usual
+    let bqh = bq.handle();
+    let child2 = bst.compositor.as_ref().unwrap().create_surface(&bqh, ());
+    let _layer2 = bst
+        .layers
+        .as_ref()
+        .unwrap()
+        .get_layer(&child2, &bar_surf, &bqh, ());
+    bar_surf.commit();
+    for _ in 0..2 {
+        rig.pump_comp(&bconn, &mut bq, &mut bst);
+    }
+    assert_eq!(layers_of(&server_bar), 2, "no commit of it is kept");
+}
+
+#[test]
+fn a_transaction_whose_creator_disconnects_before_it_starts_ends_cancelled() {
+    let mut rig = Rig::new();
+    let (hconn, mut hq, mut hst) = rig.connect_host(&["dock", "menubar"]);
+    let (hdock, dconn, mut dq, mut dst) = rig.spawn_component(&hconn, &mut hq, &mut hst, "dock");
+    let (_hbar, bconn, mut bq, mut bst) = rig.spawn_component(&hconn, &mut hq, &mut hst, "menubar");
+    let (bar_surf, _bar_layer) = rig.create_layer_surface(&bconn, &mut bq, &mut bst, "bar");
+    let server_bar = server_layer_surface(&rig, "bar");
+    let (tx, _tx_bar, _child, _layer) = menu_bar_part_kept(
+        &mut rig,
+        9,
+        (&dconn, &mut dq, &mut dst),
+        (&bconn, &mut bq, &mut bst),
+        &bar_surf,
+    );
+    // the creator submitted too, but its connection ends before the menu bar's part and the deadline came
+    tx.submit();
+    let _ = dconn.flush();
+    drop(tx);
+    drop(dst);
+    drop(dq);
+    drop(dconn);
+    drop(hdock);
+    for _ in 0..4 {
+        rig.pump_comp(&bconn, &mut bq, &mut bst);
+    }
+    assert_eq!(
+        bst.finished,
+        vec![Outcome::Cancelled],
+        "the joiner hears the transaction ended as cancelled"
+    );
+    assert!(bst.started.is_empty(), "it never started");
+    assert_eq!(
+        layers_of(&server_bar),
+        1,
+        "the joiner's kept commit applies at once"
+    );
+}

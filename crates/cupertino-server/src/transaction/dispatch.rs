@@ -390,17 +390,27 @@ impl Dispatch<CupertinoTransactionV1, TransactionObjectData> for Cupertino {
                         if let Some(g) = &mut tx.gesture {
                             g.reverse_gesture = None;
                         }
-                        if matches!(tx.phase, TxPhase::Armed | TxPhase::RestingCompleted) {
-                            tx.phase = TxPhase::Ended {
-                                ended_at: now,
-                                outcome: WireOutcome::Cancelled,
-                            };
+                        match tx.phase {
+                            // the binding ends with the creator's object: an armed transaction is cancelled for all
+                            TxPhase::Armed => {
+                                flush_changes
+                                    .extend(state.transactions.end_cancelled(data.tx_id, now));
+                            }
+                            TxPhase::RestingCompleted => {
+                                tx.phase = TxPhase::Ended {
+                                    ended_at: now,
+                                    outcome: WireOutcome::Cancelled,
+                                };
+                            }
+                            _ => {}
                         }
                     }
                 }
                 for change in flush_changes {
                     state.apply_queued_window_change(change);
                 }
+                // a creator withdrawn before it submitted leaves nothing to start the transaction: it ends as cancelled
+                state.end_abandoned_transactions(now);
                 // a part withdrawn or cancelled before it applied: its kept commits apply now, as ordinary commits
                 state.release_left_holds();
             }
@@ -669,33 +679,7 @@ impl Dispatch<CupertinoTransactionV1, TransactionObjectData> for Cupertino {
                     }
                 } else {
                     // Creator cancel ends the transaction for every participant.
-                    if let Some(tx) = state.transactions.transactions.get_mut(&data.tx_id) {
-                        let before_start = matches!(tx.phase, TxPhase::Pending | TxPhase::Armed);
-                        state.transactions.active_gesture_tx.remove(&tx.output);
-                        for p in &mut tx.participants {
-                            if !p.withdrawn {
-                                for s in &p.staged {
-                                    state
-                                        .transactions
-                                        .staged_surface_owner
-                                        .remove(&s.surface_id);
-                                }
-                                p.staged.clear();
-                                if before_start {
-                                    flush_changes.extend(std::mem::take(&mut p.window_changes));
-                                } else {
-                                    p.window_changes.clear();
-                                }
-                                if let Some(res) = &p.resource {
-                                    res.finished(WireOutcome::Cancelled);
-                                }
-                            }
-                        }
-                        tx.phase = TxPhase::Ended {
-                            ended_at: now,
-                            outcome: WireOutcome::Cancelled,
-                        };
-                    }
+                    flush_changes = state.transactions.end_cancelled(data.tx_id, now);
                 }
                 for change in flush_changes {
                     state.apply_queued_window_change(change);

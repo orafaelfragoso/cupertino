@@ -1703,6 +1703,7 @@ dependencies = [
  "cupertino-screenshot",
  "cupertino-server",
  "cupertino-shell",
+ "cupertino-shell-desktop",
  "cupertino-ui-render",
  "cupertino-wm",
  "image",

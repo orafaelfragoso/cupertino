@@ -5,9 +5,7 @@
 
 mod support;
 
-use std::future::Future;
 use std::io::{BufRead, BufReader};
-use std::pin::Pin;
 use std::process::{Child, Command as Process, Stdio};
 use std::sync::Mutex;
 
@@ -57,10 +55,10 @@ impl Session {
     }
 }
 
-/// The task a test component's loop would run: the connection made, proved and handed over, beside the
-/// connection's own work. This crate's component loop runs no tasks yet, so the component runs them in its `init`.
-fn connect_in_init(name: ComponentName) {
-    let commands = bus::session(
+/// The tasks a test component's `init` gives its loop: the connection made, proved and handed over, beside the
+/// connection's own work, which the loop runs for as long as the component runs.
+fn connect_in_init(name: ComponentName) -> Vec<Command<()>> {
+    bus::session(
         move |connection| {
             let unique = connection.map(|connection| {
                 let unique = connection
@@ -79,20 +77,7 @@ fn connect_in_init(name: ComponentName) {
                 .push((name, unique.map_err(|e| e.to_string()), judged));
         },
         (),
-    );
-    let mut tasks: Vec<Pin<Box<dyn Future<Output = ()> + Send>>> = commands
-        .into_iter()
-        .filter_map(|command| match command {
-            Command::Perform(task) => Some(task),
-            _ => None,
-        })
-        .collect();
-    let mut run = tasks.pop().expect("the connection's work");
-    let mut connect = tasks.pop().expect("the connection made");
-    async_io::block_on(std::future::poll_fn(|cx| {
-        let _ = run.as_mut().poll(cx);
-        connect.as_mut().poll(cx)
-    }));
+    )
 }
 
 macro_rules! component {
@@ -104,8 +89,7 @@ macro_rules! component {
             type Message = ();
 
             fn init() -> ((), Vec<Command<()>>) {
-                connect_in_init($name);
-                ((), Vec::new())
+                ((), connect_in_init($name))
             }
 
             fn update(_: &mut (), _: ()) -> Vec<Command<()>> {

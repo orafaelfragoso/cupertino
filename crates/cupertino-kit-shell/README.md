@@ -28,6 +28,8 @@ A component (`Entry::of`) and a program of its own (`run`, `run_lock_screen`) ru
 connection or the one the server gave the program: each window gets the role `Program::surface` names (layer, menu bar,
 dock or lock surface, persisted before its first buffer; `ready` once the first view's persistent windows were shown),
 the requests the program queued go out before the loop waits, and what the shell and the host bus say reaches
-`Program::event`. Captures are `ext_image_copy_capture_v1` sessions read from shared memory.
+`Program::event`. Captures are `ext_image_copy_capture_v1` sessions read from shared memory on Kit's I/O pool, never on
+the UI thread: a frame is cut to the capture's region (logical points of the upright source) and turned upright by the
+transform the server sent it in, and a region that covers none of the source ends the capture with an error.
 
 The [shell host specification](../../docs/architecture/shell-host.md#cupertino-kit-shell) describes the full component interface.

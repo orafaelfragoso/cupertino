@@ -2,10 +2,11 @@
 //! `cupertino_component_v1`), served from a thread of its own over socket pairs, so the hosting runtime's public
 //! interface runs as a host runs it: `Host::connect` on `WAYLAND_SOCKET`, a component's connection on request, the
 //! bridges' ends, and a bus-name announcement answered with a nonce. Its display globals ([`display`]) let a
-//! component's Kit loop run on its connection.
+//! component's Kit loop run on its connection, and its capture globals ([`capture`]) let a program capture the output.
 
 #![allow(dead_code)]
 
+pub mod capture;
 pub mod display;
 
 use std::collections::HashMap;

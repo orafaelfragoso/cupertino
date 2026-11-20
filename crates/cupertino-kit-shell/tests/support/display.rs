@@ -4,6 +4,8 @@
 //! surface's frame callbacks, and what the stand-in saw goes to [`Seen`].
 
 use std::collections::HashMap;
+use std::fs::File;
+use std::sync::Arc;
 
 use cupertino_protocols::server::app_effects::cupertino_app_effects_v1::{
     self, CupertinoAppEffectsV1,
@@ -46,6 +48,9 @@ pub const OUTPUT_SIZE: (u32, u32) = (1920, 1080);
 /// The versions of the display globals the stand-in offers.
 #[derive(Clone, Copy, Debug)]
 pub struct Offer {
+    /// The output capture globals ([`super::capture`]), whose frames hold the output's picture turned by this
+    /// transform; `None` offers none.
+    pub capture: Option<wl_output::Transform>,
     /// `cupertino_shell_v1`.
     pub shell: u32,
     /// `zwlr_layer_shell_v1`.
@@ -58,6 +63,7 @@ pub struct Offer {
 impl Offer {
     /// The versions a current server offers.
     pub const CURRENT: Offer = Offer {
+        capture: None,
         shell: 26,
         layer_shell: 4,
         app_effects: 1,
@@ -96,6 +102,18 @@ pub(super) fn create_globals(handle: &mut DisplayHandle, offer: Offer) {
     handle.create_global::<State, CupertinoShellV1, ()>(offer.shell, ());
     handle.create_global::<State, CupertinoTransactionManagerV1, ()>(1, ());
     handle.create_global::<State, CupertinoAppEffectsV1, ()>(offer.app_effects, ());
+    if let Some(transform) = offer.capture {
+        super::capture::create_globals(handle, transform);
+    }
+}
+
+/// A buffer in a client's shared memory: the pool's file and where the buffer's pixels are in it.
+pub(super) struct ShmBuffer {
+    pub(super) file: Arc<File>,
+    pub(super) offset: i32,
+    pub(super) width: i32,
+    pub(super) height: i32,
+    pub(super) stride: i32,
 }
 
 /// The session's display options as the stand-in tells them, and the appearance observers it tells them to.
@@ -224,7 +242,6 @@ ignore_requests!(
     WlSeat,
     WlOutput,
     WlCallback,
-    WlBuffer,
     CupertinoWindowManagerV1,
     CupertinoMenuBarV1,
     CupertinoDockV1,
@@ -366,25 +383,55 @@ impl Dispatch<WlShm, ()> for State {
         _: &DisplayHandle,
         init: &mut DataInit<'_, Self>,
     ) {
-        if let wl_shm::Request::CreatePool { id, .. } = request {
-            init.init(id, ());
+        if let wl_shm::Request::CreatePool { id, fd, .. } = request {
+            init.init(id, Arc::new(File::from(fd)));
         }
     }
 }
 
-impl Dispatch<WlShmPool, ()> for State {
+impl Dispatch<WlShmPool, Arc<File>> for State {
     fn request(
         _: &mut Self,
         _: &Client,
         _: &WlShmPool,
         request: wl_shm_pool::Request,
-        _: &(),
+        file: &Arc<File>,
         _: &DisplayHandle,
         init: &mut DataInit<'_, Self>,
     ) {
-        if let wl_shm_pool::Request::CreateBuffer { id, .. } = request {
-            init.init(id, ());
+        if let wl_shm_pool::Request::CreateBuffer {
+            id,
+            offset,
+            width,
+            height,
+            stride,
+            ..
+        } = request
+        {
+            init.init(
+                id,
+                ShmBuffer {
+                    file: Arc::clone(file),
+                    offset,
+                    width,
+                    height,
+                    stride,
+                },
+            );
         }
+    }
+}
+
+impl Dispatch<WlBuffer, ShmBuffer> for State {
+    fn request(
+        _: &mut Self,
+        _: &Client,
+        _: &WlBuffer,
+        _: <WlBuffer as Resource>::Request,
+        _: &ShmBuffer,
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
     }
 }
 

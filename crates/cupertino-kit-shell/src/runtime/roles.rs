@@ -740,7 +740,7 @@ impl SurfaceRoles for ShellRoles {
             self.wire_event(event);
             return None;
         }
-        self.captures.event(event, &self.inbox);
+        self.captures.event(event);
         None
     }
 
@@ -792,7 +792,7 @@ impl SurfaceRoles for ShellRoles {
         for request in context::drain_outgoing() {
             self.execute(conn, request);
         }
-        self.captures.pump(conn);
+        self.captures.pump(conn, &self.inbox);
         self.ready_if_shown();
         self.set_busy(None);
     }

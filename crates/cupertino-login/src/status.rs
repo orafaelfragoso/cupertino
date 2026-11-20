@@ -107,44 +107,15 @@ pub fn host_text(info: HostInfo) -> Option<String> {
 }
 
 fn hostname() -> Option<String> {
-    let mut buf = [0u8; 256];
-    // Safety: the length passed is the buffer's; the name is nul terminated within it on success.
-    let ok = unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) } == 0;
-    let end = buf.iter().position(|&b| b == 0)?;
-    (ok && end > 0).then(|| String::from_utf8_lossy(&buf[..end]).into_owned())
+    cupertino_kit::host::name()
 }
 
 fn first_address() -> Option<String> {
-    let mut list: *mut libc::ifaddrs = std::ptr::null_mut();
-    // Safety: `getifaddrs` fills `list`, which is freed below.
-    if unsafe { libc::getifaddrs(&mut list) } != 0 {
-        return None;
-    }
-    let mut found = None;
-    let mut at = list;
-    while !at.is_null() {
-        // Safety: `at` walks the list `getifaddrs` gave, each entry valid until it is freed.
-        let entry = unsafe { &*at };
-        at = entry.ifa_next;
-        if entry.ifa_addr.is_null() {
-            continue;
-        }
-        // Safety: the address is valid; its family says how to read it.
-        let family = unsafe { (*entry.ifa_addr).sa_family };
-        if i32::from(family) != libc::AF_INET {
-            continue;
-        }
-        // Safety: an AF_INET address is a `sockaddr_in`.
-        let address = unsafe { &*entry.ifa_addr.cast::<libc::sockaddr_in>() };
-        let ip = std::net::Ipv4Addr::from(u32::from_be(address.sin_addr.s_addr));
-        if !ip.is_loopback() {
-            found = Some(ip.to_string());
-            break;
-        }
-    }
-    // Safety: `list` came from `getifaddrs` and is freed once.
-    unsafe { libc::freeifaddrs(list) };
-    found
+    cupertino_kit::host::ipv4_addresses()
+        .ok()?
+        .into_iter()
+        .find(|ip| !ip.is_loopback())
+        .map(|ip| ip.to_string())
 }
 
 #[cfg(feature = "dbus")]

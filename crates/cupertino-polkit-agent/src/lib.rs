@@ -13,7 +13,8 @@
 //! - [`panel`]: where the prompt's parts sit and what a key or a click on them does.
 //! - [`render`]: the scrim and the panel drawn.
 //! - [`users`]: how the prompt names the users polkitd offers.
-//! - [`zeroing`]: the process's allocator, which zeroes every block it frees.
+
+#![forbid(unsafe_code)]
 
 pub mod access;
 pub mod agent;
@@ -27,4 +28,3 @@ pub mod render;
 pub mod surfaces;
 pub mod text;
 pub mod users;
-pub mod zeroing;

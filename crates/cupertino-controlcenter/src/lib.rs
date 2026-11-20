@@ -19,6 +19,8 @@
 //! * feature `app`: [`view`] (the tiles and the outside-click catcher as CupertinoKit windows) and the
 //!   `cupertino-controlcenter` process (the panel on a layer surface as a client of the server).
 
+#![forbid(unsafe_code)]
+
 pub mod arrangement;
 pub mod backend;
 #[cfg(feature = "dbus")]

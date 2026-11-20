@@ -21,7 +21,7 @@ cargo build -p cupertino-polkit-agent --features app
 
 The process:
 
-- makes itself undumpable and sets its core size to zero before anything else;
+- makes itself undumpable and sets its core size to zero before anything else (`cupertino_kit::process::harden`);
 - finds its logind session (`XDG_SESSION_ID`, else by process id) and registers at `/org/cupertino/PolkitAgent` with
   polkitd for that session, again whenever polkitd restarts;
 - answers only polkitd: a `BeginAuthentication` or `CancelAuthentication` from any other bus name is refused, and at
@@ -32,7 +32,8 @@ The process:
   itself rather than rely on the filtering of zbus's proxy streams; its session proxy keeps no property cache;
 - keeps no copy of what is typed: the field is allocated at its limit (512 bytes) so typing never moves it, the answer and
   the line written to the helper are zeroed when dropped, an answer prints as `Answer(<secret>)`, and the process's global
-  allocator (`zeroing::ZeroOnFree`) zeroes every block it frees, which covers what the toolkit's keyboard handling allocates;
+  allocator (`cupertino_login_ipc::zeroing::ZeroOnFree`) zeroes every block it frees, which covers what the toolkit's keyboard
+  handling allocates;
 - reaches the helper through polkit's socket (`/run/polkit/agent-helper.socket`) when it answers, else starts
   `polkit-agent-helper-1` from `/usr/lib/polkit-1/` or `/usr/libexec/` with an empty environment and the cookie on its
   standard input.
@@ -74,7 +75,6 @@ value is protected, so neither what is typed nor its length leaves the process; 
 | `render` | the scrim and the panel drawn with `tiny-skia` |
 | `access` | the tree assistive technology gets |
 | `users` | how the prompt names polkitd's users |
-| `zeroing` | the process's global allocator, which zeroes every block it frees |
 | `surfaces` | the layer surfaces (feature `app`) |
 | `keyring::exchange` | the keyring's secret exchange: DH, HKDF and AES |
 | `keyring::model` | the keyring's callers and its prompt, as a pure model |

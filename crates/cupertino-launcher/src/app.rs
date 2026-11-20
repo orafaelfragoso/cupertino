@@ -526,15 +526,8 @@ fn mime_database() -> MimeDatabase {
 
 /// Seconds east of UTC of local time at `time` (Unix seconds).
 fn local_offset(time: i64) -> i64 {
-    let tt = time as libc::time_t;
-    // SAFETY: a zeroed tm is a valid out value for localtime_r, which reads `tt` and writes only `tm`
-    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-    let converted = unsafe { !libc::localtime_r(&tt, &mut tm).is_null() };
-    if converted {
-        tm.tm_gmtoff
-    } else {
-        0
-    }
+    cupertino_kit::time::local(cupertino_kit::time::from_unix(time))
+        .map_or(0, |local| i64::from(local.utc_offset))
 }
 
 /// Straight RGBA as premultiplied, in place.

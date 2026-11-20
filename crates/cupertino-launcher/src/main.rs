@@ -1,6 +1,8 @@
 //! The `cupertino-launcher` process: shows the launcher panel on a layer surface and toggles it on
 //! `org.cupertino.Launcher1.Toggle`. See the README for how to run it.
 
+#![forbid(unsafe_code)]
+
 mod app;
 
 use cupertino_diagnostic_events as diag;

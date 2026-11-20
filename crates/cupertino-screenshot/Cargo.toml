@@ -19,8 +19,6 @@ app = [
     "dep:cupertino-shell-client",
     "dep:cupertino-ui-wayland",
     "dep:cupertino-wayland-client",
-    "dep:libc",
-    "dep:memmap2",
     "dep:wayland-client",
     "dep:wayland-protocols",
     "dep:cupertino-diagnostic-events",
@@ -41,8 +39,6 @@ cupertino-protocols = { path = "../cupertino-protocols", features = ["client"], 
 cupertino-shell-client = { path = "../cupertino-shell-client", optional = true }
 cupertino-ui-wayland = { path = "../cupertino-ui-wayland", optional = true }
 cupertino-wayland-client = { path = "../cupertino-wayland-client", optional = true }
-libc = { version = "0.2", optional = true }
-memmap2 = { version = "0.9", optional = true }
 wayland-client = { version = "0.31", optional = true }
 wayland-protocols = { version = "0.32", features = ["client", "staging"], optional = true }
 

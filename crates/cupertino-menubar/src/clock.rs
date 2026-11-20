@@ -47,21 +47,15 @@ pub struct LocalTime {
 
 /// The local time of `unix_seconds` in the session's time zone.
 pub fn local_time(unix_seconds: i64) -> LocalTime {
-    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-    let t = unix_seconds as libc::time_t;
-    // Safety: both pointers are valid for the duration of the call.
-    let converted = unsafe { libc::localtime_r(&t, &mut tm) };
-    assert!(
-        !converted.is_null(),
-        "localtime_r cannot represent {unix_seconds}"
-    );
+    let local = cupertino_kit::time::local(cupertino_kit::time::from_unix(unix_seconds))
+        .unwrap_or_else(|| panic!("localtime_r cannot represent {unix_seconds}"));
     LocalTime {
-        weekday: tm.tm_wday as u8,
-        day: tm.tm_mday as u8,
-        month: tm.tm_mon as u8,
-        hour: tm.tm_hour as u8,
-        minute: tm.tm_min as u8,
-        second: tm.tm_sec as u8,
+        weekday: local.weekday,
+        day: local.day,
+        month: local.month - 1,
+        hour: local.hour,
+        minute: local.minute,
+        second: local.second,
     }
 }
 

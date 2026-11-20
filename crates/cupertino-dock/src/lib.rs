@@ -11,6 +11,8 @@
 //! The tile
 //! layout, margins, section order and drag behaviour are approximate or unknown and configurable.
 
+#![forbid(unsafe_code)]
+
 pub mod actions;
 #[cfg(feature = "app")]
 pub use cupertino_apps::activate;

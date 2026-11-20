@@ -1,5 +1,5 @@
 // cupertino-layers --graph
-// 74 crates, 367 internal dependencies
+// 74 crates, 369 internal dependencies
 // per layer: foundation 5, graphics 2, models 6, system 8, platform 5, protocol 3, transport 2, render 3, ui 9, shellkit 1, core 4, services 6, shell 11, apps 2, tools 6, testing 1
 // forbidden normal edge cupertino-controlcenter (shell) -> cupertino-alsa (platform)
 // forbidden normal edge cupertino-controlcenter (shell) -> cupertino-pipewire (platform)
@@ -336,6 +336,8 @@ digraph "layers" {
   "cupertino-polkit-agent" -> "cupertino-diagnostic-events";
   "cupertino-polkit-agent" -> "cupertino-geometry";
   "cupertino-polkit-agent" -> "cupertino-icons";
+  "cupertino-polkit-agent" -> "cupertino-kit";
+  "cupertino-polkit-agent" -> "cupertino-login-ipc";
   "cupertino-polkit-agent" -> "cupertino-peer";
   "cupertino-polkit-agent" -> "cupertino-shell-client" [color=red];
   "cupertino-polkit-agent" -> "cupertino-theme";

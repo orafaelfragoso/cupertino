@@ -9,7 +9,7 @@ layer = "shell"
 
 [features]
 default = ["dbus"]
-dbus = ["dep:zbus", "dep:libc", "dep:cupertino-peer", "dep:cupertino-apps"]
+dbus = ["dep:zbus", "dep:cupertino-peer", "dep:cupertino-apps"]
 # the `cupertino-notifications` process: the banners and the notification centre on CupertinoKit layer surfaces
 app = [
     "dbus",
@@ -37,7 +37,6 @@ cupertino-assets = { path = "../cupertino-assets" }
 cupertino-theme = { path = "../cupertino-theme" }
 cupertino-ui-wayland = { path = "../cupertino-ui-wayland", optional = true }
 cupertino-wayland-client = { path = "../cupertino-wayland-client", optional = true }
-libc = { version = "0.2", optional = true }
 unicode-segmentation = "1.13"
 zbus = { version = "5", optional = true }
 

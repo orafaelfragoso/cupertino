@@ -92,16 +92,11 @@ impl std::error::Error for ExchangeError {}
 pub(crate) fn random(buf: &mut [u8]) -> Result<(), ExchangeError> {
     let mut filled = 0;
     while filled < buf.len() {
-        // Safety: the pointer and length name the unfilled rest of `buf`, which outlives the call.
-        let n =
-            unsafe { libc::getrandom(buf[filled..].as_mut_ptr().cast(), buf.len() - filled, 0) };
-        if n < 0 {
-            if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
-                continue;
-            }
-            return Err(ExchangeError::Random);
+        match rustix::rand::getrandom(&mut buf[filled..], rustix::rand::GetRandomFlags::empty()) {
+            Ok(n) => filled += n,
+            Err(rustix::io::Errno::INTR) => {}
+            Err(_) => return Err(ExchangeError::Random),
         }
-        filled += n as usize;
     }
     Ok(())
 }

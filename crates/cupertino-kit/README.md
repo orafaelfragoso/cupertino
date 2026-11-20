@@ -36,7 +36,13 @@ again on the UI thread. `task::follow_settings` follows settings files (`cuperti
 the UI loop only waits for each burst of changes to be quiet, and the files are read on the I/O pool (deadline
 `task::SETTINGS_READ_DEADLINE`, 2 s). `kit::bus::connect` opens a D-Bus connection whose work the UI loop polls, with no executor
 thread: the connection comes as one message and its close as another. `kit::time` reads the session's local time
-(`local`, `now`) and turns a local date and time back into a moment (`from_local`), daylight saving time included.
+(`local`, `now`) and turns a local date and time back into a moment (`from_local`), daylight saving time included; it
+converts Unix seconds (`from_unix`, `to_unix`), formats a moment by a `strftime` pattern in the locale's words
+(`format`) and gives the locale's time format (`locale_time_format`), which says whether it counts hours to 12 or 24.
+`kit::account` reads the password database (`uid`, `current`, `by_uid`: the login name, the comment with its full name,
+the home); `kit::host` the machine's host name and IPv4 addresses; `kit::process::harden` makes a process that holds a
+typed password undumpable, with no core file; `kit::render::zeroed_pixels` hands over zeroed pixel memory a program fills
+in place. They are the shell's safe way to these calls: shell crates forbid `unsafe` code.
 `kit::spawn` starts a program for the instance the thread runs for, and the instance's UI loop reaps it on its first
 turn after it ends (`test::each_turn`, which every `app::run` installs with `Runtime::with_each_turn`), reporting an
 unsuccessful exit on standard error; no thread waits for it.
@@ -137,7 +143,7 @@ What `shell` and `apps` crates name from the toolkit, where each item is in Kit,
 | `kit::geometry` | `Point`, `Size`, `Rect`, `Insets` |
 | `kit::motion` | [Motion](#motion) |
 | `kit::image` | `decode` (PNG and JPEG within the side the caller allows), `resize`, `crop`, `orient` (upright from an `OutputTransform`, which the module names), `encode_png`, `encode_jpeg`, and `ImageError`: plain functions on `render::ImageResource` that a program runs as a `task::cpu`, each refusing a picture of more pixels than a window drawn on the CPU has |
-| `kit::task`, `kit::bus`, `kit::time`, `kit::file_icons`, `kit::spawn`, `kit::Instance`, `kit::Entered`, `kit::prelude` | as above |
+| `kit::task`, `kit::bus`, `kit::time`, `kit::account`, `kit::host`, `kit::process`, `kit::file_icons`, `kit::spawn`, `kit::Instance`, `kit::Entered`, `kit::prelude` | as above |
 | `kit::test` | [The `test` feature](#the-test-feature) |
 
 `GlassStyle` is one type with two paths, `core::GlassStyle` and `platform::GlassStyle`. `theme::Motion` is the theme's

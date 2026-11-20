@@ -1,8 +1,10 @@
 //! The user the screen is locked for or the login screen lists, and the clock text.
 
+use cupertino_kit::account::{self, Account};
 use cupertino_kit::controls::ImageSource;
 use cupertino_kit::core::next_resource_id;
 use cupertino_kit::render::{ImageResource, PixelFormat};
+use cupertino_kit::time;
 use cupertino_login_ipc::UserRow;
 use std::ffi::CStr;
 use std::fmt;
@@ -29,7 +31,7 @@ pub enum UserError {
         login: String,
         source: Box<dyn std::error::Error>,
     },
-    /// `localtime_r` or `strftime` failed.
+    /// The local time cannot be read or formatted (`kit::time::format`).
     Clock(io::Error),
 }
 
@@ -68,14 +70,12 @@ pub struct User {
 impl User {
     /// The user of this process: the screen is locked for the session's own user.
     pub fn current() -> Result<User, UserError> {
-        // Safety: `getuid` has no preconditions.
-        let uid = unsafe { libc::getuid() };
-        let entry = read_entry(|passwd, buffer, found| unsafe {
-            libc::getpwuid_r(uid, passwd, buffer.as_mut_ptr().cast(), buffer.len(), found)
-        })?;
-        let entry = entry.ok_or(UserError::Unknown { uid })?;
-        let picture = load_picture(PathBuf::from(&entry.home).join(FACE_FILE))?;
-        Ok(entry.into_user(picture))
+        let uid = account::uid();
+        let entry = account::by_uid(uid)
+            .map_err(UserError::Database)?
+            .ok_or(UserError::Unknown { uid })?;
+        let picture = load_picture(entry.home.join(FACE_FILE))?;
+        Ok(user_of(entry, picture))
     }
 
     /// A user typed at the picker's "Other…" tile: the name is whatever was typed and nothing is looked up, so the
@@ -111,64 +111,21 @@ impl User {
     }
 }
 
-/// The fields of a password database entry that the screen needs.
-struct Entry {
-    login: String,
-    gecos: String,
-    home: String,
-}
-
-impl Entry {
-    fn into_user(self, picture: Option<ImageSource>) -> User {
-        let full_name = self.gecos.split(',').next().unwrap_or("").trim();
-        let display = if full_name.is_empty() {
-            self.login.clone()
-        } else {
-            full_name.to_owned()
-        };
-        User {
-            login: self.login,
-            display,
-            picture,
-            uid: None,
-            logged_in: false,
-        }
+/// The user of the password database entry `entry`, shown by the full name of its comment field, else by its name.
+fn user_of(entry: Account, picture: Option<ImageSource>) -> User {
+    let full_name = entry.full_name().trim();
+    let display = if full_name.is_empty() {
+        entry.login.clone()
+    } else {
+        full_name.to_owned()
+    };
+    User {
+        login: entry.login,
+        display,
+        picture,
+        uid: None,
+        logged_in: false,
     }
-}
-
-/// Run a `getpw*_r` call with a buffer that grows until the entry fits; `None` when there is no such entry. `call` gets
-/// the `passwd` to fill, the buffer and the result pointer.
-fn read_entry(
-    call: impl Fn(&mut libc::passwd, &mut [u8], &mut *mut libc::passwd) -> libc::c_int,
-) -> Result<Option<Entry>, UserError> {
-    let mut buffer = vec![0u8; 1024];
-    // Safety: all-zero is a valid `passwd` (null pointers and zero ids), and `call` overwrites it.
-    let mut passwd: libc::passwd = unsafe { std::mem::zeroed() };
-    let mut found: *mut libc::passwd = std::ptr::null_mut();
-    loop {
-        match call(&mut passwd, &mut buffer, &mut found) {
-            0 => break,
-            libc::ERANGE => buffer.resize(buffer.len() * 2, 0),
-            errno => return Err(UserError::Database(io::Error::from_raw_os_error(errno))),
-        }
-    }
-    if found.is_null() {
-        return Ok(None);
-    }
-    // Safety: on success the fields point at nul-terminated strings inside `buffer`.
-    Ok(Some(unsafe {
-        Entry {
-            login: field(passwd.pw_name),
-            gecos: field(passwd.pw_gecos),
-            home: field(passwd.pw_dir),
-        }
-    }))
-}
-
-/// # Safety
-/// `ptr` must point at a nul-terminated string.
-unsafe fn field(ptr: *const libc::c_char) -> String {
-    CStr::from_ptr(ptr).to_string_lossy().into_owned()
 }
 
 /// A decoded picture as the image the screens draw: tiny-skia keeps premultiplied RGBA rows without padding.
@@ -221,9 +178,7 @@ pub fn initials(display: &str) -> String {
 /// The hour cycle of the locale's time format (`LC_TIME`): 12-hour when it names a 12-hour hour (`%I`, `%l` or `%r`),
 /// else 24-hour.
 pub fn locale_hour_cycle() -> cupertino_defaults::menubar::HourCycle {
-    // Safety: `nl_langinfo` returns a pointer to a nul-terminated string that stays valid until the locale changes.
-    let format = unsafe { CStr::from_ptr(libc::nl_langinfo(libc::T_FMT)) };
-    hour_cycle_of(&format.to_string_lossy())
+    hour_cycle_of(&time::locale_time_format())
 }
 
 /// The hour cycle of the `strftime` time format `format`.
@@ -255,20 +210,5 @@ pub fn language_is_rtl(locale: &str) -> bool {
 
 /// Local time `unix_seconds` as text by the `strftime` pattern `format`.
 pub fn format_time(unix_seconds: i64, format: &CStr) -> Result<String, UserError> {
-    let t = unix_seconds as libc::time_t;
-    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-    // Safety: both pointers are valid for the duration of the call.
-    if unsafe { libc::localtime_r(&t, &mut tm) }.is_null() {
-        return Err(UserError::Clock(io::Error::last_os_error()));
-    }
-    let mut buf = [0u8; 128];
-    // Safety: the buffer length is passed and `format` is nul terminated.
-    let n = unsafe { libc::strftime(buf.as_mut_ptr().cast(), buf.len(), format.as_ptr(), &tm) };
-    if n == 0 {
-        return Err(UserError::Clock(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "strftime produced no text",
-        )));
-    }
-    Ok(String::from_utf8_lossy(&buf[..n]).into_owned())
+    time::format(time::from_unix(unix_seconds), format).map_err(UserError::Clock)
 }

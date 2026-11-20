@@ -1,7 +1,14 @@
-//! `kit::time`: a moment in the session's time zone and back, daylight saving time and day arithmetic included.
+//! `kit::time`: a moment in the session's time zone and back, daylight saving time and day arithmetic included, Unix
+//! seconds, and the time as the locale's text.
 
 use cupertino_kit::time::{self, LocalTime};
 use std::time::{Duration, SystemTime};
+
+/// Central European Time with its summer time, named by rule so no zone database is needed. The C library reads the
+/// zone once, so every test that reads local time sets this one zone first.
+fn in_central_european_time() {
+    std::env::set_var("TZ", "CET-1CEST,M3.5.0,M10.5.0/3");
+}
 
 fn at(seconds: i64) -> SystemTime {
     if seconds >= 0 {
@@ -13,9 +20,7 @@ fn at(seconds: i64) -> SystemTime {
 
 #[test]
 fn local_time_follows_the_zone_and_its_daylight_saving_time_both_ways() {
-    // Central European Time with its summer time, named by rule so no zone database is needed; the C library reads
-    // the zone once, so the one test of the process sets it first
-    std::env::set_var("TZ", "CET-1CEST,M3.5.0,M10.5.0/3");
+    in_central_european_time();
     let local = |year, month, day, weekday, hour, minute, second, utc_offset| LocalTime {
         year,
         month,
@@ -67,4 +72,42 @@ fn local_time_follows_the_zone_and_its_daylight_saving_time_both_ways() {
         (1..=12).contains(&now.month) && (1..=31).contains(&now.day),
         "{now:?}"
     );
+}
+
+#[test]
+fn unix_seconds_go_both_ways_and_count_a_part_second_before_the_epoch_as_the_earlier_one() {
+    for seconds in [0, 1, -1, 1_782_907_200, -1_782_907_200] {
+        assert_eq!(time::from_unix(seconds), at(seconds), "{seconds}");
+        assert_eq!(
+            time::to_unix(time::from_unix(seconds)),
+            Some(seconds),
+            "{seconds}"
+        );
+    }
+    let half = Duration::from_millis(500);
+    assert_eq!(time::to_unix(SystemTime::UNIX_EPOCH + half), Some(0));
+    assert_eq!(time::to_unix(SystemTime::UNIX_EPOCH - half), Some(-1));
+}
+
+#[test]
+fn a_moment_is_formatted_in_the_zone_by_the_strftime_pattern() {
+    in_central_european_time();
+    // 2026-07-01 12:00:00 UTC is 14:00 in summer time; the process runs in the C locale, whose names are English
+    let summer = at(1_782_907_200);
+    assert_eq!(time::format(summer, c"%a %b %-d").unwrap(), "Wed Jul 1");
+    assert_eq!(time::format(summer, c"%H:%M").unwrap(), "14:00");
+    assert_eq!(time::format(summer, c"%-I:%M").unwrap(), "2:00");
+    // 2026-12-31 23:30:00 UTC is already the new year here
+    assert_eq!(
+        time::format(at(1_798_759_800), c"%Y-%m-%d %H:%M").unwrap(),
+        "2027-01-01 00:30"
+    );
+    let empty = time::format(summer, c"").unwrap_err();
+    assert_eq!(empty.kind(), std::io::ErrorKind::InvalidData);
+}
+
+#[test]
+fn the_c_locale_counts_hours_to_24() {
+    // no program of the toolkit's tests calls `setlocale`, so `LC_TIME` is the C locale's
+    assert_eq!(time::locale_time_format(), "%H:%M:%S");
 }

@@ -11,6 +11,7 @@ layer = "shell"
 default = []
 # the `cupertino-polkit-agent` and `cupertino-keyring-prompter` processes
 app = [
+    "dep:cupertino-login-ipc",
     "dep:cupertino-shell-client",
     "dep:cupertino-ui-wayland",
     "dep:cupertino-wayland-client",
@@ -22,6 +23,8 @@ cupertino-assets = { path = "../cupertino-assets" }
 cupertino-decorations = { path = "../cupertino-decorations" }
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-icons = { path = "../cupertino-icons" }
+cupertino-kit = { path = "../cupertino-kit" }
+cupertino-login-ipc = { path = "../cupertino-login-ipc", optional = true }
 cupertino-peer = { path = "../cupertino-peer" }
 cupertino-shell-client = { path = "../cupertino-shell-client", optional = true }
 cupertino-theme = { path = "../cupertino-theme" }
@@ -33,7 +36,7 @@ async-channel = "2"
 cbc = { version = "0.1", features = ["alloc"] }
 crypto-bigint = { version = "0.7", default-features = false, features = ["zeroize"] }
 hkdf = "0.12"
-libc = "0.2"
+rustix = { version = "1", features = ["rand"] }
 tiny-skia = "0.12"
 sha2 = "0.10"
 zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }

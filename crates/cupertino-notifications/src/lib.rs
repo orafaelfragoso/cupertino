@@ -11,6 +11,7 @@
 //! Colours and typography come from `cupertino-theme`.
 
 #![allow(clippy::chunks_exact_to_as_chunks)]
+#![forbid(unsafe_code)]
 
 pub mod center;
 #[cfg(feature = "dbus")]

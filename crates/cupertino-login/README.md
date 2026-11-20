@@ -215,7 +215,7 @@ session's login (the shared stack's `authsucc`, or the `authsucc` line of `cuper
 without a password). The lockout message it prints shows as the notice. Not verified on an installed system: enter wrong passwords at the lock screen,
 then `faillock --user $USER` on another console lists them.
 
-The process holds the typed password, so it starts by setting `PR_SET_DUMPABLE=0` and `RLIMIT_CORE=0` (`harden`): it writes no core file and its owner cannot read its memory or environment through `/proc`. Its global allocator (`cupertino_login_ipc::zeroing::ZeroOnFree`) zeroes every block it frees, so the `CString` that pam-client2 drops unzeroed once it has copied the answer into PAM's buffer is cleared too; PAM clears its own copy. Swap can hold a password (no `mlockall`).
+The process holds the typed password, so it starts by setting `PR_SET_DUMPABLE=0` and `RLIMIT_CORE=0` (`cupertino_kit::process::harden`): it writes no core file and its owner cannot read its memory or environment through `/proc`. Its global allocator (`cupertino_login_ipc::zeroing::ZeroOnFree`) zeroes every block it frees, so the `CString` that pam-client2 drops unzeroed once it has copied the answer into PAM's buffer is cleared too; PAM clears its own copy. Swap can hold a password (no `mlockall`).
 
 While it is typed the password lives in the field's `SecureBuffer` (Kit's, zeroed when the field goes), which holds at most
 `MAX_PASSWORD_BYTES` (512, `PAM_MAX_RESP_SIZE`): a key past it is refused, not an edit and not announced, and text from an input

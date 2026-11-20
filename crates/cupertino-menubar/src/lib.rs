@@ -31,6 +31,8 @@
 //! (configurable placeholders); every metric, timer and the safe-triangle rule are approximate and
 //! configurable. The D-Bus interfaces are open Canonical, KDE and GNOME interfaces.
 
+#![forbid(unsafe_code)]
+
 pub mod clock;
 pub mod controller;
 pub mod dbus;

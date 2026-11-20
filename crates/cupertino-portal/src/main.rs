@@ -1,5 +1,7 @@
 //! The `cupertino-portal` process, which the server starts for the session. See the README.
 
+#![forbid(unsafe_code)]
+
 use std::process::ExitCode;
 use std::sync::mpsc;
 use std::time::Duration;

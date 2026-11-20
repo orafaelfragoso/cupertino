@@ -606,21 +606,16 @@ pub struct LocalTime {
 }
 
 impl LocalTime {
-    /// The local wall-clock time now (`localtime_r`, POSIX).
+    /// The local wall-clock time now (`kit::time`).
     pub fn now() -> io::Result<LocalTime> {
-        // SAFETY: `time` with a null pointer only returns the time; `localtime_r` writes the zeroed `tm` it is given.
-        let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-        let now = unsafe { libc::time(std::ptr::null_mut()) };
-        if unsafe { libc::localtime_r(&now, &mut tm) }.is_null() {
-            return Err(io::Error::last_os_error());
-        }
+        let now = cupertino_kit::time::now().ok_or_else(io::Error::last_os_error)?;
         Ok(LocalTime {
-            year: tm.tm_year + 1900,
-            month: (tm.tm_mon + 1) as u32,
-            day: tm.tm_mday as u32,
-            hour: tm.tm_hour as u32,
-            minute: tm.tm_min as u32,
-            second: tm.tm_sec as u32,
+            year: now.year,
+            month: u32::from(now.month),
+            day: u32::from(now.day),
+            hour: u32::from(now.hour),
+            minute: u32::from(now.minute),
+            second: u32::from(now.second),
         })
     }
 

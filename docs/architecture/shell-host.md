@@ -784,6 +784,9 @@ pub enum Event {
     Lock(lock::Event),
     Consent(consent::Event),
     Capture(capture::Event),
+    /// The appearance and display options a Kit program's theme follows (dark, Increase Contrast, Reduce
+    /// Transparency, Reduce Motion, the steady caret): once at start and on every change.
+    Appearance(SystemAppearance),
 }
 ```
 

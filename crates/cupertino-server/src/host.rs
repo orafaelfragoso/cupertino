@@ -675,12 +675,7 @@ impl HostManager {
                 let start = offset + y * stride;
                 tightly_packed.extend_from_slice(&mem[start..start + row_bytes]);
             }
-            let fourcc = match data.format {
-                smithay::reexports::wayland_server::protocol::wl_shm::Format::Xrgb8888 => {
-                    Fourcc::Xrgb8888
-                }
-                _ => Fourcc::Argb8888,
-            };
+            let fourcc = held_shm_fourcc(data.format)?;
             let mem_buf = MemoryRenderBuffer::from_slice(
                 &tightly_packed,
                 fourcc,
@@ -695,6 +690,22 @@ impl HostManager {
             })
         });
         captured.ok().flatten()
+    }
+}
+
+/// The pixel format of a held picture copied from a `wl_shm` buffer of `format` (D19), its bytes kept as they are:
+/// the four-byte formats a renderer imports from memory, so a toolkit's `abgr8888` keeps its colours; `None` for
+/// another format, which leaves the hold without a picture rather than one in the wrong colours.
+pub fn held_shm_fourcc(
+    format: smithay::reexports::wayland_server::protocol::wl_shm::Format,
+) -> Option<Fourcc> {
+    use smithay::reexports::wayland_server::protocol::wl_shm::Format;
+    match format {
+        Format::Argb8888 => Some(Fourcc::Argb8888),
+        Format::Xrgb8888 => Some(Fourcc::Xrgb8888),
+        Format::Abgr8888 => Some(Fourcc::Abgr8888),
+        Format::Xbgr8888 => Some(Fourcc::Xbgr8888),
+        _ => None,
     }
 }
 

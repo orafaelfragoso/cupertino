@@ -1516,3 +1516,17 @@ fn window_manager_placements_stay_held_until_takeover_or_the_hold_timeout() {
         "the held placement ended: the window returns to its frame"
     );
 }
+
+#[test]
+fn a_held_shm_picture_keeps_the_colour_order_of_its_buffer() {
+    use cupertino_server::host::held_shm_fourcc;
+    use smithay::backend::allocator::Fourcc;
+    use smithay::reexports::wayland_server::protocol::wl_shm::Format;
+    // a toolkit's abgr8888 keeps its red and blue where they are
+    assert_eq!(held_shm_fourcc(Format::Abgr8888), Some(Fourcc::Abgr8888));
+    assert_eq!(held_shm_fourcc(Format::Xbgr8888), Some(Fourcc::Xbgr8888));
+    assert_eq!(held_shm_fourcc(Format::Argb8888), Some(Fourcc::Argb8888));
+    assert_eq!(held_shm_fourcc(Format::Xrgb8888), Some(Fourcc::Xrgb8888));
+    // a format the copy does not read four bytes a pixel of leaves the hold without a picture, never a wrong one
+    assert_eq!(held_shm_fourcc(Format::Rgb565), None);
+}

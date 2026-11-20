@@ -1,12 +1,80 @@
 //! The slices of a held surface's picture (D19, [`super::capture_held_surface`]): each drawn over the bounds of its
-//! pieces alone, so a slice holds no more pixels than it draws.
+//! pieces alone, so a slice holds no more pixels than it draws, and a vibrant layer screened over a dark face cut out
+//! on a slice of its own and kept as its coverage, which drawn over what lies behind it screens it in as the live layer
+//! did.
 
+use super::layers::{held_glass_mark, is_held_glass_mark, HeldGlass};
 use super::*;
 use crate::render::content_blur::{reach_px, sigma_px};
+
+/// How far towards white a full coverage of a vibrant layer lifts what lies behind a dark face: `VIBRANT_LIFT` of the
+/// clip shader (`cupertino-server-render/shaders/compositor/clip.frag`). A held vibrant slice keeps the layer's coverage
+/// as white of that coverage, drawn at this opacity: over what lies behind it, the screen the live layer's blend makes of
+/// its grey lift.
+const HELD_VIBRANT_LIFT: f32 = 0.95;
 
 /// Device pixels a held slice reaches past the bounds of its pieces on every side: the renderer's rounding of where it
 /// places them and the antialiasing of their edges.
 const HELD_SLICE_MARGIN_PX: i32 = 1;
+
+/// Whether `piece` is a vibrant layer's content screened in over a dark face, which blends with what lies behind it.
+fn screened(piece: &Piece) -> bool {
+    matches!(piece, Piece::Tree(t) if matches!(t.role, SurfaceRole::Vibrant(b) if b.dark && !b.plain))
+}
+
+/// The pieces of a held surface's layers (`layers`, front to back, glass and hole marks among them) cut directly in
+/// front of and behind each vibrant layer screened over a dark face, so its slice holds its content alone; each cut
+/// takes its place among what is drawn between the slices (`between`) in the order of the marks, drawing nothing.
+pub(super) fn vibrant_cuts(layers: Vec<Piece>, between: &mut Vec<HeldGlass>) -> Vec<Piece> {
+    let mut out = Vec::with_capacity(layers.len());
+    // the marks so far, which name the place of the next among `between`
+    let mut marks = 0;
+    let mut cut_behind = false;
+    let mut cut = |out: &mut Vec<Piece>, marks: &mut usize| {
+        between.insert(*marks, HeldGlass::Cut);
+        *marks += 1;
+        out.push(held_glass_mark());
+    };
+    for piece in layers {
+        let mark = is_held_glass_mark(&piece);
+        if std::mem::take(&mut cut_behind) && !mark {
+            cut(&mut out, &mut marks);
+        }
+        if screened(&piece) {
+            if out.last().is_some_and(|last| !is_held_glass_mark(last)) {
+                cut(&mut out, &mut marks);
+            }
+            cut_behind = true;
+        }
+        if mark {
+            marks += 1;
+        }
+        out.push(piece);
+    }
+    // the surface's own tree follows the layers
+    if cut_behind {
+        cut(&mut out, &mut marks);
+    }
+    out
+}
+
+/// `piece` as a held slice keeps it: a vibrant layer screened over a dark face as its coverage alone, white, its slice
+/// drawn at `opacity` [`HELD_VIBRANT_LIFT`]; any other as it is.
+pub(super) fn as_coverage(piece: Piece, opacity: &mut f32) -> Piece {
+    match piece {
+        Piece::Tree(mut t) => {
+            if let SurfaceRole::Vibrant(ref mut blend) = t.role {
+                if blend.dark && !blend.plain {
+                    // the plain label colour over a dark face is the coverage in white
+                    blend.plain = true;
+                    *opacity = HELD_VIBRANT_LIFT;
+                }
+            }
+            Piece::Tree(t)
+        }
+        piece => piece,
+    }
+}
 
 /// The pieces of one slice of a held surface's picture, drawn at `scale` into a picture of `size_px` device pixels,
 /// moved to draw into the bounds of what they draw there, with those bounds (device pixels of the picture); the whole

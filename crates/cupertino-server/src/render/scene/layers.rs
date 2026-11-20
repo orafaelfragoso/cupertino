@@ -262,7 +262,7 @@ pub struct HeldBackdrops {
 /// What a held surface drew live among its content ([`HeldBackdrops`]): the glass of its layers and subsurfaces, and
 /// the holes of its layers.
 #[derive(Clone)]
-enum HeldGlass {
+pub(super) enum HeldGlass {
     /// The glass of one of its layers, and how the layer made it of its backdrop (lens, blur ramp, edge, shadow, the
     /// pointer's light), made again in each frame in the frame's appearance and lit from its pointer.
     Layer {
@@ -277,6 +277,9 @@ enum HeldGlass {
     /// The hole of one of its layers (the layer's `wl_surface`), whose source the server goes on drawing live where the
     /// live layer drew it, behind the layer's own content and in front of its glass ([`super::holes::held_hole_in_slot`]).
     Hole(smithay::reexports::wayland_server::backend::ObjectId),
+    /// Nothing: the picture is cut there only, around a vibrant layer's coverage, which blends with what lies behind it
+    /// ([`super::held_slices::vibrant_cuts`]).
+    Cut,
 }
 
 impl HeldBackdrops {
@@ -305,7 +308,7 @@ impl HeldBackdrops {
 const HELD_GLASS_MARK: u64 = u64::MAX;
 
 /// The mark of a glass among the pieces of a held surface's capture.
-fn held_glass_mark() -> Piece {
+pub(super) fn held_glass_mark() -> Piece {
     rrect_item(
         SceneKind::Backdrop,
         HELD_GLASS_MARK,
@@ -319,7 +322,7 @@ fn held_glass_mark() -> Piece {
 }
 
 /// Whether `piece` is the mark of a glass ([`held_glass_mark`]).
-fn is_held_glass_mark(piece: &Piece) -> bool {
+pub(super) fn is_held_glass_mark(piece: &Piece) -> bool {
     matches!(piece, Piece::Item(item) if item.id.kind == SceneKind::Backdrop && item.id.index == HELD_GLASS_MARK)
 }
 
@@ -340,7 +343,9 @@ fn piece_kind(piece: &Piece) -> SceneKind {
 /// cut at each glass its layers and subsurfaces draw among them into slices, each a new texture covering the bounds of
 /// what it draws inside `area` (`None` for a slice with nothing in it). The backdrops they draw are left out of the
 /// slices and returned, to be drawn live between them ([`HeldBackdrops`]); so are its layers' holes, the picture cut
-/// directly behind each one's layer content, where the server draws the hole's source live.
+/// directly behind each one's layer content, where the server draws the hole's source live. A vibrant layer screened
+/// over a dark face has a slice of its own, which blends with what lies behind it as the live layer did
+/// ([`super::held_slices::vibrant_cuts`]).
 pub fn capture_held_surface(
     renderer: &mut GlesRenderer,
     p: &mut SceneParams<'_>,
@@ -388,17 +393,20 @@ pub fn capture_held_surface(
     }
     // a layer's hole lies directly behind the layer's content: the picture is cut there too, to draw it live there
     let layers = held_hole_marks(p, layers, &mut between);
-    let mut slices: Vec<Vec<Piece>> = vec![Vec::new()];
+    // a vibrant layer screened over a dark face is cut out on its own, to blend with what lies behind it
+    let layers = super::held_slices::vibrant_cuts(layers, &mut between);
+    let mut slices: Vec<(Vec<Piece>, f32)> = vec![(Vec::new(), 1.0)];
     for piece in layers.into_iter().chain(tree) {
         if is_held_glass_mark(&piece) {
-            slices.push(Vec::new());
+            slices.push((Vec::new(), 1.0));
         } else if piece_kind(&piece) != SceneKind::Backdrop {
-            slices.last_mut()?.push(piece);
+            let (pieces, opacity) = slices.last_mut()?;
+            pieces.push(super::held_slices::as_coverage(piece, opacity));
         }
     }
     // each slice drawn over the bounds of its pieces alone, its texture no larger than they are
     let mut composed = Vec::with_capacity(slices.len());
-    for pieces in slices {
+    for (pieces, opacity) in slices {
         let Some((pieces, bounds)) = super::held_slices::fitted(p, pieces, size_px) else {
             composed.push(None);
             continue;
@@ -413,15 +421,16 @@ pub fn capture_held_surface(
         p.output_px = (bounds.size.w, bounds.size.h);
         let mut stack = Composition::new(p.scale);
         stack.extend(SceneLayer::LayerTop, pieces);
-        composed.push(Some((finish_composition(stack, p), rect)));
+        composed.push(Some((finish_composition(stack, p), rect, opacity)));
     }
     (p.rect, p.output_px, p.for_capture) = saved;
     let mut textures = Vec::with_capacity(composed.len());
     for slice in composed {
         textures.push(match slice {
-            Some((composed, rect)) => Some(crate::host::HeldSlice {
+            Some((composed, rect, opacity)) => Some(crate::host::HeldSlice {
                 pixels: held_slice_texture(renderer, p, composed)?,
                 rect,
+                opacity,
             }),
             None => None,
         });
@@ -919,7 +928,7 @@ fn held_elements(
                     let slice = slice.as_ref()?;
                     let r = slice.rect;
                     let local = Rect::new(at.x + r.x, at.y + r.y, r.w, r.h);
-                    held_texture_piece(p, &slice.pixels, index, local, opacity)
+                    held_texture_piece(p, &slice.pixels, index, local, opacity * slice.opacity)
                 })
                 .collect(),
             crate::host::HeldContent::Memory { buffer, size } => {
@@ -1003,7 +1012,7 @@ fn held_picture_pieces(
             Some(HeldGlass::Hole(layer)) => {
                 out.extend(super::holes::held_hole_in_slot(p, on, layer));
             }
-            None => {}
+            Some(HeldGlass::Cut) | None => {}
         }
     }
     let own = moved(&held.surface);

@@ -243,13 +243,16 @@ pub enum HeldContent {
 }
 
 /// One slice of a held surface's picture drawn by the renderer (D19, [`HeldContent::Texture`]): its pixels (`T`, a
-/// texture as captured, then the snapshot that keeps it) and where they lie.
+/// texture as captured, then the snapshot that keeps it), where they lie and the opacity they are drawn at.
 #[derive(Clone)]
 pub struct HeldSlice<T = crate::render::snapshots::SnapshotOwner> {
     pub pixels: T,
     /// What the pixels cover, in logical points from the surface's top-left corner, on device pixels of the output
     /// they were drawn for: the bounds of what the slice draws.
     pub rect: Rect,
+    /// The opacity the pixels are drawn at, before the surface's own: below 1 for a vibrant layer's coverage, which
+    /// stands for the lift it screens in over a dark face.
+    pub opacity: f32,
 }
 
 /// How far a restarted window manager has come in taking over the placements held on an output (D19).

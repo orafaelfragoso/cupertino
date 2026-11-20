@@ -2261,3 +2261,107 @@ fn a_held_surface_draws_its_hole_between_its_layer_s_content_and_glass_as_live()
          surface's own content"
     );
 }
+
+/// An opaque white pixel.
+const WHITE: [u8; 4] = [255, 255, 255, 255];
+
+#[test]
+fn a_held_surface_screens_its_vibrant_layer_over_what_lies_behind_it_as_live() {
+    use cupertino_theme::Appearance;
+    let mut rig = Rig::headless((480, 300));
+    rig.state.fixed_time = Some(rig.state.now());
+    // over a dark face a vibrant layer's coverage is screened into what lies behind it
+    switch_appearance(&mut rig, Appearance::Dark);
+    let surface_rect = (0, 0, 160, 120);
+    let layer_rect = (40, 30, 80, 60);
+    let (hconn, mut hq, mut hst) = rig.connect_host(&["overview"]);
+    let (_hov, oconn, mut oq, mut ost) = rig.spawn_component(&hconn, &mut hq, &mut hst, "overview");
+    // a persisted clear surface at the output's top left, the wallpaper showing through it, with one vibrant layer over
+    // the middle of it covering all of its bounds
+    let qh = oq.handle();
+    let parent = ost.compositor.as_ref().unwrap().create_surface(&qh, ());
+    let shell_surface = ost.layer_shell.as_ref().unwrap().get_layer_surface(
+        &parent,
+        ost.output.as_ref(),
+        zwlr_layer_shell_v1::Layer::Top,
+        "strip".into(),
+        &qh,
+        (),
+    );
+    shell_surface
+        .set_anchor(zwlr_layer_surface_v1::Anchor::Top | zwlr_layer_surface_v1::Anchor::Left);
+    shell_surface.set_size(160, 120);
+    ost.component_global
+        .as_ref()
+        .unwrap()
+        .persist(&parent, "strip".into());
+    parent.commit();
+    for _ in 0..4 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    let clear = shm_buffer(ost.shm.as_ref().unwrap(), &qh, (160, 120), CLEAR);
+    parent.attach(Some(&clear), 0, 0);
+    parent.damage_buffer(0, 0, 160, 120);
+    let child = ost.compositor.as_ref().unwrap().create_surface(&qh, ());
+    let layer = ost
+        .layers
+        .as_ref()
+        .unwrap()
+        .get_layer(&child, &parent, &qh, ());
+    let (x, y, w, h) = layer_rect;
+    for (property, value) in [
+        (cupertino_layer_v1::Property::X, x),
+        (cupertino_layer_v1::Property::Y, y),
+        (cupertino_layer_v1::Property::Width, w),
+        (cupertino_layer_v1::Property::Height, h),
+    ] {
+        layer.set_value(property, f64::from(value));
+    }
+    layer.set_blend(cupertino_layer_v1::Blend::Vibrant);
+    let white = shm_buffer(ost.shm.as_ref().unwrap(), &qh, (w as i32, h as i32), WHITE);
+    child.attach(Some(&white), 0, 0);
+    child.damage_buffer(0, 0, w as i32, h as i32);
+    child.commit();
+    parent.commit();
+    for _ in 0..6 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    let live = rig.image();
+    let inside = (x + 8, y + 8, w - 16, h - 16);
+    let beside = (x + w + 8, y + 8, w - 16, h - 16);
+    let [lit, plain] = [inside, beside].map(|(px, py, ..)| live.get_pixel(px, py).0);
+    assert!(
+        lit[..3].iter().zip(&plain[..3]).all(|(l, p)| l > p),
+        "the live vibrant layer lifts the wallpaper behind it: {lit:?} over {plain:?}"
+    );
+    assert!(
+        lit[..3].iter().any(|&c| c < 250),
+        "the lift is screened in, short of white: {lit:?}"
+    );
+
+    // the surface's layer role ends, then its connection: the server holds it
+    shell_surface.destroy();
+    for _ in 0..3 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    drop((layer, child, white, clear, parent));
+    drop(ost);
+    drop(oq);
+    drop(oconn);
+    for _ in 0..6 {
+        rig.pump();
+    }
+    assert_eq!(
+        rig.state.hosts.held_surfaces().len(),
+        1,
+        "the surface is held"
+    );
+    let held = rig.image();
+    let most = largest_difference(&live, &held, surface_rect);
+    assert!(
+        most <= HELD_PICTURE_TOLERANCE,
+        "the held vibrant layer is screened over the wallpaper as the live one was, not added to it (largest \
+         difference {most})"
+    );
+    switch_appearance(&mut rig, Appearance::Light);
+}

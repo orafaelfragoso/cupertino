@@ -97,6 +97,7 @@ impl Cupertino {
                         slice.map(|s| HeldSlice {
                             pixels: p.res.snapshots.insert(s.pixels),
                             rect: s.rect,
+                            opacity: s.opacity,
                         })
                     })
                     .collect();

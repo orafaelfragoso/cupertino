@@ -6,7 +6,9 @@
 //! 3. The nonce goes back from that bus connection (`org.cupertino.Session1.AnnounceComponent`), and the server's
 //!    answer (`bus_name`) becomes [`crate::Event::BusIdentity`].
 //!
-//! Only then does the component get the connection, so none of its calls precedes its identity.
+//! Only then does the component get the connection, so none of its calls precedes its identity. A development build
+//! serves the debug interface (`org.cupertino.ShellComponentDebug1`, [`crate::crash`]) on the connection before step 2,
+//! so a call that finds the component's connection by the name the server accepted is answered from the start.
 
 use std::io;
 use std::os::unix::net::UnixStream;
@@ -60,11 +62,11 @@ pub(super) fn session<M: Send + 'static>(
         stream,
         move |connection| async move {
             if let Ok(bus) = &connection {
-                let accepted = prove(&link, bus).await;
                 #[cfg(debug_assertions)]
                 if let Some(serving) = serving {
                     crate::crash::serve(bus, serving).await;
                 }
+                let accepted = prove(&link, bus).await;
                 inbox.push(Event::BusIdentity { accepted });
             }
             connected(connection)

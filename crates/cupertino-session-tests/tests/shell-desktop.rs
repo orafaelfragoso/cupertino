@@ -23,7 +23,6 @@ use std::io::{BufRead, BufReader};
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command as Process, Stdio};
-use std::time::Duration;
 
 use cupertino_kit::geometry::Rect;
 use cupertino_server::host::HostKind;
@@ -228,40 +227,31 @@ fn desktop_connection(rig: &Rig, session: &Connection) -> Option<String> {
         .find(|name| rig.state.hosts.component_of_bus_name(name) == Some("desktop"))
 }
 
-/// How long a call of the desktop's debug interface may go unanswered before it is made again.
-const CALL_WAIT: Duration = Duration::from_secs(2);
-
-/// Have the desktop panic `at` `dispatch`, `paint` or `helper` (`org.cupertino.ShellComponentDebug1`). Its
-/// connection serves the interface only after the server accepted it as the desktop's, and a call that comes between
-/// is never answered: a call unanswered after [`CALL_WAIT`] did nothing, and is made again.
+/// Have the desktop panic `at` `dispatch`, `paint` or `helper` (`org.cupertino.ShellComponentDebug1`), on the
+/// connection the server accepted as the desktop's, which serves the interface from before its announcement.
 fn crash_desktop(rig: &mut Rig, bus: &Connection, at: &'static str) {
-    let mut call: Option<std::thread::JoinHandle<zbus::Result<()>>> = None;
-    rig.until(&format!("the desktop takes a crash at {at}"), |rig| {
-        match call.take() {
-            Some(running) if !running.is_finished() => call = Some(running),
-            Some(ended) => match ended.join().unwrap() {
-                Ok(()) => return true,
-                Err(zbus::Error::InputOutput(e)) if e.kind() == std::io::ErrorKind::TimedOut => {}
-                Err(e) => panic!("the desktop takes a crash at {at}: {e}"),
-            },
-            None => {
-                if let Some(name) = desktop_connection(rig, bus) {
-                    let bus = bus.clone();
-                    call = Some(std::thread::spawn(move || {
-                        bus.call_method(
-                            Some(name.as_str()),
-                            "/org/cupertino/ShellComponentDebug1",
-                            Some("org.cupertino.ShellComponentDebug1"),
-                            "Crash",
-                            &(at,),
-                        )
-                        .map(drop)
-                    }));
-                }
-            }
-        }
-        false
+    let mut name = None;
+    rig.until("the server accepted the desktop's connection", |rig| {
+        name = desktop_connection(rig, bus);
+        name.is_some()
     });
+    let (name, bus) = (name.unwrap(), bus.clone());
+    let call = std::thread::spawn(move || {
+        bus.call_method(
+            Some(name.as_str()),
+            "/org/cupertino/ShellComponentDebug1",
+            Some("org.cupertino.ShellComponentDebug1"),
+            "Crash",
+            &(at,),
+        )
+        .map(drop)
+    });
+    rig.until(&format!("the desktop takes a crash at {at}"), |_| {
+        call.is_finished()
+    });
+    call.join()
+        .unwrap()
+        .unwrap_or_else(|e| panic!("the desktop takes a crash at {at}: {e}"));
 }
 
 /// The host process's anonymous memory (its heap and stacks, which a leak grows), in KiB.
@@ -399,9 +389,7 @@ fn the_desktop_restarts_alone_holding_its_picture_after_injected_panics() {
     let session = Session::start();
     let mut rig = Rig::new("desktop", &["dock", "desktop"], &[]);
     cupertino_server::quit::start_session_service_on(&mut rig.state, Some(session.bus.1.clone()));
-    let bus = zbus::blocking::connection::Builder::session()
-        .and_then(|b| b.method_timeout(CALL_WAIT).build())
-        .expect("the test's bus");
+    let bus = Connection::session().expect("the test's bus");
     let output = rig.state.outputs[0].id;
     let first = Slot::new(0, 0);
     let ground = Ground::take(&mut rig);

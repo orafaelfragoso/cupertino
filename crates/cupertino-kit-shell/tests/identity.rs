@@ -1,7 +1,8 @@
 //! A component's session-bus identity (D20, `shell-host.md#identity`) against a private bus daemon, a stand-in of
 //! `org.cupertino.Session1` and the stand-in server: `bus::session` announces the connection's unique name on the
 //! component's Wayland connection, returns the server's nonce from that bus connection, says the server's answer as
-//! `Event::BusIdentity`, and only then hands the connection over; `Running::shut` cuts the connection off.
+//! `Event::BusIdentity`, and only then hands the connection over; a development build's debug interface answers on the
+//! connection before the announcement does; `Running::shut` cuts the connection off.
 
 mod support;
 
@@ -26,6 +27,12 @@ static CONNECTED: Mutex<Vec<Connected>> = Mutex::new(Vec::new());
 static IDENTITY: Mutex<Vec<(ComponentName, bool)>> = Mutex::new(Vec::new());
 /// The connections, kept open.
 static KEPT: Mutex<Vec<zbus::Connection>> = Mutex::new(Vec::new());
+/// Each announcing bus name, and whether its debug interface answered before the stand-in answered the announcement.
+static DEBUG_SERVED: Mutex<Vec<(String, bool)>> = Mutex::new(Vec::new());
+
+/// The object path of a development build's debug interface, and the interface.
+const DEBUG_PATH: &str = "/org/cupertino/ShellComponentDebug1";
+const DEBUG_INTERFACE: &str = "org.cupertino.ShellComponentDebug1";
 
 /// The stand-in server accepts every component but the dialogs.
 fn accept(component: &str) -> bool {
@@ -42,8 +49,23 @@ impl Session {
         &self,
         nonce: String,
         #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &zbus::Connection,
     ) -> zbus::fdo::Result<()> {
         let sender = header.sender().map(|s| s.to_string()).unwrap_or_default();
+        // a caller that finds the component by the name about to be accepted reaches its debug interface already
+        let debug = connection
+            .call_method(
+                Some(sender.as_str()),
+                DEBUG_PATH,
+                Some("org.freedesktop.DBus.Introspectable"),
+                "Introspect",
+                &(),
+            )
+            .await
+            .ok()
+            .and_then(|reply| reply.body().deserialize::<String>().ok())
+            .is_some_and(|xml| xml.contains(DEBUG_INTERFACE));
+        DEBUG_SERVED.lock().unwrap().push((sender.clone(), debug));
         JUDGED.lock().unwrap().push(sender.clone());
         if self.judge.judge(&sender, &nonce, accept) {
             Ok(())
@@ -214,6 +236,15 @@ fn a_component_proves_its_bus_name_before_it_gets_its_connection() {
         "the agent got its connection before its identity was settled"
     );
     assert_eq!(identity(ComponentName::AGENT), Some(true));
+    // a development build serves the debug interface before it announces the name, so no call that finds the
+    // component by its accepted name comes before the interface
+    assert!(
+        DEBUG_SERVED
+            .lock()
+            .unwrap()
+            .contains(&(unique.clone(), cfg!(debug_assertions))),
+        "the agent's debug interface is served as its announcement is judged"
+    );
     // the name announced on the agent's Wayland connection is its bus connection's
     server.expect(|seen| {
         matches!(seen, Seen::Announced { component, name, .. } if component == "agent" && *name == unique)

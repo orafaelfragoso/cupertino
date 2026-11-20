@@ -112,6 +112,8 @@ impl Blocker for Barrier {
 struct TransactionState {
     surfaces: Vec<(Weak<WlSurface>, Serial)>,
     blockers: Vec<Box<dyn Blocker + Send>>,
+    // blockers that, while pending, have later commits of the transaction's surfaces merged into it
+    coalescing: Vec<Box<dyn Blocker + Send>>,
 }
 
 impl TransactionState {
@@ -165,6 +167,10 @@ impl PendingTransaction {
         self.with_inner_state(|state| state.blockers.push(Box::new(blocker) as Box<_>))
     }
 
+    pub(crate) fn add_coalescing_blocker<B: Blocker + Send + 'static>(&self, blocker: B) {
+        self.with_inner_state(|state| state.coalescing.push(Box::new(blocker) as Box<_>))
+    }
+
     pub(crate) fn is_same_as(&self, other: &PendingTransaction) -> bool {
         let ptr1 = self.with_inner_state(|state| state as *const _);
         let ptr2 = other.with_inner_state(|state| state as *const _);
@@ -201,6 +207,7 @@ impl PendingTransaction {
                 }
             }
             state.blockers.extend(my_state.blockers);
+            state.coalescing.extend(my_state.coalescing);
         });
     }
 
@@ -213,8 +220,16 @@ impl PendingTransaction {
             };
             match inner {
                 TransactionInner::Data(TransactionState {
-                    surfaces, blockers, ..
-                }) => return Transaction { surfaces, blockers },
+                    surfaces,
+                    blockers,
+                    coalescing,
+                }) => {
+                    return Transaction {
+                        surfaces,
+                        blockers,
+                        coalescing,
+                    }
+                }
                 TransactionInner::Fused(into) => self.inner = into,
             }
         }
@@ -225,6 +240,7 @@ impl PendingTransaction {
 pub(crate) struct Transaction {
     surfaces: Vec<(Weak<WlSurface>, Serial)>,
     blockers: Vec<Box<dyn Blocker + Send>>,
+    coalescing: Vec<Box<dyn Blocker + Send>>,
 }
 
 impl fmt::Debug for Box<dyn Blocker + Send> {
@@ -251,11 +267,57 @@ impl Transaction {
         use BlockerState::*;
         self.blockers
             .iter()
+            .chain(&self.coalescing)
             .fold(Released, |acc, blocker| match (acc, blocker.state()) {
                 (Cancelled, _) | (_, Cancelled) => Cancelled,
                 (Pending, _) | (_, Pending) => Pending,
                 (Released, Released) => Released,
             })
+    }
+
+    /// Whether this transaction holds a state of `surface` and a coalescing blocker that is pending
+    fn coalesces(&self, surface: &WlSurface) -> bool {
+        self.coalescing
+            .iter()
+            .any(|blocker| blocker.state() == BlockerState::Pending)
+            && self.surfaces.iter().any(|(s, _)| s == surface)
+    }
+
+    /// Whether this transaction and `other` hold states of a same surface that is alive
+    fn shares_surface_with(&self, other: &Transaction) -> bool {
+        self.surfaces
+            .iter()
+            .filter(|(s, _)| s.is_alive())
+            .any(|(s, _)| other.surfaces.iter().any(|(o, _)| o == s))
+    }
+
+    /// Merge `other`, a transaction made after this one, into this one
+    ///
+    /// Each surface of `other` takes the newer of the two serials. Released blockers are dropped, as they
+    /// no longer hold anything. Returns the surfaces both transactions hold a state of, with the serial
+    /// of this transaction's state and that of the newer one, whose cached states are to be merged
+    /// into one.
+    fn merge(&mut self, other: Transaction) -> Vec<(WlSurface, Serial, Serial)> {
+        let mut collapse = Vec::new();
+        for (surface, id) in other.surfaces {
+            let Ok(surface) = surface.upgrade() else {
+                continue;
+            };
+            if let Some(place) = self.surfaces.iter_mut().find(|(s, _)| *s == surface) {
+                if place.1 < id {
+                    collapse.push((surface, place.1, id));
+                    place.1 = id;
+                }
+            } else {
+                self.surfaces.push((surface.downgrade(), id));
+            }
+        }
+        let held = |blocker: &Box<dyn Blocker + Send>| blocker.state() != BlockerState::Released;
+        self.blockers.retain(held);
+        self.blockers.extend(other.blockers.into_iter().filter(held));
+        self.coalescing.retain(held);
+        self.coalescing.extend(other.coalescing.into_iter().filter(held));
+        collapse
     }
 
     pub(crate) fn apply<C: CompositorHandler + 'static>(self, dh: &DisplayHandle, state: &mut C) {
@@ -286,8 +348,31 @@ pub(crate) struct TransactionQueue {
 }
 
 impl TransactionQueue {
-    pub(crate) fn append(&mut self, t: Transaction) {
+    /// Queue `t`, the transaction a commit of `surface` made
+    ///
+    /// While a queued transaction holding a state of `surface` has a pending coalescing blocker, `t` is
+    /// merged into the last queued transaction it shares a surface with, so its states still apply after
+    /// every earlier state of their surfaces; otherwise it is appended. Returns, for each surface whose
+    /// state was merged into an earlier one, the serials of the earlier state and of the newer one: the
+    /// cached states between them are to be merged into one
+    /// ([`MultiCache::collapse`](super::cache::MultiCache::collapse)).
+    pub(crate) fn coalesce_or_append(
+        &mut self,
+        t: Transaction,
+        surface: &WlSurface,
+    ) -> Vec<(WlSurface, Serial, Serial)> {
+        if self.transactions.iter().any(|queued| queued.coalesces(surface)) {
+            if let Some(into) = self
+                .transactions
+                .iter_mut()
+                .rev()
+                .find(|queued| queued.shares_surface_with(&t))
+            {
+                return into.merge(t);
+            }
+        }
         self.transactions.push(t);
+        Vec::new()
     }
 
     pub(crate) fn take_ready(&mut self) -> Vec<Transaction> {

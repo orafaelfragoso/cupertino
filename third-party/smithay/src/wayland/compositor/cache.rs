@@ -95,6 +95,7 @@ impl<T> CachedState<T> {
 trait Cache: Downcast {
     fn commit(&self, commit_id: Option<Serial>, dh: &DisplayHandle);
     fn apply_state(&self, commit_id: Serial, dh: &DisplayHandle);
+    fn collapse(&self, from: Serial, to: Serial, dh: &DisplayHandle);
 }
 
 impl_downcast!(Cache);
@@ -125,6 +126,26 @@ impl<T: Cacheable + 'static> Cache for Mutex<CachedState<T>> {
                 break;
             }
             me.cache.pop_front().unwrap().1.merge_into(&mut me.current, dh);
+        }
+    }
+
+    fn collapse(&self, from: Serial, to: Serial, dh: &DisplayHandle) {
+        let mut guard = self.lock().unwrap();
+        let me = &mut *guard;
+        // the cached states are in commit order: those from `from` to `to` follow each other
+        let Some(first) = me.cache.iter().position(|&(s, _)| s >= from) else {
+            return;
+        };
+        let mut collapsed: Option<T> = None;
+        while me.cache.get(first).is_some_and(|&(s, _)| s <= to) {
+            let (_, state) = me.cache.remove(first).unwrap();
+            match collapsed.as_mut() {
+                Some(into) => state.merge_into(into, dh),
+                None => collapsed = Some(state),
+            }
+        }
+        if let Some(state) = collapsed {
+            me.cache.insert(first, (to, state));
         }
     }
 }
@@ -219,6 +240,16 @@ impl MultiCache {
         // a &mut reference to the container, non are borrowed.
         for cache in &self.caches {
             cache.apply_state(commit_id, dh);
+        }
+    }
+
+    /// Merge the cached states from commit id `from` to `to` into one, identified by `to`
+    ///
+    /// Each state is merged into the one before it with `Cacheable::merge_into`, as applying them
+    /// in order would merge them into the current state, so the merged state applies as they would.
+    pub(crate) fn collapse(&self, from: Serial, to: Serial, dh: &DisplayHandle) {
+        for cache in &self.caches {
+            cache.collapse(from, to, dh);
         }
     }
 }

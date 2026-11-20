@@ -1436,4 +1436,5 @@ One line per change to a decision or approval of a design: date, number, what, w
   vibrant layer is a white-coverage slice drawn at the shader's lift (`HELD_VIBRANT_LIFT` mirrors `VIBRANT_LIFT` in
   `clip.frag`; change both together); `kit::time` formats in the process's `LC_TIME`, the C locale while no
   program sets one. `cupertino-session-tests/tests/shell-host.rs` runs kit-shell's host and components against the
-  real server headless.
+  real server headless. A part lets go only of staged surfaces it still owns, and a value or cancel that applies answers
+  each animation still waiting for its property `replaced`.

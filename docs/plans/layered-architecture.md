@@ -18,7 +18,7 @@ Updated by the lead at every merge.
 | Current wave | 6 |
 | Running tasks | none |
 | Enforced layers | foundation, system, graphics, models, platform, protocol, transport, render, ui, shellkit, core, services, testing (110 remaining-work lines; zero outside `shell` and `apps`) |
-| Waiting on the owner | W6.2 no-go: 0.70 of the two processes' PSS after the D5 fix, against the 0.60 limit; go on and judge the limit at W6.close, change it, or stop |
+| Waiting on the owner | nothing |
 | Last closed wave | 5 |
 
 ## Contents
@@ -1086,7 +1086,7 @@ Every component task has this shape:
 
 **After** W6.3.
 
-- [ ] The host with `osd` and `notifications` against the two processes of W0.1. Go when its PSS is at most 60% of
+- [x] (owner, 2026-11-20: go; performance is measured once every wave and its bugs are done) The host with `osd` and `notifications` against the two processes of W0.1. Go when its PSS is at most 60% of
       theirs and frame p99 is no worse; the lead records the numbers and the result in the
       [decision log](#decision-log). No-go stops wave 6 and goes to the owner.
 
@@ -1458,3 +1458,6 @@ One line per change to a decision or approval of a design: date, number, what, w
   the two processes. Left per process outside Kit: `cupertino-kit-shell`'s `design.rs` loads the theme data again,
   and the menu bar and control panel call `theme::load()` themselves (their W6 tasks); `SystemIcons` holds its lock
   while drawing and `PackIcons` keeps a second copy of the pixels, not one of D5's forms.
+- 2026-11-20: owner, on W6.2: go. Wave 6 continues; memory and frame measurements wait until every wave and its bugs
+  are done and the desktop is stable, so W6.close records the memory then rather than gating on it. Components keep
+  their restart-leak program test.

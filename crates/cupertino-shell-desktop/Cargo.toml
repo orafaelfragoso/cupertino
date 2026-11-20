@@ -1,0 +1,27 @@
+[package]
+name = "cupertino-shell-desktop"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "The desktop items of the Cupertino desktop, a component of the shell host: the Desktop folder's items on a layer surface of every output, drawn with Kit's file family, kept in a grid between sessions, their file work run on Kit's I/O pool and their copies and moves slice by slice"
+[package.metadata.cupertino]
+layer = "shell"
+
+[dependencies]
+async-channel = "2"
+cupertino-apps = { path = "../cupertino-apps" }
+cupertino-defaults = { path = "../cupertino-defaults" }
+cupertino-icons = { path = "../cupertino-icons" }
+cupertino-kit = { path = "../cupertino-kit" }
+cupertino-kit-shell = { path = "../cupertino-kit-shell" }
+cupertino-trash = { path = "../cupertino-trash" }
+percent-encoding = "2"
+serde_json = "1"
+zbus = { version = "5", default-features = false, features = ["async-io"] }
+
+[dev-dependencies]
+cupertino-assets = { path = "../cupertino-assets" }
+cupertino-kit = { path = "../cupertino-kit", features = ["test"] }
+
+[[example]]
+name = "desktop_capture"

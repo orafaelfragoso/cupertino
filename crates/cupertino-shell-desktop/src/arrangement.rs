@@ -3,10 +3,11 @@
 //! ([`Grid`]). Each item keeps the cell it was put in ([`arrange`]) until it is dragged elsewhere ([`dropped`]), the
 //! desktop is cleaned up ([`cleaned`]) or kept sorted by a key, which lays every item out in that order.
 //!
-//! What the desktop keeps between launches ([`DesktopPrefs`]) is `$XDG_CONFIG_HOME/cupertino/files/desktop.json`
+//! What the desktop keeps between sessions ([`DesktopPrefs`]) is `$XDG_CONFIG_HOME/cupertino/files/desktop.json`
 //! ([`location`]): `{"sort": null | "name" | "kind" | "date-modified" | "size", "positions": {NAME: [COLUMN, ROW]}}`,
 //! column 0 being the rightmost. A missing or malformed file, or a field of another type, gives that field's default; a
-//! write replaces the file atomically.
+//! write replaces the file atomically. [`DesktopPrefs::load`] and [`DesktopPrefs::save`] touch the file, so the
+//! component runs them on Kit's I/O pool.
 
 use std::collections::{BTreeMap, HashSet};
 use std::io;
@@ -14,10 +15,10 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Map, Value};
 
-use crate::metrics::desktop as m;
-use cupertino_geometry::{Insets, Point, Rect};
+use crate::metrics as m;
 use cupertino_kit::files::geom::Direction;
 use cupertino_kit::files::sort::SortKey;
+use cupertino_kit::geometry::{Insets, Point, Rect};
 
 /// A cell of the grid: `column` 0 is the rightmost, `row` 0 the top one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -240,12 +241,19 @@ impl DesktopPrefs {
     }
 
     /// The arrangement kept at `path`; the defaults when it cannot be read.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "runs on the I/O pool (kit::task::io)"
+    )]
     pub fn load(path: &Path) -> DesktopPrefs {
         match std::fs::read_to_string(path) {
             Ok(text) => DesktopPrefs::parse(&text),
             Err(e) => {
                 if e.kind() != io::ErrorKind::NotFound {
-                    eprintln!("cupertino-files: cannot read {}: {e}", path.display());
+                    eprintln!(
+                        "cupertino-shell-desktop: cannot read {}: {e}",
+                        path.display()
+                    );
                 }
                 DesktopPrefs::default()
             }
@@ -253,6 +261,10 @@ impl DesktopPrefs {
     }
 
     /// Keep this arrangement at `path`, replacing what is there.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "runs on the I/O pool (kit::task::io)"
+    )]
     pub fn save(&self, path: &Path) -> io::Result<()> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;

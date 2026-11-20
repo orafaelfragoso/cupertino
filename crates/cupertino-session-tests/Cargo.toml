@@ -26,6 +26,7 @@ cupertino-screenshot = { path = "../cupertino-screenshot" }
 cupertino-server = { path = "../cupertino-server" }
 cupertino-shell = { path = "../cupertino-shell" }
 cupertino-shell-agent = { path = "../cupertino-shell-agent" }
+cupertino-shell-desktop = { path = "../cupertino-shell-desktop" }
 cupertino-ui-render = { path = "../cupertino-ui-render" }
 cupertino-wm = { path = "../cupertino-wm" }
 image = { version = "0.25", default-features = false }

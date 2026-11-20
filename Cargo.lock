@@ -1109,10 +1109,7 @@ dependencies = [
  "cupertino-keyboard",
  "cupertino-kit",
  "cupertino-menu-model",
- "cupertino-theme",
  "cupertino-trash",
- "cupertino-ui-wayland",
- "cupertino-wayland-client",
  "libc",
  "notify",
  "percent-encoding",
@@ -1120,9 +1117,6 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tiny-skia",
- "wayland-client",
- "wayland-protocols",
- "wayland-protocols-wlr",
  "zbus",
  "zeroize",
 ]
@@ -1703,6 +1697,7 @@ dependencies = [
  "cupertino-server",
  "cupertino-shell",
  "cupertino-shell-agent",
+ "cupertino-shell-desktop",
  "cupertino-ui-render",
  "cupertino-wm",
  "image",
@@ -1769,6 +1764,7 @@ dependencies = [
  "cupertino-notifications",
  "cupertino-osd",
  "cupertino-shell-agent",
+ "cupertino-shell-desktop",
 ]
 
 [[package]]
@@ -1801,6 +1797,23 @@ dependencies = [
  "wayland-protocols",
  "wayland-protocols-wlr",
  "wayland-server",
+]
+
+[[package]]
+name = "cupertino-shell-desktop"
+version = "0.1.0"
+dependencies = [
+ "async-channel",
+ "cupertino-apps",
+ "cupertino-assets",
+ "cupertino-defaults",
+ "cupertino-icons",
+ "cupertino-kit",
+ "cupertino-kit-shell",
+ "cupertino-trash",
+ "percent-encoding",
+ "serde_json",
+ "zbus",
 ]
 
 [[package]]

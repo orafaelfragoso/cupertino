@@ -1,5 +1,5 @@
 //! What the desktop draws on each output, and what its presses mean. The main display shows the items of the desktop
-//! folder in their cells ([`crate::desktop`]): the icon, on a grey backdrop when selected, and the name under it in
+//! folder in their cells ([`crate::arrangement`]): the icon, on a grey backdrop when selected, and the name under it in
 //! white with a soft shadow, on an accent capsule when selected.
 //!
 //! * A press on an item selects it alone; with Shift or Primary held it toggles the item. A plain press on a selected
@@ -29,12 +29,13 @@ use cupertino_kit::render::{Effect, Paint, PaintOp, Shape};
 use cupertino_kit::text::{AttributedText, ParagraphLayout, TextStyle};
 use cupertino_kit::theme::{Color, ColorRole, InteractionVariant, StateVariant};
 
-use super::Message;
-use crate::desktop::{backdrop_radius, item_frames};
-use crate::metrics::desktop as m;
+use crate::arrangement::{backdrop_radius, item_frames};
+use crate::component::Message;
+use crate::metrics as m;
 use cupertino_kit::files::grid::laid_out_name;
 use cupertino_kit::files::metrics::{drag, timing::DOUBLE_CLICK_INTERVAL};
 use cupertino_kit::files::rename::{RenameEvent, RenameTrigger};
+use cupertino_kit::motion::Timing;
 
 /// The grey of the backdrop behind a selected icon, before its opacity.
 const BACKDROP_GREY: f32 = 0.35;
@@ -60,7 +61,7 @@ fn selected_variant() -> StateVariant {
 
 /// An item as the desktop shows it.
 #[derive(Clone)]
-pub(super) struct ItemView {
+pub(crate) struct ItemView {
     pub path: PathBuf,
     pub name: String,
     pub is_dir: bool,
@@ -74,26 +75,29 @@ pub(super) struct ItemView {
 
 /// The rubber band as it shows: where, and when it started and was let go.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct BandLook {
+pub(crate) struct BandLook {
     pub rect: Rect,
     pub started: Timestamp,
     pub ended: Option<Timestamp>,
 }
 
 impl BandLook {
-    /// How opaque the band is at `now`: fading in from its start, and out from where it was when let go.
+    /// How opaque the band is at `now`, and whether it still fades: fading in from its start
+    /// ([`Timing::DESKTOP_BAND_FADE_IN`]), and out from where it was when let go ([`Timing::DESKTOP_BAND_FADE_OUT`]).
     fn opacity(&self, now: Timestamp) -> (f64, bool) {
-        let fade_in = |at: Timestamp| {
-            ((seconds(at) - seconds(self.started)) / m::BAND_FADE_IN).clamp(0.0, 1.0)
+        let fade = |timing: Timing, from: Timestamp, at: Timestamp| {
+            let elapsed = (seconds(at) - seconds(from)).max(0.0);
+            (
+                timing.value(elapsed).clamp(0.0, 1.0),
+                elapsed < timing.duration(),
+            )
         };
         match self.ended {
-            None => {
-                let shown = fade_in(now);
-                (shown, shown < 1.0)
-            }
+            None => fade(Timing::DESKTOP_BAND_FADE_IN, self.started, now),
             Some(end) => {
-                let out = ((seconds(now) - seconds(end)) / m::BAND_FADE_OUT).clamp(0.0, 1.0);
-                (fade_in(end) * (1.0 - out), out < 1.0)
+                let (shown, _) = fade(Timing::DESKTOP_BAND_FADE_IN, self.started, end);
+                let (out, fading) = fade(Timing::DESKTOP_BAND_FADE_OUT, end, now);
+                (shown * (1.0 - out), fading)
             }
         }
     }
@@ -110,8 +114,9 @@ fn laid_out(env: &Environment, name: &str) -> Option<ParagraphLayout> {
 }
 
 /// The desktop of one output: its items, the band and the icons a drag moves.
-pub(super) struct Desk {
-    pub output: u32,
+pub(crate) struct Desk {
+    /// The number of the screen it is on.
+    pub output: u64,
     pub label: String,
     pub items: Rc<[ItemView]>,
     pub band: Option<BandLook>,
@@ -137,7 +142,7 @@ struct Banding {
 }
 
 #[derive(Default)]
-pub(super) struct DeskState {
+pub(crate) struct DeskState {
     press: Option<Press>,
     band: Option<Banding>,
     /// The item last pressed, and when.

@@ -19,7 +19,8 @@ use cupertino_kit::file_icons::FileIcons;
 use cupertino_kit::files::places::{session_places, SessionPlaces};
 use cupertino_kit::files::recents;
 
-const USAGE: &str = "usage: cupertino-files [--terminal PROGRAM] [FOLDER | file:///FOLDER | trash:///] | --desktop | \
+const USAGE: &str =
+    "usage: cupertino-files [--terminal PROGRAM] [FOLDER | file:///FOLDER | trash:///] | \
      --gapplication-service";
 
 /// What the command line asks for.
@@ -28,8 +29,6 @@ struct Options {
     target: Option<Target>,
     /// The argv prefix that runs applications with `Terminal=true` (`PROGRAM -e`), as the launcher's.
     terminal: Option<Vec<String>>,
-    /// Show the desktop folder's items on the desktop instead of a browser window.
-    desktop: bool,
     /// Started by the session bus for a call: serve the names and open only the windows the calls ask for.
     service: bool,
 }
@@ -38,7 +37,6 @@ struct Options {
 fn options(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
     let mut folder = None;
     let mut terminal = None;
-    let mut desktop = false;
     let mut service = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -48,7 +46,6 @@ fn options(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
                     "-e".to_string(),
                 ])
             }
-            "--desktop" => desktop = true,
             "--gapplication-service" => service = true,
             a if a.starts_with('-') => return Err(format!("unexpected argument {a}")),
             _ if folder.is_some() => return Err(format!("unexpected argument {arg}")),
@@ -62,16 +59,12 @@ fn options(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
                 .map_err(|e| format!("{arg}: {e}"))
         })
         .transpose()?;
-    if desktop && (target.is_some() || terminal.is_some() || service) {
-        return Err("--desktop takes no other argument".into());
-    }
     if service && target.is_some() {
         return Err("--gapplication-service takes no folder".into());
     }
     Ok(Options {
         target,
         terminal,
-        desktop,
         service,
     })
 }
@@ -86,17 +79,6 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    if options.desktop {
-        // the desktop is a shell process: it serves no browser window, and a failure exit has the server start it again
-        return match kit::desktop::run() {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(e) => {
-                diag::exit_error(&e);
-                eprintln!("cupertino-files: {e}");
-                ExitCode::FAILURE
-            }
-        };
-    }
     // before any thread starts, so no program Files starts inherits the launch's spent token
     let token = instance::take_activation_token();
     if options.service {

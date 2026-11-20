@@ -42,13 +42,17 @@ pub static LAUNCHER: Entry = Entry::of::<cupertino_launcher::component::Launcher
 /// (`cupertino-shell-agent`).
 pub static AGENT: Entry = Entry::of::<cupertino_shell_agent::Agent>();
 
+/// The items of the Desktop folder on the desktop (`cupertino-shell-desktop`).
+pub static DESKTOP: Entry = Entry::of::<cupertino_shell_desktop::Desktop>();
+
 /// The components this build of the host runs. A component the server lists that is not here is answered
 /// `unavailable` (`absent`), and the server runs it the way the rest of its configuration says.
-pub static COMPONENTS: [&Entry; 6] = [
+pub static COMPONENTS: [&Entry; 7] = [
     &OSD,
     &NOTIFICATIONS,
     &CONTROLCENTER,
     &MENUBAR,
     &LAUNCHER,
     &AGENT,
+    &DESKTOP,
 ];

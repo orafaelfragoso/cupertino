@@ -8,17 +8,11 @@ description = "The file manager: directory model with batched enumeration and wa
 layer = "apps"
 
 [features]
-# the `cupertino-files` process: a browser window as a client of the server, and the desktop on a layer surface
+# the `cupertino-files` process: a browser window as a client of the server
 app = [
     "dep:async-channel",
     "dep:cupertino-assets",
-    "dep:cupertino-theme",
-    "dep:cupertino-ui-wayland",
-    "dep:cupertino-wayland-client",
     "dep:notify",
-    "dep:wayland-client",
-    "dep:wayland-protocols",
-    "dep:wayland-protocols-wlr",
     "dep:zbus",
     "dep:zeroize",
     "dep:cupertino-diagnostic-events",
@@ -29,18 +23,12 @@ cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events", optiona
 cupertino-menu-model = { path = "../cupertino-menu-model" }
 cupertino-keyboard = { path = "../cupertino-keyboard" }
 cupertino-apps = { path = "../cupertino-apps" }
-cupertino-theme = { path = "../cupertino-theme", optional = true }
 cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-trash = { path = "../cupertino-trash" }
 cupertino-kit = { path = "../cupertino-kit" }
 cupertino-assets = { path = "../cupertino-assets", optional = true }
 cupertino-icons = { path = "../cupertino-icons" }
-cupertino-ui-wayland = { path = "../cupertino-ui-wayland", optional = true }
-cupertino-wayland-client = { path = "../cupertino-wayland-client", optional = true }
-wayland-client = { version = "0.31", optional = true }
-wayland-protocols = { version = "0.32", features = ["client"], optional = true }
-wayland-protocols-wlr = { version = "0.3", features = ["client"], optional = true }
 async-channel = { version = "2", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

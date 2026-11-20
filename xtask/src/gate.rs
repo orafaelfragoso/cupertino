@@ -197,7 +197,7 @@ const SIZE_LIMITED: [&str; 2] = ["crates/*/src/**", "xtask/src/**"];
 const LARGE_FILE_CAPS: [(&str, usize); 10] = [
     ("crates/cupertino-dock/src/dock.rs", 1536),
     ("crates/cupertino-dock/src/kit.rs", 3346),
-    ("crates/cupertino-files/src/kit/mod.rs", 3377),
+    ("crates/cupertino-files/src/kit/mod.rs", 3376),
     ("crates/cupertino-login/src/view.rs", 1919),
     ("crates/cupertino-login/src/view/widgets.rs", 2832),
     ("crates/cupertino-notifications/src/center.rs", 1511),

@@ -197,6 +197,16 @@ impl Timing {
         easing: Easing::LINEAR,
         seconds: 0.067,
     });
+    /// The desktop's rubber band fading in as a drag on the desktop starts: constant speed over 0.15 s.
+    pub const DESKTOP_BAND_FADE_IN: Timing = Timing(Motion::Eased {
+        easing: Easing::LINEAR,
+        seconds: 0.15,
+    });
+    /// The desktop's rubber band fading out once it is let go: constant speed over 0.2 s.
+    pub const DESKTOP_BAND_FADE_OUT: Timing = Timing(Motion::Eased {
+        easing: Easing::LINEAR,
+        seconds: 0.2,
+    });
 
     /// Progress `seconds` after the start: 0 at the start, 1 at rest; a spring may pass 1.
     pub fn value(self, seconds: f64) -> f64 {

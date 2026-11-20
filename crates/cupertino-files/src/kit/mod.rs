@@ -5,7 +5,6 @@
 mod announce;
 mod columns;
 mod context;
-pub mod desktop;
 mod dragged;
 mod drops;
 mod gallery;

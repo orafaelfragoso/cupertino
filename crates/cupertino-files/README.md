@@ -2,7 +2,8 @@
 
 File-manager core on Kit's file family (`cupertino_kit::files`), with or without the `app` feature, plus the file
 manager itself: the `cupertino-files` binary (feature `app`) runs it as a CupertinoKit application (`kit`). The library implements the data, interaction
-logic and layout metrics a native file manager (and a desktop-icon layer) needs.
+logic and layout metrics a native file manager needs. The desktop's items are `cupertino-shell-desktop`, a component
+of the shell host.
 
 ## Usage
 
@@ -12,7 +13,6 @@ cargo clippy -p cupertino-files --all-targets
 cargo run -p cupertino-files --example files_capture -- files/window --view list   # a window or its sidebar on a sample home folder (`kit::test::capture`)
 cargo run -p cupertino-files --example files_capture -- files/sidebar --devices removable --scale 2   # the sidebar with a mounted, a busy and an unmounted device
 cargo run -p cupertino-files --example files_capture -- files/window --view gallery --state ring   # the view's item ringed under its context menu (also rename, band)
-cargo run -p cupertino-files --example files_capture -- files/desktop   # the desktop's items over a flat fill
 ```
 
 ### The window
@@ -464,7 +464,7 @@ and `metrics::{icon_view, list_view, column_view, timing, selection, marquee, dr
 | `tab_strip` | a window's tabs | `TabStrip::{open, close, select, cycle, move_to, order, active_id}`, `tab_frames`, `drop_place` |
 | `window`, `format` | the window's wording and metrics | `metrics`, `ViewMode`, `path_chain`, `status_text`; `human_size`, `available_size`, `relative_date` |
 | `udisks` (feature `app`) | removable media | `devices` (the listed file systems and locked containers of udisks' managed objects), `Volumes::{watch, poll, mount, unlock, eject}` → `Report`, `Media` (the listed devices and the busy ones), `Passphrase`, `holders`, `notice` (a failure's notification text) |
-| `kit` (feature `app`) | the window on CupertinoKit; driven headless through `cupertino_kit::test` | `prepare(Start::open(folder, places, types, recents, notices, applications, terminal))`, with `with_file_icons`, `with_thumbnails`, `with_places_source`, `with_instance` and `with_activation_token`, then `run` or a `TestDriver<Files>`; `view_events` (the file views' events as the window's), `toolbar` (pop-up buttons, path bar folders), `sidebar` (material, keyboard watch), `places` (live places), `transfer` (the worker of a file operation: `Work` → `Outcome`), `jobs` (the file operations of the process and when the progress window shows; `PROGRESS_WINDOW_DELAY`, `Start::with_progress_delay`), `progress` (the progress window, and the click on a window's row that shows it), `remote` (what the calls of later launches and of the desktop do), `context` (context menus), `search` (the field's slot and "No Results"), `dragged` (drag images), `drops` (drops onto folders, places, the path bar and the folder shown), `spring` (spring-loaded folders and the way back), `columns` (the column view), `gallery` (the gallery), `peek` (the preview window), `tabs` (the tab bar and a tab's parked state), `tag_editor` (the tags popover), `desktop` (the desktop: `run`, and `prepare` for a `TestDriver<Desktop>`) |
+| `kit` (feature `app`) | the window on CupertinoKit; driven headless through `cupertino_kit::test` | `prepare(Start::open(folder, places, types, recents, notices, applications, terminal))`, with `with_file_icons`, `with_thumbnails`, `with_places_source`, `with_instance` and `with_activation_token`, then `run` or a `TestDriver<Files>`; `view_events` (the file views' events as the window's), `toolbar` (pop-up buttons, path bar folders), `sidebar` (material, keyboard watch), `places` (live places), `transfer` (the worker of a file operation: `Work` → `Outcome`), `jobs` (the file operations of the process and when the progress window shows; `PROGRESS_WINDOW_DELAY`, `Start::with_progress_delay`), `progress` (the progress window, and the click on a window's row that shows it), `remote` (what the calls of later launches and of the desktop do), `context` (context menus), `search` (the field's slot and "No Results"), `dragged` (drag images), `drops` (drops onto folders, places, the path bar and the folder shown), `spring` (spring-loaded folders and the way back), `columns` (the column view), `gallery` (the gallery), `peek` (the preview window), `tabs` (the tab bar and a tab's parked state), `tag_editor` (the tags popover) |
 | `instance` (feature `app`) | one process per session | `Service::serve` (the names, `org.freedesktop.Application` and `org.freedesktop.FileManager1`; `take` the waiting `Call`s), `serve_or_forward` → `Launch::{Serve, Forwarded}`, `Target::{of_argument, of_uri, uri, folder}`, `Request`, `Action`, `take_activation_token`, `FORWARD_TIMEOUT`, `BUS_NAME`, `OBJECT_PATH` |
 | `main` (feature `app`) | the binary | arguments, the hand-over to a running Files, the session's places, types, associations and buses, then `kit::run` |
 

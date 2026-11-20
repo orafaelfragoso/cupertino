@@ -26,14 +26,14 @@
 //! strokes its own edge along the glass's continuous outline, as the compositor draws it ([`super::edge_outside`]).
 //!
 //! [`close_changes`] are the layers' changes for a close from rest: on the close's ease-out over
-//! [`CLOSE_DURATION`], the glass grows to the enclosure's closing shape, its edge following it, the content and the
+//! [`CLOSE`], the glass grows to the enclosure's closing shape, its edge following it, the content and the
 //! glass's edge blur to the close's blur, everything fades out, and the mode buttons move out with the group.
 
 use super::modes::{JOIN_CONTAINER, JOIN_SPACING};
 use super::{
     edge_alpha, edge_outside, enclosure_radius, enclosure_rect, mode_rects_of, Input, EDGE_WIDTH,
 };
-use crate::motion::{Frame, Header, Motion, CLOSE_BLUR, CLOSE_DURATION, OPEN_FADE};
+use crate::motion::{Frame, Header, Motion, CLOSE, CLOSE_BLUR, OPEN_FADE};
 use cupertino_kit::controls::CaretBlink;
 use cupertino_kit::core::{
     Change, Element, Event, EventCx, MeasureCx, PaintCx, Propagation, SemanticsCx,
@@ -41,7 +41,7 @@ use cupertino_kit::core::{
 };
 use cupertino_kit::geometry::{Point, Rect, Size};
 use cupertino_kit::layout::{Constraints, ContainerKind, LayoutSpec, Measured, SizeSpec};
-use cupertino_kit::motion::{Easing, SpringPreset, Timing};
+use cupertino_kit::motion::{SpringPreset, Timing};
 use cupertino_kit::platform::{
     GlassStyle, LayerChange, LayerEdge, LayerProperty, SurfaceLayerLook,
 };
@@ -648,7 +648,7 @@ pub fn close_changes(
     to: &Frame,
     modes: usize,
 ) -> Vec<(u64, Vec<LayerChange>)> {
-    let curve = Some(Easing::EASE_OUT.over(CLOSE_DURATION));
+    let curve = Some(CLOSE);
     let go = |property, value: f64| LayerChange::new(property, value, curve);
     let fade = || go(LayerProperty::Opacity, 0.0);
     let (rest, end) = (enclosure_rect(extent, from), enclosure_rect(extent, to));
@@ -729,7 +729,7 @@ pub fn open_changes(
     start: f64,
 ) -> Vec<(u64, Vec<LayerChange>)> {
     let spring = Some(Timing::from(SpringPreset::LAUNCHER_OPEN));
-    let fade = Some(Easing::LINEAR.over(OPEN_FADE));
+    let fade = Some(OPEN_FADE);
     // a property set where the open starts and moved to where it rests along `curve`
     let from_to = |out: &mut Vec<LayerChange>, property, a: f64, b: f64, curve| {
         if a != b {
@@ -835,7 +835,7 @@ pub fn field_open_changes(
     caret: Option<CaretBlink>,
 ) -> Vec<(u64, Vec<LayerChange>)> {
     let count = rest.modes.count;
-    let fade = Some(Easing::LINEAR.over(OPEN_FADE));
+    let fade = Some(OPEN_FADE);
     let opacity = |out: &mut Vec<LayerChange>| {
         out.push(LayerChange::new(LayerProperty::Opacity, first.alpha, None));
         out.push(LayerChange::new(LayerProperty::Opacity, rest.alpha, fade));
@@ -941,7 +941,7 @@ pub fn caret_opacity(first: f64, rest: f64, open: f64, blink: CaretBlink) -> Lay
     let values: Arc<[f32]> = (0..count)
         .map(|i| {
             let t = duration * i as f64 / last;
-            let fade = first + (rest - first) * (t / OPEN_FADE).min(1.0);
+            let fade = first + (rest - first) * OPEN_FADE.value(t);
             (fade * f64::from(blink.opacity(t))) as f32
         })
         .collect();

@@ -826,9 +826,10 @@ impl Launcher {
         actions
     }
 
-    /// The folder Reveal opens for `path`: the path itself when it is a folder, else the folder holding it.
-    pub fn reveal_folder(path: &std::path::Path) -> PathBuf {
-        if path.is_dir() {
+    /// The folder Reveal opens for `path`: the path itself when it is a folder (`is_dir`, as the index found it), else
+    /// the folder holding it.
+    pub fn reveal_folder(path: &std::path::Path, is_dir: bool) -> PathBuf {
+        if is_dir {
             path.to_path_buf()
         } else {
             path.parent()
@@ -839,8 +840,10 @@ impl Launcher {
 
     /// The command that opens the folder of `path` in the session's file manager ([`FILE_MANAGER_ID`]) when it is
     /// installed, else with the open command.
-    pub fn reveal_command(&self, path: &std::path::Path) -> Option<CommandSpec> {
-        let folder = Self::reveal_folder(path).to_string_lossy().into_owned();
+    pub fn reveal_command(&self, path: &std::path::Path, is_dir: bool) -> Option<CommandSpec> {
+        let folder = Self::reveal_folder(path, is_dir)
+            .to_string_lossy()
+            .into_owned();
         match self.entry(FILE_MANAGER_ID) {
             Some(entry) => exec::command_for_entry(entry, &[folder]),
             None => self.open_with(&folder),
@@ -859,14 +862,16 @@ impl Launcher {
     ) -> Activation {
         match (&action.kind, &item.action) {
             (ActionKind::Default, _) => self.activate(item, query, now),
-            (ActionKind::Reveal, Action::OpenPath(path)) => match self.reveal_command(path) {
-                Some(spec) => {
-                    self.frecency
-                        .record(&item.id, &Query::new(query).normalized(), now);
-                    Activation::Run(spec)
+            (ActionKind::Reveal, Action::OpenPath(path)) => {
+                match self.reveal_command(path, item.kind == ItemKind::Folder) {
+                    Some(spec) => {
+                        self.frecency
+                            .record(&item.id, &Query::new(query).normalized(), now);
+                        Activation::Run(spec)
+                    }
+                    None => Activation::Nothing,
                 }
-                None => Activation::Nothing,
-            },
+            }
             (ActionKind::CopyPath, Action::OpenPath(path)) => {
                 Activation::CopyToClipboard(path.to_string_lossy().into_owned())
             }

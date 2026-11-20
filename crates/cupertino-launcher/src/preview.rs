@@ -5,7 +5,6 @@
 
 use cupertino_kit::controls::ImageSource;
 use cupertino_kit::geometry::Size;
-use std::sync::{Arc, Condvar, Mutex};
 
 /// The picture the pane shows above the result's name.
 #[derive(Clone, Debug, PartialEq)]
@@ -283,66 +282,4 @@ pub fn fit(size: Size, limit: Size) -> Size {
         (size.width * scale).round().max(1.0),
         (size.height * scale).round().max(1.0),
     )
-}
-
-/// Runs jobs one at a time on a thread of its own, only the newest: a job handed over while another runs replaces the
-/// one still waiting, which is dropped unrun. Moving through the results asks for a preview at every step; this keeps
-/// the reads (and the decoding of large pictures) from piling up on threads of their own. The thread ends when the
-/// reader is dropped, after the job it runs.
-pub struct LatestOnly<J: Send + 'static> {
-    shared: Arc<(Mutex<Slot<J>>, Condvar)>,
-}
-
-struct Slot<J> {
-    job: Option<J>,
-    closed: bool,
-}
-
-impl<J: Send + 'static> LatestOnly<J> {
-    /// A reader whose thread, named `name`, hands each job to `run`.
-    pub fn new(name: &str, mut run: impl FnMut(J) + Send + 'static) -> std::io::Result<Self> {
-        let shared = Arc::new((
-            Mutex::new(Slot {
-                job: None,
-                closed: false,
-            }),
-            Condvar::new(),
-        ));
-        let theirs = Arc::clone(&shared);
-        std::thread::Builder::new()
-            .name(name.to_owned())
-            .spawn(move || loop {
-                let (lock, ready) = &*theirs;
-                let mut slot = lock.lock().unwrap_or_else(|e| e.into_inner());
-                while slot.job.is_none() && !slot.closed {
-                    slot = ready.wait(slot).unwrap_or_else(|e| e.into_inner());
-                }
-                if slot.closed {
-                    return;
-                }
-                let job = slot.job.take();
-                drop(slot);
-                if let Some(job) = job {
-                    run(job);
-                }
-            })?;
-        Ok(Self { shared })
-    }
-
-    /// Run `job` next, in place of any job still waiting.
-    pub fn submit(&self, job: J) {
-        let (lock, ready) = &*self.shared;
-        lock.lock().unwrap_or_else(|e| e.into_inner()).job = Some(job);
-        ready.notify_one();
-    }
-}
-
-impl<J: Send + 'static> Drop for LatestOnly<J> {
-    fn drop(&mut self) {
-        let (lock, ready) = &*self.shared;
-        let mut slot = lock.lock().unwrap_or_else(|e| e.into_inner());
-        slot.closed = true;
-        slot.job = None;
-        ready.notify_one();
-    }
 }

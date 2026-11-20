@@ -8,7 +8,7 @@
 //! `.ignore` files found on the way (patterns, negation, directory-only, anchored and `** globs)
 //! and extra patterns from the configuration. Symbolic links are never followed.
 //!
-//! Building is blocking; run it on a thread ([`FileIndex::spawn_build`]) and hand the finished
+//! Building is blocking: a host runs [`FileIndex::build`] on Kit's I/O pool and hands the finished
 //! index to the launcher.
 
 use crate::matcher::{self, fold_char, Candidate, CandidateField, Query, Weights};
@@ -253,6 +253,11 @@ impl FileIndex {
         }
     }
 
+    /// Walk the root as `config` bounds it. It reads the file system: a host runs it as a task of the I/O pool.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the walk is the I/O pool's work, never the UI thread's"
+    )]
     pub fn build(config: FileSearchConfig) -> FileIndex {
         let started = Instant::now();
         let mut entries = Vec::new();
@@ -344,10 +349,6 @@ impl FileIndex {
             truncated,
             dirs_read,
         }
-    }
-
-    pub fn spawn_build(config: FileSearchConfig) -> std::thread::JoinHandle<FileIndex> {
-        std::thread::spawn(move || FileIndex::build(config))
     }
 
     pub fn len(&self) -> usize {

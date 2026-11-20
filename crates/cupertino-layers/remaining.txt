@@ -16,7 +16,6 @@ apps facade cupertino-settings -> cupertino-wayland-client normal
 apps forbidden_edge cupertino-files -> cupertino-wayland-client normal
 apps forbidden_edge cupertino-settings -> cupertino-wayland-client normal
 shell disallowed_methods cupertino-dock clippy.toml
-shell disallowed_methods cupertino-launcher clippy.toml
 shell disallowed_methods cupertino-login clippy.toml
 shell disallowed_methods cupertino-polkit-agent clippy.toml
 shell disallowed_methods cupertino-portal clippy.toml
@@ -34,11 +33,6 @@ shell facade cupertino-dock -> cupertino-animation normal
 shell facade cupertino-dock -> cupertino-shell-client normal
 shell facade cupertino-dock -> cupertino-ui-wayland normal
 shell facade cupertino-dock -> cupertino-wayland-client normal
-shell facade cupertino-launcher -> cupertino-animation normal
-shell facade cupertino-launcher -> cupertino-shell-client normal
-shell facade cupertino-launcher -> cupertino-ui-text normal
-shell facade cupertino-launcher -> cupertino-ui-wayland normal
-shell facade cupertino-launcher -> cupertino-wayland-client normal
 shell facade cupertino-login -> cupertino-raster-math normal
 shell facade cupertino-login -> cupertino-shell-client normal
 shell facade cupertino-login -> cupertino-ui-wayland normal
@@ -54,8 +48,6 @@ shell facade cupertino-portal -> cupertino-wayland-client normal
 shell facade cupertino-windowmanager -> cupertino-protocols normal
 shell forbidden_edge cupertino-dock -> cupertino-shell-client normal
 shell forbidden_edge cupertino-dock -> cupertino-wayland-client normal
-shell forbidden_edge cupertino-launcher -> cupertino-shell-client normal
-shell forbidden_edge cupertino-launcher -> cupertino-wayland-client normal
 shell forbidden_edge cupertino-login -> cupertino-raster-math normal
 shell forbidden_edge cupertino-login -> cupertino-seat normal
 shell forbidden_edge cupertino-login -> cupertino-shell-client normal

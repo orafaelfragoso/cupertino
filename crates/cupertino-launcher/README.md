@@ -7,42 +7,45 @@ panel it shows the application browser: every application, filtered by category 
 opens. It draws its panel with CupertinoKit.
 
 The crate has no Smithay dependency. The engine and the panel state are separate from the window, so a host can run queries on
-any thread. The `cupertino-launcher` process is the host for the desktop: a CupertinoKit application whose windows sit on layer
+any thread. The `component` module is the host for the desktop: a component of the shell host whose windows sit on layer
 surfaces. Panel geometry, keyboard semantics, the top-hit rule and the section limits follow the analysis of the design's launcher.
 Ranking scores, row heights and the other items marked approximate are authored and configurable. Colours, type, controls and the
 material come from Kit's theme.
 
 ## Running
 
-Feature `app` builds the `cupertino-launcher` binary: the panel on a layer surface, as a client of `cupertino-server` on
-`cupertino-kit` (`cupertino_kit::app::run_on`) with `cupertino-shell-client`'s layer surfaces as the windows' roles. The server starts and restarts it through the `shell` key of its configuration.
+The launcher is a component of the shell host (`cupertino-shell`, entry `launcher` of its `COMPONENTS`): the
+`Component` `component::Launcher`, a library with no binary of its own. The host runs it on a thread of its own with its
+own connection to the server and to the session bus, and starts it again alone when it fails; the server starts the host.
+With the desktop's nested server (`cargo run -p cupertino-server -- --winit --spawn foot`) `Super+Space` opens the
+panel.
 
-```json
-{"shell": [{"name": "launcher", "command": ["cupertino-launcher", "--terminal", "foot"]}]}
-```
-
-```
-cargo build -p cupertino-launcher --features app
-cupertino-launcher [--no-files] [--terminal PROGRAM]
-```
-
-| Option or file | Default | Effect |
+| File | Default | Effect |
 |---|---|---|
-| `launcher.conf` (`$CUPERTINO_LAUNCHER_CONF`) | every kind on | Read each time the launcher opens: which kinds of result it lists (applications, folders, files, calculator, actions), whether it marks a top hit, and the folders the file search leaves out. |
-| `--no-files` | files indexed | Do not index the home directory for file results. Otherwise a background thread builds the index on the first show. |
-| `--terminal PROGRAM` | the first installed of `xdg-terminal-exec`, `$TERMINAL`, `foot`, `alacritty`, `kitty`, `wezterm`, `xterm` | Run entries with `Terminal=true` as `PROGRAM -e …` (`xdg-terminal-exec` takes the command without `-e`). |
+| `launcher.conf` (`$CUPERTINO_LAUNCHER_CONF`) | every kind on | Read as the component starts and again at each change (watched): which kinds of result it lists (applications, folders, files, calculator, actions), whether it marks a top hit, and the folders the file search leaves out, applied the next time the panel opens. |
 | `~/.local/share/cupertino/launcher.json` (`$XDG_DATA_HOME/cupertino/launcher.json`) | none | The launch history (see Persistence). |
+
+Entries with `Terminal=true` run in the first installed of `xdg-terminal-exec`, `$TERMINAL`, `foot`, `alacritty`, `kitty`,
+`wezterm` and `xterm`, as `PROGRAM -e …` (`xdg-terminal-exec` takes the command without `-e`). The home folder is indexed
+for file results the first time the panel shows, unless `launcher.conf` turns files off.
+
+**What a restart loses.** The panel's query, its results, the browser's arrangement and scroll positions, and a launch made
+in the moment before whose history write had not finished. A shown panel goes with the component that failed, and the
+keyboard returns to the window that had it. The launch history, `launcher.conf`, the applications and the file index are
+read again as the component starts.
 
 Kit follows the session's appearance and display options: Reduce Transparency and Increase Contrast give the panel the opaque
 fill and the high-contrast colours.
 
 ## How it works
 
-**Windows.** The process is one Kit application with three windows, each on a layer surface (namespace `cupertino-launcher`)
-that `LauncherRoles` gives it, none of them on an output, so the server puts them on its active output, the one the person works on:
+**Windows.** The component shows two windows while the panel is up and none while it is hidden, each on a layer surface
+(namespace `cupertino-launcher`) that `Program::surface` describes, both transient: the server dismisses them when the
+component stops. They go on the output a `TogglePanel` publication of the host bus names, else on none, so the server puts
+them on its active output, the one the person works on:
 
 * the panel: overlay layer, anchored to the top only (so centred horizontally), the panel's top edge at 203/982 of the output's
-  height, with exclusive keyboard interactivity. The enclosure (the panel's shape: `view::compact_shape`, `view::search_shape`,
+  height, with exclusive keyboard interactivity while the panel is shown and none while it closes. The enclosure (the panel's shape: `view::compact_shape`, `view::search_shape`,
   `view::browse_shape`) sits in a window with room for its shadow on every side (`view::window_extent`). While the shape moves,
   the window holds both the shape presented and the one it heads for, and once it settles the window is exactly the target's, so
   it never cuts the enclosure off mid-way nor keeps room it no longer needs. Where the window system shows surface layers
@@ -51,8 +54,8 @@ that `LauncherRoles` gives it, none of them on an output, so the server puts the
   overshoot, on the 4 pt grid and within the output's room below the panel), so a fold or unfold the compositor runs never
   waits for the window to be configured again; hidden, the panel has no window. Its input region is the enclosure and the
   mode buttons (`view::enclosure_rect`) while the panel is open and nothing while it closes, so a press beside the panel
-  reaches the catcher. When the window's size changes the model asks the host to resize the surface
-  (`LayerSurface::set_placement`), and the server's configure gives Kit the new size. A settled shape's width and height are multiples of 4 pt (`view::SHAPE_GRID`), so the glass
+  reaches the catcher. When the window's size changes the surface's size follows with the window's next frame
+  (`Program::surface` gives `Model::extent`), and the server's configure gives Kit the new size. A settled shape's width and height are multiples of 4 pt (`view::SHAPE_GRID`), so the glass
   ends on whole device pixels at 1, 1.25, 1.5, 1.75 and 2. The window is transparent: the enclosure is large-panel glass
   (`Glass::large_panel`, the regular recipe blurred twice as wide with a refraction band at most 6 pt deep and a face of its
   own: in the dark appearance its tones pressed together, a lower white, a lifted black and a little less saturation; in the
@@ -94,15 +97,10 @@ that `LauncherRoles` gives it, none of them on an output, so the server puts the
 * the catcher: top layer, over the whole output, below the panel; a press on it closes the panel. It is
   `WindowBackground::INPUT_ONLY`: a transparent single pixel the compositor stretches over the output, so it costs no
   drawing or upload at any output size or scale (a compositor without one-pixel buffers gets a drawn transparent frame);
-* while the panel is hidden, one transparent point that takes no input, so the process always has a mapped surface.
-
-Opening the panel closes the hidden window and opens the panel and the catcher; closing it does the reverse. A panel or catcher
-window the server closes (its output went away) closes the panel; a hidden window it closes is replaced by a new one
-(`Message::Remap`, a new window key), which the server puts on an output still there, so the process keeps running. With no
-output left the new one waits until one comes back (`Message::Outputs`), as the server closes a window put on none at once. The panel's
-margin is first guessed from the first output's height, since the output the server picks is not known before the configure; the
-catcher's configure gives the height of the output both were put on, and `LauncherRoles` corrects the margin
-(`LayerSurface::set_margin`) when it differs, before the panel's first frame commits it.
+A panel or catcher window the server closes (its output went away) hides the panel at once (`Message::Gone`), and so does
+the session lock (`Message::Locked`). The panel's margin and the browser's height come from the size of the output the panel
+opened on; when the server picks the output (no `TogglePanel` output), from its only output, else the first one it
+described, since the component is not told which output the server chose.
 
 **Navigation.** `nav` holds which view is up (hidden, search or the browser), the nested state over it (the enlarged preview,
 the view options menu) and where the keyboard is. Escape steps back one level at a time: a nested state closes and the keyboard
@@ -128,9 +126,8 @@ while it moves and for a moment after the browser opens (`browse::SCROLLER_LINGE
 last row and under a row the keys scroll to. A filter starts the selection and the scroll over; clearing it puts
 back the scroll the unfiltered view had. The browser reopens at the top with nothing selected. It is 844 × 577 pt, and on a short
 output it leaves 96 pt free below (`kit::BROWSE_BOTTOM_ROOM`, at least 300 pt tall). Icons load at 32, 60, 120 and 180 px,
-the generic application icon standing in for a missing one. They are looked up, read and decoded off the loop, on a
-thread of the host's with its own icon lookup (`Host::app_icon`, answered as `Message::AppIcon`), nearest the view
-first; at most 14 wait at once (`kit::MAX_APP_ICON_LOADS`), and each that arrives makes room for the next. It launches with an activation token like a search result, when the press on it lets go. A press that moves 4 pt first drags the application out instead: its desktop file as a `text/uri-list`, its icon under the pointer where it was held. The dock keeps it where it lands and the desktop takes a copy; the catcher steps aside while it is dragged, and a drop something took closes the panel.
+the generic application icon standing in for a missing one. They are looked up, read and decoded off the UI thread, as tasks of Kit's I/O pool
+(`Host::app_icon`, answered as `Message::AppIcon`), nearest the view first; at most 14 wait at once (`kit::MAX_APP_ICON_LOADS`), and each that arrives makes room for the next. It launches with an activation token like a search result, when the press on it lets go. A press that moves 4 pt first drags the application out instead: its desktop file as a `text/uri-list`, its icon under the pointer where it was held. The dock keeps it where it lands and the desktop takes a copy; the catcher steps aside while it is dragged, and a drop something took closes the panel.
 
 **Mode buttons and the files scope.** Beside the plain search bar stand round buttons (`modes`, `view::modes`) that switch
 to a scope: the applications (Primary+1) and, while files are searched, the files (Primary+2). Each is a 55 pt circle of the
@@ -190,9 +187,9 @@ a row activates it, a click on an action button carries that action out, and `Es
 **Preview and actions.** Beside the results the pane shows the selected result: a file's picture (a thumbnail through
 `cupertino-icons`' `thumbnail`), the first lines of a text file or its type's icon, then its name, its type in words, its size (or a
 folder's item count), when it changed and its folder; an application's icon at the pane's size and its description; a
-calculation's or a conversion's value set large over its expression. The host reads a file's preview on one thread
-of its own that takes only the newest request (`preview::LatestOnly`, `Host::preview`, `Message::Previewed`), so moving
-through the results never piles reads up; it reads at most 4 KiB of text, only from a regular file opened without waiting
+calculation's or a conversion's value set large over its expression. The host reads a file's preview as a task of Kit's I/O
+pool, and a read that a newer request replaced before it started is skipped (`Host::preview`, `Message::Previewed`), so
+moving through the results never piles reads up; it reads at most 4 KiB of text, only from a regular file opened without waiting
 (a pipe or device never holds it), and pictures through the thumbnailer's size and decode limits. A preview that arrives
 for a result no longer selected is dropped. Below it the
 result's actions are capsule buttons, the chosen one filled in the accent colour (`Launcher::actions`): Open, Reveal in Files and
@@ -202,9 +199,8 @@ through them and stop at the ends; Return carries out the chosen one. Moving the
 again. The panel also closes when its window loses the keyboard (another
 window took it; not its view options menu or the query field's own menu of Cut, Copy, Paste and Select All, popups of
 the panel that give the keyboard back; when another surface takes the keyboard from the field's menu the panel closes
-with the menu), on a press outside the panel, after a launch, and when the session locks: `LauncherRoles` sees the server's
-`cupertino_app_effects_v1` session-lock event (which Kit passes only to the accessibility adapter) and sends the model
-`Message::Locked`. The launch history is written when the panel closes.
+with the menu), on a press outside the panel, after a launch, and when the session locks (the shell host's `Event::Session`, as `Message::Locked`). The launch history is written when
+the panel closes, as a task of the I/O pool (`Host::save_history`).
 
 **Launching.** `Activation::Run` asks Kit for an `xdg-activation` token for the panel window (`Command::ActivationToken`, with the
 entry's desktop id), and starts the command with `XDG_ACTIVATION_TOKEN` / `DESKTOP_STARTUP_ID` when the token arrives. A copy
@@ -216,8 +212,8 @@ not selected. Web search runs `xdg-open`. The other panel commands are logged as
 **Opening an application.** Choosing an application, in the browser or among the search results (its Open action),
 opens it as a click on its Dock tile does; a desktop action (a new private window, say) always runs its own command.
 `Launcher::activate` gives `Activation::OpenApp` for it, and the token is asked for as above. When the token arrives the host
-asks the server to bring the application forward (`Host::bring_forward`: `cupertino_session_v1.activate_app` with the desktop
-file ID, shell version 20), and the server answers with `app_activation` (`Message::Opened`):
+asks the server to bring the application forward (`Host::bring_forward`: `cupertino_kit_shell::session::activate_app` with the desktop
+file ID), and the server answers with `app_activation` (`Message::Opened`):
 
 - `activated`: it showed a window and the server brought it forward through the same path as the Dock's `activate_app`: the
   frontmost window takes the focus, a minimised window is restored when it has no other, a hidden application is shown, and
@@ -228,39 +224,39 @@ file ID, shell version 20), and the server answers with `app_activation` (`Messa
   instance opens a window.
 - `not_running`: the entry is started with the token, as before.
 
-With a server older than shell version 20, or without the shell global (the launcher has the Session role by default), the
-application is started at once, as before. The server matches the desktop file ID to an application the way the Dock does:
+The server matches the desktop file ID to an application the way the Dock does:
 its application id, or the desktop entry of its application id (by ID, `StartupWMClass` or program), without regard to case.
 
 Screenshot: `cupertino-server/output/launcher-open.png`.
 
 ## Protocols / D-Bus it speaks
 
-The process owns `org.cupertino.Launcher1` at `/org/cupertino/Launcher1`. A second launcher cannot take the name and exits with
-failure. The interface lives in `control` (`BUS_NAME`, `OBJECT_PATH`, `serve`). It also speaks `cupertino_session_v1` (from
-shell version 20 its `activate_app` request, which needs the Session role the server gives the launcher's connection and
-checks on every request) and `xdg-activation` to the server, and calls `org.freedesktop.Application.Activate` on a resident
+The component owns `org.cupertino.Launcher1` at `/org/cupertino/Launcher1` on its own session bus connection, the one the
+server knows as the launcher's (D20). When another connection holds the name the component exits with failure and the host
+starts it again. The interface lives in `control` (`BUS_NAME`, `OBJECT_PATH`, `serve`). Through the shell host it hears
+`TogglePanel` for the launcher and the applications and publishes `PanelShown` on the host bus, asks the server to bring an
+application forward, and asks for `xdg-activation` tokens; it calls `org.freedesktop.Application.Activate` on a resident
 D-Bus activatable application.
 
 | Method | Effect |
 |---|---|
-| `Toggle` | Shows the search field or hides whatever is up. The server calls it for `Super+Space`. Only the server (the process's parent) and the launcher itself may: any other caller is refused with `org.cupertino.Error.UntrustedCaller` (`AnonymousCaller`, `FlatpakCaller`, `SnapCaller`), `cupertino_peer::check_call`. |
+| `Toggle` | Shows the search field or hides whatever is up. The server calls it for `Super+Space`, from its bus worker's connection. Only the server (the shell host's parent process) and the launcher component itself (its own connection) may: any other caller, another component of the host included, is refused with `org.cupertino.Error.UntrustedCaller` (`AnonymousCaller`, `FlatpakCaller`, `SnapCaller`), `cupertino_peer::CallerError`, the caller named off the UI thread. |
 | `ToggleApplications` | Opens the application browser, unfolds the search field into it, or closes it. The server calls it for the Dock's app-grid action; the same callers are allowed. |
 
 A call from a shell (`gdbus call ... --method org.cupertino.Launcher1.Toggle`) is refused for that reason; press
-`Super+Space`, or pass `--key 2:Super+space` to a scripted server .
+`Super+Space`, or pass `--key 2:Super+space` to a scripted server.
 
 ## Icons
 
-Application results show the entry's own `Icon=` (an absolute path or `hicolor`; `cupertino_icons::ThemeIcons`) and the asset
-`application.generic` when it has none. Folder results are the asset `folder`, file results `document.generic` in the list
+Application results show the entry's own `Icon=` through Kit's icons (an asset pack's icon of that name, else the host's
+icon themes or an absolute path), and the asset `application.generic` when it has none. Folder results are the asset `folder`, file results `document.generic` in the list
 (the preview types the selected file with the MIME database and shows its type's icon through `cupertino_kit::file_icons`); they
 are loaded at the icon size for scales 1, 2 and 3 and shown as Kit images, which draw the rendition that covers the output's scale. They
-are looked up, read and decoded off the loop, on the browser's icon thread (`Host::icon`, answered as `Message::ResultIcon`), and a row is
+are looked up, read and decoded off the UI thread, as tasks of Kit's I/O pool (`Host::icon`, answered as `Message::ResultIcon`), and a row is
 blank until its icon arrives; the preview's application icon loads there too (`Message::Previewed`, or `Message::NoPreview` when the
 application has no icon of its own and the preview shows only the result). The web
 search row is Kit's `symbol.magnifyingglass` symbol in the secondary label colour, as is the symbol in front of the query. The
-calculator and conversion rows have no icon. Missing assets are reported once, when the icon thread starts, and drawn as placeholders.
+calculator and conversion rows have no icon. A missing asset is drawn as Kit's placeholder.
 
 ## Values applied
 
@@ -299,7 +295,7 @@ calculator and conversion rows have no icon. Missing assets are reported once, w
 | `frecency` | decayed launch counts + learned query→item associations, JSON persistence; the file format, its path and the ranking are `cupertino-apps::frecency` (re-exported `default_path`, `ItemRecord`, `FILE_VERSION`), which the menu bar reads the store with |
 | `calc` | arithmetic parser (`+ − × ÷ ^ % `, constants, `sqrt sin cos …), number formatting; division by zero, overflow and input past 200 bytes give no result |
 | `convert` | unit conversions (`10 km in mi`, `72 f to c`, `2^10 kib = kb`): the units table, the quantity through `calc` |
-| `preview` | what the preview shows of a file: its type in words, size, change date, folder, text excerpt; the newest-only reader thread |
+| `preview` | what the preview shows of a file: its type in words, size, change date, folder, text excerpt |
 | `files` | bounded breadth-first walker, ignore rules, in-memory name index and search |
 | `engine` | `Launcher`: providers → `Results { sections }`; `actions` of a result; `activate` and `activate_action` → `Activation` |
 | `panel` | `Panel`: query editing, selection, scrolling; `takes_key` |
@@ -307,8 +303,10 @@ calculator and conversion rows have no icon. Missing assets are reported once, w
 | `browse` | `Browser`: the application browser's model, categories, grid and list geometry, keyboard, scrolling and selection |
 | `motion` | `Motion`: the opening, unfolding, folding and closing transitions, sampled at a time passed in |
 | `providers` | `Tracker`: generations, cancel tokens, deadlines and the status of results that arrive late |
-| `view` | the panel, catcher and hidden windows on CupertinoKit, panel metrics, `panel_key`; `view::browse` the browser's nodes |
+| `view` | the panel and catcher windows on CupertinoKit, panel metrics, `panel_key`; `view::browse` the browser's nodes |
 | `kit` | `Model`, `Message`, `update` and `view`: the launcher as a Kit application, the session behind the `Host` trait |
+| `component` | `Launcher`, the component of the shell host: its surfaces, the host bus, `ComponentHost` (the `Host` on Kit's task pools) |
+| `control` | `org.cupertino.Launcher1`, served on the component's connection |
 
 ## Integration API
 
@@ -377,8 +375,8 @@ recently modified files. Opening goes through `open_command` (default `xdg-open`
 
 `~/.local/share/cupertino/launcher.json` (`$XDG_DATA_HOME/cupertino/launcher.json`), versioned,
 written atomically; a missing, corrupt or foreign-version file starts empty. Bounded to 2 000 items
-and 500 queries. The README of the compositor integration should call `save_if_dirty` on a timer or
-at shutdown.
+and 500 queries. The component reads it as it starts and writes it when the panel closes, both as tasks of Kit's I/O pool
+(`Frecency::unsaved` hands the model's copy over).
 
 ## Decisions
 

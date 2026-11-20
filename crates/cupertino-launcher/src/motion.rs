@@ -24,62 +24,57 @@
 //!
 //! The model is pure: every value is sampled at a time passed in.
 
-use cupertino_animation::{AnimatedValue, Curve, Spring, SpringParams};
-use cupertino_kit::motion::{Easing, SpringPreset, Timing};
+use cupertino_kit::motion::{Animated, SpringPreset, Timing};
 
-/// The enclosure fading in when the launcher opens, in seconds.
-pub const OPEN_FADE: f64 = 0.10;
+/// The enclosure fading in when the launcher opens.
+pub const OPEN_FADE: Timing = Timing::LAUNCHER_OPEN_FADE;
 /// The scale the enclosure starts at when the launcher opens; the catalogue's `SpringPreset::LAUNCHER_OPEN`, whose
 /// damping ratio is under 1 so it undershoots a little, settles it to 1 about its centre.
 pub const ENTER_SCALE: f64 = 1.1;
 /// The content fading out when a scope folds; the enclosure starts contracting after it.
-pub const FOLD_FADE: f64 = 0.05;
-/// The enclosure's spring between shapes: its response and damping ratio when it grows and when it shrinks. Both
-/// overshoot a few points.
-pub const GROW_RESPONSE: f64 = 0.27;
-pub const GROW_DAMPING: f64 = 0.83;
-pub const SHRINK_RESPONSE: f64 = 0.295;
-pub const SHRINK_DAMPING: f64 = 0.86;
+pub const FOLD_FADE: Timing = Timing::LAUNCHER_FOLD_FADE;
+/// The enclosure's spring between shapes when it grows and when it shrinks. Both overshoot a few points.
+pub const GROW: SpringPreset = SpringPreset::LAUNCHER_GROW;
+pub const SHRINK: SpringPreset = SpringPreset::LAUNCHER_SHRINK;
 /// The spring's tail: once every edge is this many points from its target, and still is a frame ([`REST_LOOKAHEAD`]
 /// seconds) later, the shape is at its target. The tail moves nothing a display shows, and presenting it would
 /// reshape the glass under the panel on every repaint long after the motion ended. A spring past its settling time
 /// presents its target too.
 pub const SHAPE_REST: f64 = 1.0 / 64.0;
 pub const REST_LOOKAHEAD: f64 = 1.0 / 60.0;
-/// The content fading in as a scope unfolds: its delay and its duration, and the same for the files scope, whose
-/// grid waits for the enclosure to have grown.
+/// The content fading in as a scope unfolds: its delay in seconds and its fade, and the same for the files scope,
+/// whose grid waits for the enclosure to have grown.
 pub const UNFOLD_CONTENT_DELAY: f64 = 0.06;
-pub const UNFOLD_CONTENT_FADE: f64 = 0.12;
+pub const UNFOLD_CONTENT_FADE: Timing = Timing::LAUNCHER_UNFOLD_CONTENT;
 pub const FILES_CONTENT_DELAY: f64 = 0.16;
-pub const FILES_CONTENT_FADE: f64 = 0.10;
+pub const FILES_CONTENT_FADE: Timing = Timing::LAUNCHER_FILES_CONTENT;
 /// Into the files scope from the search field, the header switches and the enclosure starts growing this long after
 /// the buttons merged into the field and the width began its dip.
 pub const FILES_GROW_DELAY: f64 = 0.09;
-/// Closing: how long it takes, how much the enclosure grows, and how far the content blurs, in points.
-pub const CLOSE_DURATION: f64 = 0.10;
+/// Closing: its motion, how much the enclosure grows, and how far the content blurs, in points.
+pub const CLOSE: Timing = Timing::LAUNCHER_CLOSE;
 pub const CLOSE_SCALE: f64 = 1.02;
 pub const CLOSE_BLUR: f64 = 8.0;
-/// The mode buttons budding out of the field: the field's end springs back (response, damping ratio) while the
-/// buttons slide out on a slower spring that carries them a little past their places.
-pub const FIELD_RESPONSE: f64 = 0.305;
-pub const FIELD_DAMPING: f64 = 0.68;
-pub const SPLIT_RESPONSE: f64 = 0.575;
-pub const SPLIT_DAMPING: f64 = 0.69;
-/// The buttons' symbols sharpening after they bud: their delay and duration.
+/// The mode buttons budding out of the field: the field's end springs back while the buttons slide out on a slower
+/// spring that carries them a little past their places.
+pub const FIELD: SpringPreset = SpringPreset::LAUNCHER_FIELD;
+pub const SPLIT: SpringPreset = SpringPreset::LAUNCHER_SPLIT;
+/// The buttons' symbols sharpening after they bud: their delay in seconds and their motion.
 pub const GLYPH_DELAY: f64 = 0.25;
-pub const GLYPH_SHARPEN: f64 = 0.2;
+pub const GLYPH_SHARPEN: Timing = Timing::LAUNCHER_GLYPH_SHARPEN;
 /// The buttons merging back into the field when a scope opens.
-pub const MERGE_DURATION: f64 = 0.05;
+pub const MERGE: Timing = Timing::LAUNCHER_MERGE;
 /// How long the buttons wait after a scope folds before they bud out of the field again: the field settles into its
 /// capsule and rests a while first.
 pub const RESPLIT_DELAY: f64 = 1.1;
-/// The width the enclosure dips by while the files scope opens, how long the dip takes to reach its depth, and the
-/// response of the spring that brings the width back.
+/// The width the enclosure dips by while the files scope opens, in points, the motion that takes it to its depth, and
+/// the spring that brings the width back.
 pub const DIP_DEPTH: f64 = 123.0;
-pub const DIP_IN: f64 = 0.14;
-pub const DIP_RESPONSE: f64 = 0.25;
-/// Past this long after it starts, a dip is over.
-const DIP_END: f64 = DIP_IN + 1.2;
+pub const DIP_IN: Timing = Timing::LAUNCHER_DIP;
+pub const DIP_BACK: SpringPreset = SpringPreset::LAUNCHER_DIP_BACK;
+/// How long after the width starts coming back the dip is over, in seconds: the spring's tail is far below a point by
+/// then.
+const DIP_BACK_END: f64 = 1.2;
 
 /// The widest the mode buttons and the field can be together: the width of the field without the buttons.
 pub const GROUP_WIDTH: f64 = 640.0;
@@ -138,14 +133,14 @@ impl Header {
     }
 }
 
-/// A value fading from where it is towards a target after a delay, along an ease.
+/// A value fading from where it is towards a target after a delay, along a timed motion of the catalogue; none to
+/// jump.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Fade {
     from: f64,
     to: f64,
     start: f64,
-    duration: f64,
-    ease: Easing,
+    timing: Option<Timing>,
 }
 
 impl Fade {
@@ -154,37 +149,55 @@ impl Fade {
             from: value,
             to: value,
             start: 0.0,
-            duration: 0.0,
-            ease: Easing::LINEAR,
+            timing: None,
         }
     }
 
+    /// How long the fade takes, in seconds.
+    fn duration(&self) -> f64 {
+        self.timing.map_or(0.0, Timing::duration)
+    }
+
     fn value(&self, now: f64) -> f64 {
-        if self.duration <= 0.0 || now >= self.start + self.duration {
+        let duration = self.duration();
+        let Some(timing) = self
+            .timing
+            .filter(|_| duration > 0.0 && now < self.start + duration)
+        else {
             return if now >= self.start {
                 self.to
             } else {
                 self.from
             };
-        }
-        let x = ((now - self.start) / self.duration).clamp(0.0, 1.0);
-        self.from + (self.to - self.from) * self.ease.eval(x)
+        };
+        let elapsed = (now - self.start).clamp(0.0, duration);
+        self.from + (self.to - self.from) * timing.value(elapsed)
     }
 
-    /// Head for `to` from the value presented at `now`, starting `delay` later and taking `duration`.
-    fn retarget(&mut self, to: f64, now: f64, delay: f64, duration: f64, ease: Easing) {
+    /// Head for `to` from the value presented at `now`, starting `delay` later and moving along `timing`.
+    fn retarget(&mut self, to: f64, now: f64, delay: f64, timing: Timing) {
         let from = self.value(now);
         *self = Fade {
             from,
             to,
             start: now + delay,
-            duration,
-            ease,
+            timing: Some(timing),
+        };
+    }
+
+    /// Jump to `to` at `now`.
+    fn jump(&mut self, to: f64, now: f64) {
+        let from = self.value(now);
+        *self = Fade {
+            from,
+            to,
+            start: now,
+            timing: None,
         };
     }
 
     fn animating(&self, now: f64) -> bool {
-        self.from != self.to && now < self.start + self.duration
+        self.from != self.to && now < self.start + self.duration()
     }
 }
 
@@ -224,9 +237,9 @@ pub struct Frame {
 /// The panel's presentation.
 #[derive(Clone, Debug)]
 pub struct Motion {
-    shape: AnimatedValue<[f64; 3]>,
+    shape: Animated<[f64; 3]>,
     alpha: Fade,
-    scale: AnimatedValue<f64>,
+    scale: Animated<f64>,
     content: Fade,
     blur: Fade,
     /// The header shown before `switch_at`, and the one from then on.
@@ -239,8 +252,8 @@ pub struct Motion {
     modes_wanted: usize,
     modes_laid: usize,
     /// How far the buttons are out of the field, and how far the field's end has drawn back for them.
-    split: AnimatedValue<f64>,
-    field: AnimatedValue<f64>,
+    split: Animated<f64>,
+    field: Animated<f64>,
     sharp: Fade,
     /// When the width's dip began, while the files scope opens.
     dip: Option<f64>,
@@ -251,9 +264,9 @@ pub struct Motion {
 impl Motion {
     pub fn new(shape: Shape) -> Self {
         Self {
-            shape: AnimatedValue::new(shape.array()),
+            shape: Animated::new(shape.array()),
             alpha: Fade::at(0.0),
-            scale: AnimatedValue::new(1.0),
+            scale: Animated::new(1.0),
             content: Fade::at(0.0),
             blur: Fade::at(0.0),
             header: (Header::Search, Header::Search),
@@ -262,8 +275,8 @@ impl Motion {
             target: shape,
             modes_wanted: 0,
             modes_laid: 0,
-            split: AnimatedValue::new(0.0),
-            field: AnimatedValue::new(0.0),
+            split: Animated::new(0.0),
+            field: Animated::new(0.0),
             sharp: Fade::at(0.0),
             dip: None,
             widen_only: false,
@@ -279,12 +292,8 @@ impl Motion {
         self.reduce
     }
 
-    fn spring(grow: bool) -> Curve {
-        Curve::Spring(if grow {
-            SpringParams::from_ratio(GROW_RESPONSE, GROW_DAMPING)
-        } else {
-            SpringParams::from_ratio(SHRINK_RESPONSE, SHRINK_DAMPING)
-        })
+    fn spring(grow: bool) -> Timing {
+        Timing::from(if grow { GROW } else { SHRINK })
     }
 
     /// Move the shape to `to`, starting `delay` from `now`; at once under Reduce Motion. A shape still moving turns
@@ -348,9 +357,8 @@ impl Motion {
         } else {
             self.shape_to(shape, now, 0.0);
         }
-        self.alpha
-            .retarget(1.0, now, 0.0, OPEN_FADE, Easing::LINEAR);
-        self.blur.retarget(0.0, now, 0.0, 0.0, Easing::LINEAR);
+        self.alpha.retarget(1.0, now, 0.0, OPEN_FADE);
+        self.blur.jump(0.0, now);
         if self.reduce {
             self.scale.set_immediately(1.0);
         } else {
@@ -358,7 +366,7 @@ impl Motion {
                 self.scale.set_immediately(ENTER_SCALE);
             }
             self.scale
-                .animate_to(1.0, Timing::from(SpringPreset::LAUNCHER_OPEN).curve(), now);
+                .animate_to(1.0, Timing::from(SpringPreset::LAUNCHER_OPEN), now);
         }
         self.header = (header, header);
         self.dip = None;
@@ -370,13 +378,12 @@ impl Motion {
             // the content fades in with the enclosure, not after it: shown at once, the enclosure's fade carries it;
             // reopened while closing, it comes back alongside the enclosure
             if closing {
-                self.content
-                    .retarget(1.0, now, 0.0, OPEN_FADE, Easing::LINEAR);
+                self.content.retarget(1.0, now, 0.0, OPEN_FADE);
             } else {
                 self.content = Fade::at(1.0);
             }
         } else {
-            self.content.retarget(0.0, now, 0.0, 0.0, Easing::LINEAR);
+            self.content.jump(0.0, now);
         }
         // the buttons start inside the field and bud out as it opens
         if !closing {
@@ -391,24 +398,21 @@ impl Motion {
 
     /// The panel goes at `now`: it grows a little, its content blurs and it fades out.
     pub fn hide(&mut self, now: f64) {
-        self.alpha
-            .retarget(0.0, now, 0.0, CLOSE_DURATION, Easing::EASE_OUT);
+        self.alpha.retarget(0.0, now, 0.0, CLOSE);
         if !self.reduce {
-            self.scale.animate_to(
-                CLOSE_SCALE,
-                Easing::EASE_OUT.over(CLOSE_DURATION).curve(),
-                now,
-            );
-            self.blur
-                .retarget(1.0, now, 0.0, CLOSE_DURATION, Easing::EASE_OUT);
+            self.scale.animate_to(CLOSE_SCALE, CLOSE, now);
+            self.blur.retarget(1.0, now, 0.0, CLOSE);
         }
     }
 
     /// A scope folds into the search field's `compact` shape at `now`.
     pub fn fold(&mut self, compact: Shape, now: f64) {
-        self.content
-            .retarget(0.0, now, 0.0, FOLD_FADE, Easing::LINEAR);
-        let wait = if self.reduce { 0.0 } else { FOLD_FADE };
+        self.content.retarget(0.0, now, 0.0, FOLD_FADE);
+        let wait = if self.reduce {
+            0.0
+        } else {
+            FOLD_FADE.duration()
+        };
         self.switch_header(Header::Search, now, now + wait);
         self.shape_to(compact, now, wait);
         self.dip = None;
@@ -437,8 +441,7 @@ impl Motion {
         } else {
             (UNFOLD_CONTENT_DELAY, UNFOLD_CONTENT_FADE)
         };
-        self.content
-            .retarget(1.0, now, delay, fade, Easing::EASE_OUT);
+        self.content.retarget(1.0, now, delay, fade);
         self.dip = (header == Header::Files && from_field && !self.reduce).then_some(now);
     }
 
@@ -475,19 +478,11 @@ impl Motion {
             self.sharp = Fade::at(1.0);
             return;
         }
-        let spring = |response, damping| Curve::Spring(SpringParams::from_ratio(response, damping));
-        self.field
-            .animate_to(1.0, spring(FIELD_RESPONSE, FIELD_DAMPING), now + delay);
-        self.split
-            .animate_to(1.0, spring(SPLIT_RESPONSE, SPLIT_DAMPING), now + delay);
+        self.field.animate_to(1.0, Timing::from(FIELD), now + delay);
+        self.split.animate_to(1.0, Timing::from(SPLIT), now + delay);
         self.sharp = Fade::at(0.0);
-        self.sharp.retarget(
-            1.0,
-            now,
-            delay + GLYPH_DELAY,
-            GLYPH_SHARPEN,
-            Easing::EASE_OUT,
-        );
+        self.sharp
+            .retarget(1.0, now, delay + GLYPH_DELAY, GLYPH_SHARPEN);
     }
 
     /// The buttons merge back into the field.
@@ -498,9 +493,8 @@ impl Motion {
             self.sharp = Fade::at(0.0);
             return;
         }
-        let timed = Easing::EASE_OUT.over(MERGE_DURATION).curve();
-        self.field.animate_to(0.0, timed, now);
-        self.split.animate_to(0.0, timed, now);
+        self.field.animate_to(0.0, MERGE, now);
+        self.split.animate_to(0.0, MERGE, now);
     }
 
     /// Put every transition at its end (the settled test clock).
@@ -557,14 +551,14 @@ impl Motion {
             return 0.0;
         };
         let t = now - start;
-        if t <= 0.0 || t >= DIP_END {
+        let dip_in = DIP_IN.duration();
+        if t <= 0.0 || t >= dip_in + DIP_BACK_END {
             return 0.0;
         }
-        if t < DIP_IN {
-            let x = t / DIP_IN;
-            return -DIP_DEPTH * Easing::EASE_IN_OUT.eval(x);
+        if t < dip_in {
+            return -DIP_DEPTH * DIP_IN.value(t);
         }
-        let back = Spring::new(SpringParams::from_ratio(DIP_RESPONSE, 1.0)).value(t - DIP_IN);
+        let back = Timing::from(DIP_BACK).value(t - dip_in);
         -DIP_DEPTH * (1.0 - back)
     }
 
@@ -626,7 +620,7 @@ impl Motion {
             || self.split.is_animating(now)
             || self.field.is_animating(now)
             || self.sharp.animating(now)
-            || self.dip.is_some_and(|start| now < start + DIP_END)
+            || self.dip.is_some_and(|start| now < start + dip_end())
             || now < self.switch_at
     }
 
@@ -638,7 +632,7 @@ impl Motion {
             || self.scale.is_animating(now)
             || self.content.animating(now)
             || self.blur.animating(now)
-            || self.dip.is_some_and(|start| now < start + DIP_END)
+            || self.dip.is_some_and(|start| now < start + dip_end())
             || now < self.switch_at
     }
 
@@ -662,7 +656,7 @@ impl Motion {
         if self.alpha.to != 0.0 {
             return 0.0;
         }
-        (self.alpha.start + self.alpha.duration - now).max(0.0)
+        (self.alpha.start + self.alpha.duration() - now).max(0.0)
     }
 
     /// How long from `now` until nothing moves, to the next [`MOVING_STEP`]; 0 when nothing does, and at most
@@ -676,6 +670,11 @@ impl Motion {
     }
 }
 
+/// Past this long after it starts, a dip is over.
+fn dip_end() -> f64 {
+    DIP_IN.duration() + DIP_BACK_END
+}
+
 /// The step and the bound of [`Motion::moving_left`]'s search, in seconds.
 const MOVING_STEP: f64 = 1.0 / 120.0;
 const MOVING_MOST: f64 = 4.0;
@@ -683,7 +682,7 @@ const MOVING_MOST: f64 = 4.0;
 /// What `value` presents at `now`: its target once it no longer moves. A spring past its settling time is a hair off
 /// its target for ever; presenting that hair would leave the panel's place and the text in it a little off the
 /// device pixels they settle on.
-fn shown(value: &AnimatedValue<f64>, now: f64) -> f64 {
+fn shown(value: &Animated<f64>, now: f64) -> f64 {
     if value.is_animating(now) {
         value.value(now)
     } else {

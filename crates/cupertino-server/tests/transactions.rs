@@ -5,6 +5,8 @@
 //!   reverse gestures).
 //! - Window/workspace holes (`get_hole`) stack claims in commit order, fall back on destroy, and emit `source_closed`.
 
+use std::io::Write;
+use std::os::fd::AsFd;
 use std::os::unix::net::UnixStream;
 use std::time::{Duration, Instant};
 
@@ -27,14 +29,20 @@ use cupertino_protocols::client::transaction::cupertino_transaction_v1::{
 };
 use cupertino_server::authorization::{Holder, DETACHED_LIFETIME};
 use cupertino_server::host::HostKind;
-use cupertino_server::state::new_output;
+use cupertino_server::state::{insert_client, new_output, ClientState};
 use cupertino_server::{Config, Cupertino};
 use cupertino_wm::{OutputId, WindowId};
+use smithay::desktop::layer_map_for_output;
 use smithay::output::{Mode as OutputMode, PhysicalProperties, Subpixel};
 use smithay::reexports::calloop::EventLoop;
+use smithay::reexports::wayland_protocols::xdg::shell::client::{
+    xdg_surface, xdg_toplevel, xdg_wm_base,
+};
 use smithay::reexports::wayland_server::Display;
 use smithay::utils::Transform;
-use wayland_client::protocol::{wl_compositor, wl_output, wl_registry, wl_surface};
+use wayland_client::protocol::{
+    wl_buffer, wl_callback, wl_compositor, wl_output, wl_registry, wl_shm, wl_shm_pool, wl_surface,
+};
 use wayland_client::{Connection, Dispatch, EventQueue, QueueHandle, WEnum};
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
@@ -96,6 +104,9 @@ impl Dispatch<CupertinoHostComponentV1, String> for HostClient {
 #[derive(Default)]
 struct CompClient {
     compositor: Option<wl_compositor::WlCompositor>,
+    shm: Option<wl_shm::WlShm>,
+    /// Frame callbacks answered.
+    frames: usize,
     output: Option<wl_output::WlOutput>,
     layer_shell: Option<zwlr_layer_shell_v1::ZwlrLayerShellV1>,
     layers: Option<CupertinoLayersV1>,
@@ -132,6 +143,9 @@ impl Dispatch<wl_registry::WlRegistry, ()> for CompClient {
                         qh,
                         (),
                     ));
+                }
+                "wl_shm" => {
+                    state.shm = Some(reg.bind::<wl_shm::WlShm, _, _>(name, 1, qh, ()));
                 }
                 "wl_output" => {
                     state.output =
@@ -189,6 +203,25 @@ impl Dispatch<wl_output::WlOutput, ()> for CompClient {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
+    }
+}
+
+wayland_client::delegate_noop!(CompClient: ignore wl_shm::WlShm);
+wayland_client::delegate_noop!(CompClient: ignore wl_shm_pool::WlShmPool);
+wayland_client::delegate_noop!(CompClient: ignore wl_buffer::WlBuffer);
+
+impl Dispatch<wl_callback::WlCallback, ()> for CompClient {
+    fn event(
+        state: &mut Self,
+        _: &wl_callback::WlCallback,
+        event: wl_callback::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let wl_callback::Event::Done { .. } = event {
+            state.frames += 1;
+        }
     }
 }
 
@@ -330,6 +363,8 @@ struct Rig {
     event_loop: EventLoop<'static, Cupertino>,
     state: Cupertino,
     output_id: OutputId,
+    /// Drawn by the headless backend into an offscreen texture, rather than frames prepared without drawing.
+    headless: bool,
 }
 
 impl Rig {
@@ -368,14 +403,67 @@ impl Rig {
             event_loop,
             state,
             output_id,
+            headless: false,
         }
     }
 
+    /// A compositor drawing one offscreen output of `size` pixels at scale 1 with the headless backend.
+    fn headless(size: (i32, i32)) -> Self {
+        // the software rasteriser, as the program tests run the headless server
+        std::env::set_var("LIBGL_ALWAYS_SOFTWARE", "1");
+        let event_loop: EventLoop<'static, Cupertino> = EventLoop::try_new().unwrap();
+        let display: Display<Cupertino> = Display::new().unwrap();
+        let mut config = Config::default();
+        config.shell_processes.clear();
+        let mut state = Cupertino::new(
+            display,
+            event_loop.handle(),
+            event_loop.get_signal(),
+            config,
+            false,
+            &Assets::builtin(),
+        )
+        .unwrap();
+        cupertino_server::backend::headless::init(&mut state, size, 1.0)
+            .expect("an offscreen renderer");
+        let output_id = state.outputs[0].id;
+        Self {
+            event_loop,
+            state,
+            output_id,
+            headless: true,
+        }
+    }
+
+    /// The output as it shows now, without the pointer.
+    fn image(&mut self) -> image::RgbaImage {
+        let mut backend = self.state.backend.take().unwrap();
+        let image = self
+            .state
+            .draw_output_image(backend.renderer(), 0, false, false)
+            .unwrap();
+        self.state.backend = Some(backend);
+        image
+    }
+
+    /// One turn of the loop: dispatch, advance the model and prepare a frame of the output, as a backend does (the
+    /// headless one draws it).
     fn pump(&mut self) {
         let _ = self
             .event_loop
             .dispatch(Some(Duration::from_millis(2)), &mut self.state);
         self.state.tick();
+        if self.headless {
+            cupertino_server::backend::headless::render(&mut self.state);
+        } else {
+            let idx = self
+                .state
+                .outputs
+                .iter()
+                .position(|o| o.id == self.output_id)
+                .unwrap();
+            self.state.transactions_frame(idx);
+        }
         let _ = self.state.display_handle.flush_clients();
     }
 
@@ -517,6 +605,200 @@ impl Rig {
             self.pump_comp(conn, queue, state);
         }
         (surf, layer)
+    }
+}
+
+/// An ordinary client with one window.
+#[derive(Default)]
+struct WinClient {
+    compositor: Option<wl_compositor::WlCompositor>,
+    shm: Option<wl_shm::WlShm>,
+    wm_base: Option<xdg_wm_base::XdgWmBase>,
+    configured: bool,
+}
+
+impl Dispatch<wl_registry::WlRegistry, ()> for WinClient {
+    fn event(
+        state: &mut Self,
+        reg: &wl_registry::WlRegistry,
+        event: wl_registry::Event,
+        _: &(),
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
+        if let wl_registry::Event::Global {
+            name, interface, ..
+        } = event
+        {
+            match interface.as_str() {
+                "wl_compositor" => state.compositor = Some(reg.bind(name, 4, qh, ())),
+                "wl_shm" => state.shm = Some(reg.bind(name, 1, qh, ())),
+                "xdg_wm_base" => state.wm_base = Some(reg.bind(name, 1, qh, ())),
+                _ => {}
+            }
+        }
+    }
+}
+
+impl Dispatch<xdg_wm_base::XdgWmBase, ()> for WinClient {
+    fn event(
+        _: &mut Self,
+        base: &xdg_wm_base::XdgWmBase,
+        event: xdg_wm_base::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let xdg_wm_base::Event::Ping { serial } = event {
+            base.pong(serial);
+        }
+    }
+}
+
+impl Dispatch<xdg_surface::XdgSurface, ()> for WinClient {
+    fn event(
+        state: &mut Self,
+        surface: &xdg_surface::XdgSurface,
+        event: xdg_surface::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let xdg_surface::Event::Configure { serial } = event {
+            surface.ack_configure(serial);
+            state.configured = true;
+        }
+    }
+}
+
+wayland_client::delegate_noop!(WinClient: ignore xdg_toplevel::XdgToplevel);
+wayland_client::delegate_noop!(WinClient: ignore wl_compositor::WlCompositor);
+wayland_client::delegate_noop!(WinClient: ignore wl_surface::WlSurface);
+wayland_client::delegate_noop!(WinClient: ignore wl_shm::WlShm);
+wayland_client::delegate_noop!(WinClient: ignore wl_shm_pool::WlShmPool);
+wayland_client::delegate_noop!(WinClient: ignore wl_buffer::WlBuffer);
+
+/// One colour in `wl_shm` ARGB8888 memory order (blue, green, red, alpha): an opaque magenta, which neither the
+/// wallpaper nor a window's frame shows.
+const MAGENTA: [u8; 4] = [255, 0, 255, 255];
+/// A clear pixel.
+const CLEAR: [u8; 4] = [0, 0, 0, 0];
+
+/// A `width` × `height` buffer of one colour `pixel` (ARGB8888 memory order).
+fn shm_buffer<D>(
+    shm: &wl_shm::WlShm,
+    qh: &QueueHandle<D>,
+    (width, height): (i32, i32),
+    pixel: [u8; 4],
+) -> wl_buffer::WlBuffer
+where
+    D: Dispatch<wl_shm_pool::WlShmPool, ()> + Dispatch<wl_buffer::WlBuffer, ()> + 'static,
+{
+    let len = width * height * 4;
+    let fd = rustix::fs::memfd_create("cupertino-test", rustix::fs::MemfdFlags::CLOEXEC).unwrap();
+    let mut file = std::fs::File::from(fd);
+    let bytes: Vec<u8> = pixel.iter().copied().cycle().take(len as usize).collect();
+    file.write_all(&bytes).unwrap();
+    let pool = shm.create_pool(file.as_fd(), len, qh, ());
+    let buffer = pool.create_buffer(
+        0,
+        width,
+        height,
+        width * 4,
+        wl_shm::Format::Argb8888,
+        qh,
+        (),
+    );
+    pool.destroy();
+    buffer
+}
+
+/// How many pixels of `image` inside `rect` (`x`, `y`, `width`, `height` in pixels) show the magenta of a window's
+/// content, its picture faded part of the way included.
+fn magenta_in(image: &image::RgbaImage, rect: (u32, u32, u32, u32)) -> usize {
+    let (x0, y0, w, h) = rect;
+    let mut n = 0;
+    for y in y0..(y0 + h).min(image.height()) {
+        for x in x0..(x0 + w).min(image.width()) {
+            let [r, g, b, _] = image.get_pixel(x, y).0;
+            if r > 120 && b > 120 && g < 60 {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
+impl Rig {
+    /// Dispatch one loop turn of the compositor and of client `conn`.
+    fn pump_with<D: 'static>(
+        &mut self,
+        conn: &Connection,
+        queue: &mut EventQueue<D>,
+        state: &mut D,
+    ) {
+        let _ = conn.flush();
+        self.pump();
+        if let Some(guard) = conn.prepare_read() {
+            let _ = guard.read();
+        }
+        let _ = queue.dispatch_pending(state);
+    }
+
+    /// An ordinary client showing a `size` window of magenta content, mapped; returns its window's id too.
+    fn magenta_window(
+        &mut self,
+        size: (i32, i32),
+    ) -> (
+        Connection,
+        EventQueue<WinClient>,
+        WinClient,
+        wl_surface::WlSurface,
+        xdg_toplevel::XdgToplevel,
+        WindowId,
+    ) {
+        let (ours, theirs) = UnixStream::pair().unwrap();
+        insert_client(&self.state.display_handle, ours, ClientState::default()).unwrap();
+        let conn = Connection::from_socket(theirs).unwrap();
+        let mut queue: EventQueue<WinClient> = conn.new_event_queue();
+        let qh = queue.handle();
+        let mut client = WinClient::default();
+        let _reg = conn.display().get_registry(&qh, ());
+        for _ in 0..6 {
+            self.pump_with(&conn, &mut queue, &mut client);
+        }
+        let surface = client.compositor.as_ref().unwrap().create_surface(&qh, ());
+        let xdg = client
+            .wm_base
+            .as_ref()
+            .unwrap()
+            .get_xdg_surface(&surface, &qh, ());
+        let toplevel = xdg.get_toplevel(&qh, ());
+        toplevel.set_title("hole source".into());
+        toplevel.set_app_id("org.cupertino.test.hole".into());
+        surface.commit();
+        for _ in 0..20 {
+            self.pump_with(&conn, &mut queue, &mut client);
+            if client.configured {
+                break;
+            }
+        }
+        assert!(client.configured, "the window is configured");
+        let buffer = shm_buffer(client.shm.as_ref().unwrap(), &qh, size, MAGENTA);
+        surface.attach(Some(&buffer), 0, 0);
+        surface.damage_buffer(0, 0, size.0, size.1);
+        surface.commit();
+        for _ in 0..10 {
+            self.pump_with(&conn, &mut queue, &mut client);
+        }
+        let id = self
+            .state
+            .windows
+            .iter()
+            .find(|e| e.mapped)
+            .map(|e| e.id)
+            .expect("the window is mapped");
+        (conn, queue, client, surface, toplevel, id)
     }
 }
 
@@ -768,4 +1050,350 @@ fn holes_stack_claims_and_notify_source_closed() {
 
     // Keep test timestamps alive cleanly.
     let _ = Instant::now();
+}
+
+/// What a component keeps of a surface with a hole: its objects, alive while it holds them.
+struct HoleHost {
+    _parent: wl_surface::WlSurface,
+    _shell_surface: zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
+    _buffer: wl_buffer::WlBuffer,
+    _child: wl_surface::WlSurface,
+    _layer: CupertinoLayerV1,
+    _hole: CupertinoHoleV1,
+}
+
+impl Rig {
+    /// A layer shell surface of the component on `conn` at the output's top left, 160 × 120 points, clear, with one layer
+    /// over all of it that is a hole claiming window `window`; persisted (`cupertino_component_v1.persist`) with
+    /// `persist`.
+    fn hole_host(
+        &mut self,
+        conn: &Connection,
+        queue: &mut EventQueue<CompClient>,
+        state: &mut CompClient,
+        window: WindowId,
+        persist: bool,
+    ) -> HoleHost {
+        let qh = queue.handle();
+        let parent = state.compositor.as_ref().unwrap().create_surface(&qh, ());
+        let shell_surface = state.layer_shell.as_ref().unwrap().get_layer_surface(
+            &parent,
+            state.output.as_ref(),
+            zwlr_layer_shell_v1::Layer::Top,
+            "hole-host".into(),
+            &qh,
+            (),
+        );
+        shell_surface
+            .set_anchor(zwlr_layer_surface_v1::Anchor::Top | zwlr_layer_surface_v1::Anchor::Left);
+        shell_surface.set_size(160, 120);
+        if persist {
+            state
+                .component_global
+                .as_ref()
+                .unwrap()
+                .persist(&parent, "holes".into());
+        }
+        parent.commit();
+        for _ in 0..4 {
+            self.pump_comp(conn, queue, state);
+        }
+        let buffer = shm_buffer(state.shm.as_ref().unwrap(), &qh, (160, 120), CLEAR);
+        parent.attach(Some(&buffer), 0, 0);
+        parent.damage_buffer(0, 0, 160, 120);
+        let child = state.compositor.as_ref().unwrap().create_surface(&qh, ());
+        let layer = state
+            .layers
+            .as_ref()
+            .unwrap()
+            .get_layer(&child, &parent, &qh, ());
+        layer.set_value(cupertino_layer_v1::Property::Width, 160.0);
+        layer.set_value(cupertino_layer_v1::Property::Height, 120.0);
+        let hole = state.tx_manager.as_ref().unwrap().get_hole(&child, &qh, ());
+        hole.set_source(HoleWireSource::Window, window.0 as u32);
+        hole.set_claim(1);
+        child.commit();
+        parent.commit();
+        for _ in 0..6 {
+            self.pump_comp(conn, queue, state);
+        }
+        HoleHost {
+            _parent: parent,
+            _shell_surface: shell_surface,
+            _buffer: buffer,
+            _child: child,
+            _layer: layer,
+            _hole: hole,
+        }
+    }
+}
+
+/// `(tv_sec_hi, tv_sec_lo, tv_nsec)` of a presentation-clock time, as `started` carries it.
+fn wire_time(t: Duration) -> (u32, u32, u32) {
+    let secs = t.as_secs();
+    ((secs >> 32) as u32, secs as u32, t.subsec_nanos())
+}
+
+#[test]
+fn staged_commits_are_kept_until_the_part_applies() {
+    let mut rig = Rig::new();
+    let (hconn, mut hq, mut hst) = rig.connect_host(&["dock", "menubar"]);
+    let (_hdock, dconn, mut dq, mut dst) = rig.spawn_component(&hconn, &mut hq, &mut hst, "dock");
+    let (_hbar, bconn, mut bq, mut bst) = rig.spawn_component(&hconn, &mut hq, &mut hst, "menubar");
+    let (dock_surf, _dock_layer) = rig.create_layer_surface(&dconn, &mut dq, &mut dst, "dock");
+    let server_dock = layer_map_for_output(&rig.state.outputs[0].output)
+        .layers()
+        .find(|l| l.namespace() == "dock")
+        .map(|l| l.wl_surface().clone())
+        .expect("the dock's layer shell surface");
+    let layers_of = |s: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface| {
+        cupertino_server::layers_v1::with_parent(s, |layers| layers.len())
+    };
+    let dock_inst = dst.instance.unwrap();
+    let dqh = dq.handle();
+    let bqh = bq.handle();
+
+    let tx = dst
+        .tx_manager
+        .as_ref()
+        .unwrap()
+        .create(3, dst.output.as_ref().unwrap(), &dqh, ());
+    tx.expect("menubar".into());
+    tx.set_deadline(100);
+    tx.stage(&dock_surf);
+    // a layer made while its parent is staged, the parent's commit with a frame callback
+    let child = dst.compositor.as_ref().unwrap().create_surface(&dqh, ());
+    let _layer = dst
+        .layers
+        .as_ref()
+        .unwrap()
+        .get_layer(&child, &dock_surf, &dqh, ());
+    let _callback = dock_surf.frame(&dqh, ());
+    dock_surf.commit();
+    tx.submit();
+    for _ in 0..3 {
+        rig.pump_comp(&dconn, &mut dq, &mut dst);
+    }
+    assert!(dst.started.is_empty(), "the menu bar is expected");
+    assert_eq!(
+        layers_of(&server_dock),
+        0,
+        "the staged surface's commit is kept: its new layer is not there yet"
+    );
+    assert!(
+        dst.frames >= 1,
+        "a kept commit's frame callback is answered with the output's next frame"
+    );
+
+    // the menu bar joins and submits: the kept commit applies on the start frame
+    let tx_bar = bst.tx_manager.as_ref().unwrap().join(
+        "dock".into(),
+        dock_inst,
+        3,
+        bst.output.as_ref().unwrap(),
+        &bqh,
+        (),
+    );
+    tx_bar.submit();
+    for _ in 0..4 {
+        rig.pump_comp(&bconn, &mut bq, &mut bst);
+        rig.pump_comp(&dconn, &mut dq, &mut dst);
+    }
+    assert_eq!(dst.started.len(), 1, "the transaction started");
+    assert_eq!(
+        layers_of(&server_dock),
+        1,
+        "the kept commit applied with the part, its layer with it"
+    );
+
+    // after the part applied, the surface commits as usual
+    let child2 = dst.compositor.as_ref().unwrap().create_surface(&dqh, ());
+    let _layer2 = dst
+        .layers
+        .as_ref()
+        .unwrap()
+        .get_layer(&child2, &dock_surf, &dqh, ());
+    dock_surf.commit();
+    for _ in 0..2 {
+        rig.pump_comp(&dconn, &mut dq, &mut dst);
+    }
+    assert_eq!(
+        layers_of(&server_dock),
+        2,
+        "an unstaged commit applies at once"
+    );
+}
+
+#[test]
+fn participants_start_at_the_presentation_time_of_their_start_frame() {
+    let mut rig = Rig::new();
+    // a model clock that stands still, and a display whose last vblank came 5 ms before it
+    rig.state.fixed_time = Some(20.0);
+    let refresh = rig.state.refresh_of(0);
+    let vblank = Duration::from_secs_f64(19.995);
+    rig.state.outputs[0].scheduler.vblank(vblank, refresh);
+    let presented = vblank + refresh;
+
+    let (hconn, mut hq, mut hst) = rig.connect_host(&["dock", "menubar"]);
+    let (_hdock, dconn, mut dq, mut dst) = rig.spawn_component(&hconn, &mut hq, &mut hst, "dock");
+    let (_hbar, bconn, mut bq, mut bst) = rig.spawn_component(&hconn, &mut hq, &mut hst, "menubar");
+    let dock_inst = dst.instance.unwrap();
+    let (dqh, bqh) = (dq.handle(), bq.handle());
+    let tx = dst
+        .tx_manager
+        .as_ref()
+        .unwrap()
+        .create(4, dst.output.as_ref().unwrap(), &dqh, ());
+    tx.expect("menubar".into());
+    tx.set_deadline(100);
+    tx.submit();
+    rig.pump_comp(&dconn, &mut dq, &mut dst);
+    let tx_bar = bst.tx_manager.as_ref().unwrap().join(
+        "dock".into(),
+        dock_inst,
+        4,
+        bst.output.as_ref().unwrap(),
+        &bqh,
+        (),
+    );
+    tx_bar.submit();
+    for _ in 0..4 {
+        rig.pump_comp(&bconn, &mut bq, &mut bst);
+        rig.pump_comp(&dconn, &mut dq, &mut dst);
+    }
+    assert_eq!(dst.started.len(), 1);
+    assert_eq!(bst.started.len(), 1);
+    assert_eq!(
+        dst.started[0],
+        wire_time(presented),
+        "the start time is the presentation time of the frame the transaction starts on"
+    );
+    assert_eq!(
+        bst.started[0], dst.started[0],
+        "one start time for every participant"
+    );
+    assert_ne!(
+        dst.started[0],
+        wire_time(rig.state.frame_now()),
+        "not the time of the loop turn that found it ready"
+    );
+}
+
+#[test]
+fn a_claimed_window_shows_in_its_hole_alone_and_fades_out_there() {
+    let mut rig = Rig::headless((480, 300));
+    let (wconn, mut wq, mut wst, wsurf, toplevel, wid) = rig.magenta_window((100, 80));
+    let frame = rig.state.wm.window(wid).unwrap().geometry();
+    let own = (
+        frame.x.max(0.0) as u32,
+        frame.y.max(0.0) as u32,
+        frame.w as u32,
+        frame.h as u32,
+    );
+    let hole_rect = (0, 0, 160, 120);
+    assert!(
+        own.0 >= hole_rect.2 || own.1 >= hole_rect.3,
+        "the window's own frame {own:?} lies apart from the hole"
+    );
+    let image = rig.image();
+    assert!(
+        magenta_in(&image, own) > 1000,
+        "the window shows at its own frame"
+    );
+
+    // the overview's surface at the output's top left, a hole layer over all of it claiming the window
+    let (hconn, mut hq, mut hst) = rig.connect_host(&["overview"]);
+    let (_hov, oconn, mut oq, mut ost) = rig.spawn_component(&hconn, &mut hq, &mut hst, "overview");
+    let _host = rig.hole_host(&oconn, &mut oq, &mut ost, wid, false);
+    let image = rig.image();
+    assert_eq!(
+        magenta_in(&image, own),
+        0,
+        "a claimed window is not drawn at its own frame"
+    );
+    assert!(
+        magenta_in(&image, hole_rect) > 1000,
+        "the claimed window is drawn in its hole"
+    );
+
+    // the window closes: its last picture fades out in the hole alone, then the hole draws nothing
+    rig.state.fx.cfg.closing = true;
+    toplevel.destroy();
+    wsurf.destroy();
+    for _ in 0..3 {
+        rig.pump_with(&wconn, &mut wq, &mut wst);
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    assert_eq!(ost.source_closed, 1, "the hole hears its source closed");
+    let image = rig.image();
+    assert_eq!(
+        magenta_in(&image, own),
+        0,
+        "the closing window does not fade out at its own frame"
+    );
+    assert!(
+        magenta_in(&image, hole_rect) > 0,
+        "its last picture fades out in the hole"
+    );
+    std::thread::sleep(Duration::from_millis(1500));
+    for _ in 0..3 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    let image = rig.image();
+    assert_eq!(
+        magenta_in(&image, hole_rect),
+        0,
+        "once faded out the hole draws nothing"
+    );
+}
+
+#[test]
+fn a_held_surface_keeps_its_hole_drawing_live() {
+    let mut rig = Rig::headless((480, 300));
+    let (_wconn, _wq, _wst, _wsurf, _toplevel, wid) = rig.magenta_window((100, 80));
+    let frame = rig.state.wm.window(wid).unwrap().geometry();
+    let own = (
+        frame.x.max(0.0) as u32,
+        frame.y.max(0.0) as u32,
+        frame.w as u32,
+        frame.h as u32,
+    );
+    let hole_rect = (0, 0, 160, 120);
+    let (hconn, mut hq, mut hst) = rig.connect_host(&["overview"]);
+    let (_hov, oconn, mut oq, mut ost) = rig.spawn_component(&hconn, &mut hq, &mut hst, "overview");
+    let host = rig.hole_host(&oconn, &mut oq, &mut ost, wid, true);
+    let image = rig.image();
+    assert!(
+        magenta_in(&image, hole_rect) > 1000,
+        "the window is drawn in its hole"
+    );
+
+    // frames of the output show the hole where it lies
+    for _ in 0..10 {
+        std::thread::sleep(Duration::from_millis(5));
+        rig.pump();
+    }
+    // the overview's connection ends: the server holds its persisted surface, the hole and its claim stay
+    drop(host);
+    drop(ost);
+    drop(oq);
+    drop(oconn);
+    for _ in 0..6 {
+        rig.pump();
+    }
+    assert_eq!(
+        rig.state.hosts.held_surfaces().len(),
+        1,
+        "the surface is held"
+    );
+    assert!(
+        rig.state.transactions.is_window_claimed(wid),
+        "the held hole keeps its claim"
+    );
+    let image = rig.image();
+    assert_eq!(magenta_in(&image, own), 0, "the window stays claimed");
+    assert!(
+        magenta_in(&image, hole_rect) > 1000,
+        "the held hole goes on drawing the window live"
+    );
 }

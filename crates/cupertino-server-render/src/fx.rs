@@ -166,6 +166,14 @@ impl Effects {
         Some((s.owner, s.area.translate(dx, dy), frame_origin))
     }
 
+    /// The stored snapshot of `id`, left in the store: its pixels, the area they cover (global logical points) and the
+    /// window frame's origin when it was taken. The picture of a minimized window as it last showed.
+    pub fn snapshot_of(&self, id: WindowId) -> Option<(&SnapshotOwner, Rect, (f64, f64))> {
+        self.snapshots
+            .get(&id)
+            .map(|s| (&s.owner, s.area, s.frame_origin))
+    }
+
     pub fn forget_snapshot(&mut self, id: WindowId) {
         self.snapshots.remove(&id);
     }

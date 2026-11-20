@@ -83,6 +83,8 @@ impl CompositorHandler for Cupertino {
 
     fn new_surface(&mut self, surface: &WlSurface) {
         add_pre_commit_hook::<Self, _>(surface, |state, _dh, surface| {
+            // a staged surface's commit, and its layer surfaces', is kept until its transaction part applies
+            state.transaction_pre_commit(surface);
             let dmabuf = with_states(surface, |data| {
                 data.cached_state
                     .get::<SurfaceAttributes>()
@@ -1079,6 +1081,18 @@ impl XdgShellHandler for Cupertino {
         if self.windows[idx].mapped {
             let id = self.windows[idx].id;
             self.snapshot_closing(id);
+            // a hole that draws the window fades its last picture out, fitted as the window's frame is now
+            let (geo, ins) = (
+                self.windows[idx].window.geometry(),
+                self.windows[idx].insets(),
+            );
+            self.transactions.window_closing(
+                id,
+                (
+                    f64::from(geo.size.w) + ins.horizontal(),
+                    f64::from(geo.size.h) + ins.vertical(),
+                ),
+            );
         }
         let entry = self.windows.remove(idx);
         self.decor.forget(entry.id);

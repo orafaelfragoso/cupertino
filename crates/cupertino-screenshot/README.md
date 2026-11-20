@@ -153,10 +153,10 @@ bus connection, which owns the name. Only the program the server started as `por
 | `Close(s handle)` | Takes the call's picker down unanswered |
 
 **Colour picker.** Every output is copied when the call comes, and its copy is shown frozen under an overlay on it
-(layer namespace `cupertino-screenshot-color-picker`). A crosshair marks the hidden pointer, a loupe of 11 x 11 pixels
-follows it, and a click takes the colour of the pixel under it. A click counts only once its overlay has been on screen
-0.5 s, so a click meant for the app picks nothing. Escape cancels. An output added, gone or moved ends the pick. One
-pick runs at a time.
+(layer namespace `cupertino-screenshot`, the capture overlay's, so no screenshot shortcut starts during a pick). A
+crosshair marks the hidden pointer, a loupe of 11 x 11 pixels follows it, and a click takes the colour of the pixel
+under it. A click counts only once its overlay has been on screen 0.5 s, so a click meant for the app picks nothing.
+Escape cancels. An output added, gone or moved ends the pick. One pick runs at a time.
 
 **Sharing choice.** A window titled "Share Screen" (app id `org.cupertino.Portal.Prompt`) shows the app, the displays
 and windows the portal lists, and, when the app asked to restore the share, a box to let it share again without asking.

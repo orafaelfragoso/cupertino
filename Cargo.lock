@@ -1715,6 +1715,8 @@ dependencies = [
  "cupertino-login",
  "cupertino-notifications",
  "cupertino-osd",
+ "cupertino-portal",
+ "cupertino-screenshot",
  "cupertino-server",
  "cupertino-shell",
  "cupertino-ui-render",

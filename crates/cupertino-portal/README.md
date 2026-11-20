@@ -193,7 +193,7 @@ captured unless the person agrees.
   the window down and answers `2`, and so does a capture or a write that fails.
 - `PickColor` lets the person pick the colour of one pixel on any display, in the screenshot program
   (`org.cupertino.Screenshot1.PickColor`, see below). One frame of every display is copied at once
-  and frozen under an overlay layer surface on each display (namespace `cupertino-screenshot-color-picker`), the pointer
+  and frozen under an overlay layer surface on each display (namespace `cupertino-screenshot`), the pointer
   hidden. A crosshair marks the pixel under the pointer and a loupe beside it shows the 11 × 11 pixels round it, ten
   points each, the middle one outlined; it moves to the other side of the pointer near an edge. A click picks: its
   press must come on the overlay at least 500 ms after it appeared, and its release takes the pixel under the pointer

@@ -992,10 +992,11 @@ impl<M: 'static> Widget<M> for ClipboardPixel<M> {
 
     fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
 
-    /// Nothing to reach: the pixel only holds the keyboard for the moment the capture goes on the clipboard. It takes
-    /// the focus, so it hears the keyboard come.
+    /// The pixel only holds the keyboard for the moment the capture goes on the clipboard. It takes the focus, so it
+    /// hears the keyboard come: a hidden node would pass the focus on to none.
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
-        cx.hidden();
+        cx.role(Role::Group);
+        cx.name("Copying the screenshot");
         cx.focusable();
         cx.initial_focus();
     }

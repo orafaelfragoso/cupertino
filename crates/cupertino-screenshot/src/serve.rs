@@ -28,9 +28,10 @@ use crate::share_picker::{self, Picker};
 /// How long the service waits for its next call, once nothing is shown, before it exits; the portal starts it again
 /// for the next one.
 pub const IDLE_EXIT: Duration = Duration::from_secs(30);
-/// Layer namespace of the colour picker's overlays. It is not the capture overlay's, so a screenshot shortcut still
-/// works while a pick is shown.
-pub const PICK_NAMESPACE: &str = "cupertino-screenshot-color-picker";
+/// Layer namespace of the colour picker's overlays: the capture overlay's ([`crate::shot::OVERLAY_NAMESPACE`]), so the
+/// server starts no screenshot while a pick is shown, as while a capture's overlay is: the pick's overlay holds the
+/// keyboard, and a capture's overlay over it would take a copy of the frozen screen.
+pub const PICK_NAMESPACE: &str = crate::shot::OVERLAY_NAMESPACE;
 
 /// How the service ended, for [`serve`] to return.
 static OUTCOME: Mutex<Option<Result<(), String>>> = Mutex::new(None);

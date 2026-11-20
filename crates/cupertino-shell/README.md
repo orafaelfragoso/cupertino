@@ -16,9 +16,10 @@ The server starts the host; nobody else does. It hands the host a connection wit
 | Command | Started for |
 |---|---|
 | `cupertino-shell` | the shared host: every component of the list no separate host runs, and the hub of the host bus |
+| `cupertino-shell --only NAME` | a separate host (D18): the component the server runs alone (`alone` of the `shell` section, or one lost in the shared host); it runs no other component whatever its list says, and exits when its list empties |
 
 Exit statuses: 0 when the server said to exit (its quiet moment after a request to restart) or a separate host's list
-became empty, 1 when the connection to the server failed or the render thread hung, 2 for an unknown argument, 76
+became empty, 1 when the connection to the server failed or the render thread hung, 2 for an unknown argument or a name that is no component of the shell, 76
 (`hosting::EXIT_VERSION`) when the server speaks another version of the host protocol. The server starts an exited
 host again whatever its status (D16).
 
@@ -43,6 +44,12 @@ thread out of its wait for 10 s hangs every component: the host exits with statu
 constants.
 
 A component asked to stop that has not ended after `STOP_GRACE` is cut off (`Running::shut`).
+
+## Trying a failure
+
+A development (debug) build serves `org.cupertino.ShellComponentDebug1` on each component's bus connection:
+`cupertino shell crash NAME [--at dispatch|paint|helper]` makes the component panic there, and the host contains it as
+any other failure. A release build has no such interface.
 
 ## Modules
 

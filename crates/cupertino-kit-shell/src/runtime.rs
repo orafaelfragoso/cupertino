@@ -96,6 +96,9 @@ struct Feed {
     bus: Option<(Arc<BusHub>, u64)>,
     /// A task waits for the next event that becomes a message.
     armed: Arc<AtomicBool>,
+    /// Where the program was asked to panic (development builds).
+    #[cfg(debug_assertions)]
+    crash: Option<Arc<crate::crash::Crash>>,
 }
 
 impl Feed {
@@ -112,6 +115,8 @@ impl Feed {
             inbox,
             bus,
             armed: Arc::new(AtomicBool::new(false)),
+            #[cfg(debug_assertions)]
+            crash: context::with_ctx(|ctx| Arc::clone(&ctx.crash)),
         }
     }
 
@@ -124,6 +129,14 @@ impl Feed {
         commands.push(Command::Perform(Box::pin(async move {
             loop {
                 let event = poll_fn(|cx| {
+                    #[cfg(debug_assertions)]
+                    if feed
+                        .crash
+                        .as_ref()
+                        .is_some_and(|crash| crash.take_dispatch())
+                    {
+                        panic!("the crash asked for as the component's loop dispatches");
+                    }
                     if let Some((hub, id)) = &feed.bus {
                         if let Poll::Ready(published) = hub.poll_drain(*id, cx) {
                             for (from, message) in published {
@@ -181,6 +194,8 @@ impl<P: Program, R: Residence + 'static> Application for Hosted<P, R> {
     fn view(model: &Self::Model) -> Vec<Window<Self::Message>> {
         let inner = model.inner.borrow();
         let windows = P::view(&inner);
+        #[cfg(debug_assertions)]
+        let windows = crate::crash::wrap(windows);
         let surfaces: HashMap<WindowKey, Surface> = windows
             .iter()
             .map(|w| (w.key.clone(), P::surface(&inner, &w.key)))

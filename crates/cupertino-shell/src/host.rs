@@ -24,16 +24,42 @@ pub const EXIT_USAGE: i32 = 2;
 /// The status the host exits with when it cannot go on: its connection failed, or its render thread hangs.
 pub const EXIT_FAILURE: i32 = 1;
 
+/// How the host is started.
+const USAGE: &str = "usage: cupertino-shell [--only COMPONENT]";
+
+/// The component `--only` names, if any: such a host runs that component alone (D18), whatever else its list names.
+/// A name outside the server's table is a usage error.
+fn only(args: impl IntoIterator<Item = String>) -> Result<Option<ComponentName>, String> {
+    let mut args = args.into_iter();
+    let mut only = None;
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--only" if only.is_none() => {
+                let name = args.next().ok_or("--only needs a component")?;
+                only = Some(
+                    ComponentName::from_name(&name)
+                        .ok_or_else(|| format!("{name:?} is not a component of the shell"))?,
+                );
+            }
+            _ => return Err(format!("unknown argument {arg}")),
+        }
+    }
+    Ok(only)
+}
+
 /// The id of the diagnostic event of a component that ended without being asked, or was lost to a hang.
 const FAILED_EVENT: &str = "shell.component.failed";
 
 /// Be the host of `components` with the arguments `args` (the program's, after its name), until the server says to
 /// exit, a separate host's list becomes empty or loses its component, or the connection ends.
 pub fn run(components: &'static [&'static Entry], args: impl IntoIterator<Item = String>) -> ! {
-    if let Some(arg) = args.into_iter().next() {
-        eprintln!("cupertino-shell: unknown argument {arg}\nusage: cupertino-shell");
-        std::process::exit(EXIT_USAGE);
-    }
+    let only = match only(args) {
+        Ok(only) => only,
+        Err(problem) => {
+            eprintln!("cupertino-shell: {problem}\n{USAGE}");
+            std::process::exit(EXIT_USAGE);
+        }
+    };
     let mut host = match Host::connect() {
         Ok(host) => host,
         Err(Error::Version { expected, found }) => {
@@ -78,6 +104,7 @@ pub fn run(components: &'static [&'static Entry], args: impl IntoIterator<Item =
         runtime,
         kind,
         components,
+        only,
         started: HashMap::new(),
         lost: Vec::new(),
         listed: Vec::new(),
@@ -137,6 +164,8 @@ struct Shell {
     runtime: Runtime,
     kind: Kind,
     components: &'static [&'static Entry],
+    /// The one component a host started with `--only` runs.
+    only: Option<ComponentName>,
     started: HashMap<ComponentName, Started>,
     /// Components lost to a hang: their threads cannot be ended, so they are kept, cut off, until the process exits.
     lost: Vec<(ComponentName, Running)>,
@@ -171,8 +200,12 @@ impl Shell {
         }
     }
 
-    /// The entry this host was built with for `component`.
+    /// The entry this host was built with for `component`, when it runs it: a host started with `--only` runs that
+    /// component alone.
     fn entry(&self, component: ComponentName) -> Option<&'static Entry> {
+        if self.only.is_some_and(|only| only != component) {
+            return None;
+        }
         self.components
             .iter()
             .copied()

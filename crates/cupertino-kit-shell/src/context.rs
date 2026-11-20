@@ -318,6 +318,9 @@ pub(crate) struct ComponentContext {
     pub inbox: Arc<Inbox>,
     /// The single-frame captures waiting for their frame.
     pub captures: Captures,
+    /// Where the component was asked to panic (development builds).
+    #[cfg(debug_assertions)]
+    pub crash: Arc<crate::crash::Crash>,
 }
 
 impl Default for ComponentContext {
@@ -344,6 +347,8 @@ impl Default for ComponentContext {
             sockets: Sockets::default(),
             inbox: Arc::default(),
             captures: Captures::default(),
+            #[cfg(debug_assertions)]
+            crash: Arc::default(),
         }
     }
 }

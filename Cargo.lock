@@ -1724,6 +1724,7 @@ version = "0.1.0"
 dependencies = [
  "calloop 0.14.5",
  "cupertino-assets",
+ "cupertino-cli",
  "cupertino-kit",
  "cupertino-kit-shell",
  "cupertino-server",
@@ -1735,6 +1736,7 @@ dependencies = [
  "wayland-client",
  "wayland-protocols",
  "wayland-server",
+ "zbus",
 ]
 
 [[package]]

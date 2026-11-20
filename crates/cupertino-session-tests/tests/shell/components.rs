@@ -6,7 +6,9 @@
 //!   teardown; its second panics on a helper thread; the instances after it report that they run;
 //! - `controlcenter`: every instance panics as it handles its first message;
 //! - `launcher`: its first instance in the session waits [`HANG_AFTER`], past the host's start-up grace, then its
-//!   loop never returns to its wait; later instances report that they run.
+//!   loop never returns to its wait; later instances report that they run;
+//! - `menubar`: a persistent layer window at the output's top left whose colour turns from [`GREEN`] to [`YELLOW`]
+//!   and back every [`TICK`]; it opens its session bus connection and reports its unique name with its instance.
 //!
 //! What a component reports goes to the report file ([`report`]) as one line.
 
@@ -393,10 +395,147 @@ impl Component for Launcher {
     const NAME: ComponentName = ComponentName::LAUNCHER;
 }
 
+/// The menu bar's two colours.
+pub const GREEN: Color = Color::new(0.0, 1.0, 0.0, 1.0);
+pub const YELLOW: Color = Color::new(1.0, 1.0, 0.0, 1.0);
+/// The size of the menu bar's window, in points, at the output's top left.
+pub const BAR_SIZE: Size = Size::new(160.0, 40.0);
+
+/// How many instances of `menubar` this host process started.
+static MENUBAR_STARTED: AtomicU32 = AtomicU32::new(0);
+
+/// The `menubar` component.
+pub struct MenuBar;
+
+#[derive(Clone, Debug)]
+pub enum BarMessage {
+    Tick,
+    Connected(Option<zbus::Connection>),
+    Closed,
+}
+
+/// The menu bar's model: its instance, whether it shows green, and its bus connection, kept open.
+pub struct Bar {
+    instance: u32,
+    green: bool,
+    bus: Option<zbus::Connection>,
+}
+
+impl Application for MenuBar {
+    type Model = Bar;
+    type Message = BarMessage;
+    const RENDERER: RendererClass = RendererClass::Cpu;
+
+    fn init() -> (Bar, Vec<Command<BarMessage>>) {
+        let instance = MENUBAR_STARTED.fetch_add(1, Ordering::SeqCst) + 1;
+        let mut commands = bus::session(
+            |connection| BarMessage::Connected(connection.ok()),
+            BarMessage::Closed,
+        );
+        commands.push(Command::After {
+            delay: TICK,
+            message: BarMessage::Tick,
+        });
+        (
+            Bar {
+                instance,
+                green: true,
+                bus: None,
+            },
+            commands,
+        )
+    }
+
+    fn update(bar: &mut Bar, message: BarMessage) -> Vec<Command<BarMessage>> {
+        match message {
+            BarMessage::Tick => {
+                bar.green = !bar.green;
+                vec![Command::After {
+                    delay: TICK,
+                    message: BarMessage::Tick,
+                }]
+            }
+            BarMessage::Connected(connection) => {
+                let name = connection
+                    .as_ref()
+                    .and_then(|c| c.unique_name().map(|n| n.to_string()));
+                report(format!(
+                    "menubar {} bus {}",
+                    bar.instance,
+                    name.as_deref().unwrap_or("none")
+                ));
+                bar.bus = connection;
+                Vec::new()
+            }
+            BarMessage::Closed => {
+                bar.bus = None;
+                Vec::new()
+            }
+        }
+    }
+
+    fn view(bar: &Bar) -> Vec<Window<BarMessage>> {
+        vec![Window {
+            key: WindowKey(Key::from("bar")),
+            spec: WindowSpec {
+                title: "bar".to_owned(),
+                app_id: "org.cupertino.test.bar".to_owned(),
+                size: BAR_SIZE,
+                min_size: None,
+                max_size: None,
+                decorations: DecorationMode::None,
+                foreign_parent: None,
+                input_region: None,
+            },
+            shortcuts: CommandRegistry::new(),
+            on_close: None,
+            background: WindowBackground::None,
+            content: Element::new(Block {
+                size: BAR_SIZE,
+                color: if bar.green { GREEN } else { YELLOW },
+            }),
+            popup: None,
+            menus: None,
+        }]
+    }
+}
+
+impl Program for MenuBar {
+    fn surface(_: &Bar, _: &WindowKey) -> Surface {
+        Surface {
+            role: Role::Layer(LayerSpec {
+                namespace: "test-bar",
+                output: None,
+                layer: Layer::Top,
+                anchor: Anchor {
+                    top: true,
+                    left: true,
+                    ..Anchor::default()
+                },
+                size: BAR_SIZE,
+                margin: Margin::default(),
+                exclusive_zone: 0,
+                keyboard: Keyboard::None,
+            }),
+            persistent: Some("bar"),
+            holes: Vec::new(),
+        }
+    }
+
+    fn event(_: Event) -> Option<BarMessage> {
+        None
+    }
+}
+
+impl Component for MenuBar {
+    const NAME: ComponentName = ComponentName::MENUBAR;
+}
+
+pub static MENUBAR: Entry = Entry::of::<MenuBar>();
 pub static DOCK: Entry = Entry::of::<Dock>();
 pub static NOTIFICATIONS: Entry = Entry::of::<Notifications>();
 pub static CONTROLCENTER: Entry = Entry::of::<ControlCenter>();
 pub static LAUNCHER: Entry = Entry::of::<Launcher>();
 
 /// The components this host was built with.
-pub static ENTRIES: [&Entry; 4] = [&DOCK, &NOTIFICATIONS, &CONTROLCENTER, &LAUNCHER];
+pub static ENTRIES: [&Entry; 5] = [&MENUBAR, &DOCK, &NOTIFICATIONS, &CONTROLCENTER, &LAUNCHER];

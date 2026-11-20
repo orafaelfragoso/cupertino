@@ -9,6 +9,8 @@ pub mod capture;
 mod component;
 pub mod consent;
 mod context;
+#[cfg(debug_assertions)]
+mod crash;
 pub mod design;
 pub mod dock;
 pub mod host;

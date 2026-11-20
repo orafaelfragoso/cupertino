@@ -1,6 +1,8 @@
 //! The `cupertino-screenshot` process: one capture per run, started by the server for a screenshot shortcut on a
 //! connection of its own (`WAYLAND_SOCKET`). See the README for the modes and the settings.
 
+#![forbid(unsafe_code)]
+
 mod app;
 mod capture;
 mod deliver;

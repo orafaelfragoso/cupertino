@@ -2,9 +2,10 @@
 //! lock surfaces until the user authenticates, and shows the confirmation panels of the session agent. With `--greeter` it
 //! is the login screen of the session manager. See the README for how to run it.
 
+#![forbid(unsafe_code)]
+
 mod app;
 mod greeter;
-mod harden;
 mod options;
 mod roles;
 mod screen;
@@ -29,7 +30,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    if let Err(e) = harden::harden() {
+    if let Err(e) = cupertino_kit::process::harden() {
         diag::exit_error(&e);
         eprintln!("cupertino-login: hardening the process: {e}");
         return ExitCode::FAILURE;

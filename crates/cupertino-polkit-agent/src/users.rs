@@ -1,7 +1,5 @@
 //! The users polkitd offers, as the prompt names them, and the login name the helper takes.
 
-use std::ffi::CStr;
-
 use crate::agent::User;
 use crate::text::shown;
 
@@ -15,35 +13,10 @@ pub struct Account {
 
 /// The account of `user`, when the password database knows it.
 pub fn account(user: User) -> Option<Account> {
-    let mut buffer = vec![0u8; 16 * 1024];
-    // Safety: an all-zero `passwd` is a valid value for `getpwuid_r` to fill.
-    let mut entry: libc::passwd = unsafe { std::mem::zeroed() };
-    let mut found = std::ptr::null_mut();
-    // Safety: `entry`, `buffer` and `found` outlive the call, and `buffer.len()` is the buffer's size.
-    let status = unsafe {
-        libc::getpwuid_r(
-            user.0,
-            &mut entry,
-            buffer.as_mut_ptr().cast(),
-            buffer.len(),
-            &mut found,
-        )
-    };
-    if status != 0 || found.is_null() {
-        return None;
-    }
-    // Safety: on success the fields point to NUL-terminated strings in `buffer`, which is still alive.
-    let text = |p: *const libc::c_char| {
-        (!p.is_null()).then(|| unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned())
-    };
+    let entry = cupertino_kit::account::by_uid(user.0).ok()??;
     Some(Account {
-        login: text(entry.pw_name)?,
-        full_name: text(entry.pw_gecos)
-            .unwrap_or_default()
-            .split(',')
-            .next()
-            .unwrap_or_default()
-            .to_owned(),
+        full_name: entry.full_name().to_owned(),
+        login: entry.login,
     })
 }
 

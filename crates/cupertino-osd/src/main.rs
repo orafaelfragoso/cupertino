@@ -1,6 +1,8 @@
 //! The `cupertino-osd` process: shows the volume, brightness and keyboard-backlight overlay on a layer surface and
 //! carries out the calls of `org.cupertino.Osd1`. See the README for how to run it.
 
+#![forbid(unsafe_code)]
+
 mod app;
 
 use cupertino_diagnostic_events as diag;

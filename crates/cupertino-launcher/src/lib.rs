@@ -14,6 +14,8 @@
 //! the analysis; ranking scores and the remaining row metrics are approximate (authored) and configurable; colours,
 //! type, material and controls come from CupertinoKit's theme.
 
+#![forbid(unsafe_code)]
+
 pub mod browse;
 pub mod calc;
 #[cfg(feature = "app")]

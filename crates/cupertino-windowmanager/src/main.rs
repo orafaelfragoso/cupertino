@@ -1,6 +1,8 @@
 //! The `cupertino-windowmanager` process: the stage policy of every output, as a client of the
 //! server. See the README for how to run it.
 
+#![forbid(unsafe_code)]
+
 mod app;
 
 use cupertino_diagnostic_events as diag;

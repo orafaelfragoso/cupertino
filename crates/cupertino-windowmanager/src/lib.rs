@@ -2,6 +2,8 @@
 //! `cupertino_wm::stage` model) and its settings file ([`conf`]). Pure logic; the `cupertino-windowmanager`
 //! process (feature `app`) feeds the server's window events in and sends the requests out.
 
+#![forbid(unsafe_code)]
+
 pub mod conf;
 pub mod controller;
 

@@ -16,8 +16,8 @@ use cupertino_kit::layout::{
 };
 use cupertino_kit::platform::{Keysym, Mods, MouseButton, PointerEvent};
 use cupertino_kit::render::{
-    Effect, FillRule, ImageResource, Paint, PaintOp, PathVerb, PixelFormat, ResourceId, Sampling,
-    Shape,
+    zeroed_pixels, Effect, FillRule, ImageResource, Paint, PaintOp, PathVerb, PixelFormat,
+    ResourceId, Sampling, Shape,
 };
 use cupertino_kit::text::{
     AttributedText, FontWeight, GlyphFormat, GlyphKey, GlyphRaster, GlyphRasterizer,
@@ -269,8 +269,7 @@ fn made(width: u32, height: u32, fill: impl FnOnce(&mut [u8])) -> ImageResource 
     let len = width as usize * height as usize * 4;
     // memory the system hands over zeroed, untouched until `fill` writes it: a whole screen of it is not set to zero
     // first, and its pages are first touched by the workers that fill it
-    // SAFETY: zeroed bytes are valid `u8`s
-    let mut pixels: Arc<[u8]> = unsafe { Arc::<[u8]>::new_zeroed_slice(len).assume_init() };
+    let mut pixels: Arc<[u8]> = zeroed_pixels(len);
     if let Some(out) = Arc::get_mut(&mut pixels) {
         fill(out);
     }

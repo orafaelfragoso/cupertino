@@ -1,12 +1,16 @@
 //! CupertinoKit, the Cupertino UI toolkit. Applications depend on this crate alone; each module lists the toolkit's
 //! items an application names, one by one, and [`prelude`] has what a typical application names.
 
+pub mod account;
 pub mod bus;
+pub mod host;
 mod icons;
 pub mod image;
 mod instance;
 pub mod motion;
 mod picture;
+mod pixels;
+pub mod process;
 mod start;
 pub mod task;
 #[cfg(feature = "test")]
@@ -80,6 +84,7 @@ pub mod layout {
 /// What a picture is made of, and pictures a program draws.
 pub mod render {
     pub use crate::picture::picture;
+    pub use crate::pixels::zeroed_pixels;
     pub use cupertino_ui_render::{
         Effect, FillRule, GradientStop, ImageResource, Paint, PaintOp, PathVerb, PixelFormat,
         ResourceId, Sampling, Shape, Transform,

@@ -1,5 +1,7 @@
 //! The session's xdg-desktop-portal backend. See the README.
 
+#![forbid(unsafe_code)]
+
 pub mod app_chooser;
 pub mod capture;
 pub mod chooser;

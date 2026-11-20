@@ -184,8 +184,7 @@ pub fn run() -> Result<()> {
         "cupertino-polkit-agent: registered with polkitd for session {}",
         session.id
     );
-    // Safety: `getuid` has no preconditions.
-    let me = User(unsafe { libc::getuid() });
+    let me = User(cupertino_kit::account::uid());
     let helpers = std::sync::Mutex::new(notifier);
     let mut app = App {
         conn,

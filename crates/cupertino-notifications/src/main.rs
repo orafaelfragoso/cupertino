@@ -2,6 +2,8 @@
 //! and the notification centre list on a layer surface and opens the list on
 //! `org.cupertino.NotificationCenter1.ToggleCentre`. See the README for how to run it.
 
+#![forbid(unsafe_code)]
+
 mod app;
 
 use cupertino_diagnostic_events as diag;

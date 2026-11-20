@@ -86,36 +86,32 @@ pub struct SystemCalendar;
 
 #[cfg(feature = "dbus")]
 impl SystemCalendar {
-    fn local(unix: i64) -> libc::tm {
-        let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-        let t = unix as libc::time_t;
-        // Safety: both pointers are valid for the duration of the call.
-        let converted = unsafe { libc::localtime_r(&t, &mut tm) };
-        assert!(!converted.is_null(), "localtime_r cannot represent {unix}");
-        tm
+    fn local(unix: i64) -> cupertino_kit::time::LocalTime {
+        cupertino_kit::time::local(cupertino_kit::time::from_unix(unix))
+            .unwrap_or_else(|| panic!("localtime_r cannot represent {unix}"))
     }
 }
 
 #[cfg(feature = "dbus")]
 impl LocalCalendar for SystemCalendar {
     fn hour(&self, unix: i64) -> u8 {
-        Self::local(unix).tm_hour as u8
+        Self::local(unix).hour
     }
 
     fn at(&self, unix: i64, days_ahead: i32, hour: u8) -> i64 {
-        let mut tm = Self::local(unix);
-        // mktime normalises a day past the month's end
-        tm.tm_mday += days_ahead;
-        tm.tm_hour = i32::from(hour);
-        tm.tm_min = 0;
-        tm.tm_sec = 0;
-        tm.tm_isdst = -1;
-        // Safety: the pointer is valid for the duration of the call.
-        let t = unsafe { libc::mktime(&mut tm) };
-        assert!(
-            t != -1,
-            "mktime cannot represent {hour}:00 {days_ahead} days after {unix}"
-        );
-        t as i64
+        let local = Self::local(unix);
+        // a day past the month's end runs into the next month
+        cupertino_kit::time::from_local(
+            local.year,
+            local.month,
+            i32::from(local.day) + days_ahead,
+            hour,
+            0,
+            0,
+        )
+        .and_then(cupertino_kit::time::to_unix)
+        .unwrap_or_else(|| {
+            panic!("mktime cannot represent {hour}:00 {days_ahead} days after {unix}")
+        })
     }
 }

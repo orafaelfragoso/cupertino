@@ -16,6 +16,7 @@ use std::error::Error;
 use std::fs::File;
 use std::io::{ErrorKind, Read, Write};
 use std::os::fd::{AsFd, OwnedFd};
+use std::os::unix::fs::FileExt;
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{mpsc, Arc};
@@ -27,7 +28,6 @@ use cupertino_screenshot::image::{self, Format};
 use cupertino_screenshot::pick::PickWindow;
 use cupertino_screenshot::session::Target;
 use cupertino_wayland_client::OutputId;
-use memmap2::Mmap;
 use rustix::event::{poll, PollFd, PollFlags, Timespec};
 use rustix::fs::{memfd_create, MemfdFlags};
 use tiny_skia::Pixmap;
@@ -567,9 +567,10 @@ impl Capturer {
         if let FrameEnd::Failed(reason) = end {
             return Err(format!("the capture failed: {reason}").into());
         }
-        // SAFETY: the memfd is private to this process and the server, which wrote the frame before `ready`.
-        let map = unsafe { Mmap::map(&file) }?;
-        let image = image::from_shm(width, height, stride, &map, format)
+        // the memfd is private to this process and the server, which wrote the frame before `ready`; it is read once
+        let mut frame_bytes = vec![0u8; len];
+        file.read_exact_at(&mut frame_bytes, 0)?;
+        let image = image::from_shm(width, height, stride, &frame_bytes, format)
             .ok_or_else(|| format!("the {width} x {height} buffer does not hold its image"))?;
         Ok((image, self.state.transform))
     }

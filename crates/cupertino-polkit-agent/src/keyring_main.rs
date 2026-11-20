@@ -2,14 +2,15 @@
 //! draw the authentication prompt. It owns the keyring daemon's prompter names on the session bus, so the keyring's
 //! password questions are asked in the session's own prompt. See the README.
 
-mod harden;
+#![forbid(unsafe_code)]
+
 mod keyring_app;
 mod logind;
 
 use std::process::ExitCode;
 
 use cupertino_diagnostic_events as diag;
-use cupertino_polkit_agent::zeroing::ZeroOnFree;
+use cupertino_login_ipc::zeroing::ZeroOnFree;
 
 /// The prompter handles passwords: nothing it frees keeps one.
 #[global_allocator]
@@ -21,7 +22,7 @@ fn main() -> ExitCode {
         "keyring",
         diag::Sink::UserStore,
     );
-    if let Err(e) = harden::harden() {
+    if let Err(e) = cupertino_kit::process::harden() {
         eprintln!("cupertino-keyring-prompter: hardening the process: {e}");
         diag::exit_error(&format!("hardening the process: {e}"));
         return ExitCode::FAILURE;

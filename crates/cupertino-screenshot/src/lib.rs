@@ -13,6 +13,8 @@
 //!   `controller`, one run from the overlay to the delivered capture; and the `cupertino-screenshot` process, a client
 //!   the server starts on a privileged connection of its own for each screenshot shortcut (see the README).
 
+#![forbid(unsafe_code)]
+
 #[cfg(feature = "app")]
 pub mod controller;
 pub mod filename;

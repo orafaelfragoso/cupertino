@@ -1,6 +1,8 @@
 //! The `cupertino-controlcenter` process: shows the control panel on a layer surface and carries out the calls of
 //! `org.cupertino.ControlPanel1`. See the README for how to run it.
 
+#![forbid(unsafe_code)]
+
 mod app;
 
 use cupertino_diagnostic_events as diag;

@@ -15,6 +15,8 @@
 //! reference analysis; colours, glyph placement and the
 //! material recipe are approximate.
 
+#![forbid(unsafe_code)]
+
 pub mod backend;
 #[cfg(feature = "dbus")]
 pub mod control;

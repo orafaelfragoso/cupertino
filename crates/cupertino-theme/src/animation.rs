@@ -92,6 +92,12 @@ impl SpringPreset {
         response: std::f64::consts::TAU / 28.0,
         damping: 1.0,
     });
+    /// A detail view of the control panel growing out of its tile, and shrinking back into it: critically damped, its
+    /// undamped period 0.35 s, so it never overshoots and rests after 0.6 s.
+    pub const CONTROL_PANEL_DETAIL: SpringPreset = SpringPreset(SpringForm::Ratio {
+        response: 0.35,
+        damping: 1.0,
+    });
     /// The launcher panel's scale as it opens, with a little bounce.
     pub const LAUNCHER_OPEN: SpringPreset = SpringPreset(SpringForm::Ratio {
         response: 0.30,
@@ -148,6 +154,12 @@ impl Timing {
             0.234375, 0.7421875, 0.54296875, 0.92578125,
         ))),
         seconds: 0.18,
+    });
+    /// A detail view of the control panel and its tile cross-fading in place with Reduce Motion, in place of
+    /// [`SpringPreset::CONTROL_PANEL_DETAIL`]: constant speed over 0.2 s.
+    pub const CONTROL_PANEL_DETAIL_FADE: Timing = Timing(Motion::Eased {
+        easing: Easing::LINEAR,
+        seconds: 0.2,
     });
     /// The on-screen displays' fade after their hold: constant speed over 0.7 s, so the alpha falls as `1 - t / 0.7`.
     pub const OSD_FADE: Timing = Timing(Motion::Eased {

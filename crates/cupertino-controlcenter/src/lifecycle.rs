@@ -1,46 +1,33 @@
 //! The open / close state machine of the panel, with injected time (seconds on any monotonic clock).
 //!
-//! `hidden -> shown` on a toggle; `shown -> hiding` on a dismissal; `hiding -> hidden` after the fade-out (derived from the
-//! observers). A toggle while hiding opens the panel again.
+//! `hidden -> shown` on a toggle; `shown -> hiding` on a dismissal; `hiding -> hidden` once the fade-out has run. A toggle
+//! while hiding opens the panel again.
 //!
-//! The fades are the same whether the panel draws them frame by frame or the compositor runs them on its clock, on the
-//! design catalogue's `SpringPreset::CONTROL_PANEL_OPEN` (the critically damped rise of `OPEN_RATE`, a spring of
-//! damping ratio 1 whose undamped period is a turn at that rate, which follows `rise` to [`OPEN_SECONDS`] and then
-//! settles the last hundredth smoothly instead of at once) and `Timing::CONTROL_PANEL_CLOSE` (`fall` over
-//! [`FADE_SECONDS`] as a cubic Bézier through its ends, fitted to it within a two-thousandth everywhere).
+//! The compositor runs the fades on its clock, on the design catalogue's `SpringPreset::CONTROL_PANEL_OPEN` and
+//! `Timing::CONTROL_PANEL_CLOSE` ([`open`], [`close`]); the lifecycle follows the same curves, so it knows how far a fade
+//! has come when it turns and when the card's window may go. With Reduce Motion the panel appears and goes at once.
 
-/// How long the panel takes to fade out: it falls away quickly at first and slows towards the end.
-pub const FADE_SECONDS: f64 = 0.18;
-/// Time constant of the fade-out's exponential fall, in seconds.
-const FADE_TAU: f64 = 0.06;
-/// How long the panel takes to fade in.
-pub const OPEN_SECONDS: f64 = 0.23;
-/// Rate of the fade-in's critically damped curve, in radians per second.
-const OPEN_RATE: f64 = 28.0;
+use cupertino_kit::motion::{SpringPreset, Timing};
 
-/// How far a critically damped rise of [`OPEN_RATE`] has come after `t` seconds, 0 to 1; 1 from [`OPEN_SECONDS`] on.
-fn rise(t: f64) -> f64 {
-    if t <= 0.0 {
-        0.0
-    } else if t >= OPEN_SECONDS {
-        1.0
-    } else {
-        let wt = OPEN_RATE * t;
-        1.0 - (1.0 + wt) * (-wt).exp()
-    }
+/// The card's fade-in: the catalogue's critically damped rise of the control panel.
+pub fn open() -> Timing {
+    SpringPreset::CONTROL_PANEL_OPEN.into()
 }
 
-/// What is left of a fade-out `t` seconds after it began: an exponential fall stretched so it reaches 0 at
-/// [`FADE_SECONDS`].
-fn fall(t: f64) -> f64 {
+/// The card's fade-out: the catalogue's fall of the control panel, quick at first and slowing towards the end.
+pub fn close() -> Timing {
+    Timing::CONTROL_PANEL_CLOSE
+}
+
+/// How far `timing` has come `t` seconds after it started, 0 to 1; 1 from its end on.
+fn progress(timing: Timing, t: f64) -> f64 {
     if t <= 0.0 {
-        return 1.0;
+        0.0
+    } else if t >= timing.duration() {
+        1.0
+    } else {
+        timing.value(t).clamp(0.0, 1.0)
     }
-    if t >= FADE_SECONDS {
-        return 0.0;
-    }
-    let end = (-FADE_SECONDS / FADE_TAU).exp();
-    (((-t / FADE_TAU).exp() - end) / (1.0 - end)).clamp(0.0, 1.0)
 }
 
 /// Where the panel is in its lifetime.
@@ -85,7 +72,7 @@ impl Lifecycle {
         if self.reduce_motion {
             0.0
         } else {
-            FADE_SECONDS
+            close().duration()
         }
     }
 
@@ -99,20 +86,15 @@ impl Lifecycle {
         }
     }
 
-    /// Opacity of the card and its material at `now`: rising while it opens, 1 while shown, falling to 0 while hiding.
-    /// A reversal continues from where the fade was.
+    /// Opacity of the card at `now` as the compositor fades it: rising while it opens, 1 while shown, falling to 0
+    /// while hiding. A reversal continues from where the fade was.
     pub fn opacity(&self, now: f64) -> f64 {
         match self.state {
             State::Hidden => 0.0,
             State::Shown(..) if self.reduce_motion => 1.0,
-            State::Shown(since, from) => from + (1.0 - from) * rise(now - since),
-            State::Hiding(since, from) => {
-                if self.reduce_motion {
-                    0.0
-                } else {
-                    from * fall(now - since)
-                }
-            }
+            State::Shown(since, from) => from + (1.0 - from) * progress(open(), now - since),
+            State::Hiding(..) if self.reduce_motion => 0.0,
+            State::Hiding(since, from) => from * (1.0 - progress(close(), now - since)),
         }
     }
 
@@ -128,7 +110,7 @@ impl Lifecycle {
 
     /// Whether the panel is still fading in at `now`.
     pub fn opening(&self, now: f64) -> bool {
-        matches!(self.state, State::Shown(since, _) if !self.reduce_motion && now - since < OPEN_SECONDS)
+        matches!(self.state, State::Shown(since, _) if !self.reduce_motion && now - since < open().duration())
     }
 
     /// Open the panel when it is hidden or hiding, dismiss it when it is shown.

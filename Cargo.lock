@@ -980,20 +980,14 @@ name = "cupertino-controlcenter"
 version = "0.1.0"
 dependencies = [
  "async-channel",
- "async-io",
- "cupertino-alsa",
  "cupertino-assets",
  "cupertino-defaults",
- "cupertino-diagnostic-events",
  "cupertino-geometry",
- "cupertino-keyboard",
  "cupertino-kit",
+ "cupertino-kit-shell",
  "cupertino-peer",
- "cupertino-pipewire",
  "cupertino-radios",
- "cupertino-shell-client",
- "cupertino-ui-wayland",
- "cupertino-wayland-client",
+ "serde",
  "zbus",
 ]
 
@@ -1714,6 +1708,7 @@ dependencies = [
  "calloop 0.14.5",
  "cupertino-assets",
  "cupertino-cli",
+ "cupertino-controlcenter",
  "cupertino-kit",
  "cupertino-kit-shell",
  "cupertino-login",
@@ -1778,6 +1773,7 @@ dependencies = [
 name = "cupertino-shell"
 version = "0.1.0"
 dependencies = [
+ "cupertino-controlcenter",
  "cupertino-diagnostic-events",
  "cupertino-kit",
  "cupertino-kit-shell",

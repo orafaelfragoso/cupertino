@@ -76,6 +76,15 @@ where
     Command::Perform(Box::pin(async move { done(outcome.await) }))
 }
 
+/// The result of `work` run on the I/O pool, as [`io`] runs it, for a future of the crate's own.
+#[track_caller]
+pub(crate) fn io_outcome<T: Send + 'static>(
+    deadline: Duration,
+    work: impl FnOnce() -> T + Send + 'static,
+) -> impl Future<Output = T> + Send {
+    outcome(io_submit, Some((deadline, Location::caller())), work)
+}
+
 /// The result of `work`, run on a pool by `submit` once the future is first polled, for the instance of the calling
 /// thread; its panic goes on where the future is polled.
 fn outcome<T: Send + 'static>(

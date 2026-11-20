@@ -52,6 +52,10 @@ name = "bus"
 required-features = ["test"]
 
 [[test]]
+name = "bus-ended"
+required-features = ["test"]
+
+[[test]]
 name = "children"
 required-features = ["test"]
 

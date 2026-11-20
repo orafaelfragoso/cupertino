@@ -10,6 +10,7 @@
 use crate::motion::GROUP_WIDTH;
 use crate::nav::View;
 use cupertino_kit::geometry::Rect;
+use cupertino_kit::motion::Easing;
 
 /// A button's diameter, the distance between the starts of two, and so the gap between two buttons and between the
 /// field and the first.
@@ -103,7 +104,7 @@ pub const BUD_LAG: f64 = 0.08;
 pub fn bud_size(index: usize, spread: f64) -> f64 {
     let t = ((spread - index as f64 * BUD_LAG) / BUD_GROWN).clamp(0.0, 1.0);
     // ease out: it swells fast as it leaves the field and settles into its size
-    let eased = 1.0 - (1.0 - t) * (1.0 - t);
+    let eased = Easing::LAUNCHER_BUD.eval(t);
     BUD_START + (1.0 - BUD_START) * eased
 }
 

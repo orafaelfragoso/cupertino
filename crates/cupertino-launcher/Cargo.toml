@@ -31,7 +31,6 @@ cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events" }
 async-channel = { version = "2", optional = true }
 async-io = { version = "2", optional = true }
 cupertino-apps = { path = "../cupertino-apps" }
-cupertino-animation = { path = "../cupertino-animation" }
 cupertino-assets = { path = "../cupertino-assets", optional = true }
 cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-icons = { path = "../cupertino-icons", optional = true }
@@ -39,7 +38,6 @@ cupertino-kit = { path = "../cupertino-kit" }
 cupertino-keyboard = { path = "../cupertino-keyboard", optional = true }
 cupertino-peer = { path = "../cupertino-peer", optional = true }
 cupertino-shell-client = { path = "../cupertino-shell-client", optional = true }
-cupertino-ui-text = { path = "../cupertino-ui-text" }
 cupertino-ui-wayland = { path = "../cupertino-ui-wayland", optional = true }
 cupertino-wayland-client = { path = "../cupertino-wayland-client", optional = true }
 libc = { version = "0.2", optional = true }

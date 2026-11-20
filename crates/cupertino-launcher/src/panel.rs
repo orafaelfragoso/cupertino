@@ -1,7 +1,7 @@
-//! Panel state: query editing, result selection, scrolling and the appear/disappear animation.
+//! Panel state: query editing, result selection and scrolling.
 //!
 //! The panel is a model. The compositor feeds it translated key events ([`Key`], [`Mods`]) and
-//! pointer events and draws it with [`crate::render`]. The query is a shared text field (`cupertino-ui-text`'s `TextBuffer`):
+//! pointer events and draws it with [`crate::view`]. The query is a shared text field (Kit's `TextBuffer`):
 //! every key the table below does not name is [`PanelEvent::Edit`], which the host passes to [`Panel::edit`].
 //!
 //! | key | action |
@@ -25,8 +25,7 @@
 
 use crate::engine::{Activation, ItemAction, Launcher, ResultItem, Results};
 use crate::refine;
-use cupertino_animation::{AnimatedValue, Curve, SpringParams};
-use cupertino_ui_text::TextBuffer;
+use cupertino_kit::text::TextBuffer;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Key {
@@ -182,10 +181,8 @@ pub struct Panel {
     scroll_row: usize,
     visible: bool,
     focus: Focus,
-    appear: AnimatedValue<f64>,
     /// Rows (headers included) shown at once; keep equal to the style's `max_rows`.
     pub max_rows: usize,
-    pub spring: SpringParams,
     /// The searches that opened something, the latest first, at most [`HISTORY_LEN`]; and which of them Up put in
     /// the field, while it stands there unedited.
     history: Vec<String>,
@@ -211,9 +208,7 @@ impl Panel {
             scroll_row: 0,
             visible: false,
             focus: Focus::Field,
-            appear: AnimatedValue::new(0.0),
             max_rows: 9,
-            spring: SpringParams::from_perceptual(0.3, 0.0),
             history: Vec::new(),
             recalled: None,
         }
@@ -377,27 +372,11 @@ impl Panel {
         !self.field.is_empty() && self.field.selection() == (0..self.field.text().len())
     }
 
-    /// Appear progress 0…1 (the spring may overshoot slightly with a bouncy configuration).
-    pub fn progress(&self, now: f64) -> f64 {
-        self.appear.value(now)
-    }
-
-    pub fn is_animating(&self, now: f64) -> bool {
-        self.appear.is_animating(now)
-    }
-
-    /// `true` while something has to be drawn: visible or still animating out.
-    pub fn needs_draw(&self, now: f64) -> bool {
-        self.visible || self.appear.is_animating(now) || self.appear.value(now) > 0.001
-    }
-
     /// Open with the previous query kept and selected, so typing replaces it. A kept query is not searched until it
     /// is edited: nothing shows below the field for it. With no query, the suggestions.
     pub fn show(&mut self, launcher: &Launcher, now: Now) {
         self.visible = true;
         self.focus = Focus::Field;
-        self.appear
-            .animate_to(1.0, Curve::Spring(self.spring), now.mono);
         if self.field.is_empty() {
             self.requery(launcher, now.unix);
         } else {
@@ -409,21 +388,14 @@ impl Panel {
         }
     }
 
-    /// Put the appear animation at its end at once (the shell client's fixed test clock).
-    pub fn settle_appear(&mut self) {
-        self.appear
-            .set_immediately(if self.visible { 1.0 } else { 0.0 });
-    }
-
-    pub fn hide(&mut self, now: f64) {
+    pub fn hide(&mut self) {
         self.visible = false;
         self.focus = Focus::Field;
-        self.appear.animate_to(0.0, Curve::Spring(self.spring), now);
     }
 
     pub fn toggle(&mut self, launcher: &Launcher, now: Now) {
         if self.visible {
-            self.hide(now.mono);
+            self.hide();
         } else {
             self.show(launcher, now);
         }
@@ -603,7 +575,7 @@ impl Panel {
         let activation = launcher.activate_action(&item, action, self.field.text(), now.unix);
         let query = self.field.text().to_owned();
         self.remember(&query);
-        self.hide(now.mono);
+        self.hide();
         PanelEvent::Activate(activation)
     }
 
@@ -615,7 +587,7 @@ impl Panel {
         let activation = launcher.activate(&item, self.field.text(), now.unix);
         let query = self.field.text().to_owned();
         self.remember(&query);
-        self.hide(now.mono);
+        self.hide();
         PanelEvent::Activate(activation)
     }
 
@@ -647,7 +619,7 @@ impl Panel {
             };
             if let Some(cmd) = cmd {
                 if matches!(cmd, PanelCommand::OpenSettings | PanelCommand::Help) {
-                    self.hide(now.mono);
+                    self.hide();
                 }
                 return PanelEvent::Command(cmd);
             }
@@ -666,7 +638,7 @@ impl Panel {
                     self.set_query("", launcher, now);
                     PanelEvent::Changed
                 } else {
-                    self.hide(now.mono);
+                    self.hide();
                     PanelEvent::Close
                 }
             }

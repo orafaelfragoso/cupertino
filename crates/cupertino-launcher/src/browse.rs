@@ -17,14 +17,15 @@
 
 use crate::desktop::DesktopEntry;
 use cupertino_kit::geometry::{Point, Rect};
+use cupertino_kit::motion::Timing;
 use std::collections::HashMap;
 
 /// Columns of the grid, the recents row included.
 pub const COLUMNS: usize = 7;
 
-/// How long the scroll indicator stays after the content last scrolled, then how long it takes to fade out.
+/// How long the scroll indicator stays after the content last scrolled, in seconds, then how it fades out.
 pub const SCROLLER_LINGER: f64 = 0.8;
-pub const SCROLLER_FADE: f64 = 0.25;
+pub const SCROLLER_FADE: Timing = Timing::LAUNCHER_SCROLLER_FADE;
 
 /// The categories a filter narrows the applications to, in the order the filters show. An application is in every
 /// category one of its desktop entry's `Categories` maps to ([`Category::of`]), and in [`Category::Other`] when none
@@ -854,14 +855,14 @@ impl Browser {
     /// How much the scroll indicator shows at `now`: whole while the content scrolls and for a moment after.
     pub fn scroller_alpha(&self, now: f64) -> f64 {
         self.scrolled_at.map_or(0.0, |at| {
-            (1.0 - (now - at - SCROLLER_LINGER) / SCROLLER_FADE).clamp(0.0, 1.0)
+            1.0 - SCROLLER_FADE.value(now - at - SCROLLER_LINGER)
         })
     }
 
     /// Whether the scroll indicator is still fading at `now`.
     pub fn animating(&self, now: f64) -> bool {
         self.scrolled_at
-            .is_some_and(|at| now - at < SCROLLER_LINGER + SCROLLER_FADE)
+            .is_some_and(|at| now - at < SCROLLER_LINGER + SCROLLER_FADE.duration())
     }
 
     /// The filters with their rectangles.

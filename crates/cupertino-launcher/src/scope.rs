@@ -632,15 +632,14 @@ impl FilesScope {
     /// How much the scroll indicator shows at `now`: whole while the content scrolls and for a moment after.
     pub fn scroller_alpha(&self, now: f64) -> f64 {
         self.scrolled_at.map_or(0.0, |at| {
-            (1.0 - (now - at - crate::browse::SCROLLER_LINGER) / crate::browse::SCROLLER_FADE)
-                .clamp(0.0, 1.0)
+            1.0 - crate::browse::SCROLLER_FADE.value(now - at - crate::browse::SCROLLER_LINGER)
         })
     }
 
     /// Whether the scroll indicator is still fading at `now`.
     pub fn animating(&self, now: f64) -> bool {
         self.scrolled_at.is_some_and(|at| {
-            now - at < crate::browse::SCROLLER_LINGER + crate::browse::SCROLLER_FADE
+            now - at < crate::browse::SCROLLER_LINGER + crate::browse::SCROLLER_FADE.duration()
         })
     }
 

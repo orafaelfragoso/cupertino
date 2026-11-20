@@ -832,7 +832,6 @@ impl Model {
                 let kept = self.panel.query().to_owned();
                 self.apply_launcher_settings();
                 self.panel.show(&self.launcher, now);
-                self.panel.settle_appear();
                 self.searched = None;
                 self.held = !kept.is_empty();
                 self.select_query = self.held;
@@ -995,7 +994,7 @@ impl Model {
         self.mode_hover = None;
         self.mode_focus = modes::Focus::default();
         self.primary_held = false;
-        self.panel.hide(now.mono);
+        self.panel.hide();
         self.tracker.cancel();
         self.searched = None;
         self.said = None;
@@ -1013,7 +1012,9 @@ impl Model {
             self.motion.settle(now.mono);
         }
         if let Some(from) = rest {
-            let to = self.motion.frame(now.mono + crate::motion::CLOSE_DURATION);
+            let to = self
+                .motion
+                .frame(now.mono + crate::motion::CLOSE.duration());
             self.layer_changes =
                 view::layers::close_changes(self.extent, &from, &to, self.modes().len());
             self.handed = Some(from);
@@ -1090,7 +1091,7 @@ impl Model {
         let duration = self
             .motion
             .shaping_left(now)
-            .max(crate::motion::MERGE_DURATION)
+            .max(crate::motion::MERGE.duration())
             .max(1e-3);
         let switch = self.motion.header_switch(now);
         let rest = self.resting(now);

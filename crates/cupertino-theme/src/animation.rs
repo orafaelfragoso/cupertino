@@ -233,6 +233,99 @@ impl Timing {
     }
 }
 
+/// The motions of the launcher's panel.
+impl SpringPreset {
+    /// The panel's enclosure growing to a larger shape (a scope unfolding, the results lengthening): an undamped
+    /// period of 0.27 s at a damping ratio of 0.83, so it overshoots by a few points.
+    pub const LAUNCHER_GROW: SpringPreset = SpringPreset(SpringForm::Ratio {
+        response: 0.27,
+        damping: 0.83,
+    });
+    /// The panel's enclosure shrinking to a smaller shape (a scope folding into the search field): 0.295 s at 0.86.
+    pub const LAUNCHER_SHRINK: SpringPreset = SpringPreset(SpringForm::Ratio {
+        response: 0.295,
+        damping: 0.86,
+    });
+    /// The search field's end drawing back as the mode buttons bud out of it: 0.305 s at 0.68.
+    pub const LAUNCHER_FIELD: SpringPreset = SpringPreset(SpringForm::Ratio {
+        response: 0.305,
+        damping: 0.68,
+    });
+    /// The mode buttons sliding out of the search field to their places, carried a little past them: 0.575 s at 0.69.
+    pub const LAUNCHER_SPLIT: SpringPreset = SpringPreset(SpringForm::Ratio {
+        response: 0.575,
+        damping: 0.69,
+    });
+    /// The enclosure's width coming back from its dip as the files scope opens: critically damped, 0.25 s.
+    pub const LAUNCHER_DIP_BACK: SpringPreset = SpringPreset(SpringForm::Ratio {
+        response: 0.25,
+        damping: 1.0,
+    });
+}
+
+/// The motions of the launcher's panel.
+impl Timing {
+    /// The panel fading in as it opens: constant speed over 0.1 s.
+    pub const LAUNCHER_OPEN_FADE: Timing = Timing(Motion::Eased {
+        easing: Easing::LINEAR,
+        seconds: 0.10,
+    });
+    /// A scope's content fading out as it folds into the search field: constant speed over 0.05 s.
+    pub const LAUNCHER_FOLD_FADE: Timing = Timing(Motion::Eased {
+        easing: Easing::LINEAR,
+        seconds: 0.05,
+    });
+    /// The applications browser's content fading in as it unfolds from the search field: ease-out over 0.12 s.
+    pub const LAUNCHER_UNFOLD_CONTENT: Timing = Timing(Motion::Eased {
+        easing: Easing::EASE_OUT,
+        seconds: 0.12,
+    });
+    /// The files scope's content fading in once its enclosure has grown: ease-out over 0.1 s.
+    pub const LAUNCHER_FILES_CONTENT: Timing = Timing(Motion::Eased {
+        easing: Easing::EASE_OUT,
+        seconds: 0.10,
+    });
+    /// The panel closing: it grows a little, its content blurs and it fades out, ease-out over 0.1 s.
+    pub const LAUNCHER_CLOSE: Timing = Timing(Motion::Eased {
+        easing: Easing::EASE_OUT,
+        seconds: 0.10,
+    });
+    /// The mode buttons' symbols sharpening after they bud: ease-out over 0.2 s.
+    pub const LAUNCHER_GLYPH_SHARPEN: Timing = Timing(Motion::Eased {
+        easing: Easing::EASE_OUT,
+        seconds: 0.2,
+    });
+    /// The mode buttons merging back into the search field as a scope opens: ease-out over 0.05 s.
+    pub const LAUNCHER_MERGE: Timing = Timing(Motion::Eased {
+        easing: Easing::EASE_OUT,
+        seconds: 0.05,
+    });
+    /// The enclosure's width dipping as the files scope opens, before [`SpringPreset::LAUNCHER_DIP_BACK`] brings it
+    /// back: ease-in-out over 0.14 s.
+    pub const LAUNCHER_DIP: Timing = Timing(Motion::Eased {
+        easing: Easing::EASE_IN_OUT,
+        seconds: 0.14,
+    });
+    /// The applications browser's and the files scope's scroll indicator fading out after it lingers: constant speed
+    /// over 0.25 s.
+    pub const LAUNCHER_SCROLLER_FADE: Timing = Timing(Motion::Eased {
+        easing: Easing::LINEAR,
+        seconds: 0.25,
+    });
+}
+
+/// The motions of the launcher's panel.
+impl Easing {
+    /// A mode button swelling from a bud to its size as it leaves the search field, fast at first and settling:
+    /// `1 − (1 − t)²`, which this cubic Bézier is exactly.
+    pub const LAUNCHER_BUD: Easing = Easing(Shape::Bezier(CubicBezier::new(
+        1.0 / 3.0,
+        2.0 / 3.0,
+        2.0 / 3.0,
+        1.0,
+    )));
+}
+
 /// The motions of the notification banners and the notification list.
 impl SpringPreset {
     /// A banner springing back to rest after a leftward swipe: mass 1, stiffness 100, damping 100, a damping ratio of

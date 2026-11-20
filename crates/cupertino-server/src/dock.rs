@@ -158,6 +158,11 @@ impl Docks {
         self.docks.iter().any(|d| &d.surface == surface)
     }
 
+    /// Whether a surface of `output` has the dock role.
+    pub fn has_dock(&self, output: OutputId) -> bool {
+        self.of_output(output).is_some()
+    }
+
     pub fn remove_output(&mut self, output: OutputId) {
         self.docks.retain(|d| d.output != output);
     }

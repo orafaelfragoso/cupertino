@@ -12,8 +12,11 @@ use smithay::backend::renderer::element::texture::TextureRenderElement;
 use smithay::backend::renderer::element::utils::RescaleRenderElement;
 use smithay::backend::renderer::element::{Element, Kind};
 use smithay::backend::renderer::gles::GlesRenderer;
+use smithay::backend::renderer::utils::RendererSurfaceStateUserData;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
+use smithay::reexports::wayland_server::Resource;
 use smithay::utils::{Logical, Physical, Point, Rectangle, Scale, Size};
+use smithay::wayland::compositor::with_states;
 
 use super::chrome::Resolved;
 use super::clip::{ClipElement, ClipShape};
@@ -387,10 +390,48 @@ pub(super) fn surface_elements(
 ) -> Vec<WaylandSurfaceRenderElement<GlesRenderer>> {
     let mut els: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
         render_elements_from_surface_tree(ctx.renderer, surface, origin, scale, alpha, kind);
+    if els.is_empty() && !surface.is_alive() {
+        els.extend(ended_surface_element(
+            ctx, surface, origin, scale, alpha, kind,
+        ));
+    }
     if let Some(only) = only {
         els.retain(|e| only.ids.contains(e.id()));
     }
     els
+}
+
+/// The element of a `wl_surface` that ended, drawn as its renderer state last showed it: an ended surface is no longer
+/// in its own tree (its children, itself among them, went as it did), so its tree draws nothing, and its subsurfaces
+/// are lost to it. A persistent surface's last picture is taken this way as its client's connection drops (D19).
+fn ended_surface_element(
+    ctx: &mut Lowering<'_>,
+    surface: &WlSurface,
+    origin: Point<i32, Physical>,
+    scale: Scale<f64>,
+    alpha: f32,
+    kind: Kind,
+) -> Option<WaylandSurfaceRenderElement<GlesRenderer>> {
+    with_states(surface, |states| {
+        let offset = states
+            .data_map
+            .get::<RendererSurfaceStateUserData>()?
+            .lock()
+            .ok()?
+            .view()?
+            .offset;
+        let location = origin.to_f64() + offset.to_f64().to_physical(scale);
+        WaylandSurfaceRenderElement::from_surface(
+            ctx.renderer,
+            surface,
+            states,
+            location,
+            alpha,
+            kind,
+        )
+        .ok()
+        .flatten()
+    })
 }
 
 fn surface_tree(

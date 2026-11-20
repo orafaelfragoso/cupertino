@@ -23,16 +23,22 @@ impl Cupertino {
         }
     }
 
-    /// A component's `wl_surface` ends: a persisted one keeps its last picture for the hold the end of its layer role
-    /// starts.
+    /// A component's `wl_surface` ends: a persisted one keeps its last picture, and where it lay, for the hold the end
+    /// of its layer role starts.
     fn host_surface_destroyed(&mut self, surface: &WlSurface) {
         let id = surface.id();
         if !self.hosts.persisted.contains_key(&id) {
             return;
         }
         let picture = self.capture_held_picture(surface);
+        let geometry = self.outputs.iter().find_map(|o| {
+            let map = layer_map_for_output(&o.output);
+            let layer = map.layer_for_surface(surface, WindowSurfaceType::TOPLEVEL)?;
+            map.layer_geometry(layer)
+        });
         if let Some(persisted) = self.hosts.persisted.get_mut(&id) {
             persisted.last_picture = picture;
+            persisted.last_geometry = geometry;
         }
     }
 

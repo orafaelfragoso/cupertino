@@ -30,6 +30,7 @@ use cupertino_protocols::client::transaction::cupertino_transaction_v1::{
 use cupertino_server::authorization::{Holder, DETACHED_LIFETIME};
 use cupertino_server::host::HostKind;
 use cupertino_server::state::{insert_client, new_output, ClientState};
+use cupertino_server::transaction::{MAX_KEPT_COMMITS, PACED_KEPT_COMMITS};
 use cupertino_server::{Config, Cupertino};
 use cupertino_wm::{OutputId, WindowId};
 use smithay::desktop::layer_map_for_output;
@@ -1400,5 +1401,386 @@ fn a_held_surface_keeps_its_hole_drawing_live() {
     assert!(
         magenta_in(&image, hole_rect) > 1000,
         "the held hole goes on drawing the window live"
+    );
+}
+
+/// The server's surface of the component's layer shell surface of namespace `namespace`.
+fn server_layer_surface(
+    rig: &Rig,
+    namespace: &str,
+) -> smithay::reexports::wayland_server::protocol::wl_surface::WlSurface {
+    layer_map_for_output(&rig.state.outputs[0].output)
+        .layers()
+        .find(|l| l.namespace() == namespace)
+        .map(|l| l.wl_surface().clone())
+        .expect("the component's layer shell surface")
+}
+
+/// How many `cupertino_layers_v1` layers the server's surface `parent` has applied.
+fn layers_of(
+    parent: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+) -> usize {
+    cupertino_server::layers_v1::with_parent(parent, |layers| layers.len())
+}
+
+/// The dock creates transaction `serial` expecting the menu bar, which joins and stages its surface with a commit that
+/// makes a layer and submits: the commit is kept. Returns the dock's transaction, the menu bar's and its layer's objects.
+fn menu_bar_part_kept(
+    rig: &mut Rig,
+    serial: u32,
+    (dconn, dq, dst): (&Connection, &mut EventQueue<CompClient>, &mut CompClient),
+    (bconn, bq, bst): (&Connection, &mut EventQueue<CompClient>, &mut CompClient),
+    bar_surf: &wl_surface::WlSurface,
+) -> (
+    CupertinoTransactionV1,
+    CupertinoTransactionV1,
+    wl_surface::WlSurface,
+    CupertinoLayerV1,
+) {
+    let (dqh, bqh) = (dq.handle(), bq.handle());
+    let tx =
+        dst.tx_manager
+            .as_ref()
+            .unwrap()
+            .create(serial, dst.output.as_ref().unwrap(), &dqh, ());
+    tx.expect("menubar".into());
+    tx.set_deadline(100);
+    rig.pump_comp(dconn, dq, dst);
+    let tx_bar = bst.tx_manager.as_ref().unwrap().join(
+        "dock".into(),
+        dst.instance.unwrap(),
+        serial,
+        bst.output.as_ref().unwrap(),
+        &bqh,
+        (),
+    );
+    tx_bar.stage(bar_surf);
+    let child = bst.compositor.as_ref().unwrap().create_surface(&bqh, ());
+    let layer = bst
+        .layers
+        .as_ref()
+        .unwrap()
+        .get_layer(&child, bar_surf, &bqh, ());
+    bar_surf.commit();
+    tx_bar.submit();
+    for _ in 0..3 {
+        rig.pump_comp(bconn, bq, bst);
+    }
+    (tx, tx_bar, child, layer)
+}
+
+#[test]
+fn a_transaction_whose_creator_withdraws_before_submit_ends_cancelled() {
+    let mut rig = Rig::new();
+    let (hconn, mut hq, mut hst) = rig.connect_host(&["dock", "menubar"]);
+    let (_hdock, dconn, mut dq, mut dst) = rig.spawn_component(&hconn, &mut hq, &mut hst, "dock");
+    let (_hbar, bconn, mut bq, mut bst) = rig.spawn_component(&hconn, &mut hq, &mut hst, "menubar");
+    let (bar_surf, _bar_layer) = rig.create_layer_surface(&bconn, &mut bq, &mut bst, "bar");
+    let server_bar = server_layer_surface(&rig, "bar");
+    let (tx, _tx_bar, _child, _layer) = menu_bar_part_kept(
+        &mut rig,
+        8,
+        (&dconn, &mut dq, &mut dst),
+        (&bconn, &mut bq, &mut bst),
+        &bar_surf,
+    );
+    assert_eq!(layers_of(&server_bar), 0, "the joiner's commit is kept");
+    assert!(bst.finished.is_empty());
+
+    // the creator destroys its part before it submitted: nothing would start the transaction any more
+    tx.destroy();
+    for _ in 0..3 {
+        rig.pump_comp(&dconn, &mut dq, &mut dst);
+        rig.pump_comp(&bconn, &mut bq, &mut bst);
+    }
+    assert_eq!(
+        bst.finished,
+        vec![Outcome::Cancelled],
+        "the joiner hears the transaction ended as cancelled"
+    );
+    assert!(bst.started.is_empty(), "it never started");
+    assert_eq!(
+        layers_of(&server_bar),
+        1,
+        "the joiner's kept commit applies at once, as an ordinary commit"
+    );
+    // the joiner's surface is no longer staged: it commits as usual
+    let bqh = bq.handle();
+    let child2 = bst.compositor.as_ref().unwrap().create_surface(&bqh, ());
+    let _layer2 = bst
+        .layers
+        .as_ref()
+        .unwrap()
+        .get_layer(&child2, &bar_surf, &bqh, ());
+    bar_surf.commit();
+    for _ in 0..2 {
+        rig.pump_comp(&bconn, &mut bq, &mut bst);
+    }
+    assert_eq!(layers_of(&server_bar), 2, "no commit of it is kept");
+}
+
+#[test]
+fn a_transaction_whose_creator_disconnects_before_it_starts_ends_cancelled() {
+    let mut rig = Rig::new();
+    let (hconn, mut hq, mut hst) = rig.connect_host(&["dock", "menubar"]);
+    let (hdock, dconn, mut dq, mut dst) = rig.spawn_component(&hconn, &mut hq, &mut hst, "dock");
+    let (_hbar, bconn, mut bq, mut bst) = rig.spawn_component(&hconn, &mut hq, &mut hst, "menubar");
+    let (bar_surf, _bar_layer) = rig.create_layer_surface(&bconn, &mut bq, &mut bst, "bar");
+    let server_bar = server_layer_surface(&rig, "bar");
+    let (tx, _tx_bar, _child, _layer) = menu_bar_part_kept(
+        &mut rig,
+        9,
+        (&dconn, &mut dq, &mut dst),
+        (&bconn, &mut bq, &mut bst),
+        &bar_surf,
+    );
+    // the creator submitted too, but its connection ends before the menu bar's part and the deadline came
+    tx.submit();
+    let _ = dconn.flush();
+    drop(tx);
+    drop(dst);
+    drop(dq);
+    drop(dconn);
+    drop(hdock);
+    for _ in 0..4 {
+        rig.pump_comp(&bconn, &mut bq, &mut bst);
+    }
+    assert_eq!(
+        bst.finished,
+        vec![Outcome::Cancelled],
+        "the joiner hears the transaction ended as cancelled"
+    );
+    assert!(bst.started.is_empty(), "it never started");
+    assert_eq!(
+        layers_of(&server_bar),
+        1,
+        "the joiner's kept commit applies at once"
+    );
+}
+
+/// The overview's surface of namespace `namespace`, staged in a transaction armed for a swipe up, with one layer made
+/// while it is staged. Returns the transaction and the layer's objects.
+fn armed_overview_part(
+    rig: &mut Rig,
+    (oconn, oq, ost): (&Connection, &mut EventQueue<CompClient>, &mut CompClient),
+    surf: &wl_surface::WlSurface,
+) -> (
+    CupertinoTransactionV1,
+    wl_surface::WlSurface,
+    CupertinoLayerV1,
+) {
+    let oqh = oq.handle();
+    let tx = ost
+        .tx_manager
+        .as_ref()
+        .unwrap()
+        .create(1, ost.output.as_ref().unwrap(), &oqh, ());
+    tx.bind_gesture(Gesture::SwipeUp, 0.45, 1.0);
+    tx.stage(surf);
+    let child = ost.compositor.as_ref().unwrap().create_surface(&oqh, ());
+    let layer = ost
+        .layers
+        .as_ref()
+        .unwrap()
+        .get_layer(&child, surf, &oqh, ());
+    surf.commit();
+    tx.submit();
+    for _ in 0..4 {
+        rig.pump_comp(oconn, oq, ost);
+    }
+    (tx, child, layer)
+}
+
+#[test]
+fn an_armed_part_paces_the_frame_callbacks_of_its_kept_commits() {
+    let mut rig = Rig::new();
+    let (hconn, mut hq, mut hst) = rig.connect_host(&["overview"]);
+    let (_hov, oconn, mut oq, mut ost) = rig.spawn_component(&hconn, &mut hq, &mut hst, "overview");
+    let (surf, _shell) = rig.create_layer_surface(&oconn, &mut oq, &mut ost, "strip");
+    let server_strip = server_layer_surface(&rig, "strip");
+    let (_tx, _child, _layer) = armed_overview_part(&mut rig, (&oconn, &mut oq, &mut ost), &surf);
+    let oqh = oq.handle();
+    // the component draws on its frame callbacks while the transaction waits for its gesture
+    let drawn = PACED_KEPT_COMMITS + 3;
+    let mut callbacks = Vec::new();
+    for _ in 0..drawn {
+        callbacks.push(surf.frame(&oqh, ()));
+        surf.commit();
+        for _ in 0..2 {
+            rig.pump_comp(&oconn, &mut oq, &mut ost);
+        }
+    }
+    assert_eq!(layers_of(&server_strip), 0, "every commit is kept");
+    // the commit that staged it carried no callback: the paced ones are among the first kept
+    assert_eq!(
+        ost.frames,
+        PACED_KEPT_COMMITS - 1,
+        "past the paced commits the callbacks wait for the part"
+    );
+
+    // the gesture applies the part: its kept commits apply and the waiting callbacks are answered with the next frame
+    assert!(rig.state.transaction_gesture_begin(
+        rig.output_id,
+        cupertino_protocols::server::transaction::cupertino_transaction_v1::Gesture::SwipeUp
+    ));
+    for _ in 0..3 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    assert_eq!(layers_of(&server_strip), 1, "the kept commits applied");
+    assert_eq!(ost.frames, drawn, "every frame callback is answered");
+}
+
+#[test]
+fn an_armed_part_keeps_a_bounded_number_of_commits() {
+    let mut rig = Rig::new();
+    let (hconn, mut hq, mut hst) = rig.connect_host(&["overview"]);
+    let (_hov, oconn, mut oq, mut ost) = rig.spawn_component(&hconn, &mut hq, &mut hst, "overview");
+    let (surf, _shell) = rig.create_layer_surface(&oconn, &mut oq, &mut ost, "strip");
+    let server_strip = server_layer_surface(&rig, "strip");
+    let (_tx, _child, _layer) = armed_overview_part(&mut rig, (&oconn, &mut oq, &mut ost), &surf);
+    // a component that commits without waiting for its frame callbacks: the staging commit and more, up to the cap
+    for _ in 1..MAX_KEPT_COMMITS {
+        surf.commit();
+    }
+    for _ in 0..2 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    assert_eq!(
+        layers_of(&server_strip),
+        0,
+        "up to {MAX_KEPT_COMMITS} commits are kept"
+    );
+    surf.commit();
+    for _ in 0..2 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    assert_eq!(
+        layers_of(&server_strip),
+        1,
+        "a commit past them takes the surface out of the part, its kept commits applying in order"
+    );
+    // the transaction is still armed for its gesture, the surface out of it
+    assert!(rig.state.transaction_gesture_begin(
+        rig.output_id,
+        cupertino_protocols::server::transaction::cupertino_transaction_v1::Gesture::SwipeUp
+    ));
+}
+
+/// One colour in `wl_shm` ARGB8888 memory order: an opaque green, which neither the wallpaper nor a window shows.
+const GREEN: [u8; 4] = [0, 255, 0, 255];
+
+/// How many pixels of `image` inside `rect` (`x`, `y`, `width`, `height` in pixels) show a layer's green.
+fn green_in(image: &image::RgbaImage, rect: (u32, u32, u32, u32)) -> usize {
+    let (x0, y0, w, h) = rect;
+    let mut n = 0;
+    for y in y0..(y0 + h).min(image.height()) {
+        for x in x0..(x0 + w).min(image.width()) {
+            let [r, g, b, _] = image.get_pixel(x, y).0;
+            if g > 180 && r < 60 && b < 60 {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
+#[test]
+fn a_held_surface_shows_its_layers_and_gives_way_as_the_live_one() {
+    let mut rig = Rig::headless((480, 300));
+    let rect = (0, 0, 160, 120);
+    let (hconn, mut hq, mut hst) = rig.connect_host(&["overview"]);
+    let (_hov, oconn, mut oq, mut ost) = rig.spawn_component(&hconn, &mut hq, &mut hst, "overview");
+    // a persisted surface at the output's top left, clear, with one layer over all of it drawing green
+    let qh = oq.handle();
+    let parent = ost.compositor.as_ref().unwrap().create_surface(&qh, ());
+    let shell_surface = ost.layer_shell.as_ref().unwrap().get_layer_surface(
+        &parent,
+        ost.output.as_ref(),
+        zwlr_layer_shell_v1::Layer::Top,
+        "strip".into(),
+        &qh,
+        (),
+    );
+    shell_surface
+        .set_anchor(zwlr_layer_surface_v1::Anchor::Top | zwlr_layer_surface_v1::Anchor::Left);
+    shell_surface.set_size(160, 120);
+    ost.component_global
+        .as_ref()
+        .unwrap()
+        .persist(&parent, "strip".into());
+    parent.commit();
+    for _ in 0..4 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    let clear = shm_buffer(ost.shm.as_ref().unwrap(), &qh, (160, 120), CLEAR);
+    parent.attach(Some(&clear), 0, 0);
+    parent.damage_buffer(0, 0, 160, 120);
+    let child = ost.compositor.as_ref().unwrap().create_surface(&qh, ());
+    let layer = ost
+        .layers
+        .as_ref()
+        .unwrap()
+        .get_layer(&child, &parent, &qh, ());
+    layer.set_value(cupertino_layer_v1::Property::Width, 160.0);
+    layer.set_value(cupertino_layer_v1::Property::Height, 120.0);
+    let green = shm_buffer(ost.shm.as_ref().unwrap(), &qh, (160, 120), GREEN);
+    child.attach(Some(&green), 0, 0);
+    child.damage_buffer(0, 0, 160, 120);
+    child.commit();
+    parent.commit();
+    for _ in 0..6 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    let image = rig.image();
+    assert!(
+        green_in(&image, rect) > 1000,
+        "the live surface shows its layer"
+    );
+
+    // the surface's layer role ends, then its connection: the server holds it, and the held picture shows what the live
+    // surface showed, its layer's content with it
+    shell_surface.destroy();
+    for _ in 0..3 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    drop((layer, child, green, clear, parent));
+    drop(ost);
+    drop(oq);
+    drop(oconn);
+    for _ in 0..6 {
+        rig.pump();
+    }
+    assert_eq!(
+        rig.state.hosts.held_surfaces().len(),
+        1,
+        "the surface is held"
+    );
+    let image = rig.image();
+    assert!(
+        green_in(&image, rect) > 1000,
+        "the held picture keeps the layer's content"
+    );
+
+    // a full-screen window covers the output: the held surface gives way, as the live one does
+    let (wconn, mut wq, mut wst, _wsurf, _toplevel, wid) = rig.magenta_window((100, 80));
+    rig.state.command(cupertino_wm::Command::Fullscreen {
+        window: wid,
+        output: None,
+        requested_by: cupertino_wm::Requester::User,
+    });
+    // the model clock steps past the move into full screen
+    for _ in 0..10 {
+        rig.state.fixed_time = Some(rig.state.now() + 1.0);
+        rig.pump_with(&wconn, &mut wq, &mut wst);
+    }
+    assert!(
+        rig.state.wm.fullscreen_front(rig.output_id).is_some(),
+        "the window covers the output"
+    );
+    let image = rig.image();
+    assert_eq!(
+        green_in(&image, rect),
+        0,
+        "a held surface that gives way is not drawn over a full-screen window"
     );
 }

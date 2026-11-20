@@ -208,9 +208,23 @@ struct PersistedSurface {
     last_geometry: Option<Rectangle<i32, Logical>>,
 }
 
-/// The last picture of a held persistent surface (D19), taken once as its hold starts.
+/// The last picture of a held persistent surface (D19), taken once as its hold starts, with what the server drew for
+/// the surface besides its pixels, so the held surface shows as the live one did.
 #[derive(Clone)]
-pub enum HeldPicture {
+pub struct HeldPicture {
+    /// The surface's pixels and its layers' content.
+    pub content: HeldContent,
+    /// The backdrops the surface and its layers drew, which sample what lies behind them: drawn live under the
+    /// picture.
+    pub backdrops: crate::render::scene::HeldBackdrops,
+    /// The surface was its output's menu bar: it is hidden, revealed and dimmed as the output's menu bar is, and it does
+    /// not give way to a full-screen window.
+    pub menu_bar: bool,
+}
+
+/// The pixels of a held persistent surface (D19).
+#[derive(Clone)]
+pub enum HeldContent {
     /// The surface tree drawn by the renderer into a texture it keeps, whatever kind of buffer the surface showed
     /// (shm, dmabuf); the texture lives as long as the hold.
     Texture {
@@ -623,7 +637,7 @@ impl HostManager {
     }
 
     /// Copy the current shm pixel contents of `surface` if accessible: a held surface's picture without a renderer.
-    fn capture_shm_picture(surface: &WlSurface) -> Option<HeldPicture> {
+    fn capture_shm_picture(surface: &WlSurface) -> Option<HeldContent> {
         let buffer = with_states(surface, |states| {
             let from_renderer = states
                 .data_map
@@ -664,12 +678,7 @@ impl HostManager {
                 let start = offset + y * stride;
                 tightly_packed.extend_from_slice(&mem[start..start + row_bytes]);
             }
-            let fourcc = match data.format {
-                smithay::reexports::wayland_server::protocol::wl_shm::Format::Xrgb8888 => {
-                    Fourcc::Xrgb8888
-                }
-                _ => Fourcc::Argb8888,
-            };
+            let fourcc = held_shm_fourcc(data.format)?;
             let mem_buf = MemoryRenderBuffer::from_slice(
                 &tightly_packed,
                 fourcc,
@@ -678,12 +687,28 @@ impl HostManager {
                 Transform::Normal,
                 None,
             );
-            Some(HeldPicture::Memory {
+            Some(HeldContent::Memory {
                 buffer: mem_buf,
                 size: (w, h),
             })
         });
         captured.ok().flatten()
+    }
+}
+
+/// The pixel format of a held picture copied from a `wl_shm` buffer of `format` (D19), its bytes kept as they are:
+/// the four-byte formats a renderer imports from memory, so a toolkit's `abgr8888` keeps its colours; `None` for
+/// another format, which leaves the hold without a picture rather than one in the wrong colours.
+pub fn held_shm_fourcc(
+    format: smithay::reexports::wayland_server::protocol::wl_shm::Format,
+) -> Option<Fourcc> {
+    use smithay::reexports::wayland_server::protocol::wl_shm::Format;
+    match format {
+        Format::Argb8888 => Some(Fourcc::Argb8888),
+        Format::Xrgb8888 => Some(Fourcc::Xrgb8888),
+        Format::Abgr8888 => Some(Fourcc::Abgr8888),
+        Format::Xbgr8888 => Some(Fourcc::Xbgr8888),
+        _ => None,
     }
 }
 

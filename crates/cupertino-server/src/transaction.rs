@@ -35,6 +35,7 @@ use crate::authorization::{authorized, ShellRole};
 use crate::host::{component_spec, HeldSurface};
 use crate::layers_v1::LAYER_ROLE;
 use crate::state::{ClientState, Cupertino};
+pub use staging::{MAX_KEPT_COMMITS, PACED_KEPT_COMMITS};
 
 /// Protocol version offered for `cupertino_transaction_manager_v1`.
 pub const TRANSACTION_PROTOCOL_VERSION: u32 = 1;
@@ -213,7 +214,8 @@ pub struct HoleRecord {
     pub pending_claim: bool,
     pub committed_claim: bool,
     /// The source and claim each commit of the layer surface carries, in commit order, taken as it is made (its
-    /// pre-commit hook) and applied as it applies, so a kept commit applies the hole state it was made with.
+    /// pre-commit hook) and applied as it applies, so a kept commit applies the hole state it was made with; a part keeps
+    /// at most [`MAX_KEPT_COMMITS`] commits of a surface, so the queue stays as short.
     pub queued: VecDeque<(HoleSource, bool)>,
     /// The window whose picture fades out in the hole after it closed ([`ClosedSource`]).
     pub closing: Option<ClosedSource>,
@@ -387,12 +389,65 @@ impl TransactionManager {
             return false;
         };
         if let Some(tx) = self.transactions.get_mut(&tx_id) {
+            // a transaction that ended keeps no changes: the request is carried out at once, as an ordinary one
+            if matches!(tx.phase, TxPhase::Ended { .. }) {
+                return false;
+            }
             if let Some(p) = tx.participants.iter_mut().find(|p| p.id == pid) {
                 p.window_changes.push(change);
                 return true;
             }
         }
         false
+    }
+
+    /// End `tx_id` as cancelled for every participant: each that has not withdrawn hears `finished(cancelled)` and its
+    /// staged surfaces leave the transaction, so their kept commits apply at once, as ordinary commits
+    /// ([`Cupertino::release_left_holds`]). Returns the window changes to carry out: before the start each part applies
+    /// by itself; after it, the changes not yet carried out are dropped.
+    fn end_cancelled(&mut self, tx_id: TxId, now: Instant) -> Vec<QueuedWindowChange> {
+        let mut changes = Vec::new();
+        let Some(tx) = self.transactions.get_mut(&tx_id) else {
+            return changes;
+        };
+        let before_start = matches!(tx.phase, TxPhase::Pending | TxPhase::Armed);
+        if self.active_gesture_tx.get(&tx.output) == Some(&tx_id) {
+            self.active_gesture_tx.remove(&tx.output);
+        }
+        for p in &mut tx.participants {
+            if p.withdrawn {
+                continue;
+            }
+            for s in &p.staged {
+                self.staged_surface_owner.remove(&s.surface_id);
+            }
+            p.staged.clear();
+            if before_start {
+                changes.extend(std::mem::take(&mut p.window_changes));
+            } else {
+                p.window_changes.clear();
+            }
+            if let Some(res) = &p.resource {
+                res.finished(WireOutcome::Cancelled);
+            }
+        }
+        tx.phase = TxPhase::Ended {
+            ended_at: now,
+            outcome: WireOutcome::Cancelled,
+        };
+        changes
+    }
+
+    /// The transactions not started whose creator withdrew (it destroyed its object before `submit`, or its connection
+    /// ended): nothing would start them.
+    fn abandoned(&self) -> Vec<TxId> {
+        self.transactions
+            .values()
+            .filter(|tx| matches!(tx.phase, TxPhase::Pending | TxPhase::Armed))
+            .filter(|tx| tx.orphan_join_until.is_none())
+            .filter(|tx| !tx.participants.iter().any(|p| p.is_creator && !p.withdrawn))
+            .map(|tx| tx.id)
+            .collect()
     }
 
     /// Current gesture progress (`0.0..=1.0`) for `output` while a bound gesture transaction is tracking or settling.
@@ -556,7 +611,8 @@ impl TransactionManager {
         }
         self.drop_holes(&dropped);
 
-        // Withdraw unapplied parts and settle active gestures if their creator disconnected.
+        // Withdraw unapplied parts and settle active gestures if their creator disconnected. A transaction that had not
+        // started ends as cancelled with the next tick ([`Cupertino::end_abandoned_transactions`]).
         let mut creator_gone_txs = Vec::new();
         for tx in self.transactions.values_mut() {
             for p in &mut tx.participants {
@@ -579,7 +635,7 @@ impl TransactionManager {
                 if let Some(g) = &mut tx.gesture {
                     g.reverse_gesture = None;
                 }
-                if matches!(tx.phase, TxPhase::Armed | TxPhase::RestingCompleted) {
+                if tx.phase == TxPhase::RestingCompleted {
                     tx.phase = TxPhase::Ended {
                         ended_at: Instant::now(),
                         outcome: WireOutcome::Cancelled,

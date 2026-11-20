@@ -2,8 +2,19 @@
 //! that is gone. Each of these touches the disk (and may wait on a mount that does not answer): the application runs
 //! them as I/O tasks, never on its UI thread.
 
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+/// How long a folder's read-only state, once read, answers a drag hovering it before it is read again: a file system
+/// can be mounted again read-only, and a drag lasts seconds.
+pub const MOUNT_STATE_LIFETIME: Duration = Duration::from_secs(30);
+
+/// How long reading the write state of a few folders should take: one `statvfs` each, held up only by a mount that
+/// does not answer.
+pub const MOUNT_READ_DEADLINE: Duration = Duration::from_secs(5);
 
 /// The room and the write state of a folder's file system.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -45,6 +56,56 @@ pub fn read(dir: &Path) -> Result<Space, String> {
 /// hold a file system mounted so.
 pub fn mounted_read_only(dir: &Path) -> io::Result<bool> {
     Ok(file_system(dir)?.f_flag & libc::ST_RDONLY != 0)
+}
+
+/// The write state of the file systems of the folders a drag hovers, kept so that hovering never touches the disk.
+/// A folder not known yet counts as writable, so the drag is allowed, and is asked for: [`MountedCache::take_wanted`]
+/// names it for a task that reads it ([`read_each`]) and [`MountedCache::record`] files the answer, after which the
+/// folder is refused if its file system is mounted read-only. UI thread only.
+#[derive(Default)]
+pub struct MountedCache {
+    known: RefCell<HashMap<PathBuf, (bool, Instant)>>,
+    /// Folders to read, not yet handed to a task.
+    wanted: RefCell<Vec<PathBuf>>,
+    /// Folders wanted or being read, so each is asked for once.
+    asked: RefCell<HashSet<PathBuf>>,
+}
+
+impl MountedCache {
+    /// Whether the file system of `dir` is known to be mounted read-only. Unknown, or known longer ago than
+    /// [`MOUNT_STATE_LIFETIME`] at `now`, the folder is asked for, and the last known state (writable when there is
+    /// none) answers.
+    pub fn read_only(&self, dir: &Path, now: Instant) -> bool {
+        let known = self.known.borrow().get(dir).copied();
+        let fresh =
+            known.is_some_and(|(_, at)| now.saturating_duration_since(at) < MOUNT_STATE_LIFETIME);
+        if !fresh && self.asked.borrow_mut().insert(dir.to_path_buf()) {
+            self.wanted.borrow_mut().push(dir.to_path_buf());
+        }
+        known.is_some_and(|(read_only, _)| read_only)
+    }
+
+    /// The folders to read now: each is handed out once until its answer is recorded.
+    pub fn take_wanted(&self) -> Vec<PathBuf> {
+        std::mem::take(&mut *self.wanted.borrow_mut())
+    }
+
+    /// File the state read for `dir` at `now`.
+    pub fn record(&self, dir: PathBuf, read_only: bool, now: Instant) {
+        self.asked.borrow_mut().remove(&dir);
+        self.known.borrow_mut().insert(dir, (read_only, now));
+    }
+}
+
+/// The write state of the file system of each of `dirs`; a folder that cannot be read counts as writable. Blocks on
+/// the file system, so a program runs it on an I/O task.
+pub fn read_each(dirs: Vec<PathBuf>) -> Vec<(PathBuf, bool)> {
+    dirs.into_iter()
+        .map(|dir| {
+            let read_only = mounted_read_only(&dir).unwrap_or(false);
+            (dir, read_only)
+        })
+        .collect()
 }
 
 /// The nearest folder above `dir` that exists.

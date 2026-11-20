@@ -13,6 +13,7 @@ mod jobs;
 mod peek;
 mod places;
 mod progress;
+mod reads;
 mod remote;
 mod search;
 mod share_popover;
@@ -88,7 +89,7 @@ use cupertino_kit::files::{ColumnEvent, ViewEvent};
 /// Identifier of the window for the server, as the desktop entry names it.
 pub const APP_ID: &str = "cupertino-files";
 
-/// What the first window opens with; [`Start::open`] lists the folder before the toolkit runs.
+/// What the first window opens with; [`Start::open`] hands over the folder, which the toolkit's I/O tasks list.
 pub struct Start {
     /// The first window's folder, what wakes when it changes and what wakes it; none for a Files started by a call
     /// ([`Start::without_window`]).
@@ -149,7 +150,7 @@ pub fn session_notices() -> (Notices, Option<Posting>) {
 
 impl Start {
     /// The window on `folder` with the sidebar's `places`, its items typed with `types`, the Recents folder read
-    /// from `recents` and the removable media of the `system` bus.
+    /// from `recents` and the removable media of the `system` bus; a folder that cannot be read leaves a notice.
     #[allow(clippy::too_many_arguments)]
     pub fn open(
         folder: PathBuf,
@@ -160,10 +161,10 @@ impl Start {
         applications: Box<dyn Fn() -> io::Result<MimeApps>>,
         terminal: Option<Vec<String>>,
         system: Option<Connection>,
-    ) -> io::Result<Start> {
+    ) -> Start {
         let listings = Listings::default();
-        let first = open_browser(folder, types.clone(), recents.clone(), listings.clone())?;
-        Ok(Start {
+        let first = open_browser(folder, types.clone(), recents.clone(), listings.clone());
+        Start {
             first: Some(first),
             listings,
             ..Start::idle(
@@ -175,7 +176,7 @@ impl Start {
                 terminal,
                 system,
             )
-        })
+        }
     }
 
     /// [`Start::open`] without its window: Files opens the windows the calls it serves ask for, and exits when the
@@ -408,7 +409,7 @@ fn open_browser(
     types: Option<Arc<MimeDatabase>>,
     recents: PathBuf,
     listings: Listings,
-) -> io::Result<(Browser, async_channel::Receiver<()>, Wake)> {
+) -> (Browser, async_channel::Receiver<()>, Wake) {
     let (wake, woken) = wake_channel();
     let browser = Browser::open(
         folder,
@@ -417,8 +418,8 @@ fn open_browser(
         types,
         Arc::clone(&wake),
         listings,
-    )?;
-    Ok((browser, woken, wake))
+    );
+    (browser, woken, wake)
 }
 
 thread_local! {
@@ -484,6 +485,9 @@ struct Session {
     /// click on one lists it again.
     noticed: VecDeque<(u64, Option<jobs::Failure>)>,
     places_source: Option<PlacesSource>,
+    /// The standard places are to be read again, and a read of them is running.
+    places_due: bool,
+    places_reading: bool,
     places_watch: places::PlacesWatch,
     /// The items' icons and thumbnails, shared with the list's rows, which ask for them as they show.
     icons: Rc<ItemIcons>,
@@ -527,6 +531,8 @@ struct BrowserWindow {
     available: Option<u64>,
     /// Whether the folder's file system is mounted read-only, read with the free space.
     mounted_read_only: bool,
+    /// The free space is to be read again: the next [`Model::io_work`] starts the task.
+    space_due: bool,
     search: String,
     search_revision: u64,
     /// The search field has the keyboard.
@@ -635,6 +641,8 @@ pub enum Message {
     Noticed(Option<notice::Click>),
     /// [`CALL_WAIT`] passed since Files started without a window.
     CallWaitOver,
+    /// The standard places were read again: they replace the ones shown.
+    PlacesRead(Vec<Place>),
     /// A listing's work or watch, a thumbnail's job or the posting of the notices ended; what it brought wakes the
     /// windows.
     Worked,
@@ -646,6 +654,8 @@ pub enum Message {
 pub enum Event {
     /// The folder's model has changes waiting.
     Woken,
+    /// The file system of the folder `dir` was read, or could not be.
+    Space(PathBuf, Result<crate::space::Space, String>),
     Place(usize),
     Navigate(Navigation),
     Select(Selection),
@@ -891,6 +901,8 @@ impl Application for Files {
                 noticed: VecDeque::new(),
                 places_watch,
                 places_source: start.places_source,
+                places_due: false,
+                places_reading: false,
                 icons,
                 thumbnails_woken,
                 dragged: Vec::new(),
@@ -1002,6 +1014,7 @@ impl Model {
                 self.session.follow_places();
                 vec![woken(&self.session.places_watch.woken, Message::Places)]
             }
+            Message::PlacesRead(fresh) => self.session.places_read(fresh),
             Message::TrashLooked(changed) => {
                 if changed {
                     let session = &self.session;
@@ -1065,7 +1078,7 @@ impl Model {
     /// UI loop, and the session's kept listings whose work ended let go.
     fn io_work(&mut self) -> Vec<Command<Message>> {
         self.session.listings.sweep();
-        let (mut works, mut watches) = (Vec::new(), Vec::new());
+        let (mut works, mut watches, mut lookups) = (Vec::new(), Vec::new(), Vec::new());
         for window in self.windows.values_mut() {
             let browsers = std::iter::once((&mut window.browser, &mut window.columns)).chain(
                 window
@@ -1078,6 +1091,7 @@ impl Model {
                     works.extend(w);
                     watches.extend(f);
                 }
+                lookups.extend(browser.take_lookups());
             }
         }
         let watched = watches.into_iter().map(|watch| {
@@ -1094,10 +1108,22 @@ impl Model {
                 |()| Message::Worked,
             )
         });
+        let places = self.session.places_task();
         let thumbnails = std::iter::from_fn(|| self.session.icons.take_job()).map(|job| {
             cupertino_kit::task::io(JOB_DEADLINE, move || job.run(), |()| Message::Worked)
         });
-        watched.chain(run).chain(thumbnails).collect()
+        let found = lookups.into_iter().map(reads::look_up);
+        let spaces = self
+            .windows
+            .iter_mut()
+            .filter_map(|(&id, window)| window.space_task(id));
+        watched
+            .chain(run)
+            .chain(thumbnails)
+            .chain(found)
+            .chain(spaces)
+            .chain(places)
+            .collect()
     }
 
     /// Exit once no browser window is open, no file operation runs and the progress window lists nothing, after the
@@ -1174,6 +1200,7 @@ impl Model {
             status_bar: prefs.status_bar,
             available: None,
             mounted_read_only: false,
+            space_due: false,
             search: String::new(),
             search_revision: 0,
             search_focused: false,
@@ -1222,28 +1249,21 @@ impl Model {
     fn open_windows(&mut self, folders: Vec<PathBuf>) -> Vec<Command<Message>> {
         folders
             .into_iter()
-            .filter_map(|folder| self.open_window(folder).map(|(_, wake)| wake))
+            .map(|folder| self.open_window(folder).1)
             .collect()
     }
 
-    /// Open a window on `folder`: its id and what wakes it, or `None` (and a notice) when the folder cannot be read.
-    fn open_window(&mut self, folder: PathBuf) -> Option<(u64, Command<Message>)> {
+    /// Open a window on `folder`: its id and what wakes it. It shows the folder once its model has read it.
+    fn open_window(&mut self, folder: PathBuf) -> (u64, Command<Message>) {
         let session = &self.session;
-        match open_browser(
-            folder.clone(),
+        let (browser, woken, wake) = open_browser(
+            folder,
             session.types.clone(),
             session.recents.clone(),
             session.listings.clone(),
-        ) {
-            Ok((browser, woken, wake)) => {
-                let id = self.next_window;
-                Some((id, self.add_window(browser, woken, wake)))
-            }
-            Err(e) => {
-                session.failed(Action::Open, &[&folder], &e);
-                None
-            }
-        }
+        );
+        let id = self.next_window;
+        (id, self.add_window(browser, woken, wake))
     }
 
     /// Drag `grab`'s items out of window `id`, remembering them until the drag ends so the windows know their own items.
@@ -1502,13 +1522,18 @@ impl Model {
             Event::Woken => {
                 let polled = window.browser.poll();
                 let changed = polled.changed;
+                let not_opened = polled.not_opened.clone();
                 window.polled(polled, session);
+                if window.not_opened(not_opened, session) {
+                    self.windows.remove(&id);
+                    return Vec::new();
+                }
                 let columns = window.columns.poll();
                 window.texts.poll();
                 // the tabs not shown follow their folders too
                 for tab in window.parked.values_mut() {
                     let polled = tab.browser.poll();
-                    for error in polled.errors {
+                    for error in polled.errors.into_iter().chain(polled.not_opened) {
                         eprintln!("cupertino-files: {error}");
                     }
                     tab.columns.poll();
@@ -1526,6 +1551,7 @@ impl Model {
                 commands.push(woken(&window.woken, Message::Window(id, Event::Woken)));
                 return commands;
             }
+            Event::Space(dir, read) => window.space_read(&dir, read),
             Event::Place(_)
             | Event::Accessory(_)
             | Event::Unlock
@@ -2327,17 +2353,6 @@ impl Session {
     }
 
     /// Read the standard places again, keeping the removable media's after them, and watch the trash once it exists.
-    fn follow_places(&mut self) {
-        let trash = self.trash.home_trash().to_path_buf();
-        self.standard_places = places::reread(
-            &mut self.places,
-            self.standard_places,
-            self.places_source.as_ref(),
-            &trash.join("files"),
-        );
-        self.places_watch.follow(&trash);
-    }
-
     fn show_media(&mut self) {
         self.places.truncate(self.standard_places);
         self.places.extend(self.media.places());
@@ -2481,7 +2496,7 @@ impl BrowserWindow {
 
     /// Open a tab after the one shown, on the folder shown, in the same view, and show it.
     fn new_tab(&mut self, session: &Session) {
-        let opened = Browser::open(
+        let browser = Browser::open(
             self.browser.dir().to_path_buf(),
             self.browser.sort(),
             session.recents.clone(),
@@ -2489,10 +2504,6 @@ impl BrowserWindow {
             Arc::clone(&self.wake),
             session.listings.clone(),
         );
-        let browser = match opened {
-            Ok(browser) => browser,
-            Err(e) => return session.failed(Action::Open, &[self.browser.dir()], &e),
-        };
         // the tab parked forgets a folder it asked for
         self.browser.stop_waiting();
         let shown = self.tabs.active_id();
@@ -2668,21 +2679,10 @@ impl BrowserWindow {
         self.read_available();
     }
 
-    /// Read the free space of the folder's file system for the status bar: on entering a folder, whenever its listing
-    /// changes, and after a transfer, so it follows what the window and others write there.
+    /// Ask for the free space of the folder's file system for the status bar: on entering a folder, whenever its
+    /// listing changes, and after a transfer. An I/O task reads it ([`Event::Space`]); the last answer stays until then.
     fn read_available(&mut self) {
-        self.available = match self.browser.available_space() {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                eprintln!(
-                    "cupertino-files: cannot read the free space of {}: {e}",
-                    self.browser.dir().display()
-                );
-                None
-            }
-        };
-        // a folder whose file system cannot be read takes the changes, and their failures say why
-        self.mounted_read_only = self.browser.read_only().unwrap_or(false);
+        self.space_due = true;
         self.volumes_hold_trash = self.in_trash() && self.trash_look.volumes_hold();
     }
 

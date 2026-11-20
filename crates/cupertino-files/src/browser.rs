@@ -36,11 +36,11 @@ use cupertino_kit::files::recents;
 use cupertino_kit::files::sort::{SortKey, SortSpec};
 use std::cell::RefCell;
 use std::collections::{hash_map, HashMap, HashSet};
-use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 /// What opening the selection does ([`Browser::activation`]).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -58,6 +58,8 @@ pub struct Polled {
     pub changed: bool,
     /// Errors the model reported (reading the folder, the watch); the listing stays as it was.
     pub errors: Vec<String>,
+    /// The window's own first listing did not open (why): the folder cannot be read, and the window has nothing to show.
+    pub not_opened: Option<String>,
     /// The folder a request asked for opened and is shown now: what asked for it.
     pub entered: Option<Asked>,
     /// The folder a request asked for could not be opened: the listing and the history stay as they were.
@@ -197,6 +199,36 @@ pub struct Browser {
     reopen: Vec<PathBuf>,
     /// The item [`Browser::reveal`] puts the keyboard on, until the window takes it ([`Browser::take_revealed`]).
     revealing: Option<PathBuf>,
+    /// The window's own first listing has not opened yet: its failure to open is the window's ([`Polled::not_opened`]).
+    first_listing: bool,
+    /// The search for the folder shown while it is gone, and what it found ([`Browser::take_lookups`]).
+    ancestor: Option<(PathBuf, Found)>,
+    /// Searches waiting for the program to run them.
+    lookups: Vec<AncestorLookup>,
+}
+
+/// What a search for an existing ancestor found, once it ran: the folder, or none above.
+type Found = Arc<Mutex<Option<Option<PathBuf>>>>;
+
+/// How long the search for the nearest existing ancestor of a folder that is gone should take: a few stat calls on
+/// the folders above it, which only a mount that does not answer holds up.
+pub const LOOKUP_DEADLINE: Duration = Duration::from_secs(5);
+
+/// The search for the nearest existing folder above a folder that is gone, which the program runs on an I/O task
+/// ([`AncestorLookup::run`], within [`LOOKUP_DEADLINE`]); the browser applies what it found at its next poll.
+pub struct AncestorLookup {
+    dir: PathBuf,
+    found: Found,
+    notify: Notify,
+}
+
+impl AncestorLookup {
+    /// Look for the folder, and wake the browser with what was found. Blocks on the file system.
+    pub fn run(self) {
+        let found = crate::space::nearest_existing_ancestor(&self.dir);
+        *self.found.lock().unwrap_or_else(PoisonError::into_inner) = Some(found);
+        (self.notify)();
+    }
 }
 
 /// Where a window was, to go back to with [`Browser::return_to`]: its history, its expanded folders and its
@@ -309,9 +341,9 @@ fn virtual_folder(dir: &Path) -> bool {
 impl Browser {
     /// A window on `start` listed in `sort` order, its Recents folder from the bookmark file `recents_file`, its items
     /// typed with the MIME database `types` ([`ModelOptions::types`]), the models it lets go of while their work runs
-    /// kept in `listings`; `notify` runs on other threads whenever there is something to [`Browser::poll`]. A folder
-    /// of the file system is tried here, on the caller's thread: on an error (no such folder, not a folder, no
-    /// permission) there is no window.
+    /// kept in `listings`; `notify` runs on other threads whenever there is something to [`Browser::poll`]. No file is
+    /// touched here: the folder is read by its model's work, and a folder that cannot be read (no such folder, not a
+    /// folder, no permission) is told by the first poll ([`Polled::not_opened`]).
     pub fn open(
         start: PathBuf,
         sort: SortSpec,
@@ -319,10 +351,7 @@ impl Browser {
         types: Option<Arc<MimeDatabase>>,
         notify: Notify,
         listings: Listings,
-    ) -> io::Result<Self> {
-        if !virtual_folder(&start) {
-            std::fs::read_dir(&start)?;
-        }
+    ) -> Self {
         let queued = Arc::new(AtomicBool::new(false));
         let flag = queued.clone();
         let notify: Notify = Arc::new(move || {
@@ -331,7 +360,9 @@ impl Browser {
         });
         let model = taken(&listings, &start, sort, &notify)
             .unwrap_or_else(|| open_model(&start, sort, &recents_file, &types, notify.clone()));
-        Ok(Browser {
+        // a model kept by the session has opened already, and its failure was told to the window that let it go
+        let first_listing = model.opened().is_none();
+        Browser {
             history: History::new(start),
             model,
             waiting: None,
@@ -355,7 +386,10 @@ impl Browser {
             reselect: None,
             reopen: Vec::new(),
             revealing: None,
-        })
+            first_listing,
+            ancestor: None,
+            lookups: Vec::new(),
+        }
     }
 
     /// The folder is not a directory of the file system (Recents, Applications): it has no enclosing folder and no
@@ -455,37 +489,6 @@ impl Browser {
     /// The listing is [`Browser::rows`]: folders are expanded or a search is shown.
     fn uses_rows(&self) -> bool {
         self.filter.is_some() || !self.expanded.is_empty()
-    }
-
-    /// Bytes an unprivileged user can still write on the folder's file system (`statvfs`: available blocks times the
-    /// fragment size); `None` for a virtual folder.
-    pub fn available_space(&self) -> io::Result<Option<u64>> {
-        let Some(fs) = self.file_system()? else {
-            return Ok(None);
-        };
-        // the fields are narrower on 32-bit targets
-        #[allow(clippy::unnecessary_cast)]
-        Ok(Some(fs.f_bavail as u64 * fs.f_frsize as u64))
-    }
-
-    /// Whether the folder's file system is mounted read-only; see [`mounted_read_only`]. Applications lists what is
-    /// installed: nothing is made, renamed or moved there.
-    pub fn read_only(&self) -> io::Result<bool> {
-        if self.dir() == cupertino_kit::files::applications::location() {
-            return Ok(true);
-        }
-        match self.is_virtual() {
-            true => Ok(false),
-            false => mounted_read_only(self.dir()),
-        }
-    }
-
-    /// The folder's file system; `None` for a virtual folder.
-    fn file_system(&self) -> io::Result<Option<libc::statvfs>> {
-        match self.is_virtual() {
-            true => Ok(None),
-            false => file_system(self.dir()).map(Some),
-        }
     }
 
     pub fn dir(&self) -> &Path {
@@ -684,6 +687,7 @@ impl Browser {
         let to = model.dir().to_path_buf();
         let asked = request.asked();
         let left = self.replace_model(model);
+        self.first_listing = false;
         self.listings.let_go(left);
         // what the listing queued before it was shown is applied at the next poll
         self.queued.store(true, Ordering::SeqCst);
@@ -940,10 +944,13 @@ impl Browser {
                 | ModelDelta::Inserted { .. }
                 | ModelDelta::Removed { .. }
                 | ModelDelta::Moved { .. } => reordered = true,
-                ModelDelta::Opened
-                | ModelDelta::LoadComplete { .. }
-                | ModelDelta::Changed { .. } => {}
+                ModelDelta::Opened => self.first_listing = false,
+                ModelDelta::LoadComplete { .. } | ModelDelta::Changed { .. } => {}
                 ModelDelta::DirectoryGone => gone = true,
+                ModelDelta::OpenFailed { error, .. } if self.first_listing => {
+                    self.first_listing = false;
+                    polled.not_opened = Some(error);
+                }
                 ModelDelta::OpenFailed { error, .. } | ModelDelta::Error(error) => {
                     polled.errors.push(error)
                 }
@@ -971,16 +978,18 @@ impl Browser {
         if polled.changed {
             self.rebuild();
         }
-        if gone {
-            match self.nearest_existing_ancestor() {
-                Some(to) => {
-                    self.ask(&to, Request::Enclosing);
-                    return polled;
-                }
-                None => polled
-                    .errors
-                    .push("the folder and every folder above it are gone".into()),
+        if gone && self.ancestor.is_none() {
+            self.look_for_ancestor();
+        }
+        match self.take_ancestor() {
+            Some(Some(to)) => {
+                self.ask(&to, Request::Enclosing);
+                return polled;
             }
+            Some(None) => polled
+                .errors
+                .push("the folder and every folder above it are gone".into()),
+            None => {}
         }
         if reordered {
             self.restore_selection(kept);
@@ -1063,12 +1072,34 @@ impl Browser {
         shown
     }
 
-    fn nearest_existing_ancestor(&self) -> Option<PathBuf> {
-        self.dir()
-            .ancestors()
-            .skip(1)
-            .find(|p| p.is_dir())
-            .map(Path::to_path_buf)
+    /// Start the search for the nearest existing folder above the folder shown, which is gone.
+    fn look_for_ancestor(&mut self) {
+        let found = Found::default();
+        self.ancestor = Some((self.dir().to_path_buf(), Arc::clone(&found)));
+        self.lookups.push(AncestorLookup {
+            dir: self.dir().to_path_buf(),
+            found,
+            notify: Arc::clone(&self.notify),
+        });
+    }
+
+    /// What the search for an ancestor found, once it ran: `Some(None)` when nothing above the folder exists. A folder
+    /// the window left meanwhile is not looked for any more.
+    fn take_ancestor(&mut self) -> Option<Option<PathBuf>> {
+        let (gone, found) = self.ancestor.as_ref()?;
+        let result = found
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()?;
+        let current = gone == self.dir();
+        self.ancestor = None;
+        current.then_some(result)
+    }
+
+    /// The searches for an existing ancestor the program is to run ([`AncestorLookup::run`], on an I/O task) before the
+    /// folder shown can be replaced by one that exists.
+    pub fn take_lookups(&mut self) -> Vec<AncestorLookup> {
+        std::mem::take(&mut self.lookups)
     }
 
     /// The paths of the selected, anchor and focus items: names repeat at different levels of the outline.
@@ -1275,23 +1306,6 @@ impl Drop for Browser {
         self.drop_expanded(|_| true);
         self.listings.let_go(shown);
     }
-}
-
-/// Whether the file system of `dir` is mounted read-only, whatever the medium under it says: a writable stick can
-/// hold a file system mounted so.
-pub fn mounted_read_only(dir: &Path) -> io::Result<bool> {
-    Ok(file_system(dir)?.f_flag & libc::ST_RDONLY != 0)
-}
-
-fn file_system(dir: &Path) -> io::Result<libc::statvfs> {
-    let dir = std::ffi::CString::new(dir.as_os_str().as_encoded_bytes())
-        .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
-    // SAFETY: a zeroed statvfs is a valid out value; the path is NUL-terminated and outlives the call
-    let mut fs: libc::statvfs = unsafe { std::mem::zeroed() };
-    if unsafe { libc::statvfs(dir.as_ptr(), &mut fs) } != 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(fs)
 }
 
 /// Whether `entry` is a result of the search `query` (lower case): its name contains it, or one of its tags is named it.

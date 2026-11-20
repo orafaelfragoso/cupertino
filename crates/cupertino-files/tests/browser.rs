@@ -1,11 +1,12 @@
 //! A browser window's folder requests: a folder asked for is shown once its model opens, one that does not open
 //! leaves the window where it was, and a folder asked for again while its work runs takes the model it had.
 
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use cupertino_files::browser::{Asked, Browser, Listings, Polled};
+use cupertino_files::browser::{AncestorLookup, Asked, Browser, Listings, Polled};
 use cupertino_kit::files::model::{ModelWork, Notify};
 use cupertino_kit::files::sort::SortSpec;
 
@@ -23,7 +24,6 @@ fn woken_browser(start: &Path, listings: &Listings, notify: Notify) -> Browser {
         notify,
         listings.clone(),
     )
-    .unwrap()
 }
 
 /// The works of `browser`'s models, as the program takes them; the watches are not followed.
@@ -47,6 +47,7 @@ fn settle(browser: &mut Browser) -> Polled {
         all.errors.extend(polled.errors);
         all.entered = all.entered.or(polled.entered);
         all.unopened = all.unopened.or(polled.unopened);
+        all.not_opened = all.not_opened.or(polled.not_opened);
     }
 }
 
@@ -238,4 +239,90 @@ fn a_folder_kept_after_its_work_ended_wakes_the_window_that_takes_it() {
         assert_eq!(second.dir(), b, "{row}");
         assert_eq!(names(&second), ["item"], "{row}");
     }
+}
+
+#[test]
+fn a_window_on_a_folder_that_cannot_be_read_opens_without_a_read_and_says_so_once_its_work_ran() {
+    let root = tempfile::tempdir().unwrap();
+    let missing = root.path().join("missing");
+    let mut browser = browser(&missing, &Listings::default());
+
+    // nothing was read on the caller's thread: the first poll has nothing to tell until the work ran
+    assert_eq!(browser.poll(), Polled::default());
+    assert!(browser.is_loading());
+    let polled = settle(&mut browser);
+    assert!(polled.not_opened.is_some_and(|error| !error.is_empty()));
+    assert!(polled.errors.is_empty());
+    assert_eq!(polled.entered, None);
+
+    // a folder that opens is not told
+    std::fs::create_dir(&missing).unwrap();
+    let mut browser = self::browser(&missing, &Listings::default());
+    assert_eq!(settle(&mut browser).not_opened, None);
+}
+
+/// Follow `watch` on a thread of its own, as the program's loop follows it.
+fn follow(watch: cupertino_kit::files::model::ModelWatch) {
+    struct Unpark(std::thread::Thread);
+    impl std::task::Wake for Unpark {
+        fn wake(self: Arc<Self>) {
+            self.0.unpark();
+        }
+    }
+    std::thread::spawn(move || {
+        let waker = std::task::Waker::from(Arc::new(Unpark(std::thread::current())));
+        let mut context = std::task::Context::from_waker(&waker);
+        let mut watch = Box::pin(watch.follow());
+        while watch.as_mut().poll(&mut context).is_pending() {
+            std::thread::park();
+        }
+    });
+}
+
+#[test]
+fn a_folder_that_is_gone_is_replaced_by_the_nearest_existing_one_found_by_a_lookup_the_program_runs(
+) {
+    let root = tempfile::tempdir().unwrap();
+    let deep = root.path().join("a/b/c");
+    std::fs::create_dir_all(&deep).unwrap();
+    let (wake, woken) = std::sync::mpsc::channel();
+    let notify: Notify = Arc::new(move || {
+        let _ = wake.send(());
+    });
+    let mut browser = woken_browser(&deep, &Listings::default(), notify);
+    let (works, watches) = browser.take_work();
+    watches.into_iter().for_each(follow);
+    works.into_iter().for_each(ModelWork::run);
+    browser.poll();
+    settle(&mut browser);
+    assert!(!browser.is_loading());
+
+    // the folder and the one above it go: the nearest one left is a
+    std::fs::remove_dir_all(root.path().join("a/b")).unwrap();
+    let wait = std::time::Duration::from_secs(10);
+    let lookups = loop {
+        woken
+            .recv_timeout(wait)
+            .expect("the watch told the folder is gone");
+        // the watch's changes queue the work that finds the folder gone
+        let mut polled = browser.poll();
+        let later = settle(&mut browser);
+        polled.errors.extend(later.errors);
+        assert!(polled.errors.is_empty(), "{:?}", polled.errors);
+        let lookups = browser.take_lookups();
+        if !lookups.is_empty() {
+            break lookups;
+        }
+    };
+    // one search at a time, and the folder is not replaced before it ran
+    assert_eq!(lookups.len(), 1);
+    assert_eq!(browser.dir(), deep);
+    assert!(browser.take_lookups().is_empty());
+    lookups.into_iter().for_each(AncestorLookup::run);
+    woken
+        .recv_timeout(wait)
+        .expect("the lookup woke the window");
+    browser.poll();
+    settle(&mut browser);
+    assert_eq!(browser.dir(), root.path().join("a"));
 }

@@ -300,7 +300,7 @@ fn read_only(session: &Session) -> Rc<ReadOnly> {
             .filter(|(mount, _)| dir.starts_with(mount))
             .max_by_key(|(mount, _)| mount.components().count())
             .is_some_and(|&(_, read_only)| read_only);
-        medium || crate::browser::mounted_read_only(dir).unwrap_or(false)
+        medium || crate::space::mounted_read_only(dir).unwrap_or(false)
     })
 }
 

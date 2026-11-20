@@ -1304,7 +1304,6 @@ version = "0.1.0"
 dependencies = [
  "async-channel",
  "async-io",
- "cupertino-apps",
  "cupertino-assets",
  "cupertino-defaults",
  "cupertino-diagnostic-events",
@@ -1360,7 +1359,6 @@ dependencies = [
  "cupertino-kit",
  "cupertino-kit-shell",
  "cupertino-menu-model",
- "cupertino-peer",
  "cupertino-radios",
  "futures-util",
  "x11rb",
@@ -1711,6 +1709,7 @@ dependencies = [
  "cupertino-osd",
  "cupertino-server",
  "cupertino-shell",
+ "cupertino-shell-agent",
  "cupertino-ui-render",
  "cupertino-wm",
  "image",
@@ -1775,6 +1774,24 @@ dependencies = [
  "cupertino-menubar",
  "cupertino-notifications",
  "cupertino-osd",
+ "cupertino-shell-agent",
+]
+
+[[package]]
+name = "cupertino-shell-agent"
+version = "0.1.0"
+dependencies = [
+ "async-channel",
+ "async-io",
+ "cupertino-apps",
+ "cupertino-assets",
+ "cupertino-defaults",
+ "cupertino-geometry",
+ "cupertino-kit",
+ "cupertino-kit-shell",
+ "futures-util",
+ "serde",
+ "zbus",
 ]
 
 [[package]]

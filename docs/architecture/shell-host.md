@@ -54,7 +54,7 @@ version that added it (`since`). A host speaks the versions it was built with an
 | `window_manager` | arrange the windows of an output (`cupertino_window_manager_v1`); claim windows in holes | `windowmanager` |
 | `overview` | follow an output's windows and workspaces (`cupertino_overview_v1`); claim windows in holes; show workspaces in holes; bind gestures to transactions | `overview` |
 | `windows` | show windows and minimized windows' pictures in holes (`cupertino_hole_v1`) | `dock`, `overview`, `windowmanager` |
-| `session_agent` | receive the session's requests for its panels (`log_out_requested`); be the session agent for `org.cupertino.Session1` | `agent`; *(until W6.13)* `cupertino-login` |
+| `session_agent` | receive the session's requests for its panels (`log_out_requested`); be the session agent for `org.cupertino.Session1` | `agent` |
 | `session_lock` | take the session lock (`ext_session_lock_v1`); receive `lock_requested` | `cupertino-login` |
 | `prompt` | draw prompt surfaces: above every other surface, left out of captures, no application holding the pointer or the shortcuts meanwhile | `cupertino-prompts` |
 | `consent` | answer desktop-control consent (`cupertino_control_authority_v1`) | `cupertino-prompts` |
@@ -90,8 +90,6 @@ roles or its bus names. The host holds the same names, each bound to its compone
 - The server sends a host's list in the table's order, and the host starts its components in that order.
 - A component owns its well-known names on its own bus connection and announces that connection's unique name to the
   server ([Identity](#identity)).
-- *(until W6.13)* No host holds `agent`: `cupertino-login` is the session agent
-  ([Programs the server starts itself](#programs-the-server-starts-itself)).
 - `cupertino shell list` names components by the first column; `cupertino shell restart NAME` takes the same names
   and the names of the programs under [Programs the server starts itself](#programs-the-server-starts-itself).
 
@@ -173,7 +171,7 @@ programs are (installed under an install root, owned by root, not writable by ot
 |---|---|---|---|---|
 | `host` | `/usr/bin/cupertino-shell` | user | while a component runs | `host` |
 | `host-NAME` | `/usr/bin/cupertino-shell --only NAME`, or the development folder's | user | while component NAME runs alone | `host` |
-| `login` | `/usr/bin/cupertino-login` | user | always: the lock screen | `session`, `session_lock`; *(until W6.13)* `session_agent` |
+| `login` | `/usr/bin/cupertino-login` | user | always: the lock screen | `session`, `session_lock` |
 | `login` | `/usr/bin/cupertino-login --greeter` | login | always: the login screen | `session` |
 | `prompts` | `/usr/bin/cupertino-prompts` | user, on the hardware | always | `session`, `prompt`, `consent` |
 | `portal` | `/usr/bin/cupertino-portal` | user, on the hardware | always | `capture`, `global_shortcuts` |
@@ -192,11 +190,6 @@ programs are (installed under an install root, owned by root, not writable by ot
 - `cupertino-audiod` is started by the bus at first use, never by the server.
 - W5.5 makes `login` a row of this table: the server starts `cupertino-login` itself in both sessions, and no file
   lists it.
-- *(until W6.13)* `cupertino-login` is the session agent. It holds `session_agent` beside `session_lock`, receives
-  `log_out_requested`, and `org.cupertino.Session1` takes its calls as the agent's by its process. The menu bar reads
-  the session menu's state from `org.cupertino.Login1` of the process the server names (`session_agent` of
-  `cupertino_menu_bar_v1`). W6.13 gives the role to the `agent` component alone, which publishes that state on the
-  host bus ([The host bus](#the-host-bus)).
 - *(until W6.14)* `polkit-agent` and `keyring-prompter` are started in the place of `prompts`, each with the `prompt`
   role, and the consent authority is offered to the `session_lock` role.
 
@@ -877,7 +870,7 @@ interface, with the request's name.
 | Module | Feed | Requests |
 |---|---|---|
 | `dock` | the window and application list: windows (application id, title, minimized, active), icons, launching and resident applications, attention, applications that do not respond; the application switcher; hot corners; `Engage`, `ToggleAppGrid`, `ToggleAutoHide`, `ForceQuitDialog` | `activate_app`, `activate_window`, `restore_window`, `set_minimize_target`, `force_quit_app`, `app_command`, `run_action`, `switcher_select`, `switcher_activate`, `switcher_cancel`, `switch_workspace`, `add_workspace`, `remove_workspace`, `move_workspace` |
-| `menu_bar` | the active application and its windows, its menus, the window's state and controls, shortcuts, the backdrop bands, the screen capture state; *(until W6.13)* the session agent's process | `set_menu_open`, `window_command`, `activate_window`, `move_to_workspace`, `session_action`, `edit`, `force_quit_app` |
+| `menu_bar` | the active application and its windows, its menus, the window's state and controls, shortcuts, the backdrop bands, the screen capture state | `set_menu_open`, `window_command`, `activate_window`, `move_to_workspace`, `session_action`, `edit`, `force_quit_app` |
 | `window_manager` | the usable area and the arranged windows with their frames; `ToggleStage` | `place(ServerWindowId, Placement)`, `commit`, `activate_window`; `Placement` is `Stage` or `Hidden` |
 | `overview` | the area, the windows of the workspace with their frames, the workspaces, each with whether it is the current one and whether it is a full-screen one; `Toggle { mode, app_id }` | `activate_window`, `switch_workspace`, `add_workspace`, `remove_workspace`, `move_workspace`, `move_window` |
 
@@ -887,8 +880,7 @@ interface, with the request's name.
   (a window's icon) is a `render::ImageResource`.
 - The session menu's state (the person's name, what the session can carry out) is no part of the menu bar's feed:
   the `agent` component publishes it as `bus::Message::SessionMenu`, and the menu bar takes it from that sender
-  alone. *(until W6.13)* The agent is `cupertino-login`, a program outside the host bus: the feed names its
-  process, and the menu bar reads the state from `org.cupertino.Login1` of that process.
+  alone.
 - A minimized window's picture is a hole (`HoleSource::Thumbnail`), not an image in the feed. The dock's overview
   messages and the window manager's strip placement have no function: the overview is `overview`, and the strip is
   holes.
@@ -1088,7 +1080,7 @@ What the components read of each other goes over this bus and not over their ses
 
 | Reader | What | Message | Publisher |
 |---|---|---|---|
-| `menubar` | the session menu's state; *(until W6.13)* read from `org.cupertino.Login1` | `SessionMenu` | `agent` |
+| `menubar` | the session menu's state | `SessionMenu` | `agent` |
 | `menubar` | do not disturb and its durations | `DoNotDisturbChanged` | `notifications` |
 | `menubar` | which panels are open, and where | `PanelShown` | `controlcenter`, `notifications`, `launcher` |
 | `notifications` | a component the server stopped | `ComponentStopped` | the host |
@@ -1531,7 +1523,6 @@ that keeps its choice and gains a rule, no mark for a default that stands as it 
 3. **`alone` in a person's file.** Default: allowed, since it names no command and no role and costs memory only.
 4. **Roles.** *(extended)* Default: `host`, `overview`, `windows`, `session_agent` and `consent` join the server's
    roles; the development folder's allow-list gains `overview` and `windows`, and `agent` never starts from it.
-   Until W6.13 `cupertino-login` holds `session_agent` and is the session agent.
 5. **Bus names.** Default: `org.cupertino.SessionAgent1` for `agent` and `org.cupertino.Dialogs1` for `dialogs`; the
    components without a service (`dock`, `desktop`, `windowmanager`, `overview`) own none.
 6. **`osd`'s role for the switcher and the picker.** Left to the design note of W6.12, which adds it to the tables

@@ -1,0 +1,27 @@
+[package]
+name = "cupertino-shell-agent"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Session agent of the Cupertino desktop, a component of the shell host: application restore and login items at login, the log out, restart and shut down panels and the panel that interrupts them, the power key's hold, the low-battery notifications, the session menu's state and org.cupertino.SessionAgent1, on CupertinoKit"
+[package.metadata.cupertino]
+layer = "shell"
+
+[dependencies]
+async-channel = "2"
+async-io = "2"
+cupertino-apps = { path = "../cupertino-apps" }
+cupertino-defaults = { path = "../cupertino-defaults" }
+cupertino-geometry = { path = "../cupertino-geometry" }
+cupertino-kit = { path = "../cupertino-kit" }
+cupertino-kit-shell = { path = "../cupertino-kit-shell" }
+futures-util = { version = "0.3", default-features = false, features = ["std", "async-await-macro"] }
+serde = "1"
+zbus = { version = "5", default-features = false, features = ["async-io"] }
+
+[dev-dependencies]
+cupertino-assets = { path = "../cupertino-assets" }
+cupertino-kit = { path = "../cupertino-kit", features = ["test"] }
+
+[[example]]
+name = "agent_capture"

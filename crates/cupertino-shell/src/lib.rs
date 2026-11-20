@@ -35,6 +35,10 @@ pub static CONTROLCENTER: Entry = Entry::of::<cupertino_controlcenter::ControlCe
 /// The menu bar of every output (`cupertino-menubar`).
 pub static MENUBAR: Entry = Entry::of::<cupertino_menubar::MenuBar>();
 
+/// The session agent: restore, login items, the session's panels, the power key and the session menu
+/// (`cupertino-shell-agent`).
+pub static AGENT: Entry = Entry::of::<cupertino_shell_agent::Agent>();
+
 /// The components this build of the host runs. A component the server lists that is not here is answered
 /// `unavailable` (`absent`), and the server runs it the way the rest of its configuration says.
-pub static COMPONENTS: [&Entry; 4] = [&OSD, &NOTIFICATIONS, &CONTROLCENTER, &MENUBAR];
+pub static COMPONENTS: [&Entry; 5] = [&OSD, &NOTIFICATIONS, &CONTROLCENTER, &MENUBAR, &AGENT];

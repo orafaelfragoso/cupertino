@@ -246,6 +246,128 @@ pub fn capture_surface(
     }
 }
 
+/// What a held persistent surface (D19) drew besides its pixels, in points from its top-left corner: the backdrops of
+/// the surface, of its subsurfaces and of its layers (`cupertino_layers_v1`). They sample what lies behind the
+/// surface, so the server goes on drawing them live under the held picture, with the live surface's piece builders.
+#[derive(Clone, Default)]
+pub struct HeldBackdrops {
+    /// The surface's own backdrops (`cupertino_app_effects_v1`), front to back.
+    surface: Vec<BackdropArea>,
+    /// The glass of each of its subsurfaces and the rectangle it is drawn within.
+    subsurfaces: Vec<(Vec<BackdropArea>, Rectangle<f64, Logical>)>,
+    /// The glass of each of its layers, front to back, with the container and opacity the layer made of it (its lens,
+    /// blur ramp, edge, shadow and light), when the glass pass drew it.
+    layers: Vec<(Vec<BackdropArea>, Option<(Rc<GlassContainer>, f32)>)>,
+}
+
+impl HeldBackdrops {
+    /// The backdrops of `surface` itself, for a picture taken without a renderer to draw its layers with.
+    pub fn of_surface(surface: &WlSurface) -> Self {
+        Self {
+            surface: surface_backdrops(surface, Point::from((0.0, 0.0))),
+            ..Self::default()
+        }
+    }
+}
+
+/// The kind of scene item `piece` makes.
+fn piece_kind(piece: &Piece) -> SceneKind {
+    match piece {
+        Piece::Item(item) => item.id.kind,
+        Piece::Tree(t) => t.kind,
+        Piece::Image(i) => i.kind,
+        Piece::Material(m) => m.kind,
+        Piece::Glass(g) => g.kind,
+        Piece::Mesh(m) => m.kind,
+    }
+}
+
+/// Render the layer shell surface `surface` as its output draws it, its top-left corner at the corner of `area`
+/// (global logical points), into a new texture covering `area`: its surface tree and its layers' content, for the
+/// picture of its hold (D19). The backdrops they draw are left out of the texture and returned, to be drawn live under
+/// it ([`HeldBackdrops`]); so are its holes, whose sources the server draws live behind the held picture.
+pub fn capture_held_surface(
+    renderer: &mut GlesRenderer,
+    p: &mut SceneParams<'_>,
+    surface: &WlSurface,
+    area: Rect,
+) -> Option<(smithay::backend::renderer::gles::GlesTexture, HeldBackdrops)> {
+    let size_px = (
+        ((area.w * p.scale).round() as i32).max(1),
+        ((area.h * p.scale).round() as i32).max(1),
+    );
+    let saved = (p.rect, p.output_px, p.for_capture);
+    p.rect = area;
+    p.output_px = size_px;
+    // a capture notes no hole's bounds, and a hole inside it is as deep as holes go, so it draws nothing
+    p.for_capture = true;
+    let nested = p.transactions.enter_hole();
+    let origin = Point::<f64, Logical>::from((0.0, 0.0));
+    let place = super::super::layers::LayerPlace {
+        origin,
+        pivot: origin,
+        scale: (1.0, 1.0),
+        opacity: 1.0,
+        clip: Clip::None,
+        kind: SceneKind::LayerContent,
+    };
+    let mut layer_glass: Vec<Vec<BackdropArea>> = Vec::new();
+    let layers = super::super::layers::layer_pieces(p, surface, &place, |p, areas| {
+        let pieces = backdrop_elements(p, &areas, 1.0, WindowState::Active);
+        layer_glass.push(areas);
+        pieces
+    });
+    let mut subsurfaces = Vec::new();
+    let tree = standalone_tree(surface, SceneKind::LayerContent, (0, 0).into(), 1.0);
+    let tree = tree_pieces(p, tree, origin, |_, areas, bound| {
+        subsurfaces.push((areas, bound));
+        Vec::new()
+    });
+    if nested {
+        p.transactions.leave_hole();
+    }
+    let layers_made = layer_glass
+        .into_iter()
+        .map(|areas| {
+            let key = areas.first().map(|a| a.key);
+            let made = layers.iter().find_map(|piece| match piece {
+                Piece::Glass(g) if Some(g.index) == key => Some((g.glass.clone(), g.opacity)),
+                _ => None,
+            });
+            (areas, made)
+        })
+        .collect();
+    let held = HeldBackdrops {
+        surface: surface_backdrops(surface, origin),
+        subsurfaces,
+        layers: layers_made,
+    };
+    let mut stack = Composition::new(p.scale);
+    stack.extend(
+        SceneLayer::LayerTop,
+        layers
+            .into_iter()
+            .chain(tree)
+            .filter(|piece| piece_kind(piece) != SceneKind::Backdrop),
+    );
+    let composed = finish_composition(stack, p);
+    (p.rect, p.output_px, p.for_capture) = saved;
+    let mut cache = ElementCache::default();
+    let mut resources = GlesResources::new(p.res, &mut cache, composed.resources);
+    match Gles.render(
+        &composed.frame,
+        &mut resources,
+        GlesTarget::Snapshot { renderer },
+    ) {
+        Ok(GlesCompletion::Snapshot(t)) => Some((t, held)),
+        Ok(_) => None,
+        Err(e) => {
+            tracing::warn!(error = %e, "held surface snapshot failed");
+            None
+        }
+    }
+}
+
 /// The icon of a client's drag that ended without a drop, flying back or fading out (`crate::drag_return`).
 pub(super) fn drag_return_element(p: &mut SceneParams<'_>, stack: &mut Composition) {
     if p.res.mesh.is_none() {
@@ -483,13 +605,7 @@ pub(super) fn layer_elements(
         // a menu bar is offset and faded by its presentation (hide, reveal, inactive output), and gives way to an
         // overview of its output
         let look = p.menu_bars.look(surface.wl_surface(), p.rect.y, p.now);
-        let overview_bar = p
-            .shell
-            .overview
-            .as_ref()
-            .filter(|o| o.output == p.output_id)
-            .map_or(1.0, |o| o.menu_bar_alpha(p.now) as f32);
-        let (dy, opacity) = look.map_or((0.0, 1.0), |l| (l.dy, l.alpha * overview_bar));
+        let (dy, opacity) = bar_shown(p, look);
         // the surface's own presentation (cupertino_layers_v1 version 2) moves, scales and fades all it draws
         let shown =
             crate::layers_v1::presentation(surface.wl_surface(), p.now, p.display.reduce_motion);
@@ -604,48 +720,184 @@ pub(super) fn layer_elements(
             out.extend(pieces);
         }
     }
-    // Held persistent surfaces whose component connection ended keep their last picture until takeover or ready (D19).
-    for hold in p.hosts.held_surfaces_on(p.output_id, layer) {
-        let (buffer, size) = match &hold.picture {
-            Some(crate::host::HeldPicture::Memory { buffer, size }) => (buffer, *size),
-            Some(crate::host::HeldPicture::Texture { snapshot, .. }) => {
-                out.extend(held_texture_piece(p, snapshot, hold.geometry));
-                continue;
-            }
-            None => continue,
-        };
-        let src = smithay::utils::Rectangle::<f64, Logical>::from_size(
-            (f64::from(size.0), f64::from(size.1)).into(),
-        );
-        out.push(Piece::Image(Picture {
-            buffer: buffer.clone().into(),
-            kind: SceneKind::LayerContent,
-            index: 0,
-            role: ImageRole::Standalone,
-            buffer_px: size,
-            src,
-            size: (hold.geometry.size.w, hold.geometry.size.h),
-            placement: Placement {
-                origin: OutputPoint(cupertino_geometry::Point::new(
-                    f64::from(hold.geometry.loc.x),
-                    f64::from(hold.geometry.loc.y),
-                )),
-                ..Placement::IDENTITY
-            },
-            opacity: 1.0,
-            clip: Clip::None,
-        }));
-    }
-    out.extend(held_hole_pieces(p, layer));
+    out.extend(held_elements(p, layer, covered, captures));
     out
 }
 
-/// A held surface's picture drawn by the renderer (D19), over its layer geometry `at` (output-local points): the
-/// snapshot's quad, as a returning drag icon draws its own. Nothing without the mesh program or once it is retired.
+/// How a menu bar of the output shows, given its `look`: its offset and opacity, faded with an overview of its
+/// output; `(0, 1)` for any other surface.
+fn bar_shown(p: &SceneParams<'_>, look: Option<crate::menu_bar::BarLook>) -> (f64, f32) {
+    let overview_bar = p
+        .shell
+        .overview
+        .as_ref()
+        .filter(|o| o.output == p.output_id)
+        .map_or(1.0, |o| o.menu_bar_alpha(p.now) as f32);
+    look.map_or((0.0, 1.0), |l| (l.dy, l.alpha * overview_bar))
+}
+
+/// The held persistent surfaces of `layer` whose component connection ended (D19), front to back, as the live
+/// surfaces drew them: each one's last picture over its backdrops, drawn live, a held menu bar offset and faded as the
+/// output's menu bar shows, and nothing of a surface that gives way while a full-screen window covers the output
+/// (`covered`); then their holes, behind the pictures. The backdrop captures of a held menu bar go to `captures`.
+fn held_elements(
+    p: &mut SceneParams<'_>,
+    layer: Layer,
+    covered: bool,
+    captures: &mut Vec<Piece>,
+) -> Vec<Piece> {
+    let hosts = p.hosts;
+    let mut out = Vec::new();
+    let mut shown = Vec::new();
+    for hold in hosts.held_surfaces_on(p.output_id, layer) {
+        let menu_bar = hold
+            .picture
+            .as_ref()
+            .is_some_and(|picture| picture.menu_bar);
+        if covered && !menu_bar && hold.anchor != Anchor::all() {
+            continue;
+        }
+        let look = menu_bar
+            .then(|| p.menu_bars.look_on(hold.output, p.rect.y, p.now))
+            .flatten();
+        let (dy, opacity) = bar_shown(p, look);
+        if opacity <= 0.0 {
+            continue;
+        }
+        shown.push(HeldShown {
+            component: hold.component,
+            key: &hold.key,
+            dy,
+            opacity,
+        });
+        let Some(picture) = &hold.picture else {
+            continue;
+        };
+        let g = hold.geometry;
+        let at = Rect::new(
+            f64::from(g.loc.x),
+            f64::from(g.loc.y) + dy,
+            f64::from(g.size.w),
+            f64::from(g.size.h),
+        );
+        match &picture.content {
+            crate::host::HeldContent::Texture { snapshot, .. } => {
+                out.extend(held_texture_piece(p, snapshot, at, opacity));
+            }
+            crate::host::HeldContent::Memory { buffer, size } => {
+                out.push(held_memory_piece(buffer, *size, at, opacity));
+            }
+        }
+        out.extend(held_backdrop_pieces(
+            p,
+            &picture.backdrops,
+            (at.x, at.y),
+            opacity,
+            menu_bar,
+            captures,
+        ));
+    }
+    out.extend(held_hole_pieces(p, &shown));
+    out
+}
+
+/// A held surface as it shows on the output: which hold, and its offset and opacity ([`held_elements`]).
+pub(super) struct HeldShown<'a> {
+    pub component: &'static str,
+    pub key: &'a str,
+    pub dy: f64,
+    pub opacity: f32,
+}
+
+/// The backdrops a held surface drew ([`HeldBackdrops`]), its top-left corner at `at` (output-local points), front to
+/// back as the live surface draws them: its layers' glass, its subsurfaces' glass, its own backdrops (a menu bar's
+/// through [`bar_backdrop_elements`], its captures going to `captures`).
+fn held_backdrop_pieces(
+    p: &mut SceneParams<'_>,
+    held: &HeldBackdrops,
+    at: (f64, f64),
+    opacity: f32,
+    menu_bar: bool,
+    captures: &mut Vec<Piece>,
+) -> Vec<Piece> {
+    let moved = |areas: &[BackdropArea]| -> Vec<BackdropArea> {
+        areas
+            .iter()
+            .map(|a| BackdropArea {
+                area: Rectangle::new(a.area.loc + Point::from(at), a.area.size),
+                ..a.clone()
+            })
+            .collect()
+    };
+    let mut out = Vec::new();
+    for (areas, made) in &held.layers {
+        for mut piece in backdrop_elements(p, &moved(areas), opacity, WindowState::Active) {
+            if let (Piece::Glass(g), Some((made, made_opacity))) = (&mut piece, made) {
+                // the glass as the layer made it, at the held surface's place
+                let mut gc = (*g.glass).clone();
+                let m = &made.container;
+                gc.container.lens = m.lens;
+                gc.container = gc.container.with_blur_ramp(m.blur_ramp);
+                gc.container.edge = m.edge;
+                gc.container.params.shadow = m.params.shadow;
+                gc.container.params.highlight.angle = m.params.highlight.angle;
+                gc.key = Sig::new().u(gc.key).u(made.key).finish();
+                g.glass = Rc::new(gc);
+                g.opacity = made_opacity * opacity;
+            }
+            out.push(piece);
+        }
+    }
+    for (areas, bound) in &held.subsurfaces {
+        let bound = Rectangle::new(bound.loc + Point::from(at), bound.size);
+        out.extend(bounded_glass(
+            backdrop_elements(p, &moved(areas), opacity, WindowState::Active),
+            bound,
+        ));
+    }
+    let own = moved(&held.surface);
+    if menu_bar {
+        out.extend(bar_backdrop_elements(p, &own, opacity, captures));
+    } else {
+        out.extend(backdrop_elements(p, &own, opacity, WindowState::Active));
+    }
+    out
+}
+
+/// A held surface's picture copied from its shm buffer (D19), over `at` (output-local points) at `opacity`.
+fn held_memory_piece(
+    buffer: &smithay::backend::renderer::element::memory::MemoryRenderBuffer,
+    size: (i32, i32),
+    at: Rect,
+    opacity: f32,
+) -> Piece {
+    let src = smithay::utils::Rectangle::<f64, Logical>::from_size(
+        (f64::from(size.0), f64::from(size.1)).into(),
+    );
+    Piece::Image(Picture {
+        buffer: buffer.clone().into(),
+        kind: SceneKind::LayerContent,
+        index: 0,
+        role: ImageRole::Standalone,
+        buffer_px: size,
+        src,
+        size: (at.w as i32, at.h as i32),
+        placement: Placement {
+            origin: OutputPoint(cupertino_geometry::Point::new(at.x, at.y)),
+            ..Placement::IDENTITY
+        },
+        opacity,
+        clip: Clip::None,
+    })
+}
+
+/// A held surface's picture drawn by the renderer (D19), over `at` (output-local points) at `opacity`: the snapshot's
+/// quad, as a returning drag icon draws its own. Nothing without the mesh program or once it is retired.
 fn held_texture_piece(
     p: &SceneParams<'_>,
     snapshot: &crate::render::snapshots::SnapshotOwner,
-    at: smithay::utils::Rectangle<i32, Logical>,
+    local: Rect,
+    opacity: f32,
 ) -> Option<Piece> {
     p.res.mesh.as_ref()?;
     let lease = match p.res.snapshots.pin(snapshot.id()) {
@@ -655,19 +907,13 @@ fn held_texture_piece(
             return None;
         }
     };
-    let local = Rect::new(
-        f64::from(at.loc.x),
-        f64::from(at.loc.y),
-        f64::from(at.size.w),
-        f64::from(at.size.h),
-    );
     Some(Piece::Mesh(MeshPiece {
         kind: SceneKind::LayerContent,
         index: 0,
         snapshot: lease.id(),
         keep: SnapshotKeep::Pinned(lease),
         mesh: Mesh::quad(local.into_geom()),
-        opacity: 1.0,
+        opacity,
         // a held picture never changes
         revision: 0,
     }))

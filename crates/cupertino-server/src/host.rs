@@ -205,9 +205,23 @@ struct PersistedSurface {
     last_picture: Option<HeldPicture>,
 }
 
-/// The last picture of a held persistent surface (D19), taken once as its hold starts.
+/// The last picture of a held persistent surface (D19), taken once as its hold starts, with what the server drew for
+/// the surface besides its pixels, so the held surface shows as the live one did.
 #[derive(Clone)]
-pub enum HeldPicture {
+pub struct HeldPicture {
+    /// The surface's pixels and its layers' content.
+    pub content: HeldContent,
+    /// The backdrops the surface and its layers drew, which sample what lies behind them: drawn live under the
+    /// picture.
+    pub backdrops: crate::render::scene::HeldBackdrops,
+    /// The surface was its output's menu bar: it is hidden, revealed and dimmed as the output's menu bar is, and it does
+    /// not give way to a full-screen window.
+    pub menu_bar: bool,
+}
+
+/// The pixels of a held persistent surface (D19).
+#[derive(Clone)]
+pub enum HeldContent {
     /// The surface tree drawn by the renderer into a texture it keeps, whatever kind of buffer the surface showed
     /// (shm, dmabuf); the texture lives as long as the hold.
     Texture {
@@ -620,7 +634,7 @@ impl HostManager {
     }
 
     /// Copy the current shm pixel contents of `surface` if accessible: a held surface's picture without a renderer.
-    fn capture_shm_picture(surface: &WlSurface) -> Option<HeldPicture> {
+    fn capture_shm_picture(surface: &WlSurface) -> Option<HeldContent> {
         let buffer = with_states(surface, |states| {
             let from_renderer = states
                 .data_map
@@ -675,7 +689,7 @@ impl HostManager {
                 Transform::Normal,
                 None,
             );
-            Some(HeldPicture::Memory {
+            Some(HeldContent::Memory {
                 buffer: mem_buf,
                 size: (w, h),
             })

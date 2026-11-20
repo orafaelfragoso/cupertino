@@ -1665,3 +1665,122 @@ fn an_armed_part_keeps_a_bounded_number_of_commits() {
         cupertino_protocols::server::transaction::cupertino_transaction_v1::Gesture::SwipeUp
     ));
 }
+
+/// One colour in `wl_shm` ARGB8888 memory order: an opaque green, which neither the wallpaper nor a window shows.
+const GREEN: [u8; 4] = [0, 255, 0, 255];
+
+/// How many pixels of `image` inside `rect` (`x`, `y`, `width`, `height` in pixels) show a layer's green.
+fn green_in(image: &image::RgbaImage, rect: (u32, u32, u32, u32)) -> usize {
+    let (x0, y0, w, h) = rect;
+    let mut n = 0;
+    for y in y0..(y0 + h).min(image.height()) {
+        for x in x0..(x0 + w).min(image.width()) {
+            let [r, g, b, _] = image.get_pixel(x, y).0;
+            if g > 180 && r < 60 && b < 60 {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
+#[test]
+fn a_held_surface_shows_its_layers_and_gives_way_as_the_live_one() {
+    let mut rig = Rig::headless((480, 300));
+    let rect = (0, 0, 160, 120);
+    let (hconn, mut hq, mut hst) = rig.connect_host(&["overview"]);
+    let (_hov, oconn, mut oq, mut ost) = rig.spawn_component(&hconn, &mut hq, &mut hst, "overview");
+    // a persisted surface at the output's top left, clear, with one layer over all of it drawing green
+    let qh = oq.handle();
+    let parent = ost.compositor.as_ref().unwrap().create_surface(&qh, ());
+    let shell_surface = ost.layer_shell.as_ref().unwrap().get_layer_surface(
+        &parent,
+        ost.output.as_ref(),
+        zwlr_layer_shell_v1::Layer::Top,
+        "strip".into(),
+        &qh,
+        (),
+    );
+    shell_surface
+        .set_anchor(zwlr_layer_surface_v1::Anchor::Top | zwlr_layer_surface_v1::Anchor::Left);
+    shell_surface.set_size(160, 120);
+    ost.component_global
+        .as_ref()
+        .unwrap()
+        .persist(&parent, "strip".into());
+    parent.commit();
+    for _ in 0..4 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    let clear = shm_buffer(ost.shm.as_ref().unwrap(), &qh, (160, 120), CLEAR);
+    parent.attach(Some(&clear), 0, 0);
+    parent.damage_buffer(0, 0, 160, 120);
+    let child = ost.compositor.as_ref().unwrap().create_surface(&qh, ());
+    let layer = ost
+        .layers
+        .as_ref()
+        .unwrap()
+        .get_layer(&child, &parent, &qh, ());
+    layer.set_value(cupertino_layer_v1::Property::Width, 160.0);
+    layer.set_value(cupertino_layer_v1::Property::Height, 120.0);
+    let green = shm_buffer(ost.shm.as_ref().unwrap(), &qh, (160, 120), GREEN);
+    child.attach(Some(&green), 0, 0);
+    child.damage_buffer(0, 0, 160, 120);
+    child.commit();
+    parent.commit();
+    for _ in 0..6 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    let image = rig.image();
+    assert!(
+        green_in(&image, rect) > 1000,
+        "the live surface shows its layer"
+    );
+
+    // the surface's layer role ends, then its connection: the server holds it, and the held picture shows what the live
+    // surface showed, its layer's content with it
+    shell_surface.destroy();
+    for _ in 0..3 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    drop((layer, child, green, clear, parent));
+    drop(ost);
+    drop(oq);
+    drop(oconn);
+    for _ in 0..6 {
+        rig.pump();
+    }
+    assert_eq!(
+        rig.state.hosts.held_surfaces().len(),
+        1,
+        "the surface is held"
+    );
+    let image = rig.image();
+    assert!(
+        green_in(&image, rect) > 1000,
+        "the held picture keeps the layer's content"
+    );
+
+    // a full-screen window covers the output: the held surface gives way, as the live one does
+    let (wconn, mut wq, mut wst, _wsurf, _toplevel, wid) = rig.magenta_window((100, 80));
+    rig.state.command(cupertino_wm::Command::Fullscreen {
+        window: wid,
+        output: None,
+        requested_by: cupertino_wm::Requester::User,
+    });
+    // the model clock steps past the move into full screen
+    for _ in 0..10 {
+        rig.state.fixed_time = Some(rig.state.now() + 1.0);
+        rig.pump_with(&wconn, &mut wq, &mut wst);
+    }
+    assert!(
+        rig.state.wm.fullscreen_front(rig.output_id).is_some(),
+        "the window covers the output"
+    );
+    let image = rig.image();
+    assert_eq!(
+        green_in(&image, rect),
+        0,
+        "a held surface that gives way is not drawn over a full-screen window"
+    );
+}

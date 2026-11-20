@@ -652,7 +652,13 @@ impl MenuBars {
     /// Presentation of `surface` when it is a menu bar. `output_y` is the top of its output.
     pub fn look(&self, surface: &WlSurface, output_y: f64, now: f64) -> Option<BarLook> {
         let bar = self.bars.iter().find(|b| &b.surface == surface)?;
-        let p = self.set.presentation(bar.output, now)?;
+        self.look_on(bar.output, output_y, now)
+    }
+
+    /// Presentation of the menu bar of `output`, whose top is `output_y`, also while no bar surface is there: a held
+    /// one shows as the live one would (D19).
+    pub fn look_on(&self, output: OutputId, output_y: f64, now: f64) -> Option<BarLook> {
+        let p = self.set.presentation(output, now)?;
         Some(BarLook {
             dy: p.rect.y - output_y,
             alpha: (p.visible * (1.0 - INACTIVE_DIM * p.inactive)) as f32,

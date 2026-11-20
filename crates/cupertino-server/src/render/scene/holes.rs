@@ -33,21 +33,29 @@ pub(crate) fn hole_pieces(
     source_pieces(p, hole, bounds, opacity)
 }
 
-/// The holes of the persistent surfaces held on `layer` of the output after their component's connection ended
-/// (D19), front to back: each draws its source live where it last showed, behind the surface's last picture.
-pub(crate) fn held_hole_pieces(p: &mut SceneParams<'_>, layer: Layer) -> Vec<Piece> {
+/// The holes of the persistent surfaces held on the output after their component's connection ended (D19) that show
+/// (`shown`), front to back: each draws its source live where it last showed, behind the surface's last picture, moved
+/// and faded as its surface shows.
+pub(crate) fn held_hole_pieces(
+    p: &mut SceneParams<'_>,
+    shown: &[layers::HeldShown<'_>],
+) -> Vec<Piece> {
     let transactions = p.transactions;
-    let holds = p.hosts.held_surfaces_on(p.output_id, layer);
     let mut out = Vec::new();
     for hole in transactions.held_holes() {
         let Some(held) = hole.held.as_ref() else {
             continue;
         };
-        let on_hold = holds
+        let Some(on) = shown
             .iter()
-            .any(|s| s.component == hole.component && s.key == held.key);
-        if held.output == p.output_id && on_hold {
-            out.extend(source_pieces(p, hole, held.bounds, 1.0));
+            .find(|s| s.component == hole.component && s.key == held.key)
+        else {
+            continue;
+        };
+        if held.output == p.output_id {
+            let b = held.bounds;
+            let bounds = Rectangle::new((b.loc.x, b.loc.y + on.dy).into(), b.size);
+            out.extend(source_pieces(p, hole, bounds, on.opacity));
         }
     }
     out

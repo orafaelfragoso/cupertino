@@ -1230,6 +1230,6 @@ pub(crate) use compose::{glass_layer, material_layer};
 use holes::held_hole_pieces;
 pub(crate) use holes::hole_pieces;
 pub use layers::{
-    capture_surface, capture_window, gives_way, raised_popups_window, top_layer_covered,
-    SnapshotBackdrop,
+    capture_held_surface, capture_surface, capture_window, gives_way, raised_popups_window,
+    top_layer_covered, HeldBackdrops, SnapshotBackdrop,
 };

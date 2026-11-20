@@ -217,7 +217,11 @@ fn draw(surface: &str, state: &State, look: Look, scale: f32) -> Result<ImageRes
     let theme = cupertino_assets::theme::load().map_err(|e| e.to_string())?;
     let tokens = ThemeTokens::cupertino(&theme, preferences).map_err(|e| e.to_string())?;
     options.theme = Arc::new(tokens);
-    let (center, ui) = model(surface, state, CenterConfig::from_theme(&theme))?;
+    let (center, ui) = model(
+        surface,
+        state,
+        CenterConfig::below_menu_bar(theme.shapes.menu_bar_height),
+    )?;
     let metrics = CardMetrics::new(Arc::clone(&options.theme), Arc::clone(&options.text));
     NEXT.set(Some((center, ui, metrics)));
     let turns = NonZeroU32::new(TURNS).expect("a turn budget");

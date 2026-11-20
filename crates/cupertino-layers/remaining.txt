@@ -60,9 +60,7 @@ shell facade cupertino-menubar -> cupertino-theme normal
 shell facade cupertino-menubar -> cupertino-ui-text normal
 shell facade cupertino-menubar -> cupertino-ui-wayland normal
 shell facade cupertino-menubar -> cupertino-wayland-client normal
-shell facade cupertino-notifications -> cupertino-animation normal
 shell facade cupertino-notifications -> cupertino-shell-client normal
-shell facade cupertino-notifications -> cupertino-theme normal
 shell facade cupertino-notifications -> cupertino-ui-wayland normal
 shell facade cupertino-notifications -> cupertino-wayland-client normal
 shell facade cupertino-polkit-agent -> cupertino-shell-client normal

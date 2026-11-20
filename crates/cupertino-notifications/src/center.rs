@@ -22,11 +22,9 @@ use crate::notification::{
     cap, CloseReason, Expire, Notification, NotifyInput, Urgency, DEFAULT_ACTION_KEY,
     MAX_APP_NAME_CHARS, MAX_SUMMARY_CHARS,
 };
-use cupertino_animation::{CubicBezier, Spring, SpringParams};
 use cupertino_defaults::notifications::{NotificationSettings, Policy, Previews};
 use cupertino_geometry::{Point, Rect, Size};
-use cupertino_theme::animation::{DEFAULT_SPRING, EASE_IN_OUT_CURVE};
-use cupertino_theme::Theme;
+use cupertino_kit::motion::{SpringPreset, Timing};
 use std::borrow::Cow;
 use std::collections::VecDeque;
 
@@ -195,11 +193,11 @@ pub struct SwipeConfig {
     pub velocity_divisor: f64,
     /// Lower bound of the dismiss speed: 8.
     pub min_dismiss_speed: f64,
-    /// Spring back after a leftward release: mass 1, stiffness 100, damping 100; the
-    /// initial velocity (`dx / velocity_divisor`, fractions of the distance per second) is set on
-    /// release. Damping ratio 5 is clamped to 1 (critically damped), as the design layer
-    /// framework's spring does; that the banner's spring clamps the same way is.
-    pub spring_back: SpringParams,
+    /// Spring back after a leftward release: mass 1, stiffness 100, damping 100, its damping ratio 5 clamped to 1
+    /// (critically damped), as the design layer framework's spring does. It starts at rest: the design's initial
+    /// velocity (`dx / velocity_divisor`) is not carried, which moves the banner at most a tenth of a point from where
+    /// it would be.
+    pub spring_back: SpringPreset,
 }
 
 impl Default for SwipeConfig {
@@ -209,12 +207,7 @@ impl Default for SwipeConfig {
             left_limit: -16.0,
             velocity_divisor: 100.0,
             min_dismiss_speed: 8.0,
-            spring_back: SpringParams {
-                mass: 1.0,
-                stiffness: 100.0,
-                damping: 100.0,
-                ..DEFAULT_SPRING
-            },
+            spring_back: SpringPreset::NOTIFICATION_SWIPE_BACK,
         }
     }
 }
@@ -230,11 +223,9 @@ impl SwipeConfig {
 /// Banner transitions.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Motion {
-    /// 0.25 s, the default transaction duration (that the banner insert/remove
-    /// uses this helper is). Every non-swipe slide-out uses it as is.
-    pub duration: f64,
-    /// Ease-in-out.
-    pub curve: CubicBezier,
+    /// The catalogue's banner motion: ease-in-out over the default transaction duration (that the banner
+    /// insert/remove uses this helper is). Every non-swipe slide-out uses it as is.
+    pub timing: Timing,
     /// The exit is complete `duration + 0.01` s after it started.
     pub completion_slack: f64,
     /// Fade instead of the horizontal slide (branch, fade opacities 0 → 1 ).
@@ -247,8 +238,7 @@ pub struct Motion {
 impl Default for Motion {
     fn default() -> Self {
         Self {
-            duration: 0.25,
-            curve: EASE_IN_OUT_CURVE,
+            timing: Timing::NOTIFICATION_BANNER,
             completion_slack: 0.01,
             reduce_motion: false,
             speed_divisor: 15.0,
@@ -257,9 +247,14 @@ impl Default for Motion {
 }
 
 impl Motion {
+    /// Duration of a transition played at its own speed.
+    pub fn duration(&self) -> f64 {
+        self.timing.duration()
+    }
+
     /// Duration of a transition played at `speed` (see [`SwipeConfig::dismiss_speed`]).
     pub fn duration_at_speed(&self, speed: f64) -> f64 {
-        self.duration * self.speed_divisor / speed
+        self.duration() * self.speed_divisor / speed
     }
 }
 
@@ -296,10 +291,10 @@ impl Default for CenterConfig {
 }
 
 impl CenterConfig {
-    /// Defaults with the top inset below the theme's menu bar.
-    pub fn from_theme(theme: &Theme) -> Self {
+    /// Defaults with the top inset below a menu bar `menu_bar_height` points tall.
+    pub fn below_menu_bar(menu_bar_height: f64) -> Self {
         let layout = StackLayout {
-            top_inset: theme.shapes.menu_bar_height + StackLayout::LIST_TOP_PADDING,
+            top_inset: menu_bar_height + StackLayout::LIST_TOP_PADDING,
             ..StackLayout::default()
         };
         Self {
@@ -414,14 +409,14 @@ enum Track {
         to: f64,
         start: f64,
         duration: f64,
-        curve: CubicBezier,
+        timing: Timing,
     },
     Spring {
         from: f64,
         to: f64,
         start: f64,
         ends: f64,
-        spring: Spring,
+        timing: Timing,
     },
 }
 
@@ -434,26 +429,27 @@ impl Track {
                 to,
                 start,
                 duration,
-                curve,
+                timing,
             } => {
                 let x = if duration <= 0.0 {
                     1.0
                 } else {
                     ((now - start) / duration).clamp(0.0, 1.0)
                 };
-                from + (to - from) * curve.eval(x)
+                // the motion's curve played over `duration`, its own or one a swipe's speed set
+                from + (to - from) * timing.value(x * timing.duration())
             }
             Track::Spring {
                 from,
                 to,
                 start,
                 ends,
-                spring,
+                timing,
             } => {
                 if now >= ends {
                     to
                 } else {
-                    from + (to - from) * spring.value(now - start)
+                    from + (to - from) * timing.value(now - start)
                 }
             }
         }
@@ -476,7 +472,7 @@ impl Track {
             to,
             start: now,
             duration,
-            curve: motion.curve,
+            timing: motion.timing,
         };
     }
 }
@@ -998,10 +994,10 @@ impl NotificationCenter {
         b.deadline = deadline;
         if m.reduce_motion {
             b.opacity = Track::Still(0.0);
-            b.opacity.ease_to(1.0, &m, m.duration, now);
+            b.opacity.ease_to(1.0, &m, m.duration(), now);
         } else {
             b.slide = Track::Still(slide);
-            b.slide.ease_to(0.0, &m, m.duration, now);
+            b.slide.ease_to(0.0, &m, m.duration(), now);
         }
     }
 
@@ -1057,7 +1053,7 @@ impl NotificationCenter {
         self.entries[i].in_centre = false;
         match self.phase_of(i) {
             Some(Phase::Pending) => self.entries[i].banner = None,
-            Some(_) => self.start_leaving(i, reason, self.config.motion.duration, now),
+            Some(_) => self.start_leaving(i, reason, self.config.motion.duration(), now),
             None => {}
         }
         self.signal_if_needed(i, reason);
@@ -1181,9 +1177,12 @@ impl NotificationCenter {
                 self.drop_pending(i);
                 self.gc();
             }
-            Some(Phase::Visible { .. }) => {
-                self.start_leaving(i, CloseReason::Dismissed, self.config.motion.duration, now)
-            }
+            Some(Phase::Visible { .. }) => self.start_leaving(
+                i,
+                CloseReason::Dismissed,
+                self.config.motion.duration(),
+                now,
+            ),
             _ => {}
         }
         self.promote(now);
@@ -1251,16 +1250,13 @@ impl NotificationCenter {
             return SwipeOutcome::Click;
         }
         if drag.dx < 0.0 {
-            let spring = Spring::new(SpringParams {
-                initial_velocity: drag.dx / cfg.velocity_divisor,
-                ..cfg.spring_back
-            });
+            let timing = Timing::from(cfg.spring_back);
             b.offset = Track::Spring {
                 from: drag.dx,
                 to: 0.0,
                 start: now,
-                ends: now + spring.settling_duration(),
-                spring,
+                ends: now + timing.duration(),
+                timing,
             };
             self.touch();
             return SwipeOutcome::Cancelled;
@@ -1293,7 +1289,7 @@ impl NotificationCenter {
         if b.hovered || b.drag.is_some() {
             b.deadline = Some(now + recheck);
         } else {
-            self.start_leaving(i, CloseReason::Expired, self.config.motion.duration, now);
+            self.start_leaving(i, CloseReason::Expired, self.config.motion.duration(), now);
         }
         true
     }

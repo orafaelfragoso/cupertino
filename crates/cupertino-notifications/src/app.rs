@@ -603,7 +603,8 @@ fn watch_policy(notes: async_channel::Sender<Note>) -> Option<Command<Message>> 
 }
 
 fn start(options: &Options) -> Result<(Notifications, Vec<Command<Message>>)> {
-    let mut config = CenterConfig::from_theme(&cupertino_assets::theme::load()?);
+    let mut config =
+        CenterConfig::below_menu_bar(cupertino_assets::theme::load()?.shapes.menu_bar_height);
     // the toolkit's first frame has the session's options; the roles report changes
     config.motion.reduce_motion = false;
     let (sender, notes) = async_channel::unbounded();

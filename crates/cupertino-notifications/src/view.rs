@@ -33,7 +33,6 @@ use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
 
-use cupertino_animation::{Spring, SpringParams};
 use cupertino_kit::controls::{
     paint_glass_edge, AppIcon, Button, ButtonRole, ButtonStyle, DisclosureButton, DisclosureStyle,
     GlassEdge, PressCatcher, RichText, ScrollView, Scroller, Stack, Text, TextLink, TextRole,
@@ -48,6 +47,7 @@ use cupertino_kit::layout::{
     Align, Axis, Constraints, ContainerKind, Flex, Justify, LayoutSpec, Measured, Overflow,
     ScrollState, SizeSpec,
 };
+use cupertino_kit::motion::{SpringPreset, Timing};
 use cupertino_kit::platform::{DecorationMode, Keysym, MouseButton, PointerEvent, WindowSpec};
 use cupertino_kit::render::{Effect, FillRule, Paint, PaintOp, PathVerb, Shape};
 use cupertino_kit::text::{
@@ -160,8 +160,6 @@ pub const CLEAR_WIDTH: f64 = 86.0;
 /// An expanded group: its header row (its application, Show Less and its clear button) and the gap between its cards.
 pub const GROUP_HEADER: f64 = 30.0;
 pub const CARD_GAP: f64 = 6.0;
-/// How long a group takes to expand or collapse, as a spring's perceptual duration, without bounce.
-pub const EXPAND_DURATION: f64 = 0.35;
 /// Space between the centre's list and the bottom edge of the output.
 pub const BOTTOM_MARGIN: f64 = 16.0;
 /// How far left of the cards the centre takes input, and how tall (more than any output) its region is.
@@ -249,7 +247,7 @@ pub enum Input {
 
 /// What the windows show beyond the model: whether the centre and its Clear menu are open, where its list is
 /// scrolled to, which of its cards are unfolded, which one is revealed, and which groups are expanded or collapsing.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Ui {
     /// The centre is open and takes input. It stays on screen while it slides out after it is closed
     /// ([`Ui::centre_shown`]).
@@ -275,20 +273,20 @@ pub struct Ui {
 }
 
 /// The spring a group expands and collapses with.
-fn expand_spring() -> Spring {
-    Spring::new(SpringParams::from_perceptual(EXPAND_DURATION, 0.0))
+fn expand_timing() -> Timing {
+    Timing::from(SpringPreset::NOTIFICATION_GROUP_EXPAND)
 }
 
 impl Ui {
     /// How far the group `key` is expanded at `now`: 0 collapsed, 1 expanded.
     pub fn expansion(&self, key: &str, now: f64) -> f64 {
-        let spring = expand_spring();
+        let timing = expand_timing();
         let progress = |start: f64| {
             let t = now - start;
-            if t >= spring.settling_duration() {
+            if t >= timing.duration() {
                 1.0
             } else {
-                spring.value(t).clamp(0.0, 1.0)
+                timing.value(t).clamp(0.0, 1.0)
             }
         };
         match (self.expanded.get(key), self.collapsing.get(key)) {
@@ -301,7 +299,7 @@ impl Ui {
     /// Whether something of the centre moves at `now` (a group expanding or collapsing, the list sliding, a card
     /// leaving or the cards below it rising), so the centre needs frames.
     pub fn is_animating(&self, now: f64) -> bool {
-        let settle = expand_spring().settling_duration();
+        let settle = expand_timing().duration();
         self.expanded
             .values()
             .chain(self.collapsing.values())
@@ -329,7 +327,7 @@ impl Ui {
         }
         if self.slide.is_out(now) {
             *self = Ui {
-                slide: self.slide,
+                slide: std::mem::take(&mut self.slide),
                 ..Ui::default()
             };
         }
@@ -370,7 +368,7 @@ impl Ui {
         self.rises.retain(|r| !r.done(now));
         let (done, going): (Vec<Removal>, Vec<Removal>) = std::mem::take(&mut self.removals)
             .into_iter()
-            .partition(|r| now - r.start >= motion::LEAVE_DURATION);
+            .partition(|r| now - r.start >= motion::leave_duration());
         self.removals = going;
         if done.is_empty() {
             return;
@@ -400,7 +398,7 @@ impl Default for Ui {
     fn default() -> Self {
         Ui {
             centre_open: false,
-            slide: Slide::OUT,
+            slide: Slide::default(),
             removals: Vec::new(),
             rises: Vec::new(),
             close_wide: None,

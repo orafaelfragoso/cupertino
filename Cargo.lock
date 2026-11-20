@@ -1400,7 +1400,6 @@ version = "0.1.0"
 dependencies = [
  "async-channel",
  "async-io",
- "cupertino-animation",
  "cupertino-apps",
  "cupertino-assets",
  "cupertino-defaults",
@@ -1410,7 +1409,6 @@ dependencies = [
  "cupertino-kit",
  "cupertino-peer",
  "cupertino-shell-client",
- "cupertino-theme",
  "cupertino-ui-wayland",
  "cupertino-wayland-client",
  "unicode-segmentation",

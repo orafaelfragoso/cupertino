@@ -216,6 +216,72 @@ impl Timing {
     }
 }
 
+/// The motions of the notification banners and the notification list.
+impl SpringPreset {
+    /// A banner springing back to rest after a leftward swipe: mass 1, stiffness 100, damping 100, a damping ratio of
+    /// 5 that the spring takes as critically damped (it allows no overdamping).
+    pub const NOTIFICATION_SWIPE_BACK: SpringPreset =
+        SpringPreset(SpringForm::Physical(SpringParams {
+            mass: 1.0,
+            stiffness: 100.0,
+            damping: 100.0,
+            ..DEFAULT_SPRING
+        }));
+    /// The notification list sliding in from the output's right edge and out again as one piece: critically damped
+    /// at 21 radians per second (stiffness 21², damping 2·21), about 0.4 s to settle.
+    pub const NOTIFICATION_LIST_SLIDE: SpringPreset =
+        SpringPreset(SpringForm::Physical(SpringParams {
+            mass: 1.0,
+            stiffness: 441.0,
+            damping: 42.0,
+            ..DEFAULT_SPRING
+        }));
+    /// The cards below a cleared notification rising into its gap: critically damped at 21.75 radians per second
+    /// (stiffness 21.75², damping 2·21.75).
+    pub const NOTIFICATION_RISE: SpringPreset = SpringPreset(SpringForm::Physical(SpringParams {
+        mass: 1.0,
+        stiffness: 473.0625,
+        damping: 43.5,
+        ..DEFAULT_SPRING
+    }));
+    /// A notification group expanding into its cards and collapsing again: the perceptual spring of 0.35 s without
+    /// bounce (stiffness (2π/0.35)², damping 4π/0.35), its numbers computed as [`SpringParams::from_perceptual`]
+    /// computes them.
+    pub const NOTIFICATION_GROUP_EXPAND: SpringPreset =
+        SpringPreset(SpringForm::Physical(SpringParams {
+            mass: 1.0,
+            stiffness: (std::f64::consts::TAU * NOTIFICATION_GROUP_EXPAND_RATE)
+                * (std::f64::consts::TAU * NOTIFICATION_GROUP_EXPAND_RATE),
+            damping: 1.0 * 4.0 * std::f64::consts::PI * NOTIFICATION_GROUP_EXPAND_RATE,
+            ..DEFAULT_SPRING
+        }));
+}
+
+/// The reciprocal of the perceptual duration of [`SpringPreset::NOTIFICATION_GROUP_EXPAND`], 0.35 s.
+const NOTIFICATION_GROUP_EXPAND_RATE: f64 = 1.0 / 0.35;
+
+/// The motions of the notification banners and the notification list.
+impl Timing {
+    /// A banner sliding in from the output's right edge and out again, or fading in and out with Reduce Motion: the
+    /// timing table's ease-in-out over 0.25 s, the default transaction's duration. A swiped banner leaves on the same
+    /// curve, faster as the swipe was.
+    pub const NOTIFICATION_BANNER: Timing = Timing(Motion::Eased {
+        easing: Easing::EASE_IN_OUT,
+        seconds: 0.25,
+    });
+    /// A cleared notification blurring, shrinking and fading away over 0.13 s, slow at first and quick at the end:
+    /// the smoothstep `3t² − 2t³`, which this cubic Bézier is exactly.
+    pub const NOTIFICATION_CARD_LEAVE: Timing = Timing(Motion::Eased {
+        easing: Easing(Shape::Bezier(CubicBezier::new(
+            1.0 / 3.0,
+            0.0,
+            2.0 / 3.0,
+            1.0,
+        ))),
+        seconds: 0.13,
+    });
+}
+
 /// Dock-related timing values.
 #[derive(Clone, Debug)]
 pub struct DockAnimation {

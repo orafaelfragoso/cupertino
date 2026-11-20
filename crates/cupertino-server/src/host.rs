@@ -214,8 +214,8 @@ struct PersistedSurface {
 pub struct HeldPicture {
     /// The surface's pixels and its layers' content.
     pub content: HeldContent,
-    /// The backdrops the surface and its layers drew, which sample what lies behind them: drawn live under the
-    /// picture.
+    /// The backdrops the surface, its subsurfaces and its layers drew, which sample what lies behind them: drawn live
+    /// where the live surface drew them, among the slices of the picture and behind it.
     pub backdrops: crate::render::scene::HeldBackdrops,
     /// The surface was its output's menu bar: it is hidden, revealed and dimmed as the output's menu bar is, and it does
     /// not give way to a full-screen window.
@@ -225,10 +225,12 @@ pub struct HeldPicture {
 /// The pixels of a held persistent surface (D19).
 #[derive(Clone)]
 pub enum HeldContent {
-    /// The surface tree drawn by the renderer into a texture it keeps, whatever kind of buffer the surface showed
-    /// (shm, dmabuf); the texture lives as long as the hold.
+    /// The surface tree and its layers' content drawn by the renderer into textures it keeps, whatever kind of buffer
+    /// the surface showed (shm, dmabuf): cut into slices, front to back, at each glass its layers and subsurfaces draw
+    /// among them, which the server draws live between them; `None` for a slice with nothing in it. The textures live
+    /// as long as the hold.
     Texture {
-        snapshot: Rc<crate::render::snapshots::SnapshotOwner>,
+        slices: Rc<[Option<crate::render::snapshots::SnapshotOwner>]>,
         /// Logical size the texture covers.
         size: (i32, i32),
     },

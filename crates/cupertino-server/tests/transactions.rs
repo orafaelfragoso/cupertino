@@ -1684,6 +1684,175 @@ fn green_in(image: &image::RgbaImage, rect: (u32, u32, u32, u32)) -> usize {
     n
 }
 
+/// The largest difference of any channel between two images of the same output inside `rect` (`x`, `y`, `width`,
+/// `height` in pixels).
+fn largest_difference(
+    a: &image::RgbaImage,
+    b: &image::RgbaImage,
+    rect: (u32, u32, u32, u32),
+) -> u8 {
+    let (x0, y0, w, h) = rect;
+    let mut most = 0;
+    for y in y0..(y0 + h).min(a.height()) {
+        for x in x0..(x0 + w).min(a.width()) {
+            let (p, q) = (a.get_pixel(x, y).0, b.get_pixel(x, y).0);
+            for c in 0..4 {
+                most = most.max(p[c].abs_diff(q[c]));
+            }
+        }
+    }
+    most
+}
+
+/// The largest difference of a channel a held surface's picture may show from the live surface's: the rounding of its
+/// content drawn into a texture and back.
+const HELD_PICTURE_TOLERANCE: u8 = 4;
+
+/// The kinds of the output's held and live layer content and backdrops, front to back, a run of one kind counted once.
+fn content_and_glass_order(rig: &mut Rig) -> Vec<cupertino_scene::SceneKind> {
+    use cupertino_scene::SceneKind;
+    let mut backend = rig.state.backend.take().unwrap();
+    let composed = rig
+        .state
+        .compose_output(backend.renderer(), 0, false)
+        .expect("the render resources are loaded");
+    rig.state.backend = Some(backend);
+    let mut kinds: Vec<SceneKind> = composed
+        .frame
+        .items()
+        .iter()
+        .map(|(_, item)| item.id.kind)
+        .filter(|kind| matches!(kind, SceneKind::LayerContent | SceneKind::Backdrop))
+        .collect();
+    kinds.dedup();
+    kinds
+}
+
+/// Switch the appearance and let the model clock step past any fade it starts.
+fn switch_appearance(rig: &mut Rig, appearance: cupertino_theme::Appearance) {
+    rig.state.set_appearance(appearance);
+    for _ in 0..4 {
+        rig.state.fixed_time = Some(rig.state.now() + 1.0);
+        rig.pump();
+    }
+}
+
+/// The output as it shows in the light appearance and then in the dark one; the appearance is light again after it.
+fn images_in_both_appearances(rig: &mut Rig) -> [image::RgbaImage; 2] {
+    use cupertino_theme::Appearance;
+    let images = [Appearance::Light, Appearance::Dark].map(|appearance| {
+        switch_appearance(rig, appearance);
+        rig.image()
+    });
+    switch_appearance(rig, Appearance::Light);
+    images
+}
+
+#[test]
+fn a_held_surface_draws_its_layer_glass_over_its_own_content_in_the_frame_s_appearance() {
+    let mut rig = Rig::headless((480, 300));
+    rig.state.fixed_time = Some(rig.state.now());
+    let surface_rect = (0, 0, 160, 120);
+    let glass_rect = (40, 30, 80, 60);
+    let (hconn, mut hq, mut hst) = rig.connect_host(&["overview"]);
+    let (_hov, oconn, mut oq, mut ost) = rig.spawn_component(&hconn, &mut hq, &mut hst, "overview");
+    // a persisted surface at the output's top left drawing green all over, with one clear layer of glass over the
+    // middle of it
+    let qh = oq.handle();
+    let parent = ost.compositor.as_ref().unwrap().create_surface(&qh, ());
+    let shell_surface = ost.layer_shell.as_ref().unwrap().get_layer_surface(
+        &parent,
+        ost.output.as_ref(),
+        zwlr_layer_shell_v1::Layer::Top,
+        "strip".into(),
+        &qh,
+        (),
+    );
+    shell_surface
+        .set_anchor(zwlr_layer_surface_v1::Anchor::Top | zwlr_layer_surface_v1::Anchor::Left);
+    shell_surface.set_size(160, 120);
+    ost.component_global
+        .as_ref()
+        .unwrap()
+        .persist(&parent, "strip".into());
+    parent.commit();
+    for _ in 0..4 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    let green = shm_buffer(ost.shm.as_ref().unwrap(), &qh, (160, 120), GREEN);
+    parent.attach(Some(&green), 0, 0);
+    parent.damage_buffer(0, 0, 160, 120);
+    let child = ost.compositor.as_ref().unwrap().create_surface(&qh, ());
+    let layer = ost
+        .layers
+        .as_ref()
+        .unwrap()
+        .get_layer(&child, &parent, &qh, ());
+    let (x, y, w, h) = glass_rect;
+    for (property, value) in [
+        (cupertino_layer_v1::Property::X, x),
+        (cupertino_layer_v1::Property::Y, y),
+        (cupertino_layer_v1::Property::Width, w),
+        (cupertino_layer_v1::Property::Height, h),
+    ] {
+        layer.set_value(property, f64::from(value));
+    }
+    // regular glass (cupertino_backdrop_v1.glass_style), at its size
+    layer.set_glass(0, 1.0);
+    let clear = shm_buffer(ost.shm.as_ref().unwrap(), &qh, (w as i32, h as i32), CLEAR);
+    child.attach(Some(&clear), 0, 0);
+    child.damage_buffer(0, 0, w as i32, h as i32);
+    child.commit();
+    parent.commit();
+    for _ in 0..6 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    let live_order = content_and_glass_order(&mut rig);
+    let live = images_in_both_appearances(&mut rig);
+    let inside = (x + 8, y + 8, w - 16, h - 16);
+    assert_eq!(
+        green_in(&live[0], inside),
+        0,
+        "the live layer's glass lies over the surface's own content"
+    );
+    assert!(
+        largest_difference(&live[0], &live[1], inside) > 16,
+        "the live glass follows the appearance"
+    );
+
+    // the surface's layer role ends, then its connection: the server holds it
+    shell_surface.destroy();
+    for _ in 0..3 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    drop((layer, child, green, clear, parent));
+    drop(ost);
+    drop(oq);
+    drop(oconn);
+    for _ in 0..6 {
+        rig.pump();
+    }
+    assert_eq!(
+        rig.state.hosts.held_surfaces().len(),
+        1,
+        "the surface is held"
+    );
+    assert_eq!(
+        content_and_glass_order(&mut rig),
+        live_order,
+        "the held surface draws its content and its layer's glass in the live order"
+    );
+    // the appearance changes during the hold: the held glass follows it as the live glass did
+    let held = images_in_both_appearances(&mut rig);
+    for (appearance, (live, held)) in ["light", "dark"].into_iter().zip(live.iter().zip(&held)) {
+        assert!(
+            largest_difference(live, held, surface_rect) <= HELD_PICTURE_TOLERANCE,
+            "the held surface shows what the live one showed in the {appearance} appearance, its layer's glass over its \
+             own content"
+        );
+    }
+}
+
 #[test]
 fn a_held_surface_shows_its_layers_and_gives_way_as_the_live_one() {
     let mut rig = Rig::headless((480, 300));

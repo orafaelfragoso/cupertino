@@ -285,6 +285,93 @@ fn group_areas(
         .collect()
 }
 
+/// How a layer makes its glass of the glass its backdrop gives, as [`layer_pieces`] draws it: the lens, blur ramp and
+/// edge it asks for, a raised layer's shadow and its rim lit from the pointer. The appearance the glass takes and the
+/// pointer are read from the frame it is drawn in, so the glass of a held surface (D19) follows them as the live one does.
+#[derive(Clone, Debug)]
+pub struct LayerGlass {
+    lens: f64,
+    blur_ramp: [f32; 2],
+    edge: cupertino_glass::glass::GlassEdge,
+    raised: bool,
+    pointer_lit: bool,
+    /// The layer's centre as shown, output-local points: its rim is lit from the pointer's side of it.
+    centre: Point<f64, Logical>,
+    /// The layer's opacity, which the glass of a layer alone carries (a group's shapes carry their layers' already).
+    opacity: Option<f32>,
+}
+
+impl LayerGlass {
+    /// The glass of layer `l` of lens `lens`, its centre as shown at `centre` (output-local points), on an output of
+    /// `scale` device pixels a point.
+    fn of(l: &LayerDraw, lens: f64, centre: Point<f64, Logical>, scale: f64) -> Self {
+        Self {
+            lens,
+            blur_ramp: l.blur_ramp,
+            edge: glass_edge(l, scale),
+            raised: l.raised,
+            pointer_lit: l.pointer_lit,
+            centre,
+            opacity: (l.group == 0).then_some(l.opacity as f32),
+        }
+    }
+
+    /// The same glass, its layer moved by `by` points.
+    pub fn moved(&self, by: Point<f64, Logical>) -> Self {
+        Self {
+            centre: self.centre + by,
+            ..self.clone()
+        }
+    }
+
+    /// `pieces`, the glass of the layer's backdrop made as its parent's own backdrops are, as the layer makes it in the
+    /// frame of `p`: lit from the pointer there when the layer asks for it.
+    pub fn make(&self, p: &SceneParams<'_>, pieces: Vec<Piece>) -> Vec<Piece> {
+        let pointer = Point::<f64, Logical>::from((p.pointer.x - p.rect.x, p.pointer.y - p.rect.y));
+        let pointer_here =
+            pointer.x >= 0.0 && pointer.y >= 0.0 && pointer.x <= p.rect.w && pointer.y <= p.rect.h;
+        let light = (self.pointer_lit && pointer_here)
+            .then(|| pointer_light(self.centre, pointer))
+            .flatten();
+        let mut pieces = pieces;
+        for piece in &mut pieces {
+            let Piece::Glass(g) = piece else { continue };
+            let mut gc = (*g.glass).clone();
+            gc.container.lens = self.lens as f32;
+            gc.container = gc.container.with_blur_ramp(self.blur_ramp);
+            if let Some(angle) = light {
+                gc.container.params.highlight.angle = angle;
+            }
+            gc.container.edge = self.edge;
+            if self.raised {
+                let s = &mut gc.container.params.shadow;
+                (s.offset, s.amount, s.height) = RAISED_SHADOW;
+                s.fill = [0.0, 0.0, 0.0, 1.0];
+                s.opacity = 1.0;
+            }
+            gc.key = Sig::new()
+                .u(gc.key)
+                .f(self.lens)
+                .f(f64::from(self.blur_ramp[0]))
+                .f(f64::from(self.blur_ramp[1]))
+                .f(light.map_or(-10.0, f64::from))
+                .u(u64::from(self.raised))
+                .f(f64::from(self.edge.width))
+                .f(f64::from(self.edge.color[0]))
+                .f(f64::from(self.edge.color[1]))
+                .f(f64::from(self.edge.color[2]))
+                .f(f64::from(self.edge.color[3]))
+                .f(f64::from(self.edge.soft))
+                .finish();
+            g.glass = std::rc::Rc::new(gc);
+            if let Some(opacity) = self.opacity {
+                g.opacity *= opacity;
+            }
+        }
+        pieces
+    }
+}
+
 /// The pieces of `parent`'s layers, front to back, as shown at `p.now`. `glass` makes the pieces of a layer's glass
 /// from its backdrop (output-local points before the window's rescale), as the parent's own backdrops are made.
 pub fn layer_pieces(
@@ -293,15 +380,26 @@ pub fn layer_pieces(
     place: &LayerPlace,
     mut glass: impl FnMut(&mut SceneParams<'_>, Vec<BackdropArea>) -> Vec<Piece>,
 ) -> Vec<Piece> {
+    layer_pieces_with(p, parent, place, |p, areas, made| {
+        let pieces = glass(p, areas);
+        made.make(p, pieces)
+    })
+}
+
+/// [`layer_pieces`], `glass` making the whole of a layer's glass from its backdrop and how the layer makes its glass
+/// ([`LayerGlass::make`]).
+pub fn layer_pieces_with(
+    p: &mut SceneParams<'_>,
+    parent: &WlSurface,
+    place: &LayerPlace,
+    mut glass: impl FnMut(&mut SceneParams<'_>, Vec<BackdropArea>, &LayerGlass) -> Vec<Piece>,
+) -> Vec<Piece> {
     let layers = present(parent, p.now, p.display.reduce_motion);
     if layers.is_empty() {
         return Vec::new();
     }
     let dark = p.config.is_dark();
     let plain = p.display.reduce_transparency || p.display.increase_contrast;
-    let pointer = Point::<f64, Logical>::from((p.pointer.x - p.rect.x, p.pointer.y - p.rect.y));
-    let pointer_here =
-        pointer.x >= 0.0 && pointer.y >= 0.0 && pointer.x <= p.rect.w && pointer.y <= p.rect.h;
     let s_min = place.scale.0.min(place.scale.1);
     let anchors = glass_anchors(&layers, place.opacity);
     let mut out = Vec::new();
@@ -424,46 +522,7 @@ pub fn layer_pieces(
         if areas.is_empty() {
             continue;
         }
-        let light = (l.pointer_lit && pointer_here)
-            .then(|| pointer_light(mc, pointer))
-            .flatten();
-        for mut piece in glass(p, areas) {
-            if let Piece::Glass(g) = &mut piece {
-                let mut gc = (*g.glass).clone();
-                gc.container.lens = lens as f32;
-                gc.container = gc.container.with_blur_ramp(l.blur_ramp);
-                if let Some(angle) = light {
-                    gc.container.params.highlight.angle = angle;
-                }
-                gc.container.edge = glass_edge(l, p.scale);
-                if l.raised {
-                    let s = &mut gc.container.params.shadow;
-                    (s.offset, s.amount, s.height) = RAISED_SHADOW;
-                    s.fill = [0.0, 0.0, 0.0, 1.0];
-                    s.opacity = 1.0;
-                }
-                gc.key = Sig::new()
-                    .u(gc.key)
-                    .f(lens)
-                    .f(f64::from(l.blur_ramp[0]))
-                    .f(f64::from(l.blur_ramp[1]))
-                    .f(light.map_or(-10.0, f64::from))
-                    .u(u64::from(l.raised))
-                    .f(l.edge.width)
-                    .f(f64::from(l.edge.color[0]))
-                    .f(f64::from(l.edge.color[1]))
-                    .f(f64::from(l.edge.color[2]))
-                    .f(f64::from(l.edge.color[3]))
-                    .f(f64::from(gc.container.edge.soft))
-                    .finish();
-                g.glass = std::rc::Rc::new(gc);
-                // a group's shapes carry their layers' opacities
-                if l.group == 0 {
-                    g.opacity *= l.opacity as f32;
-                }
-            }
-            out.push(piece);
-        }
+        out.extend(glass(p, areas, &LayerGlass::of(l, lens, mc, p.scale)));
     }
     out
 }

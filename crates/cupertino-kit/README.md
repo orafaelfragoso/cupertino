@@ -53,7 +53,8 @@ compositor. `app::run` connects for the application's renderer class (`Applicati
 makes the GPU renderer once the process draws on the GPU. `app::run_on` and `app::run_on_with` run on a window system a
 desktop shell set up with its surface roles (connected with `WaylandWindowSystem::connect_as` for its class);
 `app::run_lock_screen_on_with` does the same for the lock screen, whose AT-SPI adapter the session's lock never mutes
-(`AtspiAdapter::lock_screen`), and `app::run_on_with_appearance` passes the session's appearance through a function first, for a
+(`AtspiAdapter::lock_screen`); `app::run_on_with_until` and `app::run_lock_screen_on_with_until` also end the run on the
+turn a condition holds (`Runtime::with_exit_when`), as a host stops a component; and `app::run_on_with_appearance` passes the session's appearance through a function first, for a
 shell surface that keeps the dark appearance in a light session. Every one of them keeps the text caret from blinking
 (`caret_phase_ms` 0) while the session asks for a steady caret, from the first frame.
 Every one of them reports scroll timing when `CUPERTINO_SCROLL_TIMING` names an absolute path:
@@ -130,7 +131,7 @@ What `shell` and `apps` crates name from the toolkit, where each item is in Kit,
 
 | Module | Holds |
 |---|---|
-| `kit::app` | `run`, `environment` (a `core::Environment`: the theme, text system and symbols a program measures text with before it has a window), `mono_family`, `AppError`; for now `run_on`, `run_on_with`, `run_on_with_appearance`, `run_lock_screen_on_with` and `options` ([Temporary exposures](#temporary-exposures)) |
+| `kit::app` | `run`, `environment` (a `core::Environment`: the theme, text system and symbols a program measures text with before it has a window), `mono_family`, `AppError`; for now `run_on`, `run_on_with`, `run_on_with_appearance`, `run_lock_screen_on_with`, `run_on_with_until`, `run_lock_screen_on_with_until` and `options` ([Temporary exposures](#temporary-exposures)) |
 | `kit::core` | the application (`Application`, `Command`, `Window`, `WindowKey`, `Key`, `Popup`, `PopupAnchor`, `Menus`, `WindowBackground`, `RendererClass`, `Shortcut`, `CommandRegistry`); the widget (`Widget`, `Element`, `Change`, `Propagation`, `Event`, `Phase`, `EventCx`, `MeasureCx`, `PaintCx`, `SemanticsCx`, `IdleCx`, `Environment`, `FocusTarget`); semantics (`Role`, `Action`, `ActionData`, `AccessibleStates`, `AccessibleValue`, `Checked`, `Live`, `Relation`); drag and drop (`Drag`, `DragPreview`, `DropTarget`, `DropPlace`, `DropOver`, `Dropped`); glass (`Glass`, `GlassStyle`, `glass_outline`, `MAX_MATERIALS`, `SurfaceLayerMark`); icons (`Icons`, `IconImage`, `next_resource_id`); `session_scroll_bars`; for now `RuntimeOptions` |
 | `kit::platform` | values of windows and input: `WindowSpec`, `WindowId`, `WindowRequest`, `DecorationMode`, `ForeignParent`, `SystemAppearance`, `ScrollBars`, `ScrollSource`, `CursorShape`, `Timestamp`, `KeyEvent`, `Keysym`, `Mods`, `PointerEvent`, `MouseButton`, `ClipboardData`, `DragProgress`, `DropAction`, `DropToken`, `GlassStyle`, and the compositor-run changes `PresentChange`, `PresentProperty`, `LayerChange`, `LayerProperty`, `LayerEdge`, `SurfaceLayerLook`, `MAX_LAYER_SAMPLES`; for now `WindowSystem` |
 | `kit::layout` | `Align`, `Axis`, `Constraints`, `ContainerKind`, `Flex`, `Justify`, `LayoutDirection`, `LayoutSpec`, `Measured`, `Overflow`, `ScrollState`, `SizeSpec`, `Track` |

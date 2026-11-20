@@ -1,4 +1,5 @@
-//! A role extension addresses the view's window and its actual layer surfaces before their frame reaches the wire.
+//! A role extension addresses the view's window and its actual layer surfaces before their frame reaches the wire, and
+//! hears when the window system leaves its wait and when a surface's frame was presented.
 
 #[path = "../../cupertino-wayland-client/tests/support/mod.rs"]
 mod wire;
@@ -26,6 +27,10 @@ struct Seen {
     created: Vec<Option<WindowKey>>,
     frames: Vec<Frame>,
     state: Vec<Frame>,
+    /// How often the window system left its wait.
+    woke: usize,
+    /// The surfaces whose frame callbacks the server answered, in order.
+    presented: Vec<SurfaceId>,
 }
 
 struct Frame {
@@ -76,6 +81,14 @@ impl SurfaceRoles for Roles {
             surface,
             layers,
         });
+    }
+
+    fn woke(&mut self) {
+        self.0.borrow_mut().woke += 1;
+    }
+
+    fn frame_done(&mut self, surface: SurfaceId) {
+        self.0.borrow_mut().presented.push(surface);
     }
 }
 
@@ -236,4 +249,21 @@ fn keyed_roles_send_to_the_current_layers_before_the_window_commits() {
             }
         }
     }
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while seen.borrow().presented.is_empty() {
+        system
+            .dispatch(
+                Some(deadline.saturating_duration_since(Instant::now())),
+                &mut vec![],
+            )
+            .unwrap();
+        assert!(Instant::now() < deadline, "no frame was presented");
+    }
+    let seen = seen.borrow();
+    assert!(seen.woke > 0, "the window system left its wait");
+    assert!(
+        seen.presented.iter().all(|surface| *surface == parent),
+        "only the window's frames were presented: {:?}",
+        seen.presented
+    );
 }

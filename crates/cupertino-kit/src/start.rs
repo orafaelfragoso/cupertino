@@ -11,7 +11,7 @@ use cupertino_theme::{DesignTokens, Theme};
 use cupertino_ui_core::layout::LayoutDirection;
 use cupertino_ui_core::platform::{PlatformError, SystemAppearance, WindowSystem};
 use cupertino_ui_core::{
-    Application, Command, EachTurn, Environment, MonotonicClock, Runtime, RuntimeOptions,
+    Application, Command, EachTurn, Environment, ExitWhen, MonotonicClock, Runtime, RuntimeOptions,
     ThemeForAppearance, UiError,
 };
 use cupertino_ui_render::gpu::GpuConfig;
@@ -111,26 +111,18 @@ pub fn run_on_with<A: Application>(
     system: WaylandWindowSystem,
     start: impl FnOnce(&RuntimeOptions) -> (A::Model, Vec<Command<A::Message>>),
 ) -> Result<(), AppError> {
-    let _instance = instance();
-    // the first frame already has the session's appearance
-    let (mut options, theme) = options_and_theme(start_preferences(system.appearance()))?;
-    renderers_on_gpu(&mut options, system.gpu_renderers());
-    let first = system.appearance().unwrap_or_default();
-    keep_caret(Arc::make_mut(&mut options.theme), &first);
-    let mut personal = Personal::follow(system.waker(), theme, &options.theme, first);
-    options.theme = personal.theme();
-    let follow = personal.theme_for();
-    options.accessibility = Some(Box::new(AtspiAdapter::muted(system.waker())));
-    let mut start = start(&options);
-    start.1.extend(personal.watching());
-    let renderers = system.gpu_renderers();
-    Runtime::<A, _>::start(system, options, start)
-        .with_theme_for(follow)
-        .with_personal_refresh(personal.refresh())
-        .with_each_turn(each_turn())
-        .timed(renderers)
-        .run()
-        .map_err(AppError::Runtime)
+    run_shell::<A>(system, start, false, None)
+}
+
+/// [`run_on_with`] that also ends once `until` says so, asked on each turn of the loop after the window system was
+/// read ([`Runtime::with_exit_when`]): a runner that stops the application from another thread sets what `until`
+/// reads and wakes the window system.
+pub fn run_on_with_until<A: Application>(
+    system: WaylandWindowSystem,
+    start: impl FnOnce(&RuntimeOptions) -> (A::Model, Vec<Command<A::Message>>),
+    until: ExitWhen,
+) -> Result<(), AppError> {
+    run_shell::<A>(system, start, false, Some(until))
 }
 
 /// [`run_on_with`] for the application that draws the lock screen: its accessibility adapter is not muted while the
@@ -139,24 +131,55 @@ pub fn run_lock_screen_on_with<A: Application>(
     system: WaylandWindowSystem,
     start: impl FnOnce(&RuntimeOptions) -> (A::Model, Vec<Command<A::Message>>),
 ) -> Result<(), AppError> {
+    run_shell::<A>(system, start, true, None)
+}
+
+/// [`run_lock_screen_on_with`] that also ends once `until` says so ([`run_on_with_until`]).
+pub fn run_lock_screen_on_with_until<A: Application>(
+    system: WaylandWindowSystem,
+    start: impl FnOnce(&RuntimeOptions) -> (A::Model, Vec<Command<A::Message>>),
+    until: ExitWhen,
+) -> Result<(), AppError> {
+    run_shell::<A>(system, start, true, Some(until))
+}
+
+/// The runs of [`run_on_with`] and [`run_lock_screen_on_with`]: the lock screen's draws on the CPU and its adapter is
+/// not muted while the session is locked.
+fn run_shell<A: Application>(
+    system: WaylandWindowSystem,
+    start: impl FnOnce(&RuntimeOptions) -> (A::Model, Vec<Command<A::Message>>),
+    lock_screen: bool,
+    until: Option<ExitWhen>,
+) -> Result<(), AppError> {
     let _instance = instance();
+    // the first frame already has the session's appearance
     let (mut options, theme) = options_and_theme(start_preferences(system.appearance()))?;
+    if !lock_screen {
+        renderers_on_gpu(&mut options, system.gpu_renderers());
+    }
     let first = system.appearance().unwrap_or_default();
     keep_caret(Arc::make_mut(&mut options.theme), &first);
     let mut personal = Personal::follow(system.waker(), theme, &options.theme, first);
     options.theme = personal.theme();
     let follow = personal.theme_for();
-    options.accessibility = Some(Box::new(AtspiAdapter::lock_screen(system.waker())));
+    let adapter = if lock_screen {
+        AtspiAdapter::lock_screen(system.waker())
+    } else {
+        AtspiAdapter::muted(system.waker())
+    };
+    options.accessibility = Some(Box::new(adapter));
     let mut start = start(&options);
     start.1.extend(personal.watching());
     let renderers = system.gpu_renderers();
-    Runtime::<A, _>::start(system, options, start)
+    let mut runtime = Runtime::<A, _>::start(system, options, start)
         .with_theme_for(follow)
         .with_personal_refresh(personal.refresh())
         .with_each_turn(each_turn())
-        .timed(renderers)
-        .run()
-        .map_err(AppError::Runtime)
+        .timed(renderers);
+    if let Some(until) = until {
+        runtime = runtime.with_exit_when(until);
+    }
+    runtime.run().map_err(AppError::Runtime)
 }
 
 /// Names the file that [`Timed::timed`] appends the timing of each scroll to.

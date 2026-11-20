@@ -3,6 +3,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::task::{Context, Poll, Waker};
 
 use super::bridge::{Bridges, Came};
 use super::{Message, Panel, Sender, Topic, MAX_SUBSCRIBER_QUEUE};
@@ -38,6 +39,8 @@ struct Subscriber {
     topics: HashSet<Topic>,
     queue: VecDeque<(Sender, Message)>,
     warned_overflow: bool,
+    /// The component's loop waiting for its queue to fill ([`BusHub::poll_drain`]).
+    waker: Option<Waker>,
 }
 
 #[derive(Default)]
@@ -86,6 +89,7 @@ impl BusHub {
             topics: HashSet::new(),
             queue: VecDeque::new(),
             warned_overflow: false,
+            waker: None,
         });
         id
     }
@@ -188,18 +192,29 @@ impl BusHub {
         self.bridges.forward(from, &message, came);
     }
 
-    pub fn drain(&self, sub_id: u64) -> Vec<(Sender, Message)> {
+    /// The publications waiting in `sub_id`'s queue, or `Pending` with `cx`'s task woken by the next one. A subscriber
+    /// that left the bus waits for good.
+    pub(crate) fn poll_drain(
+        &self,
+        sub_id: u64,
+        cx: &mut Context<'_>,
+    ) -> Poll<Vec<(Sender, Message)>> {
         let mut inner = self.lock();
-        inner
-            .subscribers
-            .iter_mut()
-            .find(|s| s.id == sub_id)
-            .map(|s| s.queue.drain(..).collect())
-            .unwrap_or_default()
+        let Some(sub) = inner.subscribers.iter_mut().find(|s| s.id == sub_id) else {
+            return Poll::Pending;
+        };
+        if sub.queue.is_empty() {
+            sub.waker = Some(cx.waker().clone());
+            return Poll::Pending;
+        }
+        Poll::Ready(sub.queue.drain(..).collect())
     }
 }
 
 fn push_bounded(sub: &mut Subscriber, from: Sender, msg: Message) {
+    if let Some(waker) = sub.waker.take() {
+        waker.wake();
+    }
     if sub.queue.len() >= MAX_SUBSCRIBER_QUEUE {
         sub.queue.pop_front();
         if !sub.warned_overflow {

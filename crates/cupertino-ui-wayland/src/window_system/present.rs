@@ -303,6 +303,9 @@ impl WaylandWindowSystem {
                     return;
                 };
                 self.windows[i].frame_pending = false;
+                if let Some(roles) = self.roles.as_mut() {
+                    roles.frame_done(callback.surface);
+                }
                 if !self.resume(i) {
                     return;
                 }

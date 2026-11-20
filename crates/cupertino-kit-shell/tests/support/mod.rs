@@ -1,9 +1,12 @@
 //! A stand-in for the server's side of the host protocol (`cupertino_host_v1`, `cupertino_host_component_v1`,
 //! `cupertino_component_v1`), served from a thread of its own over socket pairs, so the hosting runtime's public
 //! interface runs as a host runs it: `Host::connect` on `WAYLAND_SOCKET`, a component's connection on request, the
-//! bridges' ends, and a bus-name announcement answered with a nonce.
+//! bridges' ends, and a bus-name announcement answered with a nonce. Its display globals ([`display`]) let a
+//! component's Kit loop run on its connection.
 
 #![allow(dead_code)]
+
+pub mod display;
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -26,7 +29,8 @@ use cupertino_protocols::server::host::cupertino_host_v1::{
     self as host_v1, CupertinoHostV1, Kind as WireKind,
 };
 use serde_json::{json, Value};
-use wayland_server::backend::{ClientData, ClientId, DisconnectReason};
+use wayland_protocols_wlr::layer_shell::v1::server::zwlr_layer_surface_v1::ZwlrLayerSurfaceV1;
+use wayland_server::backend::{ClientData, ClientId, DisconnectReason, ObjectId};
 use wayland_server::{Client, DataInit, Dispatch, Display, DisplayHandle, GlobalDispatch, New};
 
 /// The instance number the stand-in gives every component connection, as a server does on its third start.
@@ -47,6 +51,26 @@ pub enum Seen {
         name: String,
         nonce: String,
     },
+    /// A component asked the server to hold its surface under `key` (`persist`).
+    Persisted {
+        component: String,
+        key: String,
+    },
+    /// A component's persistent windows of its first view are shown (`ready`).
+    Ready(String),
+    /// A surface of a component committed a buffer; `namespace` is its layer surface's, empty for another surface.
+    Drawn {
+        component: String,
+        namespace: String,
+    },
+    /// The host asked the server to restart it.
+    RestartRequested,
+    /// A component asked the session to bring an application forward.
+    ActivateApp {
+        component: String,
+        serial: u32,
+        desktop_id: String,
+    },
 }
 
 /// What the test asks the stand-in to do.
@@ -55,6 +79,8 @@ enum Ask {
     Bus(OwnedFd),
     BusPeerGone(String),
     CloseHost,
+    /// A connection of a client of its own, as the server gives a program it starts.
+    Client(Sender<UnixStream>),
     /// `AnnounceComponent(nonce)` from `sender`: answers whether it is accepted, and sends `bus_name`.
     Judge {
         sender: String,
@@ -108,6 +134,9 @@ struct State {
     nonces: HashMap<String, Pending>,
     next_nonce: u64,
     seen: Sender<Seen>,
+    display: display::Surfaces,
+    /// The layer surface of each surface that has one.
+    layer_resources: HashMap<ObjectId, ZwlrLayerSurfaceV1>,
 }
 
 struct Data;
@@ -121,6 +150,15 @@ impl Server {
     /// Starts the stand-in for a host of `kind` that runs `components`; returns it with the host's end of the host
     /// connection, which [`connect_host`] hands to `Host::connect`.
     pub fn start(kind: Kind, components: &[&str]) -> (Server, UnixStream) {
+        Self::start_offering(kind, components, display::Offer::CURRENT)
+    }
+
+    /// [`Server::start`] with the display globals at the versions `offer` names.
+    pub fn start_offering(
+        kind: Kind,
+        components: &[&str],
+        offer: display::Offer,
+    ) -> (Server, UnixStream) {
         let (asks, asked) = mpsc::channel();
         let (seen_tx, seen) = mpsc::channel();
         let (ready_tx, ready) = mpsc::channel();
@@ -129,7 +167,17 @@ impl Server {
         let components: Vec<String> = components.iter().map(|c| c.to_string()).collect();
         let thread = std::thread::Builder::new()
             .name("stand-in-server".into())
-            .spawn(move || serve(kind, components, asked, seen_tx, ready_tx, thread_quit))
+            .spawn(move || {
+                serve(
+                    kind,
+                    components,
+                    offer,
+                    asked,
+                    seen_tx,
+                    ready_tx,
+                    thread_quit,
+                )
+            })
             .expect("stand-in server thread");
         let host_end = ready.recv().expect("stand-in server starts");
         (
@@ -163,6 +211,14 @@ impl Server {
         self.asks.send(Ask::BusPeerGone(component.into())).unwrap();
     }
 
+    /// The client end of a connection of its own, as the server hands a program it starts in `WAYLAND_SOCKET`.
+    pub fn client(&self) -> UnixStream {
+        let (reply, end) = mpsc::channel();
+        self.asks.send(Ask::Client(reply)).unwrap();
+        end.recv_timeout(PATIENCE)
+            .expect("the stand-in makes a client")
+    }
+
     /// Closes the host's connection, as a server that went away.
     pub fn close_host(&self) {
         self.asks.send(Ask::CloseHost).unwrap();
@@ -188,6 +244,22 @@ impl Server {
     }
 }
 
+impl Server {
+    /// Everything the stand-in saw, in order, until `done` holds of it, waiting up to [`PATIENCE`].
+    pub fn seen_until(&self, mut done: impl FnMut(&[Seen]) -> bool) -> Vec<Seen> {
+        let deadline = Instant::now() + PATIENCE;
+        let mut seen = Vec::new();
+        while !done(&seen) {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match self.seen.recv_timeout(left) {
+                Ok(one) => seen.push(one),
+                Err(_) => panic!("the stand-in server saw only {seen:?}"),
+            }
+        }
+        seen
+    }
+}
+
 impl Drop for Server {
     fn drop(&mut self) {
         self.quit.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -201,6 +273,7 @@ impl Drop for Server {
 fn serve(
     kind: Kind,
     components: Vec<String>,
+    offer: display::Offer,
     asked: Receiver<Ask>,
     seen: Sender<Seen>,
     ready: Sender<UnixStream>,
@@ -210,6 +283,7 @@ fn serve(
     let mut handle = display.handle();
     handle.create_global::<State, CupertinoHostV1, ()>(1, ());
     handle.create_global::<State, CupertinoComponentV1, ()>(1, ());
+    display::create_globals(&mut handle, offer);
     let (server_end, host_end) = UnixStream::pair().expect("socket pair");
     let host_socket = server_end.try_clone().expect("host socket");
     handle
@@ -224,11 +298,22 @@ fn serve(
         nonces: HashMap::new(),
         next_nonce: 0,
         seen,
+        display: display::Surfaces::default(),
+        layer_resources: HashMap::new(),
     };
     ready.send(host_end).unwrap();
     while !quit.load(std::sync::atomic::Ordering::SeqCst) {
         while let Ok(ask) = asked.try_recv() {
-            answer(&mut state, ask);
+            match ask {
+                Ask::Client(reply) => {
+                    let (server_end, client_end) = UnixStream::pair().expect("socket pair");
+                    handle
+                        .insert_client(server_end, Arc::new(Data))
+                        .expect("client");
+                    let _ = reply.send(client_end);
+                }
+                ask => answer(&mut state, ask),
+            }
         }
         display.dispatch_clients(&mut state).expect("dispatch");
         display.flush_clients().expect("flush");
@@ -262,6 +347,7 @@ fn answer(state: &mut State, ask: Ask) {
                 host.bus_peer_gone(component);
             }
         }
+        Ask::Client(_) => {}
         Ask::CloseHost => {
             if let Some(socket) = state.host_socket.take() {
                 let _ = socket.shutdown(std::net::Shutdown::Both);
@@ -332,6 +418,9 @@ impl Dispatch<CupertinoHostV1, ()> for State {
             host_v1::Request::BusDropped { component } => {
                 let _ = state.seen.send(Seen::BusDropped(component));
             }
+            host_v1::Request::RequestRestart => {
+                let _ = state.seen.send(Seen::RestartRequested);
+            }
             _ => {}
         }
     }
@@ -393,6 +482,18 @@ impl Dispatch<CupertinoComponentV1, ()> for State {
         _: &DisplayHandle,
         _: &mut DataInit<'_, Self>,
     ) {
+        match request {
+            component_v1::Request::Persist { key, .. } => {
+                let component = state.component_of(client);
+                let _ = state.seen.send(Seen::Persisted { component, key });
+                return;
+            }
+            component_v1::Request::Ready => {
+                let _ = state.seen.send(Seen::Ready(state.component_of(client)));
+                return;
+            }
+            _ => {}
+        }
         if let component_v1::Request::AnnounceBusName { name } = request {
             let component = state
                 .component_clients
@@ -420,7 +521,7 @@ impl Dispatch<CupertinoComponentV1, ()> for State {
 }
 
 /// `WAYLAND_SOCKET` is the process's: one host connects at a time.
-fn environment_lock() -> MutexGuard<'static, ()> {
+pub fn environment_lock() -> MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
         .lock()

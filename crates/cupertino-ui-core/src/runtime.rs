@@ -69,6 +69,10 @@ pub type PersonalRefresh = Box<dyn FnMut() -> Option<Arc<ThemeTokens>>>;
 /// outside the runtime (the processes it started, reaped as they end).
 pub type EachTurn = Box<dyn FnMut()>;
 
+/// Asked on each turn of the loop, after the window system was read: true ends the run, as [`Command::Exit`] does. A
+/// runner whose application is stopped from outside its loop (a shell host stopping a component) answers it.
+pub type ExitWhen = Box<dyn FnMut() -> bool>;
+
 /// How a runtime is set up besides its window system.
 pub struct RuntimeOptions {
     pub theme: Arc<ThemeTokens>,
@@ -459,6 +463,8 @@ pub struct Runtime<A: Application, W: WindowSystem> {
     pins_seen: bool,
     personal_refresh: Option<PersonalRefresh>,
     each_turn: Option<EachTurn>,
+    /// Asked on each turn of the loop, after the window system was read: true ends the run ([`Runtime::with_exit_when`]).
+    exit_when: Option<ExitWhen>,
     /// Follows each scroll event to the screen, when asked ([`Runtime::with_scroll_timing`]).
     scroll_timing: Option<crate::scroll_timing::ScrollTimings>,
     /// Times every frame phase by phase, when asked ([`Runtime::with_frame_timing`]).
@@ -538,6 +544,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             pins_seen: false,
             personal_refresh: None,
             each_turn: None,
+            exit_when: None,
             scroll_timing: None,
             frame_timing: None,
             tokens: HashMap::new(),
@@ -598,6 +605,13 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
     /// Call `each_turn` on each turn of the loop, after the window system was read.
     pub fn with_each_turn(mut self, each_turn: EachTurn) -> Self {
         self.set_each_turn(each_turn);
+        self
+    }
+
+    /// End the run as [`Command::Exit`] does once `exit_when` says so; it is asked on each turn of the loop, after the
+    /// window system was read, so a waker that wakes the window system from another thread ends a run that waits.
+    pub fn with_exit_when(mut self, exit_when: ExitWhen) -> Self {
+        self.exit_when = Some(exit_when);
         self
     }
 
@@ -703,6 +717,10 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 .map_err(UiError::Platform)?;
             if let Some(each_turn) = self.each_turn.as_mut() {
                 each_turn();
+            }
+            if self.exit_when.as_mut().is_some_and(|exit_when| exit_when()) {
+                self.exit = true;
+                return Ok(StepStatus::Idle);
             }
             if !self.ready() {
                 let pending = self.pending();

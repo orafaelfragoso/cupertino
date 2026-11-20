@@ -10,9 +10,19 @@ use cupertino_login::panel::Action;
 use cupertino_login::restore::{self, Applications, SessionMark};
 use cupertino_login::session;
 
-/// The action an interrupt this agent did not start is worded as (the interrupt panel's "The log out stopped..."):
-/// `QuitInterrupted` does not name the action, and Session1 has no method that does.
-const ADOPTED_ACTION: Action = Action::LogOut;
+/// The action an interrupt this agent did not start is worded as (the interrupt panel's "The log out stopped...") when
+/// `PendingInterrupt` does not say which it belongs to (the call failed, or the interrupt is gone already).
+const FALLBACK_ACTION: Action = Action::LogOut;
+
+/// The action `PendingInterrupt` names (an interrupted sequence is a `LogOut`, `Restart` or `ShutDown`).
+fn action_of(name: &str) -> Option<Action> {
+    match name {
+        "LogOut" => Some(Action::LogOut),
+        "Restart" => Some(Action::Restart),
+        "ShutDown" => Some(Action::ShutDown),
+        _ => None,
+    }
+}
 
 impl SessionApp {
     /// Store the "Open my windows again" choice, with no list yet: the list follows just before the action is asked for.
@@ -189,7 +199,8 @@ impl SessionApp {
     ///
     /// The server sends an interrupt once and waits for its answer, so one this agent did not start (it started again
     /// in the middle of a sequence, or another caller Session1 lets end the session asked for it) is adopted: the panel
-    /// shows and is answered as for its own, worded as [`ADOPTED_ACTION`].
+    /// shows and is answered as for its own, worded as the action `PendingInterrupt` names ([`FALLBACK_ACTION`] when it
+    /// does not answer).
     pub(super) fn quit_signal(&mut self, interrupt: session::Interrupt) -> Result<()> {
         if let session::Interrupt::ActionFailed { action, reason } = interrupt {
             self.action_failed(&action, &reason);
@@ -200,11 +211,32 @@ impl SessionApp {
                 eprintln!("cupertino-login: quit signal ignored: no action is under way");
                 return Ok(());
             }
-            eprintln!("cupertino-login: adopting an interrupted action this agent did not start");
+            let then = match session::pending_interrupt(&self.session_bus) {
+                Ok(Some(pending)) => action_of(&pending.action).unwrap_or_else(|| {
+                    eprintln!(
+                        "cupertino-login: PendingInterrupt names an unknown action: {}",
+                        pending.action
+                    );
+                    FALLBACK_ACTION
+                }),
+                Ok(None) => FALLBACK_ACTION,
+                Err(e) => {
+                    eprintln!("cupertino-login: PendingInterrupt did not answer: {e}");
+                    FALLBACK_ACTION
+                }
+            };
+            eprintln!(
+                "cupertino-login: adopting an interrupted {} this agent did not start",
+                then.log_name()
+            );
             self.logging_out = true;
+            self.quitting = Some(Quitting {
+                then,
+                interrupt: None,
+            });
         }
         let quitting = self.quitting.get_or_insert(Quitting {
-            then: ADOPTED_ACTION,
+            then: FALLBACK_ACTION,
             interrupt: None,
         });
         match interrupt {

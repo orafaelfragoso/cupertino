@@ -3,7 +3,8 @@
 //! `QuitInterrupted` brings the interrupt panel ([`crate::interrupt`]), whose Try Again, Cancel and Force Quit are
 //! `RetrySessionAction`, `CancelSessionAction` and `ForceQuitApplication`, also for an action this agent did not start
 //! (the server sends an interrupt once and waits). A signal counts only from the server, the owner of the name when it
-//! arrives: another program could otherwise bring the panel up or take it away.
+//! arrives: another program could otherwise bring the panel up or take it away. An interrupt sent before this agent
+//! listened (it restarted) is asked for once the signals are subscribed ([`pending_interrupt`]).
 
 use std::collections::HashMap;
 
@@ -51,6 +52,29 @@ pub fn sleep(session: &Connection) -> zbus::Result<()> {
 /// The identities of the applications that have windows, in the order a log out quits them.
 pub fn open_applications(session: &Connection) -> zbus::Result<Vec<String>> {
     call(session, "OpenApplications")
+}
+
+/// An interrupt the server's quit sequence waits on (`PendingInterrupt`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingInterrupt {
+    /// The interrupted action: `LogOut`, `Restart` or `ShutDown`.
+    pub action: String,
+    /// The application that did not quit.
+    pub app: String,
+    /// Its quit status, as in [`Interrupt::Interrupted`].
+    pub reason: String,
+}
+
+/// The interrupt the quit sequence waits on, if any: `QuitInterrupted` is sent once, so an agent that was not there
+/// for it, or does not know the action it belongs to, asks.
+pub fn pending_interrupt(session: &Connection) -> zbus::Result<Option<PendingInterrupt>> {
+    let (pending, action, app, reason): (bool, String, String, String) =
+        call(session, "PendingInterrupt")?;
+    Ok(pending.then_some(PendingInterrupt {
+        action,
+        app,
+        reason,
+    }))
 }
 
 /// The interrupt panel's Try Again: ask the applications to quit again.
@@ -105,9 +129,22 @@ pub fn watch_interrupts(
     let messages = from_owner(session, BUS_NAME, rule, |_| {
         eprintln!("cupertino-login: a quit signal not sent by the server was ignored")
     })?;
+    let asking = session.clone();
     std::thread::Builder::new()
         .name("session-quit".into())
         .spawn(move || {
+            // subscribed above, so an interrupt is either in the answer or comes as a signal; one seen twice is
+            // the same interrupt
+            match pending_interrupt(&asking) {
+                Ok(Some(pending)) => notify(Ok(Interrupt::Interrupted {
+                    app: pending.app,
+                    reason: pending.reason,
+                })),
+                Ok(None) => {}
+                Err(e) => eprintln!(
+                    "cupertino-login: no word on an interrupt from before this start: {e}"
+                ),
+            }
             for message in messages {
                 let interrupt = message.and_then(|m| {
                     let member = m.header().member().map(|n| n.to_string());

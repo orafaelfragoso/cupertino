@@ -351,7 +351,7 @@ panel (`interrupt`), on the same regular glass with 26 pt corners as the confirm
 and at least 128 high, a 64 pt icon at (20, 13), the title (bold 13) at (102, 13) and the info line 10 pt under it, both
 wrapping at 293 pt in 16 pt lines, the buttons 12 pt under the info line (y 83 at the least) as 28 pt capsules 8 pt
 apart, ending at the text column's end. Like the confirmation panels it moves when its background is dragged and is no
-modal dialog. The panel is worded by the reason, the application's quit status:
+modal dialog. The server sends the signal once, so an agent that starts while an interrupt waits (it restarted) asks `PendingInterrupt` once its signals are subscribed, and one that gets an interrupt it did not start asks it too: the panel is worded as the action it names (a log out when the call fails). The panel is worded by the reason, the application's quit status:
 
 - `kept-windows`: the application cancelled the log out. Try Again (the default) and Cancel.
 - `closing`: it did not finish quitting. Force Quit, Cancel and Try Again.
@@ -650,7 +650,7 @@ network users).
 | `login_wallpaper` | `choose` (the wallpaper the settings show), `render` (the JPEG for the login screen), `store`, `keep_current` (the writing thread) |
 | `lock_notices` | `Notice`, `from_rows`, `cap`, the cards' column and heights, `shown`, `more_text`; with feature `dbus`, `fetch` and `watch`: the notifications the daemon lists for the lock screen |
 | `upower` (feature `dbus`) | `watch` (the display device's `WarningLevel` and `Percentage`), `post` and `close` (the notification calls) |
-| `session` (feature `dbus`) | `log_out`, `restart`, `shut_down`, `sleep`, `open_applications`, `retry_session_action`, `cancel_session_action`, `force_quit_application`, `watch_interrupts` (`Interrupt`), `report_failure`: the server's `org.cupertino.Session1` and the notice when it does not take an action |
+| `session` (feature `dbus`) | `log_out`, `restart`, `shut_down`, `sleep`, `open_applications`, `pending_interrupt`, `retry_session_action`, `cancel_session_action`, `force_quit_application`, `watch_interrupts` (`Interrupt`), `report_failure`: the server's `org.cupertino.Session1` and the notice when it does not take an action |
 | `auth` (feature `app`) | `Authenticator`: PAM on a worker thread |
 | `manager` (feature `app`) | `Connection`, `Message`: the greeter's connection to the session manager and the thread that reads its events |
 

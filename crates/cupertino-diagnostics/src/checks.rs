@@ -626,7 +626,7 @@ fn dev_folder(sources: &Sources) -> Check {
             "no development folder is declared: every shell process starts its installed program",
         );
     };
-    let entries = settings.shell.unwrap_or_default();
+    let entries = settings.shell.and_then(|s| s.processes).unwrap_or_default();
     let mut builds = Vec::new();
     let mut older = Vec::new();
     for name in &folder.components {

@@ -33,7 +33,7 @@ pub struct Update {
     pub usable_area: Option<Rect>,
     /// Arranged windows of the output.
     pub windows: Vec<Window>,
-    /// Server asked to toggle Stage Manager on this output.
+    /// Server asked to toggle the window stage on this output.
     pub toggle_stage: bool,
 }
 

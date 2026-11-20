@@ -71,7 +71,7 @@ as dev-dependencies, and only dev-dependencies point at a `testing` crate. The c
 | `render` (the compositor's own drawing) | `cupertino-cursor`, `cupertino-decorations`, `cupertino-glass` | `foundation`, `graphics`, `system`, `platform`, `render` |
 | `ui` (the toolkit) | `cupertino-kit`, `cupertino-ui-abi`, `cupertino-ui-controls`, `cupertino-ui-core`, `cupertino-ui-files`, `cupertino-ui-render`, `cupertino-ui-test`, `cupertino-ui-text`, `cupertino-ui-wayland` | `foundation`, `graphics`, `system`, `protocol`, `transport`, `ui` |
 | `shellkit` (the shell's extension of the toolkit) | `cupertino-kit-shell` | `foundation`, `system`, `protocol`, `transport`, `ui` |
-| `core` (the compositor) | `cupertino-server` | `foundation`, `graphics`, `models`, `system`, `platform`, `protocol`, `render`, `core` |
+| `core` (the compositor) | `cupertino-server`, `cupertino-server-backend`, `cupertino-server-input`, `cupertino-server-render` | `foundation`, `graphics`, `models`, `system`, `platform`, `protocol`, `render`, `core` |
 | `services` (processes with no interface of their own) | `cupertino-audiod`, `cupertino-btd`, `cupertino-control`, `cupertino-netd`, `cupertino-powerd`, `cupertino-sessiond` | `foundation`, `models`, `system`, `platform`, `protocol`, `transport`, `services` |
 | `shell` | `cupertino-controlcenter`, `cupertino-dock`, `cupertino-launcher`, `cupertino-login`, `cupertino-menubar`, `cupertino-notifications`, `cupertino-osd`, `cupertino-polkit-agent`, `cupertino-portal`, `cupertino-screenshot`, `cupertino-windowmanager` | `foundation`, `models`, `system`, `protocol`, `ui`, `shellkit`, `shell` |
 | `apps` | `cupertino-files`, `cupertino-settings` | `foundation`, `models`, `system`, `protocol`, `ui` |
@@ -90,6 +90,10 @@ Further rules:
   `cupertino-wayland-client`.
 - `shell` and `apps` crates reach the toolkit only through `cupertino-kit`, and `cupertino-shell-client` and
   `cupertino-protocols` only through `cupertino-kit-shell` (for `shell` crates).
+- Inside `core`, dependencies follow one direction (D25): `cupertino-server-backend` and `cupertino-server-input` depend
+  on no other `core` crate; `cupertino-server-render` depends only on `cupertino-server-backend`; `cupertino-server`
+  depends on all three.
+- Only `cupertino-shell` (and `cupertino-kit-shell` itself) may reference `cupertino_kit_shell::hosting` in `src/`.
 - External crates stay in their layers: Smithay in `core` only; the image, Wayland client, `xkbcommon`,
   `wayland-server`, `zbus` and system-call crates in the layers `cupertino-layers` lists for them.
 - Every `shell` and `apps` crate holds the `clippy.toml` that `cupertino-layers` writes, which disallows starting
@@ -102,8 +106,9 @@ Further rules:
 `crates/cupertino-layers/remaining.txt`: the check fails on a problem the list does not hold and on a line that is no
 longer a problem, and `cargo run -q -p cupertino-layers -- --write-remaining` writes it again. Until the layered
 refactor's last wave, a change may add lines (`cargo xtask remaining` reports them); after it the list only shrinks.
-The layers in `ENFORCED` in `cupertino-layers` (`foundation`, `graphics`, `models`, `system`, `protocol`, `transport`,
-`render`, `ui` and `testing`) are closed: none of their problems may be listed. Test code outside a crate's `tests/` is refused by the
+The layers in `ENFORCED` in `cupertino-layers` (`foundation`, `graphics`, `models`, `system`, `platform`, `protocol`,
+`transport`, `render`, `ui`, `shellkit`, `core`, `services` and `testing`) are closed: none of their problems may be
+listed. Test code outside a crate's `tests/` is refused by the
 gate of `cargo xtask ci`. Keyboard layouts come from the system's libxkbcommon through the registry `xkbcommon` crate,
 the one Smithay uses too; the server keeps the last keymap that compiled when a new layout does not.
 `crates/cupertino-layers/graph/layers.dot` is a DOT snapshot of the layers (`cargo run -p cupertino-layers -- --graph`

@@ -7,11 +7,11 @@ Pure Rust over `zbus` (blocking API, no `-sys` crate); no libseat, no libsystemd
 
 | Item | Contents |
 |---|---|
-| `LogindSession` | Smithay's `Session`: `open` (stat for the `dev_t`, `TakeDevice`), `close` (`ReleaseDevice`), `change_vt` (`Seat.SwitchTo`), `is_active`, `seat`. Cloneable handle |
-| `LogindNotifier` | calloop `EventSource` emitting `Event::PauseSession` / `Event::ActivateSession`. Owns the session: dropping it calls `ReleaseControl` |
 | `state::Machine` | the pure bookkeeping: `dev_t` to descriptor number, per-device active / pause pending / paused / gone, session running or not |
-| `logind` | the thin D-Bus layer: lookup, `TakeControl(false), device calls, signal decoding |
+| `logind` | the thin D-Bus layer: lookup, `TakeControl(false)`, device calls, signal decoding, bounded deadline helpers |
 | `inspect` | reads a session's `Id`, `Type`, `Active`, `VTNr` and `Seat` without taking control |
+
+The Smithay `Session` and calloop `EventSource` adapters (`LogindSession`, `LogindNotifier`) live in `cupertino-server-backend::session`, keeping `cupertino-seat` Smithay-free in the `platform` layer.
 
 ## How it works
 

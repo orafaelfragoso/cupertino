@@ -193,11 +193,32 @@ pub const ENFORCED: &[Layer] = &[
     Layer::Graphics,
     Layer::Models,
     Layer::System,
+    Layer::Platform,
     Layer::Protocol,
     Layer::Transport,
     Layer::Render,
     Layer::Ui,
+    Layer::Shellkit,
+    Layer::Core,
+    Layer::Services,
     Layer::Testing,
+];
+
+/// Allowed dependencies among the `core` server crates (D25): `cupertino-server-backend` and
+/// `cupertino-server-input` depend on no other `core` crate; `cupertino-server-render` depends
+/// only on `cupertino-server-backend`; `cupertino-server` depends on all three.
+pub const CORE_DIRECTION: &[(&str, &[&str])] = &[
+    ("cupertino-server-backend", &[]),
+    ("cupertino-server-input", &[]),
+    ("cupertino-server-render", &["cupertino-server-backend"]),
+    (
+        "cupertino-server",
+        &[
+            "cupertino-server-backend",
+            "cupertino-server-render",
+            "cupertino-server-input",
+        ],
+    ),
 ];
 
 /// The layers whose crates start no threads in their `src/`: they offer blocking functions, which callers run as
@@ -459,6 +480,13 @@ pub enum Problem {
         file: String,
         call: &'static str,
     },
+    /// A source in the `src/` of a crate other than the shell host (and `cupertino-kit-shell` itself) that references
+    /// `cupertino_kit_shell::hosting`. `file` is relative to the crate's directory.
+    HostingApi {
+        krate: String,
+        layer: Layer,
+        file: String,
+    },
     /// A crate whose `license` is missing or no licence expression.
     UndeclaredLicence {
         krate: String,
@@ -503,6 +531,7 @@ impl Problem {
             Problem::ExternalCrate { .. } => "external_crate",
             Problem::Impure { .. } => "impure_source",
             Problem::StartsThread { .. } => "starts_thread",
+            Problem::HostingApi { .. } => "hosting_api",
             Problem::UndeclaredLicence { .. } => "undeclared_licence",
             Problem::StaleRemaining(_) => "stale_remaining",
             Problem::EnforcedRemaining(_) => "enforced_remaining",
@@ -525,6 +554,7 @@ impl Problem {
             Problem::ExternalCrate { from, .. } => from,
             Problem::Impure { krate, .. }
             | Problem::StartsThread { krate, .. }
+            | Problem::HostingApi { krate, .. }
             | Problem::UndeclaredLicence { krate, .. }
             | Problem::DisallowedMethods { krate, .. }
             | Problem::TestFeature { krate, .. } => krate,
@@ -560,6 +590,7 @@ impl Problem {
             | Problem::ExternalCrate { from_layer, .. } => Some(*from_layer),
             Problem::Impure { layer, .. }
             | Problem::StartsThread { layer, .. }
+            | Problem::HostingApi { layer, .. }
             | Problem::UndeclaredLicence { layer, .. }
             | Problem::DisallowedMethods { layer, .. } => Some(*layer),
             _ => None,
@@ -587,6 +618,7 @@ impl Problem {
             Problem::StartsThread {
                 krate, file, call, ..
             } => format!("{krate} {file} {call}"),
+            Problem::HostingApi { krate, file, .. } => format!("{krate} {file}"),
             Problem::UndeclaredLicence { krate, .. } => krate.clone(),
             Problem::DisallowedMethods { krate, .. } => format!("{krate} clippy.toml"),
             _ => return None,
@@ -654,6 +686,11 @@ impl fmt::Display for Problem {
                 "{krate} ({layer}) starts a thread with {call} in {file}: offer the blocking function and let the \
                  caller run it as a task"
             ),
+            Problem::HostingApi { krate, layer, file } => write!(
+                f,
+                "{krate} ({layer}) references cupertino_kit_shell::hosting in {file}: only {SHELL_HOST} may use \
+                 the hosting API"
+            ),
             Problem::UndeclaredLicence { krate, licence, .. } => {
                 write!(f, "{krate} declares no licence expression (`{licence}`)")
             }
@@ -702,7 +739,15 @@ impl fmt::Display for Problem {
 pub fn check(rules: Rules, edges: &[Edge], facades: &[Facade]) -> Vec<Problem> {
     let mut out: Vec<Problem> = edges
         .iter()
-        .filter(|e| !allows_edge(rules, e))
+        .filter(|e| {
+            !allows_edge(rules, e)
+                || (e.from_layer == Core
+                    && e.to_layer == Core
+                    && CORE_DIRECTION
+                        .iter()
+                        .find(|(from, _)| *from == e.from)
+                        .is_some_and(|(_, allowed)| !allowed.contains(&e.to.as_str())))
+        })
         .cloned()
         .map(Problem::Forbidden)
         .collect();

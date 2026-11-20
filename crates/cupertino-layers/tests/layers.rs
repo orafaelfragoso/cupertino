@@ -623,6 +623,80 @@ fn the_programs_alias_names_every_feature_but_the_test_feature() {
     }
 }
 
+#[test]
+fn core_server_crates_follow_d25_direction() {
+    let ok = Fixture::new("core-d25-ok")
+        .krate("cupertino-server-backend", Core, &[])
+        .krate("cupertino-server-input", Core, &[])
+        .krate(
+            "cupertino-server-render",
+            Core,
+            &[("normal", "cupertino-server-backend")],
+        )
+        .krate(
+            "cupertino-server",
+            Core,
+            &[
+                ("normal", "cupertino-server-backend"),
+                ("normal", "cupertino-server-render"),
+                ("normal", "cupertino-server-input"),
+            ],
+        )
+        .build();
+    assert_lines(&ok, NONE, "valid D25 core graph");
+
+    let bad = Fixture::new("core-d25-bad")
+        .krate(
+            "cupertino-server-backend",
+            Core,
+            &[("normal", "cupertino-server-render")],
+        )
+        .krate(
+            "cupertino-server-render",
+            Core,
+            &[("normal", "cupertino-server-input")],
+        )
+        .krate("cupertino-server-input", Core, &[])
+        .build();
+    assert_lines(
+        &bad,
+        &[
+            "core forbidden_edge cupertino-server-backend -> cupertino-server-render normal",
+            "core forbidden_edge cupertino-server-render -> cupertino-server-input normal",
+        ],
+        "invalid D25 core edges",
+    );
+}
+
+#[test]
+fn only_the_shell_host_may_use_kit_shell_hosting() {
+    let fx = Fixture::new("hosting-api")
+        .krate("cupertino-shell", Shell, &[])
+        .file(
+            "cupertino-shell",
+            "src/lib.rs",
+            "pub fn f() { let _ = cupertino_kit_shell::hosting::EXIT_VERSION; }",
+        )
+        .krate("cupertino-dock", Shell, &[])
+        .file(
+            "cupertino-dock",
+            "src/lib.rs",
+            "use cupertino_kit_shell::{ComponentName, hosting};\n",
+        )
+        .krate("cupertino-menubar", Shell, &[])
+        .file(
+            "cupertino-menubar",
+            "src/lib.rs",
+            "// cupertino_kit_shell::hosting in a comment is fine\npub const S: &str = \"cupertino_kit_shell::hosting\";",
+        )
+        .build();
+    assert_lines(
+        &fx,
+        &["shell hosting_api cupertino-dock src/lib.rs"],
+        "only cupertino-shell may use cupertino_kit_shell::hosting",
+    );
+}
+
 // the repository
 
 #[test]

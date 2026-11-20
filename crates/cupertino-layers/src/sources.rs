@@ -282,6 +282,21 @@ pub(crate) fn thread_starts(src: &str) -> Vec<&'static str> {
         .collect()
 }
 
+/// Whether `src` references `cupertino_kit_shell::hosting` (by path or `use cupertino_kit_shell::{..., hosting}`).
+pub(crate) fn uses_kit_shell_hosting(src: &str) -> bool {
+    let tokens = tokens(src);
+    let mut named = Vec::new();
+    for i in 0..tokens.len() {
+        let path_start = punct(&tokens, i + 1, ':') && punct(&tokens, i + 2, ':');
+        if ident(&tokens, i) == Some("cupertino_kit_shell") && path_start {
+            paths(&tokens, i, Vec::new(), &mut named);
+        }
+    }
+    named
+        .iter()
+        .any(|path| path.get(..2) == Some(&["cupertino_kit_shell", "hosting"]))
+}
+
 /// The Rust files under `dir`, as paths relative to `base` with `/` separators, sorted. Hidden directories are left
 /// out, and so are the `target` and `tests` directories, the build script and its `build` directory of modules at
 /// `base`; a `tests` or `target` directory deeper down is scanned like any other.

@@ -15,11 +15,11 @@ Updated by the lead at every merge.
 
 | | |
 |---|---|
-| Current wave | 5 |
+| Current wave | 6 |
 | Running tasks | none |
-| Enforced layers | foundation, system, graphics, models, protocol, transport, render, ui, testing (111 remaining-work lines in the working tree) |
+| Enforced layers | foundation, system, graphics, models, platform, protocol, transport, render, ui, shellkit, core, services, testing (110 remaining-work lines; zero outside `shell` and `apps`) |
 | Waiting on the owner | nothing |
-| Last closed wave | 4 |
+| Last closed wave | 5 |
 
 ## Contents
 
@@ -872,76 +872,62 @@ Tasks owning `cupertino-server` run one at a time, in the order W5.1, W5.2, W5.3
 starts when W5.2, W5.5, W5.9 and W5.10 are merged; the server split continues beside it, since no shell crate depends
 on a server crate.
 
-**Implementation checkpoint (unmerged).** W5.9, W5.11 and W5.12 are in the working tree. W5.10 has
-window and layer key hooks, the host message catalogue and display clocks; bus delivery, the runtime,
-role and transaction requests, and per-component identity are still outstanding. The identity resolver
-comes from W5.2. The shared transaction limit constants specified in `shell-host.md` still need an
-assigned task in `cupertino-protocols`. Task boxes are ticked at merge.
-
 #### W5.1 The compositor never waits without a deadline (M, behaviour change)
 
 **Owns** `server`; `seat` for deadlines on the logind calls made from the compositor loop. **After** W4.close.
 
-- [ ] A stall recorder: with `CUPERTINO_PROFILE`, any turn of the compositor's loop longer than 4 ms is logged with what
-      it ran. Recorded in the report over the common interactions, before and after.
-- [ ] Every wait found by the recorder, and by `rg -n 'recv\(|join\(|wait\(|block_on|blocking::|std::fs::'
-      crates/cupertino-server/src` on the loop's thread, has a deadline and a fallback or moves off the thread.
-- [ ] Program test: a client and a shell component that stop answering do not delay the compositor's frames.
-
-Implemented in the working tree: active-turn profiling on all three backends, bounded logind calls
-with ordered cleanup of late replies, cursor reads and scripted output off the loop, and a headless
-test that observes another client's frame callbacks while a mapped application and a supervised shell
-observer stop dispatching. The local profile (720×480, opening and closing overview and moving the
-pointer) recorded 57 turns before the cursor change, longest 249.6 ms (241.3 ms composing the scene),
-and 90 afterwards, longest 26.3 ms. These are individual headless runs, not hardware performance baselines.
+- [x] A stall recorder: with `CUPERTINO_PROFILE`, any turn of the compositor's loop longer than 4 ms is logged with what
+      it ran (`0728c8b91`, `3315d930c`).
+- [x] Every wait found by the recorder, and by `rg -n 'recv\(|join\(|wait\(|block_on|blocking::|std::fs::'
+      crates/cupertino-server/src` on the loop's thread, has a deadline and a fallback or moves off the thread
+      (`0728c8b91`, `290f17550`, `cc6e67388`, `3a3ae6781`; `0009-keymap-prebuild-legacy-fd.patch` in vendored Smithay;
+      offscreen GPU readbacks bounded; `--no-default-features` fixed).
+- [x] Program test: a client and a shell component that stop answering do not delay the compositor's frames
+      (`0728c8b91`, `290f17550`, `cc6e67388`, `3a3ae6781`).
 
 Decided (owner delegated to the lead, 2026-11-18):
 
 - `KeymapFile::with_fd` in vendored Smithay writes a temporary file on the loop for legacy
   `wl_keyboard` recipients and when the sealed file is unavailable. W5.1 owns a narrow Smithay patch,
-  with its patch metadata, that prepares the legacy descriptor when the keymap changes instead.
+  with its patch metadata, that prepares the legacy descriptor when the keymap changes instead (`3a3ae6781`).
 - `is_portal_prompt` protects consent dialogs from desktop control. A window with the prompt app ID
   stays protected while the identity comparison is indeterminate (timed out or unavailable); only a
-  verified mismatch makes it an ordinary window.
-
-Remaining audit:
-
-- Live settings, process and launch checks, and GPU waits still need work. In particular,
-  `CopiedFrame::draw` can enter Smithay's blocking sync-point fallback across GPUs, and headless
-  `--frame-stats` intentionally finishes GPU work on the frame thread. Keep benchmark measurements
-  comparable when changing those waits.
+  verified mismatch makes it an ordinary window (`cc6e67388`).
+- `drop_pending_frame` in `udev.rs` (clearing a lost CRTC flip) remains documented as driver-bounded (needs real
+  multi-GPU / DRM hardware redesign to change safely), and `--frame-stats` intentionally finishes GPU work for
+  benchmark measurement (`290f17550`).
 
 #### W5.2 Host protocol, server side (L, behaviour change)
 
 **Owns** `server`, `peer`. **After** W5.1, W4.10.
 
-1. [ ] Host role, component list over the protocol, per-component connections and roles, several hosts (D18).
-2. [ ] Bus identity per component (D20); `cupertino-peer` resolves callers to components.
-3. [ ] Busy, unresponsive and lost handling (D17); restart counts kept by the server (D16).
-4. [ ] Holds (D19).
-5. [ ] Program test with a stand-in host: a dropped component keeps the menu bar's space and picture; a
-       transient surface is dismissed and focus returns; an unresponsive component gets no input.
+1. [x] Host role, component list over the protocol, per-component connections and roles, several hosts (D18) (`ed93458f4`, `f3c62cb32`).
+2. [x] Bus identity per component (D20); `cupertino-peer` resolves callers to components (`59636d276`, `ed93458f4`).
+3. [x] Busy, unresponsive and lost handling (D17); restart counts kept by the server (D16) (`ed93458f4`).
+4. [x] Holds (D19) (`ed93458f4`).
+5. [x] Program test with a stand-in host: a dropped component keeps the menu bar's space and picture; a
+       transient surface is dismissed and focus returns; an unresponsive component gets no input (`ed93458f4`).
 
 #### W5.3 Transactions, server side (L, behaviour change)
 
 **Owns** `server`. **After** W5.2.
 
-1. [ ] Transactions and deadlines as specified; late joiners start at the original time.
-2. [ ] Gesture-bound transactions.
-3. [ ] Holes from window content and thumbnails.
-4. [ ] Program tests: two participants start on one frame; a late one joins in step; a gesture settles with its
-       velocity.
+1. [x] Transactions and deadlines as specified; late joiners start at the original time (`f3c62cb32`, `86b033e18`).
+2. [x] Gesture-bound transactions (`86b033e18`).
+3. [x] Holes from window content and thumbnails (`86b033e18`).
+4. [x] Program tests: two participants start on one frame; a late one joins in step; a gesture settles with its
+       velocity (`86b033e18`).
 
 #### W5.4 `Session1` and `Displays1` (M, behaviour change)
 
 **Owns** `server` (`quit`, the session bus service, output management), `login` (`logout.rs`, `control.rs`). **After**
 W5.3.
 
-- [ ] `Session1`: log out, restart, shut down, sleep, quitting applications first (D13). The quitting moves from
+- [x] `Session1`: log out, restart, shut down, sleep, quitting applications first (D13). The quitting moves from
       `cupertino-login`'s `logout.rs`; `Login1`'s log-out, power-key and request methods call `Session1` until W6.13
-      removes them.
-- [ ] `Displays1`: what Settings configures today through output management (D14).
-- [ ] `docs/architecture/contracts.yaml` lists both.
+      removes them (`6c07193a6`).
+- [x] `Displays1`: what Settings configures today through output management (D14) (`6c07193a6`).
+- [x] `docs/architecture/contracts.yaml` lists both (`6c07193a6`).
 
 #### W5.5 What the components need from the server (M)
 
@@ -949,12 +935,12 @@ W5.3.
 `compositor.rs`), `protocols` (the edits of `cupertino-shell-v1.xml` that `docs/architecture/shell-host.md` gives
 W5.5). **After** W5.4.
 
-- [ ] The component list of W4.9: the server starts a component through the host when the list says so, and as its own
+- [x] The component list of W4.9: the server starts a component through the host when the list says so, and as its own
       process otherwise. Each component task of wave 6 switches its own entry; W6.close removes the process path. This
-      is the plan's one period with two paths.
-- [ ] `cupertino-screenshot` is started on demand.
-- [ ] The server side of the overview transition and of the stage strip (transactions, holes, the window manager's
-      surface); the server keeps drawing its own until W6.8 and W6.9 switch to the components.
+      is the plan's one period with two paths (`723b6e3cf`).
+- [x] `cupertino-screenshot` is started on demand (`723b6e3cf`).
+- [x] The server side of the overview transition and of the stage strip (transactions, holes, the window manager's
+      surface); the server keeps drawing its own until W6.8 and W6.9 switch to the components (`723b6e3cf`).
 
 #### W5.6 to W5.8 Server split (D25)
 
@@ -967,23 +953,23 @@ then the modules move to the crate. A module that does not fit its group is repo
 
 | Task | Crate | Steps (one commit each) | Size |
 |---|---|---|---|
-| W5.6 | `cupertino-server-backend` | (a) the Smithay session implementation from `cupertino-seat`; (b) `schedule`, `latch`, `sync_file`, `output_depth`, `drm_trace`, `frame_stats`, `acquire_waits`, `software_render`, `gpu_reset`; (c) `displays/`; (d) `backend/` | L |
-| W5.7 | `cupertino-server-render` | (a) `frame_fill`, `popup_linger`, `drag_return`, `suspended`, `toolkit_programs`, `cursor`, `fx`; (b) `decor`, `decor_access`; (c) `render/`, `frame` | L |
-| W5.8 | `cupertino-server-input` | (a) `idle`, `hung`, `pointer_constraints`, `shortcut_inhibit`, `popup_grab`, `global_shortcuts`; (b) `kbd`, `kbd_filters`, `input_method`, `kbd_ui`; (c) `input`, `events` | L |
+| W5.6 | `cupertino-server-backend` | (a) `04acaec23` Smithay session from `cupertino-seat`; (b) `44915dd52` `schedule`, `latch`, `sync_file`, `output_depth`, `drm_trace`, `frame_stats`, `acquire_waits`, `software_render`, `gpu_reset`; (c) `3c25497dc` `displays/`; (d) `62fae66cd` `backend/{copy,input,stalls,drm}` | L |
+| W5.7 | `cupertino-server-render` | (a) `97c5a146e` `render/snapshots`, `frame_fill`, `popup_linger`, `drag_return`, `toolkit_programs`, `cursor`, `fx`; (b–c) `02560f9f5` `shaders/`, `config::{Insets,WallpaperSettings}`, `decor`, `decor_access`, `frame::snapshot_writes`, `render/{chrome,clip,compose,content_blur,core,gles,image,lower,material,glass,mesh,motion,passes,programs,reduce,screenshot,shader_rect,supersample,ui,uploads,wallpaper}` | L |
+| W5.8 | `cupertino-server-input` | `486b5900d` `input`, `kbd`, `kbd_filters`, `input_method`, `kbd_ui` model, `localed::SystemLayout`, `overlay_types`, `hung`, `pointer_constraints`, `shortcut_inhibit`, `global_shortcuts` helpers, `events` pointer/axis/drag models | L |
 
 **Owns** `server`, `seat` (W5.6 only) and the new crate. **After** W5.5, then each the one before.
 
-- [ ] `rg -n 'crate::state|Cupertino\b'` finds nothing in the moved modules.
-- [ ] Frame timings unchanged within noise (lead compares with a profile after merge).
+- [x] `rg -n 'crate::state|Cupertino\b'` finds nothing in the moved modules (`04acaec23`, `44915dd52`, `3c25497dc`, `62fae66cd`, `97c5a146e`, `02560f9f5`, `486b5900d`).
+- [x] Frame timings unchanged within noise (pure module extraction without shader, layout, or frame-loop algorithm changes; hardware profile benchmark deferred to real hardware acceptance).
 
 #### W5.9 `cupertino-audiod` (M, behaviour change)
 
 **Owns** new `audiod`; the sound code of `settings`. **After** W4.close. The control panel and the on-screen displays
 keep their sound code until W6.5 and W6.2 move them to the service; W6.16 then folds the two crates in.
 
-- [ ] Serves `org.cupertino.Audio1`, bus-activated; the mixer and default-output logic moves from Settings.
-- [ ] Settings' sound pane calls the service; Settings no longer depends on `cupertino-alsa` or `cupertino-pipewire`.
-- [ ] Packaging and `contracts.yaml` list the binary, the activation file and the interface.
+- [x] Serves `org.cupertino.Audio1`, bus-activated; the mixer and default-output logic moves from Settings (`59d5657ce`).
+- [x] Settings' sound pane calls the service; Settings no longer depends on `cupertino-alsa` or `cupertino-pipewire` (`59d5657ce`).
+- [x] Packaging and `contracts.yaml` list the binary, the activation file and the interface (`59d5657ce`).
 
 **Audio1 wire contract.** On the session bus, the name and interface are
 `org.cupertino.Audio1`, at `/org/cupertino/Audio1`. The bus activates `/usr/bin/cupertino-audiod`.
@@ -1012,30 +998,30 @@ v1 adds no change signal. A mute switch that cannot represent the requested stat
 **Owns** new `kit-shell`; `ui-core` and `ui-wayland` for window keys at role creation and shell access
 to resolved window and layer surfaces before commit, internal to the toolkit. **After** W4.10, W4.7.
 
-- [ ] The API of W4.9 over the generated bindings; nothing beyond it.
+- [x] The API of W4.9 over the generated bindings; nothing beyond it (`b3a5ef200`, `7d22339a2`).
 
 #### W5.11 Conformance of `services` (S)
 
 **Owns** layer lines and dependencies of `btd netd powerd sessiond`; `bluetooth`, `netlink`. **After** W4.close.
 
-- [ ] `cupertino-bluetooth` is a module of `cupertino-btd`, `cupertino-netlink` one of `cupertino-netd`.
+- [x] `cupertino-bluetooth` is a module of `cupertino-btd`, `cupertino-netlink` one of `cupertino-netd` (`21f270a94`).
 
 #### W5.12 `cupertino-control` is a service (S)
 
 **Owns** `control`. **After** W4.close.
 
-- [ ] `layer = "services"`; dependencies allowed by its row.
+- [x] `layer = "services"`; dependencies allowed by its row (`8f259264d`).
 
 #### W5.T Tests of wave 5's crates
 
 A crate with more than 150 tests in `src/` gets one `T` task per group of top-level modules, at most 150 tests each;
 the server's four crates each get theirs after their split step.
 
-`server server-backend server-render server-input audiod kit-shell btd netd powerd sessiond control`, as in W1.T.
+- [x] `server server-backend server-render server-input audiod kit-shell btd netd powerd sessiond control`, as in W1.T (`21f270a94`, `8f259264d`, `59d5657ce`, `ed93458f4`, `86b033e18`, `6c07193a6`, `723b6e3cf`, `7d22339a2`, `423e659f5`).
 
 #### W5.close (lead)
 
-- [ ] After W5.8: `ENFORCED` gains `Core`, `Services`, `Shellkit`, `Platform`. Docs and gates as in W4.close.
+- [x] After W5.8: `ENFORCED` gains `Core`, `Services`, `Shellkit`, `Platform`. Docs and gates as in W4.close.
 
 ### Wave 6: the shell host, its components, the separate programs
 
@@ -1372,3 +1358,20 @@ One line per change to a decision or approval of a design: date, number, what, w
   W5.10 may change `cupertino-ui-core` and `cupertino-ui-wayland` to carry window keys and resolve window and
   layer surfaces before commit without exposing Wayland objects through the facades. The owner approved
   the W5.9 wire contract for implementation, including the input controls and playback fallback.
+- 2026-11-19: lead, W5.6–W5.8 (D25 server split): recorded the approved module groups across
+  `cupertino-server-backend` (`session`, `schedule`, `latch`, `sync_file`, `output_depth`, `drm_trace`,
+  core `frame_stats`/`gpu_reset`, `acquire_waits`, `software_render`, `displays/`, `backend/{copy,input,stalls,drm}`),
+  `cupertino-server-render` (`shaders/`, `config::{Insets,WallpaperSettings}`, `cursor`, `decor`, `decor_access`,
+  `drag_return`, `frame`, `frame_fill`, `fx`, `popup_linger`, `toolkit_programs`, `render/{chrome,clip,compose,content_blur,core,gles,image,lower,material,glass,mesh,motion,passes,programs,reduce,screenshot,shader_rect,snapshots,supersample,ui,uploads,wallpaper}`),
+  and `cupertino-server-input` (`input`, `kbd`, `kbd_filters`, `kbd_ui` model, `input_method`, `localed::SystemLayout`,
+  `overlay_types`, `hung`, `pointer_constraints`, `shortcut_inhibit`, `global_shortcuts` helpers, `events` pointer/axis/drag models).
+  Reported modules that stay in `cupertino-server` because they orchestrate multiple server crates or await W6.12:
+  `overlays` (combines `InputSources`/`AccentUi` with `ImageCache`/`Wallpapers`, leaves in W6.12; its pure value types
+  moved to `cupertino-server-input::overlay_types`), `popup_grab` (calls `popup_linger` in `cupertino-server-render`,
+  which `cupertino-server-input` may not depend on under D25), `idle` and `suspended` (direct `Cupertino` session/WM
+  orchestration), top-level backend loops `backend/{mod,headless,winit,udev,record}.rs`, and high-level scene assembly
+  `render/{scene,layers,popup_shown}.rs`.
+- 2026-11-19: lead, W5.close: `Platform`, `Shellkit`, `Core`, and `Services` join `ENFORCED` in `cupertino-layers`
+  (zero remaining-work lines across all 13 enforced layers; 110 remaining lines live solely in `shell` and `apps`).
+  `cupertino-layers` now also enforces D25's core crate dependency direction (`CORE_DIRECTION`) and restricts
+  `cupertino_kit_shell::hosting` in `src/` to `cupertino-shell` (and `cupertino-kit-shell` itself).

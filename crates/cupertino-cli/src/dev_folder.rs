@@ -264,7 +264,10 @@ fn enable(args: &Args, cx: &Context) -> Result<Reply, Failure> {
     };
     let (path, text) = read_system(cx)?;
     let settings = CompositorSettings::parse(&text, None).0;
-    let entries = settings.shell.ok_or_else(|| {
+    let entries = settings
+        .shell
+        .and_then(|s| s.processes)
+        .ok_or_else(|| {
         Failure::new(
             FailureKind::Validation,
             "no_shell_list",

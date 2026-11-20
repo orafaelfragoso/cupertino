@@ -286,6 +286,18 @@ pub fn check_workspace_with(
                 }
             }
         }
+        if name != crate::SHELL_HOST && name != "cupertino-kit-shell" {
+            for file in sources::rust_files(dir, &dir.join("src")) {
+                let src = std::fs::read_to_string(dir.join(&file)).unwrap_or_default();
+                if sources::uses_kit_shell_hosting(&src) {
+                    problems.push(Problem::HostingApi {
+                        krate: name.clone(),
+                        layer,
+                        file,
+                    });
+                }
+            }
+        }
         let licence = &crates.licences[name];
         if !licence.as_deref().is_some_and(is_licence) {
             problems.push(Problem::UndeclaredLicence {

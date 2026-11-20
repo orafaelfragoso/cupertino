@@ -35,6 +35,27 @@ fn each_entry_is_found_by_name_and_index_and_is_its_curve_or_the_default_spring(
 }
 
 #[test]
+fn the_on_screen_displays_fade_at_constant_speed_over_seven_tenths_of_a_second() {
+    let fade = Timing::OSD_FADE;
+    assert_eq!(fade, Easing::LINEAR.over(0.7));
+    assert_eq!(fade.duration(), 0.7);
+    assert_eq!(
+        fade.layer_curve(),
+        LayerCurve::Timed {
+            duration: 0.7,
+            bezier: LINEAR_CURVE,
+        }
+    );
+    for t in [0.0, 0.175, 0.35, 0.525, 0.7] {
+        assert!(
+            (fade.value(t) - t / 0.7).abs() < 1e-9,
+            "{t} s into the fade: {}",
+            fade.value(t)
+        );
+    }
+}
+
+#[test]
 fn a_named_motion_reads_out_as_the_curves_that_run_it() {
     let tau = std::f64::consts::TAU;
     for (timing, layer) in [

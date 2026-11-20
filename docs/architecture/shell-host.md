@@ -1292,6 +1292,197 @@ pub mod hosting {
   1 s, the exit status 76) are named in `cupertino-shell` and `cupertino-kit-shell`; the restart, hold, quiet-moment
   and kill constants in `cupertino-server`.
 
+## The input-source switcher and the accent picker
+
+The design note of W6.12. `osd` draws both panels. The server keeps their keys, their choice and the text they
+change, as it does for the application switcher the dock draws (`cupertino_dock_v1`). No key reaches a component,
+so nothing a component does or fails to do delays a switch or an edit.
+
+| | The server | `osd` |
+|---|---|---|
+| The switch chord, its steps, Escape, Return, Up, Down, the release of the modifiers | takes them from the seat; no client gets them | never sees them |
+| The sources, their order, the selection, the keymap | `InputSources` of `cupertino-server-input` | shows what it is sent |
+| The held letter, its first repeat, the keys of the open picker | `AccentUi` and the key filters | never sees them |
+| The candidates and the focused one | `AccentPicker` of `cupertino-keyboard` | shows what it is sent; reports a click |
+| The text field: the pre-edit, the commit, the restore | its own input method | never sees the text |
+| The panels: surfaces, layout, text, material, shadow, fade | draws nothing | all of it |
+
+### The role, the object and the surfaces
+
+1. The role `keyboard_panels` lets a connection create `cupertino_keyboard_panels_v1` with
+   `cupertino_shell_v1.get_keyboard_panels`. `osd` holds it; no other component and no program does.
+2. The object needs no surface and exists from the component's start, as the window manager's does. A second
+   object on the connection is the `role` error; a connection without the role gets `permission`.
+3. A panel is an ordinary transient layer surface (`Role::Layer`). The server knows it by its namespace on a
+   connection that holds the role; the same namespace on another connection is any layer surface.
+4. A panel's window exists only while the panel shows or fades.
+
+| | The switcher's panel | The picker's panel |
+|---|---|---|
+| Namespace | `cupertino-osd-input-sources` | `cupertino-osd-accents` |
+| Layer | overlay | overlay |
+| Output | the one `sources_changed` names | the one `accents_changed` names |
+| Anchor | none: centred on the output | top and left |
+| Margin | none | the origin of the layout's rectangle |
+| Size | `switcher::hud_content_size` of its rows | the layout's rectangle |
+| Exclusive zone | -1 | -1 |
+| Keyboard | none | none |
+| Input region | empty | the whole surface |
+
+- The picker's layout is `cupertino_keyboard::accent::layout_popup` of the candidates, the anchor rectangle and
+  the output less `top` points at its top, with `PopupMetrics::default()`.
+- The look is today's: the switcher on the regular glass of an alert with its rows, source codes and 0.3 s fade
+  (`switcher::fade_alpha`); the picker on the menu material with its numbered cells. `osd_capture` gains both
+  surfaces, and the review sheet shows them before and after, light and dark.
+- The rows and the candidates are Kit labels and buttons named by their text. W6.12 adds no announcement.
+- Neither panel ever takes the keyboard: a focus change would end the text input the picker edits.
+
+### Messages
+
+`cupertino_shell_v1` gains one request and its version rises by one (28 when no other edit lands first).
+`cupertino_keyboard_panels_v1` is new in the same file, at version 1.
+
+| Interface | Message | Arguments | Says |
+|---|---|---|---|
+| `cupertino_shell_v1` | request `get_keyboard_panels`, `since` the new version | `id: new_id` | creates the object |
+| `cupertino_keyboard_panels_v1` | request `destroy` | | destructor |
+| | event `source_entry` | `id: string`, `name: string` | one source of the switch, most recently used first |
+| | event `sources_changed` | `output: wl_output` or null, `selected: uint` | closes the list before it and selects one; sent when the switch opens and on every step, with the whole list |
+| | event `sources_closed` | | the switch ended, committed or cancelled |
+| | event `accent_entry` | `text: string` | one candidate, in order; at most nine |
+| | event `accents_changed` | `serial: uint`, `output: wl_output` or null, `x`, `y`, `width`, `height: int`, `top: int`, `focused: int` | closes the list before it; sent when the picker opens and on every move of the focus |
+| | event `accents_closed` | `serial: uint` | that picker is gone |
+| | request `accent_pick` | `serial: uint`, `index: uint` | the pointer was released on a candidate |
+
+- An `output` is null when the client has not bound that output; the panel then goes on its first one.
+- `x`, `y`, `width`, `height` are the text cursor's rectangle in the output's logical points, from its top left
+  corner: the rectangle the server anchors at today. `top` is the menu bar's height while the configuration
+  shows one, else 0. `focused` is -1 when no candidate is.
+- `serial` counts the pickers of the session. An `accent_pick` that names another picker than the open one, or an
+  index outside its list, is ignored.
+- Strings are cut as the dock's are.
+
+```rust
+pub mod keyboard_panels {
+    pub const SOURCES_NAMESPACE: &str = "cupertino-osd-input-sources";
+    pub const ACCENTS_NAMESPACE: &str = "cupertino-osd-accents";
+    pub struct Source { pub id: String, pub name: String }
+    pub enum Update {
+        Sources { output: Option<OutputId>, sources: Vec<Source>, selected: usize },
+        SourcesClosed,
+        Accents { serial: u32, output: Option<OutputId>, anchor: Rect, top: f64, candidates: Vec<String>,
+                  focused: Option<usize> },
+        AccentsClosed { serial: u32 },
+    }
+    pub fn accent_pick(serial: u32, index: u32);
+}
+// Event gains: KeyboardPanels(keyboard_panels::Update)
+```
+
+### The switch
+
+1. The chord opens the switch in the server's model and the server sends the list (`source_entry` for each
+   source, then `sources_changed`) naming its first output, where the panel is today.
+2. Each further chord, Up and Down step the selection; the server sends the whole list again.
+3. The server commits the selected source the moment the chord's modifiers are up, or on Return, and cancels on
+   Escape. It changes the keymap itself and then sends `sources_closed`. It waits for nothing.
+4. `osd` maps the panel on the first `sources_changed` and fades it from `sources_closed`. When the close
+   arrives before the panel's first frame, the fade starts with that frame, so a quick tap still shows the choice.
+5. A chord without held modifiers (the globe key, a caps lock tap) commits at once and sends nothing.
+6. When the session locks, the server cancels an open switch and dismisses an open picker.
+
+### The picker
+
+1. A text field enables `zwp_text_input_v3` (`enable`, `set_surrounding_text`, `set_cursor_rectangle`,
+   `commit`). The server's input method hears `activate`, `surrounding_text` and `done`. It is the in-process
+   `zwp_input_method_v2` client of `cupertino-server-input`, the only client that sees
+   `zwp_input_method_manager_v2`. The cursor rectangle reaches the server through that client's popup surface,
+   which is never mapped.
+2. The server arms a held letter only while the text input is active, the letter has candidates, the application
+   allows the picker, and `osd` has its object and is not reported busy, unresponsive or lost. Otherwise the
+   letter repeats in the application.
+3. On the letter's first repeat the server opens the picker and sends `accent_entry` for each candidate, then
+   `accents_changed`. When no output holds the anchor's centre the picker does not open.
+4. Tab, Shift+Tab, Left and Right move the focus. The server sends the list again and shows the focused
+   candidate in the field: `delete_surrounding_text` for the letter, once, then `set_preedit_string` and
+   `commit`, which the field gets as `delete_surrounding_text`, `preedit_string` and `done`.
+5. A digit, Return, or `accent_pick` inserts a candidate: `set_preedit_string` with no text, `commit_string`,
+   `commit`. Escape puts the letter back with `commit_string` when a preview had replaced it.
+6. The picker also closes, as cancelled, when the text input ends, the focus changes, the pointer is pressed
+   anywhere but on the picker's panel (the press goes on to what it hit), or `osd` is gone. Any other key closes
+   it and goes to the application.
+7. The server sends `accents_closed` after every close. The pre-edit is the server's from start to end: `osd`
+   holds no part of an edit, so none is left in a field when `osd` ends.
+
+### When `osd` is not there
+
+| `osd` | The switch | The picker |
+|---|---|---|
+| Not started, turned off, stopped, or between two instances | works without a panel: the release commits | not armed: letters repeat |
+| Its connection ends while a panel shows (D19) | goes on; the panel is dismissed at once | dismissed: the letter is put back |
+| The modifiers come up while it restarts | committed at once by the server; the new instance is sent nothing | |
+| A new instance binds during a switch | sent the list at once | |
+| Busy | goes on | an open one stays; no new one is armed |
+| Unresponsive (D17) | goes on; the panel is dismissed | dismissed: the letter is put back |
+| Responsive again during a switch | sent the list again | armed again |
+
+- A hung `osd` can leave a stale panel on screen for at most the 2 s before it is reported unresponsive. A click
+  on a stale picker changes nothing: its `serial` is not the open picker's.
+- The server's scripted input (`--key`, `--accent`, `--hold-modifiers`) drives the same models.
+
+### What the server stops drawing
+
+| Goes from the server | Stays in the server |
+|---|---|
+| `input_hud`, `accent_popup`, `render_hud`, `render_accent`, `hud_backdrop`, the palette and metrics of both | `InputSources`, `Switcher`, keymaps, `activate_input_source`, the caps lock tap |
+| The scene layers `InputHud` and `AccentPopup`; the scene kinds `InputHud`, `InputHudTint`, `InputHudMaterial`, `InputHudShadow`, `AccentPopup`, `AccentMaterial`, `AccentShadow` | `AccentUi`, `AccentPicker`, `TextOp`, the input method, the key filters and the compositor's key repeat |
+| The fade of the switcher (`HudView::alpha`, `fading_since`, `InputSources::tick`) | whether a switch is open |
+| `accent_layout`, `hud_size`, `HUD_LABEL_EXTRA`, the pointer hit test of the picker | the press that dismisses the picker |
+
+The notice that an application holds the shortcuts or the pointer stays the server's: it must show when no
+component runs. The plan's table does not list it; W6.12 reports it there.
+
+### Who may do what
+
+1. Only the connection that holds `keyboard_panels` creates the object; each request checks the role again
+   (D20: the role is bound to `osd`'s connection and ends with it).
+2. No key of a switch or a picker is sent to any client, `osd` included.
+3. `osd` learns the sources' names, the candidates and the cursor's rectangle: not the text around the cursor,
+   not the application.
+4. `accent_pick` can insert only a candidate of the open picker, into the field the server already edits.
+5. `zwp_input_method_manager_v2` stays hidden from every connection but the server's own.
+6. A layer surface with a panel's namespace on a connection without the role is no panel: a press on it
+   dismisses the picker like any other.
+
+### Tests
+
+Program tests in `crates/cupertino-session-tests/tests/shell-keyboard-panels.rs`, headless, with two input
+sources and an accent table:
+
+1. `the_chord_shows_the_sources_panel_and_the_release_switches_the_source`
+2. `a_quick_tap_switches_and_still_shows_the_choice_fading`
+3. `the_release_while_the_panel_component_restarts_switches_the_source` (crash `osd` with the modifier held)
+4. `a_panel_component_that_starts_during_a_switch_shows_its_list`
+5. `a_hung_panel_component_delays_no_switch_and_its_panel_goes` (a stand-in `osd` of the test host that hangs)
+6. `without_the_panel_component_the_chord_switches_and_a_held_letter_repeats`
+7. `a_held_letter_opens_the_picker_at_the_caret_and_a_digit_inserts_its_candidate` (a Kit text field)
+8. `escape_puts_the_letter_back_and_a_click_on_a_candidate_inserts_it`
+9. `a_press_off_the_picker_closes_it_and_reaches_the_window_under_it`
+10. `the_picker_closes_and_the_letter_returns_when_the_panel_component_ends`
+11. `locking_ends_the_switch_and_the_picker`
+
+Server tests in `crates/cupertino-server/tests/keyboard-panels.rs`, with clients in the server's process:
+
+12. `a_connection_without_the_role_gets_the_permission_error`
+13. `a_second_object_is_the_role_error`
+14. `a_pick_of_another_picker_or_past_the_list_inserts_nothing`
+15. `the_panels_connection_gets_no_key_of_a_switch`
+16. `the_input_method_global_is_offered_to_no_component`
+17. `a_surface_of_the_panels_namespace_without_the_role_is_no_panel`
+18. `the_server_draws_no_panel` (a switch and a picker with no `osd`: the output's picture does not change)
+
+`crates/cupertino-osd/tests/` covers the panels' views through `Osd`'s messages, and `osd_capture` their look.
+
 ## Edits of the existing protocol files
 
 This specification changes messages of `cupertino-shell-v1.xml`, which holds the session, menu bar, dock and window

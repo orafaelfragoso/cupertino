@@ -1110,8 +1110,8 @@ At most three at a time, in this order:
 
 **Owns** `osd`, `server-input` (`kbd_ui`, `input_method`). **After** W6.2, W5.8.
 
-- [ ] Before code: a design note in `docs/architecture/shell-host.md` on how the switcher holds the keyboard while its
-      modifier is down and how the picker reaches the focused text field, approved as in W4.7.
+- [x] Before code: a design note in `docs/architecture/shell-host.md` on how the switcher holds the keyboard while its
+      modifier is down and how the picker reaches the focused text field, approved as in W4.7 (written by the architect, approved by the lead under the owner's instruction to finish wave 6, 2026-11-20).
 - [ ] The input-source switcher and the accent picker are drawn by `osd`; the server routes keys and the text-input
       protocol and draws neither.
 - [ ] [What the compositor draws](#what-the-compositor-draws) checked against the code.
@@ -1461,3 +1461,18 @@ One line per change to a decision or approval of a design: date, number, what, w
 - 2026-11-20: owner, on W6.2: go. Wave 6 continues; memory and frame measurements wait until every wave and its bugs
   are done and the desktop is stable, so W6.close records the memory then rather than gating on it. Components keep
   their restart-leak program test.
+- 2026-11-20: lead, W6.12 design note ("The input-source switcher and the accent picker" in shell-host.md), approved
+  under the owner's instruction to finish wave 6: the server keeps the keys, the choice and the pre-edit, as for the
+  application switcher, and `osd` draws the panels under a role of its own (`keyboard_panels`,
+  `cupertino_keyboard_panels_v1`); locking ends a switch and a picker; a picker whose anchor is on no output does not
+  open; the development folder may hold `keyboard_panels`. W6.12 owns, beyond its line, the protocol, shell-client,
+  kit-shell, server, scene and server-render edits the note names. The notice that an application holds the shortcuts
+  stays the compositor's and joins [What the compositor draws](#what-the-compositor-draws) in W6.12.
+- 2026-11-20: lead, W6.4 and W6.13 stopped on gaps, calls made: the portal asks `Session1.StartScreenshot` (portal only)
+  for `cupertino-screenshot --serve` on a server-made connection; `Session1.ProgramOf` names the program the server
+  started for a bus connection, `cupertino-peer` resolves it; Kit gains an image clipboard; kit-shell copies captured
+  frames on the I/O pool and crops with the output's transform. The session agent's panels are asked through
+  `org.cupertino.SessionAgent1` on the `agent` component's accepted name, mirroring `Login1`'s panel and power-key
+  requests; log out now and sleep are `Session1`'s; `SwitchToLoginWindow` moves to `Session1`; `Login1` keeps
+  `Lock`. W6.13 owns the server's session-agent parts (`NOT_HOSTED`, login's roles, `Need::SessionAgent`, the
+  `Login1` callers) and moves the menu bar to `SessionMenu`, after W6.7.

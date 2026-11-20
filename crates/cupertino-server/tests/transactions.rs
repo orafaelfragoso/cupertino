@@ -1774,6 +1774,61 @@ fn a_hole_layer_merged_into_its_kept_commit_applies_the_newest_hole_state() {
     );
 }
 
+/// Commits of an armed part that each damage a pixel of their own: far more than a kept state holds rectangles.
+const DAMAGED_COMMITS: i32 = 1000;
+
+#[test]
+fn an_armed_part_keeps_the_damage_of_its_merged_commits_bounded() {
+    let mut rig = Rig::new();
+    let (hconn, mut hq, mut hst) = rig.connect_host(&["overview"]);
+    let (_hov, oconn, mut oq, mut ost) = rig.spawn_component(&hconn, &mut hq, &mut hst, "overview");
+    let (surf, _shell) = rig.create_layer_surface(&oconn, &mut oq, &mut ost, "strip");
+    let server_strip = server_layer_surface(&rig, "strip");
+    let before = with_renderer_surface_state(&server_strip, |s| s.current_commit())
+        .expect("the surface's renderer state");
+    let (_tx, _child, _layer) = armed_overview_part(&mut rig, (&oconn, &mut oq, &mut ost), &surf);
+    let oqh = oq.handle();
+    let buffer = shm_buffer(ost.shm.as_ref().unwrap(), &oqh, (200, 40), GREEN);
+    surf.attach(Some(&buffer), 0, 0);
+    let pixel = |i: i32| (i % 200, i / 200 * 8);
+    for i in 0..DAMAGED_COMMITS {
+        let (x, y) = pixel(i);
+        surf.damage_buffer(x, y, 1, 1);
+        surf.commit();
+        if i % 16 == 0 {
+            rig.pump_comp(&oconn, &mut oq, &mut ost);
+        }
+    }
+    for _ in 0..3 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    assert!(rig.state.transaction_gesture_begin(
+        rig.output_id,
+        cupertino_protocols::server::transaction::cupertino_transaction_v1::Gesture::SwipeUp
+    ));
+    for _ in 0..3 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    let damage =
+        with_renderer_surface_state(&server_strip, |s| s.damage_since(Some(before)).to_vec())
+            .expect("the damage of the part's commit");
+    assert!(
+        !damage.iter().any(|r| r.contains((0, 39))),
+        "the damage is the commits', not the whole buffer"
+    );
+    assert!(
+        !damage.is_empty() && damage.len() <= smithay::wayland::compositor::MAX_COALESCED_DAMAGE,
+        "the merged commits keep at most a few rectangles, not one each: {}",
+        damage.len()
+    );
+    for i in 0..DAMAGED_COMMITS {
+        assert!(
+            damage.iter().any(|r| r.contains(pixel(i))),
+            "the kept damage covers every damaged pixel"
+        );
+    }
+}
+
 /// One colour in `wl_shm` ARGB8888 memory order: an opaque green, which neither the wallpaper nor a window shows.
 const GREEN: [u8; 4] = [0, 255, 0, 255];
 

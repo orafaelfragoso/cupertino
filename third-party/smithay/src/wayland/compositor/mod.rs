@@ -558,10 +558,11 @@ pub fn add_blocker(surface: &WlSurface, blocker: impl Blocker + Send + 'static) 
 ///
 /// While this blocker is pending, a later commit of the surface (with the cached state of its
 /// synchronized subsurfaces) is not kept as a state of its own behind the blocked one: it is merged
-/// into the blocked state, as a state merges into the one it follows ([`Cacheable::merge_into`]). A
-/// replaced buffer is released at once, damage accumulates, superseded presentation feedback is
-/// discarded, and other double-buffered state takes the newer value. The blockers of a merged commit
-/// hold the state it is merged into. Once the blockers are released, the surface applies the newest
+/// into the blocked state, as a state merges into the one it follows ([`Cacheable::merge_coalesced`],
+/// by default [`Cacheable::merge_into`]). A replaced buffer is released at once, damage accumulates
+/// (as its bounding rectangles past [`MAX_COALESCED_DAMAGE`] rectangles), superseded presentation
+/// feedback is discarded, and other double-buffered state takes the newer value. The blockers of a
+/// merged commit hold the state it is merged into. Once the blockers are released, the surface applies the newest
 /// state, with one call to [`CompositorHandler::commit`], so what a blocked surface keeps does not
 /// grow with its commits.
 ///
@@ -574,6 +575,12 @@ pub fn add_blocker(surface: &WlSurface, blocker: impl Blocker + Send + 'static) 
 pub fn add_coalescing_blocker(surface: &WlSurface, blocker: impl Blocker + Send + 'static) {
     PrivateSurfaceData::add_coalescing_blocker(surface, blocker)
 }
+
+/// The most damage rectangles a surface state keeps while later commits merge into it under a
+/// coalescing blocker ([`add_coalescing_blocker`]): past it, the damage becomes the bounding
+/// rectangle of its surface damage and that of its buffer damage, so it stays bounded however many
+/// commits merge.
+pub const MAX_COALESCED_DAMAGE: usize = 16;
 
 /// Handler trait for compositor
 pub trait CompositorHandler {

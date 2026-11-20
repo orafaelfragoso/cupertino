@@ -146,6 +146,22 @@ impl Cacheable for SurfaceAttributes {
         into.frame_callbacks.extend(self.frame_callbacks);
         into.client_scale = self.client_scale;
     }
+    fn merge_coalesced(self, into: &mut Self, dh: &DisplayHandle) {
+        self.merge_into(into, dh);
+        if into.damage.len() > super::MAX_COALESCED_DAMAGE {
+            // the bounding rectangle of each coordinate space: it covers all the damage
+            let mut surface: Option<Rectangle<i32, Logical>> = None;
+            let mut buffer: Option<Rectangle<i32, crate::utils::Buffer>> = None;
+            for damage in into.damage.drain(..) {
+                match damage {
+                    Damage::Surface(rect) => surface = Some(surface.map_or(rect, |s| s.merge(rect))),
+                    Damage::Buffer(rect) => buffer = Some(buffer.map_or(rect, |b| b.merge(rect))),
+                }
+            }
+            into.damage.extend(surface.map(Damage::Surface));
+            into.damage.extend(buffer.map(Damage::Buffer));
+        }
+    }
 }
 
 /// User data for WlSurface

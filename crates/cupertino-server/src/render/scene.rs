@@ -1220,6 +1220,7 @@ fn window_decorations(
 }
 
 mod compose;
+mod held_slices;
 mod holes;
 mod layers;
 use compose::backdrop_elements;

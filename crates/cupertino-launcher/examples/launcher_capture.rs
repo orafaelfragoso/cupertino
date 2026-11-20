@@ -144,7 +144,7 @@ fn entries() -> Vec<DesktopEntry> {
                 .map(str::to_owned)
                 .collect(),
             icon: Some((*icon).to_owned()),
-            exec: format!("{}", name.to_lowercase().replace(' ', "-")),
+            exec: name.to_lowercase().replace(' ', "-"),
             try_exec: None,
             terminal: false,
             path: None,

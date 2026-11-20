@@ -8,6 +8,8 @@
 //! [`LockScreen::field`](crate::model::LockScreen::field): a submission or Escape makes a new field, so the old one's
 //! buffer is dropped and zeroed, and the new one takes the focus on every output.
 
+mod pictures;
+mod wants;
 mod widgets;
 
 use std::fmt;
@@ -41,17 +43,21 @@ use crate::power::{self, Menu};
 use crate::status::{StatusItems, WifiState};
 use crate::user::{initials, User};
 use crate::wallpaper::Source;
+use pictures::Glass;
+pub use pictures::{Made, ScreenPictures, Shown, Wants};
+use wants::notices_strip;
 pub use widgets::Access;
 use widgets::{
     Adornment, AlertBody, Avatar, Backdrop, Fade, FieldFrame, FieldMaterial, FieldTint, GlassText,
-    Glyph, GlyphKind, Ground, Label, Look, NoticeCard, Place, Prepare, Pressable, Shift, Slot,
-    StatusItem, StatusKind, StatusRow, ESCAPE, OPTION_RETURN, WHITE,
+    Glyph, GlyphKind, Ground, Label, Look, NoticeCard, Place, Pressable, Shift, Slot, StatusItem,
+    StatusKind, StatusRow, ESCAPE, OPTION_RETURN, WHITE,
 };
 
-/// The `app_id` of a lock surface's window, followed by `.` and the output's registry name: the surface roles give it
-/// the output's lock surface.
+/// The `app_id` of a lock surface's window, followed by `.` and the number the program gives the output while it is
+/// there: the program's `surface` gives the window the output's lock surface.
 pub const LOCK_APP_ID: &str = "cupertino-login.lock";
-/// The `app_id` of a greeter window, followed by `.` and the output's registry name: a full-output layer surface.
+/// The `app_id` of a greeter window, followed by `.` and the number the program gives the output: a full-output layer
+/// surface.
 pub const GREETER_APP_ID: &str = "cupertino-login.greeter";
 
 /// What assistive technology calls the lock screen and the login screen.
@@ -332,6 +338,9 @@ pub struct Screen<'a> {
     /// What the screen stands on, and its dimming's opacity (0 to 1).
     pub wallpaper: &'a Source,
     pub dim: f64,
+    /// The pictures the screen was last given ([`ScreenPictures::shown`]): its wallpaper's picture, its controls'
+    /// material and its glass letters.
+    pub pictures: &'a Shown,
 }
 
 fn label(
@@ -674,15 +683,9 @@ fn within(rect: Rect, origin: Point) -> Rect {
     rect.translate(-origin.x, -origin.y)
 }
 
-/// The clock at the top of a screen, a part of its own just its size.
-/// The date in solid white and the time below it in glass letters made from `ground`'s picture.
-fn clock<M: 'static>(
-    clock: &Clock,
-    layout: &Layout,
-    metrics: Metrics,
-    opacity: f64,
-    ground: &Ground,
-) -> Element<M> {
+/// Where the clock at the top of a screen stands: the date's line, the time's glass letters (in the points of the
+/// clock's part) and the part, just their size.
+fn clock_parts(clock: &Clock, layout: &Layout, metrics: Metrics) -> (Rect, Glass, Rect) {
     let date = metrics.line(
         layout.center_x,
         layout.date_width(),
@@ -698,6 +701,27 @@ fn clock<M: 'static>(
         1.0,
     );
     let rect = date.union(&time);
+    let glass = Glass {
+        text: clock.time.clone(),
+        size: layout.time_size,
+        weight: WEIGHT_TIME,
+        rect: within(time, rect.origin),
+        ascent: metrics.ascent * layout.time_size,
+        origin: rect.origin,
+    };
+    (date, glass, rect)
+}
+
+/// The clock at the top of a screen, a part of its own just its size.
+/// The date in solid white and the time below it in glass letters made from the screen's picture.
+fn clock<M: 'static>(
+    clock: &Clock,
+    layout: &Layout,
+    metrics: Metrics,
+    opacity: f64,
+    pictures: &Shown,
+) -> Element<M> {
+    let (date, glass, rect) = clock_parts(clock, layout, metrics);
     Element::new(Fade::new(
         rect,
         opacity,
@@ -710,13 +734,8 @@ fn clock<M: 'static>(
                 metrics,
             )),
             Element::new(GlassText {
-                text: clock.time.clone(),
-                size: layout.time_size,
-                weight: WEIGHT_TIME,
-                rect: within(time, rect.origin),
-                ascent: metrics.ascent * layout.time_size,
-                ground: ground.clone(),
-                origin: rect.origin,
+                glass,
+                letters: pictures.letters(),
             }),
         ],
     ))
@@ -731,9 +750,8 @@ const ACCESS_PART: &str = "access-part";
 const STATUS_PART: &str = "status-part";
 const NOTICES_PART: &str = "notices-part";
 const LOCK_MESSAGE_PART: &str = "lock-message-part";
-/// The key of the picker's tiles, a part of their own, and of what makes the password screen's material ahead of it.
+/// The key of the picker's tiles, a part of their own.
 const TILES_PART: &str = "tiles-part";
-const PREPARE_PART: &str = "prepare-part";
 
 /// The strip of the screen whose control material a field or button at `rect` stands on: as wide as the shake takes it,
 /// so the material is made once for the control at rest and is the screen's under it wherever it is.
@@ -746,13 +764,31 @@ fn strip_of(rect: Rect) -> Rect {
     })
 }
 
-/// The ground of a screen of `size` on `wallpaper` with its dimming at `dim`.
-fn ground(wallpaper: &Source, size: Size, dim: f64) -> Ground {
-    Ground {
-        source: wallpaper.clone(),
-        size,
-        dim,
+/// The material of the screen's `strip` laid with its origin at `origin`, as the screen was last given it.
+fn material_of(pictures: &Shown, strip: Rect, origin: Point) -> FieldMaterial {
+    FieldMaterial {
+        strip,
+        origin,
+        laid: pictures.material(strip),
     }
+}
+
+/// Where the name field stands, above the password field, where a name is typed with the password.
+fn name_box(layout: &Layout) -> Rect {
+    layout
+        .pill
+        .translate(0.0, -(layout.pill.height() + CREDENTIAL_GAP))
+}
+
+/// The layout of a screen of `size` measured by `metrics`.
+fn layout_of(size: Size, metrics: Metrics) -> Layout {
+    Layout::new(
+        size.width,
+        size.height,
+        metrics.ascent,
+        metrics.descent,
+        metrics.placeholder,
+    )
 }
 
 /// The password screen of the lock screen and the greeter, or the greeter's name screen.
@@ -770,11 +806,11 @@ pub fn screen<M: Clone + 'static>(
         metrics.descent,
         metrics.placeholder,
     );
-    let ground = ground(screen.wallpaper, screen.size, screen.dim);
+    let pictures = screen.pictures;
     // the date and the large time, unless the settings leave them out
     let mut parts: Vec<Element<M>> = screen
         .large_clock
-        .then(|| clock(screen.clock, &layout, metrics, screen.opacity, &ground))
+        .then(|| clock(screen.clock, &layout, metrics, screen.opacity, pictures))
         .into_iter()
         .collect();
 
@@ -827,9 +863,7 @@ pub fn screen<M: Clone + 'static>(
         .union(&layout.help_button)
         .union(&layout.back_button);
     // the name field, where a name is typed with the password, stands above the password field
-    let name_box = layout
-        .pill
-        .translate(0.0, -(layout.pill.height() + CREDENTIAL_GAP));
+    let name_box = name_box(&layout);
     let block = layout
         .avatar
         .outset(AVATAR_SHAKE_SHARE * SHAKE_AMPLITUDE)
@@ -968,11 +1002,7 @@ pub fn screen<M: Clone + 'static>(
                     Element::new(FieldFrame {
                         rect: local,
                         insets: Insets::ZERO,
-                        material: Some(FieldMaterial {
-                            ground: ground.clone(),
-                            strip: strip_of(rest),
-                            origin: button.origin,
-                        }),
+                        material: Some(material_of(pictures, strip_of(rest), button.origin)),
                         tint: FieldTint::of(screen.access, false),
                         initial: false,
                         submit: None,
@@ -1004,11 +1034,7 @@ pub fn screen<M: Clone + 'static>(
             Element::new(FieldFrame {
                 rect: within(name_rect, at),
                 insets: CREDENTIAL_INSETS,
-                material: Some(FieldMaterial {
-                    ground: ground.clone(),
-                    strip: strip_of(name_box),
-                    origin: name_rect.origin,
-                }),
+                material: Some(material_of(pictures, strip_of(name_box), name_rect.origin)),
                 tint: FieldTint::of(screen.access, !enabled),
                 initial: name_first,
                 submit: None,
@@ -1042,11 +1068,7 @@ pub fn screen<M: Clone + 'static>(
         Element::new(FieldFrame {
             rect: within(pill, at),
             insets,
-            material: Some(FieldMaterial {
-                ground: ground.clone(),
-                strip,
-                origin: pill.origin,
-            }),
+            material: Some(material_of(pictures, strip, pill.origin)),
             tint: FieldTint::of(screen.access, !enabled || screen.locked),
             initial: !name_first,
             submit: (submit > 0.0).then(|| within(layout.submit, layout.pill.origin)),
@@ -1165,10 +1187,13 @@ pub fn screen<M: Clone + 'static>(
         screen.size,
         metrics,
         screen.opacity,
-        &ground,
+        pictures,
     ));
     Element::new(Backdrop {
-        ground: Some(ground),
+        ground: Some(Ground {
+            size: screen.size,
+            picture: pictures.ground(),
+        }),
         hidden: screen.hidden,
         on_activity: Some(map(Input::Activity)),
         keys: field_keys(screen.name.is_some(), map),
@@ -1188,23 +1213,11 @@ fn notice_cards<M: 'static>(
     size: Size,
     metrics: Metrics,
     opacity: f64,
-    ground: &Ground,
+    pictures: &Shown,
 ) -> Option<Element<M>> {
-    if notices.is_empty() {
-        return None;
-    }
+    let strip = notices_strip(notices, size, metrics)?;
     let (cards, more) = lock_notices::shown(notices);
     let column = lock_notices::column(size.width, size.height);
-    // the material of the cards covers the room the shown cards may take at most, made once for all of them
-    let tallest =
-        lock_notices::card_height(lock_notices::BODY_LINES, metrics.ascent, metrics.descent)
-            + lock_notices::CARD_GAP;
-    let strip = Rect::new(
-        column.x(),
-        column.y(),
-        column.width(),
-        (tallest * cards.len() as f64).min(column.height()),
-    );
     let mut children: Vec<Element<M>> = cards
         .iter()
         .enumerate()
@@ -1217,9 +1230,9 @@ fn notice_cards<M: 'static>(
                 ascent: metrics.ascent,
                 descent: metrics.descent,
                 material: Some(FieldMaterial {
-                    ground: ground.clone(),
                     strip,
                     origin: column.origin,
+                    laid: pictures.notices(),
                 }),
                 above: cards[..index].iter().map(|c| c.body.clone()).collect(),
             })
@@ -1271,6 +1284,8 @@ pub struct PickerScreen<'a> {
     /// What the screen stands on, and its dimming's opacity (0 to 1).
     pub wallpaper: &'a Source,
     pub dim: f64,
+    /// The pictures the screen was last given ([`ScreenPictures::shown`]).
+    pub pictures: &'a Shown,
 }
 
 /// The element key of picker tile `index`, which the focus follows.
@@ -1289,11 +1304,11 @@ pub fn picker<M: Clone + 'static>(screen: &PickerScreen<'_>, map: fn(Input) -> M
         metrics.descent,
         metrics.placeholder,
     );
-    let ground = ground(screen.wallpaper, screen.size, screen.dim);
+    let pictures = screen.pictures;
     // the date and the large time, unless the settings leave them out
     let mut parts: Vec<Element<M>> = screen
         .large_clock
-        .then(|| clock(screen.clock, &layout, metrics, screen.opacity, &ground))
+        .then(|| clock(screen.clock, &layout, metrics, screen.opacity, pictures))
         .into_iter()
         .collect();
     let picker = screen.picker;
@@ -1374,14 +1389,6 @@ pub fn picker<M: Clone + 'static>(screen: &PickerScreen<'_>, map: fn(Input) -> M
         })
         .key(TILES_PART),
     );
-    // the password screen's field and back button stand on material made while the picker rests
-    parts.push(
-        Element::new(Prepare {
-            ground: ground.clone(),
-            strips: vec![strip_of(layout.pill), strip_of(layout.back_button)],
-        })
-        .key(PREPARE_PART),
-    );
     if let Some(menu) = screen.power {
         parts.push(power_item(menu, &layout, screen.opacity, map));
     }
@@ -1395,7 +1402,10 @@ pub fn picker<M: Clone + 'static>(screen: &PickerScreen<'_>, map: fn(Input) -> M
     ));
     let selected = picker.selected_index();
     Element::new(Backdrop {
-        ground: Some(ground),
+        ground: Some(Ground {
+            size: screen.size,
+            picture: pictures.ground(),
+        }),
         hidden: false,
         on_activity: None,
         keys: Box::new(move |keysym, _| {
@@ -1467,19 +1477,6 @@ pub fn tile_avatar(
     let at = page.clone().position(|i| i == index)?;
     let frame = frames.get(at)?;
     Some(layout.row_avatar(rtl).translate(frame.x(), frame.y()))
-}
-
-/// How many pictures of a whole screen this thread made from their wallpaper: once per screen size, scale and
-/// wallpaper, and once more as the dimming has come in. What a frame of a typed character, a hover or a fade draws
-/// leaves it as it is.
-pub fn pictures_made() -> u64 {
-    widgets::pictures_made()
-}
-
-/// Drop the pictures the screens keep: when the lock screen ends or the greeter hands over to a session, so a screen's
-/// memory is given back.
-pub fn forget_pictures() {
-    widgets::forget_pictures();
 }
 
 /// The power menu's popup windows while it is open, under the power item of the window `parent`.

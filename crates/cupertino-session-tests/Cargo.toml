@@ -18,7 +18,8 @@ cupertino-input = { path = "../cupertino-input" }
 cupertino-kit = { path = "../cupertino-kit" }
 cupertino-kit-shell = { path = "../cupertino-kit-shell" }
 cupertino-launcher = { path = "../cupertino-launcher" }
-cupertino-login = { path = "../cupertino-login", features = ["dbus"] }
+cupertino-login = { path = "../cupertino-login", features = ["app"] }
+cupertino-login-ipc = { path = "../cupertino-login-ipc" }
 cupertino-menubar = { path = "../cupertino-menubar" }
 cupertino-notifications = { path = "../cupertino-notifications" }
 cupertino-osd = { path = "../cupertino-osd" }

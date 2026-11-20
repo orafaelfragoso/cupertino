@@ -1,32 +1,46 @@
-//! The lock screen on the headless window system with the CPU renderer, at the size and scale a bench asks for, on a
-//! picture made for it: its first frame, which makes the screen's picture, and the frame of one typed character.
+//! The lock screen on Kit's headless window system, drawn as an application's windows are, at the size and scale a
+//! bench asks for, on a picture made for it: its first frame, which waits for the screen's pictures made on the CPU
+//! pool, and the frame of one typed character.
 
 mod fixture;
 
-use cupertino_assets::BUILTIN_FONT;
-use cupertino_kit::core::{Application, Command, Key, RuntimeOptions, Window, WindowKey};
+use cupertino_kit::core::{Application, Command, Environment, Key, Window, WindowKey};
 use cupertino_kit::geometry::Size;
-use cupertino_kit::layout::LayoutDirection;
 use cupertino_kit::platform::{KeyEvent, Keysym, Mods, Timestamp, WindowId};
-use cupertino_kit::render::{CpuConfig, CpuRenderer};
-use cupertino_kit::test::{
-    Capabilities, FontIndex, ManualClock, PlaceholderIcons, TestDriver, WindowEvent, WindowStates,
-};
-use cupertino_kit::text::{GlyphRaster, TextSystem};
+use cupertino_kit::test::{Capabilities, ManualClock, TestDriver, WindowEvent, WindowStates};
 use cupertino_kit::theme::{Appearance, ThemePreferences, ThemeTokens};
 use cupertino_login::model::LockScreen;
 use cupertino_login::user::User;
 use cupertino_login::view::{
-    self, Access, Clock, Field, Input, Metrics, Screen, Status, LOCKED_TITLE, LOCK_APP_ID,
+    self, Access, Clock, Field, Input, Made, Metrics, Screen, ScreenPictures, Shown, Status,
+    LOCKED_TITLE, LOCK_APP_ID,
 };
 use cupertino_login::wallpaper::Source;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::num::NonZeroU32;
 use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
+
+/// How long a bench waits for the screen's pictures, made on the CPU pool.
+const PATIENCE: Duration = Duration::from_secs(60);
 
 thread_local! {
-    /// The output the next lock screen of this thread fills, in points.
-    static OUTPUT: Cell<Size> = const { Cell::new(Size::new(2560.0, 1440.0)) };
+    /// The output the next lock screen of this thread fills, in points, and the device scale of its pictures.
+    static OUTPUT: Cell<(Size, f64)> = const { Cell::new((Size::new(2560.0, 1440.0), 1.0)) };
+    /// The environment the next lock screen of this thread measures with and makes its pictures in.
+    static ENVIRONMENT: RefCell<Option<Environment>> = const { RefCell::new(None) };
+}
+
+/// The key of the lock screen's window.
+fn window_key() -> WindowKey {
+    WindowKey(Key::from("lock"))
+}
+
+/// What the lock screen hears: what the person does, and the pictures made for it.
+#[derive(Clone, Debug)]
+pub enum Message {
+    Input(Input),
+    Made(Made),
 }
 
 /// The wallpaper of the bench's lock screens: the fixture picture at 3840 by 2160, made once.
@@ -37,29 +51,31 @@ fn wallpaper() -> &'static Source {
 
 pub struct Model {
     size: Size,
+    scale: f64,
     screen: LockScreen,
     clock: Clock,
     user: User,
     metrics: Metrics,
+    pictures: ScreenPictures,
+    env: Environment,
 }
 
 pub struct Lock;
 
-fn text_system() -> Arc<TextSystem> {
-    let mut fonts = FontIndex::new();
-    fonts.add_font(Arc::new(BUILTIN_FONT.to_vec())).unwrap();
-    Arc::new(TextSystem::new(fonts, "Inter Variable"))
-}
-
 impl Application for Lock {
     type Model = Model;
-    type Message = Input;
+    type Message = Message;
 
-    fn init() -> (Model, Vec<Command<Input>>) {
+    fn init() -> (Model, Vec<Command<Message>>) {
         let mut screen = LockScreen::new(0.0, 3600.0);
         screen.settle_interface();
-        let model = Model {
-            size: OUTPUT.get(),
+        let (size, scale) = OUTPUT.get();
+        let env = ENVIRONMENT
+            .take()
+            .expect("the bench sets the environment first");
+        let mut model = Model {
+            size,
+            scale,
             screen,
             clock: Clock {
                 date: "Mon Nov 16".into(),
@@ -72,68 +88,90 @@ impl Application for Lock {
                 uid: None,
                 logged_in: false,
             },
-            metrics: Metrics::of(&text_system()),
+            metrics: Metrics::of(&env.text),
+            pictures: ScreenPictures::new(),
+            env,
         };
-        (model, Vec::new())
+        let commands = want(&mut model);
+        (model, commands)
     }
 
-    fn update(model: &mut Model, input: Input) -> Vec<Command<Input>> {
-        if let Input::Edited(typed) = input {
-            model.screen.edit_to(1.0, typed);
+    fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
+        match message {
+            Message::Input(Input::Edited(typed)) => model.screen.edit_to(1.0, typed),
+            Message::Input(_) => {}
+            Message::Made(made) => return model.pictures.made(&model.env, made, Message::Made),
         }
-        Vec::new()
+        want(model)
     }
 
-    fn view(model: &Model) -> Vec<Window<Input>> {
-        let s = &model.screen;
-        let content = view::screen(
-            &Screen {
-                size: model.size,
-                metrics: model.metrics,
-                clock: &model.clock,
-                user: Some(&model.user),
-                field: Field::Password {
-                    generation: s.field(),
-                    enabled: true,
-                    busy: false,
-                },
-                name: None,
-                typed: s.typed(),
-                caps_lock: false,
-                spinner: None,
-                denied: false,
-                denied_said: false,
-                notice: None,
-                help: false,
-                help_open: false,
-                opacity: 1.0,
-                block: 1.0,
-                shake: 0.0,
-                hidden: false,
-                lock_message: None,
-                back: false,
-                locked: false,
-                hide_user: false,
-                access: Access::default(),
-                large_clock: true,
-                avatar_from: None,
-                power: None,
-                status: Status::NONE,
-                notices: &[],
-                wallpaper: wallpaper(),
-                dim: 1.0,
-            },
-            LOCKED_TITLE,
-            |input| input,
-        );
+    fn view(model: &Model) -> Vec<Window<Message>> {
+        let content = lock_screen(model, model.pictures.shown(&window_key()), |screen| {
+            view::screen(screen, LOCKED_TITLE, Message::Input)
+        });
         vec![view::full_screen(
-            WindowKey(Key::from("lock")),
+            window_key(),
             LOCK_APP_ID.into(),
             LOCKED_TITLE,
             model.size,
             content,
             None,
         )]
+    }
+}
+
+/// What the lock screen's pictures are made from, handed to its pictures after each update.
+fn want(model: &mut Model) -> Vec<Command<Message>> {
+    let scale = model.scale;
+    let wants = lock_screen(model, model.pictures.shown(&window_key()), |screen| {
+        screen.wants(scale)
+    });
+    model
+        .pictures
+        .want(&model.env, vec![(window_key(), wants)], Message::Made)
+}
+
+/// The lock screen on `pictures`, given to `f`.
+fn lock_screen<R>(model: &Model, pictures: &Shown, f: impl FnOnce(&Screen<'_>) -> R) -> R {
+    {
+        let s = &model.screen;
+        f(&Screen {
+            size: model.size,
+            metrics: model.metrics,
+            clock: &model.clock,
+            user: Some(&model.user),
+            field: Field::Password {
+                generation: s.field(),
+                enabled: true,
+                busy: false,
+            },
+            name: None,
+            typed: s.typed(),
+            caps_lock: false,
+            spinner: None,
+            denied: false,
+            denied_said: false,
+            notice: None,
+            help: false,
+            help_open: false,
+            opacity: 1.0,
+            block: 1.0,
+            shake: 0.0,
+            hidden: false,
+            lock_message: None,
+            back: false,
+            locked: false,
+            hide_user: false,
+            access: Access::default(),
+            large_clock: true,
+            avatar_from: None,
+            power: None,
+            status: Status::NONE,
+            notices: &[],
+            wallpaper: wallpaper(),
+            dim: 1.0,
+            pictures,
+        })
     }
 }
 
@@ -151,11 +189,10 @@ impl Run {
     /// drawn yet.
     /// The screen's picture is made anew for its first frame; the wallpaper is ready before.
     pub fn open(size: Size, scale: f64) -> Run {
-        OUTPUT.set(size);
-        view::forget_pictures();
+        OUTPUT.set((size, scale));
         wallpaper();
-        let text = text_system();
-        let glyphs = Arc::clone(&text);
+        // the system's fonts and symbols, as an application's, in the theme of the repository's data
+        let mut options = cupertino_kit::app::options().unwrap();
         let data = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/theme");
         let theme = ThemeTokens::cupertino(
             &cupertino_assets::theme::from_dir(data).unwrap(),
@@ -166,33 +203,32 @@ impl Run {
             },
         )
         .unwrap();
-        let options = RuntimeOptions {
-            theme: Arc::new(theme),
-            text,
-            icons: Arc::new(PlaceholderIcons::default()),
-            direction: LayoutDirection::Ltr,
-            node_limit: 1000,
-            renderers: Box::new(move || {
-                Box::new(CpuRenderer::new(
-                    CpuConfig {
-                        max_pixels: 1 << 25,
-                        glyph_cache_bytes: 1 << 22,
-                        image_cache_bytes: 1 << 22,
-                        font_smoothing: true,
-                    },
-                    GlyphRaster::new(Arc::clone(&glyphs)),
-                ))
-            }),
-            accessibility: None,
-            clock: Arc::new(ManualClock::new(Timestamp(0))),
-            on_window_error: None,
-        };
-        let mut driver = TestDriver::new(
+        options.theme = Arc::new(theme);
+        ENVIRONMENT.set(Some(Environment {
+            theme: Arc::clone(&options.theme),
+            text: Arc::clone(&options.text),
+            direction: options.direction,
+            scale,
+            icons: Arc::clone(&options.icons),
+        }));
+        let mut driver = TestDriver::<Lock>::new(
             Capabilities::default(),
             options,
             ManualClock::new(Timestamp(0)),
         );
-        driver.run_until_idle(turns()).unwrap();
+        // the screen's pictures, made on the CPU pool, before its first frame
+        let end = Instant::now() + PATIENCE;
+        loop {
+            driver.run_until_idle(turns()).unwrap();
+            if driver.runtime().model().pictures.ready(&window_key()) {
+                break;
+            }
+            let left = end.saturating_duration_since(Instant::now());
+            assert!(
+                driver.window_system_mut().wait_for_wake(left),
+                "the screen's pictures were not made within {PATIENCE:?}"
+            );
+        }
         let window = driver.runtime().windows()[0].1;
         let system = driver.window_system_mut();
         system.set_keep_pixels(false);

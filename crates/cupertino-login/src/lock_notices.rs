@@ -5,7 +5,7 @@
 //! lock from applications allowed on the lock screen, each as its application, a title and a body. The title is
 //! "Notification" and the body empty unless the application's previews are always shown, so the rest of a notification
 //! never reaches this process, its windows or the tree assistive technology reads. The component says when the list
-//! changed with the signal `LockScreenChanged`, which carries nothing; [`watch`] then asks for the list again, and again
+//! changed with the signal `LockScreenChanged`, which carries nothing; [`follow`] then has the list asked for again, and again
 //! when the bus name changes owner. Each text is cut again here to its cap, whatever the component sent.
 //!
 //! Any process of the user could own the bus name while the component is not running, so the name alone is not trusted
@@ -148,55 +148,55 @@ pub fn more_text(n: usize) -> String {
 pub const NOTIFICATIONS_COMPONENT: &str = "notifications";
 
 #[cfg(feature = "dbus")]
-pub use bus::{fetch, serves_lock_screen, watch};
+pub use bus::{fetch, follow, serves_lock_screen};
 
 #[cfg(feature = "dbus")]
 mod bus {
     use super::{from_rows, Notice, NOTIFICATIONS_COMPONENT};
     use cupertino_peer::component::{resolve_component, ComponentCaller};
-    use cupertino_peer::signal::{from_owner, sent_by_bus};
-    use zbus::blocking::fdo::DBusProxy;
-    use zbus::blocking::{Connection, MessageIterator};
-    use zbus::message::Type;
+    use futures_lite::stream::{self, StreamExt};
+    use zbus::fdo::DBusProxy;
     use zbus::names::{BusName, UniqueName};
-    use zbus::MatchRule;
+    use zbus::proxy::CacheProperties;
+    use zbus::{Connection, Proxy};
 
     const BUS_NAME: &str = "org.cupertino.NotificationCenter1";
     const OBJECT_PATH: &str = "/org/cupertino/NotificationCenter1";
     const INTERFACE: &str = "org.cupertino.NotificationCenter1";
 
     /// Whether the server resolves the connection `owner` to the component [`NOTIFICATIONS_COMPONENT`] (D20). The
-    /// server itself, another component of a shell host and any other connection are not. Waits for the bus, so it is
-    /// called only from the lock screen's reader thread.
-    pub fn serves_lock_screen(session: &Connection, owner: &UniqueName<'_>) -> bool {
-        let caller = zbus::block_on(resolve_component(session.inner(), owner));
+    /// server itself, another component of a shell host and any other connection are not.
+    pub async fn serves_lock_screen(session: &Connection, owner: &UniqueName<'_>) -> bool {
+        let caller = resolve_component(session, owner).await;
         matches!(caller, ComponentCaller::Component(name) if name == NOTIFICATIONS_COMPONENT)
     }
 
     /// The list the notifications component gives the lock screen now, asked of the owner of its bus name only when
     /// that connection is the component's ([`serves_lock_screen`]); any other owner is an error and is not asked. No
     /// owner is an empty list.
-    pub fn fetch(session: &Connection) -> zbus::Result<Vec<Notice>> {
-        let dbus = DBusProxy::new(session)?;
+    pub async fn fetch(session: &Connection) -> zbus::Result<Vec<Notice>> {
+        let dbus = DBusProxy::new(session).await?;
         let name = BusName::try_from(BUS_NAME)?;
-        let owner = match dbus.get_name_owner(name) {
+        let owner = match dbus.get_name_owner(name).await {
             Ok(owner) => owner,
             Err(zbus::fdo::Error::NameHasNoOwner(_)) => return Ok(Vec::new()),
             Err(e) => return Err(e.into()),
         };
-        if !serves_lock_screen(session, &owner) {
+        if !serves_lock_screen(session, &owner).await {
             return Err(zbus::Error::Failure(format!(
                 "{BUS_NAME} is owned by {owner}, which is not the {NOTIFICATIONS_COMPONENT} component"
             )));
         }
         // the owner's own connection, so a new owner of the name cannot answer in its place
-        let reply = session.call_method(
-            Some(owner.as_str()),
-            OBJECT_PATH,
-            Some(INTERFACE),
-            "LockScreenNotifications",
-            &(),
-        );
+        let reply = session
+            .call_method(
+                Some(owner.as_str()),
+                OBJECT_PATH,
+                Some(INTERFACE),
+                "LockScreenNotifications",
+                &(),
+            )
+            .await;
         match reply {
             Ok(reply) => Ok(from_rows(reply.body().deserialize()?)),
             Err(zbus::Error::MethodError(name, _, _))
@@ -209,73 +209,44 @@ mod bus {
         }
     }
 
-    /// Pass the list to `on_list` now, at every `LockScreenChanged` from the owner of the component's name and when the
-    /// name changes owner. A list that cannot be read is reported and passed on as empty, so nothing stale stays shown.
-    ///
-    /// The readers of the signals never wait on the bus: a signal only asks a thread of its own for a read, with at most
-    /// one asked for while one runs. A stream that fills stops the connection, the replies to the read included, and the
-    /// bus hands this process any signal another peer sends it; a forged `LockScreenChanged` is dropped as it arrives
-    /// (`from_owner`), and a flood of owner changes costs one read at a time.
-    pub fn watch(
-        session: &Connection,
-        on_list: impl Fn(Vec<Notice>) + Send + Sync + 'static,
-    ) -> zbus::Result<()> {
-        let changed = MatchRule::builder()
-            .msg_type(Type::Signal)
-            .sender(BUS_NAME)?
-            .interface(INTERFACE)?
-            .member("LockScreenChanged")?
-            .path(OBJECT_PATH)?
-            .build();
-        let owner = MatchRule::builder()
-            .msg_type(Type::Signal)
-            .sender("org.freedesktop.DBus")?
-            .interface("org.freedesktop.DBus")?
-            .member("NameOwnerChanged")?
-            .add_arg(BUS_NAME)?
-            .build();
-        let changes = from_owner(session, BUS_NAME, changed, |_| {
-            eprintln!("cupertino-login: a LockScreenChanged not sent by the notifications component was ignored")
-        })?;
-        let owners = MessageIterator::for_match_rule(owner, session, None)?.filter(|message| {
-            // zbus filters the rule's sender already; this does not rely on it
-            !matches!(message, Ok(message) if !sent_by_bus(message))
-        });
-        let streams: [Box<dyn Iterator<Item = zbus::Result<zbus::Message>> + Send>; 2] =
-            [Box::new(changes), Box::new(owners)];
-        let report = std::sync::Arc::new(move |session: &Connection| {
-            on_list(fetch(session).unwrap_or_else(|e| {
-                eprintln!("cupertino-login: the lock screen's notifications: {e}");
-                Vec::new()
-            }))
-        });
-        let (again, asked) = std::sync::mpsc::sync_channel::<()>(1);
-        let reader = session.clone();
-        std::thread::Builder::new()
-            .name("lock-notices-read".into())
-            .spawn(move || asked.into_iter().for_each(|()| report(&reader)))
-            .map_err(|e| zbus::Error::Failure(format!("starting the notifications reader: {e}")))?;
-        for messages in streams {
-            let again = again.clone();
-            std::thread::Builder::new()
-                .name("lock-notices".into())
-                .spawn(move || {
-                    for message in messages {
-                        if message.is_err() {
-                            break;
-                        }
-                        let _ = again.try_send(());
-                    }
-                    eprintln!(
-                        "cupertino-login: the lock screen's notifications are no longer followed"
-                    );
-                })
-                .map_err(|e| {
-                    zbus::Error::Failure(format!("starting the notifications reader: {e}"))
-                })?;
+    /// Call `due` now, at every `LockScreenChanged` from the owner of the component's name and whenever the name
+    /// changes owner, until a stream ends; returns why. `due` must not wait: it only notes that the list is to be
+    /// read again ([`fetch`]), so a burst of signals costs one read. The proxy follows the owner of the name and
+    /// passes on what that connection sent alone, so a forged `LockScreenChanged` is dropped as it arrives; a new
+    /// owner counts from the bus alone.
+    pub async fn follow(session: &Connection, due: impl Fn()) -> String {
+        let center = match zbus::proxy::Builder::<Proxy<'_>>::new(session)
+            .destination(BUS_NAME)
+            .and_then(|b| b.path(OBJECT_PATH))
+            .and_then(|b| b.interface(INTERFACE))
+        {
+            Ok(builder) => builder.cache_properties(CacheProperties::No).build().await,
+            Err(e) => Err(e),
+        };
+        let center = match center {
+            Ok(center) => center,
+            Err(e) => return format!("reaching the notifications component: {e}"),
+        };
+        let changes = match center.receive_signal("LockScreenChanged").await {
+            Ok(changes) => changes.map(drop),
+            Err(e) => return format!("subscribing to LockScreenChanged: {e}"),
+        };
+        let owners = match DBusProxy::new(session).await {
+            Ok(bus) => match bus
+                .receive_name_owner_changed_with_args(&[(0, BUS_NAME)])
+                .await
+            {
+                Ok(owners) => owners.map(drop),
+                Err(e) => return format!("following the notifications component's name: {e}"),
+            },
+            Err(e) => return format!("reaching the bus: {e}"),
+        };
+        // the first read, after both streams are subscribed, so no change between them and it is missed
+        due();
+        let mut news = stream::or(changes, owners);
+        while news.next().await.is_some() {
+            due();
         }
-        // the first read, on the same thread as the later ones so the lists arrive in order
-        let _ = again.try_send(());
-        Ok(())
+        "the notifications component's signal streams ended".into()
     }
 }

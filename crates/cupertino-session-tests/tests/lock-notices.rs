@@ -168,7 +168,8 @@ fn only_the_notifications_component_answers_the_lock_screen() {
 
     let ask = session.clone();
     let answers = aside(&mut rig, "the callers are resolved", move || {
-        [&centre, &osd, &server, &own].map(|name| serves_lock_screen(&ask, name))
+        [&centre, &osd, &server, &own]
+            .map(|name| zbus::block_on(serves_lock_screen(ask.inner(), name)))
     });
     assert_eq!(
         answers,
@@ -177,7 +178,9 @@ fn only_the_notifications_component_answers_the_lock_screen() {
     );
 
     let ask = session.clone();
-    let list = aside(&mut rig, "the list is answered", move || fetch(&ask));
+    let list = aside(&mut rig, "the list is answered", move || {
+        zbus::block_on(fetch(ask.inner()))
+    });
     assert_eq!(
         list.expect("the notifications component is asked"),
         [],
@@ -197,7 +200,9 @@ fn a_name_another_connection_owns_is_not_asked() {
         .expect("the test takes the notifications' name");
 
     let ask = session.clone();
-    let list = aside(&mut rig, "the list is refused", move || fetch(&ask));
+    let list = aside(&mut rig, "the list is refused", move || {
+        zbus::block_on(fetch(ask.inner()))
+    });
     let error = list.expect_err("a name the test owns is not the notifications component's");
     assert!(
         error

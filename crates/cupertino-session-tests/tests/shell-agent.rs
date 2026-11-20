@@ -545,16 +545,18 @@ fn the_lock_screens_login1_has_lock_alone() {
     let bus = Bus::start("login1");
     let asked = Arc::new(Mutex::new(Vec::new()));
     let heard = Arc::clone(&asked);
-    let builder = zbus::connection::Builder::address(bus.1.as_str()).expect("the test's bus");
-    let service = cupertino_login::control::serve_unnamed(builder, move |request| {
-        heard.lock().unwrap().push(request);
+    // the lock screen's connection, its executor on a thread of zbus's own where the lock screen's loop ticks it
+    let service = zbus::block_on(async {
+        zbus::connection::Builder::address(bus.1.as_str())?
+            .build()
+            .await
     })
+    .expect("the test's bus");
+    zbus::block_on(cupertino_login::control::serve(&service, move |request| {
+        heard.lock().unwrap().push(request);
+    }))
     .expect("the lock screen serves Login1");
-    let unique = service
-        .connection()
-        .unique_name()
-        .expect("a unique name")
-        .to_string();
+    let unique = service.unique_name().expect("a unique name").to_string();
     let caller = Connection::session().expect("the test's bus");
     let reply = caller
         .call_method(

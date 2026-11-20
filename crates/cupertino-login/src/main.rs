@@ -1,18 +1,14 @@
-//! The `cupertino-login` process. In a session it locks the session on a request, shows the lock screen on the server's
-//! lock surfaces until the user authenticates, and shows the confirmation panels of the session agent. With `--greeter` it
-//! is the login screen of the session manager. See the README for how to run it.
+//! The `cupertino-login` process. In a user's session it is the lock screen: it locks the session on a request and
+//! shows the lock screen on the server's lock surfaces until the user authenticates ([`cupertino_login::lock_screen`]).
+//! With `--greeter` it is the login screen of the session manager ([`cupertino_login::greeter`]). See the README for
+//! how to run it.
 
 #![forbid(unsafe_code)]
 
-mod app;
-mod greeter;
-mod options;
-mod roles;
-mod screen;
-
 use cupertino_diagnostic_events as diag;
+use cupertino_login::options::{Options, USAGE};
+use cupertino_login::{greeter, lock_screen};
 use cupertino_login_ipc::zeroing::ZeroOnFree;
-use options::{Options, USAGE};
 use std::process::ExitCode;
 
 /// The lock screen and the login screen handle passwords: nothing they free keeps one, the `CString` that PAM's binding
@@ -36,16 +32,11 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
     let result = match options {
-        Options::Session(options) => app::run(&options).map(|ended| match ended {
-            // a success exit: the server does not restart the process
-            app::Ended::NoLoginSession => eprintln!(
-                "cupertino-login: this process is in no login session: there is no session to lock, exiting"
-            ),
-        }),
-        // `run` only returns on failure
-        Options::Greeter => greeter::run().map(|never| match never {}),
+        Options::Session(options) => lock_screen::run(options),
+        Options::Greeter => greeter::run(),
     };
     match result {
+        // the process is in no login session: a success exit, which the server does not restart
         Ok(()) => ExitCode::SUCCESS,
         // a failure exit makes the server restart the process
         Err(e) => {

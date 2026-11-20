@@ -13,12 +13,13 @@
 //! saturated and tinted dark, made from the picture itself, never from what lies under the window (the unlocked
 //! session, under a lock surface).
 //!
-//! Everything here is plain arithmetic on pixels, split over the machine's processors by rows.
+//! Everything here is plain arithmetic on pixels, on the thread that calls it: the screens make their pictures on Kit's
+//! CPU pool, a whole screen's picture in bands of rows that the pool's threads share ([`crate::view::ScreenPictures`]).
+//! Reading a picture file ([`decode`], [`for_session`], [`Stamp::of`]) runs on Kit's I/O pool
+//! (`cupertino_kit::task::io`), never on the UI thread.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-
-use cupertino_raster_math::dither;
 
 /// Black laid over the picture, alpha.
 pub const DARKEN: f32 = 0.25;
@@ -59,8 +60,12 @@ pub const MATERIAL_TONE: f32 = 0.08;
 /// The most pixels a decoded picture may have a side, and in all.
 pub const MAX_SIDE: u32 = 8192;
 
-/// Rows a worker takes at least, so a small picture is not split over more threads than it is worth.
-const MIN_ROWS_PER_WORKER: usize = 64;
+/// The deviation of the Gaussian a blur of a radius comes close to, per point of the radius: the renderers' blur takes
+/// a radius as twice the deviation.
+const SIGMA_PER_RADIUS: f32 = 0.5;
+
+/// Side of the ordered dither's matrix, pixels: the offsets repeat every this many pixels each way.
+const DITHER_SIZE: u32 = 8;
 
 static NEXT_PICTURE: AtomicU64 = AtomicU64::new(1);
 
@@ -120,6 +125,22 @@ impl Picture {
             rgb,
             id: NEXT_PICTURE.fetch_add(1, Ordering::Relaxed),
         })
+    }
+
+    /// A picture of `width` x `height` pixels from premultiplied RGBA bytes, four a pixel (as `cupertino_kit::image`
+    /// decodes): each pixel laid over black, which keeps its colour bytes. `None` as for [`Picture::from_rgba`].
+    pub fn from_premultiplied(width: u32, height: u32, rgba: &[u8]) -> Option<Picture> {
+        let count = usize::try_from(u64::from(width) * u64::from(height)).ok()?;
+        if rgba.len() != count.checked_mul(4)? {
+            return None;
+        }
+        let rgb = rgba
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .flat_map(|px| [px[0], px[1], px[2]])
+            .collect();
+        Picture::from_rgb(width, height, rgb)
     }
 
     pub fn width(&self) -> u32 {
@@ -264,13 +285,42 @@ impl Dimming {
     }
 }
 
-/// The dither's offsets of a row of the 8 x 8 matrix, in 8-bit steps, by the column's place in it.
-fn dither_row(y: u32) -> [f32; 8] {
-    std::array::from_fn(|x| dither::offset(x as u32, y))
+/// The ordered dither the renderers use (`cupertino-raster-math`'s `dither`), the same offsets at the same pixels: the
+/// entry, 0 to 63, of pixel `(x, y)` in the [`DITHER_SIZE`] x [`DITHER_SIZE`] ordered matrix, made of the 2 x 2 matrix
+/// `[[0, 2], [3, 1]]` at each of the three low bits of `x` and `y`.
+fn dither_matrix(x: u32, y: u32) -> u32 {
+    let bit = |v: u32, k: u32| (v >> k) & 1;
+    let pair = |x: u32, y: u32| 2 * (x ^ y) + y;
+    16 * pair(bit(x, 0), bit(y, 0)) + 4 * pair(bit(x, 1), bit(y, 1)) + pair(bit(x, 2), bit(y, 2))
+}
+
+/// The dither's offset of pixel `(x, y)`, in 8-bit steps, inside (-0.5, 0.5): `(m + 0.5) / 64 - 0.5` for its matrix
+/// entry `m`, so a value 8 bits hold exactly is stored unchanged.
+fn dither_offset(x: u32, y: u32) -> f32 {
+    let levels = (DITHER_SIZE * DITHER_SIZE) as f32;
+    (dither_matrix(x, y) as f32 + 0.5) / levels - 0.5
+}
+
+/// `v` (0 to 1) stored in 8 bits: held to 0 to 1 and rounded to nearest, a half away from zero.
+fn quantize(v: f32) -> u8 {
+    let x = v.clamp(0.0, 1.0) * 255.0;
+    // the fraction `x - whole` is exact
+    let whole = x as u32;
+    (whole + u32::from(x - whole as f32 >= 0.5)) as u8
+}
+
+/// `v` (0 to 1) with the dither's offset of pixel `(x, y)` added, stored in 8 bits.
+fn dither_store(v: f32, x: u32, y: u32) -> u8 {
+    quantize(v + dither_offset(x, y) / 255.0)
+}
+
+/// The dither's offsets of a row of the matrix, in 8-bit steps, by the column's place in it.
+fn dither_row(y: u32) -> [f32; DITHER_SIZE as usize] {
+    std::array::from_fn(|x| dither_offset(x as u32, y))
 }
 
 /// `v` (0 to 255) with the dither's offset `offset` added, held to 0 to 255 and rounded to nearest, as
-/// [`dither::store`] stores `v / 255`.
+/// [`dither_store`] stores `v / 255`.
 #[inline]
 fn store(v: f32, offset: f32) -> u8 {
     ((v + offset).clamp(0.0, 255.0) + 0.5) as u8
@@ -351,33 +401,11 @@ fn taps(count: u32, len: u32, scale: f64, offset: f64) -> Vec<(u32, u32, f32)> {
         .collect()
 }
 
-/// The workers `rows` rows are split over.
-fn workers(rows: usize) -> usize {
-    let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
-    cores.min(rows.div_ceil(MIN_ROWS_PER_WORKER)).clamp(1, 16)
-}
-
-/// Runs `row(y, bytes)` for rows `y0..y1` of an image `width` pixels wide whose rows are `out`, split over the workers.
-fn by_rows(out: &mut [u8], width: usize, y0: u32, row: &(dyn Fn(u32, &mut [u8]) + Sync)) {
-    let stride = width * 4;
-    by_bands(out, width, y0, &|first, bytes| {
-        for (i, line) in bytes.chunks_mut(stride).enumerate() {
-            row(first + i as u32, line);
-        }
-    });
-}
-
-/// Runs `band(y, bytes)` for bands of whole rows of an image `width` pixels wide whose rows from `y0` are `out`, one band
-/// a worker, `y` the band's first row: a worker keeps what one row leaves to the next.
-fn by_bands(out: &mut [u8], width: usize, y0: u32, band: &(dyn Fn(u32, &mut [u8]) + Sync)) {
-    let stride = width * 4;
-    let rows = out.len() / stride.max(1);
-    let per = rows.div_ceil(workers(rows)).max(1);
-    std::thread::scope(|scope| {
-        for (chunk, bytes) in out.chunks_mut(per * stride).enumerate() {
-            scope.spawn(move || band(y0 + (chunk * per) as u32, bytes));
-        }
-    });
+/// Runs `row(y, bytes)` for the rows of an image `width` pixels wide whose rows from `y0` are `out`.
+fn by_rows(out: &mut [u8], width: usize, y0: u32, row: impl Fn(u32, &mut [u8])) {
+    for (i, line) in out.chunks_mut(width * 4).enumerate() {
+        row(y0 + i as u32, line);
+    }
 }
 
 /// One row of a picture scaled across: each device column's two pixels of `row` (RGB bytes) blended by the weight of the
@@ -479,6 +507,7 @@ fn render_region_into(
         // 2^24 a step, where the dither's offset with a half to round to nearest is added
         let stride = p.width as usize * 3;
         let outside = (dimming.outside * 65536.0).round() as u32;
+        // one band, the region's rows, in order: each keeps what one row leaves to the next
         let band = |first: u32, bytes: &mut [u8]| {
             let mut held: [(Option<u32>, Vec<u32>); 2] =
                 [(None, vec![0; w * 3]), (None, vec![0; w * 3])];
@@ -527,7 +556,7 @@ fn render_region_into(
                 }
             }
         };
-        by_bands(out, w, y0, &band);
+        band(y0, out);
         return;
     }
     let row = |y: u32, line: &mut [u8]| {
@@ -548,7 +577,7 @@ fn render_region_into(
             px[3] = 255;
         }
     };
-    by_rows(out, w, y0, &row);
+    by_rows(out, w, y0, row);
 }
 
 /// The picture of `source` over a screen of `width` x `height` device pixels at `scale` (device pixels a point), with
@@ -560,12 +589,28 @@ pub fn render(source: &Source, width: u32, height: u32, scale: f64, dim: f32) ->
 /// [`render`] into `out`, which holds `width` x `height` pixels: the screens make their picture in the memory they hand
 /// on, with no copy of it.
 pub fn render_into(source: &Source, width: u32, height: u32, scale: f64, dim: f32, out: &mut [u8]) {
+    render_rows_into(source, width, height, scale, dim, 0..height, out);
+}
+
+/// The rows `rows` of [`render`]'s picture into `out`, which holds those rows: one band of a screen's picture, which the
+/// screens make apart from the others on the CPU pool. The bands of a picture together hold the very pixels
+/// [`render`] makes.
+pub fn render_rows_into(
+    source: &Source,
+    width: u32,
+    height: u32,
+    scale: f64,
+    dim: f32,
+    rows: std::ops::Range<u32>,
+    out: &mut [u8],
+) {
+    let rows = rows.start.min(height)..rows.end.min(height);
     render_region_into(
         source,
         (width, height),
         scale,
         dim,
-        [0, 0, width, height],
+        [0, rows.start, width, rows.end],
         out,
     );
 }
@@ -573,8 +618,27 @@ pub fn render_into(source: &Source, width: u32, height: u32, scale: f64, dim: f3
 /// The picture `undimmed` (made by [`render`] with the dimming at 0) with the dimming at opacity `dim`, into `out`: what a
 /// frame of the dimming coming in shows, made from the kept picture with no new look at the source.
 pub fn dim_into(undimmed: &[u8], width: u32, height: u32, scale: f64, dim: f32, out: &mut [u8]) {
+    dim_rows_into(undimmed, width, height, scale, dim, 0, out);
+}
+
+/// [`dim_into`] for the rows of the screen from `first_row` that `undimmed` and `out` hold: one band of a frame of the
+/// dimming coming in, made from the same band of the undimmed picture.
+pub fn dim_rows_into(
+    undimmed: &[u8],
+    width: u32,
+    height: u32,
+    scale: f64,
+    dim: f32,
+    first_row: u32,
+    out: &mut [u8],
+) {
     let w = width as usize;
-    if out.len() != w * height as usize * 4 || undimmed.len() != out.len() || w == 0 {
+    let rows = out.len() / (w * 4).max(1);
+    if w == 0
+        || undimmed.len() != out.len()
+        || out.len() != w * rows * 4
+        || u64::from(first_row) + rows as u64 > u64::from(height)
+    {
         return;
     }
     let scale = if scale.is_finite() && scale > 0.0 {
@@ -594,7 +658,7 @@ pub fn dim_into(undimmed: &[u8], width: u32, height: u32, scale: f64, dim: f32, 
         })
         .collect();
     let row = |y: u32, line: &mut [u8]| {
-        let from = &undimmed[y as usize * w * 4..][..w * 4];
+        let from = &undimmed[(y - first_row) as usize * w * 4..][..w * 4];
         let dy2 = dimming.rows[y as usize];
         let offsets = dither_row(y);
         let table = &tables[(y & 7) as usize];
@@ -616,7 +680,7 @@ pub fn dim_into(undimmed: &[u8], width: u32, height: u32, scale: f64, dim: f32, 
             px[3] = 255;
         }
     };
-    by_rows(out, w, 0, &row);
+    by_rows(out, w, first_row, row);
 }
 
 /// One pass of a box blur `radius` pixels each side along rows (`across` false) or columns of an RGB float image.
@@ -680,7 +744,7 @@ pub fn frosted(source: &Source, width: u32, height: u32, scale: f64, region: [u3
             let c = material(blurred[j * rw + i], surround);
             let (x, y) = (x0 + i as u32, y0 + j as u32);
             for k in 0..3 {
-                px[k] = dither::store(c[k], x, y);
+                px[k] = dither_store(c[k], x, y);
             }
             px[3] = 255;
         }
@@ -713,7 +777,7 @@ fn blurred(
     } else {
         1.0
     };
-    let sigma = f64::from(cupertino_raster_math::blur::sigma_for_radius(blur as f32)) * scale;
+    let sigma = f64::from(blur as f32 * SIGMA_PER_RADIUS) * scale;
     let radii = box_radii(sigma);
     let reach = radii.iter().sum::<usize>() as u32;
     // the blur reads the picture around the region
@@ -813,9 +877,9 @@ pub fn glass_letters(
             });
             let (x, y) = (x0 + i as u32, y0 + j as u32);
             for k in 0..3 {
-                px[k] = dither::store(c[k] * a, x, y);
+                px[k] = dither_store(c[k] * a, x, y);
             }
-            px[3] = dither::store(a, x, y).max(px[0].max(px[1]).max(px[2]));
+            px[3] = dither_store(a, x, y).max(px[0].max(px[1]).max(px[2]));
         }
     }
     out
@@ -860,11 +924,16 @@ pub fn material(c: [f32; 3], surround: [f32; 3]) -> [f32; 3] {
 pub const MAX_FILE_BYTES: u64 = 256 << 20;
 
 /// Decodes the PNG or JPEG at `path` into a picture: refused when it is not a regular file, larger than `max_bytes`
-/// (at most [`MAX_FILE_BYTES`]), of another format, or past [`MAX_SIDE`] a side.
+/// (at most [`MAX_FILE_BYTES`]), of another format, or past [`MAX_SIDE`] a side. A FIFO or a device named as the
+/// wallpaper never blocks it. It reads the file and decodes it: run it on Kit's I/O pool (`cupertino_kit::task::io`),
+/// never on the UI thread.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "runs on the I/O pool (kit::task::io)"
+)]
 pub fn decode(path: &std::path::Path, max_bytes: u64) -> Result<Picture, String> {
-    use std::io::BufReader;
+    use std::io::Read;
     use std::os::unix::fs::OpenOptionsExt;
-    const MAX_ALLOC: u64 = 512 << 20;
     // a FIFO or a device named as the wallpaper never blocks the screen
     let file = std::fs::OpenOptions::new()
         .read(true)
@@ -872,36 +941,33 @@ pub fn decode(path: &std::path::Path, max_bytes: u64) -> Result<Picture, String>
         .open(path)
         .map_err(|e| format!("{}: {e}", path.display()))?;
     let meta = file.metadata().map_err(|e| e.to_string())?;
-    if !meta.is_file() || meta.len() > max_bytes.min(MAX_FILE_BYTES) {
+    let limit = max_bytes.min(MAX_FILE_BYTES);
+    if !meta.is_file() || meta.len() > limit {
         return Err(format!("{}: not a picture file", path.display()));
     }
-    let mut reader = image::ImageReader::new(BufReader::new(file))
-        .with_guessed_format()
-        .map_err(|e| e.to_string())?;
-    if !matches!(
-        reader.format(),
-        Some(image::ImageFormat::Png | image::ImageFormat::Jpeg)
-    ) {
-        return Err(format!("{}: only PNG and JPEG are read", path.display()));
+    // no more than the limit, should the file grow while it is read
+    let mut data = Vec::with_capacity(meta.len() as usize);
+    file.take(limit + 1)
+        .read_to_end(&mut data)
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    if data.len() as u64 > limit {
+        return Err(format!("{}: not a picture file", path.display()));
     }
-    let mut limits = image::Limits::default();
-    limits.max_image_width = Some(MAX_SIDE);
-    limits.max_image_height = Some(MAX_SIDE);
-    limits.max_alloc = Some(MAX_ALLOC);
-    reader.limits(limits);
-    let image = reader
-        .decode()
-        .map_err(|e| format!("{}: {e}", path.display()))?
-        .into_rgb8();
-    let (width, height) = image.dimensions();
-    Picture::from_rgb(width, height, image.into_raw())
+    let image = cupertino_kit::image::decode(&data, MAX_SIDE).map_err(|e| match e {
+        cupertino_kit::image::ImageError::Unsupported => {
+            format!("{}: only PNG and JPEG are read", path.display())
+        }
+        e => format!("{}: {e}", path.display()),
+    })?;
+    // a picture Kit decodes is premultiplied rows with no gap between them
+    Picture::from_premultiplied(image.width, image.height, &image.pixels)
         .ok_or_else(|| format!("{}: no pixels", path.display()))
 }
 
 /// What the lock screen of a session stands on, by the compositor's `settings` and the session's appearance (`dark`): a
 /// solid colour when one is set, else the appearance's picture (the dark one in a dark appearance when it is set), else
 /// the default picture `default` names for the appearance, else the drawn fallback. A picture that does not decode is
-/// passed over, and why is said on standard error.
+/// passed over, and why is said on standard error. It reads the pictures ([`decode`]): run it on Kit's I/O pool.
 pub fn for_session(
     settings: &cupertino_defaults::compositor::CompositorSettings,
     dark: bool,
@@ -937,7 +1003,12 @@ pub struct Stamp {
 }
 
 impl Stamp {
-    /// The file at `path` now; `None` when there is none.
+    /// The file at `path` now; `None` when there is none. It asks the file system: run it on Kit's I/O pool
+    /// (`cupertino_kit::task::io`), never on the UI thread.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "runs on the I/O pool (kit::task::io)"
+    )]
     pub fn of(path: &std::path::Path) -> Option<Stamp> {
         use std::os::unix::fs::MetadataExt;
         let meta = std::fs::metadata(path).ok()?;
@@ -970,19 +1041,19 @@ pub struct Pictures {
 pub enum Want {
     /// Show this.
     Ready(Source),
-    /// Read this file, as it is now, and hand it to [`Pictures::read`]; until then the screen shows what it showed.
+    /// Read this file, as it is now, on the I/O pool ([`decode`]) and hand it to [`Pictures::read`]; until then the screen
+    /// shows what it showed.
     Read(std::path::PathBuf, Stamp),
     /// It is being read.
     Reading,
 }
 
 impl Pictures {
-    /// The wallpaper at `path` (`None`: the user has none, the screen shows [`LOGIN_FALLBACK`]).
-    pub fn want(&mut self, path: Option<&std::path::Path>) -> Want {
-        let Some(path) = path else {
-            return Want::Ready(Source::Solid(LOGIN_FALLBACK));
-        };
-        let Some(stamp) = Stamp::of(path) else {
+    /// The wallpaper at `path` (`None`: the user has none) as the file is now: `stamp` is what [`Stamp::of`] said of it,
+    /// read on the I/O pool (`None`: there is no such file). Without either the screen shows [`LOGIN_FALLBACK`]. It
+    /// touches no file.
+    pub fn want(&mut self, path: Option<&std::path::Path>, stamp: Option<Stamp>) -> Want {
+        let (Some(path), Some(stamp)) = (path, stamp) else {
             return Want::Ready(Source::Solid(LOGIN_FALLBACK));
         };
         if let Some(i) = self

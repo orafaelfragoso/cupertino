@@ -1,16 +1,16 @@
-//! Authentication through PAM, off the thread that draws.
+//! Authentication through PAM, on Kit's I/O pool (`cupertino_kit::task::io`), never on the thread that draws.
 //!
 //! The service name is [`SERVICE`]; its policy is `/etc/pam.d/cupertino-login` (the README has the file). A fresh PAM
 //! transaction runs per attempt: `pam_authenticate`, then `pam_acct_mgmt` so that an expired or locked account does not
 //! unlock the screen. The messages PAM's modules print (a lockout from `pam_faillock`, a password about to expire) reach
-//! the screen as [`Event::Notice`].
+//! the screen through the attempt's `on_notice` while it runs.
 //!
 //! The password is zeroed when the attempt is done ([`Password`]), and the one copy this module cannot clear, the `CString`
 //! that pam-client2 drops once it has copied the answer into PAM's buffer, is zeroed by the process's allocator
 //! (`cupertino_login_ipc::zeroing::ZeroOnFree`); PAM clears its own copy.
 
 use std::ffi::{CStr, CString};
-use std::sync::mpsc::{channel, Sender};
+use std::time::Duration;
 
 use pam_client2::{Context, ConversationHandler, ErrorCode, Flag};
 
@@ -19,48 +19,10 @@ use crate::model::{AuthOutcome, Password};
 /// PAM service name of the lock screen.
 pub const SERVICE: &str = "cupertino-login";
 
-/// What the worker tells the screen.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Event {
-    /// Text a PAM module printed (`PAM_TEXT_INFO`, `PAM_ERROR_MSG`) while the attempt runs.
-    Notice(String),
-    /// The attempt is decided.
-    Outcome(AuthOutcome),
-}
-
-/// Runs attempts one after another on its own thread.
-pub struct Authenticator {
-    attempts: Sender<Password>,
-}
-
-impl Authenticator {
-    /// Start the worker for the account `login`. `on_event` runs on it: the notices of an attempt in the order PAM sent
-    /// them, then its outcome, for each attempt in turn.
-    pub fn spawn(
-        login: String,
-        on_event: impl Fn(Event) + Send + 'static,
-    ) -> std::io::Result<Authenticator> {
-        let (attempts, queue) = channel::<Password>();
-        std::thread::Builder::new()
-            .name("login-pam".into())
-            .spawn(move || {
-                // ends when the `Authenticator` is dropped
-                for password in queue {
-                    let outcome =
-                        authenticate(&login, password, &|text| on_event(Event::Notice(text)));
-                    on_event(Event::Outcome(outcome));
-                }
-            })?;
-        Ok(Authenticator { attempts })
-    }
-
-    /// Queue an attempt with `password`; it is zeroed when the attempt is done.
-    pub fn attempt(&self, password: Password) {
-        self.attempts
-            .send(password)
-            .expect("the worker lives as long as the authenticator");
-    }
-}
+/// How long an attempt should take on the I/O pool: PAM's own delay after a wrong password is a few seconds, and a
+/// module that asks a slow service (a directory, a fingerprint reader that times out) takes longer; an attempt past this
+/// is reported, never cut short.
+pub const ATTEMPT_DEADLINE: Duration = Duration::from_secs(60);
 
 /// Answers the password prompt with the attempt's password, refuses every other prompt and passes the modules'
 /// messages on.
@@ -99,8 +61,9 @@ impl ConversationHandler for PasswordConversation<'_> {
     }
 }
 
-/// One PAM transaction for `login` with `password`; `on_notice` gets the modules' messages.
-fn authenticate(login: &str, password: Password, on_notice: &dyn Fn(String)) -> AuthOutcome {
+/// One PAM transaction for `login` with `password`; `on_notice` gets the modules' messages, in the order PAM sent them.
+/// It waits for PAM (and its delay after a wrong password): run it on the I/O pool with [`ATTEMPT_DEADLINE`].
+pub fn authenticate(login: &str, password: Password, on_notice: &dyn Fn(String)) -> AuthOutcome {
     let mut context = match Context::new(
         SERVICE,
         Some(login),

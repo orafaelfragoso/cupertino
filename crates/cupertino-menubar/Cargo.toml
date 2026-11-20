@@ -31,9 +31,15 @@ x11rb = { version = "0.13", default-features = false }
 zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
+[dev-dependencies]
+cupertino-kit = { path = "../cupertino-kit", features = ["test"] }
+
 [[bin]]
 name = "cupertino-menubar"
 path = "src/main.rs"
 
 [[example]]
 name = "fake-login"
+
+[[example]]
+name = "menubar_capture"

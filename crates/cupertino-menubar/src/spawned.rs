@@ -2,8 +2,8 @@
 //! and outlived its owner would keep the connection, and the connection its executor and so the task, until the task
 //! ends, which a task that follows signals never does. So no task is detached: each belongs to a [`Spawned`] set its
 //! owner holds, and dropping the set cancels the tasks still running; the executor drops their futures when it runs
-//! next (the component's end closes its connections and runs their executors empty, `crate::component`). A task that
-//! ends leaves the set itself.
+//! next (once the component's runtime has ended, Kit closes its connections and runs their executors to the end,
+//! `cupertino_kit::bus`). A task that ends leaves the set itself.
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;

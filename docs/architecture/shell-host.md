@@ -783,6 +783,8 @@ pub enum Event {
     /// The appearance and display options a Kit program's theme follows (dark, Increase Contrast, Reduce
     /// Transparency, Reduce Motion, the steady caret): once at start and on every change.
     Appearance(SystemAppearance),
+    /// Caps Lock turned on or off on the component's keyboard (the password field's badge).
+    CapsLock(bool),
 }
 ```
 

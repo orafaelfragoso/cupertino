@@ -1560,21 +1560,13 @@ dependencies = [
 name = "cupertino-screenshot"
 version = "0.1.0"
 dependencies = [
- "async-channel",
- "async-io",
+ "cupertino-assets",
  "cupertino-defaults",
  "cupertino-diagnostic-events",
  "cupertino-geometry",
- "cupertino-keyboard",
  "cupertino-kit",
- "cupertino-protocols",
- "cupertino-shell-client",
- "cupertino-ui-wayland",
- "cupertino-wayland-client",
+ "cupertino-kit-shell",
  "rustix 1.1.6",
- "tiny-skia",
- "wayland-client",
- "wayland-protocols",
 ]
 
 [[package]]

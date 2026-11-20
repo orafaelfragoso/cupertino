@@ -3,18 +3,15 @@
 
 #![forbid(unsafe_code)]
 
-mod app;
-mod capture;
-mod deliver;
-
 use cupertino_diagnostic_events as diag;
+use cupertino_screenshot::shot::{self, Options};
 use std::process::ExitCode;
 
 const USAGE: &str = "usage: cupertino-screenshot --mode screen|selection|toolbar [--clipboard]";
 
 fn main() -> ExitCode {
     diag::init(diag::component!(), "screenshot", diag::Sink::UserStore);
-    let options = match app::Options::parse(std::env::args().skip(1)) {
+    let options = match Options::parse(std::env::args().skip(1)) {
         Ok(options) => options,
         Err(problem) => {
             diag::exit_error(&problem);
@@ -22,7 +19,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    match app::run(&options) {
+    match shot::run(options) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             diag::exit_error(&e);

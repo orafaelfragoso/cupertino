@@ -16,7 +16,6 @@
 //! defaults below are approximate except `remember-selection` (`save-selections` true).
 
 use std::fmt;
-use std::io;
 use std::path::{Path, PathBuf};
 
 use cupertino_geometry::Rect;
@@ -219,53 +218,10 @@ impl Settings {
         }
         out
     }
-
-    /// Read `path`. A missing file is the defaults; problems are returned with the settings.
-    pub fn load(path: &Path) -> io::Result<(Settings, Vec<Problem>)> {
-        match std::fs::read_to_string(path) {
-            Ok(text) => Ok(Self::parse(&text)),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok((Settings::default(), Vec::new())),
-            Err(e) => Err(e),
-        }
-    }
-
-    /// Write `path` atomically (a temporary file renamed over it), creating its directory.
-    pub fn store(&self, path: &Path) -> io::Result<()> {
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        let mut tmp = path.as_os_str().to_owned();
-        tmp.push(".tmp");
-        std::fs::write(&tmp, self.to_text())?;
-        std::fs::rename(&tmp, path)
-    }
 }
 
-/// The `XDG_<NAME>_DIR` assignments of a `user-dirs.dirs` file as `(NAME, path)`, `$HOME` expanded against `home`
-/// (xdg-user-dirs: `XDG_<NAME>_DIR="$HOME/<path>" or an absolute path). Comments, malformed lines and
-/// relative paths without `$HOME/ are skipped, as xdg-user-dirs does. The same parser lives in the file manager
-/// (`cupertino-files`); a shell process cannot depend on an application crate.
-pub fn parse_user_dirs(text: &str, home: &Path) -> Vec<(String, PathBuf)> {
-    text.lines()
-        .filter_map(|line| {
-            let (key, value) = line.trim().split_once('=')?;
-            let name = key.trim().strip_prefix("XDG_")?.strip_suffix("_DIR")?;
-            let value = value.trim().strip_prefix('"')?.strip_suffix('"')?;
-            let path = if value == "$HOME" {
-                home.to_path_buf()
-            } else if let Some(rest) = value.strip_prefix("$HOME/") {
-                home.join(rest)
-            } else if value.starts_with('/') {
-                PathBuf::from(value)
-            } else {
-                return None;
-            };
-            Some((name.to_string(), path))
-        })
-        .collect()
-}
-
-/// The user directory `key` (`DESKTOP`, `DOCUMENTS`, `PICTURES`): the last assignment, else the xdg-user-dirs default
+/// The user directory `key` (`DESKTOP`, `DOCUMENTS`, `PICTURES`) among the assignments of `user-dirs.dirs`
+/// (`cupertino_defaults::user_dirs`): the last assignment, else the xdg-user-dirs default
 /// `$HOME/Desktop`, `$HOME/Documents`, `$HOME/Pictures` (`user-dirs.defaults`).
 fn user_dir(key: &str, home: &Path, user_dirs: &[(String, PathBuf)]) -> PathBuf {
     if let Some((_, path)) = user_dirs.iter().rev().find(|(k, _)| k == key) {

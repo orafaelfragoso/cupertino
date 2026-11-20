@@ -11,9 +11,8 @@
 
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_kit::core::{next_resource_id, Window};
-use tiny_skia::Pixmap;
+use cupertino_kit::render::ImageResource;
 
-use crate::image;
 use crate::pick::PickWindow;
 use crate::session::{Key, Outcome, Session, Style, Target};
 use crate::settings::{Location, Mode, Settings};
@@ -39,12 +38,13 @@ pub enum Effect {
     /// Write [`Controller::settings`] to the settings file.
     StoreSettings,
     /// Copy `target`, with the pointer when `pointer`, once the tool's surfaces are gone; answer with
-    /// [`Controller::shots`].
+    /// [`Controller::shots`], the thumbnail's picture made as [`Controller::thumbnail_pixels`] says.
     Capture { target: Target, pointer: bool },
     /// Write [`Controller::images`] as files.
     Write,
-    /// Offer the first of [`Controller::images`] on the clipboard while the clipboard pixel has the keyboard; answer
-    /// with [`Controller::offered`] and, once another selection replaced it, [`Controller::clipboard_done`].
+    /// Offer the first of [`Controller::images`] on the clipboard: the clipboard pixel has the keyboard, which the
+    /// compositor asks of the client that sets it. Answer with [`Controller::offered`] and, once another selection
+    /// replaced it, [`Controller::clipboard_done`].
     Offer,
     /// End the process: cancelled or delivered, or the error.
     Exit(Result<(), String>),
@@ -89,8 +89,10 @@ pub struct Controller {
     menu: bool,
     /// Control was held at the last press or release on the toolbar: the Capture button then sends to the clipboard.
     control: bool,
-    images: Vec<Pixmap>,
+    images: Vec<ImageResource>,
     to_clipboard: bool,
+    /// The offer was asked for ([`Effect::Offer`]).
+    offering: bool,
     thumbnail: Option<Shown>,
 }
 
@@ -123,6 +125,7 @@ impl Controller {
             control: false,
             images: Vec::new(),
             to_clipboard: false,
+            offering: false,
             thumbnail: None,
         };
         let effects = if controller.session.is_none() {
@@ -146,7 +149,7 @@ impl Controller {
     }
 
     /// The captured images, upright, one per output for a capture of the whole screen.
-    pub fn images(&self) -> &[Pixmap] {
+    pub fn images(&self) -> &[ImageResource] {
         &self.images
     }
 
@@ -212,6 +215,7 @@ impl Controller {
     pub fn input(&mut self, input: Input, now: f64) -> Vec<Effect> {
         match input {
             Input::Closed => return self.fail("the server closed a screenshot surface".into()),
+            Input::ClipboardFocused => return self.clipboard_focused(),
             Input::ArrowShown => return self.left(),
             Input::Thumbnail(input) => return self.thumbnail_input(input, now),
             _ => {}
@@ -266,7 +270,9 @@ impl Controller {
                 effects.push(Effect::StoreSettings);
                 None
             }
-            Input::Closed | Input::ArrowShown | Input::Thumbnail(_) => None,
+            Input::Closed | Input::ArrowShown | Input::Thumbnail(_) | Input::ClipboardFocused => {
+                None
+            }
         };
         if let Some(outcome) = outcome {
             effects.extend(self.leave(outcome, now));
@@ -307,8 +313,43 @@ impl Controller {
         }
     }
 
-    /// The copy of the capture arrived, its images upright; on the first output for the thumbnail.
-    pub fn shots(&mut self, shots: Result<Vec<Pixmap>, String>, now: f64) -> Vec<Effect> {
+    /// The size in pixels of the thumbnail's picture of a capture whose first image is `image` pixels large: its size
+    /// in points at [`THUMBNAIL_DENSITY`], never larger than the image.
+    pub fn thumbnail_pixels(&self, image: (u32, u32)) -> (u32, u32) {
+        let (w, h) = self.thumbnail_points(image);
+        (
+            ((w * THUMBNAIL_DENSITY).round() as u32).clamp(1, image.0.max(1)),
+            ((h * THUMBNAIL_DENSITY).round() as u32).clamp(1, image.1.max(1)),
+        )
+    }
+
+    /// The thumbnail's size in points for a first image of `image` pixels, on the first output.
+    fn thumbnail_points(&self, image: (u32, u32)) -> (f64, f64) {
+        let screen = self.screens.first().copied().unwrap_or_default();
+        thumbnail::size(
+            (f64::from(image.0), f64::from(image.1)),
+            (screen.width(), screen.height()),
+        )
+    }
+
+    /// Whether the capture shows a thumbnail, so its picture is wanted with [`Controller::shots`].
+    pub fn wants_thumbnail(&self) -> bool {
+        !self.to_clipboard && self.settings.show_thumbnail
+    }
+
+    /// The thumbnail window's size in points (the picture and the room for its shadow), while it is shown.
+    pub fn thumbnail_size(&self) -> Option<Size> {
+        self.thumbnail.as_ref().map(|shown| shown.size)
+    }
+
+    /// The copy of the capture arrived, its images upright, with the thumbnail's picture of the first ([`Effect::Capture`]);
+    /// `None` when it could not be made, and then the capture is written without a thumbnail.
+    pub fn shots(
+        &mut self,
+        shots: Result<Vec<ImageResource>, String>,
+        small: Option<ImageResource>,
+        now: f64,
+    ) -> Vec<Effect> {
         if self.phase != Phase::Capturing {
             return Vec::new();
         }
@@ -320,35 +361,20 @@ impl Controller {
         self.images = images;
         self.phase = Phase::Delivering;
         if self.to_clipboard {
-            return vec![Effect::Offer];
+            // the offer is made once the clipboard pixel has the keyboard
+            return Vec::new();
         }
-        if !self.settings.show_thumbnail {
-            self.phase = Phase::Done;
-            return vec![Effect::Write, Effect::Exit(Ok(()))];
-        }
-        let first = &self.images[0];
-        let screen = self.screens.first().copied().unwrap_or_default();
-        let (w, h) = thumbnail::size(
-            (f64::from(first.width()), f64::from(first.height())),
-            (screen.width(), screen.height()),
-        );
-        let pixels = (
-            ((w * THUMBNAIL_DENSITY).round() as u32).clamp(1, first.width()),
-            ((h * THUMBNAIL_DENSITY).round() as u32).clamp(1, first.height()),
-        );
-        let Some(small) = image::downscale(first, pixels.0, pixels.1) else {
+        let small = small.filter(|_| self.settings.show_thumbnail);
+        let Some(small) = small else {
             self.phase = Phase::Done;
             return vec![Effect::Write, Effect::Exit(Ok(()))];
         };
+        let first = &self.images[0];
+        let (w, h) = self.thumbnail_points((first.width, first.height));
         let outset = THUMBNAIL_SHADOW_OUTSET;
         self.thumbnail = Some(Shown {
             model: Thumbnail::new(w, now),
-            image: ThumbnailImage::new(
-                next_resource_id(),
-                small.width(),
-                small.height(),
-                small.data().to_vec(),
-            ),
+            image: ThumbnailImage::new(next_resource_id(), small),
             rect: Rect::new(outset, outset, w, h),
             size: Size::new((w + 2.0 * outset).ceil(), (h + 2.0 * outset).ceil()),
             written: false,
@@ -394,6 +420,15 @@ impl Controller {
             effects.push(Effect::Exit(Ok(())));
         }
         effects
+    }
+
+    /// The clipboard pixel has the keyboard: the offer can be made, once.
+    fn clipboard_focused(&mut self) -> Vec<Effect> {
+        if self.phase == Phase::Delivering && self.to_clipboard && !self.offering {
+            self.offering = true;
+            return vec![Effect::Offer];
+        }
+        Vec::new()
     }
 
     /// The offer is on the clipboard: the pixel that held the keyboard for it goes.

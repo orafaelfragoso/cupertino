@@ -59,7 +59,7 @@ the [decision log](#decision-log), never changed silently in a task.
 | D10 | Privileged interface stays out of the shell host, in small processes: `cupertino-login` (login screen, lock screen), `cupertino-prompts` (authentication, keyring, and the consent prompts for desktop control, screenshots and global shortcuts) and `cupertino-screenshot` (everything that shows the screen's contents: capture, the colour picker, the screen-sharing picker). | Roles are bound to connections because a process must not gain another's privilege; inside one process every component could use every role. Screen capture, consent and password entry are kept away from the components that handle untrusted content (notification bodies and images, tray menus, application names), and password entry away from window titles and screen contents. | Three processes, two of them always running; `cupertino-prompts` replaces two processes (`cupertino-polkit-agent`, `cupertino-keyring-prompter`), so the count does not grow. | Plan (narrows the owner's one-process decision for these three) |
 | D11 | Processes with no interface of their own are services: the portal backend (`cupertino-portal`), the desktop-control bridge (`cupertino-control`), and the audio service (D12). They do not use Kit. | A service has no reason to load a toolkit. | The portal asks the shell host's dialogs component (file and application chooser), `cupertino-prompts` (consent) or `cupertino-screenshot` (colour picker, sharing picker) over private bus interfaces (W6.11). | Plan |
 | D12 | `cupertino-audiod` owns the mixer and the default output and serves `org.cupertino.Audio1`, started by bus activation. Nothing else uses the mixer. | Three processes drive the mixer today with nothing coordinating them. | Control panel, on-screen displays and Settings call it. | Owner (service), plan (form) |
-| D13 | Log out, restart, shut down and sleep have one entry point: the server's `org.cupertino.Session1`, which quits applications first and then asks `cupertino-sessiond` (log out) or logind (power). The login screen, which has no user session, asks `cupertino-sessiond`. | One place for open applications, inhibitors and confirmation. | No other program calls logind's `Manager` for these; `cupertino-prompts` keeps the logind call that finds its own session. Quitting applications moves from `cupertino-login` into `Session1` (W5.4); `org.cupertino.Login1` keeps only `Lock`, and its log-out, power-key and request methods move to `Session1`, which asks the session agent for the panels (W6.13). | Plan |
+| D13 | Log out, restart, shut down and sleep have one entry point: the server's `org.cupertino.Session1`, which quits applications first (log out, restart, shut down; sleep quits nothing) and then asks `cupertino-sessiond` (log out) or logind (power). The login screen, which has no user session, asks `cupertino-sessiond`. | One place for open applications, inhibitors and confirmation. | No other program calls logind's `Manager` for these; `cupertino-prompts` keeps the logind call that finds its own session. Quitting applications moves from `cupertino-login` into `Session1` (W5.4); `org.cupertino.Login1` keeps only `Lock`, and its log-out, power-key and request methods move to `Session1`, which asks the session agent for the panels (W6.13). | Plan |
 | D14 | Display configuration has one entry point for programs: the server's `org.cupertino.Displays1`. | Settings opens raw output-management connections today; programs never speak the window system's protocols directly (D1). | Server side in W5.4, Settings in W7.2. | Plan |
 | D15 | Always running in a user session: server, shell host, `cupertino-login` (the lock screen must appear at once), `cupertino-prompts` (the authentication agent must stay registered), `cupertino-portal`, `cupertino-control`. Started on demand: `cupertino-screenshot`; `cupertino-audiod` by bus activation at first use, then kept. | Today the server starts nine shell processes and four built-in ones in every session. | Six processes always running instead of fourteen, seven once sound is used. | Plan |
 
@@ -71,7 +71,7 @@ the [decision log](#decision-log), never changed silently in a task.
 | D17 | Hangs. A component's UI loop records when it leaves its wait and clears it when it returns; the host checks every 0.5 s, only while the component is busy, after a 10 s start-up grace. Busy for 2 s: the host reports it unresponsive and the server releases its grabs, dismisses its transient surfaces and stops sending it input. Back in its wait before that, it is reported responsive and gets input again. Busy for 10 s: the component is lost; the host shuts its sockets down (`shutdown(2)`; descriptors are closed only after the thread has ended, so none is reused under it), the server starts that component alone in a separate host process (D18), and the shell host restarts itself at the next quiet moment (no input for 2 s) to reclaim the lost thread. The component stays in its own host for the rest of the session or until `cupertino shell restart <component>`; the server gives a component's roles to one host at a time, so two instances never run. | A thread cannot be killed; a separate process can. One hung component never stops the others or the compositor. | Host protocol events in W4.9; server in W5.2; host in W6.1. | Plan |
 | D18 | Any component can run in a host process of its own (`cupertino-shell --only <component>`). The server uses this for a component lost to a hang (D17); after three host crashes within 60 s it starts every component this way for the rest of the session, so a crash Rust cannot contain (abort, stack overflow, out of memory, driver fault) then costs one component, not the shell; developers use it to try one changed component. Shipped configuration never sets it. | One mechanism for isolation, recovery and development. | The server accepts several host connections; each component's roles go to one of them. | Plan |
 | D19 | Holds. When a component's connection drops, its persistent surfaces (menu bar, dock, desktop items) keep their last picture and their reserved screen space, without input, until the component is back or declared stopped. Its transient surfaces (launcher panel, menus, overview, on-screen bubbles, dialogs) are dismissed at once and focus returns to the window that had it; an overview transition settles at the windows' resting places. | No flash and no window reflow when a component restarts; nothing frozen on screen that looks usable. | Server side in W5.2. | Plan |
-| D20 | Identity. Each component announces its bus unique name over its own Wayland connection; the server checks it belongs to the host and then checks bus callers per component, not per process. A component authorises a bus caller the same way: `cupertino-peer` resolves the caller's connection to a host process (the shared one or one of D18) and to the component whose well-known names that connection owns, so a component in a host of its own keeps its rights. No check compares process relations. Component sockets are close-on-exec. | Checks like "only the session agent may" and "only the launcher may" must keep meaning one component. | `cupertino-peer` resolves a caller to a component (W5.2). | Plan |
+| D20 | Identity. Each component proves its bus connection over its own Wayland connection: the server sends a nonce there, the component returns it through `Session1.AnnounceComponent`, and the server records that unique name as the component's (`shell-host.md`, decision 13). The server checks bus callers per component, not per process, and answers which component a unique name is (`ComponentOf`); a component authorises a bus caller the same way, through `cupertino-peer`, so a component in a host of its own (D18) keeps its rights. No check compares process relations. Component sockets are close-on-exec. | Checks like "only the session agent may" and "only the launcher may" must keep meaning one component. | `cupertino-peer` resolves a caller to a component (W5.2). | Plan |
 | D21 | The notification list survives a restart of the notifications component, in a file in `$XDG_RUNTIME_DIR` (mode 0600, cleared at log out). Transient notifications are not written. Every component's README lists what else a restart loses. | Losing notifications on a crash is visible data loss; keeping them on disk across sessions is a privacy decision not taken here. | One file written on change, off the UI thread. | Plan |
 
 ### Structure, tests and outside code
@@ -82,7 +82,7 @@ the [decision log](#decision-log), never changed silently in a task.
 | D23 | Above `ui`, the toolkit is reached only through `cupertino-kit`, and the shell's extension of it only through `cupertino-kit-shell` (see [Facades](#facades)). | D1 made checkable. | Kit gains what programs use directly today, and nothing on the must-not-expose list (W4.7). | Owner |
 | D24 | A merge keeps the name of the crate that absorbs the others; the only new names are the ones in the [crate map](#crate-map). No crate is renamed; where a new crate takes over an old one's role (`cupertino-polkit-agent` into `cupertino-prompts`), the map lists the old one as merged into it. | Names are how agents and people find things. | | Plan |
 | D25 | The server becomes four crates: `cupertino-server-backend`, `cupertino-server-render`, `cupertino-server-input` and `cupertino-server`. Direction: `-backend` (display devices, session, frame scheduling and timing, GPU reset) and `-input` depend on no other server crate, `-render` may depend on `-backend`, and `cupertino-server` on all three. A call against that direction goes through a trait the lower crate defines and `cupertino-server` implements; code that needs Smithay's handler pattern is generic over the server's state type bounded by those traits, as Smithay's own modules are. Smithay handler implementations for the server's state stay in `cupertino-server`. The groups come from the server's measured module graph (W5.6 step 0); a module that refers to a group above it stays in `cupertino-server`. | 81k lines in 82 modules around one state struct. | A serial chain beside the shell work (W5.6 to W5.8). | Plan |
-| D26 | Components never depend on each other's crates; inside the host they talk through the host's message bus (typed, serialisable messages in `cupertino-kit-shell`, no blocking replies); a component in a host of its own (D18) is on the same bus through a socket the shared host serves in `$XDG_RUNTIME_DIR`; other processes are reached through the compositor's protocols or the session bus. | A component can be restarted, stopped or run alone. | | Plan |
+| D26 | Components never depend on each other's crates; inside the host they talk through the host's message bus (typed, serialisable messages in `cupertino-kit-shell`, no blocking replies); a component in a host of its own (D18) is on the same bus through a socket pair the server makes, passing one end to each host (`shell-host.md`, decision 12); other processes are reached through the compositor's protocols or the session bus. | A component can be restarted, stopped or run alone. | | Plan |
 | D27 | `cupertino-defaults` stays one crate in the `system` layer. | Its coupling is to the settings schema, which a split would not change. | | Plan |
 | D28 | Licences are not a constraint on this work. Every licence check that could refuse a merge of this plan is removed in W0.2 (the toolkit's MPL closure, the GPL-dependency check); the check that each crate declares a licence stays. Licences are redefined later. | Owner. | Merges may cross today's licence boundaries; declared licences are reconciled when they are redefined. | Owner |
 | D29 | Tests exercise public boundaries only. At the end no source file holds test code: every test is in a crate's `tests/` and uses only its public API, or is a program test (whole processes: headless sessions). Tests of internals are removed in the crate's `T` task; one that guarded a behaviour no other test covers is replaced by a public or program test before it goes. No item is made more visible and no feature is added to keep a test; Kit's `test` feature, for program tests, is the only test feature. Frame timings, instruction counts and per-process PSS (profiled by hand) are part of the acceptance bar. Behaviour this plan adds (restarts, hangs, holds, transactions, deadlines) is proven by program tests. | Behaviour and performance are what count; tests of internals are what make refactoring expensive, and behaviour tests are the refactor's safety net. | A `T` task per crate in every wave; `cupertino-session-tests` holds tests that start programs from more than one crate. | Owner |
@@ -518,7 +518,8 @@ controlcenter decorations files glass menubar notifications polkit-agent server 
 login osd portal screenshot`. **After** W1.3.
 
 - [x] (50a18e5bd) The tokens (`ThemeTokens`, `ColorRole`, `StateVariant`, appearance) are a module of `cupertino-theme`. The
-      thread-local activation value of `cupertino-ui-theme` moves to `cupertino-ui-core`, which owns runtime state.
+      window activation value is a `ColorTokens` field of `cupertino_theme::ui`, not a thread-local (decision log,
+      2026-11-17).
 - [x] (50a18e5bd) `cupertino-theme` parses a specification it is given; `cupertino-assets` finds the files
       (`CUPERTINO_THEME_DIR`, `CUPERTINO_SPEC_DIR`, the installed path) and offers theme loading that composes both;
       callers of `Theme::load` and `Theme::from_dir` use it.
@@ -539,8 +540,8 @@ login osd portal screenshot`. **After** W1.3.
 **Owns** the layer line of `capture`; new `cupertino-session-tests`, the home of tests that start programs from more
 than one crate. **Touches** `menubar server` (dev-dependencies), `contracts.yaml`. **After** W0.close.
 
-- [x] (44782bc91) `capture` and `cupertino-session-tests` declare `layer = "testing"`; nothing has a normal or build dependency on
-      them.
+- [x] (44782bc91) `cupertino-session-tests` declares `layer = "testing"` (so did `capture` until W4.11 made it Kit's
+      `test` feature); nothing has a normal or build dependency on it.
 - [x] (44782bc91) Any test that starts programs from more than one crate lives in `cupertino-session-tests`;
       `cupertino-menubar` no longer depends on `cupertino-files` or `cupertino-settings`; `cupertino-server`'s tests start
       no other crate's program.
@@ -633,7 +634,7 @@ seat`, as in W1.T.
 
 #### W2.close (lead)
 
-- [x] `ENFORCED` gains `Graphics`, `Models`; `Platform` joins when W5.6 lands. Docs and gates as in W1.close.
+- [x] (`8d604ca56`) `ENFORCED` gains `Graphics`, `Models`; `Platform` joins when W5.6 lands. Docs and gates as in W1.close.
 
 ### Wave 3: protocol, transport
 
@@ -667,7 +668,7 @@ shell-client ui-menus ui-wayland`. **After** W3.1.
 
 #### W3.close (lead)
 
-- [x] `ENFORCED` gains `Protocol`, `Transport`. Docs and gates as in W1.close.
+- [x] (`b5ba20b7d`) `ENFORCED` gains `Protocol`, `Transport`. Docs and gates as in W1.close.
 
 ### Wave 4: render and the toolkit
 
@@ -748,7 +749,7 @@ ui-wayland`. **After** W4.2.
 **Owns** `ui-files`; `files`; `kit` (the `files` list of `lib.rs`, the README's module table); `layers` (`FACADES`);
 the `ui` row of `docs/src/architecture.md`. **Touches** the manifests of `files kit`. **After** W4.7, W4.11.
 
-The design is "File views (proposal)" in `crates/cupertino-ui-controls/README.md`, approved in the
+The design is in `crates/cupertino-ui-files/README.md` (first drafted as "File views (proposal)" in `crates/cupertino-ui-controls/README.md`), approved in the
 [decision log](#decision-log). No step changes a behaviour or a look, so none has a review sheet. The proof is the same
 pixels (`files_capture`'s sheets written with `--out` before and after each step, at 1× and 2×, light and dark, are the
 same files) and the views' tests in `crates/cupertino-ui-files/tests/`, driven through the headless driver. Each step
@@ -775,7 +776,7 @@ a behaviour is W4.12.
        `tests/file-list.rs`.
 6. [x] (fe4fa305d) **Columns** (no behaviour change, M). The column widgets and assembly are `FileColumns<M>`; the chain, its
        layout and its listings stay in Files. Done when: as 4, `tests/file-columns.rs`;
-       `rg 'Session|BrowserWindow' crates/cupertino-ui-files/src` finds nothing.
+       `rg -w 'Session|BrowserWindow' crates/cupertino-ui-files/src` finds nothing.
 
 From step 3 `cupertino-files` depends on `cupertino-kit` whether or not its `app` feature is on; the feature stays
 until W7.1.
@@ -819,8 +820,8 @@ W4.7 step 1 (its approved types).
 `ui-controls` (`filepicker::places`); `defaults` (`user_dirs`); `portal` (where `dialog.rs` takes its places from,
 `pictures` in `screenshot.rs`). **Touches** the manifests of `ui-files files kit portal`. **After** W4.8.
 
-Every behaviour change of the file family is here, and none is in W4.8. The design is "File views (proposal)" in
-`crates/cupertino-ui-controls/README.md` (places and user directories, slow work, a folder that does not open, mounts
+Every behaviour change of the file family is here, and none is in W4.8. The design is in
+`crates/cupertino-ui-files/README.md` (places and user directories, slow work, a folder that does not open, mounts
 that do not answer, transfers). The family starts no thread and touches no file on the UI thread. Each step is one
 commit and ends as W4.8's do.
 

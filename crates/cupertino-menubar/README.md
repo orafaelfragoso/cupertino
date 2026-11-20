@@ -105,7 +105,7 @@ and the space it reserves (the persistent `menu_bar` surface, D19), so windows d
 draws over it. Kept across a restart: `menubar.conf` and the time of the last Clear Menu (files, read again), the
 do-not-disturb state and which panel is open where (retained on the host bus, so they arrive again as the component
 follows its topics), the server's feed of the active application and its windows (sent again to the new bars), the
-radios, the battery and the session agent's properties (read again). It loses:
+radios and the battery (read again) and the session agent's entries (retained on the host bus). It loses:
 
 - any open menu, title focus and a Help search with its text;
 - the Wi-Fi join prompt and the passphrase being typed (wiped from memory), and a join under way;
@@ -300,7 +300,7 @@ executors until every task has ended (at most 0.5 s), since the loop that ran th
   token, through `cupertino_apps::launch` like Settings… and the dock. A document no installed application opens goes to
   `xdg-open` without a token, as the dock's folders do. An entry with `Terminal=true` is not started (the bar has no
   terminal). Clear Menu stores the time and hides what was used until then; problems are reported on standard error.
-- **Session menu.** The system menu's session entries (`SessionAction`) are not D-Bus calls of the bar: the session agent answers only the server, so the bar sends `cupertino_menu_bar_v1.session_action` and the server calls the agent. The bar still reads the agent's `Locked`, `UserName` and `Capabilities` properties itself (an item whose capability is not reported is disabled; a read of the property that fails keeps the items as the previous read gave them, every one offered before any read, and the agent refuses what is not allowed), but only from the owner of `org.cupertino.Login1` that is the process the server names in `cupertino_menu_bar_v1.session_agent` (checked with `cupertino-peer`; any owner in a development run); a client that took the name first is not read, and until the server names a process nothing is. Without a session agent Lock Screen still works: the server locks without the agent while it has named a login process. A system menu that is open when the agent goes away closes.
+- **Session menu.** The system menu's session entries (`SessionAction`) are not D-Bus calls of the bar: the session agent answers only the server, so the bar sends `cupertino_menu_bar_v1.session_action` and the server calls the agent. Which entries work and the name on Log Out come from the agent's `SessionMenu` on the host bus (retained, from the `agent` component alone; `component::Model::published`): an entry it turns off is disabled, and the agent and logind still refuse what is not allowed. Without it (the agent not started yet, or given up by the host) the menu has no session entries but Lock Screen, which works through the server's lock screen. A system menu that is open when the host gives the agent up closes.
 - **Extras (`extras_bus`).** Wi-Fi, battery and Bluetooth read the system bus; Wi-Fi and Bluetooth through `cupertino-radios`, which finds the Cupertino daemons, else NetworkManager and BlueZ, as Settings and the control panel do, on Kit's I/O pool so the bar never waits for a service: one reading of a radio is under way at a time and the newest request meanwhile is kept, the task waits 150 ms for a reading it started and otherwise takes it when it ends, and a service still silent after 3 s hides its item while the other items are read as before. A signal of a radio's service reads that radio alone, and a Bluetooth device's signal strength reads nothing. On NetworkManager the bar reads the radio and its device; the networks in range are read when those differ from what the bar shows, when the Wi-Fi menu opens, once more 4 s after a scan was asked for, and with every change for 30 s after that. The Focus item shows the do-not-disturb state
   and its durations that the notifications component publishes on the host bus (`DoNotDisturbChanged`), and its rows
   publish `SetDoNotDisturb`. The task reads the radios and the battery again after any signal on those objects, when a
@@ -308,11 +308,8 @@ executors until every task has ended (at most 0.5 s), since the loop that ran th
   no device, hides its item. Any other failure hides it too and is reported on stderr once per reason. Without a system bus
   only the Focus item can show. The order next to the control panel is Wi-Fi, battery, Bluetooth, Focus, then the status
   notifier items. The task's queue is bounded (`QUEUE`, 16): any peer can send the component signals, so a refresh is queued
-  only when none waits (the read a waiting refresh causes starts after the new signal, so it sees what it announced), the
-  session agent is a value the next read takes and never queued or lost, and an action that finds the queue full (the task
-  stuck on a service that does not answer) is dropped and reported on stderr instead of queued without bound. The session
-  agent's properties are read from `org.cupertino.Login1` here until the session agent publishes `SessionMenu` on the host
-  bus, which the component then takes instead (`component::Model::published`).
+  only when none waits (the read a waiting refresh causes starts after the new signal, so it sees what it announced), and an action that finds the queue full (the task
+  stuck on a service that does not answer) is dropped and reported on stderr instead of queued without bound.
   - Wi-Fi: a `Wi-Fi` switch row, then "Known Network(s)" and "Other Network(s)", each by name. A saved, open or OWE network is
     joined without a passphrase. The bar has no passphrase prompt, so other networks are listed disabled.
   - Battery: "Battery N%", "Power Source: Battery / Power Adapter", and "Charging" while charging (rows approximate).

@@ -22,7 +22,6 @@ use crate::extras::Extras;
 use crate::extras_bus::ExtrasBus;
 use crate::feed::{status_icon_px, StatusState, X11Query};
 use crate::icons::{Loader, Pixels, LOAD_DEADLINE};
-use crate::layout::SlotKey;
 use crate::recent::RecentSources;
 use crate::tone::Backdrop as Wallpaper;
 use crate::view::{self, PromptPhase};
@@ -199,9 +198,6 @@ impl Model {
         };
         let system = system.clone().map_err(zbus::Error::Failure);
         let (extras, events) = ExtrasBus::start(session.clone(), std::future::ready(system));
-        if let Err(e) = extras.session_agent(self.services.agent) {
-            return fail(e);
-        }
         self.services.extras = Some(extras);
         let listening = listen(&events, Message::Extras);
         self.services.extras_events = Some(events);
@@ -297,8 +293,6 @@ impl Model {
             Some(events) => vec![listen(events, Message::Extras)],
             None => Vec::new(),
         };
-        // the session agent went away: the system menu's session items would do nothing, so it closes
-        let agent_gone = self.shared.extras.loses_session(&extras);
         let (list_open, scanning) = (
             self.shared.extras.wifi_list_open,
             self.shared.extras.wifi_scanning,
@@ -315,13 +309,6 @@ impl Model {
             .is_some_and(|w| !w.networks.is_empty());
         self.shared.extras.wifi_scanning = scanning && !listed;
         self.follow_join();
-        if agent_gone {
-            for i in 0..self.bars.len() {
-                if let Some(outcome) = self.bars[i].controller.close_slot(&SlotKey::System) {
-                    commands.extend(self.apply(i, outcome));
-                }
-            }
-        }
         commands.extend(self.refresh());
         commands
     }

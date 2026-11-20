@@ -1,5 +1,6 @@
 //! `org.cupertino.Session1` on the session bus: log out, restart, shut down and sleep (D13), quitting the applications
-//! before the first three, which the session agent (`cupertino-login`) asks for once the person confirmed, and the
+//! before the first three, which the session agent (the shell host's `agent` component) asks for once the person
+//! confirmed, the switch to the login window, and the
 //! session settings the server alone writes (the appearance and `accessibility.conf`), which the settings application
 //! sets here.
 //!
@@ -10,8 +11,9 @@
 //! `RetrySessionAction`, `CancelSessionAction` or `ForceQuitApplication`. Sleep quits nothing.
 //!
 //! Every mutating method checks its caller ([`crate::caller`]): the process behind the connection, from the bus
-//! daemon's `ProcessFD`. `QuitNextApplication`, `QuitStatus`, `ForceQuitApplication`, `OpenApplications` and `PendingInterrupt` are for the session agent the server
-//! supervises; `SetAppearance` and `SetAccessibility` for the settings application (a known program under `/usr`) and
+//! daemon's `ProcessFD`. `QuitNextApplication`, `QuitStatus`, `ForceQuitApplication`, `OpenApplications` and `PendingInterrupt` are for the session agent, known
+//! by the connection the call comes on: the bus name the server accepted for the `agent` component (D20), never by its
+//! process, which runs other components too; `SetAppearance` and `SetAccessibility` for the settings application (a known program under `/usr`) and
 //! that agent; `ListShellProcesses` and `RestartShellProcess` for any unsandboxed process of the user the server runs as
 //! (the `cupertino shell` commands), by the user id the bus daemon gives for the connection; `StartScreenshot` for the
 //! portal the server started, known by its process ([`Cupertino::program_of`]). A caller without a process descriptor, a Flatpak or a Snap is refused, with an error name of its own
@@ -22,6 +24,7 @@
 //! |---|---|
 //! | `LogOut`, `Restart`, `ShutDown` | quit the applications one at a time (the most recently used first, 45 s each, the next 0.1 s after one quits), then end the session through `cupertino-sessiond` (`LoginManager1.LogOut`, logind's `TerminateSession` when it does not answer) or ask logind to `Reboot` or `PowerOff`. Refused (`Failed`) while the session is locked |
 //! | `Sleep` | logind's `Suspend` at once: no application quits |
+//! | `SwitchToLoginWindow` | lock the session, then once the lock screen covers it ask `cupertino-sessiond` to give the console to the login screen (`LoginManager1.SwitchToLoginWindow` on the system bus, off the compositor's thread); a session already locked switches at once. For the settings application and the session agent |
 //! | `OpenApplications -> as` | the identities of the applications that have toplevels, in the order a log out would quit them: what the session agent saves for "Open my windows again" before it asks for the log out. Only the session agent may call it |
 //! | `PendingInterrupt -> (b pending, s action, s app_id, s reason)` | whether a quit sequence waits on an interrupt (the one signal of `QuitInterrupted` is sent once): `pending`, the interrupted action's method name (`LogOut`, `Restart` or `ShutDown`), the application and its `QuitStatus`; all empty and false otherwise. A session agent that restarted, or adopts an interrupt it did not start, shows the panel from it. Only the session agent may call it |
 //! | `QuitInterrupted(s app_id, s reason)` signal | an application did not quit within 45 s, with its `QuitStatus` as the reason; the sequence waits for an answer |
@@ -49,8 +52,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use crate::authorization::ShellRole;
-use crate::caller::{Caller, Denial, Need};
+use crate::caller::{Asker, Caller, Denial, Need};
 use crate::config::BuiltIn;
 use crate::state::Cupertino;
 use crate::supervisor::{ProcessInfo, RestartError};
@@ -143,6 +145,10 @@ pub struct Quit {
     pub(crate) properties: Option<Arc<Mutex<SessionSettings>>>,
     /// The connection that owns [`BUS_NAME`] while the bus thread serves it.
     pub(crate) connection: SessionConnection,
+    /// The calls on the session agent waiting to go out on that connection ([`crate::session_agent`]).
+    pub(crate) agent_calls: Option<crate::session_agent::AgentCalls>,
+    /// A switch to the login window waits for the lock screen to cover the session.
+    pub(crate) switch_pending: bool,
 }
 
 /// The connection that owns [`BUS_NAME`], shared with the bus thread: `None` while the name is not served. The
@@ -234,20 +240,16 @@ pub enum Reject {
 
 /// A call that arrived on the bus, with its caller and where its answer goes.
 pub enum Call {
-    QuitNext(Caller, async_channel::Sender<Result<(String, u32), Reject>>),
+    QuitNext(Asker, async_channel::Sender<Result<(String, u32), Reject>>),
     /// The application whose quit status is asked.
-    QuitStatus(
-        String,
-        Caller,
-        async_channel::Sender<Result<String, Reject>>,
-    ),
+    QuitStatus(String, Asker, async_channel::Sender<Result<String, Reject>>),
     /// The application to force quit.
-    ForceQuit(String, Caller, async_channel::Sender<Result<u32, Reject>>),
-    SetAppearance(String, Caller, async_channel::Sender<Result<(), Reject>>),
+    ForceQuit(String, Asker, async_channel::Sender<Result<u32, Reject>>),
+    SetAppearance(String, Asker, async_channel::Sender<Result<(), Reject>>),
     SetAccessibility(
         String,
         String,
-        Caller,
+        Asker,
         async_channel::Sender<Result<(), Reject>>,
     ),
     /// The caller and the user id the bus gave for its connection.
@@ -275,22 +277,24 @@ pub enum Call {
     /// PIDs and start ticks of currently connected shell host processes (D20).
     ShellHosts(async_channel::Sender<Result<Vec<(u32, u64)>, Reject>>),
     /// The identities of the applications with toplevels, in quit order (`OpenApplications`).
-    OpenApplications(Caller, async_channel::Sender<Result<Vec<String>, Reject>>),
+    OpenApplications(Asker, async_channel::Sender<Result<Vec<String>, Reject>>),
     /// The quit sequence's waiting interrupt, if any (`PendingInterrupt`): action, application, its quit status.
     PendingInterrupt(
-        Caller,
+        Asker,
         async_channel::Sender<Result<Option<PendingInterrupt>, Reject>>,
     ),
     /// Start a session-ending or power action (`LogOut`, `Restart`, `ShutDown`, `Sleep`), quitting apps first (D13).
     SessionAction(
         SessionAction,
-        Caller,
+        Asker,
         async_channel::Sender<Result<(), Reject>>,
     ),
     /// Cancel an in-progress session-ending quit sequence.
-    CancelSessionAction(Caller, async_channel::Sender<Result<(), Reject>>),
+    CancelSessionAction(Asker, async_channel::Sender<Result<(), Reject>>),
+    /// Lock, then hand the console to the login screen (`SwitchToLoginWindow`).
+    SwitchToLoginWindow(Asker, async_channel::Sender<Result<(), Reject>>),
     /// Retry asking the next application after an interrupt during a session-ending quit sequence.
-    RetrySessionAction(Caller, async_channel::Sender<Result<(), Reject>>),
+    RetrySessionAction(Asker, async_channel::Sender<Result<(), Reject>>),
     /// Start the screenshot program as the portal's service (`StartScreenshot`).
     StartScreenshot(Caller, async_channel::Sender<Result<(), Reject>>),
     /// The program the server started itself whose process owns a bus connection, empty for any other (`ProgramOf`):
@@ -487,16 +491,41 @@ impl Cupertino {
         }
     }
 
-    /// Judge the caller of `method` ([`Caller::authorize`]); a refusal is logged with the caller's process and kind,
-    /// never with the arguments.
+    /// Judge the caller of `method` ([`crate::caller::authorize`]) when it is not the session agent's connection; a
+    /// refusal is logged with the caller's process and kind, never with the arguments.
     pub fn authorize_call(
         &self,
         method: &'static str,
         caller: &Caller,
         need: Need,
     ) -> Result<(), Denial> {
-        let agents = self.supervisor.pids_with_role(ShellRole::SessionLock);
-        let decision = crate::caller::authorize(caller, need, &agents, std::process::id(), |exe| {
+        self.authorize_from(method, caller, false, need)
+    }
+
+    /// Judge the caller of `method` as [`Self::authorize_call`] does, the session agent known by the connection the
+    /// call came on: the bus name the server accepted for the `agent` component.
+    pub fn authorize_asker(
+        &self,
+        method: &'static str,
+        asker: &Asker,
+        need: Need,
+    ) -> Result<(), Denial> {
+        let agent = asker
+            .sender
+            .as_deref()
+            .and_then(|sender| self.hosts.component_of_bus_name(sender))
+            == Some(crate::session_agent::COMPONENT);
+        self.authorize_from(method, &asker.caller, agent, need)
+    }
+
+    fn authorize_from(
+        &self,
+        method: &'static str,
+        caller: &Caller,
+        agent: bool,
+        need: Need,
+    ) -> Result<(), Denial> {
+        let decision = crate::caller::authorize(caller, need, agent, std::process::id(), |exe| {
             self.is_settings_program(exe)
         });
         if let Err(denial) = decision {
@@ -607,10 +636,10 @@ impl Cupertino {
     /// `ForceQuitApplication` from the bus: only for the session agent.
     pub fn force_quit_application_for(
         &mut self,
-        caller: &Caller,
+        asker: &Asker,
         identity: &str,
     ) -> Result<u32, Denial> {
-        self.authorize_call("ForceQuitApplication", caller, Need::SessionAgent)?;
+        self.authorize_asker("ForceQuitApplication", asker, Need::SessionAgent)?;
         Ok(self.force_quit_application(identity))
     }
 
@@ -880,28 +909,28 @@ impl Cupertino {
         match call {
             Call::QuitNext(caller, reply) => {
                 let answer = self
-                    .authorize_call("QuitNextApplication", &caller, Need::SessionAgent)
+                    .authorize_asker("QuitNextApplication", &caller, Need::SessionAgent)
                     .map(|()| self.quit_next_application())
                     .map_err(Reject::Caller);
                 let _ = reply.try_send(answer);
             }
             Call::QuitStatus(identity, caller, reply) => {
                 let answer = self
-                    .authorize_call("QuitStatus", &caller, Need::SessionAgent)
+                    .authorize_asker("QuitStatus", &caller, Need::SessionAgent)
                     .map(|()| self.quit_status(&identity).to_owned())
                     .map_err(Reject::Caller);
                 let _ = reply.try_send(answer);
             }
             Call::OpenApplications(caller, reply) => {
                 let answer = self
-                    .authorize_call("OpenApplications", &caller, Need::SessionAgent)
+                    .authorize_asker("OpenApplications", &caller, Need::SessionAgent)
                     .map(|()| self.open_applications())
                     .map_err(Reject::Caller);
                 let _ = reply.try_send(answer);
             }
             Call::PendingInterrupt(caller, reply) => {
                 let answer = self
-                    .authorize_call("PendingInterrupt", &caller, Need::SessionAgent)
+                    .authorize_asker("PendingInterrupt", &caller, Need::SessionAgent)
                     .map(|()| self.pending_interrupt())
                     .map_err(Reject::Caller);
                 let _ = reply.try_send(answer);
@@ -914,7 +943,7 @@ impl Cupertino {
             }
             Call::SetAppearance(appearance, caller, reply) => {
                 let answer = self
-                    .authorize_call("SetAppearance", &caller, Need::SettingsClient)
+                    .authorize_asker("SetAppearance", &caller, Need::SettingsClient)
                     .map_err(Reject::Caller)
                     .and_then(|()| {
                         self.set_session_appearance(&appearance)
@@ -956,7 +985,7 @@ impl Cupertino {
             }
             Call::SetAccessibility(key, value, caller, reply) => {
                 let answer = self
-                    .authorize_call("SetAccessibility", &caller, Need::SettingsClient)
+                    .authorize_asker("SetAccessibility", &caller, Need::SettingsClient)
                     .map_err(Reject::Caller)
                     .and_then(|()| {
                         self.set_session_accessibility(&key, &value)
@@ -988,21 +1017,28 @@ impl Cupertino {
             }
             Call::SessionAction(action, caller, reply) => {
                 let answer = self
-                    .authorize_call(action.method_name(), &caller, Need::SettingsClient)
+                    .authorize_asker(action.method_name(), &caller, Need::SettingsClient)
                     .map_err(Reject::Caller)
                     .and_then(|()| self.request_session_action(action).map_err(Reject::Refusal));
                 let _ = reply.try_send(answer);
             }
             Call::CancelSessionAction(caller, reply) => {
                 let answer = self
-                    .authorize_call("CancelSessionAction", &caller, Need::SettingsClient)
+                    .authorize_asker("CancelSessionAction", &caller, Need::SettingsClient)
                     .map(|()| self.cancel_session_action())
+                    .map_err(Reject::Caller);
+                let _ = reply.try_send(answer);
+            }
+            Call::SwitchToLoginWindow(caller, reply) => {
+                let answer = self
+                    .authorize_asker("SwitchToLoginWindow", &caller, Need::SettingsClient)
+                    .map(|()| self.switch_to_login_window())
                     .map_err(Reject::Caller);
                 let _ = reply.try_send(answer);
             }
             Call::RetrySessionAction(caller, reply) => {
                 let answer = self
-                    .authorize_call("RetrySessionAction", &caller, Need::SettingsClient)
+                    .authorize_asker("RetrySessionAction", &caller, Need::SettingsClient)
                     .map(|()| self.retry_session_action())
                     .map_err(Reject::Caller);
                 let _ = reply.try_send(answer);

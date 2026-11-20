@@ -1104,23 +1104,7 @@ fn start_dbus(state: &mut Cupertino) {
     if std::env::var_os("CUPERTINO_NO_DBUS").is_some() {
         return;
     }
-    // the worker cannot touch the state: it tells the loop, which ends the server when a log out finds no login process
-    let (login_missing, rx) = smithay::reexports::calloop::channel::channel::<()>();
-    let inserted = state.loop_handle.insert_source(rx, |event, _, state| {
-        if let smithay::reexports::calloop::channel::Event::Msg(()) = event {
-            state.quit_compositor();
-        }
-    });
-    state.dbus = match inserted {
-        Ok(_) => crate::dbus::DbusHandle::start_with(move || {
-            // the loop is gone only while the server shuts down
-            let _ = login_missing.send(());
-        }),
-        Err(e) => {
-            tracing::warn!(error = %e, "cannot listen for the D-Bus worker");
-            crate::dbus::DbusHandle::start()
-        }
-    };
+    state.dbus = crate::dbus::DbusHandle::start();
     if state.config.dev_shell {
         if let Some(dbus) = &state.dbus {
             dbus.set_login(crate::dbus::LoginTrust::Any);

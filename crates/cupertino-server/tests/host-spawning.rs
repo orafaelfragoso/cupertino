@@ -275,15 +275,15 @@ fn hosted_components_run_in_the_shared_host_and_alone_ones_in_a_separate_host() 
     assert!(rig.state.hosts.component_absent("dialogs"));
     assert_eq!(
         rig.host(HostKind::Shared).unwrap().components,
-        components_but(&["dock", "agent", "dialogs"]),
-        "the shared host runs the rest of the table but `agent`, which no host holds until W6.13"
+        components_but(&["dock", "dialogs"]),
+        "the shared host runs the rest of the table, the session agent `agent` among them"
     );
     rig.until("every hosted component is connected", |s| {
-        components_but(&["agent", "dialogs"])
+        components_but(&["dialogs"])
             .iter()
             .all(|c| s.hosts.component_connected(c))
     });
-    assert!(!rig.state.hosts.component_connected("agent"));
+    assert!(rig.state.hosts.component_connected("agent"));
     assert!(
         rig.process("dock").is_none(),
         "the process entry of a component a host runs is left alone"

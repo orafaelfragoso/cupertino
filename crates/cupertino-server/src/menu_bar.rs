@@ -7,10 +7,11 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
-use crate::dbus::{LoginTrust, OwnerRefusal, Request as DbusRequest};
+use crate::dbus::{LoginTrust, OwnerRefusal};
 use crate::input::{translate_action, Action, Chord};
 use crate::owner_check::{OwnerCheck, OwnerKey};
 use crate::render::wallpaper::BarBands;
+use crate::session_agent::AgentRequest;
 use cupertino_input::{KeyCombo, Modifiers};
 use cupertino_keyboard::modifiers::{Physical, Profile, RawMods};
 use cupertino_keyboard::rewrite::ClientClass;

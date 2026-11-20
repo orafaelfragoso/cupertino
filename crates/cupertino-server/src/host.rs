@@ -540,6 +540,13 @@ impl HostManager {
         })
     }
 
+    /// The session-bus unique name the server accepted for `component`, while it has one (D20).
+    pub fn component_bus_name(&self, component: &str) -> Option<&str> {
+        self.components
+            .get(component)
+            .and_then(|r| r.accepted_bus_name.as_deref())
+    }
+
     /// PIDs and start ticks of all currently connected shell host processes (`org.cupertino.Session1.ShellHosts`).
     pub fn shell_host_processes(&self) -> Vec<(u32, u64)> {
         let mut out = Vec::new();

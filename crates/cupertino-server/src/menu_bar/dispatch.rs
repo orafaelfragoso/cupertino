@@ -426,9 +426,11 @@ impl Cupertino {
         }
     }
 
-    /// Tell the bars of version 8 or later which process is the session agent, each one when that changed for it.
+    /// Tell the bars of version 8 or later which process is the session agent, each one when that changed for it: none,
+    /// as the session agent is the `agent` component, never a process of its own (`docs/architecture/shell-host.md`,
+    /// W5.5), and the bars take the session menu's state from its `SessionMenu` on the host bus.
     pub fn refresh_session_agent(&mut self) {
-        let trust = self.login_trust();
+        let trust = LoginTrust::Nobody;
         for bar in self
             .menu_bars
             .bars
@@ -956,24 +958,23 @@ impl Dispatch<CupertinoMenuBarV1, MenuBarData> for Cupertino {
                 {
                     return;
                 }
-                let request = match action {
-                    WEnum::Value(SessionAction::Sleep) => Some(DbusRequest::Sleep),
-                    WEnum::Value(SessionAction::Restart) => Some(DbusRequest::Restart),
-                    WEnum::Value(SessionAction::ShutDown) => Some(DbusRequest::ShutDown),
-                    WEnum::Value(SessionAction::Lock) => {
-                        state.lock_session_now();
-                        return;
+                // the panels and what the machine allows are the session agent's; sleep, the lock and the switch to the
+                // login window the server's own
+                match action {
+                    WEnum::Value(SessionAction::Sleep) => state.sleep_session(),
+                    WEnum::Value(SessionAction::Restart) => {
+                        state.ask_session_agent(AgentRequest::Restart)
                     }
-                    WEnum::Value(SessionAction::LogOut) => Some(DbusRequest::LogOut),
-                    WEnum::Value(SessionAction::SwitchUser) => Some(DbusRequest::SwitchUser),
+                    WEnum::Value(SessionAction::ShutDown) => {
+                        state.ask_session_agent(AgentRequest::ShutDown)
+                    }
+                    WEnum::Value(SessionAction::Lock) => state.lock_session_now(),
+                    WEnum::Value(SessionAction::LogOut) => state.log_out_session(),
+                    WEnum::Value(SessionAction::SwitchUser) => state.switch_to_login_window(),
                     WEnum::Value(SessionAction::RefreshCapabilities) => {
-                        Some(DbusRequest::RefreshCapabilities)
+                        state.ask_session_agent(AgentRequest::RefreshCapabilities)
                     }
-                    WEnum::Value(_) | WEnum::Unknown(_) => None,
-                };
-                match request {
-                    Some(request) => state.menu_bar_session_action(request),
-                    None => resource.post_error(
+                    WEnum::Value(_) | WEnum::Unknown(_) => resource.post_error(
                         BarError::InvalidSessionAction,
                         format!("{action:?} is not a session action"),
                     ),

@@ -5,36 +5,44 @@ use std::path::Path;
 
 pub use cupertino_peer::{identify, Caller, Denial, Identified, Sandbox};
 
+/// Who calls a method of the session interface: the process the bus daemon names, and the unique name of the connection
+/// the call came on, which is the session agent's when the server accepted it for the `agent` component (D20).
+#[derive(Debug)]
+pub struct Asker {
+    pub caller: Caller,
+    pub sender: Option<String>,
+}
+
 /// What a method needs of its caller.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Need {
-    /// The session agent the server supervises (`cupertino-login`).
+    /// The session agent: the connection of the `agent` component, whose unique name the server accepted from its host
+    /// (`org.cupertino.Session1.ComponentOf`, D20).
     SessionAgent,
     /// The settings application, or the session agent.
     SettingsClient,
 }
 
-/// Whether `caller` may use a method that needs `need`. `agents` are the processes the server supervises with the
-/// session agent's role, `own_pid` is the server itself, and `settings_client` says whether a program is the settings
+/// Whether `caller` may use a method that needs `need`. `agent` says the call came on the session agent's connection
+/// (the `agent` component's accepted bus name, so by its identity, never by its process: the host that runs it runs
+/// other components too), `own_pid` is the server itself, and `settings_client` says whether a program is the settings
 /// application.
 pub fn authorize(
     caller: &Caller,
     need: Need,
-    agents: &[u32],
+    agent: bool,
     own_pid: u32,
     settings_client: impl Fn(&Path) -> bool,
 ) -> Result<(), Denial> {
-    if let Caller::Unclassified(process) = caller {
-        // `/proc` refused the sandbox check: only the agents the server itself supervises are known to be unsandboxed
-        return if agents.contains(&process.pid) && !process.has_exited() {
-            Ok(())
-        } else {
-            Err(Denial::Untrusted)
-        };
+    if agent {
+        return Ok(());
+    }
+    if let Caller::Unclassified(_) = caller {
+        // `/proc` refused the sandbox check: only the session agent, known by its connection, is trusted then
+        return Err(Denial::Untrusted);
     }
     let caller = caller.unsandboxed()?;
-    let pid = caller.process.pid;
-    if pid == own_pid || agents.contains(&pid) {
+    if caller.process.pid == own_pid {
         return Ok(());
     }
     match need {

@@ -78,16 +78,14 @@ impl Cupertino {
 
     /// Draw the surface tree of `surface` and its layers' content, its top-left corner at the corner of `area` (global
     /// logical points), at the scale of output `idx` into snapshot textures, one per slice between the glass they draw
-    /// (front to back, `None` for an empty slice), with the backdrops they draw; `None` without a renderer.
+    /// (front to back, `None` for an empty slice), each over the bounds of what it draws, with the backdrops they draw;
+    /// `None` without a renderer.
     fn capture_layer_texture(
         &mut self,
         surface: &WlSurface,
         idx: usize,
         area: Rect,
-    ) -> Option<(
-        Vec<Option<crate::render::snapshots::SnapshotOwner>>,
-        crate::render::scene::HeldBackdrops,
-    )> {
+    ) -> Option<(Vec<Option<HeldSlice>>, crate::render::scene::HeldBackdrops)> {
         let mut backend = self.backend.take()?;
         let captured = self
             .with_scene(backend.renderer(), idx, |renderer, mut p| {
@@ -95,7 +93,12 @@ impl Cupertino {
                     crate::render::scene::capture_held_surface(renderer, &mut p, surface, area)?;
                 let slices = textures
                     .into_iter()
-                    .map(|t| t.map(|t| p.res.snapshots.insert(t)))
+                    .map(|slice| {
+                        slice.map(|s| HeldSlice {
+                            pixels: p.res.snapshots.insert(s.pixels),
+                            rect: s.rect,
+                        })
+                    })
                     .collect();
                 Some((slices, backdrops))
             })

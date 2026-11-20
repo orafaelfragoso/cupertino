@@ -227,11 +227,11 @@ pub struct HeldPicture {
 pub enum HeldContent {
     /// The surface tree and its layers' content drawn by the renderer into textures it keeps, whatever kind of buffer
     /// the surface showed (shm, dmabuf): cut into slices, front to back, at each glass its layers and subsurfaces draw
-    /// among them, which the server draws live between them; `None` for a slice with nothing in it. The textures live
-    /// as long as the hold.
+    /// among them, which the server draws live between them; `None` for a slice with nothing in it. Each texture
+    /// covers only the bounds of what its slice draws, and lives as long as the hold.
     Texture {
-        slices: Rc<[Option<crate::render::snapshots::SnapshotOwner>]>,
-        /// Logical size the texture covers.
+        slices: Rc<[Option<HeldSlice>]>,
+        /// Logical size the surface covers.
         size: (i32, i32),
     },
     /// The pixels of the surface's shm buffer, copied when there is no renderer to draw it with.
@@ -240,6 +240,16 @@ pub enum HeldContent {
         /// Buffer size in pixels.
         size: (i32, i32),
     },
+}
+
+/// One slice of a held surface's picture drawn by the renderer (D19, [`HeldContent::Texture`]): its pixels (`T`, a
+/// texture as captured, then the snapshot that keeps it) and where they lie.
+#[derive(Clone)]
+pub struct HeldSlice<T = crate::render::snapshots::SnapshotOwner> {
+    pub pixels: T,
+    /// What the pixels cover, in logical points from the surface's top-left corner, on device pixels of the output
+    /// they were drawn for: the bounds of what the slice draws.
+    pub rect: Rect,
 }
 
 /// How far a restarted window manager has come in taking over the placements held on an output (D19).

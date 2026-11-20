@@ -337,17 +337,17 @@ fn piece_kind(piece: &Piece) -> SceneKind {
 
 /// Render the layer shell surface `surface` as its output draws it, its top-left corner at the corner of `area`
 /// (global logical points), for the picture of its hold (D19): its surface tree and its layers' content, front to back,
-/// cut at each glass its layers and subsurfaces draw among them into slices, each a new texture covering `area` (`None`
-/// for a slice with nothing in it). The backdrops they draw are left out of the slices and returned, to be drawn live
-/// between them ([`HeldBackdrops`]); so are its layers' holes, the picture cut directly behind each one's layer content,
-/// where the server draws the hole's source live.
+/// cut at each glass its layers and subsurfaces draw among them into slices, each a new texture covering the bounds of
+/// what it draws inside `area` (`None` for a slice with nothing in it). The backdrops they draw are left out of the
+/// slices and returned, to be drawn live between them ([`HeldBackdrops`]); so are its layers' holes, the picture cut
+/// directly behind each one's layer content, where the server draws the hole's source live.
 pub fn capture_held_surface(
     renderer: &mut GlesRenderer,
     p: &mut SceneParams<'_>,
     surface: &WlSurface,
     area: Rect,
 ) -> Option<(
-    Vec<Option<smithay::backend::renderer::gles::GlesTexture>>,
+    Vec<Option<crate::host::HeldSlice<smithay::backend::renderer::gles::GlesTexture>>>,
     HeldBackdrops,
 )> {
     let size_px = (
@@ -396,21 +396,33 @@ pub fn capture_held_surface(
             slices.last_mut()?.push(piece);
         }
     }
-    let composed: Vec<_> = slices
-        .into_iter()
-        .map(|slice| {
-            (!slice.is_empty()).then(|| {
-                let mut stack = Composition::new(p.scale);
-                stack.extend(SceneLayer::LayerTop, slice);
-                finish_composition(stack, p)
-            })
-        })
-        .collect();
+    // each slice drawn over the bounds of its pieces alone, its texture no larger than they are
+    let mut composed = Vec::with_capacity(slices.len());
+    for pieces in slices {
+        let Some((pieces, bounds)) = super::held_slices::fitted(p, pieces, size_px) else {
+            composed.push(None);
+            continue;
+        };
+        let rect = Rect::new(
+            f64::from(bounds.loc.x) / p.scale,
+            f64::from(bounds.loc.y) / p.scale,
+            f64::from(bounds.size.w) / p.scale,
+            f64::from(bounds.size.h) / p.scale,
+        );
+        p.rect = Rect::new(area.x + rect.x, area.y + rect.y, rect.w, rect.h);
+        p.output_px = (bounds.size.w, bounds.size.h);
+        let mut stack = Composition::new(p.scale);
+        stack.extend(SceneLayer::LayerTop, pieces);
+        composed.push(Some((finish_composition(stack, p), rect)));
+    }
     (p.rect, p.output_px, p.for_capture) = saved;
     let mut textures = Vec::with_capacity(composed.len());
     for slice in composed {
         textures.push(match slice {
-            Some(composed) => Some(held_slice_texture(renderer, p, composed)?),
+            Some((composed, rect)) => Some(crate::host::HeldSlice {
+                pixels: held_slice_texture(renderer, p, composed)?,
+                rect,
+            }),
             None => None,
         });
     }
@@ -904,7 +916,10 @@ fn held_elements(
                 .enumerate()
                 .map(|(i, slice)| {
                     let index = Sig::new().u(index).u(i as u64).finish();
-                    held_texture_piece(p, slice.as_ref()?, index, at, opacity)
+                    let slice = slice.as_ref()?;
+                    let r = slice.rect;
+                    let local = Rect::new(at.x + r.x, at.y + r.y, r.w, r.h);
+                    held_texture_piece(p, &slice.pixels, index, local, opacity)
                 })
                 .collect(),
             crate::host::HeldContent::Memory { buffer, size } => {

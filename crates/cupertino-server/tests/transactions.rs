@@ -1950,6 +1950,25 @@ fn a_held_surface_draws_its_layer_glass_over_its_own_content_in_the_frame_s_appe
         live_order,
         "the held surface draws its content and its layer's glass in the live order"
     );
+    // each slice of the picture covers what it draws alone: the layer's content in front of its glass, the surface's own
+    // behind it
+    let slices = held_slices(&rig);
+    assert_eq!(slices.len(), 2, "the picture is cut once, at the glass");
+    for (slice, (bounds, what)) in slices.iter().zip([
+        (glass_rect, "the layer's content"),
+        (surface_rect, "the surface's own content"),
+    ]) {
+        let (rect, size) = slice.expect("the slice draws something");
+        assert_eq!(
+            (rect.w as i32, rect.h as i32),
+            size,
+            "the texture of {what} has a pixel per point of what it covers"
+        );
+        assert!(
+            covers_within_margin(rect, bounds, surface_rect),
+            "the slice of {what} covers its bounds {bounds:?} alone, not {rect:?}"
+        );
+    }
     // the appearance changes during the hold: the held glass follows it as the live glass did
     let held = images_in_both_appearances(&mut rig);
     for (appearance, (live, held)) in ["light", "dark"].into_iter().zip(live.iter().zip(&held)) {
@@ -1959,6 +1978,59 @@ fn a_held_surface_draws_its_layer_glass_over_its_own_content_in_the_frame_s_appe
              own content"
         );
     }
+}
+
+/// Device pixels a held slice may reach past the bounds of what it draws on every side: the renderer's rounding and
+/// antialiasing of their edges.
+const HELD_SLICE_MARGIN: f64 = 1.0;
+
+/// Of each slice of the picture of the output's one held surface, front to back, what it covers (logical points from
+/// the surface's top-left corner) and the size of its texture in pixels; `None` for an empty slice.
+fn held_slices(rig: &Rig) -> Vec<Option<(cupertino_wm::Rect, (i32, i32))>> {
+    use smithay::backend::renderer::Texture;
+    let held = &rig.state.hosts.held_surfaces()[0];
+    let picture = held
+        .picture
+        .as_ref()
+        .expect("the held surface has a picture");
+    let cupertino_server::host::HeldContent::Texture { slices, .. } = &picture.content else {
+        panic!("the renderer drew the held picture");
+    };
+    let snapshots = &rig.state.render.as_ref().unwrap().snapshots;
+    slices
+        .iter()
+        .map(|slice| {
+            slice.as_ref().map(|slice| {
+                let (texture, _lease) = snapshots
+                    .lease(slice.pixels.id())
+                    .expect("the slice's texture is kept");
+                let size = texture.size();
+                (slice.rect, (size.w, size.h))
+            })
+        })
+        .collect()
+}
+
+/// Whether `rect` covers `bounds` (`x`, `y`, `width`, `height`) and reaches past them by no more than
+/// [`HELD_SLICE_MARGIN`], inside `within`.
+fn covers_within_margin(
+    rect: cupertino_wm::Rect,
+    bounds: (u32, u32, u32, u32),
+    within: (u32, u32, u32, u32),
+) -> bool {
+    let f = |(x, y, w, h): (u32, u32, u32, u32)| [x, y, x + w, y + h].map(f64::from);
+    let ([x0, y0, x1, y1], [l, t, r, b]) = (f(bounds), f(within));
+    let outer = [
+        (x0 - HELD_SLICE_MARGIN).max(l),
+        (y0 - HELD_SLICE_MARGIN).max(t),
+        (x1 + HELD_SLICE_MARGIN).min(r),
+        (y1 + HELD_SLICE_MARGIN).min(b),
+    ];
+    let got = [rect.x, rect.y, rect.right(), rect.bottom()];
+    let covers = got[0] <= x0 && got[1] <= y0 && got[2] >= x1 && got[3] >= y1;
+    let within_margin =
+        got[0] >= outer[0] && got[1] >= outer[1] && got[2] <= outer[2] && got[3] <= outer[3];
+    covers && within_margin
 }
 
 #[test]

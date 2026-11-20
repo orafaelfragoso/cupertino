@@ -18,7 +18,6 @@ zbus = { version = "5", default-features = false, features = ["async-io"] }
 [dev-dependencies]
 cupertino-assets = { path = "../cupertino-assets" }
 cupertino-kit = { path = "../cupertino-kit", features = ["test"] }
-tiny-skia = "0.12"
 
 [[example]]
 name = "osd_capture"

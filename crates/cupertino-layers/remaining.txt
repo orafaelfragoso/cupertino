@@ -29,7 +29,6 @@ shell external_crate cupertino-dock -> tiny-skia normal
 shell external_crate cupertino-login -> image normal
 shell external_crate cupertino-login -> tiny-skia normal
 shell external_crate cupertino-menubar -> tiny-skia normal
-shell external_crate cupertino-osd -> tiny-skia dev
 shell external_crate cupertino-polkit-agent -> tiny-skia normal
 shell external_crate cupertino-portal -> tiny-skia normal
 shell external_crate cupertino-portal -> wayland-client normal

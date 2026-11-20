@@ -1,11 +1,21 @@
 //! The capture command's shared part: how a command line is read, the names of the pictures it writes, the contact
-//! sheet, and what carrying it out draws and writes.
+//! sheet, what carrying it out draws and writes, and the picture of a window's last frame.
 
+#[allow(dead_code)]
+mod support;
+
+use std::num::NonZeroU32;
 use std::path::PathBuf;
 
+use cupertino_kit::core::CommandRegistry;
+use cupertino_kit::geometry::Size;
+use cupertino_kit::platform::{DecorationMode, Timestamp};
+use cupertino_kit::prelude::*;
+use cupertino_kit::render::PixelFormat;
 use cupertino_kit::test::capture::{
-    capture, file_name, parse, sheet, sheet_name, App, Look, Options, Request, State,
+    capture, file_name, parse, presented, sheet, sheet_name, App, Look, Options, Request, State,
 };
+use cupertino_kit::test::WindowStates;
 use tiny_skia::{Color, Pixmap};
 
 fn args(line: &str) -> Vec<String> {
@@ -354,4 +364,102 @@ fn a_capture_of_a_surface_the_app_lacks_or_a_state_it_cannot_draw_fails_with_wha
 
     let (done, _) = carried_out(&scratch, "demo/main --mode broken");
     assert_eq!(done, Err("cannot draw that state".into()));
+}
+
+/// One window over the theme's background with a labelled button, whose text has smoothed edges.
+struct Plain;
+
+impl Application for Plain {
+    type Model = ();
+    type Message = ();
+
+    fn init() -> ((), Vec<Command<()>>) {
+        ((), Vec::new())
+    }
+
+    fn update((): &mut (), (): ()) -> Vec<Command<()>> {
+        Vec::new()
+    }
+
+    fn view((): &()) -> Vec<Window<()>> {
+        vec![Window {
+            key: WindowKey("plain".into()),
+            spec: WindowSpec {
+                title: "Plain".into(),
+                app_id: "org.cupertino.tests.Plain".into(),
+                size: Size::new(120.0, 60.0),
+                min_size: None,
+                max_size: None,
+                decorations: DecorationMode::Preferred,
+                foreign_parent: None,
+                input_region: None,
+            },
+            shortcuts: CommandRegistry::new(),
+            on_close: None,
+            background: WindowBackground::Theme,
+            popup: None,
+            content: Element::new(Button {
+                label: "Plain".into(),
+                role: ButtonRole::Normal,
+                style: ButtonStyle::Bordered,
+                enabled: true,
+                busy: false,
+                on_press: None,
+            }),
+            menus: None,
+        }]
+    }
+}
+
+#[test]
+fn the_picture_of_a_window_is_its_last_frame_with_its_pixels_premultiplied() {
+    let turns = NonZeroU32::new(1000).unwrap();
+    let mut driver = support::driver::<Plain>(support::text_system());
+    driver.run_until_idle(turns).unwrap();
+    let window = driver.runtime().windows()[0].1;
+    assert_eq!(
+        presented(driver.runtime().window_system(), window).unwrap_err(),
+        "the window presented no frame"
+    );
+
+    let system = driver.window_system_mut();
+    system
+        .configure(window, None, WindowStates::default())
+        .unwrap();
+    for _ in 0..16 {
+        driver.run_until_idle(turns).unwrap();
+        let system = driver.window_system_mut();
+        if !system.frame_requested(window).unwrap() {
+            break;
+        }
+        system.frame_ready(window, Timestamp(0)).unwrap();
+    }
+    let system = driver.runtime().window_system();
+    let frame = system.frames(window).unwrap().last().unwrap().clone();
+    let picture = presented(system, window).unwrap();
+    assert_eq!(
+        (picture.width(), picture.height()),
+        (frame.width, frame.height)
+    );
+    let drawn = system
+        .composited(window)
+        .unwrap()
+        .unwrap_or_else(|| frame.pixels.clone());
+    let mut partly_covered = 0;
+    for (got, drawn) in picture.data().chunks(4).zip(drawn.chunks(4)) {
+        let a = u16::from(drawn[3]);
+        assert_eq!(got[3], drawn[3], "the alpha is the frame's");
+        partly_covered += usize::from(a > 0 && a < 255);
+        for c in 0..3 {
+            let want = match frame.format {
+                PixelFormat::Rgba8 => ((u16::from(drawn[c]) * a + 127) / 255) as u8,
+                _ => drawn[c],
+            };
+            assert_eq!(got[c], want, "{:?} {drawn:?}", frame.format);
+        }
+    }
+    assert!(
+        frame.format != PixelFormat::Rgba8 || partly_covered > 0,
+        "the window has partly covered pixels, which premultiplying changes"
+    );
 }

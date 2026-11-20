@@ -8,7 +8,13 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use cupertino_assets::Assets;
-use tiny_skia::{Color, Pixmap, PixmapPaint, Transform};
+use cupertino_ui_core::platform::WindowId;
+use cupertino_ui_render::PixelFormat;
+use cupertino_ui_test::HeadlessWindowSystem;
+use tiny_skia::{Color, IntSize, PixmapPaint, Transform};
+
+/// The picture a capture draws ([`App::capture`]) and writes as a PNG: premultiplied RGBA pixels.
+pub use tiny_skia::Pixmap;
 
 /// The session settings a capture is drawn with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -233,6 +239,32 @@ pub fn sheet(rows: &[Vec<Pixmap>], scale: f32) -> Option<Pixmap> {
 
 /// The asset packs, or an error when none is found: a capture with the built-in fallback alone does not show the
 /// surfaces as they look.
+/// The last frame `window` presented on `system`, with its raised layer drawn over it as a compositor shows them, as a
+/// capture's picture: the pixels of a frame drawn as straight RGBA are premultiplied. An error says the window is not
+/// there or presented no frame.
+pub fn presented(system: &HeadlessWindowSystem, window: WindowId) -> Result<Pixmap, String> {
+    let fail = |e: &dyn std::fmt::Debug| format!("the headless window system: {e:?}");
+    let frame = system
+        .frames(window)
+        .map_err(|e| fail(&e))?
+        .last()
+        .ok_or("the window presented no frame")?;
+    let mut pixels = match system.composited(window) {
+        Ok(Some(composited)) => composited,
+        _ => frame.pixels.clone(),
+    };
+    if frame.format == PixelFormat::Rgba8 {
+        for px in pixels.as_chunks_mut::<4>().0 {
+            let a = u16::from(px[3]);
+            for c in &mut px[..3] {
+                *c = ((u16::from(*c) * a + 127) / 255) as u8;
+            }
+        }
+    }
+    let size = IntSize::from_wh(frame.width, frame.height).ok_or("the frame is empty")?;
+    Pixmap::from_vec(pixels, size).ok_or_else(|| "the frame's pixels do not fill it".to_string())
+}
+
 pub fn assets() -> Result<Assets, String> {
     let assets = Assets::discover();
     if assets.roots().next().is_none() {

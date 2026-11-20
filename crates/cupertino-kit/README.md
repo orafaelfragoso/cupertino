@@ -183,7 +183,7 @@ that turns it on.
 | In `kit::test` | Items |
 |---|---|
 | The headless backend (`cupertino-ui-test`) | `TestDriver`, `ManualClock`, `HeadlessWindowSystem`, and `StepStatus`, what a driver's steps return |
-| The capture command's shared part | the `capture` module: `App`, `Look`, `Request`, `State`, `Options`, `run` and the rest of its public items |
+| The capture command's shared part | the `capture` module: `App`, `Look`, `Request`, `State`, `Options`, `run`, `Pixmap` (the picture `App::capture` draws), `presented` (a headless window's last frame as that picture, premultiplied) and the rest of its public items |
 | What a driver is built from and reads | `Runtime`, `preferences`, `Capabilities`, `WindowEvent`, `WindowStates`, `PlaceholderIcons`, `FontIndex`, `each_turn` |
 
 The capture examples of `files`, `login` and `kit` and `login`'s benches name it; Kit's tests and `kit_capture` are

@@ -399,6 +399,11 @@ impl Dispatch<CupertinoTransactionV1, TransactionObjectData> for Cupertino {
                                     outcome: WireOutcome::Cancelled,
                                 };
                             }
+                            // a gesture under way settles back to its start
+                            TxPhase::GestureTracking | TxPhase::GestureSettling => {
+                                let model_now = state.now();
+                                state.transactions.settle_back(data.tx_id, model_now);
+                            }
                             _ => {}
                         }
                     }
@@ -577,8 +582,8 @@ impl Dispatch<CupertinoTransactionV1, TransactionObjectData> for Cupertino {
                         damping,
                         armed_seq: seq,
                         completed_seq: None,
+                        progress: GestureProgress::new(),
                         settle: None,
-                        tracking_progress: None,
                         reversing: false,
                     });
                 }
@@ -672,8 +677,12 @@ impl Dispatch<CupertinoTransactionV1, TransactionObjectData> for Cupertino {
                         state.transactions.open_brackets.remove(&client_id);
                     }
                 } else {
-                    // Creator cancel ends the transaction for every participant.
-                    flush_changes = state.transactions.end_cancelled(data.tx_id, now);
+                    // Creator cancel ends the transaction for every participant; a gesture under way settles back to its
+                    // start first
+                    let model_now = state.now();
+                    if !state.transactions.settle_back(data.tx_id, model_now) {
+                        flush_changes = state.transactions.end_cancelled(data.tx_id, now);
+                    }
                 }
                 for change in flush_changes {
                     state.apply_queued_window_change(change);

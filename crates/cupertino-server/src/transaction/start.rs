@@ -152,6 +152,7 @@ impl Cupertino {
         let mut to_start: Vec<(TxId, Duration)> = Vec::new();
         let mut late_apply: Vec<(TxId, u64)> = Vec::new();
         let mut settled_gestures: Vec<(TxId, OutputId, WireOutcome, bool)> = Vec::new();
+        let mut gesture_late: Vec<(TxId, Vec<u64>)> = Vec::new();
         let mut expired_ended: Vec<TxId> = Vec::new();
         // the holes of a hold that ended go with it
         self.transactions
@@ -164,6 +165,10 @@ impl Cupertino {
                 // an ended transaction keeps no commits: what was staged and not applied applies as it stands
                 for p in &mut tx.participants {
                     p.leave_staged(tx_id, &mut self.transactions.staged_surface_owner);
+                }
+                // nor does it drive the layer animations of its gesture
+                if let Some(g) = &tx.gesture {
+                    g.progress.let_go();
                 }
                 if now.saturating_duration_since(ended_at)
                     >= Duration::from_secs(ENDED_RETENTION_SECS)
@@ -218,16 +223,29 @@ impl Cupertino {
                         }
                     }
                 }
-                TxPhase::GestureSettling => {
-                    if let Some(settle) = tx.gesture.as_ref().and_then(|g| g.settle.as_ref()) {
-                        if !settle.property.is_animating(model_now) {
-                            let at_one = (settle.property.target() - 1.0).abs() < 0.5;
-                            settled_gestures.push((tx_id, tx.output, settle.outcome, at_one));
+                TxPhase::GestureTracking | TxPhase::GestureSettling | TxPhase::RestingCompleted => {
+                    // a part ready while the gesture is under way, or at rest, joins at the progress shown
+                    let late: Vec<u64> = tx
+                        .participants
+                        .iter()
+                        .filter(|p| p.ready && !p.applied && !p.withdrawn)
+                        .map(|p| p.id)
+                        .collect();
+                    if !late.is_empty() {
+                        gesture_late.push((tx_id, late));
+                    }
+                    if let Some(g) = &tx.gesture {
+                        if let (Some(at), Some(outcome)) = (g.progress.settled(model_now), g.settle)
+                        {
+                            settled_gestures.push((tx_id, tx.output, outcome, at > 0.5));
                         }
                     }
                 }
                 _ => {}
             }
+        }
+        for (tx_id, pids) in gesture_late {
+            self.apply_gesture_parts(tx_id, &pids);
         }
 
         let mut window_changes = Vec::new();
@@ -379,7 +397,9 @@ impl Cupertino {
     }
 
     /// Finish the gesture-bound transactions whose settle spring came to rest: completed ones carry out their window
-    /// changes (returned) and keep a reverse binding at rest, reverted ones drop them.
+    /// changes (returned) and keep a reverse binding at rest, reverted and cancelled ones drop them. The progress rests
+    /// where the spring did, and a transaction that does not stay for its reverse gesture lets it go: the layer
+    /// animations it drove stay where they show ([`crate::layers_v1::GestureProgress`]).
     fn finish_settled_gestures(
         &mut self,
         settled: Vec<(TxId, OutputId, WireOutcome, bool)>,
@@ -391,21 +411,25 @@ impl Cupertino {
             self.transactions.next_seq += 1;
             let seq = self.transactions.next_seq;
             if let Some(tx) = self.transactions.transactions.get_mut(&tx_id) {
+                let completed = outcome == WireOutcome::Completed;
                 let keep_reverse = at_one
+                    && completed
                     && tx
                         .gesture
                         .as_ref()
                         .is_some_and(|g| g.reverse_gesture.is_some());
                 if let Some(g) = &mut tx.gesture {
                     g.settle = None;
-                    g.tracking_progress = None;
+                    g.progress.rest(if at_one { 1.0 } else { 0.0 });
                     if keep_reverse {
                         g.completed_seq = Some(seq);
+                    } else {
+                        g.progress.let_go();
                     }
                 }
                 for p in &mut tx.participants {
                     if !p.withdrawn {
-                        if at_one {
+                        if at_one && completed {
                             window_changes.extend(std::mem::take(&mut p.window_changes));
                         } else {
                             p.window_changes.clear();
@@ -431,13 +455,19 @@ impl Cupertino {
 
     /// The earliest model time at which a transaction has time-driven work: a participant taken as submitted, a part
     /// ready as it stands, a deadline, an orphan join promoted, a transaction or late part that stops waiting for a
-    /// frame, an ended transaction forgotten. So the loop never waits on a transaction without a deadline.
+    /// frame, an ended transaction forgotten, a gesture's settling progress at rest. So the loop never waits on a
+    /// transaction without a deadline.
     pub fn transaction_deadline(&self) -> Option<f64> {
         let ms = |m: u32| Duration::from_millis(m.into());
         let wait = Duration::from_millis(FRAME_WAIT_MS);
         let mut next: Option<Instant> = None;
         let mut at = |t: Instant| next = Some(next.map_or(t, |n| n.min(t)));
+        // when a gesture's settling progress comes to rest, on the model clock
+        let mut settles: Option<f64> = None;
         for tx in self.transactions.transactions.values() {
+            if let Some(end) = tx.gesture.as_ref().and_then(|g| g.progress.settle_end()) {
+                settles = Some(settles.map_or(end, |s| s.min(end)));
+            }
             if let TxPhase::Ended { ended_at, .. } = tx.phase {
                 at(ended_at + Duration::from_secs(ENDED_RETENTION_SECS));
                 continue;
@@ -475,8 +505,9 @@ impl Cupertino {
                 }
             }
         }
-        next.map(|t| {
+        let next = next.map(|t| {
             self.now() + t.saturating_duration_since(Instant::now()).as_secs_f64() * self.time_scale
-        })
+        });
+        [next, settles].into_iter().flatten().reduce(f64::min)
     }
 }

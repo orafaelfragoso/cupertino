@@ -10,6 +10,7 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::wayland::compositor::with_states;
 
 use super::ops::Op;
+use super::tracked::{GestureProgress, Tracked};
 use super::{held, spatial, PROPERTIES};
 
 /// How a layer's content mixes with what lies behind it.
@@ -48,6 +49,8 @@ pub(super) struct Waiting {
     velocity: f64,
     samples: Option<Arc<[f32]>>,
     pub(super) since: f64,
+    /// The gesture that drives the animation once it starts ([`Tracked`]).
+    pub(super) gesture: Option<GestureProgress>,
 }
 
 /// The value property `prop` of a new layer starts at: opacity and scale at 1, the rest at 0.
@@ -69,6 +72,9 @@ pub struct LayerModel {
     pub(super) props: [LayerProperty; PROPERTIES],
     /// The serial of each property's running animation.
     pub(super) running: [Option<u32>; PROPERTIES],
+    /// The animation of each property a gesture drives: the property shows it rather than `props`, which rests at the
+    /// value it started from.
+    pub(super) tracked: [Option<Tracked>; PROPERTIES],
     pub(super) waiting: Vec<Waiting>,
     /// Width and height follow the content's size until they are set.
     sized: [bool; 2],
@@ -103,6 +109,7 @@ impl LayerModel {
             resource,
             props,
             running: [None; PROPERTIES],
+            tracked: std::array::from_fn(|_| None),
             waiting: Vec::new(),
             sized: [false; 2],
             busy: false,
@@ -143,10 +150,19 @@ impl LayerModel {
         }
     }
 
-    /// End the running animation of `prop` at `now`: `replaced` with what was shown.
-    fn replace(&mut self, prop: usize, now: f64) {
+    /// End the running animation of `prop` at `now`: `replaced` with what was shown. A property a gesture drove stays
+    /// where it shows.
+    pub(super) fn replace(&mut self, prop: usize, now: f64) {
+        let tracked = self.tracked[prop]
+            .take()
+            .map(|t| (t.value(now), t.velocity(now)));
+        if let Some((value, _)) = tracked {
+            self.props[prop].set(value);
+        }
         if let Some(serial) = self.running[prop].take() {
-            if self.props[prop].is_animating(now) {
+            if let Some((value, velocity)) = tracked {
+                self.resource.replaced(serial, value, velocity);
+            } else if self.props[prop].is_animating(now) {
                 let p = &self.props[prop];
                 self.resource
                     .replaced(serial, p.value(now), p.velocity(now));
@@ -162,7 +178,7 @@ impl LayerModel {
         if !self.waiting.iter().any(|w| w.prop == prop) {
             return;
         }
-        let (value, velocity) = (self.value(prop, now), self.props[prop].velocity(now));
+        let (value, velocity) = (self.value(prop, now), self.velocity(prop, now));
         for w in std::mem::take(&mut self.waiting) {
             if w.prop == prop {
                 self.resource.replaced(w.serial, value, velocity);
@@ -186,9 +202,23 @@ impl LayerModel {
                         h
                     }
                 }
-                _ => self.props[prop].value(now),
+                _ => self.shown(prop, now),
             },
         )
+    }
+
+    /// The value of `prop` shown at `now`, before it is held in its range: the gesture's when one drives it.
+    fn shown(&self, prop: usize, now: f64) -> f64 {
+        self.tracked[prop]
+            .as_ref()
+            .map_or_else(|| self.props[prop].value(now), |t| t.value(now))
+    }
+
+    /// The velocity of `prop` shown at `now`, units per second.
+    pub fn velocity(&self, prop: usize, now: f64) -> f64 {
+        self.tracked[prop]
+            .as_ref()
+            .map_or_else(|| self.props[prop].velocity(now), |t| t.velocity(now))
     }
 
     /// The value `prop` rests at once its animation ends: what the client hit-tests against.
@@ -199,19 +229,66 @@ impl LayerModel {
                 .iter()
                 .rev()
                 .find(|w| w.prop == prop)
-                .map_or_else(|| self.props[prop].target(), |w| w.to),
+                .map_or_else(
+                    || {
+                        self.tracked[prop]
+                            .as_ref()
+                            .map_or_else(|| self.props[prop].target(), |t| t.to)
+                    },
+                    |w| w.to,
+                ),
         )
     }
 
-    /// Whether an animation of the layer runs or waits at `now`.
+    /// Whether an animation of the layer runs or waits at `now`, one a gesture moves included.
     pub fn animating(&self, now: f64) -> bool {
-        !self.waiting.is_empty() || self.props.iter().any(|p| p.is_animating(now))
+        !self.waiting.is_empty()
+            || self.props.iter().any(|p| p.is_animating(now))
+            || self.tracked.iter().flatten().any(|t| t.progress.moving())
+    }
+
+    /// The animations waiting to start are driven by the gesture of `progress` once they start.
+    pub(super) fn track(&mut self, progress: &GestureProgress) {
+        for w in &mut self.waiting {
+            w.gesture.get_or_insert_with(|| progress.clone());
+        }
+    }
+
+    /// Follow the gestures that drive properties at `now`: at rest at 1 an animation finished, and once its transaction
+    /// lets the progress go a property stays where it shows, its animation answered `replaced` unless it finished.
+    pub(super) fn follow_gestures(&mut self, now: f64) {
+        for prop in 0..PROPERTIES {
+            let Some((bound, at_one)) = self.tracked[prop].as_ref().map(|t| {
+                let at_one = t.progress.at_rest().is_some_and(|at| at >= 0.5);
+                (t.progress.bound(), at_one)
+            }) else {
+                continue;
+            };
+            if at_one {
+                if let Some(serial) = self.running[prop].take() {
+                    self.resource.finished(serial);
+                }
+            }
+            if !bound {
+                self.replace(prop, now);
+            }
+        }
     }
 
     /// Start the waiting animations at `now`; with `reduce_motion` the spatial ones end at their target at once.
     pub(super) fn start(&mut self, now: f64, reduce_motion: bool) {
         for w in std::mem::take(&mut self.waiting) {
             self.fix_size(w.prop);
+            if let Some(progress) = w.gesture {
+                // the gesture moves the property from what it shows now
+                let from = self.shown(w.prop, now);
+                self.replace(w.prop, now);
+                self.props[w.prop].set(from);
+                let still = reduce_motion && spatial(w.prop);
+                self.tracked[w.prop] = Some(Tracked::new(progress, from, w.to, w.samples, still));
+                self.running[w.prop] = Some(w.serial);
+                continue;
+            }
             self.replace(w.prop, now);
             if reduce_motion && spatial(w.prop) {
                 self.props[w.prop].set(w.to);
@@ -250,9 +327,10 @@ impl LayerModel {
                 velocity,
                 samples,
                 since: now,
+                gesture: None,
             }),
             Op::Cancel(prop) => {
-                let shown = self.props[prop].value(now);
+                let shown = self.shown(prop, now);
                 self.replace(prop, now);
                 self.replace_waiting(prop, now);
                 self.props[prop].set(shown);

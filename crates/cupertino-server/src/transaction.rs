@@ -2,10 +2,9 @@
 //! (`cupertino_transaction_manager_v1`, `cupertino_transaction_v1`, `cupertino_hole_v1`).
 
 use std::cell::Cell;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
-use cupertino_animation::{LayerCurve, LayerProperty};
 use cupertino_protocols::server::transaction::cupertino_hole_v1::{
     self, CupertinoHoleV1, Error as HoleError, Source as WireSource,
 };
@@ -33,7 +32,7 @@ use smithay::wayland::compositor::get_role;
 
 use crate::authorization::{authorized, ShellRole};
 use crate::host::{component_spec, HeldSurface};
-use crate::layers_v1::LAYER_ROLE;
+use crate::layers_v1::{GestureProgress, LAYER_ROLE};
 use crate::state::{ClientState, Cupertino};
 
 /// Protocol version offered for `cupertino_transaction_manager_v1`.
@@ -145,17 +144,15 @@ struct GestureBinding {
     damping: f64,
     armed_seq: u64,
     completed_seq: Option<u64>,
-    /// Active spring settling progress (`0.0..=1.0`) after fingers lift.
-    settle: Option<GestureSettle>,
-    /// Live progress (`0.0..=1.0`) while fingers are on the trackpad.
-    tracking_progress: Option<f64>,
+    /// The progress (`0.0..=1.0`), which the layer animations the transaction's parts start follow
+    /// ([`crate::layers_v1::track_gesture`]): the fingers' while they are on the touchpad, the binding's spring once
+    /// they lift.
+    progress: GestureProgress,
+    /// What the transaction is once the settling progress comes to rest: completed or reverted, or cancelled when its
+    /// gesture was given up under way.
+    settle: Option<WireOutcome>,
     /// Whether the currently active gesture is the reverse gesture (`1.0 -> 0.0`).
     reversing: bool,
-}
-
-struct GestureSettle {
-    property: LayerProperty,
-    outcome: WireOutcome,
 }
 
 /// Lifecycle phase of a transaction.
@@ -282,6 +279,9 @@ pub struct TransactionManager {
     window_claims: HashMap<WindowId, Vec<HoleId>>,
     /// Active gesture transaction per output while tracking or settling.
     active_gesture_tx: HashMap<OutputId, TxId>,
+    /// The outputs whose touchpad gesture under way a transaction claimed, until the fingers lift: the rest of that
+    /// gesture is the transaction's, also once it was given up, and never goes to the dock.
+    bound_gestures: HashSet<OutputId>,
     /// The kept commits of each staged surface, by the staged surface's object id ([`staging`]).
     holds: HashMap<ObjectId, staging::StageHold>,
     /// The frames of windows that are closing, until their holes hear it ([`TransactionManager::window_closing`]).
@@ -312,6 +312,7 @@ impl TransactionManager {
             hole_by_surface: HashMap::new(),
             window_claims: HashMap::new(),
             active_gesture_tx: HashMap::new(),
+            bound_gestures: HashSet::new(),
             holds: HashMap::new(),
             closing_frames: HashMap::new(),
             held_callbacks: Vec::new(),
@@ -442,7 +443,36 @@ impl TransactionManager {
             ended_at: now,
             outcome: WireOutcome::Cancelled,
         };
+        if let Some(g) = &tx.gesture {
+            g.progress.let_go();
+        }
         changes
+    }
+
+    /// Give up the gesture under way of `tx_id` at `now` (model seconds): the progress settles back to where the
+    /// gesture began, along the binding's spring from the velocity it shows, and the transaction ends cancelled when it
+    /// comes to rest there, its window changes dropped. False when no gesture of it is under way.
+    fn settle_back(&mut self, tx_id: TxId, now: f64) -> bool {
+        let Some(tx) = self.transactions.get_mut(&tx_id) else {
+            return false;
+        };
+        if !matches!(
+            tx.phase,
+            TxPhase::GestureTracking | TxPhase::GestureSettling
+        ) {
+            return false;
+        }
+        let Some(g) = &mut tx.gesture else {
+            return false;
+        };
+        let start = if g.reversing { 1.0 } else { 0.0 };
+        g.reverse_gesture = None;
+        let velocity = g.progress.velocity(now);
+        g.progress
+            .settle(start, g.response, g.damping, now, velocity);
+        g.settle = Some(WireOutcome::Cancelled);
+        tx.phase = TxPhase::GestureSettling;
+        true
     }
 
     /// The transactions not started whose creator withdrew (it destroyed its object before `submit`, or its connection
@@ -461,11 +491,7 @@ impl TransactionManager {
     pub fn gesture_progress_on(&self, output: OutputId, model_now: f64) -> Option<f64> {
         let tx_id = self.active_gesture_tx.get(&output)?;
         let tx = self.transactions.get(tx_id)?;
-        let binding = tx.gesture.as_ref()?;
-        if let Some(settle) = &binding.settle {
-            return Some(settle.property.value(model_now));
-        }
-        binding.tracking_progress
+        Some(tx.gesture.as_ref()?.progress.value(model_now))
     }
 
     /// Whether any armed or resting-completed transaction is bound to `gesture` on `output`.
@@ -573,8 +599,9 @@ impl TransactionManager {
 
     /// Clean up all transaction parts, brackets, staged surfaces and holes owned by a disconnected client. A hole that
     /// last showed on one of the component's surfaces the server now holds (`held`) stays there, drawing its source
-    /// and keeping its claim, until the hold ends ([`TransactionManager::drop_ended_holds`]).
-    pub fn client_disconnected(&mut self, client_id: &ClientId, held: &[HeldSurface]) {
+    /// and keeping its claim, until the hold ends ([`TransactionManager::drop_ended_holds`]). The gesture under way of a
+    /// transaction whose creator it was settles back to its start from `now` (model seconds).
+    pub fn client_disconnected(&mut self, client_id: &ClientId, held: &[HeldSurface], now: f64) {
         self.open_brackets.remove(client_id);
 
         // Remove holes owned by this client and pop them from claim stacks, but the held ones.
@@ -635,6 +662,9 @@ impl TransactionManager {
             }
         }
         for tx_id in creator_gone_txs {
+            if self.settle_back(tx_id, now) {
+                continue;
+            }
             if let Some(tx) = self.transactions.get_mut(&tx_id) {
                 if let Some(g) = &mut tx.gesture {
                     g.reverse_gesture = None;
@@ -741,59 +771,90 @@ impl Cupertino {
         self.request_redraw();
     }
 
-    /// Begin a touchpad gesture bound to a transaction on `output`. Returns `true` if a transaction claimed it.
+    /// Begin a touchpad gesture bound to a transaction on `output`. Returns `true` if a transaction claimed it: the
+    /// parts that are ready apply, and the animations they start follow the gesture's progress.
     pub fn transaction_gesture_begin(&mut self, output: OutputId, gesture: WireGesture) -> bool {
+        // a gesture whose end never came (the session locked under it) is over
+        self.transactions.bound_gestures.remove(&output);
         let Some((tx_id, reversing)) = self.transactions.pick_gesture_binding(output, gesture)
         else {
             return false;
         };
+        let mut ready = Vec::new();
         if let Some(tx) = self.transactions.transactions.get_mut(&tx_id) {
             tx.phase = TxPhase::GestureTracking;
             if let Some(binding) = &mut tx.gesture {
                 binding.reversing = reversing;
                 binding.settle = None;
-                binding.tracking_progress = Some(if reversing { 1.0 } else { 0.0 });
+                binding.progress.track(if reversing { 1.0 } else { 0.0 });
             }
-            for p in &mut tx.participants {
-                if !p.withdrawn {
-                    if let Some(res) = &p.resource {
-                        res.gesture_began(gesture);
-                    }
-                    if p.ready && !p.applied {
-                        p.applied = true;
-                        p.leave_staged(tx_id, &mut self.transactions.staged_surface_owner);
-                    }
+            for p in tx.participants.iter().filter(|p| !p.withdrawn) {
+                if let Some(res) = &p.resource {
+                    res.gesture_began(gesture);
+                }
+                if p.ready && !p.applied {
+                    ready.push(p.id);
                 }
             }
         }
         self.transactions.active_gesture_tx.insert(output, tx_id);
-        // the parts applied: their kept commits apply with them
-        self.release_left_holds();
+        self.transactions.bound_gestures.insert(output);
+        self.apply_gesture_parts(tx_id, &ready);
         self.request_redraw();
         true
     }
 
-    /// Update the progress (`0.0..=1.0`) of an active gesture-bound transaction on `output`.
-    pub fn transaction_gesture_update(&mut self, output: OutputId, progress: f64) -> bool {
-        let Some(&tx_id) = self.transactions.active_gesture_tx.get(&output) else {
-            return false;
-        };
-        let Some(tx) = self.transactions.transactions.get_mut(&tx_id) else {
-            return false;
-        };
-        if tx.phase != TxPhase::GestureTracking {
-            return false;
+    /// Apply the parts `pids` of the gesture-bound `tx_id`: their kept commits apply, and the animations they start
+    /// follow the gesture's progress from the values their properties show. Their window changes wait for the progress
+    /// to come to rest at 1.
+    fn apply_gesture_parts(&mut self, tx_id: TxId, pids: &[u64]) {
+        if pids.is_empty() {
+            return;
         }
-        if let Some(binding) = &mut tx.gesture {
-            let p = progress.clamp(0.0, 1.0);
-            binding.tracking_progress = Some(if binding.reversing { 1.0 - p } else { p });
-            self.request_redraw();
-            return true;
+        let surfaces = self.transactions.kept_surfaces(tx_id, pids);
+        let manager = &mut self.transactions;
+        let Some(tx) = manager.transactions.get_mut(&tx_id) else {
+            return;
+        };
+        let Some(progress) = tx.gesture.as_ref().map(|g| g.progress.clone()) else {
+            return;
+        };
+        for p in tx.participants.iter_mut().filter(|p| pids.contains(&p.id)) {
+            p.applied = true;
+            p.leave_staged(tx_id, &mut manager.staged_surface_owner);
         }
-        false
+        // the parts applied: their kept commits apply with them, and what they animate waits to start
+        self.release_left_holds();
+        for surface in &surfaces {
+            crate::layers_v1::track_gesture(surface, &progress);
+        }
     }
 
-    /// End an active gesture-bound transaction on `output`, settling along its spring from `velocity`.
+    /// Update the progress (`0.0..=1.0`) of an active gesture-bound transaction on `output`. True while the gesture
+    /// under way is a transaction's, also once it was given up.
+    pub fn transaction_gesture_update(&mut self, output: OutputId, progress: f64) -> bool {
+        if !self.transactions.bound_gestures.contains(&output) {
+            return false;
+        }
+        let tracking = self
+            .transactions
+            .active_gesture_tx
+            .get(&output)
+            .and_then(|id| self.transactions.transactions.get(id))
+            .filter(|tx| tx.phase == TxPhase::GestureTracking)
+            .and_then(|tx| tx.gesture.as_ref());
+        if let Some(binding) = tracking {
+            let p = progress.clamp(0.0, 1.0);
+            binding
+                .progress
+                .track(if binding.reversing { 1.0 - p } else { p });
+            self.request_redraw();
+        }
+        true
+    }
+
+    /// End an active gesture-bound transaction on `output`, settling along its spring from `velocity` (progress per
+    /// second) to 1, completed, or back to 0, reverted. True when the gesture was a transaction's.
     pub fn transaction_gesture_end(
         &mut self,
         output: OutputId,
@@ -801,47 +862,41 @@ impl Cupertino {
         velocity: f64,
     ) -> bool {
         let now_s = self.now();
-        let Some(&tx_id) = self.transactions.active_gesture_tx.get(&output) else {
-            return false;
-        };
-        let Some(tx) = self.transactions.transactions.get_mut(&tx_id) else {
-            return false;
-        };
-        if tx.phase != TxPhase::GestureTracking {
+        if !self.transactions.bound_gestures.remove(&output) {
             return false;
         }
-        let outcome = if completed {
+        let Some(&tx_id) = self.transactions.active_gesture_tx.get(&output) else {
+            return true;
+        };
+        let Some(tx) = self.transactions.transactions.get_mut(&tx_id) else {
+            return true;
+        };
+        if tx.phase != TxPhase::GestureTracking {
+            return true;
+        }
+        let Some(binding) = &mut tx.gesture else {
+            return true;
+        };
+        // a reverse gesture that goes through takes the transaction back to its start
+        let target = match (binding.reversing, completed) {
+            (false, true) | (true, false) => 1.0,
+            (false, false) | (true, true) => 0.0,
+        };
+        let outcome = if target > 0.5 {
             WireOutcome::Completed
         } else {
             WireOutcome::Reverted
         };
+        let v = if binding.reversing {
+            -velocity
+        } else {
+            velocity
+        };
+        binding
+            .progress
+            .settle(target, binding.response, binding.damping, now_s, v);
+        binding.settle = Some(outcome);
         tx.phase = TxPhase::GestureSettling;
-        if let Some(binding) = &mut tx.gesture {
-            let cur = binding.tracking_progress.unwrap_or(0.0);
-            let target = match (binding.reversing, completed) {
-                (false, true) | (true, false) => 1.0,
-                (false, false) | (true, true) => 0.0,
-            };
-            let v = if binding.reversing {
-                -velocity
-            } else {
-                velocity
-            };
-            let mut prop = LayerProperty::new(cur);
-            prop.animate(
-                target,
-                LayerCurve::Spring {
-                    response: binding.response,
-                    damping: binding.damping,
-                },
-                now_s,
-                v,
-            );
-            binding.settle = Some(GestureSettle {
-                property: prop,
-                outcome,
-            });
-        }
         for p in &tx.participants {
             if !p.withdrawn {
                 if let Some(res) = &p.resource {

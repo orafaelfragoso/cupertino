@@ -14,6 +14,7 @@ calloop = "0.14"
 cupertino-assets = { path = "../cupertino-assets" }
 cupertino-cli = { path = "../cupertino-cli" }
 cupertino-controlcenter = { path = "../cupertino-controlcenter" }
+cupertino-input = { path = "../cupertino-input" }
 cupertino-kit = { path = "../cupertino-kit" }
 cupertino-kit-shell = { path = "../cupertino-kit-shell" }
 cupertino-launcher = { path = "../cupertino-launcher" }

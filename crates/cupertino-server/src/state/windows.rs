@@ -634,8 +634,9 @@ impl Cupertino {
             self.mapped_clients.remove(id);
             residents_changed |= self.docks.client_gone(id);
             self.host_client_disconnected(id);
+            let now = self.now();
             self.transactions
-                .client_disconnected(id, self.hosts.held_surfaces());
+                .client_disconnected(id, self.hosts.held_surfaces(), now);
             self.overviews.client_disconnected(id);
         }
         let mapped = &self.mapped_clients;

@@ -123,6 +123,8 @@ struct CompClient {
     layer_replaced: Vec<u32>,
     /// What the server answered `replaced` with, in the order it did: the serial, the value and the velocity.
     layer_replaced_with: Vec<(u32, f64, f64)>,
+    /// The serials of the layer animations the server answered `finished`, in the order it did.
+    layer_finished: Vec<u32>,
     /// The buffers the server released, in the order it did.
     released: Vec<wayland_client::backend::ObjectId>,
 }
@@ -306,14 +308,17 @@ impl Dispatch<CupertinoLayerV1, ()> for CompClient {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if let cupertino_layer_v1::Event::Replaced {
-            serial,
-            value,
-            velocity,
-        } = event
-        {
-            state.layer_replaced.push(serial);
-            state.layer_replaced_with.push((serial, value, velocity));
+        match event {
+            cupertino_layer_v1::Event::Replaced {
+                serial,
+                value,
+                velocity,
+            } => {
+                state.layer_replaced.push(serial);
+                state.layer_replaced_with.push((serial, value, velocity));
+            }
+            cupertino_layer_v1::Event::Finished { serial } => state.layer_finished.push(serial),
+            _ => {}
         }
     }
 }
@@ -2876,4 +2881,631 @@ fn a_held_surface_screens_its_vibrant_layer_over_what_lies_behind_it_as_live() {
          difference {most})"
     );
     switch_appearance(&mut rig, Appearance::Light);
+}
+
+/// How far the gesture-bound part moves its layer along x, in points, and the animation's serial.
+const GESTURE_TRAVEL: f64 = 600.0;
+const MOVE_SERIAL: u32 = 1;
+/// The serial of the part's fade in.
+const FADE_SERIAL: u32 = 2;
+/// The milliseconds of the layer's own motion, the longest the layer protocol takes: on its own clock the layer would
+/// move a tenth of the way in a second, so only the gesture's progress takes it far.
+const SLOW_MS: u32 = 10_000;
+/// The model time the gesture tests start at, in seconds.
+const GESTURE_T0: f64 = 10.0;
+
+/// The model's clock stands at `t` (seconds): what the layer protocol starts and shows counts from it.
+fn at_time(rig: &mut Rig, t: f64) {
+    rig.state.fixed_time = Some(t);
+}
+
+/// A server with an overview component whose transaction 1 is armed for the swipe up (response 0.45 s, critically
+/// damped), and with `reverse` for the swipe down back, its strip staged with a layer that moves [`GESTURE_TRAVEL`]
+/// points along x and fades in from 0 over [`SLOW_MS`]; on a fixed clock at [`GESTURE_T0`].
+struct GestureRig {
+    rig: Rig,
+    tx: CupertinoTransactionV1,
+    /// The server's strip surface, the layer's parent.
+    strip: smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+    oconn: Connection,
+    oq: EventQueue<CompClient>,
+    ost: CompClient,
+    /// The host, which starts the other components.
+    host: (Connection, EventQueue<HostClient>, HostClient),
+    _layer: CupertinoLayerV1,
+}
+
+impl GestureRig {
+    fn new(reduce_motion: bool, reverse: bool) -> Self {
+        use cupertino_layer_v1::Property;
+        let mut rig = Rig::new();
+        at_time(&mut rig, GESTURE_T0);
+        rig.state.set_display_option(
+            cupertino_defaults::accessibility::DisplayOption::ReduceMotion,
+            reduce_motion,
+        );
+        let (hconn, mut hq, mut hst) = rig.connect_host(&["overview", "menubar"]);
+        let (_hov, oconn, mut oq, mut ost) =
+            rig.spawn_component(&hconn, &mut hq, &mut hst, "overview");
+        let (surf, _shell) = rig.create_layer_surface(&oconn, &mut oq, &mut ost, "strip");
+        let strip = server_layer_surface(&rig, "strip");
+        let oqh = oq.handle();
+        let tx = ost
+            .tx_manager
+            .as_ref()
+            .unwrap()
+            .create(1, ost.output.as_ref().unwrap(), &oqh, ());
+        tx.bind_gesture(Gesture::SwipeUp, 0.45, 1.0);
+        if reverse {
+            tx.bind_reverse_gesture(Gesture::SwipeDown);
+        }
+        tx.stage(&surf);
+        let child = ost.compositor.as_ref().unwrap().create_surface(&oqh, ());
+        let layer = ost
+            .layers
+            .as_ref()
+            .unwrap()
+            .get_layer(&child, &surf, &oqh, ());
+        layer.animate_timed(
+            MOVE_SERIAL,
+            Property::X,
+            GESTURE_TRAVEL,
+            SLOW_MS,
+            0.0,
+            0.0,
+            1.0,
+            1.0,
+        );
+        layer.set_value(Property::Opacity, 0.0);
+        layer.animate_timed(
+            FADE_SERIAL,
+            Property::Opacity,
+            1.0,
+            SLOW_MS,
+            0.0,
+            0.0,
+            1.0,
+            1.0,
+        );
+        surf.commit();
+        tx.submit();
+        for _ in 0..4 {
+            rig.pump_comp(&oconn, &mut oq, &mut ost);
+        }
+        assert_eq!(layers_of(&strip), 0, "the armed part's commits are kept");
+        Self {
+            rig,
+            tx,
+            strip,
+            oconn,
+            oq,
+            ost,
+            host: (hconn, hq, hst),
+            _layer: layer,
+        }
+    }
+
+    /// Turn the loop `n` times with the overview's connection.
+    fn pump(&mut self, n: usize) {
+        for _ in 0..n {
+            self.rig.pump_comp(&self.oconn, &mut self.oq, &mut self.ost);
+        }
+    }
+
+    /// The strip's layer's x and opacity as a frame built at `now` shows them.
+    fn shown(&self, now: f64) -> (f64, f64) {
+        shown_layer(&self.rig, &self.strip, now)
+    }
+
+    /// The fingers lift with `velocity` at the clock's time, and the transaction comes to rest by then + 3 s.
+    fn release(&mut self, completed: bool, velocity: f64) -> f64 {
+        let output = self.rig.output_id;
+        assert!(self
+            .rig
+            .state
+            .transaction_gesture_end(output, completed, velocity));
+        let later = self.rig.state.now() + 3.0;
+        at_time(&mut self.rig, later);
+        self.pump(4);
+        later
+    }
+}
+
+/// A gesture-bound overview part whose layer moves and fades in ([`GestureRig`]), without a reverse binding; returns the
+/// rig, the transaction and layer objects, the server's surface and the component's connection, queue and client.
+fn gesture_moved_layer(
+    reduce_motion: bool,
+) -> (
+    Rig,
+    CupertinoTransactionV1,
+    CupertinoLayerV1,
+    smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+    (Connection, EventQueue<CompClient>, CompClient),
+) {
+    let g = GestureRig::new(reduce_motion, false);
+    (g.rig, g.tx, g._layer, g.strip, (g.oconn, g.oq, g.ost))
+}
+
+/// The layer's x and opacity as a frame built at `now` shows them.
+fn shown_layer(
+    rig: &Rig,
+    strip: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+    now: f64,
+) -> (f64, f64) {
+    let reduce_motion = rig.state.display_options().reduce_motion;
+    let drawn = cupertino_server::layers_v1::present(strip, now, reduce_motion);
+    assert_eq!(drawn.len(), 1, "the part's layer shows");
+    (drawn[0].x, drawn[0].opacity)
+}
+
+fn swipe_up() -> cupertino_protocols::server::transaction::cupertino_transaction_v1::Gesture {
+    cupertino_protocols::server::transaction::cupertino_transaction_v1::Gesture::SwipeUp
+}
+
+fn close(a: f64, b: f64) -> bool {
+    (a - b).abs() < 1e-6
+}
+
+#[test]
+fn a_bound_gesture_s_progress_moves_the_layers_its_part_animates_while_the_fingers_move() {
+    let (mut rig, _tx, _layer, strip, (oconn, mut oq, mut ost)) = gesture_moved_layer(false);
+    assert!(rig
+        .state
+        .transaction_gesture_begin(rig.output_id, swipe_up()));
+    assert!(rig.state.transaction_gesture_update(rig.output_id, 0.5));
+    for _ in 0..3 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    assert_eq!(ost.gesture_began, vec![Gesture::SwipeUp]);
+    let (x, opacity) = shown_layer(&rig, &strip, GESTURE_T0);
+    assert!(
+        close(x, GESTURE_TRAVEL / 2.0) && close(opacity, 0.5),
+        "at progress 0.5 every tracked property is half way: x {x}, opacity {opacity}"
+    );
+
+    // a second later the fingers went back a little: the progress, not the layer's clock, places it
+    at_time(&mut rig, GESTURE_T0 + 1.0);
+    assert!(rig.state.transaction_gesture_update(rig.output_id, 0.25));
+    for _ in 0..3 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    let (x, opacity) = shown_layer(&rig, &strip, GESTURE_T0 + 1.0);
+    assert!(
+        close(x, GESTURE_TRAVEL / 4.0) && close(opacity, 0.25),
+        "start + progress x (target - start): x {x}, opacity {opacity}"
+    );
+    let target = cupertino_server::layers_v1::with_parent(&strip, |layers| layers[0].target(0));
+    assert_eq!(
+        target, GESTURE_TRAVEL,
+        "the client hit-tests against the target"
+    );
+    assert!(
+        ost.layer_finished.is_empty() && ost.layer_replaced.is_empty(),
+        "the tracked animations run"
+    );
+    assert!(
+        !rig.state.layers.settled(GESTURE_T0 + 1.0),
+        "what shows is not the targets while the gesture moves the layer"
+    );
+}
+
+#[test]
+fn a_bound_gesture_released_past_its_threshold_settles_its_layers_to_their_targets_with_its_velocity(
+) {
+    // the layer's x 40 ms after a release at progress 0.6 with `velocity`, and what shows and was heard at rest
+    let release = |velocity: f64| {
+        let (mut rig, _tx, _layer, strip, (oconn, mut oq, mut ost)) = gesture_moved_layer(false);
+        assert!(rig
+            .state
+            .transaction_gesture_begin(rig.output_id, swipe_up()));
+        assert!(rig.state.transaction_gesture_update(rig.output_id, 0.6));
+        for _ in 0..3 {
+            rig.pump_comp(&oconn, &mut oq, &mut ost);
+        }
+        assert!(rig
+            .state
+            .transaction_gesture_end(rig.output_id, true, velocity));
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+        let soon = GESTURE_T0 + 0.04;
+        let progress = rig
+            .state
+            .transactions
+            .gesture_progress_on(rig.output_id, soon)
+            .expect("the progress settles");
+        let (x, _) = shown_layer(&rig, &strip, soon);
+        assert!(
+            close(x, progress * GESTURE_TRAVEL),
+            "the layer follows the settling progress: x {x}, progress {progress}"
+        );
+        assert!(ost.finished.is_empty(), "not at rest yet");
+
+        let deadline = rig
+            .state
+            .transaction_deadline()
+            .expect("the settle's end is a deadline");
+        assert!(
+            deadline > GESTURE_T0 && deadline < GESTURE_T0 + 3.0,
+            "the settle ends at {deadline}"
+        );
+        at_time(&mut rig, GESTURE_T0 + 3.0);
+        for _ in 0..4 {
+            rig.pump_comp(&oconn, &mut oq, &mut ost);
+        }
+        let (rest, opacity) = shown_layer(&rig, &strip, GESTURE_T0 + 3.0);
+        (x, rest, opacity, ost)
+    };
+    let (slow, rest, opacity, ost) = release(0.0);
+    let (fast, ..) = release(6.0);
+    assert!(
+        fast > slow + 0.05 * GESTURE_TRAVEL,
+        "the gesture's velocity carries the layer further along (fast {fast}, slow {slow})"
+    );
+    assert!(
+        close(rest, GESTURE_TRAVEL) && close(opacity, 1.0),
+        "at rest every property is at its target: x {rest}, opacity {opacity}"
+    );
+    assert_eq!(ost.gesture_ended, vec![Outcome::Completed]);
+    assert_eq!(ost.finished, vec![Outcome::Completed]);
+    let mut finished = ost.layer_finished.clone();
+    finished.sort_unstable();
+    assert_eq!(
+        finished,
+        vec![MOVE_SERIAL, FADE_SERIAL],
+        "each animation finished"
+    );
+    assert!(ost.layer_replaced.is_empty(), "no animation was replaced");
+}
+
+#[test]
+fn a_bound_gesture_released_short_of_its_threshold_settles_its_layers_back_to_their_start() {
+    let (mut rig, _tx, _layer, strip, (oconn, mut oq, mut ost)) = gesture_moved_layer(false);
+    assert!(rig
+        .state
+        .transaction_gesture_begin(rig.output_id, swipe_up()));
+    assert!(rig.state.transaction_gesture_update(rig.output_id, 0.3));
+    for _ in 0..3 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    assert!(close(
+        shown_layer(&rig, &strip, GESTURE_T0).0,
+        0.3 * GESTURE_TRAVEL
+    ));
+    assert!(rig
+        .state
+        .transaction_gesture_end(rig.output_id, false, -1.0));
+    at_time(&mut rig, GESTURE_T0 + 3.0);
+    for _ in 0..4 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    let (x, opacity) = shown_layer(&rig, &strip, GESTURE_T0 + 3.0);
+    assert!(
+        close(x, 0.0) && close(opacity, 0.0),
+        "reverted, the layer is back at its start: x {x}, opacity {opacity}"
+    );
+    assert_eq!(ost.gesture_ended, vec![Outcome::Reverted]);
+    assert_eq!(ost.finished, vec![Outcome::Reverted]);
+    let mut replaced = ost.layer_replaced_with.clone();
+    replaced.sort_by_key(|r| r.0);
+    assert_eq!(
+        replaced,
+        vec![(MOVE_SERIAL, 0.0, 0.0), (FADE_SERIAL, 0.0, 0.0)],
+        "each animation is answered replaced at its start"
+    );
+    let targets = cupertino_server::layers_v1::with_parent(&strip, |layers| {
+        [0, 4].map(|prop| layers[0].target(prop))
+    });
+    assert_eq!(
+        targets,
+        [0.0, 0.0],
+        "the client hit-tests against the start again"
+    );
+    assert!(
+        rig.state.layers.settled(GESTURE_T0 + 3.0),
+        "what shows is the targets"
+    );
+    // the rest of the gesture's events are the transaction's, and the next swipe goes to the dock
+    assert!(!rig
+        .state
+        .transaction_gesture_begin(rig.output_id, swipe_up()));
+}
+
+#[test]
+fn under_reduced_motion_a_bound_gesture_s_progress_drives_opacity_alone() {
+    let (mut rig, _tx, _layer, strip, (oconn, mut oq, mut ost)) = gesture_moved_layer(true);
+    assert!(rig
+        .state
+        .transaction_gesture_begin(rig.output_id, swipe_up()));
+    assert!(rig.state.transaction_gesture_update(rig.output_id, 0.5));
+    for _ in 0..3 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    let (x, opacity) = shown_layer(&rig, &strip, GESTURE_T0);
+    assert!(
+        close(x, 0.0) && close(opacity, 0.5),
+        "the layer fades with the progress and stays where it started: x {x}, opacity {opacity}"
+    );
+    assert!(rig.state.transaction_gesture_end(rig.output_id, true, 0.0));
+    rig.pump_comp(&oconn, &mut oq, &mut ost);
+    let (x, _) = shown_layer(&rig, &strip, GESTURE_T0 + 0.04);
+    assert!(
+        close(x, 0.0),
+        "the layer stays at its start while the progress settles: x {x}"
+    );
+    at_time(&mut rig, GESTURE_T0 + 3.0);
+    for _ in 0..4 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    let (x, opacity) = shown_layer(&rig, &strip, GESTURE_T0 + 3.0);
+    assert!(
+        close(x, GESTURE_TRAVEL) && close(opacity, 1.0),
+        "at rest at 1 the spatial property takes its target: x {x}, opacity {opacity}"
+    );
+    assert_eq!(ost.finished, vec![Outcome::Completed]);
+}
+
+#[test]
+fn a_reverse_gesture_drives_a_completed_transaction_s_layers_back_to_where_the_first_gesture_began()
+{
+    let swipe_down =
+        cupertino_protocols::server::transaction::cupertino_transaction_v1::Gesture::SwipeDown;
+    let mut g = GestureRig::new(false, true);
+    let output = g.rig.output_id;
+    assert!(g.rig.state.transaction_gesture_begin(output, swipe_up()));
+    assert!(g.rig.state.transaction_gesture_update(output, 0.8));
+    g.pump(3);
+    let rest = g.release(true, 0.0);
+    assert_eq!(g.ost.finished, vec![Outcome::Completed]);
+    assert!(close(g.shown(rest).0, GESTURE_TRAVEL), "at rest completed");
+    let mut finished = g.ost.layer_finished.clone();
+    finished.sort_unstable();
+    assert_eq!(
+        finished,
+        vec![MOVE_SERIAL, FADE_SERIAL],
+        "at rest at 1 the animations finished"
+    );
+    assert!(
+        g.rig.state.layers.settled(rest),
+        "what shows at rest is the targets"
+    );
+
+    // a reverse gesture half way down: the properties are half way back
+    assert!(g.rig.state.transaction_gesture_begin(output, swipe_down));
+    assert!(g.rig.state.transaction_gesture_update(output, 0.5));
+    g.pump(3);
+    let (x, opacity) = g.shown(rest);
+    assert!(
+        close(x, GESTURE_TRAVEL / 2.0) && close(opacity, 0.5),
+        "the reverse gesture drives the same properties back: x {x}, opacity {opacity}"
+    );
+    // released short, it settles to the rest completed again and stays for the reverse gesture
+    let rest = g.release(false, 0.0);
+    assert_eq!(
+        g.ost.gesture_ended,
+        vec![Outcome::Completed, Outcome::Completed]
+    );
+    assert_eq!(g.ost.finished, vec![Outcome::Completed, Outcome::Completed]);
+    assert!(
+        close(g.shown(rest).0, GESTURE_TRAVEL),
+        "back at rest completed"
+    );
+
+    // a reverse gesture that goes through takes the layer back to its start, and the transaction is over
+    assert!(g.rig.state.transaction_gesture_begin(output, swipe_down));
+    assert!(g.rig.state.transaction_gesture_update(output, 0.9));
+    g.pump(3);
+    let rest = g.release(true, 0.0);
+    assert_eq!(g.ost.gesture_ended.last(), Some(&Outcome::Reverted));
+    assert_eq!(g.ost.finished.last(), Some(&Outcome::Reverted));
+    let (x, opacity) = g.shown(rest);
+    assert!(
+        close(x, 0.0) && close(opacity, 0.0),
+        "back where the first gesture began: x {x}, opacity {opacity}"
+    );
+    let targets = cupertino_server::layers_v1::with_parent(&g.strip, |layers| {
+        [0, 4].map(|prop| layers[0].target(prop))
+    });
+    assert_eq!(targets, [0.0, 0.0], "the properties rest at their start");
+    assert!(
+        !g.rig.state.transaction_gesture_begin(output, swipe_down),
+        "the reverse binding ended with the transaction"
+    );
+}
+
+#[test]
+fn a_bound_gesture_cancelled_under_way_settles_back_and_keeps_the_rest_of_the_gesture() {
+    let mut g = GestureRig::new(false, false);
+    let output = g.rig.output_id;
+    assert!(g.rig.state.transaction_gesture_begin(output, swipe_up()));
+    assert!(g.rig.state.transaction_gesture_update(output, 0.5));
+    g.pump(3);
+    g.tx.cancel();
+    g.pump(2);
+    assert!(g.ost.finished.is_empty(), "the progress settles back first");
+    let later = GESTURE_T0 + 3.0;
+    at_time(&mut g.rig, later);
+    g.pump(4);
+    assert_eq!(g.ost.finished, vec![Outcome::Cancelled]);
+    let (x, opacity) = g.shown(later);
+    assert!(
+        close(x, 0.0) && close(opacity, 0.0),
+        "the layer is back at its start: x {x}, opacity {opacity}"
+    );
+    let mut replaced = g.ost.layer_replaced_with.clone();
+    replaced.sort_by_key(|r| r.0);
+    assert_eq!(
+        replaced,
+        vec![(MOVE_SERIAL, 0.0, 0.0), (FADE_SERIAL, 0.0, 0.0)],
+        "each animation is answered replaced at its start"
+    );
+    // the fingers go on and lift past the threshold: the gesture stays the cancelled transaction's, not the dock's
+    assert!(g.rig.state.transaction_gesture_update(output, 0.9));
+    assert!(g.rig.state.transaction_gesture_end(output, true, 2.0));
+    g.pump(3);
+    assert!(close(g.shown(later).0, 0.0), "nothing moves the layer");
+    assert!(
+        g.ost.gesture_ended.is_empty(),
+        "the transaction hears nothing more"
+    );
+}
+
+#[test]
+fn a_part_ready_while_a_bound_gesture_is_under_way_joins_at_the_progress_shown() {
+    use cupertino_layer_v1::Property;
+    let mut g = GestureRig::new(false, false);
+    let output = g.rig.output_id;
+    let (hconn, hq, hst) = &mut g.host;
+    let (_hbar, bconn, mut bq, mut bst) = g.rig.spawn_component(hconn, hq, hst, "menubar");
+    let (bar_surf, _bar_shell) = g.rig.create_layer_surface(&bconn, &mut bq, &mut bst, "bar");
+    let server_bar = server_layer_surface(&g.rig, "bar");
+    assert!(g.rig.state.transaction_gesture_begin(output, swipe_up()));
+    assert!(g.rig.state.transaction_gesture_update(output, 0.5));
+    g.pump(3);
+
+    // the menu bar joins under way with a layer it moves 200 points
+    let bqh = bq.handle();
+    let joined = bst.tx_manager.as_ref().unwrap().join(
+        "overview".into(),
+        g.ost.instance.unwrap(),
+        1,
+        bst.output.as_ref().unwrap(),
+        &bqh,
+        (),
+    );
+    joined.stage(&bar_surf);
+    let child = bst.compositor.as_ref().unwrap().create_surface(&bqh, ());
+    let layer = bst
+        .layers
+        .as_ref()
+        .unwrap()
+        .get_layer(&child, &bar_surf, &bqh, ());
+    layer.animate_timed(7, Property::X, 200.0, SLOW_MS, 0.0, 0.0, 1.0, 1.0);
+    bar_surf.commit();
+    joined.submit();
+    for _ in 0..4 {
+        g.rig.pump_comp(&bconn, &mut bq, &mut bst);
+    }
+    let (bar_x, _) = shown_layer(&g.rig, &server_bar, GESTURE_T0);
+    assert!(
+        close(bar_x, 100.0),
+        "the late part shows at the progress reached: x {bar_x}"
+    );
+
+    let rest = g.release(true, 0.0);
+    for _ in 0..2 {
+        g.rig.pump_comp(&bconn, &mut bq, &mut bst);
+    }
+    assert!(
+        close(shown_layer(&g.rig, &server_bar, rest).0, 200.0),
+        "the late part is at its target"
+    );
+    assert_eq!(bst.finished, vec![Outcome::Completed]);
+    assert_eq!(bst.layer_finished, vec![7]);
+}
+
+#[test]
+fn a_bound_gesture_whose_creator_destroys_its_object_under_way_settles_back_to_its_start() {
+    let mut g = GestureRig::new(false, false);
+    let output = g.rig.output_id;
+    assert!(g.rig.state.transaction_gesture_begin(output, swipe_up()));
+    assert!(g.rig.state.transaction_gesture_update(output, 0.6));
+    g.pump(3);
+    g.tx.destroy();
+    g.pump(2);
+    let later = GESTURE_T0 + 3.0;
+    at_time(&mut g.rig, later);
+    g.pump(4);
+    let (x, opacity) = g.shown(later);
+    assert!(
+        close(x, 0.0) && close(opacity, 0.0),
+        "the binding ended with the object: the layer is back at its start: x {x}, opacity {opacity}"
+    );
+    let mut replaced = g.ost.layer_replaced_with.clone();
+    replaced.sort_by_key(|r| r.0);
+    assert_eq!(
+        replaced,
+        vec![(MOVE_SERIAL, 0.0, 0.0), (FADE_SERIAL, 0.0, 0.0)]
+    );
+    assert!(
+        g.ost.finished.is_empty(),
+        "the destroyed object hears nothing"
+    );
+    assert!(
+        g.rig.state.transaction_gesture_end(output, true, 2.0),
+        "the rest of the gesture is the transaction's"
+    );
+    assert!(
+        !g.rig.state.transaction_gesture_begin(output, swipe_up()),
+        "the binding ended"
+    );
+}
+
+#[test]
+fn a_bound_gesture_whose_creator_s_connection_ends_under_way_settles_a_joiner_s_layers_back() {
+    use cupertino_layer_v1::Property;
+    let g = GestureRig::new(false, false);
+    let GestureRig {
+        mut rig,
+        oconn,
+        oq,
+        ost,
+        host: (hconn, mut hq, mut hst),
+        tx,
+        _layer,
+        ..
+    } = g;
+    let output = rig.output_id;
+    let (_hbar, bconn, mut bq, mut bst) = rig.spawn_component(&hconn, &mut hq, &mut hst, "menubar");
+    let (bar_surf, _bar_shell) = rig.create_layer_surface(&bconn, &mut bq, &mut bst, "bar");
+    let server_bar = server_layer_surface(&rig, "bar");
+    // the menu bar's part, ready before the gesture, moves its layer 200 points
+    let bqh = bq.handle();
+    let joined = bst.tx_manager.as_ref().unwrap().join(
+        "overview".into(),
+        ost.instance.unwrap(),
+        1,
+        bst.output.as_ref().unwrap(),
+        &bqh,
+        (),
+    );
+    joined.stage(&bar_surf);
+    let child = bst.compositor.as_ref().unwrap().create_surface(&bqh, ());
+    let layer = bst
+        .layers
+        .as_ref()
+        .unwrap()
+        .get_layer(&child, &bar_surf, &bqh, ());
+    layer.animate_timed(7, Property::X, 200.0, SLOW_MS, 0.0, 0.0, 1.0, 1.0);
+    bar_surf.commit();
+    joined.submit();
+    for _ in 0..4 {
+        rig.pump_comp(&bconn, &mut bq, &mut bst);
+    }
+    assert!(rig.state.transaction_gesture_begin(output, swipe_up()));
+    assert!(rig.state.transaction_gesture_update(output, 0.5));
+    for _ in 0..3 {
+        rig.pump_comp(&bconn, &mut bq, &mut bst);
+    }
+    assert!(close(shown_layer(&rig, &server_bar, GESTURE_T0).0, 100.0));
+
+    // the overview's connection ends with the fingers on the touchpad
+    drop((tx, _layer, ost, oq, oconn));
+    for _ in 0..4 {
+        rig.pump_comp(&bconn, &mut bq, &mut bst);
+    }
+    let later = GESTURE_T0 + 3.0;
+    at_time(&mut rig, later);
+    for _ in 0..4 {
+        rig.pump_comp(&bconn, &mut bq, &mut bst);
+    }
+    let bar_x = shown_layer(&rig, &server_bar, later).0;
+    assert!(
+        close(bar_x, 0.0),
+        "the joiner's layer settled back to its start: x {bar_x}"
+    );
+    assert_eq!(bst.finished, vec![Outcome::Cancelled]);
+    assert_eq!(bst.layer_replaced_with, vec![(7, 0.0, 0.0)]);
+    assert!(
+        rig.state.transaction_gesture_end(output, true, 2.0),
+        "the rest of the gesture is the transaction's"
+    );
 }

@@ -1685,6 +1685,7 @@ dependencies = [
  "cupertino-assets",
  "cupertino-cli",
  "cupertino-controlcenter",
+ "cupertino-input",
  "cupertino-kit",
  "cupertino-kit-shell",
  "cupertino-launcher",

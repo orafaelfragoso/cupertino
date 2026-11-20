@@ -16,9 +16,9 @@ Updated by the lead at every merge.
 | | |
 |---|---|
 | Current wave | 6 |
-| Running tasks | none |
+| Running tasks | W6.2 follow-up: where the host's heap goes; the host's profile timeline |
 | Enforced layers | foundation, system, graphics, models, platform, protocol, transport, render, ui, shellkit, core, services, testing (110 remaining-work lines; zero outside `shell` and `apps`) |
-| Waiting on the owner | nothing |
+| Waiting on the owner | W6.2 no-go (0.81 of the two processes' PSS against the 0.60 limit): go on, change the limit, or fix first |
 | Last closed wave | 5 |
 
 ## Contents
@@ -1076,10 +1076,10 @@ Every component task has this shape:
 
 **Owns** new `shell`, `osd`. **After** W5.2, W5.5, W5.9, W5.10.
 
-1. [ ] Component threads, shared runtime, panic containment, the busy watchdog, helper-thread and child-process API,
-       the host bus.
-2. [ ] `--only` (D18) and `cupertino shell crash <component>` in development builds.
-3. [ ] The pilot: the on-screen displays run in the host, sound through `cupertino-audiod`, with the component
+1. [x] Component threads, shared runtime, panic containment, the busy watchdog, helper-thread and child-process API,
+       the host bus (`5972aa43e`).
+2. [x] `--only` (D18) and `cupertino shell crash <component>` in development builds (`5972aa43e`).
+3. [x] (`5972aa43e`, `78a55c4a8`) The pilot: the on-screen displays run in the host, sound through `cupertino-audiod`, with the component
        checklist above met and every program test passing.
 
 #### W6.2 Memory checkpoint (lead)
@@ -1209,6 +1209,7 @@ Filled in by W0.1, W6.2 and W6.close.
 | Idle session, installed packages 0.1.0-202611162246, 4K at scale 1.5 | 179 692 kB (dock 53 868, launcher 42 164, menubar 28 916, notifications 19 477, files `--desktop` 14 772, controlcenter 9 989, osd 9 675, windowmanager 831); login, polkit agent and keyring prompter are not dumpable, read as root | | | not yet recorded | |
 | Active session @ `4cb94cdbc` (W5 close, `/proc/<pid>/smaps_rollup`) | 225 052 kB (dock 76 765, launcher 41 295, files `--desktop` 37 939, menubar 28 909, notifications 28 366, controlcenter 6 288, osd 4 919, windowmanager 580); server 399 489 kB, portal 7 958 kB, control 1 357 kB | | | see headless `CUPERTINO_PROFILE` below | |
 | Headless `1920x1080@2x` 60 Hz (`CUPERTINO_PROFILE`, `4cb94cdbc`): `server` + `files` / `virtual-list` / `settings` | `heaptrack` server: 103 189 allocs (9 528 temp), 128.78 MiB peak heap, 255.50 MiB peak RSS; `benches/layout.rs`: 3 040 328 allocs (1 225 898 temp), 636.8 / 106.6 µs (1k cold/warm), 6 597.6 / 1 152.2 µs (10k cold/warm) | `heaptrack` server: 103 182 allocs (9 539 temp), 128.78 MiB peak heap, 256.21 MiB peak RSS; `benches/layout.rs`: 8 748 allocs (226 temp), 322.3 / 59.5 µs (1k cold/warm), 4 401.2 / 660.4 µs (10k cold/warm) | 0.0029× layout allocs (347× fewer); 0.51–0.67× layout time | `gpu.plan` p50: 14.1 / 7.7 / 8.3 µs; `gpu.record` p50: 48.6 / 24.1 / 57.2 µs; `ui.turn` p50: 131.3 / 25.7 / 88.3 µs; `ui.window` p99: 4.50 / 1.00 / 2.19 ms | `gpu.plan` p50: 8.2 / 5.5 / 5.5 µs (-28% to -42%); `gpu.record` p50: 34.6 / 19.1 / 46.3 µs (-19% to -29%); `ui.turn` p50: 66.7 / 18.7 / 44.5 µs (-27% to -50%); `ui.window` p99: 2.58 / 1.07 / 2.27 ms |
+| Headless 3840x2160 at scale 1.5, release builds (W6.2, `9948cea8b`; the server at `9948cea8b` for both): `cupertino-osd` + `cupertino-notifications` at `d78dfc45f` against `cupertino-shell` with `osd` and `notifications` | CPU drawing (the default): idle 28 721 kB, after a banner and the volume overlay 38 141 kB; `CUPERTINO_RENDERER=gpu`: 113 116 / 133 940 kB (medians of 3) | CPU: 23 108 / 31 509 kB; GPU: 67 718 / 84 984 kB | CPU 0.805 / 0.826; GPU 0.599 / 0.634 | `ui.window` p99 3.17 ms (CPU), 3.62 ms (GPU) | 3.14 ms (CPU), 3.66 ms (GPU) |
 
 The server measured 161 185 kB in the same session. Frame timings need a session started with `CUPERTINO_PROFILE` set.
 
@@ -1438,3 +1439,16 @@ One line per change to a decision or approval of a design: date, number, what, w
   program sets one. `cupertino-session-tests/tests/shell-host.rs` runs kit-shell's host and components against the
   real server headless. A part lets go only of staged surfaces it still owns, and a value or cancel that applies answers
   each animation still waiting for its property `replaced`.
+- 2026-11-20: lead, W6.2: no-go. The host with `osd` and `notifications` is 0.805 of the two processes' PSS idle and
+  0.826 after a banner and the volume overlay, drawing on the CPU as the session does (W0.1's installed figure for the two
+  is within 2% of the measured one); forced onto the GPU, 0.599 and 0.634, the driver's mappings counted once. Frame p99
+  is no worse. The saving is the binary and its libraries mapped once (file-backed 20 207 against 14 149 kB); anonymous
+  memory is 8 200 kB for the processes against 8 448 for the host, so nothing the two components could share is shared
+  yet. The host wrote no `CUPERTINO_PROFILE` timeline: a connection the host is handed (`WaylandWindowSystem::new_as`)
+  skips what `connect_as` switches on. Wave 6 stops at the checkpoint and goes to the owner. Calls made after W6.1 and
+  W6.3: restart counts stay in the server; `Osd1`'s steps are accepted only from the server's `Session1` connection,
+  which sends them; the OSD fade is `Timing::OSD_FADE`; `kit::test::capture` names `Pixmap`; debug builds serve
+  `org.cupertino.ShellComponentDebug1` on each component's connection for `cupertino shell crash`; the lock screen
+  asks the `notifications` component, resolved through `ComponentOf`; a component gets `Event::Appearance`; the
+  notification list is kept in `$XDG_RUNTIME_DIR/cupertino/notifications-<display>.json`; a swipe's spring-back starts
+  from rest and the cards' rise ends when its spring settles.

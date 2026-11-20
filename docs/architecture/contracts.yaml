@@ -894,9 +894,9 @@
   owner_crate: cupertino-notifications
   owner_area: apps
   scope: public
-  source: crates/cupertino-notifications/src/dbus.rs
+  source: crates/cupertino-notifications/src/control.rs
   source_match: "org.freedesktop.Notifications"
-  note: any application may notify; a sandboxed one replaces or closes only what its own instance sent
+  note: served by the notifications component in the cupertino-shell binary, on the component's own connection; any application may notify; a sandboxed one replaces or closes only what its own instance sent
 - name: org.cupertino.NotificationCenter1
   kind: dbus-interface
   version: 1
@@ -905,9 +905,9 @@
   owner_crate: cupertino-notifications
   owner_area: apps
   scope: public
-  source: crates/cupertino-notifications/src/dbus.rs
+  source: crates/cupertino-notifications/src/control.rs
   source_match: "org.cupertino.NotificationCenter1"
-  note: every method refuses sandboxed and unnamed callers
+  note: served by the notifications component in the cupertino-shell binary, on the component's own connection; every method refuses sandboxed and unnamed callers
 - name: com.canonical.AppMenu.Registrar
   kind: dbus-interface
   version: n/a
@@ -1196,14 +1196,6 @@
   owner_area: services
   scope: system
   source: crates/cupertino-netd/src/main.rs
-- name: cupertino-notifications
-  kind: binary
-  version: 0.1.0
-  shipped: yes
-  owner_crate: cupertino-notifications
-  owner_area: apps
-  scope: shell-private
-  source: crates/cupertino-notifications/src/main.rs
 - name: cupertino-shell
   kind: binary
   version: 0.1.0
@@ -1212,7 +1204,7 @@
   owner_area: apps
   scope: shell-private
   source: crates/cupertino-shell/src/main.rs
-  note: the shell host the server starts on a connection with the host role alone; runs the listed components, each on a thread of its own; holds the osd component (cupertino-osd)
+  note: the shell host the server starts on a connection with the host role alone; runs the listed components, each on a thread of its own; holds the osd (cupertino-osd) and notifications (cupertino-notifications) components
 - name: cupertino-control
   kind: binary
   version: 0.1.0

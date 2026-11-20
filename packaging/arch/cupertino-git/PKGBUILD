@@ -103,7 +103,7 @@ package_cupertino-git() {
           'etc/pam.d/cupertino-greeter' 'etc/pam.d/cupertino-autologin')
   cd "$_srcname"
   local bin="${CARGO_TARGET_DIR:-target}/release" gen="$srcdir/gen" lic="$pkgdir/usr/share/licenses/cupertino" name
-  for name in cupertino-server cupertino-dock cupertino-menubar cupertino-launcher cupertino-notifications \
+  for name in cupertino-server cupertino-dock cupertino-menubar cupertino-launcher \
               cupertino-controlcenter cupertino-screenshot cupertino-control cupertino-windowmanager \
               cupertino-login cupertino-polkit-agent cupertino-keyring-prompter cupertino-portal cupertino-files \
               cupertino-settings cupertino-sessiond cupertino-netd cupertino-btd cupertino-powerd cupertino-audiod cupertino-diagnose \

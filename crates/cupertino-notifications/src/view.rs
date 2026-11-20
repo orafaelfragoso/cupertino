@@ -33,7 +33,6 @@ use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
 
-use cupertino_animation::{Spring, SpringParams};
 use cupertino_kit::controls::{
     paint_glass_edge, AppIcon, Button, ButtonRole, ButtonStyle, DisclosureButton, DisclosureStyle,
     GlassEdge, PressCatcher, RichText, ScrollView, Scroller, Stack, Text, TextLink, TextRole,
@@ -48,6 +47,7 @@ use cupertino_kit::layout::{
     Align, Axis, Constraints, ContainerKind, Flex, Justify, LayoutSpec, Measured, Overflow,
     ScrollState, SizeSpec,
 };
+use cupertino_kit::motion::{SpringPreset, Timing};
 use cupertino_kit::platform::{DecorationMode, Keysym, MouseButton, PointerEvent, WindowSpec};
 use cupertino_kit::render::{Effect, FillRule, Paint, PaintOp, PathVerb, Shape};
 use cupertino_kit::text::{
@@ -65,6 +65,8 @@ use crate::notification::{
 use crate::stack::GroupStack;
 use controls::{CardControl, Kind};
 pub use motion::{Gap, Removal, Rise, Slide, SLIDE_DISTANCE};
+pub use roots::{centre_root_key, DisplayProbe};
+use roots::{CentreRoot, Strip};
 
 /// The `app_id` of every window of the process.
 pub const APP_ID: &str = "cupertino-notifications";
@@ -160,8 +162,6 @@ pub const CLEAR_WIDTH: f64 = 86.0;
 /// An expanded group: its header row (its application, Show Less and its clear button) and the gap between its cards.
 pub const GROUP_HEADER: f64 = 30.0;
 pub const CARD_GAP: f64 = 6.0;
-/// How long a group takes to expand or collapse, as a spring's perceptual duration, without bounce.
-pub const EXPAND_DURATION: f64 = 0.35;
 /// Space between the centre's list and the bottom edge of the output.
 pub const BOTTOM_MARGIN: f64 = 16.0;
 /// How far left of the cards the centre takes input, and how tall (more than any output) its region is.
@@ -249,7 +249,7 @@ pub enum Input {
 
 /// What the windows show beyond the model: whether the centre and its Clear menu are open, where its list is
 /// scrolled to, which of its cards are unfolded, which one is revealed, and which groups are expanded or collapsing.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Ui {
     /// The centre is open and takes input. It stays on screen while it slides out after it is closed
     /// ([`Ui::centre_shown`]).
@@ -275,20 +275,20 @@ pub struct Ui {
 }
 
 /// The spring a group expands and collapses with.
-fn expand_spring() -> Spring {
-    Spring::new(SpringParams::from_perceptual(EXPAND_DURATION, 0.0))
+fn expand_timing() -> Timing {
+    Timing::from(SpringPreset::NOTIFICATION_GROUP_EXPAND)
 }
 
 impl Ui {
     /// How far the group `key` is expanded at `now`: 0 collapsed, 1 expanded.
     pub fn expansion(&self, key: &str, now: f64) -> f64 {
-        let spring = expand_spring();
+        let timing = expand_timing();
         let progress = |start: f64| {
             let t = now - start;
-            if t >= spring.settling_duration() {
+            if t >= timing.duration() {
                 1.0
             } else {
-                spring.value(t).clamp(0.0, 1.0)
+                timing.value(t).clamp(0.0, 1.0)
             }
         };
         match (self.expanded.get(key), self.collapsing.get(key)) {
@@ -301,7 +301,7 @@ impl Ui {
     /// Whether something of the centre moves at `now` (a group expanding or collapsing, the list sliding, a card
     /// leaving or the cards below it rising), so the centre needs frames.
     pub fn is_animating(&self, now: f64) -> bool {
-        let settle = expand_spring().settling_duration();
+        let settle = expand_timing().duration();
         self.expanded
             .values()
             .chain(self.collapsing.values())
@@ -329,7 +329,7 @@ impl Ui {
         }
         if self.slide.is_out(now) {
             *self = Ui {
-                slide: self.slide,
+                slide: std::mem::take(&mut self.slide),
                 ..Ui::default()
             };
         }
@@ -370,7 +370,7 @@ impl Ui {
         self.rises.retain(|r| !r.done(now));
         let (done, going): (Vec<Removal>, Vec<Removal>) = std::mem::take(&mut self.removals)
             .into_iter()
-            .partition(|r| now - r.start >= motion::LEAVE_DURATION);
+            .partition(|r| now - r.start >= motion::leave_duration());
         self.removals = going;
         if done.is_empty() {
             return;
@@ -400,7 +400,7 @@ impl Default for Ui {
     fn default() -> Self {
         Ui {
             centre_open: false,
-            slide: Slide::OUT,
+            slide: Slide::default(),
             removals: Vec::new(),
             rises: Vec::new(),
             close_wide: None,
@@ -830,6 +830,7 @@ pub fn windows<M: Clone + 'static>(
     center: &mut NotificationCenter,
     ui: &Ui,
     metrics: &CardMetrics,
+    display: &DisplayProbe,
     now: f64,
     map: fn(Input) -> M,
 ) -> Vec<Window<M>> {
@@ -838,7 +839,7 @@ pub fn windows<M: Clone + 'static>(
     }
     let width = strip_width(&center.config.layout, &center.config.swipe);
     if ui.centre_shown(now) {
-        return vec![centre_window(center, ui, metrics, width, now, map)];
+        return vec![centre_window(center, ui, metrics, display, width, now, map)];
     }
     // the room above a banner's card is the shadow's reach, or what the output has above it
     let room = center.config.layout.top_inset.min(SHADOW_MARGIN);
@@ -870,6 +871,7 @@ pub fn windows<M: Clone + 'static>(
                 p.leaving || quiet,
                 width,
                 &age(n.timestamp, now),
+                display,
                 map,
             ))
         })
@@ -1141,6 +1143,7 @@ fn banner_window<M: Clone + 'static>(
     unannounced: bool,
     width: f64,
     age: &str,
+    display: &DisplayProbe,
     map: fn(Input) -> M,
 ) -> Window<M> {
     let size = Size::new(width, card.min_y() + card.height() + SHADOW_MARGIN);
@@ -1155,6 +1158,7 @@ fn banner_window<M: Clone + 'static>(
         id: n.id,
         card,
         map,
+        display: display.clone(),
         children: vec![Element::new(Card {
             opacity,
             // a bridge announces a live node by its name alone, as it appears or is renamed: the name is everything
@@ -1189,6 +1193,7 @@ fn centre_window<M: Clone + 'static>(
     center: &NotificationCenter,
     ui: &Ui,
     metrics: &CardMetrics,
+    display: &DisplayProbe,
     width: f64,
     now: f64,
     map: fn(Input) -> M,
@@ -1714,8 +1719,10 @@ fn centre_window<M: Clone + 'static>(
         map,
         menu_open: ui.menu_open,
         revealed: ui.revealed.is_some(),
+        display: display.clone(),
         children,
-    });
+    })
+    .key(centre_root_key());
     // the layer surface spans the output's right edge from top to bottom; this height is what the list asks for
     let natural = layout.top_inset + HEADER_HEIGHT + content_height + BOTTOM_MARGIN;
     // the surface holds the shadow's reach beside the cards, which takes no input; a list on its way out takes none at
@@ -2014,206 +2021,6 @@ fn no_measure() -> Measured {
 
 fn color(cx: &PaintCx<'_>, role: ColorRole) -> Option<Color> {
     cx.env().theme.colors.get(role, StateVariant::NORMAL)
-}
-
-/// A banner's window content: the card and the pointer handling of the banner, hover and swipe.
-struct Strip<M> {
-    id: u32,
-    /// The card's resting rect at this frame, window coordinates.
-    card: Rect,
-    map: fn(Input) -> M,
-    children: Vec<Element<M>>,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-struct StripState {
-    /// The x of the press that may become a swipe.
-    press: Option<f64>,
-    hovered: bool,
-}
-
-impl<M: 'static> Strip<M> {
-    fn hover(&self, state: &mut StripState, over: bool, cx: &mut EventCx<'_, M>) {
-        if over != state.hovered && state.press.is_none() {
-            state.hovered = over;
-            cx.emit((self.map)(Input::Hover(over.then_some(self.id))));
-        }
-    }
-
-    /// Whether `position` is over the card or its close button.
-    fn over(&self, position: Point) -> bool {
-        self.card.contains(position) || close_rect(self.card).contains(position)
-    }
-}
-
-impl<M: 'static> Widget<M> for Strip<M> {
-    type State = StripState;
-
-    fn layout(&self) -> LayoutSpec {
-        LayoutSpec {
-            width: SizeSpec::Fill,
-            height: SizeSpec::Fill,
-            ..LayoutSpec::new(ContainerKind::Absolute)
-        }
-    }
-
-    fn take_children(&mut self) -> Vec<Element<M>> {
-        std::mem::take(&mut self.children)
-    }
-
-    fn state(&self) -> StripState {
-        StripState::default()
-    }
-
-    fn update(&self, old: &Self, _: &mut StripState) -> Change {
-        if self.card != old.card {
-            Change::Layout
-        } else {
-            Change::None
-        }
-    }
-
-    fn measure(&self, _: &StripState, _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
-        no_measure()
-    }
-
-    fn event(&self, state: &mut StripState, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
-        match *event {
-            // hover follows the pointer before any child sees it
-            Event::Pointer(
-                PointerEvent::Enter { position } | PointerEvent::Motion { position },
-                _,
-            ) if cx.phase() == Phase::Capture || cx.node() == cx.target() => {
-                if let Some(start) = state.press {
-                    cx.emit((self.map)(Input::SwipeMove(self.id, position.x - start)));
-                    return Propagation::Stop;
-                }
-                self.hover(state, self.over(position), cx);
-                Propagation::Continue
-            }
-            Event::Pointer(PointerEvent::Leave, _) if cx.node() == cx.target() => {
-                self.hover(state, false, cx);
-                Propagation::Continue
-            }
-            // a press no child took: on the card it begins a swipe or a click
-            Event::Pointer(
-                PointerEvent::Button {
-                    position,
-                    button: MouseButton::Left,
-                    pressed: true,
-                    ..
-                },
-                _,
-            ) if cx.phase() != Phase::Capture && self.card.contains(position) => {
-                state.press = Some(position.x);
-                cx.capture_pointer();
-                cx.emit((self.map)(Input::SwipeBegin(self.id)));
-                Propagation::Stop
-            }
-            Event::Pointer(
-                PointerEvent::Button {
-                    position,
-                    button: MouseButton::Left,
-                    pressed: false,
-                    ..
-                },
-                _,
-            ) if state.press.is_some() => {
-                state.press = None;
-                cx.release_pointer();
-                cx.emit((self.map)(Input::SwipeEnd(self.id)));
-                self.hover(state, self.over(position), cx);
-                Propagation::Stop
-            }
-            Event::Cancel if state.press.is_some() => {
-                state.press = None;
-                cx.emit((self.map)(Input::SwipeCancel(self.id)));
-                self.hover(state, false, cx);
-                Propagation::Continue
-            }
-            _ => Propagation::Continue,
-        }
-    }
-
-    fn paint(&self, _: &StripState, _: &mut PaintCx<'_>) {}
-
-    fn semantics(&self, _: &StripState, _: &mut SemanticsCx<'_>) {}
-}
-
-/// The centre's window content: a press no card, button or menu took, and Escape close the Clear menu, then the
-/// centre.
-struct CentreRoot<M> {
-    map: fn(Input) -> M,
-    menu_open: bool,
-    /// A card is revealed: the pointer moving over no card, or leaving the window, hides its buttons again.
-    revealed: bool,
-    children: Vec<Element<M>>,
-}
-
-impl<M: 'static> Widget<M> for CentreRoot<M> {
-    type State = ();
-
-    fn layout(&self) -> LayoutSpec {
-        LayoutSpec {
-            width: SizeSpec::Fill,
-            height: SizeSpec::Fill,
-            ..LayoutSpec::new(ContainerKind::Overlay)
-        }
-    }
-
-    fn take_children(&mut self) -> Vec<Element<M>> {
-        std::mem::take(&mut self.children)
-    }
-
-    fn state(&self) {}
-
-    fn update(&self, old: &Self, _: &mut ()) -> Change {
-        if self.menu_open != old.menu_open || self.revealed != old.revealed {
-            Change::Paint
-        } else {
-            Change::None
-        }
-    }
-
-    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
-        no_measure()
-    }
-
-    fn event(&self, _: &mut (), event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
-        match *event {
-            Event::Pointer(
-                PointerEvent::Button {
-                    button: MouseButton::Left,
-                    pressed: true,
-                    ..
-                },
-                _,
-            ) if cx.phase() != Phase::Capture => {
-                cx.emit((self.map)(Input::CloseCentre));
-                Propagation::Stop
-            }
-            Event::Dismiss => {
-                cx.emit((self.map)(Input::CloseCentre));
-                Propagation::Stop
-            }
-            // a card stops the motions over it: this one is over none
-            Event::Pointer(PointerEvent::Motion { .. } | PointerEvent::Leave, _)
-                if self.revealed && cx.phase() != Phase::Capture =>
-            {
-                cx.emit((self.map)(Input::Reveal(None)));
-                Propagation::Continue
-            }
-            _ => Propagation::Continue,
-        }
-    }
-
-    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
-
-    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
-        cx.role(Role::Group);
-        cx.name(CENTRE_TITLE);
-        cx.dismissible();
-    }
 }
 
 /// The centre's header and list, one above the other, inset from the window's top and bottom.
@@ -3639,3 +3446,4 @@ impl<M: 'static> Widget<M> for Fade<M> {
 
 mod controls;
 mod motion;
+mod roots;

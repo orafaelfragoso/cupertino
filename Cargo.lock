@@ -1399,20 +1399,15 @@ name = "cupertino-notifications"
 version = "0.1.0"
 dependencies = [
  "async-channel",
- "async-io",
- "cupertino-animation",
  "cupertino-apps",
  "cupertino-assets",
  "cupertino-defaults",
- "cupertino-diagnostic-events",
  "cupertino-geometry",
- "cupertino-keyboard",
  "cupertino-kit",
+ "cupertino-kit-shell",
  "cupertino-peer",
- "cupertino-shell-client",
- "cupertino-theme",
- "cupertino-ui-wayland",
- "cupertino-wayland-client",
+ "serde",
+ "serde_json",
  "unicode-segmentation",
  "zbus",
 ]
@@ -1721,6 +1716,7 @@ dependencies = [
  "cupertino-cli",
  "cupertino-kit",
  "cupertino-kit-shell",
+ "cupertino-notifications",
  "cupertino-osd",
  "cupertino-server",
  "cupertino-shell",
@@ -1784,6 +1780,7 @@ dependencies = [
  "cupertino-diagnostic-events",
  "cupertino-kit",
  "cupertino-kit-shell",
+ "cupertino-notifications",
  "cupertino-osd",
 ]
 

@@ -15,6 +15,7 @@ cupertino-assets = { path = "../cupertino-assets" }
 cupertino-cli = { path = "../cupertino-cli" }
 cupertino-kit = { path = "../cupertino-kit" }
 cupertino-kit-shell = { path = "../cupertino-kit-shell" }
+cupertino-notifications = { path = "../cupertino-notifications" }
 cupertino-osd = { path = "../cupertino-osd" }
 cupertino-server = { path = "../cupertino-server" }
 cupertino-shell = { path = "../cupertino-shell" }

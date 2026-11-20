@@ -1,36 +1,54 @@
 # cupertino-notifications
 
-The notification daemon of the Cupertino desktop. It stands in for the design's banner controller and notification centre: an
-`org.freedesktop.Notifications` server, a single banner slot with a waiting slot, grouping by application, notification-centre
-history, do-not-disturb, hover hold, swipe-to-dismiss, and the banners and notification centre as CupertinoKit windows.
+The banners and the notification list of the Cupertino desktop, a component of the shell host (`cupertino-shell`, component
+`notifications`). It stands in for the design's banner controller and notification centre: an `org.freedesktop.Notifications`
+server, a single banner slot with a waiting slot, grouping by application, the list's history, do-not-disturb, hover hold,
+swipe-to-dismiss, and the banners and the list as CupertinoKit windows.
 
-The crate has no Smithay dependency and no threads of its own except the `zbus` executor of the optional bus server. Everything
-that depends on time takes `now: f64` (seconds on the host's monotonic clock), so the compositor drives it from its frame clock.
-Behavioural constants follow the design banner controller. Colours and typography come from `cupertino-theme`.
-
-Features: `app` (the binary, implies `dbus`), `dbus` (zbus 5, default). The windows (`view`) are always built, on `cupertino-kit`.
+The model (`center`) has no threads and no clock: everything that depends on time takes `now: f64` (seconds on the
+component's monotonic clock). Behavioural constants follow the design banner controller. Colours, typography and motion come
+from the theme through CupertinoKit; every motion is a named entry of the design catalogue (`kit::motion`).
 
 ## Running
 
-Feature `app` builds the binary: a CupertinoKit application on layer surfaces that shows the banners and the notification centre
-list. The server starts it from its `"shell"` configuration, restarts it after a failure, and calls `ToggleCentre` for the menu bar clock and the `notification-center` action. 
+The crate is a library exposing one component, `Notifications` (`Component::NAME` = `notifications`), which
+`cupertino-shell` runs on a UI thread of its own beside the other components of the shared host. The server starts the host
+(`compositor.json` lists `notifications` as a component); `cupertino shell restart notifications` starts the component
+again, alone. The menu bar's clock and the `notification-center` action open the list over the host bus (`TogglePanel`).
 
 ```sh
-cargo run -p cupertino-notifications --features app -- [--replace]
+cargo run -p cupertino-server -- --winit --spawn foot     # the nested desktop, with the shell host and this component
 ```
 
-| Option | Effect |
-|---|---|
-| `--replace` | Take `org.freedesktop.Notifications` from a running daemon that allows replacement. Without it a taken name ends the process normally (status 0, with a message), so the server does not restart it; any other startup failure exits with failure and is restarted. |
+Everything on the component's UI thread is asynchronous: the bus is ticked by the loop, the callers are named and the
+desktop entries, `notifications.conf` and the kept list are read and written on Kit's I/O pool (`kit::task::io`), and the
+banners' lifetimes and motions are paced by the loop's timers (`Command::After`). `clippy.toml` refuses threads,
+`block_on`, file access and blocking bus calls in the crate.
 
-Startup fails with a clear message when the server does not advertise `zwlr_layer_shell_v1`; the rest of the connection
-(scale, activation, appearance, accessibility) is CupertinoKit's. Any connection or bus failure, or the server closing a
-surface, ends the process with a failure status so the server restarts it.
+## What a restart loses
+
+A failed component is started again alone by its host (D16). The list survives it (D21): the component writes it whole,
+on the I/O pool, each time it changed, to `$XDG_RUNTIME_DIR/cupertino/notifications-<display>.json` (mode 0600, in a
+directory of mode 0700; `store`), and reads it back before it serves the bus, so no id is given twice. The runtime
+directory is emptied at log out, so the list never outlives the login. A restart keeps each notification of the list
+(its text, actions, urgency, application, desktop entry, icon name, image path, time, read state and whether its close
+was announced), the id the next one takes, and do not disturb (a duration that ended meanwhile is over). It loses:
+
+- transient notifications, which never enter the list, and the banners on screen and waiting: their notifications come
+  back in the list, with no banner;
+- the pixels of an image a notification sent as `image-data`: its card shows the application's icon instead;
+- which sandboxed application sent each notification: after a restart a Flatpak or Snap can no longer replace or close
+  what it sent before, as an unsandboxed process still can;
+- the open list, its scroll position, an expanded group, an unfolded card and the Clear menu: the list is closed;
+- the calls made while `org.freedesktop.Notifications` has no owner (from the failure until the new instance owns it),
+  which the bus refuses, and the answer of a `Notify` under way: its sender sees an error, and the notification is not
+  shown;
+- the activation token of an action under way, so that action does not run.
 
 ## How it works
 
 - **Surfaces.** Every window is a Kit window on an overlay layer surface (namespace `cupertino-notifications`, exclusive zone
-  -1) that `NotificationRoles` gives it. Each banner on screen is its own window at the top right, as wide as the card plus its
+  -1) that the component's `Program::surface` gives it (`cupertino-kit-shell`). Each banner on screen is its own window at the top right, as wide as the card plus its
   right margin, the leftward swipe travel and the shadow (`view::strip_width`), and as tall as the card plus its shadow; its input
   region is the card at rest, so clicks elsewhere reach the windows under it, and a swipe keeps the pointer by its implicit grab.
   The card moves inside its window by the model's slide and drag offsets. The open centre is one window anchored top, right and
@@ -38,10 +56,11 @@ surface, ends the process with a failure status so the server restarts it.
   `BOTTOM_MARGIN` (16 pt) above the screen's bottom edge. A replaced notification gets a new banner window (its height may
   change). While the centre is open every output also has a transparent window on the top layer over the whole of it
   (`view::catchers`, Kit's `PressCatcher`: one stretched transparent pixel, no frame), under the centre's surface and over
-  the bars, the dock and the windows. The process learns the outputs from the window system (`Note::Outputs`); before it
-  knows any, one such window goes where the compositor chooses. They go as a close begins, so the sliding list is never
+  the bars, the dock and the windows. The component learns the outputs from `cupertino-kit-shell` (`outputs::all`); while
+  the server has none there is no window, and a window whose surface the server closed is made anew. They go as a close begins, so the sliding list is never
   in the way of the next press.
-- **Display options.** Reduce Motion sets `Motion::reduce_motion`: banners fade in place and a group expands and collapses at
+- **Display options.** Reduce Motion, as the windows last drew with it (`view::DisplayProbe`), sets
+  `Motion::reduce_motion`: banners fade in place and a group expands and collapses at
   once; unfolding a body and scrolling have no animation of their own beyond the scroll view's. Kit follows the appearance,
   Reduce Transparency and Increase Contrast itself: under either the cards keep their glass, drawn with the compositor's recipe
   for it, and with Increase Contrast a card lays an outline and a rim over it, no line of which is thinner than a device
@@ -52,8 +71,8 @@ surface, ends the process with a failure status so the server restarts it.
   outside the header, the cards and the Clear menu, closes it. A left or right press anywhere else, on any output, closes
   it too (with its Clear menu) and goes no further: the window, desktop icon, dock tile or menu bar item under the press
   does not hear it, and the next press does. Other buttons and the wheel there do nothing. The list also closes when
-  another surface takes the keyboard from it, as the control panel or the launcher opening does (`ListKeyboard`: only a
-  leave while the list holds the keyboard and still wants it counts, never the one that answers its own letting go). A
+  another surface takes the keyboard from it, as the control panel or the launcher opening does: the list's root
+  (`view::centre_root_key`) takes the focus as the list opens and closes the list when its window loses the keyboard. A
   close lets the keyboard go at once, so it is back on the window that had it while the list slides out. In the list the pointer over a card, or the keyboard on it
   or in it with its focus ring showing, reveals its close circle, a chevron in the age's place (it unfolds the card or expands its group) and the pill of its first action over its bottom-trailing corner (the card does not grow); an unfolded card shows its other actions in a row; the
   two are kept apart, so the pointer moving elsewhere never takes the buttons from under the keyboard and Tab goes on from
@@ -67,8 +86,8 @@ surface, ends the process with a failure status so the server restarts it.
   (by its distance, offsets kept on whole points) and the keyboard (Up, Down, Page Up, Page Down, Home, End); Tab moves
   between the cards and their buttons and the list follows the focus. On a focused card Return, keypad Enter and Space run its
   default action and Delete or Backspace clears it; the focus then goes to the card in its place (its group's next one, else the next group's, else the one before).
-- **Session.** The host passes the compositor's lock state (`cupertino_appearance_v1`'s session lock event) to
-  `set_screen_locked(locked, now)`. At the lock an open list closes and no window stays open until the unlock: the lock
+- **Session.** The component passes the session's lock state (`cupertino-kit-shell`'s `session::Change::Locked`,
+  and `session::locked` as it starts) to `set_screen_locked(locked, now)`. At the lock an open list closes and no window stays open until the unlock: the lock
   screen hides them, so assistive technology has nothing of them to read. The banner on screen stops counting down and
   keeps the rest of its lifetime; the waiting banner goes to the centre. While locked no banner is shown or counted
   down: a new notification goes straight to the centre (a transient one is closed, reason 4), and a replacement of the
@@ -88,8 +107,8 @@ surface, ends the process with a failure status so the server restarts it.
   another's id and be shown with that id's policy. It gains no other application's content that way, only the
   showing of its own: with an id set to Always, its own title and body on the lock screen. That is the reach any sender
   already has through the application name it chooses, which the lock screen always shows; set Always only for an
-  application whose words you are content to see there. The daemon reads the file at start and follows its changes
-  (`set_policy`). Never also hides the content of the
+  application whose words you are content to see there. The component reads the file as it starts and follows its changes
+  (`set_policy`), on the I/O pool. Never also hides the content of the
   application's banners and centre cards while unlocked (`shown`, `redacted`): its application, the title
   "Notification", no body, image or action buttons; a click still runs the default action. Changing the policy
   measures the cards again.
@@ -143,19 +162,29 @@ surface, ends the process with a failure status so the server restarts it.
 
 ## Protocols / D-Bus it speaks
 
-The process owns `org.freedesktop.Notifications` on the session bus. It requests the name with `DoNotQueue | AllowReplacement`;
-**Who may replace or close a notification.** The daemon asks the bus who sent each `Notify` and who calls
-`CloseNotification` (`cupertino_peer::identify`, the process from the daemon's `ProcessFD`). An unsandboxed process of the
+The component owns `org.freedesktop.Notifications` at `/org/freedesktop/Notifications` and
+`org.cupertino.NotificationCenter1` at `/org/cupertino/NotificationCenter1` on its own session bus connection
+(`bus::session` of `cupertino-kit-shell`, announced to the server, D20), each requested with `DoNotQueue |
+AllowReplacement` once its object exists and the list an earlier run kept is back (`control`). When another program owns
+`org.freedesktop.Notifications` the component shows no notification and says so on stderr; any other failure of the bus
+ends it, and its host starts it again. The handlers do no work on the UI thread: each call goes to the model with where
+its answer goes, and `Notify` and `CloseNotification` are carried out one at a time, in order.
+
+On the host bus the component follows `TogglePanel` (`NotificationCenter`, with the output to open on),
+`SetDoNotDisturb` and `ComponentStopped`, which it tells the person as a notification ("The Dock stopped"), and publishes
+`PanelShown` and `DoNotDisturbChanged`, both retained.
+
+**Who may replace or close a notification.** The component asks the bus who sent each `Notify` and who calls
+`CloseNotification` (the credentials the bus gives for the sender, read against `/proc` on the I/O pool:
+`cupertino_peer::Caller::from_credentials`). An unsandboxed process of the
 person may replace or close any notification: it can already act as the person, and the legitimate replacer cannot be
 told apart from it (`notify-send --replace-id` starts a new process for each call, an application reconnects under a new
 name). A Flatpak or Snap may replace or close only what its own sandbox instance sent (`cupertino_peer::same_instance`;
 a Snap matches only its own process, so a restarted Snap cannot close what it sent before), and a caller the bus cannot
 name nothing. A refused replacement is a new notification and a refused close does nothing, exactly as for an id that
-does not exist, so a sandboxed application learns nothing of another's ids. The daemon keeps the sending process of
+does not exist, so a sandboxed application learns nothing of another's ids. The component keeps the sending process of
 each live notification a sandboxed application sent (at most the centre's history), and forgets it with the
-notification.
-
-`replace_existing` adds `ReplaceExisting`. It also owns `org.cupertino.NotificationCenter1` at `/org/cupertino/NotificationCenter1`.
+notification or a restart.
 
 | Call | Behaviour |
 |---|---|
@@ -168,10 +197,10 @@ notification.
 | `SetDoNotDisturbFor(s) (same caller check) | Turns it on for one of the `FocusLifetimes` rows (`a(ss): identifier and title, in menu order). |
 | `DoNotDisturb` property | Tells whether it is in effect, with change signals, also when a duration runs out. The menu bar's Focus item shows these rows. |
 | `CentreShown` property (`b`) | Whether the list is open (its surface exists), with change signals; the menu bar highlights the clock while it is. |
-| `CentreOutput` property (`s`) | The connector name (`wl_output.name`) of the output the open list is on, with change signals; empty while it is closed or before its surface is told its output. The process's surface roles publish both before every wait of its loop (`CentrePublisher`). |
+| `CentreOutput` property (`s`) | The connector name (`wl_output.name`) of the output the open list is on, with change signals; the output the menu bar asked the list to open on (`TogglePanel`), empty while it is closed or when none was named. |
 | `LockScreenNotifications` → `a(usss)` | The lock screen's list (`lock_screen()`): id, application, title and body of each, already redacted by the policy; empty while unlocked. Same caller check as `SetDoNotDisturb`: any unsandboxed process of the user may call it, a Flatpak or a Snap may not. With previews Always, such a process can read the titles and bodies listed while locked; it could already read every notification as it is sent, since a process of the user may monitor its own session bus, so the method opens nothing new. With When Unlocked or Never no reply holds a title, body, image or action. |
 | `Applications` → `a(ss)` | The applications of the notifications on screen and in the centre: the id their settings are kept under and their name, for Settings > Notifications. Same caller check. |
-| `LockScreenChanged` signal | The lock screen's list changed (an arrival, a replacement, a close, the lock or the unlock, a policy change). It carries nothing, so no content goes out to every listener on the bus: the lock screen asks for the list again, and again whenever the daemon's name changes owner. |
+| `LockScreenChanged` signal | The lock screen's list changed (an arrival, a replacement, a close, the lock or the unlock, a policy change). It carries nothing, so no content goes out to every listener on the bus: the lock screen asks for the list again, and again whenever `org.freedesktop.Notifications` changes owner. |
 
 Close reasons: expired 1, dismissed 2 (swipe, click without default action, clear, action invocation), closed 3, undefined 4
 (history trimmed or dropped while do-not-disturb).
@@ -181,35 +210,21 @@ Close reasons: expired 1, dismissed 2 (swipe, click without default action, clea
 | Module | Content |
 |---|---|
 | `center` | `NotificationCenter` (pure model), `CenterConfig` (`TimeoutPolicy`, `StackLayout`, `SwipeConfig`, `Motion`), the lock state and the lock screen's list (`LockItem`), the policy of `notifications.conf` |
-| `focus` | The Focus durations: `offered` (by local hour), `end` (when a row started now ends), `LocalCalendar` (`SystemCalendar` with feature `dbus`) |
+| `focus` | The Focus durations: `offered` (by local hour), `end` (when a row started now ends), `LocalCalendar` (`SystemCalendar`) |
 | `stack` | `GroupStack`, `StackCard`: geometry of a collapsed group in the notification centre |
 | `notification` | `NotifyInput`, `Notification`, `Hints`, `ImageData`, `Urgency`, `CloseReason`, `Expire`, the caps of the application name, summary and body (`cap`, `NotifyInput::capped`) |
 | `markup` | Body markup subset (`<b> <i> <u> <a href> <img alt>), entity decoding |
 | `view` | The banner and centre windows (`windows`), the user's `Input` and `apply` carrying it out on the model, `CardMetrics`, `strip_width` |
-| `dbus` (feature `dbus`) | `Server`, `ServerOptions`, `parse_hints` |
+| `control` | `org.freedesktop.Notifications` and `org.cupertino.NotificationCenter1` (`serve`, `emit`), the caller checks (`may_change`), `parse_hints` |
+| `store` | The file the list is kept in across a restart: `path`, `encode`, `decode`, `read`, `write` |
+| `component` | `Notifications`: the component's model, its messages, its layer surfaces and the host bus |
 
 ## Integration API
 
-```rust
-use cupertino_notifications::{dbus::{Server, ServerOptions}, view::{self, Input, Ui}, CenterConfig, Wakeup};
-
-let theme = cupertino_assets::theme::load()?;
-let server = Server::start(ServerOptions {
-    config: CenterConfig::from_theme(&theme),          // top inset = menu bar height + gap, spec springs
-    wake: Some(Box::new(move || ping.ping())),         // runs on the zbus thread after Notify/Close
-    ..Default::default()
-})?;                                                    // Err(NameTaken) if another daemon runs
-
-// in a CupertinoKit application's update: carry out what the windows reported, then expire and animate
-let action = view::apply(&mut server.center(), &mut ui, input, server.now()); // activation, invocation, link
-server.center().tick(server.now());
-server.flush_events()?;                                 // NotificationClosed / ActionInvoked signals
-// timers: server.center().next_wakeup(now) -> Frame | At(t) | None
-
-// in its view: the banners on screen, or the open centre, measured with the windows' theme and text system
-let metrics = view::CardMetrics::new(options.theme.clone(), options.text.clone()); // once, from RuntimeOptions
-view::windows(&mut server.center(), &ui, &metrics, server.now(), Message::Input)
-```
+`cupertino-shell` registers the component (`Entry::of::<cupertino_notifications::Notifications>()`). The model can be driven
+on its own, without the bus or windows (the compositor's own messages, tests): build a `NotificationCenter`, call
+`notify(NotifyInput, now)`, `tick(now)` and `take_events()` yourself, and `next_wakeup(now)` (`Frame`, `At(t)` or none) says
+when to step it again. `view::windows` and `view::apply` draw it and carry out the person's input on it.
 
 The model's calls, for a host of its own (all take `now`):
 
@@ -230,7 +245,7 @@ The model's calls, for a host of its own (all take `now`):
 | lifetime 5.0 s, 1.0 s while another waits | |
 | one visible + one waiting slot, minimum 1.0 s on screen | |
 | hover re-check 1.0 s, re-arm 5.0 s on hover change | |
-| drag: 5 pt minimum, clamp −16 pt, spring back m 1 / k 100 / c 100 / v dx/100, dismiss speed max(dx/100, 8) | |
+| drag: 5 pt minimum, clamp −16 pt, spring back m 1 / k 100 / c 100 from rest, dismiss speed max(dx/100, 8) | |
 | slide by the list controller width (card width + 32), no clip, fade under reduce motion, speed divisor 15 | |
 | 0.25 s ease-in-out, completion +0.01 s | |
 | width 344 pt | |
@@ -260,8 +275,16 @@ The model's calls, for a host of its own (all take `now`):
   compositor's backdrop shapes are rounded rectangles of one radius.
 - Application icons are looked up as system symbols; image-data, image-path and desktop-entry icons are not drawn yet.
 
+## Tests
+
+`crates/cupertino-session-tests/tests/shell-notifications.rs` runs the component in `cupertino-shell`'s host against the real
+server, headless, on a session bus of its own: fifty panics injected as it paints, as its loop dispatches and on a helper
+thread each restart it alone while the dock keeps drawing and the host's memory stays flat, and the list (not the transient
+notification) is back after each restart.
+
 ## Examples
 
 ```
-cargo run -p cupertino-notifications --example notification-daemon        # prints notifications from the session bus
+cargo run -p cupertino-notifications --example notifications_capture -- banner --kind actions   # a banner, light and dark, to PNGs
+cargo run -p cupertino-notifications --example notifications_capture -- centre --expanded mail  # the list with a group expanded
 ```

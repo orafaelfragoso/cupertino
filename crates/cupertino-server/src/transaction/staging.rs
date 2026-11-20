@@ -57,6 +57,17 @@ impl Blocker for StageBlocker {
     }
 }
 
+impl TransactionManager {
+    /// The staged surfaces whose commits are kept for the parts `pids` of `tx_id`.
+    pub(super) fn kept_surfaces(&self, tx_id: TxId, pids: &[u64]) -> Vec<WlSurface> {
+        self.holds
+            .values()
+            .filter(|h| h.owner.0 == tx_id && pids.contains(&h.owner.1))
+            .map(|h| h.surface.clone())
+            .collect()
+    }
+}
+
 impl Cupertino {
     /// The pre-commit hook of every surface. A commit of a staged surface counts towards its part (the participant is
     /// ready once it submitted and each surface it staged committed) and, like a commit of one of the surface's layer

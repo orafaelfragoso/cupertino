@@ -7,6 +7,8 @@
 //! ([`LayerProperty`](cupertino_animation::LayerProperty)) and their look. An animation waits until the frame that first shows its commit is built
 //! ([`present`], called by the scene) or [`START_AT_THE_LATEST`] after the commit; [`Cupertino::tick_layers`] sends
 //! `finished`, `replaced` and `settled`. The content is the layer surface's own buffer, which applies on its own commit.
+//! The animations a gesture-bound transaction's parts start follow the gesture's progress instead of their clock
+//! ([`tracked`], [`track_gesture`]).
 //! A presentation (version 2) is a layer model of a layer shell surface whose parent is itself: its offset, opacity
 //! and scale apply to everything the surface draws ([`presentation`]), and it is never drawn as a layer. From version
 //! 3 an xdg popup's surface may have one too, and layers of one parent may join their glass into one shape
@@ -32,12 +34,14 @@ use crate::state::Cupertino;
 mod dispatch;
 mod model;
 mod ops;
+mod tracked;
 
 pub use dispatch::surface_destroyed;
 use model::initial;
 pub use model::{BlendRole, GlassEdge, LayerModel, ParentLayers, VibrantWeight};
 pub use ops::LayerOps;
 use ops::{Op, Queued, Superseded};
+pub use tracked::GestureProgress;
 
 /// The role a layer's surface takes.
 pub const LAYER_ROLE: &str = "cupertino_layer_v1";
@@ -385,6 +389,18 @@ pub fn target(parent: &WlSurface, serial: u64, prop: usize) -> Option<f64> {
     })
 }
 
+/// The animations waiting to start on the layers of `parent`, its presentation's included, are driven by the gesture of
+/// `progress` once they start: the commits of a gesture-bound transaction's part just applied.
+pub fn track_gesture(parent: &WlSurface, progress: &GestureProgress) {
+    if parent.is_alive() {
+        with_parent(parent, |layers| {
+            for l in layers.iter_mut() {
+                l.track(progress);
+            }
+        });
+    }
+}
+
 /// The layer requests queued on `parent` for its next commit.
 pub fn queued(parent: &WlSurface) -> usize {
     with_states(parent, |s| {
@@ -450,8 +466,12 @@ impl Cupertino {
                         l.start(now, reduce_motion);
                         redraw = true;
                     }
+                    l.follow_gestures(now);
                     for prop in 0..PROPERTIES {
-                        if l.running[prop].is_some() && !l.props[prop].is_animating(now) {
+                        if l.running[prop].is_some()
+                            && l.tracked[prop].is_none()
+                            && !l.props[prop].is_animating(now)
+                        {
                             let serial = l.running[prop].take().unwrap();
                             l.resource.finished(serial);
                         }
@@ -486,7 +506,7 @@ impl Cupertino {
                         layers
                             .iter()
                             .find(|l| l.serial == data.serial)
-                            .map(|l| (l.value(prop, now), l.props[prop].velocity(now)))
+                            .map(|l| (l.value(prop, now), l.velocity(prop, now)))
                     })
                 });
             let (value, velocity) = shown.unwrap_or((initial(prop), 0.0));

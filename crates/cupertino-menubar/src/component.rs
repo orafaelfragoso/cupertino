@@ -161,6 +161,56 @@ struct Services {
     recent: Option<Arc<RecentSources>>,
 }
 
+/// How long the component's end waits for its bus connections to close and their tasks to end: a bus that answers
+/// closes them at once, and one that does not is not waited for longer.
+const CLOSE_WAIT: std::time::Duration = std::time::Duration::from_millis(500);
+
+impl Drop for Services {
+    /// The connections' executors are ticked by the component's loop, which has ended: a task still on one would keep
+    /// its connection, the connection its executor and so the task, for as long as the host runs. So the tasks of the
+    /// worker and the extras are cancelled, the connections closed, and their executors run until every task, the
+    /// connections' own included, has ended.
+    fn drop(&mut self) {
+        drop(self.worker.take());
+        drop(self.extras.take());
+        let connections: Vec<zbus::Connection> =
+            [self.session.take(), self.system.take().and_then(Result::ok)]
+                .into_iter()
+                .flatten()
+                .collect();
+        if connections.is_empty() {
+            return;
+        }
+        let closing = async {
+            for connection in &connections {
+                let _ = connection.clone().close().await;
+            }
+            for connection in &connections {
+                let executor = connection.executor().clone();
+                while !executor.is_empty() {
+                    executor.tick().await;
+                }
+            }
+        };
+        let waited = async {
+            async_io::Timer::after(CLOSE_WAIT).await;
+        };
+        close(futures_util::future::select(
+            std::pin::pin!(closing),
+            std::pin::pin!(waited),
+        ));
+    }
+}
+
+/// Wait for `closing` on the component's thread, whose loop has ended.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the component's loop has ended: nothing on this thread waits to be drawn, and the wait is bounded"
+)]
+fn close(closing: impl std::future::Future) {
+    async_io::block_on(closing);
+}
+
 /// The X server of the X11 bridge: here while no question is asked of it, on the I/O pool while one is.
 #[derive(Default)]
 struct X11 {
@@ -643,8 +693,8 @@ impl Program for MenuBar {
                 },
                 size: Size::new(0.0, model.height.ceil()),
                 margin: Margin::default(),
-                // the server reserves the bar's space
-                exclusive_zone: 0,
+                // the bar's space, which the server keeps while it holds the bar (D19)
+                exclusive_zone: model.height.ceil() as i32,
                 keyboard: bar.keyboard,
             }),
             persistent: Some(HOLD),

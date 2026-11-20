@@ -23,7 +23,7 @@
 //!   [`routing`] (keys and controller effects to actions), [`popups`] (placement of the menus'
 //!   popups), [`view`] (the bar and its menus as CupertinoKit windows), [`icons`] (the rows' and status items'
 //!   icons, loaded on the I/O pool), [`desktop`] (application names),
-//!   [`worker`] (the session bus tasks), [`follow`] (a DBusMenu exporter's tree kept current), [`extras_bus`] (the system services behind the extras) and [`x11`] (the X
+//!   [`worker`] (the session bus tasks), [`spawned`] (the tasks' owners, which cancel them), [`follow`] (a DBusMenu exporter's tree kept current), [`extras_bus`] (the system services behind the extras) and [`x11`] (the X
 //!   server of the X11 bridge, for menus X11 programs register).
 //!
 //! the bar structure and the interaction model are as designed behaviour of the
@@ -58,6 +58,7 @@ pub mod follow;
 pub mod icons;
 pub mod popups;
 pub mod routing;
+pub mod spawned;
 pub mod view;
 pub mod worker;
 pub mod x11;

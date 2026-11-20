@@ -1711,6 +1711,7 @@ dependencies = [
  "cupertino-kit",
  "cupertino-kit-shell",
  "cupertino-login",
+ "cupertino-menubar",
  "cupertino-notifications",
  "cupertino-osd",
  "cupertino-server",

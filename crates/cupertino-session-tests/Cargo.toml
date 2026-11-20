@@ -16,6 +16,7 @@ cupertino-cli = { path = "../cupertino-cli" }
 cupertino-kit = { path = "../cupertino-kit" }
 cupertino-kit-shell = { path = "../cupertino-kit-shell" }
 cupertino-login = { path = "../cupertino-login", features = ["dbus"] }
+cupertino-menubar = { path = "../cupertino-menubar" }
 cupertino-notifications = { path = "../cupertino-notifications" }
 cupertino-osd = { path = "../cupertino-osd" }
 cupertino-server = { path = "../cupertino-server" }

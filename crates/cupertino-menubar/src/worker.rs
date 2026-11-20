@@ -14,6 +14,7 @@ use crate::follow::{Command, Follower};
 use crate::item::{ItemId, MenuItem};
 use crate::registered::Registration;
 use crate::source::{GtkMenuProps, KdeAppMenu, MenuSource};
+use crate::spawned::{Spawned, Spawner};
 use futures_util::stream::BoxStream;
 use futures_util::StreamExt;
 use std::collections::{HashMap, HashSet};
@@ -183,10 +184,10 @@ pub(crate) fn report(context: &str, error: impl fmt::Display) {
     eprintln!("cupertino-menubar: {context}: {error}");
 }
 
-/// Handle on the worker: its loop runs as long as this lives.
+/// Handle on the worker: its loop and every task it started run as long as this lives.
 pub struct Worker {
     work: async_channel::Sender<Work>,
-    _run: zbus::Task<()>,
+    _tasks: Spawned,
 }
 
 impl Worker {
@@ -205,16 +206,25 @@ impl Worker {
         let (work_tx, work_rx) = async_channel::unbounded();
         let (events_tx, events_rx) = async_channel::unbounded();
         let out = Out { events: events_tx };
-        let registrar = serve(&conn, &work_tx, &out).await?;
-        let executor = conn.executor().clone();
-        let run = executor.spawn(
-            run(conn, work_rx, work_tx.clone(), out, waits, registrar),
+        let tasks = Spawned::default();
+        let spawner = tasks.spawner(conn.executor());
+        let registrar = serve(&conn, &spawner, &work_tx, &out).await?;
+        spawner.spawn(
+            run(
+                conn,
+                spawner.clone(),
+                work_rx,
+                work_tx.clone(),
+                out,
+                waits,
+                registrar,
+            ),
             "cupertino-menubar-worker",
         );
         Ok((
             Worker {
                 work: work_tx,
-                _run: run,
+                _tasks: tasks,
             },
             events_rx,
         ))
@@ -227,29 +237,28 @@ impl Worker {
     }
 }
 
-/// Move the events of a channel into the worker's queue, as a task of `conn`'s executor.
+/// Move the events of a channel into the worker's queue, as a task of the worker's.
 fn forward<T: Send + 'static>(
-    conn: &Connection,
+    spawner: &Spawner,
     rx: async_channel::Receiver<T>,
     tx: async_channel::Sender<Work>,
     wrap: fn(T) -> Work,
 ) {
-    conn.executor()
-        .spawn(
-            async move {
-                while let Ok(event) = rx.recv().await {
-                    if tx.send(wrap(event)).await.is_err() {
-                        break;
-                    }
+    spawner.spawn(
+        async move {
+            while let Ok(event) = rx.recv().await {
+                if tx.send(wrap(event)).await.is_err() {
+                    break;
                 }
-            },
-            "cupertino-menubar-forward",
-        )
-        .detach();
+            }
+        },
+        "cupertino-menubar-forward",
+    );
 }
 
 async fn run(
     conn: Connection,
+    spawner: Spawner,
     rx: async_channel::Receiver<Work>,
     tx: async_channel::Sender<Work>,
     out: Out,
@@ -327,7 +336,7 @@ async fn run(
                 reloading.remove(&props);
                 if missed.remove(&props) && reloads < GTK_RELOADS {
                     reloading.insert(props.clone());
-                    reload_gtk(&conn, &tx, props, reloads + 1);
+                    reload_gtk(&conn, &spawner, &tx, props, reloads + 1);
                 }
             }
             Work::GtkChanged(props, change, applied) => {
@@ -342,17 +351,14 @@ async fn run(
                 client.apply(change);
                 if unsent.insert(props.clone()) {
                     let tx = tx.clone();
-                    conn.executor()
-                        .clone()
-                        .spawn(
-                            async move {
-                                async_io::Timer::after(GTK_CHANGE_INTERVAL).await;
-                                // the worker drops its receiver only when it ends
-                                let _ = tx.send(Work::GtkFlush(props)).await;
-                            },
-                            "cupertino-gtk-flush",
-                        )
-                        .detach();
+                    spawner.spawn(
+                        async move {
+                            async_io::Timer::after(GTK_CHANGE_INTERVAL).await;
+                            // the worker drops its receiver only when it ends
+                            let _ = tx.send(Work::GtkFlush(props)).await;
+                        },
+                        "cupertino-gtk-flush",
+                    );
                 }
             }
             Work::GtkFlush(props) => {
@@ -373,7 +379,7 @@ async fn run(
                     registrar.forget(&gone);
                 }
             }
-            Work::Request(request) => handle(&conn, &out, &tx, &mut gtk, request),
+            Work::Request(request) => handle(&conn, &spawner, &out, &tx, &mut gtk, request),
         }
     }
 }
@@ -457,33 +463,31 @@ impl Followed {
 /// Load the menus of `props` again, after changes came while they loaded.
 fn reload_gtk(
     conn: &Connection,
+    spawner: &Spawner,
     tx: &async_channel::Sender<Work>,
     props: GtkMenuProps,
     reloads: u8,
 ) {
     let (conn, tx) = (conn.clone(), tx.clone());
-    conn.executor()
-        .clone()
-        .spawn(
-            async move {
-                match GtkMenuClient::load(&conn, &props).await {
-                    Ok((client, items)) => {
-                        let loaded = Work::GtkLoaded {
-                            props,
-                            client: Box::new(client),
-                            items,
-                            follow: None,
-                            reloads,
-                        };
-                        // the worker drops its receiver only when it ends
-                        let _ = tx.send(loaded).await;
-                    }
-                    Err(e) => report(&format!("cannot load the menu of {}", props.bus_name), e),
+    spawner.spawn(
+        async move {
+            match GtkMenuClient::load(&conn, &props).await {
+                Ok((client, items)) => {
+                    let loaded = Work::GtkLoaded {
+                        props,
+                        client: Box::new(client),
+                        items,
+                        follow: None,
+                        reloads,
+                    };
+                    // the worker drops its receiver only when it ends
+                    let _ = tx.send(loaded).await;
                 }
-            },
-            "cupertino-reload-gtk",
-        )
-        .detach();
+                Err(e) => report(&format!("cannot load the menu of {}", props.bus_name), e),
+            }
+        },
+        "cupertino-reload-gtk",
+    );
 }
 
 /// Forward the changes of the exporter of `props` to the worker for as long as the returned task lives.
@@ -511,16 +515,17 @@ fn follow_gtk(
 /// Claim the watcher and forward its events, then serve the registrar (`None` when it cannot be served).
 async fn serve(
     conn: &Connection,
+    spawner: &Spawner,
     tx: &async_channel::Sender<Work>,
     out: &Out,
 ) -> Result<Option<registrar::Registrar>, StartError> {
-    let (_service, events) = WatcherService::start(conn)
+    let (_service, events) = WatcherService::start(conn, spawner)
         .await
         .map_err(StartError::Watcher)?;
-    forward(conn, events, tx.clone(), Work::Watcher);
+    forward(spawner, events, tx.clone(), Work::Watcher);
     let out = out.clone();
     let changed: registrar::Changed = Arc::new(move |list| out.emit(Event::Registrations(list)));
-    match registrar::serve(conn, changed).await {
+    match registrar::serve(conn, changed, spawner).await {
         Ok(registrar) => Ok(Some(registrar)),
         Err(e) => {
             report(&format!("cannot serve {}", registrar::REGISTRAR_NAME), e);
@@ -592,14 +597,15 @@ async fn follow_status_item(
 
 fn handle(
     conn: &Connection,
+    spawner: &Spawner,
     out: &Out,
     tx: &async_channel::Sender<Work>,
     gtk: &mut HashMap<GtkMenuProps, GtkMenuClient>,
     request: Request,
 ) {
     let (conn, out) = (conn.clone(), out.clone());
-    let executor = conn.executor().clone();
-    let task = match request {
+    let executor = spawner;
+    match request {
         Request::FetchGtk(props) => {
             let tx = tx.clone();
             executor.spawn(
@@ -723,6 +729,5 @@ fn handle(
         | Request::AboutToShow { .. } => {
             unreachable!("the worker's loop handles the registrar and the followed menus")
         }
-    };
-    task.detach();
+    }
 }

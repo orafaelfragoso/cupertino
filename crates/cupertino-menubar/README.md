@@ -118,15 +118,19 @@ radios, the battery and the session agent's properties (read again). It loses:
 - an application or document being started (its activation token), which does not start;
 - the names of the applications read from their desktop entries, read again.
 
+The instance that ended leaves none of its bus work behind in the host: its bus tasks belong to the objects that started them and
+are cancelled with them, never detached, and its end closes its session and system connections and runs their
+executors until every task has ended (at most 0.5 s), since the loop that ran them is gone. The program test
+`crates/cupertino-session-tests/tests/shell-menubar.rs` bounds what fifty restarts add to the host's memory.
 
 ## How it works
 
-- **Surfaces.** A top-anchored layer surface per output (exclusive zone 0). The server reserves the space and owns hiding,
-  revealing and dimming. The bar draws nothing of its own: the wallpaper shows through it as it is, with no strip, fill or
-  blur, and only its text and symbols follow what is behind them (*Backdrop* below). Increase Contrast keeps it
-  see-through. Under Reduce Transparency it is a solid strip: the bar's `MenuBar` backdrop, which the server draws with
-  the material's opaque recipe (grey 0.1255 dark, 0.8549 light), covers the bar then and has no area otherwise
-  (`tone::solid_bar`). Each open menu level is an `xdg_popup` with a `Menu` backdrop. Its disabled rows, their submenu
+- **Surfaces.** A top-anchored layer surface per output whose exclusive zone is the bar's height, so the server keeps
+  the space while it holds the bar (D19). The server owns hiding, revealing and dimming. The bar draws nothing of its
+  own: the wallpaper shows through it as it is, with no strip, fill or blur, and only its text and symbols follow what
+  is behind them (*Backdrop* below). Increase Contrast keeps it see-through. Under Reduce Transparency it is a solid
+  strip: the window's background is the `MenuBar` surface of the theme, the material's opaque recipe (grey 0.1255
+  dark, 0.8549 light), and the bar has none otherwise (`tone::solid_bar`). Each open menu level is an `xdg_popup` with a `Menu` backdrop. Its disabled rows, their submenu
   arrows and checkmarks recede to the menu text at 0.26; with Increase Contrast they stay readable at 0.53 and the
   separators strengthen to 0.47 (`MenuPalette::high_contrast`). The process keeps its palette under
   the display options (no recorded contrast palette for the menu bar text and status items).

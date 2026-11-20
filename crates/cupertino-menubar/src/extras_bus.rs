@@ -48,8 +48,9 @@ use std::time::{Duration, Instant};
 use zbus::message::Type;
 use zbus::names::UniqueName;
 use zbus::proxy::{Builder, CacheProperties};
-use zbus::{Connection, MatchRule, MessageStream, Proxy};
+use zbus::{Connection, MatchRule, MessageStream, OwnedMatchRule, Proxy};
 
+use crate::spawned::{Spawned, Spawner};
 use crate::worker::WorkerGone;
 
 const LOGIN_NAME: &str = "org.cupertino.Login1";
@@ -61,6 +62,10 @@ const UPOWER_DEVICE_INTERFACE: &str = "org.freedesktop.UPower.Device";
 
 /// `org.freedesktop.UPower.Device.State` of a charging battery.
 const UPOWER_STATE_CHARGING: u32 = 1;
+
+/// How many signals of one of the radios' rules may wait for their follower; each only says "read again", so more
+/// would tell nothing new.
+const RADIO_SIGNALS: usize = 8;
 
 /// How many commands may wait for the task: at most one refresh, the rest actions.
 pub const QUEUE: usize = 16;
@@ -126,19 +131,20 @@ struct Queue {
     due: Arc<AtomicU8>,
     /// The session agent the next read takes.
     agent: Arc<Mutex<SessionAgent>>,
-    /// The executor of the session connection, on the component's UI thread: the radios' calls are awaited there.
-    executor: zbus::Executor<'static>,
+    /// Starts the task's own tasks on the session connection's executor, on the component's UI thread: the radios'
+    /// calls are awaited there.
+    spawner: Spawner,
 }
 
 impl Queue {
-    fn new(executor: zbus::Executor<'static>) -> (Queue, async_channel::Receiver<Command>) {
+    fn new(spawner: Spawner) -> (Queue, async_channel::Receiver<Command>) {
         let (commands, rx) = async_channel::bounded(QUEUE);
         let queue = Queue {
             commands,
             refresh_waiting: Arc::new(AtomicBool::new(false)),
             due: Arc::new(AtomicU8::new(0)),
             agent: Arc::new(Mutex::new(SessionAgent::None)),
-            executor,
+            spawner,
         };
         (queue, rx)
     }
@@ -208,9 +214,10 @@ impl Queue {
     }
 }
 
-/// Handle on the extras task.
+/// Handle on the extras task: it and every task it started run as long as this lives.
 pub struct ExtrasBus {
     queue: Queue,
+    _tasks: Spawned,
 }
 
 impl ExtrasBus {
@@ -229,16 +236,20 @@ impl ExtrasBus {
         system: impl Future<Output = zbus::Result<Connection>> + Send + 'static,
         waits: Waits,
     ) -> (ExtrasBus, async_channel::Receiver<Extras>) {
-        let executor = session.executor().clone();
-        let (queue, rx) = Queue::new(executor.clone());
+        let tasks = Spawned::default();
+        let (queue, rx) = Queue::new(tasks.spawner(session.executor()));
         let (out, events) = async_channel::unbounded();
-        executor
-            .spawn(
-                run(session, system, waits, queue.clone(), rx, out),
-                "cupertino-extras",
-            )
-            .detach();
-        (ExtrasBus { queue }, events)
+        queue.spawner.spawn(
+            run(session, system, waits, queue.clone(), rx, out),
+            "cupertino-extras",
+        );
+        (
+            ExtrasBus {
+                queue,
+                _tasks: tasks,
+            },
+            events,
+        )
     }
 
     /// Read every service again (the duration rows change with the hour).
@@ -310,18 +321,7 @@ async fn run(
         ] {
             follow(system, name, path, &queue).await;
         }
-        let radios = queue.clone();
-        let followed = cupertino_radios::watch::follow(
-            system,
-            Arc::new(move |radio| {
-                let _ = radios.radios_due(match radio {
-                    Radio::Network => DUE_NETWORK,
-                    Radio::Bluetooth => DUE_BLUETOOTH,
-                });
-            }),
-        )
-        .await;
-        if let Err(e) = followed {
+        if let Err(e) = follow_radios(system, &queue).await {
             eprintln!("cupertino-menubar: cannot follow the network and Bluetooth services: {e}");
         }
     }
@@ -424,20 +424,52 @@ async fn follow(conn: &Connection, name: &'static str, path: &'static str, queue
                 continue;
             }
         };
-        let queue = queue.clone();
-        conn.executor()
-            .spawn(
-                async move {
-                    while stream.next().await.is_some() {
-                        if queue.refresh().is_err() {
-                            break;
-                        }
+        let follower = queue.clone();
+        queue.spawner.on(conn.executor()).spawn(
+            async move {
+                while stream.next().await.is_some() {
+                    if follower.refresh().is_err() {
+                        break;
                     }
-                },
-                "cupertino-extras-follow",
-            )
-            .detach();
+                }
+            },
+            "cupertino-extras-follow",
+        );
     }
+}
+
+/// Note the radio of every signal of the radios' rules on `system` that makes its reading out of date
+/// (`cupertino_radios::watch::concern`), from tasks of the extras' own on the connection's executor, so they end with
+/// the bar.
+async fn follow_radios(system: &Connection, queue: &Queue) -> zbus::Result<()> {
+    let spawner = queue.spawner.on(system.executor());
+    for rule in cupertino_radios::watch::rules() {
+        let rule = OwnedMatchRule::try_from(rule.as_str())?;
+        let mut stream = MessageStream::for_match_rule(rule, system, Some(RADIO_SIGNALS)).await?;
+        let radios = queue.clone();
+        spawner.spawn(
+            async move {
+                while let Some(message) = stream.next().await {
+                    let Some(radio) = message
+                        .ok()
+                        .as_ref()
+                        .and_then(cupertino_radios::watch::concern)
+                    else {
+                        continue;
+                    };
+                    let due = match radio {
+                        Radio::Network => DUE_NETWORK,
+                        Radio::Bluetooth => DUE_BLUETOOTH,
+                    };
+                    if radios.radios_due(due).is_err() {
+                        break;
+                    }
+                }
+            },
+            "cupertino-extras-radios-follow",
+        );
+    }
+    Ok(())
 }
 
 async fn proxy(
@@ -594,18 +626,15 @@ impl<T: Send + 'static> Reader<T> {
     fn start(&mut self, queue: &Queue, read: impl FnOnce() -> T + Send + 'static) {
         let (done, result) = async_channel::bounded(1);
         let (notify, awaited) = (queue.clone(), self.awaited.clone());
-        queue
-            .executor
-            .spawn(
-                async move {
-                    let _ = done.send(on_io_pool(read).await).await;
-                    if !awaited.load(Ordering::Acquire) {
-                        let _ = notify.refresh();
-                    }
-                },
-                "cupertino-extras-read",
-            )
-            .detach();
+        queue.spawner.spawn(
+            async move {
+                let _ = done.send(on_io_pool(read).await).await;
+                if !awaited.load(Ordering::Acquire) {
+                    let _ = notify.refresh();
+                }
+            },
+            "cupertino-extras-read",
+        );
         self.under_way = Some((result, Instant::now()));
     }
 
@@ -1000,21 +1029,18 @@ fn on_radios(
     call: impl FnOnce(&zbus::blocking::Connection) -> zbus::Result<()> + Send + 'static,
 ) -> zbus::Result<()> {
     let (system, notify) = (system.ok_or_else(no_system_bus)?.clone(), queue.clone());
-    queue
-        .executor
-        .spawn(
-            async move {
-                if let Err(e) = on_io_pool(move || call(&system)).await {
-                    eprintln!(
-                        "cupertino-menubar: cannot {what}: {}",
-                        cupertino_radios::refusal(&e)
-                    );
-                }
-                let _ = notify.radios_due(due);
-            },
-            "cupertino-extras-radios",
-        )
-        .detach();
+    queue.spawner.spawn(
+        async move {
+            if let Err(e) = on_io_pool(move || call(&system)).await {
+                eprintln!(
+                    "cupertino-menubar: cannot {what}: {}",
+                    cupertino_radios::refusal(&e)
+                );
+            }
+            let _ = notify.radios_due(due);
+        },
+        "cupertino-extras-radios",
+    );
     Ok(())
 }
 
@@ -1032,33 +1058,30 @@ fn link_device(
         id.to_owned(),
         queue.clone(),
     );
-    queue
-        .executor
-        .spawn(
-            async move {
-                let device = id.clone();
-                let done = on_io_pool(move || {
-                    bluetooth(&system).and_then(|backend| {
-                        if connect {
-                            backend.connect(&system, &device)
-                        } else {
-                            backend.disconnect(&system, &device)
-                        }
-                    })
+    queue.spawner.spawn(
+        async move {
+            let device = id.clone();
+            let done = on_io_pool(move || {
+                bluetooth(&system).and_then(|backend| {
+                    if connect {
+                        backend.connect(&system, &device)
+                    } else {
+                        backend.disconnect(&system, &device)
+                    }
                 })
-                .await;
-                if let Err(e) = done {
-                    let action = if connect { "connect" } else { "disconnect" };
-                    eprintln!(
-                        "cupertino-menubar: cannot {action} the Bluetooth device {id}: {}",
-                        cupertino_radios::refusal(&e)
-                    );
-                }
-                let _ = notify.radios_due(DUE_BLUETOOTH);
-            },
-            "cupertino-extras-link",
-        )
-        .detach();
+            })
+            .await;
+            if let Err(e) = done {
+                let action = if connect { "connect" } else { "disconnect" };
+                eprintln!(
+                    "cupertino-menubar: cannot {action} the Bluetooth device {id}: {}",
+                    cupertino_radios::refusal(&e)
+                );
+            }
+            let _ = notify.radios_due(DUE_BLUETOOTH);
+        },
+        "cupertino-extras-link",
+    );
     Ok(())
 }
 

@@ -621,6 +621,17 @@ impl Supervisor {
             .min()
     }
 
+    /// The name of the program the server starts itself ([`BuiltIn`]) that runs as `pid`, while it runs or stops; `None`
+    /// for a host, a configured process and any other pid. The child is not reaped while it is found here, so its pid
+    /// names no other process.
+    pub fn built_in_of(&self, pid: u32) -> Option<&str> {
+        self.procs
+            .iter()
+            .filter(|p| p.origin == Origin::BuiltIn)
+            .find(|p| p.child().is_some_and(|child| child.id() == pid))
+            .map(|p| p.spec.name.as_str())
+    }
+
     /// The pid of the running process named `name`; `None` while it is not running.
     pub fn pid_of(&self, name: &str) -> Option<u32> {
         self.procs

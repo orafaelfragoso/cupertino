@@ -9,11 +9,17 @@
 //!
 //! While a screenshot overlay is on screen (a layer surface of namespace [`OVERLAY_NAMESPACE`]) a further shortcut
 //! starts nothing: the overlay is already in front and has the keyboard.
+//!
+//! The portal asks for the same program as its service (`org.cupertino.Session1.StartScreenshot`): the command with
+//! [`SERVE_ARG`], on a connection of the same roles, started unless one started so still runs. The server holds a pidfd
+//! of every screenshot process it started, so a bus caller is known as the screenshot program ([`PROGRAM`]) by its
+//! process while it runs ([`Cupertino::program_of`]).
 
 use std::os::unix::net::UnixStream;
 use std::process::Command;
 
 use cupertino_input::ScreenshotRequest;
+use cupertino_peer::ProcessHandle;
 use smithay::desktop::layer_map_for_output;
 
 use crate::authorization::{ClientCapabilitySet, ShellRole};
@@ -22,6 +28,12 @@ use crate::state::{ClientState, Cupertino};
 
 /// The layer-shell namespace of the screenshot process's overlay and toolbar (its floating thumbnail uses another).
 pub const OVERLAY_NAMESPACE: &str = "cupertino-screenshot";
+
+/// The server's name for the screenshot program, as `Session1.ProgramOf` answers it.
+pub const PROGRAM: &str = "screenshot";
+
+/// The argument that starts the screenshot program as the portal's service (`org.cupertino.Screenshot1`).
+pub const SERVE_ARG: &str = "--serve";
 
 /// The arguments that select `request`'s mode in the screenshot process.
 pub fn mode_args(request: ScreenshotRequest) -> &'static [&'static str] {
@@ -36,6 +48,41 @@ pub fn mode_args(request: ScreenshotRequest) -> &'static [&'static str] {
 
 fn capture_capabilities() -> ClientCapabilitySet {
     ClientCapabilitySet::of([ShellRole::Capture, ShellRole::Session])
+}
+
+/// What a screenshot process was started for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Mode {
+    /// One capture, for a shortcut.
+    Shortcut,
+    /// The portal's service ([`SERVE_ARG`]).
+    Serve,
+}
+
+/// The screenshot processes the server started and has not seen exit, each held by a pidfd opened before it could be
+/// reaped. One that exited is dropped at the next start.
+#[derive(Debug, Default)]
+pub struct Launched {
+    running: Vec<(ProcessHandle, Mode)>,
+}
+
+impl Launched {
+    /// Whether `process` is a screenshot process the server started that still runs.
+    pub(crate) fn holds(&self, process: &ProcessHandle) -> bool {
+        self.running.iter().any(|(held, _)| held.is(process))
+    }
+
+    /// Whether a screenshot process started as the portal's service still runs.
+    fn serving(&self) -> bool {
+        self.running
+            .iter()
+            .any(|(held, mode)| *mode == Mode::Serve && !held.has_exited())
+    }
+
+    fn add(&mut self, process: ProcessHandle, mode: Mode) {
+        self.running.retain(|(held, _)| !held.has_exited());
+        self.running.push((process, mode));
+    }
 }
 
 impl Cupertino {
@@ -67,48 +114,73 @@ impl Cupertino {
             tracing::info!(?request, "a screenshot overlay is already open");
             return;
         }
+        match self.spawn_screenshot(mode_args(request), Mode::Shortcut) {
+            Ok(pid) => tracing::info!(pid, ?request, "screenshot process started"),
+            Err(e) => tracing::warn!(?request, error = %e, "the screenshot process did not start"),
+        }
+    }
+
+    /// `StartScreenshot`: start the screenshot program as the portal's service ([`SERVE_ARG`]) unless one started so
+    /// still runs. `Ok` once it runs; the error says why it did not start.
+    pub fn start_serving_screenshot(&mut self) -> Result<(), String> {
+        if self.login_screen {
+            return Err("the login screen starts no programs".into());
+        }
+        if self.capture.launched.serving() {
+            return Ok(());
+        }
+        let pid = self.spawn_screenshot(&[SERVE_ARG], Mode::Serve)?;
+        tracing::info!(pid, "screenshot service started");
+        Ok(())
+    }
+
+    /// Spawn `config.screenshot_command` with `args` on a connection of its own holding the capture roles, bound to
+    /// its process, which the server holds a pidfd of and reaps on a thread of its own. Its pid, or why it did not start.
+    fn spawn_screenshot(&mut self, args: &[&str], mode: Mode) -> Result<u32, String> {
         let command_line = self.config.screenshot_command.clone();
-        let (program, args) = command_line
+        let (program, base) = command_line
             .split_first()
             .expect("the screenshot command is validated non-empty at load");
         let mut command = Command::new(program);
-        command.args(args).args(mode_args(request));
-        let (stream, state) = match connect_bound_client(
+        command.args(base).args(args);
+        let (stream, state) = connect_bound_client(
             &self.display_handle,
             ClientState {
                 capabilities: capture_capabilities(),
                 ..ClientState::default()
             },
-        ) {
-            Ok(connection) => connection,
-            Err(e) => {
-                tracing::warn!(error = %e, "creating the screenshot process's connection failed");
-                return;
-            }
-        };
+        )
+        .map_err(|e| format!("creating the screenshot process's connection failed: {e}"))?;
         // the process reaches the server only through its own connection, never through the public socket
         hand_over(&mut command, &stream);
         command.env_remove("WAYLAND_DISPLAY");
-        match command.spawn() {
-            Ok(mut child) => {
-                let pid = child.id();
-                if let Err(e) = bind_holder(&state, pid) {
-                    tracing::warn!(pid, error = %e, "binding the screenshot process to its connection failed: ending it");
-                    crate::shell_connection::end_unbound(child);
-                    drop(stream);
-                    return;
-                }
-                tracing::info!(pid, ?request, "screenshot process started");
-                std::thread::spawn(move || match child.wait() {
-                    Ok(status) => tracing::info!(pid, %status, "screenshot process exited"),
-                    Err(e) => {
-                        tracing::warn!(pid, error = %e, "waiting for the screenshot process failed")
-                    }
-                });
-            }
-            // the server's end of the pair sees the hang-up and the client is dropped
-            Err(e) => tracing::warn!(program, error = %e, "starting the screenshot process failed"),
-        }
+        // on a failed spawn the server's end of the pair sees the hang-up and the client is dropped
+        let mut child = command
+            .spawn()
+            .map_err(|e| format!("starting {program} failed: {e}"))?;
         drop(stream);
+        let pid = child.id();
+        // the child is not reaped yet, so its pid names it alone
+        let held = ProcessHandle::open(pid).and_then(|process| {
+            bind_holder(&state, pid)?;
+            Ok(process)
+        });
+        let process = match held {
+            Ok(process) => process,
+            Err(e) => {
+                crate::shell_connection::end_unbound(child);
+                return Err(format!(
+                    "binding the screenshot process {pid} to its connection failed: {e}"
+                ));
+            }
+        };
+        self.capture.launched.add(process, mode);
+        std::thread::spawn(move || match child.wait() {
+            Ok(status) => tracing::info!(pid, %status, "screenshot process exited"),
+            Err(e) => {
+                tracing::warn!(pid, error = %e, "waiting for the screenshot process failed")
+            }
+        });
+        Ok(pid)
     }
 }

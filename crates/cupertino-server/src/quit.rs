@@ -13,7 +13,8 @@
 //! daemon's `ProcessFD`. `QuitNextApplication`, `QuitStatus`, `ForceQuitApplication`, `OpenApplications` and `PendingInterrupt` are for the session agent the server
 //! supervises; `SetAppearance` and `SetAccessibility` for the settings application (a known program under `/usr`) and
 //! that agent; `ListShellProcesses` and `RestartShellProcess` for any unsandboxed process of the user the server runs as
-//! (the `cupertino shell` commands), by the user id the bus daemon gives for the connection. A caller without a process descriptor, a Flatpak or a Snap is refused, with an error name of its own
+//! (the `cupertino shell` commands), by the user id the bus daemon gives for the connection; `StartScreenshot` for the
+//! portal the server started, known by its process ([`Cupertino::program_of`]). A caller without a process descriptor, a Flatpak or a Snap is refused, with an error name of its own
 //! (`org.cupertino.Session1.Error.AnonymousCaller`, `.FlatpakCaller`, `.SnapCaller`; `.UntrustedCaller` for any other
 //! process), and every refusal is logged. The properties are open to every caller.
 //!
@@ -36,6 +37,7 @@
 //! | `SetAccessibility(s key, s value)` | one key of `accessibility.conf` with a value as the file writes it (`reduce_motion` `on`, `color_filter` `tint 0.5`, ...): applied and stored like the key actions; an unknown key or bad value is `InvalidArgs` |
 //! | `ListShellProcesses -> a(ssuttsbss)` | every process the server supervises, in start order, as `(name, state, pid, start_ticks, started, program, from_dev_folder, installed, dev_program)`: `state` is `running`, `stopping`, `waiting` or `stopped`; `pid`, `start_ticks` (field 22 of `/proc/PID/stat`), `started` (seconds since 1970) are 0 and `program` empty while it does not run; `from_dev_folder` says the program is the development folder's; `installed` is the configured program and `dev_program` the development folder's file it would start, empty when the folder does not apply. Only an unsandboxed process of the session's own user may call it |
 //! | `RestartShellProcess(s name) -> (ssuttsbss)` | ends the process (SIGTERM, then SIGKILL after `crate::supervisor::RESTART_STOP_GRACE`) and starts it again at once, the development folder resolved again; answers once it runs, with the same record. A component that runs in a host is restarted through its host and answered once it is ready, with its host's record under its name; `host` and `host-NAME` name the hosts. An unknown name is `InvalidArgs`, a start that failed `Failed`. Only an unsandboxed process of the session's own user may call it |
+//! | `StartScreenshot` | starts the screenshot program as the portal's service: the `screenshot` key's command with `--serve`, on a connection the server makes with the `session` and `capture` roles ([`crate::capture::launch`]), unless one it started so still runs; returns once it runs, and the portal then waits for `org.cupertino.Screenshot1` on the bus. `Failed` on the login screen or when it cannot start. Only the portal the server started may call it |
 //! | `Appearance` property `s` | `light` or `dark`, the session's appearance (with `PropertiesChanged`) |
 //! | `Accessibility` property `a{ss}` | every key of `accessibility.conf` with its value (with `PropertiesChanged`) |
 //! | `Mice` property `a(ssub)` | read-only: the connected mice that have moved, scrolled or clicked (no touchpads, no keyboard's unused pointer interface), each as `(key, name, dpi, stored)`: the `mouse_dpi` key of `compositor.json` (`vendor:product:name`, hex ids), the device name, the resolution in use (the stored one, else the hardware database's, else 1000) and whether it is the stored one; changes with `PropertiesChanged` on a mouse's first use or removal and on a change of `mouse_dpi` |
@@ -46,14 +48,16 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use smithay::reexports::calloop::channel::{self, Event};
-use zbus::object_server::SignalEmitter;
-
 use crate::authorization::ShellRole;
-use crate::caller::{identify, Caller, Denial, Need, Sandbox};
+use crate::caller::{Caller, Denial, Need};
+use crate::config::BuiltIn;
 use crate::state::Cupertino;
 use crate::supervisor::{ProcessInfo, RestartError};
 use cupertino_wm::{AppId, Command, WindowId};
+
+mod service;
+
+pub use service::{start_session_service, start_session_service_on};
 
 pub const BUS_NAME: &str = "org.cupertino.Session1";
 pub const OBJECT_PATH: &str = "/org/cupertino/Session1";
@@ -286,6 +290,8 @@ pub enum Call {
     CancelSessionAction(Caller, async_channel::Sender<Result<(), Reject>>),
     /// Retry asking the next application after an interrupt during a session-ending quit sequence.
     RetrySessionAction(Caller, async_channel::Sender<Result<(), Reject>>),
+    /// Start the screenshot program as the portal's service (`StartScreenshot`).
+    StartScreenshot(Caller, async_channel::Sender<Result<(), Reject>>),
 }
 
 /// An interrupt of a quit sequence that waits for an answer: the interrupted action's method name, the application
@@ -520,6 +526,49 @@ impl Cupertino {
             );
         }
         decision
+    }
+
+    /// The program the server started itself whose process `caller` is, by the server's own name for it (`portal`,
+    /// `login`, `desktop-control`, `polkit-agent`, `keyring-prompter`, `screenshot`): the process of a running
+    /// [`BuiltIn`] the supervisor has not reaped, or of a screenshot process the server holds the pidfd of. `None` for any
+    /// other process (a host and its components, a configured shell process, an application), for one that has exited,
+    /// and for an anonymous caller. A caller whose sandbox `/proc` would not tell is still named by its process.
+    pub fn program_of(&self, caller: &Caller) -> Option<&str> {
+        let process = match caller {
+            Caller::Process(identified) => &identified.process,
+            Caller::Unclassified(process) => process,
+            Caller::Anonymous => return None,
+        };
+        if process.has_exited() {
+            return None;
+        }
+        self.supervisor.built_in_of(process.pid).or_else(|| {
+            self.capture
+                .launched
+                .holds(process)
+                .then_some(crate::capture::launch::PROGRAM)
+        })
+    }
+
+    /// Judge the caller of `method`, which only the program the server started as `program` may call
+    /// ([`Cupertino::program_of`]); a refusal is logged with the caller's process and kind, never with the arguments.
+    pub fn authorize_program_call(
+        &self,
+        method: &'static str,
+        caller: &Caller,
+        program: &str,
+    ) -> Result<(), Denial> {
+        if self.program_of(caller) == Some(program) {
+            return Ok(());
+        }
+        let denial = caller.unsandboxed().err().unwrap_or(Denial::Untrusted);
+        tracing::warn!(
+            method,
+            pid = caller.pid(),
+            ?denial,
+            "session interface: the caller is refused"
+        );
+        Err(denial)
     }
 
     /// Restart `name` (`cupertino shell restart NAME`): a component that runs in a host through its host
@@ -954,6 +1003,16 @@ impl Cupertino {
                     .map_err(Reject::Caller);
                 let _ = reply.try_send(answer);
             }
+            Call::StartScreenshot(caller, reply) => {
+                let answer = self
+                    .authorize_program_call("StartScreenshot", &caller, BuiltIn::Portal.name())
+                    .map_err(Reject::Caller)
+                    .and_then(|()| {
+                        self.start_serving_screenshot()
+                            .map_err(|e| Reject::Refusal(Refusal::Failed(e)))
+                    });
+                let _ = reply.try_send(answer);
+            }
         }
     }
 }
@@ -1024,452 +1083,6 @@ fn execute_system_session_action(action: SessionAction) -> Result<(), String> {
             )
             .map(drop)
             .map_err(|e| format!("logind {method}: {e}"))
-        }
-    }
-}
-
-struct Session1 {
-    calls: std::sync::Mutex<channel::Sender<Call>>,
-    /// What the properties read; the compositor updates it in [`Cupertino::publish_session_settings`].
-    settings: Arc<Mutex<SessionSettings>>,
-}
-
-/// What a call of the session interface fails with: the standard errors, and one name for each way a caller is refused.
-#[derive(Debug, zbus::DBusError)]
-#[zbus(prefix = "org.cupertino.Session1.Error")]
-enum CallError {
-    #[zbus(error)]
-    ZBus(zbus::Error),
-    AnonymousCaller(String),
-    FlatpakCaller(String),
-    SnapCaller(String),
-    UntrustedCaller(String),
-}
-
-impl From<zbus::fdo::Error> for CallError {
-    fn from(e: zbus::fdo::Error) -> Self {
-        CallError::ZBus(e.into())
-    }
-}
-
-impl From<Reject> for CallError {
-    fn from(reject: Reject) -> Self {
-        match reject {
-            Reject::Caller(Denial::Anonymous) => {
-                CallError::AnonymousCaller("the bus gave no process for this caller".into())
-            }
-            Reject::Caller(Denial::Sandboxed(Sandbox::Flatpak)) => {
-                CallError::FlatpakCaller("a Flatpak may not use this method".into())
-            }
-            Reject::Caller(Denial::Sandboxed(Sandbox::Snap)) => {
-                CallError::SnapCaller("a Snap may not use this method".into())
-            }
-            Reject::Caller(Denial::Untrusted) => {
-                CallError::UntrustedCaller("this process may not use this method".into())
-            }
-            Reject::Refusal(Refusal::InvalidArgs(m)) => zbus::fdo::Error::InvalidArgs(m).into(),
-            Reject::Refusal(Refusal::NotSupported(m)) => zbus::fdo::Error::NotSupported(m).into(),
-            Reject::Refusal(Refusal::Failed(m)) => zbus::fdo::Error::Failed(m).into(),
-        }
-    }
-}
-
-impl Session1 {
-    async fn ask<T>(
-        &self,
-        make: impl FnOnce(async_channel::Sender<Result<T, Reject>>) -> Call,
-    ) -> Result<T, CallError> {
-        let (tx, rx) = async_channel::bounded(1);
-        self.calls
-            .lock()
-            .expect("no thread panics while sending a call")
-            .send(make(tx))
-            .map_err(|_| zbus::fdo::Error::Failed("the compositor is shutting down".into()))?;
-        rx.recv()
-            .await
-            .map_err(|_| zbus::fdo::Error::Failed("the compositor dropped the call".into()))?
-            .map_err(CallError::from)
-    }
-}
-
-/// The caller of a method, from the header of its message.
-async fn caller_of(header: &zbus::message::Header<'_>, connection: &zbus::Connection) -> Caller {
-    match header.sender() {
-        Some(sender) => identify(connection, sender).await,
-        None => Caller::Anonymous,
-    }
-}
-
-/// The caller of a method and the user id the bus daemon gives for its connection, from one answer of the daemon.
-async fn caller_and_user_of(
-    header: &zbus::message::Header<'_>,
-    connection: &zbus::Connection,
-) -> (Caller, Option<u32>) {
-    let Some(sender) = header.sender() else {
-        return (Caller::Anonymous, None);
-    };
-    let Ok(proxy) = zbus::fdo::DBusProxy::new(connection).await else {
-        return (Caller::Anonymous, None);
-    };
-    match proxy
-        .get_connection_credentials(sender.clone().into())
-        .await
-    {
-        Ok(credentials) => (
-            Caller::from_credentials(&credentials, std::path::Path::new("/proc")),
-            credentials.unix_user_id(),
-        ),
-        Err(_) => (Caller::Anonymous, None),
-    }
-}
-
-#[zbus::interface(name = "org.cupertino.Session1")]
-impl Session1 {
-    async fn quit_next_application(
-        &self,
-        #[zbus(header)] header: zbus::message::Header<'_>,
-        #[zbus(connection)] connection: &zbus::Connection,
-    ) -> Result<(String, u32), CallError> {
-        let caller = caller_of(&header, connection).await;
-        self.ask(|tx| Call::QuitNext(caller, tx)).await
-    }
-
-    async fn quit_status(
-        &self,
-        app_id: String,
-        #[zbus(header)] header: zbus::message::Header<'_>,
-        #[zbus(connection)] connection: &zbus::Connection,
-    ) -> Result<String, CallError> {
-        let caller = caller_of(&header, connection).await;
-        self.ask(|tx| Call::QuitStatus(app_id, caller, tx)).await
-    }
-
-    async fn force_quit_application(
-        &self,
-        app_id: String,
-        #[zbus(header)] header: zbus::message::Header<'_>,
-        #[zbus(connection)] connection: &zbus::Connection,
-    ) -> Result<u32, CallError> {
-        let caller = caller_of(&header, connection).await;
-        self.ask(|tx| Call::ForceQuit(app_id, caller, tx)).await
-    }
-
-    async fn open_applications(
-        &self,
-        #[zbus(header)] header: zbus::message::Header<'_>,
-        #[zbus(connection)] connection: &zbus::Connection,
-    ) -> Result<Vec<String>, CallError> {
-        let caller = caller_of(&header, connection).await;
-        self.ask(|tx| Call::OpenApplications(caller, tx)).await
-    }
-
-    async fn pending_interrupt(
-        &self,
-        #[zbus(header)] header: zbus::message::Header<'_>,
-        #[zbus(connection)] connection: &zbus::Connection,
-    ) -> Result<(bool, String, String, String), CallError> {
-        let caller = caller_of(&header, connection).await;
-        let pending = self.ask(|tx| Call::PendingInterrupt(caller, tx)).await?;
-        Ok(match pending {
-            Some((action, app, reason)) => (true, action.to_owned(), app, reason),
-            None => (false, String::new(), String::new(), String::new()),
-        })
-    }
-
-    async fn set_appearance(
-        &self,
-        appearance: String,
-        #[zbus(header)] header: zbus::message::Header<'_>,
-        #[zbus(connection)] connection: &zbus::Connection,
-    ) -> Result<(), CallError> {
-        let caller = caller_of(&header, connection).await;
-        self.ask(|tx| Call::SetAppearance(appearance, caller, tx))
-            .await
-    }
-
-    async fn set_accessibility(
-        &self,
-        key: String,
-        value: String,
-        #[zbus(header)] header: zbus::message::Header<'_>,
-        #[zbus(connection)] connection: &zbus::Connection,
-    ) -> Result<(), CallError> {
-        let caller = caller_of(&header, connection).await;
-        self.ask(|tx| Call::SetAccessibility(key, value, caller, tx))
-            .await
-    }
-
-    async fn list_shell_processes(
-        &self,
-        #[zbus(header)] header: zbus::message::Header<'_>,
-        #[zbus(connection)] connection: &zbus::Connection,
-    ) -> Result<Vec<ShellProcessRecord>, CallError> {
-        let (caller, user) = caller_and_user_of(&header, connection).await;
-        let processes = self
-            .ask(|tx| Call::ListShellProcesses(caller, user, tx))
-            .await?;
-        Ok(processes.iter().map(shell_process_record).collect())
-    }
-
-    async fn restart_shell_process(
-        &self,
-        name: String,
-        #[zbus(header)] header: zbus::message::Header<'_>,
-        #[zbus(connection)] connection: &zbus::Connection,
-    ) -> Result<ShellProcessRecord, CallError> {
-        let (caller, user) = caller_and_user_of(&header, connection).await;
-        let process = self
-            .ask(|tx| Call::RestartShellProcess(name, caller, user, tx))
-            .await?;
-        Ok(shell_process_record(&process))
-    }
-
-    async fn announce_component(
-        &self,
-        nonce: String,
-        #[zbus(header)] header: zbus::message::Header<'_>,
-        #[zbus(connection)] connection: &zbus::Connection,
-    ) -> Result<(), CallError> {
-        let sender = header
-            .sender()
-            .map(|s| s.as_str().to_owned())
-            .unwrap_or_default();
-        let caller = caller_of(&header, connection).await;
-        self.ask(|reply| Call::AnnounceComponent {
-            sender,
-            nonce,
-            caller,
-            reply,
-        })
-        .await
-    }
-
-    async fn component_of(&self, unique_name: String) -> Result<String, CallError> {
-        self.ask(|tx| Call::ComponentOf(unique_name, tx)).await
-    }
-
-    async fn shell_hosts(&self) -> Result<Vec<(u32, u64)>, CallError> {
-        self.ask(Call::ShellHosts).await
-    }
-
-    async fn log_out(
-        &self,
-        #[zbus(header)] header: zbus::message::Header<'_>,
-        #[zbus(connection)] connection: &zbus::Connection,
-    ) -> Result<(), CallError> {
-        let caller = caller_of(&header, connection).await;
-        self.ask(|tx| Call::SessionAction(SessionAction::LogOut, caller, tx))
-            .await
-    }
-
-    async fn restart(
-        &self,
-        #[zbus(header)] header: zbus::message::Header<'_>,
-        #[zbus(connection)] connection: &zbus::Connection,
-    ) -> Result<(), CallError> {
-        let caller = caller_of(&header, connection).await;
-        self.ask(|tx| Call::SessionAction(SessionAction::Restart, caller, tx))
-            .await
-    }
-
-    async fn shut_down(
-        &self,
-        #[zbus(header)] header: zbus::message::Header<'_>,
-        #[zbus(connection)] connection: &zbus::Connection,
-    ) -> Result<(), CallError> {
-        let caller = caller_of(&header, connection).await;
-        self.ask(|tx| Call::SessionAction(SessionAction::ShutDown, caller, tx))
-            .await
-    }
-
-    async fn sleep(
-        &self,
-        #[zbus(header)] header: zbus::message::Header<'_>,
-        #[zbus(connection)] connection: &zbus::Connection,
-    ) -> Result<(), CallError> {
-        let caller = caller_of(&header, connection).await;
-        self.ask(|tx| Call::SessionAction(SessionAction::Sleep, caller, tx))
-            .await
-    }
-
-    async fn cancel_session_action(
-        &self,
-        #[zbus(header)] header: zbus::message::Header<'_>,
-        #[zbus(connection)] connection: &zbus::Connection,
-    ) -> Result<(), CallError> {
-        let caller = caller_of(&header, connection).await;
-        self.ask(|tx| Call::CancelSessionAction(caller, tx)).await
-    }
-
-    async fn retry_session_action(
-        &self,
-        #[zbus(header)] header: zbus::message::Header<'_>,
-        #[zbus(connection)] connection: &zbus::Connection,
-    ) -> Result<(), CallError> {
-        let caller = caller_of(&header, connection).await;
-        self.ask(|tx| Call::RetrySessionAction(caller, tx)).await
-    }
-
-    #[zbus(property)]
-    async fn appearance(&self) -> String {
-        self.settings
-            .lock()
-            .expect("no thread panics while holding the settings")
-            .appearance
-            .clone()
-    }
-
-    #[zbus(property)]
-    async fn accessibility(&self) -> HashMap<String, String> {
-        self.settings
-            .lock()
-            .expect("no thread panics while holding the settings")
-            .accessibility
-            .clone()
-    }
-
-    /// Read-only on purpose: the resolution a user stores goes through `compositor.json`.
-    #[zbus(property)]
-    async fn mice(&self) -> Vec<(String, String, u32, bool)> {
-        self.settings
-            .lock()
-            .expect("no thread panics while holding the settings")
-            .mice
-            .iter()
-            .map(|m| (m.key.clone(), m.name.clone(), m.dpi, m.stored))
-            .collect()
-    }
-
-    #[zbus(signal)]
-    async fn application_quit(emitter: &SignalEmitter<'_>, app_id: &str) -> zbus::Result<()>;
-
-    #[zbus(signal)]
-    async fn quit_interrupted(
-        emitter: &SignalEmitter<'_>,
-        app_id: &str,
-        reason: &str,
-    ) -> zbus::Result<()>;
-
-    #[zbus(signal)]
-    async fn session_action_failed(
-        emitter: &SignalEmitter<'_>,
-        action: &str,
-        reason: &str,
-    ) -> zbus::Result<()>;
-
-    #[zbus(signal)]
-    async fn quit_interrupt_closed(emitter: &SignalEmitter<'_>) -> zbus::Result<()>;
-}
-
-/// Serve `org.cupertino.Session1` on the session bus from a thread of its own. Failures (no bus, the name owned by
-/// another compositor) are logged: the session agent then logs out without quitting the applications first.
-pub fn start_session_service(state: &mut Cupertino) {
-    start_session_service_on(state, None);
-}
-
-/// [`start_session_service`] on the bus at `address`, the session bus when `None`.
-pub fn start_session_service_on(state: &mut Cupertino, address: Option<String>) {
-    let (calls, rx) = channel::channel::<Call>();
-    if let Err(e) = state.loop_handle.insert_source(rx, |event, _, state| {
-        if let Event::Msg(call) = event {
-            state.on_quit_call(call);
-        }
-    }) {
-        tracing::warn!(error = %e, "cannot serve the session interface");
-        return;
-    }
-    let signals_rx = state.quit.subscribe();
-    let settings = Arc::new(Mutex::new(state.session_settings()));
-    state.quit.properties = Some(Arc::clone(&settings));
-    // the values the change signals were last emitted for
-    let mut emitted = state.session_settings();
-    let connection = Arc::clone(&state.quit.connection);
-    let spawned = std::thread::Builder::new().name("session-service".into()).spawn(move || {
-        // when the bus connection drops, connect again after a growing pause and claim the name again
-        let mut pause = crate::dbus::RECONNECT_FIRST;
-        let mut served_before = false;
-        loop {
-            let ended = zbus::block_on(serve_session(&address, &calls, &settings, &signals_rx, &mut emitted, &connection));
-            match ended {
-                Ok(true) => break,
-                Ok(false) => {
-                    tracing::warn!("the session bus connection dropped: serving {BUS_NAME} again");
-                    pause = crate::dbus::RECONNECT_FIRST;
-                    served_before = true;
-                }
-                Err(e) => {
-                    if served_before {
-                        tracing::debug!(error = %e, "the session interface {BUS_NAME} is not served yet");
-                    } else {
-                        tracing::warn!(error = %e, "the session interface {BUS_NAME} is not served: a log out does not quit the applications first until it is");
-                        served_before = true;
-                    }
-                    pause = (pause * 2).min(crate::dbus::RECONNECT_LONGEST);
-                }
-            }
-            std::thread::sleep(pause);
-        }
-    });
-    if let Err(e) = spawned {
-        tracing::warn!(error = %e, "cannot start the session interface thread");
-    }
-}
-
-/// Serve the interface on one connection until it closes (`Ok(false)`) or nothing can send signals any more (`Ok(true)`).
-async fn serve_session(
-    address: &Option<String>,
-    calls: &channel::Sender<Call>,
-    settings: &Arc<Mutex<SessionSettings>>,
-    signals_rx: &async_channel::Receiver<BusOut>,
-    emitted: &mut SessionSettings,
-    connection: &SessionConnection,
-) -> zbus::Result<bool> {
-    let iface = Session1 {
-        calls: std::sync::Mutex::new(calls.clone()),
-        settings: Arc::clone(settings),
-    };
-    let conn = crate::dbus::bus(address.as_deref())?
-        .serve_at(OBJECT_PATH, iface)?
-        .name(BUS_NAME)?
-        .build()
-        .await?;
-    let emitter = SignalEmitter::new(&conn, OBJECT_PATH)?;
-    let served = conn
-        .object_server()
-        .interface::<_, Session1>(OBJECT_PATH)
-        .await?;
-    *connection.lock().unwrap_or_else(|e| e.into_inner()) = Some(conn.clone());
-    let _serving = Serving(connection);
-    loop {
-        let out = match crate::dbus::either(signals_rx.recv(), conn.closed()).await {
-            crate::dbus::Either::First(Ok(out)) => out,
-            crate::dbus::Either::First(Err(_)) => return Ok(true),
-            crate::dbus::Either::Second(()) => return Ok(false),
-        };
-        match out {
-            BusOut::ApplicationQuit(app_id) => {
-                Session1::application_quit(&emitter, &app_id).await?
-            }
-            BusOut::QuitInterrupted { app_id, reason } => {
-                Session1::quit_interrupted(&emitter, &app_id, &reason).await?
-            }
-            BusOut::QuitInterruptClosed => Session1::quit_interrupt_closed(&emitter).await?,
-            BusOut::SessionActionFailed { action, reason } => {
-                Session1::session_action_failed(&emitter, &action, &reason).await?
-            }
-            BusOut::Settings(now) => {
-                let before = std::mem::replace(emitted, now.clone());
-                let iface = served.get().await;
-                if before.appearance != now.appearance {
-                    iface.appearance_changed(&emitter).await?;
-                }
-                if before.accessibility != now.accessibility {
-                    iface.accessibility_changed(&emitter).await?;
-                }
-                if before.mice != now.mice {
-                    iface.mice_changed(&emitter).await?;
-                }
-            }
         }
     }
 }

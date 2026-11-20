@@ -74,6 +74,8 @@ pub struct Capture {
     _globals: [GlobalId; 4],
     copy: copy::Sessions,
     feeds: windows::Feeds,
+    /// The screenshot processes the server started ([`launch`]).
+    pub(crate) launched: launch::Launched,
 }
 
 impl Capture {
@@ -93,6 +95,7 @@ impl Capture {
             ],
             copy: copy::Sessions::default(),
             feeds: windows::Feeds::default(),
+            launched: launch::Launched::default(),
         }
     }
 }

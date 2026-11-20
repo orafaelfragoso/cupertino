@@ -11,6 +11,7 @@
 //! program ([`screenshot_stand_in`]).
 
 use std::io::{BufRead, BufReader};
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command as Process, Stdio};
@@ -225,21 +226,34 @@ fn serving() -> Vec<u32> {
     pids
 }
 
-fn until(what: &str, done: impl Fn() -> bool) {
-    let deadline = Instant::now() + WAIT;
-    while !done() {
-        assert!(Instant::now() < deadline, "timed out waiting until {what}");
-        std::thread::sleep(Duration::from_millis(5));
-    }
-}
-
-/// Kill `pid` and wait until it no longer runs.
+/// Kill `pid` and wait until it has exited as the server sees it: its pidfd readable, which it is only once every
+/// thread of the process is gone. `/proc` shows the main thread a zombie before that, while another thread still
+/// exits, and the server, which asks the pidfd, still holds the process then.
 fn end(pid: u32) {
-    ProcessHandle::open(pid)
-        .unwrap()
-        .send(libc::SIGKILL)
-        .unwrap();
-    until("the screenshot service ended", || !serving().contains(&pid));
+    let process = ProcessHandle::open(pid).unwrap();
+    process.send(libc::SIGKILL).unwrap();
+    let deadline = Instant::now() + WAIT;
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        let mut ready = [libc::pollfd {
+            fd: process.fd().as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        }];
+        let timeout = libc::c_int::try_from(left.as_millis()).unwrap_or(libc::c_int::MAX);
+        // Safety: `ready` is one pollfd of a descriptor `process` holds open for the call.
+        let woke = unsafe { libc::poll(ready.as_mut_ptr(), 1, timeout) };
+        if woke < 0 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+            continue;
+        }
+        assert!(
+            woke == 1 && ready[0].revents & libc::POLLIN != 0,
+            "the screenshot service {pid} did not end within {WAIT:?}"
+        );
+        break;
+    }
+    assert!(process.has_exited());
+    assert!(!serving().contains(&pid));
 }
 
 #[test]

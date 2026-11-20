@@ -2,13 +2,10 @@
 
 use std::time::Duration;
 
-pub const USAGE: &str = "usage: cupertino-login [--idle-timeout SECONDS] [--retries-until-hint N] [--power-button-sleeps-system BOOL]\n       cupertino-login --greeter";
+pub const USAGE: &str = "usage: cupertino-login [--idle-timeout SECONDS] [--retries-until-hint N]\n       cupertino-login --greeter";
 
 /// `RetriesUntilHint` when the option is absent (absent = 0).
 const RETRIES_UNTIL_HINT_ABSENT: u32 = 0;
-
-/// `PowerButtonSleepsSystem` when the option is absent (default NO).
-const POWER_BUTTON_SLEEPS_SYSTEM_ABSENT: bool = false;
 
 /// What the process runs as.
 #[derive(Debug, PartialEq, Eq)]
@@ -27,9 +24,6 @@ pub struct SessionOptions {
     pub idle_timeout: Option<Duration>,
     /// Failed attempts until the password help shows with its hint, see [`crate::hint`]; 0 is the setting absent.
     pub retries_until_hint: u32,
-    /// `PowerButtonSleepsSystem`: a release of the power key between the debounce and the hold time sleeps the
-    /// system. The setting absent is off, the design's default.
-    pub power_button_sleeps_system: bool,
 }
 
 impl Options {
@@ -39,7 +33,6 @@ impl Options {
         let mut greeter = false;
         let mut idle_timeout = None;
         let mut retries_until_hint = None;
-        let mut power_button_sleeps_system = None;
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--greeter" => greeter = true,
@@ -64,17 +57,11 @@ impl Options {
                             format!("{count:?} is not a number of failed attempts")
                         })?);
                 }
-                "--power-button-sleeps-system" => {
-                    power_button_sleeps_system = Some(parse_flag(&arg, args.next())?)
-                }
                 _ => return Err(format!("unknown argument {arg}")),
             }
         }
         if greeter {
-            if idle_timeout.is_some()
-                || retries_until_hint.is_some()
-                || power_button_sleeps_system.is_some()
-            {
+            if idle_timeout.is_some() || retries_until_hint.is_some() {
                 return Err("--greeter takes no other option: the session manager supplies the settings of the login screen".into());
             }
             return Ok(Options::Greeter);
@@ -82,18 +69,6 @@ impl Options {
         Ok(Options::Session(SessionOptions {
             idle_timeout,
             retries_until_hint: retries_until_hint.unwrap_or(RETRIES_UNTIL_HINT_ABSENT),
-            power_button_sleeps_system: power_button_sleeps_system
-                .unwrap_or(POWER_BUTTON_SLEEPS_SYSTEM_ABSENT),
         }))
-    }
-}
-
-/// The `true` or `false` that follows the option `name`.
-fn parse_flag(name: &str, value: Option<String>) -> Result<bool, String> {
-    match value.as_deref() {
-        Some("true") => Ok(true),
-        Some("false") => Ok(false),
-        Some(other) => Err(format!("{name} takes true or false, not {other:?}")),
-        None => Err(format!("{name} needs true or false")),
     }
 }

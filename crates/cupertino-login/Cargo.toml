@@ -3,14 +3,14 @@ name = "cupertino-login"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
-description = "Lock screen, greeter and session agent for the Cupertino compositor: password entry state machine, clock and user block, wallpaper treatment, PAM authentication for the lock screen, the connection to the session manager, confirmation panels and org.cupertino.Login1, drawn with CupertinoKit"
+description = "Lock screen and greeter for the Cupertino compositor: password entry state machine, clock and user block, wallpaper treatment, PAM authentication for the lock screen, the connection to the session manager, the desktop-control consent panel and org.cupertino.Login1, drawn with CupertinoKit"
 [package.metadata.cupertino]
 layer = "shell"
 
 [features]
 default = []
 dbus = ["dep:zbus", "dep:cupertino-seat", "dep:cupertino-radios", "dep:cupertino-peer"]
-# the `cupertino-login` process: the lock screen, greeter and session agent as a client of the server
+# the `cupertino-login` process: the lock screen and greeter as a client of the server
 app = [
     "dbus",
     "dep:async-channel",
@@ -28,7 +28,6 @@ app = [
 cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events" }
 async-channel = { version = "2", optional = true }
 async-io = { version = "2", optional = true }
-cupertino-apps = { path = "../cupertino-apps" }
 cupertino-assets = { path = "../cupertino-assets", optional = true }
 cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-geometry = { path = "../cupertino-geometry" }

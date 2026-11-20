@@ -1,8 +1,5 @@
-//! What logind asks of a lock screen and a session agent: lock the session (`loginctl lock-session`), prepare for sleep, the
-//! delay inhibitor that holds sleep back until the lock is up, the block inhibitor on the power key, and the call that ends the
-//! session. Restarting, shutting down and sleeping go through the session manager ([`crate::login_manager`]); when there is none
-//! (the session was started by another display manager) the process asks logind itself ([`Logind::power`]), and logind's
-//! answers say which of them the menu may offer ([`Logind::can`]).
+//! What logind asks of a lock screen: lock the session (`loginctl lock-session`), prepare for sleep, and the delay
+//! inhibitor that holds sleep back until the lock is up.
 //!
 //! The signals arrive on reader threads (the blocking `zbus` API has no pollable descriptor) and reach the caller through
 //! the callback of [`Logind::listen`]. Each comes from logind only: the session's signals are bound to logind's unique name,
@@ -18,9 +15,6 @@ use zbus::zvariant::OwnedFd;
 use zbus::{MatchRule, Message};
 
 use cupertino_seat::{SessionLookup, SessionRef};
-
-use crate::capabilities::Answer;
-use crate::login_manager::Power;
 
 const LOGIND: &str = "org.freedesktop.login1";
 const MANAGER_PATH: &str = "/org/freedesktop/login1";
@@ -40,17 +34,6 @@ impl Error {
             what,
             source: Box::new(source),
         }
-    }
-}
-
-impl Error {
-    /// logind answered with an error of its own (access denied, a block inhibitor, an operation already running): the
-    /// request was understood and refused, which is an outcome, not a fault of the connection.
-    pub fn is_refusal(&self) -> bool {
-        matches!(
-            self.source.downcast_ref::<zbus::Error>(),
-            Some(zbus::Error::MethodError(..))
-        )
     }
 }
 
@@ -155,17 +138,6 @@ impl Logind {
         )
     }
 
-    /// Keep logind from powering off on the power key until the returned [`Inhibitor`] is dropped; the key then reaches the
-    /// compositor, whose shortcut shows the power panel.
-    pub fn block_power_key(&self) -> Result<Inhibitor, Error> {
-        self.inhibit(
-            "taking the power key inhibitor",
-            "handle-power-key",
-            "Ask before shutting down",
-            "block",
-        )
-    }
-
     fn inhibit(
         &self,
         what: &'static str,
@@ -186,68 +158,6 @@ impl Logind {
         Ok(Inhibitor(
             reply.body().deserialize().map_err(Error::bus(what))?,
         ))
-    }
-
-    /// Whether the machine can `action` and whether the person may (`CanSuspend`, `CanReboot`, `CanPowerOff`).
-    pub fn can(&self, action: Power) -> Result<Answer, Error> {
-        let (method, what) = match action {
-            Power::Sleep => ("CanSuspend", "asking logind whether the computer can sleep"),
-            Power::Restart => (
-                "CanReboot",
-                "asking logind whether the computer can restart",
-            ),
-            Power::ShutDown => (
-                "CanPowerOff",
-                "asking logind whether the computer can shut down",
-            ),
-        };
-        let reply = self
-            .connection
-            .call_method(
-                Some(LOGIND),
-                MANAGER_PATH,
-                Some(MANAGER_INTERFACE),
-                method,
-                &(),
-            )
-            .map_err(Error::bus(what))?;
-        let text: String = reply.body().deserialize().map_err(Error::bus(what))?;
-        Ok(Answer::from_logind(&text))
-    }
-
-    /// Suspend, restart or power off the computer through logind (`Suspend`, `Reboot`, `PowerOff`), without an
-    /// authentication dialog: logind decides from the open sessions and the block inhibitors, and refuses what the person may
-    /// not do ([`Error::is_refusal`]).
-    pub fn power(&self, action: Power) -> Result<(), Error> {
-        let (method, what) = match action {
-            Power::Sleep => ("Suspend", "putting the computer to sleep through logind"),
-            Power::Restart => ("Reboot", "restarting the computer through logind"),
-            Power::ShutDown => ("PowerOff", "shutting the computer down through logind"),
-        };
-        self.connection
-            .call_method(
-                Some(LOGIND),
-                MANAGER_PATH,
-                Some(MANAGER_INTERFACE),
-                method,
-                &(false,),
-            )
-            .map(drop)
-            .map_err(Error::bus(what))
-    }
-
-    /// End this process's session (`TerminateSession`).
-    pub fn terminate_session(&self) -> Result<(), Error> {
-        self.connection
-            .call_method(
-                Some(LOGIND),
-                MANAGER_PATH,
-                Some(MANAGER_INTERFACE),
-                "TerminateSession",
-                &self.session_id.as_str(),
-            )
-            .map(drop)
-            .map_err(Error::bus("terminating the session"))
     }
 
     /// Start the reader threads. `notify` runs on them for every [`Signal`], and once with the error when a stream

@@ -73,6 +73,7 @@ pub fn run(file: PathBuf) -> ! {
         kind,
         started: HashMap::new(),
         next_check: Instant::now() + LIVENESS_CHECK_INTERVAL,
+        render_busy: false,
     };
     for event in pending {
         host.handle(event);
@@ -107,6 +108,9 @@ struct Hosted {
     kind: Kind,
     started: HashMap<ComponentName, Started>,
     next_check: Instant,
+    /// Whether the last pass saw the render thread busy: it is reported on its own, as the loop of a component that
+    /// waits on it is then busy too, from about the same time.
+    render_busy: bool,
 }
 
 impl Hosted {
@@ -231,6 +235,15 @@ impl Hosted {
     /// changes; how the components that ended did.
     fn check(&mut self) {
         let render = self.runtime.render_busy_for();
+        let render_busy = render.is_some_and(|busy| busy >= BUSY_THRESHOLD);
+        if render_busy != self.render_busy {
+            self.render_busy = render_busy;
+            report(if render_busy {
+                "host render busy"
+            } else {
+                "host render idle"
+            });
+        }
         let mut ended = Vec::new();
         for (&component, started) in &mut self.started {
             if let Some((since, again)) = started.stopping {

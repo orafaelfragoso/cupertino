@@ -299,9 +299,15 @@ fn a_busy_loop_a_busy_render_thread_and_a_stuck_helper_reach_the_server() {
         "the stalled render thread was reported busy and then responsive",
         |rig| {
             note(rig, &mut seen);
-            rig.reported("host liveness notifications Busy render")
+            rig.reported("host render idle")
                 && rig.state.hosts.component_liveness("notifications") == Liveness::Responsive
         },
+    );
+    let lines = rig.lines();
+    let at = |line: &str| lines.iter().position(|l| l == line);
+    assert!(
+        at("notifications render stalls") < at("host render busy"),
+        "the render thread is busy once the component stalls it, not before: {lines:?}"
     );
     assert_eq!(
         seen,

@@ -1,5 +1,5 @@
 // cupertino-layers --graph
-// 75 crates, 375 internal dependencies
+// 75 crates, 376 internal dependencies
 // per layer: foundation 5, graphics 2, models 6, system 8, platform 5, protocol 3, transport 2, render 3, ui 9, shellkit 1, core 4, services 6, shell 12, apps 2, tools 6, testing 1
 // forbidden normal edge cupertino-dock (shell) -> cupertino-shell-client (transport)
 // forbidden normal edge cupertino-dock (shell) -> cupertino-wayland-client (transport)
@@ -407,6 +407,7 @@ digraph "layers" {
   "cupertino-server-render" -> "cupertino-wm";
   "cupertino-session-tests" -> "cupertino-assets" [label="dev"];
   "cupertino-session-tests" -> "cupertino-cli" [label="dev"];
+  "cupertino-session-tests" -> "cupertino-controlcenter" [label="dev"];
   "cupertino-session-tests" -> "cupertino-kit" [label="dev"];
   "cupertino-session-tests" -> "cupertino-kit-shell" [label="dev"];
   "cupertino-session-tests" -> "cupertino-login" [label="dev"];

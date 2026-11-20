@@ -1,6 +1,11 @@
 //! Local time: the wall clock in the session's time zone, its daylight saving time included, through the C library
-//! (`localtime_r` and `mktime`, which read the zone once, from `TZ` or `/etc/localtime`), and as text in the words of
-//! the locale's `LC_TIME` (`strftime`, `nl_langinfo`).
+//! (`localtime_r` and `mktime`, which read the zone once, from `TZ` or `/etc/localtime`), and as text by the C
+//! library's current `LC_TIME` (`strftime`, `nl_langinfo`).
+//!
+//! That locale is the C library's state of the whole process, set only by `setlocale`: until some code of the process
+//! calls it (no Cupertino program does), every thread runs in the `C` locale, whatever `LANG` or `LC_TIME` says, so
+//! the text is in English with the `C` formats (`%H:%M:%S`, a 24-hour clock). A `setlocale` anywhere in the process
+//! changes what every thread gets here.
 
 use std::ffi::CStr;
 use std::io;
@@ -80,9 +85,10 @@ pub fn to_unix(at: SystemTime) -> Option<i64> {
     }
 }
 
-/// `at` in the session's time zone as text by the `strftime` pattern `pattern`, in the words of the locale's
-/// `LC_TIME` (`c"%a %b %-d"` is `Thu Nov 19` in English). An error when the C library cannot represent the moment, or
-/// the text is empty or longer than [`FORMATTED_CAPACITY`].
+/// `at` in the session's time zone as text by the `strftime` pattern `pattern`, in the words of the C library's
+/// current `LC_TIME`, which is the `C` locale's English in a program that has not called `setlocale` (see the module):
+/// `c"%a %b %-d"` is `Thu Nov 19`. An error when the C library cannot represent the moment, or the text is empty or
+/// longer than [`FORMATTED_CAPACITY`].
 pub fn format(at: SystemTime, pattern: &CStr) -> io::Result<String> {
     let tm = local_tm(at)?;
     let mut buf = [0u8; FORMATTED_CAPACITY];
@@ -97,8 +103,9 @@ pub fn format(at: SystemTime, pattern: &CStr) -> io::Result<String> {
     Ok(String::from_utf8_lossy(&buf[..n]).into_owned())
 }
 
-/// The locale's time format (`nl_langinfo(T_FMT)` of `LC_TIME`), a `strftime` pattern such as `%H:%M:%S` or
-/// `%I:%M:%S %p`: what tells whether the locale counts hours to 12 or to 24.
+/// The time format of the C library's current `LC_TIME` (`nl_langinfo(T_FMT)`), a `strftime` pattern such as `%H:%M:%S`
+/// or `%I:%M:%S %p`: what tells whether that locale counts hours to 12 or to 24. In a program that has not called
+/// `setlocale` (see the module) it is the `C` locale's `%H:%M:%S`.
 pub fn locale_time_format() -> String {
     // SAFETY: `nl_langinfo` returns a pointer to a nul-terminated string that stays valid until the locale changes; it
     // is copied at once.

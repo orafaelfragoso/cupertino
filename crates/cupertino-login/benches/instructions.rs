@@ -1,6 +1,6 @@
-//! Instruction counts of the lock screen's frames at 2560 x 1440 points and scale 2 on the CPU renderer, on a picture
-//! made for the bench: the first frame, which makes the screen's picture once, and the frame of one typed character,
-//! which lays only the squares of the kept picture under the field again.
+//! Instruction counts of the lock screen's frames at 2560 x 1440 points and scale 2, drawn as an application's windows
+//! are, on a picture made for the bench: the first frame, whose pictures are made before it on the CPU pool, and the
+//! frame of one typed character, which lays only the squares of the screen's picture under the field again.
 //!
 //! `cargo bench -p cupertino-login --bench instructions`.
 

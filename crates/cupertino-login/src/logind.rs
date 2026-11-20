@@ -1,31 +1,30 @@
 //! What logind asks of a lock screen: lock the session (`loginctl lock-session`), prepare for sleep, and the delay
 //! inhibitor that holds sleep back until the lock is up.
 //!
-//! The signals arrive on reader threads (the blocking `zbus` API has no pollable descriptor) and reach the caller through
-//! the callback of [`Logind::listen`]. Each comes from logind only: the session's signals are bound to logind's unique name,
-//! and `PrepareForSleep` is checked against the owner of logind's name when it arrives, since a rule naming the well-known
-//! name keeps out nothing that is sent to this process directly.
+//! Everything here runs on the system bus connection the lock screen's loop ticks (`cupertino_kit::bus`): the calls
+//! are awaited there and the signals are a future of the loop. Each signal comes from logind only: the proxies follow
+//! the owner of logind's name and pass on what that connection sent alone, since a rule naming the well-known name
+//! keeps out nothing that is sent to this process directly.
 
-use cupertino_peer::signal::from_owner;
 use std::fmt;
-use std::sync::Arc;
-use zbus::blocking::Connection;
-use zbus::message::Type;
-use zbus::zvariant::OwnedFd;
-use zbus::{MatchRule, Message};
 
-use cupertino_seat::{SessionLookup, SessionRef};
+use futures_lite::stream::{self, StreamExt};
+use zbus::proxy::CacheProperties;
+use zbus::zvariant::{OwnedFd, OwnedObjectPath};
+use zbus::{Connection, Proxy};
 
 const LOGIND: &str = "org.freedesktop.login1";
 const MANAGER_PATH: &str = "/org/freedesktop/login1";
 const MANAGER_INTERFACE: &str = "org.freedesktop.login1.Manager";
 const SESSION_INTERFACE: &str = "org.freedesktop.login1.Session";
+/// The variable a login (`pam_systemd`) sets to the session's id.
+const SESSION_VARIABLE: &str = "XDG_SESSION_ID";
 
-/// Why a logind request failed or its signals stopped.
+/// Why a logind request failed.
 #[derive(Debug)]
 pub struct Error {
     what: &'static str,
-    source: Box<dyn std::error::Error + Send + Sync>,
+    source: Box<zbus::Error>,
 }
 
 impl Error {
@@ -45,7 +44,7 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(self.source.as_ref())
+        Some(&*self.source)
     }
 }
 
@@ -59,174 +58,116 @@ pub enum Signal {
 }
 
 /// A delay inhibitor on sleep; the system may sleep once it is dropped.
+#[derive(Debug)]
 pub struct Inhibitor(#[allow(dead_code)] OwnedFd);
 
-/// This process's session and the system bus it is on.
-#[derive(Clone)]
-pub struct Logind {
-    connection: Connection,
-    session: SessionRef,
-    /// The session's `Id`, which `TerminateSession` takes.
-    session_id: String,
+/// Whether `e` says that logind knows no session of this process or is not on the bus, rather than that a request
+/// failed. Only a lookup by process id can say so: with `XDG_SESSION_ID` set every failure is a fault.
+fn is_absent(e: &zbus::Error) -> bool {
+    matches!(e, zbus::Error::MethodError(name, ..) if matches!(
+        name.as_str(),
+        "org.freedesktop.login1.NoSessionForPID"
+            | "org.freedesktop.DBus.Error.ServiceUnknown"
+            | "org.freedesktop.DBus.Error.NameHasNoOwner"
+    ))
 }
 
-/// Whether `e` says that the machine has no system bus or logind has no session for this process, rather than that a
-/// request failed. Only a lookup by process id can say so: a login (`pam_systemd`) sets `XDG_SESSION_ID`, and with it
-/// set every failure is a fault to retry.
-fn is_absent(lookup: &SessionLookup, e: &cupertino_seat::Error) -> bool {
-    let (SessionLookup::ByPid(_), cupertino_seat::Error::Bus { source, .. }) = (lookup, e) else {
-        return false;
-    };
-    match &**source {
-        zbus::Error::MethodError(name, ..) => {
-            name.as_str() == "org.freedesktop.login1.NoSessionForPID"
-        }
-        zbus::Error::Connection(io, _) | zbus::Error::InputOutput(io) => matches!(
-            io.kind(),
-            std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
-        ),
-        _ => false,
+async fn manager(system: &Connection) -> zbus::Result<Proxy<'static>> {
+    zbus::proxy::Builder::new(system)
+        .destination(LOGIND)?
+        .path(MANAGER_PATH)?
+        .interface(MANAGER_INTERFACE)?
+        .cache_properties(CacheProperties::No)
+        .build()
+        .await
+}
+
+/// The object of this process's session (`XDG_SESSION_ID`, else the process id). `None` when there is no session to
+/// lock: `XDG_SESSION_ID` is unset and logind knows no session of this process or is not running.
+pub async fn session(system: &Connection) -> Result<Option<OwnedObjectPath>, Error> {
+    let what = "finding the login session";
+    let manager = manager(system).await.map_err(Error::bus(what))?;
+    match std::env::var(SESSION_VARIABLE) {
+        Ok(id) if !id.is_empty() => manager
+            .call("GetSession", &(id.as_str(),))
+            .await
+            .map(Some)
+            .map_err(Error::bus(what)),
+        _ => match manager
+            .call::<_, _, OwnedObjectPath>("GetSessionByPID", &(std::process::id(),))
+            .await
+        {
+            Ok(path) => Ok(Some(path)),
+            Err(e) if is_absent(&e) => Ok(None),
+            Err(e) => Err(Error::bus(what)(e)),
+        },
     }
 }
 
-impl Logind {
-    /// Connect to the system bus and find the session of this process (`XDG_SESSION_ID`, else the process id).
-    /// `None` when there is no session to lock: `XDG_SESSION_ID` is unset and there is no system bus or logind knows no
-    /// session of this process.
-    pub fn connect() -> Result<Option<Self>, Error> {
-        let what = "finding the login session";
-        let wrap = |e: cupertino_seat::Error| Error {
-            what,
-            source: Box::new(e),
-        };
-        let lookup = SessionLookup::from_environment().map_err(wrap)?;
-        let connection = match cupertino_seat::connect() {
-            Err(e) if is_absent(&lookup, &e) => return Ok(None),
-            connection => connection.map_err(wrap)?,
-        };
-        let session = match cupertino_seat::locate(&connection, &lookup) {
-            Err(e) if is_absent(&lookup, &e) => return Ok(None),
-            session => session.map_err(wrap)?,
-        };
-        let session_id = cupertino_seat::inspect(&connection, &session)
-            .map_err(wrap)?
-            .id;
-        Ok(Some(Logind {
-            connection,
-            session,
-            session_id,
-        }))
-    }
-
-    /// The session's `Id`.
-    pub fn session_id(&self) -> &str {
-        &self.session_id
-    }
-
-    /// The system bus connection.
-    pub fn connection(&self) -> &Connection {
-        &self.connection
-    }
-
-    /// Hold sleep back until the returned [`Inhibitor`] is dropped.
-    pub fn inhibit_sleep(&self) -> Result<Inhibitor, Error> {
-        self.inhibit(
-            "taking the sleep inhibitor",
-            "sleep",
-            "Lock the screen before the system sleeps",
-            "delay",
+/// Hold sleep back until the returned [`Inhibitor`] is dropped.
+pub async fn inhibit_sleep(system: &Connection) -> Result<Inhibitor, Error> {
+    let what = "taking the sleep inhibitor";
+    let manager = manager(system).await.map_err(Error::bus(what))?;
+    let fd: OwnedFd = manager
+        .call(
+            "Inhibit",
+            &(
+                "sleep",
+                "cupertino-login",
+                "Lock the screen before the system sleeps",
+                "delay",
+            ),
         )
-    }
-
-    fn inhibit(
-        &self,
-        what: &'static str,
-        lock: &str,
-        why: &str,
-        mode: &str,
-    ) -> Result<Inhibitor, Error> {
-        let reply = self
-            .connection
-            .call_method(
-                Some(LOGIND),
-                MANAGER_PATH,
-                Some(MANAGER_INTERFACE),
-                "Inhibit",
-                &(lock, "cupertino-login", why, mode),
-            )
-            .map_err(Error::bus(what))?;
-        Ok(Inhibitor(
-            reply.body().deserialize().map_err(Error::bus(what))?,
-        ))
-    }
-
-    /// Start the reader threads. `notify` runs on them for every [`Signal`], and once with the error when a stream
-    /// breaks or ends: after that no signal arrives any more.
-    pub fn listen(
-        &self,
-        notify: impl Fn(Result<Signal, Error>) + Send + Sync + 'static,
-    ) -> Result<(), Error> {
-        let what = "subscribing to the login manager's signals";
-        let notify = Arc::new(notify);
-        let session_signals = cupertino_seat::logind::subscribe(&self.connection, &self.session)
-            .map_err(|e| Error {
-                what,
-                source: Box::new(e),
-            })?;
-        let sleep_rule = MatchRule::builder()
-            .msg_type(Type::Signal)
-            .sender(LOGIND)
-            .and_then(|b| b.path(MANAGER_PATH))
-            .and_then(|b| b.interface(MANAGER_INTERFACE))
-            .and_then(|b| b.member("PrepareForSleep"))
-            .map_err(Error::bus(what))?
-            .build();
-        let sleep_signals = from_owner(&self.connection, LOGIND, sleep_rule, |_| {
-            eprintln!("cupertino-login: a PrepareForSleep not sent by logind was ignored")
-        })
+        .await
         .map_err(Error::bus(what))?;
-        spawn(session_signals, Arc::clone(&notify), decode_lock)?;
-        spawn(sleep_signals, notify, decode_sleep)
+    Ok(Inhibitor(fd))
+}
+
+/// Hand every [`Signal`] for `session` to `notify` until a stream ends; returns why. `following` runs once both
+/// signals are subscribed to, so a request logind sends after it is heard. Only logind's own signals count: the proxies
+/// follow the owner of its name.
+pub async fn follow(
+    system: &Connection,
+    session: OwnedObjectPath,
+    following: impl FnOnce(),
+    notify: impl Fn(Signal),
+) -> String {
+    let session = match zbus::proxy::Builder::<Proxy<'_>>::new(system)
+        .destination(LOGIND)
+        .and_then(|b| b.path(session))
+        .and_then(|b| b.interface(SESSION_INTERFACE))
+    {
+        Ok(builder) => builder.cache_properties(CacheProperties::No).build().await,
+        Err(e) => Err(e),
+    };
+    let session = match session {
+        Ok(session) => session,
+        Err(e) => return format!("reaching the login session: {e}"),
+    };
+    let manager = match manager(system).await {
+        Ok(manager) => manager,
+        Err(e) => return format!("reaching the login manager: {e}"),
+    };
+    let locks = match session.receive_signal("Lock").await {
+        Ok(locks) => locks.map(|_| Some(Signal::Lock)),
+        Err(e) => return format!("subscribing to the session's Lock: {e}"),
+    };
+    let sleeps = match manager.receive_signal("PrepareForSleep").await {
+        Ok(sleeps) => sleeps.map(|message| {
+            message
+                .body()
+                .deserialize::<bool>()
+                .is_ok_and(|going| going)
+                .then_some(Signal::PrepareForSleep)
+        }),
+        Err(e) => return format!("subscribing to PrepareForSleep: {e}"),
+    };
+    following();
+    let mut signals = stream::or(locks, sleeps);
+    while let Some(signal) = signals.next().await {
+        if let Some(signal) = signal {
+            notify(signal);
+        }
     }
-}
-
-fn spawn(
-    signals: impl Iterator<Item = zbus::Result<Message>> + Send + 'static,
-    notify: Arc<impl Fn(Result<Signal, Error>) + Send + Sync + 'static>,
-    decode: fn(&Message) -> Result<Option<Signal>, zbus::Error>,
-) -> Result<(), Error> {
-    std::thread::Builder::new()
-        .name("login-signals".into())
-        .spawn(move || {
-            for message in signals {
-                match message.and_then(|m| decode(&m)) {
-                    Ok(Some(signal)) => notify(Ok(signal)),
-                    Ok(None) => {}
-                    Err(e) => return notify(Err(Error::bus("reading a login manager signal")(e))),
-                }
-            }
-            notify(Err(Error {
-                what: "reading login manager signals",
-                source: "the signal stream ended".into(),
-            }));
-        })
-        .map(drop)
-        .map_err(|e| Error {
-            what: "starting the signal reader",
-            source: Box::new(e),
-        })
-}
-
-fn decode_lock(message: &Message) -> Result<Option<Signal>, zbus::Error> {
-    let header = message.header();
-    let is_lock = header
-        .interface()
-        .is_some_and(|i| i.as_str() == SESSION_INTERFACE)
-        && header.member().is_some_and(|m| m.as_str() == "Lock");
-    Ok(is_lock.then_some(Signal::Lock))
-}
-
-fn decode_sleep(message: &Message) -> Result<Option<Signal>, zbus::Error> {
-    let going_to_sleep: bool = message.body().deserialize()?;
-    Ok(going_to_sleep.then_some(Signal::PrepareForSleep))
+    "the login manager's signal streams ended".into()
 }

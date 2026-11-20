@@ -3,17 +3,19 @@
 use cupertino_kit::account::{self, Account};
 use cupertino_kit::controls::ImageSource;
 use cupertino_kit::core::next_resource_id;
-use cupertino_kit::render::{ImageResource, PixelFormat};
 use cupertino_kit::time;
 use cupertino_login_ipc::UserRow;
 use std::ffi::CStr;
 use std::fmt;
 use std::io;
-use std::path::PathBuf;
-use tiny_skia::Pixmap;
+use std::path::{Path, PathBuf};
 
 /// File in the home directory that holds the user's picture (the freedesktop `.face` convention).
 const FACE_FILE: &str = ".face";
+/// The longest side of a user's picture the screens take, pixels: an avatar is drawn at a few dozen points.
+const MAX_PICTURE_SIDE: u32 = 4096;
+/// The largest picture file read for a user: a PNG or JPEG of [`MAX_PICTURE_SIDE`] a side fits it.
+const MAX_PICTURE_BYTES: u64 = 64 << 20;
 
 #[derive(Debug)]
 pub enum UserError {
@@ -21,12 +23,12 @@ pub enum UserError {
     Unknown { uid: u32 },
     /// Reading the password database failed.
     Database(io::Error),
-    /// The picture exists but cannot be read as a PNG.
+    /// The picture exists but cannot be read as a PNG or JPEG.
     Picture {
         path: PathBuf,
         source: Box<dyn std::error::Error>,
     },
-    /// A picture the session manager sent cannot be decoded as a PNG.
+    /// A picture the session manager sent cannot be decoded as a PNG or JPEG.
     SentPicture {
         login: String,
         source: Box<dyn std::error::Error>,
@@ -68,14 +70,10 @@ pub struct User {
 }
 
 impl User {
-    /// The user of this process: the screen is locked for the session's own user.
+    /// The user of this process, by its account, with no picture: the screen is locked for the session's own user.
+    /// Its picture is read apart, on the I/O pool ([`current_picture`]).
     pub fn current() -> Result<User, UserError> {
-        let uid = account::uid();
-        let entry = account::by_uid(uid)
-            .map_err(UserError::Database)?
-            .ok_or(UserError::Unknown { uid })?;
-        let picture = load_picture(entry.home.join(FACE_FILE))?;
-        Ok(user_of(entry, picture))
+        Ok(user_of(current_account()?, None))
     }
 
     /// A user typed at the picker's "Other…" tile: the name is whatever was typed and nothing is looked up, so the
@@ -90,15 +88,19 @@ impl User {
         }
     }
 
-    /// A row of the session manager's user list. The manager reads the picture file; it is decoded here.
+    /// A row of the session manager's user list. The manager reads the picture file; it is decoded here, which takes
+    /// a few milliseconds for an avatar: a list of many is better turned into users on the CPU pool
+    /// (`cupertino_kit::task::cpu`).
     pub fn from_row(row: &UserRow) -> Result<User, UserError> {
         let picture = match &row.picture {
-            Some(picture) => Some(source_of(&Pixmap::decode_png(picture.bytes()).map_err(
-                |e| UserError::SentPicture {
-                    login: row.login.clone(),
-                    source: Box::new(e),
-                },
-            )?)),
+            Some(picture) => {
+                Some(
+                    decode_picture(picture.bytes()).map_err(|e| UserError::SentPicture {
+                        login: row.login.clone(),
+                        source: Box::new(e),
+                    })?,
+                )
+            }
             None => None,
         };
         Ok(User {
@@ -128,37 +130,65 @@ fn user_of(entry: Account, picture: Option<ImageSource>) -> User {
     }
 }
 
-/// A decoded picture as the image the screens draw: tiny-skia keeps premultiplied RGBA rows without padding.
-fn source_of(pixmap: &Pixmap) -> ImageSource {
-    ImageSource {
-        id: next_resource_id(),
-        image: ImageResource {
-            revision: 1,
-            width: pixmap.width(),
-            height: pixmap.height(),
-            stride: pixmap.width() * 4,
-            format: PixelFormat::Rgba8Premultiplied,
-            pixels: pixmap.data().into(),
-        },
-    }
+/// The account of this process's user.
+fn current_account() -> Result<Account, UserError> {
+    let uid = account::uid();
+    account::by_uid(uid)
+        .map_err(UserError::Database)?
+        .ok_or(UserError::Unknown { uid })
 }
 
-/// The picture at `path`; `None` when there is no such file.
-fn load_picture(path: PathBuf) -> Result<Option<ImageSource>, UserError> {
-    match std::fs::metadata(&path) {
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(UserError::Picture {
-            path,
-            source: Box::new(e),
-        }),
-        Ok(_) => match Pixmap::load_png(&path) {
-            Ok(picture) => Ok(Some(source_of(&picture))),
-            Err(e) => Err(UserError::Picture {
-                path,
-                source: Box::new(e),
-            }),
-        },
+/// The picture of this process's user: the `.face` file of its account's home, read and decoded; `None` when there is
+/// no such file. It reads the file: run it on Kit's I/O pool (`cupertino_kit::task::io`), never on the UI thread.
+pub fn current_picture() -> Result<Option<ImageSource>, UserError> {
+    load_picture(&current_account()?.home.join(FACE_FILE))
+}
+
+/// The PNG or JPEG picture in `bytes` as the image the screens draw, named by an image id of its own.
+fn decode_picture(bytes: &[u8]) -> Result<ImageSource, cupertino_kit::image::ImageError> {
+    Ok(ImageSource {
+        id: next_resource_id(),
+        image: cupertino_kit::image::decode(bytes, MAX_PICTURE_SIDE)?,
+    })
+}
+
+/// The PNG or JPEG picture at `path` (a user's `.face`); `None` when there is no such file. A file that is not a
+/// regular one, or larger than 64 MiB, is refused, and a FIFO never blocks it. It reads the file: run
+/// it on Kit's I/O pool (`cupertino_kit::task::io`), never on the UI thread.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "runs on the I/O pool (kit::task::io)"
+)]
+pub fn load_picture(path: &Path) -> Result<Option<ImageSource>, UserError> {
+    use std::io::Read;
+    use std::os::unix::fs::OpenOptionsExt;
+    let refused = |source: Box<dyn std::error::Error>| UserError::Picture {
+        path: path.to_owned(),
+        source,
+    };
+    let file = match std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY | libc::O_CLOEXEC)
+        .open(path)
+    {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(refused(Box::new(e))),
+        Ok(file) => file,
+    };
+    let meta = file.metadata().map_err(|e| refused(Box::new(e)))?;
+    if !meta.is_file() || meta.len() > MAX_PICTURE_BYTES {
+        return Err(refused("not a picture file".into()));
     }
+    let mut bytes = Vec::with_capacity(meta.len() as usize);
+    file.take(MAX_PICTURE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| refused(Box::new(e)))?;
+    if bytes.len() as u64 > MAX_PICTURE_BYTES {
+        return Err(refused("not a picture file".into()));
+    }
+    decode_picture(&bytes)
+        .map(Some)
+        .map_err(|e| refused(Box::new(e)))
 }
 
 /// The letters shown in place of a missing picture: the first letters of the first and the last word of the name,

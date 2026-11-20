@@ -10,7 +10,7 @@ const RETRIES_UNTIL_HINT_ABSENT: u32 = 0;
 /// What the process runs as.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Options {
-    /// The lock screen and session agent of a user's session.
+    /// The lock screen of a user's session.
     Session(SessionOptions),
     /// The login screen of the session manager's greeter session. It takes no options: the accounts, the power items and the
     /// hint setting come from the manager.

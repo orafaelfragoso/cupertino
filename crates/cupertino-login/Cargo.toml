@@ -9,18 +9,15 @@ layer = "shell"
 
 [features]
 default = []
-dbus = ["dep:zbus", "dep:cupertino-seat", "dep:cupertino-radios", "dep:cupertino-peer"]
-# the `cupertino-login` process: the lock screen and greeter as a client of the server
+dbus = ["dep:zbus", "dep:cupertino-radios", "dep:cupertino-peer", "dep:futures-lite"]
+# the `cupertino-login` process: the lock screen and the login screen as programs of the server's shell
 app = [
     "dbus",
     "dep:async-channel",
     "dep:async-io",
     "dep:cupertino-assets",
     "dep:cupertino-icons",
-    "dep:cupertino-keyboard",
-    "dep:cupertino-shell-client",
-    "dep:cupertino-ui-wayland",
-    "dep:cupertino-wayland-client",
+    "dep:cupertino-kit-shell",
     "dep:pam-client2",
 ]
 
@@ -33,27 +30,23 @@ cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-icons = { path = "../cupertino-icons", optional = true }
 cupertino-kit = { path = "../cupertino-kit" }
+cupertino-kit-shell = { path = "../cupertino-kit-shell", optional = true }
 cupertino-login-ipc = { path = "../cupertino-login-ipc" }
-cupertino-keyboard = { path = "../cupertino-keyboard", optional = true }
 cupertino-peer = { path = "../cupertino-peer", optional = true }
-cupertino-raster-math = { path = "../cupertino-raster-math" }
 cupertino-radios = { path = "../cupertino-radios", features = ["dbus"], optional = true }
-cupertino-seat = { path = "../cupertino-seat", optional = true }
-cupertino-shell-client = { path = "../cupertino-shell-client", optional = true }
-cupertino-ui-wayland = { path = "../cupertino-ui-wayland", optional = true }
-cupertino-wayland-client = { path = "../cupertino-wayland-client", optional = true }
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+futures-lite = { version = "2", optional = true }
 libc = "0.2"
 pam-client2 = { version = "0.5.5", optional = true }
-tiny-skia = "0.12"
 unicode-segmentation = "1.13"
 zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"], optional = true }
 zeroize = "1"
 
 [dev-dependencies]
+async-io = "2"
 cupertino-assets = { path = "../cupertino-assets" }
 cupertino-kit = { path = "../cupertino-kit", features = ["test"] }
 gungraun = "=0.20.0"
+pam-client2 = "0.5.5"
 
 [[bench]]
 name = "instructions"

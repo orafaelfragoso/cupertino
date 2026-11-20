@@ -1,13 +1,15 @@
 //! What the status items at the top right of the lock and login screens show: the Wi-Fi radio, the battery, the
-//! input source and, on the login screen, a line about the machine. [`poll`] reads them on a thread of its own every
-//! [`POLL_INTERVAL`]; the views draw what the last reading said.
+//! input source and, on the login screen, a line about the machine. [`read`] reads them on Kit's I/O pool; [`follow`]
+//! says when a reading is out of date: the network or the power daemon changed. The views draw what the last reading
+//! said.
 
 use std::time::Duration;
 
 use cupertino_defaults::login::HostInfo;
 
-/// How often the status items are read again.
-pub const POLL_INTERVAL: Duration = Duration::from_secs(10);
+/// How long a reading of the status items should take on the I/O pool: a few calls on the system bus, each bounded by
+/// the radios' own timeout, and two small files.
+pub const READ_DEADLINE: Duration = Duration::from_secs(10);
 
 /// The Wi-Fi radio as its item shows it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,7 +62,8 @@ pub fn input_label(source: &str) -> Option<String> {
 }
 
 /// The input source the item shows: the first of the person's `keyboard.conf`, else the session's default xkb layout
-/// (`XKB_DEFAULT_LAYOUT`), else "us" (approximate: the source in use is the server's to switch).
+/// (`XKB_DEFAULT_LAYOUT`), else "us" (approximate: the source in use is the server's to switch). Reads a file: run it on
+/// the I/O pool.
 pub fn current_input() -> Option<String> {
     use cupertino_defaults::keyboard::KeyboardSettings;
     let first = KeyboardSettings::path()
@@ -94,7 +97,11 @@ pub fn os_version(os_release: &str) -> Option<String> {
 pub const MAX_HOST_CHARS: usize = 64;
 
 /// The line about the machine `info` asks for, read now: its host name, its system's version or its first IPv4 address
-/// that is not a loopback one.
+/// that is not a loopback one. Reads a file: run it on the I/O pool.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "runs on the I/O pool (kit::task::io)"
+)]
 pub fn host_text(info: HostInfo) -> Option<String> {
     let text = match info {
         HostInfo::Hostname => hostname(),
@@ -119,9 +126,17 @@ fn first_address() -> Option<String> {
 }
 
 #[cfg(feature = "dbus")]
+pub use bus::{follow, read};
+
+#[cfg(feature = "dbus")]
 mod bus {
-    use super::{signal_bars, BatteryState, WifiState};
+    use super::{current_input, host_text, signal_bars, BatteryState, StatusItems, WifiState};
+    use cupertino_defaults::login::HostInfo;
+    use futures_lite::stream::{self, StreamExt};
+    use std::sync::Arc;
     use zbus::blocking::Connection;
+    use zbus::fdo::{DBusProxy, PropertiesProxy};
+    use zbus::proxy::CacheProperties;
     use zbus::zvariant::OwnedValue;
 
     const UPOWER: &str = "org.freedesktop.UPower";
@@ -133,7 +148,7 @@ mod bus {
     const FULLY_CHARGED: u32 = 4;
 
     /// The Wi-Fi radio now, through whichever service serves the network; `None` without one or a Wi-Fi device.
-    pub fn wifi(system: &Connection) -> Option<WifiState> {
+    fn wifi(system: &Connection) -> Option<WifiState> {
         let backend = cupertino_radios::detect(system).ok()?.network?;
         let wifi = backend.wifi(system).ok()?;
         if !wifi.has_wifi_device() {
@@ -151,7 +166,11 @@ mod bus {
     }
 
     /// The battery now, from the power daemon's display device; `None` without a battery.
-    pub fn battery(system: &Connection) -> Option<BatteryState> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "runs on the I/O pool (kit::task::io), as the radios' readings beside it"
+    )]
+    fn battery(system: &Connection) -> Option<BatteryState> {
         let get = |property: &str| -> Option<OwnedValue> {
             system
                 .call_method(
@@ -179,33 +198,65 @@ mod bus {
             charging: matches!(state, CHARGING | FULLY_CHARGED),
         })
     }
-}
 
-/// Read the status items now and every [`POLL_INTERVAL`] on a thread of its own, the Wi-Fi radio and the battery over
-/// the system bus, and hand each reading to `send`; the thread ends when `send` says the screen is gone. `host` is the
-/// line about the machine to show, if any; `input` whether the input source shows.
-#[cfg(feature = "dbus")]
-pub fn poll(
-    host: Option<HostInfo>,
-    input: bool,
-    send: impl Fn(StatusItems) -> bool + Send + 'static,
-) -> std::io::Result<()> {
-    std::thread::Builder::new()
-        .name("status items".into())
-        .spawn(move || {
-            let system = zbus::blocking::Connection::system().ok();
-            loop {
-                let items = StatusItems {
-                    wifi: system.as_ref().and_then(bus::wifi),
-                    battery: system.as_ref().and_then(bus::battery),
-                    input: input.then(current_input).flatten(),
-                    host: host.and_then(host_text),
-                };
-                if !send(items) {
-                    return;
-                }
-                std::thread::sleep(POLL_INTERVAL);
-            }
-        })
-        .map(|_| ())
+    /// The status items now: the Wi-Fi radio and the battery over `system` (none without it), the input source when
+    /// `input` asks for it, and the line about the machine `host` names. It waits for the bus and reads files: run it
+    /// on the I/O pool (`kit::task::io` with [`super::READ_DEADLINE`]), with the connection the loop ticks.
+    pub fn read(
+        system: Option<zbus::Connection>,
+        host: Option<HostInfo>,
+        input: bool,
+    ) -> StatusItems {
+        let system = system.map(Connection::from);
+        StatusItems {
+            wifi: system.as_ref().and_then(wifi),
+            battery: system.as_ref().and_then(battery),
+            input: input.then(current_input).flatten(),
+            host: host.and_then(host_text),
+        }
+    }
+
+    /// Call `due` whenever a reading of the status items is out of date, until a stream ends; returns why: a signal
+    /// of the network or Bluetooth services (`cupertino_radios::watch`), a change of the power daemon's display
+    /// device, the power daemon starting or stopping. `due` must not wait: it only notes that a reading is due.
+    pub async fn follow(
+        system: &zbus::Connection,
+        due: impl Fn() + Send + Sync + 'static,
+    ) -> String {
+        let due = Arc::new(due);
+        let radios = Arc::clone(&due);
+        if let Err(e) = cupertino_radios::watch::follow(system, Arc::new(move |_| radios())).await {
+            return format!("following the network: {e}");
+        }
+        let device = match PropertiesProxy::builder(system)
+            .destination(UPOWER)
+            .and_then(|b| b.path(DISPLAY_DEVICE))
+        {
+            Ok(builder) => builder.cache_properties(CacheProperties::No).build().await,
+            Err(e) => Err(e),
+        };
+        let device = match device {
+            Ok(device) => device,
+            Err(e) => return format!("reaching the power daemon: {e}"),
+        };
+        let changes = match device.receive_properties_changed().await {
+            Ok(changes) => changes.map(drop),
+            Err(e) => return format!("subscribing to the power daemon's changes: {e}"),
+        };
+        let owners = match DBusProxy::new(system).await {
+            Ok(bus) => match bus
+                .receive_name_owner_changed_with_args(&[(0, UPOWER)])
+                .await
+            {
+                Ok(owners) => owners.map(drop),
+                Err(e) => return format!("following the power daemon's name: {e}"),
+            },
+            Err(e) => return format!("reaching the bus: {e}"),
+        };
+        let mut news = stream::or(changes, owners);
+        while news.next().await.is_some() {
+            due();
+        }
+        "the power daemon's signal streams ended".into()
+    }
 }

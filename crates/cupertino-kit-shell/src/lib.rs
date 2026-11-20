@@ -242,6 +242,9 @@ pub enum Event {
     Lock(lock::Event),
     Consent(consent::Event),
     Capture(capture::Event),
+    /// Caps Lock is on (`true`) or off, as the keyboard's modifiers say: once at start and on every change. The lock
+    /// and login screens show it in their password field.
+    CapsLock(bool),
 }
 
 /// Run a standalone privileged shell program (`cupertino-login`, `cupertino-prompts`, `cupertino-screenshot`) on

@@ -2,23 +2,23 @@
 //! session agent leaves a JPEG of the wallpaper the session shows at `~/` + [`LOGIN_WALLPAPER_FILE`]: scaled down to at
 //! most [`MAX_WALLPAPER_SIDE`] pixels a side, at most [`MAX_WALLPAPER_BYTES`], readable by the user alone. The session
 //! manager reads it as the user and keeps a copy the login screen may read. It is written when the session starts and
-//! again whenever the compositor's settings file changes; without a wallpaper of the user's own (the default picture) it
-//! is removed, and the login screen shows its own.
+//! again whenever the compositor's settings file changes ([`write_current`]); without a wallpaper of the user's own (the default picture) it
+//! is removed, and the login screen shows its own. Everything here reads or writes files: it runs on Kit's I/O pool
+//! (`cupertino_kit::task::io`), never on the UI thread.
 
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use cupertino_defaults::compositor::{AppearanceName, CompositorSettings};
-use cupertino_defaults::watch::{ConfigWatcher, WatchEvent};
+use cupertino_kit::image::{self as picture, ImageError};
+use cupertino_kit::render::{ImageResource, PixelFormat};
 use cupertino_login_ipc::message::{LOGIN_WALLPAPER_FILE, MAX_WALLPAPER_BYTES, MAX_WALLPAPER_SIDE};
-use image::codecs::jpeg::JpegEncoder;
-use image::imageops::FilterType;
-use image::{ImageFormat, ImageReader, Limits, RgbImage};
 
-/// Larger pictures are not decoded, per side and in memory: the compositor shows none larger either.
+/// Larger pictures are not decoded, per side: the compositor shows none larger either.
 const MAX_SOURCE_SIDE: u32 = 8_192;
-const MAX_SOURCE_ALLOC: u64 = 512 << 20;
+/// The largest picture file read: the wallpaper's own limit.
+const MAX_SOURCE_BYTES: u64 = crate::wallpaper::MAX_FILE_BYTES;
 /// The JPEG qualities tried in turn until the file fits [`MAX_WALLPAPER_BYTES`] (approximate, ours: 90 shows no
 /// artefacts on a photograph at 4K).
 const QUALITIES: [u8; 3] = [90, 75, 60];
@@ -61,17 +61,27 @@ pub fn choose(settings: &CompositorSettings) -> Choice {
 }
 
 /// The JPEG of `choice` for the login screen, `None` for the default: a picture is decoded (PNG or JPEG) and scaled down
-/// to fit [`MAX_WALLPAPER_SIDE`], keeping its proportions; a smaller one keeps its size.
+/// to fit [`MAX_WALLPAPER_SIDE`], keeping its proportions; a smaller one keeps its size. A picture is read from its file:
+/// run it on the I/O pool.
 pub fn render(choice: &Choice) -> Result<Option<Vec<u8>>, String> {
     let image = match choice {
         Choice::Default => return Ok(None),
-        Choice::Color(rgb) => RgbImage::from_pixel(COLOR_SIDE, COLOR_SIDE, image::Rgb(*rgb)),
-        Choice::Picture(path) => fit(decode(path)?),
+        Choice::Color([r, g, b]) => ImageResource {
+            revision: 1,
+            width: COLOR_SIDE,
+            height: COLOR_SIDE,
+            stride: COLOR_SIDE * 4,
+            format: PixelFormat::Rgba8Premultiplied,
+            pixels: [*r, *g, *b, 255]
+                .repeat((COLOR_SIDE * COLOR_SIDE) as usize)
+                .into(),
+        },
+        Choice::Picture(path) => {
+            fit(decode(path)?).map_err(|e| format!("scaling the login screen's wallpaper: {e}"))?
+        }
     };
     for quality in QUALITIES {
-        let mut bytes = Vec::new();
-        JpegEncoder::new_with_quality(&mut bytes, quality)
-            .encode_image(&image)
+        let bytes = picture::encode_jpeg(&image, quality)
             .map_err(|e| format!("encoding the login screen's wallpaper: {e}"))?;
         if bytes.len() <= MAX_WALLPAPER_BYTES {
             return Ok(Some(bytes));
@@ -81,51 +91,55 @@ pub fn render(choice: &Choice) -> Result<Option<Vec<u8>>, String> {
 }
 
 /// The picture at `path`, opened without blocking on a special file.
-fn decode(path: &Path) -> Result<RgbImage, String> {
+#[expect(
+    clippy::disallowed_methods,
+    reason = "runs on the I/O pool (kit::task::io)"
+)]
+fn decode(path: &Path) -> Result<ImageResource, String> {
     let file = std::fs::File::options()
         .read(true)
         .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC)
         .open(path)
         .map_err(|e| format!("{}: {e}", path.display()))?;
-    if !file.metadata().map_err(|e| e.to_string())?.is_file() {
+    let meta = file.metadata().map_err(|e| e.to_string())?;
+    if !meta.is_file() {
         return Err(format!("{}: not a regular file", path.display()));
     }
-    let mut reader = ImageReader::new(io::BufReader::new(file))
-        .with_guessed_format()
+    let mut data = Vec::with_capacity(meta.len().min(MAX_SOURCE_BYTES) as usize);
+    file.take(MAX_SOURCE_BYTES + 1)
+        .read_to_end(&mut data)
         .map_err(|e| format!("{}: {e}", path.display()))?;
-    if !matches!(reader.format(), Some(ImageFormat::Png | ImageFormat::Jpeg)) {
-        return Err(format!(
-            "{}: only PNG and JPEG pictures are taken",
-            path.display()
-        ));
+    if data.len() as u64 > MAX_SOURCE_BYTES {
+        return Err(format!("{}: the picture is too large", path.display()));
     }
-    let mut limits = Limits::default();
-    limits.max_image_width = Some(MAX_SOURCE_SIDE);
-    limits.max_image_height = Some(MAX_SOURCE_SIDE);
-    limits.max_alloc = Some(MAX_SOURCE_ALLOC);
-    reader.limits(limits);
-    Ok(reader
-        .decode()
-        .map_err(|e| format!("{}: {e}", path.display()))?
-        .into_rgb8())
+    picture::decode(&data, MAX_SOURCE_SIDE).map_err(|e| match e {
+        ImageError::Unsupported => {
+            format!("{}: only PNG and JPEG pictures are taken", path.display())
+        }
+        e => format!("{}: {e}", path.display()),
+    })
 }
 
 /// `image` scaled down so its longer side is at most [`MAX_WALLPAPER_SIDE`].
-fn fit(image: RgbImage) -> RgbImage {
-    let (w, h) = image.dimensions();
+fn fit(image: ImageResource) -> Result<ImageResource, ImageError> {
+    let (w, h) = (image.width, image.height);
     let longer = w.max(h);
     if longer <= MAX_WALLPAPER_SIDE {
-        return image;
+        return Ok(image);
     }
     let scale = |side: u32| {
         ((u64::from(side) * u64::from(MAX_WALLPAPER_SIDE) + u64::from(longer) / 2)
             / u64::from(longer))
         .max(1) as u32
     };
-    image::imageops::resize(&image, scale(w), scale(h), FilterType::CatmullRom)
+    picture::resize(&image, scale(w), scale(h))
 }
 
 /// Put `bytes` at `path` whole (a new file renamed over the old one, the user's alone), or remove the file for `None`.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "runs on the I/O pool (kit::task::io)"
+)]
 pub fn store(path: &Path, bytes: Option<&[u8]>) -> io::Result<()> {
     let Some(bytes) = bytes else {
         return match std::fs::remove_file(path) {
@@ -183,9 +197,11 @@ fn update(config: &Path, home: &Path) {
     }
 }
 
-/// Write the login screen's copy now and whenever the compositor's settings file changes, on a thread of its own for the
-/// life of the process. Without a home or a settings path nothing is written.
-pub fn keep_current() {
+/// Write the login screen's copy once, for the compositor's settings as they are now, to the home of `HOME`: the
+/// program runs it at start and after each change of the settings file it follows. Without a home or a settings path
+/// nothing is written. It reads and writes files: run it on Kit's I/O pool (`cupertino_kit::task::io`), never on the UI
+/// thread.
+pub fn write_current() {
     let Some(config) = CompositorSettings::path() else {
         return;
     };
@@ -195,39 +211,5 @@ pub fn keep_current() {
     else {
         return;
     };
-    let watcher = match ConfigWatcher::new(vec![config.clone()]) {
-        Ok(watcher) => Some(watcher),
-        Err(e) => {
-            eprintln!("cupertino-login: the login screen's wallpaper is written once: {e}");
-            None
-        }
-    };
-    let started = std::thread::Builder::new()
-        .name("login-wallpaper".into())
-        .spawn(move || {
-            // the first write
-            update(&config, &home);
-            // the watch lives as long as this thread, which is as long as the process
-            let Some(mut watcher) = watcher else {
-                return;
-            };
-            while let Some(events) = watcher.wait() {
-                let mut changed = false;
-                for event in events {
-                    match event {
-                        WatchEvent::Changed(_) => changed = true,
-                        WatchEvent::Error(e) => eprintln!(
-                            "cupertino-login: the login screen's wallpaper no longer follows the settings: {e}"
-                        ),
-                    }
-                }
-                // a burst of changes is one write
-                if changed {
-                    update(&config, &home);
-                }
-            }
-        });
-    if let Err(e) = started {
-        eprintln!("cupertino-login: the login screen's wallpaper is not written: {e}");
-    }
+    update(&config, &home);
 }

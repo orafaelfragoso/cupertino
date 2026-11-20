@@ -1,33 +1,29 @@
-//! The widgets the screens are made of besides the standard controls: the backdrop with its kept wallpaper picture,
+//! The widgets the screens are made of besides the standard controls: the backdrop with the screen's wallpaper picture,
 //! the fading parts of the interface, absolute placement, text at a size of its own, the avatar, the field's frame on its
 //! material and its adornment, the buttons beside it and the power item.
 
-use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 
 use cupertino_geometry::rounded::{PathSeg, RoundedRect};
 use cupertino_kit::core::{
-    next_resource_id, AccessibleStates, Action, Change, Element, Event, EventCx, Glass, Live,
-    MeasureCx, PaintCx, Phase, Propagation, Role, SemanticsCx, Widget,
+    AccessibleStates, Action, Change, Element, Event, EventCx, Glass, Live, MeasureCx, PaintCx,
+    Phase, Propagation, Role, SemanticsCx, Widget,
 };
 use cupertino_kit::geometry::{Insets, Point, Rect, Size};
 use cupertino_kit::layout::{
     Align, Axis, Constraints, ContainerKind, Justify, LayoutSpec, Measured, SizeSpec,
 };
 use cupertino_kit::platform::{Keysym, Mods, MouseButton, PointerEvent};
-use cupertino_kit::render::{
-    zeroed_pixels, Effect, FillRule, ImageResource, Paint, PaintOp, PathVerb, PixelFormat,
-    ResourceId, Sampling, Shape,
-};
+use cupertino_kit::render::{Effect, FillRule, Paint, PaintOp, PathVerb, Sampling, Shape};
 use cupertino_kit::text::{
-    AttributedText, FontWeight, GlyphFormat, GlyphKey, GlyphRaster, GlyphRasterizer,
-    ParagraphLayout, ParagraphStyle, TextAlign, TextStyle, TextSystem, Wrap,
+    AttributedText, FontWeight, ParagraphLayout, ParagraphStyle, TextAlign, TextStyle, TextSystem,
+    Wrap,
 };
 use cupertino_kit::theme::{Color, ColorRole, StateVariant, Surface};
 
+use super::pictures::{Glass as GlassSpec, Laid, Whole, PICTURE_TILE};
 use crate::layout::{BUTTON_GLYPH, PILL_RADIUS};
 use crate::spinner;
-use crate::wallpaper::{self, Source};
 
 const RETURN: Keysym = Keysym(0xff0d);
 const KP_ENTER: Keysym = Keysym(0xff8d);
@@ -185,242 +181,20 @@ fn circle(center: Point, radius: f64) -> Shape {
     }
 }
 
-/// What a full screen stands on: `source` over a screen of `size` points, with its dimming at opacity `dim`.
-#[derive(Clone, Debug)]
+/// What a full screen stands on: a screen of `size` points and the picture it was last given; black until it has one.
+#[derive(Clone)]
 pub(crate) struct Ground {
-    pub source: Source,
     pub size: Size,
-    pub dim: f64,
+    pub picture: Option<Arc<Whole>>,
 }
 
-impl Ground {
-    fn same(&self, other: &Ground) -> bool {
-        self.source.key() == other.source.key() && self.size == other.size && self.dim == other.dim
+/// Whether two pictures are the same one.
+fn same_picture(a: &Option<Arc<Whole>>, b: &Option<Arc<Whole>>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+        (None, None) => true,
+        _ => false,
     }
-}
-
-/// The longest side of a picture the screens make, device pixels.
-const MAX_PICTURE_SIDE: f64 = 16384.0;
-/// How many pictures and pieces of material the screens keep: a few outputs' pictures and fields.
-const KEPT_PICTURES: usize = 8;
-
-/// Side of the squares the picture is laid in, points: a frame that changes a part of the screen (a typed character, a
-/// fading clock) lays again only the squares under it, copied from the kept picture.
-const PICTURE_TILE: f64 = 256.0;
-
-/// What a kept picture is of.
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum Kind {
-    /// The screen's picture before the dimming comes in.
-    Undimmed,
-    /// With the dimming fully in.
-    Dimmed,
-    /// With the dimming partly in, at this opacity's bits: one frame of the dimming coming in.
-    Frame(u32),
-    /// The control material over these device pixels of the screen.
-    Material([u32; 4]),
-    /// Glass letters, by a hash of their text, size, weight and place.
-    Glass(u64),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct KeptKey {
-    source: u64,
-    width: u32,
-    height: u32,
-    scale: u64,
-    kind: Kind,
-}
-
-struct Kept {
-    key: KeptKey,
-    id: ResourceId,
-    image: ImageResource,
-}
-
-thread_local! {
-    /// The pictures made last, least recently used first.
-    static KEPT: RefCell<Vec<Kept>> = const { RefCell::new(Vec::new()) };
-    /// How many pictures of a whole screen were made from a source on this thread.
-    static MADE: Cell<u64> = const { Cell::new(0) };
-    /// How many pictures of glass letters were made on this thread.
-    static GLASS_MADE: Cell<u64> = const { Cell::new(0) };
-}
-
-/// How many pictures of a whole screen were made from their source on this thread: once per screen size, scale and
-/// wallpaper, and once more when the dimming has come in.
-pub(crate) fn pictures_made() -> u64 {
-    MADE.get()
-}
-
-/// Drop every kept picture (the lock screen ends, the greeter starts a session).
-pub(crate) fn forget_pictures() {
-    KEPT.with_borrow_mut(Vec::clear);
-}
-
-/// The device pixels a screen of `size` points covers at `scale`: whole pixels, at least one each way.
-fn device_size(size: Size, scale: f64) -> (u32, u32) {
-    let side = |v: f64| (v * scale).ceil().clamp(1.0, MAX_PICTURE_SIDE) as u32;
-    (side(size.width), side(size.height))
-}
-
-/// Opaque premultiplied pixels of `width` x `height`, made in place by `fill`.
-fn made(width: u32, height: u32, fill: impl FnOnce(&mut [u8])) -> ImageResource {
-    let len = width as usize * height as usize * 4;
-    // memory the system hands over zeroed, untouched until `fill` writes it: a whole screen of it is not set to zero
-    // first, and its pages are first touched by the workers that fill it
-    let mut pixels: Arc<[u8]> = zeroed_pixels(len);
-    if let Some(out) = Arc::get_mut(&mut pixels) {
-        fill(out);
-    }
-    ImageResource {
-        revision: 1,
-        width,
-        height,
-        stride: width * 4,
-        format: PixelFormat::Rgba8Premultiplied,
-        pixels,
-    }
-}
-
-/// The kept picture of `key`, made by `make` when there is none.
-fn kept(key: KeptKey, make: impl FnOnce() -> ImageResource) -> (ResourceId, ImageResource) {
-    let found = KEPT.with_borrow_mut(|kept| {
-        let i = kept.iter().position(|k| k.key == key)?;
-        let entry = kept.remove(i);
-        let found = (entry.id, entry.image.clone());
-        kept.push(entry);
-        Some(found)
-    });
-    if let Some(found) = found {
-        return found;
-    }
-    let image = make();
-    if matches!(key.kind, Kind::Undimmed | Kind::Dimmed) {
-        MADE.set(MADE.get() + 1);
-    }
-    if matches!(key.kind, Kind::Glass(_)) {
-        GLASS_MADE.set(GLASS_MADE.get() + 1);
-    }
-    let id = next_resource_id();
-    KEPT.with_borrow_mut(|kept| {
-        let screen = |k: &KeptKey| {
-            (k.source, k.width, k.height, k.scale) == (key.source, key.width, key.height, key.scale)
-        };
-        // a frame of the dimming replaces the one before; the screen with its dimming in needs neither its frames nor
-        // its undimmed picture
-        match key.kind {
-            Kind::Frame(_) => {
-                kept.retain(|k| !(screen(&k.key) && matches!(k.key.kind, Kind::Frame(_))))
-            }
-            Kind::Dimmed => kept.retain(|k| {
-                !(screen(&k.key) && matches!(k.key.kind, Kind::Frame(_) | Kind::Undimmed))
-            }),
-            // the time of the minute before is not shown again
-            Kind::Glass(_) => {
-                kept.retain(|k| !(screen(&k.key) && matches!(k.key.kind, Kind::Glass(_))))
-            }
-            Kind::Undimmed | Kind::Material(_) => {}
-        }
-        kept.push(Kept {
-            key,
-            id,
-            image: image.clone(),
-        });
-        if kept.len() > KEPT_PICTURES {
-            kept.remove(0);
-        }
-    });
-    (id, image)
-}
-
-/// The picture of `ground` at `scale`, of whole device pixels: kept before the dimming comes in and once it is in; each
-/// frame in between is made from the kept undimmed picture.
-fn picture(ground: &Ground, scale: f64) -> (ResourceId, ImageResource) {
-    let (width, height) = device_size(ground.size, scale);
-    let key = KeptKey {
-        source: ground.source.key(),
-        width,
-        height,
-        scale: scale.to_bits(),
-        kind: Kind::Undimmed,
-    };
-    let dim = ground.dim.clamp(0.0, 1.0) as f32;
-    let source = &ground.source;
-    if dim >= 1.0 {
-        return kept(
-            KeptKey {
-                kind: Kind::Dimmed,
-                ..key
-            },
-            || {
-                made(width, height, |out| {
-                    wallpaper::render_into(source, width, height, scale, 1.0, out)
-                })
-            },
-        );
-    }
-    let (id, undimmed) = kept(key, || {
-        made(width, height, |out| {
-            wallpaper::render_into(source, width, height, scale, 0.0, out)
-        })
-    });
-    if dim <= 0.0 {
-        return (id, undimmed);
-    }
-    // every square of the frame lays the same picture
-    kept(
-        KeptKey {
-            kind: Kind::Frame(dim.to_bits()),
-            ..key
-        },
-        || {
-            made(width, height, |out| {
-                wallpaper::dim_into(&undimmed.pixels, width, height, scale, dim, out)
-            })
-        },
-    )
-}
-
-/// The control material of `ground` over `strip` (screen points) at `scale`, kept, and the device pixels it covers.
-fn material(
-    ground: &Ground,
-    scale: f64,
-    strip: Rect,
-) -> Option<(ResourceId, ImageResource, [u32; 4])> {
-    let (width, height) = device_size(ground.size, scale);
-    let to = |v: f64, limit: u32, up: bool| {
-        let v = v * scale;
-        (if up { v.ceil() } else { v.floor() }).clamp(0.0, f64::from(limit)) as u32
-    };
-    let region = [
-        to(strip.min_x(), width, false),
-        to(strip.min_y(), height, false),
-        to(strip.max_x(), width, true),
-        to(strip.max_y(), height, true),
-    ];
-    if region[0] >= region[2] || region[1] >= region[3] {
-        return None;
-    }
-    let key = KeptKey {
-        source: ground.source.key(),
-        width,
-        height,
-        scale: scale.to_bits(),
-        kind: Kind::Material(region),
-    };
-    let (id, image) = kept(key, || {
-        let pixels = wallpaper::frosted(&ground.source, width, height, scale, region);
-        ImageResource {
-            revision: 1,
-            width: region[2] - region[0],
-            height: region[3] - region[1],
-            stride: (region[2] - region[0]) * 4,
-            format: PixelFormat::Rgba8Premultiplied,
-            pixels: Arc::from(pixels),
-        }
-    });
-    Some((id, image, region))
 }
 
 /// The squares of [`PICTURE_TILE`] points that cover a screen of `size`, row by row; those at the right and bottom edges
@@ -441,10 +215,11 @@ fn tiles(size: Size) -> impl Iterator<Item = Rect> {
     })
 }
 
-/// One square of the screen's picture, at `rect`: the kept picture's pixels under it, one a device pixel, copied and
-/// never resampled. Its edges are on device pixels, so neighbouring squares meet without a seam at any scale.
+/// One square of the screen's picture, at `rect`: the picture's pixels under it, one a device pixel, copied and never
+/// resampled. Its edges are on device pixels, so neighbouring squares meet without a seam at any scale. Black while the
+/// screen has no picture, so a lock surface never shows what lies under it.
 struct PictureTile {
-    ground: Ground,
+    picture: Option<Arc<Whole>>,
     rect: Rect,
 }
 
@@ -465,7 +240,7 @@ impl<M: 'static> Widget<M> for PictureTile {
     fn update(&self, old: &Self, _: &mut ()) -> Change {
         if self.rect != old.rect {
             Change::Layout
-        } else if !self.ground.same(&old.ground) {
+        } else if !same_picture(&self.picture, &old.picture) {
             Change::Paint
         } else {
             Change::None
@@ -484,31 +259,45 @@ impl<M: 'static> Widget<M> for PictureTile {
     }
 
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
-        let scale = cx.env().scale;
-        let (id, image) = picture(&self.ground, scale);
+        let Some(picture) = &self.picture else {
+            let local = Rect::new(0.0, 0.0, self.rect.width(), self.rect.height());
+            fill(cx, Shape::Rect(local), Color::new(0.0, 0.0, 0.0, 1.0));
+            return;
+        };
+        let scale = picture.scale();
+        let (width, height) = picture.size();
         let edge = |v: f64, limit: u32| (v * scale).round().clamp(0.0, f64::from(limit));
         let (x0, y0) = (
-            edge(self.rect.min_x(), image.width),
-            edge(self.rect.min_y(), image.height),
+            edge(self.rect.min_x(), width),
+            edge(self.rect.min_y(), height),
         );
         let (x1, y1) = (
-            edge(self.rect.max_x(), image.width),
-            edge(self.rect.max_y(), image.height),
+            edge(self.rect.max_x(), width),
+            edge(self.rect.max_y(), height),
         );
         if x1 <= x0 || y1 <= y0 {
             return;
         }
+        let Some(band) = picture.band(y0 as u32, y1 as u32) else {
+            return;
+        };
+        // a picture made at another scale (the output's scale just changed) is drawn smoothly until its own is in
+        let sampling = if scale == cx.env().scale {
+            Sampling::Nearest
+        } else {
+            Sampling::Linear
+        };
         cx.image_part(
-            id,
-            &image,
-            Rect::new(x0, y0, x1 - x0, y1 - y0),
+            band.id,
+            &band.image,
+            Rect::new(x0, y0 - f64::from(band.region[1]), x1 - x0, y1 - y0),
             Rect::new(
                 x0 / scale - self.rect.min_x(),
                 y0 / scale - self.rect.min_y(),
                 (x1 - x0) / scale,
                 (y1 - y0) / scale,
             ),
-            Sampling::Nearest,
+            sampling,
         );
     }
 
@@ -573,7 +362,7 @@ impl<M: Clone + 'static> Widget<M> for Backdrop<M> {
                 tiles(ground.size)
                     .map(|rect| {
                         Element::new(PictureTile {
-                            ground: ground.clone(),
+                            picture: ground.picture.clone(),
                             rect,
                         })
                     })
@@ -973,7 +762,8 @@ pub(crate) struct Shift {
 }
 
 impl Label {
-    fn laid_out(&self, cx: &PaintCx<'_>) -> Option<ParagraphLayout> {
+    /// The label's text laid out in `text`.
+    pub(crate) fn laid_out(&self, text: &TextSystem) -> Option<ParagraphLayout> {
         let content = AttributedText::plain(
             self.text.clone(),
             TextStyle {
@@ -987,7 +777,7 @@ impl Label {
             ellipsis: !self.wrap,
             ..ParagraphStyle::default()
         };
-        let paragraph = cx.env().text.paragraph(&content, &style).ok()?;
+        let paragraph = text.paragraph(&content, &style).ok()?;
         Some(paragraph.layout(Some(self.rect.width() as f32)))
     }
 }
@@ -1028,7 +818,7 @@ impl<M: 'static> Widget<M> for Label {
     }
 
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
-        let Some(layout) = self.laid_out(cx) else {
+        let Some(layout) = self.laid_out(&cx.env().text) else {
             return;
         };
         let color = self.color.or_else(|| {
@@ -1061,7 +851,7 @@ impl<M: 'static> Widget<M> for Label {
                 ..self.clone()
             };
             let wraps = above
-                .laid_out(cx)
+                .laid_out(&cx.env().text)
                 .is_some_and(|layout| layout.lines().len() > 1);
             if wraps {
                 shift.by
@@ -1097,181 +887,13 @@ impl<M: 'static> Widget<M> for Label {
 
 /// Text in glass letters (the large time): the screen's own picture under the letters, blurred and lifted toward
 /// white, with a light rim along their top and left edges and a dark one along their bottom and right
-/// ([`wallpaper::glass_letters`]). It is made from the kept picture, never from what lies under the window, and kept, so
-/// a frame lays it again without making it; without a picture the letters are white. Centred in its box, its first
-/// baseline `ascent` below the box's top.
+/// (`wallpaper::glass_letters`), made on the CPU pool ([`super::ScreenPictures`]) from the screen's picture, never from
+/// what lies under the window. `letters` are the last the screen was given: at a minute change those of the minute
+/// before show until the new ones are in. Without any, nothing is drawn.
 #[derive(Clone, Debug)]
 pub(crate) struct GlassText {
-    pub text: String,
-    pub size: f64,
-    pub weight: FontWeight,
-    /// The box, in the parent's points.
-    pub rect: Rect,
-    pub ascent: f64,
-    pub ground: Ground,
-    /// Where the parent's origin lies on the screen, points.
-    pub origin: Point,
-}
-
-impl GlassText {
-    fn same(&self, other: &GlassText) -> bool {
-        (
-            self.text.as_str(),
-            self.size,
-            self.weight,
-            self.ascent,
-            self.origin,
-        ) == (
-            other.text.as_str(),
-            other.size,
-            other.weight,
-            other.ascent,
-            other.origin,
-        ) && self.ground.source.key() == other.ground.source.key()
-            && self.ground.size == other.ground.size
-    }
-
-    /// The glass letters at `scale` and the device pixels of the screen they cover, kept; `None` without glyphs.
-    fn letters(
-        &self,
-        cx: &PaintCx<'_>,
-        layout: &ParagraphLayout,
-        scale: f64,
-    ) -> Option<(ResourceId, ImageResource, [u32; 4])> {
-        use std::hash::{Hash, Hasher};
-        let (width, height) = device_size(self.ground.size, scale);
-        let at = Point::new(self.origin.x + self.rect.x(), self.origin.y + self.rect.y());
-        let first = layout.lines().first().map_or(0.0, |line| line.baseline);
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        (
-            self.text.as_str(),
-            self.size.to_bits(),
-            self.weight.0,
-            self.ascent.to_bits(),
-            at.x.to_bits(),
-            at.y.to_bits(),
-            self.rect.width().to_bits(),
-            self.rect.height().to_bits(),
-        )
-            .hash(&mut hasher);
-        let key = KeptKey {
-            source: self.ground.source.key(),
-            width,
-            height,
-            scale: scale.to_bits(),
-            kind: Kind::Glass(hasher.finish()),
-        };
-        // the box in device pixels: the letters are cut to it and to the screen
-        let bound = [
-            ((at.x * scale).floor().max(0.0) as u32).min(width),
-            ((at.y * scale).floor().max(0.0) as u32).min(height),
-            ((self.rect.max_x() + self.origin.x) * scale)
-                .ceil()
-                .clamp(0.0, f64::from(width)) as u32,
-            ((self.rect.max_y() + self.origin.y) * scale)
-                .ceil()
-                .clamp(0.0, f64::from(height)) as u32,
-        ];
-        let found = KEPT.with_borrow_mut(|kept| {
-            let i = kept.iter().position(|k| k.key == key)?;
-            let entry = kept.remove(i);
-            let found = (entry.id, entry.image.clone());
-            kept.push(entry);
-            Some(found)
-        });
-        let region = |image: &ImageResource, left: u32, top: u32| {
-            [left, top, left + image.width, top + image.height]
-        };
-        if let Some((id, image)) = found {
-            let left = REGIONS.with_borrow(|r| r.get(&id).copied())?;
-            return Some((id, image.clone(), region(&image, left[0], left[1])));
-        }
-        // each glyph's coverage at its device pixel, as the renderer places it
-        let mut raster = GlyphRaster::new(cx.env().text.clone());
-        let mut glyphs = Vec::new();
-        for line in layout.lines() {
-            for run in &line.runs {
-                let size_px = f64::from(run.run.size) * scale;
-                for g in &run.run.glyphs {
-                    let px = (at.x + run.origin.x + f64::from(g.x)) * scale;
-                    let py = (at.y + self.ascent - first + run.origin.y + f64::from(g.y)) * scale;
-                    let ix = px.floor();
-                    let key = GlyphKey::for_draw(
-                        run.run.font,
-                        g.id,
-                        size_px,
-                        px - ix,
-                        true,
-                        [1.0, 1.0, 1.0],
-                    );
-                    let Ok(Some(glyph)) = raster.rasterize(&key) else {
-                        continue;
-                    };
-                    if glyph.format != GlyphFormat::Coverage {
-                        continue;
-                    }
-                    let x = ix as i64 + i64::from(glyph.bearing_x);
-                    let y = py.round() as i64 - i64::from(glyph.bearing_y);
-                    glyphs.push((x, y, glyph));
-                }
-            }
-        }
-        let clamp = |v: i64, lo: u32, hi: u32| v.clamp(i64::from(lo), i64::from(hi)) as u32;
-        let (mut x0, mut y0, mut x1, mut y1) = (u32::MAX, u32::MAX, 0, 0);
-        for (x, y, g) in &glyphs {
-            x0 = x0.min(clamp(*x, bound[0], bound[2]));
-            y0 = y0.min(clamp(*y, bound[1], bound[3]));
-            x1 = x1.max(clamp(x + i64::from(g.width), bound[0], bound[2]));
-            y1 = y1.max(clamp(y + i64::from(g.height), bound[1], bound[3]));
-        }
-        if x0 >= x1 || y0 >= y1 {
-            return None;
-        }
-        let (rw, rh) = ((x1 - x0) as usize, (y1 - y0) as usize);
-        let mut coverage = vec![0u8; rw * rh];
-        for (x, y, g) in &glyphs {
-            for row in 0..g.height as i64 {
-                let sy = y + row - i64::from(y0);
-                if sy < 0 || sy >= rh as i64 {
-                    continue;
-                }
-                for col in 0..g.width as i64 {
-                    let sx = x + col - i64::from(x0);
-                    if sx < 0 || sx >= rw as i64 {
-                        continue;
-                    }
-                    let v = g.pixels[(row * i64::from(g.stride) + col) as usize];
-                    let at = sy as usize * rw + sx as usize;
-                    coverage[at] = coverage[at].saturating_add(v);
-                }
-            }
-        }
-        let region_px = [x0, y0, x1, y1];
-        let source = &self.ground.source;
-        let (id, image) = kept(key, || {
-            let pixels =
-                wallpaper::glass_letters(source, width, height, scale, region_px, &coverage);
-            ImageResource {
-                revision: 1,
-                width: x1 - x0,
-                height: y1 - y0,
-                stride: (x1 - x0) * 4,
-                format: PixelFormat::Rgba8Premultiplied,
-                pixels: Arc::from(pixels),
-            }
-        });
-        REGIONS.with_borrow_mut(|r| {
-            r.retain(|k, _| KEPT.with_borrow(|kept| kept.iter().any(|e| e.id == *k)));
-            r.insert(id, [x0, y0]);
-        });
-        Some((id, image, region_px))
-    }
-}
-
-thread_local! {
-    /// Where each kept picture of glass letters lies on its screen: its top-left device pixel.
-    static REGIONS: RefCell<std::collections::HashMap<ResourceId, [u32; 2]>> =
-        RefCell::new(std::collections::HashMap::new());
+    pub glass: GlassSpec,
+    pub letters: Option<Laid>,
 }
 
 impl<M: 'static> Widget<M> for GlassText {
@@ -1279,9 +901,9 @@ impl<M: 'static> Widget<M> for GlassText {
 
     fn layout(&self) -> LayoutSpec {
         LayoutSpec {
-            width: SizeSpec::Fixed(self.rect.width()),
-            height: SizeSpec::Fixed(self.rect.height()),
-            position: self.rect.origin,
+            width: SizeSpec::Fixed(self.glass.rect.width()),
+            height: SizeSpec::Fixed(self.glass.rect.height()),
+            position: self.glass.rect.origin,
             ..LayoutSpec::new(ContainerKind::Leaf)
         }
     }
@@ -1289,9 +911,9 @@ impl<M: 'static> Widget<M> for GlassText {
     fn state(&self) {}
 
     fn update(&self, old: &Self, _: &mut ()) -> Change {
-        if self.rect != old.rect {
+        if self.glass.rect != old.glass.rect {
             Change::Layout
-        } else if !self.same(old) {
+        } else if self.glass != old.glass || self.letters != old.letters {
             Change::Paint
         } else {
             Change::None
@@ -1300,8 +922,8 @@ impl<M: 'static> Widget<M> for GlassText {
 
     fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
         Measured {
-            size: self.rect.size,
-            baseline: Some(self.ascent),
+            size: self.glass.rect.size,
+            baseline: Some(self.glass.ascent),
         }
     }
 
@@ -1310,35 +932,44 @@ impl<M: 'static> Widget<M> for GlassText {
     }
 
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
-        let label = Label {
-            color: Some(WHITE),
-            ..label_of(&self.text, self.size, self.weight, self.rect, self.ascent)
-        };
-        let Some(layout) = label.laid_out(cx) else {
+        let Some(letters) = &self.letters else {
             return;
         };
-        let scale = cx.env().scale;
-        let Some((id, image, region)) = self.letters(cx, &layout, scale) else {
-            return;
-        };
-        let at = Point::new(self.origin.x + self.rect.x(), self.origin.y + self.rect.y());
+        let scale = letters.scale;
+        let at = self.glass.at();
         let dst = Rect::new(
-            f64::from(region[0]) / scale - at.x,
-            f64::from(region[1]) / scale - at.y,
-            f64::from(image.width) / scale,
-            f64::from(image.height) / scale,
+            f64::from(letters.region[0]) / scale - at.x,
+            f64::from(letters.region[1]) / scale - at.y,
+            f64::from(letters.image.width) / scale,
+            f64::from(letters.image.height) / scale,
         );
-        cx.image(id, &image, dst, Sampling::Nearest);
+        cx.image(letters.id, &letters.image, dst, sampling(scale, cx));
     }
 
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
         cx.role(Role::StaticText);
-        cx.name(self.text.clone());
+        cx.name(self.glass.text.clone());
+    }
+}
+
+/// How a picture made at `scale` is drawn: copied where the window's scale is its own, else smoothly until the
+/// picture of the window's scale is in.
+fn sampling(scale: f64, cx: &PaintCx<'_>) -> Sampling {
+    if scale == cx.env().scale {
+        Sampling::Nearest
+    } else {
+        Sampling::Linear
     }
 }
 
 /// A plain label of `text` at `size` and `weight` in `rect`, its first baseline `ascent` below its top.
-fn label_of(text: &str, size: f64, weight: FontWeight, rect: Rect, ascent: f64) -> Label {
+pub(crate) fn label_of(
+    text: &str,
+    size: f64,
+    weight: FontWeight,
+    rect: Rect,
+    ascent: f64,
+) -> Label {
     Label {
         text: text.to_owned(),
         size,
@@ -1447,66 +1078,21 @@ impl<M: 'static> Widget<M> for Avatar<M> {
 /// Fill of the field's capsule where there is no picture to make its material from: white at this opacity.
 const FIELD_FILL_ALPHA: f32 = 0.18;
 
-/// The control material under a field or a button: made from `ground`'s picture over `strip` (screen points, wide enough
-/// for the field's shake) and laid where it lies on the screen, whatever the frame's own place, `origin` (screen points).
-/// It is never what lies under the window: under a lock surface that is the unlocked session.
+/// The control material under a field or a button: made from the screen's picture over `strip` (screen points, wide
+/// enough for the field's shake) on the CPU pool ([`super::ScreenPictures`]) and laid where it lies on the screen,
+/// whatever the frame's own place, `origin` (screen points). It is never what lies under the window: under a lock
+/// surface that is the unlocked session. `laid` is the material the screen was last given, `None` before it has one.
 #[derive(Clone, Debug)]
 pub(crate) struct FieldMaterial {
-    pub ground: Ground,
     pub strip: Rect,
     pub origin: Point,
+    pub laid: Option<Laid>,
 }
 
-/// Draws nothing: makes and keeps the control material of `ground` over each of `strips` (screen points) while the
-/// screen rests, so the screen that needs it next (the password screen after the picker) does not make it in the first
-/// frame of its switch.
-pub(crate) struct Prepare {
-    pub ground: Ground,
-    pub strips: Vec<Rect>,
-}
-
-impl<M: 'static> Widget<M> for Prepare {
-    type State = ();
-
-    fn layout(&self) -> LayoutSpec {
-        LayoutSpec {
-            width: SizeSpec::Fixed(0.0),
-            height: SizeSpec::Fixed(0.0),
-            ..LayoutSpec::new(ContainerKind::Leaf)
-        }
-    }
-
-    fn state(&self) {}
-
-    fn update(&self, old: &Self, _: &mut ()) -> Change {
-        // the material comes from the picture with its dimming in, whatever the dimming shows now
-        if self.ground.source.key() != old.ground.source.key()
-            || self.ground.size != old.ground.size
-            || self.strips != old.strips
-        {
-            Change::Paint
-        } else {
-            Change::None
-        }
-    }
-
-    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
-        no_measure()
-    }
-
-    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
-        Propagation::Continue
-    }
-
-    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
-        let scale = cx.env().scale;
-        for &strip in &self.strips {
-            material(&self.ground, scale, strip);
-        }
-    }
-
-    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
-        cx.hidden();
+impl FieldMaterial {
+    /// What tells one material's look from another's.
+    fn look(&self) -> (Rect, Point, Option<cupertino_kit::render::ResourceId>) {
+        (self.strip, self.origin, self.laid.as_ref().map(|l| l.id))
     }
 }
 
@@ -1549,10 +1135,7 @@ impl<M: 'static> Widget<M> for FieldFrame<M> {
     fn state(&self) {}
 
     fn update(&self, old: &Self, _: &mut ()) -> Change {
-        let material = |m: &Option<FieldMaterial>| {
-            m.as_ref()
-                .map(|m| (m.ground.source.key(), m.ground.size, m.strip, m.origin))
-        };
+        let material = |m: &Option<FieldMaterial>| m.as_ref().map(FieldMaterial::look);
         if self.rect != old.rect || self.insets != old.insets {
             Change::Layout
         } else if self.tint != old.tint
@@ -1589,21 +1172,21 @@ impl<M: 'static> Widget<M> for FieldFrame<M> {
         } else {
             continuous(Rect::new(0.0, 0.0, size.width, size.height), radius)
         };
-        let scale = cx.env().scale;
         let laid = self
             .material
             .as_ref()
-            .and_then(|m| material(&m.ground, scale, m.strip).map(|found| (m, found)));
+            .and_then(|m| m.laid.as_ref().map(|laid| (m, laid)));
         match laid {
-            Some((m, (id, image, region))) => {
+            Some((m, laid)) => {
+                let scale = laid.scale;
                 cx.push(PaintOp::PushClip(capsule.clone()));
                 let dst = Rect::new(
-                    f64::from(region[0]) / scale - m.origin.x,
-                    f64::from(region[1]) / scale - m.origin.y,
-                    f64::from(image.width) / scale,
-                    f64::from(image.height) / scale,
+                    f64::from(laid.region[0]) / scale - m.origin.x,
+                    f64::from(laid.region[1]) / scale - m.origin.y,
+                    f64::from(laid.image.width) / scale,
+                    f64::from(laid.image.height) / scale,
                 );
-                cx.image(id, &image, dst, Sampling::Nearest);
+                cx.image(laid.id, &laid.image, dst, sampling(scale, cx));
                 cx.push(PaintOp::PopClip);
             }
             None => fill(
@@ -2365,18 +1948,10 @@ impl<M: 'static> Widget<M> for NoticeCard {
         fn text(c: &NoticeCard) -> (&String, &String, &String, &String, f64, f64) {
             (&c.app, &c.title, &c.body, &c.speech, c.ascent, c.descent)
         }
-        let material = |m: &Option<FieldMaterial>| m.as_ref().map(|m| (m.strip, m.origin));
-        let ground_same = match (&self.material, &old.material) {
-            (Some(a), Some(b)) => a.ground.same(&b.ground),
-            (None, None) => true,
-            _ => false,
-        };
+        let material = |m: &Option<FieldMaterial>| m.as_ref().map(FieldMaterial::look);
         if text(self) != text(old) {
             Change::Layout
-        } else if self.above != old.above
-            || material(&self.material) != material(&old.material)
-            || !ground_same
-        {
+        } else if self.above != old.above || material(&self.material) != material(&old.material) {
             Change::Paint
         } else {
             Change::None
@@ -2408,24 +1983,24 @@ impl<M: 'static> Widget<M> for NoticeCard {
             rect: Rect::new(0.0, 0.0, size.width, (size.height - CARD_GAP).max(0.0)),
             radius: CARD_RADIUS,
         };
-        let scale = cx.env().scale;
         let tint = FieldTint::Label { disabled: false };
         let laid = self
             .material
             .as_ref()
-            .and_then(|m| material(&m.ground, scale, m.strip).map(|found| (m, found)));
+            .and_then(|m| m.laid.as_ref().map(|laid| (m, laid)));
         match laid {
-            Some((m, (id, image, region))) => {
+            Some((m, laid)) => {
+                let scale = laid.scale;
                 // the card's place in the column: under the cards above it
                 let offset = self.offset_in_column(&cx.env().text);
                 cx.push(PaintOp::PushClip(card.clone()));
                 let dst = Rect::new(
-                    f64::from(region[0]) / scale - m.origin.x,
-                    f64::from(region[1]) / scale - m.origin.y - offset,
-                    f64::from(image.width) / scale,
-                    f64::from(image.height) / scale,
+                    f64::from(laid.region[0]) / scale - m.origin.x,
+                    f64::from(laid.region[1]) / scale - m.origin.y - offset,
+                    f64::from(laid.image.width) / scale,
+                    f64::from(laid.image.height) / scale,
                 );
-                cx.image(id, &image, dst, Sampling::Nearest);
+                cx.image(laid.id, &laid.image, dst, sampling(scale, cx));
                 cx.push(PaintOp::PopClip);
                 fill(cx, card, tint.color());
             }

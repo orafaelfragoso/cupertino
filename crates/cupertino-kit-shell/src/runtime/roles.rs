@@ -146,6 +146,8 @@ pub(crate) struct ShellRoles {
     pub(super) consent_apps: HashMap<u64, consent::App>,
     pub(super) next_hole: u64,
     pub(super) captures: super::capture::Capturing,
+    /// Caps Lock as the program was last told it ([`Event::CapsLock`]); `None` before the first dispatch.
+    caps_lock: Option<bool>,
 }
 
 impl ShellRoles {
@@ -211,6 +213,7 @@ impl ShellRoles {
             consent_apps: HashMap::new(),
             next_hole: 1,
             captures: super::capture::Capturing::bind(conn),
+            caps_lock: None,
         };
         roles.follow_outputs(conn, false);
         roles.read_answers(conn);
@@ -358,6 +361,13 @@ impl ShellRoles {
         key: WindowKey,
         output: OutputId,
     ) -> Result<SurfaceId, WireError> {
+        if self.lock.is_none() {
+            // the program asked for the lock in the turn that opens its first lock surface: the lock is taken first,
+            // as the protocol wants it before any lock surface
+            for request in context::drain_outgoing() {
+                self.execute(conn, request);
+            }
+        }
         let lock = self.lock.as_ref().ok_or(WireError::Protocol(
             "a lock surface without the session lock",
         ))?;
@@ -791,6 +801,11 @@ impl SurfaceRoles for ShellRoles {
         }
         for request in context::drain_outgoing() {
             self.execute(conn, request);
+        }
+        let caps_lock = conn.modifiers().caps_lock;
+        if self.caps_lock != Some(caps_lock) {
+            self.caps_lock = Some(caps_lock);
+            self.inbox.push(Event::CapsLock(caps_lock));
         }
         self.captures.pump(conn, &self.inbox);
         self.ready_if_shown();

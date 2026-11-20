@@ -14,10 +14,11 @@ login items and reopened applications, the session menu's state) is the shell ho
 
 Every screen and panel is drawn with CupertinoKit: `view` builds the Kit windows (the lock screen, the greeter's picker, name
 and password screens and power menu, the desktop-control consent panel) from the pure models, and Kit's runtime
-draws them, routes their keys and publishes them to assistive technology. The crate has no compositor dependency:
-`cupertino-seat` supplies the logind lookup, and it builds against Smithay's session trait. The state machine (`model`), layout
-(`layout`), views (`view`) and user and clock helpers (`user`) are separate from the process, so
-the screen can be driven on Kit's headless window system without it. Sizes, positions, the shake, the fades and the hide timer
+draws them, routes their keys and publishes them to assistive technology. The crate has no compositor dependency, and
+draws no pixel itself outside Kit: the screens' pictures (the treated wallpaper, the field's material, the glass letters)
+are made on Kit's CPU pool (`view::ScreenPictures`) and the files, PAM and the wallpapers' decoding run on its I/O pool. The
+state machine (`model`), layout (`layout`), views (`view`) and user and clock helpers (`user`) are separate from the
+programs, so the screen can be driven on Kit's headless window system without them. Sizes, positions, the shake, the fades and the hide timer
 follow the analysis. Items marked approximate are authored and replaceable.
 
 This is the one shell process that links a library beyond the C runtime: `libpam`, through `pam-client2` 0.5.5 (MPL-2.0, the
@@ -26,12 +27,13 @@ manager through `cupertino-login-ipc` (`models/`), and the manager runs the auth
 
 ## Running
 
-Feature `app` builds the binary: a CupertinoKit application on `cupertino-ui-wayland`'s window system, whose surface roles
-(`roles`, the binary's) make the lock windows `ext-session-lock-v1` lock surfaces and the greeter and consent windows
-layer-shell overlays. It needs the server's `ext_session_lock_manager_v1` and `ext_idle_notifier_v1` globals besides the
-toolkit's usual ones. The session runs on `cupertino_kit::app::run_lock_screen_on_with`, whose AT-SPI adapter is not muted
-while the session is locked (the lock screen is what a person hears then); the greeter on `run_on_with`. The server starts
-and restarts it through the `shell` key of its configuration:
+Feature `app` builds the binary and its two programs, each a Kit program of `cupertino-kit-shell` (`Program`): the lock
+screen (`lock_screen`) on `run_lock_screen`, whose lock windows are `Role::Lock` surfaces of `ext-session-lock-v1` and whose
+AT-SPI adapter is not muted while the session is locked (the lock screen is what a person hears then), its consent panel a
+layer-shell overlay; and the login screen (`greeter`, `--greeter`) on `run`, one layer-shell overlay per output. Nothing
+waits on the UI thread: the buses are Kit's connections the loop ticks and their signals futures of the loop, the session
+manager's socket is a future of the loop (`manager::Pump`), and PAM, the settings files, the status items, the wallpapers
+and the pictures run on Kit's pools. The server starts and restarts it through the `shell` key of its configuration:
 
 ```json
 {"shell": [{"name": "login", "command": ["cupertino-login"]}]}
@@ -49,7 +51,7 @@ cupertino-login --greeter
 | `--retries-until-hint N` | lock screen | 0 | `RetriesUntilHint`: failures until the password help shows. 0 shows it at 3. The greeter gets the setting from the session manager (`retries-until-hint` in `login.conf`). |
 | `--greeter` | | off | Run as the login screen of the session manager. Takes no other option: the accounts, the power items, the hint setting and the session command are the manager's (`/etc/cupertino/login.conf`, see `cupertino-sessiond`). |
 
-`XDG_SESSION_ID` names the logind session (else the process id, as in `cupertino-seat`). The greeter reads `CUPERTINO_LOGIN_SOCK`, the path of the manager's socket.
+`XDG_SESSION_ID` names the logind session (else logind's session of the process id). The greeter reads `CUPERTINO_LOGIN_SOCK`, the path of the manager's socket.
 
 ### What locks the session
 
@@ -64,13 +66,14 @@ Every trigger goes through the same request, which does nothing when the session
 | display sleep | The server's idle policy calls `Lock` once the display has slept for the password delay (`power.conf`, below). |
 | idle | With `--idle-timeout` only: `ext-idle-notify-v1`, which honours idle inhibitors. |
 
-**Who may send a signal.** A bus daemon hands a process every signal addressed to its unique name whatever its match rules say,
-and zbus filters a rule's sender only when it is a unique name (or the daemon's own name), so each signal is checked when it
-arrives (`cupertino_peer::signal`). logind's `Lock` is bound to logind's unique name (the reply to the session lookup). `PrepareForSleep`,
-and the session manager's `Unlock` count only from the connection that owns the sender's well-known name at that moment; a
-`NameOwnerChanged` (the manager coming and going) only from the bus daemon. Anything else is logged (`... not sent by ... was ignored`) and dropped: another user could otherwise unlock the
-screen or lock it (a forged `NameOwnerChanged` is also dropped by
-zbus's own filter; the check does not rely on it).
+**Who may send a signal.** A bus daemon hands a process every signal addressed to its unique name whatever its match rules
+say, so a rule naming a well-known name keeps nothing out. Each signal is read through a proxy whose destination is the
+sender's well-known name (`logind`, `login_manager`, `lock_notices`): the proxy follows the owner of that name and passes on
+only what that connection sent, so logind's `Lock` and `PrepareForSleep` count only from logind, the session manager's
+`Unlock` only from the owner of `org.cupertino.LoginManager1` (only root may own it), and a `NameOwnerChanged` (the manager
+coming and going) only from the bus daemon. Anything else is dropped: another user could otherwise unlock the screen or lock
+it. The session is announced to the manager (`SessionReady`) once both logind's requests and the manager's news are
+followed, so whatever either sends from then on is heard.
 
 **Idle lock.** The design locks when the display sleeps (request type 5) once the password
 delay has passed. The server owns that timing, since it knows the power source and the idle inhibitors: its idle policy dims,
@@ -130,8 +133,8 @@ Try again." under the field besides the shake, so a failure is never shown by mo
 
 The only way to `Unlocked` is `LockScreen::finish_auth` with `AuthOutcome::Success` for an attempt that `LockScreen::submit`
 handed out. `finish_auth` without an attempt in flight is an error. One attempt runs at a time: `submit` refuses while an
-attempt is being decided, so the rate of attempts is PAM's (its delay after a failure holds the answer back on the worker
-thread, and `pam_faillock` counts and locks out).
+attempt is being decided, so the rate of attempts is PAM's (its delay after a failure holds the answer back on Kit's I/O
+pool, and `pam_faillock` counts and locks out).
 
 **Keyboard and screen reader.** Each lock window is named "Locked", described by the user's name, and its password field
 has the focus from the start and again after each submission or Escape (a new field, keyed by `LockScreen::field`; the
@@ -153,9 +156,9 @@ that are not modal (below).
 While the session is locked the lock screen shows the notifications the notifications component (`notifications`, run by
 `cupertino-shell`) lists for it: its `org.cupertino.NotificationCenter1.LockScreenNotifications` on the session bus, read
 again at each `LockScreenChanged` signal (which carries nothing) and whenever the bus name changes owner
-(`lock_notices::watch`; no owner is an empty list). A `LockScreenChanged` counts only from the name's owner
-(`cupertino_peer::signal::from_owner`), and the signal readers never wait on the bus: a signal only asks a read thread
-for a read, at most one waiting, so a flood of signals cannot fill a stream and stop the connection. The name alone is not
+(`lock_notices::follow`; no owner is an empty list). A `LockScreenChanged` counts only from the name's owner (the proxy
+follows it), and a signal only asks for a read, which runs one at a time with at most one more waiting, so a flood of
+signals cannot pile reads up. The name alone is not
 trusted, as any process of the user can own it while the component is not running: `lock_notices::fetch` asks the bus for
 the name's owner and asks that connection only when the server resolves it to the component
 `lock_notices::NOTIFICATIONS_COMPONENT` (D20, per component and never by process relations or program paths:
@@ -178,7 +181,8 @@ stays the only control and keeps the focus.
 
 ### Authentication
 
-PAM service `cupertino-login`, file `/etc/pam.d/cupertino-login`. One PAM transaction per attempt runs on a worker thread:
+PAM service `cupertino-login`, file `/etc/pam.d/cupertino-login`. One PAM transaction per attempt runs on Kit's I/O pool
+(`auth::authenticate`, `auth::ATTEMPT_DEADLINE`), its notices and its outcome coming back to the loop in the order PAM gave them:
 `pam_authenticate`, then `pam_acct_mgmt`, so an expired or refused account does not unlock the screen. `AUTH_ERR` and `MAXTRIES`
 from the first are a wrong password. Any other failure is an error: the screen stays locked and shows the reason, never an unlock. Text from PAM
 modules (`PAM_TEXT_INFO`, `PAM_ERROR_MSG`: the `pam_faillock` lockout, a password about to expire) shows as the notice under the
@@ -221,7 +225,7 @@ count towards the account's `pam_faillock` limit, as for a login. `pam_unix` che
 `unix_chkpwd`, so the process needs no privilege. `pam_gnome_keyring` (skipped when it is not installed) runs only after the
 password stack accepted the password and unlocks the user's keyring with it when it is locked (see
 `cupertino-sessiond`'s README, "Secret Service"). A new drawing of this screen keeps passing the typed password to
-`Authenticator`: that is where the keyring is unlocked, not in the UI.
+`auth::authenticate`: that is where the keyring is unlocked, not in the UI.
 
 ## Login1
 
@@ -237,7 +241,8 @@ nothing happens. The session agent's panels, the power key and the session menu'
 
 The login screen shows each user's wallpaper behind that user, and the login screen's account cannot read the homes, so the
 lock screen leaves a copy (`login_wallpaper`): at the start of the session, and again whenever the compositor's settings file
-changes (`cupertino-defaults::watch`), on a thread of its own, it writes the wallpaper the session shows (a solid colour when
+changes (`cupertino_kit::task::follow_settings`), on Kit's I/O pool (`login_wallpaper::write_current`), it writes the
+wallpaper the session shows (a solid colour when
 `wallpaper_color` is set, else `wallpaper_dark` in a dark appearance when it is set, else `wallpaper`) as a JPEG to
 `~/.local/state/cupertino/login-wallpaper.jpg` (always under `$HOME`, where the session manager looks): a PNG or JPEG decoded
 (at most 8192 pixels a side), scaled down to at most 3840 pixels on its longer side with its proportions, a colour as a
@@ -261,8 +266,8 @@ The process never ends by itself: the server restarts it when it fails. It links
 connects to the manager's socket (`$CUPERTINO_LOGIN_SOCK`, `/run/cupertino-login/greeter.sock`, mode 0600, owned by the greeter
 account), greets it (`Hello`) and draws what the manager's `Welcome` says: the accounts of the picker with their full names and
 pictures, whether "Other…" follows, which power items show and the hint setting. The protocol and its caps are in
-`models/cupertino-login-ipc`. Pictures are PNG files: the manager reads `~/.face` (it does not decode) and the screen decodes it; a
-picture that is not a PNG is logged (`cupertino-login: the picture of "<login>": ...`) and the tile shows initials.
+`models/cupertino-login-ipc`. Pictures are PNG or JPEG files: the manager reads `~/.face` (it does not decode) and the screen decodes it (`kit::image`); a
+picture that does not decode is logged (`cupertino-login: the picture of "<login>": ...`) and the tile shows initials.
 
 The connection is tried once a second for 30 s when the process starts (the manager may be restarting); after that, and on a
 broken or refused connection, the process ends with failure and the server restarts it after 1 s. A half-typed password is lost
@@ -287,9 +292,9 @@ for "Other…") and keeps the password until the manager asks for it. The screen
 
 **Authentication hand-off.** The password leaves the screens at one place each, so work that adds to authentication (unlocking
 the Secret Service keyring with the login password, for example) hooks in there and nowhere in the views: in the greeter,
-`GreeterApp::answer` (`greeter.rs`) moves the password into the `Answer` for the manager's prompt, and everything after it is the
-session manager's PAM stack; on the lock screen, `auth::Authenticator::attempt` takes the `Password` that `LockScreen::submit`
-handed out and runs the PAM transaction on its worker thread (`auth.rs`). A PAM module in the `cupertino-login` service (or in
+the model's `answer` (`greeter/talk.rs`) moves the password into the `Answer` for the manager's prompt, and everything after
+it is the session manager's PAM stack; on the lock screen, the `Password` that `LockScreen::submit` handed out goes to
+`auth::authenticate` on Kit's I/O pool (`lock_screen.rs`, `auth.rs`). A PAM module in the `cupertino-login` service (or in
 the manager's service for the login) sees the password as PAM's authentication token, which is how a keyring module gets it;
 this crate unlocks no keyring itself.
 
@@ -379,7 +384,7 @@ network users).
 | Password field cleared | when the display goes to sleep or wakes, and when a lock is asked for while locked |
 | Wallpaper treatment | black 0.25 over it; then black 0.3 blended to keep the lighter, which changes no pixel and is not drawn; then a radial black 0.20 at the middle to none at the edge of a 1200 pt square centred on the screen. It comes in linearly over 0.25 s when a screen first shows (`wallpaper::DIM_FADE`) |
 | Picker and password screen | the switch between them takes 0.5 s, ease-in-out (`picker::SWITCH_DURATION`): the chosen tile's avatar moves between its row and the password screen's place at full opacity, the rest fades in; the clock, the status bar and the power item stay as they are (the same parts, not drawn again); a frame of the switch is drawn at each frame the compositor gives the screen and repaints only where the avatar and the block were and are; the lock screen's interface fades linearly over 0.25 s |
-| Status items | at the top right of both screens, in a bar as tall as the menu bar (33 pt), each 22 pt tall and centred in it, 14 pt apart, ending 20 pt from the trailing edge: from the trailing end the power item (login screen), the accessibility item (login screen), the battery, the Wi-Fi radio, the input source (`show-input-menu`) and the line about the machine (`host-info = hostname`, `version` or `ip`; login screen); text in the menu bar's 13 pt, white; glyphs our own; read every 10 s on a thread of their own (`status`, `view::widgets::StatusItem`) |
+| Status items | at the top right of both screens, in a bar as tall as the menu bar (33 pt), each 22 pt tall and centred in it, 14 pt apart, ending 20 pt from the trailing edge: from the trailing end the power item (login screen), the accessibility item (login screen), the battery, the Wi-Fi radio, the input source (`show-input-menu`) and the line about the machine (`host-info = hostname`, `version` or `ip`; login screen); text in the menu bar's 13 pt, white; glyphs our own; read on Kit's I/O pool at the start and whenever the radios, the power daemon or `keyboard.conf` change (`status`, `view::widgets::StatusItem`) |
 | Accessibility item | login screen: a menu of Increase Contrast, Reduce Transparency and Reduce Motion, each checked while on; they change the field's tint, make it opaque, and stop the shake and the switch's movement (`view::access_menu`) |
 | Hiding the user | `hide-user-avatar-and-name` in `login.conf` leaves out the avatar and the name on both screens |
 | Large clock | `large-clock = false` in `login.conf` leaves out the date and the large time on both screens |
@@ -395,7 +400,7 @@ network users).
 
 | Item | Value | Where |
 |---|---|---|
-| Wallpaper | The lock screen shows the session's wallpaper: the compositor settings' colour, else `wallpaper_dark` in the dark appearance and `wallpaper` otherwise, else the default picture of the assets. The login screen shows the selected user's copy, which the lock screen writes and the manager hands on as `UserRow.wallpaper` (`/var/lib/cupertino-login/wallpapers/<uid>.jpg`); it is read at most `MAX_WALLPAPER_BYTES` large, a file that does not decode falls back, and a new file (another inode, size or time) is read again. Without either, a drawn gradient (approximate). A picture is decoded once on a thread of its own, PNG or JPEG of at most 8192 pixels a side, scaled to cover the output and centred; the lock screen shows black until it is in, at most 0.5 s; the login screen shows nothing (the display stays black) until the first user's wallpaper is in, at most 1 s, and its decoding starts before its first frame (the first account, the one first selected; the manager does not say who logged in last). The screen's picture is made once per output size, scale and wallpaper and kept: a frame lays again only the 256 pt squares of it under what changed | `wallpaper`, `view::widgets::Ground` |
+| Wallpaper | The lock screen shows the session's wallpaper: the compositor settings' colour, else `wallpaper_dark` in the dark appearance and `wallpaper` otherwise, else the default picture of the assets. The login screen shows the selected user's copy, which the lock screen writes and the manager hands on as `UserRow.wallpaper` (`/var/lib/cupertino-login/wallpapers/<uid>.jpg`); it is read at most `MAX_WALLPAPER_BYTES` large, a file that does not decode falls back, and a new file (another inode, size or time) is read again. Without either, a drawn gradient (approximate). A picture is decoded once on Kit's I/O pool (`kit::image`), PNG or JPEG of at most 8192 pixels a side, scaled to cover the output and centred; the lock screen shows black until it is in, at most 0.5 s; the login screen shows nothing (the display stays black) until the first user's wallpaper is in, at most 1 s, and its decoding starts before its first frame (the first account, the one first selected; the manager does not say who logged in last). The screen's picture is made once per output size, scale and wallpaper and kept: a frame lays again only the 256 pt squares of it under what changed | `wallpaper`, `view::widgets::Ground` |
 | Password and name fields | Kit's chromeless `BareSecureField` (its text centred; while it is empty the caret stands just before the centred placeholder, approximate) and `BareField` in the capsule, 10 pt from its leading edge and clear of the 18 pt trailing slot; dots and caret white, the password's placeholder white 0.5 (the name field's in the secondary label colour). The screen's text and fields always take the dark appearance (`PaintCx::pin_appearance`), whatever the session's. | `view::screen`, `view::widgets::FieldFrame` |
 | Consent panel | An alert on regular glass: 260 pt wide, 26 pt corners, padding 22 pt above and 16 pt around, the icon 64 pt and the text 6 pt further in, the title Bold 13 and the message 13 pt 10 pt apart, Don't Allow and Allow as 28 pt capsules 8 pt apart. The surface is 260 x 520 pt, the alert centred in it. | `view::desktop_control`, `view::widgets::AlertBody` |
 | Initials, text | Grey fill, initials 0.4 of the avatar; white text of the theme's family. | `view::widgets::AVATAR_FILL`, `view::INITIALS_SIZE` |
@@ -430,18 +435,20 @@ network users).
 | `picker` | `Picker` (`new` takes the accounts and whether "Other…" shows; `NoTiles` when nothing is left), `Tile`, `Grid`, `cell_of`, `max_per_page`, `NameEntry` |
 | `view` | The Kit views: `screen` (lock and greeter password and name screens), `picker`, `power_menu`, `desktop_control`, `full_screen`; `Input`, the messages they send; `Typed`, a submitted password |
 | `spinner` | the spinner's frame, head spoke and spoke opacities |
-| `status` | `StatusItems`, `WifiState`, `BatteryState`, `signal_bars`, `input_label`, `os_version`, `host_text`; with feature `dbus`, `poll`: what the status items show |
+| `status` | `StatusItems`, `WifiState`, `BatteryState`, `signal_bars`, `input_label`, `os_version`, `host_text`; with feature `dbus`, `read` (on the I/O pool) and `follow` (the radios, the power daemon): what the status items show |
 | `user` | `User::current` (account, full name, picture), `User::from_row` (a row of the manager's list), `initials`, `format_time` |
-| `control` (feature `dbus`) | the `org.cupertino.Login1` interface (`serve`, `serve_unnamed`): `Lock` alone |
-| `logind` (feature `dbus`) | the session's `Lock` and `PrepareForSleep` signals and the sleep inhibitor |
-| `login_manager` (feature `dbus`) | the manager's `org.cupertino.LoginManager1`: `session_ready`, `watch_unlock` (the manager's unicast `Unlock`), `watch_owner` |
-| `login_wallpaper` | `choose` (the wallpaper the settings show), `render` (the JPEG for the login screen), `store`, `keep_current` (the writing thread) |
-| `lock_notices` | `Notice`, `from_rows`, `cap`, the cards' column and heights, `shown`, `more_text`; with feature `dbus`, `fetch`, `serves_lock_screen` and `watch`: the notifications the notifications component lists for the lock screen |
-| `auth` (feature `app`) | `Authenticator`: PAM on a worker thread |
-| `manager` (feature `app`) | `Connection`, `Message`: the greeter's connection to the session manager and the thread that reads its events |
+| `control` (feature `dbus`) | the `org.cupertino.Login1` interface (`serve`, on a connection of the loop; unnamed when another process owns the name): `Lock` alone |
+| `logind` (feature `dbus`) | `session`, `follow` (the session's `Lock` and `PrepareForSleep`) and `inhibit_sleep` |
+| `login_manager` (feature `dbus`) | the manager's `org.cupertino.LoginManager1`: `session_ready`, `follow` (its `Unlock` and its restarts) |
+| `login_wallpaper` | `choose` (the wallpaper the settings show), `render` (the JPEG for the login screen), `store`, `write_current` (one write, on the I/O pool) |
+| `lock_notices` | `Notice`, `from_rows`, `cap`, the cards' column and heights, `shown`, `more_text`; with feature `dbus`, `fetch`, `serves_lock_screen` and `follow`: the notifications the notifications component lists for the lock screen |
+| `auth` (feature `app`) | `authenticate`, `PasswordConversation`: one PAM transaction, for Kit's I/O pool |
+| `manager` (feature `app`) | `Connection`, `Pump`: the greeter's connection to the session manager, a future of its loop |
+| `lock_screen` (feature `app`) | `run`, `LockScreenProgram`: the lock screen of a user's session (`lock_screen/system.rs`: its buses; `lock_screen/consent.rs`: the consent panel) |
+| `greeter` (feature `app`) | `run`, `Greeter`: the login screen (`greeter/talk.rs`: the session manager's conversation and the input) |
+| `options` (feature `app`) | `Options`: the command line |
 
-The process (`main`, `options`, `screen`, `roles`, `app`, `greeter`) is the binary's: `roles` gives the Kit windows their
-Wayland roles and holds the session lock, `app` is the session (`SessionApp`), `greeter` the login screen (`GreeterApp`).
+The binary (`main`) parses the command line and runs one of the two programs.
 
 ## Checks by hand
 

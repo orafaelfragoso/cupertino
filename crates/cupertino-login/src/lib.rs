@@ -12,15 +12,16 @@
 //! * [`power`]: the greeter's power menu.
 //! * [`view`]: the screens and the consent panel as CupertinoKit draws them, and what the person does on them.
 //! * [`spinner`]: the frames and spoke opacities of the progress spinner.
-//! * [`status`]: what the status items at the top right of the lock and login screens show, read every few seconds.
+//! * [`status`]: what the status items at the top right of the lock and login screens show, read again whenever what they show changes.
 //! * [`user`]: the user's name and picture, and the clock text.
 //! * [`wallpaper`]: the picture the screens stand on, dimmed, made once per output, and the control material under the
 //!   field.
 //! * feature `dbus`: [`control`] (the `org.cupertino.Login1` bus interface, `Lock` alone), [`logind`] (the session's lock
 //!   request, suspend preparation and the sleep inhibitor) and [`login_manager`] (the session manager's
 //!   `org.cupertino.LoginManager1`: the session's announcement and the `Unlock` of a fast user switch).
-//! * feature `app`: [`auth`] (PAM), [`manager`] (the greeter's connection to the session manager) and the `cupertino-login`
-//!   process.
+//! * feature `app`: the two programs of the `cupertino-login` process on `cupertino-kit-shell`, [`lock_screen`] (a user's
+//!   session) and [`greeter`] (the login screen, `--greeter`), their command line ([`options`]), [`auth`] (PAM, on
+//!   Kit's I/O pool) and [`manager`] (the login screen's connection to the session manager, a future of its loop).
 //!
 //! Sizes, positions, the shake, the fades and the hide timer come from the analysis; the wallpaper source and the notice
 //! are approximate, each labelled where it is defined.
@@ -31,9 +32,13 @@
 pub mod auth;
 #[cfg(feature = "dbus")]
 pub mod control;
+#[cfg(feature = "app")]
+pub mod greeter;
 pub mod hint;
 pub mod layout;
 pub mod lock_notices;
+#[cfg(feature = "app")]
+pub mod lock_screen;
 #[cfg(feature = "dbus")]
 pub mod login_manager;
 pub mod login_wallpaper;
@@ -42,8 +47,12 @@ pub mod logind;
 #[cfg(feature = "app")]
 pub mod manager;
 pub mod model;
+#[cfg(feature = "app")]
+pub mod options;
 pub mod picker;
 pub mod power;
+#[cfg(feature = "app")]
+mod screen;
 pub mod spinner;
 pub mod status;
 pub mod user;

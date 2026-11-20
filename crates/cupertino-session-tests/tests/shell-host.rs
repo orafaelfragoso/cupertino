@@ -8,7 +8,7 @@
 //! - The menu bar and the dock take their roles on the server's own globals, at the versions it offers.
 //! - A host killed with its components leaves the menu bar's reserved space and picture held; the host the supervisor
 //!   starts again takes the bar over on the frame its new instance draws, the usable area never reflowing.
-//! - The overview claims a client's window for a hole of its surface in one transaction: claim and surface start
+//! - The overview claims a client's window for a hole of its surface in one transaction: claim and hole show
 //!   together, and the window then shows in the hole alone.
 //! - A privileged program's `capture::once` of the output returns its pixels.
 //! - The host bus's bridge carries publications between the shared host and a separate host (`--only dock`), both
@@ -32,13 +32,9 @@ use std::os::fd::IntoRawFd;
 
 use cupertino_kit::render::PixelFormat;
 use cupertino_server::host::{HostKind, Liveness};
-use smithay::utils::Rectangle;
 
-use components::{
-    bar_height, BAR_NAMESPACE, DOCK_NAMESPACE, HELLO_KEY, HELLO_NAMESPACE, HOLE_APP_ID,
-    HOLE_NAMESPACE, HOLE_SIZE,
-};
-use rig::{count, magenta, primary, Rig, OUTPUT_SIZE};
+use components::{bar_height, BAR_KEY, DOCK_SIZE, HELLO_KEY, HELLO_SIZE, HOLE_APP_ID, HOLE_SIZE};
+use rig::{count, magenta, primary, Area, Rig, OUTPUT_SIZE};
 
 /// The host itself, when the supervisor started this binary with [`host::MARK`]; a test run does nothing here.
 #[test]
@@ -48,19 +44,38 @@ fn host_program() {
     }
 }
 
-/// The share of a surface's pixels that must show its colour on the output: all but its antialiased edges.
-const COVERED: f64 = 0.9;
+/// How many pixels of the output a surface of `size` must cover with its colour to be shown.
+fn covering(size: cupertino_kit::geometry::Size) -> usize {
+    Area::new(0, 0, size.width as i32, size.height as i32).covered()
+}
 
-/// How many pixels a rectangle of `width` × `height` must show of a colour to be shown.
-fn covered(rect: Rectangle<i32, smithay::utils::Logical>) -> usize {
-    (f64::from(rect.size.w * rect.size.h) * COVERED) as usize
+/// The area the menu bar takes: the output's top, as tall as the theme's bar.
+fn bar_area() -> Area {
+    Area::new(0, 0, OUTPUT_SIZE.0, bar_height() as i32)
+}
+
+/// The first mapped window of the server, and its frame on the output.
+fn mapped(rig: &mut Rig) -> (cupertino_wm::WindowId, Area) {
+    rig.until("the window is mapped", |rig| {
+        rig.state.windows.iter().any(|w| w.mapped)
+    });
+    let id = rig.state.windows.iter().find(|w| w.mapped).unwrap().id;
+    let frame = rig.state.wm.window(id).unwrap().geometry();
+    let area = Area::new(
+        frame.x as i32,
+        frame.y as i32,
+        frame.w as i32,
+        frame.h as i32,
+    );
+    (id, area)
 }
 
 #[test]
 fn a_component_draws_its_view_persists_it_and_says_ready() {
     let mut rig = Rig::new("hello", &["osd"], &[]);
-    rig.until("the osd shows its window", |rig| {
-        rig.state.hosts.component_connected("osd") && rig.shown(HELLO_NAMESPACE)
+    let green = covering(HELLO_SIZE);
+    rig.until("the osd draws its window", |rig| {
+        rig.state.hosts.component_connected("osd") && rig.shows(Area::output(), primary(1), green)
     });
     assert_eq!(rig.state.hosts.component_instance("osd"), 1);
     let (width, height) = OUTPUT_SIZE;
@@ -69,11 +84,6 @@ fn a_component_draws_its_view_persists_it_and_says_ready() {
         rig.reported("osd holds "),
         "the first instance holds nothing"
     );
-    let area = rig.layer_geometry(HELLO_NAMESPACE);
-    rig.until("the view is drawn on the output", |rig| {
-        let image = rig.image();
-        count(&image, area, primary(1)) >= covered(area)
-    });
 
     // the server answers a restart once the new instance said it is ready; that instance takes the surface over
     let rx = rig.restart("osd");
@@ -81,17 +91,22 @@ fn a_component_draws_its_view_persists_it_and_says_ready() {
     assert_eq!(rig.state.hosts.component_instance("osd"), 2);
     rig.until_reported(&format!("osd holds {HELLO_KEY}"));
     rig.until("the new instance took the held surface over", |rig| {
-        rig.state.hosts.held_surfaces().is_empty() && rig.shown(HELLO_NAMESPACE)
+        rig.state.hosts.held_surfaces().is_empty()
     });
-    let image = rig.image();
-    assert!(count(&image, area, primary(1)) >= covered(area));
+    assert!(
+        rig.shows(Area::output(), primary(1), green),
+        "the new instance draws"
+    );
 }
 
 #[test]
 fn the_menu_bar_and_the_dock_take_their_roles_on_the_servers_globals() {
     let mut rig = Rig::new("roles", &["menubar", "dock"], &[]);
-    rig.until("the bar and the dock are shown", |rig| {
-        rig.shown(BAR_NAMESPACE) && rig.shown(DOCK_NAMESPACE)
+    let red = covering(DOCK_SIZE);
+    rig.until("the bar and the dock are drawn", |rig| {
+        let image = rig.image();
+        count(&image, bar_area(), primary(2)) >= bar_area().covered()
+            && count(&image, Area::output(), primary(0)) >= red
     });
     assert!(rig.reported("host started menubar") && rig.reported("host started dock"));
     assert!(
@@ -99,43 +114,30 @@ fn the_menu_bar_and_the_dock_take_their_roles_on_the_servers_globals() {
         "the server's globals are as new as the components need: {:?}",
         rig.lines()
     );
-    let bar = rig.layer(BAR_NAMESPACE).unwrap();
+    let output = rig.state.outputs[0].id;
     assert!(
-        rig.state.menu_bars.has_surface(bar.wl_surface()),
+        rig.state.menu_bars.has_bar(output),
         "the bar has the menu bar role"
     );
-    let dock = rig.layer(DOCK_NAMESPACE).unwrap();
     assert!(
-        rig.state.docks.has_surface(dock.wl_surface()),
+        rig.state.docks.has_dock(output),
         "the dock has the dock role"
     );
-    let output = rig.state.outputs[0].id;
     assert_eq!(
         rig.state.usable_area(output).y,
         bar_height(),
         "the bar's space is reserved"
     );
-
-    let bar_area = rig.layer_geometry(BAR_NAMESPACE);
-    let dock_area = rig.layer_geometry(DOCK_NAMESPACE);
-    assert_eq!(bar_area.size.w, OUTPUT_SIZE.0, "the bar spans the output");
-    rig.until("both are drawn", |rig| {
-        let image = rig.image();
-        count(&image, bar_area, primary(2)) >= covered(bar_area)
-            && count(&image, dock_area, primary(0)) >= covered(dock_area)
-    });
 }
 
 #[test]
 fn a_held_bar_keeps_its_space_and_picture_until_a_restarted_host_takes_it_over() {
     let mut rig = Rig::new("holds", &["menubar"], &[]);
-    rig.until("the bar is shown", |rig| rig.shown(BAR_NAMESPACE));
-    let output = rig.state.outputs[0].id;
-    let bar_area = rig.layer_geometry(BAR_NAMESPACE);
+    let blue = bar_area().covered();
     rig.until("the bar is drawn", |rig| {
-        let image = rig.image();
-        count(&image, bar_area, primary(2)) >= covered(bar_area)
+        rig.shows(bar_area(), primary(2), blue)
     });
+    let output = rig.state.outputs[0].id;
     let first = rig
         .host_pid(HostKind::Shared)
         .expect("the shared host runs");
@@ -148,18 +150,8 @@ fn a_held_bar_keeps_its_space_and_picture_until_a_restarted_host_takes_it_over()
             .hosts
             .held_surfaces()
             .iter()
-            .any(|h| h.component == "menubar" && h.key == BAR_KEY_STR)
+            .any(|h| h.component == "menubar" && h.key == BAR_KEY && h.picture.is_some())
     });
-    let held = &rig.state.hosts.held_surfaces()[0];
-    assert!(
-        held.picture.is_some(),
-        "the hold keeps the bar's last picture"
-    );
-    let image = rig.image();
-    assert!(
-        count(&image, bar_area, primary(2)) >= covered(bar_area),
-        "the held picture shows"
-    );
 
     // the supervisor starts the host again; its menu bar takes the hold over on its first frame
     rig.until("the new instance took the bar over", |rig| {
@@ -168,24 +160,20 @@ fn a_held_bar_keeps_its_space_and_picture_until_a_restarted_host_takes_it_over()
             bar_height(),
             "the bar's space stays reserved"
         );
-        let held = !rig.state.hosts.held_surfaces().is_empty();
         assert!(
-            held || rig.shown(BAR_NAMESPACE),
-            "on every turn the bar is held or shown"
+            rig.shows(bar_area(), primary(2), blue),
+            "on every turn the bar shows, held or drawn anew"
         );
-        !held && rig.state.hosts.component_instance("menubar") == 2
+        rig.state.hosts.held_surfaces().is_empty()
+            && rig.state.hosts.component_instance("menubar") == 2
     });
     let second = rig
         .host_pid(HostKind::Shared)
         .expect("the shared host runs again");
     assert_ne!(first, second, "a new host process");
-    assert!(rig.reported(&format!("menubar holds {BAR_KEY_STR}")));
-    let image = rig.image();
-    assert!(count(&image, bar_area, primary(2)) >= covered(bar_area));
+    assert!(rig.reported(&format!("menubar holds {BAR_KEY}")));
+    assert!(rig.state.menu_bars.has_bar(output));
 }
-
-/// [`components::BAR_KEY`], as the server names a hold.
-const BAR_KEY_STR: &str = components::BAR_KEY;
 
 #[test]
 fn a_transaction_shows_a_hole_claiming_a_window_on_one_frame() {
@@ -195,41 +183,25 @@ fn a_transaction_shows_a_hole_claiming_a_window_on_one_frame() {
     });
     let client = rig.client();
     app::spawn(client, HOLE_APP_ID);
-    rig.until("the window is mapped", |rig| {
-        rig.state.windows.iter().any(|w| w.mapped)
-    });
-    let id = rig.state.windows.iter().find(|w| w.mapped).unwrap().id;
-    let frame = rig.state.wm.window(id).unwrap().geometry();
-    let own = Rectangle::new(
-        (frame.x as i32, frame.y as i32).into(),
-        (frame.w as i32, frame.h as i32).into(),
-    );
-    let hole = Rectangle::new(
-        (0, 0).into(),
-        (HOLE_SIZE.width as i32, HOLE_SIZE.height as i32).into(),
-    );
+    let (id, own) = mapped(&mut rig);
+    let hole = Area::new(0, 0, HOLE_SIZE.width as i32, HOLE_SIZE.height as i32);
     assert!(
-        own.intersection(hole).is_none(),
+        !own.meets(hole),
         "the window {own:?} lies apart from the hole"
     );
-    rig.until("the window is drawn at its frame", |rig| {
-        let image = rig.image();
-        count(&image, own, magenta) > covered(own)
-    });
 
+    // the window shows in the hole on the frame the claim starts on, never before and never after without it
     rig.until("the transaction started", |rig| {
         let claimed = rig.state.transactions.is_window_claimed(id);
-        let shown = rig.shown(HOLE_NAMESPACE);
-        assert_eq!(
-            claimed, shown,
-            "the claim and the hole's surface start together"
-        );
+        let image = rig.image();
+        let in_hole = count(&image, hole, magenta) > 0;
+        assert_eq!(claimed, in_hole, "the claim and the hole show together");
         rig.reported("overview started") && claimed
     });
     assert!(rig.reported(&format!("overview claims {}", id.0)));
     rig.until("the window shows in its hole alone", |rig| {
         let image = rig.image();
-        count(&image, own, magenta) == 0 && count(&image, hole, magenta) > covered(own)
+        count(&image, own, magenta) == 0 && count(&image, hole, magenta) > own.covered()
     });
 }
 
@@ -238,18 +210,9 @@ fn capture_once_of_an_output_returns_its_pixels() {
     let mut rig = Rig::new("capture", &[], &[]);
     let client = rig.client();
     app::spawn(client, "org.cupertino.test.captured");
-    rig.until("the window is mapped", |rig| {
-        rig.state.windows.iter().any(|w| w.mapped)
-    });
-    let id = rig.state.windows.iter().find(|w| w.mapped).unwrap().id;
-    let frame = rig.state.wm.window(id).unwrap().geometry();
+    let (_, own) = mapped(&mut rig);
     rig.until("the window is drawn", |rig| {
-        let own = Rectangle::new(
-            (frame.x as i32, frame.y as i32).into(),
-            (frame.w as i32, frame.h as i32).into(),
-        );
-        let image = rig.image();
-        count(&image, own, magenta) > covered(own)
+        rig.shows(own, magenta, own.covered())
     });
 
     // the program runs on a connection with the capture role, as the server starts `cupertino-screenshot`
@@ -274,21 +237,18 @@ fn capture_once_of_an_output_returns_its_pixels() {
         image.format,
         PixelFormat::Rgba8 | PixelFormat::Rgba8Premultiplied
     ));
-    let at = |x: u32, y: u32| {
+    let taken = image::RgbaImage::from_fn(image.width, image.height, |x, y| {
         let i = (y * image.stride + x * 4) as usize;
-        [image.pixels[i], image.pixels[i + 1], image.pixels[i + 2]]
-    };
-    let (x0, y0) = (frame.x.max(0.0) as u32, frame.y.max(0.0) as u32);
-    let mut shown = 0;
-    for y in y0..y0 + frame.h as u32 {
-        for x in x0..x0 + frame.w as u32 {
-            if magenta(at(x, y)) {
-                shown += 1;
-            }
-        }
-    }
+        image::Rgba([
+            image.pixels[i],
+            image.pixels[i + 1],
+            image.pixels[i + 2],
+            255,
+        ])
+    });
+    let shown = count(&taken, own, magenta);
     assert!(
-        shown as f64 > frame.w * frame.h * COVERED,
+        shown >= own.covered(),
         "the frame shows the window: {shown} pixels"
     );
 }

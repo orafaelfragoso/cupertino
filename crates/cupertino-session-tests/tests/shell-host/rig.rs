@@ -1,22 +1,20 @@
 //! The server side of the tests: the real compositor, headless, drawing one offscreen output with the software
-//! rasteriser, whose supervisor starts this test binary as its host program ([`super::host::MARK`]).
+//! rasteriser, whose supervisor starts this test binary as its host program ([`super::host::MARK`]). The tests read
+//! the server's own state and the output's pixels; Smithay stays behind the server ([`cupertino-layers`]).
 
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+use calloop::EventLoop;
 use cupertino_assets::Assets;
 use cupertino_server::backend::headless;
 use cupertino_server::host::{HostKind, HostView};
 use cupertino_server::state::{insert_client, ClientState};
 use cupertino_server::supervisor::{HostProgram, ProcessInfo, RestartError};
 use cupertino_server::{Config, Cupertino};
-use smithay::backend::renderer::utils::with_renderer_surface_state;
-use smithay::desktop::{layer_map_for_output, LayerSurface};
-use smithay::reexports::calloop::EventLoop;
-use smithay::reexports::wayland_server::Display;
-use smithay::utils::{Logical, Rectangle};
+use wayland_server::Display;
 
 use super::host::MARK;
 
@@ -29,6 +27,42 @@ const WAIT: Duration = Duration::from_secs(60);
 
 /// How long one turn of the server's loop waits for an event at most.
 const TURN: Duration = Duration::from_millis(5);
+
+/// The share of an area's pixels that must show a colour for the area to show it: all but antialiased edges.
+const COVERED: f64 = 0.9;
+
+/// A rectangle of the output, in pixels (points at scale 1).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Area {
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+}
+
+impl Area {
+    pub const fn new(x: i32, y: i32, w: i32, h: i32) -> Self {
+        Self { x, y, w, h }
+    }
+
+    /// The whole output.
+    pub const fn output() -> Self {
+        Self::new(0, 0, OUTPUT_SIZE.0, OUTPUT_SIZE.1)
+    }
+
+    /// How many of its pixels must show a colour for the area to show it ([`COVERED`]).
+    pub fn covered(&self) -> usize {
+        (f64::from(self.w * self.h) * COVERED) as usize
+    }
+
+    /// Whether the area and `other` share a pixel.
+    pub fn meets(&self, other: Area) -> bool {
+        self.x < other.x + other.w
+            && other.x < self.x + self.w
+            && self.y < other.y + other.h
+            && other.y < self.y + self.h
+    }
+}
 
 /// The server, and the report its hosts write to.
 pub struct Rig {
@@ -87,7 +121,7 @@ impl Rig {
         headless::step(&mut self.state, &mut self.event_loop, TURN).expect("the loop turns");
     }
 
-    /// Turn until `done` holds, checking `each` after every turn.
+    /// Turn until `done` holds, which is asked before every turn.
     pub fn until(&mut self, what: &str, mut done: impl FnMut(&mut Self) -> bool) {
         let deadline = Instant::now() + WAIT;
         while !done(self) {
@@ -133,28 +167,6 @@ impl Rig {
         self.host(kind).filter(|h| h.bound).and_then(|h| h.pid)
     }
 
-    /// The layer surface of `namespace` on the output.
-    pub fn layer(&self, namespace: &str) -> Option<LayerSurface> {
-        let map = layer_map_for_output(&self.state.outputs[0].output);
-        let layer = map.layers().find(|l| l.namespace() == namespace).cloned();
-        layer
-    }
-
-    /// Whether the layer surface of `namespace` shows a buffer.
-    pub fn shown(&self, namespace: &str) -> bool {
-        self.layer(namespace).is_some_and(|layer| {
-            with_renderer_surface_state(layer.wl_surface(), |s| s.buffer().is_some())
-                .unwrap_or(false)
-        })
-    }
-
-    /// Where the layer surface of `namespace` lies on the output.
-    pub fn layer_geometry(&self, namespace: &str) -> Rectangle<i32, Logical> {
-        let layer = self.layer(namespace).expect("the layer surface");
-        let map = layer_map_for_output(&self.state.outputs[0].output);
-        map.layer_geometry(&layer).expect("a mapped layer")
-    }
-
     /// The output as it shows now, without the pointer.
     pub fn image(&mut self) -> image::RgbaImage {
         let mut backend = self.state.backend.take().unwrap();
@@ -164,6 +176,11 @@ impl Rig {
             .unwrap();
         self.state.backend = Some(backend);
         image
+    }
+
+    /// Whether `area` of the output shows a colour that passes `test` over at least `pixels` of its pixels.
+    pub fn shows(&mut self, area: Area, test: impl Fn([u8; 3]) -> bool, pixels: usize) -> bool {
+        count(&self.image(), area, test) >= pixels
     }
 
     /// A connection of an ordinary client.
@@ -202,16 +219,12 @@ impl Rig {
     }
 }
 
-/// How many pixels of `image` in `rect` pass `test` (on red, green, blue).
-pub fn count(
-    image: &image::RgbaImage,
-    rect: Rectangle<i32, Logical>,
-    test: impl Fn([u8; 3]) -> bool,
-) -> usize {
-    let (x0, y0) = (rect.loc.x.max(0) as u32, rect.loc.y.max(0) as u32);
+/// How many pixels of `image` in `area` pass `test` (on red, green, blue).
+pub fn count(image: &image::RgbaImage, area: Area, test: impl Fn([u8; 3]) -> bool) -> usize {
+    let (x0, y0) = (area.x.max(0) as u32, area.y.max(0) as u32);
     let (x1, y1) = (
-        ((rect.loc.x + rect.size.w).max(0) as u32).min(image.width()),
-        ((rect.loc.y + rect.size.h).max(0) as u32).min(image.height()),
+        ((area.x + area.w).max(0) as u32).min(image.width()),
+        ((area.y + area.h).max(0) as u32).min(image.height()),
     );
     let mut n = 0;
     for y in y0..y1 {

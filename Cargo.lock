@@ -1722,16 +1722,18 @@ dependencies = [
 name = "cupertino-session-tests"
 version = "0.1.0"
 dependencies = [
+ "calloop 0.14.5",
  "cupertino-assets",
  "cupertino-kit",
  "cupertino-kit-shell",
  "cupertino-server",
  "cupertino-ui-render",
+ "cupertino-wm",
  "image",
  "rustix 1.1.6",
- "smithay",
  "wayland-client",
  "wayland-protocols",
+ "wayland-server",
 ]
 
 [[package]]

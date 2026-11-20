@@ -6,7 +6,9 @@
 //! windows as their live content scaled into the thumbnail rectangle (the overview's path, no
 //! capture), keeps strip and hidden windows out of hit testing and reports presses on strip
 //! thumbnails. A window manager that goes away (the process
-//! died) takes its placements with it: every window is drawn and hit at its own frame again at once.
+//! died) takes its placements with it: every window is drawn and hit at its own frame again at once. A shell
+//! component's window manager whose persistent surface is held keeps them held instead (D19): until a new instance
+//! takes the hold over, its placement commits are kept, and `ready` or the hold timeout ends the held placements.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -28,6 +30,7 @@ use smithay::utils::{Logical, Point};
 use smithay::wayland::shell::wlr_layer::Layer;
 
 use crate::authorization::{authorized, refuse, require, role, Permit, ShellRole};
+use crate::host::{ComponentConnection, WmPlacementHold};
 use crate::menu_bar::cut_text;
 use crate::state::{Cupertino, WindowEntry};
 
@@ -107,6 +110,9 @@ struct Manager {
     /// `None` until the first group.
     sent: Option<Feed>,
     pending: BTreeMap<u32, Target>,
+    /// Placements this manager committed while the output's placements were held for the instance before (D19):
+    /// applied in its takeover frame, or when the hold ends.
+    deferred: Option<BTreeMap<u32, Target>>,
 }
 
 /// The window managers (at most one per output) and the placements they committed.
@@ -302,6 +308,8 @@ impl WindowManagers {
 /// Per-object data: `None` for an object the server rejected with a protocol error; it stays inert.
 pub struct WindowManagerData {
     output: Option<OutputId>,
+    /// The shell component whose connection made the object, if any: its placements can outlive the object (D19).
+    component: Option<ComponentConnection>,
 }
 
 fn whole(r: Rect) -> (i32, i32, i32, i32) {
@@ -380,7 +388,13 @@ impl Cupertino {
         init: &mut DataInit<'_, Self>,
     ) {
         if permit.is_none() {
-            init.init(id, WindowManagerData { output: None });
+            init.init(
+                id,
+                WindowManagerData {
+                    output: None,
+                    component: None,
+                },
+            );
             refuse(shell, ShellRole::WindowManager);
             return;
         }
@@ -394,17 +408,34 @@ impl Cupertino {
             Some(_) => None,
         };
         if let Some(reason) = rejection {
-            init.init(id, WindowManagerData { output: None });
+            init.init(
+                id,
+                WindowManagerData {
+                    output: None,
+                    component: None,
+                },
+            );
             shell.post_error(ShellError::Role, reason);
             return;
         }
         let out = target.expect("a rejected output returned above");
-        let resource = init.init(id, WindowManagerData { output: Some(out) });
+        let component = shell.client().and_then(|c| {
+            c.get_data::<crate::state::ClientState>()
+                .and_then(|s| s.component)
+        });
+        let resource = init.init(
+            id,
+            WindowManagerData {
+                output: Some(out),
+                component,
+            },
+        );
         self.window_managers.managers.push(Manager {
             resource,
             output: out,
             sent: None,
             pending: BTreeMap::new(),
+            deferred: None,
         });
         self.refresh_window_managers();
     }
@@ -494,9 +525,11 @@ impl Cupertino {
         self.window_managers.tick(now);
     }
 
-    /// `commit`: retarget every window whose pending placement differs from its current one.
+    /// `commit`: retarget every window whose pending placement differs from its current one. While the output's
+    /// placements are held for the instance before (D19) the commit is kept for the takeover frame; the first commit
+    /// after a takeover that brought none replaces the held placements.
     pub(crate) fn commit_placements(&mut self, output: OutputId) {
-        let now = self.now();
+        let hold = self.hosts.wm_placement_hold(output);
         let Some(m) = self
             .window_managers
             .managers
@@ -506,12 +539,58 @@ impl Cupertino {
             return;
         };
         let pending = std::mem::take(&mut m.pending);
-        let arranged = m
-            .sent
-            .as_ref()
+        match hold {
+            Some(WmPlacementHold::Held) => {
+                m.deferred.get_or_insert_with(BTreeMap::new).extend(pending);
+            }
+            Some(WmPlacementHold::AwaitingCommit) => {
+                self.hosts.set_wm_placement_hold(output, None);
+                self.apply_placements(output, pending, true);
+            }
+            None => self.apply_placements(output, pending, false),
+        }
+    }
+
+    /// Retarget the windows of `output` to `targets`. With `replace`, every other placed window of the output heads
+    /// back to its own frame along the return motion: the placements of an instance before give way.
+    fn apply_placements(
+        &mut self,
+        output: OutputId,
+        targets: BTreeMap<u32, Target>,
+        replace: bool,
+    ) {
+        let now = self.now();
+        let arranged = self
+            .window_managers
+            .of_output(output)
+            .and_then(|m| m.sent.as_ref())
             .map(|f| f.windows.keys().copied().collect::<Vec<u32>>())
             .unwrap_or_default();
-        for (id, target) in pending {
+        if replace {
+            let returning: Vec<WindowId> = self
+                .window_managers
+                .placed
+                .iter()
+                .filter(|(id, p)| {
+                    p.output == output
+                        && p.target != Target::Stage
+                        && !targets.contains_key(&(id.0 as u32))
+                })
+                .map(|(id, _)| *id)
+                .collect();
+            for window in returning {
+                match self.entry(window).and_then(|e| self.natural_rect(e, now)) {
+                    Some(natural) => {
+                        self.window_managers
+                            .retarget(window, output, Target::Stage, natural, now);
+                    }
+                    None => {
+                        self.window_managers.placed.remove(&window);
+                    }
+                }
+            }
+        }
+        for (id, target) in targets {
             // a window that left the set since the client decided: it may have just closed
             if !arranged.contains(&id) {
                 continue;
@@ -534,6 +613,46 @@ impl Cupertino {
             }
         }
         self.request_redraw();
+    }
+
+    /// The takeover frame of a window manager's held surface on `output` (D19): the placements the new instance
+    /// committed replace the held ones; with none committed yet the held ones stay until its first `commit`.
+    pub(crate) fn take_over_wm_placements(&mut self, output: OutputId) {
+        if self.hosts.wm_placement_hold(output) != Some(WmPlacementHold::Held) {
+            return;
+        }
+        let deferred = self
+            .window_managers
+            .managers
+            .iter_mut()
+            .find(|m| m.output == output)
+            .and_then(|m| m.deferred.take());
+        match deferred {
+            Some(targets) => {
+                self.hosts.set_wm_placement_hold(output, None);
+                self.apply_placements(output, targets, true);
+            }
+            None => self
+                .hosts
+                .set_wm_placement_hold(output, Some(WmPlacementHold::AwaitingCommit)),
+        }
+    }
+
+    /// End the placements held on `output` (`ready`, the hold timeout, the component stopped): each window returns to
+    /// its frame along the return motion, and what a new instance committed meanwhile applies.
+    pub(crate) fn end_held_wm_placements(&mut self, output: OutputId) {
+        if self.hosts.wm_placement_hold(output).is_none() {
+            return;
+        }
+        self.hosts.set_wm_placement_hold(output, None);
+        let deferred = self
+            .window_managers
+            .managers
+            .iter_mut()
+            .find(|m| m.output == output)
+            .and_then(|m| m.deferred.take())
+            .unwrap_or_default();
+        self.apply_placements(output, deferred, true);
     }
 
     /// A left press at `pos` on a strip thumbnail with nothing above it: tell the window manager
@@ -679,33 +798,34 @@ impl Dispatch<CupertinoWindowManagerV1, WindowManagerData> for Cupertino {
         }
     }
 
-    /// The role ends with the object; when a component window manager disconnects with active holds,
-    /// keep its placements held until the replacement takes over or holds end (W5.5).
+    /// The role ends with the object. When a shell component's connection ends while it persists a surface on the
+    /// output (or a hold of it lasts there), its placements stay held until a new instance takes them over or the holds
+    /// end (D19), whichever of the layer surface and this object ends first. A role the client let go of (`destroy`)
+    /// took its placements already.
     fn destroyed(
         state: &mut Self,
-        _: ClientId,
+        client: ClientId,
         resource: &CupertinoWindowManagerV1,
         data: &WindowManagerData,
     ) {
         let Some(output) = data.output else { return };
-        let keep_for_hold = resource
-            .client()
-            .and_then(|c| {
-                c.get_data::<crate::state::ClientState>()
-                    .and_then(|s| s.component)
-            })
-            .is_some_and(|c| {
-                state
-                    .hosts
-                    .held_surfaces()
-                    .iter()
-                    .any(|h| h.component == c.name)
+        let live = state
+            .window_managers
+            .managers
+            .iter()
+            .any(|m| &m.resource == resource);
+        let keep_for_hold = live
+            && data.component.is_some_and(|c| {
+                !state.hosts.component_gave_up(c.name)
+                    && state.hosts.component_persists_on(c.name, &client, output)
             });
         state
             .window_managers
             .managers
             .retain(|m| &m.resource != resource);
-        if !keep_for_hold {
+        if keep_for_hold {
+            state.hosts.hold_wm_placements(output);
+        } else if live {
             state
                 .window_managers
                 .placed

@@ -82,6 +82,7 @@ impl CompositorHandler for Cupertino {
     }
 
     fn new_surface(&mut self, surface: &WlSurface) {
+        self.host_surface_created(surface);
         add_pre_commit_hook::<Self, _>(surface, |state, _dh, surface| {
             let dmabuf = with_states(surface, |data| {
                 data.cached_state

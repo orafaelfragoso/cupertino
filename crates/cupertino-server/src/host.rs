@@ -3,9 +3,9 @@
 //! D16/D17 liveness and failure restart tracking, and D19 persistent surface holds.
 
 use std::collections::{HashMap, HashSet};
-use std::io::Read;
 use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::net::UnixStream;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use cupertino_peer::{Caller, Denial, ProcessHandle};
@@ -198,15 +198,37 @@ struct PersistedSurface {
     output: OutputId,
     /// True once the surface has committed its first buffer (`error::mapped` if persisted again).
     mapped: bool,
-    /// Last captured shm pixel buffer for hold display if the connection drops.
+    /// The picture taken as its `wl_surface` went, when that came before the end of its layer role.
     last_picture: Option<HeldPicture>,
 }
 
-/// Retained CPU pixel buffer of a held persistent surface.
+/// The last picture of a held persistent surface (D19), taken once as its hold starts.
 #[derive(Clone)]
-pub struct HeldPicture {
-    pub buffer: MemoryRenderBuffer,
-    pub size: (i32, i32),
+pub enum HeldPicture {
+    /// The surface tree drawn by the renderer into a texture it keeps, whatever kind of buffer the surface showed
+    /// (shm, dmabuf); the texture lives as long as the hold.
+    Texture {
+        snapshot: Rc<crate::render::snapshots::SnapshotOwner>,
+        /// Logical size the texture covers.
+        size: (i32, i32),
+    },
+    /// The pixels of the surface's shm buffer, copied when there is no renderer to draw it with.
+    Memory {
+        buffer: MemoryRenderBuffer,
+        /// Buffer size in pixels.
+        size: (i32, i32),
+    },
+}
+
+/// How far a restarted window manager has come in taking over the placements held on an output (D19).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WmPlacementHold {
+    /// The placements of the instance before stay in force; the new instance's placement commits for the output are
+    /// kept, not applied, until its takeover frame.
+    Held,
+    /// A surface of an instance that had committed no placement took the hold over: the held placements stay in force
+    /// until its first `commit`.
+    AwaitingCommit,
 }
 
 /// A persistent surface held after its component connection ended (D19).
@@ -238,8 +260,11 @@ struct HostEntry {
     connect_pending: HashSet<&'static str>,
     /// When the host sent `request_restart` (waiting for a quiet moment on a shared host).
     restart_requested_at: Option<Instant>,
-    /// If the server expects this host to exit, the deadline after which it is killed via pidfd.
+    /// If the server expects this host to exit, the deadline after which it is killed via pidfd. It stays set once
+    /// the deadline passed, so the exit is still an expected one.
     expected_exit_kill_at: Option<Instant>,
+    /// The server sent the expected-exit host `SIGKILL` after its grace.
+    kill_sent: bool,
     /// Process handle (for pidfd kill and `ShellHosts` reporting), if external.
     process: Option<ProcessHandle>,
     /// Cached start ticks of `process` for `ShellHosts`.
@@ -301,7 +326,7 @@ pub struct HostManager {
     /// Currently held persistent surfaces across all components and outputs.
     holds: Vec<HeldSurface>,
     /// Outputs whose window-manager placements are currently held across a WM component restart.
-    held_wm_outputs: HashSet<OutputId>,
+    held_wm_outputs: HashMap<OutputId, WmPlacementHold>,
     /// Shared-host unexpected crash timestamps (3 within 60s isolates all components).
     shared_host_crashes: Vec<Instant>,
     /// Once 3 shared-host crashes occur within 60s, every component runs in a separate host.
@@ -331,7 +356,7 @@ impl HostManager {
             components,
             persisted: HashMap::new(),
             holds: Vec::new(),
-            held_wm_outputs: HashSet::new(),
+            held_wm_outputs: HashMap::new(),
             shared_host_crashes: Vec::new(),
             all_separate_for_session: false,
             last_input_at: Instant::now(),
@@ -427,12 +452,46 @@ impl HostManager {
 
     /// Whether window-manager placements are currently held on `output`.
     pub fn wm_placements_held(&self, output: OutputId) -> bool {
-        self.held_wm_outputs.contains(&output)
+        self.held_wm_outputs.contains_key(&output)
     }
 
-    /// Clear held window-manager placements on `output` once the new WM commits placements or finishes takeover.
-    pub fn clear_held_wm_placements(&mut self, output: OutputId) {
-        self.held_wm_outputs.remove(&output);
+    /// The state of the window-manager placements held on `output`, if any.
+    pub fn wm_placement_hold(&self, output: OutputId) -> Option<WmPlacementHold> {
+        self.held_wm_outputs.get(&output).copied()
+    }
+
+    /// Hold the window-manager placements of `output` until a new instance takes them over or the holds end.
+    pub(crate) fn hold_wm_placements(&mut self, output: OutputId) {
+        self.held_wm_outputs.insert(output, WmPlacementHold::Held);
+    }
+
+    /// Move the held placements of `output` to `state`, or end the hold with `None`.
+    pub(crate) fn set_wm_placement_hold(
+        &mut self,
+        output: OutputId,
+        state: Option<WmPlacementHold>,
+    ) {
+        match state {
+            Some(s) => self.held_wm_outputs.insert(output, s),
+            None => self.held_wm_outputs.remove(&output),
+        };
+    }
+
+    /// Whether the component connection `client` of `component` has a persistent surface on `output`, or a hold of
+    /// `component` lasts there: what a role it loses keeps held with it.
+    pub fn component_persists_on(
+        &self,
+        component: &str,
+        client: &ClientId,
+        output: OutputId,
+    ) -> bool {
+        self.persisted
+            .values()
+            .any(|p| &p.client_id == client && p.output == output)
+            || self
+                .holds
+                .iter()
+                .any(|h| h.component == component && h.output == output)
     }
 
     /// Non-exclusive area left on `output` (`output_rect` in global logical coordinates) after subtracting the
@@ -476,7 +535,7 @@ impl HostManager {
         Some(Rect::new(output_rect.x + left, output_rect.y + top, w, h))
     }
 
-    /// Snapshot the current shm pixel contents of `surface` if accessible, so a held surface keeps its last picture.
+    /// Copy the current shm pixel contents of `surface` if accessible: a held surface's picture without a renderer.
     fn capture_shm_picture(surface: &WlSurface) -> Option<HeldPicture> {
         let buffer = with_states(surface, |states| {
             let from_renderer = states
@@ -532,7 +591,7 @@ impl HostManager {
                 Transform::Normal,
                 None,
             );
-            Some(HeldPicture {
+            Some(HeldPicture::Memory {
                 buffer: mem_buf,
                 size: (w, h),
             })
@@ -541,23 +600,27 @@ impl HostManager {
     }
 }
 
-/// Generate a 128-bit cryptographically random nonce formatted as 32 lowercase hexadecimal characters.
-fn generate_nonce() -> String {
+/// Generate a 128-bit cryptographically random nonce formatted as 32 lowercase hexadecimal characters, from the
+/// kernel's random source; `None` when that fails, so no guessable nonce is ever handed out.
+fn generate_nonce() -> Option<String> {
     let mut bytes = [0u8; 16];
-    let ok = std::fs::File::open("/dev/urandom")
-        .and_then(|mut f| f.read_exact(&mut bytes))
-        .is_ok();
-    if !ok {
-        // Fallback mixing monotonic clock and process id if /dev/urandom is unavailable.
-        let t = Instant::now().elapsed().as_nanos() ^ u128::from(std::process::id());
-        bytes = t.to_le_bytes();
+    let mut filled = 0;
+    while filled < bytes.len() {
+        match rustix::rand::getrandom(&mut bytes[filled..], rustix::rand::GetRandomFlags::empty()) {
+            Ok(n) => filled += n,
+            Err(rustix::io::Errno::INTR) => {}
+            Err(e) => {
+                tracing::warn!(error = %e, "the kernel's random source failed: no bus identity nonce");
+                return None;
+            }
+        }
     }
     let mut out = String::with_capacity(32);
     for b in bytes {
         use std::fmt::Write;
         let _ = write!(&mut out, "{b:02x}");
     }
-    out
+    Some(out)
 }
 
 /// Create a close-on-exec Unix stream socket pair for the host bus bridge.
@@ -574,3 +637,4 @@ fn backoff_for(consecutive_failures: u32) -> Duration {
 }
 
 mod dispatch;
+mod picture;

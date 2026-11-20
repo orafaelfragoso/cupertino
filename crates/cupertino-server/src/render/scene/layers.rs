@@ -606,18 +606,23 @@ pub(super) fn layer_elements(
     }
     // Held persistent surfaces whose component connection ended keep their last picture until takeover or ready (D19).
     for hold in p.hosts.held_surfaces_on(p.output_id, layer) {
-        let Some(pic) = &hold.picture else {
-            continue;
+        let (buffer, size) = match &hold.picture {
+            Some(crate::host::HeldPicture::Memory { buffer, size }) => (buffer, *size),
+            Some(crate::host::HeldPicture::Texture { snapshot, .. }) => {
+                out.extend(held_texture_piece(p, snapshot, hold.geometry));
+                continue;
+            }
+            None => continue,
         };
         let src = smithay::utils::Rectangle::<f64, Logical>::from_size(
-            (f64::from(pic.size.0), f64::from(pic.size.1)).into(),
+            (f64::from(size.0), f64::from(size.1)).into(),
         );
         out.push(Piece::Image(Picture {
-            buffer: pic.buffer.clone().into(),
+            buffer: buffer.clone().into(),
             kind: SceneKind::LayerContent,
             index: 0,
             role: ImageRole::Standalone,
-            buffer_px: pic.size,
+            buffer_px: size,
             src,
             size: (hold.geometry.size.w, hold.geometry.size.h),
             placement: Placement {
@@ -632,6 +637,39 @@ pub(super) fn layer_elements(
         }));
     }
     out
+}
+
+/// A held surface's picture drawn by the renderer (D19), over its layer geometry `at` (output-local points): the
+/// snapshot's quad, as a returning drag icon draws its own. Nothing without the mesh program or once it is retired.
+fn held_texture_piece(
+    p: &SceneParams<'_>,
+    snapshot: &crate::render::snapshots::SnapshotOwner,
+    at: smithay::utils::Rectangle<i32, Logical>,
+) -> Option<Piece> {
+    p.res.mesh.as_ref()?;
+    let lease = match p.res.snapshots.pin(snapshot.id()) {
+        Ok(lease) => lease,
+        Err(error) => {
+            tracing::error!(%error, "held surface without its snapshot");
+            return None;
+        }
+    };
+    let local = Rect::new(
+        f64::from(at.loc.x),
+        f64::from(at.loc.y),
+        f64::from(at.size.w),
+        f64::from(at.size.h),
+    );
+    Some(Piece::Mesh(MeshPiece {
+        kind: SceneKind::LayerContent,
+        index: 0,
+        snapshot: lease.id(),
+        keep: SnapshotKeep::Pinned(lease),
+        mesh: Mesh::quad(local.into_geom()),
+        opacity: 1.0,
+        // a held picture never changes
+        revision: 0,
+    }))
 }
 
 /// The glass among `pieces` with an alert's drop shadow shown ([`cupertino_theme::glass::GlassShadow::alert`]): the deep

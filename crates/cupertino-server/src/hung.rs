@@ -10,6 +10,8 @@ impl crate::state::Cupertino {
     pub fn input_came(&mut self) {
         let now = self.now();
         self.hung.input(now);
+        // a shared host's restart waits for a quiet seat (D17)
+        self.hosts.note_input(std::time::Instant::now());
     }
 
     /// Ping the clients that own a mapped toplevel and note those that do not answer (the model clock `now`).

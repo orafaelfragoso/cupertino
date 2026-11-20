@@ -1,11 +1,9 @@
 // cupertino-layers --graph
-// 75 crates, 376 internal dependencies
+// 75 crates, 372 internal dependencies
 // per layer: foundation 5, graphics 2, models 6, system 8, platform 5, protocol 3, transport 2, render 3, ui 9, shellkit 1, core 4, services 6, shell 12, apps 2, tools 6, testing 1
 // forbidden normal edge cupertino-dock (shell) -> cupertino-shell-client (transport)
 // forbidden normal edge cupertino-dock (shell) -> cupertino-wayland-client (transport)
 // forbidden normal edge cupertino-files (apps) -> cupertino-wayland-client (transport)
-// forbidden normal edge cupertino-launcher (shell) -> cupertino-shell-client (transport)
-// forbidden normal edge cupertino-launcher (shell) -> cupertino-wayland-client (transport)
 // forbidden normal edge cupertino-login (shell) -> cupertino-raster-math (graphics)
 // forbidden normal edge cupertino-login (shell) -> cupertino-seat (platform)
 // forbidden normal edge cupertino-login (shell) -> cupertino-shell-client (transport)
@@ -248,19 +246,14 @@ digraph "layers" {
   "cupertino-kit-shell" -> "cupertino-ui-render";
   "cupertino-kit-shell" -> "cupertino-ui-wayland";
   "cupertino-kit-shell" -> "cupertino-wayland-client";
-  "cupertino-launcher" -> "cupertino-animation";
   "cupertino-launcher" -> "cupertino-apps";
-  "cupertino-launcher" -> "cupertino-assets";
+  "cupertino-launcher" -> "cupertino-assets" [label="dev"];
   "cupertino-launcher" -> "cupertino-defaults";
   "cupertino-launcher" -> "cupertino-diagnostic-events";
   "cupertino-launcher" -> "cupertino-icons";
-  "cupertino-launcher" -> "cupertino-keyboard";
   "cupertino-launcher" -> "cupertino-kit";
-  "cupertino-launcher" -> "cupertino-peer";
-  "cupertino-launcher" -> "cupertino-shell-client" [color=red];
-  "cupertino-launcher" -> "cupertino-ui-text";
-  "cupertino-launcher" -> "cupertino-ui-wayland";
-  "cupertino-launcher" -> "cupertino-wayland-client" [color=red];
+  "cupertino-launcher" -> "cupertino-kit" [label="dev"];
+  "cupertino-launcher" -> "cupertino-kit-shell";
   "cupertino-login" -> "cupertino-apps";
   "cupertino-login" -> "cupertino-assets";
   "cupertino-login" -> "cupertino-assets" [label="dev"];
@@ -438,6 +431,7 @@ digraph "layers" {
   "cupertino-shell" -> "cupertino-diagnostic-events";
   "cupertino-shell" -> "cupertino-kit";
   "cupertino-shell" -> "cupertino-kit-shell";
+  "cupertino-shell" -> "cupertino-launcher";
   "cupertino-shell" -> "cupertino-notifications";
   "cupertino-shell" -> "cupertino-osd";
   "cupertino-shell-client" -> "cupertino-app-protocols";

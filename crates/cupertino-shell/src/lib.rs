@@ -32,6 +32,9 @@ pub static NOTIFICATIONS: Entry = Entry::of::<cupertino_notifications::Notificat
 /// The control panel (`cupertino-controlcenter`).
 pub static CONTROLCENTER: Entry = Entry::of::<cupertino_controlcenter::ControlCenter>();
 
+/// The launcher's panel and its application browser (`cupertino-launcher`).
+pub static LAUNCHER: Entry = Entry::of::<cupertino_launcher::component::Launcher>();
+
 /// The components this build of the host runs. A component the server lists that is not here is answered
 /// `unavailable` (`absent`), and the server runs it the way the rest of its configuration says.
-pub static COMPONENTS: [&Entry; 3] = [&OSD, &NOTIFICATIONS, &CONTROLCENTER];
+pub static COMPONENTS: [&Entry; 4] = [&OSD, &NOTIFICATIONS, &CONTROLCENTER, &LAUNCHER];

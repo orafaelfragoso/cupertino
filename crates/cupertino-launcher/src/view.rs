@@ -1,6 +1,6 @@
 //! The launcher's windows as CupertinoKit draws them: the panel (a glass capsule holding the query, which grows to
 //! show the sectioned results beside a preview of the selected one and its actions), the transparent catcher that
-//! takes a press outside the panel, and the empty window the process keeps mapped while the panel is hidden.
+//! takes a press outside the panel. While the panel is hidden the launcher has no window.
 //!
 //! The panel is one enclosure for searching and for browsing the applications ([`browse`]): the same query row heads
 //! both, and the enclosure changes shape between them as [`crate::motion`] presents it. The panel's window is larger
@@ -34,8 +34,8 @@ use crate::preview::{Preview, PreviewBody};
 use crate::providers::Status;
 use crate::scope::{FilesScope, Filter, ScopeLayout};
 use cupertino_kit::controls::{
-    BareField, CaretBlink, Icon, IconDirection, Image, ImageFit, ImageSource, Stack, Text,
-    TextChange, TextField, TextRole,
+    BareField, CaretBlink, Icon, IconDirection, Image, ImageFit, ImageSource, Text, TextChange,
+    TextField, TextRole,
 };
 use cupertino_kit::core::{
     glass_outline, AccessibleStates, Action, Change, CommandRegistry, Element, Environment, Event,
@@ -64,8 +64,6 @@ use std::path::PathBuf;
 pub const APP_ID: &str = "cupertino-launcher";
 /// The `app_id` of the window that takes a press outside the shown panel.
 pub const CATCHER_APP_ID: &str = "cupertino-launcher.catcher";
-/// The `app_id` of the window kept mapped while the panel is hidden.
-pub const HIDDEN_APP_ID: &str = "cupertino-launcher.hidden";
 
 /// Panel width: the search capsule's.
 pub const WIDTH: f64 = 640.0;
@@ -628,19 +626,14 @@ fn window_spec(title: &str, app_id: &str, size: Size) -> WindowSpec {
     }
 }
 
-fn empty<M: 'static>() -> Element<M> {
-    Element::new(Stack {
-        axis: Axis::Vertical,
-        padding: Insets::default(),
-        spacing: 0.0,
-        align: Align::Start,
-        children: Vec::new(),
-    })
-}
-
 /// The panel's window's key.
 pub fn panel_window_key() -> WindowKey {
     WindowKey(Key::from("panel"))
+}
+
+/// The key of the catcher's window ([`catcher_window`]).
+pub fn catcher_key() -> WindowKey {
+    WindowKey(Key::from("catcher"))
 }
 
 /// The key of the view options menu's popup, a popup of the panel's window.
@@ -886,29 +879,13 @@ where
     M: From<Input> + Clone + 'static,
 {
     Window {
-        key: WindowKey(Key::from("catcher")),
+        key: catcher_key(),
         spec: window_spec("Close the launcher", CATCHER_APP_ID, Size::new(1.0, 1.0)),
         shortcuts: CommandRegistry::new(),
         on_close: Some(M::from(Input::Dismiss)),
         // shown without a frame of the output's size: it draws nothing
         background: WindowBackground::INPUT_ONLY,
         content: Element::new(Catcher),
-        popup: None,
-        menus: None,
-    }
-}
-
-/// The window kept mapped while the panel is hidden: one transparent point that takes no input. Each `generation`
-/// is a new window; when the server closes one (its output went away) `on_close` arrives and the model asks for the
-/// next generation, which the server puts on an output still there.
-pub fn hidden_window<M: Clone + 'static>(generation: u64, on_close: M) -> Window<M> {
-    Window {
-        key: WindowKey(Key::from(format!("hidden-{generation}"))),
-        spec: window_spec("Launcher", HIDDEN_APP_ID, Size::new(1.0, 1.0)),
-        shortcuts: CommandRegistry::new(),
-        on_close: Some(on_close),
-        background: WindowBackground::None,
-        content: empty(),
         popup: None,
         menus: None,
     }

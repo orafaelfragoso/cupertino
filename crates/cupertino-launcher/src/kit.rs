@@ -10,6 +10,7 @@ use crate::engine::{
 };
 use crate::exec::CommandSpec;
 use crate::files::{FileIndex, FileSearchConfig};
+use crate::frecency::Frecency;
 use crate::modes::{self, Mode};
 use crate::motion::{Frame, Header, Motion, Shape, RESPLIT_DELAY};
 use crate::nav::{Focus as NavFocus, Intent, Nav, Nested, Step, View};
@@ -157,10 +158,13 @@ pub trait Host {
             Message::Scoped(answer)
         }))]
     }
-    /// The renditions of the icon of `item`'s type, at once: what the files scope shows until its thumbnail loads.
-    /// None to draw a placeholder (the default).
-    fn file_icon(&mut self, _item: &FileItem) -> Vec<ImageSource> {
-        Vec::new()
+    /// Load the renditions of the icon of `item`'s type off the loop: what the files scope shows until its thumbnail
+    /// loads. The commands deliver them as [`Message::FileIcon`], none to draw a placeholder (the default, at once).
+    fn file_icon(&mut self, item: &FileItem) -> Vec<Command<Message>> {
+        let path = item.path.clone();
+        vec![Command::Perform(Box::pin(async move {
+            Message::FileIcon(path, Vec::new())
+        }))]
     }
     /// Load and decode the thumbnail of `item` off the loop; the commands deliver it as [`Message::FileThumb`], none
     /// when the file has none. The default delivers none at once.
@@ -169,6 +173,11 @@ pub trait Host {
         vec![Command::Perform(Box::pin(async move {
             Message::FileThumb(path, Vec::new())
         }))]
+    }
+    /// Write the launch history `history` off the loop; it has changes the last write did not have. The default keeps
+    /// it in memory alone.
+    fn save_history(&mut self, _history: Frecency) -> Vec<Command<Message>> {
+        Vec::new()
     }
     /// Deliver `message` after `seconds` (a deadline). The default never does: the model then waits for the answer.
     fn after(&mut self, _seconds: f64, _message: Message) -> Vec<Command<Message>> {
@@ -212,6 +221,8 @@ pub enum Message {
     Scoped(ScopeAnswer),
     /// The thumbnail of the file at this path arrived ([`Host::file_thumb`]); none when it has none.
     FileThumb(PathBuf, Vec<ImageSource>),
+    /// The icon of the type of the file at this path arrived ([`Host::file_icon`]); none to draw a placeholder.
+    FileIcon(PathBuf, Vec<ImageSource>),
     /// The file index finished building.
     Indexed(Arc<FileIndex>),
     /// The applications changed (entries installed, changed or removed while the launcher runs): all of them, as
@@ -227,15 +238,19 @@ pub enum Message {
     Frame(u64),
     /// The file index could not be built.
     IndexFailed,
-    /// Nothing will send [`Message::Toggle`] any more: the process ends.
-    Unheard,
     /// The session was locked: what is shown goes at once, and the launch history is written.
     Locked,
-    /// The server closed the hidden window (its output went away): a new one is opened, on an output still there,
-    /// or once one comes back when none is left.
-    Remap,
-    /// Whether the server has an output the launcher's windows can go on.
-    Outputs(bool),
+    /// The server closed the panel's windows (their output went away): the panel is hidden at once, and the launch
+    /// history is written.
+    Gone,
+    /// `launcher.conf` as it was read: the kinds of result listed, the top hit and the folders the file search leaves
+    /// out, applied the next time the panel opens.
+    Settings(LauncherSettings),
+    /// The launch history as it was read from its file, which the launcher keeps from now on.
+    History(Frecency),
+    /// What the component around the model hears: its buses, the server and the session ([`crate::component`]). The
+    /// model itself does nothing with it.
+    Shell(crate::component::Shell),
     /// What the preview shows of the result with this id.
     Previewed(String, Arc<Preview>),
     /// The preview of the result with this id shows only the result itself.
@@ -322,6 +337,10 @@ pub struct Model {
     indexing: bool,
     /// What `launcher.conf` held when the panel last opened.
     launcher_settings: LauncherSettings,
+    /// What `launcher.conf` held when it was last read, to apply when the panel next opens.
+    settings_read: Option<LauncherSettings>,
+    /// The launch history with changes to write, once the message being handled is done.
+    history_to_save: Option<Frecency>,
     /// The file index, searched as a provider.
     file_index: Option<Arc<FileIndex>>,
     tracker: Tracker,
@@ -355,13 +374,6 @@ pub struct Model {
     pub(crate) frame: u64,
     /// The animation frame [`Model::frame`] names was asked of the host and has not come yet.
     frame_waiting: bool,
-    /// The hidden window's generation: each one is a new window, so one the server closed is not kept.
-    pub hidden: u64,
-    /// The server has no output: a window it closes is opened again only once one comes back, as the server closes
-    /// every window put on none at once.
-    pub no_output: bool,
-    /// The hidden window was closed while the server had no output, and waits for one.
-    remap_waiting: bool,
     preview: PreviewState,
     /// The id of the result the preview was last asked for.
     previewed: Option<String>,
@@ -375,6 +387,8 @@ pub struct Model {
     pub file_images: HashMap<PathBuf, Vec<ImageSource>>,
     /// The files whose thumbnails were asked for, and those still being loaded.
     file_thumbed: HashSet<PathBuf>,
+    /// The files whose type's icons are being loaded.
+    file_icons_asked: HashSet<PathBuf>,
     file_thumbs_loading: usize,
     /// The number of the scope's last search, and what it asked.
     scope_generation: u64,
@@ -479,6 +493,8 @@ impl Model {
             host,
             indexing: false,
             launcher_settings: LauncherSettings::UNSET,
+            settings_read: None,
+            history_to_save: None,
             file_index: None,
             tracker: Tracker::new(),
             searched: None,
@@ -495,9 +511,6 @@ impl Model {
             next_launch: 0,
             frame: 0,
             frame_waiting: false,
-            hidden: 0,
-            no_output: false,
-            remap_waiting: false,
             preview: PreviewState::None,
             previewed: None,
             arrangement: Arrangement::Grid,
@@ -505,6 +518,7 @@ impl Model {
             scope: None,
             file_images: HashMap::new(),
             file_thumbed: HashSet::new(),
+            file_icons_asked: HashSet::new(),
             file_thumbs_loading: 0,
             scope_generation: 0,
             scope_asked: None,
@@ -717,15 +731,11 @@ impl Model {
         }
     }
 
-    /// Read `launcher.conf` again and apply it: the kinds of result listed, the top hit, and the folders the file
-    /// search leaves out (a change of those builds the index again).
+    /// Apply `launcher.conf` as it was last read ([`Message::Settings`]): the kinds of result listed, the top hit, and
+    /// the folders the file search leaves out (a change of those builds the index again).
     fn apply_launcher_settings(&mut self) {
-        let Some(path) = LauncherSettings::path() else {
+        let Some(settings) = self.settings_read.take() else {
             return;
-        };
-        let (settings, _) = match LauncherSettings::load(&path, Some(&self.launcher_settings)) {
-            Ok(loaded) => loaded,
-            Err(_) => return,
         };
         if settings == self.launcher_settings {
             return;
@@ -864,6 +874,16 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
             }
             Vec::new()
         }
+        Message::FileIcon(path, sources) => {
+            // a thumbnail that came first keeps its place
+            if model.file_icons_asked.remove(&path)
+                && !sources.is_empty()
+                && !model.file_images.contains_key(&path)
+            {
+                model.file_images.insert(path, sources);
+            }
+            Vec::new()
+        }
         Message::Input(_) if !model.nav.is_visible() => Vec::new(),
         Message::Input(input) => model.input(input),
         Message::Indexed(index) => {
@@ -900,27 +920,24 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
             eprintln!("cupertino-launcher: the file index was not built");
             Vec::new()
         }
-        Message::Locked => {
+        Message::Locked | Message::Gone => {
             if model.presenting() {
                 model.hide(true);
             }
             Vec::new()
         }
-        Message::Remap => {
-            if model.no_output {
-                model.remap_waiting = true;
-            } else {
-                model.hidden += 1;
+        Message::Settings(settings) => {
+            model.settings_read = Some(settings);
+            Vec::new()
+        }
+        Message::History(history) => {
+            // launches made before the history was read are kept in place of it until the next start
+            if !model.launcher.frecency.is_dirty() {
+                model.launcher.frecency = history;
             }
             Vec::new()
         }
-        Message::Outputs(any) => {
-            model.no_output = !any;
-            if any && std::mem::take(&mut model.remap_waiting) {
-                model.hidden += 1;
-            }
-            Vec::new()
-        }
+        Message::Shell(_) => Vec::new(),
         Message::Previewed(id, preview) => {
             // only for the result last asked about; one that comes after its deadline still shows
             if model.previewed.as_deref() == Some(id.as_str()) {
@@ -1031,10 +1048,6 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
                 _ => Vec::new(),
             }
         }
-        Message::Unheard => {
-            eprintln!("cupertino-launcher: the bus interface stopped");
-            vec![Command::Exit]
-        }
     };
     commands.extend(model.changed());
     // a close handed to the compositor: the layers' changes, and a timer for its end, when the window goes
@@ -1084,14 +1097,18 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
         model.scope = None;
         model.file_images.clear();
         model.file_thumbed.clear();
+        model.file_icons_asked.clear();
+    }
+    if let Some(history) = model.history_to_save.take() {
+        commands.extend(model.host.save_history(history));
     }
     commands
 }
 
-/// The shown panel and its catcher, or the window kept mapped while it is hidden.
+/// The shown panel and its catcher; none while it is hidden.
 pub fn view(model: &Model) -> Vec<Window<Message>> {
     if !model.presenting() {
-        return vec![view::hidden_window(model.hidden, Message::Remap)];
+        return Vec::new();
     }
     let actions = model
         .panel

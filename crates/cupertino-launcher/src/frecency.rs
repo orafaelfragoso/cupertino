@@ -206,7 +206,12 @@ impl Frecency {
         }
     }
 
-    /// Write to the remembered path (no-op for an in-memory store). Atomic.
+    /// Write to the remembered path (no-op for an in-memory store). Atomic. It writes a file: a host runs it as a task
+    /// of the I/O pool.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the write is the I/O pool's work, never the UI thread's"
+    )]
     pub fn save(&mut self) -> std::io::Result<()> {
         let Some(path) = self.path.clone() else {
             return Ok(());
@@ -222,6 +227,17 @@ impl Frecency {
         std::fs::rename(&tmp, &path)?;
         self.dirty = false;
         Ok(())
+    }
+
+    /// A copy of the store to write ([`Self::save`]) when it has changes the last write did not have; the store counts
+    /// as written from then on.
+    pub fn unsaved(&mut self) -> Option<Frecency> {
+        if !self.dirty {
+            return None;
+        }
+        let copy = self.clone();
+        self.dirty = false;
+        Some(copy)
     }
 
     pub fn save_if_dirty(&mut self) -> std::io::Result<()> {

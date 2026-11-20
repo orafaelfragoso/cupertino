@@ -263,13 +263,19 @@ impl Host for Fixed {
         }))]
     }
 
-    fn file_icon(&mut self, item: &FileItem) -> Vec<ImageSource> {
+    fn file_icon(&mut self, item: &FileItem) -> Vec<Command<Message>> {
         let name = if item.is_dir {
             FOLDER_ICON
         } else {
             DOCUMENT_ICON
         };
-        named(&*self.icons, name, ScopeLayout::THUMB)
+        let (path, icon) = (
+            item.path.clone(),
+            named(&*self.icons, name, ScopeLayout::THUMB),
+        );
+        vec![Command::Perform(Box::pin(async move {
+            Message::FileIcon(path, icon)
+        }))]
     }
 
     fn now(&self) -> Now {

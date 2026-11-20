@@ -714,7 +714,7 @@
   scope: shell-private
   source: crates/cupertino-launcher/src/control.rs
   source_match: "org.cupertino.Launcher1"
-  note: Toggle accepts only the server (the parent) and the launcher itself
+  note: served by the launcher component in the cupertino-shell binary, on the component's own connection; Toggle and ToggleApplications accept only the server (the owner of org.cupertino.Session1) and the launcher component itself, any other caller gets AccessDenied
 - name: org.cupertino.ControlPanel1
   kind: dbus-interface
   version: 1
@@ -1148,14 +1148,6 @@
   owner_area: apps
   scope: shell-private
   source: crates/cupertino-files/src/main.rs
-- name: cupertino-launcher
-  kind: binary
-  version: 0.1.0
-  shipped: yes
-  owner_crate: cupertino-launcher
-  owner_area: apps
-  scope: shell-private
-  source: crates/cupertino-launcher/src/main.rs
 - name: cupertino-layers
   kind: binary
   version: 0.1.0
@@ -1196,7 +1188,7 @@
   owner_area: apps
   scope: shell-private
   source: crates/cupertino-shell/src/main.rs
-  note: the shell host the server starts on a connection with the host role alone; runs the listed components, each on a thread of its own; holds the osd (cupertino-osd), notifications (cupertino-notifications) and controlcenter (cupertino-controlcenter) components
+  note: the shell host the server starts on a connection with the host role alone; runs the listed components, each on a thread of its own; holds the osd (cupertino-osd), notifications (cupertino-notifications), controlcenter (cupertino-controlcenter) and launcher (cupertino-launcher) components
 - name: cupertino-control
   kind: binary
   version: 0.1.0

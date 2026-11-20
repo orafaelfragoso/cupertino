@@ -7,8 +7,8 @@
 //! * [`panel`]: panel state with keyboard navigation.
 //! * [`view`]: the panel's windows on CupertinoKit; [`kit`]: the launcher as a Kit application model, with what
 //!   needs the session behind [`kit::Host`].
-//! * feature `app`, the parts of the `cupertino-launcher` process (the panel on a layer surface as a
-//!   client of the server): [`control`] (the `org.cupertino.Launcher1` bus interface).
+//! * [`component`]: the launcher as a component of the shell host (`cupertino-shell`), its panel on layer
+//!   surfaces, with [`control`] (the `org.cupertino.Launcher1` bus interface) on its own bus connection.
 //!
 //! No Smithay dependency. Panel metrics, keyboard semantics, the top-hit rule and the section limits are taken from
 //! the analysis; ranking scores and the remaining row metrics are approximate (authored) and configurable; colours,
@@ -18,7 +18,7 @@
 
 pub mod browse;
 pub mod calc;
-#[cfg(feature = "app")]
+pub mod component;
 pub mod control;
 pub mod convert;
 pub use cupertino_apps::entry as desktop;

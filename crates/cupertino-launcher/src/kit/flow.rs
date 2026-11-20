@@ -202,8 +202,8 @@ impl Model {
                 view::layers::close_changes(self.extent, &from, &to, self.modes().len());
             self.handed = Some(from);
         }
-        if let Err(e) = self.launcher.frecency.save_if_dirty() {
-            eprintln!("cupertino-launcher: launch history not saved: {e}");
+        if let Some(history) = self.launcher.frecency.unsaved() {
+            self.history_to_save = Some(history);
         }
     }
 
@@ -630,6 +630,7 @@ impl Model {
         if self.file_images.len() > MAX_FILE_IMAGES {
             self.file_images.clear();
             self.file_thumbed.clear();
+            self.file_icons_asked.clear();
         }
         let near: Vec<FileItem> = files
             .nearby()
@@ -638,11 +639,10 @@ impl Model {
             .collect();
         let mut commands = Vec::new();
         for item in near {
-            if !self.file_images.contains_key(&item.path) {
-                let icon = self.host.file_icon(&item);
-                if !icon.is_empty() {
-                    self.file_images.insert(item.path.clone(), icon);
-                }
+            if !self.file_images.contains_key(&item.path)
+                && self.file_icons_asked.insert(item.path.clone())
+            {
+                commands.extend(self.host.file_icon(&item));
             }
             if !item.is_dir
                 && self.file_thumbs_loading < MAX_FILE_THUMB_LOADS

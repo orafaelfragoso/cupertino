@@ -17,10 +17,9 @@ A crash in a shell process never takes the desktop down.
 | Process | Owns |
 |---|---|
 | `cupertino-server` | compositing, window policy, input routing, cursor, materials (backdrop rendering), the menu bar layer and its auto-hide, window snapping, supervision of the shell processes |
-| `cupertino-shell` | the shell host: the shell's components, each on a thread of its own, a failed one restarted alone; today the on-screen displays (`osd`: volume, brightness and keyboard-backlight overlays), the banners and the notification list (`notifications`, `org.freedesktop.Notifications`, the list kept across a restart) and the control panel (`controlcenter`, `org.cupertino.ControlPanel1`) |
+| `cupertino-shell` | the shell host: the shell's components, each on a thread of its own, a failed one restarted alone; today the on-screen displays (`osd`: volume, brightness and keyboard-backlight overlays), the banners and the notification list (`notifications`, `org.freedesktop.Notifications`, the list kept across a restart), the control panel (`controlcenter`, `org.cupertino.ControlPanel1`) and the launcher (`launcher`, `org.cupertino.Launcher1`: the search and launch panel, and the application browser) |
 | `cupertino-dock` | the bar, application switcher, overview, workspaces, hot corners, trackpad gestures |
 | `cupertino-menubar` | status items and application menus (DBusMenu, StatusNotifierItem, GMenuModel) |
-| `cupertino-launcher` | the search and launch panel, and the application browser |
 | `cupertino-windowmanager` | the stage and tiling policy (off by default) |
 | `cupertino-login` | the login screen, the lock screen (`ext-session-lock`) and the session agent |
 | `cupertino-sessiond` | the root-owned half of login: the login screen's socket, PAM in a worker per attempt, logind sessions and virtual terminals, fast user switching, power, auto login |

@@ -7,7 +7,7 @@
 use crate::icons::PackIcons;
 use cupertino_assets::{Assets, FontRole, FontSource, BUILTIN_FONT};
 use cupertino_theme::Theme;
-use cupertino_ui_text::{FontIndex, FontStyle, FontWeight, InstalledFonts, TextSystem};
+use cupertino_ui_text::{FontData, FontIndex, FontStyle, FontWeight, InstalledFonts, TextSystem};
 use std::fs::File;
 use std::io::{self, Read};
 use std::path::Path;
@@ -109,17 +109,18 @@ fn fonts(assets: &Assets) -> (FontIndex, Option<String>) {
     let mut index = FontIndex::new();
     let mut builtin = None;
     for source in assets.fonts() {
-        let data = match &source {
+        let data: FontData = match &source {
             FontSource::File(path) => match read_font(path) {
-                Ok(data) => data,
+                Ok(data) => Arc::new(data),
                 Err(e) => {
                     eprintln!("cupertino-kit: skipping the font {}: {e}", path.display());
                     continue;
                 }
             },
-            FontSource::Builtin => BUILTIN_FONT.to_vec(),
+            // the program's own bytes, registered without a copy
+            FontSource::Builtin => Arc::new(BUILTIN_FONT),
         };
-        match index.add_font(Arc::new(data)) {
+        match index.add_font(data) {
             Ok(faces) if matches!(source, FontSource::Builtin) => {
                 builtin = faces
                     .first()

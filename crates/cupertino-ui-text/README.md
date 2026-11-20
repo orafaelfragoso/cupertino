@@ -40,7 +40,8 @@ buffer follow.
   that side; Backward, Forward, the word moves by those names and the deletes keep the text's order.
 - `Surrounding::around` costs the window, not the document; a text that is one huge run of regional indicators (flags)
   is the exception, because the boundary rule scans back over the run.
-- `FontIndex` holds the faces the app registers from font bytes and resolves a family, weight and variation set to a
+- `FontIndex` holds the faces the app registers from font bytes (`FontData`: a file read into memory, or bytes the
+  program holds, such as a built-in font, kept without a copy) and resolves a family, weight and variation set to a
   stable `FontId`; `FontIndex::shape` shapes one run with `harfrust` (visual order, byte clusters, advances in points).
   `set_system_fonts` gives it the installed fonts: `InstalledFonts` asks Fontconfig, loaded at run time, so the
   font configuration picks the face per script and language; without the library only the registered faces draw.

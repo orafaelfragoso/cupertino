@@ -3,6 +3,7 @@ use crate::{FaceId, FontId, FontStyle, FontVariation, FontWeight, TextError};
 use harfrust::font::{Font, Variation};
 use harfrust::Tag;
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use swash::{FontDataRef, StringId, Style};
 
@@ -26,17 +27,31 @@ impl FontMetrics {
     }
 }
 
+/// The bytes of a font file, shared by every face, instance and rasterizer made from it: a file read into memory
+/// (`Arc<Vec<u8>>`), or bytes the program itself holds (`Arc<&'static [u8]>`, a built-in font), which are never copied.
+pub type FontData = Arc<dyn AsRef<[u8]> + Send + Sync>;
+
 /// A font instance as bytes: the file, the face's index in it and the variation coordinates the instance sets.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct FontSource {
-    pub data: Arc<Vec<u8>>,
+    pub data: FontData,
     pub index: u32,
     pub variations: Vec<FontVariation>,
 }
 
+impl fmt::Debug for FontSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FontSource")
+            .field("bytes", &(*self.data).as_ref().len())
+            .field("index", &self.index)
+            .field("variations", &self.variations)
+            .finish()
+    }
+}
+
 struct Face {
     family: Arc<str>,
-    data: Arc<Vec<u8>>,
+    data: FontData,
     index: u32,
     weight: FontWeight,
     style: FontStyle,
@@ -115,7 +130,7 @@ impl FontIndex {
         family: &str,
         weight: FontWeight,
         style: FontStyle,
-        data: Arc<Vec<u8>>,
+        data: FontData,
         index: u32,
     ) -> Result<FaceId, TextError> {
         let face = parse_face(family, weight, style, data, index)?;
@@ -126,13 +141,14 @@ impl FontIndex {
 
     /// Registers every face of a font file or collection under the family, weight and style its own tables name. A face
     /// without a family name is skipped. Returns the faces added.
-    pub fn add_font(&mut self, data: Arc<Vec<u8>>) -> Result<Vec<FaceId>, TextError> {
-        let file = FontDataRef::new(&data)
+    pub fn add_font(&mut self, data: FontData) -> Result<Vec<FaceId>, TextError> {
+        let bytes: &[u8] = (*data).as_ref();
+        let file = FontDataRef::new(bytes)
             .ok_or_else(|| TextError::InvalidFont("not a TrueType or OpenType file".into()))?;
         // a collection's header states its face count; each face needs a 4-byte offset, so no more fit in the file
-        let named: Vec<_> = (0..file.len().min(data.len() / 4) as u32)
+        let named: Vec<_> = (0..file.len().min(bytes.len() / 4) as u32)
             .map_while(|index| file.get(index as usize).map(|_| index))
-            .filter_map(|index| named_face(&data, index).map(|named| (named, index)))
+            .filter_map(|index| named_face(bytes, index).map(|named| (named, index)))
             .collect();
         named
             .into_iter()
@@ -209,7 +225,14 @@ impl FontIndex {
         }
         let parsed = read_font(&file.path).ok().and_then(|data| {
             let (family, weight, style) = named_face(&data, file.index)?;
-            parse_face(&family, weight, style, Arc::new(data), file.index).ok()
+            parse_face(
+                &family,
+                weight,
+                style,
+                Arc::new(data) as FontData,
+                file.index,
+            )
+            .ok()
         });
         // another thread may have loaded the file meanwhile: its face stands
         let mut system_faces = write(&self.system_faces);
@@ -396,19 +419,16 @@ fn parse_face(
     family: &str,
     weight: FontWeight,
     style: FontStyle,
-    data: Arc<Vec<u8>>,
+    data: FontData,
     index: u32,
 ) -> Result<Face, TextError> {
-    let font = Font::new(
-        harfrust::font::Blob::from(Arc::clone(&data) as Arc<dyn AsRef<[u8]> + Send + Sync>),
-        index,
-    )
-    .ok_or_else(|| TextError::InvalidFont(family.into()))?;
+    let font = Font::new(harfrust::font::Blob::from(Arc::clone(&data)), index)
+        .ok_or_else(|| TextError::InvalidFont(family.into()))?;
     let weight_range = font
         .axes()
         .get_by_tag(Tag::new(&WEIGHT_AXIS))
         .map(|axis| (axis.min_value(), axis.max_value()));
-    let colour = swash::FontRef::from_index(&data, index as usize).is_some_and(|font| {
+    let colour = swash::FontRef::from_index((*data).as_ref(), index as usize).is_some_and(|font| {
         [b"COLR", b"CBDT", b"sbix"]
             .into_iter()
             .any(|tag| font.table(swash::tag_from_bytes(tag)).is_some())

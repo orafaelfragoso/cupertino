@@ -49,7 +49,7 @@ impl TextWork {
 }
 
 pub use buffer::{LineLayout, TextBuffer, CARET_BLINK_OFF, CARET_BLINK_ON, MULTI_CLICK_INTERVAL};
-pub use font::{FontIndex, FontMetrics, FontSource};
+pub use font::{FontData, FontIndex, FontMetrics, FontSource};
 pub use input::SURROUNDING_MAX_BYTES;
 pub use installed::{FontFile, InstalledFonts, SystemFonts};
 pub use keymap::{KeyInput, Keymap};

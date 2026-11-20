@@ -1285,8 +1285,6 @@ fn lost_moves_a_component_to_a_separate_host_with_its_bus_bridge() {
         vec!["menubar", "osd", "menubar"],
         "the second list is the first without the lost component"
     );
-    assert_eq!(rig.state.hosts.requested_separate_hosts, vec!["osd"]);
-    rig.state.hosts.requested_separate_hosts.clear();
 
     // the separate host binds: it gets its end of the bridge and the shared host the other
     let mut separate = rig.host(HostKind::Separate("osd"), &["osd"]);

@@ -23,7 +23,7 @@
 //! | `SetAppearance(s appearance)` | `light` or `dark`: stored as `appearance` in `compositor.json`, then applied at once; `auto` is refused with `NotSupported` (no time-of-day or location backend), anything else with `InvalidArgs`; a failed store, or no settings directory to store in, changes nothing (`Failed`) |
 //! | `SetAccessibility(s key, s value)` | one key of `accessibility.conf` with a value as the file writes it (`reduce_motion` `on`, `color_filter` `tint 0.5`, ...): applied and stored like the key actions; an unknown key or bad value is `InvalidArgs` |
 //! | `ListShellProcesses -> a(ssuttsbss)` | every process the server supervises, in start order, as `(name, state, pid, start_ticks, started, program, from_dev_folder, installed, dev_program)`: `state` is `running`, `stopping`, `waiting` or `stopped`; `pid`, `start_ticks` (field 22 of `/proc/PID/stat`), `started` (seconds since 1970) are 0 and `program` empty while it does not run; `from_dev_folder` says the program is the development folder's; `installed` is the configured program and `dev_program` the development folder's file it would start, empty when the folder does not apply. Only an unsandboxed process of the session's own user may call it |
-//! | `RestartShellProcess(s name) -> (ssuttsbss)` | ends the process (SIGTERM, then SIGKILL after `crate::supervisor::RESTART_STOP_GRACE`) and starts it again at once, the development folder resolved again; answers once it runs, with the same record. An unknown name is `InvalidArgs`, a start that failed `Failed`. Only an unsandboxed process of the session's own user may call it |
+//! | `RestartShellProcess(s name) -> (ssuttsbss)` | ends the process (SIGTERM, then SIGKILL after `crate::supervisor::RESTART_STOP_GRACE`) and starts it again at once, the development folder resolved again; answers once it runs, with the same record. A component that runs in a host is restarted through its host and answered once it is ready, with its host's record under its name; `host` and `host-NAME` name the hosts. An unknown name is `InvalidArgs`, a start that failed `Failed`. Only an unsandboxed process of the session's own user may call it |
 //! | `Appearance` property `s` | `light` or `dark`, the session's appearance (with `PropertiesChanged`) |
 //! | `Accessibility` property `a{ss}` | every key of `accessibility.conf` with its value (with `PropertiesChanged`) |
 //! | `Mice` property `a(ssub)` | read-only: the connected mice that have moved, scrolled or clicked (no touchpads, no keyboard's unused pointer interface), each as `(key, name, dpi, stored)`: the `mouse_dpi` key of `compositor.json` (`vendor:product:name`, hex ids), the device name, the resolution in use (the stored one, else the hardware database's, else 1000) and whether it is the stored one; changes with `PropertiesChanged` on a mouse's first use or removal and on a change of `mouse_dpi` |
@@ -411,15 +411,29 @@ impl Cupertino {
         decision
     }
 
-    /// Restart the supervised process `name` ([`crate::supervisor::Supervisor::request_restart`]) and run the
-    /// supervision at once, so a process that is not running starts now and one that is late to end is killed on time.
-    /// `reply` gets the process once it runs, or why not.
+    /// Restart `name` (`cupertino shell restart NAME`): a component that runs in a host through its host
+    /// ([`Cupertino::restart_hosted_component`]), answered once it is ready; any other name is a supervised process
+    /// ([`crate::supervisor::Supervisor::request_restart`]), answered once it runs: a configured process, a component's
+    /// process entry, `host` or `host-NAME` (whose exit is then expected; `host` tries a refused host program again).
+    /// The supervision runs at once, so a process that is not running starts now and one that is late to end is killed
+    /// on time. `reply` gets the process, or why not.
     pub fn restart_shell_process(&mut self, name: &str, reply: crate::supervisor::RestartReply) {
-        if self.socket_name.is_none() {
-            reply(Err(RestartError::NotStarted(
-                "the server has no socket for its shell processes".into(),
-            )));
-            return;
+        let reply = match crate::host::component_spec(name) {
+            Some(spec) => match self.restart_hosted_component(spec.name, reply) {
+                Some(reply) => reply,
+                None => {
+                    crate::cli::supervise(self);
+                    return;
+                }
+            },
+            None => reply,
+        };
+        if name == crate::config::BuiltIn::Host.name() && self.supervisor.host_refused().is_some() {
+            self.supervisor.set_host_refused(None);
+            self.apply_shell_plan();
+        }
+        if let Some(id) = self.supervisor.host_id_of(name) {
+            self.expect_host_exit(id);
         }
         self.supervisor
             .request_restart(name, std::time::Instant::now(), reply);
@@ -746,6 +760,7 @@ impl Cupertino {
                                 RestartError::NotStarted(reason) => Refusal::Failed(format!(
                                     "the process ended but did not start again ({reason}); it is tried again later"
                                 )),
+                                RestartError::NotReady(reason) => Refusal::Failed(reason),
                             })
                         });
                         let _ = reply.try_send(answer);

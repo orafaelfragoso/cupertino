@@ -57,6 +57,9 @@ pub enum BuiltIn {
     DesktopControl,
     /// The lock screen / login screen program (`cupertino-login`); started by the server in both user and login sessions (W5.5).
     Login,
+    /// The shell's host (`cupertino-shell`), started while a component runs in it, not with the others of [`BuiltIn::ALL`]
+    /// (`crate::supervisor::HostProgram`).
+    Host,
 }
 
 /// The bus name the portal's backend owns once it serves.
@@ -79,16 +82,19 @@ impl BuiltIn {
             BuiltIn::KeyringPrompter => "keyring-prompter",
             BuiltIn::DesktopControl => "desktop-control",
             BuiltIn::Login => "login",
+            BuiltIn::Host => "host",
         }
     }
 
-    const fn program_name(self) -> &'static str {
+    /// The file name of the program under an install root's `bin`.
+    pub(crate) const fn program_name(self) -> &'static str {
         match self {
             BuiltIn::Portal => "cupertino-portal",
             BuiltIn::PolkitAgent => "cupertino-polkit-agent",
             BuiltIn::KeyringPrompter => "cupertino-keyring-prompter",
             BuiltIn::DesktopControl => "cupertino-control",
             BuiltIn::Login => "cupertino-login",
+            BuiltIn::Host => "cupertino-shell",
         }
     }
 
@@ -101,6 +107,7 @@ impl BuiltIn {
             BuiltIn::PolkitAgent | BuiltIn::KeyringPrompter => ShellRole::Prompt,
             BuiltIn::DesktopControl => ShellRole::DesktopControl,
             BuiltIn::Login => ShellRole::SessionLock,
+            BuiltIn::Host => ShellRole::Host,
         }
     }
 
@@ -366,7 +373,7 @@ pub enum LayerTrust {
 
 /// The trust of the layer at `path`. It comes from which file the layer is, never from where the path resolves: only
 /// the two system files, named exactly, are [`LayerTrust::System`], and a link to them is a file of the person.
-fn layer_trust(path: &Path, dev_shell: bool) -> LayerTrust {
+pub fn layer_trust(path: &Path, dev_shell: bool) -> LayerTrust {
     if dev_shell {
         LayerTrust::Dev
     } else if [SYSTEM_CONFIG, GREETER_CONFIG]
@@ -1100,6 +1107,7 @@ impl Config {
                     .filter(|e| {
                         let built_in = BuiltIn::ALL
                             .into_iter()
+                            .chain([BuiltIn::Host])
                             .find(|b| b.named_by(&e.name, &e.command));
                         if let Some(b) = built_in {
                             problems.push(format!(
@@ -1239,5 +1247,141 @@ impl Config {
             return None;
         }
         self.shell_processes.iter().find(|p| p.name == name)
+    }
+}
+
+/// The components no host holds until W6.13: `cupertino-login` is the session agent meanwhile
+/// (`docs/architecture/shell-host.md`, *Components*).
+pub const NOT_HOSTED: [&str; 1] = ["agent"];
+
+/// What the server knows about the hosts when it works out where the components run ([`Config::shell_plan`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HostFacts {
+    /// The host program is installed and was not refused.
+    pub available: bool,
+    /// Components that run alone whatever the configuration says: lost ones, or every one after the shared host's
+    /// crashes (D18).
+    pub isolated: Vec<&'static str>,
+    /// Components a host was built without (`unavailable` with `absent`): they run as their process entries.
+    pub absent: Vec<&'static str>,
+    /// Components of the development folder that run in the installed host: the folder's file is absent or refused, or
+    /// a host from the folder gave the component back, until `cupertino shell restart NAME`.
+    pub not_from_dev: Vec<&'static str>,
+}
+
+/// Where each component of the session runs, and which supervised processes run beside the hosts.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ShellPlan {
+    /// The list of the shared host, in the table's order; `None` when no component runs in a host, so no host runs.
+    pub shared: Option<Vec<&'static str>>,
+    /// The components that run in a separate host each, in the table's order, and whether that host starts from the
+    /// development folder.
+    pub separate: Vec<(&'static str, bool)>,
+    /// The configured processes that run: those that are no component, and the entries of components no host runs.
+    pub processes: Vec<ShellProcess>,
+    /// The process entries of components that run in a host, which are left alone.
+    pub left_alone: Vec<String>,
+}
+
+impl ShellPlan {
+    /// The components that run in a host.
+    pub fn hosted(&self) -> impl Iterator<Item = &'static str> + '_ {
+        self.shared
+            .iter()
+            .flatten()
+            .copied()
+            .chain(self.separate.iter().map(|(name, _)| *name))
+    }
+}
+
+impl Config {
+    /// Where the components run (`docs/architecture/shell-host.md`, *The component list*): the components of the
+    /// session ([`Config::active_shell_components`]) run in a host when the host program is there, except
+    /// [`NOT_HOSTED`] and the ones a host was built without; those of `alone`, of the development folder and the
+    /// isolated ones each in a separate host, the others in the shared host. A process entry of a component runs only
+    /// when no host runs the component, and an entry turned `off` never runs.
+    pub fn shell_plan(&self, login_screen: bool, facts: &HostFacts) -> ShellPlan {
+        let active = self.active_shell_components(login_screen);
+        let hosted: Vec<&'static str> = if facts.available {
+            active
+                .iter()
+                .copied()
+                .filter(|name| !NOT_HOSTED.contains(name) && !facts.absent.contains(name))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        // `alone`, and the development folder's components while their folder build may run
+        let alone = self.alone_host_components(login_screen);
+        let configured_alone = |name: &str| self.shell_alone.iter().any(|a| a == name);
+        let dev_listed = |name: &str| {
+            self.dev_folder
+                .as_ref()
+                .is_some_and(|d| d.components.iter().any(|c| c == name))
+        };
+        let from_dev = |name: &&'static str| {
+            alone.contains(name) && dev_listed(name) && !facts.not_from_dev.contains(name)
+        };
+        let separate: Vec<(&'static str, bool)> = hosted
+            .iter()
+            .filter(|name| {
+                configured_alone(name) || from_dev(name) || facts.isolated.contains(name)
+            })
+            .map(|name| (*name, from_dev(name)))
+            .collect();
+        let shared = (!hosted.is_empty()).then(|| {
+            hosted
+                .iter()
+                .copied()
+                .filter(|name| !separate.iter().any(|(s, _)| s == name))
+                .collect()
+        });
+        let mut processes = Vec::new();
+        let mut left_alone = Vec::new();
+        for entry in &self.shell_processes {
+            if self.shell_off.contains(&entry.name) {
+                continue;
+            }
+            match crate::host::component_spec(&entry.name) {
+                None => processes.push(entry.clone()),
+                Some(spec) if hosted.contains(&spec.name) => left_alone.push(entry.name.clone()),
+                Some(spec) if active.contains(&spec.name) => {
+                    processes.extend(self.process_fallback_for(spec.name).cloned());
+                }
+                Some(_) => {}
+            }
+        }
+        ShellPlan {
+            shared,
+            separate,
+            processes,
+            left_alone,
+        }
+    }
+
+    /// Take the `shell` section of the system file `system` and of the person's file `user` again, each by its trust,
+    /// as at start: the component list, `off`, `alone` and the process entries. Returns what is refused.
+    pub fn apply_shell_layers(
+        &mut self,
+        system: &CompositorSettings,
+        user: &CompositorSettings,
+        trust: (LayerTrust, LayerTrust),
+    ) -> Vec<String> {
+        let defaults = Config::default();
+        let mut layered = Config {
+            dev_shell: self.dev_shell,
+            ..defaults
+        };
+        let only_shell = |f: &CompositorSettings| CompositorSettings {
+            shell: f.shell.clone(),
+            ..CompositorSettings::default()
+        };
+        let mut problems = layered.apply_privileged(&only_shell(system), trust.0);
+        problems.extend(layered.apply_privileged(&only_shell(user), trust.1));
+        self.shell_components = layered.shell_components;
+        self.shell_off = layered.shell_off;
+        self.shell_alone = layered.shell_alone;
+        self.shell_processes = layered.shell_processes;
+        problems
     }
 }

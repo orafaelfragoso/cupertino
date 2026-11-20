@@ -13,6 +13,16 @@
 //! waits for until a deadline ([`crate::process::CHECK_WAIT`]); a check that does not answer by then refuses the program.
 //! The process itself is spawned from the loop's thread, whose end kills it ([`end_with_server`]).
 //!
+//! The shell's hosts are supervised processes too (`docs/architecture/shell-host.md`, *Programs the server starts
+//! itself*): `host`, the shared host `cupertino-shell`, and `host-NAME`, a separate host `cupertino-shell --only NAME`,
+//! each holding the `host` role alone on a connection the [`Launcher`] makes ([`HostKind`]). A host is restarted
+//! whatever its exit status, never sooner than the throttle after its last start ([`decide_host`]), and never given up;
+//! an exit the server expected ([`Launcher::host_ended`]) is not counted and restarts it at once. A host whose program is
+//! refused or cannot be spawned is not tried again: the server runs its components as their own processes
+//! ([`Supervisor::host_refused`]) until `cupertino shell restart host` or a change of the `shell` section.
+//! [`Supervisor::reconcile`] adds and ends the configured processes and the hosts as the component list says; an ended
+//! one is removed once it exited.
+//!
 //! Each exit and each start that fails is also a diagnostic event: `server.shell.exited` (restarted),
 //! `server.shell.gave_up` (not restarted) and `server.shell.start_failed`.
 
@@ -23,12 +33,86 @@ use std::time::{Duration, Instant};
 use cupertino_diagnostic_events::{self as diag, Severity, Value};
 
 use crate::config::{check_built_in, dev_folder_program, BuiltIn, DevFolder, ShellProcess};
-use crate::restart_policy::{decide, with_exit_status, Backoff, Decision};
+use crate::host::HostKind;
+use crate::restart_policy::{decide, decide_host, with_exit_status, Backoff, Decision};
 use crate::shell_connection::{bind_holder, hand_over, BoundConnection};
 use crate::xwayland::XDisplay;
 
 /// How long a process asked to end for a restart has after SIGTERM before it is killed.
 pub const RESTART_STOP_GRACE: Duration = Duration::from_secs(5);
+
+/// The program of the shell's hosts (`cupertino-shell`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HostProgram {
+    pub path: PathBuf,
+    /// Arguments before the host's own (`--only NAME`); none for an installed host.
+    pub args: Vec<String>,
+    /// Checked before every start as a built-in program is ([`check_built_in`]); a program found on `PATH` for
+    /// `--dev-shell` is not.
+    pub checked: bool,
+}
+
+impl HostProgram {
+    /// The supervised process of a host of `kind`: `host` runs the program, `host-NAME` runs it with `--only NAME`;
+    /// both hold the `host` role alone.
+    pub fn process(&self, kind: HostKind) -> ShellProcess {
+        let mut command = vec![self.path.display().to_string()];
+        command.extend(self.args.iter().cloned());
+        if let HostKind::Separate(component) = kind {
+            command.extend(["--only".to_string(), component.to_string()]);
+        }
+        let name = host_name(kind);
+        ShellProcess {
+            name,
+            command,
+            roles: vec![crate::authorization::ShellRole::Host],
+        }
+    }
+}
+
+/// The name of the supervised host of `kind`: `host`, or `host-NAME` for the separate host of component NAME.
+pub fn host_name(kind: HostKind) -> String {
+    match kind {
+        HostKind::Shared => BuiltIn::Host.name().to_string(),
+        HostKind::Separate(component) => format!("{}-{component}", BuiltIn::Host.name()),
+    }
+}
+
+/// What the supervision needs from the server to start its processes and to follow its hosts.
+pub trait Launcher {
+    /// The connection of a shell process, holding `spec.roles` and no other.
+    fn connect(&mut self, spec: &ShellProcess) -> std::io::Result<BoundConnection>;
+    /// The client end of a new connection for a host of `kind`, and the id the server gave that host.
+    fn connect_host(
+        &mut self,
+        kind: HostKind,
+    ) -> std::io::Result<(std::os::unix::net::UnixStream, u64)>;
+    /// The host `host_id` was started as `pid`, from the development folder or not: its connection is bound to the
+    /// process. An error ends the process.
+    fn host_started(
+        &mut self,
+        host_id: u64,
+        pid: u32,
+        from_dev_folder: bool,
+    ) -> std::io::Result<()>;
+    /// The process of host `host_id` exited with `status`; whether the server expected the exit, which is then not
+    /// counted.
+    fn host_ended(&mut self, host_id: u64, status: ExitStatus, from_dev_folder: bool) -> bool;
+    /// A host of `kind` could not be started for `reason` and is not tried again; `host_id` is the connection made for
+    /// it, if one was.
+    fn host_refused(&mut self, kind: HostKind, host_id: Option<u64>, reason: &str);
+}
+
+/// Where a supervised process comes from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Origin {
+    /// An entry of the configuration's `shell` section.
+    Configured,
+    /// A program the server starts itself ([`BuiltIn`]).
+    BuiltIn,
+    /// A shell host.
+    Host(HostKind),
+}
 
 /// What one start ran.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -108,6 +192,8 @@ pub enum RestartError {
     Unknown(String),
     /// The process ended but could not be started again; the supervisor keeps trying after its throttle.
     NotStarted(String),
+    /// A component of a host was started again and did not say it is ready in time.
+    NotReady(String),
 }
 
 /// Where the answer to a restart goes: called once, from [`Supervisor::poll`] or [`Supervisor::request_restart`].
@@ -117,8 +203,15 @@ struct Supervised {
     spec: ShellProcess,
     phase: Phase,
     backoff: Backoff,
-    /// A built-in process: its program is checked again before every start ([`check_built_in`]).
-    built_in: bool,
+    origin: Origin,
+    /// Its program is checked again before every start ([`check_built_in`]).
+    checked: bool,
+    /// The server's id of the host connection of the running host.
+    host_id: Option<u64>,
+    /// Ended for good: removed once it exited.
+    retiring: bool,
+    /// Exited after it was retired: removed at the end of the pass.
+    gone: bool,
     /// The development folder the process may start from; `None` when it starts its installed program alone.
     dev_folder: Option<PathBuf>,
     /// The restarts asked for and not answered yet.
@@ -126,14 +219,25 @@ struct Supervised {
 }
 
 impl Supervised {
-    fn new(spec: ShellProcess, now: Instant, built_in: bool) -> Self {
+    fn new(spec: ShellProcess, now: Instant, origin: Origin, checked: bool) -> Self {
         Self {
             spec,
             phase: Phase::Waiting(now),
             backoff: Backoff::default(),
-            built_in,
+            origin,
+            checked,
+            host_id: None,
+            retiring: false,
+            gone: false,
             dev_folder: None,
             restarts: Vec::new(),
+        }
+    }
+
+    fn host(&self) -> Option<HostKind> {
+        match self.origin {
+            Origin::Host(kind) => Some(kind),
+            Origin::Configured | Origin::BuiltIn => None,
         }
     }
 
@@ -175,6 +279,12 @@ impl Supervised {
 /// The supervised shell processes.
 pub struct Supervisor {
     procs: Vec<Supervised>,
+    /// The program of the shell's hosts; `None` when it is not installed.
+    host_program: Option<HostProgram>,
+    /// Why the host program was refused at a start; while set no host starts.
+    host_refused: Option<String>,
+    /// The development folder the configured processes may start from ([`Supervisor::set_dev_folder`]).
+    dev_folder: Option<DevFolder>,
 }
 
 impl Supervisor {
@@ -183,49 +293,106 @@ impl Supervisor {
         Self {
             procs: specs
                 .iter()
-                .map(|spec| Supervised::new(spec.clone(), now, false))
+                .map(|spec| Supervised::new(spec.clone(), now, Origin::Configured, false))
                 .collect(),
+            host_program: None,
+            host_refused: None,
+            dev_folder: None,
         }
+    }
+
+    /// The program the hosts start, `None` when it is not installed; it applies from each host's next start, and takes
+    /// a refusal away.
+    pub fn set_host_program(&mut self, program: Option<HostProgram>) {
+        self.host_program = program;
+        self.host_refused = None;
+    }
+
+    /// The program the hosts start.
+    pub fn host_program(&self) -> Option<&HostProgram> {
+        self.host_program.as_ref()
+    }
+
+    /// Whether hosts may start: their program is installed and was not refused.
+    pub fn hosts_available(&self) -> bool {
+        self.host_program.is_some() && self.host_refused.is_none()
+    }
+
+    /// Why the host program was refused, while it is.
+    pub fn host_refused(&self) -> Option<&str> {
+        self.host_refused.as_deref()
+    }
+
+    /// Record that the host program was refused for `reason`; `None` lets the hosts try it again.
+    pub fn set_host_refused(&mut self, reason: Option<String>) {
+        self.host_refused = reason;
     }
 
     /// Let the processes `folder` names start from it ([`DevFolder::eligible`]); `None` takes the folder away. A name the
-    /// folder may not apply to is logged and ignored, and a built-in process never starts from it. It applies from each
-    /// process's next start.
+    /// folder may not apply to is logged and ignored, and a built-in process never starts from it; a name of a component
+    /// without a process entry is left to the hosts. It applies from each process's next start.
     pub fn set_dev_folder(&mut self, folder: Option<&DevFolder>) {
-        let configured: Vec<ShellProcess> = self
-            .procs
-            .iter()
-            .filter(|p| !p.built_in)
-            .map(|p| p.spec.clone())
-            .collect();
-        let eligible = match folder {
-            Some(folder) => {
-                let (eligible, warnings) = folder.eligible(&configured);
-                for warning in warnings {
-                    tracing::warn!(folder = %folder.path.display(), "{warning}: ignored");
-                }
-                eligible
+        self.dev_folder = folder.cloned();
+        if let Some(folder) = folder {
+            let configured = self.configured();
+            let for_processes = DevFolder {
+                path: folder.path.clone(),
+                components: folder
+                    .components
+                    .iter()
+                    .filter(|name| {
+                        crate::host::component_spec(name).is_none()
+                            || configured.iter().any(|p| &p.name == *name)
+                    })
+                    .cloned()
+                    .collect(),
+            };
+            let (eligible, warnings) = for_processes.eligible(&configured);
+            for warning in warnings {
+                tracing::warn!(folder = %folder.path.display(), "{warning}: ignored");
             }
+            tracing::info!(folder = %folder.path.display(), components = ?eligible, "development folder");
+        }
+        self.refresh_dev_folder();
+    }
+
+    /// The configured processes' specs.
+    fn configured(&self) -> Vec<ShellProcess> {
+        self.procs
+            .iter()
+            .filter(|p| p.origin == Origin::Configured)
+            .map(|p| p.spec.clone())
+            .collect()
+    }
+
+    /// Give every configured process the development folder when the folder applies to it.
+    fn refresh_dev_folder(&mut self) {
+        let eligible = match &self.dev_folder {
+            Some(folder) => folder.eligible(&self.configured()).0,
             None => Vec::new(),
         };
+        let path = self.dev_folder.as_ref().map(|f| f.path.clone());
         for p in &mut self.procs {
-            let applies = !p.built_in && eligible.contains(&p.spec.name);
-            p.dev_folder = folder.filter(|_| applies).map(|f| f.path.clone());
-        }
-        if let Some(folder) = folder {
-            tracing::info!(folder = %folder.path.display(), components = ?eligible, "development folder");
+            match p.origin {
+                Origin::Configured => {
+                    let applies = eligible.contains(&p.spec.name);
+                    p.dev_folder = path.clone().filter(|_| applies);
+                }
+                // a folder taken away applies to the hosts from their next start too; the plan gives one back
+                Origin::Host(_) if path.is_none() => p.dev_folder = None,
+                Origin::Host(_) | Origin::BuiltIn => {}
+            }
         }
     }
 
-    /// Supervise the built-in processes from `programs`, each at the first [`Supervisor::poll`] at or after `now`. One
-    /// whose program is not installed (no path, or nothing at it) is logged once and never started. The program is
-    /// checked before every start ([`check_built_in`]): a refused start waits out the throttle, like a failed one.
-    /// Add `cupertino-login --greeter` as a built-in process for the login session (W5.5).
+    /// Supervise `cupertino-login --greeter` for the login session; one whose program is not installed (no path, or
+    /// nothing at it) is logged once and never started. The program is checked before every start ([`check_built_in`]).
     pub fn add_login_greeter(&mut self, program: Option<PathBuf>, now: Instant) {
         match program.filter(|p| p.symlink_metadata().is_ok()) {
             Some(program) => self.procs.push(Supervised::new(
                 BuiltIn::login_greeter_process(&program),
                 now,
+                Origin::BuiltIn,
                 true,
             )),
             None => tracing::info!(
@@ -235,6 +402,9 @@ impl Supervisor {
         }
     }
 
+    /// Supervise the built-in processes from `programs`, each at the first [`Supervisor::poll`] at or after `now`. One
+    /// whose program is not installed (no path, or nothing at it) is logged once and never started. The program is
+    /// checked before every start ([`check_built_in`]): a refused start waits out the throttle, like a failed one.
     pub fn add_built_ins(
         &mut self,
         programs: impl IntoIterator<Item = (BuiltIn, Option<PathBuf>)>,
@@ -242,10 +412,12 @@ impl Supervisor {
     ) {
         for (built_in, program) in programs {
             match program.filter(|p| p.symlink_metadata().is_ok()) {
-                Some(program) => {
-                    self.procs
-                        .push(Supervised::new(built_in.process(&program), now, true))
-                }
+                Some(program) => self.procs.push(Supervised::new(
+                    built_in.process(&program),
+                    now,
+                    Origin::BuiltIn,
+                    true,
+                )),
                 None => {
                     tracing::info!(
                         name = built_in.name(),
@@ -254,6 +426,75 @@ impl Supervisor {
                 }
             }
         }
+    }
+
+    /// Make the configured processes `processes` and the hosts `hosts` (each with the development folder it starts
+    /// from, if any) the ones that run: a missing one starts at the next pass at or after `now`, one that is no longer
+    /// named ends and is removed once it exited (a configured process and the shared host after SIGTERM, killed after
+    /// [`RESTART_STOP_GRACE`]; a separate host by itself, once the server sent it an empty list). Built-in processes are
+    /// left alone, and hosts are not started while [`Supervisor::hosts_available`] does not hold. Returns the hosts that
+    /// end, with the id of their connection: the server expects their exit.
+    pub fn reconcile(
+        &mut self,
+        processes: &[ShellProcess],
+        hosts: &[(HostKind, Option<PathBuf>)],
+        now: Instant,
+    ) -> Vec<(HostKind, Option<u64>)> {
+        let hosts: &[(HostKind, Option<PathBuf>)] =
+            if self.hosts_available() { hosts } else { &[] };
+        let mut ended = Vec::new();
+        for p in &mut self.procs {
+            let wanted = match p.origin {
+                Origin::BuiltIn => continue,
+                Origin::Configured => processes.iter().any(|s| s.name == p.spec.name),
+                Origin::Host(kind) => hosts.iter().any(|(k, _)| *k == kind),
+            };
+            if wanted {
+                p.retiring = false;
+            } else if !p.retiring {
+                if let Some(kind) = p.host() {
+                    ended.push((kind, p.host_id));
+                }
+                retire(p, now);
+            }
+        }
+        self.procs.retain(|p| !p.gone);
+        for spec in processes {
+            match self
+                .procs
+                .iter_mut()
+                .find(|p| p.origin == Origin::Configured && p.spec.name == spec.name)
+            {
+                // a changed entry applies from its next start
+                Some(p) => p.spec = spec.clone(),
+                None => self.procs.push(Supervised::new(
+                    spec.clone(),
+                    now,
+                    Origin::Configured,
+                    false,
+                )),
+            }
+        }
+        if let Some(program) = self.host_program.clone() {
+            for (kind, dev_folder) in hosts {
+                let p = match self.procs.iter_mut().find(|p| p.host() == Some(*kind)) {
+                    Some(p) => p,
+                    None => {
+                        let spec = program.process(*kind);
+                        self.procs.push(Supervised::new(
+                            spec,
+                            now,
+                            Origin::Host(*kind),
+                            program.checked,
+                        ));
+                        self.procs.last_mut().expect("just pushed")
+                    }
+                };
+                p.dev_folder = dev_folder.clone();
+            }
+        }
+        self.refresh_dev_folder();
+        ended
     }
 
     /// Whether the process named `name` is supervised, running or not.
@@ -271,11 +512,31 @@ impl Supervisor {
         self.procs.iter().map(Supervised::info).collect()
     }
 
+    /// The host of `kind` as a process, while it is supervised.
+    pub fn host_info(&self, kind: HostKind) -> Option<ProcessInfo> {
+        self.procs
+            .iter()
+            .find(|p| p.host() == Some(kind))
+            .map(Supervised::info)
+    }
+
+    /// The id of the connection of the running host named `name` (`host`, `host-NAME`).
+    pub fn host_id_of(&self, name: &str) -> Option<u64> {
+        self.procs
+            .iter()
+            .find(|p| p.host().is_some() && p.spec.name == name)
+            .and_then(|p| p.host_id)
+    }
+
     /// Restart the process named `name`: a running one is sent SIGTERM and killed after [`RESTART_STOP_GRACE`], and once
     /// it ended it starts again at once, whatever its exit status; one that is not running starts at once. `reply` gets
     /// the process once it runs, or why not. The starts happen in [`Supervisor::poll`], which the caller runs next.
     pub fn request_restart(&mut self, name: &str, now: Instant, reply: RestartReply) {
-        let Some(p) = self.procs.iter_mut().find(|p| p.spec.name == name) else {
+        let Some(p) = self
+            .procs
+            .iter_mut()
+            .find(|p| p.spec.name == name && !p.retiring)
+        else {
             reply(Err(RestartError::Unknown(name.to_string())));
             return;
         };
@@ -303,99 +564,27 @@ impl Supervisor {
         };
     }
 
-    /// Start due processes and restart exited ones as the policy says. Children get `WAYLAND_DISPLAY=socket` and the X
-    /// display `x11` ([`crate::xwayland::set_client_env`]) for the programs they start, and their own connection from
-    /// `connect` (made for the process's roles) as `WAYLAND_SOCKET`.
+    /// Start due processes and restart exited ones as the policy says. Children get `WAYLAND_DISPLAY=socket` (when the
+    /// server listens on one) and the X display `x11` ([`crate::xwayland::set_client_env`]) for the programs they start,
+    /// and their own connection from `launcher` (made for the process's roles, or a host connection) as `WAYLAND_SOCKET`.
     pub fn poll(
         &mut self,
         now: Instant,
-        socket: &str,
+        socket: Option<&str>,
         x11: Option<&XDisplay>,
-        connect: &mut dyn FnMut(&ShellProcess) -> std::io::Result<BoundConnection>,
+        launcher: &mut dyn Launcher,
     ) {
+        let env = StartEnv { socket, x11, now };
+        let mut refused = false;
         for p in &mut self.procs {
-            let mut start_now = |p: &mut Supervised| {
-                start(
-                    &p.spec,
-                    p.built_in,
-                    p.dev_folder.as_deref(),
-                    socket,
-                    x11,
-                    connect,
-                    now,
-                    &mut p.backoff,
-                )
-            };
-            let mut failed_start = None;
-            p.phase = match std::mem::replace(&mut p.phase, Phase::Stopped) {
-                Phase::Waiting(at) if at <= now => {
-                    let (phase, failure) = start_now(p);
-                    failed_start = failure;
-                    phase
-                }
-                Phase::Running {
-                    mut child,
-                    started,
-                    launch,
-                } => match child
-                    .try_wait()
-                    .expect("waiting on a child the supervisor started")
-                {
-                    None => Phase::Running {
-                        child,
-                        started,
-                        launch,
-                    },
-                    Some(status) => {
-                        tracing::info!(name = p.spec.name, %status, "shell process exited");
-                        let decision = decide(status, started, now, &mut p.backoff);
-                        record_exit(&p.spec, status, decision, now);
-                        match decision {
-                            Decision::RestartNow => {
-                                let (phase, failure) = start_now(p);
-                                failed_start = failure;
-                                phase
-                            }
-                            Decision::RestartAt(at) => Phase::Waiting(at),
-                            Decision::Stop => Phase::Stopped,
-                        }
-                    }
-                },
-                Phase::Stopping {
-                    mut child,
-                    kill_at,
-                    launch,
-                } => match child
-                    .try_wait()
-                    .expect("waiting on a child the supervisor started")
-                {
-                    None => {
-                        let kill_at = match kill_at {
-                            Some(at) if at <= now => {
-                                tracing::warn!(name = p.spec.name, pid = child.id(), "the shell process did not end for its restart in time: killing it");
-                                // it may have exited since the wait: killing it then fails harmlessly
-                                let _ = child.kill();
-                                None
-                            }
-                            other => other,
-                        };
-                        Phase::Stopping {
-                            child,
-                            kill_at,
-                            launch,
-                        }
-                    }
-                    Some(status) => {
-                        tracing::info!(name = p.spec.name, %status, "shell process ended for its restart");
-                        p.backoff = Backoff::default();
-                        let (phase, failure) = start_now(p);
-                        failed_start = failure;
-                        phase
-                    }
-                },
-                other => other,
-            };
+            let failed_start = step(p, &env, launcher, &mut refused);
             answer_restarts(p, failed_start);
+        }
+        self.procs.retain(|p| !p.gone);
+        if refused {
+            // a refused host is not tried again: its components run as processes until the program is tried again
+            self.host_refused
+                .get_or_insert_with(|| "the host program was refused".into());
         }
     }
 
@@ -436,6 +625,156 @@ impl Supervisor {
             .find(|p| p.spec.name == name)
             .and_then(|p| p.child().map(Child::id))
     }
+}
+
+/// End `p` for good: one that does not run is gone at once; a separate host is left to exit once it has an empty list;
+/// any other running process is sent SIGTERM and killed after [`RESTART_STOP_GRACE`]. Restarts asked for are answered.
+fn retire(p: &mut Supervised, now: Instant) {
+    p.retiring = true;
+    tracing::info!(
+        name = p.spec.name,
+        "no longer configured: the shell process ends"
+    );
+    for reply in p.restarts.drain(..) {
+        reply(Err(RestartError::NotStarted(
+            "it is no longer configured".into(),
+        )));
+    }
+    p.phase = match std::mem::replace(&mut p.phase, Phase::Stopped) {
+        Phase::Waiting(_) | Phase::Stopped => {
+            p.gone = true;
+            Phase::Stopped
+        }
+        Phase::Running {
+            child,
+            started,
+            launch,
+        } if matches!(p.origin, Origin::Host(HostKind::Separate(_))) => Phase::Running {
+            child,
+            started,
+            launch,
+        },
+        Phase::Running { child, launch, .. } => {
+            terminate(&child);
+            Phase::Stopping {
+                child,
+                kill_at: Some(now + RESTART_STOP_GRACE),
+                launch,
+            }
+        }
+        stopping @ Phase::Stopping { .. } => stopping,
+    };
+}
+
+/// What every start of a pass shares.
+struct StartEnv<'a> {
+    socket: Option<&'a str>,
+    x11: Option<&'a XDisplay>,
+    now: Instant,
+}
+
+/// One pass over `p`: start it when due, reap it when it exited and decide its next start. Returns why a start that was
+/// tried failed; `refused` is set when a host could not start and is not tried again.
+fn step(
+    p: &mut Supervised,
+    env: &StartEnv<'_>,
+    launcher: &mut dyn Launcher,
+    refused: &mut bool,
+) -> Option<String> {
+    let now = env.now;
+    let mut failed_start = None;
+    p.phase = match std::mem::replace(&mut p.phase, Phase::Stopped) {
+        Phase::Waiting(at) if at <= now && !p.retiring => {
+            let (phase, failure) = start(p, env, launcher, refused);
+            failed_start = failure;
+            phase
+        }
+        Phase::Running {
+            mut child,
+            started,
+            launch,
+        } => match child
+            .try_wait()
+            .expect("waiting on a child the supervisor started")
+        {
+            None => Phase::Running {
+                child,
+                started,
+                launch,
+            },
+            Some(status) => {
+                tracing::info!(name = p.spec.name, %status, "shell process exited");
+                let expected = match (p.host(), p.host_id.take()) {
+                    (Some(_), Some(id)) => launcher.host_ended(id, status, launch.from_dev_folder),
+                    _ => false,
+                };
+                if p.retiring {
+                    p.gone = true;
+                    return None;
+                }
+                let decision = match p.host() {
+                    Some(_) => decide_host(expected, started, now, &mut p.backoff),
+                    None => decide(status, started, now, &mut p.backoff),
+                };
+                record_exit(&p.spec, status, decision, now);
+                match decision {
+                    Decision::RestartNow => {
+                        let (phase, failure) = start(p, env, launcher, refused);
+                        failed_start = failure;
+                        phase
+                    }
+                    Decision::RestartAt(at) => Phase::Waiting(at),
+                    Decision::Stop => Phase::Stopped,
+                }
+            }
+        },
+        Phase::Stopping {
+            mut child,
+            kill_at,
+            launch,
+        } => match child
+            .try_wait()
+            .expect("waiting on a child the supervisor started")
+        {
+            None => {
+                let kill_at = match kill_at {
+                    Some(at) if at <= now => {
+                        tracing::warn!(
+                            name = p.spec.name,
+                            pid = child.id(),
+                            "the shell process did not end in time: killing it"
+                        );
+                        // it may have exited since the wait: killing it then fails harmlessly
+                        let _ = child.kill();
+                        None
+                    }
+                    other => other,
+                };
+                Phase::Stopping {
+                    child,
+                    kill_at,
+                    launch,
+                }
+            }
+            Some(status) => {
+                tracing::info!(name = p.spec.name, %status, "shell process ended for its restart");
+                if let (Some(_), Some(id)) = (p.host(), p.host_id.take()) {
+                    // asked to end: never a crash
+                    launcher.host_ended(id, status, launch.from_dev_folder);
+                }
+                if p.retiring {
+                    p.gone = true;
+                    return None;
+                }
+                p.backoff = Backoff::default();
+                let (phase, failure) = start(p, env, launcher, refused);
+                failed_start = failure;
+                phase
+            }
+        },
+        other => other,
+    };
+    failed_start
 }
 
 /// Ask `child` to end: SIGTERM. A child that already exited and is not reaped yet ignores it.
@@ -542,41 +881,50 @@ fn record_start_failed(
 }
 
 /// Spawn the process; a failed spawn counts as an exit with failure, so it is retried after the throttle, which grows.
-/// The program of a `built_in` process that [`check_built_in`] refuses is not started, and is checked again then. A
-/// process with a `dev_folder` starts the folder's program when [`dev_folder_program`] accepts it, else its installed
-/// one. Returns the new phase and, for a start that failed, why.
-#[allow(clippy::too_many_arguments)]
+/// A checked program ([`check_built_in`]) that is refused is not started, and is checked again then. A process with a
+/// development folder starts the folder's program when [`dev_folder_program`] accepts it, else its installed one. A
+/// host whose program is refused or cannot be spawned is not retried: [`Launcher::host_refused`] hears it, `refused`
+/// is set and the host stays stopped. Returns the new phase and, for a start that failed, why.
 fn start(
-    spec: &ShellProcess,
-    built_in: bool,
-    dev_folder: Option<&Path>,
-    socket: &str,
-    x11: Option<&XDisplay>,
-    connect: &mut dyn FnMut(&ShellProcess) -> std::io::Result<BoundConnection>,
-    now: Instant,
-    backoff: &mut Backoff,
+    p: &mut Supervised,
+    env: &StartEnv<'_>,
+    launcher: &mut dyn Launcher,
+    refused: &mut bool,
 ) -> (Phase, Option<String>) {
+    let now = env.now;
+    let spec = p.spec.clone();
+    let host = p.host();
     let (installed, args) = spec
         .command
         .split_first()
         .expect("shell process commands are validated non-empty at load");
+    let backoff = &mut p.backoff;
     let mut retry = |stage: &'static str, program: &Path, error: String| {
         let retry = backoff.next_interval(Duration::ZERO);
-        record_start_failed(spec, program, stage, &error, retry);
+        record_start_failed(&spec, program, stage, &error, retry);
         (
             Phase::Waiting(now + retry),
             Some(format!("{stage}: {error}")),
         )
     };
-    if built_in {
+    let mut refuse =
+        |launcher: &mut dyn Launcher, kind: HostKind, id: Option<u64>, reason: String| {
+            launcher.host_refused(kind, id, &reason);
+            *refused = true;
+            (Phase::Stopped, Some(reason))
+        };
+    if p.checked {
         let program = PathBuf::from(installed);
         let checked = checked_in_time(move || check_built_in(&program));
         if let Err(reason) = checked {
-            tracing::warn!(name = spec.name, %reason, "the built-in program is not started");
+            tracing::warn!(name = spec.name, %reason, "the program is not started");
+            if let Some(kind) = host {
+                return refuse(launcher, kind, None, format!("program_check: {reason}"));
+            }
             return retry("program_check", Path::new(installed), reason);
         }
     }
-    let from_dev = dev_folder.and_then(|folder| {
+    let from_dev = p.dev_folder.as_deref().and_then(|folder| {
         let (folder, program) = (folder.to_path_buf(), installed.clone());
         let user = rustix::process::getuid().as_raw();
         match checked_in_time(move || dev_folder_program(&folder, &program, user)) {
@@ -589,7 +937,15 @@ fn start(
     });
     let from_dev_folder = from_dev.is_some();
     let program = from_dev.unwrap_or_else(|| PathBuf::from(installed));
-    let (stream, state) = match connect(spec) {
+    let connection = match host {
+        Some(kind) => launcher
+            .connect_host(kind)
+            .map(|(stream, id)| (stream, None, Some(id))),
+        None => launcher
+            .connect(&spec)
+            .map(|(stream, state)| (stream, Some(state), None)),
+    };
+    let (stream, state, host_id) = match connection {
         Ok(connection) => connection,
         Err(e) => {
             tracing::warn!(name = spec.name, error = %e, "creating the shell process's connection failed");
@@ -599,47 +955,64 @@ fn start(
     let mut command = Command::new(&program);
     command
         .args(args)
-        .env("WAYLAND_DISPLAY", socket)
         .env("XDG_CURRENT_DESKTOP", crate::state::CURRENT_DESKTOP)
         .env("XDG_SESSION_TYPE", "wayland");
-    crate::xwayland::set_client_env(&mut command, x11);
+    match env.socket {
+        Some(socket) => command.env("WAYLAND_DISPLAY", socket),
+        None => command.env_remove("WAYLAND_DISPLAY"),
+    };
+    crate::xwayland::set_client_env(&mut command, env.x11);
     hand_over(&mut command, &stream);
     end_with_server(&mut command);
-    match command.spawn() {
-        Ok(child) => {
-            if let Err(e) = bind_holder(&state, child.id()) {
-                tracing::warn!(name = spec.name, error = %e, "binding the shell process to its connection failed: ending it");
-                crate::shell_connection::end_unbound(child);
-                return retry("bind", &program, e.to_string());
-            }
-            let source = if from_dev_folder {
-                "development folder"
-            } else {
-                "installed"
-            };
-            tracing::info!(name = spec.name, pid = child.id(), program = %program.display(), source, "shell process started");
-            let pid = child.id();
-            let launch = Launch {
-                start_ticks: crate::process::Lookups::shared()
-                    .run(None, crate::process::CHECK_WAIT, move || start_ticks(pid))
-                    .flatten(),
-                program,
-                from_dev_folder,
-            };
-            (
-                Phase::Running {
-                    child,
-                    started: now,
-                    launch,
-                },
-                None,
-            )
-        }
+    let child = match command.spawn() {
+        Ok(child) => child,
         Err(e) => {
             tracing::warn!(name = spec.name, program = %program.display(), error = %e, "starting shell process failed");
-            retry("spawn", &program, e.to_string())
+            if let Some(kind) = host {
+                return refuse(launcher, kind, host_id, format!("spawn: {e}"));
+            }
+            return retry("spawn", &program, e.to_string());
         }
+    };
+    // the server keeps no descriptor of the child's end
+    drop(stream);
+    let bound = match (&state, host_id) {
+        (Some(state), _) => bind_holder(state, child.id()),
+        (None, Some(id)) => launcher.host_started(id, child.id(), from_dev_folder),
+        (None, None) => Err(std::io::Error::other("the connection has no state")),
+    };
+    if let Err(e) = bound {
+        tracing::warn!(name = spec.name, error = %e, "binding the shell process to its connection failed: ending it");
+        if let Some(id) = host_id {
+            // the host never ran: its end is no crash, and the next start makes another connection
+            launcher.host_ended(id, std::process::ExitStatus::default(), from_dev_folder);
+        }
+        crate::shell_connection::end_unbound(child);
+        return retry("bind", &program, e.to_string());
     }
+    p.host_id = host_id;
+    let source = if from_dev_folder {
+        "development folder"
+    } else {
+        "installed"
+    };
+    tracing::info!(name = spec.name, pid = child.id(), program = %program.display(), source, "shell process started");
+    let pid = child.id();
+    let launch = Launch {
+        start_ticks: crate::process::Lookups::shared()
+            .run(None, crate::process::CHECK_WAIT, move || start_ticks(pid))
+            .flatten(),
+        program,
+        from_dev_folder,
+    };
+    (
+        Phase::Running {
+            child,
+            started: now,
+            launch,
+        },
+        None,
+    )
 }
 
 /// The answer of the program check `check`, run on a thread the loop waits for until [`crate::process::CHECK_WAIT`] has

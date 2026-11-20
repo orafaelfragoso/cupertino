@@ -33,6 +33,9 @@ impl Cupertino {
             HostEntry {
                 id: host_id,
                 kind,
+                client: client_id,
+                from_dev_folder: false,
+                spawned: false,
                 components,
                 resource: None,
                 component_objects: HashMap::new(),
@@ -85,7 +88,8 @@ impl Cupertino {
         };
         rec.separate_for_session = false;
         if let Some(cb) = waiter {
-            rec.restart_waiters.push((now + HOLD_READY_TIMEOUT, cb));
+            rec.restart_waiters
+                .push((now + HOLD_READY_TIMEOUT, rec.instance, cb));
         }
         if rec.gave_up {
             rec.gave_up = false;
@@ -184,6 +188,11 @@ impl Cupertino {
     /// Periodic host housekeeping: answer due backoffs, expire nonces and holds, answer quiet-moment restarts,
     /// create throttled bridges, and kill overdue expected-exit hosts.
     pub fn tick_hosts(&mut self, now: Instant) {
+        // 0. What the hosts said since the last plan (a crash that isolates every component) moves components.
+        if self.hosts.plan_dirty {
+            self.apply_shell_plan();
+        }
+
         // 1. Reset failure counters for components running stably for >= 60s.
         for rec in self.hosts.components.values_mut() {
             if rec.active.is_some()
@@ -217,11 +226,11 @@ impl Cupertino {
                 expired_hold_components.push(name);
             }
             let mut keep = Vec::new();
-            for (deadline, cb) in std::mem::take(&mut rec.restart_waiters) {
+            for (deadline, before, cb) in std::mem::take(&mut rec.restart_waiters) {
                 if now >= deadline {
                     cb(Err(format!("{name}: started and not ready")));
                 } else {
-                    keep.push((deadline, cb));
+                    keep.push((deadline, before, cb));
                 }
             }
             rec.restart_waiters = keep;
@@ -547,6 +556,8 @@ impl Cupertino {
         if let Some(host_id) = self.hosts.host_by_client.remove(client_id) {
             if let Some(host) = self.hosts.hosts.remove(&host_id) {
                 let expected = host.expected_exit_kill_at.is_some();
+                // the supervisor reads it when it reaps the host's process
+                self.hosts.ended.insert(host_id, expected);
                 match host.kind {
                     HostKind::Separate(comp) => {
                         if let Some(shared) = self.shared_host_resource() {
@@ -567,6 +578,7 @@ impl Cupertino {
                                     self.hosts.shared_host_crashes.len()
                                 );
                                 self.hosts.all_separate_for_session = true;
+                                self.hosts.plan_dirty = true;
                             }
                         }
                     }
@@ -1062,20 +1074,16 @@ impl Dispatch<CupertinoHostComponentV1, HostComponentData> for Cupertino {
                             })
                             .unwrap_or_default();
                         state.set_host_components(data.host_id, new_list);
-                        if !state.hosts.component_gave_up(component) {
-                            state.hosts.requested_separate_hosts.push(component);
-                        }
                     }
                     Some(HostKind::Separate(_)) => {
                         if let Some(host) = state.hosts.hosts.get_mut(&data.host_id) {
                             host.expected_exit_kill_at = Some(now + EXPECTED_EXIT_KILL_GRACE);
                         }
-                        if !state.hosts.component_gave_up(component) {
-                            state.hosts.requested_separate_hosts.push(component);
-                        }
                     }
                     None => {}
                 }
+                // a lost component runs alone for the rest of the session: its separate host starts
+                state.apply_shell_plan();
             }
             cupertino_host_component_v1::Request::Failed { cause } => {
                 let WEnum::Value(cause) = cause else {
@@ -1091,9 +1099,21 @@ impl Dispatch<CupertinoHostComponentV1, HostComponentData> for Cupertino {
                     return;
                 };
                 tracing::warn!(component, ?reason, "shell component unavailable in host");
-                if let Some(host) = state.hosts.hosts.get_mut(&data.host_id) {
-                    host.connect_pending.remove(component);
+                let Some(host) = state.hosts.hosts.get_mut(&data.host_id) else {
+                    return;
+                };
+                host.connect_pending.remove(component);
+                if host.from_dev_folder {
+                    tracing::info!(component, "the development folder's host gives the component back to the installed host");
+                    state.hosts.dev_given_back.insert(component);
+                } else if reason == UnavailableReason::Absent {
+                    tracing::info!(component, "the host was built without the component: it runs as its process entry, if it has one");
+                    state.hosts.absent.insert(component);
+                } else {
+                    tracing::warn!(component, "the host was built with other protocol versions: the component stays stopped in it");
+                    return;
                 }
+                state.apply_shell_plan();
             }
             _ => {}
         }
@@ -1279,7 +1299,12 @@ impl Dispatch<CupertinoComponentV1, ComponentGlobalData> for Cupertino {
                     if rec.instance == data.instance {
                         rec.ready = true;
                         rec.hold_expire_at = None;
-                        for (_, cb) in std::mem::take(&mut rec.restart_waiters) {
+                        // a restart is answered by an instance started after it was asked for
+                        let (answered, waiting) = std::mem::take(&mut rec.restart_waiters)
+                            .into_iter()
+                            .partition(|(_, before, _)| *before < data.instance);
+                        rec.restart_waiters = waiting;
+                        for (_, _, cb) in answered {
                             cb(Ok(()));
                         }
                     }

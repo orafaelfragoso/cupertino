@@ -40,7 +40,7 @@
 //! | `SetAccessibility(s key, s value)` | one key of `accessibility.conf` with a value as the file writes it (`reduce_motion` `on`, `color_filter` `tint 0.5`, ...): applied and stored like the key actions; an unknown key or bad value is `InvalidArgs` |
 //! | `ListShellProcesses -> a(ssuttsbss)` | every process the server supervises, in start order, as `(name, state, pid, start_ticks, started, program, from_dev_folder, installed, dev_program)`: `state` is `running`, `stopping`, `waiting` or `stopped`; `pid`, `start_ticks` (field 22 of `/proc/PID/stat`), `started` (seconds since 1970) are 0 and `program` empty while it does not run; `from_dev_folder` says the program is the development folder's; `installed` is the configured program and `dev_program` the development folder's file it would start, empty when the folder does not apply. Only an unsandboxed process of the session's own user may call it |
 //! | `RestartShellProcess(s name) -> (ssuttsbss)` | ends the process (SIGTERM, then SIGKILL after `crate::supervisor::RESTART_STOP_GRACE`) and starts it again at once, the development folder resolved again; answers once it runs, with the same record. A component that runs in a host is restarted through its host and answered once it is ready, with its host's record under its name; `host` and `host-NAME` name the hosts. An unknown name is `InvalidArgs`, a start that failed `Failed`. Only an unsandboxed process of the session's own user may call it |
-//! | `StartScreenshot` | starts the screenshot program as the portal's service: the `screenshot` key's command with `--serve`, on a connection the server makes with the `session` and `capture` roles ([`crate::capture::launch`]), unless one it started so still runs; returns once it runs, and the portal then waits for `org.cupertino.Screenshot1` on the bus. `Failed` on the login screen or when it cannot start. Only the portal the server started may call it |
+//! | `StartScreenshot` | starts the screenshot program as the portal's service: the `screenshot` key's command with `--serve`, on a connection the server makes with the `session` and `capture` roles ([`crate::capture::launch`]), unless one it started so still runs and has not dropped that name (one going away drops the name before its exit is seen); returns once it runs, and the portal then waits for `org.cupertino.Screenshot1` on the bus. `Failed` on the login screen or when it cannot start. Only the portal the server started may call it |
 //! | `ProgramOf(s unique_name) -> s` | the program the server started itself that owns the connection `unique_name`, by the server's own name for it (`portal`, `login`, `desktop-control`, `polkit-agent`, `keyring-prompter`, `screenshot`): the connection's process, as the bus daemon gives it, is one the server holds the pidfd of and it has not exited ([`Cupertino::program_of`]); empty for any other connection, a host's and its components' included, and for a name that is not a unique name. Open to every caller: it tells which connection is which program, and nothing else |
 //! | `Appearance` property `s` | `light` or `dark`, the session's appearance (with `PropertiesChanged`) |
 //! | `Accessibility` property `a{ss}` | every key of `accessibility.conf` with its value (with `PropertiesChanged`) |
@@ -56,6 +56,7 @@ use crate::caller::{Asker, Caller, Denial, Need};
 use crate::config::BuiltIn;
 use crate::state::Cupertino;
 use crate::supervisor::{ProcessInfo, RestartError};
+use cupertino_peer::ProcessHandle;
 use cupertino_wm::{AppId, Command, WindowId};
 
 mod service;
@@ -295,8 +296,17 @@ pub enum Call {
     SwitchToLoginWindow(Asker, async_channel::Sender<Result<(), Reject>>),
     /// Retry asking the next application after an interrupt during a session-ending quit sequence.
     RetrySessionAction(Asker, async_channel::Sender<Result<(), Reject>>),
-    /// Start the screenshot program as the portal's service (`StartScreenshot`).
-    StartScreenshot(Caller, async_channel::Sender<Result<(), Reject>>),
+    /// Start the screenshot program as the portal's service (`StartScreenshot`): the caller, and the process that owns
+    /// the service's bus name when the call came (`crate::capture::launch::SERVICE_NAME`), none when no process the
+    /// bus names does.
+    StartScreenshot(
+        Caller,
+        Option<ProcessHandle>,
+        async_channel::Sender<Result<(), Reject>>,
+    ),
+    /// The service's bus name has a new owner, the process the bus names for it, or none
+    /// ([`Cupertino::screenshot_service_owner`]).
+    ScreenshotServiceOwner(Option<ProcessHandle>),
     /// The program the server started itself whose process owns a bus connection, empty for any other (`ProgramOf`):
     /// the connection's process as the bus daemon gives it.
     ProgramOf(Caller, async_channel::Sender<Result<String, Reject>>),
@@ -1047,16 +1057,17 @@ impl Cupertino {
                 let name = self.program_of(&process).unwrap_or("").to_owned();
                 let _ = reply.try_send(Ok(name));
             }
-            Call::StartScreenshot(caller, reply) => {
+            Call::StartScreenshot(caller, owner, reply) => {
                 let answer = self
                     .authorize_program_call("StartScreenshot", &caller, BuiltIn::Portal.name())
                     .map_err(Reject::Caller)
                     .and_then(|()| {
-                        self.start_serving_screenshot()
+                        self.start_serving_screenshot(owner.as_ref())
                             .map_err(|e| Reject::Refusal(Refusal::Failed(e)))
                     });
                 let _ = reply.try_send(answer);
             }
+            Call::ScreenshotServiceOwner(owner) => self.screenshot_service_owner(owner.as_ref()),
         }
     }
 }

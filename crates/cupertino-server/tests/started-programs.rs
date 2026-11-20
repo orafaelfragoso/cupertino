@@ -1,6 +1,9 @@
 //! The programs the server starts itself are known by their processes (`docs/architecture/shell-host.md`, *Identity*):
 //! - `org.cupertino.Session1.StartScreenshot` is the portal's alone: it starts the screenshot program with `--serve` on
 //!   a connection of its own, once while that one runs, again after it exited, and never on the login screen;
+//! - a service the server saw own `org.cupertino.Screenshot1` that no longer owns it is going away, though its exit is
+//!   not seen yet, so the next call starts a new one: whether the bus told the server the name went, or the name has no
+//!   owner when the call comes;
 //! - `ProgramOf` names the program the server started itself behind a connection's process, the portal and the
 //!   screenshot program here, while it runs, and nothing for any other process;
 //! - both are on the bus, where `cupertino-peer` resolves a caller the server names no program as no part of the shell.
@@ -8,7 +11,7 @@
 //! This test binary stands in for both programs. Hard-linked as `cupertino-portal` under an install root of the
 //! test's own, the supervisor starts it as the portal with no arguments, so every test of the binary starts in it and
 //! first holds the portal's connection there ([`as_started_program`]). Started with [`STAND_IN`] it is the screenshot
-//! program ([`screenshot_stand_in`]).
+//! program ([`screenshot_stand_in`]), which owns the service's name on the test's bus when the test gives it one.
 
 use std::io::{BufRead, BufReader};
 use std::os::fd::AsRawFd;
@@ -21,7 +24,7 @@ use std::time::{Duration, Instant};
 use cupertino_assets::Assets;
 use cupertino_peer::component::{resolve_component, ComponentCaller};
 use cupertino_peer::{Caller, Denial, ProcessHandle};
-use cupertino_server::capture::launch::SERVE_ARG;
+use cupertino_server::capture::launch::{SERVE_ARG, SERVICE_NAME};
 use cupertino_server::config::BuiltIn;
 use cupertino_server::quit::{
     start_session_service_on, Call, Refusal, Reject, BUS_NAME, OBJECT_PATH,
@@ -74,11 +77,50 @@ fn as_started_program() {
     }
 }
 
+/// The name the test claims on its bus to have the screenshot stand-in drop [`SERVICE_NAME`] and live on.
+const RELEASE_NAME: &str = "org.cupertino.Test.ReleaseScreenshot";
+
+/// Where a test that runs a bus writes its address for the screenshot stand-ins it starts: a file named after the test's
+/// process, the stand-in's parent.
+fn bus_address_file(test: u32) -> PathBuf {
+    PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("started-programs-bus-{test}"))
+}
+
+/// As the portal's service on the test's bus, when the test wrote one ([`bus_address_file`]): own [`SERVICE_NAME`] until
+/// a connection owns [`RELEASE_NAME`], then drop it and keep the bus connection. The connection, for as long as the
+/// process lives.
+fn serve_on_the_test_bus() -> Option<zbus::blocking::Connection> {
+    let address = std::fs::read_to_string(bus_address_file(cupertino_peer::own_parent())).ok()?;
+    let conn = zbus::blocking::connection::Builder::address(address.trim())
+        .unwrap()
+        .build()
+        .unwrap();
+    let dbus = zbus::blocking::fdo::DBusProxy::new(&conn).unwrap();
+    let mut releases = dbus
+        .receive_name_owner_changed_with_args(&[(0, RELEASE_NAME)])
+        .unwrap();
+    conn.request_name(SERVICE_NAME).unwrap();
+    let held = conn.clone();
+    std::thread::spawn(move || {
+        if !dbus
+            .name_has_owner(RELEASE_NAME.try_into().unwrap())
+            .unwrap()
+        {
+            releases.next();
+        }
+        held.release_name(SERVICE_NAME).unwrap();
+    });
+    Some(conn)
+}
+
 /// The screenshot program, when the server started this binary with [`STAND_IN`]; a test run does nothing here.
 #[test]
 fn screenshot_stand_in() {
     as_started_program();
     if std::env::args().any(|arg| arg == STAND_IN) {
+        let _bus = std::env::args()
+            .any(|arg| arg == SERVE_ARG)
+            .then(serve_on_the_test_bus);
         hold_connection();
     }
 }
@@ -188,10 +230,22 @@ impl Rig {
     }
 
     fn start_screenshot(&mut self, caller: Caller) -> Result<(), Reject> {
+        self.start_screenshot_owned(caller, None)
+    }
+
+    /// `StartScreenshot` when the process `owner` owns the service's name, none when no process does.
+    fn start_screenshot_owned(&mut self, caller: Caller, owner: Option<u32>) -> Result<(), Reject> {
         let (reply, answer) = async_channel::bounded(1);
+        let owner = owner.map(|pid| ProcessHandle::open(pid).unwrap());
         self.state
-            .on_quit_call(Call::StartScreenshot(caller, reply));
+            .on_quit_call(Call::StartScreenshot(caller, owner, reply));
         answer.try_recv().expect("answered at once")
+    }
+
+    /// The bus tells the server the service's name is now owned by `owner`, or by no process.
+    fn service_owner(&mut self, owner: Option<u32>) {
+        let owner = owner.map(|pid| ProcessHandle::open(pid).unwrap());
+        self.state.on_quit_call(Call::ScreenshotServiceOwner(owner));
     }
 }
 
@@ -291,6 +345,128 @@ fn only_the_portal_starts_the_screenshot_service_once_while_it_runs() {
         Err(Reject::Refusal(Refusal::Failed(_)))
     ));
     assert!(serving().is_empty(), "the login screen starts no programs");
+}
+
+#[test]
+fn a_service_that_dropped_its_name_is_not_counted_as_running() {
+    as_started_program();
+    let mut rig = Rig::new("dropped");
+    let portal = rig.portal();
+    assert_eq!(rig.start_screenshot(caller(portal)), Ok(()));
+    let first = serving();
+    assert_eq!(first.len(), 1);
+    assert_eq!(
+        rig.start_screenshot(caller(portal)),
+        Ok(()),
+        "a service that has not owned the name yet is still starting"
+    );
+    assert_eq!(serving(), first, "and counts as running");
+
+    // the service owns the name, then drops it on its way out, and the portal asks before its exit shows
+    rig.service_owner(Some(first[0]));
+    assert_eq!(
+        rig.start_screenshot_owned(caller(portal), Some(first[0])),
+        Ok(())
+    );
+    assert_eq!(serving(), first, "a service that owns the name runs");
+    assert_eq!(rig.start_screenshot_owned(caller(portal), None), Ok(()));
+    let both = serving();
+    assert_eq!(
+        both.len(),
+        2,
+        "a service that dropped its name is not counted: {both:?}"
+    );
+    assert!(both.contains(&first[0]), "the first has not exited yet");
+    let second: Vec<u32> = both.iter().copied().filter(|p| *p != first[0]).collect();
+    assert_eq!(rig.start_screenshot_owned(caller(portal), None), Ok(()));
+    assert_eq!(serving(), both, "the new one is starting and counts");
+
+    // as the bus tells it: the new one owns the name, then drops it
+    rig.service_owner(Some(second[0]));
+    assert_eq!(
+        rig.start_screenshot_owned(caller(portal), Some(second[0])),
+        Ok(())
+    );
+    assert_eq!(serving(), both);
+    rig.service_owner(None);
+    assert_eq!(rig.start_screenshot(caller(portal)), Ok(()));
+    let three = serving();
+    assert_eq!(three.len(), 3, "the bus said the name went: {three:?}");
+    for pid in three {
+        end(pid);
+    }
+}
+
+#[test]
+fn the_server_follows_the_service_name_on_the_bus() {
+    as_started_program();
+    let daemon = Daemon::start();
+    let address_file = bus_address_file(std::process::id());
+    std::fs::write(&address_file, &daemon.1).unwrap();
+    let mut rig = Rig::new("follows");
+    let conn = zbus::blocking::connection::Builder::address(daemon.1.as_str())
+        .unwrap()
+        .build()
+        .unwrap();
+    let dbus = zbus::blocking::fdo::DBusProxy::new(&conn).unwrap();
+    let mut sessions = dbus
+        .receive_name_owner_changed_with_args(&[(0, BUS_NAME)])
+        .unwrap();
+    start_session_service_on(&mut rig.state, Some(daemon.1.clone()));
+    // the server follows the service's name before it owns the session's
+    if !dbus.name_has_owner(BUS_NAME.try_into().unwrap()).unwrap() {
+        sessions.next();
+    }
+    let portal = rig.portal();
+    let (owners_tx, owners) = mpsc::channel();
+    let mut changes = dbus
+        .receive_name_owner_changed_with_args(&[(0, SERVICE_NAME)])
+        .unwrap();
+    std::thread::spawn(move || {
+        for change in &mut changes {
+            let owned = change.args().unwrap().new_owner().is_some();
+            if owners_tx.send(owned).is_err() {
+                break;
+            }
+        }
+    });
+    let until_owned = |rig: &mut Rig, owned: bool, what: &str| {
+        let deadline = Instant::now() + WAIT;
+        while owners.try_recv() != Ok(owned) {
+            assert!(Instant::now() < deadline, "timed out waiting until {what}");
+            rig.turn();
+        }
+    };
+
+    assert_eq!(rig.start_screenshot(caller(portal)), Ok(()));
+    let first = serving();
+    assert_eq!(first.len(), 1);
+    until_owned(&mut rig, true, "the service owns its name");
+    // the service drops the name and lives on: no exit of it shows
+    conn.request_name(RELEASE_NAME).unwrap();
+    until_owned(&mut rig, false, "the service drops its name");
+    // the server heard the service take the name on its own connection, in a turn of its loop: until then a call with
+    // no owner finds the first still starting, after it the first is going away
+    let deadline = Instant::now() + WAIT;
+    while serving().len() == 1 {
+        assert!(
+            Instant::now() < deadline,
+            "no call after the name went started a service"
+        );
+        assert_eq!(rig.start_screenshot(caller(portal)), Ok(()));
+        rig.turn();
+    }
+    let both = serving();
+    assert_eq!(
+        both.len(),
+        2,
+        "one new service, however many calls: {both:?}"
+    );
+    assert!(both.contains(&first[0]), "the first still runs");
+    let _ = std::fs::remove_file(&address_file);
+    for pid in both {
+        end(pid);
+    }
 }
 
 #[test]

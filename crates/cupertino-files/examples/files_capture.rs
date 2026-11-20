@@ -1,7 +1,8 @@
 //! The Files surfaces for look checks: `files/window`, a browser window (920 × 436 at 1×) on a sample home folder,
 //! and `files/sidebar`, the sidebar column of that window; `files/preview`, the preview window Space opens on the
 //! selection; `files/popover`, the tags popover of the selection; `files/tabs`, the window with a second tab gone
-//! into Documents; and `files/desktop`, the desktop's items (640 × 400) over a flat fill. The windows are the Kit
+//! into Documents; and `files/desktop`, the desktop's items (640 × 400) over a flat fill, `--state select|rename|drag`
+//! (`notes.txt` clicked, renamed with Return once clicked, or pressed and held [`DESKTOP_DRAG`] away). The windows are the Kit
 //! windows ([`cupertino_files::kit`], [`cupertino_files::kit::desktop`]) drawn on the headless window system with the
 //! CPU renderer.
 //!
@@ -103,6 +104,8 @@ const WINDOW: (f64, f64) = (920.0, 436.0);
 const SCREEN: (f64, f64) = (640.0, 400.0);
 /// What the desktop's items are drawn over where the wallpaper would be: a mid grey.
 const DESKTOP_FILL: [u8; 3] = [96, 112, 128];
+/// How far a held press on a desktop item moves before the capture of `--state drag`, in points.
+const DESKTOP_DRAG: (f64, f64) = (-220.0, -60.0);
 /// The item a view's states act on, and the gallery's, whose picture its strip shows in view.
 const ITEM: &str = "notes.txt";
 const GALLERY_ITEM: &str = "IMG_0042.png";
@@ -294,8 +297,9 @@ impl Capture {
         Ok((types, icons))
     }
 
-    /// The desktop's items on the sample home folder's Desktop, drawn in `look` at `scale` over [`DESKTOP_FILL`].
-    fn desktop(&self, look: Look, scale: f32) -> Result<Pixmap, String> {
+    /// The desktop's items on the sample home folder's Desktop, drawn in `look` at `scale` over [`DESKTOP_FILL`], after
+    /// `state` acted on [`ITEM`].
+    fn desktop(&self, look: Look, scale: f32, state: Option<&str>) -> Result<Pixmap, String> {
         let fail = |e: &dyn std::fmt::Debug| format!("the headless window system: {e:?}");
         let (types, icons) = self.icons(&self.places)?;
         let screen = Screen {
@@ -324,6 +328,25 @@ impl Capture {
             thumbnails_drawn(driver, window) >= 1
         })
         .map_err(|e| e.unwrap_or_else(|| "the desktop's thumbnail was never drawn".into()))?;
+        settle(&mut driver, window, turns).map_err(|e| fail(&e))?;
+        if let Some(state) = state {
+            let at = named_center(&driver, window, ITEM).ok_or("the desktop shows no notes.txt")?;
+            match state {
+                "select" => click(&mut driver, window, at, turns),
+                "rename" => click(&mut driver, window, at, turns)
+                    .and_then(|()| key(&mut driver, window, 0xff0d, Mods::NONE, turns)),
+                _ => {
+                    let to = Point::new(at.x + DESKTOP_DRAG.0, at.y + DESKTOP_DRAG.1);
+                    let pointer = [
+                        PointerEvent::Motion { position: at },
+                        button(at, MouseButton::Left, true),
+                        PointerEvent::Motion { position: to },
+                    ];
+                    send(&mut driver, window, pointer, turns)
+                }
+            }
+            .map_err(|e| fail(&e))?;
+        }
         if !settle(&mut driver, window, turns).map_err(|e| fail(&e))? {
             return Err("the desktop keeps asking for frames".into());
         }
@@ -718,8 +741,8 @@ fn named_center<A: Application>(
 }
 
 /// The key of `keysym` pressed and let go with `mods` held.
-fn key(
-    driver: &mut TestDriver<Files>,
+fn key<A: Application>(
+    driver: &mut TestDriver<A>,
     window: WindowId,
     keysym: u32,
     mods: Mods,
@@ -863,7 +886,11 @@ impl App for Capture {
                     ]
                 })
                 .collect(),
-            "desktop" => vec![State::new()],
+            "desktop" => ["select", "rename", "drag"]
+                .into_iter()
+                .map(|value| state("state", value))
+                .chain([State::new()])
+                .collect(),
             _ => vec![State::new(), state("devices", "removable")],
         }
     }
@@ -871,8 +898,16 @@ impl App for Capture {
     fn capture(&mut self, r: &Request<'_>) -> Result<Pixmap, String> {
         if r.surface == "desktop" {
             return match r.state.first() {
-                None => self.desktop(r.look, r.scale),
-                Some((flag, _)) => Err(format!("files/desktop has no state --{flag}")),
+                None => self.desktop(r.look, r.scale, None),
+                Some((flag, value))
+                    if flag == "state"
+                        && ["select", "rename", "drag"].contains(&value.as_str()) =>
+                {
+                    self.desktop(r.look, r.scale, Some(value))
+                }
+                Some((flag, value)) => Err(format!(
+                    "files/desktop: --{flag} {value}: only --state select, rename or drag"
+                )),
             };
         }
         // the preview window opens with Space on the selection; the tags popover from the toolbar's Tags button

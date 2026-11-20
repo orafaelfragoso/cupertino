@@ -12,7 +12,7 @@ cargo clippy -p cupertino-files --all-targets
 cargo run -p cupertino-files --example files_capture -- files/window --view list   # a window or its sidebar on a sample home folder (`kit::test::capture`)
 cargo run -p cupertino-files --example files_capture -- files/sidebar --devices removable --scale 2   # the sidebar with a mounted, a busy and an unmounted device
 cargo run -p cupertino-files --example files_capture -- files/window --view gallery --state ring   # the view's item ringed under its context menu (also rename, band)
-cargo run -p cupertino-files --example files_capture -- files/desktop   # the desktop's items over a flat fill
+cargo run -p cupertino-files --example files_capture -- files/desktop --state select   # the desktop's items over a flat fill (also rename, drag)
 ```
 
 ### The window

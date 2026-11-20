@@ -588,6 +588,67 @@ fn session1_interrupt_then_cancel_keeps_the_session_and_sleep_quits_nothing() {
 }
 
 #[test]
+fn session1_pending_interrupt_names_the_action_application_and_reason_only_while_interrupted() {
+    let mut s = Session::new();
+    let mut w = s.open("org.example.Keeper");
+    let app = s.state.open_applications().remove(0);
+    s.emitted();
+    assert_eq!(
+        s.state.pending_interrupt(),
+        None,
+        "nothing is pending when idle"
+    );
+
+    s.state
+        .request_session_action(SessionAction::Restart)
+        .unwrap();
+    s.settle(&mut [&mut w]);
+    assert_eq!(
+        s.state.pending_interrupt(),
+        None,
+        "asking is not an interrupt"
+    );
+    s.wait(QUIT_TIMEOUT_S, &mut [&mut w]);
+    let pending = Some(("Restart", app.clone(), "kept-windows".to_owned()));
+    assert_eq!(s.state.pending_interrupt(), pending);
+
+    // the agent asks as the session agent does, through the call path
+    let ask = |s: &mut Session, caller| {
+        let (tx, rx) = async_channel::bounded(1);
+        s.state.on_quit_call(Call::PendingInterrupt(caller, tx));
+        rx.try_recv().unwrap()
+    };
+    assert!(matches!(
+        ask(&mut s, Caller::Anonymous),
+        Err(Reject::Caller(_))
+    ));
+    assert_eq!(
+        s.state.pending_interrupt(),
+        pending,
+        "a refusal changes nothing"
+    );
+
+    // Try Again answers it; the next interrupt is pending again
+    s.state.retry_session_action();
+    s.settle(&mut [&mut w]);
+    assert_eq!(
+        s.state.pending_interrupt(),
+        None,
+        "retry answers the interrupt"
+    );
+    s.wait(QUIT_TIMEOUT_S, &mut [&mut w]);
+    assert_eq!(s.state.pending_interrupt(), pending);
+
+    // Cancel ends the sequence
+    s.state.cancel_session_action();
+    assert_eq!(
+        s.state.pending_interrupt(),
+        None,
+        "cancel answers the interrupt"
+    );
+}
+
+#[test]
 fn displays1_lists_and_configures_scale_refresh_position_and_transform() {
     let (_loop, mut state) = make_server();
     headless::init_displays(

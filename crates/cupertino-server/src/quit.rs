@@ -10,7 +10,7 @@
 //! `RetrySessionAction`, `CancelSessionAction` or `ForceQuitApplication`. Sleep quits nothing.
 //!
 //! Every mutating method checks its caller ([`crate::caller`]): the process behind the connection, from the bus
-//! daemon's `ProcessFD`. `QuitNextApplication`, `QuitStatus`, `ForceQuitApplication` and `OpenApplications` are for the session agent the server
+//! daemon's `ProcessFD`. `QuitNextApplication`, `QuitStatus`, `ForceQuitApplication`, `OpenApplications` and `PendingInterrupt` are for the session agent the server
 //! supervises; `SetAppearance` and `SetAccessibility` for the settings application (a known program under `/usr`) and
 //! that agent; `ListShellProcesses` and `RestartShellProcess` for any unsandboxed process of the user the server runs as
 //! (the `cupertino shell` commands), by the user id the bus daemon gives for the connection. A caller without a process descriptor, a Flatpak or a Snap is refused, with an error name of its own
@@ -22,6 +22,7 @@
 //! | `LogOut`, `Restart`, `ShutDown` | quit the applications one at a time (the most recently used first, 45 s each, the next 0.1 s after one quits), then end the session through `cupertino-sessiond` (`LoginManager1.LogOut`, logind's `TerminateSession` when it does not answer) or ask logind to `Reboot` or `PowerOff`. Refused (`Failed`) while the session is locked |
 //! | `Sleep` | logind's `Suspend` at once: no application quits |
 //! | `OpenApplications -> as` | the identities of the applications that have toplevels, in the order a log out would quit them: what the session agent saves for "Open my windows again" before it asks for the log out. Only the session agent may call it |
+//! | `PendingInterrupt -> (b pending, s action, s app_id, s reason)` | whether a quit sequence waits on an interrupt (the one signal of `QuitInterrupted` is sent once): `pending`, the interrupted action's method name (`LogOut`, `Restart` or `ShutDown`), the application and its `QuitStatus`; all empty and false otherwise. A session agent that restarted, or adopts an interrupt it did not start, shows the panel from it. Only the session agent may call it |
 //! | `QuitInterrupted(s app_id, s reason)` signal | an application did not quit within 45 s, with its `QuitStatus` as the reason; the sequence waits for an answer |
 //! | `SessionActionFailed(s action, s reason)` signal | the final step of `LogOut`, `Restart`, `ShutDown` or `Sleep` was refused or failed (another user logged in, an inhibitor, polkit denied it, no bus): `action` is the method name, `reason` the error. Sent once per failed action and only by the server; Session1 is idle again, so a later request works |
 //! | `QuitInterruptClosed` signal | the application of the last `QuitInterrupted` quit after all: the sequence goes on |
@@ -246,6 +247,11 @@ pub enum Call {
     ShellHosts(async_channel::Sender<Result<Vec<(u32, u64)>, Reject>>),
     /// The identities of the applications with toplevels, in quit order (`OpenApplications`).
     OpenApplications(Caller, async_channel::Sender<Result<Vec<String>, Reject>>),
+    /// The quit sequence's waiting interrupt, if any (`PendingInterrupt`): action, application, its quit status.
+    PendingInterrupt(
+        Caller,
+        async_channel::Sender<Result<Option<PendingInterrupt>, Reject>>,
+    ),
     /// Start a session-ending or power action (`LogOut`, `Restart`, `ShutDown`, `Sleep`), quitting apps first (D13).
     SessionAction(
         SessionAction,
@@ -257,6 +263,10 @@ pub enum Call {
     /// Retry asking the next application after an interrupt during a session-ending quit sequence.
     RetrySessionAction(Caller, async_channel::Sender<Result<(), Reject>>),
 }
+
+/// An interrupt of a quit sequence that waits for an answer: the interrupted action's method name, the application
+/// that did not quit and its `QuitStatus`.
+pub type PendingInterrupt = (&'static str, String, String);
 
 /// A supervised process on the bus: name, state, pid, start ticks, start time in seconds since 1970, program, from the
 /// development folder, installed program, development folder's file (see the table above).
@@ -352,6 +362,19 @@ impl Cupertino {
             .into_iter()
             .filter_map(|app| self.app_identity_of(app))
             .collect()
+    }
+
+    /// `PendingInterrupt`: the interrupt the quit sequence waits on, if it is waiting on one.
+    pub fn pending_interrupt(&self) -> Option<PendingInterrupt> {
+        let seq = self.quit.sequence.as_ref()?;
+        let SequenceStep::Interrupted { app } = &seq.step else {
+            return None;
+        };
+        Some((
+            seq.action.method_name(),
+            app.clone(),
+            self.quit_status(app).to_owned(),
+        ))
     }
 
     /// `QuitStatus`: why `identity`, asked to quit, is still there. `not-responding` while a client behind its windows
@@ -799,6 +822,13 @@ impl Cupertino {
                     .map_err(Reject::Caller);
                 let _ = reply.try_send(answer);
             }
+            Call::PendingInterrupt(caller, reply) => {
+                let answer = self
+                    .authorize_call("PendingInterrupt", &caller, Need::SessionAgent)
+                    .map(|()| self.pending_interrupt())
+                    .map_err(Reject::Caller);
+                let _ = reply.try_send(answer);
+            }
             Call::ForceQuit(identity, caller, reply) => {
                 let answer = self
                     .force_quit_application_for(&caller, &identity)
@@ -1107,6 +1137,19 @@ impl Session1 {
     ) -> Result<Vec<String>, CallError> {
         let caller = caller_of(&header, connection).await;
         self.ask(|tx| Call::OpenApplications(caller, tx)).await
+    }
+
+    async fn pending_interrupt(
+        &self,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &zbus::Connection,
+    ) -> Result<(bool, String, String, String), CallError> {
+        let caller = caller_of(&header, connection).await;
+        let pending = self.ask(|tx| Call::PendingInterrupt(caller, tx)).await?;
+        Ok(match pending {
+            Some((action, app, reason)) => (true, action.to_owned(), app, reason),
+            None => (false, String::new(), String::new(), String::new()),
+        })
     }
 
     async fn set_appearance(

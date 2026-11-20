@@ -265,6 +265,19 @@ the menu bar. The panel has no power controls: restart, shut down, sleep and log
 | Display floor | raw value 1 (a slider never turns the screen off) (`effects`) |
 | Refresh while open | 1 s (`controller::REFRESH_INTERVAL`) |
 
+## Tests
+
+`tests/` drives the public interface without a service: `controller.rs` the state machine (what an opening reads, one
+reading of a source at a time, a reading from before a change put off until the change ended, refused changes, the
+throttled writes of a dragged level and the overlay on release, presses, the detail views' lists, editing and the
+stored layout, the refresh and the fade-out's end), `lifecycle.rs` the fades and the detail motion on the catalogue's
+curves and their reversals, `arrangement.rs` the grid's order and `control.rs` how a caller is named.
+`crates/cupertino-session-tests/tests/shell-controlcenter.rs` runs the component in `cupertino-shell`'s host against
+the real server, headless, on a bus of its own: the component owns `org.cupertino.ControlPanel1` on a connection of its
+own, `Toggle` opens the panel on the sole output where it draws, and fifty panics injected as it paints, as its loop
+dispatches and on a helper thread each restart it alone and closed while the dock keeps drawing and the host's memory
+stays flat. `examples/controlcenter_capture.rs` draws the panel and its detail views for look checks.
+
 ## Open issues
 
 - Unplugging a real display with the panel open has not been tried yet; the hardware check belongs to the display hot-plug acceptance (#22).

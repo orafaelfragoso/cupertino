@@ -6,7 +6,6 @@
     "alone": [],
     "processes": [
       {"name": "dock", "command": ["/usr/bin/cupertino-dock"], "roles": ["session", "dock"]},
-      {"name": "menubar", "command": ["/usr/bin/cupertino-menubar"], "roles": ["session", "menu_bar"]},
       {"name": "launcher", "command": ["/usr/bin/cupertino-launcher"]},
       {"name": "desktop", "command": ["/usr/bin/cupertino-files", "--desktop"]},
       {"name": "windowmanager", "command": ["/usr/bin/cupertino-windowmanager"], "roles": ["window_manager"]},

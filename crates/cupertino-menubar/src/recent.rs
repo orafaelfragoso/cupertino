@@ -90,6 +90,11 @@ impl RecentSources {
     }
 
     /// The time of the last Clear Menu; `None` when the menu was never cleared or the file does not read as one.
+    /// For the I/O pool.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "runs on the I/O pool (kit::task::io)"
+    )]
     pub fn cleared_at(&self) -> Option<f64> {
         std::fs::read_to_string(&self.cleared)
             .ok()?
@@ -105,7 +110,11 @@ impl RecentSources {
     }
 
     /// The rows at `now` (Unix seconds). Applications without an installed visible entry and documents that no longer
-    /// exist are left out; an unreadable store or list lists nothing of its section.
+    /// exist are left out; an unreadable store or list lists nothing of its section. For the I/O pool.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "runs on the I/O pool (kit::task::io)"
+    )]
     pub fn read(&self, now: f64) -> RecentItems {
         let cleared = self.cleared_at();
         let after_clear = |used: Option<f64>| cleared.is_none_or(|c| used.is_some_and(|u| u > c));

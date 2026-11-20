@@ -11,7 +11,7 @@
 //! Registered item strings are `service + path` (for example `:1.52/StatusNotifierItem`); a bare
 //! service name means the default path `/StatusNotifierItem`, a bare path means the sender.
 
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex};
 
 use futures_util::{Stream, StreamExt};
 use zbus::message::Header;
@@ -56,7 +56,7 @@ pub enum WatcherEvent {
 struct WatcherState {
     items: Vec<String>,
     hosts: Vec<String>,
-    tx: mpsc::Sender<WatcherEvent>,
+    tx: async_channel::Sender<WatcherEvent>,
 }
 
 struct WatcherObject {
@@ -81,7 +81,7 @@ impl WatcherObject {
                 false
             } else {
                 s.items.push(id.clone());
-                let _ = s.tx.send(WatcherEvent::ItemRegistered {
+                let _ = s.tx.try_send(WatcherEvent::ItemRegistered {
                     id: id.clone(),
                     service: svc,
                     path,
@@ -149,11 +149,13 @@ pub struct WatcherService {
 }
 
 impl WatcherService {
-    /// Serve the watcher on `conn` and claim `org.kde.StatusNotifierWatcher`.
+    /// Serve the watcher on `conn` and claim `org.kde.StatusNotifierWatcher`; the task that drops the items of a
+    /// connection that left the bus is one of `spawner`'s.
     pub async fn start(
         conn: &Connection,
-    ) -> zbus::Result<(WatcherService, mpsc::Receiver<WatcherEvent>)> {
-        let (tx, rx) = mpsc::channel();
+        spawner: &crate::spawned::Spawner,
+    ) -> zbus::Result<(WatcherService, async_channel::Receiver<WatcherEvent>)> {
+        let (tx, rx) = async_channel::unbounded();
         let shared = Arc::new(Mutex::new(WatcherState {
             items: Vec::new(),
             hosts: Vec::new(),
@@ -173,56 +175,53 @@ impl WatcherService {
         let mut owner_changes = dbus.receive_name_owner_changed().await?;
         let watched = shared.clone();
         let emit_conn = conn.clone();
-        conn.executor()
-            .spawn(
-                async move {
-                    while let Some(sig) = owner_changes.next().await {
-                        let Ok(args) = sig.args() else { continue };
-                        if args.new_owner().is_some() {
-                            continue;
+        spawner.spawn(
+            async move {
+                while let Some(sig) = owner_changes.next().await {
+                    let Ok(args) = sig.args() else { continue };
+                    if args.new_owner().is_some() {
+                        continue;
+                    }
+                    let gone = args.name().to_string();
+                    let removed: Vec<String> = {
+                        let mut s = watched.lock().expect("watcher state");
+                        let removed: Vec<String> = s
+                            .items
+                            .iter()
+                            .filter(|i| i.starts_with(&format!("{gone}/")))
+                            .cloned()
+                            .collect();
+                        s.items.retain(|i| !removed.contains(i));
+                        for id in &removed {
+                            let _ =
+                                s.tx.try_send(WatcherEvent::ItemUnregistered { id: id.clone() });
                         }
-                        let gone = args.name().to_string();
-                        let removed: Vec<String> = {
-                            let mut s = watched.lock().expect("watcher state");
-                            let removed: Vec<String> = s
-                                .items
-                                .iter()
-                                .filter(|i| i.starts_with(&format!("{gone}/")))
-                                .cloned()
-                                .collect();
-                            s.items.retain(|i| !removed.contains(i));
-                            for id in &removed {
-                                let _ =
-                                    s.tx.send(WatcherEvent::ItemUnregistered { id: id.clone() });
-                            }
-                            removed
-                        };
-                        if removed.is_empty() {
-                            continue;
+                        removed
+                    };
+                    if removed.is_empty() {
+                        continue;
+                    }
+                    if let Ok(emitter) = SignalEmitter::new(&emit_conn, WATCHER_PATH) {
+                        for id in removed {
+                            let _ = WatcherObject::status_notifier_item_unregistered(&emitter, &id)
+                                .await;
                         }
-                        if let Ok(emitter) = SignalEmitter::new(&emit_conn, WATCHER_PATH) {
-                            for id in removed {
-                                let _ =
-                                    WatcherObject::status_notifier_item_unregistered(&emitter, &id)
-                                        .await;
-                            }
-                            if let Ok(iface) = emit_conn
-                                .object_server()
-                                .interface::<_, WatcherObject>(WATCHER_PATH)
+                        if let Ok(iface) = emit_conn
+                            .object_server()
+                            .interface::<_, WatcherObject>(WATCHER_PATH)
+                            .await
+                        {
+                            let _ = iface
+                                .get()
                                 .await
-                            {
-                                let _ = iface
-                                    .get()
-                                    .await
-                                    .registered_status_notifier_items_changed(&emitter)
-                                    .await;
-                            }
+                                .registered_status_notifier_items_changed(&emitter)
+                                .await;
                         }
                     }
-                },
-                "menubar-sni-watch",
-            )
-            .detach();
+                }
+            },
+            "menubar-sni-watch",
+        );
         Ok((WatcherService { shared }, rx))
     }
 
@@ -235,6 +234,7 @@ impl WatcherService {
 pub type ToolTip = (String, Vec<(i32, i32, Vec<u8>)>, String, String);
 
 #[proxy(
+    gen_blocking = false,
     interface = "org.kde.StatusNotifierWatcher",
     default_service = "org.kde.StatusNotifierWatcher",
     default_path = "/StatusNotifierWatcher"
@@ -316,7 +316,11 @@ impl WatcherClient {
     }
 }
 
-#[proxy(interface = "org.kde.StatusNotifierItem", assume_defaults = false)]
+#[proxy(
+    gen_blocking = false,
+    interface = "org.kde.StatusNotifierItem",
+    assume_defaults = false
+)]
 pub trait StatusNotifierItem {
     fn activate(&self, x: i32, y: i32) -> zbus::Result<()>;
 

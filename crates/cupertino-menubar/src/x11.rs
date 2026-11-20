@@ -48,7 +48,11 @@ impl XServer {
     }
 }
 
-/// The display the bridge was started for.
+/// The display the bridge was started for. For the I/O pool.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "runs on the I/O pool (kit::task::io)"
+)]
 fn bridge_display(bridge: u32) -> Option<String> {
     display_argument(&std::fs::read(format!("/proc/{bridge}/cmdline")).ok()?)
 }

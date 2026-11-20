@@ -30,7 +30,20 @@ pub fn app_name(app_id: &str, data_dirs: &[PathBuf]) -> AppName {
     }
 }
 
-/// `Some(name)` for a found entry; an entry without a `Name` shows its capitalised id.
+/// What the bar shows for `app_id` without its desktop entry: the last segment of the id with its first letter
+/// capitalised.
+pub fn provisional_name(app_id: &str) -> AppName {
+    AppName {
+        name: capitalised_tail(app_id),
+        has_entry: false,
+    }
+}
+
+/// `Some(name)` for a found entry; an entry without a `Name` shows its capitalised id. For the I/O pool.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "runs on the I/O pool (kit::task::io)"
+)]
 fn entry_name(app_id: &str, data_dirs: &[PathBuf]) -> Option<String> {
     for dir in data_dirs {
         let path = dir.join("applications").join(format!("{app_id}.desktop"));

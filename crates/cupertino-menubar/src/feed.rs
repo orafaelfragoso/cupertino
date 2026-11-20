@@ -9,24 +9,26 @@ use crate::dbus::sni::{self, StatusItem};
 use crate::desktop::AppName;
 use crate::extras::{tray_glyph, tray_radio, ExtraGlyph, ExtraKind, Extras, FrontApp, SystemRow};
 use crate::fallback::{self, Chords, FallbackAction, WindowRow};
+use crate::icons::Pixels;
 use crate::item::{ItemId, MenuItem, Shortcut, ShortcutModifier};
 use crate::layout::{BarContent, StatusEntry, PRIVACY_DOT_PT, STATUS_ICON_PT};
 use crate::merge::{Export, Exporter};
 use crate::recent::RecentItems;
-use crate::registered::{self, ActiveWindow, Client, NoX11, Registration, SeenX11, X11Windows};
+use crate::registered::{
+    self, ActiveWindow, Client, Matched, NoX11, Registration, SeenX11, X11Windows,
+};
 use crate::source::{GtkMenuProps, KdeAppMenu, MenuSource, MenuSourceMap, WindowKey};
 use crate::worker::Request;
 use cupertino_defaults::menubar::MenuBarSettings;
 use cupertino_icons::from_argb;
 use cupertino_keyboard::rewrite::ClientClass;
 use cupertino_kit::core::IconImage;
-use cupertino_shell_client::{
-    ActiveClient, AppWindow, BoundAction, GtkMenu, KeyClass, MenuBarUpdate, PrimaryModifier,
-    Shortcuts, WindowMenu, WindowState,
+use cupertino_kit_shell::menu_bar::{
+    ActiveClient, AppWindow, BoundAction, GtkMenu, KeyClass, PrimaryModifier, Shortcuts,
+    Update as MenuBarUpdate, WindowMenu, WindowState,
 };
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
-use tiny_skia::{IntSize, Pixmap};
 
 /// The status slot of the screen capture indicator.
 pub const SCREEN_CAPTURE_SLOT: &str = "indicator:screen-capture";
@@ -106,10 +108,6 @@ pub struct Shared {
     failed: HashSet<MenuSource>,
     /// The menus registered on the session bus, for windows the server announces none for.
     pub registrations: Vec<Registration>,
-    /// The X server of the X11 bridge, asked about registered X11 windows; `None` asks nothing.
-    pub x11: Option<Box<dyn X11Windows>>,
-    /// Registrations whose X11 window the X server has had; only those can be gone.
-    x11_seen: SeenX11,
     /// Registrations whose X11 window is gone, for the registrar to forget ([`Shared::take_gone`]).
     gone: Vec<(String, u32)>,
 }
@@ -214,19 +212,41 @@ impl Shared {
     }
 }
 
+/// What the X server of the X11 bridge is asked about the active window of one bar: which of the registered X11
+/// windows it is. Answered on the I/O pool, where the connection to the X server lives.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct X11Query {
+    /// The bar whose active window this is.
+    pub key: WindowKey,
+    registrations: Vec<Registration>,
+    bridge: u32,
+    title: String,
+    windows: Vec<(u32, bool)>,
+}
+
+impl X11Query {
+    /// The registered menu of the active window, asking `x11`; `seen` keeps the registrations whose window the X
+    /// server has had from one answer to the next.
+    pub fn resolve(&self, x11: &mut dyn X11Windows, seen: &mut SeenX11) -> Matched {
+        let active = ActiveWindow {
+            client: Client::X11(self.bridge),
+            title: &self.title,
+            windows: &self.windows,
+        };
+        registered::resolve(&self.registrations, &active, x11, seen)
+    }
+}
+
 /// Icon of a status item at `px` device pixels: its pixmap, else the themed icon named by the
 /// item (`theme` loads it).
 pub fn status_icon(
     item: &StatusItem,
     px: u32,
-    theme: impl FnOnce(&str, u32) -> Option<Pixmap>,
-) -> Option<Pixmap> {
+    theme: impl FnOnce(&str, u32) -> Option<Pixels>,
+) -> Option<Pixels> {
     let from_pixmap = sni::best_pixmap(item.current_pixmaps(), px as i32)
         .and_then(|p| from_argb(p.width, p.height, &p.argb))
-        .and_then(|icon| {
-            let size = IntSize::from_wh(icon.width, icon.height)?;
-            Pixmap::from_vec(icon.rgba, size)
-        });
+        .filter(|icon| icon.width > 0 && icon.height > 0);
     from_pixmap.or_else(|| {
         Some(item.current_icon_name())
             .filter(|name| !name.is_empty())
@@ -286,13 +306,14 @@ impl BarFeed {
         }
     }
 
-    /// Apply a group of the menu-bar object. `names` resolves an application id.
+    /// Apply a group of the menu-bar object. `names` resolves an application id. The question for the X server, when
+    /// the active window is an X11 program's that announced no menu ([`BarFeed::match_registered`]).
     pub fn apply(
         &mut self,
         update: &MenuBarUpdate,
         shared: &mut Shared,
         names: impl FnOnce(&str) -> AppName,
-    ) {
+    ) -> Option<X11Query> {
         if let Some(active) = &update.active_app {
             self.app = (!active.app_id.is_empty()).then(|| names(&active.app_id));
             self.app_id.clone_from(&active.app_id);
@@ -335,14 +356,31 @@ impl BarFeed {
         if let Some(shortcuts) = &update.shortcuts {
             shared.chords = chords(shortcuts);
         }
-        self.match_registered(shared);
+        self.match_registered(shared)
+    }
+
+    /// The active application's name, read afresh for `app_id`: kept while the application is still the active one.
+    pub fn set_app_name(&mut self, app_id: &str, name: AppName) {
+        if self.app.is_some() && self.app_id == app_id {
+            self.app = Some(name);
+        }
+    }
+
+    /// The active application's id; empty on the desktop.
+    pub fn app_id(&self) -> &str {
+        &self.app_id
     }
 
     /// Give the active window the menu it registered on the session bus, when the server announced none for it. Call
-    /// after the registrations changed.
-    pub fn match_registered(&self, shared: &mut Shared) {
+    /// after the registrations changed. A window on Wayland is matched at once; an X11 program's needs the X server of
+    /// the bridge, asked on the I/O pool: the question is returned, and its answer goes to
+    /// [`BarFeed::registered_menu`].
+    pub fn match_registered(&self, shared: &mut Shared) -> Option<X11Query> {
+        if let Some(query) = self.x11_query(shared) {
+            return Some(query);
+        }
         if self.announced {
-            return;
+            return None;
         }
         let client = match self.client {
             Some(_) if self.app.is_none() => None,
@@ -350,22 +388,44 @@ impl BarFeed {
             Some(ActiveClient::X11(pid)) => Some(Client::X11(pid)),
             None => None,
         };
-        let Some(client) = client else {
-            return;
-        };
+        let client = client?;
         let windows: Vec<(u32, bool)> = self.windows.iter().map(|w| (w.id, w.active)).collect();
         let active = ActiveWindow {
             client,
             title: &self.title,
             windows: &windows,
         };
-        let mut no_x11 = NoX11;
-        let x11: &mut dyn X11Windows = match shared.x11.as_deref_mut() {
-            Some(x11) => x11,
-            None => &mut no_x11,
+        // a window on Wayland is matched by its process alone: nothing is asked of an X server
+        let matched = registered::resolve(
+            &shared.registrations,
+            &active,
+            &mut NoX11,
+            &mut SeenX11::new(),
+        );
+        self.registered_menu(shared, matched);
+        None
+    }
+
+    /// The question for the X server of the bridge that shows the active window, when it is an X11 program's that
+    /// announced no menu; `None` otherwise. An answer to a question that is no longer the current one is not applied.
+    pub fn x11_query(&self, shared: &Shared) -> Option<X11Query> {
+        if self.announced || self.app.is_none() {
+            return None;
+        }
+        let Some(ActiveClient::X11(bridge)) = self.client else {
+            return None;
         };
-        let matched =
-            registered::resolve(&shared.registrations, &active, x11, &mut shared.x11_seen);
+        Some(X11Query {
+            key: self.key,
+            registrations: shared.registrations.clone(),
+            bridge,
+            title: self.title.clone(),
+            windows: self.windows.iter().map(|w| (w.id, w.active)).collect(),
+        })
+    }
+
+    /// Give the active window the registered menu `matched` found, and note the registrations found gone.
+    pub fn registered_menu(&self, shared: &mut Shared, matched: Matched) {
         shared.gone.extend(matched.gone);
         match matched.menu {
             Some(menu) => {

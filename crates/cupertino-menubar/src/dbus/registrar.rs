@@ -244,7 +244,12 @@ async fn has_owner(conn: &Connection, name: &str) -> bool {
 
 /// Serve the registrar on `conn`; toolkits see it only while [`own`] holds the name. `changed` hears of every change,
 /// including the registrations of a connection that left the bus.
-pub async fn serve(conn: &Connection, changed: Changed) -> zbus::Result<Registrar> {
+/// The task that drops the registrations of a connection that left the bus is one of `spawner`'s.
+pub async fn serve(
+    conn: &Connection,
+    changed: Changed,
+    spawner: &crate::spawned::Spawner,
+) -> zbus::Result<Registrar> {
     let registrar = Registrar {
         registry: Arc::default(),
         changed,
@@ -258,22 +263,20 @@ pub async fn serve(conn: &Connection, changed: Changed) -> zbus::Result<Registra
         .at(REGISTRAR_PATH, Service(registrar.clone()))
         .await?;
     let follower = registrar.clone();
-    conn.executor()
-        .spawn(
-            async move {
-                while let Some(signal) = owners.next().await {
-                    let Ok(args) = signal.args() else {
-                        continue;
-                    };
-                    if args.new_owner().is_none() {
-                        let name = args.name().as_str();
-                        follower.update(|r| r.remove(|reg| reg.service == name));
-                    }
+    spawner.spawn(
+        async move {
+            while let Some(signal) = owners.next().await {
+                let Ok(args) = signal.args() else {
+                    continue;
+                };
+                if args.new_owner().is_none() {
+                    let name = args.name().as_str();
+                    follower.update(|r| r.remove(|reg| reg.service == name));
                 }
-            },
-            "cupertino-registrar-leavers",
-        )
-        .detach();
+            }
+        },
+        "cupertino-registrar-leavers",
+    );
     Ok(registrar)
 }
 

@@ -13,6 +13,7 @@ use crate::fallback::Chords;
 use crate::item::{plain_text, ItemId, MenuItem, PanelRow, Toggle};
 use crate::layout::SlotKey;
 use crate::recent::{RecentItems, RECENT_LIMIT};
+use cupertino_kit_shell::outputs::OutputId;
 
 /// Security name of a network that needs no passphrase in `org.cupertino.Network1.GetNetworks`.
 const OPEN: &str = "open";
@@ -136,13 +137,16 @@ pub struct Extras {
     pub wifi: Option<WifiState>,
     pub battery: Option<BatteryState>,
     pub bluetooth: Option<BluetoothState>,
+    /// Do not disturb and its durations as the notifications component last published them on the host bus
+    /// (`DoNotDisturbChanged`); `None` while it publishes nothing. The bar keeps it, not the services' reading.
     pub focus: Option<FocusState>,
     /// The session agent's menu entries; `None` without the agent (a greeter, another compositor): no system menu.
     pub session: Option<SessionState>,
     /// Whether Lock Screen works without the agent's entries: the server named a login process (its lock screen locks
     /// whoever owns the agent's bus name). It names none while no login process runs, and the lock then does nothing.
     pub lock_without_agent: bool,
-    /// The panels of other processes that the bar's items open, while they are open.
+    /// The panels of other components that the bar's items open, while they are open, from the host bus; the bar
+    /// keeps them, not the services' reading.
     pub panels: OpenPanels,
     /// What the bar itself keeps of the Wi-Fi panel, not read from a service: whether the list of other networks is
     /// shown, and whether a scan the panel asked for is still under way.
@@ -199,28 +203,28 @@ impl std::fmt::Debug for Passphrase {
     }
 }
 
-/// The panels other processes show for the bar's items: the control panel and the notification centre's list. Each is
-/// `Some` while it is open, with the connector name of the output it is on (`wl_output.name`), empty while the panel
-/// does not know it yet. A panel whose process is not running is not open.
+/// The panels other components show for the bar's items: the control panel and the notification centre's list, as
+/// their components publish them on the host bus (`PanelShown`). Each is `Some` while it is open, with the output it
+/// is on, `None` within while the panel does not say. A panel whose component is not running is not open.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct OpenPanels {
-    pub control_panel: Option<String>,
-    pub centre: Option<String>,
+    pub control_panel: Option<Option<OutputId>>,
+    pub centre: Option<Option<OutputId>>,
 }
 
 impl OpenPanels {
-    /// Whether the panel the item `slot` opens is open on the bar of the output named `output`, one of `bars` bars: on
-    /// the bar of the panel's output, or, while the panel does not know its output yet, on the only bar there is.
-    pub fn open_on(&self, slot: &SlotKey, output: Option<&str>, bars: usize) -> bool {
+    /// Whether the panel the item `slot` opens is open on the bar of `output`, one of `bars` bars: on the bar of the
+    /// panel's output, or, while the panel does not say its output, on the only bar there is.
+    pub fn open_on(&self, slot: &SlotKey, output: OutputId, bars: usize) -> bool {
         let panel = match slot {
             SlotKey::ControlPanel => &self.control_panel,
             SlotKey::Clock => &self.centre,
             _ => return false,
         };
-        match panel.as_deref() {
+        match panel {
             None => false,
-            Some("") => bars == 1,
-            Some(on) => output == Some(on),
+            Some(None) => bars == 1,
+            Some(Some(on)) => *on == output,
         }
     }
 }

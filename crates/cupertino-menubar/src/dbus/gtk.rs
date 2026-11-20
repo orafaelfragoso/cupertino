@@ -66,7 +66,11 @@ pub mod menus_iface {
     use super::{RawChange, RawMenu};
     use zbus::proxy;
 
-    #[proxy(interface = "org.gtk.Menus", assume_defaults = false)]
+    #[proxy(
+        gen_blocking = false,
+        interface = "org.gtk.Menus",
+        assume_defaults = false
+    )]
     pub trait GtkMenus {
         fn start(&self, subscriptions: &[u32]) -> zbus::Result<Vec<RawMenu>>;
 
@@ -84,7 +88,11 @@ pub mod actions_iface {
     use zbus::proxy;
     use zbus::zvariant::{OwnedValue, Value};
 
-    #[proxy(interface = "org.gtk.Actions", assume_defaults = false)]
+    #[proxy(
+        gen_blocking = false,
+        interface = "org.gtk.Actions",
+        assume_defaults = false
+    )]
     pub trait GtkActions {
         fn describe_all(&self) -> zbus::Result<HashMap<String, RawAction>>;
 

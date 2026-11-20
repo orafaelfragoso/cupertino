@@ -10,9 +10,23 @@ use crate::layout::{BarLayout, SlotKey};
 use crate::source::MenuSource;
 use crate::worker::Request;
 use cupertino_apps::Launch;
-use cupertino_shell_client::{EditAction, WindowCommand};
-use cupertino_wayland_client::key;
+use cupertino_kit_shell::bus::Panel;
+use cupertino_kit_shell::menu_bar::{EditAction, WindowCommand};
 use std::path::PathBuf;
+
+/// The evdev codes of the keys menus take (`linux/input-event-codes.h`), as a key event carries them.
+mod key {
+    pub const ESCAPE: u32 = 1;
+    pub const ENTER: u32 = 28;
+    pub const SPACE: u32 = 57;
+    pub const KEYPAD_ENTER: u32 = 96;
+    pub const HOME: u32 = 102;
+    pub const UP: u32 = 103;
+    pub const LEFT: u32 = 105;
+    pub const RIGHT: u32 = 106;
+    pub const END: u32 = 107;
+    pub const DOWN: u32 = 108;
+}
 
 /// The control panel, which Settings… of the system menu starts.
 const SETTINGS_PROGRAM: &str = "cupertino-settings";
@@ -50,6 +64,8 @@ pub enum Action {
     SetMenuOpen(bool),
     /// Ask the session bus worker.
     Request(Request),
+    /// Open or close a panel of another component on the bar's output, over the host bus.
+    TogglePanel(Panel),
     WindowCommand(WindowCommand),
     /// Move the active window to a workspace (1-based).
     MoveToWorkspace(u32),
@@ -222,8 +238,8 @@ pub fn resolve(effect: Effect, cx: &Context) -> Option<Action> {
                     y,
                 }))
             }
-            SlotKey::ControlPanel => Some(Action::Request(Request::TogglePanel)),
-            SlotKey::Clock => Some(Action::Request(Request::ToggleCentre)),
+            SlotKey::ControlPanel => Some(Action::TogglePanel(Panel::ControlPanel)),
+            SlotKey::Clock => Some(Action::TogglePanel(Panel::NotificationCenter)),
             SlotKey::System | SlotKey::AppMenu | SlotKey::Menu(_) => None,
         },
     }

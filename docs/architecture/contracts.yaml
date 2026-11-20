@@ -918,7 +918,7 @@
   scope: public
   source: crates/cupertino-menubar/src/dbus/registrar.rs
   source_match: "com.canonical.AppMenu.Registrar"
-  note: registers nothing; owned while a bar exists and no other process owns the name
+  note: served by the menubar component in the cupertino-shell binary, on the component's own connection; registers nothing; owned while a bar exists and no other process owns the name
 - name: org.kde.StatusNotifierWatcher
   kind: dbus-interface
   version: n/a
@@ -929,7 +929,7 @@
   scope: public
   source: crates/cupertino-menubar/src/dbus/sni.rs
   source_match: "org.kde.StatusNotifierWatcher"
-  note: any application registers its tray item
+  note: served by the menubar component in the cupertino-shell binary, on the component's own connection; any application registers its tray item
 - name: org.gtk.Menus
   kind: dbus-interface
   version: n/a
@@ -1172,14 +1172,6 @@
   owner_area: services
   scope: unknown
   source: crates/cupertino-login/src/main.rs
-- name: cupertino-menubar
-  kind: binary
-  version: 0.1.0
-  shipped: yes
-  owner_crate: cupertino-menubar
-  owner_area: apps
-  scope: shell-private
-  source: crates/cupertino-menubar/src/main.rs
 - name: cupertino-netd
   kind: binary
   version: 0.1.0
@@ -1196,7 +1188,7 @@
   owner_area: apps
   scope: shell-private
   source: crates/cupertino-shell/src/main.rs
-  note: the shell host the server starts on a connection with the host role alone; runs the listed components, each on a thread of its own; holds the osd (cupertino-osd), notifications (cupertino-notifications) and controlcenter (cupertino-controlcenter) components
+  note: the shell host the server starts on a connection with the host role alone; runs the listed components, each on a thread of its own; holds the osd (cupertino-osd), notifications (cupertino-notifications), controlcenter (cupertino-controlcenter) and menubar (cupertino-menubar) components
 - name: cupertino-control
   kind: binary
   version: 0.1.0

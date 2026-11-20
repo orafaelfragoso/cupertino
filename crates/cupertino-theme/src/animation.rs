@@ -186,6 +186,17 @@ impl Timing {
         ))),
         seconds: 0.236,
     });
+    /// A chosen menu row's highlight going off before the choice is made: a step after 0.034 s, two frames at 60 Hz.
+    pub const MENU_CHOICE_OFF: Timing = Timing(Motion::Eased {
+        easing: Easing::LINEAR,
+        seconds: 0.034,
+    });
+    /// The chosen row's highlight back on after [`Timing::MENU_CHOICE_OFF`]: a step after 0.067 s, four frames at
+    /// 60 Hz, when the choice is made.
+    pub const MENU_CHOICE_ON: Timing = Timing(Motion::Eased {
+        easing: Easing::LINEAR,
+        seconds: 0.067,
+    });
 
     /// Progress `seconds` after the start: 0 at the start, 1 at rest; a spring may pass 1.
     pub fn value(self, seconds: f64) -> f64 {

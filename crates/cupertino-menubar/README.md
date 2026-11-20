@@ -1,8 +1,9 @@
 # cupertino-menubar
 
 The menu bar of the Cupertino desktop. It stands in for the design's system menu bar process (menus, status items, clock).
-The crate has no Smithay dependency. The `cupertino-menubar` process draws the bars and popups from the layouts this crate
-computes, and feeds the crate pointer, key and timer events with absolute timestamps in seconds.
+The crate has no Smithay dependency. Its component (`MenuBar`, `component`), which the shell host `cupertino-shell` runs on
+a thread of its own, draws the bars and popups from the layouts this crate computes, and feeds the crate pointer, key and
+timer events with absolute timestamps in seconds.
 
 ## Contents
 
@@ -26,8 +27,8 @@ computes, and feeds the crate pointer, key and timer events with absolute timest
 | `dbus::registrar` | The `com.canonical.AppMenu.Registrar` the worker serves after the watcher; the process asks it to own the name with the first bar and to release it with the last. `RegisterWindow` keeps the menu at the caller's unique name and object path with the caller's process (`GetConnectionUnixProcessID`), one per connection and window number (registering again keeps the connection's place), at most 256 of one process over all its connections (past it that process's oldest goes) and 4096 in all (past it a process holding as many as any other makes room from its own, else the process holding the most gives way when it holds over 64, else the newcomer is refused, so no process's first 64 are taken by another's); a caller whose process the bus cannot name, or that left the bus while it was asked, is not kept; `UnregisterWindow` drops the caller's own; a connection that leaves the bus loses its registrations, and so does an X11 window the bar finds gone (`Request::ForgetRegistrations`); `GetMenuForWindow` answers the first connection's registration of a window, else an empty name and `/`. Every change is the worker event `Registrations`. |
 | `dbus::gtk` | `GtkMenuClient`: an `org.gtk.Menus` + `org.gtk.Actions` reader (`Start`, sections flattened, `_` as the only mnemonic marker, namespaces, accelerators kept as text, enabled / toggle state from actions; the application menu read next to the menu bar and leading the tree under `GTK_APP_MENU`) and `Activate`. Both interfaces' `Changed` signals keep the cache current (`GtkMenuClient::changes`, subscribed before the load): menu records are spliced into the menus loaded (a record for any other menu is ignored, and a menu keeps at most `MAX_MENU_ITEMS` items, since any application can send them), and the actions' added, removed, enabled and state changes update their states. The worker reads the signals from the moment it subscribes, before the menus load, so a burst cannot fill the connection's signal queue and stop it; a change that comes while the menus load is not applied but loads them once more (twice at most). It applies each later change as it comes, one change of an exporter waiting at most, and sends the rebuilt tree at most every 50 ms. A tree is built from at most `MAX_TREE_ITEMS` entries, links included, and a link back to a menu being built builds nothing; an exporter keeps at most `MAX_ACTIONS` actions. Activation takes the item's action from the client and leaves the client with the worker. The worker loads such menus again when the exporter refuses with `AccessDenied` (100 ms, doubling to 1.6 s, then the refusal is reported): a CupertinoKit application answers only the bar's connection, which it learns over its own Wayland connection, possibly after the bar's first load. A load that fails is reported to the process (`Event::LayoutFailed`), which keeps the source's empty tree, so it does not ask in a loop, and asks again when a group announces the source again; the server sends the group again when it verifies the bar's connection. |
 
-Feature `dbus` (default) enables the zbus-based layer. Without it the crate depends only on `cupertino-animation`. The D-Bus
-layer is runtime agnostic (zbus with its `async-io` backend). Drive the futures with any executor or `zbus::block_on`.
+The D-Bus layer (`dbus`) is runtime agnostic (zbus with its `async-io` backend); the component runs its futures on its
+own loop, the executor of its bus connections.
 
 ```rust
 use cupertino_menubar::controller::{Effect, MenuController};
@@ -47,11 +48,25 @@ for effect in out.effects {
 
 ## Running
 
-Feature `app` builds the binary: a client of the display server that shows one menu bar per output and opens its menus as
-popups. It is a CupertinoKit application (`cupertino-kit`, `src/view.rs`): each bar is a Kit window whose layer surface,
-menu-bar object and `MenuBar` backdrop come from `cupertino-shell-client` and `cupertino_wayland_client::app` through its surface
-roles, and each open menu level is a Kit popup with a grab, on the `Menu` material, placed where the controller laid it out. The
-server starts it from its `"shell"` configuration and restarts it after a failure; `cupertino-server`'s
+The menu bar is a component of the shell host (`docs/architecture/shell-host.md`): `MenuBar` implements
+`cupertino_kit_shell::Component` (`ComponentName::MENUBAR`), and `cupertino-shell` runs it on a Kit instance and a thread of
+its own, with its own Wayland and bus connections, when the server's `components` list names `menubar`. It shows one menu bar
+per output and opens its menus as popups (`src/view.rs`): each bar is a Kit window with the server's `menu_bar` role
+(`Role::MenuBar`, a top layer surface across the output that reserves its height, kept while the component restarts, D19),
+the `MenuBar` material behind it while the bar is solid (`Surface::MenuBar`), and each open menu level is a Kit popup with a
+grab, on the `Menu` material, placed where the controller laid it out. The theme, text and icons are the ones Kit shares in
+the process; the display options come with the host's `Event::Appearance`, the outputs with `Event::Outputs`, the server's
+feed with `Event::MenuBar` and the lock with `Event::Session`. Its session and system bus connections are Kit's async ones
+(`bus::session`, `cupertino_kit::bus::connect`), whose tasks run on the component's own loop; what reads files, the X11
+bridge's X server, the icons and the radios' blocking calls runs on Kit's I/O pool (`cupertino_kit::task::io`), and an
+application is started through the host (`host::spawn`). The component starts no thread of its own.
+
+`examples/menubar_capture.rs` draws the bar, its menus, the system menu, the status items' menus, the join prompt and the
+help search headless, over a light and a dark wallpaper:
+
+```sh
+cargo run -p cupertino-menubar --example menubar_capture -- menubar/menu --appearance both --wallpaper dark --scale 2 --out target/captures
+```
 
 
 **A click on empty bar space while a menu is open** closes the menu and does nothing else: no item is chosen and the press
@@ -61,14 +76,8 @@ not to the bar, which asks for it only while a title is focused by the shortcut.
 receives on empty bar space (`Hit::Bar`). As with any outside press, a click on another title while a menu is open closes
 the menu without opening the other one; hover and Left / Right switch menus.
 
-```sh
-cargo run -p cupertino-menubar
-```
-
 | Setting | Effect |
 |---|---|
-| `$WAYLAND_DISPLAY` | The display to connect to. |
-| `$DBUS_SESSION_BUS_ADDRESS` | Must be set. |
 | `menubar.conf` in the configuration directory | The clock options. `CUPERTINO_MENUBAR_CONFIG` overrides the path. A missing file leaves every key unset. The bar watches the file and applies a change at once (the clock is redrawn and its tick rescheduled); a bad line is reported and keeps its last good value. |
 | `CUPERTINO_ASSET_DIR` | The first asset pack (`cupertino-assets` resolves the others): the bar text's `ui` font and the symbols of the status items (`extras::SYMBOL_NAMES`). A symbol no pack has is reported at startup and its item is drawn without it. |
 
@@ -85,19 +94,43 @@ cargo run -p cupertino-menubar
 
 The clock is redrawn 0.1 s after each minute, or each second with seconds or flashing separators.
 
-Startup fails with a clear message when the server does not advertise `zwlr_layer_shell_v1`, `xdg_wm_base` (version 3 or
-newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-bar role, `cupertino-protocols`),
-`xdg_activation_v1`, `wl_shm` or a seat. It also fails when another process owns
-`org.kde.StatusNotifierWatcher` on the session bus.
+The component fails, and its host starts it again (D16), when its session bus connection cannot be made or closes, and
+when another process owns `org.kde.StatusNotifierWatcher` on the session bus. Without a system bus it shows no Wi-Fi,
+battery or Bluetooth item.
+
+## What a restart loses
+
+A failed component is started again alone by its host (D16). While it is down the server keeps each bar's last picture
+and the space it reserves (the persistent `menu_bar` surface, D19), so windows do not move under it; the new instance
+draws over it. Kept across a restart: `menubar.conf` and the time of the last Clear Menu (files, read again), the
+do-not-disturb state and which panel is open where (retained on the host bus, so they arrive again as the component
+follows its topics), the server's feed of the active application and its windows (sent again to the new bars), the
+radios, the battery and the session agent's properties (read again). It loses:
+
+- any open menu, title focus and a Help search with its text;
+- the Wi-Fi join prompt and the passphrase being typed (wiped from memory), and a join under way;
+- the status items registered with `org.kde.StatusNotifierWatcher`: the name has a new owner, and an application that
+  registers again when it does (as the StatusNotifierItem specification asks) comes back, one that does not shows no
+  item until it starts again;
+- the menus registered with `com.canonical.AppMenu.Registrar`, likewise: Qt, KDE Frameworks and the other exporters that
+  watch the name register again, and a window of one that does not shows the synthetic menus;
+- the exported menus read so far, read again when they show;
+- an application or document being started (its activation token), which does not start;
+- the names of the applications read from their desktop entries, read again.
+
+The instance that ended leaves none of its bus work behind in the host: its bus tasks belong to the objects that started them and
+are cancelled with them, never detached, and its end closes its session and system connections and runs their
+executors until every task has ended (at most 0.5 s), since the loop that ran them is gone. The program test
+`crates/cupertino-session-tests/tests/shell-menubar.rs` bounds what fifty restarts add to the host's memory.
 
 ## How it works
 
-- **Surfaces.** A top-anchored layer surface per output (exclusive zone 0). The server reserves the space and owns hiding,
-  revealing and dimming. The bar draws nothing of its own: the wallpaper shows through it as it is, with no strip, fill or
-  blur, and only its text and symbols follow what is behind them (*Backdrop* below). Increase Contrast keeps it
-  see-through. Under Reduce Transparency it is a solid strip: the bar's `MenuBar` backdrop, which the server draws with
-  the material's opaque recipe (grey 0.1255 dark, 0.8549 light), covers the bar then and has no area otherwise
-  (`tone::solid_bar`). Each open menu level is an `xdg_popup` with a `Menu` backdrop. Its disabled rows, their submenu
+- **Surfaces.** A top-anchored layer surface per output whose exclusive zone is the bar's height, so the server keeps
+  the space while it holds the bar (D19). The server owns hiding, revealing and dimming. The bar draws nothing of its
+  own: the wallpaper shows through it as it is, with no strip, fill or blur, and only its text and symbols follow what
+  is behind them (*Backdrop* below). Increase Contrast keeps it see-through. Under Reduce Transparency it is a solid
+  strip: the window's background is the `MenuBar` surface of the theme, the material's opaque recipe (grey 0.1255
+  dark, 0.8549 light), and the bar has none otherwise (`tone::solid_bar`). Each open menu level is an `xdg_popup` with a `Menu` backdrop. Its disabled rows, their submenu
   arrows and checkmarks recede to the menu text at 0.26; with Increase Contrast they stay readable at 0.53 and the
   separators strengthen to 0.47 (`MenuPalette::high_contrast`). The process keeps its palette under
   the display options (no recorded contrast palette for the menu bar text and status items).
@@ -203,16 +236,16 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
     nothing and the next letter comes
     unaccented, so "é" cannot be typed through a dead key (a layout that has the character on a key of its own types
     it). There is no input method in the bar.
-- **Session.** The labels follow the appearance the server announces over `cupertino_session_v1`, read at start and redrawn on
-  every change. The solid strip follows it in the server. On `locked` the bars close every open menu and title focus.
+- **Session.** The labels follow the appearance the host announces (`Event::Appearance`), redrawn on every change. The
+  solid strip follows it in the server. On `locked` (`Event::Session`) the bars close every open menu and title focus.
 - **Open panels.** An item is drawn highlighted, as an open menu's title is, while what it opened is open: an
-  application or status menu (the controller's open title), the control panel (`org.cupertino.ControlPanel1`'s `Shown`)
-  and the notification centre's list behind the clock (`CentreShown`). The panels belong to other processes, so the
-  extras task reads those properties with the others and follows their `PropertiesChanged` and their names' owners
-  (`extras::OpenPanels`); whatever closes a panel (Escape, a click outside, a second click, another item or panel taking
-  the keyboard, the lock, its output going) clears its highlight, and a panel's process that ends takes it along. The
-  highlight shows on the bar of the panel's output only, named by `Output` / `CentreOutput` (`wl_output.name`); while a
-  panel does not know its output yet it shows only where there is one bar. Both items read as expanded to assistive
+  application or status menu (the controller's open title), the control panel and the notification centre's list behind
+  the clock. The panels belong to other components, which say on the host bus where they are open (`PanelShown` on the
+  `Panels` topic, from `controlcenter` and `notifications` only; `extras::OpenPanels`); whatever closes a panel (Escape,
+  a click outside, a second click, another item or panel taking the keyboard, the lock, its output going) clears its
+  highlight, and a panel's component the server gives up (`ComponentStopped`) takes it along. A click on the control
+  panel slot or the clock publishes `TogglePanel` for the bar's output. The highlight shows on the bar of the panel's
+  output only; while a panel does not say its output it shows only where there is one bar. Both items read as expanded to assistive
   technology while their panel is open. The highlight is the same fill in every mode and tone, Reduce Transparency and
   Increase Contrast included.
 - **Backdrop.** From shell version 21 the server sends each bar the mean encoded sRGB colour of its output's wallpaper
@@ -268,15 +301,18 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
   `xdg-open` without a token, as the dock's folders do. An entry with `Terminal=true` is not started (the bar has no
   terminal). Clear Menu stores the time and hides what was used until then; problems are reported on standard error.
 - **Session menu.** The system menu's session entries (`SessionAction`) are not D-Bus calls of the bar: the session agent answers only the server, so the bar sends `cupertino_menu_bar_v1.session_action` and the server calls the agent. The bar still reads the agent's `Locked`, `UserName` and `Capabilities` properties itself (an item whose capability is not reported is disabled; a read of the property that fails keeps the items as the previous read gave them, every one offered before any read, and the agent refuses what is not allowed), but only from the owner of `org.cupertino.Login1` that is the process the server names in `cupertino_menu_bar_v1.session_agent` (checked with `cupertino-peer`; any owner in a development run); a client that took the name first is not read, and until the server names a process nothing is. Without a session agent Lock Screen still works: the server locks without the agent while it has named a login process. A system menu that is open when the agent goes away closes.
-- **Extras (`extras_bus`).** Wi-Fi, battery and Bluetooth read the system bus; Wi-Fi and Bluetooth through `cupertino-radios`, which finds the Cupertino daemons, else NetworkManager and BlueZ, as Settings and the control panel do, on threads of their own so the bar never waits for a service: one reading of a radio is under way at a time and the newest request meanwhile is kept, the task waits 150 ms for a reading it started and otherwise takes it when it ends, and a service still silent after 3 s hides its item while the other items are read as before. A signal of a radio's service reads that radio alone, and a Bluetooth device's signal strength reads nothing. On NetworkManager the bar reads the radio and its device; the networks in range are read when those differ from what the bar shows, when the Wi-Fi menu opens, once more 4 s after a scan was asked for, and with every change for 30 s after that. The Focus item reads the do-not-disturb state
-  and `FocusLifetimes` of `org.cupertino.NotificationCenter1`. The process reads them again after any signal on those
-  objects, when a service's name changes owner, once a minute and after every action. A service that is not running, or has
+- **Extras (`extras_bus`).** Wi-Fi, battery and Bluetooth read the system bus; Wi-Fi and Bluetooth through `cupertino-radios`, which finds the Cupertino daemons, else NetworkManager and BlueZ, as Settings and the control panel do, on Kit's I/O pool so the bar never waits for a service: one reading of a radio is under way at a time and the newest request meanwhile is kept, the task waits 150 ms for a reading it started and otherwise takes it when it ends, and a service still silent after 3 s hides its item while the other items are read as before. A signal of a radio's service reads that radio alone, and a Bluetooth device's signal strength reads nothing. On NetworkManager the bar reads the radio and its device; the networks in range are read when those differ from what the bar shows, when the Wi-Fi menu opens, once more 4 s after a scan was asked for, and with every change for 30 s after that. The Focus item shows the do-not-disturb state
+  and its durations that the notifications component publishes on the host bus (`DoNotDisturbChanged`), and its rows
+  publish `SetDoNotDisturb`. The task reads the radios and the battery again after any signal on those objects, when a
+  service's name changes owner, once a minute and after every action. A service that is not running, or has
   no device, hides its item. Any other failure hides it too and is reported on stderr once per reason. Without a system bus
   only the Focus item can show. The order next to the control panel is Wi-Fi, battery, Bluetooth, Focus, then the status
-  notifier items. The task's queue is bounded (`QUEUE`, 16): any peer can send the process signals, so a refresh is queued
+  notifier items. The task's queue is bounded (`QUEUE`, 16): any peer can send the component signals, so a refresh is queued
   only when none waits (the read a waiting refresh causes starts after the new signal, so it sees what it announced), the
   session agent is a value the next read takes and never queued or lost, and an action that finds the queue full (the task
-  stuck on a service that does not answer) is dropped and reported on stderr instead of queued without bound.
+  stuck on a service that does not answer) is dropped and reported on stderr instead of queued without bound. The session
+  agent's properties are read from `org.cupertino.Login1` here until the session agent publishes `SessionMenu` on the host
+  bus, which the component then takes instead (`component::Model::published`).
   - Wi-Fi: a `Wi-Fi` switch row, then "Known Network(s)" and "Other Network(s)", each by name. A saved, open or OWE network is
     joined without a passphrase. The bar has no passphrase prompt, so other networks are listed disabled.
   - Battery: "Battery N%", "Power Source: Battery / Power Adapter", and "Charging" while charging (rows approximate).
@@ -293,10 +329,9 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
 
 | Name | Role |
 |---|---|
-| `org.cupertino.NotificationCenter1` | Session bus. `ToggleCentre` on a click on the clock. Do-not-disturb state and `FocusLifetimes` for the Focus item. `CentreShown` and `CentreOutput` for the clock's highlight. |
-| `org.cupertino.ControlPanel1` | Session bus. `Toggle` on a click on the control panel slot. `Shown` and `Output` for its highlight. |
-| `org.kde.StatusNotifierWatcher` | Owned by the process, which is the status item host. |
-| `com.canonical.AppMenu.Registrar` | Owned by the process while it shows a bar and no other process owns the name; released with the last bar. Qt, KDE Frameworks, Chromium, Electron and LibreOffice export their menus and hide their in-window menu bar only while the name has an owner. Electron's registrations are the only place its menus are named: the bar matches them to the active window (`registered`). |
+| Host bus (`cupertino_kit_shell::bus`) | `TogglePanel` on a click on the clock (notification centre) or the control panel slot, `PanelShown` for their highlight; `DoNotDisturbChanged` for the Focus item and `SetDoNotDisturb` from its rows; `ComponentStopped`. |
+| `org.kde.StatusNotifierWatcher` | Owned on the component's own session bus connection; the component is the status item host. |
+| `com.canonical.AppMenu.Registrar` | Owned on the component's own connection while it shows a bar and no other process owns the name; released with the last bar. Qt, KDE Frameworks, Chromium, Electron and LibreOffice export their menus and hide their in-window menu bar only while the name has an owner. Electron's registrations are the only place its menus are named: the bar matches them to the active window (`registered`). |
 | `org.cupertino.Network1`, else NetworkManager | System bus, through `cupertino-radios`. The radio switch, the devices, the networks in range, joining, leaving and scanning. |
 | UPower | System bus. The display device and `OnBattery`. |
 | `org.cupertino.Bluetooth1`, else BlueZ | System bus, through `cupertino-radios`. The adapter, its power switch and devices, connecting and disconnecting. |

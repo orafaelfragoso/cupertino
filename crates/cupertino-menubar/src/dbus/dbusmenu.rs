@@ -35,7 +35,11 @@ pub const LAYOUT_PROPERTIES: &[&str] = &[
     "children-display",
 ];
 
-#[proxy(interface = "com.canonical.dbusmenu", assume_defaults = false)]
+#[proxy(
+    gen_blocking = false,
+    interface = "com.canonical.dbusmenu",
+    assume_defaults = false
+)]
 pub trait DBusMenu {
     fn get_layout(
         &self,

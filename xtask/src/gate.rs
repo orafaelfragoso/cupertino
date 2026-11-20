@@ -198,7 +198,7 @@ const LARGE_FILE_CAPS: [(&str, usize); 15] = [
     ("crates/cupertino-controlcenter/src/view.rs", 3387),
     ("crates/cupertino-dock/src/dock.rs", 1536),
     ("crates/cupertino-dock/src/kit.rs", 3346),
-    ("crates/cupertino-files/src/kit/mod.rs", 3427),
+    ("crates/cupertino-files/src/kit/mod.rs", 3377),
     ("crates/cupertino-launcher/src/kit.rs", 2636),
     ("crates/cupertino-launcher/src/view.rs", 3007),
     ("crates/cupertino-login/src/view.rs", 2293),

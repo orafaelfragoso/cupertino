@@ -10,6 +10,7 @@ mod dragged;
 mod drops;
 mod gallery;
 mod jobs;
+mod open;
 mod peek;
 mod places;
 mod progress;
@@ -76,9 +77,7 @@ use cupertino_kit::files::item_icons::ItemIcons;
 use cupertino_kit::files::list::{row_key, Presses, RowGrab};
 use cupertino_kit::files::name_edit::NameEdit;
 use cupertino_kit::files::notice::{self, Action, Notices};
-use cupertino_kit::files::open::{
-    command_with, default_app_id, open_command, open_with, OpenError,
-};
+use cupertino_kit::files::open::open_with;
 use cupertino_kit::files::operations::{self, DropAction};
 use cupertino_kit::files::places::{removable_holding, Place};
 use cupertino_kit::files::sort::SortSpec;
@@ -687,9 +686,13 @@ pub enum Event {
     /// arrived; `None` when the compositor gave none.
     Launch {
         path: PathBuf,
+        /// Whether it is a folder, as its listing's entry told.
+        is_dir: bool,
         with: Option<String>,
         token: Option<String>,
     },
+    /// Where the link `.0` leads (or why that could not be read) arrived, for Show Original.
+    Original(PathBuf, Result<PathBuf, String>),
     /// The text of the name being edited changed.
     NameChanged(TextChange),
     /// Return in the name being edited: rename the item.
@@ -1637,9 +1640,13 @@ impl Model {
                 let toolbar = window.toolbar_width();
                 window.search_width.tick(now, toolbar, animate);
             }
-            Event::Launch { path, with, token } => {
-                session.launch(&path, with.as_deref(), token.as_deref())
-            }
+            Event::Launch {
+                path,
+                is_dir,
+                with,
+                token,
+            } => session.launch(&path, is_dir, with.as_deref(), token.as_deref()),
+            Event::Original(link, target) => window.original_found(&link, target, session),
             Event::Menu(name) => {
                 if let Some(action) = MenuAction::from_name(&name) {
                     return self.menu(id, action);
@@ -1853,7 +1860,8 @@ impl Model {
             }
             PeekEvent::Open => {
                 let path = look.browse.current().to_path_buf();
-                return session.open_paths(id, vec![path], None);
+                let is_dir = window.is_dir(&path);
+                return session.open_paths(id, vec![open::Item { path, is_dir }], None);
             }
             PeekEvent::Step(by) if look.browse.len() > 1 => {
                 look.browse.step(by);
@@ -1991,7 +1999,7 @@ impl Model {
                 let made = paths.iter().map(|p| (p, operations::make_alias(p)));
                 session.failed_some(Action::MakeAlias, made);
             }
-            MenuAction::ShowOriginal => window.show_original(session),
+            MenuAction::ShowOriginal => return window.show_original(id),
             MenuAction::View(view) if view != window.view => {
                 // the folders opened in the list close with it
                 window.browser.collapse_all();
@@ -2048,8 +2056,9 @@ impl Model {
                     let Some(window) = self.windows.get(&id) else {
                         return Vec::new();
                     };
-                    let paths = window.selected_paths();
-                    return self.session.open_paths(id, paths, Some(app));
+                    return self
+                        .session
+                        .open_paths(id, window.selected_items(), Some(app));
                 }
                 MenuCommand::ToggleTag(color) => {
                     if let Some(window) = self.windows.get(&id) {
@@ -2370,75 +2379,6 @@ impl Session {
         self.places.truncate(self.standard_places);
         self.places.extend(self.media.places());
     }
-
-    /// Open `path` with the application of desktop entry `with`, else its default one, handing it `token`. The
-    /// associations are read at each open, so changed defaults and new applications apply at once.
-    fn launch(&self, path: &Path, with: Option<&str>, token: Option<&str>) {
-        let is_dir = path.is_dir();
-        let terminal = self.terminal.as_deref();
-        let spec = (self.applications)()
-            .map_err(|e| e.to_string())
-            .and_then(|apps| match with {
-                None => open_command(&apps, path, is_dir, terminal).map_err(|e| match e {
-                    OpenError::NoApplication { .. } => "No application is set to open it".into(),
-                    e => e.to_string(),
-                }),
-                Some(id) => {
-                    let item = open_with(&apps, path, is_dir)
-                        .into_iter()
-                        .find(|item| item.entry.id == id)
-                        .ok_or_else(|| format!("{id} no longer opens it"))?;
-                    command_with(item.entry, path, terminal).map_err(|e| e.to_string())
-                }
-            });
-        match spec {
-            Ok(spec) => {
-                let spec = match token {
-                    Some(token) => spec.with_activation_token(token),
-                    None => spec,
-                };
-                cupertino_kit::spawn(APP_ID, spec.to_command());
-            }
-            Err(e) => self.failed(Action::Open, &[path], &e),
-        }
-    }
-
-    /// Ask the window `id` for an activation token for each of `paths`, naming the application that will open it, so
-    /// the dock shows it starting; each opens once its token comes.
-    fn open_paths(
-        &self,
-        id: u64,
-        paths: Vec<PathBuf>,
-        with: Option<String>,
-    ) -> Vec<Command<Message>> {
-        if paths.is_empty() {
-            return Vec::new();
-        }
-        let apps = match (self.applications)() {
-            Ok(apps) => apps,
-            Err(e) => {
-                let items: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
-                self.failed(Action::Open, &items, &e);
-                return Vec::new();
-            }
-        };
-        paths
-            .into_iter()
-            .map(|path| {
-                let app_id = with
-                    .clone()
-                    .or_else(|| default_app_id(&apps, &path, path.is_dir()));
-                let with = with.clone();
-                Command::ActivationToken {
-                    window: window_key(id),
-                    app_id,
-                    on_token: Box::new(move |token| {
-                        Message::Window(id, Event::Launch { path, with, token })
-                    }),
-                }
-            })
-            .collect()
-    }
 }
 
 impl BrowserWindow {
@@ -2473,7 +2413,12 @@ impl BrowserWindow {
         }
         if let Some(look) = self.peek.as_mut() {
             let current = look.browse.current().to_path_buf();
-            look.follow_app(session, &current);
+            let is_dir = self
+                .browser
+                .entries()
+                .iter()
+                .any(|e| e.is_dir && e.path == current);
+            look.follow_app(session, &current, is_dir);
         }
         let (previewed, _) = self.previewed();
         let previewed: Vec<Entry> = previewed.cloned().collect();
@@ -2745,21 +2690,6 @@ impl BrowserWindow {
             .collect()
     }
 
-    /// Go to the folder of the selected link's target and select the target.
-    fn show_original(&mut self, session: &Session) {
-        let Some(link) = self.selected_paths().into_iter().next() else {
-            return;
-        };
-        let target = match std::fs::canonicalize(&link) {
-            Ok(target) => target,
-            Err(e) => return session.failed(Action::ShowOriginal, &[&link], &e),
-        };
-        let Some(parent) = target.parent().map(Path::to_path_buf) else {
-            return;
-        };
-        self.go_selecting(parent, Some(target));
-    }
-
     /// Move the selected items to the trash; the listing drops them when the watcher reports it.
     fn trash_selection(&self, session: &Session) {
         let paths = self.selected_paths();
@@ -2818,6 +2748,13 @@ impl BrowserWindow {
     /// `id` has its activation token.
     fn open_selection(&mut self, id: u64, session: &Session) -> Vec<Command<Message>> {
         let Activation { folder, files } = self.browser.activation();
+        let files = files
+            .into_iter()
+            .map(|path| open::Item {
+                path,
+                is_dir: false,
+            })
+            .collect();
         let commands = session.open_paths(id, files, None);
         if let Some(folder) = folder {
             self.go(folder);

@@ -114,8 +114,13 @@ pub enum DeskCommand {
 /// What a launch starts once its activation token comes.
 #[derive(Clone, Debug)]
 pub enum Launch {
-    /// Open the item at `path`, with the application of desktop entry `with` or its default one.
-    Item { path: PathBuf, with: Option<String> },
+    /// Open the item at `path` (a folder when `is_dir`, as the listing told), with the application of desktop entry
+    /// `with` or its default one.
+    Item {
+        path: PathBuf,
+        is_dir: bool,
+        with: Option<String>,
+    },
     /// The settings' wallpaper pane.
     Wallpaper,
 }
@@ -364,6 +369,11 @@ impl Model {
         self.begin_rename(made)
     }
 
+    /// Whether `path` is a folder, as the listing's entry for it tells; a path not listed is none.
+    fn is_dir(&self, path: &Path) -> bool {
+        self.entries.iter().any(|e| e.is_dir && e.path == path)
+    }
+
     fn selected(&self) -> Vec<PathBuf> {
         self.entries
             .iter()
@@ -466,7 +476,8 @@ impl Model {
         paths
             .into_iter()
             .map(|path| {
-                let app_id = match (&with, path.is_dir()) {
+                let is_dir = self.is_dir(&path);
+                let app_id = match (&with, is_dir) {
                     (Some(id), _) => Some(id.clone()),
                     (None, true) => Some(super::APP_ID.to_string()),
                     (None, false) => apps
@@ -478,7 +489,7 @@ impl Model {
                     window: desk_key(main.key),
                     app_id,
                     on_token: Box::new(move |token| {
-                        Message::Launch(Launch::Item { path, with }, token)
+                        Message::Launch(Launch::Item { path, is_dir, with }, token)
                     }),
                 }
             })
@@ -493,26 +504,28 @@ impl Model {
                 command
             }
             // a folder opens in a browser window, which the running Files shows
-            Launch::Item { path, with: None } if path.is_dir() => {
+            Launch::Item {
+                path,
+                is_dir: true,
+                with: None,
+            } => {
                 let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from(super::APP_ID));
                 let mut command = std::process::Command::new(exe);
                 command.arg(&path);
                 command
             }
-            Launch::Item { path, with } => {
+            Launch::Item { path, is_dir, with } => {
                 let spec = applications()
                     .map_err(|e| e.to_string())
                     .and_then(|apps| match &with {
-                        None => {
-                            open_command(&apps, &path, path.is_dir(), None).map_err(|e| match e {
-                                OpenError::NoApplication { .. } => {
-                                    "No application is set to open it".to_string()
-                                }
-                                e => e.to_string(),
-                            })
-                        }
+                        None => open_command(&apps, &path, is_dir, None).map_err(|e| match e {
+                            OpenError::NoApplication { .. } => {
+                                "No application is set to open it".to_string()
+                            }
+                            e => e.to_string(),
+                        }),
                         Some(id) => {
-                            let item = open_with(&apps, &path, path.is_dir())
+                            let item = open_with(&apps, &path, is_dir)
                                 .into_iter()
                                 .find(|item| item.entry.id == *id)
                                 .ok_or_else(|| format!("{id} no longer opens it"))?;
@@ -797,7 +810,7 @@ impl Model {
             let one = selected.len() == 1;
             let apps = selected.first().and_then(|first| {
                 let apps = applications().ok()?;
-                let choices: Vec<(String, String)> = open_with(&apps, first, first.is_dir())
+                let choices: Vec<(String, String)> = open_with(&apps, first, self.is_dir(first))
                     .into_iter()
                     .map(|i| (i.entry.id.clone(), i.entry.name.clone()))
                     .collect();

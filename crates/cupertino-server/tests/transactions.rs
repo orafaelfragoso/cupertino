@@ -1954,6 +1954,78 @@ fn an_armed_part_keeps_the_damage_of_its_merged_commits_bounded() {
     }
 }
 
+#[test]
+fn a_transaction_cancelled_after_its_part_applied_leaves_its_surface_to_a_newer_one() {
+    let mut rig = Rig::new();
+    let (hconn, mut hq, mut hst) = rig.connect_host(&["overview"]);
+    let (_hov, oconn, mut oq, mut ost) = rig.spawn_component(&hconn, &mut hq, &mut hst, "overview");
+    let (surf, _shell) = rig.create_layer_surface(&oconn, &mut oq, &mut ost, "strip");
+    let server_strip = server_layer_surface(&rig, "strip");
+    let (first, _child, _layer) = armed_overview_part(&mut rig, (&oconn, &mut oq, &mut ost), &surf);
+    assert!(rig.state.transaction_gesture_begin(
+        rig.output_id,
+        cupertino_protocols::server::transaction::cupertino_transaction_v1::Gesture::SwipeUp
+    ));
+    for _ in 0..3 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    assert_eq!(layers_of(&server_strip), 1, "the first part applied");
+
+    // the overview stages the surface again, in a transaction armed for another gesture, with a commit it keeps
+    let oqh = oq.handle();
+    let newer = ost
+        .tx_manager
+        .as_ref()
+        .unwrap()
+        .create(2, ost.output.as_ref().unwrap(), &oqh, ());
+    newer.bind_gesture(Gesture::Pinch, 0.45, 1.0);
+    newer.stage(&surf);
+    let child = ost.compositor.as_ref().unwrap().create_surface(&oqh, ());
+    let _layer2 = ost
+        .layers
+        .as_ref()
+        .unwrap()
+        .get_layer(&child, &surf, &oqh, ());
+    surf.commit();
+    newer.submit();
+    for _ in 0..4 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    assert_eq!(
+        layers_of(&server_strip),
+        1,
+        "the newer part keeps its commit"
+    );
+
+    // the first transaction's creator cancels it once its part applied
+    first.cancel();
+    for _ in 0..3 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    assert_eq!(
+        ost.finished,
+        vec![Outcome::Cancelled],
+        "the first one ends cancelled"
+    );
+    assert_eq!(
+        layers_of(&server_strip),
+        1,
+        "the surface stays staged in the newer transaction, its commit kept"
+    );
+    assert!(rig.state.transaction_gesture_begin(
+        rig.output_id,
+        cupertino_protocols::server::transaction::cupertino_transaction_v1::Gesture::Pinch
+    ));
+    for _ in 0..3 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    assert_eq!(
+        layers_of(&server_strip),
+        2,
+        "the newer part applies its commit with its gesture"
+    );
+}
+
 /// One colour in `wl_shm` ARGB8888 memory order: an opaque green, which neither the wallpaper nor a window shows.
 const GREEN: [u8; 4] = [0, 255, 0, 255];
 

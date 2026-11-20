@@ -289,6 +289,7 @@ type ReadOnly = dyn Fn(&Path) -> bool;
 /// [`ReadOnly`] for the session's media: a folder on a medium that can't be written, or on a file system mounted
 /// read-only.
 fn read_only(session: &Session) -> Rc<ReadOnly> {
+    let mounts = Rc::clone(&session.mounts);
     let media: Vec<(PathBuf, bool)> = (0..)
         .map_while(|i| session.media.device(i))
         .filter_map(|(device, _)| Some((device.mount.clone()?, device.read_only)))
@@ -300,7 +301,8 @@ fn read_only(session: &Session) -> Rc<ReadOnly> {
             .filter(|(mount, _)| dir.starts_with(mount))
             .max_by_key(|(mount, _)| mount.components().count())
             .is_some_and(|&(_, read_only)| read_only);
-        medium || crate::space::mounted_read_only(dir).unwrap_or(false)
+        // the file system's state is read by a task: a folder not known yet takes the drag until it is
+        medium || mounts.read_only(dir, std::time::Instant::now())
     })
 }
 

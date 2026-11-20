@@ -488,6 +488,8 @@ struct Session {
     /// The standard places are to be read again, and a read of them is running.
     places_due: bool,
     places_reading: bool,
+    /// The write state of the folders drags hovered, filled by I/O tasks ([`Session::mounts_task`]).
+    mounts: Rc<crate::space::MountedCache>,
     places_watch: places::PlacesWatch,
     /// The items' icons and thumbnails, shared with the list's rows, which ask for them as they show.
     icons: Rc<ItemIcons>,
@@ -643,6 +645,10 @@ pub enum Message {
     CallWaitOver,
     /// The standard places were read again: they replace the ones shown.
     PlacesRead(Vec<Place>),
+    /// The sidebar's watches were added; whether the trash's folder is newly watched and the places are to be read again.
+    PlacesWatched(bool),
+    /// The write state of the file systems of folders a drag hovered was read.
+    MountsRead(Vec<(PathBuf, bool)>),
     /// A listing's work or watch, a thumbnail's job or the posting of the notices ended; what it brought wakes the
     /// windows.
     Worked,
@@ -903,6 +909,7 @@ impl Application for Files {
                 places_source: start.places_source,
                 places_due: false,
                 places_reading: false,
+                mounts: Rc::default(),
                 icons,
                 thumbnails_woken,
                 dragged: Vec::new(),
@@ -1015,6 +1022,8 @@ impl Model {
                 vec![woken(&self.session.places_watch.woken, Message::Places)]
             }
             Message::PlacesRead(fresh) => self.session.places_read(fresh),
+            Message::PlacesWatched(trash_new) => self.session.places_watched(trash_new),
+            Message::MountsRead(read) => self.session.mounts_read(read),
             Message::TrashLooked(changed) => {
                 if changed {
                     let session = &self.session;
@@ -1109,6 +1118,8 @@ impl Model {
             )
         });
         let places = self.session.places_task();
+        let watching = self.session.places_watch_task();
+        let mounts = self.session.mounts_task();
         let thumbnails = std::iter::from_fn(|| self.session.icons.take_job()).map(|job| {
             cupertino_kit::task::io(JOB_DEADLINE, move || job.run(), |()| Message::Worked)
         });
@@ -1123,6 +1134,8 @@ impl Model {
             .chain(found)
             .chain(spaces)
             .chain(places)
+            .chain(watching)
+            .chain(mounts)
             .collect()
     }
 

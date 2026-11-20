@@ -13,6 +13,7 @@ layer = "testing"
 calloop = "0.14"
 cupertino-assets = { path = "../cupertino-assets" }
 cupertino-cli = { path = "../cupertino-cli" }
+cupertino-controlcenter = { path = "../cupertino-controlcenter" }
 cupertino-kit = { path = "../cupertino-kit" }
 cupertino-kit-shell = { path = "../cupertino-kit-shell" }
 cupertino-login = { path = "../cupertino-login", features = ["dbus"] }

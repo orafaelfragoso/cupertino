@@ -4,8 +4,11 @@
 use crate::compose::{ComposeEnv, ComposeState, ComposeTable, Composed};
 use crate::{Error, SurfaceId};
 use cupertino_geometry::Point;
+use std::collections::HashMap;
+use std::mem::ManuallyDrop;
 use std::os::fd::OwnedFd;
-use std::sync::OnceLock;
+use std::os::unix::fs::FileExt;
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 use std::time::{Duration, Instant};
 use wayland_client::protocol::wl_pointer::AxisSource;
 use xkbcommon::xkb;
@@ -353,8 +356,9 @@ pub(crate) struct Preview {
 
 /// The compositor's keymap and the modifier state it reported, and the compose sequence being typed.
 pub(crate) struct Translator {
-    keymap: xkb::Keymap,
-    state: xkb::State,
+    keymap: Arc<SharedKeymap>,
+    /// Made and dropped with the keymap's count held ([`SharedKeymap`]).
+    state: ManuallyDrop<xkb::State>,
     compose_table: Option<&'static ComposeTable>,
     compose: ComposeState,
     preview: Option<Preview>,
@@ -398,6 +402,81 @@ fn marks(pending: &[u32]) -> String {
         .collect()
 }
 
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// A compiled keymap, shared by every connection of the process the compositor sent the same keymap text.
+///
+/// libxkbcommon never changes a compiled keymap but for its reference count, which it keeps without atomics. Here only
+/// making a state on the keymap ([`SharedKeymap::state`]) and dropping one ([`Translator`]'s drop) change that count,
+/// each with [`SharedKeymap::count`] held; every other call made on the keymap only reads it.
+struct SharedKeymap {
+    keymap: xkb::Keymap,
+    /// Held while the reference count of `keymap` changes.
+    count: Mutex<()>,
+}
+
+// SAFETY: the keymap is only read, but for its reference count, which changes only with `count` held (above). The last
+// `Arc` drops the keymap once no state on it is left, when no other thread can reach it.
+unsafe impl Send for SharedKeymap {}
+// SAFETY: as for `Send`.
+unsafe impl Sync for SharedKeymap {}
+
+impl SharedKeymap {
+    /// A keyboard state of its own on the keymap.
+    fn state(&self) -> xkb::State {
+        let _count = lock(&self.count);
+        xkb::State::new(&self.keymap)
+    }
+}
+
+/// The compiled keymaps by their text.
+type Keymaps = Mutex<HashMap<Box<[u8]>, Weak<SharedKeymap>>>;
+
+/// The keymaps of the process by their text (D5): an entry never changes once in, the lock is held only to look one up
+/// or put one in, never while a keymap compiles, and a keymap goes when the last connection on it is gone.
+fn keymaps() -> &'static Keymaps {
+    static KEYMAPS: OnceLock<Keymaps> = OnceLock::new();
+    KEYMAPS.get_or_init(Mutex::default)
+}
+
+/// The process's keymap compiled from `text`, compiled now when no connection has it; `None` when it does not
+/// compile. Two connections compiling the same text at once both get the first one put in.
+fn shared_keymap(text: Vec<u8>) -> Option<Arc<SharedKeymap>> {
+    if let Some(keymap) = lock(keymaps()).get(text.as_slice()).and_then(Weak::upgrade) {
+        return Some(keymap);
+    }
+    let compiled = Arc::new(SharedKeymap {
+        keymap: compile(&text)?,
+        count: Mutex::new(()),
+    });
+    let mut keymaps = lock(keymaps());
+    if let Some(keymap) = keymaps.get(text.as_slice()).and_then(Weak::upgrade) {
+        return Some(keymap);
+    }
+    keymaps.retain(|_, keymap| keymap.strong_count() > 0);
+    keymaps.insert(text.into_boxed_slice(), Arc::downgrade(&compiled));
+    Some(compiled)
+}
+
+/// The keymap `text` (in the text format, without a terminating NUL) describes, in a context of its own.
+fn compile(text: &[u8]) -> Option<xkb::Keymap> {
+    let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+    // SAFETY: the context is valid and the buffer is `text`, read for its length during the call only
+    let keymap = unsafe {
+        xkb::ffi::xkb_keymap_new_from_buffer(
+            context.get_raw_ptr(),
+            text.as_ptr().cast(),
+            text.len(),
+            xkb::KEYMAP_FORMAT_TEXT_V1,
+            xkb::KEYMAP_COMPILE_NO_FLAGS,
+        )
+    };
+    // SAFETY: a keymap just compiled, whose one reference the `Keymap` takes over
+    (!keymap.is_null()).then(|| unsafe { xkb::Keymap::from_raw_ptr(keymap) })
+}
+
 /// The compose table of the process's locale, read on first use.
 fn compose_table() -> Option<&'static ComposeTable> {
     static TABLE: OnceLock<Option<ComposeTable>> = OnceLock::new();
@@ -407,9 +486,9 @@ fn compose_table() -> Option<&'static ComposeTable> {
 }
 
 impl Translator {
-    /// Load the keymap the compositor sent over a file descriptor of `size` bytes (NUL included). A size of 0, or one
-    /// larger than the file, is refused before the file is mapped: the text is the first `size - 1` bytes, and a
-    /// mapping past the end of the file faults when it is read.
+    /// Load the keymap the compositor sent over a file descriptor of `size` bytes (NUL included): the process's
+    /// keymap of that text ([`shared_keymap`]), with a keyboard state of this connection's own. A size of 0, or one
+    /// larger than the file, is refused before the file is read: the text is the first `size - 1` bytes.
     pub(crate) fn from_fd(fd: OwnedFd, size: usize) -> Result<Self, Error> {
         if size == 0 {
             return Err(Error::Protocol(
@@ -421,31 +500,22 @@ impl Translator {
         if u64::try_from(size).map_or(true, |size| size > length) {
             return Err(Error::Protocol("the keymap size is larger than its file"));
         }
-        let fd = OwnedFd::from(file);
-        let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
-        // SAFETY: the descriptor is the compositor's keymap file, at least `size` bytes long, mapped privately and
-        // read only
-        let keymap = unsafe {
-            xkb::Keymap::new_from_fd(
-                &context,
-                fd,
-                size,
-                xkb::KEYMAP_FORMAT_TEXT_V1,
-                xkb::KEYMAP_COMPILE_NO_FLAGS,
-            )
-        }
-        .map_err(Error::Io)?;
-        keymap
+        let mut text = vec![0; size - 1];
+        file.read_exact_at(&mut text, 0).map_err(Error::Io)?;
+        shared_keymap(text)
             .map(Self::new)
             .ok_or(Error::Protocol("the keymap does not compile"))
     }
 
-    fn new(keymap: xkb::Keymap) -> Self {
+    fn new(keymap: Arc<SharedKeymap>) -> Self {
         Self::with_compose(keymap, compose_table())
     }
 
-    fn with_compose(keymap: xkb::Keymap, compose_table: Option<&'static ComposeTable>) -> Self {
-        let state = xkb::State::new(&keymap);
+    fn with_compose(
+        keymap: Arc<SharedKeymap>,
+        compose_table: Option<&'static ComposeTable>,
+    ) -> Self {
+        let state = ManuallyDrop::new(keymap.state());
         Self {
             keymap,
             state,
@@ -470,6 +540,7 @@ impl Translator {
     /// Whether holding the evdev key `code` repeats it.
     pub(crate) fn repeats(&self, code: u32) -> bool {
         self.keymap
+            .keymap
             .key_repeats(xkb::Keycode::new(code + EVDEV_OFFSET))
     }
 
@@ -569,6 +640,15 @@ impl Translator {
             character,
             mods: self.modifiers(),
         }
+    }
+}
+
+impl Drop for Translator {
+    /// The keyboard state goes with the keymap's count held ([`SharedKeymap`]), before the keymap may.
+    fn drop(&mut self) {
+        let _count = lock(&self.keymap.count);
+        // SAFETY: the state is dropped here only, once, and never used after
+        unsafe { ManuallyDrop::drop(&mut self.state) };
     }
 }
 

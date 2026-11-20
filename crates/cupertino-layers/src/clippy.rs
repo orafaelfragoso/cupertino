@@ -83,6 +83,7 @@ pub const DISALLOWED_METHODS: &[(&str, &str)] = &[
 pub fn clippy_toml(methods: &[(&str, &str)]) -> String {
     let mut s = String::from(
         "# Written by `cargo run -q -p cupertino-layers -- --write-clippy` from its list; never edit by hand.\n\
+         too-many-lines-threshold = 150\n\
          disallowed-methods = [\n",
     );
     for (path, reason) in methods {

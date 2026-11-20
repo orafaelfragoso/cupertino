@@ -12,6 +12,7 @@ Crate details are in each crate's README; project docs in `docs/`.
 - One purpose per change. No drive-by renames or reformatting, no new documents unless asked.
 - No scripts (shell, Python): use cargo, nextest, the workspace's programs and examples. Repository automation is `cargo xtask ci`, and `cargo xtask vendored` for the vendored trees.
 - Tests live only in `crates/*/tests/` and go through the crate's public interface. No `#[test]` or `#[cfg(test)]` in `src/`. The gate enforces both.
+- Source files under `crates/*/src/` and `xtask/src/` are capped at 1,500 lines (`MAX_FILE_LINES` in `xtask/src/gate.rs`), and functions follow `clippy.toml`'s `too-many-lines-threshold = 150`. Split growing modules cleanly rather than adding to oversized files.
 - Find where time goes with `samply`, `perf`, `heaptrack` and `CUPERTINO_PROFILE` timelines, never timing prints.
 
 ## Git

@@ -207,12 +207,11 @@ pub enum Layer {
 /// Its descendants are kept in it; it is not kept in itself. A frame's damage and a renderer read the same answer, so a
 /// node that only moved with its layer's offset is not damaged and is not painted again.
 pub fn scroll_layers(list: &DisplayList) -> Vec<Option<usize>> {
-    let index: HashMap<PaintNodeId, usize> = list
-        .nodes
-        .iter()
-        .enumerate()
-        .map(|(i, n)| (n.id, i))
-        .collect();
+    let mut index: rustc_hash::FxHashMap<PaintNodeId, usize> =
+        rustc_hash::FxHashMap::with_capacity_and_hasher(list.nodes.len(), Default::default());
+    for (i, n) in list.nodes.iter().enumerate() {
+        index.insert(n.id, i);
+    }
     // per node: the kept layer it lies in, and whether a group lies above it
     let mut kept: Vec<Option<usize>> = Vec::with_capacity(list.nodes.len());
     let mut grouped: Vec<bool> = Vec::with_capacity(list.nodes.len());

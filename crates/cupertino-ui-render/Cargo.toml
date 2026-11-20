@@ -8,11 +8,13 @@ description = "CupertinoKit rendering: the display list a window paints into, da
 layer = "ui"
 
 [dependencies]
+bumpalo = { version = "3.20", features = ["collections"] }
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-gpu = { path = "../cupertino-gpu" }
 cupertino-raster-math = { path = "../cupertino-raster-math" }
 cupertino-theme = { path = "../cupertino-theme" }
 cupertino-ui-text = { path = "../cupertino-ui-text" }
+rustc-hash = "2.1"
 tiny-skia = { version = "0.12", default-features = false, features = ["std", "simd"] }
 tracing = "0.1"
 

@@ -456,11 +456,11 @@ Each task: **Owns**, **Touches** (mechanical edits only), **After**, size, and a
 
 #### W0.1 Baselines (lead)
 
-- [ ] Per-process PSS (from `/proc/<pid>/smaps_rollup`) of the server, every shell and built-in process, Files and
+- [x] (baseline @ 4cb94cdbc) Per-process PSS (from `/proc/<pid>/smaps_rollup`) of the server, every shell and built-in process, Files and
       Settings, and
       frame timings (`CUPERTINO_PROFILE` timelines), for each interaction that starts the shell, installed
       packages. Recorded in [Measurements](#measurements).
-- [ ] The memory baseline: per-process PSS is compared against this machine's baseline by hand (heaptrack and `smaps_rollup`).
+- [x] (baseline @ 4cb94cdbc) The memory baseline: per-process PSS is compared against this machine's baseline by hand (heaptrack and `smaps_rollup`).
 
 #### W0.2 `cupertino-layers` checks the target rules (M)
 
@@ -1180,6 +1180,8 @@ Filled in by W0.1, W6.2 and W6.close.
 | Scenario | Processes replaced: PSS sum today | After | Ratio | Frame p99 today | After |
 |---|---|---|---|---|---|
 | Idle session, installed packages 0.1.0-202611162246, 4K at scale 1.5 | 179 692 kB (dock 53 868, launcher 42 164, menubar 28 916, notifications 19 477, files `--desktop` 14 772, controlcenter 9 989, osd 9 675, windowmanager 831); login, polkit agent and keyring prompter are not dumpable, read as root | | | not yet recorded | |
+| Active session @ `4cb94cdbc` (W5 close, `/proc/<pid>/smaps_rollup`) | 225 052 kB (dock 76 765, launcher 41 295, files `--desktop` 37 939, menubar 28 909, notifications 28 366, controlcenter 6 288, osd 4 919, windowmanager 580); server 399 489 kB, portal 7 958 kB, control 1 357 kB | | | see headless `CUPERTINO_PROFILE` below | |
+| Headless `1920x1080@2x` 60 Hz (`CUPERTINO_PROFILE`, `4cb94cdbc`): `server` + `files` / `virtual-list` / `settings` | `heaptrack` server: 103 189 allocs (9 528 temp), 128.78 MiB peak heap, 255.50 MiB peak RSS; `benches/layout.rs`: 3 040 328 allocs (1 225 898 temp), 636.8 / 106.6 µs (1k cold/warm), 6 597.6 / 1 152.2 µs (10k cold/warm) | `heaptrack` server: 103 182 allocs (9 539 temp), 128.78 MiB peak heap, 256.21 MiB peak RSS; `benches/layout.rs`: 8 748 allocs (226 temp), 322.3 / 59.5 µs (1k cold/warm), 4 401.2 / 660.4 µs (10k cold/warm) | 0.0029× layout allocs (347× fewer); 0.51–0.67× layout time | `gpu.plan` p50: 14.1 / 7.7 / 8.3 µs; `gpu.record` p50: 48.6 / 24.1 / 57.2 µs; `ui.turn` p50: 131.3 / 25.7 / 88.3 µs; `ui.window` p99: 4.50 / 1.00 / 2.19 ms | `gpu.plan` p50: 8.2 / 5.5 / 5.5 µs (-28% to -42%); `gpu.record` p50: 34.6 / 19.1 / 46.3 µs (-19% to -29%); `ui.turn` p50: 66.7 / 18.7 / 44.5 µs (-27% to -50%); `ui.window` p99: 2.58 / 1.07 / 2.27 ms |
 
 The server measured 161 185 kB in the same session. Frame timings need a session started with `CUPERTINO_PROFILE` set.
 

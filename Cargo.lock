@@ -1685,6 +1685,7 @@ dependencies = [
  "accesskit",
  "accesskit_unix",
  "anyhow",
+ "bumpalo",
  "bytemuck",
  "cupertino-assets",
  "cupertino-cursor",
@@ -1820,6 +1821,7 @@ name = "cupertino-ui-core"
 version = "0.1.0"
 dependencies = [
  "async-task",
+ "bumpalo",
  "cupertino-animation",
  "cupertino-app-protocols",
  "cupertino-assets",
@@ -1833,6 +1835,7 @@ dependencies = [
  "cupertino-ui-text",
  "gungraun",
  "rustix 1.1.6",
+ "smallvec",
  "tracing",
 ]
 
@@ -1870,6 +1873,7 @@ dependencies = [
 name = "cupertino-ui-render"
 version = "0.1.0"
 dependencies = [
+ "bumpalo",
  "cupertino-geometry",
  "cupertino-gpu",
  "cupertino-raster-math",
@@ -1877,6 +1881,7 @@ dependencies = [
  "cupertino-ui-text",
  "gungraun",
  "image",
+ "rustc-hash 2.1.3",
  "tiny-skia",
  "tracing",
 ]

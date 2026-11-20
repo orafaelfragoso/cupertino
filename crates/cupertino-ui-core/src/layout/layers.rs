@@ -1,8 +1,11 @@
 //! Containers whose children share one box: absolute, overlay and scroll content.
 
-use crate::layout::engine::{align_offset, has_own_size, Arranged, Engine};
+use crate::layout::engine::{
+    align_offset, has_own_size, Arranged, ArrangedChildren, Engine, Solved,
+};
 use crate::layout::{Align, AxisConstraint, Constraints, LayoutError, LayoutTree, SizeSpec};
 use cupertino_geometry::{Point, Rect, Size};
+use smallvec::SmallVec;
 
 #[derive(Clone, Copy)]
 pub(crate) enum Mode {
@@ -18,7 +21,7 @@ pub(crate) enum Mode {
 }
 
 pub(crate) fn arrange<T: LayoutTree>(
-    engine: &mut Engine<'_, T>,
+    engine: &mut Engine<'_, '_, T>,
     kids: &[T::Id],
     mode: Mode,
     inner: Constraints,
@@ -42,7 +45,7 @@ pub(crate) fn arrange<T: LayoutTree>(
         reach(inner.width.max(), scroll_x)?,
         reach(inner.height.max(), scroll_y)?,
     );
-    let mut natural = Vec::with_capacity(kids.len());
+    let mut natural: SmallVec<[Solved; 16]> = SmallVec::with_capacity(kids.len());
     for &id in kids {
         // an absolute child of a size of its own keeps it in a container that crops it, past the container's edge if
         // need be, as a picture cut off by a frame rather than laid out again smaller
@@ -65,21 +68,24 @@ pub(crate) fn arrange<T: LayoutTree>(
         Mode::Absolute { .. } => engine.tree.spec(id).position,
         _ => Point::ZERO,
     };
-    let content = kids.iter().zip(&natural).fold(Size::ZERO, |acc, (&id, s)| {
-        let at = origin(id);
-        Size::new(
-            acc.width.max(at.x + s.size.width),
-            acc.height.max(at.y + s.size.height),
-        )
-    });
+    let content = kids
+        .iter()
+        .zip(natural.iter())
+        .fold(Size::ZERO, |acc, (&id, s)| {
+            let at = origin(id);
+            Size::new(
+                acc.width.max(at.x + s.size.width),
+                acc.height.max(at.y + s.size.height),
+            )
+        });
     let size = Size::new(
         inner.width.clamp(content.width),
         inner.height.clamp(content.height),
     );
 
-    let mut children = Vec::with_capacity(kids.len());
+    let mut children = ArrangedChildren::with_capacity(kids.len());
     let mut baseline = None;
-    for (&id, natural) in kids.iter().zip(natural) {
+    for (&id, &natural) in kids.iter().zip(natural.iter()) {
         let spec = engine.tree.spec(id);
         let align_for = |scrolled: bool| match mode {
             Mode::Absolute { .. } => Align::Start,

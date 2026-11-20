@@ -12,6 +12,7 @@ layer = "core"
 accesskit = "0.25"
 accesskit_unix = "0.24"
 anyhow = "1"
+bumpalo = { version = "3.20", features = ["collections"] }
 bytemuck = { version = "1", features = ["derive"] }
 cupertino-assets = { path = "../cupertino-assets" }
 cupertino-cursor = { path = "../cupertino-cursor" }

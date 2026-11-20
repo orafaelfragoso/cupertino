@@ -1,4 +1,8 @@
 //! The two-pass engine: `solve` sizes a node under constraints and arranges its children, `layout` then places the tree.
+//!
+//! Sizing results are cached flat in [`LayoutCache`] (indexed ranges into a shared child-rect pool, avoiding per-entry
+//! `Rc` and `Vec` heap allocations), tree-level scratch buffers live in a reusable [`bumpalo::Bump`] arena reset once
+//! per layout call, and per-container scratch stays stack-resident via `SmallVec` so recursive solves stay L1-hot.
 
 use crate::layout::{
     grid, layers, stack, Align, Axis, AxisConstraint, Constraints, ContainerKind, LayoutDirection,
@@ -6,28 +10,53 @@ use crate::layout::{
     Overflow, SizeSpec, Track,
 };
 use crate::layout::{IdMap, IdSet};
+use bumpalo::collections::Vec as BumpVec;
+use bumpalo::Bump;
 use cupertino_geometry::{Point, Rect, Size};
-use std::rc::Rc;
+use smallvec::SmallVec;
 
 const MAX_DEPTH: usize = 256;
+
+/// Inline capacity for a single container's arranged child rects before spilling to the heap.
+pub(crate) type ArrangedChildren<Id> = SmallVec<[(Id, Rect); 16]>;
+
+/// Flat cache storage backing [`LayoutCache`], split from the scratch arena so [`Engine`] can hold `&Bump` alongside
+/// `&mut CacheStore` without borrow conflicts.
+struct CacheStore<Id> {
+    entries: IdMap<Key<Id>, Solved>,
+    children_pool: Vec<(Id, Rect)>,
+    minimums: IdMap<MinKey<Id>, f64>,
+    generations: IdMap<Id, crate::layout::Generation>,
+    seen: IdSet<Id>,
+    direction: Option<LayoutDirection>,
+}
+
+impl<Id> Default for CacheStore<Id> {
+    fn default() -> Self {
+        Self {
+            entries: IdMap::default(),
+            children_pool: Vec::new(),
+            minimums: IdMap::default(),
+            generations: IdMap::default(),
+            seen: IdSet::default(),
+            direction: None,
+        }
+    }
+}
 
 /// Sizing results kept from earlier calls so an unchanged subtree is not measured again. A node's entries are dropped when
 /// its [`Generation`](crate::layout::Generation) changed or any descendant's did; entries of nodes that left the tree go too.
 /// Pass the same cache to every [`layout_cached`] call for one tree.
 pub struct LayoutCache<Id> {
-    entries: IdMap<Key<Id>, Rc<Solved<Id>>>,
-    minimums: IdMap<MinKey<Id>, f64>,
-    generations: IdMap<Id, crate::layout::Generation>,
-    direction: Option<LayoutDirection>,
+    store: CacheStore<Id>,
+    scratch: Bump,
 }
 
 impl<Id> Default for LayoutCache<Id> {
     fn default() -> Self {
         Self {
-            entries: IdMap::default(),
-            minimums: IdMap::default(),
-            generations: IdMap::default(),
-            direction: None,
+            store: CacheStore::default(),
+            scratch: Bump::new(),
         }
     }
 }
@@ -39,7 +68,7 @@ impl<Id> LayoutCache<Id> {
 
     /// Entries held, sizing results and minimum sizes together.
     pub fn len(&self) -> usize {
-        self.entries.len() + self.minimums.len()
+        self.store.entries.len() + self.store.minimums.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -47,15 +76,22 @@ impl<Id> LayoutCache<Id> {
     }
 
     pub fn clear(&mut self) {
-        self.entries.clear();
-        self.minimums.clear();
-        self.generations.clear();
-        self.direction = None;
+        self.store.entries.clear();
+        self.store.children_pool.clear();
+        self.store.minimums.clear();
+        self.store.generations.clear();
+        self.store.seen.clear();
+        self.store.direction = None;
+        self.scratch.reset();
     }
 }
 
 /// A cache holding more entries than this many per node is dropped whole, so changing constraints cannot grow it forever.
 const ENTRIES_PER_NODE: usize = 16;
+
+/// Child-pool compaction multiplier: once the append-only child-rect pool grows past this multiple of live cache entries,
+/// the cache resets so stale child slices cannot accumulate indefinitely.
+const POOL_COMPACT_FACTOR: usize = 4;
 
 type Key<Id> = (Id, [u64; 6]);
 type MinKey<Id> = (Id, bool, u64);
@@ -64,22 +100,25 @@ type MinKey<Id> = (Id, bool, u64);
 pub(crate) struct Arranged<Id> {
     pub size: Size,
     pub baseline: Option<f64>,
-    pub children: Vec<(Id, Rect)>,
+    pub children: ArrangedChildren<Id>,
 }
 
-/// A node sized under one set of constraints; its children are in the node's own coordinates.
-pub(crate) struct Solved<Id> {
+/// A node sized under one set of constraints; its children slice lives in `CacheStore::children_pool`.
+#[derive(Clone, Copy)]
+pub(crate) struct Solved {
     pub size: Size,
     pub baseline: Option<f64>,
     pub clip: Option<Rect>,
-    pub children: Vec<(Id, Rect)>,
+    children_start: u32,
+    children_len: u32,
 }
 
-pub(crate) struct Engine<'a, T: LayoutTree> {
+pub(crate) struct Engine<'a, 'b, T: LayoutTree> {
     pub tree: &'a T,
+    pub bump: &'b Bump,
     direction: LayoutDirection,
     pub node_limit: usize,
-    cache: &'a mut LayoutCache<T::Id>,
+    store: &'a mut CacheStore<T::Id>,
     pub stats: LayoutStats,
 }
 
@@ -103,18 +142,43 @@ pub fn layout_cached<T: LayoutTree>(
     options: &LayoutOptions,
     cache: &mut LayoutCache<T::Id>,
 ) -> Result<LayoutResult<T::Id>, LayoutError> {
-    let visits = validate_tree(tree, root, options.node_limit)?;
-    refresh(tree, &visits, options.direction, cache);
+    cache.scratch.reset();
+    let bump = &cache.scratch;
+    let store = &mut cache.store;
+    let (visits, all_clean) = validate_tree(
+        tree,
+        root,
+        options.node_limit,
+        store,
+        options.direction,
+        bump,
+    )?;
+    let node_count = visits.len();
+    if !all_clean {
+        refresh(tree, &visits, options.direction, store, bump);
+    }
+    if store.entries.capacity() < node_count * 2 {
+        store
+            .entries
+            .reserve((node_count * 2).saturating_sub(store.entries.len()));
+    }
+    if store.children_pool.capacity() < node_count * 2 {
+        store
+            .children_pool
+            .reserve((node_count * 2).saturating_sub(store.children_pool.len()));
+    }
     let mut engine = Engine {
         tree,
+        bump,
         direction: options.direction,
         node_limit: options.node_limit,
-        cache,
+        store,
         stats: LayoutStats::default(),
     };
     let size = engine.solve(root, available)?.size;
-    let mut nodes = IdMap::default();
-    let mut pending = vec![(root, Point::ZERO, size)];
+    let mut nodes = IdMap::with_capacity_and_hasher(node_count, Default::default());
+    let mut pending = BumpVec::with_capacity_in(node_count.min(256), bump);
+    pending.push((root, Point::ZERO, size));
     while let Some((id, origin, size)) = pending.pop() {
         let solved = engine.solve(id, Constraints::tight(size)?)?;
         nodes.insert(
@@ -125,8 +189,10 @@ pub fn layout_cached<T: LayoutTree>(
                 baseline: solved.baseline,
             },
         );
-        for (child, rect) in &solved.children {
-            pending.push((*child, rect.origin, rect.size));
+        let start = solved.children_start as usize;
+        let end = start + solved.children_len as usize;
+        for &(child, rect) in &engine.store.children_pool[start..end] {
+            pending.push((child, rect.origin, rect.size));
         }
     }
     Ok(LayoutResult {
@@ -141,38 +207,56 @@ fn refresh<T: LayoutTree>(
     tree: &T,
     visits: &[Visit<T::Id>],
     direction: LayoutDirection,
-    cache: &mut LayoutCache<T::Id>,
+    store: &mut CacheStore<T::Id>,
+    bump: &Bump,
 ) {
-    if cache.direction != Some(direction) || cache.len() > ENTRIES_PER_NODE * visits.len() {
-        cache.clear();
-        cache.direction = Some(direction);
+    let cache_len = store.entries.len() + store.minimums.len();
+    let max_entries = ENTRIES_PER_NODE * visits.len();
+    let reset_all = store.direction != Some(direction)
+        || cache_len > max_entries
+        || store.children_pool.len() > max_entries.saturating_mul(POOL_COMPACT_FACTOR).max(4096);
+    if reset_all {
+        store.entries.clear();
+        store.children_pool.clear();
+        store.minimums.clear();
+        store.generations.clear();
+        store.direction = Some(direction);
+        store.generations.reserve(visits.len());
+        for v in visits {
+            store.generations.insert(v.id, tree.generation(v.id));
+        }
+        return;
     }
-    let mut dirty: Vec<bool> = visits
-        .iter()
-        .map(|v| cache.generations.get(&v.id) != Some(&tree.generation(v.id)))
-        .collect();
+    let mut dirty = BumpVec::with_capacity_in(visits.len(), bump);
+    for v in visits {
+        dirty.push(store.generations.get(&v.id) != Some(&tree.generation(v.id)));
+    }
     for index in (0..visits.len()).rev() {
         if let (true, Some(parent)) = (dirty[index], visits[index].parent) {
             dirty[parent] = true;
         }
     }
-    let stale: IdSet<T::Id> = visits
-        .iter()
-        .zip(&dirty)
-        .filter(|(_, d)| **d)
-        .map(|(v, _)| v.id)
-        .collect();
-    let present: IdSet<T::Id> = visits.iter().map(|v| v.id).collect();
-    cache
-        .entries
-        .retain(|(id, _), _| present.contains(id) && !stale.contains(id));
-    cache
-        .minimums
-        .retain(|(id, _, _), _| present.contains(id) && !stale.contains(id));
-    cache.generations = visits
-        .iter()
-        .map(|v| (v.id, tree.generation(v.id)))
-        .collect();
+    let mut stale = IdSet::default();
+    for (v, &is_dirty) in visits.iter().zip(dirty.iter()) {
+        if is_dirty {
+            stale.insert(v.id);
+        }
+    }
+    // `store.seen` already holds the exact set of present ids from `validate_tree`.
+    if !stale.is_empty() || store.seen.len() != store.generations.len() {
+        let present = &store.seen;
+        store
+            .entries
+            .retain(|(id, _), _| present.contains(id) && !stale.contains(id));
+        store
+            .minimums
+            .retain(|(id, _, _), _| present.contains(id) && !stale.contains(id));
+    }
+    store.generations.clear();
+    store.generations.reserve(visits.len());
+    for v in visits {
+        store.generations.insert(v.id, tree.generation(v.id));
+    }
 }
 
 struct Visit<Id> {
@@ -180,99 +264,122 @@ struct Visit<Id> {
     parent: Option<usize>,
 }
 
+type ValidatedTree<'b, Id> = (BumpVec<'b, Visit<Id>>, bool);
+
 /// Every node under `root`, parents before children, after checking the tree and its specs.
-fn validate_tree<T: LayoutTree>(
+/// Also reports whether the cache is already completely clean for this tree and direction.
+fn validate_tree<'b, T: LayoutTree>(
     tree: &T,
     root: T::Id,
     node_limit: usize,
-) -> Result<Vec<Visit<T::Id>>, LayoutError> {
-    let mut seen = IdSet::default();
-    let mut visits = Vec::new();
-    let mut pending = vec![(root, None, 0usize)];
+    store: &mut CacheStore<T::Id>,
+    direction: LayoutDirection,
+    bump: &'b Bump,
+) -> Result<ValidatedTree<'b, T::Id>, LayoutError> {
+    let expected = store.generations.len();
+    store.seen.clear();
+    if store.seen.capacity() < expected {
+        store.seen.reserve(expected);
+    }
+    let mut visits = BumpVec::with_capacity_in(expected.max(64), bump);
+    let mut pending = BumpVec::with_capacity_in(64, bump);
+    pending.push((root, None, 0usize));
+    let mut generations_match = store.direction == Some(direction) && expected > 0;
     while let Some((id, parent, depth)) = pending.pop() {
-        if depth >= MAX_DEPTH || seen.len() >= node_limit {
+        if depth >= MAX_DEPTH || store.seen.len() >= node_limit {
             return Err(LayoutError::NodeLimit);
         }
-        if !seen.insert(id) {
+        if !store.seen.insert(id) {
             return Err(LayoutError::CycleOrMissingNode);
         }
         validate_spec(tree.spec(id))?;
+        if generations_match && store.generations.get(&id) != Some(&tree.generation(id)) {
+            generations_match = false;
+        }
         let index = visits.len();
         visits.push(Visit { id, parent });
-        pending.extend(
-            tree.children(id)
-                .iter()
-                .map(|child| (*child, Some(index), depth + 1)),
-        );
+        for &child in tree.children(id) {
+            pending.push((child, Some(index), depth + 1));
+        }
     }
-    Ok(visits)
+    let cache_len = store.entries.len() + store.minimums.len();
+    let max_entries = ENTRIES_PER_NODE * visits.len();
+    let all_clean = generations_match
+        && visits.len() == expected
+        && cache_len <= max_entries
+        && store.children_pool.len() <= max_entries.saturating_mul(POOL_COMPACT_FACTOR).max(4096);
+    Ok((visits, all_clean))
 }
 
-fn validate_spec(spec: &LayoutSpec) -> Result<(), LayoutError> {
-    let insets = spec.insets;
-    let mut values = vec![
-        insets.top,
-        insets.left,
-        insets.bottom,
-        insets.right,
-        spec.flex.grow,
-        spec.flex.shrink,
-    ];
-    values.extend(spec.flex.basis);
-    if !spec.position.x.is_finite() || !spec.position.y.is_finite() {
+#[inline]
+fn check_non_negative(value: f64) -> Result<(), LayoutError> {
+    if !value.is_finite() {
         return Err(LayoutError::NonFiniteValue);
     }
-    for size in [spec.width, spec.height] {
-        match size {
-            SizeSpec::Fixed(v) | SizeSpec::Fraction(v) => values.push(v),
-            SizeSpec::Fit | SizeSpec::Fill => {}
-        }
-    }
-    match &spec.kind {
-        ContainerKind::Stack { spacing, .. } => values.push(*spacing),
-        ContainerKind::Wrap { gaps } => values.extend([gaps.width, gaps.height]),
-        ContainerKind::Split(split) => values.extend([
-            split.leading,
-            split.gap,
-            split.min_leading,
-            split.min_trailing,
-        ]),
-        ContainerKind::Grid {
-            columns,
-            rows,
-            gaps,
-        } => {
-            values.extend([gaps.width, gaps.height]);
-            for track in columns.iter().chain(rows) {
-                if let Track::Fixed(v) | Track::Fraction(v) = track {
-                    values.push(*v);
-                }
-            }
-        }
-        _ => {}
-    }
-    if values.iter().any(|v| !v.is_finite()) {
-        return Err(LayoutError::NonFiniteValue);
-    }
-    if values.iter().any(|v| *v < 0.0) {
+    if value < 0.0 {
         return Err(LayoutError::InvalidConstraint);
     }
     Ok(())
 }
 
-impl<T: LayoutTree> Engine<'_, T> {
-    pub fn solve(
-        &mut self,
-        id: T::Id,
-        constraints: Constraints,
-    ) -> Result<Rc<Solved<T::Id>>, LayoutError> {
+fn validate_spec(spec: &LayoutSpec) -> Result<(), LayoutError> {
+    let insets = spec.insets;
+    check_non_negative(insets.top)?;
+    check_non_negative(insets.left)?;
+    check_non_negative(insets.bottom)?;
+    check_non_negative(insets.right)?;
+    check_non_negative(spec.flex.grow)?;
+    check_non_negative(spec.flex.shrink)?;
+    if let Some(basis) = spec.flex.basis {
+        check_non_negative(basis)?;
+    }
+    if !spec.position.x.is_finite() || !spec.position.y.is_finite() {
+        return Err(LayoutError::NonFiniteValue);
+    }
+    for size in [spec.width, spec.height] {
+        if let SizeSpec::Fixed(v) | SizeSpec::Fraction(v) = size {
+            check_non_negative(v)?;
+        }
+    }
+    match &spec.kind {
+        ContainerKind::Stack { spacing, .. } => check_non_negative(*spacing)?,
+        ContainerKind::Wrap { gaps } => {
+            check_non_negative(gaps.width)?;
+            check_non_negative(gaps.height)?;
+        }
+        ContainerKind::Split(split) => {
+            check_non_negative(split.leading)?;
+            check_non_negative(split.gap)?;
+            check_non_negative(split.min_leading)?;
+            check_non_negative(split.min_trailing)?;
+        }
+        ContainerKind::Grid {
+            columns,
+            rows,
+            gaps,
+        } => {
+            check_non_negative(gaps.width)?;
+            check_non_negative(gaps.height)?;
+            for track in columns.iter().chain(rows) {
+                if let Track::Fixed(v) | Track::Fraction(v) = track {
+                    check_non_negative(*v)?;
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+impl<T: LayoutTree> Engine<'_, '_, T> {
+    pub fn solve(&mut self, id: T::Id, constraints: Constraints) -> Result<Solved, LayoutError> {
         let key = (id, key_of(constraints));
-        if let Some(solved) = self.cache.entries.get(&key) {
-            return Ok(Rc::clone(solved));
+        if let Some(&solved) = self.store.entries.get(&key) {
+            return Ok(solved);
         }
         self.stats.solves += 1;
-        let solved = Rc::new(self.compute(id, constraints)?);
-        self.cache.entries.insert(key, Rc::clone(&solved));
+        let solved = self.compute(id, constraints)?;
+        self.store.entries.insert(key, solved);
         Ok(solved)
     }
 
@@ -290,10 +397,11 @@ impl<T: LayoutTree> Engine<'_, T> {
             Axis::Vertical => cross_max,
         };
         let key = (id, axis == Axis::Vertical, cross_max.to_bits());
-        if let Some(min) = self.cache.minimums.get(&key) {
-            return Ok(*min);
+        if let Some(&min) = self.store.minimums.get(&key) {
+            return Ok(min);
         }
         let tree = self.tree;
+        let bump = self.bump;
         let spec = tree.spec(id);
         let (inset, cross_inset) = match axis {
             Axis::Horizontal => (spec.insets.horizontal(), spec.insets.vertical()),
@@ -319,14 +427,18 @@ impl<T: LayoutTree> Engine<'_, T> {
                 spacing,
                 ..
             } => {
-                let mut mins = Vec::with_capacity(kids.len());
-                for &kid in kids {
-                    mins.push(self.min_content(kid, axis, inner_cross)?);
-                }
                 if *along == axis {
-                    mins.iter().sum::<f64>() + spacing * kids.len().saturating_sub(1) as f64
+                    let mut sum = 0.0;
+                    for &kid in kids {
+                        sum += self.min_content(kid, axis, inner_cross)?;
+                    }
+                    sum + spacing * kids.len().saturating_sub(1) as f64
                 } else {
-                    mins.into_iter().fold(0.0, f64::max)
+                    let mut max_val = 0.0f64;
+                    for &kid in kids {
+                        max_val = max_val.max(self.min_content(kid, axis, inner_cross)?);
+                    }
+                    max_val
                 }
             }
             ContainerKind::Grid {
@@ -335,12 +447,16 @@ impl<T: LayoutTree> Engine<'_, T> {
                 gaps,
             } => {
                 let column_count = columns.len().max(1);
-                let spans: Vec<_> = kids.iter().map(|&k| tree.spec(k).span).collect();
+                let mut spans: SmallVec<[_; 16]> = SmallVec::with_capacity(kids.len());
+                for &k in kids {
+                    spans.push(tree.spec(k).span);
+                }
                 let cells = grid::place(
                     &spans,
                     column_count,
                     rows.len().max(kids.len()),
                     self.node_limit,
+                    bump,
                 )?;
                 let (tracks, gap) = match axis {
                     Axis::Horizontal => (columns, gaps.width),
@@ -358,8 +474,8 @@ impl<T: LayoutTree> Engine<'_, T> {
                     Axis::Horizontal => column_count,
                     Axis::Vertical => 0,
                 });
-                let mut sizes = vec![0.0f64; count];
-                for (&kid, cell) in kids.iter().zip(&cells) {
+                let mut sizes: SmallVec<[f64; 16]> = smallvec::smallvec![0.0f64; count];
+                for (&kid, cell) in kids.iter().zip(cells.iter()) {
                     let (start, length) = match axis {
                         Axis::Horizontal => (cell.column, cell.columns),
                         Axis::Vertical => (cell.row, cell.rows),
@@ -377,7 +493,7 @@ impl<T: LayoutTree> Engine<'_, T> {
                 sizes.iter().sum::<f64>() + gap * sizes.len().saturating_sub(1) as f64
             }
             ContainerKind::Wrap { gaps } => {
-                let mut sizes = Vec::with_capacity(kids.len());
+                let mut sizes: SmallVec<[Size; 16]> = SmallVec::with_capacity(kids.len());
                 for &kid in kids {
                     let width = self.min_content(kid, Axis::Horizontal, f64::INFINITY)?;
                     let height = self.min_content(kid, Axis::Vertical, width)?;
@@ -387,7 +503,7 @@ impl<T: LayoutTree> Engine<'_, T> {
                     // the widest child alone in its row
                     Axis::Horizontal => sizes.iter().map(|s| s.width).fold(0.0, f64::max),
                     Axis::Vertical => {
-                        crate::layout::wrap::place(&sizes, inner_cross, *gaps)
+                        crate::layout::wrap::place(&sizes, inner_cross, *gaps, bump)
                             .1
                             .height
                     }
@@ -435,15 +551,11 @@ impl<T: LayoutTree> Engine<'_, T> {
             SizeSpec::Fixed(v) => v,
             _ => content + inset,
         };
-        self.cache.minimums.insert(key, min);
+        self.store.minimums.insert(key, min);
         Ok(min)
     }
 
-    fn compute(
-        &mut self,
-        id: T::Id,
-        constraints: Constraints,
-    ) -> Result<Solved<T::Id>, LayoutError> {
+    fn compute(&mut self, id: T::Id, constraints: Constraints) -> Result<Solved, LayoutError> {
         let tree = self.tree;
         let spec = tree.spec(id);
         let inner = Constraints::new(
@@ -467,7 +579,7 @@ impl<T: LayoutTree> Engine<'_, T> {
                 Arranged {
                     size: Size::new(inner.width.clamp(w), inner.height.clamp(h)),
                     baseline: measured.baseline,
-                    children: Vec::new(),
+                    children: ArrangedChildren::new(),
                 }
             }
             ContainerKind::Stack {
@@ -518,11 +630,19 @@ impl<T: LayoutTree> Engine<'_, T> {
         }
         let clip = (scrolls || spec.overflow != Overflow::Visible)
             .then(|| Rect::new(0.0, 0.0, size.width, size.height));
+        let children_start = self.store.children_pool.len() as u32;
+        let children_len = arranged.children.len() as u32;
+        if children_len > 0 {
+            self.store
+                .children_pool
+                .extend_from_slice(&arranged.children);
+        }
         Ok(Solved {
             size,
             baseline: arranged.baseline.map(|b| b + insets.top),
             clip,
-            children: arranged.children,
+            children_start,
+            children_len,
         })
     }
 }

@@ -133,19 +133,20 @@ pub struct FrameSnapshot {
 }
 
 /// One drawable of a layer: a typed scene item, a surface tree, a picture, or an element the renderer still
-/// builds itself.
+/// builds itself. Variants are stored inline to avoid per-item heap boxing during every frame's scene assembly.
+#[allow(clippy::large_enum_variant)]
 pub enum Piece {
-    Item(Box<SceneItem>),
-    Tree(Box<Tree>),
-    Image(Box<Picture>),
-    Material(Box<Material>),
-    Glass(Box<Glass>),
-    Mesh(Box<MeshPiece>),
+    Item(SceneItem),
+    Tree(Tree),
+    Image(Picture),
+    Material(Material),
+    Glass(Glass),
+    Mesh(MeshPiece),
 }
 
 impl Piece {
     pub fn item(item: SceneItem) -> Self {
-        Self::Item(Box::new(item))
+        Self::Item(item)
     }
 }
 
@@ -204,7 +205,7 @@ impl Composition {
 
     pub fn push(&mut self, layer: SceneLayer, piece: impl Into<Piece>) {
         match piece.into() {
-            Piece::Item(item) => self.items.push(layer, *item),
+            Piece::Item(item) => self.items.push(layer, item),
             Piece::Mesh(mesh) => {
                 let snapshot = SnapshotId(ResourceKey {
                     slot: self.resources.snapshots.len() as u64,
@@ -458,7 +459,7 @@ fn picture_piece(
     scale: f64,
     alpha: f32,
 ) -> Piece {
-    Piece::Image(Box::new(Picture {
+    Piece::Image(Picture {
         buffer,
         kind,
         index: 0,
@@ -475,7 +476,7 @@ fn picture_piece(
         },
         opacity: alpha,
         clip: Clip::None,
-    }))
+    })
 }
 
 pub fn from_rect(r: cupertino_wm::Rect) -> Rect {

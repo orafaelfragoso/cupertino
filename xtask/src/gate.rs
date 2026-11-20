@@ -187,6 +187,32 @@ const TEST_FREE: [&str; 4] = [
 /// Test code markers.
 const TEST_MARKERS: &str = concat!(r"#\[te", r"st\]|#\[cfg\(te", r"st\)\]|\bmod\s+te", r"sts\b");
 
+/// Maximum lines permitted in a tracked Rust source file under `crates/*/src/**` or `xtask/src/**`.
+/// Enforced by the gate so source files stay modular and readable.
+const MAX_FILE_LINES: usize = 1500;
+/// Directories subject to [`MAX_FILE_LINES`].
+const SIZE_LIMITED: [&str; 2] = ["crates/*/src/**", "xtask/src/**"];
+/// Legacy Wave 6–7 (`shell` and `apps`) files still awaiting their wave's refactor, capped at their current line count
+/// so they may never grow; entries must be removed once split under [`MAX_FILE_LINES`].
+const LARGE_FILE_CAPS: [(&str, usize); 16] = [
+    ("crates/cupertino-controlcenter/src/view.rs", 3387),
+    ("crates/cupertino-dock/src/dock.rs", 1536),
+    ("crates/cupertino-dock/src/kit.rs", 3346),
+    ("crates/cupertino-files/src/kit/mod.rs", 3427),
+    ("crates/cupertino-launcher/src/kit.rs", 2636),
+    ("crates/cupertino-launcher/src/view.rs", 3007),
+    ("crates/cupertino-login/src/app.rs", 1691),
+    ("crates/cupertino-login/src/view.rs", 2293),
+    ("crates/cupertino-login/src/view/widgets.rs", 2833),
+    ("crates/cupertino-menubar/src/app.rs", 1783),
+    ("crates/cupertino-menubar/src/view.rs", 1915),
+    ("crates/cupertino-notifications/src/center.rs", 1511),
+    ("crates/cupertino-notifications/src/view.rs", 3641),
+    ("crates/cupertino-portal/src/dialog.rs", 1999),
+    ("crates/cupertino-settings/src/panes.rs", 3251),
+    ("crates/cupertino-settings/src/shell/state.rs", 1738),
+];
+
 /// Script suffixes no tracked file may have.
 const SCRIPT_SUFFIXES: [&str; 5] = [".sh", ".py", ".bash", ".zsh", ".fish"];
 /// Files in a format of their own that happens to be a script.
@@ -607,6 +633,35 @@ fn source_problems(
                 line_of(&text, start),
                 quoted(&matched)
             ));
+        }
+        if file_suffix == ".rs"
+            && SIZE_LIMITED
+                .iter()
+                .any(|pattern| crate::glob::matches(pattern, rel))
+        {
+            let lines = text.lines().count();
+            match LARGE_FILE_CAPS.iter().find(|(path, _)| *path == rel) {
+                Some((_, cap)) if lines > *cap => {
+                    count(hits, "file too large");
+                    problems.push(format!(
+                        "{rel}: file has {lines} lines, exceeding its grandfathered cap of {cap} (target limit {MAX_FILE_LINES})"
+                    ));
+                }
+                Some(_) if lines <= MAX_FILE_LINES => {
+                    count(hits, "stale file-size cap");
+                    problems.push(format!(
+                        "{rel}: file is now {lines} lines (<= {MAX_FILE_LINES}); remove its entry from LARGE_FILE_CAPS"
+                    ));
+                }
+                Some(_) => {}
+                None if lines > MAX_FILE_LINES => {
+                    count(hits, "file too large");
+                    problems.push(format!(
+                        "{rel}: file has {lines} lines, exceeding the {MAX_FILE_LINES}-line limit; split into focused submodules"
+                    ));
+                }
+                None => {}
+            }
         }
         if file_suffix == ".rs"
             && TEST_FREE

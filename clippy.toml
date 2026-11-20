@@ -1,0 +1,3 @@
+# Workspace Clippy configuration.
+# Per-file line limits (1500 lines) are enforced by `cargo xtask ci` (`xtask/src/gate.rs`).
+too-many-lines-threshold = 150

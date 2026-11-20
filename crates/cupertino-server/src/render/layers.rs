@@ -336,7 +336,7 @@ pub fn layer_pieces(
         };
         let role = vibrant_blend(l.blend, dark, plain)
             .map_or_else(|| content_role(l.content_blur), SurfaceRole::Vibrant);
-        out.push(Piece::Tree(Box::new(Tree {
+        out.push(Piece::Tree(Tree {
             surface: l.surface.clone(),
             kind: place.kind,
             role,
@@ -346,7 +346,7 @@ pub fn layer_pieces(
             opacity,
             clip,
             only: None,
-        })));
+        }));
         // late content: the placeholder where the content does not reach
         if l.placeholder[3] > 0.0 {
             for [x, y, w, h] in uncovered(l.content, l.width, l.height) {

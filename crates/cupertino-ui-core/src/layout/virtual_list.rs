@@ -59,10 +59,12 @@ impl VirtualList {
             ItemMetrics::Fixed(h) => Rows::Fixed(h + spacing),
             ItemMetrics::Estimated(estimate) => {
                 let stride = estimate + spacing;
+                let heights = vec![stride; count];
+                let sums = build_sums(&heights);
                 Rows::Estimated {
                     estimate: stride,
-                    heights: vec![stride; count],
-                    sums: build_sums(&vec![stride; count]),
+                    heights,
+                    sums,
                 }
             }
         };

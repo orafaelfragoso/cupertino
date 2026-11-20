@@ -1,10 +1,10 @@
 //! Two panes along an axis: the leading one at its asked extent within its limits, the trailing one taking the rest.
 
-use crate::layout::engine::{Arranged, Engine};
+use crate::layout::engine::{Arranged, ArrangedChildren, Engine};
 use crate::layout::{AxisConstraint, Constraints, LayoutError, LayoutTree, SplitSpec};
 
 pub(crate) fn arrange<T: LayoutTree>(
-    engine: &mut Engine<'_, T>,
+    engine: &mut Engine<'_, '_, T>,
     kids: &[T::Id],
     split: &SplitSpec,
     inner: Constraints,
@@ -23,7 +23,7 @@ pub(crate) fn arrange<T: LayoutTree>(
         .shown(extent)
         .map_or((0.0, 0.0), |leading| (leading, split.gap));
     let trailing = (extent - leading - gap).max(0.0);
-    let mut children = Vec::with_capacity(kids.len());
+    let mut children = ArrangedChildren::with_capacity(kids.len());
     let mut position = 0.0;
     for (&id, length) in kids.iter().zip([leading, trailing]) {
         let c = axis.join(

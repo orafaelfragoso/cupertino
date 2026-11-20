@@ -9,6 +9,7 @@ description = "CupertinoKit runtime: the application model, elements and the ret
 layer = "ui"
 
 [dependencies]
+bumpalo = { version = "3.20", features = ["collections"] }
 cupertino-app-protocols = { path = "../cupertino-app-protocols" }
 async-task = "4.7"
 cupertino-animation = { path = "../cupertino-animation" }
@@ -20,6 +21,7 @@ cupertino-ui-render = { path = "../cupertino-ui-render" }
 cupertino-ui-text = { path = "../cupertino-ui-text" }
 cupertino-theme = { path = "../cupertino-theme" }
 rustix = { version = "1", features = ["time"] }
+smallvec = "1.16"
 tracing = "0.1"
 
 [dev-dependencies]

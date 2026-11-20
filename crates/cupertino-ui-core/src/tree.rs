@@ -6,14 +6,18 @@
 use crate::layout::{Generation, LayoutSpec};
 use crate::widget::{AnyWidget, Change, Element};
 use crate::{Key, NodeId, UiError};
+use smallvec::SmallVec;
 use std::any::Any;
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::num::NonZeroU32;
 
+/// Inline capacity of a node's child list before spilling to the heap. Most UI containers hold four or fewer children.
+pub(crate) type Children = SmallVec<[NodeId; 4]>;
+
 pub(crate) struct Node<M> {
     pub(crate) parent: Option<NodeId>,
-    pub(crate) children: Vec<NodeId>,
+    pub(crate) children: Children,
     pub(crate) key: Option<Key>,
     pub(crate) widget: Box<dyn AnyWidget<M>>,
     pub(crate) state: Box<dyn Any>,
@@ -29,8 +33,10 @@ pub(crate) struct Node<M> {
     pub(crate) kept: Option<u64>,
 }
 
+// Stored inline in the slab so live nodes avoid a per-node heap allocation; free slots are a small minority.
+#[allow(clippy::large_enum_variant)]
 enum Slot<M> {
-    Live(NonZeroU32, Box<Node<M>>),
+    Live(NonZeroU32, Node<M>),
     Free(NonZeroU32),
 }
 
@@ -139,9 +145,9 @@ impl<M: 'static> Tree<M> {
         let children = element.widget.take_children();
         let revision = self.next_revision();
         let spec = element.layout();
-        let node = Box::new(Node {
+        let node = Node {
             parent,
-            children: Vec::new(),
+            children: Children::new(),
             key: element.key,
             state: element.widget.new_state(),
             spec,
@@ -150,7 +156,7 @@ impl<M: 'static> Tree<M> {
             paint_revision: revision,
             subtree_revision: revision,
             kept,
-        });
+        };
         let id = match self.free.pop() {
             Some(index) => {
                 let slot = &mut self.slots[index as usize];
@@ -169,7 +175,7 @@ impl<M: 'static> Tree<M> {
         };
         self.live += 1;
         self.paint_dirty.insert(id);
-        let mut ids = Vec::with_capacity(children.len());
+        let mut ids = Children::with_capacity(children.len());
         for child in children {
             ids.push(self.mount(Some(id), child)?);
         }
@@ -216,7 +222,7 @@ impl<M: 'static> Tree<M> {
                 None => unkeyed.push_back(child),
             }
         }
-        let mut children = Vec::with_capacity(elements.len());
+        let mut children = Children::with_capacity(elements.len());
         let mut result = Ok(());
         for element in elements {
             let candidate = match &element.key {

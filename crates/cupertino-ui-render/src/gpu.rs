@@ -384,6 +384,8 @@ pub struct GpuRenderer<R> {
     scrolls: HashMap<PaintNodeId, (Bounds, (i32, i32))>,
     /// The scroll layers whose content is kept.
     kept: HashMap<PaintNodeId, KeptScroll>,
+    /// Per-frame scratch arena for the display-list forest and CSR child index table.
+    scratch: bumpalo::Bump,
 }
 
 /// A GPU failure as a render error: the frame is not drawn and the next one is drawn whole. A lost device is also
@@ -516,6 +518,7 @@ impl<R: GlyphRasterizer> GpuRenderer<R> {
             stats: GpuStats::default(),
             scrolls: HashMap::new(),
             kept: HashMap::new(),
+            scratch: bumpalo::Bump::new(),
         }
     }
 
@@ -704,9 +707,12 @@ impl<R: GlyphRasterizer> UiRenderer for GpuRenderer<R> {
         if !dirty.is_empty() || plans.iter().any(|p| !p.paint.is_empty()) {
             let rects: Vec<Bounds> = dirty.iter().map(bounds).collect();
             let mut rec = record::Recording::new(full);
-            let painted = tracing::trace_span!("gpu.record", rects = rects.len())
-                .in_scope(|| record::paint(self, &mut rec, request, &rects, &plans))
-                .and_then(|()| self.execute(&mut rec).map_err(gpu));
+            let mut scratch = std::mem::take(&mut self.scratch);
+            scratch.reset();
+            let recorded = tracing::trace_span!("gpu.record", rects = rects.len())
+                .in_scope(|| record::paint(self, &mut rec, &scratch, request, &rects, &plans));
+            self.scratch = scratch;
+            let painted = recorded.and_then(|()| self.execute(&mut rec).map_err(gpu));
             rec.release(self);
             if painted.is_err() {
                 // a kept layer may be half painted: the next frame paints each one whole

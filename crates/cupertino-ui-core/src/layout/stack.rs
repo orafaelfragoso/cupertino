@@ -1,10 +1,12 @@
 //! Horizontal and vertical stacks: flexible main-axis sharing, cross-axis alignment and baseline alignment.
 
-use crate::layout::engine::{align_offset, has_own_size, is_fixed, Arranged, Engine, Solved};
+use crate::layout::engine::{
+    align_offset, has_own_size, is_fixed, Arranged, ArrangedChildren, Engine, Solved,
+};
 use crate::layout::{
     Align, Axis, AxisConstraint, Constraints, Justify, LayoutError, LayoutTree, SizeSpec,
 };
-use std::rc::Rc;
+use smallvec::SmallVec;
 
 const EPSILON: f64 = 1e-9;
 
@@ -17,11 +19,11 @@ struct Item<Id> {
     shrink: f64,
     align: Align,
     cross_fixed: bool,
-    natural: Option<Rc<Solved<Id>>>,
+    natural: Option<Solved>,
 }
 
 pub(crate) fn arrange<T: LayoutTree>(
-    engine: &mut Engine<'_, T>,
+    engine: &mut Engine<'_, '_, T>,
     kids: &[T::Id],
     axis: Axis,
     spacing: f64,
@@ -35,7 +37,7 @@ pub(crate) fn arrange<T: LayoutTree>(
         AxisConstraint::loose(cross_c.max())?,
     );
 
-    let mut items = Vec::with_capacity(kids.len());
+    let mut items: SmallVec<[Item<T::Id>; 16]> = SmallVec::with_capacity(kids.len());
     for &id in kids {
         let spec = engine.tree.spec(id);
         let main_spec = axis.size_spec(spec);
@@ -80,17 +82,14 @@ pub(crate) fn arrange<T: LayoutTree>(
     let (sizes, passes) = distribute(&items, main - gaps);
     engine.stats.flex_passes += passes;
 
-    let mut solved = Vec::with_capacity(items.len());
-    for (item, main_size) in items.iter().zip(&sizes) {
-        let reusable = item
-            .natural
-            .as_ref()
-            .filter(|n| axis.main(n.size) == *main_size);
+    let mut solved: SmallVec<[Solved; 16]> = SmallVec::with_capacity(items.len());
+    for (item, &main_size) in items.iter().zip(sizes.iter()) {
+        let reusable = item.natural.filter(|n| axis.main(n.size) == main_size);
         solved.push(match reusable {
-            Some(n) => Rc::clone(n),
+            Some(n) => n,
             None => {
                 let c = axis.join(
-                    AxisConstraint::tight(*main_size)?,
+                    AxisConstraint::tight(main_size)?,
                     AxisConstraint::loose(cross_c.max())?,
                 );
                 engine.solve(item.id, c)?
@@ -101,32 +100,29 @@ pub(crate) fn arrange<T: LayoutTree>(
     let baseline_aligned = axis == Axis::Horizontal;
     let shared_baseline = items
         .iter()
-        .zip(&solved)
+        .zip(solved.iter())
         .filter(|(i, _)| baseline_aligned && i.align == Align::Baseline)
         .filter_map(|(_, s)| s.baseline)
         .fold(None, |acc: Option<f64>, b| {
             Some(acc.map_or(b, |a| a.max(b)))
         });
-    let offsets: Vec<f64> = items
-        .iter()
-        .zip(&solved)
-        .map(|(i, s)| match (shared_baseline, s.baseline) {
+    let mut offsets: SmallVec<[f64; 16]> = SmallVec::with_capacity(items.len());
+    let mut natural_cross = 0.0f64;
+    for (i, s) in items.iter().zip(solved.iter()) {
+        let off = match (shared_baseline, s.baseline) {
             (Some(shared), Some(b)) if baseline_aligned && i.align == Align::Baseline => shared - b,
             _ => 0.0,
-        })
-        .collect();
-    let natural_cross = solved
-        .iter()
-        .zip(&offsets)
-        .map(|(s, o)| axis.cross(s.size) + o)
-        .fold(0.0, f64::max);
+        };
+        offsets.push(off);
+        natural_cross = natural_cross.max(axis.cross(s.size) + off);
+    }
     let cross = cross_c.clamp(natural_cross);
 
-    let mut cross_sizes = Vec::with_capacity(items.len());
-    for ((item, s), main_size) in items.iter().zip(&mut solved).zip(&sizes) {
+    let mut cross_sizes: SmallVec<[f64; 16]> = SmallVec::with_capacity(items.len());
+    for ((item, s), &main_size) in items.iter().zip(solved.iter_mut()).zip(sizes.iter()) {
         if item.align == Align::Stretch && !item.cross_fixed && axis.cross(s.size) != cross {
             let c = axis.join(
-                AxisConstraint::tight(*main_size)?,
+                AxisConstraint::tight(main_size)?,
                 AxisConstraint::tight(cross)?,
             );
             *s = engine.solve(item.id, c)?;
@@ -143,7 +139,7 @@ pub(crate) fn arrange<T: LayoutTree>(
         Justify::SpaceBetween if kids.len() > 1 => (0.0, leftover / (kids.len() - 1) as f64),
         Justify::SpaceBetween => (0.0, 0.0),
     };
-    let mut children = Vec::with_capacity(items.len());
+    let mut children = ArrangedChildren::with_capacity(items.len());
     let mut baseline = None;
     for (index, item) in items.iter().enumerate() {
         let s = &solved[index];
@@ -175,9 +171,14 @@ pub(crate) fn arrange<T: LayoutTree>(
 /// per unit of weight is solved in one pass: with the items ordered by the share at which each reaches its bound, an
 /// item whose bound comes before the share of those still free sits at its bound, and the rest take that share.
 /// Returns the sizes and the number of passes, 0 when there is nothing to share.
-fn distribute<Id>(items: &[Item<Id>], room: f64) -> (Vec<f64>, usize) {
-    let mut sizes: Vec<f64> = items.iter().map(|i| i.basis).collect();
-    let free = room - sizes.iter().sum::<f64>();
+fn distribute<Id>(items: &[Item<Id>], room: f64) -> (SmallVec<[f64; 16]>, usize) {
+    let mut sizes: SmallVec<[f64; 16]> = SmallVec::with_capacity(items.len());
+    let mut sum = 0.0;
+    for item in items {
+        sizes.push(item.basis);
+        sum += item.basis;
+    }
+    let free = room - sum;
     let growing = free > 0.0;
     let weight = |i: &Item<Id>| if growing { i.grow } else { i.shrink * i.basis };
     let slack = |i: &Item<Id>| {
@@ -187,18 +188,19 @@ fn distribute<Id>(items: &[Item<Id>], room: f64) -> (Vec<f64>, usize) {
             i.basis - i.lower
         }
     };
-    let mut flexible: Vec<(f64, usize)> = items
-        .iter()
-        .enumerate()
-        .filter(|(_, i)| weight(i) > 0.0 && i.lower != i.upper)
-        .map(|(index, i)| (slack(i) / weight(i), index))
-        .collect();
+    let mut flexible: SmallVec<[(f64, usize); 16]> = SmallVec::new();
+    for (index, i) in items.iter().enumerate() {
+        let w = weight(i);
+        if w > 0.0 && i.lower != i.upper {
+            flexible.push((slack(i) / w, index));
+        }
+    }
     if flexible.is_empty() || free.abs() < EPSILON {
         return (sizes, 0);
     }
     flexible.sort_by(|a, b| a.0.total_cmp(&b.0));
     // the weight of the items from each position on, summed from the end so a small weight is not lost in a large one
-    let mut weights = vec![0.0; flexible.len() + 1];
+    let mut weights: SmallVec<[f64; 17]> = smallvec::smallvec![0.0; flexible.len() + 1];
     for (k, &(_, index)) in flexible.iter().enumerate().rev() {
         weights[k] = weights[k + 1] + weight(&items[index]);
     }

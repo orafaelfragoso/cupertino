@@ -23,6 +23,7 @@ patterns = [
     "rust-toolchain.toml",
     ".cargo/**",
     ".config/**",
+    "clippy.toml",
     "**/build.rs",
     "third-party/**",
 ]

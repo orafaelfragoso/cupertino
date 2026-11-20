@@ -371,7 +371,6 @@ impl Capture {
             None,
             None,
         )
-        .map_err(|e| format!("listing {}: {e}", self.home.display()))?
         .with_trash(Trash::with_home(self.root.join("Trash")))
         .with_home(self.home.clone())
         .with_view(view)

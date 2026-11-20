@@ -6,13 +6,17 @@
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 
 use cupertino_kit::files::places::{follow_trash, Place};
+use cupertino_kit::prelude::Command;
+
+use super::{Message, Session};
 
 /// What reads the session's places again: the standard ones, without the removable media.
-pub type PlacesSource = Box<dyn Fn() -> io::Result<Vec<Place>>>;
+pub type PlacesSource = Arc<dyn Fn() -> io::Result<Vec<Place>> + Send + Sync>;
 
 /// The watch on the folders the places come from.
 pub(super) struct PlacesWatch {
@@ -87,26 +91,62 @@ fn wakes(event: &notify::Result<notify::Event>) -> bool {
     event.as_ref().is_ok_and(|e| !e.kind.is_access())
 }
 
-/// The standard places, `standard` first of `places`, read again: from `source` when there is one, else the same with
-/// the trash's place following `trash_files`. The removable media's places after them are kept. The number of standard
-/// places after.
+/// How long reading the standard places should take: the user directories' file, the machine's name and a few stat
+/// calls, which only a home or a configuration folder on a mount that does not answer holds up.
+pub(super) const READ_DEADLINE: Duration = Duration::from_secs(5);
+
+/// The standard places read again, `standard` being the ones shown: from `source` when there is one, else the same with
+/// the trash's place following `trash_files`. Blocks on the file system, so a program runs it on an I/O task.
 pub(super) fn reread(
-    places: &mut Vec<Place>,
-    standard: usize,
+    mut standard: Vec<Place>,
     source: Option<&PlacesSource>,
     trash_files: &Path,
-) -> usize {
-    let read = source.map(|source| source());
-    match read {
-        Some(Ok(fresh)) => {
-            let count = fresh.len();
-            places.splice(..standard, fresh);
-            count
+) -> Vec<Place> {
+    match source.map(|source| source()) {
+        Some(Ok(fresh)) => fresh,
+        read => {
+            if let Some(Err(e)) = read {
+                eprintln!("cupertino-files: cannot read the sidebar's places again: {e}");
+            }
+            let count = standard.len();
+            follow_trash(&mut standard, count, trash_files);
+            standard
         }
-        Some(Err(e)) => {
-            eprintln!("cupertino-files: cannot read the sidebar's places again: {e}");
-            follow_trash(places, standard, trash_files)
+    }
+}
+
+impl Session {
+    /// The places are read on an I/O task ([`Session::places_task`]), which the next [`Model::io_work`] starts.
+    pub(super) fn follow_places(&mut self) {
+        self.places_due = true;
+        let trash = self.trash.home_trash().to_path_buf();
+        self.places_watch.follow(&trash);
+    }
+
+    /// The task that reads the standard places again, when they are due and none is being read: the places leave the
+    /// UI thread whole, as the places source and the trash's folder are files.
+    pub(super) fn places_task(&mut self) -> Option<Command<Message>> {
+        if !self.places_due || self.places_reading {
+            return None;
         }
-        None => follow_trash(places, standard, trash_files),
+        self.places_due = false;
+        self.places_reading = true;
+        let standard = self.places[..self.standard_places].to_vec();
+        let source = self.places_source.clone();
+        let trash_files = self.trash.home_trash().join("files");
+        Some(cupertino_kit::task::io(
+            READ_DEADLINE,
+            move || reread(standard, source.as_ref(), &trash_files),
+            Message::PlacesRead,
+        ))
+    }
+
+    /// The standard places [`Session::places_task`] read replace the ones shown; the removable media's after them stay.
+    pub(super) fn places_read(&mut self, fresh: Vec<Place>) -> Vec<Command<Message>> {
+        self.places_reading = false;
+        let count = fresh.len();
+        self.places.splice(..self.standard_places, fresh);
+        self.standard_places = count;
+        Vec::new()
     }
 }

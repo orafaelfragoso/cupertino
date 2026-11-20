@@ -8,7 +8,7 @@
 //! * [`selection`], [`typeselect`]: interaction logic;
 //! * [`trash`]: freedesktop-compliant trash;
 //! * [`layout`]: the list layout engine with the measured metrics of [`metrics`];
-//! * [`format`]: how sizes and dates read;
+//! * [`format`]: how sizes and dates read; [`space`]: what a folder's file system says, read on I/O tasks;
 //! * [`history`], [`browser`]: back / forward history and the state of one browser window (the sidebar's places are
 //!   the family's, `cupertino_kit::files::places`); [`window`]: its size limits, view modes, path bar and status bar text;
 //! * [`context_menu`], [`menu_spec`], [`menu_bar`]: the rows of the context menus and the menus of the menu bar;
@@ -38,6 +38,7 @@ pub mod preview;
 pub mod search_field;
 pub mod selection;
 pub mod settings;
+pub mod space;
 pub mod spring;
 pub mod tab_strip;
 pub use cupertino_trash as trash;

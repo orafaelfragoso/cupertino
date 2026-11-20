@@ -84,10 +84,9 @@ impl Model {
             let Some(folder) = self.folder_of(target) else {
                 continue;
             };
-            if let Some((id, wake)) = self.open_window(folder) {
-                commands.push(wake);
-                last = Some(id);
-            }
+            let (id, wake) = self.open_window(folder);
+            commands.push(wake);
+            last = Some(id);
         }
         // a token raises one window: the last one opened, which the others open beneath
         commands.extend(last.map(|id| raise(window_key(id), token)));
@@ -143,10 +142,8 @@ impl Model {
     /// A new window on the home folder, raised with `token`.
     fn open_home(&mut self, token: Option<String>) -> Vec<Command<Message>> {
         let home = self.session.home.clone();
-        match self.open_window(home) {
-            Some((id, wake)) => vec![wake, raise(window_key(id), token)],
-            None => Vec::new(),
-        }
+        let (id, wake) = self.open_window(home);
+        vec![wake, raise(window_key(id), token)]
     }
 
     /// Find out on a thread of its own what the items of `call` are, each `..` resolved on the disk, and for
@@ -239,13 +236,11 @@ impl Model {
                 .map(|(&id, _)| id);
             let id = match shown {
                 Some(id) => id,
-                None => match self.open_window(folder) {
-                    Some((id, wake)) => {
-                        commands.push(wake);
-                        id
-                    }
-                    None => continue,
-                },
+                None => {
+                    let (id, wake) = self.open_window(folder);
+                    commands.push(wake);
+                    id
+                }
             };
             last = Some(id);
             if items.is_empty() {

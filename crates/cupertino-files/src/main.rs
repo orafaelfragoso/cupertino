@@ -188,7 +188,7 @@ fn start(options: Options, service: Option<Service>, token: Option<String>) -> i
         .collect();
     let (source_home, data_dirs) = (home.clone(), dirs.data_dirs.clone());
     let source: kit::PlacesSource =
-        Box::new(move || session_places(&source_home, &data_dirs).map(|p| p.places));
+        Arc::new(move || session_places(&source_home, &data_dirs).map(|p| p.places));
     // one database for the Kind column, the icons and what opens an item, so all name the same type
     let types = Arc::new(MimeDatabase::load(&dirs.all_data_dirs()).map_err(other)?);
     let icons = FileIcons::discover((*types).clone(), folder_icons.into_iter().collect());
@@ -198,9 +198,9 @@ fn start(options: Options, service: Option<Service>, token: Option<String>) -> i
         .map_err(|e| eprintln!("cupertino-files: no removable media: {e}"))
         .ok();
     let recents = dirs.data_home.join(recents::XBEL_NAME);
-    let opened = match options.service {
+    let start = match options.service {
         // started for a call, which says what to open
-        true => Ok(Start::idle(
+        true => Start::idle(
             places,
             Some(types),
             recents,
@@ -208,7 +208,7 @@ fn start(options: Options, service: Option<Service>, token: Option<String>) -> i
             Box::new(applications),
             options.terminal,
             system,
-        )),
+        ),
         false => Start::open(
             folder.clone(),
             places,
@@ -220,25 +220,21 @@ fn start(options: Options, service: Option<Service>, token: Option<String>) -> i
             system,
         ),
     };
-    opened
-        .map(|start| {
-            let start = start
-                .with_file_icons(icons)
-                .with_app_icons(
-                    cupertino_icons::ThemeIcons::new(&assets),
-                    cupertino_icons::SystemIcons::new(&assets),
-                )
-                .with_thumbnails(Thumbnailer::from_env(kit::APP_ID))
-                .with_posting(posting)
-                .with_places_source(source, watched)
-                .with_instance(service)
-                .with_activation_token(token);
-            match window_prefs::location() {
-                Some(file) => start.with_prefs_file(file),
-                None => start,
-            }
-        })
-        .map_err(|e| io::Error::new(e.kind(), format!("cannot open {}: {e}", folder.display())))
+    let start = start
+        .with_file_icons(icons)
+        .with_app_icons(
+            cupertino_icons::ThemeIcons::new(&assets),
+            cupertino_icons::SystemIcons::new(&assets),
+        )
+        .with_thumbnails(Thumbnailer::from_env(kit::APP_ID))
+        .with_posting(posting)
+        .with_places_source(source, watched)
+        .with_instance(service)
+        .with_activation_token(token);
+    Ok(match window_prefs::location() {
+        Some(file) => start.with_prefs_file(file),
+        None => start,
+    })
 }
 
 /// The default-application resolver of the session's directories and desktops, read again at each open.

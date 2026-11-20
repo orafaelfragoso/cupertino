@@ -13,8 +13,10 @@ pub mod design;
 pub mod dock;
 pub mod host;
 pub mod hosting;
+mod link;
 pub mod lock;
 pub mod menu_bar;
+mod oneshot;
 pub mod outputs;
 pub mod overview;
 pub mod session;
@@ -122,6 +124,12 @@ impl Entry {
                 .unwrap_or_default();
                 for (from, message) in bus_events {
                     if let Some(msg) = C::event(Event::Bus { from, message }) {
+                        let _ = C::update(&mut model, msg);
+                    }
+                }
+                let shell_events = context::with_ctx(|ctx| ctx.inbox.drain()).unwrap_or_default();
+                for event in shell_events {
+                    if let Some(msg) = C::event(event) {
                         let _ = C::update(&mut model, msg);
                     }
                 }

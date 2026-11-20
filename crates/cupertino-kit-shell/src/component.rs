@@ -28,6 +28,8 @@ impl ComponentName {
     pub const AGENT: Self = Self("agent");
     /// The portal's choosers.
     pub const DIALOGS: Self = Self("dialogs");
+    /// No component: the name of the inert transaction parts made outside one, which are never sent.
+    pub(crate) const NONE: Self = Self("");
 
     /// The name as the server sends it.
     pub fn as_str(self) -> &'static str {

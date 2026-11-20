@@ -65,9 +65,27 @@ fn design_limits_entries_and_outside_thread_safety() {
         transaction::MAX_DEADLINE,
         Duration::from_millis(cupertino_protocols::transaction::MAX_DEADLINE_MS as u64)
     );
+    // the menu bar's values are the theme data's
     let mb = design::menu_bar();
-    assert!(mb.height > 0.0);
-    assert!(mb.cap_height > 0.0 && mb.cap_height <= 1.0);
+    let theme = cupertino_assets::theme::load().expect("theme data");
+    let typography = theme.tokens.typography();
+    assert_eq!(mb.height, theme.shapes.menu_bar_height);
+    assert_eq!(
+        mb.selection_radius,
+        theme.shapes.menu_bar_selection_corner_radius
+    );
+    assert_eq!(mb.item.size, typography.menu_bar_item().size as f32);
+    assert_eq!(
+        (mb.item.weight.0, mb.app_name.weight.0),
+        (
+            typography.menu_bar_item().weight,
+            typography.menu_bar_app_name().weight
+        )
+    );
+    assert_eq!(
+        mb.cap_height,
+        typography.metrics.cap_height / typography.metrics.units_per_em
+    );
 
     static ENTRY: Entry = Entry::of::<TestProgram>();
     assert_eq!(ENTRY.name(), ComponentName::OSD);

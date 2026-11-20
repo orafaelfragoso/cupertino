@@ -70,9 +70,17 @@ pub struct Transaction {
     id: Id,
     is_creator: bool,
     submitted: bool,
+    /// Made outside a component: its requests go nowhere.
+    inert: bool,
 }
 
 impl Transaction {
+    fn push(&self, request: ShellRequest) {
+        if !self.inert {
+            context::push_request(request);
+        }
+    }
+
     /// Transaction identity (`(component, instance, serial)`).
     pub fn id(&self) -> Id {
         self.id
@@ -84,7 +92,7 @@ impl Transaction {
             tracing::warn!("transaction::expect called on a non-creator part; ignored");
             return;
         }
-        context::push_request(ShellRequest::TxExpect {
+        self.push(ShellRequest::TxExpect {
             id: self.id,
             component,
         });
@@ -96,7 +104,7 @@ impl Transaction {
             tracing::warn!("transaction::deadline called on a non-creator part; ignored");
             return;
         }
-        context::push_request(ShellRequest::TxDeadline {
+        self.push(ShellRequest::TxDeadline {
             id: self.id,
             deadline: deadline.min(MAX_DEADLINE),
         });
@@ -104,7 +112,7 @@ impl Transaction {
 
     /// Stage `window`'s next commit (and its layer/presentation commands) in this transaction part.
     pub fn stage(&mut self, window: &WindowKey) {
-        context::push_request(ShellRequest::TxStage {
+        self.push(ShellRequest::TxStage {
             id: self.id,
             window: window.clone(),
         });
@@ -112,9 +120,9 @@ impl Transaction {
 
     /// Bracket the window-change requests made by `changes` so they apply at transaction start.
     pub fn window_changes(&mut self, changes: impl FnOnce()) {
-        context::push_request(ShellRequest::TxBeginWindowChanges { id: self.id });
+        self.push(ShellRequest::TxBeginWindowChanges { id: self.id });
         changes();
-        context::push_request(ShellRequest::TxEndWindowChanges { id: self.id });
+        self.push(ShellRequest::TxEndWindowChanges { id: self.id });
     }
 
     /// Arm the transaction for `gesture`, settling along `settle` (creator only).
@@ -129,7 +137,7 @@ impl Transaction {
             .clamp(SPRING_RESPONSE.0, SPRING_RESPONSE.1);
         let damping = (p.damping / (2.0 * (p.stiffness * p.mass).sqrt()))
             .clamp(SPRING_DAMPING.0, SPRING_DAMPING.1);
-        context::push_request(ShellRequest::TxBindGesture {
+        self.push(ShellRequest::TxBindGesture {
             id: self.id,
             gesture,
             response,
@@ -143,7 +151,7 @@ impl Transaction {
             tracing::warn!("transaction::bind_reverse called on a non-creator part; ignored");
             return;
         }
-        context::push_request(ShellRequest::TxBindReverseGesture {
+        self.push(ShellRequest::TxBindReverseGesture {
             id: self.id,
             gesture,
         });
@@ -152,10 +160,11 @@ impl Transaction {
     /// Submit this part and return a [`Handle`] to track or cancel it.
     pub fn submit(mut self) -> Handle {
         self.submitted = true;
-        context::push_request(ShellRequest::TxSubmit { id: self.id });
+        self.push(ShellRequest::TxSubmit { id: self.id });
         Handle {
             id: self.id,
             cancelled: false,
+            inert: self.inert,
         }
     }
 }
@@ -163,7 +172,7 @@ impl Transaction {
 impl Drop for Transaction {
     fn drop(&mut self) {
         if !self.submitted {
-            context::push_request(ShellRequest::TxDestroy { id: self.id });
+            self.push(ShellRequest::TxDestroy { id: self.id });
         }
     }
 }
@@ -173,9 +182,16 @@ impl Drop for Transaction {
 pub struct Handle {
     id: Id,
     cancelled: bool,
+    inert: bool,
 }
 
 impl Handle {
+    fn push(&self, request: ShellRequest) {
+        if !self.inert {
+            context::push_request(request);
+        }
+    }
+
     pub fn id(&self) -> Id {
         self.id
     }
@@ -183,43 +199,56 @@ impl Handle {
     /// Cancel the transaction (creator cancels for all participants; non-creator withdraws only itself).
     pub fn cancel(mut self) {
         self.cancelled = true;
-        context::push_request(ShellRequest::TxCancel { id: self.id });
+        self.push(ShellRequest::TxCancel { id: self.id });
     }
 }
 
 impl Drop for Handle {
     fn drop(&mut self) {
         if !self.cancelled {
-            context::push_request(ShellRequest::TxDestroy { id: self.id });
+            self.push(ShellRequest::TxDestroy { id: self.id });
         }
     }
 }
 
-/// Create a transaction on `output`'s clock for the calling thread's component.
+/// Create a transaction on `output`'s clock for the calling thread's component, named by that component, its
+/// instance number and the next serial. Outside a component the part is inert: it is logged once and its requests
+/// go nowhere.
 pub fn create(output: OutputId) -> Transaction {
     let id = context::with_ctx_mut(|ctx| {
-        let component = ctx.component.unwrap_or(ComponentName::OVERVIEW);
-        let instance = ctx.instance;
+        let component = ctx.component?;
         let serial = ctx.next_tx_serial;
         ctx.next_tx_serial = ctx.next_tx_serial.wrapping_add(1).max(1);
         let id = Id {
             component,
-            instance,
+            instance: ctx.instance,
             serial,
         };
         ctx.outgoing
             .push_back(ShellRequest::TxCreate { id, output });
-        id
+        Some(id)
     })
-    .unwrap_or(Id {
-        component: ComponentName::OVERVIEW,
-        instance: 0,
-        serial: 0,
-    });
-    Transaction {
-        id,
-        is_creator: true,
-        submitted: false,
+    .flatten();
+    match id {
+        Some(id) => Transaction {
+            id,
+            is_creator: true,
+            submitted: false,
+            inert: false,
+        },
+        None => {
+            tracing::warn!("transaction::create called outside a component; the part goes nowhere");
+            Transaction {
+                id: Id {
+                    component: ComponentName::NONE,
+                    instance: 0,
+                    serial: 0,
+                },
+                is_creator: true,
+                submitted: false,
+                inert: true,
+            }
+        }
     }
 }
 
@@ -230,5 +259,6 @@ pub fn join(id: Id, output: OutputId) -> Transaction {
         id,
         is_creator: false,
         submitted: false,
+        inert: false,
     }
 }

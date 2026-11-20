@@ -1,5 +1,8 @@
 //! Helper threads and detached child processes managed by the host (`docs/architecture/shell-host.md#threads-and-child-processes`).
 
+mod reaper;
+
+use std::any::Any;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
@@ -8,9 +11,15 @@ use std::time::Duration;
 use cupertino_kit::core::Command;
 
 use crate::context;
+use crate::oneshot::Oneshot;
+
+pub(crate) use reaper::Reaper;
 
 /// Maximum time the host waits to join a component's helper threads when stopping it.
 pub const HELPER_JOIN_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// The name a program's problems with the children it starts are reported under, when it has no name of its own.
+const PROGRAM: &str = "cupertino-kit-shell";
 
 #[derive(Default)]
 struct StopInner {
@@ -74,7 +83,50 @@ pub(crate) struct HelperHandle {
     pub handle: Option<JoinHandle<()>>,
 }
 
+/// What a component's helper threads tell its host: a helper's panic is the component's failure
+/// (`shell-host.md#threads-and-child-processes`), also when the component never waits for that helper's result.
+pub(crate) struct Fault {
+    panicked: AtomicBool,
+    /// The host cut the component off (`Running::shut`): its helpers' results are dropped unread.
+    cut: AtomicBool,
+    /// The component loop's stop flag: a failed component ends its loop.
+    stop: Arc<AtomicBool>,
+}
+
+impl Fault {
+    pub(crate) fn new(stop: Arc<AtomicBool>) -> Self {
+        Self {
+            panicked: AtomicBool::new(false),
+            cut: AtomicBool::new(false),
+            stop,
+        }
+    }
+
+    fn helper_panicked(&self) {
+        self.panicked.store(true, Ordering::SeqCst);
+        self.stop.store(true, Ordering::SeqCst);
+    }
+
+    /// The host cut the component off: what its helpers still give goes unread.
+    pub(crate) fn cut(&self) {
+        self.cut.store(true, Ordering::SeqCst);
+    }
+
+    fn is_cut(&self) -> bool {
+        self.cut.load(Ordering::SeqCst)
+    }
+
+    /// Whether one of the component's helper threads panicked.
+    pub(crate) fn panicked(&self) -> bool {
+        self.panicked.load(Ordering::SeqCst)
+    }
+}
+
 /// Start a helper thread for the calling thread's component and deliver `done(result)` as a message.
+///
+/// The returned task waits for the helper without polling: the helper's end wakes it. A panic of the helper is the
+/// component's failure: the task unwinds the loop that runs it with the helper's panic, and the component's host
+/// records the failure and ends the component's loop even when the task is never run.
 pub fn thread<T: Send + 'static, M: Send + 'static>(
     name: &'static str,
     work: impl FnOnce(&Stop) -> T + Send + 'static,
@@ -82,71 +134,75 @@ pub fn thread<T: Send + 'static, M: Send + 'static>(
 ) -> Command<M> {
     let stop = Stop::new();
     let worker_stop = stop.clone();
-    let helpers = context::with_ctx(|ctx| Arc::clone(&ctx.helpers));
-    let (tx, rx) = std::sync::mpsc::sync_channel::<Result<T, ()>>(1);
+    let (helpers, fault) = context::with_ctx(|ctx| (Arc::clone(&ctx.helpers), ctx.fault.clone()))
+        .map_or((None, None), |(helpers, fault)| (Some(helpers), fault));
+    let result = Arc::new(Oneshot::<std::thread::Result<T>>::default());
+    let filled = Arc::clone(&result);
+    let waiting_fault = fault.clone();
 
     let spawned = std::thread::Builder::new()
         .name(name.into())
         .spawn(move || {
-            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(&worker_stop)));
-            match res {
-                Ok(value) => {
-                    let _ = tx.send(Ok(value));
-                }
-                Err(_) => {
-                    tracing::error!(helper = name, "component helper thread panicked");
-                    let _ = tx.send(Err(()));
+            let outcome =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(&worker_stop)));
+            if outcome.is_err() {
+                tracing::error!(helper = name, "component helper thread panicked");
+                if let Some(fault) = &fault {
+                    fault.helper_panicked();
                 }
             }
+            filled.fill(outcome);
         });
 
-    if let (Ok(handle), Some(helpers)) = (spawned, helpers) {
-        if let Ok(mut list) = helpers.lock() {
-            list.push(HelperHandle {
-                stop,
-                handle: Some(handle),
-            });
+    match spawned {
+        Ok(handle) => {
+            if let Some(helpers) = helpers {
+                if let Ok(mut list) = helpers.lock() {
+                    list.push(HelperHandle {
+                        stop,
+                        handle: Some(handle),
+                    });
+                }
+            }
+        }
+        Err(e) => {
+            tracing::error!(helper = name, error = %e, "component helper thread did not start");
+            let panic: Box<dyn Any + Send> =
+                Box::new(format!("helper thread {name} did not start: {e}"));
+            result.fill(Err(panic));
         }
     }
 
     Command::Perform(Box::pin(async move {
-        // Yield until the helper posts its result; if the helper panicked, remain pending so the
-        // host's panic/failure handling terminates the component cleanly.
-        loop {
-            match rx.try_recv() {
-                Ok(Ok(value)) => return done(value),
-                Ok(Err(())) => std::future::pending::<()>().await,
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    std::future::pending::<()>().await
-                }
-                Err(std::sync::mpsc::TryRecvError::Empty) => {
-                    std::thread::sleep(Duration::from_millis(5));
-                }
-            }
+        let outcome = result.wait().await;
+        if waiting_fault.as_ref().is_some_and(|fault| fault.is_cut()) {
+            // a component that was cut off hears nothing more
+            return std::future::pending().await;
+        }
+        match outcome {
+            Ok(value) => done(value),
+            Err(panic) => std::panic::resume_unwind(panic),
         }
     }))
 }
 
 /// Start a program detached from the component; the host reaps it even after the component stops.
 /// Never passes a component socket (`WAYLAND_SOCKET`) to the child.
+///
+/// A component's child goes to its host's reaper, which waits on the child's pidfd on a thread of its own. In a
+/// program of its own the child goes to the program's Kit instance, which reaps it; on a thread with neither, to a
+/// reaper of the process.
 pub fn spawn(mut command: std::process::Command) -> bool {
     command.env_remove("WAYLAND_SOCKET");
+    let reaper = context::with_ctx(|ctx| ctx.reaper.clone()).flatten();
+    if reaper.is_none() && cupertino_kit::Instance::current().is_some() {
+        return cupertino_kit::spawn(&program_name(), command);
+    }
     match command.spawn() {
         Ok(child) => {
-            if let Some(children) = context::with_ctx(|ctx| Arc::clone(&ctx.children)) {
-                if let Ok(mut list) = children.lock() {
-                    // Reap any already-exited children opportunistically.
-                    list.retain_mut(|c| !matches!(c.try_wait(), Ok(Some(_))));
-                    list.push(child);
-                }
-            } else {
-                // Outside a host context, reap in a detached thread.
-                let mut child = child;
-                let _ = std::thread::Builder::new()
-                    .name("shell-child-reaper".into())
-                    .spawn(move || {
-                        let _ = child.wait();
-                    });
+            match reaper.or_else(Reaper::process) {
+                Some(reaper) => reaper.adopt(child),
+                None => reaper::wait_on_thread(child),
             }
             true
         }
@@ -155,4 +211,16 @@ pub fn spawn(mut command: std::process::Command) -> bool {
             false
         }
     }
+}
+
+/// The calling program's name, which Kit reports a child's problems under.
+fn program_name() -> String {
+    std::env::args_os()
+        .next()
+        .and_then(|arg0| {
+            std::path::Path::new(&arg0)
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        })
+        .unwrap_or_else(|| PROGRAM.to_owned())
 }

@@ -9,12 +9,21 @@ description = "The shell's extension to CupertinoKit"
 layer = "shellkit"
 
 [dependencies]
+async-io = "2"
+cupertino-assets = { path = "../cupertino-assets" }
 cupertino-kit = { path = "../cupertino-kit" }
 cupertino-peer = { path = "../cupertino-peer" }
 cupertino-protocols = { path = "../cupertino-protocols", features = ["client"] }
 cupertino-shell-client = { path = "../cupertino-shell-client" }
+cupertino-theme = { path = "../cupertino-theme" }
+rustix = { version = "1", features = ["event", "process", "time"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
 wayland-client = "0.31"
 zbus = { version = "5", default-features = false, features = ["async-io"] }
+
+[dev-dependencies]
+# the stand-in server's side of the host protocol, which the hosting tests run against
+cupertino-protocols = { path = "../cupertino-protocols", features = ["client", "server"] }
+wayland-server = "0.31"

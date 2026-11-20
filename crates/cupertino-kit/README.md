@@ -37,8 +37,10 @@ the UI loop only waits for each burst of changes to be quiet, and the files are 
 `task::SETTINGS_READ_DEADLINE`, 2 s). `kit::bus::connect` opens a D-Bus connection whose work the UI loop polls, with no executor
 thread: the connection comes as one message and its close as another. `kit::time` reads the session's local time
 (`local`, `now`) and turns a local date and time back into a moment (`from_local`), daylight saving time included; it
-converts Unix seconds (`from_unix`, `to_unix`), formats a moment by a `strftime` pattern in the locale's words
-(`format`) and gives the locale's time format (`locale_time_format`), which says whether it counts hours to 12 or 24.
+converts Unix seconds (`from_unix`, `to_unix`), formats a moment by a `strftime` pattern (`format`) and gives the time
+format (`locale_time_format`), which says whether hours count to 12 or 24, both by the C library's current `LC_TIME`:
+that locale is the whole process's and only `setlocale` sets it, so in a program that has not called it (no Cupertino
+program does) both are the `C` locale's English and 24-hour `%H:%M:%S`, whatever `LANG` says.
 `kit::account` reads the password database (`uid`, `current`, `by_uid`: the login name, the comment with its full name,
 the home); `kit::host` the machine's host name and IPv4 addresses; `kit::process::harden` makes a process that holds a
 typed password undumpable, with no core file; `kit::render::zeroed_pixels` hands over zeroed pixel memory a program fills

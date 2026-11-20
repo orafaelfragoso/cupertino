@@ -1,8 +1,9 @@
 //! The server's `org.cupertino.Session1` on the session bus (D13): it carries out the log out, restart, shut down and
 //! sleep the person confirmed, quitting the applications first (sleep quits none), and this agent answers its interrupt:
 //! `QuitInterrupted` brings the interrupt panel ([`crate::interrupt`]), whose Try Again, Cancel and Force Quit are
-//! `RetrySessionAction`, `CancelSessionAction` and `ForceQuitApplication`. A signal counts only from the server, the
-//! owner of the name when it arrives: another program could otherwise bring the panel up or take it away.
+//! `RetrySessionAction`, `CancelSessionAction` and `ForceQuitApplication`, also for an action this agent did not start
+//! (the server sends an interrupt once and waits). A signal counts only from the server, the owner of the name when it
+//! arrives: another program could otherwise bring the panel up or take it away.
 
 use std::collections::HashMap;
 

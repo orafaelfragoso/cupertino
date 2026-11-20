@@ -38,6 +38,10 @@ pub const INSTANCE: u32 = 3;
 /// The key of the surface the stand-in holds for every component from its instance before.
 pub const HELD: &str = "bar";
 
+/// The component whose bus-name announcement the stand-in refuses without a nonce, as the server fails closed when
+/// it has no random nonce to give.
+pub const NO_NONCE: &str = "notifications";
+
 /// How long a test waits for anything the host or the stand-in does.
 pub const PATIENCE: Duration = Duration::from_secs(10);
 
@@ -500,6 +504,10 @@ impl Dispatch<CupertinoComponentV1, ()> for State {
                 .get(&client.id())
                 .cloned()
                 .unwrap_or_default();
+            if component == NO_NONCE {
+                resource.bus_name(name, BusNameResult::Refused);
+                return;
+            }
             state.next_nonce += 1;
             let nonce = format!("{:032x}", state.next_nonce);
             state.nonces.insert(

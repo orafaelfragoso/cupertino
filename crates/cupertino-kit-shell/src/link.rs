@@ -130,7 +130,8 @@ impl ComponentLink {
     }
 
     /// Announces `name`, the unique name of the component's session-bus connection, and gives the nonce the server
-    /// answers with; `None` when the connection failed first.
+    /// answers with; `None` when the server refused the name without a nonce (it fails closed when it has no random
+    /// nonce to give) or the connection failed first.
     pub(crate) async fn announce(&self, name: &str) -> Option<String> {
         {
             let mut inner = self.lock();
@@ -146,6 +147,7 @@ impl ComponentLink {
         poll_fn(|cx| {
             self.poll_until(cx, |state| match state.nonces.pop_front() {
                 Some(nonce) => Some(Some(nonce)),
+                None if state.answers.get(name) == Some(&false) => Some(None),
                 None => state.failed.then_some(None),
             })
         })

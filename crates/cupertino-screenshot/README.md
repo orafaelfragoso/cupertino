@@ -4,14 +4,22 @@ The screenshot tool of the Cupertino desktop. It stands in for the design's capt
 screen, a window or a selection. Before the capture it shows the crosshair overlay, and the toolbar on request. After the
 capture it shows the floating thumbnail, then writes `Screenshot <date> at <time>.png` or puts the PNG on the clipboard.
 
-It has no Smithay dependency. CupertinoKit draws every surface. The crate splits so a host can drive or test the UI
-without a display:
+It is also the portal's colour picker and its chooser of what a screen share shows: the server starts it with
+`--serve` when the portal asks (`org.cupertino.Session1.StartScreenshot`), and the portal calls
+`org.cupertino.Screenshot1` on it.
 
-- the pure model: `session`, `selection`, `pick`, `thumbnail`, `filename`, `settings`, `toolbar` (the Options menu's
-  rows) and `image` (captured pixels to upright images and PNG);
-- with `app`: `view`, the overlay, toolbar, Options menu, thumbnail and clipboard pixel as Kit windows, and
-  `controller`, one run from the overlay to the delivered capture. The tests drive both through Kit's headless window
-  system.
+It is a CupertinoKit program on `cupertino-kit-shell` (`cupertino_kit_shell::run`): Kit draws every surface,
+kit-shell gives them their layer roles and captures the outputs and windows. The crate splits so a host can drive or
+test the UI without a display:
+
+- the pure model: `session`, `selection`, `pick` (the window under the pointer), `thumbnail`, `filename`,
+  `settings`, `toolbar` (the Options menu's rows);
+- `view`, the overlay, toolbar, Options menu, thumbnail and clipboard pixel as Kit windows, and `controller`, one run
+  from the overlay to the delivered capture;
+- `files`: the settings file and the PNG files, run on Kit's I/O pool;
+- `shot`: the program of one capture (`--mode`);
+- `color_picker`, `share_picker`: the colour pick and the sharing choice, model and windows;
+- `control`: `org.cupertino.Screenshot1`; `serve`: the program of the portal's service (`--serve`).
 
 Its values come from the analysis (register,
 ``). The values marked approximate below are
@@ -19,22 +27,24 @@ authored and replaceable.
 
 Layer: `shell`. Depends on:
 
-- `cupertino-kit` (the design's curves; with `app`, also its windows), `cupertino-defaults` and `cupertino-geometry` (the
-  turned-output math, `transform`);
-- with `app`, also `cupertino-keyboard`, `cupertino-ui-wayland` (the Kit window system, with layer-surface
-  roles), `cupertino-shell-client`, `cupertino-wayland-client` and `cupertino-protocols`.
+- `cupertino-kit` (its windows, images and task pools), `cupertino-kit-shell` (layer roles, outputs, capture, the
+  session bus);
+- `cupertino-defaults` (the settings directory, `user_dirs`, atomic writes), `cupertino-geometry`,
+  `cupertino-diagnostic-events`, `cupertino-peer` (who calls `Screenshot1`);
+- `zbus` and `async-channel` (the interface), `rustix` (the PNG file's no-replace link).
 
 ## Running
 
-Feature `app` builds the binary. The server starts one process per screenshot shortcut, as the design spawns its capture
-tool per hot key. The process is not supervised. It exits when its capture is delivered or cancelled.
+The server starts one process per screenshot shortcut, as the design spawns its capture tool per hot key. The process
+is not supervised. It exits when its capture is delivered or cancelled.
 
 ```
-cargo build -p cupertino-screenshot --features app
+cargo build -p cupertino-screenshot
 cupertino-screenshot --mode screen|selection|toolbar [--clipboard]
+cupertino-screenshot --serve
 ```
 
-`--mode` is required. An unknown argument is an error.
+`--mode` or `--serve` is required. An unknown argument is an error.
 
 | Shortcut (default) | Server action | Arguments | Reference |
 |---|---|---|---|
@@ -53,9 +63,8 @@ cupertino-screenshot --mode screen|selection|toolbar [--clipboard]
 
 While the overlay or toolbar is mapped (layer namespace `cupertino-screenshot`), a further shortcut starts nothing.
 
-Only the server-passed connection sees the capture globals (`ext-image-capture-source-v1`, `ext-image-copy-capture-v1`,
-`cupertino_screenshot_v1`). Started by hand on the public socket, the process fails at start with "binding …: was the process
-started by the server?".
+Only the server-passed connection holds the capture role that kit-shell's capture needs. Started by hand on the
+public socket, the process captures nothing and ends with the capture's error.
 
 ## How it works
 
@@ -108,9 +117,8 @@ own actions. The thumbnail is a button whose Click commits the capture.
 frame, or at most 0.1 s), so the pointer is not left hidden over what was under it; then the surfaces are destroyed, the
 compositor gives the keyboard back, and only then is the capture copied, so it never contains them.
 
-**Turned and mixed-scale outputs.** The capture comes as the output's buffer, turned and mirrored as the output is, at its
-scale. A selection in logical points is cut from that buffer with `cupertino_geometry::area_in_buffer` and turned upright
-(`image::area`); a whole output or a window is turned upright (`image::upright`). Each output keeps its own scale.
+**Turned and mixed-scale outputs.** kit-shell's capture gives every image upright at its output's scale, a selection
+cut where it is on the upright output. Each output keeps its own scale.
 
 **Floating thumbnail.** The thumbnail sits in the bottom-right corner.
 
@@ -120,19 +128,43 @@ scale. A selection in logical points is cut from that buffer with `cupertino_geo
 - On commit the file is written, then the thumbnail slides twice its width to the right and fades over 0.5 s,
   ease-in-ease-out. After a swipe it moves faster, by the release velocity.
 
-**The file** appears whole: the PNG is written to a hidden `.<name>.<pid>.part` in the same directory and linked to its name (`image::write_new`),
+**The file** appears whole: the PNG is written to a hidden `.<name>.<pid>.part` in the same directory and linked to its name (`files::write_new`),
 so a watcher that sees `Screenshot … .png` reads all of it, and a file of that name that appeared meanwhile is never replaced. Without hard links (FAT, exFAT) the hidden file is renamed with `RENAME_NOREPLACE`; where that is missing too the PNG is written to the name directly (`create_new`), which is not atomic but never replaces a file.
 
-**Clipboard.** The capture is offered as `image/png`. Wayland needs a focused surface to set the selection, so a transparent
-1 x 1 surface takes the keyboard for the moment of the offer, with the serial of its keyboard enter. The process then
-serves pastes until another selection replaces it.
+**Clipboard.** The capture is offered as `image/png` through Kit (`Command::SetClipboardData`). Wayland needs a focused
+surface to set the selection, so a transparent 1 x 1 surface takes the keyboard, and the offer is made once it has it.
+The process then serves pastes until another selection replaces it.
 
-**Threads.** The Kit loop runs the windows. A capture thread owns a second event queue on the same connection: the
-capture globals, the window feed, the clipboard source and a keyboard that counts enters. Both read the connection as
-two libwayland readers do: every wait of the thread (its loop, a capture, a frame, a roundtrip) prepares its read,
-then dispatches what the other reader already put in its queue, and only then sends and polls, so an answer the Kit
-loop read for it is never left waiting. The roles hand a capture to the thread once the last overlay or toolbar surface is
-destroyed, so the destroy requests reach the server first.
+**Threads.** The Kit loop runs the windows and the capture's requests, which kit-shell sends once the view that drops
+the overlays was reconciled, so their destruction reaches the server first. Reading and writing the settings and the
+PNG files run on Kit's I/O pool, the thumbnail's picture and the PNG for the clipboard on its CPU pool.
+
+## The portal's service
+
+`cupertino-screenshot --serve` serves `org.cupertino.Screenshot1` at `/org/cupertino/Screenshot1` on its own session
+bus connection, which owns the name. Only the program the server started as `portal` may call
+(`Session1.ProgramOf`); any other caller gets `AccessDenied`. Each answer starts with a response: 0 success,
+1 cancelled, 2 failed.
+
+| Method | Answer |
+|---|---|
+| `PickColor(s handle)` | `(u response, (ddd) colour)`: red, green and blue in sRGB from 0 to 1 |
+| `SelectSources(s handle, s app_name, s app_icon, s parent_window, b offer_remember, a(sss) sources)` | `(u response, u index, b remember)` |
+| `Close(s handle)` | Takes the call's picker down unanswered |
+
+**Colour picker.** Every output is copied when the call comes, and its copy is shown frozen under an overlay on it
+(layer namespace `cupertino-screenshot`, the capture overlay's, so no screenshot shortcut starts during a pick). A
+crosshair marks the hidden pointer, a loupe of 11 x 11 pixels follows it, and a click takes the colour of the pixel
+under it. A click counts only once its overlay has been on screen 0.5 s, so a click meant for the app picks nothing.
+Escape cancels. An output added, gone or moved ends the pick. One pick runs at a time.
+
+**Sharing choice.** A window titled "Share Screen" (app id `org.cupertino.Portal.Prompt`) shows the app, the displays
+and windows the portal lists, and, when the app asked to restore the share, a box to let it share again without asking.
+Nothing can be chosen for 0.5 s after the window's first frame; the focus starts on Cancel; Escape cancels.
+`sources` are `("display", connector, description)` or `("window", title, app id)`.
+
+The service exits once it has had nothing to do for 30 s (`serve::IDLE_EXIT`) and when its bus connection goes; the
+portal starts it again for its next call.
 
 ## Settings
 
@@ -151,9 +183,9 @@ selection = 100,80,640,400  # the last selection, global points
 
 The values shown are the defaults, except that `selection` is unset by default and `location` defaults to desktop.
 
-Desktop, Documents and Pictures resolve through `$XDG_CONFIG_HOME/user-dirs.dirs`. The fallbacks are the xdg-user-dirs
-defaults, `$HOME/Desktop` and so on. The directory is created when missing. The `user-dirs.dirs` parser
-duplicates the one in `cupertino-files`, because a shell crate cannot depend on an application crate.
+Desktop, Documents and Pictures resolve through `$XDG_CONFIG_HOME/user-dirs.dirs`, read by
+`cupertino_defaults::user_dirs`. The fallbacks are the xdg-user-dirs defaults, `$HOME/Desktop` and so on. The
+directory is created when missing.
 
 Each written path is printed on stdout.
 

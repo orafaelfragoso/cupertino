@@ -1,5 +1,5 @@
 // cupertino-layers --graph
-// 75 crates, 374 internal dependencies
+// 75 crates, 375 internal dependencies
 // per layer: foundation 5, graphics 2, models 6, system 8, platform 5, protocol 3, transport 2, render 3, ui 9, shellkit 1, core 4, services 6, shell 12, apps 2, tools 6, testing 1
 // forbidden normal edge cupertino-dock (shell) -> cupertino-shell-client (transport)
 // forbidden normal edge cupertino-dock (shell) -> cupertino-wayland-client (transport)
@@ -14,10 +14,7 @@
 // forbidden normal edge cupertino-polkit-agent (shell) -> cupertino-shell-client (transport)
 // forbidden normal edge cupertino-polkit-agent (shell) -> cupertino-wayland-client (transport)
 // forbidden normal edge cupertino-portal (shell) -> cupertino-screencast (platform)
-// forbidden normal edge cupertino-portal (shell) -> cupertino-shell-client (transport)
 // forbidden normal edge cupertino-portal (shell) -> cupertino-wayland-client (transport)
-// forbidden normal edge cupertino-screenshot (shell) -> cupertino-shell-client (transport)
-// forbidden normal edge cupertino-screenshot (shell) -> cupertino-wayland-client (transport)
 // forbidden normal edge cupertino-settings (apps) -> cupertino-wayland-client (transport)
 digraph "layers" {
   node [shape=box];
@@ -325,9 +322,9 @@ digraph "layers" {
   "cupertino-portal" -> "cupertino-geometry";
   "cupertino-portal" -> "cupertino-icons";
   "cupertino-portal" -> "cupertino-kit";
+  "cupertino-portal" -> "cupertino-peer";
   "cupertino-portal" -> "cupertino-protocols";
   "cupertino-portal" -> "cupertino-screencast" [color=red];
-  "cupertino-portal" -> "cupertino-shell-client" [color=red];
   "cupertino-portal" -> "cupertino-ui-wayland";
   "cupertino-portal" -> "cupertino-wayland-client" [color=red];
   "cupertino-powerd" -> "cupertino-devices";
@@ -337,15 +334,14 @@ digraph "layers" {
   "cupertino-raster-math" -> "cupertino-geometry" [label="dev"];
   "cupertino-scene" -> "cupertino-effects";
   "cupertino-scene" -> "cupertino-geometry";
+  "cupertino-screenshot" -> "cupertino-assets" [label="dev"];
   "cupertino-screenshot" -> "cupertino-defaults";
   "cupertino-screenshot" -> "cupertino-diagnostic-events";
   "cupertino-screenshot" -> "cupertino-geometry";
-  "cupertino-screenshot" -> "cupertino-keyboard";
   "cupertino-screenshot" -> "cupertino-kit";
-  "cupertino-screenshot" -> "cupertino-protocols";
-  "cupertino-screenshot" -> "cupertino-shell-client" [color=red];
-  "cupertino-screenshot" -> "cupertino-ui-wayland";
-  "cupertino-screenshot" -> "cupertino-wayland-client" [color=red];
+  "cupertino-screenshot" -> "cupertino-kit" [label="dev"];
+  "cupertino-screenshot" -> "cupertino-kit-shell";
+  "cupertino-screenshot" -> "cupertino-peer";
   "cupertino-seat" -> "cupertino-devices";
   "cupertino-server" -> "cupertino-animation";
   "cupertino-server" -> "cupertino-app-protocols";
@@ -408,6 +404,8 @@ digraph "layers" {
   "cupertino-session-tests" -> "cupertino-menubar" [label="dev"];
   "cupertino-session-tests" -> "cupertino-notifications" [label="dev"];
   "cupertino-session-tests" -> "cupertino-osd" [label="dev"];
+  "cupertino-session-tests" -> "cupertino-portal" [label="dev"];
+  "cupertino-session-tests" -> "cupertino-screenshot" [label="dev"];
   "cupertino-session-tests" -> "cupertino-server" [label="dev"];
   "cupertino-session-tests" -> "cupertino-shell" [label="dev"];
   "cupertino-session-tests" -> "cupertino-ui-render" [label="dev"];

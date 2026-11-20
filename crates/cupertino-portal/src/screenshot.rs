@@ -2,9 +2,9 @@
 //! dialog, which answers through its [`Reply`]; nothing is captured unless the person agrees. The capture side then
 //! copies every display ([`Shoot`]), and the displays are joined into one PNG under the picture directory.
 //!
-//! A colour pick copies every display at once and hands the copies to the picker ([`PickEvent`]), which freezes them
-//! under an overlay until the person clicks a pixel or presses Escape ([`crate::pick`]); the app is answered the
-//! colour of that one pixel and nothing else. The pick is the consent, so no window asks first.
+//! A colour pick is the screenshot program's ([`crate::screenshot_tool`]): it copies every display at once and freezes
+//! the copies under an overlay until the person clicks a pixel or presses Escape; the app is answered the colour of that
+//! one pixel and nothing else. The pick is the consent, so no window asks first.
 
 use std::collections::HashMap;
 use std::fs::OpenOptions;
@@ -24,8 +24,8 @@ use zbus::{interface, Connection};
 
 use crate::consent::{identify, Identity};
 use crate::file_chooser::file_uri;
-use crate::pick::Picked;
 use crate::request::{answered, from_frontend, Exported, PortalError, Response};
+use crate::screenshot_tool::{self, Answer as Picked};
 
 /// The interface version served.
 pub const VERSION: u32 = 3;
@@ -122,28 +122,6 @@ pub struct Shoot {
     pub shot: Shot,
 }
 
-/// What the colour picker is told.
-pub enum PickEvent {
-    /// Let the person pick a pixel of `displays` (copied for the call at `handle`) and answer through `reply`.
-    /// Dropping `reply` unanswered fails the call.
-    Pick {
-        handle: OwnedObjectPath,
-        displays: Vec<Output>,
-        reply: PickReply,
-    },
-    /// The frontend closed the call at `handle`: take its overlay down without answering.
-    Close { handle: OwnedObjectPath },
-}
-
-/// The picker's answer to one [`PickEvent::Pick`].
-pub struct PickReply(pub(crate) async_channel::Sender<Picked>);
-
-impl PickReply {
-    pub fn send(self, picked: Picked) {
-        let _ = self.0.try_send(picked);
-    }
-}
-
 /// The app id of each open call.
 type Calls = Arc<Mutex<HashMap<OwnedObjectPath, String>>>;
 
@@ -208,7 +186,6 @@ pub struct Screenshot {
     pictures: Box<dyn Fn() -> PathBuf + Send + Sync>,
     events: Box<dyn Fn(Event) + Send + Sync>,
     shoots: Box<dyn Fn(Shoot) + Send + Sync>,
-    picks: Option<Box<dyn Fn(PickEvent) + Send + Sync>>,
     /// A colour pick runs ([`OnePick`]).
     picking: AtomicBool,
     calls: Calls,
@@ -229,16 +206,9 @@ impl Screenshot {
             pictures: Box::new(pictures),
             events: Box::new(events),
             shoots: Box::new(shoots),
-            picks: None,
             picking: AtomicBool::new(false),
             calls: Arc::default(),
         }
-    }
-
-    /// Serve `PickColor` through the picker `picks` reaches; without one it answers 2 and shows nothing.
-    pub fn with_picker(mut self, picks: impl Fn(PickEvent) + Send + Sync + 'static) -> Self {
-        self.picks = Some(Box::new(picks));
-        self
     }
 
     /// The app as the consent window names it and draws it ([`identify`]).
@@ -387,8 +357,9 @@ impl Screenshot {
         )
     }
 
-    /// The colour of a pixel the person clicks on any display ([`crate::pick`]); 1 when they press Escape, 2 without
-    /// a picker, while another pick runs (refused before anything is copied) or when the displays cannot be copied.
+    /// The colour of a pixel the person clicks on any display, picked in the screenshot program
+    /// ([`crate::screenshot_tool`]); 1 when they press Escape, 2 while another pick runs (refused before the program is
+    /// asked) or when the program cannot pick.
     async fn pick_color(
         &self,
         #[zbus(header)] header: Header<'_>,
@@ -404,48 +375,35 @@ impl Screenshot {
             from_frontend(&header, connection).await?;
             let app_id = text("app_id", app_id)?;
             text("parent_window", parent_window)?;
-            let Some(picks) = &self.picks else {
-                return Ok((Response::Other as u32, HashMap::new()));
-            };
             let _pending = Pending::take(&self.calls, &handle, &app_id)?;
-            // one pick at a time, refused before a single display is copied for it
+            // one pick at a time, refused before the program is asked
             let Some(_one) = OnePick::take(&self.picking) else {
                 eprintln!("cupertino-portal: {handle} asked for a colour during another pick");
                 return Ok((Response::Other as u32, HashMap::new()));
             };
             let request = Exported::at(connection, handle.as_ref()).await?;
-            // nothing of the portal is on screen yet, so the displays are copied at once
-            let answered = match self.copy(&request, Instant::now()).await {
-                Ok(displays) => {
-                    let (reply, picked) = async_channel::bounded(1);
-                    picks(PickEvent::Pick {
-                        handle: handle.clone(),
-                        displays,
-                        reply: PickReply(reply),
-                    });
-                    let picked =
-                        futures_lite::future::or(async { Some(picked.recv().await.ok()) }, async {
-                            request.closed().await;
-                            None
-                        })
-                        .await;
-                    match picked {
-                        Some(Some(Picked::Colour(colour))) => {
-                            (Response::Success as u32, colour_results(colour)?)
-                        }
-                        Some(Some(Picked::Cancelled)) => {
-                            (Response::Cancelled as u32, HashMap::new())
-                        }
-                        Some(None) => (Response::Other as u32, HashMap::new()),
-                        None => {
-                            picks(PickEvent::Close { handle });
-                            (Response::Other as u32, HashMap::new())
-                        }
-                    }
+            let picked = futures_lite::future::or(
+                async { Some(screenshot_tool::pick_color(connection, handle.as_str()).await) },
+                async {
+                    request.closed().await;
+                    None
+                },
+            )
+            .await;
+            let failed = |reason: &str| {
+                eprintln!("cupertino-portal: the colour pick for {handle} failed: {reason}");
+                screenshot_failed("PickColor", Some(&app), reason);
+                (Response::Other as u32, HashMap::new())
+            };
+            let answered = match picked {
+                Some(Ok(Picked::Done(colour))) => {
+                    (Response::Success as u32, colour_results(colour)?)
                 }
-                Err(reason) => {
-                    eprintln!("cupertino-portal: the colour pick for {handle} failed: {reason}");
-                    screenshot_failed("PickColor", Some(&app), &reason);
+                Some(Ok(Picked::Cancelled)) => (Response::Cancelled as u32, HashMap::new()),
+                Some(Ok(Picked::Failed)) => failed("the screenshot program could not pick"),
+                Some(Err(reason)) => failed(&reason),
+                None => {
+                    screenshot_tool::close(connection, handle.as_str()).await;
                     (Response::Other as u32, HashMap::new())
                 }
             };

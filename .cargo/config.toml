@@ -41,7 +41,6 @@ build-programs = [
     "--features=cupertino-protocols/cupertino-app-protocols",
     "--features=cupertino-protocols/server",
     "--features=cupertino-radios/dbus",
-    "--features=cupertino-screenshot/app",
     "--features=cupertino-server/dbus",
     "--features=cupertino-server/udev",
     "--features=cupertino-server/winit",

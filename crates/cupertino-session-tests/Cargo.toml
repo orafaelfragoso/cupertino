@@ -20,6 +20,8 @@ cupertino-login = { path = "../cupertino-login", features = ["dbus"] }
 cupertino-menubar = { path = "../cupertino-menubar" }
 cupertino-notifications = { path = "../cupertino-notifications" }
 cupertino-osd = { path = "../cupertino-osd" }
+cupertino-portal = { path = "../cupertino-portal" }
+cupertino-screenshot = { path = "../cupertino-screenshot" }
 cupertino-server = { path = "../cupertino-server" }
 cupertino-shell = { path = "../cupertino-shell" }
 cupertino-ui-render = { path = "../cupertino-ui-render" }

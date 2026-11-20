@@ -1,7 +1,7 @@
 //! The tool's surfaces as CupertinoKit windows: the overlay of each output (the dim with its clear selection, the
 //! tint of the direct shortcut, the window pick's highlight, the size readout and the crosshair), the toolbar with its
 //! Options menu, the floating thumbnail, and the transparent pixel that takes the keyboard while the capture is put on
-//! the clipboard. Each window's `app_id` tells the process which layer surface it gets.
+//! the clipboard. Each window's key tells the process which layer surface it gets ([`kind`]).
 //!
 //! The overlay and the thumbnail are widgets of their own: they draw from the model, and turn the pointer, the keys and
 //! the actions of assistive technology into [`Input`]. The toolbar is built from the toolkit's buttons and segmented
@@ -22,9 +22,7 @@ use cupertino_kit::layout::{
 use cupertino_kit::platform::{
     CursorShape, DecorationMode, KeyEvent, Mods, MouseButton, PointerEvent, WindowSpec,
 };
-use cupertino_kit::render::{
-    Effect, ImageResource, Paint, PaintOp, PixelFormat, ResourceId, Sampling, Shape,
-};
+use cupertino_kit::render::{Effect, ImageResource, Paint, PaintOp, ResourceId, Sampling, Shape};
 use cupertino_kit::text::{AttributedText, FontWeight, ParagraphStyle, TextStyle};
 use cupertino_kit::theme::Color;
 use cupertino_kit::theme::Surface;
@@ -79,15 +77,6 @@ pub fn overlay_app_id(index: usize) -> String {
     format!("{OVERLAY_APP_ID}/{index}")
 }
 
-/// The output index of an overlay's `app_id`.
-pub fn overlay_index(app_id: &str) -> Option<usize> {
-    app_id
-        .strip_prefix(OVERLAY_APP_ID)?
-        .strip_prefix('/')?
-        .parse()
-        .ok()
-}
-
 /// What the pointer did on an overlay, in global points.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PointerInput {
@@ -128,8 +117,36 @@ pub enum Input {
     /// An overlay showed the arrow pointer again before it goes.
     ArrowShown,
     Thumbnail(ThumbnailInput),
+    /// The clipboard pixel has the keyboard, which the compositor asks of a client that sets the clipboard.
+    ClipboardFocused,
     /// The compositor closed a surface.
     Closed,
+}
+
+/// Which of the tool's windows a window key names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    /// The overlay of the output of this index.
+    Overlay(usize),
+    Toolbar,
+    /// The Options menu's panels, popups of the toolbar.
+    OptionsMenu,
+    Thumbnail,
+    Clipboard,
+}
+
+/// The tool's window `key` names; `None` for a key the tool does not give.
+pub fn kind(key: &WindowKey) -> Option<Kind> {
+    let NodeKey::Str(name) = &key.0 else {
+        return Some(Kind::OptionsMenu);
+    };
+    Some(match name.as_ref() {
+        "toolbar" => Kind::Toolbar,
+        "thumbnail" => Kind::Thumbnail,
+        "clipboard" => Kind::Clipboard,
+        "options-menu" => Kind::OptionsMenu,
+        other => Kind::Overlay(other.strip_prefix("overlay/")?.parse().ok()?),
+    })
 }
 
 fn color(c: Rgba) -> Color {
@@ -804,19 +821,8 @@ pub struct ThumbnailImage {
 }
 
 impl ThumbnailImage {
-    /// The premultiplied RGBA pixels of a `width` x `height` image, as `tiny-skia` keeps them.
-    pub fn new(id: ResourceId, width: u32, height: u32, pixels: Vec<u8>) -> Self {
-        Self {
-            id,
-            image: ImageResource {
-                revision: 1,
-                width,
-                height,
-                stride: width * 4,
-                format: PixelFormat::Rgba8Premultiplied,
-                pixels: pixels.into(),
-            },
-        }
+    pub fn new(id: ResourceId, image: ImageResource) -> Self {
+        Self { id, image }
     }
 }
 
@@ -949,10 +955,12 @@ pub fn thumbnail<M: Clone + 'static>(
     }
 }
 
-/// Draws nothing and takes no pointer.
-struct Blank;
+/// Draws nothing and takes no pointer; it takes the keyboard focus, and says when the window has it.
+struct ClipboardPixel<M> {
+    to: fn(Input) -> M,
+}
 
-impl<M: 'static> Widget<M> for Blank {
+impl<M: 'static> Widget<M> for ClipboardPixel<M> {
     type State = ();
 
     fn layout(&self) -> LayoutSpec {
@@ -972,15 +980,25 @@ impl<M: 'static> Widget<M> for Blank {
         }
     }
 
-    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
-        Propagation::Continue
+    fn event(&self, _: &mut (), event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
+        match event {
+            Event::WindowActive(true) => {
+                cx.emit((self.to)(Input::ClipboardFocused));
+                Propagation::Stop
+            }
+            _ => Propagation::Continue,
+        }
     }
 
     fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
 
-    /// Nothing to reach: the pixel only holds the keyboard for the moment the capture goes on the clipboard.
+    /// The pixel only holds the keyboard for the moment the capture goes on the clipboard. It takes the focus, so it
+    /// hears the keyboard come: a hidden node would pass the focus on to none.
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
-        cx.hidden();
+        cx.role(Role::Group);
+        cx.name("Copying the screenshot");
+        cx.focusable();
+        cx.initial_focus();
     }
 }
 
@@ -998,7 +1016,7 @@ pub fn clipboard_focus<M: Clone + 'static>(to: fn(Input) -> M) -> Window<M> {
         shortcuts: CommandRegistry::new(),
         on_close: Some(to(Input::Closed)),
         background: WindowBackground::None,
-        content: Element::new(Blank),
+        content: Element::new(ClipboardPixel { to }),
         popup: None,
         menus: None,
     }

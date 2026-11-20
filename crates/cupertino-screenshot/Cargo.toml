@@ -3,46 +3,28 @@ name = "cupertino-screenshot"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
-description = "Screenshot tool of the Cupertino compositor: full-screen, window and selection capture with the crosshair overlay, the toolbar, the floating thumbnail, timestamped PNG files and the clipboard, drawn by CupertinoKit"
+description = "Screenshot tool of the Cupertino desktop: full-screen, window and selection capture with the crosshair overlay, the toolbar, the floating thumbnail, timestamped PNG files and the clipboard, a CupertinoKit program on cupertino-kit-shell"
 [package.metadata.cupertino]
 layer = "shell"
 
-[features]
-default = []
-# the `cupertino-screenshot` process: the overlay, toolbar and thumbnail as CupertinoKit windows on layer surfaces and
-# the capture through ext-image-copy-capture, as a client the server starts on a connection of its own
-app = [
-    "dep:async-channel",
-    "dep:async-io",
-    "dep:cupertino-keyboard",
-    "dep:cupertino-protocols",
-    "dep:cupertino-shell-client",
-    "dep:cupertino-ui-wayland",
-    "dep:cupertino-wayland-client",
-    "dep:wayland-client",
-    "dep:wayland-protocols",
-    "dep:cupertino-diagnostic-events",
-    "dep:cupertino-defaults",
-]
-
 [dependencies]
-cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events", optional = true }
-cupertino-defaults = { path = "../cupertino-defaults", optional = true }
+async-channel = "2"
+cupertino-defaults = { path = "../cupertino-defaults" }
+cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events" }
 cupertino-geometry = { path = "../cupertino-geometry" }
-tiny-skia = "0.12"
-rustix = { version = "1", features = ["event", "fs"] }
-async-channel = { version = "2", optional = true }
-async-io = { version = "2", optional = true }
 cupertino-kit = { path = "../cupertino-kit" }
-cupertino-keyboard = { path = "../cupertino-keyboard", optional = true }
-cupertino-protocols = { path = "../cupertino-protocols", features = ["client"], optional = true }
-cupertino-shell-client = { path = "../cupertino-shell-client", optional = true }
-cupertino-ui-wayland = { path = "../cupertino-ui-wayland", optional = true }
-cupertino-wayland-client = { path = "../cupertino-wayland-client", optional = true }
-wayland-client = { version = "0.31", optional = true }
-wayland-protocols = { version = "0.32", features = ["client", "staging"], optional = true }
+cupertino-kit-shell = { path = "../cupertino-kit-shell" }
+cupertino-peer = { path = "../cupertino-peer" }
+rustix = { version = "1", features = ["fs"] }
+zbus = { version = "5", default-features = false, features = ["async-io"] }
+
+[dev-dependencies]
+cupertino-assets = { path = "../cupertino-assets" }
+cupertino-kit = { path = "../cupertino-kit", features = ["test"] }
+
+[[example]]
+name = "screenshot_capture"
 
 [[bin]]
 name = "cupertino-screenshot"
 path = "src/main.rs"
-required-features = ["app"]

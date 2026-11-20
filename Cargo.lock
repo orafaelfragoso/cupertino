@@ -1465,6 +1465,7 @@ name = "cupertino-portal"
 version = "0.1.0"
 dependencies = [
  "async-channel",
+ "async-io",
  "cupertino-apps",
  "cupertino-assets",
  "cupertino-defaults",
@@ -1472,9 +1473,9 @@ dependencies = [
  "cupertino-geometry",
  "cupertino-icons",
  "cupertino-kit",
+ "cupertino-peer",
  "cupertino-protocols",
  "cupertino-screencast",
- "cupertino-shell-client",
  "cupertino-ui-wayland",
  "cupertino-wayland-client",
  "futures-lite",
@@ -1549,20 +1550,15 @@ name = "cupertino-screenshot"
 version = "0.1.0"
 dependencies = [
  "async-channel",
- "async-io",
+ "cupertino-assets",
  "cupertino-defaults",
  "cupertino-diagnostic-events",
  "cupertino-geometry",
- "cupertino-keyboard",
  "cupertino-kit",
- "cupertino-protocols",
- "cupertino-shell-client",
- "cupertino-ui-wayland",
- "cupertino-wayland-client",
+ "cupertino-kit-shell",
+ "cupertino-peer",
  "rustix 1.1.6",
- "tiny-skia",
- "wayland-client",
- "wayland-protocols",
+ "zbus",
 ]
 
 [[package]]
@@ -1709,6 +1705,8 @@ dependencies = [
  "cupertino-menubar",
  "cupertino-notifications",
  "cupertino-osd",
+ "cupertino-portal",
+ "cupertino-screenshot",
  "cupertino-server",
  "cupertino-shell",
  "cupertino-ui-render",

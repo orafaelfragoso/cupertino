@@ -803,6 +803,17 @@
   source: crates/cupertino-osd/src/control.rs
   source_match: "org.cupertino.Osd1"
   note: served by the osd component in the cupertino-shell binary, on the component's own connection; step methods accept only the server (the owner of org.cupertino.Session1, or another connection of its process); Show is open
+- name: org.cupertino.Screenshot1
+  kind: dbus-interface
+  version: 1
+  bus: session
+  bus_name: org.cupertino.Screenshot1
+  owner_crate: cupertino-screenshot
+  owner_area: apps
+  scope: shell-private
+  source: crates/cupertino-screenshot/src/control.rs
+  source_match: "org.cupertino.Screenshot1"
+  note: served by cupertino-screenshot --serve, which the server starts for the portal (Session1.StartScreenshot); PickColor, SelectSources and Close accept only the program the server started as portal (Session1.ProgramOf); called by cupertino-portal for the colour picker and the screen-sharing choice
 - name: org.cupertino.Bluetooth1
   kind: dbus-interface
   version: 1

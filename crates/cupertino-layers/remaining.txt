@@ -20,7 +20,6 @@ shell disallowed_methods cupertino-launcher clippy.toml
 shell disallowed_methods cupertino-login clippy.toml
 shell disallowed_methods cupertino-polkit-agent clippy.toml
 shell disallowed_methods cupertino-portal clippy.toml
-shell disallowed_methods cupertino-screenshot clippy.toml
 shell disallowed_methods cupertino-windowmanager clippy.toml
 shell external_crate cupertino-dock -> tiny-skia normal
 shell external_crate cupertino-login -> image normal
@@ -30,9 +29,6 @@ shell external_crate cupertino-portal -> tiny-skia normal
 shell external_crate cupertino-portal -> wayland-client normal
 shell external_crate cupertino-portal -> wayland-protocols normal
 shell external_crate cupertino-portal -> xkbcommon normal
-shell external_crate cupertino-screenshot -> tiny-skia normal
-shell external_crate cupertino-screenshot -> wayland-client normal
-shell external_crate cupertino-screenshot -> wayland-protocols normal
 shell external_crate cupertino-windowmanager -> wayland-client normal
 shell facade cupertino-dock -> cupertino-animation normal
 shell facade cupertino-dock -> cupertino-shell-client normal
@@ -53,13 +49,8 @@ shell facade cupertino-polkit-agent -> cupertino-ui-core normal
 shell facade cupertino-polkit-agent -> cupertino-ui-wayland normal
 shell facade cupertino-polkit-agent -> cupertino-wayland-client normal
 shell facade cupertino-portal -> cupertino-protocols normal
-shell facade cupertino-portal -> cupertino-shell-client normal
 shell facade cupertino-portal -> cupertino-ui-wayland normal
 shell facade cupertino-portal -> cupertino-wayland-client normal
-shell facade cupertino-screenshot -> cupertino-protocols normal
-shell facade cupertino-screenshot -> cupertino-shell-client normal
-shell facade cupertino-screenshot -> cupertino-ui-wayland normal
-shell facade cupertino-screenshot -> cupertino-wayland-client normal
 shell facade cupertino-windowmanager -> cupertino-protocols normal
 shell forbidden_edge cupertino-dock -> cupertino-shell-client normal
 shell forbidden_edge cupertino-dock -> cupertino-wayland-client normal
@@ -73,7 +64,4 @@ shell forbidden_edge cupertino-polkit-agent -> cupertino-decorations normal
 shell forbidden_edge cupertino-polkit-agent -> cupertino-shell-client normal
 shell forbidden_edge cupertino-polkit-agent -> cupertino-wayland-client normal
 shell forbidden_edge cupertino-portal -> cupertino-screencast normal
-shell forbidden_edge cupertino-portal -> cupertino-shell-client normal
 shell forbidden_edge cupertino-portal -> cupertino-wayland-client normal
-shell forbidden_edge cupertino-screenshot -> cupertino-shell-client normal
-shell forbidden_edge cupertino-screenshot -> cupertino-wayland-client normal

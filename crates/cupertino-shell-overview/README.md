@@ -4,7 +4,7 @@ The overview of the Cupertino desktop: every window of the output's current desk
 band across the top, and the application overview of one application's windows.
 
 The crate is a library: one component, `Overview`, which the shell host (`cupertino-shell`) runs as `overview` of
-the server's component table. The layout (`layout`, on the reference packing of `cupertino_wm::overview`) is pure; the
+the server's component table. The layout (`layout`, on the packing of `cupertino_wm::overview`) is pure; the
 surface (`chrome`, `parts`) is drawn by CupertinoKit; the component (`component`) speaks to the server only through
 `cupertino-kit-shell`: the overview role's feed and requests, holes and transactions.
 

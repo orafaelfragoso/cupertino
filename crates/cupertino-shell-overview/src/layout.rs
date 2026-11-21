@@ -1,4 +1,4 @@
-//! The overview's model: the layout of the windows the server lists (the reference packing in
+//! The overview's model: the layout of the windows the server lists (the packing in
 //! `cupertino_wm::overview`, in the output's points), the desktops band (names, opening on the pointer at the top to
 //! show the desktops' pictures, the add button, the remove button after a rest on a picture, drag-reorder), the
 //! selection ring and name, dragging a window onto a desktop, and what a click or a key asks for. The way in and out

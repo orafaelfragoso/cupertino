@@ -10,6 +10,9 @@
 //! - `menubar`: a persistent layer window at the output's top left whose colour turns from [`GREEN`] to [`YELLOW`]
 //!   and back every [`TICK`]; it opens its session bus connection and reports its unique name with its instance.
 //!
+//! - `desktop`: windowless; its teardown takes [`SLOW_TEARDOWN`], so the host stops it while the server already
+//!   answers what the host asks next.
+//!
 //! - `osd`: the real on-screen displays of `cupertino-osd`, as `cupertino-shell` runs them.
 //!
 //! What a component reports goes to the report file ([`report`]) as one line.
@@ -533,19 +536,70 @@ impl Component for MenuBar {
     const NAME: ComponentName = ComponentName::MENUBAR;
 }
 
+/// How long the desktop's teardown takes: far longer than a turn of the server, which answers a `connect` at once.
+pub const SLOW_TEARDOWN: Duration = Duration::from_millis(500);
+
+/// The `desktop` component.
+pub struct Desktop;
+
+/// The desktop's model, whose drop takes [`SLOW_TEARDOWN`].
+pub struct Slow;
+
+impl Drop for Slow {
+    fn drop(&mut self) {
+        std::thread::sleep(SLOW_TEARDOWN);
+        report("desktop ended");
+    }
+}
+
+impl Application for Desktop {
+    type Model = Slow;
+    type Message = ();
+    const RENDERER: RendererClass = RendererClass::Cpu;
+
+    fn init() -> (Slow, Vec<Command<()>>) {
+        report("desktop started");
+        (Slow, Vec::new())
+    }
+
+    fn update(_: &mut Slow, (): ()) -> Vec<Command<()>> {
+        Vec::new()
+    }
+
+    fn view(_: &Slow) -> Vec<Window<()>> {
+        Vec::new()
+    }
+}
+
+impl Program for Desktop {
+    fn surface(_: &Slow, _: &WindowKey) -> Surface {
+        windowless()
+    }
+
+    fn event(_: Event) -> Option<()> {
+        None
+    }
+}
+
+impl Component for Desktop {
+    const NAME: ComponentName = ComponentName::DESKTOP;
+}
+
 pub static MENUBAR: Entry = Entry::of::<MenuBar>();
 pub static DOCK: Entry = Entry::of::<Dock>();
 pub static NOTIFICATIONS: Entry = Entry::of::<Notifications>();
 pub static CONTROLCENTER: Entry = Entry::of::<ControlCenter>();
 pub static LAUNCHER: Entry = Entry::of::<Launcher>();
+pub static DESKTOP: Entry = Entry::of::<Desktop>();
 
 /// The components this host was built with.
 /// The test components and the real on-screen displays (`cupertino_shell::OSD`).
-pub static ENTRIES: [&Entry; 6] = [
+pub static ENTRIES: [&Entry; 7] = [
     &MENUBAR,
     &DOCK,
     &NOTIFICATIONS,
     &CONTROLCENTER,
     &LAUNCHER,
+    &DESKTOP,
     &cupertino_shell::OSD,
 ];

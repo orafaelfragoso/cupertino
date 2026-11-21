@@ -146,14 +146,14 @@ struct Started {
     started: Instant,
     /// What the host last reported of it; `Responsive` until it reports otherwise.
     reported: Liveness,
-    /// The host asked it to stop, at that time; `again` asks for its connection once it ended.
+    /// The host asked it to stop, at that time. Once it ended the host asks for its connection again when the server's
+    /// last list names it: the list that came last wins, whatever came while it stopped.
     stopping: Option<Stopping>,
 }
 
 #[derive(Clone, Copy)]
 struct Stopping {
     since: Instant,
-    again: bool,
     /// Cut off after [`STOP_GRACE`].
     shut: bool,
 }
@@ -213,7 +213,8 @@ impl Shell {
     }
 
     /// The list the server sent: a connection for every listed component the host has, `unavailable` for the rest,
-    /// and the components that left it stop and lose their object.
+    /// and the components that left it stop and lose their object. A listed component still stopping asks for its
+    /// connection once it ended ([`Shell::reap`]): a connection now would come while its instance before runs.
     fn list(&mut self, list: &[String]) {
         let names: Vec<ComponentName> = list
             .iter()
@@ -231,7 +232,10 @@ impl Shell {
         }
         for name in list {
             match ComponentName::from_name(name).and_then(|c| self.entry(c)) {
-                Some(entry) if !self.listed.contains(&entry.name()) => {
+                Some(entry)
+                    if !self.listed.contains(&entry.name())
+                        && !self.started.contains_key(&entry.name()) =>
+                {
                     self.host.connect_component(name);
                 }
                 Some(_) => {}
@@ -285,14 +289,15 @@ impl Shell {
         }
     }
 
-    /// Asks `component` to stop; with `again` the host asks for its connection once it ended.
+    /// Asks `component` to stop; it starts again once it ended when the list names it then. With `again` a listed
+    /// component that does not run asks for its connection now.
     fn stop(&mut self, component: ComponentName, again: bool) {
         match self.started.get_mut(&component) {
             Some(started) => {
                 started.running.stop();
-                started.stopping = Some(Stopping {
+                // a second stop keeps the first one's grace
+                started.stopping.get_or_insert(Stopping {
                     since: Instant::now(),
-                    again,
                     shut: false,
                 });
             }
@@ -304,7 +309,8 @@ impl Shell {
     }
 
     /// The components that ended since the last look: a failure is reported and followed by `connect`, which the
-    /// server answers once the component's restart time passed; one that stopped as asked starts again when asked.
+    /// server answers once the component's restart time passed; one that stopped as asked starts again when the
+    /// server's last list names it.
     fn reap(&mut self) {
         let mut ended = Vec::new();
         for (&component, started) in &mut self.started {
@@ -327,8 +333,7 @@ impl Shell {
                 report_failure(component, &format!("{cause:?}"));
                 self.host.failed(component, cause);
             }
-            let again = stopping.is_none_or(|s| s.again);
-            if again && self.listed.contains(&component) {
+            if self.listed.contains(&component) {
                 self.host.connect_component(component.as_str());
             }
         }

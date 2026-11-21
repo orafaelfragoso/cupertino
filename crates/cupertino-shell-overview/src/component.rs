@@ -296,7 +296,13 @@ impl Model {
 
     /// A surface for `mode` on `output` in `phase`, from the server's last word on the output; none
     /// without an area, an output geometry, or for the application mode without a window of the application.
-    fn make_view(&mut self, output: OutputId, mode: Mode, app_id: &str, phase: Phase) -> Option<View> {
+    fn make_view(
+        &mut self,
+        output: OutputId,
+        mode: Mode,
+        app_id: &str,
+        phase: Phase,
+    ) -> Option<View> {
         let feed = self.feeds.get(&output)?;
         let area = feed.area?;
         let geometry = outputs::get(output)?.geometry?;
@@ -648,8 +654,9 @@ impl Model {
                         view.phase = Phase::Opening;
                         let (output, key) = (view.output, view.key.clone());
                         // the other gesture's surface waits until this overview is gone
-                        self.views
-                            .retain(|v| v.key == key || !(v.output == output && v.phase == Phase::Armed));
+                        self.views.retain(|v| {
+                            v.key == key || !(v.output == output && v.phase == Phase::Armed)
+                        });
                     }
                 }
                 Vec::new()
@@ -746,9 +753,8 @@ impl Model {
         let geometry = |id: OutputId| all.iter().find(|o| o.id == id).and_then(|o| o.geometry);
         self.feeds.retain(|id, _| geometry(*id).is_some());
         self.views.retain(|v| {
-            geometry(v.output).is_some_and(|g| {
-                (g.origin.x, g.origin.y) == v.origin && g.size == v.size
-            })
+            geometry(v.output)
+                .is_some_and(|g| (g.origin.x, g.origin.y) == v.origin && g.size == v.size)
         });
         let outputs: Vec<OutputId> = self.feeds.keys().copied().collect();
         outputs.into_iter().flat_map(|o| self.arm(o)).collect()
@@ -802,8 +808,9 @@ impl Application for Overview {
                 Vec::new()
             }
             Message::Session(None) | Message::SessionClosed => {
-                eprintln!("cupertino-overview: no session bus connection");
-                vec![Do::Exit]
+                // the overview calls nothing on the bus: without it, it still works
+                model.session = None;
+                Vec::new()
             }
             Message::Conf(actions, watcher) => {
                 let mut out = Vec::new();
@@ -869,7 +876,11 @@ impl Application for Overview {
             // the view draws from the model's clock; this only makes it look again
             Message::Frame => Vec::new(),
             Message::Rearm(output, changes) => {
-                if model.feeds.get(&output).is_some_and(|f| f.changes == changes) {
+                if model
+                    .feeds
+                    .get(&output)
+                    .is_some_and(|f| f.changes == changes)
+                {
                     model.arm(output)
                 } else {
                     Vec::new()

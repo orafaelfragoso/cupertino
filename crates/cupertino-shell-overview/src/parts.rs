@@ -17,7 +17,6 @@ use cupertino_kit::text::{AttributedText, FontWeight, ParagraphStyle, TextAlign,
 use cupertino_kit::theme::Color;
 use cupertino_wm::geometry::Rect as WmRect;
 
-
 /// A colour as red, green, blue and alpha from 0 to 1.
 pub type Rgba = [f32; 4];
 

@@ -135,7 +135,12 @@ fn ids(workspaces: &[Workspace]) -> (Vec<WorkspaceId>, Option<WorkspaceId>) {
 
 impl OverviewUi {
     /// The overview over `area` (the output's points).
-    pub fn new(mode: Mode, area: Rect, windows: &[WindowEntry], workspaces: Vec<Workspace>) -> Self {
+    pub fn new(
+        mode: Mode,
+        area: Rect,
+        windows: &[WindowEntry],
+        workspaces: Vec<Workspace>,
+    ) -> Self {
         let cfg = OverviewConfig::default();
         let model_mode = match mode {
             Mode::All => OverviewMode::Overview,
@@ -455,9 +460,7 @@ impl OverviewUi {
 
     /// Whether another frame is wanted: a reflow, the band, the highlight or a drag is moving.
     pub fn is_animating(&self, now: f64) -> bool {
-        self.overview.is_animating(now)
-            || self.drag().is_some()
-            || self.window_drag().is_some()
+        self.overview.is_animating(now) || self.drag().is_some() || self.window_drag().is_some()
     }
 
     /// When the chrome next changes by itself without moving: the remove button showing after the rest.

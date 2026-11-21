@@ -204,9 +204,7 @@ pub fn action(ui: &mut OverviewUi, input: OverviewInput, now: f64) -> UiAction {
             Some(key) => ui.key(key, now),
             None => UiAction::None,
         },
-        OverviewInput::Select(id) if ui.frames().iter().any(|f| f.0 == id) => {
-            UiAction::Select(id)
-        }
+        OverviewInput::Select(id) if ui.frames().iter().any(|f| f.0 == id) => UiAction::Select(id),
         OverviewInput::SwitchWorkspace(id) if ui.workspaces().iter().any(|w| w.id == id) => {
             UiAction::SwitchWorkspace(id)
         }

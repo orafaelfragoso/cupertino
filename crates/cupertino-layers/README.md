@@ -85,12 +85,12 @@ The further rules, each a check with its own problem kind:
   layers they are allowed as dev-dependencies only. Other external crates are not restricted.
 - `undeclared_licence`: every crate declares a `license` that is a licence expression, or a `license-file`.
 - `disallowed_methods`: every `shell` and `apps` crate holds the generated `clippy.toml` (below).
-- `test_feature`: only a dev-dependency turns on `TEST_FEATURE` (`cupertino-kit/test`, the toolkit's backend for
-  program tests): a normal or build dependency that names it, or a feature of any package that turns it on, is a
+- `test_feature`: only a dev-dependency turns on one of `TEST_FEATURES` (`cupertino-kit/test`, the toolkit's backend
+  for program tests, and `cupertino-server/test`, which lets a test shorten the server's restart delays): a normal or build dependency that names it, or a feature of any package that turns it on, is a
   problem, so no program is built with it.
 - `program_features`: the alias `PROGRAMS_ALIAS` (`build-programs`) in the workspace's `.cargo/config.toml`, which
   builds the programs as they are packaged, names every feature of the workspace's packages with `--features`
-  (`default` aside), except `TEST_FEATURE`, so a feature added to a program is never left out of the packages. A
+  (`default` aside), except `TEST_FEATURES`, so a feature added to a program is never left out of the packages. A
   workspace without that file has no alias to check.
 
 Test placement (no test code in a crate's `src/`) is checked by the gate of `cargo xtask ci`, not here.

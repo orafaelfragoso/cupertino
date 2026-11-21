@@ -13,7 +13,7 @@ use crate::{
     check, clippy_toml, crate_paths, dot, edges, external_problems, is_licence, matches, sources,
     without_counts, Dep, Edge, External, Facade, Kind, Layer, Problem, Rules, DISALLOWED_METHODS,
     EXTERNAL_CRATES, FACADES, GRAPH_SNAPSHOT, IMPURE, PROGRAMS_ALIAS, PURE_LAYERS, RULES,
-    TEST_FEATURE, THREADLESS_LAYERS, WINDOW_SYSTEM,
+    TEST_FEATURES, THREADLESS_LAYERS, WINDOW_SYSTEM,
 };
 
 /// What a workspace is checked against.
@@ -30,9 +30,9 @@ pub struct Policy {
     pub threadless_layers: &'static [Layer],
     /// What the `clippy.toml` of each `shell` and `apps` crate disallows.
     pub disallowed_methods: &'static [(&'static str, &'static str)],
-    /// The feature, as package and feature, that only dev-dependencies turn on.
-    pub test_feature: (&'static str, &'static str),
-    /// The Cargo alias that names every feature but the test feature.
+    /// The features, as package and feature, that only dev-dependencies turn on.
+    pub test_features: &'static [(&'static str, &'static str)],
+    /// The Cargo alias that names every feature but the test features.
     pub programs_alias: &'static str,
 }
 
@@ -46,7 +46,7 @@ pub const POLICY: Policy = Policy {
     impure: IMPURE,
     threadless_layers: THREADLESS_LAYERS,
     disallowed_methods: DISALLOWED_METHODS,
-    test_feature: TEST_FEATURE,
+    test_features: TEST_FEATURES,
     programs_alias: PROGRAMS_ALIAS,
 };
 
@@ -270,7 +270,9 @@ pub fn check_workspace_with(
             });
         }
     }
-    problems.extend(test_feature_problems(&members, policy.test_feature)?);
+    for test in policy.test_features {
+        problems.extend(test_feature_problems(&members, *test)?);
+    }
     // a workspace without a Cargo configuration (a test workspace) packages no programs
     if let Ok(config) = std::fs::read_to_string(workspace_root.join(CARGO_CONFIG)) {
         problems.extend(program_features_problem(&members, &config, policy)?);
@@ -433,15 +435,18 @@ fn test_feature_problems(meta: &Value, test: (&str, &str)) -> Result<Vec<Problem
 }
 
 /// The problem of the programs' alias in `config` (a Cargo configuration), when it is missing or does not name exactly
-/// the features of the workspace packages in `meta`, `default` and the test feature aside.
+/// the features of the workspace packages in `meta`, `default` and the test features aside.
 fn program_features_problem(
     meta: &Value,
     config: &str,
     policy: &Policy,
 ) -> Result<Option<Problem>, LayersError> {
     let bad = |what: &str| LayersError::Manifest(format!("cargo metadata has no {what}"));
-    let (package, feature) = policy.test_feature;
-    let test = format!("{package}/{feature}");
+    let tests: BTreeSet<String> = policy
+        .test_features
+        .iter()
+        .map(|(package, feature)| format!("{package}/{feature}"))
+        .collect();
     let mut expected = BTreeSet::new();
     for p in meta["packages"].as_array().ok_or_else(|| bad("packages"))? {
         let name = p["name"].as_str().ok_or_else(|| bad("package name"))?;
@@ -453,7 +458,7 @@ fn program_features_problem(
                 .keys()
                 .filter(|f| *f != "default")
                 .map(|f| format!("{name}/{f}"))
-                .filter(|f| *f != test),
+                .filter(|f| !tests.contains(f)),
         );
     }
     let alias = config

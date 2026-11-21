@@ -4,7 +4,7 @@
 //! `models` sources stay pure, `system` crates start no threads ([`THREADLESS_LAYERS`]), components stay apart, the window-system boundaries ([`WINDOW_SYSTEM`]) hold, `shell`
 //! and `apps` crates reach the toolkit through its facades ([`FACADES`]), external crates stay in their layers
 //! ([`EXTERNAL_CRATES`]), every crate declares a licence, only dev-dependencies turn on the toolkit's test feature
-//! ([`TEST_FEATURE`]) and the alias that builds the programs names every other feature ([`PROGRAMS_ALIAS`]).
+//! ([`TEST_FEATURES`]) and the alias that builds the programs names every other feature ([`PROGRAMS_ALIAS`]).
 //!
 //! Every layer is closed: any problem fails the check. [`check_workspace`] runs every check on a checkout, as the
 //! `cupertino-layers` binary and `cupertino dev layers` do.
@@ -292,13 +292,15 @@ pub const FACADES: &[Facade] = &[
     },
 ];
 
-/// The toolkit's feature for program tests, as package and feature: only a dev-dependency may turn it on, never a
-/// normal or build dependency or a feature, so no program is built with it.
-pub const TEST_FEATURE: (&str, &str) = ("cupertino-kit", "test");
+/// The features for program tests, as package and feature: the toolkit's, and the server's that lets a test shorten its
+/// restart delays. Only a dev-dependency may turn one on, never a normal or build dependency or a feature, so no
+/// program is built with it.
+pub const TEST_FEATURES: &[(&str, &str)] =
+    &[("cupertino-kit", "test"), ("cupertino-server", "test")];
 
 /// The Cargo alias in the workspace's `.cargo/config.toml` that builds the programs as they are packaged: it names
 /// every feature of the workspace's packages with `--features`, `default` aside (on without being named), except
-/// [`TEST_FEATURE`].
+/// [`TEST_FEATURES`].
 pub const PROGRAMS_ALIAS: &str = "build-programs";
 
 /// External crates that only some layers may depend on directly. A name ending in `*` stands for every crate it

@@ -49,10 +49,10 @@ The restart tests crash a component and wait for the real delays: `RESTART_THROT
 whole crate (53,000 lines for the server). `cargo xtask ci` already sets `CARGO_INCREMENTAL=0` when it runs in CI
 (`xtask/src/run.rs:183`).
 
-- [ ] `[profile.dev] incremental = true` again; agent worktrees and CI keep it off through `CARGO_INCREMENTAL=0`.
+- [x] `[profile.dev] incremental = true` again; agent worktrees and CI keep it off through `CARGO_INCREMENTAL=0`.
       Decision: xtask sets it off whenever the checkout is a linked worktree (`git rev-parse --git-common-dir` differs
       from `--git-dir`) or CI, and the agent briefs do not need to know.
-- [ ] `target_gib` still bounds `target/` with incremental data in it.
+- [x] `target_gib` still bounds `target/` with incremental data in it.
 - [ ] Done when one edited server file reaches built tests in under 6 s in the main checkout, and an agent worktree's
       first build still hits sccache for the workspace's crates.
 

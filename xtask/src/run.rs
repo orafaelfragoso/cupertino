@@ -135,7 +135,8 @@ fn size(path: &Path) -> u64 {
 }
 
 /// Empties `target/debug` when it is larger than `limit_gib` and no cargo holds its build lock, so builds left by
-/// feature sets and package lists no longer used do not fill the disk; sccache makes the rebuild cheap.
+/// feature sets and package lists no longer used do not fill the disk; sccache makes the rebuild cheap. The size
+/// counts `debug/incremental`, the main checkout's incremental session data, which goes with the rest.
 fn trim_target(target: &Path, limit_gib: u64) {
     let debug = target.join("debug");
     let bytes = size(&debug);
@@ -164,7 +165,7 @@ fn run_cargo(
     root: &Path,
     check: &Check,
     jobs: Option<usize>,
-    in_ci: bool,
+    not_incremental: bool,
     json: bool,
 ) -> Result<bool, String> {
     let (program, args) = check
@@ -179,7 +180,7 @@ fn run_cargo(
     if let Some(jobs) = jobs {
         command.env("CARGO_BUILD_JOBS", jobs.to_string());
     }
-    if in_ci {
+    if not_incremental {
         command.env("CARGO_INCREMENTAL", "0");
     }
     if json {
@@ -425,6 +426,10 @@ pub fn ci(options: &Options) -> u8 {
                 jobs = Some((cores / slots).max(1));
             }
         }
+        // CI and linked worktrees (agents' checkouts) build without incremental data, so sccache caches the
+        // workspace's own crates and the worktrees share them; only the main checkout keeps `[profile.dev]`'s
+        // incremental builds.
+        let not_incremental = in_ci || plan::linked_worktree(&root);
         let before = sccache_counts(&root);
         for (check, outcome) in plan.checks.iter().zip(outcomes.iter_mut()) {
             if check.skipped.is_some() {
@@ -435,12 +440,11 @@ pub fn ci(options: &Options) -> u8 {
             let passed = match check.kind {
                 Kind::Gate => run_gate(&root),
                 Kind::Vendored => run_vendored(&root),
-                Kind::Cargo => {
-                    run_cargo(&root, check, jobs, in_ci, options.json).unwrap_or_else(|error| {
+                Kind::Cargo => run_cargo(&root, check, jobs, not_incremental, options.json)
+                    .unwrap_or_else(|error| {
                         eprintln!("xtask ci: {error}");
                         false
-                    })
-                }
+                    }),
             };
             if !passed {
                 code = 1;

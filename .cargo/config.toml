@@ -2,9 +2,11 @@
 [profile.dev]
 debug = "line-tables-only"
 
-# Debug and test builds are not incremental, so sccache caches the workspace's own crates as well as their dependencies
-# (it passes incremental crates through uncached) and the target directory keeps no incremental session data.
-incremental = false
+# Debug and test builds are incremental, so an edit in the main checkout rebuilds only what changed. sccache passes
+# incremental crates through uncached, so `cargo xtask ci` sets CARGO_INCREMENTAL=0 in CI and in linked worktrees
+# (agents' checkouts), which then share the workspace's own crates through sccache. `[limits] target_gib` in
+# .config/validation.toml bounds the incremental session data with the rest of `target/debug`.
+incremental = true
 
 # Compiled crates are shared between checkouts through sccache's cache.
 [build]

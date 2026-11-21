@@ -103,6 +103,24 @@ fn null_separated(text: &str) -> impl Iterator<Item = String> + '_ {
         .map(str::to_owned)
 }
 
+/// Whether `root` is a linked worktree (`git worktree add`) rather than the repository's main checkout: its git
+/// directory differs from the common one. A failed query counts as the main checkout.
+pub fn linked_worktree(root: &Path) -> bool {
+    git(
+        root,
+        &[
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-dir",
+            "--git-common-dir",
+        ],
+    )
+    .is_ok_and(|text| {
+        let mut lines = text.lines();
+        matches!((lines.next(), lines.next()), (Some(dir), Some(common)) if dir != common)
+    })
+}
+
 /// The repository root, from git.
 pub fn repository_root() -> Result<PathBuf, String> {
     let top = git(Path::new("."), &["rev-parse", "--show-toplevel"])?;

@@ -396,6 +396,19 @@ pub(crate) fn drain_outgoing() -> Vec<ShellRequest> {
     with_ctx_mut(|ctx| ctx.outgoing.drain(..).collect()).unwrap_or_default()
 }
 
+/// Take the queued request that names `window` the consent window out of the queue, if the program made one: the
+/// window's surface is created now, and the server learns of it before any commit.
+pub(crate) fn take_consent_window(window: &WindowKey) -> bool {
+    with_ctx_mut(|ctx| {
+        let before = ctx.outgoing.len();
+        ctx.outgoing.retain(
+            |request| !matches!(request, ShellRequest::ConsentSetWindow { window: w } if w == window),
+        );
+        ctx.outgoing.len() != before
+    })
+    .unwrap_or(false)
+}
+
 /// Enqueue a protocol request on the calling thread's component context.
 pub(crate) fn push_request(req: ShellRequest) {
     let _ = with_ctx_mut(|ctx| ctx.outgoing.push_back(req));

@@ -318,7 +318,14 @@ impl ShellRoles {
             .layer_shell
             .as_ref()
             .ok_or_else(|| unsupported("the server offers no layer shell"))?;
+        // The consent panel is the authority's before its keyboard claim reaches the server: the initial commit
+        // (made as the surface is created) goes without the claim and the claim follows `set_surface`, so a desktop
+        // control run is not paused for the moment the server cannot yet tell the panel from another prompt surface.
+        let consent = context::take_consent_window(&key);
         let mut config = layer_config(spec);
+        if consent {
+            config.keyboard = wire_keyboard(Keyboard::None);
+        }
         let role_output = match role {
             Role::MenuBar(_) | Role::Dock(_) => {
                 let output = config
@@ -344,6 +351,13 @@ impl ShellRoles {
                 }
                 _ => win.dock = Some(shell.dock(conn, surface, output).map_err(transport)?),
             }
+        }
+        if consent {
+            if let Some(authority) = &self.globals.consent {
+                let _ = authority.set_surface(conn, surface);
+            }
+            layer.set_keyboard_interactivity(wire_keyboard(spec.keyboard));
+            conn.commit_state(surface)?;
         }
         win.layer = Some(layer);
         if let (Some(persistent), Some(link)) = (persistent, &self.link) {

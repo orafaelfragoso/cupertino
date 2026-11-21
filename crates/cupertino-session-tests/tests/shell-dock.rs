@@ -13,6 +13,8 @@
 #[path = "shell/components.rs"]
 #[allow(dead_code)]
 mod components;
+#[path = "shell/memory.rs"]
+mod memory;
 // shared with `shell-host.rs`, which uses what this test does not
 #[allow(dead_code)]
 #[path = "shell-host/rig.rs"]
@@ -29,6 +31,7 @@ use cupertino_server::host::HostKind;
 use zbus::blocking::Connection;
 
 use components::{BAR_SIZE, GREEN, YELLOW};
+use memory::{steady_allocator, HostMemory, CRASHES_IN_A_ROW, RESTARTS};
 use rig::{count, Area, Rig};
 
 /// The host program of this test: `cupertino-shell`'s own (`cupertino_shell::run`) with the test menu bar and the
@@ -264,47 +267,14 @@ fn crash_dock(rig: &mut Rig, session: &Connection, gone: &mut HashSet<String>, a
         .unwrap_or_else(|e| panic!("the crash at {at} is sent: {e}"));
 }
 
-/// The host process's anonymous memory (its heap and stacks, which a leak grows), in KiB.
-fn anonymous(pid: u32) -> u64 {
-    let rollup =
-        std::fs::read_to_string(format!("/proc/{pid}/smaps_rollup")).expect("the host's memory");
-    rollup
-        .lines()
-        .find_map(|line| line.strip_prefix("Anonymous:"))
-        .and_then(|kib| kib.trim().trim_end_matches("kB").trim().parse().ok())
-        .expect("the host's anonymous memory")
-}
-
-/// Turns over which the host's memory is sampled for one measurement ([`settled_anonymous`]).
+/// Turns the server takes after a dock started again, for what it does as it starts to be over before its host's memory
+/// is measured.
 const SETTLE_TURNS: u32 = 100;
-
-/// The host's anonymous memory once what an instance does as it starts is over, in KiB: the least of it over
-/// [`SETTLE_TURNS`]. A restarted dock shows its bar at once and reads its start and loads its icons on the I/O pool
-/// after, which holds several MiB for a while.
-fn settled_anonymous(rig: &mut Rig, pid: u32) -> u64 {
-    let mut least = anonymous(pid);
-    for _ in 0..SETTLE_TURNS {
-        rig.turn();
-        least = least.min(anonymous(pid));
-    }
-    least
-}
-
-/// Crashes injected into the dock, after which each restarts alone.
-const RESTARTS: u32 = 50;
-/// Crashes after which the server gives a component up (D16: five within a minute); a restart the person asks for
-/// then starts it again and forgets them.
-const CRASHES_IN_A_ROW: u32 = 5;
-/// Restarts after which the host's memory is measured the first time: the host's first allocations of a component
-/// (its caches, the allocator's arenas) are made by then.
-const WARM_RESTARTS: u32 = 10;
-/// How much the host's anonymous memory may grow between that measurement and the last restart, in KiB: well below
-/// what one leaked instance holds (its 8 MiB stack, its bar's buffers and icons).
-const ANONYMOUS_GROWTH_KIB: u64 = 4 * 1024;
 
 #[test]
 fn the_dock_restarts_alone_holding_its_place_after_injected_panics() {
     let session = Session::start();
+    steady_allocator();
     let mut rig = Rig::new("dock", &["dock", "menubar"], &[]);
     cupertino_server::quit::start_session_service_on(&mut rig.state, Some(session.bus.1.clone()));
     let bus = zbus::blocking::connection::Builder::session()
@@ -330,7 +300,7 @@ fn the_dock_restarts_alone_holding_its_place_after_injected_panics() {
     let mut colours = HashSet::new();
     let mut held = false;
     let first_instance = rig.state.hosts.component_instance("dock");
-    let mut warm = None;
+    let mut host_memory = HostMemory::of(host);
     for crash in 0..RESTARTS {
         let at = ["paint", "dispatch", "helper"][crash as usize % 3];
         crash_dock(&mut rig, &bus, &mut gone, at);
@@ -405,16 +375,13 @@ fn the_dock_restarts_alone_holding_its_place_after_injected_panics() {
                         .all(|h| h.component != "dock")
             },
         );
-        // the restarted dock reads its start on the I/O pool after it shows its bar: that is over before the next crash
-        let settled = settled_anonymous(&mut rig, host);
-        if crash + 1 == WARM_RESTARTS {
-            warm = Some(settled);
+        // the restarted dock shows its bar at once and reads its start and loads its icons on the I/O pool after, which
+        // holds several MiB until it is done: that is over before the host is measured (nothing says when it is)
+        for _ in 0..SETTLE_TURNS {
+            rig.turn();
         }
+        host_memory.restarted(crash + 1);
     }
-    let (warm, last) = (warm.unwrap(), settled_anonymous(&mut rig, host));
-    eprintln!(
-        "host anonymous memory after {WARM_RESTARTS} restarts: {warm} KiB; after {RESTARTS}: {last} KiB"
-    );
 
     assert_eq!(
         rig.host_pid(HostKind::Shared),
@@ -433,11 +400,7 @@ fn the_dock_restarts_alone_holding_its_place_after_injected_panics() {
     );
     assert!(held, "the server held the bar's picture while it restarted");
     assert!(!rig.state.hosts.component_gave_up("dock"));
-    assert!(
-        last <= warm + ANONYMOUS_GROWTH_KIB,
-        "the host's anonymous memory grew from {warm} KiB to {last} KiB over {} restarts",
-        RESTARTS - WARM_RESTARTS
-    );
+    host_memory.assert_nothing_kept(&mut rig);
     // the restarted bar keeps its place
     assert_eq!(rig.state.usable_area(output), usable);
 }

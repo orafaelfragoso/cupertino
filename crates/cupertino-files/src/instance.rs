@@ -1,6 +1,6 @@
 //! One Files process per session. The process that starts first claims [`BUS_NAME`] on the session bus and serves
-//! `org.freedesktop.Application` at [`OBJECT_PATH`]; every later launch hands its request to that process and exits
-//! ([`serve_or_forward`]), so file operations, their progress window and the pasteboard stay in one process.
+//! `org.freedesktop.Application` at [`OBJECT_PATH`] ([`Service::serve`]); every later launch hands its request to that
+//! process and exits ([`forward`]), so file operations, their progress window and the pasteboard stay in one process.
 //!
 //! * `Activate` brings the most recently opened browser window forward, or opens one on the home folder when none is
 //!   open.
@@ -21,9 +21,10 @@
 //! brings forward. Only an unsandboxed process of the same user may call: the caller's process is named by the bus
 //! daemon's credentials and refused when it runs in a Flatpak or a Snap.
 //!
-//! The service's connection reads no signals: the name is claimed with a plain `RequestName` call, so the one bus call
-//! made for each incoming call (the caller's credentials) never waits behind a full signal queue. The window's thread
-//! never waits on the bus: a call reaches it through a channel and the bus thread waits for its answer. A call that
+//! The service's connection is the program's session connection, which its UI loop ticks (`cupertino_kit::bus`). It
+//! reads no signals: the name is claimed with a plain `RequestName` call, so the one bus call made for each incoming
+//! call (the caller's credentials) never waits behind a full signal queue. Nothing waits on the bus: a call reaches the
+//! window through a channel, and the call's handler waits for the answer as a future of the connection. A call that
 //! comes while Files quits fails with `org.freedesktop.DBus.Error.Disconnected`, and the launch claims the name again.
 
 use std::collections::HashMap;
@@ -32,13 +33,13 @@ use std::io;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use percent_encoding::{percent_decode_str, percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use zbus::fdo::ConnectionCredentials;
 use zbus::names::{OwnedUniqueName, UniqueName};
 use zbus::zvariant::{OwnedValue, Value};
-use zbus::{connection, Connection};
+use zbus::Connection;
 
 use crate::trash::Trash;
 
@@ -58,10 +59,6 @@ pub const FILE_MANAGER_INTERFACE: &str = "org.freedesktop.FileManager1";
 /// How long a launch waits for the running Files to answer. A Files that has not answered by then and still owns the
 /// name is taken to hang: the launch fails rather than starting a second process.
 pub const FORWARD_TIMEOUT: Duration = Duration::from_secs(3);
-/// How long a launch keeps trying while the running Files is quitting and has not yet let go of the name.
-const HANDOVER_WINDOW: Duration = Duration::from_secs(5);
-/// The pause between two tries while the running Files quits.
-const RETRY_PAUSE: Duration = Duration::from_millis(50);
 
 /// The longest activation token taken.
 const MAX_TOKEN: usize = 4096;
@@ -171,7 +168,12 @@ impl Target {
     }
 
     /// The folder a window shows for the target. The trash's folder is `files` of the home trash, made with `info`
-    /// when nothing was trashed yet (the freedesktop Trash specification lets the implementation create it).
+    /// when nothing was trashed yet (the freedesktop Trash specification lets the implementation create it): two
+    /// folders in the home's data folder, made by a launch before its loop starts and by a call that names the trash.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "two mkdir calls in the home's data folder, before the loop or for a call that names the trash"
+    )]
     pub fn folder(&self, trash: &Trash) -> io::Result<PathBuf> {
         match self {
             Target::Folder(path) => Ok(path.clone()),
@@ -220,7 +222,7 @@ impl Call {
 }
 
 /// The served name: the calls waiting for the window's thread and what wakes it for them. Dropping it refuses every
-/// waiting and later call and gives the name up.
+/// waiting and later call; [`Service::release`] gives the name up too.
 pub struct Service {
     connection: Connection,
     calls: async_channel::Receiver<Call>,
@@ -228,9 +230,9 @@ pub struct Service {
 }
 
 impl Service {
-    /// Export the application object and claim [`BUS_NAME`] without queueing, on the bus `builder` connects to.
-    /// Fails with `zbus::Error::NameTaken` when another process owns the name.
-    pub fn serve(builder: connection::Builder<'static>) -> zbus::Result<Service> {
+    /// Export the application object on `connection` and claim [`BUS_NAME`] without queueing. Fails with
+    /// `zbus::Error::NameTaken` when another process owns the name, and takes the objects back then.
+    pub async fn serve(connection: &Connection) -> zbus::Result<Service> {
         let (calls_in, calls) = async_channel::bounded(MAX_WAITING);
         let (wake, woken) = async_channel::bounded(1);
         let object = Application {
@@ -239,27 +241,30 @@ impl Service {
             own_uid: own_uid(),
         };
         let file_manager = FileManager(object.clone());
-        zbus::block_on(async {
-            let connection = builder
-                .serve_at(OBJECT_PATH, object)?
-                .serve_at(FILE_MANAGER_PATH, file_manager)?
-                .build()
-                .await?;
-            // after the object exists, so no call finds the name without it; a plain call, so the connection reads no
-            // signals (zbus's own `request_name` follows the name's loss with a signal stream)
-            match request_name(&connection, BUS_NAME, DO_NOT_QUEUE).await? {
-                PRIMARY_OWNER | ALREADY_OWNER => {}
-                _ => return Err(zbus::Error::NameTaken),
-            }
-            // in line behind another file manager that holds it: the bus hands it over once that one lets go
-            if let Err(e) = request_name(&connection, FILE_MANAGER_NAME, 0).await {
-                eprintln!("cupertino-files: cannot claim {FILE_MANAGER_NAME}: {e}");
-            }
-            Ok(Service {
-                connection,
-                calls,
-                woken,
-            })
+        let server = connection.object_server();
+        server.at(OBJECT_PATH, object).await?;
+        server.at(FILE_MANAGER_PATH, file_manager).await?;
+        // after the object exists, so no call finds the name without it; a plain call, so the connection reads no
+        // signals (zbus's own `request_name` follows the name's loss with a signal stream)
+        let claimed = match request_name(connection, BUS_NAME, DO_NOT_QUEUE).await {
+            Ok(PRIMARY_OWNER | ALREADY_OWNER) => Ok(()),
+            Ok(_) => Err(zbus::Error::NameTaken),
+            Err(e) => Err(e),
+        };
+        if let Err(e) = claimed {
+            // a later try exports objects of its own, whose calls reach the window
+            let _ = server.remove::<Application, _>(OBJECT_PATH).await;
+            let _ = server.remove::<FileManager, _>(FILE_MANAGER_PATH).await;
+            return Err(e);
+        }
+        // in line behind another file manager that holds it: the bus hands it over once that one lets go
+        if let Err(e) = request_name(connection, FILE_MANAGER_NAME, 0).await {
+            eprintln!("cupertino-files: cannot claim {FILE_MANAGER_NAME}: {e}");
+        }
+        Ok(Service {
+            connection: connection.clone(),
+            calls,
+            woken,
         })
     }
 
@@ -272,28 +277,33 @@ impl Service {
     pub fn take(&self) -> Vec<Call> {
         std::iter::from_fn(|| self.calls.try_recv().ok()).collect()
     }
-}
 
-/// Dropping the service refuses every waiting and later call, and gives the name up on a thread of its own, so a
-/// launch racing the exit starts a new Files at once instead of handing over to this one.
-impl Drop for Service {
-    fn drop(&mut self) {
-        self.calls.close();
-        drop(self.take());
+    /// Refuse every waiting and later call and give the names up, so a launch racing the exit starts a new Files at
+    /// once instead of handing over to this one.
+    pub fn release(self) -> impl std::future::Future<Output = ()> + Send + 'static {
         let connection = self.connection.clone();
-        let _ = std::thread::Builder::new()
-            .name("files-release".into())
-            .spawn(move || {
-                for name in [BUS_NAME, FILE_MANAGER_NAME] {
-                    let _ = zbus::block_on(connection.call_method(
+        drop(self);
+        async move {
+            for name in [BUS_NAME, FILE_MANAGER_NAME] {
+                let _ = connection
+                    .call_method(
                         Some("org.freedesktop.DBus"),
                         "/org/freedesktop/DBus",
                         Some("org.freedesktop.DBus"),
                         "ReleaseName",
                         &(name,),
-                    ));
-                }
-            });
+                    )
+                    .await;
+            }
+        }
+    }
+}
+
+/// Dropping the service refuses every waiting and later call.
+impl Drop for Service {
+    fn drop(&mut self) {
+        self.calls.close();
+        drop(self.take());
     }
 }
 
@@ -582,6 +592,10 @@ async fn credentials(
 /// descriptor the daemon passed (`ProcessFD`), so its id cannot name another process while it is judged; a daemon
 /// that passes none is asked for the `ProcessID`, and a descriptor is opened for it here. A process that is gone, or
 /// whose root cannot be read, is refused. `proc_root` is `/proc`.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "reads the kernel's process table (/proc), which answers from memory and never waits on a disk"
+)]
 fn judge(
     credentials: &ConnectionCredentials,
     own_uid: u32,
@@ -630,6 +644,10 @@ fn judge(
 
 /// The AppArmor label of the process at `process` (its `/proc` entry): AppArmor's own entry, else the one of the first
 /// security module, which is AppArmor's when it is the only one that keeps a label.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "reads the kernel's process table (/proc), which answers from memory and never waits on a disk"
+)]
 fn apparmor_label(process: &Path) -> Option<Vec<u8>> {
     std::fs::read(process.join("attr/apparmor/current"))
         .or_else(|_| std::fs::read(process.join("attr/current")))
@@ -650,6 +668,10 @@ fn pidfd_open(pid: u32) -> io::Result<std::os::fd::OwnedFd> {
 }
 
 /// The process id a pidfd names, as the kernel shows it.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "reads the kernel's process table (/proc), which answers from memory and never waits on a disk"
+)]
 fn pid_of(fd: BorrowedFd<'_>) -> Option<u32> {
     let info = std::fs::read_to_string(format!("/proc/self/fdinfo/{}", fd.as_raw_fd())).ok()?;
     info.lines()
@@ -671,64 +693,15 @@ fn exited(fd: BorrowedFd<'_>) -> bool {
     ready > 0 && poll.revents & libc::POLLIN != 0
 }
 
-/// How a launch went.
-pub enum Launch {
-    /// This process owns the name: it serves while the service lives.
-    Serve(Service),
-    /// The running Files took the request: this process exits.
-    Forwarded,
-}
-
-/// Why a launch neither serves nor handed over.
-#[derive(Debug)]
-pub enum LaunchError {
-    /// The name could not be claimed for another reason than its owner: no session bus, or one that refuses it. Files
-    /// can still run, alone.
-    NoBus(zbus::Error),
-    /// Another process owns the name and did not take the request.
-    Refused(String),
-}
-
-impl std::fmt::Display for LaunchError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            LaunchError::NoBus(e) => write!(f, "cannot claim {BUS_NAME}: {e}"),
-            LaunchError::Refused(why) => f.write_str(why),
-        }
-    }
-}
-
-/// Serve [`BUS_NAME`] on the bus `connect` reaches, or hand `request` (with `token`) to the process that owns it,
-/// waiting `timeout` for its answer. An owner that is quitting is waited for, and the name claimed once it has let
-/// go; an owner that does not answer in time and still holds the name fails the launch, so two Files never run at once.
-pub fn serve_or_forward(
-    connect: impl Fn() -> zbus::Result<connection::Builder<'static>>,
-    request: &Request,
-    token: Option<&str>,
-    timeout: Duration,
-) -> Result<Launch, LaunchError> {
-    let deadline = Instant::now() + timeout + HANDOVER_WINDOW;
-    loop {
-        match connect().and_then(Service::serve) {
-            Ok(service) => return Ok(Launch::Serve(service)),
-            Err(zbus::Error::NameTaken) => {}
-            Err(e) => return Err(LaunchError::NoBus(e)),
-        }
-        match zbus::block_on(forward(&connect, request, token, timeout)) {
-            Ok(()) => return Ok(Launch::Forwarded),
-            Err(Handover::Retry(why)) if Instant::now() >= deadline => {
-                return Err(LaunchError::Refused(format!(
-                    "the running Files did not take the launch: {why}"
-                )))
-            }
-            Err(Handover::Retry(_)) => std::thread::sleep(RETRY_PAUSE),
-            Err(Handover::Failed(why)) => return Err(LaunchError::Refused(why)),
-        }
-    }
-}
+/// How long a launch keeps trying while the running Files is quitting and has not yet let go of the name, beyond
+/// [`FORWARD_TIMEOUT`].
+pub const HANDOVER_WINDOW: Duration = Duration::from_secs(5);
+/// The pause between two tries while the running Files quits.
+pub const RETRY_PAUSE: Duration = Duration::from_millis(50);
 
 /// Why one hand-over did not happen.
-enum Handover {
+#[derive(Debug)]
+pub enum Handover {
     /// The owner left, or is quitting: claim the name again.
     Retry(String),
     Failed(String),
@@ -762,29 +735,18 @@ fn error_name(e: &zbus::Error) -> Option<String> {
     }
 }
 
-fn timed_out(e: &zbus::Error) -> bool {
-    matches!(e, zbus::Error::InputOutput(e) if e.kind() == io::ErrorKind::TimedOut)
-}
-
-/// Hand `request` to the owner of the name, once.
-async fn forward(
-    connect: &impl Fn() -> zbus::Result<connection::Builder<'static>>,
+/// Hand `request` (with the launch's activation `token`) to the owner of the name on `connection`, once. The caller
+/// bounds the wait for its answer ([`FORWARD_TIMEOUT`]); then [`owner_left`] tells whether to claim the name again.
+pub async fn forward(
+    connection: &Connection,
     request: &Request,
     token: Option<&str>,
-    timeout: Duration,
 ) -> Result<(), Handover> {
-    let failed = |e: zbus::Error| Handover::Failed(e.to_string());
-    let connection = connect()
-        .map_err(failed)?
-        .method_timeout(timeout)
-        .build()
-        .await
-        .map_err(failed)?;
-    let owner = name_owner(&connection).await?;
+    let owner = name_owner(connection).await?;
     // only an owner that runs this very program gets the launch's focus grant; another one (an older install at
     // another path, or a program squatting the name) still gets the request, as a launch without a token does
     let token = match token {
-        Some(token) if runs_this_program(owner_pid(&connection, &owner).await?) => Some(token),
+        Some(token) if runs_this_program(owner_pid(connection, &owner).await?) => Some(token),
         Some(_) => {
             eprintln!(
                 "cupertino-files: {BUS_NAME} is owned by another program; the launch is handed to it without its \
@@ -848,17 +810,18 @@ async fn forward(
                 .await
         }
     };
-    match result {
-        Ok(_) => Ok(()),
-        Err(e) if timed_out(&e) => match name_owner(&connection).await {
-            // the owner left while it was asked: claim the name
-            Err(retry @ Handover::Retry(_)) => Err(retry),
-            _ => Err(Handover::Failed(format!(
-                "the running Files did not answer within {} s and still owns {BUS_NAME}",
-                timeout.as_secs_f32()
-            ))),
-        },
-        Err(e) => Err(e.into()),
+    result.map(drop).map_err(Handover::from)
+}
+
+/// What a hand-over that was not answered within [`FORWARD_TIMEOUT`] comes to: claim the name again when its owner
+/// left while it was asked, else the launch fails, so two Files never run at once.
+pub async fn unanswered(connection: &Connection) -> Handover {
+    match name_owner(connection).await {
+        Err(retry @ Handover::Retry(_)) => retry,
+        _ => Handover::Failed(format!(
+            "the running Files did not answer within {} s and still owns {BUS_NAME}",
+            FORWARD_TIMEOUT.as_secs_f32()
+        )),
     }
 }
 
@@ -878,7 +841,6 @@ async fn name_owner(connection: &Connection) -> Result<OwnedUniqueName, Handover
             .body()
             .deserialize::<OwnedUniqueName>()
             .map_err(|e| Handover::Failed(e.to_string())),
-        Err(e) if timed_out(&e) => Err(Handover::Failed(format!("the bus does not answer: {e}"))),
         Err(e) => Err(e.into()),
     }
 }
@@ -901,6 +863,10 @@ async fn owner_pid(connection: &Connection, owner: &OwnedUniqueName) -> Result<u
 
 /// Whether process `pid` runs the same executable as this process. A binary replaced by a package upgrade while it
 /// runs reads "<path> (deleted)"; it still ran from the same installed path.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "reads the kernel's process table (/proc), which answers from memory and never waits on a disk"
+)]
 fn runs_this_program(pid: u32) -> bool {
     match (
         std::fs::read_link(format!("/proc/{pid}/exe")),

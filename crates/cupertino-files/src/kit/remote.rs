@@ -1,9 +1,9 @@
 //! What the calls of later launches and of the desktop do ([`crate::instance`]): `Activate` brings the most recently
 //! opened browser window forward (or, with none open, the hidden progress window while it has something to list, else
 //! a new window on the home folder), `Open` opens a window on each folder, `ShowItems` selects each item in a window on
-//! its folder (one window a folder, a window already showing it when there is one) once a thread of its own has found
-//! which of them exist, so an item on a mount that does not answer never holds the windows still, and the actions show the progress
-//! window or open a new window. That thread resolves each `..` on the disk too (an `Open` of a folder spelled with one
+//! its folder (one window a folder, a window already showing it when there is one) once an I/O task has found which
+//! of them exist, so an item on a mount that does not answer never holds the windows still, and the actions show the progress
+//! window or open a new window. That task resolves each `..` on the disk too (an `Open` of a folder spelled with one
 //! waits for it as well), and a call whose items are not all looked up within [`LOOK_UP_DEADLINE`] is answered with
 //! those that were. A click on the notice of a file operation's end shows the progress window with it, as
 //! `Activate` does when nothing is left to list. The window a call opens or brings forward is raised with the call's
@@ -146,7 +146,7 @@ impl Model {
         vec![wake, raise(window_key(id), token)]
     }
 
-    /// Find out on a thread of its own what the items of `call` are, each `..` resolved on the disk, and for
+    /// Find out on an I/O task what the items of `call` are, each `..` resolved on the disk, and for
     /// `ShowItems` which of them exist, so an item on a mount that does not answer holds no window still. The call is
     /// answered once that is known, or with what is known by then [`LOOK_UP_DEADLINE`] after it came
     /// ([`Model::looked_up`]).
@@ -291,28 +291,32 @@ pub const MAX_LOOK_UPS: usize = 8;
 /// does not answer holds the caller no longer.
 pub const LOOK_UP_DEADLINE: Duration = Duration::from_secs(4);
 
-/// The most look-up threads alive at once, those that a mount which does not answer still holds past their call's
+/// The most look-up tasks not ended at once, those that a mount which does not answer still holds past their call's
 /// deadline among them; past it a call is refused until one of them ends.
-pub(super) const MAX_LOOK_UP_THREADS: usize = 32;
+pub(super) const MAX_LOOK_UP_TASKS: usize = 32;
 
-/// What tells, on a look-up thread, whether the item at a path exists.
+/// What tells, on a look-up task, whether the item at a path exists.
 pub type LookUp = Arc<dyn Fn(&Path) -> io::Result<()> + Send + Sync>;
 
 /// Whether the item at `path` exists: its own status, a symlink's and not its target's.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "runs on a look-up task, on the I/O pool (kit::task::io)"
+)]
 pub(super) fn look_up_item(path: &Path) -> io::Result<()> {
     std::fs::symlink_metadata(path).map(drop)
 }
 
-/// The calls whose items are being looked up, each on a thread of its own, by the id their message carries.
+/// The calls whose items are being looked up, each by an I/O task, by the id their message carries.
 pub(super) struct LookUps {
     waiting: BTreeMap<u64, Waiting>,
     next: u64,
     look_up: LookUp,
-    /// The look-up threads alive, those of calls already answered among them.
-    threads: Arc<AtomicUsize>,
+    /// The look-up tasks not ended, those of calls already answered among them.
+    tasks: Arc<AtomicUsize>,
 }
 
-/// A call waiting for its items, and what its thread found of them so far.
+/// A call waiting for its items, and what its task found of them so far.
 struct Waiting {
     call: Call,
     found: Arc<Mutex<Vec<Found>>>,
@@ -324,7 +328,7 @@ impl LookUps {
             waiting: BTreeMap::new(),
             next: 0,
             look_up,
-            threads: Arc::new(AtomicUsize::new(0)),
+            tasks: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -333,37 +337,38 @@ impl LookUps {
         self.waiting.is_empty()
     }
 
-    /// Look the `paths` of `call` up on a thread of its own, each `..` resolved, and with `exists` whether each item
-    /// exists: the call's message comes once they are looked up, and at the latest [`LOOK_UP_DEADLINE`] later. Past
-    /// [`MAX_LOOK_UPS`] calls waiting, or [`MAX_LOOK_UP_THREADS`] threads alive, the call is refused.
+    /// Look the `paths` of `call` up on an I/O task, each `..` resolved, and with `exists` whether each item exists:
+    /// the call's message comes once they are looked up, and at the latest [`LOOK_UP_DEADLINE`] later. Past
+    /// [`MAX_LOOK_UPS`] calls waiting, or [`MAX_LOOK_UP_TASKS`] tasks not ended, the call is refused.
     fn start(&mut self, call: Call, paths: Vec<PathBuf>, exists: bool) -> Vec<Command<Message>> {
         if self.waiting.len() >= MAX_LOOK_UPS {
             call.refuse("too many items are being looked up");
             return Vec::new();
         }
         let look = exists.then(|| Arc::clone(&self.look_up));
-        let looking = match look_up_items(paths, look, &self.threads) {
-            Ok(looking) => looking,
-            Err(why) => {
-                call.refuse(why);
-                return Vec::new();
-            }
+        let Some(held) = Held::take(&self.tasks) else {
+            call.refuse("too many items are held by mounts that do not answer");
+            return Vec::new();
         };
+        let found = Arc::new(Mutex::new(Vec::with_capacity(paths.len())));
         let id = self.next;
         self.next += 1;
         self.waiting.insert(
             id,
             Waiting {
                 call,
-                found: looking.found,
+                found: Arc::clone(&found),
             },
         );
-        let done = looking.done;
         vec![
-            Command::Perform(Box::pin(async move {
-                let _ = done.recv().await;
-                Message::LookedUp(id)
-            })),
+            cupertino_kit::task::io(
+                LOOK_UP_DEADLINE,
+                move || {
+                    let _held = held;
+                    look_up_items(&paths, look.as_ref(), &found);
+                },
+                move |()| Message::LookedUp(id),
+            ),
             Command::After {
                 delay: LOOK_UP_DEADLINE,
                 message: Message::LookedUp(id),
@@ -379,24 +384,18 @@ impl LookUps {
     }
 }
 
-/// What a look-up thread found so far, and what closes once it is done.
-struct Looking {
-    found: Arc<Mutex<Vec<Found>>>,
-    done: async_channel::Receiver<()>,
-}
-
-/// One look-up thread alive, counted in the threads it holds until it ends.
+/// One look-up task not ended, counted in the tasks it holds until it ends.
 struct Held(Arc<AtomicUsize>);
 
 impl Held {
-    /// One more thread, unless [`MAX_LOOK_UP_THREADS`] are alive.
-    fn take(threads: &Arc<AtomicUsize>) -> Option<Held> {
-        threads
+    /// One more task, unless [`MAX_LOOK_UP_TASKS`] have not ended.
+    fn take(tasks: &Arc<AtomicUsize>) -> Option<Held> {
+        tasks
             .try_update(Ordering::AcqRel, Ordering::Acquire, |alive| {
-                (alive < MAX_LOOK_UP_THREADS).then_some(alive + 1)
+                (alive < MAX_LOOK_UP_TASKS).then_some(alive + 1)
             })
             .ok()?;
-        Some(Held(Arc::clone(threads)))
+        Some(Held(Arc::clone(tasks)))
     }
 }
 
@@ -415,6 +414,10 @@ fn lock(found: &Mutex<Vec<Found>>) -> std::sync::MutexGuard<'_, Vec<Found>> {
 /// `path` with each `..` resolved on the disk, as opening it resolves it: the part up to its last `..` made
 /// canonical (the `..` of a symlinked folder is its target's parent), the rest kept as spelled. A path without `..`
 /// is kept as it is, without reading the disk.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "runs on a look-up task, on the I/O pool (kit::task::io)"
+)]
 fn resolve(path: &Path) -> io::Result<PathBuf> {
     let parts: Vec<Component> = path.components().collect();
     let Some(last) = parts.iter().rposition(|c| *c == Component::ParentDir) else {
@@ -425,7 +428,7 @@ fn resolve(path: &Path) -> io::Result<PathBuf> {
     Ok(resolved)
 }
 
-/// An item a call names as its thread found it: where it is, each `..` resolved, or why it is not there.
+/// An item a call names as its task found it: where it is, each `..` resolved, or why it is not there.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Found {
     Here(PathBuf),
@@ -455,34 +458,17 @@ impl LookUpError {
     }
 }
 
-/// Resolve each of `paths` ([`resolve`]) and, given `look`, look it up with it, on a thread of its own counted in
-/// `threads`: what was found is added as each path is, in order, and the channel closes once every path was. Refused
-/// with why when [`MAX_LOOK_UP_THREADS`] are alive or no thread could be started.
-fn look_up_items(
-    paths: Vec<PathBuf>,
-    look: Option<LookUp>,
-    threads: &Arc<AtomicUsize>,
-) -> Result<Looking, &'static str> {
-    let held = Held::take(threads).ok_or("too many items are held by mounts that do not answer")?;
-    let found = Arc::new(Mutex::new(Vec::with_capacity(paths.len())));
-    let (sent, done) = async_channel::bounded::<()>(1);
-    let into = Arc::clone(&found);
-    std::thread::Builder::new()
-        .name("files-look-up".into())
-        .spawn(move || {
-            let _held = held;
-            for path in &paths {
-                let item = resolve(path).and_then(|resolved| {
-                    look.as_ref().map_or(Ok(()), |look| look(&resolved))?;
-                    Ok(resolved)
-                });
-                lock(&into).push(match item {
-                    Ok(path) => Found::Here(path),
-                    Err(e) => Found::Missing(LookUpError::of(&e)),
-                });
-            }
-            drop(sent);
-        })
-        .map_err(|_| "no thread could look the items up")?;
-    Ok(Looking { found, done })
+/// Resolve each of `paths` ([`resolve`]) and, given `look`, look it up with it: what was found is added to `found` as
+/// each path is, in order. Blocks on the file system: a look-up task runs it.
+fn look_up_items(paths: &[PathBuf], look: Option<&LookUp>, found: &Mutex<Vec<Found>>) {
+    for path in paths {
+        let item = resolve(path).and_then(|resolved| {
+            look.map_or(Ok(()), |look| look(&resolved))?;
+            Ok(resolved)
+        });
+        lock(found).push(match item {
+            Ok(path) => Found::Here(path),
+            Err(e) => Found::Missing(LookUpError::of(&e)),
+        });
+    }
 }

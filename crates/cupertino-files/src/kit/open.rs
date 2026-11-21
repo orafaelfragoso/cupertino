@@ -139,7 +139,7 @@ impl BrowserWindow {
         let resolve = link.clone();
         vec![cupertino_kit::task::io(
             ORIGINAL_DEADLINE,
-            move || std::fs::canonicalize(&resolve).map_err(|e| e.to_string()),
+            move || original(&resolve),
             move |target| Message::Window(id, Event::Original(link, target)),
         )]
     }
@@ -160,4 +160,13 @@ impl BrowserWindow {
         };
         self.go_selecting(parent, Some(target));
     }
+}
+
+/// Where `link` leads, every link on the way followed, or why it cannot be found.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "runs on the I/O pool (kit::task::io)"
+)]
+fn original(link: &Path) -> Result<PathBuf, String> {
+    std::fs::canonicalize(link).map_err(|e| e.to_string())
 }

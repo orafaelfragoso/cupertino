@@ -10,8 +10,8 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use cupertino_apps::{Locale, MimeApps, MimeDatabase, Visibility, XdgDirs};
-use cupertino_files::instance::{self, Launch, LaunchError, Request, Service, Target};
-use cupertino_files::kit::{self, Start};
+use cupertino_files::instance::{self, Request, Target};
+use cupertino_files::kit::{self, Buses, Ended, Start};
 use cupertino_files::trash::Trash;
 use cupertino_files::window_prefs;
 use cupertino_icons::thumbnail::Thumbnailer;
@@ -81,45 +81,13 @@ fn main() -> ExitCode {
     };
     // before any thread starts, so no program Files starts inherits the launch's spent token
     let token = instance::take_activation_token();
-    if options.service {
+    let buses = match (&options.service, &options.target) {
         // the bus started Files for a call to one of its names: the running Files already takes those calls
-        let service = match zbus::connection::Builder::session().and_then(Service::serve) {
-            Ok(service) => service,
-            Err(zbus::Error::NameTaken) => return ExitCode::SUCCESS,
-            Err(e) => {
-                diag::exit_error(&e);
-                eprintln!("cupertino-files: cannot claim {}: {e}", instance::BUS_NAME);
-                return ExitCode::FAILURE;
-            }
-        };
-        return run(start(options, Some(service), None));
-    }
-    let request = match &options.target {
-        Some(target) => Request::Open(vec![target.clone()]),
-        None => Request::Activate,
+        (true, _) => Buses::Service,
+        (false, Some(target)) => Buses::Launch(Request::Open(vec![target.clone()])),
+        (false, None) => Buses::Launch(Request::Activate),
     };
-    let service = match instance::serve_or_forward(
-        zbus::connection::Builder::session,
-        &request,
-        token.as_deref(),
-        instance::FORWARD_TIMEOUT,
-    ) {
-        Ok(Launch::Serve(service)) => Some(service),
-        Ok(Launch::Forwarded) => return ExitCode::SUCCESS,
-        Err(LaunchError::NoBus(e)) => {
-            eprintln!(
-                "cupertino-files: a later launch cannot reach this one: cannot claim {}: {e}",
-                instance::BUS_NAME
-            );
-            None
-        }
-        Err(e @ LaunchError::Refused(_)) => {
-            diag::exit_error(&e);
-            eprintln!("cupertino-files: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    run(start(options, service, token))
+    run(start(options, token).map(|start| start.with_buses(buses)))
 }
 
 /// Run Files from `start`, or say why it cannot start.
@@ -133,7 +101,12 @@ fn run(start: io::Result<Start>) -> ExitCode {
         }
     };
     match kit::run(start) {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(Ended::Closed) => ExitCode::SUCCESS,
+        Ok(Ended::Refused(why)) => {
+            diag::exit_error(&why);
+            eprintln!("cupertino-files: {why}");
+            ExitCode::FAILURE
+        }
         Err(e) => {
             diag::exit_error(&e);
             eprintln!("cupertino-files: {e}");
@@ -147,9 +120,8 @@ fn other(e: impl std::fmt::Display) -> io::Error {
 }
 
 /// The first window of the session: its folder listed, the session's places and file types, the Recents of the data
-/// folder, notices on the session bus, removable media on the system bus, the icons of the asset packs and the icon
-/// theme, and pictures' thumbnails in the session's thumbnail cache.
-fn start(options: Options, service: Option<Service>, token: Option<String>) -> io::Result<Start> {
+/// folder, the icons of the asset packs and the icon theme, and pictures' thumbnails in the session's thumbnail cache.
+fn start(options: Options, token: Option<String>) -> io::Result<Start> {
     let dirs = XdgDirs::from_env().map_err(other)?;
     let home = PathBuf::from(
         std::env::var_os("HOME")
@@ -174,11 +146,7 @@ fn start(options: Options, service: Option<Service>, token: Option<String>) -> i
     // one database for the Kind column, the icons and what opens an item, so all name the same type
     let types = Arc::new(MimeDatabase::load(&dirs.all_data_dirs()).map_err(other)?);
     let icons = FileIcons::discover((*types).clone(), folder_icons.into_iter().collect());
-    let (notices, posting) = kit::session_notices();
     let assets = cupertino_assets::Assets::discover();
-    let system = zbus::blocking::Connection::system()
-        .map_err(|e| eprintln!("cupertino-files: no removable media: {e}"))
-        .ok();
     let recents = dirs.data_home.join(recents::XBEL_NAME);
     let start = match options.service {
         // started for a call, which says what to open
@@ -186,20 +154,16 @@ fn start(options: Options, service: Option<Service>, token: Option<String>) -> i
             places,
             Some(types),
             recents,
-            notices,
             Box::new(applications),
             options.terminal,
-            system,
         ),
         false => Start::open(
             folder.clone(),
             places,
             Some(types),
             recents,
-            notices,
             Box::new(applications),
             options.terminal,
-            system,
         ),
     };
     let start = start
@@ -209,9 +173,7 @@ fn start(options: Options, service: Option<Service>, token: Option<String>) -> i
             cupertino_icons::SystemIcons::new(&assets),
         )
         .with_thumbnails(Thumbnailer::from_env(kit::APP_ID))
-        .with_posting(posting)
         .with_places_source(source, watched)
-        .with_instance(service)
         .with_activation_token(token);
     Ok(match window_prefs::location() {
         Some(file) => start.with_prefs_file(file),

@@ -74,7 +74,12 @@ pub struct TextPreview {
 }
 
 /// Read the start of the text file at `path` ([`TextPreview`]); `Ok(None)` when it is not text, or not a plain file:
-/// a pipe or a device, even one put in the file's place since it was listed, is never opened to wait on it or read.
+/// a pipe or a device, even one put in the file's place since it was listed, is never opened to wait on it or read. It
+/// blocks on the file system: a program runs it on an I/O task.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a blocking read that programs run on the I/O pool (kit::task::io)"
+)]
 pub fn read_text(path: &Path) -> io::Result<Option<TextPreview>> {
     if !std::fs::metadata(path)?.is_file() {
         return Ok(None);

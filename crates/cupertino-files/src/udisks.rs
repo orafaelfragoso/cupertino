@@ -7,24 +7,29 @@
 //! which lives in a [`Passphrase`] that is wiped when dropped and never printed. A call that fails is reported as one
 //! notification ([`notice`]), naming the programs that keep a busy file system in use ([`holders`]); a prompt the
 //! person dismissed is not.
+//!
+//! Nothing here waits: the reads and the calls are futures on the system bus connection the program's loop ticks
+//! (`cupertino_kit::bus`), and what reads files (the process table, [`holders`]) is for the program's I/O tasks.
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
+use std::future::Future;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex};
+use std::pin::{pin, Pin};
+use std::sync::Arc;
+use std::task::Poll;
+use std::time::{Duration, Instant};
 
-use zbus::blocking::fdo::ObjectManagerProxy;
-use zbus::blocking::{Connection, MessageIterator};
-use zbus::fdo::ManagedObjects;
+use zbus::export::futures_core::Stream;
+use zbus::fdo::{ManagedObjects, ObjectManagerProxy};
 use zbus::message::Type;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
-use zbus::MatchRule;
+use zbus::{Connection, MatchRule, MessageStream};
 
 use crate::format::human_size;
 use cupertino_kit::files::natural::compare_names;
-use cupertino_kit::files::notice::{escape, shown, Notice, Notices};
+use cupertino_kit::files::notice::{escape, shown, Notice};
 use cupertino_kit::files::places::{Medium, Place};
 
 pub const UDISKS_NAME: &str = "org.freedesktop.UDisks2";
@@ -197,6 +202,10 @@ fn first_mount(filesystem: &HashMap<String, OwnedValue>) -> Option<PathBuf> {
     (!bytes.is_empty()).then(|| PathBuf::from(OsStr::from_bytes(bytes)))
 }
 
+/// How long reading which programs hold a busy file system should take: a link read per open descriptor of every
+/// process.
+pub const HOLDERS_DEADLINE: Duration = Duration::from_secs(5);
+
 /// What a call was for, which words its failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Operation {
@@ -211,7 +220,12 @@ pub fn notice(operation: Operation, name: &str, e: &zbus::Error) -> Option<Notic
 }
 
 /// The names of the programs that hold a file or a working folder under `mount`, read from the process table at
-/// `proc` (`/proc`): sorted, each once. Processes whose table can't be read, as another user's, are left out.
+/// `proc` (`/proc`): sorted, each once. Processes whose table can't be read, as another user's, are left out. It reads
+/// every process's descriptors: run it on an I/O task ([`HOLDERS_DEADLINE`]).
+#[expect(
+    clippy::disallowed_methods,
+    reason = "runs on the I/O pool (kit::task::io)"
+)]
 pub fn holders(proc: &Path, mount: &Path) -> Vec<String> {
     let Ok(processes) = std::fs::read_dir(proc) else {
         return Vec::new();
@@ -318,25 +332,74 @@ pub enum Report {
     Done { object: OwnedObjectPath },
 }
 
-/// The removable media of a system bus: a reader that reports the devices whenever udisks changes them, and the calls.
+/// How a call went.
+#[derive(Debug)]
+pub enum Called {
+    /// It ended: its report, and the notification of its failure.
+    Ended(Report, Option<Notice>),
+    /// The file system to mount is not there yet: [`Volumes::mount_again`] after [`CLEARTEXT_RETRY`].
+    Later(Pending),
+    /// An eject found a file system busy: [`Busy::ended`] with the programs that hold it ([`holders`]).
+    Busy(Busy),
+}
+
+/// A mount to try again: the device the window asked for, the block whose file system is mounted, and until when.
+#[derive(Debug)]
+pub struct Pending {
+    device: Device,
+    block: OwnedObjectPath,
+    until: Instant,
+}
+
+/// An eject that found the file system `name`, mounted at `mount`, busy.
+#[derive(Debug)]
+pub struct Busy {
+    device: OwnedObjectPath,
+    name: String,
+    mount: PathBuf,
+    error: zbus::Error,
+}
+
+impl Busy {
+    /// Where the busy file system is mounted, which [`holders`] looks under.
+    pub fn mount(&self) -> &Path {
+        &self.mount
+    }
+
+    /// The eject's end, its notification naming `holders`, the programs that keep the file system in use.
+    pub fn ended(self, holders: &[String]) -> Called {
+        Called::Ended(
+            Report::Done {
+                object: self.device,
+            },
+            notice_of(Operation::Eject, &self.name, &self.error, holders, None),
+        )
+    }
+}
+
+/// The signals that tell udisks changed: its own, and its name's owner coming and going.
+struct Signals {
+    changes: MessageStream,
+    owners: MessageStream,
+}
+
+/// The removable media of a system bus: what reports the devices whenever udisks changes them, and the calls.
 pub struct Volumes {
     system: Connection,
-    notices: Notices,
-    sender: Sender<Report>,
-    reports: Receiver<Report>,
+    signals: Option<Signals>,
+    sender: async_channel::Sender<Report>,
+    reports: async_channel::Receiver<Report>,
     wake: Arc<dyn Fn() + Send + Sync>,
 }
 
 impl Volumes {
-    /// Read the devices of `system` now and whenever udisks changes them or comes to the bus; `notices` takes the
-    /// failures. `wake` runs on other threads after each report.
-    pub fn watch(
+    /// The removable media of `system`, listening for udisks' changes from now on; [`Volumes::follow`] reads them.
+    /// `wake` runs after each report.
+    pub async fn watch(
         system: Connection,
-        notices: Notices,
         wake: Arc<dyn Fn() + Send + Sync>,
     ) -> zbus::Result<Volumes> {
-        let (sender, reports) = mpsc::channel();
-        let changes = MessageIterator::for_match_rule(
+        let changes = MessageStream::for_match_rule(
             MatchRule::builder()
                 .msg_type(Type::Signal)
                 .sender(UDISKS_NAME)?
@@ -344,8 +407,9 @@ impl Volumes {
                 .build(),
             &system,
             None,
-        )?;
-        let owners = MessageIterator::for_match_rule(
+        )
+        .await?;
+        let owners = MessageStream::for_match_rule(
             MatchRule::builder()
                 .msg_type(Type::Signal)
                 .sender("org.freedesktop.DBus")?
@@ -354,140 +418,151 @@ impl Volumes {
                 .build(),
             &system,
             None,
-        )?;
-        // one read at a time, so a later report is never older than an earlier one
-        let read = Arc::new(Mutex::new(()));
-        let report = {
-            let (system, sender, wake) = (system.clone(), sender.clone(), Arc::clone(&wake));
-            move || {
-                let _one = read.lock().expect("no reader panics while reading");
-                let _ = sender.send(Report::Devices(read_devices(&system)));
-                wake();
-            }
-        };
-        report();
-        // A signal only asks for a read, on a thread of its own, with at most one asked for while one runs. The streams are
-        // read at once whatever a read costs: a stream that fills stops the connection, the reply to the read included, and
-        // the bus hands this process any signal another user sends it. The devices are read from udisks itself, so such a
-        // signal costs a read at most.
-        let (again, asked) = mpsc::sync_channel::<()>(1);
-        std::thread::Builder::new()
-            .name("udisks-read".into())
-            .spawn(move || asked.into_iter().for_each(|()| report()))
-            .map_err(|e| zbus::Error::Failure(e.to_string()))?;
-        for (name, messages) in [("udisks-changes", changes), ("udisks-owner", owners)] {
-            let again = again.clone();
-            std::thread::Builder::new()
-                .name(name.into())
-                .spawn(move || {
-                    for message in messages {
-                        if message.is_err() {
-                            break;
-                        }
-                        let _ = again.try_send(());
-                    }
-                })
-                .map_err(|e| zbus::Error::Failure(e.to_string()))?;
-        }
+        )
+        .await?;
+        let (sender, reports) = async_channel::unbounded();
         Ok(Volumes {
             system,
-            notices,
+            signals: Some(Signals { changes, owners }),
             sender,
             reports,
             wake,
         })
     }
 
-    /// The reports that came since the last call.
-    pub fn poll(&self) -> Vec<Report> {
-        self.reports.try_iter().collect()
-    }
-
-    /// Mount `device`: [`Report::Mounted`] follows, or a notification and [`Report::Done`].
-    pub fn mount(&self, device: &Device) {
-        let device = device.clone();
-        self.call(device.object.clone(), move |system, notices| {
-            match mount(system, &device) {
-                Ok(at) => Report::Mounted {
-                    object: device.object,
-                    at,
-                },
-                Err(e) => {
-                    if let Some(notice) = notice(Operation::Mount, &device.name, &e) {
-                        notices.post(notice);
-                    }
-                    Report::Done {
-                        object: device.object,
+    /// The future that reads the devices now and whenever udisks changes them or comes to the bus, reporting each read,
+    /// which the program runs on its loop until the connection closes; `None` once taken. A signal only asks for a
+    /// read, with at most one asked for while one runs, so a later report is never older than an earlier one. The
+    /// signals are taken at once whatever a read costs: a stream that fills stops the connection, the reply to the
+    /// read included, and the bus hands this process any signal another user sends it. The devices are read from
+    /// udisks itself, so such a signal costs a read at most.
+    pub fn follow(&mut self) -> Option<impl Future<Output = ()> + Send + 'static> {
+        let Signals {
+            mut changes,
+            mut owners,
+        } = self.signals.take()?;
+        let (system, sender, wake) = (
+            self.system.clone(),
+            self.sender.clone(),
+            Arc::clone(&self.wake),
+        );
+        Some(async move {
+            let (again, asked) = async_channel::bounded::<()>(1);
+            let _ = again.try_send(());
+            let listen = async move {
+                loop {
+                    let signal = std::future::poll_fn(|cx| {
+                        for stream in [&mut changes, &mut owners] {
+                            if let Poll::Ready(signal) = Pin::new(stream).poll_next(cx) {
+                                return Poll::Ready(signal);
+                            }
+                        }
+                        Poll::Pending
+                    })
+                    .await;
+                    match signal {
+                        Some(Ok(_)) => {
+                            let _ = again.try_send(());
+                        }
+                        _ => break,
                     }
                 }
-            }
-        });
+            };
+            let read = async move {
+                while asked.recv().await.is_ok() {
+                    if sender
+                        .send(Report::Devices(read_devices(&system).await))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                    wake();
+                }
+            };
+            both(listen, read).await;
+        })
+    }
+
+    /// The reports that came since the last call.
+    pub fn poll(&self) -> Vec<Report> {
+        std::iter::from_fn(|| self.reports.try_recv().ok()).collect()
+    }
+
+    /// Mount `device`: [`Report::Mounted`], or a notification and [`Report::Done`].
+    pub fn mount(&self, device: &Device) -> impl Future<Output = Called> + Send + 'static {
+        let pending = Pending {
+            block: device.object.clone(),
+            device: device.clone(),
+            until: Instant::now() + CLEARTEXT_WAIT,
+        };
+        self.mount_again(pending)
+    }
+
+    /// Try the mount of `pending` again.
+    pub fn mount_again(&self, pending: Pending) -> impl Future<Output = Called> + Send + 'static {
+        let system = self.system.clone();
+        async move { mounted(&system, pending).await }
     }
 
     /// Unlock the encrypted container `device` with `passphrase`, then mount the file system it holds:
-    /// [`Report::Mounted`] for `device` follows, or a notification and [`Report::Done`].
-    pub fn unlock(&self, device: &Device, passphrase: Passphrase) {
-        let device = device.clone();
-        self.call(device.object.clone(), move |system, notices| {
-            let mounted = unlock(system, &device, &passphrase)
-                .map_err(|e| (Operation::Unlock, e))
-                .and_then(|cleartext| {
-                    mount_object(system, &cleartext).map_err(|e| (Operation::Mount, e))
-                });
-            match mounted {
-                Ok(at) => Report::Mounted {
-                    object: device.object,
-                    at,
-                },
-                Err((operation, e)) => {
-                    let secret = (operation == Operation::Unlock).then_some(&passphrase);
-                    if let Some(notice) = notice_of(operation, &device.name, &e, &[], secret) {
-                        notices.post(notice);
-                    }
-                    Report::Done {
-                        object: device.object,
-                    }
+    /// [`Report::Mounted`] for `device`, or a notification and [`Report::Done`].
+    pub fn unlock(
+        &self,
+        device: &Device,
+        passphrase: Passphrase,
+    ) -> impl Future<Output = Called> + Send + 'static {
+        let (system, device) = (self.system.clone(), device.clone());
+        async move {
+            match unlock(&system, &device, &passphrase).await {
+                Ok(cleartext) => {
+                    let pending = Pending {
+                        device,
+                        block: cleartext,
+                        until: Instant::now() + CLEARTEXT_WAIT,
+                    };
+                    mounted(&system, pending).await
+                }
+                Err(e) => {
+                    let notice =
+                        notice_of(Operation::Unlock, &device.name, &e, &[], Some(&passphrase));
+                    Called::Ended(
+                        Report::Done {
+                            object: device.object,
+                        },
+                        notice,
+                    )
                 }
             }
-        });
+        }
     }
 
     /// Eject the drive of `device`: unmount `filesystems` (the drive's mounted ones) in order, stopping at the first
     /// that fails, lock the containers they were unlocked from, then eject the drive, else power it off.
-    /// [`Report::Done`] for `device` follows.
-    pub fn eject(&self, device: &Device, filesystems: Vec<Device>) {
-        let device = device.clone();
-        self.call(device.object.clone(), move |system, notices| {
-            if let Some(notice) = eject(system, &device, &filesystems) {
-                notices.post(notice);
-            }
-            Report::Done {
-                object: device.object,
-            }
-        });
-    }
-
-    fn call(
+    /// [`Report::Done`] for `device`, or [`Called::Busy`] for a file system that is in use.
+    pub fn eject(
         &self,
-        object: OwnedObjectPath,
-        run: impl FnOnce(&Connection, &Notices) -> Report + Send + 'static,
-    ) {
-        let (system, notices) = (self.system.clone(), self.notices.clone());
-        let (sender, wake) = (self.sender.clone(), Arc::clone(&self.wake));
-        let spawned = std::thread::Builder::new()
-            .name("udisks-call".into())
-            .spawn(move || {
-                let _ = sender.send(run(&system, &notices));
-                wake();
-            });
-        if let Err(e) = spawned {
-            eprintln!(
-                "cupertino-files: cannot start a call on {}: {e}",
-                object.as_str()
-            );
-            let _ = self.sender.send(Report::Done { object });
-        }
+        device: &Device,
+        filesystems: Vec<Device>,
+    ) -> impl Future<Output = Called> + Send + 'static {
+        let (system, device) = (self.system.clone(), device.clone());
+        async move { eject(&system, &device, &filesystems).await }
     }
+}
+
+/// Run `a` and `b` until both ended.
+async fn both(a: impl Future<Output = ()>, b: impl Future<Output = ()>) {
+    let (mut a, mut b) = (pin!(a), pin!(b));
+    let (mut a_done, mut b_done) = (false, false);
+    std::future::poll_fn(|cx| {
+        a_done = a_done || a.as_mut().poll(cx).is_ready();
+        b_done = b_done || b.as_mut().poll(cx).is_ready();
+        match a_done && b_done {
+            true => Poll::Ready(()),
+            false => Poll::Pending,
+        }
+    })
+    .await;
 }
 
 /// The removable media a window lists: the devices udisks last reported and those a call is under way on.
@@ -611,13 +686,18 @@ impl Media {
 }
 
 /// The devices udisks reports; none when it is not on the bus. Another failure is logged.
-fn read_devices(system: &Connection) -> Vec<Device> {
-    let objects = ObjectManagerProxy::builder(system)
-        .destination(UDISKS_NAME)
-        .and_then(|b| b.path(MANAGER_PATH))
-        .and_then(|b| b.build())
-        .and_then(|proxy| Ok(proxy.get_managed_objects()?));
-    match objects {
+async fn read_devices(system: &Connection) -> Vec<Device> {
+    let objects = async {
+        ObjectManagerProxy::builder(system)
+            .destination(UDISKS_NAME)?
+            .path(MANAGER_PATH)?
+            .build()
+            .await?
+            .get_managed_objects()
+            .await
+            .map_err(zbus::Error::from)
+    };
+    match objects.await {
         Ok(objects) => devices(&objects),
         Err(e) if absent(&e) => Vec::new(),
         Err(e) => {
@@ -648,33 +728,37 @@ fn no_options() -> HashMap<&'static str, Value<'static>> {
     HashMap::new()
 }
 
-fn mount(system: &Connection, device: &Device) -> zbus::Result<PathBuf> {
-    mount_object(system, &device.object)
-}
-
 /// How long the file system of a container just unlocked may take to appear, and the wait between two tries.
-const CLEARTEXT_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
-const CLEARTEXT_RETRY: std::time::Duration = std::time::Duration::from_millis(50);
+const CLEARTEXT_WAIT: Duration = Duration::from_secs(2);
+pub const CLEARTEXT_RETRY: Duration = Duration::from_millis(50);
 
-/// Mount the file system of `object`. A block udisks has not probed yet has no file system interface: that is tried
-/// again for up to [`CLEARTEXT_WAIT`].
-fn mount_object(system: &Connection, object: &OwnedObjectPath) -> zbus::Result<PathBuf> {
-    let deadline = std::time::Instant::now() + CLEARTEXT_WAIT;
-    loop {
-        let called = system.call_method(
+/// Mount the file system of `pending`'s block, once. A block udisks has not probed yet has no file system interface:
+/// that is [`Called::Later`] until [`CLEARTEXT_WAIT`] has passed since the first try.
+async fn mounted(system: &Connection, pending: Pending) -> Called {
+    let called = system
+        .call_method(
             Some(UDISKS_NAME),
-            object.as_str(),
+            pending.block.as_str(),
             Some(FILESYSTEM),
             "Mount",
             &(no_options(),),
-        );
-        match called {
-            Ok(reply) => return Ok(PathBuf::from(reply.body().deserialize::<String>()?)),
-            Err(e) if not_there_yet(&e) && std::time::Instant::now() < deadline => {
-                std::thread::sleep(CLEARTEXT_RETRY)
-            }
-            Err(e) => return Err(e),
-        }
+        )
+        .await
+        .and_then(|reply| reply.body().deserialize::<String>());
+    let object = pending.device.object.clone();
+    match called {
+        Ok(at) => Called::Ended(
+            Report::Mounted {
+                object,
+                at: PathBuf::from(at),
+            },
+            None,
+        ),
+        Err(e) if not_there_yet(&e) && Instant::now() < pending.until => Called::Later(pending),
+        Err(e) => Called::Ended(
+            Report::Done { object },
+            notice(Operation::Mount, &pending.device.name, &e),
+        ),
     }
 }
 
@@ -693,7 +777,7 @@ fn not_there_yet(e: &zbus::Error) -> bool {
 }
 
 /// Unlock the container `device` with `passphrase`; the object of the block it opens.
-fn unlock(
+async fn unlock(
     system: &Connection,
     device: &Device,
     passphrase: &Passphrase,
@@ -705,41 +789,58 @@ fn unlock(
             Some(ENCRYPTED),
             "Unlock",
             &(passphrase.text(), no_options()),
-        )?
+        )
+        .await?
         .body()
         .deserialize()
 }
 
-/// Unmount `filesystems`, lock the containers they came from, then eject or power off the drive; the notice of a
-/// failed call, naming what keeps a busy file system in use.
-fn eject(system: &Connection, device: &Device, filesystems: &[Device]) -> Option<Notice> {
+/// Unmount `filesystems`, lock the containers they came from, then eject or power off the drive; a failed call is
+/// its notification, and a busy file system [`Called::Busy`].
+async fn eject(system: &Connection, device: &Device, filesystems: &[Device]) -> Called {
+    let done = |notice| {
+        Called::Ended(
+            Report::Done {
+                object: device.object.clone(),
+            },
+            notice,
+        )
+    };
     for fs in filesystems {
-        let unmounted = system.call_method(
-            Some(UDISKS_NAME),
-            fs.object.as_str(),
-            Some(FILESYSTEM),
-            "Unmount",
-            &(no_options(),),
-        );
+        let unmounted = system
+            .call_method(
+                Some(UDISKS_NAME),
+                fs.object.as_str(),
+                Some(FILESYSTEM),
+                "Unmount",
+                &(no_options(),),
+            )
+            .await;
         if let Err(e) = unmounted {
             let busy = matches!(&e, zbus::Error::MethodError(name, _, _)
                 if name.as_str().strip_prefix(ERROR) == Some("DeviceBusy"));
-            let holders = match &fs.mount {
-                Some(mount) if busy => holders(Path::new("/proc"), mount),
-                _ => Vec::new(),
+            return match &fs.mount {
+                Some(mount) if busy => Called::Busy(Busy {
+                    device: device.object.clone(),
+                    name: fs.name.clone(),
+                    mount: mount.clone(),
+                    error: e,
+                }),
+                _ => done(notice_of(Operation::Eject, &fs.name, &e, &[], None)),
             };
-            return notice_of(Operation::Eject, &fs.name, &e, &holders, None);
         }
         if let Some(container) = &fs.backing {
-            let locked = system.call_method(
-                Some(UDISKS_NAME),
-                container.as_str(),
-                Some(ENCRYPTED),
-                "Lock",
-                &(no_options(),),
-            );
+            let locked = system
+                .call_method(
+                    Some(UDISKS_NAME),
+                    container.as_str(),
+                    Some(ENCRYPTED),
+                    "Lock",
+                    &(no_options(),),
+                )
+                .await;
             if let Err(e) = locked {
-                return notice(Operation::Eject, &fs.name, &e);
+                return done(notice(Operation::Eject, &fs.name, &e));
             }
         }
     }
@@ -748,9 +849,9 @@ fn eject(system: &Connection, device: &Device, filesystems: &[Device]) -> Option
     } else if device.can_power_off {
         "PowerOff"
     } else {
-        return None;
+        return done(None);
     };
-    system
+    let ejected = system
         .call_method(
             Some(UDISKS_NAME),
             device.drive.as_str(),
@@ -758,6 +859,10 @@ fn eject(system: &Connection, device: &Device, filesystems: &[Device]) -> Option
             method,
             &(no_options(),),
         )
-        .err()
-        .and_then(|e| notice(Operation::Eject, &device.name, &e))
+        .await;
+    done(
+        ejected
+            .err()
+            .and_then(|e| notice(Operation::Eject, &device.name, &e)),
+    )
 }

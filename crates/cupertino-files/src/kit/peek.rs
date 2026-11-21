@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use cupertino_apps::MimeApps;
 use cupertino_kit::controls::{
@@ -36,7 +36,9 @@ use cupertino_kit::layout::{
     ScrollState, SizeSpec,
 };
 use cupertino_kit::platform::{DecorationMode, Keysym, Mods, MouseButton, PointerEvent, Timestamp};
-use cupertino_kit::prelude::{Button, ButtonRole, ButtonStyle, Spacer, Stack, Window, WindowSpec};
+use cupertino_kit::prelude::{
+    Button, ButtonRole, ButtonStyle, Command, Spacer, Stack, Window, WindowSpec,
+};
 use cupertino_kit::render::{Paint, PaintOp, PathVerb, Shape};
 use cupertino_kit::text::{AttributedText, FontWeight, TextStyle};
 use cupertino_kit::theme::{ColorRole, StateVariant, Surface};
@@ -78,14 +80,19 @@ const DOWN: Keysym = Keysym(0xff54);
 const RETURN: Keysym = Keysym(0xff0d);
 
 /// The start of the text files a window previews, by path, with the time each was changed when it was read. A file is
-/// read on a thread of its own, which wakes the window when it is done; a result for a file no longer previewed, or
-/// changed since, is dropped.
+/// read by an I/O task ([`Texts::reads`]), which wakes the window when it is done; a result for a file no longer
+/// previewed, or changed since, is dropped.
 pub(super) struct Texts {
     read: HashMap<PathBuf, (Option<SystemTime>, Option<String>)>,
     /// The files being read, with the time each was changed when its read started.
     reading: HashMap<PathBuf, Option<SystemTime>>,
+    /// The reads asked for and not yet handed to a task.
+    due: Vec<(PathBuf, Option<SystemTime>)>,
     done: (Sender<TextRead>, Receiver<TextRead>),
 }
+
+/// How long reading the start of a text file to preview it should take: a few kilobytes of a local file.
+const TEXT_READ_DEADLINE: Duration = Duration::from_secs(5);
 
 /// A file read: its path, the time it was changed when the read started, and its text (`None` when it is not text).
 type TextRead = (PathBuf, Option<SystemTime>, Option<String>);
@@ -95,6 +102,7 @@ impl Default for Texts {
         Texts {
             read: HashMap::new(),
             reading: HashMap::new(),
+            due: Vec::new(),
             done: mpsc::channel(),
         }
     }
@@ -106,9 +114,9 @@ impl Texts {
         self.read.get(path).and_then(|(_, text)| text.clone())
     }
 
-    /// Keep the texts of `entries` (the text files previewed now), reading those not read yet or changed since, away
-    /// from the window's thread, and forget the others; `wake` is called as each read ends.
-    pub fn follow<'a>(&mut self, entries: impl IntoIterator<Item = &'a Entry>, wake: &Wake) {
+    /// Keep the texts of `entries` (the text files previewed now), reading those not read yet or changed since
+    /// ([`Texts::reads`]), and forget the others.
+    pub fn follow<'a>(&mut self, entries: impl IntoIterator<Item = &'a Entry>) {
         let wanted: Vec<&Entry> = entries
             .into_iter()
             .filter(|e| file_preview::kind(e) == PreviewKind::Text)
@@ -117,6 +125,8 @@ impl Texts {
             .retain(|path, _| wanted.iter().any(|e| &e.path == path));
         self.reading
             .retain(|path, _| wanted.iter().any(|e| &e.path == path));
+        self.due
+            .retain(|(path, _)| wanted.iter().any(|e| &e.path == path));
         for entry in wanted {
             let fresh = self
                 .read
@@ -126,25 +136,38 @@ impl Texts {
                 continue;
             }
             self.reading.insert(entry.path.clone(), entry.modified);
-            let (path, modified) = (entry.path.clone(), entry.modified);
-            let (done, wake) = (self.done.0.clone(), Arc::clone(wake));
-            std::thread::spawn(move || {
-                let text = match file_preview::read_text(&path) {
-                    Ok(text) => text.map(|t| t.text),
-                    Err(e) => {
-                        eprintln!(
-                            "cupertino-files: cannot read {} to preview it: {e}",
-                            path.display()
-                        );
-                        None
-                    }
-                };
-                // the window may be gone, and nobody is left to tell
-                if done.send((path, modified, text)).is_ok() {
-                    wake();
-                }
-            });
+            self.due.push((entry.path.clone(), entry.modified));
         }
+    }
+
+    /// The I/O tasks of the reads asked for, each of which calls `wake` as it ends.
+    pub fn reads(&mut self, wake: &Wake) -> Vec<Command<Message>> {
+        self.due
+            .drain(..)
+            .map(|(path, modified)| {
+                let (done, wake) = (self.done.0.clone(), Arc::clone(wake));
+                cupertino_kit::task::io(
+                    TEXT_READ_DEADLINE,
+                    move || {
+                        let text = match file_preview::read_text(&path) {
+                            Ok(text) => text.map(|t| t.text),
+                            Err(e) => {
+                                eprintln!(
+                                    "cupertino-files: cannot read {} to preview it: {e}",
+                                    path.display()
+                                );
+                                None
+                            }
+                        };
+                        // the window may be gone, and nobody is left to tell
+                        if done.send((path, modified, text)).is_ok() {
+                            wake();
+                        }
+                    },
+                    |()| Message::Worked,
+                )
+            })
+            .collect()
     }
 
     /// Whether the file at `path` was read: its text, or that it is not text, is known.

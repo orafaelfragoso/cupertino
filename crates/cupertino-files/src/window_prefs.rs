@@ -91,7 +91,11 @@ impl WindowPrefs {
         format!("{value:#}\n")
     }
 
-    /// The choices kept at `path`; the defaults when it cannot be read.
+    /// The choices kept at `path`; the defaults when it cannot be read. Files reads them before its loop starts.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "one small file, read by the program before its loop starts"
+    )]
     pub fn load(path: &Path) -> WindowPrefs {
         match std::fs::read_to_string(path) {
             Ok(text) => WindowPrefs::parse(&text),

@@ -1073,12 +1073,10 @@ dependencies = [
  "cupertino-menu-model",
  "cupertino-trash",
  "libc",
- "notify",
  "percent-encoding",
  "serde",
  "serde_json",
  "tempfile",
- "tiny-skia",
  "zbus",
  "zeroize",
 ]

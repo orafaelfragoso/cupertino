@@ -1,6 +1,11 @@
 //! A browser window's folder requests: a folder asked for is shown once its model opens, one that does not open
 //! leaves the window where it was, and a folder asked for again while its work runs takes the model it had.
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "the test makes and removes its own files on its own thread; it has no UI thread"
+)]
+
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};

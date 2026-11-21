@@ -32,17 +32,16 @@ use cupertino_files::window::ViewMode;
 use cupertino_icons::thumbnail::Thumbnailer;
 use cupertino_kit::core::{Application, Role, RuntimeOptions};
 use cupertino_kit::file_icons::FileIcons;
-use cupertino_kit::files::notice::Notices;
 use cupertino_kit::files::places::{folder_icons, standard_places, Medium, Place};
 use cupertino_kit::geometry::{Point, Size};
 use cupertino_kit::platform::{
     KeyEvent, Keysym, Mods, MouseButton, PointerEvent, SystemAppearance, Timestamp, WindowId,
 };
 use cupertino_kit::render::{PaintOp, PixelFormat};
+use cupertino_kit::test::capture::Pixmap;
 use cupertino_kit::test::capture::{App, Look, Request, State};
 use cupertino_kit::test::{Capabilities, ManualClock, TestDriver, WindowEvent, WindowStates};
 use cupertino_kit::theme::ThemeTokens;
-use tiny_skia::{IntRect, IntSize, Pixmap};
 
 /// The folder under the temporary directory that holds the sample home folder, the trash and the thumbnail cache,
 /// kept between runs.
@@ -124,6 +123,10 @@ fn io(e: std::io::Error) -> String {
 /// The sample home folder under `root`: the user folders (an hour old) and the sample files (sparse, with their ages).
 /// Every item is dated back from [`sample_now`], a folder once what it holds is written, since writing into a folder
 /// dates it by the wall clock.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a capture writes its sample folder before any UI loop runs"
+)]
 fn home(root: &Path) -> Result<PathBuf, String> {
     let home = root.join(HOME);
     let now = sample_now();
@@ -255,6 +258,10 @@ struct Capture {
 }
 
 impl Capture {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a capture writes its sample folder before any UI loop runs"
+    )]
     fn new() -> Result<Self, String> {
         let root = std::env::temp_dir().join(ROOT);
         let home = home(&root)?;
@@ -311,9 +318,7 @@ impl Capture {
             places,
             Some(Arc::new(types)),
             self.root.join("recently-used.xbel"),
-            Notices::logged(),
             Box::new(|| Err(std::io::Error::other("no applications in a capture"))),
-            None,
             None,
         )
         .with_trash(Trash::with_home(self.root.join("Trash")))
@@ -441,6 +446,10 @@ impl Capture {
 }
 
 /// The options of a driver drawing in `look`: the Cupertino theme in that appearance.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a capture loads the theme of the appearance it draws, outside any UI loop"
+)]
 fn options(look: Look) -> Result<RuntimeOptions, String> {
     let mut options = cupertino_kit::app::options().map_err(|e| e.to_string())?;
     let preferences = cupertino_kit::test::preferences(&SystemAppearance {
@@ -544,8 +553,12 @@ fn presented<A: Application>(
             }
         }
     }
-    let size = IntSize::from_wh(frame.width, frame.height).ok_or("the frame is empty")?;
-    Pixmap::from_vec(pixels, size).ok_or_else(|| "the frame's pixels do not fill it".to_string())
+    let mut pm = Pixmap::new(frame.width, frame.height).ok_or("the frame is empty")?;
+    if pm.data().len() != pixels.len() {
+        return Err("the frame's pixels do not fill it".to_string());
+    }
+    pm.data_mut().copy_from_slice(&pixels);
+    Ok(pm)
 }
 
 /// Run the window and present the frames it asks for until it rests, or presents the same pixels twice in a row (a
@@ -896,11 +909,25 @@ impl App for Capture {
             return Ok(pm);
         }
         let scale = f64::from(r.scale);
-        let rect = IntRect::from_xywh(0, 0, (SIDEBAR * scale).round() as u32, pm.height())
-            .ok_or("the sidebar is empty")?;
-        pm.clone_rect(rect)
-            .ok_or_else(|| "the sidebar is outside the window".to_string())
+        crop_width(&pm, (SIDEBAR * scale).round() as u32)
     }
+}
+
+/// The leading `width` pixels of every row of `pm`.
+fn crop_width(pm: &Pixmap, width: u32) -> Result<Pixmap, String> {
+    if width > pm.width() {
+        return Err("the sidebar is outside the window".to_string());
+    }
+    let mut cropped = Pixmap::new(width, pm.height()).ok_or("the sidebar is empty")?;
+    let (from, to) = (pm.width() as usize * 4, width as usize * 4);
+    for (row, out) in pm
+        .data()
+        .chunks_exact(from)
+        .zip(cropped.data_mut().chunks_exact_mut(to))
+    {
+        out.copy_from_slice(&row[..to]);
+    }
+    Ok(cropped)
 }
 
 fn main() -> ExitCode {

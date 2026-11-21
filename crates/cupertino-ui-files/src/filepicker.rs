@@ -1,8 +1,11 @@
-//! The model of a file chooser. See the crate README, *File chooser model*.
+//! The model of a file chooser. See the crate README, *The file chooser's model*.
 
 use std::path::{Path, PathBuf};
 
-use crate::typeahead::TypeAhead;
+use cupertino_ui_controls::typeahead::TypeAhead;
+
+use crate::entry::Entry;
+use crate::model::{enumerate_blocking, ModelOptions};
 
 /// What the picker chooses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -15,14 +18,6 @@ pub enum Mode {
     Program,
     /// Any file: folders and every file in them; the caller filters what it shows.
     File,
-}
-
-/// One row of the open folder.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Entry {
-    pub name: String,
-    pub path: PathBuf,
-    pub is_dir: bool,
 }
 
 /// A key of the chooser.
@@ -77,30 +72,25 @@ fn is_executable(path: &Path) -> bool {
     std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
 }
 
-/// The entries of `dir` for `mode`, in the chooser's order; `None` when it cannot be read.
+/// The items of `dir` `mode` lists, in the family's order (by name, as Files lists a folder); `None` when it cannot be
+/// read.
 fn read_entries(dir: &Path, mode: Mode, hidden: bool) -> Option<Vec<Entry>> {
-    let mut entries: Vec<Entry> = std::fs::read_dir(dir)
-        .ok()?
-        .filter_map(Result::ok)
-        .filter_map(|e| {
-            let name = e.file_name().to_str()?.to_string();
-            let is_dir = e.path().is_dir();
-            let listed = (hidden || !name.starts_with('.'))
-                && (is_dir
-                    || match mode {
-                        Mode::Folder => false,
-                        Mode::Photo => is_picture(&name),
-                        Mode::Program => is_executable(&e.path()),
-                        Mode::File => true,
-                    });
-            listed.then(|| Entry {
-                name,
-                path: e.path(),
-                is_dir,
-            })
-        })
-        .collect();
-    entries.sort_by_cached_key(|e| (!e.is_dir, e.name.to_lowercase(), e.name.clone()));
+    let options = ModelOptions {
+        show_hidden: hidden,
+        watch: false,
+        read_tags: false,
+        ..ModelOptions::default()
+    };
+    let mut entries = enumerate_blocking(dir, &options).ok()?;
+    entries.retain(|e| {
+        e.is_dir
+            || match mode {
+                Mode::Folder => false,
+                Mode::Photo => is_picture(&e.name),
+                Mode::Program => is_executable(&e.path),
+                Mode::File => true,
+            }
+    });
     Some(entries)
 }
 

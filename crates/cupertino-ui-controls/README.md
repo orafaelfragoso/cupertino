@@ -1,7 +1,7 @@
 # cupertino-ui-controls
 
 The standard CupertinoKit controls: `Text`, `Icon`, `Button`, `Toggle`, `TextField`, `SecureField`, `Stack`, `Spacer`,
-`Separator`, the choice, value and picker controls and the settings form controls so far, with type-to-select (`typeahead`) and the model of a file chooser (`filepicker`). MPL-2.0. Each control reads every colour and metric from the theme tokens, takes its value
+`Separator`, the choice, value and picker controls and the settings form controls so far, with type-to-select (`typeahead`). MPL-2.0. Each control reads every colour and metric from the theme tokens, takes its value
 from the application's model and reports changes as messages.
 
 - **Arming.** A pointer or touch press arms a button or switch, release over it activates once, release elsewhere
@@ -162,7 +162,7 @@ from the application's model and reports changes as messages.
   control. A key on a column header never comes there, so an application can give Tab in the rows its own meaning while
   Tab and Shift+Tab still walk the headers in the order shown. `None` keeps the table as it was.
 - **Handlers that may send nothing.** A `ListView`'s, a `TableView`'s and an `OutlineTable`'s handlers (scroll,
-  selection, activation, sorting, opening a row) give the application's message or `None`, which sends nothing and
+  selection, activation, sorting, opening a row) are `MaybeHandler`s: they give the application's message or `None`, which sends nothing and
   leaves the view as the application last drew it; a key the list takes stays taken either way. A `TreeView`'s
   handlers always give a message.
 - **Selection inset.** A list's selection and focus ring sit 4 pt in from a row's sides; `ListView::inset_element`
@@ -354,28 +354,7 @@ Titles and the typed text are compared as they are, lowercased: there is no Unic
 (`e` and a combining acute) does not match a precomposed one (`é`); a caller that needs the match normalizes the titles
 and the text first.
 
-Used by `Menu`, the file chooser model below, Settings' choice menus and the menu bar (through `cupertino-kit`).
-
-## File chooser model
-
-`filepicker` is the model of a file chooser, with no drawing, for every window that lets the user pick a folder or a
-picture: the Settings wallpaper pane and the file-chooser portal.
-
-- The picker never reads the filesystem itself, so a folder on a hung mount cannot freeze a window. `Picker::new(start, mode)`
-  lists nothing; a change of folder makes a `Request` (`take_request`) that a worker runs (`Request::run`, the only place
-  the disk is read) and whose `Listing` goes back to `apply`; until then the picker shows what it had and `loading()` is
-  true. An answer for an older request is dropped. `Picker::open(start, mode)` is the same with the answers read in place
-  (`settle`), for callers with nothing to keep responsive.
-- `Mode::Folder` shows folders, `Mode::Photo` shows folders and PNG and JPEG
-  files, `Mode::Program` shows folders and the files someone may execute, `Mode::File` shows folders and every file (the file-chooser portal filters them itself). Folders come first, then files, each by name without regard to case. Names that start with a dot are hidden
-  until `set_hidden(true)`.
-- `Picker::key(key, now)` takes the keys of the chooser: Up, Down, Home and End move the highlight (no wrap); Return
-  enters the highlighted folder or chooses the highlighted file; Super+Return (`Key::Choose`) chooses (in `Folder`
-  mode the highlighted folder, else the open one); Super+Up (`Key::Parent`) opens the parent folder; Escape cancels; a
-  typed character jumps to the next entry whose name starts with the text typed so far (*Type-to-select*).
-  `Picker::go(dir)` opens a folder of a sidebar, whose places the program lists.
-- A folder that cannot be read leaves the picker where it was and sets `unreadable`, which the view words plainly.
-- The result is `Outcome::Choose(path)`, `Cancel`, `Changed` (redraw) or `Ignore`.
+Used by `Menu`, the file chooser's model (`cupertino-ui-files`' `filepicker`), Settings' choice menus and the menu bar (through `cupertino-kit`).
 
 ## Not yet
 

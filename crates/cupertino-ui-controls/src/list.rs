@@ -9,8 +9,9 @@ use crate::press::{Keys, Outcome, Press};
 use crate::scroll;
 use crate::window_drag::DOUBLE_CLICK;
 use crate::{
-    Column, ColumnWidth, Handler, Icon, IconDirection, ListView, OutlineTable, RowKeyHandler,
-    Scroller, Selection, SortOrder, TableView, Text, TextRole, TreeItem, TreeToggle, TreeView,
+    Column, ColumnWidth, Handler, Icon, IconDirection, ListView, MaybeHandler, OutlineTable,
+    RowKeyHandler, Scroller, Selection, SortOrder, TableView, Text, TextRole, TreeItem, TreeToggle,
+    TreeView,
 };
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_theme::ui::{ColorRole, StateVariant};
@@ -199,7 +200,7 @@ enum Kind {
 /// A tree's rows and the requests to open and close them, shared by its rows.
 struct Outline<M> {
     item: Box<dyn Fn(usize) -> TreeItem>,
-    on_toggle: Option<Box<dyn Fn(TreeToggle) -> Option<M>>>,
+    on_toggle: Option<MaybeHandler<TreeToggle, M>>,
 }
 
 impl<M> Outline<M> {
@@ -215,7 +216,7 @@ impl<M> Outline<M> {
 }
 
 /// The handler of a tree, whose handlers always give a message, as a list's handler that may give none.
-fn always<T: 'static, M: 'static>(handler: Handler<T, M>) -> Box<dyn Fn(T) -> Option<M>> {
+fn always<T: 'static, M: 'static>(handler: Handler<T, M>) -> MaybeHandler<T, M> {
     Box::new(move |value| Some(handler(value)))
 }
 
@@ -253,7 +254,7 @@ impl<M: 'static> ListView<M> {
             row: list.row,
             key: list.key,
             type_select: list.type_select,
-            on_select: list.on_select.map(Rc::from),
+            on_select: list.on_select.map(Rc::new),
             on_activate: list.on_activate,
             double_click_activates: list.double_click_activates,
             on_row_key: None,
@@ -288,11 +289,7 @@ impl<M: 'static> From<TreeView<M>> for Element<M> {
             row: tree.row,
             key: None,
             type_select: tree.type_select,
-            on_select: tree
-                .on_select
-                .map(|on_select| -> Rc<dyn Fn(Selection) -> Option<M>> {
-                    Rc::new(move |selection| Some(on_select(selection)))
-                }),
+            on_select: tree.on_select.map(|on_select| Rc::new(always(on_select))),
             on_activate: tree.on_activate.map(always),
             double_click_activates: tree.double_click_activates,
             on_row_key: None,
@@ -393,7 +390,7 @@ fn table_element<M: 'static>(
         row,
         key,
         type_select: table.type_select,
-        on_select: table.on_select.map(Rc::from),
+        on_select: table.on_select.map(Rc::new),
         on_activate: table.on_activate,
         double_click_activates: table.double_click_activates,
         on_row_key: table.on_row_key,
@@ -412,7 +409,7 @@ fn table_element<M: 'static>(
         ringed,
         lead: table.header_top + HEADER_HEIGHT * f64::from(u8::from(table.header_top > 0.0)),
     };
-    let on_sort = table.on_sort.map(Rc::from);
+    let on_sort = table.on_sort.map(Rc::new);
     let header = Element::new(Header {
         cells: columns
             .iter()
@@ -495,8 +492,8 @@ struct Rows<M> {
     row: Box<dyn Fn(usize, bool) -> Element<M>>,
     key: Option<Box<dyn Fn(usize) -> Key>>,
     type_select: Option<Box<dyn Fn(usize) -> String>>,
-    on_select: Option<Rc<dyn Fn(Selection) -> Option<M>>>,
-    on_activate: Option<Box<dyn Fn(usize) -> Option<M>>>,
+    on_select: Option<Rc<MaybeHandler<Selection, M>>>,
+    on_activate: Option<MaybeHandler<usize, M>>,
     double_click_activates: bool,
     on_row_key: Option<RowKeyHandler<M>>,
     outline: Option<Rc<Outline<M>>>,

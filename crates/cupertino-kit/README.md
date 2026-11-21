@@ -1,9 +1,9 @@
 # cupertino-kit
 
 CupertinoKit, the Cupertino UI toolkit: the one crate applications depend on. Each module lists the toolkit items
-an application names, one by one ([Public API](#public-api)), and it has a `prelude`. `typeahead` (`TypeAhead`) and `filepicker` (`Picker` and its `Mode`, `Key`,
-`Request`, `Listing`, `Entry` and `Outcome`) name the
-type-to-select and file chooser model of `cupertino-ui-controls`. The `test` feature, enabled only in
+an application names, one by one ([Public API](#public-api)), and it has a `prelude`. `typeahead` (`TypeAhead`) names the type-to-select of
+`cupertino-ui-controls`, and `filepicker` (`Picker` and its `Mode`, `Key`, `Request`, `Listing` and `Outcome`, with the
+family's `Entry`) the file chooser's model of `cupertino-ui-files`. The `test` feature, enabled only in
 dev-dependencies, adds `kit::test`: the headless backend and what a driver is built from. MPL-2.0.
 
 A node is glass when its `paint` calls `PaintCx::glass` (`Glass` and `GlassStyle` are in the `prelude`): the compositor
@@ -146,7 +146,7 @@ What `shell` and `apps` crates name from the toolkit, where each item is in Kit,
 | `kit::text` | `TextSystem`, `AttributedText`, `TextStyle`, `ParagraphStyle`, `ParagraphLayout`, `FontWeight`, `FontStyle`, `FontFeature`, `TextAlign`, `TextRange`, `Wrap`, `ContentPurpose`, `TextBuffer`, `SecureBuffer`, `TextFieldKeys`, `Response`, `KeyInput`, `Keymap`, `binding_file::load_default`; for now the glyph rasters |
 | `kit::theme` | `ThemeTokens` and the types of its fields (`ThemePreferences`, `ColorTokens`, `ControlMetrics`, `TypeScale`, `FocusRing`, `Motion`), `Appearance`, `Color`, `ColorRole`, `StateVariant`, `InteractionVariant`, `ControlFamily`, `ControlSize`, `TypeRole`, `Surface`, `BAR_GLASS_MATERIAL`, `GLASS_MATERIAL`, `CARET_PHASE_MS`, and `system_color(name, appearance) -> Option<Color>`, a colour the theme data names (`system-green`) |
 | `kit::controls` | every control of `cupertino-ui-controls` with its option types (states, handlers, styles, `SortOrder`) and layout constants, and the helpers programs paint with (`caret_blinking`, `caret_opacity`, `paint_glass_edge`, `striped_element`, `unobscured_insets`) |
-| `kit::filepicker`, `kit::typeahead` | the file chooser's model and type-to-select |
+| `kit::filepicker`, `kit::typeahead` | the file chooser's model, whose rows are the file family's `Entry` in its order, and type-to-select |
 | `kit::files` | the file family of `cupertino-ui-files`, in modules named as its own, each listing what Files and the portal's chooser name: `entry` (`Entry`, `Kind`), `natural`, `sort`, `mime`, `tags`, `applications`, `recents`, `places` (the sidebar's `standard_places` and the chooser's `chooser_places`, over the user directories of `cupertino_defaults::user_dirs`), `model` (`DirectoryModel`, whose `ModelWork` a program runs with `task::io` within `WORK_DEADLINE` and whose `ModelWatch` it follows with `Command::Perform`), `geom` (`Direction`), `layout::icon`, `rename`, `name_edit`, `open`, `operations` (with `Transfer`, a copy or a move whose `TransferSlice`s a program runs with `task::io` within `SLICE_DEADLINE`), `notice`, `thumbnail_service`, `item_icons`, `item_art`, and the views' `metrics` (`icon_view`, `list_view`, `column_view`, `timing`, `selection`, `marquee`, `drag`); the views: `ViewEvent`, `grid` (`IconGrid`), `list` (`FileList`), `columns` (`FileColumns`), `ColumnEvent` |
 | `kit::geometry` | `Point`, `Size`, `Rect`, `Insets` |
 | `kit::motion` | [Motion](#motion) |

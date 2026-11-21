@@ -1,77 +1,15 @@
-//! Type-to-select, and the model of a file chooser: what its keys do to the highlight and the folder, which answer
-//! of a worker it takes, how it lists a folder in each mode, and what its Choose button picks.
+//! The model of a file chooser: what its keys do to the highlight and the folder, which answer of a worker it takes,
+//! how it lists a folder in each mode, in the family's order, and what its Choose button picks.
 
 use std::path::{Path, PathBuf};
 
-use cupertino_ui_controls::filepicker::{Entry, Key, Listing, Mode, Outcome, Picker, Request};
-use cupertino_ui_controls::typeahead::{TypeAhead, RESET_AFTER};
-
-#[test]
-fn typing_finds_the_next_item_that_starts_with_it_and_a_pause_starts_the_text_over() {
-    let titles = [
-        Some("Apricot"),
-        Some("Avocado"),
-        None,
-        Some("Banana"),
-        Some("Blueberry"),
-        Some("cherry"),
-    ];
-    // each character with the time it was typed and the item highlighted when it was, and what it finds
-    type Script<'a> = (&'a str, &'a [(char, f64, usize, Option<usize>)]);
-    let scripts: [Script; 7] = [
-        (
-            "a first letter looks after the highlighted item",
-            &[('b', 0.0, 0, Some(3))],
-        ),
-        (
-            "more letters narrow the search from the highlighted item",
-            &[('b', 0.0, 0, Some(3)), ('l', 0.2, 3, Some(4))],
-        ),
-        (
-            "the same letter again goes on to the next item it starts",
-            &[
-                ('a', 0.0, 3, Some(0)),
-                ('a', 0.1, 0, Some(1)),
-                ('a', 0.2, 1, Some(0)),
-            ],
-        ),
-        (
-            "capitals do not matter and an item with no title is passed over",
-            &[('C', 0.0, 0, Some(5))],
-        ),
-        ("nothing starts with it", &[('z', 0.0, 0, None)]),
-        (
-            "a pause ends the text",
-            &[('b', 0.0, 0, Some(3)), ('l', 2.0, 3, None)],
-        ),
-        (
-            "a character within the pause does not",
-            &[('b', 0.0, 0, Some(3)), ('l', RESET_AFTER, 3, Some(4))],
-        ),
-    ];
-    for (what, script) in scripts {
-        let mut typed = TypeAhead::default();
-        for (c, at, from, expected) in script {
-            assert_eq!(
-                typed.find(*c, *at, *from, &titles),
-                *expected,
-                "{what}: {c} at {at}"
-            );
-        }
-    }
-
-    let mut typed = TypeAhead::default();
-    assert!(!typed.typing(0.0));
-    typed.find('b', 5.0, 0, &titles);
-    assert!(typed.typing(5.0 + RESET_AFTER));
-    assert!(!typed.typing(5.0 + RESET_AFTER + 0.1));
-}
+use cupertino_ui_files::entry::Entry;
+use cupertino_ui_files::filepicker::{Key, Listing, Mode, Outcome, Picker, Request};
 
 fn entry(dir: &str, name: &str, is_dir: bool) -> Entry {
     Entry {
-        name: name.into(),
         path: PathBuf::from(dir).join(name),
-        is_dir,
+        ..Entry::synthetic(name, is_dir, 0)
     }
 }
 
@@ -310,7 +248,8 @@ struct Scratch(PathBuf);
 
 impl Scratch {
     fn new(test: &str) -> Scratch {
-        let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("ui-controls-{test}"));
+        let root =
+            PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("ui-files-picker-{test}"));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         Scratch(root)
@@ -329,7 +268,7 @@ fn names(listing: &Listing, picker: &mut Picker) -> Vec<String> {
 }
 
 #[test]
-fn a_folder_is_listed_with_its_folders_first_in_order_and_the_files_its_mode_chooses() {
+fn a_folder_is_listed_in_the_familys_order_with_the_files_its_mode_chooses() {
     use std::os::unix::fs::PermissionsExt;
     let scratch = Scratch::new("listing");
     for dir in ["zeta", "Alpha", ".hidden-dir"] {
@@ -341,31 +280,43 @@ fn a_folder_is_listed_with_its_folders_first_in_order_and_the_files_its_mode_cho
         ("c.jpeg", 0o644),
         (".dot.png", 0o644),
         ("run.sh", 0o755),
+        ("file 10.txt", 0o644),
+        ("file 9.txt", 0o644),
     ] {
         let path = scratch.0.join(file);
         std::fs::write(&path, b"x").unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
     }
+    // by name as Files sorts it, without regard to case and with numbers in order; folders among the files
     let rows: [(Mode, bool, &[&str]); 6] = [
         (Mode::Folder, false, &["Alpha", "zeta"]),
-        (Mode::Photo, false, &["Alpha", "zeta", "A.PNG", "c.jpeg"]),
-        (Mode::Program, false, &["Alpha", "zeta", "run.sh"]),
+        (Mode::Photo, false, &["A.PNG", "Alpha", "c.jpeg", "zeta"]),
+        (Mode::Program, false, &["Alpha", "run.sh", "zeta"]),
         (
             Mode::File,
             false,
-            &["Alpha", "zeta", "A.PNG", "b.txt", "c.jpeg", "run.sh"],
+            &[
+                "A.PNG",
+                "Alpha",
+                "b.txt",
+                "c.jpeg",
+                "file 9.txt",
+                "file 10.txt",
+                "run.sh",
+                "zeta",
+            ],
         ),
         (Mode::Folder, true, &[".hidden-dir", "Alpha", "zeta"]),
         (
             Mode::Photo,
             true,
             &[
-                ".hidden-dir",
-                "Alpha",
-                "zeta",
                 ".dot.png",
+                ".hidden-dir",
                 "A.PNG",
+                "Alpha",
                 "c.jpeg",
+                "zeta",
             ],
         ),
     ];
@@ -382,9 +333,10 @@ fn a_folder_is_listed_with_its_folders_first_in_order_and_the_files_its_mode_cho
     }
 
     let mut open = Picker::open(&scratch.0, Mode::File);
-    assert_eq!(open.entries().len(), 6);
-    assert!(open.entries()[0].is_dir && !open.entries()[2].is_dir);
-    open.key(Key::Home, 0.0);
+    assert_eq!(open.entries().len(), 8);
+    assert!(!open.entries()[0].is_dir && open.entries()[1].is_dir);
+    open.key(Key::Down, 0.0);
+    open.key(Key::Down, 0.0);
     assert_eq!(
         open.choice(),
         None,

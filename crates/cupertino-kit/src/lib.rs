@@ -142,12 +142,12 @@ pub mod controls {
         EditorState, FieldState, FilePreview, FormBackground, FormGroup, FormHeader, FormRow,
         FrameClock, FullWidthSegmentedControl, GlassEdge, Grid, GroupWindow, Handler, HeaderToggle,
         Icon, IconDirection, IconTile, Image, ImageFit, ImageSource, InlinePopUpButton, ListState,
-        ListView, Menu, MenuAnchor, MenuItem, MenuStyle, MenuTail, Modal, ModuleLayout,
-        ModuleToggle, Navigation, NavigationRow, NavigationStack, OutlineTable, PageDots,
-        PaneHeader, PopUpButton, Popover, Press, PressCatcher, PreviewContent, PreviewStyle,
-        Progress, PullDownButton, RadioGroup, RichText, RowKeyHandler, ScrollView, Scroller,
-        SearchField, SecureField, SecureHandler, SecureState, SegmentedControl, Selection,
-        Separator, Sidebar, SidebarAccessory, SidebarItem, SidebarLook, SidebarSection,
+        ListView, MaybeHandler, Menu, MenuAnchor, MenuItem, MenuStyle, MenuTail, Modal,
+        ModuleLayout, ModuleToggle, Navigation, NavigationRow, NavigationStack, OutlineTable,
+        PageDots, PaneHeader, PopUpButton, Popover, Press, PressCatcher, PreviewContent,
+        PreviewStyle, Progress, PullDownButton, RadioGroup, RichText, RowKeyHandler, ScrollView,
+        Scroller, SearchField, SecureField, SecureHandler, SecureState, SegmentedControl,
+        Selection, Separator, Sidebar, SidebarAccessory, SidebarItem, SidebarLook, SidebarSection,
         SidebarWindow, Slider, SliderState, SliderStyle, SmallToggle, SortOrder, Spacer,
         SplitLayout, SplitPane, SplitView, Stack, Stepper, StepperState, Swatch, SwatchFill,
         SwatchLook, SwitchState, TableView, Tabs, Text, TextBox, TextBoxState, TextChange,
@@ -392,9 +392,9 @@ pub mod typeahead {
     pub use cupertino_ui_controls::typeahead::TypeAhead;
 }
 
-/// The model of a file chooser: a folder's entries, the highlighted one, navigation, filters and type-to-select.
+/// The model of a file chooser: a folder's items (the file family's `Entry`, in its order), the highlighted one,
+/// navigation and type-to-select.
 pub mod filepicker {
-    pub use cupertino_ui_controls::filepicker::{
-        Entry, Key, Listing, Mode, Outcome, Picker, Request,
-    };
+    pub use cupertino_ui_files::entry::Entry;
+    pub use cupertino_ui_files::filepicker::{Key, Listing, Mode, Outcome, Picker, Request};
 }

@@ -443,11 +443,12 @@ struct OpenStack {
     listing: u64,
     /// Its entries, once listed; it shows from then.
     entries: Option<Vec<StackEntry>>,
-    /// When it showed: it comes in over [`stack::ENTRY_S`] from then, or a fan over [`fan::OPEN_S`].
+    /// When it showed: it comes in as [`Timing::DOCK_STACK_ENTRY`](cupertino_kit::motion::Timing::DOCK_STACK_ENTRY) runs from then, or a fan as [`Timing::DOCK_FAN_OPEN`](cupertino_kit::motion::Timing::DOCK_FAN_OPEN)
+    /// runs.
     opened: f64,
     /// Fan or grid, decided when it was listed.
     shape: fan::Shape,
-    /// The fan has begun to close; it is gone once [`fan::CLOSE_S`] has passed.
+    /// The fan has begun to close; it is gone once [`Timing::DOCK_FAN_CLOSE`](cupertino_kit::motion::Timing::DOCK_FAN_CLOSE) has run.
     closing: Option<Closing>,
     /// The fan's row the pointer is on, and the one the arrow keys moved to.
     hover: Option<usize>,
@@ -462,9 +463,6 @@ struct OpenMenu {
     /// The tile's icon darkened, as pressed: the tile shows it while its menu is up and while the menu fades out.
     dark: IconSet,
 }
-
-/// How long a tile keeps its pressed darkening after its menu closed: the time the menu takes to fade out.
-const MENU_FADE_OUT: f64 = 0.21;
 
 struct ForceQuit {
     output: u32,
@@ -502,7 +500,7 @@ pub struct Model {
     poof: Option<Poof>,
     menu: Option<OpenMenu>,
     /// The tile whose menu closed last, its darkened icon and when the menu closed: it keeps the darkening while the
-    /// menu fades out ([`MENU_FADE_OUT`]).
+    /// menu fades out ([`Timing::DOCK_MENU_PRESSED_OFF`](cupertino_kit::motion::Timing::DOCK_MENU_PRESSED_OFF)).
     menu_fade: Option<(TileId, IconSet, f64)>,
     /// The trash's alert that is up: the question before it is emptied, or what could not be deleted.
     confirm: Option<view::confirm::Alert>,

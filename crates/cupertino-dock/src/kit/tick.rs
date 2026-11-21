@@ -2,12 +2,12 @@
 //! shell has to know, and the next wake.
 
 use cupertino_kit::core::Command;
+use cupertino_kit::motion::Timing;
 
 use super::{
     IconKey, Message, Model, Request, EDGE_DWELL, FORCE_QUIT_ROW_ICON, FRAME_FALLBACK,
-    MENU_FADE_OUT, TOKEN_TIMEOUT, TRASH_CHECK_EVERY,
+    TOKEN_TIMEOUT, TRASH_CHECK_EVERY,
 };
-use crate::fan;
 use crate::force_quit;
 use crate::stack::{self, StackLayout};
 use crate::switcher_kit::SwitcherSurface;
@@ -268,7 +268,7 @@ impl Model {
                 .stack
                 .as_ref()
                 .and_then(|s| s.closing)
-                .is_some_and(|c| now >= c.start + fan::CLOSE_S)
+                .is_some_and(|c| now >= c.start + Timing::DOCK_FAN_CLOSE.duration())
         {
             self.stack = None;
         }
@@ -347,7 +347,7 @@ impl Model {
     pub(super) fn menu_fading(&self, now: f64) -> Option<(TileId, &IconSet)> {
         self.menu_fade
             .as_ref()
-            .filter(|(_, _, closed)| now - closed < MENU_FADE_OUT)
+            .filter(|(_, _, closed)| now - closed < Timing::DOCK_MENU_PRESSED_OFF.duration())
             .map(|(id, dark, _)| (*id, dark))
     }
 

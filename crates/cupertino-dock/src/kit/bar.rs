@@ -330,7 +330,7 @@ impl Model {
         ))
     }
 
-    /// Close the open stack: a fan folds back into its tile over [`fan::CLOSE_S`], a grid goes at once.
+    /// Close the open stack: a fan folds back into its tile as [`Timing::DOCK_FAN_CLOSE`](cupertino_kit::motion::Timing::DOCK_FAN_CLOSE) runs, a grid goes at once.
     pub(super) fn close_stack(&mut self) {
         let now = self.now();
         let motion = !self.reduce_motion;

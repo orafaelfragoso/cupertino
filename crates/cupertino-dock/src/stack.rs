@@ -4,6 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
+use cupertino_kit::motion::Timing;
 use cupertino_wm::geometry::{Point, Rect};
 
 use crate::config::Orientation;
@@ -30,9 +31,8 @@ pub const OPEN_FOLDER: &str = "Open in Files";
 /// What an empty folder's stack says.
 pub const EMPTY: &str = "No Items";
 
-/// How long the stack takes to come in: it fades in, scaling up from [`ENTRY_SCALE`] towards the bar; under Reduce
-/// Motion it only fades.
-pub const ENTRY_S: f64 = 0.25;
+/// The scale the stack comes in from ([`Timing::DOCK_STACK_ENTRY`]), growing towards the bar; under Reduce Motion it only
+/// fades.
 pub const ENTRY_SCALE: f64 = 0.9;
 
 /// The icon of the user's downloads folder, the stack the bar shows by default.
@@ -240,9 +240,7 @@ pub enum StackHit {
 
 /// How far the stack has come in at `t` seconds since it opened: its opacity and its scale.
 pub fn entry(t: f64, reduce_motion: bool) -> (f64, f64) {
-    let u = (t / ENTRY_S).clamp(0.0, 1.0);
-    // ease out: quick at first, settling at the end
-    let eased = 1.0 - (1.0 - u).powi(3);
+    let eased = Timing::DOCK_STACK_ENTRY.value(t);
     let scale = if reduce_motion {
         1.0
     } else {

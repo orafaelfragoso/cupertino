@@ -16,11 +16,15 @@ handle untrusted content and from every window title and screen content (D10).
   application may take a screenshot, and whether it may use keyboard shortcuts while another application has the
   keyboard. The portal decides what to ask and keeps the answers; this program shows the question and says what the
   person answered.
+- **Desktop control's consent question.** When an app asks to control or capture the desktop and the person has not
+  decided for it yet, the server asks whether to allow it through the consent authority this program holds. The server
+  decides when to ask and keeps the answer; this program shows the question and says what the person answered.
 
 ## Running
 
 The server starts and supervises the program from `/usr/bin/cupertino-prompts` in every user session, on a Wayland
-connection with the `session`, `prompt` and `consent` roles (`cupertino shell list` names it `prompts`). Nothing in
+connection with the `session`, `prompt` and `consent` roles (`cupertino shell list` names it `prompts`); the `consent`
+role is the one that sees the server's consent authority (`cupertino_control_authority_v1`). Nothing in
 `compositor.json` names it. With the `prompt` role every surface of the program is a prompt surface: above every other
 surface, left out of every capture and out of desktop control, and while one is shown no application holds the pointer
 or the shortcuts and desktop-control runs are suspended.
@@ -165,10 +169,35 @@ owns the name (`consent::service`):
   the server closing the alert deny at once, armed or not: Escape is cancelled for a screenshot and dismissed for
   shortcuts, which the portal does not remember.
 
+## Desktop control's consent question
+
+The program binds the server's consent authority as it starts (`cupertino_kit_shell::consent`). The server asks one
+run at a time, after naming the app it comes from, and says when the run stops waiting (`desktop_control`,
+`program::desktop_control`):
+
+- **The alert.** The app's icon (its desktop entry's, read on Kit's I/O pool; the applications symbol until it is read,
+  or when the app names an executable rather than a desktop entry), "Allow “<app>” to control the desktop?" (or to
+  capture the screen, or both) in bold, the rights the run asks for, the display, the executable's path for an app
+  without a desktop entry, whether the answer is remembered for the app, and that Ctrl+Alt+Escape stops control; Don't
+  Allow and Allow. A controller that names no app is asked as "the desktop controller", for this request only. Names
+  lose their control and bidirectional characters and are cut (48 characters for an app's name, 120 for a path, which
+  keeps its end, 64 for a display). The alert goes on the display the run would control when the server describes it,
+  else on the active output, and its surface is the one the server takes the answer on (`set_window`).
+- **Arming.** As for the portal's questions, the focus starts on Don't Allow, and Allow takes a press only 500 ms
+  (`consent::ARMING`) after the alert presented its first frame. Don't Allow, Escape and the server closing the alert
+  answer at once: Don't Allow is remembered for the app, Escape and a closed alert refuse this request only.
+- **Who can answer.** The server takes Allow, and a remembered Don't Allow, only with fresh physical input the person
+  gave this surface after the run asked; scripted input and desktop control's own input never reach the alert or
+  count (`crates/cupertino-server/src/control.rs`). The alert stays until the server says the run no longer waits, so
+  an answer the server did not take can be given again.
+- **While the session is away** the request asked is dismissed, and one asked then is dismissed at once: nothing is
+  remembered for an answer nobody gave. The server ends the run as the session locks.
+
 ## The alert
 
 One prompt is on screen at a time: the one shown first stays until it ends, an authentication comes before a keyring
-question that waits, and the keyring before the consent questions, which come in the order they were asked. Each output gets a scrim on the overlay layer (`authentication-scrim`, fading in over
+question that waits, the keyring before the portal's consent questions, which come in the order they were asked, and
+they before desktop control's question. Each output gets a scrim on the overlay layer (`authentication-scrim`, fading in over
 0.2 s along `Timing::AUTHENTICATION_SCRIM_FADE_IN`, at once with Reduce Motion), and the alert sits above them on the
 active output, where it takes the keyboard exclusively. A click on the scrim does nothing. The alert is 260 points
 wide with 26-point corners on the regular glass, the popover surface's fill where glass is off, and an outline with
@@ -188,7 +217,8 @@ The program keeps nothing on disk but the keyring offer's answer. A restart lose
 ones: polkitd sees the agent's bus name go and fails the authentications it asked for, and registers the agent again
 when it starts; a keyring caller loses its prompter and gets an error from its next call; the portal's consent calls
 fail, which the portal takes as Cancel for a screenshot and as dismissed for shortcuts, so nothing is granted or
-remembered. Nothing typed survives.
+remembered; the server ends a desktop-control run that waited for the person's answer and asks again once the restarted
+program binds the authority, when the app asks again. Nothing typed survives.
 
 ## Modules
 
@@ -209,15 +239,17 @@ remembered. Nothing typed survives.
 | `consent` | the portal's consent questions, their answers and the arming delay |
 | `consent::model` | the waiting consent questions, as a pure model |
 | `consent::service` | `org.cupertino.Prompts1` and who may call it |
+| `desktop_control` | desktop control's consent question and the texts its alert says |
 | `program` | the Kit program: the model of every prompt, the buses and the futures |
 | `view` | the alerts and the scrims |
 | `view::consent` | the consent alerts and their wording |
+| `view::desktop_control` | desktop control's consent alert |
 
 ## Captures
 
 `cargo run -p cupertino-prompts --example prompts_capture -- prompts/SURFACE [flags]` (`crates/cupertino-kit/README.md`):
 `authentication` (`--details hidden|shown`, `--users one|two`), `keyring` (`--kind password|new|confirm`), and the consent
-alerts `screenshot` and `shortcuts` (armed, with the applications symbol for the app's icon).
+alerts `screenshot`, `shortcuts` and `desktop-control` (armed, with the applications symbol for the app's icon).
 
 ## Diagnostic events
 

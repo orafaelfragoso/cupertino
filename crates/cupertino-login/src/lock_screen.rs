@@ -2,13 +2,11 @@
 //! the session on a request (the server's, logind's, `org.cupertino.Login1`'s, the seat's idleness), shows one lock
 //! surface per output ([`view::screen`] on `Role::Lock`), sends the attempts to PAM on Kit's I/O pool and unlocks
 //! only when the state machine has reached [`Phase::Unlocked`], which only an accepted attempt (or the session
-//! manager's proof of a fast user switch) does. Until W6.14 it also shows the desktop-control consent panel
-//! ([`consent`]), the authority the server gives the `session_lock` role.
+//! manager's proof of a fast user switch) does.
 //!
 //! Nothing waits on the UI thread: the buses are Kit's connections the loop ticks, their signals futures of the loop
 //! that hand news over a channel ([`Heard`]), and every file, PAM and the wallpaper's decoding run on the I/O pool.
 
-mod consent;
 mod system;
 
 use crate::auth;
@@ -96,7 +94,6 @@ pub enum Shell {
     Outputs,
     /// The server confirmed the session lock (`true`), or refused or ended it.
     Lock(bool),
-    Consent(cupertino_kit_shell::consent::Event),
     CapsLock(bool),
     Closed(WindowKey),
 }
@@ -125,10 +122,6 @@ pub enum Message {
     },
     Status(StatusItems),
     Notices(Vec<Notice>),
-    ConsentIcons {
-        run: cupertino_kit_shell::consent::Run,
-        icons: Vec<ImageSource>,
-    },
     /// A picture of the screens was made on the CPU pool.
     Made(Made),
     /// A task that has nothing to report ended.
@@ -217,7 +210,6 @@ pub struct Model {
     /// The number of the last lock taken.
     locks: u64,
     lock: Option<Lock>,
-    consent: Option<consent::Panel>,
     /// Wrong passwords typed at the lock screens of this run.
     failed: FailedAttempts,
 }
@@ -284,7 +276,6 @@ impl Application for LockScreenProgram {
             User::typed(String::new())
         });
         let idle = options.idle_timeout.map(session::watch_idle);
-        cupertino_kit_shell::consent::bind();
         let env = cupertino_kit_shell::environment();
         let mut model = Model {
             start: Instant::now(),
@@ -315,7 +306,6 @@ impl Application for LockScreenProgram {
             idled: false,
             locks: 0,
             lock: None,
-            consent: None,
             failed: FailedAttempts::default(),
         };
         model.follow_outputs();
@@ -427,12 +417,6 @@ impl Application for LockScreenProgram {
                 }
                 Ok(())
             }
-            Message::ConsentIcons { run, icons } => {
-                if let Some(panel) = model.consent.as_mut().filter(|p| p.run == run) {
-                    panel.set_icons(icons);
-                }
-                Ok(())
-            }
             Message::Made(made) => {
                 let env = model.env.clone();
                 commands.extend(model.pictures.made(&env, made, Message::Made));
@@ -476,15 +460,6 @@ impl Application for LockScreenProgram {
                 ));
             }
         }
-        if model.lock.is_none() {
-            if let Some(panel) = model.consent.as_ref().filter(|p| p.shown()) {
-                windows.push(view::desktop_control(
-                    consent::key(),
-                    panel.request(),
-                    Message::Input,
-                ));
-            }
-        }
         windows
     }
 }
@@ -493,9 +468,6 @@ impl Program for LockScreenProgram {
     fn surface(model: &Model, window: &WindowKey) -> Surface {
         let role = match model.outputs.iter().find(|o| &o.key == window) {
             Some(output) => Role::Lock(output.id),
-            None if *window == consent::key() => {
-                Role::Layer(consent::layer(model.consent.as_ref()))
-            }
             None => Role::Window,
         };
         Surface {
@@ -514,7 +486,6 @@ impl Program for LockScreenProgram {
             Event::Outputs => Shell::Outputs,
             Event::Lock(lock::Event::Locked) => Shell::Lock(true),
             Event::Lock(lock::Event::Finished) => Shell::Lock(false),
-            Event::Consent(event) => Shell::Consent(event),
             Event::CapsLock(on) => Shell::CapsLock(on),
             Event::Closed(key) => Shell::Closed(key),
             _ => return None,
@@ -723,7 +694,6 @@ impl Model {
                     lock.answer = Some(locked);
                 }
             }
-            Shell::Consent(event) => commands.extend(consent::heard(self, event)),
             Shell::CapsLock(on) => self.caps_lock = on,
             Shell::Closed(key) if self.outputs.iter().any(|o| o.key == key) => {
                 return Err("the server closed a surface of the lock screen".into())
@@ -733,12 +703,8 @@ impl Model {
         Ok(())
     }
 
-    /// What the person did on the lock screen or the consent panel.
+    /// What the person did on the lock screen.
     fn input(&mut self, now: f64, input: Input, commands: &mut Vec<Command<Message>>) {
-        if let Input::DesktopControl(choice) = input {
-            consent::answer(self, choice);
-            return;
-        }
         let Some(lock) = &mut self.lock else {
             return;
         };

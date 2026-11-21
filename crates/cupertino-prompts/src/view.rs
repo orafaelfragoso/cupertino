@@ -3,6 +3,7 @@
 //! two capsule buttons side by side. Nothing a person types reaches a window's title or any text the alert shows.
 
 pub mod consent;
+pub mod desktop_control;
 pub mod widgets;
 
 use std::time::Instant;

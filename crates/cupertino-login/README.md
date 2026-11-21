@@ -13,7 +13,7 @@ login items and reopened applications, the session menu's state) is the shell ho
 [Values applied](#reference-values-applied) · [Open issues](#open-issues) · [Modules](#modules) · [Checks by hand](#checks-by-hand)
 
 Every screen and panel is drawn with CupertinoKit: `view` builds the Kit windows (the lock screen, the greeter's picker, name
-and password screens and power menu, the desktop-control consent panel) from the pure models, and Kit's runtime
+and password screens and power menu) from the pure models, and Kit's runtime
 draws them, routes their keys and publishes them to assistive technology. The crate has no compositor dependency, and
 draws no pixel itself outside Kit: the screens' pictures (the treated wallpaper, the field's material, the glass letters)
 are made on Kit's CPU pool (`view::ScreenPictures`) and the files, PAM and the wallpapers' decoding run on its I/O pool. The
@@ -29,8 +29,7 @@ manager through `cupertino-login-ipc` (`models/`), and the manager runs the auth
 
 Feature `app` builds the binary and its two programs, each a Kit program of `cupertino-kit-shell` (`Program`): the lock
 screen (`lock_screen`) on `run_lock_screen`, whose lock windows are `Role::Lock` surfaces of `ext-session-lock-v1` and whose
-AT-SPI adapter is not muted while the session is locked (the lock screen is what a person hears then), its consent panel a
-layer-shell overlay; and the login screen (`greeter`, `--greeter`) on `run`, one layer-shell overlay per output. Nothing
+AT-SPI adapter is not muted while the session is locked (the lock screen is what a person hears then); and the login screen (`greeter`, `--greeter`) on `run`, one layer-shell overlay per output. Nothing
 waits on the UI thread: the buses are Kit's connections the loop ticks and their signals futures of the loop, the session
 manager's socket is a future of the loop (`manager::Pump`), and PAM, the settings files, the status items, the wallpapers
 and the pictures run on Kit's pools. The server starts and restarts it through the `shell` key of its configuration:
@@ -402,7 +401,6 @@ network users).
 |---|---|---|
 | Wallpaper | The lock screen shows the session's wallpaper: the compositor settings' colour, else `wallpaper_dark` in the dark appearance and `wallpaper` otherwise, else the default picture of the assets. The login screen shows the selected user's copy, which the lock screen writes and the manager hands on as `UserRow.wallpaper` (`/var/lib/cupertino-login/wallpapers/<uid>.jpg`); it is read at most `MAX_WALLPAPER_BYTES` large, a file that does not decode falls back, and a new file (another inode, size or time) is read again. Without either, a drawn gradient (approximate). A picture is decoded once on Kit's I/O pool (`kit::image`), PNG or JPEG of at most 8192 pixels a side, scaled to cover the output and centred; the lock screen shows black until it is in, at most 0.5 s; the login screen shows nothing (the display stays black) until the first user's wallpaper is in, at most 1 s, and its decoding starts before its first frame (the first account, the one first selected; the manager does not say who logged in last). The screen's picture is made once per output size, scale and wallpaper and kept: a frame lays again only the 256 pt squares of it under what changed | `wallpaper`, `view::widgets::Ground` |
 | Password and name fields | Kit's chromeless `BareSecureField` (its text centred; while it is empty the caret stands just before the centred placeholder, approximate) and `BareField` in the capsule, 10 pt from its leading edge and clear of the 18 pt trailing slot; dots and caret white, the password's placeholder white 0.5 (the name field's in the secondary label colour). The screen's text and fields always take the dark appearance (`PaintCx::pin_appearance`), whatever the session's. | `view::screen`, `view::widgets::FieldFrame` |
-| Consent panel | An alert on regular glass: 260 pt wide, 26 pt corners, padding 22 pt above and 16 pt around, the icon 64 pt and the text 6 pt further in, the title Bold 13 and the message 13 pt 10 pt apart, Don't Allow and Allow as 28 pt capsules 8 pt apart. The surface is 260 x 520 pt, the alert centred in it. | `view::desktop_control`, `view::widgets::AlertBody` |
 | Initials, text | Grey fill, initials 0.4 of the avatar; white text of the theme's family. | `view::widgets::AVATAR_FILL`, `view::INITIALS_SIZE` |
 | Picture | `~/.face` as PNG, cropped to a circle. A file that does not decode is an error; a missing one means initials. | `user` |
 | Administrator | Members of `wheel` in `/etc/group`; the design's admin group has no counterpart. | `users::ADMIN_GROUP` in `cupertino-sessiond` |
@@ -433,7 +431,7 @@ network users).
 | `layout` | `Layout`: the frames and baselines of the screen in points |
 | `power` | `Action`, `Menu`, `MenuKey`: the power menu's items and its selection |
 | `picker` | `Picker` (`new` takes the accounts and whether "Other…" shows; `NoTiles` when nothing is left), `Tile`, `Grid`, `cell_of`, `max_per_page`, `NameEntry` |
-| `view` | The Kit views: `screen` (lock and greeter password and name screens), `picker`, `power_menu`, `desktop_control`, `full_screen`; `Input`, the messages they send; `Typed`, a submitted password |
+| `view` | The Kit views: `screen` (lock and greeter password and name screens), `picker`, `power_menu`, `full_screen`; `Input`, the messages they send; `Typed`, a submitted password |
 | `spinner` | the spinner's frame, head spoke and spoke opacities |
 | `status` | `StatusItems`, `WifiState`, `BatteryState`, `signal_bars`, `input_label`, `os_version`, `host_text`; with feature `dbus`, `read` (on the I/O pool) and `follow` (the radios, the power daemon): what the status items show |
 | `user` | `User::current` (account, full name, picture), `User::from_row` (a row of the manager's list), `initials`, `format_time` |
@@ -444,7 +442,7 @@ network users).
 | `lock_notices` | `Notice`, `from_rows`, `cap`, the cards' column and heights, `shown`, `more_text`; with feature `dbus`, `fetch`, `serves_lock_screen` and `follow`: the notifications the notifications component lists for the lock screen |
 | `auth` (feature `app`) | `authenticate`, `PasswordConversation`: one PAM transaction, for Kit's I/O pool |
 | `manager` (feature `app`) | `Connection`, `Pump`: the greeter's connection to the session manager, a future of its loop |
-| `lock_screen` (feature `app`) | `run`, `LockScreenProgram`: the lock screen of a user's session (`lock_screen/system.rs`: its buses; `lock_screen/consent.rs`: the consent panel) |
+| `lock_screen` (feature `app`) | `run`, `LockScreenProgram`: the lock screen of a user's session (`lock_screen/system.rs`: its buses) |
 | `greeter` (feature `app`) | `run`, `Greeter`: the login screen (`greeter/talk.rs`: the session manager's conversation and the input) |
 | `options` (feature `app`) | `Options`: the command line |
 

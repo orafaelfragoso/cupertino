@@ -91,7 +91,7 @@ pub fn row_text(row: &Row) -> String {
 }
 
 /// The application's icon, or the applications symbol.
-fn app_icon(icon: Option<&Vec<ImageSource>>) -> Element<Message> {
+pub(super) fn app_icon(icon: Option<&Vec<ImageSource>>) -> Element<Message> {
     match icon {
         Some(sources) => Element::new(Image {
             sources: sources.clone(),
@@ -138,8 +138,13 @@ fn pill(
     .key(key)
 }
 
-/// The deny button, where the focus starts, and the allow button, which takes a press once the alert is armed.
-fn buttons(deny: &str, allow: &str, armed: bool) -> Element<Message> {
+/// The deny button, where the focus starts, and the allow button, which takes a press once the alert is armed: each
+/// with its label and the message its press sends.
+pub(super) fn buttons(
+    (deny, denied): (&str, Message),
+    (allow, allowed): (&str, Message),
+    armed: bool,
+) -> Element<Message> {
     let side_by_side = [deny, allow]
         .iter()
         .all(|label| label.chars().count() <= SIDE_BY_SIDE_CHARS);
@@ -150,9 +155,9 @@ fn buttons(deny: &str, allow: &str, armed: bool) -> Element<Message> {
     };
     let deny = Element::new(Deny {
         armed,
-        children: vec![pill(deny, width, true, input(ConsentInput::Deny), "deny")],
+        children: vec![pill(deny, width, true, denied, "deny")],
     });
-    let allow = pill(allow, width, armed, input(ConsentInput::Allow), "allow");
+    let allow = pill(allow, width, armed, allowed, "allow");
     if side_by_side {
         stack(
             Axis::Horizontal,
@@ -262,6 +267,10 @@ pub fn consent(key: WindowKey, prompt: &Consent) -> Window<Message> {
         Question::Shortcuts { .. } => (DONT_ALLOW, ALLOW),
     };
     children.insert(0, head_with(icon, &heading, ""));
-    children.push(buttons(deny, allow, prompt.armed));
+    children.push(buttons(
+        (deny, input(ConsentInput::Deny)),
+        (allow, input(ConsentInput::Allow)),
+        prompt.armed,
+    ));
     alert(key, title, &heading, size(&prompt.question), children)
 }

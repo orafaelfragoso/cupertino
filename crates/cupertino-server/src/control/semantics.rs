@@ -142,7 +142,7 @@ fn split(n: u64) -> (u32, u32) {
 impl Cupertino {
     /// The runs that observe: active with the observe capability, in run order.
     fn semantic_runs(&self) -> Vec<usize> {
-        if self.session_lock.is_active() || self.login_screen || self.prompt_shown() {
+        if self.session_lock.is_active() || self.login_screen || self.control_prompt_shown() {
             return Vec::new();
         }
         (0..self.control.runs.len())

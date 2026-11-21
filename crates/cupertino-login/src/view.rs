@@ -8,7 +8,6 @@
 //! [`LockScreen::field`](crate::model::LockScreen::field): a submission or Escape makes a new field, so the old one's
 //! buffer is dropped and zeroed, and the new one takes the focus on every output.
 
-mod consent;
 mod pictures;
 mod wants;
 mod widgets;
@@ -17,15 +16,14 @@ use std::fmt;
 use std::sync::Arc;
 
 use cupertino_kit::controls::{
-    BareField, BareSecureField, Canvas, Image, ImageFit, Menu as KitMenu, MenuAnchor, MenuItem,
-    SecureField, Text, TextChange, TextField, TextRole,
+    BareField, BareSecureField, Image, ImageFit, Menu as KitMenu, MenuAnchor, MenuItem,
+    SecureField, TextChange, TextField,
 };
 use cupertino_kit::core::{
     CommandRegistry, Element, Key, Live, Role, Window, WindowBackground, WindowKey,
 };
 use cupertino_kit::geometry::{Insets, Point, Rect, Size};
 use cupertino_kit::platform::{DecorationMode, Keysym, WindowSpec};
-use cupertino_kit::render::{Paint, PaintOp, Shape};
 use cupertino_kit::text::{
     AttributedText, ContentPurpose, FontWeight, SecureBuffer, TextAlign, TextStyle, TextSystem,
 };
@@ -42,10 +40,6 @@ use crate::power::{self, Menu};
 use crate::status::{StatusItems, WifiState};
 use crate::user::{initials, User};
 use crate::wallpaper::Source;
-pub use consent::{
-    control_size, control_text, desktop_control, ControlChoice, ControlRequest, RequestingApp,
-    CONTROL_APP_ID, CONTROL_HEIGHT, CONTROL_WIDTH,
-};
 use pictures::Glass;
 pub use pictures::{Made, ScreenPictures, Shown, Wants};
 use wants::notices_strip;
@@ -124,8 +118,6 @@ const AVATAR_SHAKE_SHARE: f64 = 0.25;
 /// How far the name's shadow reaches past its line: three deviations of its blur, rounded up. The user block's layer
 /// holds it.
 const SHADOW_REACH: f64 = 12.0;
-/// The fill of the consent panel's disc where the app has no icon (approximate, a neutral grey).
-const PANEL_ICON_FILL: Color = Color::new(0.60, 0.62, 0.66, 1.0);
 /// Text size the panels' title and lines are measured at; the roles set the size they draw at.
 const PANEL_TITLE_SIZE: f32 = 13.0;
 
@@ -253,8 +245,6 @@ pub enum Input {
     ClosePower,
     /// A row of the power menu.
     Power(usize),
-    /// A choice on the native desktop-control consent panel.
-    DesktopControl(ControlChoice),
 }
 
 /// The clock text the screens show.
@@ -1543,66 +1533,4 @@ pub fn full_screen<M: Clone>(
         popup: None,
         menus: None,
     }
-}
-
-/// The style the panels' title, lines and checkbox label are measured in; a countdown also sets its digits at one width
-/// each (`tnum`), so the line keeps its length and does not shift as the number changes.
-fn panel_style(weight: FontWeight, tabular: bool) -> TextStyle {
-    TextStyle {
-        weight,
-        features: if tabular {
-            vec![cupertino_kit::text::FontFeature {
-                tag: *b"tnum",
-                value: 1,
-            }]
-        } else {
-            Vec::new()
-        },
-        ..TextStyle::new(PANEL_TITLE_SIZE)
-    }
-}
-
-fn panel_text<M: 'static>(
-    text: &str,
-    role: TextRole,
-    weight: FontWeight,
-    secondary: bool,
-) -> Element<M> {
-    styled_panel_text(text, role, panel_style(weight, false), secondary)
-}
-
-fn styled_panel_text<M: 'static>(
-    text: &str,
-    role: TextRole,
-    style: TextStyle,
-    secondary: bool,
-) -> Element<M> {
-    Element::new(Text {
-        content: AttributedText::plain(text, style),
-        role,
-        wrap: true,
-        secondary,
-        selected: false,
-    })
-}
-
-fn icon_disc<M: 'static>(rect: Rect) -> Element<M> {
-    Element::new(Place::new(
-        rect,
-        vec![Element::new(Canvas {
-            size: Some(rect.size),
-            label: String::new(),
-            paint: Box::new(move |cx| {
-                let side = rect.width();
-                cx.push(PaintOp::Fill {
-                    shape: Shape::RoundedRect {
-                        rect: Rect::new(0.0, 0.0, side, side),
-                        radius: side / 2.0,
-                    },
-                    paint: Paint::Solid(PANEL_ICON_FILL),
-                })
-            }),
-            children: Vec::new(),
-        })],
-    ))
 }

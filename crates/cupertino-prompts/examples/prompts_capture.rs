@@ -3,8 +3,9 @@
 //!
 //! Surfaces: `authentication` (`--details shown` opens its details, `--users two` offers a second user), `keyring`
 //! (`--kind password`, the default, unlocks a keyring; `new` asks for a new password and its confirmation; `confirm`
-//! asks a question with no field), and the portal's consent questions `screenshot` and `shortcuts` (armed, with the
-//! applications symbol for the app's icon). Each is the alert's surface as the server shows it over the scrim, without the
+//! asks a question with no field), the portal's consent questions `screenshot` and `shortcuts`, and `desktop-control`,
+//! which asks whether an app that names its desktop entry may control the desktop (armed, with the applications symbol
+//! for the app's icon). Each is the alert's surface as the server shows it over the scrim, without the
 //! scrim. The fonts, symbols and theme are the system's, as an application's; nothing moves, so a command gives the same
 //! pixels on every run.
 
@@ -21,6 +22,7 @@ use cupertino_kit::test::capture::{presented, App, Look, Pixmap, Request, State}
 use cupertino_kit::test::{Capabilities, ManualClock, TestDriver, WindowStates};
 use cupertino_kit::theme::ThemeTokens;
 use cupertino_prompts::consent::{self, Question, Row};
+use cupertino_prompts::desktop_control::{ControlRequest, RequestingApp};
 use cupertino_prompts::program::Message;
 use cupertino_prompts::view;
 
@@ -35,6 +37,7 @@ enum Shown {
     Authentication(view::Authentication),
     Keyring(view::Keyring),
     Consent(view::consent::Consent),
+    DesktopControl(view::desktop_control::DesktopControl),
 }
 
 thread_local! {
@@ -66,6 +69,9 @@ impl Application for Alert {
                 .collect(),
             Some(Shown::Keyring(prompt)) => vec![view::keyring(key, prompt)],
             Some(Shown::Consent(prompt)) => vec![view::consent::consent(key, prompt)],
+            Some(Shown::DesktopControl(prompt)) => {
+                vec![view::desktop_control::desktop_control(key, prompt)]
+            }
             None => Vec::new(),
         }
     }
@@ -166,6 +172,26 @@ fn consent_question(
     }
 }
 
+/// What the desktop-control capture asks: an app that names its desktop entry asks to observe the desktop and to use
+/// the pointer and the keyboard, its answer to be remembered; armed.
+fn desktop_control() -> view::desktop_control::DesktopControl {
+    view::desktop_control::DesktopControl {
+        request: ControlRequest {
+            output: "DP-1".into(),
+            capabilities: 1 | 4 | 8,
+            app: Some(RequestingApp {
+                name: "Terminal".into(),
+                identity: "org.example.Terminal".into(),
+                desktop: true,
+                services: 1,
+                remembered: true,
+                icon: Vec::new(),
+            }),
+        },
+        armed: true,
+    }
+}
+
 /// The shortcuts of a call app, as the portal words them: two that get their keys and one that does not.
 fn shortcut_rows() -> Vec<Row> {
     let row = |keys: &str, description: &str, note: &str| Row {
@@ -199,16 +225,22 @@ impl App for Prompts {
     const STATE_FLAGS: &'static [&'static str] = &["details", "users", "kind"];
 
     fn surfaces(&self) -> Vec<String> {
-        ["authentication", "keyring", "screenshot", "shortcuts"]
-            .map(str::to_owned)
-            .to_vec()
+        [
+            "authentication",
+            "keyring",
+            "screenshot",
+            "shortcuts",
+            "desktop-control",
+        ]
+        .map(str::to_owned)
+        .to_vec()
     }
 
     fn sheet_states(&self, surface: &str) -> Vec<State> {
         let state = |flag: &str, value: &str| vec![(flag.to_owned(), value.to_owned())];
         match surface {
             "authentication" => vec![state("details", "hidden"), state("details", "shown")],
-            "screenshot" | "shortcuts" => vec![Vec::new()],
+            "screenshot" | "shortcuts" | "desktop-control" => vec![Vec::new()],
             _ => ["password", "new", "confirm"]
                 .map(|kind| state("kind", kind))
                 .to_vec(),
@@ -239,6 +271,7 @@ impl App for Prompts {
                 rows: shortcut_rows(),
                 allowed: 0,
             })),
+            "desktop-control" => Shown::DesktopControl(desktop_control()),
             other => return Err(format!("no surface {other}")),
         };
         SHOWN.with(|s| *s.borrow_mut() = Some(shown));

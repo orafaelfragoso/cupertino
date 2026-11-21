@@ -9,20 +9,16 @@ use cupertino_protocols::server::global_shortcuts::cupertino_global_shortcuts_v1
     self, CupertinoGlobalShortcutsV1,
 };
 use smithay::reexports::wayland_server::backend::{ClientId, GlobalId};
-use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{
     Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource,
 };
-use smithay::wayland::compositor::with_states;
-use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
 
 use crate::authorization::{authorized, ShellRole};
 use crate::input::{normalize_sym, Chord, GlobalKey};
-use crate::process::ProcessIdentity;
 use crate::state::Cupertino;
 
 pub use cupertino_server_input::global_shortcuts::{
-    is_modifier_key, modifier_bits, modifiers_of, reserved, PORTAL_PROMPT_APP_ID,
+    is_modifier_key, modifier_bits, modifiers_of, reserved,
 };
 
 /// Version of the global.
@@ -44,30 +40,6 @@ impl GlobalShortcuts {
             next_owner: 0,
         }
     }
-}
-
-/// Whether a window with [`PORTAL_PROMPT_APP_ID`] is kept from desktop control, given the process of its connection and
-/// those of the connections holding [`ShellRole::GlobalShortcuts`] (`None` where a process is not named: not known, not
-/// read in time, or gone). Only a verified mismatch makes it an ordinary window: its process and every portal process
-/// named, at least one portal, and none of them its process. Without a portal connection nothing can be compared, so
-/// the window stays kept too: a window that is not the portal's then loses only desktop control, a real prompt never
-/// gains it.
-pub fn portal_prompt_verdict(
-    window: Option<ProcessIdentity>,
-    portals: impl IntoIterator<Item = Option<ProcessIdentity>>,
-) -> bool {
-    let Some(window) = window else {
-        return true;
-    };
-    let mut compared = false;
-    for portal in portals {
-        match portal {
-            Some(portal) if portal == window => return true,
-            Some(_) => compared = true,
-            None => return true,
-        }
-    }
-    !compared
 }
 
 fn send_reserved(resource: &CupertinoGlobalShortcutsV1, chords: &[Chord]) {
@@ -95,34 +67,6 @@ impl Cupertino {
         } else {
             resource.released(key.id, time);
         }
-    }
-
-    /// Whether `root` is a window in which the portal asks the person to allow something (keyboard shortcuts, screen
-    /// sharing, a screenshot): a toplevel with [`PORTAL_PROMPT_APP_ID`] drawn by the process behind the connection that
-    /// holds [`ShellRole::GlobalShortcuts`], which the server gives the portal alone. Desktop control's input and
-    /// actions do not reach it, so a controlled run cannot answer it. The portal draws its windows on a connection of
-    /// its own, so the process is what names them; an app id another process sets names nothing once the processes are
-    /// known to differ ([`portal_prompt_verdict`]).
-    pub fn is_portal_prompt(&self, root: &WlSurface) -> bool {
-        let app_id = with_states(root, |s| {
-            s.data_map
-                .get::<XdgToplevelSurfaceData>()
-                .and_then(|d| d.lock().ok().and_then(|d| d.app_id.clone()))
-        });
-        if app_id.as_deref() != Some(PORTAL_PROMPT_APP_ID) {
-            return false;
-        }
-        let window = root
-            .client()
-            .and_then(|c| (self.process_of)(&self.display_handle, &c));
-        let portals = self
-            .global_shortcuts
-            .bound
-            .iter()
-            .filter_map(|(resource, _)| resource.client())
-            .filter(|client| authorized(client, ShellRole::GlobalShortcuts))
-            .map(|client| (self.process_of)(&self.display_handle, &client));
-        portal_prompt_verdict(window, portals)
     }
 
     /// Send the chords the server keeps to every bound object again, after its bindings changed.

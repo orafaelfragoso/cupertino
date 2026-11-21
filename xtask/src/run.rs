@@ -118,6 +118,48 @@ fn take_slot(slots: usize) -> Result<(File, Duration), String> {
     Ok((file, start.elapsed()))
 }
 
+/// The bytes of the files below `path`, without following links; what cannot be read counts as nothing.
+fn size(path: &Path) -> u64 {
+    let Ok(metadata) = std::fs::symlink_metadata(path) else {
+        return 0;
+    };
+    if !metadata.is_dir() {
+        return metadata.len();
+    }
+    std::fs::read_dir(path).map_or(0, |entries| {
+        entries
+            .filter_map(Result::ok)
+            .map(|entry| size(&entry.path()))
+            .sum()
+    })
+}
+
+/// Empties `target/debug` when it is larger than `limit_gib` and no cargo holds its build lock, so builds left by
+/// feature sets and package lists no longer used do not fill the disk; sccache makes the rebuild cheap.
+fn trim_target(target: &Path, limit_gib: u64) {
+    let debug = target.join("debug");
+    let bytes = size(&debug);
+    if bytes <= limit_gib << 30 {
+        return;
+    }
+    let gib = bytes >> 30;
+    let lock = File::options().write(true).open(debug.join(".cargo-lock"));
+    if lock.as_ref().is_ok_and(|lock| lock.try_lock().is_err()) {
+        eprintln!(
+            "xtask: {} is {gib} GiB, past {limit_gib} GiB, but a cargo builds there; left as it is",
+            debug.display()
+        );
+        return;
+    }
+    eprintln!(
+        "xtask: {} is {gib} GiB, past {limit_gib} GiB ([limits] target_gib); removing it",
+        debug.display()
+    );
+    if let Err(error) = std::fs::remove_dir_all(&debug) {
+        eprintln!("xtask: {}: {error}", debug.display());
+    }
+}
+
 fn run_cargo(
     root: &Path,
     check: &Check,
@@ -377,6 +419,7 @@ pub fn ci(options: &Options) -> u8 {
                     )
                 }
             }
+            trim_target(&workspace.target_directory, config.limits.target_gib);
             if std::env::var_os("CARGO_BUILD_JOBS").is_none() {
                 let cores = std::thread::available_parallelism().map_or(1, usize::from);
                 jobs = Some((cores / slots).max(1));

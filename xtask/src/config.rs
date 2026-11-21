@@ -25,18 +25,26 @@ pub struct Limits {
     /// How many runs may build at once on the machine.
     #[serde(default = "default_slots")]
     pub slots: usize,
+    /// The size in GiB past which a run empties the target directory's `debug` builds first.
+    #[serde(default = "default_target_gib")]
+    pub target_gib: u64,
 }
 
 impl Default for Limits {
     fn default() -> Self {
         Self {
             slots: default_slots(),
+            target_gib: default_target_gib(),
         }
     }
 }
 
 fn default_slots() -> usize {
     2
+}
+
+fn default_target_gib() -> u64 {
+    150
 }
 
 #[derive(Debug, Deserialize)]
@@ -153,6 +161,9 @@ impl Config {
         }
         if config.limits.slots == 0 {
             return Err(format!("{PATH}: [limits] slots must be at least 1"));
+        }
+        if config.limits.target_gib == 0 {
+            return Err(format!("{PATH}: [limits] target_gib must be at least 1"));
         }
         Ok(config)
     }

@@ -13,6 +13,9 @@
 [limits]
 # Runs of `cargo xtask ci` that may build at once on this machine, across every checkout. XTASK_SLOTS overrides it.
 slots = 2
+# The size in GiB past which a run empties the target directory's `debug` builds before it starts, when no cargo
+# builds there. Cargo never removes the builds a feature set or package list no longer uses; sccache rebuilds them.
+target_gib = 150
 
 [[rules]]
 name = "workspace inputs"

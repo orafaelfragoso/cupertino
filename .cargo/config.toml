@@ -2,8 +2,9 @@
 [profile.dev]
 debug = "line-tables-only"
 
-# Debug and test builds are incremental (cargo's default), so an edit rebuilds only what changed. CI and packaging set
-# CARGO_INCREMENTAL=0 themselves.
+# Debug and test builds are not incremental, so sccache caches the workspace's own crates as well as their dependencies
+# (it passes incremental crates through uncached) and the target directory keeps no incremental session data.
+incremental = false
 
 # Compiled crates are shared between checkouts through sccache's cache.
 [build]

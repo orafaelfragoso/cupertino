@@ -1,6 +1,6 @@
 //! The scroll count protocol against an in-process server.
 
-mod support;
+use crate::support;
 
 use cupertino_wayland_client::app::{AppEvent, ScrollCounts};
 use support::*;

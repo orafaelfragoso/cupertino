@@ -4,11 +4,20 @@ version = "0.1.0"
 edition.workspace = true
 license = "MPL-2.0"
 description = "Typed access to the Cupertino design tokens, material recipes and animation presets parsed from the specification documents, and the toolkit's theme tokens: semantic colours per control state, control metrics, type scale, focus ring and motion"
+autotests = false
 [package.metadata.cupertino]
 layer = "foundation"
+
+[lib]
+test = false
 
 [dependencies]
 cupertino-animation = { path = "../cupertino-animation" }
 cupertino-geometry = { path = "../cupertino-geometry" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+[[test]]
+# Every file of `tests/` is a module of this one binary (`tests/main.rs`).
+name = "tests"
+path = "tests/main.rs"

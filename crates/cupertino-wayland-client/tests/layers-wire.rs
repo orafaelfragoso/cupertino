@@ -1,7 +1,7 @@
 //! The layers protocol against an in-process server: version gating, what each request puts on the wire and the
 //! events that come back.
 
-mod support;
+use crate::support;
 
 use cupertino_animation::{CubicBezier, LayerCurve};
 use cupertino_app_protocols::layers::{LENS, SPRING_DAMPING, SPRING_RESPONSE};

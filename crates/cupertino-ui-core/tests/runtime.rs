@@ -1,7 +1,7 @@
 //! The production runtime on the headless window system: how it reconciles the application's view with its nodes,
 //! routes keys and moves the focus, and keeps the application's windows.
 
-mod support;
+use crate::support;
 
 use std::cell::Cell;
 use std::rc::Rc;

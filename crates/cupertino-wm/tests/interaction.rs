@@ -1,6 +1,6 @@
 //! Interactive move, resize, snapping to the screen edges and tiling by dragging.
 
-mod common;
+use crate::common;
 
 use common::*;
 use cupertino_wm::{

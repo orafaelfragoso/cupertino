@@ -5,9 +5,13 @@ edition.workspace = true
 license.workspace = true
 description = "Program tests of the Cupertino desktop that start programs from more than one crate"
 publish = false
+autotests = false
 
 [package.metadata.cupertino]
 layer = "testing"
+
+[lib]
+test = false
 
 [dev-dependencies]
 calloop = "0.14"
@@ -42,3 +46,20 @@ wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 wayland-server = "0.31"
 zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
+
+[[test]]
+# Every file of `tests/` is a module of this one binary (`tests/main.rs`), but for those with a [[test]] of their own below.
+name = "tests"
+path = "tests/main.rs"
+
+[[test]]
+# Its own binary: the server starts a hard link of it as `cupertino-portal` with no test filter, so every test
+# the binary holds starts in that process, and each of them must turn into the portal first.
+name = "screenshot"
+path = "tests/screenshot.rs"
+
+[[test]]
+# Its own binary: the server starts a hard link of it as `cupertino-portal` with no test filter, so every test
+# the binary holds starts in that process, and each of them must turn into the portal first.
+name = "shell-dialogs"
+path = "tests/shell-dialogs.rs"

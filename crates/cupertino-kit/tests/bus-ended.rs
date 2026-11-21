@@ -2,8 +2,7 @@
 //! connection's executor that never ends by itself, is closed and released when the runtime that made it ends, so the
 //! bus daemon sees it go and the process keeps nothing of it.
 
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 use cupertino_kit::bus::{self, Bus};
 use cupertino_kit::core::{Application, Command, Window};

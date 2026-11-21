@@ -2,7 +2,7 @@
 //! and a frame whose layers were kept have the bytes of the same list drawn whole, and a request that cannot be
 //! drawn is refused.
 
-mod support;
+use crate::support;
 
 use cupertino_geometry::{Point, Rect};
 use cupertino_ui_render::{

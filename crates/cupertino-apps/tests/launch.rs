@@ -1,6 +1,6 @@
 //! What a shell process starts: the commands of the three kinds of launch, a file's default application and spawning.
 
-mod common;
+use crate::common;
 
 use common::{desktop, entry, vis, write};
 use cupertino_apps::entry::Locale;

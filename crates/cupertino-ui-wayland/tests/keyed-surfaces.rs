@@ -1,8 +1,7 @@
 //! A role extension addresses the view's window and its actual layer surfaces before their frame reaches the wire, and
 //! hears when the window system leaves its wait and when a surface's frame was presented.
 
-#[path = "../../cupertino-wayland-client/tests/support/mod.rs"]
-mod wire;
+use crate::wire;
 
 use cupertino_geometry::{Rect, Size};
 use cupertino_keyboard::modifiers::Profile;

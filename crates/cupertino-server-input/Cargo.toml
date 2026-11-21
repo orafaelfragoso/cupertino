@@ -4,9 +4,13 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "Compositor input primitives: key routing, keyboard layouts and filters, input-method bridge, pointer acceleration, constraints, and hung-client liveness"
+autotests = false
 
 [package.metadata.cupertino]
 layer = "core"
+
+[lib]
+test = false
 
 [dependencies]
 cupertino-defaults = { path = "../cupertino-defaults" }
@@ -25,3 +29,8 @@ zbus = { version = "5", default-features = false, features = ["async-io", "block
 version = "0.7"
 default-features = false
 features = ["wayland_frontend"]
+
+[[test]]
+# Every file of `tests/` is a module of this one binary (`tests/main.rs`).
+name = "tests"
+path = "tests/main.rs"

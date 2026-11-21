@@ -2,8 +2,7 @@
 //! summaries, an unavailable store, and what an exit with an error, a panic and a fatal signal leave behind. Each test
 //! installs the emitter of its own process.
 
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;

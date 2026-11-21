@@ -1,7 +1,7 @@
 //! Layer surfaces over a real wire: what the request sends, how a configure reaches the caller and how the size to draw
 //! at is picked.
 
-mod support;
+use crate::support;
 
 use cupertino_shell_client::{
     Anchor, Error, KeyboardInteractivity, Layer, LayerShell, LayerSurfaceConfig, Margin, ShellEvent,

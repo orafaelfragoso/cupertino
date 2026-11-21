@@ -4,8 +4,12 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "Session manager: owns the login screen's socket and the console, authenticates through PAM in a worker per attempt, opens and supervises user sessions, and returns to the login screen"
+autotests = false
 [package.metadata.cupertino]
 layer = "services"
+
+[lib]
+test = false
 
 [features]
 default = []
@@ -29,3 +33,9 @@ zeroize = "1"
 name = "cupertino-sessiond"
 path = "src/main.rs"
 required-features = ["app"]
+test = false
+
+[[test]]
+# Every file of `tests/` is a module of this one binary (`tests/main.rs`).
+name = "tests"
+path = "tests/main.rs"

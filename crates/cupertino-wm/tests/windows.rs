@@ -1,6 +1,6 @@
 //! A window moves through its lifecycle as commands arrive, and the model tells the compositor what to do.
 
-mod common;
+use crate::common;
 
 use common::*;
 use cupertino_wm::{

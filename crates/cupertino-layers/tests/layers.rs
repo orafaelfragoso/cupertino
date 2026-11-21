@@ -1,6 +1,6 @@
 //! `cupertino-layers` at its public boundary: small workspaces checked through the library and the binary.
 
-mod common;
+use crate::common;
 
 use common::{run_in, stderr, stdout, Fixture};
 use cupertino_layers::Layer::{

@@ -1,7 +1,7 @@
 //! The menu-bar role over a real wire: how a group of events becomes an update, what each version leaves out and the
 //! requests of the bar.
 
-mod support;
+use crate::support;
 
 use cupertino_protocols::server::cupertino_menu_bar_v1::{
     AppWindowFlags, BoundAction as WireBoundAction, ClientKind, CupertinoMenuBarV1,

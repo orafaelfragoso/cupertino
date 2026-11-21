@@ -4,8 +4,12 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "Menu bar for the Cupertino desktop: menu model and layout, interaction state machine, a D-Bus layer (DBusMenu, status notifier items, GMenuModel) and the menu bar component of the shell host"
+autotests = false
 [package.metadata.cupertino]
 layer = "shell"
+
+[lib]
+test = false
 
 [dependencies]
 cupertino-apps = { path = "../cupertino-apps" }
@@ -29,3 +33,8 @@ cupertino-kit = { path = "../cupertino-kit", features = ["test"] }
 
 [[example]]
 name = "menubar_capture"
+
+[[test]]
+# Every file of `tests/` is a module of this one binary (`tests/main.rs`).
+name = "tests"
+path = "tests/main.rs"

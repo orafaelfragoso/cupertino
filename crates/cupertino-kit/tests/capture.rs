@@ -1,8 +1,7 @@
 //! The capture command's shared part: how a command line is read, the names of the pictures it writes, the contact
 //! sheet, what carrying it out draws and writes, and the picture of a window's last frame.
 
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 use std::num::NonZeroU32;
 use std::path::PathBuf;

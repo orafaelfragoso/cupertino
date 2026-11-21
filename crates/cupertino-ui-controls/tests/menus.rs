@@ -1,8 +1,7 @@
 //! Menus as a person uses them: the keys that move between enabled items, choose, open and close submenus and type
 //! to select, what a press chooses, and a pop-up button's menu opening over its chosen option.
 
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 use cupertino_geometry::Insets;
 use cupertino_ui_controls::{

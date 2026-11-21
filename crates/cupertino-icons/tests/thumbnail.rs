@@ -1,7 +1,6 @@
 //! `thumbnail`: the freedesktop.org thumbnail cache of pictures.
 
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};

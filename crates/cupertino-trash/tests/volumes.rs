@@ -1,6 +1,6 @@
 //! Looking at the trash of the mounted volumes, which may not answer, and what a look reports.
 
-mod common;
+use crate::common;
 
 use common::{put_item, Tree};
 use cupertino_trash::{Look, Trash};

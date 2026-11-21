@@ -4,7 +4,7 @@
 //! A machine without a GPU device has nothing to compare; the test says so, and fails only where the environment
 //! says a device must be there.
 
-mod support;
+use crate::support;
 
 use cupertino_gpu::{Device, DeviceDesc, Platform};
 use cupertino_ui_render::gpu::{GpuConfig, GpuRenderer};

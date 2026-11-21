@@ -27,9 +27,9 @@ after such a failure the next requests within 30 s open once without waiting. Th
 switch reads as muted at zero and cannot be muted at a nonzero level. Settings uses this service; the control panel
 and on-screen displays still use their own audio backends.
 
-The `audio1` tests activate the service on a private session bus. To run just that test target, build
+The `audio1` tests activate the service on a private session bus. To run just those tests, build
 its stand-in first: `cargo build -p cupertino-audiod --example audio-backend-stand-in`, then
-`cargo nextest run -p cupertino-audiod --test audio1`.
+`cargo nextest run -p cupertino-audiod audio1::`.
 
 ## Backends
 

@@ -4,8 +4,12 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "The desktop items of the Cupertino desktop, a component of the shell host: the Desktop folder's items on a layer surface of every output, drawn with Kit's file family, kept in a grid between sessions, their file work run on Kit's I/O pool and their copies and moves slice by slice"
+autotests = false
 [package.metadata.cupertino]
 layer = "shell"
+
+[lib]
+test = false
 
 [dependencies]
 async-channel = "2"
@@ -25,3 +29,8 @@ cupertino-kit = { path = "../cupertino-kit", features = ["test"] }
 
 [[example]]
 name = "desktop_capture"
+
+[[test]]
+# Every file of `tests/` is a module of this one binary (`tests/main.rs`).
+name = "tests"
+path = "tests/main.rs"

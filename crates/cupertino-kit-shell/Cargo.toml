@@ -4,9 +4,13 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "The shell's extension to CupertinoKit"
+autotests = false
 
 [package.metadata.cupertino]
 layer = "shellkit"
+
+[lib]
+test = false
 
 [dependencies]
 async-io = "2"
@@ -36,3 +40,8 @@ wayland-protocols-wlr = { version = "0.3", features = ["server"] }
 # the relay between a component and the stand-in passes file descriptors
 rustix = { version = "1", features = ["net"] }
 wayland-server = "0.31"
+
+[[test]]
+# Every file of `tests/` is a module of this one binary (`tests/main.rs`).
+name = "tests"
+path = "tests/main.rs"

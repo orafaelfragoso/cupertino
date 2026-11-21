@@ -1,7 +1,6 @@
 //! `SystemIcons`: the system's own icons by logical name from the asset packs, with the placeholders.
 
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 use cupertino_assets::Assets;
 use cupertino_icons::SystemIcons;

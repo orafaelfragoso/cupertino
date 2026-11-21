@@ -1,9 +1,7 @@
 //! An item's type from its name, then its content, how it is described, which group "arrange by kind" puts it in,
 //! and whether a name is of a type a file chooser's filter names.
 
-#[allow(dead_code)]
-#[path = "support/scratch.rs"]
-mod scratch;
+use crate::scratch;
 
 use cupertino_ui_files::entry::Entry;
 use cupertino_ui_files::mime::{

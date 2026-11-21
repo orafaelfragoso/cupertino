@@ -4,9 +4,13 @@ version = "0.1.0"
 edition.workspace = true
 license = "MPL-2.0"
 description = "Settings store shared by the Cupertino processes: where each settings file lives (environment override, else the XDG configuration directory), typed read and atomic write of the files, change notification"
+autotests = false
 
 [package.metadata.cupertino]
 layer = "system"
+
+[lib]
+test = false
 
 [dependencies]
 async-io = "2"
@@ -18,3 +22,8 @@ serde_json = "1"
 
 [dev-dependencies]
 tempfile = "3"
+
+[[test]]
+# Every file of `tests/` is a module of this one binary (`tests/main.rs`).
+name = "tests"
+path = "tests/main.rs"

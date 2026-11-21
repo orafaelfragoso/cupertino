@@ -4,8 +4,12 @@ version = "0.1.0"
 edition.workspace = true
 license = "MPL-2.0"
 description = "CupertinoKit rendering: the display list a window paints into, damage, the CPU renderer that draws it into premultiplied pixels and the GPU renderer that draws it with cupertino-gpu"
+autotests = false
 [package.metadata.cupertino]
 layer = "ui"
+
+[lib]
+test = false
 
 [dependencies]
 bumpalo = { version = "3.20", features = ["collections"] }
@@ -25,3 +29,8 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 [[bench]]
 name = "instructions"
 harness = false
+
+[[test]]
+# Every file of `tests/` is a module of this one binary (`tests/main.rs`).
+name = "tests"
+path = "tests/main.rs"

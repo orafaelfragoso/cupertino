@@ -1,6 +1,6 @@
 //! Finding the theme data and loading the theme from it.
 
-mod common;
+use crate::common;
 
 use common::Env;
 use cupertino_assets::theme::{

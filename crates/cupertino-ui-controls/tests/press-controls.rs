@@ -1,8 +1,7 @@
 //! Buttons, switches and check boxes as a person uses them: what a press, a key and a drag activate, once and only
 //! while the control takes input, and what each reports.
 
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 use cupertino_geometry::{Insets, Point};
 use cupertino_ui_controls::{Button, ButtonRole, ButtonStyle, CheckBox, Stack, Toggle};

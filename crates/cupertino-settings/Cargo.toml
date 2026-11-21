@@ -4,8 +4,12 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "Settings application on CupertinoKit: pane table, sidebar, navigation history, search, the panes and their controls, and the `cupertino-settings` process"
+autotests = false
 [package.metadata.cupertino]
 layer = "apps"
+
+[lib]
+test = false
 
 [dependencies]
 cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events" }
@@ -27,3 +31,9 @@ zbus = { version = "5", default-features = false, features = ["async-io", "block
 [[bin]]
 name = "cupertino-settings"
 path = "src/main.rs"
+test = false
+
+[[test]]
+# Every file of `tests/` is a module of this one binary (`tests/main.rs`).
+name = "tests"
+path = "tests/main.rs"

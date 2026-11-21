@@ -1,6 +1,6 @@
 //! Applications take the keyboard in most-recently-used order, hide and show, and are switched with the app switcher.
 
-mod common;
+use crate::common;
 
 use common::*;
 use cupertino_wm::{

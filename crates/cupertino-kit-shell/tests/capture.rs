@@ -2,7 +2,7 @@
 //! capture globals: a frame of a rotated or flipped output arrives in its buffer turned, as the server sends it, and
 //! the program gets the upright picture, a region of it cut where the region is on the upright output.
 
-mod support;
+use crate::support;
 
 use std::sync::Mutex;
 

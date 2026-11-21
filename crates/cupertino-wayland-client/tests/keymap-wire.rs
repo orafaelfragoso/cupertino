@@ -2,7 +2,7 @@
 //! translates keys through the keymap of its own text with a keyboard state of its own, connections sent the same text
 //! share one compiled keymap, and one connection ending leaves the others typing.
 
-mod support;
+use crate::support;
 
 use cupertino_wayland_client::{Connection, Event, KeyboardEvent};
 use std::sync::{Arc, Barrier};

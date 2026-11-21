@@ -4,12 +4,21 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "Seat session over systemd-logind's D-Bus protocol without libseat or libsystemd: TakeControl, TakeDevice with pause/resume fd handoff, VT switching, and session state machine"
+autotests = false
 
 [package.metadata.cupertino]
 layer = "platform"
+
+[lib]
+test = false
 
 [dependencies]
 cupertino-devices = { path = "../cupertino-devices" }
 rustix = { version = "1", features = ["fs"] }
 tracing = "0.1"
 zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
+
+[[test]]
+# Every file of `tests/` is a module of this one binary (`tests/main.rs`).
+name = "tests"
+path = "tests/main.rs"

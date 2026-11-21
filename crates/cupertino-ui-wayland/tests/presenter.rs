@@ -1,7 +1,6 @@
 //! A surface's presenter on the transport: when it says to draw, and what of the last frame a frame keeps.
 
-#[path = "../../cupertino-wayland-client/tests/support/mod.rs"]
-mod wire;
+use crate::wire;
 
 use cupertino_geometry::Rect;
 use cupertino_ui_wayland::{Ready, ShmPresenter};

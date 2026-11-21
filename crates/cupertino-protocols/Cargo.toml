@@ -4,9 +4,13 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "Private Wayland protocols between the Cupertino server and its shell processes, with generated client and server bindings; re-exports the public ones"
+autotests = false
 
 [package.metadata.cupertino]
 layer = "protocol"
+
+[lib]
+test = false
 
 [features]
 client = ["dep:wayland-client", "dep:wayland-backend", "dep:wayland-scanner", "dep:bitflags", "cupertino-app-protocols/client"]
@@ -21,9 +25,7 @@ wayland-client = { version = "0.31", optional = true }
 wayland-server = { version = "0.31", optional = true }
 
 [[test]]
-name = "interfaces"
-required-features = ["client", "server"]
-
-[[test]]
-name = "global-shortcuts-wire"
+# Every file of `tests/` is a module of this one binary (`tests/main.rs`).
+name = "tests"
+path = "tests/main.rs"
 required-features = ["client", "server"]

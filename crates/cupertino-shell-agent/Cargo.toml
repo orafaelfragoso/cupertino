@@ -4,8 +4,12 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "Session agent of the Cupertino desktop, a component of the shell host: application restore and login items at login, the log out, restart and shut down panels and the panel that interrupts them, the power key's hold, the low-battery notifications, the session menu's state and org.cupertino.SessionAgent1, on CupertinoKit"
+autotests = false
 [package.metadata.cupertino]
 layer = "shell"
+
+[lib]
+test = false
 
 [dependencies]
 async-channel = "2"
@@ -25,3 +29,8 @@ cupertino-kit = { path = "../cupertino-kit", features = ["test"] }
 
 [[example]]
 name = "agent_capture"
+
+[[test]]
+# Every file of `tests/` is a module of this one binary (`tests/main.rs`).
+name = "tests"
+path = "tests/main.rs"

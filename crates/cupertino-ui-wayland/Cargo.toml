@@ -4,8 +4,12 @@ version = "0.1.0"
 edition.workspace = true
 license = "MPL-2.0"
 description = "CupertinoKit's window system on the Cupertino transport, and drawing on a surface of it with tiny-skia: frame pacing, damage and buffer conversion, popup placement and the text clipboard; the menus published to the desktop menu bar and the accessibility tree over AT-SPI"
+autotests = false
 [package.metadata.cupertino]
 layer = "ui"
+
+[lib]
+test = false
 
 [dependencies]
 accesskit = "0.25"
@@ -32,3 +36,8 @@ cupertino-theme = { path = "../cupertino-theme" }
 rustix = { version = "1", features = ["event"] }
 wayland-protocols = { version = "0.32", features = ["server"] }
 wayland-server = "0.31"
+
+[[test]]
+# Every file of `tests/` is a module of this one binary (`tests/main.rs`).
+name = "tests"
+path = "tests/main.rs"

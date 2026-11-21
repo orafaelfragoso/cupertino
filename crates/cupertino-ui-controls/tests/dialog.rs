@@ -1,8 +1,7 @@
 //! A modal sheet: while it is shown the content behind takes nothing, Return answers with its default button and
 //! Escape with its cancel button, Tab stays inside it, and the content takes input again once it is answered.
 
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 use cupertino_ui_controls::{
     Button, ButtonRole, ButtonStyle, Dialog, DialogAction, DialogButton, DialogKind, Modal,

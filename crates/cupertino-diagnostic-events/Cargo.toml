@@ -5,11 +5,13 @@ edition.workspace = true
 license = "MPL-2.0"
 description = "Diagnostics of every Cupertino process: versioned diagnostic events (the event model, redaction, a bounded store, a memory ring and a journald sink), what the build is and runs on, and frame timelines when CUPERTINO_PROFILE asks"
 build = "build.rs"
+autotests = false
 [package.metadata.cupertino]
 layer = "system"
 
 [lib]
 name = "cupertino_diagnostic_events"
+test = false
 
 [features]
 # The Tracy client. It takes effect only with `--cfg cupertino_tracy` as well (see the README), so `--all-features`, which
@@ -40,3 +42,8 @@ tempfile = "3"
 [lints.rust]
 # `--cfg cupertino_tracy` is set only by a build that asks for the Tracy client (see the README); no cargo feature sets it
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(cupertino_tracy)'] }
+
+[[test]]
+# Every file of `tests/` is a module of this one binary (`tests/main.rs`).
+name = "tests"
+path = "tests/main.rs"

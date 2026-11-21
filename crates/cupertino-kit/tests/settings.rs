@@ -1,8 +1,7 @@
 //! `kit::task::follow_settings`: the files of a settings watch are followed while the application runs, a burst of
 //! changes is reported once after it is quiet, a removal is a change, and each report is heard on the UI thread.
 
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 use std::sync::{Arc, Mutex};
 use std::thread::ThreadId;

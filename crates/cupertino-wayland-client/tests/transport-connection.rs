@@ -1,7 +1,7 @@
 //! The transport's connection against an in-process server: capability discovery, window configures, shm buffer
 //! leases, the wake channel and the end of a connection.
 
-mod support;
+use crate::support;
 
 use cupertino_wayland_client::{
     BufferFormat, BufferLayout, Capability, Connection, Decorations, Disconnect, Error, Event,

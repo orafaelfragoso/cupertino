@@ -1,6 +1,6 @@
 //! The recently-used files: the bookmark file's entries, their times and reading the file.
 
-mod common;
+use crate::common;
 
 use common::write;
 use cupertino_apps::recent::{

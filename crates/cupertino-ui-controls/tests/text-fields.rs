@@ -2,8 +2,7 @@
 //! Return, what a model that lags or sets the text does, a disabled field, and a password field that keeps its
 //! text from everything but its handlers.
 
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 use cupertino_geometry::{Insets, Point};
 use cupertino_ui_controls::{

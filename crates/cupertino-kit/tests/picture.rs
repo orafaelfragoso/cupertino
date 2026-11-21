@@ -1,8 +1,7 @@
 //! `kit::render::picture`: paint operations drawn into a picture on the CPU pool, which comes back to the UI thread as
 //! a message.
 
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 use cupertino_kit::core::{Application, Command, Environment, Window};
 use cupertino_kit::geometry::{Rect, Size};

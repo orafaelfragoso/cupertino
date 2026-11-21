@@ -1,6 +1,6 @@
 //! The idle notification over a real wire: the timeout the watch asks for, the events it reports and its end.
 
-mod support;
+use crate::support;
 
 use cupertino_shell_client::{IdleNotifier, ShellEvent};
 use support::{Offer, Seen, Wire};

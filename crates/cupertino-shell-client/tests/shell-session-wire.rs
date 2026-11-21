@@ -1,7 +1,7 @@
 //! The shell global and the session observer over a real wire: binding by version, the state read at connect, the
 //! changes after it and the requests of the session object.
 
-mod support;
+use crate::support;
 
 use cupertino_defaults::accessibility::DisplayOptions;
 use cupertino_protocols::server::cupertino_session_v1::{Activation, DisplayOption, Request};

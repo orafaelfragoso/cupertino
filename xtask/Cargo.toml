@@ -9,6 +9,11 @@ publish = false
 [package.metadata.cupertino]
 layer = "tools"
 
+[[bin]]
+name = "xtask"
+path = "src/main.rs"
+test = false
+
 [dependencies]
 regex = "1"
 serde = { version = "1", features = ["derive"] }

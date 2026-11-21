@@ -1,6 +1,6 @@
 //! Reading packs, strict opening, and per-name resolution across packs, through the public API over temp dirs.
 
-mod common;
+use crate::common;
 
 use common::{manifest, write};
 use cupertino_assets::{

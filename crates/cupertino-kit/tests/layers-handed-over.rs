@@ -6,11 +6,9 @@
 //! copied into them there, a layer's as drawn. A frame waits until every surface it draws has a buffer; one drawn of a
 //! fractional size is drawn at the size its buffers are; and a raised layer the next frame hides stays hidden.
 
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
-#[path = "../../cupertino-wayland-client/tests/support/mod.rs"]
-mod wire;
+use crate::wire;
 
 use cupertino_diagnostic_events::{self as diag, Record};
 use cupertino_keyboard::modifiers::Profile;

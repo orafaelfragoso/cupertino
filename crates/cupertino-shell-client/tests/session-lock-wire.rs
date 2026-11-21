@@ -1,6 +1,6 @@
 //! The session lock over a real wire: generations of locks, confirmation, lock surfaces and ending a lock.
 
-mod support;
+use crate::support;
 
 use cupertino_shell_client::{Error, SessionLockManager, ShellEvent};
 use cupertino_wayland_client::OutputId;

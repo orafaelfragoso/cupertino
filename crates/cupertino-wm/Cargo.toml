@@ -4,11 +4,20 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "Pure-logic window-management model: apps, windows, lifecycle state machine, focus, snapping, workspaces, the stage and the window overview"
+autotests = false
 [package.metadata.cupertino]
 layer = "models"
+
+[lib]
+test = false
 
 [dependencies]
 cupertino-animation = { path = "../cupertino-animation" }
 cupertino-theme = { path = "../cupertino-theme" }
 cupertino-effects = { path = "../cupertino-effects" }
 cupertino-input = { path = "../cupertino-input" }
+
+[[test]]
+# Every file of `tests/` is a module of this one binary (`tests/main.rs`).
+name = "tests"
+path = "tests/main.rs"

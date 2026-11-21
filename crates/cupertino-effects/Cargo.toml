@@ -4,8 +4,12 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "Renderer-agnostic window effect generators for the Cupertino compositor: warp, funnel and scale minimize meshes, open/close, workspace slide, overview zoom and show-desktop transforms"
+autotests = false
 [package.metadata.cupertino]
 layer = "models"
+
+[lib]
+test = false
 
 [dependencies]
 cupertino-geometry = { path = "../cupertino-geometry" }
@@ -18,3 +22,8 @@ tiny-skia = "0.12"
 [[bench]]
 name = "effects"
 harness = false
+
+[[test]]
+# Every file of `tests/` is a module of this one binary (`tests/main.rs`).
+name = "tests"
+path = "tests/main.rs"

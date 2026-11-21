@@ -3,8 +3,7 @@
 //! its pointer input apart from the other, and when one panics the panic is that instance's and the other goes on
 //! taking input and drawing with the same caches.
 
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 use cupertino_diagnostic_events::{self as diag, Record};
 use cupertino_kit::controls::WINDOW_CONTENT_INSET;

@@ -1,6 +1,6 @@
 //! Moving items to the trash, listing, restoring, deleting and the helpers of the trashinfo records.
 
-mod common;
+use crate::common;
 
 use common::{put_item, Tree};
 use cupertino_trash::{

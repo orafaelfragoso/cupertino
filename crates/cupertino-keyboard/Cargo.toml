@@ -4,9 +4,18 @@ version = "0.1.0"
 edition.workspace = true
 license = "MPL-2.0"
 description = "Keyboard model for the Cupertino compositor: key repeat, modifier profiles, text-editing bindings, desktop shortcuts, accent picker, input-source switcher and an XKB keymap generator"
+autotests = false
 [package.metadata.cupertino]
 layer = "foundation"
+
+[lib]
+test = false
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+[[test]]
+# Every file of `tests/` is a module of this one binary (`tests/main.rs`).
+name = "tests"
+path = "tests/main.rs"

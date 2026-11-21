@@ -1,6 +1,6 @@
 //! `Exec` quoting, field codes and the command an entry turns into.
 
-mod common;
+use crate::common;
 
 use common::{desktop, entry, write};
 use cupertino_apps::exec::{

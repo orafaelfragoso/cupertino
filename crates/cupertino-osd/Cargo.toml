@@ -4,8 +4,12 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "Volume, brightness and keyboard-backlight overlay of the Cupertino desktop, a component of the shell host: show/hold/fade model, segmented meter, effects through cupertino-audiod and the backlight daemons, org.cupertino.Osd1 and the overlay window on CupertinoKit"
+autotests = false
 [package.metadata.cupertino]
 layer = "shell"
+
+[lib]
+test = false
 
 [dependencies]
 async-channel = "2"
@@ -22,3 +26,8 @@ cupertino-kit = { path = "../cupertino-kit", features = ["test"] }
 
 [[example]]
 name = "osd_capture"
+
+[[test]]
+# Every file of `tests/` is a module of this one binary (`tests/main.rs`).
+name = "tests"
+path = "tests/main.rs"

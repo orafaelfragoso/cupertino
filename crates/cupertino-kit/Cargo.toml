@@ -4,8 +4,12 @@ version = "0.1.0"
 edition.workspace = true
 license = "MPL-2.0"
 description = "CupertinoKit, the Cupertino UI toolkit: the one crate applications depend on"
+autotests = false
 [package.metadata.cupertino]
 layer = "ui"
+
+[lib]
+test = false
 
 [features]
 # `cupertino_kit::test`, the headless backend for program tests; enabled only in dev-dependencies
@@ -48,61 +52,6 @@ name = "kit_capture"
 required-features = ["test"]
 
 [[test]]
-name = "bus"
-required-features = ["test"]
-
-[[test]]
-name = "bus-ended"
-required-features = ["test"]
-
-[[test]]
-name = "children"
-required-features = ["test"]
-
-[[test]]
-name = "frame-away"
-required-features = ["test"]
-
-[[test]]
-name = "submitted-panic"
-required-features = ["test"]
-
-[[test]]
-name = "suspended-in-flight"
-required-features = ["test"]
-
-[[test]]
-name = "task"
-required-features = ["test"]
-
-[[test]]
-name = "io-burst"
-required-features = ["test"]
-
-[[test]]
-name = "two-instances"
-required-features = ["test"]
-
-[[test]]
-name = "picture"
-required-features = ["test"]
-
-[[test]]
-name = "layers-handed-over"
-required-features = ["test"]
-
-[[test]]
-name = "capture"
-required-features = ["test"]
-
-[[test]]
-name = "preferences"
-required-features = ["test"]
-
-[[test]]
-name = "settings"
-required-features = ["test"]
-
-[[test]]
-name = "clipboard"
-required-features = ["test"]
+# Every file of `tests/` is a module of this one binary (`tests/main.rs`).
+name = "tests"
+path = "tests/main.rs"

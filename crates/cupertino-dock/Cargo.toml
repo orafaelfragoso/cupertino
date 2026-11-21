@@ -4,8 +4,12 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "Dock for the Cupertino desktop as a component of the shell host: tiles, layout, magnification, bounce animations, hit-testing, drag-reorder and auto-hide, the window feed, the application switcher's panel, the Force Quit dialog and `dock.conf`"
+autotests = false
 [package.metadata.cupertino]
 layer = "shell"
+
+[lib]
+test = false
 
 [dependencies]
 async-channel = "2"
@@ -27,3 +31,8 @@ cupertino-kit = { path = "../cupertino-kit", features = ["test"] }
 
 [[example]]
 name = "dock_capture"
+
+[[test]]
+# Every file of `tests/` is a module of this one binary (`tests/main.rs`).
+name = "tests"
+path = "tests/main.rs"

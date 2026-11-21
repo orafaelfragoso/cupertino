@@ -528,7 +528,12 @@ pub fn checks(
     } else {
         Vec::new()
     };
-    let builds: [Build; 3] = [
+    let builds: [Build; 4] = [
+        (
+            "check",
+            profile.clippy,
+            vec!["check", "--locked", "--all-targets"],
+        ),
         (
             "clippy",
             profile.clippy,
@@ -558,6 +563,10 @@ pub fn checks(
         }
         for feature in &profile.features {
             let configuration = &config.features[feature];
+            // A check-only configuration gets the check and nothing else; the others get everything else.
+            if configuration.check_only != (check == "check") {
+                continue;
+            }
             let mut command = cargo(&base);
             command.extend(configuration.args.iter().cloned());
             if packages.is_empty() {

@@ -88,7 +88,7 @@ Unit tests in `src/` are forbidden, yet Cargo builds a test copy of every librar
 The `pr` and `full` profiles build and test everything twice: once with all features and once with default
 features one package at a time. Each feature set gets its own copy in `target/`, and sccache misses across them.
 
-- [ ] The `default` configuration becomes `cargo check` only (it exists to catch a missing feature, which a build
+- [x] The `default` configuration becomes `cargo check` only (it exists to catch a missing feature, which a build
       catches; tests add nothing there), in `pr` and `full`.
 - [ ] Done when `--profile pr` builds tests once, and `full` is at least 25 % faster than 1,008 s.
 

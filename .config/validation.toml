@@ -50,15 +50,19 @@ patterns = [
     "tools/**",
 ]
 
-# Feature configurations a profile can build and test with.
+# Feature configurations a profile can build and test with: `args` go to cargo, `per_package` builds each package on
+# its own, and `check_only` runs `cargo check --all-targets` over the packages clippy covers instead of clippy,
+# nextest and the doc tests.
 [features.all]
 args = ["--all-features"]
 per_package = false
 
-# Default features, one package at a time, so that features unified across packages cannot hide a missing one.
+# Default features, one package at a time, so that features unified across packages cannot hide a missing one. A
+# missing feature is a build error, so a check finds it; the tests already ran with every feature.
 [features.default]
 args = []
 per_package = true
+check_only = true
 
 # Each profile: its default scope (`changed`, `affected` or `all`; `--scope` wins), its feature configurations, and
 # which checks run. fmt is `off`, `changed` (the changed packages) or `all`; clippy, nextest and doctests are `off`,

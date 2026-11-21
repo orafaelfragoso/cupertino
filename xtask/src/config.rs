@@ -75,6 +75,11 @@ pub struct FeatureConfig {
     pub args: Vec<String>,
     /// Build each package on its own, so feature unification across packages hides nothing.
     pub per_package: bool,
+    /// Run only `cargo check --all-targets` with these features, over the packages clippy covers, instead of
+    /// clippy, nextest and the doc tests: a missing feature is a build error, which a check finds without building
+    /// test binaries for a second feature set.
+    #[serde(default)]
+    pub check_only: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, serde::Serialize)]

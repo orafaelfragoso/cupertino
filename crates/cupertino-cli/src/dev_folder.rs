@@ -1,5 +1,5 @@
-//! `cupertino dev-folder enable|disable`: the one change as root that lets a developer try builds of the shell
-//! processes in the running session without root afterwards. It declares (or removes) the development folder in the
+//! `cupertino dev-folder enable|disable`: the one change as root that lets a developer try builds of the shell host's
+//! components in the running session without root afterwards. It declares (or removes) the development folder in the
 //! system configuration, `/etc/cupertino/compositor.json`, editing that one key in place so every other key keeps its
 //! text, and creates the folder for the user who ran `sudo`.
 
@@ -7,6 +7,7 @@ use crate::{
     Arg, Args, Command, Context, Failure, FailureKind, Group, Reply, Run, Stability, ValueHint,
 };
 use cupertino_defaults::compositor::CompositorSettings;
+use cupertino_diagnostics::dev_builds::{components_run, may_run_from_folder};
 use serde::Serialize;
 use serde_json::Value;
 use std::ops::Range;
@@ -16,14 +17,16 @@ use std::path::{Component, Path, PathBuf};
 
 pub(crate) const GROUP: Group = Group {
     name: "dev-folder",
-    summary: "Declares the development folder shell processes may start from, once, as root",
-    description: "A development folder lets the person who develops the desktop try a build of a shell process (the \
-                  dock, the menu bar, the launcher, the notifications, the control panel, the overlay, the window \
-                  manager) in the running session without root: they copy the build into the folder and restart the \
-                  process with `cupertino shell restart`. Only the system configuration can declare the folder, so \
-                  these commands run as root, once.\n\n\
-                  Processes holding the lock screen's, capture's, the authentication prompt's, data control's or \
-                  desktop control's role never start from the folder, and neither does the server itself. The server \
+    summary: "Declares the development folder shell components may run from, once, as root",
+    description: "A development folder lets the person who develops the desktop try a build of the shell host \
+                  `cupertino-shell` for one component (the dock, the menu bar, the launcher, the notifications, the \
+                  control panel, the on-screen displays, the window manager and the others of the shell) in the \
+                  running session without root: they copy the build into the folder and restart the component with \
+                  `cupertino shell restart`. A component the folder names runs in a host of its own, started from \
+                  the folder's file. Only the system configuration can declare the folder, so these commands run as \
+                  root, once.\n\n\
+                  The session agent always runs in the installed host, and so do the programs the server supervises \
+                  (the lock screen, the portal, the prompts, desktop control), and the server itself. The server \
                   starts the folder's file only when it is a regular file owned by the session's user or root that no \
                   one else can write, in a folder of the same kind.",
     commands: &[COMMANDS],
@@ -34,29 +37,29 @@ const COMMANDS: &[Command] = &[
         path: &["dev-folder", "enable"],
         summary: "Declares the development folder in /etc/cupertino/compositor.json and creates it for the user who \
                   ran sudo",
-        description: "Sets the dev_folder key of /etc/cupertino/compositor.json to the folder and the processes \
-                      allowed to start from it, keeping the file's other keys and their text, and replaces the file \
+        description: "Sets the dev_folder key of /etc/cupertino/compositor.json to the folder and the components \
+                      allowed to run from it, keeping the file's other keys and their text, and replaces the file \
                       atomically. It must run as root (not_root, exit code 4), through sudo from the developer's \
                       account: the folder is created for SUDO_UID and SUDO_GID with mode 0700 when it is missing \
                       (no_invoking_user, exit code 2, without them).\n\n\
                       The folder is --folder, an absolute path, else ~/.local/lib/cupertino/dev of that user. The \
-                      processes are --components, names separated by commas, else every process of the file's shell \
-                      list that may start from a development folder: one whose roles are all among session, menu_bar, \
-                      dock and window_manager. A name that is not such a process fails with exit code 5 \
-                      (unknown_component or ineligible_component), and so does an existing folder that another user \
-                      owns or that its group or others can write (unsafe_folder). A file without a shell list, or \
-                      that is not a JSON object, fails with exit code 5 too; a missing file with exit code 3 \
+                      components are --components, names separated by commas, else every component the file's shell \
+                      section runs (its components less its off) that may run from a development folder: all but the \
+                      session agent. A name that is not such a component fails with exit code 5 (unknown_component \
+                      or ineligible_component), and so does an existing folder that another user owns or that its \
+                      group or others can write (unsafe_folder). A file whose shell section has no components list, \
+                      or that is not a JSON object, fails with exit code 5 too; a missing file with exit code 3 \
                       (no_system_config).\n\n\
-                      A running server of this release reads the key again at once; it applies from each process's \
-                      next start.",
+                      A running server of this release reads the key again at once; it applies from each \
+                      component's next start.",
         examples: &[
             (
                 "cupertino dev-folder enable",
-                "Through sudo: let every eligible shell process start from ~/.local/lib/cupertino/dev.",
+                "Through sudo: let every eligible shell component run from ~/.local/lib/cupertino/dev.",
             ),
             (
                 "cupertino dev-folder enable --components dock,menubar",
-                "Through sudo: let only the dock and the menu bar start from the folder.",
+                "Through sudo: let only the dock and the menu bar run from the folder.",
             ),
             (
                 "cupertino dev-folder enable --folder ~/cupertino-dev",
@@ -69,7 +72,7 @@ const COMMANDS: &[Command] = &[
                 .hint(ValueHint::Dir),
             Arg::option(
                 "components",
-                "the names of the shell processes that may start from the folder, separated by commas",
+                "the names of the shell components that may run from the folder, separated by commas",
             ),
         ],
         run: Run::Once(enable),
@@ -78,12 +81,12 @@ const COMMANDS: &[Command] = &[
         path: &["dev-folder", "disable"],
         summary: "Removes the development folder from /etc/cupertino/compositor.json",
         description: "Removes the dev_folder key of /etc/cupertino/compositor.json, keeping the file's other keys \
-                      and their text, so every shell process starts its installed program from its next start. The \
+                      and their text, so every component runs in the installed host from its next start. The \
                       folder and its files stay. It must run as root (not_root, exit code 4). Without the key it \
                       changes nothing.",
         examples: &[(
             "cupertino dev-folder disable",
-            "Through sudo: stop starting shell processes from the development folder.",
+            "Through sudo: stop starting shell hosts from the development folder.",
         )],
         stability: Stability::Preview,
         args: &[],
@@ -264,43 +267,42 @@ fn enable(args: &Args, cx: &Context) -> Result<Reply, Failure> {
     };
     let (path, text) = read_system(cx)?;
     let settings = CompositorSettings::parse(&text, None).0;
-    let entries = settings
+    let running = settings
         .shell
-        .and_then(|s| s.processes)
+        .as_ref()
+        .and_then(components_run)
         .ok_or_else(|| {
-        Failure::new(
-            FailureKind::Validation,
-            "no_shell_list",
-            format!("{SYSTEM_CONFIG} has no valid shell list, so no process could start from the folder"),
-        )
-    })?;
-    let eligible: Vec<&str> = entries
+            Failure::new(
+                FailureKind::Validation,
+                "no_shell_list",
+                format!("{SYSTEM_CONFIG} has no shell \"components\" list, so no component could run from the folder"),
+            )
+        })?;
+    let eligible: Vec<&str> = running
         .iter()
-        .filter(|e| e.may_start_from_dev_folder())
-        .map(|e| e.name.as_str())
+        .map(String::as_str)
+        .filter(|name| may_run_from_folder(name))
         .collect();
     let components: Vec<String> = match args.value("components") {
         Some(list) => {
             let mut names: Vec<String> = Vec::new();
             for name in list.split(',').map(str::trim).filter(|n| !n.is_empty()) {
-                let Some(entry) = entries.iter().find(|e| e.name == name) else {
+                if !running.iter().any(|n| n == name) {
                     return Err(Failure::new(
                         FailureKind::Validation,
                         "unknown_component",
                         format!(
-                            "{SYSTEM_CONFIG} starts no shell process named {name:?}; these may start from the \
-                             folder: {}",
+                            "{SYSTEM_CONFIG} runs no shell component named {name:?}; these may run from the folder: {}",
                             eligible.join(", ")
                         ),
                     ));
-                };
-                if !entry.may_start_from_dev_folder() {
+                }
+                if !may_run_from_folder(name) {
                     return Err(Failure::new(
                         FailureKind::Validation,
                         "ineligible_component",
                         format!(
-                            "{name} holds a role that always starts its installed program; these may start from \
-                             the folder: {}",
+                            "{name} always runs in the installed shell host; these may run from the folder: {}",
                             eligible.join(", ")
                         ),
                     ));
@@ -317,7 +319,7 @@ fn enable(args: &Args, cx: &Context) -> Result<Reply, Failure> {
         return Err(Failure::new(
             FailureKind::Validation,
             "no_eligible_component",
-            format!("no shell process of {SYSTEM_CONFIG} may start from a development folder"),
+            format!("no shell component of {SYSTEM_CONFIG} may run from a development folder"),
         ));
     }
     let created = ensure_folder(&folder, uid, gid)?;
@@ -325,8 +327,8 @@ fn enable(args: &Args, cx: &Context) -> Result<Reply, Failure> {
     write_system(&path, &text, &edited)?;
     let human = format!(
         "{SYSTEM_CONFIG}: the development folder is {} for {}{}\n\
-         Copy a build of one of them into the folder under its program's name, then run `cupertino shell restart \
-         NAME`; `cupertino shell use-installed NAME` goes back.\n",
+         Copy a build of the shell host into the folder as cupertino-shell, then run `cupertino shell restart \
+         NAME` for one of them; `cupertino shell use-installed NAME` goes back.\n",
         folder.display(),
         components.join(", "),
         if created { " (created)" } else { "" },
@@ -372,8 +374,8 @@ fn disable(_: &Args, cx: &Context) -> Result<Reply, Failure> {
         .and_then(Value::as_str)
         .map(str::to_owned);
     let human = format!(
-        "{SYSTEM_CONFIG}: the development folder{} is no longer used; its files stay. Every shell process starts \
-         its installed program from its next start (`cupertino shell restart NAME` restarts one now).\n",
+        "{SYSTEM_CONFIG}: the development folder{} is no longer used; its files stay. Every shell component runs in \
+         the installed host from its next start (`cupertino shell restart NAME` restarts one now).\n",
         folder.as_ref().map(|f| format!(" {f}")).unwrap_or_default()
     );
     Ok(Reply::new(

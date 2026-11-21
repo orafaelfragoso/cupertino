@@ -1,5 +1,5 @@
 //! Typed diagnostics of a Cupertino installation and the session it runs in: the GPU and its driver, the session, the
-//! desktop portal, the services, the development folder's builds of the shell processes, how the last sessions ended,
+//! desktop portal, the services, the development folder's build of the shell host, how the last sessions ended,
 //! where the logs are and the recent diagnostic events. Every check reads files, asks systemd for unit states and reads
 //! the journal; nothing is changed and no device is opened. [`run`] takes its inputs as [`Sources`], so the tests run it
 //! against a fixture tree. [`events`] reads the diagnostic events back; [`dev_builds`] compares a development build

@@ -86,9 +86,10 @@ fn host_program() {
 
 #[test]
 fn the_session_agent_runs_in_the_shared_host() {
-    let mut config = Config::default();
-    config.shell_processes.clear();
-    config.shell_components = vec!["osd".into(), "agent".into()];
+    let config = Config {
+        shell_components: vec!["osd".into(), "agent".into()],
+        ..Config::default()
+    };
     let facts = HostFacts {
         available: true,
         ..HostFacts::default()

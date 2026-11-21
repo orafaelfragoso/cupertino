@@ -38,9 +38,9 @@ pub struct Cli {
     /// Print what the TTY backend needs from this machine (GPU driver and its settings) and exit; opens no device.
     #[arg(long)]
     pub check_hardware: bool,
-    /// Development and nested runs: let any configuration file name the shell processes and the screenshot process, from
-    /// any path. Without it only the system file, programs under /usr, and the person's file removing or reordering them
-    /// apply.
+    /// Development and nested runs: let any configuration file set the component list, the development folder and the
+    /// screenshot process, this one from any path, and run the shell host found on PATH. Without it only the system file
+    /// sets them, with a screenshot program under /usr.
     #[arg(long)]
     pub dev_shell: bool,
     /// Development-only native controller, supervised on its private Wayland connection.
@@ -969,7 +969,7 @@ pub fn run(cli: Cli) -> Result<()> {
             Instant::now(),
         );
     }
-    // the components run in the shell's hosts when the host program is there, else as their process entries
+    // the components run in the shell's hosts when the host program is there, else not at all
     state
         .supervisor
         .set_host_program(crate::host::find_host_program(

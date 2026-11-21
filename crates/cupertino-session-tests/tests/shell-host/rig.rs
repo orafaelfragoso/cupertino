@@ -84,10 +84,11 @@ impl Rig {
 
         let event_loop: EventLoop<'static, Cupertino> = EventLoop::try_new().unwrap();
         let display: Display<Cupertino> = Display::new().unwrap();
-        let mut config = Config::default();
-        config.shell_processes.clear();
-        config.shell_components = components.iter().map(|c| c.to_string()).collect();
-        config.shell_alone = alone.iter().map(|c| c.to_string()).collect();
+        let config = Config {
+            shell_components: components.iter().map(|c| c.to_string()).collect(),
+            shell_alone: alone.iter().map(|c| c.to_string()).collect(),
+            ..Config::default()
+        };
         let mut state = Cupertino::new(
             display,
             event_loop.handle(),

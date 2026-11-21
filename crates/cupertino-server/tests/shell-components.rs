@@ -1,5 +1,5 @@
 //! `ListShellComponents` of `org.cupertino.Session1`: every component of the server's table, where it runs (the shared
-//! host, a separate host, from the development folder, its process entry, nowhere, or turned off) and whether a host
+//! host, a separate host, from the development folder, nowhere, or turned off) and whether a host
 //! holds its connection, for the session's own user alone.
 
 use std::os::fd::OwnedFd;
@@ -14,8 +14,8 @@ use cupertino_protocols::client::host::cupertino_host_component_v1::{
     self, CupertinoHostComponentV1,
 };
 use cupertino_protocols::client::host::cupertino_host_v1::{self, CupertinoHostV1};
-use cupertino_server::authorization::{Holder, ShellRole, DETACHED_LIFETIME};
-use cupertino_server::config::{DevFolder, ShellProcess};
+use cupertino_server::authorization::{Holder, DETACHED_LIFETIME};
+use cupertino_server::config::DevFolder;
 use cupertino_server::host::HostKind;
 use cupertino_server::quit::{Call, Reject, ShellComponentRecord};
 use cupertino_server::supervisor::HostProgram;
@@ -203,7 +203,6 @@ fn every_component_of_the_table_is_listed_with_where_it_runs_and_whether_it_is_c
 
     // with the host: the shared host, a separate host from the development folder and one of `alone`, one turned off
     let config = Config {
-        shell_processes: Vec::new(),
         shell_off: vec!["osd".into()],
         shell_alone: vec!["launcher".into()],
         dev_folder: Some(DevFolder {
@@ -239,13 +238,8 @@ fn every_component_of_the_table_is_listed_with_where_it_runs_and_whether_it_is_c
         ]
     );
 
-    // without the host: a component with a process entry runs as it, the others nowhere
+    // without the host: nothing runs
     let config = Config {
-        shell_processes: vec![ShellProcess {
-            name: "notifications".into(),
-            command: vec![host_program.display().to_string()],
-            roles: vec![ShellRole::Session],
-        }],
         shell_off: vec!["osd".into()],
         ..Config::default()
     };
@@ -254,12 +248,11 @@ fn every_component_of_the_table_is_listed_with_where_it_runs_and_whether_it_is_c
     let (caller, user) = this_process();
     let listed = rig.list(caller, user).expect("the session's user may list");
     let places: Vec<(&str, &str)> = rows(&listed).iter().map(|r| (r.0, r.1)).collect();
-    assert_eq!(places[6], ("notifications", "process"));
     assert_eq!(places[8], ("osd", "off"));
     assert!(
         places
             .iter()
-            .filter(|(name, _)| !["notifications", "osd"].contains(name))
+            .filter(|(name, _)| *name != "osd")
             .all(|(_, runs_in)| *runs_in == "none"),
         "{places:?}"
     );

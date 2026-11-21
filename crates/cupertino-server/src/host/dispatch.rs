@@ -1159,8 +1159,11 @@ impl Dispatch<CupertinoHostComponentV1, HostComponentData> for Cupertino {
                     tracing::info!(component, "the development folder's host gives the component back to the installed host");
                     state.hosts.dev_given_back.insert(component);
                 } else if reason == UnavailableReason::Absent {
-                    tracing::info!(component, "the host was built without the component: it runs as its process entry, if it has one");
-                    state.hosts.absent.insert(component);
+                    tracing::warn!(
+                        component,
+                        "the host was built without the component: it does not run"
+                    );
+                    return;
                 } else {
                     tracing::warn!(component, "the host was built with other protocol versions: the component stays stopped in it");
                     return;

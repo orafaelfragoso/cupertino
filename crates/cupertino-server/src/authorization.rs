@@ -9,7 +9,6 @@
 
 use std::time::{Duration, Instant};
 
-use cupertino_defaults::compositor::ShellRoleName;
 use cupertino_diagnostic_events::{self as diag, Severity, Value};
 use cupertino_protocols::server::cupertino_shell_v1::Error as ShellError;
 use smithay::desktop::{LayerMap, LayerSurface};
@@ -62,21 +61,6 @@ pub enum ShellRole {
 impl ShellRole {
     const fn bit(self) -> u16 {
         1 << self as u16
-    }
-}
-
-impl From<ShellRoleName> for ShellRole {
-    fn from(name: ShellRoleName) -> Self {
-        match name {
-            ShellRoleName::Session => ShellRole::Session,
-            ShellRoleName::MenuBar => ShellRole::MenuBar,
-            ShellRoleName::Dock => ShellRole::Dock,
-            ShellRoleName::WindowManager => ShellRole::WindowManager,
-            ShellRoleName::Overview => ShellRole::Overview,
-            ShellRoleName::Windows => ShellRole::Windows,
-            ShellRoleName::SessionLock => ShellRole::SessionLock,
-            ShellRoleName::Clipboard => ShellRole::DataControl,
-        }
     }
 }
 

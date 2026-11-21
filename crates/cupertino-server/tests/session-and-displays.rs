@@ -36,8 +36,7 @@ use wayland_client::{Connection, Dispatch, EventQueue, QueueHandle};
 fn make_server() -> (EventLoop<'static, Cupertino>, Cupertino) {
     let event_loop: EventLoop<'static, Cupertino> = EventLoop::try_new().unwrap();
     let display: Display<Cupertino> = Display::new().unwrap();
-    let mut config = Config::default();
-    config.shell_processes.clear();
+    let config = Config::default();
     let state = Cupertino::new(
         display,
         event_loop.handle(),

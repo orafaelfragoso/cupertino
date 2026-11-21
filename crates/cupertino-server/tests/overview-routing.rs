@@ -329,8 +329,7 @@ impl Rig {
     fn new() -> Self {
         let event_loop: EventLoop<'static, Cupertino> = EventLoop::try_new().unwrap();
         let display: Display<Cupertino> = Display::new().unwrap();
-        let mut config = Config::default();
-        config.shell_processes.clear();
+        let config = Config::default();
         let mut state = Cupertino::new(
             display,
             event_loop.handle(),

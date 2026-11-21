@@ -6,8 +6,6 @@
 //!
 //! The menu bar ([`PERSISTING`]) maps a persisted bar reserving [`BAR_HEIGHT`] at the top of its output before it says
 //! it is ready, so what the server holds for it can be looked at.
-//!
-//! With `--process` it is a plain shell process instead: it holds its connection until the server closes it.
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -37,34 +35,13 @@ const BAR_KEY: &str = "bar";
 /// The height of a persisting component's bar in logical pixels, and the space it reserves at the top of its output.
 pub const BAR_HEIGHT: u32 = 28;
 
-/// Be the host, or with `--process` a plain shell process, on the connection of `WAYLAND_SOCKET`.
+/// Be the host on the connection of `WAYLAND_SOCKET`.
 pub fn run() {
     let conn = Connection::connect_to_env().expect("started with a WAYLAND_SOCKET");
-    if std::env::args().any(|arg| arg == "--process") {
-        let mut queue = conn.new_event_queue::<Plain>();
-        let _registry = conn.display().get_registry(&queue.handle(), ());
-        while queue.blocking_dispatch(&mut Plain).is_ok() {}
-        return;
-    }
     let mut queue = conn.new_event_queue::<Host>();
     let _registry = conn.display().get_registry(&queue.handle(), ());
     let mut host = Host::default();
     while !host.exit && queue.blocking_dispatch(&mut host).is_ok() {}
-}
-
-/// A shell process with nothing to do.
-struct Plain;
-
-impl Dispatch<wl_registry::WlRegistry, ()> for Plain {
-    fn event(
-        _: &mut Self,
-        _: &wl_registry::WlRegistry,
-        _: wl_registry::Event,
-        _: &(),
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-    }
 }
 
 #[derive(Default)]

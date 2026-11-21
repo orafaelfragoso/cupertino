@@ -2,14 +2,13 @@
 //! test binary as `cupertino-shell`: started with [`STAND_IN`] it runs the stand-in host of `host-spawning/stand-in.rs`:
 //! - the components of the list run in the shared host, a component of `alone` in a separate host
 //!   (`cupertino-shell --only NAME`), each on the host connection the server passed; a component the host was built
-//!   without runs as its process entry;
-//! - without the host program, or with one that cannot start, the components run as their process entries, and the host
-//!   is not tried again;
+//!   without does not run, and nothing else starts for it;
+//! - without the host program, or with one that cannot start, no component runs, a restart of one is refused as unknown,
+//!   and the host is not tried again;
 //! - a host that exits is started again no sooner than 1 s after its last start, then 2 s, and an exit the server
 //!   expected (`cupertino shell restart host`) is not counted;
 //! - a change of the `shell` section moves a component to a separate host and turns it off, at once;
-//! - `cupertino shell restart NAME` of a hosted component goes through its host and is answered once it is ready; of a
-//!   component that runs as its process entry it restarts the process;
+//! - `cupertino shell restart NAME` of a hosted component goes through its host and is answered once it is ready;
 //! - a component turned off holds nothing any more: what was held for it, its reserved space too, ends at once;
 //! - a host whose connection cannot be bound to its process never ran: the server hears it as such, not as an exit.
 
@@ -58,19 +57,6 @@ fn stand_in() -> (PathBuf, Vec<String>) {
         std::env::current_exe().unwrap(),
         args.map(String::from).to_vec(),
     )
-}
-
-/// A shell process entry that runs the stand-in as a plain process.
-fn process_entry(name: &str) -> ShellProcess {
-    let (program, args) = stand_in();
-    let mut command = vec![program.display().to_string()];
-    command.extend(args);
-    command.push("--process".into());
-    ShellProcess {
-        name: name.into(),
-        command,
-        roles: Vec::new(),
-    }
 }
 
 struct Rig {
@@ -246,7 +232,6 @@ fn answer(
 fn hosted_components_run_in_the_shared_host_and_alone_ones_in_a_separate_host() {
     let config = Config {
         shell_alone: vec!["dock".into()],
-        shell_processes: vec![process_entry("dialogs"), process_entry("dock")],
         ..Config::default()
     };
     let mut rig = Rig::new(config, Some(stand_in()));
@@ -270,23 +255,30 @@ fn hosted_components_run_in_the_shared_host_and_alone_ones_in_a_separate_host() 
         vec!["dock"]
     );
 
-    // the stand-in was built without `dialogs`: it runs as its process entry
-    rig.until("dialogs runs as its process", |s| running(s, "dialogs"));
-    assert!(rig.state.hosts.component_absent("dialogs"));
     assert_eq!(
         rig.host(HostKind::Shared).unwrap().components,
-        components_but(&["dock", "dialogs"]),
+        components_but(&["dock"]),
         "the shared host runs the rest of the table, the session agent `agent` among them"
     );
-    rig.until("every hosted component is connected", |s| {
+    rig.until("every component the host has is connected", |s| {
         components_but(&["dialogs"])
             .iter()
             .all(|c| s.hosts.component_connected(c))
     });
     assert!(rig.state.hosts.component_connected("agent"));
-    assert!(
-        rig.process("dock").is_none(),
-        "the process entry of a component a host runs is left alone"
+    // the stand-in was built without `dialogs`: it does not run, and the server starts nothing else for it
+    assert!(!rig.state.hosts.component_connected("dialogs"));
+    let names: Vec<String> = rig
+        .state
+        .supervisor
+        .processes()
+        .into_iter()
+        .map(|p| p.name)
+        .collect();
+    assert_eq!(
+        names,
+        ["host", "host-dock"],
+        "the hosts alone are supervised"
     );
 
     // `cupertino shell restart menubar` goes through the shared host and is answered once it is ready
@@ -311,32 +303,36 @@ fn hosted_components_run_in_the_shared_host_and_alone_ones_in_a_separate_host() 
 }
 
 #[test]
-fn without_a_host_program_the_components_run_as_their_processes() {
-    let config = || Config {
-        shell_processes: vec![process_entry("dock"), process_entry("files")],
-        ..Config::default()
-    };
-
+fn without_a_host_program_no_component_runs() {
     // not installed
-    let mut rig = Rig::new(config(), None);
-    rig.until("the processes run", |s| {
-        running(s, "dock") && running(s, "files")
-    });
-    assert!(rig.process("host").is_none());
+    let mut rig = Rig::new(Config::default(), None);
+    assert!(rig.state.supervisor.processes().is_empty());
     assert!(rig.state.hosts.host_views().is_empty());
+    assert!(
+        rig.state
+            .shell_components()
+            .iter()
+            .all(|(_, runs_in, _, connected)| runs_in == "none" && !connected),
+        "{:?}",
+        rig.state.shell_components()
+    );
+    let rx = restart(&mut rig, "dock");
+    assert!(
+        matches!(answer(&mut rig, &rx), Err(RestartError::Unknown(name)) if name == "dock"),
+        "a component no host runs is no process to restart"
+    );
 
     // installed, but it cannot start: refused once, then never tried again
     let missing = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("no-such-cupertino-shell");
-    let mut rig = Rig::new(config(), Some((missing, Vec::new())));
+    let mut rig = Rig::new(Config::default(), Some((missing, Vec::new())));
     let start = rig.started;
     assert!(rig.state.supervisor.host_refused().is_some());
-    rig.until("the processes run", |s| {
-        running(s, "dock") && running(s, "files")
-    });
     rig.state.supervise_shell(start + Duration::from_secs(120));
-    assert!(rig.process("host").is_none(), "no restart loop");
+    assert!(
+        rig.state.supervisor.processes().is_empty(),
+        "no restart loop, and nothing runs in the host's place"
+    );
     assert!(rig.state.hosts.host_views().is_empty());
-    assert!(running(&rig.state, "dock"));
 }
 
 #[test]
@@ -460,22 +456,6 @@ fn a_change_of_the_shell_section_moves_and_stops_a_component_at_once() {
     assert!(running(&rig.state, "host"), "the shared host runs on");
 }
 
-#[test]
-fn restarting_a_component_that_runs_as_its_process_restarts_the_process() {
-    let config = Config {
-        shell_processes: vec![process_entry("dock")],
-        ..Config::default()
-    };
-    let mut rig = Rig::new(config, None);
-    rig.until("the dock runs as its process", |s| running(s, "dock"));
-    let before = rig.process("dock").unwrap().pid;
-    let rx = restart(&mut rig, "dock");
-    let info = answer(&mut rig, &rx).expect("the process runs again");
-    assert_eq!(info.name, "dock");
-    assert_ne!(info.pid, before, "a fresh process");
-    assert_eq!(rig.process("dock").unwrap().pid, info.pid);
-}
-
 /// A launcher whose hosts' connections cannot be bound: it records what the supervisor tells it.
 #[derive(Default)]
 struct BindRefused {
@@ -488,7 +468,7 @@ const UNBOUND_HOST: u64 = 7;
 
 impl Launcher for BindRefused {
     fn connect(&mut self, _: &ShellProcess) -> std::io::Result<BoundConnection> {
-        Err(std::io::Error::other("no plain processes here"))
+        Err(std::io::Error::other("no built-in programs here"))
     }
 
     fn connect_host(&mut self, _: HostKind) -> std::io::Result<(UnixStream, u64)> {
@@ -517,14 +497,14 @@ impl Launcher for BindRefused {
 #[test]
 fn a_host_whose_connection_cannot_be_bound_never_ran() {
     let now = Instant::now();
-    let mut supervisor = Supervisor::new(&[], now);
+    let mut supervisor = Supervisor::default();
     let (program, args) = stand_in();
     supervisor.set_host_program(Some(HostProgram {
         path: program,
         args,
         checked: false,
     }));
-    supervisor.reconcile(&[], &[(HostKind::Shared, None)], now);
+    supervisor.reconcile(&[(HostKind::Shared, None)], now);
     let mut launcher = BindRefused::default();
     supervisor.poll(now, None, None, &mut launcher);
     assert_eq!(

@@ -1,4 +1,5 @@
-//! An item's type from its name, then its content, how it is described and which group "arrange by kind" puts it in.
+//! An item's type from its name, then its content, how it is described, which group "arrange by kind" puts it in,
+//! and whether a name is of a type a file chooser's filter names.
 
 #[allow(dead_code)]
 #[path = "support/scratch.rs"]
@@ -6,7 +7,7 @@ mod scratch;
 
 use cupertino_ui_files::entry::Entry;
 use cupertino_ui_files::mime::{
-    detect, entry_mime, kind_description, kind_group, KindGroup, DIRECTORY, UNKNOWN,
+    detect, entry_mime, kind_description, kind_group, name_has_type, KindGroup, DIRECTORY, UNKNOWN,
 };
 use scratch::Scratch;
 
@@ -127,5 +128,22 @@ fn a_type_belongs_to_the_most_specific_group_that_has_it() {
     ];
     for (mime, expected) in rows {
         assert_eq!(kind_group(mime), expected, "{mime}");
+    }
+}
+
+#[test]
+fn a_name_is_of_a_type_its_extension_may_mean_a_wildcard_taking_any_kind_or_subtype() {
+    let rows = [
+        ("image/png", "Photo.PNG", true),
+        ("IMAGE/PNG", "photo.png", true),
+        ("image/*", "photo.jpeg", true),
+        ("*/*", "notes.txt", true),
+        ("image/png", "photo.jpeg", false),
+        ("image/*", "notes.txt", false),
+        ("text/plain", "no-extension", false),
+        ("image", "photo.png", true),
+    ];
+    for (pattern, name, expected) in rows {
+        assert_eq!(name_has_type(pattern, name), expected, "{pattern} {name}");
     }
 }

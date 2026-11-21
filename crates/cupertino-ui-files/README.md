@@ -19,6 +19,8 @@ public items: the family builds on them and `cupertino-ui-controls` gains no dep
 | `mime`, `tags` | metadata | `detect`, `entry_mime`, `kind_group` (`KindGroup`), `kind_description`; `read_tags` / `write_tags` (`user.xdg.tags`), `add_tag`, `remove_tag`, `parse_tag_list`, `TagColor` (seven label colours), `parse_reference_tags` |
 | `applications`, `recents` | the two virtual folders | `location`, `application_dirs`, `session_entries`, `any_installed`; `location`, `recent_entries`, `parse_xbel` and `XBEL_NAME` (`cupertino_apps::recent`'s) |
 | `places` | the places of a sidebar, over the user directories of `cupertino_defaults::user_dirs` | `Place` (name, path, `PlaceGroup`, `PlaceKind` with its symbols and folder icon; `Volume`, `Medium` of a removable file system), `standard_places` (a file browser's sidebar: the home folder, Applications, Desktop, Documents, Downloads, the computer, the network, Trash), `chooser_places` (a file chooser's: Home, then Desktop, Documents, Downloads, Music, Pictures and Videos where they exist), `session_places` (`SessionPlaces`: the running session's, with `folder_icons`), `desktop_folder`, `recents_place`, `follow_trash`, `removable_holding`, `window_title`, `computer_name`, `network_root` |
+| `filepicker` | the model of a file chooser, listing a folder's items in the family's order | `Picker` (`new`, `open`, `settle`, `take_request`, `apply`, `go`, `parent`, `highlight`, `activate`, `choice`, `key`, `set_hidden`, `dir`, `entries`, `highlighted`, `loading`, `unreadable`), `Request` (`run`, `run_with`, `key`), `Listing`, `Mode`, `Key`, `Outcome`, `Reader` |
+| `panel` | a file chooser's open and save panel around a `FileList` | `OpenSavePanel`, `PanelEvent`, `ChoiceValue`, `PanelChoice`, `SaveAs`, `SIDEBAR_WIDTH` |
 | `model` | a folder's items as a sorted list that follows its changes, read by work the program runs | `DirectoryModel::{open, open_recents, open_applications}` (touch no file), `take_work` (one `ModelWork` at a time, in the order asked: the first checks, watches, opens and lists the folder in batches, a later one reads the items a change named or lists the folder again, a virtual folder that changed or any folder whose watch lost changes; `ModelWork::run` keeps a panic of the work as `OpenFailed` or `Error`), `take_watch` (`ModelWatch::follow`, a future that waits on an inotify descriptor through `async-io`'s reactor and ends when its model drops), `poll` → `ModelDelta` (`Opened` or `OpenFailed { kind, error }` first, then `Reloaded`, `LoadComplete`, `Inserted`, `Removed`, `Changed`, `Moved`, `DirectoryGone`, `Error`), `opened`, `is_working`, `set_notify`, `set_sort`, `entries`; `ModelOptions`, `Notify`, `WORK_DEADLINE` (10 s), `enumerate_blocking` |
 | `layout::icon`, `geom` | icon view | `ideal_cell_size`, `max_title_lines`, `layout` (flow / justified, 32 pt section headers), `strip` (a gallery's row), `IconLayout::{hit, hits_in_rect, neighbour}`, `FreeGrid`, in `cupertino-geometry`'s points, sizes and rectangles; `Direction` |
 | `rename`, `name_edit` | names | `RenameTrigger` (a press on the only selected item's name renames it after the double-click interval), `validate_name`, `needs_extension_warning`, `initial_selection`, `unique_name`, `NameError`; `NameEdit::{field, field_mut, commit}` |
@@ -88,10 +90,9 @@ the transfers in slices.
 A view is a widget with public fields, generic over the program's message `M`, as every control is. It takes plain
 values (the items, the selection, the scroll state, a function for an item's icon and one for the field a name is
 edited in), never a model, a session or a window. The three report through one event type and one function, which
-answers `None` for an event the program has no use for: nothing is sent for it. The toolkit's table and lists the
-list and the columns are made of report `Select`, `Open`, `Sort`, `Toggle`, `Scroll` and a column's `Scroll` and
-`Pick` through handlers that must give a message, so a list's or a column view's function gives one for each of
-those.
+answers `None` for an event the program has no use for: nothing is sent for it, the toolkit's table and lists
+included, whose handlers may give no message too. Only the column view's own horizontal scroll goes through a handler
+that must give a message, so a column view's function gives one for `Scroll`.
 
 ```rust
 /// What a file view reports. The program gives each view one function that turns an event into its message, or
@@ -444,25 +445,54 @@ Not in these tasks, because their threads are their callers': Files' transfer th
 window's read, the look-ups, the single-instance service, the places watch and `udisks` are Files' until W7.1; the
 desktop's `desktop-files` and `trash-sizes` threads are W6.10's; the chooser's `read` and `arm` threads are W6.11's.
 
+### The file chooser's model
+
+`filepicker` is the model of a file chooser, with no drawing, for every window that lets the user pick a folder or a
+file: the Settings wallpaper pane and the open and save panel. Its rows are the family's `Entry`, so a view of the
+family draws them as it draws a folder's items.
+
+- The picker never reads the filesystem itself, so a folder on a hung mount cannot freeze a window. `Picker::new(start, mode)`
+  lists nothing; a change of folder makes a `Request` (`take_request`) that a worker runs (`Request::run`, the only place
+  the disk is read) and whose `Listing` goes back to `apply`; until then the picker shows what it had and `loading()` is
+  true. An answer for an older request is dropped. `Picker::open(start, mode)` is the same with the answers read in place
+  (`settle`), for callers with nothing to keep responsive.
+- `Mode::Folder` shows folders, `Mode::Photo` shows folders and PNG and JPEG files, `Mode::Program` shows folders and
+  the files someone may execute, `Mode::File` shows folders and every file (the panel filters them itself). The items
+  come in the family's order, by name as `natural` compares names with folders among the files, as `model` lists a
+  folder (`enumerate_blocking` with the default `SortSpec`). Names that start with a dot are hidden until
+  `set_hidden(true)`.
+- `Picker::key(key, now)` takes the keys of the chooser: Up, Down, Home and End move the highlight (no wrap); Return
+  enters the highlighted folder or chooses the highlighted file; Super+Return (`Key::Choose`) chooses (in `Folder`
+  mode the highlighted folder, else the open one); Super+Up (`Key::Parent`) opens the parent folder; Escape cancels; a
+  typed character jumps to the next entry whose name starts with the text typed so far (`cupertino-ui-controls`' *Type-to-select*).
+  `Picker::go(dir)` opens a folder of a sidebar, whose places the program lists.
+- A folder that cannot be read leaves the picker where it was and sets `unreadable`, which the view words plainly.
+- The result is `Outcome::Choose(path)`, `Cancel`, `Changed` (redraw) or `Ignore`.
+
 ### The open and save panel
 
-The panel keeps its rows in wave 4. The chooser draws a plain list of 24 pt rows in `dialog.rs`, which it shares
-with the application chooser, the sharing picker and two consent dialogs, and which W6.4, W6.11 and W6.14 take apart;
-the portal has no capture example. Rows that are a `FileList` are another look (a header, Files' row height and
-selection, perhaps its columns) and another order (the picker lists folders first by lower-cased name, the family by
-natural order with the sort the program gives), and both need the owner's eye on a sheet.
+`panel::OpenSavePanel` is a file chooser's window content, a view of the family as the others are: plain values and
+one function, `on_event`, that turns a `PanelEvent` into the program's message. The program builds it from the
+chooser's model and the picker (`filepicker`), whose rows are the family's `Entry` in its order.
 
-- Wave 4 shares what is the same already: the places (below) and the row icons (`file_icons`).
-- W6.11, which moves the chooser into `cupertino-shell-dialogs` and gives it a capture example, gains a step: the
-  panel is a view of `kit::files` (the sidebar of places, a `FileList`, the Save As field, the filters and choices,
-  the buttons), built from the chooser's model and the picker, which lists the family's `Entry` in the family's
-  order; `filepicker::Entry` and its reader go (the second pair of copies, which meets only then), and `filepicker`
-  may join `cupertino-ui-files`. It is a look and behaviour change, shown on a review sheet of the panel before and
-  after, open and save, light and dark, for the owner.
-- Settings' chooser sheet (`Chooser` in `cupertino-settings/src/sheet.rs`), which draws rows of its own on the same
-  `Picker`, moves onto that view in W7.2.
-- What a single-selection list does with a band, and whether the panel's sidebar is Files' sidebar, are settled on
-  that sheet.
+- The sidebar is the toolkit's `Sidebar` in Files' look (`SidebarLook::Neutral`, its symbols in the accent): the
+  program's places in sections, the open folder's place selected; a row chosen is `Place(index)`.
+- The items are a `FileList` the program builds and keeps (its scroll, `Presses`, selection), which reports through
+  its own function; a function that answers `None` (a rename, the band in a single-selection list, the toggle of a
+  folder the panel does not open in place) sends nothing. Over the items, a row with the Enclosing Folder button
+  (`Parent`) and the folder's name moves the window, which has no title bar, and the words "This folder can't be
+  opened." show while the last folder asked for could not be read.
+- Saving, the window's top row is the Save As field (`SaveAs`: the name, its revision, the stem it selects as it
+  opens), which takes the focus; a change is `Name`, Return in it `Accept`.
+- Under the items: the filters as a segmented control (`Filter`), each choice as a check box or a segmented control
+  (`Choice(index, ChoiceValue)`), then Cancel (`Cancel`) and the default button (`Accept`, pressable as
+  `can_accept` says). While `replace` names a file, the question whether to replace it and its Cancel
+  (`KeepEditing`) and Replace (`Replace`) stand in their place.
+- The divider between the sidebar and the items is `Split`, the sidebar's scroll `PlacesScroll`.
+
+`cupertino-shell-dialogs` draws it for the portal's file chooser (W6.11); its capture example shows the panel open and
+save, light and dark. Settings' chooser sheet (`Chooser` in `cupertino-settings/src/sheet.rs`), which draws rows
+of its own on the same `Picker`, moves onto it in W7.2.
 
 ### Places and user directories
 

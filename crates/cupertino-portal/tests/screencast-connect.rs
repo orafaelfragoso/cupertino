@@ -1,6 +1,6 @@
 //! Connecting to a PipeWire that is not there.
 
-use cupertino_screencast::Screencast;
+use cupertino_portal::screencast::Screencast;
 
 #[test]
 fn connecting_to_a_socket_nobody_listens_on_fails_with_the_reason() {

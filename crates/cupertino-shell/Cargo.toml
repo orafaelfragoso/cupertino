@@ -27,5 +27,6 @@ cupertino-notifications = { path = "../cupertino-notifications" }
 cupertino-osd = { path = "../cupertino-osd" }
 cupertino-shell-agent = { path = "../cupertino-shell-agent" }
 cupertino-shell-desktop = { path = "../cupertino-shell-desktop" }
+cupertino-shell-dialogs = { path = "../cupertino-shell-dialogs" }
 cupertino-shell-overview = { path = "../cupertino-shell-overview" }
 cupertino-windowmanager = { path = "../cupertino-windowmanager" }

@@ -9,7 +9,6 @@ use cupertino_ui_core::{
     Change, ControlState, Element, Event, EventCx, MeasureCx, PaintCx, Propagation, SemanticsCx,
     Widget,
 };
-use std::rc::Rc;
 
 const EDGE: f64 = 1.0;
 /// Keeps the content's square corners inside the rounded border.
@@ -30,7 +29,7 @@ impl<M: 'static> From<TextBox<M>> for Element<M> {
                 text_box.state,
                 (false, true),
                 text_box.scroller,
-                Rc::new(text_box.on_scroll),
+                crate::scroll::sends(text_box.on_scroll),
                 text_box.enabled,
             )),
             enabled: text_box.enabled,

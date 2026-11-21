@@ -1,18 +1,20 @@
-//! One file-chooser dialog without drawing: the folder it shows, the filter, the selection, the name of a save and the
-//! choices, and the [`Answer`] they make.
+//! One file chooser without drawing: the folder it shows, the filter, the selection, the name of a save and the
+//! choices, and the [`FileAnswer`] they make. Its folders are read by the picker's requests, which the component runs
+//! as tasks.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use cupertino_kit::filepicker::{Entry, Listing, Mode, Outcome, Picker, Request};
+use cupertino_kit::files::mime::name_has_type;
 
-use crate::file_chooser::{Answer, Ask, Choice, Filter, Kind, Pattern};
+use crate::ask::{Choice, FileAnswer, FileAsk, Filter, Kind, Pattern};
 
 /// What the accept button did.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Accept {
     /// The dialog is done.
-    Answer(Answer),
+    Answer(FileAnswer),
     /// The save would replace `0`: ask first, then [`Chooser::replace`].
     Replace(PathBuf),
     /// Nothing to accept yet (no file selected, or no name).
@@ -22,7 +24,7 @@ pub enum Accept {
 /// One open dialog.
 #[derive(Clone, Debug)]
 pub struct Chooser {
-    ask: Ask,
+    ask: FileAsk,
     picker: Picker,
     filter: Option<usize>,
     /// The indices of the picker's entries the filter lets through, worked out once for each listing and filter.
@@ -129,52 +131,39 @@ pub fn glob(pattern: &str, name: &str) -> bool {
     tokens[t..].iter().all(|token| *token == Token::Star)
 }
 
-/// Whether the file `name` matches the MIME type `mime` (`image/png`, `image/*` or `*/*`) by its extension.
-pub fn mime(mime: &str, name: &str) -> bool {
-    let mime = mime.to_ascii_lowercase();
-    let (kind, sub) = mime.split_once('/').unwrap_or((mime.as_str(), "*"));
-    mime_guess::from_path(name).iter().any(|guess| {
-        (kind == "*" || guess.type_().as_str() == kind)
-            && (sub == "*" || guess.subtype().as_str() == sub)
+/// Whether a file named `name` is shown under `filter`.
+pub fn matches(filter: &Filter, name: &str) -> bool {
+    filter.patterns.iter().any(|pattern| match pattern {
+        Pattern::Glob(pattern) => glob(pattern, name),
+        Pattern::Mime(pattern) => name_has_type(pattern, name),
     })
 }
 
-impl Filter {
-    /// Whether a file named `name` is shown under this filter.
-    pub fn matches(&self, name: &str) -> bool {
-        self.patterns.iter().any(|pattern| match pattern {
-            Pattern::Glob(pattern) => glob(pattern, name),
-            Pattern::Mime(pattern) => mime(pattern, name),
-        })
+/// Whether `value` is one of `choice`'s options, or `true` or `false` for a check box.
+pub fn takes(choice: &Choice, value: &str) -> bool {
+    if choice.options.is_empty() {
+        matches!(value, "true" | "false")
+    } else {
+        choice.options.iter().any(|(id, _)| id == value)
     }
 }
 
-impl Choice {
-    /// Whether `value` is one of this choice's options, or `true` or `false` for a check box.
-    pub fn takes(&self, value: &str) -> bool {
-        if self.options.is_empty() {
-            matches!(value, "true" | "false")
-        } else {
-            self.options.iter().any(|(id, _)| id == value)
-        }
-    }
-
-    /// The value it starts at: its initial value when it takes it, else its first option, else unchecked.
-    fn start(&self) -> String {
-        if self.takes(&self.initial) {
-            self.initial.clone()
-        } else {
-            self.options
-                .first()
-                .map_or_else(|| "false".to_owned(), |(id, _)| id.clone())
-        }
+/// The value `choice` starts at: its initial value when it takes it, else its first option, else unchecked.
+fn initial(choice: &Choice) -> String {
+    if takes(choice, &choice.initial) {
+        choice.initial.clone()
+    } else {
+        choice
+            .options
+            .first()
+            .map_or_else(|| "false".to_owned(), |(id, _)| id.clone())
     }
 }
 
 impl Chooser {
     /// The dialog for `ask`, in its folder: `current_folder`, else the folder of `current_file`, else `home`. It lists
     /// nothing until its first [`Chooser::take_request`] is answered.
-    pub fn new(ask: Ask, home: &Path) -> Self {
+    pub fn new(ask: FileAsk, home: &Path) -> Self {
         let start = ask
             .current_folder
             .clone()
@@ -192,8 +181,7 @@ impl Chooser {
         };
         let filter = ask
             .current_filter
-            .as_ref()
-            .and_then(|current| ask.filters.iter().position(|f| f == current))
+            .filter(|&index| index < ask.filters.len())
             .or((!ask.filters.is_empty()).then_some(0));
         let name = ask
             .current_name
@@ -205,7 +193,7 @@ impl Chooser {
                     .map(|n| n.to_string_lossy().into_owned())
             })
             .unwrap_or_default();
-        let choices = ask.choices.iter().map(Choice::start).collect();
+        let choices = ask.choices.iter().map(initial).collect();
         Self {
             picker: Picker::new(&start, mode),
             ask,
@@ -220,14 +208,14 @@ impl Chooser {
     fn refilter(&mut self) {
         let filter = self.filter.and_then(|i| self.ask.filters.get(i));
         self.shown = (self.picker.entries().iter().enumerate())
-            .filter(|(_, e)| e.is_dir || filter.is_none_or(|f| f.matches(&e.name)))
+            .filter(|(_, e)| e.is_dir || filter.is_none_or(|f| matches(f, &e.name)))
             .map(|(i, _)| i)
             .collect();
         let shown: BTreeSet<PathBuf> = self.entries().iter().map(|e| e.path.clone()).collect();
         self.selection.retain(|p| shown.contains(p));
     }
 
-    pub fn ask(&self) -> &Ask {
+    pub fn ask(&self) -> &FileAsk {
         &self.ask
     }
 
@@ -260,7 +248,7 @@ impl Chooser {
 
     /// Set choice `index` to `value`, when it takes it.
     pub fn set_choice(&mut self, index: usize, value: &str) {
-        if self.ask.choices.get(index).is_some_and(|c| c.takes(value)) {
+        if self.ask.choices.get(index).is_some_and(|c| takes(c, value)) {
             self.choices[index] = value.to_owned();
         }
     }
@@ -346,14 +334,6 @@ impl Chooser {
         }
     }
 
-    /// Read the folders asked for here, for callers with nothing to keep responsive.
-    pub fn settle(&mut self) {
-        while let Some(request) = self.take_request() {
-            let listing = request.run();
-            self.apply(listing);
-        }
-    }
-
     /// The label of the accept button.
     pub fn accept_label(&self) -> String {
         if let Some(label) = &self.ask.accept_label {
@@ -366,10 +346,10 @@ impl Chooser {
         .to_owned()
     }
 
-    fn chosen(&self, paths: Vec<PathBuf>) -> Answer {
-        Answer::Chosen {
+    fn chosen(&self, paths: Vec<PathBuf>) -> FileAnswer {
+        FileAnswer::Chosen {
             paths,
-            filter: self.filter.and_then(|i| self.ask.filters.get(i)).cloned(),
+            filter: self.filter,
             choices: self
                 .ask
                 .choices
@@ -421,7 +401,7 @@ impl Chooser {
     }
 
     /// The answer once the person agreed to replace `path`.
-    pub fn replace(&self, path: PathBuf) -> Answer {
+    pub fn replace(&self, path: PathBuf) -> FileAnswer {
         self.chosen(vec![path])
     }
 }

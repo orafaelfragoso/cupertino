@@ -14,8 +14,8 @@ use pw::spa::pod::Pod;
 use pw::stream::{StreamFlags, StreamListener, StreamRc, StreamState};
 use rustix::fs::{memfd_create, MemfdFlags};
 
-use crate::format::{self, Fixed, Offer, DAMAGE_REGIONS};
-use crate::{BufferId, Command, Format, Frame, Notice, Region, Size, State, StreamId};
+use super::format::{self, Fixed, Offer, DAMAGE_REGIONS};
+use super::{BufferId, Command, Format, Frame, Notice, Region, Size, State, StreamId};
 
 type Notices = Box<dyn Fn(Notice) + Send>;
 

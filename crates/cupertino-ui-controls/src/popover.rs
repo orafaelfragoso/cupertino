@@ -11,7 +11,6 @@ use cupertino_ui_core::{
     Change, CommandRegistry, Element, Event, EventCx, Glass, MeasureCx, PaintCx, Popup,
     PopupAnchor, Propagation, Role, SemanticsCx, Widget, Window, WindowBackground, WindowKey,
 };
-use std::rc::Rc;
 
 const ESCAPE: Keysym = Keysym(0xff1b);
 /// The panel's corner radius.
@@ -63,7 +62,7 @@ impl<M: Clone + 'static> Popover<M> {
                         children: vec![scroll::fitted(
                             self.content,
                             self.scroll,
-                            Rc::new(self.on_scroll),
+                            crate::scroll::sends(self.on_scroll),
                         )],
                     })
                     .key("panel"),

@@ -157,7 +157,7 @@ pub(super) struct Sort<M> {
     /// The last column draws no divider after it.
     last: bool,
     order: Option<SortOrder>,
-    on_sort: Option<Rc<Handler<(usize, SortOrder), M>>>,
+    on_sort: Option<Rc<MaybeHandler<(usize, SortOrder), M>>>,
 }
 
 /// One column's share of a row or of the header, with its content inset from the column's edges.
@@ -174,7 +174,7 @@ pub(super) fn header_cell<M: 'static>(
     last: bool,
     column: &Column,
     order: Option<SortOrder>,
-    on_sort: Option<Rc<Handler<(usize, SortOrder), M>>>,
+    on_sort: Option<Rc<MaybeHandler<(usize, SortOrder), M>>>,
 ) -> Element<M> {
     let style = TextStyle {
         weight: FontWeight(HEADER_TEXT_WEIGHT),
@@ -276,8 +276,12 @@ impl<M: 'static> Widget<M> for Cell<M> {
                     Some(SortOrder::Ascending) => SortOrder::Descending,
                     Some(SortOrder::Descending) | None => SortOrder::Ascending,
                 };
-                if let Some(on_sort) = &sort.on_sort {
-                    cx.emit(on_sort((sort.index, order)));
+                if let Some(message) = sort
+                    .on_sort
+                    .as_ref()
+                    .and_then(|on_sort| on_sort((sort.index, order)))
+                {
+                    cx.emit(message);
                 }
                 Propagation::Stop
             }

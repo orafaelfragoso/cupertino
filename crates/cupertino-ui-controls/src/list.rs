@@ -9,7 +9,7 @@ use crate::press::{Keys, Outcome, Press};
 use crate::scroll;
 use crate::window_drag::DOUBLE_CLICK;
 use crate::{
-    Column, ColumnWidth, Handler, Icon, IconDirection, ListView, OutlineTable, RowKeyHandler,
+    Column, ColumnWidth, Handler, Icon, IconDirection, ListView, MaybeHandler, RowKeyHandler,
     Scroller, Selection, SortOrder, TableView, Text, TextRole, TreeItem, TreeToggle, TreeView,
 };
 use cupertino_geometry::{Insets, Point, Rect, Size};
@@ -199,15 +199,24 @@ enum Kind {
 /// A tree's rows and the requests to open and close them, shared by its rows.
 struct Outline<M> {
     item: Box<dyn Fn(usize) -> TreeItem>,
-    on_toggle: Option<Handler<TreeToggle, M>>,
+    on_toggle: Option<MaybeHandler<TreeToggle, M>>,
 }
 
 impl<M> Outline<M> {
     fn toggle(&self, toggle: TreeToggle, cx: &mut EventCx<'_, M>) {
-        if let Some(on_toggle) = &self.on_toggle {
-            cx.emit(on_toggle(toggle));
+        if let Some(message) = self
+            .on_toggle
+            .as_ref()
+            .and_then(|on_toggle| on_toggle(toggle))
+        {
+            cx.emit(message);
         }
     }
+}
+
+/// The handler of a tree, whose handlers always give a message, as a list's handler that may give none.
+fn always<T: 'static, M: 'static>(handler: Handler<T, M>) -> MaybeHandler<T, M> {
+    Box::new(move |value| Some(handler(value)))
 }
 
 impl<M: 'static> From<ListView<M>> for Element<M> {
@@ -260,7 +269,7 @@ impl<M: 'static> ListView<M> {
             list.scroll,
             (false, true),
             Scroller::Overlay,
-            Rc::new(list.on_scroll),
+            Rc::from(list.on_scroll),
         )
     }
 }
@@ -279,13 +288,13 @@ impl<M: 'static> From<TreeView<M>> for Element<M> {
             row: tree.row,
             key: None,
             type_select: tree.type_select,
-            on_select: tree.on_select.map(Rc::new),
-            on_activate: tree.on_activate,
+            on_select: tree.on_select.map(|on_select| Rc::new(always(on_select))),
+            on_activate: tree.on_activate.map(always),
             double_click_activates: tree.double_click_activates,
             on_row_key: None,
             outline: Some(Rc::new(Outline {
                 item: tree.item,
-                on_toggle: tree.on_toggle,
+                on_toggle: tree.on_toggle.map(always),
             })),
             selection_inset: SELECTION_INSET,
             selection_radius: SELECTION_RADIUS,
@@ -298,15 +307,29 @@ impl<M: 'static> From<TreeView<M>> for Element<M> {
             tree.scroll,
             (false, true),
             Scroller::Overlay,
-            Rc::new(tree.on_scroll),
+            scroll::sends(tree.on_scroll),
         )
     }
 }
 
 impl<M: 'static> From<TableView<M>> for Element<M> {
     fn from(table: TableView<M>) -> Self {
-        table_element(table, None, None, false, Selection::default())
+        table_element(table, None, None, false, Selection::default(), false)
     }
+}
+
+/// A [`TableView`] whose rows form an outline, as a [`TreeView`]'s do: each row's first cell comes after its indent and
+/// disclosure triangle, and Left and Right open and close rows as in a tree. Build its element with `Element::from`.
+pub struct OutlineTable<M> {
+    pub table: TableView<M>,
+    pub item: Box<dyn Fn(usize) -> TreeItem>,
+    /// Row `index`'s key, which its focus and accessible object follow while rows come and go above it; its index
+    /// without one.
+    pub key: Option<Box<dyn Fn(usize) -> Key>>,
+    /// The application's message for a row to open or close, or `None`, which sends nothing.
+    pub on_toggle: Option<MaybeHandler<TreeToggle, M>>,
+    /// The rows take the focus when their window opens, as a [`ListView`]'s `initial` does.
+    pub initial: bool,
 }
 
 impl<M: 'static> From<OutlineTable<M>> for Element<M> {
@@ -321,6 +344,7 @@ impl<M: 'static> From<OutlineTable<M>> for Element<M> {
             outline.key,
             false,
             Selection::default(),
+            outline.initial,
         )
     }
 }
@@ -340,6 +364,7 @@ pub fn striped_element<M: 'static>(outline: OutlineTable<M>, ringed: Selection) 
         outline.key,
         true,
         ringed,
+        outline.initial,
     )
 }
 
@@ -349,6 +374,7 @@ fn table_element<M: 'static>(
     key: Option<Box<dyn Fn(usize) -> Key>>,
     striped: bool,
     ringed: Selection,
+    initial: bool,
 ) -> Element<M> {
     let columns: Rc<[Column]> = table.columns.into();
     let cell = table.cell;
@@ -376,7 +402,7 @@ fn table_element<M: 'static>(
         scroll: table.scroll,
         selection: table.selection,
         multiple: table.multiple,
-        initial: false,
+        initial,
         row,
         key,
         type_select: table.type_select,
@@ -424,7 +450,7 @@ fn table_element<M: 'static>(
         table.scroll,
         (false, true),
         Scroller::Overlay,
-        Rc::new(table.on_scroll),
+        Rc::from(table.on_scroll),
     );
     let header = if table.header_top > 0.0 {
         Element::new(RaisedHeader {
@@ -482,8 +508,8 @@ struct Rows<M> {
     row: Box<dyn Fn(usize, bool) -> Element<M>>,
     key: Option<Box<dyn Fn(usize) -> Key>>,
     type_select: Option<Box<dyn Fn(usize) -> String>>,
-    on_select: Option<Rc<Handler<Selection, M>>>,
-    on_activate: Option<Handler<usize, M>>,
+    on_select: Option<Rc<MaybeHandler<Selection, M>>>,
+    on_activate: Option<MaybeHandler<usize, M>>,
     double_click_activates: bool,
     on_row_key: Option<RowKeyHandler<M>>,
     outline: Option<Rc<Outline<M>>>,
@@ -537,7 +563,7 @@ impl<M: 'static> Rows<M> {
         Some(Rc::new(move |index| {
             let mut next = selection.clone();
             next.select_only(index);
-            (next != selection).then(|| on_select(next))
+            (next != selection).then(|| on_select(next)).flatten()
         }))
     }
 
@@ -589,8 +615,12 @@ impl<M: 'static> Rows<M> {
 
     fn select(&self, next: Selection, cx: &mut EventCx<'_, M>) {
         if next != self.selection {
-            if let Some(on_select) = &self.on_select {
-                cx.emit(on_select(next));
+            if let Some(message) = self
+                .on_select
+                .as_ref()
+                .and_then(|on_select| on_select(next))
+            {
+                cx.emit(message);
             }
         }
     }
@@ -641,7 +671,9 @@ impl<M: 'static> Rows<M> {
             RETURN | KP_ENTER if plain => {
                 return match (cursor, &self.on_activate) {
                     (Some(c), Some(on_activate)) => {
-                        cx.emit(on_activate(c));
+                        if let Some(message) = on_activate(c) {
+                            cx.emit(message);
+                        }
                         Propagation::Stop
                     }
                     _ => Propagation::Continue,
@@ -860,7 +892,9 @@ impl<M: 'static> Widget<M> for Rows<M> {
                 }
                 self.select(next, cx);
                 if let (true, Some(on_activate)) = (double, &self.on_activate) {
-                    cx.emit(on_activate(index));
+                    if let Some(message) = on_activate(index) {
+                        cx.emit(message);
+                    }
                 }
                 Propagation::Stop
             }

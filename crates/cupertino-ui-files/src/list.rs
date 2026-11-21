@@ -698,10 +698,6 @@ fn tab_to(names: &[String], cursor: Option<usize>, at: usize, back: bool) -> Opt
     (to != cursor.unwrap_or(at)).then_some(to)
 }
 
-/// What the table reports through a handler that must give a message, which a [`FileList`]'s `on_event` gives for each.
-const TABLE_EVENTS: &str =
-    "a file list's on_event gives a message for Select, Open, Sort, Toggle and Scroll, which its table reports";
-
 /// The folder as an outline table: a header, a row an item with its icon and name first, folders that open in place,
 /// the band and the presses of its rows. It becomes an element with `Element::from`.
 pub struct FileList<M> {
@@ -734,13 +730,21 @@ pub struct FileList<M> {
     #[allow(clippy::type_complexity)]
     pub name_field: Option<(usize, Rc<dyn Fn() -> Element<M>>)>,
     pub presses: Presses,
-    /// The program's message for each event the list reports, or none. The table reports `Select`, `Open`, `Sort`,
-    /// `Toggle` and `Scroll` through handlers that must give one, so the function gives a message for each of those.
+    /// The program's message for each event the list reports, or none, for which nothing is sent.
     pub on_event: Rc<dyn Fn(ViewEvent) -> Option<M>>,
 }
 
 impl<M: Clone + 'static> From<FileList<M>> for Element<M> {
     fn from(list: FileList<M>) -> Element<M> {
+        list.element(false)
+    }
+}
+
+impl<M: Clone + 'static> FileList<M> {
+    /// The list's element; with `focused` its rows take the focus when the window opens, for a window that opens on
+    /// the list, as an open panel does.
+    pub fn element(self, focused: bool) -> Element<M> {
+        let list = self;
         let FileList {
             window: id,
             label,
@@ -849,6 +853,7 @@ impl<M: Clone + 'static> From<FileList<M>> for Element<M> {
                 }),
                 key: Some(Box::new(move |row| row_key(id, &paths[row].path))),
                 on_toggle: Some(report(&on_event, ViewEvent::Toggle)),
+                initial: focused,
             },
             ringed,
         )
@@ -868,13 +873,14 @@ impl<M: Clone + 'static> From<FileList<M>> for Element<M> {
     }
 }
 
-/// The table's handler that reports its values as `event` through `on_event`.
+/// The table's handler that reports its values as `event` through `on_event`, sending nothing where it gives no
+/// message.
 fn report<T: 'static, M: 'static>(
     on_event: &OnEvent<M>,
     event: fn(T) -> ViewEvent,
-) -> Box<dyn Fn(T) -> M> {
+) -> Box<dyn Fn(T) -> Option<M>> {
     let on_event = Rc::clone(on_event);
-    Box::new(move |value| on_event(event(value)).expect(TABLE_EVENTS))
+    Box::new(move |value| on_event(event(value)))
 }
 
 /// The key of the list's row for the item at `path` in window `id`: its focus follows the item while folders open

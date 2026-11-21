@@ -331,8 +331,8 @@ pub fn window<M: Clone + 'static>(p: &Picker, to: fn(Input) -> M) -> Window<M> {
         row: Box::new(move |i, selected| row(&sources[i], selected)),
         key: Some(Box::new(|i| Key::Int(i as u64))),
         type_select: Some(Box::new(move |i| names[i].clone())),
-        on_scroll: Box::new(move |s| to(Input::Scroll(id, s))),
-        on_select: Some(Box::new(move |s| to(Input::Select(id, s)))),
+        on_scroll: Box::new(move |s| Some(to(Input::Scroll(id, s)))),
+        on_select: Some(Box::new(move |s| Some(to(Input::Select(id, s))))),
         // Return reaches the window's shortcut, which a held key's repeats do not send
         double_click_activates: true,
         on_activate: None,

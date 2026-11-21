@@ -15,7 +15,6 @@ mod dialog;
 mod disclosure;
 mod editor;
 mod field;
-pub mod filepicker;
 mod form;
 mod frame_clock;
 mod glass;
@@ -73,7 +72,7 @@ pub use form::{
 };
 pub use glass::{nested_radius, paint_glass, GlassMaterial, GlassRole};
 pub use glass_edge::{paint_glass_edge, GlassEdge};
-pub use list::{striped_element, ListState};
+pub use list::{striped_element, ListState, OutlineTable};
 pub use press::Press;
 pub use scroll::{BarState, ViewportState};
 pub use shell::{
@@ -120,6 +119,9 @@ pub const WINDOW_CONTENT_INSET: Insets = Insets {
 
 /// Turns a control's new value into the application's message.
 pub type Handler<T, M> = Box<dyn Fn(T) -> M>;
+
+/// Turns what a list or table reports into the application's message, or into `None`, which sends nothing.
+pub type MaybeHandler<T, M> = Box<dyn Fn(T) -> Option<M>>;
 
 /// Turns a submitted password into the application's message; the secret is only borrowed.
 pub type SecureHandler<M> = Box<dyn Fn(&SecureBuffer) -> M>;
@@ -1104,10 +1106,11 @@ pub struct ListView<M> {
     pub key: Option<Box<dyn Fn(usize) -> Key>>,
     /// Row `index`'s text for typing to select; without it typing selects nothing.
     pub type_select: Option<Box<dyn Fn(usize) -> String>>,
-    pub on_scroll: Handler<ScrollState, M>,
-    pub on_select: Option<Handler<Selection, M>>,
+    /// Each handler gives the application's message for what the list reports, or `None`, which sends nothing.
+    pub on_scroll: MaybeHandler<ScrollState, M>,
+    pub on_select: Option<MaybeHandler<Selection, M>>,
     /// Return on the cursor row.
-    pub on_activate: Option<Handler<usize, M>>,
+    pub on_activate: Option<MaybeHandler<usize, M>>,
     /// A double click on a row reports `on_activate` too. Off for a list whose rows take their own presses and open
     /// on a double click themselves.
     pub double_click_activates: bool,
@@ -1182,7 +1185,8 @@ pub struct TableView<M> {
     pub label: String,
     pub columns: Vec<Column>,
     pub sort: Option<(usize, SortOrder)>,
-    pub on_sort: Option<Handler<(usize, SortOrder), M>>,
+    /// Each handler gives the application's message for what the table reports, or `None`, which sends nothing.
+    pub on_sort: Option<MaybeHandler<(usize, SortOrder), M>>,
     pub count: usize,
     pub row_height: f64,
     pub scroll: ScrollState,
@@ -1191,9 +1195,9 @@ pub struct TableView<M> {
     /// The cell of row `index` in column `column`, given as `(index, column, selected)`.
     pub cell: Box<dyn Fn(usize, usize, bool) -> Element<M>>,
     pub type_select: Option<Box<dyn Fn(usize) -> String>>,
-    pub on_scroll: Handler<ScrollState, M>,
-    pub on_select: Option<Handler<Selection, M>>,
-    pub on_activate: Option<Handler<usize, M>>,
+    pub on_scroll: MaybeHandler<ScrollState, M>,
+    pub on_select: Option<MaybeHandler<Selection, M>>,
+    pub on_activate: Option<MaybeHandler<usize, M>>,
     /// A double click on a row reports `on_activate` too. Off for a list whose rows take their own presses and open
     /// on a double click themselves.
     pub double_click_activates: bool,
@@ -1205,17 +1209,6 @@ pub struct TableView<M> {
     /// ([`NavigationStack::under_toolbar`], [`unobscured_insets`]); 0 for none. The header then sits below the row and
     /// draws with it, raised, and the rows start below the header and scroll under both.
     pub header_top: f64,
-}
-
-/// A [`TableView`] whose rows form an outline, as a [`TreeView`]'s do: each row's first cell comes after its indent and
-/// disclosure triangle, and Left and Right open and close rows as in a tree. Build its element with `Element::from`.
-pub struct OutlineTable<M> {
-    pub table: TableView<M>,
-    pub item: Box<dyn Fn(usize) -> TreeItem>,
-    /// Row `index`'s key, which its focus and accessible object follow while rows come and go above it; its index
-    /// without one.
-    pub key: Option<Box<dyn Fn(usize) -> Key>>,
-    pub on_toggle: Option<Handler<TreeToggle, M>>,
 }
 
 /// A row of a [`Sidebar`].

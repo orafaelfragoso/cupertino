@@ -360,8 +360,10 @@ fn absolute(what: &str, bytes: Vec<u8>) -> Result<PathBuf, PortalError> {
     Ok(path)
 }
 
-type WireFilter = (String, Vec<(u32, String)>);
-type WireChoice = (String, String, Vec<(String, String)>, String);
+/// A filter as the frontend sends it: its name and `(0 glob | 1 MIME type, pattern)` pairs.
+pub type WireFilter = (String, Vec<(u32, String)>);
+/// A choice as the frontend sends it: id, label, `(id, label)` options, initial value.
+pub type WireChoice = (String, String, Vec<(String, String)>, String);
 
 fn filter((name, patterns): WireFilter) -> Result<Filter, PortalError> {
     if patterns.len() > MAX_PATTERNS {

@@ -1400,20 +1400,16 @@ dependencies = [
  "async-channel",
  "async-io",
  "cupertino-apps",
- "cupertino-assets",
  "cupertino-defaults",
  "cupertino-diagnostic-events",
  "cupertino-geometry",
- "cupertino-icons",
- "cupertino-kit",
  "cupertino-peer",
  "cupertino-protocols",
- "cupertino-screencast",
- "cupertino-ui-wayland",
+ "cupertino-trash",
  "cupertino-wayland-client",
  "futures-lite",
- "mime_guess",
  "percent-encoding",
+ "pipewire",
  "rustix 1.1.6",
  "tiny-skia",
  "wayland-client",
@@ -1492,14 +1488,6 @@ version = "0.1.0"
 dependencies = [
  "cupertino-effects",
  "cupertino-geometry",
-]
-
-[[package]]
-name = "cupertino-screencast"
-version = "0.1.0"
-dependencies = [
- "pipewire",
- "rustix 1.1.6",
 ]
 
 [[package]]
@@ -1674,6 +1662,7 @@ dependencies = [
  "cupertino-shell",
  "cupertino-shell-agent",
  "cupertino-shell-desktop",
+ "cupertino-shell-dialogs",
  "cupertino-ui-render",
  "cupertino-wm",
  "image",
@@ -1742,6 +1731,7 @@ dependencies = [
  "cupertino-osd",
  "cupertino-shell-agent",
  "cupertino-shell-desktop",
+ "cupertino-shell-dialogs",
  "cupertino-shell-overview",
  "cupertino-windowmanager",
 ]
@@ -1792,6 +1782,20 @@ dependencies = [
  "cupertino-trash",
  "percent-encoding",
  "serde_json",
+ "zbus",
+]
+
+[[package]]
+name = "cupertino-shell-dialogs"
+version = "0.1.0"
+dependencies = [
+ "async-channel",
+ "cupertino-apps",
+ "cupertino-assets",
+ "cupertino-defaults",
+ "cupertino-kit",
+ "cupertino-kit-shell",
+ "cupertino-peer",
  "zbus",
 ]
 

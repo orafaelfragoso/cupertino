@@ -136,7 +136,7 @@ impl<M: 'static> From<TileSidebar<M>> for Element<M> {
             sidebar.scroll,
             (false, true),
             Scroller::Overlay,
-            Rc::new(sidebar.on_scroll),
+            crate::scroll::sends(sidebar.on_scroll),
         );
         let mut children = Vec::new();
         if let Some(header) = sidebar.header {

@@ -57,9 +57,12 @@ pub static DOCK: Entry = Entry::of::<cupertino_dock::Dock>();
 /// are holes claiming the strip's windows (`cupertino-windowmanager`).
 pub static WINDOWMANAGER: Entry = Entry::of::<cupertino_windowmanager::WindowManager>();
 
+/// The portal's file choosers and app choosers, `org.cupertino.Dialogs1` (`cupertino-shell-dialogs`).
+pub static DIALOGS: Entry = Entry::of::<cupertino_shell_dialogs::Dialogs>();
+
 /// The components this build of the host runs. A component the server lists that is not here is answered
 /// `unavailable` (`absent`), and the server runs it the way the rest of its configuration says.
-pub static COMPONENTS: [&Entry; 10] = [
+pub static COMPONENTS: [&Entry; 11] = [
     &OSD,
     &NOTIFICATIONS,
     &CONTROLCENTER,
@@ -70,4 +73,5 @@ pub static COMPONENTS: [&Entry; 10] = [
     &OVERVIEW,
     &DOCK,
     &WINDOWMANAGER,
+    &DIALOGS,
 ];

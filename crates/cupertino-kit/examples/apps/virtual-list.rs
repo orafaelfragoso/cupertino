@@ -152,10 +152,10 @@ impl<const COUNT: usize> Application for VirtualList<COUNT> {
             type_select: Some(Box::new(move |index| {
                 format!("Item {}", grouped(Self::item(descending, index)))
             })),
-            on_scroll: Box::new(Message::Scroll),
-            on_select: Some(Box::new(Message::Select)),
+            on_scroll: Box::new(|s| Some(Message::Scroll(s))),
+            on_select: Some(Box::new(|s| Some(Message::Select(s)))),
             double_click_activates: true,
-            on_activate: Some(Box::new(Message::Open)),
+            on_activate: Some(Box::new(|i| Some(Message::Open(i)))),
         })
         .key("list");
         let selected = match items.selection.len() {

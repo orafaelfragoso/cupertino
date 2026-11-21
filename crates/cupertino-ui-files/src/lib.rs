@@ -3,6 +3,7 @@
 //! * [`entry`]: an item of a folder; [`natural`], [`sort`]: the order of names and of items;
 //! * [`mime`], [`tags`]: an item's type and its tags; [`applications`], [`recents`]: the two virtual folders;
 //! * [`places`]: the places of a file browser's sidebar and of a file chooser's, over the user directories;
+//! * [`filepicker`]: the model of a file chooser, which lists a folder's items in the family's order;
 //! * [`model`]: a folder's items as a sorted list that follows its changes, read by work the program runs;
 //! * [`notice`]: failures as notifications, posted by a future on the program's bus connection;
 //! * [`layout`]: the icon layout, with the measured metrics of [`metrics`]; [`geom`]: the direction a key moves in it;
@@ -12,7 +13,7 @@
 //!   thumbnails of the items in view, made by jobs the program runs; [`item_icons`]: what a view draws for an item;
 //! * [`grid`]: the folder as a grid of icons ([`grid::IconGrid`]), [`list`]: as an outline table
 //!   ([`list::FileList`]), and [`columns`]: a chain of folders side by side ([`columns::FileColumns`]), which report
-//!   through [`ViewEvent`].
+//!   through [`ViewEvent`]; [`panel`]: a file chooser's open and save panel around a [`list::FileList`].
 
 use std::path::PathBuf;
 
@@ -26,6 +27,7 @@ mod clicks;
 pub mod columns;
 pub mod entry;
 pub mod file_icons;
+pub mod filepicker;
 pub mod geom;
 pub mod grid;
 pub mod item_art;
@@ -40,6 +42,7 @@ pub mod natural;
 pub mod notice;
 pub mod open;
 pub mod operations;
+pub mod panel;
 pub mod places;
 pub mod recents;
 pub mod rename;

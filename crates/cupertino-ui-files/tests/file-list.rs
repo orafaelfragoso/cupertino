@@ -34,6 +34,8 @@ const SIZE_COLUMN: f64 = 80.0;
 thread_local! {
     /// The row whose name is edited in the next list the thread starts.
     static RENAMING: Cell<Option<usize>> = const { Cell::new(None) };
+    /// The next list the thread starts has no message for opening a row or sorting, as a panel that only picks.
+    static PICKS_ONLY: Cell<bool> = const { Cell::new(false) };
 }
 
 struct Model {
@@ -43,6 +45,7 @@ struct Model {
     presses: Presses,
     scroll: ScrollState,
     renaming: Option<usize>,
+    picks_only: bool,
     events: Vec<ViewEvent>,
 }
 
@@ -69,6 +72,7 @@ impl cupertino_ui_core::Application for List {
                 viewport: SIZE,
             },
             renaming: RENAMING.with(Cell::get),
+            picks_only: PICKS_ONLY.with(Cell::get),
             events: Vec::new(),
         };
         (model, Vec::new())
@@ -107,6 +111,14 @@ impl cupertino_ui_core::Application for List {
                 selected: false,
             })
         });
+        let on_event: Rc<dyn Fn(ViewEvent) -> Option<ViewEvent>> = if model.picks_only {
+            Rc::new(|event| match event {
+                ViewEvent::Open(_) | ViewEvent::Sort(_) => None,
+                event => Some(event),
+            })
+        } else {
+            Rc::new(Some)
+        };
         let list = FileList {
             window: 1,
             label: "Items".into(),
@@ -133,7 +145,7 @@ impl cupertino_ui_core::Application for List {
             lead: 0.0,
             name_field: model.renaming.map(|row| (row, Rc::clone(&field))),
             presses: model.presses.clone(),
-            on_event: Rc::new(Some),
+            on_event,
         };
         vec![support::window(SIZE, Element::from(list))]
     }
@@ -201,6 +213,33 @@ fn a_double_click_and_return_open_a_row() {
     view.click(at, Mods::NONE);
     view.key(RETURN, None, Mods::NONE);
     assert_eq!(view.model().events.last(), Some(&ViewEvent::Open(4)));
+}
+
+#[test]
+fn a_function_with_no_message_for_an_event_gets_nothing_sent_for_it() {
+    PICKS_ONLY.with(|p| p.set(true));
+    let mut view = open(None);
+    PICKS_ONLY.with(|p| p.set(false));
+    let at = name_of(&view, 2);
+    view.click(at, Mods::NONE);
+    view.click(at, Mods::NONE);
+    view.key(RETURN, None, Mods::NONE);
+    let header = view
+        .center_of(Some(Role::ColumnHeader), "Size")
+        .expect("the size column's header is shown");
+    view.click(header, Mods::NONE);
+    assert_eq!(
+        selected(&view.model().selection),
+        [2],
+        "the press still selects"
+    );
+    let events = &view.model().events;
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, ViewEvent::Open(_) | ViewEvent::Sort(_))),
+        "{events:?}"
+    );
 }
 
 #[test]

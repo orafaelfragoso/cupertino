@@ -132,9 +132,44 @@ impl<const MULTIPLE: bool> Scene for Names<MULTIPLE> {
             row: Box::new(|i, selected| text(NAMES[i], selected)),
             key: None,
             type_select: Some(Box::new(|i| NAMES[i].to_string())),
-            on_scroll: Box::new(Msg::Scroll),
-            on_select: Some(Box::new(Msg::Select)),
-            on_activate: Some(Box::new(Msg::Open)),
+            on_scroll: Box::new(|s| Some(Msg::Scroll(s))),
+            on_select: Some(Box::new(|s| Some(Msg::Select(s)))),
+            on_activate: Some(Box::new(|i| Some(Msg::Open(i)))),
+            double_click_activates: true,
+        })
+    }
+}
+
+/// The names, where the application has no message for a selection that holds cherry or for opening a row past it.
+struct Picky;
+
+impl Scene for Picky {
+    type State = State;
+    type Msg = Msg;
+
+    fn state() -> State {
+        state(NAMES.len())
+    }
+
+    fn update(state: &mut State, message: Msg) {
+        update(state, message);
+    }
+
+    fn view(state: &State) -> Element<Msg> {
+        Element::from(ListView {
+            label: "Fruit".into(),
+            count: NAMES.len(),
+            row_height: ROW,
+            scroll: state.scroll,
+            selection: state.selection.clone(),
+            multiple: false,
+            initial: false,
+            row: Box::new(|i, selected| text(NAMES[i], selected)),
+            key: None,
+            type_select: None,
+            on_scroll: Box::new(|s| Some(Msg::Scroll(s))),
+            on_select: Some(Box::new(|s| (!s.contains(3)).then_some(Msg::Select(s)))),
+            on_activate: Some(Box::new(|i| (i < 3).then_some(Msg::Open(i)))),
             double_click_activates: true,
         })
     }
@@ -173,6 +208,35 @@ fn a_press_on_a_row_selects_as_its_modifiers_say_and_only_a_multiple_list_extend
         };
         assert_eq!(state, expected, "{what}");
     }
+}
+
+#[test]
+fn a_handler_that_gives_no_message_sends_nothing() {
+    let mut view = View::<Picky>::open();
+    let (banana, cherry, date) = (
+        row(&view, "banana"),
+        row(&view, "cherry"),
+        row(&view, "date"),
+    );
+    view.click(banana, Mods::NONE);
+    view.key(RETURN, None, Mods::NONE);
+    assert_eq!(view.state().opened, [1], "a row the application opens");
+    view.wait(1.0);
+    view.click(cherry, Mods::NONE);
+    assert_eq!(
+        selected(view.state()),
+        [1],
+        "no message for cherry: the selection stays"
+    );
+    view.wait(1.0);
+    view.click(date, Mods::NONE);
+    view.key(RETURN, None, Mods::NONE);
+    assert_eq!(selected(view.state()), [4]);
+    assert_eq!(
+        view.state().opened,
+        [1],
+        "no message for opening date: nothing opens"
+    );
 }
 
 #[test]
@@ -320,7 +384,7 @@ impl Scene for Table {
                 },
             ],
             sort: state.sort,
-            on_sort: Some(Box::new(Msg::Sort)),
+            on_sort: Some(Box::new(|sort| Some(Msg::Sort(sort)))),
             count: NAMES.len(),
             row_height: ROW,
             scroll: state.scroll,
@@ -331,9 +395,9 @@ impl Scene for Table {
                 _ => text(&NAMES[i].len().to_string(), selected),
             }),
             type_select: None,
-            on_scroll: Box::new(Msg::Scroll),
-            on_select: Some(Box::new(Msg::Select)),
-            on_activate: Some(Box::new(Msg::Open)),
+            on_scroll: Box::new(|s| Some(Msg::Scroll(s))),
+            on_select: Some(Box::new(|s| Some(Msg::Select(s)))),
+            on_activate: Some(Box::new(|i| Some(Msg::Open(i)))),
             double_click_activates: true,
             on_row_key: None,
             header_top: 0.0,

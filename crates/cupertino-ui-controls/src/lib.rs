@@ -1221,6 +1221,8 @@ pub struct OutlineTable<M> {
     pub key: Option<Box<dyn Fn(usize) -> Key>>,
     /// The application's message for a row to open or close, or `None`, which sends nothing.
     pub on_toggle: Option<MaybeHandler<TreeToggle, M>>,
+    /// The rows take the focus when their window opens, as a [`ListView`]'s `initial` does.
+    pub initial: bool,
 }
 
 /// A row of a [`Sidebar`].

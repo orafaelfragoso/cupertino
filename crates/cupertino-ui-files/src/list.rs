@@ -736,6 +736,15 @@ pub struct FileList<M> {
 
 impl<M: Clone + 'static> From<FileList<M>> for Element<M> {
     fn from(list: FileList<M>) -> Element<M> {
+        list.element(false)
+    }
+}
+
+impl<M: Clone + 'static> FileList<M> {
+    /// The list's element; with `focused` its rows take the focus when the window opens, for a window that opens on
+    /// the list, as an open panel does.
+    pub fn element(self, focused: bool) -> Element<M> {
+        let list = self;
         let FileList {
             window: id,
             label,
@@ -844,6 +853,7 @@ impl<M: Clone + 'static> From<FileList<M>> for Element<M> {
                 }),
                 key: Some(Box::new(move |row| row_key(id, &paths[row].path))),
                 on_toggle: Some(report(&on_event, ViewEvent::Toggle)),
+                initial: focused,
             },
             ringed,
         )

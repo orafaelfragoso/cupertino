@@ -315,7 +315,7 @@ impl<M: 'static> From<TreeView<M>> for Element<M> {
 
 impl<M: 'static> From<TableView<M>> for Element<M> {
     fn from(table: TableView<M>) -> Self {
-        table_element(table, None, None, false, Selection::default())
+        table_element(table, None, None, false, Selection::default(), false)
     }
 }
 
@@ -331,6 +331,7 @@ impl<M: 'static> From<OutlineTable<M>> for Element<M> {
             outline.key,
             false,
             Selection::default(),
+            outline.initial,
         )
     }
 }
@@ -350,6 +351,7 @@ pub fn striped_element<M: 'static>(outline: OutlineTable<M>, ringed: Selection) 
         outline.key,
         true,
         ringed,
+        outline.initial,
     )
 }
 
@@ -359,6 +361,7 @@ fn table_element<M: 'static>(
     key: Option<Box<dyn Fn(usize) -> Key>>,
     striped: bool,
     ringed: Selection,
+    initial: bool,
 ) -> Element<M> {
     let columns: Rc<[Column]> = table.columns.into();
     let cell = table.cell;
@@ -386,7 +389,7 @@ fn table_element<M: 'static>(
         scroll: table.scroll,
         selection: table.selection,
         multiple: table.multiple,
-        initial: false,
+        initial,
         row,
         key,
         type_select: table.type_select,

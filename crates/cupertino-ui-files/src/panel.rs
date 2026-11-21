@@ -403,18 +403,13 @@ impl<M: Clone + 'static> From<OpenSavePanel<M>> for Element<M> {
             on_event,
         } = panel;
         let top = top(save_as.is_some());
+        // an open panel opens on its items; a save on its Save As field
+        let list = list.element(save_as.is_none());
         let browser = Element::from(SplitView {
             label: "Sidebar".into(),
             axis: Axis::Horizontal,
             leading: sidebar(places, place, places_scroll, top, &on_event),
-            trailing: items(
-                folder,
-                enclosing,
-                unreadable,
-                Element::from(list),
-                top,
-                &on_event,
-            ),
+            trailing: items(folder, enclosing, unreadable, list, top, &on_event),
             layout: split,
             min_leading: MIN_SIDEBAR,
             max_leading: f64::INFINITY,

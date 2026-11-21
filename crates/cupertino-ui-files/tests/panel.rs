@@ -309,3 +309,11 @@ fn the_items_are_a_file_list_that_reports_through_its_own_function() {
     assert_eq!(view.model().selection.cursor(), Some(1));
     assert!(list.contains(&&Msg::List(ViewEvent::Open(1))), "{list:?}");
 }
+
+#[test]
+fn an_open_panel_opens_with_the_keyboard_on_its_items() {
+    let mut view = open(Shown::default());
+    // no click first: the rows have the focus, so Down selects the first
+    view.key(Keysym(0xff54), None, Mods::NONE);
+    assert_eq!(view.model().selection.cursor(), Some(0));
+}

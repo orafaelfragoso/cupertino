@@ -72,7 +72,7 @@ pub use form::{
 };
 pub use glass::{nested_radius, paint_glass, GlassMaterial, GlassRole};
 pub use glass_edge::{paint_glass_edge, GlassEdge};
-pub use list::{striped_element, ListState};
+pub use list::{striped_element, ListState, OutlineTable};
 pub use press::Press;
 pub use scroll::{BarState, ViewportState};
 pub use shell::{
@@ -1209,20 +1209,6 @@ pub struct TableView<M> {
     /// ([`NavigationStack::under_toolbar`], [`unobscured_insets`]); 0 for none. The header then sits below the row and
     /// draws with it, raised, and the rows start below the header and scroll under both.
     pub header_top: f64,
-}
-
-/// A [`TableView`] whose rows form an outline, as a [`TreeView`]'s do: each row's first cell comes after its indent and
-/// disclosure triangle, and Left and Right open and close rows as in a tree. Build its element with `Element::from`.
-pub struct OutlineTable<M> {
-    pub table: TableView<M>,
-    pub item: Box<dyn Fn(usize) -> TreeItem>,
-    /// Row `index`'s key, which its focus and accessible object follow while rows come and go above it; its index
-    /// without one.
-    pub key: Option<Box<dyn Fn(usize) -> Key>>,
-    /// The application's message for a row to open or close, or `None`, which sends nothing.
-    pub on_toggle: Option<MaybeHandler<TreeToggle, M>>,
-    /// The rows take the focus when their window opens, as a [`ListView`]'s `initial` does.
-    pub initial: bool,
 }
 
 /// A row of a [`Sidebar`].

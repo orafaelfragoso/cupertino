@@ -9,9 +9,8 @@ use crate::press::{Keys, Outcome, Press};
 use crate::scroll;
 use crate::window_drag::DOUBLE_CLICK;
 use crate::{
-    Column, ColumnWidth, Handler, Icon, IconDirection, ListView, MaybeHandler, OutlineTable,
-    RowKeyHandler, Scroller, Selection, SortOrder, TableView, Text, TextRole, TreeItem, TreeToggle,
-    TreeView,
+    Column, ColumnWidth, Handler, Icon, IconDirection, ListView, MaybeHandler, RowKeyHandler,
+    Scroller, Selection, SortOrder, TableView, Text, TextRole, TreeItem, TreeToggle, TreeView,
 };
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_theme::ui::{ColorRole, StateVariant};
@@ -317,6 +316,20 @@ impl<M: 'static> From<TableView<M>> for Element<M> {
     fn from(table: TableView<M>) -> Self {
         table_element(table, None, None, false, Selection::default(), false)
     }
+}
+
+/// A [`TableView`] whose rows form an outline, as a [`TreeView`]'s do: each row's first cell comes after its indent and
+/// disclosure triangle, and Left and Right open and close rows as in a tree. Build its element with `Element::from`.
+pub struct OutlineTable<M> {
+    pub table: TableView<M>,
+    pub item: Box<dyn Fn(usize) -> TreeItem>,
+    /// Row `index`'s key, which its focus and accessible object follow while rows come and go above it; its index
+    /// without one.
+    pub key: Option<Box<dyn Fn(usize) -> Key>>,
+    /// The application's message for a row to open or close, or `None`, which sends nothing.
+    pub on_toggle: Option<MaybeHandler<TreeToggle, M>>,
+    /// The rows take the focus when their window opens, as a [`ListView`]'s `initial` does.
+    pub initial: bool,
 }
 
 impl<M: 'static> From<OutlineTable<M>> for Element<M> {

@@ -1,11 +1,13 @@
 //! The host bus across hosts (`shell-host.md#the-host-bus-and-its-bridge`), through the hosting runtime and a
 //! stand-in server: the bridge's handshake and retained replay, the shared host's checks of every frame, the
-//! forwarding from bridge to bridge and to the host's own components, and a separate host's waiting publications.
+//! forwarding from bridge to bridge and to the host's own components, a separate host's waiting publications, and the
+//! retained publications of a component's separate host, which outlive the instance the shared host lost before it.
 
 mod support;
 
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver};
 use std::sync::Mutex;
 
 use cupertino_kit::core::{Application, Command, Window, WindowKey};
@@ -96,8 +98,54 @@ component!(Osd, ComponentName::OSD, || {
     PUBLISHED.store(true, Ordering::SeqCst);
 });
 
+/// What the stuck menu bar's update waits for before it returns.
+static GATE: Mutex<Option<Receiver<()>>> = Mutex::new(None);
+
+/// A menu bar whose first update waits for the test to let it go, as a loop stuck on work.
+struct Stuck;
+
+impl Application for Stuck {
+    type Model = ();
+    type Message = ();
+
+    fn init() -> ((), Vec<Command<()>>) {
+        ((), vec![Command::Perform(Box::pin(async {}))])
+    }
+
+    fn update(_: &mut (), _: ()) -> Vec<Command<()>> {
+        let gate = GATE.lock().unwrap().take();
+        if let Some(gate) = gate {
+            let _ = gate.recv_timeout(support::PATIENCE);
+        }
+        Vec::new()
+    }
+
+    fn view(_: &()) -> Vec<Window<()>> {
+        Vec::new()
+    }
+}
+
+impl Program for Stuck {
+    fn surface(_: &(), _: &WindowKey) -> Surface {
+        Surface {
+            role: Role::Window,
+            persistent: None,
+            holes: Vec::new(),
+        }
+    }
+
+    fn event(_: Event) -> Option<()> {
+        None
+    }
+}
+
+impl Component for Stuck {
+    const NAME: ComponentName = ComponentName::MENUBAR;
+}
+
 static MENU_BAR: Entry = Entry::of::<MenuBar>();
 static OSD: Entry = Entry::of::<Osd>();
+static STUCK: Entry = Entry::of::<Stuck>();
 
 fn hello(component: &str) -> Value {
     json!({"type": "hello", "version": 1, "component": component})
@@ -275,4 +323,35 @@ fn a_separate_host_says_hello_and_sends_what_waited_for_the_bridge() {
 
     osd.stop();
     eventually("the osd stops", || osd.ended().is_some());
+}
+
+#[test]
+fn a_lost_instance_that_ends_late_leaves_what_its_separate_host_retained() {
+    let (server, host_end) = Server::start(Kind::Shared, &["menubar"]);
+    let mut host = connect_host(host_end);
+    wait_for(&mut host, |event| matches!(event, HostEvent::Components(_)));
+    let environment = cupertino_kit::app::environment().expect("toolkit environment");
+    let runtime = Runtime::for_host(&mut host, Kind::Shared, environment).unwrap();
+    let (release, gate) = mpsc::channel();
+    *GATE.lock().unwrap() = Some(gate);
+    let connection = component_connection(&mut host, "menubar");
+    let mut lost = runtime.start(&STUCK, connection).unwrap();
+    eventually("the menu bar's loop is stuck", || lost.busy_for().is_some());
+
+    // the host cuts the stuck instance off as lost; the menu bar runs again alone, and its separate host's
+    // publication is retained here
+    lost.shut();
+    let (mut dock, _) = join(&server, &mut host, "dock", 0);
+    let (mut menu_bar, _) = join(&server, &mut host, "menubar", 0);
+    send_frame(&mut menu_bar, &message("menubar", panel_shown("Launcher")));
+    assert_eq!(
+        read_frame(&mut dock),
+        Some(message("menubar", panel_shown("Launcher")))
+    );
+
+    // the lost thread wakes and ends: what the menu bar's separate host retained stays
+    release.send(()).unwrap();
+    eventually("the lost instance ends", || lost.ended().is_some());
+    let (_osd, replay) = join(&server, &mut host, "osd", 1);
+    assert_eq!(replay, vec![message("menubar", panel_shown("Launcher"))]);
 }

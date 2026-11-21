@@ -13,6 +13,7 @@ use cupertino_kit::core::WindowKey;
 use cupertino_kit::geometry::{Rect, Size};
 use cupertino_kit::platform::SystemAppearance;
 use cupertino_kit::prelude::WindowSpec;
+use cupertino_protocols::client::cupertino_keyboard_panels_v1::CupertinoKeyboardPanelsV1;
 use cupertino_protocols::client::cupertino_shell_v1::CupertinoShellV1;
 use cupertino_protocols::client::cupertino_window_manager_v1::CupertinoWindowManagerV1;
 use cupertino_protocols::client::overview::cupertino_overview_manager_v1::CupertinoOverviewManagerV1;
@@ -34,7 +35,7 @@ use cupertino_wayland_client::{
 };
 
 use super::globals;
-use super::protocols::{OverviewData, Quiet, WindowManagerData, Wire};
+use super::protocols::{KeyboardPanelsData, OverviewData, Quiet, WindowManagerData, Wire};
 use super::Shared;
 use crate::context::{self, Inbox};
 use crate::link::ComponentLink;
@@ -134,6 +135,10 @@ pub(crate) struct ShellRoles {
     pub(super) idle_watches: HashMap<u64, IdleWatch>,
     pub(super) window_managers: HashMap<OutputId, CupertinoWindowManagerV1>,
     pub(super) overviews: HashMap<OutputId, CupertinoOverviewV1>,
+    /// The keyboard's panels, the on-screen displays' alone (`crate::keyboard_panels`).
+    pub(super) keyboard_panels: Option<CupertinoKeyboardPanelsV1>,
+    /// The shell global the keyboard's panels are asked of, until they are.
+    keyboard_panels_shell: Option<CupertinoShellV1>,
     pub(super) transactions: HashMap<transaction::Id, CupertinoTransactionV1>,
     /// Windows staged in a transaction before their first commit: staged with it.
     pub(super) pending_stages: Vec<(transaction::Id, WindowKey)>,
@@ -174,6 +179,16 @@ impl ShellRoles {
                 )
             })
             .flatten();
+        // the object comes once the window system routes the roles' events ([`ShellRoles::open_keyboard_panels`]):
+        // a list the server sends at once is not read before then
+        let keyboard_panels_shell = (component == Some(ComponentName::OSD))
+            .then(|| {
+                conn.bind_extension::<CupertinoShellV1, _>(
+                    globals::SHELL_KEYBOARD_PANELS_VERSION..=globals::SHELL_KEYBOARD_PANELS_VERSION,
+                    Quiet,
+                )
+            })
+            .flatten();
         let globals = Globals {
             layer_shell: LayerShell::bind(conn),
             shell,
@@ -205,6 +220,8 @@ impl ShellRoles {
             idle_watches: HashMap::new(),
             window_managers: HashMap::new(),
             overviews: HashMap::new(),
+            keyboard_panels: None,
+            keyboard_panels_shell,
             transactions: HashMap::new(),
             pending_stages: Vec::new(),
             consent_window: None,
@@ -659,6 +676,7 @@ impl ShellRoles {
         let event = match event {
             Wire::WindowManager(output, update) => Event::WindowManager(*output, update.clone()),
             Wire::Overview(output, update) => Event::Overview(*output, update.clone()),
+            Wire::KeyboardPanels(update) => Event::KeyboardPanels(update.clone()),
             Wire::Transaction(event) => {
                 if let transaction::Event::Finished { id, .. } = event {
                     if let Some(object) = self.transactions.remove(id) {
@@ -683,6 +701,16 @@ impl ShellRoles {
             }
         };
         self.inbox.push(event);
+    }
+
+    /// Ask for the keyboard's panels, when the program is the on-screen displays: called as the window system takes
+    /// the roles, so that what the server sends at once (a switch under way) reaches the program.
+    pub(crate) fn open_keyboard_panels(&mut self, conn: &mut Connection) {
+        if let Some(shell) = self.keyboard_panels_shell.take() {
+            self.keyboard_panels = Some(
+                shell.get_keyboard_panels(&conn.queue_handle(), KeyboardPanelsData::default()),
+            );
+        }
     }
 
     /// Tells the program the session's appearance and display options the window system started on, the ones its

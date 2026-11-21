@@ -17,7 +17,7 @@ fn shape(messages: &'static [MessageDesc]) -> Shape {
 
 #[test]
 fn every_interface_agrees_between_client_and_server_and_dates_its_messages_within_its_version() {
-    let pairs: [(&Interface, &Interface); 18] = [
+    let pairs: [(&Interface, &Interface); 19] = [
         (
             client::cupertino_dock_v1::CupertinoDockV1::interface(),
             server::cupertino_dock_v1::CupertinoDockV1::interface(),
@@ -37,6 +37,10 @@ fn every_interface_agrees_between_client_and_server_and_dates_its_messages_withi
         (
             client::cupertino_window_manager_v1::CupertinoWindowManagerV1::interface(),
             server::cupertino_window_manager_v1::CupertinoWindowManagerV1::interface(),
+        ),
+        (
+            client::cupertino_keyboard_panels_v1::CupertinoKeyboardPanelsV1::interface(),
+            server::cupertino_keyboard_panels_v1::CupertinoKeyboardPanelsV1::interface(),
         ),
         (
             client::screenshot::cupertino_screenshot_v1::CupertinoScreenshotV1::interface(),

@@ -15,6 +15,7 @@ pub mod design;
 pub mod dock;
 pub mod host;
 pub mod hosting;
+pub mod keyboard_panels;
 mod link;
 pub mod lock;
 pub mod menu_bar;
@@ -244,6 +245,8 @@ pub enum Event {
     Dock(WindowKey, dock::Update),
     WindowManager(OutputId, window_manager::Update),
     Overview(OutputId, overview::Update),
+    /// What the keyboard's panels show: only for the component that holds the `keyboard_panels` role.
+    KeyboardPanels(keyboard_panels::Update),
     Transaction(transaction::Event),
     Bus {
         from: bus::Sender,

@@ -17,6 +17,9 @@ pub(crate) const SHELL_DOCK_VERSION: u32 = 28;
 /// its rectangle and `strip_pressed` came with 29, which moved the opcode of `done`, so a window manager never runs
 /// on an older server.
 pub(crate) const SHELL_WINDOW_MANAGER_VERSION: u32 = 29;
+
+/// `cupertino_shell_v1` as the on-screen displays speak it: the keyboard's panels (`get_keyboard_panels`) came with 30.
+pub(crate) const SHELL_KEYBOARD_PANELS_VERSION: u32 = 30;
 /// `zwlr_layer_shell_v1`: on-demand keyboard interactivity came with version 4.
 pub(crate) const LAYER_SHELL_VERSION: u32 = 4;
 /// `cupertino_transaction_manager_v1`, which every component's connection sees.
@@ -37,6 +40,8 @@ pub(crate) fn needs(component: ComponentName) -> Vec<(&'static str, u32)> {
         SHELL_WINDOW_MANAGER_VERSION
     } else if component == ComponentName::MENUBAR {
         SHELL_MENU_BAR_VERSION
+    } else if component == ComponentName::OSD {
+        SHELL_KEYBOARD_PANELS_VERSION
     } else {
         SHELL_SESSION_VERSION
     };

@@ -53,6 +53,7 @@ version that added it (`since`). A host speaks the versions it was built with an
 | `dock` | be the dock of an output, end applications, draw the application switcher (`cupertino_dock_v1`) | `dock` |
 | `window_manager` | arrange the windows of an output (`cupertino_window_manager_v1`); claim windows in holes | `windowmanager` |
 | `overview` | follow an output's windows and workspaces (`cupertino_overview_v1`); claim windows in holes; show workspaces in holes; bind gestures to transactions | `overview` |
+| `keyboard_panels` | draw the input-source switcher and the accent picker (`cupertino_keyboard_panels_v1`); pick a candidate of the open picker | `osd` |
 | `windows` | show windows and minimized windows' pictures in holes (`cupertino_hole_v1`) | `dock`, `overview`, `windowmanager` |
 | `session_agent` | receive the session's requests for its panels (`log_out_requested`); be the session agent for `org.cupertino.Session1` | `agent` |
 | `session_lock` | take the session lock (`ext_session_lock_v1`); receive `lock_requested` | `cupertino-login` |
@@ -83,7 +84,7 @@ roles or its bus names. The host holds the same names, each bound to its compone
 | `launcher` | `cupertino-launcher` | the launcher | `session` | `org.cupertino.Launcher1` | none |
 | `notifications` | `cupertino-notifications` | banners, the notification list | `session` | `org.freedesktop.Notifications`, `org.cupertino.NotificationCenter1` | none |
 | `controlcenter` | `cupertino-controlcenter` | the control panel | `session` | `org.cupertino.ControlPanel1` | none |
-| `osd` | `cupertino-osd` | on-screen displays, the input-source switcher, the accent picker | `session`, and what the design note of W6.12 adds | `org.cupertino.Osd1` | none |
+| `osd` | `cupertino-osd` | on-screen displays, the input-source switcher, the accent picker | `session`, `keyboard_panels` | `org.cupertino.Osd1` | none |
 | `agent` | `cupertino-shell-agent` | application restore, login items, the log out, restart and shut down panels and the panel that interrupts them, the power button and low battery panels | `session`, `session_agent` | `org.cupertino.SessionAgent1` | none |
 | `dialogs` | `cupertino-shell-dialogs` | the portal's file and application choosers | `session` | `org.cupertino.Dialogs1` | none |
 
@@ -1506,6 +1507,7 @@ manager interfaces. Each edit belongs to the task that builds what it describes,
 | W6.8 | `cupertino_shell_v1` | `get_dock`: the clause on the origin of windows entering the overview goes |
 | W6.9 | `cupertino_window_manager_v1` | the strip leaves the server: the `strip` entry of `placement`, the rectangle of `set_placement`, `strip_pressed` and the strip half of `invalid_placement` go; the description says that a strip window is a claimed hole of the window manager's surface and that the server draws no strip |
 | W6.9 | `cupertino_shell_v1` | `get_window_manager`: the window manager has a surface of its own for the strip, an ordinary layer surface it persists |
+| W6.12 | `cupertino_shell_v1` | `get_keyboard_panels` (version 30) and the new interface `cupertino_keyboard_panels_v1`: the switcher's list, the picker's candidates and `accent_pick`, for the connection that holds `keyboard_panels` |
 | W6.close | `cupertino_menu_bar_v1` | `session_agent` and `agent_trust` go with the process path: from W6.13 no client reads them |
 
 - W5.5's edits add to what the server does; the messages W6.8 and W6.9 remove keep working until those tasks, as

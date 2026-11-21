@@ -56,6 +56,20 @@ fn the_on_screen_displays_fade_at_constant_speed_over_seven_tenths_of_a_second()
 }
 
 #[test]
+fn the_input_source_switcher_fades_at_constant_speed_over_three_tenths_of_a_second() {
+    let fade = Timing::INPUT_SOURCES_FADE;
+    assert_eq!(fade, Easing::LINEAR.over(0.3));
+    assert_eq!(fade.duration(), 0.3);
+    for t in [0.0, 0.075, 0.15, 0.225, 0.3] {
+        assert!(
+            (fade.value(t) - t / 0.3).abs() < 1e-9,
+            "{t} s into the fade: {}",
+            fade.value(t)
+        );
+    }
+}
+
+#[test]
 fn a_chosen_menu_row_flashes_off_for_two_frames_then_on_for_four() {
     let at_60_hz = |timing: Timing| (timing.duration() * 60.0).round();
     assert_eq!(Timing::MENU_CHOICE_OFF, Easing::LINEAR.over(0.034));

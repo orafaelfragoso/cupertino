@@ -1225,7 +1225,6 @@ use compose::backdrop_elements;
 use layers::{popup_backdrop_elements, popup_presentation};
 
 pub use compose::compose_scene;
-pub(crate) use compose::{glass_layer, material_layer};
 use holes::held_hole_pieces;
 pub(crate) use holes::hole_pieces;
 pub use layers::{

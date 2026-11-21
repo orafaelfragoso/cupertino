@@ -16,7 +16,7 @@
 //!
 //! The compositor's own **key repeat** lives here as well. Clients repeat for themselves from
 //! `wl_keyboard.repeat_info`; keys the compositor consumes (repeating shortcuts, the input-source HUD's arrows, the
-//! accent popup's navigation) never reach a client, so the compositor repeats them with the same delay and interval
+//! accent picker's navigation) never reach a client, so the compositor repeats them with the same delay and interval
 //! (one repeating key). A repeat replays the press through the overlays and the shortcut router
 //! while the key and the same modifiers stay down. The accent picker's trigger is a repeat too: a held letter with
 //! accent alternatives reaches the application as a press and an immediate release (so the application never

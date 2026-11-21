@@ -219,6 +219,10 @@ pub(crate) enum ShellRequest {
         window: ServerWindowId,
         workspace: WorkspaceId,
     },
+    AccentPick {
+        serial: u32,
+        index: u32,
+    },
     TxCreate {
         id: TxId,
         output: OutputId,

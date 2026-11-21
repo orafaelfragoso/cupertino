@@ -1,12 +1,9 @@
-//! Accent-picker model, text-edit queue, and keyboard overlay layout helpers.
+//! Accent-picker model and text-edit queue.
 
 use std::collections::HashSet;
 
 use cupertino_geometry::Rect as GRect;
-use cupertino_keyboard::accent::{
-    layout_popup, AccentEvent, AccentPicker, AccentTable, KeyDown, PickerKey, PopupLayout,
-    PopupMetrics, Rect as KRect,
-};
+use cupertino_keyboard::accent::{AccentEvent, AccentPicker, AccentTable, KeyDown, PickerKey};
 use cupertino_keyboard::modifiers::Mods as KMods;
 use smithay::input::keyboard::keysyms;
 
@@ -255,40 +252,6 @@ impl AccentUi {
         self.apply(ev, anchor);
         self.close();
     }
-}
-
-/// Two-letter code of a source id for its placeholder icon (`fr(nodeadkeys)` → `FR`).
-pub fn source_code(id: &str) -> String {
-    id.split('(')
-        .next()
-        .unwrap_or(id)
-        .chars()
-        .take(2)
-        .collect::<String>()
-        .to_uppercase()
-}
-
-/// Popup geometry for the open picker on an output (output-local logical coordinates).
-pub fn accent_layout(popup: &AccentPopup, output: GRect, top_inset: f64) -> PopupLayout {
-    let anchor = KRect {
-        x: popup.anchor.x() - output.x(),
-        y: popup.anchor.y() - output.y(),
-        w: popup.anchor.width(),
-        h: popup.anchor.height(),
-    };
-    // the popup stays below the menu bar
-    let screen = KRect {
-        x: 0.0,
-        y: top_inset,
-        w: output.width(),
-        h: (output.height() - top_inset).max(1.0),
-    };
-    layout_popup(
-        popup.candidates.len().min(9),
-        anchor,
-        screen,
-        &PopupMetrics::default(),
-    )
 }
 
 /// Does `bindings` bind the input-source pair? (diagnostics)

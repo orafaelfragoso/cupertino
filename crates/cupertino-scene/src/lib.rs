@@ -50,20 +50,13 @@ pub enum SceneKind {
     ClientRim,
     Outline,
     CursorImage,
-    InputHud,
     ShortcutNotice,
-    AccentPopup,
     MinimizeMesh,
     ClosingGhost,
-    InputHudTint,
-    InputHudMaterial,
-    AccentMaterial,
     Backdrop,
     BackdropCapture,
     SheetDimming,
     DisplayFilter,
-    InputHudShadow,
-    AccentShadow,
 }
 
 impl SceneKind {
@@ -90,20 +83,13 @@ impl SceneKind {
             Self::ClientRim => "client-rim",
             Self::Outline => "outline",
             Self::CursorImage => "cursor-image",
-            Self::InputHud => "input-hud",
             Self::ShortcutNotice => "shortcut-notice",
-            Self::AccentPopup => "accent-popup",
             Self::MinimizeMesh => "minimize-mesh",
             Self::ClosingGhost => "closing-ghost",
-            Self::InputHudTint => "input-hud-tint",
-            Self::InputHudMaterial => "input-hud-material",
-            Self::AccentMaterial => "accent-material",
             Self::Backdrop => "backdrop",
             Self::BackdropCapture => "backdrop-capture",
             Self::SheetDimming => "sheet-dimming",
             Self::DisplayFilter => "display-filter",
-            Self::InputHudShadow => "input-hud-shadow",
-            Self::AccentShadow => "accent-shadow",
         }
     }
 }

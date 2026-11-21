@@ -1068,19 +1068,26 @@ impl Dispatch<CupertinoHostComponentV1, HostComponentData> for Cupertino {
                 });
                 if let Some(cid) = active_cid {
                     state.dismiss_component_transients_and_grabs(&cid);
+                    state.keyboard_panels_liveness(&cid);
                 }
             }
             cupertino_host_component_v1::Request::Responsive => {
-                if let Some(rec) = state.hosts.components.get_mut(component) {
+                let active_cid = state.hosts.components.get_mut(component).and_then(|rec| {
                     if rec
                         .active
                         .as_ref()
                         .is_some_and(|(_, hid)| *hid == data.host_id)
                     {
                         rec.liveness = Liveness::Responsive;
+                        rec.active.as_ref().map(|(cid, _)| cid.clone())
+                    } else {
+                        None
                     }
-                }
+                });
                 state.refocus_pointer();
+                if let Some(cid) = active_cid {
+                    state.keyboard_panels_liveness(&cid);
+                }
             }
             // only the host that runs the component can say it was lost or failed
             cupertino_host_component_v1::Request::Lost

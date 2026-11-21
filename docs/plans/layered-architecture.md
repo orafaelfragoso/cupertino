@@ -230,11 +230,17 @@ surface commits; reduced motion; a hole whose window closes.
 | Shadows and outlines of windows that draw their own frames | Stays |
 | The wallpaper (also the source every backdrop samples) | Stays |
 | Window thumbnails for the dock and the overview | Stays, as holes (transaction requirement 6) |
+| The shortcut and pointer-hold notice (`release-shortcuts`), above fullscreen windows | Stays |
 | The input-source switcher, the accent picker | `osd` component (W6.12) |
 | The stage strip | `windowmanager` component, which gains a surface (W6.9) |
 | Placeholders for the dock and the overview | Removed; the components draw their own surfaces with holes (W6.8) |
 
-W6.12 checks this table against the code; anything else the compositor draws is reported, not moved.
+W6.12 checks this table against the code; anything else the compositor draws is reported, not moved. Checked by W6.12:
+besides the rows above the compositor draws the tiling preview rectangle (`SceneKind::SnapPreview`), the overview's
+dimming and the black backing of a workspace's picture (`OverviewDim`), the sheet-underlay material over a window with a
+sheet (`SheetDimming`), the display filter pass of the accessibility colour settings (`DisplayFilter`), the minimize mesh
+and the closing ghost of a window's buffer (`MinimizeMesh`, `ClosingGhost`) and the placeholder where a layer's late
+content has not arrived (`render/layers.rs`); none is moved.
 
 ## Crate map
 
@@ -1112,9 +1118,9 @@ At most three at a time, in this order:
 
 - [x] Before code: a design note in `docs/architecture/shell-host.md` on how the switcher holds the keyboard while its
       modifier is down and how the picker reaches the focused text field, approved as in W4.7 (written by the architect, approved by the lead under the owner's instruction to finish wave 6, 2026-11-20).
-- [ ] The input-source switcher and the accent picker are drawn by `osd`; the server routes keys and the text-input
+- [x] The input-source switcher and the accent picker are drawn by `osd`; the server routes keys and the text-input
       protocol and draws neither.
-- [ ] [What the compositor draws](#what-the-compositor-draws) checked against the code.
+- [x] [What the compositor draws](#what-the-compositor-draws) checked against the code.
 
 #### W6.13 `cupertino-login` on Kit, session agent out (L)
 

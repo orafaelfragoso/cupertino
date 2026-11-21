@@ -18,9 +18,7 @@ use cupertino_server_input::input::{
 };
 use cupertino_server_input::kbd::{AccentSettings, InputSources, KeyboardSettings, SourceSpec};
 use cupertino_server_input::kbd_filters::{KeyFilters, SuperTap};
-use cupertino_server_input::kbd_ui::{
-    accent_layout, has_input_source_bindings, source_code, AccentUi, TextOp,
-};
+use cupertino_server_input::kbd_ui::{has_input_source_bindings, AccentUi, TextOp};
 use cupertino_server_input::localed::SystemLayout;
 use cupertino_server_input::overlay_types::{is_modifier_sym, OverlayKey};
 use cupertino_server_input::pointer_constraints::confine;
@@ -113,12 +111,24 @@ fn localed_and_input_sources_and_super_tap() {
     assert_eq!(specs[1], SourceSpec::parse("br(abnt2)").unwrap());
 
     let mut sources = InputSources::new(specs);
+    // a chord without held modifiers commits at once: no switch opens
     let ev = sources.press(false, cupertino_keyboard::switcher::Step::Next, false);
     assert_eq!(
-        sources.apply(ev, 1.0, |id| id.to_owned()).as_deref(),
+        sources.apply(ev, |id| id.to_owned()).as_deref(),
         Some("br(abnt2)")
     );
-    assert!(!sources.hud_open());
+    assert!(!sources.switch_open());
+
+    // with the modifiers held the switch opens with the list, steps, and ends at the release
+    let ev = sources.press(false, cupertino_keyboard::switcher::Step::Next, true);
+    assert_eq!(sources.apply(ev, |id| id.to_uppercase()), None);
+    let open = sources.open.clone().expect("the switch is open");
+    assert_eq!(open.order, ["br(abnt2)", "us"]);
+    assert_eq!(open.labels, ["BR(ABNT2)", "US"]);
+    assert_eq!(open.selection, 1);
+    let ev = sources.switcher.modifiers_released();
+    assert_eq!(sources.apply(ev, |id| id.to_owned()).as_deref(), Some("us"));
+    assert!(!sources.switch_open());
 
     let mut tap = SuperTap::default();
     assert!(!tap.key(125, true, 100, false));
@@ -173,8 +183,7 @@ fn pointer_confine_and_shortcut_inhibit_notice() {
 }
 
 #[test]
-fn accent_ui_and_source_code_and_pointer_events() {
-    assert_eq!(source_code("fr(nodeadkeys)"), "FR");
+fn accent_ui_and_pointer_events() {
     let table = AccentTable::from_json(
         r#"{"en":{"a":{"direction":"right","strings":["à","á"]}}}"#,
         &["en"],
@@ -185,9 +194,7 @@ fn accent_ui_and_source_code_and_pointer_events() {
     let anchor = GRect::new(100.0, 100.0, 2.0, 18.0);
     assert!(ui.open_for('a', anchor, "org.test.Editor"));
     assert!(ui.is_open());
-    let popup = ui.popup.as_ref().unwrap();
-    let layout = accent_layout(popup, GRect::new(0.0, 0.0, 1440.0, 900.0), 28.0);
-    assert_eq!(layout.cells.len(), 2);
+    assert_eq!(ui.popup.as_ref().unwrap().candidates, ["à", "á"]);
 
     // Selecting candidate 2 commits "á".
     let key = OverlayKey {

@@ -258,6 +258,8 @@ impl Cupertino {
     /// and on a new lock every toplevel is deactivated and the session's observers learn it is locked.
     fn seal_session(&mut self, was_active: bool) {
         self.revoke_controls(cupertino_control_model::Revocation::Locked);
+        // a switch under way and an open picker end with the session
+        self.keyboard_panels_locked();
         let now = self.now();
         // a popup grab left over would eat the first click on the lock screen as an outside press
         self.end_popup_grab(

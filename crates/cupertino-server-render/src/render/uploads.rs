@@ -1,6 +1,6 @@
-//! Pixels the compositor's own CPU drawing sent to the GPU, by what drew them: title bars and rims, and the keyboard
-//! HUDs (the input-source HUD, the shortcut notice, the accent popup). The frame statistics read the totals before and
-//! after each frame (`cupertino_server_backend::frame_stats`).
+//! Pixels the compositor's own CPU drawing sent to the GPU, by what drew them: title bars and rims, and the HUD (the
+//! shortcut notice). The frame statistics read the totals before and after each frame
+//! (`cupertino_server_backend::frame_stats`).
 //!
 //! An upload is told by the renderer's own count of memory uploads, read around the import of each CPU-drawn image:
 //! an image the GPU already holds costs nothing and counts nothing.
@@ -29,9 +29,7 @@ pub enum Drawer {
 pub fn drawer(kind: SceneKind) -> Option<Drawer> {
     match kind {
         SceneKind::TitleBar | SceneKind::Rim => Some(Drawer::Decoration),
-        SceneKind::InputHud | SceneKind::ShortcutNotice | SceneKind::AccentPopup => {
-            Some(Drawer::Hud)
-        }
+        SceneKind::ShortcutNotice => Some(Drawer::Hud),
         _ => None,
     }
 }

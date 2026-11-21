@@ -344,12 +344,6 @@ pub(super) fn bar_backdrop_elements(
     glass.finish(p, out, opacity)
 }
 
-/// The glass of `backdrop`, a shape the compositor draws for a surface of its own (a heads-up display), at `alpha`:
-/// the glass pass with the recipe of the session's display options, or the translucent fallback fill without the pass.
-pub(crate) fn glass_layer(p: &SceneParams<'_>, backdrop: &BackdropArea, alpha: f32) -> Vec<Piece> {
-    glass_pieces(p, &[backdrop], alpha, false)
-}
-
 /// Material pass (or the translucent fallback fill without one) behind `area`, drawn at `alpha`.
 pub(crate) fn material_layer(
     p: &mut SceneParams<'_>,
@@ -802,8 +796,6 @@ fn desktop_scene(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>, stack: &m
     stack.extend(SceneLayer::Popups, popups);
 
     snap_preview(p, stack);
-    stack.extend(SceneLayer::InputHud, crate::kbd_ui::input_hud(p));
-    stack.extend(SceneLayer::AccentPopup, crate::kbd_ui::accent_popup(p));
     if p.panel.is_none() {
         stack.extend(
             SceneLayer::CompositorOverlay,

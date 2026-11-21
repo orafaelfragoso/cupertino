@@ -412,7 +412,7 @@ fn schedule_script(cli: &Cli, event_loop: &EventLoop<'static, Cupertino>) -> Res
         schedule(event_loop, t, move |state| {
             if let Some(c) = text.chars().next() {
                 if !state.accent_open(c) {
-                    tracing::warn!(base = %c, "no accent candidates (set accent_table in keyboard.conf)");
+                    tracing::warn!(base = %c, "no accent picker: no candidates (set accent_table in keyboard.conf), no on-screen displays to show it, or no output at the text cursor");
                 }
             }
         })?;

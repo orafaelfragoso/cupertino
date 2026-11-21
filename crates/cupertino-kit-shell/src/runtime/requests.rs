@@ -69,6 +69,10 @@ impl ShellRoles {
             | R::TxCancel { .. }
             | R::TxDestroy { .. } => self.transaction_request(conn, request),
             R::LockRequest | R::LockUnlock => self.lock_request(conn, request),
+            R::AccentPick { serial, index } => match &self.keyboard_panels {
+                Some(panels) => panels.accent_pick(serial, index),
+                None => tracing::warn!(serial, "a pick without the keyboard panels' object"),
+            },
             R::ConsentBind
             | R::ConsentSetWindow { .. }
             | R::ConsentAnswer { .. }

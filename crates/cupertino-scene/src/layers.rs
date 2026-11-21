@@ -22,10 +22,6 @@ pub enum SceneLayer {
     Popups,
     /// Notification banners (above windows).
     Banners,
-    /// Input-source switcher HUD.
-    InputHud,
-    /// Accent picker popup.
-    AccentPopup,
     /// Layer-shell `overlay` surfaces.
     LayerOverlay,
     DragIcon,

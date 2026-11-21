@@ -79,4 +79,5 @@ features = ["desktop", "wayland_frontend", "backend_egl", "backend_drm", "backen
 [dev-dependencies]
 cupertino-cursor = { path = "../cupertino-cursor" }
 cupertino-protocols = { path = "../cupertino-protocols", features = ["client"] }
+wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }

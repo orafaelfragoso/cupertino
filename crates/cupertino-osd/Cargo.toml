@@ -10,6 +10,7 @@ layer = "shell"
 [dependencies]
 async-channel = "2"
 cupertino-geometry = { path = "../cupertino-geometry" }
+cupertino-keyboard = { path = "../cupertino-keyboard" }
 cupertino-kit = { path = "../cupertino-kit" }
 cupertino-kit-shell = { path = "../cupertino-kit-shell" }
 serde = "1"

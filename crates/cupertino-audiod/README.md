@@ -21,7 +21,9 @@ and numbers give `InvalidArgs`, missing devices and backend failures give `Faile
 
 The service serialises requests. Its `pipewire` module uses WirePlumber's `wpctl` for device selection and volumes and
 `pactl` for stereo balance. If the default playback volume cannot be read, the service uses the ALSA playback master
-under `/dev/snd` (its `alsa` module). That backend has no selectable devices, capture control or stereo balance. A master with no mute
+under `/dev/snd` (its `alsa` module). A control device that answers `EACCES` or `ENOENT` is not ready yet (at login logind grants the session's access
+a moment after the session starts): the request opens it again after 50, 100, 200, 400 and 800 ms before it fails, and
+after such a failure the next requests within 30 s open once without waiting. That backend has no selectable devices, capture control or stereo balance. A master with no mute
 switch reads as muted at zero and cannot be muted at a nonzero level. Settings uses this service; the control panel
 and on-screen displays still use their own audio backends.
 

@@ -1,6 +1,7 @@
 //! The session bus activates the mixer on the first Audio1 call.
 
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use zbus::fdo::{Error, Result};
 
@@ -10,6 +11,19 @@ use pipewire::{Sink, Target, Volume, Wpctl};
 mod alsa;
 mod pipewire;
 
+/// Waits between the attempts to open the sound cards' control devices while they are not ready (no access yet at
+/// login, before logind sets the session's ACL; or no node yet). Doubling from 50 ms, the attempts span 1.55 s, long
+/// enough for the ACL to arrive and short enough for a caller that waits on the answer.
+const OPEN_WAITS: [Duration; 5] = [
+    Duration::from_millis(50),
+    Duration::from_millis(100),
+    Duration::from_millis(200),
+    Duration::from_millis(400),
+    Duration::from_millis(800),
+];
+/// How long after a run of attempts that all failed as not ready a request opens only once, without waiting: a card
+/// that stays closed (no sound access at all) must not delay every call by [`OPEN_WAITS`].
+const OPEN_QUIET: Duration = Duration::from_secs(30);
 /// Well-known session bus name.
 const NAME: &str = "org.cupertino.Audio1";
 /// Object implementing the Audio1 contract.
@@ -31,19 +45,42 @@ fn target(direction: &str) -> Result<Target> {
 struct Audio {
     pw: Wpctl,
     master: Option<Master>,
+    /// When the last run of attempts to open a card ended without one that was ready.
+    gave_up: Option<Instant>,
 }
 
 impl Audio {
     fn alsa<T>(&mut self, action: impl FnOnce(&Master) -> Result<T>) -> Result<T> {
         if self.master.is_none() {
-            self.master = Some(
-                Master::open_default(Path::new(DEVICE_DIR), OpenMode::ReadWrite).map_err(failed)?,
-            );
+            self.master = Some(self.open_master().map_err(failed)?);
         }
         let result = action(self.master.as_ref().expect("opened above"));
         if matches!(result, Err(Error::Failed(_))) {
             self.master = None;
         }
+        result
+    }
+
+    /// Open the playback master; a card that is not ready yet is tried again after each of [`OPEN_WAITS`], unless a
+    /// run of attempts gave up less than [`OPEN_QUIET`] ago.
+    fn open_master(&mut self) -> std::result::Result<Master, alsa::Error> {
+        let open = || Master::open_default(Path::new(DEVICE_DIR), OpenMode::ReadWrite);
+        let quiet = self.gave_up.is_some_and(|at| at.elapsed() < OPEN_QUIET);
+        let mut result = open();
+        if quiet {
+            return result;
+        }
+        for wait in OPEN_WAITS {
+            if !result.as_ref().is_err_and(alsa::Error::not_ready) {
+                break;
+            }
+            std::thread::sleep(wait);
+            result = open();
+        }
+        self.gave_up = result
+            .as_ref()
+            .is_err_and(alsa::Error::not_ready)
+            .then(Instant::now);
         result
     }
 

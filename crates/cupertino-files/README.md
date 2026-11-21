@@ -58,15 +58,19 @@ environment at startup, so no program it starts inherits it, and raises its own 
   (an AppArmor label starting `snap.`), as another user, or when its root cannot be checked. A launch with a token
   hands it only to an owner that runs the same program; another owner (an install at another path, or a program that
   took the name) gets the request without the token, and the launch says so on stderr.
-* The window's thread never waits on the bus: a call reaches it through a channel (at most 16 waiting; more are refused
-  with `LimitsExceeded`) and the bus thread waits for its answer. The service's connection reads no signals (the name
-  is claimed with a plain `RequestName` call), so the credentials call made for each incoming call cannot stall behind a
-  full signal queue.
+* The window's loop never waits on the bus: Files makes one connection to the session bus as its loop starts
+  (`cupertino_kit::bus::connect`, ticked by the loop; `kit::launch`), which posts its notices and serves its names. A
+  call reaches the window through a channel (at most 16 waiting; more are refused with `LimitsExceeded`) and its answer
+  is sent by a future on the loop. The names are claimed with a plain `RequestName` call, and the only signals the
+  connection reads are the notices' clicks, which a future reads as they come, so the credentials call made for each
+  incoming call cannot stall behind a full signal queue. A launch opens its first window once it serves the names, or
+  once it found no session bus.
 * A launch waits 3 s for an answer (`FORWARD_TIMEOUT`, as long as the dock waits for one). A running Files that does not
   answer in time and still owns the name fails the launch with a message, so a second Files never starts beside a hung
   one; one that left lets the launch claim the name and start. As it exits, Files refuses waiting and later calls
   (`org.freedesktop.DBus.Error.Disconnected`) and gives the name up before it waits for its notices, so a launch racing
-  the exit claims the name and starts (it keeps trying for 5 s). Without a session bus Files runs alone and says so.
+  the exit claims the name and starts (it keeps trying for 5 s, a try every `RETRY_PAUSE`, a scheduled wake). Without a
+  session bus Files runs alone and says so.
 * Decision: the desktop file stays `cupertino-files.desktop` and does not set `DBusActivatable`, so pinned dock items
   and the default file manager keep their ID; a launch reaches the running Files through the hand-over above. The
   Desktop Entry specification wants the desktop file ID to equal the bus name for D-Bus activation, and a bus name needs
@@ -145,7 +149,7 @@ for its item, and the preview as the group "Preview of <name>".
 **Preview window** (`preview`, `kit::peek`). Space on the items, or File › Quick Preview (Primary+Y), opens the
 selection in a floating window of its own: a toolbar with a close and a full screen button, the item's name and, with
 several items, "n of N", then an "Open with <application>" button (the default application, else "Open"); under it a
-picture shows whole, the start of a text file (at most 64 KiB, cut at a character, read on a thread of its own and
+picture shows whole, the start of a text file (at most 64 KiB, cut at a character, read by an I/O task and
 dropped when the item shown has changed since; a pipe or a device is never opened) in the pack's fixed-pitch face, and
 anything else its large icon with kind, size and dates. With several items selected the arrows go from one to the
 next; with one, they move the window's selection and the window follows. Space or Escape closes it. It grows from its
@@ -308,8 +312,10 @@ source later hears the held drop cancelled. The timers are `Command::After` mess
 generation, so one of a dwell that ended does nothing.
 
 **File operations** (`kit::jobs`, `kit::transfer`, `kit::progress`). Paste Item, Move Item Here, Duplicate, New Folder
-with Selection and every drop, from Files or another application, run on a worker thread of their own; the window's
-thread never copies or moves an item. An operation belongs to the process, not to a window: the window that started it
+with Selection and every drop, from Files or another application, run in slices on the toolkit's I/O pool
+(`kit::task::io`): a slice holds an I/O turn for about `SLICE` (0.1 s), and the next is asked for once the window took
+the progress of the last, so the window's thread never copies or moves an item and an operation never holds an I/O
+thread of its own. An operation belongs to the process, not to a window: the window that started it
 shows its row while it is open, and closing that window leaves it running. Files exits once no browser window is open,
 no operation runs and the progress window lists nothing (after the notices it posted are sent), so a copy is never cut
 off by a closed window. Each operation runs once; its outcome is handed over once.
@@ -332,15 +338,15 @@ off by a closed window. Each operation runs once; its outcome is handed over onc
 * The window that started an operation, if still open, selects what arrived when it shows the folder it went to, edits
   the new folder's name after New Folder with Selection, and reads its free space again.
 * Decisions: a move to the trash from a menu or Primary+Backspace stays on the window's thread (it renames, and is not a
-  transfer), but a trashed folder's `directorysizes` line, which sums every file in it, is written from a thread of its
-  own (`Trash::trash_unsized` and `PendingSize`; a folder put back first gets no line); a drop on the Trash is an operation like any drop. A failed operation is shown in the progress window and
+  transfer), but a trashed folder's `directorysizes` line, which sums every file in it, is written by an I/O task (`Trash::trash_unsized` and `PendingSize`; a folder put back first gets no line); a drop on the Trash is an operation like any drop. A failed operation is shown in the progress window and
   is no longer a notification while a window is open. The delay, the window's title and sizes and its wording are
   approximate; Stop is a text button, and the progress window gives no time estimate.
 
 **Failures.** A failure of something a person did (open, a new folder, make alias, show original, put back, tags,
 rename, a name that can't be used, copy and paste of text, move to the trash, a drop that cannot be taken) is one transient notification from "Files" on
 the session bus (`org.freedesktop.Notifications`), posted in order by one future on the window's loop (the family's
-`notice`, `kit::files::notice`) on the session connection `main` makes before the loop starts. As it exits, Files
+`notice`, `kit::files::notice`) on the session connection Files makes as its loop starts; before it connects, and without a session bus, they are
+logged. As it exits, Files
 waits for the notices posted to be sent (`Notices::sent`), at most `EXIT_NOTICES` (2 s), without blocking. It names one
 item, or counts several, and its body is the first error, with control and bidirectional formatting characters removed,
 cut at 256 characters and escaped, because the body is markup. Without a session bus, or when a post fails, that notice
@@ -373,8 +379,11 @@ every locked encrypted container. A block without a drive, such as a loop device
 drive's medium (`places::Medium`, from udisks' `Media` and `ConnectionBus`): `symbol.memory-card` for a flash card
 (a `flash_*` medium or an SD bus), `symbol.flash-drive` for a USB stick (`thumb`, or `flash` on USB), else
 `symbol.externaldrive`; none wears the computer's. It lists again whenever udisks reports a change or comes to the
-bus; a change only asks for a read on a thread of its own (at most one waiting), so the signal streams never fill and a flood
-of signals another user sends the process costs one read, never the connection. Every call runs off the window's thread.
+bus; a change only asks for a read of udisks' objects (at most one waiting while one runs), so the signal streams never
+fill and a flood of signals another user sends the process costs one read, never the connection. The system bus is
+connected as the loop starts (`cupertino_kit::bus::connect`), and every call is a future on the window's loop, which
+none blocks; a mount whose file system udisks has not probed yet is tried again after `CLEARTEXT_RETRY`, a scheduled
+wake, and the programs that hold a busy file system are read by an I/O task.
 * **Mount:** a click on a row that is not mounted mounts it and takes the window that asked to the mount point.
   Each partition of a drive is a row of its own.
 * **Unlock:** a click on a locked container opens a sheet that asks for its passphrase in a secure field; Unlock (or
@@ -463,9 +472,9 @@ and `metrics::{icon_view, list_view, column_view, timing, selection, marquee, dr
 | `preview` | what a preview shows | `kind` → `PreviewKind`, `read_text` / `text_of` (`TEXT_LIMIT`), `summary`, `details`, `Browse` (the items gone through, `step`), `Motion` (the window's open and close, `at` → `MotionFrame`), `WINDOW_SIZE` |
 | `tab_strip` | a window's tabs | `TabStrip::{open, close, select, cycle, move_to, order, active_id}`, `tab_frames`, `drop_place` |
 | `window`, `format` | the window's wording and metrics | `metrics`, `ViewMode`, `path_chain`, `status_text`; `human_size`, `available_size`, `relative_date` |
-| `udisks` (feature `app`) | removable media | `devices` (the listed file systems and locked containers of udisks' managed objects), `Volumes::{watch, poll, mount, unlock, eject}` → `Report`, `Media` (the listed devices and the busy ones), `Passphrase`, `holders`, `notice` (a failure's notification text) |
-| `kit` (feature `app`) | the window on CupertinoKit; driven headless through `cupertino_kit::test` | `prepare(Start::open(folder, places, types, recents, notices, applications, terminal))`, with `with_file_icons`, `with_thumbnails`, `with_places_source`, `with_instance` and `with_activation_token`, then `run` or a `TestDriver<Files>`; `view_events` (the file views' events as the window's), `toolbar` (pop-up buttons, path bar folders), `sidebar` (material, keyboard watch), `places` (live places), `transfer` (the worker of a file operation: `Work` → `Outcome`), `jobs` (the file operations of the process and when the progress window shows; `PROGRESS_WINDOW_DELAY`, `Start::with_progress_delay`), `progress` (the progress window, and the click on a window's row that shows it), `remote` (what the calls of later launches and of the desktop do), `context` (context menus), `search` (the field's slot and "No Results"), `dragged` (drag images), `drops` (drops onto folders, places, the path bar and the folder shown), `spring` (spring-loaded folders and the way back), `columns` (the column view), `gallery` (the gallery), `peek` (the preview window), `tabs` (the tab bar and a tab's parked state), `tag_editor` (the tags popover) |
-| `instance` (feature `app`) | one process per session | `Service::serve` (the names, `org.freedesktop.Application` and `org.freedesktop.FileManager1`; `take` the waiting `Call`s), `serve_or_forward` → `Launch::{Serve, Forwarded}`, `Target::{of_argument, of_uri, uri, folder}`, `Request`, `Action`, `take_activation_token`, `FORWARD_TIMEOUT`, `BUS_NAME`, `OBJECT_PATH` |
+| `udisks` (feature `app`) | removable media | `devices` (the listed file systems and locked containers of udisks' managed objects), `Volumes::{watch, follow, poll, mount, mount_again, unlock, eject}` → `Report` and `Called`, `Media` (the listed devices and the busy ones), `Passphrase`, `holders`, `notice` (a failure's notification text) |
+| `kit` (feature `app`) | the window on CupertinoKit; driven headless through `cupertino_kit::test` | `prepare(Start::open(folder, places, types, recents, applications, terminal))`, with `with_file_icons`, `with_thumbnails`, `with_places_source`, `with_buses` and `with_activation_token`, then `run` or a `TestDriver<Files>`; `view_events` (the file views' events as the window's), `toolbar` (pop-up buttons, path bar folders), `sidebar` (material, keyboard watch), `places` (live places, followed by the family's watched listings), `launch` (the session bus: the launch, the names and the notices; `Buses`, `Ended`), `media` (the removable media's calls), `transfer` (the slices of a file operation on the I/O pool: `Work` → `Outcome`), `jobs` (the file operations of the process and when the progress window shows; `PROGRESS_WINDOW_DELAY`, `Start::with_progress_delay`), `progress` (the progress window, and the click on a window's row that shows it), `remote` (what the calls of later launches and of the desktop do), `context` (context menus), `search` (the field's slot and "No Results"), `dragged` (drag images), `drops` (drops onto folders, places, the path bar and the folder shown), `spring` (spring-loaded folders and the way back), `columns` (the column view), `gallery` (the gallery), `peek` (the preview window), `tabs` (the tab bar and a tab's parked state), `tag_editor` (the tags popover) |
+| `instance` (feature `app`) | one process per session | `Service::serve` (the names on a connection, `org.freedesktop.Application` and `org.freedesktop.FileManager1`; `take` the waiting `Call`s, `release`), `forward` and `unanswered` → `Handover`, `HANDOVER_WINDOW`, `RETRY_PAUSE`, `Target::{of_argument, of_uri, uri, folder}`, `Request`, `Action`, `take_activation_token`, `FORWARD_TIMEOUT`, `BUS_NAME`, `OBJECT_PATH` |
 | `main` (feature `app`) | the binary | arguments, the hand-over to a running Files, the session's places, types, associations and buses, then `kit::run` |
 
 ### Measured defaults

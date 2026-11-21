@@ -108,7 +108,11 @@ pub fn read_each(dirs: Vec<PathBuf>) -> Vec<(PathBuf, bool)> {
         .collect()
 }
 
-/// The nearest folder above `dir` that exists.
+/// The nearest folder above `dir` that exists. It blocks on the file system: a program runs it on an I/O task.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a blocking read that programs run on the I/O pool (kit::task::io)"
+)]
 pub fn nearest_existing_ancestor(dir: &Path) -> Option<PathBuf> {
     dir.ancestors()
         .skip(1)

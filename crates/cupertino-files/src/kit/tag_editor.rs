@@ -22,7 +22,7 @@ use cupertino_kit::platform::{Keysym, MouseButton, PointerEvent};
 use cupertino_kit::prelude::{Stack, TextChange};
 use cupertino_kit::render::{Paint, PaintOp, PathVerb, Shape};
 use cupertino_kit::text::{AttributedText, ContentPurpose, FontWeight, TextStyle};
-use cupertino_kit::theme::{Appearance, Color, ColorRole, StateVariant};
+use cupertino_kit::theme::{system_color, Appearance, Color, ColorRole, StateVariant};
 
 use super::view::popup_key;
 use super::{window_key, Event as WindowEvent, Message, Popup, NO_SCROLL};
@@ -88,20 +88,13 @@ pub enum TagEvent {
 /// The colour of each colour tag's dot, light and dark, from the theme's system colours.
 pub(super) type TagColors = Rc<HashMap<TagColor, (Option<Color>, Option<Color>)>>;
 
-/// The dots' colours of the installed theme; none when it cannot be read, and the dots are then drawn in the secondary
-/// text colour.
+/// The dots' colours of the installed theme ([`system_color`]); none when it cannot be read, and the dots are then
+/// drawn in the secondary text colour.
 pub(super) fn tag_colors() -> TagColors {
-    let theme = cupertino_assets::theme::load()
-        .map_err(|e| eprintln!("cupertino-files: no theme for the tags' colours: {e}"))
-        .ok();
     let colors = TagColor::ALL
         .into_iter()
         .map(|color| {
-            let of = |appearance| {
-                theme
-                    .as_ref()
-                    .and_then(|t| t.tokens.color(appearance, color.system_color_name()))
-            };
+            let of = |appearance| system_color(color.system_color_name(), appearance);
             (color, (of(Appearance::Light), of(Appearance::Dark)))
         })
         .collect();

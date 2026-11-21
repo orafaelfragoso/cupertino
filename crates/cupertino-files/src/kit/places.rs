@@ -1,155 +1,110 @@
-//! The sidebar's places kept live: a watch on the folders they come from wakes the application, which reads them again.
-//! The trash's place comes with the first item trashed and leaves when the trash's `files` folder goes
+//! The sidebar's places kept live: the folders they come from are followed by the family's listings
+//! ([`DirectoryModel`], with their watch), and a change in any of them wakes the application, which reads the places
+//! again. The trash's place comes with the first item trashed and leaves when the trash's `files` folder goes
 //! ([`follow_trash`]); with a source of the session's places ([`super::Start::with_places_source`]) a change of the user
 //! directories or their configuration shows too.
 
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
-use notify::{RecommendedWatcher, RecursiveMode, Watcher};
-
+use cupertino_kit::files::model::{
+    DirectoryModel, ModelDelta, ModelOptions, ModelWatch, ModelWork,
+};
 use cupertino_kit::files::places::{follow_trash, Place};
 use cupertino_kit::prelude::Command;
 
-use super::{Message, Session};
+use super::{wake_channel, Message, Session, Wake};
 
 /// What reads the session's places again: the standard ones, without the removable media.
 pub type PlacesSource = Arc<dyn Fn() -> io::Result<Vec<Place>> + Send + Sync>;
 
-/// The watch on the folders the places come from.
+/// The folders the places come from, each followed by a listing whose changes wake the application.
 pub(super) struct PlacesWatch {
-    /// The watcher and what it watches, shared with the I/O task that adds watches.
-    shared: Arc<Mutex<Watched>>,
-    /// Watches asked for and not yet handed to a task, and whether a task is adding watches.
-    due: Vec<Due>,
-    adding: bool,
-    /// Wakes the application to read the places again.
-    wake: Arc<async_channel::Sender<()>>,
+    /// The folders asked for and the trash's parent.
+    folders: Vec<DirectoryModel>,
+    /// The trash's folder, whose `files` folder makes its place, followed once it exists; opened again whenever
+    /// another folder changed while it was not there.
+    trash: PathBuf,
+    trash_model: DirectoryModel,
+    wake: Wake,
     pub woken: async_channel::Receiver<()>,
 }
 
-/// The watcher and the folders watched; the trash's own folder is added once it exists.
-struct Watched {
-    watcher: Option<RecommendedWatcher>,
-    folders: Vec<PathBuf>,
+/// How the places' folders are listed: watched, with nothing but what tells that a folder changed.
+fn followed(dir: &Path, wake: &Wake) -> DirectoryModel {
+    let options = ModelOptions {
+        watch: true,
+        ..ModelOptions::default()
+    };
+    DirectoryModel::open(dir, options, Arc::clone(wake))
 }
 
-/// A watch to add: a folder watched as it is, or the trash's folder once it exists.
-enum Due {
-    Folder(PathBuf),
-    Trash(PathBuf),
+/// Whether `delta` says the folder changed: a folder that is not there changes nothing until it comes.
+fn changes(delta: &ModelDelta) -> bool {
+    !matches!(delta, ModelDelta::OpenFailed { .. })
 }
-
-/// How long adding the sidebar's watches should take: an `is_dir` and an inotify add per folder.
-pub(super) const WATCH_DEADLINE: Duration = Duration::from_secs(5);
 
 impl PlacesWatch {
-    /// Watch `folders` (each alone, not what it holds) and the trash at `trash`, or its parent until it exists. The
-    /// places were read before the watch began, so it starts woken: what changed in between is read too.
+    /// Follow `folders` (each alone, not what it holds) and the trash at `trash`, with its parent until it exists.
+    /// The places were read before the folders are listed: their first listing wakes the application, so what changed
+    /// in between is read too. Nothing is read here: the listings are I/O work ([`PlacesWatch::work`]).
     pub fn start(folders: Vec<PathBuf>, trash: &Path) -> PlacesWatch {
-        let (wake, woken) = async_channel::bounded(1);
-        let wake = Arc::new(wake);
-        let events = Arc::clone(&wake);
-        let watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-            if wakes(&event) {
-                // a wake already waiting covers this change too
-                let _ = events.try_send(());
-            }
-        })
-        .map_err(|e| eprintln!("cupertino-files: the sidebar's places are not watched: {e}"))
-        .ok();
-        let mut watch = PlacesWatch {
-            shared: Arc::new(Mutex::new(Watched {
-                watcher,
-                folders: Vec::new(),
-            })),
-            due: Vec::new(),
-            adding: false,
+        let (wake, woken) = wake_channel();
+        let folders = folders
+            .iter()
+            .map(PathBuf::as_path)
+            .chain(trash.parent())
+            .map(|dir| followed(dir, &wake))
+            .collect();
+        PlacesWatch {
+            folders,
+            trash: trash.to_path_buf(),
+            trash_model: followed(trash, &wake),
             wake,
             woken,
-        };
-        // the folders are watched by the first I/O task, not here
-        watch.due.extend(folders.into_iter().map(Due::Folder));
-        if let Some(parent) = trash.parent() {
-            watch.due.push(Due::Folder(parent.to_path_buf()));
-        }
-        watch.follow(trash);
-        let _ = watch.wake.try_send(());
-        watch
-    }
-
-    /// Watch the trash's folder too once it exists, so the removal of its `files` folder is heard. Its `files` folder
-    /// may have come between the read that found the trash and this watch, so a new watch wakes the application once
-    /// to read the places again.
-    /// Asked for here, done by [`PlacesWatch::task`]: the file system is not touched on the caller's thread.
-    pub fn follow(&mut self, trash: &Path) {
-        if !self
-            .due
-            .iter()
-            .any(|due| matches!(due, Due::Trash(t) if t == trash))
-        {
-            self.due.push(Due::Trash(trash.to_path_buf()));
         }
     }
 
-    /// The task that adds the watches asked for, when there are some and none is running; its result is whether the
-    /// trash's folder is newly watched, which [`PlacesWatch::added`] takes.
-    pub fn task(&mut self) -> Option<Command<Message>> {
-        if self.due.is_empty() || self.adding {
-            return None;
+    /// Whether a folder of the places changed since the last call. A trash folder that was not there is followed
+    /// again once another folder changed: that may be where it came.
+    pub fn changed(&mut self) -> bool {
+        // every listing is polled, so none keeps what it heard for the next call
+        let polled: Vec<bool> = self
+            .folders
+            .iter_mut()
+            .map(|model| model.poll().iter().any(changes))
+            .collect();
+        let folders = polled.contains(&true);
+        let trash = self.trash_model.poll().iter().any(changes);
+        if folders {
+            self.follow();
         }
-        self.adding = true;
-        let due = std::mem::take(&mut self.due);
-        let shared = Arc::clone(&self.shared);
-        Some(cupertino_kit::task::io(
-            WATCH_DEADLINE,
-            move || {
-                let mut watched = shared.lock().unwrap_or_else(|e| e.into_inner());
-                due.iter().fold(false, |trash_new, due| match due {
-                    Due::Folder(folder) => {
-                        watched.add(folder);
-                        trash_new
-                    }
-                    Due::Trash(trash) => (trash.is_dir() && watched.add(trash)) || trash_new,
-                })
-            },
-            Message::PlacesWatched,
-        ))
+        folders || trash
     }
 
-    /// The task ended: a trash folder newly watched may have gained its `files` folder before the watch, so the
-    /// application is woken once to read the places again.
-    pub fn added(&mut self, trash_new: bool) {
-        self.adding = false;
-        if trash_new {
-            let _ = self.wake.try_send(());
+    /// Follow the trash's folder again when it was not there: an item trashed may have made it.
+    pub fn follow(&mut self) {
+        if self.trash_model.opened() == Some(false) && !self.trash_model.is_working() {
+            self.trash_model = followed(&self.trash, &self.wake);
         }
     }
-}
 
-impl Watched {
-    /// Watch `folder`; whether it was not watched before and is now.
-    fn add(&mut self, folder: &Path) -> bool {
-        if self.folders.iter().any(|w| w == folder) {
-            return false;
+    /// The listings' work and watches waiting, which the program runs as I/O tasks and futures on its UI loop.
+    pub fn work(&mut self) -> (Vec<ModelWork>, Vec<ModelWatch>) {
+        let models = self
+            .folders
+            .iter_mut()
+            .chain(std::iter::once(&mut self.trash_model));
+        let (mut works, mut watches) = (Vec::new(), Vec::new());
+        for model in models {
+            // the watch first: the first work registers the folder with it
+            watches.extend(model.take_watch());
+            works.extend(model.take_work());
         }
-        let Some(watcher) = self.watcher.as_mut() else {
-            return false;
-        };
-        let added = watcher.watch(folder, RecursiveMode::NonRecursive).is_ok();
-        if added {
-            self.folders.push(folder.to_path_buf());
-        }
-        added
+        (works, watches)
     }
-}
-
-/// Whether a file event may have changed a place. An open or a read changes none, and reading the places again opens
-/// their files: waking on it would read them again without end.
-fn wakes(event: &notify::Result<notify::Event>) -> bool {
-    event.as_ref().is_ok_and(|e| !e.kind.is_access())
 }
 
 /// How long reading the standard places should take: the user directories' file, the machine's name and a few stat
@@ -180,19 +135,14 @@ impl Session {
     /// The places are read on an I/O task ([`Session::places_task`]), which the next [`Model::io_work`] starts.
     pub(super) fn follow_places(&mut self) {
         self.places_due = true;
-        let trash = self.trash.home_trash().to_path_buf();
-        self.places_watch.follow(&trash);
+        self.places_watch.follow();
     }
 
-    /// The task that adds the sidebar's watches asked for, if any.
-    pub(super) fn places_watch_task(&mut self) -> Option<Command<Message>> {
-        self.places_watch.task()
-    }
-
-    /// The watches were added: the places are read again when the trash's folder is newly watched.
-    pub(super) fn places_watched(&mut self, trash_new: bool) -> Vec<Command<Message>> {
-        self.places_watch.added(trash_new);
-        Vec::new()
+    /// A folder of the places may have changed: the places are read again when one did.
+    pub(super) fn places_woken(&mut self) {
+        if self.places_watch.changed() {
+            self.follow_places();
+        }
     }
 
     /// The task that reads the write state of the folders drags hovered, if any are wanted.

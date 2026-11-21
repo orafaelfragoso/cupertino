@@ -1,5 +1,10 @@
 //! What a folder's file system says, as the program reads it on an I/O task.
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "the test makes and removes its own files on its own thread; it has no UI thread"
+)]
+
 use cupertino_files::space::{mounted_read_only, nearest_existing_ancestor, read, Space};
 use cupertino_kit::files::{applications, recents};
 

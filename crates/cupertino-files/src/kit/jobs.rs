@@ -1,5 +1,5 @@
-//! The file operations of the process, apart from its windows: each runs on a worker ([`Transfer`]) until it ends or
-//! its Stop button stops it. Closing the window that started one leaves it running, and Files does not exit while one
+//! The file operations of the process, apart from its windows: each runs slice by slice as I/O tasks ([`Transfer`])
+//! until it ends or its Stop button stops it. Closing the window that started one leaves it running, and Files does not exit while one
 //! runs. The progress window ([`super::progress`]) lists them; it opens by itself once one has run for
 //! [`PROGRESS_WINDOW_DELAY`], so a quick operation never shows it, and its Close button only hides it. A failure is
 //! listed there until it is closed, and opens it. An operation that ran for the delay has [`Job::lasted`]: its end is
@@ -20,7 +20,7 @@ pub const PROGRESS_WINDOW_DELAY: Duration = Duration::from_secs(1);
 /// What a file operation, or the progress window, asks of the application.
 #[derive(Clone, Debug, PartialEq)]
 pub enum JobEvent {
-    /// The operation with this id has progress or its outcome waiting.
+    /// A slice of the operation with this id ended: its progress or its outcome is waiting.
     Reported(u64),
     /// Stop the operation with this id: its Stop button, in a browser window or the progress window.
     Stop(u64),
@@ -59,11 +59,11 @@ pub(super) struct Failure {
 pub(super) enum Polled {
     /// No operation has this id: it ended already.
     Gone,
-    /// Still running: wait for its next report with this.
-    Running(Command<Message>),
+    /// Still running: its next slice.
+    Running(Vec<Command<Message>>),
     /// It ended: it is no longer listed, and its outcome is handed over this once. Whether the progress window was
     /// shown as it ended.
-    Ended(Job, Outcome, bool),
+    Ended(Box<Job>, Outcome, bool),
 }
 
 /// The running operations and the progress window.
@@ -80,7 +80,7 @@ pub(super) struct Jobs {
 }
 
 impl Jobs {
-    /// Every operation's worker calls `observer`; the progress window opens after `delay`.
+    /// Every operation's slices call `observer`; the progress window opens after `delay`.
     pub fn new(delay: Duration, observer: Option<Observer>) -> Jobs {
         Jobs {
             running: Vec::new(),
@@ -97,7 +97,7 @@ impl Jobs {
         }
     }
 
-    /// Start `work` for the window `origin`, for `drop` if it is one. What waits for its reports and for its delay.
+    /// Start `work` for the window `origin`, for `drop` if it is one: its first slice, and what waits for its delay.
     pub fn start(
         &mut self,
         work: Work,
@@ -107,13 +107,11 @@ impl Jobs {
         let id = self.next;
         self.next += 1;
         let transfer = Transfer::start(id, work, self.observer.clone());
-        let commands = vec![
-            reported(&transfer),
-            Command::After {
-                delay: self.delay,
-                message: Message::Job(JobEvent::Due(id)),
-            },
-        ];
+        let mut commands: Vec<Command<Message>> = transfer.slice().into_iter().collect();
+        commands.push(Command::After {
+            delay: self.delay,
+            message: Message::Job(JobEvent::Due(id)),
+        });
         self.running.push(Job {
             transfer,
             origin,
@@ -130,12 +128,12 @@ impl Jobs {
             return Polled::Gone;
         };
         match self.running[at].transfer.poll() {
-            None => Polled::Running(reported(&self.running[at].transfer)),
+            None => Polled::Running(self.running[at].transfer.slice().into_iter().collect()),
             Some(outcome) => {
                 let seen = self.visible();
                 let job = self.running.remove(at);
                 self.close_when_empty();
-                Polled::Ended(job, outcome, seen)
+                Polled::Ended(Box::new(job), outcome, seen)
             }
         }
     }
@@ -190,12 +188,4 @@ impl Jobs {
             self.shown = false;
         }
     }
-}
-
-/// What wakes when `transfer` reports.
-fn reported(transfer: &Transfer) -> Command<Message> {
-    super::woken(
-        &transfer.woken,
-        Message::Job(JobEvent::Reported(transfer.id)),
-    )
 }

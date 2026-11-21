@@ -277,6 +277,10 @@ pub struct FolderKey {
 }
 
 impl FolderKey {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a blocking store, which a program runs on the I/O pool (kit::task::io)"
+    )]
     pub fn of(path: &Path) -> io::Result<Self> {
         use std::os::unix::fs::MetadataExt;
         let canon = std::fs::canonicalize(path)?;
@@ -314,6 +318,10 @@ pub struct SettingsStore {
 }
 
 impl SettingsStore {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a blocking store, which a program runs on the I/O pool (kit::task::io)"
+    )]
     pub fn open(file: impl Into<PathBuf>) -> io::Result<Self> {
         let file = file.into();
         let data = match std::fs::read(&file) {
@@ -406,6 +414,10 @@ impl SettingsStore {
         self.data.folders.is_empty()
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a blocking store, which a program runs on the I/O pool (kit::task::io)"
+    )]
     pub fn save(&mut self) -> io::Result<()> {
         if !self.dirty {
             return Ok(());

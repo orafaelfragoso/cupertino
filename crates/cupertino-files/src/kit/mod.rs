@@ -9,6 +9,8 @@ mod dragged;
 mod drops;
 mod gallery;
 mod jobs;
+mod launch;
+mod media;
 mod open;
 mod peek;
 mod places;
@@ -27,6 +29,7 @@ mod view;
 
 pub use drops::Destination;
 pub use jobs::{JobEvent, PROGRESS_WINDOW_DELAY};
+pub use launch::{Buses, Ended, Handed, LaunchEvent};
 pub use peek::PeekEvent;
 pub use places::PlacesSource;
 pub use remote::{LookUp, LOOK_UP_DEADLINE, MAX_LOOK_UPS};
@@ -45,6 +48,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use cupertino_apps::{MimeApps, MimeDatabase};
+use cupertino_kit::bus::Bus;
 use cupertino_kit::controls::{
     MenuAnchor, Navigation, Selection, SortOrder, SplitLayout, SplitPane, TextChange,
 };
@@ -53,7 +57,6 @@ use cupertino_kit::layout::ScrollState;
 use cupertino_kit::platform::{DragProgress, WindowRequest};
 use cupertino_kit::prelude::*;
 use cupertino_menu_model::ActionName;
-use zbus::blocking::Connection;
 use zbus::zvariant::OwnedObjectPath;
 
 use crate::browser::{Activation, Asked, Browser, Listings, Polled};
@@ -66,7 +69,7 @@ use crate::search_field::{self, SearchWidth};
 use crate::settings::ColumnId;
 use crate::tab_strip::{TabId, TabStrip};
 use crate::trash::Trash;
-use crate::udisks::{Media, Passphrase, Report, Volumes};
+use crate::udisks::{Media, Passphrase, Volumes};
 use crate::window::ViewMode;
 use crate::window_prefs::WindowPrefs;
 use cupertino_icons::thumbnail::Thumbnailer;
@@ -93,14 +96,13 @@ pub struct Start {
     /// ([`Start::without_window`]).
     first: Option<(Browser, async_channel::Receiver<()>, Wake)>,
     places: Vec<Place>,
-    notices: Notices,
     /// What opens a file: the session's associations, read at each open so changed defaults apply at once.
     applications: Box<dyn Fn() -> io::Result<MimeApps>>,
     terminal: Option<Vec<String>>,
     types: Option<Arc<MimeDatabase>>,
     recents: PathBuf,
-    volumes: Option<Volumes>,
-    media_woken: async_channel::Receiver<()>,
+    /// What Files does on the buses; none for a Files of its own, whose notices are logged.
+    buses: Option<Buses>,
     trash: Trash,
     /// What a new window starts with, and the file that keeps it between launches.
     prefs: WindowPrefs,
@@ -119,92 +121,52 @@ pub struct Start {
     thumbnails: Option<Thumbnailer>,
     /// What the list words its dates relative to.
     clock: fn() -> SystemTime,
-    /// The session bus name the process serves, which later launches hand their requests to.
-    instance: Option<Service>,
     /// The activation token the process was started with, which raises the first window.
     activation: Option<String>,
-    /// What tells, on a look-up thread, whether an item a call names exists.
+    /// What tells, on a look-up task, whether an item a call names exists.
     look_up: LookUp,
     /// The listings the windows let go of while their work runs.
     listings: Listings,
-    /// What posts the notices on the session bus, on the UI loop.
-    posting: Option<Posting>,
-}
-
-/// The future that posts a program's notices and hears their clicks, run on its UI loop.
-pub type Posting = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
-
-/// The notices of the session bus, on a connection made here, before the loop starts, and what posts them; notices
-/// that are logged without a session bus.
-pub fn session_notices() -> (Notices, Option<Posting>) {
-    match Connection::session() {
-        Ok(session) => {
-            let (notices, posting) = Notices::on(session.into_inner());
-            (notices, Some(Box::pin(posting)))
-        }
-        Err(_) => (Notices::logged(), None),
-    }
 }
 
 impl Start {
-    /// The window on `folder` with the sidebar's `places`, its items typed with `types`, the Recents folder read
-    /// from `recents` and the removable media of the `system` bus; a folder that cannot be read leaves a notice.
-    #[allow(clippy::too_many_arguments)]
+    /// The window on `folder` with the sidebar's `places`, its items typed with `types` and the Recents folder read
+    /// from `recents`; a folder that cannot be read leaves a notice, logged unless Files is on the buses
+    /// ([`Start::with_buses`]).
     pub fn open(
         folder: PathBuf,
         places: Vec<Place>,
         types: Option<Arc<MimeDatabase>>,
         recents: PathBuf,
-        notices: Notices,
         applications: Box<dyn Fn() -> io::Result<MimeApps>>,
         terminal: Option<Vec<String>>,
-        system: Option<Connection>,
     ) -> Start {
         let listings = Listings::default();
         let first = open_browser(folder, types.clone(), recents.clone(), listings.clone());
         Start {
             first: Some(first),
             listings,
-            ..Start::idle(
-                places,
-                types,
-                recents,
-                notices,
-                applications,
-                terminal,
-                system,
-            )
+            ..Start::idle(places, types, recents, applications, terminal)
         }
     }
 
     /// [`Start::open`] without its window: Files opens the windows the calls it serves ask for, and exits when the
     /// first call has not come within [`CALL_WAIT`], or once it opened nothing.
-    #[allow(clippy::too_many_arguments)]
     pub fn idle(
         places: Vec<Place>,
         types: Option<Arc<MimeDatabase>>,
         recents: PathBuf,
-        notices: Notices,
         applications: Box<dyn Fn() -> io::Result<MimeApps>>,
         terminal: Option<Vec<String>>,
-        system: Option<Connection>,
     ) -> Start {
-        let (media_wake, media_woken) = wake_channel();
-        let volumes = system.and_then(|system| {
-            Volumes::watch(system, notices.clone(), media_wake)
-                .map_err(|e| eprintln!("cupertino-files: no removable media: {e}"))
-                .ok()
-        });
         Start {
             first: None,
             places,
-            notices,
             applications,
             terminal,
             types,
             recents,
-            volumes,
-            media_woken,
+            buses: None,
             trash: Trash::new(),
             prefs: WindowPrefs::default(),
             prefs_file: None,
@@ -217,17 +179,21 @@ impl Start {
             app_icons: None,
             thumbnails: None,
             clock: SystemTime::now,
-            instance: None,
             activation: None,
             look_up: Arc::new(remote::look_up_item),
             listings: Listings::default(),
-            posting: None,
         }
     }
 
-    /// The notices posted by `posting` ([`session_notices`]), which Files runs on its loop.
-    pub fn with_posting(self, posting: Option<Posting>) -> Start {
-        Start { posting, ..self }
+    /// Files on the buses (`buses`): one connection to the session bus, made by the toolkit, posts its notices and
+    /// serves its names (the calls of later launches and of the desktop, [`crate::instance`]) once the launch claims
+    /// them, or hands the launch to the Files that owns them; the removable media are those of the system bus. The
+    /// first window opens once the launch serves the names, or finds no session bus.
+    pub fn with_buses(self, buses: Buses) -> Start {
+        Start {
+            buses: Some(buses),
+            ..self
+        }
     }
 
     /// The same start without its first window, as [`Start::idle`] makes it.
@@ -329,18 +295,13 @@ impl Start {
         Start { clock, ..self }
     }
 
-    /// The calls of later launches and of the desktop, taken from `instance` ([`crate::instance`]). Files gives its
-    /// name up as it exits.
-    pub fn with_instance(self, instance: Option<Service>) -> Start {
-        Start { instance, ..self }
-    }
-
-    /// The items the calls name looked up with `look_up` (on a thread of their own), in place of reading their status.
+    /// The items the calls name looked up with `look_up` (on an I/O task), in place of reading their status.
     pub fn with_look_up(self, look_up: LookUp) -> Start {
         Start { look_up, ..self }
     }
 
-    /// The first window raised with `token`, the activation token Files was started with, once it is shown.
+    /// The first window raised with `token`, the activation token Files was started with, once it is shown; a launch
+    /// that hands over to the running Files hands the token on.
     pub fn with_activation_token(self, token: Option<String>) -> Start {
         Start {
             activation: token,
@@ -350,7 +311,7 @@ impl Start {
 }
 
 /// What a model calls when it has changes waiting.
-type Wake = Arc<dyn Fn() + Send + Sync>;
+pub(super) type Wake = Arc<dyn Fn() + Send + Sync>;
 
 /// What a model calls when it has changes waiting, and what wakes then.
 fn wake_channel() -> (Wake, async_channel::Receiver<()>) {
@@ -441,9 +402,19 @@ pub struct Model {
     exiting: bool,
     /// Files started without a window and waits for the first call it serves, until [`CALL_WAIT`] passes.
     awaiting_call: bool,
-    /// The calls whose items are being looked up, each on a thread of its own.
+    /// The calls whose items are being looked up, each by an I/O task.
     look_ups: remote::LookUps,
+    /// What Files does on the buses, until the session bus connected; the launch under way once it did.
+    buses: Option<Buses>,
+    launching: Option<launch::Launching>,
+    /// The first window, which opens once the launch serves the names or runs alone, and the token that raises it.
+    first: Option<(Browser, async_channel::Receiver<()>, Wake)>,
+    activation: Option<String>,
 }
+
+/// How long summing the sizes of the folders one Move to Trash trashed should take: a walk of a large folder tree on a
+/// local disk.
+const TRASH_SIZES_DEADLINE: Duration = Duration::from_secs(30);
 
 /// How long a Files started without a window ([`Start::idle`]) waits for the call it was started for before it exits.
 pub const CALL_WAIT: Duration = Duration::from_secs(10);
@@ -458,7 +429,9 @@ struct Session {
     terminal: Option<Vec<String>>,
     types: Option<Arc<MimeDatabase>>,
     recents: PathBuf,
+    /// The removable media, once the system bus connected and udisks is listened for; what wakes when they report.
     volumes: Option<Volumes>,
+    media_wake: Wake,
     media_woken: async_channel::Receiver<()>,
     media: Media,
     /// The window that asked for each mount or unlock under way, by the device's block.
@@ -621,7 +594,23 @@ struct Rename {
 pub enum Message {
     /// The removable media have reports waiting.
     Media,
-    /// A folder the sidebar's places come from changed.
+    /// The session bus connected, or could not.
+    SessionBus(Handed<zbus::Result<zbus::Connection>>),
+    /// The session bus connection closed.
+    SessionClosed,
+    /// The system bus connected, or could not.
+    SystemBus(Handed<zbus::Result<zbus::Connection>>),
+    /// The system bus connection closed: the removable media are no longer followed.
+    SystemClosed,
+    /// The removable media are listened for, or why not.
+    MediaWatched(Handed<zbus::Result<Volumes>>),
+    /// A call on the removable media ended, or has more to do.
+    MediaCalled(Handed<crate::udisks::Called>),
+    /// A mount whose file system was not there yet is tried again.
+    MountAgain(Handed<crate::udisks::Pending>),
+    /// The launch on the session bus ([`launch`]).
+    Launch(LaunchEvent),
+    /// A listing of a folder the sidebar's places come from has changes waiting.
     Places,
     /// A thumbnail was made.
     Thumbnails,
@@ -643,8 +632,6 @@ pub enum Message {
     CallWaitOver,
     /// The standard places were read again: they replace the ones shown.
     PlacesRead(Vec<Place>),
-    /// The sidebar's watches were added; whether the trash's folder is newly watched and the places are to be read again.
-    PlacesWatched(bool),
     /// The write state of the file systems of folders a drag hovered was read.
     MountsRead(Vec<(PathBuf, bool)>),
     /// A listing's work or watch, a thumbnail's job or the posting of the notices ended; what it brought wakes the
@@ -878,22 +865,28 @@ impl Application for Files {
             ItemIcons::new(file_icons, start.thumbnails, thumbnails_wake)
                 .with_app_icons(start.app_icons),
         );
+        let (media_wake, media_woken) = wake_channel();
         let mut model = Model {
             windows: BTreeMap::new(),
             next_window: 0,
             exiting: false,
             awaiting_call: start.first.is_none(),
             look_ups: remote::LookUps::new(start.look_up),
+            buses: start.buses,
+            launching: None,
+            first: start.first,
+            activation: start.activation,
             session: Session {
                 standard_places: start.places.len(),
                 places: start.places,
-                notices: start.notices,
+                notices: Notices::logged(),
                 applications: start.applications,
                 terminal: start.terminal,
                 types: start.types,
                 recents: start.recents,
-                volumes: start.volumes,
-                media_woken: start.media_woken,
+                volumes: None,
+                media_wake,
+                media_woken,
                 media: Media::default(),
                 mounting: HashMap::new(),
                 home: start.home.unwrap_or_else(|| {
@@ -916,7 +909,7 @@ impl Application for Files {
                 thumbnails_woken,
                 dragged: Vec::new(),
                 clock: start.clock,
-                instance: start.instance,
+                instance: None,
                 known_tags: RefCell::new(BTreeSet::new()),
                 tag_colors: tag_editor::tag_colors(),
                 text_family: cupertino_kit::app::mono_family(),
@@ -926,31 +919,26 @@ impl Application for Files {
         };
         let mut commands = vec![woken(&model.session.places_watch.woken, Message::Places)];
         commands.extend(model.session.look_at_trash());
-        match start.first {
-            Some((browser, woken, wake)) => {
-                let first = model.next_window;
-                commands.push(model.add_window(browser, woken, wake));
-                if let Some(token) = start.activation {
-                    commands.push(remote::raise(window_key(first), Some(token)));
-                }
-            }
-            None => commands.push(Command::After {
+        if model.first.is_none() {
+            commands.push(Command::After {
                 delay: CALL_WAIT,
                 message: Message::CallWaitOver,
-            }),
+            });
         }
-        if let Some(instance) = &model.session.instance {
-            commands.push(woken(instance.woken(), Message::Remote));
-        }
-        commands.extend(model.session.notice_clicks());
-        if let Some(posting) = start.posting {
-            commands.push(Command::Perform(Box::pin(async move {
-                posting.await;
-                Message::Worked
-            })));
-        }
-        if model.session.volumes.is_some() {
-            commands.push(woken(&model.session.media_woken, Message::Media));
+        if model.buses.is_some() {
+            // the first window waits for the launch on the session bus
+            commands.extend(cupertino_kit::bus::connect(
+                Bus::Session,
+                |connection| Message::SessionBus(Handed::new(connection)),
+                Message::SessionClosed,
+            ));
+            commands.extend(cupertino_kit::bus::connect(
+                Bus::System,
+                |connection| Message::SystemBus(Handed::new(connection)),
+                Message::SystemClosed,
+            ));
+        } else {
+            commands.extend(model.launched());
         }
         if model.session.icons.thumbnails() {
             commands.push(woken(&model.session.thumbnails_woken, Message::Thumbnails));
@@ -1019,12 +1007,46 @@ impl Model {
                 vec![Command::Window(key, WindowRequest::Activate(token))]
             }
             Message::Media => self.follow_media(),
+            Message::SessionBus(connection) => match connection.take() {
+                Some(connection) => self.session_bus(connection),
+                None => Vec::new(),
+            },
+            // the connection's end leaves the names given up; what runs goes on, and a launch still under way runs alone
+            Message::SessionClosed => match self.launching.take() {
+                Some(_) => {
+                    eprintln!(
+                        "cupertino-files: the session bus closed before the launch was served"
+                    );
+                    self.launched()
+                }
+                None => Vec::new(),
+            },
+            Message::SystemBus(connection) => match connection.take() {
+                Some(connection) => self.system_bus(connection),
+                None => Vec::new(),
+            },
+            Message::SystemClosed => {
+                eprintln!("cupertino-files: the system bus closed: removable media are no longer followed");
+                Vec::new()
+            }
+            Message::MediaWatched(volumes) => match volumes.take() {
+                Some(volumes) => self.media_watched(volumes),
+                None => Vec::new(),
+            },
+            Message::MediaCalled(called) => match called.take() {
+                Some(called) => self.media_called(called),
+                None => Vec::new(),
+            },
+            Message::MountAgain(pending) => match pending.take() {
+                Some(pending) => self.mount_again(pending),
+                None => Vec::new(),
+            },
+            Message::Launch(event) => self.launch_event(event),
             Message::Places => {
-                self.session.follow_places();
+                self.session.places_woken();
                 vec![woken(&self.session.places_watch.woken, Message::Places)]
             }
             Message::PlacesRead(fresh) => self.session.places_read(fresh),
-            Message::PlacesWatched(trash_new) => self.session.places_watched(trash_new),
             Message::MountsRead(read) => self.session.mounts_read(read),
             Message::TrashLooked(changed) => {
                 if changed {
@@ -1105,6 +1127,9 @@ impl Model {
                 lookups.extend(browser.take_lookups());
             }
         }
+        let (w, f) = self.session.places_watch.work();
+        works.extend(w);
+        watches.extend(f);
         let watched = watches.into_iter().map(|watch| {
             let follow = watch.follow();
             Command::Perform(Box::pin(async move {
@@ -1120,23 +1145,25 @@ impl Model {
             )
         });
         let places = self.session.places_task();
-        let watching = self.session.places_watch_task();
         let mounts = self.session.mounts_task();
         let thumbnails = std::iter::from_fn(|| self.session.icons.take_job()).map(|job| {
             cupertino_kit::task::io(JOB_DEADLINE, move || job.run(), |()| Message::Worked)
         });
         let found = lookups.into_iter().map(reads::look_up);
-        let spaces = self
+        let spaces: Vec<Command<Message>> = self
             .windows
             .iter_mut()
-            .filter_map(|(&id, window)| window.space_task(id));
+            .flat_map(|(&id, window)| {
+                let reads = window.texts.reads(&window.wake);
+                window.space_task(id).into_iter().chain(reads)
+            })
+            .collect();
         watched
             .chain(run)
             .chain(thumbnails)
             .chain(found)
             .chain(spaces)
             .chain(places)
-            .chain(watching)
             .chain(mounts)
             .collect()
     }
@@ -1147,6 +1174,9 @@ impl Model {
         let jobs = &self.session.jobs;
         if self.exiting
             || self.awaiting_call
+            || self.buses.is_some()
+            || self.launching.is_some()
+            || self.first.is_some()
             || !self.look_ups.is_empty()
             || !self.windows.is_empty()
             || !jobs.running.is_empty()
@@ -1156,18 +1186,27 @@ impl Model {
         }
         self.exiting = true;
         // first, so a launch racing the exit is refused at once and starts a Files of its own
-        self.session.instance = None;
-        let sent = self.session.notices.sent();
-        vec![
+        let release = self.session.instance.take().map(|instance| {
+            let release = instance.release();
             Command::Perform(Box::pin(async move {
-                sent.await;
-                Message::NoticesSent
-            })),
-            Command::After {
-                delay: EXIT_NOTICES,
-                message: Message::NoticesSent,
-            },
-        ]
+                release.await;
+                Message::Worked
+            }))
+        });
+        let sent = self.session.notices.sent();
+        release
+            .into_iter()
+            .chain([
+                Command::Perform(Box::pin(async move {
+                    sent.await;
+                    Message::NoticesSent
+                })),
+                Command::After {
+                    delay: EXIT_NOTICES,
+                    message: Message::NoticesSent,
+                },
+            ])
+            .collect()
     }
 }
 
@@ -1385,8 +1424,8 @@ impl Model {
         match event {
             JobEvent::Reported(jid) => match jobs.poll(jid) {
                 jobs::Polled::Gone => Vec::new(),
-                jobs::Polled::Running(wake) => vec![wake],
-                jobs::Polled::Ended(job, outcome, seen) => self.job_ended(job, outcome, seen),
+                jobs::Polled::Running(slice) => slice,
+                jobs::Polled::Ended(job, outcome, seen) => self.job_ended(*job, outcome, seen),
             },
             JobEvent::Stop(jid) => {
                 jobs.stop(jid);
@@ -1960,7 +1999,7 @@ impl Model {
             }
             MenuAction::Eject => {
                 if let Some(place) = window.eject_target(session) {
-                    self.eject(place);
+                    return self.eject(place);
                 }
             }
             MenuAction::Open => return window.open_selection(id, session),
@@ -1981,7 +2020,9 @@ impl Model {
                 window.go(cupertino_kit::files::recents::location().to_path_buf())
             }
             MenuAction::Home => window.go(session.home.clone()),
-            MenuAction::MoveToTrash => window.trash_selection(session),
+            MenuAction::MoveToTrash => {
+                return window.trash_selection(session).into_iter().collect()
+            }
             MenuAction::PutBack => window.put_back(session),
             MenuAction::NewFolder => match operations::new_folder(window.browser.dir()) {
                 Ok(path) => return window.rename_new_folder(id, path),
@@ -2126,56 +2167,8 @@ impl Model {
         self.start_job(id, work, None)
     }
 
-    /// Take what the removable media reported: the rows follow the devices, a window on a file system that went away
-    /// goes home, a passphrase sheet of a container that went away closes, and a finished mount goes to its folder in
-    /// the window that asked for it.
-    fn follow_media(&mut self) -> Vec<Command<Message>> {
-        let session = &mut self.session;
-        let Some(volumes) = &session.volumes else {
-            return Vec::new();
-        };
-        let reports = volumes.poll();
-        if !reports.is_empty() {
-            let held: Vec<bool> = self
-                .windows
-                .values()
-                .map(|w| removable_holding(w.browser.dir(), &session.places).is_some())
-                .collect();
-            let mut arrived = Vec::new();
-            for report in reports {
-                let object = match &report {
-                    Report::Mounted { object, .. } | Report::Done { object } => {
-                        session.mounting.remove(object)
-                    }
-                    Report::Devices(_) => None,
-                };
-                if let Some(at) = session.media.take(report) {
-                    arrived.extend(object.map(|window| (window, at)));
-                }
-            }
-            session.show_media();
-            for ((&id, window), held) in self.windows.iter_mut().zip(held) {
-                if held && !session.media.holds(window.browser.dir()) {
-                    window.go(session.home.clone());
-                }
-                if let Some((_, at)) = arrived.iter().rev().find(|(w, _)| *w == id) {
-                    window.go(at.clone());
-                }
-                let gone = window
-                    .unlock
-                    .as_ref()
-                    .is_some_and(|u| session.media.index_of(&u.object).is_none());
-                if gone {
-                    window.unlock = None;
-                }
-            }
-        }
-        vec![woken(&session.media_woken, Message::Media)]
-    }
-
-    /// Open place `index` in the window `id`, as a click on its row does: a folder is shown, a removable file system
-    /// that is not mounted is mounted (the window goes there once it is), a locked container asks for its passphrase,
-    /// and a row with a call under way does nothing.
+    /// Open place `index` in the window `id`, as a click on its row does: a folder is shown, a removable device is
+    /// opened ([`Model::open_device`]).
     fn open_place(&mut self, id: u64, index: usize) -> Vec<Command<Message>> {
         let session = &mut self.session;
         let Some(window) = self.windows.get_mut(&id) else {
@@ -2195,94 +2188,10 @@ impl Model {
             return Vec::new();
         }
         window.sidebar_row = Some(row);
-        let Some(row) = index.checked_sub(session.standard_places) else {
-            return Vec::new();
-        };
-        match session.media.device(row) {
-            Some((device, false)) if device.locked => {
-                window.unlock = Some(Unlock {
-                    object: device.object.clone(),
-                    name: device.name.clone(),
-                    passphrase: Passphrase::default(),
-                });
-            }
-            Some((_, false)) => {
-                if let (Some(volumes), Some(device)) = (&session.volumes, session.media.start(row))
-                {
-                    session.mounting.insert(device.object.clone(), id);
-                    volumes.mount(&device);
-                    session.show_media();
-                }
-            }
-            _ => {}
+        match index.checked_sub(session.standard_places) {
+            Some(row) => self.open_device(id, row),
+            None => Vec::new(),
         }
-        Vec::new()
-    }
-
-    /// Unlock the container of the passphrase sheet of the window `id` with the passphrase typed; the window goes to
-    /// what it holds once that is mounted. An empty passphrase keeps the sheet open.
-    fn unlock(&mut self, id: u64) -> Vec<Command<Message>> {
-        let session = &mut self.session;
-        let Some(window) = self.windows.get_mut(&id) else {
-            return Vec::new();
-        };
-        if window
-            .unlock
-            .as_ref()
-            .is_none_or(|u| u.passphrase.is_empty())
-        {
-            return Vec::new();
-        }
-        let Some(unlock) = window.unlock.take() else {
-            return Vec::new();
-        };
-        let started = session
-            .media
-            .index_of(&unlock.object)
-            .and_then(|row| session.media.start(row));
-        if let (Some(volumes), Some(device)) = (&session.volumes, started) {
-            session.mounting.insert(device.object.clone(), id);
-            volumes.unlock(&device, unlock.passphrase);
-            session.show_media();
-        }
-        Vec::new()
-    }
-
-    /// A press on the accessory of the sidebar row `key`: the eject button of a mounted removable file system.
-    fn accessory(&mut self, key: &Key) -> Vec<Command<Message>> {
-        let session = &self.session;
-        let row = (0..session.places.len())
-            .find(|&i| view::place_key(session, i) == *key)
-            .filter(|&i| session.places[i].ejectable());
-        if let Some(index) = row {
-            self.eject(index);
-        }
-        Vec::new()
-    }
-
-    /// Eject the drive of the removable file system of place `index`: the windows on its file systems go home first,
-    /// so they hold none of them.
-    fn eject(&mut self, index: usize) {
-        let session = &mut self.session;
-        let Some((device, filesystems)) = index
-            .checked_sub(session.standard_places)
-            .and_then(|i| session.media.eject(i))
-        else {
-            return;
-        };
-        let mounts: Vec<&Path> = filesystems
-            .iter()
-            .filter_map(|d| d.mount.as_deref())
-            .collect();
-        for window in self.windows.values_mut() {
-            if mounts.iter().any(|m| window.browser.dir().starts_with(m)) {
-                window.go(session.home.clone());
-            }
-        }
-        if let Some(volumes) = &session.volumes {
-            volumes.eject(&device, filesystems);
-        }
-        session.show_media();
     }
 }
 
@@ -2421,7 +2330,7 @@ impl BrowserWindow {
         }
         let (previewed, _) = self.previewed();
         let previewed: Vec<Entry> = previewed.cloned().collect();
-        self.texts.follow(&previewed, &self.wake);
+        self.texts.follow(&previewed);
     }
 
     /// The items previewed: the preview column's file, the gallery's item and the preview window's item, and the side
@@ -2689,8 +2598,9 @@ impl BrowserWindow {
             .collect()
     }
 
-    /// Move the selected items to the trash; the listing drops them when the watcher reports it.
-    fn trash_selection(&self, session: &Session) {
+    /// Move the selected items to the trash; the listing drops them when the watcher reports it. Summing a trashed
+    /// folder's files can take long: the I/O task that records the sizes.
+    fn trash_selection(&self, session: &Session) -> Option<Command<Message>> {
         let paths = self.selected_paths();
         let mut sizes = Vec::new();
         let moved: Vec<_> = paths
@@ -2704,11 +2614,11 @@ impl BrowserWindow {
             })
             .collect();
         session.failed_some(Action::Trash, moved);
-        // each move is a rename; summing a trashed folder's files can take long, so it runs on a thread of its own
-        if !sizes.is_empty() {
-            let spawned = std::thread::Builder::new()
-                .name("trash-sizes".into())
-                .spawn(move || {
+        // each move is a rename; the sizes are summed on the I/O pool
+        (!sizes.is_empty()).then(|| {
+            cupertino_kit::task::io(
+                TRASH_SIZES_DEADLINE,
+                move || {
                     for size in sizes {
                         if let Err(e) = size.record() {
                             eprintln!(
@@ -2716,11 +2626,10 @@ impl BrowserWindow {
                             );
                         }
                     }
-                });
-            if let Err(e) = spawned {
-                eprintln!("cupertino-files: cannot sum the trashed folders' sizes: {e}");
-            }
-        }
+                },
+                |()| Message::Worked,
+            )
+        })
     }
 
     /// Put the selected items of the trash back where they came from.
@@ -3369,8 +3278,10 @@ fn has_tag(entry: &Entry, color: TagColor) -> bool {
         .any(|t| t.eq_ignore_ascii_case(color.title()))
 }
 
-/// Open the window on `start` and serve it until the last window closes and every file operation has ended.
-pub fn run(start: Start) -> Result<(), cupertino_kit::app::AppError> {
+/// Open the window on `start` and serve it until the last window closes and every file operation has ended, or until
+/// the launch was handed over; how it ended.
+pub fn run(start: Start) -> Result<Ended, cupertino_kit::app::AppError> {
     prepare(start);
-    cupertino_kit::app::run::<Files>()
+    cupertino_kit::app::run::<Files>()?;
+    Ok(launch::ended())
 }

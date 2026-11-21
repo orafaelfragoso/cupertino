@@ -1,8 +1,10 @@
 //! The worker of a file operation: Paste Item, Move Item Here, Duplicate, New Folder with Selection and drops each run
-//! their [`Work`] on a thread of its own, which hands its progress over and wakes the application at most every
-//! [`PROGRESS_INTERVAL`], and once more when it ends. Nothing here copies or moves on the window's thread.
-//! [`Transfer::stop`] sets the work's [`Cancel`].
+//! their [`Work`] as Kit I/O tasks, one slice at a time ([`Transfer::slice`]): a slice works for about
+//! [`operations::SLICE`] and gives its turn back, so listings and thumbnails go on beside it and a stop takes effect at
+//! the next slice. Copies and moves are the family's [`operations::Transfer`]; moving to the trash and emptying it go an
+//! item a step. Nothing here copies or moves on the window's thread. [`Transfer::stop`] sets the work's [`Cancel`].
 
+use std::collections::VecDeque;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -10,15 +12,17 @@ use std::time::{Duration, Instant};
 
 use crate::format::human_size;
 use crate::trash::Trash;
-use cupertino_kit::files::operations::{self, Cancel, DropAction, Progress};
+use cupertino_kit::files::operations::{self, Cancel, DropAction, Progress, SLICE, SLICE_DEADLINE};
+use cupertino_kit::prelude::Command;
+use cupertino_trash::{TrashError, TrashedItem};
 
-/// How often a running transfer wakes the application to show its progress.
-const PROGRESS_INTERVAL: Duration = Duration::from_millis(50);
+use super::{JobEvent, Message};
+
 /// How long a transfer runs before its time left is estimated from its pace so far.
 const ESTIMATE_AFTER: Duration = Duration::from_secs(2);
 
-/// What a transfer calls with its progress after each step, on its own thread, before it looks for a stop: tests pace
-/// a transfer with it.
+/// What a transfer calls with its progress after each slice, on the I/O pool, before the next slice is asked for:
+/// tests pace a transfer with it.
 pub type Observer = Arc<dyn Fn(&Progress) + Send + Sync>;
 
 /// What a transfer does.
@@ -84,14 +88,18 @@ impl Outcome {
     }
 }
 
-/// What the transfer's thread hands to the application.
+/// What a transfer and its slices share.
 #[derive(Default)]
 struct Shared {
     progress: Progress,
     /// How long it had run at that progress.
     elapsed: Duration,
+    /// What is left of the work, while no slice holds it; `None` while one does and once the work ended.
+    run: Option<Run>,
     /// Set once the transfer ended.
     outcome: Option<Outcome>,
+    /// The transfer was dropped before it ended: the slice that holds the work stops it and runs it to its end.
+    dropped: bool,
 }
 
 /// One running transfer.
@@ -102,57 +110,50 @@ pub(super) struct Transfer {
     pub progress: Progress,
     /// How long it had run at that progress.
     pub elapsed: Duration,
-    pub woken: async_channel::Receiver<()>,
     shared: Arc<Mutex<Shared>>,
-    thread: Option<std::thread::JoinHandle<()>>,
+    started: Instant,
+    observer: Option<Observer>,
 }
 
 impl Transfer {
-    /// Do `work` on a thread of its own.
+    /// `work`, to be done slice by slice ([`Transfer::slice`]); nothing runs yet.
     pub fn start(id: u64, work: Work, observer: Option<Observer>) -> Transfer {
-        let (wake, woken) = async_channel::bounded(1);
-        let shared = Arc::new(Mutex::new(Shared::default()));
-        let cancel = Cancel::default();
-        let (thread_shared, thread_cancel, thread_work) =
-            (Arc::clone(&shared), cancel.clone(), work.clone());
-        let thread = std::thread::Builder::new()
-            .name("cupertino-files transfer".into())
-            .spawn(move || {
-                let started = Instant::now();
-                let mut woke = started - PROGRESS_INTERVAL;
-                let mut report = |progress: &Progress| {
-                    let mut shared = lock(&thread_shared);
-                    shared.progress = progress.clone();
-                    shared.elapsed = started.elapsed();
-                    drop(shared);
-                    if woke.elapsed() >= PROGRESS_INTERVAL {
-                        woke = Instant::now();
-                        // a wake already waiting shows this progress too
-                        let _ = wake.try_send(());
-                    }
-                    if let Some(observer) = &observer {
-                        observer(progress);
-                    }
-                };
-                let outcome = run(thread_work, &thread_cancel, &mut report);
-                lock(&thread_shared).outcome = Some(outcome);
-                // the application may be gone: then nobody waits for the end
-                let _ = wake.send_blocking(());
-            })
-            .expect("a thread for the transfer");
+        let shared = Shared {
+            run: Some(Run::of(work.clone())),
+            ..Shared::default()
+        };
         Transfer {
             id,
             work,
-            cancel,
+            cancel: Cancel::default(),
             progress: Progress::default(),
             elapsed: Duration::ZERO,
-            woken,
-            shared,
-            thread: Some(thread),
+            shared: Arc::new(Mutex::new(shared)),
+            started: Instant::now(),
+            observer,
         }
     }
 
-    /// Take what the thread reported: its progress, and what it did once it ended. The outcome is handed over once.
+    /// The I/O task that runs the next slice, whose end is the transfer's [`JobEvent::Reported`]; `None` while a slice
+    /// is out and once the work ended.
+    pub fn slice(&self) -> Option<Command<Message>> {
+        let run = lock(&self.shared).run.take()?;
+        let shared = Arc::clone(&self.shared);
+        let (cancel, observer, started, id) = (
+            self.cancel.clone(),
+            self.observer.clone(),
+            self.started,
+            self.id,
+        );
+        Some(cupertino_kit::task::io(
+            SLICE_DEADLINE,
+            move || slice(run, &shared, &cancel, observer.as_ref(), started),
+            move |()| Message::Job(JobEvent::Reported(id)),
+        ))
+    }
+
+    /// Take what the slices reported: the progress, and what the work did once it ended. The outcome is handed over
+    /// once.
     pub fn poll(&mut self) -> Option<Outcome> {
         let mut shared = lock(&self.shared);
         self.progress = shared.progress.clone();
@@ -160,7 +161,7 @@ impl Transfer {
         shared.outcome.take()
     }
 
-    /// Stop the transfer: the item being copied is removed again, the others stay where they are.
+    /// Stop the transfer: the next slice removes the item being copied, the others stay where they are.
     pub fn stop(&self) {
         self.cancel.cancel();
     }
@@ -291,196 +292,387 @@ fn left_words(left: Duration) -> String {
     format!("{count} {unit}{plural} left")
 }
 
-/// Do `work`, reporting to `report` and stopping at `cancel`.
-fn run(work: Work, cancel: &Cancel, report: &mut dyn FnMut(&Progress)) -> Outcome {
-    match work {
-        Work::Transfer {
-            sources,
-            dest,
-            action,
-        } => Outcome {
-            results: operations::transfer(&sources, &dest, action, cancel, report),
-            folder: None,
-            took: None,
-        },
-        Work::Duplicate { sources } => Outcome {
-            results: operations::duplicate_with(&sources, cancel, report),
-            folder: None,
-            took: None,
-        },
-        Work::NewFolderWith { dir, sources } => match operations::new_folder(&dir) {
-            Ok(folder) => Outcome {
-                results: operations::transfer(&sources, &folder, DropAction::Move, cancel, report),
-                folder: Some(folder),
-                took: None,
-            },
-            Err(e) => Outcome {
-                results: sources
-                    .iter()
-                    .map(|_| Err(io::Error::new(e.kind(), e.to_string())))
-                    .collect(),
-                folder: None,
-                took: None,
-            },
-        },
-        Work::Trash { sources, trash } => {
-            // a move to the trash renames: each item counts as one
-            let mut done = Progress {
-                total_items: sources.len(),
-                ..Progress::default()
-            };
-            let mut results = Vec::with_capacity(sources.len());
-            for source in &sources {
-                if cancel.is_cancelled() {
-                    results.push(Err(operations::stopped()));
-                    continue;
-                }
-                done.current = source.file_name().map(|n| n.to_string_lossy().into_owned());
-                report(&done);
-                results.push(
-                    trash
-                        .trash(source)
-                        .map(|item| item.file_path())
-                        .map_err(|e| io::Error::other(e.to_string())),
-                );
-                done.items += 1;
-                done.current = None;
-                report(&done);
+/// Run one slice of `run` and hand what is left, or the outcome, back to `shared`, then tell `observer`. A transfer
+/// dropped meanwhile is stopped and run to its end here, so no half-copied item is left under its own name.
+fn slice(
+    run: Run,
+    shared: &Mutex<Shared>,
+    cancel: &Cancel,
+    observer: Option<&Observer>,
+    started: Instant,
+) {
+    let mut run = run;
+    loop {
+        let (sliced, progress) = run.slice(cancel);
+        let mut held = lock(shared);
+        held.progress = progress.clone();
+        held.elapsed = started.elapsed();
+        match sliced {
+            Sliced::Left(left) if held.dropped => {
+                drop(held);
+                cancel.cancel();
+                run = left;
+                continue;
             }
-            Outcome {
-                results,
-                folder: None,
-                took: None,
-            }
+            Sliced::Left(left) => held.run = Some(left),
+            Sliced::Ended(outcome) => held.outcome = Some(outcome),
         }
-        Work::EmptyTrash { sources, trash } => {
-            // each item deleted counts as one; the trash is read again here, so what was put in since goes too. The
-            // home trash goes first and whole: a mounted volume that is slow to answer holds up only the volumes'
-            let mut emptying = Emptying {
+        drop(held);
+        if let Some(observer) = observer {
+            observer(&progress);
+        }
+        return;
+    }
+}
+
+/// What a slice leaves.
+enum Sliced {
+    /// The work goes on with the next slice.
+    Left(Run),
+    Ended(Outcome),
+}
+
+/// A work as it runs, between two slices.
+enum Run {
+    /// Copied or moved by the family's transfer; the folder New Folder with Selection made, which it fills.
+    Moving {
+        transfer: operations::Transfer,
+        folder: Option<PathBuf>,
+    },
+    /// New Folder with Selection, before its folder is made.
+    NewFolder { dir: PathBuf, sources: Vec<PathBuf> },
+    /// Items moved to the trash, one a step.
+    Trashing(Trashing),
+    /// The trash emptied, an item a step.
+    Emptying(Box<Emptying>),
+}
+
+impl Run {
+    fn of(work: Work) -> Run {
+        match work {
+            Work::Transfer {
+                sources,
+                dest,
+                action,
+            } => Run::Moving {
+                transfer: operations::Transfer::into_folder(sources, dest, action),
+                folder: None,
+            },
+            Work::Duplicate { sources } => Run::Moving {
+                transfer: operations::Transfer::duplicate(sources),
+                folder: None,
+            },
+            Work::NewFolderWith { dir, sources } => Run::NewFolder { dir, sources },
+            Work::Trash { sources, trash } => Run::Trashing(Trashing {
                 done: Progress {
                     total_items: sources.len(),
                     ..Progress::default()
                 },
+                sources: sources.into(),
+                trash,
+                results: Vec::new(),
+            }),
+            Work::EmptyTrash { sources, trash } => Run::Emptying(Box::new(Emptying {
+                done: Progress {
+                    total_items: sources.len(),
+                    ..Progress::default()
+                },
+                sources,
+                trash,
                 results: Vec::new(),
                 took: Vec::new(),
-            };
-            let home = emptying.take(
-                trash.list(),
-                || trash.home_entries(),
-                &trash,
-                cancel,
-                report,
-            );
-            let emptied = match home {
-                Ok(()) => emptying.take(
-                    trash.list_volumes(),
-                    || trash.volume_entries(),
-                    &trash,
-                    cancel,
-                    report,
-                ),
-                failed => failed,
-            };
-            let Emptying {
-                mut results,
-                mut took,
-                ..
-            } = emptying;
-            // a trash that cannot be listed fails as a whole, whatever it held: the home trash by the items it had
-            // when the work began, the volumes' as one more item that stayed
-            if let Err(e) = emptied {
-                if results.is_empty() {
-                    took = match sources.is_empty() {
-                        true => vec![trash.home_trash().join("files")],
-                        false => sources,
-                    };
-                    results = took
-                        .iter()
-                        .map(|_| Err(io::Error::other(e.to_string())))
-                        .collect();
-                } else {
-                    took.push(trash.home_trash().to_path_buf());
-                    results.push(Err(io::Error::other(e.to_string())));
+                step: Step::List(Part::Home),
+            })),
+        }
+    }
+
+    /// Work for about [`SLICE`], stopping at `cancel`: what is left, and the progress so far.
+    fn slice(self, cancel: &Cancel) -> (Sliced, Progress) {
+        match self {
+            Run::Moving {
+                mut transfer,
+                folder,
+            } => {
+                if cancel.is_cancelled() {
+                    transfer.cancel();
+                }
+                if let Some(slice) = transfer.take_slice() {
+                    slice.run();
+                }
+                let progress = transfer.progress();
+                match transfer.results() {
+                    Some(results) => (
+                        Sliced::Ended(Outcome {
+                            results,
+                            folder,
+                            took: None,
+                        }),
+                        progress,
+                    ),
+                    None => (Sliced::Left(Run::Moving { transfer, folder }), progress),
                 }
             }
-            Outcome {
-                results,
-                folder: None,
-                took: Some(took),
+            Run::NewFolder { dir, sources } => {
+                let progress = Progress {
+                    total_items: sources.len(),
+                    ..Progress::default()
+                };
+                match operations::new_folder(&dir) {
+                    Ok(folder) => (
+                        Sliced::Left(Run::Moving {
+                            transfer: operations::Transfer::into_folder(
+                                sources,
+                                folder.clone(),
+                                DropAction::Move,
+                            ),
+                            folder: Some(folder),
+                        }),
+                        progress,
+                    ),
+                    Err(e) => (
+                        Sliced::Ended(Outcome {
+                            results: sources
+                                .iter()
+                                .map(|_| Err(io::Error::new(e.kind(), e.to_string())))
+                                .collect(),
+                            folder: None,
+                            took: None,
+                        }),
+                        progress,
+                    ),
+                }
+            }
+            Run::Trashing(mut trashing) => {
+                let start = Instant::now();
+                while !trashing.sources.is_empty() && start.elapsed() < SLICE {
+                    trashing.step(cancel);
+                }
+                let progress = trashing.done.clone();
+                match trashing.sources.is_empty() {
+                    true => (
+                        Sliced::Ended(Outcome {
+                            results: trashing.results,
+                            folder: None,
+                            took: None,
+                        }),
+                        progress,
+                    ),
+                    false => (Sliced::Left(Run::Trashing(trashing)), progress),
+                }
+            }
+            Run::Emptying(mut emptying) => {
+                let start = Instant::now();
+                while !matches!(emptying.step, Step::Ended(_)) && start.elapsed() < SLICE {
+                    emptying.step(cancel);
+                }
+                let progress = emptying.done.clone();
+                match emptying.step {
+                    Step::Ended(_) => (Sliced::Ended(emptying.outcome()), progress),
+                    _ => (Sliced::Left(Run::Emptying(emptying)), progress),
+                }
             }
         }
     }
+}
+
+/// A move to the trash under way: each move renames, so an item counts as one.
+struct Trashing {
+    sources: VecDeque<PathBuf>,
+    trash: Trash,
+    done: Progress,
+    results: Vec<io::Result<PathBuf>>,
+}
+
+impl Trashing {
+    /// Move the next item to the trash, or say it was stopped.
+    fn step(&mut self, cancel: &Cancel) {
+        let Some(source) = self.sources.pop_front() else {
+            return;
+        };
+        if cancel.is_cancelled() {
+            self.results.push(Err(operations::stopped()));
+            return;
+        }
+        self.done.current = source.file_name().map(|n| n.to_string_lossy().into_owned());
+        self.results.push(
+            self.trash
+                .trash(&source)
+                .map(|item| item.file_path())
+                .map_err(|e| io::Error::other(e.to_string())),
+        );
+        self.done.items += 1;
+        self.done.current = None;
+    }
+}
+
+/// A part of the trash: the home trash, emptied first and whole, then the mounted volumes', which a volume slow to
+/// answer holds up alone.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Part {
+    Home,
+    Volumes,
+}
+
+/// Where an emptying is.
+enum Step {
+    /// The part's items are listed; the trash is read again here, so what was put in since goes too.
+    List(Part),
+    /// The part's items listed are deleted, one a step.
+    Delete(Part, VecDeque<TrashedItem>),
+    /// The part's entries that have no record, which are in no list and would keep the trash looking full.
+    Orphans(Part),
+    /// Done, or a part could not be listed.
+    Ended(Result<(), TrashError>),
 }
 
 /// An emptying of the trash under way: how far it came, and each item it took with what became of it.
 struct Emptying {
+    /// The items the home trash held when the work began.
+    sources: Vec<PathBuf>,
+    trash: Trash,
     done: Progress,
     results: Vec<io::Result<PathBuf>>,
     took: Vec<PathBuf>,
+    step: Step,
 }
 
 impl Emptying {
-    /// Delete the items `listed`, then what `entries` still finds without a record, which is in no list and would
-    /// keep the trash looking full. Nothing is deleted from a part of the trash that cannot be listed.
-    fn take(
-        &mut self,
-        listed: Result<Vec<cupertino_trash::TrashedItem>, cupertino_trash::TrashError>,
-        entries: impl FnOnce() -> Vec<PathBuf>,
-        trash: &Trash,
-        cancel: &Cancel,
-        report: &mut dyn FnMut(&Progress),
-    ) -> Result<(), cupertino_trash::TrashError> {
-        let items = listed?;
-        self.done.total_items = self.done.total_items.max(self.done.items + items.len());
-        for item in &items {
-            self.took.push(item.file_path());
-            if cancel.is_cancelled() {
-                self.results.push(Err(operations::stopped()));
-                continue;
-            }
-            self.done.current = item
-                .file_path()
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned());
-            report(&self.done);
-            self.results.push(
-                trash
-                    .delete(item)
-                    .map(|()| item.file_path())
-                    .map_err(|e| io::Error::other(e.to_string())),
-            );
-            self.done.items += 1;
-            self.done.current = None;
-            report(&self.done);
-        }
-        if !cancel.is_cancelled() {
-            for orphan in entries()
-                .into_iter()
-                .filter(|p| cupertino_trash::trashed_item(p).is_none())
-            {
-                let gone = match std::fs::symlink_metadata(&orphan) {
-                    Ok(m) if m.is_dir() => std::fs::remove_dir_all(&orphan),
-                    Ok(_) => std::fs::remove_file(&orphan),
-                    Err(_) => Ok(()),
+    /// Take the next step. Nothing is deleted from a part of the trash that cannot be listed, and nothing after it.
+    fn step(&mut self, cancel: &Cancel) {
+        self.step = match std::mem::replace(&mut self.step, Step::Ended(Ok(()))) {
+            Step::List(part) => {
+                let listed = match part {
+                    Part::Home => self.trash.list(),
+                    Part::Volumes => self.trash.list_volumes(),
                 };
-                self.results.push(gone.map(|()| orphan.clone()));
-                self.took.push(orphan);
+                match listed {
+                    Ok(items) => {
+                        self.done.total_items =
+                            self.done.total_items.max(self.done.items + items.len());
+                        Step::Delete(part, items.into())
+                    }
+                    Err(e) => Step::Ended(Err(e)),
+                }
+            }
+            Step::Delete(part, mut items) => match items.pop_front() {
+                Some(item) => {
+                    self.delete(&item, cancel);
+                    Step::Delete(part, items)
+                }
+                // a stopped emptying lists the volumes' items still, as stopped, and deletes no entry without a record
+                None if cancel.is_cancelled() => match part {
+                    Part::Home => Step::List(Part::Volumes),
+                    Part::Volumes => Step::Ended(Ok(())),
+                },
+                None => Step::Orphans(part),
+            },
+            Step::Orphans(part) => {
+                let entries = match part {
+                    Part::Home => self.trash.home_entries(),
+                    Part::Volumes => self.trash.volume_entries(),
+                };
+                for orphan in entries
+                    .into_iter()
+                    .filter(|p| cupertino_trash::trashed_item(p).is_none())
+                {
+                    self.results
+                        .push(remove_entry(&orphan).map(|()| orphan.clone()));
+                    self.took.push(orphan);
+                }
+                match part {
+                    Part::Home => Step::List(Part::Volumes),
+                    Part::Volumes => Step::Ended(Ok(())),
+                }
+            }
+            ended @ Step::Ended(_) => ended,
+        };
+    }
+
+    /// Delete `item`, or say it was stopped.
+    fn delete(&mut self, item: &TrashedItem, cancel: &Cancel) {
+        self.took.push(item.file_path());
+        if cancel.is_cancelled() {
+            self.results.push(Err(operations::stopped()));
+            return;
+        }
+        self.done.current = item
+            .file_path()
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned());
+        self.results.push(
+            self.trash
+                .delete(item)
+                .map(|()| item.file_path())
+                .map_err(|e| io::Error::other(e.to_string())),
+        );
+        self.done.items += 1;
+        self.done.current = None;
+    }
+
+    /// What the emptying did. A trash that cannot be listed fails as a whole, whatever it held: the home trash by the
+    /// items it had when the work began, the volumes' as one more item that stayed.
+    fn outcome(self) -> Outcome {
+        let Emptying {
+            sources,
+            trash,
+            mut results,
+            mut took,
+            step,
+            ..
+        } = self;
+        if let Step::Ended(Err(e)) = step {
+            if results.is_empty() {
+                took = match sources.is_empty() {
+                    true => vec![trash.home_trash().join("files")],
+                    false => sources,
+                };
+                results = took
+                    .iter()
+                    .map(|_| Err(io::Error::other(e.to_string())))
+                    .collect();
+            } else {
+                took.push(trash.home_trash().to_path_buf());
+                results.push(Err(io::Error::other(e.to_string())));
             }
         }
-        Ok(())
+        Outcome {
+            results,
+            folder: None,
+            took: Some(took),
+        }
     }
 }
 
-/// A transfer dropped before it ended is stopped and waited for: Files exits only once its transfers ended, so this
-/// is a session that went away, and a copy cut off with the process would leave a half-written item at its
-/// destination under the item's own name.
+/// Delete the trash entry `orphan`, a folder with what it holds; one that is gone already is no failure.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "runs in a transfer's slice, on the I/O pool (kit::task::io)"
+)]
+fn remove_entry(orphan: &Path) -> io::Result<()> {
+    match std::fs::symlink_metadata(orphan) {
+        Ok(m) if m.is_dir() => std::fs::remove_dir_all(orphan),
+        Ok(_) => std::fs::remove_file(orphan),
+        Err(_) => Ok(()),
+    }
+}
+
+/// A transfer dropped before it ended is stopped and run to its end: Files exits only once its transfers ended, so
+/// this is a session that went away, and a copy cut off with the process would leave a half-written item at its
+/// destination under the item's own name. A slice that holds the work does that itself; otherwise it is done here,
+/// where a stopped slice only removes the item it was copying.
 impl Drop for Transfer {
     fn drop(&mut self) {
         self.cancel.cancel();
-        // a thread that waits to hand over its last wake gives up at once
-        self.woken.close();
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
+        let left = {
+            let mut shared = lock(&self.shared);
+            shared.dropped = true;
+            shared.run.take()
+        };
+        let mut left = left;
+        while let Some(run) = left.take() {
+            if let (Sliced::Left(more), _) = run.slice(&self.cancel) {
+                left = Some(more);
+            }
         }
     }
 }

@@ -343,18 +343,6 @@ pub enum Call {
     },
 }
 
-impl Call {
-    /// The call changes the displays through the display server.
-    pub fn sets_displays(&self) -> bool {
-        matches!(
-            self,
-            Call::SetDisplayScale { .. }
-                | Call::SetDisplayRefresh { .. }
-                | Call::SetDisplayPosition { .. }
-        )
-    }
-}
-
 /// The session state the panes show besides the files.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Session {

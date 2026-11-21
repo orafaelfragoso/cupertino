@@ -162,13 +162,9 @@ pub fn run(pane: PaneId, activation: String) -> Result<()> {
     };
     // missing icons never stop the start: they are named here and drawn as placeholders
     required_icons(&Assets::discover());
-    let state = State::new(
-        Paths::from_env(),
-        Services::new(),
-        pane,
-        display_height()?,
-        notify,
-    )?;
+    let mut services = Services::new();
+    let display_height = display_height(&mut services)?;
+    let state = State::new(Paths::from_env(), services, pane, display_height, notify)?;
     launch(Start {
         state,
         background,
@@ -178,17 +174,19 @@ pub fn run(pane: PaneId, activation: String) -> Result<()> {
     Ok(cupertino_kit::app::run::<SettingsApp>()?)
 }
 
-/// The height of the display, for the Dock's default tile size: the window system reports no outputs, so one short
-/// connection asks the server.
-fn display_height() -> Result<f64> {
-    let mut conn = cupertino_wayland_client::Connection::connect()
-        .map_err(|e| format!("cannot connect to the display server: {e}"))?;
-    conn.roundtrip()?;
-    Ok(conn
-        .outputs()
-        .into_iter()
-        .find_map(|o| o.geometry.map(|g| f64::from(g.height)))
-        .ok_or("the server has no output")?)
+/// The height of the display in points, for the Dock's default tile size: the window system reports no outputs, so
+/// the server's `Displays1` is asked.
+fn display_height(services: &mut Services) -> Result<f64> {
+    match services.displays() {
+        crate::live::Reading::Ready(monitors) => Ok(monitors
+            .iter()
+            .find_map(|m| m.logical.map(|(_, h)| f64::from(h)))
+            .ok_or("the server has no display that is on")?),
+        crate::live::Reading::Unavailable(reason) => {
+            Err(format!("cannot list the displays: {reason}").into())
+        }
+        crate::live::Reading::Unknown => Err("cannot list the displays".into()),
+    }
 }
 
 /// Hand `start` to the next [`SettingsApp`] to start, as [`run`] does; for a test's window system.

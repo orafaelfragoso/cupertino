@@ -418,28 +418,19 @@ impl About {
         }
     }
 
-    /// A Displays row before Kernel for each connected display with a current mode: one short connection asks the
-    /// server.
-    /// Add a Displays row for each output, and give the height in points of the shortest one, which the window keeps
-    /// within ([`Layout::fit`]).
-    pub fn read_displays(&mut self) -> Result<Option<f64>, cupertino_wayland_client::Error> {
+    /// Add a Displays row before Kernel for each of `monitors`, and give the height in points of the shortest one, which
+    /// the window keeps within ([`Layout::fit`]).
+    pub fn add_displays(&mut self, monitors: &[crate::live::Monitor]) -> Option<f64> {
         let mut shortest: Option<f64> = None;
-        let mut conn = cupertino_wayland_client::Connection::connect()?;
-        conn.roundtrip()?;
-        for output in conn.outputs() {
-            let Some(mode) = output.mode else { continue };
+        for monitor in monitors {
             let display = Display {
-                make: output.make.as_deref(),
-                model: output.model.as_deref(),
-                description: output.description.as_deref(),
-                name: output.name.as_deref(),
-                mode,
-                physical_size_mm: output.physical_size_mm,
-                scale: output
-                    .effective_scale()
-                    .unwrap_or_else(|| output.scale.factor()),
+                description: Some(&monitor.title),
+                mode: monitor.mode,
+                physical_size_mm: monitor.physical_mm,
+                scale: monitor.scale,
+                ..Default::default()
             };
-            let height = f64::from(mode.1) / display.scale.max(1.0);
+            let height = f64::from(monitor.mode.1) / display.scale.max(1.0);
             shortest = Some(shortest.map_or(height, |h: f64| h.min(height)));
             if let Some(value) = display_value(&display) {
                 let before_kernel = self
@@ -456,7 +447,7 @@ impl About {
                 );
             }
         }
-        Ok(shortest)
+        shortest
     }
 }
 

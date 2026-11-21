@@ -21,7 +21,6 @@ pub mod menu_bar;
 pub mod meter;
 pub mod netinfo;
 pub use cupertino_radios::nm;
-pub mod output_config;
 pub mod pages;
 pub mod pane;
 pub mod pane_extras;

@@ -70,9 +70,13 @@ pub fn run(activation: String) -> Result<()> {
     // the one graphics reading that runs a program, given a short time to answer before the window shows
     let video_memory = crate::about::nvidia_video_memory(crate::about::VIDEO_MEMORY_TIMEOUT);
     let mut about = About::read_with(Path::new("/"), &video_memory);
-    let screen = about
-        .read_displays()
-        .map_err(|e| format!("cannot list the displays: {e}"))?;
+    let screen = match crate::services::Services::new().displays() {
+        crate::live::Reading::Ready(monitors) => about.add_displays(&monitors),
+        crate::live::Reading::Unavailable(reason) => {
+            return Err(format!("cannot list the displays: {reason}").into())
+        }
+        crate::live::Reading::Unknown => None,
+    };
     let env = cupertino_kit::app::environment()?;
     let mut layout = layout(&about, &env.text, &env.theme);
     if let Some(height) = screen {

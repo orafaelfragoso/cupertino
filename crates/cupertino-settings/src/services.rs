@@ -39,6 +39,9 @@ pub const SESSION_NAME: &str = "org.cupertino.Session1";
 pub const SESSION_PATH: &str = "/org/cupertino/Session1";
 pub const CENTRE_PATH: &str = "/org/cupertino/NotificationCenter1";
 pub const LOGIN_NAME: &str = "org.cupertino.LoginManager1";
+/// The server's display configuration (D14), which the Displays pane reads and changes.
+pub const DISPLAYS_NAME: &str = "org.cupertino.Displays1";
+pub const DISPLAYS_PATH: &str = "/org/cupertino/Displays1";
 pub const LOGIN_PATH: &str = "/org/cupertino/LoginManager1";
 /// The prefix of sessiond's refusals of `SetSystemAccessibility`.
 const LOGIN_ERROR: &str = "org.cupertino.LoginManager1.Error.";
@@ -343,10 +346,109 @@ impl Backends {
     }
 }
 
-/// The live services and their connections.
 /// What the Displays pane says when no display server answers.
 const NO_COMPOSITOR: &str = "The display server does not answer";
 
+/// One display as `org.cupertino.Displays1.ListDisplays` gives it: connector, description, whether it is on, its
+/// position in points, its mode (width and height in device pixels, refresh rate in millihertz), its scale, its
+/// transform, its modes (width, height, refresh rate) and its physical size in millimetres (`(0, 0)` when unknown).
+pub type DisplayRecord = (
+    String,
+    String,
+    bool,
+    i32,
+    i32,
+    i32,
+    i32,
+    u32,
+    f64,
+    String,
+    Vec<(i32, i32, u32)>,
+    (u32, u32),
+);
+
+/// Whether a transform of `Displays1` turns the display by 90 or 270 degrees.
+fn swaps_sides(transform: &str) -> bool {
+    matches!(transform, "90" | "270" | "flipped-90" | "flipped-270")
+}
+
+/// The displays that are on, from `Displays1`'s records: a display that is off or has no mode is left out.
+pub fn monitors(records: Vec<DisplayRecord>) -> Vec<Monitor> {
+    records
+        .into_iter()
+        .filter_map(
+            |(
+                connector,
+                description,
+                enabled,
+                x,
+                y,
+                width,
+                height,
+                refresh,
+                scale,
+                transform,
+                modes,
+                mm,
+            )| {
+                let mode = (u32::try_from(width).ok()?, u32::try_from(height).ok()?);
+                if !enabled || mode.0 == 0 || mode.1 == 0 {
+                    return None;
+                }
+                let rotated = swaps_sides(&transform);
+                let scale = if scale.is_finite() && scale > 0.0 {
+                    scale
+                } else {
+                    1.0
+                };
+                let points = |pixels: u32| (f64::from(pixels) / scale).round() as u32;
+                let logical = if rotated {
+                    (points(mode.1), points(mode.0))
+                } else {
+                    (points(mode.0), points(mode.1))
+                };
+                let mut refresh_rates: Vec<u32> = modes
+                    .iter()
+                    .filter(|(w, h, r)| (*w, *h) == (width, height) && *r > 0)
+                    .map(|(_, _, r)| *r)
+                    .collect();
+                refresh_rates.sort_unstable();
+                refresh_rates.dedup();
+                let title = crate::about::display_title(&crate::about::Display {
+                    description: Some(&description),
+                    name: Some(&connector),
+                    ..Default::default()
+                })
+                .unwrap_or_else(|| "Display".to_owned());
+                Some(Monitor {
+                    title,
+                    mode,
+                    refresh_mhz: (refresh > 0).then_some(refresh),
+                    scale,
+                    connector: Some(connector),
+                    physical_mm: (mm.0 > 0 && mm.1 > 0).then_some(mm),
+                    logical: Some(logical),
+                    rotated,
+                    position: Some((x, y)),
+                    refresh_rates,
+                })
+            },
+        )
+        .collect()
+}
+
+/// What a display's row says when the server did not change it.
+const REFRESH_NOT_CHANGED: &str = "The refresh rate could not be changed.";
+const NOT_MOVED: &str = "The display could not be moved.";
+const SIZE_NOT_CHANGED: &str = "The display size could not be changed.";
+
+/// A display change refused or failed: the reason goes to the log, `sentence` to the row.
+fn display_failure(e: &zbus::Error, sentence: &str) -> String {
+    log_once(&format!("{sentence} {e}"));
+    sentence.to_owned()
+}
+
+/// The live services and their connections.
 pub struct Services {
     pub system: Bus,
     pub session: Bus,
@@ -363,9 +465,6 @@ pub struct Services {
     watching: [bool; 2],
     /// The change signals the shown pane reads, shared with the watches.
     interest: crate::watch::Interest,
-    /// The displays are read from and set on the display server the session names; services on given buses (tests)
-    /// reach none, so a test never reads or changes the displays of the session it runs in.
-    compositor: bool,
 }
 
 impl Services {
@@ -380,7 +479,6 @@ impl Services {
             on_change: None,
             watching: [false; 2],
             interest: crate::watch::Interest::default(),
-            compositor: true,
         }
     }
 
@@ -396,7 +494,6 @@ impl Services {
             on_change: None,
             watching: [false; 2],
             interest: crate::watch::Interest::default(),
-            compositor: false,
         }
     }
 
@@ -628,62 +725,32 @@ impl Services {
         }
     }
 
-    /// The connected displays with a current mode: one short connection asks the server.
-    pub fn displays(&self) -> Reading<Vec<Monitor>> {
-        if !self.compositor {
-            return Reading::Unavailable(NO_COMPOSITOR.to_owned());
-        }
-        let outputs = cupertino_wayland_client::Connection::connect()
-            .map_err(|e| e.to_string())
-            .and_then(|mut conn| {
-                conn.roundtrip().map_err(|e| e.to_string())?;
-                Ok(conn.outputs())
-            });
-        // where each display lies and which refresh rates it has: the server's output management says
-        let layouts = crate::output_config::layouts().unwrap_or_default();
-        match outputs {
-            Ok(outputs) => Reading::Ready(
-                outputs
-                    .into_iter()
-                    .filter_map(|o| {
-                        let mode = o.mode?;
-                        let title = crate::about::display_title(&crate::about::Display {
-                            make: o.make.as_deref(),
-                            model: o.model.as_deref(),
-                            description: o.description.as_deref(),
-                            name: o.name.as_deref(),
-                            ..Default::default()
-                        })
-                        .unwrap_or_else(|| "Display".to_owned());
-                        Some(Monitor {
-                            title,
-                            mode,
-                            refresh_mhz: o.refresh_mhz,
-                            scale: o.effective_scale().unwrap_or_else(|| o.scale.factor()),
-                            connector: o.name.clone(),
-                            physical_mm: o.physical_size_mm,
-                            logical: o.geometry.map(|g| (g.width, g.height)),
-                            rotated: o.transform.swaps_sides(),
-                            position: o
-                                .name
-                                .as_ref()
-                                .and_then(|n| layouts.iter().find(|l| &l.connector == n))
-                                .map(|l| l.position),
-                            refresh_rates: o
-                                .name
-                                .as_ref()
-                                .and_then(|n| layouts.iter().find(|l| &l.connector == n))
-                                .map(|l| l.refresh_rates.clone())
-                                .unwrap_or_default(),
-                        })
-                    })
-                    .collect(),
-            ),
-            Err(e) => {
-                log_once(&format!("the displays could not be listed: {e}"));
-                Reading::Unavailable(NO_COMPOSITOR.into())
-            }
-        }
+    /// The displays that are on, as the server's `Displays1` lists them on the session bus.
+    pub fn displays(&mut self) -> Reading<Vec<Monitor>> {
+        let result = self
+            .session
+            .proxy(DISPLAYS_NAME, DISPLAYS_PATH, DISPLAYS_NAME)
+            .and_then(|p| p.call::<_, _, Vec<DisplayRecord>>("ListDisplays", &()));
+        reading(self.session.checked(result), NO_COMPOSITOR).map(monitors)
+    }
+
+    /// `method` of `Displays1` with `body`; a refusal is logged and the row says `sentence`.
+    fn set_displays<B>(
+        &mut self,
+        method: &'static str,
+        body: &B,
+        sentence: &str,
+    ) -> Result<(), String>
+    where
+        B: zbus::export::serde::Serialize + zbus::zvariant::DynamicType,
+    {
+        let result = self
+            .session
+            .proxy(DISPLAYS_NAME, DISPLAYS_PATH, DISPLAYS_NAME)
+            .and_then(|p| p.call::<_, _, ()>(method, body));
+        self.session
+            .checked(result)
+            .map_err(|e| display_failure(&e, sentence))
     }
 
     pub fn brightness(&mut self) -> Reading<f64> {
@@ -888,9 +955,6 @@ impl Services {
 
     /// Carry out `call`; the error text for the row when it is refused or fails.
     pub fn call(&mut self, call: &Call) -> Result<(), String> {
-        if !self.compositor && call.sets_displays() {
-            return Err(NO_COMPOSITOR.to_owned());
-        }
         let system =
             |s: &mut Self, name, path, iface, f: &dyn Fn(&Proxy<'static>) -> zbus::Result<()>| {
                 let result = s.system.proxy(name, path, iface).and_then(|p| f(&p));
@@ -930,18 +994,9 @@ impl Services {
                 let raw = ((level.clamp(0.0, 1.0) * f64::from(max)).round() as u32).clamp(BRIGHTNESS_FLOOR.min(max), max);
                 p.call::<_, _, ()>("SetBrightness", &(raw,))
             }),
-            Call::SetDisplayRefresh { connector, mhz } => crate::output_config::configure(connector, crate::output_config::Change { refresh_mhz: Some(*mhz), ..Default::default() }).map_err(|e| {
-                log_once(&format!("the refresh rate could not be changed: {e}"));
-                "The refresh rate could not be changed.".to_string()
-            }),
-            Call::SetDisplayPosition { connector, x, y } => crate::output_config::configure(connector, crate::output_config::Change { position: Some((*x, *y)), ..Default::default() }).map_err(|e| {
-                log_once(&format!("the display could not be moved: {e}"));
-                "The display could not be moved.".to_string()
-            }),
-            Call::SetDisplayScale { connector, scale } => crate::output_config::set_scale(connector, *scale).map_err(|e| {
-                log_once(&format!("the display size could not be changed: {e}"));
-                "The display size could not be changed.".to_string()
-            }),
+            Call::SetDisplayRefresh { connector, mhz } => self.set_displays("SetRefreshRate", &(connector.as_str(), *mhz), REFRESH_NOT_CHANGED),
+            Call::SetDisplayPosition { connector, x, y } => self.set_displays("SetPosition", &(connector.as_str(), *x, *y), NOT_MOVED),
+            Call::SetDisplayScale { connector, scale } => self.set_displays("SetScale", &(connector.as_str(), *scale), SIZE_NOT_CHANGED),
             Call::SetWirelessEnabled(on) => system(self, NETWORK_NAME, NETWORK_PATH, NETWORK_NAME, &|p| p.set_property("WirelessEnabled", *on).map_err(zbus::Error::from)),
             Call::Join { ssid, passphrase } => system(self, NETWORK_NAME, NETWORK_PATH, NETWORK_NAME, &|p| p.call::<_, _, ()>("Connect", &(ssid.as_str(), passphrase.as_ref().map_or("", |p| p.as_str())))),
             Call::Disconnect => system(self, NETWORK_NAME, NETWORK_PATH, NETWORK_NAME, &|p| p.call::<_, _, ()>("Disconnect", &())),
@@ -964,9 +1019,6 @@ impl Services {
         call: &Call,
         done: impl FnOnce(Result<(), String>) + Send + 'static,
     ) -> Option<Result<(), String>> {
-        if !self.compositor && call.sets_displays() {
-            return Some(Err(NO_COMPOSITOR.to_owned()));
-        }
         type Job = Box<dyn FnOnce() -> Result<(), String> + Send>;
         type BusCall = Box<dyn FnOnce(&Connection) -> zbus::Result<()> + Send>;
         let on_bus = |s: &mut Self, f: BusCall| -> Result<Job, String> {
@@ -984,6 +1036,10 @@ impl Services {
                     .call::<_, _, ()>(method, &(id.as_str(),))
                     .map_err(|e| failure(&e))
             }))
+        };
+        let on_displays = |s: &mut Self| -> Result<Proxy<'static>, String> {
+            let proxy = s.session.proxy(DISPLAYS_NAME, DISPLAYS_PATH, DISPLAYS_NAME);
+            s.session.checked(proxy).map_err(|e| failure(&e))
         };
         let job: Result<Job, String> = match call.clone() {
             Call::Connect(id) if self.bluez() => {
@@ -1006,38 +1062,24 @@ impl Services {
                 ssid,
                 passphrase: None,
             } if self.network_manager() => on_bus(self, Box::new(move |c| nm::join(c, &ssid, ""))),
-            Call::SetDisplayRefresh { connector, mhz } => Ok(Box::new(move || {
-                crate::output_config::configure(
-                    &connector,
-                    crate::output_config::Change {
-                        refresh_mhz: Some(mhz),
-                        ..Default::default()
-                    },
-                )
-                .map_err(|e| {
-                    log_once(&format!("the refresh rate could not be changed: {e}"));
-                    "The refresh rate could not be changed.".to_string()
+            Call::SetDisplayRefresh { connector, mhz } => on_displays(self).map(|p| -> Job {
+                Box::new(move || {
+                    p.call::<_, _, ()>("SetRefreshRate", &(connector.as_str(), mhz))
+                        .map_err(|e| display_failure(&e, REFRESH_NOT_CHANGED))
                 })
-            })),
-            Call::SetDisplayPosition { connector, x, y } => Ok(Box::new(move || {
-                crate::output_config::configure(
-                    &connector,
-                    crate::output_config::Change {
-                        position: Some((x, y)),
-                        ..Default::default()
-                    },
-                )
-                .map_err(|e| {
-                    log_once(&format!("the display could not be moved: {e}"));
-                    "The display could not be moved.".to_string()
+            }),
+            Call::SetDisplayPosition { connector, x, y } => on_displays(self).map(|p| -> Job {
+                Box::new(move || {
+                    p.call::<_, _, ()>("SetPosition", &(connector.as_str(), x, y))
+                        .map_err(|e| display_failure(&e, NOT_MOVED))
                 })
-            })),
-            Call::SetDisplayScale { connector, scale } => Ok(Box::new(move || {
-                crate::output_config::set_scale(&connector, scale).map_err(|e| {
-                    log_once(&format!("the display size could not be changed: {e}"));
-                    "The display size could not be changed.".to_string()
+            }),
+            Call::SetDisplayScale { connector, scale } => on_displays(self).map(|p| -> Job {
+                Box::new(move || {
+                    p.call::<_, _, ()>("SetScale", &(connector.as_str(), scale))
+                        .map_err(|e| display_failure(&e, SIZE_NOT_CHANGED))
                 })
-            })),
+            }),
             _ => return None,
         };
         let job = match job {

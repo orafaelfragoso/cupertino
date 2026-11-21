@@ -10,8 +10,9 @@
 //! - `menubar`: a persistent layer window at the output's top left whose colour turns from [`GREEN`] to [`YELLOW`]
 //!   and back every [`TICK`]; it opens its session bus connection and reports its unique name with its instance.
 //!
-//! - `desktop`: windowless; its teardown takes [`SLOW_TEARDOWN`], so the host stops it while the server already
-//!   answers what the host asks next.
+//! - `desktop`: windowless; its first turn works for [`WORK`] and its teardown takes [`SLOW_TEARDOWN`], so the host
+//!   stops it while the server already answers what the host asks next, and a stop during that turn finds its
+//!   connection closed when its loop reads it next.
 //!
 //! - `osd`: the real on-screen displays of `cupertino-osd`, as `cupertino-shell` runs them.
 //!
@@ -539,6 +540,10 @@ impl Component for MenuBar {
 /// How long the desktop's teardown takes: far longer than a turn of the server, which answers a `connect` at once.
 pub const SLOW_TEARDOWN: Duration = Duration::from_millis(500);
 
+/// How long the desktop's first turn works: far longer than a turn of the server, which closes the connection of a
+/// component turned off at once.
+pub const WORK: Duration = Duration::from_millis(500);
+
 /// The `desktop` component.
 pub struct Desktop;
 
@@ -559,10 +564,18 @@ impl Application for Desktop {
 
     fn init() -> (Slow, Vec<Command<()>>) {
         report("desktop started");
-        (Slow, Vec::new())
+        (
+            Slow,
+            vec![Command::After {
+                delay: Duration::ZERO,
+                message: (),
+            }],
+        )
     }
 
     fn update(_: &mut Slow, (): ()) -> Vec<Command<()>> {
+        report("desktop works");
+        std::thread::sleep(WORK);
         Vec::new()
     }
 

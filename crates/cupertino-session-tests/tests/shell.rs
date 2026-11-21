@@ -13,6 +13,8 @@
 //! - A component the server runs alone runs in a separate host, started with `--only` and its name.
 //! - A component turned off and on again before the instance the host stops has ended starts again: the last list
 //!   wins.
+//! - A component the host stops, its connection closed by the server as the host releases its object, is never
+//!   reported failed, however often it stops.
 //! - A component of this development build asked to crash on its bus connection
 //!   (`org.cupertino.ShellComponentDebug1`) by `cupertino shell crash` panics as its loop dispatches, as it paints
 //!   and on a helper thread, and is started again alone each time.
@@ -327,6 +329,49 @@ fn a_component_turned_off_and_on_again_while_it_stops_starts_again() {
         rig.state.hosts.component_instance("dock"),
         1,
         "the dock was never restarted"
+    );
+}
+
+/// How many times the stop test turns the desktop off and on: twice the failures that give a component up.
+const STOPS: usize = 10;
+
+#[test]
+fn a_component_the_host_stops_again_and_again_is_never_reported_failed() {
+    // the dock keeps the shared host running while the desktop is off
+    let mut rig = Rig::new("stops", &["desktop", "dock"], &[]);
+    rig.until_reported("desktop started");
+    let host = rig
+        .host_pid(HostKind::Shared)
+        .expect("the shared host runs");
+    let works = |rig: &Rig| rig.lines().iter().filter(|l| *l == "desktop works").count();
+    for stop in 1..=STOPS + 1 {
+        rig.until(&format!("instance {stop} of the desktop works"), |rig| {
+            assert!(
+                !rig.state.hosts.component_gave_up("desktop"),
+                "stops counted as failures: the server gave the desktop up after {} stops",
+                stop - 1
+            );
+            rig.state.hosts.component_connected("desktop") && works(rig) == stop
+        });
+        if stop > STOPS {
+            break;
+        }
+        // off and on again as its loop works: the host stops the desktop and releases its object, the server closes
+        // its connection, and the loop fails on it as it reads it next, while the server's list names it again
+        rig.state.config.shell_off = vec!["desktop".into()];
+        rig.state.apply_shell_plan();
+        rig.state.config.shell_off.clear();
+        rig.state.apply_shell_plan();
+    }
+    assert_eq!(
+        rig.state.hosts.component_instance("desktop"),
+        STOPS as u32 + 1,
+        "one connection for each instance"
+    );
+    assert_eq!(
+        rig.host_pid(HostKind::Shared),
+        Some(host),
+        "the host went on"
     );
 }
 

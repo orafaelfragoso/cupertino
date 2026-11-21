@@ -610,7 +610,8 @@ impl Runtime {
 
     /// Start `entry` on its own 8 MiB thread bound to `connection`, its loop Kit's UI loop on that connection.
     /// `Error::Version` when the connection offers another version of `cupertino_component_v1` than this crate was
-    /// built with, or a global the component binds older than it needs or not at all: no thread starts.
+    /// built with, a global of `cupertino-protocols` the component binds at another version or not at all, or the
+    /// layer shell older than the components work with: no thread starts.
     pub fn start(&self, entry: &'static Entry, connection: Connection) -> Result<Running, Error> {
         let component = entry.name();
         let socket = connection
@@ -664,6 +665,7 @@ impl Runtime {
         };
         let t_ended = Arc::clone(&ended);
         let t_wake = Arc::clone(&self.wake);
+        let t_stop = Arc::clone(&stop_flag);
         let t_bus = Arc::clone(&self.bus);
         let t_fault = Arc::clone(&fault);
 
@@ -693,8 +695,9 @@ impl Runtime {
                 let final_state = match outcome {
                     _ if t_fault.panicked() => Ended::Failed(Failure::Panic),
                     Ok(Ok(Ran::Stopped)) => Ended::Stopped,
-                    // the host cut the component off: its loop failing on the closed socket is the host's doing
-                    Ok(Err(_)) if t_fault.is_cut() => Ended::Stopped,
+                    // the host cut the component off, or asked it to stop and released its object, which closes its
+                    // connection: its loop failing on the closed socket is the host's doing
+                    Ok(Err(_)) if t_fault.is_cut() || t_stop.load(Ordering::SeqCst) => Ended::Stopped,
                     Ok(Ok(Ran::Exited)) => Ended::Failed(Failure::Exit),
                     Ok(Err(e)) => {
                         tracing::error!(component = component.as_str(), error = %e, "component failed");

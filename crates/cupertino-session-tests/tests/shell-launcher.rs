@@ -16,6 +16,8 @@
 #[path = "shell/components.rs"]
 #[allow(dead_code)]
 mod components;
+#[path = "shell/memory.rs"]
+mod memory;
 // shared with `shell-host.rs`, which uses what this test does not
 #[allow(dead_code)]
 #[path = "shell-host/rig.rs"]
@@ -34,6 +36,7 @@ use cupertino_server::host::HostKind;
 use zbus::blocking::Connection;
 
 use components::{BLUE, DOCK_SIZE, RED};
+use memory::{steady_allocator, HostMemory, CRASHES_IN_A_ROW, RESTARTS};
 use rig::{count, Area, Rig, OUTPUT_SIZE};
 
 /// The host program of this test: `cupertino-shell`'s own (`cupertino_shell::run`) with the test dock and the real
@@ -408,17 +411,6 @@ fn owner(session: &Connection) -> Option<(String, u32)> {
     Some((owner.to_string(), pid))
 }
 
-/// The host process's anonymous memory (its heap and stacks, which a leak grows), in KiB.
-fn anonymous(pid: u32) -> u64 {
-    let rollup =
-        std::fs::read_to_string(format!("/proc/{pid}/smaps_rollup")).expect("the host's memory");
-    rollup
-        .lines()
-        .find_map(|line| line.strip_prefix("Anonymous:"))
-        .and_then(|kib| kib.trim().trim_end_matches("kB").trim().parse().ok())
-        .expect("the host's anonymous memory")
-}
-
 /// The output once it shows the same picture for [`STILL_TURNS`] turns of the server: the window drawn, its
 /// opening done.
 fn still(rig: &mut Rig) -> image::RgbaImage {
@@ -451,18 +443,6 @@ const PIXEL_TOLERANCE: i32 = 8;
 const PANEL_PIXELS: usize = 10_000;
 /// The window that has the keyboard before the panel opens.
 const WINDOW_APP_ID: &str = "org.cupertino.LauncherTestWindow";
-/// Crashes injected into the component, after which each restarts alone.
-const RESTARTS: u32 = 50;
-/// Crashes after which the server gives a component up (D16: five within a minute); a restart the person asks for
-/// then starts it again and forgets them.
-const CRASHES_IN_A_ROW: u32 = 5;
-/// Restarts after which the host's memory is measured the first time: the host's first allocations of a component
-/// (its caches, the allocator's arenas) are made by then.
-const WARM_RESTARTS: u32 = 10;
-/// How much the host's anonymous memory may grow between that measurement and the last restart, in KiB: well below
-/// what one leaked instance holds (its 8 MiB stack, its windows' buffers).
-const ANONYMOUS_GROWTH_KIB: u64 = 4 * 1024;
-
 /// Inject a crash at `at` into the launcher on its connection `name`.
 fn crash(rig: &mut Rig, session: &Connection, name: &str, at: &'static str) {
     let (name, bus_call) = (name.to_owned(), session.clone());
@@ -534,9 +514,7 @@ fn the_launcher_opens_from_the_server_and_restarts_alone_hidden_after_injected_p
     std::env::set_var("XDG_DATA_HOME", private_dir("data"));
     std::env::set_var("XDG_CACHE_HOME", private_dir("cache"));
     std::env::set_var("HOME", private_dir("home"));
-    // the host's allocator makes an arena per thread up to a cap, and each restart's threads may add one, so the memory
-    // measured below would still be growing toward that cap when it is measured; two arenas make it the instances'
-    std::env::set_var("MALLOC_ARENA_MAX", "2");
+    steady_allocator();
     let mut rig = Rig::new("launcher", &["dock", "launcher"], &[]);
     cupertino_server::quit::start_session_service_on(&mut rig.state, Some(bus.1.clone()));
     let session = Connection::session().expect("the test's bus");
@@ -631,7 +609,7 @@ fn the_launcher_opens_from_the_server_and_restarts_alone_hidden_after_injected_p
     assert_eq!(pid, host, "the restarted launcher runs in the same host");
     connection = name;
 
-    let mut warm = None;
+    let mut host_memory = HostMemory::of(host);
     for crash_number in 1..RESTARTS {
         let at = ["paint", "dispatch", "helper"][crash_number as usize % 3];
         crash(&mut rig, &session, &connection, at);
@@ -655,14 +633,8 @@ fn the_launcher_opens_from_the_server_and_restarts_alone_hidden_after_injected_p
         let (name, pid) = restarted(&mut rig, &session, &connection, instance, &mut colours);
         assert_eq!(pid, host, "after the restart {} at {at}", crash_number + 1);
         connection = name;
-        if crash_number + 1 == WARM_RESTARTS {
-            warm = Some(anonymous(host));
-        }
+        host_memory.restarted(crash_number + 1);
     }
-    let (warm, last) = (warm.unwrap(), anonymous(host));
-    eprintln!(
-        "host anonymous memory after {WARM_RESTARTS} restarts: {warm} KiB; after {RESTARTS}: {last} KiB"
-    );
 
     assert_eq!(
         rig.host_pid(HostKind::Shared),
@@ -680,11 +652,7 @@ fn the_launcher_opens_from_the_server_and_restarts_alone_hidden_after_injected_p
         "the dock kept drawing while the launcher started again"
     );
     assert!(!rig.state.hosts.component_gave_up("launcher"));
-    assert!(
-        last <= warm + ANONYMOUS_GROWTH_KIB,
-        "the host's anonymous memory grew from {warm} KiB to {last} KiB over {} restarts",
-        RESTARTS - WARM_RESTARTS
-    );
+    host_memory.assert_nothing_kept(&mut rig);
 
     // what a restart loses: the last instance starts hidden, with the window holding the keyboard, and opens again
     rig.until("the hidden panel's area settles", |rig| {

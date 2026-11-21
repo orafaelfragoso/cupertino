@@ -24,6 +24,8 @@
 mod components;
 #[path = "shell/host.rs"]
 mod host;
+#[path = "shell/memory.rs"]
+mod memory;
 // shared with `shell-host.rs`, which uses what this test does not
 #[allow(dead_code)]
 #[path = "shell-host/rig.rs"]
@@ -39,6 +41,7 @@ use std::sync::{Arc, Mutex};
 use cupertino_server::host::{HostKind, Liveness};
 
 use components::{BLUE, DOCK_SIZE, RED};
+use memory::{steady_allocator, HostMemory, CRASHES_IN_A_ROW, RESTARTS};
 use rig::{count, Area, Rig, OUTPUT_SIZE};
 
 /// The host itself, when the supervisor started this binary with [`host::MARK`]; a test run does nothing here.
@@ -383,58 +386,10 @@ where
         .map(drop)
 }
 
-/// The host process's memory, in KiB: its resident set, its proportional set and its anonymous memory (its heap and
-/// stacks, which a leak grows; unlike the other two it does not change with what other processes map of the same
-/// files).
-#[derive(Clone, Copy)]
-struct Memory {
-    rss: u64,
-    pss: u64,
-    anonymous: u64,
-}
-
-impl std::fmt::Display for Memory {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "Rss {} KiB, Pss {} KiB, Anonymous {} KiB",
-            self.rss, self.pss, self.anonymous
-        )
-    }
-}
-
-fn memory(pid: u32) -> Memory {
-    let rollup =
-        std::fs::read_to_string(format!("/proc/{pid}/smaps_rollup")).expect("the host's memory");
-    let field = |name: &str| -> u64 {
-        rollup
-            .lines()
-            .find_map(|line| line.strip_prefix(name))
-            .and_then(|kib| kib.trim().trim_end_matches("kB").trim().parse().ok())
-            .unwrap_or_else(|| panic!("the host's {name}"))
-    };
-    Memory {
-        rss: field("Rss:"),
-        pss: field("Pss:"),
-        anonymous: field("Anonymous:"),
-    }
-}
-
-/// Crashes injected into the on-screen displays, after which each restarts alone.
-const OSD_RESTARTS: u32 = 50;
-/// Crashes after which the server gives a component up (D16: five within a minute); a restart the person asks for
-/// then starts it again and forgets them.
-const CRASHES_IN_A_ROW: u32 = 5;
-/// Restarts after which the host's memory is measured the first time: the host's first allocations of a component
-/// (its caches, the allocator's arenas) are made by then.
-const WARM_RESTARTS: u32 = 10;
-/// How much the host's anonymous memory may grow between that measurement and the last restart, in KiB: well below
-/// what one leaked instance holds (its 8 MiB stack, its window's buffers).
-const ANONYMOUS_GROWTH_KIB: u64 = 4 * 1024;
-
 #[test]
 fn the_on_screen_displays_restart_alone_after_injected_panics_and_the_host_stays_flat() {
     let bus = Bus::start();
+    steady_allocator();
     let mut rig = Rig::new("osd", &["dock", "osd"], &[]);
     cupertino_server::quit::start_session_service_on(&mut rig.state, Some(bus.1.clone()));
     let session = zbus::blocking::Connection::session().expect("the test's bus");
@@ -475,11 +430,10 @@ fn the_on_screen_displays_restart_alone_after_injected_panics_and_the_host_stays
     assert!(!status.unwrap().success());
     assert!(stderr.contains("AccessDenied"), "{stderr}");
 
-    let first = memory(host);
     let mut colours = HashSet::new();
     let first_instance = rig.state.hosts.component_instance("osd");
-    let mut warm = None;
-    for crash in 0..OSD_RESTARTS {
+    let mut host_memory = HostMemory::of(host);
+    for crash in 0..RESTARTS {
         let at = ["paint", "dispatch", "helper"][crash as usize % 3];
         let mut owner = None;
         rig.until("the displays own their name", |_| {
@@ -497,8 +451,9 @@ fn the_on_screen_displays_restart_alone_after_injected_panics_and_the_host_stays
             )
             .unwrap_or_else(|e| panic!("the displays take a crash at {at}: {e}"));
         if at == "paint" {
-            // what they draw next panics
-            osd_call(&session, "Show", &("brightness", 0.5)).expect("Show");
+            // what they draw next panics. Something else may have them draw first, and then their name is already gone
+            // with them: the crash is taken all the same
+            let _ = osd_call(&session, "Show", &("brightness", 0.5));
         }
         if (crash + 1) % CRASHES_IN_A_ROW == 0 {
             rig.until(
@@ -521,18 +476,11 @@ fn the_on_screen_displays_restart_alone_after_injected_panics_and_the_host_stays
                     && rig.state.hosts.component_connected("osd")
             },
         );
-        if crash + 1 == WARM_RESTARTS {
-            warm = Some(memory(host));
-        }
+        host_memory.restarted(crash + 1);
     }
     rig.until("the displays own their name again", |_| {
         osd_owner(&session).is_some()
     });
-    let (warm, last) = (warm.unwrap(), memory(host));
-    eprintln!(
-        "host memory before the first crash: {first}; after {WARM_RESTARTS} restarts: {warm}; after \
-         {OSD_RESTARTS}: {last}"
-    );
 
     assert_eq!(
         rig.host_pid(HostKind::Shared),
@@ -550,13 +498,7 @@ fn the_on_screen_displays_restart_alone_after_injected_panics_and_the_host_stays
         "the dock kept drawing while the displays started again"
     );
     assert!(!rig.state.hosts.component_gave_up("osd"));
-    assert!(
-        last.anonymous <= warm.anonymous + ANONYMOUS_GROWTH_KIB,
-        "the host's anonymous memory grew from {} KiB to {} KiB over {} restarts",
-        warm.anonymous,
-        last.anonymous,
-        OSD_RESTARTS - WARM_RESTARTS
-    );
+    host_memory.assert_nothing_kept(&mut rig);
 
     // and the restarted displays draw
     let before = rig.image();

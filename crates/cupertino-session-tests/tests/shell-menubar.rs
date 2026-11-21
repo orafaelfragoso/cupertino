@@ -14,6 +14,8 @@
 #[path = "shell/components.rs"]
 #[allow(dead_code)]
 mod components;
+#[path = "shell/memory.rs"]
+mod memory;
 // shared with `shell-host.rs`, which uses what this test does not
 #[allow(dead_code)]
 #[path = "shell-host/rig.rs"]
@@ -31,6 +33,7 @@ use cupertino_server::host::HostKind;
 use zbus::blocking::Connection;
 
 use components::{BLUE, DOCK_SIZE, RED};
+use memory::{steady_allocator, HostMemory, CRASHES_IN_A_ROW, RESTARTS};
 use rig::{count, magenta, Area, Rig, OUTPUT_SIZE};
 
 /// The host program of this test: `cupertino-shell`'s own (`cupertino_shell::run`) with the test dock and the real
@@ -194,17 +197,6 @@ fn bar_owner(session: &Connection) -> Option<String> {
     (owner_of(session, REGISTRAR_NAME)? == watcher).then_some(watcher)
 }
 
-/// The host process's anonymous memory (its heap and stacks, which a leak grows), in KiB.
-fn anonymous(pid: u32) -> u64 {
-    let rollup =
-        std::fs::read_to_string(format!("/proc/{pid}/smaps_rollup")).expect("the host's memory");
-    rollup
-        .lines()
-        .find_map(|line| line.strip_prefix("Anonymous:"))
-        .and_then(|kib| kib.trim().trim_end_matches("kB").trim().parse().ok())
-        .expect("the host's anonymous memory")
-}
-
 /// The edge of the status item's icon, in pixels: larger than the bar asks for, so it is scaled down whole.
 const ICON_EDGE: i32 = 32;
 
@@ -276,24 +268,13 @@ fn shows_item(rig: &mut Rig) -> bool {
     count(&rig.image(), bar_area(), magenta) >= ITEM_PIXELS
 }
 
-/// Crashes injected into the menu bar, after which each restarts alone.
-const RESTARTS: u32 = 50;
-/// Crashes after which the server gives a component up (D16: five within a minute); a restart the person asks for
-/// then starts it again and forgets them.
-const CRASHES_IN_A_ROW: u32 = 5;
-/// Restarts after which the host's memory is measured the first time: the host's first allocations of a component
-/// (its caches, the allocator's arenas) are made by then.
-const WARM_RESTARTS: u32 = 10;
-/// How much the host's anonymous memory may grow between that measurement and the last restart, in KiB: well below
-/// what one leaked instance holds (its 8 MiB stack, its bar's buffers).
-const ANONYMOUS_GROWTH_KIB: u64 = 4 * 1024;
-
 #[test]
 fn the_menu_bar_restarts_alone_holding_its_place_after_injected_panics() {
     let bus = Bus::start();
     // no menubar.conf or key bindings of the person's, and Recent Items of the test's own
     std::env::set_var("XDG_CONFIG_HOME", private_dir("config"));
     std::env::set_var("XDG_DATA_HOME", private_dir("data"));
+    steady_allocator();
     let mut rig = Rig::new("menubar", &["dock", "menubar"], &[]);
     cupertino_server::quit::start_session_service_on(&mut rig.state, Some(bus.1.clone()));
     let session = Connection::session().expect("the test's bus");
@@ -326,7 +307,7 @@ fn the_menu_bar_restarts_alone_holding_its_place_after_injected_panics() {
     let mut colours = HashSet::new();
     let mut held = false;
     let first_instance = rig.state.hosts.component_instance("menubar");
-    let mut warm = None;
+    let mut host_memory = HostMemory::of(host);
     for crash in 0..RESTARTS {
         let at = ["paint", "dispatch", "helper"][crash as usize % 3];
         let mut name = None;
@@ -401,17 +382,11 @@ fn the_menu_bar_restarts_alone_holding_its_place_after_injected_panics() {
                     && rig.state.hosts.component_connected("menubar")
             },
         );
-        if crash + 1 == WARM_RESTARTS {
-            warm = Some(anonymous(host));
-        }
+        host_memory.restarted(crash + 1);
     }
     rig.until("the menu bar owns its names again", |_| {
         bar_owner(&session).is_some()
     });
-    let (warm, last) = (warm.unwrap(), anonymous(host));
-    eprintln!(
-        "host anonymous memory after {WARM_RESTARTS} restarts: {warm} KiB; after {RESTARTS}: {last} KiB"
-    );
 
     assert_eq!(
         rig.host_pid(HostKind::Shared),
@@ -430,11 +405,7 @@ fn the_menu_bar_restarts_alone_holding_its_place_after_injected_panics() {
     );
     assert!(held, "the server held the bar's picture while it restarted");
     assert!(!rig.state.hosts.component_gave_up("menubar"));
-    assert!(
-        last <= warm + ANONYMOUS_GROWTH_KIB,
-        "the host's anonymous memory grew from {warm} KiB to {last} KiB over {} restarts",
-        RESTARTS - WARM_RESTARTS
-    );
+    host_memory.assert_nothing_kept(&mut rig);
 
     // the restarted bar keeps its place and draws an item registered with it
     assert_eq!(rig.state.usable_area(output).y, reserved);

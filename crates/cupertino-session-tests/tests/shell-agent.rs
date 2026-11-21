@@ -19,6 +19,8 @@
 #[path = "shell/components.rs"]
 #[allow(dead_code)]
 mod components;
+#[path = "shell/memory.rs"]
+mod memory;
 // shared with `shell-host.rs`, which uses what this test does not
 #[allow(dead_code)]
 #[path = "shell-host/rig.rs"]
@@ -41,6 +43,7 @@ use cupertino_shell_agent::control::BUS_NAME as AGENT_NAME;
 use zbus::blocking::Connection;
 
 use components::{BLUE, DOCK_SIZE, RED};
+use memory::{steady_allocator, HostMemory, CRASHES_IN_A_ROW, RESTARTS};
 use rig::{count, Area, Rig, OUTPUT_SIZE};
 
 /// The host program of this test: `cupertino-shell`'s own (`cupertino_shell::run`) with the test dock and the real
@@ -266,17 +269,6 @@ fn agent_owner(session: &Connection) -> Option<(String, u32)> {
     Some((owner.to_string(), pid))
 }
 
-/// The host process's anonymous memory (its heap and stacks, which a leak grows), in KiB.
-fn anonymous(pid: u32) -> u64 {
-    let rollup =
-        std::fs::read_to_string(format!("/proc/{pid}/smaps_rollup")).expect("the host's memory");
-    rollup
-        .lines()
-        .find_map(|line| line.strip_prefix("Anonymous:"))
-        .and_then(|kib| kib.trim().trim_end_matches("kB").trim().parse().ok())
-        .expect("the host's anonymous memory")
-}
-
 /// Turn the server for `time`.
 fn hold(rig: &mut Rig, what: &str, time: Duration) {
     let until = Instant::now() + time;
@@ -298,18 +290,6 @@ const PANEL_ROW_PIXELS: usize = 120;
 const TALLER_BY: i32 = 40;
 /// How long the power key is held: past the 1.5 s after which the power-button panel shows.
 const POWER_KEY_HOLD: Duration = Duration::from_millis(1_800);
-/// Crashes injected into the agent, after which each restarts alone.
-const RESTARTS: u32 = 50;
-/// Crashes after which the server gives a component up (D16: five within a minute); a restart the person asks for
-/// then starts it again and forgets them.
-const CRASHES_IN_A_ROW: u32 = 5;
-/// Restarts after which the host's memory is measured the first time: the host's first allocations of a component
-/// (its caches, the allocator's arenas) are made by then.
-const WARM_RESTARTS: u32 = 10;
-/// How much the host's anonymous memory may grow between that measurement and the last restart, in KiB: well below
-/// what one leaked instance holds (its 8 MiB stack, its panel's buffers).
-const ANONYMOUS_GROWTH_KIB: u64 = 4 * 1024;
-
 /// The session of the agent test: the bus, a server whose shell is the dock and the agent, `Session1` served on the
 /// bus, and the directories the agent reads and writes, all the test's own.
 fn agent_session() -> (Bus, Rig, Connection, Vec<PathBuf>) {
@@ -325,6 +305,7 @@ fn agent_session() -> (Bus, Rig, Connection, Vec<PathBuf>) {
     std::env::set_var("XDG_STATE_HOME", &dirs[4]);
     // no logind session: the agent starts no login item and reopens nothing
     std::env::remove_var("XDG_SESSION_ID");
+    steady_allocator();
     let mut rig = Rig::new("agent", &["dock", "agent"], &[]);
     cupertino_server::quit::start_session_service_on(&mut rig.state, Some(bus.1.clone()));
     let session = Connection::session().expect("the test's bus");
@@ -410,7 +391,7 @@ fn the_session_agent_shows_its_panels_and_restarts_alone_after_injected_panics()
     );
 
     let mut colours = HashSet::new();
-    let mut warm = None;
+    let mut host_memory = HostMemory::of(host);
     let first_instance = rig.state.hosts.component_instance("agent");
     for crash_number in 0..RESTARTS {
         let at = ["paint", "dispatch", "helper"][crash_number as usize % 3];
@@ -442,12 +423,8 @@ fn the_session_agent_shows_its_panels_and_restarts_alone_after_injected_panics()
             },
         );
         connection = new_owner(&mut rig, &session, &connection, host);
-        if crash_number + 1 == WARM_RESTARTS {
-            warm = Some(anonymous(host));
-        }
+        host_memory.restarted(crash_number + 1);
     }
-    let (warm, last) = (warm.unwrap(), anonymous(host));
-    eprintln!("host anonymous memory after {WARM_RESTARTS} restarts: {warm} KiB; after {RESTARTS}: {last} KiB");
 
     assert_eq!(
         rig.host_pid(HostKind::Shared),
@@ -465,11 +442,7 @@ fn the_session_agent_shows_its_panels_and_restarts_alone_after_injected_panics()
         "the dock kept drawing while the agent started again"
     );
     assert!(!rig.state.hosts.component_gave_up("agent"));
-    assert!(
-        last <= warm + ANONYMOUS_GROWTH_KIB,
-        "the host's anonymous memory grew from {warm} KiB to {last} KiB over {} restarts",
-        RESTARTS - WARM_RESTARTS
-    );
+    host_memory.assert_nothing_kept(&mut rig);
 
     // the last instance shows no panel, and its log out panel again
     rig.until("the restarted agent shows no panel", |rig| {

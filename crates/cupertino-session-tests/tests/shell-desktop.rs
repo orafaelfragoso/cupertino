@@ -14,6 +14,8 @@
 #[path = "shell/components.rs"]
 #[allow(dead_code)]
 mod components;
+#[path = "shell/memory.rs"]
+mod memory;
 // shared with `shell-host.rs`, which uses what this test does not
 #[allow(dead_code)]
 #[path = "shell-host/rig.rs"]
@@ -31,6 +33,7 @@ use cupertino_shell_desktop::arrangement::{item_frames, Grid, Slot};
 use zbus::blocking::Connection;
 
 use components::{BLUE, DOCK_SIZE, RED};
+use memory::{steady_allocator, HostMemory, CRASHES_IN_A_ROW, RESTARTS};
 use rig::{count, Area, Rig, OUTPUT_SIZE};
 
 /// The host program of this test: `cupertino-shell`'s own (`cupertino_shell::run`) with the test dock and the real
@@ -255,29 +258,6 @@ fn crash_desktop(rig: &mut Rig, bus: &Connection, at: &'static str) {
         .unwrap_or_else(|e| panic!("the desktop takes a crash at {at}: {e}"));
 }
 
-/// The host process's anonymous memory (its heap and stacks, which a leak grows), in KiB.
-fn anonymous(pid: u32) -> u64 {
-    let rollup =
-        std::fs::read_to_string(format!("/proc/{pid}/smaps_rollup")).expect("the host's memory");
-    rollup
-        .lines()
-        .find_map(|line| line.strip_prefix("Anonymous:"))
-        .and_then(|kib| kib.trim().trim_end_matches("kB").trim().parse().ok())
-        .expect("the host's anonymous memory")
-}
-
-/// Crashes injected into the desktop, after which each restarts alone.
-const RESTARTS: u32 = 50;
-/// Crashes after which the server gives a component up (D16: five within a minute); a restart the person asks for
-/// then starts it again and forgets them.
-const CRASHES_IN_A_ROW: u32 = 5;
-/// Restarts after which the host's memory is measured the first time: the host's first allocations of a component
-/// (its caches, the allocator's arenas) are made by then.
-const WARM_RESTARTS: u32 = 10;
-/// How much the host's anonymous memory may grow between that measurement and the last restart, in KiB: well below
-/// what one leaked instance holds (its 8 MiB stack, its desktop's buffers).
-const ANONYMOUS_GROWTH_KIB: u64 = 4 * 1024;
-
 /// The item the desktop shows from its start, in the first cell, and the file whose making and removing has the
 /// desktop draw again (in the second cell while it is there).
 const ITEM: &str = "notes.txt";
@@ -388,6 +368,7 @@ fn the_desktop_shows_renames_and_trashes_what_the_desktop_folder_holds() {
 #[test]
 fn the_desktop_restarts_alone_holding_its_picture_after_injected_panics() {
     let session = Session::start();
+    steady_allocator();
     let mut rig = Rig::new("desktop", &["dock", "desktop"], &[]);
     cupertino_server::quit::start_session_service_on(&mut rig.state, Some(session.bus.1.clone()));
     let bus = Connection::session().expect("the test's bus");
@@ -405,7 +386,7 @@ fn the_desktop_restarts_alone_holding_its_picture_after_injected_panics() {
     let mut colours = HashSet::new();
     let mut held = false;
     let first_instance = rig.state.hosts.component_instance("desktop");
-    let mut warm = None;
+    let mut host_memory = HostMemory::of(host);
     for crash in 0..RESTARTS {
         let at = ["paint", "dispatch", "helper"][crash as usize % 3];
         crash_desktop(&mut rig, &bus, at);
@@ -464,14 +445,8 @@ fn the_desktop_restarts_alone_holding_its_picture_after_injected_panics() {
                     && ground.shows_icon(rig, first)
             },
         );
-        if crash + 1 == WARM_RESTARTS {
-            warm = Some(anonymous(host));
-        }
+        host_memory.restarted(crash + 1);
     }
-    let (warm, last) = (warm.unwrap(), anonymous(host));
-    eprintln!(
-        "host anonymous memory after {WARM_RESTARTS} restarts: {warm} KiB; after {RESTARTS}: {last} KiB"
-    );
 
     assert_eq!(
         rig.host_pid(HostKind::Shared),
@@ -493,11 +468,7 @@ fn the_desktop_restarts_alone_holding_its_picture_after_injected_panics() {
         "the server held the desktop's picture while it restarted"
     );
     assert!(!rig.state.hosts.component_gave_up("desktop"));
-    assert!(
-        last <= warm + ANONYMOUS_GROWTH_KIB,
-        "the host's anonymous memory grew from {warm} KiB to {last} KiB over {} restarts",
-        RESTARTS - WARM_RESTARTS
-    );
+    host_memory.assert_nothing_kept(&mut rig);
     assert!(
         session.desktop.join(ITEM).exists(),
         "no restart touched the item"

@@ -87,6 +87,9 @@ struct HostedModel<P: Program> {
     inner: Rc<RefCell<P::Model>>,
     shared: Rc<RefCell<Shared>>,
     feed: Feed,
+    /// In a host: the component failed when its loop ends without being asked to, and its sockets are shut as the
+    /// runtime drops this model, before its window system's teardown.
+    _fails: Option<crate::host::FailsUnasked>,
 }
 
 /// Where the shell's events for the program wait: its inbox and, in a host, its queue on the host bus.
@@ -164,11 +167,15 @@ impl<P: Program> HostedModel<P> {
         STATE.with(|state| *state.borrow_mut() = Some(Rc::clone(&inner) as Rc<dyn Any>));
         let feed = Feed::of_thread();
         feed.arm::<P>(&mut commands);
+        let fails = context::with_ctx(|ctx| ctx.fault.clone())
+            .flatten()
+            .map(crate::host::FailsUnasked);
         (
             Self {
                 inner,
                 shared,
                 feed,
+                _fails: fails,
             },
             commands,
         )

@@ -512,12 +512,15 @@ impl Restart {
 }
 
 impl Runtime {
-    /// Construct a host runtime on `host`'s bus, whose bridges `host` opens as the server sends their ends.
+    /// Construct a host runtime on `host`'s bus, whose bridges `host` opens as the server sends their ends. From then
+    /// on a panic on a component's thread or helper thread shuts the component's Wayland socket as it starts, so the
+    /// component's teardown sends the server nothing.
     pub fn for_host(
         host: &mut Host,
         kind: Kind,
         environment: Environment,
     ) -> Result<Runtime, Error> {
+        crate::host::install_failure_hook();
         Ok(Self {
             kind,
             environment,
@@ -554,8 +557,13 @@ impl Runtime {
         let ended = Arc::new(Mutex::new(None::<Ended>));
         let helpers = Arc::new(Mutex::new(Vec::new()));
         let inbox = Arc::new(Inbox::default());
-        let fault = Arc::new(Fault::new(Arc::clone(&stop_flag), Arc::clone(&inbox)));
         let sockets = Sockets::default();
+        let fault = Arc::new(Fault::new(
+            Arc::clone(&stop_flag),
+            Arc::clone(&inbox),
+            conn_for_shut,
+            Arc::clone(&sockets),
+        ));
 
         let ctx = ComponentContext {
             component: Some(component),
@@ -587,6 +595,7 @@ impl Runtime {
         let handle = builder
             .spawn(move || {
                 context::install(ctx);
+                crate::host::fails_on_panic(&t_fault);
 
                 let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     (entry.runner)(&hosting, connection)
@@ -635,8 +644,6 @@ impl Runtime {
             restart: self.restart.clone(),
             ended,
             helpers,
-            socket: conn_for_shut,
-            sockets,
             fault,
             handle: Some(handle),
         })
@@ -679,9 +686,7 @@ pub struct Running {
     restart: Option<Restart>,
     ended: Arc<Mutex<Option<Ended>>>,
     helpers: Arc<Mutex<Vec<crate::host::HelperHandle>>>,
-    socket: UnixStream,
-    /// The component's session-bus sockets (`bus::session`).
-    sockets: Sockets,
+    /// What its helpers tell, and its Wayland and session-bus sockets.
     fault: Arc<Fault>,
     handle: Option<JoinHandle<()>>,
 }
@@ -711,15 +716,7 @@ impl Running {
     pub fn shut(&self) {
         self.fault.cut();
         self.stop();
-        let _ = self.socket.shutdown(std::net::Shutdown::Both);
-        for socket in self
-            .sockets
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .iter()
-        {
-            let _ = socket.shutdown(std::net::Shutdown::Both);
-        }
+        self.fault.shut_sockets();
         self.bus.unregister(self.sub_id, self.component);
     }
     /// Return how the component ended once its thread and helpers have finished.

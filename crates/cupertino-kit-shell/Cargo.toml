@@ -33,4 +33,6 @@ zbus = { version = "5", default-features = false, features = ["async-io"] }
 cupertino-protocols = { path = "../cupertino-protocols", features = ["client", "server"] }
 wayland-protocols = { version = "0.32", features = ["client", "server", "staging"] }
 wayland-protocols-wlr = { version = "0.3", features = ["server"] }
+# the relay between a component and the stand-in passes file descriptors
+rustix = { version = "1", features = ["net"] }
 wayland-server = "0.31"

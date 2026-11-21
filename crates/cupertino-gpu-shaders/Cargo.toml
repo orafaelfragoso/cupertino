@@ -18,7 +18,7 @@ path = "src/main.rs"
 test = false
 
 [dependencies]
-naga = { version = "24", features = ["wgsl-in", "glsl-out", "spv-out"] }
+naga = { version = "30", features = ["wgsl-in", "glsl-out", "spv-out"] }
 
 [[test]]
 # Every file of `tests/` is a module of this one binary (`tests/main.rs`).

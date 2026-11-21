@@ -1674,6 +1674,7 @@ dependencies = [
  "cupertino-shell",
  "cupertino-shell-agent",
  "cupertino-shell-desktop",
+ "cupertino-shell-dialogs",
  "cupertino-ui-render",
  "cupertino-wm",
  "image",

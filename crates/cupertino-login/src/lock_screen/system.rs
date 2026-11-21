@@ -59,7 +59,8 @@ impl<T> Reading<T> {
     }
 }
 
-/// The program's first steps on the buses: a connection to each.
+/// The program's first steps on the buses: a connection to each, and a second one to the session bus that asks who
+/// calls `org.cupertino.Login1`.
 pub fn start(_heard: &async_channel::Sender<Heard>) -> Vec<Command<Message>> {
     let mut commands = kit_bus::connect(
         Bus::Session,
@@ -70,6 +71,11 @@ pub fn start(_heard: &async_channel::Sender<Heard>) -> Vec<Command<Message>> {
         Bus::System,
         |c| Message::System(c.ok()),
         Message::BusClosed("the system bus"),
+    ));
+    commands.extend(kit_bus::connect(
+        Bus::Session,
+        |c| Message::Lookup(c.ok()),
+        Message::BusClosed("the session bus connection that asks who calls"),
     ));
     commands
 }
@@ -117,22 +123,19 @@ impl Model {
         match message {
             Message::Session(Some(session)) => {
                 self.session = Some(session.clone());
-                let heard = self.heard.0.clone();
-                let served = session.clone();
-                commands.push(Command::Perform(Box::pin(async move {
-                    let lock = heard.clone();
-                    let on_request = move |control::Request::Lock| drop(lock.try_send(Heard::Lock));
-                    Message::Served(match control::serve(&served, on_request).await {
-                        Ok(()) => Served::Named,
-                        Err(zbus::Error::NameTaken) => Served::Taken,
-                        Err(e) => Served::Failed(e.to_string()),
-                    })
-                })));
+                self.serve_control(commands);
                 commands.push(follow(&self.heard.0, Stream::Notices, move |send| async move {
                     lock_notices::follow(&session, move || send(Heard::NoticesDue)).await
                 }));
             }
             Message::Session(None) => return Err("no session bus connection".into()),
+            Message::Lookup(Some(lookup)) => {
+                self.lookup = Some(lookup);
+                self.serve_control(commands);
+            }
+            Message::Lookup(None) => {
+                return Err("no session bus connection to ask who calls".into())
+            }
             Message::Served(Served::Named) => {}
             // Quitting would leave the session with no lock screen at all; instead this process runs on the server's
             // own connection, which carries the lock request, and on logind's signals.
@@ -172,6 +175,23 @@ impl Model {
             _ => unreachable!("the update handles the other messages"),
         }
         Ok(())
+    }
+
+    /// Serve `org.cupertino.Login1` once both session bus connections are there, the one that serves it and the one
+    /// that asks who calls; each comes once.
+    fn serve_control(&self, commands: &mut Vec<Command<Message>>) {
+        let (Some(served), Some(lookup)) = (self.session.clone(), self.lookup.clone()) else {
+            return;
+        };
+        let lock = self.heard.0.clone();
+        commands.push(Command::Perform(Box::pin(async move {
+            let on_request = move |control::Request::Lock| drop(lock.try_send(Heard::Lock));
+            Message::Served(match control::serve(&served, lookup, on_request).await {
+                Ok(()) => Served::Named,
+                Err(zbus::Error::NameTaken) => Served::Taken,
+                Err(e) => Served::Failed(e.to_string()),
+            })
+        })));
     }
 
     /// logind knows this process's session at `path`: follow its requests and the session manager, hold sleep back

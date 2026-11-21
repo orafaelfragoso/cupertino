@@ -14,7 +14,8 @@
 //! - a panic injected as it paints, as its loop dispatches and on a helper thread restarts it alone, fifty times, while
 //!   the dock keeps drawing and the host's anonymous memory stays flat; each restart comes back on a new connection with
 //!   no panel, which is what a restart loses, and the last one shows its panel again;
-//! - the lock screen's `org.cupertino.Login1` has `Lock` alone.
+//! - the lock screen's `org.cupertino.Login1` has `Lock` alone, which the owner of `org.cupertino.Session1` may call and
+//!   no other caller.
 
 #[path = "shell/components.rs"]
 #[allow(dead_code)]
@@ -519,16 +520,24 @@ fn the_lock_screens_login1_has_lock_alone() {
     let bus = Bus::start("login1");
     let asked = Arc::new(Mutex::new(Vec::new()));
     let heard = Arc::clone(&asked);
-    // the lock screen's connection, its executor on a thread of zbus's own where the lock screen's loop ticks it
-    let service = zbus::block_on(async {
-        zbus::connection::Builder::address(bus.1.as_str())?
-            .build()
-            .await
-    })
-    .expect("the test's bus");
-    zbus::block_on(cupertino_login::control::serve(&service, move |request| {
-        heard.lock().unwrap().push(request);
-    }))
+    // the lock screen's connections, their executors on threads of zbus's own where the lock screen's loop ticks them:
+    // the one that serves Login1 and the one that asks who calls
+    let connect = || {
+        zbus::block_on(async {
+            zbus::connection::Builder::address(bus.1.as_str())?
+                .build()
+                .await
+        })
+        .expect("the test's bus")
+    };
+    let (service, lookup) = (connect(), connect());
+    zbus::block_on(cupertino_login::control::serve(
+        &service,
+        lookup,
+        move |request| {
+            heard.lock().unwrap().push(request);
+        },
+    ))
     .expect("the lock screen serves Login1");
     let unique = service.unique_name().expect("a unique name").to_string();
     let caller = Connection::session().expect("the test's bus");
@@ -547,16 +556,32 @@ fn the_lock_screens_login1_has_lock_alone() {
         ["method Lock"]
     );
 
-    // this process is the lock screen's own, which may call: Lock reaches it; what the agent serves now is unknown here
-    caller
-        .call_method(
+    // a caller that does not own Session1 is refused, though it is the lock screen's own process: nothing is asked
+    let lock = |from: &Connection| {
+        from.call_method(
             Some(unique.as_str()),
             cupertino_login::control::OBJECT_PATH,
             Some(cupertino_login::control::BUS_NAME),
             "Lock",
             &(),
         )
-        .expect("Lock is answered");
+    };
+    let refused = lock(&caller);
+    assert!(
+        matches!(&refused, Err(zbus::Error::MethodError(name, ..)) if name.as_str() == "org.cupertino.Error.UntrustedCaller"),
+        "only the server may lock: {refused:?}"
+    );
+    assert!(
+        asked.lock().unwrap().is_empty(),
+        "the refused call asks nothing"
+    );
+
+    // the stand-in server owns Session1, the one caller the lock screen takes: Lock reaches it
+    let server = zbus::blocking::connection::Builder::address(bus.1.as_str())
+        .and_then(|b| b.name("org.cupertino.Session1"))
+        .and_then(|b| b.build())
+        .expect("the stand-in server owns Session1");
+    lock(&server).expect("Lock is answered");
     assert_eq!(
         *asked.lock().unwrap(),
         [cupertino_login::control::Request::Lock]

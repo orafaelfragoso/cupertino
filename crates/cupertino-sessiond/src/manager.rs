@@ -32,6 +32,7 @@ use rustix::process::{pidfd_open, PidfdFlags};
 use crate::auto_login;
 use crate::caller::{may_end_other_sessions, Asker, CallerSession};
 use crate::channel::{Channel, ChannelError};
+use crate::core_limit;
 use crate::limits::{RateLimit, ATTEMPTS_PER_WINDOW, ATTEMPT_TIMEOUT, ATTEMPT_WINDOW};
 use crate::logind::{self, Logind, SeatSession, Signal};
 use crate::service::{self, Authorizer, Call, ReadyRefusal};
@@ -491,7 +492,7 @@ struct Manager {
 impl Manager {
     /// Read the configuration, bind the socket and start the login screen.
     fn start() -> Result<Manager> {
-        harden()?;
+        core_limit::harden()?;
         let loaded = LoginConfig::load().map_err(|problems| {
             let lines: Vec<String> = problems.iter().map(describe).collect();
             format!("{}: {}", LoginConfig::path().display(), lines.join("; "))
@@ -772,6 +773,8 @@ pub fn own_program() -> Command {
 fn worker_command(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> Command {
     let mut command = own_program();
     command.arg("worker").env_clear();
+    // the worker hardens itself again, and gives its session the limit the manager was started with
+    core_limit::restore_in_child(&mut command);
     if let Some(socket) = var(diag::journal::SOCKET_ENV).filter(|s| !s.is_empty()) {
         command.env(diag::journal::SOCKET_ENV, socket);
     }
@@ -876,22 +879,6 @@ fn notify_ready() -> Result<()> {
     std::os::unix::net::UnixDatagram::unbound()?
         .send_to_addr(b"READY=1", &address)
         .map_err(|e| format!("telling systemd the manager is ready: {e}"))?;
-    Ok(())
-}
-
-/// No core file and no ptrace attach on the process that holds passwords and root.
-fn harden() -> Result<()> {
-    // Safety: `prctl(PR_SET_DUMPABLE)` takes integers only.
-    if unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) } != 0 {
-        return Err(format!("PR_SET_DUMPABLE: {}", io::Error::last_os_error()).into());
-    }
-    rustix::process::setrlimit(
-        rustix::process::Resource::Core,
-        rustix::process::Rlimit {
-            current: Some(0),
-            maximum: Some(0),
-        },
-    )?;
     Ok(())
 }
 

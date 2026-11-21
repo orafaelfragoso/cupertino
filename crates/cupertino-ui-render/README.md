@@ -175,6 +175,9 @@ driver that hangs, and its callers give the GPU up. A `Claim` holds the device; 
 after its step, lets the device go, and waits up to 5 s for both. `lost` lets a reset or purged device go once
 however many instances saw it, and counts it (resets only, never purges): after `LOSS_LIMIT` (3) resets within
 `LOSS_WINDOW` (60 s) `lost` and `losses_exceeded` tell every window system of the process to stay on the CPU.
-`RenderThread::device_of` reads a device let go as lost by the same loss. A
+`RenderThread::device_of` reads a device let go as lost by the same loss. `shutdown`, which Kit calls after each run once
+its window system is gone, waits up to `SHUTDOWN_WAIT` (2 s) for the work handed over before it (frames, resident
+values sent to be dropped) and lets an unclaimed device go there, so a process never exits while the render thread
+still calls the driver. A
 `GpuRenderer` made on a device someone else lends (`Device::borrow`, the server's) draws on the lender's thread and
 never meets the render thread.

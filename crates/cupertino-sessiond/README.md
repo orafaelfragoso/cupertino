@@ -383,7 +383,7 @@ Seahorse ("Passwords and Keys", not installed by the packages) shows and deletes
 
 | Measure | Where |
 |---|---|
-| No core file, no ptrace attach while root: `PR_SET_DUMPABLE` 0 and `RLIMIT_CORE` 0 (and `LimitCORE=0` in the unit) | manager start, worker step 1 |
+| No core file, no ptrace attach while root: `PR_SET_DUMPABLE` 0 and `RLIMIT_CORE` 0 (and `LimitCORE=0` in the unit); the workers and the session leader get back the limit the manager was started with (`core_limit`) | manager start, worker step 1, the leader before `setuid` |
 | Only the greeter account connects, one connection at a time: mode 0600 on the socket, `SO_PEERCRED` uid check | `manager::bind`, `accept` |
 | Frame caps: 2 KiB from the screen, checked on the length prefix before any body is read; 4 MiB to it; the decoder asks for exact amounts | `cupertino-login-ipc::Decoder`, `Channel` |
 | A strict state machine and `deny_unknown_fields`: any unknown type or field, any message the state does not allow, closes the connection; an `Answer` that does not name the open prompt is dropped (SEC-06) | `State::next`, `Attempt::answered`, `screen_readable` |

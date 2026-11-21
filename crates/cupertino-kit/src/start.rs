@@ -15,6 +15,7 @@ use cupertino_ui_core::{
     ThemeForAppearance, UiError,
 };
 use cupertino_ui_render::gpu::GpuConfig;
+use cupertino_ui_render::render_thread;
 use cupertino_ui_render::{CpuConfig, CpuRenderer};
 use cupertino_ui_text::GlyphRaster;
 use cupertino_ui_wayland::atspi::AtspiAdapter;
@@ -92,13 +93,14 @@ pub fn run_on_with_appearance<A: Application>(
     options.accessibility = Some(Box::new(AtspiAdapter::muted(system.waker())));
     start.1.extend(personal.watching());
     let renderers = system.gpu_renderers();
-    Runtime::<A, _>::start(system, options, start)
+    let result = Runtime::<A, _>::start(system, options, start)
         .with_theme_for(follow)
         .with_personal_refresh(personal.refresh())
         .with_each_turn(each_turn())
         .timed(renderers)
-        .run()
-        .map_err(AppError::Runtime)
+        .run();
+    settle_render_thread();
+    result.map_err(AppError::Runtime)
 }
 
 /// [`run_on`], starting from what `start` makes of the runtime's options: a model that measures text itself does so
@@ -175,7 +177,16 @@ fn run_shell<A: Application>(
     if let Some(until) = until {
         runtime = runtime.with_exit_when(until);
     }
-    runtime.run().map_err(AppError::Runtime)
+    let result = runtime.run();
+    settle_render_thread();
+    result.map_err(AppError::Runtime)
+}
+
+/// After a run, its window system gone with the runtime: the render thread finishes what the windows handed it and lets
+/// the device go once no other instance of the process holds it ([`render_thread::shutdown`]), so the process does not
+/// exit while the render thread still calls the driver.
+fn settle_render_thread() {
+    let _ = render_thread::shutdown();
 }
 
 /// Names the file that [`Timed::timed`] appends the timing of each scroll to.

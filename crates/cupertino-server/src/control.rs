@@ -29,6 +29,8 @@ use cupertino_protocols::server::control::cupertino_control_v1::{
     self as manager, CupertinoControlV1,
 };
 pub(crate) use semantics::ActionGrab;
+use smithay::backend::renderer::utils::with_renderer_surface_state;
+use smithay::desktop::layer_map_for_output;
 use smithay::output::{Output, WeakOutput};
 use smithay::reexports::wayland_server::backend::{ClientId, GlobalId};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
@@ -37,6 +39,7 @@ use smithay::reexports::wayland_server::{
 };
 use smithay::utils::Transform;
 use smithay::wayland::compositor::with_states;
+use smithay::wayland::shell::wlr_layer::Layer;
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -182,7 +185,7 @@ impl Control {
         self.authority.as_ref().is_some_and(|a| {
             a.is_alive()
                 && a.client()
-                    .is_some_and(|c| authorized(&c, ShellRole::SessionLock))
+                    .is_some_and(|c| authorized(&c, ShellRole::Consent))
         })
     }
 }
@@ -394,7 +397,7 @@ impl Cupertino {
                 self.control_resume(i);
             }
             if self.control.runs[i].model.phase() == Phase::Active {
-                if self.prompt_shown() {
+                if self.control_prompt_shown() {
                     self.suspend_controls(PauseReason::AuthenticationPrompt);
                     break;
                 }
@@ -415,7 +418,7 @@ impl Cupertino {
     /// Whether something keeps a suspended run from resuming: the authentication prompt, or a protected session panel
     /// holding the keyboard.
     fn control_blocked(&self) -> bool {
-        self.prompt_shown()
+        self.control_prompt_shown()
             || self
                 .seat
                 .get_keyboard()
@@ -434,13 +437,39 @@ impl Cupertino {
         self.control_geometry(index);
         self.control_changed(index, 0);
     }
-    /// Other session panels pause control; the consent panel itself may still be committing its old focus after approval.
+    /// Prompts and session panels pause control. The consent panel does not: it asks for a run, and may still be
+    /// committing its old focus after approval.
     pub(crate) fn control_sensitive_focus(&self, surface: &WlSurface) -> bool {
-        crate::authorization::is_prompt(surface)
-            || (self.control.consent_surface.as_ref() != Some(surface)
-                && surface
+        self.control.consent_surface.as_ref() != Some(surface)
+            && (crate::authorization::is_prompt(surface)
+                || surface
                     .client()
                     .is_some_and(|c| authorized(&c, ShellRole::SessionLock)))
+    }
+    /// Whether a prompt is shown that is not the consent panel ([`Cupertino::prompt_shown`] but for it). The panel is a
+    /// prompt surface of the program holding the consent authority, shown with that program's scrims: while the
+    /// panel's surface lives none of that program's surfaces pauses control or keeps the person from answering it, so
+    /// that the scrims, which may show before the panel's first frame, pause no run either. Desktop control reaches none
+    /// of them either way (`control_protected`).
+    pub(crate) fn control_prompt_shown(&self) -> bool {
+        let panel = self
+            .control
+            .consent_surface
+            .as_ref()
+            .filter(|panel| panel.is_alive())
+            .and_then(Resource::client)
+            .map(|client| client.id());
+        self.outputs.iter().any(|o| {
+            layer_map_for_output(&o.output)
+                .layers_on(Layer::Overlay)
+                .any(|l| {
+                    let surface = l.wl_surface();
+                    crate::authorization::is_prompt(surface)
+                        && (panel.is_none() || surface.client().map(|c| c.id()) != panel)
+                        && with_renderer_surface_state(surface, |s| s.buffer().is_some())
+                            .unwrap_or(false)
+                })
+        })
     }
     /// Only backend-originated serials delivered to the registered authority surface can approve or resume.
     pub(crate) fn control_user_input(&mut self, serial: u32, surface: Option<WlSurface>) {
@@ -511,7 +540,7 @@ impl Cupertino {
         output: Output,
         bits: u32,
     ) -> Result<(), session::Refusal> {
-        if self.session_lock.is_active() || self.login_screen || self.prompt_shown() {
+        if self.session_lock.is_active() || self.login_screen || self.control_prompt_shown() {
             return Err(session::Refusal::Blocked);
         }
         if bits == 0
@@ -775,7 +804,7 @@ impl Cupertino {
         if r.revision != revision {
             return Err(session::Refusal::StaleGeometry);
         }
-        if self.prompt_shown() || self.session_lock.is_active() {
+        if self.control_prompt_shown() || self.session_lock.is_active() {
             return Err(session::Refusal::Blocked);
         }
         Ok(())
@@ -787,7 +816,7 @@ impl Cupertino {
         epoch: u64,
     ) -> bool {
         !self.session_lock.is_active()
-            && !self.prompt_shown()
+            && !self.control_prompt_shown()
             && authorized(client, ShellRole::DesktopControl)
             && self.control.runs.iter().any(|r| {
                 r.resource.client().as_ref() == Some(client)
@@ -1179,7 +1208,7 @@ impl GlobalDispatch<CupertinoControlAuthorityV1, ()> for Cupertino {
         init: &mut DataInit<'_, Self>,
     ) {
         let r = init.init(id, ());
-        if !require(client, ShellRole::SessionLock, &r) {
+        if !require(client, ShellRole::Consent, &r) {
             return;
         }
         if state.control.authority_alive() {
@@ -1189,7 +1218,7 @@ impl GlobalDispatch<CupertinoControlAuthorityV1, ()> for Cupertino {
         state.control.authority = Some(r);
     }
     fn can_view(client: Client, _: &()) -> bool {
-        authorized(&client, ShellRole::SessionLock)
+        authorized(&client, ShellRole::Consent)
     }
 }
 impl Dispatch<CupertinoControlAuthorityV1, ()> for Cupertino {
@@ -1205,7 +1234,7 @@ impl Dispatch<CupertinoControlAuthorityV1, ()> for Cupertino {
         if matches!(request, authority::Request::Destroy) {
             return;
         }
-        if !require(client, ShellRole::SessionLock, resource) {
+        if !require(client, ShellRole::Consent, resource) {
             return;
         }
         if state.control.authority.as_ref() != Some(resource) {
@@ -1251,7 +1280,7 @@ impl Dispatch<CupertinoControlAuthorityV1, ()> for Cupertino {
                 }
                 let e = state.control.runs[i].model.epoch();
                 if allow == 1 {
-                    if state.session_lock.is_active() || state.prompt_shown() {
+                    if state.session_lock.is_active() || state.control_prompt_shown() {
                         return;
                     }
                     if capabilities(state.control.runs[i].capabilities).allows(Operation::Pointer)

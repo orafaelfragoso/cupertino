@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use cupertino_geometry::rounded::{PathSeg, RoundedRect};
 use cupertino_kit::core::{
-    AccessibleStates, Action, Change, Element, Event, EventCx, Glass, Live, MeasureCx, PaintCx,
-    Phase, Propagation, Role, SemanticsCx, Widget,
+    AccessibleStates, Action, Change, Element, Event, EventCx, Live, MeasureCx, PaintCx, Phase,
+    Propagation, Role, SemanticsCx, Widget,
 };
 use cupertino_kit::geometry::{Insets, Point, Rect, Size};
 use cupertino_kit::layout::{
@@ -19,7 +19,7 @@ use cupertino_kit::text::{
     AttributedText, FontWeight, ParagraphLayout, ParagraphStyle, TextAlign, TextStyle, TextSystem,
     Wrap,
 };
-use cupertino_kit::theme::{Color, ColorRole, StateVariant, Surface};
+use cupertino_kit::theme::{Color, ColorRole, StateVariant};
 
 use super::pictures::{Glass as GlassSpec, Laid, Whole, PICTURE_TILE};
 use crate::layout::{BUTTON_GLYPH, PILL_RADIUS};
@@ -453,103 +453,6 @@ impl<M: Clone + 'static> Widget<M> for Backdrop<M> {
     }
 }
 
-/// Width of the outline an alert on glass draws round itself with Increase Contrast, in points: a whole device pixel or
-/// more on every display.
-pub(crate) const ALERT_CONTRAST_RIM: f64 = 1.0;
-
-/// An alert's body on glass, `width` wide and `height` tall or, without one, as tall as its content, which it pads by
-/// `padding`: its corners rounded by `radius`, and the popover surface's fill where the window cannot show glass.
-pub(crate) struct AlertBody<M> {
-    pub width: f64,
-    pub height: Option<f64>,
-    pub radius: f64,
-    pub padding: cupertino_kit::geometry::Insets,
-    pub children: Vec<Element<M>>,
-}
-
-impl<M: 'static> Widget<M> for AlertBody<M> {
-    type State = ();
-
-    fn layout(&self) -> LayoutSpec {
-        LayoutSpec {
-            width: SizeSpec::Fixed(self.width),
-            height: self.height.map_or(SizeSpec::Fit, SizeSpec::Fixed),
-            insets: self.padding,
-            ..LayoutSpec::new(ContainerKind::Stack {
-                axis: Axis::Vertical,
-                spacing: 0.0,
-                align: Align::Stretch,
-                justify: Justify::Start,
-            })
-        }
-    }
-
-    fn take_children(&mut self) -> Vec<Element<M>> {
-        std::mem::take(&mut self.children)
-    }
-
-    fn state(&self) {}
-
-    fn update(&self, old: &Self, _: &mut ()) -> Change {
-        if self.width != old.width || self.height != old.height || self.padding != old.padding {
-            Change::Layout
-        } else if self.radius != old.radius {
-            Change::Paint
-        } else {
-            Change::None
-        }
-    }
-
-    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
-        no_measure()
-    }
-
-    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
-        Propagation::Continue
-    }
-
-    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
-        let size = cx.size();
-        if cx.glass(Glass::regular().radius(self.radius)) {
-            // with Increase Contrast the glass takes the contrast face, which over a window of the same appearance is
-            // that window's tone: the alert marks its edge with the outline its buttons have
-            let theme = cx.env().theme.clone();
-            let rim = theme
-                .colors
-                .get(ColorRole::ControlBorder, StateVariant::NORMAL);
-            if let (true, Some(rim)) = (theme.preferences.appearance.is_high_contrast(), rim) {
-                let half = ALERT_CONTRAST_RIM / 2.0;
-                cx.push(PaintOp::Stroke {
-                    shape: Shape::RoundedRect {
-                        rect: Rect::new(
-                            half,
-                            half,
-                            size.width - ALERT_CONTRAST_RIM,
-                            size.height - ALERT_CONTRAST_RIM,
-                        ),
-                        radius: (self.radius - half).max(0.0),
-                    },
-                    width: ALERT_CONTRAST_RIM,
-                    paint: Paint::Solid(rim),
-                });
-            }
-            return;
-        }
-        if let Some(color) = cx.env().theme.surface(Surface::Popover).fill {
-            fill(
-                cx,
-                Shape::RoundedRect {
-                    rect: Rect::new(0.0, 0.0, size.width, size.height),
-                    radius: self.radius,
-                },
-                color,
-            );
-        }
-    }
-
-    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
-}
-
 /// A part of a screen at `rect` (its children placed in it), drawn as one layer the size of `rect` while it is partly
 /// faded; fully shown it is drawn straight over the wallpaper, which looks the same, so a change in it repaints only what
 /// it covers. A fade composites the layer over the kept picture, which it does not make again.
@@ -660,14 +563,6 @@ impl<M: 'static> Place<M> {
         Place {
             align: Align::Start,
             justify: Justify::Start,
-            ..Place::new(rect, children)
-        }
-    }
-
-    /// Filling the box: a button at its frame.
-    pub(crate) fn filled(rect: Rect, children: Vec<Element<M>>) -> Self {
-        Place {
-            align: Align::Stretch,
             ..Place::new(rect, children)
         }
     }

@@ -5,10 +5,6 @@ use smithay::input::keyboard::keysyms;
 
 use crate::input::{Chord, KeyBindings, Mods};
 
-/// The app id of the portal's windows that ask the person to allow something; the portal's file and
-/// app choosers have another.
-pub const PORTAL_PROMPT_APP_ID: &str = "org.cupertino.Portal.Prompt"; // a window's app_id
-
 /// The modifiers of a chord as the protocol carries them.
 pub fn modifier_bits(mods: Mods) -> Modifier {
     let mut bits = Modifier::empty();

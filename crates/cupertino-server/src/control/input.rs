@@ -14,8 +14,8 @@ const MAX_AXIS_POINTS: f64 = 4096.0;
 
 impl Cupertino {
     /// Whether desktop control keeps away from `root`, the root surface of a window or a layer surface: a protected
-    /// session panel, the authentication prompt (the polkit agent's and the keyring prompter's surfaces), the lock
-    /// screen and login, the portal's prompts, and every surface of a screenshot program the server started (its
+    /// session panel, every surface of the prompts (the authentication, the keyring's and the consent alerts and their
+    /// scrims), the lock screen and login, and every surface of a screenshot program the server started (its
     /// capture overlay, the colour picker and the Share Screen chooser, [`Cupertino::is_screenshot_surface`]). Its input
     /// does not reach them, observation does not list them and actions do not reach their publications.
     pub(super) fn control_protected(
@@ -25,7 +25,6 @@ impl Cupertino {
         use smithay::reexports::wayland_server::Resource;
         protected_surface(root)
             || crate::authorization::is_prompt(root)
-            || self.is_portal_prompt(root)
             || self.is_screenshot_surface(root)
             || root.client().is_some_and(|client| {
                 crate::authorization::authorized(

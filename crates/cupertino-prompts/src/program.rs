@@ -4,14 +4,17 @@
 //! - [`authentication`]: the polkit agent's prompts and polkit's helper.
 //! - [`keyring`]: the keyring's prompts and the offer about the default keyring.
 //! - [`consent`]: the portal's consent questions, asked over `org.cupertino.Prompts1`.
+//! - [`desktop_control`]: the desktop-control consent question, asked by the server's consent authority.
 //!
 //! One prompt is on screen at a time, in an alert over a scrim on every output; the one shown first stays until it
-//! ends, and the others wait: an authentication first, then the keyring, then the consent questions in the order they
-//! came. While the session is locked, or is not the active one of its seat, nothing is shown: the authentication on
-//! screen is cancelled, the keyring's prompt is ended and every consent question is dismissed, as their callers expect.
+//! ends, and the others wait: an authentication first, then the keyring, then the portal's consent questions in the
+//! order they came, then desktop control. While the session is locked, or is not the active one of its seat, nothing is
+//! shown: the authentication on screen is cancelled, the keyring's prompt is ended and every consent question is
+//! dismissed, as their callers expect.
 
 pub mod authentication;
 pub mod consent;
+pub mod desktop_control;
 pub mod keyring;
 
 use std::collections::HashSet;
@@ -41,6 +44,7 @@ use crate::view;
 
 use authentication::Authentication;
 use consent::Consent;
+use desktop_control::DesktopControl;
 use keyring::Keyring;
 
 /// The layer surfaces' namespaces, for the server.
@@ -162,6 +166,22 @@ pub enum ConsentInput {
     },
 }
 
+/// What the person does in the desktop-control alert, and what the alert hears.
+#[derive(Clone, Debug)]
+pub enum DesktopControlInput {
+    Allow,
+    DontAllow,
+    /// The alert of the run presented its first frame.
+    Presented(cupertino_kit_shell::consent::Run),
+    /// The arming delay of the run's alert has passed.
+    Armed(cupertino_kit_shell::consent::Run),
+    /// The icon of the run's app, read on the I/O pool.
+    Icons {
+        run: cupertino_kit_shell::consent::Run,
+        icons: Vec<ImageSource>,
+    },
+}
+
 #[derive(Clone)]
 pub enum Message {
     /// The system bus connection, or none.
@@ -208,6 +228,9 @@ pub enum Message {
     Authentication(AuthInput),
     Keyring(KeyringInput),
     Consent(ConsentInput),
+    /// What the server's consent authority said.
+    Authority(cupertino_kit_shell::consent::Event),
+    DesktopControl(DesktopControlInput),
     /// Escape in the alert.
     Escape,
     /// A frame while the scrim fades in.
@@ -222,13 +245,15 @@ pub enum Front {
     Authentication,
     Keyring,
     Consent,
+    DesktopControl,
 }
 
 /// The prompt on screen.
 #[derive(Clone, Debug, PartialEq)]
 struct Shown {
     front: Front,
-    /// What it is about: the authentication's cookie, the keyring caller's name and path, the consent's call.
+    /// What it is about: the authentication's cookie, the keyring caller's name and path, the consent's call, the
+    /// desktop-control run.
     about: String,
     /// The number of its windows, new for each prompt shown.
     serial: u64,
@@ -254,6 +279,7 @@ pub struct Model {
     auth: Authentication,
     keyring: Keyring,
     consent: Consent,
+    desktop_control: DesktopControl,
 }
 
 /// The next news a future heard.
@@ -288,6 +314,7 @@ impl Model {
         let commands = self.auth.set_away(away);
         self.keyring.set_away(away);
         self.consent.set_away(away);
+        self.desktop_control.set_away(away);
         commands
     }
 
@@ -300,21 +327,27 @@ impl Model {
     }
 
     /// Show the prompt that should be on screen: the one shown stays while it lasts, else the authentication comes
-    /// before the keyring, and the keyring before the consent questions.
+    /// before the keyring, the keyring before the portal's consent questions, and they before desktop control.
     fn arrange(&mut self) {
         let about = |front: Front, model: &Model| match front {
             Front::Authentication => model.auth.shown_about(),
             Front::Keyring => model.keyring.shown_about(),
             Front::Consent => model.consent.shown_about(),
+            Front::DesktopControl => model.desktop_control.shown_about(),
         };
         if let Some(shown) = &self.shown {
             if about(shown.front, self).as_ref() == Some(&shown.about) {
                 return;
             }
         }
-        let next = [Front::Authentication, Front::Keyring, Front::Consent]
-            .into_iter()
-            .find_map(|front| about(front, self).map(|about| (front, about)));
+        let next = [
+            Front::Authentication,
+            Front::Keyring,
+            Front::Consent,
+            Front::DesktopControl,
+        ]
+        .into_iter()
+        .find_map(|front| about(front, self).map(|about| (front, about)));
         self.shown = next.map(|(front, about)| {
             self.serials += 1;
             Shown {
@@ -339,6 +372,10 @@ impl Model {
             }
             Some(Front::Consent) => {
                 self.consent.dismiss();
+                Vec::new()
+            }
+            Some(Front::DesktopControl) => {
+                self.desktop_control.dismiss();
                 Vec::new()
             }
             None => Vec::new(),
@@ -546,6 +583,7 @@ impl Application for Prompts {
             auth,
             keyring: Keyring::new(options.keyring_offer),
             consent: Consent::new(),
+            desktop_control: DesktopControl::bind(),
         };
         (model, commands)
     }
@@ -612,15 +650,32 @@ impl Application for Prompts {
                 }
             }
             Message::Consent(input) => model.consent.input(input),
+            Message::Authority(event) => model.desktop_control.heard(event),
+            Message::DesktopControl(
+                input @ (DesktopControlInput::Allow | DesktopControlInput::DontAllow),
+            ) => {
+                if model.shown.as_ref().map(|s| s.front) == Some(Front::DesktopControl) {
+                    model.desktop_control.input(input)
+                } else {
+                    Vec::new()
+                }
+            }
+            Message::DesktopControl(input) => model.desktop_control.input(input),
             Message::Frame | Message::Idle => Vec::new(),
             shell => model.shell(shell),
         };
         let before = model.shown.as_ref().map(|s| s.serial);
         model.arrange();
         if let Some(shown) = model.shown.as_ref() {
-            if shown.front == Front::Consent && before != Some(shown.serial) {
+            if before != Some(shown.serial) {
                 let window = Model::alert_key(shown.serial);
-                commands.extend(model.consent.opened(window));
+                match shown.front {
+                    Front::Consent => commands.extend(model.consent.opened(window)),
+                    Front::DesktopControl => {
+                        commands.extend(model.desktop_control.opened(window));
+                    }
+                    Front::Authentication | Front::Keyring => {}
+                }
             }
         }
         commands.extend(model.auth.look_up());
@@ -658,6 +713,11 @@ impl Application for Prompts {
                     windows.push(view::consent::consent(key, &prompt));
                 }
             }
+            Front::DesktopControl => {
+                if let Some(prompt) = model.desktop_control.view() {
+                    windows.push(view::desktop_control::desktop_control(key, &prompt));
+                }
+            }
         }
         windows
     }
@@ -669,7 +729,7 @@ impl Model {
         let field = match self.shown.as_ref().map(|s| s.front) {
             Some(Front::Authentication) => self.auth.new_question(),
             Some(Front::Keyring) => self.keyring.new_question(),
-            Some(Front::Consent) | None => None,
+            Some(Front::Consent | Front::DesktopControl) | None => None,
         };
         // a window that just opened gives its field the focus itself
         match field {
@@ -680,19 +740,34 @@ impl Model {
         }
     }
 
+    /// The output the alert goes on: desktop control's on the output the run would control, when the server describes
+    /// it; any other on the active output (`None`).
+    fn alert_output(&self) -> Option<OutputId> {
+        if self.shown.as_ref().map(|s| s.front) != Some(Front::DesktopControl) {
+            return None;
+        }
+        let name = self.desktop_control.output()?;
+        outputs::all()
+            .into_iter()
+            .find(|o| o.geometry.is_some() && o.name.as_deref() == Some(name))
+            .map(|o| o.id)
+    }
+
     /// The size of the alert's surface for what it shows.
     fn alert_size(&self) -> Size {
         match self.shown.as_ref().map(|s| s.front) {
             Some(Front::Keyring) => view::KEYRING_SIZE,
             Some(Front::Consent) => self.consent.alert_size(),
+            Some(Front::DesktopControl) => view::desktop_control::SIZE,
             _ => view::authentication_size(self.auth.details_shown()),
         }
     }
 }
 
 impl Program for Prompts {
-    /// The scrims cover their outputs on the overlay layer and take no keys; the alert is centred on the active output
-    /// above them and takes the keyboard. A menu of the alert is Kit's popup.
+    /// The scrims cover their outputs on the overlay layer and take no keys; the alert is centred above them on the
+    /// active output (desktop control's on the output the run would control, when it is there) and takes the keyboard.
+    /// A menu of the alert is Kit's popup.
     fn surface(model: &Model, window: &WindowKey) -> Surface {
         let shown = model.shown.as_ref();
         let alert = shown.map(|s| Model::alert_key(s.serial));
@@ -706,7 +781,7 @@ impl Program for Prompts {
         let role = if alert.as_ref() == Some(window) {
             Role::Layer(LayerSpec {
                 namespace: ALERT_NAMESPACE,
-                output: None,
+                output: model.alert_output(),
                 layer: Layer::Overlay,
                 anchor: Anchor::default(),
                 size: model.alert_size(),
@@ -746,6 +821,7 @@ impl Program for Prompts {
             Event::CapsLock(on) => Some(Message::CapsLock(on)),
             Event::Outputs => Some(Message::Outputs),
             Event::Closed(key) => Some(Message::Closed(key)),
+            Event::Consent(event) => Some(Message::Authority(event)),
             _ => None,
         }
     }

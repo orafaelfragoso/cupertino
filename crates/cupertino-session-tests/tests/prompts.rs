@@ -12,6 +12,9 @@
 //!   (a stand-in of `Session1` names one test connection so) and refuses any other caller: the screenshot question is
 //!   granted with Take Screenshot once the arming delay has passed, and cancelled with Escape; the shortcuts question
 //!   is allowed with Allow and refused with Don't Allow; the portal's `Close` takes a question down.
+//! - The server's consent authority asks the program whether a desktop controller's run may capture: the alert is
+//!   the prompts', on the surface the person answers the authority on; an active run is not paused and its input
+//!   reaches neither the alert nor its scrim; a scripted Allow starts nothing, Don't Allow and Escape refuse the run.
 //! - While an alert is up the server counts it as a prompt: desktop control is suspended and observes nothing
 //!   (`prompt_shown`), every surface of the program is a prompt surface, the keyboard is the alert's, and the output's
 //!   capture does not show it.
@@ -36,6 +39,7 @@ use std::process::{Child, Command as Process, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+use cupertino_defaults::desktop_control::{App, Decision, DesktopControlConf, Service};
 use cupertino_prompts::consent::service::{
     BUS_NAME as PROMPTS_NAME, INTERFACE as PROMPTS_INTERFACE, OBJECT_PATH as PROMPTS_PATH,
 };
@@ -47,8 +51,15 @@ use cupertino_prompts::keyring::prompter::{ERROR_IN_PROGRESS, INTERFACE, PATH, S
 use cupertino_prompts::polkit::agent::AGENT_PATH;
 use cupertino_prompts::polkit::helper::Route;
 use cupertino_prompts::Options;
+use cupertino_protocols::client::control::cupertino_control_session_v1::{
+    self, Capability, CupertinoControlSessionV1, Phase, Refusal,
+};
+use cupertino_protocols::client::control::cupertino_control_v1::CupertinoControlV1;
 use cupertino_server::authorization::{is_prompt, ShellRole};
+use cupertino_server::control::protected_surface;
 use cupertino_server::shell_connection::shell_process_connection;
+use wayland_client::protocol::{wl_output, wl_registry};
+use wayland_client::WEnum;
 use zbus::message::Header;
 use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value};
 
@@ -833,5 +844,309 @@ fn the_portals_consent_questions_are_answered_by_the_person() {
     let closed = response(&mut rig, &asked, "the closed question is answered");
     assert_eq!(closed.expect("an answer"), SCREENSHOT_CANCELLED);
     rig.until("the alert goes", |rig| !rig.state.prompt_shown());
+    assert!(!program.is_finished(), "the program runs on");
+}
+
+/// What a desktop controller's connection heard.
+#[derive(Default)]
+struct Controlled {
+    globals: Vec<(u32, String, u32)>,
+    epoch: Option<(u32, u32)>,
+    phase: Option<WEnum<Phase>>,
+    revision: Option<u32>,
+    completed: Vec<u32>,
+    refused: Vec<(u32, WEnum<Refusal>)>,
+}
+
+impl wayland_client::Dispatch<wl_registry::WlRegistry, ()> for Controlled {
+    fn event(
+        heard: &mut Self,
+        _: &wl_registry::WlRegistry,
+        event: wl_registry::Event,
+        _: &(),
+        _: &wayland_client::Connection,
+        _: &wayland_client::QueueHandle<Self>,
+    ) {
+        if let wl_registry::Event::Global {
+            name,
+            interface,
+            version,
+        } = event
+        {
+            heard.globals.push((name, interface, version));
+        }
+    }
+}
+
+wayland_client::delegate_noop!(Controlled: ignore wl_output::WlOutput);
+wayland_client::delegate_noop!(Controlled: ignore CupertinoControlV1);
+
+impl wayland_client::Dispatch<CupertinoControlSessionV1, ()> for Controlled {
+    fn event(
+        heard: &mut Self,
+        _: &CupertinoControlSessionV1,
+        event: cupertino_control_session_v1::Event,
+        _: &(),
+        _: &wayland_client::Connection,
+        _: &wayland_client::QueueHandle<Self>,
+    ) {
+        use cupertino_control_session_v1::Event;
+        match event {
+            Event::Created {
+                epoch_hi, epoch_lo, ..
+            } => heard.epoch = Some((epoch_hi, epoch_lo)),
+            Event::Status { phase, .. } => heard.phase = Some(phase),
+            Event::Geometry { revision, .. } => heard.revision = Some(revision),
+            Event::Completed { serial } => heard.completed.push(serial),
+            Event::Refused { serial, reason } => heard.refused.push((serial, reason)),
+            _ => {}
+        }
+    }
+}
+
+/// The app desktop control names a run of this process by: the executable of its parent, as a run under no window.
+fn this_app() -> App {
+    let parent = std::os::unix::process::parent_id();
+    let exe = std::fs::read_link(format!("/proc/{parent}/exe")).unwrap();
+    let exe = exe.to_str().unwrap();
+    App::Executable(exe.strip_suffix(" (deleted)").unwrap_or(exe).into())
+}
+
+/// This process's start, field 22 of `/proc/self/stat` counted from the last `)`, which names it to desktop control.
+fn own_start() -> u64 {
+    let stat = std::fs::read_to_string("/proc/self/stat").unwrap();
+    let after_name = &stat[stat.rfind(')').unwrap() + 1..];
+    after_name
+        .split_whitespace()
+        .nth(19)
+        .unwrap()
+        .parse()
+        .unwrap()
+}
+
+/// Read what the server sent the controller, without waiting, and dispatch it.
+fn pump(
+    conn: &wayland_client::Connection,
+    queue: &mut wayland_client::EventQueue<Controlled>,
+    heard: &mut Controlled,
+) {
+    let _ = conn.flush();
+    if let Some(guard) = conn.prepare_read() {
+        let _ = guard.read();
+    }
+    queue.dispatch_pending(heard).unwrap();
+    let _ = conn.flush();
+}
+
+/// A desktop controller's run, on a connection of its own with the `desktop_control` role, named as this process.
+struct Controller {
+    conn: wayland_client::Connection,
+    queue: wayland_client::EventQueue<Controlled>,
+    heard: Controlled,
+    session: CupertinoControlSessionV1,
+    epoch: (u32, u32),
+    serial: u32,
+}
+
+impl Controller {
+    /// A run asking for `capabilities` on the output, its start sent as request 1.
+    fn request(rig: &mut Rig, capabilities: Capability) -> Controller {
+        let stream =
+            shell_process_connection(&rig.state.display_handle, &[ShellRole::DesktopControl])
+                .expect("a controller's connection");
+        let conn = wayland_client::Connection::from_socket(stream).unwrap();
+        let mut queue = conn.new_event_queue();
+        let qh = queue.handle();
+        let registry = conn.display().get_registry(&qh, ());
+        let mut heard = Controlled::default();
+        rig.until("the controller sees the globals", |_| {
+            pump(&conn, &mut queue, &mut heard);
+            heard
+                .globals
+                .iter()
+                .any(|(_, i, _)| i == "cupertino_control_v1")
+        });
+        let bind = |interface: &str| {
+            heard
+                .globals
+                .iter()
+                .find(|(_, i, _)| i == interface)
+                .map(|&(name, _, version)| (name, version))
+                .unwrap()
+        };
+        let (name, _) = bind("wl_output");
+        let output: wl_output::WlOutput = registry.bind(name, 4, &qh, ());
+        let (name, version) = bind("cupertino_control_v1");
+        let control: CupertinoControlV1 = registry.bind(name, version.min(5), &qh, ());
+        let session = control.get_session(&qh, ());
+        rig.until("the run is created", |_| {
+            pump(&conn, &mut queue, &mut heard);
+            heard.epoch.is_some()
+        });
+        let epoch = heard.epoch.unwrap();
+        let start = own_start();
+        session.identify(std::process::id(), (start >> 32) as u32, start as u32);
+        session.start(1, epoch.0, epoch.1, &output, capabilities);
+        Controller {
+            conn,
+            queue,
+            heard,
+            session,
+            epoch,
+            serial: 1,
+        }
+    }
+
+    fn step(&mut self) {
+        pump(&self.conn, &mut self.queue, &mut self.heard);
+    }
+
+    /// The answer to request `serial`: `Ok` once it was carried out, the refusal's reason else.
+    fn answer(&mut self, rig: &mut Rig, serial: u32) -> Result<(), WEnum<Refusal>> {
+        rig.until(&format!("request {serial} is answered"), |_| {
+            self.step();
+            self.heard.completed.contains(&serial)
+                || self.heard.refused.iter().any(|(s, _)| *s == serial)
+        });
+        match self.heard.refused.iter().find(|(s, _)| *s == serial) {
+            Some((_, reason)) => Err(*reason),
+            None => Ok(()),
+        }
+    }
+
+    /// The run's phase once the server has said it.
+    fn phase_until(&mut self, rig: &mut Rig, phase: Phase, what: &str) {
+        rig.until(what, |_| {
+            self.step();
+            self.heard.phase == Some(WEnum::Value(phase))
+        });
+    }
+
+    /// Send the input `send` makes of a serial and the run's geometry revision, again while the geometry moves on; its
+    /// answer.
+    fn input(
+        &mut self,
+        rig: &mut Rig,
+        send: impl Fn(&CupertinoControlSessionV1, u32, (u32, u32), u32),
+    ) -> Result<(), WEnum<Refusal>> {
+        loop {
+            self.serial += 1;
+            let serial = self.serial;
+            let revision = self.heard.revision.expect("the run's geometry");
+            send(&self.session, serial, self.epoch, revision);
+            match self.answer(rig, serial) {
+                Err(WEnum::Value(Refusal::StaleGeometry)) => {}
+                answer => return answer,
+            }
+        }
+    }
+}
+
+/// Turn the server for `time`: what the program sends in it is handled.
+fn turn_for(rig: &mut Rig, time: Duration) {
+    let until = Instant::now() + time;
+    rig.until("the time passes", |_| Instant::now() >= until);
+}
+
+#[test]
+fn desktop_controls_consent_alert_is_the_prompts_and_answers_the_person() {
+    private_home("control");
+    let socket = std::env::temp_dir().join(format!("prompts-control-{}.sock", std::process::id()));
+    let bus = Bus::start("control");
+    let (_logind, _polkitd, _registrations) = system_stand_ins(&bus);
+    let mut rig = Rig::new("prompts-control", &[], &[]);
+    let bare = rig.image();
+    let program = start(&mut rig, &socket);
+    let daemon = zbus::blocking::fdo::DBusProxy::new(&bus.connect()).expect("the bus daemon");
+    rig.until("the prompts serve", |_| {
+        daemon
+            .name_has_owner(PROMPTS_NAME.try_into().unwrap())
+            .unwrap_or(false)
+    });
+
+    // a run the person allowed before, active
+    let mut store = DesktopControlConf::default();
+    store
+        .set(Service::Control, &this_app(), Decision::Allow)
+        .unwrap();
+    rig.state.apply_desktop_control_store(store);
+    let mut active = Controller::request(
+        &mut rig,
+        Capability::Observe | Capability::Pointer | Capability::Keyboard,
+    );
+    assert_eq!(active.answer(&mut rig, 1), Ok(()), "the allowed run starts");
+    active.phase_until(&mut rig, Phase::Active, "the allowed run is active");
+
+    // a run asking to capture, which the person has not decided: the prompts ask on the consent authority's surface
+    let mut asking = Controller::request(&mut rig, Capability::Observe | Capability::Capture);
+    assert_eq!(asking.answer(&mut rig, 1), Ok(()), "the run asks");
+    alert_up(&mut rig, &bare);
+    let focus = rig
+        .state
+        .seat
+        .get_keyboard()
+        .and_then(|k| k.current_focus());
+    assert!(
+        focus.is_some_and(|surface| protected_surface(&surface)),
+        "the alert is the surface the person answers the consent authority on"
+    );
+    let up = Instant::now();
+    assert_eq!(
+        asking.heard.phase,
+        Some(WEnum::Value(Phase::AwaitingConsent))
+    );
+
+    // the alert pauses no run, and the active run's input reaches neither it nor its scrim
+    active.step();
+    assert_eq!(active.heard.phase, Some(WEnum::Value(Phase::Active)));
+    let pressed = active.input(&mut rig, |session, serial, (hi, lo), revision| {
+        session.key(
+            serial,
+            hi,
+            lo,
+            revision,
+            28,
+            cupertino_control_session_v1::KeyState::Pressed,
+        )
+    });
+    assert_eq!(pressed, Err(WEnum::Value(Refusal::Blocked)), "Return");
+    let centre = (
+        f64::from(rig::OUTPUT_SIZE.0) / 2.0,
+        f64::from(rig::OUTPUT_SIZE.1) / 2.0,
+    );
+    let moved = active.input(&mut rig, |session, serial, (hi, lo), revision| {
+        session.motion(serial, hi, lo, revision, centre.0, centre.1)
+    });
+    assert_eq!(moved, Err(WEnum::Value(Refusal::Blocked)), "the pointer");
+
+    // Allow by a scripted key, once armed, allows nothing: only the person's own input does
+    armed(&mut rig, up);
+    rig.state.scripted_key("Tab").unwrap();
+    rig.state.scripted_key("Return").unwrap();
+    turn_for(&mut rig, ARMING);
+    asking.step();
+    assert_eq!(
+        asking.heard.phase,
+        Some(WEnum::Value(Phase::AwaitingConsent)),
+        "a scripted Allow does not start the run"
+    );
+    assert!(rig.state.prompt_shown(), "the alert stays");
+
+    // Don't Allow refuses the run, and the alert goes
+    rig.state.scripted_key("Tab").unwrap();
+    rig.state.scripted_key("Return").unwrap();
+    asking.phase_until(&mut rig, Phase::Inactive, "Don't Allow refuses the run");
+    rig.until("the alert goes", |rig| !rig.state.prompt_shown());
+
+    // Escape refuses this request
+    let mut dismissed = Controller::request(&mut rig, Capability::Observe | Capability::Capture);
+    assert_eq!(dismissed.answer(&mut rig, 1), Ok(()), "the next run asks");
+    alert_up(&mut rig, &bare);
+    rig.state.scripted_key("Escape").unwrap();
+    dismissed.phase_until(&mut rig, Phase::Inactive, "Escape refuses the run");
+    rig.until("the alert goes", |rig| !rig.state.prompt_shown());
+
+    active.step();
+    assert_eq!(active.heard.phase, Some(WEnum::Value(Phase::Active)));
     assert!(!program.is_finished(), "the program runs on");
 }

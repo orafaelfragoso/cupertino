@@ -1,6 +1,5 @@
 //! The process behind a connection is read off the compositor's loop and remembered; the loop waits for a reading or a
-//! check until a deadline, and what does not answer in time names no process and allows nothing. A window with the
-//! portal's prompt app id stays kept from desktop control unless its process is known to differ from the portal's.
+//! check until a deadline, and what does not answer in time names no process and allows nothing.
 
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -9,7 +8,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use cupertino_peer::ProcessHandle;
-use cupertino_server::global_shortcuts::portal_prompt_verdict;
 use cupertino_server::process::{read_facts, Alive, Lookups, ProcessFacts, ProcessLookup};
 
 /// How long a test lets the loop wait for a lookup that does not answer.
@@ -237,42 +235,4 @@ fn a_reading_with_no_thread_left_is_not_started_and_names_nothing_until_a_later_
         lookup.wait_until(Instant::now() + SETTLE).as_deref(),
         Some(&facts)
     );
-}
-
-#[test]
-fn a_prompt_window_is_ordinary_only_when_its_process_is_known_to_differ_from_the_portal() {
-    let window = Some((10, 100));
-    let portal = Some((20, 200));
-    let rows = [
-        ("the portal's own window", window, vec![window], true),
-        ("another process's window", window, vec![portal], false),
-        (
-            "the window's process is not known",
-            None,
-            vec![portal],
-            true,
-        ),
-        (
-            "the portal's process is not known",
-            window,
-            vec![None],
-            true,
-        ),
-        (
-            "one portal connection not known",
-            window,
-            vec![portal, None],
-            true,
-        ),
-        (
-            "a reused id with another start",
-            Some((20, 300)),
-            vec![portal],
-            false,
-        ),
-        ("no portal connection to compare", window, vec![], true),
-    ];
-    for (row, window, portals, kept) in rows {
-        assert_eq!(portal_prompt_verdict(window, portals), kept, "{row}");
-    }
 }

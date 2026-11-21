@@ -10,7 +10,7 @@
 //! * [`login_wallpaper`]: the copy of the session's wallpaper the lock screen leaves for the login screen.
 //! * [`picker`]: the greeter's user tiles, grid, selection and the name typed for "Other…".
 //! * [`power`]: the greeter's power menu.
-//! * [`view`]: the screens and the consent panel as CupertinoKit draws them, and what the person does on them.
+//! * [`view`]: the screens as CupertinoKit draws them, and what the person does on them.
 //! * [`spinner`]: the frames and spoke opacities of the progress spinner.
 //! * [`status`]: what the status items at the top right of the lock and login screens show, read again whenever what they show changes.
 //! * [`user`]: the user's name and picture, and the clock text.

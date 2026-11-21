@@ -5,8 +5,7 @@
 //! the chosen account's password). `--field empty|typed|help` shows the password field empty, with a password typed
 //! (its dots and the submit button), or after failed attempts (the help button pressed, its line shown). On the picker,
 //! `--selection none|shown` shows no selection (as it opens) or the first tile selected (after an arrow key or the
-//! pointer), and `--users three|one` three accounts and "Other…", or one account alone. `consent` is the panel that
-//! asks whether an app may control the desktop, for an app that names its desktop entry. Each screen
+//! pointer), and `--users three|one` three accounts and "Other…", or one account alone. Each screen
 //! stands on a wallpaper made for the capture, lighter for the light appearance; the accounts, the clock and the
 //! dimming are fixed, so a command gives the same pixels on every run. The fonts, symbols and theme are the system's,
 //! as an application's.
@@ -35,9 +34,8 @@ use cupertino_login::status::{BatteryState, StatusItems, WifiState};
 const LOCK_MESSAGE: &str = "If found, please return to the front desk.";
 use cupertino_login::user::User;
 use cupertino_login::view::{
-    self, Access, Clock, ControlRequest, Field, Input, Made, Metrics, PickerScreen, RequestingApp,
-    Screen, ScreenPictures, Shown, Status, GREETER_APP_ID, GREETER_TITLE, LOCKED_TITLE,
-    LOCK_APP_ID,
+    self, Access, Clock, Field, Input, Made, Metrics, PickerScreen, Screen, ScreenPictures, Shown,
+    Status, GREETER_APP_ID, GREETER_TITLE, LOCKED_TITLE, LOCK_APP_ID,
 };
 use cupertino_login::wallpaper::Source;
 
@@ -62,7 +60,6 @@ enum Surface {
     Lock,
     Picker,
     Password,
-    Consent,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -192,13 +189,6 @@ impl Application for Showing {
 
     fn view(model: &Model) -> Vec<Window<Message>> {
         let shot = model.shot;
-        if shot.surface == Surface::Consent {
-            return vec![view::desktop_control(
-                window_key(),
-                &consent_request(),
-                Message::Input,
-            )];
-        }
         let (title, app_id) = match shot.surface {
             Surface::Lock => (LOCKED_TITLE, LOCK_APP_ID.to_string()),
             _ => (GREETER_TITLE, format!("{GREETER_APP_ID}.capture")),
@@ -222,9 +212,6 @@ impl Application for Showing {
 
 /// What the screen's pictures are made from, handed to its pictures after each update.
 fn want(model: &mut Model) -> Vec<Command<Message>> {
-    if model.shot.surface == Surface::Consent {
-        return Vec::new();
-    }
     let scale = model.shot.scale;
     let wants = shown(
         model,
@@ -286,7 +273,7 @@ fn shown<R>(
                 dim: 1.0,
                 pictures,
             }),
-            Surface::Lock | Surface::Password | Surface::Consent => screen(&Screen {
+            Surface::Lock | Surface::Password => screen(&Screen {
                 size,
                 metrics: model.metrics,
                 clock: &model.clock,
@@ -327,23 +314,6 @@ fn shown<R>(
     }
 }
 
-/// What the consent capture asks: an app that names its desktop entry asks to observe the desktop and to use the
-/// pointer and the keyboard, its answer to be remembered.
-fn consent_request() -> ControlRequest {
-    ControlRequest {
-        output: "DP-1".into(),
-        capabilities: 1 | 4 | 8,
-        app: Some(RequestingApp {
-            name: "Terminal".into(),
-            identity: "org.example.Terminal".into(),
-            desktop: true,
-            services: 1,
-            remembered: true,
-            icon: Vec::new(),
-        }),
-    }
-}
-
 struct Login {
     /// The wallpapers made so far, light and dark.
     wallpapers: [Option<Source>; 2],
@@ -366,15 +336,10 @@ impl App for Login {
     const STATE_FLAGS: &'static [&'static str] = &["field", "selection", "users"];
 
     fn surfaces(&self) -> Vec<String> {
-        ["lock", "picker", "password", "consent"]
-            .map(String::from)
-            .to_vec()
+        ["lock", "picker", "password"].map(String::from).to_vec()
     }
 
     fn sheet_states(&self, surface: &str) -> Vec<State> {
-        if surface == "consent" {
-            return vec![State::new()];
-        }
         if surface == "picker" {
             return ["none", "shown"]
                 .map(|v| vec![("selection".to_string(), v.to_string())])
@@ -389,12 +354,8 @@ impl App for Login {
         let surface = match request.surface {
             "lock" => Surface::Lock,
             "picker" => Surface::Picker,
-            "consent" => Surface::Consent,
             _ => Surface::Password,
         };
-        if surface == Surface::Consent && !request.state.is_empty() {
-            return Err("login/consent has no states".into());
-        }
         let field = state(request)?;
         if surface == Surface::Picker && field != FieldState::Empty {
             return Err("login/picker has no password field".into());
@@ -476,7 +437,7 @@ fn draw(look: Look, scale: f32, wallpaper: Source, field: FieldState) -> Result<
     loop {
         driver.run_until_idle(turns).map_err(|e| fail(&e))?;
         let model = driver.runtime().model();
-        if model.shot.surface == Surface::Consent || model.pictures.ready(&window_key()) {
+        if model.pictures.ready(&window_key()) {
             break;
         }
         let left = end.saturating_duration_since(Instant::now());

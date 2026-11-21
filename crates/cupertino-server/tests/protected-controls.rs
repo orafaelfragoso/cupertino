@@ -8,6 +8,11 @@
 //! - pointer input over the program's overlay, and keyboard input while the overlay holds the keyboard, are refused as
 //!   blocked; pointer input over the ordinary window is carried out, and keyboard input once the program ended.
 //!
+//!
+//! The consent panel is one too: the prompts' connection (the `consent` role) sees the consent authority and a lock
+//! screen's does not; the panel, a prompt surface the authority names, pauses no active run, yet that run's input does
+//! not reach it; a scripted key on the panel does not allow a run, the person's key does, and refuses one.
+//!
 //! This test binary stands in for the screenshot program: started with [`STAND_IN`] it maps the chooser, publishing
 //! its controls, and the overlay on the connection the server made for it ([`screenshot_stand_in`]).
 
@@ -22,6 +27,9 @@ use cupertino_defaults::desktop_control::{App, Decision, DesktopControlConf, Ser
 use cupertino_input::ScreenshotRequest;
 use cupertino_peer::component::process_start_ticks;
 use cupertino_peer::ProcessHandle;
+use cupertino_protocols::client::control::cupertino_control_authority_v1::{
+    self, CupertinoControlAuthorityV1,
+};
 use cupertino_protocols::client::control::cupertino_control_session_v1::{
     self, Capability, CupertinoControlSessionV1, KeyState, Phase, Refusal,
 };
@@ -33,16 +41,22 @@ use cupertino_protocols::client::semantics::cupertino_semantics_v1::CupertinoSem
 use cupertino_server::authorization::ShellRole;
 use cupertino_server::backend::headless;
 use cupertino_server::capture::launch::OVERLAY_NAMESPACE;
+use cupertino_server::control::protected_surface;
 use cupertino_server::shell_connection::shell_process_connection;
 use cupertino_server::state::{insert_client, ClientState};
 use cupertino_server::{Config, Cupertino};
+use smithay::backend::input::{
+    Device, DeviceCapability, Event as DeviceEvent, InputBackend, InputEvent,
+    KeyState as DeviceKey, KeyboardKeyEvent, Keycode, UnusedEvent,
+};
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_protocols::xdg::shell::client::{
     xdg_surface, xdg_toplevel, xdg_wm_base,
 };
 use smithay::reexports::wayland_server::Display;
 use wayland_client::protocol::{
-    wl_buffer, wl_compositor, wl_output, wl_registry, wl_shm, wl_shm_pool, wl_surface,
+    wl_buffer, wl_callback, wl_compositor, wl_keyboard, wl_output, wl_registry, wl_seat, wl_shm,
+    wl_shm_pool, wl_surface,
 };
 use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum};
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
@@ -71,6 +85,19 @@ const CORNER_INSET: f64 = 40.0;
 /// The evdev code of the A key.
 const KEY_A: u32 = 30;
 
+/// The roles the server gives the prompts, the program that holds the consent authority.
+const PROMPTS: [ShellRole; 3] = [ShellRole::Session, ShellRole::Prompt, ShellRole::Consent];
+
+/// The consent authority's global.
+const AUTHORITY: &str = "cupertino_control_authority_v1";
+
+/// The consent panel's surface, centred on the output, in points.
+const PANEL: (i32, i32) = (260, 200);
+
+/// The authority's answers: allow, and a refusal remembered for the app.
+const ALLOW: u32 = 1;
+const DENY: u32 = 2;
+
 /// What a connection heard.
 #[derive(Default)]
 struct Heard {
@@ -84,6 +111,12 @@ struct Heard {
     completed: Vec<u32>,
     refused: Vec<(u32, WEnum<Refusal>)>,
     observations: Vec<(u32, wire::Observation)>,
+    /// The runs the consent authority was asked for, by epoch.
+    asked: Vec<(u32, u32)>,
+    /// The serials of the keys pressed on the connection's keyboard focus.
+    keys: Vec<u32>,
+    /// The syncs answered.
+    synced: u32,
 }
 
 impl Dispatch<wl_registry::WlRegistry, ()> for Heard {
@@ -116,6 +149,60 @@ wayland_client::delegate_noop!(Heard: ignore xdg_toplevel::XdgToplevel);
 wayland_client::delegate_noop!(Heard: ignore zwlr_layer_shell_v1::ZwlrLayerShellV1);
 wayland_client::delegate_noop!(Heard: ignore CupertinoControlV1);
 wayland_client::delegate_noop!(Heard: ignore CupertinoSemanticsV1);
+wayland_client::delegate_noop!(Heard: ignore wl_seat::WlSeat);
+
+impl Dispatch<wl_keyboard::WlKeyboard, ()> for Heard {
+    fn event(
+        heard: &mut Self,
+        _: &wl_keyboard::WlKeyboard,
+        event: wl_keyboard::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let wl_keyboard::Event::Key {
+            serial,
+            state: WEnum::Value(wl_keyboard::KeyState::Pressed),
+            ..
+        } = event
+        {
+            heard.keys.push(serial);
+        }
+    }
+}
+
+impl Dispatch<wl_callback::WlCallback, ()> for Heard {
+    fn event(
+        heard: &mut Self,
+        _: &wl_callback::WlCallback,
+        event: wl_callback::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let wl_callback::Event::Done { .. } = event {
+            heard.synced += 1;
+        }
+    }
+}
+
+impl Dispatch<CupertinoControlAuthorityV1, ()> for Heard {
+    fn event(
+        heard: &mut Self,
+        _: &CupertinoControlAuthorityV1,
+        event: cupertino_control_authority_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let cupertino_control_authority_v1::Event::Requested {
+            epoch_hi, epoch_lo, ..
+        } = event
+        {
+            heard.asked.push((epoch_hi, epoch_lo));
+        }
+    }
+}
 
 impl Dispatch<xdg_wm_base::XdgWmBase, ()> for Heard {
     fn event(
@@ -300,6 +387,11 @@ impl Wl {
         }
         self.queue.dispatch_pending(&mut self.heard).unwrap();
         let _ = self.conn.flush();
+    }
+
+    /// Whether the server offers the global `interface` to this connection.
+    fn offers(&self, interface: &str) -> bool {
+        self.heard.globals.iter().any(|(_, i, _)| i == interface)
     }
 
     /// Wait for what comes and dispatch it, in a process of its own.
@@ -528,7 +620,7 @@ fn this_app() -> App {
     App::Executable(exe.strip_suffix(" (deleted)").unwrap_or(exe).into())
 }
 
-/// A controller's run, active on the output with every capability but capture, allowed by a remembered answer.
+/// A controller's run on a connection of its own, named as this process.
 struct Run {
     wl: Wl,
     session: CupertinoControlSessionV1,
@@ -537,7 +629,8 @@ struct Run {
 }
 
 impl Run {
-    fn start(rig: &mut Rig) -> Run {
+    /// A run asking for `capabilities` on the output, its start sent as request 1.
+    fn request(rig: &mut Rig, capabilities: Capability) -> Run {
         let stream =
             shell_process_connection(&rig.state.display_handle, &[ShellRole::DesktopControl])
                 .unwrap();
@@ -545,13 +638,7 @@ impl Run {
         rig.until(
             &mut [&mut wl],
             "the controller sees the globals",
-            |_, wl| {
-                wl[0]
-                    .heard
-                    .globals
-                    .iter()
-                    .any(|(_, i, _)| i == "cupertino_control_v1")
-            },
+            |_, wl| wl[0].offers("cupertino_control_v1"),
         );
         let output: wl_output::WlOutput = wl.bind(4);
         let control: CupertinoControlV1 = wl.bind(5);
@@ -560,27 +647,29 @@ impl Run {
             wl[0].heard.epoch.is_some()
         });
         let epoch = wl.heard.epoch.unwrap();
+        let own = ProcessHandle::open(std::process::id()).unwrap();
+        let start = process_start_ticks(&own).unwrap();
+        session.identify(std::process::id(), (start >> 32) as u32, start as u32);
+        session.start(1, epoch.0, epoch.1, &output, capabilities);
+        Run {
+            wl,
+            session,
+            epoch,
+            serial: 1,
+        }
+    }
+
+    /// A run active on the output with every capability but capture, allowed by a remembered answer.
+    fn start(rig: &mut Rig) -> Run {
         let mut store = DesktopControlConf::default();
         store
             .set(Service::Control, &this_app(), Decision::Allow)
             .unwrap();
         rig.state.apply_desktop_control_store(store);
-        let own = ProcessHandle::open(std::process::id()).unwrap();
-        let start = process_start_ticks(&own).unwrap();
-        session.identify(std::process::id(), (start >> 32) as u32, start as u32);
-        session.start(
-            1,
-            epoch.0,
-            epoch.1,
-            &output,
+        let mut run = Run::request(
+            rig,
             Capability::Observe | Capability::Pointer | Capability::Keyboard | Capability::Semantic,
         );
-        let mut run = Run {
-            wl,
-            session,
-            epoch,
-            serial: 1,
-        };
         assert_eq!(run.answer(rig, 1), Ok(()), "the run starts");
         assert_eq!(run.wl.heard.phase, Some(WEnum::Value(Phase::Active)));
         run
@@ -821,4 +910,282 @@ fn desktop_control_neither_sees_nor_reaches_the_screenshot_program() {
     );
     assert_eq!(run.key(&mut rig, KeyState::Pressed), Ok(()));
     assert_eq!(run.key(&mut rig, KeyState::Released), Ok(()));
+}
+
+/// The person's keyboard, as a device the server reads.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct Keyboard;
+
+impl Device for Keyboard {
+    fn id(&self) -> String {
+        "person-keyboard".into()
+    }
+
+    fn name(&self) -> String {
+        "The person's keyboard".into()
+    }
+
+    fn has_capability(&self, capability: DeviceCapability) -> bool {
+        capability == DeviceCapability::Keyboard
+    }
+
+    fn usb_id(&self) -> Option<(u32, u32)> {
+        None
+    }
+
+    fn syspath(&self) -> Option<std::path::PathBuf> {
+        None
+    }
+}
+
+/// A key the person presses or releases, by its evdev code.
+struct PersonKey {
+    code: u32,
+    state: DeviceKey,
+}
+
+impl DeviceEvent<Person> for PersonKey {
+    fn time(&self) -> u64 {
+        0
+    }
+
+    fn device(&self) -> Keyboard {
+        Keyboard
+    }
+}
+
+impl KeyboardKeyEvent<Person> for PersonKey {
+    fn key_code(&self) -> Keycode {
+        // xkb's codes are evdev's plus 8
+        Keycode::new(self.code + 8)
+    }
+
+    fn state(&self) -> DeviceKey {
+        self.state
+    }
+
+    fn count(&self) -> u32 {
+        u32::from(self.state == DeviceKey::Pressed)
+    }
+}
+
+/// The person at the keyboard: input the server takes from a device, as a backend delivers it.
+struct Person;
+
+impl InputBackend for Person {
+    type Device = Keyboard;
+    type KeyboardKeyEvent = PersonKey;
+    type PointerAxisEvent = UnusedEvent;
+    type PointerButtonEvent = UnusedEvent;
+    type PointerMotionEvent = UnusedEvent;
+    type PointerMotionAbsoluteEvent = UnusedEvent;
+    type GestureSwipeBeginEvent = UnusedEvent;
+    type GestureSwipeUpdateEvent = UnusedEvent;
+    type GestureSwipeEndEvent = UnusedEvent;
+    type GesturePinchBeginEvent = UnusedEvent;
+    type GesturePinchUpdateEvent = UnusedEvent;
+    type GesturePinchEndEvent = UnusedEvent;
+    type GestureHoldBeginEvent = UnusedEvent;
+    type GestureHoldEndEvent = UnusedEvent;
+    type TouchDownEvent = UnusedEvent;
+    type TouchUpEvent = UnusedEvent;
+    type TouchMotionEvent = UnusedEvent;
+    type TouchCancelEvent = UnusedEvent;
+    type TouchFrameEvent = UnusedEvent;
+    type TabletToolAxisEvent = UnusedEvent;
+    type TabletToolProximityEvent = UnusedEvent;
+    type TabletToolTipEvent = UnusedEvent;
+    type TabletToolButtonEvent = UnusedEvent;
+    type SwitchToggleEvent = UnusedEvent;
+    type SpecialEvent = ();
+}
+
+/// The person types the A key on the keyboard.
+fn person_types(rig: &mut Rig) {
+    for state in [DeviceKey::Pressed, DeviceKey::Released] {
+        rig.state
+            .process_input_event(InputEvent::<Person>::Keyboard {
+                event: PersonKey { code: KEY_A, state },
+            });
+    }
+}
+
+/// The prompts' stand-in: a connection with their roles, holding the consent authority, and the panel on which the
+/// person answers, a layer surface on the overlay layer centred on the output that takes the keyboard.
+struct Prompts {
+    wl: Wl,
+    authority: CupertinoControlAuthorityV1,
+}
+
+impl Prompts {
+    fn start(rig: &mut Rig) -> Prompts {
+        let stream = shell_process_connection(&rig.state.display_handle, &PROMPTS).unwrap();
+        let mut wl = Wl::new(Connection::from_socket(stream).unwrap());
+        rig.until(&mut [&mut wl], "the prompts see the globals", |_, wl| {
+            wl[0].offers("wl_compositor")
+        });
+        let compositor: wl_compositor::WlCompositor = wl.bind(4);
+        let shm: wl_shm::WlShm = wl.bind(1);
+        let layer_shell: zwlr_layer_shell_v1::ZwlrLayerShellV1 = wl.bind(4);
+        let seat: wl_seat::WlSeat = wl.bind(1);
+        let _keyboard = seat.get_keyboard(&wl.qh(), ());
+        let authority: CupertinoControlAuthorityV1 = wl.bind(2);
+        let panel = compositor.create_surface(&wl.qh(), ());
+        let layer = layer_shell.get_layer_surface(
+            &panel,
+            None,
+            zwlr_layer_shell_v1::Layer::Overlay,
+            "consent".into(),
+            &wl.qh(),
+            (),
+        );
+        layer.set_size(PANEL.0 as u32, PANEL.1 as u32);
+        layer.set_keyboard_interactivity(zwlr_layer_surface_v1::KeyboardInteractivity::Exclusive);
+        // the panel is the authority's before it shows, as the prompts name their alert's surface
+        authority.set_surface(&panel);
+        panel.commit();
+        rig.until(&mut [&mut wl], "the panel is configured", |_, wl| {
+            wl[0].heard.layer_configured
+        });
+        panel.attach(Some(&buffer(&wl, &shm, PANEL.0, PANEL.1)), 0, 0);
+        panel.damage(0, 0, PANEL.0, PANEL.1);
+        panel.commit();
+        rig.until(&mut [&mut wl], "the panel is shown", |rig, _| {
+            rig.state.prompt_shown()
+        });
+        Prompts { wl, authority }
+    }
+
+    /// Wait until the server has handled every request the prompts sent so far.
+    fn sync(&mut self, rig: &mut Rig) {
+        let synced = self.wl.heard.synced;
+        self.wl.conn.display().sync(&self.wl.qh(), ());
+        rig.until(
+            &mut [&mut self.wl],
+            "the server answers the sync",
+            |_, wl| wl[0].heard.synced > synced,
+        );
+    }
+
+    /// Answer the request of `run` with `allow`, quoting the last key pressed on the panel; once the server handled it.
+    fn answer(&mut self, rig: &mut Rig, run: &Run, allow: u32) {
+        let serial = *self.wl.heard.keys.last().expect("a key reached the panel");
+        self.authority
+            .answer(run.epoch.0, run.epoch.1, allow, serial);
+        self.sync(rig);
+    }
+
+    /// Wait until a key pressed after `before` keys reached the panel.
+    fn key_after(&mut self, rig: &mut Rig, before: usize) {
+        rig.until(&mut [&mut self.wl], "the key reaches the panel", |_, wl| {
+            wl[0].heard.keys.len() > before
+        });
+    }
+}
+
+/// A run that asks for capture, which the person has not decided for this process: the consent authority asks.
+fn asking(rig: &mut Rig, prompts: &mut Prompts) -> Run {
+    let mut run = Run::request(rig, Capability::Observe | Capability::Capture);
+    assert_eq!(run.answer(rig, 1), Ok(()), "the run asks");
+    assert_eq!(
+        run.wl.heard.phase,
+        Some(WEnum::Value(Phase::AwaitingConsent))
+    );
+    let epoch = run.epoch;
+    rig.until(&mut [&mut prompts.wl], "the panel is asked", |_, wl| {
+        wl[0].heard.asked.contains(&epoch)
+    });
+    run
+}
+
+#[test]
+fn the_consent_panel_takes_the_persons_answer_and_never_desktop_controls() {
+    let mut rig = Rig::new();
+
+    // the prompts' connection sees the consent authority, the lock screen's does not
+    let stream = shell_process_connection(
+        &rig.state.display_handle,
+        &[ShellRole::Session, ShellRole::SessionLock],
+    )
+    .unwrap();
+    let mut lock = Wl::new(Connection::from_socket(stream).unwrap());
+    rig.until(
+        &mut [&mut lock],
+        "the lock screen sees the globals",
+        |_, wl| wl[0].offers("ext_session_lock_manager_v1"),
+    );
+    assert!(
+        !lock.offers(AUTHORITY),
+        "the session lock role holds no consent authority"
+    );
+
+    let mut active = Run::start(&mut rig);
+    let mut prompts = Prompts::start(&mut rig);
+    assert!(
+        prompts.wl.offers(AUTHORITY),
+        "the consent role sees the consent authority"
+    );
+    rig.until(
+        &mut [&mut prompts.wl, &mut active.wl],
+        "the panel takes the keyboard",
+        |rig, _| {
+            let focus = rig
+                .state
+                .seat
+                .get_keyboard()
+                .and_then(|k| k.current_focus());
+            focus.is_some_and(|surface| protected_surface(&surface))
+        },
+    );
+
+    // the panel pauses no run, and an active run's input does not reach it
+    let mut run = asking(&mut rig, &mut prompts);
+    active.wl.step();
+    assert_eq!(active.wl.heard.phase, Some(WEnum::Value(Phase::Active)));
+    assert_eq!(
+        active.key(&mut rig, KeyState::Pressed),
+        Err(WEnum::Value(Refusal::Blocked))
+    );
+    let centre = (f64::from(OUTPUT.0) / 2.0, f64::from(OUTPUT.1) / 2.0);
+    assert_eq!(
+        active.motion(&mut rig, centre.0, centre.1),
+        Err(WEnum::Value(Refusal::Blocked))
+    );
+
+    // a scripted key on the panel allows nothing
+    let keys = prompts.wl.heard.keys.len();
+    rig.state.scripted_key("a").unwrap();
+    prompts.key_after(&mut rig, keys);
+    prompts.answer(&mut rig, &run, ALLOW);
+    run.wl.step();
+    assert_eq!(
+        run.wl.heard.phase,
+        Some(WEnum::Value(Phase::AwaitingConsent)),
+        "a scripted key does not allow the run"
+    );
+
+    // the person's key on the panel does
+    let keys = prompts.wl.heard.keys.len();
+    person_types(&mut rig);
+    prompts.key_after(&mut rig, keys);
+    prompts.answer(&mut rig, &run, ALLOW);
+    rig.until(
+        &mut [&mut run.wl],
+        "the person's Allow starts the run",
+        |_, wl| wl[0].heard.phase == Some(WEnum::Value(Phase::Active)),
+    );
+
+    // and refuses another
+    let mut refused = asking(&mut rig, &mut prompts);
+    let keys = prompts.wl.heard.keys.len();
+    person_types(&mut rig);
+    prompts.key_after(&mut rig, keys);
+    prompts.answer(&mut rig, &refused, DENY);
+    rig.until(
+        &mut [&mut refused.wl],
+        "the person's Don't Allow refuses the run",
+        |_, wl| wl[0].heard.phase == Some(WEnum::Value(Phase::Inactive)),
+    );
+    active.wl.step();
+    assert_eq!(active.wl.heard.phase, Some(WEnum::Value(Phase::Active)));
 }

@@ -6,7 +6,9 @@
 //! - the keyring's prompt ([`keyring`]): the keyring daemon asks it for a password or a confirmation, and the offer
 //!   to move a default keyring that login does not unlock into the login keyring asks through it;
 //! - the portal's consent questions ([`consent`]): whether an application may take a screenshot, and whether it may
-//!   use keyboard shortcuts while another application has the keyboard, asked over `org.cupertino.Prompts1`.
+//!   use keyboard shortcuts while another application has the keyboard, asked over `org.cupertino.Prompts1`;
+//! - the desktop-control consent question ([`desktop_control`]): whether an app may control or capture the desktop,
+//!   asked by the server through the consent authority the program holds with the `consent` role.
 //!
 //! The prompts are drawn through CupertinoKit ([`view`]) on the role the server gives the program: every surface of
 //! it is a prompt surface, above every other one, left out of captures and out of desktop control. A prompt shows
@@ -16,6 +18,7 @@
 #![forbid(unsafe_code)]
 
 pub mod consent;
+pub mod desktop_control;
 pub mod keyring;
 pub mod logind;
 pub mod polkit;

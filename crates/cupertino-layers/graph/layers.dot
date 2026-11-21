@@ -241,7 +241,6 @@ digraph "layers" {
   "cupertino-login" -> "cupertino-defaults";
   "cupertino-login" -> "cupertino-diagnostic-events";
   "cupertino-login" -> "cupertino-geometry";
-  "cupertino-login" -> "cupertino-icons";
   "cupertino-login" -> "cupertino-kit";
   "cupertino-login" -> "cupertino-kit" [label="dev"];
   "cupertino-login" -> "cupertino-kit-shell";
@@ -366,6 +365,7 @@ digraph "layers" {
   "cupertino-session-tests" -> "cupertino-assets" [label="dev"];
   "cupertino-session-tests" -> "cupertino-cli" [label="dev"];
   "cupertino-session-tests" -> "cupertino-controlcenter" [label="dev"];
+  "cupertino-session-tests" -> "cupertino-defaults" [label="dev"];
   "cupertino-session-tests" -> "cupertino-input" [label="dev"];
   "cupertino-session-tests" -> "cupertino-kit" [label="dev"];
   "cupertino-session-tests" -> "cupertino-kit-shell" [label="dev"];

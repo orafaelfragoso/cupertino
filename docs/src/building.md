@@ -345,7 +345,7 @@ it is not a prerequisite for Terra to operate Cupertino.
 | `cupertino-server` | The `DesktopControl` role (the role set is 16 bits wide), grants checked on every request, accepted input routed through the existing handlers, capture checked per frame, the controller's held input released when its run ends |
 | `cupertino-shell-client` | Binds the control and consent protocols for the controller and the session agent |
 | `cupertino-control` | The supervised controller: the local socket, bounded requests, capture, and the MCP stdio bridge |
-| `cupertino-login`, `cupertino-menubar`, `cupertino-settings` | The consent panel, the capture indicator, and the Privacy pages that edit `desktop-control.conf` |
+| `cupertino-prompts`, `cupertino-menubar`, `cupertino-settings` | The consent panel, the capture indicator, and the Privacy pages that edit `desktop-control.conf` |
 | Contract registry and packaging | The globals, the executable and its install path, under the trusted-path rules of the built-in processes |
 
 The public app transport stays free of private shell protocols, and the semantic wire types sit below both the server

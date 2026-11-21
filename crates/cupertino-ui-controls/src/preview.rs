@@ -17,7 +17,6 @@ use cupertino_ui_core::{
     SemanticsCx, Widget,
 };
 use cupertino_ui_text::{AttributedText, FontWeight, TextStyle};
-use std::rc::Rc;
 use std::sync::Arc;
 
 /// The pane's side insets, and the room above its content box.
@@ -154,7 +153,7 @@ fn content_box<M: 'static>(content: Content<M>, icon: f64, framed: bool) -> Elem
                     scroll,
                     (false, true),
                     crate::Scroller::Overlay,
-                    Rc::new(on_scroll),
+                    crate::scroll::sends(on_scroll),
                 )
                 .fill(),
                 true,

@@ -199,15 +199,24 @@ enum Kind {
 /// A tree's rows and the requests to open and close them, shared by its rows.
 struct Outline<M> {
     item: Box<dyn Fn(usize) -> TreeItem>,
-    on_toggle: Option<Handler<TreeToggle, M>>,
+    on_toggle: Option<Box<dyn Fn(TreeToggle) -> Option<M>>>,
 }
 
 impl<M> Outline<M> {
     fn toggle(&self, toggle: TreeToggle, cx: &mut EventCx<'_, M>) {
-        if let Some(on_toggle) = &self.on_toggle {
-            cx.emit(on_toggle(toggle));
+        if let Some(message) = self
+            .on_toggle
+            .as_ref()
+            .and_then(|on_toggle| on_toggle(toggle))
+        {
+            cx.emit(message);
         }
     }
+}
+
+/// The handler of a tree, whose handlers always give a message, as a list's handler that may give none.
+fn always<T: 'static, M: 'static>(handler: Handler<T, M>) -> Box<dyn Fn(T) -> Option<M>> {
+    Box::new(move |value| Some(handler(value)))
 }
 
 impl<M: 'static> From<ListView<M>> for Element<M> {
@@ -244,7 +253,7 @@ impl<M: 'static> ListView<M> {
             row: list.row,
             key: list.key,
             type_select: list.type_select,
-            on_select: list.on_select.map(Rc::new),
+            on_select: list.on_select.map(Rc::from),
             on_activate: list.on_activate,
             double_click_activates: list.double_click_activates,
             on_row_key: None,
@@ -260,7 +269,7 @@ impl<M: 'static> ListView<M> {
             list.scroll,
             (false, true),
             Scroller::Overlay,
-            Rc::new(list.on_scroll),
+            Rc::from(list.on_scroll),
         )
     }
 }
@@ -279,13 +288,17 @@ impl<M: 'static> From<TreeView<M>> for Element<M> {
             row: tree.row,
             key: None,
             type_select: tree.type_select,
-            on_select: tree.on_select.map(Rc::new),
-            on_activate: tree.on_activate,
+            on_select: tree
+                .on_select
+                .map(|on_select| -> Rc<dyn Fn(Selection) -> Option<M>> {
+                    Rc::new(move |selection| Some(on_select(selection)))
+                }),
+            on_activate: tree.on_activate.map(always),
             double_click_activates: tree.double_click_activates,
             on_row_key: None,
             outline: Some(Rc::new(Outline {
                 item: tree.item,
-                on_toggle: tree.on_toggle,
+                on_toggle: tree.on_toggle.map(always),
             })),
             selection_inset: SELECTION_INSET,
             selection_radius: SELECTION_RADIUS,
@@ -298,7 +311,7 @@ impl<M: 'static> From<TreeView<M>> for Element<M> {
             tree.scroll,
             (false, true),
             Scroller::Overlay,
-            Rc::new(tree.on_scroll),
+            scroll::sends(tree.on_scroll),
         )
     }
 }
@@ -380,7 +393,7 @@ fn table_element<M: 'static>(
         row,
         key,
         type_select: table.type_select,
-        on_select: table.on_select.map(Rc::new),
+        on_select: table.on_select.map(Rc::from),
         on_activate: table.on_activate,
         double_click_activates: table.double_click_activates,
         on_row_key: table.on_row_key,
@@ -399,7 +412,7 @@ fn table_element<M: 'static>(
         ringed,
         lead: table.header_top + HEADER_HEIGHT * f64::from(u8::from(table.header_top > 0.0)),
     };
-    let on_sort = table.on_sort.map(Rc::new);
+    let on_sort = table.on_sort.map(Rc::from);
     let header = Element::new(Header {
         cells: columns
             .iter()
@@ -424,7 +437,7 @@ fn table_element<M: 'static>(
         table.scroll,
         (false, true),
         Scroller::Overlay,
-        Rc::new(table.on_scroll),
+        Rc::from(table.on_scroll),
     );
     let header = if table.header_top > 0.0 {
         Element::new(RaisedHeader {
@@ -482,8 +495,8 @@ struct Rows<M> {
     row: Box<dyn Fn(usize, bool) -> Element<M>>,
     key: Option<Box<dyn Fn(usize) -> Key>>,
     type_select: Option<Box<dyn Fn(usize) -> String>>,
-    on_select: Option<Rc<Handler<Selection, M>>>,
-    on_activate: Option<Handler<usize, M>>,
+    on_select: Option<Rc<dyn Fn(Selection) -> Option<M>>>,
+    on_activate: Option<Box<dyn Fn(usize) -> Option<M>>>,
     double_click_activates: bool,
     on_row_key: Option<RowKeyHandler<M>>,
     outline: Option<Rc<Outline<M>>>,
@@ -537,7 +550,7 @@ impl<M: 'static> Rows<M> {
         Some(Rc::new(move |index| {
             let mut next = selection.clone();
             next.select_only(index);
-            (next != selection).then(|| on_select(next))
+            (next != selection).then(|| on_select(next)).flatten()
         }))
     }
 
@@ -589,8 +602,12 @@ impl<M: 'static> Rows<M> {
 
     fn select(&self, next: Selection, cx: &mut EventCx<'_, M>) {
         if next != self.selection {
-            if let Some(on_select) = &self.on_select {
-                cx.emit(on_select(next));
+            if let Some(message) = self
+                .on_select
+                .as_ref()
+                .and_then(|on_select| on_select(next))
+            {
+                cx.emit(message);
             }
         }
     }
@@ -641,7 +658,9 @@ impl<M: 'static> Rows<M> {
             RETURN | KP_ENTER if plain => {
                 return match (cursor, &self.on_activate) {
                     (Some(c), Some(on_activate)) => {
-                        cx.emit(on_activate(c));
+                        if let Some(message) = on_activate(c) {
+                            cx.emit(message);
+                        }
                         Propagation::Stop
                     }
                     _ => Propagation::Continue,
@@ -860,7 +879,9 @@ impl<M: 'static> Widget<M> for Rows<M> {
                 }
                 self.select(next, cx);
                 if let (true, Some(on_activate)) = (double, &self.on_activate) {
-                    cx.emit(on_activate(index));
+                    if let Some(message) = on_activate(index) {
+                        cx.emit(message);
+                    }
                 }
                 Propagation::Stop
             }

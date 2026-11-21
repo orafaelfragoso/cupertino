@@ -211,7 +211,7 @@ impl<M: 'static> Sidebar<M> {
             sidebar.scroll,
             (false, true),
             Scroller::Overlay,
-            Rc::new(sidebar.on_scroll),
+            crate::scroll::sends(sidebar.on_scroll),
         )
     }
 }

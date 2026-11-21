@@ -88,10 +88,9 @@ the transfers in slices.
 A view is a widget with public fields, generic over the program's message `M`, as every control is. It takes plain
 values (the items, the selection, the scroll state, a function for an item's icon and one for the field a name is
 edited in), never a model, a session or a window. The three report through one event type and one function, which
-answers `None` for an event the program has no use for: nothing is sent for it. The toolkit's table and lists the
-list and the columns are made of report `Select`, `Open`, `Sort`, `Toggle`, `Scroll` and a column's `Scroll` and
-`Pick` through handlers that must give a message, so a list's or a column view's function gives one for each of
-those.
+answers `None` for an event the program has no use for: nothing is sent for it, the toolkit's table and lists
+included, whose handlers may give no message too. Only the column view's own horizontal scroll goes through a handler
+that must give a message, so a column view's function gives one for `Scroll`.
 
 ```rust
 /// What a file view reports. The program gives each view one function that turns an event into its message, or

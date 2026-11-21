@@ -1104,10 +1104,11 @@ pub struct ListView<M> {
     pub key: Option<Box<dyn Fn(usize) -> Key>>,
     /// Row `index`'s text for typing to select; without it typing selects nothing.
     pub type_select: Option<Box<dyn Fn(usize) -> String>>,
-    pub on_scroll: Handler<ScrollState, M>,
-    pub on_select: Option<Handler<Selection, M>>,
+    /// Each handler gives the application's message for what the list reports, or `None`, which sends nothing.
+    pub on_scroll: Box<dyn Fn(ScrollState) -> Option<M>>,
+    pub on_select: Option<Box<dyn Fn(Selection) -> Option<M>>>,
     /// Return on the cursor row.
-    pub on_activate: Option<Handler<usize, M>>,
+    pub on_activate: Option<Box<dyn Fn(usize) -> Option<M>>>,
     /// A double click on a row reports `on_activate` too. Off for a list whose rows take their own presses and open
     /// on a double click themselves.
     pub double_click_activates: bool,
@@ -1182,7 +1183,8 @@ pub struct TableView<M> {
     pub label: String,
     pub columns: Vec<Column>,
     pub sort: Option<(usize, SortOrder)>,
-    pub on_sort: Option<Handler<(usize, SortOrder), M>>,
+    /// Each handler gives the application's message for what the table reports, or `None`, which sends nothing.
+    pub on_sort: Option<Box<dyn Fn((usize, SortOrder)) -> Option<M>>>,
     pub count: usize,
     pub row_height: f64,
     pub scroll: ScrollState,
@@ -1191,9 +1193,9 @@ pub struct TableView<M> {
     /// The cell of row `index` in column `column`, given as `(index, column, selected)`.
     pub cell: Box<dyn Fn(usize, usize, bool) -> Element<M>>,
     pub type_select: Option<Box<dyn Fn(usize) -> String>>,
-    pub on_scroll: Handler<ScrollState, M>,
-    pub on_select: Option<Handler<Selection, M>>,
-    pub on_activate: Option<Handler<usize, M>>,
+    pub on_scroll: Box<dyn Fn(ScrollState) -> Option<M>>,
+    pub on_select: Option<Box<dyn Fn(Selection) -> Option<M>>>,
+    pub on_activate: Option<Box<dyn Fn(usize) -> Option<M>>>,
     /// A double click on a row reports `on_activate` too. Off for a list whose rows take their own presses and open
     /// on a double click themselves.
     pub double_click_activates: bool,
@@ -1215,7 +1217,8 @@ pub struct OutlineTable<M> {
     /// Row `index`'s key, which its focus and accessible object follow while rows come and go above it; its index
     /// without one.
     pub key: Option<Box<dyn Fn(usize) -> Key>>,
-    pub on_toggle: Option<Handler<TreeToggle, M>>,
+    /// The application's message for a row to open or close, or `None`, which sends nothing.
+    pub on_toggle: Option<Box<dyn Fn(TreeToggle) -> Option<M>>>,
 }
 
 /// A row of a [`Sidebar`].

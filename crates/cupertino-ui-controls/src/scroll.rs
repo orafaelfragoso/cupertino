@@ -72,7 +72,13 @@ const SHRINK: Flex = Flex {
     ..Flex::NONE
 };
 
-pub(crate) type ScrollHandler<M> = Rc<Handler<ScrollState, M>>;
+/// What a scroll view sends for a scroll, or nothing.
+pub(crate) type ScrollHandler<M> = Rc<dyn Fn(ScrollState) -> Option<M>>;
+
+/// The scroll handler of a view whose handler always gives a message.
+pub(crate) fn sends<M: 'static>(handler: Handler<ScrollState, M>) -> ScrollHandler<M> {
+    Rc::new(move |state| Some(handler(state)))
+}
 
 impl<M: 'static> From<ScrollView<M>> for Element<M> {
     fn from(view: ScrollView<M>) -> Self {
@@ -81,7 +87,7 @@ impl<M: 'static> From<ScrollView<M>> for Element<M> {
             view.state,
             (view.horizontal, view.vertical),
             view.scroller,
-            Rc::new(view.on_scroll),
+            sends(view.on_scroll),
         )
     }
 }
@@ -389,7 +395,9 @@ impl<M: 'static> Viewport<M> {
         .clamped();
         if next.offset != state.offset {
             state.offset = next.offset;
-            cx.emit((self.on_scroll)(next));
+            if let Some(message) = (self.on_scroll)(next) {
+                cx.emit(message);
+            }
         }
     }
 
@@ -661,7 +669,9 @@ impl<M: 'static> Widget<M> for Viewport<M> {
                 }
                 if next != self.state {
                     state.offset = next.offset;
-                    cx.emit((self.on_scroll)(next));
+                    if let Some(message) = (self.on_scroll)(next) {
+                        cx.emit(message);
+                    }
                 }
             }
             Event::Reveal(offset) => {
@@ -1005,7 +1015,9 @@ impl<M: 'static> Bar<M> {
         }
         .clamped();
         if next != self.state {
-            cx.emit((self.on_scroll)(next));
+            if let Some(message) = (self.on_scroll)(next) {
+                cx.emit(message);
+            }
         }
     }
 }

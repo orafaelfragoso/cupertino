@@ -698,13 +698,12 @@ fn sidebar(d: &Dialog, places: &[Place]) -> Element<Message> {
         row: Box::new(move |i, selected| row(symbol(rows[i].0), rows[i].1.clone(), selected)),
         key: Some(Box::new(move |i| Key::from(keys[i].clone()))),
         type_select: Some(Box::new(move |i| names[i].clone())),
-        on_scroll: Box::new(move |s| Message::PlacesScroll(id, s)),
+        on_scroll: Box::new(move |s| Some(Message::PlacesScroll(id, s))),
         on_select: Some(Box::new(move |s: Selection| {
-            s.cursor()
-                .map_or(Message::Ignore, |i| Message::Place(id, i))
+            s.cursor().map(|i| Message::Place(id, i))
         })),
         double_click_activates: true,
-        on_activate: Some(Box::new(move |i| Message::Place(id, i))),
+        on_activate: Some(Box::new(move |i| Some(Message::Place(id, i)))),
     })
     .key("places");
     Element::new(Stack {
@@ -761,10 +760,10 @@ fn files(d: &Dialog, icons: &RefCell<FileIcons>) -> Element<Message> {
         }),
         key: Some(Box::new(move |i| Key::from(keys[i].clone()))),
         type_select: Some(Box::new(move |i| names[i].clone())),
-        on_scroll: Box::new(move |s| Message::Scroll(id, s)),
-        on_select: Some(Box::new(move |s| Message::Select(id, s))),
+        on_scroll: Box::new(move |s| Some(Message::Scroll(id, s))),
+        on_select: Some(Box::new(move |s| Some(Message::Select(id, s)))),
         double_click_activates: true,
-        on_activate: Some(Box::new(move |i| Message::Open(id, i))),
+        on_activate: Some(Box::new(move |i| Some(Message::Open(id, i)))),
     })
     .key("files");
     let unreadable = d.chooser.picker().unreadable().then(|| {
@@ -1084,10 +1083,10 @@ fn app_window(a: &AppPicker, app_icons: &AppIcons) -> Window<Message> {
         }),
         key: Some(Box::new(|i| Key::Int(i as u64))),
         type_select: Some(Box::new(move |i| names[i].clone())),
-        on_scroll: Box::new(move |s| Message::AppScroll(id, s)),
-        on_select: Some(Box::new(move |s| Message::AppSelect(id, s))),
+        on_scroll: Box::new(move |s| Some(Message::AppScroll(id, s))),
+        on_select: Some(Box::new(move |s| Some(Message::AppSelect(id, s)))),
         double_click_activates: true,
-        on_activate: Some(Box::new(move |_| Message::OpenWith(id))),
+        on_activate: Some(Box::new(move |_| Some(Message::OpenWith(id)))),
     })
     .key("apps");
     let target = a.ask.target.as_deref().map(shortened);

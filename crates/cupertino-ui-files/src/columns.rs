@@ -60,8 +60,7 @@ const RIGHT: Keysym = Keysym(0xff53);
 /// What a column's list reports through a handler that must give a message, which a [`FileColumns`]' `on_event`
 /// gives for each.
 const LIST_EVENTS: &str =
-    "a column view's on_event gives a message for Scroll, Select, Open and a column's Scroll and \
-                           Pick, which its lists report";
+    "a column view's on_event gives a message for Scroll, which its scroll view reports";
 
 /// The program's message for each event a view reports, or none.
 type OnEvent<M> = Rc<dyn Fn(ViewEvent) -> Option<M>>;
@@ -203,13 +202,23 @@ impl<M: Clone + 'static> From<FileColumns<M>> for Element<M> {
     }
 }
 
-/// A list's handler that reports its values as `event` through `on_event`.
+/// The scroll view's handler that reports its values as `event` through `on_event`.
 fn report<T: 'static, M: 'static>(
     on_event: &OnEvent<M>,
     event: impl Fn(T) -> ViewEvent + 'static,
 ) -> Box<dyn Fn(T) -> M> {
     let on_event = Rc::clone(on_event);
     Box::new(move |value| on_event(event(value)).expect(LIST_EVENTS))
+}
+
+/// A list's handler that reports its values as `event` through `on_event`, sending nothing where it gives no
+/// message.
+fn relay<T: 'static, M: 'static>(
+    on_event: &OnEvent<M>,
+    event: impl Fn(T) -> ViewEvent + 'static,
+) -> Box<dyn Fn(T) -> Option<M>> {
+    let on_event = Rc::clone(on_event);
+    Box::new(move |value| on_event(event(value)))
 }
 
 /// Hand `event` to the program through `on_event`, as its message if it has one for it.
@@ -299,12 +308,12 @@ fn active_column<M: Clone + 'static>(
         }),
         key: Some(Box::new(move |row| row_key(id, &keys[row].path))),
         type_select: Some(Box::new(move |row| names[row].clone())),
-        on_scroll: report(on_event, move |s| {
+        on_scroll: relay(on_event, move |s| {
             ViewEvent::Column(ColumnEvent::Scroll(folder.clone(), s))
         }),
-        on_select: Some(report(on_event, ViewEvent::Select)),
+        on_select: Some(relay(on_event, ViewEvent::Select)),
         double_click_activates: false,
-        on_activate: Some(report(on_event, ViewEvent::Open)),
+        on_activate: Some(relay(on_event, ViewEvent::Open)),
     };
     Element::new(ColumnKeys {
         children: vec![list
@@ -371,10 +380,10 @@ fn other_column<M: Clone + 'static>(
         }),
         key: Some(Box::new(move |row| row_key(id, &keys[row].path))),
         type_select: Some(Box::new(move |row| names[row].clone())),
-        on_scroll: report(on_event, move |s| {
+        on_scroll: relay(on_event, move |s| {
             ViewEvent::Column(ColumnEvent::Scroll(scrolled.clone(), s))
         }),
-        on_select: Some(report(on_event, move |s: Selection| {
+        on_select: Some(relay(on_event, move |s: Selection| {
             ViewEvent::Column(ColumnEvent::Pick {
                 folder: picked.clone(),
                 index: s.cursor().unwrap_or(0),

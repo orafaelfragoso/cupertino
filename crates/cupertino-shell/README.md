@@ -36,7 +36,9 @@ host again whatever its status (D16).
 
 A component's end wakes the host at once (`Host::wait`); nothing is polled.
 
-The watchdog (D17, `watchdog`) reads each component's loop every 0.5 s and reports, after a start-up grace of 10 s:
+The watchdog (D17, `watchdog`) reads each component's loop and the render thread every 0.5 s while one is out of its
+wait or left it since the check before; while every loop waits the host sleeps until a loop leaves its wait, which
+wakes it (`Host::watch`). It reports, after a start-up grace of 10 s:
 `busy` once the loop has been out of its wait for 0.5 s, `unresponsive` at 2 s, `responsive` when it is back, and at
 10 s `lost`: the host shuts the component's sockets down first, keeps its thread (a thread cannot be ended), and a
 shared host asks the server to start it again (`request_restart`), while a separate host exits at once. A render

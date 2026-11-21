@@ -263,7 +263,8 @@ fn a_components_end_wakes_its_hosts_wait() {
     let mut osd = runtime.start(&PANICKING, connection).unwrap();
     // the server says nothing more: only the component's end ends a wait before its time
     let ended = loop {
-        host.wait(PATIENCE).expect("the host's connection stays up");
+        host.wait(Some(PATIENCE))
+            .expect("the host's connection stays up");
         if let Some(ended) = osd.ended() {
             break ended;
         }
@@ -357,7 +358,7 @@ fn a_host_hears_an_error_when_its_server_connection_closes() {
     server.close_host();
     let deadline = Instant::now() + PATIENCE;
     loop {
-        match host.wait(Duration::from_millis(50)) {
+        match host.wait(Some(Duration::from_millis(50))) {
             Err(_) => break,
             Ok(_) => assert!(
                 Instant::now() < deadline,
@@ -366,5 +367,5 @@ fn a_host_hears_an_error_when_its_server_connection_closes() {
         }
     }
     // and again: the connection stays closed, never an empty success
-    assert!(host.wait(Duration::from_millis(50)).is_err());
+    assert!(host.wait(Some(Duration::from_millis(50))).is_err());
 }

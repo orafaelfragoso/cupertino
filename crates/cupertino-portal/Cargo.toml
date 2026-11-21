@@ -3,29 +3,26 @@ name = "cupertino-portal"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
-description = "xdg-desktop-portal backend of the session: the appearance settings, the file chooser, the app chooser, screen sharing and screenshots applications reach through the portal"
+description = "xdg-desktop-portal backend of the session, with no interface of its own: the appearance settings, screen sharing (its PipeWire streams) and screenshots, and the file chooser, app chooser and consent questions it asks the shell's dialogs and prompts for"
 [package.metadata.cupertino]
-layer = "shell"
+layer = "services"
 
 [dependencies]
 cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events" }
 async-channel = "2"
 async-io = "2"
 cupertino-apps = { path = "../cupertino-apps" }
-cupertino-assets = { path = "../cupertino-assets" }
 cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-geometry = { path = "../cupertino-geometry" }
-cupertino-icons = { path = "../cupertino-icons" }
-cupertino-kit = { path = "../cupertino-kit" }
 cupertino-peer = { path = "../cupertino-peer" }
 cupertino-protocols = { path = "../cupertino-protocols", features = ["client"] }
-cupertino-screencast = { path = "../cupertino-screencast" }
-cupertino-ui-wayland = { path = "../cupertino-ui-wayland" }
+cupertino-trash = { path = "../cupertino-trash" }
 cupertino-wayland-client = { path = "../cupertino-wayland-client" }
 futures-lite = "2"
 xkbcommon = { version = "0.8", default-features = false }
-mime_guess = "2"
 percent-encoding = "2"
+# 0.3.34 adds pw_stream_trigger_process, which drives the graph after a frame is queued
+pipewire = { version = "0.10.1", features = ["v0_3_34"] }
 rustix = { version = "1", features = ["fs", "time"] }
 tiny-skia = "0.12"
 wayland-client = "0.31"

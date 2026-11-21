@@ -1,8 +1,6 @@
 // cupertino-layers --graph
-// 79 crates, 394 internal dependencies
-// per layer: foundation 5, graphics 2, models 6, system 8, platform 5, protocol 3, transport 2, render 3, ui 9, shellkit 1, core 4, services 6, shell 16, apps 2, tools 6, testing 1
-// forbidden normal edge cupertino-portal (shell) -> cupertino-screencast (platform)
-// forbidden normal edge cupertino-portal (shell) -> cupertino-wayland-client (transport)
+// 78 crates, 390 internal dependencies
+// per layer: foundation 5, graphics 2, models 6, system 8, platform 4, protocol 3, transport 2, render 3, ui 9, shellkit 1, core 4, services 7, shell 15, apps 2, tools 6, testing 1
 // forbidden normal edge cupertino-settings (apps) -> cupertino-wayland-client (transport)
 digraph "layers" {
   node [shape=box];
@@ -40,11 +38,10 @@ digraph "layers" {
     "cupertino-trash";
   }
   subgraph "cluster_platform" {
-    label="platform (5)";
+    label="platform (4)";
     "cupertino-alsa";
     "cupertino-devices";
     "cupertino-pipewire";
-    "cupertino-screencast";
     "cupertino-seat";
   }
   subgraph "cluster_protocol" {
@@ -88,16 +85,17 @@ digraph "layers" {
     "cupertino-server-render";
   }
   subgraph "cluster_services" {
-    label="services (6)";
+    label="services (7)";
     "cupertino-audiod";
     "cupertino-btd";
     "cupertino-control";
     "cupertino-netd";
+    "cupertino-portal";
     "cupertino-powerd";
     "cupertino-sessiond";
   }
   subgraph "cluster_shell" {
-    label="shell (16)";
+    label="shell (15)";
     "cupertino-controlcenter";
     "cupertino-dock";
     "cupertino-launcher";
@@ -105,7 +103,6 @@ digraph "layers" {
     "cupertino-menubar";
     "cupertino-notifications";
     "cupertino-osd";
-    "cupertino-portal";
     "cupertino-prompts";
     "cupertino-screenshot";
     "cupertino-shell";
@@ -276,17 +273,13 @@ digraph "layers" {
   "cupertino-osd" -> "cupertino-kit" [label="dev"];
   "cupertino-osd" -> "cupertino-kit-shell";
   "cupertino-portal" -> "cupertino-apps";
-  "cupertino-portal" -> "cupertino-assets";
   "cupertino-portal" -> "cupertino-defaults";
   "cupertino-portal" -> "cupertino-diagnostic-events";
   "cupertino-portal" -> "cupertino-geometry";
-  "cupertino-portal" -> "cupertino-icons";
-  "cupertino-portal" -> "cupertino-kit";
   "cupertino-portal" -> "cupertino-peer";
   "cupertino-portal" -> "cupertino-protocols";
-  "cupertino-portal" -> "cupertino-screencast" [color=red];
-  "cupertino-portal" -> "cupertino-ui-wayland";
-  "cupertino-portal" -> "cupertino-wayland-client" [color=red];
+  "cupertino-portal" -> "cupertino-trash";
+  "cupertino-portal" -> "cupertino-wayland-client";
   "cupertino-powerd" -> "cupertino-devices";
   "cupertino-powerd" -> "cupertino-diagnostic-events";
   "cupertino-powerd" -> "cupertino-seat";

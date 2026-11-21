@@ -564,16 +564,30 @@ pub struct LocalTime {
 }
 
 impl LocalTime {
-    /// The local wall-clock time now (`kit::time`).
+    /// The local wall-clock time now, as the C library's time zone gives it.
     pub fn now() -> io::Result<LocalTime> {
-        let now = cupertino_kit::time::now().ok_or_else(io::Error::last_os_error)?;
-        Ok(LocalTime {
-            year: now.year,
-            month: u32::from(now.month),
-            day: u32::from(now.day),
-            hour: u32::from(now.hour),
-            minute: u32::from(now.minute),
-            second: u32::from(now.second),
+        let unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(io::Error::other)?;
+        let unix = i64::try_from(unix.as_secs()).map_err(io::Error::other)?;
+        LocalTime::parse(&cupertino_trash::format_local_time(unix))
+            .ok_or_else(|| io::Error::other("the local time cannot be read"))
+    }
+
+    /// The time `YYYY-MM-DDThh:mm:ss` names.
+    pub fn parse(text: &str) -> Option<LocalTime> {
+        let (date, time) = text.split_once('T')?;
+        let mut date = date.splitn(3, '-');
+        let mut time = time.splitn(3, ':');
+        let next = |part: &mut std::str::SplitN<'_, char>| part.next()?.parse::<u32>().ok();
+        let year = i32::try_from(next(&mut date)?).ok()?;
+        Some(LocalTime {
+            year,
+            month: next(&mut date)?,
+            day: next(&mut date)?,
+            hour: next(&mut time)?,
+            minute: next(&mut time)?,
+            second: next(&mut time)?,
         })
     }
 

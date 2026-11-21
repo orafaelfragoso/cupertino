@@ -1017,7 +1017,7 @@
   scope: shell-private
   source: crates/cupertino-portal/src/file_chooser.rs
   source_match: "org.freedesktop.impl.portal.FileChooser"
-  note: only the xdg-desktop-portal frontend calls
+  note: only the xdg-desktop-portal frontend calls; the dialog is the shell's, asked over org.cupertino.Dialogs1.ChooseFile
 - name: org.freedesktop.impl.portal.Request
   kind: dbus-interface
   version: n/a
@@ -1061,7 +1061,7 @@
   scope: shell-private
   source: crates/cupertino-portal/src/app_chooser.rs
   source_match: "org.freedesktop.impl.portal.AppChooser"
-  note: only the xdg-desktop-portal frontend calls
+  note: only the xdg-desktop-portal frontend calls; the dialog is the shell's, asked over org.cupertino.Dialogs1.ChooseApplication
 - name: org.freedesktop.impl.portal.Screenshot
   kind: dbus-interface
   version: n/a

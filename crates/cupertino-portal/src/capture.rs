@@ -14,7 +14,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use cupertino_geometry::OutputTransform as Transform;
-use cupertino_screencast::{BufferId, Format, Frame, Notice, Offer, Pixel, Region, Screencast, Size, State, StreamId};
+use crate::screencast::{BufferId, Format, Frame, Notice, Offer, Pixel, Region, Screencast, Size, State, StreamId};
 use cupertino_wayland_client::{Connection, Event, OutputId, OutputInfo, OutputTransform, State as Wayland, Waker};
 use rustix::fs::{memfd_create, MemfdFlags};
 use tiny_skia::Pixmap;

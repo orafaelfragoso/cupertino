@@ -11,7 +11,7 @@ use cupertino_defaults::screen_sharing::ScreenSharingConf;
 use cupertino_diagnostic_events as diag;
 use cupertino_portal::app_chooser::AppChooser;
 use cupertino_portal::capture::Capture;
-use cupertino_portal::dialog::{inbox, Dialogs};
+use cupertino_portal::dialogs::Dialogs;
 use cupertino_portal::file_chooser::FileChooser;
 use cupertino_portal::global_shortcuts::GlobalShortcuts;
 use cupertino_portal::prompts::Prompts;
@@ -50,15 +50,6 @@ fn fold(mut appearance: Appearance, events: &[Event]) -> Appearance {
     appearance
 }
 
-/// The file-chooser and app-chooser windows; a dialog that cannot be shown ends the process.
-fn dialogs() {
-    if let Err(e) = cupertino_kit::app::run::<Dialogs>() {
-        eprintln!("cupertino-portal: {e}");
-        diag::exit_error(&e);
-    }
-    std::process::exit(1);
-}
-
 fn run() -> Result<()> {
     let mut conn = Connection::connect()?;
     let effects = AppEffects::bind(&mut conn).ok_or("the server lacks cupertino_app_effects_v1")?;
@@ -85,8 +76,10 @@ fn run() -> Result<()> {
         capture.update(&conn, &first);
     }
     let bus = zbus::blocking::Connection::session()?;
-    // the consent questions are the prompts': asked on the session bus connection, each a task of its executor
+    // the consent questions are the prompts' and the choosers the shell's dialogs': asked on the session bus
+    // connection, each a task of its executor
     let prompts = Prompts::new(bus.inner().clone());
+    let dialogs = Dialogs::new(bus.inner().clone());
     let settings = Service::serve(&bus, appearance)?;
     let toolkits = toolkits::Writer::start(
         cupertino_defaults::config_home(),
@@ -94,13 +87,17 @@ fn run() -> Result<()> {
         || std::process::Command::new("gsettings"),
     )?;
     toolkits.apply(ToolkitSettings::from(appearance));
-    bus.object_server()
-        .at(PORTAL_PATH, FileChooser::new(|event| inbox().push(event)))?;
+    let files = dialogs.clone();
     bus.object_server().at(
         PORTAL_PATH,
-        AppChooser::new(cupertino_apps::entry::xdg_application_dirs(), |event| {
-            inbox().push(event)
-        }),
+        FileChooser::new(move |event| files.file(event)),
+    )?;
+    bus.object_server().at(
+        PORTAL_PATH,
+        AppChooser::new(
+            cupertino_apps::entry::xdg_application_dirs(),
+            move |event| dialogs.app(event),
+        ),
     )?;
     if let Some(capture) = &capture {
         let sources = capture.sources();
@@ -150,9 +147,6 @@ fn run() -> Result<()> {
     if let (Some(keys), Some(handle)) = (&mut shortcut_keys, &shortcuts) {
         keys.update(&first, handle, &bus);
     }
-    std::thread::Builder::new()
-        .name("dialogs".to_owned())
-        .spawn(dialogs)?;
     bus.request_name(BUS_NAME)?;
     loop {
         let events = conn.wait(capture.as_ref().and_then(Capture::timeout))?;

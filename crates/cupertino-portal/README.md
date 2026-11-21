@@ -4,6 +4,12 @@ The session's xdg-desktop-portal backend. Applications ask xdg-desktop-portal, a
 backend for the interfaces `data/cupertino.portal` lists: Settings, FileChooser, ScreenCast, AppChooser, Screenshot and GlobalShortcuts. The server sets `XDG_CURRENT_DESKTOP=Cupertino`, so
 xdg-desktop-portal reads `cupertino-portals.conf` to pick the backend for each interface.
 
+The portal is a service (layer `services`): it draws nothing. The file chooser and the app chooser are the shell's
+dialogs (the `dialogs` component of `cupertino-shell`, `cupertino-shell-dialogs`), the consent questions the
+session's prompts (`cupertino-prompts`), and the colour picker and the screen-sharing chooser the screenshot program's
+(`cupertino-screenshot`); the portal asks each over a private bus interface that only it may call. The PipeWire
+streams of screen sharing are its own module (`screencast`).
+
 ## Running
 
 The crate builds the `cupertino-portal` binary. The server starts and supervises it from its installed path. It
@@ -47,28 +53,31 @@ its own, at the start and after every change.
 
 ## File chooser
 
-`org.freedesktop.impl.portal.FileChooser` answers `OpenFile`, `SaveFile` and `SaveFiles` with a window drawn with
-CupertinoKit: a sidebar of the home folder and the user directories, the open folder's list, and a bottom bar with the
-filters, the choices, Cancel and the action button. A save adds a Save As field and asks before it replaces a file.
-Each row wears the icon of its type from the asset packs and the host icon theme, typed by name with the session's MIME
-database, as in Files (`cupertino_kit::file_icons`); the rows show no thumbnails and no special folder icons.
+`org.freedesktop.impl.portal.FileChooser` answers `OpenFile`, `SaveFile` and `SaveFiles` with the shell's file
+chooser: the portal checks the call, then asks the dialogs component (`org.cupertino.Dialogs1.ChooseFile`, which only
+the portal may call; `src/dialogs.rs`) and answers with what the person chose. The dialog is the file family's open and
+save panel: a sidebar of the home folder and the user directories, the open folder's list with the family's item icons,
+and a bottom bar with the filters, the choices, Cancel and the action button; a save adds a Save As field and asks before
+it replaces a file (`crates/cupertino-shell-dialogs/README.md`).
 
 - Only the owner of `org.freedesktop.portal.Desktop` may call it or close a request; any other caller gets
   `AccessDenied`. Options are checked before a window shows: a wrong type, a relative folder, a `current_name` with a
   `/`, an unknown filter kind, a filter pattern over 256 bytes or a string or list over its bound is `InvalidArgs`. At
   most 16 dialogs are open at once, 4 for one app id.
-- Glob filters match without regard to case, in at most pattern × name steps; MIME filters match by extension. Folders
-  always show. The filter runs once for each listing, not on each redraw.
+- The dialogs bound every value again. Glob filters match without regard to case, in at most pattern × name steps;
+  MIME filters match by extension. Folders always show. The filter runs once for each listing, not on each redraw.
 - The title, the action label, filter names and choice labels lose control and bidirectional-override characters.
 - The answer is `0` with `uris` (`file://`, escaped), `choices` and `current_filter`; Cancel or closing the window is
-  `1`; `Close` on the request takes the window down and answers `2`.
-- A `parent_window` of `wayland:<handle>` makes the dialog a child of that window (xdg-foreign-unstable-v2, `wayland_parent`). An `x11:` window, an empty one, or a handle the server does not know leaves the dialog a window of its own, centred.
-- A folder is read on a thread of its own, so one on a hung mount leaves the window responsive.
+  `1`; `Close` on the request takes the dialog down (`Dialogs1.Close`) and answers `2`, as does a dialog that ends
+  without an answer (the dialogs component restarted) or a call to the dialogs that fails.
+- A `parent_window` of `wayland:<handle>` makes the dialog a child of that window (xdg-foreign-unstable-v2). An `x11:` window, an empty one, or a handle the server does not know leaves the dialog a window of its own.
+- The dialogs read every folder as a task, so one on a hung mount leaves the window responsive.
 
 ## Screen cast
 
 `org.freedesktop.impl.portal.ScreenCast` version 5 shares one display or one window with an application as a PipeWire
-video stream (`cupertino-screencast`). It is served only when the server offers the image capture globals
+video stream (the `screencast` module: one PipeWire source node for each share, which the consumer connects to by its
+node id; the portal is the only program that links libpipewire). It is served only when the server offers the image capture globals
 (ext-image-copy-capture-v1, ext-output-image-capture-source-v1, ext-foreign-toplevel-image-capture-source-v1 and
 ext-foreign-toplevel-list-v1).
 
@@ -139,17 +148,58 @@ and no audio. A display is remembered by its connector name, so a different scre
 too. The app id of an app outside a sandbox is what the frontend reads from its systemd unit; such an app runs as the
 person and could edit `screen-sharing.conf` itself, so a grant protects against sandboxed apps only.
 
+### The PipeWire streams (`screencast`)
+
+One PipeWire video source stream for each share, which a consumer such as a browser connects to by its node id; the
+portal is the only program that links libpipewire.
+
+| Item | Contents |
+|---|---|
+| `Screencast` | the connection to the user's PipeWire, served by a thread of its own: `connect(notices)`, `open(stream, name, offer)`, `resize(stream, size)`, `dequeue(stream)`, `queue(stream, buffer, frame)`, `close(stream)`, `is_connected()`; dropping it closes every stream |
+| `Notice` | what the thread reports: `Node` (the node id), `State`, `Added` (a buffer and its memfd), `Removed`, `Dequeued` (a buffer to fill, or none) |
+| `State` | `Connecting`, `Negotiated(Format)`, `Streaming(Format)`, `Closed(reason)` |
+| `Offer` | the source size and the pixel layouts it can be captured in, in order of preference |
+| `Format` | the fixed `width`, `height`, `pixel` (`Bgrx` or `Bgra`) and `framerate`; `stride()`, `frame_len()` |
+| `Frame` | the damage of a filled buffer and its timestamp on `CLOCK_MONOTONIC` |
+| `format::negotiate` | the format a consumer's fixed `Format` param means for an offer, or the `Mismatch` |
+
+#### How it works
+
+- `connect` starts the thread `pipewire`, which runs the PipeWire main loop; commands reach it over a
+  `pipewire::channel`, and `notices` runs on it, so the owner hands them on without blocking. The connection goes to
+  the PipeWire that `PIPEWIRE_REMOTE` or the runtime directory names.
+- Each stream is an output that drives the graph (`DRIVER`) and allocates its own buffers (`ALLOC_BUFFERS`). It offers
+  the source size in each layout of the offer, a variable framerate up to 60 with 30 as the default, and takes the
+  maximum framerate the consumer fixes.
+- A fixed format sets the buffer params: 4 buffers (2 to 8) of one memfd each, with a header meta (the timestamp and
+  a sequence number) and a damage meta of up to 16 rectangles. Each memfd is announced as `Added` with a duplicate fd,
+  so the owner writes frames into it directly.
+- The owner asks for a buffer with `dequeue`, writes the frame at offset 0 and the format's stride, and hands it back
+  with `queue`. The damage is cut to the frame; more rectangles than fit become the whole frame. Each queue triggers one
+  cycle of the graph.
+- `resize` drops the buffers, offers the new size and waits for the consumer to fix a format again. Buffers that
+  PipeWire still adds for the old format get memfds of that format.
+- PipeWire going away reports every stream `Closed` and ends the thread.
+
+#### Known limitations
+
+- Shared memory only: no dmabuf buffers, so every frame is copied once into the memfd.
+- No cursor metadata: the cursor is either painted into the frame or left out.
+- Video only, no audio.
+- A frame is at most `i32::MAX` bytes, the largest `wl_shm` pool (`Size::shareable`): the portal ends the share of a
+  larger source.
+
 ## App chooser
 
 `org.freedesktop.impl.portal.AppChooser` version 2 asks which app opens a link or a file when xdg-desktop-portal's
 OpenURI needs the person to pick or confirm one. The window is the consent: nothing opens unless they choose an app.
 
-- `ChooseApplication` shows a window, "Open “<file name or URI>” with:", that lists the `choices` by the name of their
-  desktop entry (`<id>.desktop` in `$XDG_DATA_HOME/applications` and each `XDG_DATA_DIRS` entry); an id with no
-  installed entry shows as the id. Each row shows the entry's `Icon=` as `cupertino-icons` resolves an application's
-  icon (the session's `application.` icons, then the `hicolor` theme and the pixmaps of each data directory); an entry
-  with no icon, an icon that does not resolve, or an `Icon=` with a `/` or a control character shows the applications
-  symbol. `last_choice` opens selected when it is one of `choices`. Open is the default button: Return opens the
+- `ChooseApplication` asks the dialogs component (`org.cupertino.Dialogs1.ChooseApplication`, `src/dialogs.rs`)
+  for a window, "Open “<file name or URI>” with:", that lists the `choices` by the name of their desktop entry
+  (`<id>.desktop` in `$XDG_DATA_HOME/applications` and each `XDG_DATA_DIRS` entry), which the portal reads; an id with
+  no installed entry shows as the id. Each row shows the entry's `Icon=` as Kit resolves an application's icon; an
+  entry with no icon, an icon that does not resolve, or an `Icon=` with a `/` or a control character shows the
+  applications symbol. `last_choice` opens selected when it is one of `choices`. Open is the default button: Return opens the
   selected app, and Escape cancels. Unlike the screen-sharing window and the screenshot alert it has no arming delay and opens
   with the focus in the list, on the selected app: it hands the app nothing of the person's (no pixels, no files),
   only which installed app opens what the app already named, so the arrows and Return work at once.
@@ -159,7 +209,7 @@ OpenURI needs the person to pick or confirm one. The window is the consent: noth
   has no `activation_token`. Cancel or closing the window is `1`; `Close` on the request takes the window down and
   answers `2`; neither carries a token. An answer that is not one of the choices offered at that moment is `2` with
   no `choice`.
-- `UpdateChoices` replaces the list of the open window at `handle`; the selection stays on its app while that app is
+- `UpdateChoices` replaces the list of the open window at `handle` (`Dialogs1.UpdateChoices`); the selection stays on its app while that app is
   still offered. Any other handle is `InvalidArgs`.
 - The same callers and bounds as the file chooser apply: only the frontend calls, at most 16 windows and 4 for one app
   id, at most 256 choices, an id with a `/` or a control character is refused, and shown text loses control and

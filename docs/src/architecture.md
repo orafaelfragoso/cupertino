@@ -23,7 +23,7 @@ A crash in a shell process never takes the desktop down.
 | `cupertino-sessiond` | the root-owned half of login: the login screen's socket, PAM in a worker per attempt, logind sessions and virtual terminals, fast user switching, power, auto login |
 | `cupertino-screenshot` | screen, window and selection capture, toolbar, floating thumbnail; with `--serve`, started for the portal, the colour picker and the screen-sharing chooser (`org.cupertino.Screenshot1`) |
 | `cupertino-prompts` | the session's prompts, always running: the polkit authentication agent's prompt and the keyring's password prompt |
-| `cupertino-portal` | the xdg-desktop-portal backend: file chooser, screen sharing, screenshots and colour picking (the choosing and picking in `cupertino-screenshot`), app chooser, appearance settings |
+| `cupertino-portal` | the xdg-desktop-portal backend, with no interface of its own: screen sharing (its PipeWire streams), screenshots and colour picking (the choosing and picking in `cupertino-screenshot`), the file chooser and the app chooser (the dialogs in the shell's `dialogs` component), appearance settings |
 | `cupertino-control` | desktop control for local agents: output-scoped observation, capture, pointer and keyboard runs, each with the person's consent per app, and its MCP stdio bridge (`--mcp`) |
 | `cupertino-files` | the file manager |
 | `cupertino-settings` | the settings app |
@@ -59,15 +59,15 @@ as dev-dependencies, and only dev-dependencies point at a `testing` crate. The c
 | `graphics` (the one definition of the drawing maths, and the GPU device) | `cupertino-gpu`, `cupertino-raster-math` | `foundation`, `graphics` |
 | `models` (desktop policy as pure logic) | `cupertino-control-model`, `cupertino-displays`, `cupertino-effects`, `cupertino-input`, `cupertino-scene`, `cupertino-wm` | `foundation`, `models` |
 | `system` (user-space operating-system access) | `cupertino-apps`, `cupertino-assets`, `cupertino-defaults`, `cupertino-diagnostic-events`, `cupertino-icons`, `cupertino-peer`, `cupertino-radios`, `cupertino-trash` | `foundation`, `system` |
-| `platform` (kernel interfaces that more than one program needs) | `cupertino-alsa`, `cupertino-devices`, `cupertino-pipewire`, `cupertino-screencast`, `cupertino-seat` | `foundation`, `platform` |
+| `platform` (kernel interfaces that more than one program needs) | `cupertino-alsa`, `cupertino-devices`, `cupertino-pipewire`, `cupertino-seat` | `foundation`, `platform` |
 | `protocol` (wire schemas) | `cupertino-app-protocols`, `cupertino-login-ipc`, `cupertino-protocols` | `foundation`, `protocol` |
 | `transport` (client connections without widgets) | `cupertino-shell-client`, `cupertino-wayland-client` | `foundation`, `system`, `platform`, `protocol`, `transport` |
 | `render` (the compositor's own drawing) | `cupertino-cursor`, `cupertino-decorations`, `cupertino-glass` | `foundation`, `graphics`, `system`, `platform`, `render` |
 | `ui` (the toolkit) | `cupertino-kit`, `cupertino-ui-abi`, `cupertino-ui-controls`, `cupertino-ui-core`, `cupertino-ui-files`, `cupertino-ui-render`, `cupertino-ui-test`, `cupertino-ui-text`, `cupertino-ui-wayland` | `foundation`, `graphics`, `system`, `protocol`, `transport`, `ui` |
 | `shellkit` (the shell's extension of the toolkit) | `cupertino-kit-shell` | `foundation`, `system`, `protocol`, `transport`, `ui` |
 | `core` (the compositor) | `cupertino-server`, `cupertino-server-backend`, `cupertino-server-input`, `cupertino-server-render` | `foundation`, `graphics`, `models`, `system`, `platform`, `protocol`, `render`, `core` |
-| `services` (processes with no interface of their own) | `cupertino-audiod`, `cupertino-btd`, `cupertino-control`, `cupertino-netd`, `cupertino-powerd`, `cupertino-sessiond` | `foundation`, `models`, `system`, `platform`, `protocol`, `transport`, `services` |
-| `shell` | `cupertino-controlcenter`, `cupertino-dock`, `cupertino-launcher`, `cupertino-login`, `cupertino-menubar`, `cupertino-notifications`, `cupertino-osd`, `cupertino-portal`, `cupertino-prompts`, `cupertino-screenshot`, `cupertino-shell`, `cupertino-shell-agent`, `cupertino-shell-desktop`, `cupertino-shell-dialogs`, `cupertino-shell-overview`, `cupertino-windowmanager` | `foundation`, `models`, `system`, `protocol`, `ui`, `shellkit`, `shell` |
+| `services` (processes with no interface of their own) | `cupertino-audiod`, `cupertino-btd`, `cupertino-control`, `cupertino-netd`, `cupertino-portal`, `cupertino-powerd`, `cupertino-sessiond` | `foundation`, `models`, `system`, `platform`, `protocol`, `transport`, `services` |
+| `shell` | `cupertino-controlcenter`, `cupertino-dock`, `cupertino-launcher`, `cupertino-login`, `cupertino-menubar`, `cupertino-notifications`, `cupertino-osd`, `cupertino-prompts`, `cupertino-screenshot`, `cupertino-shell`, `cupertino-shell-agent`, `cupertino-shell-desktop`, `cupertino-shell-dialogs`, `cupertino-shell-overview`, `cupertino-windowmanager` | `foundation`, `models`, `system`, `protocol`, `ui`, `shellkit`, `shell` |
 | `apps` | `cupertino-files`, `cupertino-settings` | `foundation`, `models`, `system`, `protocol`, `ui` |
 | `tools` | `cupertino-cli`, `cupertino-diagnostics`, `cupertino-gpu-shaders`, `cupertino-gpu-slice`, `cupertino-layers`, `xtask` | every layer except `core`, `shell`, `services`, `apps`, `testing` |
 | `testing` (test harnesses, tests that start programs from more than one crate) | `cupertino-session-tests` | every layer |

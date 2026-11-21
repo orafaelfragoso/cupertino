@@ -1,6 +1,9 @@
-//! PipeWire video source streams for screen sharing. See the README.
+//! PipeWire video source streams for screen sharing: one stream for each share, which a consumer such as a browser
+//! connects to by its node id. The portal is the only program that links libpipewire. See the README.
 
 pub mod format;
+// the PipeWire buffers are raw pointers the stream hands out and takes back
+#[allow(unsafe_code)]
 mod node;
 
 use std::fmt;

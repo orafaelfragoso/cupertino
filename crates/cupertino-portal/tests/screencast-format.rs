@@ -1,6 +1,6 @@
 //! Offers, negotiation and the params a stream publishes, without a PipeWire daemon.
 
-use cupertino_screencast::format::{
+use cupertino_portal::screencast::format::{
     buffers, enum_format, metas, negotiate, Fixed, Format, Mismatch, Offer, Pixel, Rate, Size,
     DAMAGE_REGIONS, DEFAULT_RATE, MAX_RATE,
 };

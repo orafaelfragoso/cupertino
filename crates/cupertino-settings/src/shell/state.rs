@@ -197,6 +197,8 @@ pub struct State {
     pub(super) audio: super::audio::Audio,
     /// The input level meter, while the Sound pane shows the input.
     pub(crate) meter: Option<Meter>,
+    /// Counts the meters started: the task that reads one clears the meter only while it is still the one it read.
+    pub(crate) meter_generation: u64,
     /// Whether a reading of the shown pane is on its way, and whether another was asked for meanwhile.
     pub(crate) reading: bool,
     pub(crate) read_again: bool,
@@ -327,6 +329,7 @@ impl State {
             refreshed: f64::NEG_INFINITY,
             audio: Default::default(),
             meter: None,
+            meter_generation: 0,
             reading: false,
             read_again: false,
             agent_wanted: false,

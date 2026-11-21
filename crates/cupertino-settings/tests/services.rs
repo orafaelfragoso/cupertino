@@ -1,6 +1,7 @@
 //! The services Settings reads and changes through the server, on a private bus with stand-ins of the server's
 //! interfaces: the displays of `org.cupertino.Displays1` (D14) and the appearance and accessibility of
-//! `org.cupertino.Session1` (D13), what a refusal tells the pane's row, and a server that is not on the bus.
+//! `org.cupertino.Session1` (D13), what a refusal tells the pane's row, and a server that is not on the bus, which
+//! Settings starts without.
 #![allow(
     clippy::disallowed_methods,
     reason = "a test drives its private bus and stand-ins from its own thread"
@@ -11,12 +12,14 @@ use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 
+use cupertino_defaults::dock::default_tile_size;
 use cupertino_settings::live::{Monitor, Reading};
 use cupertino_settings::panes::Call;
 use cupertino_settings::services::{
     monitors, Bus, DisplayRecord, Services, DISPLAYS_NAME, DISPLAYS_PATH, SESSION_NAME,
     SESSION_PATH,
 };
+use cupertino_settings::settings::{dock_display_height, Paths, Settings, DEFAULT_DISPLAY_HEIGHT};
 use zbus::blocking::connection::Builder;
 use zbus::fdo;
 
@@ -290,6 +293,23 @@ fn displays_are_read_from_displays1_and_unavailable_without_the_server() {
         empty.services().displays(),
         Reading::Unavailable("The display server does not answer".into())
     );
+}
+
+#[test]
+fn settings_start_without_displays1_with_the_docks_tile_size_for_the_usual_display() {
+    // (the server is on the bus, the height the Dock's default tile size is for)
+    for (server, height) in [(true, 900.0), (false, DEFAULT_DISPLAY_HEIGHT)] {
+        let fixture = Fixture::new(server);
+        let displays = fixture.services().displays();
+        assert_eq!(dock_display_height(&displays), height, "server {server}");
+        let settings = Settings::load(&Paths::default(), dock_display_height(&displays))
+            .expect("settings load without files");
+        assert_eq!(
+            settings.tile_size(),
+            default_tile_size(height),
+            "server {server}"
+        );
+    }
 }
 
 #[test]

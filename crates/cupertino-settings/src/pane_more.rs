@@ -563,7 +563,7 @@ pub fn refresh_row(index: usize, m: &Monitor) -> Option<Row> {
                 .collect(),
             selected,
         },
-        Backend::Service("zwlr_output_manager_v1"),
+        Backend::Service("SetRefreshRate"),
     ))
 }
 
@@ -603,7 +603,7 @@ pub fn arrange_row(index: usize, monitors: &[Monitor]) -> Option<Row> {
         ControlId::More(More::Arrange(index)),
         "Position",
         Control::Popup { choices, selected },
-        Backend::Service("zwlr_output_manager_v1"),
+        Backend::Service("SetPosition"),
     ))
 }
 

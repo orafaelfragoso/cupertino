@@ -23,7 +23,25 @@ use cupertino_defaults::power::PowerSettings;
 use cupertino_defaults::screen_sharing::ScreenSharingConf;
 use cupertino_defaults::system::read_root_file;
 
+use crate::live::{Monitor, Reading};
 use crate::{clipboard, desktop_control, mapping, screen_sharing};
+
+/// The height in points the Dock's default tile size assumes when no display can be read (the server's `Displays1`
+/// is not on the bus or lists no display that is on): a common desktop display, above the Dock's small-display
+/// height, so the usual default tile size shows.
+pub const DEFAULT_DISPLAY_HEIGHT: f64 = 1080.0;
+
+/// The height in points of the display the Dock sits on, for [`Settings::load`]: the first display that is on with a
+/// size in points, else [`DEFAULT_DISPLAY_HEIGHT`].
+pub fn dock_display_height(displays: &Reading<Vec<Monitor>>) -> f64 {
+    match displays {
+        Reading::Ready(monitors) => monitors
+            .iter()
+            .find_map(|m| m.logical.map(|(_, h)| f64::from(h)))
+            .unwrap_or(DEFAULT_DISPLAY_HEIGHT),
+        Reading::Unavailable(_) | Reading::Unknown => DEFAULT_DISPLAY_HEIGHT,
+    }
+}
 
 /// A settings file the panes write.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

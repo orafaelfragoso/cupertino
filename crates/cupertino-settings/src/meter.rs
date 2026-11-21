@@ -86,11 +86,6 @@ impl Meter {
     pub fn level(&self) -> f64 {
         f64::from(f32::from_bits(self.level.load(Ordering::Relaxed)))
     }
-
-    /// Whether the recording ended by itself.
-    pub fn ended(&mut self) -> bool {
-        self.child.try_wait().is_ok_and(|status| status.is_some())
-    }
 }
 
 /// Fill `buffer` from the recording; an error at its end.

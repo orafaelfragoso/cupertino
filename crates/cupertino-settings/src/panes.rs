@@ -1719,7 +1719,7 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
                     ControlId::Reading,
                     label,
                     Control::Text { value },
-                    Backend::Service("wl_output"),
+                    Backend::Service("ListDisplays"),
                 )
             };
             let mut out: Vec<Section> = match &live.displays {
@@ -1858,7 +1858,7 @@ fn display_size_row(index: usize, monitor: &crate::live::Monitor) -> Option<Row>
         ControlId::DisplaySize(index),
         "Desktop Size",
         control,
-        Backend::Service("zwlr_output_manager_v1"),
+        Backend::Service("SetScale"),
     ))
 }
 

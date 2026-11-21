@@ -13,6 +13,7 @@ use cupertino_kit::task;
 
 use super::state::State;
 use super::Message;
+use crate::inflight::{Turns, PICTURE_FOLDER_TURNS, THUMBNAIL_TURNS};
 use crate::services::Services;
 
 /// How long a task of the services should take: the readings of a pane, or a call, each a few bus round trips; the
@@ -61,11 +62,23 @@ type Job = Box<dyn FnOnce(&mut Services) -> Apply + Send>;
 /// the loop runs (the window's first readings) starts with it.
 type Start = Box<dyn FnOnce() -> Command<Message> + Send>;
 
-/// The services and the tasks waiting for them, and the tasks started since the window loop last took them.
+/// Work of which many tasks can be asked for at once, run a few at a time so that the services keep their thread.
+#[derive(Clone, Copy)]
+pub(crate) enum Lane {
+    /// The thumbnails of the Wallpaper pane's pictures.
+    Thumbnails,
+    /// The listings of the Wallpaper pane's packs and folders of pictures.
+    PictureFolders,
+}
+
+/// The services and the tasks waiting for them, the work that takes turns, and the tasks started since the window loop
+/// last took them.
 pub(crate) struct Desk {
     /// The services while no task holds them.
     services: Option<Box<Services>>,
     waiting: VecDeque<Job>,
+    thumbnails: Turns<Start>,
+    picture_folders: Turns<Start>,
     started: Vec<Start>,
 }
 
@@ -74,6 +87,8 @@ impl Desk {
         Desk {
             services: Some(Box::new(services)),
             waiting: VecDeque::new(),
+            thumbnails: Turns::new(THUMBNAIL_TURNS),
+            picture_folders: Turns::new(PICTURE_FOLDER_TURNS),
             started: Vec::new(),
         }
     }
@@ -132,6 +147,42 @@ impl Desk {
                 Message::Done(Done::new(move |state: &mut State| apply(state, found)))
             })
         }));
+    }
+
+    /// Run `work` on the I/O pool, as [`Desk::off`] does, when its turn in `lane` comes: the tasks of a lane run a few at
+    /// a time, in the order they were asked for.
+    pub(crate) fn queue<T: Send + 'static>(
+        &mut self,
+        lane: Lane,
+        deadline: Duration,
+        work: impl FnOnce() -> T + Send + 'static,
+        apply: impl FnOnce(&mut State, T) + Send + 'static,
+    ) {
+        let start: Start = Box::new(move || {
+            task::io(deadline, work, move |found| {
+                Message::Done(Done::new(move |state: &mut State| {
+                    state.desk.turn_over(lane);
+                    apply(state, found);
+                }))
+            })
+        });
+        if let Some(start) = self.lane(lane).ask(start) {
+            self.started.push(start);
+        }
+    }
+
+    /// A task of `lane` finished: the next one waiting starts.
+    fn turn_over(&mut self, lane: Lane) {
+        if let Some(start) = self.lane(lane).finished() {
+            self.started.push(start);
+        }
+    }
+
+    fn lane(&mut self, lane: Lane) -> &mut Turns<Start> {
+        match lane {
+            Lane::Thumbnails => &mut self.thumbnails,
+            Lane::PictureFolders => &mut self.picture_folders,
+        }
     }
 
     /// Run `task`, a future of the window's loop (a watch, a reader), with the tasks.

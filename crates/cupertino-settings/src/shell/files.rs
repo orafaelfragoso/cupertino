@@ -12,6 +12,7 @@ use cupertino_kit::file_icons::FileIcons;
 use cupertino_kit::filepicker::{Listing, Request};
 use cupertino_kit::files::places::{chooser_places, Place};
 
+use super::desk::Lane;
 use super::state::{Choosing, ListingKey, State, VideoMemory};
 use crate::chooser::{Chooser, Outcome as ChooserOutcome};
 use crate::controls::Unreadable;
@@ -413,7 +414,8 @@ impl State {
             .collect();
         self.ask_again(&current);
         self.ask_thumbnails(current);
-        // each listing a task of its own: a folder on a hung mount shows "Loading…" and holds nothing else up
+        // each listing a task of its own, taking turns: a folder on a hung mount shows "Loading…" and holds up the other
+        // folders, never the services
         self.start_listing(ListingKey::Packs, None);
         for folder in folders {
             self.start_listing(ListingKey::Pictures(folder), None);
@@ -433,13 +435,15 @@ impl State {
         match key.clone() {
             ListingKey::Packs => {
                 let assets = self.assets.clone();
-                self.desk.off(
+                self.desk.queue(
+                    Lane::PictureFolders,
                     FILES_DEADLINE,
                     move || assets.wallpaper_files(),
                     move |state, files| state.pictures_listed(key, files),
                 );
             }
-            ListingKey::Pictures(folder) => self.desk.off(
+            ListingKey::Pictures(folder) => self.desk.queue(
+                Lane::PictureFolders,
                 FILES_DEADLINE,
                 move || cupertino_assets::pictures_in(&folder),
                 move |state, files| state.pictures_listed(key, files),
@@ -507,7 +511,7 @@ impl State {
         }
     }
 
-    /// Make the thumbnails of `images` that have none and were not asked for yet, a task each.
+    /// Make the thumbnails of `images` that have none and were not asked for yet, a task each, taking turns.
     pub(crate) fn ask_thumbnails(&mut self, images: Vec<PathBuf>) {
         for image in images {
             if self.thumbnails.contains_key(&image) || !self.thumbnails_asked.insert(image.clone())
@@ -515,7 +519,8 @@ impl State {
                 continue;
             }
             let cache_home = self.thumbnail_cache.clone();
-            self.desk.off(
+            self.desk.queue(
+                Lane::Thumbnails,
                 THUMBNAIL_DEADLINE,
                 {
                     let image = image.clone();

@@ -479,10 +479,13 @@ impl State {
             return;
         };
         self.meter = Some(meter);
+        self.meter_generation += 1;
+        let generation = self.meter_generation;
         self.desk.run(async move {
             reader.await;
-            Message::Done(Done::new(|state: &mut State| {
-                if state.meter.as_mut().is_some_and(Meter::ended) {
+            // the recording ended, by itself or stopped: the meter it read goes, unless another has started since
+            Message::Done(Done::new(move |state: &mut State| {
+                if state.meter_generation == generation {
                     state.meter = None;
                 }
             }))

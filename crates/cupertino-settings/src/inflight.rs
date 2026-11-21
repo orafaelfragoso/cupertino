@@ -1,7 +1,8 @@
 //! Reads that are running on threads: a read that is already running is not started again, so a folder on a mount that
-//! never answers costs one blocked thread, not one for every visit.
+//! never answers costs one blocked thread, not one for every visit; and work that takes turns, so that many tasks of
+//! one kind hold only a few of the window's threads of the I/O pool.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::Hash;
 
 /// The keys of the reads in flight, and those asked for again while one was running.
@@ -94,5 +95,62 @@ impl<K: Eq + Hash + Clone, J> Reads<K, J> {
         } else {
             None
         }
+    }
+}
+
+/// How many thumbnails of the Wallpaper pane are made at once, and how many of its folders of pictures are read at
+/// once: with the one task of the services and the window's other work, they stay within the window's share of Kit's
+/// I/O pool (`cupertino_kit::task::IO_SHARE`), so a call or a reading of the services never waits behind them.
+pub const THUMBNAIL_TURNS: usize = 1;
+pub const PICTURE_FOLDER_TURNS: usize = 1;
+
+/// Work that takes turns: at most a number of jobs run at once, and the others wait in the order they were asked for.
+#[derive(Debug)]
+pub struct Turns<J> {
+    limit: usize,
+    running: usize,
+    waiting: VecDeque<J>,
+}
+
+impl<J> Turns<J> {
+    /// No job running, and at most `limit` (at least one) at once.
+    pub fn new(limit: usize) -> Self {
+        Turns {
+            limit: limit.max(1),
+            running: 0,
+            waiting: VecDeque::new(),
+        }
+    }
+
+    /// `job` is wanted: `Some(job)` when it may start now, `None` when it waits for a running one to finish.
+    pub fn ask(&mut self, job: J) -> Option<J> {
+        if self.running < self.limit {
+            self.running += 1;
+            Some(job)
+        } else {
+            self.waiting.push_back(job);
+            None
+        }
+    }
+
+    /// A running job finished: the first waiting one, which starts now in its place.
+    pub fn finished(&mut self) -> Option<J> {
+        match self.waiting.pop_front() {
+            Some(job) => Some(job),
+            None => {
+                self.running = self.running.saturating_sub(1);
+                None
+            }
+        }
+    }
+
+    /// How many jobs are running.
+    pub fn running(&self) -> usize {
+        self.running
+    }
+
+    /// How many jobs wait for their turn.
+    pub fn waiting(&self) -> usize {
+        self.waiting.len()
     }
 }

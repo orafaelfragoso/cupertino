@@ -168,35 +168,21 @@ pub fn run(pane: PaneId, activation: String) -> Result<()> {
     // missing icons never stop the start: they are named here and drawn as placeholders
     required_icons(&Assets::discover());
     let mut services = Services::new();
-    let display_height = display_height(&mut services)?;
+    // the window system reports no outputs, so the server's `Displays1` is asked; without it the Dock's default tile
+    // size assumes a display of the usual height, and the Displays pane says the displays cannot be read
+    let displays = services.displays();
+    if let crate::live::Reading::Unavailable(reason) = &displays {
+        eprintln!("cupertino-settings: cannot list the displays: {reason}");
+    }
+    let display_height = crate::settings::dock_display_height(&displays);
     let state = State::new(Paths::from_env(), services, pane, display_height, notify)?;
-    launch(Start {
+    *START.lock().expect("no thread panics holding the start") = Some(Start {
         state,
         background,
         woken,
         activation,
     });
     Ok(cupertino_kit::app::run::<SettingsApp>()?)
-}
-
-/// The height of the display in points, for the Dock's default tile size: the window system reports no outputs, so
-/// the server's `Displays1` is asked.
-fn display_height(services: &mut Services) -> Result<f64> {
-    match services.displays() {
-        crate::live::Reading::Ready(monitors) => Ok(monitors
-            .iter()
-            .find_map(|m| m.logical.map(|(_, h)| f64::from(h)))
-            .ok_or("the server has no display that is on")?),
-        crate::live::Reading::Unavailable(reason) => {
-            Err(format!("cannot list the displays: {reason}").into())
-        }
-        crate::live::Reading::Unknown => Err("cannot list the displays".into()),
-    }
-}
-
-/// Hand `start` to the next [`SettingsApp`] to start, as [`run`] does; for a test's window system.
-pub(crate) fn launch(start: Start) {
-    *START.lock().expect("no thread panics holding the start") = Some(start);
 }
 
 pub struct SettingsApp;

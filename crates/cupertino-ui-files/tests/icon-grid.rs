@@ -1,8 +1,7 @@
 //! The icon grid as a program uses it: what a press, a key, the band and typing select, what opens an item, renames
 //! it, drags it and asks for its menu, each reported through the program's function.
 
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 use std::cell::Cell;
 use std::rc::Rc;

@@ -1,7 +1,7 @@
 //! Desktop control and consent over a real wire: binding by version, run epochs, the events of a run and of the
 //! authority, and the requests with the epoch in every one.
 
-mod support;
+use crate::support;
 
 use cupertino_app_protocols::semantics::{
     self, Action, ActionReply, Data, Invocation, Observation, Outcome, OutputGeometry,

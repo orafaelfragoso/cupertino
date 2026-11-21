@@ -1,9 +1,7 @@
 //! An item's tags: kept as names in the file's extended attribute, read back, added and removed, those of a link being
 //! its target's; the colours of the names; and the tags a volume of the design's file manager holds.
 
-#[allow(dead_code)]
-#[path = "support/scratch.rs"]
-mod scratch;
+use crate::scratch;
 
 use cupertino_ui_files::tags::{
     add_tag, parse_reference_tags, parse_tag_list, read_tags, remove_tag, write_tags, Tag,

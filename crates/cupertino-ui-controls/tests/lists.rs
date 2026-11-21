@@ -2,8 +2,7 @@
 //! opens a row, typing to select, sorting by a column header, opening and closing outline rows, and a selection's own
 //! arithmetic.
 
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 use cupertino_geometry::{Point, Size};
 use cupertino_ui_controls::{

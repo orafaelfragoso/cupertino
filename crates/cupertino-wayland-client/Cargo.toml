@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license = "MPL-2.0"
 description = "Wayland client transport: connection with capability discovery, application windows and popups, shm buffer leases, frame callbacks and presentation feedback, per-surface scale, pointer with an XCursor theme fallback, keyboard, input methods and clipboard over the standard protocols, and the public Cupertino protocols: appearance and display options, server-rendered backdrops, the title bar style, scroll counts and layers the server animates"
+autotests = false
 [package.metadata.cupertino]
 layer = "transport"
 
@@ -26,3 +27,8 @@ xcursor = "0.3"
 cupertino-app-protocols = { path = "../cupertino-app-protocols", features = ["client", "server"] }
 wayland-protocols = { version = "0.32", features = ["server"] }
 wayland-server = "0.31"
+
+[[test]]
+# Every file of `tests/` is a module of this one binary (`tests/main.rs`).
+name = "tests"
+path = "tests/main.rs"

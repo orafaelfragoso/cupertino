@@ -1,7 +1,7 @@
 //! A present committed from another thread than the connection's: it acknowledges the configure its buffer was drawn
 //! for, then attaches and commits, and a configure that arrives meanwhile waits for the next frame.
 
-mod support;
+use crate::support;
 
 use cupertino_wayland_client::{BufferFormat, Event};
 use std::time::Duration;

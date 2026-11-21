@@ -384,8 +384,10 @@ fn unresponsive_peers_and_scripted_outputs_do_not_stop_frames() {
     let probe = UnixListener::bind(dir.join("probe")).unwrap();
     let list = Pipe::new(dir.join("windows.fifo"));
     let shot = Pipe::new(dir.join("frame.png"));
+    // this test by its name in the test binary, which starts with this file's
+    let file = module_path!().split_once("::").map_or("", |(_, file)| file);
     let clients = format!(
-        "{} --exact unresponsive_peers_and_scripted_outputs_do_not_stop_frames --nocapture",
+        "{} --exact {file}::unresponsive_peers_and_scripted_outputs_do_not_stop_frames --nocapture",
         std::env::current_exe().unwrap().display()
     );
     let later = LIST_AT + LATER_LIST_AFTER_LIST;

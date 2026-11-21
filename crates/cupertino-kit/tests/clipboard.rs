@@ -2,8 +2,7 @@
 //! hears the message it named once another application's selection replaces it, never after it put something else on
 //! the clipboard itself.
 
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 use cupertino_kit::core::{Application, Command, Window};
 use cupertino_kit::platform::ClipboardData;

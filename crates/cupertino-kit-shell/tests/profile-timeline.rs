@@ -1,7 +1,7 @@
 //! A host running a component records the frame timeline `CUPERTINO_PROFILE` asks for: one trace for the process,
 //! holding the component's `ui.window` and `ui.turn` spans on the track of the component's own thread.
 
-mod support;
+use crate::support;
 
 use std::path::Path;
 

@@ -1,8 +1,7 @@
 //! The column view as a program uses it: a row of another folder's column picked, a step from the column of the
 //! folder shown, and a column resized by its divider, each reported through the program's function.
 
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

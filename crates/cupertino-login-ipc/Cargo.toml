@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "Protocol between the login screen and the session manager: typed requests and events, length-prefixed JSON framing with size caps, zeroed secrets and the connection state machine"
+autotests = false
 [package.metadata.cupertino]
 layer = "protocol"
 
@@ -14,3 +15,8 @@ test = false
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 zeroize = "1"
+
+[[test]]
+# Every file of `tests/` is a module of this one binary (`tests/main.rs`).
+name = "tests"
+path = "tests/main.rs"

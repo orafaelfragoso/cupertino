@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "Power and backlight daemon for the system bus: power_supply and backlight sysfs, the lid switch over evdev, the org.freedesktop.UPower interface subset apps call, and display brightness at org.cupertino.Power1"
+autotests = false
 [package.metadata.cupertino]
 layer = "services"
 
@@ -28,3 +29,8 @@ name = "cupertino-powerd"
 path = "src/main.rs"
 required-features = ["app"]
 test = false
+
+[[test]]
+# Every file of `tests/` is a module of this one binary (`tests/main.rs`).
+name = "tests"
+path = "tests/main.rs"

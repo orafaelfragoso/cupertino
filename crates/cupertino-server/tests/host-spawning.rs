@@ -52,7 +52,10 @@ fn stand_in_host() {
 
 /// This test binary, running [`stand_in_host`] alone: the host program and its leading arguments.
 fn stand_in() -> (PathBuf, Vec<String>) {
-    let args = ["--exact", "stand_in_host", "--nocapture", "--", STAND_IN];
+    // the stand-in by its name in the test binary, which starts with this file's
+    let file = module_path!().split_once("::").map_or("", |(_, file)| file);
+    let test = format!("{file}::stand_in_host");
+    let args = ["--exact", &test, "--nocapture", "--", STAND_IN];
     (
         std::env::current_exe().unwrap(),
         args.map(String::from).to_vec(),

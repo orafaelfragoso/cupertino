@@ -11,7 +11,7 @@ Crate details are in each crate's README; project docs in `docs/`.
 - Names: crates `cupertino-*`, files kebab-case, user-visible terms the project's own (overview, workspaces, launcher, control panel, file manager).
 - One purpose per change. No drive-by renames or reformatting, no new documents unless asked.
 - No scripts (shell, Python): use cargo, nextest, the workspace's programs and examples. Repository automation is `cargo xtask ci`, and `cargo xtask vendored` for the vendored trees.
-- Tests live only in `crates/*/tests/` and go through the crate's public interface. No `#[test]` or `#[cfg(test)]` in `src/`. The gate enforces both.
+- Tests live only in `crates/*/tests/` and go through the crate's public interface. No `#[test]` or `#[cfg(test)]` in `src/`; every `[lib]` and `[[bin]]` says `test = false`. Each crate's tests are one binary: `tests/main.rs` declares every other `tests/*.rs` as a module (`autotests = false`); a file that must be its own process is its own `[[test]]` with a comment why. The gate enforces all of it.
 - Source files under `crates/*/src/` and `xtask/src/` are capped at 1,500 lines (`MAX_FILE_LINES` in `xtask/src/gate.rs`), and functions follow `clippy.toml`'s `too-many-lines-threshold = 150`. Split growing modules cleanly rather than adding to oversized files.
 - Find where time goes with `samply`, `perf`, `heaptrack` and `CUPERTINO_PROFILE` timelines, never timing prints.
 

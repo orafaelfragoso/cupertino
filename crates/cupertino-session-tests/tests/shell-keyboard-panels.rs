@@ -463,7 +463,10 @@ impl Rig {
             "the server's input method connects"
         );
         cupertino_server::quit::start_session_service_on(&mut state, Some(bus.1.clone()));
-        let mut args: Vec<String> = ["--exact", "host_program", "--nocapture", "--", mark]
+        // `host_program` by its name in the test binary, which starts with this file's
+        let file = module_path!().split_once("::").map_or("", |(_, file)| file);
+        let test = format!("{file}::host_program");
+        let mut args: Vec<String> = ["--exact", &test, "--nocapture", "--", mark]
             .map(String::from)
             .to_vec();
         args.push(report.display().to_string());

@@ -1,7 +1,6 @@
 //! The rate limit: so many records of one id per window, and one summary of the rest.
 
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 use std::time::{Duration, Instant};
 

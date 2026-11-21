@@ -2,8 +2,7 @@
 //! it, asks for its menu, sorts the list and opens a folder in place, each reported through the program's function,
 //! and the program's field standing in the name being edited.
 
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 use std::cell::Cell;
 use std::rc::Rc;

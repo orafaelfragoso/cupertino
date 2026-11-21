@@ -1,6 +1,6 @@
 //! The shared MIME database: file names to types, aliases, subclasses and icon names.
 
-mod common;
+use crate::common;
 
 use common::write;
 use cupertino_apps::mime::{

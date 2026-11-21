@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "The portal's file chooser and app chooser, a component of the shell host: org.cupertino.Dialogs1 for the portal alone, the family's open and save panel and the app chooser on CupertinoKit"
+autotests = false
 [package.metadata.cupertino]
 layer = "shell"
 
@@ -26,3 +27,8 @@ cupertino-kit = { path = "../cupertino-kit", features = ["test"] }
 
 [[example]]
 name = "dialogs_capture"
+
+[[test]]
+# Every file of `tests/` is a module of this one binary (`tests/main.rs`).
+name = "tests"
+path = "tests/main.rs"

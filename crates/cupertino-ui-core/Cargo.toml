@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license = "MPL-2.0"
 description = "CupertinoKit runtime: the application model, elements and the retained node tree, event routing, focus, commands and tasks, the accessibility tree, layout and the window-system interface"
+autotests = false
 
 [package.metadata.cupertino]
 layer = "ui"
@@ -39,3 +40,8 @@ harness = false
 [[bench]]
 name = "instructions"
 harness = false
+
+[[test]]
+# Every file of `tests/` is a module of this one binary (`tests/main.rs`).
+name = "tests"
+path = "tests/main.rs"

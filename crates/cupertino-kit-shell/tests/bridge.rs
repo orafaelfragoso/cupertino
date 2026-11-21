@@ -3,7 +3,7 @@
 //! forwarding from bridge to bridge and to the host's own components, a separate host's waiting publications, and the
 //! retained publications of a component's separate host, which outlive the instance the shared host lost before it.
 
-mod support;
+use crate::support;
 
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, Ordering};

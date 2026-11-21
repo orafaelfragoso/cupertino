@@ -1,9 +1,7 @@
 //! The file operations that are not a transfer: a rename that never replaces, a new folder with the first free name,
 //! a folder made around items, an alias, and what a drop does by the keys held.
 
-#[allow(dead_code)]
-#[path = "support/scratch.rs"]
-mod scratch;
+use crate::scratch;
 
 use std::fs;
 use std::io::ErrorKind;

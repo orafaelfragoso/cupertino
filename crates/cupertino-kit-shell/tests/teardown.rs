@@ -3,7 +3,7 @@
 //! no role object and the server holds its menu bar from the connection's end. Each case runs a menu bar against
 //! the stand-in through a relay that counts what the component sent.
 
-mod support;
+use crate::support;
 
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex, Once};

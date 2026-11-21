@@ -1,8 +1,7 @@
 //! The redaction policy: what each class of value becomes, what free text loses, the salted hash, and a secret that
 //! reaches neither the ring nor the store.
 
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 use std::path::Path;
 use std::time::Duration;

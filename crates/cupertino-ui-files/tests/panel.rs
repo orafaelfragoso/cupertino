@@ -2,8 +2,7 @@
 //! choices and buttons report through the program's function, the question whether to replace a file in place of
 //! the controls, and the items of the open folder as a file list that reports through its own function.
 
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 use std::cell::Cell;
 use std::rc::Rc;

@@ -1,8 +1,7 @@
 //! A record of `cupertino.diag.v1`: the line it is written as, what the code gives it, reading a line back, and the
 //! size limit.
 
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 use std::path::Path;
 use std::time::Duration;

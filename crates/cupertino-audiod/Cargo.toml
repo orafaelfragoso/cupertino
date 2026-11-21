@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "Session audio service for the default devices, volume, mute and stereo balance"
+autotests = false
 
 [package.metadata.cupertino]
 layer = "services"
@@ -23,3 +24,8 @@ tempfile = "3"
 [[example]]
 name = "audio-backend-stand-in"
 path = "examples/audio-backend-stand-in.rs"
+
+[[test]]
+# Every file of `tests/` is a module of this one binary (`tests/main.rs`).
+name = "tests"
+path = "tests/main.rs"

@@ -1,9 +1,7 @@
 //! Opening an item against a fixture of installed applications: the default application of its type and the Open
 //! With list under the user's choices, a terminal application, and an application's own item, which starts it.
 
-#[allow(dead_code)]
-#[path = "support/scratch.rs"]
-mod scratch;
+use crate::scratch;
 
 use std::path::{Path, PathBuf};
 

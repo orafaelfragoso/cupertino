@@ -1,7 +1,6 @@
 //! `document`: the icon name of a MIME type, the corner badges and the cache of file icons.
 
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 use std::collections::HashMap;
 use std::path::PathBuf;

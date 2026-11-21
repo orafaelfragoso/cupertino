@@ -1,6 +1,6 @@
 //! Desktop entries: locale fallback, list values, visibility, handlers and indexing.
 
-mod common;
+use crate::common;
 
 use common::{desktop, executable, vis, write};
 use cupertino_apps::entry::{

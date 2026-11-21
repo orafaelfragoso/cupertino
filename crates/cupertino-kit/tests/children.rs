@@ -1,8 +1,7 @@
 //! `kit::spawn`: a program started for an instance is reaped by the instance's UI loop once it ended, with no thread
 //! waiting for it.
 
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 use cupertino_kit::core::{Application, Command, Window};
 use cupertino_kit::Instance;

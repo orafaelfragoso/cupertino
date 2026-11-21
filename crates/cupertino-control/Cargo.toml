@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "The native desktop controller: scoped session consent, input and capture over local Rust IPC"
+autotests = false
 
 [package.metadata.cupertino]
 layer = "services"
@@ -26,3 +27,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+
+[[test]]
+# Every file of `tests/` is a module of this one binary (`tests/main.rs`).
+name = "tests"
+path = "tests/main.rs"

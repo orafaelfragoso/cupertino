@@ -8,7 +8,7 @@
 //! size the server configured its layer surface to; a component offered another version of a global of the project than it was built with, or an older layer shell than it works with, is refused before it starts; a busy loop and a busy render
 //! thread are reported; the on-screen displays hear the list the server sends on their keyboard panels as it makes them.
 
-mod support;
+use crate::support;
 
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Mutex;

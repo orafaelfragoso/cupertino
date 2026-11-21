@@ -1,8 +1,7 @@
 //! `kit::task`: a burst of I/O tasks handed over while one of the pool's threads waits for a job starts a thread for
 //! each, up to the instance's share, instead of queueing them behind the one that waits.
 
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 use cupertino_kit::core::{Application, Command, Window};
 use cupertino_kit::task::{self, IO_SHARE};

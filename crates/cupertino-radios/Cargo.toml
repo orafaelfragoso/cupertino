@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "The Wi-Fi and Bluetooth radios through whichever service owns them: the Cupertino network and Bluetooth daemons, else NetworkManager and BlueZ, found, read, changed and followed the same way by Settings, the control panel and the menu bar"
+autotests = false
 
 [package.metadata.cupertino]
 layer = "system"
@@ -19,3 +20,8 @@ dbus = ["dep:async-io", "dep:zbus"]
 [dependencies]
 async-io = { version = "2", optional = true }
 zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"], optional = true }
+
+[[test]]
+# Every file of `tests/` is a module of this one binary (`tests/main.rs`).
+name = "tests"
+path = "tests/main.rs"

@@ -1,7 +1,7 @@
 //! The app effects protocol against an in-process server: appearance and display options, backdrops, the title bar
 //! style, the menu announcement and disabled window controls.
 
-mod support;
+use crate::support;
 
 use cupertino_app_protocols::server::app_effects::{
     cupertino_appearance_v1::DisplayOption, cupertino_backdrop_v1::Tone,

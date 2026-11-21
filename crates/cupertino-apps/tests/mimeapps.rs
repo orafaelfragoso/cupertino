@@ -1,6 +1,6 @@
 //! Default applications and the Open With list over a temporary set of XDG directories.
 
-mod common;
+use crate::common;
 
 use common::{desktop, vis, write};
 use cupertino_apps::entry::Locale;

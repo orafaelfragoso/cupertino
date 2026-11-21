@@ -1,6 +1,6 @@
 //! The catalogue of applications, the burst timing and (feature `watch`) following the folders.
 
-mod common;
+use crate::common;
 
 use common::{desktop, vis, write};
 use cupertino_apps::catalogue::{Burst, Catalogue, Timing};

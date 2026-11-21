@@ -2,11 +2,9 @@
 //! protocol server of its own: when one's renderer panics in a frame drawn away from its UI thread, the panic is that
 //! instance's, recorded in its scope and resumed on its UI thread, and the other goes on drawing.
 
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
-#[path = "../../cupertino-wayland-client/tests/support/mod.rs"]
-mod wire;
+use crate::wire;
 
 use cupertino_diagnostic_events::{self as diag, Record};
 use cupertino_keyboard::modifiers::Profile;

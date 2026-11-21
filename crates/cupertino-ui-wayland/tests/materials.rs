@@ -1,8 +1,7 @@
 //! Compositor materials under a window: a list past the protocol's limits is refused before the compositor is asked
 //! for any, and a refused list leaves the window with none.
 
-#[path = "../../cupertino-wayland-client/tests/support/mod.rs"]
-mod wire;
+use crate::wire;
 
 use cupertino_geometry::{Rect, Size};
 use cupertino_keyboard::modifiers::Profile;

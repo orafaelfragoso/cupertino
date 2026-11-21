@@ -1,8 +1,7 @@
 //! Controls that choose a value: a slider and a stepper (by pointer and keys, within their range and steps), and
 //! the controls that choose one of several (segments, radio buttons, tabs).
 
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 use cupertino_geometry::{Insets, Point};
 use cupertino_ui_controls::{

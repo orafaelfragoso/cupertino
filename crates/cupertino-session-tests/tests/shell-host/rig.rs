@@ -99,7 +99,12 @@ impl Rig {
         )
         .expect("the server starts");
         headless::init(&mut state, OUTPUT_SIZE, 1.0).expect("an offscreen renderer");
-        let args = ["--exact", "host_program", "--nocapture", "--", MARK];
+        // the including test file's `host_program` by its name in the binary: `module_path!()` is `BINARY[::FILE]::rig`
+        let path: Vec<&str> = module_path!().split("::").collect();
+        let test = [&path[1..path.len() - 1], &["host_program"]]
+            .concat()
+            .join("::");
+        let args = ["--exact", &test, "--nocapture", "--", MARK];
         let mut args: Vec<String> = args.map(String::from).to_vec();
         args.push(report.display().to_string());
         state.supervisor.set_host_program(Some(HostProgram {

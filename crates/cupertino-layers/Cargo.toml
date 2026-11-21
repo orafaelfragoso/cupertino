@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "Checks that workspace crates follow the layer rules: the layer table, the further rules, the facades and the external crates"
+autotests = false
 [package.metadata.cupertino]
 layer = "tools"
 
@@ -20,3 +21,8 @@ test = false
 serde_json = "1"
 toml = "1"
 spdx = "0.13.6"
+
+[[test]]
+# Every file of `tests/` is a module of this one binary (`tests/main.rs`).
+name = "tests"
+path = "tests/main.rs"

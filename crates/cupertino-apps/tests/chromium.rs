@@ -1,6 +1,6 @@
 //! Programs built on Chromium: finding them through their launchers and turning the overlay scroll bars on.
 
-mod common;
+use crate::common;
 
 use common::{executable, write};
 use cupertino_apps::chromium::{

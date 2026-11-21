@@ -1,6 +1,6 @@
 //! Workspaces: per-output lists, switching, gestures, window and app assignment, full-screen workspaces.
 
-mod common;
+use crate::common;
 
 use common::*;
 use cupertino_wm::{Assignment, Command, Effect, Requester, WorkspaceId, WorkspaceKind};

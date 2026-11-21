@@ -4,7 +4,7 @@
 //! it, a component's children are reaped as they end, a host whose server connection closed hears an error, and no
 //! program a host starts inherits its connection.
 
-mod support;
+use crate::support;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};

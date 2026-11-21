@@ -198,13 +198,16 @@ const QUIET_WINDOWS: usize = 4;
 /// How many times the thread of host process `pid` that runs the host's loop, the test harness's thread of
 /// [`host_program`], has slept and been woken.
 fn wakeups(pid: u32) -> u64 {
+    // the thread is named after the test, `FILE::host_program`, of which the kernel keeps 15 bytes
+    let file = module_path!().split_once("::").map_or("", |(_, file)| file);
+    let test = format!("{file}::host_program");
+    let comm = &test[..test.len().min(15)];
     let tasks = std::fs::read_dir(format!("/proc/{pid}/task")).expect("the host's threads");
     let task = tasks
         .flatten()
         .map(|task| task.path())
         .find(|task| {
-            std::fs::read_to_string(task.join("comm"))
-                .is_ok_and(|name| name.trim() == "host_program")
+            std::fs::read_to_string(task.join("comm")).is_ok_and(|name| name.trim() == comm)
         })
         .expect("the host's loop runs on the thread of its test");
     let status = std::fs::read_to_string(task.join("status")).expect("the thread has a status");

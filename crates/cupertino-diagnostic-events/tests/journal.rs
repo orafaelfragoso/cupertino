@@ -1,8 +1,7 @@
 //! The journald sink: the datagram of the native protocol, sending it to a socket, and a service's events reaching the
 //! journal reduced, or standard error when there is none.
 
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 use std::os::unix::net::UnixDatagram;
 

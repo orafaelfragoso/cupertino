@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "The trash of the freedesktop.org Trash specification: moving items in, listing, restoring, deleting and emptying, shared by the file manager and the dock"
+autotests = false
 
 [package.metadata.cupertino]
 layer = "system"
@@ -17,3 +18,8 @@ percent-encoding = "2"
 
 [dev-dependencies]
 tempfile = "3"
+
+[[test]]
+# Every file of `tests/` is a module of this one binary (`tests/main.rs`).
+name = "tests"
+path = "tests/main.rs"

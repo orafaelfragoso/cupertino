@@ -2,8 +2,7 @@
 //! the render thread draws the frame with, nor turns its loop over while the window waits for the frame, and the
 //! renderer lets go of its layers once the frame is shown.
 
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 use cupertino_kit::controls::WINDOW_CONTENT_INSET;
 use cupertino_kit::core::CommandRegistry;

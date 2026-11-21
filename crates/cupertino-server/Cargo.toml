@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "Smithay-based Wayland compositor: window policy from cupertino-wm, GLES shadows, rounded corners and material passes, dock and overview placeholders"
+autotests = false
 [package.metadata.cupertino]
 layer = "core"
 
@@ -82,3 +83,14 @@ cupertino-cursor = { path = "../cupertino-cursor" }
 cupertino-protocols = { path = "../cupertino-protocols", features = ["client"] }
 wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+
+[[test]]
+# Every file of `tests/` is a module of this one binary (`tests/main.rs`), but for those with a [[test]] of their own below.
+name = "tests"
+path = "tests/main.rs"
+
+[[test]]
+# Its own binary: the server starts a hard link of it as `cupertino-portal` with no test filter, so every test
+# the binary holds starts in that process, and each of them must turn into the portal first.
+name = "started-programs"
+path = "tests/started-programs.rs"

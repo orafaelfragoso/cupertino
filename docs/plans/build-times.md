@@ -65,19 +65,19 @@ Unit tests in `src/` are forbidden, yet Cargo builds a test copy of every librar
 
 - [x] `test = false` under `[lib]` (and `[[bin]]`) in every crate; doc tests keep running (`doctest` stays on).
 - [x] The gate fails a crate whose `[lib]` or `[[bin]]` lacks `test = false`, so a new crate cannot bring the copy back.
-- [ ] Done when the server's timing report has no `lib (test)` or `bin (test)` unit and nextest lists the same tests.
+- [x] Done when the server's timing report has no `lib (test)` or `bin (test)` unit and nextest lists the same tests.
 
 ### 4. One test binary per crate (`crates/*/tests/`, gate)
 
 386 files in `tests/` are 386 binaries, each linked against the whole dependency tree.
 
-- [ ] Each crate's tests become one binary: `tests/main.rs` declares the current files as modules
+- [x] Each crate's tests become one binary: `tests/main.rs` declares the current files as modules
       (`autotests = false` and one `[[test]]`). Files move into `tests/suite/` only where module names would clash;
       test names keep their file as their module path, so nextest filters still work.
-- [ ] Tests that must be their own process (they install a global, a signal handler, a panic hook, or set the
+- [x] Tests that must be their own process (they install a global, a signal handler, a panic hook, or set the
       environment) stay separate binaries, listed in the crate's manifest with a comment saying why. Nextest
       already runs each test in its own process, so most do not need this.
-- [ ] The gate fails a `tests/*.rs` file that is neither the crate's main test file nor listed as its own binary.
+- [x] The gate fails a `tests/*.rs` file that is neither the crate's main test file nor listed as its own binary.
 - [ ] Done when the workspace has about 80 test binaries instead of 386, nextest lists the same tests, and the
       integration run's build part drops by at least a third.
 

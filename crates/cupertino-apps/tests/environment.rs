@@ -2,7 +2,7 @@
 //!
 //! The tests of this file change environment variables, so each holds the lock and restores them.
 
-mod common;
+use crate::common;
 
 use common::{desktop, write};
 use cupertino_apps::catalogue::Catalogue;

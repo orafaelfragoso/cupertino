@@ -4,7 +4,7 @@
 //! `Event::BusIdentity`, and only then hands the connection over; a development build's debug interface answers on the
 //! connection before the announcement does; `Running::shut` cuts the connection off.
 
-mod support;
+use crate::support;
 
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command as Process, Stdio};

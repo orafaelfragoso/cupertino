@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "Device discovery and input without libudev or libinput: sysfs enumeration, input classification, primary GPU, a kernel uevent hotplug monitor, and Linux evdev devices from an fd read into typed frames"
+autotests = false
 [package.metadata.cupertino]
 layer = "platform"
 
@@ -15,3 +16,8 @@ rustix = { version = "1", features = ["fs", "net", "time"] }
 
 [dev-dependencies]
 rustix = { version = "1", features = ["event", "fs", "pipe", "time"] }
+
+[[test]]
+# Every file of `tests/` is a module of this one binary (`tests/main.rs`).
+name = "tests"
+path = "tests/main.rs"

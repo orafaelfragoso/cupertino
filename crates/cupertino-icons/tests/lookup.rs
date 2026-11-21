@@ -1,7 +1,6 @@
 //! `IconLookup` and `ThemeIcons`: where an application's icon file is found by name, size and scale.
 
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 use std::path::{Path, PathBuf};
 

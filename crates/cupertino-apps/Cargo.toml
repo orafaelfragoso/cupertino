@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license = "MPL-2.0"
 description = "Application registry shared by the Cupertino processes: desktop entries and their Exec lines, launching with an activation token, the shared MIME database (globs, aliases, subclasses, icon names), default applications from mimeapps.list, and the recently-used files and the launcher's usage store"
+autotests = false
 
 [package.metadata.cupertino]
 layer = "system"
@@ -29,3 +30,8 @@ zbus = { version = "5", default-features = false, features = ["async-io"], optio
 
 [dev-dependencies]
 tempfile = "3"
+
+[[test]]
+# Every file of `tests/` is a module of this one binary (`tests/main.rs`).
+name = "tests"
+path = "tests/main.rs"

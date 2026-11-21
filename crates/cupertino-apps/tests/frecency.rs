@@ -1,6 +1,6 @@
 //! The launcher's usage store: reading its file and ranking its items.
 
-mod common;
+use crate::common;
 
 use common::write;
 use cupertino_apps::frecency::{

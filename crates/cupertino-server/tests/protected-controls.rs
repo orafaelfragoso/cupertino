@@ -509,10 +509,13 @@ fn screenshot_stand_in() {
 /// This test binary, running [`screenshot_stand_in`] alone.
 fn screenshot_command() -> Vec<String> {
     let exe = std::env::current_exe().unwrap().display().to_string();
+    // the stand-in by its name in the test binary, which starts with this file's
+    let file = module_path!().split_once("::").map_or("", |(_, file)| file);
+    let test = format!("{file}::screenshot_stand_in");
     [
         exe.as_str(),
         "--exact",
-        "screenshot_stand_in",
+        &test,
         "--nocapture",
         "--",
         STAND_IN,

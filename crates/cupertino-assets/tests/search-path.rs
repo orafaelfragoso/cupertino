@@ -1,6 +1,6 @@
 //! The pack search list and discovery through the environment variables.
 
-mod common;
+use crate::common;
 
 use common::{manifest, Env};
 use cupertino_assets::{

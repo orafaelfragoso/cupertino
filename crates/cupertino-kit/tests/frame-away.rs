@@ -2,8 +2,7 @@
 //! request at once: the window asks for no frame it cannot draw until its frame is back, so the compositor does not turn
 //! its loop over and over meanwhile, and once the frame is back it draws the next.
 
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 use cupertino_kit::controls::{FrameClock, WINDOW_CONTENT_INSET};
 use cupertino_kit::core::CommandRegistry;

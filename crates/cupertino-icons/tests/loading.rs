@@ -1,7 +1,6 @@
 //! Loading icon files into premultiplied pixels: PNG bytes and files, SVG files, ARGB pixmaps and the system mark.
 
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 use cupertino_icons::{decode_png, from_argb, load_icon, system_mark};
 

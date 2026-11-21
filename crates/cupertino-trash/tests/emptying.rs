@@ -1,6 +1,6 @@
 //! Emptying the trash: what goes, what stays and what is reported.
 
-mod common;
+use crate::common;
 
 use common::{is_root, lock, names, put_item, uid, unlock, Tree};
 use std::fs;

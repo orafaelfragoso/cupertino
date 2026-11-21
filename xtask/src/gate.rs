@@ -901,8 +901,88 @@ fn target_problems(root: &Path) -> Vec<String> {
                 }
             }
         }
+        test_file_problems(root, krate, &table, &mut problems);
     }
     problems
+}
+
+/// The modules a test target's root file declares, as paths relative to its directory: `mod NAME;` is `NAME.rs`
+/// unless a `#[path = "..."]` among the attributes right above it says otherwise.
+fn declared_modules(text: &str) -> BTreeSet<String> {
+    static MODULE: LazyLock<Regex> = LazyLock::new(|| {
+        regex(r"^(?:pub(?:\([^)]*\))?\s+)?mod\s+(?:r#)?([A-Za-z_][A-Za-z0-9_]*)\s*;")
+    });
+    static PATH: LazyLock<Regex> = LazyLock::new(|| regex(r#"^#\[path\s*=\s*"([^"]+)"\]"#));
+    let mut modules = BTreeSet::new();
+    let mut path = None;
+    for line in text.lines().map(str::trim) {
+        if let Some(found) = PATH.captures(line) {
+            path = Some(found[1].to_owned());
+        } else if let Some(found) = MODULE.captures(line) {
+            modules.insert(path.take().unwrap_or_else(|| format!("{}.rs", &found[1])));
+        } else if !line.starts_with("#[") {
+            path = None;
+        }
+    }
+    modules
+}
+
+/// Test files outside the crate's one test binary: each crate's tests are one binary, `tests/main.rs` with every
+/// other `tests/*.rs` a module of it, so `autotests = false` (Cargo would build each file as a binary of its own
+/// besides), and a file that is neither a module of a listed `[[test]]`'s root nor listed itself is not built at all.
+fn test_file_problems(root: &Path, krate: &Path, table: &toml::Table, problems: &mut Vec<String>) {
+    let tests = krate.join("tests");
+    let mut files: Vec<String> = std::fs::read_dir(&tests)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+        .filter(|name| name.ends_with(".rs") && tests.join(name).is_file())
+        .collect();
+    if files.is_empty() {
+        return;
+    }
+    files.sort();
+    let rel = relative(&krate.join("Cargo.toml"), root);
+    let autotests = table
+        .get("package")
+        .and_then(|package| package.get("autotests"))
+        .and_then(toml::Value::as_bool);
+    if autotests != Some(false) {
+        problems.push(format!(
+            "{rel}: [package] lacks `autotests = false`: Cargo builds every tests/*.rs as a binary of its own"
+        ));
+    }
+    let mut built = BTreeSet::new();
+    for target in table
+        .get("test")
+        .and_then(toml::Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let path = target
+            .get("path")
+            .and_then(toml::Value::as_str)
+            .map(str::to_owned)
+            .or_else(|| {
+                let name = target.get("name").and_then(toml::Value::as_str)?;
+                Some(format!("tests/{name}.rs"))
+            });
+        let Some(file) = path.as_deref().and_then(|path| path.strip_prefix("tests/")) else {
+            continue;
+        };
+        built.insert(file.to_owned());
+        if let Ok(text) = std::fs::read_to_string(tests.join(file)) {
+            built.extend(declared_modules(&text));
+        }
+    }
+    for file in files {
+        if !built.contains(&file) {
+            problems.push(format!(
+                "{}: neither a module of tests/main.rs nor a [[test]] of its own in {rel}",
+                relative(&tests.join(&file), root)
+            ));
+        }
+    }
 }
 
 /// Checks the tree at `root`.

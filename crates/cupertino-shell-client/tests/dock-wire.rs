@@ -1,7 +1,7 @@
 //! The dock role over a real wire: how a group of events becomes a list of changes, the pictures the server sends as
 //! files, and the requests of the dock.
 
-mod support;
+use crate::support;
 
 use cupertino_geometry::Rect;
 use cupertino_protocols::server::cupertino_dock_v1::{

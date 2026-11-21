@@ -1,8 +1,7 @@
 //! `kit::bus`: a connection does its work on the UI thread, polled by the runtime, with no executor thread of its own; a
 //! call's reply comes back as a message, and the application hears when the connection closes.
 
-#[allow(dead_code)]
-mod support;
+use crate::support;
 
 use cupertino_kit::bus::{self, Bus};
 use cupertino_kit::core::{Application, Command, Window};

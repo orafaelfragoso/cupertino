@@ -1,6 +1,6 @@
 //! Semantic publication against an in-process server: interest, sealed snapshots, routed actions and replies.
 
-mod support;
+use crate::support;
 
 use cupertino_app_protocols::semantics::{
     seal, Action, ActionCall, Bounds, Node, Outcome, Position, Snapshot, States, MAX_FRAME,

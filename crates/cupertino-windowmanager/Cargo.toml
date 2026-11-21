@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "Window manager of the Cupertino desktop, a component of the shell host: the stage policy on cupertino-wm's stage model (stage on or off, groups, the strip of recent groups), placed in transactions, the stage strip a surface of its own whose thumbnails are holes, and `windowmanager.conf`"
+autotests = false
 
 [package.metadata.cupertino]
 layer = "shell"
@@ -24,3 +25,8 @@ cupertino-kit = { path = "../cupertino-kit", features = ["test"] }
 
 [[example]]
 name = "windowmanager_capture"
+
+[[test]]
+# Every file of `tests/` is a module of this one binary (`tests/main.rs`).
+name = "tests"
+path = "tests/main.rs"

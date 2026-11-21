@@ -26,6 +26,8 @@ udev = [
 ]
 # session bus worker: notification centre toggle
 dbus = []
+# `restart_policy::TEST_TIME_SCALE_ENV`, the restart delays on a test harness's clock; enabled only in dev-dependencies
+test = []
 
 [dependencies]
 cupertino-app-protocols = { path = "../cupertino-app-protocols" }

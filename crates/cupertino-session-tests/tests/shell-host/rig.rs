@@ -28,6 +28,10 @@ const WAIT: Duration = Duration::from_secs(60);
 /// How long one turn of the server's loop waits for an event at most.
 const TURN: Duration = Duration::from_millis(5);
 
+/// The factor for the server's restart delays (its backoffs and quiet moments): a twentieth, so a test's rows of crashes
+/// wait milliseconds instead of seconds while the server still counts and orders them as it does in a session.
+const TIME_SCALE: f64 = 0.05;
+
 /// The share of an area's pixels that must show a colour for the area to show it: all but antialiased edges.
 const COVERED: f64 = 0.9;
 
@@ -77,6 +81,11 @@ impl Rig {
     pub fn new(name: &str, components: &[&str], alone: &[&str]) -> Self {
         // the software rasteriser, as the server's program tests run the headless server
         std::env::set_var("LIBGL_ALWAYS_SOFTWARE", "1");
+        // the restart delays on the test's clock, which the hosts this rig starts inherit
+        std::env::set_var(
+            cupertino_server::restart_policy::TEST_TIME_SCALE_ENV,
+            TIME_SCALE.to_string(),
+        );
         let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("shell-host");
         std::fs::create_dir_all(&dir).expect("the report's folder");
         let report = dir.join(format!("{name}-{}.report", std::process::id()));

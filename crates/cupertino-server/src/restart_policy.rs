@@ -37,8 +37,38 @@ impl Backoff {
         }
         let interval = self.interval;
         self.interval = (interval * 2).min(BACKOFF_CAP);
-        interval
+        scaled(interval)
     }
+}
+
+/// The environment variable a test harness sets to a factor for the restart delays (`0.05` waits a twentieth). Only a
+/// build with the `test` feature reads it, once, at the first delay, so a production server cannot be slowed or sped
+/// up by its environment. It scales the waits ([`RESTART_THROTTLE`] up to [`BACKOFF_CAP`], the shell components'
+/// backoff and the shared host's quiet moment), never the windows that count failures or runs ([`STABLE_AFTER`] and
+/// the give-up window), so the events, their order and their counts stay the same and only come sooner.
+pub const TEST_TIME_SCALE_ENV: &str = "CUPERTINO_TEST_TIME_SCALE";
+
+/// `delay` as this process waits it: as given, or times [`TEST_TIME_SCALE_ENV`] in a test build that sets it.
+pub fn scaled(delay: Duration) -> Duration {
+    test_time_scale().map_or(delay, |scale| delay.mul_f64(scale))
+}
+
+/// The factor [`TEST_TIME_SCALE_ENV`] gives when it is a finite number above 0, read once.
+#[cfg(feature = "test")]
+fn test_time_scale() -> Option<f64> {
+    static SCALE: std::sync::OnceLock<Option<f64>> = std::sync::OnceLock::new();
+    *SCALE.get_or_init(|| {
+        std::env::var(TEST_TIME_SCALE_ENV)
+            .ok()
+            .and_then(|v| v.trim().parse::<f64>().ok())
+            .filter(|s| s.is_finite() && *s > 0.0)
+    })
+}
+
+/// A build without the `test` feature waits every delay as given.
+#[cfg(not(feature = "test"))]
+fn test_time_scale() -> Option<f64> {
+    None
 }
 
 /// What to do with a process that exited.

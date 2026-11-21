@@ -34,9 +34,9 @@ The restart tests crash a component and wait for the real delays: `RESTART_THROT
 30 s (`cupertino-server/src/restart_policy.rs`), `RESTART_QUIET_*` (`host.rs`), and the host's liveness thresholds
 (`cupertino-kit-shell/src/hosting.rs`).
 
-- [ ] Find which delays each of the 11 slow tests actually waits for (a `CUPERTINO_PROFILE` timeline of one run, not
+- [x] Find which delays each of the 11 slow tests actually waits for (a `CUPERTINO_PROFILE` timeline of one run, not
       prints).
-- [ ] A test-only scale for those delays, set by the test harness. Decision: an environment variable the server and
+- [x] A test-only scale for those delays, set by the test harness. Decision: an environment variable the server and
       host read once at start, only with the `test` feature (`cupertino-kit/test` already exists for this kind of
       thing), so a production build cannot be slowed or sped up by the environment. The policy's order of events
       stays the same; only the durations scale.

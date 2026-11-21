@@ -215,7 +215,7 @@ impl Dispatch<wl_registry::WlRegistry, ()> for ComponentClientState {
                 }
                 "cupertino_shell_v1" => {
                     state.shell =
-                        Some(reg.bind::<CupertinoShellV1, _, _>(name, version.min(29), qh, ()));
+                        Some(reg.bind::<CupertinoShellV1, _, _>(name, version.min(31), qh, ()));
                 }
                 _ => {}
             }

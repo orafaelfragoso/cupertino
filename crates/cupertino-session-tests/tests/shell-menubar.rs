@@ -26,13 +26,14 @@ use std::io::{BufRead, BufReader};
 use std::os::unix::fs::DirBuilderExt;
 use std::path::PathBuf;
 use std::process::{Child, Command as Process, Stdio};
+use std::time::{Duration, Instant};
 
 use cupertino_menubar::dbus::registrar::REGISTRAR_NAME;
 use cupertino_menubar::dbus::sni::{DEFAULT_ITEM_PATH, WATCHER_NAME, WATCHER_PATH};
 use cupertino_server::host::HostKind;
 use zbus::blocking::Connection;
 
-use components::{BLUE, DOCK_SIZE, RED};
+use components::{BLUE, DOCK_SIZE, RED, TICK};
 use memory::{steady_allocator, HostMemory, CRASHES_IN_A_ROW, RESTARTS};
 use rig::{count, magenta, Area, Rig, OUTPUT_SIZE};
 
@@ -98,6 +99,11 @@ fn dock_colour(rig: &mut Rig) -> Option<&'static str> {
         None
     }
 }
+
+/// How often a restart watch looks at the dock's colour: a third of [`TICK`], so each colour the dock holds for a tick is
+/// seen, while the output is not drawn into an image on every turn of the loop (a whole software frame each, in a debug
+/// build).
+const DOCK_LOOK: Duration = Duration::from_millis(TICK.as_millis() as u64 / 3);
 
 /// The height of the menu bar, in points (pixels at the output's scale 1).
 fn bar_height() -> f64 {
@@ -329,18 +335,25 @@ fn the_menu_bar_restarts_alone_holding_its_place_after_injected_panics() {
                 .map(drop)
         })
         .unwrap_or_else(|e| panic!("the menu bar takes a crash at {at}: {e}"));
-        if at == "paint" {
-            // what it draws next panics: the bar with the item. Something else may have it draw first, and then the
-            // watcher is already gone with it: the crash is taken all the same
-            let _ = register(&mut rig, &session, &item);
-        }
+        // what it draws next panics: the bar with an item new to it, so it draws now, not when its clock next turns
+        // a minute (the first instance already shows `item`). Something else may have it draw first, and then the
+        // watcher is already gone with it: the crash is taken all the same. The item ends with this crash's turn
+        let _fresh = (at == "paint").then(|| {
+            let fresh = item_connection();
+            let _ = register(&mut rig, &session, &fresh);
+            fresh
+        });
         // every turn until it runs again the bar's space stays reserved and its picture shows, live, held or drawn
         // anew: the crashed instance's bar shows live until its connection ends, also once its teardown destroyed the
         // role object, and is then held as the output's menu bar. But the server holds nothing of a component it gives
         // up, the fifth failure in a row (D16)
         let gives_up = (crash + 1) % CRASHES_IN_A_ROW == 0;
+        let mut looked: Option<Instant> = None;
         let mut watch = |rig: &mut Rig| {
-            colours.extend(dock_colour(rig));
+            if looked.is_none_or(|at| at.elapsed() >= DOCK_LOOK) {
+                looked = Some(Instant::now());
+                colours.extend(dock_colour(rig));
+            }
             if gives_up {
                 return;
             }

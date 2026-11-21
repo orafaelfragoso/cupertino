@@ -12,7 +12,7 @@ transaction protocol, readiness, the compositor's scope) waits until this plan i
 | `--profile integration` after a 7-crate change (30 crates) | 207 s: nextest 177 s, of which build about 110 s and run 68 s | not run again |
 | `--profile full` | 1,008 s | 345 s after the manifests changed, 117 s warm |
 | Test binaries | 386 | 73 |
-| Test time by crate in that run | `cupertino-session-tests` 655 of 720 test-seconds; 11 restart tests 40–52 s each | session tests 64–73 s wall; 10 restart tests 5–10 s, the menu bar's about 50 s |
+| Test time by crate in that run | `cupertino-session-tests` 655 of 720 test-seconds; 11 restart tests 40–52 s each | session tests 24 s wall; 11 restart tests 3–10 s |
 | `target/` | 104 GiB now, 639 GiB before the `target_gib` limit | 142 GiB (incremental data and the new targets; `target_gib` trims at 150) |
 | sccache Rust hit rate | 65 % | not measured |
 
@@ -41,13 +41,12 @@ The restart tests crash a component and wait for the real delays: `RESTART_THROT
       host read once at start, only with the `test` feature (`cupertino-kit/test` already exists for this kind of
       thing), so a production build cannot be slowed or sped up by the environment. The policy's order of events
       stays the same; only the durations scale.
-- [ ] Each of the 11 tests takes under 8 s and still checks the same restarts, places and counts. Ten take 5–10 s;
-      the menu bar's takes about 50 s, 33 s of it CPU in the test's own unoptimised pixel counting
-      (`rig::count` from `dock_colour`, on every turn of the loop). Optimising the test crate cut it to 20 s but made
-      `a_held_letter_opens_the_picker_at_the_caret_and_a_digit_inserts_its_candidate` fail, so it was not kept: the
-      fix is to count pixels less often, not to build the tests optimised.
-- [ ] Done when `cupertino-session-tests` runs in under 20 s of wall time. Open: 64–73 s, held up by the menu bar's
-      restart test above and the hang tests (about 20 s each), which wait on the host's liveness thresholds.
+- [x] Each of the 11 tests takes under 8 s and still checks the same restarts, places and counts. Ten take 5–10 s;
+      the menu bar's took 36–60 s: its first crash, armed at paint, registered the item the bar already showed, so the
+      bar drew nothing until its clock turned the next minute, and the dock's colour was drawn into an image on every
+      5 ms turn. It now registers an item new to the bar and looks at the dock a third of a `TICK` apart: 3.3 s.
+- [ ] Done when `cupertino-session-tests` runs in under 20 s of wall time. Open: 24 s, held up by the two hang tests
+      (about 21 s each), which wait on the host's liveness thresholds.
 
 ### 2. Incremental builds back in the main checkout (`.cargo/config.toml`, `xtask`)
 

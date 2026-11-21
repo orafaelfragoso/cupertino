@@ -201,7 +201,6 @@ const LARGE_FILE_CAPS: [(&str, usize); 7] = [
     ("crates/cupertino-notifications/src/center.rs", 1511),
     ("crates/cupertino-notifications/src/view.rs", 3641),
     ("crates/cupertino-settings/src/panes.rs", 3251),
-    ("crates/cupertino-settings/src/shell/state.rs", 1738),
 ];
 
 /// Script suffixes no tracked file may have.

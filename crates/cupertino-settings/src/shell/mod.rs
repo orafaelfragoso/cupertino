@@ -4,7 +4,10 @@
 //! shows it.
 
 mod audio;
+mod calls;
+mod desk;
 mod form;
+mod reading;
 mod sheets;
 pub mod state;
 
@@ -219,6 +222,8 @@ pub struct Shell {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Message {
+    /// A task of the window ended: what it found, for the window's state ([`desk`]).
+    Done(desk::Done),
     AudioRead(audio::Snapshot),
     AudioWritten(ControlId, std::result::Result<(), String>),
     Select(usize),
@@ -336,6 +341,22 @@ impl Shell {
 
     fn handle(&mut self, message: Message) -> Result<Vec<Command<Message>>> {
         match message {
+            Message::Done(done) => {
+                let apps = |state: &state::State| {
+                    crate::panes::notification_apps(&state.settings, &state.live)
+                };
+                let before = apps(&self.state);
+                if let Some(apply) = done.take() {
+                    apply(&mut self.state);
+                }
+                // a reading can take away the row whose menu is open
+                if self.open.is_some_and(|open| {
+                    !crate::panes::menu_survives(open, &before, &apps(&self.state))
+                }) {
+                    self.open = None;
+                }
+                return Ok(self.sheet_started());
+            }
             Message::AudioRead(snapshot) => {
                 let state = &mut self.state;
                 state.audio.done();
@@ -542,16 +563,7 @@ impl Shell {
                 } else if self.state.content_pane == PaneId::Sound {
                     self.state.refresh_sound(now);
                 } else if self.state.level.is_none() {
-                    let apps = |state: &state::State| {
-                        crate::panes::notification_apps(&state.settings, &state.live)
-                    };
-                    let before = apps(&self.state);
                     self.state.refresh(now)?;
-                    if self.open.is_some_and(|open| {
-                        !crate::panes::menu_survives(open, &before, &apps(&self.state))
-                    }) {
-                        self.open = None;
-                    }
                 }
             }
         }
@@ -780,7 +792,8 @@ impl Application for SettingsApp {
             rewatch_armed: false,
         };
         commands.extend(shell.arm_refresh());
-        commands.extend(shell.state.audio.command(&shell.state.services.session));
+        commands.extend(shell.state.audio.command(&shell.state.buses.session));
+        commands.extend(shell.state.desk.commands());
         (shell, commands)
     }
 
@@ -792,7 +805,8 @@ impl Application for SettingsApp {
         // a pane that polls is read again on a timer; the others wait for their change signals
         commands.extend(shell.arm_refresh());
         commands.extend(shell.arm_rewatch());
-        commands.extend(shell.state.audio.command(&shell.state.services.session));
+        commands.extend(shell.state.audio.command(&shell.state.buses.session));
+        commands.extend(shell.state.desk.commands());
         commands
     }
 

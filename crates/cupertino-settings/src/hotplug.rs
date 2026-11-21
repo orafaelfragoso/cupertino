@@ -1,7 +1,7 @@
-//! Devices plugged in and removed: a thread waits on the kernel's device event socket for udev's announcements and
-//! tells [`Changed::Hardware`] when a device of a kind the panes list comes or goes, so a touchpad plugged in adds
-//! its row whatever pane shows. The socket carries nothing while no device comes or goes; a device's other events (a
-//! battery's charge) are dropped in the thread.
+//! Devices plugged in and removed: a task of the window's loop waits on the kernel's device event socket for udev's
+//! announcements and tells [`Changed::Hardware`] when a device of a kind the panes list comes or goes, so a touchpad
+//! plugged in adds its row whatever pane shows. The socket carries nothing while no device comes or goes; a device's
+//! other events (a battery's charge) are dropped in the task.
 
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
@@ -77,38 +77,47 @@ fn socket() -> io::Result<OwnedFd> {
     }
 }
 
-/// Wait for devices coming and going on a thread of its own; `on` hears [`Changed::Hardware`] for each of a kind the
-/// panes list.
-pub fn start(on: Arc<dyn Fn(Changed) + Send + Sync>) -> io::Result<()> {
-    let fd = socket()?;
-    std::thread::Builder::new()
-        .name("settings-hotplug".into())
-        .spawn(move || {
-            let mut buffer = vec![0u8; MESSAGE_BYTES];
-            loop {
-                // SAFETY: reads at most the buffer's length into the buffer, from the descriptor the thread owns.
+/// Wait for devices coming and going, as a task of the window's loop; `on` hears [`Changed::Hardware`] for each of a
+/// kind the panes list. It ends only when the socket can't be made or read, and says why first.
+pub async fn watch(on: Arc<dyn Fn(Changed) + Send + Sync>) {
+    let socket = match socket().and_then(async_io::Async::new) {
+        Ok(socket) => socket,
+        Err(e) => {
+            eprintln!("cupertino-settings: cannot hear devices coming and going: {e}; a device plugged in shows when the window reads the hardware again");
+            return;
+        }
+    };
+    let mut buffer = vec![0u8; MESSAGE_BYTES];
+    loop {
+        let read = socket
+            .read_with(|fd| {
+                // SAFETY: reads at most the buffer's length into the buffer, from the descriptor the task owns.
                 let read = unsafe {
                     libc::recv(fd.as_raw_fd(), buffer.as_mut_ptr().cast(), buffer.len(), 0)
                 };
-                if read < 0 {
-                    let e = io::Error::last_os_error();
-                    // a burst the socket could not hold is a device coming or going too
-                    match e.raw_os_error() {
-                        Some(libc::EINTR) => continue,
-                        Some(libc::ENOBUFS) => {
-                            on(Changed::Hardware);
-                            continue;
+                match usize::try_from(read) {
+                    Ok(read) => Ok(read),
+                    Err(_) => match io::Error::last_os_error() {
+                        e if e.kind() == io::ErrorKind::Interrupted => {
+                            Err(io::ErrorKind::WouldBlock.into())
                         }
-                        _ => {
-                            eprintln!("cupertino-settings: device events: {e}; a device plugged in shows when the window reads the hardware again");
-                            return;
-                        }
-                    }
+                        e => Err(e),
+                    },
                 }
-                if plugged(&buffer[..read as usize]) {
+            })
+            .await;
+        match read {
+            Ok(read) => {
+                if plugged(&buffer[..read]) {
                     on(Changed::Hardware);
                 }
             }
-        })?;
-    Ok(())
+            // a burst the socket could not hold is a device coming or going too
+            Err(e) if e.raw_os_error() == Some(libc::ENOBUFS) => on(Changed::Hardware),
+            Err(e) => {
+                eprintln!("cupertino-settings: device events: {e}; a device plugged in shows when the window reads the hardware again");
+                return;
+            }
+        }
+    }
 }

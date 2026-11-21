@@ -1,27 +1,30 @@
 //! What the Settings window shows and does, apart from how it shows it: the history, the settings and their files,
-//! the live services, the sheets, and the work on other threads that answers through [`Background`].
+//! the live services (read and called off the window's thread: [`super::reading`], [`super::calls`]), the sheets, and
+//! the work on other threads that answers through [`Background`].
 
 use std::collections::HashMap;
 use std::error::Error;
 use std::path::PathBuf;
 
-use crate::agent::{Agent, AgentEvent};
+use super::calls::Asker;
+use super::desk::Desk;
+use super::reading::{Buses, Watches};
+use crate::agent::AgentEvent;
 use crate::controls::{Control, LevelWriter, Value};
 use crate::history::History;
 use crate::inflight::Reads;
-use crate::live::{
-    display_name, DeviceAction, DeviceFailure, Live, LoginScreen, Pictures, Reading,
-};
+use crate::live::{display_name, DeviceAction, Live, Pictures};
+use crate::meter::Meter;
 use crate::pages::Page;
 use crate::panes::{self, Call, ControlId, Effect, Section, Session};
-use crate::services::{self, Services, SESSION_NAME, SESSION_PATH};
-use crate::settings::{system_accessibility, File, Paths, Settings};
+use crate::services::Services;
+use crate::settings::{File, Paths, Settings};
 use crate::sheet::{Answer, Outcome, Sheet};
 use crate::sidebar;
-use crate::watch::{Changed, Which};
+use crate::watch::{Changed, Interest, Which};
 use crate::PaneId;
 use cupertino_assets::Assets;
-use cupertino_defaults::accessibility::{DisplayOptions, SYSTEM_ACCESSIBILITY};
+use cupertino_defaults::accessibility::DisplayOptions;
 use cupertino_defaults::watch::{ConfigWatcher, WatchEvent};
 use cupertino_icons::thumbnail::{ThumbError, ThumbSize, Thumbnailer};
 use cupertino_kit::filepicker::Mode;
@@ -38,8 +41,8 @@ pub(crate) type Result<T> = std::result::Result<T, Box<dyn Error>>;
 pub(crate) enum Background {
     ShowPane(PaneId, String),
     Agent(AgentEvent),
-    /// The pairing with device `.0` ended.
-    Paired(String, std::result::Result<(), String>),
+    /// The watch of this bus has the bus daemon's rules ([`crate::watch`]).
+    Watching(Which),
     /// A settings file changed on disk.
     Files(WatchEvent),
     /// A service the panes read sent a change signal ([`crate::watch`]).
@@ -63,21 +66,8 @@ pub(crate) enum Background {
         image: std::path::PathBuf,
         why: crate::controls::Unreadable,
     },
-    /// Whether the Login Screen section shows, asked at the Accessibility pane's opening `opening`.
-    LoginScreen {
-        opening: u64,
-        allowed: bool,
-    },
-    /// sessiond answered Use Mine.
-    LoginScreenSaved(std::result::Result<(), String>),
     /// The graphics memory only the driver's tool reports was read.
     VideoMemory(Vec<(crate::about::PciAddress, u64)>),
-    /// A service call made on a thread of its own ended; `id` is the control that asked for it.
-    Called {
-        id: Option<ControlId>,
-        call: Call,
-        result: std::result::Result<(), String>,
-    },
 }
 
 /// Reads the graphics memory only the driver's tool reports, by PCI address.
@@ -166,6 +156,7 @@ pub(crate) fn background_channel(
             // a change signal that finds the queue full is not needed: the changes queued read everything again
             Background::ShowPane(..)
             | Background::Agent(_)
+            | Background::Watching(_)
             | Background::Changed(_)
             | Background::Files(_) => sender.try_send(event).is_ok(),
             event => sender.send(event).is_ok(),
@@ -178,9 +169,9 @@ pub(crate) fn background_channel(
 }
 
 /// The Wi-Fi pane scans this often while it is shown and the radio is on (approximate, §6.4).
-const SCAN: f64 = 10.0;
+pub(crate) const SCAN: f64 = 10.0;
 /// How often the battery's recorded charge is read again while the Battery pane shows, in seconds.
-const HISTORY_REFRESH: f64 = 60.0;
+pub(crate) const HISTORY_REFRESH: f64 = 60.0;
 /// How often a pane reads again the readings that have no change signal, in seconds.
 pub(crate) const POLL: f64 = 1.0;
 /// How often the input level meter reads the level while it shows, in seconds.
@@ -227,7 +218,8 @@ pub(crate) struct SliderDrag {
 pub struct State {
     pub(crate) paths: Paths,
     pub(crate) settings: Settings,
-    pub(crate) services: Services,
+    /// The services, called on the I/O pool, and the other tasks the window starts.
+    pub(crate) desk: Desk,
     pub(crate) live: Live,
     pub(crate) hidden: Vec<PaneId>,
     pub(crate) groups: Vec<Vec<PaneId>>,
@@ -240,13 +232,22 @@ pub struct State {
     pub(crate) reported: std::collections::HashSet<String>,
     pub(crate) dark: bool,
     pub(crate) display: DisplayOptions,
-    pub(crate) bus: Option<zbus::blocking::Connection>,
+    /// The accessibility settings as the server held them at its last reading, put over the files' after each read of
+    /// them ([`State::sync_accessibility`]).
+    pub(crate) held_accessibility: Option<HashMap<String, String>>,
     pub(crate) sheet: Option<Sheet>,
     pub(crate) level: Option<LevelDrag>,
     pub(crate) slide: Option<SliderDrag>,
     pub(crate) start: std::time::Instant,
     pub(crate) refreshed: f64,
     pub(super) audio: super::audio::Audio,
+    /// The input level meter, while the Sound pane shows the input.
+    pub(crate) meter: Option<Meter>,
+    /// Whether a reading of the shown pane is on its way, and whether another was asked for meanwhile.
+    pub(crate) reading: bool,
+    pub(crate) read_again: bool,
+    /// The Bluetooth pane waits for its reading to show an adapter before it serves its pairing agent.
+    pub(crate) agent_wanted: bool,
     pub(crate) scanned: f64,
     /// When the battery's charge history was last read.
     pub(crate) history_read: f64,
@@ -278,9 +279,11 @@ pub struct State {
     pub(crate) read_video_memory: ReadVideoMemory,
     /// An activation token another start of Settings handed over, for the window to raise itself with.
     pub(crate) activation: Option<String>,
-    /// The buses whose watch ended and has not started again, and how long until the next try, in seconds.
-    lost: Vec<Which>,
-    rewatch_in: f64,
+    /// The buses the watches and the Sound pane's client reach, the watches, and the change signals the shown pane
+    /// reads, which they share.
+    pub(crate) buses: Buses,
+    pub(crate) watches: Watches,
+    pub(crate) interest: Interest,
     /// Watches the settings files, until [`State::watching`] hands it to the loop.
     files: Option<ConfigWatcher>,
     /// Watches `desktop-control.conf`, which the compositor writes when an app first asks, on its own: a file that
@@ -339,10 +342,15 @@ impl State {
         let account = crate::system::Account::read();
         let display = settings.accessibility.display;
         let screen_reader_installed = paths.screen_reader.is_some();
+        let devices = services.reads_hardware();
+        let buses = Buses {
+            session: services.session.reach(),
+            system: services.system.reach(),
+        };
         let mut state = State {
             paths,
             settings,
-            services,
+            desk: Desk::new(services),
             live: Live {
                 hardware: Some(backends.hardware),
                 screen_reader_installed,
@@ -356,13 +364,17 @@ impl State {
             reported: std::collections::HashSet::new(),
             dark: false,
             display,
-            bus: None,
+            held_accessibility: None,
             sheet: None,
             level: None,
             slide: None,
             start: std::time::Instant::now(),
             refreshed: f64::NEG_INFINITY,
             audio: Default::default(),
+            meter: None,
+            reading: false,
+            read_again: false,
+            agent_wanted: false,
             scanned: f64::NEG_INFINITY,
             history_read: f64::NEG_INFINITY,
             picking_exclusion: false,
@@ -389,16 +401,14 @@ impl State {
             read_video_memory: std::sync::Arc::new(read_video_memory),
             login_saving: false,
             activation: None,
-            lost: Vec::new(),
-            rewatch_in: REWATCH_FIRST,
+            buses,
+            watches: Watches::default(),
+            interest: Interest::default(),
             files,
             answers,
         };
         state.sync_accessibility();
-        let to_loop = state.notify.clone();
-        state.services.watch(std::sync::Arc::new(move |changed| {
-            to_loop(Background::Changed(changed))
-        }));
+        state.start_watching(devices);
         state.read_appearance();
         state.enter_pane(None, pane)?;
         Ok(state)
@@ -422,20 +432,12 @@ impl State {
             .collect()
     }
 
-    /// Read the appearance the session is in; it changes with the session interface's change signal.
-    fn read_appearance(&mut self) {
-        if let Some(dark) = self.services.dark() {
-            self.dark = dark;
-        }
-    }
-
     /// How soon the shown pane reads its readings again when no change signal comes, in seconds; `None` when every
     /// reading it shows has a change signal ([`crate::watch`]) or it shows none. Only these panes wake the window on
     /// a timer:
     /// * Sound: the volume and the outputs are read from the sound server, which sends no change signal; the input
     ///   level meter reads the level ten times a second while it shows.
-    /// * Displays: the displays come from a fresh connection to the display server, which tells the window nothing
-    ///   when a display comes or goes.
+    /// * Displays: the displays come from the server's `Displays1`, whose change signal the window does not watch.
     /// * Wi-Fi and Network: the interfaces' addresses are read from the kernel, which sends no change signal; the
     ///   Wi-Fi pane also scans every ten seconds.
     /// * Notifications: a new notification's application has no change signal.
@@ -453,61 +455,6 @@ impl State {
             PaneId::Battery => Some(HISTORY_REFRESH),
             _ => None,
         }
-    }
-
-    /// Whether the shown pane shows a reading `changed` is about.
-    fn shows(&self, changed: Changed) -> bool {
-        match changed {
-            // the backends and the hardware name the sidebar's rows, whatever the pane
-            Changed::Owner(_) | Changed::Hardware => true,
-            Changed::Session => self.content_pane == PaneId::Mouse,
-            Changed::Ended(_) => false,
-            changed => reads(self.content_pane).contains(&changed),
-        }
-    }
-
-    /// Services sent change signals: read again what they changed, once, if the window shows it. A bus whose watch
-    /// ended is watched again on its new connection, or later ([`State::rewatch_after`]).
-    pub(crate) fn changed(&mut self, changes: &[Changed]) -> Result<()> {
-        let mut appearance = false;
-        for changed in changes {
-            match changed {
-                Changed::Ended(bus) => {
-                    self.services.watch_ended(*bus);
-                    self.services.keep_watching();
-                    if !self.services.watched(*bus) && !self.lost.contains(bus) {
-                        self.lost.push(*bus);
-                        self.rewatch_in = REWATCH_FIRST;
-                    }
-                }
-                Changed::Owner(Which::Session) | Changed::Session => appearance = true,
-                _ => {}
-            }
-        }
-        if appearance {
-            self.read_appearance();
-        }
-        if changes.iter().any(|c| self.shows(*c)) {
-            self.refresh(self.now())?;
-        }
-        Ok(())
-    }
-
-    /// How soon to try again to watch a bus whose watch ended; `None` while every such bus is watched again.
-    pub(crate) fn rewatch_after(&self) -> Option<f64> {
-        (!self.lost.is_empty()).then_some(self.rewatch_in)
-    }
-
-    /// Try again to watch the buses whose watch ended; the next try waits twice as long.
-    pub(crate) fn rewatch(&mut self) {
-        self.services.keep_watching();
-        let services = &self.services;
-        self.lost.retain(|bus| !services.watched(*bus));
-        self.rewatch_in = if self.lost.is_empty() {
-            REWATCH_FIRST
-        } else {
-            (self.rewatch_in * 2.0).min(REWATCH_MAX)
-        };
     }
 
     pub(crate) fn now(&self) -> f64 {
@@ -550,103 +497,9 @@ impl State {
         Ok(())
     }
 
-    /// Whether the input level meter listens and shows now.
-    pub(crate) fn meter_running(&self) -> bool {
-        self.content_pane == PaneId::Sound && self.live.tab == 1 && !self.live.inputs.is_empty()
-    }
-
-    /// Read how loud the input is now; true when it changed.
-    pub(crate) fn refresh_meter(&mut self) -> bool {
-        let level = self.services.meter_level();
-        let changed = (level - self.live.input_level).abs() > 0.005;
-        self.live.input_level = level;
-        changed
-    }
-
-    pub(super) fn refresh_sound(&mut self, now: f64) {
-        self.refreshed = now;
-        if self.level.is_none() {
-            self.audio.read(self.live.tab == 1);
-        }
-        if self.live.tab == 1 {
-            self.services.start_meter();
-            self.live.input_level = self.services.meter_level();
-        } else {
-            self.services.stop_meter();
-            self.live.input_level = 0.0;
-        }
-    }
-
-    /// Read the live services of the pane shown again; draw again when something changed. The battery is read on the
-    /// first refresh too, whatever the pane: whether there is one names the Battery row.
-    pub(crate) fn refresh(&mut self, now: f64) -> Result<()> {
-        self.refreshed = now;
-        let backends = self.services.detect();
-        self.live.hardware = Some(backends.hardware);
-        let hidden = backends.hidden();
-        if hidden != self.hidden {
-            self.groups = sidebar::groups(&hidden);
-            self.hidden = hidden;
-        }
-        if self.hidden.contains(&self.pane()) {
-            return self.go(self.rows()[0]);
-        }
-        self.display = self.settings.accessibility.display;
-        if self.content_pane == PaneId::Battery
-            || self.live.battery == crate::live::Reading::Unknown
-        {
-            self.live.battery = self.services.battery();
-        }
-        if self.content_pane == PaneId::Battery {
-            let with_history = now - self.history_read >= HISTORY_REFRESH;
-            if with_history {
-                self.history_read = now;
-            }
-            self.live.battery_extras = self
-                .services
-                .battery_extras(&self.live.battery_extras, with_history);
-        }
-        match self.content_pane {
-            PaneId::Focus => self.live.focus = self.services.focus(),
-            PaneId::Notifications => self.live.notifying_apps = self.services.notifying_apps(),
-            PaneId::Sound => self.refresh_sound(now),
-            PaneId::Keyboard => self.live.keyboard_backlight = self.services.keyboard_backlight(),
-            PaneId::Vpn => self.live.vpns = self.services.vpns(),
-            PaneId::Displays => {
-                self.live.displays = self.services.displays();
-                if self.level.is_none() {
-                    self.live.brightness = self.services.brightness();
-                }
-            }
-            PaneId::Wifi | PaneId::Network => {
-                let keep = self.live.wifi.ready().cloned();
-                self.live.wifi = self.services.wifi(keep.as_ref());
-                self.live.interfaces = crate::netinfo::read();
-                let radio_on = self
-                    .live
-                    .wifi
-                    .ready()
-                    .is_some_and(|w| w.enabled && w.has_wifi_device());
-                if self.content_pane == PaneId::Wifi && radio_on && now - self.scanned >= SCAN {
-                    self.scanned = now;
-                    if let Err(e) = self.services.scan() {
-                        eprintln!("cupertino-settings: Wi-Fi scan: {e}");
-                    }
-                }
-            }
-            PaneId::Mouse => self.live.mice = self.services.mice(),
-            PaneId::Bluetooth => {
-                let keep = self.live.bluetooth.ready().cloned();
-                self.live.bluetooth = self.services.bluetooth(keep.as_ref());
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-
     /// The content now shows `to` (`from` before): start what the new pane needs and stop what the old one started.
     pub(crate) fn enter_pane(&mut self, from: Option<PaneId>, to: PaneId) -> Result<()> {
-        self.services.want(reads(to));
+        self.interest.set(reads(to));
         if let Some(from) = from.filter(|f| *f != to) {
             self.leave_pane(from);
         }
@@ -687,7 +540,8 @@ impl State {
             self.live.browsers = crate::system::browsers();
         }
         if to == PaneId::MenuBar {
-            self.live.tray = self.services.tray_items();
+            self.desk
+                .serve(Services::tray_items, |state, tray| state.live.tray = tray);
         }
         if to == PaneId::Privacy {
             self.settings.reload_clipboard(&self.paths);
@@ -709,45 +563,19 @@ impl State {
                 .unwrap_or_default();
             self.live.apps = crate::clipboard::installed(entries, &path_dirs);
         }
+        // the pairing agent waits for the reading to show an adapter
+        self.agent_wanted = to == PaneId::Bluetooth;
         self.refresh(self.now())?;
-        if to == PaneId::Bluetooth && self.live.bluetooth.ready().is_some_and(|b| b.available) {
-            let notify = self.notify.clone();
-            match self.services.register_agent(Agent {
-                on_event: Box::new(move |event| notify(Background::Agent(event))),
-            }) {
-                Ok(ours) => {
-                    self.agent_registered = ours;
-                    if let crate::live::Reading::Ready(b) = &mut self.live.bluetooth {
-                        b.agent_elsewhere = !ours;
-                    }
-                }
-                Err(e) => eprintln!("cupertino-settings: Bluetooth pairing agent: {e}"),
-            }
-            // discovery needs a powered adapter; the pane shows why otherwise
-            if self.live.bluetooth.ready().is_some_and(|b| b.powered) {
-                if let Err(e) = self.services.discovery(true) {
-                    eprintln!("cupertino-settings: Bluetooth discovery: {e}");
-                }
-            }
-        }
         Ok(())
     }
 
     pub(crate) fn leave_pane(&mut self, pane: PaneId) {
         if pane == PaneId::Sound {
-            self.services.stop_meter();
-            self.live.input_level = 0.0;
+            self.stop_meter();
         }
-        if pane == PaneId::Bluetooth && self.live.bluetooth.ready().is_some_and(|b| b.discovering) {
-            if let Err(e) = self.services.discovery(false) {
-                eprintln!("cupertino-settings: Bluetooth discovery: {e}");
-            }
-        }
-        if pane == PaneId::Bluetooth && self.agent_registered {
-            self.agent_registered = false;
-            if let Err(e) = self.services.unregister_agent() {
-                eprintln!("cupertino-settings: Bluetooth pairing agent: {e}");
-            }
+        if pane == PaneId::Bluetooth {
+            let discovering = self.live.bluetooth.ready().is_some_and(|b| b.discovering);
+            self.stop_bluetooth(discovering);
         }
     }
 
@@ -812,6 +640,7 @@ impl State {
                     .push((id, "The settings could not be read.".to_string()));
                 return Ok(());
             }
+            self.apply_held_accessibility();
             self.sync_accessibility();
         }
         let before = self.settings.clone();
@@ -846,7 +675,10 @@ impl State {
                     self.sheet = Some(Sheet::forget(&id, &name));
                     Ok(())
                 }
-                Effect::Service(call) => self.service_call(Some(id), &call),
+                Effect::Service(call) => {
+                    self.service_call(Asker::Row(Some(id)), &call);
+                    Ok(())
+                }
                 Effect::Audio(change) => {
                     self.audio.write(id, change);
                     Ok(())
@@ -934,17 +766,20 @@ impl State {
                     }
                     stored
                 }
-                Effect::SetAppearance { dark } => self.set_appearance(dark),
+                Effect::SetAppearance { dark } => {
+                    self.set_appearance(id, dark);
+                    Ok(())
+                }
                 Effect::SetTheme { dark } => {
                     // the file first, so the menu bar's schedule sees the new switch before the look changes
                     let stored = self
                         .settings
                         .store(&self.paths, File::Appearance)
                         .map_err(|e| e.to_string());
-                    match (stored, dark) {
-                        (Ok(()), Some(dark)) => self.set_appearance(dark),
-                        (stored, _) => stored,
+                    if let (Ok(()), Some(dark)) = (&stored, dark) {
+                        self.set_appearance(id, dark);
                     }
+                    stored
                 }
                 Effect::SetLoginItem { id, enable } => {
                     let done = crate::system::set_login_item(&id, enable)
@@ -958,8 +793,14 @@ impl State {
                     self.live.browsers = crate::system::browsers();
                     done
                 }
-                Effect::SetAccessibility { key, value } => self.set_accessibility(key, &value),
-                Effect::SetSystemAccessibility => self.save_login_screen(),
+                Effect::SetAccessibility { key, value } => {
+                    self.set_accessibility(id, key, &value);
+                    Ok(())
+                }
+                Effect::SetSystemAccessibility => {
+                    self.save_login_screen();
+                    Ok(())
+                }
             };
             if let Err(e) = outcome {
                 eprintln!("cupertino-settings: {e}");
@@ -981,86 +822,6 @@ impl State {
         Ok(())
     }
 
-    /// The action on device `id` failed with `reason`: its row says so until the next action.
-    pub(crate) fn device_failed(&mut self, id: &str, action: DeviceAction, reason: String) {
-        if let Reading::Ready(b) = &mut self.live.bluetooth {
-            b.device_failure = Some(DeviceFailure {
-                id: id.to_string(),
-                action,
-                reason,
-            });
-        }
-    }
-
-    /// Make `call` on its service; a Join waits for the device until it connects or fails. The readings are refreshed
-    /// after it, so the control shows the service's state, not the asked one.
-    pub(crate) fn service_call(
-        &mut self,
-        id: Option<ControlId>,
-        call: &Call,
-    ) -> std::result::Result<(), String> {
-        // a new action on a device: the last one's error goes
-        if let (Some((_, _)), crate::live::Reading::Ready(b)) =
-            (device_call(call), &mut self.live.bluetooth)
-        {
-            b.clear_failures();
-        }
-        if let Call::Pair(device) = call {
-            let notify = self.notify.clone();
-            let paired = device.clone();
-            let started = self.services.pair(device, move |result| {
-                notify(Background::Paired(paired, result))
-            });
-            if let Err(e) = &started {
-                self.device_failed(device, DeviceAction::Pair, e.clone());
-            }
-            return started;
-        }
-        // a call that can take long runs on a thread: the window goes on, and its end refreshes the readings
-        let notify = self.notify.clone();
-        let asked = call.clone();
-        if let Some(started) = self.services.call_in_background(call, move |result| {
-            notify(Background::Called {
-                id,
-                call: asked,
-                result,
-            })
-        }) {
-            match (&started, call) {
-                (Ok(()), Call::Join { ssid, .. }) => {
-                    if let crate::live::Reading::Ready(w) = &mut self.live.wifi {
-                        w.joining = Some(ssid.clone());
-                        w.failure = None;
-                    }
-                }
-                (Ok(()), Call::Connect(device)) => {
-                    if let crate::live::Reading::Ready(b) = &mut self.live.bluetooth {
-                        b.connect_asked(device);
-                    }
-                }
-                (Err(e), call) => {
-                    if let Some((device, action)) = device_call(call) {
-                        self.device_failed(device, action, e.clone());
-                    }
-                }
-                _ => {}
-            }
-            return started;
-        }
-        let result = self.services.call(call);
-        if let (Ok(()), Call::Join { ssid, .. }) = (&result, call) {
-            if let crate::live::Reading::Ready(w) = &mut self.live.wifi {
-                w.joining = Some(ssid.clone());
-                w.failure = None;
-            }
-        }
-        let now = self.now();
-        self.refresh(now).map_err(|e| e.to_string())?;
-        result
-    }
-
-    /// Ask sessiond whether the Login Screen section shows at this opening of the Accessibility pane: it stays hidden
-    /// until the answer, and the refusal shown under it at the last opening goes.
     /// Read the graphics memory only the driver's tool reports on a thread, once; the pane shows at once without
     /// it and gains it when [`Background::VideoMemory`] arrives.
     pub(crate) fn ask_video_memory(&mut self) {
@@ -1077,37 +838,6 @@ impl State {
             eprintln!("cupertino-settings: cannot read the graphics memory: {e}");
             self.video_memory = Some(VideoMemory::Read(Vec::new()));
         }
-    }
-
-    pub(crate) fn ask_login_screen(&mut self) {
-        self.live.login_screen = None;
-        self.errors.retain(|(id, _)| *id != ControlId::LoginScreen);
-        self.login_opening += 1;
-        let opening = self.login_opening;
-        let notify = self.notify.clone();
-        // a failure is logged and leaves the section hidden
-        let _ = self.services.can_set_system_accessibility(move |allowed| {
-            notify(Background::LoginScreen { opening, allowed })
-        });
-    }
-
-    /// Use Mine: send the person's allow-listed options to sessiond; the row shows "Saving…" until the reply.
-    pub(crate) fn save_login_screen(&mut self) -> std::result::Result<(), String> {
-        let session = Session {
-            dark: self.dark,
-            display: self.display,
-        };
-        let options = panes::login_screen_options(session, &self.settings);
-        let notify = self.notify.clone();
-        self.services
-            .set_system_accessibility(options, move |result| {
-                notify(Background::LoginScreenSaved(result))
-            })?;
-        self.login_saving = true;
-        if let Some(login) = &mut self.live.login_screen {
-            login.saving = true;
-        }
-        Ok(())
     }
 
     /// What a sheet's key or press decided.
@@ -1172,23 +902,14 @@ impl State {
                     Err(e) => eprintln!("cupertino-settings: {e}"),
                 }
             }
-            Outcome::Do(call) => match self.service_call(None, &call) {
-                Ok(()) => self.sheet = None,
-                // the passphrase sheet stays with the error (§7.2); a failed removal closes it, and the device's row
-                // shows the error (service_call put it there)
-                Err(e) => match &mut self.sheet {
-                    Some(sheet) if matches!(call, Call::Join { .. }) => sheet.failed(&e),
-                    _ => {
-                        self.sheet = None;
-                        eprintln!("cupertino-settings: {e}");
-                        if let (None, crate::live::Reading::Ready(b)) =
-                            (device_call(&call), &mut self.live.bluetooth)
-                        {
-                            b.failure = Some(e);
-                        }
-                    }
-                },
-            },
+            // the passphrase sheet waits for the join and stays with its error (§7.2); a removal's sheet closes, and the
+            // device's row shows its error
+            Outcome::Do(call) => {
+                if !matches!(call, Call::Join { .. }) {
+                    self.sheet = None;
+                }
+                self.service_call(Asker::Sheet, &call);
+            }
         }
         Ok(())
     }
@@ -1355,6 +1076,7 @@ impl State {
     pub(crate) fn background_event(&mut self, event: Background) -> Result<()> {
         match event {
             Background::Changed(changed) => self.changed(&[changed])?,
+            Background::Watching(bus) => self.watch_started(bus),
             Background::ShowPane(pane, token) => {
                 self.go(pane)?;
                 if !token.is_empty() {
@@ -1437,14 +1159,6 @@ impl State {
             Background::NoThumbnail { image, why } => {
                 self.live.pictures.unreadable.insert(image, why);
             }
-            Background::LoginScreen { opening, allowed } => {
-                if opening == self.login_opening {
-                    self.live.login_screen = allowed.then(|| LoginScreen {
-                        current: system_accessibility(std::path::Path::new(SYSTEM_ACCESSIBILITY)),
-                        saving: self.login_saving,
-                    });
-                }
-            }
             Background::VideoMemory(list) => {
                 if !list.is_empty() {
                     if let Some(system) = &mut self.live.system {
@@ -1453,17 +1167,6 @@ impl State {
                     }
                 }
                 self.video_memory = Some(VideoMemory::Read(list));
-            }
-            Background::LoginScreenSaved(result) => {
-                self.login_saving = false;
-                if let Some(login) = &mut self.live.login_screen {
-                    login.saving = false;
-                    login.current =
-                        system_accessibility(std::path::Path::new(SYSTEM_ACCESSIBILITY));
-                }
-                if let Err(e) = result {
-                    self.errors.push((ControlId::LoginScreen, e));
-                }
             }
             Background::Files(WatchEvent::Changed(changed)) => {
                 if let Err(e) = self.settings.reload(&self.paths) {
@@ -1477,46 +1180,11 @@ impl State {
                 {
                     self.settings.reload_desktop_control(&self.paths);
                 }
+                self.apply_held_accessibility();
                 self.sync_accessibility();
             }
             Background::Files(WatchEvent::Error(e)) => {
                 eprintln!("cupertino-settings: watching the settings files: {e}")
-            }
-            Background::Called { id, call, result } => {
-                if let (Call::Connect(device), crate::live::Reading::Ready(b)) =
-                    (&call, &mut self.live.bluetooth)
-                {
-                    b.connect_returned(device);
-                }
-                if let Err(e) = result {
-                    eprintln!("cupertino-settings: {e}");
-                    match (&call, &mut self.live.wifi, device_call(&call)) {
-                        (Call::Join { .. }, crate::live::Reading::Ready(w), _) => {
-                            w.joining = None;
-                            w.failure = Some(e);
-                        }
-                        (_, _, Some((device, action))) => {
-                            let device = device.to_string();
-                            self.device_failed(&device, action, e);
-                        }
-                        _ => {
-                            if let Some(id) = id {
-                                self.errors.retain(|(e, _)| *e != id);
-                                self.errors.push((id, e));
-                            }
-                        }
-                    }
-                }
-                let now = self.now();
-                self.refresh(now)?;
-            }
-            Background::Paired(device, result) => {
-                if let Err(e) = result {
-                    eprintln!("cupertino-settings: {e}");
-                    self.device_failed(&device, DeviceAction::Pair, e);
-                }
-                let now = self.now();
-                self.refresh(now)?;
             }
         }
         Ok(())
@@ -1630,95 +1298,11 @@ impl State {
         for effect in panes::change(id, Value::Fraction(v), &mut self.settings, &self.live) {
             match effect {
                 Effect::Audio(change) => self.audio.write(id, change),
-                Effect::Service(call) => {
-                    if let Err(e) = self.services.call(&call) {
-                        eprintln!("cupertino-settings: {e}");
-                        self.errors.retain(|(e, _)| *e != id);
-                        self.errors.push((id, e));
-                    }
-                }
+                Effect::Service(call) => self.level_call(id, call),
                 _ => {}
             }
         }
         Ok(())
-    }
-
-    /// Ask the server for the appearance (`org.cupertino.Session1.SetAppearance`); the control shows it at once and the
-    /// session's report replaces it.
-    pub(crate) fn set_appearance(&mut self, dark: bool) -> std::result::Result<(), String> {
-        let name = if dark { "dark" } else { "light" };
-        let bus = self.bus()?;
-        bus.call_method(
-            Some(SESSION_NAME),
-            SESSION_PATH,
-            Some(SESSION_NAME),
-            "SetAppearance",
-            &(name,),
-        )
-        .map_err(|e| {
-            format!(
-                "The appearance could not be changed: {}",
-                services::failure(&e)
-            )
-        })?;
-        self.dark = dark;
-        Ok(())
-    }
-
-    /// The session bus, connected on first use.
-    pub(crate) fn bus(&mut self) -> std::result::Result<&zbus::blocking::Connection, String> {
-        if self.bus.is_none() {
-            self.bus = Some(zbus::blocking::Connection::session().map_err(|e| {
-                services::log_once(&format!("the session bus: {e}"));
-                "The session is not available.".to_string()
-            })?);
-        }
-        Ok(self.bus.as_ref().expect("connected above"))
-    }
-
-    /// Ask the server to set one key of `accessibility.conf` (`org.cupertino.Session1.SetAccessibility`) and show what
-    /// the server now holds; the display options themselves arrive from the session.
-    pub(crate) fn set_accessibility(
-        &mut self,
-        key: &str,
-        value: &str,
-    ) -> std::result::Result<(), String> {
-        let bus = self.bus()?;
-        bus.call_method(
-            Some(SESSION_NAME),
-            SESSION_PATH,
-            Some(SESSION_NAME),
-            "SetAccessibility",
-            &(key, value),
-        )
-        .map_err(|e| {
-            format!(
-                "The setting could not be changed: {}",
-                services::failure(&e)
-            )
-        })?;
-        self.sync_accessibility();
-        Ok(())
-    }
-
-    /// The accessibility settings as the server holds them (`org.cupertino.Session1.Accessibility`): the server is
-    /// their only writer, and it keeps them in memory only when it has no file to store them in, so the file is not
-    /// the truth. Without the property the file's values stay.
-    pub(crate) fn sync_accessibility(&mut self) {
-        let problems = match self.services.accessibility() {
-            Reading::Ready(held) => self.settings.apply_session_accessibility(&held),
-            Reading::Unavailable(reason) => {
-                vec![format!(
-                    "the session's accessibility settings cannot be read: {reason}"
-                )]
-            }
-            Reading::Unknown => Vec::new(),
-        };
-        for problem in problems {
-            if self.reported.insert(problem.clone()) {
-                eprintln!("cupertino-settings: {problem}");
-            }
-        }
     }
 }
 

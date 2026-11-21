@@ -7,7 +7,6 @@ use zeroize::{Zeroize, Zeroizing};
 
 use cupertino_defaults::compositor::MOUSE_DPI_RANGE;
 
-use cupertino_kit::filepicker::{Key as PickerKey, Mode, Outcome as PickerOutcome, Picker};
 use cupertino_kit::typeahead::TypeAhead;
 
 use crate::geom::{Point, Rect};
@@ -23,11 +22,10 @@ pub mod metrics {
     pub const BUTTON: (f64, f64) = (96.0, 20.0);
     pub const GAP: f64 = 12.0;
     pub const RADIUS: f64 = 10.0;
-    /// The chooser sheet: its width, a row of its list, the rows shown and the Up button. approximate.
+    /// The applications sheet: its width, a row of its list and the rows shown. approximate.
     pub const PICKER_WIDTH: f64 = 460.0;
     pub const PICKER_ROW: f64 = 22.0;
     pub const PICKER_ROWS: usize = 12;
-    pub const PICKER_UP: (f64, f64) = (48.0, 20.0);
 }
 
 use metrics as m;
@@ -80,20 +78,6 @@ impl Zeroize for Secret {
 /// The room of a [`Secret`] (ours, approximate: a WPA passphrase is at most 63 characters, IEEE 802.11i).
 pub const SECRET_BYTES: usize = 256;
 
-/// An open file chooser; two of them are equal when they show the same folder with the same highlight.
-#[derive(Clone, Debug)]
-pub struct Chooser(pub Picker);
-
-impl PartialEq for Chooser {
-    fn eq(&self, other: &Self) -> bool {
-        self.0.mode() == other.0.mode()
-            && self.0.dir() == other.0.dir()
-            && self.0.highlighted() == other.0.highlighted()
-    }
-}
-
-impl Eq for Chooser {}
-
 /// The type-to-select text of a list; it never makes two sheets differ.
 #[derive(Clone, Debug, Default)]
 pub struct Typed(pub TypeAhead);
@@ -125,15 +109,6 @@ pub enum Kind {
         key: String,
         name: String,
         text: String,
-    },
-    /// A chooser of a folder or a picture; `top` is the first row of its list that shows.
-    Picker {
-        chooser: Chooser,
-        top: usize,
-        /// The row under the pointer.
-        hovered: Option<usize>,
-        /// Why the chosen file was refused; the chooser stays up.
-        failure: Option<String>,
     },
     /// The installed applications to allow to use the clipboard; `selected` is an enabled row, `top` the first row that
     /// shows. Return never allows: only the Allow button or a double click does.
@@ -212,13 +187,8 @@ pub enum Outcome {
     },
     /// Take `program` off Clipboard Access; the sheet closes.
     Unallow(std::path::PathBuf),
-    /// The program file the chooser picked to allow to use the clipboard; the sheet stays until it is allowed.
+    /// The application picked to allow to use the clipboard, by its program; the sheet stays until it is allowed.
     Program(std::path::PathBuf),
-    /// The chooser's result, a folder or a picture; the sheet closes.
-    Picked {
-        path: std::path::PathBuf,
-        folder: bool,
-    },
 }
 
 /// Where a sheet's parts lie in a content column `content`.
@@ -230,9 +200,8 @@ pub struct SheetLayout {
     pub field: Option<Rect>,
     pub cancel: Rect,
     pub action: Rect,
-    /// The chooser's list of rows and its Up button.
+    /// The applications sheet's list of rows.
     pub list: Option<Rect>,
-    pub up: Option<Rect>,
 }
 
 impl Sheet {
@@ -291,48 +260,6 @@ impl Sheet {
         }
     }
 
-    /// A chooser of a folder (`Mode::Folder`) or a picture, opened at `start`.
-    pub fn picker(start: &std::path::Path, mode: Mode) -> Self {
-        Sheet {
-            kind: Kind::Picker {
-                chooser: Chooser(Picker::open(start, mode)),
-                top: 0,
-                hovered: None,
-                failure: None,
-            },
-        }
-    }
-
-    /// [`Sheet::picker`] that lists nothing yet: the window hands [`Sheet::picker_request`] to a thread and the answer
-    /// to [`Sheet::apply_listing`], so a folder that is slow to read never holds the window.
-    pub fn picker_pending(start: &std::path::Path, mode: Mode) -> Self {
-        Sheet {
-            kind: Kind::Picker {
-                chooser: Chooser(Picker::new(start, mode)),
-                top: 0,
-                hovered: None,
-                failure: None,
-            },
-        }
-    }
-
-    /// The folder the chooser wants listed next, once.
-    pub fn picker_request(&mut self) -> Option<cupertino_kit::filepicker::Request> {
-        match &mut self.kind {
-            Kind::Picker { chooser, .. } => chooser.0.take_request(),
-            _ => None,
-        }
-    }
-
-    /// The listing a thread read for the chooser.
-    pub fn apply_listing(&mut self, listing: cupertino_kit::filepicker::Listing) {
-        if let Kind::Picker { chooser, top, .. } = &mut self.kind {
-            if chooser.0.apply(listing) == PickerOutcome::Changed {
-                picked(chooser, top, PickerOutcome::Changed);
-            }
-        }
-    }
-
     pub fn pairing(id: u64, device: &str, prompt: Prompt) -> Self {
         Sheet {
             kind: Kind::Pairing {
@@ -351,7 +278,6 @@ impl Sheet {
             Kind::Passphrase { .. }
             | Kind::Forget { .. }
             | Kind::Resolution { .. }
-            | Kind::Picker { .. }
             | Kind::Apps { .. } => None,
         }
     }
@@ -369,12 +295,6 @@ impl Sheet {
                 what: Forget::Clipboard(_),
                 name,
             } => format!("Remove \u{201c}{name}\u{201d} from Clipboard Access?"),
-            Kind::Picker { chooser, .. } => match chooser.0.mode() {
-                Mode::Folder => "Add a Folder".to_string(),
-                Mode::Photo => "Add a Photo".to_string(),
-                Mode::Program => "Choose a Program".to_string(),
-                Mode::File => "Choose a File".to_string(),
-            },
             Kind::Apps { .. } => "Allow an Application to Use the Clipboard".to_string(),
             Kind::Resolution { name, .. } => format!("Resolution of \u{201c}{name}\u{201d}"),
             Kind::Pairing {
@@ -399,17 +319,10 @@ impl Sheet {
         match &self.kind {
             Kind::Passphrase { failure: Some(f), .. } => f.clone(),
             Kind::Passphrase { .. } => "The network needs a password to join.".to_string(),
-            Kind::Picker {
-                failure: Some(f), ..
-            }
-            | Kind::Apps {
+            Kind::Apps {
                 failure: Some(f), ..
             } => f.clone(),
             Kind::Apps { .. } => "It can read and change what you copy at any time.".to_string(),
-            Kind::Picker { chooser, .. } if chooser.0.unreadable() => {
-                "That folder cannot be opened.".to_string()
-            }
-            Kind::Picker { chooser, .. } => crate::panes::home_relative(chooser.0.dir()),
             Kind::Resolution { .. } => format!(
                 "Type the resolution in dots per inch, from {} to {}.",
                 MOUSE_DPI_RANGE.start(),
@@ -437,12 +350,6 @@ impl Sheet {
             } => "Remove",
             Kind::Resolution { .. } => "Set",
             Kind::Apps { .. } => "Allow",
-            Kind::Picker { chooser, .. } => match chooser.0.mode() {
-                Mode::Folder => "Choose",
-                Mode::Photo => "Add",
-                Mode::Program => "Allow",
-                Mode::File => "Choose",
-            },
             Kind::Pairing {
                 prompt: Prompt::Confirm { .. } | Prompt::Request,
                 ..
@@ -465,10 +372,7 @@ impl Sheet {
                 ..
             } => Some(text.to_string()),
             Kind::Resolution { text, .. } => Some(text.clone()),
-            Kind::Forget { .. }
-            | Kind::Pairing { .. }
-            | Kind::Picker { .. }
-            | Kind::Apps { .. } => None,
+            Kind::Forget { .. } | Kind::Pairing { .. } | Kind::Apps { .. } => None,
         }
     }
 
@@ -481,10 +385,6 @@ impl Sheet {
                 ssid: ssid.clone(),
                 passphrase: Some(std::mem::take(text)),
             }),
-            Kind::Picker { chooser, .. } => match chooser.0.choice() {
-                Some(path) => chosen(chooser, path),
-                None => Outcome::Stay,
-            },
             Kind::Apps { apps, selected, .. } => {
                 match selected
                     .and_then(|i| apps.get(i))
@@ -543,7 +443,6 @@ impl Sheet {
             Kind::Passphrase { .. }
             | Kind::Forget { .. }
             | Kind::Resolution { .. }
-            | Kind::Picker { .. }
             | Kind::Apps { .. }
             | Kind::Pairing {
                 prompt: Prompt::Display { .. },
@@ -558,24 +457,8 @@ impl Sheet {
         self.key_at(key, 0.0)
     }
 
-    /// [`Sheet::key`] at `now` seconds: the chooser's type-to-select forgets the typed text after a pause.
+    /// [`Sheet::key`] at `now` seconds: the applications list's type-to-select forgets the typed text after a pause.
     pub fn key_at(&mut self, key: SheetKey, now: f64) -> Outcome {
-        if let Kind::Picker { chooser, top, .. } = &mut self.kind {
-            let picker_key = match key {
-                SheetKey::Escape => return Outcome::Cancel,
-                SheetKey::Return => PickerKey::Return,
-                SheetKey::Up => PickerKey::Up,
-                SheetKey::Down => PickerKey::Down,
-                SheetKey::Home => PickerKey::Home,
-                SheetKey::End => PickerKey::End,
-                SheetKey::Parent => PickerKey::Parent,
-                SheetKey::Choose => PickerKey::Choose,
-                SheetKey::Type(c) => PickerKey::Type(c),
-                SheetKey::Backspace => return Outcome::Stay,
-            };
-            let outcome = chooser.0.key(picker_key, now);
-            return picked(chooser, top, outcome);
-        }
         if let Kind::Apps {
             apps,
             selected,
@@ -612,9 +495,7 @@ impl Sheet {
                     };
                 }
                 // Return in the list never allows: a key press alone grants no access
-                SheetKey::Return | SheetKey::Choose | SheetKey::Parent | SheetKey::Backspace => {
-                    None
-                }
+                SheetKey::Return | SheetKey::Backspace => None,
             };
             if let Some(&i) = to {
                 *selected = Some(i);
@@ -669,23 +550,14 @@ impl Sheet {
                 text.pop();
                 Outcome::Stay
             }
-            (
-                SheetKey::Return | SheetKey::Type(_) | SheetKey::Backspace,
-                Kind::Picker { .. } | Kind::Apps { .. },
-            ) => Outcome::Stay,
+            (SheetKey::Return | SheetKey::Type(_) | SheetKey::Backspace, Kind::Apps { .. }) => {
+                Outcome::Stay
+            }
             (
                 SheetKey::Type(_) | SheetKey::Backspace,
                 Kind::Forget { .. } | Kind::Pairing { .. },
             ) => Outcome::Stay,
-            (
-                SheetKey::Up
-                | SheetKey::Down
-                | SheetKey::Home
-                | SheetKey::End
-                | SheetKey::Parent
-                | SheetKey::Choose,
-                _,
-            ) => Outcome::Stay,
+            (SheetKey::Up | SheetKey::Down | SheetKey::Home | SheetKey::End, _) => Outcome::Stay,
         }
     }
 
@@ -697,16 +569,14 @@ impl Sheet {
                 text.zeroize();
                 *failure = Some(error.to_string());
             }
-            Kind::Picker { failure, .. } | Kind::Apps { failure, .. } => {
-                *failure = Some(error.to_string())
-            }
+            Kind::Apps { failure, .. } => *failure = Some(error.to_string()),
             _ => {}
         }
     }
 
     /// The layout of the sheet centred in the content column `content`, near its top.
     pub fn layout(&self, content: &Rect) -> SheetLayout {
-        if let Kind::Picker { .. } | Kind::Apps { .. } = self.kind {
+        if let Kind::Apps { .. } = self.kind {
             return self.picker_layout(content);
         }
         let field = self.field_text().is_some();
@@ -749,11 +619,10 @@ impl Sheet {
             cancel,
             action,
             list: None,
-            up: None,
         }
     }
 
-    /// The chooser: the title with the Up button at its end, the folder under it, the list, then the buttons.
+    /// The applications sheet: the title, the message under it, the list, then the buttons.
     fn picker_layout(&self, content: &Rect) -> SheetLayout {
         let list_h = m::PICKER_ROW * m::PICKER_ROWS as f64;
         let h = m::PADDING * 2.0
@@ -771,21 +640,7 @@ impl Sheet {
             h,
         );
         let inner = frame.inset(m::PADDING, m::PADDING);
-        // the application chooser has no folders to go up from
-        let up = matches!(self.kind, Kind::Picker { .. }).then(|| {
-            Rect::new(
-                inner.right() - m::PICKER_UP.0,
-                inner.y - 1.0,
-                m::PICKER_UP.0,
-                m::PICKER_UP.1,
-            )
-        });
-        let title = Rect::new(
-            inner.x,
-            inner.y,
-            inner.w - up.map_or(0.0, |u| u.w + m::GAP),
-            m::TITLE_HEIGHT,
-        );
+        let title = Rect::new(inner.x, inner.y, inner.w, m::TITLE_HEIGHT);
         let message = Rect::new(
             inner.x,
             title.bottom() + m::GAP / 2.0,
@@ -809,19 +664,12 @@ impl Sheet {
             cancel,
             action,
             list: Some(list),
-            up,
         }
     }
 
-    /// The pointer is at `p` (`None`: it left): the chooser's row under it shows its hover. `true` when that changed.
+    /// The pointer is at `p` (`None`: it left): the applications sheet's row under it shows its hover. `true` when that changed.
     pub fn hover(&mut self, layout: &SheetLayout, p: Option<Point>) -> bool {
         let (rows, top, hovered) = match &mut self.kind {
-            Kind::Picker {
-                chooser,
-                top,
-                hovered,
-                ..
-            } => (chooser.0.entries().len(), top, hovered),
             Kind::Apps {
                 apps, top, hovered, ..
             } => (apps.len(), top, hovered),
@@ -835,11 +683,10 @@ impl Sheet {
         std::mem::replace(hovered, row) != row
     }
 
-    /// The wheel moved by `dy` points with the pointer at `p`: the chooser's list scrolls when `p` is over it. `true`
+    /// The wheel moved by `dy` points with the pointer at `p`: the applications sheet's list scrolls when `p` is over it. `true`
     /// when it moved.
     pub fn scroll(&mut self, layout: &SheetLayout, p: Point, dy: f64) -> bool {
         let (count, top) = match &mut self.kind {
-            Kind::Picker { chooser, top, .. } => (chooser.0.entries().len(), top),
             Kind::Apps { apps, top, .. } => (apps.len(), top),
             _ => return false,
         };
@@ -862,20 +709,16 @@ impl Sheet {
         match &mut self.kind {
             Kind::Passphrase { text, .. } | Kind::Pairing { text, .. } => text.zeroize(),
             Kind::Resolution { text, .. } => text.clear(),
-            Kind::Forget { .. } | Kind::Picker { .. } | Kind::Apps { .. } => return,
+            Kind::Forget { .. } | Kind::Apps { .. } => return,
         }
         for c in typed.chars() {
             self.key(SheetKey::Type(c));
         }
     }
 
-    /// The rows of a chooser or of the applications list, and the highlighted one; `None` for a sheet without a list.
+    /// The rows of the applications list, and the selected one; `None` for a sheet without a list.
     pub fn rows(&self) -> Option<(Vec<String>, Option<usize>)> {
         match &self.kind {
-            Kind::Picker { chooser, .. } => Some((
-                chooser.0.entries().iter().map(|e| e.name.clone()).collect(),
-                chooser.0.highlighted(),
-            )),
             Kind::Apps { apps, selected, .. } => {
                 Some((apps.iter().map(|a| a.name.clone()).collect(), *selected))
             }
@@ -883,18 +726,10 @@ impl Sheet {
         }
     }
 
-    /// A press on row `row` of the list: it highlights, and a press on the highlighted row opens a folder or allows
-    /// the application (the second press of a double click).
+    /// A press on row `row` of the list: it selects, and a press on the selected row allows the application (the
+    /// second press of a double click).
     pub fn press_row(&mut self, row: usize) -> Outcome {
         match &mut self.kind {
-            Kind::Picker { chooser, top, .. } => {
-                let outcome = if chooser.0.highlighted() == Some(row) {
-                    chooser.0.activate(row)
-                } else {
-                    chooser.0.highlight(row)
-                };
-                picked(chooser, top, outcome)
-            }
             Kind::Apps { apps, selected, .. } => {
                 if apps.get(row).is_some_and(|a| a.reason.is_none()) {
                     if *selected == Some(row) {
@@ -908,39 +743,8 @@ impl Sheet {
         }
     }
 
-    /// The chooser's folder up: its parent.
-    pub fn parent(&mut self) -> Outcome {
-        match &mut self.kind {
-            Kind::Picker { chooser, top, .. } => {
-                let outcome = chooser.0.parent();
-                picked(chooser, top, outcome)
-            }
-            _ => Outcome::Stay,
-        }
-    }
-
     /// A press at `p` in a sheet laid out as `layout`.
     pub fn press(&mut self, layout: &SheetLayout, p: Point) -> Outcome {
-        if let Kind::Picker { chooser, top, .. } = &mut self.kind {
-            let outcome = if layout.up.is_some_and(|up| up.contains(p)) {
-                chooser.0.parent()
-            } else if let Some(list) = layout.list.filter(|l| l.contains(p)) {
-                let row = *top + ((p.y - list.y) / m::PICKER_ROW) as usize;
-                // a press on the highlighted row opens it (the second press of a double click)
-                if chooser.0.highlighted() == Some(row) {
-                    chooser.0.activate(row)
-                } else {
-                    chooser.0.highlight(row)
-                }
-            } else if layout.cancel.contains(p) {
-                return Outcome::Cancel;
-            } else if layout.action.contains(p) {
-                return self.action();
-            } else {
-                return Outcome::Stay;
-            };
-            return picked(chooser, top, outcome);
-        }
         if let Kind::Apps {
             apps,
             selected,
@@ -977,30 +781,11 @@ pub enum SheetKey {
     Backspace,
     Return,
     Escape,
-    /// The chooser's keys: the arrows, Home and End, Super+Up (the parent folder) and Super+Return (choose).
+    /// The applications list's keys: the arrows, Home and End.
     Up,
     Down,
     Home,
     End,
-    Parent,
-    Choose,
-}
-
-/// The sheet's outcome of what the chooser did, with its list scrolled to show the highlighted row.
-fn picked(chooser: &Chooser, top: &mut usize, outcome: PickerOutcome) -> Outcome {
-    let rows = chooser.0.entries().len();
-    *top = match chooser.0.highlighted() {
-        Some(i) if i < *top => i,
-        Some(i) if i >= *top + m::PICKER_ROWS => i + 1 - m::PICKER_ROWS,
-        Some(_) => *top,
-        None => 0,
-    }
-    .min(rows.saturating_sub(m::PICKER_ROWS));
-    match outcome {
-        PickerOutcome::Choose(path) => chosen(chooser, path),
-        PickerOutcome::Cancel => Outcome::Cancel,
-        PickerOutcome::Changed | PickerOutcome::Ignore => Outcome::Stay,
-    }
 }
 
 /// The first row of a list of `rows` that shows, moved from `top` just enough to show row `i`.
@@ -1013,14 +798,4 @@ fn scrolled_to(i: usize, top: usize, rows: usize) -> usize {
         top
     };
     top.min(rows.saturating_sub(m::PICKER_ROWS))
-}
-
-fn chosen(chooser: &Chooser, path: std::path::PathBuf) -> Outcome {
-    match chooser.0.mode() {
-        Mode::Program => Outcome::Program(path),
-        mode => Outcome::Picked {
-            path,
-            folder: mode == Mode::Folder,
-        },
-    }
 }

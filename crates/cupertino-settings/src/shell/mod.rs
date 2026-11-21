@@ -8,6 +8,7 @@ mod calls;
 mod desk;
 mod files;
 mod form;
+mod panel;
 mod reading;
 mod sheets;
 pub mod state;
@@ -219,6 +220,8 @@ pub struct Shell {
     refresh_armed: bool,
     /// Whether a [`Message::Rewatch`] is on its way.
     rewatch_armed: bool,
+    /// What the open panel's window keeps between frames.
+    panel_rows: panel::PanelRows,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -234,6 +237,8 @@ pub enum Message {
     ContentScroll(ScrollState),
     /// The sheet's list scrolled.
     SheetScroll(ScrollState),
+    /// Something happened in the open panel's window.
+    Chooser(crate::chooser::Event),
     /// The strip of thumbnails of this control scrolled.
     Query(TextChange),
     /// Return in the search field: the first result.
@@ -356,7 +361,6 @@ impl Shell {
                 }) {
                     self.open = None;
                 }
-                return Ok(self.sheet_started());
             }
             Message::AudioRead(snapshot) => {
                 let state = &mut self.state;
@@ -436,7 +440,6 @@ impl Shell {
             Message::Commit(id, value) => {
                 self.open = None;
                 self.state.commit(id, value)?;
-                return Ok(self.sheet_started());
             }
             Message::Level(id, value) => {
                 let now = self.state.now();
@@ -493,7 +496,14 @@ impl Shell {
                 if let Some(outcome) = sheets::apply(&mut self.state, action) {
                     self.state.sheet_outcome(outcome)?;
                 }
-                return Ok(self.sheet_started());
+            }
+            Message::Chooser(event) => {
+                if let Some((_, chooser)) = self.state.chooser.as_mut() {
+                    let outcome = chooser.update(event);
+                    self.state.chooser_outcome(outcome);
+                    // a folder the panel moved to is read by a task
+                    self.state.drive_picker();
+                }
             }
             Message::Menu(action) => {
                 return Ok(match MenuAction::from_name(&action) {
@@ -593,12 +603,6 @@ impl Shell {
             self.show(page)?;
         }
         Ok(Vec::new())
-    }
-
-    /// A sheet a commit opened may need a listing from another thread first.
-    fn sheet_started(&mut self) -> Vec<Command<Message>> {
-        self.state.drive_picker();
-        Vec::new()
     }
 
     /// The search field over the rows of the panes, each with its tile; the current pane's row selected.
@@ -791,6 +795,7 @@ impl Application for SettingsApp {
             full_screen: false,
             refresh_armed: false,
             rewatch_armed: false,
+            panel_rows: panel::PanelRows::default(),
         };
         commands.extend(shell.arm_refresh());
         commands.extend(shell.state.audio.command(&shell.state.buses.session));
@@ -808,6 +813,10 @@ impl Application for SettingsApp {
         commands.extend(shell.arm_rewatch());
         commands.extend(shell.state.audio.command(&shell.state.buses.session));
         commands.extend(shell.state.desk.commands());
+        let chooser = shell.state.chooser.as_ref().map(|(_, chooser)| chooser);
+        shell
+            .panel_rows
+            .follow(chooser, shell.state.file_icons.take());
         commands
     }
 
@@ -876,6 +885,9 @@ impl Application for SettingsApp {
             .and_then(|id| form::menu(&shell.state.sections(), id, main_window()))
         {
             windows.extend(menu);
+        }
+        if let Some((_, chooser)) = &shell.state.chooser {
+            windows.push(panel::window(chooser, &shell.panel_rows));
         }
         windows
     }

@@ -6,6 +6,7 @@ pub mod about;
 pub mod about_app;
 pub mod agent;
 pub mod bluez;
+pub mod chooser;
 pub mod clipboard;
 pub mod controls;
 pub mod desktop_control;

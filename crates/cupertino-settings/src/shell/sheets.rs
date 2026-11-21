@@ -23,7 +23,6 @@ pub enum Action {
     /// The passphrase as typed, then Join.
     Join(Secret),
     Row(usize),
-    Parent,
 }
 
 /// Apply `action` to the open sheet: what the sheet decided, `None` when no sheet is open.
@@ -45,7 +44,6 @@ pub fn apply(state: &mut State, action: Action) -> Option<Outcome> {
             sheet.action()
         }
         Action::Row(row) => sheet.press_row(row),
-        Action::Parent => sheet.parent(),
     })
 }
 
@@ -63,36 +61,24 @@ fn typed(secret: &SecureBuffer) -> Secret {
 /// The sheet's field or list; a list taller than [`LIST_MAX`] scrolls at `scroll`.
 fn body(sheet: &Sheet, scroll: ScrollState) -> Option<Element<Message>> {
     if let Some((rows, highlighted)) = sheet.rows() {
-        let mut children = Vec::new();
-        if matches!(sheet.kind, Kind::Picker { .. }) {
-            children.push(
+        let children: Vec<Element<Message>> = (rows.iter().enumerate())
+            .map(|(i, name)| {
+                let label = if highlighted == Some(i) {
+                    format!("{name} ✓")
+                } else {
+                    name.clone()
+                };
                 Element::new(Button {
-                    label: "Enclosing Folder".into(),
+                    label,
                     role: ButtonRole::Normal,
-                    style: ButtonStyle::Bordered,
+                    style: ButtonStyle::Borderless,
                     enabled: true,
                     busy: false,
-                    on_press: Some(Message::Sheet(Action::Parent)),
+                    on_press: Some(Message::Sheet(Action::Row(i))),
                 })
-                .key("parent"),
-            );
-        }
-        children.extend(rows.iter().enumerate().map(|(i, name)| {
-            let label = if highlighted == Some(i) {
-                format!("{name} ✓")
-            } else {
-                name.clone()
-            };
-            Element::new(Button {
-                label,
-                role: ButtonRole::Normal,
-                style: ButtonStyle::Borderless,
-                enabled: true,
-                busy: false,
-                on_press: Some(Message::Sheet(Action::Row(i))),
+                .key(i as u64)
             })
-            .key(i as u64)
-        }));
+            .collect();
         let count = children.len();
         let list = Element::new(Stack {
             axis: Axis::Vertical,
@@ -157,7 +143,7 @@ fn body(sheet: &Sheet, scroll: ScrollState) -> Option<Element<Message>> {
                 .key("field"),
             )
         }
-        Kind::Forget { .. } | Kind::Picker { .. } | Kind::Apps { .. } => None,
+        Kind::Forget { .. } | Kind::Apps { .. } => None,
     }
 }
 

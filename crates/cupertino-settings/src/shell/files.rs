@@ -8,16 +8,23 @@ use std::time::Duration;
 
 use cupertino_icons::thumbnail::{ThumbError, ThumbSize, Thumbnailer};
 use cupertino_kit::controls::ImageSource;
-use cupertino_kit::filepicker::{Listing, Mode, Request};
+use cupertino_kit::file_icons::FileIcons;
+use cupertino_kit::filepicker::{Listing, Request};
+use cupertino_kit::files::places::{chooser_places, Place};
 
-use super::state::{ListingKey, State, VideoMemory};
+use super::state::{Choosing, ListingKey, State, VideoMemory};
+use crate::chooser::{Chooser, Outcome as ChooserOutcome};
 use crate::controls::Unreadable;
 use crate::panes::ControlId;
-use crate::sheet::Sheet;
+use crate::settings::File;
 use crate::PaneId;
 
 /// How long reading a few local files or listing a folder should take.
 pub(crate) const FILES_DEADLINE: Duration = Duration::from_secs(2);
+/// How long finding where the panel opens, its places and, the first time, the icons of its items should take.
+const CHOOSER_DEADLINE: Duration = Duration::from_secs(5);
+/// Where the panel that chooses a program opens (approximate).
+const PROGRAM_CHOOSER_START: &str = "/usr/bin";
 /// How long making one thumbnail should take: a large picture read and scaled down once.
 const THUMBNAIL_DEADLINE: Duration = Duration::from_secs(5);
 /// How long reading the graphics memory should take: the driver's tool is given
@@ -73,18 +80,51 @@ fn account_picture(path: &Path) -> Option<ImageSource> {
         .then(|| decode(path, ACCOUNT_PICTURE_EDGE))?
 }
 
-/// Where a chooser of pictures opens: the person's Pictures folder, else their home, else the root; on the I/O pool.
+/// The home folder: `HOME` when it is absolute, else the root.
+fn home() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .unwrap_or_else(|| PathBuf::from("/"))
+}
+
+/// Where the panel choosing for `choosing` opens: pictures in the person's Pictures folder, else their home; a
+/// program among the system's; a folder to leave out at home. On the I/O pool.
 #[expect(
     clippy::disallowed_methods,
     reason = "runs on the I/O pool (kit::task::io)"
 )]
-fn pictures_folder() -> PathBuf {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    home.as_ref()
-        .map(|h| h.join("Pictures"))
-        .filter(|p| p.is_dir())
-        .or(home)
-        .unwrap_or_else(|| PathBuf::from("/"))
+fn chooser_start(choosing: Choosing, home: &Path) -> PathBuf {
+    match choosing {
+        Choosing::Wallpaper | Choosing::WallpaperFolder => Some(home.join("Pictures"))
+            .filter(|p| p.is_dir())
+            .unwrap_or_else(|| home.to_path_buf()),
+        Choosing::Program => PathBuf::from(PROGRAM_CHOOSER_START),
+        Choosing::Exclusion => home.to_path_buf(),
+    }
+}
+
+/// The panel's places with this `home`; on the I/O pool.
+fn places(home: &Path) -> Vec<Place> {
+    let dirs = cupertino_defaults::user_dirs::read(home).unwrap_or_else(|e| {
+        eprintln!("cupertino-settings: cannot read the user directories: {e}");
+        Vec::new()
+    });
+    chooser_places(home, &dirs)
+}
+
+/// The icons of the panel's items, typed with the installed MIME database, `places` wearing their own; on the I/O
+/// pool.
+fn file_icons(places: &[Place]) -> FileIcons {
+    let types = cupertino_apps::XdgDirs::from_env()
+        .ok()
+        .and_then(|dirs| cupertino_apps::MimeDatabase::load(&dirs.all_data_dirs()).ok())
+        .unwrap_or_default();
+    let folders = places
+        .iter()
+        .filter_map(|p| Some((p.path.clone(), p.kind.folder_icon()?)))
+        .collect();
+    FileIcons::discover(types, folders)
 }
 
 /// The installed applications with their programs, for the Privacy and Notifications panes; on the I/O pool.
@@ -262,37 +302,88 @@ impl State {
         );
     }
 
-    /// Allow `program` to use the clipboard (its entry is read first: a link becomes its file); the chooser stays with
-    /// the reason it can't be.
+    /// Allow `program` to use the clipboard (its entry is read first: a link becomes its file). The applications sheet
+    /// stays with the reason it can't be; a program the panel chose shows it under Clipboard Access.
     pub(crate) fn allow_clipboard(&mut self, program: PathBuf) {
         self.desk.off(
             FILES_DEADLINE,
             move || crate::clipboard::entry_for(&program),
             |state, entry| {
                 let paths = state.paths.clone();
+                let sheet = (state.sheet.as_mut())
+                    .filter(|sheet| matches!(sheet.kind, crate::sheet::Kind::Apps { .. }));
                 match entry.and_then(|entry| state.settings.allow_clipboard(&paths, entry)) {
                     Ok(()) => {
-                        state.sheet = None;
+                        if sheet.is_some() {
+                            state.sheet = None;
+                        }
                         state.read_clipboard_states();
                     }
-                    Err(e) => {
-                        if let Some(sheet) = &mut state.sheet {
-                            sheet.failed(&e);
-                        }
-                    }
+                    Err(e) => match sheet {
+                        Some(sheet) => sheet.failed(&e),
+                        None => state.show_error(Some(ControlId::ClipboardAdd), e),
+                    },
                 }
             },
         );
     }
 
-    /// Open the chooser of a picture (or a folder of them, `folder`) at the person's Pictures folder.
-    pub(crate) fn ask_picture(&mut self, folder: bool) {
-        let mode = if folder { Mode::Folder } else { Mode::Photo };
-        self.desk
-            .off(FILES_DEADLINE, pictures_folder, move |state, start| {
-                state.sheet = Some(Sheet::picker_pending(&start, mode));
+    /// Open the panel that chooses for `choosing`, once where it opens and its places are read; the icons of its items
+    /// are read with the first.
+    pub(crate) fn open_chooser(&mut self, choosing: Choosing) {
+        let icons = !std::mem::replace(&mut self.file_icons_asked, true);
+        self.desk.off(
+            CHOOSER_DEADLINE,
+            move || {
+                let home = home();
+                let places = places(&home);
+                let icons = icons.then(|| file_icons(&places));
+                (chooser_start(choosing, &home), places, icons)
+            },
+            move |state, (start, places, icons)| {
+                if icons.is_some() {
+                    state.file_icons = icons;
+                }
+                state.chooser = Some((choosing, Chooser::new(&start, choosing.mode(), places)));
                 state.drive_picker();
-            });
+            },
+        );
+    }
+
+    /// What an event of the panel decided: it stays, closes, or closes with what it chose, which the pane takes.
+    pub(crate) fn chooser_outcome(&mut self, outcome: ChooserOutcome) {
+        let ChooserOutcome::Chosen(path) = outcome else {
+            if outcome == ChooserOutcome::Cancel {
+                self.chooser = None;
+            }
+            return;
+        };
+        let Some((choosing, _)) = self.chooser.take() else {
+            return;
+        };
+        match choosing {
+            Choosing::Program => self.allow_clipboard(path),
+            Choosing::Exclusion => {
+                let text = path.to_string_lossy().into_owned();
+                if !self.settings.launcher.excluded.contains(&text) {
+                    self.settings.launcher.excluded.push(text);
+                    if let Err(e) = self.settings.store(&self.paths, File::Launcher) {
+                        eprintln!("cupertino-settings: {e}");
+                    }
+                }
+            }
+            Choosing::Wallpaper | Choosing::WallpaperFolder => {
+                let added = if choosing == Choosing::WallpaperFolder {
+                    self.settings.add_wallpaper_folder(&self.paths, &path)
+                } else {
+                    self.settings.set_wallpaper(&self.paths, &path)
+                };
+                match added {
+                    Ok(()) => self.load_pictures(),
+                    Err(e) => eprintln!("cupertino-settings: {e}"),
+                }
+            }
+        }
     }
 
     /// List the pictures of the packs and of the added folders, and start the thumbnails of those without one.
@@ -399,8 +490,8 @@ impl State {
         if let Some(request) = self.listings.answered(&key) {
             self.run_listing(key, request);
         }
-        if let Some(sheet) = self.sheet.as_mut() {
-            sheet.apply_listing(listing);
+        if let Some((_, chooser)) = self.chooser.as_mut() {
+            chooser.apply(listing);
         }
     }
 
@@ -481,7 +572,7 @@ impl State {
 
     /// Hand the chooser's next listing to a task.
     pub(crate) fn drive_picker(&mut self) {
-        let Some(request) = self.sheet.as_mut().and_then(Sheet::picker_request) else {
+        let Some(request) = self.chooser.as_mut().and_then(|(_, c)| c.take_request()) else {
             return;
         };
         let (dir, hidden, mode) = request.key();

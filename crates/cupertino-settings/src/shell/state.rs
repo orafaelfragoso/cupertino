@@ -72,13 +72,32 @@ pub(crate) enum ListingKey {
     Chooser(std::path::PathBuf, bool, cupertino_kit::filepicker::Mode),
 }
 
+/// What the open panel chooses: a picture or a folder of them for the Wallpaper pane, a program to allow to use the
+/// clipboard, or a folder the file search leaves out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Choosing {
+    Wallpaper,
+    WallpaperFolder,
+    Program,
+    Exclusion,
+}
+
+impl Choosing {
+    /// What the panel lists and chooses.
+    pub(crate) fn mode(self) -> Mode {
+        match self {
+            Choosing::Wallpaper => Mode::Photo,
+            Choosing::WallpaperFolder | Choosing::Exclusion => Mode::Folder,
+            Choosing::Program => Mode::Program,
+        }
+    }
+}
+
 /// Hands a [`Background`] to the window loop and wakes it.
 pub(crate) type Notify = std::sync::Arc<dyn Fn(Background) + Send + Sync>;
 
 /// Background events waiting for the window loop.
 const BACKGROUND_QUEUE: usize = 64;
-/// Where Choose Program… opens (approximate).
-const PROGRAM_CHOOSER_START: &str = "/usr/bin";
 
 /// The window loop owns the receiver until it ends; what arrives after that has no window. What arrives before the
 /// window exists waits for the loop's first turn. What finds the queue full is dropped, so a caller can neither grow the
@@ -166,6 +185,11 @@ pub struct State {
     /// them ([`State::sync_accessibility`]).
     pub(crate) held_accessibility: Option<HashMap<String, String>>,
     pub(crate) sheet: Option<Sheet>,
+    /// The open panel, a window of its own, and what it chooses.
+    pub(crate) chooser: Option<(Choosing, crate::chooser::Chooser)>,
+    /// The icons of the panel's items once read, for the window to take, and whether they were asked for.
+    pub(crate) file_icons: Option<cupertino_kit::file_icons::FileIcons>,
+    pub(crate) file_icons_asked: bool,
     pub(crate) level: Option<LevelDrag>,
     pub(crate) slide: Option<SliderDrag>,
     pub(crate) start: std::time::Instant,
@@ -181,8 +205,6 @@ pub struct State {
     pub(crate) scanned: f64,
     /// When the battery's charge history was last read.
     pub(crate) history_read: f64,
-    /// The folder chooser that is open adds a folder the file search leaves out.
-    pub(crate) picking_exclusion: bool,
     pub(crate) notify: Notify,
     pub(crate) assets: Assets,
     /// Each picture's thumbnail once made.
@@ -296,6 +318,9 @@ impl State {
             display,
             held_accessibility: None,
             sheet: None,
+            chooser: None,
+            file_icons: None,
+            file_icons_asked: false,
             level: None,
             slide: None,
             start: std::time::Instant::now(),
@@ -307,7 +332,6 @@ impl State {
             agent_wanted: false,
             scanned: f64::NEG_INFINITY,
             history_read: f64::NEG_INFINITY,
-            picking_exclusion: false,
             notify,
             assets: Assets::discover(),
             thumbnails: HashMap::new(),
@@ -575,7 +599,11 @@ impl State {
                     Ok(())
                 }
                 Effect::AskPicture { folder } => {
-                    self.ask_picture(folder);
+                    self.open_chooser(if folder {
+                        Choosing::WallpaperFolder
+                    } else {
+                        Choosing::Wallpaper
+                    });
                     Ok(())
                 }
                 Effect::AskResolution { key, name } => {
@@ -587,11 +615,7 @@ impl State {
                     Ok(())
                 }
                 Effect::AskClipboardApp { program: true } => {
-                    self.sheet = Some(Sheet::picker_pending(
-                        std::path::Path::new(PROGRAM_CHOOSER_START),
-                        Mode::Program,
-                    ));
-                    self.drive_picker();
+                    self.open_chooser(Choosing::Program);
                     Ok(())
                 }
                 Effect::AskClipboardApp { program: false } => {
@@ -618,12 +642,7 @@ impl State {
                     }
                 }
                 Effect::AskExclusion => {
-                    let start = std::env::var_os("HOME")
-                        .map(std::path::PathBuf::from)
-                        .unwrap_or_else(|| std::path::PathBuf::from("/"));
-                    self.picking_exclusion = true;
-                    self.sheet = Some(Sheet::picker_pending(&start, Mode::Folder));
-                    self.drive_picker();
+                    self.open_chooser(Choosing::Exclusion);
                     Ok(())
                 }
                 Effect::Refuse(reason) => Err(reason),
@@ -706,7 +725,6 @@ impl State {
         match outcome {
             Outcome::Stay => {}
             Outcome::Cancel => {
-                self.picking_exclusion = false;
                 self.sheet = None;
                 self.agent_answer = None;
             }
@@ -733,29 +751,6 @@ impl State {
             }
             // the sheet stays with the reason until the program is allowed
             Outcome::Program(program) => self.allow_clipboard(program),
-            Outcome::Picked { path, folder } if std::mem::take(&mut self.picking_exclusion) => {
-                let _ = folder;
-                self.sheet = None;
-                let text = path.to_string_lossy().into_owned();
-                if !self.settings.launcher.excluded.contains(&text) {
-                    self.settings.launcher.excluded.push(text);
-                    if let Err(e) = self.settings.store(&self.paths, File::Launcher) {
-                        eprintln!("cupertino-settings: {e}");
-                    }
-                }
-            }
-            Outcome::Picked { path, folder } => {
-                self.sheet = None;
-                let added = if folder {
-                    self.settings.add_wallpaper_folder(&self.paths, &path)
-                } else {
-                    self.settings.set_wallpaper(&self.paths, &path)
-                };
-                match added {
-                    Ok(()) => self.load_pictures(),
-                    Err(e) => eprintln!("cupertino-settings: {e}"),
-                }
-            }
             // the passphrase sheet waits for the join and stays with its error (§7.2); a removal's sheet closes, and the
             // device's row shows its error
             Outcome::Do(call) => {

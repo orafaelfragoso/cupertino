@@ -102,6 +102,8 @@ pub enum Shell {
 pub enum Message {
     Session(Option<zbus::Connection>),
     System(Option<zbus::Connection>),
+    /// The session bus connection that asks who calls `org.cupertino.Login1` (`cupertino_peer::lookup`).
+    Lookup(Option<zbus::Connection>),
     /// A bus connection closed.
     BusClosed(&'static str),
     Served(system::Served),
@@ -174,6 +176,8 @@ pub struct Model {
     heard: (async_channel::Sender<Heard>, async_channel::Receiver<Heard>),
     session: Option<zbus::Connection>,
     system: Option<zbus::Connection>,
+    /// Asks who calls `org.cupertino.Login1`, on a session bus connection of its own.
+    lookup: Option<zbus::Connection>,
     options: SessionOptions,
     _idle: Option<IdleWatch>,
     /// The session asks for reduced motion: the lock screen follows it.
@@ -219,7 +223,7 @@ impl Drop for Model {
     /// the object server of `org.cupertino.Login1`) would keep its connection. So they are closed, at most
     /// [`screen::CLOSE_WAIT`].
     fn drop(&mut self) {
-        screen::close([self.session.take(), self.system.take()]);
+        screen::close([self.session.take(), self.system.take(), self.lookup.take()]);
     }
 }
 
@@ -282,6 +286,7 @@ impl Application for LockScreenProgram {
             heard,
             session: None,
             system: None,
+            lookup: None,
             options,
             _idle: idle,
             reduce_motion: false,

@@ -112,7 +112,7 @@ roles or its bus names. The host holds the same names, each bound to its compone
 | `components` | names of the table: the components of the session; every component of the table when the key is absent | sets the list | refused, with a logged problem |
 | `off` | names of the table: components that do not run | applies | applies |
 | `alone` | names of the table: components that each run in a separate host (D18) | applies; the packaged file leaves it empty | applies |
-| `processes` *(until W6.close)* | `[{"name", "command", "roles"}]`: supervised processes, with the rules the list has before the host exists | names processes with roles, under an install root | removes or reorders entries, adds none with roles |
+| `processes` | ignored: a list of processes for the server to start, which a file edited before every component ran in a host may still hold | ignored, with a logged warning | ignored, with a logged warning |
 
 - The components that run are `components` minus `off`. A name that is not in the table is a logged problem and is
   left out; the other names apply.
@@ -126,19 +126,18 @@ roles or its bus names. The host holds the same names, each bound to its compone
 - A system file without a `shell` section runs every component of the table.
 - The login session runs no component, whatever its file says ([`greeter.json`](#greeterjson)).
 
-*(until W6.close)* The two forms of the section and the two ways a name runs:
+Every component runs in a host, and nothing else runs for one:
 
-- A `shell` that is an array is the list of supervised processes, the form of a file written for a server without
-  hosts: the server reads it as `{"processes": ARRAY}`, so `components` is every component of the table. A package
-  update leaves an edited `/etc/cupertino/compositor.json` in that form, and the session starts whole with it.
-- A name may be a component and have a process entry. The host comes first: the server lists the component to its
-  host, and starts the process entry only when the host program is not installed or the host answers `unavailable`
-  for the name. Otherwise the entry is left alone, with one logged note. So one file serves every build between the
-  first component in the host and the last.
-- `off` turns a name off whichever way it runs.
-- A process entry named like a program of [Programs the server starts itself](#programs-the-server-starts-itself)
-  (`login` in the installed files) is left alone with a logged note: the server starts that program itself.
-- After W6.close the array form is a logged problem and counts as no `shell` section.
+- A `shell` that is an array, or a `processes` list in the object, names processes for the server to start, as an
+  edited `/etc/cupertino/compositor.json` kept through a package update may. Nothing of it is read or runs: the server
+  logs one warning each time it reads the file, and the rest of the section applies. An array is a section with no
+  key, so every component of the table runs.
+- A component that no host runs does not run: while the host program is not installed (one log line at start), after
+  it was refused or could not be spawned (logged, and not tried again until `cupertino shell restart host` or a
+  change of the section), and when its host answers `unavailable` for it (logged; the component stays stopped in
+  that host).
+- The programs of [Programs the server starts itself](#programs-the-server-starts-itself) are no components: no file
+  names them, and the server supervises them whatever the section says.
 
 ### Development builds
 
@@ -1508,7 +1507,7 @@ manager interfaces. Each edit belongs to the task that builds what it describes,
 | W6.9 | `cupertino_window_manager_v1` | the strip leaves the server: the `strip` entry of `placement`, the rectangle of `set_placement`, `strip_pressed` and the strip half of `invalid_placement` go; the description says that a strip window is a claimed hole of the window manager's surface and that the server draws no strip |
 | W6.9 | `cupertino_shell_v1` | `get_window_manager`: the window manager has a surface of its own for the strip, an ordinary layer surface it persists |
 | W6.12 | `cupertino_shell_v1` | `get_keyboard_panels` (version 30) and the new interface `cupertino_keyboard_panels_v1`: the switcher's list, the picker's candidates and `accent_pick`, for the connection that holds `keyboard_panels` |
-| W6.close | `cupertino_menu_bar_v1` | `session_agent` and `agent_trust` go with the process path: from W6.13 no client reads them |
+| W6.close | `cupertino_menu_bar_v1` | `session_agent` and `agent_trust` go with the process path (version 31): from W6.13 no client reads them |
 
 - W5.5's edits add to what the server does; the messages W6.8 and W6.9 remove keep working until those tasks, as
   the server keeps drawing its own overview and strip until then.
@@ -1526,10 +1525,9 @@ that keeps its choice and gains a rule, no mark for a default that stands as it 
 1. **A third protocol file.** The overview component needs a role object of its own, since the dock holds the dock's.
    Default: `cupertino-overview-v1.xml`, with holes and transactions in place of the dock's overview frames, drags
    and workspace pictures. W4.10 generates bindings for three files.
-2. **The `shell` schema.** *(extended)* Default: `components` (system file only), `off` and `alone` (either file),
-   and `processes` until W6.close. Until W6.close an array is read as `processes`, a system file without the section
-   or without `components` runs every component of the table, and a name with both a component and a process entry
-   runs in the host, or as the process when the host has no such component. Rejected: one list of objects with a
+2. **The `shell` schema.** *(extended)* Default: `components` (system file only), `off` and `alone` (either file). An
+   array or a `processes` list, from a file written before every component ran in a host, is ignored with a logged
+   warning, and a system file without the section or without `components` runs every component of the table. Rejected: one list of objects with a
    mode for each name, which lets a person's file restate the system's list.
 3. **`alone` in a person's file.** Default: allowed, since it names no command and no role and costs memory only.
 4. **Roles.** *(extended)* Default: `host`, `overview`, `windows`, `session_agent` and `consent` join the server's

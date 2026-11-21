@@ -304,7 +304,12 @@ fn a_busy_loop_a_busy_render_thread_and_a_stuck_helper_reach_the_server() {
         },
     );
     let lines = rig.lines();
-    let at = |line: &str| lines.iter().position(|l| l == line);
+    let at = |line: &str| {
+        lines
+            .iter()
+            .position(|l| l == line)
+            .unwrap_or_else(|| panic!("the hosts reported {line:?}: {lines:?}"))
+    };
     assert!(
         at("notifications render stalls") < at("host render busy"),
         "the render thread is busy once the component stalls it, not before: {lines:?}"

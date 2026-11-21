@@ -47,7 +47,7 @@ pub use config::{
     DockConfig, Hop, LiftFormula, MinimizeEffect, Orientation,
 };
 pub use dock::{DockLayout, DragOutcome, PlacedTile, TileHit};
-pub use ease::{cosine_ease, EasedValue, COSINE_EASE_BEZIER};
+pub use ease::{cosine_ease, EasedValue};
 pub use magnify::{
     base_length, fish_ramp_ms, fish_ramp_out_ms, fisheye_edge_offset, fisheye_real_scale, layout,
     layout_items, profile, CosineProfile, FisheyeProfile, LayoutItem, MagnificationProfile,

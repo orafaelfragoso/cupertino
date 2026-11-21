@@ -1046,7 +1046,6 @@ version = "0.1.0"
 dependencies = [
  "async-channel",
  "async-io",
- "cupertino-animation",
  "cupertino-apps",
  "cupertino-assets",
  "cupertino-defaults",

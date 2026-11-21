@@ -473,6 +473,79 @@ impl Timing {
     });
 }
 
+/// The motions of the dock.
+impl Easing {
+    /// A tile removed by dragging it off the dock fading its icon and label from opacity 1 to 0: quick at first and
+    /// settling gently.
+    pub const DOCK_REMOVE_FADE: Easing = Easing(Shape::Bezier(CubicBezier::new(
+        0.22363, 0.002, 0.5534, 0.9529,
+    )));
+}
+
+/// The motions of the dock.
+impl Timing {
+    /// A folder's stack opening out of its tile as a fan: ease-in-out over 0.244 s.
+    pub const DOCK_FAN_OPEN: Timing = Timing(Motion::Eased {
+        easing: Easing::EASE_IN_OUT,
+        seconds: 0.244,
+    });
+    /// The fan folding back into its tile: ease-in over 0.178 s.
+    pub const DOCK_FAN_CLOSE: Timing = Timing(Motion::Eased {
+        easing: Easing::EASE_IN,
+        seconds: 0.178,
+    });
+    /// A folder's stack coming in as a grid, fading in and scaling up towards the bar: `1 - (1 - t)³` over 0.25 s, as a
+    /// cubic Bézier.
+    pub const DOCK_STACK_ENTRY: Timing = Timing(Motion::Eased {
+        easing: Easing(Shape::Bezier(CubicBezier::new(
+            1.0 / 3.0,
+            1.0,
+            2.0 / 3.0,
+            1.0,
+        ))),
+        seconds: 0.25,
+    });
+    /// A tile's neighbour sliding to its new place as the gap a dragged tile leaves moves: the cosine ease over 0.27 s.
+    pub const DOCK_TILE_SLIDE: Timing = Timing(Motion::Eased {
+        easing: Easing::COSINE,
+        seconds: 0.270,
+    });
+    /// A dropped tile settling into its slot: the cosine ease over 0.35 s.
+    pub const DOCK_TILE_SETTLE: Timing = Timing(Motion::Eased {
+        easing: Easing::COSINE,
+        seconds: 0.350,
+    });
+    /// The dragged tile's icon fading to and from the opacity that says a drop would remove it, and the "Remove" label
+    /// fading in and out with it: ease-in-out over 0.25 s, the default transaction's duration.
+    pub const DOCK_REMOVE_LOOK: Timing = Timing(Motion::Eased {
+        easing: Easing::EASE_IN_OUT,
+        seconds: 0.25,
+    });
+    /// A tile removed by dragging it off the dock fading its icon and label out, and the puff where it vanished:
+    /// [`Easing::DOCK_REMOVE_FADE`] over the default transaction's 0.25 s at animation speed 0.75.
+    pub const DOCK_REMOVE_FADE: Timing = Timing(Motion::Eased {
+        easing: Easing::DOCK_REMOVE_FADE,
+        seconds: 0.25 / 0.75,
+    });
+    /// An application's running dot fading in once it has started: constant speed over 0.28 s.
+    pub const DOCK_RUNNING_DOT: Timing = Timing(Motion::Eased {
+        easing: Easing::LINEAR,
+        seconds: 0.28,
+    });
+    /// The application switcher's panel fading out after a commit: ease-in-out over 0.25 s, the default transaction's
+    /// duration.
+    pub const DOCK_SWITCHER_HIDE: Timing = Timing(Motion::Eased {
+        easing: Easing::EASE_IN_OUT,
+        seconds: 0.25,
+    });
+    /// A tile's pressed darkening going off after its menu closed: a step after 0.21 s, the time the menu takes to fade
+    /// out.
+    pub const DOCK_MENU_PRESSED_OFF: Timing = Timing(Motion::Eased {
+        easing: Easing::LINEAR,
+        seconds: 0.21,
+    });
+}
+
 /// Dock-related timing values.
 #[derive(Clone, Debug)]
 pub struct DockAnimation {

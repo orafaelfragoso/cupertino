@@ -9,7 +9,7 @@ use zbus::object_server::SignalEmitter;
 
 use super::{
     shell_process_record, BusOut, Call, Refusal, Reject, Serving, SessionAction, SessionConnection,
-    SessionSettings, ShellProcessRecord, BUS_NAME, OBJECT_PATH,
+    SessionSettings, ShellComponentRecord, ShellProcessRecord, BUS_NAME, OBJECT_PATH,
 };
 use crate::caller::{identify, Asker, Caller, Denial, Sandbox};
 use crate::capture::launch::SERVICE_NAME;
@@ -206,6 +206,16 @@ impl Session1 {
             .ask(|tx| Call::ListShellProcesses(caller, user, tx))
             .await?;
         Ok(processes.iter().map(shell_process_record).collect())
+    }
+
+    async fn list_shell_components(
+        &self,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &zbus::Connection,
+    ) -> Result<Vec<ShellComponentRecord>, CallError> {
+        let (caller, user) = caller_and_user_of(&header, connection).await;
+        self.ask(|tx| Call::ListShellComponents(caller, user, tx))
+            .await
     }
 
     async fn restart_shell_process(

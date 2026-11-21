@@ -17,7 +17,7 @@ pub(crate) const GROUP: Group = Group {
                   the window manager, the overview, the launcher, the notifications, the control panel, the on-screen \
                   displays, the session agent and the dialogs), which run in the shell host `cupertino-shell`, and the \
                   processes the desktop's server starts and keeps running: the host, the host a component runs in \
-                  alone, the built-in portal, prompts and desktop control, and the others its configuration names. \
+                  alone, and the built-in portal, prompts, desktop control and login. \
                   They talk to the server of the current session over the session bus, which allows them to the \
                   session's own user alone, outside any Flatpak or Snap.\n\n\
                   When the system configuration declares a development folder (see `cupertino dev-folder enable`), a \
@@ -50,13 +50,16 @@ const COMMANDS: &[Command] = &[
                   program and whether it is the development folder's",
         description: "Asks the server of the current session for every process it supervises, in the order they \
                       start (the shell host `host`, the host `host-NAME` a component runs in alone, and the other \
-                      processes), and for the components of the shell host: the name the server accepted for each of \
-                      the bus connections on the session bus, with the host process that holds the connection. A \
-                      component that has not connected is not listed. Each process has its name, its state (running, stopping, waiting to start again, or stopped \
+                      processes), and for every component of the shell host: where it runs (host, the shared host; \
+                      host-NAME, a host of its own, from the development folder or installed; none, nothing runs \
+                      it, as the shell host is not installed or cannot start; or off, the session does not run \
+                      it), whether a host holds its connection to the server, and the bus \
+                      connection the server accepted for it on the session bus with the process that holds it. Each \
+                      process has its name, its state (running, stopping, waiting to start again, or stopped \
                       after it ended successfully), and while it runs its pid, its start time (also as clock ticks \
                       after boot, field 22 of /proc/PID/stat, which tells a process from a later one with the same \
                       pid), the program that runs and whether that is the development folder's. installed is the \
-                      program of the configuration, and dev_program the file of the development folder the process \
+                      installed program, and dev_program the file of the development folder the process \
                       starts when it is there (null when the folder does not apply to it).\n\n\
                       dev_program_older_than_installed is true when that file is there and was last modified before \
                       the installed program (a package's files keep their build time): the folder holds a build \
@@ -411,31 +414,55 @@ fn restart_process(cx: &Context, name: &str) -> Result<Process, Failure> {
     Ok(Process::from(record).compared())
 }
 
-/// A component of the shell host as the session bus shows it.
+/// A component of the server's component table as the server and the session bus show it.
 #[derive(Serialize)]
 struct Component {
     name: String,
+    /// Where it runs: `host`, `host-NAME`, `none` or `off`.
+    runs_in: String,
+    /// Its host of its own starts from the development folder.
+    from_dev_folder: bool,
+    /// A host holds the connection the server handed out for it.
+    connected: bool,
     /// The component's own bus connection, the one the server accepted for it.
-    connection: String,
-    /// The process that holds the connection: the component's host.
+    connection: Option<String>,
+    /// The process that holds that bus connection: the component's host.
     pid: Option<u32>,
-    /// The supervised process of that pid (`host`, `host-NAME`); `None` when it is not in the server's list.
-    host: Option<String>,
 }
 
-/// The components that have an accepted connection on the bus, by name: for each connection the bus lists, the name
-/// the server's `ComponentOf` gives it, and the process that holds it from the bus driver.
-fn components_on(
-    connection: &zbus::blocking::Connection,
-    processes: &[Process],
-) -> Result<Vec<Component>, Failure> {
-    let mut found = Vec::new();
+impl Component {
+    /// `host-dock (development folder)`, `host`, `off`, …
+    fn place(&self) -> String {
+        if self.from_dev_folder {
+            format!("{} (development folder)", self.runs_in)
+        } else {
+            self.runs_in.clone()
+        }
+    }
+}
+
+/// Every component of the server's table (`ListShellComponents`), in its order, each with the bus connection the
+/// server's `ComponentOf` names it for and the process that holds that connection, from the bus driver.
+fn components_on(connection: &zbus::blocking::Connection) -> Result<Vec<Component>, Failure> {
+    let listed: Vec<(String, String, bool, bool)> =
+        call_on(connection, "ListShellComponents", &())?;
+    let mut components: Vec<Component> = listed
+        .into_iter()
+        .map(|(name, runs_in, from_dev_folder, connected)| Component {
+            name,
+            runs_in,
+            from_dev_folder,
+            connected,
+            connection: None,
+            pid: None,
+        })
+        .collect();
     for unique in unique_names(connection)? {
         let name: String = call_on(connection, "ComponentOf", &(unique.as_str(),))?;
-        if name.is_empty() {
+        let Some(component) = components.iter_mut().find(|c| c.name == name) else {
             continue;
-        }
-        let pid = connection
+        };
+        component.pid = connection
             .call_method(
                 Some(BUS_DRIVER),
                 BUS_DRIVER_PATH,
@@ -445,21 +472,9 @@ fn components_on(
             )
             .and_then(|reply| reply.body().deserialize::<u32>())
             .ok();
-        let host = pid.and_then(|pid| {
-            processes
-                .iter()
-                .find(|p| p.pid == Some(pid))
-                .map(|p| p.name.clone())
-        });
-        found.push(Component {
-            name,
-            connection: unique,
-            pid,
-            host,
-        });
+        component.connection = Some(unique);
     }
-    found.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(found)
+    Ok(components)
 }
 
 #[derive(Serialize)]
@@ -471,7 +486,7 @@ struct Listed {
 fn list(_: &Args, cx: &Context) -> Result<Reply, Failure> {
     let connection = session_bus(cx)?;
     let processes = processes_on(&connection)?;
-    let components = components_on(&connection, &processes)?;
+    let components = components_on(&connection)?;
     let width = processes
         .iter()
         .map(|p| p.name.len())
@@ -498,34 +513,33 @@ fn list(_: &Args, cx: &Context) -> Result<Reply, Failure> {
             p.name, p.state,
         );
     }
-    if !components.is_empty() {
-        let name_width = components
-            .iter()
-            .map(|c| c.name.len())
-            .max()
-            .unwrap_or(0)
-            .max("COMPONENT".len());
-        let host_width = components
-            .iter()
-            .map(|c| c.host.as_deref().map_or(1, str::len))
-            .max()
-            .unwrap_or(0)
-            .max("HOST".len());
-        let _ = write!(
+    let places: Vec<String> = components.iter().map(Component::place).collect();
+    let name_width = components
+        .iter()
+        .map(|c| c.name.len())
+        .max()
+        .unwrap_or(0)
+        .max("COMPONENT".len());
+    let place_width = places
+        .iter()
+        .map(|p| p.chars().count())
+        .max()
+        .unwrap_or(0)
+        .max("RUNS IN".len());
+    let _ = write!(
+        human,
+        "\n{:name_width$}  {:place_width$}  {:9}  {:>7}  CONNECTION\n",
+        "COMPONENT", "RUNS IN", "CONNECTED", "PID"
+    );
+    for (c, place) in components.iter().zip(&places) {
+        let pid = c.pid.map_or_else(|| "-".to_owned(), |pid| pid.to_string());
+        let _ = writeln!(
             human,
-            "\n{:name_width$}  {:host_width$}  {:>7}  CONNECTION\n",
-            "COMPONENT", "HOST", "PID"
+            "{:name_width$}  {place:place_width$}  {:9}  {pid:>7}  {}",
+            c.name,
+            if c.connected { "yes" } else { "no" },
+            c.connection.as_deref().unwrap_or("-")
         );
-        for c in &components {
-            let pid = c.pid.map_or_else(|| "-".to_owned(), |pid| pid.to_string());
-            let _ = writeln!(
-                human,
-                "{:name_width$}  {:host_width$}  {pid:>7}  {}",
-                c.name,
-                c.host.as_deref().unwrap_or("-"),
-                c.connection
-            );
-        }
     }
     Ok(Reply::new(
         &Listed {
@@ -561,24 +575,27 @@ fn use_installed(args: &Args, cx: &Context) -> Result<Reply, Failure> {
         .find(|p| p.name == name)
         .or_else(|| listed.iter().find(|p| p.name == host))
     else {
-        let components = components_on(&connection, &listed)?;
-        return Err(if components.iter().any(|c| c.name == name) {
-            Failure::new(
+        let components = components_on(&connection)?;
+        return Err(
+            if let Some(component) = components.iter().find(|c| c.name == name) {
+                Failure::new(
                 FailureKind::Validation,
                 "no_dev_program",
                 format!(
-                    "{name} runs in the installed shell host, not from the development folder: `cupertino \
-                     dev-folder enable --components {name}` gives it a host of its own"
+                    "{name} runs in {}, not in a host of its own from the development folder: `cupertino \
+                     dev-folder enable --components {name}` gives it one",
+                    component.place()
                 ),
             )
-        } else {
-            Failure::usage(
-                "unknown_process",
-                format!(
+            } else {
+                Failure::usage(
+                    "unknown_process",
+                    format!(
                     "no component or shell process is named {name:?}; see `cupertino shell list`"
                 ),
-            )
-        });
+                )
+            },
+        );
     };
     let file = process.dev_program.clone().ok_or_else(|| {
         Failure::new(

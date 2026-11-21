@@ -352,7 +352,6 @@ impl Rig {
         let event_loop: EventLoop<'static, Cupertino> = EventLoop::try_new().unwrap();
         let display: Display<Cupertino> = Display::new().unwrap();
         let mut config = Config::default();
-        config.shell_processes.clear();
         config.keyboard.sources = ["us", "de"]
             .map(|s| SourceSpec::parse(s).expect("an xkb layout"))
             .to_vec();

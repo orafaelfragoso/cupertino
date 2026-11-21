@@ -771,7 +771,7 @@ pub struct Cupertino {
     /// A client's drag that just ended without a drop, its icon not captured yet.
     pub drag_ended: Option<crate::drag_return::DragEnd>,
     pub key_router: KeyRouter,
-    /// Input-source HUD and accent popup.
+    /// The input-source switcher and the accent picker, which the on-screen displays draw.
     pub overlays: Overlays,
     pub caps: CapsDebounce,
     /// Slow keys, sticky keys, mouse keys, the globe key and the compositor's key repeat (`kbd_filters`).
@@ -1051,8 +1051,7 @@ impl Cupertino {
         let global_shortcuts = crate::global_shortcuts::GlobalShortcuts::new(&dh);
         let scroll_counts = ScrollObservers::new(&dh);
         let layers = crate::layers_v1::Layers::new(&dh);
-        let mut supervisor = Supervisor::new(&config.shell_processes, std::time::Instant::now());
-        supervisor.set_dev_folder(config.dev_folder.as_ref());
+        let supervisor = Supervisor::default();
         let menu_bars = MenuBars::new(config.shell.menu_bar_height);
 
         let overlays = Overlays::new(&config, &decor.decorations().config.typography, assets)?;

@@ -1,12 +1,12 @@
-//! Supervision of the shell processes named in the configuration and of the built-in ones ([`BuiltIn`], their program checked before every start): started with the server,
-//! restarted by [`crate::restart_policy`], and killed when the server goes away. A pass of
+//! Supervision of the built-in programs ([`BuiltIn`], their program checked before every start) and of the shell's
+//! hosts: started with the server, restarted by [`crate::restart_policy`], and killed when the server goes away. A pass of
 //! [`Supervisor::poll`] runs when a child's pidfd becomes readable (it exited) or at the earliest
 //! restart ([`Supervisor::next_deadline`]), see [`Wakeups`]; `try_wait` reaps it there. The server
 //! installs no SIGCHLD handler, and nothing wakes the loop while every child runs.
 //!
-//! A process the development folder applies to ([`Supervisor::set_dev_folder`]) starts the folder's file of its
-//! program's name at every start when [`dev_folder_program`] accepts it, else its installed program. A restart asked
-//! for by name ([`Supervisor::request_restart`]) ends the process with SIGTERM, then SIGKILL after
+//! A separate host the plan starts from the development folder ([`Supervisor::reconcile`]) starts the folder's
+//! `cupertino-shell` at every start when [`dev_folder_program`] accepts it, else the installed host; a built-in program
+//! never starts from the folder. A restart asked for by name ([`Supervisor::request_restart`]) ends the process with SIGTERM, then SIGKILL after
 //! [`RESTART_STOP_GRACE`], and starts it again at once, whatever its exit status; the request is answered once it runs.
 //!
 //! The checks of a program before a start, and the reading of a started process's start time, run on threads the loop
@@ -18,10 +18,9 @@
 //! each holding the `host` role alone on a connection the [`Launcher`] makes ([`HostKind`]). A host is restarted
 //! whatever its exit status, never sooner than the throttle after its last start ([`decide_host`]), and never given up;
 //! an exit the server expected ([`Launcher::host_ended`]) is not counted and restarts it at once. A host whose program is
-//! refused or cannot be spawned is not tried again: the server runs its components as their own processes
-//! ([`Supervisor::host_refused`]) until `cupertino shell restart host` or a change of the `shell` section.
-//! [`Supervisor::reconcile`] adds and ends the configured processes and the hosts as the component list says; an ended
-//! one is removed once it exited.
+//! refused or cannot be spawned is not tried again: no component runs ([`Supervisor::host_refused`]) until
+//! `cupertino shell restart host` or a change of the `shell` section. [`Supervisor::reconcile`] adds and ends the
+//! hosts as the component list says; an ended one is removed once it exited.
 //!
 //! Each exit and each start that fails is also a diagnostic event: `server.shell.exited` (restarted),
 //! `server.shell.gave_up` (not restarted) and `server.shell.start_failed`.
@@ -32,7 +31,7 @@ use std::time::{Duration, Instant};
 
 use cupertino_diagnostic_events::{self as diag, Severity, Value};
 
-use crate::config::{check_built_in, dev_folder_program, BuiltIn, DevFolder, ShellProcess};
+use crate::config::{check_built_in, dev_folder_program, BuiltIn, ShellProcess};
 use crate::host::HostKind;
 use crate::restart_policy::{decide, decide_host, with_exit_status, Backoff, Decision};
 use crate::shell_connection::{bind_holder, hand_over, BoundConnection};
@@ -80,7 +79,7 @@ pub fn host_name(kind: HostKind) -> String {
 
 /// What the supervision needs from the server to start its processes and to follow its hosts.
 pub trait Launcher {
-    /// The connection of a shell process, holding `spec.roles` and no other.
+    /// The connection of a built-in program, holding `spec.roles` and no other.
     fn connect(&mut self, spec: &ShellProcess) -> std::io::Result<BoundConnection>;
     /// The client end of a new connection for a host of `kind`, and the id the server gave that host.
     fn connect_host(
@@ -109,8 +108,6 @@ pub trait Launcher {
 /// Where a supervised process comes from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Origin {
-    /// An entry of the configuration's `shell` section.
-    Configured,
     /// A program the server starts itself ([`BuiltIn`]).
     BuiltIn,
     /// A shell host.
@@ -182,7 +179,7 @@ pub struct ProcessInfo {
     pub program: Option<PathBuf>,
     /// The program that runs is the development folder's.
     pub from_dev_folder: bool,
-    /// The program of the configuration.
+    /// The installed program.
     pub installed: PathBuf,
     /// The file of the development folder the process starts when it is there; `None` when the folder does not apply.
     pub dev_program: Option<PathBuf>,
@@ -215,7 +212,7 @@ struct Supervised {
     retiring: bool,
     /// Exited after it was retired: removed at the end of the pass.
     gone: bool,
-    /// The development folder the process may start from; `None` when it starts its installed program alone.
+    /// The development folder a separate host may start from; `None` when it starts its installed program alone.
     dev_folder: Option<PathBuf>,
     /// The restarts asked for and not answered yet.
     restarts: Vec<RestartReply>,
@@ -240,7 +237,7 @@ impl Supervised {
     fn host(&self) -> Option<HostKind> {
         match self.origin {
             Origin::Host(kind) => Some(kind),
-            Origin::Configured | Origin::BuiltIn => None,
+            Origin::BuiltIn => None,
         }
     }
 
@@ -279,31 +276,18 @@ impl Supervised {
     }
 }
 
-/// The supervised shell processes.
+/// The supervised processes: none until the built-in programs ([`Supervisor::add_built_ins`]) and the hosts
+/// ([`Supervisor::reconcile`]) are added.
+#[derive(Default)]
 pub struct Supervisor {
     procs: Vec<Supervised>,
     /// The program of the shell's hosts; `None` when it is not installed.
     host_program: Option<HostProgram>,
     /// Why the host program was refused at a start; while set no host starts.
     host_refused: Option<String>,
-    /// The development folder the configured processes may start from ([`Supervisor::set_dev_folder`]).
-    dev_folder: Option<DevFolder>,
 }
 
 impl Supervisor {
-    /// Processes start at the first [`Supervisor::poll`] at or after `now`.
-    pub fn new(specs: &[ShellProcess], now: Instant) -> Self {
-        Self {
-            procs: specs
-                .iter()
-                .map(|spec| Supervised::new(spec.clone(), now, Origin::Configured, false))
-                .collect(),
-            host_program: None,
-            host_refused: None,
-            dev_folder: None,
-        }
-    }
-
     /// The program the hosts start, `None` when it is not installed; it applies from each host's next start, and takes
     /// a refusal away.
     pub fn set_host_program(&mut self, program: Option<HostProgram>) {
@@ -331,60 +315,11 @@ impl Supervisor {
         self.host_refused = reason;
     }
 
-    /// Let the processes `folder` names start from it ([`DevFolder::eligible`]); `None` takes the folder away. A name the
-    /// folder may not apply to is logged and ignored, and a built-in process never starts from it; a name of a component
-    /// without a process entry is left to the hosts. It applies from each process's next start.
-    pub fn set_dev_folder(&mut self, folder: Option<&DevFolder>) {
-        self.dev_folder = folder.cloned();
-        if let Some(folder) = folder {
-            let configured = self.configured();
-            let for_processes = DevFolder {
-                path: folder.path.clone(),
-                components: folder
-                    .components
-                    .iter()
-                    .filter(|name| {
-                        crate::host::component_spec(name).is_none()
-                            || configured.iter().any(|p| &p.name == *name)
-                    })
-                    .cloned()
-                    .collect(),
-            };
-            let (eligible, warnings) = for_processes.eligible(&configured);
-            for warning in warnings {
-                tracing::warn!(folder = %folder.path.display(), "{warning}: ignored");
-            }
-            tracing::info!(folder = %folder.path.display(), components = ?eligible, "development folder");
-        }
-        self.refresh_dev_folder();
-    }
-
-    /// The configured processes' specs.
-    fn configured(&self) -> Vec<ShellProcess> {
-        self.procs
-            .iter()
-            .filter(|p| p.origin == Origin::Configured)
-            .map(|p| p.spec.clone())
-            .collect()
-    }
-
-    /// Give every configured process the development folder when the folder applies to it.
-    fn refresh_dev_folder(&mut self) {
-        let eligible = match &self.dev_folder {
-            Some(folder) => folder.eligible(&self.configured()).0,
-            None => Vec::new(),
-        };
-        let path = self.dev_folder.as_ref().map(|f| f.path.clone());
+    /// Take the development folder away from every host: each starts the installed program from its next start, until the
+    /// plan gives the folder back ([`Supervisor::reconcile`]).
+    pub fn forget_dev_folder(&mut self) {
         for p in &mut self.procs {
-            match p.origin {
-                Origin::Configured => {
-                    let applies = eligible.contains(&p.spec.name);
-                    p.dev_folder = path.clone().filter(|_| applies);
-                }
-                // a folder taken away applies to the hosts from their next start too; the plan gives one back
-                Origin::Host(_) if path.is_none() => p.dev_folder = None,
-                Origin::Host(_) | Origin::BuiltIn => {}
-            }
+            p.dev_folder = None;
         }
     }
 
@@ -431,15 +366,14 @@ impl Supervisor {
         }
     }
 
-    /// Make the configured processes `processes` and the hosts `hosts` (each with the development folder it starts
-    /// from, if any) the ones that run: a missing one starts at the next pass at or after `now`, one that is no longer
-    /// named ends and is removed once it exited (a configured process and the shared host after SIGTERM, killed after
-    /// [`RESTART_STOP_GRACE`]; a separate host by itself, once the server sent it an empty list). Built-in processes are
-    /// left alone, and hosts are not started while [`Supervisor::hosts_available`] does not hold. Returns the hosts that
-    /// end, with the id of their connection: the server expects their exit.
+    /// Make the hosts `hosts` (each with the development folder it starts from, if any) the ones that run: a missing one
+    /// starts at the next pass at or after `now`, one that is no longer named ends and is removed once it exited (the
+    /// shared host after SIGTERM, killed after [`RESTART_STOP_GRACE`]; a separate host by itself, once the server sent
+    /// it an empty list); a folder taken away or given applies from the host's next start. Built-in processes are left
+    /// alone, and hosts are not started while [`Supervisor::hosts_available`] does not hold. Returns the hosts that end,
+    /// with the id of their connection: the server expects their exit.
     pub fn reconcile(
         &mut self,
-        processes: &[ShellProcess],
         hosts: &[(HostKind, Option<PathBuf>)],
         now: Instant,
     ) -> Vec<(HostKind, Option<u64>)> {
@@ -449,7 +383,6 @@ impl Supervisor {
         for p in &mut self.procs {
             let wanted = match p.origin {
                 Origin::BuiltIn => continue,
-                Origin::Configured => processes.iter().any(|s| s.name == p.spec.name),
                 Origin::Host(kind) => hosts.iter().any(|(k, _)| *k == kind),
             };
             if wanted {
@@ -462,22 +395,6 @@ impl Supervisor {
             }
         }
         self.procs.retain(|p| !p.gone);
-        for spec in processes {
-            match self
-                .procs
-                .iter_mut()
-                .find(|p| p.origin == Origin::Configured && p.spec.name == spec.name)
-            {
-                // a changed entry applies from its next start
-                Some(p) => p.spec = spec.clone(),
-                None => self.procs.push(Supervised::new(
-                    spec.clone(),
-                    now,
-                    Origin::Configured,
-                    false,
-                )),
-            }
-        }
         if let Some(program) = self.host_program.clone() {
             for (kind, dev_folder) in hosts {
                 let p = match self.procs.iter_mut().find(|p| p.host() == Some(*kind)) {
@@ -496,7 +413,6 @@ impl Supervisor {
                 p.dev_folder = dev_folder.clone();
             }
         }
-        self.refresh_dev_folder();
         ended
     }
 
@@ -585,7 +501,7 @@ impl Supervisor {
         }
         self.procs.retain(|p| !p.gone);
         if refused {
-            // a refused host is not tried again: its components run as processes until the program is tried again
+            // a refused host is not tried again: no component runs until the program is tried again
             self.host_refused
                 .get_or_insert_with(|| "the host program was refused".into());
         }
@@ -597,6 +513,14 @@ impl Supervisor {
             .iter()
             .filter_map(|p| p.child().map(Child::id))
             .collect()
+    }
+
+    /// Whether a process whose connection holds `role` is supervised and runs again should it end: it runs, stops for
+    /// a restart or waits for its next start; not one that ended successfully, nor one that ends for good.
+    pub fn keeps_role(&self, role: crate::authorization::ShellRole) -> bool {
+        self.procs.iter().any(|p| {
+            p.spec.roles.contains(&role) && !p.retiring && !matches!(p.phase, Phase::Stopped)
+        })
     }
 
     /// The pids of the running processes whose connection holds `role`.
@@ -622,7 +546,7 @@ impl Supervisor {
     }
 
     /// The name of the program the server starts itself ([`BuiltIn`]) that runs as `pid`, while it runs or stops; `None`
-    /// for a host, a configured process and any other pid. The child is not reaped while it is found here, so its pid
+    /// for a host and any other pid. The child is not reaped while it is found here, so its pid
     /// names no other process.
     pub fn built_in_of(&self, pid: u32) -> Option<&str> {
         self.procs

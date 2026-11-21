@@ -16,8 +16,8 @@ Updated by the lead at every merge.
 | | |
 |---|---|
 | Current wave | 6 |
-| Running tasks | W6.close (shell enforced, shell-v1 31, component list), the menu bar restart-test flake |
-| Enforced layers | foundation, system, graphics, models, platform, protocol, transport, render, ui, shellkit, core, services, testing (9 remaining-work lines: 8 in `apps`, 1 in `shell`) |
+| Running tasks | restart program tests steady under load; the architect's review of wave 6; the process path (W5.5's) still to remove |
+| Enforced layers | foundation, system, graphics, models, platform, protocol, transport, render, ui, shellkit, core, services, shell, testing (8 remaining-work lines, all in `apps`) |
 | Waiting on the owner | nothing |
 | Last closed wave | 5 |
 
@@ -1126,7 +1126,7 @@ At most three at a time, in this order:
 
 **Owns** `login`, new `shell-agent`. **After** W6.2, W5.4.
 
-1. [ ] Where `cupertino-login`'s modules go:
+1. [x] (`41d42563e`, `c4f4044eb`) Where `cupertino-login`'s modules go:
 
        | Module | Goes to |
        |---|---|
@@ -1136,7 +1136,7 @@ At most three at a time, in this order:
        | `control` (`Login1`) | `Lock` stays in `cupertino-login`; the other methods are gone (D13) |
        | the consent prompt | `cupertino-prompts` (W6.14) |
        | everything else | stays: login and lock screens |
-2. [ ] Login and lock screens draw through Kit and `cupertino-kit-shell` (lock surfaces); no `tiny-skia`,
+2. [x] (`991e75877`) Login and lock screens draw through Kit and `cupertino-kit-shell` (lock surfaces); no `tiny-skia`,
        `cupertino-raster-math` or `cupertino-seat`; power through `cupertino-sessiond` (login screen) or `Session1`
        (lock screen).
 
@@ -1144,15 +1144,15 @@ At most three at a time, in this order:
 
 **Owns** `polkit-agent`, new `prompts`; the consent prompt code in `login`. **After** W6.13.
 
-1. [ ] One process with the authentication and keyring prompts, drawn through Kit.
-2. [ ] The desktop-control consent prompt moves here from `cupertino-login`; the screenshot and global-shortcut consent
+1. [x] (`6479ff5c7`) One process with the authentication and keyring prompts, drawn through Kit.
+2. [x] (`97bfd7209`, `2fc3e2568`) The desktop-control consent prompt moves here from `cupertino-login`; the screenshot and global-shortcut consent
        dialogs from `cupertino-portal` (W6.11 calls them).
 
 #### W6.15 Everything that names the old shell binaries (M)
 
 **Owns** `cli` (`shell.rs`, `dev_folder.rs`), `diagnostics` (`dev_builds.rs`), `docs/src/building.md`, the tests in `cupertino-session-tests`. **After** each component as it lands.
 
-- [ ] Each names the host and its components; `cupertino shell list` and `restart` act on components.
+- [x] (`b9608a75a`, `6cba8a237`, `7b0e84a06`, `309f971b7`) Each names the host and its components; `cupertino shell list` and `restart` act on components.
 
 #### W6.16 Crates left with one user (S)
 
@@ -1168,10 +1168,11 @@ Every crate of wave 6, as in W1.T.
 
 #### W6.close (lead)
 
-- [ ] `ENFORCED` gains `Shell`. Old binaries are gone from packaging and `contracts.yaml`.
-- [ ] `cupertino-shell-v1.xml` loses `session_agent` and `agent_trust`, whose last reader goes in W6.13 (shell-host.md,
+- [x] (`794642fa2`, `6a8251659`) `ENFORCED` gains `Shell`. Old binaries are gone from packaging and `contracts.yaml`.
+- [x] (`1100a8559`, version 31) `cupertino-shell-v1.xml` loses `session_agent` and `agent_trust`, whose last reader goes in W6.13 (shell-host.md,
       "Edits of the existing protocol files").
-- [ ] Memory measured against W0.1; numbers in [Measurements](#measurements).
+- [ ] Memory measured against W0.1; numbers in [Measurements](#measurements). Deferred by the owner (2026-11-20) until
+      every wave and its bugs are done.
 - [ ] `docs/src/architecture.md`'s process table matches [Processes](#processes). Gates as in W4.close.
 
 ### Wave 7: applications, tools, documents

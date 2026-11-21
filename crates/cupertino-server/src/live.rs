@@ -10,7 +10,7 @@
 //!
 //! | File | Applied at once | At the next start |
 //! |---|---|---|
-//! | `compositor.json` | appearance, tracking speeds, acceleration, scroll direction, cursor size, colours and shake, minimize effect, closing animation, hot corner size and dwell, corner radius, scroll bars, key bindings, terminals, the fractional scale mode; `shell` (components, `off`, `alone`, process entries: the hosts and processes follow at once, `crate::host`); `dev_folder` of the system file, read again through its root-only check, for each shell process's next start and the hosts of its components | `decorations` (new windows only), `menu_bar_height`, `show_menu_bar`, `screenshot` (privileged process: read at start) |
+//! | `compositor.json` | appearance, tracking speeds, acceleration, scroll direction, cursor size, colours and shake, minimize effect, closing animation, hot corner size and dwell, corner radius, scroll bars, key bindings, terminals, the fractional scale mode; `shell` (components, `off`, `alone`: the hosts follow at once, `crate::host`); `dev_folder` of the system file, read again through its root-only check, for the hosts of its components | `decorations` (new windows only), `menu_bar_height`, `show_menu_bar`, `screenshot` (privileged process: read at start) |
 //! | `keyboard.conf` | every key: repeat, caps lock, filters, rewrite, accent picker, input sources and layouts (the keymap is rebuilt) | — |
 //! | `power.conf` | every key (the countdown in progress continues with the new timers) | — |
 //! | `/etc/cupertino/accessibility.conf` | its keys, for an account without an `accessibility.conf` of its own and the login screen (`crate::accessibility`) | — |
@@ -281,7 +281,7 @@ impl Cupertino {
                 self.set_system_accessibility(AccessibilitySettings::default());
             }
             ReloadKind::SystemCompositor => {
-                self.supervisor.set_dev_folder(None);
+                self.supervisor.forget_dev_folder();
                 self.config.dev_folder = None;
             }
             ReloadKind::UserCompositor
@@ -405,20 +405,15 @@ impl Cupertino {
                     match dev_folder {
                         Some(Ok(folder)) => {
                             if folder.is_none() {
-                                tracing::info!("the development folder is gone: every shell process starts its installed program from its next start");
+                                tracing::info!("the development folder is gone: its components run in the installed host");
                             }
-                            self.supervisor.set_dev_folder(folder.as_ref());
                             self.config.dev_folder = folder;
                         }
                         Some(Err(e)) => {
                             tracing::error!(path = %path.display(), error = %e, "the development folder of the changed system configuration is refused");
-                            self.supervisor.set_dev_folder(None);
                             self.config.dev_folder = None;
                         }
-                        None => {
-                            self.supervisor.set_dev_folder(None);
-                            self.config.dev_folder = None;
-                        }
+                        None => self.config.dev_folder = None,
                     }
                     // the folder's components run alone from it, or back in the installed host
                     self.apply_shell_plan();
@@ -647,7 +642,7 @@ impl Cupertino {
     }
 
     /// Take the `shell` section of the system file `system` and the person's file `user` again (`docs/architecture/shell-host.md`,
-    /// *The `shell` section*): each layer by its trust, as at start, and then the hosts and processes follow it at once
+    /// *The `shell` section*): each layer by its trust, as at start, and then the hosts follow it at once
     /// ([`Cupertino::apply_shell_plan`]).
     pub fn apply_shell_section(&mut self, system: &CompositorSettings, user: &CompositorSettings) {
         use crate::config::LayerTrust;
@@ -671,7 +666,7 @@ impl Cupertino {
         {
             tracing::warn!(error = %problem, "invalid configuration: the key keeps its default");
         }
-        tracing::info!("the `shell` section changed: the components and processes follow it");
+        tracing::info!("the `shell` section changed: the components follow it");
         self.apply_shell_plan();
     }
 

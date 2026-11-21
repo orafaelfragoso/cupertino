@@ -2,7 +2,7 @@
 //! button with its icon and name) and a button that opens the folder. Over a bar at the bottom of the output a pointer
 //! under the panel, one piece of glass with it, points at the folder's tile; where the panel was moved to stay inside
 //! the output the pointer stays over the tile. It takes the keyboard and closes on a press outside it or Escape. It
-//! comes in over [`stack::ENTRY_S`], fading and scaling up out of the pointer's tip, and under Reduce Motion only
+//! comes in as [`Timing::DOCK_STACK_ENTRY`](cupertino_kit::motion::Timing::DOCK_STACK_ENTRY) runs, fading and scaling up out of the pointer's tip, and under Reduce Motion only
 //! fading. Where the parts go is [`StackLayout`]'s, and where the popup stands [`StackPlacement`]'s.
 
 use cupertino_kit::controls::CalloutPointer;

@@ -1,6 +1,7 @@
 //! `cupertino shell list`, `restart` and `use-installed` act on the components of the shell host through the server's
 //! `org.cupertino.Session1` on a session bus of the test's own, and `dev-folder enable` names components. The server is
-//! a stand-in that answers as the real one does (`ListShellProcesses`, `RestartShellProcess`, `ComponentOf`).
+//! a stand-in that answers as the real one does (`ListShellProcesses`, `ListShellComponents`, `RestartShellProcess`,
+//! `ComponentOf`).
 
 use cupertino_cli::{Context, EffectiveUser, Output, Runner, REGISTRY};
 use serde_json::Value;
@@ -70,10 +71,42 @@ fn record(name: &str, pid: u32, dev_program: &str) -> Record {
     )
 }
 
-/// What the stand-in server knows: its processes, the component each bus connection was accepted as, and what it was
-/// asked to restart.
+/// `(name, runs_in, from_dev_folder, connected)`
+type ComponentRecord = (String, String, bool, bool);
+
+/// The server's component table as the stand-in lists it: every component in the shared host, those named in
+/// `connected` connected, `dock` in a host of its own from the development folder and `osd` turned off.
+fn table(connected: &[&str]) -> Vec<ComponentRecord> {
+    [
+        "menubar",
+        "dock",
+        "desktop",
+        "windowmanager",
+        "overview",
+        "launcher",
+        "notifications",
+        "controlcenter",
+        "osd",
+        "agent",
+        "dialogs",
+    ]
+    .into_iter()
+    .map(|name| {
+        let (runs_in, dev) = match name {
+            "dock" => ("host-dock", true),
+            "osd" => ("off", false),
+            _ => ("host", false),
+        };
+        (name.into(), runs_in.into(), dev, connected.contains(&name))
+    })
+    .collect()
+}
+
+/// What the stand-in server knows: its processes and components, the component each bus connection was accepted as,
+/// and what it was asked to restart.
 struct Session {
     processes: Vec<Record>,
+    table: Vec<ComponentRecord>,
     components: Arc<Mutex<HashMap<String, String>>>,
     restarted: Arc<Mutex<Vec<String>>>,
 }
@@ -82,6 +115,10 @@ struct Session {
 impl Session {
     fn list_shell_processes(&self) -> Vec<Record> {
         self.processes.clone()
+    }
+
+    fn list_shell_components(&self) -> Vec<ComponentRecord> {
+        self.table.clone()
     }
 
     fn restart_shell_process(&self, name: String) -> zbus::fdo::Result<Record> {
@@ -141,6 +178,7 @@ fn desktop(test: &str, components: &[&str], processes: Vec<Record>) -> Desktop {
         .serve_at(
             "/org/cupertino/Session1",
             Session {
+                table: table(components),
                 processes,
                 components: known,
                 restarted: restarted.clone(),
@@ -183,7 +221,7 @@ fn scratch(name: &str) -> PathBuf {
 }
 
 #[test]
-fn shell_list_names_the_components_of_the_host_and_the_host_that_holds_them() {
+fn shell_list_names_every_component_of_the_table_with_where_it_runs_and_its_connection() {
     let host = std::process::id();
     let desktop = desktop(
         "list",
@@ -194,13 +232,30 @@ fn shell_list_names_the_components_of_the_host_and_the_host_that_holds_them() {
     let output = command(&desktop, &root, &["shell", "list"]);
     assert_eq!(output.code, 0, "{output:?}");
     let data = &json(&output)["data"];
-    let components: Vec<(&str, &str)> = data["components"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|c| (c["name"].as_str().unwrap(), c["host"].as_str().unwrap()))
-        .collect();
-    assert_eq!(components, [("dock", "host"), ("menubar", "host")]);
+    let components = data["components"].as_array().unwrap();
+    assert_eq!(components.len(), 11, "every component of the table");
+    let row = |name: &str| {
+        let c = components
+            .iter()
+            .find(|c| c["name"] == name)
+            .unwrap_or_else(|| panic!("{name} is listed"));
+        (
+            c["runs_in"].as_str().unwrap().to_owned(),
+            c["from_dev_folder"].as_bool().unwrap(),
+            c["connected"].as_bool().unwrap(),
+            c["connection"].is_string(),
+            c["pid"].as_u64(),
+        )
+    };
+    let pid = Some(u64::from(host));
+    for (name, expected) in [
+        ("menubar", ("host".to_owned(), false, true, true, pid)),
+        ("dock", ("host-dock".to_owned(), true, true, true, pid)),
+        ("launcher", ("host".to_owned(), false, false, false, None)),
+        ("osd", ("off".to_owned(), false, false, false, None)),
+    ] {
+        assert_eq!(row(name), expected, "{name}");
+    }
     assert_eq!(data["processes"].as_array().unwrap().len(), 2);
 
     let human = {
@@ -212,8 +267,10 @@ fn shell_list_names_the_components_of_the_host_and_the_host_that_holds_them() {
             .run(&args, "shell-test")
     };
     assert!(
-        human.stdout.contains("COMPONENT") && human.stdout.contains("dock"),
-        "{human:?}"
+        human.stdout.contains("COMPONENT")
+            && human.stdout.contains("host-dock (development folder)")
+            && human.stdout.contains("launcher"),
+        "a component that has not connected is listed too: {human:?}"
     );
 }
 

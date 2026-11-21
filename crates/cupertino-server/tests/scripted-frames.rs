@@ -1,4 +1,4 @@
-//! A supervised legacy shell and an ordinary mapped client stop dispatching. A third connection must still
+//! An observer of the session's appearance and an ordinary mapped client stop dispatching. A third connection must still
 //! receive frame callbacks even while the consumer of either scripted output is not reading.
 
 use std::fs::{self, DirBuilder, File, OpenOptions};
@@ -26,6 +26,7 @@ use wayland_client::protocol::{
 };
 use wayland_client::{Connection, Dispatch, EventQueue, QueueHandle};
 
+use cupertino_protocols::server::app_effects::cupertino_app_effects_v1::CupertinoAppEffectsV1;
 use cupertino_protocols::server::cupertino_shell_v1::CupertinoShellV1;
 use wayland_backend::{
     client::{Backend, ObjectData, ObjectId},
@@ -38,7 +39,7 @@ const SETUP: Duration = Duration::from_secs(20);
 /// A fresh frame has to arrive before a stalled write could time out.
 const FRAME_WAIT: Duration = Duration::from_secs(2);
 /// Seconds after the server starts at which it writes the window list into the blocked FIFO. The server's script runs
-/// on the wall clock from its start, so this is the time the supervised shell and its two clients have to map on a
+/// on the wall clock from its start, so this is the time the started clients have to map on a
 /// loaded builder (they took up to 2.6 s with the workspace's tests running at 64 jobs).
 const LIST_AT: f64 = 6.0;
 /// Seconds after the window list at which the server writes the screenshot into the other blocked FIFO.
@@ -85,11 +86,11 @@ impl Home {
         Self(dir)
     }
 
-    fn server(&self, shell: serde_json::Value) -> Command {
+    fn server(&self) -> Command {
         let config = self.0.join("compositor.json");
         fs::write(
             &config,
-            json!({"prepare_toolkit_programs":false, "shell":shell}).to_string(),
+            json!({"prepare_toolkit_programs":false}).to_string(),
         )
         .unwrap();
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_cupertino-server"));
@@ -213,7 +214,7 @@ wayland_client::delegate_noop!(Client: ignore wl_shm::WlShm);
 wayland_client::delegate_noop!(Client: ignore wl_shm_pool::WlShmPool);
 wayland_client::delegate_noop!(Client: ignore wl_buffer::WlBuffer);
 wayland_client::delegate_noop!(Client: ignore xdg_toplevel::XdgToplevel);
-/// Receives the initial session state on the negotiated version-one session object.
+/// Receives the initial appearance on the version-one appearance observer.
 #[derive(Default)]
 struct Observer(AtomicBool);
 impl ObjectData for Observer {
@@ -222,7 +223,7 @@ impl ObjectData for Observer {
         _: &Backend,
         msg: Message<ObjectId, OwnedFd>,
     ) -> Option<Arc<dyn ObjectData>> {
-        if msg.sender_id.interface().name == "cupertino_session_v1" {
+        if msg.sender_id.interface().name == "cupertino_appearance_v1" {
             self.0.store(true, Ordering::Release);
         }
         None
@@ -311,13 +312,13 @@ fn map(
     (queue, surface, top)
 }
 
-/// The supervisor runs this test binary as the legacy shell. After registration, its private session observer and
-/// the ordinary client's mapped toplevel keep their connections open but never dispatch another event.
+/// The server starts this test binary (`--spawn`). After registration, its appearance observer and the ordinary
+/// client's mapped toplevel keep their connections open but never dispatch another event.
 fn clients(home: &Path) {
-    let shell = Connection::connect_to_env().unwrap();
-    let (globals, mut shell_queue) = registry_queue_init::<Client>(&shell).unwrap();
-    // Use the server crate's wire descriptions. No client-only shell dependency is needed for these two requests.
-    let iface = CupertinoShellV1::interface();
+    let conn = Connection::connect_to_env().unwrap();
+    let (globals, mut observer_queue) = registry_queue_init::<Client>(&conn).unwrap();
+    // Use the server crate's wire descriptions. No client-only dependency is needed for these two requests.
+    let iface = CupertinoAppEffectsV1::interface();
     let name = globals
         .contents()
         .clone_list()
@@ -326,7 +327,7 @@ fn clients(home: &Path) {
         .unwrap()
         .name;
     let observer = Arc::new(Observer::default());
-    let role = shell
+    let effects = conn
         .send_request(
             globals.registry(),
             wl_registry::Request::Bind {
@@ -336,17 +337,16 @@ fn clients(home: &Path) {
             Some(observer.clone()),
         )
         .unwrap();
-    let session = iface
+    let get_appearance = iface
         .requests
         .iter()
-        .position(|r| r.name == "get_session")
+        .position(|r| r.name == "get_appearance")
         .unwrap();
-    shell
-        .backend()
+    conn.backend()
         .send_request(
             Message {
-                sender_id: role,
-                opcode: session as u16,
+                sender_id: effects,
+                opcode: get_appearance as u16,
                 args: [Argument::NewId(ObjectId::null())].into_iter().collect(),
             },
             Some(observer.clone()),
@@ -354,7 +354,7 @@ fn clients(home: &Path) {
         )
         .unwrap();
     let mut state = Client::default();
-    shell_queue.roundtrip(&mut state).unwrap();
+    observer_queue.roundtrip(&mut state).unwrap();
     assert!(observer.0.load(Ordering::Acquire));
     let _stalled = map(home, "stalled-client");
     let (mut queue, surface, top) = map(home, "frame-client");
@@ -384,11 +384,15 @@ fn unresponsive_peers_and_scripted_outputs_do_not_stop_frames() {
     let probe = UnixListener::bind(dir.join("probe")).unwrap();
     let list = Pipe::new(dir.join("windows.fifo"));
     let shot = Pipe::new(dir.join("frame.png"));
-    let shell = json!([{"name":"test-shell", "roles":["session"], "command":[std::env::current_exe().unwrap(),
-        "--exact", "unresponsive_peers_and_scripted_outputs_do_not_stop_frames", "--nocapture"]}]);
+    let clients = format!(
+        "{} --exact unresponsive_peers_and_scripted_outputs_do_not_stop_frames --nocapture",
+        std::env::current_exe().unwrap().display()
+    );
     let later = LIST_AT + LATER_LIST_AFTER_LIST;
     let mut server = Session(
-        home.server(shell)
+        home.server()
+            .arg("--spawn")
+            .arg(clients)
             .arg("--window-list")
             .arg(format!("{LIST_AT}:{}", list.path.display()))
             .arg("--window-list")
@@ -435,7 +439,7 @@ fn a_stalled_screenshot_fails_the_run_after_writing_the_other_output() {
     let home = Home::new("snapshot-failure");
     let stalled = Pipe::new(home.0.join("shot.png"));
     let mut server = Session(
-        home.server(json!([]))
+        home.server()
             .args([
                 "--extra-output",
                 "second:96x64",

@@ -10,7 +10,6 @@ layer = "shell"
 [dependencies]
 async-channel = "2"
 async-io = "2"
-cupertino-animation = { path = "../cupertino-animation" }
 cupertino-apps = { path = "../cupertino-apps", features = ["dbus"] }
 cupertino-assets = { path = "../cupertino-assets" }
 cupertino-defaults = { path = "../cupertino-defaults" }

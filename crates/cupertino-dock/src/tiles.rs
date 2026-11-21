@@ -1,14 +1,11 @@
 //! Tile model ("Tile lifecycle": launching → running → attention → quit;
 //! minimized windows live in the right section; separators and a recents separator exist).
 
-use cupertino_animation::AnimatedValue;
+use cupertino_kit::motion::{Animated, Timing};
 use cupertino_wm::ids::WindowId;
 
 use crate::bounce::Bounce;
 use crate::config::BounceConfig;
-
-/// How long a running dot takes to fade in once its app has started.
-pub const RUNNING_FADE_S: f64 = 0.28;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TileId(pub u64);
@@ -47,7 +44,7 @@ pub struct Tile {
     /// pins, removed or moved ([`crate::dock::Dock::set_built_in`]).
     pub built_in: bool,
     pub running: bool,
-    /// When the app's running dot began to appear: it fades in over [`RUNNING_FADE_S`] from then. `None` shows it in
+    /// When the app's running dot began to appear: it fades in as [`Timing::DOCK_RUNNING_DOT`] runs from then. `None` shows it in
     /// full (an app that was running before the dock was).
     pub(crate) running_since: Option<f64>,
     pub launch: Option<Bounce>,
@@ -56,7 +53,7 @@ pub struct Tile {
     pub attention: Option<Bounce>,
     /// Trash only.
     pub full: bool,
-    pub(crate) presence: AnimatedValue<f64>,
+    pub(crate) presence: Animated<f64>,
     pub(crate) leaving: bool,
 }
 
@@ -76,7 +73,7 @@ impl Tile {
             launch_deadline: None,
             attention: None,
             full: false,
-            presence: AnimatedValue::new(1.0),
+            presence: Animated::new(1.0),
             leaving: false,
         }
     }
@@ -93,9 +90,8 @@ impl Tile {
 
     /// How much of its running dot shows at `now`, from 0 to 1: it fades in once the app has started.
     pub fn indicator_alpha(&self, now: f64) -> f64 {
-        self.running_since.map_or(1.0, |since| {
-            ((now - since) / RUNNING_FADE_S).clamp(0.0, 1.0)
-        })
+        self.running_since
+            .map_or(1.0, |since| Timing::DOCK_RUNNING_DOT.value(now - since))
     }
 
     pub fn lifecycle(&self, cfg: &BounceConfig, now: f64) -> TileLifecycle {

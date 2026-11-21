@@ -94,9 +94,16 @@ impl BusHub {
         id
     }
 
+    /// Takes subscriber `sub_id` of `component` off the bus; the component's retained publications go when no other
+    /// subscriber of it is left. A subscriber already off the bus (cut off by `Running::shut` before its thread ended)
+    /// changes nothing: what is retained of the component now came from another instance, as one in a separate host.
     pub fn unregister(&self, sub_id: u64, component: ComponentName) {
         let mut inner = self.lock();
+        let before = inner.subscribers.len();
         inner.subscribers.retain(|s| s.id != sub_id);
+        if inner.subscribers.len() == before {
+            return;
+        }
         let still_present = inner.subscribers.iter().any(|s| s.component == component);
         if !still_present {
             let sender = Sender::Component(component);

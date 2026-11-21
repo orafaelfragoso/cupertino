@@ -91,7 +91,7 @@ pub struct Offer {
 impl Offer {
     pub fn all() -> Offer {
         Offer {
-            shell: Some(28),
+            shell: Some(31),
             layer_shell: Some(4),
             lock: true,
             idle: Some(2),

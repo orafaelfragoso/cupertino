@@ -100,22 +100,6 @@ fn a_rejected_value_is_a_problem_of_its_key_alone_and_leaves_it_unset() {
         ),
         (r#"{"screenshot": []}"#, "screenshot", "empty"),
         (
-            r#"{"shell": [{"name": "a", "command": ["x"], "roles": ["boss"]}]}"#,
-            "shell",
-            "unknown role",
-        ),
-        (
-            r#"{"shell": [{"name": "a", "command": []}]}"#,
-            "shell",
-            "empty command",
-        ),
-        (
-            r#"{"shell": [{"command": ["x"]}]}"#,
-            "shell",
-            "needs a name",
-        ),
-        (r#"{"shell": [{"name": "a"}]}"#, "shell", "needs a command"),
-        (
             r#"{"dev_folder": {"path": "rel", "components": []}}"#,
             "dev_folder",
             "not an absolute path",
@@ -211,61 +195,46 @@ fn colours_are_hex_with_an_optional_alpha() {
 }
 
 #[test]
-fn a_shell_process_has_the_roles_the_file_lists_and_the_session_role_by_default() {
-    let (s, p) = parse(
-        r#"{"shell": [{"name": "bar", "command": ["cupertino-menubar"], "roles": ["menu_bar", "session"]},
-                      {"name": "obs", "command": ["x", "y"]}]}"#,
-    );
-    assert!(p.is_empty(), "{p:?}");
-    let shell = s.shell.unwrap();
-    let procs = shell.processes.unwrap();
-    assert_eq!(procs[0].name, "bar");
-    assert_eq!(
-        procs[0].roles,
-        [ShellRoleName::MenuBar, ShellRoleName::Session]
-    );
-    assert_eq!(procs[1].roles, [ShellRoleName::Session]);
-    assert_eq!(procs[1].command, ["x", "y"]);
-
-    // Object form (`shell-host.md`): components, off, alone, processes.
-    let (obj, p2) = parse(
-        r#"{"shell": {"components": ["menubar", "dock"], "off": ["dock"], "alone": ["menubar"]}}"#,
-    );
-    assert!(p2.is_empty(), "{p2:?}");
-    let sec = obj.shell.unwrap();
-    assert_eq!(
-        sec.components.as_deref(),
-        Some(&["menubar".to_string(), "dock".to_string()][..])
-    );
-    assert_eq!(sec.off.as_deref(), Some(&["dock".to_string()][..]));
-    assert_eq!(sec.alone.as_deref(), Some(&["menubar".to_string()][..]));
-    assert!(sec.processes.is_none());
+fn the_shell_section_names_the_components_and_a_list_of_processes_is_ignored() {
+    let names = |list: &[&str]| Some(list.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+    for (text, components, ignored) in [
+        (
+            r#"{"shell": {"components": ["menubar", "dock"], "off": ["dock"], "alone": ["menubar"]}}"#,
+            names(&["menubar", "dock"]),
+            false,
+        ),
+        // a processes list beside the components: the components apply, the processes are not read
+        (
+            r#"{"shell": {"components": ["dock"], "processes": [{"name": "a", "command": [], "roles": ["boss"]}]}}"#,
+            names(&["dock"]),
+            true,
+        ),
+        // the section as a list of processes: every component, nothing of the list
+        (
+            r#"{"shell": [{"name": "bar", "command": ["cupertino-menubar"], "roles": ["menu_bar"]}]}"#,
+            None,
+            true,
+        ),
+    ] {
+        let (s, p) = parse(text);
+        assert!(p.is_empty(), "{text}: {p:?}");
+        let section = s.shell.expect("the section is read");
+        assert_eq!(section.components, components, "{text}");
+        assert_eq!(section.ignored_processes, ignored, "{text}");
+    }
+    let (s, _) = parse(r#"{"shell": {"off": ["dock"], "alone": ["menubar"]}}"#);
+    let section = s.shell.unwrap();
+    assert_eq!(section.off, names(&["dock"]));
+    assert_eq!(section.alone, names(&["menubar"]));
 }
 
 #[test]
-fn only_the_shells_own_chrome_may_start_from_the_development_folder() {
+fn the_development_folder_names_its_path_and_its_components() {
     let (s, p) = parse(r#"{"dev_folder": {"path": "/dev/f", "components": ["dock", "bar"]}}"#);
-    assert!(p.is_empty());
+    assert!(p.is_empty(), "{p:?}");
     let f = s.dev_folder.unwrap();
-    assert_eq!((f.path.as_str(), f.components.len()), ("/dev/f", 2));
-    let entry = |roles: Vec<ShellRoleName>| ShellEntry {
-        name: "x".into(),
-        command: vec!["x".into()],
-        roles,
-    };
-    for (roles, allowed) in [
-        (vec![ShellRoleName::Dock, ShellRoleName::Session], true),
-        (vec![ShellRoleName::Overview, ShellRoleName::Windows], true),
-        (vec![ShellRoleName::Dock, ShellRoleName::SessionLock], false),
-        (vec![ShellRoleName::Clipboard], false),
-        (vec![ShellRoleName::SessionLock], false),
-    ] {
-        assert_eq!(
-            entry(roles.clone()).may_start_from_dev_folder(),
-            allowed,
-            "{roles:?}"
-        );
-    }
+    assert_eq!(f.path, "/dev/f");
+    assert_eq!(f.components, ["dock", "bar"]);
 }
 
 #[test]

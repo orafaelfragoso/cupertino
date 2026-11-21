@@ -9,6 +9,8 @@
 //!   then asks to be started again, and the server starts it again at its quiet moment.
 //! - A restart the person asks for stops the component and starts it again.
 //! - A component the server runs alone runs in a separate host, started with `--only` and its name.
+//! - A component turned off and on again before the instance the host stops has ended starts again: the last list
+//!   wins.
 //! - A component of this development build asked to crash on its bus connection
 //!   (`org.cupertino.ShellComponentDebug1`) by `cupertino shell crash` panics as its loop dispatches, as it paints
 //!   and on a helper thread, and is started again alone each time.
@@ -206,6 +208,53 @@ fn a_component_the_server_runs_alone_runs_in_a_host_started_with_only() {
     rig.until_reported("notifications steady");
     assert_eq!(rig.host_pid(HostKind::Separate("dock")), Some(separate));
     assert_eq!(rig.state.hosts.component_instance("dock"), 1);
+}
+
+#[test]
+fn a_component_turned_off_and_on_again_while_it_stops_starts_again() {
+    let mut rig = Rig::new("relisted", &["desktop", "dock"], &[]);
+    rig.until("the dock draws and the desktop runs", |rig| {
+        dock_colour(rig).is_some() && rig.state.hosts.component_connected("desktop")
+    });
+    let host = rig.host_pid(HostKind::Shared).unwrap();
+
+    // off and on again within one turn: the host reads both lists while the desktop it stops tears down, and the last
+    // list wins once it ended
+    rig.state.config.shell_off = vec!["desktop".into()];
+    rig.state.apply_shell_plan();
+    rig.state.config.shell_off.clear();
+    rig.state.apply_shell_plan();
+    rig.until("the desktop runs again", |rig| {
+        rig.state.hosts.component_connected("desktop")
+            && rig
+                .lines()
+                .iter()
+                .filter(|l| *l == "desktop started")
+                .count()
+                == 2
+    });
+    let lines = rig.lines();
+    let ended = lines.iter().position(|l| l == "desktop ended");
+    let again = lines.iter().rposition(|l| l == "desktop started");
+    assert!(
+        ended.is_some() && again.is_some() && ended < again,
+        "one instance at a time: {lines:?}"
+    );
+    assert_eq!(
+        rig.state.hosts.component_instance("desktop"),
+        2,
+        "the second instance has the first connection the host asked for after the lists"
+    );
+    assert_eq!(
+        rig.host_pid(HostKind::Shared),
+        Some(host),
+        "the host went on"
+    );
+    assert_eq!(
+        rig.state.hosts.component_instance("dock"),
+        1,
+        "the dock was never restarted"
+    );
 }
 
 /// A session bus of the test's own, whose address the hosts and the command inherit, and the address.

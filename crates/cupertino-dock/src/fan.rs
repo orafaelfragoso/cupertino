@@ -3,8 +3,8 @@
 //! the fan is and where its parts go: how it comes and goes, how many entries it holds, and the arc's geometry. The
 //! window is [`crate::view::fan`], and the model opens and closes it ([`crate::kit`]).
 
-use cupertino_animation::CubicBezier;
 use cupertino_defaults::dock::StackStyle;
+use cupertino_kit::motion::Timing;
 use cupertino_wm::geometry::{Point, Rect};
 
 use crate::stack::StackEntry;
@@ -26,12 +26,6 @@ pub const PILL_MAX_WIDTH: f64 = 260.0;
 pub const LOWEST_ABOVE_BAR: f64 = 40.5;
 /// The room kept above the top row and around the arc for a row's tilt.
 const MARGIN: f64 = 14.0;
-/// How long the fan takes to open and to close, in seconds.
-pub const OPEN_S: f64 = 0.244;
-pub const CLOSE_S: f64 = 0.178;
-/// The curve of opening, slow at both ends, and of closing, slow at first.
-pub const OPEN_EASE: CubicBezier = CubicBezier::new(0.42, 0.0, 0.58, 1.0);
-pub const CLOSE_EASE: CubicBezier = CubicBezier::new(0.42, 0.0, 1.0, 1.0);
 /// How far the rows sit from the tile's middle to the trailing side, by row from the lowest: the arc bends towards the
 /// trailing side as it rises, less and less.
 const DRIFT: [f64; 12] = [
@@ -83,26 +77,24 @@ pub fn estimated_pill_width(name: &str) -> f64 {
     (ems * PILL_FONT_PT + 2.0 * PILL_PADDING).min(PILL_MAX_WIDTH)
 }
 
-/// How far the fan has come out at `now`, from 0 (in the tile) to 1: it opened at `opened`, and, if it is closing, began
-/// at `closing.0` from the progress `closing.1`. Without motion it is out or gone.
+/// How far the fan has come out at `now`, from 0 (in the tile) to 1: it opened at `opened` ([`Timing::DOCK_FAN_OPEN`]),
+/// and, if it is closing ([`Timing::DOCK_FAN_CLOSE`]), began at `closing.0` from the progress `closing.1`. Without motion
+/// it is out or gone.
 pub fn progress(now: f64, opened: f64, closing: Option<(f64, f64)>, reduce_motion: bool) -> f64 {
     if reduce_motion {
         return if closing.is_some() { 0.0 } else { 1.0 };
     }
     match closing {
-        Some((start, from)) => {
-            let u = ((now - start) / CLOSE_S).clamp(0.0, 1.0);
-            from * (1.0 - CLOSE_EASE.eval(u))
-        }
-        None => OPEN_EASE.eval(((now - opened) / OPEN_S).clamp(0.0, 1.0)),
+        Some((start, from)) => from * (1.0 - Timing::DOCK_FAN_CLOSE.value(now - start)),
+        None => Timing::DOCK_FAN_OPEN.value(now - opened),
     }
 }
 
 /// Whether the fan still moves at `now`.
 pub fn moving(now: f64, opened: f64, closing: Option<f64>) -> bool {
     match closing {
-        Some(start) => now < start + CLOSE_S,
-        None => now < opened + OPEN_S,
+        Some(start) => now < start + Timing::DOCK_FAN_CLOSE.duration(),
+        None => now < opened + Timing::DOCK_FAN_OPEN.duration(),
     }
 }
 

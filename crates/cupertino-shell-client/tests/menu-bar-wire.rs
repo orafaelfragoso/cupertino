@@ -4,13 +4,13 @@
 mod support;
 
 use cupertino_protocols::server::cupertino_menu_bar_v1::{
-    AgentTrust, AppWindowFlags, BoundAction as WireBoundAction, ClientKind, CupertinoMenuBarV1,
+    AppWindowFlags, BoundAction as WireBoundAction, ClientKind, CupertinoMenuBarV1,
     KeyClass as WireKeyClass, ModifierKey, Request, WindowControl,
 };
 use cupertino_shell_client::{
     ActiveApp, ActiveClient, AppWindow, BoundAction, EditAction, GtkMenu, KeyClass, LayerShell,
-    LayerSurfaceConfig, MenuBar, MenuBarUpdate, PrimaryModifier, SessionAction, SessionAgent,
-    Shell, ShellEvent, WindowCommand, WindowMenu, WindowState, MAX_BACKDROP_BANDS,
+    LayerSurfaceConfig, MenuBar, MenuBarUpdate, PrimaryModifier, SessionAction, Shell, ShellEvent,
+    WindowCommand, WindowMenu, WindowState, MAX_BACKDROP_BANDS,
 };
 use cupertino_shell_client::{Anchor, KeyboardInteractivity, Layer, Margin};
 use support::{Offer, Seen, Wire};
@@ -243,19 +243,6 @@ fn window_state_takes_the_controls_full_screen_and_window_list_of_its_group() {
     let update = next_update(&mut wire, |bar| bar.window_state(1, 1, 1));
     assert!(update.window_state.is_some());
     assert_eq!(update.windows, None, "a server without the window list");
-}
-
-#[test]
-fn the_session_agent_trust_maps_to_who_may_answer() {
-    let (mut wire, _bar, _) = ready(Offer::all());
-    for (trust, pid, expected) in [
-        (AgentTrust::Process, 1234, SessionAgent::Process(1234)),
-        (AgentTrust::Any, 77, SessionAgent::Any),
-        (AgentTrust::None, 77, SessionAgent::None),
-    ] {
-        let update = next_update(&mut wire, move |bar| bar.session_agent(trust, pid));
-        assert_eq!(update.session_agent, Some(expected));
-    }
 }
 
 fn bands(count: usize) -> Vec<u8> {

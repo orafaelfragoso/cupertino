@@ -352,11 +352,11 @@ fn a_missing_or_malformed_licence_is_a_problem() {
 // The fixtures use `shell` and `apps`, the last layers to close, so that closing a layer leaves these tests as they are.
 fn one_problem(name: &str) -> Fixture {
     Fixture::new(name)
-        .krate("f", Shell, &[("normal", "g")])
-        .krate("g", Apps, &[])
+        .krate("f", Apps, &[("normal", "g")])
+        .krate("g", Shell, &[])
 }
 
-const LISTED: &str = "shell forbidden_edge f -> g normal";
+const LISTED: &str = "apps forbidden_edge f -> g normal";
 
 #[test]
 fn the_list_excuses_exactly_the_problems_it_names() {
@@ -364,7 +364,7 @@ fn the_list_excuses_exactly_the_problems_it_names() {
     let fx = one_problem("unlisted").build();
     let out = fx.run(&[]);
     assert!(!out.status.success());
-    assert!(stderr(&out).contains("f (shell) must not depend on g (apps)"));
+    assert!(stderr(&out).contains("f (apps) must not depend on g (shell)"));
     assert!(stdout(&out).ends_with("1 problems\n"), "{}", stdout(&out));
     assert_eq!(fx.check().unlisted().count(), 1);
     drop(fx);
@@ -381,7 +381,7 @@ fn the_list_excuses_exactly_the_problems_it_names() {
     drop(fx);
 
     // a line that is no longer a problem fails
-    let stale = "shell forbidden_edge f -> h normal";
+    let stale = "apps forbidden_edge f -> h normal";
     let fx = one_problem("stale").remaining(&[LISTED, stale]).build();
     let out = fx.run(&[]);
     assert!(!out.status.success());
@@ -401,12 +401,12 @@ fn the_list_excuses_exactly_the_problems_it_names() {
 #[test]
 fn write_remaining_writes_sorted_lines_and_is_idempotent() {
     let fx = Fixture::new("write-remaining")
-        .krate("z", Shell, &[("normal", "g")])
-        .krate("a", Shell, &[("normal", "g")])
-        .krate("g", Apps, &[])
-        .krate("m", Shell, &[])
+        .krate("z", Apps, &[("normal", "g")])
+        .krate("a", Apps, &[("normal", "g")])
+        .krate("g", Shell, &[])
+        .krate("m", Apps, &[])
         .no_clippy("m")
-        .remaining(&["shell forbidden_edge old -> gone normal"])
+        .remaining(&["apps forbidden_edge old -> gone normal"])
         .build();
     let file = fx.path(cupertino_layers::REMAINING);
     let out = fx.run(&["--write-remaining"]);
@@ -421,9 +421,9 @@ fn write_remaining_writes_sorted_lines_and_is_idempotent() {
     assert_eq!(
         lines,
         [
-            "shell disallowed_methods m clippy.toml",
-            "shell forbidden_edge a -> g normal",
-            "shell forbidden_edge z -> g normal"
+            "apps disallowed_methods m clippy.toml",
+            "apps forbidden_edge a -> g normal",
+            "apps forbidden_edge z -> g normal"
         ]
     );
     assert!(fx.run(&[]).status.success());
@@ -435,7 +435,7 @@ fn write_remaining_writes_sorted_lines_and_is_idempotent() {
 fn an_enforced_layer_is_never_excused_by_the_list() {
     let fx = one_problem("enforced").remaining(&[LISTED]).build();
     let policy = Policy {
-        enforced: &[Shell],
+        enforced: &[Apps],
         ..POLICY
     };
     let findings = fx.check_with(&policy);

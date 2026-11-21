@@ -1,8 +1,8 @@
 //! Typed wrapper of `cupertino_menu_bar_v1`: the menu-bar role of a layer surface.
 
 use cupertino_protocols::client::cupertino_menu_bar_v1::{
-    self, AgentTrust, AppWindowFlags, BoundAction as WireBoundAction, ClientKind, Command,
-    CupertinoMenuBarV1, EditAction as WireEditAction, KeyClass as WireKeyClass, ModifierKey,
+    self, AppWindowFlags, BoundAction as WireBoundAction, ClientKind, Command, CupertinoMenuBarV1,
+    EditAction as WireEditAction, KeyClass as WireKeyClass, ModifierKey,
     SessionAction as WireSessionAction, WindowControl,
 };
 use std::collections::BTreeMap;
@@ -172,8 +172,6 @@ pub struct MenuBarUpdate {
     pub engage_help: bool,
     /// Whether a screen or window capture runs (the screen capture indicator).
     pub screen_capture: Option<bool>,
-    /// Which process may answer as the session agent.
-    pub session_agent: Option<SessionAgent>,
     /// The lightness of the wallpaper under the bar (CIE L*/100 in thousandths, at most 1000), from version 14 once
     /// the server has measured it.
     pub backdrop_lightness: Option<u16>,
@@ -195,17 +193,6 @@ pub struct MenuBarUpdate {
 
 /// The most bands of [`MenuBarUpdate::backdrop_bands`] a bar reads; the rest of a longer array is dropped.
 pub const MAX_BACKDROP_BANDS: usize = 256;
-
-/// The process whose ownership of the session agent's bus name is trusted.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SessionAgent {
-    /// No session agent runs.
-    None,
-    /// The owner of the name is the agent when it is this process.
-    Process(u32),
-    /// A development run: whoever owns the name.
-    Any,
-}
 
 /// A window-management command of the fallback menus.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -472,13 +459,6 @@ impl GroupBuilder {
             Event::Engage => self.update.engage = true,
             Event::EngageHelp => self.update.engage_help = true,
             Event::ScreenCapture { active } => self.update.screen_capture = Some(active != 0),
-            Event::SessionAgent { trust, pid } => {
-                self.update.session_agent = Some(match trust {
-                    WEnum::Value(AgentTrust::Process) => SessionAgent::Process(pid),
-                    WEnum::Value(AgentTrust::Any) => SessionAgent::Any,
-                    WEnum::Value(_) | WEnum::Unknown(_) => SessionAgent::None,
-                })
-            }
             Event::BackdropLuminance { luminance } => {
                 self.update.backdrop_lightness = Some(luminance.min(1000) as u16)
             }

@@ -11,7 +11,7 @@ pub mod motion;
 mod picture;
 mod pixels;
 pub mod process;
-mod shared;
+pub mod shared;
 mod start;
 pub mod task;
 #[cfg(feature = "test")]

@@ -5,7 +5,7 @@
 //! commands queue, persist their surfaces and say `ready`; a component is told the session's display options at start
 //! and on every change; a component that shows nothing until it has what to show says `ready` only once a view of it
 //! shows it (`Program::showing`), so the server holds the surfaces of the instance before until then, and hears the
-//! size the server configured its layer surface to; a component needing a newer global is refused before it starts; a busy loop and a busy render
+//! size the server configured its layer surface to; a component offered another version of a global of the project than it was built with, or an older layer shell than it works with, is refused before it starts; a busy loop and a busy render
 //! thread are reported; the on-screen displays hear the list the server sends on their keyboard panels as it makes them.
 
 mod support;
@@ -570,44 +570,55 @@ fn a_component_is_ready_once_it_shows_what_it_has_to_show() {
 }
 
 #[test]
-fn a_component_needing_newer_globals_is_refused_before_it_starts() {
-    let older_shell = Offer {
-        shell: 27,
-        ..Offer::CURRENT
-    };
-    let (server, host_end) = Server::start_offering(Kind::Shared, &["dock"], older_shell);
-    let (mut host, runtime) = host_and_runtime(host_end);
-    let connection = component_connection(&mut host, "dock");
-    match runtime.start(&DOCK, connection) {
-        Err(error) => assert_eq!(
-            error,
-            Error::Version {
-                expected: 28,
-                found: 27
-            }
+fn a_component_on_other_versions_of_its_globals_is_refused_before_it_starts() {
+    let current = Offer::CURRENT;
+    // the shell at another version than the crate was built with, older than the dock's messages or not; the layer
+    // shell, of another project, older than the oldest the components work with
+    let rows: [(&str, Offer, &str, &'static Entry, u32, u32); 3] = [
+        (
+            "a dock on an older shell",
+            Offer {
+                shell: 27,
+                ..current
+            },
+            "dock",
+            &DOCK,
+            current.shell,
+            27,
         ),
-        Ok(_) => panic!("a dock started on a server whose shell is older than it needs"),
-    }
-    drop(server);
-
-    let older_layer_shell = Offer {
-        layer_shell: 3,
-        ..Offer::CURRENT
-    };
-    let (server, host_end) = Server::start_offering(Kind::Shared, &["osd"], older_layer_shell);
-    let (mut host, runtime) = host_and_runtime(host_end);
-    let connection = component_connection(&mut host, "osd");
-    match runtime.start(&OVERLAY, connection) {
-        Err(error) => assert_eq!(
-            error,
-            Error::Version {
-                expected: 4,
-                found: 3
-            }
+        (
+            "the displays on an older shell",
+            Offer {
+                shell: 30,
+                ..current
+            },
+            "osd",
+            &OVERLAY,
+            current.shell,
+            30,
         ),
-        Ok(_) => panic!("an overlay started on a server whose layer shell is older than it needs"),
+        (
+            "the displays on an older layer shell",
+            Offer {
+                layer_shell: 3,
+                ..current
+            },
+            "osd",
+            &OVERLAY,
+            current.layer_shell,
+            3,
+        ),
+    ];
+    for (case, offer, name, entry, expected, found) in rows {
+        let (server, host_end) = Server::start_offering(Kind::Shared, &[name], offer);
+        let (mut host, runtime) = host_and_runtime(host_end);
+        let connection = component_connection(&mut host, name);
+        match runtime.start(entry, connection) {
+            Err(error) => assert_eq!(error, Error::Version { expected, found }, "{case}"),
+            Ok(_) => panic!("{case}: the component started"),
+        }
+        drop(server);
     }
-    drop(server);
 }
 
 #[test]

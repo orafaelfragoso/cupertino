@@ -21,7 +21,9 @@ dock`). `cupertino shell restart dock` starts it again; in a development build `
 dispatch|paint|helper]` makes it panic there (`crates/cupertino-shell/README.md`, *Trying a failure*).
 
 The bar is a persistent surface: while the dock restarts the server holds its last picture and keeps the space it
-reserves (D19), and the restarted dock's first view shows the bar in its place. The edge strips, the held tile, the
+reserves (D19). The restarted dock shows no window until its bar has all it draws at hand, the trash's state, the
+launcher's history and every tile's icon (`kit::Model::ready_to_show`), so its first picture takes the held one's place
+whole. The edge strips, the held tile, the
 dialogs and the switcher's panel are transient and go with the instance. The terminal that runs `Terminal=true` entries is
 the first installed of `conf::TERMINALS`. Programs start through the host (`host::spawn`), which reaps them; the dock
 hears nothing of their exit, so the guard against a second launch lasts its full five seconds
@@ -29,19 +31,21 @@ hears nothing of their exit, so the guard against a second launch lasts its full
 
 ### What a restart loses
 
-What the dock read and loaded is kept in the host process for the next instance: the desktop entries, `dock.conf` as
-last read, the pins, the file manager, the icons, the badges' counts and whether the trash is full; the next instance
-reads its start again on the I/O pool and takes `dock.conf` as it is then. The server tells a new dock role every
-window, every resident application and every application that does not respond. Lost with the instance:
+An instance keeps nothing for the next. A restarted dock reads its start again on the I/O pool (the desktop entries,
+`dock.conf` as it is then, the pins, the file manager, the folders, the terminal), looks at the trash and reads the
+launcher's history again, and loads its icons again through the process's shared icons (`cupertino_kit::shared`, which
+keeps the host's icon themes and the asset packs read). The server tells a new dock role every window, every resident
+application and every application that does not respond: their tiles come in once the bar shows. Lost with the
+instance:
 
+- the counts on the tiles' badges: an application sends its count only when it changes, so a badge shows again at its
+  application's next change;
 - a bounce, a magnification, a slide or the removal puff under way, and a drag (the tile goes back to its place);
 - an open menu, folder stack, name label, Force Quit dialog or trash alert, and Focus Dock (the keyboard goes back);
 - the switcher's panel: the server's switch goes on, and the panel shows again at the switch's next step;
 - the guard against a second launch of an application asked to open, and a launch waiting for its activation token;
 - the applications that quit since the dock started, which the recents section shows first (the launcher's history
-  remains);
-- a dock started by a host process of its own while the server holds a bar (the host itself restarted) has nothing
-  kept: its first view shows the bar with the trash only, and the tiles come in as its start is read.
+  remains).
 
 ## Captures
 

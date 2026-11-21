@@ -27,7 +27,7 @@ host again whatever its status (D16).
 
 | Event | What follows |
 |---|---|
-| The server's list | a connection asked for every listed component the host was built with ([`COMPONENTS`]), `unavailable` (`absent`) for the others; a component that left the list is stopped and its object released |
+| The server's list | a connection asked for every listed component the host was built with ([`COMPONENTS`]), `unavailable` (`absent`) for the others; a component that left the list is stopped and its object released; one listed again while it stops asks for its connection once it ended, so the last list wins |
 | A connection | the component starts on it on a thread of its own (8 MiB stack, `hosting::Runtime::start`) |
 | A component panics (its thread, a task or a helper thread), its loop fails or ends unasked | the runtime tears it down inside `catch_unwind` (a second panic leaks the state); the host shuts its sockets, sends `failed`, then `connect`, which the server answers once the restart time passed (D16: 0.25 s doubling to 8 s, five failures in 60 s stop it; the server keeps the times and counts) |
 | `restart` of a component (`cupertino shell restart NAME`) | the component stops and starts again; no failure |

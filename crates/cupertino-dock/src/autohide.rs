@@ -2,7 +2,7 @@
 //! and the duration formula.
 //!
 //! The delay before a reveal (default 0.2 s; a hide has none) and the show/hide duration formula are as designed;
-//! the state machine around them is. The offset is eased with the cosine ease, approximated here by a cubic Bézier within 3·10⁻⁴.
+//! the state machine around them is. The offset is eased with the motion catalogue's cosine ease.
 //!
 //! ```text
 //! Hidden ─hot→ WaitingToShow ─delay→ Showing ─done→ Shown
@@ -10,11 +10,10 @@
 //! Hiding ─hot→ Showing (reverse in place, C¹) WaitingToShow ─cold→ Hidden
 //! ```
 
-use cupertino_animation::{AnimatedValue, Curve};
+use cupertino_kit::motion::{Animated, Easing};
 use cupertino_wm::geometry::Rect;
 
 use crate::config::{DockConfig, Orientation};
-use crate::ease::COSINE_EASE_BEZIER;
 
 /// How long the pointer must have left the dock before it starts to slide away: none, the slide starts at once.
 pub const HIDE_DELAY: f64 = 0.0;
@@ -34,7 +33,7 @@ pub struct AutoHide {
     pub delay: f64,
     pub duration: f64,
     /// 0 = fully shown, 1 = fully hidden.
-    pub offset: AnimatedValue<f64>,
+    pub offset: Animated<f64>,
 }
 
 impl AutoHide {
@@ -43,7 +42,7 @@ impl AutoHide {
             state: HideState::Hidden,
             delay,
             duration,
-            offset: AnimatedValue::new(1.0),
+            offset: Animated::new(1.0),
         }
     }
 
@@ -53,16 +52,13 @@ impl AutoHide {
             state: HideState::Shown,
             delay,
             duration,
-            offset: AnimatedValue::new(0.0),
+            offset: Animated::new(0.0),
         }
     }
 
     /// `hot`: the pointer is in the reveal zone (screen edge) or over the visible dock.
     pub fn update(&mut self, hot: bool, now: f64) {
-        let curve = Curve::Timed {
-            duration: self.duration,
-            bezier: COSINE_EASE_BEZIER,
-        };
+        let curve = Easing::COSINE.over(self.duration);
         self.state = match (self.state, hot) {
             (HideState::Hidden, true) => HideState::WaitingToShow { since: now },
             (HideState::WaitingToShow { since }, true) if now - since >= self.delay => {

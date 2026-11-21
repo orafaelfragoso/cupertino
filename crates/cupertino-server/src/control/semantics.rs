@@ -203,25 +203,15 @@ impl Cupertino {
                 &self.fx,
                 self.display_options(),
             )?;
-            // Strip thumbnails are pictures, not live application targets.
+            // A hidden window takes no input of its client.
             if self.window_managers.passes_input(id) {
                 return None;
             }
             match self.window_managers.look(id, self.now()) {
                 crate::window_manager::Look::Natural => {}
                 crate::window_manager::Look::Hidden => return None,
-                crate::window_manager::Look::Placed {
-                    rect,
-                    strip,
-                    alpha,
-                    rounding,
-                } => {
-                    if strip {
-                        return None;
-                    }
-                    let corner = self
-                        .window_managers
-                        .corner_radius(self.config.window.corner_radius, rounding);
+                crate::window_manager::Look::Placed { rect, alpha } => {
+                    let corner = self.config.window.corner_radius;
                     wplan = crate::render::scene::placed_plan(
                         entry,
                         rect,

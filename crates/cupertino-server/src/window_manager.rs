@@ -67,15 +67,8 @@ pub enum Look {
     /// No placement: drawn and hit as every window without a window manager.
     Natural,
     Hidden,
-    /// Scaled into `rect` at `alpha` (times its own opacity) as it fades out or back in. `strip` is false and
-    /// `rounding` 0 since the strip became the window manager's own surface: they remain for the desktop control's
-    /// reading of a placed window (`control/semantics.rs`), whose corners [`WindowManagers::corner_radius`] gives.
-    Placed {
-        rect: Rect,
-        strip: bool,
-        alpha: f64,
-        rounding: f64,
-    },
+    /// Scaled into `rect` at `alpha` (times its own opacity) as it fades out or back in, with the window's own corners.
+    Placed { rect: Rect, alpha: f64 },
 }
 
 /// What a window manager was told about one arranged window.
@@ -135,16 +128,8 @@ impl WindowManagers {
         }
         Look::Placed {
             rect: p.frame,
-            strip: false,
             alpha: p.alpha.value(now),
-            rounding: 0.0,
         }
-    }
-
-    /// Visual corner radius, in points, of a placed window whose own radius is `window` ([`Look::Placed`]): its own,
-    /// as `rounding` is always 0.
-    pub fn corner_radius(&self, window: f64, _rounding: f64) -> f64 {
-        window
     }
 
     /// Whether the pointer passes through window `id`: a hidden window takes no input of its client.

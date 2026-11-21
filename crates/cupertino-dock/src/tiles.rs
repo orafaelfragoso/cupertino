@@ -1,7 +1,7 @@
 //! Tile model ("Tile lifecycle": launching → running → attention → quit;
 //! minimized windows live in the right section; separators and a recents separator exist).
 
-use cupertino_animation::AnimatedValue;
+use cupertino_kit::motion::Animated;
 use cupertino_wm::ids::WindowId;
 
 use crate::bounce::Bounce;
@@ -56,7 +56,7 @@ pub struct Tile {
     pub attention: Option<Bounce>,
     /// Trash only.
     pub full: bool,
-    pub(crate) presence: AnimatedValue<f64>,
+    pub(crate) presence: Animated<f64>,
     pub(crate) leaving: bool,
 }
 
@@ -76,7 +76,7 @@ impl Tile {
             launch_deadline: None,
             attention: None,
             full: false,
-            presence: AnimatedValue::new(1.0),
+            presence: Animated::new(1.0),
             leaving: false,
         }
     }

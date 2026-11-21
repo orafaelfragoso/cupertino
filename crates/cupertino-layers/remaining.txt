@@ -8,4 +8,3 @@ apps external_crate cupertino-settings -> wayland-protocols-wlr normal
 apps facade cupertino-settings -> cupertino-theme normal
 apps facade cupertino-settings -> cupertino-wayland-client normal
 apps forbidden_edge cupertino-settings -> cupertino-wayland-client normal
-shell facade cupertino-dock -> cupertino-animation normal

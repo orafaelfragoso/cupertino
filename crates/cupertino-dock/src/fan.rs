@@ -3,8 +3,8 @@
 //! the fan is and where its parts go: how it comes and goes, how many entries it holds, and the arc's geometry. The
 //! window is [`crate::view::fan`], and the model opens and closes it ([`crate::kit`]).
 
-use cupertino_animation::CubicBezier;
 use cupertino_defaults::dock::StackStyle;
+use cupertino_kit::motion::Easing;
 use cupertino_wm::geometry::{Point, Rect};
 
 use crate::stack::StackEntry;
@@ -30,8 +30,8 @@ const MARGIN: f64 = 14.0;
 pub const OPEN_S: f64 = 0.244;
 pub const CLOSE_S: f64 = 0.178;
 /// The curve of opening, slow at both ends, and of closing, slow at first.
-pub const OPEN_EASE: CubicBezier = CubicBezier::new(0.42, 0.0, 0.58, 1.0);
-pub const CLOSE_EASE: CubicBezier = CubicBezier::new(0.42, 0.0, 1.0, 1.0);
+pub const OPEN_EASE: Easing = Easing::EASE_IN_OUT;
+pub const CLOSE_EASE: Easing = Easing::EASE_IN;
 /// How far the rows sit from the tile's middle to the trailing side, by row from the lowest: the arc bends towards the
 /// trailing side as it rises, less and less.
 const DRIFT: [f64; 12] = [

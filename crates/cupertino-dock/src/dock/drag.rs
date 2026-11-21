@@ -3,8 +3,7 @@
 
 use std::collections::HashMap;
 
-use cupertino_animation::AnimatedValue;
-use cupertino_kit::motion::Easing;
+use cupertino_kit::motion::{Animated, Easing};
 use cupertino_wm::geometry::{Point, Rect};
 
 use super::{
@@ -62,7 +61,7 @@ impl Dock {
         else {
             return false;
         };
-        let look = AnimatedValue::new(0.0);
+        let look = Animated::new(0.0);
         self.drag = Some(DragState {
             id,
             section,
@@ -255,7 +254,7 @@ impl Dock {
         };
         if d.look.target() != target {
             d.look
-                .animate_to(target, Easing::EASE_IN_OUT.over(LOOK_S).curve(), now);
+                .animate_to(target, Easing::EASE_IN_OUT.over(LOOK_S), now);
         }
     }
 
@@ -289,7 +288,7 @@ impl Dock {
             }
             if d.section == Section::Recents || !t.running {
                 // its slot was closed since the pointer left the dock: it goes at once
-                t.presence = AnimatedValue::new(0.0);
+                t.presence = Animated::new(0.0);
                 t.leaving = true;
             }
             let tile = PlacedTile {

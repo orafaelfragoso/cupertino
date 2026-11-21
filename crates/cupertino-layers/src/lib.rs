@@ -201,6 +201,7 @@ pub const ENFORCED: &[Layer] = &[
     Layer::Shellkit,
     Layer::Core,
     Layer::Services,
+    Layer::Shell,
     Layer::Testing,
 ];
 

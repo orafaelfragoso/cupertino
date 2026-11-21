@@ -15,11 +15,11 @@ Updated by the lead at every merge.
 
 | | |
 |---|---|
-| Current wave | 7 (not started) |
+| Current wave | none: every wave is closed |
 | Running tasks | none |
-| Enforced layers | foundation, system, graphics, models, platform, protocol, transport, render, ui, shellkit, core, services, shell, testing (8 remaining-work lines, all in `apps`) |
+| Enforced layers | every layer; the remaining-work list is gone (W7.close) |
 | Waiting on the owner | nothing |
-| Last closed wave | 6 (its memory measurement deferred by the owner) |
+| Last closed wave | 7 (W6.close's memory measurement still deferred by the owner) |
 
 ## Contents
 
@@ -1193,7 +1193,7 @@ is the open and save panel of `kit::files`.
 **Owns** layer lines and dependencies of `cli diagnostics gpu-shaders gpu-slice`. **Touches** `packaging/arch/*/PKGBUILD`,
 `contracts.yaml`, `docs/src/diagnose.md`. **After** W6.close.
 
-- [ ] `cupertino-diagnostics` is a module of `cupertino-cli`; the deprecated `cupertino-diagnose` program is gone from
+- [x] (`c65786135`) `cupertino-diagnostics` is a module of `cupertino-cli`; the deprecated `cupertino-diagnose` program is gone from
       the tree, packaging and the documents, which name `cupertino diagnose`.
 
 #### W7.T Tests of wave 7's crates
@@ -1202,10 +1202,11 @@ is the open and save panel of `kit::files`.
 
 #### W7.close (lead)
 
-- [ ] `ENFORCED` lists every layer; `remaining.txt` is empty and deleted with its check.
-- [ ] `docs/src/architecture.md`, the repository's agent instructions, `CONTRIBUTING.md`, `cupertino-layers/README.md`
+- [x] (`7d00865e5`) Every layer is enforced; `remaining.txt` is empty and deleted with its check, and `ENFORCED`, which
+      only told the list which layers it could not excuse, goes with it.
+- [x] (`7d00865e5`, `5891fe7a7`) `docs/src/architecture.md`, the repository's agent instructions, `CONTRIBUTING.md`, `cupertino-layers/README.md`
       and every touched crate's README describe the result.
-- [ ] `cargo xtask ci --profile full` passes on merged `main`.
+- [x] `cargo xtask ci --profile full` passes on merged `main` (`545846bf5`).
 
 ## Measurements
 
@@ -1504,3 +1505,16 @@ One line per change to a decision or approval of a design: date, number, what, w
   exactly the protocol versions it was built with; a failed component sends the server nothing after it fails, and a
   stopped one is never reported failed; the host sleeps with no timeout while every component waits, and checks at
   2 Hz while one animates; ShellComponentDebug1.Crash keeps no caller check (debug builds only).
+- 2026-11-21: lead, wave 7 (owner may revisit any): `Displays1`'s display record gains the physical size in
+  millimetres, (0, 0) unknown, appended to the struct (Settings is its only reader); Settings starts without
+  `Displays1`, the Dock's default tile size then assuming a 1080-point display; Settings' services, thumbnails and
+  folder listings run on Kit's I/O pool, thumbnails and Wallpaper folders one at a time each so the services keep a
+  thread; its chooser is Kit's open panel, for now a window of its own, not a sheet, since `WindowSpec` cannot name
+  the app's own window as parent; Files' threads are tasks, transfers run in slices, the places follow their folders
+  through Kit's watched listings, and look-ups take at most `IO_SHARE - 1` turns; `ENFORCED` goes with
+  `remaining.txt`. Kit's I/O pool starts a thread whenever waiting jobs outnumber waiting threads (`bb800d764`): a
+  burst queued behind one woken thread. Open after the review: a second Files launch still starts Kit (Wayland,
+  MIME, theme) before it hands over, since Kit has no bus connection before a runtime nor a way to hand one to it;
+  blocking calls through other crates (`cupertino-defaults` stores, trash moves, renames) stay on the window
+  threads, unseen by the per-crate clippy lists; six files keep their caps over 1,500 lines in `xtask/src/gate.rs`;
+  `cupertino-gpu-slice` has no tests (needs a GPU).

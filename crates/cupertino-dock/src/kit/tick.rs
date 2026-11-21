@@ -226,6 +226,8 @@ impl Model {
         {
             self.trash_checked = Some(now);
             let look = self.host.trash_full();
+            // a host that cannot look has an empty trash
+            self.trash_looked |= look.is_empty();
             self.later.extend(look);
             trash_look = self.host.look_at_trash();
         }
@@ -272,8 +274,9 @@ impl Model {
         }
         self.refresh_recents(now);
         self.tell_host();
-        commands.extend(self.preload());
+        // what the next view draws, and the icons of it not at hand asked for at once
         self.prefill();
+        commands.extend(self.preload());
         commands.extend(self.focus_commands());
         commands.extend(self.schedule(now));
         commands
@@ -301,6 +304,7 @@ impl Model {
         }
         self.recents_basis = Some(basis);
         let read = self.host.recent_apps();
+        self.recents_reading += read.len();
         if read.is_empty() {
             // a host without the launcher's history: the recents are the applications that quit
             let recents = self.session.recent_apps(&[]);

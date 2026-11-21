@@ -12,7 +12,7 @@ use cupertino_kit::core::Command;
 use cupertino_kit::task;
 use futures_util::StreamExt;
 
-use super::{Handed, Heard, Kept, PROCESS};
+use super::{Handed, Heard, Read, PROCESS};
 use crate::conf::{default_pins, load_pins, session_file_manager, TERMINALS};
 use crate::desktop::DesktopIndex;
 use crate::kit::Message;
@@ -27,7 +27,7 @@ const DEFAULT_PINS: usize = 4;
 
 /// What the dock reads at start, and the watches that follow the files after it.
 pub struct Startup {
-    pub(super) read: Kept,
+    pub(super) read: Read,
     /// The terminal emulator that runs entries with `Terminal=true`: the first of [`TERMINALS`] installed.
     pub(super) terminal: Option<String>,
     pub(super) folders: Vec<(String, String)>,
@@ -35,21 +35,6 @@ pub struct Startup {
     pub(super) trash: Arc<cupertino_trash::Look>,
     pub(super) conf_watch: Option<ConfigWatcher>,
     pub(super) trash_watch: Option<notify::RecommendedWatcher>,
-}
-
-impl Kept {
-    /// What the model starts with when nothing was read yet: no entries, no settings and no pins.
-    pub(super) fn unread() -> Self {
-        Self {
-            desktop: DesktopIndex::default(),
-            conf: None,
-            pins: Vec::new(),
-            file_manager: None,
-            icons: HashMap::new(),
-            badges: crate::badge::Badges::default(),
-            trash_full: false,
-        }
-    }
 }
 
 /// Where the dock stores its pins.
@@ -147,14 +132,11 @@ fn read(tell: async_channel::Sender<Message>) -> Startup {
         .filter(|h| !h.is_empty())
         .map(PathBuf::from);
     Startup {
-        read: Kept {
+        read: Read {
             pins: pins(&desktop, conf.as_ref()),
             file_manager: session_file_manager(&desktop),
             desktop,
             conf,
-            icons: HashMap::new(),
-            badges: crate::badge::Badges::default(),
-            trash_full: false,
         },
         terminal: TERMINALS
             .iter()

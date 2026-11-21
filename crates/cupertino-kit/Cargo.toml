@@ -76,6 +76,10 @@ name = "task"
 required-features = ["test"]
 
 [[test]]
+name = "io-burst"
+required-features = ["test"]
+
+[[test]]
 name = "two-instances"
 required-features = ["test"]
 

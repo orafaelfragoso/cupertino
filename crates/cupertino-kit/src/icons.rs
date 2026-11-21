@@ -55,7 +55,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 /// The value `cache` holds for `key`, else `draw`'s, drawn with no lock held and put in unless another thread put one in
 /// first, whose value is then the one given.
-fn cached<K: Eq + Hash, V: Clone>(
+pub(crate) fn cached<K: Eq + Hash, V: Clone>(
     cache: &Mutex<HashMap<K, V>>,
     key: K,
     draw: impl FnOnce() -> V,
@@ -128,7 +128,7 @@ impl PackIcons {
     }
 
     /// The host themes' icon `name` at `px`, or that of a file it names.
-    fn theme_icon(&self, name: &str, px: u32) -> Option<IconImage> {
+    pub(crate) fn theme_icon(&self, name: &str, px: u32) -> Option<IconImage> {
         let app = &self.application;
         let themes = app
             .themes
@@ -171,7 +171,7 @@ impl PackIcons {
 }
 
 /// Premultiplied RGBA pixels as an image with an id of its own.
-fn image_of(width: u32, height: u32, data: &[u8]) -> IconImage {
+pub(crate) fn image_of(width: u32, height: u32, data: &[u8]) -> IconImage {
     IconImage {
         id: next_resource_id(),
         image: ImageResource {

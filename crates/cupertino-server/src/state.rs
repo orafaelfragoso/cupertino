@@ -1051,8 +1051,7 @@ impl Cupertino {
         let global_shortcuts = crate::global_shortcuts::GlobalShortcuts::new(&dh);
         let scroll_counts = ScrollObservers::new(&dh);
         let layers = crate::layers_v1::Layers::new(&dh);
-        let mut supervisor = Supervisor::new(&config.shell_processes, std::time::Instant::now());
-        supervisor.set_dev_folder(config.dev_folder.as_ref());
+        let supervisor = Supervisor::default();
         let menu_bars = MenuBars::new(config.shell.menu_bar_height);
 
         let overlays = Overlays::new(&config, &decor.decorations().config.typography, assets)?;

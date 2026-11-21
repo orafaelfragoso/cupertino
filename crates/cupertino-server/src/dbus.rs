@@ -1,5 +1,6 @@
-//! Session bus worker: relays the lock request (the lock screen's `org.cupertino.Login1`) to the process that owns it.
-//! The calls on the shell components' bus interfaces (the notification centre's, the launcher's and the control panel's
+//! Session bus worker: relays the lock request (the lock screen's `org.cupertino.Login1`) to the process that owns it,
+//! once it has checked that owner, on the connection that owns `org.cupertino.Session1`, the one caller the lock screen
+//! takes it from (D20). The calls on the shell components' bus interfaces (the notification centre's, the launcher's and the control panel's
 //! toggles, the on-screen displays' media keys) go from the connection that owns `org.cupertino.Session1` instead
 //! ([`crate::quit::SessionConnection`]), the one connection each component takes for the server (D20), and so do the
 //! session agent's requests ([`crate::session_agent`]).
@@ -231,7 +232,8 @@ pub enum OwnerRefusal {
 
 /// What the worker is asked to do.
 enum Job {
-    Call(Request),
+    /// Make the call on the connection given, after the owner check on the worker's own.
+    Call(Request, zbus::Connection),
     Owner(OwnerQuery),
     WatchOwner(&'static str, OwnerChanged),
     /// Run the callback once the name has an owner.
@@ -297,11 +299,12 @@ impl DbusHandle {
             .expect("no thread panics while holding the login trust") = trust;
     }
 
-    /// Queue a call on a shell process; false when the worker is gone (no session bus).
-    pub fn send(&self, what: Request) -> bool {
+    /// Queue a call on a shell process, made on `via` (the connection that owns `org.cupertino.Session1`); false when
+    /// the worker is gone (no session bus).
+    pub fn send(&self, what: Request, via: zbus::Connection) -> bool {
         // counted before the worker can be done with it, so the done count never runs ahead
         self.calls.0 .0.fetch_add(1, Ordering::SeqCst);
-        let queued = self.tx.try_send(Job::Call(what)).is_ok();
+        let queued = self.tx.try_send(Job::Call(what, via)).is_ok();
         if !queued {
             self.calls.0 .0.fetch_sub(1, Ordering::SeqCst);
             tracing::warn!(?what, "no session bus: cannot reach the shell process");
@@ -521,7 +524,7 @@ async fn worker(
 /// published waits for the next connection.
 fn refuse(job: Job, keep: &mut Kept, calls: &ShellCalls) {
     match job {
-        Job::Call(_) => {
+        Job::Call(..) => {
             calls.0 .1.fetch_add(1, Ordering::SeqCst);
         }
         Job::Owner(query) => (query.reply)(Err(OwnerRefusal::NoBus)),
@@ -625,8 +628,8 @@ async fn serve(
         };
         let conn = conn.clone();
         let (login, identifying, calls) = (login.clone(), identifying.clone(), calls.clone());
-        let what = match job {
-            Job::Call(what) => what,
+        let (what, via) = match job {
+            Job::Call(what, via) => (what, via),
             Job::WatchOwner(name, changed) => {
                 let changed: SharedWatch = std::sync::Arc::new(std::sync::Mutex::new(changed));
                 watch_owner(&conn, name, changed.clone());
@@ -668,7 +671,7 @@ async fn serve(
             .clone()
             .spawn(
                 async move {
-                    call(&conn, what, &login).await;
+                    call(&conn, &via, what, &login).await;
                     calls.0 .1.fetch_add(1, Ordering::SeqCst);
                 },
                 "cupertino-shell-call",
@@ -894,8 +897,13 @@ fn trusts(trust: LoginTrust, owner: &Caller) -> bool {
     }
 }
 
-/// Make the call of `what` and log a failure.
-async fn call(conn: &zbus::Connection, what: Request, login: &SharedLoginTrust) {
+/// Make the call of `what` on `via`, once the owner of its name passed the check on `conn`, and log a failure.
+async fn call(
+    conn: &zbus::Connection,
+    via: &zbus::Connection,
+    what: Request,
+    login: &SharedLoginTrust,
+) {
     let (name, path, interface, method, body) = what.call();
     // an owner that is not the lock screen gets nothing
     let Some(destination) = destination(conn, name, login).await else {
@@ -904,11 +912,11 @@ async fn call(conn: &zbus::Connection, what: Request, login: &SharedLoginTrust) 
     let destination = Some(destination.as_str());
     let sent = match body {
         Body::Empty => {
-            conn.call_method(destination, path, Some(interface), method, &())
+            via.call_method(destination, path, Some(interface), method, &())
                 .await
         }
         Body::Step(direction, fine) => {
-            conn.call_method(
+            via.call_method(
                 destination,
                 path,
                 Some(interface),
@@ -1029,12 +1037,21 @@ impl crate::state::Cupertino {
         }
     }
 
+    /// Send `what` to the login process from the connection that owns `org.cupertino.Session1`, as the lock screen
+    /// takes the call only from that one (D20); while the session interface is not served it is not sent.
     fn shell_call(&mut self, what: Request) {
-        match &self.dbus {
-            Some(dbus) => {
-                dbus.send(what);
+        let Some(dbus) = &self.dbus else {
+            tracing::warn!(?what, "no session bus: cannot reach the shell process");
+            return;
+        };
+        match self.quit.session_connection() {
+            Some(via) => {
+                dbus.send(what, via);
             }
-            None => tracing::warn!(?what, "no session bus: cannot reach the shell process"),
+            None => tracing::warn!(
+                ?what,
+                "the session interface is not served: the lock request does not reach the lock screen"
+            ),
         }
     }
 }

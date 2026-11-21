@@ -17,7 +17,7 @@ pub(crate) const GROUP: Group = Group {
                   the window manager, the overview, the launcher, the notifications, the control panel, the on-screen \
                   displays, the session agent and the dialogs), which run in the shell host `cupertino-shell`, and the \
                   processes the desktop's server starts and keeps running: the host, the host a component runs in \
-                  alone, the built-in portal, prompts and desktop control, and the others its configuration names. \
+                  alone, and the built-in portal, prompts, desktop control and login. \
                   They talk to the server of the current session over the session bus, which allows them to the \
                   session's own user alone, outside any Flatpak or Snap.\n\n\
                   When the system configuration declares a development folder (see `cupertino dev-folder enable`), a \
@@ -51,15 +51,15 @@ const COMMANDS: &[Command] = &[
         description: "Asks the server of the current session for every process it supervises, in the order they \
                       start (the shell host `host`, the host `host-NAME` a component runs in alone, and the other \
                       processes), and for every component of the shell host: where it runs (host, the shared host; \
-                      host-NAME, a host of its own, from the development folder or installed; process, its own \
-                      process entry of the configuration, as no host runs it; none, nothing runs it; or off, the \
-                      session does not run it), whether a host holds its connection to the server, and the bus \
+                      host-NAME, a host of its own, from the development folder or installed; none, nothing runs \
+                      it, as the shell host is not installed or cannot start; or off, the session does not run \
+                      it), whether a host holds its connection to the server, and the bus \
                       connection the server accepted for it on the session bus with the process that holds it. Each \
                       process has its name, its state (running, stopping, waiting to start again, or stopped \
                       after it ended successfully), and while it runs its pid, its start time (also as clock ticks \
                       after boot, field 22 of /proc/PID/stat, which tells a process from a later one with the same \
                       pid), the program that runs and whether that is the development folder's. installed is the \
-                      program of the configuration, and dev_program the file of the development folder the process \
+                      installed program, and dev_program the file of the development folder the process \
                       starts when it is there (null when the folder does not apply to it).\n\n\
                       dev_program_older_than_installed is true when that file is there and was last modified before \
                       the installed program (a package's files keep their build time): the folder holds a build \
@@ -418,7 +418,7 @@ fn restart_process(cx: &Context, name: &str) -> Result<Process, Failure> {
 #[derive(Serialize)]
 struct Component {
     name: String,
-    /// Where it runs: `host`, `host-NAME`, `process`, `none` or `off`.
+    /// Where it runs: `host`, `host-NAME`, `none` or `off`.
     runs_in: String,
     /// Its host of its own starts from the development folder.
     from_dev_folder: bool,

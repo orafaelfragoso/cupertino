@@ -182,9 +182,10 @@ impl Rig {
         let root = Root::new(name);
         let event_loop: EventLoop<'static, Cupertino> = EventLoop::try_new().unwrap();
         let display: Display<Cupertino> = Display::new().unwrap();
-        let mut config = Config::default();
-        config.shell_processes.clear();
-        config.screenshot_command = screenshot_command();
+        let config = Config {
+            screenshot_command: screenshot_command(),
+            ..Config::default()
+        };
         let mut state = Cupertino::new(
             display,
             event_loop.handle(),

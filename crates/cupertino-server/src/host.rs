@@ -379,8 +379,6 @@ pub struct HostManager {
     pub all_separate_for_session: bool,
     /// Last time seat input occurred (for shared-host `request_restart` quiet-moment check).
     last_input_at: Instant,
-    /// Components a host was built without (`unavailable` with `absent`): they run as their process entries.
-    absent: HashSet<&'static str>,
     /// Components a host of the development folder gave back to the installed host, until a restart asks for them.
     dev_given_back: HashSet<&'static str>,
     /// Whether each host connection that ended was expected to end, until the supervisor reaps its process.
@@ -389,8 +387,6 @@ pub struct HostManager {
     planned_shared: Vec<&'static str>,
     /// The components of the last plan that run in a separate host.
     planned_separate: Vec<&'static str>,
-    /// The process entries of hosted components that were logged as left alone.
-    left_alone: Vec<String>,
     /// What the hosts said changes where the components run: the plan is worked out again after the supervision pass.
     pub(crate) plan_dirty: bool,
 }
@@ -430,12 +426,10 @@ impl HostManager {
             shared_host_crashes: Vec::new(),
             all_separate_for_session: false,
             last_input_at: Instant::now(),
-            absent: HashSet::new(),
             dev_given_back: HashSet::new(),
             ended: HashMap::new(),
             planned_shared: Vec::new(),
             planned_separate: Vec::new(),
-            left_alone: Vec::new(),
             plan_dirty: false,
         }
     }
@@ -465,11 +459,6 @@ impl HostManager {
     /// The instance number the server last handed out for `component`, 0 before the first.
     pub fn component_instance(&self, component: &str) -> u32 {
         self.components.get(component).map_or(0, |r| r.instance)
-    }
-
-    /// Whether a host answered `unavailable` with `absent` for `component`, so it runs as its process entry.
-    pub fn component_absent(&self, component: &str) -> bool {
-        self.absent.contains(component)
     }
 
     /// The host `component` runs in by the last plan, if any.

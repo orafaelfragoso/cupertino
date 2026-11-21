@@ -17,13 +17,13 @@ use cupertino_theme::Appearance;
 /// Environment variable naming the configuration file.
 pub use cupertino_defaults::compositor::COMPOSITOR_CONF_ENV as CONFIG_ENV;
 
-/// The system configuration file the packages install: the shell processes and whatever else a fresh account needs.
+/// The system configuration file the packages install: the shell section and whatever else a fresh account needs.
 pub const SYSTEM_CONFIG: &str = "/etc/cupertino/compositor.json";
 
 /// The system file of the login screen's server, which `$CUPERTINO_SERVER_CONFIG` names when the login manager starts it.
 pub const GREETER_CONFIG: &str = cupertino_defaults::compositor::GREETER_CONF_PATH;
 
-/// Where the programs of the shell processes and the screenshot process must be installed. The install prefix of the
+/// Where the built-in programs and the screenshot process must be installed. The install prefix of the
 /// build is added to `/usr` when it is set (`CUPERTINO_INSTALL_PREFIX` at compile time).
 pub(crate) fn installed_roots() -> impl DoubleEndedIterator<Item = &'static Path> {
     ["/usr"].into_iter().chain(INSTALL_PREFIX).map(Path::new)
@@ -44,7 +44,7 @@ const _: () = {
 const INSTALLED_SCREENSHOT: &str = "/usr/bin/cupertino-screenshot";
 
 /// A process the server starts in every user session from a fixed install path, with one role. No configuration file
-/// names, changes or removes it, and no [`ShellRoleName`](cupertino_defaults::compositor::ShellRoleName) grants its role.
+/// names, changes or removes it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BuiltIn {
     /// The desktop portal's backend, owner of [`PORTAL_BUS_NAME`]: it captures the screen for what the person allows.
@@ -153,15 +153,6 @@ impl BuiltIn {
             roles: vec![ShellRole::Session],
         }
     }
-
-    /// Whether a `shell` entry names this process, by its name or its program.
-    fn named_by(self, name: &str, command: &[String]) -> bool {
-        name == self.name()
-            || command
-                .first()
-                .and_then(|program| Path::new(program).file_name())
-                .is_some_and(|file| file == self.program_name())
-    }
 }
 
 /// Whether the built-in program at `<root>/bin/<name>` may run with its role, checked at every start: the file and its
@@ -211,11 +202,10 @@ pub fn may_run_built_in(file: (u32, u32), bin: (u32, u32), root_owner: u32, user
         && (file.0 == 0 || (root_owner == user && file.0 == user))
 }
 
-/// The roles a shell process may hold and still start from the development folder: the session's own chrome (the menu
-/// bar, the dock, the window manager, the keyboard's panels and the processes that only follow the session). A process
-/// holding any other role (the lock screen and login, capture, the authentication prompt, data control, desktop
-/// control, or a role added later) always starts its installed program: this is a list of what is allowed, not of what
-/// is refused.
+/// The roles a shell component may hold and still run from the development folder: the session's own chrome (the menu
+/// bar, the dock, the window manager, the keyboard's panels and the components that only follow the session). A
+/// component holding any other role (the session agent, data control, or a role added later) always runs in the
+/// installed host: this is a list of what is allowed, not of what is refused.
 pub const DEV_FOLDER_ROLES: [ShellRole; 7] = [
     ShellRole::Session,
     ShellRole::MenuBar,
@@ -226,15 +216,15 @@ pub const DEV_FOLDER_ROLES: [ShellRole; 7] = [
     ShellRole::KeyboardPanels,
 ];
 
-/// Whether a shell process with `roles` may start from the development folder: all of its roles are
+/// Whether a shell component with `roles` may run from the development folder: all of its roles are
 /// [`DEV_FOLDER_ROLES`].
 pub fn may_start_from_dev_folder(roles: &[ShellRole]) -> bool {
     roles.iter().all(|role| DEV_FOLDER_ROLES.contains(role))
 }
 
-/// The development folder the system file declares (`dev_folder`): the shell processes named in `components` that
-/// [`may_start_from_dev_folder`] start `<path>/<file name of their program>` instead of the installed program, when that
-/// file passes [`dev_folder_program`] at the start.
+/// The development folder the system file declares (`dev_folder`): each shell component named in `components` that
+/// may run from it ([`DevFolder::eligible`]) runs in a separate host that starts `<path>/cupertino-shell` instead of the
+/// installed host, when that file passes [`dev_folder_program`] at the start.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DevFolder {
     pub path: PathBuf,
@@ -242,22 +232,22 @@ pub struct DevFolder {
 }
 
 impl DevFolder {
-    /// The names of `processes` that may start from the folder, and a warning for each name of `components` that is
-    /// not one of them (no such process, or one holding a role outside [`DEV_FOLDER_ROLES`]).
-    pub fn eligible(&self, processes: &[ShellProcess]) -> (Vec<String>, Vec<String>) {
+    /// The components of `components` that may run from the folder, in its order, and a warning for each other name:
+    /// no component has it, or the component holds a role outside [`DEV_FOLDER_ROLES`].
+    pub fn eligible(&self) -> (Vec<&'static str>, Vec<String>) {
         let mut eligible = Vec::new();
         let mut warnings = Vec::new();
         for name in &self.components {
-            match processes.iter().find(|p| &p.name == name) {
-                Some(p) if may_start_from_dev_folder(&p.roles) => eligible.push(name.clone()),
-                Some(p) => warnings.push(format!(
-                    "dev_folder: {name}: a process holding {:?} always starts its installed program",
-                    p.roles
+            match crate::host::component_spec(name) {
+                Some(spec) if may_start_from_dev_folder(spec.roles) => eligible.push(spec.name),
+                Some(spec) => warnings.push(format!(
+                    "dev_folder: {name}: a component holding {:?} always runs in the installed host",
+                    spec.roles
                         .iter()
                         .filter(|r| !DEV_FOLDER_ROLES.contains(r))
                         .collect::<Vec<_>>()
                 )),
-                None => warnings.push(format!("dev_folder: {name}: no shell process has this name")),
+                None => warnings.push(format!("dev_folder: {name}: no shell component has this name")),
             }
         }
         (eligible, warnings)
@@ -355,14 +345,16 @@ pub fn is_installed_program(command: &[String]) -> bool {
         && installed_roots().any(|root| program.starts_with(root))
 }
 
-/// What a configuration file may decide about the processes the server starts with privileges (the shell processes
-/// and the screenshot process). Everything else a file sets is the same for every layer.
+/// What a configuration file may decide about the shell and the processes the server starts with privileges (the
+/// component list, the screenshot process and the development folder). Everything else a file sets is the same for
+/// every layer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LayerTrust {
-    /// The system file, owned by root: it may name privileged processes, only programs the install put in place.
+    /// The system file, owned by root: it sets the component list and the development folder, and names the screenshot
+    /// process, only a program the install put in place.
     System,
-    /// A file of the person: it may disable or reorder what the system file names, never add or change a privileged
-    /// process.
+    /// A file of the person: it may turn components off or run them alone, never set the component list, the screenshot
+    /// process or the development folder.
     User,
     /// A development or nested run (`--dev-shell`): every file may name any program.
     Dev,
@@ -385,7 +377,7 @@ pub fn layer_trust(path: &Path, dev_shell: bool) -> LayerTrust {
 
 pub(crate) use cupertino_defaults::system::read_root_file as read_system_file;
 
-/// A shell process the server starts and keeps alive (see [`crate::supervisor`]).
+/// A process the server starts and keeps alive, a built-in program or a shell host (see [`crate::supervisor`]).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ShellProcess {
     /// Name in log lines.
@@ -518,8 +510,6 @@ pub struct Config {
     pub shell_off: Vec<String>,
     /// Shell host components running in separate host processes (`shell.alone`).
     pub shell_alone: Vec<String>,
-    /// Legacy shell processes supervised by the server (`shell.processes` or legacy array form); none by default.
-    pub shell_processes: Vec<ShellProcess>,
     pub keybindings: KeyBindings,
     pub effects: crate::fx::EffectsConfig,
     /// Hot-corner detection: all four corners arm (the binding's action is a placeholder; the dock
@@ -706,7 +696,6 @@ impl Default for Config {
                 .collect(),
             shell_off: Vec::new(),
             shell_alone: Vec::new(),
-            shell_processes: Vec::new(),
             keybindings: KeyBindings::from_shortcuts(
                 &crate::kbd::default_shortcut_map("cupertino").0,
                 "cupertino",
@@ -1095,68 +1084,11 @@ impl Config {
             if let Some(alone) = &section.alone {
                 self.shell_alone = filter_known(alone, "alone", &mut problems);
             }
-            if let Some(list) = &section.processes {
-                let list: Vec<_> = list
-                    .iter()
-                    .filter(|e| {
-                        let built_in = BuiltIn::ALL
-                            .into_iter()
-                            .chain([BuiltIn::Host])
-                            .find(|b| b.named_by(&e.name, &e.command));
-                        if let Some(b) = built_in {
-                            problems.push(format!(
-                                "shell: {}: the server starts the {} process itself",
-                                e.name,
-                                b.name()
-                            ));
-                        }
-                        built_in.is_none()
-                    })
-                    .collect();
-                let entry = |e: &cupertino_defaults::compositor::ShellEntry| ShellProcess {
-                    name: e.name.clone(),
-                    command: e.command.clone(),
-                    roles: e.roles.iter().copied().map(ShellRole::from).collect(),
-                };
-                self.shell_processes = match trust {
-                    LayerTrust::Dev => list.into_iter().map(entry).collect(),
-                    LayerTrust::System => list
-                        .into_iter()
-                        .filter(|e| {
-                            let allowed = e.roles.is_empty() || is_installed_program(&e.command);
-                            if !allowed {
-                                problems.push(format!(
-                                    "shell: {}: a process with roles must be a program installed under {}",
-                                    e.name,
-                                    installed_roots().map(|r| r.display().to_string()).collect::<Vec<_>>().join(" or ")
-                                ));
-                            }
-                            allowed
-                        })
-                        .map(entry)
-                        .collect(),
-                    LayerTrust::User => list
-                        .into_iter()
-                        .filter_map(|e| {
-                            let known = self.shell_processes.iter().find(|p| p.name == e.name);
-                            match (known, e.roles.is_empty()) {
-                                (Some(known), _) => {
-                                    if known.command != e.command
-                                        || known.roles != e.roles.iter().copied().map(ShellRole::from).collect::<Vec<_>>()
-                                    {
-                                        problems.push(format!("shell: {}: the user configuration cannot change a shell process of the system", e.name));
-                                    }
-                                    Some(known.clone())
-                                }
-                                (None, true) => Some(entry(e)),
-                                (None, false) => {
-                                    problems.push(format!("shell: {}: the user configuration cannot add a process with roles", e.name));
-                                    None
-                                }
-                            }
-                        })
-                        .collect(),
-                };
+            if section.ignored_processes {
+                problems.push(
+                    "shell.processes: ignored: every component runs in a shell host, and the server starts its own programs itself"
+                        .to_string(),
+                );
             }
         }
         if let Some(command) = &f.screenshot {
@@ -1178,10 +1110,12 @@ impl Config {
         if let Some(folder) = &f.dev_folder {
             match trust {
                 LayerTrust::System | LayerTrust::Dev => {
-                    self.dev_folder = Some(DevFolder {
+                    let folder = DevFolder {
                         path: PathBuf::from(&folder.path),
                         components: folder.components.clone(),
-                    });
+                    };
+                    problems.extend(folder.eligible().1);
+                    self.dev_folder = Some(folder);
                 }
                 LayerTrust::User => problems.push(
                     "dev_folder: only the system configuration sets the development folder"
@@ -1210,19 +1144,14 @@ impl Config {
 
     /// Components that run in a separate host (`shell_alone` or eligible `dev_folder`).
     pub fn alone_host_components(&self, login_screen: bool) -> Vec<&'static str> {
-        let dev_list: &[String] = self
+        let from_dev = self
             .dev_folder
             .as_ref()
-            .map(|d| d.components.as_slice())
-            .unwrap_or(&[]);
+            .map(|d| d.eligible().0)
+            .unwrap_or_default();
         self.active_shell_components(login_screen)
             .into_iter()
-            .filter(|&name| {
-                self.shell_alone.iter().any(|a| a == name)
-                    || (dev_list.iter().any(|d| d == name)
-                        && crate::host::component_spec(name)
-                            .is_some_and(|s| may_start_from_dev_folder(s.roles)))
-            })
+            .filter(|&name| self.shell_alone.iter().any(|a| a == name) || from_dev.contains(&name))
             .collect()
     }
 
@@ -1234,14 +1163,6 @@ impl Config {
             .filter(|name| !alone.contains(name))
             .collect()
     }
-
-    /// Fallback legacy supervised process entry for `name` when the host is unavailable or not installed (until W6.close).
-    pub fn process_fallback_for(&self, name: &str) -> Option<&ShellProcess> {
-        if self.shell_off.iter().any(|o| o == name) {
-            return None;
-        }
-        self.shell_processes.iter().find(|p| p.name == name)
-    }
 }
 
 /// What the server knows about the hosts when it works out where the components run ([`Config::shell_plan`]).
@@ -1252,14 +1173,12 @@ pub struct HostFacts {
     /// Components that run alone whatever the configuration says: lost ones, or every one after the shared host's
     /// crashes (D18).
     pub isolated: Vec<&'static str>,
-    /// Components a host was built without (`unavailable` with `absent`): they run as their process entries.
-    pub absent: Vec<&'static str>,
     /// Components of the development folder that run in the installed host: the folder's file is absent or refused, or
     /// a host from the folder gave the component back, until `cupertino shell restart NAME`.
     pub not_from_dev: Vec<&'static str>,
 }
 
-/// Where each component of the session runs, and which supervised processes run beside the hosts.
+/// Where each component of the session runs.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ShellPlan {
     /// The list of the shared host, in the table's order; `None` when no component runs in a host, so no host runs.
@@ -1267,10 +1186,6 @@ pub struct ShellPlan {
     /// The components that run in a separate host each, in the table's order, and whether that host starts from the
     /// development folder.
     pub separate: Vec<(&'static str, bool)>,
-    /// The configured processes that run: those that are no component, and the entries of components no host runs.
-    pub processes: Vec<ShellProcess>,
-    /// The process entries of components that run in a host, which are left alone.
-    pub left_alone: Vec<String>,
 }
 
 impl ShellPlan {
@@ -1286,18 +1201,12 @@ impl ShellPlan {
 
 impl Config {
     /// Where the components run (`docs/architecture/shell-host.md`, *The component list*): the components of the
-    /// session ([`Config::active_shell_components`]) run in a host when the host program is there, except
-    /// the ones a host was built without; those of `alone`, of the development folder and the
-    /// isolated ones each in a separate host, the others in the shared host. A process entry of a component runs only
-    /// when no host runs the component, and an entry turned `off` never runs.
+    /// session ([`Config::active_shell_components`]) run in a host when the host program is there; those of `alone`, of
+    /// the development folder and the isolated ones each in a separate host, the others in the shared host. Without
+    /// the host program no component runs.
     pub fn shell_plan(&self, login_screen: bool, facts: &HostFacts) -> ShellPlan {
-        let active = self.active_shell_components(login_screen);
         let hosted: Vec<&'static str> = if facts.available {
-            active
-                .iter()
-                .copied()
-                .filter(|name| !facts.absent.contains(name))
-                .collect()
+            self.active_shell_components(login_screen)
         } else {
             Vec::new()
         };
@@ -1326,31 +1235,11 @@ impl Config {
                 .filter(|name| !separate.iter().any(|(s, _)| s == name))
                 .collect()
         });
-        let mut processes = Vec::new();
-        let mut left_alone = Vec::new();
-        for entry in &self.shell_processes {
-            if self.shell_off.contains(&entry.name) {
-                continue;
-            }
-            match crate::host::component_spec(&entry.name) {
-                None => processes.push(entry.clone()),
-                Some(spec) if hosted.contains(&spec.name) => left_alone.push(entry.name.clone()),
-                Some(spec) if active.contains(&spec.name) => {
-                    processes.extend(self.process_fallback_for(spec.name).cloned());
-                }
-                Some(_) => {}
-            }
-        }
-        ShellPlan {
-            shared,
-            separate,
-            processes,
-            left_alone,
-        }
+        ShellPlan { shared, separate }
     }
 
     /// Take the `shell` section of the system file `system` and of the person's file `user` again, each by its trust,
-    /// as at start: the component list, `off`, `alone` and the process entries. Returns what is refused.
+    /// as at start: the component list, `off` and `alone`. Returns what is refused.
     pub fn apply_shell_layers(
         &mut self,
         system: &CompositorSettings,
@@ -1371,7 +1260,6 @@ impl Config {
         self.shell_components = layered.shell_components;
         self.shell_off = layered.shell_off;
         self.shell_alone = layered.shell_alone;
-        self.shell_processes = layered.shell_processes;
         problems
     }
 }

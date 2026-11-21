@@ -6,8 +6,8 @@
 //!
 //! The plan changes when the configuration's `shell` section changes, when a host answers `unavailable`, when a
 //! component is lost (it runs alone for the rest of the session), when the shared host crashed often enough to isolate
-//! every component (D18), and when the host program is refused at a start: then every component runs as its process
-//! entry, if it has one, until `cupertino shell restart host` or the next change of the section.
+//! every component (D18), and when the host program is refused at a start: then no component runs until
+//! `cupertino shell restart host` or the next change of the section.
 
 use std::path::PathBuf;
 use std::process::ExitStatus;
@@ -15,11 +15,11 @@ use std::process::ExitStatus;
 use super::*;
 use crate::config::{dev_folder_program, BuiltIn, HostFacts, ShellProcess};
 use crate::shell_connection::BoundConnection;
-use crate::supervisor::{HostProgram, Launcher, RestartError, RestartReply, Supervisor};
+use crate::supervisor::{HostProgram, Launcher, RestartError, RestartReply};
 
 /// The host program of this server: none in the login session; with `--dev-shell` `cupertino-shell` found on `PATH`,
 /// unchecked; otherwise the installed one ([`BuiltIn::installed`]), checked before every start. A host program that is
-/// not there is logged once: the components then run as their process entries.
+/// not there is logged once: no component runs then.
 pub fn find_host_program(dev_shell: bool, login_screen: bool) -> Option<HostProgram> {
     if login_screen {
         return None;
@@ -40,15 +40,15 @@ pub fn find_host_program(dev_shell: bool, login_screen: bool) -> Option<HostProg
     if found.is_none() {
         tracing::info!(
             program = BuiltIn::Host.program_name(),
-            "the shell host is not installed: the components run as their own processes"
+            "the shell host is not installed: no shell component runs"
         );
     }
     found
 }
 
 impl Cupertino {
-    /// Work out where every component runs and make the supervisor follow: the hosts and the configured processes that
-    /// should run are started at the next supervision pass, the others end. A running host whose list changed gets it
+    /// Work out where every component runs and make the supervisor follow: the hosts that should run are started at the
+    /// next supervision pass, the others end. A running host whose list changed gets it
     /// in whole; a separate host that is no longer needed gets an empty list and exits by itself, the shared host is
     /// ended. The pass is scheduled at once.
     pub fn apply_shell_plan(&mut self) {
@@ -66,7 +66,7 @@ impl Cupertino {
         for &(name, dev) in &plan.separate {
             targets.push((HostKind::Separate(name), folder.clone().filter(|_| dev)));
         }
-        let ended = self.supervisor.reconcile(&plan.processes, &targets, now);
+        let ended = self.supervisor.reconcile(&targets, now);
         for (kind, host_id) in ended {
             let Some(id) = host_id else { continue };
             match kind {
@@ -95,26 +95,13 @@ impl Cupertino {
         for (id, list) in lists {
             self.set_host_components(id, list);
         }
-        if plan.left_alone != self.hosts.left_alone {
-            for name in plan
-                .left_alone
-                .iter()
-                .filter(|n| !self.hosts.left_alone.contains(n))
-            {
-                tracing::info!(
-                    name,
-                    "the component runs in its host: its process entry is left alone"
-                );
-            }
-            self.hosts.left_alone = plan.left_alone;
-        }
         self.release_unhosted_holds();
         crate::cli::schedule_supervision(self);
     }
 
     /// Whether a host runs `component`: the plan puts it in one, or a host the supervisor did not start
-    /// ([`Cupertino::attach_host_connection`]) and that is not ending has it in its list. A component no host runs is
-    /// turned off or runs as its process entry: nothing of it is held.
+    /// ([`Cupertino::attach_host_connection`]) and that is not ending has it in its list. A component no host runs does
+    /// not run: nothing of it is held.
     pub(super) fn component_hosted(&self, component: &str) -> bool {
         self.hosts.planned_host(component).is_some()
             || self.hosts.hosts.values().any(|h| {
@@ -122,7 +109,7 @@ impl Cupertino {
             })
     }
 
-    /// End what is held for the components no host runs any more (turned off, or gone back to their process entries):
+    /// End what is held for the components no host runs any more (turned off, or with no host to run them):
     /// their held pictures, reserved space and holes, and the window manager's held placements on every output.
     fn release_unhosted_holds(&mut self) {
         let mut held: Vec<&'static str> = self.hosts.holds.iter().map(|h| h.component).collect();
@@ -183,7 +170,6 @@ impl Cupertino {
                 .map(|s| s.name)
                 .filter(|name| self.hosts.component_separate_for_session(name))
                 .collect(),
-            absent: self.hosts.absent.iter().copied().collect(),
             not_from_dev,
         }
     }
@@ -200,7 +186,7 @@ impl Cupertino {
     /// that was refused, or what the hosts' exits changed, works the plan out again, and the pass runs once more for it.
     pub fn supervise_shell(&mut self, now: Instant) {
         for _ in 0..2 {
-            let mut supervisor = std::mem::replace(&mut self.supervisor, Supervisor::new(&[], now));
+            let mut supervisor = std::mem::take(&mut self.supervisor);
             let xwayland = self.xwayland.take();
             let socket = self.socket_name.clone();
             let mut launcher = ServerLauncher {
@@ -217,7 +203,7 @@ impl Cupertino {
             self.xwayland = xwayland;
             self.supervisor = supervisor;
             if let Some(reason) = refused {
-                tracing::warn!(%reason, "the shell host cannot start: the components run as their own processes until `cupertino shell restart host`");
+                tracing::warn!(%reason, "the shell host cannot start: no shell component runs until `cupertino shell restart host`");
                 self.supervisor.set_host_refused(Some(reason));
                 self.hosts.plan_dirty = true;
             }
@@ -231,7 +217,7 @@ impl Cupertino {
     /// Restart the component `component` where it runs (`cupertino shell restart NAME`): a component of a host is
     /// stopped and started by its host, a component of the development folder or of `alone` by starting its separate
     /// host again from the file that is there then, and a lost one goes back to the shared host. What a host said
-    /// against it (built without it, a folder build given back) is forgotten. `reply` gets the host's process under
+    /// against it (a folder build given back) is forgotten. `reply` gets the host's process under
     /// the component's name once the component says it is ready, or an error after [`HOLD_READY_TIMEOUT`]. Returns
     /// `reply` back when no host runs the component.
     pub fn restart_hosted_component(
@@ -242,7 +228,6 @@ impl Cupertino {
         let Some(was) = self.hosts.planned_host(component) else {
             return Some(reply);
         };
-        self.hosts.absent.remove(component);
         self.hosts.dev_given_back.remove(component);
         let answer = std::sync::Arc::new(std::sync::Mutex::new(PendingAnswer {
             reply: Some(reply),

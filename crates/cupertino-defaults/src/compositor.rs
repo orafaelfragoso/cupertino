@@ -27,7 +27,7 @@
 //! | `cursor_fill`, `cursor_outline` | `#rrggbb` or `#rrggbbaa` |
 //! | `wallpaper_folders` | absolute paths of the folders the Settings wallpaper pane lists besides the packs' pictures; the server ignores it |
 //! | `wallpaper`, `wallpaper_dark` | absolute path of a PNG or JPEG: the wallpaper, and the one of the dark appearance (else `wallpaper` is used) |
-//! | `shell` | list of `{"name": …, "command": [program, args…], "roles": […]}`, commands not empty; `roles` (optional, default `["session"]`) lists what the server lets the process do: `session`, `menu_bar`, `dock`, `window_manager` |
+//! | `shell` | `{"components": [names…], "off": [names…], "alone": [names…]}`: the shell components the session runs (only the system file sets `components`), those turned off, and those that run in a host of their own ([`ShellSection`]); a `processes` list, or the section written as a list, is ignored ([`ShellSection::ignored_processes`]) |
 //! | `screenshot` | the screenshot command, not empty |
 //! | `dev_folder` | `{"path": …, "components": [names…]}`: an absolute directory without `..` and the names of the shell components that may run from it ([`DevFolder`]); only the system file sets it |
 
@@ -219,71 +219,8 @@ pub const SHELL_COMPONENTS: [&str; 11] = [
     "dialogs",
 ];
 
-/// A role of the shell protocol a process the server starts can be given.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ShellRoleName {
-    /// Observe the session (appearance, display options, lock state).
-    Session,
-    MenuBar,
-    Dock,
-    WindowManager,
-    /// Follow an output's windows and workspaces (`cupertino_overview_v1`), claim windows and bind gestures.
-    Overview,
-    /// Bind window/thumbnail holes (`cupertino_transaction_manager_v1.get_hole`).
-    Windows,
-    /// Take the session lock (`ext-session-lock`): the lock screen.
-    SessionLock,
-    /// Use data control: read and set the selections without focus (a clipboard history).
-    Clipboard,
-}
-
-impl ShellRoleName {
-    pub const ALL: [ShellRoleName; 8] = [
-        ShellRoleName::Session,
-        ShellRoleName::MenuBar,
-        ShellRoleName::Dock,
-        ShellRoleName::WindowManager,
-        ShellRoleName::Overview,
-        ShellRoleName::Windows,
-        ShellRoleName::SessionLock,
-        ShellRoleName::Clipboard,
-    ];
-
-    pub fn name(self) -> &'static str {
-        match self {
-            ShellRoleName::Session => "session",
-            ShellRoleName::MenuBar => "menu_bar",
-            ShellRoleName::Dock => "dock",
-            ShellRoleName::WindowManager => "window_manager",
-            ShellRoleName::Overview => "overview",
-            ShellRoleName::Windows => "windows",
-            ShellRoleName::SessionLock => "session_lock",
-            ShellRoleName::Clipboard => "clipboard",
-        }
-    }
-
-    pub fn from_name(name: &str) -> Option<ShellRoleName> {
-        Self::ALL.into_iter().find(|r| r.name() == name)
-    }
-
-    /// Whether a process holding this role may still start from the development folder: the roles of the session's
-    /// own chrome (`session`, `menu_bar`, `dock`, `window_manager`, `overview`, `windows`). The lock screen's,
-    /// session agent's and data control's may not.
-    pub fn allows_dev_folder(self) -> bool {
-        matches!(
-            self,
-            ShellRoleName::Session
-                | ShellRoleName::MenuBar
-                | ShellRoleName::Dock
-                | ShellRoleName::WindowManager
-                | ShellRoleName::Overview
-                | ShellRoleName::Windows
-        )
-    }
-}
-
-/// The `shell` section of `compositor.json` (`docs/architecture/shell-host.md`): host components
-/// (`components`, `off`, `alone`) and legacy supervised `processes` (until W6.close).
+/// The `shell` section of `compositor.json` (`docs/architecture/shell-host.md`): the host components
+/// (`components`, `off`, `alone`).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ShellSection {
     /// Host components enabled for the session (system file only; absent means all [`SHELL_COMPONENTS`]).
@@ -292,32 +229,14 @@ pub struct ShellSection {
     pub off: Option<Vec<String>>,
     /// Host components running in separate host processes (applies in system or user file).
     pub alone: Option<Vec<String>>,
-    /// Legacy supervised shell processes (accepted until W6.close, including from the top-level array form).
-    pub processes: Option<Vec<ShellEntry>>,
-}
-
-impl ShellEntry {
-    /// Whether the development folder may apply to this process: every role it holds [`ShellRoleName::allows_dev_folder`].
-    pub fn may_start_from_dev_folder(&self) -> bool {
-        self.roles.iter().all(|r| r.allows_dev_folder())
-    }
-}
-
-/// A shell process the server starts and keeps alive.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ShellEntry {
-    /// Name in log lines.
-    pub name: String,
-    /// Program and arguments; never empty.
-    pub command: Vec<String>,
-    /// What the server lets the process do on its connection; a process the file gives no roles observes the session.
-    pub roles: Vec<ShellRoleName>,
+    /// The section has a `processes` list, or is itself a list, of processes for the server to start: nothing reads or
+    /// runs them, every component runs in a shell host.
+    pub ignored_processes: bool,
 }
 
 /// The development folder of the system file: the shell components named in `components` run in a host of their own
-/// that starts from the `cupertino-shell` in `path` when one is there, instead of the installed host (a supervised
-/// process of the `processes` list named there starts the file of its program's name the same way). The server decides which names it accepts and
-/// checks the folder and each file before every start.
+/// that starts from the `cupertino-shell` in `path` when one is there, instead of the installed host. The server decides
+/// which names it accepts and checks the folder and each file before every start.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DevFolder {
     /// An absolute directory without `..`.
@@ -440,47 +359,19 @@ fn strings(v: &Value) -> Result<Vec<String>, String> {
 fn shell_section(v: &Value) -> Result<ShellSection, String> {
     if v.is_array() {
         return Ok(ShellSection {
-            components: None,
-            off: None,
-            alone: None,
-            processes: Some(shell_entries(v)?),
+            ignored_processes: true,
+            ..ShellSection::default()
         });
     }
     let obj = v
         .as_object()
-        .ok_or_else(|| format!("expected a shell object or list of processes, got {v}"))?;
-    let components = obj.get("components").map(strings).transpose()?;
-    let off = obj.get("off").map(strings).transpose()?;
-    let alone = obj.get("alone").map(strings).transpose()?;
-    let processes = obj.get("processes").map(shell_entries).transpose()?;
+        .ok_or_else(|| format!("expected a shell object, got {v}"))?;
     Ok(ShellSection {
-        components,
-        off,
-        alone,
-        processes,
+        components: obj.get("components").map(strings).transpose()?,
+        off: obj.get("off").map(strings).transpose()?,
+        alone: obj.get("alone").map(strings).transpose()?,
+        ignored_processes: obj.contains_key("processes"),
     })
-}
-
-fn shell_entries_value(list: &[ShellEntry]) -> Value {
-    Value::Array(
-        list.iter()
-            .map(|e| {
-                let mut m = Map::new();
-                m.insert("name".into(), Value::String(e.name.clone()));
-                m.insert("command".into(), strings_value(&e.command));
-                m.insert(
-                    "roles".into(),
-                    Value::Array(
-                        e.roles
-                            .iter()
-                            .map(|r| Value::String(r.name().into()))
-                            .collect(),
-                    ),
-                );
-                Value::Object(m)
-            })
-            .collect(),
-    )
 }
 
 fn shell_section_value(section: &ShellSection) -> Value {
@@ -494,46 +385,7 @@ fn shell_section_value(section: &ShellSection) -> Value {
     if let Some(a) = &section.alone {
         m.insert("alone".into(), strings_value(a));
     }
-    if let Some(p) = &section.processes {
-        m.insert("processes".into(), shell_entries_value(p));
-    }
     Value::Object(m)
-}
-
-fn shell_entries(v: &Value) -> Result<Vec<ShellEntry>, String> {
-    let list = v
-        .as_array()
-        .ok_or_else(|| format!("expected a list of shell processes, got {v}"))?;
-    let mut out = Vec::new();
-    for item in list {
-        let obj = item
-            .as_object()
-            .ok_or_else(|| format!("expected {{\"name\": …, \"command\": […]}}, got {item}"))?;
-        let name = string(obj.get("name").ok_or("a shell process needs a name")?)?.to_string();
-        let command = strings(
-            obj.get("command")
-                .ok_or_else(|| format!("shell process {name} needs a command"))?,
-        )?;
-        if command.is_empty() {
-            return Err(format!("shell process {name} has an empty command"));
-        }
-        let roles = match obj.get("roles") {
-            None => vec![ShellRoleName::Session],
-            Some(v) => strings(v)?
-                .iter()
-                .map(|r| {
-                    ShellRoleName::from_name(r)
-                        .ok_or_else(|| format!("shell process {name} has the unknown role {r:?}"))
-                })
-                .collect::<Result<_, _>>()?,
-        };
-        out.push(ShellEntry {
-            name,
-            command,
-            roles,
-        });
-    }
-    Ok(out)
 }
 
 /// How one key of the file is read and written.

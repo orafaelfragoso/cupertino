@@ -1,7 +1,7 @@
 //! Program and configuration tests for W5.5:
-//! - `shell` section of `compositor.json`: object form (`components`, `off`, `alone`, `processes`),
-//!   legacy array backward compatibility, system-only `components`, login session empty components,
-//!   and `BuiltIn::Login` (user + greeter).
+//! - `shell` section of `compositor.json`: `components`, `off`, `alone`, system-only `components`, login session
+//!   empty components, a `processes` list or the section as a list ignored with a warning, and `BuiltIn::Login` (user +
+//!   greeter).
 //! - `cupertino_overview_manager_v1` / `cupertino_overview_v1`: receives initial `area`, `workspace`,
 //!   `done`; handles `add_workspace`, `switch_workspace`, `remove_workspace`, and `toggle` delivery.
 
@@ -219,14 +219,29 @@ fn shell_section_rules_and_builtin_login() {
     );
     assert_eq!(cfg.alone_host_components(false), vec!["menubar"]);
 
-    // Legacy array form with `login` rejects `login` because the server starts BuiltIn::Login itself.
-    let (legacy, errs) = CompositorSettings::parse(
+    // A list of processes, beside the components or as the whole section, is ignored with one warning: nothing of it
+    // runs, and the server starts the login itself.
+    for text in [
         r#"{"shell": [{"name": "login", "command": ["/usr/bin/cupertino-login"], "roles": ["session", "session_lock"]}]}"#,
-        None,
-    );
-    assert!(errs.is_empty());
-    let lprobs = cfg.apply_privileged(&legacy, LayerTrust::System);
-    assert!(lprobs.iter().any(|p| p.contains("login")));
+        r#"{"shell": {"components": ["menubar", "dock", "overview"], "processes": [{"name": "bar", "command": ["/usr/bin/bar"]}]}}"#,
+    ] {
+        let (legacy, errs) = CompositorSettings::parse(text, None);
+        assert!(errs.is_empty(), "{text}: {errs:?}");
+        let lprobs = cfg.apply_privileged(&legacy, LayerTrust::System);
+        assert_eq!(
+            lprobs
+                .iter()
+                .filter(|p| p.starts_with("shell.processes: ignored"))
+                .count(),
+            1,
+            "{text}: {lprobs:?}"
+        );
+        assert_eq!(
+            cfg.active_shell_components(false),
+            vec!["menubar", "dock", "overview"],
+            "{text}"
+        );
+    }
 
     let user_login = BuiltIn::Login.process(std::path::Path::new("/usr/bin/cupertino-login"));
     assert!(user_login.roles.contains(&ShellRole::SessionLock));
@@ -240,8 +255,7 @@ fn shell_section_rules_and_builtin_login() {
 fn overview_v1_delivers_area_workspaces_and_toggle() {
     let mut event_loop: EventLoop<'static, Cupertino> = EventLoop::try_new().unwrap();
     let display: Display<Cupertino> = Display::new().unwrap();
-    let mut config = Config::default();
-    config.shell_processes.clear();
+    let config = Config::default();
     let mut state = Cupertino::new(
         display,
         event_loop.handle(),

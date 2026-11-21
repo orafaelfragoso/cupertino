@@ -230,10 +230,10 @@ password stack accepted the password and unlocks the user's keyring with it when
 
 The lock screen serves `org.cupertino.Login1` on the session bus, at path `/org/cupertino/Login1`, with one method:
 `Lock`, which locks the session or does nothing when it is locked already. The server calls it only while no lock screen
-is connected to ask through `cupertino_session_v1`. It checks its caller (`cupertino-peer`): only the server, this
-process's parent, and this process itself may call. An anonymous, sandboxed (Flatpak, Snap) or unrelated caller gets
-`org.cupertino.Error.AnonymousCaller`, `FlatpakCaller`, `SnapCaller` or `UntrustedCaller`, one warning is logged and
-nothing happens. The session agent's panels, the power key and the session menu's state are the `agent` component's
+is connected to ask through `cupertino_session_v1`. Only the server may call: the connection that owns
+`org.cupertino.Session1` (D20), asked through `cupertino-peer`'s `Lookup` on a session bus connection of the lock
+screen's own, never by process relations. Any other caller, the server's other connections and the programs it started
+included, gets `org.cupertino.Error.UntrustedCaller` and nothing happens. The session agent's panels, the power key and the session menu's state are the `agent` component's
 (`org.cupertino.SessionAgent1` and `SessionMenu` on the host bus, `cupertino-shell-agent`).
 
 ### The login screen's wallpaper
@@ -435,7 +435,7 @@ network users).
 | `spinner` | the spinner's frame, head spoke and spoke opacities |
 | `status` | `StatusItems`, `WifiState`, `BatteryState`, `signal_bars`, `input_label`, `os_version`, `host_text`; with feature `dbus`, `read` (on the I/O pool) and `follow` (the radios, the power daemon): what the status items show |
 | `user` | `User::current` (account, full name, picture), `User::from_row` (a row of the manager's list), `initials`, `format_time` |
-| `control` (feature `dbus`) | the `org.cupertino.Login1` interface (`serve`, on a connection of the loop; unnamed when another process owns the name): `Lock` alone |
+| `control` (feature `dbus`) | the `org.cupertino.Login1` interface (`serve`, on a connection of the loop, with a second connection that asks who calls; unnamed when another process owns the name): `Lock` alone, for the server |
 | `logind` (feature `dbus`) | `session`, `follow` (the session's `Lock` and `PrepareForSleep`) and `inhibit_sleep` |
 | `login_manager` (feature `dbus`) | the manager's `org.cupertino.LoginManager1`: `session_ready`, `follow` (its `Unlock` and its restarts) |
 | `login_wallpaper` | `choose` (the wallpaper the settings show), `render` (the JPEG for the login screen), `store`, `write_current` (one write, on the I/O pool) |

@@ -15,32 +15,34 @@ rustc-wrapper = "sccache"
 xtask = "run --locked --quiet --package xtask --"
 # The release build of every program, with the feature set the packages use: every feature of the workspace's packages
 # but `cupertino-kit/test`, which only dev-dependencies enable. `cupertino-layers` checks the list.
-build-programs = [
-    "build",
-    "--locked",
-    "--release",
-    "--workspace",
-    "--bins",
-    "--features=cupertino-app-protocols/client",
-    "--features=cupertino-app-protocols/server",
-    "--features=cupertino-apps/dbus",
-    "--features=cupertino-apps/watch",
-    "--features=cupertino-btd/app",
-    "--features=cupertino-btd/dbus",
-    "--features=cupertino-diagnostic-events/tracy",
-    "--features=cupertino-files/app",
-    "--features=cupertino-login/app",
-    "--features=cupertino-login/dbus",
-    "--features=cupertino-netd/app",
-    "--features=cupertino-netd/dbus",
-    "--features=cupertino-powerd/app",
-    "--features=cupertino-powerd/dbus",
-    "--features=cupertino-protocols/client",
-    "--features=cupertino-protocols/cupertino-app-protocols",
-    "--features=cupertino-protocols/server",
-    "--features=cupertino-radios/dbus",
-    "--features=cupertino-server/dbus",
-    "--features=cupertino-server/udev",
-    "--features=cupertino-server/winit",
-    "--features=cupertino-sessiond/app",
-]
+# A string, not a list: Cargo joins a list alias with the same alias of every .cargo/config.toml above the working
+# directory, so the package build's checkout, which makepkg clones inside this one, ran `cargo build build ...`.
+build-programs = '''
+    build
+    --locked
+    --release
+    --workspace
+    --bins
+    --features=cupertino-app-protocols/client
+    --features=cupertino-app-protocols/server
+    --features=cupertino-apps/dbus
+    --features=cupertino-apps/watch
+    --features=cupertino-btd/app
+    --features=cupertino-btd/dbus
+    --features=cupertino-diagnostic-events/tracy
+    --features=cupertino-files/app
+    --features=cupertino-login/app
+    --features=cupertino-login/dbus
+    --features=cupertino-netd/app
+    --features=cupertino-netd/dbus
+    --features=cupertino-powerd/app
+    --features=cupertino-powerd/dbus
+    --features=cupertino-protocols/client
+    --features=cupertino-protocols/cupertino-app-protocols
+    --features=cupertino-protocols/server
+    --features=cupertino-radios/dbus
+    --features=cupertino-server/dbus
+    --features=cupertino-server/udev
+    --features=cupertino-server/winit
+    --features=cupertino-sessiond/app
+'''

@@ -58,6 +58,9 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.cupertino-ui-render]
 opt-level = 3
+# The dock rescales every app icon (icons::bilinear) each time it starts, which its restart tests do 50 times.
+[profile.dev.package.cupertino-dock]
+opt-level = 3
 # The shared drawing maths every pixel test and model runs through.
 [profile.dev.package.cupertino-raster-math]
 opt-level = 3

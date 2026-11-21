@@ -24,6 +24,7 @@ use cupertino_diagnostic_events::{self as diag, Severity, Value};
 use pam_client2::{Context, ConversationHandler, ErrorCode, Flag};
 
 use crate::channel::Channel;
+use crate::core_limit;
 use crate::reader;
 use crate::users;
 use crate::worker_protocol::{FromWorker, Mode, SessionClass, ToWorker, MAX_FRAME};
@@ -208,7 +209,7 @@ fn outcome_of(stage: Stage, code: ErrorCode, talk: Talk) -> Outcome {
 
 /// Steps 1 to 5; the exit status of the leader. `progress` says how far it got.
 fn session(channel: &mut Channel, progress: &mut Progress) -> Result<u8> {
-    harden()?;
+    core_limit::harden()?;
     let ToWorker::Begin {
         service,
         login,
@@ -360,22 +361,6 @@ fn session(channel: &mut Channel, progress: &mut Progress) -> Result<u8> {
         .close(Flag::NONE)
         .map_err(|e| format!("closing the session: {e}"))?;
     Ok(status)
-}
-
-/// No core file and no debugger can read this process's memory while it holds a password or root.
-fn harden() -> Result<()> {
-    // Safety: `prctl(PR_SET_DUMPABLE)` takes integers only.
-    if unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) } != 0 {
-        return Err(format!("PR_SET_DUMPABLE: {}", io::Error::last_os_error()).into());
-    }
-    rustix::process::setrlimit(
-        rustix::process::Resource::Core,
-        rustix::process::Rlimit {
-            current: Some(0),
-            maximum: Some(0),
-        },
-    )?;
-    Ok(())
 }
 
 /// Everything the leader needs, built before `fork` so the child allocates nothing it can fail on.
@@ -539,6 +524,10 @@ unsafe fn become_user_and_exec(launch: &Launch, report: libc::c_int) -> ! {
     }
     if libc::setgid(launch.gid) != 0 {
         fail(report, "setgid");
+    }
+    // the limit the manager was started with, while root may still raise it: the worker's is zero
+    if core_limit::restore().is_err() {
+        fail(report, "restoring the core file limit");
     }
     if libc::setuid(launch.uid) != 0 {
         fail(report, "setuid");

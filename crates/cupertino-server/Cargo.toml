@@ -52,9 +52,7 @@ cupertino-server-input = { path = "../cupertino-server-input" }
 cupertino-server-render = { path = "../cupertino-server-render" }
 async-channel = "2"
 libc = "0.2"
-tiny-skia = "0.12"
 wayland-backend = "0.3"
-wayland-client = "0.31"
 wayland-protocols-plasma = { version = "0.3", features = ["server"] }
 wayland-scanner = "0.31"
 # the per-client event buffer's size ([`state::CLIENT_EVENT_BUFFER`])
@@ -76,6 +74,7 @@ default-features = false
 features = ["desktop", "wayland_frontend", "backend_egl", "backend_drm", "backend_gbm", "renderer_gl"]
 
 [dev-dependencies]
+wayland-client = "0.31"
 cupertino-cursor = { path = "../cupertino-cursor" }
 cupertino-protocols = { path = "../cupertino-protocols", features = ["client"] }
 wayland-protocols = { version = "0.32", features = ["client", "unstable"] }

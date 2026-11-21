@@ -96,10 +96,10 @@ features one package at a time. Each feature set gets its own copy in `target/`,
 
 A change to `cupertino-kit`, `cupertino-ui-render` or the server reaches 30 crates; the longest chain is 11 crates.
 
-- [ ] List each crate's reverse dependencies and the dependency edges nothing uses (a declared dependency no `use`
+- [x] List each crate's reverse dependencies and the dependency edges nothing uses (a declared dependency no `use`
       reaches, a dev-dependency no test needs, a heavy dependency only one feature needs). Remove the unused ones;
       put feature-only ones behind their feature.
-- [ ] No new crates and no change to `docs/src/architecture.md`'s layer table here: splitting crates belongs to the
+- [x] No new crates and no change to `docs/src/architecture.md`'s layer table here: splitting crates belongs to the
       architecture work. `cargo run -p cupertino-layers` stays at 0 problems.
 - [ ] Done when the reverse-dependency count of `cupertino-kit`, `cupertino-ui-render` and `cupertino-server` is
       recorded before and after, and any drop is measured with the same integration run.

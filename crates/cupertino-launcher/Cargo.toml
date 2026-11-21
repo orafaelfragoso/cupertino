@@ -8,7 +8,6 @@ description = "Launcher (search panel) for the Cupertino compositor: desktop ent
 layer = "shell"
 
 [dependencies]
-cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events" }
 async-channel = "2"
 cupertino-apps = { path = "../cupertino-apps", features = ["dbus", "watch"] }
 cupertino-defaults = { path = "../cupertino-defaults" }

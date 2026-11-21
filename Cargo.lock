@@ -1226,7 +1226,6 @@ dependencies = [
  "cupertino-apps",
  "cupertino-assets",
  "cupertino-defaults",
- "cupertino-diagnostic-events",
  "cupertino-icons",
  "cupertino-kit",
  "cupertino-kit-shell",
@@ -1527,7 +1526,6 @@ dependencies = [
  "serde_json",
  "smithay",
  "smithay-drm-extras",
- "tiny-skia",
  "tracing",
  "tracing-subscriber",
  "wayland-backend",
@@ -1570,7 +1568,6 @@ dependencies = [
  "cupertino-protocols",
  "cupertino-wm",
  "libc",
- "serde_json",
  "smithay",
  "tracing",
  "wayland-client",
@@ -1810,7 +1807,6 @@ dependencies = [
  "cupertino-ui-test",
  "object",
  "rustix 1.1.6",
- "toml",
 ]
 
 [[package]]

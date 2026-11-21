@@ -22,4 +22,3 @@ rustix = { version = "1", features = ["event"] }
 [dev-dependencies]
 object = { version = "0.40.0", default-features = false, features = ["read_core", "elf", "std"] }
 rustix = { version = "1", features = ["event", "pipe"] }
-toml = "1"

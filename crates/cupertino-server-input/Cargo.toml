@@ -8,6 +8,9 @@ description = "Compositor input primitives: key routing, keyboard layouts and fi
 [package.metadata.cupertino]
 layer = "core"
 
+[lib]
+test = false
+
 [dependencies]
 cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-geometry = { path = "../cupertino-geometry" }

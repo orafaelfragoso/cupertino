@@ -8,6 +8,9 @@ description = "System icons by semantic name from the asset directory (rasters, 
 [package.metadata.cupertino]
 layer = "system"
 
+[lib]
+test = false
+
 [dependencies]
 cupertino-apps = { path = "../cupertino-apps" }
 cupertino-assets = { path = "../cupertino-assets" }

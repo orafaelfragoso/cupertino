@@ -8,6 +8,9 @@ description = "Animation primitives for a Smithay compositor: reference spring, 
 [package.metadata.cupertino]
 layer = "foundation"
 
+[lib]
+test = false
+
 [dependencies]
 
 [[bench]]

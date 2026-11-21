@@ -7,6 +7,9 @@ description = "The file manager: directory model with batched enumeration and wa
 [package.metadata.cupertino]
 layer = "apps"
 
+[lib]
+test = false
+
 [features]
 # the `cupertino-files` process: a browser window as a client of the server
 app = [
@@ -44,6 +47,7 @@ tempfile = "3"
 name = "cupertino-files"
 path = "src/main.rs"
 required-features = ["app"]
+test = false
 
 [[test]]
 name = "kit"

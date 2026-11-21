@@ -9,10 +9,12 @@ layer = "tools"
 
 [lib]
 name = "cupertino_cli"
+test = false
 
 [[bin]]
 name = "cupertino"
 path = "src/bin/cupertino.rs"
+test = false
 
 [dependencies]
 cupertino-assets = { path = "../cupertino-assets" }

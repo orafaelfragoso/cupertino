@@ -7,6 +7,9 @@ description = "CupertinoKit's file family: the items of a folder, their order, t
 [package.metadata.cupertino]
 layer = "ui"
 
+[lib]
+test = false
+
 [dependencies]
 cupertino-apps = { path = "../cupertino-apps" }
 cupertino-assets = { path = "../cupertino-assets" }

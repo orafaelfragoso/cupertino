@@ -7,6 +7,9 @@ description = "Renderer-agnostic window effect generators for the Cupertino comp
 [package.metadata.cupertino]
 layer = "models"
 
+[lib]
+test = false
+
 [dependencies]
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-animation = { path = "../cupertino-animation" }

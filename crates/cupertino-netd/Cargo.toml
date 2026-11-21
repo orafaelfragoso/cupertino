@@ -7,6 +7,9 @@ description = "Network daemon for the system bus: links, DHCPv4, DNS, Wi-Fi thro
 [package.metadata.cupertino]
 layer = "services"
 
+[lib]
+test = false
+
 [features]
 default = ["dbus"]
 dbus = ["dep:zbus", "dep:cupertino-seat", "dep:async-channel", "dep:cupertino-peer"]
@@ -27,3 +30,4 @@ zeroize = "1"
 name = "cupertino-netd"
 path = "src/main.rs"
 required-features = ["app"]
+test = false

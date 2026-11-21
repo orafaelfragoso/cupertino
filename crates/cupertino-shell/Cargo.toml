@@ -10,10 +10,12 @@ layer = "shell"
 
 [lib]
 path = "src/lib.rs"
+test = false
 
 [[bin]]
 name = "cupertino-shell"
 path = "src/main.rs"
+test = false
 
 [dependencies]
 cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events" }

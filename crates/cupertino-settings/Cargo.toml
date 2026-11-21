@@ -7,6 +7,9 @@ description = "Settings application on CupertinoKit: pane table, sidebar, naviga
 [package.metadata.cupertino]
 layer = "apps"
 
+[lib]
+test = false
+
 [dependencies]
 cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events" }
 cupertino-menu-model = { path = "../cupertino-menu-model" }
@@ -27,3 +30,4 @@ zbus = { version = "5", default-features = false, features = ["async-io", "block
 [[bin]]
 name = "cupertino-settings"
 path = "src/main.rs"
+test = false

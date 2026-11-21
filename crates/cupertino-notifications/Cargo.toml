@@ -7,6 +7,9 @@ description = "Banners and notification list of the Cupertino desktop, a compone
 [package.metadata.cupertino]
 layer = "shell"
 
+[lib]
+test = false
+
 [dependencies]
 async-channel = "2"
 cupertino-apps = { path = "../cupertino-apps" }

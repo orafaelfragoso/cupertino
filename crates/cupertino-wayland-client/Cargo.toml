@@ -7,6 +7,9 @@ description = "Wayland client transport: connection with capability discovery, a
 [package.metadata.cupertino]
 layer = "transport"
 
+[lib]
+test = false
+
 [dependencies]
 cupertino-animation = { path = "../cupertino-animation" }
 cupertino-app-protocols = { path = "../cupertino-app-protocols", features = ["client"] }

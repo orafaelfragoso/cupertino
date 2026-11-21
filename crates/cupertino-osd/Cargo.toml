@@ -7,6 +7,9 @@ description = "Volume, brightness and keyboard-backlight overlay of the Cupertin
 [package.metadata.cupertino]
 layer = "shell"
 
+[lib]
+test = false
+
 [dependencies]
 async-channel = "2"
 cupertino-geometry = { path = "../cupertino-geometry" }

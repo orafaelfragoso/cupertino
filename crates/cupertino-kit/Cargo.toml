@@ -7,6 +7,9 @@ description = "CupertinoKit, the Cupertino UI toolkit: the one crate application
 [package.metadata.cupertino]
 layer = "ui"
 
+[lib]
+test = false
+
 [features]
 # `cupertino_kit::test`, the headless backend for program tests; enabled only in dev-dependencies
 test = ["dep:cupertino-ui-test", "dep:tiny-skia"]

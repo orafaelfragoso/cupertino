@@ -7,6 +7,9 @@ description = "Session agent of the Cupertino desktop, a component of the shell 
 [package.metadata.cupertino]
 layer = "shell"
 
+[lib]
+test = false
+
 [dependencies]
 async-channel = "2"
 async-io = "2"

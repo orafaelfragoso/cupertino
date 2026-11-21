@@ -8,6 +8,9 @@ description = "Who is on the other end of a session bus call: the process behind
 [package.metadata.cupertino]
 layer = "system"
 
+[lib]
+test = false
+
 [dependencies]
 async-lock = "3"
 libc = "0.2"

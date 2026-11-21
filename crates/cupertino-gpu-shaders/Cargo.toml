@@ -8,5 +8,13 @@ description = "Development build step of Cupertino's shaders: the shared module 
 [package.metadata.cupertino]
 layer = "tools"
 
+[lib]
+test = false
+
+[[bin]]
+name = "cupertino-gpu-shaders"
+path = "src/main.rs"
+test = false
+
 [dependencies]
 naga = { version = "24", features = ["wgsl-in", "glsl-out", "spv-out"] }

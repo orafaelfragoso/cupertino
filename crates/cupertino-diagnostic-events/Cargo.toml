@@ -10,6 +10,7 @@ layer = "system"
 
 [lib]
 name = "cupertino_diagnostic_events"
+test = false
 
 [features]
 # The Tracy client. It takes effect only with `--cfg cupertino_tracy` as well (see the README), so `--all-features`, which

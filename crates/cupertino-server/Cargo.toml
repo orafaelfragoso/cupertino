@@ -9,10 +9,12 @@ layer = "core"
 
 [lib]
 name = "cupertino_server"
+test = false
 
 [[bin]]
 name = "cupertino-server"
 path = "src/main.rs"
+test = false
 
 [features]
 default = ["winit", "udev", "dbus"]

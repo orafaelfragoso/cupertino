@@ -7,6 +7,9 @@ description = "CupertinoKit rendering: the display list a window paints into, da
 [package.metadata.cupertino]
 layer = "ui"
 
+[lib]
+test = false
+
 [dependencies]
 bumpalo = { version = "3.20", features = ["collections"] }
 cupertino-geometry = { path = "../cupertino-geometry" }

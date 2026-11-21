@@ -8,6 +8,9 @@ description = "Compositor backend primitives: logind Smithay session, scheduling
 [package.metadata.cupertino]
 layer = "core"
 
+[lib]
+test = false
+
 [dependencies]
 anyhow = "1"
 cupertino-defaults = { path = "../cupertino-defaults" }

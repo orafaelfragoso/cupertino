@@ -7,6 +7,9 @@ description = "The desktop items of the Cupertino desktop, a component of the sh
 [package.metadata.cupertino]
 layer = "shell"
 
+[lib]
+test = false
+
 [dependencies]
 async-channel = "2"
 cupertino-apps = { path = "../cupertino-apps" }

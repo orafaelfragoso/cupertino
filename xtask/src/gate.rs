@@ -787,6 +787,124 @@ fn lockfile_problems(root: &Path) -> Vec<String> {
     problems
 }
 
+/// The manifests of the workspace's packages: every crate under `crates/`, and `xtask`.
+fn package_manifests(root: &Path) -> Vec<PathBuf> {
+    let mut manifests: Vec<PathBuf> = std::fs::read_dir(root.join("crates"))
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.ok().map(|entry| entry.path().join("Cargo.toml")))
+        .filter(|path| path.is_file())
+        .collect();
+    manifests.sort();
+    manifests.push(root.join("xtask/Cargo.toml"));
+    manifests.retain(|path| path.is_file());
+    manifests
+}
+
+/// Whether a `[lib]` or `[[bin]]` table says `test = false`.
+fn test_off(target: Option<&toml::Value>) -> bool {
+    target
+        .and_then(|target| target.get("test"))
+        .and_then(toml::Value::as_bool)
+        == Some(false)
+}
+
+/// The binaries Cargo finds by itself in a package at `krate` named `package`: `src/main.rs`, `src/bin/NAME.rs` and
+/// `src/bin/NAME/main.rs`, as (name, path relative to the package).
+fn discovered_binaries(krate: &Path, package: &str) -> Vec<(String, String)> {
+    let mut found = Vec::new();
+    if krate.join("src/main.rs").is_file() {
+        found.push((package.to_owned(), "src/main.rs".to_owned()));
+    }
+    let mut entries: Vec<PathBuf> = std::fs::read_dir(krate.join("src/bin"))
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .collect();
+    entries.sort();
+    for path in entries {
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if let Some(stem) = name.strip_suffix(".rs") {
+            found.push((stem.to_owned(), format!("src/bin/{name}")));
+        } else if path.join("main.rs").is_file() {
+            found.push((name.to_owned(), format!("src/bin/{name}/main.rs")));
+        }
+    }
+    found
+}
+
+/// Library and binary targets that would build a unit-test copy: unit tests are not allowed in `src/` ([`TEST_FREE`]),
+/// so every `[lib]` and `[[bin]]` says `test = false`, and a library or binary Cargo would find by itself has its
+/// table to say it in. Doc tests are not affected: they are `doctest`.
+fn target_problems(root: &Path) -> Vec<String> {
+    let mut problems = Vec::new();
+    for manifest in package_manifests(root) {
+        let rel = relative(&manifest, root);
+        let krate = manifest.parent().unwrap_or(root);
+        let table = match std::fs::read_to_string(&manifest)
+            .map_err(|error| error.to_string())
+            .and_then(|text| toml::from_str::<toml::Table>(&text).map_err(|e| e.to_string()))
+        {
+            Ok(table) => table,
+            Err(error) => {
+                problems.push(format!("{rel}: cannot be read: {error}"));
+                continue;
+            }
+        };
+        let package = table.get("package");
+        let flag = |key: &str| {
+            package
+                .and_then(|p| p.get(key))
+                .and_then(toml::Value::as_bool)
+        };
+        let name = package
+            .and_then(|package| package.get("name"))
+            .and_then(toml::Value::as_str)
+            .unwrap_or_default();
+        let lib = table.get("lib");
+        let auto_lib = flag("autolib") != Some(false) && krate.join("src/lib.rs").is_file();
+        if (lib.is_some() || auto_lib) && !test_off(lib) {
+            problems.push(format!(
+                "{rel}: the library builds a unit-test copy: its [lib] lacks `test = false`"
+            ));
+        }
+        let bins: Vec<&toml::Value> = table
+            .get("bin")
+            .and_then(toml::Value::as_array)
+            .map(|bins| bins.iter().collect())
+            .unwrap_or_default();
+        let field = |bin: &toml::Value, key: &str| {
+            bin.get(key)
+                .and_then(toml::Value::as_str)
+                .map(str::to_owned)
+        };
+        for bin in &bins {
+            if !test_off(Some(bin)) {
+                let bin_name = field(bin, "name").unwrap_or_default();
+                problems.push(format!(
+                    "{rel}: the binary {bin_name} builds a unit-test copy: its [[bin]] lacks `test = false`"
+                ));
+            }
+        }
+        if flag("autobins") != Some(false) {
+            for (bin_name, path) in discovered_binaries(krate, name) {
+                let listed = bins.iter().any(|bin| {
+                    field(bin, "name").as_deref() == Some(bin_name.as_str())
+                        || field(bin, "path").as_deref() == Some(path.as_str())
+                });
+                if !listed {
+                    problems.push(format!(
+                        "{rel}: the binary {bin_name} ({path}) builds a unit-test copy: it has no [[bin]] with `test = false`"
+                    ));
+                }
+            }
+        }
+    }
+    problems
+}
+
 /// Checks the tree at `root`.
 pub fn run(root: &Path) -> Result<Outcome, String> {
     let mut hits = Vec::new();
@@ -794,6 +912,7 @@ pub fn run(root: &Path) -> Result<Outcome, String> {
     source_problems(root, &mut hits, &mut problems)?;
     problems.extend(protocol_xml_problems(root));
     problems.extend(lockfile_problems(root));
+    problems.extend(target_problems(root));
     problems.extend(crate::licences::problems(root));
     Ok(Outcome { hits, problems })
 }

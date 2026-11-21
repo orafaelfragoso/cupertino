@@ -7,6 +7,9 @@ description = "Cupertino's thin GPU layer for 2D rendering: devices, buffers, te
 [package.metadata.cupertino]
 layer = "graphics"
 
+[lib]
+test = false
+
 [dependencies]
 glow = "0.16"
 libc = "0.2"

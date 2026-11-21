@@ -7,6 +7,9 @@ description = "Session manager: owns the login screen's socket and the console, 
 [package.metadata.cupertino]
 layer = "services"
 
+[lib]
+test = false
+
 [features]
 default = []
 # the `cupertino-sessiond` process: the manager and its worker
@@ -29,3 +32,4 @@ zeroize = "1"
 name = "cupertino-sessiond"
 path = "src/main.rs"
 required-features = ["app"]
+test = false

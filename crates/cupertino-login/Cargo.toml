@@ -7,6 +7,9 @@ description = "Lock screen and greeter for the Cupertino compositor: password en
 [package.metadata.cupertino]
 layer = "shell"
 
+[lib]
+test = false
+
 [features]
 default = []
 dbus = ["dep:zbus", "dep:cupertino-radios", "dep:cupertino-peer", "dep:futures-lite"]
@@ -54,3 +57,4 @@ harness = false
 name = "cupertino-login"
 path = "src/main.rs"
 required-features = ["app"]
+test = false

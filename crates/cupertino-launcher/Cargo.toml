@@ -7,6 +7,9 @@ description = "Launcher (search panel) for the Cupertino compositor: desktop ent
 [package.metadata.cupertino]
 layer = "shell"
 
+[lib]
+test = false
+
 [dependencies]
 cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events" }
 async-channel = "2"

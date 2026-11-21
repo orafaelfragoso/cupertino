@@ -9,6 +9,9 @@ publish = false
 [package.metadata.cupertino]
 layer = "testing"
 
+[lib]
+test = false
+
 [dev-dependencies]
 calloop = "0.14"
 cupertino-assets = { path = "../cupertino-assets" }

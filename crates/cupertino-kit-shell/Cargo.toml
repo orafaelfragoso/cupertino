@@ -8,6 +8,9 @@ description = "The shell's extension to CupertinoKit"
 [package.metadata.cupertino]
 layer = "shellkit"
 
+[lib]
+test = false
+
 [dependencies]
 async-io = "2"
 cupertino-assets = { path = "../cupertino-assets" }

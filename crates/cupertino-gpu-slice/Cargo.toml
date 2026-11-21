@@ -9,6 +9,11 @@ description = "Development check of the GPU buffer handoff: a window drawn with 
 [package.metadata.cupertino]
 layer = "tools"
 
+[[bin]]
+name = "cupertino-gpu-slice"
+path = "src/main.rs"
+test = false
+
 [dependencies]
 drm = "0.14.1"
 libc = "0.2.191"

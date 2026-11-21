@@ -8,4 +8,7 @@ description = "Display mode model: the scaled \"looks like\" list of a display (
 [package.metadata.cupertino]
 layer = "models"
 
+[lib]
+test = false
+
 [dependencies]

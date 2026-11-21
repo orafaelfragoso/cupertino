@@ -10,10 +10,12 @@ layer = "render"
 
 [lib]
 name = "cupertino_cursor"
+test = false
 
 [[bin]]
 name = "cupertino-cursor"
 path = "src/bin/cupertino-cursor.rs"
+test = false
 
 [dependencies]
 tiny-skia = "0.12"

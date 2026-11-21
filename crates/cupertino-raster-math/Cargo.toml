@@ -7,6 +7,9 @@ description = "The one definition of the drawing maths every Cupertino renderer 
 [package.metadata.cupertino]
 layer = "graphics"
 
+[lib]
+test = false
+
 [dependencies]
 swash = "0.2.10"
 

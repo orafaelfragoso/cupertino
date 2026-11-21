@@ -12,6 +12,7 @@ layer = "ui"
 [lib]
 name = "cupertinokit"
 crate-type = ["cdylib", "rlib"]
+test = false
 
 [dependencies]
 cupertino-kit = { path = "../cupertino-kit" }

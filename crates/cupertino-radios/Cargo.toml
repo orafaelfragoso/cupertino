@@ -8,6 +8,9 @@ description = "The Wi-Fi and Bluetooth radios through whichever service owns the
 [package.metadata.cupertino]
 layer = "system"
 
+[lib]
+test = false
+
 [features]
 default = []
 # the services over the system bus; without it only the readings' types

@@ -7,6 +7,9 @@ description = "Screenshot tool of the Cupertino desktop: full-screen, window and
 [package.metadata.cupertino]
 layer = "shell"
 
+[lib]
+test = false
+
 [dependencies]
 async-channel = "2"
 cupertino-defaults = { path = "../cupertino-defaults" }
@@ -28,3 +31,4 @@ name = "screenshot_capture"
 [[bin]]
 name = "cupertino-screenshot"
 path = "src/main.rs"
+test = false

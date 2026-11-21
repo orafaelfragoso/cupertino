@@ -8,5 +8,8 @@ description = "Typed application menus shared by CupertinoKit and the menu bar: 
 [package.metadata.cupertino]
 layer = "foundation"
 
+[lib]
+test = false
+
 [dependencies]
 cupertino-keyboard = { path = "../cupertino-keyboard" }

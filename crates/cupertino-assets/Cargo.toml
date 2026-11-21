@@ -7,9 +7,13 @@ description = "The asset packs of the Cupertino processes: finds and reads them 
 [package.metadata.cupertino]
 layer = "system"
 
+[lib]
+test = false
+
 [[bin]]
 name = "cupertino-assets"
 path = "src/bin/cupertino-assets.rs"
+test = false
 
 [dependencies]
 cupertino-theme = { path = "../cupertino-theme" }

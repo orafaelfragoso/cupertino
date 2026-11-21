@@ -8,6 +8,9 @@ description = "Application registry shared by the Cupertino processes: desktop e
 [package.metadata.cupertino]
 layer = "system"
 
+[lib]
+test = false
+
 [features]
 default = []
 # `activate`: `org.freedesktop.Application.Activate` on the session bus

@@ -8,6 +8,9 @@ description = "Renderer-neutral per-output scene commands, desktop drawing order
 [package.metadata.cupertino]
 layer = "models"
 
+[lib]
+test = false
+
 [dependencies]
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-effects = { path = "../cupertino-effects" }

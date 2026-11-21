@@ -8,6 +8,9 @@ description = "CupertinoKit test harness: a headless window system, event-trace 
 [package.metadata.cupertino]
 layer = "ui"
 
+[lib]
+test = false
+
 [dependencies]
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-assets = { path = "../cupertino-assets" }

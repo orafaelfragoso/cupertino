@@ -8,6 +8,9 @@ description = "Seat session over systemd-logind's D-Bus protocol without libseat
 [package.metadata.cupertino]
 layer = "platform"
 
+[lib]
+test = false
+
 [dependencies]
 cupertino-devices = { path = "../cupertino-devices" }
 rustix = { version = "1", features = ["fs"] }

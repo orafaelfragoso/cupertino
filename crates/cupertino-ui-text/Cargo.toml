@@ -7,6 +7,9 @@ description = "CupertinoKit text: fonts and fallback, paragraph layout (bidi, li
 [package.metadata.cupertino]
 layer = "ui"
 
+[lib]
+test = false
+
 [dependencies]
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-raster-math = { path = "../cupertino-raster-math" }

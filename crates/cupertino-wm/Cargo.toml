@@ -7,6 +7,9 @@ description = "Pure-logic window-management model: apps, windows, lifecycle stat
 [package.metadata.cupertino]
 layer = "models"
 
+[lib]
+test = false
+
 [dependencies]
 cupertino-animation = { path = "../cupertino-animation" }
 cupertino-theme = { path = "../cupertino-theme" }

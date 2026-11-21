@@ -8,6 +8,9 @@ description = "Dependency-free 2D geometry for the Cupertino compositor: rects, 
 [package.metadata.cupertino]
 layer = "foundation"
 
+[lib]
+test = false
+
 [dependencies]
 
 [[bench]]

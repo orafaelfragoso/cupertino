@@ -7,6 +7,9 @@ description = "Overview of the Cupertino desktop, a component of the shell host:
 [package.metadata.cupertino]
 layer = "shell"
 
+[lib]
+test = false
+
 [dependencies]
 async-channel = "2"
 cupertino-defaults = { path = "../cupertino-defaults" }

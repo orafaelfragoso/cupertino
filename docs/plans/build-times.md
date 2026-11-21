@@ -63,8 +63,8 @@ whole crate (53,000 lines for the server). `cargo xtask ci` already sets `CARGO_
 Unit tests in `src/` are forbidden, yet Cargo builds a test copy of every library (5.5 s for the server) and clippy
 `--all-targets` checks it again.
 
-- [ ] `test = false` under `[lib]` (and `[[bin]]`) in every crate; doc tests keep running (`doctest` stays on).
-- [ ] The gate fails a crate whose `[lib]` or `[[bin]]` lacks `test = false`, so a new crate cannot bring the copy back.
+- [x] `test = false` under `[lib]` (and `[[bin]]`) in every crate; doc tests keep running (`doctest` stays on).
+- [x] The gate fails a crate whose `[lib]` or `[[bin]]` lacks `test = false`, so a new crate cannot bring the copy back.
 - [ ] Done when the server's timing report has no `lib (test)` or `bin (test)` unit and nextest lists the same tests.
 
 ### 4. One test binary per crate (`crates/*/tests/`, gate)

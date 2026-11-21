@@ -8,6 +8,9 @@ description = "Compositor rendering primitives: scene lowering, GLES passes, win
 [package.metadata.cupertino]
 layer = "core"
 
+[lib]
+test = false
+
 [dependencies]
 accesskit = "0.25"
 accesskit_unix = "0.24"

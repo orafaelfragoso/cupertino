@@ -7,6 +7,9 @@ description = "Menu bar for the Cupertino desktop: menu model and layout, intera
 [package.metadata.cupertino]
 layer = "shell"
 
+[lib]
+test = false
+
 [dependencies]
 cupertino-apps = { path = "../cupertino-apps" }
 cupertino-assets = { path = "../cupertino-assets" }

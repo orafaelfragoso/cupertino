@@ -8,6 +8,11 @@ description = "The native desktop controller: scoped session consent, input and 
 [package.metadata.cupertino]
 layer = "services"
 
+[[bin]]
+name = "cupertino-control"
+path = "src/main.rs"
+test = false
+
 [dependencies]
 cupertino-control-model = { path = "../cupertino-control-model" }
 cupertino-app-protocols = { path = "../cupertino-app-protocols" }

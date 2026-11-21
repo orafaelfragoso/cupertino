@@ -6,3 +6,6 @@ license.workspace = true
 description = "Pure desktop-control grant lifecycle and input ownership, without transport or device I/O"
 [package.metadata.cupertino]
 layer = "models"
+
+[lib]
+test = false

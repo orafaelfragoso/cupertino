@@ -7,6 +7,9 @@ description = "Protocol between the login screen and the session manager: typed 
 [package.metadata.cupertino]
 layer = "protocol"
 
+[lib]
+test = false
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

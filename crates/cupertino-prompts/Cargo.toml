@@ -7,6 +7,9 @@ description = "The session's prompts: the polkit authentication agent, the keyri
 [package.metadata.cupertino]
 layer = "shell"
 
+[lib]
+test = false
+
 [dependencies]
 cupertino-assets = { path = "../cupertino-assets" }
 cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events" }
@@ -36,3 +39,4 @@ name = "prompts_capture"
 [[bin]]
 name = "cupertino-prompts"
 path = "src/main.rs"
+test = false

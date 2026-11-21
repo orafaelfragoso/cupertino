@@ -7,6 +7,9 @@ description = "Device discovery and input without libudev or libinput: sysfs enu
 [package.metadata.cupertino]
 layer = "platform"
 
+[lib]
+test = false
+
 [dependencies]
 rustix = { version = "1", features = ["fs", "net", "time"] }
 

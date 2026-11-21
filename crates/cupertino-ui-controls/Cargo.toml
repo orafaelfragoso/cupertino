@@ -7,6 +7,9 @@ description = "CupertinoKit controls: text, icons, buttons, toggles, text and se
 [package.metadata.cupertino]
 layer = "ui"
 
+[lib]
+test = false
+
 [dependencies]
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-menu-model = { path = "../cupertino-menu-model" }

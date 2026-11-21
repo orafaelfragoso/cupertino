@@ -7,6 +7,9 @@ description = "The portal's file chooser and app chooser, a component of the she
 [package.metadata.cupertino]
 layer = "shell"
 
+[lib]
+test = false
+
 [dependencies]
 async-channel = "2"
 cupertino-apps = { path = "../cupertino-apps" }

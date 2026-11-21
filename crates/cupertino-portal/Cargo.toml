@@ -7,6 +7,9 @@ description = "xdg-desktop-portal backend of the session, with no interface of i
 [package.metadata.cupertino]
 layer = "services"
 
+[lib]
+test = false
+
 [dependencies]
 cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events" }
 async-channel = "2"
@@ -32,3 +35,4 @@ zbus = { version = "5", default-features = false, features = ["async-io", "block
 [[bin]]
 name = "cupertino-portal"
 path = "src/main.rs"
+test = false

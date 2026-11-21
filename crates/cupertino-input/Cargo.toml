@@ -7,6 +7,9 @@ description = "Input model for the Cupertino compositor: touchpad gesture recogn
 [package.metadata.cupertino]
 layer = "models"
 
+[lib]
+test = false
+
 [dependencies]
 cupertino-animation = { path = "../cupertino-animation" }
 cupertino-keyboard = { path = "../cupertino-keyboard" }

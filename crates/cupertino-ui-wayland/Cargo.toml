@@ -7,6 +7,9 @@ description = "CupertinoKit's window system on the Cupertino transport, and draw
 [package.metadata.cupertino]
 layer = "ui"
 
+[lib]
+test = false
+
 [dependencies]
 accesskit = "0.25"
 accesskit_unix = "0.24"

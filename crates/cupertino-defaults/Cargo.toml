@@ -8,6 +8,9 @@ description = "Settings store shared by the Cupertino processes: where each sett
 [package.metadata.cupertino]
 layer = "system"
 
+[lib]
+test = false
+
 [dependencies]
 async-io = "2"
 cupertino-keyboard = { path = "../cupertino-keyboard" }

@@ -7,6 +7,9 @@ description = "Dock for the Cupertino desktop as a component of the shell host: 
 [package.metadata.cupertino]
 layer = "shell"
 
+[lib]
+test = false
+
 [dependencies]
 async-channel = "2"
 async-io = "2"

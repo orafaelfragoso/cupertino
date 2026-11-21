@@ -7,6 +7,9 @@ description = "Control panel of the Cupertino shell, a component of the shell ho
 [package.metadata.cupertino]
 layer = "shell"
 
+[lib]
+test = false
+
 [dependencies]
 async-channel = "2"
 cupertino-defaults = { path = "../cupertino-defaults" }

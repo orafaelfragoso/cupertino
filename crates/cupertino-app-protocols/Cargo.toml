@@ -8,6 +8,9 @@ description = "Public Wayland protocols of the Cupertino server that any client 
 [package.metadata.cupertino]
 layer = "protocol"
 
+[lib]
+test = false
+
 [features]
 client = ["dep:wayland-client", "dep:wayland-backend", "dep:wayland-scanner", "dep:bitflags"]
 server = ["dep:wayland-server", "dep:wayland-backend", "dep:wayland-scanner", "dep:bitflags"]

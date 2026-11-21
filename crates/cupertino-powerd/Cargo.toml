@@ -7,6 +7,9 @@ description = "Power and backlight daemon for the system bus: power_supply and b
 [package.metadata.cupertino]
 layer = "services"
 
+[lib]
+test = false
+
 [features]
 default = ["dbus"]
 dbus = ["dep:zbus", "dep:cupertino-seat"]
@@ -24,3 +27,4 @@ zbus = { version = "5", default-features = false, features = ["async-io", "block
 name = "cupertino-powerd"
 path = "src/main.rs"
 required-features = ["app"]
+test = false

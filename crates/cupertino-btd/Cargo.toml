@@ -7,6 +7,9 @@ description = "Bluetooth daemon for the system bus: adapter and device inventory
 [package.metadata.cupertino]
 layer = "services"
 
+[lib]
+test = false
+
 [features]
 default = ["dbus"]
 dbus = ["dep:zbus", "dep:cupertino-seat", "dep:async-channel", "dep:serde"]
@@ -25,3 +28,4 @@ zbus = { version = "5", default-features = false, features = ["async-io", "block
 name = "cupertino-btd"
 path = "src/main.rs"
 required-features = ["app"]
+test = false

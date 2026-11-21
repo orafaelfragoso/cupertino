@@ -8,6 +8,9 @@ description = "CupertinoKit runtime: the application model, elements and the ret
 [package.metadata.cupertino]
 layer = "ui"
 
+[lib]
+test = false
+
 [dependencies]
 bumpalo = { version = "3.20", features = ["collections"] }
 cupertino-app-protocols = { path = "../cupertino-app-protocols" }

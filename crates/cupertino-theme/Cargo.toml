@@ -7,6 +7,9 @@ description = "Typed access to the Cupertino design tokens, material recipes and
 [package.metadata.cupertino]
 layer = "foundation"
 
+[lib]
+test = false
+
 [dependencies]
 cupertino-animation = { path = "../cupertino-animation" }
 cupertino-geometry = { path = "../cupertino-geometry" }

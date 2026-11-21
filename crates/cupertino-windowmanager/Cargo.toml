@@ -8,6 +8,9 @@ description = "Window manager of the Cupertino desktop, a component of the shell
 [package.metadata.cupertino]
 layer = "shell"
 
+[lib]
+test = false
+
 [dependencies]
 cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-kit = { path = "../cupertino-kit" }

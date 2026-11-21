@@ -9,10 +9,12 @@ layer = "render"
 
 [lib]
 name = "cupertino_glass"
+test = false
 
 [[bin]]
 name = "glass-renderer"
 path = "src/bin/glass_renderer.rs"
+test = false
 
 [dependencies]
 cupertino-assets = { path = "../cupertino-assets" }

@@ -29,10 +29,12 @@ use zbus::Connection;
 const CHANGE_INTERVAL: Duration = Duration::from_millis(50);
 /// At most this many signals are kept for one change; past it the whole tree is read instead.
 const CHANGE_BATCH: usize = 256;
-/// The first wait before a status item's menu that could not be read is read again; it doubles up to
-/// [`RETRY_LAST`], then the failure is reported. An item can name its menu before the menu's object answers.
+/// The first wait before a menu that could not be read is read again; it doubles up to [`RETRY_LAST`], then the failure
+/// is reported. An item or a window can name its menu before the menu's object answers: Chromium and Electron announce
+/// a window's menu seconds before they export it. A window's follower ends with its holder, so the waits do too.
 const RETRY_FIRST: Duration = Duration::from_millis(100);
-const RETRY_LAST: Duration = Duration::from_millis(1600);
+/// The last wait of the doubling from [`RETRY_FIRST`]: 12.7 s in all before the failure is reported.
+const RETRY_LAST: Duration = Duration::from_millis(6400);
 
 /// How long a follower waits for an exporter's answers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,9 +71,9 @@ pub(crate) struct Follower {
 }
 
 impl Follower {
-    /// Follow `menu` and report its tree. `patient` is for a status item's menu: it is told that it is about to show
-    /// before the first read, as an exporter that fills its menu only then expects, and a first read that fails is
-    /// made again for a while.
+    /// Follow `menu` and report its tree; a first read that fails is made again for a while. `patient` is for a status
+    /// item's menu: it is told that it is about to show before the first read, as an exporter that fills its menu only
+    /// then expects.
     pub(crate) fn start(
         conn: &Connection,
         out: Out,
@@ -222,7 +224,7 @@ async fn run(
             overflowed: false,
         },
         tree: MenuTree::default(),
-        retry: patient.then_some(RETRY_FIRST),
+        retry: Some(RETRY_FIRST),
         show_reported: false,
     };
     if patient {
@@ -303,7 +305,7 @@ impl<S: Stream<Item = MenuUpdate> + Unpin> State<S> {
         }
     }
 
-    /// A read failed. The first read of a patient follower is made again without a word while its waits last.
+    /// A read failed. The first read is made again without a word while its waits last.
     fn failed(&mut self, error: impl fmt::Display) {
         let unread = self.tree.is_unread();
         if unread && self.retry.is_some() {

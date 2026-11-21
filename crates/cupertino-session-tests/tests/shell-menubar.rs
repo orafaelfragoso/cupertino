@@ -334,8 +334,10 @@ fn the_menu_bar_restarts_alone_holding_its_place_after_injected_panics() {
             // watcher is already gone with it: the crash is taken all the same
             let _ = register(&mut rig, &session, &item);
         }
-        // every turn until it runs again the bar's space stays reserved and its picture shows, held or drawn anew;
-        // but the server holds nothing of a component it gives up, the fifth failure in a row (D16)
+        // every turn until it runs again the bar's space stays reserved and its picture shows, live, held or drawn
+        // anew: the crashed instance's bar shows live until its connection ends, also once its teardown destroyed the
+        // role object, and is then held as the output's menu bar. But the server holds nothing of a component it gives
+        // up, the fifth failure in a row (D16)
         let gives_up = (crash + 1) % CRASHES_IN_A_ROW == 0;
         let mut watch = |rig: &mut Rig| {
             colours.extend(dock_colour(rig));
@@ -348,18 +350,22 @@ fn the_menu_bar_restarts_alone_holding_its_place_after_injected_panics() {
                 "the bar's space stays reserved after a crash at {at}"
             );
             assert!(
-                rig.state.menu_bars.has_bar(output) || {
-                    let holds = rig
-                        .state
-                        .hosts
-                        .held_surfaces()
-                        .iter()
-                        .any(|h| h.component == "menubar" && h.picture.is_some());
-                    held |= holds;
-                    holds
-                },
-                "the bar or its held picture shows after a crash at {at}"
+                rig.state.hosts.persistent_shows_on("menubar", output),
+                "the bar's picture shows, live or held, after a crash at {at}"
             );
+            let holds: Vec<bool> = rig
+                .state
+                .hosts
+                .held_surfaces()
+                .iter()
+                .filter(|h| h.component == "menubar")
+                .map(|h| h.picture.as_ref().is_some_and(|p| p.menu_bar))
+                .collect();
+            assert!(
+                holds.iter().all(|&bar| bar),
+                "the bar is held with its picture, as the output's menu bar, after a crash at {at}"
+            );
+            held |= !holds.is_empty();
         };
         if gives_up {
             rig.until(

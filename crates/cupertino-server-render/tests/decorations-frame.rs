@@ -1,13 +1,13 @@
 //! The frame's geometry and what lies under the pointer: layout per titlebar style, hit-testing with its priorities,
 //! the resize zones and the double-click action.
 
-use cupertino_decorations::chrome::Direction;
-use cupertino_decorations::layout::title_slot;
-use cupertino_decorations::{
+use cupertino_geometry::{Point, Rect, Size};
+use cupertino_server_render::decorations::chrome::Direction;
+use cupertino_server_render::decorations::layout::title_slot;
+use cupertino_server_render::decorations::{
     resize_hit, ButtonKind, DecorationMetrics, DoubleClickAction, FrameLayout, Hit, ResizeEdge,
     TitleAlignment, TitlebarStyle,
 };
-use cupertino_geometry::{Point, Rect, Size};
 
 const CONTENT: Size = Size {
     width: 400.0,
@@ -20,7 +20,7 @@ fn layout(style: TitlebarStyle) -> FrameLayout {
 }
 
 fn hit(layout: &FrameLayout, x: f64, y: f64, resizable: bool) -> Hit {
-    cupertino_decorations::hit::hit_test(
+    cupertino_server_render::decorations::hit::hit_test(
         layout,
         &DecorationMetrics::default(),
         Point::new(x, y),
@@ -199,11 +199,13 @@ fn the_pointer_hits_what_lies_under_it() {
 fn the_input_region_and_the_button_group_follow_the_layout() {
     let metrics = DecorationMetrics::default();
     let l = layout(TitlebarStyle::Standard);
-    let region = cupertino_decorations::hit::input_region(&l, &metrics);
+    let region = cupertino_server_render::decorations::hit::input_region(&l, &metrics);
     assert_eq!(region, l.frame.outset(metrics.resize_outset));
     let inside = l.button(ButtonKind::Minimize).center;
-    assert!(cupertino_decorations::hit::in_button_group(&l, inside));
-    assert!(!cupertino_decorations::hit::in_button_group(
+    assert!(cupertino_server_render::decorations::hit::in_button_group(
+        &l, inside
+    ));
+    assert!(!cupertino_server_render::decorations::hit::in_button_group(
         &l,
         Point::new(300.0, 16.0)
     ));
@@ -266,7 +268,7 @@ fn only_the_title_bar_runs_the_double_click_action() {
     ];
     for (hit, configured, expected) in cases {
         assert_eq!(
-            cupertino_decorations::hit::double_click(hit, configured),
+            cupertino_server_render::decorations::hit::double_click(hit, configured),
             expected
         );
     }

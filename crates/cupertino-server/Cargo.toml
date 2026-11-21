@@ -42,7 +42,6 @@ cupertino-theme = { path = "../cupertino-theme" }
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-glass = { path = "../cupertino-glass" }
 cupertino-gpu = { path = "../cupertino-gpu" }
-cupertino-decorations = { path = "../cupertino-decorations" }
 cupertino-effects = { path = "../cupertino-effects" }
 cupertino-input = { path = "../cupertino-input" }
 cupertino-keyboard = { path = "../cupertino-keyboard" }

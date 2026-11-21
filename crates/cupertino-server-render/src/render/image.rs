@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use cupertino_decorations::DrawList;
+use crate::decorations::DrawList;
 
 use super::chrome::ChromeImage;
 use super::uploads::Drawer;

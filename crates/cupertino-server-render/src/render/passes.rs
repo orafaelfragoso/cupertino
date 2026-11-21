@@ -420,7 +420,7 @@ impl Passes {
         &self,
         name: u32,
         size: (u32, u32),
-        list: &cupertino_decorations::DrawList,
+        list: &crate::decorations::DrawList,
     ) -> cupertino_gpu::Result<()> {
         if self.made.borrow().is_none() {
             return Err(cupertino_gpu::Error::Invalid(

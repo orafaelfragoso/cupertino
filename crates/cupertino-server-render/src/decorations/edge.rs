@@ -12,7 +12,7 @@
 //! A line narrower than a device pixel is drawn one device pixel wide at the share of its strength the pixel's
 //! coverage gives ([`Hairline::device`]), so half a point at 1× is one pixel at half strength.
 
-use crate::palette::Rgba;
+use crate::decorations::palette::Rgba;
 use cupertino_theme::window_shadow::{window_shadow, ShadowOption};
 
 /// Width in points of the outline around a window or a menu.

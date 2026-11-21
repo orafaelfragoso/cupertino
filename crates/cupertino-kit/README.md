@@ -269,4 +269,4 @@ appearance, the timing reports) in `cupertino-ui-wayland`, where `cupertino-kit`
 | the window system (`WaylandWindowSystem`, `SurfaceRoles`, `ShmPresenter`, the AT-SPI adapter), the connection and its outputs and raw input (`cupertino-wayland-client`) | `app::run` and a Kit window's values; the shell's in `cupertino-kit-shell` |
 | the timing reports' wiring (`Timed`, `frame_timing_json`, `scroll_timing_json`, `start_preferences`) | `CUPERTINO_SCROLL_TIMING` and `CUPERTINO_FRAME_TIMING`, which every `app::run` reads |
 | the theme data (`cupertino_assets::theme::load`, on the methods `shell` and `apps` crates must not call) | `theme::system_color` for a named colour; the theme a widget is painted with; the menu bar's metrics from `cupertino-kit-shell` |
-| drawing maths (`cupertino-raster-math`) and the compositor's drawing (`cupertino-decorations`) | `render::Effect` and the controls |
+| drawing maths (`cupertino-raster-math`) and the compositor's drawing (`cupertino-server-render::decorations`) | `render::Effect` and the controls |

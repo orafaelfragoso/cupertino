@@ -4,13 +4,13 @@
 
 use std::rc::Rc;
 
-use cupertino_decorations::TitlebarStyle;
 use cupertino_defaults::accessibility::DisplayOptions;
 use cupertino_effects::{DockEdge, Mesh, MinimizeEffect, Vertex};
 use cupertino_scene::{
     BorderFalloff, Clip, ImageRole, OutputPoint, Placement, RoundedRect, SceneItem, SceneKind,
     Shadow, Source, SurfaceRole,
 };
+use cupertino_server_render::decorations::TitlebarStyle;
 use cupertino_theme::glass::adapts_foreground;
 use cupertino_theme::WindowState;
 use cupertino_wm::{OutputId, Presentation, Rect, WindowId, Wm};
@@ -239,7 +239,7 @@ fn local(r: Rect, origin: &Rect) -> smithay::utils::Rectangle<f64, Logical> {
     smithay::utils::Rectangle::new((r.x - origin.x, r.y - origin.y).into(), (r.w, r.h).into())
 }
 
-/// The outline of an edge ([`cupertino_decorations::Edge`]) just outside `rect`, whose corners are rounded by
+/// The outline of an edge ([`cupertino_server_render::decorations::Edge`]) just outside `rect`, whose corners are rounded by
 /// `radius`: a ring of whole device pixels whose inner side is the shape's outline, at `alpha`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn outline_item(
@@ -248,7 +248,7 @@ pub(crate) fn outline_item(
     rect: smithay::utils::Rectangle<f64, Logical>,
     radius: f64,
     continuous: bool,
-    edge: &cupertino_decorations::Edge,
+    edge: &cupertino_server_render::decorations::Edge,
     scale: f64,
     alpha: f32,
 ) -> Option<Piece> {
@@ -269,7 +269,7 @@ pub(crate) fn inner_rim_item(
     rect: smithay::utils::Rectangle<f64, Logical>,
     radius: f64,
     continuous: bool,
-    edge: &cupertino_decorations::Edge,
+    edge: &cupertino_server_render::decorations::Edge,
     scale: f64,
     alpha: f32,
 ) -> Option<Piece> {
@@ -283,8 +283,8 @@ pub(crate) fn inner_rim_item(
 
 /// One line of an edge and the side of the shape's outline it lies on.
 struct EdgeLine {
-    line: cupertino_decorations::Hairline,
-    falloff: cupertino_decorations::OutlineFalloff,
+    line: cupertino_server_render::decorations::Hairline,
+    falloff: cupertino_server_render::decorations::OutlineFalloff,
     /// Just outside the outline, else just inside it.
     outside: bool,
 }
@@ -570,7 +570,7 @@ fn shadow_scale(plan: &WindowPlan) -> f64 {
 /// device-pixel values of `ShadowParams::gpu` converted back to points.
 fn shadow_data(
     p: &SceneParams<'_>,
-    params: &cupertino_decorations::ShadowParams,
+    params: &cupertino_server_render::decorations::ShadowParams,
     plan: &WindowPlan,
     corner: f64,
     alpha: f64,
@@ -615,7 +615,7 @@ pub(crate) fn shadow_item(
     p: &SceneParams<'_>,
     kind: SceneKind,
     index: u64,
-    params: &cupertino_decorations::ShadowParams,
+    params: &cupertino_server_render::decorations::ShadowParams,
     plan: &WindowPlan,
     corner: f64,
     alpha: f64,
@@ -921,7 +921,12 @@ struct WindowEdgeLines {
 
 impl WindowEdgeLines {
     /// Put the inner rim of `edge` at `alpha` in front of `out` (the window's pieces, front to back).
-    fn rim(&self, out: &mut Vec<Piece>, edge: &cupertino_decorations::Edge, alpha: f32) {
+    fn rim(
+        &self,
+        out: &mut Vec<Piece>,
+        edge: &cupertino_server_render::decorations::Edge,
+        alpha: f32,
+    ) {
         if let Some(rim) = inner_rim_item(
             SceneKind::ClientRim,
             self.index,
@@ -937,7 +942,12 @@ impl WindowEdgeLines {
     }
 
     /// Put the outline of `edge` at `alpha` behind `out` (the window's pieces, front to back).
-    fn outline(&self, out: &mut Vec<Piece>, edge: &cupertino_decorations::Edge, alpha: f32) {
+    fn outline(
+        &self,
+        out: &mut Vec<Piece>,
+        edge: &cupertino_server_render::decorations::Edge,
+        alpha: f32,
+    ) {
         out.extend(outline_item(
             SceneKind::Outline,
             self.index,

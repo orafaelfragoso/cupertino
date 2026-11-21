@@ -1,5 +1,5 @@
 //! The chrome (title bars, their window buttons, rims) drawn on the GPU from its list of draws
-//! ([`cupertino_decorations::DrawList`]): the borrowed device lays the list's draws one after the other into a
+//! ([`crate::decorations::DrawList`]): the borrowed device lays the list's draws one after the other into a
 //! texture of the renderer with the compositor's chrome program ([`super::passes::CHROME`]), which computes the shapes
 //! from the same distance as the CPU painter and lays each over what the draws before it made with the painter's own
 //! arithmetic (it reads the image below from a second texture, blending off), so both give the same bytes. The
@@ -16,9 +16,9 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
-use cupertino_decorations::coverage::{Outline, Shade};
-use cupertino_decorations::palette::Rgba;
-use cupertino_decorations::{Draw, DrawList};
+use crate::decorations::coverage::{Outline, Shade};
+use crate::decorations::palette::Rgba;
+use crate::decorations::{Draw, DrawList};
 use cupertino_gpu::atlas::{Atlas, AtlasConfig};
 use cupertino_gpu::shaders::NamedBinding;
 use cupertino_gpu::{
@@ -220,7 +220,7 @@ fn path_mask(path: &tiny_skia::Path, stroke: Option<f32>, frame: (u32, u32)) -> 
     let moved = path
         .clone()
         .transform(tiny_skia::Transform::from_translate(-ox, -oy))?;
-    let paint = cupertino_decorations::draws::solid([1.0; 4]);
+    let paint = crate::decorations::draws::solid([1.0; 4]);
     match stroke {
         Some(width) => {
             let s = tiny_skia::Stroke {

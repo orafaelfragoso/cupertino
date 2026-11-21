@@ -61,7 +61,7 @@ as dev-dependencies, and only dev-dependencies point at a `testing` crate. The c
 | `platform` (kernel interfaces that more than one program needs) | `cupertino-devices`, `cupertino-seat` | `foundation`, `platform` |
 | `protocol` (wire schemas) | `cupertino-app-protocols`, `cupertino-login-ipc`, `cupertino-protocols` | `foundation`, `protocol` |
 | `transport` (client connections without widgets) | `cupertino-shell-client`, `cupertino-wayland-client` | `foundation`, `system`, `platform`, `protocol`, `transport` |
-| `render` (the compositor's own drawing) | `cupertino-cursor`, `cupertino-decorations`, `cupertino-glass` | `foundation`, `graphics`, `system`, `platform`, `render` |
+| `render` (the compositor's own drawing) | `cupertino-cursor`, `cupertino-glass` | `foundation`, `graphics`, `system`, `platform`, `render` |
 | `ui` (the toolkit) | `cupertino-kit`, `cupertino-ui-abi`, `cupertino-ui-controls`, `cupertino-ui-core`, `cupertino-ui-files`, `cupertino-ui-render`, `cupertino-ui-test`, `cupertino-ui-text`, `cupertino-ui-wayland` | `foundation`, `graphics`, `system`, `protocol`, `transport`, `ui` |
 | `shellkit` (the shell's extension of the toolkit) | `cupertino-kit-shell` | `foundation`, `system`, `protocol`, `transport`, `ui` |
 | `core` (the compositor) | `cupertino-server`, `cupertino-server-backend`, `cupertino-server-input`, `cupertino-server-render` | `foundation`, `graphics`, `models`, `system`, `platform`, `protocol`, `render`, `core` |

@@ -9,10 +9,10 @@
 //! inactive window (a translucent grey disc without a ring, colour returns while the group is hovered), disabled (the
 //! same disc, no glyph).
 
-use crate::coverage::{Outline, Shade};
-use crate::draws::{paint_into, Draw};
-use crate::metrics::{ButtonKind, DecorationMetrics};
-use crate::palette::{Palette, Rgba};
+use crate::decorations::coverage::{Outline, Shade};
+use crate::decorations::draws::{paint_into, Draw};
+use crate::decorations::metrics::{ButtonKind, DecorationMetrics};
+use crate::decorations::palette::{Palette, Rgba};
 use cupertino_geometry::Point;
 use tiny_skia::{PathBuilder, Pixmap};
 

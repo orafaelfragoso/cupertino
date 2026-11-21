@@ -796,7 +796,7 @@ impl XdgShellHandler for Cupertino {
             toplevel: surface,
             mapped: false,
             server_side: legacy,
-            titlebar: cupertino_decorations::TitlebarStyle::Standard,
+            titlebar: cupertino_server_render::decorations::TitlebarStyle::Standard,
             foreign: None,
             modal: false,
             decor_insets: if legacy {

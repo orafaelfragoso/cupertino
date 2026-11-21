@@ -256,7 +256,8 @@ pub fn render_direct(
     let off = params.offset_px(scale);
     let r = corner_radius_pt * scale;
     let rect = Rect::new(m.left as f64, (m.top + off) as f64, fw as f64, fh as f64);
-    if let Some(path) = crate::shape::rounded_path(rect, Radii::uniform(r), style, 1.0) {
+    if let Some(path) = crate::decorations::shape::rounded_path(rect, Radii::uniform(r), style, 1.0)
+    {
         let mut paint = Paint {
             anti_alias: true,
             ..Paint::default()

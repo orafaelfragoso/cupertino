@@ -1,11 +1,11 @@
 //! The inside of a text field: where the caret positions fall and what is drawn, clipped to the field.
 
 use cupertino_assets::{Assets, FontRole};
-use cupertino_decorations::field::{
+use cupertino_geometry::Rect;
+use cupertino_server_render::decorations::field::{
     caret_offsets, centred_baseline, draw_field, FieldContent, FieldStyle,
 };
-use cupertino_decorations::text::TextRenderer;
-use cupertino_geometry::Rect;
+use cupertino_server_render::decorations::text::TextRenderer;
 use tiny_skia::Pixmap;
 
 const TEXT: [f32; 4] = [0.0, 0.0, 0.0, 1.0];

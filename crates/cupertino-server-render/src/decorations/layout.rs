@@ -4,9 +4,9 @@
 //! `y ∈ [0, titlebar_height)` and the client content sits below it. The frame is
 //! `content.width × (reserved + content.height)`, where `reserved` is the titlebar height of a
 //! standard bar and zero for a unified one, whose strip lies over the content. `unobscured` is the part of the content
-//! no chrome covers (the content below a unified strip), where the client's layout starts ([`crate::chrome`]).
+//! no chrome covers (the content below a unified strip), where the client's layout starts ([`crate::decorations::chrome`]).
 
-use crate::metrics::{ButtonKind, DecorationMetrics, TitleAlignment, TitlebarStyle};
+use crate::decorations::metrics::{ButtonKind, DecorationMetrics, TitleAlignment, TitlebarStyle};
 use cupertino_geometry::{Point, Rect, Size};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -55,7 +55,7 @@ impl FrameLayout {
         // the frame view centres the 16 pt cell in the bar; the disc is centred in its cell
         let cy = tb / 2.0;
         let first = metrics.button_leading(style) + metrics.button_cell.0 / 2.0;
-        let rtl = metrics.direction == crate::chrome::Direction::RightToLeft;
+        let rtl = metrics.direction == crate::decorations::chrome::Direction::RightToLeft;
         let buttons = ButtonKind::ALL.map(|kind| {
             let cx = first + kind.index() as f64 * metrics.button_pitch();
             // right to left: the same distance from the right edge, close outermost

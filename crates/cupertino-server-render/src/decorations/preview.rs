@@ -1,7 +1,7 @@
 //! A composed window image for samples and tests: shadow, content area, titlebar and rim.
 
-use crate::render::{DecorationState, Decorations};
-use crate::shadow::ShadowRasterizer;
+use crate::decorations::render::{DecorationState, Decorations};
+use crate::decorations::shadow::ShadowRasterizer;
 use cupertino_geometry::{Radii, Rect, Size};
 use tiny_skia::{FillRule, Paint, Pixmap, PixmapPaint, Transform};
 
@@ -43,7 +43,9 @@ pub fn render_preview(
         frame.width,
         frame.height - tb_px / scale,
     );
-    if let Some(path) = crate::shape::rounded_path(body, Radii::bottom(r), style, scale) {
+    if let Some(path) =
+        crate::decorations::shape::rounded_path(body, Radii::bottom(r), style, scale)
+    {
         let mut p = Paint {
             anti_alias: true,
             ..Paint::default()

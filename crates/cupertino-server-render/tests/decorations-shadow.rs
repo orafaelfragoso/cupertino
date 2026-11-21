@@ -1,9 +1,9 @@
 //! Window shadows: the margins a shadow needs, the cached nine-slice image against a direct render, and the knock-out
 //! beneath the window.
 
-use cupertino_decorations::shadow::render_direct;
-use cupertino_decorations::{ShadowParams, ShadowRasterizer};
 use cupertino_geometry::{CornerStyle, Size};
+use cupertino_server_render::decorations::shadow::render_direct;
+use cupertino_server_render::decorations::{ShadowParams, ShadowRasterizer};
 use cupertino_theme::{ShadowOption, WindowShadowEntry};
 
 fn params(active: bool, dark: bool) -> ShadowParams {

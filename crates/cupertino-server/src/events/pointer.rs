@@ -379,7 +379,7 @@ impl Cupertino {
 
     /// Hover state of the decorations under the pointer: button group glyphs, resize cursors.
     fn update_decor_hover(&mut self, target: Option<&WindowTarget>) {
-        use cupertino_decorations::Hit;
+        use cupertino_server_render::decorations::Hit;
         let (group, cursor) = match target {
             Some(WindowTarget::Decoration {
                 id,
@@ -414,7 +414,7 @@ impl Cupertino {
     /// the configured action), the resize zones resize; moves and resizes start past the drag
     /// threshold ([`PendingDrag`]). True when the press was consumed.
     fn decoration_press(&mut self, pos: Point<f64, Logical>, button: u32, now: f64) -> bool {
-        use cupertino_decorations::{DoubleClickAction, Hit};
+        use cupertino_server_render::decorations::{DoubleClickAction, Hit};
         let Some(WindowTarget::Decoration { id, hit, .. }) = self.window_target_on_top(pos) else {
             return false;
         };
@@ -490,7 +490,7 @@ impl Cupertino {
     pub(crate) fn decor_button_enabled(
         &self,
         id: WindowId,
-        kind: cupertino_decorations::ButtonKind,
+        kind: cupertino_server_render::decorations::ButtonKind,
     ) -> bool {
         // a full-screen window does not minimize: its revealed title bar draws minimize disabled
         let fullscreen = self.entry(id).is_some_and(|e| e.fullscreen);
@@ -503,7 +503,7 @@ impl Cupertino {
     /// Button released after a press on a window control button: run the action when the pointer
     /// is still over the same button.
     fn decor_button_release(&mut self, pos: Point<f64, Logical>) {
-        use cupertino_decorations::Hit;
+        use cupertino_server_render::decorations::Hit;
         let Some((id, kind)) = self.decor.pressed.take() else {
             return;
         };
@@ -516,8 +516,12 @@ impl Cupertino {
 
     /// Do what window control button `kind` of window `id` is for, as a click on it does: an assistive technology's
     /// press comes here too ([`crate::decor_access`]). Nothing when the button is disabled.
-    pub fn press_window_button(&mut self, id: WindowId, kind: cupertino_decorations::ButtonKind) {
-        use cupertino_decorations::ButtonKind;
+    pub fn press_window_button(
+        &mut self,
+        id: WindowId,
+        kind: cupertino_server_render::decorations::ButtonKind,
+    ) {
+        use cupertino_server_render::decorations::ButtonKind;
         if !self.decor_button_enabled(id, kind) {
             return;
         }

@@ -7,8 +7,8 @@ use std::ops::Range;
 use cupertino_geometry::Rect;
 use tiny_skia::{Paint, Pixmap, PixmapPaint, Rect as SkRect, Transform};
 
-use crate::palette::Rgba;
-use crate::text::TextRenderer;
+use crate::decorations::palette::Rgba;
+use crate::decorations::text::TextRenderer;
 
 /// Points the selection band and the caret reach above and below the text size.
 pub const BAND_OVERHANG: f64 = 2.0;

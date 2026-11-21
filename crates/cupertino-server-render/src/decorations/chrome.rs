@@ -18,7 +18,7 @@
 //! enabled from the window's capabilities ([`button_presence`]), and lays out titlebar accessories, which may keep a
 //! minimum height visible in full screen.
 
-use crate::metrics::{ButtonKind, TitlebarStyle};
+use crate::decorations::metrics::{ButtonKind, TitlebarStyle};
 use cupertino_geometry::{Rect, Size};
 
 /// Height of a titled window's title bar, and of the title row above an expanded or settings-style toolbar.

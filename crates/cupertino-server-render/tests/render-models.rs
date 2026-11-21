@@ -8,7 +8,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use accesskit::{Action, ActionRequest, NodeId};
-use cupertino_decorations::ButtonKind;
 use cupertino_defaults::accessibility::DisplayOptions;
 use cupertino_effects::WindowKind;
 use cupertino_geometry::Rect as GRect;
@@ -17,6 +16,7 @@ use cupertino_server_render::cursor::{fallback_arrow, recolor, CursorColors, Cur
 use cupertino_server_render::decor_access::{
     button_name, controls_name, ButtonAccess, ButtonAccessibility, ButtonSink, WindowButtons,
 };
+use cupertino_server_render::decorations::ButtonKind;
 use cupertino_server_render::drag_return::{placement, Back, DragReturn, DRAG_RETURN_DURATION};
 use cupertino_server_render::fx::{Effects, EffectsConfig};
 use cupertino_server_render::popup_linger::Expiries;

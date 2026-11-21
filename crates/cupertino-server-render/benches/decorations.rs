@@ -1,7 +1,7 @@
 //! Minimal dependency-free benchmark of the rasterisation paths.
-use cupertino_decorations::shadow::render_direct;
-use cupertino_decorations::*;
 use cupertino_geometry::{CornerStyle, Size};
+use cupertino_server_render::decorations::shadow::render_direct;
+use cupertino_server_render::decorations::*;
 use cupertino_theme::window_shadow::ShadowOption;
 use cupertino_theme::Appearance;
 use std::hint::black_box;

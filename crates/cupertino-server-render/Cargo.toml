@@ -16,7 +16,6 @@ bumpalo = { version = "3.20", features = ["collections"] }
 bytemuck = { version = "1", features = ["derive"] }
 cupertino-assets = { path = "../cupertino-assets" }
 cupertino-cursor = { path = "../cupertino-cursor" }
-cupertino-decorations = { path = "../cupertino-decorations" }
 cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-effects = { path = "../cupertino-effects" }
 cupertino-geometry = { path = "../cupertino-geometry" }
@@ -31,6 +30,7 @@ cupertino-wm = { path = "../cupertino-wm" }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 libc = "0.2"
 rustix = { version = "1", features = ["event", "fs"] }
+swash = "0.2.10"
 tiny-skia = "0.12"
 tracing = "0.1"
 xcursor = "0.3"
@@ -46,3 +46,7 @@ features = [
     "renderer_gl",
     "wayland_frontend",
 ]
+
+[[bench]]
+name = "decorations"
+harness = false

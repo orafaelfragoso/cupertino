@@ -6,9 +6,9 @@
 
 use std::rc::Rc;
 
-use crate::coverage::{self, Outline, Shade};
-use crate::glyph::Mask;
-use crate::palette::Rgba;
+use crate::decorations::coverage::{self, Outline, Shade};
+use crate::decorations::glyph::Mask;
+use crate::decorations::palette::Rgba;
 use tiny_skia::{Color, FillRule, LineCap, Paint, Pixmap, Stroke, Transform};
 
 /// One glyph's coverage image at a whole device pixel, with the identity of its rasterization (the same glyph at

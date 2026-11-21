@@ -8,13 +8,13 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use cupertino_decorations::TitlebarStyle;
 use cupertino_protocols::server::app_effects::cupertino_app_effects_v1::{
     self, CupertinoAppEffectsV1, Error as EffectsError, WindowControl,
 };
 use cupertino_protocols::server::app_effects::cupertino_backdrop_v1::{
     self, CupertinoBackdropV1, Error, Tone,
 };
+use cupertino_server_render::decorations::TitlebarStyle;
 use cupertino_theme::glass::{face_tone, FaceTone};
 use cupertino_theme::GlassStyle;
 use smithay::desktop::{layer_map_for_output, LayerMap, LayerSurface};

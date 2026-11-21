@@ -19,9 +19,9 @@
 //! * **The shortcut notice**: the pill that says an application holds the shortcuts or the pointer, which the server
 //!   draws because it must show when no component runs.
 
-use cupertino_decorations::{Draw, DrawList};
 use cupertino_geometry::{CornerStyle, Radii, Rect as GRect};
 use cupertino_keyboard::switcher::{Step, SwitchEvent};
+use cupertino_server_render::decorations::{Draw, DrawList};
 use smithay::backend::input::KeyState;
 use smithay::input::keyboard::{keysyms, Keycode, Layout, XkbConfig};
 use smithay::utils::Logical;
@@ -47,7 +47,7 @@ type Rgba = [f32; 4];
 
 /// The draw of `r` (points) filled in `color` with continuous corners of `radius`, at `scale`.
 fn rounded(r: GRect, radius: f64, scale: f64, color: Rgba) -> Option<Draw> {
-    let path = cupertino_decorations::shape::rounded_path(
+    let path = cupertino_server_render::decorations::shape::rounded_path(
         r,
         Radii::uniform(radius),
         CornerStyle::continuous(),

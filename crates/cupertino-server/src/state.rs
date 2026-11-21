@@ -395,7 +395,7 @@ pub struct WindowEntry {
     pub server_side: bool,
     /// Title bar style the client chose (`cupertino_app_effects_v1.set_titlebar_style`); it applies while the
     /// window is `server_side`.
-    pub titlebar: cupertino_decorations::TitlebarStyle,
+    pub titlebar: cupertino_server_render::decorations::TitlebarStyle,
     pub foreign: Option<ForeignToplevelHandle>,
     pub modal: bool,
     /// Space around the surface reserved by server-side decorations (see `WindowStyle::ssd_insets`).
@@ -411,8 +411,8 @@ pub struct WindowEntry {
 impl WindowEntry {
     /// The style of the title bar revealed over a full-screen window: standard, with a background of its own: a
     /// unified bar is drawn over the client's toolbar, which stays at the top of the output under the menu bar.
-    pub const REVEALED_TITLEBAR: cupertino_decorations::TitlebarStyle =
-        cupertino_decorations::TitlebarStyle::Standard;
+    pub const REVEALED_TITLEBAR: cupertino_server_render::decorations::TitlebarStyle =
+        cupertino_server_render::decorations::TitlebarStyle::Standard;
 
     /// Whether the client said it draws its own decorations (`xdg-decoration` client-side mode): the compositor draws no
     /// title bar for it, and shapes it as [`Self::styled`] says.
@@ -603,8 +603,8 @@ pub enum WindowTarget {
     /// Compositor-drawn decorations: `local` is frame-local, `content` the surface size.
     Decoration {
         id: WindowId,
-        style: cupertino_decorations::TitlebarStyle,
-        hit: cupertino_decorations::Hit,
+        style: cupertino_server_render::decorations::TitlebarStyle,
+        hit: cupertino_server_render::decorations::Hit,
         content: (f64, f64),
         local: (f64, f64),
     },

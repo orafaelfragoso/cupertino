@@ -481,8 +481,8 @@ impl Cupertino {
 
     /// Hand the title bar's double click action to the decorations.
     pub fn apply_titlebar_double_click(&mut self) {
-        use cupertino_decorations::DoubleClickAction;
         use cupertino_defaults::appearance::TitlebarAction;
+        use cupertino_server_render::decorations::DoubleClickAction;
         self.decor
             .set_double_click(match self.config.titlebar_double_click {
                 TitlebarAction::Zoom => DoubleClickAction::Zoom,

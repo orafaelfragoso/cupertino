@@ -699,7 +699,7 @@ impl Cupertino {
     /// Insets for a window decorated by the compositor with a title bar of `style`.
     pub fn decoration_insets(
         &self,
-        style: cupertino_decorations::TitlebarStyle,
+        style: cupertino_server_render::decorations::TitlebarStyle,
     ) -> crate::config::Insets {
         if self.config.window.decorations {
             self.decor.insets(style)
@@ -713,7 +713,7 @@ impl Cupertino {
     pub fn resize_cursor(
         &self,
         id: WindowId,
-        edge: cupertino_decorations::ResizeEdge,
+        edge: cupertino_server_render::decorations::ResizeEdge,
     ) -> Option<smithay::input::pointer::CursorIcon> {
         let w = self.wm.window(id)?;
         let (min, max) = w.size_limits();
@@ -865,7 +865,7 @@ impl Cupertino {
             // the window control buttons of a unified bar lie over the client's surface and take the pointer first
             if decorated && style.client_drawn() {
                 let (hit, content, local) = decoration_hit(false);
-                if matches!(hit, cupertino_decorations::Hit::Button(_)) {
+                if matches!(hit, cupertino_server_render::decorations::Hit::Button(_)) {
                     return Some(WindowTarget::Decoration {
                         id,
                         style,
@@ -897,8 +897,8 @@ impl Cupertino {
                 let local = (pos.x - strip.x, pos.y - strip.y);
                 let style = WindowEntry::REVEALED_TITLEBAR;
                 let hit = match self.decor.hit_test(style, content, local, false) {
-                    hit @ cupertino_decorations::Hit::Button(_) => hit,
-                    _ => cupertino_decorations::Hit::None,
+                    hit @ cupertino_server_render::decorations::Hit::Button(_) => hit,
+                    _ => cupertino_server_render::decorations::Hit::None,
                 };
                 return Some(WindowTarget::Decoration {
                     id,
@@ -911,7 +911,7 @@ impl Cupertino {
             // the resize zones, where the window can resize that way (the cursor follows; dropping the zone with the cursor is)
             let edge = if decorated {
                 match decoration_hit(true).0 {
-                    cupertino_decorations::Hit::Resize(edge) => Some(edge),
+                    cupertino_server_render::decorations::Hit::Resize(edge) => Some(edge),
                     _ => None,
                 }
             } else if plan.exact
@@ -931,7 +931,7 @@ impl Cupertino {
                 return Some(WindowTarget::Decoration {
                     id,
                     style,
-                    hit: cupertino_decorations::Hit::Resize(edge),
+                    hit: cupertino_server_render::decorations::Hit::Resize(edge),
                     content,
                     local,
                 });
@@ -954,7 +954,8 @@ impl Cupertino {
                 let (hit, content, local) = decoration_hit(false);
                 if matches!(
                     hit,
-                    cupertino_decorations::Hit::Button(_) | cupertino_decorations::Hit::Titlebar
+                    cupertino_server_render::decorations::Hit::Button(_)
+                        | cupertino_server_render::decorations::Hit::Titlebar
                 ) {
                     return Some(WindowTarget::Decoration {
                         id,

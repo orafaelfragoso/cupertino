@@ -1247,7 +1247,7 @@ fn in_callout(backdrops: &[BackdropArea], b: &BackdropArea) -> bool {
 fn popup_shadow(
     p: &mut SceneParams<'_>,
     b: &BackdropArea,
-    params: &cupertino_decorations::ShadowParams,
+    params: &cupertino_server_render::decorations::ShadowParams,
     alpha: f32,
 ) -> Vec<Piece> {
     let visual = cupertino_wm::Rect::new(

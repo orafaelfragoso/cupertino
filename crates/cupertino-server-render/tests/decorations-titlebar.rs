@@ -2,11 +2,11 @@
 //! edges.
 
 use cupertino_assets::Assets;
-use cupertino_decorations::edge::{edge, EdgeKind, Hairline};
-use cupertino_decorations::{
+use cupertino_geometry::Size;
+use cupertino_server_render::decorations::edge::{edge, EdgeKind, Hairline};
+use cupertino_server_render::decorations::{
     ButtonKind, DecorationConfig, DecorationState, Decorations, Draw, TitlebarStyle,
 };
-use cupertino_geometry::Size;
 use cupertino_theme::Appearance;
 
 fn decorations(appearance: Appearance, style: TitlebarStyle) -> Decorations {

@@ -20,7 +20,7 @@ pub enum TitlebarStyle {
     /// Titlebar merged with the client's toolbar: the bar is the 52 pt toolbar row, the client's
     /// content runs under it (full-size content), and the decorations draw only the window control
     /// buttons, vertically centred in the row with the unified leading inset.
-    /// The client draws the toolbar, its fill ([`crate::palette::Palette::titlebar`]) and the title.
+    /// The client draws the toolbar, its fill ([`crate::decorations::palette::Palette::titlebar`]) and the title.
     Unified,
     /// [`TitlebarStyle::Unified`] with the compact 40 pt toolbar row.
     UnifiedCompact,
@@ -116,7 +116,7 @@ pub struct DecorationMetrics {
     /// diameter of a window control button, regular size class.
     pub button_diameter: f64,
     /// Which way the title bar lays out: right to left puts the button group at the right edge, close outermost.
-    pub direction: crate::chrome::Direction,
+    pub direction: crate::decorations::chrome::Direction,
     /// edge of the square art box of a button, used as its hit area.
     pub button_art: f64,
     /// size of the frame of one button (the cell the frame view lays out);
@@ -179,7 +179,7 @@ impl DecorationMetrics {
             titlebar_height_sidebar: TOOLBAR_ROW_HEIGHT,
             corner_radius: WINDOW_CORNER_RADIUS,
             button_diameter: d,
-            direction: crate::chrome::Direction::LeftToRight,
+            direction: crate::decorations::chrome::Direction::LeftToRight,
             button_art: 16.0,
             button_cell: (WINDOW_BUTTON_DIAMETER, 16.0),
             button_spacing: WINDOW_BUTTON_PITCH - WINDOW_BUTTON_DIAMETER,

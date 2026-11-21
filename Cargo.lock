@@ -991,18 +991,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cupertino-decorations"
-version = "0.1.0"
-dependencies = [
- "cupertino-assets",
- "cupertino-geometry",
- "cupertino-raster-math",
- "cupertino-theme",
- "swash",
- "tiny-skia",
-]
-
-[[package]]
 name = "cupertino-defaults"
 version = "0.1.0"
 dependencies = [
@@ -1529,7 +1517,6 @@ dependencies = [
  "cupertino-assets",
  "cupertino-control-model",
  "cupertino-cursor",
- "cupertino-decorations",
  "cupertino-defaults",
  "cupertino-devices",
  "cupertino-diagnostic-events",
@@ -1617,7 +1604,6 @@ dependencies = [
  "bytemuck",
  "cupertino-assets",
  "cupertino-cursor",
- "cupertino-decorations",
  "cupertino-defaults",
  "cupertino-effects",
  "cupertino-geometry",
@@ -1633,6 +1619,7 @@ dependencies = [
  "libc",
  "rustix 1.1.6",
  "smithay",
+ "swash",
  "tiny-skia",
  "tracing",
  "xcursor",

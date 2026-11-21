@@ -578,8 +578,8 @@ fn window_list(state: &Cupertino) -> Result<String> {
                     (frame.x + c.x, frame.y + c.y)
                 };
                 [
-                    centre(cupertino_decorations::ButtonKind::Close),
-                    centre(cupertino_decorations::ButtonKind::Zoom),
+                    centre(cupertino_server_render::decorations::ButtonKind::Close),
+                    centre(cupertino_server_render::decorations::ButtonKind::Zoom),
                 ]
             });
             window_line(app, &w.title, frame, buttons)

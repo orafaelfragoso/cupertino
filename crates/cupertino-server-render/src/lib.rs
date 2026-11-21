@@ -6,6 +6,7 @@ pub mod config;
 pub mod cursor;
 pub mod decor;
 pub mod decor_access;
+pub mod decorations;
 pub mod drag_return;
 pub mod frame;
 pub mod frame_fill;

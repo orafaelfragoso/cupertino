@@ -18,7 +18,7 @@
 //!   renderer takes device pixels; the point size is `px / scale`, so the optical size is applied once the
 //!   owner calls [`TextRenderer::set_scale`]. Without it the axis stays at its default (the display design).
 //!
-//! Glyphs are rasterised by [`crate::glyph`] with the design's dilation (stem darkening), which
+//! Glyphs are rasterised by [`crate::decorations::glyph`] with the design's dilation (stem darkening), which
 //! depends on the size and on the fill colour's luminance, while [`TextRenderer::set_smoothing`] is on (the default,
 //! [`DEFAULT_SMOOTHING`]), and their origins quantised to the subpixel positions of the size. Coverage is blended source-over on the premultiplied destination values, with no gamma, contrast
 //! or lookup table.
@@ -27,9 +27,9 @@
 //! left to right (no bidirectional reordering) and a character missing from the
 //! family is taken from the first other loaded face that has it.
 
-use crate::draws::{composite_glyphs, PlacedGlyph as PlacedImage};
-use crate::glyph::{self, Mask, Smoothing};
-use crate::palette::Rgba;
+use crate::decorations::draws::{composite_glyphs, PlacedGlyph as PlacedImage};
+use crate::decorations::glyph::{self, Mask, Smoothing};
+use crate::decorations::palette::Rgba;
 use cupertino_assets::{AssetError, Assets, FontRole, FontSource};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};

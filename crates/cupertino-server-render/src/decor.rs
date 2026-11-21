@@ -1,7 +1,7 @@
-//! Server-side window decorations: the glue between `cupertino-decorations` (layout, hit
+//! Server-side window decorations: the glue between `decorations` (layout, hit
 //! testing, rasterisation) and the compositor (textures, pointer interaction).
 //!
-//! Title bars and rims are recorded as lists of draws ([`cupertino_decorations::DrawList`]) in images cached per
+//! Title bars and rims are recorded as lists of draws ([`crate::decorations::DrawList`]) in images cached per
 //! window ([`ChromeImage`]), which the renderer draws on its GPU (or paints on the CPU when it cannot); a list is
 //! recorded again only when its state key (size, scale, active, hover, pressed, title, appearance) changes.
 
@@ -9,11 +9,11 @@ use std::collections::{hash_map::DefaultHasher, HashMap};
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
-use cupertino_assets::{AssetError, Assets};
-use cupertino_decorations::{
+use crate::decorations::{
     button_presence, ButtonKind, Capabilities, DecorationConfig, DecorationState, Decorations,
     DoubleClickAction, DrawList, Edge, FrameKind, Hit, ResizeEdge, ShadowParams, TitlebarStyle,
 };
+use cupertino_assets::{AssetError, Assets};
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_theme::Appearance;
 use cupertino_wm::WindowId;
@@ -310,7 +310,7 @@ impl Decor {
         local: (f64, f64),
         exterior: bool,
     ) -> Option<ResizeEdge> {
-        cupertino_decorations::resize_hit(
+        crate::decorations::resize_hit(
             Rect::new(0.0, 0.0, frame.0, frame.1),
             &self.deco.config.metrics,
             Point::new(local.0, local.1),

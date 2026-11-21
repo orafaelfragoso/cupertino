@@ -1,11 +1,13 @@
 //! Hit-testing of the decorated frame.
 //!
-//! Points are in frame-local logical points (see [`crate::layout`]); negative coordinates and
+//! Points are in frame-local logical points (see [`crate::decorations::layout`]); negative coordinates and
 //! coordinates beyond the frame are outside the frame geometry and can still hit a resize zone.
 //! Priority: window control buttons, resize zones, titlebar (drag), content.
 
-use crate::layout::FrameLayout;
-use crate::metrics::{ButtonKind, DecorationMetrics, DoubleClickAction, TitlebarStyle};
+use crate::decorations::layout::FrameLayout;
+use crate::decorations::metrics::{
+    ButtonKind, DecorationMetrics, DoubleClickAction, TitlebarStyle,
+};
 use cupertino_geometry::{Point, Rect};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

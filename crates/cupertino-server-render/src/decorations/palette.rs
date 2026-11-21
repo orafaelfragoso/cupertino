@@ -16,7 +16,7 @@
 //! [`Palette::builtin`] carries the same numbers for use without the specification files; a test
 //! compares it with the values loaded from the specification.
 
-use crate::metrics::TitlebarStyle;
+use crate::decorations::metrics::TitlebarStyle;
 use cupertino_theme::recipe::{MaterialOptions, WindowState};
 use cupertino_theme::{Appearance, SemanticColor, Theme};
 
@@ -281,44 +281,44 @@ impl Palette {
         }
     }
 
-    pub fn button_color(&self, kind: crate::metrics::ButtonKind) -> Rgba {
+    pub fn button_color(&self, kind: crate::decorations::metrics::ButtonKind) -> Rgba {
         match kind {
-            crate::metrics::ButtonKind::Close => self.close,
-            crate::metrics::ButtonKind::Minimize => self.minimize,
-            crate::metrics::ButtonKind::Zoom => self.zoom,
+            crate::decorations::metrics::ButtonKind::Close => self.close,
+            crate::decorations::metrics::ButtonKind::Minimize => self.minimize,
+            crate::decorations::metrics::ButtonKind::Zoom => self.zoom,
         }
     }
 
-    fn index(kind: crate::metrics::ButtonKind) -> usize {
+    fn index(kind: crate::decorations::metrics::ButtonKind) -> usize {
         match kind {
-            crate::metrics::ButtonKind::Close => 0,
-            crate::metrics::ButtonKind::Minimize => 1,
-            crate::metrics::ButtonKind::Zoom => 2,
+            crate::decorations::metrics::ButtonKind::Close => 0,
+            crate::decorations::metrics::ButtonKind::Minimize => 1,
+            crate::decorations::metrics::ButtonKind::Zoom => 2,
         }
     }
 
     /// A button's face from top to bottom: upper colour, centre, lower colour.
-    pub fn face_of(&self, kind: crate::metrics::ButtonKind) -> [Rgba; 3] {
+    pub fn face_of(&self, kind: crate::decorations::metrics::ButtonKind) -> [Rgba; 3] {
         self.button_face[Self::index(kind)]
     }
 
     /// The ring of a button just inside its edge.
-    pub fn rim_of(&self, kind: crate::metrics::ButtonKind) -> Rgba {
+    pub fn rim_of(&self, kind: crate::decorations::metrics::ButtonKind) -> Rgba {
         self.button_rim[Self::index(kind)]
     }
 
     /// The colour of a button's edge at its sides.
-    pub fn edge_of(&self, kind: crate::metrics::ButtonKind) -> Rgba {
+    pub fn edge_of(&self, kind: crate::decorations::metrics::ButtonKind) -> Rgba {
         self.button_edge[Self::index(kind)]
     }
 
     /// The fill of a pressed button.
-    pub fn pressed_fill(&self, kind: crate::metrics::ButtonKind) -> Rgba {
+    pub fn pressed_fill(&self, kind: crate::decorations::metrics::ButtonKind) -> Rgba {
         self.button_pressed[Self::index(kind)]
     }
 
     /// The glyph a button shows while the group is hovered.
-    pub fn glyph_of(&self, kind: crate::metrics::ButtonKind) -> Rgba {
+    pub fn glyph_of(&self, kind: crate::decorations::metrics::ButtonKind) -> Rgba {
         self.button_glyph[Self::index(kind)]
     }
 }

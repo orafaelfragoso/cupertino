@@ -469,7 +469,7 @@ pub struct WindowStyle {
     /// Insets around the surface of server-side decorated windows (integration point for the
     /// decoration component: window frame = surface geometry + insets).
     pub ssd_insets: Insets,
-    /// Draw the built-in server-side decorations (`cupertino-decorations`) for clients that
+    /// Draw the built-in server-side decorations (`cupertino-server-render`, module `decorations`) for clients that
     /// accept them; their insets then replace `ssd_insets`.
     pub decorations: bool,
 }
@@ -477,7 +477,7 @@ pub struct WindowStyle {
 impl Default for WindowStyle {
     fn default() -> Self {
         Self {
-            corner_radius: cupertino_decorations::WINDOW_CORNER_RADIUS,
+            corner_radius: cupertino_server_render::decorations::WINDOW_CORNER_RADIUS,
             continuous_corners: true,
             shadow: ShadowStyle::default(),
             style_client_decorated: true,

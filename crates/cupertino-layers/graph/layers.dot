@@ -1,6 +1,6 @@
 // cupertino-layers --graph
-// 76 crates, 393 internal dependencies
-// per layer: foundation 5, graphics 2, models 6, system 8, platform 2, protocol 3, transport 2, render 3, ui 9, shellkit 1, core 4, services 7, shell 15, apps 2, tools 6, testing 1
+// 75 crates, 387 internal dependencies
+// per layer: foundation 5, graphics 2, models 6, system 8, platform 2, protocol 3, transport 2, render 2, ui 9, shellkit 1, core 4, services 7, shell 15, apps 2, tools 6, testing 1
 // forbidden normal edge cupertino-settings (apps) -> cupertino-wayland-client (transport)
 digraph "layers" {
   node [shape=box];
@@ -54,9 +54,8 @@ digraph "layers" {
     "cupertino-wayland-client";
   }
   subgraph "cluster_render" {
-    label="render (3)";
+    label="render (2)";
     "cupertino-cursor";
-    "cupertino-decorations";
     "cupertino-glass";
   }
   subgraph "cluster_ui" {
@@ -149,10 +148,6 @@ digraph "layers" {
   "cupertino-controlcenter" -> "cupertino-kit-shell";
   "cupertino-controlcenter" -> "cupertino-peer";
   "cupertino-controlcenter" -> "cupertino-radios";
-  "cupertino-decorations" -> "cupertino-assets";
-  "cupertino-decorations" -> "cupertino-geometry";
-  "cupertino-decorations" -> "cupertino-raster-math";
-  "cupertino-decorations" -> "cupertino-theme";
   "cupertino-defaults" -> "cupertino-keyboard";
   "cupertino-diagnostics" -> "cupertino-defaults";
   "cupertino-diagnostics" -> "cupertino-devices";
@@ -306,7 +301,6 @@ digraph "layers" {
   "cupertino-server" -> "cupertino-assets";
   "cupertino-server" -> "cupertino-control-model";
   "cupertino-server" -> "cupertino-cursor" [label="dev"];
-  "cupertino-server" -> "cupertino-decorations";
   "cupertino-server" -> "cupertino-defaults";
   "cupertino-server" -> "cupertino-devices";
   "cupertino-server" -> "cupertino-diagnostic-events";
@@ -341,7 +335,6 @@ digraph "layers" {
   "cupertino-server-input" -> "cupertino-wm";
   "cupertino-server-render" -> "cupertino-assets";
   "cupertino-server-render" -> "cupertino-cursor";
-  "cupertino-server-render" -> "cupertino-decorations";
   "cupertino-server-render" -> "cupertino-defaults";
   "cupertino-server-render" -> "cupertino-effects";
   "cupertino-server-render" -> "cupertino-geometry";

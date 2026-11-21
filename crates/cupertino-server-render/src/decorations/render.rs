@@ -1,18 +1,18 @@
 //! The decoration façade: configuration, state, layout, hit-testing and rasterisation of the
 //! titlebar and rim into premultiplied RGBA buffers.
 
-use crate::buttons::{button_draws, ButtonState};
-use crate::coverage::{Outline, Shade};
-use crate::draws::{Draw, DrawList};
-use crate::edge::{edge, Edge, EdgeKind};
-use crate::hit::{double_click, hit_test, in_button_group, input_region, Hit};
-use crate::layout::{title_slot, FrameLayout};
-use crate::metrics::{
+use crate::decorations::buttons::{button_draws, ButtonState};
+use crate::decorations::coverage::{Outline, Shade};
+use crate::decorations::draws::{Draw, DrawList};
+use crate::decorations::edge::{edge, Edge, EdgeKind};
+use crate::decorations::hit::{double_click, hit_test, in_button_group, input_region, Hit};
+use crate::decorations::layout::{title_slot, FrameLayout};
+use crate::decorations::metrics::{
     ButtonKind, DecorationMetrics, DoubleClickAction, TitleAlignment, TitlebarStyle,
 };
-use crate::palette::Palette;
-use crate::shadow::ShadowParams;
-use crate::text::TextRenderer;
+use crate::decorations::palette::Palette;
+use crate::decorations::shadow::ShadowParams;
+use crate::decorations::text::TextRenderer;
 use cupertino_assets::{AssetError, Assets, FontRole};
 use cupertino_geometry::{CornerStyle, Point, Radii, Rect, Size};
 use cupertino_theme::window_shadow::ShadowOption;

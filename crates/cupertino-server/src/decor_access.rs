@@ -3,8 +3,8 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use cupertino_decorations::ButtonKind;
 use cupertino_geometry::{Rect, Size};
+use cupertino_server_render::decorations::ButtonKind;
 use cupertino_wm::WindowId;
 use smithay::reexports::calloop::channel;
 

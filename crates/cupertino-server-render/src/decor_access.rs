@@ -20,11 +20,11 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
+use crate::decorations::ButtonKind;
 use accesskit::{
     Action, ActionHandler, ActionRequest, ActivationHandler, DeactivationHandler, Node, NodeId,
     Role, TreeInfo, TreeUpdate,
 };
-use cupertino_decorations::ButtonKind;
 use cupertino_geometry::Rect;
 use cupertino_wm::WindowId;
 

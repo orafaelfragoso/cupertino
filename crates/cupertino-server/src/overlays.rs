@@ -3,8 +3,8 @@
 //! the server draws.
 
 use cupertino_assets::{AssetError, Assets, FontRole};
-use cupertino_decorations::text::TextRenderer;
-use cupertino_decorations::Draw;
+use cupertino_server_render::decorations::text::TextRenderer;
+use cupertino_server_render::decorations::Draw;
 
 use crate::config::Config;
 use crate::kbd::InputSources;

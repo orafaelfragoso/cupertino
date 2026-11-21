@@ -1,15 +1,15 @@
 //! Renders sample images into `output/`.
 //!
-//! `cargo run -p cupertino-decorations --release --example render_samples`
+//! `cargo run -p cupertino-server-render --release --example render_samples`
 //!
 //! Needs `CUPERTINO_ASSET_DIR` (the fonts come from the asset directory).
 
 use cupertino_assets::Assets;
-use cupertino_decorations::buttons::{draw_button, ButtonState};
-use cupertino_decorations::preview::render_preview;
-use cupertino_decorations::shadow::{ShadowParams, ShadowRasterizer};
-use cupertino_decorations::*;
 use cupertino_geometry::{CornerStyle, Size};
+use cupertino_server_render::decorations::buttons::{draw_button, ButtonState};
+use cupertino_server_render::decorations::preview::render_preview;
+use cupertino_server_render::decorations::shadow::{ShadowParams, ShadowRasterizer};
+use cupertino_server_render::decorations::*;
 use cupertino_theme::window_shadow::ShadowOption;
 use cupertino_theme::{Appearance, Theme, WindowCornerSize};
 use tiny_skia::{Color, Pixmap, PixmapPaint, Transform};

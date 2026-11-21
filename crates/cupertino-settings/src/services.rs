@@ -5,6 +5,10 @@
 //! again after a failure, so a daemon that starts later is picked up; properties are read every time, never cached.
 //! Every call here waits for its service, so the window makes none of them itself: they run as tasks of Kit's I/O pool
 //! (`shell::desk`), and a call that can wait long hands back the [`Job`] that waits, for a task of its own.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "the services are called by tasks of the I/O pool (shell::desk), and before the window loop exists"
+)]
 
 use crate::hardware::{Hardware, Sources};
 use std::collections::{HashMap, HashSet};

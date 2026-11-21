@@ -6,6 +6,7 @@
 mod audio;
 mod calls;
 mod desk;
+mod files;
 mod form;
 mod reading;
 mod sheets;

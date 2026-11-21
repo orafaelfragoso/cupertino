@@ -3,10 +3,15 @@
 //! Whether an entry still allows its program is the server's own test ([`Entry::allows_file`]), never derived here. A
 //! program is always the canonical path of its file: the server compares the resolved executable of a running client,
 //! so a link would never match.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "the programs' files are read by tasks of the I/O pool (shell::files); the pane shows what they read"
+)]
 
 use cupertino_apps::entry::DesktopEntry;
 use cupertino_apps::exec::command_for_entry;
 use cupertino_defaults::data_control::{refusal, DataControlConf, Entry, Unusable, RUNS_SCRIPTS};
+use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -95,8 +100,24 @@ impl List {
     }
 }
 
+/// Where each of `entries` stands now, by its program; on the I/O pool.
+pub fn states(entries: &[Entry]) -> HashMap<PathBuf, State> {
+    entries
+        .iter()
+        .map(|entry| (entry.program.clone(), state(entry)))
+        .collect()
+}
+
+/// Where `entry` stood at the last reading of the entries, `states` ([`states`]): allowed until it was read.
+pub fn known_state(states: &HashMap<PathBuf, State>, entry: &Entry) -> State {
+    states
+        .get(&entry.program)
+        .copied()
+        .unwrap_or(State::Allowed)
+}
+
 /// Where `entry` stands now.
-pub fn state(entry: &Entry) -> State {
+fn state(entry: &Entry) -> State {
     match std::fs::metadata(&entry.program) {
         Err(_) => State::Missing,
         Ok(meta) if entry.allows_file(&meta) => State::Allowed,

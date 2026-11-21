@@ -1,6 +1,6 @@
 //! What the Settings window shows and does, apart from how it shows it: the history, the settings and their files,
-//! the live services (read and called off the window's thread: [`super::reading`], [`super::calls`]), the sheets, and
-//! the work on other threads that answers through [`Background`].
+//! the live services (read and called off the window's thread: [`super::reading`], [`super::calls`]), the files and
+//! programs the panes read ([`super::files`]), the sheets, and what the buses and watches tell through [`Background`].
 
 use std::collections::HashMap;
 use std::error::Error;
@@ -13,7 +13,7 @@ use crate::agent::AgentEvent;
 use crate::controls::{Control, LevelWriter, Value};
 use crate::history::History;
 use crate::inflight::Reads;
-use crate::live::{display_name, DeviceAction, Live, Pictures};
+use crate::live::{display_name, DeviceAction, Live};
 use crate::meter::Meter;
 use crate::pages::Page;
 use crate::panes::{self, Call, ControlId, Effect, Section, Session};
@@ -26,7 +26,6 @@ use crate::PaneId;
 use cupertino_assets::Assets;
 use cupertino_defaults::accessibility::DisplayOptions;
 use cupertino_defaults::watch::{ConfigWatcher, WatchEvent};
-use cupertino_icons::thumbnail::{ThumbError, ThumbSize, Thumbnailer};
 use cupertino_kit::filepicker::Mode;
 
 /// A level slider still this long, in seconds, has ended its drag: the live readings show again.
@@ -37,7 +36,7 @@ const SLIDE_APPLY_EVERY: f64 = 0.15;
 
 pub(crate) type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
-/// Something for the window loop from another thread.
+/// Something for the window loop from a bus or a watch.
 pub(crate) enum Background {
     ShowPane(PaneId, String),
     Agent(AgentEvent),
@@ -47,30 +46,9 @@ pub(crate) enum Background {
     Files(WatchEvent),
     /// A service the panes read sent a change signal ([`crate::watch`]).
     Changed(Changed),
-    /// A listing of the Wallpaper pane's pictures: group 0 the packs', then one per added folder.
-    Pictures {
-        key: ListingKey,
-        files: Vec<cupertino_assets::WallpaperFile>,
-    },
-    /// A folder the chooser asked for was read.
-    Listing(cupertino_kit::filepicker::Listing),
-    /// The thumbnail of a picture of the Wallpaper pane is made.
-    Thumbnail {
-        image: std::path::PathBuf,
-        thumbnail: std::path::PathBuf,
-        /// The thumbnail's pixels, decoded on the thread that made it.
-        pixels: Option<cupertino_kit::controls::ImageSource>,
-    },
-    /// No thumbnail of a picture of the Wallpaper pane could be made.
-    NoThumbnail {
-        image: std::path::PathBuf,
-        why: crate::controls::Unreadable,
-    },
-    /// The graphics memory only the driver's tool reports was read.
-    VideoMemory(Vec<(crate::about::PciAddress, u64)>),
 }
 
-/// Reads the graphics memory only the driver's tool reports, by PCI address.
+/// Reads the graphics memory only the driver's tool reports, by PCI address; on the I/O pool.
 pub(crate) type ReadVideoMemory =
     std::sync::Arc<dyn Fn() -> Vec<(crate::about::PciAddress, u64)> + Send + Sync>;
 
@@ -81,52 +59,12 @@ fn read_video_memory() -> Vec<(crate::about::PciAddress, u64)> {
 
 /// The graphics memory only the driver's tool reports.
 pub(crate) enum VideoMemory {
-    /// Its thread is running.
+    /// Its task is running.
     Reading,
     Read(Vec<(crate::about::PciAddress, u64)>),
 }
 
-/// The longest edge of a thumbnail the cache keeps, in pixels: the decoder keeps a picture of this size whole.
-const THUMBNAIL_EDGE: u32 = 256;
-
-/// Why the thumbnail of a picture could not be made: its file is gone, or it is no picture that can be read.
-fn unreadable(error: &ThumbError) -> crate::controls::Unreadable {
-    match error {
-        ThumbError::Io(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            crate::controls::Unreadable::Missing
-        }
-        _ => crate::controls::Unreadable::Damaged,
-    }
-}
-
-/// The longest edge of the account picture kept for the sidebar's row, in pixels.
-const ACCOUNT_PICTURE_EDGE: u32 = 128;
-/// The largest account picture file read, in bytes.
-const ACCOUNT_PICTURE_BYTES: u64 = 8 * 1024 * 1024;
-
-/// The pixels of the thumbnail file `path`, as an image of its own for the window to draw; run on the thumbnail
-/// thread, never the window's.
-fn decode_thumbnail(
-    path: &std::path::Path,
-    edge: u32,
-) -> Option<cupertino_kit::controls::ImageSource> {
-    use cupertino_kit::render::{ImageResource, PixelFormat};
-    let data = std::fs::read(path).ok()?;
-    let icon = cupertino_icons::decode_png(&data, edge)?;
-    Some(cupertino_kit::controls::ImageSource {
-        id: cupertino_kit::core::next_resource_id(),
-        image: ImageResource {
-            revision: 1,
-            width: icon.width,
-            height: icon.height,
-            stride: icon.width * 4,
-            format: PixelFormat::Rgba8Premultiplied,
-            pixels: std::sync::Arc::from(icon.rgba),
-        },
-    })
-}
-
-/// What a listing thread reads: the packs' pictures, the pictures of an added folder, or a folder of the chooser.
+/// What a listing task reads: the packs' pictures, the pictures of an added folder, or a folder of the chooser.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum ListingKey {
     Packs,
@@ -143,25 +81,17 @@ const BACKGROUND_QUEUE: usize = 64;
 const PROGRAM_CHOOSER_START: &str = "/usr/bin";
 
 /// The window loop owns the receiver until it ends; what arrives after that has no window. What arrives before the
-/// window exists waits for the loop's first turn. A full queue makes a worker thread wait. What comes from a bus is
-/// dropped instead, so a caller can neither grow the queue nor block a bus executor: a dropped pane request shows nothing,
-/// a dropped agent prompt refuses the pairing. So is a report of the settings files' watch, which the window loop
-/// itself follows and must not wait on: a later report reads the files again.
+/// window exists waits for the loop's first turn. What finds the queue full is dropped, so a caller can neither grow the
+/// queue nor block a bus executor or the window's loop: a dropped pane request shows nothing, a dropped agent prompt
+/// refuses the pairing, a dropped change signal is not needed (the changes queued read everything again), a dropped
+/// report of the settings files' watch is followed by a later one that reads the files again, and a watch whose
+/// report of its rules is dropped is no less watched.
 pub(crate) fn background_channel(
     wake: impl Fn() + Send + Sync + 'static,
 ) -> (Notify, std::sync::mpsc::Receiver<Background>) {
     let (sender, receiver) = std::sync::mpsc::sync_channel(BACKGROUND_QUEUE);
     let notify: Notify = std::sync::Arc::new(move |event| {
-        let queued = match event {
-            // a change signal that finds the queue full is not needed: the changes queued read everything again
-            Background::ShowPane(..)
-            | Background::Agent(_)
-            | Background::Watching(_)
-            | Background::Changed(_)
-            | Background::Files(_) => sender.try_send(event).is_ok(),
-            event => sender.send(event).is_ok(),
-        };
-        if queued {
+        if sender.try_send(event).is_ok() {
             wake();
         }
     });
@@ -272,10 +202,10 @@ pub struct State {
     pub(crate) login_saving: bool,
     /// Where About's readings come from: `/`, or a test's tree.
     pub(crate) about_root: PathBuf,
-    /// The graphics memory only the driver's tool reports, read once on a thread when a pane first shows the
+    /// The graphics memory only the driver's tool reports, read once by a task when a pane first shows the
     /// graphics; `None` until it is asked for.
     pub(crate) video_memory: Option<VideoMemory>,
-    /// Reads that memory; on a thread, as it runs a program.
+    /// Reads that memory; on the I/O pool, as it runs a program.
     pub(crate) read_video_memory: ReadVideoMemory,
     /// An activation token another start of Settings handed over, for the window to raise itself with.
     pub(crate) activation: Option<String>,
@@ -293,7 +223,7 @@ pub struct State {
 
 impl State {
     /// The state of a window opening on `pane` (the first row when it is hidden); `display_height` is the height of the
-    /// display the Dock sits on, which its default tile size depends on. Work on other threads answers through
+    /// display the Dock sits on, which its default tile size depends on. The buses and the watches answer through
     /// `notify`.
     pub(crate) fn new(
         paths: Paths,
@@ -382,13 +312,7 @@ impl State {
             assets: Assets::discover(),
             thumbnails: HashMap::new(),
             thumbnail_images: HashMap::new(),
-            account_picture: account
-                .picture
-                .as_deref()
-                .filter(|path| {
-                    std::fs::metadata(path).is_ok_and(|m| m.len() <= ACCOUNT_PICTURE_BYTES)
-                })
-                .and_then(|path| decode_thumbnail(path, ACCOUNT_PICTURE_EDGE)),
+            account_picture: None,
             account,
             thumbnails_asked: std::collections::HashSet::new(),
             thumbnail_cache: None,
@@ -407,6 +331,7 @@ impl State {
             files,
             answers,
         };
+        state.read_account_picture();
         state.sync_accessibility();
         state.start_watching(devices);
         state.read_appearance();
@@ -513,31 +438,12 @@ impl State {
             self.refresh_sound(self.now());
             return Ok(());
         }
-        if to == PaneId::Users {
-            self.live.users = crate::system::users();
-        }
+        self.read_files(to);
         if to == PaneId::Wallpaper {
             self.load_pictures();
         }
         if to == PaneId::Accessibility {
             self.ask_login_screen();
-        }
-        if matches!(to, PaneId::Account | PaneId::General) {
-            let known = match &self.video_memory {
-                Some(VideoMemory::Read(list)) => list.as_slice(),
-                _ => &[],
-            };
-            self.live.system = Some(Box::new(crate::system::SystemInfo::read_with(
-                &self.about_root,
-                known,
-            )));
-            self.ask_video_memory();
-        }
-        if to == PaneId::General {
-            self.live.login_items = crate::system::login_items();
-        }
-        if to == PaneId::DesktopDock {
-            self.live.browsers = crate::system::browsers();
         }
         if to == PaneId::MenuBar {
             self.desk
@@ -547,21 +453,6 @@ impl State {
             self.settings.reload_clipboard(&self.paths);
             self.settings.reload_screen_sharing(&self.paths);
             self.settings.reload_desktop_control(&self.paths);
-        }
-        if matches!(to, PaneId::Privacy | PaneId::Notifications) {
-            let (locale, visibility) = (
-                cupertino_apps::entry::Locale::from_env(),
-                cupertino_apps::entry::Visibility::from_env(),
-            );
-            let entries = cupertino_apps::entry::index_dirs(
-                &cupertino_apps::entry::xdg_application_dirs(),
-                &locale,
-                &visibility,
-            );
-            let path_dirs: Vec<std::path::PathBuf> = std::env::var_os("PATH")
-                .map(|p| std::env::split_paths(&p).collect())
-                .unwrap_or_default();
-            self.live.apps = crate::clipboard::installed(entries, &path_dirs);
         }
         // the pairing agent waits for the reading to show an adapter
         self.agent_wanted = to == PaneId::Bluetooth;
@@ -684,16 +575,7 @@ impl State {
                     Ok(())
                 }
                 Effect::AskPicture { folder } => {
-                    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
-                    let start = home
-                        .as_ref()
-                        .map(|h| h.join("Pictures"))
-                        .filter(|p| p.is_dir())
-                        .or(home)
-                        .unwrap_or_else(|| std::path::PathBuf::from("/"));
-                    let mode = if folder { Mode::Folder } else { Mode::Photo };
-                    self.sheet = Some(Sheet::picker_pending(&start, mode));
-                    self.drive_picker();
+                    self.ask_picture(folder);
                     Ok(())
                 }
                 Effect::AskResolution { key, name } => {
@@ -763,6 +645,7 @@ impl State {
                         .map_err(|e| e.to_string());
                     if file == File::DataControl && stored.is_ok() {
                         self.settings.reload_clipboard(&self.paths);
+                        self.read_clipboard_states();
                     }
                     stored
                 }
@@ -781,17 +664,13 @@ impl State {
                     }
                     stored
                 }
-                Effect::SetLoginItem { id, enable } => {
-                    let done = crate::system::set_login_item(&id, enable)
-                        .map_err(|e| format!("The login item could not be changed: {e}"));
-                    self.live.login_items = crate::system::login_items();
-                    done
+                Effect::SetLoginItem { id: item, enable } => {
+                    self.set_login_item(id, item, enable);
+                    Ok(())
                 }
-                Effect::SetDefaultBrowser { id } => {
-                    let done = crate::system::set_default_browser(&id)
-                        .map_err(|e| format!("The default browser could not be changed: {e}"));
-                    self.live.browsers = crate::system::browsers();
-                    done
+                Effect::SetDefaultBrowser { id: browser } => {
+                    self.set_default_browser(id, browser);
+                    Ok(())
                 }
                 Effect::SetAccessibility { key, value } => {
                     self.set_accessibility(id, key, &value);
@@ -822,24 +701,6 @@ impl State {
         Ok(())
     }
 
-    /// Read the graphics memory only the driver's tool reports on a thread, once; the pane shows at once without
-    /// it and gains it when [`Background::VideoMemory`] arrives.
-    pub(crate) fn ask_video_memory(&mut self) {
-        if self.video_memory.is_some() {
-            return;
-        }
-        self.video_memory = Some(VideoMemory::Reading);
-        let notify = self.notify.clone();
-        let read = self.read_video_memory.clone();
-        let spawned = std::thread::Builder::new()
-            .name("settings-video-memory".into())
-            .spawn(move || notify(Background::VideoMemory(read())));
-        if let Err(e) = spawned {
-            eprintln!("cupertino-settings: cannot read the graphics memory: {e}");
-            self.video_memory = Some(VideoMemory::Read(Vec::new()));
-        }
-    }
-
     /// What a sheet's key or press decided.
     pub(crate) fn sheet_outcome(&mut self, outcome: Outcome) -> Result<()> {
         match outcome {
@@ -868,17 +729,10 @@ impl State {
                     eprintln!("cupertino-settings: {e}");
                     self.errors.push((ControlId::ClipboardAdd, e));
                 }
+                self.read_clipboard_states();
             }
             // the sheet stays with the reason until the program is allowed
-            Outcome::Program(program) => match self.settings.allow_clipboard(&self.paths, &program)
-            {
-                Ok(()) => self.sheet = None,
-                Err(e) => {
-                    if let Some(sheet) = &mut self.sheet {
-                        sheet.failed(&e);
-                    }
-                }
-            },
+            Outcome::Program(program) => self.allow_clipboard(program),
             Outcome::Picked { path, folder } if std::mem::take(&mut self.picking_exclusion) => {
                 let _ = folder;
                 self.sheet = None;
@@ -914,165 +768,12 @@ impl State {
         Ok(())
     }
 
-    /// List the pictures of the packs and of the added folders, and start the thumbnails of those without one.
-    pub(crate) fn load_pictures(&mut self) {
-        let folders: Vec<std::path::PathBuf> = self
-            .settings
-            .compositor
-            .wallpaper_folders
-            .iter()
-            .flatten()
-            .map(std::path::PathBuf::from)
-            .collect();
-        self.live.pictures = Pictures {
-            bundled: Vec::new(),
-            folders: folders.iter().map(|f| (f.clone(), Vec::new())).collect(),
-            default: self.assets.wallpaper_path(false),
-            loading: (0..=folders.len()).collect(),
-            // what could not be made stays known until it is asked for again and answered
-            unreadable: std::mem::take(&mut self.live.pictures.unreadable),
-        };
-        let current: Vec<std::path::PathBuf> = self
-            .settings
-            .compositor
-            .wallpaper
-            .iter()
-            .map(std::path::PathBuf::from)
-            .collect();
-        self.ask_again(&current);
-        self.ask_thumbnails(current);
-        // each listing on a thread of its own: a folder on a hung mount shows "Loading…" and holds nothing else up
-        self.start_listing(ListingKey::Packs, None);
-        for folder in folders {
-            self.start_listing(ListingKey::Pictures(folder), None);
-        }
-    }
-
-    /// Start the read of `key` on a thread unless one is running (a folder on a dead mount keeps one thread, however
-    /// often it is visited); it is read once more when the running one is answered if it was asked for meanwhile.
-    pub(crate) fn start_listing(
-        &mut self,
-        key: ListingKey,
-        request: Option<cupertino_kit::filepicker::Request>,
-    ) {
-        if let Some(request) = self.listings.ask(key.clone(), request) {
-            self.run_listing(key, request);
-        }
-    }
-
-    /// Run the read of `key` on a thread; its answer comes back as a [`Background`] event.
-    pub(crate) fn run_listing(
-        &mut self,
-        key: ListingKey,
-        request: Option<cupertino_kit::filepicker::Request>,
-    ) {
-        let notify = self.notify.clone();
-        let spawned_key = key.clone();
-        let job: Box<dyn FnOnce() -> Background + Send> = match key.clone() {
-            ListingKey::Packs => {
-                let assets = self.assets.clone();
-                Box::new(move || Background::Pictures {
-                    files: assets.wallpaper_files(),
-                    key,
-                })
-            }
-            ListingKey::Pictures(folder) => Box::new(move || Background::Pictures {
-                files: cupertino_assets::pictures_in(&folder),
-                key,
-            }),
-            ListingKey::Chooser(..) => {
-                let Some(request) = request else {
-                    self.listings.abandon(&key);
-                    return;
-                };
-                Box::new(move || Background::Listing(request.run()))
-            }
-        };
-        let spawned = std::thread::Builder::new()
-            .name("settings-listing".into())
-            .spawn(move || notify(job()));
-        if let Err(e) = spawned {
-            eprintln!("cupertino-settings: cannot list a folder: {e}");
-            self.listings.abandon(&spawned_key);
-        }
-    }
-
-    /// Make the thumbnails of `images` that have none and were not asked for yet, one after the other on a thread.
-    /// The pictures among `images` whose thumbnail could not be made are asked for again by the next
-    /// [`Self::ask_thumbnails`], as they are listed again: a file that came back, or was mended, shows; one still
-    /// missing or unreadable says so again. Each keeps what it says until it is answered.
-    pub(crate) fn ask_again(&mut self, images: &[std::path::PathBuf]) {
-        for image in images {
-            if self.live.pictures.unreadable.contains_key(image) {
-                self.thumbnails_asked.remove(image);
-                self.thumbnails.remove(image);
-            }
-        }
-    }
-
-    pub(crate) fn ask_thumbnails(&mut self, images: Vec<std::path::PathBuf>) {
-        let wanted: Vec<std::path::PathBuf> = images
-            .into_iter()
-            .filter(|image| {
-                !self.thumbnails.contains_key(image) && self.thumbnails_asked.insert(image.clone())
-            })
-            .collect();
-        if wanted.is_empty() {
-            return;
-        }
-        let notify = self.notify.clone();
-        let cache_home = self.thumbnail_cache.clone();
-        let spawned = std::thread::Builder::new()
-            .name("wallpaper-thumbnails".into())
-            .spawn(move || {
-                let cache = match cache_home {
-                    Some(home) => Thumbnailer::new(home, "cupertino-settings"),
-                    None => Thumbnailer::from_env("cupertino-settings"),
-                };
-                for image in wanted {
-                    match cache.get_or_create(&image, ThumbSize::Large) {
-                        Ok(thumbnail) => {
-                            let pixels = decode_thumbnail(&thumbnail, THUMBNAIL_EDGE);
-                            notify(Background::Thumbnail {
-                                image,
-                                thumbnail,
-                                pixels,
-                            })
-                        }
-                        Err(e) => {
-                            eprintln!(
-                                "cupertino-settings: no thumbnail of {}: {e}",
-                                image.display()
-                            );
-                            notify(Background::NoThumbnail {
-                                why: unreadable(&e),
-                                image,
-                            })
-                        }
-                    }
-                }
-            });
-        if let Err(e) = spawned {
-            eprintln!("cupertino-settings: cannot start the thumbnails: {e}");
-        }
-    }
-
-    /// Hand the chooser's next listing to a thread; its answer comes back as [`Background::Listing`].
-    pub(crate) fn drive_picker(&mut self) {
-        let Some(request) = self.sheet.as_mut().and_then(Sheet::picker_request) else {
-            return;
-        };
-        let (dir, hidden, mode) = request.key();
-        let key = ListingKey::Chooser(dir, hidden, mode);
-        self.start_listing(key, Some(request));
-    }
-
     /// Store the typed resolution of the mouse `key`; the server applies the file.
     pub(crate) fn set_mouse_dpi(&mut self, key: &str, dpi: u32) -> std::result::Result<(), String> {
         self.settings.set_mouse_dpi(&self.paths, key, dpi)
     }
 
-    /// Something from a bus thread: a pane to show, a question of the pairing agent, the end of a pairing.
+    /// Something from a bus or a watch: a pane to show, a question of the pairing agent, a change.
     pub(crate) fn background_event(&mut self, event: Background) -> Result<()> {
         match event {
             Background::Changed(changed) => self.changed(&[changed])?,
@@ -1098,75 +799,6 @@ impl State {
                     self.sheet = None;
                     self.agent_answer = None;
                 }
-            }
-            Background::Pictures { key, files } => {
-                if let Some(request) = self.listings.answered(&key) {
-                    self.run_listing(key.clone(), request);
-                }
-                let images: Vec<std::path::PathBuf> =
-                    files.iter().map(|f| f.light.clone()).collect();
-                let pictures = &mut self.live.pictures;
-                // the pane may list other folders by now: the answer goes to the one it is for, if still listed
-                let group = match &key {
-                    ListingKey::Packs => Some(0),
-                    ListingKey::Pictures(folder) => pictures
-                        .folders
-                        .iter()
-                        .position(|(f, _)| f == folder)
-                        .map(|i| i + 1),
-                    ListingKey::Chooser(..) => None,
-                };
-                if let Some(group) = group {
-                    pictures.loading.remove(&group);
-                    match group {
-                        0 => pictures.bundled = files,
-                        n => pictures.folders[n - 1].1 = files,
-                    }
-                    self.ask_again(&images);
-                    self.ask_thumbnails(images);
-                }
-            }
-            Background::Listing(listing) => {
-                let (dir, hidden, mode) = listing.key();
-                let key = ListingKey::Chooser(dir, hidden, mode);
-                if let Some(request) = self.listings.answered(&key) {
-                    self.run_listing(key, request);
-                }
-                if let Some(sheet) = self.sheet.as_mut() {
-                    sheet.apply_listing(listing);
-                }
-            }
-            Background::Thumbnail {
-                image,
-                thumbnail,
-                pixels,
-            } => {
-                match pixels {
-                    Some(pixels) => {
-                        self.live.pictures.unreadable.remove(&image);
-                        self.thumbnail_images.insert(image.clone(), pixels);
-                    }
-                    // a thumbnail that cannot be decoded shows as a picture that cannot be read
-                    None => {
-                        self.live
-                            .pictures
-                            .unreadable
-                            .insert(image.clone(), crate::controls::Unreadable::Damaged);
-                    }
-                }
-                self.thumbnails.insert(image, thumbnail);
-            }
-            Background::NoThumbnail { image, why } => {
-                self.live.pictures.unreadable.insert(image, why);
-            }
-            Background::VideoMemory(list) => {
-                if !list.is_empty() {
-                    if let Some(system) = &mut self.live.system {
-                        system.about =
-                            Some(crate::about::About::read_with(&self.about_root, &list));
-                    }
-                }
-                self.video_memory = Some(VideoMemory::Read(list));
             }
             Background::Files(WatchEvent::Changed(changed)) => {
                 if let Err(e) = self.settings.reload(&self.paths) {

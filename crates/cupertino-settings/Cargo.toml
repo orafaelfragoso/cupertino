@@ -17,7 +17,6 @@ cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-radios = { path = "../cupertino-radios", features = ["dbus"] }
 cupertino-displays = { path = "../cupertino-displays" }
 cupertino-icons = { path = "../cupertino-icons" }
-cupertino-theme = { path = "../cupertino-theme" }
 cupertino-keyboard = { path = "../cupertino-keyboard" }
 libc = "0.2"
 zeroize = "1"

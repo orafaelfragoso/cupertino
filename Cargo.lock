@@ -1695,7 +1695,6 @@ dependencies = [
  "cupertino-kit",
  "cupertino-menu-model",
  "cupertino-radios",
- "cupertino-theme",
  "libc",
  "zbus",
  "zeroize",

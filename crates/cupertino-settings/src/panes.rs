@@ -483,7 +483,7 @@ fn privacy_sections(settings: &Settings, live: &Live) -> Vec<Section> {
     }
     for (i, entry) in list.conf.allowed.iter().enumerate() {
         let (name, icon) = clipboard::identity(&entry.program, &live.apps);
-        let (error, control) = match clipboard::state(entry) {
+        let (error, control) = match clipboard::known_state(&live.clipboard, entry) {
             State::Allowed => (None, button("Remove")),
             State::Missing => (Some("Not found"), button("Remove")),
             State::Changed => (
@@ -3161,7 +3161,9 @@ pub fn change(id: ControlId, value: Value, settings: &mut Settings, live: &Live)
             let Some(entry) = settings.clipboard.conf.allowed.get(i) else {
                 return Vec::new();
             };
-            if clipboard::state(entry) == State::Changed && index_of(value) == 0 {
+            if clipboard::known_state(&live.clipboard, entry) == State::Changed
+                && index_of(value) == 0
+            {
                 return match cupertino_defaults::data_control::Entry::for_program(&entry.program) {
                     Ok(again) => {
                         settings.clipboard.conf.allowed[i] = again;

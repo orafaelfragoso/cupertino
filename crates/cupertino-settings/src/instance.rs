@@ -31,6 +31,10 @@ impl AboutInstance {
 }
 
 /// About has a separate owner, so its lifetime and repeat launches never change the Settings pane.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "claims or reaches the running instance at the start, before the window loop exists"
+)]
 pub fn serve_about(
     builder: connection::Builder<'static>,
     on_show: impl Fn(String) + Send + Sync + 'static,
@@ -57,6 +61,10 @@ pub fn serve_about(
 
 /// Hand `activation_token` to the running About. Only an owner that runs this very program gets it: another program
 /// holding the name would otherwise receive the launcher's focus grant. The call goes to the owner that was checked.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "claims or reaches the running instance at the start, before the window loop exists"
+)]
 pub fn show_about(
     builder: connection::Builder<'static>,
     activation_token: &str,
@@ -101,6 +109,10 @@ async fn checked_owner(
 }
 
 /// Whether process `pid` runs the same executable as this process.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "asked by the start's claim of the instance (show, show_about), before the window loop exists"
+)]
 fn runs_this_program(pid: u32) -> bool {
     match (
         std::fs::read_link(format!("/proc/{pid}/exe")),
@@ -187,6 +199,10 @@ impl Instance {
 /// Export the interface and claim [`BUS_NAME`] on the bus `builder` connects to; `on_show` runs on the bus thread for
 /// every accepted call. Served while the returned connection lives. Fails with `zbus::Error::NameTaken` when another
 /// settings process owns the name.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "claims or reaches the running instance at the start, before the window loop exists"
+)]
 pub fn serve(
     builder: connection::Builder<'static>,
     on_show: impl Fn(PaneId, String) + Send + Sync + 'static,
@@ -214,6 +230,10 @@ pub fn serve(
 
 /// Ask the running settings process on the bus `builder` connects to to show the pane with the id `pane_id`. A launch
 /// with an activation token hands it only to an owner that runs this very program, and calls the owner it checked.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "claims or reaches the running instance at the start, before the window loop exists"
+)]
 pub fn show(
     builder: connection::Builder<'static>,
     pane_id: &str,

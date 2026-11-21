@@ -165,22 +165,36 @@ fn shortcuts() -> CommandRegistry<Message> {
         .with(key(Mods::NONE, SPACE), Message::MoreInfo)
 }
 
-/// Start More Info with `token`; the command ends with [`Message::Ended`] when its process exits.
+/// Start More Info with `token`; the command ends with [`Message::Ended`] when its process exits, which the window's
+/// loop hears on the process's descriptor (`pidfd_open`), so nothing waits for it.
 fn more_info(token: &str) -> Result<Command<Message>> {
+    use std::os::fd::{FromRawFd, OwnedFd};
     let mut child = std::process::Command::new(std::env::current_exe()?)
         .env("XDG_ACTIVATION_TOKEN", token)
         .spawn()?;
-    let (ended, exit) = async_channel::bounded(1);
-    std::thread::spawn(move || {
-        match child.wait() {
-            Ok(status) if status.success() => {}
-            Ok(status) => eprintln!("cupertino-settings: More Info exited with {status}"),
+    let pid = libc::pid_t::try_from(child.id())?;
+    // SAFETY: pidfd_open of the child started above, which is not reaped before the descriptor is made
+    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+    let exited = match std::os::fd::RawFd::try_from(fd) {
+        // SAFETY: the descriptor pidfd_open returned, owned from here on
+        Ok(fd) if fd >= 0 => unsafe { OwnedFd::from_raw_fd(fd) },
+        _ => {
+            let e = std::io::Error::last_os_error();
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(e.into());
+        }
+    };
+    let exited = async_io::Async::new(exited)?;
+    Ok(Command::Perform(Box::pin(async move {
+        // the descriptor reads ready once the process has exited
+        let _ = exited.readable().await;
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => {}
+            Ok(Some(status)) => eprintln!("cupertino-settings: More Info exited with {status}"),
+            Ok(None) => eprintln!("cupertino-settings: More Info is left running"),
             Err(e) => eprintln!("cupertino-settings: cannot wait for More Info: {e}"),
         }
-        let _ = ended.try_send(());
-    });
-    Ok(Command::Perform(Box::pin(async move {
-        let _ = exit.recv().await;
         Message::Ended
     })))
 }

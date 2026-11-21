@@ -1,5 +1,9 @@
 //! What the machine has, read where the kernel and udev publish it: a battery of its own and a touchpad decide
 //! whether their panes show.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "read by the services, on the I/O pool (shell::desk)"
+)]
 
 use std::fs;
 use std::path::{Path, PathBuf};

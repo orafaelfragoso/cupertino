@@ -79,12 +79,18 @@ impl Rig {
     /// A server whose shell is `components`, those of `alone` in separate hosts, run by this test binary as the host
     /// program, its first supervision pass run; `name` names the report.
     pub fn new(name: &str, components: &[&str], alone: &[&str]) -> Self {
+        Self::with_time_scale(name, components, alone, TIME_SCALE)
+    }
+
+    /// [`Rig::new`] with the server's restart delays scaled by `scale`: `1.0` keeps them as long as in a session, for a
+    /// test that watches what other components do while one waits to start again.
+    pub fn with_time_scale(name: &str, components: &[&str], alone: &[&str], scale: f64) -> Self {
         // the software rasteriser, as the server's program tests run the headless server
         std::env::set_var("LIBGL_ALWAYS_SOFTWARE", "1");
         // the restart delays on the test's clock, which the hosts this rig starts inherit
         std::env::set_var(
             cupertino_server::restart_policy::TEST_TIME_SCALE_ENV,
-            TIME_SCALE.to_string(),
+            scale.to_string(),
         );
         let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("shell-host");
         std::fs::create_dir_all(&dir).expect("the report's folder");

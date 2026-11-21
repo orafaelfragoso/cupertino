@@ -86,7 +86,8 @@ fn dock_colour(rig: &mut Rig) -> Option<&'static str> {
 
 #[test]
 fn a_failed_component_restarts_alone_while_another_keeps_drawing() {
-    let mut rig = Rig::new("restarts", &["dock", "notifications"], &[]);
+    // the session's restart delays: the dock must have time to draw its next colour while the notifications wait
+    let mut rig = Rig::with_time_scale("restarts", &["dock", "notifications"], &[], 1.0);
     rig.until("the dock draws", |rig| dock_colour(rig).is_some());
     let first = rig
         .host_pid(HostKind::Shared)

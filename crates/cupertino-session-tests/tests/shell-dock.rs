@@ -308,8 +308,9 @@ fn the_dock_restarts_alone_holding_its_place_after_injected_panics() {
             // what it draws next panics: the trash's tile with a file more or less
             toggle(&session.data);
         }
-        // every turn until it runs again the bar's space stays reserved and its picture shows, held or drawn anew;
-        // but the server holds nothing of a component it gives up, the fifth failure in a row (D16)
+        // every turn until it runs again the bar's space stays reserved and its picture shows, live, held or drawn
+        // anew: the crashed instance's bar shows live until its connection ends and is then held. But the server holds
+        // nothing of a component it gives up, the fifth failure in a row (D16)
         let gives_up = (crash + 1) % CRASHES_IN_A_ROW == 0;
         let mut turns = 0;
         let mut watch = |rig: &mut Rig| {
@@ -327,18 +328,15 @@ fn the_dock_restarts_alone_holding_its_place_after_injected_panics() {
                 "the bar's space stays reserved after a crash at {at}"
             );
             assert!(
-                rig.state.docks.has_dock(output) || {
-                    let holds = rig
-                        .state
-                        .hosts
-                        .held_surfaces()
-                        .iter()
-                        .any(|h| h.component == "dock" && h.picture.is_some());
-                    held |= holds;
-                    holds
-                },
-                "the bar or its held picture shows after a crash at {at}"
+                rig.state.hosts.persistent_shows_on("dock", output),
+                "the bar's picture shows, live or held, after a crash at {at}"
             );
+            held |= rig
+                .state
+                .hosts
+                .held_surfaces()
+                .iter()
+                .any(|h| h.component == "dock" && h.picture.is_some());
         };
         if gives_up {
             rig.until(

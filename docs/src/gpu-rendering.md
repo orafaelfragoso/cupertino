@@ -213,7 +213,7 @@ from EGL), which tests use; a device that cannot be made, one with no allocator,
 the process to the CPU. Contexts are created with the same robustness and purge-notification attributes as the
 compositor's. Video-memory purges (suspend, VT switch, mode set) are never counted as losses. After a reset or a purge the
 compositor tells every client its buffers were lost, so an idle client repaints instead of showing what the driver
-left behind. The renderer each process uses is logged once, reported by `cupertino-diagnose` and recorded in the frame
+left behind. The renderer each process uses is logged once, reported by `cupertino diagnose` and recorded in the frame
 statistics. A process or surface that wanted the GPU and draws on the CPU instead (the process at its start, one
 surface whose buffer was refused, a reset of its context; a purge is none) logs
 `renderer: fell back to the CPU (<scope>): <why>` and records the diagnostic event `toolkit.renderer.fallback`, which

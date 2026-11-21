@@ -1169,14 +1169,6 @@
   owner_area: rendering
   scope: public
   source: crates/cupertino-cursor/src/bin/cupertino-cursor.rs
-- name: cupertino-diagnose
-  kind: binary
-  version: 0.1.0
-  shipped: yes
-  owner_crate: cupertino-diagnostics
-  owner_area: services
-  scope: public
-  source: crates/cupertino-diagnostics/src/bin/cupertino-diagnose.rs
 - name: cupertino-files
   kind: binary
   version: 0.1.0

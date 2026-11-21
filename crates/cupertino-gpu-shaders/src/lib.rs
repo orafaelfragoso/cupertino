@@ -1,5 +1,5 @@
 //! The build step of Cupertino's own shader programs. Each program of a set ([`sets`]: `crates/cupertino-gpu/shaders/`,
-//! `crates/cupertino-glass/shaders/` and `crates/cupertino-server/shaders/passes/`) is one WGSL file with a `vs_main`
+//! `crates/cupertino-glass/shaders/` and `crates/cupertino-server-render/shaders/passes/`) is one WGSL file with a `vs_main`
 //! and an `fs_main` entry point, whose `// include NAME.wgsl` lines put the set's include files in their place; the
 //! shared module (`shared.wgsl` of `cupertino-gpu`, the drawing maths) is concatenated ahead of it, and `naga` generates, into the set's `generated/`:
 //!

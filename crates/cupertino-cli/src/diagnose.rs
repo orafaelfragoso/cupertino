@@ -1,12 +1,12 @@
-//! `cupertino diagnose`: the checks of `cupertino-diagnostics` on this machine and session.
+//! `cupertino diagnose`: the checks of [`crate::diagnostics`] on this machine and session.
 //!
 //! The group's command lists are joined in [`GROUP`]; another module adds its commands under `diagnose` by adding its
 //! list there.
 
+use crate::diagnostics::{Area, Report, Sources, Status};
 use crate::{
     Arg, Args, Command, Context, Failure, FailureKind, Format, Group, Reply, Run, Sink, Stability,
 };
-use cupertino_diagnostics::{Area, Report, Sources, Status};
 use serde::Serialize;
 
 pub(crate) const GROUP: Group = Group {
@@ -58,10 +58,9 @@ pub(crate) const COMMANDS: &[Command] = &[Command {
                   (skip, ok, warn or fail), a summary, the facts it found and, for warn and fail, a fix. Checks that need a \
                   session are skipped outside one.\n\n\
                   The command exits 0 once the checks ran, whatever they found; with --strict a check that fails \
-                  makes it exit 5 (checks_failed). In the JSON envelope data is the report itself (schema 1, the \
-                  same object `cupertino-diagnose --json` prints). In JSON lines each check is a `check` event, in \
-                  order, and the result counts the checks of each status.\n\n\
-                  It replaces `cupertino-diagnose`, which still works and prints a notice.",
+                  makes it exit 5 (checks_failed). In the JSON envelope data is the report itself (schema 1). In \
+                  JSON lines each check is a `check` event, in order, and the result counts the checks of each \
+                  status.",
     examples: &[
         ("cupertino diagnose", "Run every check and print the report."),
         (
@@ -111,7 +110,7 @@ fn diagnose(args: &Args, cx: &Context, sink: &mut Sink) -> Result<Reply, Failure
     };
     // area by area, so a stop is seen between them
     let mut report = Report {
-        schema: cupertino_diagnostics::SCHEMA,
+        schema: crate::diagnostics::SCHEMA,
         checks: Vec::new(),
     };
     for area in Area::ALL
@@ -123,7 +122,7 @@ fn diagnose(args: &Args, cx: &Context, sink: &mut Sink) -> Result<Reply, Failure
         }
         report
             .checks
-            .extend(cupertino_diagnostics::run(sources, &[area]).checks);
+            .extend(crate::diagnostics::run(sources, &[area]).checks);
     }
     // the report's text, cut into the lines of each check, so the human form prints as `Display` does
     let text = report.to_string();

@@ -1,6 +1,6 @@
 //! Rendering without a GPU: when no card offers a hardware renderer (a virtual machine without 3D, or a GPU whose
 //! driver did not load), the server draws the desktop with the software one instead of not starting. It says so in its
-//! log, in a line of the session's `session.log`, which `cupertino-diagnose` reports, and in the diagnostic event
+//! log, in a line of the session's `session.log`, which `cupertino diagnose` reports, and in the diagnostic event
 //! `server.renderer.software`.
 
 use std::path::{Path, PathBuf};

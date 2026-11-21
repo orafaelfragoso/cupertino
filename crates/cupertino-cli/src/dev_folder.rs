@@ -3,11 +3,11 @@
 //! system configuration, `/etc/cupertino/compositor.json`, editing that one key in place so every other key keeps its
 //! text, and creates the folder for the user who ran `sudo`.
 
+use crate::diagnostics::dev_builds::{components_run, may_run_from_folder};
 use crate::{
     Arg, Args, Command, Context, Failure, FailureKind, Group, Reply, Run, Stability, ValueHint,
 };
 use cupertino_defaults::compositor::CompositorSettings;
-use cupertino_diagnostics::dev_builds::{components_run, may_run_from_folder};
 use serde::Serialize;
 use serde_json::Value;
 use std::ops::Range;

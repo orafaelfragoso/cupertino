@@ -9,7 +9,7 @@ use cupertino_devices::preflight;
 
 use cupertino_diagnostic_events::Severity;
 
-use crate::{dev_builds, events, Area, Check, Scope, Sources, Status, Unit};
+use super::{dev_builds, events, Area, Check, Scope, Sources, Status, Unit};
 
 /// The longest log line a check quotes.
 const QUOTE_LIMIT: usize = 300;
@@ -556,7 +556,7 @@ fn unit(
         };
         if unit.active != "active" && (sources.unit_state)(scope, service).is_some_and(serves) {
             let state = match (unit.active.as_str(), unit.file.as_str()) {
-                (crate::NOT_FOUND, _) => "not installed".to_owned(),
+                (super::NOT_FOUND, _) => "not installed".to_owned(),
                 (active, "") => active.to_owned(),
                 (active, file) => format!("{active} ({file})"),
             };
@@ -570,7 +570,7 @@ fn unit(
     }
     match unit.active.as_str() {
         "active" => Check::new(id, area, Status::Ok, format!("{name} is active")),
-        crate::NOT_FOUND => Check::new(
+        super::NOT_FOUND => Check::new(
             id,
             area,
             Status::Warn,
@@ -798,8 +798,8 @@ fn gpu_resets(log: &str) -> Check {
     .fact("last_reason", quote(last.reason))
     .fact("last_outcome", quote(last.outcome))
     .fix(
-        "a reset is the GPU driver's or the hardware's; to investigate it, give the output of `cupertino-diagnose \
-         --json` and the server.log lines around that time to an AI assistant, or to the driver's bug tracker",
+        "a reset is the GPU driver's or the hardware's; to investigate it, give the output of `cupertino \
+         --format json diagnose` and the server.log lines around that time to an AI assistant, or to the driver's bug tracker",
     )
 }
 

@@ -521,7 +521,7 @@ Presenter and process:
       `docs/architecture/contracts.yaml`, compositor event, client repaint, tests.
 - [x] First frame on the CPU while the context and programs warm on a worker thread; after the switch the CPU
       renderer's frame, layers and caches are freed.
-- [x] `cupertino-diagnose` and the frame statistics report the renderer per process.
+- [x] `cupertino diagnose` and the frame statistics report the renderer per process.
 - [x] Local GPU tier, presenter: dmabuf import, syncobj, injected loss and purge, CPU↔GPU switch, failed-import
       fallback, resize storm, fence soak on the NVIDIA GPU.
 - [x] Local GPU tier: goldens on the NVIDIA GPU (with `GpuRenderer`): `cupertino-ui-gpu`'s suite, long-running group.
@@ -618,7 +618,7 @@ connects, and `CUPERTINO_RENDERER=cpu|gpu` overrides it.
 - [ ] A week of daily use on the target machine without a fallback. DEFERRED by the owner (2026-11-15): a week of use. A
       fallback is logged (`renderer: fell back to the CPU (<scope>): <why>`) and recorded as the diagnostic event
       `toolkit.renderer.fallback` in the user's event store (kept a fortnight); `cupertino diagnose events --since 7d`
-      lists any, and `cupertino-diagnose`'s `gpu.client_renderers` names a process on the CPU after a failure. Purges
+      lists any, and `cupertino diagnose`'s `gpu.client_renderers` names a process on the CPU after a failure. Purges
       are not recorded.
 
 Gate:
@@ -1736,7 +1736,7 @@ Taken on the target machine's GPU (GeForce RTX 3060, proprietary driver 615.78.0
 - `cupertino-ui-wayland::renderer`: the fallback rule as functions of what the process found (`start`, `settle`,
   `LossHistory`), the switch `GPU_BY_DEFAULT` (off), `CUPERTINO_RENDERER`, the process's current renderer and why
   (`active`), logged as `renderer: <cpu|gpu> (<reason>)` on every change and recorded in
-  `$XDG_RUNTIME_DIR/cupertino/renderers/<pid>` for `cupertino-diagnose` (`gpu.client_renderers`). The frame
+  `$XDG_RUNTIME_DIR/cupertino/renderers/<pid>` for `cupertino diagnose` (`gpu.client_renderers`). The frame
   statistics carry `renderer` on every line and the frame bench lists each program's renderers.
 - `cupertino-ui-wayland::gpu_path`: the warm-up thread (device on the feedback's render node, saved programs, the blit
   program, one draw with each of the renderers' programs so the driver finishes them before the first frame,

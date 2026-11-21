@@ -1,5 +1,5 @@
 //! Which renderer a process draws with, and why: the fallback rule as a model without a display, the size and repaint
-//! rule of a process that declares no class, and the record of the choice each process leaves for `cupertino-diagnose`
+//! rule of a process that declares no class, and the record of the choice each process leaves for `cupertino diagnose`
 //! and the frame statistics.
 //!
 //! A process draws on the CPU when `CUPERTINO_RENDERER=cpu` is set, when its class is the CPU's
@@ -246,7 +246,7 @@ pub struct Choice {
 }
 
 /// A window system takes `choice` as its renderer: logged on standard error, and written to the session's record of
-/// process renderers ([`record_dir`]) that `cupertino-diagnose` reads.
+/// process renderers ([`record_dir`]) that `cupertino diagnose` reads.
 pub(crate) fn announce(choice: &Choice) {
     eprintln!(
         "renderer: {} ({})",

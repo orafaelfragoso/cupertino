@@ -23,7 +23,7 @@ use cupertino_diagnostic_events::store::{self, Contents};
 use cupertino_diagnostic_events::{time, Fields, Record, Severity, SCHEMA};
 use serde::Serialize;
 
-use crate::Sources;
+use super::Sources;
 
 /// The name of the user store among the sources.
 pub const STORE: &str = "store";

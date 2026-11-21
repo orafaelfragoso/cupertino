@@ -22,6 +22,7 @@ mod dev;
 mod dev_folder;
 mod diagnose;
 mod diagnose_events;
+pub mod diagnostics;
 pub mod manual;
 mod sdk;
 mod shell;

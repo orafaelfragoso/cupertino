@@ -1,15 +1,15 @@
 //! `cupertino diagnose events …` and `cupertino diagnose export`: the diagnostic events the desktop's processes recorded
-//! (the user store, `session.log` and the system journal, read by `cupertino_diagnostics::events`), and one file with
+//! (the user store, `session.log` and the system journal, read by `crate::diagnostics::events`), and one file with
 //! them and the diagnostics report for a bug report.
 
+use crate::diagnostics::events::{self, Counts, Filter, FollowFrom, SourceReport, SourceStatus};
+use crate::diagnostics::Sources;
 use crate::{
     Arg, Args, Command, Context, Failure, FailureKind, Reply, Run, Sink, Stability, ValueHint,
 };
 use cupertino_diagnostic_events::build_info;
 use cupertino_diagnostic_events::store::{Limits, Store};
 use cupertino_diagnostic_events::{time, Record};
-use cupertino_diagnostics::events::{self, Counts, Filter, FollowFrom, SourceReport, SourceStatus};
-use cupertino_diagnostics::Sources;
 use serde::Serialize;
 use std::fmt::Write as _;
 use std::fs::OpenOptions;
@@ -94,7 +94,7 @@ pub(crate) const COMMANDS: &[Command] = &[
         summary: "Writes the diagnostics report, the diagnostic events and the versions to one new JSON file",
         description: "Writes one JSON document (mode 0600) for a bug report: `schema`, `created`, `versions` (the \
                       command's version and commit, the OS image and the kernel), `report` (every diagnostics \
-                      check, as cupertino-diagnose --json gives it, its texts through the free-text scrubber), \
+                      check, as the data of `cupertino --format json diagnose`, its texts through the free-text scrubber), \
                       `events` (the diagnostic events, already redacted when they were recorded) and `sources`.\n\n\
                       --include-logs adds `logs` with server.log, server.log.1 and session.log, each line passed \
                       through the free-text scrubber: home paths, user and host names, addresses and tokens are \
@@ -550,7 +550,7 @@ fn export(args: &Args, cx: &Context) -> Result<Reply, Failure> {
     let include_logs = args.flag("include-logs");
     with_sources(cx, |sources| {
         let report = events::read(sources, &filter);
-        let checks = cupertino_diagnostics::run(sources, &[]);
+        let checks = crate::diagnostics::run(sources, &[]);
         // the store's salt when there is a store, so hashes in the logs match the events'
         let policy = events::policy(sources);
         let mut checks_json = serde_json::to_value(&checks).expect("a report serializes");

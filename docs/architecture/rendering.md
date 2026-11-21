@@ -67,7 +67,7 @@ a rule changes this file first, in its own reviewed change.
     process or surface that wanted the GPU is logged and recorded as a diagnostic event.
 18. *(from step 6)* Every client context is created with robustness and purge notification. After a reset or purge
     the compositor tells clients their buffers were lost, and clients repaint.
-19. *(from step 6)* The renderer each process uses is logged, reported by `cupertino-diagnose` and recorded in the
+19. *(from step 6)* The renderer each process uses is logged, reported by `cupertino diagnose` and recorded in the
     frame statistics.
 
 ## Structure

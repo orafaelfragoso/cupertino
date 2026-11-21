@@ -5,7 +5,7 @@
 - [Using Cupertino every day](daily-use.md)
 - [Install from a USB stick](install-usb.md)
 - [The cupertino command](cupertino-command.md)
-- [Checking a machine with cupertino-diagnose](diagnose.md)
+- [Checking a machine with cupertino diagnose](diagnose.md)
 - [Portals](portals.md)
 - [Release checklist](release-checklist.md)
 - [Building and running](building.md)

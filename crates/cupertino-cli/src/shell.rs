@@ -3,8 +3,8 @@
 //! the server's `org.cupertino.Session1` interface on the session bus, and a component of a development build of the
 //! shell host made to panic on its own bus connection.
 
+use crate::diagnostics::dev_builds::older_than_installed;
 use crate::{Arg, Args, Command, Context, Failure, FailureKind, Group, Reply, Run, Stability};
-use cupertino_diagnostics::dev_builds::older_than_installed;
 use serde::Serialize;
 use std::fmt::Write as _;
 use std::path::Path;

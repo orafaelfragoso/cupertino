@@ -1,8 +1,8 @@
-# Checking a machine with cupertino-diagnose
+# Checking a machine with cupertino diagnose
 
-`cupertino-diagnose` checks this machine and the session it runs in for what Cupertino needs: the GPU and its driver, the session, the desktop portal, the services, the development folder's build of the shell host, how the last sessions ended, where the logs are, and the errors the desktop recorded in the last day. It changes nothing and opens no device. It reads sysfs, installed files, the session's logs, the [diagnostic events](#diagnostic-events) and the states of systemd units. It runs as your user, from the session or from a text console; the checks that need a session are skipped outside one.
+`cupertino diagnose` checks this machine and the session it runs in for what Cupertino needs: the GPU and its driver, the session, the desktop portal, the services, the development folder's build of the shell host, how the last sessions ended, where the logs are, and the errors the desktop recorded in the last day. It changes nothing and opens no device. It reads sysfs, installed files, the session's logs, the [diagnostic events](#diagnostic-events) and the states of systemd units. It runs as your user, from the session or from a text console; the checks that need a session are skipped outside one.
 
-This page describes the checks as they are on `main` today. They run as `cupertino diagnose`, a command of [the cupertino command](cupertino-command.md), and as `cupertino-diagnose`, the program it replaces. `cupertino-diagnose` still works; in the text form it prints one line on standard error naming `cupertino diagnose`, and its `--json` output is unchanged. It will be removed in a later release. The same group reads the diagnostic events with `cupertino diagnose events` and writes a bug report file with `cupertino diagnose export`.
+This page describes the checks as they are on `main` today. `diagnose` is a group of [the cupertino command](cupertino-command.md); the same group reads the diagnostic events with `cupertino diagnose events` and writes a bug report file with `cupertino diagnose export`.
 
 ## Usage
 
@@ -12,25 +12,24 @@ cupertino --format json diagnose                     # the report as one JSON en
 cupertino --format jsonl diagnose                    # each check as a JSON line, then the counts of each status
 cupertino diagnose --area gpu --area crash
 cupertino diagnose --strict                          # exit 5 when a check fails
-cupertino-diagnose --json                            # the program it replaces: the report alone
 ```
 
-`cupertino diagnose` takes `--area` as below and `--strict`; its exit codes are those of [the cupertino command](cupertino-command.md#exit-codes): 0 once the checks ran, 2 for a wrong argument, 5 with `--strict` when a check fails. The rest of this page describes `cupertino-diagnose`, whose report is the same.
-
-| Flag | Meaning |
+| Option | Meaning |
 |---|---|
-| `--json` | Print the report as JSON. |
 | `--area AREA` | Run only this area. Repeat it for more. `AREA` is `gpu`, `session`, `portals`, `services`, `shell`, `crash`, `logs` or `events`. With no `--area`, every area runs, in that order. |
-| `-h`, `--help` | Print the usage and exit 0. |
+| `--strict` | Exit 5 (`checks_failed`) when a check fails. |
 
 ## Exit codes
 
+The exit codes are those of [the cupertino command](cupertino-command.md#exit-codes):
+
 | Code | Meaning |
 |---|---|
-| 0 | The checks ran. A failed check does not change the exit code. |
-| 2 | The command line was wrong: an unknown flag, or `--area` with a missing or unknown name. The usage goes to standard error. |
+| 0 | The checks ran. Without `--strict`, a failed check does not change the exit code. |
+| 2 | The command line was wrong (`invalid_usage`): an unknown option, or `--area` with a missing or unknown name. |
+| 5 | With `--strict`, a check failed (`checks_failed`). |
 
-The command never exits 1. A script reads each check's `status` from `--json`.
+A script reads each check's `status` from the JSON form.
 
 ## Text output
 
@@ -46,6 +45,8 @@ warn  portals.conf        no cupertino-portals.conf: xdg-desktop-portal picks th
 ```
 
 ## JSON output
+
+In `cupertino --format json diagnose` the envelope's `data` is the report:
 
 ```json
 {

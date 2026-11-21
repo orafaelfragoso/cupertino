@@ -102,9 +102,9 @@ Still required:
 
 In progress, WP-14, WP-16 and WP-11.
 
-The `cupertino` command ships as `/usr/bin/cupertino` with the groups `appearance`, `diagnose` (with `events` and `export`), `desktop`, `shell`, `dev`, `dev-folder`, `sdk`, `version` and `completions`, human, JSON and JSON-lines output, defined exit codes, completions and manual pages generated from its registry. Every process records diagnostic events in a bounded store. `cupertino-diagnose` and `cupertino-assets check` remain as deprecated programs. The C ABI has a headless runtime, generational handles, panic containment and symbol, header and layout baselines; the `cupertino-kit` package ships its library, header and pkg-config file.
+The `cupertino` command ships as `/usr/bin/cupertino` with the groups `appearance`, `diagnose` (with `events` and `export`), `desktop`, `shell`, `dev`, `dev-folder`, `sdk`, `version` and `completions`, human, JSON and JSON-lines output, defined exit codes, completions and manual pages generated from its registry. Every process records diagnostic events in a bounded store. `cupertino-assets check` remains as a deprecated program. The C ABI has a headless runtime, generational handles, panic containment and symbol, header and layout baselines; the `cupertino-kit` package ships its library, header and pkg-config file.
 
-Source: `crates/cupertino-cli/src/lib.rs`, `crates/cupertino-diagnostics`, `crates/cupertino-diagnostic-events`, `crates/cupertino-ui-abi` and `packaging/arch`.
+Source: `crates/cupertino-cli/src/lib.rs`, `crates/cupertino-cli/src/diagnostics`, `crates/cupertino-diagnostic-events`, `crates/cupertino-ui-abi` and `packaging/arch`.
 
 Still required:
 

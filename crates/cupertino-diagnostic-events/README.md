@@ -41,7 +41,7 @@ diag::event(Severity::Warn, "dock.icon.load_failed", "an icon could not be loade
 | `Scope::new(area)`, `.enter()`, `Scope::current()`, `.set_context(key, Value)` | One part of a process that records as its own, such as one of several toolkit instances: while a thread is in it (from `enter` until the guard drops), its panic is `<area>.panic`, its `exit_error` `<area>.exit_error`, and its events carry the scope's context fields over the process's. A thread in no scope records as the process. Every scope records through the process's one emitter and its one panic hook. |
 | `recent()` | The last events of the process (the memory ring), for crash reports. |
 | `Emitter::prepare_fatal(id, message, key, values)` | Lines a fatal signal handler writes with no lock and no allocation, one per value of `key`, to `fatal-<boot>-<pid>.jsonl` in the store (`FatalRecord::path`, `FatalRecord::render`). |
-| `store::{Store, read, segments, user_dir}` | The store itself, and reading it back (used by `cupertino_diagnostics::events`). |
+| `store::{Store, read, segments, user_dir}` | The store itself, and reading it back (used by `cupertino_cli::diagnostics::events`). |
 | `journal::{datagram, parse, Journal}` | The journal's native protocol. |
 | `redact::{Policy, Salt}` | The redaction policy and the salted hash. |
 | `time::{format, parse}` | RFC 3339 UTC times with milliseconds. |

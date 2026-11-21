@@ -50,10 +50,10 @@ const SCHEMAS: &[(&str, &str)] = &[
     ("schema-diagnose", DIAGNOSE_SCHEMA),
 ];
 
-/// The schema of `cupertino-diagnose --json` and of the `diagnose` report.
+/// The schema of the `diagnose` report.
 const DIAGNOSE_SCHEMA: &str = {
     assert!(
-        cupertino_diagnostics::SCHEMA == 1,
+        crate::diagnostics::SCHEMA == 1,
         "update the diagnose schema entry"
     );
     "1"

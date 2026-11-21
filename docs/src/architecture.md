@@ -68,7 +68,7 @@ as dev-dependencies, and only dev-dependencies point at a `testing` crate. The c
 | `services` (processes with no interface of their own) | `cupertino-audiod`, `cupertino-btd`, `cupertino-control`, `cupertino-netd`, `cupertino-portal`, `cupertino-powerd`, `cupertino-sessiond` | `foundation`, `models`, `system`, `platform`, `protocol`, `transport`, `services` |
 | `shell` | `cupertino-controlcenter`, `cupertino-dock`, `cupertino-launcher`, `cupertino-login`, `cupertino-menubar`, `cupertino-notifications`, `cupertino-osd`, `cupertino-prompts`, `cupertino-screenshot`, `cupertino-shell`, `cupertino-shell-agent`, `cupertino-shell-desktop`, `cupertino-shell-dialogs`, `cupertino-shell-overview`, `cupertino-windowmanager` | `foundation`, `models`, `system`, `protocol`, `ui`, `shellkit`, `shell` |
 | `apps` | `cupertino-files`, `cupertino-settings` | `foundation`, `models`, `system`, `protocol`, `ui` |
-| `tools` | `cupertino-cli`, `cupertino-diagnostics`, `cupertino-gpu-shaders`, `cupertino-gpu-slice`, `cupertino-layers`, `xtask` | every layer except `core`, `shell`, `services`, `apps`, `testing` |
+| `tools` | `cupertino-cli`, `cupertino-gpu-shaders`, `cupertino-gpu-slice`, `cupertino-layers`, `xtask` | every layer except `core`, `shell`, `services`, `apps`, `testing` |
 | `testing` (test harnesses, tests that start programs from more than one crate) | `cupertino-session-tests` | every layer |
 
 Further rules:

@@ -935,8 +935,8 @@ version = "0.1.0"
 dependencies = [
  "cupertino-assets",
  "cupertino-defaults",
+ "cupertino-devices",
  "cupertino-diagnostic-events",
- "cupertino-diagnostics",
  "cupertino-layers",
  "libc",
  "serde",
@@ -1022,18 +1022,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "tracing-tracy",
-]
-
-[[package]]
-name = "cupertino-diagnostics"
-version = "0.1.0"
-dependencies = [
- "cupertino-defaults",
- "cupertino-devices",
- "cupertino-diagnostic-events",
- "libc",
- "serde",
- "serde_json",
 ]
 
 [[package]]

@@ -53,9 +53,13 @@ pub static OVERVIEW: Entry = Entry::of::<cupertino_shell_overview::Overview>();
 /// dialog and the application switcher's panel (`cupertino-dock`).
 pub static DOCK: Entry = Entry::of::<cupertino_dock::Dock>();
 
+/// The window manager: the stage policy of each output, placed in transactions, and the stage strip, whose thumbnails
+/// are holes claiming the strip's windows (`cupertino-windowmanager`).
+pub static WINDOWMANAGER: Entry = Entry::of::<cupertino_windowmanager::WindowManager>();
+
 /// The components this build of the host runs. A component the server lists that is not here is answered
 /// `unavailable` (`absent`), and the server runs it the way the rest of its configuration says.
-pub static COMPONENTS: [&Entry; 9] = [
+pub static COMPONENTS: [&Entry; 10] = [
     &OSD,
     &NOTIFICATIONS,
     &CONTROLCENTER,
@@ -65,4 +69,5 @@ pub static COMPONENTS: [&Entry; 9] = [
     &DESKTOP,
     &OVERVIEW,
     &DOCK,
+    &WINDOWMANAGER,
 ];

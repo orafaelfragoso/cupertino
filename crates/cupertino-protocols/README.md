@@ -30,5 +30,5 @@ The crate generates bindings from its protocol XML. `build.rs` reruns when the X
 
 | Feature | Generates |
 |---|---|
-| `client` | `cupertino_protocols::client`, used by `cupertino-shell-client`, `cupertino-screenshot` and `cupertino-windowmanager` (which has no surface, so no toolkit) |
+| `client` | `cupertino_protocols::client`, used by `cupertino-shell-client` and `cupertino-screenshot` |
 | `server` | `cupertino_protocols::server`, used by `cupertino-server` |

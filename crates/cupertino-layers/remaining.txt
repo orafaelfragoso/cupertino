@@ -9,16 +9,13 @@ apps facade cupertino-settings -> cupertino-theme normal
 apps facade cupertino-settings -> cupertino-wayland-client normal
 apps forbidden_edge cupertino-settings -> cupertino-wayland-client normal
 shell disallowed_methods cupertino-portal clippy.toml
-shell disallowed_methods cupertino-windowmanager clippy.toml
 shell external_crate cupertino-portal -> tiny-skia normal
 shell external_crate cupertino-portal -> wayland-client normal
 shell external_crate cupertino-portal -> wayland-protocols normal
 shell external_crate cupertino-portal -> xkbcommon normal
-shell external_crate cupertino-windowmanager -> wayland-client normal
 shell facade cupertino-dock -> cupertino-animation normal
 shell facade cupertino-portal -> cupertino-protocols normal
 shell facade cupertino-portal -> cupertino-ui-wayland normal
 shell facade cupertino-portal -> cupertino-wayland-client normal
-shell facade cupertino-windowmanager -> cupertino-protocols normal
 shell forbidden_edge cupertino-portal -> cupertino-screencast normal
 shell forbidden_edge cupertino-portal -> cupertino-wayland-client normal

@@ -104,7 +104,7 @@ package_cupertino-git() {
   cd "$_srcname"
   local bin="${CARGO_TARGET_DIR:-target}/release" gen="$srcdir/gen" lic="$pkgdir/usr/share/licenses/cupertino" name
   for name in cupertino-server \
-              cupertino-screenshot cupertino-control cupertino-windowmanager \
+              cupertino-screenshot cupertino-control \
               cupertino-login cupertino-prompts cupertino-portal cupertino-files \
               cupertino-settings cupertino-sessiond cupertino-netd cupertino-btd cupertino-powerd cupertino-audiod cupertino-diagnose \
               cupertino-shell \

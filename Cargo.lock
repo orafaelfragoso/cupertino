@@ -1755,6 +1755,7 @@ dependencies = [
  "cupertino-shell-agent",
  "cupertino-shell-desktop",
  "cupertino-shell-overview",
+ "cupertino-windowmanager",
 ]
 
 [[package]]
@@ -2013,11 +2014,12 @@ dependencies = [
 name = "cupertino-windowmanager"
 version = "0.1.0"
 dependencies = [
+ "cupertino-assets",
  "cupertino-defaults",
- "cupertino-diagnostic-events",
- "cupertino-protocols",
+ "cupertino-kit",
+ "cupertino-kit-shell",
  "cupertino-wm",
- "wayland-client",
+ "zbus",
 ]
 
 [[package]]

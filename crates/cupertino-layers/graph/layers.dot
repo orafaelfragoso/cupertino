@@ -1,5 +1,5 @@
 // cupertino-layers --graph
-// 78 crates, 385 internal dependencies
+// 78 crates, 388 internal dependencies
 // per layer: foundation 5, graphics 2, models 6, system 8, platform 5, protocol 3, transport 2, render 3, ui 9, shellkit 1, core 4, services 6, shell 15, apps 2, tools 6, testing 1
 // forbidden normal edge cupertino-portal (shell) -> cupertino-screencast (platform)
 // forbidden normal edge cupertino-portal (shell) -> cupertino-wayland-client (transport)
@@ -414,6 +414,7 @@ digraph "layers" {
   "cupertino-shell" -> "cupertino-shell-agent";
   "cupertino-shell" -> "cupertino-shell-desktop";
   "cupertino-shell" -> "cupertino-shell-overview";
+  "cupertino-shell" -> "cupertino-windowmanager";
   "cupertino-shell-agent" -> "cupertino-apps";
   "cupertino-shell-agent" -> "cupertino-assets" [label="dev"];
   "cupertino-shell-agent" -> "cupertino-defaults";
@@ -509,9 +510,11 @@ digraph "layers" {
   "cupertino-wayland-client" -> "cupertino-app-protocols" [label="dev"];
   "cupertino-wayland-client" -> "cupertino-defaults";
   "cupertino-wayland-client" -> "cupertino-geometry";
+  "cupertino-windowmanager" -> "cupertino-assets" [label="dev"];
   "cupertino-windowmanager" -> "cupertino-defaults";
-  "cupertino-windowmanager" -> "cupertino-diagnostic-events";
-  "cupertino-windowmanager" -> "cupertino-protocols";
+  "cupertino-windowmanager" -> "cupertino-kit";
+  "cupertino-windowmanager" -> "cupertino-kit" [label="dev"];
+  "cupertino-windowmanager" -> "cupertino-kit-shell";
   "cupertino-windowmanager" -> "cupertino-wm";
   "cupertino-wm" -> "cupertino-animation";
   "cupertino-wm" -> "cupertino-effects";

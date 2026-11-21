@@ -46,3 +46,39 @@ pub fn parse_conf(text: &str) -> (WindowManagerFile, Vec<ConfProblem>) {
     }
     (file, problems)
 }
+
+/// The stage setting of `windowmanager.conf` (`$CUPERTINO_WINDOWMANAGER_CONFIG` overrides the path): off without a
+/// file or a path. A file that cannot be read and the lines that cannot be used are reported on stderr. It reads the
+/// file, so it runs on the I/O pool (`kit::task::io`).
+#[expect(
+    clippy::disallowed_methods,
+    reason = "runs on the I/O pool (kit::task::io)"
+)]
+pub fn read_stage() -> bool {
+    let Some(path) =
+        cupertino_defaults::config_file("CUPERTINO_WINDOWMANAGER_CONFIG", "windowmanager.conf")
+    else {
+        return false;
+    };
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return false,
+        Err(e) => {
+            eprintln!(
+                "cupertino-windowmanager: cannot read {}: {e}",
+                path.display()
+            );
+            return false;
+        }
+    };
+    let (file, problems) = parse_conf(&text);
+    for p in problems {
+        eprintln!(
+            "cupertino-windowmanager: {}:{}: {}, line skipped",
+            path.display(),
+            p.line,
+            p.problem
+        );
+    }
+    file.stage.unwrap_or(false)
+}

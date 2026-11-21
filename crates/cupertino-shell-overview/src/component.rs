@@ -108,6 +108,9 @@ struct Feed {
     workspaces: Vec<overview::Workspace>,
     /// Counts the changes of the windows, so a re-arm waits for the last.
     changes: u64,
+    /// A re-arm is scheduled: the gestures are armed again once the windows keep still, and a change meanwhile only
+    /// puts it off.
+    rearming: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -523,12 +526,18 @@ impl Model {
         if changed {
             feed.changes += 1;
             let changes = feed.changes;
-            let armed = self
-                .views
-                .iter()
-                .any(|v| v.output == output && v.phase == Phase::Armed);
+            // a re-arm already scheduled counts as armed: arming at once here would make surfaces and transactions
+            // anew with every other change while the windows move
+            let armed = feed.rearming
+                || self
+                    .views
+                    .iter()
+                    .any(|v| v.output == output && v.phase == Phase::Armed);
             self.disarm(output);
             if armed {
+                if let Some(feed) = self.feeds.get_mut(&output) {
+                    feed.rearming = true;
+                }
                 out.push(Do::After {
                     delay: REARM_QUIET,
                     message: Message::Rearm(output, changes),
@@ -876,11 +885,12 @@ impl Application for Overview {
             // the view draws from the model's clock; this only makes it look again
             Message::Frame => Vec::new(),
             Message::Rearm(output, changes) => {
-                if model
+                if let Some(feed) = model
                     .feeds
-                    .get(&output)
-                    .is_some_and(|f| f.changes == changes)
+                    .get_mut(&output)
+                    .filter(|f| f.changes == changes)
                 {
+                    feed.rearming = false;
                     model.arm(output)
                 } else {
                     Vec::new()

@@ -13,7 +13,7 @@
 //!   thumbnails of the items in view, made by jobs the program runs; [`item_icons`]: what a view draws for an item;
 //! * [`grid`]: the folder as a grid of icons ([`grid::IconGrid`]), [`list`]: as an outline table
 //!   ([`list::FileList`]), and [`columns`]: a chain of folders side by side ([`columns::FileColumns`]), which report
-//!   through [`ViewEvent`].
+//!   through [`ViewEvent`]; [`panel`]: a file chooser's open and save panel around a [`list::FileList`].
 
 use std::path::PathBuf;
 
@@ -42,6 +42,7 @@ pub mod natural;
 pub mod notice;
 pub mod open;
 pub mod operations;
+pub mod panel;
 pub mod places;
 pub mod recents;
 pub mod rename;

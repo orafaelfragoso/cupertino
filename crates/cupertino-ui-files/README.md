@@ -20,6 +20,7 @@ public items: the family builds on them and `cupertino-ui-controls` gains no dep
 | `applications`, `recents` | the two virtual folders | `location`, `application_dirs`, `session_entries`, `any_installed`; `location`, `recent_entries`, `parse_xbel` and `XBEL_NAME` (`cupertino_apps::recent`'s) |
 | `places` | the places of a sidebar, over the user directories of `cupertino_defaults::user_dirs` | `Place` (name, path, `PlaceGroup`, `PlaceKind` with its symbols and folder icon; `Volume`, `Medium` of a removable file system), `standard_places` (a file browser's sidebar: the home folder, Applications, Desktop, Documents, Downloads, the computer, the network, Trash), `chooser_places` (a file chooser's: Home, then Desktop, Documents, Downloads, Music, Pictures and Videos where they exist), `session_places` (`SessionPlaces`: the running session's, with `folder_icons`), `desktop_folder`, `recents_place`, `follow_trash`, `removable_holding`, `window_title`, `computer_name`, `network_root` |
 | `filepicker` | the model of a file chooser, listing a folder's items in the family's order | `Picker` (`new`, `open`, `settle`, `take_request`, `apply`, `go`, `parent`, `highlight`, `activate`, `choice`, `key`, `set_hidden`, `dir`, `entries`, `highlighted`, `loading`, `unreadable`), `Request` (`run`, `run_with`, `key`), `Listing`, `Mode`, `Key`, `Outcome`, `Reader` |
+| `panel` | a file chooser's open and save panel around a `FileList` | `OpenSavePanel`, `PanelEvent`, `ChoiceValue`, `PanelChoice`, `SaveAs`, `SIDEBAR_WIDTH` |
 | `model` | a folder's items as a sorted list that follows its changes, read by work the program runs | `DirectoryModel::{open, open_recents, open_applications}` (touch no file), `take_work` (one `ModelWork` at a time, in the order asked: the first checks, watches, opens and lists the folder in batches, a later one reads the items a change named or lists the folder again, a virtual folder that changed or any folder whose watch lost changes; `ModelWork::run` keeps a panic of the work as `OpenFailed` or `Error`), `take_watch` (`ModelWatch::follow`, a future that waits on an inotify descriptor through `async-io`'s reactor and ends when its model drops), `poll` → `ModelDelta` (`Opened` or `OpenFailed { kind, error }` first, then `Reloaded`, `LoadComplete`, `Inserted`, `Removed`, `Changed`, `Moved`, `DirectoryGone`, `Error`), `opened`, `is_working`, `set_notify`, `set_sort`, `entries`; `ModelOptions`, `Notify`, `WORK_DEADLINE` (10 s), `enumerate_blocking` |
 | `layout::icon`, `geom` | icon view | `ideal_cell_size`, `max_title_lines`, `layout` (flow / justified, 32 pt section headers), `strip` (a gallery's row), `IconLayout::{hit, hits_in_rect, neighbour}`, `FreeGrid`, in `cupertino-geometry`'s points, sizes and rectangles; `Direction` |
 | `rename`, `name_edit` | names | `RenameTrigger` (a press on the only selected item's name renames it after the double-click interval), `validate_name`, `needs_extension_warning`, `initial_selection`, `unique_name`, `NameError`; `NameEdit::{field, field_mut, commit}` |
@@ -470,23 +471,28 @@ family draws them as it draws a folder's items.
 
 ### The open and save panel
 
-The panel keeps its rows in wave 4. The chooser draws a plain list of 24 pt rows in `dialog.rs`, which it shares
-with the application chooser, the sharing picker and two consent dialogs, and which W6.4, W6.11 and W6.14 take apart;
-the portal has no capture example. Rows that are a `FileList` are another look (a header, Files' row height and
-selection, perhaps its columns) and another order (the picker lists folders first by lower-cased name, the family by
-natural order with the sort the program gives), and both need the owner's eye on a sheet.
+`panel::OpenSavePanel` is a file chooser's window content, a view of the family as the others are: plain values and
+one function, `on_event`, that turns a `PanelEvent` into the program's message. The program builds it from the
+chooser's model and the picker (`filepicker`), whose rows are the family's `Entry` in its order.
 
-- Wave 4 shares what is the same already: the places (below) and the row icons (`file_icons`).
-- W6.11, which moves the chooser into `cupertino-shell-dialogs` and gives it a capture example, gains a step: the
-  panel is a view of `kit::files` (the sidebar of places, a `FileList`, the Save As field, the filters and choices,
-  the buttons), built from the chooser's model and the picker, which lists the family's `Entry` in the family's
-  order; `filepicker::Entry` and its reader go (the second pair of copies, which meets only then), and `filepicker`
-  may join `cupertino-ui-files`. It is a look and behaviour change, shown on a review sheet of the panel before and
-  after, open and save, light and dark, for the owner.
-- Settings' chooser sheet (`Chooser` in `cupertino-settings/src/sheet.rs`), which draws rows of its own on the same
-  `Picker`, moves onto that view in W7.2.
-- What a single-selection list does with a band, and whether the panel's sidebar is Files' sidebar, are settled on
-  that sheet.
+- The sidebar is the toolkit's `Sidebar` in Files' look (`SidebarLook::Neutral`, its symbols in the accent): the
+  program's places in sections, the open folder's place selected; a row chosen is `Place(index)`.
+- The items are a `FileList` the program builds and keeps (its scroll, `Presses`, selection), which reports through
+  its own function; a function that answers `None` (a rename, the band in a single-selection list, the toggle of a
+  folder the panel does not open in place) sends nothing. Over the items, a row with the Enclosing Folder button
+  (`Parent`) and the folder's name moves the window, which has no title bar, and the words "This folder can't be
+  opened." show while the last folder asked for could not be read.
+- Saving, the window's top row is the Save As field (`SaveAs`: the name, its revision, the stem it selects as it
+  opens), which takes the focus; a change is `Name`, Return in it `Accept`.
+- Under the items: the filters as a segmented control (`Filter`), each choice as a check box or a segmented control
+  (`Choice(index, ChoiceValue)`), then Cancel (`Cancel`) and the default button (`Accept`, pressable as
+  `can_accept` says). While `replace` names a file, the question whether to replace it and its Cancel
+  (`KeepEditing`) and Replace (`Replace`) stand in their place.
+- The divider between the sidebar and the items is `Split`, the sidebar's scroll `PlacesScroll`.
+
+`cupertino-shell-dialogs` draws it for the portal's file chooser (W6.11); its capture example shows the panel open and
+save, light and dark. Settings' chooser sheet (`Chooser` in `cupertino-settings/src/sheet.rs`), which draws rows
+of its own on the same `Picker`, moves onto it in W7.2.
 
 ### Places and user directories
 

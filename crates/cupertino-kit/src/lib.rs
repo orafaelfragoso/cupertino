@@ -351,6 +351,13 @@ pub mod files {
         };
     }
 
+    /// A file chooser's open and save panel around a `FileList`.
+    pub mod panel {
+        pub use cupertino_ui_files::panel::{
+            ChoiceValue, OpenSavePanel, PanelChoice, PanelEvent, SaveAs, SIDEBAR_WIDTH,
+        };
+    }
+
     /// The places of a file browser's sidebar and of a file chooser's.
     pub mod places {
         pub use cupertino_ui_files::places::{

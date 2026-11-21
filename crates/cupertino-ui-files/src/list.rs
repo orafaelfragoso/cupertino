@@ -730,8 +730,7 @@ pub struct FileList<M> {
     #[allow(clippy::type_complexity)]
     pub name_field: Option<(usize, Rc<dyn Fn() -> Element<M>>)>,
     pub presses: Presses,
-    /// The program's message for each event the list reports, or none. The table reports `Select`, `Open`, `Sort`,
-    /// `Toggle` and `Scroll` through handlers that must give one, so the function gives a message for each of those.
+    /// The program's message for each event the list reports, or none, for which nothing is sent.
     pub on_event: Rc<dyn Fn(ViewEvent) -> Option<M>>,
 }
 

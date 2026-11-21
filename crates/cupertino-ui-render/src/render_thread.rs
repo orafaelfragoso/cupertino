@@ -48,6 +48,11 @@ pub const DEVICE_HANG: Duration = Duration::from_secs(10);
 /// takes some 80 ms with the compiler and 5 ms from saved binaries; the frames meanwhile go out on the CPU.
 const PROGRAM_TURN_PATIENCE: Duration = Duration::from_secs(2);
 
+/// The longest [`shutdown`] waits for the render thread to finish the work handed to it before: a frame and the
+/// freeing of a window's buffers take milliseconds, so work still going after this is a wedged driver, and the process
+/// ends without waiting for it any longer.
+pub const SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
+
 /// The longest the last [`Claim`] going waits for a warm-up thread still inside `Device::new`, and for the render
 /// thread to let the device go, before leaving them.
 const RELEASE_WAIT: Duration = Duration::from_secs(5);
@@ -406,6 +411,52 @@ pub fn losses_exceeded() -> bool {
     lock(&handle().shared.state).losses.exceeded(Instant::now())
 }
 
+/// What a process does as it ends, once its window systems are gone: waits until the render thread has done every
+/// piece of work handed to it before this call (the frames handed over, the [`Resident`] values dropped elsewhere and
+/// sent there to be dropped) and, unless a [`Claim`] is still held, has let the device go. So no GL, EGL or GBM call
+/// is left on the render thread while the process's exit tears the driver's libraries down. The wait is bounded by
+/// [`SHUTDOWN_WAIT`]; whether everything was done within it. A process whose render thread never started returns at
+/// once without starting it; called on the render thread itself, it cannot wait for itself and returns `false`.
+pub fn shutdown() -> bool {
+    let Some(thread) = THREAD.get() else {
+        return true;
+    };
+    if thread.id.is_none() {
+        return true;
+    }
+    if thread.is_current() {
+        return false;
+    }
+    let (tx, rx) = mpsc::sync_channel(1);
+    thread.send(job(move |on| {
+        let shared = &handle().shared;
+        let released = {
+            let mut state = lock(&shared.state);
+            let unclaimed = state.claims == 0;
+            if unclaimed && matches!(state.phase, Phase::Ready(_)) {
+                state.phase = Phase::Idle;
+            }
+            unclaimed
+        };
+        if released {
+            shared.changed.notify_all();
+            on.on = None;
+        }
+        let _ = tx.send(());
+    }));
+    match rx.recv_timeout(SHUTDOWN_WAIT) {
+        Ok(()) => true,
+        Err(_) => {
+            eprintln!(
+                "renderer: the render thread did not finish its work within {} s of the process ending; the process \
+                 leaves it",
+                SHUTDOWN_WAIT.as_secs()
+            );
+            false
+        }
+    }
+}
+
 /// Resets within [`LOSS_WINDOW`] after which a process stays on the CPU.
 pub const LOSS_LIMIT: usize = 3;
 
@@ -499,9 +550,11 @@ impl Handle {
     }
 }
 
+/// The process's render thread, once [`handle`] started it.
+static THREAD: OnceLock<Handle> = OnceLock::new();
+
 /// The process's render thread, started on first use.
 fn handle() -> &'static Handle {
-    static THREAD: OnceLock<Handle> = OnceLock::new();
     THREAD.get_or_init(|| {
         let (jobs, queue) = mpsc::channel::<Job>();
         let spawned = std::thread::Builder::new()

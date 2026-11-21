@@ -12,10 +12,10 @@
 
 use std::path::Path;
 
-use crate::abi::{ElementInfo, ElementType, Interface};
-use crate::card::{card_indexes, Card, OpenMode};
-use crate::error::{Error, Result};
-use crate::volume::VolumeRange;
+use super::abi::{ElementInfo, ElementType, Interface};
+use super::card::{card_indexes, Card, OpenMode};
+use super::error::{Error, Result};
+use super::volume::VolumeRange;
 
 const VOLUME_SUFFIX: &str = "Playback Volume";
 const MASTER_NAME: &str = "Master Playback Volume";
@@ -114,17 +114,6 @@ impl Master {
         Self::from_elements(card, &elements, volume)
     }
 
-    /// The best master of card `index` below `dir`; fails with [`Error::NoPlaybackVolume`] when it has none.
-    pub fn open_card(dir: &Path, index: u32, mode: OpenMode) -> Result<Self> {
-        let card = Card::open(dir, index, mode)?;
-        let elements = card.elements()?;
-        let volume = select_master(&elements)
-            .ok_or(Error::NoPlaybackVolume)?
-            .1
-            .clone();
-        Self::from_elements(card, &elements, volume)
-    }
-
     fn from_elements(card: Card, elements: &[ElementInfo], volume: ElementInfo) -> Result<Self> {
         let switch = find_switch(elements, &volume).cloned();
         let bounds = volume.range.expect("a selected master has a range");
@@ -135,21 +124,6 @@ impl Master {
             switch,
             range,
         })
-    }
-
-    /// The card the master is on.
-    pub fn card(&self) -> &Card {
-        &self.card
-    }
-
-    /// The master volume control.
-    pub fn volume_info(&self) -> &ElementInfo {
-        &self.volume
-    }
-
-    /// The mute switch, if the card has one for the master.
-    pub fn switch_info(&self) -> Option<&ElementInfo> {
-        self.switch.as_ref()
     }
 
     /// The raw value of the first channel.
@@ -169,11 +143,6 @@ impl Master {
     /// Set every channel to the raw value nearest to `level`; returns the level reached.
     pub fn set_level(&self, level: f64) -> Result<f64> {
         self.write_raw(self.range.raw(level))
-    }
-
-    /// Move one press of size `step` (a level difference) in `direction`; returns the level reached.
-    pub fn step(&self, direction: i32, step: f64) -> Result<f64> {
-        self.write_raw(self.range.step(self.raw()?, direction, step))
     }
 
     fn write_raw(&self, raw: i64) -> Result<f64> {

@@ -9,10 +9,6 @@ use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-mod worker;
-
-pub use worker::{Reading, VolumeWorker};
-
 /// The program run when no other is given.
 pub const WPCTL: &str = "wpctl";
 /// The program that reads and sets the channel levels of the default output.
@@ -128,12 +124,6 @@ impl Wpctl {
             program,
             timeout: TIMEOUT,
         }
-    }
-
-    /// Wait `timeout` instead of [`TIMEOUT`] before a call gives up.
-    pub fn with_timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
-        self
     }
 
     /// The volume of `target` now.

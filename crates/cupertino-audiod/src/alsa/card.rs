@@ -8,9 +8,9 @@ use rustix::fs::{self, Mode as FileMode, OFlags};
 use rustix::io::Errno;
 use rustix::ioctl::{self, Ioctl, IoctlOutput, Opcode};
 
-use crate::abi::{self, CardInfo, ElementId, ElementInfo, Event, EVENT_SIZE, TLV_HEADER_SIZE};
-use crate::error::{Error, Result};
-use crate::tlv::DbCurve;
+use super::abi::{self, ElementId, ElementInfo, TLV_HEADER_SIZE};
+use super::error::{Error, Result};
+use super::tlv::DbCurve;
 
 /// Directory of the sound device nodes.
 pub const DEVICE_DIR: &str = "/dev/snd";
@@ -59,8 +59,6 @@ unsafe fn control_ioctl(
 /// How a control device is opened.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OpenMode {
-    /// Query only: values can be read but no write is possible through the descriptor.
-    ReadOnly,
     /// Values can be written.
     ReadWrite,
 }
@@ -69,7 +67,6 @@ pub enum OpenMode {
 #[derive(Debug)]
 pub struct Card {
     fd: OwnedFd,
-    index: u32,
 }
 
 /// The path of the control device of card `index` below `dir`.
@@ -101,7 +98,6 @@ impl Card {
     /// Open the control device of card `index` below `dir` (non-blocking, so event reads return at once).
     pub fn open(dir: &Path, index: u32, mode: OpenMode) -> Result<Self> {
         let access = match mode {
-            OpenMode::ReadOnly => OFlags::RDONLY,
             OpenMode::ReadWrite => OFlags::RDWR,
         };
         let fd = fs::open(
@@ -116,27 +112,7 @@ impl Card {
                 errno,
             },
         })?;
-        Ok(Self { fd, index })
-    }
-
-    /// The card number.
-    pub fn index(&self) -> u32 {
-        self.index
-    }
-
-    /// Names of the card.
-    pub fn info(&self) -> Result<CardInfo> {
-        let mut buf = [0u8; abi::CARD_INFO_SIZE];
-        // SAFETY: `buf` is a `snd_ctl_card_info`.
-        unsafe {
-            control_ioctl(
-                self.fd.as_fd(),
-                "SNDRV_CTL_IOCTL_CARD_INFO",
-                abi::CARD_INFO,
-                &mut buf,
-            )?
-        };
-        CardInfo::parse(&buf)
+        Ok(Self { fd })
     }
 
     /// The ids of every control of the card.
@@ -253,33 +229,6 @@ impl Card {
             .get(TLV_HEADER_SIZE..TLV_HEADER_SIZE + 8 + length)
             .ok_or(Error::MalformedTlv("block longer than the buffer"))?;
         DbCurve::parse(block)
-    }
-
-    /// Ask the kernel to queue an event for every change of a control; read them with [`Card::read_events`].
-    pub fn subscribe(&self) -> Result<()> {
-        let mut on = 1i32.to_ne_bytes();
-        // SAFETY: the argument is one `int`.
-        unsafe {
-            control_ioctl(
-                self.fd.as_fd(),
-                "SNDRV_CTL_IOCTL_SUBSCRIBE_EVENTS",
-                abi::SUBSCRIBE_EVENTS,
-                &mut on,
-            )
-        }
-    }
-
-    /// The events queued since the last read; empty when there are none. Needs [`Card::subscribe`] first.
-    pub fn read_events(&self) -> Result<Vec<Event>> {
-        let mut buf = [0u8; EVENT_SIZE * 16];
-        match rustix::io::read(&self.fd, &mut buf) {
-            Ok(len) => Event::parse_all(&buf[..len]),
-            Err(Errno::AGAIN) => Ok(Vec::new()),
-            Err(errno) => Err(Error::Io {
-                op: "read control events",
-                errno,
-            }),
-        }
     }
 }
 

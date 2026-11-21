@@ -866,13 +866,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cupertino-alsa"
-version = "0.1.0"
-dependencies = [
- "rustix 1.1.6",
-]
-
-[[package]]
 name = "cupertino-animation"
 version = "0.1.0"
 
@@ -919,8 +912,7 @@ dependencies = [
 name = "cupertino-audiod"
 version = "0.1.0"
 dependencies = [
- "cupertino-alsa",
- "cupertino-pipewire",
+ "rustix 1.1.6",
  "tempfile",
  "zbus",
 ]
@@ -1400,10 +1392,6 @@ dependencies = [
  "tracing",
  "zbus",
 ]
-
-[[package]]
-name = "cupertino-pipewire"
-version = "0.1.0"
 
 [[package]]
 name = "cupertino-portal"

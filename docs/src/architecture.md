@@ -58,7 +58,7 @@ as dev-dependencies, and only dev-dependencies point at a `testing` crate. The c
 | `graphics` (the one definition of the drawing maths, and the GPU device) | `cupertino-gpu`, `cupertino-raster-math` | `foundation`, `graphics` |
 | `models` (desktop policy as pure logic) | `cupertino-control-model`, `cupertino-displays`, `cupertino-effects`, `cupertino-input`, `cupertino-scene`, `cupertino-wm` | `foundation`, `models` |
 | `system` (user-space operating-system access) | `cupertino-apps`, `cupertino-assets`, `cupertino-defaults`, `cupertino-diagnostic-events`, `cupertino-icons`, `cupertino-peer`, `cupertino-radios`, `cupertino-trash` | `foundation`, `system` |
-| `platform` (kernel interfaces that more than one program needs) | `cupertino-alsa`, `cupertino-devices`, `cupertino-pipewire`, `cupertino-screencast`, `cupertino-seat` | `foundation`, `platform` |
+| `platform` (kernel interfaces that more than one program needs) | `cupertino-devices`, `cupertino-screencast`, `cupertino-seat` | `foundation`, `platform` |
 | `protocol` (wire schemas) | `cupertino-app-protocols`, `cupertino-login-ipc`, `cupertino-protocols` | `foundation`, `protocol` |
 | `transport` (client connections without widgets) | `cupertino-shell-client`, `cupertino-wayland-client` | `foundation`, `system`, `platform`, `protocol`, `transport` |
 | `render` (the compositor's own drawing) | `cupertino-cursor`, `cupertino-decorations`, `cupertino-glass` | `foundation`, `graphics`, `system`, `platform`, `render` |
@@ -120,7 +120,7 @@ The registry records the state of the code; it does not grant access. It covers 
 | libudev | `cupertino-devices` | `NETLINK_KOBJECT_UEVENT`, `/sys` |
 | libinput | `cupertino-devices` (`evdev`) and `cupertino-input` | evdev |
 | libseat, logind client | `cupertino-seat` | logind's D-Bus protocol (`TakeControl`, `TakeDevice`, pause and resume, VT switch) |
-| alsa-lib | `cupertino-alsa` | `/dev/snd/controlC*` ioctls |
+| alsa-lib | `cupertino-audiod` (its `alsa` module) | `/dev/snd/controlC*` ioctls |
 | UPower, backlight helpers | `cupertino-powerd` | `/sys/class/power_supply`, `/sys/class/backlight`, lid switch over evdev |
 | NetworkManager (development alternative) | `cupertino-netd` | rtnetlink, nl80211; iwd for authentication |
 | BlueZ daemon (development alternative) | `cupertino-btd` | Bluetooth management socket, L2CAP |

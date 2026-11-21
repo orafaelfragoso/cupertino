@@ -16,8 +16,8 @@ Updated by the lead at every merge.
 | | |
 |---|---|
 | Current wave | 6 |
-| Running tasks | none |
-| Enforced layers | foundation, system, graphics, models, platform, protocol, transport, render, ui, shellkit, core, services, testing (110 remaining-work lines; zero outside `shell` and `apps`) |
+| Running tasks | W6.close (shell enforced, shell-v1 31, component list), the menu bar restart-test flake |
+| Enforced layers | foundation, system, graphics, models, platform, protocol, transport, render, ui, shellkit, core, services, testing (9 remaining-work lines: 8 in `apps`, 1 in `shell`) |
 | Waiting on the owner | nothing |
 | Last closed wave | 5 |
 
@@ -1159,7 +1159,7 @@ At most three at a time, in this order:
 **Owns** `decorations alsa pipewire`, the new modules in `server-render` and `audiod`. **After** W6.14 (the prompts stop
 using the decorations), W6.5 and W6.2 (the last users of the sound crates besides the service).
 
-- [ ] `cupertino-decorations` is a module of `cupertino-server-render`; `cupertino-alsa` and `cupertino-pipewire` are
+- [x] (`b9606aec5`, `33225ea5a`) `cupertino-decorations` is a module of `cupertino-server-render`; `cupertino-alsa` and `cupertino-pipewire` are
       modules of `cupertino-audiod`. Before each move, `cargo tree -i` shows the absorbing crate as the only user.
 
 #### W6.T Tests of wave 6's crates
@@ -1482,3 +1482,16 @@ One line per change to a decision or approval of a design: date, number, what, w
   requests; log out now and sleep are `Session1`'s; `SwitchToLoginWindow` moves to `Session1`; `Login1` keeps
   `Lock`. W6.13 owns the server's session-agent parts (`NOT_HOSTED`, login's roles, `Need::SessionAgent`, the
   `Login1` callers) and moves the menu bar to `SessionMenu`, after W6.7.
+- 2026-11-21: lead, calls made while merging W6.8, W6.9, W6.11, W6.12, W6.14, W6.15 and W6.16 (owner may revisit any):
+  a dock, window manager or keyboard-panels client bound below the version that changed its object (28, 29, 30) is
+  left inert with a warning, not a protocol error, which would end the whole host; the overview has no dimmed backdrop
+  (`overview_dim` was never read); Show All Windows is a plain toggle; the dock keeps its icon loader and file-type
+  database in the host across restarts; the stage strip's thumbnails have the window's own corners and shadow; a held
+  strip turns the stage on after a restart; consent alerts (desktop control, screenshot, shortcuts) focus Don't Allow,
+  arm Allow 500 ms after their first frame, sit over a scrim and come one at a time after an authentication and the
+  keyring; desktop control's authority is the `consent` role's, and its panel pauses no run (`control_prompt_shown`);
+  a file chooser's window opens once its first folder is read or after 300 ms; an open panel's rows take the keyboard,
+  a save panel's Save As field; list and table handlers return `Option<M>`; the PipeWire node keeps the name
+  `cupertino-screencast`; the restart program tests run their host with one malloc arena and compare floors through
+  `tests/shell/memory.rs` (a real per-instance leak in the menu bar's task set was fixed, `31d351dd0`); the folded audio
+  crates lost the code the service never called, and with it the ALSA byte-layout tests.

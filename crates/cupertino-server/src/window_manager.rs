@@ -68,7 +68,10 @@ pub enum Look {
     Natural,
     Hidden,
     /// Scaled into `rect` at `alpha` (times its own opacity) as it fades out or back in, with the window's own corners.
-    Placed { rect: Rect, alpha: f64 },
+    Placed {
+        rect: Rect,
+        alpha: f64,
+    },
 }
 
 /// What a window manager was told about one arranged window.

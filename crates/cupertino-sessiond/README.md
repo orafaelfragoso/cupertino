@@ -19,7 +19,7 @@ beyond the typed messages of [`cupertino-login-ipc`](../cupertino-login-ipc/READ
 | Socket | `/run/cupertino-login/greeter.sock`, mode 0600, owned by `greeter-user`; one connection at a time; `SO_PEERCRED` uid must be the greeter's |
 | Bus | `org.cupertino.LoginManager1` on the system bus, root-owned (policy: `org.cupertino.conf`); see "The bus interface" |
 | Unit file | [`cupertino-login.service`] |
-| Image files | [`login.conf`], PAM services `cupertino-greeter`, `cupertino-session` and `cupertino-autologin`, [sysusers] |
+| Image files | [`login.conf`], PAM services `cupertino-greeter`, `cupertino-session` and `cupertino-autologin`, [sysusers], tmpfiles.d |
 
 **The package's unit** (`cupertino-login.service`, `Alias=display-manager.service`) has `Conflicts=getty@tty1.service` and is `Type=notify`: the manager sends `READY=1` once its socket listens, the login screen's
 session is starting and the bus name is taken.
@@ -51,8 +51,7 @@ the unit's restrictions and a session must be able to run `sudo`.
 **PAM services.** `cupertino-greeter`: `auth` and `account` `pam_permit.so`, `session` `pam_loginuid.so` and `pam_systemd.so`.
 `cupertino-session`: `auth`, `account` and `session` include `system-local-login` (`pam_faillock`, `pam_unix`, `pam_loginuid`,
 `pam_systemd`, `pam_limits`, `pam_env`), then `pam_gnome_keyring` for `auth` and `session` (see "Secret Service"). `cupertino-autologin`: `auth` `pam_permit.so`, then `pam_faillock.so authsucc` (optional: it makes the tally file the lock screen, which runs as the user, records failures in), `account` and `session` include `system-local-login`, then `pam_gnome_keyring`'s `session` line. `cupertino-login` (the lock screen's) adds `pam_gnome_keyring`'s `auth` line. **Accounts.** `u cupertino-greeter -
-"Cupertino login screen" / /usr/bin/nologin` (sysusers; home `/` because the worker's `chdir($HOME)` must not fail and the
-account has no private directory), no group.
+"Cupertino login screen" / /usr/bin/nologin` (sysusers; home `/var/lib/cupertino-greeter`, made by tmpfiles.d `d` mode 0700 owned by the account: the worker sets `HOME` from the password database and `chdir`s there, so the login screen's server writes its log (`$HOME/.local/state`) and watches its settings (`$HOME/.config`) in a directory it owns instead of `/`; sysusers does not change the home of an existing account, so after an update that account needs `usermod -d /var/lib/cupertino-greeter cupertino-greeter` once).
 
 ## Administrators
 

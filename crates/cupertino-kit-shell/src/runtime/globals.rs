@@ -13,6 +13,8 @@ pub(crate) const SHELL_MENU_BAR_VERSION: u32 = 25;
 /// `cupertino_shell_v1` as the dock speaks it: the dock's messages without the overview and the pictures of minimized
 /// windows came with 28, which moved the opcodes of the later ones, so a dock never runs on an older server.
 pub(crate) const SHELL_DOCK_VERSION: u32 = 28;
+/// `cupertino_shell_v1` as the on-screen displays speak it: the keyboard's panels (`get_keyboard_panels`) came with 30.
+pub(crate) const SHELL_KEYBOARD_PANELS_VERSION: u32 = 30;
 /// `zwlr_layer_shell_v1`: on-demand keyboard interactivity came with version 4.
 pub(crate) const LAYER_SHELL_VERSION: u32 = 4;
 /// `cupertino_transaction_manager_v1`, which every component's connection sees.
@@ -31,6 +33,8 @@ pub(crate) fn needs(component: ComponentName) -> Vec<(&'static str, u32)> {
         SHELL_DOCK_VERSION
     } else if component == ComponentName::MENUBAR {
         SHELL_MENU_BAR_VERSION
+    } else if component == ComponentName::OSD {
+        SHELL_KEYBOARD_PANELS_VERSION
     } else {
         SHELL_SESSION_VERSION
     };

@@ -14,6 +14,7 @@ use cupertino_protocols::server::app_effects::cupertino_appearance_v1::{
     CupertinoAppearanceV1, DisplayOption,
 };
 use cupertino_protocols::server::cupertino_dock_v1::CupertinoDockV1;
+use cupertino_protocols::server::cupertino_keyboard_panels_v1::CupertinoKeyboardPanelsV1;
 use cupertino_protocols::server::cupertino_menu_bar_v1::CupertinoMenuBarV1;
 use cupertino_protocols::server::cupertino_session_v1::{self, CupertinoSessionV1};
 use cupertino_protocols::server::cupertino_shell_v1::{self, CupertinoShellV1};
@@ -60,11 +61,14 @@ pub struct Offer {
     pub app_effects: u32,
 }
 
+/// The input sources of the switch the stand-in tells the keyboard's panels of as they are made, the second selected.
+pub const SOURCES: &[(&str, &str)] = &[("us", "English"), ("de", "German")];
+
 impl Offer {
     /// The versions a current server offers.
     pub const CURRENT: Offer = Offer {
         capture: None,
-        shell: 28,
+        shell: 30,
         layer_shell: 4,
         app_effects: 1,
     };
@@ -247,7 +251,8 @@ ignore_requests!(
     CupertinoDockV1,
     CupertinoTransactionV1,
     CupertinoHoleV1,
-    CupertinoAppearanceV1
+    CupertinoAppearanceV1,
+    CupertinoKeyboardPanelsV1
 );
 
 impl GlobalDispatch<WlShm, ()> for State {
@@ -506,6 +511,14 @@ impl Dispatch<CupertinoShellV1, ()> for State {
             }
             cupertino_shell_v1::Request::GetWindowManager { id, .. } => {
                 init.init(id, ());
+            }
+            cupertino_shell_v1::Request::GetKeyboardPanels { id } => {
+                // a switch under way: the list goes out at once, as the server's does
+                let panels = init.init(id, ());
+                for (id, name) in SOURCES {
+                    panels.source_entry((*id).to_owned(), (*name).to_owned());
+                }
+                panels.sources_changed(None, 1);
             }
             _ => {}
         }

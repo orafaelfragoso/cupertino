@@ -1,5 +1,6 @@
-//! Shell overlays that are drawn above the windows and take keyboard or pointer input: the
-//! input-source HUD and the accent popup.
+//! The keyboard's overlays: the input sources and the accent picker the server runs (their panels are drawn by the
+//! on-screen displays, [`crate::keyboard_panels`]), and the notice that an application holds the shortcuts, which
+//! the server draws.
 
 use cupertino_assets::{AssetError, Assets, FontRole};
 use cupertino_decorations::text::TextRenderer;
@@ -12,7 +13,7 @@ use crate::render::image::ImageCache;
 
 pub use cupertino_server_input::overlay_types::{is_modifier_sym, OverlayKey, ShortcutNotice};
 
-/// Text drawing for the HUD and the accent popup (the `ui` font of the asset directory).
+/// Text drawing for the shortcut notice (the `ui` font of the asset directory).
 pub struct OverlayText {
     text: TextRenderer,
     cap_height: f32,
@@ -69,11 +70,13 @@ impl OverlayText {
 pub struct Overlays {
     pub inputs: InputSources,
     pub accent: AccentUi,
+    /// The objects of the component that draws the keyboard's panels, and what they were sent.
+    pub panels: crate::keyboard_panels::KeyboardPanels,
     pub images: ImageCache,
     /// The image wallpapers (`render/wallpaper.rs`).
     pub wallpaper: crate::render::wallpaper::Wallpapers,
     pub text: OverlayText,
-    /// Scripted input behaves as if the shortcut's modifiers were still held (HUD stays open).
+    /// Scripted input behaves as if the shortcut's modifiers were still held (the switch stays open).
     pub hold_modifiers: bool,
     /// The notice that an application holds the shortcuts or the pointer (`crate::shortcut_inhibit`).
     pub shortcut_notice: Option<ShortcutNotice>,
@@ -88,6 +91,7 @@ impl Overlays {
         Ok(Self {
             inputs: InputSources::new(config.keyboard.sources.clone()),
             accent: AccentUi::new(&config.keyboard.accent),
+            panels: crate::keyboard_panels::KeyboardPanels::default(),
             images: ImageCache::default(),
             wallpaper: crate::render::wallpaper::Wallpapers::new(assets),
             text: OverlayText::new(typography, assets)?,
@@ -98,18 +102,14 @@ impl Overlays {
 
     /// Any overlay that needs frames at `now`.
     pub fn wants_tick(&self) -> bool {
-        self.inputs.wants_tick()
-            || self.accent.is_open()
-            || self.wallpaper.pending()
-            || self.shortcut_notice.is_some()
+        self.accent.is_open() || self.wallpaper.pending() || self.shortcut_notice.is_some()
     }
 }
 
 impl crate::state::Cupertino {
-    /// Per-frame work of the overlays: HUD fade, and the timed keyboard filters (slow keys, mouse keys, the
-    /// compositor's key repeat, which also opens the accent picker).
-    pub fn tick_overlays(&mut self, now: f64) {
-        self.overlays.inputs.tick(now);
+    /// Per-frame work of the overlays: the timed keyboard filters (slow keys, mouse keys, the compositor's key repeat,
+    /// which also opens the accent picker).
+    pub fn tick_overlays(&mut self) {
         self.tick_key_filters();
     }
 }

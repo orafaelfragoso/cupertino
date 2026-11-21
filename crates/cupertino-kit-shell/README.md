@@ -15,6 +15,7 @@ The shell's extension to CupertinoKit (`shellkit` layer). Exposes zero Wayland o
 | `dock` | Dock tile geometry, running applications, badges, gestures, and switcher hooks |
 | `window_manager` | Window/workspace/stage placements and bracketed commits |
 | `overview` | Overview transition state and gesture bindings |
+| `keyboard_panels` | The input-source switcher's list and the accent picker's candidates the server sends the on-screen displays (`Event::KeyboardPanels`, namespaces of their layer surfaces), and `accent_pick`; the object is asked for once the window system routes the component's events, so a list sent at once is heard |
 | `lock` | Session-lock surface bindings |
 | `consent` | Desktop-control and portal consent authority handles |
 | `capture` | Screen/window capture requests: `windows`, `once`, `follow` |

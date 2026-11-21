@@ -1,58 +1,47 @@
 //! Keyboard integration on the compositor state (`cupertino-keyboard`): `wl_keyboard.repeat_info`, the
-//! XKB layouts behind the input sources, the input-source switcher HUD, the caps-lock activation
-//! delay and the accent picker.
+//! XKB layouts behind the input sources, the input-source switch, the caps-lock activation
+//! delay and the accent picker. Their panels are drawn by the on-screen displays ([`crate::keyboard_panels`]).
 //!
 //! * **Repeat**: the advertised rate and delay come from `keyboard.conf` (defaults 500 ms /
 //!   83 ms, 12 Hz; 420 ms / 420 ms while slow keys are on). Clients do the repeating;
 //!   the compositor repeats only keys it consumes (`kbd_filters`).
 //! * **Input sources**: `input_sources = us, de, ...` in `keyboard.conf` become the XKB layouts of the
 //!   seat keyboard; a `decoded:<path> source gets a generated keymap that replaces the seat keymap while
-//!   it is current. `Ctrl+Space` / `Ctrl+Alt+Space` (reference assignments) open the HUD in
+//!   it is current. `Ctrl+Space` / `Ctrl+Alt+Space` (reference assignments) open the switch in
 //!   most-recently-used order, further presses and the Up / Down arrows step, releasing the modifiers
-//!   commits, `Escape` cancels. HUD metrics: radius 24, minimum width 167, padding 10, rows of
-//!   40, 0.3 s fade, on the regular glass of an alert ([`HUD_GLASS`]), which takes the recipes of
-//!   Reduce Transparency and Increase Contrast; the placement (screen centre) and the source icons
-//!   are approximate / unknown.
+//!   commits, `Escape` cancels.
 //! * **Caps lock**: the press reaches the keyboard state only when the key is still down after the delay
 //!   (75 ms); with hold-to-switch a tap switches the input source and a 500 ms hold
 //!   turns caps lock on.
 //! * **Accent picker**: the model (`AccentPicker`: opens on the first repeat of a held letter, `1`-`9`,
-//!   `Tab`/arrows, `Return`, `Escape`, a click on a candidate) and the popup are implemented
-//!   here; committing text needs a `zwp_text_input_v3` / `zwp_input_method_v2` bridge, see [`TextOp`] and
-//!   the README.
+//!   `Tab`/arrows, `Return`, `Escape`, a pick of a candidate on its panel) runs here; committing text needs
+//!   a `zwp_text_input_v3` / `zwp_input_method_v2` bridge, see [`TextOp`] and the README.
+//! * **The shortcut notice**: the pill that says an application holds the shortcuts or the pointer, which the server
+//!   draws because it must show when no component runs.
 
 use cupertino_decorations::{Draw, DrawList};
 use cupertino_geometry::{CornerStyle, Radii, Rect as GRect};
-use cupertino_keyboard::accent::Rect as KRect;
-use cupertino_keyboard::switcher::{self, Step};
+use cupertino_keyboard::switcher::{Step, SwitchEvent};
 use smithay::backend::input::KeyState;
 use smithay::input::keyboard::{keysyms, Keycode, Layout, XkbConfig};
-use smithay::utils::{Logical, Rectangle};
+use smithay::utils::Logical;
 
 use crate::input::Mods;
-use crate::kbd::{hud_size, CapsStep, HudView};
+use crate::kbd::CapsStep;
 use crate::overlays::OverlayKey;
 use crate::render::image::debug_sig;
 use cupertino_scene::SceneKind;
 
-use crate::app_effects_v1::{BackdropArea, GlassSpec};
 use crate::render::compose::{list_piece, Piece};
-use crate::render::scene::{glass_layer, material_layer, shadow_item, SceneParams, WindowPlan};
+use crate::render::scene::SceneParams;
 use crate::state::Cupertino;
 
 pub use cupertino_server_input::kbd_ui::{
-    accent_layout, has_input_source_bindings, source_code, AccentPopup, AccentRoute, AccentUi,
-    TextOp,
+    has_input_source_bindings, AccentPopup, AccentRoute, AccentUi, TextOp,
 };
 
-/// Font size of HUD rows and accent cells in points (approximate).
+/// Font size of the shortcut notice in points (approximate).
 pub const FONT_PT: f32 = 13.0;
-/// Accent candidate size in points (approximate).
-pub const ACCENT_FONT_PT: f32 = 18.0;
-/// Edge of the source icon in the HUD (approximate, icon artwork unknown).
-pub const HUD_ICON_PT: f64 = 24.0;
-/// Material behind the accent popup (unknown, the menu material is used).
-const MATERIAL: &str = "Menu";
 
 type Rgba = [f32; 4];
 
@@ -238,25 +227,33 @@ impl Cupertino {
         }
         let mods = self.current_mods();
         let held = self.overlays.hold_modifiers || mods.ctrl || mods.alt || mods.logo;
-        let now = self.now();
         let ev = self.overlays.inputs.press(menu, step, held);
-        // labels are looked up lazily for the sources the HUD lists
-        let ids = self.overlays.inputs.switcher.historical_order();
-        let labels: std::collections::HashMap<String, String> = ids
-            .iter()
-            .map(|id| (id.clone(), self.source_label(id)))
-            .collect();
-        if let Some(id) = self.overlays.inputs.apply(ev, now, |id| {
+        self.run_switch_event(ev);
+    }
+
+    /// Run `ev` on the input sources: the source it commits becomes the keymap, then the switcher's panel is sent the
+    /// list or the close.
+    pub(crate) fn run_switch_event(&mut self, ev: SwitchEvent) {
+        let was_open = self.overlays.inputs.switch_open();
+        // labels are looked up lazily for the sources the panel lists
+        let labels: std::collections::HashMap<String, String> = match &ev {
+            SwitchEvent::ShowHud { order, .. } => order
+                .iter()
+                .map(|id| (id.clone(), self.source_label(id)))
+                .collect(),
+            _ => std::collections::HashMap::new(),
+        };
+        if let Some(id) = self.overlays.inputs.apply(ev, |id| {
             labels.get(id).cloned().unwrap_or_else(|| id.to_string())
         }) {
             self.activate_input_source(&id);
         }
-        self.request_redraw();
+        self.sources_changed(was_open);
     }
 
     /// The modifier state changed: releasing the shortcut's modifiers commits the displayed source.
     pub fn input_sources_modifiers(&mut self, mods: Mods) {
-        if !self.overlays.inputs.hud_open()
+        if !self.overlays.inputs.switch_open()
             || self.overlays.hold_modifiers
             || mods.ctrl
             || mods.alt
@@ -264,22 +261,17 @@ impl Cupertino {
         {
             return;
         }
-        let now = self.now();
         let ev = self.overlays.inputs.switcher.modifiers_released();
-        if let Some(id) = self.overlays.inputs.apply(ev, now, |id| id.to_string()) {
-            self.activate_input_source(&id);
-        }
-        self.request_redraw();
+        self.run_switch_event(ev);
     }
 
-    /// `Escape`, `Return` and the arrows while the HUD is open. True when the key was consumed. Up and Down move the
-    /// selection through the list like further presses of the shortcut (approximate: the design HUD's own key
+    /// `Escape`, `Return` and the arrows while a switch is open. True when the key was consumed. Up and Down move the
+    /// selection through the list like further presses of the shortcut (approximate: the design switcher's own key
     /// handling beyond Escape is not known).
     pub fn input_sources_key(&mut self, sym: u32) -> bool {
-        if !self.overlays.inputs.hud_open() {
+        if !self.overlays.inputs.switch_open() {
             return false;
         }
-        let now = self.now();
         let ev = match sym {
             keysyms::KEY_Escape => self.overlays.inputs.switcher.escape(),
             keysyms::KEY_Return | keysyms::KEY_KP_Enter => self.overlays.inputs.switcher.commit(),
@@ -287,10 +279,7 @@ impl Cupertino {
             keysyms::KEY_Down => self.overlays.inputs.switcher.press(Step::Next, true),
             _ => return false,
         };
-        if let Some(id) = self.overlays.inputs.apply(ev, now, |id| id.to_string()) {
-            self.activate_input_source(&id);
-        }
-        self.request_redraw();
+        self.run_switch_event(ev);
         true
     }
 
@@ -452,21 +441,26 @@ impl Cupertino {
         }
     }
 
+    /// Close the picker as cancelled: the letter is put back where a preview replaced it, and its panel is told.
     pub fn accent_dismiss(&mut self) {
         if self.overlays.accent.is_open() {
             self.overlays.accent.dismiss();
-            self.request_redraw();
+            self.flush_text_ops();
         }
+        self.sync_accent_panel();
     }
 
-    /// Open the picker for `base` now (scripted input, tests; a held key opens it through [`Self::tick_accent`]).
+    /// Open the picker for `base` now, as the first repeat of its held key would ([`Self::accent_trigger`]): scripted
+    /// input and tests. False when it does not open: no candidates, no panel to show it, no output at the anchor.
     pub fn accent_open(&mut self, base: char) -> bool {
         let anchor = self.accent_anchor();
+        if !self.panels_can_open_picker() || !self.picker_has_output(anchor) {
+            return false;
+        }
         let app = self.key_app_id();
         let opened = self.overlays.accent.open_for(base, anchor, &app);
-        if opened {
-            self.request_redraw();
-        }
+        self.flush_text_ops();
+        self.sync_accent_panel();
         opened
     }
 
@@ -482,10 +476,12 @@ impl Cupertino {
         if self.overlays.accent.is_open() {
             let app = self.key_app_id();
             let consumed = self.overlays.accent.key(key, &app);
-            self.request_redraw();
             if !consumed {
-                // the key closed the popup and goes to the client
+                // the key closed the picker and goes to the client
                 self.overlays.accent.close();
+            }
+            self.sync_accent_panel();
+            if !consumed {
                 return AccentRoute::Pass;
             }
             let navigation = matches!(
@@ -506,7 +502,8 @@ impl Cupertino {
             Some(c)
                 if self.overlays.accent.bridge
                     && self.overlays.accent.picker.offers(c)
-                    && self.overlays.accent.picker.allowed_for(&self.key_app_id()) =>
+                    && self.overlays.accent.picker.allowed_for(&self.key_app_id())
+                    && self.panels_can_open_picker() =>
             {
                 AccentRoute::Armed(c)
             }
@@ -519,55 +516,30 @@ impl Cupertino {
         (self.now() * 1000.0) as u64
     }
 
-    /// First compositor repeat of a held letter with alternatives: open the picker.
+    /// First compositor repeat of a held letter with alternatives: open the picker, unless its panel cannot show it
+    /// (the panels' component went since the letter was armed, or no output holds the anchor).
     pub fn accent_trigger(&mut self, ch: char) {
         let anchor = self.accent_anchor();
-        let app = self.key_app_id();
-        if self.overlays.accent.open_for(ch, anchor, &app) {
-            self.request_redraw();
+        if self.panels_can_open_picker() && self.picker_has_output(anchor) {
+            let app = self.key_app_id();
+            self.overlays.accent.open_for(ch, anchor, &app);
         }
         self.flush_text_ops();
+        self.sync_accent_panel();
     }
 
-    /// A pointer press while the accent popup is open: a candidate commits it (a single click commits), a
-    /// press elsewhere on the popup is taken without effect, a press outside closes the popup and goes on
-    /// (approximate: what the design does with an outside click is not known). True when the press is taken.
-    pub fn accent_pointer_press(&mut self, pos: smithay::utils::Point<f64, Logical>) -> bool {
-        let Some(popup) = self.overlays.accent.popup.clone() else {
-            return false;
-        };
-        let centre = cupertino_geometry::Point::new(
-            popup.anchor.x() + popup.anchor.width() / 2.0,
-            popup.anchor.y() + popup.anchor.height() / 2.0,
-        );
-        let output = self
-            .outputs
-            .iter()
-            .map(|o| GRect::new(o.rect.x, o.rect.y, o.rect.w, o.rect.h))
-            .find(|r| r.contains(centre));
-        let Some(output) = output else {
+    /// A pointer press while the picker is open: anywhere but on the picker's panel it closes the picker as
+    /// cancelled. The press goes on to what it hit either way; a candidate's panel reports its pick itself.
+    pub fn accent_pointer_press(&mut self, pos: smithay::utils::Point<f64, Logical>) {
+        if !self.overlays.accent.is_open() {
+            return;
+        }
+        let on_panel = self
+            .surface_under(pos)
+            .is_some_and(|(surface, _)| self.is_accents_panel(&surface));
+        if !on_panel {
             self.accent_dismiss();
-            return false;
-        };
-        let inset = if self.config.shell.show_menu_bar {
-            self.config.shell.menu_bar_height
-        } else {
-            0.0
-        };
-        let layout = accent_layout(&popup, output, inset);
-        let (x, y) = (pos.x - output.x(), pos.y - output.y());
-        let inside = |r: &KRect| x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h;
-        if let Some(index) = layout.cells.iter().position(inside) {
-            self.overlays.accent.click(index);
-            self.flush_text_ops();
-            self.request_redraw();
-            return true;
         }
-        if inside(&layout.rect) {
-            return true;
-        }
-        self.accent_dismiss();
-        false
     }
 
     /// Deliver one edit to the focused client's text input. False when there is no bridge.
@@ -591,105 +563,13 @@ impl Cupertino {
 
 // ---- scene -------------------------------------------------------------------------------------
 
-/// Colours of the HUD and popup contents. approximate.
-struct Palette {
-    text: Rgba,
-    /// Fill of the highlighted row and the text on it.
-    row_highlight: Rgba,
-    row_highlight_text: Rgba,
-}
-
-fn palette(dark: bool) -> Palette {
-    let row_highlight = [0.04, 0.45, 1.0, 1.0];
-    let row_highlight_text = [1.0, 1.0, 1.0, 1.0];
+/// The colour of the notice's text in the dark and the light appearance (approximate).
+fn notice_text(dark: bool) -> Rgba {
     if dark {
-        Palette {
-            text: [0.97, 0.97, 0.98, 0.95],
-            row_highlight,
-            row_highlight_text,
-        }
+        [0.97, 0.97, 0.98, 0.95]
     } else {
-        Palette {
-            text: [0.05, 0.05, 0.06, 0.92],
-            row_highlight,
-            row_highlight_text,
-        }
+        [0.05, 0.05, 0.06, 0.92]
     }
-}
-
-fn render_hud(
-    view: &HudView,
-    size: (f64, f64),
-    scale: f64,
-    dark: bool,
-    text: &mut crate::overlays::OverlayText,
-) -> Option<DrawList> {
-    let mut list = DrawList::new(
-        (size.0 * scale).round().max(1.0) as u32,
-        (size.1 * scale).round().max(1.0) as u32,
-    );
-    let draws = &mut list.draws;
-    let pal = palette(dark);
-    let pad = switcher::HUD_PADDING;
-    for (i, label) in view.labels.iter().enumerate() {
-        let y = pad + i as f64 * switcher::HUD_ROW_HEIGHT;
-        let row = GRect::new(pad, y, size.0 - 2.0 * pad, switcher::HUD_ROW_HEIGHT);
-        let hot = i == view.selection;
-        if hot {
-            draws.extend(rounded(
-                row,
-                switcher::HUD_BACKGROUND_PATTERN_RADIUS,
-                scale,
-                pal.row_highlight,
-            ));
-        }
-        let color = if hot {
-            pal.row_highlight_text
-        } else {
-            pal.text
-        };
-        // placeholder source icon: a rounded square with the layout code
-        let icon = GRect::new(
-            row.x() + 10.0,
-            y + (switcher::HUD_ROW_HEIGHT - HUD_ICON_PT) / 2.0,
-            HUD_ICON_PT,
-            HUD_ICON_PT,
-        );
-        let icon_fill = if hot {
-            [1.0, 1.0, 1.0, 0.28]
-        } else {
-            [color[0], color[1], color[2], 0.14]
-        };
-        draws.extend(rounded(icon, 6.0, scale, icon_fill));
-        let code = view
-            .order
-            .get(i)
-            .map(|id| source_code(id))
-            .unwrap_or_default();
-        let px = (10.0 * scale) as f32;
-        let cw = text.width(&code, px, 600);
-        draws.push(text.centered(
-            &code,
-            ((icon.x() + icon.width() / 2.0) * scale) as f32 - cw / 2.0,
-            ((icon.y() + icon.height() / 2.0) * scale) as f32,
-            px,
-            600,
-            color,
-        ));
-        let tx = icon.x() + HUD_ICON_PT + 10.0;
-        let avail = (row.x() + row.width() - 10.0 - tx) * scale;
-        let px = FONT_PT * scale as f32;
-        let fitted = text.fit(label, px, 400, avail as f32);
-        draws.push(text.centered(
-            &fitted,
-            (tx * scale) as f32,
-            ((y + switcher::HUD_ROW_HEIGHT / 2.0) * scale) as f32,
-            px,
-            400,
-            color,
-        ));
-    }
-    Some(list)
 }
 
 /// Padding of the notice that an application holds the shortcuts, in points: horizontal and vertical.
@@ -716,7 +596,6 @@ fn render_notice(
         (size.0 * scale).round().max(1.0) as u32,
         (size.1 * scale).round().max(1.0) as u32,
     );
-    let pal = palette(dark);
     let fill = if dark {
         [0.16, 0.16, 0.18, 0.92]
     } else {
@@ -734,7 +613,7 @@ fn render_notice(
         (size.1 / 2.0 * scale) as f32,
         setting.pt * scale as f32,
         400,
-        pal.text,
+        notice_text(dark),
     ));
     Some(list)
 }
@@ -856,243 +735,4 @@ pub fn shortcut_notice(p: &mut SceneParams<'_>) -> Vec<Piece> {
         )]
     })
     .unwrap_or_default()
-}
-
-/// The glass the input-source HUD lies on: the regular glass of an alert, which takes the recipe of Reduce Transparency
-/// (a wide blur under a nearly opaque face, nothing bent at the edge) and of Increase Contrast (the contrast face) from
-/// the session's display options as every glass does.
-pub const HUD_GLASS: cupertino_theme::GlassStyle = cupertino_theme::GlassStyle::Regular;
-/// The HUD's glass in the element cache and the tone measurements: no surface's backdrop has it (theirs count up from
-/// 1).
-const HUD_GLASS_KEY: u64 = u64::MAX - 0x1d;
-
-/// The HUD's backdrop over `area` (output-local points): one shape of [`HUD_GLASS`] with the HUD's corners.
-pub fn hud_backdrop(area: Rectangle<f64, Logical>) -> BackdropArea {
-    BackdropArea {
-        key: HUD_GLASS_KEY,
-        material: String::new(),
-        area,
-        radius: switcher::HUD_CORNER_RADIUS,
-        alpha: 1.0,
-        glass: Some(GlassSpec {
-            style: HUD_GLASS,
-            container: 0,
-            spacing: 0.0,
-        }),
-    }
-}
-
-/// The input-source HUD (centre of the primary output while it is open or fading).
-pub fn input_hud(p: &mut SceneParams<'_>) -> Vec<Piece> {
-    if p.wm.outputs().first().map(|o| o.id) != Some(p.output_id) {
-        return Vec::new();
-    }
-    let Some(view) = p.overlays.inputs.hud.clone() else {
-        return Vec::new();
-    };
-    let alpha = view.alpha(p.now) as f32;
-    if alpha <= 0.002 || view.labels.is_empty() {
-        return Vec::new();
-    }
-    let (scale, dark) = (p.scale, p.config.is_dark());
-    let px = FONT_PT * scale as f32;
-    let overlays = &mut *p.overlays;
-    let text = &mut overlays.text;
-    text.set_scale(scale as f32);
-    let (w, h) = hud_size(&view.labels, |l| f64::from(text.width(l, px, 400)) / scale);
-    // the placement is unknown: centred
-    let (x, y) = (
-        ((p.rect.w - w) / 2.0).round(),
-        ((p.rect.h - h) / 2.0).round(),
-    );
-    let sig = debug_sig(&(
-        &view.order,
-        &view.labels,
-        view.selection,
-        (w.to_bits(), h.to_bits()),
-        scale.to_bits(),
-        dark,
-    ));
-    let cut = overlays.images.get(("input-hud", 0), sig, || {
-        render_hud(&view, (w, h), scale, dark, text)
-    });
-    let mut els: Vec<Piece> = Vec::new();
-    if let Some((image, px)) = cut {
-        els.push(list_piece(
-            &image,
-            SceneKind::InputHud,
-            px,
-            x,
-            y,
-            scale,
-            alpha,
-        ));
-    }
-    let area = Rectangle::<f64, Logical>::new((x, y).into(), (w, h).into());
-    els.extend(glass_layer(p, &hud_backdrop(area), alpha));
-    let params = p.decor.popup_shadow_params();
-    let plan = WindowPlan {
-        visual: cupertino_wm::Rect::new(p.rect.x + x, p.rect.y + y, w, h),
-        scale_x: 1.0,
-        scale_y: 1.0,
-        opacity: 1.0,
-        shadow: 1.0,
-        exact: true,
-        corner: None,
-        corner_cap: None,
-    };
-    els.extend(shadow_item(
-        p,
-        SceneKind::InputHudShadow,
-        0,
-        &params,
-        &plan,
-        switcher::HUD_CORNER_RADIUS,
-        f64::from(alpha),
-    ));
-    els
-}
-
-fn render_accent(
-    popup: &AccentPopup,
-    layout: &cupertino_keyboard::accent::PopupLayout,
-    scale: f64,
-    dark: bool,
-    text: &mut crate::overlays::OverlayText,
-) -> Option<DrawList> {
-    let r = layout.rect;
-    let mut list = DrawList::new(
-        (r.w * scale).round().max(1.0) as u32,
-        (r.h * scale).round().max(1.0) as u32,
-    );
-    let draws = &mut list.draws;
-    let pal = palette(dark);
-    for (i, cell) in layout.cells.iter().enumerate() {
-        let Some(cand) = popup.candidates.get(i) else {
-            break;
-        };
-        let c = GRect::new(cell.x - r.x, cell.y - r.y, cell.w, cell.h);
-        let hot = popup.focused == Some(i);
-        if hot {
-            draws.extend(rounded(c, 8.0, scale, pal.row_highlight));
-        }
-        let color = if hot {
-            pal.row_highlight_text
-        } else {
-            pal.text
-        };
-        let px = ACCENT_FONT_PT * scale as f32;
-        let w = text.width(cand, px, 400);
-        draws.push(text.centered(
-            cand,
-            ((c.x() + c.width() / 2.0) * scale) as f32 - w / 2.0,
-            ((c.y() + c.height() * 0.42) * scale) as f32,
-            px,
-            400,
-            color,
-        ));
-        // the number key that picks the candidate directly (1 to 9)
-        let num = (i + 1).to_string();
-        let npx = 9.0 * scale as f32;
-        let nw = text.width(&num, npx, 400);
-        let dim = [color[0], color[1], color[2], color[3] * 0.6];
-        draws.push(text.centered(
-            &num,
-            ((c.x() + c.width() / 2.0) * scale) as f32 - nw / 2.0,
-            ((c.y() + c.height() - 8.0) * scale) as f32,
-            npx,
-            400,
-            dim,
-        ));
-    }
-    Some(list)
-}
-
-/// The accent popup next to its anchor.
-pub fn accent_popup(p: &mut SceneParams<'_>) -> Vec<Piece> {
-    let Some(popup) = p.overlays.accent.popup.clone() else {
-        return Vec::new();
-    };
-    let anchor_center = (
-        popup.anchor.x() + popup.anchor.width() / 2.0,
-        popup.anchor.y() + popup.anchor.height() / 2.0,
-    );
-    let rect = GRect::new(p.rect.x, p.rect.y, p.rect.w, p.rect.h);
-    if !rect.contains(cupertino_geometry::Point::new(
-        anchor_center.0,
-        anchor_center.1,
-    )) {
-        return Vec::new();
-    }
-    let layout = accent_layout(
-        &popup,
-        rect,
-        if p.config.shell.show_menu_bar {
-            p.config.shell.menu_bar_height
-        } else {
-            0.0
-        },
-    );
-    let (scale, dark) = (p.scale, p.config.is_dark());
-    let overlays = &mut *p.overlays;
-    let text = &mut overlays.text;
-    text.set_scale(scale as f32);
-    let sig = debug_sig(&(
-        &popup.candidates,
-        popup.focused,
-        (
-            layout.rect.x.to_bits(),
-            layout.rect.y.to_bits(),
-            layout.rect.w.to_bits(),
-        ),
-        scale.to_bits(),
-        dark,
-    ));
-    let cut = overlays.images.get(("accent", 0), sig, || {
-        render_accent(&popup, &layout, scale, dark, text)
-    });
-    let r = layout.rect;
-    let mut els: Vec<Piece> = Vec::new();
-    if let Some((image, px)) = cut {
-        els.push(list_piece(
-            &image,
-            SceneKind::AccentPopup,
-            px,
-            r.x,
-            r.y,
-            scale,
-            1.0,
-        ));
-    }
-    let area = Rectangle::<f64, Logical>::new((r.x, r.y).into(), (r.w, r.h).into());
-    els.extend(material_layer(
-        p,
-        SceneKind::AccentMaterial,
-        0,
-        MATERIAL,
-        area,
-        12.0,
-        1.0,
-    ));
-    let params = p.decor.popup_shadow_params();
-    let plan = WindowPlan {
-        visual: cupertino_wm::Rect::new(p.rect.x + r.x, p.rect.y + r.y, r.w, r.h),
-        scale_x: 1.0,
-        scale_y: 1.0,
-        opacity: 1.0,
-        shadow: 1.0,
-        exact: true,
-        corner: None,
-        corner_cap: None,
-    };
-    els.extend(shadow_item(
-        p,
-        SceneKind::AccentShadow,
-        0,
-        &params,
-        &plan,
-        12.0,
-        1.0,
-    ));
-    els
 }

@@ -2,7 +2,8 @@
 
 The on-screen displays of the Cupertino desktop. They stand in for the design's overlay helper: a 200 x 200 pt window
 with a glyph and a 16-segment meter for volume, mute, brightness, keyboard backlight and microphone. It appears on a key
-press, holds, and fades out.
+press, holds, and fades out. They also draw the keyboard's two panels, the input-source switcher and the accent picker,
+whose keys, choice and text the server keeps (`panels`, `panels_view`).
 
 The crate is a library: one component, `Osd`, which the shell host (`cupertino-shell`) runs on a thread of its own as
 `osd` of the server's component table. The model (`model`, `sender`, `controller`) is pure; the effects (`effects`)
@@ -21,6 +22,8 @@ To see it without touching the machine's levels, call `Show` (below): it changes
 
 ```
 cargo run -p cupertino-osd --example osd_capture -- osd/overlay --sheet   # the overlay of each kind, light and dark
+cargo run -p cupertino-osd --example osd_capture -- osd/sources --sheet   # the switcher, each selection
+cargo run -p cupertino-osd --example osd_capture -- osd/accents --sheet   # the picker, no focus and the second candidate
 ```
 
 ## What a restart loses
@@ -31,7 +34,10 @@ A failed component is started again alone by its host (D16, D21). The osd keeps 
 - the presses accepted and not yet carried out are dropped, and a call of `org.cupertino.Osd1` made while the name has
   no owner (from the failure until the new instance owns it) is refused by the bus: the server's key press does
   nothing;
-- its bus connections and the hold or fade under way.
+- its bus connections and the hold or fade under way;
+- the keyboard's panels: the server dismisses them with the instance's surfaces. A switch goes on without them and the
+  new instance is sent its list as it binds; an open picker closes with the letter put back, and the next held letter
+  opens a new one.
 
 The levels themselves live in `cupertino-audiod`, the power daemon and UPower, so a restart changes none of them.
 
@@ -76,6 +82,19 @@ on stderr with its reason.
 - A change of level always moves at least one raw unit, so a coarse raw range cannot swallow a press.
 - A master without a mute switch counts as muted exactly at level 0 (the service's rule). The volume keys work, and
   the mute key fails with its reason at any other level.
+
+**Keyboard panels.** The server sends the switcher's list and the picker's candidates on `cupertino_keyboard_panels_v1`
+(`cupertino_kit_shell::keyboard_panels`); the component holds the `keyboard_panels` role. The switcher's panel is a
+transient overlay layer surface (`cupertino-osd-input-sources`) centred on its output, with no input: rows of 40 pt
+with a 24 pt source icon and its two-letter code, the selected one on the accent highlight, on the regular glass of an
+alert (`Glass::regular()`). Once the switch ends it fades at constant speed over 0.3 s (`Timing::INPUT_SOURCES_FADE`),
+from its first frame when the end came before it, so a quick tap still shows the choice. The picker's panel is a
+transient overlay layer surface (`cupertino-osd-accents`) anchored at its layout's corner next to the text cursor, below
+the menu bar, on the menu material (`Surface::Menu`), one numbered cell per candidate (at most nine,
+`cupertino_keyboard::accent::layout_popup`); a press and release on a candidate sends `accent_pick` with the picker's
+serial. Neither takes the keyboard, and neither holds any text: the server edits the field. Each is a list (`Role::List`)
+named "Input sources" or "Accents", its rows static text named by the source and its candidates buttons named by the
+character.
 
 ## Protocols / D-Bus it speaks
 

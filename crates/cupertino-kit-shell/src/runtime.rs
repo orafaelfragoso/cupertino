@@ -299,7 +299,11 @@ pub(crate) fn run_program<P: Program>(lock_screen: bool) -> Result<(), Error> {
 /// `system` opening the program's windows with `roles`, which tell the program the session's appearance and display
 /// options the window system started on ([`Event::Appearance`]): light with motion on where the server tells none, as
 /// Kit's theme starts there too.
-fn with_roles(system: WaylandWindowSystem, mut roles: roles::ShellRoles) -> WaylandWindowSystem {
+fn with_roles(
+    mut system: WaylandWindowSystem,
+    mut roles: roles::ShellRoles,
+) -> WaylandWindowSystem {
+    roles.open_keyboard_panels(system.connection());
     roles.start_appearance(system.appearance().unwrap_or_default());
     system.with_roles(roles)
 }

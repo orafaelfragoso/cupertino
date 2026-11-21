@@ -45,9 +45,9 @@ enum KeyRoute {
     Forward,
     /// The focused client, released at once: a held letter with accent alternatives (see [`AccentRoute::Armed`]).
     AccentArmed(char),
-    /// The input-source HUD (Escape, Return, the arrows).
-    Hud,
-    /// The accent popup; `repeats` for its navigation keys.
+    /// The input-source switch (Escape, Return, the arrows).
+    Switch,
+    /// The accent picker; `repeats` for its navigation keys.
     Accent { repeats: bool },
     /// A compositor shortcut or a swallowed release.
     Plan(ActionPlan),
@@ -199,7 +199,7 @@ impl Cupertino {
         self.key_from_device(evt.key_code(), evt.state(), evt.time_msec());
     }
 
-    /// One key event through the overlays (input-source HUD, accent picker), the menus and
+    /// One key event through the overlays (input-source switch, accent picker), the menus and
     /// the key router; whatever none of them takes goes to the focused client. A second press of a
     /// key that is down, or a release of a key that is not, changes nothing and is dropped (sticky
     /// keys and mouse keys can produce both).
@@ -343,12 +343,12 @@ impl Cupertino {
             self.key_router.swallow(sym);
             return KeyRoute::CancelDrag;
         }
-        // 1. the input-source HUD takes Escape, Return and the arrows
+        // 1. the input-source switch takes Escape, Return and the arrows
         if pressed
             && !modifier_key
             && !ctx.locked
             && !ctx.input_held
-            && self.overlays.inputs.hud_open()
+            && self.overlays.inputs.switch_open()
             && matches!(
                 sym,
                 keysyms::KEY_Escape
@@ -359,7 +359,7 @@ impl Cupertino {
             )
         {
             self.key_router.swallow(sym);
-            return KeyRoute::Hud;
+            return KeyRoute::Switch;
         }
         // 2. accent picker (hold a letter key)
         if !modifier_key && !ctx.locked && !ctx.input_held {
@@ -415,7 +415,7 @@ impl Cupertino {
                 self.arm_key_repeat(key.code, RepeatTarget::AccentTrigger(c));
                 false
             }
-            KeyRoute::Hud => {
+            KeyRoute::Switch => {
                 self.input_sources_key(key.sym);
                 matches!(key.sym, keysyms::KEY_Up | keysyms::KEY_Down)
             }
@@ -481,19 +481,25 @@ impl Cupertino {
             "super" => 125,
             other => return Err(format!("not a modifier: {other}")),
         };
+        self.scripted_evdev_key(evdev, pressed);
+        Ok(())
+    }
+
+    /// Scripted key of evdev code `evdev` held down or let go, as a device would deliver it: through the filters, the
+    /// shortcuts, the Super tap, the input-source switch and the accent picker's trigger, and on to the focused client
+    /// when nothing takes it. A letter held down repeats as a real one does.
+    pub fn scripted_evdev_key(&mut self, evdev: u32, pressed: bool) {
         let time = (self.now() * 1000.0) as u32;
         let state = if pressed {
             KeyState::Pressed
         } else {
             KeyState::Released
         };
-        // as a device would deliver it: through the filters, the shortcuts and the Super tap
         self.key_after_delays(
             smithay::input::keyboard::Keycode::new(evdev + 8),
             state,
             time,
         );
-        Ok(())
     }
 
     /// Scripted text: every character is typed as its own key.
@@ -513,7 +519,7 @@ impl Cupertino {
     fn scripted_overlay_key(&mut self, key: OverlayKey) {
         let ctx = self.action_context();
         let sym = key.sym;
-        if !ctx.locked && self.overlays.inputs.hud_open() && self.input_sources_key(sym) {
+        if !ctx.locked && self.overlays.inputs.switch_open() && self.input_sources_key(sym) {
             return;
         }
         // a scripted key is a press and a release at once, so it never arms the accent trigger

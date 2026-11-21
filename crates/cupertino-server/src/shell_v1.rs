@@ -1,8 +1,9 @@
 //! `cupertino_shell_v1` (shell processes → server): the private global that hands out the shell roles. Only the
 //! connections the server made for a shell process see it ([`crate::authorization`]), and each request needs the role
 //! it creates: `get_menu_bar` in [`crate::menu_bar`], `get_dock` in [`crate::dock`], `get_session` in
-//! [`crate::session_v1`], `get_window_manager` in [`crate::window_manager`]. What any client may ask for (backdrops, title
-//! bar style, appearance) is in [`crate::app_effects_v1`].
+//! [`crate::session_v1`], `get_window_manager` in [`crate::window_manager`], `get_keyboard_panels` in
+//! [`crate::keyboard_panels`]. What any client may ask for (backdrops, title bar style, appearance) is in
+//! [`crate::app_effects_v1`].
 
 use cupertino_protocols::server::cupertino_shell_v1::{self, CupertinoShellV1};
 use smithay::reexports::wayland_server::backend::GlobalId;
@@ -14,8 +15,9 @@ use crate::authorization::{capabilities, permit, role};
 use crate::state::Cupertino;
 
 /// The version of `cupertino_shell_v1` the server offers: 28 took the overview and the pictures of minimized windows
-/// out of the dock object, which the overview component and its holes replace.
-const SHELL_VERSION: u32 = 28;
+/// out of the dock object, which the overview component and its holes replace; 30 added the keyboard's panels
+/// (`get_keyboard_panels`), which the on-screen displays draw.
+const SHELL_VERSION: u32 = 30;
 
 /// Registers the `cupertino_shell_v1` global.
 pub struct ShellV1Global {
@@ -94,6 +96,12 @@ impl Dispatch<CupertinoShellV1, ()> for Cupertino {
                     &output,
                     init,
                 ),
+            cupertino_shell_v1::Request::GetKeyboardPanels { id } => state.create_keyboard_panels(
+                shell,
+                permit::<role::KeyboardPanels>(client),
+                id,
+                init,
+            ),
             // `Destroy` needs nothing: objects created through the global stay valid
             _ => {}
         }

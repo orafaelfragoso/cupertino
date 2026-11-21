@@ -7,9 +7,9 @@ Compositor input primitives (`core` layer, D25). Depends on no other server crat
 | Module | Contents |
 |---|---|
 | `input` | Key bindings (`KeyBindings`, `Chord`, `Mods`, `Action`), action translation, switcher key handling, and `KeyRouter` |
-| `kbd` | Keyboard settings (`KeyboardSettings`, `AccentSettings`), XKB/decoded input sources (`InputSources`, `SourceSpec`), caps-lock debounce (`CapsDebounce`), and HUD sizing |
+| `kbd` | Keyboard settings (`KeyboardSettings`, `AccentSettings`), XKB/decoded input sources (`InputSources`, `SourceSpec`), caps-lock debounce (`CapsDebounce`), and the switch under way (`OpenSwitch`) |
 | `kbd_filters` | Accessibility key filters state (`KeyFilters`), `SuperTap`, `RepeatTarget`, and XKB modifier-mask rewrite helpers (`ModIndices`, `rewrite_masks`, `key_for_sym`) |
-| `kbd_ui` | Accent-picker state machine (`AccentUi`, `AccentPopup`, `AccentRoute`, `TextOp`) and overlay layout helpers (`source_code`, `accent_layout`, `has_input_source_bindings`) |
+| `kbd_ui` | Accent-picker state machine (`AccentUi`, `AccentPopup`, `AccentRoute`, `TextOp`) and `has_input_source_bindings`; the picker's panel is drawn by the on-screen displays |
 | `input_method` | In-process `zwp_input_method_v2` client bridge thread (`ImBridge`, `ImEvent`) |
 | `localed` | `org.freedesktop.locale1` system keyboard layout reader (`SystemLayout`) |
 | `overlay_types` | Shared overlay key and shortcut-notice value types (`OverlayKey`, `ShortcutNotice`, `is_modifier_sym`) |

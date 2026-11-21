@@ -296,8 +296,8 @@ is glass of that style (`GlassParams` of `glass`); a `Surface::…` is the theme
 | Log out, restart, shut down, power button, interrupt and consent panels | `crates/cupertino-login/src/view/widgets.rs` | `Glass::regular()` | kept | kept |
 | Authentication and keyring prompts | `crates/cupertino-polkit-agent/src/render.rs` | `then_some(PANEL_MATERIAL)` | opaque | opaque |
 | Portal prompts (sharing, open with, consent) | `crates/cupertino-portal/src/dialog.rs` | `PANEL_WINDOW_BACKGROUND` | opaque | kept |
-| Input-source switcher | `crates/cupertino-server/src/kbd_ui.rs` | `GlassStyle::Regular` | kept | kept |
-| Accent popup | `crates/cupertino-server/src/kbd_ui.rs` | `SceneKind::AccentMaterial` | kept | kept |
+| Input-source switcher | `crates/cupertino-osd/src/panels_view.rs` | `Glass::regular()` | kept | kept |
+| Accent picker | `crates/cupertino-osd/src/panels_view.rs` | `Surface::Menu` | kept | kept |
 
 Solid by design, so not in the table: a sheet, a tooltip, the Force Quit window and the pills of a fanned stack.
 

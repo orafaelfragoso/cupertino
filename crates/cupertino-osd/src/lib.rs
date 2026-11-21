@@ -9,6 +9,8 @@
 //! * [`control`]: `org.cupertino.Osd1`, served on the component's own bus connection.
 //! * [`layout`]: the geometry of the 200 x 200 window.
 //! * [`view`]: the overlay's window in CupertinoKit.
+//! * [`panels`]: the keyboard's two panels, the input-source switcher and the accent picker, as the server describes
+//!   them; [`panels_view`]: their windows in CupertinoKit.
 //! * [`Osd`]: the component.
 //!
 //! Window size, corner radius, position, meter geometry, the partial-segment rule and the fade are taken from the
@@ -23,6 +25,8 @@ pub mod controller;
 pub mod effects;
 pub mod layout;
 pub mod model;
+pub mod panels;
+pub mod panels_view;
 pub mod sender;
 pub mod view;
 

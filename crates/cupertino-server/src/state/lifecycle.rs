@@ -59,7 +59,7 @@ impl Cupertino {
         self.tick_window_managers(now);
         self.tick_menu_bars(now);
         self.tick_input_timers(now);
-        self.tick_overlays(now);
+        self.tick_overlays();
         self.tick_layers(now);
         if self.popup_linger.tick(now) {
             // a dismissed popup reached its limit: the next frame no longer draws it

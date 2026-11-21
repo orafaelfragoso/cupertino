@@ -55,6 +55,8 @@ pub enum ShellRole {
     SessionAgent,
     /// Show desktop-control, screenshot and global-shortcut consent prompts.
     Consent,
+    /// Draw the keyboard's panels, the input-source switcher and the accent picker (`cupertino_keyboard_panels_v1`).
+    KeyboardPanels,
 }
 
 impl ShellRole {
@@ -219,6 +221,7 @@ pub mod role {
         Windows,
         SessionAgent,
         Consent,
+        KeyboardPanels,
     );
 }
 

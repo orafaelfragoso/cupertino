@@ -120,7 +120,7 @@ pub const COMPONENTS: [ComponentSpec; 11] = [
     },
     ComponentSpec {
         name: "osd",
-        roles: &[ShellRole::Session],
+        roles: &[ShellRole::Session, ShellRole::KeyboardPanels],
     },
     ComponentSpec {
         name: "agent",

@@ -6,7 +6,7 @@
 //! and on every change; a component that shows nothing until it has what to show says `ready` only once a view of it
 //! shows it (`Program::showing`), so the server holds the surfaces of the instance before until then, and hears the
 //! size the server configured its layer surface to; a component needing a newer global is refused before it starts; a busy loop and a busy render
-//! thread are reported.
+//! thread are reported; the on-screen displays hear the list the server sends on their keyboard panels as it makes them.
 
 mod support;
 
@@ -22,11 +22,12 @@ use cupertino_kit::layout::{Align, Axis};
 use cupertino_kit::platform::{DecorationMode, SystemAppearance, WindowSpec};
 use cupertino_kit_shell::bus::{Message, OsdKind};
 use cupertino_kit_shell::hosting::{Ended, Host, HostEvent, Kind, Runtime, EXIT_VERSION};
+use cupertino_kit_shell::keyboard_panels::Update;
 use cupertino_kit_shell::{
     design, holds, host, outputs, run, session, transaction, Anchor, Component, ComponentName,
     Entry, Error, Event, Keyboard, Layer, LayerSpec, Margin, Program, Role, Surface,
 };
-use support::display::Offer;
+use support::display::{Offer, SOURCES};
 use support::{
     component_connection, connect_host, environment_lock, eventually, wait_for, DisplayOption,
     Seen, Server,
@@ -125,6 +126,56 @@ impl Program for Overlay {
 }
 
 impl Component for Overlay {
+    const NAME: ComponentName = ComponentName::OSD;
+}
+
+/// The on-screen displays as far as the keyboard's panels go: the selected source of the first list it hears is
+/// passed on as an activation, which the stand-in records.
+struct Panels;
+
+#[derive(Clone, Debug)]
+enum PanelsMessage {
+    Heard(String),
+}
+
+impl Application for Panels {
+    type Model = ();
+    type Message = PanelsMessage;
+
+    fn init() -> ((), Vec<Command<PanelsMessage>>) {
+        ((), Vec::new())
+    }
+
+    fn update(_: &mut (), message: PanelsMessage) -> Vec<Command<PanelsMessage>> {
+        match message {
+            PanelsMessage::Heard(id) => session::activate_app(ACTIVATION.0, &id),
+        }
+        Vec::new()
+    }
+
+    fn view(_: &()) -> Vec<Window<PanelsMessage>> {
+        vec![overlay_window("panels")]
+    }
+}
+
+impl Program for Panels {
+    fn surface(_: &(), _: &WindowKey) -> Surface {
+        overlay_surface(NAMESPACE, None)
+    }
+
+    fn event(event: Event) -> Option<PanelsMessage> {
+        match event {
+            Event::KeyboardPanels(Update::Sources {
+                sources, selected, ..
+            }) => sources
+                .get(selected)
+                .map(|s| PanelsMessage::Heard(s.id.clone())),
+            _ => None,
+        }
+    }
+}
+
+impl Component for Panels {
     const NAME: ComponentName = ComponentName::OSD;
 }
 
@@ -334,6 +385,7 @@ impl Component for Revealing {
 static REVEALING: Entry = Entry::of::<Revealing>();
 static FOLLOWING: Entry = Entry::of::<Following>();
 static OVERLAY: Entry = Entry::of::<Overlay>();
+static PANELS: Entry = Entry::of::<Panels>();
 static DOCK: Entry = Entry::of::<Dock>();
 static STALLING: Entry = Entry::of::<Stalling>();
 
@@ -387,6 +439,29 @@ fn a_component_draws_its_view_runs_its_commands_and_says_ready() {
     }));
     // the loop waits for what comes next, out of its busy record
     eventually("the loop waits", || running.busy_for().is_none());
+
+    running.stop();
+    eventually("the component stops", || {
+        running.ended() == Some(Ended::Stopped)
+    });
+    drop(server);
+}
+
+#[test]
+fn the_on_screen_displays_hear_the_list_the_server_sends_as_their_panels_are_made() {
+    let (server, host_end) = Server::start(Kind::Shared, &["osd"]);
+    let (mut host, runtime) = host_and_runtime(host_end);
+    let connection = component_connection(&mut host, "osd");
+    let mut running = runtime.start(&PANELS, connection).unwrap();
+
+    // the stand-in sends the switch's list in the same breath as it makes the object, before the component's loop
+    // first waits: the component hears it all the same
+    let seen = server.seen_until(|seen| seen.iter().any(|s| matches!(s, Seen::ActivateApp { .. })));
+    assert!(seen.contains(&Seen::ActivateApp {
+        component: "osd".into(),
+        serial: ACTIVATION.0,
+        desktop_id: SOURCES[1].0.into(),
+    }));
 
     running.stop();
     eventually("the component stops", || {

@@ -166,6 +166,12 @@ impl Timing {
         easing: Easing::LINEAR,
         seconds: 0.7,
     });
+    /// The input-source switcher's panel fading out once the switch ends: constant speed over 0.3 s, so the alpha falls
+    /// as `1 - t / 0.3` (`cupertino_keyboard::switcher::fade_alpha`).
+    pub const INPUT_SOURCES_FADE: Timing = Timing(Motion::Eased {
+        easing: Easing::LINEAR,
+        seconds: 0.3,
+    });
     /// A popover shrinking into its anchor over 0.22 s: `1 - (1 - t)²` as a cubic Bézier.
     pub const POPOVER_CLOSE: Timing = Timing(Motion::Eased {
         easing: Easing(Shape::Bezier(CubicBezier::new(

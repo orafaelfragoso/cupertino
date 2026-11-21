@@ -309,9 +309,9 @@ impl Cupertino {
             self.consumed_buttons.push(button);
             return;
         }
-        if state == ButtonState::Pressed && self.accent_pointer_press(pos) {
-            self.consumed_buttons.push(button);
-            return;
+        if state == ButtonState::Pressed {
+            // a press off the picker's panel closes the picker and goes on
+            self.accent_pointer_press(pos);
         }
         if state == ButtonState::Pressed && self.press_consumed(pos, button, now) {
             self.consumed_buttons.push(button);

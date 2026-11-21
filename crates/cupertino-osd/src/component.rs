@@ -1,15 +1,17 @@
 //! The on-screen displays as a component of the shell host (`cupertino-shell`): the overlay's window on a layer
 //! surface, `org.cupertino.Osd1` on the component's own session bus connection, the commands carried out one at a
 //! time through the services that own the levels, and the hold and the fade on the UI loop's clock and the display's
-//! frames.
+//! frames; and the keyboard's two panels, the input-source switcher and the accent picker, which the server sends
+//! through `cupertino_kit_shell::keyboard_panels` and which never take the keyboard.
 
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use cupertino_kit::bus::{self as kit_bus, Bus};
 use cupertino_kit::core::{Application, Command as Do, Key, RendererClass, Window, WindowKey};
-use cupertino_kit::geometry::Size;
+use cupertino_kit::geometry::{Rect, Size};
 use cupertino_kit_shell::bus::{self, Message as Published, OsdKind, Topic};
+use cupertino_kit_shell::keyboard_panels::{self, Update};
 use cupertino_kit_shell::outputs::{self, OutputId};
 use cupertino_kit_shell::{
     Anchor, Component, ComponentName, Event, Keyboard, Layer, LayerSpec, Margin, Program, Role,
@@ -20,6 +22,8 @@ use crate::controller::{Command, EffectError, Shown};
 use crate::effects::{self, Buses};
 use crate::layout::{BOTTOM_MARGIN, WINDOW_SIZE};
 use crate::model::{Hud, Kind, Overlay, Phase};
+use crate::panels::{Panels, LABEL_SIZE};
+use crate::panels_view::{self, accents_key, sources_key};
 use crate::sender::hold_seconds;
 use crate::{control, view};
 
@@ -52,6 +56,10 @@ pub struct Model {
     output: Option<OutputId>,
     /// The window's generation: a window the server closed, or one on an output that went, is made anew.
     window: u64,
+    /// The keyboard's panels as the server last described them.
+    panels: Panels,
+    /// The switcher's panel's size, measured from its labels as its list came.
+    sources_size: Size,
 }
 
 #[derive(Clone)]
@@ -73,8 +81,17 @@ pub enum Message {
     Frame,
     /// The server's outputs changed.
     Outputs,
-    /// The server closed the window.
-    Closed,
+    /// The server closed the window of this key.
+    Closed(WindowKey),
+    /// What the server says of the keyboard's panels.
+    Panels(Update),
+    /// A frame of the display, while the switcher's panel waits for its first frame or fades.
+    SourcesFrame,
+    /// The pointer was released on candidate `index` of the picker of `serial`.
+    Pick {
+        serial: u32,
+        index: usize,
+    },
 }
 
 impl Model {
@@ -180,6 +197,8 @@ impl Application for Osd {
             hold: 0,
             output: first_output(),
             window: 0,
+            panels: Panels::default(),
+            sources_size: Size::ZERO,
         };
         (model, commands)
     }
@@ -256,30 +275,165 @@ impl Application for Osd {
                 }
                 Vec::new()
             }
-            Message::Closed => {
-                // a new window, on the output the server still has; while it has none there is no window
-                model.window += 1;
+            Message::Closed(key) => {
+                // a panel the server dismissed is gone until the server sends it again
+                if model
+                    .panels
+                    .sources
+                    .as_ref()
+                    .is_some_and(|p| key.0 == Key::from(sources_key(p)))
+                {
+                    model.panels.sources = None;
+                } else if model
+                    .panels
+                    .accents
+                    .as_ref()
+                    .is_some_and(|p| key.0 == Key::from(accents_key(p)))
+                {
+                    model.panels.accents = None;
+                } else {
+                    // a new window, on the output the server still has; while it has none there is no window
+                    model.window += 1;
+                }
+                Vec::new()
+            }
+            Message::Panels(update) => {
+                let sources = matches!(update, Update::Sources { .. });
+                let now = model.now();
+                model.panels.apply(update, now);
+                if let (true, Some(panel)) = (sources, model.panels.sources.as_ref()) {
+                    let widest = panel
+                        .sources
+                        .iter()
+                        .map(|s| panels_view::text_width(&s.name, LABEL_SIZE, 400))
+                        .fold(0.0, f64::max);
+                    model.sources_size = panel.size(widest);
+                }
+                Vec::new()
+            }
+            Message::SourcesFrame => {
+                let now = model.now();
+                model.panels.sources_frame(now);
+                Vec::new()
+            }
+            Message::Pick { serial, index } => {
+                keyboard_panels::accent_pick(serial, index as u32);
                 Vec::new()
             }
         }
     }
 
     fn view(model: &Model) -> Vec<Window<Message>> {
-        if model.output.is_none() {
-            return Vec::new();
-        }
+        let mut windows = Vec::new();
         let now = model.now();
-        let fading = model.hud.phase(now) == Phase::Fading;
-        let mut window = view::window(model.hud.view(now), fading.then_some(Message::Frame));
-        window.key = WindowKey(Key::from(format!("osd-{}", model.window)));
-        vec![window]
+        if model.output.is_some() {
+            let fading = model.hud.phase(now) == Phase::Fading;
+            let mut window = view::window(model.hud.view(now), fading.then_some(Message::Frame));
+            window.key = WindowKey(Key::from(format!("osd-{}", model.window)));
+            windows.push(window);
+        }
+        if let Some(panel) = &model.panels.sources {
+            let frame = panel.wants_frames().then_some(Message::SourcesFrame);
+            windows.push(panels_view::sources_window(
+                panel,
+                model.sources_size,
+                panel.alpha(now),
+                frame,
+            ));
+        }
+        if let Some((panel, layout)) = model.panels.accents.as_ref().and_then(|panel| {
+            let size = output_size(panel.output)?;
+            Some((panel, panel.layout(size)))
+        }) {
+            let serial = panel.serial;
+            windows.push(panels_view::accents_window(panel, &layout, |index| {
+                Message::Pick { serial, index }
+            }));
+        }
+        windows
+    }
+}
+
+/// The output a panel shows on: the one the server named, else the first one.
+fn panel_output(output: Option<OutputId>) -> Option<OutputId> {
+    output.or_else(first_output)
+}
+
+/// The size in points of the output a panel shows on.
+fn output_size(output: Option<OutputId>) -> Option<Size> {
+    let geometry = outputs::get(panel_output(output)?)?.geometry?;
+    Some(geometry.size)
+}
+
+/// A panel's layer surface: on the overlay layer of `output`, never taking the keyboard.
+fn panel_surface(
+    namespace: &'static str,
+    output: Option<OutputId>,
+    anchor: Anchor,
+    rect: Rect,
+) -> Surface {
+    Surface {
+        role: Role::Layer(LayerSpec {
+            namespace,
+            output: panel_output(output),
+            layer: Layer::Overlay,
+            anchor,
+            size: rect.size,
+            margin: Margin {
+                top: rect.y().round() as i32,
+                left: rect.x().round() as i32,
+                ..Margin::default()
+            },
+            exclusive_zone: -1,
+            keyboard: Keyboard::None,
+        }),
+        persistent: None,
+        holes: Vec::new(),
     }
 }
 
 impl Program for Osd {
-    /// On the overlay layer of the server's first output, anchored to the bottom only, so it is centred horizontally
-    /// `BOTTOM_MARGIN` above the edge, with no keyboard.
-    fn surface(model: &Model, _: &WindowKey) -> Surface {
+    /// The overlay: on the overlay layer of the server's first output, anchored to the bottom only, so it is centred
+    /// horizontally `BOTTOM_MARGIN` above the edge, with no keyboard. The switcher's panel: centred on its output (no
+    /// anchor). The picker's panel: anchored top and left at the origin of its layout's rectangle.
+    fn surface(model: &Model, key: &WindowKey) -> Surface {
+        if let Some(panel) = model
+            .panels
+            .sources
+            .as_ref()
+            .filter(|p| key.0 == Key::from(sources_key(p)))
+        {
+            let rect = Rect::new(
+                0.0,
+                0.0,
+                model.sources_size.width,
+                model.sources_size.height,
+            );
+            return panel_surface(
+                keyboard_panels::SOURCES_NAMESPACE,
+                panel.output,
+                Anchor::default(),
+                rect,
+            );
+        }
+        if let Some(panel) = model
+            .panels
+            .accents
+            .as_ref()
+            .filter(|p| key.0 == Key::from(accents_key(p)))
+        {
+            let size = output_size(panel.output).unwrap_or(Size::ZERO);
+            return panel_surface(
+                keyboard_panels::ACCENTS_NAMESPACE,
+                panel.output,
+                Anchor {
+                    top: true,
+                    left: true,
+                    ..Anchor::default()
+                },
+                panel.layout(size).rect,
+            );
+        }
         let side = f64::from(WINDOW_SIZE);
         Surface {
             role: Role::Layer(LayerSpec {
@@ -310,7 +464,8 @@ impl Program for Osd {
                 ..
             } => published(kind, level).map(|overlay| Message::Command(Command::Show(overlay))),
             Event::Outputs => Some(Message::Outputs),
-            Event::Closed(_) => Some(Message::Closed),
+            Event::Closed(key) => Some(Message::Closed(key)),
+            Event::KeyboardPanels(update) => Some(Message::Panels(update)),
             _ => None,
         }
     }

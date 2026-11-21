@@ -7,6 +7,9 @@ use std::sync::{Mutex, PoisonError};
 
 use cupertino_kit::geometry::Rect;
 use cupertino_kit::platform::Timestamp;
+use cupertino_protocols::client::cupertino_keyboard_panels_v1::{
+    self as panels, CupertinoKeyboardPanelsV1,
+};
 use cupertino_protocols::client::cupertino_shell_v1::CupertinoShellV1;
 use cupertino_protocols::client::cupertino_window_manager_v1::{
     self as wm, CupertinoWindowManagerV1,
@@ -24,8 +27,10 @@ use cupertino_protocols::client::transaction::cupertino_transaction_v1::{
     self as tx, CupertinoTransactionV1,
 };
 use cupertino_wayland_client::State;
+use wayland_client::protocol::wl_output::WlOutput;
 use wayland_client::{Connection as WlConnection, Dispatch, QueueHandle, WEnum};
 
+use crate::keyboard_panels::{self, Source, Update as PanelsUpdate};
 use crate::outputs::OutputId;
 use crate::transaction::{self, Gesture, Outcome};
 use crate::{capture, overview, window_manager, ServerWindowId, WorkspaceId};
@@ -35,6 +40,7 @@ use crate::{capture, overview, window_manager, ServerWindowId, WorkspaceId};
 pub(super) enum Wire {
     WindowManager(OutputId, window_manager::Update),
     Overview(OutputId, overview::Update),
+    KeyboardPanels(keyboard_panels::Update),
     Transaction(transaction::Event),
     /// The window or workspace of the hole of this number is gone.
     HoleClosed(u64),
@@ -89,6 +95,16 @@ impl OverviewData {
             feed: Mutex::default(),
         }
     }
+}
+
+/// User data of the keyboard's panels: the entries of the list being sent.
+#[derive(Default)]
+pub(super) struct KeyboardPanelsData(Mutex<PanelsFeed>);
+
+#[derive(Default)]
+struct PanelsFeed {
+    sources: Vec<Source>,
+    accents: Vec<String>,
 }
 
 /// User data of a transaction part: the transaction it is a part of.
@@ -300,6 +316,70 @@ impl Dispatch<CupertinoOverviewV1, OverviewData> for State {
             }
             _ => {}
         }
+    }
+}
+
+impl Dispatch<CupertinoKeyboardPanelsV1, KeyboardPanelsData> for State {
+    fn event(
+        state: &mut Self,
+        _: &CupertinoKeyboardPanelsV1,
+        event: panels::Event,
+        data: &KeyboardPanelsData,
+        _: &WlConnection,
+        _: &QueueHandle<Self>,
+    ) {
+        let mut feed = data.0.lock().unwrap_or_else(PoisonError::into_inner);
+        // the program's id of an output the server named, `None` for one this connection has not bound
+        let output = |state: &Self, wl: Option<WlOutput>| {
+            wl.and_then(|wl| state.output_id(&wl))
+                .map(|id| OutputId::from_raw(id.registry_name()))
+        };
+        let update = match event {
+            panels::Event::SourceEntry { id, name } => {
+                feed.sources.push(Source { id, name });
+                return;
+            }
+            panels::Event::SourcesChanged {
+                output: wl,
+                selected,
+            } => PanelsUpdate::Sources {
+                output: output(state, wl),
+                sources: std::mem::take(&mut feed.sources),
+                selected: selected as usize,
+            },
+            panels::Event::SourcesClosed => {
+                feed.sources.clear();
+                PanelsUpdate::SourcesClosed
+            }
+            panels::Event::AccentEntry { text } => {
+                feed.accents.push(text);
+                return;
+            }
+            panels::Event::AccentsChanged {
+                serial,
+                output: wl,
+                x,
+                y,
+                width,
+                height,
+                top,
+                focused,
+            } => PanelsUpdate::Accents {
+                serial,
+                output: output(state, wl),
+                anchor: rect(x, y, width, height),
+                top: f64::from(top.max(0)),
+                candidates: std::mem::take(&mut feed.accents),
+                focused: usize::try_from(focused).ok(),
+            },
+            panels::Event::AccentsClosed { serial } => {
+                feed.accents.clear();
+                PanelsUpdate::AccentsClosed { serial }
+            }
+            _ => return,
+        };
+        drop(feed);
+        state.emit(Wire::KeyboardPanels(update));
     }
 }
 

@@ -1,7 +1,7 @@
 //! Keyboard settings and the pure parts of the keyboard integration (`cupertino-keyboard`):
 //! `keyboard.conf`, the key repeat advertised to clients, the modifier profile, the merge of the
 //! verified shortcut assignments into the `cupertino-input` shortcut map, the caps-lock debounce and
-//! the input-source list behind the switcher HUD.
+//! the input-source list behind the switch.
 //!
 //! Shortcut precedence (highest first):
 //!
@@ -68,7 +68,7 @@ use cupertino_keyboard::modifiers::{Physical, Profile, RawMods};
 use cupertino_keyboard::repeat::{CapsLockDelay, RepeatConfig, RepeatInfo, CAPS_HOLD_DEFAULT_MS};
 use cupertino_keyboard::rewrite::ClientClass;
 use cupertino_keyboard::shortcuts::{ShortcutSet, SystemAction};
-use cupertino_keyboard::switcher::{self, Step, SwitchEvent, Switcher};
+use cupertino_keyboard::switcher::{Step, SwitchEvent, Switcher};
 use cupertino_keyboard::xkb::{Keyboard, Level3Keys};
 use cupertino_keyboard::{mouse_keys, slow_keys};
 use smithay::input::keyboard::{keysyms, xkb, ModifiersState};
@@ -816,29 +816,16 @@ impl CapsDebounce {
     }
 }
 
-// ---- input sources and the HUD model -----------------------------------------------------------
+// ---- input sources and the switch under way ----------------------------------------------------
 
-/// What the HUD shows.
+/// A switch under way: what the switcher's panel, which the on-screen displays draw, is sent.
 #[derive(Clone, Debug, PartialEq)]
-pub struct HudView {
+pub struct OpenSwitch {
     /// Source ids, historical order (most recently used first).
     pub order: Vec<String>,
+    /// The name each source is shown with, in the same order.
     pub labels: Vec<String>,
     pub selection: usize,
-    /// Start of the fade-out (seconds on the model clock) once the HUD is dismissed.
-    pub fading_since: Option<f64>,
-}
-
-impl HudView {
-    pub fn alpha(&self, now: f64) -> f64 {
-        self.fading_since
-            .map_or(1.0, |t| switcher::fade_alpha(now - t))
-    }
-
-    pub fn finished(&self, now: f64) -> bool {
-        self.fading_since
-            .is_some_and(|t| now - t >= switcher::HUD_FADE_OUT_S)
-    }
 }
 
 /// The generated keymap of a decoded layout and its display name.
@@ -872,12 +859,13 @@ pub fn generate_decoded(
     })
 }
 
-/// Input-source state: the MRU switcher plus the HUD view.
+/// Input-source state: the MRU switcher plus the switch under way.
 #[derive(Clone, Debug, Default)]
 pub struct InputSources {
     pub specs: Vec<SourceSpec>,
     pub switcher: Switcher,
-    pub hud: Option<HudView>,
+    /// The switch under way, from its first step to its commit or cancel.
+    pub open: Option<OpenSwitch>,
     /// Generated keymaps of the `decoded:` sources that loaded, by source id.
     pub decoded: std::collections::HashMap<String, DecodedSource>,
     /// The seat keymap is a decoded one (the system keymap has to come back for a system source).
@@ -914,61 +902,39 @@ impl InputSources {
         self.switcher.current()
     }
 
-    /// Run a switcher event. Returns the source to activate now, if any. `label` names a source for the HUD.
-    pub fn apply(
-        &mut self,
-        ev: SwitchEvent,
-        now: f64,
-        label: impl Fn(&str) -> String,
-    ) -> Option<String> {
+    /// Run a switcher event. Returns the source to activate now, if any. `label` names a source for the panel.
+    pub fn apply(&mut self, ev: SwitchEvent, label: impl Fn(&str) -> String) -> Option<String> {
         match ev {
             SwitchEvent::None => None,
             SwitchEvent::ShowHud { order, selection } => {
                 let labels = order.iter().map(|id| label(id)).collect();
-                self.hud = Some(HudView {
+                self.open = Some(OpenSwitch {
                     order,
                     labels,
                     selection,
-                    fading_since: None,
                 });
                 None
             }
             SwitchEvent::MoveSelection { selection } => {
-                if let Some(h) = self.hud.as_mut() {
-                    h.selection = selection;
+                if let Some(open) = self.open.as_mut() {
+                    open.selection = selection;
                 }
                 None
             }
             SwitchEvent::Commit { id } => {
-                self.dismiss_hud(now);
+                self.open = None;
                 Some(id)
             }
             SwitchEvent::Cancel => {
-                self.dismiss_hud(now);
+                self.open = None;
                 None
             }
         }
     }
 
-    fn dismiss_hud(&mut self, now: f64) {
-        if let Some(h) = self.hud.as_mut() {
-            h.fading_since.get_or_insert(now);
-        }
-    }
-
-    /// Drop a fully faded HUD.
-    pub fn tick(&mut self, now: f64) {
-        if self.hud.as_ref().is_some_and(|h| h.finished(now)) {
-            self.hud = None;
-        }
-    }
-
-    pub fn hud_open(&self) -> bool {
-        self.hud.as_ref().is_some_and(|h| h.fading_since.is_none())
-    }
-
-    pub fn wants_tick(&self) -> bool {
-        self.hud.as_ref().is_some_and(|h| h.fading_since.is_some())
+    /// Whether a switch is under way: its keys are the switch's, and its panel shows.
+    pub fn switch_open(&self) -> bool {
+        self.open.is_some()
     }
 
     pub fn press(&mut self, menu: bool, step: Step, held: bool) -> SwitchEvent {
@@ -979,14 +945,3 @@ impl InputSources {
         }
     }
 }
-
-/// HUD panel size in points for a list of labels (`text_width` measures one label); the constants are the
-/// ones: width at least 167, padding 10, rows of 40.
-pub fn hud_size(labels: &[String], mut text_width: impl FnMut(&str) -> f64) -> (f64, f64) {
-    let widest = labels.iter().map(|l| text_width(l)).fold(0.0f64, f64::max);
-    switcher::hud_content_size(labels.len(), widest, HUD_LABEL_EXTRA)
-}
-
-/// Space added to the widest label: the 24 pt source icon, a 10 pt gap and 10 pt inside both row edges
-/// (approximate).
-pub const HUD_LABEL_EXTRA: f64 = 24.0 + 10.0 + 20.0;

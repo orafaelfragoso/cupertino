@@ -212,16 +212,18 @@ pub fn may_run_built_in(file: (u32, u32), bin: (u32, u32), root_owner: u32, user
 }
 
 /// The roles a shell process may hold and still start from the development folder: the session's own chrome (the menu
-/// bar, the dock, the window manager and the processes that only follow the session). A process holding any other role
-/// (the lock screen and login, capture, the authentication prompt, data control, desktop control, or a role added
-/// later) always starts its installed program: this is a list of what is allowed, not of what is refused.
-pub const DEV_FOLDER_ROLES: [ShellRole; 6] = [
+/// bar, the dock, the window manager, the keyboard's panels and the processes that only follow the session). A process
+/// holding any other role (the lock screen and login, capture, the authentication prompt, data control, desktop
+/// control, or a role added later) always starts its installed program: this is a list of what is allowed, not of what
+/// is refused.
+pub const DEV_FOLDER_ROLES: [ShellRole; 7] = [
     ShellRole::Session,
     ShellRole::MenuBar,
     ShellRole::Dock,
     ShellRole::WindowManager,
     ShellRole::Overview,
     ShellRole::Windows,
+    ShellRole::KeyboardPanels,
 ];
 
 /// Whether a shell process with `roles` may start from the development folder: all of its roles are

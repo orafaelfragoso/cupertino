@@ -166,7 +166,7 @@ or a `From` that takes numbers.
 - `Easing`: `EASE`, `LINEAR`, `EASE_IN`, `EASE_OUT`, `EASE_IN_OUT` (the timing table) and `COSINE`; `eval`, `over(seconds)
   -> Timing` (a duration with a named shape; a spring never takes a number) and `as_bezier`.
 - `SpringPreset`: `DEFAULT`, `CONTROL_PANEL_OPEN`, `LAUNCHER_OPEN`, `POPOVER_OPEN`; `params`.
-- `Timing`: `CONTROL_PANEL_CLOSE`, `OSD_FADE`, `POPOVER_CLOSE`, `MENU_CLOSE`, and `From<SpringPreset>`; `value(seconds)`,
+- `Timing`: `CONTROL_PANEL_CLOSE`, `OSD_FADE`, `INPUT_SOURCES_FADE`, `POPOVER_CLOSE`, `MENU_CLOSE`, and `From<SpringPreset>`; `value(seconds)`,
   `duration`, `curve` and `layer_curve`.
 - `Animated<T: Animatable>`: a value that moves to a target and keeps its velocity when the target changes (`new`,
   `value`, `velocity`, `target`, `is_animating`, `set_immediately`, `cancel`, `track`, `animate_to(to, Timing, now)`,

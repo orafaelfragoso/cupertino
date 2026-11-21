@@ -166,8 +166,8 @@ impl<M: 'static> Widget<M> for Meter {
 
 /// Sends its message at every frame the compositor gives the window, from its first paint: the fade advances with the
 /// display's frames. It draws nothing and takes no room.
-struct Pacer<M> {
-    frame: M,
+pub(crate) struct Pacer<M> {
+    pub(crate) frame: M,
 }
 
 impl<M: Clone + 'static> Widget<M> for Pacer<M> {

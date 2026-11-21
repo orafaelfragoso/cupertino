@@ -12,8 +12,6 @@ fn flattening_lists_layers_top_to_bottom_and_keeps_the_callers_order_within_a_la
         DisplayFilter,
         DragIcon,
         LayerOverlay,
-        AccentPopup,
-        InputHud,
         Banners,
         Popups,
         LayerTop,

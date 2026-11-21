@@ -713,7 +713,6 @@ pub(crate) fn supervise(state: &mut Cupertino) {
     if let Some(dbus) = &state.dbus {
         dbus.set_login(trust);
     }
-    state.refresh_session_agent();
 
     let mut next = [
         state.supervisor.next_deadline(),

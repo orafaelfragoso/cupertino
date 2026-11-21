@@ -59,6 +59,15 @@ impl Cupertino {
             shell.post_error(ShellError::Role, reason);
             return;
         }
+        if shell.version() < MENU_BAR_MESSAGES_SINCE {
+            tracing::warn!(
+                version = shell.version(),
+                since = MENU_BAR_MESSAGES_SINCE,
+                "a menu bar bound below the shell version of this server's menu bar messages is left inert"
+            );
+            init.init(id, MenuBarData { output: None });
+            return;
+        }
         let (out, _) = target.expect("a rejected target returned above");
         let resource = init.init(id, MenuBarData { output: Some(out) });
         self.menu_bars.bars.push(Bar {
@@ -67,7 +76,6 @@ impl Cupertino {
             output: out,
             sent: None,
             capture_sent: None,
-            agent_sent: None,
             shortcuts_sent: None,
             backdrop_sent: None,
             bands_sent: None,
@@ -75,7 +83,6 @@ impl Cupertino {
         self.refresh_usable_area(out);
         self.refresh_menu_bars();
         self.refresh_capture_indicator();
-        self.refresh_session_agent();
         self.refresh_menu_bar_shortcuts();
         self.refresh_backdrop();
         self.refresh_gtk_capabilities();
@@ -423,28 +430,6 @@ impl Cupertino {
             bar.resource.screen_capture(u32::from(active));
             bar.resource.done();
             bar.capture_sent = Some(active);
-        }
-    }
-
-    /// Tell the bars of version 8 or later which process is the session agent, each one when that changed for it: none,
-    /// as the session agent is the `agent` component, never a process of its own (`docs/architecture/shell-host.md`,
-    /// W5.5), and the bars take the session menu's state from its `SessionMenu` on the host bus.
-    pub fn refresh_session_agent(&mut self) {
-        let trust = LoginTrust::Nobody;
-        for bar in self
-            .menu_bars
-            .bars
-            .iter_mut()
-            .filter(|b| b.resource.version() >= 8 && b.agent_sent != Some(trust))
-        {
-            let (kind, pid) = match trust {
-                LoginTrust::Nobody => (AgentTrust::None, 0),
-                LoginTrust::Agent(pid) => (AgentTrust::Process, pid),
-                LoginTrust::Any => (AgentTrust::Any, 0),
-            };
-            bar.resource.session_agent(kind, pid);
-            bar.resource.done();
-            bar.agent_sent = Some(trust);
         }
     }
 

@@ -17,8 +17,9 @@ use crate::state::Cupertino;
 /// The version of `cupertino_shell_v1` the server offers: 28 took the overview and the pictures of minimized windows
 /// out of the dock object, which the overview component and its holes replace; 29 took the strip out of the window
 /// manager object, which the window manager's own surface and its holes replace; 30 added the keyboard's panels
-/// (`get_keyboard_panels`), which the on-screen displays draw.
-const SHELL_VERSION: u32 = 30;
+/// (`get_keyboard_panels`), which the on-screen displays draw; 31 took `session_agent` out of the menu bar object, whose
+/// session menu's state comes from the session agent component.
+const SHELL_VERSION: u32 = 31;
 
 /// Registers the `cupertino_shell_v1` global.
 pub struct ShellV1Global {

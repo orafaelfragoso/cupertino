@@ -10,7 +10,7 @@
     Every change of a message raises the version of its interface.
   </description>
 
-  <interface name="cupertino_shell_v1" version="30">
+  <interface name="cupertino_shell_v1" version="31">
     <description summary="shell services of the server">
       Global singleton, offered only to the processes the server started for a shell role, on a
       connection of their own. Each request needs the role it creates: a connection that holds
@@ -25,7 +25,8 @@
       component (cupertino_overview_v1) and its holes take their place. Version 29 removes the
       strip placement, the rectangle of set_placement and the strip_pressed event of the window
       manager object: the strip is the window manager's own surface, its thumbnails holes. Version 30 adds the
-      get_keyboard_panels request. An object this global
+      get_keyboard_panels request. Version 31 removes the agent_trust enum and the session_agent event of
+      the menu bar object: the menu bar takes the session menu's state from the session agent component. An object this global
       creates has the version the global was bound at, so the since of each message of those
       objects is the shell version that added it.
     </description>
@@ -497,25 +498,6 @@
         ended by done, after the first group and whenever it changes.
       </description>
       <arg name="active" type="uint"/>
-    </event>
-
-    <enum name="agent_trust" since="8">
-      <entry name="none" value="0" summary="no session agent runs: nothing on the bus is the agent"/>
-      <entry name="process" value="1" summary="the owner of the agent's bus name is the agent when it is the process named by pid"/>
-      <entry name="any" value="2" summary="a development run: whoever owns the agent's bus name is the agent"/>
-    </enum>
-
-    <event name="session_agent" since="8">
-      <description summary="which process is the session agent">
-        Names the process that may answer as the session agent (`org.cupertino.Login1`) only while
-        the agent is a program of its own; its trust is `none` when a component is the agent. The
-        bar takes the session menu's state (the user name and what the machine allows) only from
-        the owner of that bus name when it is this process, so a client that took the name first
-        cannot write the menu. pid is 0 unless trust is process. Sent in a group of its own, ended
-        by done, after the first group and whenever it changes.
-      </description>
-      <arg name="trust" type="uint" enum="agent_trust"/>
-      <arg name="pid" type="uint"/>
     </event>
 
     <enum name="bound_action" since="10">

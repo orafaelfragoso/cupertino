@@ -7,7 +7,7 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
-use crate::dbus::{LoginTrust, OwnerRefusal};
+use crate::dbus::OwnerRefusal;
 use crate::input::{translate_action, Action, Chord};
 use crate::owner_check::{OwnerCheck, OwnerKey};
 use crate::render::wallpaper::BarBands;
@@ -19,9 +19,8 @@ use cupertino_protocols::server::app_effects::cupertino_app_menu_v1::{
     self, CupertinoAppMenuV1, Error as AppMenuError,
 };
 use cupertino_protocols::server::cupertino_menu_bar_v1::{
-    self, AgentTrust, AppWindowFlags, BoundAction, ClientKind, Command as BarCommand,
-    CupertinoMenuBarV1, EditAction, Error as BarError, KeyClass, ModifierKey, SessionAction,
-    WindowControl,
+    self, AppWindowFlags, BoundAction, ClientKind, Command as BarCommand, CupertinoMenuBarV1,
+    EditAction, Error as BarError, KeyClass, ModifierKey, SessionAction, WindowControl,
 };
 use cupertino_protocols::server::cupertino_shell_v1::{CupertinoShellV1, Error as ShellError};
 use cupertino_wm::menu_bar::{BarSetConfig, MenuBarSet};
@@ -345,8 +344,6 @@ struct Bar {
     sent: Option<Feed>,
     /// The screen capture state last sent (version 3); `None` until the first one.
     capture_sent: Option<bool>,
-    /// The session agent last named (version 8); `None` until the first time.
-    agent_sent: Option<LoginTrust>,
     /// The shortcut group last sent (version 10); `None` until the first one.
     shortcuts_sent: Option<Shortcuts>,
     /// The backdrop lightness last sent (version 14 to 20); `None` until the first one.
@@ -390,6 +387,9 @@ pub const BACKDROP_LIGHTNESS_STEP: u16 = 10;
 /// The version of `cupertino_menu_bar_v1` that is told the backdrop's bands in place of its lightness, and the most
 /// bands it carries.
 pub const BACKDROP_BANDS_VERSION: u32 = 21;
+/// Shell version from which `cupertino_menu_bar_v1` has the messages of this server: version 31 removed
+/// `session_agent`, which moved the opcodes of the later events, so an older bar speaks another wire and is left inert.
+pub const MENU_BAR_MESSAGES_SINCE: u32 = 31;
 pub const BACKDROP_BANDS_MAX: usize = 256;
 
 /// The `menu_bar` value of a menu object of `version`: 1 while a bar runs, and from version 3 only while the reader is

@@ -9,7 +9,8 @@
 #               every crate that builds a cdylib has an entry); `unknown` where it
 #               cannot be measured
 #   owner_crate workspace crate that defines it
-#   owner_area  compositor | rendering | design | apps | services | packaging
+#   owner_area  compositor | rendering | design | shell | apps | services | packaging (shell: the shell host, its
+#               components and the shell's own programs)
 #   scope       public: any client or application may use it
 #               shell-private: only a process holding the named role (globals) or an allowed caller (D-Bus)
 #               system: system bus, or a root-owned daemon
@@ -127,7 +128,7 @@
   scope: public
   role: none
   advertised: always
-  source: crates/cupertino-server/src/state.rs
+  source: crates/cupertino-server/src/state/windows.rs
   source_match: output.create_global::<Self>
 - name: zxdg_output_manager_v1
   kind: wayland-global
@@ -655,7 +656,7 @@
   bus: session
   bus_name: org.cupertino.Login1
   owner_crate: cupertino-login
-  owner_area: services
+  owner_area: shell
   scope: shell-private
   source: crates/cupertino-login/src/control.rs
   source_match: "org.cupertino.Login1"
@@ -688,7 +689,7 @@
   bus: session
   bus_name: none
   owner_crate: cupertino-kit-shell
-  owner_area: apps
+  owner_area: shell
   scope: shell-private
   source: crates/cupertino-kit-shell/src/crash.rs
   source_match: "org.cupertino.ShellComponentDebug1"
@@ -710,7 +711,7 @@
   bus: session
   bus_name: org.cupertino.Launcher1
   owner_crate: cupertino-launcher
-  owner_area: apps
+  owner_area: shell
   scope: shell-private
   source: crates/cupertino-launcher/src/control.rs
   source_match: "org.cupertino.Launcher1"
@@ -721,7 +722,7 @@
   bus: session
   bus_name: org.cupertino.ControlPanel1
   owner_crate: cupertino-controlcenter
-  owner_area: apps
+  owner_area: shell
   scope: public
   source: crates/cupertino-controlcenter/src/control.rs
   source_match: "org.cupertino.ControlPanel1"
@@ -798,7 +799,7 @@
   bus: session
   bus_name: org.cupertino.Osd1
   owner_crate: cupertino-osd
-  owner_area: apps
+  owner_area: shell
   scope: shell-private
   source: crates/cupertino-osd/src/control.rs
   source_match: "org.cupertino.Osd1"
@@ -809,7 +810,7 @@
   bus: session
   bus_name: org.cupertino.Screenshot1
   owner_crate: cupertino-screenshot
-  owner_area: apps
+  owner_area: shell
   scope: shell-private
   source: crates/cupertino-screenshot/src/control.rs
   source_match: "org.cupertino.Screenshot1"
@@ -820,7 +821,7 @@
   bus: session
   bus_name: org.cupertino.Prompts1
   owner_crate: cupertino-prompts
-  owner_area: apps
+  owner_area: shell
   scope: shell-private
   source: crates/cupertino-prompts/src/consent/service.rs
   source_match: "org.cupertino.Prompts1"
@@ -831,7 +832,7 @@
   bus: session
   bus_name: org.cupertino.Dialogs1
   owner_crate: cupertino-shell-dialogs
-  owner_area: apps
+  owner_area: shell
   scope: shell-private
   source: crates/cupertino-shell-dialogs/src/service.rs
   source_match: "org.cupertino.Dialogs1"
@@ -842,7 +843,7 @@
   bus: session
   bus_name: org.cupertino.SessionAgent1
   owner_crate: cupertino-shell-agent
-  owner_area: apps
+  owner_area: shell
   scope: shell-private
   source: crates/cupertino-shell-agent/src/control.rs
   source_match: "org.cupertino.SessionAgent1"
@@ -936,7 +937,7 @@
   bus: session
   bus_name: org.freedesktop.Notifications
   owner_crate: cupertino-notifications
-  owner_area: apps
+  owner_area: shell
   scope: public
   source: crates/cupertino-notifications/src/control.rs
   source_match: "org.freedesktop.Notifications"
@@ -947,7 +948,7 @@
   bus: session
   bus_name: org.cupertino.NotificationCenter1
   owner_crate: cupertino-notifications
-  owner_area: apps
+  owner_area: shell
   scope: public
   source: crates/cupertino-notifications/src/control.rs
   source_match: "org.cupertino.NotificationCenter1"
@@ -958,7 +959,7 @@
   bus: session
   bus_name: com.canonical.AppMenu.Registrar
   owner_crate: cupertino-menubar
-  owner_area: apps
+  owner_area: shell
   scope: public
   source: crates/cupertino-menubar/src/dbus/registrar.rs
   source_match: "com.canonical.AppMenu.Registrar"
@@ -969,7 +970,7 @@
   bus: session
   bus_name: org.kde.StatusNotifierWatcher
   owner_crate: cupertino-menubar
-  owner_area: apps
+  owner_area: shell
   scope: public
   source: crates/cupertino-menubar/src/dbus/sni.rs
   source_match: "org.kde.StatusNotifierWatcher"
@@ -1112,7 +1113,7 @@
   bus: system
   bus_name: none
   owner_crate: cupertino-prompts
-  owner_area: services
+  owner_area: shell
   scope: system
   source: crates/cupertino-prompts/src/polkit/agent.rs
   source_match: "org.freedesktop.PolicyKit1.AuthenticationAgent"
@@ -1197,7 +1198,7 @@
   version: 0.1.0
   shipped: yes
   owner_crate: cupertino-login
-  owner_area: services
+  owner_area: shell
   scope: unknown
   source: crates/cupertino-login/src/main.rs
 - name: cupertino-netd
@@ -1213,7 +1214,7 @@
   version: 0.1.0
   shipped: yes
   owner_crate: cupertino-shell
-  owner_area: apps
+  owner_area: shell
   scope: shell-private
   source: crates/cupertino-shell/src/main.rs
   note: the shell host the server starts on a connection with the host role alone; runs the listed components, each on a thread of its own; holds the osd (cupertino-osd), notifications (cupertino-notifications), controlcenter (cupertino-controlcenter), menubar (cupertino-menubar), launcher (cupertino-launcher), agent (cupertino-shell-agent), desktop (cupertino-shell-desktop), dock (cupertino-dock), overview (cupertino-shell-overview), windowmanager (cupertino-windowmanager) and dialogs (cupertino-shell-dialogs) components
@@ -1230,7 +1231,7 @@
   version: 0.1.0
   shipped: yes
   owner_crate: cupertino-prompts
-  owner_area: services
+  owner_area: shell
   scope: shell-private
   source: crates/cupertino-prompts/src/main.rs
 - name: cupertino-portal
@@ -1254,7 +1255,7 @@
   version: 0.1.0
   shipped: yes
   owner_crate: cupertino-screenshot
-  owner_area: apps
+  owner_area: shell
   scope: shell-private
   source: crates/cupertino-screenshot/src/main.rs
 - name: cupertino-server

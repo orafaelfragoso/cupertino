@@ -304,7 +304,7 @@ impl Cupertino {
         self.request_redraw();
     }
 
-    /// The decision for one key event (shared by real keys and the compositor's repeats): the input-source HUD,
+    /// The decision for one key event (shared by real keys and the compositor's repeats): the input-source switcher,
     /// the accent picker, then the shortcut router.
     fn route_key(
         &mut self,
@@ -433,7 +433,7 @@ impl Cupertino {
     }
 
     /// Replay the press of a key the compositor repeats. False when the key does not repeat any more: nothing in the
-    /// compositor takes it (the HUD or popup closed, the shortcut is gone) or its consumer does not repeat it. The
+    /// compositor takes it (the switcher or the accent picker closed, the shortcut is gone) or its consumer does not repeat it. The
     /// client never saw the press, so it gets nothing either way.
     pub fn replay_key(&mut self, key: &OverlayKey) -> bool {
         let ctx = self.action_context();

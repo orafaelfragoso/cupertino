@@ -25,17 +25,17 @@ use crate::input::OsdKey;
 /// What the server asks a shell component to toggle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Toggle {
-    /// The notification centre list of `cupertino-notifications`.
+    /// The notification centre list of the `notifications` component.
     NotificationCentre,
-    /// The panel of `cupertino-launcher`.
+    /// The panel of the `launcher` component.
     Launcher,
-    /// The application browser of `cupertino-launcher`.
+    /// The application browser of the `launcher` component.
     Applications,
-    /// The panel of `cupertino-controlcenter`.
+    /// The panel of the `controlcenter` component.
     ControlPanel,
 }
 
-/// One call the worker makes on a shell process.
+/// One call the worker makes on a program the server started: the lock request on `cupertino-login`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
     /// Lock the session through the lock screen's `org.cupertino.Login1` while no lock screen is connected to ask

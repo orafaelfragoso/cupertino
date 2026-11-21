@@ -373,8 +373,9 @@ struct PendingEdit {
     returned: bool,
 }
 
-/// The well-known name the menu bar process owns while it reads menus (the registrar `cupertino-menubar` claims); the
-/// owner, once checked to be the bar's process, is the reader the windows' menus answer (`menu_reader`).
+/// The well-known name the menu bar component owns while it reads menus (the registrar the `menubar` component claims);
+/// the owner, once checked to be the process behind the bar's connection (its host), is the reader the windows' menus
+/// answer (`menu_reader`).
 pub const MENU_BAR_BUS_NAME: &str = "com.canonical.AppMenu.Registrar";
 /// The first wait before a check of the reader refused for a passing reason is made again; it doubles up to
 /// [`READER_RETRY_MAX`].

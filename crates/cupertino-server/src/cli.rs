@@ -175,7 +175,7 @@ pub struct Cli {
     /// Open the accent picker for a character at a time (`SECONDS:CHAR`), as a held key would after its repeat delay.
     #[arg(long = "accent", value_name = "SECONDS:CHAR", value_parser = parse_timed_text)]
     pub accents: Vec<(f64, String)>,
-    /// Scripted shortcuts behave as if their modifiers were still held (the input-source HUD stays open).
+    /// Scripted shortcuts behave as if their modifiers were still held (the input-source switcher stays open).
     #[arg(long)]
     pub hold_modifiers: bool,
     /// Once the Wayland socket is bound, write `WAYLAND_DISPLAY=<name>` and a line end to this open file descriptor and

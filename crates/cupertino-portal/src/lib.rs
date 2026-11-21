@@ -10,6 +10,7 @@ pub mod dialog;
 pub mod file_chooser;
 pub mod geometry;
 pub mod global_shortcuts;
+pub mod prompts;
 pub mod request;
 pub mod screen_cast;
 pub mod screenshot;
@@ -24,11 +25,6 @@ pub mod toolkits;
 pub const BUS_NAME: &str = "org.freedesktop.impl.portal.desktop.cupertino";
 /// Where every portal interface lives.
 pub const PORTAL_PATH: &str = "/org/freedesktop/portal/desktop";
-/// The app id of the windows that ask the person to allow something (screen sharing, a screenshot, keyboard
-/// shortcuts). The server takes this process's windows with this id out of reach of desktop control's input, so a
-/// controlled run cannot answer them; the file and app choosers keep the process's other id.
-pub const PROMPT_APP_ID: &str = "org.cupertino.Portal.Prompt"; // a window's app_id
-
 /// The xdg-foreign handle of a request's `parent_window` (`wayland:<handle>`), which a dialog opens as a child of. An
 /// X11 window (`x11:<xid>`), an empty one or an empty handle names none, and the dialog opens on its own.
 pub fn wayland_parent(parent_window: &str) -> Option<&str> {

@@ -1412,35 +1412,6 @@ name = "cupertino-pipewire"
 version = "0.1.0"
 
 [[package]]
-name = "cupertino-polkit-agent"
-version = "0.1.0"
-dependencies = [
- "aes",
- "async-channel",
- "cbc",
- "crypto-bigint",
- "cupertino-assets",
- "cupertino-decorations",
- "cupertino-diagnostic-events",
- "cupertino-geometry",
- "cupertino-icons",
- "cupertino-kit",
- "cupertino-login-ipc",
- "cupertino-peer",
- "cupertino-shell-client",
- "cupertino-theme",
- "cupertino-ui-core",
- "cupertino-ui-wayland",
- "cupertino-wayland-client",
- "hkdf",
- "rustix 1.1.6",
- "sha2",
- "tiny-skia",
- "zbus",
- "zeroize",
-]
-
-[[package]]
 name = "cupertino-portal"
 version = "0.1.0"
 dependencies = [
@@ -1478,6 +1449,30 @@ dependencies = [
  "cupertino-seat",
  "rustix 1.1.6",
  "zbus",
+]
+
+[[package]]
+name = "cupertino-prompts"
+version = "0.1.0"
+dependencies = [
+ "aes",
+ "async-channel",
+ "async-io",
+ "cbc",
+ "crypto-bigint",
+ "cupertino-assets",
+ "cupertino-diagnostic-events",
+ "cupertino-icons",
+ "cupertino-kit",
+ "cupertino-kit-shell",
+ "cupertino-login-ipc",
+ "cupertino-peer",
+ "futures-lite",
+ "hkdf",
+ "rustix 1.1.6",
+ "sha2",
+ "zbus",
+ "zeroize",
 ]
 
 [[package]]
@@ -1689,6 +1684,7 @@ dependencies = [
  "cupertino-notifications",
  "cupertino-osd",
  "cupertino-portal",
+ "cupertino-prompts",
  "cupertino-screenshot",
  "cupertino-server",
  "cupertino-shell",

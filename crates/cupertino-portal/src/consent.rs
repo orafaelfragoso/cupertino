@@ -1,5 +1,5 @@
-//! What the consent windows share (screen sharing, screenshots and the colour picker): the application that asks, named
-//! as its desktop entry names it, and the arming delay before a window takes an answer that grants anything.
+//! What the consent questions share (screen sharing, screenshots and keyboard shortcuts): the application that asks,
+//! named as its desktop entry names it.
 //!
 //! The app id is the one xdg-desktop-portal passes the backend, which only the frontend may call
 //! ([`crate::request::from_frontend`]): the frontend reads it from the caller's sandbox (Flatpak or Snap metadata) or, for
@@ -8,15 +8,11 @@
 //! trust the name to grant anything by itself.
 
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
 
 use cupertino_apps::entry::{parse_handler, Locale, Visibility};
 
 use crate::file_chooser::plain;
 
-/// How long a consent window waits after it opened before a key, a click or a held key's repeats can grant. A key typed
-/// for the application just before the window took the focus lands in this time and grants nothing.
-pub const ARMING: Duration = Duration::from_millis(500);
 /// Bytes of an icon name the windows look up.
 const MAX_ICON: usize = 1024;
 
@@ -62,27 +58,5 @@ pub fn identify(applications: &[PathBuf], app_id: &str) -> Identity {
     Identity {
         name: Some(name),
         icon,
-    }
-}
-
-/// When a consent window may grant: [`ARMING`] after it opened.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Arming {
-    opened: Instant,
-}
-
-impl Arming {
-    pub fn new(opened: Instant) -> Self {
-        Self { opened }
-    }
-
-    /// Whether an answer that grants is taken at `now`.
-    pub fn armed(&self, now: Instant) -> bool {
-        now.saturating_duration_since(self.opened) >= ARMING
-    }
-
-    /// How long until it is armed, from `now`.
-    pub fn remaining(&self, now: Instant) -> Duration {
-        ARMING.saturating_sub(now.saturating_duration_since(self.opened))
     }
 }

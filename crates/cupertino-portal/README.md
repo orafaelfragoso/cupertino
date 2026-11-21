@@ -150,7 +150,7 @@ OpenURI needs the person to pick or confirm one. The window is the consent: noth
   icon (the session's `application.` icons, then the `hicolor` theme and the pixmaps of each data directory); an entry
   with no icon, an icon that does not resolve, or an `Icon=` with a `/` or a control character shows the applications
   symbol. `last_choice` opens selected when it is one of `choices`. Open is the default button: Return opens the
-  selected app, and Escape cancels. Unlike the screen-sharing and screenshot windows it has no arming delay and opens
+  selected app, and Escape cancels. Unlike the screen-sharing window and the screenshot alert it has no arming delay and opens
   with the focus in the list, on the selected app: it hands the app nothing of the person's (no pixels, no files),
   only which installed app opens what the app already named, so the arrows and Return work at once.
 - The answer is `0` with `choice` and an `activation_token`: the caller's own, handed on unchanged, when it sent one;
@@ -170,27 +170,27 @@ Known limitations: an `Icon=` that is an absolute path is not shown.
 ## Screenshot
 
 `org.freedesktop.impl.portal.Screenshot` version 3 takes a screenshot of every display for an application. It is served
-with screen cast, only when the server offers the image capture globals. The window is the consent: nothing is
+with screen cast, only when the server offers the image capture globals. The prompts' alert is the consent: nothing is
 captured unless the person agrees.
 
-- `Screenshot` shows a window, "Screenshot", that says "“<app>” wants to take a screenshot of your screen.", the app
-  named and drawn by its desktop entry (`<app id>.desktop` in `$XDG_DATA_HOME/applications` and each `XDG_DATA_DIRS`
-  entry), else by its id; an empty id shows as "An application". The keyboard focus starts on Cancel, which a screen
-  reader announces first. Take Screenshot has no shortcut and is enabled (and a Tab stop) only 500 ms after the
-  window's first frame is on screen; until then Return, Enter and Space press no button, Cancel included, so neither
-  a key nor a click meant for the app can consent. Once armed, Return and Space press the focused button, so Tab to
-  Take Screenshot and Return consents. Escape, a click on Cancel and closing the window deny, armed or not.
-- `modal`, `interactive` and `permission_store_checked` are read but change nothing: the same window shows every time,
+- `Screenshot` asks the session's prompts (`cupertino-prompts`, `org.cupertino.Prompts1.AskScreenshot`, which only
+  the portal may call; `src/prompts.rs`) whether the app may take it: an alert over a scrim, "Screenshot", that says
+  "“<app>” wants to take a screenshot of your screen.", the app named and drawn by its desktop entry (`<app id>.desktop`
+  in `$XDG_DATA_HOME/applications` and each `XDG_DATA_DIRS` entry), else by its id; an empty id shows as "An
+  application". The prompts' README tells how the alert takes its answer: the focus starts on Cancel, Take Screenshot
+  takes a press only 500 ms after the alert's first frame is on screen, Escape and Cancel deny. A call to the prompts
+  that fails is Cancel.
+- `modal`, `interactive` and `permission_store_checked` are read but change nothing: the same alert shows every time,
   even when the frontend checked the permission store. `AvailableTargets` is `1` (the whole screen); a `target` other
   than `1` is `InvalidArgs`.
-- Once the window has had 300 ms to leave the screen, one frame of each display is copied with an image copy session
+- Once the alert has had 300 ms to leave the screen, one frame of each display is copied with an image copy session
   into a memfd, without the pointer. Each is turned upright when its copy says it is turned, and the displays are joined
   as they sit, at the largest scale among them; what no display covers is transparent.
 - The PNG goes to `XDG_PICTURES_DIR` of `user-dirs.dirs`, else `~/Pictures`, created when missing, as
   `Screenshot <date> at <time>.png` like the screenshot tool names it, then ` (2)`, ` (3)`, … when the name is taken. It
   is created new (never replacing a file) and readable by its owner only (`0600`).
-- The answer is `0` with `uri` (`file://`, escaped); Cancel or closing the window is `1`; `Close` on the request takes
-  the window down and answers `2`, and so does a capture or a write that fails.
+- The answer is `0` with `uri` (`file://`, escaped); Cancel or Escape is `1`; `Close` on the request takes the alert
+  down (`Prompts1.Close`) and answers `2`, and so does a capture or a write that fails.
 - `PickColor` lets the person pick the colour of one pixel on any display, in the screenshot program
   (`org.cupertino.Screenshot1.PickColor`, see below). One frame of every display is copied at once
   and frozen under an overlay layer surface on each display (namespace `cupertino-screenshot`), the pointer
@@ -229,7 +229,7 @@ to the portal before the focused client sees it, so that client gets neither the
 
 - `CreateSession` adds an `org.freedesktop.impl.portal.Session` object at the session handle; at most 32 sessions and
   4 for one app id. `Session.Close`, and the frontend leaving the bus, end the session and give its keys back to the
-  server; a `BindShortcuts` waiting on its window then answers `2` and the window goes.
+  server; a `BindShortcuts` waiting on its question then answers `2` and the alert goes (`Prompts1.Close`).
 - `BindShortcuts` reads each shortcut's `description` and `preferred_trigger`, written as the shortcuts specification
   writes it (`CTRL+ALT+k`, `LOGO+Return`, modifier names without regard to case) or as a GTK accelerator
   (`<Control><Alt>k`); the key is an xkb keysym name, the character it types, or one of the web and Electron key
@@ -241,21 +241,20 @@ to the portal before the focused client sees it, so that client gets neither the
   Control, Alt or Super or is F1 to F35 or a media key (`XF86…`), is none of the chords the server keeps (its bindings, Ctrl+Alt+F1
   to F12, Super+Alt+S, Ctrl+Alt+Escape: the `reserved` group), and no other session holds it; within one call the
   first shortcut naming a key keeps it. A shortcut without its key is not bound and is left out of the answer.
-- The first call of an app shows a window, "Keyboard Shortcuts": "“<app>” wants to use these keyboard shortcuts, also
-  while you work in other apps.", then one row per shortcut, its keys as symbols (`⌃⌥T  Push to talk`) or, for one
-  without a key, the reason (`it needs ⌃, ⌥ or ⌘`, `its key is a modifier key`, `the system uses it`, `“<app>” uses it`,
-  `it names no key`, `another shortcut here uses it`); a description is cut to 80 characters. The window grows with
-  the first eight rows and the list scrolls past them, so every shortcut can be read before Allow. Its app id is
-  `org.cupertino.Portal.Prompt`, as the screenshot window's is: the server keeps desktop control's input and actions
-  off a window of this process with that id. The screen-sharing chooser has that id too, but is the screenshot
-  program's window, which the server does not count as the portal's yet. Don't Allow has the focus; Allow is enabled
-  only 500 ms after the first frame is on screen, as in the screenshot window. Allow answers `0` with `shortcuts`
+- The first call of an app asks the session's prompts (`org.cupertino.Prompts1.AskShortcuts`, `src/prompts.rs`): an
+  alert over a scrim, "Keyboard Shortcuts": "“<app>” wants to use these keyboard shortcuts, also while you work in
+  other apps.", then one row per shortcut, which the portal words and the prompts show as they come: its keys as
+  symbols (`⌃⌥T  Push to talk`) or, for one without a key, the reason (`not available: it needs ⌃, ⌥ or ⌘`, `its key
+  is a modifier key`, `the system uses it`, `“<app>” uses it`, `it names no key`, `another shortcut here uses it`);
+  a description is cut to 80 characters. The list scrolls past its first lines, so every shortcut can be read before
+  Allow. Don't Allow has the focus; Allow takes a press only 500 ms after the alert's first frame is on screen. Allow
+  answers `0` with `shortcuts`
   (each with `description` and `trigger_description`) and Don't Allow `1`, both remembered for the app id in
   `global-shortcuts.conf` (`cupertino-defaults::global_shortcuts`, mode `0600`, `allow = <app id> <key>…` with the
   keys allowed, or `deny = <app id>`, changed under an advisory lock on a thread of its own so the bus is served
-  meanwhile; comments and lines not understood are kept); Escape and closing the window answer `1` and remember
-  nothing. A denied app is refused without a window. An allowed app binds the keys it was allowed without a window;
-  a call naming a key it was not allowed shows the window again, which lists only the shortcuts not allowed yet
+  meanwhile; comments and lines not understood are kept); Escape, the alert taken away and a call to the prompts that
+  fails answer `1` and remember nothing. A denied app is refused without asking. An allowed app binds the keys it was allowed without asking;
+  a call naming a key it was not allowed asks again, listing only the shortcuts not allowed yet
   ("“<app>” wants to use more keyboard shortcuts …"), and Allow adds their keys to the line. An `allow` line without
   keys (written before the keys were remembered) allows none, so the app is asked once more. An empty app id or one a
   line cannot hold is asked every time. A call where no shortcut can have

@@ -24,6 +24,7 @@ cupertino-menubar = { path = "../cupertino-menubar" }
 cupertino-notifications = { path = "../cupertino-notifications" }
 cupertino-osd = { path = "../cupertino-osd" }
 cupertino-portal = { path = "../cupertino-portal" }
+cupertino-prompts = { path = "../cupertino-prompts" }
 cupertino-screenshot = { path = "../cupertino-screenshot" }
 cupertino-server = { path = "../cupertino-server" }
 cupertino-shell = { path = "../cupertino-shell" }

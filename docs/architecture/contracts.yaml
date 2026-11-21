@@ -814,6 +814,17 @@
   source: crates/cupertino-screenshot/src/control.rs
   source_match: "org.cupertino.Screenshot1"
   note: served by cupertino-screenshot --serve, which the server starts for the portal (Session1.StartScreenshot); PickColor, SelectSources and Close accept only the program the server started as portal (Session1.ProgramOf); called by cupertino-portal for the colour picker and the screen-sharing choice
+- name: org.cupertino.Prompts1
+  kind: dbus-interface
+  version: 1
+  bus: session
+  bus_name: org.cupertino.Prompts1
+  owner_crate: cupertino-prompts
+  owner_area: apps
+  scope: shell-private
+  source: crates/cupertino-prompts/src/consent/service.rs
+  source_match: "org.cupertino.Prompts1"
+  note: served at /org/cupertino/Prompts1 by cupertino-prompts on its main session bus connection, which owns the name; AskScreenshot(o handle, s app_id, s app_name, s app_icon, s parent_window) -> u (0 granted, 1 cancelled) and AskShortcuts(o handle, s app_id, s app_name, s app_icon, s parent_window, a(sss) shortcuts as (description, keys, note) worded by the portal, u allowed) -> u (0 allowed, 1 denied, 2 dismissed) reply once the person answers; Close(o handle) takes a question down and its call answers as dismissed; every method accepts only the program the server started as portal (Session1.ProgramOf, asked on a lookup connection of its own), any other caller gets org.freedesktop.DBus.Error.AccessDenied; at most 16 questions wait, 64 shortcuts a call, 1024 bytes a text; called by cupertino-portal for the screenshot and global-shortcuts consent
 - name: org.cupertino.SessionAgent1
   kind: dbus-interface
   version: 1
@@ -1089,10 +1100,10 @@
   version: n/a
   bus: system
   bus_name: none
-  owner_crate: cupertino-polkit-agent
+  owner_crate: cupertino-prompts
   owner_area: services
   scope: system
-  source: crates/cupertino-polkit-agent/src/agent.rs
+  source: crates/cupertino-prompts/src/polkit/agent.rs
   source_match: "org.freedesktop.PolicyKit1.AuthenticationAgent"
   note: registered with polkitd for the session; only polkitd calls
 - name: org.bluez.Agent1
@@ -1211,22 +1222,14 @@
   owner_area: services
   scope: shell-private
   source: crates/cupertino-control/src/main.rs
-- name: cupertino-polkit-agent
+- name: cupertino-prompts
   kind: binary
   version: 0.1.0
   shipped: yes
-  owner_crate: cupertino-polkit-agent
+  owner_crate: cupertino-prompts
   owner_area: services
   scope: shell-private
-  source: crates/cupertino-polkit-agent/src/main.rs
-- name: cupertino-keyring-prompter
-  kind: binary
-  version: 0.1.0
-  shipped: yes
-  owner_crate: cupertino-polkit-agent
-  owner_area: services
-  scope: shell-private
-  source: crates/cupertino-polkit-agent/src/keyring_main.rs
+  source: crates/cupertino-prompts/src/main.rs
 - name: cupertino-portal
   kind: binary
   version: 0.1.0

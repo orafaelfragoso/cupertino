@@ -14,8 +14,9 @@ use crate::authorization::{capabilities, permit, role};
 use crate::state::Cupertino;
 
 /// The version of `cupertino_shell_v1` the server offers: 28 took the overview and the pictures of minimized windows
-/// out of the dock object, which the overview component and its holes replace.
-const SHELL_VERSION: u32 = 28;
+/// out of the dock object, which the overview component and its holes replace; 29 took the strip out of the window
+/// manager object, which the window manager's own surface and its holes replace.
+const SHELL_VERSION: u32 = 29;
 
 /// Registers the `cupertino_shell_v1` global.
 pub struct ShellV1Global {

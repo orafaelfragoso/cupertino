@@ -161,7 +161,7 @@ impl ShellRoles {
         let window_managers = (component == Some(ComponentName::WINDOWMANAGER))
             .then(|| {
                 conn.bind_extension::<CupertinoShellV1, _>(
-                    globals::SHELL_SESSION_VERSION..=globals::SHELL_DOCK_VERSION,
+                    globals::SHELL_WINDOW_MANAGER_VERSION..=globals::SHELL_WINDOW_MANAGER_VERSION,
                     Quiet,
                 )
             })

@@ -1,14 +1,12 @@
-//! Server side of the window manager process (`cupertino_shell_v1.get_window_manager`,
-//! `cupertino_window_manager_v1`): the process owns the stage policy (which group is on the stage,
-//! the strip of recent groups) and commits where every arranged window rests; the server keeps the
-//! frame clock. It animates each window from where it is drawn to its committed placement on three
-//! tracks with the stage model's springs (frame, alpha and corner radius), draws strip
-//! windows as their live content scaled into the thumbnail rectangle (the overview's path, no
-//! capture), keeps strip and hidden windows out of hit testing and reports presses on strip
-//! thumbnails. A window manager that goes away (the process
-//! died) takes its placements with it: every window is drawn and hit at its own frame again at once. A shell
-//! component's window manager whose persistent surface is held keeps them held instead (D19): until a new instance
-//! takes the hold over, its placement commits are kept, and `ready` or the hold timeout ends the held placements.
+//! Server side of the window manager (`cupertino_shell_v1.get_window_manager`, `cupertino_window_manager_v1`): the
+//! window manager owns the stage policy (which group is on the stage, the strip of recent groups) and commits which
+//! arranged windows are hidden; the server keeps the frame clock and fades a hidden window out where it is drawn and a
+//! shown one back in at its own frame, with the stage model's alpha spring, and keeps hidden windows out of hit
+//! testing. The strip is the window manager's own surface, whose holes claim its windows (`transaction.rs`); the server
+//! draws no strip. A window manager that goes away takes its placements with it: every window is drawn and hit at its
+//! own frame again at once. A shell component's window manager whose persistent surface is held keeps them held
+//! instead (D19): until a new instance takes the hold over, its placement commits are kept, and `ready` or the hold
+//! timeout ends the held placements.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -19,48 +17,47 @@ use cupertino_protocols::server::cupertino_window_manager_v1::{
 };
 use cupertino_wm::stage::StageConfig;
 use cupertino_wm::{OutputId, Rect, WindowId};
-use smithay::desktop::layer_map_for_output;
 use smithay::output::Output;
 use smithay::reexports::wayland_server::backend::ClientId;
 use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
 use smithay::reexports::wayland_server::{
     Client, DataInit, Dispatch, DisplayHandle, New, Resource, WEnum,
 };
-use smithay::utils::{Logical, Point};
-use smithay::wayland::shell::wlr_layer::Layer;
 
 use crate::authorization::{authorized, refuse, require, role, Permit, ShellRole};
 use crate::host::{ComponentConnection, WmPlacementHold};
 use crate::menu_bar::cut_text;
 use crate::state::{Cupertino, WindowEntry};
 
-/// Where a placed window is headed. A window on the stage has no entry once its animation ended.
+/// Shell version from which `cupertino_window_manager_v1` has the messages of this server: version 29 removed the strip
+/// placement, the rectangle of `set_placement` and `strip_pressed`, which moved the opcode of `done`, so an older
+/// window manager speaks another wire and is left inert.
+const WINDOW_MANAGER_MESSAGES_SINCE: u32 = 29;
+
+/// The component whose holes are the stage strip's thumbnails.
+const WINDOW_MANAGER_COMPONENT: &str = "windowmanager";
+
+/// Where a placed window is headed. A window on the stage has no entry once its fade-in ended.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Target {
-    /// Back to its own frame.
+    /// Back at its own frame.
     Stage,
-    Strip(Rect),
     Hidden,
 }
 
 struct Placed {
     output: OutputId,
     target: Target,
-    /// Frame track: x, y, width and height of the rectangle the window is drawn at.
-    frame: AnimatedValue<[f64; 4]>,
-    /// Alpha track: 0 for a hidden window, 1 on the stage and in the strip.
+    /// The rectangle the window is drawn at while it fades: where it was when it was hidden, its own frame as it comes
+    /// back.
+    frame: Rect,
+    /// Alpha track: 0 for a hidden window, 1 on the stage.
     alpha: AnimatedValue<f64>,
-    /// Corner track: 0 at the window's own corner radius, 1 at the strip's.
-    rounding: AnimatedValue<f64>,
-    /// Drawn with the strip, below every stage window: towards the strip, or fading out of it.
-    strip_layer: bool,
 }
 
 impl Placed {
     fn is_animating(&self, now: f64) -> bool {
-        self.frame.is_animating(now)
-            || self.alpha.is_animating(now)
-            || self.rounding.is_animating(now)
+        self.alpha.is_animating(now)
     }
 }
 
@@ -70,24 +67,15 @@ pub enum Look {
     /// No placement: drawn and hit as every window without a window manager.
     Natural,
     Hidden,
-    /// Scaled into `rect` at `alpha` (times its own opacity), its corners `rounding` of the way from
-    /// the window's radius to the strip's ([`WindowManagers::corner_radius`]); `strip` while it is,
-    /// becomes or fades out of a strip thumbnail (drawn below the stage windows and not hit).
+    /// Scaled into `rect` at `alpha` (times its own opacity) as it fades out or back in. `strip` is false and
+    /// `rounding` 0 since the strip became the window manager's own surface: they remain for the desktop control's
+    /// reading of a placed window (`control/semantics.rs`), whose corners [`WindowManagers::corner_radius`] gives.
     Placed {
         rect: Rect,
         strip: bool,
         alpha: f64,
         rounding: f64,
     },
-}
-
-/// Springs and strip radius of the placement tracks.
-#[derive(Clone, Copy, Debug)]
-struct Motion {
-    frame: Curve,
-    alpha: Curve,
-    corner: Curve,
-    strip_corner_radius: f64,
 }
 
 /// What a window manager was told about one arranged window.
@@ -119,98 +107,68 @@ struct Manager {
 pub struct WindowManagers {
     managers: Vec<Manager>,
     placed: HashMap<WindowId, Placed>,
-    motion: Motion,
+    /// The spring of a window's fade out and back in.
+    alpha: Curve,
 }
 
 impl WindowManagers {
-    /// A placement change moves the frame with `stage.swap_curve`, the alpha with
-    /// `stage.alpha_curve` and the corner radius towards `stage.strip_corner_radius` with
-    /// `stage.corner_curve`.
+    /// A hidden window fades out, and back in, with `stage.alpha_curve`.
     pub fn new(stage: &StageConfig) -> Self {
-        let motion = Motion {
-            frame: stage.swap_curve,
-            alpha: stage.alpha_curve,
-            corner: stage.corner_curve,
-            strip_corner_radius: stage.strip_corner_radius,
-        };
         Self {
             managers: Vec::new(),
             placed: HashMap::new(),
-            motion,
+            alpha: stage.alpha_curve,
         }
     }
 
-    /// How window `id` is drawn at `now`. A hidden window fades out where it was drawn and is not
-    /// drawn once the fade ends.
+    /// How window `id` is drawn at `now`. A hidden window fades out where it was drawn and is not drawn once the fade
+    /// ends.
     pub fn look(&self, id: WindowId, now: f64) -> Look {
         let Some(p) = self.placed.get(&id) else {
             return Look::Natural;
         };
-        match p.target {
-            Target::Hidden if !p.alpha.is_animating(now) => return Look::Hidden,
-            Target::Stage if !p.is_animating(now) => return Look::Natural,
-            Target::Hidden | Target::Strip(_) | Target::Stage => {}
+        if !p.is_animating(now) {
+            return match p.target {
+                Target::Hidden => Look::Hidden,
+                Target::Stage => Look::Natural,
+            };
         }
-        let rect = Rect::from_array(p.frame.value(now));
         Look::Placed {
-            rect,
-            strip: p.strip_layer,
+            rect: p.frame,
+            strip: false,
             alpha: p.alpha.value(now),
-            rounding: p.rounding.value(now),
+            rounding: 0.0,
         }
     }
 
-    /// Visual corner radius, in points, of a placed window whose own radius is `window` at
-    /// `rounding` ([`Look::Placed`]).
-    pub fn corner_radius(&self, window: f64, rounding: f64) -> f64 {
-        window + (self.motion.strip_corner_radius - window) * rounding
+    /// Visual corner radius, in points, of a placed window whose own radius is `window` ([`Look::Placed`]): its own,
+    /// as `rounding` is always 0.
+    pub fn corner_radius(&self, window: f64, _rounding: f64) -> f64 {
+        window
     }
 
-    /// Whether window `id` is headed for the strip (a press on it is a strip press).
-    fn in_strip(&self, id: WindowId) -> bool {
-        self.placed
-            .get(&id)
-            .is_some_and(|p| matches!(p.target, Target::Strip(_)))
-    }
-
-    /// Whether the pointer passes through window `id`: strip thumbnails and hidden windows take no
-    /// input of their clients.
+    /// Whether the pointer passes through window `id`: a hidden window takes no input of its client.
     pub fn passes_input(&self, id: WindowId) -> bool {
         self.placed
             .get(&id)
-            .is_some_and(|p| p.target != Target::Stage)
-    }
-
-    /// Whether the stage of `output` is on as far as the server can tell: a window there is placed
-    /// in the strip or hidden. A stage holding only its centre group places nothing off the stage
-    /// and is not seen (the protocol carries no stage state).
-    pub fn stage_active(&self, output: OutputId) -> bool {
-        self.placed
-            .values()
-            .any(|p| p.output == output && p.target != Target::Stage)
+            .is_some_and(|p| p.target == Target::Hidden)
     }
 
     pub fn wants_tick(&self, now: f64) -> bool {
         self.placed.values().any(|p| p.is_animating(now))
     }
 
-    /// Keep window `id`, while it heads back to the stage, headed for its own frame `natural`: when
-    /// the frame changed since the commit (a client that resized during the swap) the frame track
-    /// turns towards the new one, keeping its value and velocity.
-    fn follow_natural(&mut self, id: WindowId, natural: Rect, now: f64) {
-        let frame = self.motion.frame;
-        let Some(p) = self.placed.get_mut(&id) else {
-            return;
-        };
-        if p.target == Target::Stage
-            && p.is_animating(now)
-            && p.frame.target() != natural.to_array()
-        {
-            p.frame.animate_to(natural.to_array(), frame, now);
+    /// Keep window `id`, while it fades back in on the stage, at its own frame `natural` (a client that resized
+    /// meanwhile).
+    fn follow_natural(&mut self, id: WindowId, natural: Rect) {
+        if let Some(p) = self.placed.get_mut(&id) {
+            if p.target == Target::Stage {
+                p.frame = natural;
+            }
         }
     }
 
-    /// Drop the entries of windows that arrived back on the stage.
+    /// Drop the entries of windows that are back on the stage.
     pub fn tick(&mut self, now: f64) {
         self.placed
             .retain(|_, p| p.target != Target::Stage || p.is_animating(now));
@@ -233,11 +191,8 @@ impl WindowManagers {
         }
     }
 
-    /// Move window `id` towards `target`, starting from where it is drawn now: the frame, alpha
-    /// and corner tracks each keep their value and velocity and spring to the target's; the frame
-    /// heads for the window's own rectangle `natural`, which [`Cupertino::tick_window_managers`]
-    /// keeps following. A hidden window stops where it is and fades out; it comes back in its new
-    /// place, fading in with the corners of that place. False when it was already headed there.
+    /// Head window `id` for `target`: a hidden window stops where it is drawn and fades out; one shown again fades in
+    /// at its own frame `natural`, from the alpha it has. False when it was already headed there.
     fn retarget(
         &mut self,
         id: WindowId,
@@ -246,59 +201,20 @@ impl WindowManagers {
         natural: Rect,
         now: f64,
     ) -> bool {
-        let current = self.look(id, now);
-        let motion = self.motion;
+        let alpha = self.alpha;
         let entry = self.placed.entry(id).or_insert_with(|| Placed {
             output,
             target: Target::Stage,
-            frame: AnimatedValue::new(natural.to_array()),
+            frame: natural,
             alpha: AnimatedValue::new(1.0),
-            rounding: AnimatedValue::new(0.0),
-            strip_layer: false,
         });
         if entry.target == target {
             return false;
         }
-        let rounding = match target {
-            Target::Stage => 0.0,
-            Target::Strip(_) => 1.0,
-            Target::Hidden => entry.rounding.target(),
-        };
-        match current {
-            Look::Natural => entry.frame.set_immediately(natural.to_array()),
-            // a hidden window appears in its slot instead of flying in from where it was hidden
-            Look::Hidden => entry.frame.set_immediately(
-                if let Target::Strip(rect) = target {
-                    rect
-                } else {
-                    natural
-                }
-                .to_array(),
-            ),
-            Look::Placed { .. } => {}
-        }
-        match target {
-            Target::Strip(rect) => entry.frame.animate_to(rect.to_array(), motion.frame, now),
-            Target::Stage => entry
-                .frame
-                .animate_to(natural.to_array(), motion.frame, now),
-            Target::Hidden => entry.frame.cancel(now),
-        }
-        if current == Look::Hidden {
-            entry.rounding.set_immediately(rounding);
-        } else {
-            entry.rounding.animate_to(rounding, motion.corner, now);
-        }
-        entry.strip_layer = match target {
-            Target::Strip(_) => true,
-            Target::Stage => false,
-            Target::Hidden => matches!(current, Look::Placed { strip: true, .. }),
-        };
-        entry.alpha.animate_to(
-            if target == Target::Hidden { 0.0 } else { 1.0 },
-            motion.alpha,
-            now,
-        );
+        entry.frame = natural;
+        entry
+            .alpha
+            .animate_to(if target == Target::Hidden { 0.0 } else { 1.0 }, alpha, now);
         entry.target = target;
         entry.output = output;
         true
@@ -378,6 +294,23 @@ impl Cupertino {
         self.request_redraw();
     }
 
+    /// Whether the stage of `output` is on as far as the server can tell: a window there is hidden, or in a hole of
+    /// the window manager's strip. A stage holding only its centre group shows neither and is not seen (the protocol
+    /// carries no stage state).
+    pub fn stage_active(&self, output: OutputId) -> bool {
+        self.window_managers
+            .placed
+            .values()
+            .any(|p| p.output == output && p.target == Target::Hidden)
+            || self.wm.windows().any(|w| {
+                w.output == output
+                    && self
+                        .transactions
+                        .active_claim_for(w.id)
+                        .is_some_and(|hole| hole.component == WINDOW_MANAGER_COMPONENT)
+            })
+    }
+
     /// `cupertino_shell_v1.get_window_manager`: one per output; send the first group.
     pub fn create_window_manager(
         &mut self,
@@ -416,6 +349,21 @@ impl Cupertino {
                 },
             );
             shell.post_error(ShellError::Role, reason);
+            return;
+        }
+        if shell.version() < WINDOW_MANAGER_MESSAGES_SINCE {
+            tracing::warn!(
+                version = shell.version(),
+                since = WINDOW_MANAGER_MESSAGES_SINCE,
+                "a window manager bound below the shell version of this server's window manager messages is left inert"
+            );
+            init.init(
+                id,
+                WindowManagerData {
+                    output: None,
+                    component: None,
+                },
+            );
             return;
         }
         let out = target.expect("a rejected output returned above");
@@ -507,8 +455,8 @@ impl Cupertino {
             .map(|(plan, _)| plan.visual)
     }
 
-    /// Advance the placements at `now`: windows heading back to the stage follow their own frame,
-    /// and the entries of those that arrived are dropped.
+    /// Advance the placements at `now`: windows fading back in on the stage follow their own frame, and the entries
+    /// of those that are back are dropped.
     pub fn tick_window_managers(&mut self, now: f64) {
         let heading: Vec<WindowId> = self
             .window_managers
@@ -519,7 +467,7 @@ impl Cupertino {
             .collect();
         for id in heading {
             if let Some(natural) = self.entry(id).and_then(|e| self.natural_rect(e, now)) {
-                self.window_managers.follow_natural(id, natural, now);
+                self.window_managers.follow_natural(id, natural);
             }
         }
         self.window_managers.tick(now);
@@ -551,8 +499,8 @@ impl Cupertino {
         }
     }
 
-    /// Retarget the windows of `output` to `targets`. With `replace`, every other placed window of the output heads
-    /// back to its own frame along the return motion: the placements of an instance before give way.
+    /// Retarget the windows of `output` to `targets`. With `replace`, every other hidden window of the output fades
+    /// back in at its own frame: the placements of an instance before give way.
     fn apply_placements(
         &mut self,
         output: OutputId,
@@ -638,8 +586,8 @@ impl Cupertino {
         }
     }
 
-    /// End the placements held on `output` (`ready`, the hold timeout, the component stopped): each window returns to
-    /// its frame along the return motion, and what a new instance committed meanwhile applies.
+    /// End the placements held on `output` (`ready`, the hold timeout, the component stopped): each hidden window fades
+    /// back in at its frame, and what a new instance committed meanwhile applies.
     pub(crate) fn end_held_wm_placements(&mut self, output: OutputId) {
         if self.hosts.wm_placement_hold(output).is_none() {
             return;
@@ -653,51 +601,6 @@ impl Cupertino {
             .and_then(|m| m.deferred.take())
             .unwrap_or_default();
         self.apply_placements(output, deferred, true);
-    }
-
-    /// A left press at `pos` on a strip thumbnail with nothing above it: tell the window manager
-    /// of that output. True when the press was consumed.
-    pub fn window_manager_press(&mut self, pos: Point<f64, Logical>) -> bool {
-        if self.window_managers.placed.is_empty() || self.window_target_under(pos).is_some() {
-            return false;
-        }
-        let Some(out) = self.output_at(pos) else {
-            return false;
-        };
-        let (output, rect) = (out.id, out.rect);
-        let rel = pos - Point::from((rect.x, rect.y));
-        {
-            let map = layer_map_for_output(&out.output);
-            if map.layer_under(Layer::Overlay, rel).is_some()
-                || map.layer_under(Layer::Top, rel).is_some()
-            {
-                return false;
-            }
-        }
-        let now = self.now();
-        let p = cupertino_wm::Point::new(pos.x, pos.y);
-        let hit = crate::render::scene::windows_on_output(
-            &self.wm,
-            output,
-            rect.w,
-            crate::render::motion::WorkspaceTransition::for_options(self.display_options()),
-            now,
-        )
-        .into_iter()
-        .rev()
-        .find_map(|(id, _, _)| match self.window_managers.look(id, now) {
-            Look::Placed { rect, .. } if self.window_managers.in_strip(id) && rect.contains(p) => {
-                Some(id)
-            }
-            _ => None,
-        });
-        let Some(id) = hit else { return false };
-        let Some(m) = self.window_managers.of_output(output) else {
-            return false;
-        };
-        m.resource.strip_pressed(id.0 as u32);
-        m.resource.done();
-        true
     }
 }
 
@@ -716,32 +619,10 @@ impl Dispatch<CupertinoWindowManagerV1, WindowManagerData> for Cupertino {
             return;
         }
         match request {
-            cupertino_window_manager_v1::Request::SetPlacement {
-                id,
-                placement,
-                x,
-                y,
-                width,
-                height,
-            } => {
+            cupertino_window_manager_v1::Request::SetPlacement { id, placement } => {
                 let target = match placement {
                     WEnum::Value(WirePlacement::Stage) => Target::Stage,
                     WEnum::Value(WirePlacement::Hidden) => Target::Hidden,
-                    WEnum::Value(WirePlacement::Strip) if width > 0 && height > 0 => {
-                        Target::Strip(Rect::new(
-                            f64::from(x),
-                            f64::from(y),
-                            f64::from(width),
-                            f64::from(height),
-                        ))
-                    }
-                    WEnum::Value(WirePlacement::Strip) => {
-                        resource.post_error(
-                            Error::InvalidPlacement,
-                            format!("strip rectangle {width}x{height} has no area"),
-                        );
-                        return;
-                    }
                     // the generated enum is non-exhaustive; a value it gains later is not handled here yet
                     WEnum::Value(other) => {
                         resource.post_error(

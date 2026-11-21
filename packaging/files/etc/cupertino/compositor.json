@@ -5,7 +5,6 @@
     "off": [],
     "alone": [],
     "processes": [
-      {"name": "windowmanager", "command": ["/usr/bin/cupertino-windowmanager"], "roles": ["window_manager"]},
       {"name": "login", "command": ["/usr/bin/cupertino-login"], "roles": ["session", "session_lock"]}
     ]
   }

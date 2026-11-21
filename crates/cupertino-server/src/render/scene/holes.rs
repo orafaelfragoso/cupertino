@@ -147,7 +147,7 @@ fn fitted(size: (f64, f64), bounds: Rectangle<f64, Logical>) -> Option<Rectangle
 }
 
 /// Window `id` as it shows, live, its frame (decorations included) fitted in `bounds`: its popups, decorations, content,
-/// layers and shadow, as the stage strip draws a placed window.
+/// layers and shadow, as a placed window is drawn ([`placed_plan`]).
 fn window_in_hole(
     p: &mut SceneParams<'_>,
     id: WindowId,

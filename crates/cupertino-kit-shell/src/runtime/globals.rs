@@ -13,6 +13,10 @@ pub(crate) const SHELL_MENU_BAR_VERSION: u32 = 25;
 /// `cupertino_shell_v1` as the dock speaks it: the dock's messages without the overview and the pictures of minimized
 /// windows came with 28, which moved the opcodes of the later ones, so a dock never runs on an older server.
 pub(crate) const SHELL_DOCK_VERSION: u32 = 28;
+/// `cupertino_shell_v1` as the window manager speaks it: the window manager's messages without the strip placement,
+/// its rectangle and `strip_pressed` came with 29, which moved the opcode of `done`, so a window manager never runs
+/// on an older server.
+pub(crate) const SHELL_WINDOW_MANAGER_VERSION: u32 = 29;
 /// `zwlr_layer_shell_v1`: on-demand keyboard interactivity came with version 4.
 pub(crate) const LAYER_SHELL_VERSION: u32 = 4;
 /// `cupertino_transaction_manager_v1`, which every component's connection sees.
@@ -29,6 +33,8 @@ pub(crate) const OVERVIEW_MANAGER: &str = "cupertino_overview_manager_v1";
 pub(crate) fn needs(component: ComponentName) -> Vec<(&'static str, u32)> {
     let shell = if component == ComponentName::DOCK {
         SHELL_DOCK_VERSION
+    } else if component == ComponentName::WINDOWMANAGER {
+        SHELL_WINDOW_MANAGER_VERSION
     } else if component == ComponentName::MENUBAR {
         SHELL_MENU_BAR_VERSION
     } else {

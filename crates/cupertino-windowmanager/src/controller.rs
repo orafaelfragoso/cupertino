@@ -1,8 +1,10 @@
-//! The stage policy of one output: the server's groups of window events in, placement and
-//! activation requests out. The `cupertino_wm::stage` model decides; the controller keeps what the
-//! server was told so that each group yields only the placements that changed.
+//! The stage policy of one output: the server's groups of window events in, placement and activation requests and the
+//! strip's thumbnails out. The `cupertino_wm::stage` model decides; the controller keeps what the server was told so
+//! that each group yields only the placements that changed. A window of a strip group the strip shows is on the stage
+//! as far as the server's placements go: the component shows it in a hole of its strip ([`Controller::strip`]); the
+//! windows of groups beyond the strip's rows are hidden.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use cupertino_wm::geometry::Rect;
 use cupertino_wm::ids::{AppId, WindowId};
@@ -38,10 +40,8 @@ pub enum Change {
 /// What to send the server, in order.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Request {
-    Place {
-        id: u32,
-        placement: Placement,
-    },
+    /// Hide the window, or show it again at its own frame; pending until the commit.
+    Place { id: u32, hidden: bool },
     /// Apply the placements sent since the last commit together.
     Commit,
     /// Focus and raise the window.
@@ -55,6 +55,8 @@ struct Known {
 
 pub struct Controller {
     stage: Stage,
+    /// The usable area the server last gave.
+    usable: Rect,
     /// Whether the stage is on: the setting at start, then the shortcut.
     enabled: bool,
     /// The first group has been applied.
@@ -64,8 +66,8 @@ pub struct Controller {
     recency: Vec<u32>,
     active: Option<u32>,
     apps: HashMap<String, AppId>,
-    /// Placements the server holds that are not the stage; a window missing here is on the stage.
-    sent: BTreeMap<u32, Placement>,
+    /// The windows the server holds hidden.
+    hidden: BTreeSet<u32>,
 }
 
 impl Controller {
@@ -73,18 +75,45 @@ impl Controller {
     pub fn new(cfg: StageConfig, enabled: bool) -> Self {
         Self {
             stage: Stage::new(cfg, Rect::new(0.0, 0.0, 0.0, 0.0)),
+            usable: Rect::new(0.0, 0.0, 0.0, 0.0),
             enabled,
             started: false,
             windows: BTreeMap::new(),
             recency: Vec::new(),
             active: None,
             apps: HashMap::new(),
-            sent: BTreeMap::new(),
+            hidden: BTreeSet::new(),
         }
     }
 
+    /// Whether the stage is on.
     pub fn is_enabled(&self) -> bool {
         self.enabled
+    }
+
+    /// The windows the server holds hidden: the windows of the strip groups beyond the strip's rows.
+    pub fn hidden(&self) -> &BTreeSet<u32> {
+        &self.hidden
+    }
+
+    /// The thumbnails of the strip: each window of a group the strip shows and the rectangle, in global logical
+    /// coordinates, where it rests once a swap ended; empty while the stage is off.
+    pub fn strip(&self) -> BTreeMap<u32, Rect> {
+        self.stage
+            .placements()
+            .into_iter()
+            .filter_map(|(w, p)| match p {
+                Placement::Strip(rect) => Some((w.0 as u32, rect)),
+                Placement::Stage | Placement::Hidden => None,
+            })
+            .collect()
+    }
+
+    /// The strip's column in global logical coordinates: the usable area's left edge to the start of the stage area.
+    pub fn strip_column(&self) -> Rect {
+        let usable = self.usable;
+        let stage = self.stage.stage_area();
+        Rect::new(usable.x, usable.y, (stage.x - usable.x).max(0.0), usable.h)
     }
 
     fn app(&mut self, app_id: &str) -> AppId {
@@ -111,12 +140,15 @@ impl Controller {
         let mut activate = None;
         for change in group {
             match change {
-                Change::UsableArea(area) => self.stage.set_usable(*area, now),
+                Change::UsableArea(area) => {
+                    self.usable = *area;
+                    self.stage.set_usable(*area, now);
+                }
                 Change::Window(w) => self.window(w, now),
                 Change::WindowClosed(id) => {
                     self.windows.remove(id);
                     self.recency.retain(|x| x != id);
-                    self.sent.remove(id);
+                    self.hidden.remove(id);
                     if self.active == Some(*id) {
                         self.active = None;
                     }
@@ -187,32 +219,27 @@ impl Controller {
         }
     }
 
-    /// The placements that differ from what the server holds, then a commit; nothing when none
-    /// changed.
+    /// The windows hidden or shown again since the server was last told, then a commit; nothing when none changed.
     fn placement_requests(&mut self) -> Vec<Request> {
-        let wanted: BTreeMap<u32, Placement> = self
+        let wanted: BTreeSet<u32> = self
             .stage
             .placements()
             .into_iter()
-            .map(|(w, p)| (w.0 as u32, p))
-            .filter(|(_, p)| *p != Placement::Stage)
+            .filter(|(_, p)| *p == Placement::Hidden)
+            .map(|(w, _)| w.0 as u32)
             .collect();
-        let mut requests = Vec::new();
-        for (id, placement) in &wanted {
-            if self.sent.get(id) != Some(placement) {
-                requests.push(Request::Place {
-                    id: *id,
-                    placement: *placement,
-                });
-            }
-        }
-        for id in self.sent.keys().filter(|id| !wanted.contains_key(id)) {
-            requests.push(Request::Place {
+        let mut requests: Vec<Request> = wanted
+            .difference(&self.hidden)
+            .map(|id| Request::Place {
                 id: *id,
-                placement: Placement::Stage,
-            });
-        }
-        self.sent = wanted;
+                hidden: true,
+            })
+            .collect();
+        requests.extend(self.hidden.difference(&wanted).map(|id| Request::Place {
+            id: *id,
+            hidden: false,
+        }));
+        self.hidden = wanted;
         if !requests.is_empty() {
             requests.push(Request::Commit);
         }

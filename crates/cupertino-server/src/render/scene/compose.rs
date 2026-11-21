@@ -723,8 +723,6 @@ fn desktop_scene(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>, stack: &m
     let key = p.wm.key_window();
     let raised = raised_popups_window(p.wm, p.output_id);
     let mut front_to_back: Vec<Piece> = Vec::new();
-    // strip thumbnails, drawn below every window on the stage
-    let mut strip: Vec<Piece> = Vec::new();
     // the windows whose ghost was drawn with them
     let mut with_their_window: Vec<WindowId> = Vec::new();
     for (id, slide, workspace_opacity) in list.into_iter().rev() {
@@ -741,33 +739,19 @@ fn desktop_scene(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>, stack: &m
             continue;
         };
         plan.opacity *= workspace_opacity;
-        // a stage placement draws the window at its animated frame, alpha and corner radius
-        let in_strip = match p.window_managers.look(id, p.now) {
-            Look::Natural => false,
+        // a window the window manager hides fades out where it was drawn, and back in at its own frame
+        match p.window_managers.look(id, p.now) {
+            Look::Natural => {}
             Look::Hidden => continue,
-            Look::Placed {
-                rect,
-                strip,
-                alpha,
-                rounding,
-            } => {
-                let corner = p
-                    .window_managers
-                    .corner_radius(p.config.window.corner_radius, rounding);
+            Look::Placed { rect, alpha, .. } => {
+                let corner = p.config.window.corner_radius;
                 plan = placed_plan(entry, rect, plan.opacity * alpha, plan.shadow, corner);
-                strip
             }
-        };
+        }
         if plan.opacity <= 0.0 || plan.visual.right() < p.rect.x || plan.visual.x > p.rect.right() {
             continue;
         }
         let active = key == Some(id);
-        if in_strip {
-            let deco = window_decorations(p, entry, &plan, active);
-            strip.extend(window_popup_elements(p, entry, &plan));
-            strip.extend(window_elements(p, entry, &plan, active, true, deco));
-            continue;
-        }
         if pres.minimize_progress > 1e-6 {
             if let Some(els) = minimize_elements(renderer, p, entry, &pres, slide, active) {
                 front_to_back.extend(els);
@@ -814,7 +798,6 @@ fn desktop_scene(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>, stack: &m
     with_their_window.extend(p.transactions.closing_in_claims());
     let mut ghosts: Vec<Piece> = closing_elements(p, &with_their_window);
     ghosts.append(&mut front_to_back);
-    ghosts.append(&mut strip);
     stack.extend(SceneLayer::Windows, ghosts);
     stack.extend(SceneLayer::Popups, popups);
 

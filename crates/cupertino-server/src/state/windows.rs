@@ -512,7 +512,7 @@ impl Cupertino {
             .map(|o| (o.rect, o.usable))
             .unwrap_or_default();
         // the visible frame new windows are placed in: the stage frame while the stage is on
-        let visible = if self.window_managers.stage_active(output) {
+        let visible = if self.stage_active(output) {
             cupertino_wm::stage::StageConfig::default().stage_frame(usable)
         } else {
             usable
@@ -726,8 +726,8 @@ impl Cupertino {
     }
 
     /// The windows on the output under `pos` that take input, topmost first, each with its plan; `None` while the
-    /// session is locked or off every output. Strip thumbnails and hidden windows take no input of their clients
-    /// (`window_manager_press`).
+    /// session is locked or off every output. Hidden windows and the windows holes claim (the stage strip's, the
+    /// overview's) take no input of their clients.
     fn input_windows(
         &self,
         pos: Point<f64, Logical>,

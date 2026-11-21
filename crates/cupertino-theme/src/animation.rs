@@ -384,6 +384,23 @@ impl Timing {
     });
 }
 
+/// The motions of the stage strip.
+impl SpringPreset {
+    /// A window moving between the stage and the strip, and a thumbnail moving to its new slot when the strip's groups
+    /// change: critically damped, its undamped period 0.38 s (the swap spring of `cupertino_wm::stage`, the window
+    /// manager's spring for frame properties).
+    pub const STAGE_SWAP: SpringPreset = SpringPreset(SpringForm::Ratio {
+        response: 0.38,
+        damping: 1.0,
+    });
+    /// A thumbnail fading into the strip or out of it as its group gains or loses a row: critically damped, 0.30 s (the
+    /// alpha spring of a swap in `cupertino_wm::stage`).
+    pub const STAGE_FADE: SpringPreset = SpringPreset(SpringForm::Ratio {
+        response: 0.30,
+        damping: 1.0,
+    });
+}
+
 /// The motions of the notification banners and the notification list.
 impl SpringPreset {
     /// A banner springing back to rest after a leftward swipe: mass 1, stiffness 100, damping 100, a damping ratio of

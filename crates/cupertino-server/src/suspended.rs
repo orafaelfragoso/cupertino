@@ -158,7 +158,7 @@ impl Cupertino {
             let claimed = list
                 .iter()
                 .any(|(id, _, _)| self.transactions.is_window_claimed(*id));
-            if claimed || self.window_managers.stage_active(o.id) || desk {
+            if claimed || self.stage_active(o.id) || desk {
                 continue;
             }
             let mut covers: Vec<Rect> = Vec::new();

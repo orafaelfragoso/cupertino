@@ -521,7 +521,7 @@
   note: The prompts (cupertino-prompts) register their alert as the consent surface; it is a prompt surface, but the consent panel neither suspends runs nor keeps its own answer out. Allow and a remembered Don't Allow require a fresh physical serial delivered to that surface after the request; synthetic input cannot approve. Version 2 names the requesting app and its services before each request and remembers the person's answer in desktop-control.conf; its loss revokes only runs awaiting an answer. It is asked one request at a time.
 - name: cupertino_shell_v1
   kind: wayland-global
-  version: 27
+  version: 29
   owner_crate: cupertino-server
   owner_area: compositor
   scope: shell-private
@@ -1205,7 +1205,7 @@
   owner_area: apps
   scope: shell-private
   source: crates/cupertino-shell/src/main.rs
-  note: the shell host the server starts on a connection with the host role alone; runs the listed components, each on a thread of its own; holds the osd (cupertino-osd), notifications (cupertino-notifications), controlcenter (cupertino-controlcenter), menubar (cupertino-menubar), launcher (cupertino-launcher), agent (cupertino-shell-agent), desktop (cupertino-shell-desktop), dock (cupertino-dock) and overview (cupertino-shell-overview) components
+  note: the shell host the server starts on a connection with the host role alone; runs the listed components, each on a thread of its own; holds the osd (cupertino-osd), notifications (cupertino-notifications), controlcenter (cupertino-controlcenter), menubar (cupertino-menubar), launcher (cupertino-launcher), agent (cupertino-shell-agent), desktop (cupertino-shell-desktop), dock (cupertino-dock), overview (cupertino-shell-overview) and windowmanager (cupertino-windowmanager) components
 - name: cupertino-control
   kind: binary
   version: 0.1.0
@@ -1286,14 +1286,6 @@
   owner_area: rendering
   scope: public
   source: crates/cupertino-gpu-shaders/src/main.rs
-- name: cupertino-windowmanager
-  kind: binary
-  version: 0.1.0
-  shipped: yes
-  owner_crate: cupertino-windowmanager
-  owner_area: apps
-  scope: shell-private
-  source: crates/cupertino-windowmanager/src/main.rs
 - name: glass-renderer
   kind: binary
   version: 0.1.0

@@ -29,7 +29,10 @@ fonts, and the packs' icons are the process's too: the first instance to start (
 reads them and every other starts on them (D5). The theme data never changes once read; the caches only take whole
 entries that never change, under locks held just to look one up or put one in, so a panic in one instance leaves them
 whole for the others, and their budgets (two generations of 512 shaped paragraphs, `SHARED_RASTER_BYTES` of glyph
-rasters) are the whole process's.
+rasters) are the whole process's. A program that draws installed applications' and files' icons itself reads them the
+same way, from work on the I/O pool (`kit::shared`): the installed file types, the host icon themes' icons and the asset
+packs' raster icons, each read or drawn by its first caller and never changed after, so an instance started again after
+a panic finds them read.
 
 Work that would hold up a UI thread goes to the process's pools as a command (`kit::task`): `task::cpu` on a pool of
 up to a thread a core, `task::io` on a pool of up to `task::IO_THREADS` for blocking work with the deadline the caller
@@ -150,6 +153,7 @@ What `shell` and `apps` crates name from the toolkit, where each item is in Kit,
 | `kit::files` | the file family of `cupertino-ui-files`, in modules named as its own, each listing what Files and the portal's chooser name: `entry` (`Entry`, `Kind`), `natural`, `sort`, `mime`, `tags`, `applications`, `recents`, `places` (the sidebar's `standard_places` and the chooser's `chooser_places`, over the user directories of `cupertino_defaults::user_dirs`), `model` (`DirectoryModel`, whose `ModelWork` a program runs with `task::io` within `WORK_DEADLINE` and whose `ModelWatch` it follows with `Command::Perform`), `geom` (`Direction`), `layout::icon`, `rename`, `name_edit`, `open`, `operations` (with `Transfer`, a copy or a move whose `TransferSlice`s a program runs with `task::io` within `SLICE_DEADLINE`), `notice`, `thumbnail_service`, `item_icons`, `item_art`, and the views' `metrics` (`icon_view`, `list_view`, `column_view`, `timing`, `selection`, `marquee`, `drag`); the views: `ViewEvent`, `grid` (`IconGrid`), `list` (`FileList`), `columns` (`FileColumns`), `ColumnEvent`, and `panel` (`OpenSavePanel`, a file chooser's panel around a `FileList`, with `PanelEvent`, `ChoiceValue`, `PanelChoice`, `SaveAs`, `SIDEBAR_WIDTH`) |
 | `kit::geometry` | `Point`, `Size`, `Rect`, `Insets` |
 | `kit::motion` | [Motion](#motion) |
+| `kit::shared` | what every instance of the process reads once, from work on the I/O pool: `file_types` (the shared MIME database of the XDG data directories, a `MimeDatabase`), `theme_icon` (a host icon theme's icon or a file's, as a `core::IconImage`), `pack_raster` (an asset pack's raster icon, or the placeholder a name no pack provides is drawn as) and `pack_has_raster` |
 | `kit::image` | `decode` (PNG and JPEG within the side the caller allows), `resize`, `crop`, `orient` (upright from an `OutputTransform`, which the module names), `encode_png`, `encode_jpeg`, and `ImageError`: plain functions on `render::ImageResource` that a program runs as a `task::cpu`, each refusing a picture of more pixels than a window drawn on the CPU has |
 | `kit::task`, `kit::bus`, `kit::time`, `kit::account`, `kit::host`, `kit::process`, `kit::file_icons`, `kit::spawn`, `kit::Instance`, `kit::Entered`, `kit::prelude` | as above |
 | `kit::test` | [The `test` feature](#the-test-feature) |

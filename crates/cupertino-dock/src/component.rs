@@ -9,9 +9,10 @@
 //!
 //! Nothing here waits on the UI thread: the desktop entries, `dock.conf`, the pins, the icons, the folders, the
 //! launcher's history and the trash are read and written on Kit's I/O pool ([`tasks`]); the applications' badges and
-//! the D-Bus activation are calls on the component's session connection. What the instance before had read is kept in
-//! the process ([`Kept`]), so the bar of a restarted dock shows in its first view, in the place of the picture the
-//! server held.
+//! the D-Bus activation are calls on the component's session connection. Every instance reads its start anew and keeps
+//! nothing for the next: while the server holds the bar's picture of the instance before, the restarted dock shows no
+//! window until its bar has all it draws at hand ([`kit::Model::ready_to_show`]), so its first picture takes the held
+//! one's place whole.
 
 mod host;
 mod tasks;
@@ -95,34 +96,24 @@ pub enum Heard {
     Told(Box<Message>),
 }
 
-/// What the dock read and loaded, kept in the process for the next instance of the component: its bar shows at once
-/// after a restart, with the tiles, the icons and the badges the one before had.
-#[derive(Clone)]
-pub struct Kept {
+/// What the dock reads at start, which its model is made from: the desktop entries, `dock.conf`, the pins and the
+/// file manager.
+pub struct Read {
     desktop: DesktopIndex,
     conf: Option<DockSettings>,
     pins: Vec<String>,
     file_manager: Option<String>,
-    icons: std::collections::HashMap<kit::IconKey, std::collections::BTreeMap<u32, view::IconSet>>,
-    badges: crate::badge::Badges,
-    trash_full: bool,
-}
-
-/// The instance before's [`Kept`]; `None` until a dock read its start in this process.
-static KEPT: Mutex<Option<Kept>> = Mutex::new(None);
-
-fn kept() -> std::sync::MutexGuard<'static, Option<Kept>> {
-    KEPT.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// The dock's model as the shell runs it.
 pub struct Model {
     /// `None` until what the dock reads at start arrived and an output is there.
     dock: Option<kit::Model>,
-    /// The model was made before the start's reading arrived: without anything kept, so the reading still applies.
-    unread: bool,
+    /// The server holds the bar's picture of the instance before (D19): no window shows until the bar has all it draws
+    /// at hand, so the bar's first picture takes the held one's place whole.
+    held: bool,
     /// The start's reading, while no output is there to make the model on.
-    startup: Option<Kept>,
+    startup: Option<Read>,
     link: Rc<RefCell<Link>>,
     /// The outputs' keys in the model, by the shell's id, in the order they were seen.
     keys: Vec<(OutputId, u32)>,
@@ -183,35 +174,31 @@ impl Model {
         }))
     }
 
-    /// Make the dock's model from `kept` on the first output, when there is one; `unread` when `kept` is not what was
-    /// read but the defaults, made while the server holds the bar.
-    fn make(&mut self, kept: Kept, unread: bool) -> Vec<Command<Message>> {
+    /// Make the dock's model from what it read on the first output, when there is one.
+    fn make(&mut self, read: Read) -> Vec<Command<Message>> {
         let outputs = self.outputs();
         let Some(first) = outputs.first() else {
-            self.startup = Some(kept);
+            self.startup = Some(read);
             return Vec::new();
         };
-        let cfg = dock_config(kept.conf.as_ref(), first.height);
-        let actions = kept
+        let cfg = dock_config(read.conf.as_ref(), first.height);
+        let actions = read
             .conf
             .as_ref()
             .map_or_else(ActionMap::default, |f| f.actions.clone());
         let mut bar = crate::dock::Dock::new(cfg);
-        if let Some(file_manager) = &kept.file_manager {
+        if let Some(file_manager) = &read.file_manager {
             bar.set_built_in(file_manager);
         }
-        bar.set_pinned(&kept.pins.iter().map(String::as_str).collect::<Vec<_>>());
-        let session = Session::new(bar, kept.desktop);
+        bar.set_pinned(&read.pins.iter().map(String::as_str).collect::<Vec<_>>());
+        let session = Session::new(bar, read.desktop);
         let host = ShellHost::new(Rc::clone(&self.link));
         let mut dock = kit::Model::new(
             session,
             actions,
-            kept.conf.unwrap_or_default(),
+            read.conf.unwrap_or_default(),
             Box::new(host),
         );
-        dock.set_icons(kept.icons);
-        dock.set_badges(kept.badges);
-        dock.set_trash_full(kept.trash_full);
         let mut commands = Vec::new();
         for message in [
             Message::Dark(self.dark),
@@ -222,12 +209,11 @@ impl Model {
             commands.extend(kit::update(&mut dock, message));
         }
         self.dock = Some(dock);
-        self.unread = unread;
         commands
     }
 
     /// The start's reading arrived: the host's paths and programs follow it, the watches start, and the dock's model is
-    /// made from it, or takes it when it was made before.
+    /// made from it.
     fn loaded(&mut self, startup: Startup) -> Vec<Command<Message>> {
         let Startup {
             read,
@@ -250,35 +236,7 @@ impl Model {
             .map(|watch| tasks::follow_conf(watch, self.tell.clone()))
             .into_iter()
             .collect();
-        match self.dock.as_mut() {
-            None => {
-                *kept() = Some(read.clone());
-                commands.extend(self.make(read, false));
-            }
-            Some(dock) => {
-                if std::mem::take(&mut self.unread) {
-                    dock.loaded(
-                        read.desktop.clone(),
-                        &read.pins,
-                        read.file_manager.as_deref(),
-                    );
-                    *kept() = Some(Kept {
-                        icons: dock.icons().clone(),
-                        badges: dock.badges().clone(),
-                        trash_full: dock.trash_full(),
-                        ..read.clone()
-                    });
-                }
-                if let Some(kept) = kept().as_mut() {
-                    kept.conf.clone_from(&read.conf);
-                }
-                // `dock.conf` as it is now; what the instance before had read stays where it did not change
-                commands.extend(kit::update(
-                    dock,
-                    Message::ConfRead(read.conf.map(Box::new)),
-                ));
-            }
-        }
+        commands.extend(self.make(read));
         commands
     }
 
@@ -303,7 +261,7 @@ impl Model {
                 match self.dock.as_mut() {
                     Some(dock) => kit::update(dock, Message::Outputs(outputs)),
                     None => match self.startup.take() {
-                        Some(kept) => self.make(kept, false),
+                        Some(read) => self.make(read),
                         None => Vec::new(),
                     },
                 }
@@ -345,40 +303,6 @@ impl Model {
                 }
                 commands
             }
-        }
-    }
-
-    /// Keep what the next instance starts with after the model took `message`: the icons as they load, the badges as
-    /// they change, the pins as they are stored.
-    fn keep(&self, kind: Keep) {
-        let Some(dock) = &self.dock else { return };
-        let mut kept = kept();
-        let Some(kept) = kept.as_mut() else { return };
-        match kind {
-            Keep::Icons => kept.icons.clone_from(dock.icons()),
-            Keep::Badges => kept.badges.clone_from(dock.badges()),
-            Keep::Nothing => {}
-        }
-        kept.pins = dock.session.dock.pinned_keys();
-        kept.trash_full = dock.trash_full();
-    }
-}
-
-/// What of the model a message changes that the next instance starts with ([`Model::keep`]).
-#[derive(Clone, Copy)]
-enum Keep {
-    Icons,
-    Badges,
-    Nothing,
-}
-
-impl Keep {
-    fn of(message: &Message) -> Self {
-        match message {
-            Message::IconsLoaded { .. } => Keep::Icons,
-            Message::Badge(_) => Keep::Badges,
-            Message::Shell(Heard::Told(told)) => Keep::of(told),
-            _ => Keep::Nothing,
         }
     }
 }
@@ -461,9 +385,9 @@ impl Application for Dock {
     fn init() -> (Model, Vec<Command<Message>>) {
         let preferences = cupertino_kit_shell::environment().theme.preferences;
         let (tell, told) = async_channel::unbounded();
-        let mut model = Model {
+        let model = Model {
             dock: None,
-            unread: false,
+            held: cupertino_kit_shell::holds().iter().any(|key| key == HOLD),
             startup: None,
             link: Rc::new(RefCell::new(Link::new())),
             keys: Vec::new(),
@@ -480,21 +404,10 @@ impl Application for Dock {
         );
         commands.push(model.told());
         commands.push(tasks::startup(tell));
-        // the bar of a restart shows in the first view, so the server's held picture gives way to it in place; on a
-        // first start it waits for the start's reading
-        let kept = kept().clone();
-        match kept {
-            Some(kept) => commands.extend(model.make(kept, false)),
-            None if !cupertino_kit_shell::holds().is_empty() => {
-                commands.extend(model.make(Kept::unread(), true));
-            }
-            None => {}
-        }
         (model, commands)
     }
 
     fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
-        let keep = Keep::of(&message);
         let commands = match message {
             Message::Shell(heard) => model.heard(heard),
             Message::Locked(locked) => {
@@ -509,11 +422,16 @@ impl Application for Dock {
                 None => Vec::new(),
             },
         };
-        model.keep(keep);
+        if model.held {
+            model.held = !model.dock.as_ref().is_some_and(kit::Model::ready_to_show);
+        }
         commands
     }
 
     fn view(model: &Model) -> Vec<Window<Message>> {
+        if model.held {
+            return Vec::new();
+        }
         model.dock.as_ref().map(kit::view).unwrap_or_default()
     }
 }
@@ -667,6 +585,12 @@ impl Program for Dock {
             None => None,
         };
         surface.unwrap_or_else(|| transient(Role::Window))
+    }
+
+    /// Once the bar shows: while the server holds its picture of the instance before, not before the bar has all it
+    /// draws at hand.
+    fn showing(model: &Model) -> bool {
+        !model.held
     }
 
     fn event(event: Event) -> Option<Message> {

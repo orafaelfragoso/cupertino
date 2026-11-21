@@ -3,18 +3,15 @@
 
 use std::collections::HashMap;
 
-use cupertino_kit::motion::{Animated, Easing};
+use cupertino_kit::motion::{Animated, Timing};
 use cupertino_wm::geometry::{Point, Rect};
 
 use super::{
     Departing, Dock, DragOutcome, DragState, DraggedTile, PlacedTile, Section, Settle, Slide,
 };
 use crate::config::Orientation;
-use crate::ease::cosine_ease;
 use crate::magnify::fish_ramp_ms;
-use crate::tile_drag::{
-    LOOK_S, REMOVE_DELAY_S, REMOVE_FADE_CURVE, REMOVE_FADE_S, REMOVING_OPACITY, SETTLE_S,
-};
+use crate::tile_drag::{REMOVE_DELAY_S, REMOVING_OPACITY};
 use crate::tiles::{Tile, TileId, TileKind, TileLifecycle};
 
 impl Dock {
@@ -253,8 +250,7 @@ impl Dock {
             0.0
         };
         if d.look.target() != target {
-            d.look
-                .animate_to(target, Easing::EASE_IN_OUT.over(LOOK_S), now);
+            d.look.animate_to(target, Timing::DOCK_REMOVE_LOOK, now);
         }
     }
 
@@ -352,9 +348,9 @@ impl Dock {
     ) -> Option<DraggedTile> {
         let s = self
             .settle
-            .filter(|s| (s.start..s.start + SETTLE_S).contains(&now))?;
+            .filter(|s| (s.start..s.start + Timing::DOCK_TILE_SETTLE.duration()).contains(&now))?;
         let slot = tiles.remove(tiles.iter().position(|t| t.id == s.id)?);
-        let e = cosine_ease((now - s.start) / SETTLE_S);
+        let e = Timing::DOCK_TILE_SETTLE.value(now - s.start);
         let lerp = |a: f64, b: f64| a + (b - a) * e;
         let rect = Rect::new(
             lerp(s.from.x, slot.rect.x),
@@ -383,8 +379,8 @@ impl Dock {
         let d = self
             .departing
             .as_ref()
-            .filter(|d| (d.start..d.start + REMOVE_FADE_S).contains(&now))?;
-        let fade = 1.0 - REMOVE_FADE_CURVE.eval((now - d.start) / REMOVE_FADE_S);
+            .filter(|d| (d.start..d.start + Timing::DOCK_REMOVE_FADE.duration()).contains(&now))?;
+        let fade = 1.0 - Timing::DOCK_REMOVE_FADE.value(now - d.start);
         Some(DraggedTile {
             tile: d.tile.clone(),
             key: d.key.clone(),

@@ -104,11 +104,6 @@ impl Session {
         &self.desktop
     }
 
-    /// Resolve the tiles through `desktop` from now on: the entries as read after the session started without them.
-    pub fn set_desktop(&mut self, desktop: DesktopIndex) {
-        self.desktop = desktop;
-    }
-
     /// Key of the tile an application id stands for: the tile of that id, else the tile pinned
     /// by the id of the same desktop entry or by one of its aliases, else the id itself.
     pub fn key_of(&self, app_id: &str) -> String {

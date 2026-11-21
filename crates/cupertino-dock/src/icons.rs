@@ -1,17 +1,17 @@
 //! The icons the dock shows, loaded for the toolkit's images on Kit's I/O pool: an application's own icon (an absolute
 //! path or the `hicolor` theme), the icon a window set for itself, and the system's generic application and trash icons
-//! from the asset directory. Every surface of the dock draws them through CupertinoKit ([`crate::view`], the switcher's
+//! from the asset directory, the themes' and the packs' read through the process's shared icons
+//! ([`cupertino_kit::shared`]). Every surface of the dock draws them through CupertinoKit ([`crate::view`], the switcher's
 //! panel of [`crate::switcher_kit`]). Nothing here runs on the UI thread but [`WindowImage::new`], which only reorders
 //! the pixels the server sent.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use cupertino_assets::Assets;
-use cupertino_icons::{SystemIcons, ThemeIcons};
 use cupertino_kit::controls::ImageSource;
-use cupertino_kit::core::next_resource_id;
+use cupertino_kit::core::{next_resource_id, IconImage};
 use cupertino_kit::render::{ImageResource, PixelFormat};
+use cupertino_kit::shared;
 
 /// Semantic names of the generic application icon and of the trash's two states.
 const GENERIC_APPLICATION_ICON: &str = "application.generic";
@@ -281,40 +281,47 @@ pub enum Job {
     Trash(bool),
 }
 
-/// Icon images by name and pixel size, loaded once: an application's own icon (an absolute path or the `hicolor`
-/// theme) and the system's icons from the asset directory. It reads files: it lives on Kit's I/O pool.
+/// Icon images by name and pixel size, filled to their squares once for the instance: an application's own icon (an
+/// absolute path or the `hicolor` theme) and the system's icons from the asset directory, both read through the
+/// process's shared icons. It reads files: it lives on Kit's I/O pool.
 pub struct Icons {
-    apps: ThemeIcons,
-    system: SystemIcons,
     cache: HashMap<(String, u32), Option<Raster>>,
     /// The system's icons by name and pixel size, filled to their squares.
     system_cache: HashMap<(&'static str, u32), Raster>,
 }
 
-/// A pixmap of the icon crates as a [`Raster`].
-macro_rules! raster {
-    ($pixmap:expr) => {{
-        let pixmap = $pixmap;
-        Raster {
-            width: pixmap.width(),
-            height: pixmap.height(),
-            data: pixmap.data().to_vec(),
-        }
-    }};
+/// The pixels of a shared icon.
+fn raster(image: &IconImage) -> Raster {
+    Raster {
+        width: image.image.width,
+        height: image.image.height,
+        data: image.image.pixels.to_vec(),
+    }
 }
 
+/// The pixel size at which [`Icons::new`] looks whether the asset packs give the dock's own icons.
+const REPORTED_PX: u32 = 32;
+
 impl Icons {
-    /// The icon themes and the asset packs of `assets`. The generic application icon and the trash's are reported
-    /// when no asset pack provides them; they are then drawn as placeholders.
-    pub fn new(assets: &Assets) -> Self {
-        let system = SystemIcons::required(
-            assets,
-            &[GENERIC_APPLICATION_ICON, TRASH_EMPTY_ICON, TRASH_FULL_ICON],
-            &[],
-        );
+    /// Nothing loaded yet. The generic application icon and the trash's are reported when no asset pack provides them;
+    /// they are then drawn as placeholders.
+    #[expect(
+        clippy::new_without_default,
+        reason = "it reads the asset packs: made on Kit's I/O pool, never by default"
+    )]
+    pub fn new() -> Self {
+        let missing: Vec<String> = [GENERIC_APPLICATION_ICON, TRASH_EMPTY_ICON, TRASH_FULL_ICON]
+            .into_iter()
+            .filter(|name| !shared::pack_has_raster(name, REPORTED_PX))
+            .map(|name| format!("`{name}`"))
+            .collect();
+        if !missing.is_empty() {
+            eprintln!(
+                "cupertino-dock: no asset pack provides the icon {}; it is drawn as a placeholder",
+                missing.join(", ")
+            );
+        }
         Self {
-            apps: ThemeIcons::new(assets),
-            system,
             cache: HashMap::new(),
             system_cache: HashMap::new(),
         }
@@ -338,21 +345,25 @@ impl Icons {
 
     /// The theme's icon `name` at `px`, filled to its square, loaded once; `None` when the theme has none.
     fn themed(&mut self, name: &str, px: u32) -> Option<Raster> {
-        let apps = &mut self.apps;
         self.cache
             .entry((name.to_owned(), px))
-            .or_insert_with(|| filled(px, |side| apps.load(name, side).map(|p| raster!(p))))
+            .or_insert_with(|| {
+                filled(px, |side| {
+                    shared::theme_icon(name, side).as_ref().map(raster)
+                })
+            })
             .clone()
     }
 
     /// The system's icon `name` at `px`, filled to its square.
     fn system_icon(&mut self, name: &'static str, px: u32) -> Raster {
-        let system = &mut self.system;
         self.system_cache
             .entry((name, px))
             .or_insert_with(|| {
-                filled(px, |side| Some(raster!(system.raster(name, side))))
-                    .unwrap_or_else(|| Raster::transparent(px.max(1), px.max(1)))
+                filled(px, |side| {
+                    shared::pack_raster(name, side).as_ref().map(raster)
+                })
+                .unwrap_or_else(|| Raster::transparent(px.max(1), px.max(1)))
             })
             .clone()
     }
@@ -364,7 +375,7 @@ impl Icons {
             return icon;
         }
         if let Some(packed) = PACKED_NAMES.iter().find(|n| **n == name) {
-            if self.system.has_raster(packed, px) {
+            if shared::pack_has_raster(packed, px) {
                 return self.system_icon(packed, px);
             }
         }

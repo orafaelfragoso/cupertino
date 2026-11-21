@@ -5,13 +5,13 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use cupertino_apps::launch::OPEN_COMMAND;
 use cupertino_defaults::dock::DockSettings;
 use cupertino_kit::core::{Command, WindowKey};
-use cupertino_kit::task;
+use cupertino_kit::{shared, task};
 use cupertino_kit_shell::{dock, host, ServerWindowId};
 
 use super::{tasks, PROCESS};
@@ -64,18 +64,16 @@ impl Link {
     }
 }
 
-/// The icons, made on the pool by the first load in the process and used by one load at a time there: an instance
-/// of the dock after a restart finds the themes and the asset packs read and the icons it drew loaded.
-static ICONS: Mutex<Option<Icons>> = Mutex::new(None);
-
-/// The file types, for a stack's icons; loaded by the first listing in the process, on the pool.
-static MIME: OnceLock<cupertino_apps::MimeDatabase> = OnceLock::new();
+/// The instance's icons, made on the pool by its first load and used by one load at a time there; the themes and the
+/// asset packs they come from are the process's ([`shared`]).
+type SharedIcons = Arc<Mutex<Option<Icons>>>;
 
 pub struct ShellHost {
     link: Rc<RefCell<Link>>,
     start: Instant,
     /// The icons the windows set for themselves, by window id, with the keys of their applications.
     windows: HashMap<u32, ([String; 2], WindowImage)>,
+    icons: SharedIcons,
 }
 
 impl ShellHost {
@@ -84,6 +82,7 @@ impl ShellHost {
             link,
             start: Instant::now(),
             windows: HashMap::new(),
+            icons: SharedIcons::default(),
         }
     }
 
@@ -254,12 +253,7 @@ impl Host for ShellHost {
     fn folder_entries(&mut self, folder: &str) -> FolderListing {
         let folder = PathBuf::from(folder);
         pooled(LISTING_DEADLINE, move || {
-            let mime = MIME.get_or_init(|| {
-                let dirs = cupertino_apps::XdgDirs::from_env()
-                    .map(|d| d.all_data_dirs())
-                    .unwrap_or_default();
-                cupertino_apps::MimeDatabase::load(&dirs).unwrap_or_default()
-            });
+            let mime = shared::file_types();
             crate::stack::list_folder(&folder, |path, is_dir| {
                 let ty = mime.file_type(path, is_dir);
                 cupertino_icons::document::document_icon_name(mime, ty).to_owned()
@@ -321,10 +315,10 @@ impl Host for ShellHost {
                 (key, side, job)
             })
             .collect();
+        let icons = Arc::clone(&self.icons);
         Some(pooled(ICONS_DEADLINE, move || {
-            let mut slot = ICONS.lock().unwrap_or_else(PoisonError::into_inner);
-            let icons =
-                slot.get_or_insert_with(|| Icons::new(&cupertino_assets::Assets::discover()));
+            let mut slot = icons.lock().unwrap_or_else(PoisonError::into_inner);
+            let icons = slot.get_or_insert_with(Icons::new);
             jobs.into_iter()
                 .map(|(key, side, job)| {
                     let set: IconSet = ICON_SCALES

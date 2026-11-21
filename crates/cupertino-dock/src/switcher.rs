@@ -3,16 +3,12 @@
 //! geometry, the show delay and fade, the
 //! selection and label colours and the pointer rules.
 
-use cupertino_kit::motion::Easing;
+use cupertino_kit::motion::Timing;
 use cupertino_wm::geometry::{Point, Rect};
 
 /// Delay between the switcher opening and its panel appearing; a commit before then switches
 /// without a panel (150 ms). The panel then appears without animation.
 pub const SHOW_DELAY: f64 = 0.15;
-
-/// Duration of the fade-out after a commit: no duration is set, so the layer framework's default
-/// applies (0.25 s); the curve is ease-in-ease-out.
-pub const HIDE_DURATION: f64 = 0.25;
 
 /// The pointer selects only after leaving a box this far (in each axis) around where it was when
 /// the panel appeared.
@@ -80,16 +76,16 @@ impl Switcher {
         (self.opened_at + SHOW_DELAY - now).max(0.0)
     }
 
-    /// Panel opacity: 1 until the fade starts, then `1 - ease(t)` over [`HIDE_DURATION`].
+    /// Panel opacity: 1 until the fade after a commit starts, then `1 - ease(t)` as [`Timing::DOCK_SWITCHER_HIDE`] runs.
     pub fn alpha(&self, now: f64) -> f64 {
-        self.closed_at.map_or(1.0, |at| {
-            1.0 - Easing::EASE_IN_OUT.eval(((now - at) / HIDE_DURATION).clamp(0.0, 1.0))
-        })
+        self.closed_at
+            .map_or(1.0, |at| 1.0 - Timing::DOCK_SWITCHER_HIDE.value(now - at))
     }
 
     /// Whether the fade-out has finished and the panel can go.
     pub fn is_gone(&self, now: f64) -> bool {
-        self.closed_at.is_some_and(|at| now - at >= HIDE_DURATION)
+        self.closed_at
+            .is_some_and(|at| now - at >= Timing::DOCK_SWITCHER_HIDE.duration())
     }
 
     /// Whether the panel is fading out and needs a frame per refresh.

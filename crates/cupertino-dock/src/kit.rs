@@ -443,11 +443,12 @@ struct OpenStack {
     listing: u64,
     /// Its entries, once listed; it shows from then.
     entries: Option<Vec<StackEntry>>,
-    /// When it showed: it comes in over [`stack::ENTRY_S`] from then, or a fan over [`fan::OPEN_S`].
+    /// When it showed: it comes in as [`Timing::DOCK_STACK_ENTRY`](cupertino_kit::motion::Timing::DOCK_STACK_ENTRY) runs from then, or a fan as [`Timing::DOCK_FAN_OPEN`](cupertino_kit::motion::Timing::DOCK_FAN_OPEN)
+    /// runs.
     opened: f64,
     /// Fan or grid, decided when it was listed.
     shape: fan::Shape,
-    /// The fan has begun to close; it is gone once [`fan::CLOSE_S`] has passed.
+    /// The fan has begun to close; it is gone once [`Timing::DOCK_FAN_CLOSE`](cupertino_kit::motion::Timing::DOCK_FAN_CLOSE) has run.
     closing: Option<Closing>,
     /// The fan's row the pointer is on, and the one the arrow keys moved to.
     hover: Option<usize>,
@@ -462,9 +463,6 @@ struct OpenMenu {
     /// The tile's icon darkened, as pressed: the tile shows it while its menu is up and while the menu fades out.
     dark: IconSet,
 }
-
-/// How long a tile keeps its pressed darkening after its menu closed: the time the menu takes to fade out.
-const MENU_FADE_OUT: f64 = 0.21;
 
 struct ForceQuit {
     output: u32,
@@ -502,7 +500,7 @@ pub struct Model {
     poof: Option<Poof>,
     menu: Option<OpenMenu>,
     /// The tile whose menu closed last, its darkened icon and when the menu closed: it keeps the darkening while the
-    /// menu fades out ([`MENU_FADE_OUT`]).
+    /// menu fades out ([`Timing::DOCK_MENU_PRESSED_OFF`](cupertino_kit::motion::Timing::DOCK_MENU_PRESSED_OFF)).
     menu_fade: Option<(TileId, IconSet, f64)>,
     /// The trash's alert that is up: the question before it is emptied, or what could not be deleted.
     confirm: Option<view::confirm::Alert>,
@@ -557,6 +555,10 @@ pub struct Model {
     names: HashMap<String, Option<String>>,
     trash_checked: Option<f64>,
     trash_full: bool,
+    /// The trash's state came back from a look ([`Model::ready_to_show`]).
+    trash_looked: bool,
+    /// Reads of the launcher's history asked for and not arrived yet.
+    recents_reading: usize,
     wake_generation: u64,
     wake_at: Option<f64>,
     /// The work the host handed back while a message was taken, run after it.
@@ -626,6 +628,8 @@ impl Model {
             names: HashMap::new(),
             trash_checked: None,
             trash_full: false,
+            trash_looked: false,
+            recents_reading: 0,
             wake_generation: 0,
             wake_at: None,
             later: Vec::new(),
@@ -641,61 +645,14 @@ impl Model {
         self.unresponsive = apps;
     }
 
-    /// The icons loaded so far, by key and side in whole points: what a model of the next instance starts with.
-    pub fn icons(&self) -> &HashMap<IconKey, BTreeMap<u32, IconSet>> {
-        &self.icons
-    }
-
-    /// Start with `icons` loaded, as [`Model::icons`] gave them.
-    pub fn set_icons(&mut self, icons: HashMap<IconKey, BTreeMap<u32, IconSet>>) {
-        self.icons = icons;
-    }
-
-    /// The counts the applications show on their tiles: what a model of the next instance starts with, as the
-    /// applications send them only when they change.
-    pub fn badges(&self) -> &crate::badge::Badges {
-        &self.badges
-    }
-
-    /// Start with `badges`, as [`Model::badges`] gave them.
-    pub fn set_badges(&mut self, badges: crate::badge::Badges) {
-        self.badges = badges;
-    }
-
-    /// Whether the trash held anything at the last look: what a model of the next instance starts with, so its tile
-    /// shows what the held picture showed until the next look.
-    pub fn trash_full(&self) -> bool {
-        self.trash_full
-    }
-
-    /// Start with the trash's tile full or empty, as [`Model::trash_full`] gave it.
-    pub fn set_trash_full(&mut self, full: bool) {
-        self.trash_full = full;
-        self.session.dock.set_trash_full(full);
-    }
-
-    /// What the dock reads at start arrived after the model was made without it (on a restart with nothing kept): the
-    /// tiles resolve through `desktop` from now on, the built-in `file_manager` comes first and `pins` follow in
-    /// their order.
-    pub fn loaded(&mut self, desktop: DesktopIndex, pins: &[String], file_manager: Option<&str>) {
-        let now = self.now();
-        self.session.set_desktop(desktop);
-        self.names.clear();
-        let dock = &mut self.session.dock;
-        let tiles = dock.tiles();
-        let mut built_in = usize::from(tiles.iter().any(|t| t.built_in));
-        if let Some(key) = file_manager.filter(|key| {
-            built_in == 0
-                && !tiles
-                    .iter()
-                    .any(|t| t.kind == TileKind::App && t.key == *key)
-        }) {
-            dock.set_built_in(key);
-            built_in = 1;
-        }
-        for (i, key) in pins.iter().enumerate() {
-            dock.pin(key, Some(built_in + i), now);
-        }
+    /// Whether the bar has all it draws at hand: the trash was looked at, the launcher's history the recents come
+    /// from was read, and the icon of every tile is loaded at every size it is drawn at. What the server tells the
+    /// bar's role (the windows, the residents) comes once the bar shows.
+    pub fn ready_to_show(&self) -> bool {
+        self.trash_looked
+            && self.recents_reading == 0
+            && self.wanted.is_empty()
+            && self.requested.is_empty()
     }
 
     fn now(&self) -> f64 {
@@ -916,6 +873,7 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
             Vec::new()
         }
         Message::TrashFull(full) => {
+            model.trash_looked = true;
             model.trash_full = full;
             model.session.dock.set_trash_full(full);
             Vec::new()
@@ -938,6 +896,7 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
             Vec::new()
         }
         Message::RecentApps(history) => {
+            model.recents_reading = model.recents_reading.saturating_sub(1);
             let now = model.now();
             let recents = model.session.recent_apps(&history);
             let keys: Vec<&str> = recents.iter().map(String::as_str).collect();

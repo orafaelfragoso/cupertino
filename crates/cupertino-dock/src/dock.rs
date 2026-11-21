@@ -8,7 +8,7 @@ mod drag;
 
 use std::collections::HashMap;
 
-use crate::ease::{cosine_ease, EasedValue};
+use crate::ease::EasedValue;
 use cupertino_kit::motion::{Animated, Easing, Timing};
 use cupertino_wm::geometry::{Point, Rect};
 use cupertino_wm::ids::WindowId;
@@ -20,7 +20,7 @@ use crate::magnify::{
     base_length, fish_ramp_ms, fish_ramp_out_ms, layout_items, FisheyeProfile, LayoutItem,
     MagnificationProfile,
 };
-use crate::tile_drag::{REMOVE_DELAY_S, REMOVE_FADE_S, REMOVING_OPACITY, SETTLE_S, SLIDE_S};
+use crate::tile_drag::{REMOVE_DELAY_S, REMOVING_OPACITY};
 use crate::tiles::{Tile, TileId, TileKind, TileLifecycle};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -133,11 +133,11 @@ struct Slide {
 impl Slide {
     /// How far the tile still lags its place at `now`, in points along the dock axis.
     fn remaining(&self, now: f64) -> f64 {
-        self.offset * (1.0 - cosine_ease((now - self.start) / SLIDE_S))
+        self.offset * (1.0 - Timing::DOCK_TILE_SLIDE.value(now - self.start))
     }
 
     fn is_active(&self, now: f64) -> bool {
-        now < self.start + SLIDE_S
+        now < self.start + Timing::DOCK_TILE_SLIDE.duration()
     }
 }
 
@@ -628,13 +628,16 @@ impl Dock {
         }
         self.sync_look(now);
         self.slides.retain(|_, s| s.is_active(now));
-        if self.settle.is_some_and(|s| now >= s.start + SETTLE_S) {
+        if self
+            .settle
+            .is_some_and(|s| now >= s.start + Timing::DOCK_TILE_SETTLE.duration())
+        {
             self.settle = None;
         }
         if self
             .departing
             .as_ref()
-            .is_some_and(|d| now >= d.start + REMOVE_FADE_S)
+            .is_some_and(|d| now >= d.start + Timing::DOCK_REMOVE_FADE.duration())
         {
             self.departing = None;
         }
@@ -668,11 +671,13 @@ impl Dock {
             d.look.is_animating(now) || (d.zone && now - d.start < REMOVE_DELAY_S)
         });
         let moving = self.slides.values().any(|s| s.is_active(now))
-            || self.settle.is_some_and(|s| now < s.start + SETTLE_S)
+            || self
+                .settle
+                .is_some_and(|s| now < s.start + Timing::DOCK_TILE_SETTLE.duration())
             || self
                 .departing
                 .as_ref()
-                .is_some_and(|d| now < d.start + REMOVE_FADE_S);
+                .is_some_and(|d| now < d.start + Timing::DOCK_REMOVE_FADE.duration());
         animating
             || dragging
             || moving

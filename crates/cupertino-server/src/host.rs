@@ -206,6 +206,9 @@ struct PersistedSurface {
     /// Where the surface lay on its output as its `wl_surface` went: by the end of its layer role the surface has no
     /// buffer, and the layer map no size for it.
     last_geometry: Option<Rectangle<i32, Logical>>,
+    /// The surface was its output's menu bar as of its last commit. A failing component can end the role before its
+    /// connection ends (its teardown destroys the role object first), and what is held then is still the menu bar.
+    menu_bar: bool,
 }
 
 /// The last picture of a held persistent surface (D19), taken once as its hold starts, with what the server drew for
@@ -571,6 +574,19 @@ impl HostManager {
     /// All currently held persistent surfaces (for inspection and tests).
     pub fn held_surfaces(&self) -> &[HeldSurface] {
         &self.holds
+    }
+
+    /// Whether `component` shows a persistent surface on `output` (for inspection and tests): one of its connection that
+    /// has shown a buffer, which shows live until the connection ends, also once its role object is gone, or the held
+    /// picture of one (D19).
+    pub fn persistent_shows_on(&self, component: &str, output: OutputId) -> bool {
+        self.persisted
+            .values()
+            .any(|p| p.component == component && p.output == output && p.mapped)
+            || self
+                .holds
+                .iter()
+                .any(|h| h.component == component && h.output == output && h.picture.is_some())
     }
 
     /// Whether window-manager placements are currently held on `output`.

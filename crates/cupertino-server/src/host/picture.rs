@@ -30,7 +30,8 @@ impl Cupertino {
         if !self.hosts.persisted.contains_key(&id) {
             return;
         }
-        let picture = self.capture_held_picture(surface);
+        let was_menu_bar = self.hosts.persisted.get(&id).is_some_and(|p| p.menu_bar);
+        let picture = self.capture_held_picture(surface, was_menu_bar);
         let geometry = self.outputs.iter().find_map(|o| {
             let map = layer_map_for_output(&o.output);
             let layer = map.layer_for_surface(surface, WindowSurfaceType::TOPLEVEL)?;
@@ -45,7 +46,12 @@ impl Cupertino {
     /// The picture of the layer surface `surface` as its output shows it: its surface tree and its layers' content drawn
     /// by the renderer into textures (shm, dmabuf or any buffer the renderer imports), cut at each glass they draw, with
     /// the backdrops they draw kept to be drawn live between and behind them; without a renderer a copy of its shm pixels, with its own backdrops.
-    pub(super) fn capture_held_picture(&mut self, surface: &WlSurface) -> Option<HeldPicture> {
+    /// It is a menu bar's when the surface is its output's menu bar now or was as of its last commit (`was_menu_bar`).
+    pub(super) fn capture_held_picture(
+        &mut self,
+        surface: &WlSurface,
+        was_menu_bar: bool,
+    ) -> Option<HeldPicture> {
         let (idx, area) = self.outputs.iter().enumerate().find_map(|(i, o)| {
             let map = layer_map_for_output(&o.output);
             let layer = map.layer_for_surface(surface, WindowSurfaceType::TOPLEVEL)?;
@@ -58,7 +64,7 @@ impl Cupertino {
             );
             Some((i, area))
         })?;
-        let menu_bar = self.menu_bars.has_surface(surface);
+        let menu_bar = was_menu_bar || self.menu_bars.has_surface(surface);
         if let Some((slices, backdrops)) = self.capture_layer_texture(surface, idx, area) {
             return Some(HeldPicture {
                 content: HeldContent::Texture {

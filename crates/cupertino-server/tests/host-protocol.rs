@@ -8,6 +8,8 @@
 //! - Five failures within 60 s stop the component (`stopped(gave_up)` + `component_stopped`) and release holds; a
 //!   restart then hands its host a connection.
 //! - An instance that ends before its first buffer leaves the older hold as it was.
+//! - A menu bar whose role object ends before its connection (a failing component's teardown) shows live until the
+//!   connection ends and is then held as the output's menu bar.
 //! - `lost` and `failed` count only from the host that runs the component.
 //! - Keyboard focus returns to the window that had it when a component with a transient surface turns unresponsive
 //!   and when its connection drops; the dropped transient leaves no hold.
@@ -25,6 +27,7 @@ use std::time::{Duration, Instant};
 
 use cupertino_assets::Assets;
 use cupertino_peer::{Caller, ProcessHandle};
+use cupertino_protocols::client::cupertino_menu_bar_v1::CupertinoMenuBarV1;
 use cupertino_protocols::client::cupertino_shell_v1::CupertinoShellV1;
 use cupertino_protocols::client::cupertino_window_manager_v1::{
     self, CupertinoWindowManagerV1, Placement,
@@ -316,6 +319,7 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for ComponentClient
 
 wayland_client::delegate_noop!(ComponentClientState: ignore wl_output::WlOutput);
 wayland_client::delegate_noop!(ComponentClientState: ignore CupertinoShellV1);
+wayland_client::delegate_noop!(ComponentClientState: ignore CupertinoMenuBarV1);
 
 impl Dispatch<CupertinoWindowManagerV1, ()> for ComponentClientState {
     fn event(
@@ -1617,6 +1621,70 @@ fn an_instance_that_ends_before_its_first_buffer_keeps_the_older_hold() {
         28.0,
         "and its reserved space"
     );
+}
+
+#[test]
+fn a_bar_whose_role_ends_before_its_connection_is_held_as_the_menu_bar() {
+    let mut rig = Rig::new();
+    let mut host = rig.host(HostKind::Shared, &["menubar"]);
+    let _menubar_hc = rig.component_object(&mut host, "menubar");
+    let mut side = rig.component(&mut host, "menubar");
+    let qh = side.queue.handle();
+    // the bar takes the menu-bar role before its first buffer, as Kit's bar does
+    let (surface, _layer, _) = bar(&mut rig, &mut side, 28, 0, false);
+    let role = side
+        .client
+        .shell
+        .as_ref()
+        .expect("shell global")
+        .get_menu_bar(
+            &surface,
+            side.client.output.as_ref().expect("output"),
+            &qh,
+            (),
+        );
+    let buffer = make_shm_buffer(side.client.shm.as_ref().unwrap(), &qh, 800, 28);
+    surface.attach(Some(&buffer.2), 0, 0);
+    surface.commit();
+    rig.pump(&mut side);
+    assert!(
+        rig.state.menu_bars.has_bar(rig.output_id),
+        "the bar has the role"
+    );
+    assert!(rig
+        .state
+        .hosts
+        .persistent_shows_on("menubar", rig.output_id));
+
+    // a failing component's teardown destroys the role object, and its connection ends a moment later
+    role.destroy();
+    rig.pump(&mut side);
+    assert!(
+        !rig.state.menu_bars.has_bar(rig.output_id),
+        "the role ended"
+    );
+    assert!(
+        rig.state
+            .hosts
+            .persistent_shows_on("menubar", rig.output_id),
+        "its surface shows live until the connection ends"
+    );
+    assert!(rig.state.hosts.held_surfaces().is_empty());
+    drop(buffer);
+    drop(surface);
+    drop(side);
+    rig.settle();
+
+    let held = rig.state.hosts.held_surfaces();
+    assert_eq!(held.len(), 1, "the bar is held");
+    assert!(
+        held[0].picture.as_ref().is_some_and(|p| p.menu_bar),
+        "held as the output's menu bar: hidden, revealed and dimmed as the output's menu bar is"
+    );
+    assert!(rig
+        .state
+        .hosts
+        .persistent_shows_on("menubar", rig.output_id));
 }
 
 #[test]

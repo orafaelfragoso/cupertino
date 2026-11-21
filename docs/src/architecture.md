@@ -95,13 +95,8 @@ Further rules:
 - Only a dev-dependency turns on `cupertino-kit/test`, and `cargo build-programs` names every other feature of the
   workspace's packages.
 
-`cargo run -p cupertino-layers` checks them all. The problems that crates still have are listed one per line in
-`crates/cupertino-layers/remaining.txt`: the check fails on a problem the list does not hold and on a line that is no
-longer a problem, and `cargo run -q -p cupertino-layers -- --write-remaining` writes it again. Until the layered
-refactor's last wave, a change may add lines (`cargo xtask remaining` reports them); after it the list only shrinks.
-The layers in `ENFORCED` in `cupertino-layers` (`foundation`, `graphics`, `models`, `system`, `platform`, `protocol`,
-`transport`, `render`, `ui`, `shellkit`, `core`, `services`, `shell` and `testing`) are closed: none of their problems may be
-listed. Test code outside a crate's `tests/` is refused by the
+`cargo run -p cupertino-layers` checks them all. Every layer is closed: the check fails on any problem, and no list
+excuses one. Test code outside a crate's `tests/` is refused by the
 gate of `cargo xtask ci`. Keyboard layouts come from the system's libxkbcommon through the registry `xkbcommon` crate,
 the one Smithay uses too; the server keeps the last keymap that compiled when a new layout does not.
 `crates/cupertino-layers/graph/layers.dot` is a DOT snapshot of the layers (`cargo run -p cupertino-layers -- --graph`

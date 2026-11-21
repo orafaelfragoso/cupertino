@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 
 use crate::config::Config;
 use crate::plan::{self, Check, Kind, Plan};
-use crate::{gate, remaining, vendored, Options};
+use crate::{gate, vendored, Options};
 
 /// What a run did with each check.
 struct Outcome {
@@ -182,24 +182,6 @@ pub fn run_vendored(root: &Path) -> bool {
         }
         Err(error) => {
             eprintln!("vendored patches: {error}");
-            false
-        }
-    }
-}
-
-/// Runs the check that the remaining-work list only shrinks since `base` and prints its problems and summary; whether
-/// it passed, always while `remaining::GROWTH_FAILS` is false.
-pub fn run_remaining(root: &Path, base: &str) -> bool {
-    match remaining::problems(root, base) {
-        Ok(problems) => {
-            for problem in &problems {
-                eprintln!("{problem}");
-            }
-            eprintln!("{}", remaining::summary(&problems));
-            problems.is_empty() || !remaining::GROWTH_FAILS
-        }
-        Err(error) => {
-            eprintln!("remaining-work list: {error}");
             false
         }
     }
@@ -410,7 +392,6 @@ pub fn ci(options: &Options) -> u8 {
             let passed = match check.kind {
                 Kind::Gate => run_gate(&root),
                 Kind::Vendored => run_vendored(&root),
-                Kind::Remaining => run_remaining(&root, &plan.git.merge_base),
                 Kind::Cargo => {
                     run_cargo(&root, check, jobs, in_ci, options.json).unwrap_or_else(|error| {
                         eprintln!("xtask ci: {error}");

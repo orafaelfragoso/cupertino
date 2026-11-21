@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use cupertino_layers::{
-    check_workspace_with, clippy_toml, Findings, Layer, Policy, DISALLOWED_METHODS, POLICY,
+    check_workspace_with, clippy_toml, Findings, Layer, DISALLOWED_METHODS, POLICY,
 };
 
 struct Krate {
@@ -27,7 +27,6 @@ pub struct Fixture {
     base: PathBuf,
     root: PathBuf,
     crates: Vec<Krate>,
-    remaining: Option<String>,
     cargo_config: Option<String>,
 }
 
@@ -42,7 +41,6 @@ impl Fixture {
             root: base.join("ws"),
             base,
             crates: Vec::new(),
-            remaining: None,
             cargo_config: None,
         }
     }
@@ -114,12 +112,6 @@ impl Fixture {
     /// The workspace's `.cargo/config.toml`.
     pub fn cargo_config(mut self, content: &str) -> Fixture {
         self.cargo_config = Some(content.to_owned());
-        self
-    }
-
-    /// The remaining-work file of the workspace, lines without header.
-    pub fn remaining(mut self, lines: &[&str]) -> Fixture {
-        self.remaining = Some(lines.iter().map(|l| format!("{l}\n")).collect());
         self
     }
 
@@ -209,9 +201,6 @@ impl Fixture {
         if let Some(config) = &self.cargo_config {
             write(self.root.join(".cargo/config.toml"), config);
         }
-        if let Some(lines) = &self.remaining {
-            write(self.root.join(cupertino_layers::REMAINING), lines);
-        }
         let out = cargo()
             .args(["generate-lockfile", "--offline"])
             .current_dir(&self.root)
@@ -226,14 +215,10 @@ impl Fixture {
     }
 
     pub fn check(&self) -> Findings {
-        self.check_with(&POLICY)
+        check_workspace_with(&self.root, &cargo, &POLICY).expect("the fixture is a workspace")
     }
 
-    pub fn check_with(&self, policy: &Policy) -> Findings {
-        check_workspace_with(&self.root, &cargo, policy).expect("the fixture is a workspace")
-    }
-
-    /// The remaining-work lines of every problem of the rules, sorted.
+    /// The lines of every problem of the rules, sorted.
     pub fn lines(&self) -> Vec<String> {
         self.check()
             .problems

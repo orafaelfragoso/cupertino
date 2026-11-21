@@ -8,7 +8,6 @@ Checks that the workspace crates follow the layer rules below. A crate's layer i
 ```sh
 cargo run -p cupertino-layers                     # the check, from anywhere inside the repository
 cargo run -p cupertino-layers -- --graph          # DOT graph of the declared layers
-cargo run -p cupertino-layers -- --write-remaining  # write remaining.txt from the problems found
 cargo run -p cupertino-layers -- --write-clippy [CRATE...]  # write the clippy.toml of these shell and apps crates
 ```
 
@@ -17,10 +16,10 @@ reads the sources of the pure layers and the `clippy.toml` of the `shell` and `a
 checks from the library and reports them in the `cupertino` command's forms. The check's last line is a summary:
 
 ```
-91 crates, 390 internal dependencies, 234 listed, 0 problems
+74 crates, 381 internal dependencies, 0 problems
 ```
 
-It exits with failure on any problem. It is one of the checks to run before finishing a change; `cargo xtask ci` runs
+Every layer is closed: it exits with failure on any problem, and no list excuses one. It is one of the checks to run before finishing a change; `cargo xtask ci` runs
 it in the profiles that have `layers = true`.
 
 ## The rules
@@ -94,42 +93,9 @@ The further rules, each a check with its own problem kind:
   (`default` aside), except `TEST_FEATURE`, so a feature added to a program is never left out of the packages. A
   workspace without that file has no alias to check.
 
-`test_feature` and `program_features` problems are never listed in the remaining-work file: they fail the check until
-they are fixed.
-
 Test placement (no test code in a crate's `src/`) is checked by the gate of `cargo xtask ci`, not here.
 
 A crate without a declared layer, or with a layer that has no row in `RULES`, stops the check.
-
-## The remaining-work list
-
-Today's crates still declare today's layers and break some of the rules. `remaining.txt` lists each such problem on
-one line, `<layer> <rule> <crate> …` (the layer the crate declares), sorted, under a two-line `#` header:
-
-```
-shell facade cupertino-dock -> cupertino-ui-wayland normal
-platform external_crate cupertino-seat -> smithay normal
-apps disallowed_methods cupertino-files clippy.toml
-```
-
-A line names only what the problem is about (crates, kind of dependency, file and item; never a line number or a
-chain), so it changes only when the problem does. The check fails on a problem the file does not list
-(`forbidden_edge`, `reaches_up`, …) and on a line that is no longer a problem (`stale_remaining`). After fixing a problem, or after a change that moves a crate to another layer, write it again:
-
-```sh
-cargo run -q -p cupertino-layers -- --write-remaining
-```
-
-`ENFORCED` lists the closed layers. Their problems are never excused by the file, `--write-remaining` leaves them out
-and fails while they remain, and a line of an enforced layer in the file is a problem (`enforced_remaining`). It holds
-`foundation`, `graphics`, `models`, `system`, `platform`, `protocol`, `transport`, `render`, `ui`, `shellkit`, `core`,
-`services`, `shell` and `testing`.
-
-`cargo xtask ci`, in the profiles that run this check, also compares the file with its version at the merge base
-(`cargo xtask remaining [<ref>]` runs only that comparison) and reports a line the base does not hold, unless the same
-change removes a line with the same `<layer> <rule> <crate>` (a renamed dependency or file) or the line's rule is one
-this check at the base does not have yet. During the layered refactor such a line passes; once `GROWTH_FAILS` in
-`xtask/src/remaining.rs` is set, it fails, so `--write-remaining` cannot list a new problem of an existing rule.
 
 ## The clippy.toml of shell and apps crates
 
@@ -146,9 +112,8 @@ and bus calls go through the toolkit's task API and its async bus API instead. B
 `proxy` macro are not on the list; their constructors and calls go through the listed `zbus::blocking` items.
 
 A `shell` or `apps` crate whose `clippy.toml`, next to its manifest, is missing or differs from the list is a problem
-of the rules like the others, with the line `<layer> disallowed_methods <crate> clippy.toml` in the remaining-work
-list. Once a crate's banned calls are gone, `--write-clippy <crate>` writes its file and `--write-remaining` drops its
-line; without crate names, `--write-clippy` writes the file of every `shell` and `apps` crate. A name that is not a
+of the rules like the others (`<layer> disallowed_methods <crate> clippy.toml`). Once a crate's banned calls are gone,
+`--write-clippy <crate>` writes its file; without crate names, `--write-clippy` writes the file of every `shell` and `apps` crate. A name that is not a
 `shell` or `apps` crate fails and writes nothing.
 
 ## The graph
@@ -171,12 +136,11 @@ branches that each add a crate do not conflict on them.
 `allows_edge(rules, edge)`, `Edge`, `edges(layers, deps)`, `check(rules, edges, facades)`,
 `external_problems(layers, deps, externals)`, `reaches_up(edges)`, `crate_paths(deps, start, targets)`, `matches`,
 `is_licence`, `Facade`, `External`, `Problem` (with `kind()`, a stable snake_case name, `from()`, `to()`, `layer()` and
-`line()`, its line in the remaining-work file), `dot(…)`, `clippy_toml(methods)`, and the constants above.
+`line()`, `<layer> <kind> <crate> …`, which names only what the problem is about and orders the problems), `dot(…)`, `clippy_toml(methods)`, and the constants above.
 
 The whole check of a checkout is `check_workspace(root)`, or `check_workspace_with(root, cargo, policy)` with the
 command that runs Cargo (its environment is the caller's) and a `Policy` (`POLICY` is this repository's). It returns
-`Findings`: the workspace root, each crate's layer, the edges, every problem of the rules, the lines of the
-remaining-work file, the problems of those lines and of the snapshots, with `unlisted()`, `all_problems()`,
-`is_clean()`, `summary()`, `dot()`, `by_layer()`, `remaining_file()`, `write_remaining()` and `write_clippy(crates)`. A Cargo
+`Findings`: the workspace root, each crate's layer, the edges, every problem of the rules and the problem of
+the graph snapshot, with `all_problems()`, `is_clean()`, `summary()`, `dot()`, `by_layer()` and `write_clippy(crates)`. A Cargo
 that cannot start, a `cargo metadata` that fails and a crate without a layer are a `LayersError` (`Cargo`, `Metadata`,
 `Manifest`), never a panic. The binary is this call on the working directory.

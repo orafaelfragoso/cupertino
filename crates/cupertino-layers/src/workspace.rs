@@ -1,6 +1,6 @@
 //! Every check on a checkout: `cargo metadata` read into layers, dependencies, features and licences, the sources of
-//! the pure layers, the `clippy.toml` files and the programs' alias read, then every rule checked and compared with the
-//! remaining-work file and the graph snapshot.
+//! the pure layers, the `clippy.toml` files and the programs' alias read, then every rule checked and the graph snapshot
+//! compared.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -12,16 +12,14 @@ use serde_json::Value;
 use crate::{
     check, clippy_toml, crate_paths, dot, edges, external_problems, is_licence, matches, sources,
     without_counts, Dep, Edge, External, Facade, Kind, Layer, Problem, Rules, DISALLOWED_METHODS,
-    ENFORCED, EXTERNAL_CRATES, FACADES, GRAPH_SNAPSHOT, IMPURE, PROGRAMS_ALIAS, PURE_LAYERS,
-    REMAINING, RULES, TEST_FEATURE, THREADLESS_LAYERS, WINDOW_SYSTEM,
+    EXTERNAL_CRATES, FACADES, GRAPH_SNAPSHOT, IMPURE, PROGRAMS_ALIAS, PURE_LAYERS, RULES,
+    TEST_FEATURE, THREADLESS_LAYERS, WINDOW_SYSTEM,
 };
 
 /// What a workspace is checked against.
 #[derive(Clone, Copy, Debug)]
 pub struct Policy {
     pub rules: Rules,
-    /// The closed layers, whose problems the remaining-work file may not list.
-    pub enforced: &'static [Layer],
     pub facades: &'static [Facade],
     pub window_system: &'static [(&'static str, &'static [&'static str])],
     pub external_crates: &'static [External],
@@ -41,7 +39,6 @@ pub struct Policy {
 /// The rules of this repository.
 pub const POLICY: Policy = Policy {
     rules: RULES,
-    enforced: ENFORCED,
     facades: FACADES,
     window_system: WINDOW_SYSTEM,
     external_crates: EXTERNAL_CRATES,
@@ -58,11 +55,6 @@ const CARGO_CONFIG: &str = ".cargo/config.toml";
 
 /// The layers whose crates hold the generated `clippy.toml`.
 const CLIPPY_LAYERS: &[Layer] = &[Layer::Shell, Layer::Apps];
-
-const REMAINING_HEADER: &str = "\
-# The target layer rules that crates still break, one problem per line: <layer> <rule> <crate> ...
-# Written by `cargo run -q -p cupertino-layers -- --write-remaining`; never edit by hand. Lines only leave.
-";
 
 /// Why a workspace could not be checked.
 #[derive(Debug)]
@@ -99,12 +91,8 @@ pub struct Findings {
     pub layers: BTreeMap<String, Layer>,
     /// The dependencies between workspace crates, one per kind.
     pub edges: Vec<Edge>,
-    /// Every problem of the rules, sorted by its line, listed or not.
+    /// Every problem of the rules, sorted by its line.
     pub problems: Vec<Problem>,
-    /// The lines of the committed remaining-work file (none when the workspace has none).
-    pub remaining: Vec<String>,
-    /// [`Problem::StaleRemaining`] and [`Problem::EnforcedRemaining`] for lines of the file.
-    pub listing: Vec<Problem>,
     /// [`Problem::StaleGraph`] when the workspace has a committed graph snapshot that no longer matches it.
     pub snapshot: Vec<Problem>,
     /// The `clippy.toml` of each `shell` and `apps` crate, by crate, as absolute paths.
@@ -116,19 +104,9 @@ impl Findings {
         self.all_problems().next().is_none()
     }
 
-    /// The problems of the rules that the remaining-work file does not excuse: those it does not list, and every one
-    /// of an enforced layer.
-    pub fn unlisted(&self) -> impl Iterator<Item = &Problem> {
-        let listed: BTreeSet<&str> = self.remaining.iter().map(String::as_str).collect();
-        self.problems.iter().filter(move |p| {
-            p.layer().is_some_and(|l| self.policy.enforced.contains(&l))
-                || p.line().is_none_or(|line| !listed.contains(line.as_str()))
-        })
-    }
-
-    /// Every problem: [`Findings::unlisted`], [`Findings::listing`], then [`Findings::snapshot`].
+    /// Every problem: [`Findings::problems`], then [`Findings::snapshot`].
     pub fn all_problems(&self) -> impl Iterator<Item = &Problem> {
-        self.unlisted().chain(&self.listing).chain(&self.snapshot)
+        self.problems.iter().chain(&self.snapshot)
     }
 
     /// The problems of a run that prints the graph: every one but an out-of-date snapshot, which that run makes again.
@@ -137,21 +115,12 @@ impl Findings {
             .filter(|p| !matches!(p, Problem::StaleGraph(_)))
     }
 
-    /// The problems of a run that writes the remaining-work file and so makes its lines again: those of enforced
-    /// layers, which it cannot list.
-    pub fn problems_writing_the_remaining_work(&self) -> impl Iterator<Item = &Problem> {
-        self.problems
-            .iter()
-            .filter(|p| p.layer().is_some_and(|l| self.policy.enforced.contains(&l)))
-    }
-
-    /// `91 crates, 390 internal dependencies, 120 listed, 0 problems`
+    /// `91 crates, 390 internal dependencies, 0 problems`
     pub fn summary(&self) -> String {
         format!(
-            "{} crates, {} internal dependencies, {} listed, {} problems",
+            "{} crates, {} internal dependencies, {} problems",
             self.layers.len(),
             self.edges.len(),
-            self.remaining.len(),
             self.all_problems().count()
         )
     }
@@ -159,27 +128,6 @@ impl Findings {
     /// The DOT graph of the layers, as `cupertino-layers --graph` prints it.
     pub fn dot(&self) -> String {
         dot("layers", self.policy.rules, &self.layers, &self.edges)
-    }
-
-    /// The remaining-work file for the problems found: every line of a layer that is not enforced, sorted.
-    pub fn remaining_file(&self) -> String {
-        let lines: BTreeSet<String> = self
-            .problems
-            .iter()
-            .filter(|p| !p.layer().is_some_and(|l| self.policy.enforced.contains(&l)))
-            .filter_map(Problem::line)
-            .collect();
-        let mut s = REMAINING_HEADER.to_owned();
-        for line in lines {
-            s.push_str(&line);
-            s.push('\n');
-        }
-        s
-    }
-
-    /// Writes [`Findings::remaining_file`] to the workspace's remaining-work file.
-    pub fn write_remaining(&self) -> std::io::Result<()> {
-        std::fs::write(self.root.join(REMAINING), self.remaining_file())
     }
 
     /// Writes the `clippy.toml` of the `shell` and `apps` crates in `crates`, or of all of them when `crates` is
@@ -335,35 +283,12 @@ pub fn check_workspace_with(
     }
     let problems: Vec<Problem> = sorted.into_values().collect();
 
-    let remaining: Vec<String> = std::fs::read_to_string(workspace_root.join(REMAINING))
-        .unwrap_or_default()
-        .lines()
-        .filter(|l| !l.trim().is_empty() && !l.starts_with('#'))
-        .map(str::to_owned)
-        .collect();
-    let lines: BTreeSet<String> = problems.iter().filter_map(Problem::line).collect();
-    let listing = remaining
-        .iter()
-        .filter_map(|line| {
-            let layer = line.split(' ').next().and_then(Layer::from_name);
-            if layer.is_some_and(|l| policy.enforced.contains(&l)) {
-                Some(Problem::EnforcedRemaining(line.clone()))
-            } else if !lines.contains(line) {
-                Some(Problem::StaleRemaining(line.clone()))
-            } else {
-                None
-            }
-        })
-        .collect();
-
     let mut findings = Findings {
         policy: *policy,
         root: workspace_root,
         layers: crates.layers,
         edges,
         problems,
-        remaining,
-        listing,
         snapshot: Vec::new(),
         clippy_files,
     };

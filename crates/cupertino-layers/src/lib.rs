@@ -6,10 +6,8 @@
 //! ([`EXTERNAL_CRATES`]), every crate declares a licence, only dev-dependencies turn on the toolkit's test feature
 //! ([`TEST_FEATURE`]) and the alias that builds the programs names every other feature ([`PROGRAMS_ALIAS`]).
 //!
-//! Problems that today's crates still have are listed in the committed remaining-work file ([`REMAINING`]): the check
-//! fails on a problem the file does not list and on a line that is no longer a problem, and the lines of the layers in
-//! [`ENFORCED`] must be absent. [`check_workspace`] runs every check on a checkout, as the `cupertino-layers` binary
-//! and `cupertino dev layers` do.
+//! Every layer is closed: any problem fails the check. [`check_workspace`] runs every check on a checkout, as the
+//! `cupertino-layers` binary and `cupertino dev layers` do.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -22,9 +20,6 @@ mod workspace;
 pub use clippy::{clippy_toml, DISALLOWED_METHODS};
 pub use graph::{crate_paths, dot, reaches_up, without_counts, GRAPH_SNAPSHOT};
 pub use workspace::{check_workspace, check_workspace_with, Findings, LayersError, Policy, POLICY};
-
-/// The committed remaining-work file, relative to the workspace root.
-pub const REMAINING: &str = "crates/cupertino-layers/remaining.txt";
 
 /// The layers, from the bottom. The order is the height: a crate reaches up when it reaches a later layer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -185,24 +180,6 @@ pub const RULES: Rules = &[
             Shellkit, Core, Services, Shell, Apps, Tools, Testing,
         ],
     ),
-];
-
-/// The closed layers: none of their problems may be listed in the remaining-work file.
-pub const ENFORCED: &[Layer] = &[
-    Layer::Foundation,
-    Layer::Graphics,
-    Layer::Models,
-    Layer::System,
-    Layer::Platform,
-    Layer::Protocol,
-    Layer::Transport,
-    Layer::Render,
-    Layer::Ui,
-    Layer::Shellkit,
-    Layer::Core,
-    Layer::Services,
-    Layer::Shell,
-    Layer::Testing,
 ];
 
 /// Allowed dependencies among the `core` server crates (D25): `cupertino-server-backend` and
@@ -494,10 +471,6 @@ pub enum Problem {
         layer: Layer,
         licence: String,
     },
-    /// A line of the remaining-work file that is no longer a problem.
-    StaleRemaining(String),
-    /// A line of the remaining-work file for a layer in [`ENFORCED`].
-    EnforcedRemaining(String),
     /// The committed DOT snapshot of the layers, at this path relative to the workspace root, no longer matches the
     /// workspace.
     StaleGraph(String),
@@ -534,8 +507,6 @@ impl Problem {
             Problem::StartsThread { .. } => "starts_thread",
             Problem::HostingApi { .. } => "hosting_api",
             Problem::UndeclaredLicence { .. } => "undeclared_licence",
-            Problem::StaleRemaining(_) => "stale_remaining",
-            Problem::EnforcedRemaining(_) => "enforced_remaining",
             Problem::StaleGraph(_) => "stale_graph",
             Problem::DisallowedMethods { .. } => "disallowed_methods",
             Problem::TestFeature { .. } => "test_feature",
@@ -559,10 +530,7 @@ impl Problem {
             | Problem::UndeclaredLicence { krate, .. }
             | Problem::DisallowedMethods { krate, .. }
             | Problem::TestFeature { krate, .. } => krate,
-            Problem::StaleRemaining(_)
-            | Problem::EnforcedRemaining(_)
-            | Problem::StaleGraph(_)
-            | Problem::ProgramFeatures { .. } => "cupertino-layers",
+            Problem::StaleGraph(_) | Problem::ProgramFeatures { .. } => "cupertino-layers",
         }
     }
 
@@ -598,8 +566,8 @@ impl Problem {
         }
     }
 
-    /// The problem's line in the remaining-work file, `<layer> <kind> <crate> …`, for a problem of the rules. It
-    /// names only what the problem is about, so it changes only when the problem does.
+    /// The problem's line, `<layer> <kind> <crate> …`, for a problem of the rules: the key problems are sorted and
+    /// told apart by. It names only what the problem is about, so it changes only when the problem does.
     pub fn line(&self) -> Option<String> {
         let layer = self.layer()?;
         let kind = self.kind();
@@ -627,8 +595,6 @@ impl Problem {
         Some(format!("{layer} {kind} {rest}"))
     }
 }
-
-const WRITE_REMAINING: &str = "cargo run -q -p cupertino-layers -- --write-remaining";
 
 impl fmt::Display for Problem {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -695,14 +661,6 @@ impl fmt::Display for Problem {
             Problem::UndeclaredLicence { krate, licence, .. } => {
                 write!(f, "{krate} declares no licence expression (`{licence}`)")
             }
-            Problem::StaleRemaining(line) => write!(
-                f,
-                "{REMAINING} lists `{line}`, which is no longer a problem: {WRITE_REMAINING}"
-            ),
-            Problem::EnforcedRemaining(line) => write!(
-                f,
-                "{REMAINING} lists `{line}` of an enforced layer: fix it instead"
-            ),
             Problem::StaleGraph(path) => write!(
                 f,
                 "{path} is out of date: cargo run -q -p cupertino-layers -- --graph > {path}"

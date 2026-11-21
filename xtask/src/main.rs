@@ -1,13 +1,11 @@
 //! Repository tasks. `cargo xtask ci` works out what a change touches and runs the checks the chosen profile asks for
-//! on it; `cargo xtask vendored` runs only its check of the vendored trees' patch series, and `cargo xtask remaining`
-//! only its check that the layers check's remaining-work list did not grow.
+//! on it; `cargo xtask vendored` runs only its check of the vendored trees' patch series.
 
 mod config;
 mod gate;
 mod glob;
 mod licences;
 mod plan;
-mod remaining;
 mod run;
 mod vendored;
 
@@ -19,7 +17,6 @@ const USAGE: &str = "\
 usage: cargo xtask ci [--scope changed|affected|all] [--base <git-ref>] [--profile agent|integration|pr|full]
                       [--format text|json] [--dry-run]
        cargo xtask vendored
-       cargo xtask remaining [<git-ref>]
 
 Plans the checks a change needs from .config/validation.toml and runs them.
   --scope    changed: the packages whose files changed; affected: those and every package depending on them;
@@ -30,9 +27,7 @@ Plans the checks a change needs from .config/validation.toml and runs them.
   --format   text (a summary) or json (the report); the report is also written to target/xtask/ci-latest.json.
   --dry-run  print the plan and its commands and run nothing.
 `vendored` reverses each vendored tree's patches in memory and compares the result with its UPSTREAM.sha256; `ci`
-runs it in the profiles with the gate and whenever a vendored tree changed. The profiles with the layers check also
-check that crates/cupertino-layers/remaining.txt holds no line its version at the merge base does not; `remaining`
-runs only that check, against the merge base of the ref (default origin/main) with HEAD.
+runs it in the profiles with the gate and whenever a vendored tree changed.
 Exit status: 0 every check passed, 1 a check failed, 2 the plan could not be made.";
 
 /// Options of `cargo xtask ci`.
@@ -57,10 +52,10 @@ fn parse(args: &[String]) -> Result<Options, String> {
         Some("ci") => {}
         Some(other) => {
             return Err(format!(
-                "unknown command `{other}`; the commands are `ci`, `vendored` and `remaining`"
+                "unknown command `{other}`; the commands are `ci` and `vendored`"
             ))
         }
-        None => return Err("a command is required: `ci`, `vendored` or `remaining`".to_owned()),
+        None => return Err("a command is required: `ci` or `vendored`".to_owned()),
     }
     while let Some(arg) = args.next() {
         let (flag, inline) = match arg.split_once('=') {
@@ -120,29 +115,6 @@ fn main() -> ExitCode {
             }
         };
         return if run::run_vendored(&root) {
-            ExitCode::SUCCESS
-        } else {
-            ExitCode::FAILURE
-        };
-    }
-    if args.first().map(String::as_str) == Some("remaining") {
-        if args.len() > 2 {
-            eprintln!("xtask: `remaining` takes at most a git ref\n\n{USAGE}");
-            return ExitCode::from(2);
-        }
-        let base = args.get(1).map_or("origin/main", String::as_str);
-        let merge_base = plan::repository_root().and_then(|root| {
-            let merge_base = plan::output(&root, "git", &["merge-base", base, "HEAD"])?;
-            Ok((root, merge_base.trim().to_owned()))
-        });
-        let (root, merge_base) = match merge_base {
-            Ok(found) => found,
-            Err(error) => {
-                eprintln!("xtask: {error}");
-                return ExitCode::from(2);
-            }
-        };
-        return if run::run_remaining(&root, &merge_base) {
             ExitCode::SUCCESS
         } else {
             ExitCode::FAILURE

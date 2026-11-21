@@ -69,8 +69,8 @@ sidebar row (approximate). The desktop entry is `data/applications/cupertino-set
   or removed is heard from udev's announcements (`src/hotplug.rs`). The readings without a change signal (the sound
   server's, the display list, the interface addresses, a new notification's application) are read again every
   second (approximate) while their pane shows, and the Wi-Fi pane scans on open and every 10 s (approximate).
-- Displays sets only the size a display looks like: modes, refresh rate, rotation and arrangement are shown but not
-  set, and the choice applies at once, without a confirmation that reverts it.
+- Displays sets the size a display looks like, its refresh rate and its place in the arrangement; its modes and
+  rotation are shown but not set, and a choice applies at once, without a confirmation that reverts it.
 - The pane open and close hooks (scan, discovery, agent registration and unregistration) run in the window process,
   as tasks of the I/O pool.
 - `ShowPane` switches the pane of the running window; `ShowPaneWithToken` also raises it. On a compositor without the

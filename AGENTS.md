@@ -7,7 +7,7 @@ Crate details are in each crate's README; project docs in `docs/`.
 - Licence `GPL-3.0-or-later`; `cupertino-wayland-client` and its normal dependency closure are `MPL-2.0`. Contributions need a signed CLA.
 - A constant is a named design value with a comment saying what it controls.
 - Shader and physics math changes only with a maintainer's agreement.
-- Layers: a crate depends only on the layers its row of `docs/src/architecture.md` allows, plus the further rules there (purity, facades, external crates); `cargo run -p cupertino-layers` checks them. Violations not fixed yet are listed in `crates/cupertino-layers/remaining.txt`: a new one fails, a fixed one must leave the list (`-- --write-remaining`).
+- Layers: a crate depends only on the layers its row of `docs/src/architecture.md` allows, plus the further rules there (purity, facades, external crates); `cargo run -p cupertino-layers` checks them and fails on any violation.
 - Names: crates `cupertino-*`, files kebab-case, user-visible terms the project's own (overview, workspaces, launcher, control panel, file manager).
 - One purpose per change. No drive-by renames or reformatting, no new documents unless asked.
 - No scripts (shell, Python): use cargo, nextest, the workspace's programs and examples. Repository automation is `cargo xtask ci`, and `cargo xtask vendored` for the vendored trees.

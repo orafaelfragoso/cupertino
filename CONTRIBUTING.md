@@ -45,7 +45,7 @@ A broken link or anchor in the book fails both commands. CI installs the same tw
 
 1. **One purpose.** A bug fix, a feature or a refactor, not a mix.
 2. **A test.** Model crates are pure logic and cheap to test: put the behaviour there and test it without a display, in the crate's `tests/`.
-3. **Layers respected.** A crate depends only on the layers its row of the [layer table](docs/src/architecture.md#crate-layers) allows and follows the further rules there; only `core` crates depend on Smithay. `cargo run -p cupertino-layers` fails on any problem that `crates/cupertino-layers/remaining.txt` does not list, and on a line there that is no longer a problem.
+3. **Layers respected.** A crate depends only on the layers its row of the [layer table](docs/src/architecture.md#crate-layers) allows and follows the further rules there; only `core` crates depend on Smithay. `cargo run -p cupertino-layers` fails on any problem.
 4. **Plain design values.** A constant that shapes the look (a duration, a radius, a spring) is a named value in one place, with a comment that says what it controls. Do not change the shader or physics math without a maintainer's agreement.
 5. **Names.** Crates are `cupertino-*`, files are kebab-case, and user-visible text uses the project's own terms (overview, workspaces, launcher, control panel, file manager).
 6. **Small diffs.** No drive-by renames or reformatting outside the change.

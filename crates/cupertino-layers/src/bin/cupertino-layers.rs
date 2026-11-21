@@ -1,10 +1,8 @@
-//! Reads `cargo metadata` for the workspace and reports every problem of the layer rules that the remaining-work file
-//! does not list.
+//! Reads `cargo metadata` for the workspace and reports every problem of the layer rules.
 //!
 //! ```text
 //! cupertino-layers                     (run from anywhere inside the workspace)
 //! cupertino-layers --graph             DOT graph of the layers on stdout
-//! cupertino-layers --write-remaining   write the remaining-work file from the problems found
 //! cupertino-layers --write-clippy [CRATE…]
 //!                                      write the clippy.toml of these shell and apps crates, or of all of them
 //! ```
@@ -16,7 +14,6 @@ use std::process::ExitCode;
 enum Mode {
     Check,
     Graph,
-    WriteRemaining,
     WriteClippy(Vec<String>),
 }
 
@@ -25,14 +22,11 @@ fn main() -> ExitCode {
     let mode = match args.iter().map(String::as_str).collect::<Vec<_>>()[..] {
         [] => Mode::Check,
         ["--graph"] => Mode::Graph,
-        ["--write-remaining"] => Mode::WriteRemaining,
         ["--write-clippy", ref crates @ ..] => {
             Mode::WriteClippy(crates.iter().map(|c| (*c).to_owned()).collect())
         }
         _ => {
-            eprintln!(
-                "usage: cupertino-layers [--graph | --write-remaining | --write-clippy [CRATE...]]"
-            );
+            eprintln!("usage: cupertino-layers [--graph | --write-clippy [CRATE...]]");
             return ExitCode::from(2);
         }
     };
@@ -43,19 +37,6 @@ fn main() -> ExitCode {
         Mode::Check => findings.all_problems().collect(),
         // printing the graph is how the snapshot is made again, so an out-of-date one does not fail that run
         Mode::Graph => findings.problems_printing_the_graph().collect(),
-        Mode::WriteRemaining => {
-            if let Err(e) = findings.write_remaining() {
-                eprintln!("cannot write {}: {e}", cupertino_layers::REMAINING);
-                return ExitCode::FAILURE;
-            }
-            let lines = findings
-                .remaining_file()
-                .lines()
-                .filter(|l| !l.starts_with('#'))
-                .count();
-            println!("{}: {lines} lines", cupertino_layers::REMAINING);
-            findings.problems_writing_the_remaining_work().collect()
-        }
         Mode::WriteClippy(ref crates) => {
             let crates: Vec<&str> = crates.iter().map(String::as_str).collect();
             match findings.write_clippy(&crates) {
@@ -78,7 +59,7 @@ fn main() -> ExitCode {
     match mode {
         Mode::Check => println!("{}", findings.summary()),
         Mode::Graph => print!("{}", findings.dot()),
-        Mode::WriteRemaining | Mode::WriteClippy(_) => {}
+        Mode::WriteClippy(_) => {}
     }
     if problems.is_empty() {
         ExitCode::SUCCESS

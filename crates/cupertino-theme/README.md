@@ -279,7 +279,7 @@ is glass of that style (`GlassParams` of `glass`); a `Surface::…` is the theme
 | Window content pane | `crates/cupertino-ui-controls/src/shell.rs` | `Surface::WindowBackground` | kept | kept |
 | Form pane | `crates/cupertino-ui-controls/src/form.rs` | `Surface::WindowBackground` | kept | kept |
 | Scrolled navigation bar's band | `crates/cupertino-ui-controls/src/navigation.rs` | `Surface::ToolbarBand` | opaque | opaque |
-| Menu bar strip | `crates/cupertino-menubar/src/app.rs` | `set_material("MenuBar")` | kept | kept |
+| Menu bar strip | `crates/cupertino-menubar/src/view.rs` | `Surface::MenuBar` | kept | kept |
 | Menu bar menus and prompt | `crates/cupertino-menubar/src/view.rs` | `Surface::Menu` | kept | kept |
 | Dock bar | `crates/cupertino-dock/src/view/bar.rs` | `Surface::DockBar` | kept | kept |
 | Dock stack panel (the grid and its pointer, dense glass) | `crates/cupertino-dock/src/view/stack.rs` | `cx.glass(panel_glass(` | kept | kept |
@@ -293,9 +293,10 @@ is glass of that style (`GlassParams` of `glass`); a `Surface::…` is the theme
 | Volume and brightness overlay | `crates/cupertino-osd/src/view.rs` | `Surface::Hud` | opaque | kept |
 | Screenshot toolbar | `crates/cupertino-screenshot/src/view.rs` | `Surface::Hud` | opaque | kept |
 | Quick preview panel | `crates/cupertino-files/src/kit/peek.rs` | `Glass::dense()` | kept | kept |
-| Log out, restart, shut down, power button, interrupt and consent panels | `crates/cupertino-login/src/view/widgets.rs` | `Glass::regular()` | kept | kept |
-| Authentication and keyring prompts | `crates/cupertino-polkit-agent/src/render.rs` | `then_some(PANEL_MATERIAL)` | opaque | opaque |
-| Portal prompts (sharing, open with, consent) | `crates/cupertino-portal/src/dialog.rs` | `PANEL_WINDOW_BACKGROUND` | opaque | kept |
+| Log out, restart, shut down, power button and interrupt panels | `crates/cupertino-shell-agent/src/view/widgets.rs` | `Glass::regular()` | kept | kept |
+| Authentication, keyring and consent prompts | `crates/cupertino-prompts/src/view/widgets.rs` | `Glass::regular()` | kept | kept |
+| Screen-sharing chooser | `crates/cupertino-screenshot/src/share_picker.rs` | `PANEL_WINDOW_BACKGROUND` | opaque | kept |
+| The portal's file and app choosers (`dialogs`) | `crates/cupertino-shell-dialogs/src/view.rs` | `PANEL_WINDOW_BACKGROUND` | opaque | kept |
 | Input-source switcher | `crates/cupertino-osd/src/panels_view.rs` | `Glass::regular()` | kept | kept |
 | Accent picker | `crates/cupertino-osd/src/panels_view.rs` | `Surface::Menu` | kept | kept |
 

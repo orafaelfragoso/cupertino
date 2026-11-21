@@ -102,7 +102,7 @@ fn answer(d: FileDialog, answer: &async_channel::Receiver<FileAnswer>) -> FileAn
 fn globs_and_types_match_names_without_regard_to_case() {
     assert!(glob("*.TXT", "notes.txt"));
     assert!(glob("[a-c]?.md", "B1.md"));
-    assert!(!glob("[!a-c]*", "apple"));
+    assert!(!glob("[!a-c]*", "basket"));
     assert!(glob("[unclosed", "[unclosed"));
     let images = Filter {
         name: "Images".into(),

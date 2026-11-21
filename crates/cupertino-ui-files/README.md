@@ -448,7 +448,7 @@ desktop's `desktop-files` and `trash-sizes` threads are W6.10's; the chooser's `
 ### The file chooser's model
 
 `filepicker` is the model of a file chooser, with no drawing, for every window that lets the user pick a folder or a
-file: the Settings wallpaper pane and the open and save panel. Its rows are the family's `Entry`, so a view of the
+file: the Settings wallpaper pane and the open and save panel of the `dialogs` component of `cupertino-shell`. Its rows are the family's `Entry`, so a view of the
 family draws them as it draws a folder's items.
 
 - The picker never reads the filesystem itself, so a folder on a hung mount cannot freeze a window. `Picker::new(start, mode)`

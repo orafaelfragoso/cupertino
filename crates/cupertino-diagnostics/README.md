@@ -37,6 +37,7 @@ outside one.
 | `portals.service` | `xdg-desktop-portal.service` (user) is active; in a session only |
 | `services.login`, `services.network`, `services.power`, `services.bluetooth` | `cupertino-login`, `cupertino-netd`, `cupertino-powerd`, `cupertino-btd` (system): `ok` active, `fail` failed, `warn` inactive or not installed, `skip` when systemd cannot be asked. `cupertino-netd` and `cupertino-btd` are also `ok` in any other state (inactive with any unit file state, failed or not installed) while `NetworkManager.service` or `bluetooth.service` is active, or enabled and inactive (BlueZ stays inactive without an adapter), which does their job |
 | `services.session_target`, `services.pipewire` | `cupertino-session.target` and `pipewire.service` (user); in a session only |
+| `shell.dev_folder` | the shell host in the development folder the system file declares (`dev_folder`): `warn` when its `cupertino-shell` is older than the installed one (`dev_builds::HOST_PROGRAM`) for a component the folder names and the session runs (all but `agent`); the fix names `cupertino shell use-installed NAME` for each; `skip` without the file or the key |
 | `crash.last` | the last end in `session.log`: `warn` when it was not a normal end or a stop by the session; facts: how many ended badly, the last bad end, and the first panic or fatal-signal line of `server.log` and `server.log.1` |
 | `crash.gpu_reset` | the GPU resets the server recorded in `session.log` (it makes a new renderer and the clients stay connected): `warn` when there was one; facts: how many, after how many it made a new renderer, and the last one's time, GPU, reason and outcome. Its `fix` says how to investigate one: the JSON form and the `server.log` lines of that time, for an AI assistant or the driver's bug tracker; not run without a `session.log` |
 | `logs.paths` | where `session.log`, `server.log` and `server.log.1` are, with their sizes, and the journal unit |
@@ -69,6 +70,14 @@ when empty. `status` is `skip`, `ok`, `warn` or `fail`; `area` is `gpu`, `sessio
 `run(&Sources, &[Area]) -> Report`. `Sources` holds the sysfs root, the file system root, the environment, a function
 that names a unit's state, a function that reads the system journal (`journal`) and one that makes the command following
 it (`journal_follow`), so every area can run against another tree and another journal. `Sources::system()` is this machine: `systemctl`, `events::journalctl` and `events::journalctl_follow`.
+
+### Development builds (`dev_builds`)
+
+`older_than_installed(dev, installed)` says whether the development folder's file was last modified before the installed
+program it starts instead of (`false` when it cannot be told). `components_run` gives the components a `shell` section
+runs (its `components` less its `off`), `may_run_from_folder` says whether the folder may give one a host of its own, and
+`HOST_PROGRAM` is the installed shell host the folder's `cupertino-shell` replaces; `cupertino dev-folder enable` and the
+`shell.dev_folder` check share them.
 
 ### Diagnostic events (`events`)
 

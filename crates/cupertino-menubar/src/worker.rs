@@ -28,7 +28,7 @@ use zbus::Connection;
 /// its menus over its own Wayland connection, which can come after the bar's first load.
 const GTK_RETRY_FIRST: Duration = Duration::from_millis(100);
 const GTK_RETRY_LAST: Duration = Duration::from_millis(1600);
-/// The changes of a GTK exporter reach the process at most this often: those that come in between are applied to its
+/// The changes of a GTK exporter reach the component at most this often: those that come in between are applied to its
 /// cache and sent as one tree, so an exporter that changes without pause cannot flood the bar.
 const GTK_CHANGE_INTERVAL: Duration = Duration::from_millis(50);
 /// A change that came while an exporter's menus loaded may or may not be in what the load read, so they are loaded
@@ -308,7 +308,7 @@ async fn run(
             Work::Request(Request::FetchDbusMenu(menu)) => menus.hold(&Holder::Bars, Some(menu)),
             Work::Request(Request::ReleaseDbusMenu(menu)) => menus.release(&Holder::Bars, &menu),
             Work::Request(Request::AboutToShow { menu, item }) => menus.show(&menu, item),
-            // hosts need no action: this process is the host
+            // hosts need no action: this component is the host
             Work::Watcher(WatcherEvent::HostRegistered) => {}
             Work::GtkLoaded {
                 props,

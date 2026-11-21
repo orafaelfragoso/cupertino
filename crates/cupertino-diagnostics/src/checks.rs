@@ -604,9 +604,9 @@ pub fn shell(sources: &Sources) -> Vec<Check> {
     vec![dev_folder(sources)]
 }
 
-/// Whether a build in the development folder is older than the installed program it starts instead of, for each
-/// process of the system file's shell list that the folder applies to, as the server decides it: named in the folder's
-/// components, with only roles that may start from the folder.
+/// Whether the build of the shell host in the development folder is older than the installed host it starts instead of,
+/// for the components of the system file's shell section that the folder applies to, as the server decides it: named in
+/// the folder's components and run by the session, other than the one that always runs in the installed host.
 fn dev_folder(sources: &Sources) -> Check {
     const ID: &str = "shell.dev_folder";
     let Ok(text) = fs::read_to_string(sources.installed(SYSTEM_CONFIG)) else {
@@ -623,20 +623,21 @@ fn dev_folder(sources: &Sources) -> Check {
             ID,
             Area::Shell,
             Status::Skip,
-            "no development folder is declared: every shell process starts its installed program",
+            "no development folder is declared: every shell component runs in the installed host",
         );
     };
-    let entries = settings.shell.and_then(|s| s.processes).unwrap_or_default();
+    let run = settings
+        .shell
+        .as_ref()
+        .and_then(dev_builds::components_run)
+        .unwrap_or_default();
+    let installed = dev_builds::HOST_PROGRAM;
     let mut builds = Vec::new();
     let mut older = Vec::new();
     for name in &folder.components {
-        let Some(installed) = entries
-            .iter()
-            .find(|e| &e.name == name && e.may_start_from_dev_folder())
-            .map(|e| e.command[0].as_str())
-        else {
+        if !run.contains(name) || !dev_builds::may_run_from_folder(name) {
             continue;
-        };
+        }
         let Some(file_name) = Path::new(installed).file_name() else {
             continue;
         };
@@ -645,9 +646,7 @@ fn dev_folder(sources: &Sources) -> Check {
         if fs::symlink_metadata(&found).is_err() {
             continue;
         }
-        // a program the system file names by a relative path is found on the server's PATH: not compared
-        let is_older = Path::new(installed).is_absolute()
-            && dev_builds::older_than_installed(&found, &sources.installed(installed));
+        let is_older = dev_builds::older_than_installed(&found, &sources.installed(installed));
         if is_older {
             older.push((name.as_str(), build, installed));
         } else {
@@ -662,7 +661,8 @@ fn dev_folder(sources: &Sources) -> Check {
             if builds.is_empty() {
                 "the development folder holds no build".to_owned()
             } else {
-                "no build in the development folder is older than its installed program".to_owned()
+                "the shell host in the development folder is not older than the installed one"
+                    .to_owned()
             },
         )
     } else {
@@ -676,12 +676,12 @@ fn dev_folder(sources: &Sources) -> Check {
             Area::Shell,
             Status::Warn,
             format!(
-                "the development folder's build of {} is older than the installed program and starts instead of it",
+                "the development folder's shell host is older than the installed one and starts instead of it for {}",
                 names.join(", ")
             ),
         )
         .fix(format!(
-            "{} removes the older build and restarts the process on its installed program",
+            "{} removes the older build and restarts the component in the installed host",
             commands.join(", ")
         ))
     };

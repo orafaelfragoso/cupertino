@@ -128,7 +128,7 @@ The registry records the state of the code; it does not grant access. It covers 
 ## Known limits
 
 - X11 programs need `xwayland-satellite` (0.8 or later) and `Xwayland` installed; without them the session serves Wayland clients only. Drag and drop between X11 and Wayland programs and per-output scales for X11 windows depend on the satellite (it uses one scale for all X11 windows), and none of it has been tested with real applications on hardware.
-- `org.cupertino.Session1` authorizes mutating calls by process identity. Settings changes require the trusted Settings executable, the supervised session agent or the server. Application quitting requires the session agent or server. Listing and restarting the supervised shell processes requires an unsandboxed process of the session's own user. This does not make arbitrary same-user code a security boundary (see `SECURITY.md`).
+- `org.cupertino.Session1` authorizes mutating calls by process identity. Settings changes require the trusted Settings executable, the session agent (the `agent` component of the shell host) or the server. Application quitting requires the session agent or server. Listing and restarting the shell host's components and the other supervised processes requires an unsandboxed process of the session's own user. This does not make arbitrary same-user code a security boundary (see `SECURITY.md`).
 - VM evidence covers the TTY backend. The full real-hardware acceptance matrix remains open; see [Roadmap](roadmap.md).
 - Applications play audio through PipeWire. The Sound pane uses the session's `org.cupertino.Audio1` mixer. The volume
   overlay and control panel still use PipeWire and the ALSA playback fallback directly.

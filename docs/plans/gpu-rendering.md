@@ -1986,7 +1986,7 @@ The keyboard HUDs are not in these scenarios; `coverage_gl` checks them as it ch
 
 ### Step 9: layers and animation in the compositor
 
-Headless server, `cupertino-controlcenter --fake-backends` on a private bus, debug builds, counted by
+Headless server, the `controlcenter` component of `cupertino-shell` on a private bus, debug builds, counted by
 `shell_processes::the_control_panel_fades_on_the_compositor_s_clock_without_a_new_buffer` (its trace with
 `--no-capture`): the buffers the card committed between its first frame and the end of each fade, against the server
 steps that showed the fade part way.

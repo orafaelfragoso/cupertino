@@ -319,7 +319,7 @@ logged in. To restart, enter an administrator's name and password." (ours, appro
 member of `wheel` with the right password, carries the action out and logs `power action authorised` on the screen; a name that is
 no administrator, a wrong password and a lock-out are the login screen's usual failures. The design passes this through the
 system's authorisation rights (`RestartShutdownAuthRefMgr`), whose dialog is not in the payload; the dialog here is ours. The
-in-session agent has none: its restart and shut down keep being refused for a non-administrator while another user is logged in.
+in-session agent (the `agent` component of `cupertino-shell`) has none: its restart and shut down keep being refused for a non-administrator while another user is logged in.
 
 ### User picker
 

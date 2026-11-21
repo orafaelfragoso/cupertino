@@ -4,7 +4,7 @@
 //! the system bus. Do not disturb, the panels that are open and the session agent's entries for the system menu
 //! (`SessionMenu`) come from the host bus, not from here (`crate::component`).
 //!
-//! One task reads every service into an [`Extras`] and sends it to the process whenever it differs from the last one
+//! One task reads every service into an [`Extras`] and sends it to the component whenever it differs from the last one
 //! sent. It reads again after any signal on the services' objects (property changes, the network list, devices), when a
 //! service's bus name changes owner (a daemon that starts later is picked up), on [`ExtrasBus::refresh`], and after
 //! every action. Properties are read from the service every time, never from a cache. A service that cannot be read
@@ -23,7 +23,7 @@
 //! when the Wi-Fi menu opens (it asks for a scan), once more when the scan has had time to end, and with every
 //! change for [`LIST_FRESH`] after that.
 //!
-//! The task's queue is bounded ([`QUEUE`]). Any peer on a bus can send this process signals, so a refresh is queued
+//! The task's queue is bounded ([`QUEUE`]). Any peer on a bus can send this component signals, so a refresh is queued
 //! only when none waits already: the read that a waiting refresh causes starts after the new signal arrived, so it
 //! sees what the signal announced. An action waits in the queue; should the queue be full (the
 //! task is stuck on a service that does not answer), the action is dropped and reported rather than queued without
@@ -105,7 +105,7 @@ enum Command {
     },
 }
 
-/// The task's queue, as the process and the signal followers fill it.
+/// The task's queue, as the component and the signal followers fill it.
 #[derive(Clone)]
 struct Queue {
     commands: async_channel::Sender<Command>,

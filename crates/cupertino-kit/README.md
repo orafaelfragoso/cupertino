@@ -233,7 +233,8 @@ alone does not show the surfaces as they look.
 
 | Surface | States |
 |---|---|
-| `files/window`, `files/sidebar` (the sidebar column of the window), `files/preview`, `files/popover`, `files/tabs`, `files/desktop` (the desktop's items over a flat fill) | `--view icon\|list\|columns\|gallery`, `--selected NAME`, `--state rename\|ring\|band` (the view's item renamed from its context menu, ringed under its open context menu, or under a band held over it), `--devices removable` (a mounted, a busy and an unmounted device in the sidebar); `files/desktop` has none |
+| `files/window`, `files/sidebar` (the sidebar column of the window), `files/preview`, `files/popover`, `files/tabs` | `--view icon\|list\|columns\|gallery`, `--selected NAME`, `--state rename\|ring\|band` (the view's item renamed from its context menu, ringed under its open context menu, or under a band held over it), `--devices removable` (a mounted, a busy and an unmounted device in the sidebar) |
+| `desktop/items` of `cupertino-shell-desktop`'s `desktop_capture` (the desktop's items over a flat fill) | `--state select\|rename\|drag` |
 | `kit/controls` (the row 167a controls sheet), `kit/icons` (with the chevrons along the reading direction and a missing symbol's placeholder) | `--direction ltr\|rtl` |
 | `kit/gallery` (every control family; its sheet shows each state) | `--state rest\|held-button\|held-switch\|held-slider\|held-segment\|disabled`, `--control-size mini\|small\|regular\|large\|extra-large`, `--compact on\|off`, `--backdrop flat\|busy`, `--direction ltr\|rtl` |
 | `kit/scroll` (an overlay scroll view: at rest, pulled past its top edge, its bar shown, fading and hidden after a wheel step) | `--direction ltr\|rtl`, `--phase rest\|stretch\|shown\|fading\|hidden` |
@@ -250,9 +251,9 @@ These stay nameable until each caller's own task replaces them; the plan's decis
 
 | Items | Callers | Each caller's task | After |
 |---|---|---|---|
-| `app::run_on`, `run_on_with`, `run_on_with_appearance`, `run_lock_screen_on_with`, `platform::WindowSystem`, `core::RuntimeOptions` | nine programs | each program's W6 task; the desktop items W6.10; `login` W6.13 | a component starts through `cupertino-kit-shell` and gets a `core::Environment` |
+| `app::run_on`, `run_on_with`, `run_on_with_appearance`, `run_lock_screen_on_with`, `platform::WindowSystem`, `core::RuntimeOptions` | `cupertino-kit-shell`'s runtime | W6.16 | a component starts through `cupertino-kit-shell` and gets a `core::Environment` |
 | `app::options` | `cupertino-ui-abi`, `notifications`, the drivers | `notifications` W6.3 | `app::environment` in a program; `kit::test` for a driver; the start-up below Kit for `cupertino-ui-abi` |
-| the renderers (`render::{CpuRenderer, CpuConfig, UiRenderer, RenderRequest, DisplayList, PaintNode, PaintNodeId, PaintResources, PaintRevision, DamageRegion}`) and glyph rasters (`text::{GlyphRaster, GlyphRasterizer, GlyphKey, GlyphFormat, RasterGlyph, TextError}`) | `controlcenter`, `dock`, `login` and `login`'s bench | W6.5, W6.8, W6.13 | `render::picture`; `kit::test` for the bench |
+| the renderers (`render::{CpuRenderer, CpuConfig, UiRenderer, RenderRequest, DisplayList, PaintNode, PaintNodeId, PaintResources, PaintRevision, DamageRegion}`) and glyph rasters (`text::{GlyphRaster, GlyphRasterizer, GlyphKey, GlyphFormat, RasterGlyph, TextError}`) | `dock`, `login` and `login`'s bench | W6.8, W6.13 | `render::picture`; `kit::test` for the bench |
 
 A step of W6.16, after the last of these tasks, puts Kit's start-up (the theme, the fonts, the options, following the
 appearance, the timing reports) in `cupertino-ui-wayland`, where `cupertino-kit`, `cupertino-kit-shell` and

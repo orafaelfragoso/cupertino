@@ -547,7 +547,7 @@ impl<M: 'static> Widget<M> for SmallToggle<M> {
     }
 }
 
-/// The pane header's switch: the toggle's behaviour, reading and look at [`SwitchShape::HEADER`]'s size.
+/// The pane header's switch: the toggle's behaviour, reading and look at the header switch's size (`SwitchShape::HEADER`).
 impl<M: 'static> Widget<M> for HeaderToggle<M> {
     type State = SwitchState;
 

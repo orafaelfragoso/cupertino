@@ -178,8 +178,9 @@ impl Session {
 /// The file whose putting in the trash and taking out has the dock draw again: the trash's tile changes its icon.
 const TRASHED: &str = "paint.txt";
 
-/// Turns after which a dock armed to panic as it paints that has not drawn yet is made to draw again: the trash's
-/// tile follows the trash at the dock's next look, and a look before the file came in may have seen it already.
+/// Turns after which a dock armed to panic as it paints that has not drawn yet is made to draw again, while it runs:
+/// the crash call is not awaited, so the dock may have drawn the trash's change before it took the call. Once it failed
+/// the trash stays as it is, and the restarted dock starts on the trash it then reads.
 const REDRAW_TURNS: u32 = 200;
 
 /// Have the dock draw again: [`TRASHED`] is put in the trash, or taken out when it is there.
@@ -267,9 +268,96 @@ fn crash_dock(rig: &mut Rig, session: &Connection, gone: &mut HashSet<String>, a
         .unwrap_or_else(|e| panic!("the crash at {at} is sent: {e}"));
 }
 
-/// Turns the server takes after a dock started again, for what it does as it starts to be over before its host's memory
-/// is measured.
-const SETTLE_TURNS: u32 = 100;
+/// The dock's part of the output: what it reserves below the usable area, which ends at `usable_bottom`.
+fn dock_area(usable_bottom: f64) -> Area {
+    let top = usable_bottom as i32;
+    Area::new(0, top, rig::OUTPUT_SIZE.0, rig::OUTPUT_SIZE.1 - top)
+}
+
+/// How far apart two pictures' channels may be and still count as the same pixel.
+const SAME_PIXEL: i32 = 8;
+
+/// How many pixels of `area` `now` shows otherwise than `before`, with the luma of each in `now`.
+fn differing(now: &image::RgbaImage, before: &image::RgbaImage, area: Area) -> Vec<i32> {
+    let mut luma = Vec::new();
+    for y in area.y..area.y + area.h {
+        for x in area.x..area.x + area.w {
+            let (p, q) = (
+                now.get_pixel(x as u32, y as u32),
+                before.get_pixel(x as u32, y as u32),
+            );
+            if (0..3).any(|c| (i32::from(p[c]) - i32::from(q[c])).abs() > SAME_PIXEL) {
+                luma.push((3 * i32::from(p[0]) + 6 * i32::from(p[1]) + i32::from(p[2])) / 10);
+            }
+        }
+    }
+    luma
+}
+
+/// The most the luma of a tile whose icon has not loaded spreads over: it shows the bar's even backdrop, where an
+/// icon has outlines and highlights.
+const BLANK_SPREAD: i32 = 16;
+
+/// Whether the dock in `area` shows another icon than in `before`: some pixels differ, and not as the even backdrop of
+/// a tile whose icon is still loading.
+fn shows_another_icon(now: &image::RgbaImage, before: &image::RgbaImage, area: Area) -> bool {
+    let luma = differing(now, before, area);
+    let spread = luma
+        .iter()
+        .max()
+        .zip(luma.iter().min())
+        .map_or(0, |(max, min)| max - min);
+    spread > BLANK_SPREAD
+}
+
+/// Whether [`TRASHED`] is in the trash.
+fn trash_full(data: &Path) -> bool {
+    data.join("Trash/files").join(TRASHED).exists()
+}
+
+/// The restarted dock's pictures with the trash empty and full, the trash left as it was. The dock draws first what it
+/// shows now, which a restarted dock held by the server shows only once its bar has all it draws at hand (the trash's
+/// state and its icon among it), then the trash's other state: drawing both has the host load both states' icons
+/// before its memory is measured, where a first instance that lives on to show the other state at a restart in the
+/// measure would add them there (heaptrack: 6.7 MiB, the full trash's icons at both sides and every scale).
+fn learn_the_trash(rig: &mut Rig, data: &Path, area: Area) -> [image::RgbaImage; 2] {
+    let was = trash_full(data);
+    let first = rig.image();
+    toggle(data);
+    let mut other = None;
+    rig.until("the restarted dock draws the trash's other icon", |rig| {
+        let now = rig.image();
+        let shows = shows_another_icon(&now, &first, area);
+        other = shows.then_some(now);
+        shows
+    });
+    toggle(data);
+    rig.until("the restarted dock draws the trash as it was", |rig| {
+        differing(&rig.image(), &first, area).is_empty()
+    });
+    let other = other.unwrap();
+    if was {
+        [other, first]
+    } else {
+        [first, other]
+    }
+}
+
+/// The restarted dock has what it reads at start: it follows the trash, there and back, which it looks at from the path
+/// its start's reading gives, and draws each state as `pictures` show it, with the icons its host keeps.
+fn follows_the_trash(rig: &mut Rig, data: &Path, area: Area, pictures: &[image::RgbaImage; 2]) {
+    let was = trash_full(data);
+    for full in [!was, was] {
+        toggle(data);
+        rig.until(
+            &format!(
+                "the restarted dock draws the trash {}",
+                if full { "full" } else { "empty" }
+            ),
+            |rig| differing(&rig.image(), &pictures[usize::from(full)], area).is_empty(),
+        );
+    }
+}
 
 #[test]
 fn the_dock_restarts_alone_holding_its_place_after_injected_panics() {
@@ -296,6 +384,8 @@ fn the_dock_restarts_alone_holding_its_place_after_injected_panics() {
         rig.turn();
     }
     let usable = rig.state.usable_area(output);
+    let area = dock_area(usable.y + usable.h);
+    let mut pictures = None;
 
     let mut colours = HashSet::new();
     let mut held = false;
@@ -303,19 +393,25 @@ fn the_dock_restarts_alone_holding_its_place_after_injected_panics() {
     let mut host_memory = HostMemory::of(host);
     for crash in 0..RESTARTS {
         let at = ["paint", "dispatch", "helper"][crash as usize % 3];
+        let crashed = rig.state.hosts.component_instance("dock");
         crash_dock(&mut rig, &bus, &mut gone, at);
         if at == "paint" {
             // what it draws next panics: the trash's tile with a file more or less
             toggle(&session.data);
         }
-        // every turn until it runs again the bar's space stays reserved and its picture shows, held or drawn anew;
-        // but the server holds nothing of a component it gives up, the fifth failure in a row (D16)
+        // every turn until it runs again the bar's space stays reserved and its picture shows, live, held or drawn
+        // anew: the crashed instance's bar shows live until its connection ends and is then held. But the server holds
+        // nothing of a component it gives up, the fifth failure in a row (D16)
         let gives_up = (crash + 1) % CRASHES_IN_A_ROW == 0;
         let mut turns = 0;
         let mut watch = |rig: &mut Rig| {
             colours.extend(bar_colour(rig));
             turns += 1;
-            if at == "paint" && turns % REDRAW_TURNS == 0 {
+            if at == "paint"
+                && turns % REDRAW_TURNS == 0
+                && rig.state.hosts.component_instance("dock") == crashed
+                && rig.state.hosts.component_connected("dock")
+            {
                 toggle(&session.data);
             }
             if gives_up {
@@ -327,18 +423,15 @@ fn the_dock_restarts_alone_holding_its_place_after_injected_panics() {
                 "the bar's space stays reserved after a crash at {at}"
             );
             assert!(
-                rig.state.docks.has_dock(output) || {
-                    let holds = rig
-                        .state
-                        .hosts
-                        .held_surfaces()
-                        .iter()
-                        .any(|h| h.component == "dock" && h.picture.is_some());
-                    held |= holds;
-                    holds
-                },
-                "the bar or its held picture shows after a crash at {at}"
+                rig.state.hosts.persistent_shows_on("dock", output),
+                "the bar's picture shows, live or held, after a crash at {at}"
             );
+            held |= rig
+                .state
+                .hosts
+                .held_surfaces()
+                .iter()
+                .any(|h| h.component == "dock" && h.picture.is_some());
         };
         if gives_up {
             rig.until(
@@ -375,10 +468,11 @@ fn the_dock_restarts_alone_holding_its_place_after_injected_panics() {
                         .all(|h| h.component != "dock")
             },
         );
-        // the restarted dock shows its bar at once and reads its start and loads its icons on the I/O pool after, which
-        // holds several MiB until it is done: that is over before the host is measured (nothing says when it is)
-        for _ in 0..SETTLE_TURNS {
-            rig.turn();
+        // the restarted dock reads its start on the I/O pool, which holds several MiB until it is done: that is over
+        // before the host is measured, once the dock follows the trash it watches from its start
+        match &pictures {
+            None => pictures = Some(learn_the_trash(&mut rig, &session.data, area)),
+            Some(pictures) => follows_the_trash(&mut rig, &session.data, area, pictures),
         }
         host_memory.restarted(crash + 1);
     }

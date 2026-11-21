@@ -30,6 +30,7 @@ use std::process::{Child, Command as Process, Stdio};
 use cupertino_notifications::control::{
     BUS_NAME, CENTRE_BUS_NAME, CENTRE_OBJECT_PATH, OBJECT_PATH,
 };
+use cupertino_notifications::store;
 use cupertino_server::host::HostKind;
 use zbus::blocking::Connection;
 use zbus::zvariant::Value;
@@ -289,9 +290,15 @@ fn the_notifications_restart_alone_with_their_list_after_injected_panics() {
     });
     let (kept_id, transient_id) = (ids.0.expect("Notify"), ids.1.expect("Notify"));
     assert_ne!(kept_id, transient_id);
+    // kept once the file holds the kept notification and the ids given out, the transient one's among them: a crash
+    // before then restores an earlier count, and gives an id out again
     let mut file = None;
-    rig.until("the list is kept", |_| {
-        file = kept(&runtime).filter(|(_, content)| content.contains(KEPT_SUMMARY));
+    rig.until("the list and the ids given out are kept", |_| {
+        file = kept(&runtime).filter(|(_, content)| {
+            content.contains(KEPT_SUMMARY)
+                && store::decode(content.as_bytes(), 0.0)
+                    .is_ok_and(|restored| restored.next_id > transient_id)
+        });
         file.is_some()
     });
     let (path, content) = file.unwrap();

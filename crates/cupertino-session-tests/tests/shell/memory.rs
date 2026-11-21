@@ -30,8 +30,11 @@ pub const WARM_RESTARTS: u32 = 10;
 /// mostly finds the instance without what its start needs (the launcher's host measures 2 MiB less in about one
 /// measurement of five).
 const FLOOR_RESTARTS: usize = 10;
-/// How much the host's anonymous memory may grow between the two floors, in KiB: well below what one leaked instance
-/// holds (its 8 MiB stack, its windows' buffers).
+/// How much the host's anonymous memory may grow between the two floors, in KiB. Anonymous memory is the heap and the
+/// stack pages threads touched; neither a stack's untouched pages nor the windows' shared-memory buffers count. What
+/// the bound catches is heap the ended instances leave behind: a leaked bus connection with what its tasks hold (its
+/// thread, [`ENDED_CONNECTION`], is caught on its own), a model or a cache entry each instance adds, at about 100 KiB a
+/// restart over the forty measured.
 const ANONYMOUS_GROWTH_KIB: u64 = 4 * 1024;
 
 /// The name of the thread on which Kit finishes a bus connection whose runtime ended (`cupertino_kit::bus`): it ends

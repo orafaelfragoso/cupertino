@@ -3,11 +3,13 @@
 //! interface runs as a host runs it: `Host::connect` on `WAYLAND_SOCKET`, a component's connection on request, the
 //! bridges' ends, and a bus-name announcement answered with a nonce. Its display globals ([`display`]) let a
 //! component's Kit loop run on its connection, and its capture globals ([`capture`]) let a program capture the output.
+//! A component's connection may pass through a [`relay`] that counts what the component sent.
 
 #![allow(dead_code)]
 
 pub mod capture;
 pub mod display;
+pub mod relay;
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -89,6 +91,13 @@ enum Ask {
     DisplayOptions(DisplayOption),
     /// A connection of a client of its own, as the server gives a program it starts.
     Client(Sender<UnixStream>),
+    /// The next connection of the component passes through a relay, sent once it is made; `taken` answers once the
+    /// stand-in knows.
+    Relay {
+        component: String,
+        reply: Sender<Arc<relay::Relay>>,
+        taken: Sender<()>,
+    },
     /// `AnnounceComponent(nonce)` from `sender`: answers whether it is accepted, and sends `bus_name`.
     Judge {
         sender: String,
@@ -146,6 +155,8 @@ struct State {
     /// The layer surface of each surface that has one.
     layer_resources: HashMap<ObjectId, ZwlrLayerSurfaceV1>,
     appearance: display::Appearance,
+    /// The components whose next connection passes through a relay, with where the relay goes.
+    relays: HashMap<String, Sender<Arc<relay::Relay>>>,
 }
 
 struct Data;
@@ -234,6 +245,23 @@ impl Server {
         self.asks.send(Ask::DisplayOptions(options)).unwrap();
     }
 
+    /// The relay the next connection of `component` passes through; it comes once the host asked for the connection.
+    pub fn relay(&self, component: &str) -> Receiver<Arc<relay::Relay>> {
+        let (reply, relay) = mpsc::channel();
+        let (taken, known) = mpsc::channel();
+        self.asks
+            .send(Ask::Relay {
+                component: component.into(),
+                reply,
+                taken,
+            })
+            .unwrap();
+        known
+            .recv_timeout(PATIENCE)
+            .expect("the stand-in takes the relay");
+        relay
+    }
+
     /// Closes the host's connection, as a server that went away.
     pub fn close_host(&self) {
         self.asks.send(Ask::CloseHost).unwrap();
@@ -316,6 +344,7 @@ fn serve(
         display: display::Surfaces::default(),
         layer_resources: HashMap::new(),
         appearance: display::Appearance::default(),
+        relays: HashMap::new(),
     };
     ready.send(host_end).unwrap();
     while !quit.load(std::sync::atomic::Ordering::SeqCst) {
@@ -364,6 +393,14 @@ fn answer(state: &mut State, ask: Ask) {
             }
         }
         Ask::Client(_) => {}
+        Ask::Relay {
+            component,
+            reply,
+            taken,
+        } => {
+            state.relays.insert(component, reply);
+            let _ = taken.send(());
+        }
         Ask::DisplayOptions(options) => state.appearance.set_display_options(options),
         Ask::CloseHost => {
             if let Some(socket) = state.host_socket.take() {
@@ -461,7 +498,14 @@ impl Dispatch<CupertinoHostComponentV1, String> for State {
                     .insert_client(server_end, Arc::new(Data))
                     .expect("component client");
                 state.component_clients.insert(client.id(), name.clone());
-                resource.connection(client_end.as_fd());
+                match state.relays.remove(name) {
+                    Some(reply) => {
+                        let (component_end, relay_end) = UnixStream::pair().expect("socket pair");
+                        let _ = reply.send(relay::Relay::start(relay_end, client_end));
+                        resource.connection(component_end.as_fd());
+                    }
+                    None => resource.connection(client_end.as_fd()),
+                }
             }
             host_component_v1::Request::Failed { cause } => {
                 let _ = state.seen.send(Seen::Failed(name.clone(), cause.into()));

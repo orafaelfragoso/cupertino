@@ -3,14 +3,16 @@
 mod reaper;
 
 use std::any::Any;
+use std::cell::OnceCell;
+use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, Once, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use cupertino_kit::core::Command;
 
-use crate::context::{self, Inbox};
+use crate::context::{self, Inbox, Sockets};
 use crate::oneshot::Oneshot;
 
 pub(crate) use reaper::Reaper;
@@ -121,6 +123,13 @@ impl Drop for FinishOnDrop {
 
 /// What a component's helper threads tell its host: a helper's panic is the component's failure
 /// (`shell-host.md#threads-and-child-processes`), also when the component never waits for that helper's result.
+///
+/// A failing component reaches the server no more from the moment it fails: its Wayland socket is shut then, as its
+/// thread or one of its helpers panics ([`install_failure_hook`]) or as its loop's runtime starts its teardown after the
+/// loop ended unasked ([`FailsUnasked`]), so the teardown sends nothing, no role object's destroy either, and the
+/// server holds its surfaces from the connection's end. Its session-bus sockets are the host's to shut as it reads the
+/// failure, so a reply its bus connection was sending as it failed still goes out. A component its host stops keeps its
+/// orderly teardown.
 pub(crate) struct Fault {
     panicked: AtomicBool,
     /// The host cut the component off (`Running::shut`): its helpers' results are dropped unread.
@@ -129,22 +138,98 @@ pub(crate) struct Fault {
     stop: Arc<AtomicBool>,
     /// The component's inbox, woken so its loop sees the stop.
     inbox: Arc<Inbox>,
+    /// The component's Wayland socket.
+    socket: UnixStream,
+    /// The component's session-bus sockets (`bus::session`).
+    sockets: Sockets,
+}
+
+thread_local! {
+    /// The fault of the component whose thread, or helper thread, this is: a panic on it fails the component.
+    static FAULT: OnceCell<Arc<Fault>> = const { OnceCell::new() };
+}
+
+/// Marks the calling thread as `fault`'s component's own or one of its helpers: a panic on it shuts the component's
+/// Wayland socket before anything unwinds ([`install_failure_hook`]).
+pub(crate) fn fails_on_panic(fault: &Arc<Fault>) {
+    FAULT.with(|slot| {
+        let _ = slot.set(Arc::clone(fault));
+    });
+}
+
+/// Chains a panic hook, once per process, that shuts the Wayland socket of the component whose thread or helper thread
+/// panics, before the hook that was there before and before the panic unwinds a frame: the drops of the unwind and
+/// of the teardown after it send the server nothing.
+pub(crate) fn install_failure_hook() {
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let _ = FAULT.try_with(|slot| {
+                if let Some(fault) = slot.get() {
+                    fault.failed();
+                }
+            });
+            previous(info);
+        }));
+    });
+}
+
+/// Held by a hosted component's loop model, which its runtime drops before its window system: a loop that ended
+/// without its host asking it to stop (the component's exit, an error of its loop, a panic) failed, and the
+/// component's Wayland socket is shut before the window system's teardown sends anything.
+pub(crate) struct FailsUnasked(pub(crate) Arc<Fault>);
+
+impl Drop for FailsUnasked {
+    fn drop(&mut self) {
+        // a helper's panic sets the stop too, and shut the sockets as it did
+        if !self.0.stop.load(Ordering::SeqCst) {
+            self.0.failed();
+        }
+    }
 }
 
 impl Fault {
-    pub(crate) fn new(stop: Arc<AtomicBool>, inbox: Arc<Inbox>) -> Self {
+    pub(crate) fn new(
+        stop: Arc<AtomicBool>,
+        inbox: Arc<Inbox>,
+        socket: UnixStream,
+        sockets: Sockets,
+    ) -> Self {
         Self {
             panicked: AtomicBool::new(false),
             cut: AtomicBool::new(false),
             stop,
             inbox,
+            socket,
+            sockets,
         }
     }
 
     fn helper_panicked(&self) {
         self.panicked.store(true, Ordering::SeqCst);
+        self.failed();
         self.stop.store(true, Ordering::SeqCst);
         self.inbox.wake();
+    }
+
+    /// The component failed: its Wayland socket is shut down, so nothing more reaches the server, which sees its
+    /// connection end.
+    fn failed(&self) {
+        let _ = self.socket.shutdown(std::net::Shutdown::Both);
+    }
+
+    /// Shuts down the component's Wayland socket and its session-bus sockets: it reaches no one from now on.
+    pub(crate) fn shut_sockets(&self) {
+        self.failed();
+        for socket in self
+            .sockets
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+        {
+            let _ = socket.shutdown(std::net::Shutdown::Both);
+        }
     }
 
     /// The host cut the component off: what its helpers still give goes unread.
@@ -186,6 +271,9 @@ pub fn thread<T: Send + 'static, M: Send + 'static>(
         .name(name.into())
         .spawn(move || {
             let _finish = finish;
+            if let Some(fault) = &fault {
+                fails_on_panic(fault);
+            }
             let outcome =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(&worker_stop)));
             if outcome.is_err() {

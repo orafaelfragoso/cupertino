@@ -241,12 +241,14 @@ impl Model {
 
     /// The owner left or is quitting: claim the name again after a pause, unless the launch has tried for too long.
     fn retry(&mut self, why: String) -> Vec<Command<Message>> {
-        let Some(launching) = self.launching.as_ref() else {
+        let Some(launching) = self.launching.as_mut() else {
             return Vec::new();
         };
         if Instant::now() >= launching.until {
             return self.refuse(format!("the running Files did not take the launch: {why}"));
         }
+        // a try of its own: the hand-over's pending Unanswered no longer matches
+        launching.attempt += 1;
         vec![Command::After {
             delay: instance::RETRY_PAUSE,
             message: Message::Launch(LaunchEvent::Again(launching.attempt)),

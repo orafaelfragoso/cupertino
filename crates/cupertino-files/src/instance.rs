@@ -736,7 +736,7 @@ fn error_name(e: &zbus::Error) -> Option<String> {
 }
 
 /// Hand `request` (with the launch's activation `token`) to the owner of the name on `connection`, once. The caller
-/// bounds the wait for its answer ([`FORWARD_TIMEOUT`]); then [`owner_left`] tells whether to claim the name again.
+/// bounds the wait for its answer ([`FORWARD_TIMEOUT`]); then [`unanswered`] tells whether to claim the name again.
 pub async fn forward(
     connection: &Connection,
     request: &Request,

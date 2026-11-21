@@ -14,6 +14,8 @@
 #[path = "shell/components.rs"]
 #[allow(dead_code)]
 mod components;
+#[path = "shell/memory.rs"]
+mod memory;
 // shared with `shell-host.rs`, which uses what this test does not
 #[allow(dead_code)]
 #[path = "shell-host/rig.rs"]
@@ -31,6 +33,7 @@ use zbus::blocking::Connection;
 use zbus::zvariant::OwnedValue;
 
 use components::{BLUE, DOCK_SIZE, RED};
+use memory::{steady_allocator, HostMemory, CRASHES_IN_A_ROW, RESTARTS};
 use rig::{count, Area, Rig, OUTPUT_SIZE};
 
 /// The host program of this test: `cupertino-shell`'s own (`cupertino_shell::run`) with the test dock and the real
@@ -234,17 +237,6 @@ fn shown(session: &Connection) -> Option<bool> {
     property(session, "Shown")
 }
 
-/// The host process's anonymous memory (its heap and stacks, which a leak grows), in KiB.
-fn anonymous(pid: u32) -> u64 {
-    let rollup =
-        std::fs::read_to_string(format!("/proc/{pid}/smaps_rollup")).expect("the host's memory");
-    rollup
-        .lines()
-        .find_map(|line| line.strip_prefix("Anonymous:"))
-        .and_then(|kib| kib.trim().trim_end_matches("kB").trim().parse().ok())
-        .expect("the host's anonymous memory")
-}
-
 /// The width and height of the area at the output's top right the open panel's card covers part of, in pixels: the
 /// card is about 340 points wide below the menu bar's band, at scale 1.
 const PANEL_AREA_WIDTH: i32 = 360;
@@ -253,18 +245,6 @@ const PANEL_AREA_HEIGHT: i32 = 320;
 const PIXEL_TOLERANCE: i32 = 8;
 /// Pixels of the panel's area the open card changes at least: a fraction of the card itself.
 const PANEL_PIXELS: usize = 20_000;
-/// Crashes injected into the component, after which each restarts alone.
-const RESTARTS: u32 = 50;
-/// Crashes after which the server gives a component up (D16: five within a minute); a restart the person asks for
-/// then starts it again and forgets them.
-const CRASHES_IN_A_ROW: u32 = 5;
-/// Restarts after which the host's memory is measured the first time: the host's first allocations of a component
-/// (its caches, the allocator's arenas) are made by then.
-const WARM_RESTARTS: u32 = 10;
-/// How much the host's anonymous memory may grow between that measurement and the last restart, in KiB: well below
-/// what one leaked instance holds (its 8 MiB stack, its windows' buffers).
-const ANONYMOUS_GROWTH_KIB: u64 = 4 * 1024;
-
 #[test]
 fn the_control_panel_restarts_alone_closed_after_injected_panics() {
     let bus = Bus::start();
@@ -272,6 +252,7 @@ fn the_control_panel_restarts_alone_closed_after_injected_panics() {
     std::env::set_var("XDG_RUNTIME_DIR", &runtime);
     // no settings of the person's: the default arrangement, the dock's defaults
     std::env::set_var("XDG_CONFIG_HOME", private_dir("config"));
+    steady_allocator();
     let mut rig = Rig::new("controlcenter", &["dock", "controlcenter"], &[]);
     cupertino_server::quit::start_session_service_on(&mut rig.state, Some(bus.1.clone()));
     let session = Connection::session().expect("the test's bus");
@@ -324,7 +305,7 @@ fn the_control_panel_restarts_alone_closed_after_injected_panics() {
 
     let mut colours = HashSet::new();
     let first_instance = rig.state.hosts.component_instance("controlcenter");
-    let mut warm = None;
+    let mut host_memory = HostMemory::of(host);
     for crash in 0..RESTARTS {
         let at = ["paint", "dispatch", "helper"][crash as usize % 3];
         let name = connection.clone();
@@ -381,14 +362,8 @@ fn the_control_panel_restarts_alone_closed_after_injected_panics() {
             "after the restart {} at {at} the panel is closed",
             crash + 1
         );
-        if crash + 1 == WARM_RESTARTS {
-            warm = Some(anonymous(host));
-        }
+        host_memory.restarted(crash + 1);
     }
-    let (warm, last) = (warm.unwrap(), anonymous(host));
-    eprintln!(
-        "host anonymous memory after {WARM_RESTARTS} restarts: {warm} KiB; after {RESTARTS}: {last} KiB"
-    );
 
     assert_eq!(
         rig.host_pid(HostKind::Shared),
@@ -406,11 +381,7 @@ fn the_control_panel_restarts_alone_closed_after_injected_panics() {
         "the dock kept drawing while the control panel started again"
     );
     assert!(!rig.state.hosts.component_gave_up("controlcenter"));
-    assert!(
-        last <= warm + ANONYMOUS_GROWTH_KIB,
-        "the host's anonymous memory grew from {warm} KiB to {last} KiB over {} restarts",
-        RESTARTS - WARM_RESTARTS
-    );
+    host_memory.assert_nothing_kept(&mut rig);
 
     // the last instance opens again and draws
     rig.until("the closed panel's area settles", |rig| {

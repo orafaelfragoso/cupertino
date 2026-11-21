@@ -14,6 +14,8 @@
 #[path = "shell/components.rs"]
 #[allow(dead_code)]
 mod components;
+#[path = "shell/memory.rs"]
+mod memory;
 // shared with `shell-host.rs`, which uses what this test does not
 #[allow(dead_code)]
 #[path = "shell-host/rig.rs"]
@@ -33,6 +35,7 @@ use zbus::blocking::Connection;
 use zbus::zvariant::Value;
 
 use components::{BLUE, DOCK_SIZE, RED};
+use memory::{steady_allocator, HostMemory, CRASHES_IN_A_ROW, RESTARTS};
 use rig::{count, Area, Rig, OUTPUT_SIZE};
 
 /// The host program of this test: `cupertino-shell`'s own (`cupertino_shell::run`) with the test dock and the real
@@ -232,34 +235,11 @@ fn kept(runtime: &Path) -> Option<(PathBuf, String)> {
     Some((path, content))
 }
 
-/// The host process's anonymous memory (its heap and stacks, which a leak grows), in KiB.
-fn anonymous(pid: u32) -> u64 {
-    let rollup =
-        std::fs::read_to_string(format!("/proc/{pid}/smaps_rollup")).expect("the host's memory");
-    rollup
-        .lines()
-        .find_map(|line| line.strip_prefix("Anonymous:"))
-        .and_then(|kib| kib.trim().trim_end_matches("kB").trim().parse().ok())
-        .expect("the host's anonymous memory")
-}
-
 /// The application whose notification the list keeps, and the one that sends a transient notification.
 const KEPT_APP: &str = "Mail";
 const TRANSIENT_APP: &str = "Weather";
 /// The kept notification's title, as the file holds it.
 const KEPT_SUMMARY: &str = "Lunch at noon";
-/// Crashes injected into the component, after which each restarts alone.
-const RESTARTS: u32 = 50;
-/// Crashes after which the server gives a component up (D16: five within a minute); a restart the person asks for
-/// then starts it again and forgets them.
-const CRASHES_IN_A_ROW: u32 = 5;
-/// Restarts after which the host's memory is measured the first time: the host's first allocations of a component
-/// (its caches, the allocator's arenas) are made by then.
-const WARM_RESTARTS: u32 = 10;
-/// How much the host's anonymous memory may grow between that measurement and the last restart, in KiB: well below
-/// what one leaked instance holds (its 8 MiB stack, its windows' buffers).
-const ANONYMOUS_GROWTH_KIB: u64 = 4 * 1024;
-
 #[test]
 fn the_notifications_restart_alone_with_their_list_after_injected_panics() {
     let bus = Bus::start();
@@ -267,6 +247,7 @@ fn the_notifications_restart_alone_with_their_list_after_injected_panics() {
     std::env::set_var("XDG_RUNTIME_DIR", &runtime);
     // no notifications.conf of the person's: every application with the defaults
     std::env::set_var("XDG_CONFIG_HOME", private_dir("config"));
+    steady_allocator();
     let mut rig = Rig::new("notifications", &["dock", "notifications"], &[]);
     cupertino_server::quit::start_session_service_on(&mut rig.state, Some(bus.1.clone()));
     let session = Connection::session().expect("the test's bus");
@@ -329,7 +310,7 @@ fn the_notifications_restart_alone_with_their_list_after_injected_panics() {
 
     let mut colours = HashSet::new();
     let first_instance = rig.state.hosts.component_instance("notifications");
-    let mut warm = None;
+    let mut host_memory = HostMemory::of(host);
     for crash in 0..RESTARTS {
         let at = ["paint", "dispatch", "helper"][crash as usize % 3];
         let mut name = None;
@@ -391,14 +372,8 @@ fn the_notifications_restart_alone_with_their_list_after_injected_panics() {
             "after the restart {} at {at} the list holds the kept notification alone",
             crash + 1
         );
-        if crash + 1 == WARM_RESTARTS {
-            warm = Some(anonymous(host));
-        }
+        host_memory.restarted(crash + 1);
     }
-    let (warm, last) = (warm.unwrap(), anonymous(host));
-    eprintln!(
-        "host anonymous memory after {WARM_RESTARTS} restarts: {warm} KiB; after {RESTARTS}: {last} KiB"
-    );
 
     assert_eq!(
         rig.host_pid(HostKind::Shared),
@@ -416,11 +391,7 @@ fn the_notifications_restart_alone_with_their_list_after_injected_panics() {
         "the dock kept drawing while the notifications started again"
     );
     assert!(!rig.state.hosts.component_gave_up("notifications"));
-    assert!(
-        last <= warm + ANONYMOUS_GROWTH_KIB,
-        "the host's anonymous memory grew from {warm} KiB to {last} KiB over {} restarts",
-        RESTARTS - WARM_RESTARTS
-    );
+    host_memory.assert_nothing_kept(&mut rig);
 
     // the restarted component takes notifications, and gives the next one an id the earlier runs did not give
     let bus_call = session.clone();

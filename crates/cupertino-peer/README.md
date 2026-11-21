@@ -45,7 +45,7 @@ nothing; the caller is the process behind its connection.
   they fill: a zbus stream holds 64 messages and the connection reads nothing while one is full, the replies to its own calls
   included, so a reader that asked the bus for each signal, or called anything on the connection while forged signals queued,
   would wait for good. `FromOwner::owner` gives the owner it follows, for a method call from the same service. Users:
-  `cupertino-login`, `cupertino-sessiond`, `cupertino-netd`, `cupertino-polkit-agent` and the server's power watchers.
+  `cupertino-login`, `cupertino-sessiond`, `cupertino-netd`, `cupertino-prompts` and the server's power watchers.
 
 * `component::resolve_component(connection, sender) -> ComponentCaller`: who a caller is to the shell, asked of
   `org.cupertino.Session1` and never by comparing processes (D20): the owner of that name is `Server`; a caller whose
@@ -66,7 +66,7 @@ nothing; the caller is the process behind its connection.
 
 Users: `cupertino-server` (`org.cupertino.Session1`, the call to `org.cupertino.Login1` and the owner check of a bus name
 a Wayland client announces), `cupertino-login`
-(`org.cupertino.Login1`) and `cupertino-osd` (`org.cupertino.Osd1`).
+(`org.cupertino.Login1`) and the `osd` component of `cupertino-shell` (`org.cupertino.Osd1`).
 
 ## Known limitations
 

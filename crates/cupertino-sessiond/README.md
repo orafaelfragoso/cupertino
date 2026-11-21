@@ -109,7 +109,7 @@ reference; they were options of `cupertino-login --greeter`.
 ## Wallpapers
 
 The login screen shows each user's wallpaper behind that user, as the lock screen does. The login screen's account cannot read
-the homes, so the user's session agent (`cupertino-login`, see its README) leaves a JPEG of the session's wallpaper at
+the homes, so the user's lock screen (`cupertino-login`, see its README) leaves a JPEG of the session's wallpaper at
 `~/.local/state/cupertino/login-wallpaper.jpg` (`LOGIN_WALLPAPER_FILE`): at most 3840 pixels a side and 16 MiB, written when the
 session starts and when the compositor's settings change, removed when the user has no wallpaper of its own
 (`wallpaper.rs`):
@@ -344,7 +344,7 @@ target gnome-keyring.
 | The password is accepted but is not the keyring's (changed with `passwd`, whose PAM file does not update the keyring) | the session opens with the keyring locked; the first client is refused (`IsLocked`) or its unlock opens the prompter, which asks for the keyring's own password |
 | Locked keyring | reading or storing is refused with `org.freedesktop.Secret.Error.IsLocked`, a search lists the items as locked, and `Unlock` returns a prompt. Running the prompt opens the prompter; when the person dismisses it the prompt completes as dismissed and the keyring stays locked. Nothing is unlocked without the password |
 | Auto login | locked, as above, until the person unlocks it in the prompter or unlocks the lock screen with the password |
-| Another keyring is the default collection (an application made it so) | login unlocks the login keyring only, so that keyring stays locked. Nothing is changed silently: `cupertino-keyring-prompter` asks once whether to copy its items into the login keyring and make the login keyring the default (`cupertino-polkit-agent`'s README, "The default keyring that login does not unlock"). It asks from a thread of its own after the session started, so login never waits for it |
+| Another keyring is the default collection (an application made it so) | login unlocks the login keyring only, so that keyring stays locked. Nothing is changed silently: `cupertino-prompts` asks once whether to copy its items into the login keyring and make the login keyring the default (`cupertino-prompts`'s README, "The default keyring that login does not unlock"). It asks from a thread of its own after the session started, so login never waits for it |
 | Screen locked | the keyring stays unlocked, as on other desktops; unlocking the screen unlocks a keyring that was locked |
 | Fast user switching, the administrator's restart | `Mode::Verify` runs the same `auth` stack, but the worker sets no `XDG_RUNTIME_DIR` before `pam_authenticate`, so the module finds no daemon and keeps nothing: the session's keyring is not changed |
 | Logout | after the compositor ends and `cupertino-session.target` is stopped, the session (`cupertino-server --session`) lists the provider's `Collections` and calls `Lock` on all of them over the user bus, only when the provider has the name already, so a provider that is not running is not started. It logs `locked the keyring (N collections)` in `session.log`; a path that is not `/org/freedesktop/secrets/collection/…` stops it with a log line. The daemon itself ends with the user manager, after the user's last session. A session that did not own the user manager (another graphical session of the user was active) locks nothing |

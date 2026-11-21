@@ -119,9 +119,9 @@ Totals: 16 open (DQ-08 included), 10 partial, 3 needing the installed-session ch
 
 To reproduce, start Cupertino and its launcher, install an application that provides a desktop entry, then reopen launcher search and the application browser and search for it. The reported case used `chatgpt-desktop` `26.1103.60933-1` on Arch Linux in the installed TTY session, at 3840×2160 with scale 2. The package already supplied `/usr/share/applications/chatgpt.desktop`, `/usr/bin/chatgpt` and `/usr/share/pixmaps/chatgpt.png`; no user override hid the entry. `desktop-file-validate` found no errors, and GLib resolved it as visible.
 
-Source inspection at `0582a36c` found that `crates/cupertino-launcher/src/app.rs` constructs the model with `Launcher::from_system(config)` at startup. `crates/cupertino-launcher/src/engine.rs` indexes the XDG application directories there; `set_entries` has no production caller, and no runtime catalogue watcher or refresh is wired into the launcher.
+Source inspection at `0582a36c` (when the launcher was a program of its own) found that its startup constructed the model with `Launcher::from_system(config)`. `crates/cupertino-launcher/src/engine.rs` indexes the XDG application directories there; `set_entries` had no production caller, and no runtime catalogue watcher or refresh was wired into the launcher.
 
-Workaround performed: terminate only the affected session's `cupertino-launcher` with SIGTERM and let the compositor supervisor restart it, forcing a fresh scan. The replacement process was verified in the server log; the compositor and open applications stayed running. With multiple sessions, identify the launcher belonging to the affected compositor before restarting it. This workaround does not close DQ-30.
+Workaround performed: restart only the affected session's `launcher` component (`cupertino shell restart launcher`, which goes to that session's own server), forcing a fresh scan. The replacement was verified in the server log; the compositor, the other components and open applications stayed running. This workaround does not close DQ-30.
 
 ## Electron window dragging through XWayland
 
@@ -149,7 +149,7 @@ Quit the existing ChatGPT process and reopen the application for the flag to tak
 
 To reproduce, start ChatGPT Desktop, use it until its exported status menu changes, then open its menu-bar icon's menu and choose Open ChatGPT or Quit. The reported menu remained visible but its actions had no effect. The captured Open event used an ID absent from the current layout, explaining that failure. Quit was reported by the maintainer; it was not invoked during inspection because it would terminate the active application.
 
-In `crates/cupertino-menubar/src/worker.rs`, `follow_status_item` reloads the menu when the status item's icon, title, status or tooltip changes. `sni::item_changes` does not follow the menu's own `LayoutUpdated` or `ItemsPropertiesUpdated` signals. `crates/cupertino-menubar/src/routing.rs` also ignores `AboutToShow` for status menus. Consequently, a DBusMenu replacement can leave the visible menu and its activation IDs stale even while the status icon remains valid. This path uses D-Bus and is separate from the X11/Wayland backend selection in DQ-33. No permanent fix has been applied.
+In the `menubar` component (`crates/cupertino-menubar/src/worker.rs`), `follow_status_item` reloads the menu when the status item's icon, title, status or tooltip changes. `sni::item_changes` does not follow the menu's own `LayoutUpdated` or `ItemsPropertiesUpdated` signals. `crates/cupertino-menubar/src/routing.rs` also ignores `AboutToShow` for status menus. Consequently, a DBusMenu replacement can leave the visible menu and its activation IDs stale even while the status icon remains valid. This path uses D-Bus and is separate from the X11/Wayland backend selection in DQ-33. No permanent fix has been applied.
 
 ## Closed Electron titlebar policy
 

@@ -1,7 +1,7 @@
 //! The launcher's usage store, `$XDG_DATA_HOME/cupertino/launcher.json`: its file format, where it is, and its
 //! ranking. Every launch adds 1 to an item's score after decaying the old value with a half-life
-//! (`score·2^(−Δt/half_life)`); items rank by the decayed score. The launcher (`cupertino-launcher`) writes the file;
-//! other processes only read it.
+//! (`score·2^(−Δt/half_life)`); items rank by the decayed score. The `launcher` component (`cupertino-launcher`) writes the file;
+//! other programs only read it.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

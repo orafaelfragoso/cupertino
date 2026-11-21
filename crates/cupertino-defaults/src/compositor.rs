@@ -29,7 +29,7 @@
 //! | `wallpaper`, `wallpaper_dark` | absolute path of a PNG or JPEG: the wallpaper, and the one of the dark appearance (else `wallpaper` is used) |
 //! | `shell` | list of `{"name": …, "command": [program, args…], "roles": […]}`, commands not empty; `roles` (optional, default `["session"]`) lists what the server lets the process do: `session`, `menu_bar`, `dock`, `window_manager` |
 //! | `screenshot` | the screenshot command, not empty |
-//! | `dev_folder` | `{"path": …, "components": [names…]}`: an absolute directory without `..` and the names of the shell processes that may start from it ([`DevFolder`]); only the system file sets it |
+//! | `dev_folder` | `{"path": …, "components": [names…]}`: an absolute directory without `..` and the names of the shell components that may run from it ([`DevFolder`]); only the system file sets it |
 
 use std::collections::BTreeMap;
 use std::io;
@@ -314,14 +314,15 @@ pub struct ShellEntry {
     pub roles: Vec<ShellRoleName>,
 }
 
-/// The development folder of the system file: the shell processes named in `components` start the program of the same
-/// file name from `path` when one is there, instead of the installed one. The server decides which names it accepts and
+/// The development folder of the system file: the shell components named in `components` run in a host of their own
+/// that starts from the `cupertino-shell` in `path` when one is there, instead of the installed host (a supervised
+/// process of the `processes` list named there starts the file of its program's name the same way). The server decides which names it accepts and
 /// checks the folder and each file before every start.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DevFolder {
     /// An absolute directory without `..`.
     pub path: String,
-    /// Names of shell processes, each once and none empty.
+    /// Names of shell components, each once and none empty.
     pub components: Vec<String>,
 }
 

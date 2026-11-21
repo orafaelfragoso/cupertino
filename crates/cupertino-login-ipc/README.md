@@ -19,7 +19,7 @@ only, never on D-Bus.
 | `Decoder` | reads a stream of unknown chunking in exact amounts: `wanted` bytes at most, `push(bytes) returns a frame body when one completes |
 | `encode`, `encode_secret`, `decode` | a message to a frame (length prefix, JSON) and back; `encode_secret` allocates its buffer at the full cap so it never moves |
 | `Secret` | a password: `Zeroizing<String>`, at most 512 bytes (`PAM_MAX_RESP_SIZE`), `Debug` prints `<secret>, sent as hex |
-| `zeroing::ZeroOnFree` | a global allocator that zeroes every block it frees, the allocator of the processes that hold passwords (`cupertino-sessiond`, `cupertino-login`, `cupertino-polkit-agent` and `cupertino-keyring-prompter`): a copy a library drops without clearing it (pam-client2's `CString`) is cleared too; growing a block frees the old one through it |
+| `zeroing::ZeroOnFree` | a global allocator that zeroes every block it frees, the allocator of the processes that hold passwords (`cupertino-sessiond`, `cupertino-login` and `cupertino-prompts`): a copy a library drops without clearing it (pam-client2's `CString`) is cleared too; growing a block frees the old one through it |
 | `State` | the connection's state machine (`New`, `Idle`, `Authenticating`, `Starting`): `next(request)` and `after(event) |
 
 ## Rules

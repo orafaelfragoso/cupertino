@@ -192,7 +192,7 @@ pub enum Action {
     },
 }
 
-/// The media keys the overlay process (`cupertino-osd`) handles.
+/// The media keys the `osd` component handles.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum OsdKey {
     VolumeUp,

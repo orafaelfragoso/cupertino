@@ -2,7 +2,7 @@
 //! is copied on its way (the frame, the `CString` handed to PAM, which PAM's Rust binding drops without clearing), and
 //! the libraries that make the copies do not clear them. A binary that handles passwords installs it as its global
 //! allocator: `cupertino-sessiond` (manager and worker), `cupertino-login` (the lock screen and the login screen) and
-//! `cupertino-polkit-agent`'s two prompts (the authentication agent and the keyring's prompter), where what the person
+//! `cupertino-prompts` (the authentication agent, the keyring's prompter and the consent questions), where what the person
 //! types also passes through the toolkit's keyboard handling, which may hold it in blocks of its own.
 //! Growing a block goes through the default `realloc`, which frees the old block here too.
 

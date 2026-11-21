@@ -6,7 +6,7 @@ Cupertino serves Wayland clients, and X11 programs through `xwayland-satellite` 
 
 - [Trying Cupertino](trying.md): what works, the open p1 defects, and how to report a bug.
 - [Using Cupertino every day](daily-use.md): sessions, shortcuts, screenshots, logs and what to do when something hangs.
-- [The cupertino command](cupertino-command.md): the command line for diagnostics, the desktop, the shell processes and the SDK.
+- [The cupertino command](cupertino-command.md): the command line for diagnostics, the desktop, the shell's components and the SDK.
 - [Building and running](building.md): get a nested session up in a minute, then the TTY session.
 - [Architecture](architecture.md): processes, layers and the rules between them.
 - [Asset packs](asset-packs.md): swap fonts, icons, cursors and wallpapers, or build your own pack.

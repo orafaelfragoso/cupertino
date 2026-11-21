@@ -1,5 +1,5 @@
 //! The screens as CupertinoKit draws them: the password screen of the lock screen and the greeter, the greeter's name
-//! screen, user picker and power menu, and the session agent's confirmation and interrupt panels. Each function builds
+//! screen, user picker and power menu. Each function builds
 //! a window's content from the state machines' state; what the person does comes back as an [`Input`], which the
 //! process maps into its own messages.
 //!

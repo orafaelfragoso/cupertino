@@ -1,5 +1,5 @@
 //! The copy of the session's wallpaper that the login screen shows. The login screen's account cannot read homes, so the
-//! session agent leaves a JPEG of the wallpaper the session shows at `~/` + [`LOGIN_WALLPAPER_FILE`]: scaled down to at
+//! lock screen leaves a JPEG of the wallpaper the session shows at `~/` + [`LOGIN_WALLPAPER_FILE`]: scaled down to at
 //! most [`MAX_WALLPAPER_SIDE`] pixels a side, at most [`MAX_WALLPAPER_BYTES`], readable by the user alone. The session
 //! manager reads it as the user and keeps a copy the login screen may read. It is written when the session starts and
 //! again whenever the compositor's settings file changes ([`write_current`]); without a wallpaper of the user's own (the default picture) it

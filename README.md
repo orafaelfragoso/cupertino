@@ -106,14 +106,10 @@ Cupertino is a set of small processes around one compositor.
 | Process | Role |
 |---|---|
 | `cupertino-server` | compositing, window policy, input, materials, supervision of the shell |
-| `cupertino-dock` | dock, application switcher, overview, app grid, workspaces, hot corners |
-| `cupertino-menubar` | menu bar, status items, application menus |
-| `cupertino-launcher` | search and launch panel |
-| `cupertino-notifications` | banners, notification list, `org.freedesktop.Notifications` |
-| `cupertino-controlcenter`, `cupertino-osd` | control panel, volume and brightness overlays |
-| `cupertino-files`, `cupertino-settings`, `cupertino-screenshot` | file manager and desktop items, settings app, screenshot tool |
+| `cupertino-shell` | the shell host: one process whose components each run on a thread of their own: `menubar` (menu bar, status items, application menus), `dock` (dock, application switcher, hot corners), `desktop` (the desktop's items), `overview` (overview, workspaces), `windowmanager` (stage strip), `launcher` (search and launch panel), `notifications` (banners, notification list, `org.freedesktop.Notifications`), `controlcenter` (control panel), `osd` (volume and brightness overlays), `agent` (the session agent: log out, restart and shut down panels, login items) and `dialogs` (the portal's file and app choosers) |
+| `cupertino-files`, `cupertino-settings`, `cupertino-screenshot` | file manager, settings app, screenshot tool (also the portal's colour picker and screen-sharing chooser) |
 | `cupertino-portal` | xdg-desktop-portal backend: file chooser, screen sharing, screenshots, app chooser, appearance |
-| `cupertino-polkit-agent`, `cupertino-keyring-prompter` | password prompts for polkit and the keyring |
+| `cupertino-prompts` | password prompts for polkit and the keyring, and the consent questions of the portal and of desktop control |
 | `cupertino-control` | desktop control for local agents, with consent per app, and its MCP server |
 | `cupertino-login`, `cupertino-sessiond` | login and lock screens, root-owned session manager |
 | `cupertino-netd`, `cupertino-btd`, `cupertino-powerd` | network, Bluetooth and power daemons |

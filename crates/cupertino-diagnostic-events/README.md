@@ -204,14 +204,14 @@ Every id, where it comes from, and how. The table matches `grep -rn 'diag::event
 | `portal.screencast.failed` | error | `cupertino-portal` | a screen cast could not be started |
 | `portal.screenshot.failed` | error | `cupertino-portal` | a screenshot could not be taken |
 | `portal.permission.store_failed` | warn | `cupertino-portal` | a screen cast permission could not be stored |
-| `polkit.register.failed` | error | `cupertino-polkit-agent` | the agent could not register with polkit |
-| `polkit.auth.failed` | warn | `cupertino-polkit-agent` | an authentication failed; never its text |
+| `polkit.register.failed` | error | `cupertino-prompts` | the agent could not register with polkit |
+| `polkit.auth.failed` | warn | `cupertino-prompts` | an authentication failed; never its text |
 | `session.start`, `session.end` | info | `cupertino-server` | read from `session.log` by `cupertino diagnose events`, not recorded: a session started, or ended normally or by a stop |
 | `session.end_abnormal` | error | `cupertino-server` | read from `session.log`, not recorded: the compositor ended abnormally |
 
 The areas: `server`, `dock`, `menubar`, `launcher`, `notifications`, `controlcenter`, `osd`, `screenshot`,
-`windowmanager`, `login_ui` (`cupertino-login`), `files`, `settings`, `portal`, `polkit` (`cupertino-polkit-agent`),
-`keyring` (`cupertino-keyring-prompter`), `login` (`cupertino-sessiond`), `network`, `bluetooth` and `power`
+`windowmanager`, `login_ui` (`cupertino-login`), `files`, `settings`, `portal`, `polkit` and
+`keyring` (`cupertino-prompts`), `login` (`cupertino-sessiond`), `network`, `bluetooth` and `power`
 (`cupertino-netd`, `-btd`, `-powerd`).
 
 ## Build information

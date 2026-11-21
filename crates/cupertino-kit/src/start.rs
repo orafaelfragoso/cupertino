@@ -234,7 +234,7 @@ impl<A: Application, W: WindowSystem> Timed for Runtime<A, W> {
     }
 }
 
-/// This program's name and the modes it was started in (`cupertino-files --desktop`), as the frame timing names it
+/// This program's name and the modes it was started in (`cupertino-screenshot --serve`), as the frame timing names it
 /// ([`program_label`]).
 fn program_name() -> String {
     program_label(std::env::args_os())

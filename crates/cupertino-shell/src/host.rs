@@ -110,17 +110,23 @@ pub fn run(components: &'static [&'static Entry], args: impl IntoIterator<Item =
         listed: Vec::new(),
         since: Instant::now(),
         next_check: Instant::now() + LIVENESS_CHECK_INTERVAL,
+        render_done: 0,
+        stirred: false,
     };
     for event in early {
         shell.handle(event);
     }
     loop {
-        let timeout = (!shell.started.is_empty())
-            .then(|| shell.next_check.saturating_duration_since(Instant::now()));
+        // watched before the records are read: a loop that leaves its wait after the read wakes the host
+        shell.host.watch();
+        let timeout = shell
+            .deadline()
+            .map(|deadline| deadline.saturating_duration_since(Instant::now()));
         for event in wait(&mut shell.host, timeout) {
             shell.handle(event);
         }
         shell.reap();
+        shell.cut_off_slow_stops();
         if !shell.started.is_empty() && Instant::now() >= shell.next_check {
             shell.next_check = Instant::now() + LIVENESS_CHECK_INTERVAL;
             shell.check();
@@ -128,10 +134,10 @@ pub fn run(components: &'static [&'static Entry], args: impl IntoIterator<Item =
     }
 }
 
-/// What the server sent within `timeout` (`None`: until it sends something or a component ends); a host whose
-/// connection ended has no server to run components for.
+/// What the server sent within `timeout` (`None`: until it sends something, a component ends or, as the host watches,
+/// a loop leaves its wait); a host whose connection ended has no server to run components for.
 fn wait(host: &mut Host, timeout: Option<Duration>) -> Vec<HostEvent> {
-    match host.wait(timeout.unwrap_or(Duration::MAX)) {
+    match host.wait(timeout) {
         Ok(events) => events,
         Err(e) => {
             eprintln!("cupertino-shell: {e}");
@@ -146,6 +152,8 @@ struct Started {
     started: Instant,
     /// What the host last reported of it; `Responsive` until it reports otherwise.
     reported: Liveness,
+    /// How many times its loop had left its wait at the last check.
+    turns: u64,
     /// The host asked it to stop, at that time. Once it ended the host asks for its connection again when the server's
     /// last list names it: the list that came last wins, whatever came while it stopped.
     stopping: Option<Stopping>,
@@ -174,6 +182,10 @@ struct Shell {
     /// When the host started: the render thread's start-up grace.
     since: Instant,
     next_check: Instant,
+    /// The pieces of work the render thread had finished at the last check.
+    render_done: u64,
+    /// At the last check a loop or the render thread was out of its wait, or had left it since the check before.
+    stirred: bool,
 }
 
 impl Shell {
@@ -269,6 +281,7 @@ impl Shell {
                         running,
                         started: Instant::now(),
                         reported: Liveness::Responsive,
+                        turns: 0,
                         stopping: None,
                     },
                 );
@@ -339,22 +352,59 @@ impl Shell {
         }
     }
 
-    /// The watchdog's pass: each component's loop, reported to the server as its state changes; a stop that took
-    /// too long; the render thread.
-    fn check(&mut self) {
-        if watchdog::render_hung(self.runtime.render_busy_for(), self.since.elapsed()) {
-            eprintln!("cupertino-shell: the render thread hangs; the host exits");
-            std::process::exit(EXIT_FAILURE);
-        }
-        let mut lost = Vec::new();
-        for (&component, started) in &mut self.started {
+    /// When the host's wait ends at the latest, read after [`Host::watch`]: at the next check while a loop or the
+    /// render thread is out of its wait, left it since the last check, or had at the last check, so a loop that turns
+    /// again and again (an animation) is checked until a whole interval passed without a turn; at the end of a stop's
+    /// grace. `None` while everything waits: the host sleeps until the server sends something, a component ends or a
+    /// loop leaves its wait (D17: the watchdog wakes only while a loop is out of its wait).
+    fn deadline(&self) -> Option<Instant> {
+        let stirs = self.stirred
+            || self.runtime.render_busy_for().is_some()
+            || self.runtime.render_done() != self.render_done
+            || self.started.values().any(|started| {
+                started.running.busy_for().is_some() || started.running.turns() != started.turns
+            });
+        let check = (stirs && !self.started.is_empty()).then_some(self.next_check);
+        let stop = self
+            .started
+            .values()
+            .filter_map(|started| started.stopping.filter(|stopping| !stopping.shut))
+            .map(|stopping| stopping.since + STOP_GRACE)
+            .min();
+        check.into_iter().chain(stop).min()
+    }
+
+    /// Cuts off every component the host asked to stop that has not ended within [`STOP_GRACE`]; the watchdog takes
+    /// it from there.
+    fn cut_off_slow_stops(&mut self) {
+        for started in self.started.values_mut() {
             if let Some(stopping) = &mut started.stopping {
                 if !stopping.shut && stopping.since.elapsed() >= STOP_GRACE {
                     stopping.shut = true;
                     started.running.shut();
                 }
             }
-            let state = watchdog::liveness(started.running.busy_for(), started.started.elapsed());
+        }
+    }
+
+    /// The watchdog's pass: each component's loop, reported to the server as its state changes, and the render
+    /// thread; whether any of them was out of its wait or left it since the pass before.
+    fn check(&mut self) {
+        let render_busy = self.runtime.render_busy_for();
+        if watchdog::render_hung(render_busy, self.since.elapsed()) {
+            eprintln!("cupertino-shell: the render thread hangs; the host exits");
+            std::process::exit(EXIT_FAILURE);
+        }
+        let render_done = self.runtime.render_done();
+        let mut stirred = render_busy.is_some() || render_done != self.render_done;
+        self.render_done = render_done;
+        let mut lost = Vec::new();
+        for (&component, started) in &mut self.started {
+            let busy = started.running.busy_for();
+            let turns = started.running.turns();
+            stirred |= busy.is_some() || turns != started.turns;
+            started.turns = turns;
+            let state = watchdog::liveness(busy, started.started.elapsed());
             if state == started.reported {
                 continue;
             }
@@ -365,6 +415,7 @@ impl Shell {
                 self.host.report(component, state);
             }
         }
+        self.stirred = stirred;
         for component in lost {
             self.lose(component);
         }
@@ -401,7 +452,7 @@ impl Shell {
                 break;
             }
             // a component's end ends the wait
-            let _ = self.host.wait(left);
+            let _ = self.host.wait(Some(left));
         }
         for started in self.started.values() {
             started.running.shut();

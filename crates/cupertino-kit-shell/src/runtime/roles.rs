@@ -6,8 +6,8 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex, PoisonError};
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::time::Duration;
 
 use cupertino_kit::core::WindowKey;
 use cupertino_kit::geometry::{Rect, Size};
@@ -38,6 +38,7 @@ use super::globals;
 use super::protocols::{KeyboardPanelsData, OverviewData, Quiet, WindowManagerData, Wire};
 use super::Shared;
 use crate::context::{self, Inbox};
+use crate::hosting::Busy;
 use crate::link::ComponentLink;
 use crate::outputs::{Output, OutputId, Transform};
 use crate::{
@@ -50,8 +51,8 @@ pub(crate) struct Binding {
     /// The component the loop runs; `None` for a program of its own.
     pub component: Option<ComponentName>,
     pub shared: Rc<RefCell<Shared>>,
-    /// The record of when the loop left its wait, that a host's watchdog reads.
-    pub busy: Option<Arc<Mutex<Option<Instant>>>>,
+    /// The loop's record of its wait, that a host's watchdog reads.
+    pub busy: Option<Arc<Busy>>,
 }
 
 /// The shell's globals on the connection, those it offers.
@@ -120,7 +121,7 @@ pub(crate) struct ShellRoles {
     shared: Rc<RefCell<Shared>>,
     pub(super) inbox: Arc<Inbox>,
     link: Option<Arc<ComponentLink>>,
-    busy: Option<Arc<Mutex<Option<Instant>>>>,
+    busy: Option<Arc<Busy>>,
     pub(super) globals: Globals,
     observed: SessionState,
     /// The session's appearance and display options as the program was last told them ([`Event::Appearance`]);
@@ -741,12 +742,6 @@ impl ShellRoles {
             self.inbox.push(Event::Appearance(appearance));
         }
     }
-
-    fn set_busy(&self, busy: Option<Instant>) {
-        if let Some(record) = &self.busy {
-            *record.lock().unwrap_or_else(PoisonError::into_inner) = busy;
-        }
-    }
 }
 
 impl SurfaceRoles for ShellRoles {
@@ -857,11 +852,15 @@ impl SurfaceRoles for ShellRoles {
         }
         self.captures.pump(conn, &self.inbox);
         self.ready_if_shown();
-        self.set_busy(None);
+        if let Some(busy) = &self.busy {
+            busy.waits();
+        }
     }
 
     fn woke(&mut self) {
-        self.set_busy(Some(Instant::now()));
+        if let Some(busy) = &self.busy {
+            busy.left();
+        }
     }
 
     fn frame_done(&mut self, surface: SurfaceId) {

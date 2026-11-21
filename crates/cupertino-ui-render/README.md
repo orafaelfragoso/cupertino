@@ -162,7 +162,8 @@ any thread (a window's renderer, its frames' texture, a surface's buffers). `run
 returns its result once the work before it is done (a panic in it goes on in the caller), and runs it at once when called
 from work `hand_over` gave the render thread; `hand_over` hands it work whose result comes back another way (a window's
 frame drawn and committed there) or that nobody waits for. `heartbeat` reads, from any thread, how long the work it
-is doing has taken and how much it finished: a stuck render thread shows there.
+is doing has taken and how much it finished: a stuck render thread shows there. `on_busy` has the render thread call a
+signal each time it leaves its wait for work, so a watchdog that sleeps while it waits is woken.
 `request` asks for the device: unless it is ready or being made, a warm-up thread (`gpu-warm-up`)
 makes the context on the render node it names (the surfaceless platform without one), makes the renderers' programs
 (saved per driver, made in turn with the session's other processes, `PROGRAM_TURN_PATIENCE`) and draws with each

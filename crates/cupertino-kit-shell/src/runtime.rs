@@ -17,9 +17,8 @@ use std::future::poll_fn;
 use std::marker::PhantomData;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 use std::task::Poll;
-use std::time::Instant;
 
 use cupertino_keyboard::modifiers::Profile;
 use cupertino_kit::core::{Application, Command, RendererClass, Window, WindowKey};
@@ -36,8 +35,8 @@ pub(crate) use globals::check as check_globals;
 pub(crate) struct Hosting {
     /// Set when the host asks the component to stop; the loop ends on its next turn.
     pub stop: Arc<AtomicBool>,
-    /// When the loop left its wait, while it is out of it (`hosting::Running::busy_for`).
-    pub busy: Arc<Mutex<Option<Instant>>>,
+    /// The loop's record of its wait, that the host's watchdog reads (`hosting::Running::busy_for`).
+    pub busy: Arc<hosting::Busy>,
 }
 
 /// How a component's loop ended.
@@ -242,7 +241,7 @@ pub(crate) fn run_component<C: Component>(
     hosting: &Hosting,
     connection: hosting::Connection,
 ) -> Result<Ran, Error> {
-    mark_busy(&hosting.busy);
+    hosting.busy.left();
     let wayland = connection
         .wayland()
         .cloned()
@@ -313,9 +312,4 @@ fn with_roles(
     roles.open_keyboard_panels(system.connection());
     roles.start_appearance(system.appearance().unwrap_or_default());
     system.with_roles(roles)
-}
-
-/// The loop is out of its wait from now on.
-fn mark_busy(busy: &Mutex<Option<Instant>>) {
-    *busy.lock().unwrap_or_else(PoisonError::into_inner) = Some(Instant::now());
 }

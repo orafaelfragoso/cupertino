@@ -204,7 +204,8 @@ fn a_failed_components_connection_sends_nothing_after_the_failure() {
         open.send(()).unwrap();
         let asked = Instant::now();
         let ended = loop {
-            host.wait(PATIENCE).expect("the host's connection stays up");
+            host.wait(Some(PATIENCE))
+                .expect("the host's connection stays up");
             if let Some(ended) = bar.ended() {
                 break ended;
             }

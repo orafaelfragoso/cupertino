@@ -604,7 +604,10 @@ pub fn connect_host(host_end: UnixStream) -> Host {
 pub fn wait_for(host: &mut Host, mut want: impl FnMut(&mut HostEvent) -> bool) -> HostEvent {
     let deadline = Instant::now() + PATIENCE;
     while Instant::now() < deadline {
-        for mut event in host.wait(Duration::from_millis(50)).expect("host waits") {
+        for mut event in host
+            .wait(Some(Duration::from_millis(50)))
+            .expect("host waits")
+        {
             if want(&mut event) {
                 return event;
             }
@@ -617,7 +620,8 @@ pub fn wait_for(host: &mut Host, mut want: impl FnMut(&mut HostEvent) -> bool) -
 pub fn settle(host: &mut Host) {
     let started = Instant::now();
     while started.elapsed() < Duration::from_millis(100) {
-        host.wait(Duration::from_millis(20)).expect("host waits");
+        host.wait(Some(Duration::from_millis(20)))
+            .expect("host waits");
     }
 }
 

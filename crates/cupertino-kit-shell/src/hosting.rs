@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::os::fd::{FromRawFd, OwnedFd};
 use std::os::unix::net::UnixStream;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{fence, AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -280,29 +280,81 @@ pub struct Host {
     queue: EventQueue<HostDispatchState>,
     state: HostDispatchState,
     components: HashMap<String, CupertinoHostComponentV1>,
-    /// Signalled as a component of a runtime made from this host ends, so [`Host::wait`] returns then.
-    ends: Arc<Ends>,
+    /// Signalled as a component of a runtime made from this host ends, and as a loop leaves its wait while the host
+    /// watches, so [`Host::wait`] returns then.
+    wake: Arc<Wake>,
 }
 
-/// An event descriptor a component's thread signals as it ends, which the host's wait reads.
-struct Ends(OwnedFd);
+/// The event descriptor the host's wait reads: a component's thread signals it as it ends and, while the host watches
+/// ([`Host::watch`]), the first loop of a component or the render thread that leaves its wait signals it too, so a
+/// loop that turns while the host waits with a timeout, or after the host woke, writes nothing.
+struct Wake {
+    fd: OwnedFd,
+    /// The host waits with no timeout, every loop in its wait when it looked: the next loop to leave it signals.
+    watching: AtomicBool,
+}
 
-impl Ends {
-    fn new() -> Result<Ends, Error> {
+impl Wake {
+    fn new() -> Result<Wake, Error> {
         rustix::event::eventfd(0, EventfdFlags::CLOEXEC | EventfdFlags::NONBLOCK)
-            .map(Ends)
+            .map(|fd| Wake {
+                fd,
+                watching: AtomicBool::new(false),
+            })
             .map_err(|e| Error::Protocol(format!("no event descriptor for the host's wait: {e}")))
     }
 
     /// A component ended: the host's wait returns.
     fn signal(&self) {
-        let _ = rustix::io::write(&self.0, &1u64.to_ne_bytes());
+        let _ = rustix::io::write(&self.fd, &1u64.to_ne_bytes());
+    }
+
+    /// A loop left its wait, its record already says so: a host that watches wakes, and stops watching.
+    fn left_wait(&self) {
+        // with the fence of `watch`: either the host reads this loop's record as out of its wait, or this loop reads
+        // the host as watching
+        fence(Ordering::SeqCst);
+        if self.watching.load(Ordering::Relaxed) && self.watching.swap(false, Ordering::Relaxed) {
+            self.signal();
+        }
+    }
+
+    /// The host reads the loops' records next and waits with no timeout if every loop is in its wait.
+    fn watch(&self) {
+        self.watching.store(true, Ordering::Relaxed);
+        fence(Ordering::SeqCst);
+    }
+
+    fn unwatch(&self) {
+        self.watching.store(false, Ordering::Relaxed);
     }
 
     /// Takes the signals given so far.
     fn clear(&self) {
         let mut count = [0u8; 8];
-        let _ = rustix::io::read(&self.0, &mut count);
+        let _ = rustix::io::read(&self.fd, &mut count);
+    }
+}
+
+/// A component's loop's record of its wait, which the host's watchdog reads (D17): when the loop left it, while it is
+/// out of it, and how often it left it. Leaving it wakes a host that watches ([`Host::watch`]).
+pub(crate) struct Busy {
+    since: Mutex<Option<Instant>>,
+    turns: AtomicU64,
+    wake: Arc<Wake>,
+}
+
+impl Busy {
+    /// The loop left its wait.
+    pub(crate) fn left(&self) {
+        *self.since.lock().unwrap_or_else(PoisonError::into_inner) = Some(Instant::now());
+        self.turns.fetch_add(1, Ordering::Relaxed);
+        self.wake.left_wait();
+    }
+
+    /// The loop is back in its wait.
+    pub(crate) fn waits(&self) {
+        *self.since.lock().unwrap_or_else(PoisonError::into_inner) = None;
     }
 }
 
@@ -354,14 +406,34 @@ impl Host {
             queue,
             state,
             components: HashMap::new(),
-            ends: Arc::new(Ends::new()?),
+            wake: Arc::new(Wake::new()?),
         })
     }
 
-    /// Wait up to `timeout` for host protocol events; it returns sooner, with what came meanwhile, as a component
-    /// started on a runtime of this host ends, so the host reads [`Running::ended`] then. A connection the server
-    /// closed, or that failed, is an error: the host has no server to run components for.
-    pub fn wait(&mut self, timeout: Duration) -> Result<Vec<HostEvent>, Error> {
+    /// From now until the next [`Host::wait`] returns, the first loop of a component started on a runtime of this host,
+    /// or of the process's render thread, to leave its wait ends a wait with no timeout as a component's end does. A
+    /// host calls it before it reads the records ([`Running::busy_for`], [`Running::turns`],
+    /// [`Runtime::render_busy_for`], [`Runtime::render_done`]) and waits with no timeout only when they say every loop
+    /// waits: a loop that leaves its wait after the host read its record finds the host watching.
+    pub fn watch(&self) {
+        self.wake.watch();
+    }
+
+    /// Wait up to `timeout` (`None`: with no timeout) for host protocol events; it returns sooner, with what came
+    /// meanwhile, as a component started on a runtime of this host ends, so the host reads [`Running::ended`] then, and,
+    /// with no timeout after [`Host::watch`], as a loop leaves its wait. A connection the server closed, or that failed,
+    /// is an error: the host has no server to run components for.
+    pub fn wait(&mut self, timeout: Option<Duration>) -> Result<Vec<HostEvent>, Error> {
+        if timeout.is_some() {
+            // a wait with a timeout ends at its time: the loops' turns meanwhile write nothing
+            self.wake.unwatch();
+        }
+        let events = self.wait_for(timeout.unwrap_or(Duration::MAX));
+        self.wake.unwatch();
+        events
+    }
+
+    fn wait_for(&mut self, timeout: Duration) -> Result<Vec<HostEvent>, Error> {
         let failed =
             |e: &dyn std::fmt::Display| Error::Protocol(format!("host connection failed: {e}"));
         match self.conn.flush() {
@@ -379,7 +451,7 @@ impl Host {
             let fd = guard.connection_fd();
             let mut fds = [
                 PollFd::new(&fd, PollFlags::IN),
-                PollFd::new(&self.ends.0, PollFlags::IN),
+                PollFd::new(&self.wake.fd, PollFlags::IN),
             ];
             let timeout = Timespec::try_from(timeout).unwrap_or(Timespec {
                 tv_sec: i64::MAX,
@@ -387,7 +459,7 @@ impl Host {
             });
             let polled = poll(&mut fds, Some(&timeout));
             if !fds[1].revents().is_empty() {
-                self.ends.clear();
+                self.wake.clear();
             }
             match polled {
                 // readable, hung up or failed: the read says which
@@ -493,8 +565,8 @@ pub struct Runtime {
     /// How a component's helper that ignores its stop asks for the host's restart.
     restart: Option<Restart>,
     reaper: Option<Arc<Reaper>>,
-    /// What a component's thread signals as it ends ([`Host::wait`]).
-    ends: Arc<Ends>,
+    /// What a component's thread signals as it ends, and its loop as it leaves its wait ([`Host::wait`]).
+    wake: Arc<Wake>,
 }
 
 /// The host's `request_restart`, which a component's handle can send without the host.
@@ -521,6 +593,8 @@ impl Runtime {
         environment: Environment,
     ) -> Result<Runtime, Error> {
         crate::host::install_failure_hook();
+        let wake = Arc::clone(&host.wake);
+        cupertino_ui_render::render_thread::on_busy(move || wake.left_wait());
         Ok(Self {
             kind,
             environment,
@@ -530,7 +604,7 @@ impl Runtime {
                 conn: host.conn.clone(),
             }),
             reaper: Reaper::new(),
-            ends: Arc::clone(&host.ends),
+            wake: Arc::clone(&host.wake),
         })
     }
 
@@ -553,7 +627,11 @@ impl Runtime {
             .map_err(|e| Error::Protocol(format!("clone component socket failed: {e}")))?;
         let sub_id = self.bus.register(component);
         let stop_flag = Arc::new(AtomicBool::new(false));
-        let busy_since = Arc::new(Mutex::new(None::<Instant>));
+        let busy = Arc::new(Busy {
+            since: Mutex::new(None),
+            turns: AtomicU64::new(0),
+            wake: Arc::clone(&self.wake),
+        });
         let ended = Arc::new(Mutex::new(None::<Ended>));
         let helpers = Arc::new(Mutex::new(Vec::new()));
         let inbox = Arc::new(Inbox::default());
@@ -582,10 +660,10 @@ impl Runtime {
         };
         let hosting = Hosting {
             stop: Arc::clone(&stop_flag),
-            busy: Arc::clone(&busy_since),
+            busy: Arc::clone(&busy),
         };
         let t_ended = Arc::clone(&ended);
-        let t_ends = Arc::clone(&self.ends);
+        let t_wake = Arc::clone(&self.wake);
         let t_bus = Arc::clone(&self.bus);
         let t_fault = Arc::clone(&fault);
 
@@ -627,7 +705,7 @@ impl Runtime {
                 if let Ok(mut slot) = t_ended.lock() {
                     *slot = Some(final_state);
                 }
-                t_ends.signal();
+                t_wake.signal();
             })
             .map_err(|e| {
                 self.bus.unregister(sub_id, component);
@@ -639,7 +717,7 @@ impl Runtime {
             sub_id,
             bus: Arc::clone(&self.bus),
             stop_flag,
-            busy_since,
+            busy,
             inbox,
             restart: self.restart.clone(),
             ended,
@@ -665,6 +743,12 @@ impl Runtime {
     pub fn render_busy_for(&self) -> Option<Duration> {
         cupertino_ui_render::render_thread::heartbeat().busy_for
     }
+
+    /// How many pieces of work the process's render thread finished: a count that moved since the host last read it
+    /// says the render thread left its wait meanwhile.
+    pub fn render_done(&self) -> u64 {
+        cupertino_ui_render::render_thread::heartbeat().done
+    }
 }
 
 /// Final termination status of a [`Running`] component.
@@ -680,7 +764,7 @@ pub struct Running {
     sub_id: u64,
     bus: Arc<BusHub>,
     stop_flag: Arc<AtomicBool>,
-    busy_since: Arc<Mutex<Option<Instant>>>,
+    busy: Arc<Busy>,
     /// The component's inbox, woken so its loop sees a stop.
     inbox: Arc<Inbox>,
     restart: Option<Restart>,
@@ -694,10 +778,17 @@ pub struct Running {
 impl Running {
     /// How long the component's loop has been busy; `None` while waiting.
     pub fn busy_for(&self) -> Option<Duration> {
-        self.busy_since
+        self.busy
+            .since
             .lock()
-            .ok()
-            .and_then(|s| s.map(|t| t.elapsed()))
+            .unwrap_or_else(PoisonError::into_inner)
+            .map(|t| t.elapsed())
+    }
+
+    /// How many times the component's loop left its wait: a count that moved since the host last read it says the
+    /// loop turned meanwhile.
+    pub fn turns(&self) -> u64 {
+        self.busy.turns.load(Ordering::Relaxed)
     }
 
     /// Ask the component's loop and helper threads to stop cleanly.

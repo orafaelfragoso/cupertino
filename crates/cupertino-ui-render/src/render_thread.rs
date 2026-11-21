@@ -243,6 +243,15 @@ pub fn heartbeat() -> Heartbeat {
     }
 }
 
+/// Has the render thread call `signal` each time it leaves its wait for work, once its [`heartbeat`] says it is busy:
+/// a watchdog that sleeps while the render thread waits is woken then (D17). A later call replaces the signal.
+pub fn on_busy(signal: impl Fn() + Send + Sync + 'static) {
+    *lock(&ON_BUSY) = Some(Arc::new(signal));
+}
+
+/// What the render thread calls as it leaves its wait ([`on_busy`]).
+static ON_BUSY: Mutex<Option<Arc<dyn Fn() + Send + Sync>>> = Mutex::new(None);
+
 /// When the work the render thread is doing began, in nanoseconds after [`epoch`] plus one; 0 while it waits.
 static BUSY_SINCE: AtomicU64 = AtomicU64::new(0);
 
@@ -534,6 +543,10 @@ fn serve(queue: Receiver<Job>) {
     while let Ok(job) = queue.recv() {
         let since = epoch.elapsed().as_nanos() as u64 + 1;
         BUSY_SINCE.store(since, Ordering::Release);
+        let signal = lock(&ON_BUSY).clone();
+        if let Some(signal) = signal {
+            signal();
+        }
         // `run` catches its work's panic; a panic in handed-over work or in dropping a resident value is the render
         // thread's own and is caught here so it keeps serving
         let _ = catch_unwind(AssertUnwindSafe(job));

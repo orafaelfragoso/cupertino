@@ -92,7 +92,7 @@ pub fn run(file: PathBuf) -> ! {
 
 /// What the server sent within `timeout`; a host whose connection ended has no server to run components for.
 fn wait(host: &mut Host, timeout: Duration) -> Vec<HostEvent> {
-    match host.wait(timeout) {
+    match host.wait(Some(timeout)) {
         Ok(events) => events,
         Err(e) => {
             report(format!("host connection ended {e}"));

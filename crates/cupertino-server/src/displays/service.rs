@@ -21,8 +21,9 @@ pub const BUS_NAME: &str = "org.cupertino.Displays1";
 pub const OBJECT_PATH: &str = "/org/cupertino/Displays1";
 
 /// One connected display on the wire:
-/// `(connector, description, enabled, x, y, width, height, refresh_mhz, scale, transform, modes)`
-/// where each mode is `(width, height, refresh_mhz)`.
+/// `(connector, description, enabled, x, y, width, height, refresh_mhz, scale, transform, modes, physical_mm)`
+/// where each mode is `(width, height, refresh_mhz)` and `physical_mm` is the picture's width and height in
+/// millimetres, `(0, 0)` when the display does not report it.
 pub type DisplayRecord = (
     String,
     String,
@@ -35,6 +36,7 @@ pub type DisplayRecord = (
     f64,
     String,
     Vec<(i32, i32, u32)>,
+    (u32, u32),
 );
 
 /// Signals emitted by the compositor to the `Displays1` bus thread.
@@ -79,6 +81,14 @@ pub enum DisplaysCall {
         caller: Caller,
         reply: async_channel::Sender<Result<(), Reject>>,
     },
+}
+
+/// A display's physical size on the wire: `(0, 0)` when either side is unknown.
+fn physical_size((width, height): (i32, i32)) -> (u32, u32) {
+    match (u32::try_from(width), u32::try_from(height)) {
+        (Ok(w), Ok(h)) if w > 0 && h > 0 => (w, h),
+        _ => (0, 0),
+    }
 }
 
 /// Wire name for a Smithay `Transform`.
@@ -141,6 +151,7 @@ impl Cupertino {
                     h.state.scale,
                     transform_name(h.state.transform).to_owned(),
                     modes,
+                    physical_size(h.info.physical_mm),
                 )
             })
             .collect()

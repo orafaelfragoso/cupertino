@@ -3,6 +3,12 @@
 //! UPower's display device on the system bus, `org.cupertino.NotificationCenter1` on
 //! the session bus. The Sound pane talks to Audio1 through its own asynchronous client. Each connection is made on first use and
 //! again after a failure, so a daemon that starts later is picked up; properties are read every time, never cached.
+//! Every call here waits for its service, so the window makes none of them itself: they run as tasks of Kit's I/O pool
+//! (`shell::desk`), and a call that can wait long hands back the [`Job`] that waits, for a task of its own.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "the services are called by tasks of the I/O pool (shell::desk), and before the window loop exists"
+)]
 
 use crate::hardware::{Hardware, Sources};
 use std::collections::{HashMap, HashSet};
@@ -23,7 +29,6 @@ use crate::live::{
     Mouse, Reading, Vpn, Wifi,
 };
 use crate::panes::Call;
-use crate::watch::{Changed, Which};
 
 pub const NETWORK_NAME: &str = "org.cupertino.Network1";
 pub const NETWORK_PATH: &str = "/org/cupertino/Network1";
@@ -39,6 +44,9 @@ pub const SESSION_NAME: &str = "org.cupertino.Session1";
 pub const SESSION_PATH: &str = "/org/cupertino/Session1";
 pub const CENTRE_PATH: &str = "/org/cupertino/NotificationCenter1";
 pub const LOGIN_NAME: &str = "org.cupertino.LoginManager1";
+/// The server's display configuration (D14), which the Displays pane reads and changes.
+pub const DISPLAYS_NAME: &str = "org.cupertino.Displays1";
+pub const DISPLAYS_PATH: &str = "/org/cupertino/Displays1";
 pub const LOGIN_PATH: &str = "/org/cupertino/LoginManager1";
 /// The prefix of sessiond's refusals of `SetSystemAccessibility`.
 const LOGIN_ERROR: &str = "org.cupertino.LoginManager1.Error.";
@@ -76,32 +84,14 @@ enum Endpoint {
 }
 
 impl Bus {
-    /// Reuse the session connection without a blocking connect on the window thread.
-    pub(crate) fn audio_connection(
-        &self,
-    ) -> impl std::future::Future<Output = zbus::Result<zbus::Connection>> + Send + 'static {
-        let connected = self
-            .connection
-            .as_ref()
-            .map(|c| c.inner().clone())
-            .filter(|c| !c.is_closed());
-        let endpoint = self.endpoint.clone();
-        async move {
-            if let Some(conn) = connected {
-                return Ok(conn);
-            }
-            match endpoint {
-                Endpoint::Session => zbus::Connection::session().await,
-                Endpoint::System => zbus::Connection::system().await,
-                Endpoint::Address(address) => {
-                    zbus::connection::Builder::address(address.as_str())?
-                        .build()
-                        .await
-                }
-                Endpoint::Gone => Err(zbus::Error::Failure(
-                    "The session bus is unavailable.".into(),
-                )),
-            }
+    /// Where this bus is for a connection of the window's loop ([`Reach`]): a test's bus is reached on its own
+    /// connection.
+    pub fn reach(&self) -> Reach {
+        Reach {
+            endpoint: self.endpoint.clone(),
+            connection: Arc::new(Mutex::new(
+                self.connection.as_ref().map(|c| c.inner().clone()),
+            )),
         }
     }
 
@@ -164,17 +154,54 @@ impl Bus {
             .build()
     }
 
-    /// Forget the connection, closed under it, so the next use connects again.
-    fn forget(&mut self) {
-        self.connection = None;
-    }
-
     /// Forget the connection after a failure of the bus itself, so the next use connects again.
     fn checked<T>(&mut self, result: zbus::Result<T>) -> zbus::Result<T> {
         if let Err(zbus::Error::InputOutput(_) | zbus::Error::Address(_)) = &result {
             self.connection = None;
         }
         result
+    }
+}
+
+/// A bus for the tasks of the window's loop (the watches, the Sound pane's client): one asynchronous connection, made
+/// by the first task that needs it and again once it closed, shared by the clones.
+#[derive(Clone)]
+pub struct Reach {
+    endpoint: Endpoint,
+    connection: Arc<Mutex<Option<zbus::Connection>>>,
+}
+
+impl Reach {
+    /// The connection, made first if there is none open.
+    pub fn connect(
+        &self,
+    ) -> impl std::future::Future<Output = zbus::Result<zbus::Connection>> + Send + 'static {
+        let shared = self.connection.clone();
+        let endpoint = self.endpoint.clone();
+        async move {
+            let open = shared
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
+                .filter(|c| !c.is_closed());
+            if let Some(connection) = open {
+                return Ok(connection);
+            }
+            let connection = match endpoint {
+                Endpoint::Session => zbus::Connection::session().await,
+                Endpoint::System => zbus::Connection::system().await,
+                Endpoint::Address(address) => {
+                    zbus::connection::Builder::address(address.as_str())?
+                        .build()
+                        .await
+                }
+                Endpoint::Gone => Err(zbus::Error::Failure("the test bus is gone".into())),
+            }?;
+            *shared
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(connection.clone());
+            Ok(connection)
+        }
     }
 }
 
@@ -343,10 +370,153 @@ impl Backends {
     }
 }
 
-/// The live services and their connections.
 /// What the Displays pane says when no display server answers.
 const NO_COMPOSITOR: &str = "The display server does not answer";
 
+/// One display as `org.cupertino.Displays1.ListDisplays` gives it: connector, description, whether it is on, its
+/// position in points, its mode (width and height in device pixels, refresh rate in millihertz), its scale, its
+/// transform, its modes (width, height, refresh rate) and its physical size in millimetres (`(0, 0)` when unknown).
+pub type DisplayRecord = (
+    String,
+    String,
+    bool,
+    i32,
+    i32,
+    i32,
+    i32,
+    u32,
+    f64,
+    String,
+    Vec<(i32, i32, u32)>,
+    (u32, u32),
+);
+
+/// Whether a transform of `Displays1` turns the display by 90 or 270 degrees.
+fn swaps_sides(transform: &str) -> bool {
+    matches!(transform, "90" | "270" | "flipped-90" | "flipped-270")
+}
+
+/// The displays that are on, from `Displays1`'s records: a display that is off or has no mode is left out.
+pub fn monitors(records: Vec<DisplayRecord>) -> Vec<Monitor> {
+    records
+        .into_iter()
+        .filter_map(
+            |(
+                connector,
+                description,
+                enabled,
+                x,
+                y,
+                width,
+                height,
+                refresh,
+                scale,
+                transform,
+                modes,
+                mm,
+            )| {
+                let mode = (u32::try_from(width).ok()?, u32::try_from(height).ok()?);
+                if !enabled || mode.0 == 0 || mode.1 == 0 {
+                    return None;
+                }
+                let rotated = swaps_sides(&transform);
+                let scale = if scale.is_finite() && scale > 0.0 {
+                    scale
+                } else {
+                    1.0
+                };
+                let points = |pixels: u32| (f64::from(pixels) / scale).round() as u32;
+                let logical = if rotated {
+                    (points(mode.1), points(mode.0))
+                } else {
+                    (points(mode.0), points(mode.1))
+                };
+                let mut refresh_rates: Vec<u32> = modes
+                    .iter()
+                    .filter(|(w, h, r)| (*w, *h) == (width, height) && *r > 0)
+                    .map(|(_, _, r)| *r)
+                    .collect();
+                refresh_rates.sort_unstable();
+                refresh_rates.dedup();
+                let title = crate::about::display_title(&crate::about::Display {
+                    description: Some(&description),
+                    name: Some(&connector),
+                    ..Default::default()
+                })
+                .unwrap_or_else(|| "Display".to_owned());
+                Some(Monitor {
+                    title,
+                    mode,
+                    refresh_mhz: (refresh > 0).then_some(refresh),
+                    scale,
+                    connector: Some(connector),
+                    physical_mm: (mm.0 > 0 && mm.1 > 0).then_some(mm),
+                    logical: Some(logical),
+                    rotated,
+                    position: Some((x, y)),
+                    refresh_rates,
+                })
+            },
+        )
+        .collect()
+}
+
+/// What a display's row says when the server did not change it.
+const REFRESH_NOT_CHANGED: &str = "The refresh rate could not be changed.";
+const NOT_MOVED: &str = "The display could not be moved.";
+const SIZE_NOT_CHANGED: &str = "The display size could not be changed.";
+
+/// A display change refused or failed: the reason goes to the log, `sentence` to the row.
+fn display_failure(e: &zbus::Error, sentence: &str) -> String {
+    log_once(&format!("{sentence} {e}"));
+    sentence.to_owned()
+}
+
+/// A new Wi-Fi reading with what the window added to the one it shows, `keep`: a join in progress ends when its
+/// network is connected or a device reports a failure.
+pub fn carry_wifi(reading: Reading<Wifi>, keep: Option<&Wifi>) -> Reading<Wifi> {
+    match (reading, keep) {
+        (Reading::Ready(mut w), Some(previous)) => {
+            w.joining = previous.joining.clone().filter(|ssid| {
+                !w.networks.iter().any(|n| &n.ssid == ssid && n.connected)
+                    && w.devices.iter().all(|d| d.failure.is_empty())
+            });
+            w.failure = previous.failure.clone().or_else(|| {
+                w.devices
+                    .iter()
+                    .find(|d| !d.failure.is_empty() && previous.joining.is_some())
+                    .map(|d| d.failure.clone())
+            });
+            Reading::Ready(w)
+        }
+        (other, _) => other,
+    }
+}
+
+/// A new Bluetooth reading with what the window added to the one it shows, `keep`: whether another client's agent
+/// pairs, the failures shown, and the connections asked for, which mark their devices connecting.
+pub fn carry_bluetooth(
+    reading: Reading<Bluetooth>,
+    keep: Option<&Bluetooth>,
+) -> Reading<Bluetooth> {
+    reading.map(|b| {
+        let mut b = Bluetooth {
+            agent_elsewhere: keep.is_some_and(|k| k.agent_elsewhere),
+            failure: keep.and_then(|k| k.failure.clone()),
+            asked_connect: keep.map(|k| k.asked_connect.clone()).unwrap_or_default(),
+            device_failure: keep.and_then(|k| k.device_failure.clone()),
+            ..b
+        };
+        b.mark_connecting();
+        b
+    })
+}
+
+/// A call that waits for its service (a pairing, a device, a join, a display's mode), made by a task of its own:
+/// the services go on meanwhile. Its error is the row's sentence.
+pub type Job = Box<dyn FnOnce() -> Result<(), String> + Send>;
+
+/// The live services and their connections.
 pub struct Services {
     pub system: Bus,
     pub session: Bus,
@@ -355,17 +525,6 @@ pub struct Services {
     pairing: Arc<Mutex<HashSet<String>>>,
     /// Where the hardware facts are read; `None` (tests) is a machine without a battery or a touchpad.
     hardware: Option<Sources>,
-    /// Listens to the input while the Sound pane shows it, to draw its level.
-    meter: Option<crate::meter::Meter>,
-    /// Hears the change signals of the services, once [`Services::watch`] is called.
-    on_change: Option<Arc<dyn Fn(Changed) + Send + Sync>>,
-    /// Whether the session bus and the system bus are watched now.
-    watching: [bool; 2],
-    /// The change signals the shown pane reads, shared with the watches.
-    interest: crate::watch::Interest,
-    /// The displays are read from and set on the display server the session names; services on given buses (tests)
-    /// reach none, so a test never reads or changes the displays of the session it runs in.
-    compositor: bool,
 }
 
 impl Services {
@@ -376,11 +535,6 @@ impl Services {
             backends: Backends::default(),
             pairing: Arc::default(),
             hardware: Some(Sources::default()),
-            meter: None,
-            on_change: None,
-            watching: [false; 2],
-            interest: crate::watch::Interest::default(),
-            compositor: true,
         }
     }
 
@@ -392,11 +546,6 @@ impl Services {
             backends: Backends::default(),
             pairing: Arc::default(),
             hardware: None,
-            meter: None,
-            on_change: None,
-            watching: [false; 2],
-            interest: crate::watch::Interest::default(),
-            compositor: false,
         }
     }
 
@@ -410,69 +559,15 @@ impl Services {
 
     // ---- reading ---------------------------------------------------------------------------------------------------
 
-    /// Watch the change signals of the services the panes read, on each bus once it connects ([`crate::watch`]), and
-    /// the devices coming and going ([`crate::hotplug`]); `on` hears what changed. A bus that does not connect now is
-    /// watched at a later [`Services::detect`] or [`Services::keep_watching`].
-    pub fn watch(&mut self, on: Arc<dyn Fn(Changed) + Send + Sync>) {
-        if self.on_change.is_none() && self.hardware.is_some() {
-            if let Err(e) = crate::hotplug::start(on.clone()) {
-                log_once(&format!(
-                    "cannot hear devices coming and going: {e}; a device plugged in shows when the window reads the hardware again"
-                ));
-            }
-        }
-        self.on_change = Some(on);
-        self.keep_watching();
-    }
-
-    /// The change signals the shown pane reads; the watches drop the others before they reach the window.
-    pub fn want(&self, wanted: &[Changed]) {
-        self.interest.set(wanted);
-    }
-
-    /// The watch of `bus` ended with its connection: the connection is closed, so the next use connects again and
-    /// [`Services::keep_watching`] watches the new one.
-    pub fn watch_ended(&mut self, bus: Which) {
-        self.watching[bus as usize] = false;
-        match bus {
-            Which::Session => self.session.forget(),
-            Which::System => self.system.forget(),
-        }
-    }
-
-    /// Whether `bus` is watched now.
-    pub fn watched(&self, bus: Which) -> bool {
-        self.watching[bus as usize]
-    }
-
-    /// Watch each bus not watched now, once [`Services::watch`] was called.
-    pub fn keep_watching(&mut self) {
-        let Some(on) = self.on_change.clone() else {
-            return;
-        };
-        for bus in [Which::Session, Which::System] {
-            if self.watching[bus as usize] {
-                continue;
-            }
-            let side = match bus {
-                Which::Session => &mut self.session,
-                Which::System => &mut self.system,
-            };
-            let Ok(connection) = side.connection() else {
-                continue;
-            };
-            match crate::watch::start(bus, connection, self.interest.clone(), on.clone()) {
-                Ok(()) => self.watching[bus as usize] = true,
-                Err(e) => log_once(&format!("cannot watch the services' change signals: {e}")),
-            }
-        }
+    /// Whether the hardware facts are this machine's, so devices coming and going are heard ([`crate::hotplug`]).
+    pub fn reads_hardware(&self) -> bool {
+        self.hardware.is_some()
     }
 
     /// Look up which services are on the system bus, running or activatable. `org.cupertino.Network1` comes before
     /// NetworkManager, whose name the network daemon also claims. When the bus does not answer the last answer stays.
-    /// Which services back the panes, and the hardware facts; the buses are watched again if their watch ended.
+    /// Which services back the panes, and the hardware facts.
     pub fn detect(&mut self) -> Backends {
-        self.keep_watching();
         self.backends.hardware = self
             .hardware
             .as_ref()
@@ -628,62 +723,32 @@ impl Services {
         }
     }
 
-    /// The connected displays with a current mode: one short connection asks the server.
-    pub fn displays(&self) -> Reading<Vec<Monitor>> {
-        if !self.compositor {
-            return Reading::Unavailable(NO_COMPOSITOR.to_owned());
-        }
-        let outputs = cupertino_wayland_client::Connection::connect()
-            .map_err(|e| e.to_string())
-            .and_then(|mut conn| {
-                conn.roundtrip().map_err(|e| e.to_string())?;
-                Ok(conn.outputs())
-            });
-        // where each display lies and which refresh rates it has: the server's output management says
-        let layouts = crate::output_config::layouts().unwrap_or_default();
-        match outputs {
-            Ok(outputs) => Reading::Ready(
-                outputs
-                    .into_iter()
-                    .filter_map(|o| {
-                        let mode = o.mode?;
-                        let title = crate::about::display_title(&crate::about::Display {
-                            make: o.make.as_deref(),
-                            model: o.model.as_deref(),
-                            description: o.description.as_deref(),
-                            name: o.name.as_deref(),
-                            ..Default::default()
-                        })
-                        .unwrap_or_else(|| "Display".to_owned());
-                        Some(Monitor {
-                            title,
-                            mode,
-                            refresh_mhz: o.refresh_mhz,
-                            scale: o.effective_scale().unwrap_or_else(|| o.scale.factor()),
-                            connector: o.name.clone(),
-                            physical_mm: o.physical_size_mm,
-                            logical: o.geometry.map(|g| (g.width, g.height)),
-                            rotated: o.transform.swaps_sides(),
-                            position: o
-                                .name
-                                .as_ref()
-                                .and_then(|n| layouts.iter().find(|l| &l.connector == n))
-                                .map(|l| l.position),
-                            refresh_rates: o
-                                .name
-                                .as_ref()
-                                .and_then(|n| layouts.iter().find(|l| &l.connector == n))
-                                .map(|l| l.refresh_rates.clone())
-                                .unwrap_or_default(),
-                        })
-                    })
-                    .collect(),
-            ),
-            Err(e) => {
-                log_once(&format!("the displays could not be listed: {e}"));
-                Reading::Unavailable(NO_COMPOSITOR.into())
-            }
-        }
+    /// The displays that are on, as the server's `Displays1` lists them on the session bus.
+    pub fn displays(&mut self) -> Reading<Vec<Monitor>> {
+        let result = self
+            .session
+            .proxy(DISPLAYS_NAME, DISPLAYS_PATH, DISPLAYS_NAME)
+            .and_then(|p| p.call::<_, _, Vec<DisplayRecord>>("ListDisplays", &()));
+        reading(self.session.checked(result), NO_COMPOSITOR).map(monitors)
+    }
+
+    /// `method` of `Displays1` with `body`; a refusal is logged and the row says `sentence`.
+    fn set_displays<B>(
+        &mut self,
+        method: &'static str,
+        body: &B,
+        sentence: &str,
+    ) -> Result<(), String>
+    where
+        B: zbus::export::serde::Serialize + zbus::zvariant::DynamicType,
+    {
+        let result = self
+            .session
+            .proxy(DISPLAYS_NAME, DISPLAYS_PATH, DISPLAYS_NAME)
+            .and_then(|p| p.call::<_, _, ()>(method, body));
+        self.session
+            .checked(result)
+            .map_err(|e| display_failure(&e, sentence))
     }
 
     pub fn brightness(&mut self) -> Reading<f64> {
@@ -807,50 +872,18 @@ impl Services {
         }
     }
 
-    /// Start listening to the default input to measure how loud it is. Does nothing when it already runs.
-    pub fn start_meter(&mut self) {
-        if self.meter.is_some() {
-            return;
-        }
-        self.meter = crate::meter::Meter::start();
-    }
-
-    /// Stop listening.
-    pub fn stop_meter(&mut self) {
-        self.meter = None;
-    }
-
-    /// How loud the input is, 0 to 1, since the last asked; 0 while nothing listens.
-    pub fn meter_level(&mut self) -> f64 {
-        self.meter.as_ref().map_or(0.0, |m| m.level())
-    }
-
-    pub fn wifi(&mut self, keep: Option<&Wifi>) -> Reading<Wifi> {
+    /// The Wi-Fi radio, its devices and networks as the service reports them; what the window adds to them
+    /// (a join in progress, its failure) is carried over by [`carry_wifi`].
+    pub fn wifi(&mut self) -> Reading<Wifi> {
         // before the first detection the Cupertino daemon is asked, as its calls are
         let backend = self.backends.network.unwrap_or(NetworkBackend::Cupertino);
         let result = self.system.connection().and_then(|c| backend.wifi(c));
-        match reading(self.system.checked(result), "Wi-Fi is not available") {
-            Reading::Ready(mut w) => {
-                // a Join in progress ends when its network is connected or a device reports a failure
-                if let Some(previous) = keep {
-                    w.joining = previous.joining.clone().filter(|ssid| {
-                        !w.networks.iter().any(|n| &n.ssid == ssid && n.connected)
-                            && w.devices.iter().all(|d| d.failure.is_empty())
-                    });
-                    w.failure = previous.failure.clone().or_else(|| {
-                        w.devices
-                            .iter()
-                            .find(|d| !d.failure.is_empty() && previous.joining.is_some())
-                            .map(|d| d.failure.clone())
-                    });
-                }
-                Reading::Ready(w)
-            }
-            other => other,
-        }
+        reading(self.system.checked(result), "Wi-Fi is not available")
     }
 
-    pub fn bluetooth(&mut self, keep: Option<&Bluetooth>) -> Reading<Bluetooth> {
+    /// The Bluetooth adapter and its devices as the service reports them; what the window adds to them (the agent
+    /// elsewhere, the failures, the connections asked for) is carried over by [`carry_bluetooth`].
+    pub fn bluetooth(&mut self) -> Reading<Bluetooth> {
         let backend = self
             .backends
             .bluetooth
@@ -865,22 +898,13 @@ impl Services {
             .connection()
             .and_then(|c| backend.adapter(c, &pairing));
         reading(self.system.checked(result), "Bluetooth is not available").map(|adapter| {
-            let b = Bluetooth {
+            Bluetooth {
                 available: adapter.available,
                 powered: adapter.powered,
                 discovering: adapter.discovering,
                 devices: adapter.devices,
                 ..Bluetooth::default()
-            };
-            let mut b = Bluetooth {
-                agent_elsewhere: keep.is_some_and(|k| k.agent_elsewhere),
-                failure: keep.and_then(|k| k.failure.clone()),
-                asked_connect: keep.map(|k| k.asked_connect.clone()).unwrap_or_default(),
-                device_failure: keep.and_then(|k| k.device_failure.clone()),
-                ..b
-            };
-            b.mark_connecting();
-            b
+            }
         })
     }
 
@@ -888,9 +912,6 @@ impl Services {
 
     /// Carry out `call`; the error text for the row when it is refused or fails.
     pub fn call(&mut self, call: &Call) -> Result<(), String> {
-        if !self.compositor && call.sets_displays() {
-            return Err(NO_COMPOSITOR.to_owned());
-        }
         let system =
             |s: &mut Self, name, path, iface, f: &dyn Fn(&Proxy<'static>) -> zbus::Result<()>| {
                 let result = s.system.proxy(name, path, iface).and_then(|p| f(&p));
@@ -930,23 +951,14 @@ impl Services {
                 let raw = ((level.clamp(0.0, 1.0) * f64::from(max)).round() as u32).clamp(BRIGHTNESS_FLOOR.min(max), max);
                 p.call::<_, _, ()>("SetBrightness", &(raw,))
             }),
-            Call::SetDisplayRefresh { connector, mhz } => crate::output_config::configure(connector, crate::output_config::Change { refresh_mhz: Some(*mhz), ..Default::default() }).map_err(|e| {
-                log_once(&format!("the refresh rate could not be changed: {e}"));
-                "The refresh rate could not be changed.".to_string()
-            }),
-            Call::SetDisplayPosition { connector, x, y } => crate::output_config::configure(connector, crate::output_config::Change { position: Some((*x, *y)), ..Default::default() }).map_err(|e| {
-                log_once(&format!("the display could not be moved: {e}"));
-                "The display could not be moved.".to_string()
-            }),
-            Call::SetDisplayScale { connector, scale } => crate::output_config::set_scale(connector, *scale).map_err(|e| {
-                log_once(&format!("the display size could not be changed: {e}"));
-                "The display size could not be changed.".to_string()
-            }),
+            Call::SetDisplayRefresh { connector, mhz } => self.set_displays("SetRefreshRate", &(connector.as_str(), *mhz), REFRESH_NOT_CHANGED),
+            Call::SetDisplayPosition { connector, x, y } => self.set_displays("SetPosition", &(connector.as_str(), *x, *y), NOT_MOVED),
+            Call::SetDisplayScale { connector, scale } => self.set_displays("SetScale", &(connector.as_str(), *scale), SIZE_NOT_CHANGED),
             Call::SetWirelessEnabled(on) => system(self, NETWORK_NAME, NETWORK_PATH, NETWORK_NAME, &|p| p.set_property("WirelessEnabled", *on).map_err(zbus::Error::from)),
             Call::Join { ssid, passphrase } => system(self, NETWORK_NAME, NETWORK_PATH, NETWORK_NAME, &|p| p.call::<_, _, ()>("Connect", &(ssid.as_str(), passphrase.as_ref().map_or("", |p| p.as_str())))),
             Call::Disconnect => system(self, NETWORK_NAME, NETWORK_PATH, NETWORK_NAME, &|p| p.call::<_, _, ()>("Disconnect", &())),
             Call::SetBluetoothPowered(on) => system(self, BLUETOOTH_NAME, BLUETOOTH_PATH, BLUETOOTH_NAME, &|p| p.set_property("Powered", *on).map_err(zbus::Error::from)),
-            Call::Pair(_) => panic!("a pairing waits for the agent's sheet, so it runs on its own thread: Services::pair"),
+            Call::Pair(_) => panic!("a pairing waits for the agent's sheet, so it runs as a task of its own: Services::pair"),
             Call::Connect(id) => system(self, BLUETOOTH_NAME, BLUETOOTH_PATH, BLUETOOTH_NAME, &|p| p.call::<_, _, ()>("Connect", &(id.as_str(),))),
             Call::DisconnectDevice(id) => system(self, BLUETOOTH_NAME, BLUETOOTH_PATH, BLUETOOTH_NAME, &|p| p.call::<_, _, ()>("Disconnect", &(id.as_str(),))),
             Call::Remove { id, confirmed } => {
@@ -956,18 +968,10 @@ impl Services {
         }
     }
 
-    /// Start `call` on a thread of its own when it can take long: a device's connection, disconnection or removal, a
-    /// join of a saved network, a display's mode or place. `done` gets its result there. `None` when `call` is quick and
-    /// is made with [`Self::call`]; `Some(Err)` when the thread could not start.
-    pub fn call_in_background(
-        &mut self,
-        call: &Call,
-        done: impl FnOnce(Result<(), String>) + Send + 'static,
-    ) -> Option<Result<(), String>> {
-        if !self.compositor && call.sets_displays() {
-            return Some(Err(NO_COMPOSITOR.to_owned()));
-        }
-        type Job = Box<dyn FnOnce() -> Result<(), String> + Send>;
+    /// The [`Job`] that makes `call` when it can take long: a device's connection, disconnection or removal, a join of
+    /// a saved network, a display's mode or place. `None` when `call` is quick and is made with [`Self::call`];
+    /// `Some(Err)` when its service can't be reached.
+    pub fn long_call(&mut self, call: &Call) -> Option<Result<Job, String>> {
         type BusCall = Box<dyn FnOnce(&Connection) -> zbus::Result<()> + Send>;
         let on_bus = |s: &mut Self, f: BusCall| -> Result<Job, String> {
             let connection = s.system.connection().cloned();
@@ -984,6 +988,10 @@ impl Services {
                     .call::<_, _, ()>(method, &(id.as_str(),))
                     .map_err(|e| failure(&e))
             }))
+        };
+        let on_displays = |s: &mut Self| -> Result<Proxy<'static>, String> {
+            let proxy = s.session.proxy(DISPLAYS_NAME, DISPLAYS_PATH, DISPLAYS_NAME);
+            s.session.checked(proxy).map_err(|e| failure(&e))
         };
         let job: Result<Job, String> = match call.clone() {
             Call::Connect(id) if self.bluez() => {
@@ -1006,54 +1014,27 @@ impl Services {
                 ssid,
                 passphrase: None,
             } if self.network_manager() => on_bus(self, Box::new(move |c| nm::join(c, &ssid, ""))),
-            Call::SetDisplayRefresh { connector, mhz } => Ok(Box::new(move || {
-                crate::output_config::configure(
-                    &connector,
-                    crate::output_config::Change {
-                        refresh_mhz: Some(mhz),
-                        ..Default::default()
-                    },
-                )
-                .map_err(|e| {
-                    log_once(&format!("the refresh rate could not be changed: {e}"));
-                    "The refresh rate could not be changed.".to_string()
+            Call::SetDisplayRefresh { connector, mhz } => on_displays(self).map(|p| -> Job {
+                Box::new(move || {
+                    p.call::<_, _, ()>("SetRefreshRate", &(connector.as_str(), mhz))
+                        .map_err(|e| display_failure(&e, REFRESH_NOT_CHANGED))
                 })
-            })),
-            Call::SetDisplayPosition { connector, x, y } => Ok(Box::new(move || {
-                crate::output_config::configure(
-                    &connector,
-                    crate::output_config::Change {
-                        position: Some((x, y)),
-                        ..Default::default()
-                    },
-                )
-                .map_err(|e| {
-                    log_once(&format!("the display could not be moved: {e}"));
-                    "The display could not be moved.".to_string()
+            }),
+            Call::SetDisplayPosition { connector, x, y } => on_displays(self).map(|p| -> Job {
+                Box::new(move || {
+                    p.call::<_, _, ()>("SetPosition", &(connector.as_str(), x, y))
+                        .map_err(|e| display_failure(&e, NOT_MOVED))
                 })
-            })),
-            Call::SetDisplayScale { connector, scale } => Ok(Box::new(move || {
-                crate::output_config::set_scale(&connector, scale).map_err(|e| {
-                    log_once(&format!("the display size could not be changed: {e}"));
-                    "The display size could not be changed.".to_string()
+            }),
+            Call::SetDisplayScale { connector, scale } => on_displays(self).map(|p| -> Job {
+                Box::new(move || {
+                    p.call::<_, _, ()>("SetScale", &(connector.as_str(), scale))
+                        .map_err(|e| display_failure(&e, SIZE_NOT_CHANGED))
                 })
-            })),
+            }),
             _ => return None,
         };
-        let job = match job {
-            Ok(job) => job,
-            Err(e) => return Some(Err(e)),
-        };
-        Some(
-            std::thread::Builder::new()
-                .name("settings-call".into())
-                .spawn(move || done(job()))
-                .map(drop)
-                .map_err(|e| {
-                    log_once(&format!("cannot start a service call: {e}"));
-                    "The change could not be started.".to_string()
-                }),
-        )
+        Some(job)
     }
 
     /// Ask the Wi-Fi device to scan (the pane open and every 10 s while the radio is on, approximate).
@@ -1140,62 +1121,39 @@ impl Services {
         unregistered
     }
 
-    /// Pair device `id` on a thread of its own: `Pair` returns only when the pairing is over, and meanwhile the daemon
-    /// asks the agent, whose sheet needs the window. `done` gets the outcome on that thread.
-    pub fn pair(
-        &mut self,
-        id: &str,
-        done: impl FnOnce(Result<(), String>) + Send + 'static,
-    ) -> Result<(), String> {
+    /// The [`Job`] that pairs device `id`: `Pair` returns only when the pairing is over, and meanwhile the daemon asks
+    /// the agent, whose sheet needs the window.
+    pub fn pair(&mut self, id: &str) -> Result<Job, String> {
+        let id = id.to_string();
         if self.bluez() {
-            let device = self.system.connection().and_then(|c| bluez::pairing(c, id));
+            let device = self
+                .system
+                .connection()
+                .and_then(|c| bluez::pairing(c, &id));
             let device = self.system.checked(device).map_err(|e| failure(&e))?;
             let pairing = self.pairing.clone();
-            let id = id.to_string();
             pairing
                 .lock()
                 .expect("no thread panics while pairing")
                 .insert(id.clone());
-            let (shared, key) = (pairing.clone(), id.clone());
-            return std::thread::Builder::new()
-                .name("bluetooth-pair".into())
-                .spawn(move || {
-                    let result = bluez::pair(&device).map_err(|e| failure(&e));
-                    shared
-                        .lock()
-                        .expect("no thread panics while pairing")
-                        .remove(&key);
-                    done(result)
-                })
-                .map(drop)
-                .map_err(|e| {
-                    pairing
-                        .lock()
-                        .expect("no thread panics while pairing")
-                        .remove(&id);
-                    log_once(&format!("cannot start the pairing: {e}"));
-                    "The pairing could not be started.".to_string()
-                });
+            return Ok(Box::new(move || {
+                let result = bluez::pair(&device).map_err(|e| failure(&e));
+                pairing
+                    .lock()
+                    .expect("no thread panics while pairing")
+                    .remove(&id);
+                result
+            }));
         }
         let proxy = self
             .system
             .proxy(BLUETOOTH_NAME, BLUETOOTH_PATH, BLUETOOTH_NAME);
         let proxy = self.system.checked(proxy).map_err(|e| failure(&e))?;
-        let id = id.to_string();
-        std::thread::Builder::new()
-            .name("bluetooth-pair".into())
-            .spawn(move || {
-                done(
-                    proxy
-                        .call::<_, _, ()>("Pair", &(id.as_str(),))
-                        .map_err(|e| failure(&e)),
-                )
-            })
-            .map_err(|e| {
-                log_once(&format!("cannot start the pairing: {e}"));
-                "The pairing could not be started.".to_string()
-            })?;
-        Ok(())
+        Ok(Box::new(move || {
+            proxy
+                .call::<_, _, ()>("Pair", &(id.as_str(),))
+                .map_err(|e| failure(&e))
+        }))
     }
 
     /// Start or stop Bluetooth discovery (the pane open, §6.4).
@@ -1215,64 +1173,65 @@ impl Services {
         self.system.checked(result).map_err(|e| failure(&e))
     }
 
-    /// Ask sessiond on a thread of its own whether this person may set the machine's accessibility defaults (each
-    /// opening of the Accessibility pane, never kept). `done` gets the answer: false when sessiond says no, fails or
-    /// is not running.
+    /// What asks sessiond whether this person may set the machine's accessibility defaults (each opening of the
+    /// Accessibility pane, never kept), for a task of its own: false when sessiond says no, fails or is not running.
     pub fn can_set_system_accessibility(
         &mut self,
-        done: impl FnOnce(bool) + Send + 'static,
-    ) -> Result<(), String> {
+    ) -> Result<Box<dyn FnOnce() -> bool + Send>, String> {
         let proxy = self.system.proxy(LOGIN_NAME, LOGIN_PATH, LOGIN_NAME);
         let proxy = self.system.checked(proxy).map_err(|e| failure(&e))?;
-        std::thread::Builder::new()
-            .name("login-screen".into())
-            .spawn(move || {
-                done(
-                    match proxy.call::<_, _, bool>("CanSetSystemAccessibility", &()) {
-                        Ok(allowed) => allowed,
-                        Err(e) => {
-                            if !absent(&e) {
-                                log_once(&e.to_string());
-                            }
-                            false
-                        }
-                    },
-                )
-            })
-            .map_err(|e| {
-                log_once(&format!("cannot ask for the login screen: {e}"));
-                SERVICE_UNAVAILABLE.to_string()
-            })?;
-        Ok(())
+        Ok(Box::new(move || {
+            match proxy.call::<_, _, bool>("CanSetSystemAccessibility", &()) {
+                Ok(allowed) => allowed,
+                Err(e) => {
+                    if !absent(&e) {
+                        log_once(&e.to_string());
+                    }
+                    false
+                }
+            }
+        }))
     }
 
-    /// Make `options` the machine's accessibility defaults (`SetSystemAccessibility`) on a thread of its own, so the
-    /// row shows "Saving…" meanwhile. `done` gets the outcome: the row's sentence for a refusal
-    /// ([`login_screen_failure`]).
+    /// The [`Job`] that makes `options` the machine's accessibility defaults (`SetSystemAccessibility`), for a task of
+    /// its own, so the row shows "Saving…" meanwhile; a refusal is the row's sentence ([`login_screen_failure`]).
     pub fn set_system_accessibility(
         &mut self,
         options: HashMap<String, String>,
-        done: impl FnOnce(Result<(), String>) + Send + 'static,
-    ) -> Result<(), String> {
+    ) -> Result<Job, String> {
         let proxy = self.system.proxy(LOGIN_NAME, LOGIN_PATH, LOGIN_NAME);
         let proxy = self
             .system
             .checked(proxy)
             .map_err(|e| login_screen_failure(&e))?;
-        std::thread::Builder::new()
-            .name("login-screen".into())
-            .spawn(move || {
-                done(
-                    proxy
-                        .call::<_, _, ()>("SetSystemAccessibility", &(options,))
-                        .map_err(|e| login_screen_failure(&e)),
-                )
-            })
-            .map_err(|e| {
-                log_once(&format!("cannot change the login screen: {e}"));
-                SERVICE_UNAVAILABLE.to_string()
-            })?;
-        Ok(())
+        Ok(Box::new(move || {
+            proxy
+                .call::<_, _, ()>("SetSystemAccessibility", &(options,))
+                .map_err(|e| login_screen_failure(&e))
+        }))
+    }
+
+    /// Ask the server for the appearance (`org.cupertino.Session1.SetAppearance`).
+    pub fn set_appearance(&mut self, dark: bool) -> Result<(), String> {
+        let name = if dark { "dark" } else { "light" };
+        let result = self
+            .session
+            .proxy(SESSION_NAME, SESSION_PATH, SESSION_NAME)
+            .and_then(|p| p.call::<_, _, ()>("SetAppearance", &(name,)));
+        self.session
+            .checked(result)
+            .map_err(|e| format!("The appearance could not be changed: {}", failure(&e)))
+    }
+
+    /// Ask the server to set one key of `accessibility.conf` (`org.cupertino.Session1.SetAccessibility`).
+    pub fn set_accessibility(&mut self, key: &str, value: &str) -> Result<(), String> {
+        let result = self
+            .session
+            .proxy(SESSION_NAME, SESSION_PATH, SESSION_NAME)
+            .and_then(|p| p.call::<_, _, ()>("SetAccessibility", &(key, value)));
+        self.session
+            .checked(result)
+            .map_err(|e| format!("The setting could not be changed: {}", failure(&e)))
     }
 }
 

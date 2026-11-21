@@ -1,5 +1,9 @@
 //! What the Wi-Fi and Network panes show of each network interface: its addresses, router and name servers. The
 //! kernel and the resolver's file are read directly, so the same details show whichever service manages the network.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "read with the Wi-Fi and Network panes' readings, on the I/O pool (shell::reading)"
+)]
 
 use std::ffi::CStr;
 use std::net::Ipv4Addr;

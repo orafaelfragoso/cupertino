@@ -4,7 +4,12 @@
 //! shows it.
 
 mod audio;
+mod calls;
+mod desk;
+mod files;
 mod form;
+mod panel;
+mod reading;
 mod sheets;
 pub mod state;
 
@@ -162,13 +167,9 @@ pub fn run(pane: PaneId, activation: String) -> Result<()> {
     };
     // missing icons never stop the start: they are named here and drawn as placeholders
     required_icons(&Assets::discover());
-    let state = State::new(
-        Paths::from_env(),
-        Services::new(),
-        pane,
-        display_height()?,
-        notify,
-    )?;
+    let mut services = Services::new();
+    let display_height = display_height(&mut services)?;
+    let state = State::new(Paths::from_env(), services, pane, display_height, notify)?;
     launch(Start {
         state,
         background,
@@ -178,17 +179,19 @@ pub fn run(pane: PaneId, activation: String) -> Result<()> {
     Ok(cupertino_kit::app::run::<SettingsApp>()?)
 }
 
-/// The height of the display, for the Dock's default tile size: the window system reports no outputs, so one short
-/// connection asks the server.
-fn display_height() -> Result<f64> {
-    let mut conn = cupertino_wayland_client::Connection::connect()
-        .map_err(|e| format!("cannot connect to the display server: {e}"))?;
-    conn.roundtrip()?;
-    Ok(conn
-        .outputs()
-        .into_iter()
-        .find_map(|o| o.geometry.map(|g| f64::from(g.height)))
-        .ok_or("the server has no output")?)
+/// The height of the display in points, for the Dock's default tile size: the window system reports no outputs, so
+/// the server's `Displays1` is asked.
+fn display_height(services: &mut Services) -> Result<f64> {
+    match services.displays() {
+        crate::live::Reading::Ready(monitors) => Ok(monitors
+            .iter()
+            .find_map(|m| m.logical.map(|(_, h)| f64::from(h)))
+            .ok_or("the server has no display that is on")?),
+        crate::live::Reading::Unavailable(reason) => {
+            Err(format!("cannot list the displays: {reason}").into())
+        }
+        crate::live::Reading::Unknown => Err("cannot list the displays".into()),
+    }
 }
 
 /// Hand `start` to the next [`SettingsApp`] to start, as [`run`] does; for a test's window system.
@@ -217,10 +220,14 @@ pub struct Shell {
     refresh_armed: bool,
     /// Whether a [`Message::Rewatch`] is on its way.
     rewatch_armed: bool,
+    /// What the open panel's window keeps between frames.
+    panel_rows: panel::PanelRows,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Message {
+    /// A task of the window ended: what it found, for the window's state ([`desk`]).
+    Done(desk::Done),
     AudioRead(audio::Snapshot),
     AudioWritten(ControlId, std::result::Result<(), String>),
     Select(usize),
@@ -230,6 +237,8 @@ pub enum Message {
     ContentScroll(ScrollState),
     /// The sheet's list scrolled.
     SheetScroll(ScrollState),
+    /// Something happened in the open panel's window.
+    Chooser(crate::chooser::Event),
     /// The strip of thumbnails of this control scrolled.
     Query(TextChange),
     /// Return in the search field: the first result.
@@ -338,6 +347,21 @@ impl Shell {
 
     fn handle(&mut self, message: Message) -> Result<Vec<Command<Message>>> {
         match message {
+            Message::Done(done) => {
+                let apps = |state: &state::State| {
+                    crate::panes::notification_apps(&state.settings, &state.live)
+                };
+                let before = apps(&self.state);
+                if let Some(apply) = done.take() {
+                    apply(&mut self.state);
+                }
+                // a reading can take away the row whose menu is open
+                if self.open.is_some_and(|open| {
+                    !crate::panes::menu_survives(open, &before, &apps(&self.state))
+                }) {
+                    self.open = None;
+                }
+            }
             Message::AudioRead(snapshot) => {
                 let state = &mut self.state;
                 state.audio.done();
@@ -416,7 +440,6 @@ impl Shell {
             Message::Commit(id, value) => {
                 self.open = None;
                 self.state.commit(id, value)?;
-                return Ok(self.sheet_started());
             }
             Message::Level(id, value) => {
                 let now = self.state.now();
@@ -473,7 +496,14 @@ impl Shell {
                 if let Some(outcome) = sheets::apply(&mut self.state, action) {
                     self.state.sheet_outcome(outcome)?;
                 }
-                return Ok(self.sheet_started());
+            }
+            Message::Chooser(event) => {
+                if let Some((_, chooser)) = self.state.chooser.as_mut() {
+                    let outcome = chooser.update(event);
+                    self.state.chooser_outcome(outcome);
+                    // a folder the panel moved to is read by a task
+                    self.state.drive_picker();
+                }
             }
             Message::Menu(action) => {
                 return Ok(match MenuAction::from_name(&action) {
@@ -544,16 +574,7 @@ impl Shell {
                 } else if self.state.content_pane == PaneId::Sound {
                     self.state.refresh_sound(now);
                 } else if self.state.level.is_none() {
-                    let apps = |state: &state::State| {
-                        crate::panes::notification_apps(&state.settings, &state.live)
-                    };
-                    let before = apps(&self.state);
                     self.state.refresh(now)?;
-                    if self.open.is_some_and(|open| {
-                        !crate::panes::menu_survives(open, &before, &apps(&self.state))
-                    }) {
-                        self.open = None;
-                    }
                 }
             }
         }
@@ -582,12 +603,6 @@ impl Shell {
             self.show(page)?;
         }
         Ok(Vec::new())
-    }
-
-    /// A sheet a commit opened may need a listing from another thread first.
-    fn sheet_started(&mut self) -> Vec<Command<Message>> {
-        self.state.drive_picker();
-        Vec::new()
     }
 
     /// The search field over the rows of the panes, each with its tile; the current pane's row selected.
@@ -780,9 +795,11 @@ impl Application for SettingsApp {
             full_screen: false,
             refresh_armed: false,
             rewatch_armed: false,
+            panel_rows: panel::PanelRows::default(),
         };
         commands.extend(shell.arm_refresh());
-        commands.extend(shell.state.audio.command(&shell.state.services.session));
+        commands.extend(shell.state.audio.command(&shell.state.buses.session));
+        commands.extend(shell.state.desk.commands());
         (shell, commands)
     }
 
@@ -794,7 +811,12 @@ impl Application for SettingsApp {
         // a pane that polls is read again on a timer; the others wait for their change signals
         commands.extend(shell.arm_refresh());
         commands.extend(shell.arm_rewatch());
-        commands.extend(shell.state.audio.command(&shell.state.services.session));
+        commands.extend(shell.state.audio.command(&shell.state.buses.session));
+        commands.extend(shell.state.desk.commands());
+        let chooser = shell.state.chooser.as_ref().map(|(_, chooser)| chooser);
+        shell
+            .panel_rows
+            .follow(chooser, shell.state.file_icons.take());
         commands
     }
 
@@ -863,6 +885,9 @@ impl Application for SettingsApp {
             .and_then(|id| form::menu(&shell.state.sections(), id, main_window()))
         {
             windows.extend(menu);
+        }
+        if let Some((_, chooser)) = &shell.state.chooser {
+            windows.push(panel::window(chooser, &shell.panel_rows));
         }
         windows
     }

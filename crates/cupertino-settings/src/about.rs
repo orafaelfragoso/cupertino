@@ -1,4 +1,8 @@
 //! Unprivileged, one-shot readings for About This Computer. Unavailable values have no row.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "read by tasks of the I/O pool (shell::files), and by About before its window loop exists"
+)]
 
 use std::fs::File;
 use std::io::{self, Read};
@@ -418,28 +422,19 @@ impl About {
         }
     }
 
-    /// A Displays row before Kernel for each connected display with a current mode: one short connection asks the
-    /// server.
-    /// Add a Displays row for each output, and give the height in points of the shortest one, which the window keeps
-    /// within ([`Layout::fit`]).
-    pub fn read_displays(&mut self) -> Result<Option<f64>, cupertino_wayland_client::Error> {
+    /// Add a Displays row before Kernel for each of `monitors`, and give the height in points of the shortest one, which
+    /// the window keeps within ([`Layout::fit`]).
+    pub fn add_displays(&mut self, monitors: &[crate::live::Monitor]) -> Option<f64> {
         let mut shortest: Option<f64> = None;
-        let mut conn = cupertino_wayland_client::Connection::connect()?;
-        conn.roundtrip()?;
-        for output in conn.outputs() {
-            let Some(mode) = output.mode else { continue };
+        for monitor in monitors {
             let display = Display {
-                make: output.make.as_deref(),
-                model: output.model.as_deref(),
-                description: output.description.as_deref(),
-                name: output.name.as_deref(),
-                mode,
-                physical_size_mm: output.physical_size_mm,
-                scale: output
-                    .effective_scale()
-                    .unwrap_or_else(|| output.scale.factor()),
+                description: Some(&monitor.title),
+                mode: monitor.mode,
+                physical_size_mm: monitor.physical_mm,
+                scale: monitor.scale,
+                ..Default::default()
             };
-            let height = f64::from(mode.1) / display.scale.max(1.0);
+            let height = f64::from(monitor.mode.1) / display.scale.max(1.0);
             shortest = Some(shortest.map_or(height, |h: f64| h.min(height)));
             if let Some(value) = display_value(&display) {
                 let before_kernel = self
@@ -456,7 +451,7 @@ impl About {
                 );
             }
         }
-        Ok(shortest)
+        shortest
     }
 }
 
@@ -701,21 +696,57 @@ pub fn nvidia_video_memory(timeout: std::time::Duration) -> Vec<(PciAddress, u64
     let Some(mut stdout) = child.stdout.take() else {
         return Vec::new();
     };
-    let (send, receive) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let mut text = String::new();
-        let read = (&mut stdout).take(MAX_FILE_BYTES).read_to_string(&mut text);
-        let _ = send.send(read.map(|_| text));
-    });
-    let text = receive.recv_timeout(timeout);
-    if text.is_err() {
+    let text = read_within(&mut stdout, std::time::Instant::now() + timeout);
+    if text.is_none() {
         eprintln!("cupertino-settings: nvidia-smi did not answer in {timeout:?}");
         let _ = child.kill();
     }
     let status = child.wait();
     match (text, status) {
-        (Ok(Ok(text)), Ok(status)) if status.success() => nvidia_memory_list(&text),
+        (Some(text), Ok(status)) if status.success() => nvidia_memory_list(&text),
         _ => Vec::new(),
+    }
+}
+
+/// What `out` writes until it closes, at most [`MAX_FILE_BYTES`]; `None` when it is still open at `deadline`, writes
+/// more, or is not text.
+fn read_within(
+    out: &mut std::process::ChildStdout,
+    deadline: std::time::Instant,
+) -> Option<String> {
+    use std::os::fd::AsRawFd;
+    let mut text = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        let mut ready = libc::pollfd {
+            fd: out.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let wait = libc::c_int::try_from(left.as_millis()).unwrap_or(libc::c_int::MAX);
+        // SAFETY: one pollfd, of the pipe `out` owns, for the length of the call
+        match unsafe { libc::poll(&mut ready, 1, wait) } {
+            0 => return None,
+            n if n < 0 => {
+                if io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
+                    continue;
+                }
+                return None;
+            }
+            _ => {}
+        }
+        match out.read(&mut chunk) {
+            Ok(0) => return String::from_utf8(text).ok(),
+            Ok(n) => {
+                text.extend_from_slice(&chunk[..n]);
+                if text.len() as u64 > MAX_FILE_BYTES {
+                    return None;
+                }
+            }
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+            Err(_) => return None,
+        }
     }
 }
 

@@ -1,8 +1,8 @@
-//! The services' change signals: one thread a bus waits for the signals of the services the panes read and names what
-//! changed, so a reading that has a change signal is read again when one comes, never on a timer. The bus daemon lets
-//! through only the signals of these services on the objects the panes read ([`rules`]); the thread drops what the
-//! shown pane does not read ([`Interest`]) before it reaches the window. On an idle desktop none come and the threads
-//! sleep.
+//! The services' change signals: a task of the window's loop a bus waits for the signals of the services the panes
+//! read and names what changed, so a reading that has a change signal is read again when one comes, never on a timer.
+//! The bus daemon lets through only the signals of these services on the objects the panes read ([`rules`]); the task
+//! drops what the shown pane does not read ([`Interest`]) before it reaches the window. On an idle desktop none come
+//! and the tasks wait.
 
 use std::future::{poll_fn, Future};
 use std::pin::Pin;
@@ -56,8 +56,6 @@ pub enum Changed {
     KeyboardBacklight,
     /// A device was plugged in or removed ([`crate::hotplug`]).
     Hardware,
-    /// The watch of this bus ended with its connection; the window watches the bus again.
-    Ended(Which),
 }
 
 impl Changed {
@@ -65,7 +63,7 @@ impl Changed {
     /// stopping names the sidebar's rows, the session's properties hold the appearance, a hot-plug may add a row).
     fn bit(self) -> Option<u32> {
         match self {
-            Changed::Owner(_) | Changed::Session | Changed::Hardware | Changed::Ended(_) => None,
+            Changed::Owner(_) | Changed::Session | Changed::Hardware => None,
             Changed::Centre => Some(1),
             Changed::Network => Some(1 << 1),
             Changed::Bluetooth => Some(1 << 2),
@@ -76,7 +74,7 @@ impl Changed {
     }
 }
 
-/// Which changes the shown pane reads, shared with the watch threads: a change no one reads is dropped there and
+/// Which changes the shown pane reads, shared with the watches: a change no one reads is dropped there and
 /// never wakes the window.
 #[derive(Clone, Debug, Default)]
 pub struct Interest(Arc<AtomicU32>);
@@ -189,30 +187,26 @@ fn changed_by(bus: Which, message: &zbus::Message) -> Option<Changed> {
     Some(changed)
 }
 
-/// Watch `bus` on `connection` from a thread of its own; `on` hears what each signal the shown pane reads changed
-/// (`interest`), and [`Changed::Ended`] once the connection closes. Returns once the bus daemon has the rules.
+/// Watch `bus` on the connection `connect` makes, as a task of the window's loop: `on` hears what each signal the
+/// shown pane reads changed (`interest`), and `subscribed` is told once the bus daemon has the rules. It ends when the
+/// connection closes, or when it could not be made or the rules could not be given: true when it had subscribed.
 ///
-/// The thread reads every message of the connection from one queue, which it drains while it asks the daemon for the
+/// The task reads every message of the connection from one queue, which it drains while it asks the daemon for the
 /// rules: a full queue would stop the connection reading its socket, replies included, so nothing else waits on it.
-pub fn start(
+pub async fn watch(
     bus: Which,
-    connection: &zbus::blocking::Connection,
+    connect: impl Future<Output = zbus::Result<zbus::Connection>>,
     interest: Interest,
     on: Arc<dyn Fn(Changed) + Send + Sync>,
-) -> zbus::Result<()> {
-    let connection = connection.inner().clone();
-    let (subscribed, result) = std::sync::mpsc::sync_channel(1);
-    std::thread::Builder::new()
-        .name("settings-watch".into())
-        .spawn(move || {
-            zbus::block_on(serve(bus, connection, interest, on, move |r| {
-                let _ = subscribed.send(r);
-            }))
-        })
-        .map_err(|e| zbus::Error::Failure(format!("cannot start the watch: {e}")))?;
-    result
-        .recv()
-        .map_err(|_| zbus::Error::Failure("the watch ended before it subscribed".into()))?
+    subscribed: impl FnOnce(),
+) -> bool {
+    match connect.await {
+        Ok(connection) => serve(bus, connection, interest, on, subscribed).await,
+        Err(e) => {
+            crate::services::log_once(&format!("cannot watch the services' change signals: {e}"));
+            false
+        }
+    }
 }
 
 /// Ask the daemon to send `bus`'s rules to `connection`, one after the other.
@@ -236,8 +230,8 @@ async fn serve(
     connection: zbus::Connection,
     interest: Interest,
     on: Arc<dyn Fn(Changed) + Send + Sync>,
-    subscribed: impl FnOnce(zbus::Result<()>),
-) {
+    subscribed: impl FnOnce(),
+) -> bool {
     // the queue exists before the first rule: no signal of the rules comes before it
     let mut stream = MessageStream::from(&connection);
     let mut subscribing: Option<Pin<Box<dyn Future<Output = zbus::Result<()>> + Send>>> =
@@ -272,14 +266,19 @@ async fn serve(
             }
         })
         .await;
-        if let Some(result) = done {
-            let failed = result.is_err();
-            if let Some(tell) = subscribed.take() {
-                tell(result);
+        match done {
+            Some(Ok(())) => {
+                if let Some(tell) = subscribed.take() {
+                    tell();
+                }
             }
-            if failed {
-                return;
+            Some(Err(e)) => {
+                crate::services::log_once(&format!(
+                    "cannot watch the services' change signals: {e}"
+                ));
+                return false;
             }
+            None => {}
         }
         // a signal several rules let through, or a burst, is told once
         let mut told = Vec::new();
@@ -294,14 +293,7 @@ async fn serve(
             }
         }
         if ended {
-            if let Some(tell) = subscribed.take() {
-                tell(Err(zbus::Error::Failure(
-                    "the connection closed before the watch subscribed".into(),
-                )));
-                return;
-            }
-            on(Changed::Ended(bus));
-            return;
+            return subscribed.is_none();
         }
     }
 }

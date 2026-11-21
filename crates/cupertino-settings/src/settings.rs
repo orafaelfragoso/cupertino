@@ -504,14 +504,13 @@ impl Settings {
         changed
     }
 
-    /// Let `program` use the clipboard: its entry ([`clipboard::entry_for`], so a link becomes its file) is added and
-    /// the file written. `Err` is the sentence the chooser shows; nothing changed.
+    /// Let a program use the clipboard: its `entry` ([`clipboard::entry_for`], so a link becomes its file) is added
+    /// and the file written. `Err` is the sentence the chooser shows; nothing changed.
     pub fn allow_clipboard(
         &mut self,
         paths: &Paths,
-        program: &std::path::Path,
+        entry: cupertino_defaults::data_control::Entry,
     ) -> Result<(), String> {
-        let entry = clipboard::entry_for(program)?;
         let mut list = self.clipboard.clone();
         list.conf.allowed.retain(|e| e.program != entry.program);
         list.conf.allowed.push(entry);

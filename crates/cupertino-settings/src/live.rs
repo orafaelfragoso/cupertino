@@ -358,6 +358,8 @@ pub struct Live {
     pub login_screen: Option<LoginScreen>,
     /// The installed applications, read when the Privacy or the Notifications pane shows.
     pub apps: Vec<crate::clipboard::Installed>,
+    /// Where each program Clipboard Access allows stood when the Privacy pane last read it, by program.
+    pub clipboard: std::collections::HashMap<std::path::PathBuf, crate::clipboard::State>,
     /// The applications whose notifications the centre holds (`NotificationCenter1.Applications`): their settings id
     /// and name, read while the Notifications pane shows.
     pub notifying_apps: Vec<(String, String)>,
@@ -406,6 +408,7 @@ impl Default for Live {
     fn default() -> Self {
         Live {
             pictures: Pictures::default(),
+            clipboard: std::collections::HashMap::new(),
             mice: Reading::Unknown,
             focus: Reading::Unknown,
             volume: Reading::Unknown,

@@ -1,7 +1,7 @@
 // cupertino-layers --graph
-// 74 crates, 383 internal dependencies
+// 74 crates, 381 internal dependencies
 // per layer: foundation 5, graphics 2, models 6, system 8, platform 2, protocol 3, transport 2, render 2, ui 9, shellkit 1, core 4, services 7, shell 15, apps 2, tools 5, testing 1
-// forbidden normal edge cupertino-settings (apps) -> cupertino-wayland-client (transport)
+// forbidden edges: none
 digraph "layers" {
   node [shape=box];
   subgraph "cluster_foundation" {
@@ -380,8 +380,6 @@ digraph "layers" {
   "cupertino-settings" -> "cupertino-kit";
   "cupertino-settings" -> "cupertino-menu-model";
   "cupertino-settings" -> "cupertino-radios";
-  "cupertino-settings" -> "cupertino-theme";
-  "cupertino-settings" -> "cupertino-wayland-client" [color=red];
   "cupertino-shell" -> "cupertino-controlcenter";
   "cupertino-shell" -> "cupertino-diagnostic-events";
   "cupertino-shell" -> "cupertino-dock";

@@ -704,7 +704,7 @@
   scope: shell-private
   source: crates/cupertino-server/src/displays/service.rs
   source_match: "org.cupertino.Displays1"
-  note: display listing and configuration for Settings (D14); ListDisplays is open to any caller; SetScale, SetRefreshRate, SetPosition, Configure and TestConfigure require an authorized settings client and an unlocked session
+  note: display listing and configuration for Settings (D14); ListDisplays is open to any caller and gives each display's connector, description, state, mode, scale, transform, modes and physical size in millimetres ((0, 0) when unknown); SetScale, SetRefreshRate, SetPosition, Configure and TestConfigure require an authorized settings client and an unlocked session
 - name: org.cupertino.Launcher1
   kind: dbus-interface
   version: 1

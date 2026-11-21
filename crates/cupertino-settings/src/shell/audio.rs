@@ -14,7 +14,7 @@ use zbus::zvariant::{DynamicDeserialize, DynamicType};
 use super::Message;
 use crate::live::{Output, Reading, Volume};
 use crate::panes::{AudioChange, ControlId};
-use crate::services::{failure, Bus};
+use crate::services::{failure, Reach};
 
 const NAME: &str = "org.cupertino.Audio1";
 const PATH: &str = "/org/cupertino/Audio1";
@@ -60,7 +60,7 @@ impl Audio {
         !self.writes.is_empty()
     }
 
-    pub fn command(&mut self, bus: &Bus) -> Option<Command<Message>> {
+    pub fn command(&mut self, bus: &Reach) -> Option<Command<Message>> {
         if self.busy {
             return None;
         }
@@ -71,7 +71,7 @@ impl Audio {
             false
         };
         self.busy = true;
-        let connection = bus.audio_connection();
+        let connection = bus.connect();
         Some(Command::Perform(Box::pin(async move {
             if let Some((id, change)) = write {
                 let result = within(async { apply(&connection.await?, &change).await }).await;

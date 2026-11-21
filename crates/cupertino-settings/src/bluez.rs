@@ -1,6 +1,10 @@
 //! The Bluetooth pane on BlueZ, when `cupertino-btd` is not running: the adapter's reading and calls
 //! (`cupertino_radios::bluez`, the same as `org.cupertino.Bluetooth1` on the first adapter), and the pane's pairing
 //! agent as an `org.bluez.Agent1`. A device's id is its object path.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "called by the services, on the I/O pool (shell::desk)"
+)]
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;

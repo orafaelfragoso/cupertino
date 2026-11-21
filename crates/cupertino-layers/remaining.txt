@@ -1,8 +1,2 @@
 # The target layer rules that crates still break, one problem per line: <layer> <rule> <crate> ...
 # Written by `cargo run -q -p cupertino-layers -- --write-remaining`; never edit by hand. Lines only leave.
-apps disallowed_methods cupertino-settings clippy.toml
-apps external_crate cupertino-settings -> wayland-client normal
-apps external_crate cupertino-settings -> wayland-protocols-wlr normal
-apps facade cupertino-settings -> cupertino-theme normal
-apps facade cupertino-settings -> cupertino-wayland-client normal
-apps forbidden_edge cupertino-settings -> cupertino-wayland-client normal

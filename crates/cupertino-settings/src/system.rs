@@ -2,6 +2,10 @@
 //! disks, the time zone and language, the programs that start at login and the default web browser. Reads are plain
 //! files and the C library; writes are the user's own files (`~/.config/autostart`, `~/.config/mimeapps.list`).
 //! Nothing here touches a window toolkit.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "read and written by tasks of the I/O pool (shell::files), and the account before the window loop exists"
+)]
 
 use std::io;
 use std::path::{Path, PathBuf};

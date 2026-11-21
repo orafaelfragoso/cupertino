@@ -1681,11 +1681,7 @@ dependencies = [
  "cupertino-kit",
  "cupertino-menu-model",
  "cupertino-radios",
- "cupertino-theme",
- "cupertino-wayland-client",
  "libc",
- "wayland-client",
- "wayland-protocols-wlr",
  "zbus",
  "zeroize",
 ]

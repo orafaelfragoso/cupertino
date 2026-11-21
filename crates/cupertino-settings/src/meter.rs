@@ -1,8 +1,11 @@
 //! The input level meter of the Sound pane: while the pane shows the input, `pw-record` listens to the default input at
-//! a low rate and this reads how loud it is. Nothing is kept or written; stopping the meter ends the recording.
+//! a low rate and a task of the window's loop reads how loud it is. Nothing is kept or written; stopping the meter ends
+//! the recording.
 
-use std::io::Read;
-use std::process::{Child, Command, Stdio};
+use std::future::Future;
+use std::io;
+use std::os::fd::AsRawFd;
+use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
@@ -33,8 +36,9 @@ pub struct Meter {
 }
 
 impl Meter {
-    /// Start listening to the default input; `None` when `pw-record` cannot be started.
-    pub fn start() -> Option<Meter> {
+    /// Start listening to the default input, with the task of the window's loop that reads how loud it is until the
+    /// recording ends; `None` when `pw-record` cannot be started.
+    pub fn start() -> Option<(Meter, impl Future<Output = ()> + Send + 'static)> {
         let mut child = Command::new("pw-record")
             .args([
                 "--rate",
@@ -50,22 +54,22 @@ impl Meter {
             .stderr(Stdio::null())
             .spawn()
             .ok()?;
-        let mut out = child.stdout.take()?;
+        let out = async_io::Async::new(child.stdout.take()?).ok()?;
         let level = Arc::new(AtomicU32::new(0));
         let shared = level.clone();
-        std::thread::spawn(move || {
+        let reader = async move {
             let mut header = [0u8; HEADER];
-            if out.read_exact(&mut header).is_err() {
+            if read_exact(&out, &mut header).await.is_err() {
                 return;
             }
             // the header says where the samples start; skip anything beyond the 24 bytes read
             let start = u32::from_be_bytes([header[4], header[5], header[6], header[7]]) as usize;
             let mut skip = vec![0u8; start.saturating_sub(HEADER).min(4096)];
-            if out.read_exact(&mut skip).is_err() {
+            if read_exact(&out, &mut skip).await.is_err() {
                 return;
             }
             let mut bytes = vec![0u8; WINDOW * 2];
-            while out.read_exact(&mut bytes).is_ok() {
+            while read_exact(&out, &mut bytes).await.is_ok() {
                 let samples: Vec<i16> = bytes
                     .as_chunks::<2>()
                     .0
@@ -74,14 +78,48 @@ impl Meter {
                     .collect();
                 shared.store((level_of(&samples) as f32).to_bits(), Ordering::Relaxed);
             }
-        });
-        Some(Meter { child, level })
+        };
+        Some((Meter { child, level }, reader))
     }
 
     /// The loudness of the last window, 0 to 1.
     pub fn level(&self) -> f64 {
         f64::from(f32::from_bits(self.level.load(Ordering::Relaxed)))
     }
+
+    /// Whether the recording ended by itself.
+    pub fn ended(&mut self) -> bool {
+        self.child.try_wait().is_ok_and(|status| status.is_some())
+    }
+}
+
+/// Fill `buffer` from the recording; an error at its end.
+async fn read_exact(out: &async_io::Async<ChildStdout>, buffer: &mut [u8]) -> io::Result<()> {
+    let mut filled = 0;
+    while filled < buffer.len() {
+        let rest = &mut buffer[filled..];
+        let read = out
+            .read_with(|out| {
+                // SAFETY: reads at most the rest's length into the rest, from the pipe the meter owns.
+                let read =
+                    unsafe { libc::read(out.as_raw_fd(), rest.as_mut_ptr().cast(), rest.len()) };
+                match usize::try_from(read) {
+                    Ok(read) => Ok(read),
+                    Err(_) => match io::Error::last_os_error() {
+                        e if e.kind() == io::ErrorKind::Interrupted => {
+                            Err(io::ErrorKind::WouldBlock.into())
+                        }
+                        e => Err(e),
+                    },
+                }
+            })
+            .await?;
+        if read == 0 {
+            return Err(io::ErrorKind::UnexpectedEof.into());
+        }
+        filled += read;
+    }
+    Ok(())
 }
 
 impl Drop for Meter {

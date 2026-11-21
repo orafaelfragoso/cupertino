@@ -12,12 +12,13 @@ use cbc::cipher::block_padding::Pkcs7;
 use cbc::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit};
 use crypto_bigint::modular::{FixedMontyForm, FixedMontyParams};
 use crypto_bigint::{Odd, U1024};
+use futures_lite::StreamExt;
 use hkdf::Hkdf;
 use sha2::Sha256;
-use zbus::blocking::{Connection, MessageIterator};
 use zbus::export::serde::de::DeserializeOwned;
 use zbus::export::serde::Serialize;
 use zbus::zvariant::{DynamicType, ObjectPath, OwnedObjectPath, OwnedValue, Type, Value};
+use zbus::{Connection, MessageStream};
 use zeroize::Zeroizing;
 
 use crate::keyring::exchange::random;
@@ -83,7 +84,7 @@ fn path(call: &'static str, path: &str) -> Result<ObjectPath<'static>, StoreErro
     ObjectPath::try_from(path.to_owned()).map_err(|_| StoreError::new(call, "not an object path"))
 }
 
-fn call<R: DeserializeOwned + Type>(
+async fn call<R: DeserializeOwned + Type>(
     bus: &Connection,
     what: &'static str,
     object: &str,
@@ -91,31 +92,60 @@ fn call<R: DeserializeOwned + Type>(
     method: &str,
     body: &(impl Serialize + DynamicType),
 ) -> Result<R, StoreError> {
-    bus.call_method(Some(NAME), object, Some(interface), method, body)
-        .and_then(|reply| reply.body().deserialize())
-        .map_err(failed(what))
+    let reply = bus
+        .call_method(Some(NAME), object, Some(interface), method, body)
+        .await
+        .map_err(failed(what))?;
+    reply.body().deserialize().map_err(failed(what))
 }
 
-fn property<R: TryFrom<OwnedValue>>(
+async fn property<R: TryFrom<OwnedValue>>(
     bus: &Connection,
     what: &'static str,
     object: &str,
     interface: &str,
     name: &str,
 ) -> Result<R, StoreError> {
-    let value: OwnedValue = call(bus, what, object, PROPERTIES, "Get", &(interface, name))?;
+    let value: OwnedValue = call(bus, what, object, PROPERTIES, "Get", &(interface, name)).await?;
     R::try_from(value).map_err(|_| StoreError::new(what, "a property of another type"))
 }
 
-/// Whether a Secret Service runs on `bus`; asking never starts one.
-pub fn present(bus: &Connection) -> bool {
-    zbus::blocking::fdo::DBusProxy::new(bus)
-        .and_then(|dbus| Ok(dbus.name_has_owner(NAME.try_into()?)?))
-        .unwrap_or(false)
+/// Whether a Secret Service is on `bus`, waiting up to `wait` for one that is starting: the bus's `NameOwnerChanged`
+/// for its name is followed before the name is asked for, so an owner that comes between is not missed. Asking never
+/// starts one.
+pub async fn present(bus: &Connection, wait: std::time::Duration) -> bool {
+    let Ok(dbus) = zbus::fdo::DBusProxy::new(bus).await else {
+        return false;
+    };
+    let Ok(mut owners) = dbus
+        .receive_name_owner_changed_with_args(&[(0, NAME)])
+        .await
+    else {
+        return false;
+    };
+    let Ok(name) = zbus::names::BusName::try_from(NAME) else {
+        return false;
+    };
+    if dbus.name_has_owner(name).await.unwrap_or(false) {
+        return true;
+    }
+    let owned = async {
+        while let Some(change) = owners.next().await {
+            if change.args().is_ok_and(|a| a.new_owner().is_some()) {
+                return true;
+            }
+        }
+        false
+    };
+    let late = async {
+        async_io::Timer::after(wait).await;
+        false
+    };
+    futures_lite::future::or(owned, late).await
 }
 
 /// The default collection and the login collection's lock, as the service says now.
-pub fn observe(bus: &Connection) -> Result<Observed, StoreError> {
+pub async fn observe(bus: &Connection) -> Result<Observed, StoreError> {
     let default: OwnedObjectPath = call(
         bus,
         "reading the default keyring",
@@ -123,8 +153,9 @@ pub fn observe(bus: &Connection) -> Result<Observed, StoreError> {
         SERVICE,
         "ReadAlias",
         &(DEFAULT,),
-    )?;
-    let default = (default.as_str() != NONE).then(|| {
+    )
+    .await?;
+    let default = if default.as_str() != NONE {
         let label = property(
             bus,
             "reading a keyring's name",
@@ -132,12 +163,17 @@ pub fn observe(bus: &Connection) -> Result<Observed, StoreError> {
             COLLECTION,
             "Label",
         )
+        .await
         .unwrap_or_default();
-        (default.to_string(), label)
-    });
+        Some((default.to_string(), label))
+    } else {
+        None
+    };
     // a login collection that does not answer does not exist
     let login_locked =
-        property::<bool>(bus, "reading a keyring's lock", LOGIN, COLLECTION, "Locked").ok();
+        property::<bool>(bus, "reading a keyring's lock", LOGIN, COLLECTION, "Locked")
+            .await
+            .ok();
     Ok(Observed {
         default,
         login_locked,
@@ -146,32 +182,34 @@ pub fn observe(bus: &Connection) -> Result<Observed, StoreError> {
 
 /// Unlock `collection` with the service's own prompt, which asks the session's prompter for the keyring's password.
 /// Returns when the person answered it.
-pub fn unlock(bus: &Connection, collection: &str) -> Unlocked {
-    match try_unlock(bus, collection) {
+pub async fn unlock(bus: &Connection, collection: &str) -> Unlocked {
+    match try_unlock(bus, collection).await {
         Ok(unlocked) => unlocked,
         Err(error) => {
-            eprintln!("cupertino-keyring-prompter: {error}");
+            eprintln!("cupertino-prompts: {error}");
             Unlocked::Failed
         }
     }
 }
 
-fn try_unlock(bus: &Connection, collection: &str) -> Result<Unlocked, StoreError> {
+async fn try_unlock(bus: &Connection, collection: &str) -> Result<Unlocked, StoreError> {
     const WHAT: &str = "unlocking the keyring";
-    let is_unlocked = || {
-        property::<bool>(bus, WHAT, collection, COLLECTION, "Locked").map(|locked| {
-            if locked {
-                Unlocked::Failed
-            } else {
-                Unlocked::Yes
-            }
-        })
+    let is_unlocked = || async {
+        property::<bool>(bus, WHAT, collection, COLLECTION, "Locked")
+            .await
+            .map(|locked| {
+                if locked {
+                    Unlocked::Failed
+                } else {
+                    Unlocked::Yes
+                }
+            })
     };
     let objects = vec![path(WHAT, collection)?];
     let (_, prompt): (Vec<OwnedObjectPath>, OwnedObjectPath) =
-        call(bus, WHAT, SERVICE_PATH, SERVICE, "Unlock", &(objects,))?;
+        call(bus, WHAT, SERVICE_PATH, SERVICE, "Unlock", &(objects,)).await?;
     if prompt.as_str() == NONE {
-        return is_unlocked();
+        return is_unlocked().await;
     }
     let rule = zbus::MatchRule::builder()
         .msg_type(zbus::message::Type::Signal)
@@ -181,11 +219,13 @@ fn try_unlock(bus: &Connection, collection: &str) -> Result<Unlocked, StoreError
         .and_then(|rule| rule.path(prompt.as_str().to_owned()))
         .map_err(failed(WHAT))?
         .build();
-    let mut completions =
-        MessageIterator::for_match_rule(rule, bus, Some(4)).map_err(failed(WHAT))?;
-    let () = call(bus, WHAT, prompt.as_str(), PROMPT, "Prompt", &("",))?;
+    let mut completions = MessageStream::for_match_rule(rule, bus, Some(4))
+        .await
+        .map_err(failed(WHAT))?;
+    let () = call(bus, WHAT, prompt.as_str(), PROMPT, "Prompt", &("",)).await?;
     let completed = completions
         .next()
+        .await
         .ok_or(StoreError::new(WHAT, "the bus closed"))?
         .map_err(failed(WHAT))?;
     let (dismissed, _): (bool, OwnedValue) =
@@ -193,7 +233,7 @@ fn try_unlock(bus: &Connection, collection: &str) -> Result<Unlocked, StoreError
     if dismissed {
         return Ok(Unlocked::Cancelled);
     }
-    is_unlocked()
+    is_unlocked().await
 }
 
 /// A session with the service: the key its secrets travel under.
@@ -205,7 +245,7 @@ pub struct Secrets {
 
 impl Secrets {
     /// Open a session whose secrets are encrypted on the bus.
-    pub fn open(bus: &Connection) -> Result<Secrets, StoreError> {
+    pub async fn open(bus: &Connection) -> Result<Secrets, StoreError> {
         const WHAT: &str = "opening a session";
         for _ in 0..SESSION_TRIES {
             let mut bytes = Zeroizing::new([0u8; GROUP_BYTES]);
@@ -221,7 +261,8 @@ impl Secrets {
                 SERVICE,
                 "OpenSession",
                 &(ALGORITHM, Value::from(public.to_vec())),
-            )?;
+            )
+            .await?;
             let theirs = Vec::<u8>::try_from(theirs)
                 .map_err(|_| StoreError::new(WHAT, "no public key in the reply"))?;
             let shared = shared_value(&private, &theirs)
@@ -229,7 +270,8 @@ impl Secrets {
             // implementations differ in whether a shared value keeps its leading zero bytes when the key is derived
             // from it; one value in 256 has one, and then another session is opened instead
             if shared[0] == 0 {
-                let _: Result<(), _> = call(bus, WHAT, session.as_str(), SESSION, "Close", &());
+                let _: Result<(), _> =
+                    call(bus, WHAT, session.as_str(), SESSION, "Close", &()).await;
                 continue;
             }
             let mut key = Zeroizing::new([0u8; KEY_BYTES]);
@@ -271,8 +313,9 @@ impl Secrets {
     }
 }
 
-impl Drop for Secrets {
-    fn drop(&mut self) {
+impl Secrets {
+    /// Close the session with the service.
+    pub async fn close(self) {
         let _: Result<(), _> = call(
             &self.bus,
             "closing a session",
@@ -280,7 +323,8 @@ impl Drop for Secrets {
             SESSION,
             "Close",
             &(),
-        );
+        )
+        .await;
     }
 }
 
@@ -317,7 +361,7 @@ fn with_schema(attributes: HashMap<String, String>) -> BTreeMap<String, String> 
 }
 
 impl Store for Secrets {
-    fn default_collection(&mut self) -> Result<String, StoreError> {
+    async fn default_collection(&mut self) -> Result<String, StoreError> {
         let default: OwnedObjectPath = call(
             &self.bus,
             "reading the default keyring",
@@ -325,11 +369,12 @@ impl Store for Secrets {
             SERVICE,
             "ReadAlias",
             &(DEFAULT,),
-        )?;
+        )
+        .await?;
         Ok(default.to_string())
     }
 
-    fn set_default(&mut self, collection: &str) -> Result<(), StoreError> {
+    async fn set_default(&mut self, collection: &str) -> Result<(), StoreError> {
         const WHAT: &str = "changing the default keyring";
         let collection = path(WHAT, collection)?;
         call(
@@ -340,30 +385,32 @@ impl Store for Secrets {
             "SetAlias",
             &(DEFAULT, collection),
         )
+        .await
     }
 
-    fn items(&mut self, collection: &str) -> Result<Vec<String>, StoreError> {
+    async fn items(&mut self, collection: &str) -> Result<Vec<String>, StoreError> {
         let items: Vec<OwnedObjectPath> = property(
             &self.bus,
             "listing a keyring",
             collection,
             COLLECTION,
             "Items",
-        )?;
+        )
+        .await?;
         Ok(items.iter().map(|item| item.to_string()).collect())
     }
 
-    fn attributes(&mut self, item: &str) -> Result<BTreeMap<String, String>, StoreError> {
+    async fn attributes(&mut self, item: &str) -> Result<BTreeMap<String, String>, StoreError> {
         let attributes: HashMap<String, String> =
-            property(&self.bus, "reading an item", item, ITEM, "Attributes")?;
+            property(&self.bus, "reading an item", item, ITEM, "Attributes").await?;
         Ok(with_schema(attributes))
     }
 
-    fn read(&mut self, item: &str) -> Result<Record, StoreError> {
+    async fn read(&mut self, item: &str) -> Result<Record, StoreError> {
         const WHAT: &str = "reading an item";
-        let label: String = property(&self.bus, WHAT, item, ITEM, "Label")?;
+        let label: String = property(&self.bus, WHAT, item, ITEM, "Label").await?;
         let attributes: HashMap<String, String> =
-            property(&self.bus, WHAT, item, ITEM, "Attributes")?;
+            property(&self.bus, WHAT, item, ITEM, "Attributes").await?;
         let (_, iv, cipher, content_type): Sealed = call(
             &self.bus,
             WHAT,
@@ -371,7 +418,8 @@ impl Store for Secrets {
             ITEM,
             "GetSecret",
             &(ObjectPath::from(&self.session),),
-        )?;
+        )
+        .await?;
         let secret = self
             .open_sealed(&iv, &cipher)
             .ok_or(StoreError::new(WHAT, "the secret does not decrypt"))?;
@@ -383,7 +431,7 @@ impl Store for Secrets {
         })
     }
 
-    fn create(&mut self, collection: &str, record: &Record) -> Result<String, StoreError> {
+    async fn create(&mut self, collection: &str, record: &Record) -> Result<String, StoreError> {
         const WHAT: &str = "saving an item";
         let attributes: HashMap<&str, &str> = record
             .attributes
@@ -408,16 +456,17 @@ impl Store for Secrets {
             COLLECTION,
             "CreateItem",
             &(properties, self.seal(record)?, false),
-        )?;
+        )
+        .await?;
         if prompt.as_str() != NONE || item.as_str() == NONE {
             return Err(StoreError::new(WHAT, "the keyring asked for a prompt"));
         }
         Ok(item.to_string())
     }
 
-    fn delete(&mut self, item: &str) -> Result<(), StoreError> {
+    async fn delete(&mut self, item: &str) -> Result<(), StoreError> {
         const WHAT: &str = "removing a copy";
-        let prompt: OwnedObjectPath = call(&self.bus, WHAT, item, ITEM, "Delete", &())?;
+        let prompt: OwnedObjectPath = call(&self.bus, WHAT, item, ITEM, "Delete", &()).await?;
         if prompt.as_str() != NONE {
             return Err(StoreError::new(WHAT, "the keyring asked for a prompt"));
         }

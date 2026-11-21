@@ -1,14 +1,17 @@
-//! The prompt as a pure model: what polkitd asked, what the helper says, what is typed, and when to start the helper,
+//! The authentication prompt as a pure model: what polkitd asked, what the helper says, and when to start the helper,
 //! answer it or tell polkitd the authentication is over. One prompt is on screen at a time; the others wait in
-//! polkitd's order. While the session is locked or not the active one, nothing is on screen: a prompt showing then
-//! is dismissed, and the waiting ones stay until the session is back.
+//! polkitd's order. While the session is locked or not the active one, nothing is on screen: a prompt showing then is
+//! dismissed, and the waiting ones stay until the session is back.
+//!
+//! The password itself is the field's (`cupertino_kit::controls::SecureField`): the model is handed a copy when the
+//! person submits it ([`Agent::submit`]) and passes it on to the helper at once.
 
 use std::collections::VecDeque;
 
 use zeroize::Zeroizing;
 
-use crate::agent::{Outcome, Request, User};
-use crate::helper::Line;
+use crate::polkit::helper::Line;
+use crate::polkit::{Outcome, Request, User};
 use crate::text::shown;
 
 /// Helper runs per prompt: after this many failures polkitd is told the authentication is over, unauthorised.
@@ -17,15 +20,6 @@ pub const ATTEMPTS: u8 = 3;
 pub const TRY_AGAIN: &str = "Incorrect password. Try again.";
 /// The longest answer the field takes, in bytes.
 pub const MAX_ANSWER: usize = 512;
-
-/// A key that reaches the prompt.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Key {
-    Char(char),
-    Backspace,
-    Return,
-    Escape,
-}
 
 /// What the host does for the model. `Debug` never prints an answer.
 #[derive(PartialEq, Eq)]
@@ -56,24 +50,19 @@ impl std::fmt::Debug for Effect {
     }
 }
 
-/// An empty field, allocated at [`MAX_ANSWER`] so that typing never moves its text and leaves a copy behind in the
-/// block it left; it is zeroed when it drops.
-fn empty_field() -> Zeroizing<String> {
-    Zeroizing::new(String::with_capacity(MAX_ANSWER))
-}
-
 /// Where the prompt on screen is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Phase {
     /// The helper runs and hasn't asked anything yet.
     Waiting,
-    /// The helper asked; the field takes keys.
+    /// The helper asked; the field takes the answer.
     Asking,
     /// The answer went to the helper.
     Checking,
 }
 
 /// The prompt on screen.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Prompt {
     pub request: Request,
     pub user: User,
@@ -82,37 +71,17 @@ pub struct Prompt {
     pub question: String,
     /// Whether the field shows what is typed; false for a secret.
     pub echo: bool,
-    /// What is typed, in a block of its own that never grows ([`empty_field`]).
-    field: Zeroizing<String>,
-    /// How many characters the field showed when the answer went to the helper; it keeps showing them while checking.
-    sent_len: usize,
     pub error: Option<String>,
     pub info: Option<String>,
     failures: u8,
+    /// How many questions the helper asked: each one is a fresh, empty field.
+    pub asked: u32,
 }
 
 impl Prompt {
     /// How many attempts of this prompt have failed so far.
     pub fn failures(&self) -> u8 {
         self.failures
-    }
-
-    /// Characters the field shows.
-    pub fn field_len(&self) -> usize {
-        match self.phase {
-            Phase::Checking => self.sent_len,
-            _ => self.field.chars().count(),
-        }
-    }
-
-    /// Whether Return answers: the helper asked and the field isn't empty.
-    pub fn can_answer(&self) -> bool {
-        self.phase == Phase::Asking && !self.field.is_empty()
-    }
-
-    /// The field's text when it may be shown: only for a question PAM asks in clear.
-    pub fn shown_field(&self) -> Option<&str> {
-        self.echo.then_some(self.field.as_str())
     }
 }
 
@@ -142,6 +111,11 @@ impl Agent {
 
     pub fn waiting(&self) -> usize {
         self.waiting.len()
+    }
+
+    /// Whether the session is locked or not the active one.
+    pub fn away(&self) -> bool {
+        self.away
     }
 
     /// polkitd asks for `request`.
@@ -199,47 +173,34 @@ impl Agent {
         }
         prompt.user = user;
         prompt.phase = Phase::Waiting;
-        prompt.field = empty_field();
         prompt.error = None;
         prompt.info = None;
+        prompt.asked += 1;
         vec![Effect::StartHelper {
             user,
             cookie: prompt.request.cookie.clone(),
         }]
     }
 
-    /// A key typed into the prompt on screen.
-    pub fn key(&mut self, key: Key) -> Vec<Effect> {
-        if key == Key::Escape {
-            return self.dismiss();
+    /// The person edited the field: an error about the last answer no longer stands.
+    pub fn edited(&mut self) {
+        if let Some(prompt) = self.prompt.as_mut().filter(|p| p.phase == Phase::Asking) {
+            prompt.error = None;
         }
-        let Some(prompt) = &mut self.prompt else {
+    }
+
+    /// The person submits `answer` to the question on screen. Nothing happens unless the helper asked and the answer
+    /// is neither empty, longer than [`MAX_ANSWER`] nor broken by a control character.
+    pub fn submit(&mut self, answer: &[u8]) -> Vec<Effect> {
+        let Some(prompt) = self.prompt.as_mut().filter(|p| p.phase == Phase::Asking) else {
             return Vec::new();
         };
-        match key {
-            _ if prompt.phase != Phase::Asking => {}
-            Key::Char(c) => {
-                if !c.is_control() && prompt.field.len() + c.len_utf8() <= MAX_ANSWER {
-                    prompt.field.push(c);
-                    prompt.error = None;
-                }
-            }
-            Key::Backspace => {
-                prompt.field.pop();
-                prompt.error = None;
-            }
-            Key::Escape => unreachable!("handled above"),
-            Key::Return if prompt.field.is_empty() => {}
-            Key::Return => {
-                prompt.sent_len = prompt.field.chars().count();
-                prompt.phase = Phase::Checking;
-                prompt.error = None;
-                // the answer is copied once, into a block of its exact size; the field it came from is zeroed here
-                let field = std::mem::replace(&mut prompt.field, empty_field());
-                return vec![Effect::Answer(Zeroizing::new(field.as_bytes().to_vec()))];
-            }
+        if answer.is_empty() || answer.len() > MAX_ANSWER || answer.contains(&b'\n') {
+            return Vec::new();
         }
-        Vec::new()
+        prompt.phase = Phase::Checking;
+        prompt.error = None;
+        vec![Effect::Answer(Zeroizing::new(answer.to_vec()))]
     }
 
     /// The person dismissed the prompt on screen.
@@ -263,7 +224,7 @@ impl Agent {
                 prompt.phase = Phase::Asking;
                 prompt.question = shown(&text);
                 prompt.echo = echo;
-                prompt.field = empty_field();
+                prompt.asked += 1;
             }
             Line::Error(text) => prompt.error = Some(shown(&text)),
             Line::Info(text) => prompt.info = Some(shown(&text)),
@@ -333,11 +294,10 @@ impl Agent {
             phase: Phase::Waiting,
             question: String::new(),
             echo: false,
-            field: empty_field(),
-            sent_len: 0,
             error: None,
             info: None,
             failures: 0,
+            asked: 0,
         });
         vec![effect]
     }

@@ -224,13 +224,6 @@ pub enum Field {
     Confirm,
 }
 
-/// A key typed into a field.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Key {
-    Char(char),
-    Backspace,
-}
-
 fn empty_field() -> Zeroizing<String> {
     Zeroizing::new(String::with_capacity(MAX_PASSWORD))
 }
@@ -251,11 +244,11 @@ pub struct Prompt {
 }
 
 impl Prompt {
-    /// Characters a field shows (as bullets).
-    pub fn field_len(&self, field: Field) -> usize {
+    /// Whether `field` holds no text.
+    pub fn field_empty(&self, field: Field) -> bool {
         match field {
-            Field::Password => self.password.chars().count(),
-            Field::Confirm => self.confirm.chars().count(),
+            Field::Password => self.password.is_empty(),
+            Field::Confirm => self.confirm.is_empty(),
         }
     }
 
@@ -422,29 +415,25 @@ impl Prompter {
         effects
     }
 
-    /// A key typed into `field` of the question on screen.
-    pub fn key(&mut self, field: Field, key: Key) {
+    /// The text of `field` of the question on screen is now `text` (the field's own, handed over as it changes); text
+    /// past [`MAX_PASSWORD`] bytes or with a control character is not taken.
+    pub fn set_field(&mut self, field: Field, text: &str) {
         let Some(prompt) = self.asking_mut() else {
             return;
         };
         if prompt.kind != Kind::Password || (field == Field::Confirm && !prompt.confirms()) {
             return;
         }
-        let text = match field {
+        if text.len() > MAX_PASSWORD || text.chars().any(char::is_control) {
+            return;
+        }
+        let kept = match field {
             Field::Password => &mut prompt.password,
             Field::Confirm => &mut prompt.confirm,
         };
-        match key {
-            Key::Char(c) => {
-                if c.is_control() || text.len() + c.len_utf8() > MAX_PASSWORD {
-                    return;
-                }
-                text.push(c);
-            }
-            Key::Backspace => {
-                text.pop();
-            }
-        }
+        // the field's block never grows: it was made at the largest size a password may have
+        kept.clear();
+        kept.push_str(text);
         prompt.mismatch = false;
     }
 

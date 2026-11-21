@@ -1,6 +1,6 @@
 //! The users polkitd offers, as the prompt names them, and the login name the helper takes.
 
-use crate::agent::User;
+use crate::polkit::User;
 use crate::text::shown;
 
 /// What the password database says about a user.
@@ -11,7 +11,7 @@ pub struct Account {
     pub full_name: String,
 }
 
-/// The account of `user`, when the password database knows it.
+/// The account of `user`, when the password database knows it. Reads the database: run it on the I/O pool.
 pub fn account(user: User) -> Option<Account> {
     let entry = cupertino_kit::account::by_uid(user.0).ok()??;
     Some(Account {

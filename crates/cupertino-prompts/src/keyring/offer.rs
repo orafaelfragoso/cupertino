@@ -15,6 +15,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::future::Future;
 
 use zeroize::Zeroizing;
 
@@ -374,19 +375,33 @@ impl fmt::Display for StoreError {
 
 impl std::error::Error for StoreError {}
 
-/// The keyrings the move works on. Items and collections are named by their paths.
+/// The keyrings the move works on. Items and collections are named by their paths. Each call is a future, awaited on
+/// Kit's loop.
 pub trait Store {
     /// The default collection.
-    fn default_collection(&mut self) -> Result<String, StoreError>;
+    fn default_collection(&mut self) -> impl Future<Output = Result<String, StoreError>> + Send;
     /// Make `collection` the default one.
-    fn set_default(&mut self, collection: &str) -> Result<(), StoreError>;
-    fn items(&mut self, collection: &str) -> Result<Vec<String>, StoreError>;
+    fn set_default(
+        &mut self,
+        collection: &str,
+    ) -> impl Future<Output = Result<(), StoreError>> + Send;
+    fn items(
+        &mut self,
+        collection: &str,
+    ) -> impl Future<Output = Result<Vec<String>, StoreError>> + Send;
     /// An item's attributes alone, without its secret.
-    fn attributes(&mut self, item: &str) -> Result<BTreeMap<String, String>, StoreError>;
-    fn read(&mut self, item: &str) -> Result<Record, StoreError>;
+    fn attributes(
+        &mut self,
+        item: &str,
+    ) -> impl Future<Output = Result<BTreeMap<String, String>, StoreError>> + Send;
+    fn read(&mut self, item: &str) -> impl Future<Output = Result<Record, StoreError>> + Send;
     /// A new item in `collection`, beside any item with the same attributes; its path.
-    fn create(&mut self, collection: &str, record: &Record) -> Result<String, StoreError>;
-    fn delete(&mut self, item: &str) -> Result<(), StoreError>;
+    fn create(
+        &mut self,
+        collection: &str,
+        record: &Record,
+    ) -> impl Future<Output = Result<String, StoreError>> + Send;
+    fn delete(&mut self, item: &str) -> impl Future<Output = Result<(), StoreError>> + Send;
 }
 
 /// What a finished move did.
@@ -460,43 +475,46 @@ impl std::error::Error for MoveError {}
 /// back ([`FailedStep::Unconfirmed`]): it may be `to`, so the copies stay, and `to` is never left the default without
 /// the items. A default that is already `to` (such a run, tried again) is a move to finish: what is missing is copied
 /// and the default is left alone.
-pub fn move_items(store: &mut impl Store, from: &str, to: &str) -> Result<Moved, MoveError> {
+pub async fn move_items(store: &mut impl Store, from: &str, to: &str) -> Result<Moved, MoveError> {
     let mut created = Vec::new();
-    let result = copy_and_switch(store, from, to, &mut created);
-    result.map_err(|(step, cause)| {
-        let left = if step == FailedStep::Unconfirmed {
-            0
-        } else {
-            created
-                .iter()
-                .filter(|item| store.delete(item).is_err())
-                .count()
-        };
-        MoveError { step, cause, left }
-    })
+    let result = copy_and_switch(store, from, to, &mut created).await;
+    match result {
+        Ok(moved) => Ok(moved),
+        Err((step, cause)) => {
+            let mut left = 0;
+            if step != FailedStep::Unconfirmed {
+                for item in &created {
+                    if store.delete(item).await.is_err() {
+                        left += 1;
+                    }
+                }
+            }
+            Err(MoveError { step, cause, left })
+        }
+    }
 }
 
 type Failure = (FailedStep, Option<StoreError>);
 
-fn copy_and_switch(
+async fn copy_and_switch(
     store: &mut impl Store,
     from: &str,
     to: &str,
     created: &mut Vec<String>,
 ) -> Result<Moved, Failure> {
     let read = |e| (FailedStep::Read, Some(e));
-    let default = store.default_collection().map_err(read)?;
+    let default = store.default_collection().await.map_err(read)?;
     if default != from && default != to {
         return Err((FailedStep::Changed, None));
     }
     let mut sources = Vec::new();
-    for item in store.items(from).map_err(read)? {
-        sources.push(store.read(&item).map_err(read)?);
+    for item in store.items(from).await.map_err(read)? {
+        sources.push(store.read(&item).await.map_err(read)?);
     }
     // what the target holds, by attributes: only an item with an item's own attributes has its secret read
     let mut held = Vec::new();
-    for item in store.items(to).map_err(read)? {
-        held.push((store.attributes(&item).map_err(read)?, item));
+    for item in store.items(to).await.map_err(read)? {
+        held.push((store.attributes(&item).await.map_err(read)?, item));
     }
     // each item's copy: one made now, or an identical item that no other item of this run counts as its own
     let mut copies: Vec<String> = Vec::new();
@@ -506,7 +524,7 @@ fn copy_and_switch(
         for (attributes, candidate) in &held {
             if *attributes == record.attributes
                 && !copies.contains(candidate)
-                && store.read(candidate).map_err(read)? == *record
+                && store.read(candidate).await.map_err(read)? == *record
             {
                 found = Some(candidate.clone());
                 break;
@@ -520,6 +538,7 @@ fn copy_and_switch(
             None => {
                 let item = store
                     .create(to, record)
+                    .await
                     .map_err(|e| (FailedStep::Copy, Some(e)))?;
                 created.push(item.clone());
                 copies.push(item);
@@ -529,6 +548,7 @@ fn copy_and_switch(
     for (record, copy) in sources.iter().zip(&copies) {
         let stored = store
             .read(copy)
+            .await
             .map_err(|e| (FailedStep::Verify, Some(e)))?;
         if stored != *record {
             return Err((FailedStep::Verify, None));
@@ -543,10 +563,10 @@ fn copy_and_switch(
         created.clear();
         return Ok(moved);
     }
-    if let Err(error) = store.set_default(to) {
+    if let Err(error) = store.set_default(to).await {
         return Err((FailedStep::Default, Some(error)));
     }
-    match store.default_collection() {
+    match store.default_collection().await {
         Ok(default) if default == to => {
             // the move stands: nothing of it is taken back
             created.clear();
@@ -557,7 +577,7 @@ fn copy_and_switch(
         // another keyring was made the default meanwhile: it is left alone, and the copies go
         Ok(_) => Err((FailedStep::Changed, None)),
         // the default was set and is not known: only with the old one back for certain do the copies go
-        Err(unread) => match store.set_default(from) {
+        Err(unread) => match store.set_default(from).await {
             Ok(()) => Err((FailedStep::Default, Some(unread))),
             Err(_) => Err((FailedStep::Unconfirmed, Some(unread))),
         },

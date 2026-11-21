@@ -1089,10 +1089,10 @@
   version: n/a
   bus: system
   bus_name: none
-  owner_crate: cupertino-polkit-agent
+  owner_crate: cupertino-prompts
   owner_area: services
   scope: system
-  source: crates/cupertino-polkit-agent/src/agent.rs
+  source: crates/cupertino-prompts/src/polkit/agent.rs
   source_match: "org.freedesktop.PolicyKit1.AuthenticationAgent"
   note: registered with polkitd for the session; only polkitd calls
 - name: org.bluez.Agent1
@@ -1211,22 +1211,14 @@
   owner_area: services
   scope: shell-private
   source: crates/cupertino-control/src/main.rs
-- name: cupertino-polkit-agent
+- name: cupertino-prompts
   kind: binary
   version: 0.1.0
   shipped: yes
-  owner_crate: cupertino-polkit-agent
+  owner_crate: cupertino-prompts
   owner_area: services
   scope: shell-private
-  source: crates/cupertino-polkit-agent/src/main.rs
-- name: cupertino-keyring-prompter
-  kind: binary
-  version: 0.1.0
-  shipped: yes
-  owner_crate: cupertino-polkit-agent
-  owner_area: services
-  scope: shell-private
-  source: crates/cupertino-polkit-agent/src/keyring_main.rs
+  source: crates/cupertino-prompts/src/main.rs
 - name: cupertino-portal
   kind: binary
   version: 0.1.0

@@ -1,0 +1,37 @@
+[package]
+name = "cupertino-prompts"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "The session's prompts: the polkit authentication agent, the keyring's prompter and the consent dialogs, one Kit program on the prompt role"
+[package.metadata.cupertino]
+layer = "shell"
+
+[dependencies]
+cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events" }
+cupertino-kit = { path = "../cupertino-kit" }
+cupertino-kit-shell = { path = "../cupertino-kit-shell" }
+cupertino-login-ipc = { path = "../cupertino-login-ipc" }
+cupertino-peer = { path = "../cupertino-peer" }
+aes = "0.8"
+async-channel = "2"
+async-io = "2"
+cbc = { version = "0.1", features = ["alloc"] }
+crypto-bigint = { version = "0.7", default-features = false, features = ["zeroize"] }
+futures-lite = "2"
+hkdf = "0.12"
+rustix = { version = "1", features = ["rand"] }
+sha2 = "0.10"
+zbus = { version = "5", default-features = false, features = ["async-io"] }
+zeroize = "1"
+
+[dev-dependencies]
+cupertino-assets = { path = "../cupertino-assets" }
+cupertino-kit = { path = "../cupertino-kit", features = ["test"] }
+
+[[example]]
+name = "prompts_capture"
+
+[[bin]]
+name = "cupertino-prompts"
+path = "src/main.rs"

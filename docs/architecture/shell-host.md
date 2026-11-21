@@ -190,8 +190,7 @@ programs are (installed under an install root, owned by root, not writable by ot
 - `cupertino-audiod` is started by the bus at first use, never by the server.
 - W5.5 makes `login` a row of this table: the server starts `cupertino-login` itself in both sessions, and no file
   lists it.
-- *(until W6.14)* `polkit-agent` and `keyring-prompter` are started in the place of `prompts`, each with the `prompt`
-  role, and the consent authority is offered to the `session_lock` role.
+- *(until W6.14)* the consent authority is offered to the `session_lock` role.
 
 ### `greeter.json`
 

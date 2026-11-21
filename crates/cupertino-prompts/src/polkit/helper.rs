@@ -5,12 +5,19 @@
 //! Newer polkit runs the helper as a socket-activated service at [`SOCKET`]; otherwise, or when nothing answers there
 //! (a distribution that ships the socket disabled), the agent starts the helper binary from a fixed path. Either way
 //! the cookie travels on the stream, never on a command line.
+//!
+//! The helper is started on the I/O pool ([`Helper::start`]); its lines are read ([`Lines::read_line`]) and its
+//! questions answered ([`Answers::answer`]) by futures on Kit's loop, without a thread of their own.
 
-use std::io::{self, BufRead, BufReader, Read, Write};
+use std::io::{self, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::Arc;
 
+use async_io::Async;
+use futures_lite::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use futures_lite::AsyncRead;
 use zeroize::Zeroizing;
 
 /// Where polkit's socket-activated helper listens.
@@ -32,12 +39,17 @@ pub enum Route {
 
 impl Route {
     /// The routes to try in order: the socket when it exists, then the first helper binary installed. Empty when
-    /// polkit has neither.
+    /// polkit has neither. Looks at files: run it on the I/O pool.
     pub fn find() -> Vec<Route> {
         Self::find_in(Path::new(SOCKET), &BINARIES.map(Path::new))
     }
 
-    fn find_in(socket: &Path, binaries: &[&Path]) -> Vec<Route> {
+    /// [`Route::find`] with another socket and other binaries.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "runs on the I/O pool (kit::task::io)"
+    )]
+    pub fn find_in(socket: &Path, binaries: &[&Path]) -> Vec<Route> {
         let socket = socket.exists().then(|| Route::Socket(socket.to_owned()));
         let binary = binaries
             .iter()
@@ -153,28 +165,33 @@ fn unescape(line: &[u8]) -> Vec<u8> {
     out
 }
 
-/// The helper's side of one authentication: read its lines with [`Helper::read_line`], answer its prompts with
-/// [`Helper::answer`], or [`Helper::split`] it to read on one thread and answer from another. Dropping the [`Answers`]
-/// ends the conversation: a helper the agent started is stopped, and a read waiting on the socket returns.
+/// A helper started for one authentication, before its halves go their ways: [`Helper::split`].
 pub struct Helper {
     lines: Lines,
     answers: Answers,
 }
 
 /// The reading half of a [`Helper`].
-pub struct Lines(BufReader<Box<dyn Read + Send>>);
+pub struct Lines(BufReader<Box<dyn AsyncRead + Send + Unpin>>);
 
-/// The answering half of a [`Helper`]; dropping it ends the conversation.
+/// Where answers go.
+#[derive(Clone)]
+enum Writer {
+    Socket(Arc<Async<UnixStream>>),
+    Pipe(Arc<Async<ChildStdin>>),
+}
+
+/// The answering half of a [`Helper`]. Dropping it ends the conversation: a started helper is killed and a socket shut
+/// down, so a read waiting on either returns; [`Answers::end`] also waits for the killed helper.
 pub struct Answers {
-    writer: Box<dyn Write + Send>,
+    writer: Writer,
     child: Option<Child>,
-    socket: Option<UnixStream>,
 }
 
 impl Helper {
     /// Starts authenticating `user` for polkitd's `cookie` through the first of `routes` that answers. A started
     /// helper gets an empty environment, no descriptors but its pipes and stderr discarded; only the user is on its
-    /// command line.
+    /// command line. Connects or starts a process: run it on the I/O pool.
     pub fn start(routes: &[Route], user: &str, cookie: &str) -> io::Result<Helper> {
         let mut failed = io::Error::new(io::ErrorKind::NotFound, "polkit has no agent helper");
         for route in routes {
@@ -187,19 +204,21 @@ impl Helper {
     }
 
     fn start_on(route: &Route, user: &str, cookie: &str) -> io::Result<Helper> {
-        let mut helper = match route {
+        match route {
             Route::Socket(path) => {
-                let stream = UnixStream::connect(path)?;
-                let mut helper = Helper {
-                    lines: Lines(BufReader::new(Box::new(stream.try_clone()?))),
+                let mut stream = UnixStream::connect(path)?;
+                send_blocking(&mut stream, user.as_bytes())?;
+                send_blocking(&mut stream, cookie.as_bytes())?;
+                let stream = Arc::new(Async::new(stream)?);
+                let reader: Box<dyn AsyncRead + Send + Unpin> =
+                    Box::new(Shared(Arc::clone(&stream)));
+                Ok(Helper {
+                    lines: Lines(BufReader::new(reader)),
                     answers: Answers {
-                        writer: Box::new(stream.try_clone()?),
+                        writer: Writer::Socket(stream),
                         child: None,
-                        socket: Some(stream),
                     },
-                };
-                helper.answers.send(user.as_bytes())?;
-                helper
+                })
             }
             Route::Binary(path) => {
                 let mut child = Command::new(path)
@@ -210,31 +229,29 @@ impl Helper {
                     .stdout(Stdio::piped())
                     .stderr(Stdio::null())
                     .spawn()?;
-                let (Some(stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
+                let (Some(mut stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take())
+                else {
                     unreachable!("both pipes were asked for");
                 };
-                Helper {
+                let started = send_blocking(&mut stdin, cookie.as_bytes())
+                    .and_then(|()| Ok((Async::new(stdin)?, Async::new(stdout)?)));
+                let (stdin, stdout): (Async<ChildStdin>, Async<ChildStdout>) = match started {
+                    Ok(pipes) => pipes,
+                    Err(error) => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return Err(error);
+                    }
+                };
+                Ok(Helper {
                     lines: Lines(BufReader::new(Box::new(stdout))),
                     answers: Answers {
-                        writer: Box::new(stdin),
+                        writer: Writer::Pipe(Arc::new(stdin)),
                         child: Some(child),
-                        socket: None,
                     },
-                }
+                })
             }
-        };
-        helper.answers.send(cookie.as_bytes())?;
-        Ok(helper)
-    }
-
-    /// The helper's next line; blocks until it comes.
-    pub fn read_line(&mut self) -> Result<Line, HelperError> {
-        self.lines.read_line()
-    }
-
-    /// See [`Answers::answer`].
-    pub fn answer(&mut self, answer: &[u8]) -> io::Result<()> {
-        self.answers.answer(answer)
+        }
     }
 
     pub fn split(self) -> (Lines, Answers) {
@@ -242,13 +259,36 @@ impl Helper {
     }
 }
 
+/// A line written while the helper is being started, on the I/O pool.
+fn send_blocking(writer: &mut impl Write, text: &[u8]) -> io::Result<()> {
+    let mut line = Zeroizing::new(Vec::with_capacity(text.len() + 1));
+    line.extend_from_slice(text);
+    line.push(b'\n');
+    writer.write_all(&line)?;
+    writer.flush()
+}
+
+/// The reading side of a socket whose writing side the [`Answers`] hold.
+struct Shared(Arc<Async<UnixStream>>);
+
+impl AsyncRead for Shared {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut [u8],
+    ) -> std::task::Poll<io::Result<usize>> {
+        std::pin::Pin::new(&mut &*self.0).poll_read(cx, buf)
+    }
+}
+
 impl Lines {
-    /// The helper's next line; blocks until it comes, or until the [`Answers`] are dropped.
-    pub fn read_line(&mut self) -> Result<Line, HelperError> {
+    /// The helper's next line, once it comes; an error once the [`Answers`] are dropped.
+    pub async fn read_line(&mut self) -> Result<Line, HelperError> {
         let mut line = Vec::new();
         let read = (&mut self.0)
             .take(MAX_LINE as u64)
-            .read_until(b'\n', &mut line)?;
+            .read_until(b'\n', &mut line)
+            .await?;
         match line.pop() {
             None if read == 0 => Err(HelperError::Closed),
             Some(b'\n') => parse(&line),
@@ -259,37 +299,61 @@ impl Lines {
 }
 
 impl Answers {
+    /// A handle that writes the answers while these are held elsewhere.
+    pub fn sender(&self) -> AnswerSender {
+        AnswerSender(self.writer.clone())
+    }
+
+    /// The conversation ended: a started helper is killed and waited for, a socket shut down. Waits for a process:
+    /// run it on the I/O pool.
+    pub fn end(mut self) {
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+impl Drop for Answers {
+    fn drop(&mut self) {
+        if let Writer::Socket(socket) = &self.writer {
+            let _ = socket.get_ref().shutdown(std::net::Shutdown::Both);
+        }
+        // a helper still reading an answer stops; it is waited for by [`Answers::end`], else when the process ends
+        if let Some(child) = &mut self.child {
+            let _ = child.kill();
+        }
+    }
+}
+
+/// Writes answers to a helper's last prompt.
+#[derive(Clone)]
+pub struct AnswerSender(Writer);
+
+impl AnswerSender {
     /// Answers the last prompt. The answer and the buffer it is written from are wiped once sent; a line break in
     /// the answer would end it early, so it is refused.
-    pub fn answer(&mut self, answer: &[u8]) -> io::Result<()> {
+    pub async fn answer(&self, answer: &[u8]) -> io::Result<()> {
         if answer.contains(&b'\n') {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "an answer can't hold a line break",
             ));
         }
-        self.send(answer)
-    }
-
-    fn send(&mut self, text: &[u8]) -> io::Result<()> {
-        let mut line = Zeroizing::new(Vec::with_capacity(text.len() + 1));
-        line.extend_from_slice(text);
+        let mut line = Zeroizing::new(Vec::with_capacity(answer.len() + 1));
+        line.extend_from_slice(answer);
         line.push(b'\n');
-        self.writer.write_all(&line)?;
-        self.writer.flush()
-    }
-}
-
-impl Drop for Answers {
-    fn drop(&mut self) {
-        // a helper still reading an answer stops at the end of its input
-        self.writer = Box::new(io::sink());
-        if let Some(socket) = &self.socket {
-            let _ = socket.shutdown(std::net::Shutdown::Both);
-        }
-        if let Some(child) = &mut self.child {
-            let _ = child.kill();
-            let _ = child.wait();
+        match &self.0 {
+            Writer::Socket(socket) => {
+                let mut writer = &**socket;
+                writer.write_all(&line).await?;
+                writer.flush().await
+            }
+            Writer::Pipe(pipe) => {
+                let mut writer = &**pipe;
+                writer.write_all(&line).await?;
+                writer.flush().await
+            }
         }
     }
 }

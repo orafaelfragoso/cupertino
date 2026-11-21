@@ -49,10 +49,9 @@ const INSTALLED_SCREENSHOT: &str = "/usr/bin/cupertino-screenshot";
 pub enum BuiltIn {
     /// The desktop portal's backend, owner of [`PORTAL_BUS_NAME`]: it captures the screen for what the person allows.
     Portal,
-    /// The polkit authentication agent, which draws the authentication prompt.
-    PolkitAgent,
-    /// The keyring's prompter, which draws the keyring's password prompt as the authentication prompt is drawn.
-    KeyringPrompter,
+    /// The session's prompts (`cupertino-prompts`): the polkit authentication agent, the keyring's prompter and the
+    /// consent dialogs, drawn as prompts.
+    Prompts,
     /// The native local desktop controller; each run still needs session consent.
     DesktopControl,
     /// The lock screen / login screen program (`cupertino-login`); started by the server in both user and login sessions (W5.5).
@@ -66,10 +65,9 @@ pub enum BuiltIn {
 pub const PORTAL_BUS_NAME: &str = "org.freedesktop.impl.portal.desktop.cupertino";
 
 impl BuiltIn {
-    pub const ALL: [BuiltIn; 5] = [
+    pub const ALL: [BuiltIn; 4] = [
         BuiltIn::Portal,
-        BuiltIn::PolkitAgent,
-        BuiltIn::KeyringPrompter,
+        BuiltIn::Prompts,
         BuiltIn::DesktopControl,
         BuiltIn::Login,
     ];
@@ -78,8 +76,7 @@ impl BuiltIn {
     pub const fn name(self) -> &'static str {
         match self {
             BuiltIn::Portal => "portal",
-            BuiltIn::PolkitAgent => "polkit-agent",
-            BuiltIn::KeyringPrompter => "keyring-prompter",
+            BuiltIn::Prompts => "prompts",
             BuiltIn::DesktopControl => "desktop-control",
             BuiltIn::Login => "login",
             BuiltIn::Host => "host",
@@ -90,21 +87,21 @@ impl BuiltIn {
     pub(crate) const fn program_name(self) -> &'static str {
         match self {
             BuiltIn::Portal => "cupertino-portal",
-            BuiltIn::PolkitAgent => "cupertino-polkit-agent",
-            BuiltIn::KeyringPrompter => "cupertino-keyring-prompter",
+            BuiltIn::Prompts => "cupertino-prompts",
             BuiltIn::DesktopControl => "cupertino-control",
             BuiltIn::Login => "cupertino-login",
             BuiltIn::Host => "cupertino-shell",
         }
     }
 
-    /// The role of the process's connection; the portal holds [`ShellRole::GlobalShortcuts`] besides and login
-    /// [`ShellRole::Session`] besides [`ShellRole::SessionLock`] ([`BuiltIn::process`]). The session agent is the `agent`
+    /// The role of the process's connection; the portal holds [`ShellRole::GlobalShortcuts`] besides, login
+    /// [`ShellRole::Session`] besides [`ShellRole::SessionLock`], and the prompts [`ShellRole::Session`] and
+    /// [`ShellRole::Consent`] besides [`ShellRole::Prompt`] ([`BuiltIn::process`]). The session agent is the `agent`
     /// component a host runs, never a process of its own.
     pub const fn role(self) -> ShellRole {
         match self {
             BuiltIn::Portal => ShellRole::Capture,
-            BuiltIn::PolkitAgent | BuiltIn::KeyringPrompter => ShellRole::Prompt,
+            BuiltIn::Prompts => ShellRole::Prompt,
             BuiltIn::DesktopControl => ShellRole::DesktopControl,
             BuiltIn::Login => ShellRole::SessionLock,
             BuiltIn::Host => ShellRole::Host,
@@ -141,6 +138,8 @@ impl BuiltIn {
                 BuiltIn::Portal => vec![self.role(), ShellRole::GlobalShortcuts],
                 // the lock screen follows the session (its lock and idle events) beside its own role
                 BuiltIn::Login => vec![ShellRole::Session, ShellRole::SessionLock],
+                // the prompts follow the session (its lock) and ask the person's consent beside their own role
+                BuiltIn::Prompts => vec![ShellRole::Session, ShellRole::Prompt, ShellRole::Consent],
                 _ => vec![self.role()],
             },
         }

@@ -207,6 +207,17 @@ impl Timing {
         easing: Easing::LINEAR,
         seconds: 0.2,
     });
+    /// The scrim behind an authentication or keyring prompt fading in as the prompt opens: `1 - (1 - t)³` over 0.2 s,
+    /// as a cubic Bézier.
+    pub const AUTHENTICATION_SCRIM_FADE_IN: Timing = Timing(Motion::Eased {
+        easing: Easing(Shape::Bezier(CubicBezier::new(
+            1.0 / 3.0,
+            1.0,
+            2.0 / 3.0,
+            1.0,
+        ))),
+        seconds: 0.2,
+    });
 
     /// Progress `seconds` after the start: 0 at the start, 1 at rest; a spring may pass 1.
     pub fn value(self, seconds: f64) -> f64 {

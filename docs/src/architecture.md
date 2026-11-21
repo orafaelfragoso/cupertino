@@ -23,8 +23,7 @@ A crash in a shell process never takes the desktop down.
 | `cupertino-login` | the login screen and the lock screen (`ext-session-lock`), with `org.cupertino.Login1` (`Lock`) |
 | `cupertino-sessiond` | the root-owned half of login: the login screen's socket, PAM in a worker per attempt, logind sessions and virtual terminals, fast user switching, power, auto login |
 | `cupertino-screenshot` | screen, window and selection capture, toolbar, floating thumbnail; with `--serve`, started for the portal, the colour picker and the screen-sharing chooser (`org.cupertino.Screenshot1`) |
-| `cupertino-polkit-agent` | the session's polkit authentication agent and its prompt |
-| `cupertino-keyring-prompter` | the keyring's password prompt, drawn as the authentication prompt is (a second binary of the `cupertino-polkit-agent` crate, which has no crate of its own) |
+| `cupertino-prompts` | the session's prompts, always running: the polkit authentication agent's prompt and the keyring's password prompt |
 | `cupertino-portal` | the xdg-desktop-portal backend: file chooser, screen sharing, screenshots and colour picking (the choosing and picking in `cupertino-screenshot`), app chooser, appearance settings |
 | `cupertino-control` | desktop control for local agents: output-scoped observation, capture, pointer and keyboard runs, each with the person's consent per app, and its MCP stdio bridge (`--mcp`) |
 | `cupertino-files` | the file manager |
@@ -34,7 +33,7 @@ A crash in a shell process never takes the desktop down.
 | `cupertino-btd` | adapters, discovery, pairing with a UI agent, key store, `org.cupertino.Bluetooth1`, on the system bus |
 | `cupertino-powerd` | batteries, mains, display and keyboard backlight, lid; the `org.freedesktop.UPower` subset apps call and `org.cupertino.Power1` |
 
-The server starts the shell processes listed in `/etc/cupertino/compositor.json` and four built-in processes from their installed paths, each with one role: `portal`, `polkit-agent`, `keyring-prompter` and `desktop-control` (`cupertino-control`). `cupertino shell list` shows them all.
+The server starts the shell processes listed in `/etc/cupertino/compositor.json` and three built-in processes from their installed paths, each with its roles: `portal`, `prompts` and `desktop-control` (`cupertino-control`). `cupertino shell list` shows them all.
 
 ## Rendering
 
@@ -69,7 +68,7 @@ as dev-dependencies, and only dev-dependencies point at a `testing` crate. The c
 | `shellkit` (the shell's extension of the toolkit) | `cupertino-kit-shell` | `foundation`, `system`, `protocol`, `transport`, `ui` |
 | `core` (the compositor) | `cupertino-server`, `cupertino-server-backend`, `cupertino-server-input`, `cupertino-server-render` | `foundation`, `graphics`, `models`, `system`, `platform`, `protocol`, `render`, `core` |
 | `services` (processes with no interface of their own) | `cupertino-audiod`, `cupertino-btd`, `cupertino-control`, `cupertino-netd`, `cupertino-powerd`, `cupertino-sessiond` | `foundation`, `models`, `system`, `platform`, `protocol`, `transport`, `services` |
-| `shell` | `cupertino-controlcenter`, `cupertino-dock`, `cupertino-launcher`, `cupertino-login`, `cupertino-menubar`, `cupertino-notifications`, `cupertino-osd`, `cupertino-polkit-agent`, `cupertino-portal`, `cupertino-screenshot`, `cupertino-shell`, `cupertino-shell-agent`, `cupertino-shell-desktop`, `cupertino-windowmanager` | `foundation`, `models`, `system`, `protocol`, `ui`, `shellkit`, `shell` |
+| `shell` | `cupertino-controlcenter`, `cupertino-dock`, `cupertino-launcher`, `cupertino-login`, `cupertino-menubar`, `cupertino-notifications`, `cupertino-osd`, `cupertino-portal`, `cupertino-prompts`, `cupertino-screenshot`, `cupertino-shell`, `cupertino-shell-agent`, `cupertino-shell-desktop`, `cupertino-windowmanager` | `foundation`, `models`, `system`, `protocol`, `ui`, `shellkit`, `shell` |
 | `apps` | `cupertino-files`, `cupertino-settings` | `foundation`, `models`, `system`, `protocol`, `ui` |
 | `tools` | `cupertino-cli`, `cupertino-diagnostics`, `cupertino-gpu-shaders`, `cupertino-gpu-slice`, `cupertino-layers`, `xtask` | every layer except `core`, `shell`, `services`, `apps`, `testing` |
 | `testing` (test harnesses, tests that start programs from more than one crate) | `cupertino-session-tests` | every layer |

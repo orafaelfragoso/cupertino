@@ -27,7 +27,6 @@ pub mod desktop;
 pub mod display_power;
 pub mod displays;
 pub mod dock;
-pub mod dock_thumbnail;
 pub mod drag_return;
 pub mod events;
 pub mod file_limit;

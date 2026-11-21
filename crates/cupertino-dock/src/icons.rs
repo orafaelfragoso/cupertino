@@ -1,16 +1,17 @@
-//! The icons the dock shows, loaded for the toolkit's images: an application's own icon (an absolute path or the
-//! `hicolor` theme), the icon a window set for itself, and the system's generic application and trash icons from the
-//! asset directory. Every surface of the process draws them through CupertinoKit ([`crate::view`], the switcher's
-//! panel of [`crate::switcher_kit`]).
+//! The icons the dock shows, loaded for the toolkit's images on Kit's I/O pool: an application's own icon (an absolute
+//! path or the `hicolor` theme), the icon a window set for itself, and the system's generic application and trash icons
+//! from the asset directory. Every surface of the dock draws them through CupertinoKit ([`crate::view`], the switcher's
+//! panel of [`crate::switcher_kit`]). Nothing here runs on the UI thread but [`WindowImage::new`], which only reorders
+//! the pixels the server sent.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use cupertino_assets::Assets;
 use cupertino_icons::{SystemIcons, ThemeIcons};
-use cupertino_shell_client::{DockWindowIcon, WindowIconImage};
-use tiny_skia::{FilterQuality, Pixmap, PixmapPaint, Transform};
-
-use crate::desktop::DesktopIndex;
+use cupertino_kit::controls::ImageSource;
+use cupertino_kit::core::next_resource_id;
+use cupertino_kit::render::{ImageResource, PixelFormat};
 
 /// Semantic names of the generic application icon and of the trash's two states.
 const GENERIC_APPLICATION_ICON: &str = "application.generic";
@@ -46,68 +47,59 @@ const MAX_FILL_SCALE: f64 = 4.0;
 /// A pixel at least this opaque is part of an icon's shape.
 const SHAPE_ALPHA: u8 = 8;
 
-/// Icon pixmaps by name and pixel size, loaded once: an application's own icon (an absolute path or the `hicolor`
-/// theme) and the system's icons from the asset directory; and the icons windows set for themselves.
-pub struct Icons {
-    apps: ThemeIcons,
-    system: SystemIcons,
-    cache: HashMap<(String, u32), Option<Pixmap>>,
-    /// The system's icons by name and pixel size, filled to their squares.
-    system_cache: HashMap<(&'static str, u32), Pixmap>,
-    /// Windows' own icons by window id.
-    windows: BTreeMap<u32, WindowIcon>,
+/// An image of premultiplied RGBA8 pixels, rows top to bottom.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Raster {
+    pub width: u32,
+    pub height: u32,
+    pub data: Vec<u8>,
 }
 
-/// The icon a window set for itself: a theme name, an image, or both.
-struct WindowIcon {
-    /// The window's application id and the dock's key for it (its tile's).
-    apps: [String; 2],
-    name: Option<String>,
-    image: Option<Pixmap>,
-    /// The image resampled to each smaller size it is drawn at.
-    scaled: BTreeMap<u32, Pixmap>,
-}
-
-impl WindowIcon {
-    /// The image at `px`: resampled once when it is larger, as it is when not.
-    fn at(&mut self, px: u32) -> &Pixmap {
-        let image = self.image.as_ref().expect("has an image");
-        self.scaled.entry(px).or_insert_with(|| {
-            let shape = shape_square(image).map_or_else(|| image.clone(), |s| cropped(image, s));
-            if shape.width() <= px {
-                shape
-            } else {
-                resampled(&shape, px)
-            }
-        })
+impl Raster {
+    /// A transparent image `width` × `height` pixels large.
+    fn transparent(width: u32, height: u32) -> Self {
+        Self {
+            width,
+            height,
+            data: vec![0; width as usize * height as usize * 4],
+        }
     }
-}
 
-/// Where an application's icon comes from.
-enum IconSource {
-    Theme(String),
-    Window(u32),
-    Generic,
-}
+    /// The pixel at `(x, y)`, the nearest edge pixel for one outside.
+    fn at(&self, x: i64, y: i64) -> [u8; 4] {
+        let x = x.clamp(0, i64::from(self.width) - 1) as usize;
+        let y = y.clamp(0, i64::from(self.height) - 1) as usize;
+        let i = (y * self.width as usize + x) * 4;
+        [
+            self.data[i],
+            self.data[i + 1],
+            self.data[i + 2],
+            self.data[i + 3],
+        ]
+    }
 
-/// A window's ARGB8888 image (premultiplied, little-endian) as a pixmap; a colour channel over its alpha is cut to it.
-fn window_pixmap(image: &WindowIconImage) -> Option<Pixmap> {
-    let rgba = image
-        .argb
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .flat_map(|&[b, g, r, a]| [r.min(a), g.min(a), b.min(a), a])
-        .collect();
-    Pixmap::from_vec(rgba, tiny_skia::IntSize::from_wh(image.size, image.size)?)
+    /// The image as the toolkit draws it.
+    pub fn image(&self) -> ImageSource {
+        ImageSource {
+            id: next_resource_id(),
+            image: ImageResource {
+                revision: 0,
+                width: self.width,
+                height: self.height,
+                stride: self.width * 4,
+                format: PixelFormat::Rgba8Premultiplied,
+                pixels: Arc::from(self.data.as_slice()),
+            },
+        }
+    }
 }
 
 /// The square of `image` around its drawn shape, `(x, y, side)`: the bounding box of the pixels at least
 /// [`SHAPE_ALPHA`] opaque, made square about its centre and kept inside the image. `None` when nothing is drawn.
-pub fn shape_square(image: &Pixmap) -> Option<(u32, u32, u32)> {
-    let (w, h) = (image.width(), image.height());
+pub fn shape_square(image: &Raster) -> Option<(u32, u32, u32)> {
+    let (w, h) = (image.width, image.height);
     let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0, 0);
-    for (i, px) in image.data().as_chunks::<4>().0.iter().enumerate() {
+    for (i, px) in image.data.as_chunks::<4>().0.iter().enumerate() {
         if px[3] >= SHAPE_ALPHA {
             let (x, y) = (i as u32 % w, i as u32 / w);
             x0 = x0.min(x);
@@ -128,56 +120,71 @@ pub fn shape_square(image: &Pixmap) -> Option<(u32, u32, u32)> {
 }
 
 /// `image` cropped to the square `(x, y, side)`.
-fn cropped(image: &Pixmap, (x, y, side): (u32, u32, u32)) -> Pixmap {
-    let mut out = Pixmap::new(side, side).expect("a non-empty side");
-    out.draw_pixmap(
-        -(x as i32),
-        -(y as i32),
-        image.as_ref(),
-        &PixmapPaint::default(),
-        Transform::identity(),
-        None,
+fn cropped(image: &Raster, (x, y, side): (u32, u32, u32)) -> Raster {
+    let mut out = Raster::transparent(side, side);
+    let row = side as usize * 4;
+    for r in 0..side.min(image.height.saturating_sub(y)) {
+        let from = ((y + r) as usize * image.width as usize + x as usize) * 4;
+        let width = (side.min(image.width.saturating_sub(x)) as usize) * 4;
+        out.data[r as usize * row..r as usize * row + width]
+            .copy_from_slice(&image.data[from..from + width]);
+    }
+    out
+}
+
+/// `image` scaled to `side` × `side` pixels, each pixel sampled bilinearly at its centre, the edge pixels repeated
+/// past the image's edge.
+fn bilinear(image: &Raster, side: u32) -> Raster {
+    let mut out = Raster::transparent(side, side);
+    let (kx, ky) = (
+        f64::from(image.width) / f64::from(side),
+        f64::from(image.height) / f64::from(side),
     );
+    for (i, px) in out.data.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+        let (x, y) = (i as u32 % side, i as u32 / side);
+        let u = (f64::from(x) + 0.5) * kx - 0.5;
+        let v = (f64::from(y) + 0.5) * ky - 0.5;
+        let (x0, y0) = (u.floor(), v.floor());
+        let (fx, fy) = (u - x0, v - y0);
+        let (x0, y0) = (x0 as i64, y0 as i64);
+        let corners = [
+            (image.at(x0, y0), (1.0 - fx) * (1.0 - fy)),
+            (image.at(x0 + 1, y0), fx * (1.0 - fy)),
+            (image.at(x0, y0 + 1), (1.0 - fx) * fy),
+            (image.at(x0 + 1, y0 + 1), fx * fy),
+        ];
+        for (c, value) in px.iter_mut().enumerate() {
+            let sum: f64 = corners.iter().map(|(p, w)| f64::from(p[c]) * w).sum();
+            *value = sum.round().clamp(0.0, 255.0) as u8;
+        }
+    }
     out
 }
 
 /// A square image at exactly `px` a side: resampled down when larger, scaled up bilinearly when smaller.
-fn sized(image: Pixmap, px: u32) -> Pixmap {
+fn sized(image: Raster, px: u32) -> Raster {
     let px = px.max(1);
-    if image.width() >= px {
+    if image.width >= px {
         return resampled(&image, px);
     }
-    let mut out = Pixmap::new(px, px).expect("a non-empty side");
-    let fit = px as f32 / image.width() as f32;
-    out.draw_pixmap(
-        0,
-        0,
-        image.as_ref(),
-        &PixmapPaint {
-            quality: FilterQuality::Bilinear,
-            ..PixmapPaint::default()
-        },
-        Transform::from_scale(fit, fit),
-        None,
-    );
-    out
+    bilinear(&image, px)
 }
 
 /// The icon `load` gives at `px` a side, its drawn shape filling the square: when the shape covers less than
 /// [`FILLED_SHARE`] of the image, the icon is loaded again as much larger as its margin and cropped to the shape, so
 /// it stays as sharp as when drawn at its own size.
-pub fn filled(px: u32, mut load: impl FnMut(u32) -> Option<Pixmap>) -> Option<Pixmap> {
+pub fn filled(px: u32, mut load: impl FnMut(u32) -> Option<Raster>) -> Option<Raster> {
     let first = load(px)?;
     let Some(shape) = shape_square(&first) else {
         return Some(first);
     };
-    let share = f64::from(shape.2) / f64::from(first.width().max(1));
+    let share = f64::from(shape.2) / f64::from(first.width.max(1));
     if share >= FILLED_SHARE || share * MAX_FILL_SCALE < 1.0 {
         return Some(first);
     }
     let larger = (f64::from(px) / share).ceil() as u32;
     let image = match load(larger) {
-        Some(image) if image.width() >= larger => image,
+        Some(image) if image.width >= larger => image,
         _ => return Some(sized(cropped(&first, shape), px)),
     };
     match shape_square(&image) {
@@ -186,14 +193,14 @@ pub fn filled(px: u32, mut load: impl FnMut(u32) -> Option<Pixmap>) -> Option<Pi
     }
 }
 
-/// A square pixmap at half its side, each pixel the mean of the (up to) four it covers.
-fn halved(image: &Pixmap) -> Pixmap {
-    let side = image.width();
+/// A square image at half its side, each pixel the mean of the (up to) four it covers.
+fn halved(image: &Raster) -> Raster {
+    let side = image.width;
     let half = side.div_ceil(2);
-    let src = image.data();
-    let mut out = Pixmap::new(half, half).expect("a non-empty side");
+    let src = &image.data;
+    let mut out = Raster::transparent(half, half);
     let at = |x: u32, y: u32| (y.min(side - 1) * side + x.min(side - 1)) as usize * 4;
-    for (i, px) in out.data_mut().as_chunks_mut::<4>().0.iter_mut().enumerate() {
+    for (i, px) in out.data.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         let (x, y) = (2 * (i as u32 % half), 2 * (i as u32 / half));
         let corners = [at(x, y), at(x + 1, y), at(x, y + 1), at(x + 1, y + 1)];
         for (c, v) in px.iter_mut().enumerate() {
@@ -205,34 +212,100 @@ fn halved(image: &Pixmap) -> Pixmap {
 }
 
 /// A square image larger than `px` at `px` a side: halved while it is at least twice as large, then bilinear.
-fn resampled(image: &Pixmap, px: u32) -> Pixmap {
+fn resampled(image: &Raster, px: u32) -> Raster {
     let px = px.max(1);
     let mut image = image.clone();
-    while image.width() >= 2 * px {
+    while image.width >= 2 * px {
         image = halved(&image);
     }
-    if image.width() == px {
+    if image.width == px {
         return image;
     }
-    let mut out = Pixmap::new(px, px).expect("a non-empty side");
-    let fit = px as f32 / image.width() as f32;
-    out.draw_pixmap(
-        0,
-        0,
-        image.as_ref(),
-        &PixmapPaint {
-            quality: FilterQuality::Bilinear,
-            ..PixmapPaint::default()
-        },
-        Transform::from_scale(fit, fit),
-        None,
-    );
-    out
+    bilinear(&image, px)
+}
+
+/// The icon a window set for itself: a theme name, an image, or both. Sent with each icon job of its application.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WindowImage {
+    pub name: Option<String>,
+    pub image: Option<Arc<Raster>>,
+}
+
+impl WindowImage {
+    /// The icon of the server's `name` and square `side` × `side` image of premultiplied ARGB8888 pixels,
+    /// little-endian; a colour channel over its alpha is cut to it. `None` when it names nothing and has no image.
+    pub fn new(name: Option<String>, image: Option<(u32, &[u8])>) -> Option<Self> {
+        let image = image
+            .filter(|(side, argb)| *side > 0 && argb.len() == *side as usize * *side as usize * 4)
+            .map(|(side, argb)| {
+                let data = argb
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .flat_map(|&[b, g, r, a]| [r.min(a), g.min(a), b.min(a), a])
+                    .collect();
+                Arc::new(Raster {
+                    width: side,
+                    height: side,
+                    data,
+                })
+            });
+        (name.is_some() || image.is_some()).then_some(Self { name, image })
+    }
+
+    /// The image at `px`: cropped to its shape, resampled when larger, as it is when not.
+    fn at(&self, px: u32) -> Option<Raster> {
+        let image = self.image.as_deref()?;
+        let shape = shape_square(image).map_or_else(|| image.clone(), |s| cropped(image, s));
+        Some(if shape.width <= px {
+            shape
+        } else {
+            resampled(&shape, px)
+        })
+    }
+}
+
+/// One icon to load.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Job {
+    /// An application's icon: its desktop entry's theme name (`entry`), else the icon its window set, else the theme's
+    /// icon named as the application, else the generic application icon.
+    App {
+        app: String,
+        entry: Option<String>,
+        window: Option<WindowImage>,
+    },
+    /// The theme's icon of this name, else the asset packs' of the name, else the generic application icon.
+    Named(String),
+    /// The trash, full or empty.
+    Trash(bool),
+}
+
+/// Icon images by name and pixel size, loaded once: an application's own icon (an absolute path or the `hicolor`
+/// theme) and the system's icons from the asset directory. It reads files: it lives on Kit's I/O pool.
+pub struct Icons {
+    apps: ThemeIcons,
+    system: SystemIcons,
+    cache: HashMap<(String, u32), Option<Raster>>,
+    /// The system's icons by name and pixel size, filled to their squares.
+    system_cache: HashMap<(&'static str, u32), Raster>,
+}
+
+/// A pixmap of the icon crates as a [`Raster`].
+macro_rules! raster {
+    ($pixmap:expr) => {{
+        let pixmap = $pixmap;
+        Raster {
+            width: pixmap.width(),
+            height: pixmap.height(),
+            data: pixmap.data().to_vec(),
+        }
+    }};
 }
 
 impl Icons {
-    /// The generic application icon and the trash's are reported at startup when no asset pack provides them; they
-    /// are then drawn as placeholders.
+    /// The icon themes and the asset packs of `assets`. The generic application icon and the trash's are reported
+    /// when no asset pack provides them; they are then drawn as placeholders.
     pub fn new(assets: &Assets) -> Self {
         let system = SystemIcons::required(
             assets,
@@ -244,76 +317,51 @@ impl Icons {
             system,
             cache: HashMap::new(),
             system_cache: HashMap::new(),
-            windows: BTreeMap::new(),
         }
     }
 
-    /// The icons loaded away from the dock's loop: as [`Icons::new`], but an asset the system's icons lack falls back to
-    /// a placeholder rather than failing, as the dock's own [`Icons`] already checked them.
-    pub fn background(assets: &Assets) -> Self {
-        Self {
-            apps: ThemeIcons::new(assets),
-            system: SystemIcons::new(assets),
-            cache: HashMap::new(),
-            system_cache: HashMap::new(),
-            windows: BTreeMap::new(),
-        }
-    }
-
-    /// The theme's icon `name` at `px`, filled to its square; `None` when the theme has none.
-    pub fn themed(&mut self, name: &str, px: u32) -> Option<&Pixmap> {
-        if self.has_themed(name, px) {
-            self.cache[&(name.to_owned(), px)].as_ref()
-        } else {
-            None
-        }
-    }
-
-    /// A window set its own icon, or removed it; `apps` are its application id and the dock's key for it.
-    pub fn window_icon(&mut self, apps: [String; 2], icon: DockWindowIcon) {
-        let image = icon.image.as_ref().and_then(window_pixmap);
-        if icon.name.is_none() && image.is_none() {
-            self.windows.remove(&icon.id);
-        } else {
-            self.windows.insert(
-                icon.id,
-                WindowIcon {
-                    apps,
-                    name: icon.name,
-                    image,
-                    scaled: BTreeMap::new(),
+    /// What `job` loads at `px` a side.
+    pub fn load(&mut self, job: &Job, px: u32) -> Raster {
+        match job {
+            Job::App { app, entry, window } => self.app(app, entry.as_deref(), window.as_ref(), px),
+            Job::Named(name) => self.named(name, px),
+            Job::Trash(full) => self.system_icon(
+                if *full {
+                    TRASH_FULL_ICON
+                } else {
+                    TRASH_EMPTY_ICON
                 },
-            );
+                px,
+            ),
         }
     }
 
-    pub fn window_closed(&mut self, id: u32) {
-        self.windows.remove(&id);
-    }
-
-    /// Whether the theme has icon `name` at `px`, loading it once.
-    fn has_themed(&mut self, name: &str, px: u32) -> bool {
+    /// The theme's icon `name` at `px`, filled to its square, loaded once; `None` when the theme has none.
+    fn themed(&mut self, name: &str, px: u32) -> Option<Raster> {
         let apps = &mut self.apps;
         self.cache
             .entry((name.to_owned(), px))
-            .or_insert_with(|| filled(px, |side| apps.load(name, side)))
-            .is_some()
+            .or_insert_with(|| filled(px, |side| apps.load(name, side).map(|p| raster!(p))))
+            .clone()
     }
 
     /// The system's icon `name` at `px`, filled to its square.
-    fn system_icon(&mut self, name: &'static str, px: u32) -> &Pixmap {
+    fn system_icon(&mut self, name: &'static str, px: u32) -> Raster {
         let system = &mut self.system;
-        self.system_cache.entry((name, px)).or_insert_with(|| {
-            filled(px, |side| Some(system.raster(name, side).clone()))
-                .expect("the system always gives an icon")
-        })
+        self.system_cache
+            .entry((name, px))
+            .or_insert_with(|| {
+                filled(px, |side| Some(raster!(system.raster(name, side))))
+                    .unwrap_or_else(|| Raster::transparent(px.max(1), px.max(1)))
+            })
+            .clone()
     }
 
     /// The theme's icon `name`, else the asset packs' icon of that name (a folder's or a kind of document's,
     /// `folder.downloads` or `document.pdf`), else the asset `application.generic`.
-    pub fn named(&mut self, name: &str, px: u32) -> &Pixmap {
-        if self.has_themed(name, px) {
-            return self.cache[&(name.to_owned(), px)].as_ref().expect("loaded");
+    fn named(&mut self, name: &str, px: u32) -> Raster {
+        if let Some(icon) = self.themed(name, px) {
+            return icon;
         }
         if let Some(packed) = PACKED_NAMES.iter().find(|n| **n == name) {
             if self.system.has_raster(packed, px) {
@@ -323,50 +371,27 @@ impl Icons {
         self.system_icon(GENERIC_APPLICATION_ICON, px)
     }
 
-    fn source(&mut self, desktop: &DesktopIndex, app_id: &str, px: u32) -> IconSource {
-        if let Some(name) = desktop.entry_icon(app_id) {
-            if self.has_themed(name, px) {
-                return IconSource::Theme(name.to_owned());
-            }
-        }
-        let window = self
-            .windows
-            .iter()
-            .find(|(_, w)| w.apps.iter().any(|a| a == app_id))
-            .map(|(id, w)| (*id, w.name.clone(), w.image.is_some()));
-        if let Some((id, name, image)) = window {
-            if let Some(name) = name.filter(|n| self.has_themed(n, px)) {
-                return IconSource::Theme(name);
-            }
-            if image {
-                return IconSource::Window(id);
-            }
-        }
-        if self.has_themed(app_id, px) {
-            return IconSource::Theme(app_id.to_owned());
-        }
-        IconSource::Generic
-    }
-
     /// The icon of an application: its desktop entry's, else the one its window set for itself (a theme name, then
     /// its image), else the theme's icon named as the application, else the asset `application.generic`.
-    pub fn app(&mut self, desktop: &DesktopIndex, app_id: &str, px: u32) -> &Pixmap {
-        match self.source(desktop, app_id, px) {
-            IconSource::Theme(name) => self.cache[&(name, px)].as_ref().expect("loaded"),
-            IconSource::Window(id) => self.windows.get_mut(&id).expect("listed").at(px),
-            IconSource::Generic => self.system_icon(GENERIC_APPLICATION_ICON, px),
+    fn app(
+        &mut self,
+        app: &str,
+        entry: Option<&str>,
+        window: Option<&WindowImage>,
+        px: u32,
+    ) -> Raster {
+        if let Some(icon) = entry.and_then(|name| self.themed(name, px)) {
+            return icon;
         }
-    }
-
-    /// The trash's icon, empty or full.
-    pub fn trash(&mut self, full: bool, px: u32) -> &Pixmap {
-        self.system_icon(
-            if full {
-                TRASH_FULL_ICON
-            } else {
-                TRASH_EMPTY_ICON
-            },
-            px,
-        )
+        if let Some(window) = window {
+            if let Some(icon) = window.name.as_deref().and_then(|n| self.themed(n, px)) {
+                return icon;
+            }
+            if let Some(icon) = window.at(px) {
+                return icon;
+            }
+        }
+        self.themed(app, px)
+            .unwrap_or_else(|| self.system_icon(GENERIC_APPLICATION_ICON, px))
     }
 }

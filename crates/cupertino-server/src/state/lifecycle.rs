@@ -80,15 +80,6 @@ impl Cupertino {
         for id in missing {
             self.refresh_snapshot(id);
         }
-        if self
-            .shell
-            .overview
-            .as_ref()
-            .is_some_and(|o| o.closing && !o.is_animating(now))
-        {
-            self.shell.overview = None;
-            self.request_redraw();
-        }
     }
 
     /// The earliest model time at which [`Cupertino::tick`] has time-driven work that no event and no frame brings
@@ -124,7 +115,6 @@ impl Cupertino {
     pub fn animating(&self) -> bool {
         let now = self.now();
         self.wm.wants_tick(now)
-            || self.shell.wants_tick(now)
             || self.fx.wants_tick(now)
             || self.window_managers.wants_tick(now)
             || self.menu_bars_want_tick(now)
@@ -212,19 +202,8 @@ impl Cupertino {
                     }
                 }
                 Effect::SwitcherClosed { committed } => self.docks.switcher_closed(committed),
-                // the overview does not survive a workspace switch (the dock's, a shortcut's or a
-                // swipe's); workspace edits reach the dock's bar
-                Effect::WorkspaceSwitched { output, .. } => {
-                    if self.shell.overview_on(output).is_some() {
-                        self.close_overview();
-                    }
-                }
                 Effect::WorkspaceRemoved { workspace, .. } => {
                     self.transactions.notify_workspace_removed(workspace);
-                    self.send_overview_to_docks();
-                }
-                Effect::WorkspaceCreated { .. } | Effect::WorkspacesReordered { .. } => {
-                    self.send_overview_to_docks()
                 }
                 Effect::WindowStateChanged { window, from, to } => {
                     if from == cupertino_wm::LifecycleState::Minimized
@@ -239,7 +218,10 @@ impl Cupertino {
                 | Effect::Raise { .. }
                 | Effect::SetVisible { .. }
                 | Effect::StartAnimation { .. }
-                | Effect::SnapPreview { .. } => {}
+                | Effect::SnapPreview { .. }
+                | Effect::WorkspaceSwitched { .. }
+                | Effect::WorkspaceCreated { .. }
+                | Effect::WorkspacesReordered { .. } => {}
             }
         }
         // the outputs each window is on and the scale it draws at follow its frame (`displays::surface_output`)
@@ -251,35 +233,10 @@ impl Cupertino {
         self.refresh_suspended();
         if redraw {
             self.request_redraw();
-            self.refresh_overview_windows();
             self.refresh_overview_v1();
             self.refresh_menu_bars();
             self.refresh_docks();
             self.refresh_window_managers();
-        }
-    }
-
-    /// Keep the open overview in sync with windows that opened, closed or changed state: a changed
-    /// set goes to the dock for a new layout.
-    fn refresh_overview_windows(&mut self) {
-        let Some(out) = self
-            .shell
-            .overview
-            .as_ref()
-            .filter(|s| !s.closing)
-            .map(|s| s.output)
-        else {
-            return;
-        };
-        let now = self.now();
-        let windows = shell::overview_windows(&self.wm, out, now, self.dock_rect(out));
-        let changed = self
-            .shell
-            .overview
-            .as_mut()
-            .is_some_and(|s| s.set_windows(windows));
-        if changed {
-            self.send_overview_to_docks();
         }
     }
 
@@ -465,7 +422,6 @@ impl Cupertino {
             front_app_windows,
             output,
             switcher_open: self.wm.switcher().is_some(),
-            overview_open: self.shell.overview_open(),
             workspaces,
             current_workspace: current,
             locked: self.session_lock.is_active(),
@@ -495,7 +451,6 @@ impl Cupertino {
             match op {
                 ShellOp::ToggleOverview => self.toggle_overview(false),
                 ShellOp::ToggleAppOverview => self.toggle_overview(true),
-                ShellOp::CloseOverview => self.close_overview(),
                 ShellOp::SpawnTerminal => self.spawn_terminal(),
                 ShellOp::Screenshot(request) => self.start_screenshot(request),
                 ShellOp::Quit => self.quit_compositor(),

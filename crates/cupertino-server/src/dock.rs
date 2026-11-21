@@ -12,12 +12,9 @@
 //! server's ([`SWITCHER_NAMESPACE`]). Refused activations reach every dock as `attention`. The
 //! app-grid action opens the launcher's application browser, which the server asks for on the
 //! session bus (`Cupertino::toggle_applications`); a hot corner or gesture the dock maps to it
-//! comes back as that action. Docks are no longer sent `toggle_app_grid`. The overview is shared: the server owns
-//! the session (`shell.rs`: transition, frames, Escape, click and workspace-switch fallbacks) and
-//! tells the dock of its output the window set, the workspaces and the layout area
-//! ([`Cupertino::send_overview_to_docks`]); the dock lays the windows out (`overview_frame`), draws
-//! the workspaces bar and sends picks and workspace edits. Hot corners and gestures the server
-//! detects go to the dock to be mapped ([`Docks::hot_corner`], [`Docks::gesture`]).
+//! comes back as that action. Docks are no longer sent `toggle_app_grid`. The overview is a component of its own
+//! (`overview_v1.rs`); the dock's `show_windows` command asks it for one application's windows. Hot corners and the
+//! gestures no transaction is bound to go to the dock to be mapped ([`Docks::hot_corner`], [`Docks::gesture`]).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{Seek, Write};
@@ -29,7 +26,6 @@ use cupertino_protocols::server::cupertino_dock_v1::{
 };
 use cupertino_protocols::server::cupertino_session_v1::Activation as AppActivation;
 use cupertino_protocols::server::cupertino_shell_v1::{CupertinoShellV1, Error as ShellError};
-use cupertino_wm::overview::OverviewMode;
 use cupertino_wm::{Command, LifecycleState, OutputId, Rect, WindowId};
 use smithay::desktop::{layer_map_for_output, WindowSurfaceType};
 use smithay::output::Output;
@@ -44,7 +40,6 @@ use smithay::wayland::compositor::{with_states, Cacheable};
 
 use crate::app_effects_v1::surface_backdrops;
 use crate::authorization::{authorized, refuse, require, role, Permit, ShellRole};
-use crate::dock_thumbnail::WindowThumbnail;
 use crate::menu_bar::cut_text;
 use crate::state::Cupertino;
 use crate::toplevel_icon::WindowIcon;
@@ -74,8 +69,6 @@ struct WindowInfo {
     state: WindowState,
     /// The window's copied icon: the same `Arc` until the window commits another.
     icon: Arc<WindowIcon>,
-    /// The picture of the window while it is minimized, once drawn.
-    thumbnail: Option<Arc<WindowThumbnail>>,
 }
 
 impl WindowInfo {
@@ -93,15 +86,13 @@ const ENGAGE_SINCE: u32 = 18;
 /// Shell version of `cupertino_dock_v1.app_resident`.
 const APP_RESIDENT_SINCE: u32 = 19;
 
-/// Shell version of `cupertino_dock_v1.window_thumbnail`.
-const WINDOW_THUMBNAIL_SINCE: u32 = 22;
+/// Shell version from which `cupertino_dock_v1` has the messages of this server: version 28 removed the overview's and
+/// `window_thumbnail`, which moved the opcodes of the later ones, so an older dock speaks another wire and is left inert.
+const DOCK_MESSAGES_SINCE: u32 = 28;
 
 /// Layer-shell namespace of the dock's switcher panel: a press there is the dock's, a press
 /// anywhere else cancels the switch.
 pub const SWITCHER_NAMESPACE: &str = "cupertino-dock-switcher";
-
-/// Layer-shell namespace of the dock's overview surface: the workspaces' live pictures lie on its material.
-pub const OVERVIEW_NAMESPACE: &str = "cupertino-dock-overview";
 
 /// The open application switcher: what the panel's dock is shown, and the output it is drawn on.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -140,10 +131,6 @@ pub struct Docks {
     /// The applications each connected application client has shown a window of: they stay resident while it is
     /// connected, windows or not ([`Cupertino::resident_apps`]).
     residents: HashMap<ClientId, BTreeSet<String>>,
-    /// The pictures of the minimized windows, by window id.
-    thumbnails: HashMap<u32, Arc<WindowThumbnail>>,
-    /// Minimized windows that get no picture: protected from capture, or drawing them failed.
-    no_thumbnail: BTreeSet<u32>,
 }
 
 impl Docks {
@@ -243,14 +230,6 @@ impl Docks {
         }
     }
 
-    /// The overview of `output` is leaving: its dock drops the chrome.
-    pub fn overview_closed(&self, output: OutputId) {
-        if let Some(dock) = self.of_output(output) {
-            dock.resource.overview_closed();
-            dock.resource.done();
-        }
-    }
-
     /// A corner of `output` fired: its dock maps the corner to an action.
     pub fn hot_corner(&self, output: OutputId, corner: Corner) {
         if let Some(dock) = self.of_output(output) {
@@ -259,50 +238,13 @@ impl Docks {
         }
     }
 
-    /// A gesture committed on `output`: its dock maps it to an action. False without a dock there.
-    pub fn gesture(&self, output: OutputId, kind: Gesture) -> bool {
-        let Some(dock) = self.of_output(output) else {
-            return false;
-        };
-        dock.resource.gesture(kind);
-        dock.resource.done();
-        true
+    /// A gesture no transaction is bound to committed on `output`: its dock maps it to an action.
+    pub fn gesture(&self, output: OutputId, kind: Gesture) {
+        if let Some(dock) = self.of_output(output) {
+            dock.resource.gesture(kind);
+            dock.resource.done();
+        }
     }
-}
-
-/// The open overview as one dock sees it, in its output's coordinates.
-struct OverviewGroup {
-    mode: cupertino_dock_v1::OverviewMode,
-    app_id: String,
-    area: Rect,
-    windows: Vec<(u32, Rect)>,
-    workspaces: Vec<(u32, bool)>,
-}
-
-/// One group: the overview's windows, workspaces and area.
-fn send_overview(resource: &CupertinoDockV1, g: &OverviewGroup) {
-    for (id, r) in &g.windows {
-        resource.overview_window(
-            *id,
-            r.x.round() as i32,
-            r.y.round() as i32,
-            r.w.round() as i32,
-            r.h.round() as i32,
-        );
-    }
-    for (id, current) in &g.workspaces {
-        resource.overview_workspace(*id, u32::from(*current));
-    }
-    let a = g.area;
-    resource.overview_changed(
-        g.mode,
-        cut_text(&g.app_id).to_owned(),
-        a.x.round() as i32,
-        a.y.round() as i32,
-        a.w.round() as i32,
-        a.h.round() as i32,
-    );
-    resource.done();
 }
 
 /// `window_icon` for window `id`, its pixels in a sealed memfd; nothing when the file cannot be made.
@@ -319,17 +261,6 @@ fn send_window_icon(resource: &CupertinoDockV1, id: u32, icon: &WindowIcon) {
             file.as_fd(),
         ),
         Err(e) => tracing::warn!(error = %e, "making the file of a window icon failed"),
-    }
-}
-
-/// `window_thumbnail` for window `id`, its pixels in a sealed memfd, or an empty one for none; nothing when the file
-/// cannot be made.
-fn send_window_thumbnail(resource: &CupertinoDockV1, id: u32, thumbnail: Option<&WindowThumbnail>) {
-    let (width, height, argb) =
-        thumbnail.map_or((0, 0, &[][..]), |t| (t.width, t.height, t.argb.as_slice()));
-    match sealed_file(argb) {
-        Ok(file) => resource.window_thumbnail(id, width, height, file.as_fd()),
-        Err(e) => tracing::warn!(error = %e, "making the file of a window picture failed"),
     }
 }
 
@@ -425,6 +356,15 @@ impl Cupertino {
             shell.post_error(ShellError::Role, reason);
             return;
         }
+        if shell.version() < DOCK_MESSAGES_SINCE {
+            tracing::warn!(
+                version = shell.version(),
+                since = DOCK_MESSAGES_SINCE,
+                "a dock bound below the shell version of this server's dock messages is left inert"
+            );
+            init.init(id, DockData { output: None });
+            return;
+        }
         let (out, _) = target.expect("a rejected target returned above");
         let resource = init.init(id, DockData { output: Some(out) });
         self.docks.docks.push(Dock {
@@ -455,15 +395,6 @@ impl Cupertino {
         // a dock that restarts mid-switch on the panel's output draws the panel from where the switch stands
         if let Some(state) = self.docks.switcher.clone().filter(|s| s.output == out) {
             self.send_switcher_to_panel_dock(&state);
-        }
-        // and one that restarts mid-overview lays it out from where it stands
-        if let Some(group) = self
-            .overview_group()
-            .filter(|_| self.shell.overview_on(out).is_some())
-        {
-            if let Some(dock) = self.docks.docks.last() {
-                send_overview(&dock.resource, &group);
-            }
         }
     }
 
@@ -534,47 +465,9 @@ impl Cupertino {
         }
     }
 
-    /// The dock of `output` is gone: its reservation goes, and an overview it was laying out
-    /// closes so the windows come back.
+    /// The dock of `output` is gone: its reservation goes.
     fn dock_gone(&mut self, output: OutputId) {
         self.refresh_usable_area(output);
-        if self.shell.overview_on(output).is_some() {
-            self.close_overview();
-        }
-    }
-
-    /// The open overview for the dock of its output, in the output's coordinates.
-    fn overview_group(&self) -> Option<OverviewGroup> {
-        let s = self.shell.overview.as_ref().filter(|s| !s.closing)?;
-        let origin = self.output_entry(s.output)?.rect;
-        let local = |r: Rect| r.translate(-origin.x, -origin.y);
-        let (mode, app_id) = match s.mode {
-            OverviewMode::Overview => (cupertino_dock_v1::OverviewMode::All, String::new()),
-            OverviewMode::AppOverview(app) => (
-                cupertino_dock_v1::OverviewMode::App,
-                self.wm
-                    .app(app)
-                    .map(|a| a.identity.clone())
-                    .unwrap_or_default(),
-            ),
-        };
-        let current = self.wm.current_workspace(s.output);
-        Some(OverviewGroup {
-            mode,
-            app_id,
-            area: local(s.area),
-            windows: s
-                .windows
-                .iter()
-                .map(|w| (w.id.0 as u32, local(w.frame)))
-                .collect(),
-            workspaces: self
-                .wm
-                .workspaces(s.output)
-                .iter()
-                .map(|w| (w.id.0 as u32, Some(w.id) == current))
-                .collect(),
-        })
     }
 
     /// The Focus Dock shortcut: the dock of the active output takes the keyboard on its first tile, asking for
@@ -587,29 +480,6 @@ impl Cupertino {
         self.released_layer = None;
         let output = self.active_output();
         self.docks.engage(output);
-    }
-
-    /// Send the open overview (its windows, workspaces and area) to the dock of its output. Call
-    /// when it opens and whenever its window set or the workspaces change.
-    pub fn send_overview_to_docks(&self) {
-        let Some(group) = self.overview_group() else {
-            return;
-        };
-        let output = self
-            .shell
-            .overview
-            .as_ref()
-            .map(|s| s.output)
-            .expect("a group exists only for an open overview");
-        if let Some(dock) = self.docks.of_output(output) {
-            tracing::info!(
-                output = output.0,
-                windows = group.windows.len(),
-                workspaces = group.workspaces.len(),
-                "overview sent"
-            );
-            send_overview(&dock.resource, &group);
-        }
     }
 
     /// Windows a dock lists, by id: every mapped main window of an application. A window with a parent (a dialog, a
@@ -645,7 +515,6 @@ impl Cupertino {
                         title: cut_text(&w.title).to_owned(),
                         state,
                         icon: self.entry(w.id).map(|e| e.icon()).unwrap_or_default(),
-                        thumbnail: self.docks.thumbnails.get(&(w.id.0 as u32)).cloned(),
                     },
                 )
             })
@@ -730,7 +599,6 @@ impl Cupertino {
             let mut changed = dock.sent.is_none();
             let known = dock.sent.take().unwrap_or_default();
             let icons = dock.resource.version() >= WINDOW_ICON_SINCE;
-            let thumbnails = dock.resource.version() >= WINDOW_THUMBNAIL_SINCE;
             for (id, info) in &feed {
                 let old = known.get(id);
                 if !old.is_some_and(|o| o.same_window_event(info)) {
@@ -743,16 +611,6 @@ impl Cupertino {
                 });
                 if icons && new_icon {
                     send_window_icon(&dock.resource, *id, &info.icon);
-                    changed = true;
-                }
-                let new_thumbnail = match (old.and_then(|o| o.thumbnail.as_ref()), &info.thumbnail)
-                {
-                    (Some(a), Some(b)) => !Arc::ptr_eq(a, b),
-                    (None, None) => false,
-                    (Some(_), None) | (None, Some(_)) => true,
-                };
-                if thumbnails && new_thumbnail {
-                    send_window_thumbnail(&dock.resource, *id, info.thumbnail.as_deref());
                     changed = true;
                 }
             }
@@ -775,70 +633,6 @@ impl Cupertino {
                 dock.resource.done();
             }
             dock.sent = Some(feed.clone());
-        }
-    }
-
-    /// Draw the picture of each minimized window of output `idx` that has none yet, while a dock takes pictures, and
-    /// forget the pictures of the windows that are no longer minimized; tell the docks when that changed anything.
-    pub fn capture_dock_thumbnails(
-        &mut self,
-        renderer: &mut smithay::backend::renderer::gles::GlesRenderer,
-        idx: usize,
-    ) {
-        let minimized: BTreeSet<u32> = self
-            .wm
-            .windows()
-            .filter(|w| w.state() == LifecycleState::Minimized)
-            .map(|w| w.id.0 as u32)
-            .collect();
-        let before = self.docks.thumbnails.len();
-        self.docks.thumbnails.retain(|id, _| minimized.contains(id));
-        self.docks.no_thumbnail.retain(|id| minimized.contains(id));
-        let mut changed = self.docks.thumbnails.len() != before;
-        let wanted = self
-            .docks
-            .docks
-            .iter()
-            .any(|d| d.resource.version() >= WINDOW_THUMBNAIL_SINCE);
-        if let (true, Some(output)) = (wanted, self.outputs.get(idx).map(|o| o.id)) {
-            let pending: Vec<WindowId> = self
-                .wm
-                .windows()
-                .filter(|w| w.state() == LifecycleState::Minimized && w.output == output)
-                .filter(|w| w.parent.is_none())
-                .map(|w| w.id)
-                .filter(|id| {
-                    let key = id.0 as u32;
-                    !self.docks.thumbnails.contains_key(&key)
-                        && !self.docks.no_thumbnail.contains(&key)
-                })
-                .collect();
-            for id in pending {
-                let key = id.0 as u32;
-                let protected = self
-                    .entry(id)
-                    .is_none_or(|e| crate::control::protected_surface(e.surface()));
-                if protected || self.is_shell_window(id) {
-                    self.docks.no_thumbnail.insert(key);
-                    continue;
-                }
-                match self
-                    .render_window_rgba(renderer, idx, id)
-                    .ok()
-                    .and_then(|(w, h, rgba)| crate::dock_thumbnail::from_rgba(w, h, &rgba))
-                {
-                    Some(t) => {
-                        self.docks.thumbnails.insert(key, Arc::new(t));
-                        changed = true;
-                    }
-                    None => {
-                        self.docks.no_thumbnail.insert(key);
-                    }
-                }
-            }
-        }
-        if changed {
-            self.refresh_docks();
         }
     }
 
@@ -1067,87 +861,6 @@ impl Dispatch<CupertinoDockV1, DockData> for Cupertino {
                 }
             }
             cupertino_dock_v1::Request::SwitcherCancel => state.command(Command::SwitcherCancel),
-            cupertino_dock_v1::Request::OverviewFrame {
-                id,
-                x,
-                y,
-                width,
-                height,
-            } => {
-                let Some(origin) = state.output_entry(output).map(|o| o.rect) else {
-                    return;
-                };
-                if width <= 0 || height <= 0 {
-                    return;
-                }
-                state.dock_overview_frame(
-                    output,
-                    id,
-                    Rect::new(
-                        origin.x + f64::from(x),
-                        origin.y + f64::from(y),
-                        f64::from(width),
-                        f64::from(height),
-                    ),
-                );
-            }
-            cupertino_dock_v1::Request::OverviewDrag {
-                id,
-                x,
-                y,
-                width,
-                height,
-            } => {
-                let Some(origin) = state.output_entry(output).map(|o| o.rect) else {
-                    return;
-                };
-                if width <= 0 || height <= 0 {
-                    return;
-                }
-                state.dock_overview_drag(
-                    output,
-                    id,
-                    Rect::new(
-                        origin.x + f64::from(x),
-                        origin.y + f64::from(y),
-                        f64::from(width),
-                        f64::from(height),
-                    ),
-                );
-            }
-            cupertino_dock_v1::Request::OverviewMoveWindow { id, workspace } => {
-                state.dock_overview_move_window(output, id, workspace)
-            }
-            cupertino_dock_v1::Request::OverviewWorkspaceFrame {
-                workspace,
-                x,
-                y,
-                width,
-                height,
-            } => {
-                let Some(origin) = state.output_entry(output).map(|o| o.rect) else {
-                    return;
-                };
-                let rect = if width <= 0 || height <= 0 {
-                    Rect::default()
-                } else {
-                    Rect::new(
-                        origin.x + f64::from(x),
-                        origin.y + f64::from(y),
-                        f64::from(width),
-                        f64::from(height),
-                    )
-                };
-                state.dock_overview_picture(output, workspace, rect);
-            }
-            cupertino_dock_v1::Request::OverviewSelect { id } => {
-                state.overview_select(WindowId(u64::from(id)));
-            }
-            cupertino_dock_v1::Request::OverviewClose => {
-                if state.shell.overview_on(output).is_some() {
-                    state.close_overview();
-                }
-            }
             cupertino_dock_v1::Request::SwitchWorkspace { id } => {
                 state.dock_switch_workspace(output, id)
             }

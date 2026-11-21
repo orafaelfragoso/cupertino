@@ -1,0 +1,475 @@
+//! The overview (`cupertino-shell-overview`) as `cupertino-shell` runs it, against the real server, headless, on a
+//! session bus of the test's own and with settings and data directories of its own (`docs/architecture/shell-host.md`,
+//! D16). The server's supervisor starts this test binary as `cupertino-shell`: with [`host::MARK`] among its arguments it
+//! runs the host with the test dock of `shell/components.rs` and the real overview (`cupertino_shell::OVERVIEW`).
+//! - A panic injected as it paints, as its loop dispatches and on a helper thread restarts it alone, fifty times, while
+//!   the dock keeps drawing and the host's anonymous memory stays flat.
+//! - The swipe up is armed for the overview: released slowly short of half its travel it settles back and gives the
+//!   window back; released at the same place in a quick flick, the release's velocity carries it open, and the window
+//!   stays in its hole.
+//! - A window that closes while the overview is open has its hole closed: the claim ends and nothing of it shows.
+
+#[path = "shell-host/app.rs"]
+mod app;
+#[path = "shell/components.rs"]
+#[allow(dead_code)]
+mod components;
+// shared with `shell-host.rs`, which uses what this test does not
+#[allow(dead_code)]
+#[path = "shell-host/rig.rs"]
+mod rig;
+
+use std::collections::HashSet;
+use std::io::{BufRead, BufReader};
+use std::net::Shutdown;
+use std::os::unix::fs::DirBuilderExt;
+use std::path::PathBuf;
+use std::process::{Child, Command as Process, Stdio};
+
+use cupertino_input::gesture::GestureEvent;
+use cupertino_protocols::server::transaction::cupertino_transaction_v1::Gesture as WireGesture;
+use cupertino_server::host::HostKind;
+use zbus::blocking::Connection;
+
+use components::{BLUE, DOCK_SIZE, RED};
+use rig::{count, magenta, Area, Rig, OUTPUT_SIZE};
+
+/// The host program of this test: `cupertino-shell`'s own (`cupertino_shell::run`) with the test dock and the real
+/// overview.
+mod host {
+    use std::path::PathBuf;
+
+    use cupertino_kit_shell::Entry;
+
+    use super::components::{report_to, DOCK};
+
+    /// The argument that makes this test binary the host: a filter after `--` that names no test.
+    pub const MARK: &str = "cupertino-shell-overview-host";
+
+    /// The components this host was built with.
+    static ENTRIES: [&Entry; 2] = [&DOCK, &cupertino_shell::OVERVIEW];
+
+    /// The report file and the host's own arguments that follow [`MARK`], when this process is the host.
+    pub fn arguments() -> Option<(PathBuf, Vec<String>)> {
+        let args: Vec<String> = std::env::args().collect();
+        let at = args.iter().position(|a| a == MARK)?;
+        let report = PathBuf::from(args.get(at + 1)?);
+        Some((report, args[at + 2..].to_vec()))
+    }
+
+    /// Be the host, the dock reporting to `report`.
+    pub fn run(report: PathBuf, args: Vec<String>) -> ! {
+        report_to(report);
+        cupertino_shell::run(&ENTRIES, args)
+    }
+}
+
+/// The host itself, when the supervisor started this binary with [`host::MARK`]; a test run does nothing here.
+#[test]
+fn host_program() {
+    if let Some((report, args)) = host::arguments() {
+        host::run(report, args);
+    }
+}
+
+/// The area the dock covers: the output's bottom left.
+fn dock_area() -> Area {
+    let (w, h) = (DOCK_SIZE.width as i32, DOCK_SIZE.height as i32);
+    Area::new(0, OUTPUT_SIZE.1 - h, w, h)
+}
+
+/// The colour of [`components::Dock`] its area shows now.
+fn dock_colour(rig: &mut Rig) -> Option<&'static str> {
+    let image = rig.image();
+    let area = dock_area();
+    let shows = |colour: cupertino_kit::theme::Color| {
+        let want = [colour.r, colour.g, colour.b].map(|c| (c * 255.0) as i32);
+        count(&image, area, |rgb| {
+            (0..3).all(|c| (i32::from(rgb[c]) - want[c]).abs() < 40)
+        }) >= area.covered()
+    };
+    if shows(RED) {
+        Some("red")
+    } else if shows(BLUE) {
+        Some("blue")
+    } else {
+        None
+    }
+}
+
+/// A session bus of the test's own, whose address the hosts inherit, and the address.
+struct Bus(Child, String);
+
+/// A session bus that starts no service: nothing the component calls reaches a program of the machine.
+const BUS_CONFIG: &str = r#"<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <type>session</type>
+  <listen>unix:tmpdir=/tmp</listen>
+  <auth>EXTERNAL</auth>
+  <policy context="default">
+    <allow send_destination="*" eavesdrop="true"/>
+    <allow eavesdrop="true"/>
+    <allow own="*"/>
+  </policy>
+</busconfig>
+"#;
+
+impl Bus {
+    /// The bus, for the session and the system alike: the radios, the battery and the session agent the bar reads
+    /// are not on it, so it shows none of their items.
+    fn start() -> Bus {
+        let config = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("shell-overview-bus.conf");
+        std::fs::write(&config, BUS_CONFIG).expect("the bus's configuration");
+        let mut daemon = Process::new("dbus-daemon")
+            .arg(format!("--config-file={}", config.display()))
+            .args(["--nofork", "--print-address=1"])
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("dbus-daemon runs");
+        let mut address = String::new();
+        BufReader::new(daemon.stdout.take().unwrap())
+            .read_line(&mut address)
+            .unwrap();
+        assert!(!address.trim().is_empty(), "dbus-daemon gives its address");
+        let address = address.trim().to_owned();
+        std::env::set_var("DBUS_SESSION_BUS_ADDRESS", &address);
+        std::env::set_var("DBUS_SYSTEM_BUS_ADDRESS", &address);
+        Bus(daemon, address)
+    }
+}
+
+impl Drop for Bus {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// A directory of the test's own, new and empty, of mode 0700: the session's settings or data.
+fn private_dir(name: &str) -> PathBuf {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("shell-overview-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&dir)
+        .expect("a private directory");
+    dir
+}
+
+/// The host process's anonymous memory (its heap and stacks, which a leak grows), in KiB.
+fn anonymous(pid: u32) -> u64 {
+    let rollup =
+        std::fs::read_to_string(format!("/proc/{pid}/smaps_rollup")).expect("the host's memory");
+    rollup
+        .lines()
+        .find_map(|line| line.strip_prefix("Anonymous:"))
+        .and_then(|kib| kib.trim().trim_end_matches("kB").trim().parse().ok())
+        .expect("the host's anonymous memory")
+}
+
+/// `work` on a thread of its own while the server turns, so a call that waits for the server is answered.
+fn aside<T: Send + 'static>(
+    rig: &mut Rig,
+    what: &str,
+    work: impl FnOnce() -> T + Send + 'static,
+) -> T {
+    let work = std::thread::spawn(work);
+    rig.until(what, |_| work.is_finished());
+    work.join().unwrap()
+}
+
+/// How long a question to the overview's connection waits for its answer: a connection that serves no object yet
+/// leaves a call unanswered, so it is asked again.
+const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Whether the connection `name` serves the components' debug interface yet: the server knows a component's
+/// connection as soon as its name is proved, before the component serves anything on it, and a call made before
+/// that is never answered. `session` gives up on a call after [`PROBE_TIMEOUT`].
+fn serves_crash(rig: &mut Rig, session: &Connection, name: &str) -> bool {
+    let (session, name) = (session.clone(), name.to_owned());
+    aside(rig, "the overview answers", move || {
+        session
+            .call_method(
+                Some(name.as_str()),
+                "/org/cupertino/ShellComponentDebug1",
+                Some("org.freedesktop.DBus.Introspectable"),
+                "Introspect",
+                &(),
+            )
+            .ok()
+            .and_then(|reply| reply.body().deserialize::<String>().ok())
+            .is_some_and(|xml| xml.contains("org.cupertino.ShellComponentDebug1"))
+    })
+}
+
+/// The overview's own connection to the session bus, once the server knows it as the overview's: one not among
+/// `gone`, the connections of instances that failed, which the bus may still list for a while.
+fn overview_name(rig: &Rig, session: &Connection, gone: &HashSet<String>) -> Option<String> {
+    let dbus = zbus::blocking::fdo::DBusProxy::new(session).ok()?;
+    dbus.list_names()
+        .ok()?
+        .into_iter()
+        .map(|name| name.to_string())
+        .filter(|name| name.starts_with(':') && !gone.contains(name))
+        .find(|name| rig.state.hosts.component_of_bus_name(name) == Some("overview"))
+}
+
+/// A session bus, settings and data of the test's own, and the server with `components` serving the session on it.
+fn start(name: &str, components: &[&str]) -> (Bus, Rig) {
+    let bus = Bus::start();
+    // no dock.conf of the person's: the swipe up opens the overview, as by default
+    std::env::set_var("XDG_CONFIG_HOME", private_dir(&format!("{name}-config")));
+    std::env::set_var("XDG_DATA_HOME", private_dir(&format!("{name}-data")));
+    let mut rig = Rig::new(name, components, &[]);
+    cupertino_server::quit::start_session_service_on(&mut rig.state, Some(bus.1.clone()));
+    (bus, rig)
+}
+
+/// The first mapped window of the server, and its frame on the output.
+fn mapped(rig: &mut Rig) -> (cupertino_wm::WindowId, Area) {
+    rig.until("the window is mapped", |rig| {
+        rig.state.windows.iter().any(|w| w.mapped)
+    });
+    let id = rig.state.windows.iter().find(|w| w.mapped).unwrap().id;
+    let frame = rig.state.wm.window(id).unwrap().geometry();
+    let area = Area::new(
+        frame.x as i32,
+        frame.y as i32,
+        frame.w as i32,
+        frame.h as i32,
+    );
+    (id, area)
+}
+
+/// Crashes injected into the overview, after which each restarts alone.
+const RESTARTS: u32 = 50;
+/// Crashes after which the server gives a component up (D16: five within a minute); a restart the person asks for
+/// then starts it again and forgets them.
+const CRASHES_IN_A_ROW: u32 = 5;
+/// Restarts after which the host's memory is measured the first time: the host's first allocations of a component
+/// (its caches, the allocator's arenas) are made by then.
+const WARM_RESTARTS: u32 = 10;
+/// How much the host's anonymous memory may grow between that measurement and the last restart, in KiB: well below
+/// what one leaked instance holds (its 8 MiB stack, its surface's buffers).
+const ANONYMOUS_GROWTH_KIB: u64 = 4 * 1024;
+
+#[test]
+fn the_overview_restarts_alone_after_injected_panics() {
+    let (_bus, mut rig) = start("overview-crash", &["dock", "overview"]);
+    let session = zbus::blocking::connection::Builder::session()
+        .and_then(|builder| builder.method_timeout(PROBE_TIMEOUT).build())
+        .expect("the test's bus");
+    let mut gone = HashSet::new();
+    rig.until(
+        "the dock draws and the overview has its connection",
+        |rig| dock_colour(rig).is_some() && overview_name(rig, &session, &gone).is_some(),
+    );
+    let host = rig.host_pid(HostKind::Shared).unwrap();
+    let mut colours = HashSet::new();
+    let first_instance = rig.state.hosts.component_instance("overview");
+    let mut warm = None;
+    for crash in 0..RESTARTS {
+        let at = ["paint", "dispatch", "helper"][crash as usize % 3];
+        let mut name = None;
+        rig.until("the overview has its connection", |rig| {
+            name = overview_name(rig, &session, &gone);
+            name.is_some()
+        });
+        let name = name.unwrap();
+        gone.insert(name.clone());
+        rig.until("the overview serves its debug interface", |rig| {
+            serves_crash(rig, &session, &name)
+        });
+        // no reply is awaited: a crash at dispatch or on a helper may end the component before its reply leaves, and
+        // what shows the crash was taken is the next instance
+        let crash_call = zbus::Message::method_call("/org/cupertino/ShellComponentDebug1", "Crash")
+            .and_then(|m| m.destination(name.as_str()))
+            .and_then(|m| m.interface("org.cupertino.ShellComponentDebug1"))
+            .and_then(|m| m.with_flags(zbus::message::Flags::NoReplyExpected))
+            .and_then(|m| m.build(&(at,)))
+            .expect("the crash call");
+        session
+            .send(&crash_call)
+            .unwrap_or_else(|e| panic!("the crash at {at} is sent: {e}"));
+        // the person asks for the overview: the component hears it and draws its surface
+        rig.state.toggle_overview(false);
+        let gives_up = (crash + 1) % CRASHES_IN_A_ROW == 0;
+        if gives_up {
+            rig.until(
+                &format!("the server gives the overview up after a crash at {at}"),
+                |rig| {
+                    colours.extend(dock_colour(rig));
+                    rig.state.hosts.component_gave_up("overview")
+                },
+            );
+            let rx = rig.restart("overview");
+            rig.answer(&rx).expect("the overview starts again");
+        }
+        // each crash, or the restart after the last of a row, starts one instance
+        let instance = first_instance + crash + 1;
+        rig.until(
+            &format!("the overview starts again after a crash at {at}"),
+            |rig| {
+                colours.extend(dock_colour(rig));
+                rig.state.hosts.component_instance("overview") == instance
+                    && rig.state.hosts.component_connected("overview")
+            },
+        );
+        if crash + 1 == WARM_RESTARTS {
+            warm = Some(anonymous(host));
+        }
+    }
+    let (warm, last) = (warm.unwrap(), anonymous(host));
+    eprintln!(
+        "host anonymous memory after {WARM_RESTARTS} restarts: {warm} KiB; after {RESTARTS}: {last} KiB"
+    );
+    assert_eq!(
+        rig.host_pid(HostKind::Shared),
+        Some(host),
+        "the host went on"
+    );
+    assert_eq!(
+        rig.state.hosts.component_instance("dock"),
+        1,
+        "the dock was never restarted"
+    );
+    assert_eq!(
+        colours,
+        HashSet::from(["red", "blue"]),
+        "the dock kept drawing while the overview started again"
+    );
+    assert!(!rig.state.hosts.component_gave_up("overview"));
+    assert!(
+        last <= warm + ANONYMOUS_GROWTH_KIB,
+        "the host's anonymous memory grew from {warm} KiB to {last} KiB over {} restarts",
+        RESTARTS - WARM_RESTARTS
+    );
+}
+
+/// The fingers of the swipe up, and its travel for the whole gesture (the recogniser's `overview_distance`).
+const FINGERS: u32 = 3;
+const SWIPE_DISTANCE: f64 = 250.0;
+/// How far both swipes go before the fingers lift: short of the half at which a release without speed opens.
+const SHORT_OF_HALF: f64 = 0.35;
+/// The seconds between two touchpad events of the slow swipe, and of the flick.
+const SLOW_STEP: f64 = 0.05;
+const FLICK_STEP: f64 = 0.008;
+/// The events each swipe moves in.
+const SWIPE_EVENTS: u32 = 6;
+/// The events the slow swipe then rests in place before the fingers lift: longer than the recogniser's velocity
+/// window, so it lifts without speed.
+const REST_EVENTS: u32 = 6;
+/// The turns the window must stay claimed after the flick settled for the overview to have stayed open.
+const OPEN_TURNS: u32 = 200;
+
+/// A swipe up of [`SHORT_OF_HALF`] of the travel in [`SWIPE_EVENTS`] events `step` seconds apart, from `time`; with
+/// `rest`, the fingers stay still a while before they lift. Returns the time after it.
+fn swipe(rig: &mut Rig, mut time: f64, step: f64, rest: bool) -> f64 {
+    rig.state.gesture(GestureEvent::SwipeBegin {
+        time,
+        fingers: FINGERS,
+    });
+    for _ in 0..SWIPE_EVENTS {
+        time += step;
+        rig.state.gesture(GestureEvent::SwipeUpdate {
+            time,
+            dx: 0.0,
+            dy: -SWIPE_DISTANCE * SHORT_OF_HALF / f64::from(SWIPE_EVENTS),
+        });
+        rig.turn();
+    }
+    if rest {
+        for _ in 0..REST_EVENTS {
+            time += step;
+            rig.state.gesture(GestureEvent::SwipeUpdate {
+                time,
+                dx: 0.0,
+                dy: 0.0,
+            });
+            rig.turn();
+        }
+    }
+    time += step;
+    rig.state.gesture(GestureEvent::SwipeEnd {
+        time,
+        cancelled: false,
+    });
+    time
+}
+
+#[test]
+fn a_swipe_up_settles_with_the_velocity_it_is_released_with() {
+    let (_bus, mut rig) = start("overview-gesture", &["overview"]);
+    let client = rig.client();
+    app::spawn(client, "org.cupertino.test.overview");
+    let (id, own) = mapped(&mut rig);
+    let output = rig.state.outputs[0].id;
+    rig.until("the swipe up is armed", |rig| {
+        rig.state
+            .transactions
+            .has_gesture_binding(output, WireGesture::SwipeUp)
+    });
+
+    // slowly, and still when the fingers lift: the overview settles back and the window is its own again
+    let time = swipe(&mut rig, 1.0, SLOW_STEP, true);
+    rig.until("the slow swipe settled back", |rig| {
+        !rig.state.transactions.is_window_claimed(id)
+            && rig
+                .state
+                .transactions
+                .has_gesture_binding(output, WireGesture::SwipeUp)
+    });
+    assert!(
+        rig.shows(own, magenta, own.covered()),
+        "the window shows at its own frame"
+    );
+
+    // the same way in a quick flick: the velocity carries it open, and the window stays in its hole
+    swipe(&mut rig, time + 1.0, FLICK_STEP, false);
+    rig.until("the flick took the window into the overview", |rig| {
+        rig.state.transactions.is_window_claimed(id)
+    });
+    for _ in 0..OPEN_TURNS {
+        rig.turn();
+        assert!(
+            rig.state.transactions.is_window_claimed(id),
+            "the overview the flick opened stays open"
+        );
+    }
+    assert!(
+        count(&rig.image(), Area::output(), magenta) > 0,
+        "the window shows in its hole"
+    );
+}
+
+#[test]
+fn a_window_closing_in_the_open_overview_closes_its_hole() {
+    let (_bus, mut rig) = start("overview-close", &["overview"]);
+    let client = rig.client();
+    let closer = client.try_clone().expect("the client's socket");
+    app::spawn(client, "org.cupertino.test.overview");
+    let (id, _) = mapped(&mut rig);
+    let output = rig.state.outputs[0].id;
+    rig.until("the overview has the window", |rig| {
+        rig.state
+            .transactions
+            .has_gesture_binding(output, WireGesture::SwipeUp)
+    });
+    rig.state.toggle_overview(false);
+    rig.until("the overview shows the window in its hole", |rig| {
+        rig.state.transactions.is_window_claimed(id)
+            && count(&rig.image(), Area::output(), magenta) > 0
+    });
+
+    // the application goes: its window closes, and its hole with it
+    closer
+        .shutdown(Shutdown::Both)
+        .expect("the client's connection ends");
+    rig.until("the window's hole closed", |rig| {
+        rig.state.transactions.active_claim_for(id).is_none()
+            && count(&rig.image(), Area::output(), magenta) == 0
+    });
+}

@@ -1,218 +1,50 @@
-//! Shell behaviour on the compositor state: opening and closing the overview, the dock's intents
-//! for it (target frames, selection, workspaces, named actions, tile commands), the server-side
-//! fallbacks that work without a dock (click, Escape, workspace switch), and the hot corners.
+//! Shell behaviour on the compositor state: the ways the person asks for the overview, which go to the overview
+//! component of the output (`overview_v1.rs`), the dock's intents (workspaces, named actions, tile commands), and the
+//! hot corners.
 
 use cupertino_protocols::server::cupertino_dock_v1::{AppCommand, Corner};
-use cupertino_wm::overview::{OverviewConfig, OverviewMode};
-use cupertino_wm::{Command, OutputId, Point as MPoint, WindowId, WorkspaceId};
+use cupertino_protocols::server::overview::cupertino_overview_v1::Mode as OverviewMode;
+use cupertino_wm::{Command, OutputId, WindowId, WorkspaceId};
 use smithay::utils::{Logical, Point};
 
 use crate::input::{translate_action, Action};
-use crate::shell::{self, OverviewSession};
 use crate::state::Cupertino;
 
 impl Cupertino {
-    /// The overview shortcut: open on the active output (`app_mode`: the front application's
-    /// windows), or leave an open one.
+    /// The overview shortcut, its named action and gesture: the overview component of the active output opens or leaves
+    /// (`app_mode`: the front application's windows, all of them when no application is in front).
     pub fn toggle_overview(&mut self, app_mode: bool) {
-        if self.shell.overview_open() {
-            self.close_overview();
-            return;
-        }
         let Some(output) = self.active_output() else {
             return;
         };
-        let mode = match (app_mode, self.wm.front_app()) {
-            (true, Some(app)) => OverviewMode::AppOverview(app),
-            _ => OverviewMode::Overview,
-        };
-        self.open_overview(output, mode);
-    }
-
-    /// Open the overview on `output`; a closing one is replaced.
-    pub fn open_overview(&mut self, output: OutputId, mode: OverviewMode) {
-        if self.shell.overview_open() {
-            return;
-        }
-        let Some(rect) = self.output_entry(output).map(|o| o.rect) else {
-            return;
-        };
-        let now = self.now();
-        // the dock lays the windows out from the output's top (the menu bar gives way) down to the usable area's
-        // bottom (clear of the dock)
-        let usable = self.wm.output(output).map(|o| o.usable).unwrap_or(rect);
-        let area = shell::overview_area(rect, usable);
-        let windows = shell::overview_windows(&self.wm, output, now, self.dock_rect(output));
-        let mut session =
-            OverviewSession::new(&OverviewConfig::default(), output, area, mode, windows);
-        session.opened_at = now;
-        session.reduce_motion = self.display_options().reduce_motion;
-        session.transition.toggle(true, now);
-        tracing::info!(
-            output = output.0,
-            x = area.x,
-            y = area.y,
-            width = area.w,
-            height = area.h,
-            windows = session.windows.len(),
-            "overview opened"
-        );
-        self.shell.overview = Some(session);
-        self.send_overview_to_docks();
-        self.request_redraw();
-    }
-
-    /// Leave the overview: the windows glide back to their desktop frames, the docks drop their chrome.
-    pub fn close_overview(&mut self) {
-        let now = self.now();
-        if let Some(s) = self.shell.overview.as_mut().filter(|s| !s.closing) {
-            s.close(now);
-            let output = s.output;
-            tracing::info!(output = output.0, "overview closed");
-            self.docks.overview_closed(output);
-        }
-        self.request_redraw();
-    }
-
-    /// Leave the overview activating `window` (a minimized one is restored). False when the window
-    /// is not in the overview.
-    pub fn overview_select(&mut self, window: WindowId) -> bool {
-        if !self
-            .shell
-            .overview
-            .as_ref()
-            .is_some_and(|s| !s.closing && s.contains(window))
-        {
-            return false;
-        }
-        let minimized = self
-            .wm
-            .window(window)
-            .is_some_and(|w| w.state().is_minimized());
-        self.close_overview();
-        self.as_input(|s| {
-            s.command(if minimized {
-                Command::Restore { window }
-            } else {
-                Command::FocusWindow { window }
-            })
-        });
-        true
-    }
-
-    /// A press while the overview is open that no shell surface took: the window under the pointer
-    /// is selected, an empty spot leaves. Works without a dock. False when no overview is open.
-    pub fn overview_click(&mut self, pos: Point<f64, Logical>) -> bool {
-        let now = self.now();
-        let Some(s) = self.shell.overview.as_ref().filter(|s| !s.closing) else {
-            return false;
-        };
-        let hit = s.hit(MPoint::new(pos.x, pos.y), self.wm.stacking_order(), now);
-        match hit {
-            Some(window) => self.overview_select(window),
-            None => {
-                self.close_overview();
-                true
-            }
+        let app = app_mode
+            .then(|| self.wm.front_app())
+            .flatten()
+            .and_then(|app| self.app_identity_of(app))
+            .filter(|identity| !identity.is_empty());
+        match app {
+            Some(app_id) => self.ask_overview(output, OverviewMode::App, &app_id),
+            None => self.ask_overview(output, OverviewMode::All, ""),
         }
     }
 
-    /// `overview_frame`: the dock laid a window out; it glides there.
-    pub fn dock_overview_frame(&mut self, output: OutputId, id: u32, rect: cupertino_wm::Rect) {
-        let now = self.now();
-        let Some(s) = self
-            .shell
-            .overview
-            .as_mut()
-            .filter(|s| !s.closing && s.output == output)
-        else {
-            return;
-        };
-        if s.set_target(WindowId(u64::from(id)), rect, now) {
-            tracing::info!(
-                id,
-                x = rect.x,
-                y = rect.y,
-                width = rect.w,
-                height = rect.h,
-                "overview frame"
+    /// Ask the overview component of `output` to open in `mode` (`app_id` the application of the app mode, empty for
+    /// all), or to leave when it is open: the component decides. Nothing without a component on that output.
+    pub fn ask_overview(&self, output: OutputId, mode: OverviewMode, app_id: &str) {
+        if !self.toggle_overview_v1(output, mode, app_id) {
+            tracing::debug!(
+                output = output.0,
+                "no overview component on the output to open the overview"
             );
-            self.request_redraw();
         }
     }
 
-    /// `overview_drag`: the person drags a window of the overview; it is drawn where the pointer took it at once.
-    pub fn dock_overview_drag(&mut self, output: OutputId, id: u32, rect: cupertino_wm::Rect) {
-        let Some(s) = self
-            .shell
-            .overview
-            .as_mut()
-            .filter(|s| !s.closing && s.output == output)
-        else {
-            return;
-        };
-        if s.set_drag(WindowId(u64::from(id)), rect) {
-            self.request_redraw();
-        }
-    }
-
-    /// `overview_move_window`: a window of the overview was dropped on another regular workspace of its output; it
-    /// moves there and leaves the overview (the window set is sent again).
-    pub fn dock_overview_move_window(&mut self, output: OutputId, id: u32, workspace: u32) {
-        let window = WindowId(u64::from(id));
-        let workspace = WorkspaceId(u64::from(workspace));
-        let in_overview = self
-            .shell
-            .overview_on(output)
-            .is_some_and(|s| s.contains(window));
-        let target = self
-            .wm
-            .workspaces(output)
-            .iter()
-            .find(|w| w.id == workspace);
-        let regular = target.is_some_and(|w| w.kind == cupertino_wm::WorkspaceKind::Regular);
-        if !in_overview || !regular || self.wm.current_workspace(output) == Some(workspace) {
-            return;
-        }
-        tracing::info!(
-            id,
-            workspace = workspace.0,
-            "overview window moved to a workspace"
-        );
-        self.command(Command::MoveWindowToWorkspace { window, workspace });
-        self.request_redraw();
-    }
-
-    /// `overview_workspace_frame`: where the live picture of a workspace of `output` is drawn while its overview is
-    /// open; an empty rectangle removes it.
-    pub fn dock_overview_picture(
-        &mut self,
-        output: OutputId,
-        workspace: u32,
-        rect: cupertino_wm::Rect,
-    ) {
-        let workspace = WorkspaceId(u64::from(workspace));
-        if !self.wm.workspaces(output).iter().any(|w| w.id == workspace) {
-            return;
-        }
-        if let Some(s) = self
-            .shell
-            .overview
-            .as_mut()
-            .filter(|s| !s.closing && s.output == output)
-        {
-            s.set_picture(workspace, rect);
-            self.request_redraw();
-        }
-    }
-
-    /// `switch_workspace`: leave an open overview and go to the workspace.
+    /// `switch_workspace`: go to the workspace.
     pub fn dock_switch_workspace(&mut self, output: OutputId, id: u32) {
         let workspace = WorkspaceId(u64::from(id));
         if !self.wm.workspaces(output).iter().any(|w| w.id == workspace) {
             return;
         }
-        self.close_overview();
         self.command(Command::SwitchWorkspace { output, workspace });
     }
 
@@ -236,10 +68,10 @@ impl Cupertino {
         };
         match command {
             AppCommand::ShowWindows => {
-                if self.shell.overview_open() {
-                    self.close_overview();
-                }
-                self.open_overview(output, OverviewMode::AppOverview(app));
+                let app_id = self
+                    .app_identity_of(app)
+                    .unwrap_or_else(|| app_id.to_owned());
+                self.ask_overview(output, OverviewMode::App, &app_id);
             }
             AppCommand::Hide => self.command(Command::HideApp { app }),
             AppCommand::Quit => {

@@ -3,8 +3,8 @@
 //!
 //! The compositor decides, not the client. A constraint is active only while its surface is under the pointer and
 //! belongs to the window with the keyboard focus, that window may hold the shortcuts (an application's toplevel, the
-//! session unlocked, its client answering its pings), the person has not released it, no move, resize, popup grab,
-//! overview or switcher is running, and the pointer is inside the constraint's region. A lock keeps the pointer where
+//! session unlocked, its client answering its pings), the person has not released it, no move, resize, popup grab or
+//! switcher is running, and the pointer is inside the constraint's region. A lock keeps the pointer where
 //! it is and the client gets only relative motion; a confine keeps the pointer inside the region. The release chord
 //! gives the pointer back together with the shortcuts, and the same rule arms it again: focus from the person's own
 //! input (`crate::shortcut_inhibit`). A released window never hides the cursor. A subsurface under the pointer counts as
@@ -38,7 +38,6 @@ impl Cupertino {
             && !self.shortcut_inhibit.is_released(&root)
             && self.pointer_mode == PointerMode::Normal
             && self.popup_grab_root().is_none()
-            && !self.shell.overview_open()
             && self.wm.switcher().is_none()
     }
 

@@ -1,11 +1,9 @@
-//! The overview as the dock process shows it: the layout of the windows the server lists (the
-//! reference packing in `cupertino_wm::overview`, which the dock answers with one `overview_frame` per
-//! window), the desktops bar (names, opening on the pointer at the top to show the desktops' pictures, the add button,
-//! the remove button after a rest on a picture, drag-reorder), the selection ring and name, dragging a window onto a
-//! desktop, and what a click or key asks the server for. The server owns the open/close transition and the windows
-//! themselves; this model is always at the final layout.
+//! The overview's model: the layout of the windows the server lists (the reference packing in
+//! `cupertino_wm::overview`, in the output's points), the desktops band (names, opening on the pointer at the top to
+//! show the desktops' pictures, the add button, the remove button after a rest on a picture, drag-reorder), the
+//! selection ring and name, dragging a window onto a desktop, and what a click or a key asks for. The way in and out
+//! is the component's transactions ([`crate::component`]); this model is always at the final layout.
 
-use cupertino_animation::{AnimatedValue, Curve, SpringParams};
 use cupertino_wm::geometry::{Point, Rect};
 use cupertino_wm::ids::{AppId, WindowId, WorkspaceId};
 use cupertino_wm::overview::bar::{BarHit, BarLayout};
@@ -13,15 +11,6 @@ use cupertino_wm::overview::{
     Highlight, Key, Overview, OverviewAction, OverviewConfig, OverviewMode, OverviewWindow,
     PlacedWindow,
 };
-
-/// Wayland layer-shell namespace of the overview's surface.
-pub const NAMESPACE: &str = "cupertino-dock-overview";
-
-/// Response of the spring the chrome leaves on when the overview closes: critically damped, 0.125 s.
-pub const HIDE_RESPONSE: f64 = 0.125;
-
-/// The chrome is gone once its opacity fell below this.
-const GONE_ALPHA: f64 = 1e-3;
 
 /// A press on a workspace slot or a window becomes a drag once the pointer moved this far (approximate).
 pub const DRAG_SLACK: f64 = 4.0;
@@ -32,7 +21,7 @@ pub const REMOVE_BUTTON: f64 = 28.0;
 /// Seconds the pointer rests on a desktop's picture before its remove button shows (1 s).
 pub const REMOVE_HOVER_DELAY: f64 = 1.0;
 
-/// Which windows the server put in the overview.
+/// Which windows the overview shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
     /// Every window of the current workspace, with the workspaces bar.
@@ -41,8 +30,8 @@ pub enum Mode {
     App,
 }
 
-/// A window of the overview as the dock knows it: the server's id and desktop frame (output
-/// coordinates), the title and minimized state from the window feed.
+/// A window of the overview: the server's id and desktop frame (the output's points), the title and minimized state
+/// from the server's feed.
 #[derive(Clone, Debug, PartialEq)]
 pub struct WindowEntry {
     pub id: u32,
@@ -58,7 +47,7 @@ pub struct Workspace {
     pub current: bool,
 }
 
-/// What the pointer or a key asked the server for.
+/// What the pointer or a key asked for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum UiAction {
     None,
@@ -103,8 +92,7 @@ pub struct OverviewUi {
     overview: Overview,
     mode: Mode,
     workspaces: Vec<Workspace>,
-    /// The chrome's opacity: 1 while open, springing to 0 once the server said the overview leaves.
-    alpha: AnimatedValue<f64>,
+    /// The overview leaves: the pointer and the keys ask for nothing more.
     closing: bool,
     drag: Option<Drag>,
     window_drag: Option<WindowDrag>,
@@ -117,7 +105,7 @@ fn entries(windows: &[WindowEntry]) -> Vec<OverviewWindow> {
     windows
         .iter()
         .map(|w| {
-            // `from` is the server's business (it animates); the layout only needs the size
+            // the way in is the component's transaction; the layout only needs the size
             if w.minimized {
                 OverviewWindow::minimized(
                     WindowId(u64::from(w.id)),
@@ -146,13 +134,12 @@ fn ids(workspaces: &[Workspace]) -> (Vec<WorkspaceId>, Option<WorkspaceId>) {
 }
 
 impl OverviewUi {
-    /// The overview the server opened over `area` (output coordinates).
+    /// The overview over `area` (the output's points).
     pub fn new(
         mode: Mode,
         area: Rect,
         windows: &[WindowEntry],
         workspaces: Vec<Workspace>,
-        _now: f64,
     ) -> Self {
         let cfg = OverviewConfig::default();
         let model_mode = match mode {
@@ -160,7 +147,7 @@ impl OverviewUi {
             Mode::App => OverviewMode::AppOverview(AppId(0)),
         };
         let mut overview = Overview::new(cfg, area, model_mode, entries(windows));
-        // the server drives the transition: here the layout is final from the first frame
+        // the component's transaction is the way in: here the layout is final from the first frame
         overview.transition.progress.set_immediately(1.0);
         let (list, current) = ids(&workspaces);
         overview.set_workspaces(&list, current);
@@ -168,7 +155,6 @@ impl OverviewUi {
             overview,
             mode,
             workspaces,
-            alpha: AnimatedValue::new(1.0),
             closing: false,
             drag: None,
             window_drag: None,
@@ -181,7 +167,7 @@ impl OverviewUi {
         self.mode
     }
 
-    /// The server sent the window set again: windows reflow with the model's spring.
+    /// The server sent the window set again: the layout follows.
     pub fn set_windows(&mut self, windows: &[WindowEntry], now: f64) {
         self.overview.set_windows(entries(windows), now);
         if self
@@ -202,7 +188,7 @@ impl OverviewUi {
         &self.workspaces
     }
 
-    /// The final frame of every window: what the server is told with `overview_frame`.
+    /// The final frame of every window, in the model's order.
     pub fn frames(&self) -> Vec<(u32, Rect)> {
         self.overview
             .shown_windows()
@@ -461,39 +447,20 @@ impl OverviewUi {
         }
     }
 
-    /// The server said the overview leaves: the chrome springs out from `now`.
-    pub fn close(&mut self, now: f64) {
-        if !self.closing {
-            self.closing = true;
-            self.drag = None;
-            self.window_drag = None;
-            self.alpha.animate_to(
-                0.0,
-                Curve::Spring(SpringParams::from_ratio(HIDE_RESPONSE, 1.0)),
-                now,
-            );
-        }
+    /// The overview leaves: drags end and the pointer and the keys ask for nothing more.
+    pub fn close(&mut self) {
+        self.closing = true;
+        self.drag = None;
+        self.window_drag = None;
     }
 
     pub fn is_closing(&self) -> bool {
         self.closing
     }
 
-    /// Opacity of the chrome: 1 while open, springing to 0 after `close`.
-    pub fn alpha(&self, now: f64) -> f64 {
-        self.alpha.value(now).clamp(0.0, 1.0)
-    }
-
-    pub fn is_gone(&self, now: f64) -> bool {
-        self.closing && (self.alpha(now) < GONE_ALPHA || !self.alpha.is_animating(now))
-    }
-
-    /// Whether another frame is wanted: a reflow, the band, the highlight, a drag or the fade is moving.
+    /// Whether another frame is wanted: a reflow, the band, the highlight or a drag is moving.
     pub fn is_animating(&self, now: f64) -> bool {
-        self.closing
-            || self.overview.is_animating(now)
-            || self.drag().is_some()
-            || self.window_drag().is_some()
+        self.overview.is_animating(now) || self.drag().is_some() || self.window_drag().is_some()
     }
 
     /// When the chrome next changes by itself without moving: the remove button showing after the rest.

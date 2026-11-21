@@ -784,12 +784,11 @@ impl Cupertino {
     }
 
     /// The key window when an edit may go to it: the xdg toplevel of a client of the public socket, while no lock
-    /// (active or pending), overview, application switcher or move or resize is under way. The server runs no
+    /// (active or pending), application switcher or move or resize is under way. The server runs no
     /// Xwayland: every window it manages is an xdg toplevel (`WindowEntry`), so no X11 window is ever returned, nor a
     /// layer, lock or shell surface.
     fn edit_target(&self) -> Option<WindowId> {
         if self.session_lock.is_active()
-            || self.shell.overview.is_some()
             || self.wm.switcher().is_some()
             || self.pointer_mode != PointerMode::Normal
         {

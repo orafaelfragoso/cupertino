@@ -139,7 +139,6 @@ impl Cupertino {
             config: &self.config,
             display: self.accessibility.settings.display,
             display_filter: self.accessibility.display_filter(),
-            shell: &mut self.shell,
             decor: &mut self.decor,
             menu_bars: &self.menu_bars,
             hosts: &self.hosts,
@@ -306,7 +305,7 @@ impl Cupertino {
         (f64, f64),
     )> {
         let w = self.wm.window(id)?;
-        if !self.wm.window_on_screen(id) || w.state().is_minimized() || self.shell.overview_open() {
+        if !self.wm.window_on_screen(id) || w.state().is_minimized() {
             return None;
         }
         let output = w.output;
@@ -500,7 +499,6 @@ impl Cupertino {
             return;
         }
         self.process_captures(renderer, idx);
-        self.capture_dock_thumbnails(renderer, idx);
         self.send_backdrop_tones(renderer);
         let paths = if self.screenshot_each_output {
             self.split_screenshots();
@@ -596,19 +594,6 @@ impl Cupertino {
     fn visible_window_ids(&self, idx: usize) -> Vec<cupertino_wm::WindowId> {
         let out = &self.outputs[idx];
         let now = self.now();
-        if self
-            .shell
-            .overview
-            .as_ref()
-            .is_some_and(|s| s.output == out.id)
-        {
-            return self
-                .wm
-                .windows()
-                .filter(|w| w.output == out.id && !w.state().is_dead())
-                .map(|w| w.id)
-                .collect();
-        }
         crate::render::scene::windows_on_output(
             &self.wm,
             out.id,

@@ -92,11 +92,6 @@ impl Cupertino {
         self.end_popup_grab_on(id);
         self.overviews.remove_output(id);
         self.output_screenshots.retain(|(o, _)| *o != id);
-        // the overview of this output has nothing left to show on; one open elsewhere takes the windows that arrive
-        if self.shell.overview.as_ref().is_some_and(|o| o.output == id) {
-            tracing::info!(output = id.0, "the overview's output went away");
-            self.shell.overview = None;
-        }
         // told before the global goes, so a client hears `leave` for an output it can still name
         self.leave_departing_output(idx);
         let entry = self.outputs.remove(idx);
@@ -1003,7 +998,7 @@ impl Cupertino {
         let now = self.now();
         let rel = pos - Point::from((out.rect.x, out.rect.y));
         let origin = Point::<f64, Logical>::from((out.rect.x, out.rect.y));
-        let covered = crate::render::scene::top_layer_covered(&self.wm, &self.shell, out.id);
+        let covered = crate::render::scene::top_layer_covered(&self.wm, out.id);
         let layer_hit = |layers: &[Layer]| {
             let map = layer_map_for_output(&out.output);
             // every surface of a layer, topmost first: one whose box holds the point but whose input region does not
@@ -1091,19 +1086,14 @@ impl Cupertino {
         if let Some(hit) = layer_popup_hit() {
             return Some(hit);
         }
-        if !self.shell.overview_open() {
-            if let Some(WindowTarget::Surface {
-                surface, origin, ..
-            }) = self.window_popup_under(pos)
-            {
-                return Some((surface, origin));
-            }
+        if let Some(WindowTarget::Surface {
+            surface, origin, ..
+        }) = self.window_popup_under(pos)
+        {
+            return Some((surface, origin));
         }
         if let Some(hit) = layer_hit(&[Layer::Top]) {
             return Some(hit);
-        }
-        if self.shell.overview_open() {
-            return None;
         }
         match self.window_target_under(pos) {
             Some(WindowTarget::Surface {

@@ -82,6 +82,10 @@ pub fn parse_pins(text: &str) -> Vec<String> {
 
 /// Read the pins file at `path`; `None` when it does not exist (a file with no pins is `Some`, the
 /// user removed them all).
+#[expect(
+    clippy::disallowed_methods,
+    reason = "runs on the I/O pool (kit::task::io)"
+)]
 pub fn load_pins(path: &Path) -> io::Result<Option<Vec<String>>> {
     match std::fs::read_to_string(path) {
         Ok(text) => Ok(Some(parse_pins(&text))),

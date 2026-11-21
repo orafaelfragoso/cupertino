@@ -137,6 +137,10 @@ pub struct DesktopIndex {
 
 impl DesktopIndex {
     /// Index the `applications` directories under `dirs` (the XDG data directories).
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "runs on the I/O pool (kit::task::io)"
+    )]
     pub fn load_from(dirs: &[PathBuf]) -> Self {
         let mut entries: Vec<DesktopEntry> = Vec::new();
         for base in dirs {

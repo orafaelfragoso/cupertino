@@ -758,10 +758,10 @@ impl Default for KeyBindings {
 /// Shell-level operations an action can request besides model commands.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ShellOp {
+    /// Open or leave the overview of the active output (the overview component's).
     ToggleOverview,
+    /// Open or leave the overview of the front application's windows.
     ToggleAppOverview,
-    /// Escape while the overview is open (its other keys are the dock's).
-    CloseOverview,
     SpawnTerminal,
     /// Start the screenshot process.
     Screenshot(ScreenshotRequest),
@@ -844,7 +844,7 @@ impl ActionPlan {
 
     /// Whether holding the key that produced this plan repeats it: plans that step a selection or a level (switcher,
     /// window cycling, relative workspace switch, input-source steps, volume and brightness). The overview's
-    /// navigation keys reach the dock's surface, which repeats them as any client does.
+    /// keys reach the overview component's surface, which repeats them as any client does.
     /// Toggles, launches and one-shot commands do not repeat. The design repeats every key except its exclusion
     /// list; which shortcut handlers act on repeats is not known, so this set is approximate.
     pub fn repeats(&self) -> bool {
@@ -874,7 +874,6 @@ pub struct ActionContext {
     pub front_app_windows: Vec<WindowId>,
     pub output: Option<OutputId>,
     pub switcher_open: bool,
-    pub overview_open: bool,
     /// Workspace ids of the output, in order, and the index of the current one.
     pub workspaces: Vec<cupertino_wm::WorkspaceId>,
     pub current_workspace: usize,
@@ -1232,15 +1231,6 @@ impl KeyRouter {
                 }
                 None => KeyOutcome::Forward,
             };
-        }
-        // the overview's navigation keys reach the dock's keyboard-exclusive layer; Escape stays
-        // here so the overview leaves without a dock too
-        if ctx.overview_open && sym == keysyms::KEY_Escape && ev.mods == Mods::NONE {
-            self.suppressed.insert(sym, None);
-            return KeyOutcome::Consumed(ActionPlan {
-                ops: vec![ShellOp::CloseOverview],
-                ..Default::default()
-            });
         }
         // the open switcher takes every key but the modifiers: its own keys act on it, the others
         // do nothing (the design turns the other global shortcuts off while it is up)

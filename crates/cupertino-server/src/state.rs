@@ -74,7 +74,7 @@ use crate::render::scene::RenderResources;
 use crate::render::ElementCache;
 use crate::scroll_v1::ScrollObservers;
 use crate::session_v1::SessionObservers;
-use crate::shell::{self, Shell};
+use crate::shell;
 use crate::shell_v1::ShellV1Global;
 use crate::supervisor::Supervisor;
 use crate::toplevel_icon::WindowIcon;
@@ -853,7 +853,6 @@ pub struct Cupertino {
     pub fx: Effects,
     pub windows: Vec<WindowEntry>,
     pub outputs: Vec<OutputEntry>,
-    pub shell: Shell,
     pub render: Option<RenderResources>,
     /// The tone each glass backdrop's text was last sent ([`crate::app_effects_v1::BackdropTones`]).
     pub backdrop_tones: crate::app_effects_v1::BackdropTones,
@@ -1039,7 +1038,6 @@ impl Cupertino {
         let fx = Effects::new(config.effects);
         let key_router = KeyRouter::new(config.keybindings.clone());
         let hot_corner_config = config.hot_corners.clone();
-        let shell = Shell::default();
         let menu_protocols = MenuProtocols::new(&dh);
         let owner_checks = crate::owner_check::OwnerChecks::new(&loop_handle)?;
         let displays = crate::displays::Displays::new(&dh);
@@ -1212,7 +1210,6 @@ impl Cupertino {
             fx,
             windows: Vec::new(),
             outputs: Vec::new(),
-            shell,
             render: None,
             backdrop_tones: Default::default(),
             backend: None,

@@ -41,56 +41,8 @@ pub struct DockWindowIcon {
     pub image: Option<WindowIconImage>,
 }
 
-/// Largest side of a window's picture a dock accepts, in pixels: the server sends at most 256.
-pub const MAX_WINDOW_THUMBNAIL: u32 = 256;
-
-/// Shell version of the overview's drag, drop and workspace picture requests.
-const OVERVIEW_DRAG_VERSION: u32 = 23;
 /// Shell version of the request that shows one window.
 const ACTIVATE_WINDOW_VERSION: u32 = 26;
-
-/// A picture: `width` × `height` pixels of `wl_shm` ARGB8888 (premultiplied, little-endian), rows packed.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ThumbnailImage {
-    pub width: u32,
-    pub height: u32,
-    pub argb: Vec<u8>,
-}
-
-/// The picture of a minimized window, as the server drew it when the window minimized; `None` once the window is no
-/// longer minimized. From shell version 22.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DockWindowThumbnail {
-    /// The window's id, as in [`DockWindow`].
-    pub id: u32,
-    pub image: Option<ThumbnailImage>,
-}
-
-/// Which windows the open overview shows.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum OverviewMode {
-    /// Every window of the current workspace, with the workspaces bar.
-    All,
-    /// The windows of the application with this id, minimized ones in a lower row.
-    App(String),
-}
-
-/// A window of the open overview: its id (as in [`DockWindow`]) and its frame on the desktop, in
-/// the output's logical coordinates.
-#[derive(Clone, Debug, PartialEq)]
-pub struct OverviewWindow {
-    pub id: u32,
-    pub frame: Rect,
-}
-
-/// A workspace of the dock's output, in order.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct OverviewWorkspace {
-    /// The server's id, stable for the workspace's lifetime.
-    pub id: u32,
-    /// The one on screen.
-    pub current: bool,
-}
 
 /// One change of a group, in the order the server sent it.
 #[derive(Clone, Debug, PartialEq)]
@@ -99,8 +51,6 @@ pub enum DockChange {
     Window(DockWindow),
     /// The window's own icon is set, changed or removed; it follows the window's [`DockChange::Window`].
     WindowIcon(DockWindowIcon),
-    /// The minimized window's picture is set or removed; it follows the window's [`DockChange::Window`].
-    WindowThumbnail(DockWindowThumbnail),
     /// The window with this id went away.
     WindowClosed(u32),
     /// The server started a program of this application id.
@@ -132,20 +82,10 @@ pub enum DockChange {
     AppResident { app_id: String, resident: bool },
     /// The switch ended: `committed` when the selected application was activated, else cancelled.
     SwitcherClosed { committed: bool },
-    /// The overview opened on the dock's output, or its windows or workspaces changed while open:
-    /// the whole window set and workspace list, and the area (output coordinates) the windows are
-    /// laid out in. The dock answers with [`Dock::overview_frame`] for every window.
-    OverviewChanged {
-        mode: OverviewMode,
-        area: Rect,
-        windows: Vec<OverviewWindow>,
-        workspaces: Vec<OverviewWorkspace>,
-    },
-    /// The overview is leaving: the server animates the windows back.
-    OverviewClosed,
     /// The pointer dwelt in a corner of the dock's output: the dock maps it to its action.
     HotCorner(Corner),
-    /// A touchpad gesture committed on the dock's output: the dock maps it to its action.
+    /// A touchpad gesture committed on the dock's output that no transaction is bound to: the dock maps it to its
+    /// action.
     Gesture(Gesture),
 }
 
@@ -224,58 +164,7 @@ impl Dock {
         Ok(())
     }
 
-    /// The frame window `id` takes in the open overview (output coordinates, rounded outwards to
-    /// whole points); the server animates it there.
-    pub fn overview_frame(&self, id: u32, rect: &Rect) -> Result<(), Error> {
-        let (x, y, width, height) = whole_rect(rect)?;
-        self.proxy.overview_frame(id, x, y, width, height);
-        Ok(())
-    }
-
-    /// Window `id` of the open overview follows the pointer at `rect` (output coordinates, rounded outwards to whole
-    /// points), drawn above the overview's surface; nothing is sent to a server older than shell version 23.
-    pub fn overview_drag(&self, id: u32, rect: &Rect) -> Result<(), Error> {
-        let (x, y, width, height) = whole_rect(rect)?;
-        if self.proxy.version() >= OVERVIEW_DRAG_VERSION {
-            self.proxy.overview_drag(id, x, y, width, height);
-        }
-        Ok(())
-    }
-
-    /// Window `id` of the open overview was dropped on `workspace`: it moves there; nothing is sent to a server older
-    /// than shell version 23.
-    pub fn overview_move_window(&self, id: u32, workspace: u32) {
-        if self.proxy.version() >= OVERVIEW_DRAG_VERSION {
-            self.proxy.overview_move_window(id, workspace);
-        }
-    }
-
-    /// Where the live picture of `workspace` is drawn while the overview is open (output coordinates, rounded outwards;
-    /// an empty rectangle for none); nothing is sent to a server older than shell version 23.
-    pub fn overview_workspace_frame(&self, workspace: u32, rect: &Rect) -> Result<(), Error> {
-        let (x, y, width, height) = if rect.width() <= 0.0 || rect.height() <= 0.0 {
-            (0, 0, 0, 0)
-        } else {
-            whole_rect(rect)?
-        };
-        if self.proxy.version() >= OVERVIEW_DRAG_VERSION {
-            self.proxy
-                .overview_workspace_frame(workspace, x, y, width, height);
-        }
-        Ok(())
-    }
-
-    /// Leave the overview activating window `id` (a minimized one is restored).
-    pub fn overview_select(&self, id: u32) {
-        self.proxy.overview_select(id);
-    }
-
-    /// Leave the overview without a pick.
-    pub fn overview_close(&self) {
-        self.proxy.overview_close();
-    }
-
-    /// Switch the dock's output to the workspace, leaving an open overview first.
+    /// Switch the dock's output to the workspace.
     pub fn switch_workspace(&self, id: u32) {
         self.proxy.switch_workspace(id);
     }
@@ -349,31 +238,6 @@ fn icon_image(size: u32, pixels: std::os::fd::OwnedFd) -> Option<WindowIconImage
     Some(WindowIconImage { size, argb })
 }
 
-/// The image of a `window_thumbnail` event: `None` for an empty size, a side over [`MAX_WINDOW_THUMBNAIL`], or a file
-/// that does not hold exactly the image.
-fn thumbnail_image(
-    width: u32,
-    height: u32,
-    pixels: std::os::fd::OwnedFd,
-) -> Option<ThumbnailImage> {
-    use std::os::unix::fs::FileExt;
-    if width == 0 || height == 0 || width.max(height) > MAX_WINDOW_THUMBNAIL {
-        return None;
-    }
-    let file = std::fs::File::from(pixels);
-    let len = width as usize * height as usize * 4;
-    if file.metadata().ok()?.len() != len as u64 {
-        return None;
-    }
-    let mut argb = vec![0; len];
-    file.read_exact_at(&mut argb, 0).ok()?;
-    Some(ThumbnailImage {
-        width,
-        height,
-        argb,
-    })
-}
-
 /// Collects the events of a group until `done`.
 #[derive(Debug, Default)]
 pub(crate) struct GroupBuilder {
@@ -382,19 +246,6 @@ pub(crate) struct GroupBuilder {
     switcher_apps: Vec<String>,
     /// The output of the last `switcher_output`, resolved by the caller of [`GroupBuilder::switcher_output`].
     switcher_output: Option<OutputId>,
-    /// `overview_window` and `overview_workspace` events since the last `overview_changed`.
-    overview_windows: Vec<OverviewWindow>,
-    overview_workspaces: Vec<OverviewWorkspace>,
-}
-
-/// A rectangle the server sent in whole logical points.
-fn rect_of(x: i32, y: i32, width: i32, height: i32) -> Rect {
-    Rect::new(
-        f64::from(x),
-        f64::from(y),
-        f64::from(width),
-        f64::from(height),
-    )
 }
 
 impl GroupBuilder {
@@ -437,17 +288,6 @@ impl GroupBuilder {
                 name: (!name.is_empty()).then_some(name),
                 image: icon_image(size, pixels),
             })),
-            Event::WindowThumbnail {
-                id,
-                width,
-                height,
-                pixels,
-            } => self
-                .changes
-                .push(DockChange::WindowThumbnail(DockWindowThumbnail {
-                    id,
-                    image: thumbnail_image(width, height, pixels),
-                })),
             Event::WindowClosed { id } => self.changes.push(DockChange::WindowClosed(id)),
             Event::Launching { app_id } => self.changes.push(DockChange::Launching(app_id)),
             Event::ToggleAutoHide => self.changes.push(DockChange::ToggleAutoHide),
@@ -479,46 +319,6 @@ impl GroupBuilder {
             Event::SwitcherClosed { committed } => self.changes.push(DockChange::SwitcherClosed {
                 committed: committed != 0,
             }),
-            Event::OverviewWindow {
-                id,
-                x,
-                y,
-                width,
-                height,
-            } => self.overview_windows.push(OverviewWindow {
-                id,
-                frame: rect_of(x, y, width, height),
-            }),
-            Event::OverviewWorkspace { id, current } => {
-                self.overview_workspaces.push(OverviewWorkspace {
-                    id,
-                    current: current != 0,
-                })
-            }
-            Event::OverviewChanged {
-                mode,
-                app_id,
-                x,
-                y,
-                width,
-                height,
-            } => {
-                // a mode a newer server defines is shown as the plain overview
-                let mode = if mode == WEnum::Value(cupertino_dock_v1::OverviewMode::App) {
-                    OverviewMode::App(app_id)
-                } else {
-                    OverviewMode::All
-                };
-                let windows = std::mem::take(&mut self.overview_windows);
-                let workspaces = std::mem::take(&mut self.overview_workspaces);
-                self.changes.push(DockChange::OverviewChanged {
-                    mode,
-                    area: rect_of(x, y, width, height),
-                    windows,
-                    workspaces,
-                });
-            }
-            Event::OverviewClosed => self.changes.push(DockChange::OverviewClosed),
             // a corner or gesture a newer server defines has no action here
             Event::HotCorner {
                 corner: WEnum::Value(corner),

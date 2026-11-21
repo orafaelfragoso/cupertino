@@ -1,4 +1,4 @@
-//! The design's drag-reorder rules around the model ([`crate::Dock::begin_drag`]): the press
+//! The design's drag-reorder rules around the model ([`crate::dock::Dock::begin_drag`]): the press
 //! that turns into a drag, the timings of the gap, the drop and the removal, and the puff shown
 //! where a dragged tile was removed.
 

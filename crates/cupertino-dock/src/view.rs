@@ -1,6 +1,6 @@
 //! The dock's windows as CupertinoKit draws them: the bar, the tile held by the pointer, the context menus, the Force
 //! Quit dialog, the trash's alerts and the edge strips that move the dock to another display; the switcher's
-//! panel and the overview's chrome are [`crate::switcher_kit`] and [`crate::overview_kit`]. Each window is a pure
+//! panel is [`crate::switcher_kit`]. Each window is a pure
 //! function of what [`crate::kit::Model`] holds; the geometry is the model's (`Dock::layout`,
 //! `force_quit::Layout`), so a node is placed where the model put it and reports the pointer and the keys back as an
 //! [`Input`].
@@ -22,18 +22,16 @@ use cupertino_kit::core::{Key, WindowKey};
 use cupertino_kit::geometry::Point;
 use cupertino_kit::platform::{KeyEvent, Mods};
 
-use crate::overview_kit::OverviewInput;
 use crate::switcher_kit::SwitcherInput;
 
-/// The `app_id` prefixes the process's windows open with, each followed by `@` and the key of the output it is on;
-/// the surface roles give each its layer surface by them. The context menus are popups of the bar.
+/// The `app_id` prefixes the dock's windows open with, each followed by `@` and the key of the output it is on; they
+/// are the namespaces of their layer surfaces. The context menus are popups of the bar.
 pub const BAR_APP_ID: &str = "cupertino-dock";
 pub const DRAG_APP_ID: &str = "cupertino-dock-drag";
 pub const FORCE_QUIT_APP_ID: &str = "cupertino-force-quit";
 pub const ALERT_APP_ID: &str = "cupertino-dock-alert";
 pub const EDGE_APP_ID: &str = "cupertino-dock-edge";
 pub const SWITCHER_APP_ID: &str = crate::switcher_kit::APP_ID;
-pub const OVERVIEW_APP_ID: &str = crate::overview_kit::APP_ID;
 
 /// What assistive technology calls the bar.
 pub const BAR_TITLE: &str = "Dock";
@@ -72,8 +70,10 @@ pub enum Input {
     Activate(u64),
     /// The Menu key, Shift+F10 or assistive technology's show-menu on the tile with this id.
     ShowMenu(u64),
-    /// Escape in the bar, or the keyboard left it: the bar gives the keyboard back.
+    /// Escape in the bar: the bar gives the keyboard back.
     LeaveKeyboard,
+    /// The keyboard left the bar's window: the server gave it to a window, or a menu of the bar took it.
+    Blurred,
     /// The context menu's item at this index was chosen.
     MenuItem(usize),
     /// The context menu closed: an item was chosen, Escape, or a press outside it.
@@ -87,10 +87,8 @@ pub enum Input {
     Edge(u32, bool),
     /// The switcher's panel on the output with this key.
     Switcher(u32, SwitcherInput),
-    /// The overview's chrome on the output with this key.
-    Overview(u32, OverviewInput),
-    /// The compositor closed this window-manager surface of the output with this key.
-    WmClosed(u32, Wm),
+    /// The compositor closed the switcher's panel on the output with this key.
+    SwitcherLost(u32),
     /// The tile with this id (`TileId.0`) took the bar's keyboard focus.
     TileFocused(u64),
     /// A window whose content moves by itself got a frame from the compositor.
@@ -114,13 +112,6 @@ pub enum Input {
     ConfirmClosed,
     /// The compositor took the hovered tile's label down; the next pointer motion shows it again.
     LabelGone,
-}
-
-/// The window-manager surfaces of an output.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Wm {
-    Switcher,
-    Overview,
 }
 
 /// The model's rectangle as the toolkit's.

@@ -1165,14 +1165,6 @@
   owner_area: services
   scope: public
   source: crates/cupertino-diagnostics/src/bin/cupertino-diagnose.rs
-- name: cupertino-dock
-  kind: binary
-  version: 0.1.0
-  shipped: yes
-  owner_crate: cupertino-dock
-  owner_area: apps
-  scope: shell-private
-  source: crates/cupertino-dock/src/main.rs
 - name: cupertino-files
   kind: binary
   version: 0.1.0
@@ -1213,7 +1205,7 @@
   owner_area: apps
   scope: shell-private
   source: crates/cupertino-shell/src/main.rs
-  note: the shell host the server starts on a connection with the host role alone; runs the listed components, each on a thread of its own; holds the osd (cupertino-osd), notifications (cupertino-notifications), controlcenter (cupertino-controlcenter), menubar (cupertino-menubar), launcher (cupertino-launcher), agent (cupertino-shell-agent) and desktop (cupertino-shell-desktop) components
+  note: the shell host the server starts on a connection with the host role alone; runs the listed components, each on a thread of its own; holds the osd (cupertino-osd), notifications (cupertino-notifications), controlcenter (cupertino-controlcenter), menubar (cupertino-menubar), launcher (cupertino-launcher), agent (cupertino-shell-agent), desktop (cupertino-shell-desktop), dock (cupertino-dock) and overview (cupertino-shell-overview) components
 - name: cupertino-control
   kind: binary
   version: 0.1.0

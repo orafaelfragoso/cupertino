@@ -13,7 +13,7 @@ use super::{Input, ALERT_APP_ID};
 
 /// The window: the alert hangs centred near its top, with room around it for its shadow and under it for a longer
 /// message. Nothing else of it is drawn.
-const WINDOW: Size = Size {
+pub const WINDOW: Size = Size {
     width: 340.0,
     height: 400.0,
 };

@@ -538,36 +538,6 @@ fn cursor(p: &mut SceneParams<'_>, stack: &mut Composition) {
     }
 }
 
-/// The live pictures of the workspaces the dock's overview asked for (`overview_workspace_frame`), front to back: each
-/// an opaque black backing, the wallpaper and, for a workspace other than the current one (whose windows the overview
-/// itself shows), its windows, all scaled from the output into the picture's frame, at `alpha`.
-pub(super) fn overview_pictures(p: &mut SceneParams<'_>, alpha: f32) -> Vec<Piece> {
-    let Some(session) = p
-        .shell
-        .overview
-        .as_ref()
-        .filter(|s| s.output == p.output_id && !s.closing)
-    else {
-        return Vec::new();
-    };
-    let pictures = session.pictures.clone();
-    let current = p.wm.current_workspace(p.output_id);
-    let (output, out_rect) = (p.output_id, p.rect);
-    let mut out = Vec::new();
-    for (workspace, frame) in pictures {
-        let windows = Some(workspace) != current;
-        out.extend(workspace_picture(
-            p,
-            (workspace, output, out_rect),
-            frame,
-            alpha,
-            windows,
-            1 + workspace.0,
-        ));
-    }
-    out
-}
-
 /// The live picture of `workspace` on `output` (whose rectangle is `out_rect`), front to back: an opaque black backing,
 /// the wallpaper and, with `windows`, the workspace's windows but the claimed ones (drawn in their holes alone), all
 /// scaled from the output into `frame` (global logical points), at `alpha`. Its backing and wallpaper pieces take
@@ -674,110 +644,6 @@ pub(super) fn workspace_picture(
     out
 }
 
-fn overview(p: &mut SceneParams<'_>, stack: &mut Composition) -> bool {
-    let Some(session) = p
-        .shell
-        .overview
-        .as_ref()
-        .filter(|s| s.output == p.output_id)
-    else {
-        return false;
-    };
-    let now = p.now;
-    // under Reduce Motion the windows do not move: they fade out of their desktop places and into their overview
-    // places (`crossfade`), each drawn at its target
-    let reduced = session.reduce_motion;
-    let crossfade = session.crossfade(now);
-    let progress = if reduced {
-        crossfade
-    } else {
-        session.transition.progress_at(now).clamp(0.0, 1.0)
-    };
-    let placed = if reduced {
-        session.targets()
-    } else {
-        session.frames(now)
-    };
-    let origins: Vec<(WindowId, cupertino_wm::Rect)> =
-        session.windows.iter().map(|w| (w.id, w.from)).collect();
-    let dragged = session.dragged;
-    let dim = p.config.shell.overview_dim;
-
-    if dim > 0.0 {
-        let full = smithay::utils::Rectangle::<f64, Logical>::new(
-            (0.0, 0.0).into(),
-            (p.rect.w, p.rect.h).into(),
-        );
-        let e = rrect_item(
-            SceneKind::OverviewDim,
-            0,
-            full,
-            0.0,
-            false,
-            [0.0, 0.0, 0.0, (dim * progress) as f32],
-            None,
-            1.0,
-        );
-        stack.push(SceneLayer::OverviewBackdrop, e);
-    }
-
-    // windows, back to front in stacking order, drawn at their frames; the workspaces bar, the
-    // highlight and the titles are the dock's layer surface
-    let order: Vec<WindowId> = p.wm.stacking_order().to_vec();
-    let key = p.wm.key_window();
-    let mut windows_front_to_back: Vec<Piece> = Vec::new();
-    for id in order.iter().rev() {
-        let Some(pw) = placed.iter().find(|w| w.id == *id) else {
-            continue;
-        };
-        let Some(entry) = p.windows.iter().find(|w| w.id == *id) else {
-            continue;
-        };
-        if p.for_capture && crate::control::protected_surface(entry.surface()) {
-            continue;
-        }
-        let geo = entry.window.geometry();
-        let ins = entry.insets();
-        // under Reduce Motion a window that has not faded in yet is seen at its desktop place, fading out
-        let (frame, opacity) = if reduced && crossfade < 0.5 {
-            (
-                origins
-                    .iter()
-                    .find(|o| o.0 == *id)
-                    .map_or(pw.frame, |o| o.1),
-                1.0 - 2.0 * crossfade,
-            )
-        } else if reduced {
-            (pw.frame, 2.0 * crossfade - 1.0)
-        } else {
-            (pw.frame, 1.0)
-        };
-        let plan = WindowPlan {
-            visual: frame,
-            scale_x: frame.w / (f64::from(geo.size.w) + ins.horizontal()).max(1.0),
-            scale_y: frame.h / (f64::from(geo.size.h) + ins.vertical()).max(1.0),
-            opacity: opacity.clamp(0.0, 1.0),
-            shadow: 1.0,
-            exact: false,
-            corner: None,
-            corner_cap: None,
-        };
-        let active = key == Some(*id);
-        let deco = window_decorations(p, entry, &plan, active);
-        let mut els = window_popup_elements(p, entry, &plan);
-        els.extend(window_elements(p, entry, &plan, active, true, deco));
-        if dragged == Some(*id) {
-            // a dragged window goes over the chrome, so it can be taken onto the desktops band
-            stack.extend(SceneLayer::DragIcon, els);
-        } else {
-            // a window keeps its popups over it while it is a preview
-            windows_front_to_back.extend(els);
-        }
-    }
-    stack.extend(SceneLayer::Windows, windows_front_to_back);
-    true
-}
-
 /// The neutral frame of one output, with the elements the renderer still builds itself.
 pub fn compose_scene(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>) -> Composed {
     p.res
@@ -846,117 +712,110 @@ fn desktop_scene(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>, stack: &m
     }
     stack.extend(SceneLayer::BackdropCapture, captures);
 
-    let in_overview = overview(p, stack);
-    if !in_overview {
-        let width = p.rect.w;
-        let list = windows_on_output(
-            p.wm,
-            p.output_id,
-            width,
-            WorkspaceTransition::for_options(p.display),
-            p.now,
-        );
-        let key = p.wm.key_window();
-        let raised = raised_popups_window(p.wm, p.output_id);
-        let mut front_to_back: Vec<Piece> = Vec::new();
-        // strip thumbnails, drawn below every window on the stage
-        let mut strip: Vec<Piece> = Vec::new();
-        // the windows whose ghost was drawn with them
-        let mut with_their_window: Vec<WindowId> = Vec::new();
-        for (id, slide, workspace_opacity) in list.into_iter().rev() {
-            if p.transactions.is_window_claimed(id) {
-                continue;
-            }
-            let Some(entry) = p.windows.iter().find(|w| w.id == id) else {
-                continue;
-            };
-            if p.for_capture && crate::control::protected_surface(entry.surface()) {
-                continue;
-            }
-            let Some((mut plan, pres)) = plan_for(p.wm, entry, slide, p.now, p.fx, p.display)
-            else {
-                continue;
-            };
-            plan.opacity *= workspace_opacity;
-            // a stage placement draws the window at its animated frame, alpha and corner radius
-            let in_strip = match p.window_managers.look(id, p.now) {
-                Look::Natural => false,
-                Look::Hidden => continue,
-                Look::Placed {
-                    rect,
-                    strip,
-                    alpha,
-                    rounding,
-                } => {
-                    let corner = p
-                        .window_managers
-                        .corner_radius(p.config.window.corner_radius, rounding);
-                    plan = placed_plan(entry, rect, plan.opacity * alpha, plan.shadow, corner);
-                    strip
-                }
-            };
-            if plan.opacity <= 0.0
-                || plan.visual.right() < p.rect.x
-                || plan.visual.x > p.rect.right()
-            {
-                continue;
-            }
-            let active = key == Some(id);
-            if in_strip {
-                let deco = window_decorations(p, entry, &plan, active);
-                strip.extend(window_popup_elements(p, entry, &plan));
-                strip.extend(window_elements(p, entry, &plan, active, true, deco));
-                continue;
-            }
-            if pres.minimize_progress > 1e-6 {
-                if let Some(els) = minimize_elements(renderer, p, entry, &pres, slide, active) {
-                    front_to_back.extend(els);
-                    continue;
-                }
-            }
-            // the picture of the window as it showed before an appearance change fades out over this window alone, under
-            // the windows in front of it: over every window it would show a window behind through the ones in front.
-            // The window's own shadow and outline come in as the picture's go, so the two never add up
-            if let Some(ghost) = p.fx.fading_over(id, p.output_id) {
-                plan.shadow *= 1.0 - ghost.placement(p.now).1.clamp(0.0, 1.0);
-                front_to_back.extend(ghost_piece(p, ghost));
-                with_their_window.push(id);
-            }
-            // a window with a sheet is covered by the sheet-underlay material, as far as the sheet is
-            // shown; the material samples the window below it rather than the desktop
-            // behind it (approximate: the design blends behind the window)
-            let dimming = p.wm.sheet_dimming(id, p.now);
-            if dimming > 0.0 {
-                let area = local(plan.visual, &p.rect);
-                let radius = p.config.window.corner_radius;
-                front_to_back.extend(material_layer(
-                    p,
-                    SceneKind::SheetDimming,
-                    id.0,
-                    SHEET_DIMMING_MATERIAL,
-                    area,
-                    radius,
-                    (dimming * plan.opacity) as f32,
-                ));
-            }
-            let mut deco = window_decorations(p, entry, &plan, active);
-            deco.extend(revealed_titlebar(p, entry, &plan, active));
-            // the key window's popups go above every window and the bars; another window's stay over it
-            let own_popups = window_popup_elements(p, entry, &plan);
-            if raised == Some(id) {
-                popups.extend(own_popups);
-            } else {
-                front_to_back.extend(own_popups);
-            }
-            front_to_back.extend(window_elements(p, entry, &plan, active, true, deco));
+    let width = p.rect.w;
+    let list = windows_on_output(
+        p.wm,
+        p.output_id,
+        width,
+        WorkspaceTransition::for_options(p.display),
+        p.now,
+    );
+    let key = p.wm.key_window();
+    let raised = raised_popups_window(p.wm, p.output_id);
+    let mut front_to_back: Vec<Piece> = Vec::new();
+    // strip thumbnails, drawn below every window on the stage
+    let mut strip: Vec<Piece> = Vec::new();
+    // the windows whose ghost was drawn with them
+    let mut with_their_window: Vec<WindowId> = Vec::new();
+    for (id, slide, workspace_opacity) in list.into_iter().rev() {
+        if p.transactions.is_window_claimed(id) {
+            continue;
         }
-        // the picture of a claimed window that closed fades out in the hole that claimed it alone
-        with_their_window.extend(p.transactions.closing_in_claims());
-        let mut ghosts: Vec<Piece> = closing_elements(p, &with_their_window);
-        ghosts.append(&mut front_to_back);
-        ghosts.append(&mut strip);
-        stack.extend(SceneLayer::Windows, ghosts);
+        let Some(entry) = p.windows.iter().find(|w| w.id == id) else {
+            continue;
+        };
+        if p.for_capture && crate::control::protected_surface(entry.surface()) {
+            continue;
+        }
+        let Some((mut plan, pres)) = plan_for(p.wm, entry, slide, p.now, p.fx, p.display) else {
+            continue;
+        };
+        plan.opacity *= workspace_opacity;
+        // a stage placement draws the window at its animated frame, alpha and corner radius
+        let in_strip = match p.window_managers.look(id, p.now) {
+            Look::Natural => false,
+            Look::Hidden => continue,
+            Look::Placed {
+                rect,
+                strip,
+                alpha,
+                rounding,
+            } => {
+                let corner = p
+                    .window_managers
+                    .corner_radius(p.config.window.corner_radius, rounding);
+                plan = placed_plan(entry, rect, plan.opacity * alpha, plan.shadow, corner);
+                strip
+            }
+        };
+        if plan.opacity <= 0.0 || plan.visual.right() < p.rect.x || plan.visual.x > p.rect.right() {
+            continue;
+        }
+        let active = key == Some(id);
+        if in_strip {
+            let deco = window_decorations(p, entry, &plan, active);
+            strip.extend(window_popup_elements(p, entry, &plan));
+            strip.extend(window_elements(p, entry, &plan, active, true, deco));
+            continue;
+        }
+        if pres.minimize_progress > 1e-6 {
+            if let Some(els) = minimize_elements(renderer, p, entry, &pres, slide, active) {
+                front_to_back.extend(els);
+                continue;
+            }
+        }
+        // the picture of the window as it showed before an appearance change fades out over this window alone, under
+        // the windows in front of it: over every window it would show a window behind through the ones in front.
+        // The window's own shadow and outline come in as the picture's go, so the two never add up
+        if let Some(ghost) = p.fx.fading_over(id, p.output_id) {
+            plan.shadow *= 1.0 - ghost.placement(p.now).1.clamp(0.0, 1.0);
+            front_to_back.extend(ghost_piece(p, ghost));
+            with_their_window.push(id);
+        }
+        // a window with a sheet is covered by the sheet-underlay material, as far as the sheet is
+        // shown; the material samples the window below it rather than the desktop
+        // behind it (approximate: the design blends behind the window)
+        let dimming = p.wm.sheet_dimming(id, p.now);
+        if dimming > 0.0 {
+            let area = local(plan.visual, &p.rect);
+            let radius = p.config.window.corner_radius;
+            front_to_back.extend(material_layer(
+                p,
+                SceneKind::SheetDimming,
+                id.0,
+                SHEET_DIMMING_MATERIAL,
+                area,
+                radius,
+                (dimming * plan.opacity) as f32,
+            ));
+        }
+        let mut deco = window_decorations(p, entry, &plan, active);
+        deco.extend(revealed_titlebar(p, entry, &plan, active));
+        // the key window's popups go above every window and the bars; another window's stay over it
+        let own_popups = window_popup_elements(p, entry, &plan);
+        if raised == Some(id) {
+            popups.extend(own_popups);
+        } else {
+            front_to_back.extend(own_popups);
+        }
+        front_to_back.extend(window_elements(p, entry, &plan, active, true, deco));
     }
+    // the picture of a claimed window that closed fades out in the hole that claimed it alone
+    with_their_window.extend(p.transactions.closing_in_claims());
+    let mut ghosts: Vec<Piece> = closing_elements(p, &with_their_window);
+    ghosts.append(&mut front_to_back);
+    ghosts.append(&mut strip);
+    stack.extend(SceneLayer::Windows, ghosts);
     stack.extend(SceneLayer::Popups, popups);
 
     snap_preview(p, stack);

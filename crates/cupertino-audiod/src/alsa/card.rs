@@ -108,7 +108,7 @@ impl Card {
         .map_err(|errno| match errno {
             Errno::NOENT => Error::NoSuchCard { card: index },
             errno => Error::Io {
-                op: "open control device",
+                op: super::error::OPEN_OP,
                 errno,
             },
         })?;

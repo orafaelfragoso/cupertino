@@ -17,4 +17,5 @@ mod tlv;
 mod volume;
 
 pub use card::{OpenMode, DEVICE_DIR};
+pub use error::Error;
 pub use master::Master;

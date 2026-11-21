@@ -3,6 +3,9 @@
 use std::fmt;
 use std::path::PathBuf;
 
+/// The `op` of the failure of opening a card's control device.
+pub(super) const OPEN_OP: &str = "open control device";
+
 /// Every failure of this crate.
 #[derive(Debug)]
 pub enum Error {
@@ -55,6 +58,22 @@ pub enum Error {
         /// The card number asked for.
         card: u32,
     },
+}
+
+impl Error {
+    /// A control device that is not usable yet but may be a moment later: it is not there (`ENOENT`) or the session
+    /// has not been granted access to it (`EACCES`, before logind sets the session's ACL).
+    #[must_use]
+    pub fn not_ready(&self) -> bool {
+        match self {
+            Self::NoSuchCard { .. } => true,
+            Self::Io { op, errno } => {
+                *op == OPEN_OP
+                    && matches!(*errno, rustix::io::Errno::ACCESS | rustix::io::Errno::NOENT)
+            }
+            _ => false,
+        }
+    }
 }
 
 impl fmt::Display for Error {

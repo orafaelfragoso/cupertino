@@ -212,7 +212,7 @@ impl Dispatch<wl_registry::WlRegistry, ()> for ComponentClientState {
                 }
                 "cupertino_shell_v1" => {
                     state.shell =
-                        Some(reg.bind::<CupertinoShellV1, _, _>(name, version.min(27), qh, ()));
+                        Some(reg.bind::<CupertinoShellV1, _, _>(name, version.min(29), qh, ()));
                 }
                 _ => {}
             }
@@ -1465,7 +1465,7 @@ fn window_manager_placements_stay_held_until_takeover_or_the_hold_timeout() {
         Some("strip"),
         false,
     );
-    first.wm.set_placement(id, Placement::Hidden, 0, 0, 0, 0);
+    first.wm.set_placement(id, Placement::Hidden);
     first.wm.commit();
     rig.pump(&mut first.side);
     assert!(
@@ -1488,7 +1488,7 @@ fn window_manager_placements_stay_held_until_takeover_or_the_hold_timeout() {
     // a new instance commits the window back on the stage: kept until its takeover frame
     let mut second = window_manager(&mut rig, &mut host, &wm_hc);
     assert_eq!(second.side.client.holds, vec!["strip"]);
-    second.wm.set_placement(id, Placement::Stage, 0, 0, 0, 0);
+    second.wm.set_placement(id, Placement::Stage);
     second.wm.commit();
     rig.pump(&mut second.side);
     assert!(
@@ -1510,7 +1510,7 @@ fn window_manager_placements_stay_held_until_takeover_or_the_hold_timeout() {
     );
 
     // hidden again, dropped again; this time no instance takes over and the hold times out
-    second.wm.set_placement(id, Placement::Hidden, 0, 0, 0, 0);
+    second.wm.set_placement(id, Placement::Hidden);
     second.wm.commit();
     rig.pump(&mut second.side);
     assert!(rig.state.window_managers.passes_input(window_id));

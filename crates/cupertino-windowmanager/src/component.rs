@@ -1,6 +1,6 @@
 //! The window manager as a component of the shell host (`cupertino-shell`): the stage policy of every output
 //! ([`Controller`], on the window manager role's feed) and the stage strip, a surface of its own along each output's
-//! left edge ([`strip`](crate::strip)), whose thumbnails are holes claiming the strip's windows.
+//! left edge ([`crate::strip`]), whose thumbnails are holes claiming the strip's windows.
 //!
 //! - **The stage.** Off, the component places nothing and shows no strip. On (`windowmanager.conf`, or the server's
 //!   `toggle_stage`), the windows of the most recently active application are on the stage, and the other

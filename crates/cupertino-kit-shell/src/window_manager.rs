@@ -20,9 +20,10 @@ pub struct Window {
 /// Where the window manager places an arranged window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Placement {
-    /// Shown on the stage at its own frame.
+    /// At its own frame. A window of the strip stays there for the server, drawn only in the hole of the window
+    /// manager's strip surface that claims it.
     Stage,
-    /// Hidden off-stage (or shown only through a claimed hole on the strip surface).
+    /// Not drawn: the server fades it out where it is and keeps it out of hit testing.
     Hidden,
 }
 

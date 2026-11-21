@@ -349,9 +349,6 @@ impl Cupertino {
                 .surface_under(pos)
                 .is_some_and(|(surface, _)| self.is_switcher_panel(&surface));
         }
-        if button == BTN_LEFT && self.window_manager_press(pos) {
-            return true;
-        }
         if self.decoration_press(pos, button, now) {
             return true;
         }

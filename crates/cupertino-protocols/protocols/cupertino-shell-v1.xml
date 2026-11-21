@@ -10,7 +10,7 @@
     Every change of a message raises the version of its interface.
   </description>
 
-  <interface name="cupertino_shell_v1" version="28">
+  <interface name="cupertino_shell_v1" version="29">
     <description summary="shell services of the server">
       Global singleton, offered only to the processes the server started for a shell role, on a
       connection of their own. Each request needs the role it creates: a connection that holds
@@ -22,7 +22,9 @@
       object, version 9 the log_out_requested event of the session object, version 10 the window list, the shortcuts and the further
       window commands of the menu bar object, version 11 its edit request, version 12 its engage_help event, version 13 its force_quit_app request, version 14 its backdrop_luminance event, version 15 its window_controls event, version 16 its window_full_screen event, version 17 the window_icon event of the dock object, version 18 its engage event, version 19 its app_resident event, version 20 the activate_app request and app_activation event of the session object, version 21 the backdrop_bands event of the menu bar object, version 22 the window_thumbnail event of the dock object, version 23 its overview_drag, overview_move_window and overview_workspace_frame requests, version 24 the active_client event of the menu bar object, version 25 its active_client_keys event, version 26 the activate_window request of the dock object. Version 28 removes the overview's
       events, enum and requests and the window_thumbnail event of the dock object: the overview
-      component (cupertino_overview_v1) and its holes take their place. An object this global
+      component (cupertino_overview_v1) and its holes take their place. Version 29 removes the
+      strip placement, the rectangle of set_placement and the strip_pressed event of the window
+      manager object: the strip is the window manager's own surface, its thumbnails holes. An object this global
       creates has the version the global was bound at, so the since of each message of those
       objects is the shell version that added it.
     </description>
@@ -79,8 +81,11 @@
 
     <request name="get_window_manager">
       <description summary="arrange the windows of an output">
-        Makes the client the window manager of the output: the process that owns the stage
-        policy (which windows share the stage, the strip of recent groups). It needs no surface.
+        Makes the client the window manager of the output: the component that owns the stage
+        policy (which windows share the stage, the strip of recent groups). The role takes no
+        surface: the window manager has a surface of its own for the strip, an ordinary layer
+        surface it persists, so the server holds it with the placements while the component
+        starts again. A window manager bound below version 29 is left inert.
         Posts the role error when the output is gone or already has a window manager.
       </description>
       <arg name="id" type="new_id" interface="cupertino_window_manager_v1"/>
@@ -98,11 +103,12 @@
       The arranged windows are the mapped, unminimized top-level windows without a parent on the
       output's current workspace (or on every workspace), of applications that are not hidden.
 
-      The client decides where each arranged window rests; the server keeps the frame clock: it
-      animates every window from where it is drawn to its committed placement, draws strip
-      windows as live thumbnails scaled into their rectangle, keeps strip and hidden windows out
-      of pointer hit testing and reports presses on strip windows. A window starts on the stage
-      and returns to it when it leaves the arranged set. When the connection of a window manager
+      The client decides which arranged windows are hidden; the server keeps the frame clock: it
+      fades a hidden window out where it is drawn and a window shown again back in at its own
+      frame, and keeps hidden windows out of pointer hit testing. A strip window is a claimed
+      hole of the window manager's own surface (cupertino_hole_v1): the server draws it in the
+      hole, and the presses on it reach that surface. The server draws no strip. A window starts
+      on the stage and returns to it when it leaves the arranged set. When the connection of a window manager
       that is a component ends, its placements are held with its holds and replaced by the
       instance that takes the hold over; otherwise, on explicit destroy and when holds end, every
       window is drawn and hit at its own frame again at once. `commit` and `activate_window` are
@@ -159,42 +165,29 @@
       </description>
     </event>
 
-    <event name="strip_pressed">
-      <description summary="the pointer pressed a strip window">
-        The left button went down on the thumbnail of this window, with nothing of the server's
-        or another client's above it. The press reaches no client.
-      </description>
-      <arg name="id" type="uint"/>
-    </event>
-
     <event name="done">
       <description summary="end of a group of events"/>
     </event>
 
     <enum name="placement">
       <entry name="stage" value="0" summary="at the window's own frame"/>
-      <entry name="strip" value="1" summary="a thumbnail at the given rectangle"/>
       <entry name="hidden" value="2" summary="not drawn"/>
     </enum>
 
     <request name="set_placement">
       <description summary="where a window rests">
-        Pending until commit. The rectangle, in global logical coordinates, is read only for
-        the strip placement. An id that is not an arranged window is ignored at commit: the
+        Pending until commit. An id that is not an arranged window is ignored at commit: the
         window may have just closed.
       </description>
       <arg name="id" type="uint"/>
       <arg name="placement" type="uint" enum="placement"/>
-      <arg name="x" type="int"/>
-      <arg name="y" type="int"/>
-      <arg name="width" type="int"/>
-      <arg name="height" type="int"/>
     </request>
 
     <request name="commit">
       <description summary="apply the pending placements together">
-        Every window whose placement changed starts its animation in the same frame, so a swap
-        of the stage and the strip moves as one.
+        Every window whose placement changed starts its fade in the same frame. Inside a
+        transaction bracket it starts with the transaction's other changes, the strip's holes
+        among them, so a swap of the stage and the strip moves as one.
       </description>
     </request>
 
@@ -206,7 +199,7 @@
     </request>
 
     <enum name="error">
-      <entry name="invalid_placement" value="0" summary="not an entry of the placement enum, or a strip rectangle without area"/>
+      <entry name="invalid_placement" value="0" summary="not an entry of the placement enum"/>
     </enum>
   </interface>
 

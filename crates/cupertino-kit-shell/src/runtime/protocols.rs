@@ -214,7 +214,7 @@ impl Dispatch<CupertinoWindowManagerV1, WindowManagerData> for State {
                 drop(feed);
                 state.emit(Wire::WindowManager(data.output, update));
             }
-            // a press on the strip reaches the strip's own surface as input
+            // the generated enum is non-exhaustive: a message a later version adds is not read here
             _ => {}
         }
     }

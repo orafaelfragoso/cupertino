@@ -72,7 +72,7 @@ fn finish_composition(stack: Composition, p: &SceneParams<'_>) -> Composed {
 }
 
 /// Plan of a window whose whole frame (decorations included) is scaled into `rect` with visual
-/// corner radius `corner`, for a stage placement: the live content, as the overview draws it.
+/// corner radius `corner`, for a stage placement or a hole: the live content, as the overview draws it.
 pub fn placed_plan(
     entry: &WindowEntry,
     rect: Rect,
@@ -168,7 +168,7 @@ pub struct SceneParams<'a> {
     pub hosts: &'a crate::host::HostManager,
     /// Active transactions and window/workspace holes (W5.3).
     pub transactions: &'a crate::transaction::TransactionManager,
-    /// Stage placements: strip thumbnails and hidden windows.
+    /// Stage placements: the windows the window manager hides, as they fade.
     pub window_managers: &'a crate::window_manager::WindowManagers,
     pub overlays: &'a mut crate::overlays::Overlays,
     pub fx: &'a Effects,

@@ -242,8 +242,7 @@ impl ShellRoles {
                         Placement::Stage => WirePlacement::Stage,
                         Placement::Hidden => WirePlacement::Hidden,
                     };
-                    // the rectangle is a strip thumbnail's only
-                    wm.set_placement(window.0, placement, 0, 0, 0, 0);
+                    wm.set_placement(window.0, placement);
                     return;
                 }
             }

@@ -274,11 +274,13 @@ impl Pool {
         }
     }
 
-    /// Queues `job`, starting a thread for it when none waits for one and the pool has room; with no thread at all,
-    /// the job runs on the thread that hands it over.
+    /// Queues `job`, starting a thread for it when the jobs waiting, with it, outnumber the threads that wait for one
+    /// and the pool has room (a woken thread counts as waiting until it takes a job, so a burst of jobs handed over
+    /// while one thread waits would otherwise all queue behind it); with no thread at all, the job runs on the thread
+    /// that hands it over.
     fn submit(&self, job: Job) {
         let mut state = lock(&self.queue.state);
-        if state.idle == 0 && state.started < self.threads {
+        if state.idle <= state.waiting.len() && state.started < self.threads {
             let index = state.started;
             let queue = Arc::clone(&self.queue);
             match std::thread::Builder::new()

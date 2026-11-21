@@ -73,7 +73,9 @@ restart:
 the folder (name and kind, the item icons of the file family), the Save As field of a save, the filters, the choices,
 and Cancel and the accept button. Saving over a file asks first, in the panel. An app chooser is a prompt window: its
 question ("Open “Notes.txt” with:"), the applications with their icons, Cancel and Open. Return is the default button
-(or opens the selected folder of a file chooser) and Escape cancels; a window the server closes cancels.
+(or opens the selected folder of a file chooser) and Escape cancels; a window the server closes cancels. A file
+chooser's window opens once its first folder is read, or after `SHOW_WAIT` (300 ms) without it: an open opens with the
+keyboard on the rows, a save on the Save As field with the name's stem selected.
 
 **Reading.** The places, the user folders, the MIME database and the icon themes are read once, as one task of Kit's
 I/O pool; every folder is read as a task too, past which a folder on a hung mount is reported and the dialog keeps the

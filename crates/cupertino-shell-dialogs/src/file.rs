@@ -37,7 +37,13 @@ pub enum FileEvent {
     Return,
     /// Escape, or the server closed the window.
     Cancel,
+    /// The wait for the first folder is over ([`SHOW_WAIT`]): the window opens without it.
+    Show,
 }
+
+/// How long a file chooser waits for its first folder before its window opens without it. A folder read in time opens
+/// with the window, whose rows then take the keyboard (Kit gives a window's first focus on its first frame only).
+pub const SHOW_WAIT: std::time::Duration = std::time::Duration::from_millis(300);
 
 /// One open file chooser.
 pub struct FileDialog {
@@ -58,6 +64,8 @@ pub struct FileDialog {
     replace: Option<PathBuf>,
     /// The answer, once the dialog is done.
     answer: Option<FileAnswer>,
+    /// The window is open: its first folder was read, or [`SHOW_WAIT`] passed.
+    shown: bool,
 }
 
 impl FileDialog {
@@ -88,7 +96,13 @@ impl FileDialog {
             name_revision: 0,
             replace: None,
             answer: None,
+            shown: false,
         }
+    }
+
+    /// Whether the dialog's window is open: once its first folder was read or [`SHOW_WAIT`] passed.
+    pub fn shown(&self) -> bool {
+        self.shown
     }
 
     pub fn handle(&self) -> &str {
@@ -141,6 +155,7 @@ impl FileDialog {
 
     /// Take the listing the dialog's read made, as its task hands it back (the capture example reads it in place).
     pub fn apply(&mut self, listing: Listing) {
+        self.shown = true;
         self.chooser.apply(listing);
         self.refresh();
     }
@@ -182,6 +197,10 @@ impl FileDialog {
         match event {
             FileEvent::Panel(event) => self.panel(event, places),
             FileEvent::List(event) => self.list(event),
+            FileEvent::Show => {
+                self.shown = true;
+                (false, Vec::new())
+            }
             FileEvent::Listing(listing) => {
                 self.apply(listing);
                 (false, Vec::new())

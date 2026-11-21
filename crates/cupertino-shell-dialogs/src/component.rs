@@ -17,7 +17,7 @@ use cupertino_kit_shell::bus;
 use cupertino_kit_shell::{Component, ComponentName, Event, Program, Role, Surface};
 
 use crate::apps::{AppDialog, AppEvent};
-use crate::file::{FileDialog, FileEvent};
+use crate::file::{FileDialog, FileEvent, SHOW_WAIT};
 use crate::service::{self, Request};
 use crate::view;
 
@@ -162,7 +162,15 @@ impl Model {
                 let mut dialog = FileDialog::new(id, handle, *ask, reply, &self.home);
                 let first = dialog.take_request();
                 self.files.push(dialog);
-                first.map(|r| read(id, r)).into_iter().collect()
+                let show = Command::After {
+                    delay: SHOW_WAIT,
+                    message: Message::File(id, FileEvent::Show),
+                };
+                first
+                    .map(|r| read(id, r))
+                    .into_iter()
+                    .chain([show])
+                    .collect()
             }
             Request::App { handle, ask, reply } => {
                 let id = self.next;
@@ -326,6 +334,7 @@ impl Application for Dialogs {
         model
             .files
             .iter()
+            .filter(|d| d.shown())
             .map(|d| view::file_window(d, &model.places, model.icons.as_ref()))
             .chain(model.apps.iter().map(view::app_window))
             .collect()

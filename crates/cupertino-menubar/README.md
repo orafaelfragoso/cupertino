@@ -119,8 +119,10 @@ radios and the battery (read again) and the session agent's entries (retained on
 - the names of the applications read from their desktop entries, read again.
 
 The instance that ended leaves none of its bus work behind in the host: its bus tasks belong to the objects that started them and
-are cancelled with them, never detached, and its end closes its session and system connections and runs their
-executors until every task has ended (at most 0.5 s), since the loop that ran them is gone. The program test
+are cancelled with them, never detached, and its end closes its session and system connections, whose executors Kit
+runs until each connection is gone, since the loop that ran them is gone. The executors belong to those objects too,
+never to the tasks (`spawned.rs`), so a cancelled task that its executor did not run again is dropped with the
+executor, and what it holds (the extras' task holds the system connection) with it. The program test
 `crates/cupertino-session-tests/tests/shell-menubar.rs` bounds what fifty restarts add to the host's memory.
 
 ## How it works

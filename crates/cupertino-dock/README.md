@@ -1,31 +1,57 @@
 # cupertino-dock
 
-The dock process of the Cupertino desktop. It stands in for the design's dock process, and it also hosts the application
-switcher panel and the Overview chrome. The crate holds the model (tiles, layout, magnification, bounce,
-auto-hide, with no compositor dependency), the CupertinoKit application that draws it (`src/kit.rs`, the model and its
-messages, and `src/view/`, one pure view function per window) and the `cupertino-dock` process (feature `app`, `src/app.rs`),
-which runs that application on `cupertino-ui-wayland` and gives its windows layer surfaces and the dock role through
-`cupertino-shell-client`.
+The dock of the Cupertino desktop, a component of the shell host (`cupertino-shell`): the bar of applications, folders
+and the trash along an edge of one output, the edge strips that move it to another, the context menus, the tile held by
+a drag, the Force Quit dialog, the trash's alerts and the application switcher's panel. The crate holds the model (tiles,
+layout, magnification, bounce, auto-hide, with no compositor dependency), the CupertinoKit application that draws it
+(`src/kit.rs` and `src/kit/`, the model and its messages, and `src/view/`, one pure view function per window) and the
+component `Dock` (`src/component.rs` and `src/component/`), which runs that application on the shell's roles through
+`cupertino-kit-shell`.
 
-Everything the process shows is drawn through Kit: the bar, the context menus, the tile held by a drag, the Force Quit
-dialog, the switcher panel (`switcher_kit`) and the Overview chrome (`overview_kit`). The process paints
-nothing itself; `src/icons.rs` only loads the icons the views draw.
+Everything the dock shows is drawn through Kit; `src/icons.rs` only loads the icons the views draw, on Kit's I/O pool. The
+overview is not the dock's: it is the `overview` component (`cupertino-shell-overview`), which the server asks for
+(the gestures, the overview shortcuts, the tile menu's Show All Windows as the server maps it).
 
 ## Running
 
-Build with `cargo build -p cupertino-dock --features app` (`--features app`). The server starts the process from the `"shell"`
-key of `compositor.json` and restarts it after a failure.
+The dock is the `dock` component of the shell host: listed in the `"components"` of the `"shell"` section of
+`compositor.json`, the shared `cupertino-shell` runs it on a thread of its own with its own Wayland and bus connections,
+and restarts it alone after a failure (D16); listed in `"alone"`, a host of its own runs it (`cupertino-shell --only
+dock`). `cupertino shell restart dock` starts it again; in a development build `cupertino shell crash dock [--at
+dispatch|paint|helper]` makes it panic there (`crates/cupertino-shell/README.md`, *Trying a failure*).
 
-Command line: `cupertino-dock [--terminal PROGRAM]`.
+The bar is a persistent surface: while the dock restarts the server holds its last picture and keeps the space it
+reserves (D19), and the restarted dock's first view shows the bar in its place. The edge strips, the held tile, the
+dialogs and the switcher's panel are transient and go with the instance. The terminal that runs `Terminal=true` entries is
+the first installed of `conf::TERMINALS`. Programs start through the host (`host::spawn`), which reaps them; the dock
+hears nothing of their exit, so the guard against a second launch lasts its full five seconds
+(`kit::OPEN_GUARD`).
 
-`--terminal` names the terminal program that runs `Terminal=true` entries. The dock also tries it first when it picks default
-pins.
+### What a restart loses
+
+What the dock read and loaded is kept in the host process for the next instance: the desktop entries, `dock.conf` as
+last read, the pins, the file manager, the icons, the badges' counts and whether the trash is full; the next instance
+reads its start again on the I/O pool and takes `dock.conf` as it is then. The server tells a new dock role every
+window, every resident application and every application that does not respond. Lost with the instance:
+
+- a bounce, a magnification, a slide or the removal puff under way, and a drag (the tile goes back to its place);
+- an open menu, folder stack, name label, Force Quit dialog or trash alert, and Focus Dock (the keyboard goes back);
+- the switcher's panel: the server's switch goes on, and the panel shows again at the switch's next step;
+- the guard against a second launch of an application asked to open, and a launch waiting for its activation token;
+- the applications that quit since the dock started, which the recents section shows first (the launcher's history
+  remains);
+- a dock started by a host process of its own while the server holds a bar (the host itself restarted) has nothing
+  kept: its first view shows the bar with the trash only, and the tiles come in as its start is read.
+
+## Captures
+
+`cargo run -p cupertino-dock --example dock_capture -- dock/SURFACE [flags]` draws `bar`, `running`, `badges`,
+`magnified`, `switcher` or `force-quit` in light and dark at any scale (`crates/cupertino-kit/README.md`), with a
+fixture host, fixed icons and a fixed clock.
 
 ## Force Quit
 
-The Force Quit Applications dialog is a centred overlay layer surface of this process. The server opens it with the `force_quit_dialog` event (`Super+Alt+Escape`). The list holds the running applications by application id, alphabetical without regard to case with the file manager last; the first one the server reported as unresponsive (`unresponsive` event) is selected and shows `(not responding)` after its name. Click selects a row, Ctrl or Super toggles it, Shift takes a range, and Shift with the arrows grows the selection. Force Quit (Return) needs at least one selected row and opens the second step, a smaller panel that asks about one application or about the N selected ones; its Force Quit sends one `force_quit_app` per application, and Cancel is the default. An unresponsive application's tile menu starts with a disabled "Application Not Responding" row and offers Force Quit in place of Quit; it opens the dialog on the second step.
-
-In a dock built with `--cfg cupertino_capture_fixtures` (a `RUSTFLAGS` cfg, not a cargo feature, so `--all-features` builds never contain it), `CUPERTINO_DOCK_FIXTURE_UNRESPONSIVE=id,id` marks those application ids unresponsive at startup.
+The Force Quit Applications dialog is a centred overlay layer surface of the dock. The server opens it with the `force_quit_dialog` event (`Super+Alt+Escape`). The list holds the running applications by application id, alphabetical without regard to case with the file manager last; the first one the server reported as unresponsive (`unresponsive` event) is selected and shows `(not responding)` after its name. Click selects a row, Ctrl or Super toggles it, Shift takes a range, and Shift with the arrows grows the selection. Force Quit (Return) needs at least one selected row and opens the second step, a smaller panel that asks about one application or about the N selected ones; its Force Quit sends one `force_quit_app` per application, and Cancel is the default. An unresponsive application's tile menu starts with a disabled "Application Not Responding" row and offers Force Quit in place of Quit; it opens the dialog on the second step.
 
 | Setting | Effect |
 |---|---|
@@ -51,7 +77,7 @@ Preference defaults: tile size 64 (52 for displays at most 800 pt tall,
 | Tiles | Pinned and running apps, running indicator, launch / attention bounce state, recents section, separators, folder tiles (stacks), minimized-window tiles, trash. Tiles appear and disappear with an animated presence. |
 | Layout | `Dock::layout(screen, now) gives the bar and every tile rectangle for bottom, left and right orientation, including auto-hide offset and magnification. |
 | Hit-testing | `Dock::hit_test(pointer, screen, now) on the magnified layout. |
-| Minimize target | `Dock::minimize_target(window, app, screen) returns the rectangle a minimizing window flies to. It matches the tile rectangle once the tile has appeared. The process reports the next minimized-window slot, since the protocol has one target. |
+| Minimize target | `Dock::minimize_target(window, app, screen) returns the rectangle a minimizing window flies to. It matches the tile rectangle once the tile has appeared. The dock reports the next minimized-window slot, since the protocol has one target. |
 | Drag-reorder | `begin_drag` / `drag_move` / `end_drag` with a gap placeholder, section limits, removal when dragged out or dropped on the trash. `Dock::pinned_keys` lists the pins in order for storing. |
 | Application drops | the bar takes a `text/uri-list` from another application: the first desktop file in it that names an installed application is pinned before the first application tile past the drop point (`kit::dropped_app`, `Dock::pin`) and the pins are stored; anything else is refused, so its source keeps it. |
 | Auto-hide | `AutoHide` state machine and `reveal_zone`. The tile's name fades as the bar hides (its opacity is one less the hidden share), and the name that showed as the pointer left stays over its tile, riding the bar down, until the bar is hidden or the pointer comes back. |
@@ -88,7 +114,7 @@ with amplitudes 1/0.5/0.25, repeating every 2000 ms with lift `len + 1` pt (info
 | Bar | 84 pt deep: 10.5 pt of padding at its ends, 10 pt between the tiles and its screen-edge side and 11 pt on the other (`BAR_PADDING_RATIO`, `BAR_EDGE_PADDING_RATIO`); continuous corners of 19.6 pt reaching 30 pt along each side (`BAR_RADIUS`); 5 pt from the screen edge (`EDGE_MARGIN`) |
 | Running indicator | a 4 pt dot 2 pt below the tile, its middle 6 pt from the bar's edge; in the dark appearance over glass the compositor draws it (`Surface::DockIndicator`), lightening the glass behind it, and otherwise the dot paints itself |
 | Badge | an application's count, a 23 pt red circle (a capsule for more than one digit, 6.5 pt either side of the count) with white 13 pt medium figures, its middle 5.75 pt inside the icon's top trailing corner, so a quarter of it overhangs each side (`badge::rect`); counts above 9999 read 9999+ |
-| Minimized window | the picture the server drew of the window when it minimized (shell version 22), fitted into 60 × 52 pt across the tile, its middle 1.25 pt above the tile's, and the application's icon over it with a 19.5 pt artwork, 3.25 pt inside the tile's trailing edge and 4.5 pt above its bottom (`minimized.rs`); without a picture, the application's icon at full size |
+| Minimized window | the picture the server draws of the window in a hole of the bar's window (a thumbnail hole on a layer of its own under the tile's), fitted into 60 × 52 pt across the tile, its middle 1.25 pt above the tile's, and the application's icon over it with a 19.5 pt artwork, 3.25 pt inside the tile's trailing edge and 4.5 pt above its bottom (`minimized.rs`); until the server has a picture, the small icon alone |
 | Edge and rim | over glass, the glass's own rim light, along the top and the bottom and fading around the corners; where the bar is not glass (Reduce Transparency, no desktop effects), a 0.5 pt dark hairline just inside the outline and inside it a 0.5 pt light rim that is brightest along the top and the bottom and fades out down the sides; Increase Contrast doubles the hairline and draws the rim all round, over glass too |
 
 The bar's material is `view::bar::BAR_SURFACE` (the `Dock` surface): glass in the bar's shape, with Reduce Transparency
@@ -108,7 +134,7 @@ one transparent pixel the compositor stretches) and holds that output's
 dock role. When the pointer rests on a strip for 0.4 s (`kit::EDGE_DWELL`), the bar moves to that output and the output it
 left gets a strip. Passing over a strip does not move the bar, and neither does a drag in progress or a locked session. When
 the dock's output goes away the bar moves to the first remaining one. The window list is taken from the bar's role only; the
-switcher, the Overview, hot corners and gestures are taken from the role of the output they happen on.
+switcher, hot corners and gestures are taken from the role of the output they happen on.
 
 **Keyboard.** The Focus Dock shortcut (`focus-dock`: Ctrl+F3 under the `cupertino` profile, Super+F3 under `classic-pc`) makes the server send `engage` to the dock of the
 output under the pointer. The bar then takes the keyboard with the first tile focused. The arrows along the bar move the focus,
@@ -212,17 +238,16 @@ running dot follows it:
 - The dot goes when the server reports the application no longer resident (its process exited or crashed) and it has no
   window left.
 - No duplicate launches. A second ask for the same tile within 5 s (`OPEN_GUARD`) is dropped while no window has come,
-  and so is one whose activation token is still on the way. The guard ends early when the started process fails (an
-  unsuccessful exit status or a signal) before a window comes, so asking again starts it again; one that exits
-  successfully keeps it, as a launcher that starts the application in the background or hands the open to a running
-  instance does before its window comes. An earlier launch's exit leaves a later launch's guard alone. The wait for the activation token is bounded: after 2 s (`TOKEN_TIMEOUT`) the program starts
+  and so is one whose activation token is still on the way. The host starts the program and reaps it without telling
+  the dock its exit, so the guard lasts its full time even for a program that fails at once (a host that tells the exit
+  would let the model end it early: `kit::Started::Watched`). The wait for the activation token is bounded: after 2 s (`TOKEN_TIMEOUT`) the program starts
   without one, and a token that comes later is dropped.
 - No false dots. A new bar role (the dock moved to another display, or the server restarted) gets every resident
   application in its first group; one the dock still held that is not listed has gone.
 - With a server older than version 19 there is no residency: the dot goes with the last window, as before.
 
 **Animation and repaints.** What moves by itself (bounces, slides, auto-hide, the drag's settle,
-the switcher's fade, the overview's glide and fade) runs on the frame callbacks of the window that shows it: the window's
+the switcher's fade) runs on the frame callbacks of the window that shows it: the window's
 root asks for the next frame while its view moves, and every frame wakes the model (`Input::Frame`). A slow wake every
 0.1 s (`kit::FRAME_FALLBACK`) keeps it going if the frames stop (a surface the compositor does not show). Delays are
 timers: the switcher's, the held press and the edge dwell. Reduce Motion applies as before. A window repaints
@@ -314,7 +339,7 @@ with the delay, the fade and the pointer rules unchanged. The panel is a list na
 list item that a screen reader can press (`switcher_activate`), and the label is a polite live region, so the selection is
 read as the keys step it (the panel never takes the keyboard). Under Reduce Transparency the material is opaque; with
 Increase Contrast the panel keeps its glass, drawn with the contrast face, and the selection and label get stronger colours. The dock's Kit model keeps one `SwitcherSurface`
-per output, opens the panel on the output the server names (window key and app id carry the output), and draws each
+per output, opens the panel on the output whose dock role the server tells (window key and app id carry the output), and draws each
 application with the dock's icon for it, or the generic application icon.
 
 ### Application browser
@@ -330,48 +355,6 @@ launcher's. Choosing an application in the browser (or in the launcher's search)
 launcher asks the server (`cupertino_session_v1.activate_app`, the same server path as this dock's `activate_app`), which
 brings a running application forward, and only otherwise asks a resident one for a window or starts the entry with an
 activation token (see the launcher's README, *Opening an application*).
-
-### Overview
-
-Code: `src/overview_ui.rs`, `src/overview_kit.rs` and the overview part of `src/kit.rs`. The server owns the session: the
-transition, the windows' frames and their animation, Escape, the click fallback, and closing on a workspace switch and when
-the dock dies. It sends the dock of its output the window set with desktop frames, the workspaces and the area from the
-output's top to the usable area's bottom (`overview_changed`); the menu bar gives way while the overview is open.
-
-The dock lays the windows out with the design packing (`cupertino_wm::overview`: inset 16, gap 14, lift 20, tolerance 2,
-shrink 0.9, 499 passes, constants; the application mode puts minimized windows in a lower row) and answers one
-`overview_frame` per window. A changed set is laid out again and resent. The windows start 39 pt (`BarConfig::layout_gap`)
-below the desktops band (111 pt from the top while it is closed), and are laid out again when the band opens or
-closes; the arrangement is centred in the area left (see the `cupertino-wm` README).
-
-The chrome is a keyboard-exclusive overlay surface over the whole output (namespace `cupertino-dock-overview`, exclusive zone
--1, so surface and output coordinates agree). The server draws the windows and the desktops' live pictures. The chrome has:
-
-- the desktops band across the output: 72 pt tall with a light tint and a 44 pt shadow below it, showing the desktops'
-  names ("Desktop", or "Desktop n" with several), the current one on a 24 pt white pill of radius 5 with white 14 pt text,
-  and a bare 20 pt plus whose centre is 28 pt from the right edge and 35 pt from the top. While the pointer is over it, the
-  band opens to 165 pt on a critically damped 0.25 s spring and shows a 146 × 95 pt live picture of each desktop above its
-  name (`overview_workspace_frame`; the server draws it), the current one in a 3 pt accent ring of radius 4. The tint
-  and gap between pictures are approximate;
-- a 28 pt remove button on a picture the pointer has rested on for 1 s;
-- the selection ring, from hover or the keys (arrows, `Tab` / `Shift+Tab`, `Return` / `Space` select, `Escape` leaves): a 5 pt
-  accent ring just outside the window, following its corners;
-- the highlighted window's name only, centred on the window on a 28 pt light translucent plate with dark 16 pt text, never
-  wider than the window.
-
-A window dragged past 4 pt follows the pointer at once (`overview_drag`); let go over another desktop's picture it moves
-there (`overview_move_window`), elsewhere it glides back. The chrome closes on a critically damped spring of response
-0.125 s on `overview_closed`, and then the surface goes.
-
-**On Kit.** `src/overview_kit.rs` is the same chrome as a Kit window (`OverviewSurface`, app id `cupertino-dock-overview`,
-no background), with the model of `overview_ui.rs` and its layout. It is a group named "Overview" holding one button per
-slot ("Desktop n", selected when current), the hovered slot's "Remove Desktop n", "Add Desktop" and one button per window
-named by its title ("Untitled Window" without one). A screen reader presses them as the pointer would. The selected window
-takes the keyboard focus, so its title is read as the keys move the selection. Under Reduce Motion the highlight goes
-straight to the selection and the windows' frames are their final ones. Under Reduce Transparency the band and the name plate are opaque, and
-under Increase Contrast the pills get an outline and the ring's corners are tighter.
-The dock's Kit model keeps one `OverviewSurface` per output, sends its `overview_frame` answers and requests, passes
-Reduce Motion, and gives its surface the keyboard exclusively while `wants_keyboard` holds (before the bar).
 
 ### Hot corners and gestures
 
@@ -419,21 +402,17 @@ Minimising into the application's tile, the launch bounce and the running indica
 
 ## Protocols / D-Bus it speaks
 
-The process speaks the server's dock protocol (version 26) and `cupertino_session_v1`. On the session bus it only calls
+The dock speaks the server's dock protocol (version 28) through `cupertino-kit-shell`. On the session bus it only calls
 `org.freedesktop.Application.Activate` to ask a resident D-Bus-activatable application for a window (see *Residency*). It listens for the launcher entry signal (`com.canonical.Unity.LauncherEntry.Update`): an application names its
 desktop file as `application://ID.desktop` and sets `count` and `count-visible`, and a running application's tile shows
-a visible count above zero on its badge (`badge.rs`). The messages are named
-where they are used above. In the Overview chrome a press on a window sends `overview_select` and on empty space
-`overview_close`. A press on a slot sends `switch_workspace` when released in place, or `move_workspace` when dragged past 4 pt
-to another slot (approximate slack). The add slot sends `add_workspace` and the remove button `remove_workspace`.
+a visible count above zero on its badge (`badge.rs`). Both are on the component's own session connection. The messages
+are named where they are used above.
 
 
 ## Open issues
 
-- **Not wired.** Window thumbnails in minimized tiles and in the
-  workspaces bar, a key to toggle auto-hide, and changing the position at run time.
+- **Not wired.** A key to toggle auto-hide, and changing the position at run time.
 - **Switcher.** The all-displays preference, scroll, and drag and drop.
-- **Overview.** Thumbnails of the workspaces are not drawn, and the slots are plain (approximate).
 - **Context menus.** Deviations (approximate): the Options submenu is flattened. There is no Open at Login (no login-items
   store). Show Recents, Dock Settings, Minimize Using and the Option-key alternates are absent. Metrics and colours are the
   menu bar's. The desktop background menu has no surface to live on and is not done.

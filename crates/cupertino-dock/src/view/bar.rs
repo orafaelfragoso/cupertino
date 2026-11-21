@@ -6,16 +6,15 @@
 //! repaints only the nodes it moved. The tiles are one roving group: the arrows move the keyboard focus along the bar,
 //! Return or Space activates, the Menu key or Shift+F10 opens the tile's menu, Escape gives the keyboard back.
 
-use cupertino_kit::controls::ImageSource;
 use cupertino_kit::core::{
     AccessibleStates, Action, Change, CommandRegistry, Element, Event, EventCx, FocusTarget, Key,
-    MeasureCx, PaintCx, Propagation, Role, SemanticsCx, Widget, Window, WindowBackground,
-    WindowKey,
+    MeasureCx, PaintCx, Propagation, Role, SemanticsCx, SurfaceLayerMark, Widget, Window,
+    WindowBackground, WindowKey,
 };
 use cupertino_kit::geometry::{Point, Rect, Size};
 use cupertino_kit::layout::{Constraints, LayoutSpec, Measured};
-use cupertino_kit::platform::{DecorationMode, Keysym, Mods, WindowSpec};
-use cupertino_kit::render::{FillRule, GradientStop, Paint, PaintOp, PathVerb, Sampling, Shape};
+use cupertino_kit::platform::{DecorationMode, Keysym, Mods, SurfaceLayerLook, WindowSpec};
+use cupertino_kit::render::{FillRule, GradientStop, Paint, PaintOp, PathVerb, Shape};
 use cupertino_kit::theme::{Surface, BAR_GLASS_MATERIAL, GLASS_MATERIAL};
 
 use super::paint::{self, Root};
@@ -102,8 +101,20 @@ pub struct TileView {
     pub description: String,
     /// The count on the application's badge, as drawn.
     pub badge: Option<String>,
-    /// A minimized window's picture: drawn across the tile with the application's icon small over its corner.
-    pub thumbnail: Option<ImageSource>,
+    /// A minimized window's tile shows the window's picture across it, with the application's icon small over its
+    /// corner: the server draws the picture in the hole of this layer of the bar's window ([`picture_layer`]).
+    pub picture: Option<u64>,
+}
+
+/// The surface layer whose hole shows the picture of the minimized window of the tile with `id` (`TileId.0`): odd keys
+/// are the pictures' layers, even ones the layers of their tiles, which draw the icon over the picture.
+pub fn picture_layer(id: u64) -> u64 {
+    2 * id + 1
+}
+
+/// The surface layer of the minimized window's tile with `id`, over its picture's.
+fn tile_layer(id: u64) -> u64 {
+    2 * id + 2
 }
 
 /// What the bar shows.
@@ -187,17 +198,31 @@ pub fn window<M: Clone + 'static>(view: BarView, input: fn(Input) -> M) -> Windo
         }
     }
     let initial = view.initial;
-    children.extend(view.tiles.into_iter().map(|tile| {
+    for tile in view.tiles {
         let key = tile_key(tile.id);
-        Element::new(TileNode {
-            initial: initial == Some(tile.id),
-            tile,
-            tile_size: view.tile_size,
-            orientation,
-            input,
-        })
-        .key(key)
-    }));
+        if let Some(layer) = tile.picture {
+            // the picture's layer before the tile's in paint order, so the icon stands over the picture
+            let rect = crate::minimized::picture_rect(
+                tile.rect,
+                crate::minimized::PICTURE_WIDTH,
+                crate::minimized::PICTURE_HEIGHT,
+            );
+            children.push(
+                Element::new(PictureNode { rect, layer })
+                    .key(Key::from(format!("picture-{}", tile.id))),
+            );
+        }
+        children.push(
+            Element::new(TileNode {
+                initial: initial == Some(tile.id),
+                tile,
+                tile_size: view.tile_size,
+                orientation,
+                input,
+            })
+            .key(key),
+        );
+    }
     Window {
         key: view.key.clone(),
         spec: WindowSpec {
@@ -221,7 +246,7 @@ pub fn window<M: Clone + 'static>(view: BarView, input: fn(Input) -> M) -> Windo
                 (k.pressed && k.keysym == ESCAPE).then(|| input(Input::LeaveKeyboard))
             })),
             roving: true,
-            on_blur: None,
+            on_blur: Some(input(Input::Blurred)),
             alpha: 1.0,
             revision: view.surface_changes,
             under: None,
@@ -678,6 +703,59 @@ pub fn artwork_rect(r: Rect) -> Rect {
     )
 }
 
+/// Where a minimized window's picture shows over its tile: a layer that draws nothing, in whose hole the server draws
+/// the window's picture, fitted and centred ([`crate::minimized::picture_rect`]).
+struct PictureNode {
+    rect: Rect,
+    layer: u64,
+}
+
+impl<M: Clone + 'static> Widget<M> for PictureNode {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        paint::placed(self.rect)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self.rect != old.rect || self.layer != old.layer {
+            Change::Layout
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: self.rect.size,
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn hit(&self, _: &(), _: Point) -> bool {
+        false
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        cx.hidden();
+    }
+
+    fn surface_layer(&self, _: &()) -> Option<SurfaceLayerMark> {
+        Some(SurfaceLayerMark {
+            key: self.layer,
+            look: SurfaceLayerLook::default(),
+        })
+    }
+}
+
 struct TileNode<M> {
     tile: TileView,
     tile_size: f64,
@@ -766,14 +844,7 @@ impl<M: Clone + 'static> Widget<M> for TileNode<M> {
         let artwork = artwork_rect(bounds);
         if self.tile.chevron {
             paint_chevron(cx, artwork);
-        } else if let Some(picture) = &self.tile.thumbnail {
-            let image = &picture.image;
-            let rect = crate::minimized::picture_rect(
-                bounds,
-                f64::from(image.width),
-                f64::from(image.height),
-            );
-            cx.image(picture.id, image, rect, Sampling::Linear);
+        } else if self.tile.picture.is_some() {
             paint::image(cx, &self.tile.icon, crate::minimized::icon_rect(bounds));
         } else {
             paint::image(cx, &self.tile.icon, artwork);
@@ -785,6 +856,14 @@ impl<M: Clone + 'static> Widget<M> for TileNode<M> {
         if cx.focus_visible() && cx.window_active() {
             paint::focus_ring(cx, artwork, self.tile_size * ICON_ARTWORK * FOCUS_RADIUS);
         }
+    }
+
+    /// A minimized window's tile is a layer of its own, over its picture's ([`picture_layer`]).
+    fn surface_layer(&self, _: &()) -> Option<SurfaceLayerMark> {
+        self.tile.picture.map(|_| SurfaceLayerMark {
+            key: tile_layer(self.tile.id),
+            look: SurfaceLayerLook::default(),
+        })
     }
 
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {

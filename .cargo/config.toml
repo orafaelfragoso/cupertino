@@ -27,7 +27,6 @@ build-programs = [
     "--features=cupertino-btd/app",
     "--features=cupertino-btd/dbus",
     "--features=cupertino-diagnostic-events/tracy",
-    "--features=cupertino-dock/app",
     "--features=cupertino-files/app",
     "--features=cupertino-login/app",
     "--features=cupertino-login/dbus",

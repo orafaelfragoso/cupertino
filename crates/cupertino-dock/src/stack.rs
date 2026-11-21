@@ -264,6 +264,10 @@ pub fn newest_first(mut items: Vec<(StackEntry, std::time::SystemTime)>) -> Vec<
 /// whether it is a folder. A hidden file and a name that is not UTF-8 (the session's opener takes the path as text) are
 /// left out before anything is read of them; a link shows what it points at, and one that points nowhere is left out.
 /// Only the entries shown have their icon looked up. It reads the whole folder: run it away from the model's thread.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "runs on the I/O pool (kit::task::io)"
+)]
 pub fn list_folder(folder: &Path, icon_of: impl Fn(&Path, bool) -> String) -> Vec<StackEntry> {
     let Ok(dir) = std::fs::read_dir(folder) else {
         return Vec::new();

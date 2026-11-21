@@ -1,4 +1,4 @@
-//! What the window-manager surfaces of the dock process ([`crate::switcher_kit`], [`crate::overview_kit`]) share on
+//! What the window-manager surfaces of the dock ([`crate::switcher_kit`]) share on
 //! CupertinoKit: a root node that hands the pointer and the keys to the surface's model before any node below it and
 //! places its children where the model laid them out, the placed nodes that draw a part of the surface and describe it
 //! to assistive technology, and the drawing helpers. The models hit-test themselves, as they did on the old painter,

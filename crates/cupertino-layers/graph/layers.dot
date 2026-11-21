@@ -1,8 +1,6 @@
 // cupertino-layers --graph
-// 77 crates, 388 internal dependencies
-// per layer: foundation 5, graphics 2, models 6, system 8, platform 5, protocol 3, transport 2, render 3, ui 9, shellkit 1, core 4, services 6, shell 14, apps 2, tools 6, testing 1
-// forbidden normal edge cupertino-dock (shell) -> cupertino-shell-client (transport)
-// forbidden normal edge cupertino-dock (shell) -> cupertino-wayland-client (transport)
+// 78 crates, 393 internal dependencies
+// per layer: foundation 5, graphics 2, models 6, system 8, platform 5, protocol 3, transport 2, render 3, ui 9, shellkit 1, core 4, services 6, shell 15, apps 2, tools 6, testing 1
 // forbidden normal edge cupertino-login (shell) -> cupertino-raster-math (graphics)
 // forbidden normal edge cupertino-login (shell) -> cupertino-seat (platform)
 // forbidden normal edge cupertino-login (shell) -> cupertino-shell-client (transport)
@@ -106,7 +104,7 @@ digraph "layers" {
     "cupertino-sessiond";
   }
   subgraph "cluster_shell" {
-    label="shell (14)";
+    label="shell (15)";
     "cupertino-controlcenter";
     "cupertino-dock";
     "cupertino-launcher";
@@ -120,6 +118,7 @@ digraph "layers" {
     "cupertino-shell";
     "cupertino-shell-agent";
     "cupertino-shell-desktop";
+    "cupertino-shell-overview";
     "cupertino-windowmanager";
   }
   subgraph "cluster_apps" {
@@ -175,15 +174,11 @@ digraph "layers" {
   "cupertino-dock" -> "cupertino-apps";
   "cupertino-dock" -> "cupertino-assets";
   "cupertino-dock" -> "cupertino-defaults";
-  "cupertino-dock" -> "cupertino-diagnostic-events";
-  "cupertino-dock" -> "cupertino-geometry";
   "cupertino-dock" -> "cupertino-icons";
-  "cupertino-dock" -> "cupertino-keyboard";
   "cupertino-dock" -> "cupertino-kit";
-  "cupertino-dock" -> "cupertino-shell-client" [color=red];
+  "cupertino-dock" -> "cupertino-kit" [label="dev"];
+  "cupertino-dock" -> "cupertino-kit-shell";
   "cupertino-dock" -> "cupertino-trash";
-  "cupertino-dock" -> "cupertino-ui-wayland";
-  "cupertino-dock" -> "cupertino-wayland-client" [color=red];
   "cupertino-dock" -> "cupertino-wm";
   "cupertino-effects" -> "cupertino-animation";
   "cupertino-effects" -> "cupertino-geometry";
@@ -397,6 +392,7 @@ digraph "layers" {
   "cupertino-session-tests" -> "cupertino-notifications" [label="dev"];
   "cupertino-session-tests" -> "cupertino-osd" [label="dev"];
   "cupertino-session-tests" -> "cupertino-portal" [label="dev"];
+  "cupertino-session-tests" -> "cupertino-protocols" [label="dev"];
   "cupertino-session-tests" -> "cupertino-screenshot" [label="dev"];
   "cupertino-session-tests" -> "cupertino-server" [label="dev"];
   "cupertino-session-tests" -> "cupertino-shell" [label="dev"];
@@ -423,6 +419,7 @@ digraph "layers" {
   "cupertino-settings" -> "cupertino-wayland-client" [color=red];
   "cupertino-shell" -> "cupertino-controlcenter";
   "cupertino-shell" -> "cupertino-diagnostic-events";
+  "cupertino-shell" -> "cupertino-dock";
   "cupertino-shell" -> "cupertino-kit";
   "cupertino-shell" -> "cupertino-kit-shell";
   "cupertino-shell" -> "cupertino-launcher";
@@ -431,6 +428,7 @@ digraph "layers" {
   "cupertino-shell" -> "cupertino-osd";
   "cupertino-shell" -> "cupertino-shell-agent";
   "cupertino-shell" -> "cupertino-shell-desktop";
+  "cupertino-shell" -> "cupertino-shell-overview";
   "cupertino-shell-agent" -> "cupertino-apps";
   "cupertino-shell-agent" -> "cupertino-assets" [label="dev"];
   "cupertino-shell-agent" -> "cupertino-defaults";
@@ -452,6 +450,12 @@ digraph "layers" {
   "cupertino-shell-desktop" -> "cupertino-kit" [label="dev"];
   "cupertino-shell-desktop" -> "cupertino-kit-shell";
   "cupertino-shell-desktop" -> "cupertino-trash";
+  "cupertino-shell-overview" -> "cupertino-assets" [label="dev"];
+  "cupertino-shell-overview" -> "cupertino-defaults";
+  "cupertino-shell-overview" -> "cupertino-kit";
+  "cupertino-shell-overview" -> "cupertino-kit" [label="dev"];
+  "cupertino-shell-overview" -> "cupertino-kit-shell";
+  "cupertino-shell-overview" -> "cupertino-wm";
   "cupertino-theme" -> "cupertino-animation";
   "cupertino-theme" -> "cupertino-geometry";
   "cupertino-ui-abi" -> "cupertino-kit";

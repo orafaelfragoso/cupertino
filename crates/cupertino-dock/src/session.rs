@@ -49,7 +49,6 @@ pub struct Launch {
 /// The command the dock runs for a launch's `argv` (a tile's entry, or the file manager opening a folder) with the
 /// activation `token`: a program built on Chromium gets its overlay scroll bars turned on, as in every launch from a
 /// desktop entry ([`cupertino_apps::chromium::launch_args`]). `None` for an empty `argv`.
-#[cfg(feature = "app")]
 pub fn launch_command(
     argv: Vec<String>,
     token: Option<&str>,
@@ -103,6 +102,11 @@ impl Session {
     /// The desktop entries the tiles resolve through.
     pub fn desktop(&self) -> &DesktopIndex {
         &self.desktop
+    }
+
+    /// Resolve the tiles through `desktop` from now on: the entries as read after the session started without them.
+    pub fn set_desktop(&mut self, desktop: DesktopIndex) {
+        self.desktop = desktop;
     }
 
     /// Key of the tile an application id stands for: the tile of that id, else the tile pinned

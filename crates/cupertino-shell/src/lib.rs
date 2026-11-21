@@ -45,9 +45,17 @@ pub static AGENT: Entry = Entry::of::<cupertino_shell_agent::Agent>();
 /// The items of the Desktop folder on the desktop (`cupertino-shell-desktop`).
 pub static DESKTOP: Entry = Entry::of::<cupertino_shell_desktop::Desktop>();
 
+/// The overview: the windows in holes of a surface over the output, the desktops band, opened and closed with the
+/// gestures' transactions (`cupertino-shell-overview`).
+pub static OVERVIEW: Entry = Entry::of::<cupertino_shell_overview::Overview>();
+
+/// The dock: the bar of applications, folders and the trash, the strips that move it to another output, the Force Quit
+/// dialog and the application switcher's panel (`cupertino-dock`).
+pub static DOCK: Entry = Entry::of::<cupertino_dock::Dock>();
+
 /// The components this build of the host runs. A component the server lists that is not here is answered
 /// `unavailable` (`absent`), and the server runs it the way the rest of its configuration says.
-pub static COMPONENTS: [&Entry; 7] = [
+pub static COMPONENTS: [&Entry; 9] = [
     &OSD,
     &NOTIFICATIONS,
     &CONTROLCENTER,
@@ -55,4 +63,6 @@ pub static COMPONENTS: [&Entry; 7] = [
     &LAUNCHER,
     &AGENT,
     &DESKTOP,
+    &OVERVIEW,
+    &DOCK,
 ];

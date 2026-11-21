@@ -8,12 +8,10 @@ apps external_crate cupertino-settings -> wayland-protocols-wlr normal
 apps facade cupertino-settings -> cupertino-theme normal
 apps facade cupertino-settings -> cupertino-wayland-client normal
 apps forbidden_edge cupertino-settings -> cupertino-wayland-client normal
-shell disallowed_methods cupertino-dock clippy.toml
 shell disallowed_methods cupertino-login clippy.toml
 shell disallowed_methods cupertino-polkit-agent clippy.toml
 shell disallowed_methods cupertino-portal clippy.toml
 shell disallowed_methods cupertino-windowmanager clippy.toml
-shell external_crate cupertino-dock -> tiny-skia normal
 shell external_crate cupertino-login -> image normal
 shell external_crate cupertino-login -> tiny-skia normal
 shell external_crate cupertino-polkit-agent -> tiny-skia normal
@@ -23,9 +21,6 @@ shell external_crate cupertino-portal -> wayland-protocols normal
 shell external_crate cupertino-portal -> xkbcommon normal
 shell external_crate cupertino-windowmanager -> wayland-client normal
 shell facade cupertino-dock -> cupertino-animation normal
-shell facade cupertino-dock -> cupertino-shell-client normal
-shell facade cupertino-dock -> cupertino-ui-wayland normal
-shell facade cupertino-dock -> cupertino-wayland-client normal
 shell facade cupertino-login -> cupertino-raster-math normal
 shell facade cupertino-login -> cupertino-shell-client normal
 shell facade cupertino-login -> cupertino-ui-wayland normal
@@ -39,8 +34,6 @@ shell facade cupertino-portal -> cupertino-protocols normal
 shell facade cupertino-portal -> cupertino-ui-wayland normal
 shell facade cupertino-portal -> cupertino-wayland-client normal
 shell facade cupertino-windowmanager -> cupertino-protocols normal
-shell forbidden_edge cupertino-dock -> cupertino-shell-client normal
-shell forbidden_edge cupertino-dock -> cupertino-wayland-client normal
 shell forbidden_edge cupertino-login -> cupertino-raster-math normal
 shell forbidden_edge cupertino-login -> cupertino-seat normal
 shell forbidden_edge cupertino-login -> cupertino-shell-client normal

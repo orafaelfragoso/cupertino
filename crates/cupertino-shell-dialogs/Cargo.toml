@@ -1,0 +1,25 @@
+[package]
+name = "cupertino-shell-dialogs"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "The portal's file chooser and app chooser, a component of the shell host: org.cupertino.Dialogs1 for the portal alone, the family's open and save panel and the app chooser on CupertinoKit"
+[package.metadata.cupertino]
+layer = "shell"
+
+[dependencies]
+async-channel = "2"
+cupertino-apps = { path = "../cupertino-apps" }
+cupertino-defaults = { path = "../cupertino-defaults" }
+cupertino-kit = { path = "../cupertino-kit" }
+cupertino-kit-shell = { path = "../cupertino-kit-shell" }
+cupertino-peer = { path = "../cupertino-peer" }
+zbus = { version = "5", default-features = false, features = ["async-io"] }
+
+[dev-dependencies]
+cupertino-apps = { path = "../cupertino-apps" }
+cupertino-assets = { path = "../cupertino-assets" }
+cupertino-kit = { path = "../cupertino-kit", features = ["test"] }
+
+[[example]]
+name = "dialogs_capture"

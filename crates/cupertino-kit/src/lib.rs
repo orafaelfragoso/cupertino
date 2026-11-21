@@ -314,7 +314,9 @@ pub mod files {
 
     /// An item's type.
     pub mod mime {
-        pub use cupertino_ui_files::mime::{entry_mime, kind_description, kind_group, KindGroup};
+        pub use cupertino_ui_files::mime::{
+            entry_mime, kind_description, kind_group, name_has_type, KindGroup,
+        };
     }
 
     /// The name being edited.

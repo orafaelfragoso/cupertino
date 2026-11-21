@@ -825,6 +825,17 @@
   source: crates/cupertino-prompts/src/consent/service.rs
   source_match: "org.cupertino.Prompts1"
   note: served at /org/cupertino/Prompts1 by cupertino-prompts on its main session bus connection, which owns the name; AskScreenshot(o handle, s app_id, s app_name, s app_icon, s parent_window) -> u (0 granted, 1 cancelled) and AskShortcuts(o handle, s app_id, s app_name, s app_icon, s parent_window, a(sss) shortcuts as (description, keys, note) worded by the portal, u allowed) -> u (0 allowed, 1 denied, 2 dismissed) reply once the person answers; Close(o handle) takes a question down and its call answers as dismissed; every method accepts only the program the server started as portal (Session1.ProgramOf, asked on a lookup connection of its own), any other caller gets org.freedesktop.DBus.Error.AccessDenied; at most 16 questions wait, 64 shortcuts a call, 1024 bytes a text; called by cupertino-portal for the screenshot and global-shortcuts consent
+- name: org.cupertino.Dialogs1
+  kind: dbus-interface
+  version: 1
+  bus: session
+  bus_name: org.cupertino.Dialogs1
+  owner_crate: cupertino-shell-dialogs
+  owner_area: apps
+  scope: shell-private
+  source: crates/cupertino-shell-dialogs/src/service.rs
+  source_match: "org.cupertino.Dialogs1"
+  note: served at /org/cupertino/Dialogs1 by the dialogs component in the cupertino-shell binary, on the component's own connection, which owns the name; ChooseFile(o handle, s kind open|save|save-files, s app_id, s parent_window, s title, a{sv} options) -> (u response, aay paths, i filter index or -1, a(ss) choices) and ChooseApplication(o handle, s app_id, s parent_window, s target, a(sss) choices as (id, name, icon), s last_choice, b wants_token) -> (u response, s choice, s activation token) reply once the person answers (0 chosen, 1 cancelled, 2 ended without an answer); UpdateChoices(o handle, a(sss)) changes an app chooser's applications; Close(o handle) takes a dialog down and its call answers 2; every method accepts only the program the server started as portal (Session1.ProgramOf, asked on a lookup connection of its own), any other caller gets org.freedesktop.DBus.Error.AccessDenied; at most 16 dialogs open, 4 of one app, 1024 bytes a text, 4096 a path, 64 filters, 16 choices, 1024 files, 256 applications; called by cupertino-portal for the FileChooser and AppChooser portals; a restart of the component ends every open dialog with 2
 - name: org.cupertino.SessionAgent1
   kind: dbus-interface
   version: 1
@@ -1205,7 +1216,7 @@
   owner_area: apps
   scope: shell-private
   source: crates/cupertino-shell/src/main.rs
-  note: the shell host the server starts on a connection with the host role alone; runs the listed components, each on a thread of its own; holds the osd (cupertino-osd), notifications (cupertino-notifications), controlcenter (cupertino-controlcenter), menubar (cupertino-menubar), launcher (cupertino-launcher), agent (cupertino-shell-agent), desktop (cupertino-shell-desktop), dock (cupertino-dock) and overview (cupertino-shell-overview) components
+  note: the shell host the server starts on a connection with the host role alone; runs the listed components, each on a thread of its own; holds the osd (cupertino-osd), notifications (cupertino-notifications), controlcenter (cupertino-controlcenter), menubar (cupertino-menubar), launcher (cupertino-launcher), agent (cupertino-shell-agent), desktop (cupertino-shell-desktop), dock (cupertino-dock), overview (cupertino-shell-overview) and dialogs (cupertino-shell-dialogs) components
 - name: cupertino-control
   kind: binary
   version: 0.1.0

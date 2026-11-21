@@ -53,9 +53,12 @@ pub static OVERVIEW: Entry = Entry::of::<cupertino_shell_overview::Overview>();
 /// dialog and the application switcher's panel (`cupertino-dock`).
 pub static DOCK: Entry = Entry::of::<cupertino_dock::Dock>();
 
+/// The portal's file choosers and app choosers, `org.cupertino.Dialogs1` (`cupertino-shell-dialogs`).
+pub static DIALOGS: Entry = Entry::of::<cupertino_shell_dialogs::Dialogs>();
+
 /// The components this build of the host runs. A component the server lists that is not here is answered
 /// `unavailable` (`absent`), and the server runs it the way the rest of its configuration says.
-pub static COMPONENTS: [&Entry; 9] = [
+pub static COMPONENTS: [&Entry; 10] = [
     &OSD,
     &NOTIFICATIONS,
     &CONTROLCENTER,
@@ -65,4 +68,5 @@ pub static COMPONENTS: [&Entry; 9] = [
     &DESKTOP,
     &OVERVIEW,
     &DOCK,
+    &DIALOGS,
 ];

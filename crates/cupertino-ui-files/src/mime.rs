@@ -14,6 +14,17 @@ pub fn mime_from_name(name: &str) -> Option<String> {
         .map(|m| m.essence_str().to_string())
 }
 
+/// Whether a file named `name` is of the MIME type `pattern` (`image/png`, `image/*` or `*/*`, without regard to case)
+/// by its extension: any of the types its extension may mean will do, as a file chooser's filter takes it.
+pub fn name_has_type(pattern: &str, name: &str) -> bool {
+    let pattern = pattern.to_ascii_lowercase();
+    let (kind, sub) = pattern.split_once('/').unwrap_or((pattern.as_str(), "*"));
+    mime_guess::from_path(name).iter().any(|guess| {
+        (kind == "*" || guess.type_().as_str() == kind)
+            && (sub == "*" || guess.subtype().as_str() == sub)
+    })
+}
+
 /// MIME type of `path`: directories, then extension, then content sniffing of a regular file.
 pub fn detect(path: &Path, is_dir: bool) -> String {
     if is_dir {

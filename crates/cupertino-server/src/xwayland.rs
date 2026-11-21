@@ -269,6 +269,9 @@ pub struct XWayland {
     /// [`QUICK_EXIT`]; tests set it long, so a loaded machine cannot turn a quick exit into a run.
     quick_exit: Duration,
     sources: Vec<RegistrationToken>,
+    /// Whether `sources` are enabled. They are switched only when this changes: calloop registers the fds again on
+    /// every enable, and epoll answers EEXIST for sources that are already on.
+    watching: bool,
 }
 
 impl XWayland {
@@ -310,6 +313,7 @@ impl XWayland {
             backoff: Backoff::default(),
             quick_exit: QUICK_EXIT,
             sources,
+            watching: true,
         })
     }
 
@@ -412,7 +416,11 @@ impl XWayland {
         }
     }
 
-    fn watch<D>(&self, handle: &LoopHandle<'_, D>, on: bool) {
+    fn watch<D>(&mut self, handle: &LoopHandle<'_, D>, on: bool) {
+        if self.watching == on {
+            return;
+        }
+        self.watching = on;
         for token in &self.sources {
             let result = if on {
                 handle.enable(token)

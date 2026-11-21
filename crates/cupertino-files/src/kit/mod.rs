@@ -1964,7 +1964,7 @@ impl Model {
             }
             _ => {}
         }
-        let session = &self.session;
+        let session = &mut self.session;
         match action {
             MenuAction::Copy
             | MenuAction::Paste
@@ -2021,7 +2021,10 @@ impl Model {
             }
             MenuAction::Home => window.go(session.home.clone()),
             MenuAction::MoveToTrash => {
-                return window.trash_selection(session).into_iter().collect()
+                let commands = window.trash_selection(session).into_iter().collect();
+                // the first item trashed makes the trash: its place comes at once
+                session.follow_places();
+                return commands;
             }
             MenuAction::PutBack => window.put_back(session),
             MenuAction::NewFolder => match operations::new_folder(window.browser.dir()) {
@@ -2081,8 +2084,8 @@ impl Model {
                 self.session.remember(window);
             }
         }
-        if matches!(action, MenuAction::MoveToTrash | MenuAction::PutBack) {
-            // the first item trashed makes the trash: its place comes at once
+        if action == MenuAction::PutBack {
+            // the item put back may have emptied the trash: its place follows at once
             self.session.follow_places();
         }
         Vec::new()

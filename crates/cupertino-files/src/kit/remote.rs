@@ -9,7 +9,7 @@
 //! `Activate` does when nothing is left to list. The window a call opens or brings forward is raised with the call's
 //! activation token once it is shown.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -162,8 +162,11 @@ impl Model {
     /// The items of the call `id` were looked up, or its deadline passed first: show or open what was found, and
     /// answer the call. Nothing once it was answered.
     pub(super) fn looked_up(&mut self, id: u64) -> Vec<Command<Message>> {
-        let Some((call, found)) = self.look_ups.take(id) else {
-            return Vec::new();
+        let taken = self.look_ups.take(id);
+        // a task that ended leaves a turn to the next call queued
+        let mut resumed = self.look_ups.resume();
+        let Some((call, found)) = taken else {
+            return resumed;
         };
         let token = call.token.clone();
         let commands = match &call.request {
@@ -178,7 +181,8 @@ impl Model {
             _ => Vec::new(),
         };
         call.done();
-        commands
+        resumed.extend(commands);
+        resumed
     }
 
     /// `targets` with each path as its look-up found it (`found`, one a path in order): resolved, where it exists. One
@@ -292,8 +296,9 @@ pub const MAX_LOOK_UPS: usize = 8;
 pub const LOOK_UP_DEADLINE: Duration = Duration::from_secs(4);
 
 /// The most look-up tasks not ended at once, those that a mount which does not answer still holds past their call's
-/// deadline among them; past it a call is refused until one of them ends.
-pub(super) const MAX_LOOK_UP_TASKS: usize = 32;
+/// deadline among them: fewer than Kit's I/O share of one instance, so the listings and the other I/O work keep a turn
+/// while every look-up waits on a mount. Past it a call waits for one of them to end, within its deadline.
+pub(super) const MAX_LOOK_UP_TASKS: usize = cupertino_kit::task::IO_SHARE - 1;
 
 /// What tells, on a look-up task, whether the item at a path exists.
 pub type LookUp = Arc<dyn Fn(&Path) -> io::Result<()> + Send + Sync>;
@@ -310,6 +315,8 @@ pub(super) fn look_up_item(path: &Path) -> io::Result<()> {
 /// The calls whose items are being looked up, each by an I/O task, by the id their message carries.
 pub(super) struct LookUps {
     waiting: BTreeMap<u64, Waiting>,
+    /// The calls whose task waits for one of [`MAX_LOOK_UP_TASKS`] to end, oldest first.
+    queued: VecDeque<u64>,
     next: u64,
     look_up: LookUp,
     /// The look-up tasks not ended, those of calls already answered among them.
@@ -320,12 +327,21 @@ pub(super) struct LookUps {
 struct Waiting {
     call: Call,
     found: Arc<Mutex<Vec<Found>>>,
+    /// What its task looks up, until the task starts.
+    task: Option<Task>,
+}
+
+/// What one look-up task looks up: the paths, and with what whether each exists.
+struct Task {
+    paths: Vec<PathBuf>,
+    look: Option<LookUp>,
 }
 
 impl LookUps {
     pub(super) fn new(look_up: LookUp) -> LookUps {
         LookUps {
             waiting: BTreeMap::new(),
+            queued: VecDeque::new(),
             next: 0,
             look_up,
             tasks: Arc::new(AtomicUsize::new(0)),
@@ -338,42 +354,62 @@ impl LookUps {
     }
 
     /// Look the `paths` of `call` up on an I/O task, each `..` resolved, and with `exists` whether each item exists:
-    /// the call's message comes once they are looked up, and at the latest [`LOOK_UP_DEADLINE`] later. Past
-    /// [`MAX_LOOK_UPS`] calls waiting, or [`MAX_LOOK_UP_TASKS`] tasks not ended, the call is refused.
+    /// the call's message comes once they are looked up, and at the latest [`LOOK_UP_DEADLINE`] later. With
+    /// [`MAX_LOOK_UP_TASKS`] tasks not ended, the task waits for one of them to end ([`LookUps::resume`]). Past
+    /// [`MAX_LOOK_UPS`] calls waiting, the call is refused.
     fn start(&mut self, call: Call, paths: Vec<PathBuf>, exists: bool) -> Vec<Command<Message>> {
         if self.waiting.len() >= MAX_LOOK_UPS {
             call.refuse("too many items are being looked up");
             return Vec::new();
         }
         let look = exists.then(|| Arc::clone(&self.look_up));
-        let Some(held) = Held::take(&self.tasks) else {
-            call.refuse("too many items are held by mounts that do not answer");
-            return Vec::new();
-        };
-        let found = Arc::new(Mutex::new(Vec::with_capacity(paths.len())));
         let id = self.next;
         self.next += 1;
         self.waiting.insert(
             id,
             Waiting {
                 call,
-                found: Arc::clone(&found),
+                found: Arc::new(Mutex::new(Vec::with_capacity(paths.len()))),
+                task: Some(Task { paths, look }),
             },
         );
-        vec![
-            cupertino_kit::task::io(
+        self.queued.push_back(id);
+        let mut commands = vec![Command::After {
+            delay: LOOK_UP_DEADLINE,
+            message: Message::LookedUp(id),
+        }];
+        commands.extend(self.resume());
+        commands
+    }
+
+    /// Start the tasks of the calls queued, oldest first, while fewer than [`MAX_LOOK_UP_TASKS`] have not ended. Each
+    /// task's end comes as its call's message, which resumes the queue again.
+    pub(super) fn resume(&mut self) -> Vec<Command<Message>> {
+        let mut commands = Vec::new();
+        while let Some(&id) = self.queued.front() {
+            // a call answered by its deadline before its task started is dropped from the queue
+            let Some(waiting) = self.waiting.get_mut(&id) else {
+                self.queued.pop_front();
+                continue;
+            };
+            let Some(held) = Held::take(&self.tasks) else {
+                break;
+            };
+            self.queued.pop_front();
+            let Some(Task { paths, look }) = waiting.task.take() else {
+                continue;
+            };
+            let found = Arc::clone(&waiting.found);
+            commands.push(cupertino_kit::task::io(
                 LOOK_UP_DEADLINE,
                 move || {
                     let _held = held;
                     look_up_items(&paths, look.as_ref(), &found);
                 },
                 move |()| Message::LookedUp(id),
-            ),
-            Command::After {
-                delay: LOOK_UP_DEADLINE,
-                message: Message::LookedUp(id),
-            },
-        ]
+            ));
+        }
+        commands
     }
 
     /// The call `id` and what was found of its items by now, one a path in order; none once it was taken.

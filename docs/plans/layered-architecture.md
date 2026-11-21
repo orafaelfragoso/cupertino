@@ -1126,7 +1126,7 @@ At most three at a time, in this order:
 
 **Owns** `login`, new `shell-agent`. **After** W6.2, W5.4.
 
-1. [ ] Where `cupertino-login`'s modules go:
+1. [x] (`41d42563e`, `c4f4044eb`) Where `cupertino-login`'s modules go:
 
        | Module | Goes to |
        |---|---|
@@ -1136,7 +1136,7 @@ At most three at a time, in this order:
        | `control` (`Login1`) | `Lock` stays in `cupertino-login`; the other methods are gone (D13) |
        | the consent prompt | `cupertino-prompts` (W6.14) |
        | everything else | stays: login and lock screens |
-2. [ ] Login and lock screens draw through Kit and `cupertino-kit-shell` (lock surfaces); no `tiny-skia`,
+2. [x] (`991e75877`) Login and lock screens draw through Kit and `cupertino-kit-shell` (lock surfaces); no `tiny-skia`,
        `cupertino-raster-math` or `cupertino-seat`; power through `cupertino-sessiond` (login screen) or `Session1`
        (lock screen).
 
@@ -1144,8 +1144,8 @@ At most three at a time, in this order:
 
 **Owns** `polkit-agent`, new `prompts`; the consent prompt code in `login`. **After** W6.13.
 
-1. [ ] One process with the authentication and keyring prompts, drawn through Kit.
-2. [ ] The desktop-control consent prompt moves here from `cupertino-login`; the screenshot and global-shortcut consent
+1. [x] (`6479ff5c7`) One process with the authentication and keyring prompts, drawn through Kit.
+2. [x] (`97bfd7209`, `2fc3e2568`) The desktop-control consent prompt moves here from `cupertino-login`; the screenshot and global-shortcut consent
        dialogs from `cupertino-portal` (W6.11 calls them).
 
 #### W6.15 Everything that names the old shell binaries (M)

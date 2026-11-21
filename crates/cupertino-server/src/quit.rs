@@ -14,7 +14,7 @@
 //! daemon's `ProcessFD`. `QuitNextApplication`, `QuitStatus`, `ForceQuitApplication`, `OpenApplications` and `PendingInterrupt` are for the session agent, known
 //! by the connection the call comes on: the bus name the server accepted for the `agent` component (D20), never by its
 //! process, which runs other components too; `SetAppearance` and `SetAccessibility` for the settings application (a known program under `/usr`) and
-//! that agent; `ListShellProcesses` and `RestartShellProcess` for any unsandboxed process of the user the server runs as
+//! that agent; `ListShellProcesses`, `ListShellComponents` and `RestartShellProcess` for any unsandboxed process of the user the server runs as
 //! (the `cupertino shell` commands), by the user id the bus daemon gives for the connection; `StartScreenshot` for the
 //! portal the server started, known by its process ([`Cupertino::program_of`]). A caller without a process descriptor, a Flatpak or a Snap is refused, with an error name of its own
 //! (`org.cupertino.Session1.Error.AnonymousCaller`, `.FlatpakCaller`, `.SnapCaller`; `.UntrustedCaller` for any other
@@ -39,6 +39,7 @@
 //! | `SetAppearance(s appearance)` | `light` or `dark`: stored as `appearance` in `compositor.json`, then applied at once; `auto` is refused with `NotSupported` (no time-of-day or location backend), anything else with `InvalidArgs`; a failed store, or no settings directory to store in, changes nothing (`Failed`) |
 //! | `SetAccessibility(s key, s value)` | one key of `accessibility.conf` with a value as the file writes it (`reduce_motion` `on`, `color_filter` `tint 0.5`, ...): applied and stored like the key actions; an unknown key or bad value is `InvalidArgs` |
 //! | `ListShellProcesses -> a(ssuttsbss)` | every process the server supervises, in start order, as `(name, state, pid, start_ticks, started, program, from_dev_folder, installed, dev_program)`: `state` is `running`, `stopping`, `waiting` or `stopped`; `pid`, `start_ticks` (field 22 of `/proc/PID/stat`), `started` (seconds since 1970) are 0 and `program` empty while it does not run; `from_dev_folder` says the program is the development folder's; `installed` is the configured program and `dev_program` the development folder's file it would start, empty when the folder does not apply. Only an unsandboxed process of the session's own user may call it |
+//! | `ListShellComponents -> a(ssbb)` | every component of the server's component table, in its order, as `(name, runs_in, from_dev_folder, connected)`: `runs_in` is `host` (the shared host), `host-NAME` (the separate host of that component), `process` (no host runs it: its process entry of the configuration does), `none` (no host runs it and it has no process entry) or `off` (the session does not run it: not in the component list, turned off, or the login screen); `from_dev_folder` says a separate host starts from the development folder; `connected` that a host holds the connection the server handed out for it. Only an unsandboxed process of the session's own user may call it |
 //! | `RestartShellProcess(s name) -> (ssuttsbss)` | ends the process (SIGTERM, then SIGKILL after `crate::supervisor::RESTART_STOP_GRACE`) and starts it again at once, the development folder resolved again; answers once it runs, with the same record. A component that runs in a host is restarted through its host and answered once it is ready, with its host's record under its name; `host` and `host-NAME` name the hosts. An unknown name is `InvalidArgs`, a start that failed `Failed`. Only an unsandboxed process of the session's own user may call it |
 //! | `StartScreenshot` | starts the screenshot program as the portal's service: the `screenshot` key's command with `--serve`, on a connection the server makes with the `session` and `capture` roles ([`crate::capture::launch`]), unless one it started so still runs and has not dropped that name (one going away drops the name before its exit is seen); returns once it runs, and the portal then waits for `org.cupertino.Screenshot1` on the bus. `Failed` on the login screen or when it cannot start. Only the portal the server started may call it |
 //! | `ProgramOf(s unique_name) -> s` | the program the server started itself that owns the connection `unique_name`, by the server's own name for it (`portal`, `login`, `desktop-control`, `polkit-agent`, `keyring-prompter`, `screenshot`): the connection's process, as the bus daemon gives it, is one the server holds the pidfd of and it has not exited ([`Cupertino::program_of`]); empty for any other connection, a host's and its components' included, and for a name that is not a unique name. Open to every caller: it tells which connection is which program, and nothing else |
@@ -54,8 +55,9 @@ use std::sync::{Arc, Mutex};
 
 use crate::caller::{Asker, Caller, Denial, Need};
 use crate::config::BuiltIn;
+use crate::host::HostKind;
 use crate::state::Cupertino;
-use crate::supervisor::{ProcessInfo, RestartError};
+use crate::supervisor::{host_name, ProcessInfo, RestartError};
 use cupertino_peer::ProcessHandle;
 use cupertino_wm::{AppId, Command, WindowId};
 
@@ -259,6 +261,12 @@ pub enum Call {
         Option<u32>,
         async_channel::Sender<Result<Vec<ProcessInfo>, Reject>>,
     ),
+    /// The caller and the user id the bus gave for its connection.
+    ListShellComponents(
+        Caller,
+        Option<u32>,
+        async_channel::Sender<Result<Vec<ShellComponentRecord>, Reject>>,
+    ),
     /// The process to restart, the caller and the user id the bus gave for its connection.
     RestartShellProcess(
         String,
@@ -340,7 +348,52 @@ pub fn shell_process_record(info: &ProcessInfo) -> ShellProcessRecord {
     )
 }
 
+/// A component of the server's table as `ListShellComponents` sends it: name, where it runs, whether its separate host
+/// starts from the development folder, whether it is connected.
+pub type ShellComponentRecord = (String, String, bool, bool);
+
 impl Cupertino {
+    /// Where every component of the server's table runs and whether it is connected, in the table's order
+    /// (`ListShellComponents`): the host the last plan puts it in, else the host the server was handed that lists it, else
+    /// its supervised process entry; a component the session does not run is `off`.
+    pub fn shell_components(&self) -> Vec<ShellComponentRecord> {
+        let active = self.config.active_shell_components(self.login_screen);
+        let attached = self.hosts.host_views();
+        crate::host::COMPONENTS
+            .iter()
+            .map(|spec| {
+                let name = spec.name;
+                let host = self.hosts.planned_host(name).or_else(|| {
+                    attached
+                        .iter()
+                        .find(|h| h.components.contains(&name))
+                        .map(|h| h.kind)
+                });
+                let (runs_in, from_dev_folder) = match host {
+                    Some(kind) => (
+                        host_name(kind),
+                        matches!(kind, HostKind::Separate(_))
+                            && self
+                                .supervisor
+                                .host_info(kind)
+                                .is_some_and(|p| p.dev_program.is_some()),
+                    ),
+                    None if !active.contains(&name) => ("off".to_owned(), false),
+                    None if self.supervisor.processes().iter().any(|p| p.name == name) => {
+                        ("process".to_owned(), false)
+                    }
+                    None => ("none".to_owned(), false),
+                };
+                (
+                    name.to_owned(),
+                    runs_in,
+                    from_dev_folder,
+                    self.hosts.component_connected(name),
+                )
+            })
+            .collect()
+    }
+
     /// The applications that have toplevels, most recently used first, then the others by id.
     fn apps_with_windows(&self) -> Vec<AppId> {
         let has_windows = |app: AppId| {
@@ -965,6 +1018,13 @@ impl Cupertino {
                 let answer = self
                     .authorize_session_user_call("ListShellProcesses", &caller, user)
                     .map(|()| self.supervisor.processes())
+                    .map_err(Reject::Caller);
+                let _ = reply.try_send(answer);
+            }
+            Call::ListShellComponents(caller, user, reply) => {
+                let answer = self
+                    .authorize_session_user_call("ListShellComponents", &caller, user)
+                    .map(|()| self.shell_components())
                     .map_err(Reject::Caller);
                 let _ = reply.try_send(answer);
             }

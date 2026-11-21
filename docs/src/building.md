@@ -95,7 +95,8 @@ program and the source of every start.
 ### The loop
 
 1. Find the component's name with `cupertino shell list`: its `COMPONENT` column (`data.components` in `--format json`)
-   is the name the commands take and says which host holds it, and a process named `host-NAME` (`data.processes`) is
+   is the name the commands take, `RUNS IN` says which host runs it (`host-NAME (development folder)` for a host of the
+   folder) and `CONNECTED` whether it connected, and a process named `host-NAME` (`data.processes`) is
    the host a component of the folder runs in, whose `dev_program` is the file the folder provides. The component's
    crate is `crates/cupertino-NAME`, except `agent` (`cupertino-shell-agent`), `desktop`, `overview` and `dialogs`
    (`cupertino-shell-desktop`, `-overview`, `-dialogs`); the program is always `cupertino-shell`.

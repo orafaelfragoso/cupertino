@@ -599,6 +599,14 @@ impl Supervisor {
             .collect()
     }
 
+    /// Whether a process whose connection holds `role` is supervised and runs again should it end: it runs, stops for
+    /// a restart or waits for its next start; not one that ended successfully, nor one that ends for good.
+    pub fn keeps_role(&self, role: crate::authorization::ShellRole) -> bool {
+        self.procs.iter().any(|p| {
+            p.spec.roles.contains(&role) && !p.retiring && !matches!(p.phase, Phase::Stopped)
+        })
+    }
+
     /// The pids of the running processes whose connection holds `role`.
     pub fn pids_with_role(&self, role: crate::authorization::ShellRole) -> Vec<u32> {
         self.procs

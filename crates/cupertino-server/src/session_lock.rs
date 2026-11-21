@@ -10,8 +10,8 @@
 //! window); the window that was active when the lock began is active again after the unlock.
 //!
 //! When the system is about to sleep ([`Cupertino::system_going_to_sleep`]) the session must not show when it wakes,
-//! whatever the lock client did. In a session with a lock screen (a shell process with the session lock role, not the
-//! login screen), a session that is not locked yet (the lock client hung or crashed before it asked) becomes `Orphaned`
+//! whatever the lock client did. In a session with a lock screen (the built-in login the supervisor keeps, with the
+//! session lock role; not the login screen), a session that is not locked yet (the lock client hung or crashed before it asked) becomes `Orphaned`
 //! at once: black on every output, locked for the session's observers, taken over by the next lock client; the lock
 //! screen is asked to lock, as `lock_session` asks it. A pending lock stays in force should its client go before it
 //! confirms. The compositor holds the sleep back (a logind delay inhibitor, `power.rs`) until every output shows such a
@@ -320,15 +320,10 @@ impl Cupertino {
         self.request_redraw();
     }
 
-    /// Whether the session has a lock screen that takes a covered session over: a shell process with the session lock
-    /// role (the login process, restarted by its supervisor should it crash); never the login screen's server.
+    /// Whether the session has a lock screen that takes a covered session over: the supervisor keeps a process with the
+    /// session lock role (the built-in login, restarted should it crash); never the login screen's server.
     pub(crate) fn has_lock_screen(&self) -> bool {
-        !self.login_screen
-            && self
-                .config
-                .shell_processes
-                .iter()
-                .any(|p| p.roles.contains(&ShellRole::SessionLock))
+        !self.login_screen && self.supervisor.keeps_role(ShellRole::SessionLock)
     }
 
     /// Whether the session is hidden on every output: each shows a locked frame (the lock surfaces over black, or black)

@@ -2,9 +2,13 @@
 
 use std::path::Path;
 
-use cupertino_alsa::{Master, OpenMode, DEVICE_DIR};
-use cupertino_pipewire::{Sink, Target, Volume, Wpctl};
 use zbus::fdo::{Error, Result};
+
+use alsa::{Master, OpenMode, DEVICE_DIR};
+use pipewire::{Sink, Target, Volume, Wpctl};
+
+mod alsa;
+mod pipewire;
 
 /// Well-known session bus name.
 const NAME: &str = "org.cupertino.Audio1";
@@ -71,7 +75,7 @@ impl Audio {
                 Ok((balance, level))
             }
             Ok(_) => Err(Error::Failed("Invalid output channel levels.".into())),
-            Err(cupertino_pipewire::Error::Unparsed(text))
+            Err(pipewire::Error::Unparsed(text))
                 if text.starts_with("Volume:")
                     && text.lines().next().is_some_and(|line| {
                         line.split_whitespace().any(|s| {

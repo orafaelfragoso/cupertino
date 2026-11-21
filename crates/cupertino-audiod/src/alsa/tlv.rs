@@ -5,7 +5,7 @@
 //! `DB_MINMAX_MUTE` and `DB_RANGE` (a list of ranges, each with one of the others inside). Every other type
 //! (containers, `DB_LINEAR`, channel maps) is "no dB information", and the control then maps on its raw range.
 
-use crate::error::{Error, Result};
+use super::error::{Error, Result};
 
 /// `SNDRV_CTL_TLVD_DB_GAIN_MUTE`: the gain of a muted step, in 1/100 dB.
 pub const DB_GAIN_MUTE: i32 = -9_999_999;

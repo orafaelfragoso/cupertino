@@ -7,7 +7,7 @@
 
 use rustix::ioctl::{opcode, Direction, Opcode};
 
-use crate::error::{Error, Result};
+use super::error::{Error, Result};
 
 #[cfg(not(target_pointer_width = "64"))]
 compile_error!("the control structures are laid out for a 64-bit kernel (`long` is 8 bytes)");
@@ -15,8 +15,6 @@ compile_error!("the control structures are laid out for a 64-bit kernel (`long` 
 /// The ioctl "type" byte of every control request (`'U'`).
 const CTL_TYPE: u8 = b'U';
 
-/// `sizeof(struct snd_ctl_card_info)`.
-pub const CARD_INFO_SIZE: usize = 376;
 /// `sizeof(struct snd_ctl_elem_id)`.
 pub const ELEM_ID_SIZE: usize = 64;
 /// `sizeof(struct snd_ctl_elem_list)`.
@@ -25,8 +23,6 @@ pub const ELEM_LIST_SIZE: usize = 80;
 pub const ELEM_INFO_SIZE: usize = 272;
 /// `sizeof(struct snd_ctl_elem_value)`.
 pub const ELEM_VALUE_SIZE: usize = 1224;
-/// `sizeof(struct snd_ctl_event)`.
-pub const EVENT_SIZE: usize = 72;
 /// `sizeof(struct snd_ctl_tlv)`: `numid` and `length`; the TLV words follow the header.
 pub const TLV_HEADER_SIZE: usize = 8;
 
@@ -35,8 +31,6 @@ const NAME_FIELD: usize = 44;
 /// Values a control can hold (`long value[128]`).
 pub const MAX_VALUES: usize = 128;
 
-/// `SNDRV_CTL_IOCTL_CARD_INFO`.
-pub(crate) const CARD_INFO: Opcode = opcode::read::<[u8; CARD_INFO_SIZE]>(CTL_TYPE, 0x01);
 /// `SNDRV_CTL_IOCTL_ELEM_LIST`.
 pub(crate) const ELEM_LIST: Opcode = opcode::read_write::<[u8; ELEM_LIST_SIZE]>(CTL_TYPE, 0x10);
 /// `SNDRV_CTL_IOCTL_ELEM_INFO`.
@@ -45,8 +39,6 @@ pub(crate) const ELEM_INFO: Opcode = opcode::read_write::<[u8; ELEM_INFO_SIZE]>(
 pub(crate) const ELEM_READ: Opcode = opcode::read_write::<[u8; ELEM_VALUE_SIZE]>(CTL_TYPE, 0x12);
 /// `SNDRV_CTL_IOCTL_ELEM_WRITE`.
 pub(crate) const ELEM_WRITE: Opcode = opcode::read_write::<[u8; ELEM_VALUE_SIZE]>(CTL_TYPE, 0x13);
-/// `SNDRV_CTL_IOCTL_SUBSCRIBE_EVENTS`.
-pub(crate) const SUBSCRIBE_EVENTS: Opcode = opcode::read_write::<i32>(CTL_TYPE, 0x16);
 /// `SNDRV_CTL_IOCTL_TLV_READ`: the encoded size is the header only; the kernel reads `length` from it and fills the words after it.
 pub(crate) const TLV_READ: Opcode =
     opcode::from_components(Direction::ReadWrite, CTL_TYPE, 0x1a, TLV_HEADER_SIZE);
@@ -64,37 +56,6 @@ fn text_at(buf: &[u8], offset: usize, len: usize, field: &'static str) -> Result
     let bytes = &buf[offset..offset + len];
     let end = bytes.iter().position(|&b| b == 0).unwrap_or(len);
     String::from_utf8(bytes[..end].to_vec()).map_err(|_| Error::NotUtf8 { field })
-}
-
-/// What a card is called, from `SNDRV_CTL_IOCTL_CARD_INFO`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CardInfo {
-    /// Card number.
-    pub card: i32,
-    /// Short user-selectable identifier.
-    pub id: String,
-    /// Driver name.
-    pub driver: String,
-    /// Short name of the card.
-    pub name: String,
-    /// Name plus information text.
-    pub long_name: String,
-    /// Visual mixer identification.
-    pub mixer_name: String,
-}
-
-impl CardInfo {
-    /// Parse the 376 bytes the kernel fills.
-    pub fn parse(buf: &[u8; CARD_INFO_SIZE]) -> Result<Self> {
-        Ok(Self {
-            card: i32::from_ne_bytes(buf[0..4].try_into().expect("4-byte slice")),
-            id: text_at(buf, 8, 16, "id")?,
-            driver: text_at(buf, 24, 16, "driver")?,
-            name: text_at(buf, 40, 32, "name")?,
-            long_name: text_at(buf, 72, 80, "longname")?,
-            mixer_name: text_at(buf, 168, 80, "mixername")?,
-        })
-    }
 }
 
 /// `SNDRV_CTL_ELEM_IFACE_*`: which device a control belongs to.
@@ -360,51 +321,4 @@ pub(crate) fn value_reply(buf: &[u8; ELEM_VALUE_SIZE], count: u32) -> Result<Vec
     Ok((0..count as usize)
         .map(|i| i64_at(buf, 72 + i * 8))
         .collect())
-}
-
-/// `SNDRV_CTL_EVENT_MASK_REMOVE`: the element was removed.
-const MASK_REMOVE: u32 = !0;
-/// `SNDRV_CTL_EVENT_MASK_VALUE`.
-const MASK_VALUE: u32 = 1 << 0;
-
-/// `struct snd_ctl_event`: something changed on a control.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Event {
-    /// What changed (`SNDRV_CTL_EVENT_MASK_*`).
-    pub mask: u32,
-    /// The control.
-    pub id: ElementId,
-}
-
-impl Event {
-    /// The value of the control changed.
-    pub fn value_changed(&self) -> bool {
-        self.mask != MASK_REMOVE && self.mask & MASK_VALUE != 0
-    }
-
-    /// The control was removed.
-    pub fn removed(&self) -> bool {
-        self.mask == MASK_REMOVE
-    }
-
-    /// Parse the events of one `read`: a whole number of 72-byte records, each of type `SNDRV_CTL_EVENT_ELEM`.
-    pub fn parse_all(bytes: &[u8]) -> Result<Vec<Event>> {
-        let (records, rest) = bytes.as_chunks::<EVENT_SIZE>();
-        if !rest.is_empty() {
-            return Err(Error::TruncatedEvent { len: bytes.len() });
-        }
-        records
-            .iter()
-            .map(|record| {
-                let kind = u32_at(record, 0);
-                if kind != 0 {
-                    return Err(Error::UnknownEventType { kind });
-                }
-                Ok(Event {
-                    mask: u32_at(record, 4),
-                    id: ElementId::parse(&record[8..])?,
-                })
-            })
-            .collect()
-    }
 }

@@ -55,16 +55,6 @@ pub enum Error {
         /// The card number asked for.
         card: u32,
     },
-    /// A `read` returned a byte count that is not a whole number of events.
-    TruncatedEvent {
-        /// The byte count returned.
-        len: usize,
-    },
-    /// An event of a type other than `SNDRV_CTL_EVENT_ELEM`.
-    UnknownEventType {
-        /// The type received.
-        kind: u32,
-    },
 }
 
 impl fmt::Display for Error {
@@ -84,11 +74,6 @@ impl fmt::Display for Error {
             Self::NoPlaybackVolume => write!(f, "no card has a playback volume control"),
             Self::NoMuteSwitch => write!(f, "the master volume has no mute switch"),
             Self::NoSuchCard { card } => write!(f, "sound card {card} has no control device"),
-            Self::TruncatedEvent { len } => write!(
-                f,
-                "a read of {len} bytes is not a whole number of control events"
-            ),
-            Self::UnknownEventType { kind } => write!(f, "unknown control event type {kind}"),
         }
     }
 }

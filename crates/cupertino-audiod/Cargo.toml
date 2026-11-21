@@ -9,8 +9,7 @@ description = "Session audio service for the default devices, volume, mute and s
 layer = "services"
 
 [dependencies]
-cupertino-alsa = { path = "../cupertino-alsa" }
-cupertino-pipewire = { path = "../cupertino-pipewire" }
+rustix = { version = "1", features = ["fs"] }
 zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
 
 [dev-dependencies]
@@ -18,4 +17,4 @@ tempfile = "3"
 
 [[example]]
 name = "audio-backend-stand-in"
-path = "../cupertino-pipewire/examples/wpctl-stand-in.rs"
+path = "examples/audio-backend-stand-in.rs"

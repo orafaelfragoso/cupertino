@@ -270,3 +270,263 @@ fn invalid_arguments_stale_devices_and_unsupported_controls_have_distinct_bus_er
     assert!(!calls.contains("set-default"));
     assert!(!calls.contains("set-sink-volume"));
 }
+
+/// What `wpctl status` prints on a machine with a webcam: video nodes, streams and endpoints around the audio ones.
+const BUSY_STATUS: &str = "\
+PipeWire 'pipewire-0' [1.4.2, user@host, cookie:123]
+ └─ Clients:
+        33. WirePlumber                         [1.4.2, user@host, pid:900]
+
+Audio
+ ├─ Devices:
+ │      45. Built-in Audio                      [alsa]
+ │
+ ├─ Sinks:
+ │      46. Built-in Audio Analog Stereo        [vol: 0.40]
+ │  *   52. HDMI / DisplayPort 1                   [vol: 1.00]
+ │
+ ├─ Sink endpoints:
+ │
+ ├─ Sources:
+ │  *   47. Built-in Audio Analog Stereo        [vol: 1.00]
+ │      48. Webcam Microphone
+ │
+ └─ Streams:
+        60. Firefox
+             61. output_FL       > Built-in Audio:playback_FL
+
+Video
+ ├─ Devices:
+ │      41. Webcam                              [v4l2]
+ │
+ ├─ Sinks:
+ │
+ ├─ Sources:
+ │      42. Webcam: Webcam (V4L2)
+";
+
+type Rows = Vec<(u32, String, bool)>;
+
+fn rows(list: &[(u32, &str, bool)]) -> Rows {
+    list.iter()
+        .map(|(id, n, d)| (*id, n.to_string(), *d))
+        .collect()
+}
+
+impl Bus {
+    /// Replace the stand-in's behaviour: each `(command, text)` prints `text` for `command`.
+    fn prints(&self, lines: &[(&str, &str)]) {
+        let text: String = lines
+            .iter()
+            .map(|(command, out)| format!("{command}\tstdout\t{}\n", out.replace('\n', "\\n")))
+            .collect();
+        fs::write(self.path("behaviour"), text).unwrap();
+    }
+}
+
+#[test]
+fn device_lists_come_from_the_audio_section_in_order_with_the_default_marked() {
+    let bus = Bus::new();
+    let proxy = bus.proxy();
+    for (name, status, outputs, inputs) in [
+        (
+            "video nodes, streams and endpoints left out, the bracket group cut off",
+            BUSY_STATUS,
+            rows(&[
+                (46, "Built-in Audio Analog Stereo", false),
+                (52, "HDMI / DisplayPort 1", true),
+            ]),
+            rows(&[
+                (47, "Built-in Audio Analog Stereo", true),
+                (48, "Webcam Microphone", false),
+            ]),
+        ),
+        ("empty output", "", rows(&[]), rows(&[])),
+        (
+            "empty sections",
+            "Audio\n ├─ Sinks:\n │\n └─ Streams:\n",
+            rows(&[]),
+            rows(&[]),
+        ),
+        (
+            "video only",
+            "Video\n ├─ Sinks:\n │      42. Camera\n ├─ Sources:\n │      43. Camera 2\n",
+            rows(&[]),
+            rows(&[]),
+        ),
+        (
+            "lines that are not nodes skipped",
+            "Audio\n ├─ Sinks:\n │      not-a-number. Name\n │      7. Kept\n │      8.NoSpace\n",
+            rows(&[(7, "Kept", false)]),
+            rows(&[]),
+        ),
+        (
+            "brackets inside a name kept",
+            "Audio\n ├─ Sinks:\n │      9. Name [with] brackets inside\n",
+            rows(&[(9, "Name [with] brackets inside", false)]),
+            rows(&[]),
+        ),
+    ] {
+        bus.prints(&[("status", status)]);
+        assert_eq!(
+            proxy.call::<_, _, Rows>("ListDevices", &"output").unwrap(),
+            outputs,
+            "{name}"
+        );
+        assert_eq!(
+            proxy.call::<_, _, Rows>("ListDevices", &"input").unwrap(),
+            inputs,
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn a_volume_line_is_a_level_in_zero_to_one_and_a_mute_state() {
+    let bus = Bus::new();
+    let proxy = bus.proxy();
+    for (text, level, muted) in [
+        ("Volume: 0.42\n", 0.42, false),
+        ("Volume: 0.30 [MUTED]\n", 0.30, true),
+        ("Volume: 1.50", 1.0, false),
+        ("Volume: -0.20", 0.0, false),
+    ] {
+        bus.prints(&[("get-volume", text)]);
+        assert_eq!(
+            proxy
+                .call::<_, _, (f64, bool)>("GetVolume", &"input")
+                .unwrap(),
+            (level, muted),
+            "{text:?}"
+        );
+    }
+}
+
+#[test]
+fn output_that_is_not_a_volume_line_fails_the_call_and_quotes_the_text() {
+    let bus = Bus::new();
+    let proxy = bus.proxy();
+    for text in [
+        "",
+        "Volume:",
+        "Volume: loud",
+        "volume: 0.5",
+        "Volume: 0.5 [MUTE]",
+        "Volume: 0.5 [MUTED] extra",
+        "Volume: NaN",
+        "Volume: inf",
+        "Volume: 0.5 0.5",
+        "0.5",
+    ] {
+        bus.prints(&[("get-volume", text)]);
+        let error = proxy
+            .call::<_, _, (f64, bool)>("GetVolume", &"input")
+            .unwrap_err();
+        let zbus::Error::MethodError(name, message, _) = &error else {
+            panic!("{text:?}: {error}")
+        };
+        assert_eq!(
+            name.as_str(),
+            "org.freedesktop.DBus.Error.Failed",
+            "{text:?}"
+        );
+        assert_eq!(
+            message.as_deref(),
+            Some(format!("unexpected wpctl output {:?}", text.trim()).as_str()),
+            "{text:?}"
+        );
+    }
+}
+
+#[test]
+fn two_channels_give_a_balance_toward_the_louder_one() {
+    let bus = Bus::new();
+    let proxy = bus.proxy();
+    for (text, balance) in [
+        ("Volume: front-left: 32768 /  50% / -18.06 dB,   front-right: 32768 /  50% / -18.06 dB\n", 0.0),
+        ("Volume: front-left: 1 / 100% / 0 dB, front-right: 1 / 50% / 0 dB", -0.5),
+        ("Volume: front-left: 1 / 20% / 0 dB, front-right: 1 / 80% / 0 dB", 0.75),
+        ("Volume: front-left: 1 / 120% / 0 dB, front-right: 1 / 120% / 0 dB", 0.0),
+        ("Volume: front-left: 0 / 0% / -inf dB, front-right: 0 / 0% / -inf dB", 0.0),
+        ("Volume: front-left: 1 / 50% / 0 dB, front-right: 1 / 50% / 0 dB\nBalance: 0.00\n", 0.0),
+    ] {
+        bus.prints(&[("get-volume", "Volume: 0.5"), ("get-sink-volume", text)]);
+        let got = proxy.call::<_, _, f64>("GetBalance", &()).unwrap();
+        assert!((got - balance).abs() < 1e-9, "{text:?}: {got}");
+    }
+    // The louder channel's level (80%) is kept: centring gives 80% on both sides.
+    bus.prints(&[
+        ("get-volume", "Volume: 0.5"),
+        (
+            "get-sink-volume",
+            "Volume: front-left: 1 / 20% / 0 dB, front-right: 1 / 80% / 0 dB",
+        ),
+    ]);
+    proxy.call::<_, _, ()>("SetBalance", &0.0f64).unwrap();
+    let calls = fs::read_to_string(bus.path("calls")).unwrap();
+    assert!(
+        calls
+            .lines()
+            .any(|c| c == "set-sink-volume @DEFAULT_SINK@ 80% 80%"),
+        "{calls}"
+    );
+}
+
+#[test]
+fn an_output_that_is_not_two_channels_has_no_balance() {
+    let bus = Bus::new();
+    let proxy = bus.proxy();
+    for (text, expected) in [
+        ("Volume: mono: 65536 / 100% / 0.00 dB", "NotSupported"),
+        (
+            "Volume: a: 1 / 10% / 0 dB, b: 1 / 20% / 0 dB, c: 1 / 30% / 0 dB",
+            "NotSupported",
+        ),
+        ("", "Failed"),
+        ("Volume: nothing", "Failed"),
+    ] {
+        bus.prints(&[("get-volume", "Volume: 0.5"), ("get-sink-volume", text)]);
+        refused(proxy.call::<_, _, f64>("GetBalance", &()), expected);
+    }
+}
+
+#[test]
+fn a_backend_that_fails_is_reported_by_how_it_failed() {
+    let bus = Bus::new();
+    let proxy = bus.proxy();
+    for (name, behaviour, message) in [
+        (
+            "exit",
+            "*\tstderr\t  no default node  \\n\n*\texit\t3\n",
+            "wpctl exited with 3: no default node",
+        ),
+        ("signal", "*\tabort\n", "wpctl was killed: "),
+        (
+            "timeout",
+            "*\thang\n",
+            "wpctl was killed: no answer within 1000 ms",
+        ),
+    ] {
+        fs::write(bus.path("behaviour"), behaviour).unwrap();
+        let started = std::time::Instant::now();
+        let error = proxy
+            .call::<_, _, (f64, bool)>("GetVolume", &"input")
+            .unwrap_err();
+        assert!(started.elapsed() < Duration::from_secs(4), "{name}");
+        let zbus::Error::MethodError(kind, text, _) = &error else {
+            panic!("{name}: {error}")
+        };
+        assert_eq!(kind.as_str(), "org.freedesktop.DBus.Error.Failed", "{name}");
+        assert_eq!(text.as_deref(), Some(message), "{name}");
+    }
+    // A program that cannot start.
+    fs::remove_file(bus.path("wpctl")).unwrap();
+    let error = proxy
+        .call::<_, _, (f64, bool)>("GetVolume", &"input")
+        .unwrap_err();
+    assert!(
+        matches!(&error, zbus::Error::MethodError(kind, Some(text), _)
+            if kind.as_str() == "org.freedesktop.DBus.Error.Failed" && text.starts_with("cannot run wpctl")),
+        "{error}"
+    );
+}

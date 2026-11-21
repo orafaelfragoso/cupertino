@@ -5,8 +5,8 @@
 //! so that its lowest step is 0 (the position then follows perceived loudness). Without dB information the
 //! mapping is linear in the raw value.
 
-use crate::error::{Error, Result};
-use crate::tlv::{DbCurve, DB_GAIN_MUTE};
+use super::error::{Error, Result};
+use super::tlv::{DbCurve, DB_GAIN_MUTE};
 
 /// Widest range, in 1/100 dB, that maps linearly in dB (`MAX_LINEAR_DB_SCALE` is 24 dB).
 const LINEAR_DB_LIMIT: i32 = 24 * 100;
@@ -35,16 +35,6 @@ impl VolumeRange {
             raw_max,
             db,
         })
-    }
-
-    /// The lowest raw value.
-    pub fn raw_min(&self) -> i64 {
-        self.raw_min
-    }
-
-    /// The highest raw value.
-    pub fn raw_max(&self) -> i64 {
-        self.raw_max
     }
 
     /// Gain of `raw` in 1/100 dB; `None` without dB information.
@@ -124,23 +114,6 @@ impl VolumeRange {
             low - 1
         } else {
             low
-        }
-    }
-
-    /// The raw value one press of size `step` (a level difference) from `raw` in `direction` (the sign counts). A
-    /// press always moves at least one raw step unless the end is reached; `direction` 0 stays.
-    pub fn step(&self, raw: i64, direction: i32, step: f64) -> i64 {
-        let current = raw.clamp(self.raw_min, self.raw_max);
-        match direction.signum() {
-            1 => self
-                .raw(self.level(current) + step)
-                .max(current + 1)
-                .min(self.raw_max),
-            -1 => self
-                .raw(self.level(current) - step)
-                .min(current - 1)
-                .max(self.raw_min),
-            _ => current,
         }
     }
 }

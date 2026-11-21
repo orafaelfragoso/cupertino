@@ -4,7 +4,9 @@
 //! - the authentication prompt of polkit's agent ([`polkit`]): polkitd asks it to authenticate someone for another
 //!   program's action;
 //! - the keyring's prompt ([`keyring`]): the keyring daemon asks it for a password or a confirmation, and the offer
-//!   to move a default keyring that login does not unlock into the login keyring asks through it.
+//!   to move a default keyring that login does not unlock into the login keyring asks through it;
+//! - the portal's consent questions ([`consent`]): whether an application may take a screenshot, and whether it may
+//!   use keyboard shortcuts while another application has the keyboard, asked over `org.cupertino.Prompts1`.
 //!
 //! The prompts are drawn through CupertinoKit ([`view`]) on the role the server gives the program: every surface of
 //! it is a prompt surface, above every other one, left out of captures and out of desktop control. A prompt shows
@@ -13,6 +15,7 @@
 //! bus call and every read of the helper as a future on Kit's loop, and the work that blocks on Kit's I/O pool.
 #![forbid(unsafe_code)]
 
+pub mod consent;
 pub mod keyring;
 pub mod logind;
 pub mod polkit;

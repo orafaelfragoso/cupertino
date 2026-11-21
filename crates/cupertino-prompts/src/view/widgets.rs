@@ -1,5 +1,6 @@
 //! The widgets the alerts are made of besides the standard controls: the alert's body on glass, the frame that takes
-//! Escape and names the alert to assistive technology, and the pacer that asks for frames while the scrim fades in.
+//! Escape and names the alert to assistive technology, the holder of a consent alert's deny button, and the pacer that
+//! asks for frames while the scrim fades in.
 
 use cupertino_kit::core::{
     AccessibleStates, Change, Element, Event, EventCx, Glass, MeasureCx, PaintCx, Phase,
@@ -17,6 +18,15 @@ use std::time::Instant;
 
 /// Escape: the alert closes without an answer.
 pub const ESCAPE: Keysym = Keysym(0xff1b);
+/// The keys that press a focused button: Return, Enter on the keypad and Space.
+const RETURN: Keysym = Keysym(0xff0d);
+const KP_ENTER: Keysym = Keysym(0xff8d);
+const SPACE: Keysym = Keysym(0x20);
+
+/// Whether `keysym` presses a focused button.
+fn presses(keysym: Keysym) -> bool {
+    matches!(keysym, RETURN | KP_ENTER | SPACE)
+}
 
 fn no_measure() -> Measured {
     Measured {
@@ -250,6 +260,58 @@ impl<M: 'static> Widget<M> for Sized<M> {
         if self.initial {
             cx.initial_focus();
         }
+    }
+}
+
+/// Holds a consent alert's deny button: the alert's keyboard focus starts on it, so the answer a stray key reaches is the
+/// one that denies. Until the alert is `armed` the keys that press a button (Return, Enter and Space) are taken before
+/// they reach it, so a key typed for the application does nothing at all; Tab and Escape still work, and a click on the
+/// button denies at once.
+pub struct Deny<M> {
+    pub armed: bool,
+    pub children: Vec<Element<M>>,
+}
+
+impl<M: 'static> Widget<M> for Deny<M> {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec::new(ContainerKind::Overlay)
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        std::mem::take(&mut self.children)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self.armed == old.armed {
+            Change::None
+        } else {
+            Change::Paint
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        no_measure()
+    }
+
+    fn event(&self, _: &mut (), event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
+        match event {
+            Event::Key(key, _)
+                if !self.armed && cx.phase() == Phase::Capture && presses(key.keysym) =>
+            {
+                Propagation::Stop
+            }
+            _ => Propagation::Continue,
+        }
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        cx.initial_focus();
     }
 }
 

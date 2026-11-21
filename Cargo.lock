@@ -1462,6 +1462,7 @@ dependencies = [
  "crypto-bigint",
  "cupertino-assets",
  "cupertino-diagnostic-events",
+ "cupertino-icons",
  "cupertino-kit",
  "cupertino-kit-shell",
  "cupertino-login-ipc",

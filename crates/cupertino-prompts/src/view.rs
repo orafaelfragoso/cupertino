@@ -2,6 +2,7 @@
 //! active output over a scrim on every output: the lock symbol, the question in bold, what it is about, the fields and
 //! two capsule buttons side by side. Nothing a person types reaches a window's title or any text the alert shows.
 
+pub mod consent;
 pub mod widgets;
 
 use std::time::Instant;
@@ -199,7 +200,7 @@ fn column(spacing: f64, children: Vec<Element<Message>>) -> Element<Message> {
     )
 }
 
-/// The symbol, the bold heading and the text under it, inset from the controls.
+/// The lock symbol, the bold heading and the text under it, inset from the controls.
 fn head(heading: &str, body: &str) -> Element<Message> {
     let symbol = Element::new(Icon {
         name: SYMBOL_NAME.to_owned(),
@@ -208,6 +209,11 @@ fn head(heading: &str, body: &str) -> Element<Message> {
         label: None,
         tint: Some(ColorRole::SecondaryText),
     });
+    head_with(symbol, heading, body)
+}
+
+/// `symbol` at the text's leading edge, the bold heading and the text under it, inset from the controls.
+fn head_with(symbol: Element<Message>, heading: &str, body: &str) -> Element<Message> {
     let mut lines = vec![text(heading, TEXT_SIZE, FontWeight::BOLD, false)];
     if !body.trim().is_empty() {
         lines.push(text(body, TEXT_SIZE, FontWeight::REGULAR, false));

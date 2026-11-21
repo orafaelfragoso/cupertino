@@ -1,28 +1,23 @@
-//! The file-chooser, app-chooser, screenshot and keyboard-shortcut windows: one for each open request, drawn with CupertinoKit. The D-Bus side
+//! The file-chooser and app-chooser windows: one for each open request, drawn with CupertinoKit. The D-Bus side
 //! hands its events to the [`inbox`]; [`Dialogs`] is resident and keeps running while no dialog is open.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
-use std::time::Instant;
 
 use cupertino_assets::Assets;
 use cupertino_icons::ThemeIcons;
 use cupertino_kit::controls::{
-    CheckBox, Image, ImageFit, ImageSource, ListView, ScrollView, Scroller, SegmentedControl,
-    Selection, SplitLayout, SplitView, TextRole, WindowDragArea, PANEL_WINDOW_BACKGROUND,
-    SIDEBAR_TOP,
+    CheckBox, Image, ImageFit, ImageSource, ListView, SegmentedControl, Selection, SplitLayout,
+    SplitView, TextRole, WindowDragArea, PANEL_WINDOW_BACKGROUND, SIDEBAR_TOP,
 };
-use cupertino_kit::core::{
-    next_resource_id, Change, Checked, CommandRegistry, Event as CoreEvent, EventCx, Key,
-    MeasureCx, PaintCx, Phase, Propagation, SemanticsCx, Shortcut, Widget,
-};
+use cupertino_kit::core::{next_resource_id, Checked, CommandRegistry, Key, Shortcut};
 use cupertino_kit::file_icons::FileIcons;
 use cupertino_kit::filepicker::{Listing, Request};
 use cupertino_kit::files::places::{chooser_places, Place};
 use cupertino_kit::geometry::{Insets, Point, Size};
-use cupertino_kit::layout::{Constraints, ContainerKind, LayoutSpec, Measured, ScrollState};
+use cupertino_kit::layout::ScrollState;
 use cupertino_kit::platform::{DecorationMode, ForeignParent, Keysym, Mods};
 use cupertino_kit::prelude::*;
 use cupertino_kit::render::{ImageResource, PixelFormat};
@@ -31,10 +26,7 @@ use zbus::zvariant::OwnedObjectPath;
 
 use crate::app_chooser;
 use crate::chooser::{Accept, Chooser};
-use crate::consent::Arming;
 use crate::file_chooser::{self, Answer, Kind, Reply};
-use crate::global_shortcuts::{self, Refusal};
-use crate::screenshot;
 
 const ROW_HEIGHT: f64 = 24.0;
 const ROW_ICON: f64 = 16.0;
@@ -66,23 +58,10 @@ fn top_inset(d: &Dialog) -> f64 {
 /// The prompt windows: the row of the window's buttons ([`SIDEBAR_TOP`]) over their content.
 const PICKER_SIZE: Size = Size::new(480.0, 360.0 + SIDEBAR_TOP);
 const PICKER_MIN_SIZE: Size = Size::new(360.0, 240.0 + SIDEBAR_TOP);
-const CONSENT_SIZE: Size = Size::new(420.0, 180.0 + SIDEBAR_TOP);
-/// The shortcut window grows by one line of this height for each line of the first [`SHORTCUT_ROWS`] shortcuts it
-/// lists (two for a row that wraps); the rest scroll in the list.
-const SHORTCUT_ROW: f64 = 20.0;
-const SHORTCUT_ROWS: usize = 8;
-/// Characters of a shortcut's description its row shows before it ends it with an ellipsis: two lines of the window.
-const DESCRIPTION_CHARS: usize = 80;
-/// Characters of a shortcut's row that fit on one line of the window, an estimate the window's height is grown by.
-const SHORTCUT_LINE_CHARS: usize = 56;
 /// A prompt window's title bar is only its control buttons, over the top of its glass panel.
 const PROMPT_DECORATIONS: DecorationMode = DecorationMode::Unified;
-/// Side of the requesting app's icon in the screenshot and keyboard-shortcut windows.
-const APP_ICON: f64 = 32.0;
 const RETURN: Keysym = Keysym(0xff0d);
 const ESCAPE: Keysym = Keysym(0xff1b);
-const KP_ENTER: Keysym = Keysym(0xff8d);
-const SPACE: Keysym = Keysym(0x20);
 /// Characters of a file name or URI the app chooser's prompt shows before it ends it with an ellipsis.
 const TARGET_CHARS: usize = 80;
 
@@ -90,14 +69,6 @@ const TARGET_CHARS: usize = 80;
 pub enum Event {
     FileChooser(file_chooser::Event),
     AppChooser(app_chooser::Event),
-    Screenshot(screenshot::Event),
-    GlobalShortcuts(global_shortcuts::Event),
-}
-
-impl From<global_shortcuts::Event> for Event {
-    fn from(event: global_shortcuts::Event) -> Self {
-        Event::GlobalShortcuts(event)
-    }
 }
 
 impl From<file_chooser::Event> for Event {
@@ -109,12 +80,6 @@ impl From<file_chooser::Event> for Event {
 impl From<app_chooser::Event> for Event {
     fn from(event: app_chooser::Event) -> Self {
         Event::AppChooser(event)
-    }
-}
-
-impl From<screenshot::Event> for Event {
-    fn from(event: screenshot::Event) -> Self {
-        Event::Screenshot(event)
     }
 }
 
@@ -152,29 +117,6 @@ impl Inbox {
     }
 }
 
-/// Start the arming delay of consent window `id`, whose window is `window`, once the window has presented its first
-/// frame: a window the server is slow to show takes no answer before the person could see it for the whole delay.
-fn arm_when_shown(id: u64, window: WindowKey) -> Command<Message> {
-    Command::OnPresented {
-        window,
-        message: Message::Shown(id),
-    }
-}
-
-/// Arm consent window `id` once its arming delay has passed, on a thread of its own.
-fn arm(id: u64, arming: Arming) -> Command<Message> {
-    let (sender, armed) = async_channel::bounded(1);
-    let wait = arming.remaining(Instant::now());
-    std::thread::spawn(move || {
-        std::thread::sleep(wait);
-        let _ = sender.send_blocking(());
-    });
-    Command::Perform(Box::pin(async move {
-        let _ = armed.recv().await;
-        Message::Armed(id)
-    }))
-}
-
 fn woken() -> Command<Message> {
     Command::Perform(Box::pin(async {
         let _ = inbox().wake.1.recv().await;
@@ -207,8 +149,6 @@ pub struct Model {
     app_icons: AppIcons,
     /// The icons of the file chooser's rows, by the items' types.
     file_icons: RefCell<FileIcons>,
-    consents: Vec<Consent>,
-    shortcut_consents: Vec<ShortcutConsent>,
 }
 
 /// The apps' own icons by the name of their `Icon=`, each name loaded once.
@@ -272,37 +212,6 @@ struct Dialog {
     replace: Option<PathBuf>,
 }
 
-/// The question whether an app may take a screenshot.
-struct Consent {
-    id: u64,
-    handle: OwnedObjectPath,
-    reply: screenshot::Reply,
-    ask: screenshot::Ask,
-    /// The arming delay has passed: Take Screenshot can be pressed.
-    armed: bool,
-    /// From the window's first presented frame; `None` before it.
-    arming: Option<Arming>,
-}
-
-/// The question whether an app may use keyboard shortcuts while another app has the keyboard.
-struct ShortcutConsent {
-    id: u64,
-    handle: OwnedObjectPath,
-    reply: global_shortcuts::Reply,
-    ask: global_shortcuts::Ask,
-    /// The list of the shortcuts.
-    scroll: ScrollState,
-    /// The arming delay has passed: Allow can be pressed.
-    armed: bool,
-    arming: Option<Arming>,
-}
-
-/// Whether a window armed by its message, whose delay started at `arming`, takes an answer now: the delay has passed
-/// by the clock too.
-fn ready(armed: bool, arming: Option<Arming>) -> bool {
-    armed && arming.is_some_and(|a| a.armed(Instant::now()))
-}
-
 /// The chooser of the app that opens a link or a file.
 struct AppPicker {
     id: u64,
@@ -353,17 +262,6 @@ pub enum Message {
     OpenWith(u64),
     /// The activation token the server made for app chooser `0`'s choice `1`.
     Opened(u64, String, Option<String>),
-    TakeScreenshot(u64),
-    /// Allow shortcut window `0`'s shortcuts, remembered for its app.
-    AllowShortcuts(u64),
-    /// Don't Allow them, remembered for its app.
-    DenyShortcuts(u64),
-    /// The list of shortcut window `0` moved.
-    ShortcutsScroll(u64, ScrollState),
-    /// Consent window `0` has presented its first frame: its arming delay starts.
-    Shown(u64),
-    /// The arming delay of consent window `0` has passed.
-    Armed(u64),
 }
 
 const NO_SCROLL: ScrollState = ScrollState {
@@ -461,41 +359,6 @@ impl Model {
                 Event::AppChooser(app_chooser::Event::Close { handle }) => {
                     self.apps.retain(|a| a.handle != handle)
                 }
-                Event::Screenshot(screenshot::Event::Ask { handle, ask, reply }) => {
-                    let id = self.next;
-                    self.next += 1;
-                    self.app_icons.load_names(ask.app_icon.as_deref());
-                    commands.push(arm_when_shown(id, consent_window_key(id)));
-                    self.consents.push(Consent {
-                        id,
-                        handle,
-                        reply,
-                        ask: *ask,
-                        armed: false,
-                        arming: None,
-                    });
-                }
-                Event::Screenshot(screenshot::Event::Close { handle }) => {
-                    self.consents.retain(|c| c.handle != handle)
-                }
-                Event::GlobalShortcuts(global_shortcuts::Event::Ask { handle, ask, reply }) => {
-                    let id = self.next;
-                    self.next += 1;
-                    self.app_icons.load_names(ask.app_icon.as_deref());
-                    commands.push(arm_when_shown(id, shortcuts_window_key(id)));
-                    self.shortcut_consents.push(ShortcutConsent {
-                        id,
-                        handle,
-                        reply,
-                        ask: *ask,
-                        scroll: NO_SCROLL,
-                        armed: false,
-                        arming: None,
-                    });
-                }
-                Event::GlobalShortcuts(global_shortcuts::Event::Close { handle }) => {
-                    self.shortcut_consents.retain(|c| c.handle != handle)
-                }
             }
         }
         commands
@@ -512,20 +375,6 @@ impl Model {
     fn finish_app(&mut self, id: u64, answer: app_chooser::Answer) {
         if let Some(i) = self.apps.iter().position(|a| a.id == id) {
             self.apps.remove(i).reply.send(answer);
-        }
-    }
-
-    /// End consent window `id` with `answer`.
-    fn finish_consent(&mut self, id: u64, answer: screenshot::Answer) {
-        if let Some(i) = self.consents.iter().position(|c| c.id == id) {
-            self.consents.remove(i).reply.send(answer);
-        }
-    }
-
-    /// End shortcut window `id` with `answer`.
-    fn finish_shortcuts(&mut self, id: u64, answer: global_shortcuts::Answer) {
-        if let Some(i) = self.shortcut_consents.iter().position(|c| c.id == id) {
-            self.shortcut_consents.remove(i).reply.send(answer);
         }
     }
 }
@@ -567,8 +416,6 @@ impl Application for Dialogs {
                 loaded: HashMap::new(),
             },
             file_icons: RefCell::new(FileIcons::discover(types(), HashMap::new())),
-            consents: Vec::new(),
-            shortcut_consents: Vec::new(),
         };
         let mut commands = model.take(inbox().take());
         commands.push(woken());
@@ -690,52 +537,6 @@ impl Application for Dialogs {
             Message::Cancel(id) => {
                 model.finish(id, Answer::Cancelled);
                 model.finish_app(id, app_chooser::Answer::Cancelled);
-                model.finish_consent(id, screenshot::Answer::Cancelled);
-                model.finish_shortcuts(id, global_shortcuts::Answer::Dismissed);
-            }
-            Message::DenyShortcuts(id) => {
-                model.finish_shortcuts(id, global_shortcuts::Answer::Denied)
-            }
-            Message::ShortcutsScroll(id, scroll) => {
-                if let Some(c) = model.shortcut_consents.iter_mut().find(|c| c.id == id) {
-                    c.scroll = scroll;
-                }
-            }
-            Message::AllowShortcuts(id) => {
-                if model
-                    .shortcut_consents
-                    .iter()
-                    .any(|c| c.id == id && ready(c.armed, c.arming))
-                {
-                    model.finish_shortcuts(id, global_shortcuts::Answer::Allowed)
-                }
-            }
-            Message::Shown(id) => {
-                let arming = Arming::new(Instant::now());
-                let shown = model
-                    .consents
-                    .iter_mut()
-                    .find(|c| c.id == id && c.arming.is_none())
-                    .map(|c| c.arming = Some(arming))
-                    .or_else(|| {
-                        model
-                            .shortcut_consents
-                            .iter_mut()
-                            .find(|c| c.id == id && c.arming.is_none())
-                            .map(|c| c.arming = Some(arming))
-                    })
-                    .is_some();
-                if shown {
-                    commands.push(arm(id, arming));
-                }
-            }
-            Message::Armed(id) => {
-                if let Some(c) = model.consents.iter_mut().find(|c| c.id == id) {
-                    c.armed = true;
-                }
-                if let Some(c) = model.shortcut_consents.iter_mut().find(|c| c.id == id) {
-                    c.armed = true;
-                }
             }
             Message::AppScroll(id, scroll) => {
                 if let Some(a) = model.app_picker(id) {
@@ -781,15 +582,6 @@ impl Application for Dialogs {
                     model.finish_app(id, app_chooser::Answer::Chosen { id: choice, token });
                 }
             }
-            Message::TakeScreenshot(id) => {
-                if model
-                    .consents
-                    .iter()
-                    .any(|c| c.id == id && ready(c.armed, c.arming))
-                {
-                    model.finish_consent(id, screenshot::Answer::Granted)
-                }
-            }
         }
         commands
     }
@@ -800,18 +592,6 @@ impl Application for Dialogs {
             .iter()
             .map(|d| window(d, &model.places, &model.file_icons))
             .chain(model.apps.iter().map(|a| app_window(a, &model.app_icons)))
-            .chain(
-                model
-                    .consents
-                    .iter()
-                    .map(|c| consent_window(c, &model.app_icons)),
-            )
-            .chain(
-                model
-                    .shortcut_consents
-                    .iter()
-                    .map(|c| shortcuts_window(c, &model.app_icons)),
-            )
             .collect()
     }
 }
@@ -876,79 +656,6 @@ fn button(label: String, role: ButtonRole, enabled: bool, on_press: Message) -> 
         busy: false,
         on_press: Some(on_press),
     })
-}
-
-/// The Cancel button of a consent window: the window's keyboard focus starts on it, so the answer a stray key reaches
-/// is the one that denies. Until the window is `armed` the keys that press a button (Return, Enter and Space) are taken
-/// before they reach it, so a key typed for the app does nothing at all; Tab and Escape still work, and a click on
-/// Cancel denies at once.
-fn deny_button(id: u64, armed: bool) -> Element<Message> {
-    labelled_deny_button("Cancel", Message::Cancel(id), armed)
-}
-
-/// [`deny_button`] with its own label and message.
-fn labelled_deny_button(label: &str, on_press: Message, armed: bool) -> Element<Message> {
-    Element::new(Deny {
-        armed,
-        children: vec![button(label.to_owned(), ButtonRole::Normal, true, on_press).key("cancel")],
-    })
-}
-
-/// Holds a consent window's Cancel button; see [`deny_button`].
-struct Deny {
-    armed: bool,
-    children: Vec<Element<Message>>,
-}
-
-/// The keys that press a focused button.
-fn presses(keysym: Keysym) -> bool {
-    matches!(keysym, RETURN | KP_ENTER | SPACE)
-}
-
-impl Widget<Message> for Deny {
-    type State = ();
-
-    fn layout(&self) -> LayoutSpec {
-        LayoutSpec::new(ContainerKind::Overlay)
-    }
-
-    fn take_children(&mut self) -> Vec<Element<Message>> {
-        std::mem::take(&mut self.children)
-    }
-
-    fn state(&self) {}
-
-    fn update(&self, old: &Self, _: &mut ()) -> Change {
-        if self.armed == old.armed {
-            Change::None
-        } else {
-            Change::Paint
-        }
-    }
-
-    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
-        Measured {
-            size: Size::ZERO,
-            baseline: None,
-        }
-    }
-
-    fn event(&self, _: &mut (), event: &CoreEvent, cx: &mut EventCx<'_, Message>) -> Propagation {
-        match event {
-            CoreEvent::Key(key, _)
-                if !self.armed && cx.phase() == Phase::Capture && presses(key.keysym) =>
-            {
-                Propagation::Stop
-            }
-            _ => Propagation::Continue,
-        }
-    }
-
-    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
-
-    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
-        cx.initial_focus();
-    }
 }
 
 /// A choice among several, in the bottom bar.
@@ -1336,55 +1043,6 @@ fn foreign_parent(parent_window: &str, modal: bool) -> Option<ForeignParent> {
     })
 }
 
-/// The requesting app's icon at [`APP_ICON`], else the applications symbol.
-fn app_icon(icon: Option<&str>, app_icons: &AppIcons) -> Element<Message> {
-    match icon.and_then(|name| app_icons.named(name)) {
-        Some(sources) => Element::new(Image {
-            sources,
-            size: Size::new(APP_ICON, APP_ICON),
-            fit: ImageFit::Contain,
-            radius: 0.0,
-            label: None,
-        }),
-        None => Element::new(Icon {
-            name: "symbol.applications".to_owned(),
-            size: APP_ICON,
-            direction: Default::default(),
-            label: None,
-            tint: None,
-        }),
-    }
-    .key("app-icon")
-}
-
-/// A window's header: the requesting app's icon above `prompt`, which wraps inside the window.
-fn app_header(icon: Option<&str>, app_icons: &AppIcons, prompt: String) -> Element<Message> {
-    Element::new(Stack {
-        axis: Axis::Vertical,
-        padding: BAR_INSETS,
-        spacing: GAP,
-        align: Align::Stretch,
-        children: vec![
-            // at the leading edge, not stretched across the header
-            Element::new(Stack {
-                axis: Axis::Horizontal,
-                padding: Insets::ZERO,
-                spacing: 0.0,
-                align: Align::Center,
-                children: vec![app_icon(icon, app_icons), Element::new(Spacer { min: 0.0 })],
-            }),
-            Element::new(Text {
-                content: AttributedText::plain(prompt, TextStyle::new(13.0)),
-                role: TextRole::Body,
-                wrap: true,
-                secondary: false,
-                selected: false,
-            })
-            .key("prompt"),
-        ],
-    })
-}
-
 /// `target` as the app chooser's prompt names it: at most [`TARGET_CHARS`] characters, the rest left out.
 fn shortened(target: &str) -> String {
     match target.char_indices().nth(TARGET_CHARS) {
@@ -1395,14 +1053,6 @@ fn shortened(target: &str) -> String {
 
 fn app_window_key(id: u64) -> WindowKey {
     WindowKey(Key::Str(format!("apps-{id}").into()))
-}
-
-fn consent_window_key(id: u64) -> WindowKey {
-    WindowKey(Key::Str(format!("consent-{id}").into()))
-}
-
-fn shortcuts_window_key(id: u64) -> WindowKey {
-    WindowKey(Key::Str(format!("shortcuts-{id}").into()))
 }
 
 fn app_window(a: &AppPicker, app_icons: &AppIcons) -> Window<Message> {
@@ -1524,220 +1174,4 @@ fn app_window(a: &AppPicker, app_icons: &AppIcons) -> Window<Message> {
             bar,
         ]),
     }
-}
-
-/// What the consent window asks: the app by its name, else an unnamed app.
-fn consent_prompt(ask: &screenshot::Ask) -> String {
-    match &ask.app_name {
-        Some(name) => format!("“{name}” wants to take a screenshot of your screen."),
-        None => "An application wants to take a screenshot of your screen.".to_owned(),
-    }
-}
-
-fn consent_window(c: &Consent, app_icons: &AppIcons) -> Window<Message> {
-    let id = c.id;
-    let prompt = app_header(c.ask.app_icon.as_deref(), app_icons, consent_prompt(&c.ask));
-    let bar = bar_row(
-        Vec::new(),
-        vec![
-            deny_button(id, c.armed),
-            button(
-                "Take Screenshot".to_owned(),
-                ButtonRole::Normal,
-                c.armed,
-                Message::TakeScreenshot(id),
-            )
-            .key("take"),
-        ],
-    );
-    Window {
-        key: consent_window_key(id),
-        spec: WindowSpec {
-            title: "Screenshot".to_owned(),
-            app_id: crate::PROMPT_APP_ID.into(),
-            size: CONSENT_SIZE,
-            min_size: Some(CONSENT_SIZE),
-            max_size: None,
-            decorations: PROMPT_DECORATIONS,
-            foreign_parent: foreign_parent(&c.ask.parent_window, false),
-            input_region: None,
-        },
-        // Escape cancels wherever the focus is; Return has no shortcut and presses only the focused button, which is
-        // Cancel when the window opens, so a key meant for the app never consents
-        shortcuts: CommandRegistry::new().with(
-            Shortcut {
-                mods: Mods::NONE,
-                keysym: ESCAPE,
-            },
-            Message::Cancel(id),
-        ),
-        on_close: Some(Message::Cancel(id)),
-        background: PANEL_WINDOW_BACKGROUND,
-        popup: None,
-        menus: None,
-        content: prompt_content(vec![
-            Element::new(Spacer { min: 0.0 }),
-            prompt,
-            Element::new(Spacer { min: 0.0 }),
-            Element::new(Separator {
-                axis: Axis::Horizontal,
-            }),
-            bar,
-        ]),
-    }
-}
-
-/// What the shortcut window asks: the app by its name, else an unnamed app.
-fn shortcuts_prompt(ask: &global_shortcuts::Ask) -> String {
-    let app = match &ask.app_name {
-        Some(name) => format!("“{name}”"),
-        None => "An application".to_owned(),
-    };
-    if ask.allowed > 0 {
-        format!("{app} wants to use more keyboard shortcuts, also while you work in other apps.")
-    } else {
-        format!("{app} wants to use these keyboard shortcuts, also while you work in other apps.")
-    }
-}
-
-/// `text` as a shortcut's row shows it: at most [`DESCRIPTION_CHARS`] characters, the rest left out.
-fn description(text: &str) -> String {
-    match text.char_indices().nth(DESCRIPTION_CHARS) {
-        Some((end, _)) => format!("{}…", &text[..end]),
-        None => text.to_owned(),
-    }
-}
-
-/// One row of the shortcut window: the keys, what the shortcut does, and why it gets no key when it does not.
-fn shortcut_row(offered: &global_shortcuts::Offered, holders: &HashMap<String, String>) -> String {
-    let keys = offered
-        .trigger
-        .map_or_else(|| "No key".to_owned(), |t| t.describe());
-    let what = description(if offered.description.is_empty() {
-        &offered.id
-    } else {
-        &offered.description
-    });
-    let why = match &offered.refusal {
-        None => return format!("{keys}  {what}"),
-        Some(Refusal::NoKey) => "it names no key".to_owned(),
-        Some(Refusal::Modifier) => "its key is a modifier key".to_owned(),
-        Some(Refusal::Typing) => "it needs ⌃, ⌥ or ⌘".to_owned(),
-        Some(Refusal::System) => "the system uses it".to_owned(),
-        Some(Refusal::Taken(app)) => {
-            let name = holders.get(app).map_or(app.as_str(), String::as_str);
-            format!("“{name}” uses it")
-        }
-        Some(Refusal::Twice) => "another shortcut here uses it".to_owned(),
-    };
-    format!("{keys}  {what} (not available: {why})")
-}
-
-fn shortcuts_window(c: &ShortcutConsent, app_icons: &AppIcons) -> Window<Message> {
-    let id = c.id;
-    let prompt = app_header(
-        c.ask.app_icon.as_deref(),
-        app_icons,
-        shortcuts_prompt(&c.ask),
-    );
-    let texts: Vec<String> = c
-        .ask
-        .shortcuts
-        .iter()
-        .map(|offered| plain_row(&shortcut_row(offered, &c.ask.holders)))
-        .collect();
-    // the window grows by the lines of its first rows, a row that wraps by two
-    let lines: usize = texts
-        .iter()
-        .take(SHORTCUT_ROWS)
-        .map(|t| t.chars().count().div_ceil(SHORTCUT_LINE_CHARS).clamp(1, 2))
-        .sum();
-    let rows: Vec<Element<Message>> = texts
-        .into_iter()
-        .zip(&c.ask.shortcuts)
-        .enumerate()
-        .map(|(i, (text, offered))| {
-            Element::new(Text {
-                content: AttributedText::plain(text, TextStyle::new(13.0)),
-                role: TextRole::Body,
-                wrap: true,
-                secondary: offered.refusal.is_some(),
-                selected: false,
-            })
-            .key(Key::Str(format!("shortcut-{i}").into()))
-        })
-        .collect();
-    // every shortcut can be read before Allow: past the rows the window grows by, the list scrolls
-    let list = Element::from(ScrollView {
-        content: Element::new(Stack {
-            axis: Axis::Vertical,
-            padding: BAR_INSETS,
-            spacing: 4.0,
-            align: Align::Stretch,
-            children: rows,
-        }),
-        state: c.scroll,
-        horizontal: false,
-        vertical: true,
-        scroller: Scroller::Overlay,
-        on_scroll: Box::new(move |s| Message::ShortcutsScroll(id, s)),
-    })
-    .key("shortcuts")
-    .fill();
-    let bar = bar_row(
-        Vec::new(),
-        vec![
-            labelled_deny_button("Don’t Allow", Message::DenyShortcuts(id), c.armed),
-            button(
-                "Allow".to_owned(),
-                ButtonRole::Normal,
-                c.armed,
-                Message::AllowShortcuts(id),
-            )
-            .key("allow"),
-        ],
-    );
-    let size = Size::new(
-        CONSENT_SIZE.width,
-        CONSENT_SIZE.height + SHORTCUT_ROW * lines as f64,
-    );
-    Window {
-        key: shortcuts_window_key(id),
-        spec: WindowSpec {
-            title: "Keyboard Shortcuts".to_owned(),
-            app_id: crate::PROMPT_APP_ID.into(),
-            size,
-            min_size: Some(size),
-            max_size: None,
-            decorations: PROMPT_DECORATIONS,
-            foreign_parent: foreign_parent(&c.ask.parent_window, false),
-            input_region: None,
-        },
-        // Escape and closing the window answer nothing that is remembered; Return presses only the focused button,
-        // Don't Allow when the window opens
-        shortcuts: CommandRegistry::new().with(
-            Shortcut {
-                mods: Mods::NONE,
-                keysym: ESCAPE,
-            },
-            Message::Cancel(id),
-        ),
-        on_close: Some(Message::Cancel(id)),
-        background: PANEL_WINDOW_BACKGROUND,
-        popup: None,
-        menus: None,
-        content: prompt_content(vec![
-            prompt,
-            list,
-            Element::new(Separator {
-                axis: Axis::Horizontal,
-            }),
-            bar,
-        ]),
-    }
-}
-
-/// A row's text without control or bidirectional-override characters.
-fn plain_row(text: &str) -> String {
-    crate::file_chooser::plain(text)
 }

@@ -1,9 +1,10 @@
 //! The prompts drawn to PNGs for look checks:
 //! `cargo run -p cupertino-prompts --example prompts_capture -- prompts/SURFACE [flags]` (crates/cupertino-kit/README.md).
 //!
-//! Surfaces: `authentication` (`--details shown` opens its details, `--users two` offers a second user) and `keyring`
+//! Surfaces: `authentication` (`--details shown` opens its details, `--users two` offers a second user), `keyring`
 //! (`--kind password`, the default, unlocks a keyring; `new` asks for a new password and its confirmation; `confirm`
-//! asks a question with no field). Each is the alert's surface as the server shows it over the scrim, without the
+//! asks a question with no field), and the portal's consent questions `screenshot` and `shortcuts` (armed, with the
+//! applications symbol for the app's icon). Each is the alert's surface as the server shows it over the scrim, without the
 //! scrim. The fonts, symbols and theme are the system's, as an application's; nothing moves, so a command gives the same
 //! pixels on every run.
 
@@ -13,10 +14,13 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use cupertino_kit::core::{Application, Command, Key, Window, WindowKey};
+use cupertino_kit::geometry::{Point, Size};
+use cupertino_kit::layout::ScrollState;
 use cupertino_kit::platform::{SystemAppearance, Timestamp, WindowId};
 use cupertino_kit::test::capture::{presented, App, Look, Pixmap, Request, State};
 use cupertino_kit::test::{Capabilities, ManualClock, TestDriver, WindowStates};
 use cupertino_kit::theme::ThemeTokens;
+use cupertino_prompts::consent::{self, Question, Row};
 use cupertino_prompts::program::Message;
 use cupertino_prompts::view;
 
@@ -30,6 +34,7 @@ const FRAMES: usize = 16;
 enum Shown {
     Authentication(view::Authentication),
     Keyring(view::Keyring),
+    Consent(view::consent::Consent),
 }
 
 thread_local! {
@@ -60,6 +65,7 @@ impl Application for Alert {
                 .take(1)
                 .collect(),
             Some(Shown::Keyring(prompt)) => vec![view::keyring(key, prompt)],
+            Some(Shown::Consent(prompt)) => vec![view::consent::consent(key, prompt)],
             None => Vec::new(),
         }
     }
@@ -138,6 +144,46 @@ fn keyring(kind: &str) -> Result<view::Keyring, String> {
     })
 }
 
+/// A consent question of an app named `name`, armed.
+fn consent_question(
+    name: &str,
+    question: impl FnOnce(consent::App) -> Question,
+) -> view::consent::Consent {
+    let app = consent::App {
+        id: format!("org.example.{name}"),
+        name: Some(name.to_owned()),
+        icon: None,
+    };
+    view::consent::Consent {
+        question: question(app),
+        icon: None,
+        armed: true,
+        scroll: ScrollState {
+            offset: Point::ZERO,
+            content: Size::ZERO,
+            viewport: Size::ZERO,
+        },
+    }
+}
+
+/// The shortcuts of a call app, as the portal words them: two that get their keys and one that does not.
+fn shortcut_rows() -> Vec<Row> {
+    let row = |keys: &str, description: &str, note: &str| Row {
+        description: description.to_owned(),
+        keys: keys.to_owned(),
+        note: note.to_owned(),
+    };
+    vec![
+        row("\u{2303}\u{2325}T", "Push to talk", ""),
+        row("\u{2303}\u{2318}M", "Mute the microphone", ""),
+        row(
+            "H",
+            "Raise a hand",
+            "not available: it needs \u{2303}, \u{2325} or \u{2318}",
+        ),
+    ]
+}
+
 fn flag<'a>(request: &'a Request<'_>, name: &str) -> Option<&'a str> {
     request
         .state
@@ -153,13 +199,16 @@ impl App for Prompts {
     const STATE_FLAGS: &'static [&'static str] = &["details", "users", "kind"];
 
     fn surfaces(&self) -> Vec<String> {
-        vec!["authentication".to_owned(), "keyring".to_owned()]
+        ["authentication", "keyring", "screenshot", "shortcuts"]
+            .map(str::to_owned)
+            .to_vec()
     }
 
     fn sheet_states(&self, surface: &str) -> Vec<State> {
         let state = |flag: &str, value: &str| vec![(flag.to_owned(), value.to_owned())];
         match surface {
             "authentication" => vec![state("details", "hidden"), state("details", "shown")],
+            "screenshot" | "shortcuts" => vec![Vec::new()],
             _ => ["password", "new", "confirm"]
                 .map(|kind| state("kind", kind))
                 .to_vec(),
@@ -182,6 +231,14 @@ impl App for Prompts {
                 Shown::Authentication(authentication(details, two))
             }
             "keyring" => Shown::Keyring(keyring(flag(request, "kind").unwrap_or("password"))?),
+            "screenshot" => Shown::Consent(consent_question("Notes", |app| Question::Screenshot {
+                app,
+            })),
+            "shortcuts" => Shown::Consent(consent_question("Talk", |app| Question::Shortcuts {
+                app,
+                rows: shortcut_rows(),
+                allowed: 0,
+            })),
             other => return Err(format!("no surface {other}")),
         };
         SHOWN.with(|s| *s.borrow_mut() = Some(shown));

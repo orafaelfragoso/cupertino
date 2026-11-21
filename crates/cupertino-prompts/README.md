@@ -12,6 +12,10 @@ handle untrusted content and from every window title and screen content (D10).
 - **The keyring's prompt.** The keyring daemon (gnome-keyring) asks for passwords through a prompter on the session
   bus: to unlock a keyring, for a new keyring's password and its confirmation, or to confirm an action. This program
   takes the prompter's names, so in a Cupertino session the questions appear in the same alert.
+- **The portal's consent questions.** The portal (`cupertino-portal`) asks over `org.cupertino.Prompts1` whether an
+  application may take a screenshot, and whether it may use keyboard shortcuts while another application has the
+  keyboard. The portal decides what to ask and keeps the answers; this program shows the question and says what the
+  person answered.
 
 ## Running
 
@@ -30,8 +34,9 @@ The process:
 - makes itself undumpable and sets its core size to zero before anything else (`cupertino_kit::process::harden`), after
   installing its diagnostic recorder;
 - runs on CupertinoKit's loop (`cupertino_kit_shell::run`): every bus call, the reads of polkit's helper and the
-  writes to it are futures of that loop; finding and starting the helper, reading the password database and `/proc`,
-  and the keyring offer's files run on Kit's I/O pool. No thread of its own, no polling;
+  writes to it, and the consent alerts' arming delay are futures of that loop; finding and starting the helper, reading
+  the password database and `/proc`, the keyring offer's files and the applications' icons run on Kit's I/O pool. No
+  thread of its own, no polling;
 - keeps no copy of what is typed beyond the field's own buffer and one zeroing copy for the button that submits it:
   answers and the lines written to the helper are zeroed when dropped, an answer prints as `Answer(<secret>)` and a
   field's text as `Secret(..)`, and the process's global allocator (`cupertino_login_ipc::zeroing::ZeroOnFree`)
@@ -123,10 +128,47 @@ whether that keyring's items should move into the login keyring.
 
 To be asked again after Don't Move, delete `~/.local/state/cupertino/keyring-offer` and log in again.
 
+## The portal's consent questions
+
+The program serves `org.cupertino.Prompts1` at `/org/cupertino/Prompts1` on its main session bus connection, which
+owns the name (`consent::service`):
+
+| Method | Answer |
+|---|---|
+| `AskScreenshot(o handle, s app_id, s app_name, s app_icon, s parent_window)` | `u`: 0 granted, 1 cancelled |
+| `AskShortcuts(o handle, s app_id, s app_name, s app_icon, s parent_window, a(sss) shortcuts, u allowed)` | `u`: 0 allowed, 1 denied, 2 dismissed |
+| `Close(o handle)` | the question of the portal's request `handle` goes; its call answers as dismissed |
+
+- **Only the portal asks.** Every method accepts only the program the server started as `portal` (D20:
+  `Session1.ProgramOf`, asked through `cupertino-peer`'s `Lookup` on a session bus connection of its own, which reads
+  nothing else). Any other caller gets `org.freedesktop.DBus.Error.AccessDenied` and nothing is shown. At most 16
+  questions wait at once (`LimitsExceeded` past that), 64 shortcuts a call, and every text is at most 1024 bytes and
+  loses its control and bidirectional-override characters.
+- **The reply waits for the person.** An `Ask` call is answered once the question is: by the person, by `Close`, or
+  because the session went away.
+- **The portal words the rows.** Each shortcut is `(description, keys, note)`, worded by the portal; the note says why
+  the shortcut gets no key (`not available: it needs ⌃, ⌥ or ⌘`) and is empty when it gets its key. A row shows as
+  `⌃⌥T  Push to talk`, with `(note)` after it in secondary text when there is one. `allowed` counts the app's
+  shortcuts allowed before and not listed: with any, the alert asks for "more" shortcuts.
+- **The alerts.** The application's icon (its `Icon=` name, read from the host's icon themes on Kit's I/O pool; the
+  applications symbol until it is read or when there is none) stands where the lock symbol goes, then the question in
+  bold, worded as the portal's windows did: "“<app>” wants to take a screenshot of your screen." with Cancel and Take
+  Screenshot (one above the other, Take Screenshot first, as the label is too long for the pair), and "“<app>” wants
+  to use these keyboard shortcuts, also while you work in other apps." with the shortcut list, which grows by its rows'
+  lines up to ten and scrolls past them, and Don't Allow and Allow. The alerts are named "Screenshot" and "Keyboard
+  Shortcuts" to assistive technology. `app_name` empty shows "An application"; `parent_window` is read and bounded,
+  but an alert on the prompt layer has no parent.
+- **Arming.** The keyboard focus starts on the deny button, so the answer a stray key reaches is the one that denies.
+  The allow button takes a press only 500 ms (`consent::ARMING`) after the alert presented its first frame, and until
+  then Return, Enter and Space press no button, the deny button included: neither a key nor a click meant for the
+  application can consent. Once armed, Tab to the allow button and Return or Space grants. Escape, the deny button and
+  the server closing the alert deny at once, armed or not: Escape is cancelled for a screenshot and dismissed for
+  shortcuts, which the portal does not remember.
+
 ## The alert
 
-One prompt is on screen at a time: the one shown first stays until it ends, and an authentication comes before a
-keyring question that waits. Each output gets a scrim on the overlay layer (`authentication-scrim`, fading in over
+One prompt is on screen at a time: the one shown first stays until it ends, an authentication comes before a keyring
+question that waits, and the keyring before the consent questions, which come in the order they were asked. Each output gets a scrim on the overlay layer (`authentication-scrim`, fading in over
 0.2 s along `Timing::AUTHENTICATION_SCRIM_FADE_IN`, at once with Reduce Motion), and the alert sits above them on the
 active output, where it takes the keyboard exclusively. A click on the scrim does nothing. The alert is 260 points
 wide with 26-point corners on the regular glass, the popover surface's fill where glass is off, and an outline with
@@ -134,7 +176,8 @@ Increase Contrast; the 64-point lock symbol, 13-point text, 28-point capsule but
 
 While the session is locked or isn't logind's active one nothing is shown: an authentication on screen is cancelled
 and waiting ones stay until the session is back; a keyring question is answered `no`, the active caller hears
-`PromptDone`, and waiting callers wait.
+`PromptDone`, and waiting callers wait; every consent question, shown or waiting, is answered cancelled or dismissed,
+and one asked while the session is away is answered so at once, so nothing is granted or remembered.
 
 Assistive technology sees a modal alert dialog labelled by the title and described by the message. A password field's
 value is protected, so neither what is typed nor its length leaves the process.
@@ -143,7 +186,9 @@ value is protected, so neither what is typed nor its length leaves the process.
 
 The program keeps nothing on disk but the keyring offer's answer. A restart loses the prompt on screen and the waiting
 ones: polkitd sees the agent's bus name go and fails the authentications it asked for, and registers the agent again
-when it starts; a keyring caller loses its prompter and gets an error from its next call. Nothing typed survives.
+when it starts; a keyring caller loses its prompter and gets an error from its next call; the portal's consent calls
+fail, which the portal takes as Cancel for a screenshot and as dismissed for shortcuts, so nothing is granted or
+remembered. Nothing typed survives.
 
 ## Modules
 
@@ -161,13 +206,18 @@ when it starts; a keyring caller loses its prompter and gets an error from its n
 | `keyring::offer` | the offer about the default keyring: its flow and the move, as a pure model |
 | `keyring::secrets` | the Secret Service the offer works on |
 | `keyring::asking` | the offer carried out, asking through the prompter inside the process |
+| `consent` | the portal's consent questions, their answers and the arming delay |
+| `consent::model` | the waiting consent questions, as a pure model |
+| `consent::service` | `org.cupertino.Prompts1` and who may call it |
 | `program` | the Kit program: the model of every prompt, the buses and the futures |
 | `view` | the alerts and the scrims |
+| `view::consent` | the consent alerts and their wording |
 
 ## Captures
 
 `cargo run -p cupertino-prompts --example prompts_capture -- prompts/SURFACE [flags]` (`crates/cupertino-kit/README.md`):
-`authentication` (`--details hidden|shown`, `--users one|two`) and `keyring` (`--kind password|new|confirm`).
+`authentication` (`--details hidden|shown`, `--users one|two`), `keyring` (`--kind password|new|confirm`), and the consent
+alerts `screenshot` and `shortcuts` (armed, with the applications symbol for the app's icon).
 
 ## Diagnostic events
 

@@ -14,6 +14,7 @@ use cupertino_portal::capture::Capture;
 use cupertino_portal::dialog::{inbox, Dialogs};
 use cupertino_portal::file_chooser::FileChooser;
 use cupertino_portal::global_shortcuts::GlobalShortcuts;
+use cupertino_portal::prompts::Prompts;
 use cupertino_portal::screen_cast::ScreenCast;
 use cupertino_portal::screenshot::{self, Screenshot};
 use cupertino_portal::settings::{Appearance, Service};
@@ -49,7 +50,7 @@ fn fold(mut appearance: Appearance, events: &[Event]) -> Appearance {
     appearance
 }
 
-/// The file-chooser, app-chooser, screenshot and keyboard-shortcut windows; a dialog that cannot be shown ends the process.
+/// The file-chooser and app-chooser windows; a dialog that cannot be shown ends the process.
 fn dialogs() {
     if let Err(e) = cupertino_kit::app::run::<Dialogs>() {
         eprintln!("cupertino-portal: {e}");
@@ -84,6 +85,8 @@ fn run() -> Result<()> {
         capture.update(&conn, &first);
     }
     let bus = zbus::blocking::Connection::session()?;
+    // the consent questions are the prompts': asked on the session bus connection, each a task of its executor
+    let prompts = Prompts::new(bus.inner().clone());
     let settings = Service::serve(&bus, appearance)?;
     let toolkits = toolkits::Writer::start(
         cupertino_defaults::config_home(),
@@ -113,10 +116,11 @@ fn run() -> Result<()> {
         .with_grants(ScreenSharingConf::path())
         .serve(&bus)?;
         let waker = conn.waker();
+        let asking = prompts.clone();
         let screenshot = Screenshot::new(
             cupertino_apps::entry::xdg_application_dirs(),
             screenshot::pictures,
-            |event| inbox().push(event),
+            move |event| asking.screenshot(event),
             move |shoot| {
                 let _ = shoots.send(shoot);
                 waker.wake();
@@ -127,8 +131,9 @@ fn run() -> Result<()> {
     let shortcuts = match shortcut_keys {
         Some(_) => {
             let waker = conn.waker();
+            let asking = prompts.clone();
             let shortcuts = GlobalShortcuts::new(
-                |event| inbox().push(event),
+                move |event| asking.shortcuts(event),
                 move |keys| {
                     let _ = keys_sender.send(keys);
                     waker.wake();

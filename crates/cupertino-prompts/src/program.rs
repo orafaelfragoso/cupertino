@@ -3,12 +3,15 @@
 //!
 //! - [`authentication`]: the polkit agent's prompts and polkit's helper.
 //! - [`keyring`]: the keyring's prompts and the offer about the default keyring.
+//! - [`consent`]: the portal's consent questions, asked over `org.cupertino.Prompts1`.
 //!
 //! One prompt is on screen at a time, in an alert over a scrim on every output; the one shown first stays until it
-//! ends, and the others wait. While the session is locked, or is not the active one of its seat, nothing is shown:
-//! the authentication on screen is cancelled and the keyring's prompt is ended, as their callers expect.
+//! ends, and the others wait: an authentication first, then the keyring, then the consent questions in the order they
+//! came. While the session is locked, or is not the active one of its seat, nothing is shown: the authentication on
+//! screen is cancelled, the keyring's prompt is ended and every consent question is dismissed, as their callers expect.
 
 pub mod authentication;
+pub mod consent;
 pub mod keyring;
 
 use std::collections::HashSet;
@@ -16,8 +19,10 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Instant;
 
 use cupertino_kit::bus::{self as kit_bus, Bus};
+use cupertino_kit::controls::ImageSource;
 use cupertino_kit::core::{Application, Command, Key, RendererClass, Window, WindowKey};
 use cupertino_kit::geometry::Size;
+use cupertino_kit::layout::ScrollState;
 use cupertino_kit::text::SecureBuffer;
 use cupertino_kit_shell::outputs::{self, OutputId};
 use cupertino_kit_shell::session::{self, Change};
@@ -35,6 +40,7 @@ use crate::polkit::{Event as Polkit, User};
 use crate::view;
 
 use authentication::Authentication;
+use consent::Consent;
 use keyring::Keyring;
 
 /// The layer surfaces' namespaces, for the server.
@@ -104,6 +110,8 @@ pub enum News {
     Owned(Result<Owned, String>),
     /// Work of the offer for the I/O pool.
     Io(crate::keyring::asking::Io),
+    /// A call of the portal.
+    Consent(crate::consent::Request),
 }
 
 /// What the person does in an authentication prompt.
@@ -134,6 +142,26 @@ pub enum KeyringInput {
     Choice(bool),
 }
 
+/// What the person does in a consent alert, and what its alert hears.
+#[derive(Clone)]
+pub enum ConsentInput {
+    /// Take Screenshot, or Allow.
+    Allow,
+    /// Cancel, or Don't Allow.
+    Deny,
+    /// The shortcut list moved.
+    Scroll(ScrollState),
+    /// The alert of the call presented its first frame.
+    Presented(u64),
+    /// The arming delay of the call has passed.
+    Armed(u64),
+    /// The application icon `name` was read on the I/O pool; `None` when it resolves to none.
+    Icon {
+        name: String,
+        sources: Option<Vec<ImageSource>>,
+    },
+}
+
 #[derive(Clone)]
 pub enum Message {
     /// The system bus connection, or none.
@@ -145,6 +173,9 @@ pub enum Message {
     /// The prompter's own session bus connection, which serves no object, or none.
     Prompter(Option<zbus::Connection>),
     PrompterClosed,
+    /// The session bus connection that only asks who calls `org.cupertino.Prompts1`, or none.
+    Lookup(Option<zbus::Connection>),
+    LookupClosed,
     /// This process's logind session, or why there is none.
     Logind(Result<logind::Session, String>),
     /// polkit's helper, found on the I/O pool.
@@ -176,6 +207,7 @@ pub enum Message {
     Closed(WindowKey),
     Authentication(AuthInput),
     Keyring(KeyringInput),
+    Consent(ConsentInput),
     /// Escape in the alert.
     Escape,
     /// A frame while the scrim fades in.
@@ -189,13 +221,14 @@ pub enum Message {
 pub enum Front {
     Authentication,
     Keyring,
+    Consent,
 }
 
 /// The prompt on screen.
 #[derive(Clone, Debug, PartialEq)]
 struct Shown {
     front: Front,
-    /// What it is about: the authentication's cookie, the keyring caller's name and path.
+    /// What it is about: the authentication's cookie, the keyring caller's name and path, the consent's call.
     about: String,
     /// The number of its windows, new for each prompt shown.
     serial: u64,
@@ -206,6 +239,7 @@ pub struct Model {
     heard: (async_channel::Sender<News>, async_channel::Receiver<News>),
     system: Option<zbus::Connection>,
     session_bus: Option<zbus::Connection>,
+    lookup: Option<zbus::Connection>,
     /// This process's logind session: `None` until logind answered, `Some(None)` when it has none for it.
     login: Option<Option<logind::Session>>,
     locked: bool,
@@ -219,6 +253,7 @@ pub struct Model {
     closed: HashSet<WindowKey>,
     auth: Authentication,
     keyring: Keyring,
+    consent: Consent,
 }
 
 /// The next news a future heard.
@@ -252,6 +287,7 @@ impl Model {
         let away = self.away();
         let commands = self.auth.set_away(away);
         self.keyring.set_away(away);
+        self.consent.set_away(away);
         commands
     }
 
@@ -264,18 +300,19 @@ impl Model {
     }
 
     /// Show the prompt that should be on screen: the one shown stays while it lasts, else the authentication comes
-    /// before the keyring.
+    /// before the keyring, and the keyring before the consent questions.
     fn arrange(&mut self) {
         let about = |front: Front, model: &Model| match front {
             Front::Authentication => model.auth.shown_about(),
             Front::Keyring => model.keyring.shown_about(),
+            Front::Consent => model.consent.shown_about(),
         };
         if let Some(shown) = &self.shown {
             if about(shown.front, self).as_ref() == Some(&shown.about) {
                 return;
             }
         }
-        let next = [Front::Authentication, Front::Keyring]
+        let next = [Front::Authentication, Front::Keyring, Front::Consent]
             .into_iter()
             .find_map(|front| about(front, self).map(|about| (front, about)));
         self.shown = next.map(|(front, about)| {
@@ -300,6 +337,10 @@ impl Model {
                 self.keyring.escape();
                 Vec::new()
             }
+            Some(Front::Consent) => {
+                self.consent.dismiss();
+                Vec::new()
+            }
             None => Vec::new(),
         }
     }
@@ -317,6 +358,11 @@ impl Model {
             self.keyring
                 .start_offer(self.session_bus.as_ref(), login, &self.heard.0),
         );
+        commands.extend(self.consent.serve(
+            self.session_bus.as_ref(),
+            self.lookup.as_ref(),
+            &self.heard.0,
+        ));
         commands
     }
 
@@ -362,6 +408,10 @@ impl Model {
                 self.connected()
             }
             Message::Prompter(Some(connection)) => self.keyring.serve(connection, &self.heard.0),
+            Message::Lookup(Some(connection)) => {
+                self.lookup = Some(connection);
+                self.connected()
+            }
             Message::System(None) | Message::SystemClosed => {
                 eprintln!("cupertino-prompts: no system bus connection");
                 vec![Command::Exit]
@@ -372,6 +422,10 @@ impl Model {
             }
             Message::Prompter(None) | Message::PrompterClosed => {
                 eprintln!("cupertino-prompts: no session bus connection for the keyring's prompts");
+                vec![Command::Exit]
+            }
+            Message::Lookup(None) | Message::LookupClosed => {
+                eprintln!("cupertino-prompts: no session bus connection to ask who calls");
                 vec![Command::Exit]
             }
             Message::Logind(Ok(found)) => {
@@ -437,6 +491,7 @@ impl Model {
                 commands
             }
             News::Io(work) => vec![keyring::on_pool(work)],
+            News::Consent(request) => self.consent.request(request),
         });
         commands
     }
@@ -468,12 +523,18 @@ impl Application for Prompts {
             |connection| Message::Prompter(connection.ok()),
             Message::PrompterClosed,
         ));
+        commands.extend(kit_bus::connect(
+            Bus::Session,
+            |connection| Message::Lookup(connection.ok()),
+            Message::LookupClosed,
+        ));
         let (auth, found) = Authentication::new(options.helper);
         commands.extend(found);
         let model = Model {
             heard,
             system: None,
             session_bus: None,
+            lookup: None,
             login: None,
             locked: session::locked(),
             active: None,
@@ -484,6 +545,7 @@ impl Application for Prompts {
             closed: HashSet::new(),
             auth,
             keyring: Keyring::new(options.keyring_offer),
+            consent: Consent::new(),
         };
         (model, commands)
     }
@@ -496,6 +558,8 @@ impl Application for Prompts {
             | Message::SessionClosed
             | Message::Prompter(_)
             | Message::PrompterClosed
+            | Message::Lookup(_)
+            | Message::LookupClosed
             | Message::Logind(_) => model.buses(message),
             Message::Routes(routes) => {
                 model.auth.found(routes);
@@ -540,11 +604,25 @@ impl Application for Prompts {
                 }
                 Vec::new()
             }
+            Message::Consent(input @ (ConsentInput::Allow | ConsentInput::Deny)) => {
+                if model.shown.as_ref().map(|s| s.front) == Some(Front::Consent) {
+                    model.consent.input(input)
+                } else {
+                    Vec::new()
+                }
+            }
+            Message::Consent(input) => model.consent.input(input),
             Message::Frame | Message::Idle => Vec::new(),
             shell => model.shell(shell),
         };
         let before = model.shown.as_ref().map(|s| s.serial);
         model.arrange();
+        if let Some(shown) = model.shown.as_ref() {
+            if shown.front == Front::Consent && before != Some(shown.serial) {
+                let window = Model::alert_key(shown.serial);
+                commands.extend(model.consent.opened(window));
+            }
+        }
         commands.extend(model.auth.look_up());
         commands.extend(model.focus(before));
         commands
@@ -575,6 +653,11 @@ impl Application for Prompts {
                     windows.push(view::keyring(key, &prompt));
                 }
             }
+            Front::Consent => {
+                if let Some(prompt) = model.consent.view() {
+                    windows.push(view::consent::consent(key, &prompt));
+                }
+            }
         }
         windows
     }
@@ -586,7 +669,7 @@ impl Model {
         let field = match self.shown.as_ref().map(|s| s.front) {
             Some(Front::Authentication) => self.auth.new_question(),
             Some(Front::Keyring) => self.keyring.new_question(),
-            None => None,
+            Some(Front::Consent) | None => None,
         };
         // a window that just opened gives its field the focus itself
         match field {
@@ -601,6 +684,7 @@ impl Model {
     fn alert_size(&self) -> Size {
         match self.shown.as_ref().map(|s| s.front) {
             Some(Front::Keyring) => view::KEYRING_SIZE,
+            Some(Front::Consent) => self.consent.alert_size(),
             _ => view::authentication_size(self.auth.details_shown()),
         }
     }

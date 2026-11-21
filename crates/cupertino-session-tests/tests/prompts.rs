@@ -8,6 +8,10 @@
 //! - The keyring's prompter answers a gcr-style caller (`BeginPrompting`, `PerformPrompt`, its callback object's
 //!   `PromptReady`): the password typed comes back through the secret exchange, and another caller is refused while
 //!   one is active.
+//! - `org.cupertino.Prompts1` takes the portal's consent questions from the program the server started as `portal`
+//!   (a stand-in of `Session1` names one test connection so) and refuses any other caller: the screenshot question is
+//!   granted with Take Screenshot once the arming delay has passed, and cancelled with Escape; the shortcuts question
+//!   is allowed with Allow and refused with Don't Allow; the portal's `Close` takes a question down.
 //! - While an alert is up the server counts it as a prompt: desktop control is suspended and observes nothing
 //!   (`prompt_shown`), every surface of the program is a prompt surface, the keyboard is the alert's, and the output's
 //!   capture does not show it.
@@ -30,8 +34,14 @@ use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command as Process, Stdio};
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use cupertino_prompts::consent::service::{
+    BUS_NAME as PROMPTS_NAME, INTERFACE as PROMPTS_INTERFACE, OBJECT_PATH as PROMPTS_PATH,
+};
+use cupertino_prompts::consent::{
+    ARMING, SCREENSHOT_CANCELLED, SCREENSHOT_GRANTED, SHORTCUTS_ALLOWED, SHORTCUTS_DENIED,
+};
 use cupertino_prompts::keyring::exchange::Exchange;
 use cupertino_prompts::keyring::prompter::{ERROR_IN_PROGRESS, INTERFACE, PATH, SYSTEM_NAME};
 use cupertino_prompts::polkit::agent::AGENT_PATH;
@@ -600,6 +610,228 @@ fn the_keyring_prompter_answers_a_callers_password_question_through_the_exchange
     assert_eq!(secret.as_slice(), PASSWORD.as_bytes());
 
     prompter(&caller, "StopPrompting", &(&callback,)).expect("the caller stops");
+    rig.until("the alert goes", |rig| !rig.state.prompt_shown());
+    assert!(!program.is_finished(), "the program runs on");
+}
+
+/// A stand-in of `org.cupertino.Session1` with no shell hosts, which names one connection the portal.
+struct Session {
+    portal: String,
+}
+
+#[zbus::interface(name = "org.cupertino.Session1")]
+impl Session {
+    fn shell_hosts(&self) -> Vec<(u32, u64)> {
+        Vec::new()
+    }
+
+    fn component_of(&self, _unique_name: String) -> String {
+        String::new()
+    }
+
+    fn program_of(&self, unique_name: String) -> String {
+        if unique_name == self.portal {
+            "portal".to_owned()
+        } else {
+            String::new()
+        }
+    }
+}
+
+/// The shortcuts the portal words for a call app: two that get their keys and one that does not.
+fn shortcut_rows() -> Vec<(&'static str, &'static str, &'static str)> {
+    vec![
+        ("Push to talk", "\u{2303}\u{2325}T", ""),
+        ("Mute the microphone", "\u{2303}\u{2318}M", ""),
+        (
+            "Raise a hand",
+            "H",
+            "not available: it needs \u{2303}, \u{2325} or \u{2318}",
+        ),
+    ]
+}
+
+/// Ask the prompts `method` with `body` from `caller`; the response comes on the channel once the person answered.
+fn ask<B>(
+    caller: &zbus::blocking::Connection,
+    method: &'static str,
+    body: B,
+) -> mpsc::Receiver<zbus::Result<u32>>
+where
+    B: serde::Serialize + zbus::zvariant::DynamicType + Send + 'static,
+{
+    let caller = caller.clone();
+    let (done, outcome) = mpsc::channel();
+    std::thread::spawn(move || {
+        let result = caller
+            .call_method(
+                Some(PROMPTS_NAME),
+                PROMPTS_PATH,
+                Some(PROMPTS_INTERFACE),
+                method,
+                &body,
+            )
+            .and_then(|reply| reply.body().deserialize::<u32>());
+        let _ = done.send(result);
+    });
+    outcome
+}
+
+fn ask_screenshot(
+    caller: &zbus::blocking::Connection,
+    handle: &str,
+) -> mpsc::Receiver<zbus::Result<u32>> {
+    let handle = OwnedObjectPath::try_from(handle).unwrap();
+    ask(
+        caller,
+        "AskScreenshot",
+        (handle, "org.example.Notes", "Notes", "", ""),
+    )
+}
+
+fn ask_shortcuts(
+    caller: &zbus::blocking::Connection,
+    handle: &str,
+) -> mpsc::Receiver<zbus::Result<u32>> {
+    let handle = OwnedObjectPath::try_from(handle).unwrap();
+    ask(
+        caller,
+        "AskShortcuts",
+        (
+            handle,
+            "org.example.Talk",
+            "Talk",
+            "",
+            "",
+            shortcut_rows(),
+            0u32,
+        ),
+    )
+}
+
+/// The response `asked` gets, while the server turns.
+fn response(
+    rig: &mut Rig,
+    asked: &mpsc::Receiver<zbus::Result<u32>>,
+    what: &str,
+) -> zbus::Result<u32> {
+    let mut got = None;
+    rig.until(what, |_| {
+        got = asked.try_recv().ok();
+        got.is_some()
+    });
+    got.unwrap()
+}
+
+/// Turn the server until the alert that came up at `up` is armed, with a margin for its first frame.
+fn armed(rig: &mut Rig, up: Instant) {
+    let ready = up + ARMING + Duration::from_millis(400);
+    rig.until("the arming delay passes", |_| Instant::now() >= ready);
+}
+
+#[test]
+fn the_portals_consent_questions_are_answered_by_the_person() {
+    private_home("consent");
+    let socket = std::env::temp_dir().join(format!("prompts-consent-{}.sock", std::process::id()));
+    let bus = Bus::start("consent");
+    let (_logind, _polkitd, _registrations) = system_stand_ins(&bus);
+    let portal = bus.connect();
+    let portal_name = portal.unique_name().expect("a unique name").to_string();
+    let _session = zbus::blocking::connection::Builder::address(bus.1.as_str())
+        .and_then(|b| b.name("org.cupertino.Session1"))
+        .and_then(|b| {
+            b.serve_at(
+                "/org/cupertino/Session1",
+                Session {
+                    portal: portal_name,
+                },
+            )
+        })
+        .and_then(|b| b.build())
+        .expect("Session1's stand-in");
+    let mut rig = Rig::new("prompts-consent", &[], &[]);
+    let bare = rig.image();
+    let program = start(&mut rig, &socket);
+    let daemon = zbus::blocking::fdo::DBusProxy::new(&portal).expect("the bus daemon");
+    rig.until("the prompts take their name", |_| {
+        daemon
+            .name_has_owner(PROMPTS_NAME.try_into().unwrap())
+            .unwrap_or(false)
+    });
+
+    // only the portal may ask
+    let stranger = bus.connect();
+    let refused = ask_screenshot(&stranger, "/request/stranger");
+    let refused = response(&mut rig, &refused, "the stranger is answered");
+    assert_eq!(
+        error_name(&refused.map(|_| ())).as_deref(),
+        Some("org.freedesktop.DBus.Error.AccessDenied")
+    );
+    assert!(!rig.state.prompt_shown(), "and nothing is shown for it");
+
+    // a screenshot: a key before the arming delay grants nothing, Take Screenshot after it does
+    let asked = ask_screenshot(&portal, "/request/1");
+    alert_up(&mut rig, &bare);
+    let up = Instant::now();
+    rig.state.scripted_key("Tab").unwrap();
+    rig.state.scripted_key("Return").unwrap();
+    rig.state.scripted_key("Tab").unwrap();
+    rig.state.scripted_key("Return").unwrap();
+    armed(&mut rig, up);
+    assert!(
+        asked.try_recv().is_err(),
+        "no key answered before the delay"
+    );
+    assert!(rig.state.prompt_shown(), "the alert stays");
+    // the focus starts on Cancel; Take Screenshot is the other button
+    rig.state.scripted_key("Tab").unwrap();
+    rig.state.scripted_key("Return").unwrap();
+    let granted = response(&mut rig, &asked, "the screenshot is granted");
+    assert_eq!(granted.expect("an answer"), SCREENSHOT_GRANTED);
+    rig.until("the alert goes", |rig| !rig.state.prompt_shown());
+
+    // Escape cancels
+    let asked = ask_screenshot(&portal, "/request/2");
+    alert_up(&mut rig, &bare);
+    rig.state.scripted_key("Escape").unwrap();
+    let cancelled = response(&mut rig, &asked, "the screenshot is cancelled");
+    assert_eq!(cancelled.expect("an answer"), SCREENSHOT_CANCELLED);
+    rig.until("the alert goes", |rig| !rig.state.prompt_shown());
+
+    // shortcuts: Allow, past Don't Allow where the focus starts
+    let asked = ask_shortcuts(&portal, "/request/3");
+    alert_up(&mut rig, &bare);
+    armed(&mut rig, Instant::now());
+    rig.state.scripted_key("Tab").unwrap();
+    rig.state.scripted_key("Return").unwrap();
+    let allowed = response(&mut rig, &asked, "the shortcuts are allowed");
+    assert_eq!(allowed.expect("an answer"), SHORTCUTS_ALLOWED);
+    rig.until("the alert goes", |rig| !rig.state.prompt_shown());
+
+    // shortcuts: Don't Allow, where the focus starts
+    let asked = ask_shortcuts(&portal, "/request/4");
+    alert_up(&mut rig, &bare);
+    armed(&mut rig, Instant::now());
+    rig.state.scripted_key("Return").unwrap();
+    let denied = response(&mut rig, &asked, "the shortcuts are refused");
+    assert_eq!(denied.expect("an answer"), SHORTCUTS_DENIED);
+    rig.until("the alert goes", |rig| !rig.state.prompt_shown());
+
+    // the portal's Close takes a question down without an answer of the person's
+    let asked = ask_screenshot(&portal, "/request/5");
+    alert_up(&mut rig, &bare);
+    let handle = OwnedObjectPath::try_from("/request/5").unwrap();
+    portal
+        .call_method(
+            Some(PROMPTS_NAME),
+            PROMPTS_PATH,
+            Some(PROMPTS_INTERFACE),
+            "Close",
+            &(handle,),
+        )
+        .expect("the prompts take the portal's Close");
+    let closed = response(&mut rig, &asked, "the closed question is answered");
+    assert_eq!(closed.expect("an answer"), SCREENSHOT_CANCELLED);
     rig.until("the alert goes", |rig| !rig.state.prompt_shown());
     assert!(!program.is_finished(), "the program runs on");
 }

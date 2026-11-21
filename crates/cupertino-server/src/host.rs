@@ -37,6 +37,7 @@ use smithay::wayland::shm::with_buffer_contents;
 
 use crate::authorization::{authorized, ClientCapabilitySet, Holder, ShellRole};
 use crate::menu_bar::is_unique_bus_name;
+use crate::restart_policy::scaled;
 use crate::state::{ClientState, Cupertino};
 
 /// Protocol version offered for `cupertino_host_v1` and `cupertino_component_v1`.
@@ -768,11 +769,12 @@ fn bridge_socketpair() -> std::io::Result<(OwnedFd, OwnedFd)> {
     Ok((OwnedFd::from(a), OwnedFd::from(b)))
 }
 
-/// Compute exponential failure backoff (`0.25s`, `0.5s`, ..., capped at `8s`).
+/// Compute exponential failure backoff (`0.25s`, `0.5s`, ..., capped at `8s`), as a test build may scale it
+/// ([`scaled`]).
 fn backoff_for(consecutive_failures: u32) -> Duration {
     let shift = consecutive_failures.saturating_sub(1).min(5);
     let ms = FAILURE_BACKOFF_BASE.as_millis() * (1u128 << shift);
-    Duration::from_millis(ms as u64).min(FAILURE_BACKOFF_CAP)
+    scaled(Duration::from_millis(ms as u64).min(FAILURE_BACKOFF_CAP))
 }
 
 mod dispatch;

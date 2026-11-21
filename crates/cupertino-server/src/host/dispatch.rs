@@ -256,14 +256,15 @@ impl Cupertino {
         }
 
         // 5. Answer shared-host `request_restart` once quiet for 2s (and no grabs/transients) or 60s max.
-        let idle_ok = now.saturating_duration_since(self.hosts.last_input_at) >= RESTART_QUIET_IDLE;
+        let idle_ok =
+            now.saturating_duration_since(self.hosts.last_input_at) >= scaled(RESTART_QUIET_IDLE);
         let restart_ready: Vec<u64> = self
             .hosts
             .hosts
             .values()
             .filter_map(|h| {
                 let req = h.restart_requested_at?;
-                let max_hit = now.saturating_duration_since(req) >= RESTART_QUIET_MAX;
+                let max_hit = now.saturating_duration_since(req) >= scaled(RESTART_QUIET_MAX);
                 let quiet = match h.kind {
                     HostKind::Separate(_) => true,
                     HostKind::Shared => idle_ok && !self.host_has_active_grab_or_transient(h.id),

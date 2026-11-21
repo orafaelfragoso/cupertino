@@ -28,7 +28,7 @@ cupertino-portal = { path = "../cupertino-portal" }
 cupertino-prompts = { path = "../cupertino-prompts" }
 cupertino-protocols = { path = "../cupertino-protocols" }
 cupertino-screenshot = { path = "../cupertino-screenshot" }
-cupertino-server = { path = "../cupertino-server" }
+cupertino-server = { path = "../cupertino-server", features = ["test"] }
 cupertino-shell = { path = "../cupertino-shell" }
 cupertino-shell-agent = { path = "../cupertino-shell-agent" }
 cupertino-shell-desktop = { path = "../cupertino-shell-desktop" }

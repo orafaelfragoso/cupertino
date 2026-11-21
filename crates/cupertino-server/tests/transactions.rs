@@ -3438,6 +3438,66 @@ fn a_bound_gesture_whose_creator_destroys_its_object_under_way_settles_back_to_i
 }
 
 #[test]
+fn a_gesture_bound_transaction_destroyed_before_it_arms_ends_cancelled_and_no_longer_counts() {
+    let mut rig = Rig::new();
+    at_time(&mut rig, GESTURE_T0);
+    let (hconn, mut hq, mut hst) = rig.connect_host(&["overview", "menubar"]);
+    let (_hov, oconn, mut oq, mut ost) = rig.spawn_component(&hconn, &mut hq, &mut hst, "overview");
+    let (_hbar, bconn, mut bq, mut bst) = rig.spawn_component(&hconn, &mut hq, &mut hst, "menubar");
+    let oqh = oq.handle();
+    let bqh = bq.handle();
+    let output = rig.output_id;
+    // more arm-and-drop cycles than a connection may have transactions, as the overview re-arming while windows move
+    let cycles =
+        u32::try_from(cupertino_protocols::transaction::MAX_ACTIVE_TRANSACTIONS + 4).unwrap();
+    for serial in 1..=cycles {
+        let (surf, _shell) =
+            rig.create_layer_surface(&oconn, &mut oq, &mut ost, &format!("armed-{serial}"));
+        let tx =
+            ost.tx_manager
+                .as_ref()
+                .unwrap()
+                .create(serial, ost.output.as_ref().unwrap(), &oqh, ());
+        tx.bind_gesture(Gesture::SwipeUp, 0.45, 1.0);
+        // the surface is new and not committed yet: the part is not ready, so the transaction is not armed
+        tx.stage(&surf);
+        tx.submit();
+        let joined = (serial == 1).then(|| {
+            let joined = bst.tx_manager.as_ref().unwrap().join(
+                "overview".into(),
+                ost.instance.unwrap(),
+                serial,
+                bst.output.as_ref().unwrap(),
+                &bqh,
+                (),
+            );
+            joined.submit();
+            joined
+        });
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+        rig.pump_comp(&bconn, &mut bq, &mut bst);
+        tx.destroy();
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+        rig.pump_comp(&bconn, &mut bq, &mut bst);
+        if joined.is_some() {
+            assert_eq!(
+                bst.finished,
+                vec![Outcome::Cancelled],
+                "the joiner hears the transaction end"
+            );
+        }
+        assert!(
+            oconn.protocol_error().is_none(),
+            "cycle {serial}: the dropped transactions no longer count towards the connection's limit"
+        );
+    }
+    assert!(
+        !rig.state.transaction_gesture_begin(output, swipe_up()),
+        "no dropped transaction keeps the gesture"
+    );
+}
+
+#[test]
 fn a_bound_gesture_whose_creator_s_connection_ends_under_way_settles_a_joiner_s_layers_back() {
     use cupertino_layer_v1::Property;
     let g = GestureRig::new(false, false);

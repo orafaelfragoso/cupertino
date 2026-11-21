@@ -388,8 +388,9 @@ impl Dispatch<CupertinoTransactionV1, TransactionObjectData> for Cupertino {
                             g.reverse_gesture = None;
                         }
                         match tx.phase {
-                            // the binding ends with the creator's object: an armed transaction is cancelled for all
-                            TxPhase::Armed => {
+                            // the binding ends with the creator's object: a transaction waiting for its gesture,
+                            // armed or still waiting for its parts to arm, is cancelled for all (nothing else starts it)
+                            TxPhase::Pending | TxPhase::Armed => {
                                 flush_changes
                                     .extend(state.transactions.end_cancelled(data.tx_id, now));
                             }

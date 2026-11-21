@@ -671,7 +671,7 @@ fn displays1_lists_and_configures_scale_refresh_position_and_transform() {
             HeadlessDisplay {
                 name: "DP-2".into(),
                 size: (1920, 1080),
-                physical_mm: (340, 220),
+                physical_mm: (0, 0),
             },
         ],
         Some(1.0),
@@ -685,6 +685,9 @@ fn displays1_lists_and_configures_scale_refresh_position_and_transform() {
     assert_eq!(list[0].5, 1920);
     assert_eq!(list[0].6, 1080);
     assert_eq!(list[0].7, 60_000);
+    // the physical size in millimetres, (0, 0) for a display that reports none
+    assert_eq!(list[0].11, (340, 220));
+    assert_eq!(list[1].11, (0, 0));
 
     // SetScale, SetRefreshRate, and SetPosition apply through configure_heads.
     state.display_set_scale("DP-1", 2.0).unwrap();

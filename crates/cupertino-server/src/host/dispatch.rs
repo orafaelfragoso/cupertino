@@ -363,6 +363,11 @@ impl Cupertino {
         if !self.hosts.persisted.contains_key(&surface_id) {
             return;
         }
+        // as of every commit, for the hold: a failing component may end the role before its connection
+        let menu_bar = self.menu_bars.has_surface(surface);
+        if let Some(persisted) = self.hosts.persisted.get_mut(&surface_id) {
+            persisted.menu_bar = menu_bar;
+        }
         let has_buffer = with_states(surface, |states| {
             states
                 .data_map
@@ -432,7 +437,7 @@ impl Cupertino {
         let picture = persisted
             .last_picture
             .take()
-            .or_else(|| self.capture_held_picture(surface));
+            .or_else(|| self.capture_held_picture(surface, persisted.menu_bar));
         let Some(output_id) = self.output_by_wl(output).map(|o| o.id) else {
             return;
         };
@@ -1339,6 +1344,7 @@ impl Dispatch<CupertinoComponentV1, ComponentGlobalData> for Cupertino {
                         mapped: false,
                         last_picture: None,
                         last_geometry: None,
+                        menu_bar: state.menu_bars.has_surface(&surface),
                     },
                 );
             }

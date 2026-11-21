@@ -107,5 +107,5 @@ A change to `cupertino-kit`, `cupertino-ui-render` or the server reaches 30 crat
 ## Close
 
 - [ ] `--profile full` on merged `main`, with the baseline table filled in again beside the old numbers.
-- [ ] `CONTRIBUTING.md` and `AGENTS.md` say what changed for contributors (incremental in the main checkout, one test
-      binary per crate, the gate's two new checks).
+- [ ] `CONTRIBUTING.md` and the agent instructions say what changed for contributors (incremental in the main
+      checkout, one test binary per crate, the gate's two new checks).

@@ -3,9 +3,6 @@
     "components": ["menubar", "dock", "desktop", "windowmanager", "overview", "launcher",
                    "notifications", "controlcenter", "osd", "agent", "dialogs"],
     "off": [],
-    "alone": [],
-    "processes": [
-      {"name": "login", "command": ["/usr/bin/cupertino-login"], "roles": ["session", "session_lock"]}
-    ]
+    "alone": []
   }
 }

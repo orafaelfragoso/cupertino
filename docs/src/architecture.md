@@ -12,17 +12,17 @@ Cupertino is a Wayland desktop with separate compositor, shell, applications and
 
 ## Processes
 
-A crash in a shell process never takes the desktop down.
+A crash in a shell component or process never takes the desktop down.
 
 | Process | Owns |
 |---|---|
-| `cupertino-server` | compositing, window policy, input routing, cursor, materials (backdrop rendering), the menu bar layer and its auto-hide, window snapping, supervision of the shell processes |
-| `cupertino-shell` | the shell host: the shell's components, each on a thread of its own, a failed one restarted alone; today the on-screen displays (`osd`: volume, brightness and keyboard-backlight overlays), the banners and the notification list (`notifications`, `org.freedesktop.Notifications`, the list kept across a restart), the control panel (`controlcenter`, `org.cupertino.ControlPanel1`), the menu bar (`menubar`: status items and application menus, DBusMenu, StatusNotifierItem, GMenuModel), the launcher (`launcher`, `org.cupertino.Launcher1`: the search and launch panel, and the application browser), the session agent (`agent`, `org.cupertino.SessionAgent1`: the log out, restart, shut down and power-button panels, the power key, login items, reopened applications, low-battery notices and the session menu's state), the items of the Desktop folder on the desktop (`desktop`), the dock (`dock`: the bar, the application switcher, the Force Quit dialog, hot corners and the gestures no transaction takes), the overview (`overview`: the windows in holes, the desktops band, its gesture-bound way in and out) the window manager (`windowmanager`: the stage and tiling policy, off by default, and the stage strip, whose thumbnails are holes) and the portal's dialogs (`dialogs`, `org.cupertino.Dialogs1`: the file chooser, the file family's open and save panel, and the app chooser) |
+| `cupertino-server` | compositing, window policy, input routing, cursor, materials (backdrop rendering), the menu bar layer and its auto-hide, window snapping, supervision of the shell host and the built-in processes |
+| `cupertino-shell` | the shell host: the shell's components, each on a thread of its own, a failed one restarted alone; today the on-screen displays (`osd`: volume, brightness and keyboard-backlight overlays, and the keyboard's input-source switcher and accent picker), the banners and the notification list (`notifications`, `org.freedesktop.Notifications`, the list kept across a restart), the control panel (`controlcenter`, `org.cupertino.ControlPanel1`), the menu bar (`menubar`: status items and application menus, DBusMenu, StatusNotifierItem, GMenuModel), the launcher (`launcher`, `org.cupertino.Launcher1`: the search and launch panel, and the application browser), the session agent (`agent`, `org.cupertino.SessionAgent1`: the log out, restart, shut down and power-button panels, the power key, login items, reopened applications, low-battery notices and the session menu's state), the items of the Desktop folder on the desktop (`desktop`), the dock (`dock`: the bar, the application switcher, the Force Quit dialog, hot corners and the gestures no transaction takes), the overview (`overview`: the windows in holes, the desktops band, its gesture-bound way in and out) the window manager (`windowmanager`: the stage and tiling policy, off by default, and the stage strip, whose thumbnails are holes) and the portal's dialogs (`dialogs`, `org.cupertino.Dialogs1`: the file chooser, the file family's open and save panel, and the app chooser) |
 | `cupertino-login` | the login screen and the lock screen (`ext-session-lock`), with `org.cupertino.Login1` (`Lock`) |
 | `cupertino-sessiond` | the root-owned half of login: the login screen's socket, PAM in a worker per attempt, logind sessions and virtual terminals, fast user switching, power, auto login |
 | `cupertino-screenshot` | screen, window and selection capture, toolbar, floating thumbnail; with `--serve`, started for the portal, the colour picker and the screen-sharing chooser (`org.cupertino.Screenshot1`) |
-| `cupertino-prompts` | the session's prompts, always running: the polkit authentication agent's prompt and the keyring's password prompt |
-| `cupertino-portal` | the xdg-desktop-portal backend, with no interface of its own: screen sharing (its PipeWire streams), screenshots and colour picking (the choosing and picking in `cupertino-screenshot`), the file chooser and the app chooser (the dialogs in the shell's `dialogs` component), appearance settings |
+| `cupertino-prompts` | the session's prompts, always running: the polkit authentication agent's prompt, the keyring's password prompt and the consent prompts for desktop control, screenshots and global shortcuts (`org.cupertino.Prompts1`) |
+| `cupertino-portal` | the xdg-desktop-portal backend, with no interface of its own: screen sharing (its PipeWire streams), screenshots and colour picking (the choosing and picking in `cupertino-screenshot`), the person's consent (asked through `cupertino-prompts`), the file chooser and the app chooser (the dialogs in the shell's `dialogs` component), appearance settings |
 | `cupertino-control` | desktop control for local agents: output-scoped observation, capture, pointer and keyboard runs, each with the person's consent per app, and its MCP stdio bridge (`--mcp`) |
 | `cupertino-files` | the file manager |
 | `cupertino-settings` | the settings app |
@@ -31,7 +31,7 @@ A crash in a shell process never takes the desktop down.
 | `cupertino-btd` | adapters, discovery, pairing with a UI agent, key store, `org.cupertino.Bluetooth1`, on the system bus |
 | `cupertino-powerd` | batteries, mains, display and keyboard backlight, lid; the `org.freedesktop.UPower` subset apps call and `org.cupertino.Power1` |
 
-The server starts the shell processes listed in `/etc/cupertino/compositor.json` and three built-in processes from their installed paths, each with its roles: `portal`, `prompts` and `desktop-control` (`cupertino-control`). `cupertino shell list` shows them all.
+In a user session the server starts the shell host with the components the `shell` section of `/etc/cupertino/compositor.json` names, and four built-in programs from their installed paths, each with its roles: `portal`, `prompts`, `desktop-control` (`cupertino-control --serve`) and `login` (`cupertino-login`). With the server these are the processes always running; `cupertino-screenshot` starts when it is asked for, and `cupertino-audiod` by bus activation at first use. On the login screen only `cupertino-login --greeter` starts. `cupertino shell list` shows every component and process.
 
 ## Rendering
 
@@ -100,7 +100,7 @@ Further rules:
 longer a problem, and `cargo run -q -p cupertino-layers -- --write-remaining` writes it again. Until the layered
 refactor's last wave, a change may add lines (`cargo xtask remaining` reports them); after it the list only shrinks.
 The layers in `ENFORCED` in `cupertino-layers` (`foundation`, `graphics`, `models`, `system`, `platform`, `protocol`,
-`transport`, `render`, `ui`, `shellkit`, `core`, `services` and `testing`) are closed: none of their problems may be
+`transport`, `render`, `ui`, `shellkit`, `core`, `services`, `shell` and `testing`) are closed: none of their problems may be
 listed. Test code outside a crate's `tests/` is refused by the
 gate of `cargo xtask ci`. Keyboard layouts come from the system's libxkbcommon through the registry `xkbcommon` crate,
 the one Smithay uses too; the server keeps the last keymap that compiled when a new layout does not.

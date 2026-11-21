@@ -1508,7 +1508,7 @@ manager interfaces. Each edit belongs to the task that builds what it describes,
 | W6.9 | `cupertino_window_manager_v1` | the strip leaves the server: the `strip` entry of `placement`, the rectangle of `set_placement`, `strip_pressed` and the strip half of `invalid_placement` go; the description says that a strip window is a claimed hole of the window manager's surface and that the server draws no strip |
 | W6.9 | `cupertino_shell_v1` | `get_window_manager`: the window manager has a surface of its own for the strip, an ordinary layer surface it persists |
 | W6.12 | `cupertino_shell_v1` | `get_keyboard_panels` (version 30) and the new interface `cupertino_keyboard_panels_v1`: the switcher's list, the picker's candidates and `accent_pick`, for the connection that holds `keyboard_panels` |
-| W6.close | `cupertino_menu_bar_v1` | `session_agent` and `agent_trust` go with the process path: from W6.13 no client reads them |
+| W6.close | `cupertino_menu_bar_v1` | `session_agent` and `agent_trust` go with the process path (version 31): from W6.13 no client reads them |
 
 - W5.5's edits add to what the server does; the messages W6.8 and W6.9 remove keep working until those tasks, as
   the server keeps drawing its own overview and strip until then.

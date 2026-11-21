@@ -2,7 +2,7 @@
 //! that turns into a drag, the timings of the gap, the drop and the removal, and the puff shown
 //! where a dragged tile was removed.
 
-use cupertino_animation::CubicBezier;
+use cupertino_kit::motion::Easing;
 use cupertino_wm::geometry::Point;
 
 use crate::tiles::TileId;
@@ -38,7 +38,7 @@ pub const LOOK_S: f64 = 0.25;
 /// The fade of a removed tile's icon and label from opacity 1 to 0: this
 /// timing function (..24) over the default transaction duration at animation
 /// speed 0.75, `0.25 / 0.75` seconds (derived from the default duration).
-pub const REMOVE_FADE_CURVE: CubicBezier = CubicBezier::new(0.22363, 0.002, 0.5534, 0.9529);
+pub const REMOVE_FADE_CURVE: Easing = Easing::DOCK_REMOVE_FADE;
 pub const REMOVE_FADE_S: f64 = 0.25 / 0.75;
 
 /// Duration of the removal puff in seconds: that of the icon's fade. The puff itself is not drawn

@@ -4,16 +4,10 @@
 //! `0.5 − 0.5·cos(π·t/duration); the magnification amount and the auto-hide offset use the cosine
 //! ease. An interrupted animation restarts from the current value towards the new target.
 
-use cupertino_animation::CubicBezier;
-
 /// `0.5 − 0.5·cos(π·x)` for `x` clamped to `[0, 1].
 pub fn cosine_ease(x: f64) -> f64 {
     0.5 - 0.5 * (std::f64::consts::PI * x.clamp(0.0, 1.0)).cos()
 }
-
-/// Cubic Bézier within 3·10⁻⁴ of [`cosine_ease`] over the whole range (approximate fit, used where
-/// a [`CubicBezier`] is required by the animation layer).
-pub const COSINE_EASE_BEZIER: CubicBezier = CubicBezier::new(0.364, 0.0, 0.636, 1.0);
 
 /// A scalar that eases from its current value to a target with [`cosine_ease`].
 #[derive(Clone, Copy, Debug)]

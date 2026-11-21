@@ -9,8 +9,7 @@ mod drag;
 use std::collections::HashMap;
 
 use crate::ease::{cosine_ease, EasedValue};
-use cupertino_animation::{AnimatedValue, Curve};
-use cupertino_kit::motion::Easing;
+use cupertino_kit::motion::{Animated, Easing, Timing};
 use cupertino_wm::geometry::{Point, Rect};
 use cupertino_wm::ids::WindowId;
 
@@ -113,7 +112,7 @@ struct DragState {
     zone: bool,
     over_trash: bool,
     /// 0 to 1: how far the icon has dimmed and the "Remove" label shown.
-    look: AnimatedValue<f64>,
+    look: Animated<f64>,
 }
 
 impl DragState {
@@ -252,8 +251,8 @@ fn push_section<'a>(
     }
 }
 
-fn presence_curve(cfg: &DockConfig) -> Curve {
-    Easing::EASE_IN_OUT.over(cfg.tile_presence_s).curve()
+fn presence_curve(cfg: &DockConfig) -> Timing {
+    Easing::EASE_IN_OUT.over(cfg.tile_presence_s)
 }
 
 impl Dock {
@@ -340,7 +339,7 @@ impl Dock {
     }
 
     fn appear(&self, mut t: Tile, now: f64) -> Tile {
-        t.presence = AnimatedValue::new(0.0);
+        t.presence = Animated::new(0.0);
         t.presence.animate_to(1.0, presence_curve(&self.cfg), now);
         t
     }

@@ -473,6 +473,15 @@ impl Timing {
     });
 }
 
+/// The motions of the dock.
+impl Easing {
+    /// A tile removed by dragging it off the dock fading its icon and label from opacity 1 to 0: quick at first and
+    /// settling gently.
+    pub const DOCK_REMOVE_FADE: Easing = Easing(Shape::Bezier(CubicBezier::new(
+        0.22363, 0.002, 0.5534, 0.9529,
+    )));
+}
+
 /// Dock-related timing values.
 #[derive(Clone, Debug)]
 pub struct DockAnimation {

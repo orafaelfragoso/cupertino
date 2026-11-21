@@ -771,7 +771,7 @@ pub struct Cupertino {
     /// A client's drag that just ended without a drop, its icon not captured yet.
     pub drag_ended: Option<crate::drag_return::DragEnd>,
     pub key_router: KeyRouter,
-    /// Input-source HUD and accent popup.
+    /// The input-source switcher and the accent picker, which the on-screen displays draw.
     pub overlays: Overlays,
     pub caps: CapsDebounce,
     /// Slow keys, sticky keys, mouse keys, the globe key and the compositor's key repeat (`kbd_filters`).

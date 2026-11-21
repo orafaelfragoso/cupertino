@@ -3,8 +3,8 @@
 use cupertino_kit::core::WindowKey;
 pub use cupertino_shell_client::{
     ActiveApp, ActiveClient, AppWindow, BoundAction, EditAction, GtkMenu, KeyClass,
-    MenuBarUpdate as Update, PrimaryModifier, SessionAction, SessionAgent, Shortcuts,
-    WindowCommand, WindowMenu, WindowState, MAX_BACKDROP_BANDS,
+    MenuBarUpdate as Update, PrimaryModifier, SessionAction, Shortcuts, WindowCommand, WindowMenu,
+    WindowState, MAX_BACKDROP_BANDS,
 };
 
 use crate::context::{self, ShellRequest};

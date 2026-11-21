@@ -15,7 +15,7 @@
 //! keys would otherwise latch the modifiers of the chord that switched sessions.
 //!
 //! The compositor's own **key repeat** lives here as well. Clients repeat for themselves from
-//! `wl_keyboard.repeat_info`; keys the compositor consumes (repeating shortcuts, the input-source HUD's arrows, the
+//! `wl_keyboard.repeat_info`; keys the compositor consumes (repeating shortcuts, the input-source switcher's arrows, the
 //! accent picker's navigation) never reach a client, so the compositor repeats them with the same delay and interval
 //! (one repeating key). A repeat replays the press through the overlays and the shortcut router
 //! while the key and the same modifiers stay down. The accent picker's trigger is a repeat too: a held letter with
@@ -367,7 +367,7 @@ impl Cupertino {
         }
         match self.key_filters.fn_usage {
             FnUsage::DoNothing => {}
-            // the globe key moves the HUD selection to the next item (log string); without held modifiers
+            // the globe key moves the switcher's selection to the next item (log string); without held modifiers
             // the switch is immediate
             FnUsage::ChangeInputSource => self.input_source_step(true, Step::Next),
             FnUsage::ShowEmojiPicker => {

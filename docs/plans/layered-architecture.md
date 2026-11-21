@@ -15,11 +15,11 @@ Updated by the lead at every merge.
 
 | | |
 |---|---|
-| Current wave | 6 |
-| Running tasks | restart program tests steady under load; the architect's review of wave 6; the process path (W5.5's) still to remove |
+| Current wave | 7 (not started) |
+| Running tasks | none |
 | Enforced layers | foundation, system, graphics, models, platform, protocol, transport, render, ui, shellkit, core, services, shell, testing (8 remaining-work lines, all in `apps`) |
 | Waiting on the owner | nothing |
-| Last closed wave | 5 |
+| Last closed wave | 6 (its memory measurement deferred by the owner) |
 
 ## Contents
 
@@ -1173,7 +1173,7 @@ Every crate of wave 6, as in W1.T.
       "Edits of the existing protocol files").
 - [ ] Memory measured against W0.1; numbers in [Measurements](#measurements). Deferred by the owner (2026-11-20) until
       every wave and its bugs are done.
-- [ ] `docs/src/architecture.md`'s process table matches [Processes](#processes). Gates as in W4.close.
+- [x] (`6a8251659`; `cargo xtask ci --profile full` passed on `c6f63be58`) `docs/src/architecture.md`'s process table matches [Processes](#processes). Gates as in W4.close.
 
 ### Wave 7: applications, tools, documents
 
@@ -1496,3 +1496,11 @@ One line per change to a decision or approval of a design: date, number, what, w
   `cupertino-screencast`; the restart program tests run their host with one malloc arena and compare floors through
   `tests/shell/memory.rs` (a real per-instance leak in the menu bar's task set was fixed, `31d351dd0`); the folded audio
   crates lost the code the service never called, and with it the ALSA byte-layout tests.
+- 2026-11-21: lead, after the architect's review of wave 6: the dock keeps nothing across a restart (its statics went;
+  icons and file types are Kit's shared caches, `kit::shared`) and the server holds its picture until the new bar has
+  what it draws; the dock's motions are catalogue names; the server's component-as-process path is gone (a legacy
+  `processes` list is read, reported and ignored); the lock screen is the supervisor's built-in login, so display
+  sleep locks again; Login1.Lock and every bus interface check identity, not process relation; kit-shell requires
+  exactly the protocol versions it was built with; a failed component sends the server nothing after it fails, and a
+  stopped one is never reported failed; the host sleeps with no timeout while every component waits, and checks at
+  2 Hz while one animates; ShellComponentDebug1.Crash keeps no caller check (debug builds only).

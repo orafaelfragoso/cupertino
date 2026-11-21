@@ -853,6 +853,8 @@ struct Controlled {
     globals: Vec<(u32, String, u32)>,
     epoch: Option<(u32, u32)>,
     phase: Option<WEnum<Phase>>,
+    /// Every phase the server reported, in order.
+    phases: Vec<WEnum<Phase>>,
     revision: Option<u32>,
     completed: Vec<u32>,
     refused: Vec<(u32, WEnum<Refusal>)>,
@@ -895,7 +897,10 @@ impl wayland_client::Dispatch<CupertinoControlSessionV1, ()> for Controlled {
             Event::Created {
                 epoch_hi, epoch_lo, ..
             } => heard.epoch = Some((epoch_hi, epoch_lo)),
-            Event::Status { phase, .. } => heard.phase = Some(phase),
+            Event::Status { phase, .. } => {
+                heard.phase = Some(phase);
+                heard.phases.push(phase);
+            }
             Event::Geometry { revision, .. } => heard.revision = Some(revision),
             Event::Completed { serial } => heard.completed.push(serial),
             Event::Refused { serial, reason } => heard.refused.push((serial, reason)),
@@ -1099,6 +1104,14 @@ fn desktop_controls_consent_alert_is_the_prompts_and_answers_the_person() {
     // the alert pauses no run, and the active run's input reaches neither it nor its scrim
     active.step();
     assert_eq!(active.heard.phase, Some(WEnum::Value(Phase::Active)));
+    assert!(
+        !active
+            .heard
+            .phases
+            .contains(&WEnum::Value(Phase::Suspended)),
+        "the alert never paused the active run, not even before its first frame: {:?}",
+        active.heard.phases
+    );
     let pressed = active.input(&mut rig, |session, serial, (hi, lo), revision| {
         session.key(
             serial,

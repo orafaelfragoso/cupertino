@@ -501,6 +501,13 @@ fn map_window(
     surface.commit();
     rig.settle(&mut [app]);
     assert!(app.client.configured, "the window is configured");
+    show(app, &surface);
+    (toplevel, surface)
+}
+
+/// Attach a buffer to the configured `surface` and commit it: its toplevel maps.
+fn show(app: &mut Side<AppClient>, surface: &wl_surface::WlSurface) {
+    let qh = app.queue.handle();
     let (width, height) = (200, 150);
     let len = width * height * 4;
     let fd = rustix::fs::memfd_create("cupertino-test", rustix::fs::MemfdFlags::CLOEXEC).unwrap();
@@ -521,7 +528,6 @@ fn map_window(
     surface.attach(Some(&buffer), 0, 0);
     surface.damage_buffer(0, 0, width, height);
     surface.commit();
-    (toplevel, surface)
 }
 
 #[test]
@@ -660,5 +666,44 @@ fn an_applications_own_token_names_no_launch() {
     assert!(
         launches_named(&dock_side).is_empty(),
         "an activation with the chat program's token names no launch"
+    );
+}
+
+#[test]
+fn a_window_mapped_again_keeps_the_launch_an_activation_named() {
+    let mut rig = Rig::new();
+    let (mut host, mut dock_side, _dock) = rig.dock(WINDOW_LAUNCH);
+    rig.state.launch_token_of = Box::new(|_, _| None);
+    let mut launcher = rig.launcher();
+    let mut app = rig.app();
+    let (_toplevel, surface) = map_window(&mut rig, &mut app, EDITOR_WINDOWS);
+    rig.settle(&mut [&mut host, &mut dock_side, &mut app]);
+    activate_with(
+        &mut rig,
+        (&mut host, &mut dock_side),
+        &mut launcher,
+        &mut app,
+        &surface,
+        EDITOR,
+    );
+    assert_eq!(launches_named(&dock_side), [EDITOR]);
+    // the toplevel unmaps (a null buffer) and maps again with no token of its own
+    surface.attach(None, 0, 0);
+    surface.commit();
+    rig.settle(&mut [&mut host, &mut dock_side, &mut app]);
+    app.client.configured = false;
+    surface.commit();
+    rig.settle(&mut [&mut host, &mut dock_side, &mut app]);
+    assert!(app.client.configured, "the window is configured again");
+    dock_side.client.heard.clear();
+    show(&mut app, &surface);
+    rig.settle(&mut [&mut host, &mut dock_side, &mut app]);
+    assert_eq!(
+        dock_side.client.heard,
+        [
+            ("window_launch", EDITOR.to_owned()),
+            ("window", EDITOR_WINDOWS.to_owned())
+        ],
+        "the window listed again is named by its launch first"
     );
 }

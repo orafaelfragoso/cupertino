@@ -47,8 +47,10 @@ fn opened(launcher: &mut Launcher, desktop_id: &str) -> cupertino_launcher::Comm
 
 #[test]
 fn a_terminal_entrys_token_names_the_terminal_whose_window_comes() {
-    let mut config = LauncherConfig::default();
-    config.terminal_command = vec!["/usr/bin/foot".to_owned(), "-e".to_owned()];
+    let config = LauncherConfig {
+        terminal_command: vec!["/usr/bin/foot".to_owned(), "-e".to_owned()],
+        ..LauncherConfig::default()
+    };
     let mut launcher = Launcher::new(
         config,
         vec![

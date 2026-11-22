@@ -287,6 +287,46 @@ fn the_launch_timeout_keeps_a_running_tile() {
     assert!(s.dock.app_tile("htop").is_none_or(|t| t.is_leaving()));
 }
 
+/// The server reports a window again only when it changes: one that got no tile when it was reported is placed when
+/// the entry it stands for is shown later, and leaves its tile when that entry is hidden again.
+#[test]
+fn indexing_the_entries_again_places_a_window_that_had_no_tile() {
+    // T3 Code's hidden handler entry was written before the entry people start it by
+    let only_hidden = || DesktopIndex {
+        entries: vec![entry(T3_HIDDEN, T3_EXEC, true)],
+    };
+    let mut s = Session::new(Dock::new(dock_config(None, 1080.0)), only_hidden());
+    s.list_taken();
+    s.window(1, T3_HIDDEN, "T3 Code", false, 0.0);
+    assert!(
+        s.window_info(1).is_none(),
+        "a hidden entry's window has no tile"
+    );
+    s.set_desktop(desktop(), 1.0);
+    assert_eq!(s.window_info(1).map(|w| w.key.as_str()), Some(T3_SHOWN));
+    assert!(s.dock.app_tile(T3_SHOWN).is_some_and(|t| t.running));
+    s.set_desktop(only_hidden(), 2.0);
+    assert!(s.window_info(1).is_none());
+    assert!(s.dock.app_tile(T3_SHOWN).is_none_or(|t| !t.running));
+}
+
+/// `window_launch` for a window the dock holds no tile for (its own application id is a hidden entry's) places it,
+/// though the server does not report the window again.
+#[test]
+fn a_launch_named_for_a_window_without_a_tile_places_it() {
+    let mut s = session(&[]);
+    s.window(1, "org.example.Portal", "Untitled", false, 0.0);
+    assert!(s.window_info(1).is_none());
+    s.window_launch(1, EDITOR, 1.0);
+    assert_eq!(s.window_info(1).map(|w| w.key.as_str()), Some(EDITOR));
+    assert!(s.dock.app_tile(EDITOR).is_some_and(|t| t.running));
+    s.window_closed(1, 2.0);
+    assert!(s.dock.app_tile(EDITOR).is_none_or(|t| !t.running));
+    // a launch named after the window closed places nothing
+    s.window_launch(1, EDITOR, 3.0);
+    assert!(s.window_info(1).is_none());
+}
+
 #[test]
 fn indexing_the_entries_again_keeps_a_window_on_the_tile_its_launch_named() {
     let mut s = session(&[]);

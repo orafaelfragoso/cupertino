@@ -70,6 +70,10 @@ pub struct Session {
     desktop: DesktopIndex,
     /// Windows by server id.
     windows: BTreeMap<u32, Window>,
+    /// The windows the server reported that belong to no tile (a hidden entry's), by server id, with their own
+    /// application id as their key: a launch named later or the entries indexed again may place them, and the server
+    /// reports a window again only when it changes.
+    unplaced: BTreeMap<u32, Window>,
     /// The application the launch behind a window named, by window id, when the server named one that is an
     /// application ([`Session::window_launch`]).
     launches: BTreeMap<u32, String>,
@@ -90,6 +94,7 @@ impl Session {
             dock,
             desktop,
             windows: BTreeMap::new(),
+            unplaced: BTreeMap::new(),
             launches: BTreeMap::new(),
             resident: BTreeSet::new(),
             quit: Vec::new(),
@@ -109,17 +114,25 @@ impl Session {
     }
 
     /// The desktop entries were indexed again: the tiles resolve through `desktop` from now on, and each window
-    /// whose tile is another one by the new entries is placed again, as the window of its application it is.
+    /// whose tile is another one by the new entries is placed again, as the window of its application it is: one that
+    /// had none (a hidden entry's) gets the tile of an entry shown since, one whose entry is hidden now leaves its tile.
     pub fn set_desktop(&mut self, desktop: DesktopIndex, now: f64) {
         self.desktop = desktop;
-        let moved: Vec<(u32, String, String, bool)> = self
-            .windows
-            .iter()
-            .filter(|(id, w)| self.placed(**id, &w.app_id).as_ref() != Some(&w.key))
-            .map(|(id, w)| (*id, w.app_id.clone(), w.title.clone(), w.minimized))
+        self.place_again(None, now);
+    }
+
+    /// Place again every window (or only window `only`) whose tile is not the one it belongs to now
+    /// ([`Session::placed`]), as the window it is.
+    fn place_again(&mut self, only: Option<u32>, now: f64) {
+        let shown = self.windows.iter().map(|(id, w)| (id, w, Some(&w.key)));
+        let moved: Vec<(u32, String, String, bool)> = shown
+            .chain(self.unplaced.iter().map(|(id, w)| (id, w, None)))
+            .filter(|(id, w, key)| {
+                only.is_none_or(|o| o == **id) && self.placed(**id, &w.app_id).as_ref() != *key
+            })
+            .map(|(id, w, _)| (*id, w.app_id.clone(), w.title.clone(), w.minimized))
             .collect();
         for (id, app_id, title, minimized) in moved {
-            self.forget_window(id, now);
             self.window(id, &app_id, &title, minimized, now);
         }
     }
@@ -192,15 +205,30 @@ impl Session {
     }
 
     /// A window appeared or one of its properties changed. A window of a process whose entry the desktop hides
-    /// ([`Session::shows_windows`]) is not counted, and a window whose application id names no application belongs to
-    /// the tile of the application its launch named ([`Session::window_launch`]).
+    /// ([`Session::shows_windows`]) is not counted but held, so it can be placed later, and a window whose application
+    /// id names no application belongs to the tile of the application its launch named ([`Session::window_launch`]).
     pub fn window(&mut self, id: u32, app_id: &str, title: &str, minimized: bool, now: f64) {
-        if self.windows.get(&id).is_some_and(|w| w.app_id != app_id) {
+        let placed = self.placed(id, app_id);
+        if self
+            .windows
+            .get(&id)
+            .is_some_and(|w| Some(&w.key) != placed.as_ref())
+        {
             self.forget_window(id, now);
         }
-        let Some(key) = self.placed(id, app_id) else {
+        let Some(key) = placed else {
+            self.unplaced.insert(
+                id,
+                Window {
+                    app_id: app_id.to_owned(),
+                    key: app_id.to_owned(),
+                    title: title.to_owned(),
+                    minimized,
+                },
+            );
             return;
         };
+        self.unplaced.remove(&id);
         if !self.windows.values().any(|w| w.key == key) {
             // a resident application showing a window again was running all along: no launch hop
             if self.live && self.resident_app_id(&key).is_none() {
@@ -234,6 +262,7 @@ impl Session {
     /// reported it resident: its process still runs, and the tile keeps its running dot until it exits.
     pub fn window_closed(&mut self, id: u32, now: f64) {
         self.launches.remove(&id);
+        self.unplaced.remove(&id);
         self.forget_window(id, now);
     }
 
@@ -241,22 +270,15 @@ impl Session {
     /// activation token started), which the window's own application id may not name (a program whose windows name
     /// no desktop entry): such a window belongs to that application's tile, and its first window ends that tile's
     /// launch bounce. A window whose own application id names an application stays on its tile: the token may have
-    /// been asked for something else. It comes before the window's first event; a window already shown moves. A launch
-    /// that names no application ([`Session::is_application`]) changes nothing.
+    /// been asked for something else. It comes before the window's first event; a window reported before moves, the
+    /// one a hidden entry's process showed too. A launch that names no application ([`Session::is_application`])
+    /// changes nothing.
     pub fn window_launch(&mut self, id: u32, app_id: &str, now: f64) {
         if !self.is_application(app_id) {
             return;
         }
         self.launches.insert(id, app_id.to_owned());
-        let Some(shown) = self.windows.get(&id) else {
-            return;
-        };
-        if self.placed(id, &shown.app_id).as_ref() == Some(&shown.key) {
-            return;
-        }
-        let (own, title, minimized) = (shown.app_id.clone(), shown.title.clone(), shown.minimized);
-        self.forget_window(id, now);
-        self.window(id, &own, &title, minimized, now);
+        self.place_again(Some(id), now);
     }
 
     /// Take window `id` off its tile, which quits with its last window unless the application is resident.

@@ -187,3 +187,16 @@ fn a_launch_that_names_no_application_leaves_the_window_where_it_was() {
         Some(EDITOR_WINDOWS)
     );
 }
+
+#[test]
+fn indexing_the_entries_again_keeps_a_window_on_the_tile_its_launch_named() {
+    let mut s = session(&[]);
+    s.window_launch(1, EDITOR, 0.0);
+    s.window(1, EDITOR_WINDOWS, "Untitled", false, 0.0);
+    s.set_desktop(desktop(), 1.0);
+    assert_eq!(s.window_info(1).map(|w| w.key.as_str()), Some(EDITOR));
+    assert!(s.dock.app_tile(EDITOR).is_some_and(|t| t.running));
+    // the launch is still the window's after the index changed under it
+    s.window(1, EDITOR_WINDOWS, "Saved", false, 2.0);
+    assert_eq!(s.window_info(1).map(|w| w.key.as_str()), Some(EDITOR));
+}

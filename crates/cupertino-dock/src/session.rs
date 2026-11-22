@@ -115,11 +115,17 @@ impl Session {
         let moved: Vec<(u32, String, String, bool)> = self
             .windows
             .iter()
-            .filter(|(_, w)| self.key_of(&w.app_id) != w.key)
+            .filter(|(id, w)| {
+                let named = self
+                    .launches
+                    .get(id)
+                    .map_or(w.app_id.as_str(), String::as_str);
+                self.key_of(named) != w.key
+            })
             .map(|(id, w)| (*id, w.app_id.clone(), w.title.clone(), w.minimized))
             .collect();
         for (id, app_id, title, minimized) in moved {
-            self.window_closed(id, now);
+            self.forget_window(id, now);
             self.window(id, &app_id, &title, minimized, now);
         }
     }

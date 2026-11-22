@@ -239,3 +239,20 @@ fn a_name_path_or_file_uri_loads_as_a_pixmap() {
     assert_eq!(by_path.data(), by_uri.data());
     assert!(theme_icons.load("no-such-icon", 8).is_none());
 }
+
+#[test]
+fn a_base_without_the_themes_index_still_holds_its_icons() {
+    // an application installed for one person writes its icon under `~/.local/share/icons/hicolor`, which has no
+    // `index.theme`: the theme's index is in another base directory, and the icon theme specification needs it in one only
+    let dir = tempfile::tempdir().unwrap();
+    let (user_base, system_base) = (dir.path().join("user"), dir.path().join("system"));
+    support::theme(&system_base, "hicolor", None, &APPS_48);
+    let user = user_base.join("hicolor");
+    support::write_png(&user.join("48x48/apps/per-user.png"), 48, 48, BLACK);
+
+    let mut lookup = IconLookup::with_roots(&Assets::builtin(), vec![user_base, system_base]);
+    assert_eq!(
+        lookup.find("per-user", 48, 1),
+        Some(user.join("48x48/apps/per-user.png"))
+    );
+}

@@ -103,6 +103,11 @@ fn load_theme(name: &str, bases: &[PathBuf]) -> Option<Theme> {
     let mut found = false;
     for base in bases {
         let root = base.join(name);
+        // a base holds the theme's icons whether or not its index is there: the specification asks for `index.theme`
+        // in one of the bases only (`~/.local/share/icons/hicolor`, where a per-user application writes its icon, has none)
+        if root.is_dir() {
+            theme.roots.push(root.clone());
+        }
         let Ok(text) = std::fs::read_to_string(root.join("index.theme")) else {
             continue;
         };
@@ -138,7 +143,6 @@ fn load_theme(name: &str, bases: &[PathBuf]) -> Option<Theme> {
             }
         }
         found = true;
-        theme.roots.push(root);
     }
     found.then_some(theme)
 }

@@ -103,6 +103,7 @@ struct DockClient {
     output: Option<wl_output::WlOutput>,
     layer_shell: Option<zwlr_layer_shell_v1::ZwlrLayerShellV1>,
     shell: Option<CupertinoShellV1>,
+    activation: Option<xdg_activation_v1::XdgActivationV1>,
     /// `launching`, `window_launch` and `window` events in the order they came: the event's name and its application id.
     heard: Vec<(&'static str, String)>,
 }
@@ -130,6 +131,7 @@ impl Dispatch<wl_registry::WlRegistry, ()> for DockClient {
             "zwlr_layer_shell_v1" => {
                 state.layer_shell = Some(reg.bind(name, version.min(4), qh, ()))
             }
+            "xdg_activation_v1" => state.activation = Some(reg.bind(name, 1, qh, ())),
             "cupertino_shell_v1" => {
                 state.shell = Some(reg.bind(name, version.min(state.shell_version), qh, ()));
             }
@@ -177,6 +179,8 @@ wayland_client::delegate_noop!(DockClient: ignore wl_surface::WlSurface);
 wayland_client::delegate_noop!(DockClient: ignore wl_output::WlOutput);
 wayland_client::delegate_noop!(DockClient: ignore zwlr_layer_shell_v1::ZwlrLayerShellV1);
 wayland_client::delegate_noop!(DockClient: ignore CupertinoShellV1);
+wayland_client::delegate_noop!(DockClient: ignore xdg_activation_v1::XdgActivationV1);
+wayland_client::delegate_noop!(DockClient: ignore xdg_activation_token_v1::XdgActivationTokenV1);
 
 /// An application's connection: one window, and the activation tokens it was given.
 #[derive(Default)]
@@ -545,6 +549,35 @@ fn a_token_announces_the_launch_of_an_application_the_desktop_shows_only() {
         [("launching", EDITOR.to_owned())],
         "only the editor's launch is announced"
     );
+}
+
+/// The dock bounces the tile of its own launches itself, and asks for a token too when it asks a running application
+/// for a window, which must not bounce.
+#[test]
+fn the_docks_own_token_is_not_announced_back_to_it() {
+    let mut rig = Rig::new();
+    let (mut host, mut dock_side, _dock) = rig.dock(WINDOW_LAUNCH);
+    let qh = dock_side.queue.handle();
+    let token = dock_side
+        .client
+        .activation
+        .as_ref()
+        .expect("the activation global")
+        .get_activation_token(&qh, ());
+    token.set_app_id(EDITOR.into());
+    token.commit();
+    dock_side.client.heard.clear();
+    rig.settle(&mut [&mut host, &mut dock_side]);
+    assert!(
+        dock_side.client.heard.is_empty(),
+        "no launch is announced: {:?}",
+        dock_side.client.heard
+    );
+    // the launcher's still is
+    let mut launcher = rig.launcher();
+    let _token = self::token(&mut launcher, EDITOR);
+    rig.settle(&mut [&mut host, &mut dock_side, &mut launcher]);
+    assert_eq!(dock_side.client.heard, [("launching", EDITOR.to_owned())]);
 }
 
 #[test]

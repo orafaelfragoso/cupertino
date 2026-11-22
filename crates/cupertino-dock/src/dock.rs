@@ -611,7 +611,8 @@ impl Dock {
 
     /// Drop tiles whose disappear animation has finished.
     pub fn tick(&mut self, now: f64) {
-        // a launch that never produced a running app: an unpinned tile has nothing left to show
+        // a launch that never produced a running app: an unpinned tile has nothing left to show, but one that runs (a
+        // resident application asked for a window that never came) keeps its tile
         for t in self
             .apps
             .iter_mut()
@@ -619,7 +620,7 @@ impl Dock {
         {
             t.launch_deadline = None;
             t.launch = None;
-            if !t.pinned {
+            if !t.pinned && !t.running {
                 Self::fade_out(&self.cfg, t, now);
             }
         }

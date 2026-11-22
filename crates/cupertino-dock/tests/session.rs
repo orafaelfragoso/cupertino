@@ -206,6 +206,43 @@ fn a_window_of_an_application_stays_on_its_tile_whatever_its_launch_named() {
     assert_eq!(s.window_info(2).map(|w| w.key.as_str()), Some(T3_SHOWN));
 }
 
+/// Opening a resident application without windows asks it for a window: the launcher's token for it is announced, and
+/// neither bounces the tile nor lets the launch timeout take the running tile away.
+#[test]
+fn launching_an_application_that_runs_without_a_window_keeps_its_tile_unbounced() {
+    // the terminal ran before the dock: its window is in the server's first list, and does not bounce
+    let mut s = Session::new(Dock::new(dock_config(None, 1080.0)), desktop());
+    s.window(1, "foot", "Terminal", false, 0.0);
+    s.list_taken();
+    s.set_resident("foot", true, 0.0);
+    s.window_closed(1, 1.0);
+    s.launching("foot", 2.0);
+    let tile = s.dock.app_tile("foot").expect("the running tile");
+    assert!(tile.running);
+    assert!(tile.launch.is_none(), "no bounce");
+    let later = 3.0 + s.dock.bounce.launch_timeout;
+    s.dock.tick(later);
+    let tile = s.dock.app_tile("foot").expect("the running tile");
+    assert!(tile.running && !tile.is_leaving());
+}
+
+/// A launch that times out takes away an unpinned tile only when nothing of the application runs.
+#[test]
+fn the_launch_timeout_keeps_a_running_tile() {
+    let mut s = session(&[]);
+    s.dock.app_started("foot", 0.0);
+    s.dock.app_launching("foot", 1.0);
+    let later = 2.0 + s.dock.bounce.launch_timeout;
+    s.dock.tick(later);
+    let tile = s.dock.app_tile("foot").expect("the running tile");
+    assert!(tile.running && !tile.is_leaving());
+    // a launch of what does not run still fades
+    s.dock.app_launching("htop", later);
+    let after = later + s.dock.bounce.launch_timeout + 1.0;
+    s.dock.tick(after);
+    assert!(s.dock.app_tile("htop").is_none_or(|t| t.is_leaving()));
+}
+
 #[test]
 fn indexing_the_entries_again_keeps_a_window_on_the_tile_its_launch_named() {
     let mut s = session(&[]);

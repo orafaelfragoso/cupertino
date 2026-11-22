@@ -625,8 +625,13 @@ impl XdgActivationHandler for Cupertino {
             app_id: data.app_id.clone().filter(|id| !id.is_empty()),
         });
         // a token that names an application is a launch (launchers, file managers and GTK's
-        // launch context set the id): the docks bounce its tile before its first window maps
-        if let Some(app_id) = data.app_id.as_deref().filter(|id| !id.is_empty()) {
+        // launch context set the id): the docks bounce its tile before its first window maps. Only an application the
+        // desktop shows is one: a helper's hidden entry or an id without one would leave a tile no window comes to
+        if let Some(app_id) = data
+            .app_id
+            .as_deref()
+            .filter(|id| self.desktop.find(id).is_some_and(|e| !e.no_display))
+        {
             self.docks.launching(app_id);
         }
         true

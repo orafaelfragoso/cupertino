@@ -109,3 +109,28 @@ fn a_window_of_a_lone_hidden_entry_gets_no_tile() {
     assert!(s.dock.app_tile("org.example.Portal").is_none());
     assert!(!s.has_windows("org.example.Portal"));
 }
+
+#[test]
+fn launching_a_program_that_is_no_application_adds_no_tile() {
+    let mut s = session(&[]);
+    for identity in ["org.example.Portal", "some-script", ""] {
+        s.launching(identity, 0.0);
+        assert!(
+            s.dock.app_tile(identity).is_none(),
+            "{identity:?} has no tile"
+        );
+    }
+    // an application the desktop shows still bounces
+    s.launching("foot", 0.0);
+    assert!(s.dock.app_tile("foot").is_some_and(|t| t.launch.is_some()));
+}
+
+#[test]
+fn launching_a_pinned_program_without_an_entry_bounces_its_tile() {
+    let mut s = session(&["some-script"]);
+    s.launching("some-script", 0.0);
+    assert!(s
+        .dock
+        .app_tile("some-script")
+        .is_some_and(|t| t.launch.is_some()));
+}

@@ -778,7 +778,16 @@ impl Launcher {
                     Some(a) => exec::command_for_action(e, e.actions.iter().find(|x| &x.id == a)?)?,
                 };
                 Some(if e.terminal {
-                    spec.in_terminal(&self.config.terminal_command)
+                    // the window that comes is the terminal's: the token names the terminal (its program's name, which
+                    // the dock and the server resolve to its entry), so the terminal's tile bounces and its window ends
+                    // the bounce
+                    let mut spec = spec.in_terminal(&self.config.terminal_command);
+                    spec.desktop_id = std::path::Path::new(&spec.program)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .filter(|n| !n.is_empty())
+                        .map(str::to_owned);
+                    spec
                 } else {
                     spec
                 })

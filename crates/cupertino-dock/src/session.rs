@@ -316,8 +316,13 @@ impl Session {
 
     /// The server started a program of this application: its tile bounces until a window appears. An application
     /// that already shows a window does not bounce: it is brought forward rather than started (the launcher asks for
-    /// its token before it knows), and no first window would come to end the bounce.
+    /// its token before it knows), and no first window would come to end the bounce. A program that is no application
+    /// ([`Session::is_application`]: no entry the desktop shows and no tile pinned for it) gets no tile: no window of
+    /// it would come to give the tile a running dot.
     pub fn launching(&mut self, app_id: &str, now: f64) {
+        if !self.is_application(app_id) {
+            return;
+        }
         let key = self.key_of(app_id);
         if self.windows.values().any(|w| w.key == key) {
             return;

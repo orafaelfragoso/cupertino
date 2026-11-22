@@ -8,6 +8,8 @@
 //!   window back; released at the same place in a quick flick, the release's velocity carries it open, and the window
 //!   stays in its hole.
 //! - A window that closes while the overview is open has its hole closed: the claim ends and nothing of it shows.
+//! - The toggle (the shortcut, F3) opens the overview and the next one leaves it, giving the window back, more times
+//!   than a connection may have transactions, with the same instance.
 
 #[path = "shell-host/app.rs"]
 mod app;
@@ -443,4 +445,54 @@ fn a_window_closing_in_the_open_overview_closes_its_hole() {
         rig.state.transactions.active_claim_for(id).is_none()
             && count(&rig.image(), Area::output(), magenta) == 0
     });
+}
+
+/// The times the toggle opens and leaves the overview, each a transaction in and one out: more than a connection may
+/// have that have not ended.
+const TOGGLE_ROUNDS: usize = cupertino_protocols::transaction::MAX_ACTIVE_TRANSACTIONS / 2 + 2;
+/// The turns the overview stays shown before the toggle leaves it: past the way in's motion (0.5 s and more).
+const SHOWN_TURNS: u32 = 100;
+
+#[test]
+fn the_toggle_opens_the_overview_and_the_next_one_leaves_it() {
+    let (_bus, mut rig) = start("overview-toggle", &["overview"]);
+    let client = rig.client();
+    app::spawn(client, "org.cupertino.test.overview");
+    let (id, own) = mapped(&mut rig);
+    let output = rig.state.outputs[0].id;
+    rig.until("the overview has the window", |rig| {
+        rig.state
+            .transactions
+            .has_gesture_binding(output, WireGesture::SwipeUp)
+    });
+    for round in 0..TOGGLE_ROUNDS {
+        rig.state.toggle_overview(false);
+        rig.until(
+            &format!("round {round}: the toggle opened the overview"),
+            |rig| {
+                rig.state.transactions.is_window_claimed(id)
+                    && count(&rig.image(), Area::output(), magenta) > 0
+            },
+        );
+        for _ in 0..SHOWN_TURNS {
+            rig.turn();
+        }
+        rig.state.toggle_overview(false);
+        rig.until(&format!("round {round}: the next toggle left it"), |rig| {
+            !rig.state.transactions.is_window_claimed(id)
+                && rig
+                    .state
+                    .transactions
+                    .has_gesture_binding(output, WireGesture::SwipeUp)
+        });
+        assert!(
+            rig.shows(own, magenta, own.covered()),
+            "round {round}: the window shows at its own frame"
+        );
+    }
+    assert_eq!(
+        rig.state.hosts.component_instance("overview"),
+        1,
+        "the overview kept its first instance"
+    );
 }

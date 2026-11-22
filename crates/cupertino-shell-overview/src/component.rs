@@ -6,15 +6,16 @@
 //!   shown, has a hole per window laid out at the window's own frame, claiming it, and layer animations that take
 //!   each hole to its place in the overview and fade the chrome in. The fingers drive them; released, the gesture
 //!   completes or reverts along [`SpringPreset::OVERVIEW_OPEN`] from its velocity. The server's toggle (the shortcut, a
-//!   hot corner, a named action) opens the same surface with a transaction of its own.
+//!   hot corner, a named action) opens the same surface with a transaction of its own, open once its motion has run:
+//!   the server says when a gesture's transaction comes to rest, never when one no gesture drives ends.
 //! - **Open.** The holes are laid out at their places; a change of the windows or of the band moves them there with
 //!   [`SpringPreset::OVERVIEW_REFLOW`]. A window that closes has its hole faded by the server, which says so
 //!   (`Event::HoleClosed`). Clicks and keys pick a window, leave, switch, add, remove and reorder desktops and
 //!   move a window to another desktop, through `kit_shell::overview`.
 //! - **The way out.** The reverse gesture takes a gesture-opened overview back; a pick, a desktop or a leave starts a
 //!   transaction that takes the holes back to the windows' frames (the picked window activated at its start) and
-//!   fades the chrome; at its end the surface goes and the windows show in their places again. Then the gesture is
-//!   armed anew.
+//!   fades the chrome; once its motion has run the surface goes, the windows show in their places again and the
+//!   transaction, let go of, ends. Then the gesture is armed anew.
 //!
 //! The windows' frames are global; the component subtracts the output's origin. Under Reduce Motion the server
 //! drives only the opacity of a gesture's layers, and a toggle fades the overview in and out with the windows at
@@ -98,6 +99,8 @@ pub enum Message {
     Rearm(OutputId, u64),
     /// The grace of a hole whose window left the set ended.
     Departed(WindowKey, u32),
+    /// The motion of the transaction no gesture drives, of the view so named, has run ([`View::settle`]).
+    Settled(WindowKey, transaction::Id),
 }
 
 /// What the server last said of an output.
@@ -147,6 +150,10 @@ struct View {
     phase: Phase,
     /// The transaction of its way in or out.
     tx: Option<transaction::Id>,
+    /// How long after its start that transaction's motion ends, for one no gesture drives: the server says when a
+    /// gesture's transaction comes to rest (`finished`), never when another one ends, so the way in is open and the
+    /// way out over once its motion has run ([`Message::Settled`]). None for a gesture's transaction.
+    settle: Option<Duration>,
     handle: Option<transaction::Handle>,
     holes: BTreeMap<u32, HoleState>,
 }
@@ -174,7 +181,7 @@ pub struct Model {
     feeds: HashMap<OutputId, Feed>,
     views: Vec<View>,
     next_view: u64,
-    /// Transactions of window changes alone (a window moved to another desktop), kept until they end.
+    /// Transactions of window changes alone (a window moved to another desktop), kept until they start.
     errands: Vec<transaction::Handle>,
     /// Where the watch on `dock.conf` says the file changed.
     conf_changes: (async_channel::Sender<()>, async_channel::Receiver<()>),
@@ -369,9 +376,21 @@ impl Model {
             phase,
             // set by the caller with the transaction it submits
             tx: None,
+            settle: None,
             handle: None,
             holes,
         })
+    }
+
+    /// How long the motion of a way in or out that no gesture drives runs ([`Model::motion`]), the spring's
+    /// settling time or the fade's.
+    fn motion_time(fade_only: bool) -> Duration {
+        let timing: Timing = if fade_only {
+            Timing::OVERVIEW_FADE
+        } else {
+            SpringPreset::OVERVIEW_OPEN.into()
+        };
+        Duration::from_secs_f64(timing.duration())
     }
 
     /// The layer animations of a way in (`opening`) or out of `view`: holes to their places or back to their
@@ -478,6 +497,7 @@ impl Model {
         let mut part = transaction::create(output);
         part.stage(&view.key);
         view.tx = Some(part.id());
+        view.settle = Some(Self::motion_time(self.reduce_motion));
         view.handle = Some(part.submit());
         let out = Self::motion(&view, true, self.reduce_motion);
         self.views.push(view);
@@ -508,6 +528,7 @@ impl Model {
         }
         part.stage(&view.key);
         view.tx = Some(part.id());
+        view.settle = Some(Self::motion_time(fade_only));
         view.handle = Some(part.submit());
         Self::motion(view, false, fade_only)
     }
@@ -675,26 +696,49 @@ impl Model {
                     self.errands.remove(i);
                     return Vec::new();
                 }
-                let Some(i) = self.by_tx(id) else {
-                    return Vec::new();
-                };
-                let view = &mut self.views[i];
-                match (view.phase, outcome) {
-                    (Phase::Armed | Phase::Opening, Outcome::Completed) => {
-                        view.phase = Phase::Open;
-                        Vec::new()
-                    }
-                    // a completed gesture's transaction stays for the reverse gesture
-                    (Phase::Open, Outcome::Completed) => Vec::new(),
-                    _ => {
-                        let output = view.output;
-                        self.views.remove(i);
-                        self.arm(output)
-                    }
+                match self.by_tx(id) {
+                    Some(i) => self.rest(i, outcome),
+                    None => Vec::new(),
                 }
             }
-            transaction::Event::Started { .. } | transaction::Event::GestureEnded { .. } => {
+            // window changes alone are carried out at the start: nothing more to hear, and letting go ends it
+            transaction::Event::Started { id, .. } if self.errands.iter().any(|h| h.id() == id) => {
+                self.errands.retain(|h| h.id() != id);
                 Vec::new()
+            }
+            // the server never says that a transaction no gesture drives ended: its motion runs from here
+            transaction::Event::Started { id, .. } => match self.by_tx(id) {
+                Some(i) => {
+                    let view = &self.views[i];
+                    view.settle
+                        .map(|delay| Do::After {
+                            delay,
+                            message: Message::Settled(view.key.clone(), id),
+                        })
+                        .into_iter()
+                        .collect()
+                }
+                None => Vec::new(),
+            },
+            transaction::Event::GestureEnded { .. } => Vec::new(),
+        }
+    }
+
+    /// The transaction of view `i` came to rest with `outcome`: the way in is open, or gone when reverted or
+    /// cancelled; the way out is gone, and the gestures are armed again.
+    fn rest(&mut self, i: usize, outcome: Outcome) -> Vec<Do<Message>> {
+        let view = &mut self.views[i];
+        match (view.phase, outcome) {
+            (Phase::Armed | Phase::Opening, Outcome::Completed) => {
+                view.phase = Phase::Open;
+                Vec::new()
+            }
+            // a completed gesture's transaction stays for the reverse gesture
+            (Phase::Open, Outcome::Completed) => Vec::new(),
+            _ => {
+                let output = view.output;
+                self.views.remove(i);
+                self.arm(output)
             }
         }
     }
@@ -860,6 +904,13 @@ impl Application for Overview {
                     model.views[i].holes.remove(&id);
                 }
                 Vec::new()
+            }
+            Message::Settled(key, id) => {
+                // a view whose way out started since keeps waiting for that one
+                match model.view(&key).filter(|&i| model.views[i].tx == Some(id)) {
+                    Some(i) => model.rest(i, Outcome::Completed),
+                    None => Vec::new(),
+                }
             }
             Message::Departed(key, id) => {
                 if let Some(i) = model.view(&key) {

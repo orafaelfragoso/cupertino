@@ -496,6 +496,9 @@ A participant's part is made of two things:
 - A join by name that reaches the server before the creator's `create` waits for it, at most 100 ms, then starts as a
   transaction of its own, on the clock of the output the join names. When the `create` is there, the creator's output
   is the transaction's and the join's is not read.
+- A transaction bound to no gesture ends once it started and every participant that did not withdraw had its part
+  applied and destroyed its object: no event says when its animations end, so a participant keeps its object while
+  it waits for them and destroys it when it is done.
 - A join within 10 s after the transaction ended applies with every animation at its end.
 - A connection takes part in at most 16 transactions that have not ended, the ones it created and the ones it
   joined counted together.

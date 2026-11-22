@@ -47,7 +47,9 @@ server drives them with the fingers (start + progress x (target - start)) and se
 gesture is armed again. The same transaction keeps the reverse gesture (`bind_reverse_gesture`), which takes the
 overview back. When the windows change, the armed surface goes at once and comes back once they kept still for 250 ms
 (`REARM_QUIET`): a swipe in between reaches the dock. The server's toggle (the shortcut, a hot corner, a named action,
-the dock's Show All Windows) opens the same surface with a transaction of its own, critically damped over 0.25 s.
+the dock's Show All Windows) opens the same surface with a transaction of its own, critically damped over 0.25 s. The
+server says when a gesture's transaction comes to rest, never when one no gesture drives ends: the toggle's way in is
+open, and every way out over, once its motion has run from its start (the spring's settling time, or the fade's).
 
 **Open.** The holes are laid out at their places, with the keyboard. A change of the windows or of the band moves a hole
 to its new place along `SpringPreset::OVERVIEW_REFLOW`; a new window's hole shows at its place; a window that left the
@@ -59,8 +61,9 @@ minimized window of the application overview shows in a thumbnail hole, which cl
 **The way out.** A pick (click, Return or Space on the selection), a desktop, the background or Escape starts a
 transaction that takes every hole back to its window's frame and fades the chrome out; the picked window is activated,
 or the desktop switched to, at its start (`kit_shell::overview`). At its end the surface goes and the windows show in
-their places again. Dragging a window onto another desktop of the band moves it there in a transaction of window changes
-alone; dropped anywhere else it goes back to its place.
+their places again, and the component lets go of the transaction, which ends it. Dragging a window onto another desktop
+of the band moves it there in a transaction of window changes alone, let go of once it started; dropped anywhere else
+it goes back to its place.
 
 **Session.** Under Reduce Motion the server drives only the opacity of a gesture's layers, and a toggle fades the
 overview in and out over 0.2 s (`Timing::OVERVIEW_FADE`) with the holes at their end places. Kit follows the appearance;

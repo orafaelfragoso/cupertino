@@ -3497,6 +3497,66 @@ fn a_gesture_bound_transaction_destroyed_before_it_arms_ends_cancelled_and_no_lo
     );
 }
 
+/// The most turns a transaction whose parts are in takes to start: it waits at most `FRAME_WAIT_MS` (50 ms) for a frame,
+/// and each turn waits up to 2 ms for the clients.
+const STARTING_PUMPS: usize = 200;
+
+#[test]
+fn a_started_transaction_every_participant_let_go_of_no_longer_counts() {
+    let mut rig = Rig::new();
+    let (hconn, mut hq, mut hst) = rig.connect_host(&["overview", "menubar"]);
+    let (_hov, oconn, mut oq, mut ost) = rig.spawn_component(&hconn, &mut hq, &mut hst, "overview");
+    let (_hbar, bconn, mut bq, mut bst) = rig.spawn_component(&hconn, &mut hq, &mut hst, "menubar");
+    let oqh = oq.handle();
+    let bqh = bq.handle();
+    // more transactions than a connection may have, each let go of once it started: the overview's way in and out
+    let cycles =
+        u32::try_from(cupertino_protocols::transaction::MAX_ACTIVE_TRANSACTIONS + 4).unwrap();
+    for serial in 1..=cycles {
+        let tx =
+            ost.tx_manager
+                .as_ref()
+                .unwrap()
+                .create(serial, ost.output.as_ref().unwrap(), &oqh, ());
+        tx.submit();
+        let joined = bst.tx_manager.as_ref().unwrap().join(
+            "overview".into(),
+            ost.instance.unwrap(),
+            serial,
+            bst.output.as_ref().unwrap(),
+            &bqh,
+            (),
+        );
+        joined.submit();
+        let started = ost.started.len();
+        for _ in 0..STARTING_PUMPS {
+            if ost.started.len() > started {
+                break;
+            }
+            rig.pump_comp(&oconn, &mut oq, &mut ost);
+            rig.pump_comp(&bconn, &mut bq, &mut bst);
+        }
+        assert!(ost.started.len() > started, "transaction {serial} started");
+        tx.destroy();
+        // the joiner holds its object still: the transaction goes on for it
+        if serial == 1 {
+            rig.pump_comp(&oconn, &mut oq, &mut ost);
+            rig.pump_comp(&bconn, &mut bq, &mut bst);
+            assert!(
+                bst.finished.is_empty(),
+                "a transaction a participant holds goes on"
+            );
+        }
+        joined.destroy();
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+        rig.pump_comp(&bconn, &mut bq, &mut bst);
+        assert!(
+            oconn.protocol_error().is_none() && bconn.protocol_error().is_none(),
+            "transaction {serial}: the ones let go of no longer count towards the connections' limit"
+        );
+    }
+}
+
 #[test]
 fn a_bound_gesture_whose_creator_s_connection_ends_under_way_settles_a_joiner_s_layers_back() {
     use cupertino_layer_v1::Property;

@@ -124,6 +124,17 @@ fn start_due(
     all_expected_ready || deadline_passed
 }
 
+/// Whether `tx` (started, bound to no gesture) is over: every participant that did not withdraw has its part applied
+/// and has destroyed its object. No event says when such a transaction's motion ends, so its participants let go of
+/// it when they are done with it; nothing is left for it to do, and it ends.
+fn let_go(tx: &TransactionRecord) -> bool {
+    tx.gesture.is_none()
+        && tx
+            .participants
+            .iter()
+            .all(|p| p.withdrawn || (p.applied && p.resource.is_none()))
+}
+
 /// Apply part `p` of `tx_id` with start time `ts`: its staged surfaces leave it, so their kept commits leave the hold
 /// ([`Cupertino::release_left_holds`]), its window changes go to `changes` and it hears `started`.
 fn apply_part(
@@ -205,6 +216,13 @@ impl Cupertino {
                 }
             }
             match tx.phase {
+                // ended, it no longer counts towards its connections' limit and is forgotten after the retention
+                TxPhase::Started { .. } if let_go(tx) => {
+                    tx.phase = TxPhase::Ended {
+                        ended_at: now,
+                        outcome: WireOutcome::Completed,
+                    };
+                }
                 TxPhase::Pending => {
                     if tx.ready_at.is_none() && start_due(tx, now, &self.hosts, &self.outputs) {
                         if tx.gesture.is_some() {

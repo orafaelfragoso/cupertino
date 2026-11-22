@@ -4,8 +4,8 @@ use crate::common;
 
 use common::*;
 use cupertino_wm::{
-    AnimationKind, Command, DisabledControls, Effect, LifecycleState, MapParams, Requester,
-    Resting, TileKind, WindowKind,
+    AnimationKind, Command, DisabledControls, Effect, LifecycleState, MapParams, OutputId,
+    Requester, Resting, TileKind, WindowKind, Wm,
 };
 
 #[test]
@@ -483,4 +483,56 @@ fn a_sheet_hangs_from_its_parent_dims_it_and_blocks_its_input() {
         Some(win(2)),
         "the modal child keeps the keyboard"
     );
+}
+
+/// A monitor that comes back (as a new output) is given its windows before the menu bar registers again; the bar's area arrives later.
+const BACK: OutputId = OutputId(2);
+
+fn readd_output_with_full_usable(wm: &mut Wm) {
+    wm.handle(Command::RemoveOutput { output: OUT }, 10.0);
+    wm.handle(
+        Command::AddOutput {
+            output: BACK,
+            rect: SCREEN,
+            usable: SCREEN,
+        },
+        11.0,
+    );
+    settle(wm, 11.0);
+    wm.handle(
+        Command::SetUsableArea {
+            output: BACK,
+            usable: USABLE,
+        },
+        20.0,
+    );
+    settle(wm, 20.0);
+}
+
+#[test]
+fn a_usable_area_that_arrives_after_the_output_refits_a_zoomed_window() {
+    let mut wm = common::wm();
+    open(&mut wm, 1, "a", 1.0);
+    wm.handle(Command::ToggleZoom { window: win(1) }, 3.0);
+    settle(&mut wm, 3.0);
+    readd_output_with_full_usable(&mut wm);
+    assert_eq!(state(&wm, 1), LifecycleState::Zoomed);
+    assert_eq!(wm.window(win(1)).unwrap().geometry(), USABLE);
+}
+
+#[test]
+fn a_usable_area_that_arrives_after_the_output_refits_a_tiled_window() {
+    let mut wm = common::wm();
+    open(&mut wm, 1, "a", 1.0);
+    wm.handle(
+        Command::Tile {
+            window: win(1),
+            kind: TileKind::Top,
+        },
+        3.0,
+    );
+    settle(&mut wm, 3.0);
+    readd_output_with_full_usable(&mut wm);
+    assert_eq!(state(&wm, 1), LifecycleState::Tiled(TileKind::Top));
+    assert!(wm.window(win(1)).unwrap().geometry().y >= USABLE.y);
 }

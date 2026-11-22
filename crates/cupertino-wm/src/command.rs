@@ -120,6 +120,8 @@ pub enum Command {
         output: OutputId,
         frame: Rect,
     },
+    /// The area free of bars on `output` changed (a menu bar came or went): when it differs from the stored one,
+    /// windows resting in full screen, zoomed, tiled or normal layouts are refitted to it, as for `SetOutputRect`.
     SetUsableArea {
         output: OutputId,
         usable: Rect,

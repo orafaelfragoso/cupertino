@@ -214,8 +214,14 @@ impl Wm {
                 frame,
             } => self.move_window_to_output(window, output, frame, now, o),
             Command::SetUsableArea { output, usable } => {
-                if let Some(op) = self.outputs.iter_mut().find(|p| p.id == output) {
-                    op.usable = usable;
+                let changed = self
+                    .outputs
+                    .iter()
+                    .find(|p| p.id == output)
+                    .filter(|p| p.usable != usable)
+                    .map(|p| p.rect);
+                if let Some(rect) = changed {
+                    self.set_output_rect(output, rect, usable, o);
                 }
             }
             Command::SetOutputRect {

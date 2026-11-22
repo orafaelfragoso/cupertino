@@ -125,6 +125,8 @@ pub struct Model {
     told: async_channel::Receiver<Message>,
     /// The watch on the home trash; dropping it ends the watch.
     trash_watch: Option<notify::RecommendedWatcher>,
+    /// The watch on the `applications` directories; dropping it ends the watch.
+    desktop_watch: Option<notify::RecommendedWatcher>,
 }
 
 impl Model {
@@ -223,6 +225,7 @@ impl Model {
             trash,
             conf_watch,
             trash_watch,
+            desktop_watch,
         } = startup;
         {
             let mut link = self.link.borrow_mut();
@@ -236,6 +239,10 @@ impl Model {
             .map(|watch| tasks::follow_conf(watch, self.tell.clone()))
             .into_iter()
             .collect();
+        if let Some((watcher, pokes)) = desktop_watch {
+            self.desktop_watch = Some(watcher);
+            commands.push(tasks::follow_desktop(pokes, self.tell.clone()));
+        }
         commands.extend(self.make(read));
         commands
     }
@@ -298,6 +305,10 @@ impl Model {
             }
             Heard::Told(message) => {
                 let mut commands = vec![self.told()];
+                if matches!(*message, Message::DesktopChanged) {
+                    commands.push(tasks::reindex_desktop());
+                    return commands;
+                }
                 if let Some(dock) = self.dock.as_mut() {
                     commands.extend(kit::update(dock, *message));
                 }
@@ -397,6 +408,7 @@ impl Application for Dock {
             tell: tell.clone(),
             told,
             trash_watch: None,
+            desktop_watch: None,
         };
         let mut commands = bus::session(
             |connection| Message::Shell(Heard::Bus(connection.ok())),

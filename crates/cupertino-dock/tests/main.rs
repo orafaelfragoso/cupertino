@@ -3,3 +3,6 @@
 
 #[path = "ready-to-show.rs"]
 mod ready_to_show;
+
+#[path = "desktop-index.rs"]
+mod desktop_index;

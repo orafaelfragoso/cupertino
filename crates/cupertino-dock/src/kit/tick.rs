@@ -50,6 +50,27 @@ impl Model {
             .collect()
     }
 
+    /// The desktop entries were indexed again: the tiles resolve through the new index, and the icon of an application
+    /// whose entry names another one is loaded again, the one before drawn until it arrives.
+    pub(super) fn desktop_changed(&mut self, index: crate::desktop::DesktopIndex) {
+        let old = self.session.desktop();
+        let changed: Vec<IconKey> = self
+            .icons
+            .keys()
+            .filter(|key| {
+                matches!(key, IconKey::App(app) if old.entry_icon(app) != index.entry_icon(app))
+            })
+            .cloned()
+            .collect();
+        for key in changed {
+            if let Some(loaded) = self.icons.remove(&key) {
+                self.stale_icons.insert(key, loaded);
+            }
+        }
+        let now = self.now();
+        self.session.set_desktop(index, now);
+    }
+
     /// The sides the tiles are drawn at: resting, and fully magnified. While the magnified side loads, a magnified
     /// tile draws the resting side's largest rendition.
     pub(super) fn drawn_sides(&self) -> Vec<f64> {

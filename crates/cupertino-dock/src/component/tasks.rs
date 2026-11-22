@@ -22,6 +22,11 @@ use crate::kit::Message;
 const STARTUP_DEADLINE: Duration = Duration::from_secs(5);
 /// How long reading a small file (`dock.conf`, the launcher's history) should take.
 pub const CONF_DEADLINE: Duration = Duration::from_secs(2);
+/// How long the `applications` directories must be quiet before the desktop entries are read again: an installer or an
+/// application rewriting its own entry writes several files in a burst, and one index of the result is enough.
+const DESKTOP_QUIET: Duration = Duration::from_millis(500);
+/// How long indexing the desktop entries again should take, as at start.
+const DESKTOP_DEADLINE: Duration = Duration::from_secs(5);
 /// The default pins after the built-in file manager, when neither the stored pins nor `dock.conf` name any.
 const DEFAULT_PINS: usize = 4;
 
@@ -35,6 +40,8 @@ pub struct Startup {
     pub(super) trash: Arc<cupertino_trash::Look>,
     pub(super) conf_watch: Option<ConfigWatcher>,
     pub(super) trash_watch: Option<notify::RecommendedWatcher>,
+    /// The watch on the `applications` directories, and the pokes it gives.
+    pub(super) desktop_watch: Option<(notify::RecommendedWatcher, async_channel::Receiver<()>)>,
 }
 
 /// Where the dock stores its pins.
@@ -147,6 +154,7 @@ fn read(tell: async_channel::Sender<Message>) -> Startup {
         trash: cupertino_trash::Look::new(cupertino_trash::Trash::new()),
         conf_watch,
         trash_watch: watch_trash(tell),
+        desktop_watch: watch_desktop(),
     }
 }
 
@@ -206,6 +214,74 @@ fn watch_trash(tell: async_channel::Sender<Message>) -> Option<notify::Recommend
             None
         }
     }
+}
+
+/// Watch the `applications` directories of the XDG data directories that exist; every change there pokes the receiver
+/// ([`follow_desktop`]). `None` when none can be watched: the entries then stay as read at start.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "runs on the I/O pool (kit::task::io)"
+)]
+fn watch_desktop() -> Option<(notify::RecommendedWatcher, async_channel::Receiver<()>)> {
+    use notify::Watcher;
+    let (poke, pokes) = async_channel::unbounded();
+    let mut watcher =
+        match notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+            if event.is_ok_and(|e| !e.kind.is_access()) {
+                let _ = poke.try_send(());
+            }
+        }) {
+            Ok(w) => w,
+            Err(e) => {
+                eprintln!("{PROCESS}: cannot watch the desktop entries: {e}");
+                return None;
+            }
+        };
+    let mut watching = false;
+    for dir in cupertino_defaults::data_dirs() {
+        let apps = dir.join("applications");
+        if !apps.is_dir() {
+            continue;
+        }
+        match watcher.watch(&apps, notify::RecursiveMode::Recursive) {
+            Ok(()) => watching = true,
+            Err(e) => eprintln!("{PROCESS}: cannot watch {}: {e}", apps.display()),
+        }
+    }
+    watching.then_some((watcher, pokes))
+}
+
+/// Wait for the desktop entries to change and be quiet for [`DESKTOP_QUIET`]: each burst is told once as
+/// [`Message::DesktopChanged`]. Ends when the watch is dropped.
+pub fn follow_desktop(
+    pokes: async_channel::Receiver<()>,
+    tell: async_channel::Sender<Message>,
+) -> Command<Message> {
+    Command::Perform(Box::pin(async move {
+        while pokes.recv().await.is_ok() {
+            loop {
+                async_io::Timer::after(DESKTOP_QUIET).await;
+                let mut more = false;
+                while pokes.try_recv().is_ok() {
+                    more = true;
+                }
+                if !more {
+                    break;
+                }
+            }
+            let _ = tell.try_send(Message::DesktopChanged);
+        }
+        Message::Done
+    }))
+}
+
+/// Index the desktop entries again on the I/O pool: it ends in [`Message::Desktop`].
+pub fn reindex_desktop() -> Command<Message> {
+    task::io(
+        DESKTOP_DEADLINE,
+        || DesktopIndex::load_from(&cupertino_defaults::data_dirs()),
+        |index| Message::Desktop(Box::new(index)),
+    )
 }
 
 /// The launcher's usage store, ranked now, the most used first.

@@ -104,6 +104,22 @@ impl Session {
         &self.desktop
     }
 
+    /// The desktop entries were indexed again: the tiles resolve through `desktop` from now on, and each window
+    /// whose tile is another one by the new entries is placed again, as the window of its application it is.
+    pub fn set_desktop(&mut self, desktop: DesktopIndex, now: f64) {
+        self.desktop = desktop;
+        let moved: Vec<(u32, String, String, bool)> = self
+            .windows
+            .iter()
+            .filter(|(_, w)| self.key_of(&w.app_id) != w.key)
+            .map(|(id, w)| (*id, w.app_id.clone(), w.title.clone(), w.minimized))
+            .collect();
+        for (id, app_id, title, minimized) in moved {
+            self.window_closed(id, now);
+            self.window(id, &app_id, &title, minimized, now);
+        }
+    }
+
     /// Key of the tile an application id stands for: the tile of that id, else the tile pinned
     /// by the id of the same desktop entry or by one of its aliases, else the id itself.
     pub fn key_of(&self, app_id: &str) -> String {

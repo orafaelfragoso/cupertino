@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant, SystemTime};
 
 /// One application entry.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -99,23 +100,235 @@ pub fn exec_command(exec: &str) -> Vec<String> {
     out
 }
 
+/// What an `Exec` line runs ([`runs`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Runs {
+    /// A program, a script or a module, as `Exec` names it.
+    Program(PathBuf),
+    /// A Flatpak application, by its ID (`flatpak run ID`).
+    Flatpak(String),
+    /// A shell command line that is more than one program (`sh -c "cd /opt/app && ./run"`), whole.
+    Shell(String),
+}
+
+/// Programs that run the command after their options, by file name, with the options of theirs that take the next word
+/// as their value: what an entry runs through one is that command.
+const RUNNERS: &[(&str, &[&str])] = &[
+    ("env", &["-u", "--unset", "-C", "--chdir"]),
+    ("exec", &[]),
+    ("nice", &["-n", "--adjustment"]),
+    ("ionice", &["-c", "--class", "-n", "--classdata"]),
+    ("nohup", &[]),
+    ("setsid", &[]),
+    ("prime-run", &[]),
+    ("gamemoderun", &[]),
+    ("mangohud", &[]),
+    ("optirun", &[]),
+    ("primusrun", &[]),
+    ("vglrun", &[]),
+    ("firejail", &[]),
+    ("torsocks", &[]),
+    ("dbus-launch", &[]),
+    ("dbus-run-session", &[]),
+    ("appimage-run", &[]),
+];
+/// Interpreters that run the script after their options, by file name: a name with a version after it (`python3.12`,
+/// `electron36`) is the same interpreter.
+const INTERPRETERS: &[&str] = &[
+    "python", "pypy", "perl", "ruby", "node", "nodejs", "electron", "gjs", "lua", "php", "java",
+    "mono", "wine",
+];
+/// Options of the [`INTERPRETERS`] that take the next word as their value.
+const INTERPRETER_VALUES: &[&str] = &["-W", "-X", "-Q", "-cp", "-classpath", "--class-path"];
+/// Options of the [`INTERPRETERS`] whose value is what runs: Python's module, Java's archive.
+const INTERPRETER_RUNS: &[&str] = &["-m", "-jar"];
+/// Shells: `-c` runs the command line after it, else the shell runs the script after its options.
+const SHELLS: &[&str] = &["sh", "bash", "dash", "zsh", "ksh", "mksh", "fish"];
+/// Words of a shell command line that make it more than one program run with its arguments.
+const SHELL_SYNTAX: &[char] = &[';', '&', '|', '$', '`', '<', '>', '(', ')', '\''];
+/// How many shell command lines inside one another (`sh -c "env A=1 sh -c '…'"`) are followed.
+const SHELL_DEPTH: u8 = 2;
+
+/// What an `Exec` line runs: its program, past the programs that only run another ([`RUNNERS`], `env`'s `NAME=value`
+/// words), the interpreter of a script ([`INTERPRETERS`], [`SHELLS`]) and `flatpak run`, whose application is its ID.
+/// Two entries whose `Exec` runs the same are the same application. `None` for an empty line.
+fn runs(exec: &str) -> Option<Runs> {
+    runs_words(&exec_command(exec), SHELL_DEPTH)
+}
+
+fn runs_words(words: &[String], depth: u8) -> Option<Runs> {
+    let mut i = 0;
+    loop {
+        let word = words.get(i)?;
+        let name = Path::new(word)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(word.as_str());
+        let program = || Some(Runs::Program(PathBuf::from(word)));
+        if let Some((_, values)) = RUNNERS.iter().find(|(r, _)| *r == name) {
+            i = past_options(words, i + 1, values);
+            continue;
+        }
+        let after = words.get(i + 1..).unwrap_or_default();
+        if name == "flatpak" {
+            return flatpak_app(after).map(Runs::Flatpak).or_else(program);
+        }
+        if SHELLS.contains(&name) {
+            let mut options = after.iter().take_while(|w| w.starts_with('-'));
+            if options.any(|w| w == "-c") {
+                let line = after.iter().skip_while(|w| *w != "-c").nth(1)?;
+                return shell_line(line, depth);
+            }
+            return after
+                .iter()
+                .find(|w| !w.starts_with('-'))
+                .map(|s| Runs::Program(PathBuf::from(s)))
+                .or_else(program);
+        }
+        let versioned = |base: &str| {
+            name.strip_prefix(base)
+                .is_some_and(|rest| rest.chars().all(|c| c.is_ascii_digit() || c == '.'))
+        };
+        if INTERPRETERS.iter().any(|b| versioned(b)) {
+            let mut j = 0;
+            while let Some(option) = after.get(j).filter(|w| w.starts_with('-')) {
+                if INTERPRETER_RUNS.contains(&option.as_str()) {
+                    return after.get(j + 1).map(|s| Runs::Program(PathBuf::from(s)));
+                }
+                j += if INTERPRETER_VALUES.contains(&option.as_str()) {
+                    2
+                } else {
+                    1
+                };
+            }
+            return after
+                .get(j)
+                .map(|s| Runs::Program(PathBuf::from(s)))
+                .or_else(program);
+        }
+        return program();
+    }
+}
+
+/// The index of the first word from `i` that is not an option of a runner (with `values`, the options that take the
+/// next word) or a `NAME=value` assignment, past a `--` that ends them.
+fn past_options(words: &[String], mut i: usize, values: &[&str]) -> usize {
+    while let Some(word) = words.get(i) {
+        if word == "--" {
+            return i + 1;
+        }
+        if values.contains(&word.as_str()) {
+            i += 2;
+        } else if word.starts_with('-') || is_assignment(word) {
+            i += 1;
+        } else {
+            break;
+        }
+    }
+    i
+}
+
+/// Whether `word` is `env`'s `NAME=value`.
+fn is_assignment(word: &str) -> bool {
+    word.split_once('=').is_some_and(|(name, _)| {
+        !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    })
+}
+
+/// The application ID of `flatpak`'s arguments `run [options] ID`.
+fn flatpak_app(args: &[String]) -> Option<String> {
+    let mut words = args.iter().skip_while(|w| w.starts_with('-'));
+    if words.next()? != "run" {
+        return None;
+    }
+    words.find(|w| !w.starts_with('-')).cloned()
+}
+
+/// What a shell's command line runs: the program of a plain command, followed like an `Exec` line; a line with shell
+/// syntax ([`SHELL_SYNTAX`]) is itself what runs.
+fn shell_line(line: &str, depth: u8) -> Option<Runs> {
+    if depth == 0 || line.contains(SHELL_SYNTAX) {
+        return Some(Runs::Shell(line.trim().to_owned()));
+    }
+    let words: Vec<String> = line.split_whitespace().map(str::to_owned).collect();
+    runs_words(&words, depth - 1)
+}
+
+/// How long after a look whether the `applications` directories changed ([`DesktopIndex::refresh`]) the next one is
+/// taken at the earliest: a client naming unknown applications in a burst of tokens costs one look, not one each.
+const RECHECK: Duration = Duration::from_secs(1);
+
+/// Where an index was read from, to read it again when that changed.
+#[derive(Clone, Debug)]
+struct Source {
+    /// The XDG data directories it was read from.
+    dirs: Vec<PathBuf>,
+    /// Every `applications` directory it read, or looked for, with its modification time then (`None`: missing). A
+    /// file created, removed or renamed into one changes it.
+    stamps: Vec<(PathBuf, Option<SystemTime>)>,
+    /// When it was last looked at.
+    checked: Option<Instant>,
+}
+
 /// Every application of the XDG data directories, first definition of an ID wins.
 #[derive(Clone, Debug, Default)]
 pub struct DesktopIndex {
     pub entries: Vec<DesktopEntry>,
+    /// Where the entries were read from; `None` for an index made of given entries, which is never read again.
+    source: Option<Source>,
 }
 
 impl DesktopIndex {
+    /// An index of `entries`, read from nowhere: [`Self::refresh`] leaves it as it is.
+    pub fn from_entries(entries: Vec<DesktopEntry>) -> Self {
+        Self {
+            entries,
+            source: None,
+        }
+    }
+
     pub fn load() -> Self {
         Self::load_from(&cupertino_defaults::data_dirs())
     }
 
+    /// Read the entries again when an `applications` directory they were read from changed since (an application
+    /// installed, an entry written after the server started), looking at most once per [`RECHECK`]. Whether they
+    /// were read again. The look is one `stat` per directory; reading again happens only after a change.
+    pub fn refresh(&mut self) -> bool {
+        let Some(source) = self.source.as_mut() else {
+            return false;
+        };
+        let now = Instant::now();
+        if source
+            .checked
+            .is_some_and(|at| now.duration_since(at) < RECHECK)
+        {
+            return false;
+        }
+        source.checked = Some(now);
+        if source.stamps.iter().all(|(dir, at)| modified(dir) == *at) {
+            return false;
+        }
+        let dirs = std::mem::take(&mut source.dirs);
+        *self = Self::load_from(&dirs);
+        if let Some(source) = self.source.as_mut() {
+            source.checked = Some(now);
+        }
+        tracing::info!(
+            entries = self.entries.len(),
+            "desktop entries read again: an applications directory changed"
+        );
+        true
+    }
+
     pub fn load_from(dirs: &[PathBuf]) -> Self {
         let mut entries: Vec<DesktopEntry> = Vec::new();
+        let mut stamps = Vec::new();
         for base in dirs {
             let apps = base.join("applications");
             let mut stack = vec![apps.clone()];
             while let Some(dir) = stack.pop() {
+                stamps.push((dir.clone(), modified(&dir)));
                 let Ok(rd) = std::fs::read_dir(&dir) else {
                     continue;
                 };
@@ -143,7 +356,14 @@ impl DesktopIndex {
             }
         }
         entries.sort_by(|a, b| a.id.cmp(&b.id));
-        Self { entries }
+        Self {
+            entries,
+            source: Some(Source {
+                dirs: dirs.to_vec(),
+                stamps,
+                checked: None,
+            }),
+        }
     }
 
     /// Entry for an application identity (an `app_id`, a desktop file ID or a command name):
@@ -156,28 +376,30 @@ impl DesktopIndex {
         self.named(identity).map(|e| self.shown(e))
     }
 
-    /// The entry the desktop shows for `entry`: `entry` itself, unless it is `NoDisplay` and an entry the desktop
-    /// shows runs the same program (the first word of `Exec`, compared as a path); the first such entry by ID. A
-    /// hidden helper's or portal's entry without one stays itself.
+    /// The entry the desktop shows for `entry`: `entry` itself, unless it is `NoDisplay` and exactly one entry the
+    /// desktop shows runs the same program ([`runs`]: past `env`, `flatpak run` and the other programs that only run
+    /// another). A hidden helper's or portal's entry without one stays itself, and so does one whose program several
+    /// shown entries run: it could stand for any of them.
     pub fn shown<'a>(&'a self, entry: &'a DesktopEntry) -> &'a DesktopEntry {
         if !entry.no_display {
             return entry;
         }
-        let Some(program) = exec_command(&entry.exec).into_iter().next() else {
+        let Some(program) = runs(&entry.exec) else {
             return entry;
         };
-        self.entries
+        let mut same = self
+            .entries
             .iter()
-            .find(|e| {
-                !e.no_display
-                    && exec_command(&e.exec)
-                        .first()
-                        .is_some_and(|p| Path::new(p) == Path::new(&program))
-            })
-            .unwrap_or(entry)
+            .filter(|e| !e.no_display && runs(&e.exec).as_ref() == Some(&program));
+        match (same.next(), same.next()) {
+            (Some(shown), None) => shown,
+            _ => entry,
+        }
     }
 
-    fn named(&self, identity: &str) -> Option<&DesktopEntry> {
+    /// The entry an identity names, by the rules of [`Self::find`] but without its step from a hidden entry to the one
+    /// the desktop shows: what Desktop Control names an application by, so a decision stored for it keeps its key.
+    pub fn named(&self, identity: &str) -> Option<&DesktopEntry> {
         let id = identity.trim_end_matches(".desktop").to_lowercase();
         if id.is_empty() {
             return None;
@@ -218,6 +440,11 @@ impl DesktopIndex {
         }
         std::iter::once(first).chain(rest).find(|e| e.id == name)
     }
+}
+
+/// When `dir` was last modified; `None` when it does not exist.
+fn modified(dir: &Path) -> Option<SystemTime> {
+    std::fs::metadata(dir).and_then(|m| m.modified()).ok()
 }
 
 /// Human readable application name for the menu bar: the desktop entry's name, else the last

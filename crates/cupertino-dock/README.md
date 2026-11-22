@@ -219,10 +219,12 @@ The bar follows Reduce Motion too:
 - `set_minimize_target` follows the slot the next minimized window takes.
 - `launching` from the server makes a tile bounce until a window of that application appears. The server sends it when it
   starts a program that has a desktop entry and when an `xdg-activation-v1` token names an application (`set_app_id`: the
-  launcher, Open With, GTK's launch context). An application that appears with no such signal (started from a terminal)
-  bounces for one cycle at its first window; the windows listed when the dock starts do not bounce; a second signal for a
-  bounce already running does not restart it; an application that already shows a window does not bounce (the launcher
-  asks for a token before the server brings the application forward, and no first window would end the bounce).
+  launcher, Open With, GTK's launch context), not for the dock's own tokens, whose launches the dock bounces itself. An
+  application that appears with no such signal (started from a terminal) bounces for one cycle at its first window; the
+  windows listed when the dock starts do not bounce; a second signal for a bounce already running does not restart it; an
+  application that already shows a window does not bounce (the launcher asks for a token before the server brings the
+  application forward, and no first window would end the bounce), and neither does one that runs without a window (it is
+  asked for one, which may not come); a launch that times out takes away an unpinned tile only when it does not run.
 - `attention` (the server refused an application's activation) bounces its tile once (informational attention).
 - An application's own icon comes from `cupertino-icons` (its desktop entry's `Icon=`: an absolute path or `hicolor` only); the trash is the asset `trash.empty` or `trash.full` (the home trash or the trash folder of a mounted volume has an entry or not, looked at once a second and when the home trash changes: the home trash where the tile asks, the volumes' folders only ever in a task on Kit's I/O pool that `cupertino_trash::Look` hands out, one look at a time, so the tile shows the home trash's state from the first frame and a volume's once it answers, and a volume that does not answer holds up neither the bar nor the later looks).
 

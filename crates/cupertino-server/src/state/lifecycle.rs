@@ -551,12 +551,14 @@ impl Cupertino {
         let program = cmd.get_program().to_string_lossy().into_owned();
         // the docks key tiles by desktop entry id; a program without an entry the desktop shows (a script, a shell, a
         // helper with a hidden entry) is not an application launch, and neither is a name several entries run
-        let app_id = self
-            .desktop
-            .for_program(std::path::Path::new(&program))
-            .map(|e| self.desktop.shown(e))
-            .filter(|e| !e.no_display)
-            .map(|e| e.id.clone());
+        let path = std::path::Path::new(&program);
+        let app_id = self.desktop_lookup(|desktop| {
+            desktop
+                .for_program(path)
+                .map(|e| desktop.shown(e))
+                .filter(|e| !e.no_display)
+                .map(|e| e.id.clone())
+        });
         crate::file_limit::restore_in_child(&mut cmd);
         match cmd.spawn() {
             Ok(mut child) => {
@@ -569,6 +571,31 @@ impl Cupertino {
             }
             Err(e) => tracing::warn!(program, error = %e, "spawning failed"),
         }
+    }
+
+    /// What `look` finds in the desktop entries; when it finds nothing, the entries are read again first if they
+    /// changed since they were read ([`crate::desktop::DesktopIndex::refresh`]), so an application installed or an
+    /// entry written after the server started is found.
+    pub(crate) fn desktop_lookup<T>(
+        &mut self,
+        look: impl Fn(&crate::desktop::DesktopIndex) -> Option<T>,
+    ) -> Option<T> {
+        look(&self.desktop).or_else(|| {
+            self.desktop
+                .refresh()
+                .then(|| look(&self.desktop))
+                .flatten()
+        })
+    }
+
+    /// The desktop file ID of the application the desktop shows that `identity` names ([`Self::desktop_lookup`]).
+    pub(crate) fn shown_application(&mut self, identity: &str) -> Option<String> {
+        self.desktop_lookup(|desktop| {
+            desktop
+                .find(identity)
+                .filter(|e| !e.no_display)
+                .map(|e| e.id.clone())
+        })
     }
 
     /// Run a command line (program and arguments split at whitespace).

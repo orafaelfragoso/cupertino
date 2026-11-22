@@ -123,7 +123,8 @@ impl Cupertino {
         clients
     }
 
-    /// The desktop entry ids the app ids of `client`'s windows name.
+    /// The desktop entry ids the app ids of `client`'s windows name: the entry each names itself, hidden or not
+    /// ([`crate::desktop::DesktopIndex::named`]), which is the key the person's decisions are stored under.
     fn control_client_entries(&self, client: &Client) -> Vec<String> {
         self.windows
             .iter()
@@ -131,7 +132,7 @@ impl Cupertino {
             .filter_map(|e| {
                 let window = self.wm.window(e.id)?;
                 let app = self.wm.app(window.app)?;
-                Some(self.desktop.find(&app.identity)?.id.clone())
+                Some(self.desktop.named(&app.identity)?.id.clone())
             })
             .collect()
     }

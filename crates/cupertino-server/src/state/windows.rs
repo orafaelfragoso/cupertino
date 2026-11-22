@@ -488,7 +488,10 @@ impl Cupertino {
             (d.app_id.clone(), d.title.clone())
         });
         let launch = self.take_launch(&surface);
-        self.windows[idx].launch = launch.as_ref().and_then(|l| l.app_id.clone());
+        // a launch is named once: a toplevel mapped again keeps the one it mapped or was activated with before
+        if self.windows[idx].launch.is_none() {
+            self.windows[idx].launch = launch.as_ref().and_then(|l| l.launch.clone());
+        }
         let identity = match app_id.as_deref().filter(|a| !a.is_empty()) {
             Some(app_id) => app_id.to_string(),
             None => self

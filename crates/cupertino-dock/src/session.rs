@@ -105,22 +105,27 @@ impl Session {
     }
 
     /// Key of the tile an application id stands for: the tile of that id, else the tile pinned
-    /// by the id of the same desktop entry or by one of its aliases, else the id itself.
+    /// by the id of the same desktop entry or by one of its aliases, else the id itself. An id that names a hidden
+    /// entry standing for one the desktop shows ([`DesktopIndex::find`]) is keyed by the shown entry's id.
     pub fn key_of(&self, app_id: &str) -> String {
         if self.dock.app_tile(app_id).is_some() {
             return app_id.to_string();
         }
         if let Some(e) = self.desktop.find(app_id) {
+            let aliased = self.desktop.named(app_id).is_some_and(|n| n.id != e.id);
             for candidate in [e.id.as_str(), e.startup_wm_class.as_str()] {
                 if !candidate.is_empty() && self.dock.app_tile(candidate).is_some() {
                     return candidate.to_string();
                 }
             }
-            let aliased = self.dock.tiles().into_iter().find(|t| {
+            let tile_alias = self.dock.tiles().into_iter().find(|t| {
                 t.kind == TileKind::App && self.desktop.find(&t.key).is_some_and(|x| x.id == e.id)
             });
-            if let Some(t) = aliased {
+            if let Some(t) = tile_alias {
                 return t.key.clone();
+            }
+            if aliased {
+                return e.id.clone();
             }
         }
         app_id.to_string()

@@ -178,8 +178,38 @@ impl DesktopIndex {
     }
 
     /// Entry for an application identity (an `app_id`, a desktop file ID or a command name):
-    /// desktop file ID, then `StartupWMClass`, then the program of `Exec`, all case-insensitive.
+    /// desktop file ID, then `StartupWMClass`, then the program of `Exec`, all case-insensitive. An entry the desktop
+    /// hides (`NoDisplay`) stands for the entry it shows that runs the same program, when there is one ([`shown`]):
+    /// an application installs a hidden entry by its window's id for its URL handlers beside the one people start it
+    /// by, and its windows belong to that one.
     pub fn find(&self, identity: &str) -> Option<&DesktopEntry> {
+        self.named(identity).map(|e| self.shown(e))
+    }
+
+    /// The entry the desktop shows for `entry`: `entry` itself, unless it is `NoDisplay` and an entry the desktop
+    /// shows runs the same program (the first word of `Exec`, compared as a path); the first such entry by ID. A
+    /// hidden helper's or portal's entry without one stays itself.
+    pub fn shown<'a>(&'a self, entry: &'a DesktopEntry) -> &'a DesktopEntry {
+        if !entry.no_display {
+            return entry;
+        }
+        let Some(program) = exec_command(&entry.exec).into_iter().next() else {
+            return entry;
+        };
+        self.entries
+            .iter()
+            .find(|e| {
+                !e.no_display
+                    && exec_command(&e.exec)
+                        .first()
+                        .is_some_and(|p| Path::new(p) == Path::new(&program))
+            })
+            .unwrap_or(entry)
+    }
+
+    /// The entry an identity names, by the rules of [`Self::find`] but without its step from a hidden entry to the one
+    /// the desktop shows.
+    pub fn named(&self, identity: &str) -> Option<&DesktopEntry> {
         let id = identity.trim_end_matches(".desktop").to_lowercase();
         if id.is_empty() {
             return None;

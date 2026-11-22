@@ -536,3 +536,85 @@ fn a_usable_area_that_arrives_after_the_output_refits_a_tiled_window() {
     assert_eq!(state(&wm, 1), LifecycleState::Tiled(TileKind::Top));
     assert!(wm.window(win(1)).unwrap().geometry().y >= USABLE.y);
 }
+
+#[test]
+fn a_usable_area_change_leaves_a_window_that_overhangs_an_edge_where_it_is() {
+    let mut wm = common::wm();
+    let over = cupertino_wm::Rect::new(1700.0, 200.0, 640.0, 480.0);
+    wm.handle(Command::Map(MapParams::new(win(1), "a", over)), 1.0);
+    wm.tick(3.0);
+    let before = wm.window(win(1)).unwrap().geometry();
+    wm.handle(
+        Command::SetUsableArea {
+            output: OUT,
+            usable: cupertino_wm::Rect::new(0.0, 32.0, 1920.0, 1000.0),
+        },
+        4.0,
+    );
+    settle(&mut wm, 4.0);
+    assert_eq!(wm.window(win(1)).unwrap().geometry(), before);
+}
+
+#[test]
+fn a_minimized_zoomed_window_restores_inside_a_usable_area_that_shrank_meanwhile() {
+    let mut wm = common::wm();
+    open(&mut wm, 1, "a", 1.0);
+    wm.handle(Command::ToggleZoom { window: win(1) }, 3.0);
+    settle(&mut wm, 3.0);
+    wm.handle(
+        Command::Minimize {
+            window: win(1),
+            target: None,
+        },
+        9.0,
+    );
+    settle(&mut wm, 9.0);
+    assert_eq!(state(&wm, 1), LifecycleState::Minimized);
+    wm.handle(Command::RemoveOutput { output: OUT }, 10.0);
+    wm.handle(
+        Command::AddOutput {
+            output: BACK,
+            rect: SCREEN,
+            usable: SCREEN,
+        },
+        11.0,
+    );
+    settle(&mut wm, 11.0);
+    wm.handle(
+        Command::SetUsableArea {
+            output: BACK,
+            usable: USABLE,
+        },
+        20.0,
+    );
+    wm.handle(Command::Restore { window: win(1) }, 21.0);
+    settle(&mut wm, 21.0);
+    assert_eq!(state(&wm, 1), LifecycleState::Zoomed);
+    assert_eq!(wm.window(win(1)).unwrap().geometry(), USABLE);
+}
+
+#[test]
+fn a_window_zooming_when_the_usable_area_shrinks_ends_inside_it() {
+    let mut wm = common::wm();
+    wm.handle(
+        Command::SetUsableArea {
+            output: OUT,
+            usable: SCREEN,
+        },
+        0.5,
+    );
+    open(&mut wm, 1, "a", 1.0);
+    wm.handle(Command::ToggleZoom { window: win(1) }, 3.0);
+    wm.tick(3.1);
+    assert_eq!(state(&wm, 1), LifecycleState::Zooming);
+    wm.handle(
+        Command::SetUsableArea {
+            output: OUT,
+            usable: USABLE,
+        },
+        3.1,
+    );
+    settle(&mut wm, 3.1);
+    assert_eq!(state(&wm, 1), LifecycleState::Zoomed);
+    assert_eq!(wm.window(win(1)).unwrap().geometry(), USABLE);
+}

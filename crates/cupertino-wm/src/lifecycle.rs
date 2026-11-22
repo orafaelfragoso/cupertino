@@ -312,6 +312,11 @@ impl Lifecycle {
         self.minimize_target
     }
 
+    /// The stored frame of the layout the window rests in.
+    pub fn rest_frame(&self) -> Rect {
+        self.frame_of(self.rest)
+    }
+
     fn frame_of(&self, r: Resting) -> Rect {
         match r {
             Resting::Normal => self.normal_frame,
@@ -534,6 +539,27 @@ impl Lifecycle {
                 self.frame.set_immediately(frame);
             }
             _ => return false,
+        }
+        true
+    }
+
+    /// The stored zoomed or tiled frame of the layout the window rests in (not its normal one) when the usable area
+    /// changed: replaced in every state, so a minimized, hidden or animating window ends or returns inside the new area.
+    /// The drawn frame jumps only while the window rests in it (zoomed or tiled). False when the window rests in the
+    /// normal layout or the frame is the same.
+    pub fn refit_rest(&mut self, frame: Rect) -> bool {
+        use LifecycleState::*;
+        let slot = match self.rest {
+            Resting::Normal => return false,
+            Resting::Zoomed => &mut self.zoom_frame,
+            Resting::Tiled(_) => &mut self.tile_frame,
+        };
+        if *slot == frame {
+            return false;
+        }
+        *slot = frame;
+        if matches!(self.state, Zoomed | Tiled(_) | Tiling(_)) {
+            self.frame.set_immediately(frame);
         }
         true
     }

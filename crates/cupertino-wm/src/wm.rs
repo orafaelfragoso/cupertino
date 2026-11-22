@@ -220,8 +220,8 @@ impl Wm {
                     .find(|p| p.id == output)
                     .filter(|p| p.usable != usable)
                     .map(|p| p.rect);
-                if let Some(rect) = changed {
-                    self.set_output_rect(output, rect, usable, o);
+                if changed.is_some() {
+                    self.set_usable_area(output, usable, o);
                 }
             }
             Command::SetOutputRect {
@@ -414,6 +414,46 @@ impl Wm {
         for wid in orphans {
             let normal = self.windows[&wid].lifecycle.normal_frame();
             self.transfer_to_output(wid, id, ws, normal, now, out);
+        }
+    }
+
+    /// [`Command::SetUsableArea`]: the zoomed and tiled windows of the output, in any state (minimized and animating
+    /// ones included), take frames for the new area. Normal windows stay where they are (a drag may leave one over an
+    /// edge) and full-screen ones do not depend on the area.
+    fn set_usable_area(&mut self, id: OutputId, usable: Rect, out: &mut Vec<Effect>) {
+        let Some(op) = self.outputs.iter_mut().find(|o| o.id == id) else {
+            return;
+        };
+        op.usable = usable;
+        let mut ids: Vec<WindowId> = self
+            .windows
+            .values()
+            .filter(|w| w.output == id)
+            .map(|w| w.id)
+            .collect();
+        ids.sort();
+        for wid in ids {
+            let margin = self.cfg.snap.tiled_margin;
+            let zoom_cfg = self.cfg.zoom.clone();
+            let w = self.windows.get_mut(&wid).unwrap();
+            let hints = w.hints();
+            let frame = match w.lifecycle.resting() {
+                Resting::Normal => continue,
+                Resting::Zoomed => best_fit(&zoom_cfg, usable, w.lifecycle.rest_frame(), &hints),
+                Resting::Tiled(kind) => tile_rect(kind, usable, margin),
+            };
+            let visible = w.lifecycle.state().is_visible() && !w.lifecycle.state().is_fullscreen();
+            if w.lifecycle.refit_rest(frame) && visible {
+                if let Some(c) = self.configure_effect(wid, false) {
+                    out.push(c);
+                }
+                if let Some(w) = self.windows.get(&wid) {
+                    out.push(Effect::Place {
+                        window: wid,
+                        rect: w.geometry(),
+                    });
+                }
+            }
         }
     }
 

@@ -1002,12 +1002,14 @@
     <event name="window_launch" since="32">
       <description summary="the application whose launch a window answered">
         The application the launch behind a window named: the application id an
-        xdg_activation_v1 token was given with set_app_id (the desktop entry id the launcher, the
-        dock or a file manager starts), when the window presented that token as it mapped, its
-        process was started with it in XDG_ACTIVATION_TOKEN, or it was first activated with it
-        later. The window's own application id may differ from it (a program whose windows name
-        no desktop entry, or another one); the dock files the window under the launched
-        application and ends that application's launch bounce.
+        xdg_activation_v1 token a shell process made (the launcher, the dock) was given with
+        set_app_id, the desktop entry id it starts, when the window presented that token as it
+        mapped, its process was started with it in XDG_ACTIVATION_TOKEN, or it was first
+        activated with it later. An application's own token names no launch: Qt names the
+        requester's application whatever the token is for. The window's own application id may
+        differ from it (a program whose windows name no desktop entry); the dock files a window
+        whose own application id names no application under the launched one and ends that
+        application's launch bounce.
 
         Sent before the window's window event in the group that first lists the window when its
         launch named an application then, else in the group of the activation that first named

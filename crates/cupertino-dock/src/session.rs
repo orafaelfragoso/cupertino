@@ -115,13 +115,7 @@ impl Session {
         let moved: Vec<(u32, String, String, bool)> = self
             .windows
             .iter()
-            .filter(|(id, w)| {
-                let named = self
-                    .launches
-                    .get(id)
-                    .map_or(w.app_id.as_str(), String::as_str);
-                self.key_of(named) != w.key
-            })
+            .filter(|(id, w)| self.placed(**id, &w.app_id).as_ref() != Some(&w.key))
             .map(|(id, w)| (*id, w.app_id.clone(), w.title.clone(), w.minimized))
             .collect();
         for (id, app_id, title, minimized) in moved {
@@ -183,18 +177,30 @@ impl Session {
                     .is_some_and(|t| t.pinned || t.built_in))
     }
 
+    /// The key of the tile window `id` of `app_id` belongs to ([`Session::window`]): the tile of the application its
+    /// launch named when its own application id names no application ([`Session::is_application`]), else its own
+    /// application's; `None` for a window of a process whose entry the desktop hides ([`Session::shows_windows`]).
+    fn placed(&self, id: u32, app_id: &str) -> Option<String> {
+        if let Some(launch) = self
+            .launches
+            .get(&id)
+            .filter(|_| !self.is_application(app_id))
+        {
+            return Some(self.key_of(launch));
+        }
+        self.shows_windows(app_id).then(|| self.key_of(app_id))
+    }
+
     /// A window appeared or one of its properties changed. A window of a process whose entry the desktop hides
-    /// ([`Session::shows_windows`]) is not counted, unless its launch named an application
-    /// ([`Session::window_launch`]): it belongs to that application's tile.
+    /// ([`Session::shows_windows`]) is not counted, and a window whose application id names no application belongs to
+    /// the tile of the application its launch named ([`Session::window_launch`]).
     pub fn window(&mut self, id: u32, app_id: &str, title: &str, minimized: bool, now: f64) {
         if self.windows.get(&id).is_some_and(|w| w.app_id != app_id) {
             self.forget_window(id, now);
         }
-        let launch = self.launches.get(&id);
-        if launch.is_none() && !self.shows_windows(app_id) {
+        let Some(key) = self.placed(id, app_id) else {
             return;
-        }
-        let key = self.key_of(launch.map_or(app_id, String::as_str));
+        };
         if !self.windows.values().any(|w| w.key == key) {
             // a resident application showing a window again was running all along: no launch hop
             if self.live && self.resident_app_id(&key).is_none() {
@@ -231,11 +237,12 @@ impl Session {
         self.forget_window(id, now);
     }
 
-    /// The server named the application the launch behind window `id` named (its activation token's application id),
-    /// which the window's own application id may not be (a program whose windows name no desktop entry, or another
-    /// one): the window belongs to that application's tile, and its first window ends that tile's launch bounce. It
-    /// comes before the window's first event; a window already shown moves to that tile. A launch that names no
-    /// application ([`Session::is_application`]) changes nothing.
+    /// The server named the application the launch behind window `id` named (the application a shell process's
+    /// activation token started), which the window's own application id may not name (a program whose windows name
+    /// no desktop entry): such a window belongs to that application's tile, and its first window ends that tile's
+    /// launch bounce. A window whose own application id names an application stays on its tile: the token may have
+    /// been asked for something else. It comes before the window's first event; a window already shown moves. A launch
+    /// that names no application ([`Session::is_application`]) changes nothing.
     pub fn window_launch(&mut self, id: u32, app_id: &str, now: f64) {
         if !self.is_application(app_id) {
             return;
@@ -244,7 +251,7 @@ impl Session {
         let Some(shown) = self.windows.get(&id) else {
             return;
         };
-        if shown.key == self.key_of(app_id) {
+        if self.placed(id, &shown.app_id).as_ref() == Some(&shown.key) {
             return;
         }
         let (own, title, minimized) = (shown.app_id.clone(), shown.title.clone(), shown.minimized);

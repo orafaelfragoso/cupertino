@@ -534,6 +534,11 @@ pub struct TokenGrant {
     pub created: f64,
     pub valid: bool,
     pub app_id: Option<String>,
+    /// The application a window that answers the token is filed under ([`crate::state::WindowEntry::launch`]): the one
+    /// it names when a shell process made it (the launcher, the dock), which names the application it starts. An
+    /// application's own token names no launch: Qt names the requester's application whatever the token is for, so a
+    /// link opened from a chat program would file the browser's window under the chat program.
+    pub launch: Option<String>,
 }
 
 impl Cupertino {
@@ -588,6 +593,7 @@ impl Cupertino {
             created: self.now(),
             valid: true,
             app_id: None,
+            launch: None,
         });
         self.xdg_activation_state
             .create_external_token(data)
@@ -619,10 +625,13 @@ impl XdgActivationHandler for Cupertino {
             }
             None => false,
         };
+        let app_id = data.app_id.clone().filter(|id| !id.is_empty());
+        let shell = !self.token_maker_roles(&data).is_empty();
         data.user_data.insert_if_missing(|| TokenGrant {
             created: self.now(),
             valid,
-            app_id: data.app_id.clone().filter(|id| !id.is_empty()),
+            launch: app_id.clone().filter(|_| shell),
+            app_id,
         });
         // a token that names an application is a launch (launchers, file managers and GTK's
         // launch context set the id): the docks bounce its tile before its first window maps. Only an application the
@@ -657,6 +666,26 @@ impl XdgActivationHandler for Cupertino {
 }
 
 impl Cupertino {
+    /// The roles the connection that made a token holds: none for an application's.
+    fn token_maker_roles(
+        &self,
+        data: &XdgActivationTokenData,
+    ) -> crate::authorization::ClientCapabilitySet {
+        data.client_id
+            .clone()
+            .and_then(|id| {
+                self.display_handle
+                    .backend_handle()
+                    .get_client_data(id)
+                    .ok()
+            })
+            .and_then(|d| {
+                (*d).downcast_ref::<crate::state::ClientState>()
+                    .map(crate::state::ClientState::granted)
+            })
+            .unwrap_or(crate::authorization::ClientCapabilitySet::NONE)
+    }
+
     /// `gtk_surface1.present` or `request_focus` for `surface`, whose `startup_id` is an activation token. A window of
     /// the client that has the keyboard focus already is brought forward; any other request is judged as an
     /// `xdg_activation` request is, by the token it names (`present` names none), so a client that has no input behind
@@ -688,6 +717,7 @@ impl Cupertino {
             created: self.now(),
             valid: false,
             app_id: None,
+            launch: None,
         });
         self.activate_surface(surface, grant);
     }
@@ -710,8 +740,8 @@ impl Cupertino {
             }
             return;
         };
-        // the first activation that names an application names the launch a window mapped without one answered
-        if let Some(app_id) = grant.app_id.as_ref() {
+        // the first activation that names a launch names the launch a window mapped without one answered
+        if let Some(app_id) = grant.launch.as_ref() {
             let entry = self.windows.iter_mut().find(|e| e.id == id);
             if let Some(entry) = entry.filter(|e| e.launch.is_none()) {
                 entry.launch = Some(app_id.clone());

@@ -188,6 +188,24 @@ fn a_launch_that_names_no_application_leaves_the_window_where_it_was() {
     );
 }
 
+/// A token can name another application than the one it starts (Qt names the requester's): a window whose own
+/// application id names an application stays on that application's tile.
+#[test]
+fn a_window_of_an_application_stays_on_its_tile_whatever_its_launch_named() {
+    let mut s = session(&[]);
+    s.window_launch(1, EDITOR, 0.0);
+    s.window(1, "foot", "Terminal", false, 0.0);
+    assert_eq!(s.window_info(1).map(|w| w.key.as_str()), Some("foot"));
+    // a window shown before stays too
+    s.window(2, T3_HIDDEN, "T3 Code", false, 1.0);
+    s.window_launch(2, EDITOR, 1.0);
+    assert_eq!(s.window_info(2).map(|w| w.key.as_str()), Some(T3_SHOWN));
+    assert!(s.dock.app_tile(EDITOR).is_none_or(|t| !t.running));
+    s.set_desktop(desktop(), 2.0);
+    assert_eq!(s.window_info(1).map(|w| w.key.as_str()), Some("foot"));
+    assert_eq!(s.window_info(2).map(|w| w.key.as_str()), Some(T3_SHOWN));
+}
+
 #[test]
 fn indexing_the_entries_again_keeps_a_window_on_the_tile_its_launch_named() {
     let mut s = session(&[]);

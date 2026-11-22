@@ -1,7 +1,7 @@
 //! The application a window's launch named reaches the dock: a token made with `set_app_id` announces the launch of an
-//! application the desktop shows (and of nothing else), and the window of the process started with it is named to a
-//! dock of shell version 32 by `window_launch`, before its `window` event, whatever application id the window gives
-//! itself.
+//! application the desktop shows (and of nothing else), and the window of the process started with one a shell process
+//! made is named to a dock of shell version 32 by `window_launch`, before its `window` event, whatever application id
+//! the window gives itself; an application's own token names no launch.
 
 use std::io::Write;
 use std::os::fd::{AsFd, OwnedFd};
@@ -15,7 +15,7 @@ use cupertino_protocols::client::host::cupertino_host_component_v1::{
     self, CupertinoHostComponentV1,
 };
 use cupertino_protocols::client::host::cupertino_host_v1::{self, CupertinoHostV1};
-use cupertino_server::authorization::{Holder, DETACHED_LIFETIME};
+use cupertino_server::authorization::{ClientCapabilitySet, Holder, ShellRole, DETACHED_LIFETIME};
 use cupertino_server::desktop::{DesktopEntry, DesktopIndex};
 use cupertino_server::host::HostKind;
 use cupertino_server::state::{insert_client, new_output, ClientState};
@@ -441,8 +441,19 @@ impl Rig {
 
     /// An application's connection.
     fn app(&mut self) -> Side<AppClient> {
+        self.client(ClientState::default())
+    }
+
+    /// The launcher's connection: a shell process's, which holds the session role.
+    fn launcher(&mut self) -> Side<AppClient> {
+        self.client(ClientState::detached(ClientCapabilitySet::of([
+            ShellRole::Session,
+        ])))
+    }
+
+    fn client(&mut self, state: ClientState) -> Side<AppClient> {
         let (ours, theirs) = UnixStream::pair().unwrap();
-        insert_client(&self.state.display_handle, ours, ClientState::default()).unwrap();
+        insert_client(&self.state.display_handle, ours, state).unwrap();
         let mut side = Side::new(
             Connection::from_socket(theirs).unwrap(),
             AppClient::default(),
@@ -535,10 +546,11 @@ fn the_window_of_a_process_started_with_a_token_is_named_by_its_launch_to_a_new_
     for (version, named) in [(WINDOW_LAUNCH - 1, false), (WINDOW_LAUNCH, true)] {
         let mut rig = Rig::new();
         let (mut host, mut dock_side, _dock) = rig.dock(version);
+        let mut launcher = rig.launcher();
+        let _token = token(&mut launcher, EDITOR);
+        rig.settle(&mut [&mut host, &mut dock_side, &mut launcher]);
+        let made = launcher.client.tokens.pop().expect("the token");
         let mut app = rig.app();
-        let _token = token(&mut app, EDITOR);
-        rig.settle(&mut [&mut host, &mut dock_side, &mut app]);
-        let made = app.client.tokens.pop().expect("the token");
         // the process was started with the token in its environment and never presents it
         rig.state.launch_token_of = Box::new(move |_, _| Some(made.clone()));
         dock_side.client.heard.clear();
@@ -555,41 +567,98 @@ fn the_window_of_a_process_started_with_a_token_is_named_by_its_launch_to_a_new_
     }
 }
 
+/// The applications `window_launch` named to the dock, in order.
+fn launches_named(dock: &Side<DockClient>) -> Vec<String> {
+    dock.client
+        .heard
+        .iter()
+        .filter(|(event, _)| *event == "window_launch")
+        .map(|(_, app_id)| app_id.clone())
+        .collect()
+}
+
+/// Activate `surface` of `app` with a token `maker` made naming `app_id`.
+fn activate_with(
+    rig: &mut Rig,
+    dock: (&mut Side<HostClient>, &mut Side<DockClient>),
+    maker: &mut Side<AppClient>,
+    app: &mut Side<AppClient>,
+    surface: &wl_surface::WlSurface,
+    app_id: &str,
+) {
+    let (host, dock_side) = dock;
+    let _token = token(maker, app_id);
+    rig.settle(&mut [&mut *host, &mut *dock_side, &mut *maker]);
+    let made = maker.client.tokens.pop().expect("the token");
+    let activation = app
+        .client
+        .activation
+        .clone()
+        .expect("the activation global");
+    activation.activate(made, surface);
+    rig.settle(&mut [host, dock_side, app]);
+}
+
 #[test]
 fn a_window_first_activated_with_a_token_is_named_by_it_once() {
     let mut rig = Rig::new();
     let (mut host, mut dock_side, _dock) = rig.dock(WINDOW_LAUNCH);
     rig.state.launch_token_of = Box::new(|_, _| None);
+    let mut launcher = rig.launcher();
     let mut app = rig.app();
     let (_toplevel, surface) = map_window(&mut rig, &mut app, EDITOR_WINDOWS);
     rig.settle(&mut [&mut host, &mut dock_side, &mut app]);
-    let named = |dock: &Side<DockClient>| -> Vec<String> {
-        dock.client
-            .heard
-            .iter()
-            .filter(|(event, _)| *event == "window_launch")
-            .map(|(_, app_id)| app_id.clone())
-            .collect()
-    };
     assert!(
-        named(&dock_side).is_empty(),
+        launches_named(&dock_side).is_empty(),
         "the window mapped with no launch"
     );
     for app_id in [EDITOR, "org.example.Other"] {
-        let _token = token(&mut app, app_id);
-        rig.settle(&mut [&mut host, &mut dock_side, &mut app]);
-        let made = app.client.tokens.pop().expect("the token");
-        let activation = app
-            .client
-            .activation
-            .clone()
-            .expect("the activation global");
-        activation.activate(made, &surface);
-        rig.settle(&mut [&mut host, &mut dock_side, &mut app]);
+        activate_with(
+            &mut rig,
+            (&mut host, &mut dock_side),
+            &mut launcher,
+            &mut app,
+            &surface,
+            app_id,
+        );
     }
     assert_eq!(
-        named(&dock_side),
+        launches_named(&dock_side),
         [EDITOR],
         "the first activation names the launch, once"
+    );
+}
+
+/// Qt names the requester's own application in the tokens it asks for, whatever they are for: a link opened from a
+/// chat program starts the browser with a token naming the chat program, and an open browser window is activated with
+/// one.
+#[test]
+fn an_applications_own_token_names_no_launch() {
+    let mut rig = Rig::new();
+    let (mut host, mut dock_side, _dock) = rig.dock(WINDOW_LAUNCH);
+    let mut chat = rig.app();
+    let _token = token(&mut chat, EDITOR);
+    rig.settle(&mut [&mut host, &mut dock_side, &mut chat]);
+    let made = chat.client.tokens.pop().expect("the token");
+    rig.state.launch_token_of = Box::new(move |_, _| Some(made.clone()));
+    let mut browser = rig.app();
+    let (_toplevel, surface) = map_window(&mut rig, &mut browser, EDITOR_WINDOWS);
+    rig.settle(&mut [&mut host, &mut dock_side, &mut browser]);
+    assert!(
+        launches_named(&dock_side).is_empty(),
+        "the window started with the chat program's token is named by no launch"
+    );
+    rig.state.launch_token_of = Box::new(|_, _| None);
+    activate_with(
+        &mut rig,
+        (&mut host, &mut dock_side),
+        &mut chat,
+        &mut browser,
+        &surface,
+        EDITOR,
+    );
+    assert!(
+        launches_named(&dock_side).is_empty(),
+        "an activation with the chat program's token names no launch"
     );
 }

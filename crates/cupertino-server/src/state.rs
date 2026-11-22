@@ -406,8 +406,9 @@ pub struct WindowEntry {
     /// What the client's own frame is as of its last commit ([`crate::frame_fill`]): an opaque rectangle up to corners
     /// no rounder than the window's, or a transparent or shaped window.
     pub frame: crate::frame_fill::Frame,
-    /// The application the launch behind the window named: the application id of the activation token it mapped with
-    /// or was first activated with ([`crate::handlers::TokenGrant::app_id`]); the docks file the window under it.
+    /// The application the launch behind the window named: the launch of the activation token it mapped with or was
+    /// first activated with ([`crate::handlers::TokenGrant::launch`], a shell process's token only); the docks file the
+    /// window under it when its own application id names no application.
     pub launch: Option<String>,
 }
 

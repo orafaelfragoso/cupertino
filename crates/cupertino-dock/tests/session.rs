@@ -64,6 +64,50 @@ fn a_hidden_entry_stands_for_the_shown_entry_that_runs_its_program() {
     assert!(portal.no_display);
 }
 
+/// A hidden entry stands for the shown one its program is past the programs that only run another (`env`, `flatpak
+/// run`, a shell, an interpreter), and only when exactly one shown entry runs it.
+#[test]
+fn a_hidden_entry_stands_for_the_one_shown_entry_its_wrapped_program_is() {
+    let index = DesktopIndex {
+        entries: vec![
+            entry("org.kde.dolphin", "env LANGUAGE=en_GB:en dolphin %u", false),
+            entry("org.kde.dolphin.handler", "env -u QT_SCALE_FACTOR dolphin --select %u", true),
+            entry("org.example.Helper", "env GDK_BACKEND=x11 /usr/lib/example-helper", true),
+            entry(
+                "org.mozilla.firefox",
+                "/usr/bin/flatpak run --branch=stable --command=firefox org.mozilla.firefox @@u %u @@",
+                false,
+            ),
+            entry("org.mozilla.firefox.handler", "flatpak run org.mozilla.firefox --new-window %u", true),
+            entry("org.example.Sandboxed", "/usr/bin/flatpak run org.example.Sandboxed", true),
+            entry("org.example.Shelled", "sh -c \"cd /opt/a && ./run\"", false),
+            entry("org.example.OtherShelled", "sh -c \"cd /opt/b && ./run\"", true),
+            entry("org.example.Script", "python3 /opt/a/main.py", false),
+            entry("org.example.OtherScript", "python3.12 -X dev /opt/b/tool.py", true),
+            entry("org.example.ScriptHandler", "sh -c \"exec python3 /opt/a/main.py %u\"", true),
+            entry("org.example.SuiteWriter", "/opt/suite/launch --writer", false),
+            entry("org.example.SuiteSheets", "/opt/suite/launch --sheets", false),
+            entry("org.example.SuiteHandler", "/opt/suite/launch %U", true),
+        ],
+    };
+    for (hidden, shown) in [
+        ("org.kde.dolphin.handler", "org.kde.dolphin"),
+        ("org.example.Helper", "org.example.Helper"),
+        ("org.mozilla.firefox.handler", "org.mozilla.firefox"),
+        ("org.example.Sandboxed", "org.example.Sandboxed"),
+        ("org.example.OtherShelled", "org.example.OtherShelled"),
+        ("org.example.OtherScript", "org.example.OtherScript"),
+        ("org.example.ScriptHandler", "org.example.Script"),
+        ("org.example.SuiteHandler", "org.example.SuiteHandler"),
+    ] {
+        assert_eq!(
+            index.find(hidden).map(|e| e.id.as_str()),
+            Some(shown),
+            "{hidden}"
+        );
+    }
+}
+
 #[test]
 fn a_window_named_by_the_hidden_entry_runs_on_the_shown_entrys_tile() {
     let mut s = session(&[]);

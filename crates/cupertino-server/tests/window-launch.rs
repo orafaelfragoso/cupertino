@@ -354,12 +354,10 @@ impl Rig {
             Transform::Normal,
             (0, 0),
         ));
-        state.desktop = DesktopIndex {
-            entries: vec![
-                entry(EDITOR, "/opt/editor/start-editor %F", false),
-                entry(PORTAL, "/usr/lib/example-portal", true),
-            ],
-        };
+        state.desktop = DesktopIndex::from_entries(vec![
+            entry(EDITOR, "/opt/editor/start-editor %F", false),
+            entry(PORTAL, "/usr/lib/example-portal", true),
+        ]);
         Self { event_loop, state }
     }
 
@@ -549,6 +547,31 @@ fn a_token_announces_the_launch_of_an_application_the_desktop_shows_only() {
         [("launching", EDITOR.to_owned())],
         "only the editor's launch is announced"
     );
+}
+
+/// An application installed after the server read the desktop entries is found when a token names it: the entries are
+/// read again once the directory they came from changed.
+#[test]
+fn a_token_announces_the_launch_of_an_application_installed_after_the_start() {
+    const FRESH: &str = "org.example.Fresh";
+    let data = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("window-launch-installed-{}", std::process::id()));
+    let apps = data.join("applications");
+    let _ = std::fs::remove_dir_all(&data);
+    std::fs::create_dir_all(&apps).unwrap();
+    let mut rig = Rig::new();
+    rig.state.desktop = DesktopIndex::load_from(std::slice::from_ref(&data));
+    let (mut host, mut dock_side, _dock) = rig.dock(WINDOW_LAUNCH);
+    std::fs::write(
+        apps.join(format!("{FRESH}.desktop")),
+        "[Desktop Entry]\nType=Application\nName=Fresh\nExec=/opt/fresh/run %U\n",
+    )
+    .unwrap();
+    let mut launcher = rig.launcher();
+    let _token = token(&mut launcher, FRESH);
+    rig.settle(&mut [&mut host, &mut dock_side, &mut launcher]);
+    std::fs::remove_dir_all(&data).unwrap();
+    assert_eq!(dock_side.client.heard, [("launching", FRESH.to_owned())]);
 }
 
 /// The dock bounces the tile of its own launches itself, and asks for a token too when it asks a running application

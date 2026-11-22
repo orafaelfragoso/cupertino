@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant, SystemTime};
 
 /// One application entry.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -253,23 +254,81 @@ fn shell_line(line: &str, depth: u8) -> Option<Runs> {
     runs_words(&words, depth - 1)
 }
 
+/// How long after a look whether the `applications` directories changed ([`DesktopIndex::refresh`]) the next one is
+/// taken at the earliest: a client naming unknown applications in a burst of tokens costs one look, not one each.
+const RECHECK: Duration = Duration::from_secs(1);
+
+/// Where an index was read from, to read it again when that changed.
+#[derive(Clone, Debug)]
+struct Source {
+    /// The XDG data directories it was read from.
+    dirs: Vec<PathBuf>,
+    /// Every `applications` directory it read, or looked for, with its modification time then (`None`: missing). A
+    /// file created, removed or renamed into one changes it.
+    stamps: Vec<(PathBuf, Option<SystemTime>)>,
+    /// When it was last looked at.
+    checked: Option<Instant>,
+}
+
 /// Every application of the XDG data directories, first definition of an ID wins.
 #[derive(Clone, Debug, Default)]
 pub struct DesktopIndex {
     pub entries: Vec<DesktopEntry>,
+    /// Where the entries were read from; `None` for an index made of given entries, which is never read again.
+    source: Option<Source>,
 }
 
 impl DesktopIndex {
+    /// An index of `entries`, read from nowhere: [`Self::refresh`] leaves it as it is.
+    pub fn from_entries(entries: Vec<DesktopEntry>) -> Self {
+        Self {
+            entries,
+            source: None,
+        }
+    }
+
     pub fn load() -> Self {
         Self::load_from(&cupertino_defaults::data_dirs())
     }
 
+    /// Read the entries again when an `applications` directory they were read from changed since (an application
+    /// installed, an entry written after the server started), looking at most once per [`RECHECK`]. Whether they
+    /// were read again. The look is one `stat` per directory; reading again happens only after a change.
+    pub fn refresh(&mut self) -> bool {
+        let Some(source) = self.source.as_mut() else {
+            return false;
+        };
+        let now = Instant::now();
+        if source
+            .checked
+            .is_some_and(|at| now.duration_since(at) < RECHECK)
+        {
+            return false;
+        }
+        source.checked = Some(now);
+        if source.stamps.iter().all(|(dir, at)| modified(dir) == *at) {
+            return false;
+        }
+        let dirs = std::mem::take(&mut source.dirs);
+        *self = Self::load_from(&dirs);
+        if let Some(source) = self.source.as_mut() {
+            source.checked = Some(now);
+        }
+        tracing::info!(
+            entries = self.entries.len(),
+            "desktop entries read again: an applications directory changed"
+        );
+        true
+    }
+
     pub fn load_from(dirs: &[PathBuf]) -> Self {
         let mut entries: Vec<DesktopEntry> = Vec::new();
+        let mut stamps = Vec::new();
         for base in dirs {
             let apps = base.join("applications");
             let mut stack = vec![apps.clone()];
             while let Some(dir) = stack.pop() {
+                stamps.push((dir.clone(), modified(&dir)));
                 let Ok(rd) = std::fs::read_dir(&dir) else {
                     continue;
                 };
@@ -297,7 +356,14 @@ impl DesktopIndex {
             }
         }
         entries.sort_by(|a, b| a.id.cmp(&b.id));
-        Self { entries }
+        Self {
+            entries,
+            source: Some(Source {
+                dirs: dirs.to_vec(),
+                stamps,
+                checked: None,
+            }),
+        }
     }
 
     /// Entry for an application identity (an `app_id`, a desktop file ID or a command name):
@@ -374,6 +440,11 @@ impl DesktopIndex {
         }
         std::iter::once(first).chain(rest).find(|e| e.id == name)
     }
+}
+
+/// When `dir` was last modified; `None` when it does not exist.
+fn modified(dir: &Path) -> Option<SystemTime> {
+    std::fs::metadata(dir).and_then(|m| m.modified()).ok()
 }
 
 /// Human readable application name for the menu bar: the desktop entry's name, else the last

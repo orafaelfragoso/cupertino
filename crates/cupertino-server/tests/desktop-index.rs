@@ -19,17 +19,15 @@ fn entry(id: &str, exec: &str, no_display: bool) -> DesktopEntry {
 /// An application with the entry people start it by and a hidden URL handler named by its windows' id, and a portal's
 /// hidden entry alone.
 fn index() -> DesktopIndex {
-    DesktopIndex {
-        entries: vec![
-            entry(T3_SHOWN, T3_EXEC, false),
-            entry(T3_HIDDEN, T3_EXEC, true),
-            entry(
-                "org.example.Portal",
-                "/usr/lib/example-portal --replace",
-                true,
-            ),
-        ],
-    }
+    DesktopIndex::from_entries(vec![
+        entry(T3_SHOWN, T3_EXEC, false),
+        entry(T3_HIDDEN, T3_EXEC, true),
+        entry(
+            "org.example.Portal",
+            "/usr/lib/example-portal --replace",
+            true,
+        ),
+    ])
 }
 
 #[test]
@@ -111,7 +109,7 @@ fn wrapped() -> (DesktopIndex, Vec<(&'static str, Option<&'static str>)>) {
         ("org.example.ScriptHandler", Some("org.example.Script")),
         ("org.example.SuiteHandler", None),
     ];
-    (DesktopIndex { entries }, expected)
+    (DesktopIndex::from_entries(entries), expected)
 }
 
 #[test]

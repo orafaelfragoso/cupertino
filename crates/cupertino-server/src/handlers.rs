@@ -635,14 +635,15 @@ impl XdgActivationHandler for Cupertino {
         });
         // a token that names an application is a launch (launchers, file managers and GTK's
         // launch context set the id): the docks bounce its tile before its first window maps. Only an application the
-        // desktop shows is one: a helper's hidden entry or an id without one would leave a tile no window comes to. The
+        // desktop shows is one (read again for one installed since the start): a helper's hidden entry or an id without one
+        // would leave a tile no window comes to. The
         // dock's own token is not announced back to it: it bounces the tile of a launch itself, and asks for one too
         // when it asks a running application for a window, which does not bounce
         if let Some(app_id) = data
             .app_id
             .as_deref()
             .filter(|_| !maker.contains(crate::authorization::ShellRole::Dock))
-            .filter(|id| self.desktop.find(id).is_some_and(|e| !e.no_display))
+            .filter(|id| self.shown_application(id).is_some())
         {
             self.docks.launching(app_id);
         }

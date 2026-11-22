@@ -14,7 +14,7 @@ use futures_util::StreamExt;
 
 use super::{Handed, Heard, Read, PROCESS};
 use crate::conf::{default_pins, load_pins, session_file_manager, TERMINALS};
-use crate::desktop::DesktopIndex;
+use crate::desktop::{DesktopIndex, WatchPlan};
 use crate::kit::Message;
 
 /// How long reading what the dock needs at start should take: the desktop entries of every data directory, a few
@@ -41,7 +41,7 @@ pub struct Startup {
     pub(super) conf_watch: Option<ConfigWatcher>,
     pub(super) trash_watch: Option<notify::RecommendedWatcher>,
     /// The watch on the `applications` directories, and the pokes it gives.
-    pub(super) desktop_watch: Option<(notify::RecommendedWatcher, async_channel::Receiver<()>)>,
+    pub(super) desktop_watch: Option<DesktopWatch>,
 }
 
 /// Where the dock stores its pins.
@@ -216,18 +216,29 @@ fn watch_trash(tell: async_channel::Sender<Message>) -> Option<notify::Recommend
     }
 }
 
-/// Watch the `applications` directories of the XDG data directories that exist; every change there pokes the receiver
-/// ([`follow_desktop`]). `None` when none can be watched: the entries then stay as read at start.
-#[expect(
-    clippy::disallowed_methods,
-    reason = "runs on the I/O pool (kit::task::io)"
-)]
-fn watch_desktop() -> Option<(notify::RecommendedWatcher, async_channel::Receiver<()>)> {
+/// The watch on the desktop entries ([`watch_desktop`]).
+pub struct DesktopWatch {
+    /// Dropping it ends the watch.
+    pub(super) watcher: notify::RecommendedWatcher,
+    /// A poke for every change heard ([`follow_desktop`]).
+    pub(super) pokes: async_channel::Receiver<()>,
+    /// An `applications` directory did not exist ([`WatchPlan::waits`]): the watch is made again after a change.
+    pub(super) waits: bool,
+}
+
+/// Watch the `applications` directories of the XDG data directories that exist, and above each that does not the
+/// nearest directory that does ([`WatchPlan`]); every change that concerns the entries pokes the receiver
+/// ([`follow_desktop`]). `None` when nothing can be watched: the entries then stay as read.
+fn watch_desktop() -> Option<DesktopWatch> {
     use notify::Watcher;
+    let plan = WatchPlan::of(&cupertino_defaults::data_dirs());
     let (poke, pokes) = async_channel::unbounded();
+    let concerns = plan.clone();
     let mut watcher =
         match notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-            if event.is_ok_and(|e| !e.kind.is_access()) {
+            if event
+                .is_ok_and(|e| !e.kind.is_access() && e.paths.iter().any(|p| concerns.concerns(p)))
+            {
                 let _ = poke.try_send(());
             }
         }) {
@@ -238,17 +249,25 @@ fn watch_desktop() -> Option<(notify::RecommendedWatcher, async_channel::Receive
             }
         };
     let mut watching = false;
-    for dir in cupertino_defaults::data_dirs() {
-        let apps = dir.join("applications");
-        if !apps.is_dir() {
-            continue;
-        }
-        match watcher.watch(&apps, notify::RecursiveMode::Recursive) {
+    let recursive = plan
+        .entries
+        .iter()
+        .map(|d| (d, notify::RecursiveMode::Recursive));
+    let alone = plan
+        .above
+        .iter()
+        .map(|d| (d, notify::RecursiveMode::NonRecursive));
+    for (dir, mode) in recursive.chain(alone) {
+        match watcher.watch(dir, mode) {
             Ok(()) => watching = true,
-            Err(e) => eprintln!("{PROCESS}: cannot watch {}: {e}", apps.display()),
+            Err(e) => eprintln!("{PROCESS}: cannot watch {}: {e}", dir.display()),
         }
     }
-    watching.then_some((watcher, pokes))
+    watching.then_some(DesktopWatch {
+        watcher,
+        pokes,
+        waits: plan.waits(),
+    })
 }
 
 /// Wait for the desktop entries to change and be quiet for [`DESKTOP_QUIET`]: each burst is told once as
@@ -275,12 +294,20 @@ pub fn follow_desktop(
     }))
 }
 
-/// Index the desktop entries again on the I/O pool: it ends in [`Message::Desktop`].
-pub fn reindex_desktop() -> Command<Message> {
+/// Index the desktop entries again on the I/O pool, after making the watch on them again when `rewatch` is set (an
+/// `applications` directory was missing: it may exist now), so nothing written between the two is missed. It ends in
+/// [`Heard::Reindexed`].
+pub fn reindex_desktop(rewatch: bool) -> Command<Message> {
     task::io(
         DESKTOP_DEADLINE,
-        || DesktopIndex::load_from(&cupertino_defaults::data_dirs()),
-        |index| Message::Desktop(Box::new(index)),
+        move || {
+            let watch = rewatch.then(watch_desktop).flatten();
+            (
+                DesktopIndex::load_from(&cupertino_defaults::data_dirs()),
+                watch,
+            )
+        },
+        |reindexed| Message::Shell(Heard::Reindexed(Handed::new(reindexed))),
     )
 }
 

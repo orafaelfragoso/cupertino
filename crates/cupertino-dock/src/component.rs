@@ -43,7 +43,7 @@ use crate::view::{
 };
 
 use host::{Link, ShellHost};
-pub use tasks::Startup;
+pub use tasks::{DesktopWatch, Startup};
 
 /// The key the server holds the bar's picture and the space it reserves under while the component restarts: one bar.
 const HOLD: &str = "dock";
@@ -89,6 +89,9 @@ pub enum Heard {
     Appearance(SystemAppearance),
     /// What the dock reads at start, read on the I/O pool.
     Loaded(Handed<Startup>),
+    /// The desktop entries indexed again after they changed, with the watch on them made again when it was
+    /// ([`tasks::reindex_desktop`]).
+    Reindexed(Handed<(DesktopIndex, Option<DesktopWatch>)>),
     /// The component's session connection, or none.
     Bus(Option<zbus::Connection>),
     BusClosed,
@@ -127,6 +130,8 @@ pub struct Model {
     trash_watch: Option<notify::RecommendedWatcher>,
     /// The watch on the `applications` directories; dropping it ends the watch.
     desktop_watch: Option<notify::RecommendedWatcher>,
+    /// An `applications` directory did not exist when the watch was made: it is made again after each change.
+    desktop_waits: bool,
 }
 
 impl Model {
@@ -239,12 +244,21 @@ impl Model {
             .map(|watch| tasks::follow_conf(watch, self.tell.clone()))
             .into_iter()
             .collect();
-        if let Some((watcher, pokes)) = desktop_watch {
-            self.desktop_watch = Some(watcher);
-            commands.push(tasks::follow_desktop(pokes, self.tell.clone()));
-        }
+        commands.extend(desktop_watch.map(|watch| self.watch_desktop(watch)));
         commands.extend(self.make(read));
         commands
+    }
+
+    /// Follow the desktop entries through `watch`, which ends the watch before it.
+    fn watch_desktop(&mut self, watch: DesktopWatch) -> Command<Message> {
+        let DesktopWatch {
+            watcher,
+            pokes,
+            waits,
+        } = watch;
+        self.desktop_watch = Some(watcher);
+        self.desktop_waits = waits;
+        tasks::follow_desktop(pokes, self.tell.clone())
     }
 
     /// What the shell told the component.
@@ -290,6 +304,19 @@ impl Model {
                 Some(startup) => self.loaded(startup),
                 None => Vec::new(),
             },
+            Heard::Reindexed(reindexed) => {
+                let Some((index, watch)) = reindexed.take() else {
+                    return Vec::new();
+                };
+                let mut commands: Vec<Command<Message>> = watch
+                    .map(|watch| self.watch_desktop(watch))
+                    .into_iter()
+                    .collect();
+                if let Some(dock) = self.dock.as_mut() {
+                    commands.extend(kit::update(dock, Message::Desktop(Box::new(index))));
+                }
+                commands
+            }
             Heard::Bus(Some(connection)) => {
                 self.link.borrow_mut().bus = Some(connection.clone());
                 vec![tasks::listen_badges(connection, self.tell.clone())]
@@ -306,7 +333,7 @@ impl Model {
             Heard::Told(message) => {
                 let mut commands = vec![self.told()];
                 if matches!(*message, Message::DesktopChanged) {
-                    commands.push(tasks::reindex_desktop());
+                    commands.push(tasks::reindex_desktop(self.desktop_waits));
                     return commands;
                 }
                 if let Some(dock) = self.dock.as_mut() {
@@ -410,6 +437,7 @@ impl Application for Dock {
             told,
             trash_watch: None,
             desktop_watch: None,
+            desktop_waits: false,
         };
         let mut commands = bus::session(
             |connection| Message::Shell(Heard::Bus(connection.ok())),

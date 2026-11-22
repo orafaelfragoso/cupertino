@@ -394,3 +394,53 @@ impl DesktopIndex {
             .filter(|i| !i.is_empty())
     }
 }
+
+/// What to watch to hear the desktop entries of the XDG data directories change ([`WatchPlan::of`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WatchPlan {
+    /// The `applications` directories that exist, watched with everything under them.
+    pub entries: Vec<PathBuf>,
+    /// The nearest existing directory above each `applications` directory that does not exist, each once, watched
+    /// alone (not what is under it): the creation of the directory, or of one on the way to it, is heard there.
+    pub above: Vec<PathBuf>,
+    /// Every `applications` directory, existing or not.
+    pub targets: Vec<PathBuf>,
+}
+
+impl WatchPlan {
+    /// The plan for the `applications` directories under `dirs` (the XDG data directories).
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "runs on the I/O pool (kit::task::io)"
+    )]
+    pub fn of(dirs: &[PathBuf]) -> Self {
+        let mut plan = Self::default();
+        for dir in dirs {
+            let apps = dir.join("applications");
+            if apps.is_dir() {
+                plan.entries.push(apps.clone());
+            } else if let Some(above) = apps.ancestors().skip(1).find(|a| a.is_dir()) {
+                if !plan.above.iter().any(|a| a == above) {
+                    plan.above.push(above.to_path_buf());
+                }
+            }
+            plan.targets.push(apps);
+        }
+        plan
+    }
+
+    /// Whether a change at `path` can change the entries: one inside an `applications` directory, or one of a
+    /// directory on the way to one (its creation). Another file of a directory watched above one (a program's state
+    /// in `~/.local/share`) cannot.
+    pub fn concerns(&self, path: &Path) -> bool {
+        self.targets
+            .iter()
+            .any(|t| path.starts_with(t) || t.starts_with(path))
+    }
+
+    /// Whether an `applications` directory is missing: the watch is made again after each change heard, so it follows
+    /// the directory down to it once it is created.
+    pub fn waits(&self) -> bool {
+        !self.above.is_empty()
+    }
+}

@@ -391,6 +391,10 @@ pub enum Message {
     ConfChanged,
     /// `dock.conf` as read again ([`Host::read_conf`]); `None` when it could not be read.
     ConfRead(Option<Box<DockSettings>>),
+    /// The `applications` directories changed: the component indexes them again, the model ignores this.
+    DesktopChanged,
+    /// The desktop entries as indexed again: the tiles resolve through them from now on.
+    Desktop(Box<DesktopIndex>),
     /// The launcher's history of applications ([`Host::recent_apps`]), the most recent first.
     RecentApps(Vec<String>),
     /// An application asked for its badge's count to change ([`crate::badge`]).
@@ -895,6 +899,10 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
             }
             Vec::new()
         }
+        Message::Desktop(index) => {
+            model.desktop_changed(*index);
+            Vec::new()
+        }
         Message::RecentApps(history) => {
             model.recents_reading = model.recents_reading.saturating_sub(1);
             let now = model.now();
@@ -903,7 +911,10 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
             model.session.dock.set_recents(&keys, now);
             Vec::new()
         }
-        Message::TrashLooked(false) | Message::Shell(_) | Message::Done => Vec::new(),
+        Message::TrashLooked(false)
+        | Message::DesktopChanged
+        | Message::Shell(_)
+        | Message::Done => Vec::new(),
     };
     commands.extend(model.changed());
     commands.append(&mut model.later);

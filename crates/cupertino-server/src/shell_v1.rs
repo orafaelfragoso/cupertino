@@ -18,8 +18,9 @@ use crate::state::Cupertino;
 /// out of the dock object, which the overview component and its holes replace; 29 took the strip out of the window
 /// manager object, which the window manager's own surface and its holes replace; 30 added the keyboard's panels
 /// (`get_keyboard_panels`), which the on-screen displays draw; 31 took `session_agent` out of the menu bar object, whose
-/// session menu's state comes from the session agent component.
-const SHELL_VERSION: u32 = 31;
+/// session menu's state comes from the session agent component; 32 added the dock's `window_launch`, the application a
+/// window's launch named.
+const SHELL_VERSION: u32 = 32;
 
 /// Registers the `cupertino_shell_v1` global.
 pub struct ShellV1Global {

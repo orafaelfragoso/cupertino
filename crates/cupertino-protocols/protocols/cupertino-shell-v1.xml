@@ -10,7 +10,7 @@
     Every change of a message raises the version of its interface.
   </description>
 
-  <interface name="cupertino_shell_v1" version="31">
+  <interface name="cupertino_shell_v1" version="32">
     <description summary="shell services of the server">
       Global singleton, offered only to the processes the server started for a shell role, on a
       connection of their own. Each request needs the role it creates: a connection that holds
@@ -26,7 +26,8 @@
       strip placement, the rectangle of set_placement and the strip_pressed event of the window
       manager object: the strip is the window manager's own surface, its thumbnails holes. Version 30 adds the
       get_keyboard_panels request. Version 31 removes the agent_trust enum and the session_agent event of
-      the menu bar object: the menu bar takes the session menu's state from the session agent component. An object this global
+      the menu bar object: the menu bar takes the session menu's state from the session agent component. Version 32 adds the
+      window_launch event of the dock object. An object this global
       creates has the version the global was bound at, so the since of each message of those
       objects is the shell version that added it.
     </description>
@@ -778,7 +779,7 @@
     </request>
   </interface>
 
-  <interface name="cupertino_dock_v1" version="28">
+  <interface name="cupertino_dock_v1" version="32">
     <description summary="the dock of one output">
       Events describe the windows of the session and the application switcher. They come in
       groups ended by a done event; the client applies a group at once. The first group, sent
@@ -996,6 +997,25 @@
 
     <event name="done">
       <description summary="end of a group of events"/>
+    </event>
+
+    <event name="window_launch" since="32">
+      <description summary="the application whose launch a window answered">
+        The application the launch behind a window named: the application id an
+        xdg_activation_v1 token was given with set_app_id (the desktop entry id the launcher, the
+        dock or a file manager starts), when the window presented that token as it mapped, its
+        process was started with it in XDG_ACTIVATION_TOKEN, or it was first activated with it
+        later. The window's own application id may differ from it (a program whose windows name
+        no desktop entry, or another one); the dock files the window under the launched
+        application and ends that application's launch bounce.
+
+        Sent before the window's window event in the group that first lists the window when its
+        launch named an application then, else in the group of the activation that first named
+        one; never again for that window. Not sent for a window whose launch named none. The
+        application id is cut like the window event's.
+      </description>
+      <arg name="id" type="uint"/>
+      <arg name="app_id" type="string"/>
     </event>
 
     <request name="force_quit_app" since="4">

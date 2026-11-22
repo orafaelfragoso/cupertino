@@ -4,4 +4,5 @@
 mod component;
 mod files;
 mod frecency;
+mod launch;
 mod model;

@@ -69,6 +69,8 @@ struct WindowInfo {
     state: WindowState,
     /// The window's copied icon: the same `Arc` until the window commits another.
     icon: Arc<WindowIcon>,
+    /// The application its launch named ([`crate::state::WindowEntry::launch`]), cut; empty for none.
+    launch: String,
 }
 
 impl WindowInfo {
@@ -85,6 +87,9 @@ const ENGAGE_SINCE: u32 = 18;
 
 /// Shell version of `cupertino_dock_v1.app_resident`.
 const APP_RESIDENT_SINCE: u32 = 19;
+
+/// Shell version of `cupertino_dock_v1.window_launch`.
+const WINDOW_LAUNCH_SINCE: u32 = 32;
 
 /// Shell version from which `cupertino_dock_v1` has the messages of this server: version 28 removed the overview's and
 /// `window_thumbnail`, which moved the opcodes of the later ones, so an older dock speaks another wire and is left inert.
@@ -515,6 +520,11 @@ impl Cupertino {
                         title: cut_text(&w.title).to_owned(),
                         state,
                         icon: self.entry(w.id).map(|e| e.icon()).unwrap_or_default(),
+                        launch: self
+                            .entry(w.id)
+                            .and_then(|e| e.launch.as_deref())
+                            .map(|l| cut_text(l).to_owned())
+                            .unwrap_or_default(),
                     },
                 )
             })
@@ -599,8 +609,18 @@ impl Cupertino {
             let mut changed = dock.sent.is_none();
             let known = dock.sent.take().unwrap_or_default();
             let icons = dock.resource.version() >= WINDOW_ICON_SINCE;
+            let launches = dock.resource.version() >= WINDOW_LAUNCH_SINCE;
             for (id, info) in &feed {
                 let old = known.get(id);
+                // before the window event, so the window is filed under its launch at once; a window's launch is named
+                // once and never changes after
+                if launches
+                    && !info.launch.is_empty()
+                    && old.is_none_or(|o| o.launch != info.launch)
+                {
+                    dock.resource.window_launch(*id, info.launch.clone());
+                    changed = true;
+                }
                 if !old.is_some_and(|o| o.same_window_event(info)) {
                     dock.resource
                         .window(*id, info.app_id.clone(), info.title.clone(), info.state);

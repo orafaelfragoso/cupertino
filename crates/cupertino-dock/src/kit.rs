@@ -129,6 +129,12 @@ pub enum DockEvent {
     WindowIcon(WindowIcon),
     WindowClosed(u32),
     Launching(String),
+    /// The application the launch behind window `id` named, which its own application id may not be: the window is
+    /// filed under it ([`Session::window_launch`]).
+    WindowLaunch {
+        id: u32,
+        app_id: String,
+    },
     /// Whether a process of the application that showed a window is still connected, with or without windows now.
     Resident {
         app_id: String,

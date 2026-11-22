@@ -68,7 +68,7 @@ impl Offer {
     /// The versions a current server offers.
     pub const CURRENT: Offer = Offer {
         capture: None,
-        shell: 31,
+        shell: 32,
         layer_shell: 4,
         app_effects: 1,
     };

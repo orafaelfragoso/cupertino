@@ -466,8 +466,8 @@ impl Shell {
         // pictures of minimized windows, version 23 the overview's window drag, drop and workspace pictures, version 24 the
         // process behind the active window, version 25 how the server passes chords to it, version 26 the dock showing
         // one window, version 28 the dock without the overview and the pictures of minimized windows, version 31 the menu
-        // bar without the session agent's process
-        conn.bind_extension(9..=31, Quiet).map(Shell)
+        // bar without the session agent's process, version 32 the application a window's launch named
+        conn.bind_extension(9..=32, Quiet).map(Shell)
     }
 
     /// Observe the session: its appearance and display options arrive as

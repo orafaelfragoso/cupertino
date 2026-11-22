@@ -549,12 +549,13 @@ impl Cupertino {
         crate::xwayland::set_client_env(&mut cmd, self.xwayland.as_ref().map(|x| x.display()));
         cmd.env_remove("WAYLAND_SOCKET");
         let program = cmd.get_program().to_string_lossy().into_owned();
-        // the docks key tiles by desktop entry id; a program without an entry (a script, a shell)
-        // is not an application launch
-        let app_id = std::path::Path::new(&program)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .and_then(|n| self.desktop.find(n))
+        // the docks key tiles by desktop entry id; a program without an entry the desktop shows (a script, a shell, a
+        // helper with a hidden entry) is not an application launch, and neither is a name several entries run
+        let app_id = self
+            .desktop
+            .for_program(std::path::Path::new(&program))
+            .map(|e| self.desktop.shown(e))
+            .filter(|e| !e.no_display)
             .map(|e| e.id.clone());
         crate::file_limit::restore_in_child(&mut cmd);
         match cmd.spawn() {

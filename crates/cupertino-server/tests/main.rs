@@ -5,6 +5,8 @@
 mod copy_sync;
 #[path = "cursor-reader.rs"]
 mod cursor_reader;
+#[path = "desktop-index.rs"]
+mod desktop_index;
 #[path = "frame-not-ready.rs"]
 mod frame_not_ready;
 #[path = "host-protocol.rs"]
@@ -36,5 +38,7 @@ mod session_and_displays;
 #[path = "shell-components.rs"]
 mod shell_components;
 mod transactions;
+#[path = "window-launch.rs"]
+mod window_launch;
 #[path = "xwayland-watch.rs"]
 mod xwayland_watch;

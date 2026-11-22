@@ -598,15 +598,19 @@ impl Model {
         self.start(key, true)
     }
 
-    /// Start the entry of tile `key` with an activation token, bouncing its tile when `bounce` is set.
+    /// Start the entry of tile `key` with an activation token, bouncing its tile when `bounce` is set. An entry that
+    /// runs in a terminal (`Terminal=true`) shows the terminal's window, not one of its own: the terminal's tile
+    /// bounces, and that window ends the bounce.
     pub(super) fn start(&mut self, key: String, bounce: bool) -> Vec<Command<Message>> {
         let launch = self.session.launch(&key);
         let mut argv = launch.argv;
+        let mut key = key;
         if launch.terminal {
             let Some(terminal) = self.host.terminal() else {
                 eprintln!("cupertino-dock: {key} runs in a terminal and none is installed");
                 return Vec::new();
             };
+            key = self.session.key_of(&terminal);
             argv.splice(0..0, [terminal, "-e".to_owned()]);
         }
         if argv.is_empty() {
@@ -621,6 +625,14 @@ impl Model {
         let launch = self.next_launch;
         self.next_launch += 1;
         let asked = self.now();
+        // the token names the application, so the server files the window that answers it under that tile whatever
+        // application id the window gives itself (`window_launch`)
+        let app_id = self
+            .session
+            .desktop()
+            .find(&key)
+            .filter(|e| !e.no_display)
+            .map(|e| e.id.clone());
         self.pending.insert(
             launch,
             Pending {
@@ -634,7 +646,7 @@ impl Model {
             .unwrap_or_else(|| view::bar_key(0, self.bar_generation));
         vec![Command::ActivationToken {
             window,
-            app_id: None,
+            app_id,
             on_token: Box::new(move |token| Message::Token(launch, token)),
         }]
     }
@@ -652,7 +664,9 @@ impl Model {
                     self.opening.remove(&key);
                     return Vec::new();
                 }
-                if bounce {
+                // an application that shows a window already (the terminal of an entry that runs in one, the file
+                // manager opening a folder) gets no first window to end a bounce
+                if bounce && !self.session.has_windows(&key) {
                     let now = self.now();
                     self.session.dock.app_launching(&key, now);
                 }

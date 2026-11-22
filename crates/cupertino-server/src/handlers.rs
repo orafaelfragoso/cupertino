@@ -625,8 +625,13 @@ impl XdgActivationHandler for Cupertino {
             app_id: data.app_id.clone().filter(|id| !id.is_empty()),
         });
         // a token that names an application is a launch (launchers, file managers and GTK's
-        // launch context set the id): the docks bounce its tile before its first window maps
-        if let Some(app_id) = data.app_id.as_deref().filter(|id| !id.is_empty()) {
+        // launch context set the id): the docks bounce its tile before its first window maps. Only an application the
+        // desktop shows is one: a helper's hidden entry or an id without one would leave a tile no window comes to
+        if let Some(app_id) = data
+            .app_id
+            .as_deref()
+            .filter(|id| self.desktop.find(id).is_some_and(|e| !e.no_display))
+        {
             self.docks.launching(app_id);
         }
         true
@@ -705,6 +710,14 @@ impl Cupertino {
             }
             return;
         };
+        // the first activation that names an application names the launch a window mapped without one answered
+        if let Some(app_id) = grant.app_id.as_ref() {
+            let entry = self.windows.iter_mut().find(|e| e.id == id);
+            if let Some(entry) = entry.filter(|e| e.launch.is_none()) {
+                entry.launch = Some(app_id.clone());
+                self.refresh_docks();
+            }
+        }
         if grant.valid
             && self
                 .wm
@@ -807,6 +820,7 @@ impl XdgShellHandler for Cupertino {
             fullscreen: false,
             shrink: Default::default(),
             frame: crate::frame_fill::Frame::UNSEEN,
+            launch: None,
         });
     }
 

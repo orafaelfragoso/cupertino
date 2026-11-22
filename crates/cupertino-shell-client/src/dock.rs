@@ -87,6 +87,11 @@ pub enum DockChange {
     /// A touchpad gesture committed on the dock's output that no transaction is bound to: the dock maps it to its
     /// action.
     Gesture(Gesture),
+    /// The application the launch behind window `id` named (the application id of its activation token), which its
+    /// own application id may not be: the dock files the window under it. Before the window's [`DockChange::Window`]
+    /// in the group that first lists it, else in the group of the activation that named it; once per window, from
+    /// shell version 32.
+    WindowLaunch { id: u32, app_id: String },
 }
 
 /// One group of events, applied at once. The first group after the object is created lists every
@@ -319,6 +324,9 @@ impl GroupBuilder {
             Event::SwitcherClosed { committed } => self.changes.push(DockChange::SwitcherClosed {
                 committed: committed != 0,
             }),
+            Event::WindowLaunch { id, app_id } => {
+                self.changes.push(DockChange::WindowLaunch { id, app_id })
+            }
             // a corner or gesture a newer server defines has no action here
             Event::HotCorner {
                 corner: WEnum::Value(corner),

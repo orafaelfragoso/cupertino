@@ -38,5 +38,7 @@ mod session_and_displays;
 #[path = "shell-components.rs"]
 mod shell_components;
 mod transactions;
+#[path = "window-launch.rs"]
+mod window_launch;
 #[path = "xwayland-watch.rs"]
 mod xwayland_watch;

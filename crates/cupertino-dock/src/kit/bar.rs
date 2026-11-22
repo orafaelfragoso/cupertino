@@ -625,6 +625,14 @@ impl Model {
         let launch = self.next_launch;
         self.next_launch += 1;
         let asked = self.now();
+        // the token names the application, so the server files the window that answers it under that tile whatever
+        // application id the window gives itself (`window_launch`)
+        let app_id = self
+            .session
+            .desktop()
+            .find(&key)
+            .filter(|e| !e.no_display)
+            .map(|e| e.id.clone());
         self.pending.insert(
             launch,
             Pending {
@@ -638,7 +646,7 @@ impl Model {
             .unwrap_or_else(|| view::bar_key(0, self.bar_generation));
         vec![Command::ActivationToken {
             window,
-            app_id: None,
+            app_id,
             on_token: Box::new(move |token| Message::Token(launch, token)),
         }]
     }

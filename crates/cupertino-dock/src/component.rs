@@ -349,6 +349,7 @@ fn dock_event(change: dock::Change, output: u32) -> Option<DockEvent> {
         }),
         dock::Change::WindowClosed(id) => DockEvent::WindowClosed(id),
         dock::Change::Launching(app_id) => DockEvent::Launching(app_id),
+        dock::Change::WindowLaunch { id, app_id } => DockEvent::WindowLaunch { id, app_id },
         dock::Change::ToggleAutoHide => DockEvent::ToggleAutoHide,
         dock::Change::ToggleAppGrid => DockEvent::ToggleAppGrid,
         dock::Change::SwitcherChanged { apps, selected, .. } => DockEvent::Switcher {

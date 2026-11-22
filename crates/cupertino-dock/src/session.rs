@@ -70,6 +70,9 @@ pub struct Session {
     desktop: DesktopIndex,
     /// Windows by server id.
     windows: BTreeMap<u32, Window>,
+    /// The application the launch behind a window named, by window id, when the server named one that is an
+    /// application ([`Session::window_launch`]).
+    launches: BTreeMap<u32, String>,
     /// The application ids the server reported resident: a process of the application that showed a window is
     /// still connected, with or without windows now.
     resident: BTreeSet<String>,
@@ -87,6 +90,7 @@ impl Session {
             dock,
             desktop,
             windows: BTreeMap::new(),
+            launches: BTreeMap::new(),
             resident: BTreeSet::new(),
             quit: Vec::new(),
             live: false,
@@ -158,15 +162,17 @@ impl Session {
     }
 
     /// A window appeared or one of its properties changed. A window of a process whose entry the desktop hides
-    /// ([`Session::shows_windows`]) is not counted.
+    /// ([`Session::shows_windows`]) is not counted, unless its launch named an application
+    /// ([`Session::window_launch`]): it belongs to that application's tile.
     pub fn window(&mut self, id: u32, app_id: &str, title: &str, minimized: bool, now: f64) {
         if self.windows.get(&id).is_some_and(|w| w.app_id != app_id) {
-            self.window_closed(id, now);
+            self.forget_window(id, now);
         }
-        if !self.shows_windows(app_id) {
+        let launch = self.launches.get(&id);
+        if launch.is_none() && !self.shows_windows(app_id) {
             return;
         }
-        let key = self.key_of(app_id);
+        let key = self.key_of(launch.map_or(app_id, String::as_str));
         if !self.windows.values().any(|w| w.key == key) {
             // a resident application showing a window again was running all along: no launch hop
             if self.live && self.resident_app_id(&key).is_none() {
@@ -199,6 +205,33 @@ impl Session {
     /// A window went away. The application leaves the running state with its last window unless the server
     /// reported it resident: its process still runs, and the tile keeps its running dot until it exits.
     pub fn window_closed(&mut self, id: u32, now: f64) {
+        self.launches.remove(&id);
+        self.forget_window(id, now);
+    }
+
+    /// The server named the application the launch behind window `id` named (its activation token's application id),
+    /// which the window's own application id may not be (a program whose windows name no desktop entry, or another
+    /// one): the window belongs to that application's tile, and its first window ends that tile's launch bounce. It
+    /// comes before the window's first event; a window already shown moves to that tile. A launch that names no
+    /// application ([`Session::is_application`]) changes nothing.
+    pub fn window_launch(&mut self, id: u32, app_id: &str, now: f64) {
+        if !self.is_application(app_id) {
+            return;
+        }
+        self.launches.insert(id, app_id.to_owned());
+        let Some(shown) = self.windows.get(&id) else {
+            return;
+        };
+        if shown.key == self.key_of(app_id) {
+            return;
+        }
+        let (own, title, minimized) = (shown.app_id.clone(), shown.title.clone(), shown.minimized);
+        self.forget_window(id, now);
+        self.window(id, &own, &title, minimized, now);
+    }
+
+    /// Take window `id` off its tile, which quits with its last window unless the application is resident.
+    fn forget_window(&mut self, id: u32, now: f64) {
         let Some(window) = self.windows.remove(&id) else {
             return;
         };

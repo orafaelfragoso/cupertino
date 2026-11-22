@@ -153,6 +153,7 @@ fn each_event_is_one_change_in_its_group_and_an_empty_group_is_not_reported() {
         dock.app_resident("org.example.B".into(), 0);
         dock.switcher_closed(1);
         dock.switcher_closed(0);
+        dock.window_launch(4, "org.example.Launched".into());
         for corner in [
             wire_dock::Corner::TopLeft,
             wire_dock::Corner::TopRight,
@@ -201,6 +202,10 @@ fn each_event_is_one_change_in_its_group_and_an_empty_group_is_not_reported() {
                 },
                 DockChange::SwitcherClosed { committed: true },
                 DockChange::SwitcherClosed { committed: false },
+                DockChange::WindowLaunch {
+                    id: 4,
+                    app_id: "org.example.Launched".into()
+                },
                 DockChange::HotCorner(Corner::TopLeft),
                 DockChange::HotCorner(Corner::TopRight),
                 DockChange::HotCorner(Corner::BottomLeft),

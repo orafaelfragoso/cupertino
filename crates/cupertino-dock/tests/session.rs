@@ -10,6 +10,9 @@ use cupertino_dock::session::Session;
 const T3_SHOWN: &str = "T3-Code-x86_64";
 const T3_HIDDEN: &str = "com.t3tools.T3Code";
 const T3_EXEC: &str = "\"/home/user/.local/bin/T3-Code-x86_64.AppImage\" %U";
+/// An application whose windows name none of its entry's id, `StartupWMClass` or program.
+const EDITOR: &str = "org.example.Editor";
+const EDITOR_WINDOWS: &str = "electron-editor";
 
 fn entry(id: &str, exec: &str, no_display: bool) -> DesktopEntry {
     DesktopEntry {
@@ -34,6 +37,7 @@ fn desktop() -> DesktopIndex {
         ),
         entry("foot", "foot", false),
         entry("htop", "htop", false),
+        entry(EDITOR, "/opt/editor/start-editor %F", false),
     ];
     entries[4].terminal = true;
     entries.sort_by(|a, b| a.id.cmp(&b.id));
@@ -133,4 +137,53 @@ fn launching_a_pinned_program_without_an_entry_bounces_its_tile() {
         .dock
         .app_tile("some-script")
         .is_some_and(|t| t.launch.is_some()));
+}
+
+#[test]
+fn a_window_whose_launch_named_an_application_runs_on_its_tile_and_ends_its_bounce() {
+    let mut s = session(&[]);
+    s.launching(EDITOR, 0.0);
+    s.window_launch(1, EDITOR, 1.0);
+    s.window(1, EDITOR_WINDOWS, "Untitled", false, 1.0);
+    assert_eq!(s.window_info(1).map(|w| w.key.as_str()), Some(EDITOR));
+    assert!(s.dock.app_tile(EDITOR_WINDOWS).is_none());
+    let later = 2.0 + s.dock.bounce.launch_timeout;
+    s.dock.tick(later);
+    let tile = s.dock.app_tile(EDITOR).expect("the launched tile");
+    assert!(tile.running && !tile.is_leaving());
+    assert!(tile
+        .launch
+        .is_none_or(|b| !b.is_active(&s.dock.bounce, later)));
+    // raising it names the window's own application id to the server
+    assert_eq!(
+        s.opening(EDITOR),
+        cupertino_dock::session::Activation::ActivateApp(EDITOR_WINDOWS.to_owned())
+    );
+    s.window_closed(1, later);
+    assert!(s.dock.app_tile(EDITOR).is_none_or(|t| !t.running));
+}
+
+#[test]
+fn a_window_shown_before_its_launch_was_named_moves_to_the_launched_tile() {
+    let mut s = session(&[EDITOR]);
+    s.window(1, EDITOR_WINDOWS, "Untitled", false, 0.0);
+    assert!(s.dock.app_tile(EDITOR_WINDOWS).is_some_and(|t| t.running));
+    s.window_launch(1, EDITOR, 1.0);
+    assert_eq!(s.window_info(1).map(|w| w.key.as_str()), Some(EDITOR));
+    assert!(s.dock.app_tile(EDITOR).is_some_and(|t| t.running));
+    assert!(s
+        .dock
+        .app_tile(EDITOR_WINDOWS)
+        .is_none_or(|t| !t.running && t.is_leaving()));
+}
+
+#[test]
+fn a_launch_that_names_no_application_leaves_the_window_where_it_was() {
+    let mut s = session(&[]);
+    s.window_launch(1, "org.example.Portal", 0.0);
+    s.window(1, EDITOR_WINDOWS, "Untitled", false, 0.0);
+    assert_eq!(
+        s.window_info(1).map(|w| w.key.as_str()),
+        Some(EDITOR_WINDOWS)
+    );
 }

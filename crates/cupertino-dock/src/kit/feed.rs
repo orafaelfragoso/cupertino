@@ -145,8 +145,19 @@ impl Model {
                     title,
                     minimized,
                 } => {
-                    self.opening.remove(&self.session.key_of(&app_id));
-                    self.session.window(id, &app_id, &title, minimized, now)
+                    self.session.window(id, &app_id, &title, minimized, now);
+                    // the guard against a second launch ends with a window of the tile it was for
+                    let key = self
+                        .session
+                        .window_info(id)
+                        .map_or_else(|| self.session.key_of(&app_id), |w| w.key.clone());
+                    self.opening.remove(&key);
+                }
+                DockEvent::WindowLaunch { id, app_id } => {
+                    self.session.window_launch(id, &app_id, now);
+                    if let Some(key) = self.session.window_info(id).map(|w| w.key.clone()) {
+                        self.opening.remove(&key);
+                    }
                 }
                 DockEvent::Resident { app_id, resident } => {
                     if resident {

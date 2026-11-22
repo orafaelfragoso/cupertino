@@ -99,14 +99,20 @@ fn model() -> (Model, Rc<RefCell<Seen>>) {
     (model, seen)
 }
 
-/// Run `message` and hand every activation token it asks for over at once.
-fn run(model: &mut Model, message: Message) {
+/// Run `message` and hand every activation token it asks for over at once; the application each token was asked for.
+fn run(model: &mut Model, message: Message) -> Vec<Option<String>> {
+    let mut named = Vec::new();
     let mut pending = kit::update(model, message);
     while let Some(command) = pending.pop() {
-        if let Command::ActivationToken { on_token, .. } = command {
+        if let Command::ActivationToken {
+            app_id, on_token, ..
+        } = command
+        {
+            named.push(app_id);
             pending.extend(kit::update(model, on_token(Some("token".to_owned()))));
         }
     }
+    named
 }
 
 fn bouncing(model: &Model, key: &str, now: f64) -> bool {
@@ -127,7 +133,12 @@ fn an_entry_that_runs_in_a_terminal_bounces_the_terminal_until_its_window_shows(
         .app_tile("htop")
         .expect("the pinned tile")
         .id;
-    run(&mut model, Message::Input(Input::Activate(htop.0)));
+    let named = run(&mut model, Message::Input(Input::Activate(htop.0)));
+    assert_eq!(
+        named,
+        [Some("foot".to_owned())],
+        "the token names the terminal"
+    );
     assert_eq!(seen.borrow().spawned, [["foot", "-e", "htop"]]);
     assert!(bouncing(&model, "foot", 0.5), "the terminal's tile bounces");
     assert!(!bouncing(&model, "htop", 0.5), "the entry's tile does not");

@@ -17,7 +17,7 @@ fn flat(_level: usize, _at: [f32; 2]) -> Rgb {
 }
 
 /// A square of straight edges whose top edge lies along y = 0, in light regular glass with nothing at its edge but what
-/// a test turns on: no rim, no edge line, no fill over the face.
+/// a test turns on: no rim, no edge line, no fill over the face, no key and fill light, no edge bleed and no ring.
 fn square() -> Container {
     let mut c = Container::new(
         vec![GlassShape::new([0.0, 0.0, 100.0, 100.0], 0.0)],
@@ -27,10 +27,13 @@ fn square() -> Container {
     c.params.highlight.amount = 0.0;
     c.params.shadow.edge_line = 0.0;
     c.params.face.fill = [1.0, 1.0, 1.0, 0.0];
+    c.params.specular = GlassSpecular::NONE;
+    c.params.bleed.opacity = 0.0;
+    c.params.shadow.ring_opacity = 0.0;
     c
 }
 
-/// The key and fill light of the light regular glass of the research example: 0.4 strong, arcs 96° either side of a
+/// The key and fill light of the light regular glass of the recorded recipe: 0.4 strong, arcs 96° either side of a
 /// key from the top, 0.75 points deep, the fill as strong, a diffuse glow 8 times as deep over arcs 0.65 as wide at
 /// 0.15 of the strength; here a point deep to make the band's falloff easy to follow.
 const SPECULAR: GlassSpecular = GlassSpecular {
@@ -240,22 +243,26 @@ fn the_tint_lies_over_the_face_at_its_alpha_times_the_face_opacity() {
     assert!(close(c, expected, 1e-6), "{c:?} {expected:?}");
 }
 
-/// A toolbar group and a segment inside it, clear of its edges, in one container joined hard.
+/// A toolbar group and a segment inside it, clear of its edges, in one container joined hard, without the ring shadow
+/// (which darkens the face after the tint).
 fn group() -> Container {
-    Container::new(
+    let mut c = Container::new(
         vec![
             GlassShape::new([10.0, 10.0, 80.0, 40.0], 12.0),
             GlassShape::new([60.0, 16.0, 24.0, 28.0], 10.0),
         ],
         0.0,
         GlassMode::default(),
-    )
+    );
+    c.for_each_recipe(|r| r.shadow.ring_opacity = 0.0);
+    c
 }
 
 #[test]
 fn each_shape_of_a_container_keeps_its_own_glass() {
     let same = group();
-    let red = GlassParams::new(GlassMode::default(), 30.0).with_tint([1.0, 0.0, 0.0, 0.5], 1.0);
+    let mut red = GlassParams::new(GlassMode::default(), 30.0).with_tint([1.0, 0.0, 0.0, 0.5], 1.0);
+    red.shadow.ring_opacity = 0.0;
     let mixed = group().with_shape_recipe(1, red);
     // the group's own glass where only it lies, the segment's tint over the same face where it lies, though the
     // group's outline is the nearer one there
@@ -271,10 +278,7 @@ fn each_shape_of_a_container_keeps_its_own_glass() {
     let expected: Rgb = std::array::from_fn(|i| base[i] + ([1.0, 0.0, 0.0][i] - base[i]) * 0.5);
     assert!(close(c, expected, 1e-6), "{c:?} {expected:?}");
     // another style on the segment changes its face and leaves the group's
-    let clear = GlassMode {
-        style: GlassStyle::Clear,
-        ..GlassMode::default()
-    };
+    let clear = GlassMode::of_style(false, GlassStyle::Clear);
     let segment = group().with_shape_mode(1, clear);
     assert!(segment.recipes[1].is_some() && segment.recipes[0].is_none());
     assert_ne!(
@@ -309,11 +313,7 @@ fn lit_scenes() -> Vec<(&'static str, Container)> {
         }
         out.push((name, c));
     }
-    let clear = GlassMode {
-        style: GlassStyle::Clear,
-        dark: true,
-        ..GlassMode::default()
-    };
+    let clear = GlassMode::of_style(true, GlassStyle::Clear);
     out.push(("segment of other glass", group().with_shape_mode(1, clear)));
     let tinted = GlassParams::new(GlassMode::default(), 30.0).with_tint([0.9, 0.2, 0.1, 0.6], 1.0);
     let mut joined = group().with_shape_recipe(1, tinted);

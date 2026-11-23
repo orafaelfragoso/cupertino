@@ -513,7 +513,7 @@ pub(crate) fn levels<M: Clone + 'static>(
                     surface: Surface::Menu,
                     radius: style.radius,
                     alpha: 1.0,
-                    glass: None,
+                    glass: Some(widgets::MENU_GLASS),
                 }
             },
             content: match style.tail.filter(|_| tailed) {

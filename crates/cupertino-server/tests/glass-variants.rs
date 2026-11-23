@@ -724,3 +724,27 @@ fn under_reduce_motion_interactive_glass_does_not_grow_under_a_press() {
     }
     capsule.release(t0 + 1.0);
 }
+
+#[test]
+fn a_menu_named_by_its_variant_keeps_the_popover_outline_of_the_menu_style() {
+    use cupertino_server::glass_look::{of_wire, GlassLook};
+    use cupertino_theme::GlassStyle as Style;
+    let menu = |bits: GlassModifier| {
+        of_wire(
+            GlassVariant::Menu as u32,
+            bits.bits(),
+            SizeClass::Dynamic as u32,
+        )
+        .expect("the menu variant")
+    };
+    let without_shadow = menu(GlassModifier::ExcludeShadow);
+    assert_eq!(
+        without_shadow.style,
+        Some(Style::Menu),
+        "draws as the menu style does"
+    );
+    assert!(without_shadow.popover_outline());
+    assert!(menu(GlassModifier::empty()).popover_outline());
+    assert!(GlassLook::of_style(Style::Menu).popover_outline());
+    assert!(!GlassLook::of_style(Style::Regular).popover_outline());
+}

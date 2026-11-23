@@ -95,6 +95,14 @@ impl GlassLook {
         }
     }
 
+    /// Whether a popup's callout of this glass (a panel and its pointer joined in one container) draws the popover's
+    /// outline just outside its shape: the dense glass of a popover and the menu's glass, named by its style or by the
+    /// menu variant.
+    pub fn popover_outline(self) -> bool {
+        matches!(self.style, Some(GlassStyle::Dense | GlassStyle::Menu))
+            || self.variant == GlassVariant::Menu
+    }
+
     /// Whether the glass responds to a press ([`crate::glass_press`]).
     pub fn interactive(self) -> bool {
         self.modifiers.interactive

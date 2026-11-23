@@ -1005,6 +1005,9 @@ pub mod transaction {
   A component that hears it calls `join(id, output)`, stages its window and submits.
 - `Started::at` is on the clock of `platform::Timestamp`, so a component that draws something in step evaluates the
   same `Timing` from it.
+- The crate lets go of a part's object when its transaction is over (`Finished`), but not of a creator's whose
+  transaction came to rest completed with a reverse binding (`bind_reverse`): that one stays for the reverse gesture
+  until the creator drops its `Handle` or the transaction finishes reverted or cancelled.
 
 ### The host bus
 

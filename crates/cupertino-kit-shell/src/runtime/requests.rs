@@ -337,6 +337,7 @@ impl ShellRoles {
                 } else {
                     manager.create(id.serial, &wl, &qh, TransactionData(id))
                 };
+                self.reverse_bound.remove(&id);
                 if let Some(old) = self.transactions.insert(id, object) {
                     old.destroy();
                 }
@@ -347,6 +348,7 @@ impl ShellRoles {
             },
             R::TxDestroy { id } => {
                 self.pending_stages.retain(|(staged, _)| *staged != id);
+                self.reverse_bound.remove(&id);
                 if let Some(object) = self.transactions.remove(&id) {
                     object.destroy();
                 }
@@ -391,6 +393,7 @@ impl ShellRoles {
             } => object.bind_gesture(wire_gesture(gesture), response, damping),
             R::TxBindReverseGesture { gesture, .. } => {
                 object.bind_reverse_gesture(wire_gesture(gesture));
+                self.reverse_bound.insert(id);
             }
             R::TxSubmit { .. } => object.submit(),
             R::TxCancel { .. } => object.cancel(),

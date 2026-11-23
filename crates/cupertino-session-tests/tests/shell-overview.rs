@@ -7,6 +7,7 @@
 //! - The swipe up is armed for the overview: released slowly short of half its travel it settles back and gives the
 //!   window back; released at the same place in a quick flick, the release's velocity carries it open, and the window
 //!   stays in its hole.
+//! - The overview a swipe up opened keeps the swipe down once at rest, and the swipe down takes it back.
 //! - A window that closes while the overview is open has its hole closed: the claim ends and nothing of it shows.
 //! - The toggle (the shortcut, F3) opens the overview and the next one leaves it, giving the window back, more times
 //!   than a connection may have transactions, with the same instance.
@@ -341,7 +342,12 @@ const OPEN_TURNS: u32 = 200;
 
 /// A swipe up of [`SHORT_OF_HALF`] of the travel in [`SWIPE_EVENTS`] events `step` seconds apart, from `time`; with
 /// `rest`, the fingers stay still a while before they lift. Returns the time after it.
-fn swipe(rig: &mut Rig, mut time: f64, step: f64, rest: bool) -> f64 {
+fn swipe(rig: &mut Rig, time: f64, step: f64, rest: bool) -> f64 {
+    swipe_by(rig, time, step, rest, -SHORT_OF_HALF)
+}
+
+/// [`swipe`] over `travel` of the whole gesture's travel: up when it is negative, down when it is positive.
+fn swipe_by(rig: &mut Rig, mut time: f64, step: f64, rest: bool, travel: f64) -> f64 {
     rig.state.gesture(GestureEvent::SwipeBegin {
         time,
         fingers: FINGERS,
@@ -351,7 +357,7 @@ fn swipe(rig: &mut Rig, mut time: f64, step: f64, rest: bool) -> f64 {
         rig.state.gesture(GestureEvent::SwipeUpdate {
             time,
             dx: 0.0,
-            dy: -SWIPE_DISTANCE * SHORT_OF_HALF / f64::from(SWIPE_EVENTS),
+            dy: SWIPE_DISTANCE * travel / f64::from(SWIPE_EVENTS),
         });
         rig.turn();
     }
@@ -416,6 +422,55 @@ fn a_swipe_up_settles_with_the_velocity_it_is_released_with() {
     assert!(
         count(&rig.image(), Area::output(), magenta) > 0,
         "the window shows in its hole"
+    );
+}
+
+#[test]
+fn a_swipe_down_takes_back_the_overview_a_swipe_up_opened() {
+    let (_bus, mut rig) = start("overview-reverse", &["overview"]);
+    let client = rig.client();
+    app::spawn(client, "org.cupertino.test.overview");
+    let (id, own) = mapped(&mut rig);
+    let output = rig.state.outputs[0].id;
+    rig.until("the swipe up is armed", |rig| {
+        rig.state
+            .transactions
+            .has_gesture_binding(output, WireGesture::SwipeUp)
+    });
+
+    // a flick opens the overview, which comes to rest open and keeps the swipe down that takes it back
+    let time = swipe(&mut rig, 1.0, FLICK_STEP, false);
+    rig.until("the flick opened the overview and it came to rest", |rig| {
+        let now = rig.state.now();
+        rig.state.transactions.is_window_claimed(id)
+            && rig
+                .state
+                .transactions
+                .gesture_progress_on(output, now)
+                .is_none()
+    });
+    for _ in 0..OPEN_TURNS {
+        rig.turn();
+    }
+    assert!(
+        rig.state
+            .transactions
+            .has_gesture_binding(output, WireGesture::SwipeDown),
+        "the open overview keeps the swipe down that takes it back"
+    );
+
+    // the swipe down takes it back: the window is its own again, and the swipe up is armed anew
+    swipe_by(&mut rig, time + 1.0, FLICK_STEP, false, SHORT_OF_HALF);
+    rig.until("the swipe down took the overview back", |rig| {
+        !rig.state.transactions.is_window_claimed(id)
+            && rig
+                .state
+                .transactions
+                .has_gesture_binding(output, WireGesture::SwipeUp)
+    });
+    assert!(
+        rig.shows(own, magenta, own.covered()),
+        "the window shows at its own frame"
     );
 }
 

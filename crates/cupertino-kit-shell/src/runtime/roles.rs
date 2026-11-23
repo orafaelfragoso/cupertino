@@ -4,7 +4,7 @@
 //! objects say becomes the program's [`Event`]s; the requests the program queued go out before the loop waits.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -141,6 +141,9 @@ pub(crate) struct ShellRoles {
     /// The shell global the keyboard's panels are asked of, until they are.
     keyboard_panels_shell: Option<CupertinoShellV1>,
     pub(super) transactions: HashMap<transaction::Id, CupertinoTransactionV1>,
+    /// The transactions the program bound to a reverse gesture: one at rest completed stays for that gesture until the
+    /// program lets go of it (`cupertino_transaction_v1.finished`).
+    pub(super) reverse_bound: HashSet<transaction::Id>,
     /// Windows staged in a transaction before their first commit: staged with it.
     pub(super) pending_stages: Vec<(transaction::Id, WindowKey)>,
     /// The window the person answers consent on, until its surface is known.
@@ -224,6 +227,7 @@ impl ShellRoles {
             keyboard_panels: None,
             keyboard_panels_shell,
             transactions: HashMap::new(),
+            reverse_bound: HashSet::new(),
             pending_stages: Vec::new(),
             consent_window: None,
             consent_runs: HashMap::new(),
@@ -679,9 +683,16 @@ impl ShellRoles {
             Wire::Overview(output, update) => Event::Overview(*output, update.clone()),
             Wire::KeyboardPanels(update) => Event::KeyboardPanels(update.clone()),
             Wire::Transaction(event) => {
-                if let transaction::Event::Finished { id, .. } = event {
-                    if let Some(object) = self.transactions.remove(id) {
-                        object.destroy();
+                if let transaction::Event::Finished { id, outcome } = event {
+                    // at rest completed with a reverse binding the transaction stays for that gesture, which the
+                    // creator's object holds; otherwise it is over
+                    let kept = *outcome == transaction::Outcome::Completed
+                        && self.reverse_bound.contains(id);
+                    if !kept {
+                        self.reverse_bound.remove(id);
+                        if let Some(object) = self.transactions.remove(id) {
+                            object.destroy();
+                        }
                     }
                 }
                 Event::Transaction(*event)

@@ -26,11 +26,7 @@ const STYLES: [GlassStyle; 16] = [
 ];
 
 fn mode(style: GlassStyle, dark: bool) -> GlassMode {
-    GlassMode {
-        style,
-        dark,
-        ..GlassMode::default()
-    }
+    GlassMode::of_style(dark, style)
 }
 
 fn params(style: GlassStyle, dark: bool, side: f32) -> GlassParams {
@@ -65,12 +61,11 @@ fn every_style_in_every_mode_and_size_gives_finite_non_negative_blurs() {
     for style in STYLES {
         for bits in 0..16u8 {
             let m = GlassMode {
-                style,
-                dark: bits & 1 != 0,
                 reduce_transparency: bits & 2 != 0,
                 increase_contrast: bits & 4 != 0,
                 reduce_motion: bits & 8 != 0,
                 density: 0,
+                ..mode(style, bits & 1 != 0)
             };
             for side in [0.0, 10.0, 32.0, 63.0, 64.0, 400.0] {
                 let p = GlassParams::new(m, side);
@@ -171,20 +166,30 @@ fn a_large_panel_blurs_wider_than_regular_glass_with_a_broader_shadow() {
 }
 
 #[test]
-fn only_veiled_glass_darkens_more_towards_the_bottom() {
+fn no_recipe_veils_its_face_not_even_the_veiled_style_which_draws_as_clear_glass() {
     for style in STYLES {
-        let [top, bottom] = params(style, true, 50.0).veil;
-        if style == GlassStyle::Veiled {
-            assert!(0.0 < top && top < bottom, "{top} {bottom}");
-        } else {
-            assert_eq!([top, bottom], [0.0, 0.0], "{style:?}");
-        }
+        assert_eq!(params(style, true, 50.0).veil, [0.0, 0.0], "{style:?}");
     }
+    assert_eq!(
+        params(GlassStyle::Veiled, true, 50.0),
+        params(GlassStyle::Clear, true, 50.0)
+    );
+}
+
+/// The legacy styles whose variant's Reduce Transparency trades the bend and the ring for a wider blur: all but the
+/// Dock's and the switcher's (which keep their optics) and the slider's (none recorded).
+fn styles_reduced_like_regular_glass() -> impl Iterator<Item = GlassStyle> {
+    STYLES.into_iter().filter(|s| {
+        !matches!(
+            s,
+            GlassStyle::Bar | GlassStyle::Switcher | GlassStyle::Track
+        )
+    })
 }
 
 #[test]
 fn reduce_transparency_drops_refraction_and_the_ring_for_a_wider_blur_and_a_denser_face() {
-    for style in STYLES {
+    for style in styles_reduced_like_regular_glass() {
         for dark in [false, true] {
             let plain = params(style, dark, 100.0);
             let p = with(mode(style, dark), 100.0, |m| m.reduce_transparency = true);
@@ -202,7 +207,10 @@ fn reduce_transparency_drops_refraction_and_the_ring_for_a_wider_blur_and_a_dens
                 (0.0, 0.0, 0.0),
                 "{style:?}"
             );
-            assert!(p.blur.radius > plain.blur.radius, "{style:?} dark={dark}");
+            // the subdued control centre doubles a blur the recorded one of Reduce Transparency replaces
+            if style != GlassStyle::SubduedModule {
+                assert!(p.blur.radius > plain.blur.radius, "{style:?} dark={dark}");
+            }
             if style == GlassStyle::Regular {
                 assert_ne!(plain.face, p.face, "dark={dark}");
             }
@@ -248,16 +256,21 @@ fn a_menu_loses_its_glow_without_transparency_or_with_more_contrast() {
 }
 
 #[test]
-fn density_only_thickens_the_face_up_to_a_hundred_and_not_under_reduced_transparency() {
+fn density_only_thickens_the_blur_fill_up_to_a_hundred_and_not_under_reduced_transparency() {
     for style in STYLES {
         for dark in [false, true] {
             let plain = params(style, dark, 100.0);
             let dense = with(mode(style, dark), 100.0, |m| m.density = 100);
             assert!(
-                dense.face.fill[3] >= plain.face.fill[3] - 1e-6,
+                dense.blur.fill_normal >= plain.blur.fill_normal - 1e-6,
                 "{style:?} {dark}"
             );
-            assert_eq!(dense.blur, plain.blur, "{style:?} {dark}");
+            assert_eq!(dense.face, plain.face, "{style:?} {dark}");
+            assert_eq!(dense.blur.radius, plain.blur.radius, "{style:?} {dark}");
+            assert_eq!(
+                dense.blur.level_opacity, plain.blur.level_opacity,
+                "{style:?} {dark}"
+            );
         }
     }
     let at = |density, reduce_transparency| {

@@ -9,6 +9,8 @@ mod color;
 mod control_panel_motion;
 #[path = "glass-params.rs"]
 mod glass_params;
+#[path = "glass-variants.rs"]
+mod glass_variants;
 #[path = "launcher-motion.rs"]
 mod launcher_motion;
 #[path = "notification-motion.rs"]

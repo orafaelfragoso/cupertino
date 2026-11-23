@@ -22,11 +22,7 @@ fn gpu() -> Option<HeadlessGpu> {
 }
 
 fn mode(style: GlassStyle, dark: bool) -> GlassMode {
-    GlassMode {
-        dark,
-        style,
-        ..GlassMode::default()
-    }
+    GlassMode::of_style(dark, style)
 }
 
 /// The containers every check runs over: each style's paths through the stages (one shape, joined shapes, a capsule,
@@ -255,27 +251,27 @@ fn the_glass_program_agrees_with_the_cpu_model() {
 }
 
 const MODEL_FINGERPRINTS: [(&str, u64); 10] = [
-    ("regular dark", 10084663419430105350),
-    ("regular light pair", 5685349813555855042),
-    ("clear dark capsule", 3351143975796395997),
-    ("large panel dark", 10767531798776457761),
-    ("card light", 1986863667224751888),
+    ("regular dark", 3090781794271355752),
+    ("regular light pair", 714335166968171239),
+    ("clear dark capsule", 535904700277293323),
+    ("large panel dark", 14608176073171154180),
+    ("card light", 15533129145349833937),
     ("module pair", 14613577065980837062),
-    ("bar light capsule", 5799772737222772845),
-    ("popover outline", 6360342157493424180),
-    ("toolbar edge", 734195834387120834),
-    ("reduced transparency", 11145381829055641696),
+    ("bar light capsule", 2689815143484161464),
+    ("popover outline", 5206748911706460017),
+    ("toolbar edge", 9903925566250079167),
+    ("reduced transparency", 3290778928593919062),
 ];
 
 const DEVICE_FINGERPRINTS: [(&str, u64); 10] = [
-    ("regular dark", 9997088405685175401),
-    ("regular light pair", 11583979811485097001),
-    ("clear dark capsule", 11140998575309254516),
-    ("large panel dark", 5631737398462813122),
-    ("card light", 12900348446998722835),
+    ("regular dark", 15032506918187949951),
+    ("regular light pair", 14506083299972674069),
+    ("clear dark capsule", 12860175283153529903),
+    ("large panel dark", 909770197359738154),
+    ("card light", 17776628249363455869),
     ("module pair", 9653246343634539312),
-    ("bar light capsule", 15374590078766967087),
-    ("popover outline", 12759727410233455383),
-    ("toolbar edge", 1965519472265696089),
-    ("reduced transparency", 7616934211420809624),
+    ("bar light capsule", 13168230188289903164),
+    ("popover outline", 12264618184555609004),
+    ("toolbar edge", 13940538949189605013),
+    ("reduced transparency", 17816218594961483024),
 ];

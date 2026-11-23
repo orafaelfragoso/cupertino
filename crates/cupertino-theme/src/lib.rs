@@ -15,7 +15,8 @@
 //! * [`window_shadow`]: the verified window shadow parameter table (32 rows) and the window corner radii.
 //! * [`recipe`]: material recipes (backdrop filter chain + fill layers) including opaque variants
 //!   for reduce-transparency and the high-contrast catalogs.
-//! * [`glass`]: glass recipes (background pass and foreground matrix) per appearance, style, accessibility option and
+//! * [`glass`]: glass recipes (background pass and foreground matrix) per appearance, system glass variant and its
+//!   modifiers (the legacy styles map onto variants), accessibility option and
 //!   shape size.
 //! * [`ui`]: the toolkit's theme tokens: semantic colours per control state ([`ui::ColorRole`], [`ui::StateVariant`]),
 //!   control metrics, type scale, focus ring and motion ([`ui::ThemeTokens`]), from the neutral built-in theme or the
@@ -42,7 +43,7 @@ pub use color::{AccentColor, Color, SemanticColor};
 pub use control_sizes::{control_geometry, ControlFamily, ControlGeometry, Corners};
 pub use error::{Error, Result};
 pub use evidence::Evidence;
-pub use glass::{GlassMode, GlassParams, GlassStyle};
+pub use glass::{GlassMode, GlassModifiers, GlassParams, GlassSize, GlassStyle, GlassVariant};
 pub use metrics::{ControlSize, ShapeTokens, WindowShadowPreset};
 pub use recipe::{
     kept_when_inactive, Backdrop, Blend, Catalog, ColorOp, CornerCurve, Fill, Interaction,

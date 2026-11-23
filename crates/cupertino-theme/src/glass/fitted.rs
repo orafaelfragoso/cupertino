@@ -1,0 +1,308 @@
+//! The values no recipe records, fitted to captures and kept under the glass variant names: the control centre's
+//! modules, the notification cards' edges, the launcher's results panel and the cartouches' edge lines. The control
+//! centre's accessibility shifts are recorded and laid over its fitted face.
+
+use super::clear::clear_base;
+use super::*;
+
+// ---- the control centre ----------------------------------------------------------------------------------------
+
+/// The angular width of the arcs the module's line lights, in radians: the whole top and bottom, fading round the
+/// corners.
+const MODULE_LINE_SPREAD: f32 = std::f32::consts::FRAC_PI_2;
+/// Module glass: the clear glass of its size with a strong bending edge and a darker rim. The strength is the same at
+/// every size; the band is [`MODULE_REFRACTION_HEIGHT_PER_POINT`] of the short side, at most
+/// [`MODULE_REFRACTION_HEIGHT_MAX`] points.
+const MODULE_REFRACTION: f32 = -80.0;
+const MODULE_REFRACTION_HEIGHT_PER_POINT: f32 = 0.18;
+const MODULE_REFRACTION_HEIGHT_MAX: f32 = 25.0;
+/// The module's blur radius by short side `(side, radius)`; linear between, flat outside.
+const MODULE_BLUR_BY_SIDE: [(f32, f32); 2] = [(60.0, 5.0), (140.0, 10.0)];
+const MODULE_RIM_BIAS: f32 = -0.3;
+/// The module's face, the same in both appearances: a little more colour, black lifted to about 27 of 255 and white held
+/// near 178, so every channel comes out at about `0.59 · c + 27` and a sunlit backdrop as a mid tone of its own colour.
+pub const MODULE_SATURATION: f32 = 1.045;
+pub const MODULE_WHITE: f32 = 0.697;
+pub const MODULE_BLACK: f32 = 0.107;
+/// The module's line of light just inside its top and bottom edges: its strength (the share of its colour added at its
+/// middle), its half-width and where its middle lies inside the edge, in points, and the bottom's strength as a share
+/// of the top's: a bright line about a point wide along the top and as bright along the bottom, which takes a
+/// mid-toned face to near white.
+pub const MODULE_LINE: (f32, f32, f32) = (0.55, 0.55, -0.45);
+pub const MODULE_LINE_BOTTOM: f32 = 1.0;
+/// The exponent on the module line's arc falloff: under 1, so the line keeps most of its light round the corners until
+/// the side's dark line takes over.
+const MODULE_LINE_CURVATURE: f32 = 0.5;
+/// The colour of the module's line of light from the face under it: the face plus nearly half white, so a mid tone of
+/// a warm backdrop turns a pale tint of it and a light one white.
+const MODULE_LINE_MATRIX: ColorMatrix = [
+    1.0, 0.0, 0.0, 0.0, 0.47, //
+    0.0, 1.0, 0.0, 0.0, 0.47, //
+    0.0, 0.0, 1.0, 0.0, 0.47, //
+    0.0, 0.0, 0.0, 1.0, 0.0,
+];
+/// The dark line just outside the module's outline, which marks its sides: its strength, the same over any backdrop,
+/// and the angular width of the arcs facing left and right it keeps to (none along the top and the bottom, which carry
+/// the line of light).
+const MODULE_EDGE_LINE: f32 = 0.64;
+const MODULE_EDGE_LINE_SIDES: f32 = std::f32::consts::FRAC_PI_2;
+
+/// Subdued module glass: how much wider its blur is than the module's of the same size, and its face's white (light)
+/// and black (dark).
+const SUBDUED_MODULE_BLUR_SCALE: f32 = 2.0;
+const SUBDUED_MODULE_WHITE_LIGHT: f32 = 0.88;
+const SUBDUED_MODULE_BLACK_DARK: f32 = 0.0;
+
+/// The control centre's shifts of its face with Increase Contrast: the light face's black lift and the dark face's
+/// white gain (recorded, relative to the face at rest).
+pub const CONTROL_CENTER_CONTRAST_BLACK_LIGHT: f32 = -0.2;
+pub const CONTROL_CENTER_CONTRAST_WHITE_DARK: f32 = 0.55;
+/// The control centre with Reduce Transparency: the blur radius in points at full opacity, the shifts of the face's
+/// black lift and white gain, light and dark (recorded, relative to the face at rest), and the dark face's saturation
+/// (the clear glass's).
+pub const CONTROL_CENTER_REDUCED_BLUR: f32 = 10.0;
+pub const CONTROL_CENTER_REDUCED_BLACK_LIGHT: f32 = -0.25;
+pub const CONTROL_CENTER_REDUCED_WHITE_LIGHT: f32 = -0.11;
+pub const CONTROL_CENTER_REDUCED_BLACK_DARK: f32 = 0.05;
+pub const CONTROL_CENTER_REDUCED_WHITE_DARK: f32 = 0.10;
+const CONTROL_CENTER_REDUCED_SATURATION_DARK: f32 = 0.7;
+
+/// The control centre's module glass, the same in both appearances at rest: the clear glass of its size with the
+/// module's blur, face, refraction and rim, a line of light inside its top and bottom edges and a dark line outside its
+/// sides (fitted to captures); subdued, twice the blur and a quieter face. Increase Contrast and Reduce Transparency
+/// shift its face by the recorded amounts.
+pub(super) fn control_center(mode: GlassMode, s: f32) -> GlassParams {
+    let dark = mode.dark;
+    let mut p = clear_base(s);
+    p.blur.radius = by_side(&MODULE_BLUR_BY_SIDE, s);
+    p.face = GlassFace {
+        saturation: MODULE_SATURATION,
+        white: MODULE_WHITE,
+        black: MODULE_BLACK,
+        clamp: 1.0,
+        max_luma: 1.0,
+        fill: [0.0; 4],
+    };
+    p.refraction.amount = MODULE_REFRACTION;
+    p.refraction.height =
+        (MODULE_REFRACTION_HEIGHT_PER_POINT * s).min(MODULE_REFRACTION_HEIGHT_MAX);
+    p.highlight.color_bias = MODULE_RIM_BIAS;
+    let (amount, height, offset) = MODULE_LINE;
+    p.highlight.glow_amount = amount;
+    p.highlight.glow_height = height;
+    p.highlight.glow_offset = offset;
+    p.highlight.glow_fill = MODULE_LINE_BOTTOM;
+    p.highlight.spread = MODULE_LINE_SPREAD;
+    p.highlight.curvature = MODULE_LINE_CURVATURE;
+    p.highlight.diffuse = GlowDiffuse::NONE;
+    p.highlight.matrix = MODULE_LINE_MATRIX;
+    p.shadow.edge_line = MODULE_EDGE_LINE;
+    p.shadow.edge_line_sides = MODULE_EDGE_LINE_SIDES;
+    p.shadow.edge_line_even = true;
+    if mode.modifiers.subdued {
+        p.blur.radius *= SUBDUED_MODULE_BLUR_SCALE;
+        if dark {
+            p.face.black = SUBDUED_MODULE_BLACK_DARK;
+        } else {
+            p.face.white = SUBDUED_MODULE_WHITE_LIGHT;
+        }
+    }
+    let f = &mut p.face;
+    if mode.increase_contrast {
+        if dark {
+            f.white += CONTROL_CENTER_CONTRAST_WHITE_DARK;
+        } else {
+            f.black += CONTROL_CENTER_CONTRAST_BLACK_LIGHT;
+        }
+    }
+    if mode.reduce_transparency {
+        if dark {
+            f.black += CONTROL_CENTER_REDUCED_BLACK_DARK;
+            f.white += CONTROL_CENTER_REDUCED_WHITE_DARK;
+            f.saturation = CONTROL_CENTER_REDUCED_SATURATION_DARK;
+        } else {
+            f.black += CONTROL_CENTER_REDUCED_BLACK_LIGHT;
+            f.white += CONTROL_CENTER_REDUCED_WHITE_LIGHT;
+        }
+        p.blur.radius = CONTROL_CENTER_REDUCED_BLUR;
+        p.blur.level_opacity = [1.0; BLUR_LEVELS];
+        p.refraction.amount = 0.0;
+        p.refraction.height = 0.0;
+    }
+    p
+}
+
+// ---- the notification centre -------------------------------------------------------------------------------------
+
+/// The notification card's edge line in the light appearance, all round.
+const CARD_EDGE_LINE_LIGHT: f32 = 0.19;
+/// The dark card's edge line, as the module's: a dark line just outside its sides only, its strength over any
+/// backdrop, on arcs as wide as the module's.
+const CARD_EDGE_LINE_DARK: f32 = 0.62;
+
+/// The notification centre's cards over the regular base `p`: the card's edge lines, read from a backdrop captured at
+/// [`CARD_CAPTURE_SCALE`] (fitted to captures).
+pub(super) fn notification_center(p: &mut GlassParams, dark: bool) {
+    let sh = &mut p.shadow;
+    if dark {
+        sh.edge_line = CARD_EDGE_LINE_DARK;
+        sh.edge_line_sides = MODULE_EDGE_LINE_SIDES;
+        sh.edge_line_even = true;
+    } else {
+        sh.edge_line = CARD_EDGE_LINE_LIGHT;
+    }
+    p.capture_scale = CARD_CAPTURE_SCALE;
+}
+
+// ---- the cartouches ------------------------------------------------------------------------------------------------
+
+/// The edge line of the minimum cartouche (the dock's labels) in the light appearance; the dark one has none.
+const CARTOUCHE_EDGE_LINE_LIGHT: f32 = 0.175;
+/// The edge line of larger cartouches (the dock's stack grid), light and dark.
+const CARTOUCHE_EDGE_LINE_WIDE_LIGHT: f32 = 0.31;
+const CARTOUCHE_EDGE_LINE_WIDE_DARK: f32 = 0.54;
+
+/// The edge line of a cartouche resolved at `size` (fitted to captures of each surface).
+pub(super) fn cartouche_edge_line(size: GlassSize, dark: bool) -> f32 {
+    match (size, dark) {
+        (GlassSize::Minimum, false) => CARTOUCHE_EDGE_LINE_LIGHT,
+        (GlassSize::Minimum, true) => 0.0,
+        (_, false) => CARTOUCHE_EDGE_LINE_WIDE_LIGHT,
+        (_, true) => CARTOUCHE_EDGE_LINE_WIDE_DARK,
+    }
+}
+
+// ---- the launcher's results panel ----------------------------------------------------------------------------------
+
+/// The launcher's results panel over the regular base `p`: a blur twice as wide, its own face (unless Increase
+/// Contrast gave it the contrast face), a refraction band no deeper than [`LARGE_PANEL_REFRACTION_HEIGHT_MAX`], in the
+/// light appearance a bright inner line and in the dark one a bevel, in place of the key and fill light, and its drop
+/// shadow shown (fitted to captures).
+pub(super) fn search_results(p: &mut GlassParams, dark: bool, contrast: bool) {
+    p.blur.radius *= LARGE_PANEL_BLUR_SCALE;
+    p.blur.fill_radius *= LARGE_PANEL_BLUR_SCALE;
+    if !contrast {
+        p.face = large_panel_face(dark, p.face);
+    }
+    p.refraction.height = p.refraction.height.min(LARGE_PANEL_REFRACTION_HEIGHT_MAX);
+    p.specular = GlassSpecular::NONE;
+    let h = &mut p.highlight;
+    if dark {
+        (h.glow_amount, h.glow_height, h.glow_offset) = LARGE_PANEL_RIM_DARK;
+        h.spread = LARGE_PANEL_RIM_SPREAD_DARK;
+        h.curvature = LARGE_PANEL_RIM_CURVATURE_DARK;
+        h.glow_fill = 1.0;
+        h.diffuse = LARGE_PANEL_GLOW_DARK;
+        h.matrix = TOWARDS_WHITE_MATRIX;
+    } else {
+        h.glow_amount = LARGE_PANEL_INNER_LINE_LIGHT;
+        h.glow_height = LARGE_PANEL_INNER_LINE_WIDTH;
+        h.glow_offset = LARGE_PANEL_INNER_LINE_DEPTH;
+    }
+    p.shadow.offset = [0.0, LARGE_PANEL_SHADOW_OFFSET];
+    p.shadow.amount = 100.0;
+    p.shadow.height = LARGE_PANEL_SHADOW_BLUR;
+    p.shadow.fill = [
+        0.0,
+        0.0,
+        0.0,
+        if dark {
+            LARGE_PANEL_SHADOW_DARK
+        } else {
+            LARGE_PANEL_SHADOW_LIGHT
+        },
+    ];
+    p.shadow.opacity = 1.0;
+}
+
+/// The launcher's results panel with Reduce Transparency, in the dark appearance without Increase Contrast: a near-black
+/// sheet with only a faint trace of the colours behind it.
+pub(super) fn search_results_reduced(p: &mut GlassParams) {
+    p.face.saturation = LARGE_PANEL_REDUCED_SATURATION_DARK;
+}
+
+/// Face of the large panel. Dark: white behind it comes out a mid grey (about 125 of 255) and black a dark grey (about
+/// 53), while strong colours keep much of their brightness, as their luma is compressed less; the saturation is a
+/// little under the regular glass's. Light: a bright sheet that keeps the scene's colour: every channel comes out at
+/// about `0.61 · c + 124` of 255 after a moderate saturation, so black comes through as a light grey near 124, a dark warm
+/// scene as a light tint of its own hue, and anything from a mid tone up is near white.
+fn large_panel_face(dark: bool, regular: GlassFace) -> GlassFace {
+    if dark {
+        GlassFace {
+            saturation: LARGE_PANEL_SATURATION_DARK,
+            white: LARGE_PANEL_WHITE_DARK,
+            black: LARGE_PANEL_BLACK_DARK,
+            max_luma: LARGE_PANEL_MAX_LUMA_DARK,
+            fill: [0.0; 4],
+            ..regular
+        }
+    } else {
+        GlassFace {
+            saturation: LARGE_PANEL_SATURATION_LIGHT,
+            white: LARGE_PANEL_WHITE_LIGHT,
+            black: LARGE_PANEL_BLACK_LIGHT,
+            clamp: 1.0,
+            max_luma: 1.0,
+            fill: [1.0, 1.0, 1.0, LARGE_PANEL_FILL_LIGHT],
+        }
+    }
+}
+
+/// The light large panel's face: saturation, white and black levels (no luma compression) and the white veil over it.
+/// A grey `x` comes out at `(1 − fill) · (b + (w − b) · x) + fill`: 0.61 per unit of the scene above 0.486.
+pub const LARGE_PANEL_SATURATION_LIGHT: f32 = 1.4;
+pub const LARGE_PANEL_WHITE_LIGHT: f32 = 1.118;
+pub const LARGE_PANEL_BLACK_LIGHT: f32 = 0.37;
+pub const LARGE_PANEL_FILL_LIGHT: f32 = 0.184;
+/// The dark large panel's saturation with Reduce Transparency: the near-black sheet keeps a tenth or so of the
+/// backdrop's colour (its departure from grey), so a strong colour behind shows only as a faint tint.
+pub const LARGE_PANEL_REDUCED_SATURATION_DARK: f32 = 0.3;
+/// The large panel's refraction band: at most this many points inside its edge bend, so a launcher-sized sheet shows
+/// no wide lens along its sides.
+pub const LARGE_PANEL_REFRACTION_HEIGHT_MAX: f32 = 6.0;
+/// The light large panel's bright inner line: a narrow band of light just inside the dark edge, strongest along the
+/// top and still showing along the bottom: its strength, half-width and depth in points.
+pub const LARGE_PANEL_INNER_LINE_LIGHT: f32 = 0.6;
+pub const LARGE_PANEL_INNER_LINE_WIDTH: f32 = 0.35;
+pub const LARGE_PANEL_INNER_LINE_DEPTH: f32 = -0.6;
+/// The dark large panel's bevel: a bright rim about a point wide just inside its dark edge, which mixes the face this
+/// share of the way to white at its middle, its half-width and depth in points. With the arcs below it lights the top
+/// and the bottom fully and the sides at about 0.7, so the panel reads as raised rather than outlined.
+pub const LARGE_PANEL_RIM_DARK: (f32, f32, f32) = (0.33, 0.7, -0.3);
+/// The angular width of the arcs the dark bevel lights round each end of its axis, and the exponent on their falloff:
+/// two arcs this wide meet at the sides, where each gives about a third of its light.
+pub const LARGE_PANEL_RIM_SPREAD_DARK: f32 = 4.0 * std::f32::consts::FRAC_PI_3;
+pub const LARGE_PANEL_RIM_CURVATURE_DARK: f32 = 1.5;
+/// The soft band of light under the dark bevel, along the top and the bottom: as many times wider than the bevel, on
+/// arcs half as wide, at this share of its strength, so it also lifts the face where the blur of the darker backdrop
+/// outside the panel darkens it near the edge.
+pub const LARGE_PANEL_GLOW_DARK: GlowDiffuse = GlowDiffuse {
+    height_scale: 13.0,
+    spread_scale: 0.5,
+    amount_scale: 0.125,
+};
+/// The colour the dark bevel mixes the face towards: white.
+const TOWARDS_WHITE_MATRIX: ColorMatrix = [
+    -1.0, 0.0, 0.0, 0.0, 1.0, //
+    0.0, -1.0, 0.0, 0.0, 1.0, //
+    0.0, 0.0, -1.0, 0.0, 1.0, //
+    0.0, 0.0, 0.0, 1.0, 0.0,
+];
+
+/// The dark large panel's tone compression: saturation, white and black levels and luma compression. A bright spot in
+/// the scene (a sunlit sky, a white page, the light centre of a picture) comes through as a light patch near the
+/// panel's tint rather than a glare: white comes out near 125, black near 53.
+pub const LARGE_PANEL_SATURATION_DARK: f32 = 0.93;
+pub const LARGE_PANEL_WHITE_DARK: f32 = 0.94;
+pub const LARGE_PANEL_BLACK_DARK: f32 = 0.164;
+pub const LARGE_PANEL_MAX_LUMA_DARK: f32 = 0.415;
+/// How much wider the large panel blurs than regular glass: its blur levels and its blur fill (10 and 16 points
+/// rather than 5 and 8), so stripes, text and bright spots in the scene behind a launcher-sized sheet melt into broad
+/// fields of colour instead of showing through as ripples.
+pub const LARGE_PANEL_BLUR_SCALE: f32 = 2.0;
+/// The large panel's drop shadow: how far below the panel it falls and its blur radius in points (its edge fades over
+/// three radii), and its black's opacity in each appearance.
+pub const LARGE_PANEL_SHADOW_OFFSET: f32 = 16.0;
+pub const LARGE_PANEL_SHADOW_BLUR: f32 = 24.0;
+pub const LARGE_PANEL_SHADOW_DARK: f32 = 0.5;
+pub const LARGE_PANEL_SHADOW_LIGHT: f32 = 0.40;

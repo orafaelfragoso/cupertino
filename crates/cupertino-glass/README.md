@@ -102,8 +102,8 @@ placement block at `GLASS_SAMPLER`), which only a recipe that turns those stages
    t the depth into the band and g(t) = 0.9·e^(−4.2t)·(1 − t⁴) (`refraction_profile`), nothing from t = 1 on: the
    negative strengths of the recipes read the face further inside, so the edge magnifies what lies just inside it;
 3. blur and blur fill: each shape's backdrop is one Gaussian, its deviation twice the recipe's radius scaled by the first
-   level's opacity (4 points for a small regular control, 8 for a regular panel 160 points high, 20 for clear glass of
-   radius 10); the container blurs once per distinct deviation of its shapes (at most four copies, a shape between two
+   level's opacity (4 points for a small regular control, 8 for a regular panel 160 points high, 1.4 for clear glass);
+   the container blurs once per distinct deviation of its shapes (at most four copies, a shape between two
    mixing them), then the fill, a Gaussian of twice its radius, darkens, lightens or covers;
 4. face colour: saturation about the luma of the encoded colour (so the weaker channels of a strong colour keep a milky
    floor rather than dropping to black, as they would in linear light), then the luma compression
@@ -114,7 +114,7 @@ placement block at `GLASS_SAMPLER`), which only a recipe that turns those stages
    `amount · (1 − t)` points outside the pixel along the outward normal, read from its own Gaussian of deviation
    `GlassBleed::blur` (`BLEED_LEVEL`), saturated about its luma and through its own levels `black`/`white`
    (`bleed_tone`), blends into the face at `opacity · (1 − t)²`, by the smaller channel (`darken`, light glass) or
-   normally (dark glass) (`bleed_read`, `bleed_into`); none at rest. Then the face's fill and the tint
+   normally (dark glass) (`bleed_read`, `bleed_into`); the regular glass bleeds at 0.2. Then the face's fill and the tint
    (`GlassParams::tint`, straight, its alpha the tint's times the face opacity its caller asks for,
    `GlassParams::with_tint`) over it in normal blending (`fill_and_tint`);
 6. soft band and rim: the soft band, a Gaussian about the edge where the highlight matrix is applied to the face, lit
@@ -128,19 +128,19 @@ placement block at `GLASS_SAMPLER`), which only a recipe that turns those stages
    `1 − smoothstep(0, height, depth)`, each arc `1 − smoothstep(0, spread, a)` of the angle between the edge's normal
    and the key (at `angle`, y up) or the fill light opposite it (at `fill` of the key), and the glow
    `amount_scale · arcs′ · (1 − depth / (height · height_scale))²` over arcs `spread_scale` as wide; where the light
-   falls the outline keeps a fifth (`BORDER_LIT_SHARE`). Neither shows in today's recipes;
+   falls the outline keeps a fifth (`BORDER_LIT_SHARE`). The regular glass lights its edge so, a toolbar item draws the outline (`cupertino-theme`'s variants);
 7. the ring shadow, a stroke inside the outline moved up by its offset and blurred by a Gaussian of its radius,
    darkens the face by its opacity; outside the shape, the drop shadow at its opacity, over the backdrop bent outside
    the edge (`outer_read`): `d` points outside the outline, t = d / `outer_height`, the capture (`SHARP_LEVEL`) read
-   `outer_amount · g(t)` points along the outward normal, laid at `outer_opacity · (1 − smoothstep(0, 1, t))` (none at
-   rest); the control outline's outer half lies over all of it;
+   `outer_amount · g(t)` points along the outward normal, laid at `outer_opacity · (1 − smoothstep(0, 1, t))` (the Dock
+   only, at 0.2); the control outline's outer half lies over all of it;
 8. the edge line, one pixel wide just outside the outline: black at the recipe's `edge_line` opacity times the rim's
    response g to the luma of the blurred backdrop there, fading out over the pixel and a half past the outline, so the
    outline shows over light content and vanishes over black. A recipe can keep it to the sides (`edge_line_sides`, the
    width of arcs facing left and right): it then shows at a raised cosine of the outline's angle from the horizontal,
    all of it along a straight side, none along the top and bottom (module tiles: a dark line down their sides under a
    bright line along their top and bottom), and keep it even (`edge_line_even`: the same strength over any backdrop,
-   without the response g). Clear and bar glass have none;
+   without the response g). Clear glass and the Dock have none;
 9. the veil (after the rim, before the ring): the face times `1 − v`, `v` running linearly from the recipe's top value
    at the top of the shapes' bounds to its bottom value at their bottom (`Container::veil`; the uniform's `fill.w` and
    `levels.y`).
@@ -166,7 +166,7 @@ along its outline, though the group's outline is the nearer one. The blur fill, 
 shadow, the outline hairline, the edge line, the veil and the bleed's colour stay the container's, and the bleed reads
 one blur for the container (the widest of its bleeding shapes').
 
-**Frame cost.** At rest nothing changes: no texture or pass is added and the composite skips every new stage on its
+**Frame cost.** A recipe that leaves these stages off adds no texture or pass, and the composite skips every such stage on its
 values. A bleeding container reads a blurred copy it makes already when one has the bleed's deviation
 (`Container::bleed_source`: a level or the blur fill), else blurs once more; a bend outside the edge reads the capture,
 kept instead of freed, with no pass. Containers whose shapes differ in look loop over their shapes once more per pixel.

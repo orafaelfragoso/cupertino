@@ -146,10 +146,7 @@ fn glass_pieces(
     let last = members.len() - 1;
     for (j, b) in members.iter().enumerate().skip(1) {
         if let Some(own) = b.glass.filter(|g| g.style != spec.style) {
-            let own_mode = cupertino_theme::GlassMode {
-                style: own.style,
-                ..mode
-            };
+            let own_mode = mode.with_style(own.style);
             container = container.with_shape_mode(last - j, own_mode);
         }
     }

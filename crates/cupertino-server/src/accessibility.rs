@@ -39,12 +39,11 @@ use crate::state::Cupertino;
 /// selects its own recipe of the glass rather than turning it off.
 pub fn glass_mode(dark: bool, style: GlassStyle, options: DisplayOptions) -> GlassMode {
     GlassMode {
-        dark,
-        style,
         reduce_transparency: options.reduce_transparency,
         increase_contrast: options.increase_contrast,
         reduce_motion: options.reduce_motion,
         density: 0,
+        ..GlassMode::of_style(dark, style)
     }
 }
 

@@ -11,7 +11,7 @@ The crate parses the documents it is given and reads no files: `cupertino-assets
 |---|---|
 | `tokens.json` | `DesignTokens`: named colours per `Appearance` (sRGB `f32` + alpha) and the system font sizes, metrics and tracking table |
 | `materials.json` | `MaterialLibrary`/`Recipe`: backdrop filter chain + fill layers per window state and interaction, opaque variants, high-contrast catalogs |
-| `glass` (code) | `GlassParams::new(GlassMode, short_side)`: the glass recipe of an appearance, style (`GlassStyle::{Regular, Clear, LargePanel, Bar, Dense, Module, Card, Track}`), Reduce Transparency, Increase Contrast and Reduce Motion, for a shape whose shorter side is `short_side` points; `foreground_matrix(dark)`, `adapts_foreground(side)`, `apply_matrix` for content on glass; `FaceTone`, `face_tone(luminance, previous)` (light above `FACE_TONE_THRESHOLD`, 0.179, where white and black text read alike, changing only `FACE_TONE_HYSTERESIS`, 0.03, past it), `foreground_matrix_for(dark, tone)` and `foreground_rgb(dark, tone)`, the colour of text on glass; `VIBRANT_PRIMARY`, `vibrant_secondary(dark)`, `VIBRANT_PLACEHOLDER` (1, about 0.55, 0.7), how opaque labels are drawn on glass, a secondary label at the opacity that shifts the label face by `SECONDARY_SHIFT_LIGHT` (−0.4) or `SECONDARY_SHIFT_DARK` (+0.3); `relative_luminance`, `contrast_ratio` |
+| `glass` (code) | `GlassParams::new(GlassMode, short_side)`: the glass recipe of an appearance, system glass variant (`GlassVariant`, 22 of them) and its `GlassModifiers` (size class, subdued, shadow, active), the legacy `GlassStyle` mapped onto a variant (`GlassStyle::variant`), Reduce Transparency, Increase Contrast and Reduce Motion, for a shape whose shorter side is `short_side` points; `foreground_matrix(dark)`, `adapts_foreground(side)`, `apply_matrix` for content on glass; `FaceTone`, `face_tone(luminance, previous)` (light above `FACE_TONE_THRESHOLD`, 0.179, where white and black text read alike, changing only `FACE_TONE_HYSTERESIS`, 0.03, past it), `foreground_matrix_for(dark, tone)` and `foreground_rgb(dark, tone)`, the colour of text on glass; `VIBRANT_PRIMARY`, `vibrant_secondary(dark)`, `VIBRANT_PLACEHOLDER` (1, about 0.55, 0.7), how opaque labels are drawn on glass, a secondary label at the opacity that shifts the label face by `SECONDARY_SHIFT_LIGHT` (−0.4) or `SECONDARY_SHIFT_DARK` (+0.3); `relative_luminance`, `contrast_ratio` |
 | `control_sizes` (code) | `control_geometry(ControlFamily, ControlSize, compact)`: each control family's height, width, corners, label size and inset at the five sizes (`ControlSize::ASCENDING`: mini, small, regular, large, extra large), normal and compact; `switch_geometry(compact)`, `slider_geometry(size)` and `choice_mark(size, compact)` for the parts of a switch, a slider and a check box or radio button. It is the one table of control sizes: `metrics` keeps only `ControlSize`, `ShapeTokens` and `WindowShadowPreset` |
 | `animations.json` | `AnimationPresets`: springs, timing functions, momentum, rubber band and dock timings as `cupertino-animation` types; `Easing` (bézier timing functions plus the cosine ease, which is not a bézier) via `AnimationPresets::easing(name)`; the dock auto-hide curve is `Easing::CosineEase` with the 0.15 s delay / 0.24 s duration; an unknown curve name is an error, not a silent fallback |
 | `animation` (code) | the design's named curves `EASE_CURVE`, `LINEAR_CURVE`, `EASE_IN_CURVE`, `EASE_OUT_CURVE`, `EASE_IN_OUT_CURVE` and its default spring `DEFAULT_SPRING` (mass 1, stiffness 100, damping 10), also exported by `ui` for the toolkit; `TimingPreset`: the timing-function table of those five béziers (`ease`, `linear`, `ease-in`, `ease-out`, `ease-in-out`) and the spring, by index or name, as a bézier, a spring, a sampled progress or a `cupertino-animation` `Curve` |
@@ -95,57 +95,62 @@ flag and its Increase Contrast option.
   as fractions of the short side), the soft band and rim (`GlassHighlight`), the key and fill light added as white
   (`GlassSpecular`), the control outline centred on the edge (`GlassBorder`), the tint over the face (`tint`,
   `GlassParams::with_tint`) and the drop and ring shadows (`GlassShadow`), the bend, the bleed, the light, the outline,
-  the tint and the shadows at opacity 0 at rest. Some values follow the shape's size: for regular glass
-  the refraction offset (−min(s/2, 60)) and band (min(s/4, 20)), the bleed band (0.35·min(s, 140)), the opacity of the
-  two narrowest levels (0.4 + clamp(s − 64, 0, 76)/240) and, in the dark appearance, the luminance cap (0.6 at 60 pt
-  down to 0.35 at 120 pt); for clear glass the offset (−min(0.65·s, 60)), band (min(0.36·s, 20)), blur radius
-  (5 to 10 between 48 and 120 pt) and shadows. Each accessibility option selects its own recipe rather than turning
-  the glass off: Reduce Transparency removes the bending at the edge, widens the blur (40.6 pt, 200 for clear glass)
-  and lays a dense fill over it; Increase Contrast keeps the optics with firmer colours; both together use the
-  reduced-transparency optics with the increased-contrast colours; Reduce Motion drops the refraction band and widens the
-  narrowest blur. `GlassParams::capture_scale` is the scale the backdrop is read at: `GLASS_BACKDROP_SCALE` (0.5),
-  `CARD_CAPTURE_SCALE` (0.25) for cards, `TRACK_CAPTURE_SCALE` (1) for tracks and 0.25 (0.125 once its blur is widest)
-  for dense glass. Content on glass is coloured by a
-  4×5 matrix per appearance; `adapts_foreground` tells which controls (shorter side under 64 pt) take it. The bar
-  (`GlassStyle::Bar`, the dock) blurs with a radius of 1 pt, bends 8.64 over a 3.84 pt band, and its face takes
-  saturation 1.25, black 0.15 and white 0.9 (light) or black 0.05, white 0.92, a luma cap of 0.75 and a faint black veil
-  (dark), with a thin line of light along its top and bottom edges over a wide faint glow. Popover glass (`GlassStyle::Popover`, a floating bar's names and menus) has no blur of its own, only an
-  8 pt blur fill, bends 24 over a 5 pt band and lights its top and bottom as the bar does. Switcher glass (`GlassStyle::Switcher`, the application switcher's panel)
-  blurs with a radius of 0.96 pt at full opacity and no blur fill, bends 41.6 over a 9.6 pt band at every size with a rim
-  of 0.4 (bias −0.5) and no ring or drop shadow; its face takes saturation 1.2, black 0.25, white 1.06, a luma cap of
-  0.85 and a clamp of 1.142 (light) or saturation 0.8, black 0.05 and white 0.3 (dark). Sidebar glass
-  (`GlassStyle::Sidebar`, a window's sidebar) blurs with a radius of 5 under an 8 pt blur fill (lighten or darken 0.882,
-  normal 0.48), bends 24 over 12 pt, has a ring shadow of 0.06 and a face of saturation 1.2, black 0.4, white 1.03, a
-  luma cap of 0.85 and a white veil of 0.2 (light) or saturation 0.6, black 0.1 and white 0.5 (dark). Subdued module
-  glass (`GlassStyle::SubduedModule`) is module glass with twice the blur, white 0.88 (light) and black 0 (dark).
-  Snippet glass (`GlassStyle::Snippet`) has a faint blur (the first level at 0.2666) under the 8 pt blur fill, bends 24
-  over 12 pt and veils its face white at 0.5 (light) or black at 0.4 (dark). Veiled glass (`GlassStyle::Veiled`) is the
-  clear face under the blur fill, bending 34.56 over 19.2 pt, and `GlassParams::veil` darkens it with black from 0.2 at
-  the top of its shapes to 1 at their bottom. Toolbar glass (`GlassStyle::Toolbar`, a window's toolbar controls) is the
-  regular recipe of its size with black 0.11 (dark) or white 0.99 (light), no rim and no edge line, and a line of light
-  0.45 pt wide a quarter point inside its edge (strength 0.7 dark, 0.25 light) on arcs 140° wide about the top, half as
-  strong at the bottom, over a glow eight times as wide at 0.12 of its strength. Dense glass (`GlassStyle::Dense`, menus and popovers) is
-  the regular recipe of its size with its own blur (radius 6 pt up to a short side of 60, 12 pt from 120, the first
-  level at full opacity), bending by 0.4 of its short side over 0.2 of it (at most 60 and 20) and a ring shadow of 0.06,
-  over a face that washes the backdrop out: black lifted by 0.8 under a faint light grey veil (light), saturation 1.3,
-  black 0.15 and white 0.3 with the regular glass's luma cap (dark). Module glass (`GlassStyle::Module`, the control panel's
-  tiles) is clear glass of its size blurring with a radius of 5 pt up to a short side of 60 and 10 pt from 140, bending by 80 over a band of 0.18 of
-  its short side (at most 25 pt) with a rim
-  bias of −0.3: white comes out at 244 in the light appearance and 207 in the dark one. Card glass
-  (`GlassStyle::Card`, notification cards) is the clear face over a blur of radius 10 and the regular blur fill,
-  bending by 60 over 20 pt, with a ring shadow of 0.06 at rest, read at a quarter scale. Track glass
-  (`GlassStyle::Track`, the control panel's levels) has no blur, bends by 0.3 of its height over 0.18 of it, lifts black
-  by 0.1 and has a ring shadow of 0.15 (light) or 0.4 (dark), read at the output's scale. The large
-  panel (`GlassStyle::LargePanel`) is regular glass with a blur twice as wide (`LARGE_PANEL_BLUR_SCALE`: levels from 10
-  pt, the blur fill 16 pt) and its tones pressed together, so a launcher-sized sheet reads as one calm surface over any
-  wallpaper, stripes and text in the scene melting into broad fields of colour: in the dark appearance a luminance cap
-  of 0.102, a black lift of 0.15 and a saturation of 1.15 (white comes out near 125, black near 53, a strong red keeps
-  its colour), in the light one a cap of 0.94, a lift of 0.5 and 1.1 (white near 253, mid tones as before, black near 153); and a drop shadow of its own (28 pt blur, 16 pt below, black at 0.5 dark or 0.22
-  light), drawn by the compositor outside the shape. With Reduce Transparency or Increase Contrast it takes regular
-  glass's colours; Reduce Transparency also takes regular glass's whole blur. `GlassParams::shadow_reach` is how far the shadow reaches past the shape.
-  `GlassShadow::edge_line` is the opacity of the dark line one pixel wide just outside the outline (0.2 light, 0.22 dark
-  for regular and large panel glass; 0.31 / 0.54 dense; 0.22 / 0.24 track; 0.175 for light popover glass, 0.19 for a
-  light card, 0.2 / 0.32 switcher, 0.2 / 0.4 sidebar, 0.1 for light snippet glass; none on clear, bar and module glass), scaled by how bright the backdrop is there.
+  the tint and the shadows at opacity 0 unless a recipe turns them on. A recipe is chosen by `GlassMode`: the
+  appearance, a system glass variant (`GlassVariant`) and its modifiers (`GlassModifiers`: the size it resolves at,
+  `GlassSize::{Minimum, Medium, Large, Dynamic}` = 48, 120, 160 pt or the shape's own short side `s`; `subdued`;
+  `exclude_shadow`; `interactive` and `adaptive`, carried only; `active`, false selecting the inactive branch of the
+  variants on the regular base), the accessibility options and the legibility amount. Each variant is built on the
+  regular or the clear base (`GlassVariant::base`); values are the recorded ones where the system's recipes record them
+  and fitted to captures elsewhere (the source comments say which). The legacy `GlassStyle` of the wire and the toolkit
+  maps onto a variant (`GlassStyle::variant`, `GlassMode::of_style`, `GlassMode::with_style`).
+
+  | Variant | Recipe (light / dark where they differ) |
+  |---|---|
+  | `Regular` | blur 5 pt, first level 0.4 up to s = 64 rising to 0.8 at 160 (deviation 2·radius·opacity); blur fill 8 pt, lighten 0.9 / darken 0.9, normal 0.5; face black 0.4 / 0.125, white 1.03 / 1.125, saturation 1.2 / 1.3, luma cap 0.94 / 0.6 at s ≤ 64 to 0.35 at 104, white fill 0.2 / none; bend −min(s/2, 60) over min(s/4, 20); edge bleed 0.35·s band, reach and blur (blur at most 160), opacity 0.2, black 0.9, saturation 1.2, darken / black 0.125, white 0.5, normal; rim 0.5, bias −0.25; ring 0.06 (stroke 4, 8 pt down, deviation 5); key and fill light 0.4 from the top, arcs 96° / 75°, 0.75 pt deep, diffuse ×8 deep, ×0.65 wide, ×0.15; edge line 0.2 / 0.22 (fitted) |
+  | `Clear`, `AppIcons` | blur 0.69 pt at full opacity, no fill; face black 0.125, white 1.08, saturation 1.06 in both; bend −min(0.65·s, 60) over min(0.36·s, 20); rim 0.4, bias −0.25; no ring, no light |
+  | `Dock` | clear base, blur 1.5 × 0.69 pt; face saturation 1.25, black 0.15 / 0.05, white 0.9 / 0.92, black fill 0.02 dark; bend −0.18·s over 0.08·s; bend outside the edge 0.42·s over 0.13·s at 0.2; no light at rest |
+  | `AppSwitcher` | the Dock with blur 2 × / 3.5 × 0.69 pt; edge line 0.2 / 0.32 (fitted) |
+  | `ControlCenter` | the module glass (fitted): clear base, blur 5 to 10 pt between s = 60 and 140, face saturation 1.045, white 0.697, black 0.107 in both appearances, bend −80 over 0.18·s (at most 25), a line of light top and bottom, a dark line down the sides; `subdued`: twice the blur, white 0.88 / black 0 |
+  | `NotificationCenter` | regular at `Medium` (legacy cards) or at its size (legacy snippets), the card's edge lines (fitted), captured at 0.25 |
+  | `Sidebar` | regular, luma cap 0.85 light |
+  | `AbuttedSidebar`, `Inspector` | regular made planar: no key and fill light, rim 0, ring 0, no bend outside, bleed saturation 1.5, luma cap 0.85 light, no edge line; `sidebar_edge` leading / trailing |
+  | `CartouchePopover` | regular at its size class (`Minimum` for the dock's labels, `Medium` for its stack grid), bend −5 over 5 pt, white fill 0.1 light; edge line 0.175 / none at minimum, 0.31 / 0.54 larger (fitted) |
+  | `Menu` | regular at its own size, captured at 0.25, no edge line; window shadow 24 pt, 10 pt down, 0.7 / 0.8 (inactive 16 pt, 4 down, 0.55 / 0.65), which the legacy `Menu` leaves to the popup (`exclude_shadow`) |
+  | `GlassWindow` | regular with the window shadow of an alert (`GlassShadow::alert`; a sheet's 0.6 / 0.7, inactive 0.45 / 0.55, through `GlassShadow::sheet`) |
+  | `Tab` | regular under a white fill 0.15, black and white lowered by 0.05 light; inactive fill 0.3 / 0.07 |
+  | `ToolbarItem` | regular with the first levels at 0.2, bend −18 over 9 pt, control border black 0.125, 1 pt (none with Increase Contrast), no edge line |
+  | `Control`, `Slider`, `Loupe` | no blur, read at the output's scale; face black 0.5 / 0.2, white 1.03 / 0.6; ring 0.1 (deviation 3, 8 down) and bend −0.15·s over 0.1·s; `Slider` ring 0.15 / 0.4, bend −0.27·s over 0.18·s, the track's edge line 0.22 / 0.24 (fitted); `Loupe` ring 0.07, deviation 4, 12 down, bend −0.3·s over 0.095·s |
+  | `SearchResults` | the large panel (fitted): regular with the blur and blur fill twice as wide, its own face, bend band at most 6 pt, an inner line (light) or bevel (dark) in place of the key light, drop shadow 24 pt, 16 down, 0.4 / 0.5 |
+  | `FocusBorder` | regular |
+  | `EntryField` | regular with no blur |
+  | `Identity` | no glass: a face that leaves the backdrop as it is, nothing at the edge, read at the output's scale (`GlassVariant::draws_glass` is false) |
+
+  Legacy styles: `Regular`, `Clear`, `Menu` keep their names; `Bar` is `Dock`; `Popover` is `CartouchePopover` at
+  `Minimum` and `Dense` at `Medium`; `Module` is `ControlCenter` and `SubduedModule` the subdued one; `Card` is
+  `NotificationCenter` at `Medium` and `Snippet` at its own size; `Track` is `Slider`; `Switcher` is `AppSwitcher`;
+  `Sidebar` is `AbuttedSidebar`; `Toolbar` is `ToolbarItem`; `LargePanel` is `SearchResults`; `Veiled` is `Clear`, its
+  veil gone.
+
+  Each base has its stages. Increase Contrast on the regular base: saturation 0.8, black 0.5 / 0.2, fill white 0.45 /
+  black 0.45, the optics kept. Reduce Transparency on the regular base: blur 40.625 pt at full opacity, nothing bent,
+  no ring, no bleed, face black 0.9 and saturation 0.9 (light; black 0.5 with Increase Contrast) or saturation 0.7
+  (0.8 with Increase Contrast), black 0.225, white 0.31 and no luma cap (dark). On the clear base: blur 200, nothing
+  bent, black 0.125 light, saturation 0.7 dark. The Dock and the switcher keep their optics: Increase Contrast gives
+  black 0.125 / 0.1, white 0.7 / 0.65, fill white 0.12 / black 0.15 and the key and fill light at 0.75 of the regular
+  strength; Reduce Transparency gives the light face black 0.4, white 0.92, white fill 0.1. The control centre shifts
+  its face (Increase Contrast: black −0.2 light, white +0.55 dark; Reduce Transparency: blur 10 pt, nothing bent, black
+  −0.25 and white −0.11 light, black +0.05, white +0.10 and saturation 0.7 dark). The controls record none. Reduce
+  Motion on every variant: no inner bend, the blur at least 8 pt over levels 1, 1, 0.625, 0.625, four times as wide
+  first for the control and notification centres. The inactive branch (`active: false`, regular base): a frost of
+  0.5 pt at full opacity, no ring or drop shadow (a glass window keeps its inactive window shadow), nothing bent
+  outside the edge, no bleed and the key and fill light at half strength. The legibility amount `a = 0.5 + density/200`
+  (`legibility_amount`; 0.5 changes nothing) raises the regular blur fill's normal opacity linearly towards 1 and its
+  lighten or darken towards 0.9, and gives the clear base a blur fill of 8 pt at normal opacity 2(a − 0.5); Reduce
+  Transparency leaves it out. `GlassParams::capture_scale` is the scale the backdrop is read at:
+  `GLASS_BACKDROP_SCALE` (0.5) unless the table says otherwise. Content on glass is coloured by a 4×5 matrix per
+  appearance; `adapts_foreground` tells which controls (shorter side under 64 pt) take it. `GlassParams::shadow_reach`
+  is how far the drop shadow reaches past the shape. `GlassShadow::edge_line` is the opacity of the dark line one pixel
+  wide just outside the outline, scaled by how bright the backdrop is there.
 - **Display filter steps.** `ColorOp::{LinearMatrix, Invert, Contrast}` feed `cupertino-glass::display_filter`. No catalog
   recipe uses them.
 
@@ -258,11 +263,12 @@ in high contrast it asks for no material, except for the surfaces above that kee
 
 Every component of the toolkit and of the shell that lies on a material the compositor draws, with the call that asks
 for it and what becomes of it with Reduce Transparency and with Increase Contrast. A `Glass::…` call or a `GlassStyle`
-is glass of that style (`GlassParams` of `glass`); a `Surface::…` is the theme surface whose material
+is glass of that style, drawn as the system variant in brackets (`GlassStyle::variant`; `GlassParams` of `glass`); a `Surface::…` is the theme surface whose material
 `ThemeTokens::surface` names; a quoted name is a recipe of `materials.json`.
 
 - **kept**: the component asks for the same material and the compositor draws that material's recipe of the option. For
-  glass that is, with Reduce Transparency, a wide blur under a nearly opaque face with nothing bent at the edge, and
+  glass that is the variant's own stage: with Reduce Transparency, on the regular base a wide blur under a denser face with
+  nothing bent at the edge (the Dock keeps its optics and changes its face, the controls record none), and
   with Increase Contrast the same optics under the contrast face; for a recipe of `materials.json`, its opaque variant
   and the high-contrast catalog's.
 - **kept in dark**: kept in the dark appearance, not drawn in the light one.
@@ -272,12 +278,12 @@ is glass of that style (`GlassParams` of `glass`); a `Surface::…` is the theme
 | Component | Drawn in | Draws | Reduce Transparency | Increase Contrast |
 |---|---|---|---|---|
 | Menu (pop-up, context and bar menus) | `crates/cupertino-ui-controls/src/menu.rs` | `Surface::Menu` | kept | kept |
-| Menu with a pointer | `crates/cupertino-ui-controls/src/menu.rs` | `Glass::menu()` | kept | kept |
+| Menu with a pointer | `crates/cupertino-ui-controls/src/menu.rs` | `Glass::menu()` (`Menu`) | kept | kept |
 | Popover | `crates/cupertino-ui-controls/src/popover.rs` | `Surface::Popover` | kept | kept |
-| Popover with a pointer | `crates/cupertino-ui-controls/src/popover.rs` | `Glass::dense()` | kept | kept |
-| Alert | `crates/cupertino-ui-controls/src/dialog.rs` | `Glass::dense().radius(ALERT_RADIUS)` | painted | painted |
-| Toolbar controls | `crates/cupertino-ui-controls/src/glass.rs` | `Glass::toolbar()` | kept | kept |
-| Glass button | `crates/cupertino-ui-controls/src/glass.rs` | `Glass::regular()` | kept | kept |
+| Popover with a pointer | `crates/cupertino-ui-controls/src/popover.rs` | `Glass::dense()` (`CartouchePopover`, medium) | kept | kept |
+| Alert | `crates/cupertino-ui-controls/src/dialog.rs` | `Glass::dense().radius(ALERT_RADIUS)` (`CartouchePopover`, medium) | painted | painted |
+| Toolbar controls | `crates/cupertino-ui-controls/src/glass.rs` | `Glass::toolbar()` (`ToolbarItem`) | kept | kept |
+| Glass button | `crates/cupertino-ui-controls/src/glass.rs` | `Glass::regular()` (`Regular`) | kept | kept |
 | A callout's pointer | `crates/cupertino-ui-controls/src/callout.rs` | `cx.glass(self.glass.capsule())` | kept | kept |
 | Sidebar panel | `crates/cupertino-ui-controls/src/glass.rs` | `Surface::Sidebar` | opaque | kept |
 | One-panel window (About, portal prompts) | `crates/cupertino-ui-controls/src/shell.rs` | `Surface::Sidebar` | opaque | kept |
@@ -287,22 +293,22 @@ is glass of that style (`GlassParams` of `glass`); a `Surface::…` is the theme
 | Menu bar strip | `crates/cupertino-menubar/src/view.rs` | `Surface::MenuBar` | kept | kept |
 | Menu bar menus and prompt | `crates/cupertino-menubar/src/view.rs` | `Surface::Menu` | kept | kept |
 | Dock bar | `crates/cupertino-dock/src/view/bar.rs` | `Surface::DockBar` | kept | kept |
-| Dock stack panel (the grid and its pointer, dense glass) | `crates/cupertino-dock/src/view/stack.rs` | `cx.glass(panel_glass(` | kept | kept |
+| Dock stack panel (the grid and its pointer, dense glass) | `crates/cupertino-dock/src/view/stack.rs` | `cx.glass(panel_glass(` (`CartouchePopover`, medium) | kept | kept |
 | Dock tile name and menu | `crates/cupertino-dock/src/view/label.rs` | `Surface::Tooltip` | opaque | kept |
 | Dock running indicator | `crates/cupertino-dock/src/view/bar.rs` | `Surface::DockIndicator` | kept in dark | opaque |
 | Application switcher | `crates/cupertino-dock/src/switcher_kit.rs` | `Surface::Switcher` | opaque | kept |
-| Control panel tiles | `crates/cupertino-controlcenter/src/view.rs` | `Glass::module()` | kept | kept |
-| Control panel level tracks | `crates/cupertino-controlcenter/src/view.rs` | `Glass::track()` | kept | kept |
-| Notification cards (banners and the centre) | `crates/cupertino-notifications/src/view.rs` | `Glass::card()` | kept | kept |
-| Launcher panel | `crates/cupertino-launcher/src/view.rs` | `Glass::large_panel()` | kept | kept |
+| Control panel tiles | `crates/cupertino-controlcenter/src/view.rs` | `Glass::module()` (`ControlCenter`) | kept | kept |
+| Control panel level tracks | `crates/cupertino-controlcenter/src/view.rs` | `Glass::track()` (`Slider`) | kept | kept |
+| Notification cards (banners and the centre) | `crates/cupertino-notifications/src/view.rs` | `Glass::card()` (`NotificationCenter`, medium) | kept | kept |
+| Launcher panel | `crates/cupertino-launcher/src/view.rs` | `Glass::large_panel()` (`SearchResults`) | kept | kept |
 | Volume and brightness overlay | `crates/cupertino-osd/src/view.rs` | `Surface::Hud` | opaque | kept |
 | Screenshot toolbar | `crates/cupertino-screenshot/src/view.rs` | `Surface::Hud` | opaque | kept |
-| Quick preview panel | `crates/cupertino-files/src/kit/peek.rs` | `Glass::dense()` | kept | kept |
-| Log out, restart, shut down, power button and interrupt panels | `crates/cupertino-shell-agent/src/view/widgets.rs` | `Glass::regular()` | kept | kept |
-| Authentication, keyring and consent prompts | `crates/cupertino-prompts/src/view/widgets.rs` | `Glass::regular()` | kept | kept |
+| Quick preview panel | `crates/cupertino-files/src/kit/peek.rs` | `Glass::dense()` (`CartouchePopover`, medium) | kept | kept |
+| Log out, restart, shut down, power button and interrupt panels | `crates/cupertino-shell-agent/src/view/widgets.rs` | `Glass::regular()` (`Regular`) | kept | kept |
+| Authentication, keyring and consent prompts | `crates/cupertino-prompts/src/view/widgets.rs` | `Glass::regular()` (`Regular`) | kept | kept |
 | Screen-sharing chooser | `crates/cupertino-screenshot/src/share_picker.rs` | `PANEL_WINDOW_BACKGROUND` | opaque | kept |
 | The portal's file and app choosers (`dialogs`) | `crates/cupertino-shell-dialogs/src/view.rs` | `PANEL_WINDOW_BACKGROUND` | opaque | kept |
-| Input-source switcher | `crates/cupertino-osd/src/panels_view.rs` | `Glass::regular()` | kept | kept |
+| Input-source switcher | `crates/cupertino-osd/src/panels_view.rs` | `Glass::regular()` (`Regular`) | kept | kept |
 | Accent picker | `crates/cupertino-osd/src/panels_view.rs` | `Surface::Menu` | kept | kept |
 
 Solid by design, so not in the table: a sheet, a tooltip, the Force Quit window and the pills of a fanned stack.

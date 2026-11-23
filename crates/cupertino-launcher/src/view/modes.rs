@@ -174,6 +174,8 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for ModeButton<M> {
         let theme = cx.env().theme.clone();
         let dark = theme.preferences.appearance.is_dark();
         let material = Glass::large_panel()
+            .variant(super::BUTTON_VARIANT.0)
+            .size_class(super::BUTTON_VARIANT.1)
             .capsule()
             .alpha(alpha)
             .container(JOIN_CONTAINER, JOIN_SPACING);

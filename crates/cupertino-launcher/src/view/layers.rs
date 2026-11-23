@@ -31,13 +31,14 @@
 
 use super::modes::{JOIN_CONTAINER, JOIN_SPACING};
 use super::{
-    edge_alpha, edge_outside, enclosure_radius, enclosure_rect, mode_rects_of, Input, EDGE_WIDTH,
+    edge_alpha, edge_outside, enclosure_radius, enclosure_rect, enclosure_variant, mode_rects_of,
+    Input, BUTTON_VARIANT, EDGE_WIDTH,
 };
 use crate::motion::{Frame, Header, Motion, CLOSE, CLOSE_BLUR, OPEN_FADE};
 use cupertino_kit::controls::CaretBlink;
 use cupertino_kit::core::{
-    Change, Element, Event, EventCx, MeasureCx, PaintCx, Propagation, SemanticsCx,
-    SurfaceLayerMark, Widget,
+    Change, Element, Event, EventCx, GlassModifiers, GlassSize, GlassVariant, MeasureCx, PaintCx,
+    Propagation, SemanticsCx, SurfaceLayerMark, Widget,
 };
 use cupertino_kit::geometry::{Point, Rect, Size};
 use cupertino_kit::layout::{Constraints, ContainerKind, LayoutSpec, Measured, SizeSpec};
@@ -106,8 +107,13 @@ pub fn face_layer_rect(button: Rect) -> Rect {
     on_grid(button.outset(EDGE_ROOM.max(FOCUS_ROOM)))
 }
 
-/// The look of the enclosure's glass layer: the large panel's glass in the enclosure's shape, joined with the mode
-/// buttons' when they stand beside it.
+/// `variant` at the size class `size`, with no other modifier: not adapting to what is behind it.
+fn named((variant, size): (GlassVariant, GlassSize)) -> (GlassVariant, GlassModifiers) {
+    (variant, GlassModifiers::DEFAULT.sized(size))
+}
+
+/// The look of the enclosure's glass layer: the large panel's glass in the enclosure's shape, named by its variant
+/// ([`enclosure_variant`]), joined with the mode buttons' when they stand beside it.
 pub fn glass_look(frame: &Frame) -> SurfaceLayerLook {
     SurfaceLayerLook {
         glass: Some(GlassStyle::LargePanel),
@@ -117,19 +123,21 @@ pub fn glass_look(frame: &Frame) -> SurfaceLayerLook {
             (0, 0.0)
         },
         radius: enclosure_radius(frame),
+        variant: Some(named(enclosure_variant(frame))),
         masks: false,
         edge: LayerEdge::NONE,
         ..SurfaceLayerLook::default()
     }
 }
 
-/// The look of a mode button's glass layer, `side` points across: a capsule of the large panel's glass in the field's
+/// The look of a mode button's glass layer, `side` points across: a capsule of the search bar's platter glass in the field's
 /// glass group.
 pub fn button_glass_look(side: f64) -> SurfaceLayerLook {
     SurfaceLayerLook {
         glass: Some(GlassStyle::LargePanel),
         group: (JOIN_CONTAINER, JOIN_SPACING),
         radius: side / 2.0,
+        variant: Some(named(BUTTON_VARIANT)),
         masks: false,
         edge: LayerEdge::NONE,
         ..SurfaceLayerLook::default()

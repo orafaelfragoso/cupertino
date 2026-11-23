@@ -6,7 +6,7 @@
 use crate::cx::{OverlayCx, PaintCx};
 use crate::layout::{ContainerKind, LayoutDirection};
 use crate::layout::{IdMap, IdSet};
-use crate::platform::{GlassRegion, GlassStyle, GlassTone, MaterialRegion, Timestamp};
+use crate::platform::{BlurRamp, GlassRegion, GlassStyle, GlassTone, MaterialRegion, Timestamp};
 use crate::route::{Geometry, Placement};
 use crate::tree::Tree;
 use crate::{Environment, NodeId, WindowBackground};
@@ -169,6 +169,8 @@ pub(crate) struct NodeMaterial {
     pub(crate) in_layer: bool,
     pub(crate) alpha: f64,
     pub(crate) glass: Option<GlassRegion>,
+    /// How its blur varies from its top to its bottom ([`crate::PaintCx::set_blur_ramp`]).
+    pub(crate) blur_ramp: BlurRamp,
 }
 
 mod geometry;
@@ -886,6 +888,7 @@ impl Painter {
                         alpha: material.alpha,
                         glass: material.glass,
                         raised: raised && input.layer,
+                        blur_ramp: material.blur_ramp,
                     });
                 }
             }

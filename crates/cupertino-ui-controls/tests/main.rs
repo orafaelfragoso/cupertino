@@ -13,6 +13,8 @@ mod menus;
 mod press_controls;
 #[path = "text-fields.rs"]
 mod text_fields;
+#[path = "toolbar-band.rs"]
+mod toolbar_band;
 mod typeahead;
 #[path = "value-controls.rs"]
 mod value_controls;

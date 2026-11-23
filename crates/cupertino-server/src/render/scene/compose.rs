@@ -17,18 +17,34 @@ pub(super) fn backdrop_elements(
             glass.add(b, out.len());
             continue;
         }
-        out.extend(window_material_layer(
-            p,
-            SceneKind::Backdrop,
-            b.key,
-            &b.material,
-            b.area,
-            b.radius,
-            b.alpha as f32 * opacity,
-            window,
-        ));
+        out.extend(
+            window_material_layer(
+                p,
+                SceneKind::Backdrop,
+                b.key,
+                &b.material,
+                b.area,
+                b.radius,
+                b.alpha as f32 * opacity,
+                window,
+            )
+            .into_iter()
+            .map(|piece| ramped(piece, b.blur_ramp)),
+        );
     }
     glass.finish(p, out, opacity)
+}
+
+/// `piece` with its material's filter fading by `ramp` from its top to its bottom (a backdrop's `set_blur_ramp`); the
+/// fallback fill that stands in for a material has no filter to fade.
+fn ramped(piece: Piece, ramp: [f32; 2]) -> Piece {
+    match piece {
+        Piece::Material(m) => Piece::Material(Material {
+            blur_ramp: ramp,
+            ..m
+        }),
+        other => other,
+    }
 }
 
 /// Note the backdrops drawn as a material other than glass: one whose face was measured while it was glass goes back
@@ -152,6 +168,11 @@ fn glass_pieces(
             };
             container = container.with_shape_mode(last - j, own_mode);
         }
+    }
+    // the container's blur ramp runs along its first shape, the backdrop the surface created first
+    let ramp = members[last].blur_ramp;
+    if ramp != [1.0, 1.0] {
+        container = container.with_blur_ramp(ramp);
     }
     // a callout (a panel and its pointer, a label and its pointer) is one piece of glass that lights its own rim, and a
     // small one keeps the glass's face
@@ -327,7 +348,7 @@ pub(super) fn bar_backdrop_elements(
             MaterialStage::Composite { owner },
             WindowState::Active,
         );
-        let Some(composite) = composite else {
+        let Some(composite) = composite.map(|piece| ramped(piece, b.blur_ramp)) else {
             out.push(fallback_fill(
                 p,
                 SceneKind::Backdrop,
@@ -442,6 +463,7 @@ fn material_piece(
         tint: window_tint(p, dark),
         opacity: alpha,
         clip: Clip::None,
+        blur_ramp: [1.0, 1.0],
     }))
 }
 
@@ -872,6 +894,7 @@ fn display_filter(p: &mut SceneParams<'_>, stack: &mut Composition) {
             tint: [0.0; 3],
             opacity: 1.0,
             clip: Clip::None,
+            blur_ramp: [1.0, 1.0],
         }),
     );
 }

@@ -45,7 +45,7 @@ impl AppEffectsV1Global {
 }
 
 /// The version of `cupertino_app_effects_v1` the server offers.
-const VERSION: u32 = 21;
+const VERSION: u32 = 22;
 /// The version from which the backdrops of a subsurface are drawn, above the rest of its surface tree.
 pub const SUBSURFACE_BACKDROPS_VERSION: u32 = 11;
 
@@ -75,6 +75,8 @@ const SIDEBAR_VERSION: u32 = 18;
 const TOOLBAR_VERSION: u32 = 19;
 /// The version of `cupertino_backdrop_v1` that has the menu glass style.
 const MENU_VERSION: u32 = 20;
+/// The version of `cupertino_backdrop_v1` that has `set_blur_ramp`.
+const BLUR_RAMP_VERSION: u32 = 22;
 
 /// The tone a backdrop's text is drawn with, as the wire carries it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -239,6 +241,8 @@ struct BackdropEntry {
     glass: Option<GlassSpec>,
     shape: Shape,
     alpha: f64,
+    /// The share of its blur the backdrop keeps along the top and the bottom of its shape (`set_blur_ramp`).
+    blur_ramp: [f32; 2],
     /// Made through an object of [`SUBSURFACE_BACKDROPS_VERSION`] or later: on a subsurface it is drawn.
     on_subsurface: bool,
 }
@@ -270,6 +274,9 @@ pub struct BackdropArea {
     pub alpha: f64,
     /// Drawn as glass: by `set_glass`, or by a glass material name ([`GLASS_MATERIALS`]).
     pub glass: Option<GlassSpec>,
+    /// The share of its blur the backdrop keeps along the top and the bottom of its area, smoothly between
+    /// (`set_blur_ramp`); `[1, 1]` blurs evenly.
+    pub blur_ramp: [f32; 2],
 }
 
 /// Committed, visible backdrops of `surface` (set material or glass, non-empty shape) in creation order,
@@ -321,6 +328,7 @@ fn committed_backdrops(
                 area: Rectangle::new(origin + Point::from((s.x, s.y)), (s.width, s.height).into()),
                 radius: s.radius,
                 alpha: e.alpha,
+                blur_ramp: e.blur_ramp,
             })
         })
         .collect()
@@ -562,6 +570,7 @@ impl Dispatch<CupertinoAppEffectsV1, ()> for Cupertino {
                             glass: None,
                             shape: Shape::default(),
                             alpha: 1.0,
+                            blur_ramp: [1.0, 1.0],
                             on_subsurface: effects.version() >= SUBSURFACE_BACKDROPS_VERSION,
                         });
                 });
@@ -986,6 +995,19 @@ impl Dispatch<CupertinoBackdropV1, BackdropData> for Cupertino {
                         spacing,
                     })
                 });
+            }
+            cupertino_backdrop_v1::Request::SetBlurRamp { top, bottom }
+                if resource.version() >= BLUR_RAMP_VERSION =>
+            {
+                let weight = |w: f64| w.is_finite() && (0.0..=1.0).contains(&w);
+                if !(weight(top) && weight(bottom)) {
+                    resource.post_error(
+                        Error::InvalidRamp,
+                        format!("blur weights {top} and {bottom} are not both from 0 to 1"),
+                    );
+                    return;
+                }
+                data.edit(|e| e.blur_ramp = [top as f32, bottom as f32]);
             }
             // `Destroy` is handled in `destroyed`
             _ => {}

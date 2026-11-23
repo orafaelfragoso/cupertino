@@ -10,6 +10,8 @@ pub enum Error {
     InvalidAlpha,
     /// A glass spacing that is negative or not finite.
     InvalidGlass,
+    /// A backdrop blur weight below 0, above 1 or not finite.
+    InvalidRamp,
     /// A layer value outside its property's range.
     InvalidLayerValue,
     /// A request the server's version of the protocol does not have.
@@ -25,6 +27,7 @@ impl fmt::Display for Error {
             ),
             Self::InvalidAlpha => write!(f, "backdrop alpha is outside 0 to 1"),
             Self::InvalidGlass => write!(f, "glass spacing is negative or not finite"),
+            Self::InvalidRamp => write!(f, "backdrop blur weight is outside 0 to 1"),
             Self::InvalidLayerValue => write!(f, "layer value is outside its property's range"),
             Self::Unsupported(request) => write!(f, "the server does not take {request}"),
         }

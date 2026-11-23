@@ -34,6 +34,7 @@ fn pass(stage: MaterialStage) -> Source {
         style: CornerStyle::Circular,
         stage,
         tint: [1.0; 3],
+        blur_ramp: [1.0, 1.0],
     })
 }
 

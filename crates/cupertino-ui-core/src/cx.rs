@@ -3,7 +3,7 @@ use crate::accessibility::{
 };
 use crate::layout::LayoutDirection;
 use crate::paint::NodeMaterial;
-use crate::platform::{CursorShape, GlassRegion, GlassStyle, Timestamp};
+use crate::platform::{BlurRamp, CursorShape, GlassRegion, GlassStyle, Timestamp};
 use crate::route::Placement;
 use crate::widget::Change;
 use crate::{Environment, Key, NodeId, Phase, WindowKey};
@@ -717,6 +717,7 @@ impl PaintCx<'_> {
                 container: 0,
                 spacing: 0.0,
             }),
+            blur_ramp: BlurRamp::EVEN,
         });
         self.take_foreground();
         self.material.is_some()
@@ -783,9 +784,31 @@ impl PaintCx<'_> {
                 container: glass.container,
                 spacing: finite(glass.spacing, 0.0).max(0.0),
             }),
+            blur_ramp: BlurRamp::EVEN,
         });
         self.take_foreground();
         self.material.is_some()
+    }
+
+    /// Varies the blur of the material or glass this node asked for ([`PaintCx::material`], [`PaintCx::glass`]) down
+    /// the node: `ramp.top` times its blur along its top edge and `ramp.bottom` times it along its bottom edge,
+    /// smoothly between (a variable blur), each weight taken from 0 to 1; where less of the blur is kept the material
+    /// shows what lies behind it as the compositor captured it. A compositor that cannot blurs evenly. Nothing without a
+    /// material asked for first; asking again resets the ramp to [`BlurRamp::EVEN`].
+    pub fn set_blur_ramp(&mut self, ramp: BlurRamp) {
+        let weight = |w: f64| {
+            if w.is_finite() {
+                w.clamp(0.0, 1.0)
+            } else {
+                1.0
+            }
+        };
+        if let Some(material) = self.material.as_mut() {
+            material.blur_ramp = BlurRamp {
+                top: weight(ramp.top),
+                bottom: weight(ramp.bottom),
+            };
+        }
     }
 }
 

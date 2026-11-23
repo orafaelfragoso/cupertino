@@ -6,7 +6,7 @@ use crate::wire;
 use cupertino_geometry::{Rect, Size};
 use cupertino_keyboard::modifiers::Profile;
 use cupertino_ui_core::platform::{
-    DecorationMode, MaterialRegion, WindowId, WindowRequest, WindowSpec, WindowSystem,
+    BlurRamp, DecorationMode, MaterialRegion, WindowId, WindowRequest, WindowSpec, WindowSystem,
 };
 use cupertino_ui_wayland::WaylandWindowSystem;
 use wire::{Harness, Offer};
@@ -33,6 +33,7 @@ fn regions(count: usize) -> Vec<MaterialRegion> {
             alpha: 1.0,
             glass: None,
             raised: false,
+            blur_ramp: BlurRamp::EVEN,
         })
         .collect()
 }
@@ -110,4 +111,73 @@ fn a_list_past_the_protocols_limits_is_refused_before_any_backdrop_is_asked_for_
     system
         .request(third, WindowRequest::Materials(regions(1)))
         .unwrap();
+}
+
+/// One region with its blur fading from `top` to `bottom`.
+fn ramped(top: f64, bottom: f64) -> Vec<MaterialRegion> {
+    let mut list = regions(1);
+    list[0].blur_ramp = BlurRamp { top, bottom };
+    list
+}
+
+fn ramps_sent(server: &Harness) -> Vec<String> {
+    server
+        .requests()
+        .into_iter()
+        .filter(|r| r.starts_with("SetBlurRamp"))
+        .collect()
+}
+
+#[test]
+fn a_regions_blur_ramp_goes_to_a_server_that_takes_it_when_it_changes_and_not_to_an_older_one() {
+    let (server, conn) = Harness::start(Offer {
+        app_effects: Some(22),
+        ..Offer::NONE
+    });
+    let mut system = WaylandWindowSystem::new(conn, Profile::cupertino());
+    let window = open(&mut system);
+    // an even region sends no ramp
+    system
+        .request(window, WindowRequest::Materials(regions(1)))
+        .unwrap();
+    flush(&mut system);
+    server.wait_for("get_backdrop", 1);
+    assert!(ramps_sent(&server).is_empty());
+    system
+        .request(window, WindowRequest::Materials(ramped(1.0, 0.0)))
+        .unwrap();
+    // the same ramp is not sent again, a weight past 1 goes as 1, and going back to even is sent too
+    system
+        .request(window, WindowRequest::Materials(ramped(1.0, 0.0)))
+        .unwrap();
+    system
+        .request(window, WindowRequest::Materials(ramped(2.0, 0.5)))
+        .unwrap();
+    system
+        .request(window, WindowRequest::Materials(regions(1)))
+        .unwrap();
+    flush(&mut system);
+    server.wait_for("SetBlurRamp", 3);
+    assert_eq!(
+        ramps_sent(&server),
+        [
+            "SetBlurRamp { top: 1.0, bottom: 0.0 }",
+            "SetBlurRamp { top: 1.0, bottom: 0.5 }",
+            "SetBlurRamp { top: 1.0, bottom: 1.0 }",
+        ]
+    );
+    assert_eq!(backdrops_asked(&server), 1, "the backdrop is kept");
+
+    let (server, conn) = Harness::start(Offer {
+        app_effects: Some(21),
+        ..Offer::NONE
+    });
+    let mut system = WaylandWindowSystem::new(conn, Profile::cupertino());
+    let window = open(&mut system);
+    system
+        .request(window, WindowRequest::Materials(ramped(1.0, 0.0)))
+        .unwrap();
+    flush(&mut system);
+    server.wait_for("SetShape", 1);
+    assert!(ramps_sent(&server).is_empty(), "version 21 blurs evenly");
 }

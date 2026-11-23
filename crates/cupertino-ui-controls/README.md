@@ -253,7 +253,10 @@ from the application's model and reports changes as messages.
   band thinning in a straight line to 72 % at its bottom, with a hairline of 0.5 pt along the bottom, or, with Reduce Transparency and in high contrast, the band filled with
   the window background and a separator along its bottom. In a window that is not active the band is the inactive
   title bar colour (`ColorRole::InactiveTitlebar`), solid with a hard edge and no veil, with the separator under it
-  where the active band has one. Its bar, paging and focus scrolling keep below the row.
+  where the active band has one. Its bar, paging and focus scrolling keep below the row. Where the window shows
+  materials the row lays the soft band itself, the `ToolbarBand` material, and the veil is left out: its blur fades
+  out down the row as macOS's scroll edge (`scroll_edge::TOOLBAR_BAND_RAMP`, all of it under the row's top and 3 % at
+  the band's bottom, `PaintCx::set_blur_ramp`); a compositor without blur ramps blurs the band evenly.
   Without a layer the row draws in place, the page is clipped below it and there is no edge. A `TableView` with
   `header_top` puts its header that far down, raised with the row, and starts its rows below both; the rows scroll
   under the two, and since the header's titles are text outside glass the band under them is always the solid one,

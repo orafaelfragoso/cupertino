@@ -77,6 +77,7 @@ impl MaterialGl {
             &[(REGION_BLOCK, BIND_REGION), (PLACEMENT, BIND_PLACE)],
         )?;
         let material_backdrop = sampler_loc(gl, material, program, REGION_BACKDROP)?;
+        let material_capture = sampler_loc(gl, material, program, REGION_CAPTURE)?;
         self.glass = glass::GlassGl::init(gl)?;
         let src_loc = [downsample_src, blur_src, color_src];
         self.progs = Some(Programs {
@@ -85,6 +86,7 @@ impl MaterialGl {
             color,
             material,
             material_backdrop,
+            material_capture,
             src_loc,
             blur_dither: dither && !self.float_targets,
             place_dither: dither,
@@ -685,6 +687,12 @@ impl MaterialGl {
             return Ok(());
         }
         let backdrop_tex = self.cache[idx].target.tex;
+        // the capture before the filter, which a blur ramp shows where its weight is low: the backdrop itself when the
+        // recipe does not filter
+        let capture_tex = self.cache[idx]
+            .pyramid
+            .as_ref()
+            .map_or(backdrop_tex, |p| p.tex);
         let held = self.cache[idx].crop;
         self.timer_begin(gl, false);
 
@@ -707,6 +715,8 @@ impl MaterialGl {
         ];
         region.tint = [p.tint[0], p.tint[1], p.tint[2], 1.0];
         region.set_fills(&p.recipe.fills);
+        // the ramp runs along the region's own rectangle, also where its mask is a window's outline
+        region.set_blur_ramp(p.blur_ramp, p.area.loc.y as f32, p.area.size.h as f32);
 
         gl.BindFramebuffer(ffi::DRAW_FRAMEBUFFER, saved.draw_fbo as GLuint);
         gl.BindFramebuffer(ffi::READ_FRAMEBUFFER, saved.read_fbo as GLuint);
@@ -733,6 +743,9 @@ impl MaterialGl {
             BIND_REGION,
             bytemuck::bytes_of(&region),
         );
+        gl.ActiveTexture(ffi::TEXTURE1);
+        gl.BindTexture(ffi::TEXTURE_2D, capture_tex);
+        gl.Uniform1i(progs.material_capture, 1);
         gl.ActiveTexture(ffi::TEXTURE0);
         gl.BindTexture(ffi::TEXTURE_2D, backdrop_tex);
         gl.Uniform1i(progs.material_backdrop, 0);

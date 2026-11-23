@@ -209,8 +209,11 @@ target). Material and glass include `shaders/include/place.wgsl`, the placement 
 mapped through a projection from target pixels to clip space, and the dither flag, so the compositor draws one quad per
 damage rectangle through its frame projection and the headless renderer one padded quad per region through its own.
 The backdrop is sampled at the framebuffer-normalised coordinate mapped into the area it covers (`Region.info.zw`, its
-origin, and `Region.sizes.zw`, its size, in target pixels). Uniform blocks are std140 and byte-identical to the Rust
-structs.
+origin, and `Region.sizes.zw`, its size, in target pixels). A region with a blur ramp (a variable blur,
+`MaterialRegion::with_blur_ramp`, `RegionParams::set_blur_ramp`) mixes the processed backdrop with the capture at the
+recipe's scale before its filter (group 0 binding 3, `shaders::REGION_CAPTURE`) by a weight that runs from the top of
+the region to its bottom along a smoothstep; `cpu::render_regions` weighs it the same way (`MaterialRegion::blur_weight`).
+Uniform blocks are std140 and byte-identical to the Rust structs.
 
 ## Binary
 

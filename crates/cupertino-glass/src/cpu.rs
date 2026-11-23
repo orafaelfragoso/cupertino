@@ -196,12 +196,16 @@ fn blend(mode: i32, s: [f32; 3], a: f32, d: [f32; 3]) -> [f32; 3] {
     [0, 1, 2].map(|i| d[i] * (1.0 - a) + b[i] * a)
 }
 
+/// A backdrop as the model processes it: the capture at the recipe's scale, which a blur ramp shows where its weight
+/// is low, and the backdrop filtered from it.
+type Processed = (Img, Img);
+
 fn processed_backdrop(
     base: &Img,
     region: &MaterialRegion,
     display_scale: f32,
     exact_blur: bool,
-) -> Option<Img> {
+) -> Option<Processed> {
     let b = region.recipe.backdrop.as_ref()?;
     let (w, h) = (base.w, base.h);
     let plan = plan_blur(w as u32, h as u32, b.scale, b.sigma_pt, display_scale);
@@ -231,6 +235,8 @@ fn processed_backdrop(
     for (lw, lh) in levels {
         cur = cur.down(lw as usize, lh as usize);
     }
+    // the capture at the recipe's scale, which a blur ramp shows where its weight is low
+    let capture = cur.clone();
     if wts.len() > 1 {
         cur = cur.blur(&wts, 1, 0).blur(&wts, 0, 1);
     }
@@ -238,7 +244,7 @@ fn processed_backdrop(
     for p in cur.px.iter_mut() {
         *p = apply_color_ops(*p, &ops).map(round_f16);
     }
-    Some(cur)
+    Some((capture, cur))
 }
 
 /// Render `regions` over `wall` the way the GPU renderer does: backdrops are computed from the
@@ -267,7 +273,7 @@ pub fn render_regions(
             .collect(),
     };
     let mut out = wall.clone();
-    let mut cache: HashMap<(u32, u32, Vec<u32>), Option<Img>> = HashMap::new();
+    let mut cache: HashMap<(u32, u32, Vec<u32>), Option<Processed>> = HashMap::new();
     for r in regions {
         let key = r
             .recipe
@@ -309,7 +315,17 @@ pub fn render_regions(
                     continue;
                 }
                 let mut c = match &back {
-                    Some(bk) => bk.bilinear(px / w as f32, py / h as f32),
+                    Some((capture, bk)) => {
+                        let (u, v) = (px / w as f32, py / h as f32);
+                        let blurred = bk.bilinear(u, v);
+                        let keep = r.blur_weight(py);
+                        if keep < 1.0 {
+                            let sharp = capture.bilinear(u, v);
+                            [0, 1, 2].map(|i| blurred[i] + (sharp[i] - blurred[i]) * (1.0 - keep))
+                        } else {
+                            blurred
+                        }
+                    }
                     None => base.px[y * w + x],
                 };
                 for o in &fops {

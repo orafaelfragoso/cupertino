@@ -230,6 +230,26 @@ impl Backdrop {
         self.proxy.set_alpha(alpha);
         Ok(())
     }
+
+    /// Whether the server varies the backdrop's blur from its top to its bottom ([`Self::set_blur_ramp`], version 22).
+    pub fn takes_blur_ramp(&self) -> bool {
+        self.proxy.version() >= BLUR_RAMP_VERSION
+    }
+
+    /// Blur the backdrop at `top` times its blur along the top edge of its shape and at `bottom` times it along the
+    /// bottom edge, smoothly between (a variable blur); 1 and 1 blur evenly. Errors on a weight below 0, above 1 or not
+    /// finite, which the server would reject as a protocol error. A server before version 22 blurs evenly and is sent
+    /// nothing.
+    pub fn set_blur_ramp(&self, top: f64, bottom: f64) -> Result<(), Error> {
+        let weight = |w: f64| w.is_finite() && (0.0..=1.0).contains(&w);
+        if !(weight(top) && weight(bottom)) {
+            return Err(Error::InvalidRamp);
+        }
+        if self.takes_blur_ramp() {
+            self.proxy.set_blur_ramp(top, bottom);
+        }
+        Ok(())
+    }
 }
 
 impl GlassStyle {
@@ -283,6 +303,8 @@ const SIDEBAR_VERSION: u32 = 18;
 const TOOLBAR_VERSION: u32 = 19;
 /// The version of `cupertino_backdrop_v1` that has the menu glass style.
 const MENU_VERSION: u32 = 20;
+/// The version of `cupertino_backdrop_v1` that has `set_blur_ramp`.
+const BLUR_RAMP_VERSION: u32 = 22;
 
 /// The wire style of the menu on a server of `version`: one before [`MENU_VERSION`] draws it as dense glass (regular
 /// glass before [`DENSE_VERSION`]).

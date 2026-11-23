@@ -111,6 +111,8 @@ pub const REGION_BACKDROP: (u32, u32) = (0, 1);
 pub const GLASS_BLOCK: (u32, u32) = (0, 0);
 pub const GLASS_LEVELS: [(u32, u32); 4] = [(0, 1), (0, 2), (0, 3), (0, 4)];
 pub const GLASS_FILL: (u32, u32) = (0, 5);
+/// Every texture the glass program reads, in binding order: the blurred copies, then the blur fill.
+pub const GLASS_TEXTURES: [(u32, u32); 5] = [(0, 1), (0, 2), (0, 3), (0, 4), (0, 5)];
 /// Where the vibrant program binds its block (`VibrantUniform`), its glyphs and the copy of its target.
 pub const VIBRANT_BLOCK: (u32, u32) = (0, 0);
 pub const VIBRANT_GLYPHS: (u32, u32) = (0, 1);

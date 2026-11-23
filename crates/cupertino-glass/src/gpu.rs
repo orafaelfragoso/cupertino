@@ -1,9 +1,14 @@
 //! Headless helpers for the binary, tests and benchmarks: a `cupertino-gpu` device of its own, texture upload and
-//! read-back, a procedural wallpaper.
+//! read-back, the glass composite drawn on its own, a procedural wallpaper.
 
+use crate::glass::GlassUniform;
+use crate::ops::Placement;
 use crate::renderer::{FrameDesc, MaterialRegion, MaterialRenderer, TargetInit};
+use crate::shaders;
 use cupertino_gpu::{
-    Device, DeviceDesc, Platform, Region, Result, Texture, TextureDesc, TextureFormat, TextureUsage,
+    AddressMode, BindGroupEntry, BindingKind, BindingLayout, BindingResource, Blend, BufferDesc,
+    BufferUsage, Device, DeviceDesc, Filter, LoadOp, PipelineDesc, Platform, Region, Result,
+    SamplerDesc, Texture, TextureDesc, TextureFormat, TextureUsage, Topology,
 };
 
 pub struct HeadlessGpu {
@@ -84,6 +89,114 @@ impl HeadlessGpu {
         r.destroy(&self.device);
         self.device.destroy_texture(src);
         self.device.destroy_texture(dst);
+        img
+    }
+}
+
+impl HeadlessGpu {
+    /// The glass composite of one container ([`shaders::GLASS`]) drawn once over an opaque black target `size` pixels:
+    /// `textures` are what the program reads at its texture bindings, in order (from binding 1), and
+    /// `uniform` maps target pixels to their coordinates. The target's colour is the glass's straight colour times its
+    /// coverage, as the compositor's blend lays it over black.
+    pub fn render_glass(
+        &self,
+        uniform: &GlassUniform,
+        textures: &[image::RgbaImage],
+        size: (u32, u32),
+    ) -> Result<image::RgbaImage> {
+        let device = &self.device;
+        let uploaded = textures
+            .iter()
+            .map(|t| self.upload(t))
+            .collect::<Result<Vec<_>>>()?;
+        let mut kinds = vec![BindingKind::UniformBuffer];
+        kinds.extend(uploaded.iter().map(|_| BindingKind::Texture));
+        kinds.push(BindingKind::Sampler);
+        let entries: Vec<BindingLayout> = kinds
+            .iter()
+            .enumerate()
+            .map(|(i, &kind)| BindingLayout {
+                binding: i as u32,
+                kind,
+            })
+            .collect();
+        let layout_glass = device.create_bind_group_layout(&entries)?;
+        let layout_place = device.create_bind_group_layout(&[BindingLayout {
+            binding: 0,
+            kind: BindingKind::UniformBuffer,
+        }])?;
+        let pipeline = device.create_pipeline(&PipelineDesc {
+            shader: &shaders::GLASS.source,
+            layouts: &[&layout_glass, &layout_place],
+            vertex_buffers: &[],
+            blend: Blend::StraightOver,
+            topology: Topology::TriangleStrip,
+        })?;
+        let sampler = device.create_sampler(&SamplerDesc {
+            filter: Filter::Linear,
+            address: AddressMode::ClampToEdge,
+        })?;
+        let (w, h) = (size.0 as f32, size.1 as f32);
+        let projection = [2.0 / w, 0.0, 0.0, 0.0, 2.0 / h, 0.0, -1.0, -1.0, 1.0];
+        let place = Placement::new(&projection, [0.0, 0.0, w, h], false);
+        let mut buffers = Vec::new();
+        for bytes in [bytemuck::bytes_of(uniform), bytemuck::bytes_of(&place)] {
+            let buffer = device.create_buffer(&BufferDesc {
+                size: bytes.len() as u64,
+                usage: BufferUsage::Uniform,
+            })?;
+            device.write_buffer(&buffer, 0, bytes)?;
+            buffers.push(buffer);
+        }
+        fn whole(b: &cupertino_gpu::Buffer) -> BindingResource<'_> {
+            BindingResource::Buffer {
+                buffer: b,
+                offset: 0,
+                size: b.size(),
+            }
+        }
+        let mut group = vec![BindGroupEntry {
+            binding: 0,
+            resource: whole(&buffers[0]),
+        }];
+        for (i, t) in uploaded.iter().enumerate() {
+            group.push(BindGroupEntry {
+                binding: i as u32 + 1,
+                resource: BindingResource::Texture(t),
+            });
+        }
+        group.push(BindGroupEntry {
+            binding: uploaded.len() as u32 + 1,
+            resource: BindingResource::Sampler(&sampler),
+        });
+        let g0 = device.create_bind_group(&layout_glass, &group)?;
+        let g1 = device.create_bind_group(
+            &layout_place,
+            &[BindGroupEntry {
+                binding: 0,
+                resource: whole(&buffers[1]),
+            }],
+        )?;
+        let target = self.target(size.0, size.1)?;
+        let drawn = (|| {
+            let mut rp = device.begin_pass(&target, LoadOp::Clear([0.0, 0.0, 0.0, 1.0]))?;
+            rp.set_pipeline(&pipeline);
+            rp.set_bind_group(0, &g0)?;
+            rp.set_bind_group(1, &g1)?;
+            rp.draw(0..4, 1)?;
+            rp.end();
+            Ok(())
+        })();
+        let img = drawn.and_then(|()| self.read(&target));
+        device.destroy_texture(target);
+        for t in uploaded {
+            device.destroy_texture(t);
+        }
+        for b in buffers {
+            device.destroy_buffer(b);
+        }
+        device.destroy_pipeline(pipeline);
+        device.destroy_sampler(sampler);
         img
     }
 }

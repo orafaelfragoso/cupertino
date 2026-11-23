@@ -5,5 +5,7 @@
 mod display_filter;
 #[path = "glass-model.rs"]
 mod glass_model;
+#[path = "glass-stages.rs"]
+mod glass_stages;
 #[path = "material-renderer.rs"]
 mod material_renderer;

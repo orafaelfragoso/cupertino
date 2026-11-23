@@ -5,6 +5,8 @@
 mod support;
 
 mod dialog;
+#[path = "glass-variants.rs"]
+mod glass_variants;
 #[path = "knob-lens.rs"]
 mod knob_lens;
 mod lists;

@@ -3,7 +3,8 @@
 //! Every glass surface a control draws names its [`GlassRole`]; [`GlassRole::material`] says what draws that role. A
 //! role drawn by the compositor asks for the theme's material under the node ([`PaintCx::material`]) and paints the
 //! surface's opaque fill where the window cannot show it (no desktop effects, Reduce Transparency, Increase
-//! Contrast). A glass role asks for glass under the node ([`PaintCx::glass`]), which the compositor keeps with
+//! Contrast); where the theme keeps that material, a role with a system variant ([`GlassRole::variant_glass`]) asks for
+//! the variant's glass in its place. A glass role asks for glass under the node ([`PaintCx::glass`]), which the compositor keeps with
 //! Reduce Transparency and Increase Contrast, and joins the role's container. A painted role draws a translucent body
 //! with a fine rim over what the window shows below it, as a glass role does where the desktop shows no glass. Moving
 //! a role to another material is the one line of its arm in [`GlassRole::material`].
@@ -26,7 +27,7 @@
 
 use cupertino_geometry::{Insets, Rect};
 use cupertino_theme::ui::{Color, Surface};
-use cupertino_ui_core::platform::GlassStyle;
+use cupertino_ui_core::platform::{GlassStyle, GlassVariant};
 use cupertino_ui_core::{Glass, PaintCx};
 use cupertino_ui_render::{Paint, PaintOp, Shape};
 
@@ -94,6 +95,16 @@ impl GlassRole {
         }
     }
 
+    /// The glass a role of [`GlassMaterial::Compositor`] asks for in place of its surface's material where the theme
+    /// keeps that material: the sidebar panel lies against the window's leading edge, the abutted sidebar's glass
+    /// (planar, no light and no ring at its edge), which takes its inactive recipe while the window is not active.
+    pub fn variant_glass(self) -> Option<Glass> {
+        match self {
+            GlassRole::SidebarPanel => Some(Glass::sidebar().variant(GlassVariant::AbuttedSidebar)),
+            GlassRole::ToolbarGroup | GlassRole::GlassButton | GlassRole::ThumbLens => None,
+        }
+    }
+
     /// The glass container the role's nodes join and its blend width in points: nodes of one window in the same
     /// container blend into one shape where they come closer than the width.
     pub const fn container(self) -> (u32, f64) {
@@ -140,7 +151,14 @@ pub fn paint_glass(cx: &mut PaintCx<'_>, role: GlassRole, rect: Rect, radius: f6
     }
     match role.material() {
         GlassMaterial::Compositor(surface) => {
-            if cx.material(surface, radius, 1.0) {
+            // where the theme keeps the surface's glass, a role named by its system variant asks for that glass, which
+            // follows the window's activation; elsewhere the surface's opaque fill
+            let kept = cx.env().theme.surface(surface).material.is_some();
+            let shown = match role.variant_glass() {
+                Some(glass) if kept => cx.glass(glass.radius(radius)),
+                _ => cx.material(surface, radius, 1.0),
+            };
+            if shown {
                 return true;
             }
             if let Some(fill) = cx.env().theme.surface(surface).fill {

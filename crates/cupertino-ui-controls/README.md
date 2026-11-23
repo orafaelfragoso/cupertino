@@ -283,7 +283,11 @@ from the application's model and reports changes as messages.
   the glass as the disabled glyphs beside it. The field under a resting `ToolbarSearch` button is not drawn, so the button's
   glass shows what lies below the field. Moving a role to another material is its one arm in `GlassRole::material`.
   `GlassRole::floating` tells the floating controls (toolbar groups, glass buttons, a held thumb) from the content
-  surfaces (the sidebar panel). Glass is never laid on glass: a node on glass the window shows
+  surfaces (the sidebar panel). The sidebar panel's glass is named by the abutted sidebar variant
+  (`GlassRole::variant_glass`, `GlassVariant::AbuttedSidebar`): planar against the window's leading edge, with its
+  inactive recipe while the window is not active; where the theme keeps no sidebar material (Reduce Transparency) it
+  paints the theme's opaque fill. A single-panel window (`PANEL_WINDOW_BACKGROUND`) keeps the sidebar material of its
+  window background, which names no variant. Glass is never laid on glass: a node on glass the window shows
   (`PaintCx::on_glass`) draws none of its own, so a glass button on a toolbar group shows its label alone.
 - **Menus.** `Menu` levels follow the pointer as the menu bar's do (`cupertino-menu-model`'s `tracking`): the row
   under the pointer takes the focus and the highlight, a submenu opens once the pointer rests 0.2 s on its row and

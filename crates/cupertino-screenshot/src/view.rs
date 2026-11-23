@@ -12,8 +12,8 @@ use cupertino_kit::controls::{Button, ButtonRole, ButtonStyle, Menu, MenuAnchor,
 use cupertino_kit::controls::{SegmentedControl, Spacer, Stack};
 use cupertino_kit::core::{
     glass_outline, AccessibleValue, Action, Change, CommandRegistry, Element, Event, EventCx,
-    Glass, Key as NodeKey, MeasureCx, PaintCx, Phase as RoutePhase, Propagation, Role, SemanticsCx,
-    Widget, Window, WindowBackground, WindowKey,
+    Glass, GlassVariant, Key as NodeKey, MeasureCx, PaintCx, Phase as RoutePhase, Propagation,
+    Role, SemanticsCx, Widget, Window, WindowBackground, WindowKey,
 };
 use cupertino_kit::geometry::Insets;
 use cupertino_kit::layout::{
@@ -694,7 +694,11 @@ impl<M: 'static> Widget<M> for Keys<M> {
     /// the heads-up surface in the same shape.
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
         let glass = !cx.env().theme.preferences.reduce_transparency
-            && cx.glass(Glass::regular().radius(TOOLBAR_RADIUS));
+            && cx.glass(
+                Glass::regular()
+                    .variant(GlassVariant::Regular)
+                    .radius(TOOLBAR_RADIUS),
+            );
         if !glass {
             if let Some(color) = cx.env().theme.surface(Surface::Hud).fill {
                 let rect = Rect::from_origin_size(Point::ZERO, cx.size());

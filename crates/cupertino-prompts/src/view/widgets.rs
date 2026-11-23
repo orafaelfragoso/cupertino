@@ -3,8 +3,8 @@
 //! asks for frames while the scrim fades in.
 
 use cupertino_kit::core::{
-    AccessibleStates, Change, Element, Event, EventCx, Glass, MeasureCx, PaintCx, Phase,
-    Propagation, Role, SemanticsCx, Widget,
+    AccessibleStates, Change, Element, Event, EventCx, Glass, GlassVariant, MeasureCx, PaintCx,
+    Phase, Propagation, Role, SemanticsCx, Widget,
 };
 use cupertino_kit::geometry::{Insets, Rect, Size};
 use cupertino_kit::layout::{
@@ -91,7 +91,12 @@ impl<M: 'static> Widget<M> for AlertBody<M> {
 
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
         let size = cx.size();
-        if cx.glass(Glass::regular().radius(self.radius)) {
+        // the glass of an alert; the compositor gives it the alert's drop shadow in place of the variant's own
+        if cx.glass(
+            Glass::regular()
+                .variant(GlassVariant::GlassWindow)
+                .radius(self.radius),
+        ) {
             // with Increase Contrast the glass takes the contrast face, which over a window of the same appearance is
             // that window's tone: the alert marks its edge with the outline its buttons have
             let theme = cx.env().theme.clone();

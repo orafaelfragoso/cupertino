@@ -61,7 +61,9 @@ them on its active output, the one the person works on:
   own: in the dark appearance its tones pressed together, a lower white, a lifted black and a little less saturation; in the
   light one a bright, more saturated sheet, black behind coming through as a light grey and a dark scene as a light tint of
   its own hue, with a bright line just inside the edge; so the panel reads as one calm sheet over any wallpaper) with the
-  panel's corner radius and a thin dark edge;
+  panel's corner radius and a thin dark edge, named as the search results variant at its own size while the panel holds
+  more than its field, and as a platter of the regular variant at the large size while it is the plain search bar (the mode
+  buttons beside it too; `view::enclosure_variant`, `view::BUTTON_VARIANT`), neither adapting to what is behind it;
   the compositor draws the glass's soft shadow outside its shape. Without the desktop's effects it paints `Surface::Menu`'s
   fill and a shadow of its own instead. While the browser shows, the panel fades by giving the glass, the search bar and
   the browser's body each their opacity rather than compositing the whole window as one group, which keeps every frame of

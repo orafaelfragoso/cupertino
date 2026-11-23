@@ -1,5 +1,6 @@
 //! Glass a node asks for ([`PaintCx::glass`]) as the window asks its window system for it: a legacy style alone goes
-//! as the style; a system variant goes with its size class, whether it responds to a press and its tint, the style kept
+//! as the style; a system variant goes with its size class, whether it responds to a press, steps back or draws no shadow
+//! of its own, and its tint, the style kept
 //! for a window system without variants; interactive glass of a style alone is named by the style's own variant so the
 //! compositor can grow it.
 
@@ -186,6 +187,29 @@ fn interactive_glass_of_a_style_is_named_by_the_styles_own_variant() {
         ))
     );
     assert_eq!(region.tint, [0.0; 4]);
+}
+
+#[test]
+fn a_variant_goes_subdued_and_without_its_shadow_when_asked() {
+    let region = region_of(
+        Glass::regular()
+            .variant(GlassVariant::NotificationCenter)
+            .size_class(GlassSize::Medium)
+            .subdued(true)
+            .exclude_shadow(true),
+    );
+    assert_eq!(
+        region.variant,
+        Some((
+            GlassVariant::NotificationCenter,
+            GlassModifiers {
+                size: GlassSize::Medium,
+                subdued: true,
+                exclude_shadow: true,
+                ..GlassModifiers::DEFAULT
+            }
+        ))
+    );
 }
 
 #[test]

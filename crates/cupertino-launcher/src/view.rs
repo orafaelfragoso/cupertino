@@ -39,8 +39,8 @@ use cupertino_kit::controls::{
 };
 use cupertino_kit::core::{
     glass_outline, AccessibleStates, Action, Change, CommandRegistry, Element, Environment, Event,
-    EventCx, Glass, Key, Live, MeasureCx, PaintCx, Phase, Propagation, Role, SemanticsCx, Widget,
-    Window, WindowBackground, WindowKey,
+    EventCx, Glass, GlassSize, GlassVariant, Key, Live, MeasureCx, PaintCx, Phase, Propagation,
+    Role, SemanticsCx, Widget, Window, WindowBackground, WindowKey,
 };
 use cupertino_kit::geometry::{Insets, Point, Rect, Size};
 use cupertino_kit::layout::{
@@ -522,6 +522,21 @@ pub fn enclosure_rect(extent: Size, frame: &Frame) -> Rect {
 pub fn enclosure_radius(frame: &Frame) -> f64 {
     frame.shape.radius * frame.scale.min(frame.scale_y).clamp(0.0, MAX_SCALE)
 }
+
+/// The system variant and size class the enclosure's glass is named by in `frame`, neither adapting to what is behind
+/// it: the plain search bar ([`COLLAPSED_HEIGHT`] tall, the mode buttons beside it) is a platter of the regular glass
+/// at the large size; a panel that holds more below its field is the search results' glass at its own size, with the
+/// soft shadow the compositor draws under it.
+pub fn enclosure_variant(frame: &Frame) -> (GlassVariant, GlassSize) {
+    if frame.shape.height <= COLLAPSED_HEIGHT {
+        (GlassVariant::Regular, GlassSize::Large)
+    } else {
+        (GlassVariant::SearchResults, GlassSize::Dynamic)
+    }
+}
+
+/// The variant and size class of a mode button's glass: the search bar's platter it stands beside.
+pub const BUTTON_VARIANT: (GlassVariant, GlassSize) = (GlassVariant::Regular, GlassSize::Large);
 
 /// Where the panel goes on an output `output` points large: horizontally centred, its top edge at [`TOP_FRACTION`]
 /// of the height.
@@ -1086,6 +1101,7 @@ where
         alpha: frame.alpha,
         blur: frame.blur,
         joins: frame.modes.count > 0,
+        variant: enclosure_variant(frame),
         joined: mode_rects(view, &rect)
             .into_iter()
             .map(|r| (r, r.width() / 2.0))

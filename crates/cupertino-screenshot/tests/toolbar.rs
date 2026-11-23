@@ -5,7 +5,9 @@ use std::num::NonZeroU32;
 use std::sync::Arc;
 
 use cupertino_assets::BUILTIN_FONT;
-use cupertino_kit::core::{Application, Command, RuntimeOptions, Window};
+use cupertino_kit::core::{
+    Application, Command, GlassModifiers, GlassVariant, RuntimeOptions, Window,
+};
 use cupertino_kit::geometry::Rect;
 use cupertino_kit::layout::LayoutDirection;
 use cupertino_kit::platform::{GlassStyle, Timestamp, WindowId, WindowRequest};
@@ -88,6 +90,7 @@ fn options(reduce_transparency: bool) -> RuntimeOptions {
 #[derive(Debug)]
 struct Region {
     glass: Option<GlassStyle>,
+    variant: Option<(GlassVariant, GlassModifiers)>,
     rect: Rect,
     radius: f64,
     alpha: f64,
@@ -125,6 +128,7 @@ fn drawn(reduce_transparency: bool) -> (Vec<Region>, u8) {
                     .iter()
                     .map(|r| Region {
                         glass: r.glass.map(|g| g.style),
+                        variant: r.glass.and_then(|g| g.variant),
                         rect: r.rect,
                         radius: r.radius,
                         alpha: r.alpha,
@@ -146,6 +150,11 @@ fn the_toolbar_lies_on_regular_glass_with_its_corners() {
     assert_eq!(regions.len(), 1, "one glass region: {regions:?}");
     let region = &regions[0];
     assert_eq!(region.glass, Some(GlassStyle::Regular), "regular glass");
+    assert_eq!(
+        region.variant,
+        Some((GlassVariant::Regular, GlassModifiers::DEFAULT)),
+        "named as the regular variant at its own size, not adaptive"
+    );
     assert_eq!(
         region.rect,
         Rect::new(0.0, 0.0, TOOLBAR_SIZE.0, TOOLBAR_SIZE.1)

@@ -8,10 +8,15 @@ use std::num::NonZeroU32;
 use std::sync::Arc;
 
 use cupertino_assets::BUILTIN_FONT;
-use cupertino_kit::core::{Application, Command, Key, Role, RuntimeOptions, Window, WindowKey};
+use cupertino_kit::core::{
+    Application, Command, GlassModifiers, GlassVariant, Key, Role, RuntimeOptions, Window,
+    WindowKey,
+};
 use cupertino_kit::geometry::{Point, Rect, Size};
 use cupertino_kit::layout::LayoutDirection;
-use cupertino_kit::platform::{Mods, MouseButton, PointerEvent, Timestamp, WindowId};
+use cupertino_kit::platform::{
+    GlassStyle, Mods, MouseButton, PointerEvent, Timestamp, WindowId, WindowRequest,
+};
 use cupertino_kit::render::{CpuConfig, CpuRenderer};
 use cupertino_kit::test::{
     Capabilities, FontIndex, ManualClock, PlaceholderIcons, TestDriver, WindowEvent, WindowStates,
@@ -500,4 +505,74 @@ fn a_candidate_picks_when_the_pointer_is_pressed_and_released_on_it() {
     driven.button(window, third.center(), true);
     driven.button(window, third.center(), false);
     assert_eq!(driven.driver.runtime().model().picks, [(6, 1), (6, 2)]);
+}
+
+#[test]
+fn the_switcher_lies_on_regular_glass_and_the_picker_on_menu_glass_without_its_shadow() {
+    let capabilities = Capabilities {
+        app_effects: true,
+        ..Capabilities::default()
+    };
+    let mut driver =
+        TestDriver::<PanelsApp>::new(capabilities, options(), ManualClock::new(Timestamp(0)));
+    driver.run_until_idle(turns()).unwrap();
+    for (_, window) in driver.runtime().windows() {
+        driver
+            .window_system_mut()
+            .configure(window, None, WindowStates::default())
+            .unwrap();
+        driver.run_until_idle(turns()).unwrap();
+    }
+    let windows = driver.runtime().windows();
+    let system = driver.window_system_mut();
+    let glass: Vec<(String, Vec<_>)> = windows
+        .into_iter()
+        .map(|(_, window)| {
+            let title = system.spec(window).unwrap().title.clone();
+            let glass = system
+                .requests(window)
+                .unwrap()
+                .iter()
+                .rev()
+                .find_map(|r| match r {
+                    WindowRequest::Materials(regions) => Some(
+                        regions
+                            .iter()
+                            .filter_map(|r| r.glass)
+                            .map(|g| (g.style, g.variant))
+                            .collect(),
+                    ),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            (title, glass)
+        })
+        .collect();
+    let of = |title: &str| {
+        glass
+            .iter()
+            .find(|(t, _)| t == title)
+            .map(|(_, g)| g.clone())
+            .unwrap_or_else(|| panic!("no window {title}: {glass:?}"))
+    };
+    assert_eq!(
+        of("Input sources"),
+        [(
+            GlassStyle::Regular,
+            Some((GlassVariant::Regular, GlassModifiers::DEFAULT))
+        )]
+    );
+    assert_eq!(
+        of("Accents"),
+        [(
+            GlassStyle::Menu,
+            Some((
+                GlassVariant::Menu,
+                GlassModifiers {
+                    exclude_shadow: true,
+                    ..GlassModifiers::DEFAULT
+                }
+            ))
+        )]
+    );
 }

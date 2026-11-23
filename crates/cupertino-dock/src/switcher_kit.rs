@@ -9,8 +9,10 @@
 use crate::switcher::{HoverGate, Switcher, SwitcherLayout};
 use crate::wm_kit::{self, fill, ImageSource, Look, Part, PointerInput, Rgba, Root};
 use cupertino_kit::core::{
-    AccessibleStates, CommandRegistry, Element, Key, Role, Window, WindowBackground, WindowKey,
+    AccessibleStates, CommandRegistry, Element, Glass, Key, Role, Window, WindowBackground,
+    WindowKey,
 };
+use cupertino_kit::core::{GlassSize, GlassVariant};
 use cupertino_kit::geometry::{Rect, Size};
 use cupertino_kit::platform::{DecorationMode, WindowSpec};
 use cupertino_kit::theme::Surface;
@@ -303,7 +305,7 @@ impl SwitcherSurface {
             wm_kit::kit_rect(r.translate(-layout.panel.x, -layout.panel.y))
         };
         let selected = open.switcher.selected();
-        let mut children = Vec::new();
+        let mut children = vec![body(size, alpha)];
         let selection = local(layout.selection(selected));
         children.push(Element::new(Part {
             rect: selection,
@@ -409,11 +411,8 @@ impl SwitcherSurface {
             },
             shortcuts: CommandRegistry::new(),
             on_close: None,
-            background: WindowBackground::Surface {
-                surface: Surface::Switcher,
-                radius: SwitcherLayout::RADIUS,
-                alpha,
-            },
+            // the body is the first part's glass, which the parts after it lie on
+            background: WindowBackground::None,
             content: Element::new(Root {
                 role: Role::List,
                 name: TITLE.to_owned(),
@@ -432,6 +431,40 @@ impl SwitcherSurface {
 
 /// The selection's fill: the switcher's own colours over its material; over the opaque fill of Reduce Transparency or
 /// Increase Contrast a stronger one, so the selection stays visible.
+/// The panel's body over the whole window of `size` with the panel's corners: the application switcher's glass at the
+/// medium size, not adapting to what is behind it, shown at `alpha` (a group's fade does not reach glass); where the
+/// theme gives the `Switcher` surface no material (Reduce Transparency) or the desktop shows no glass, the surface's
+/// opaque fill in its shape, which the surface's fade reaches.
+fn body<M: Clone + 'static>(size: Size, alpha: f64) -> Element<M> {
+    Element::new(Part {
+        rect: Rect::new(0.0, 0.0, size.width, size.height),
+        role: None,
+        name: String::new(),
+        states: AccessibleStates::default(),
+        click: None,
+        look_key: format!("body:{alpha}"),
+        take_focus: false,
+        place: None,
+        live: false,
+        paint: Box::new(move |cx, _| {
+            let all = Rect::new(0.0, 0.0, cx.size().width, cx.size().height);
+            let theme = cx.env().theme.surface(Surface::Switcher);
+            let glass = Glass::switcher()
+                .variant(GlassVariant::AppSwitcher)
+                .size_class(GlassSize::Medium)
+                .radius(SwitcherLayout::RADIUS)
+                .alpha(alpha);
+            if theme.material.is_some() && cx.glass(glass) {
+                return;
+            }
+            if let Some(c) = theme.fill {
+                fill(cx, all, SwitcherLayout::RADIUS, [c.r, c.g, c.b, c.a]);
+            }
+        }),
+    })
+    .key(Key::from("body"))
+}
+
 fn selection_fill(look: Look) -> Rgba {
     let base = SwitcherLayout::selection_fill(look.dark);
     if look.high_contrast {

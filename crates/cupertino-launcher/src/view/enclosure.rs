@@ -14,6 +14,8 @@ pub(super) struct Enclosure<M> {
     pub(super) blur: f64,
     /// Its glass joins the mode buttons' into one shape where they come close.
     pub(super) joins: bool,
+    /// The system variant and size class its glass is named by ([`super::enclosure_variant`]).
+    pub(super) variant: (GlassVariant, GlassSize),
     /// The mode buttons, in the window, with their corner radii: its edge is not drawn inside them.
     pub(super) joined: Vec<(Rect, f64)>,
     /// Its parts fade themselves at `alpha` ([`Bar`] and the browser's body): the enclosure draws its own edge (and
@@ -68,6 +70,7 @@ impl<M: 'static> Widget<M> for Enclosure<M> {
             old.joins,
             old.layered,
         ) || self.joined != old.joined
+            || self.variant != old.variant
         {
             Change::Paint
         } else {
@@ -94,7 +97,11 @@ impl<M: 'static> Widget<M> for Enclosure<M> {
         let theme = cx.env().theme.clone();
         let dark = theme.preferences.appearance.is_dark();
         // the compositor draws the large panel's glass and its shadow; a window without glass draws both itself
-        let mut material = Glass::large_panel().radius(radius).alpha(alpha);
+        let mut material = Glass::large_panel()
+            .variant(self.variant.0)
+            .size_class(self.variant.1)
+            .radius(radius)
+            .alpha(alpha);
         if self.joins {
             material = material.container(modes::JOIN_CONTAINER, modes::JOIN_SPACING);
         }

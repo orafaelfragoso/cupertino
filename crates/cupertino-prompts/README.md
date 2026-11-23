@@ -200,7 +200,7 @@ question that waits, the keyring before the portal's consent questions, which co
 they before desktop control's question. Each output gets a scrim on the overlay layer (`authentication-scrim`, fading in over
 0.2 s along `Timing::AUTHENTICATION_SCRIM_FADE_IN`, at once with Reduce Motion), and the alert sits above them on the
 active output, where it takes the keyboard exclusively. A click on the scrim does nothing. The alert is 260 points
-wide with 26-point corners on the regular glass, the popover surface's fill where glass is off, and an outline with
+wide with 26-point corners on the glass window variant's glass (the regular glass of an alert, its drop shadow the compositor's), the popover surface's fill where glass is off, and an outline with
 Increase Contrast; the 64-point lock symbol, 13-point text, 28-point capsule buttons 8 points apart, 16 points in.
 
 While the session is locked or isn't logind's active one nothing is shown: an authentication on screen is cancelled

@@ -47,6 +47,7 @@ use std::ops::Range;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, OnceLock};
 
+mod body;
 mod rows;
 
 /// The `app_id` of a bar's window is this followed by the bar's number; the roles give it its layer surface.
@@ -421,12 +422,12 @@ fn join_prompt<M: Clone + 'static>(
         spec: spec(BAR_APP_ID.to_owned(), size),
         shortcuts: CommandRegistry::new(),
         on_close: None,
-        background: WindowBackground::Surface {
-            surface: Surface::Menu,
+        // the body is the menu glass the content lies on
+        background: WindowBackground::None,
+        content: Element::new(body::Body {
             radius: panel::RADIUS,
-            alpha: 1.0,
-        },
-        content,
+            children: vec![content],
+        }),
         popup: Some(Popup {
             parent: bar.window(),
             // `At` hangs the popup off the far corner of the point's one-point square
@@ -502,6 +503,7 @@ fn bar<M: Clone + 'static>(scene: &BarScene<'_>, input: fn(Input) -> M) -> Windo
             WindowBackground::None
         },
         content: Element::new(Root {
+            body: None,
             bar: scene.bar,
             keyboard: true,
             origin: BarPoint::new(0.0, 0.0),
@@ -968,6 +970,8 @@ fn system_mark(px: u32, c: Rgba) -> IconImage {
 /// The root of a bar's window or of one of its menus: it takes the pointer and the keys for the controller before any
 /// node below it, and lays its children out where the controller put them.
 struct Root<M> {
+    /// A menu's body under its rows, with corners of this radius ([`body::paint`]); a bar paints none.
+    body: Option<f64>,
     bar: BarId,
     /// The bar's own root: it holds the window's focus, so it hears the window get the keyboard and lose it.
     keyboard: bool,
@@ -1008,7 +1012,11 @@ impl<M: Clone + 'static> Widget<M> for Root<M> {
     fn update(&self, old: &Self, _: &mut ()) -> Change {
         if self.size != old.size {
             Change::Layout
-        } else if self.name != old.name || self.items != old.items || self.origin != old.origin {
+        } else if self.name != old.name
+            || self.items != old.items
+            || self.origin != old.origin
+            || self.body != old.body
+        {
             Change::Paint
         } else {
             Change::None
@@ -1067,7 +1075,11 @@ impl<M: Clone + 'static> Widget<M> for Root<M> {
         Propagation::Stop
     }
 
-    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        if let Some(radius) = self.body {
+            body::paint(cx, radius);
+        }
+    }
 
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
         cx.role(self.role);

@@ -140,8 +140,8 @@ flag and its Increase Contrast option.
   strength; Reduce Transparency gives the light face black 0.4, white 0.92, white fill 0.1. The control centre shifts
   its face (Increase Contrast: black −0.2 light, white +0.55 dark; Reduce Transparency: blur 10 pt, nothing bent, black
   −0.25 and white −0.11 light, black +0.05, white +0.10 and saturation 0.7 dark). The controls record none. Reduce
-  Motion on every variant: no inner bend, the blur at least 8 pt over levels 1, 1, 0.625, 0.625, four times as wide
-  first for the control and notification centres. The inactive branch (`active: false`, regular base): a frost of
+  Motion on every variant: no inner bend and no bend outside the edge, the blur at least 8 pt over levels 1, 1, 0.625,
+  0.625, four times as wide first for the control and notification centres. The inactive branch (`active: false`, regular base): a frost of
   0.5 pt at full opacity, no ring or drop shadow (a glass window keeps its inactive window shadow), nothing bent
   outside the edge, no bleed and the key and fill light at half strength. The legibility amount `a = 0.5 + density/200`
   (`legibility_amount`; 0.5 changes nothing) raises the regular blur fill's normal opacity linearly towards 1 and its

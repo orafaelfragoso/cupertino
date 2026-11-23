@@ -69,11 +69,12 @@ const REDUCED_MOTION_LEVELS: [f32; BLUR_LEVELS] = [1.0, 1.0, 0.625, 0.625];
 /// How much wider the control centre's and the notification centre's blur is with Reduce Motion (their shared stage).
 pub const REDUCED_MOTION_BLUR_SCALE: f32 = 4.0;
 
-/// The Reduce Motion stage over `p`: no inner bend, and a blur at least [`REDUCED_MOTION_BLUR`] wide over the Reduce
-/// Motion levels, [`REDUCED_MOTION_BLUR_SCALE`] times as wide first for the variants whose recipes take the shared
-/// stage.
+/// The Reduce Motion stage over `p`: no inner bend and no bend outside the edge, and a blur at least
+/// [`REDUCED_MOTION_BLUR`] wide over the Reduce Motion levels, [`REDUCED_MOTION_BLUR_SCALE`] times as wide first for the
+/// variants whose recipes take the shared stage.
 pub(super) fn reduced_motion(p: &mut GlassParams, variant: GlassVariant) {
     p.refraction.height = 0.0;
+    p.refraction.outer_opacity = 0.0;
     if matches!(
         variant,
         GlassVariant::ControlCenter | GlassVariant::NotificationCenter

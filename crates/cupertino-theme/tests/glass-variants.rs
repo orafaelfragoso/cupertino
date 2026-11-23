@@ -243,7 +243,7 @@ fn reduce_transparency_on_regular_glass_takes_the_recorded_optics_and_faces() {
 }
 
 #[test]
-fn reduce_motion_flattens_the_inner_bend_and_widens_the_blur_four_times_for_the_centres() {
+fn reduce_motion_flattens_both_bends_and_widens_the_blur_four_times_for_the_centres() {
     for variant in GlassVariant::ALL {
         if variant == GlassVariant::Identity {
             continue;
@@ -252,6 +252,7 @@ fn reduce_motion_flattens_the_inner_bend_and_widens_the_blur_four_times_for_the_
             let plain = at(variant, dark, 100.0);
             let p = with(variant, dark, 100.0, |m| m.reduce_motion = true);
             assert_eq!(p.refraction.height, 0.0, "{variant:?}");
+            assert_eq!(p.refraction.outer_opacity, 0.0, "{variant:?}");
             assert_eq!(p.blur.level_opacity, [1.0, 1.0, 0.625, 0.625]);
             let scale = match variant {
                 GlassVariant::ControlCenter | GlassVariant::NotificationCenter => 4.0,
@@ -271,6 +272,12 @@ fn reduce_motion_flattens_the_inner_bend_and_widens_the_blur_four_times_for_the_
         .radius,
         8.0
     );
+    // the dock and the app switcher bend what lies outside their edge, but not with Reduce Motion
+    for variant in [GlassVariant::Dock, GlassVariant::AppSwitcher] {
+        assert!(at(variant, false, 100.0).refraction.outer_opacity > 0.0, "{variant:?}");
+        let reduced = with(variant, false, 100.0, |m| m.reduce_motion = true);
+        assert_eq!(reduced.refraction.outer_opacity, 0.0, "{variant:?}");
+    }
 }
 
 #[test]

@@ -13,7 +13,7 @@ use std::sync::Arc;
 use cupertino_geometry::Rect;
 use cupertino_ui_render::CpuFrame;
 
-use crate::platform::GlassStyle;
+use crate::platform::{GlassModifiers, GlassStyle, GlassVariant};
 
 /// A property of a surface layer ([`WindowRequest::Layer`](crate::platform::WindowRequest)).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -110,10 +110,18 @@ pub struct SurfaceLayerLook {
     /// by the others when the layer is the group's first ([`LayerEdge`]); its default draws none. Only where the window system draws edges
     /// ([`Capabilities::surface_layer_edges`](crate::platform::Capabilities::surface_layer_edges)).
     pub edge: LayerEdge,
+    /// The system variant and modifiers the layer's glass is named by in place of [`SurfaceLayerLook::glass`]'s
+    /// style, which a window system without variants draws instead; the compositor takes the modifiers' `active` from
+    /// the window, and grows interactive glass under a press. Nothing without glass.
+    pub variant: Option<(GlassVariant, GlassModifiers)>,
+    /// A straight sRGB colour laid over the face of the layer's glass at its alpha; alpha 0, the default, lays none.
+    /// Nothing without glass.
+    pub tint: [f32; 4],
 }
 
 impl Default for SurfaceLayerLook {
-    /// No glass, a lens that shows what is behind at its size, an even blur, no group, no corners, no mask, no edge.
+    /// No glass, a lens that shows what is behind at its size, an even blur, no group, no corners, no mask, no edge,
+    /// no variant and no tint.
     fn default() -> SurfaceLayerLook {
         SurfaceLayerLook {
             glass: None,
@@ -123,6 +131,8 @@ impl Default for SurfaceLayerLook {
             radius: 0.0,
             masks: false,
             edge: LayerEdge::NONE,
+            variant: None,
+            tint: [0.0; 4],
         }
     }
 }

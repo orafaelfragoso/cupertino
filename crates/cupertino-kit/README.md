@@ -6,7 +6,7 @@ an application names, one by one ([Public API](#public-api)), and it has a `prel
 family's `Entry`) the file chooser's model of `cupertino-ui-files`. The `test` feature, enabled only in
 dev-dependencies, adds `kit::test`: the headless backend and what a driver is built from. MPL-2.0.
 
-A node is glass when its `paint` calls `PaintCx::glass` (`Glass` and `GlassStyle` are in the `prelude`): the compositor
+A node is glass when its `paint` calls `PaintCx::glass` (`Glass`, `GlassStyle` and `GlassVariant` are in the `prelude`; `core` has `GlassCorners`, `GlassModifiers` and `GlassSize`): the compositor
 draws the glass under it, and nodes in the same container merge into one shape (`cupertino-ui-core`, *Glass*):
 
 ```rust

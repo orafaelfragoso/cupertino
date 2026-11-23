@@ -1,5 +1,6 @@
 //! Typed wrapper of `cupertino_backdrop_v1`: a material the server draws below a surface.
 
+use crate::app::glass_variant::{valid_tint, VariantGlass};
 use crate::app::{AppEvent, Error};
 use crate::State;
 use cupertino_app_protocols::client::app_effects::cupertino_backdrop_v1::{
@@ -222,6 +223,52 @@ impl Backdrop {
         Ok(())
     }
 
+    /// Whether the server takes glass named by its system variant and tinted ([`Self::set_glass_variant`],
+    /// [`Self::set_glass_tint`], version 23).
+    pub fn takes_glass_variants(&self) -> bool {
+        self.proxy.version() >= VARIANT_VERSION
+    }
+
+    /// Draw the backdrop as glass of a system variant, its size class and modifiers, joined into `container` as
+    /// [`Self::set_glass`] joins it. The server resolves it with the window's activation, and grows interactive glass
+    /// under a press. A server before version 23 draws [`VariantGlass::fallback_style`] instead. Errors on a negative
+    /// or non-finite spacing, which the server would reject as a protocol error.
+    pub fn set_glass_variant(
+        &self,
+        glass: VariantGlass,
+        container: u32,
+        spacing: f64,
+    ) -> Result<(), Error> {
+        if !(spacing.is_finite() && spacing >= 0.0) {
+            return Err(Error::InvalidGlass);
+        }
+        if !self.takes_glass_variants() {
+            return self.set_glass(glass.fallback_style(), container, spacing);
+        }
+        self.proxy.set_glass_variant(
+            glass.wire_variant(),
+            glass.wire_modifiers(),
+            glass.wire_size(),
+            container,
+            spacing,
+        );
+        Ok(())
+    }
+
+    /// Lay the straight sRGB colour `rgba` (each channel 0 to 1) over the face of the backdrop's glass at its alpha;
+    /// alpha 0 lays none. Errors on a channel outside 0 to 1 or not finite, which the server would reject as a protocol
+    /// error. A server before version 23 tints nothing and is sent nothing.
+    pub fn set_glass_tint(&self, rgba: [f64; 4]) -> Result<(), Error> {
+        if !valid_tint(rgba) {
+            return Err(Error::InvalidGlass);
+        }
+        if self.takes_glass_variants() {
+            let [r, g, b, a] = rgba;
+            self.proxy.set_glass_tint(r, g, b, a);
+        }
+        Ok(())
+    }
+
     /// Opacity of the whole backdrop, 0 to 1.
     pub fn set_alpha(&self, alpha: f64) -> Result<(), Error> {
         if !(0.0..=1.0).contains(&alpha) {
@@ -305,6 +352,8 @@ const TOOLBAR_VERSION: u32 = 19;
 const MENU_VERSION: u32 = 20;
 /// The version of `cupertino_backdrop_v1` that has `set_blur_ramp`.
 const BLUR_RAMP_VERSION: u32 = 22;
+/// The version of `cupertino_backdrop_v1` that has `set_glass_variant` and `set_glass_tint`.
+pub(crate) const VARIANT_VERSION: u32 = 23;
 
 /// The wire style of the menu on a server of `version`: one before [`MENU_VERSION`] draws it as dense glass (regular
 /// glass before [`DENSE_VERSION`]).

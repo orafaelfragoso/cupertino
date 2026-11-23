@@ -8,7 +8,8 @@ pub enum Error {
     InvalidShape,
     /// A backdrop alpha outside 0 to 1.
     InvalidAlpha,
-    /// A glass spacing that is negative or not finite.
+    /// A glass spacing that is negative or not finite, a lens outside 1 to 4, or a glass tint or edge channel outside 0
+    /// to 1.
     InvalidGlass,
     /// A backdrop blur weight below 0, above 1 or not finite.
     InvalidRamp,

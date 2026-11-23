@@ -485,13 +485,12 @@ pub fn layer_pieces_with(
                 ));
             }
         }
-        let Some((style, lens)) = l.glass.filter(|_| anchor) else {
+        let Some((look, lens)) = l.glass.filter(|_| anchor) else {
             continue;
         };
         let spec = GlassSpec {
-            style,
-            container: l.group,
-            spacing: if l.group == 0 { 0.0 } else { l.spacing },
+            tint: l.tint,
+            ..GlassSpec::of_look(look, l.group, if l.group == 0 { 0.0 } else { l.spacing })
         };
         // a group's shapes as shown, front to back as backdrops are listed, each at its layer's opacity; the glass is cut
         // to the window, and a shape too far out of it to reach in is left out
@@ -504,6 +503,7 @@ pub fn layer_pieces_with(
                 alpha: 1.0,
                 glass: Some(spec),
                 blur_ramp: [1.0, 1.0],
+                owner: Some(parent.clone()),
             }]
         } else {
             group_areas(&layers, l.group, place.opacity, place.origin)
@@ -517,6 +517,7 @@ pub fn layer_pieces_with(
                     alpha,
                     glass: Some(spec),
                     blur_ramp: [1.0, 1.0],
+                    owner: Some(parent.clone()),
                 })
                 .collect()
         };

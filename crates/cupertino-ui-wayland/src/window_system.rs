@@ -244,19 +244,21 @@ fn set_look(
     name: &str,
     glass: Option<GlassRegion>,
 ) -> Result<(), cupertino_wayland_client::app::Error> {
-    let glass = glass.or_else(|| {
-        GlassStyle::of_material(name).map(|style| GlassRegion {
-            style,
-            container: 0,
-            spacing: 0.0,
-        })
-    });
-    match glass {
-        Some(g) => backdrop.set_glass(protocol_style(g.style), g.container, g.spacing),
-        None => {
-            backdrop.set_material(name);
-            Ok(())
-        }
+    let glass =
+        glass.or_else(|| GlassStyle::of_material(name).map(|s| GlassRegion::of_style(s, 0, 0.0)));
+    let Some(g) = glass else {
+        backdrop.set_material(name);
+        return Ok(());
+    };
+    // a compositor without variants draws the style, untinted
+    backdrop.set_glass_tint(g.tint.map(f64::from))?;
+    match g.variant.filter(|_| backdrop.takes_glass_variants()) {
+        Some(variant) => backdrop.set_glass_variant(
+            crate::glass_wire::protocol_variant(variant),
+            g.container,
+            g.spacing,
+        ),
+        None => backdrop.set_glass(protocol_style(g.style), g.container, g.spacing),
     }
 }
 

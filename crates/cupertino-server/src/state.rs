@@ -871,6 +871,8 @@ pub struct Cupertino {
     pub screenshot_each_output: bool,
     /// The screenshots of [`Cupertino::screenshot_each_output`] still to write, by output.
     pub output_screenshots: Vec<(OutputId, std::path::PathBuf)>,
+    /// The press interactive glass grows under ([`crate::glass_press`]).
+    pub glass_press: crate::glass_press::GlassPress,
     /// Replaces the clock for the model and animations (deterministic tests, frame stepping).
     pub fixed_time: Option<f64>,
     /// Per-frame timings for the frame-rate benchmark (`--frame-stats`).
@@ -1223,6 +1225,7 @@ impl Cupertino {
             exit_after_screenshot: false,
             screenshot_each_output: false,
             output_screenshots: Vec::new(),
+            glass_press: Default::default(),
             fixed_time: None,
             frame_stats: None,
             drm_trace: None,

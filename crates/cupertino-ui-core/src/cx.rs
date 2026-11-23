@@ -6,7 +6,7 @@ use crate::paint::NodeMaterial;
 use crate::platform::{BlurRamp, CursorShape, GlassRegion, GlassStyle, Timestamp};
 use crate::route::Placement;
 use crate::widget::Change;
-use crate::{Environment, Key, NodeId, Phase, WindowKey};
+use crate::{Environment, Glass, GlassCorners, Key, NodeId, Phase, WindowKey};
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_theme::ui::Surface;
 use cupertino_ui_render::{
@@ -712,11 +712,7 @@ impl PaintCx<'_> {
                 1.0
             },
             // a glass surface is glass on its own
-            glass: glass_style(name).map(|style| GlassRegion {
-                style,
-                container: 0,
-                spacing: 0.0,
-            }),
+            glass: glass_style(name).map(|style| GlassRegion::of_style(style, 0, 0.0)),
             blur_ramp: BlurRamp::EVEN,
         });
         self.take_foreground();
@@ -769,7 +765,7 @@ impl PaintCx<'_> {
         *self.asked_material = true;
         *self.lays_material = true;
         let finite = |v: f64, otherwise: f64| if v.is_finite() { v } else { otherwise };
-        let (name, style) = (glass.style.material(), glass.style);
+        let name = glass.style.material();
         *self.material = self.materials.then(|| NodeMaterial {
             name,
             radius: match glass.corners {
@@ -779,11 +775,7 @@ impl PaintCx<'_> {
             capsule: glass.corners == GlassCorners::Capsule,
             in_layer,
             alpha: finite(glass.alpha, 1.0).clamp(0.0, 1.0),
-            glass: Some(GlassRegion {
-                style,
-                container: glass.container,
-                spacing: finite(glass.spacing, 0.0).max(0.0),
-            }),
+            glass: Some(glass.region(finite(glass.spacing, 0.0).max(0.0))),
             blur_ramp: BlurRamp::EVEN,
         });
         self.take_foreground();
@@ -878,206 +870,6 @@ pub fn glass_outline(rect: Rect, radius: f64, outset: f64) -> Shape {
         extent,
         exponent,
         outset,
-    }
-}
-
-/// The corners of a glass node.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum GlassCorners {
-    /// Corners of this radius in points.
-    Radius(f64),
-    /// Round ends: the radius is half the node's shorter side, whatever its size.
-    Capsule,
-}
-
-/// What [`PaintCx::glass`] puts under a node: the style, the corners, the container it joins and its opacity.
-///
-/// ```
-/// use cupertino_ui_core::{Glass, GlassCorners, GlassStyle};
-///
-/// // two capsule buttons of a toolbar that merge where they are less than 8 points apart
-/// let button = Glass::regular().capsule().container(1, 8.0);
-/// assert_eq!(button.corners, GlassCorners::Capsule);
-/// // a clear panel on its own, fading in
-/// let panel = Glass::clear().radius(16.0).alpha(0.5);
-/// assert_eq!((panel.style, panel.container), (GlassStyle::Clear, 0));
-/// ```
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Glass {
-    pub style: GlassStyle,
-    pub corners: GlassCorners,
-    /// Nodes of a window with the same nonzero container join into one shape; 0 keeps the node on its own.
-    pub container: u32,
-    /// How far the outlines of a container blend into each other, in points; 0 joins them with a hard edge.
-    pub spacing: f64,
-    /// From 0 (hidden) to 1.
-    pub alpha: f64,
-}
-
-impl Glass {
-    /// Regular glass with square corners, on its own, opaque.
-    pub fn regular() -> Self {
-        Self {
-            style: GlassStyle::Regular,
-            corners: GlassCorners::Radius(0.0),
-            container: 0,
-            spacing: 0.0,
-            alpha: 1.0,
-        }
-    }
-
-    /// Clear glass with square corners, on its own, opaque.
-    pub fn clear() -> Self {
-        Self {
-            style: GlassStyle::Clear,
-            ..Self::regular()
-        }
-    }
-
-    /// The glass of a large floating panel with square corners, on its own, opaque: regular glass toned further
-    /// towards the middle, with a soft drop shadow the compositor draws below it.
-    pub fn large_panel() -> Self {
-        Self {
-            style: GlassStyle::LargePanel,
-            ..Self::regular()
-        }
-    }
-
-    /// The glass of a dense floating surface with square corners, on its own, opaque: regular glass with a wider blur
-    /// over a washed-out face.
-    pub fn dense() -> Self {
-        Self {
-            style: GlassStyle::Dense,
-            ..Self::regular()
-        }
-    }
-
-    /// The glass of the tiles of a panel of modules with square corners, on its own, opaque: the clear face under a
-    /// wide blur and a strong bending edge.
-    pub fn module() -> Self {
-        Self {
-            style: GlassStyle::Module,
-            ..Self::regular()
-        }
-    }
-
-    /// The glass of a notification card with square corners, on its own, opaque: the clear face over a wide blur and a
-    /// blur fill, with a faint ring shadow inside its outline.
-    pub fn card() -> Self {
-        Self {
-            style: GlassStyle::Card,
-            ..Self::regular()
-        }
-    }
-
-    /// The glass of a level's track with square corners, on its own, opaque: no blur, a bending edge that follows the
-    /// track's height and a ring shadow inside its outline.
-    pub fn track() -> Self {
-        Self {
-            style: GlassStyle::Track,
-            ..Self::regular()
-        }
-    }
-
-    /// The glass of a small popover over a floating bar with square corners, on its own, opaque: a wide soft blur fill,
-    /// a strong bending edge and a thin line of light along its top and bottom edges.
-    pub fn popover() -> Self {
-        Self {
-            style: GlassStyle::Popover,
-            ..Self::regular()
-        }
-    }
-
-    /// The glass of a wide floating panel of large icons (the application switcher) with square corners, on its own,
-    /// opaque: a blur of about a point, a strong bending edge and no shadow.
-    pub fn switcher() -> Self {
-        Self {
-            style: GlassStyle::Switcher,
-            ..Self::regular()
-        }
-    }
-
-    /// The glass of a window's sidebar with square corners, on its own, opaque: a wide soft blur fill over a light pane
-    /// in the light appearance and a dark, nearly grey one in the dark.
-    pub fn sidebar() -> Self {
-        Self {
-            style: GlassStyle::Sidebar,
-            ..Self::regular()
-        }
-    }
-
-    /// The module glass of a tile that steps back, with square corners, on its own, opaque: twice the module's blur and
-    /// a quieter face.
-    pub fn subdued_module() -> Self {
-        Self {
-            style: GlassStyle::SubduedModule,
-            ..Self::regular()
-        }
-    }
-
-    /// The glass of a small card of content over the desktop with square corners, on its own, opaque: a faint blur under
-    /// a wide soft blur fill and a veiled face.
-    pub fn snippet() -> Self {
-        Self {
-            style: GlassStyle::Snippet,
-            ..Self::regular()
-        }
-    }
-
-    /// Clear glass veiled black from a fifth at its top to fully at its bottom, with square corners, on its own, opaque.
-    pub fn veiled() -> Self {
-        Self {
-            style: GlassStyle::Veiled,
-            ..Self::regular()
-        }
-    }
-
-    /// The glass of a window's toolbar controls with square corners, on its own, opaque: regular glass with a face
-    /// lifted a little further and a thin line of light along its top and bottom edges.
-    pub fn toolbar() -> Self {
-        Self {
-            style: GlassStyle::Toolbar,
-            ..Self::regular()
-        }
-    }
-
-    /// The glass of a menu with square corners, on its own, opaque: a wide blur under a face that tones the backdrop
-    /// into a narrow band, with a thin line of light along its top and bottom edges.
-    pub fn menu() -> Self {
-        Self {
-            style: GlassStyle::Menu,
-            ..Self::regular()
-        }
-    }
-
-    /// Corners of `radius` points.
-    pub fn radius(self, radius: f64) -> Self {
-        Self {
-            corners: GlassCorners::Radius(radius),
-            ..self
-        }
-    }
-
-    /// Round ends.
-    pub fn capsule(self) -> Self {
-        Self {
-            corners: GlassCorners::Capsule,
-            ..self
-        }
-    }
-
-    /// Join container `id` (nonzero), blending into its other shapes over `spacing` points.
-    pub fn container(self, id: u32, spacing: f64) -> Self {
-        Self {
-            container: id,
-            spacing,
-            ..self
-        }
-    }
-
-    /// Draw at `alpha`, from 0 (hidden) to 1.
-    pub fn alpha(self, alpha: f64) -> Self {
-        Self { alpha, ..self }
     }
 }
 

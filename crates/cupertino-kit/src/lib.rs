@@ -48,10 +48,10 @@ pub mod core {
         glass_outline, next_resource_id, session_scroll_bars, AccessibleStates, AccessibleValue,
         Action, ActionData, Application, Change, Checked, Command, CommandRegistry, Drag,
         DragPreview, DropOver, DropPlace, DropTarget, Dropped, Element, Environment, Event,
-        EventCx, ExitWhen, FocusTarget, Glass, GlassStyle, IconImage, Icons, IdleCx, Key, Live,
-        MeasureCx, Menus, PaintCx, Phase, Popup, PopupAnchor, Propagation, Relation, RendererClass,
-        Role, SemanticsCx, Shortcut, SurfaceLayerMark, Widget, Window, WindowBackground, WindowKey,
-        MAX_MATERIALS,
+        EventCx, ExitWhen, FocusTarget, Glass, GlassCorners, GlassModifiers, GlassSize, GlassStyle,
+        GlassVariant, IconImage, Icons, IdleCx, Key, Live, MeasureCx, Menus, PaintCx, Phase, Popup,
+        PopupAnchor, Propagation, Relation, RendererClass, Role, SemanticsCx, Shortcut,
+        SurfaceLayerMark, Widget, Window, WindowBackground, WindowKey, MAX_MATERIALS,
     };
 
     /// The runtime's options, which [`crate::app::run_on_with`] and [`crate::app::run_lock_screen_on_with`] hand a
@@ -178,7 +178,7 @@ pub mod prelude {
     pub use cupertino_ui_core::layout::{Align, Axis};
     pub use cupertino_ui_core::platform::WindowSpec;
     pub use cupertino_ui_core::{
-        Application, Command, Element, Glass, GlassStyle, Key, RendererClass, Window,
+        Application, Command, Element, Glass, GlassStyle, GlassVariant, Key, RendererClass, Window,
         WindowBackground, WindowKey,
     };
 }

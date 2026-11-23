@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use wire::{Harness, Offer};
 
 /// A frame of a window 32 points square with one surface layer of `look`.
-fn frame(look: SurfaceLayerLook) -> Submission {
+pub(crate) fn frame(look: SurfaceLayerLook) -> Submission {
     let text = Arc::new(TextSystem::new(FontIndex::new(), ""));
     let renderer = || {
         CpuRenderer::new(

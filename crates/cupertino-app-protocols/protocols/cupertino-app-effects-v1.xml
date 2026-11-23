@@ -12,7 +12,7 @@
     arrangement or the session; those roles are in the private cupertino_shell_v1.
   </description>
 
-  <interface name="cupertino_app_effects_v1" version="22">
+  <interface name="cupertino_app_effects_v1" version="23">
     <description summary="effects for the client's own surfaces">
       Global singleton, offered to every client. Version 2 adds get_menu, version 3 the menu_reader
       event of cupertino_app_menu_v1, version 4 set_disabled_controls, version 5 the session_lock
@@ -21,7 +21,7 @@
       option of cupertino_appearance_v1, version 9 its steady_caret display option, version 10 the large_panel glass
       style of cupertino_backdrop_v1, version 11 the backdrops of a subsurface (get_backdrop), version 12 the bar glass
       style of cupertino_backdrop_v1, version 13 its dense and module glass styles, version 14 its set_shape_fixed
-      request, version 15 its card and track glass styles, version 16 its popover glass style, version 17 its switcher glass style, version 18 its sidebar, subdued_module, snippet and veiled glass styles, version 19 its toolbar glass style, version 20 its menu glass style, version 21 the buffers_lost event of cupertino_appearance_v1, version 22 the set_blur_ramp request of cupertino_backdrop_v1; the other interfaces of the protocol are unchanged in each.
+      request, version 15 its card and track glass styles, version 16 its popover glass style, version 17 its switcher glass style, version 18 its sidebar, subdued_module, snippet and veiled glass styles, version 19 its toolbar glass style, version 20 its menu glass style, version 21 the buffers_lost event of cupertino_appearance_v1, version 22 the set_blur_ramp request of cupertino_backdrop_v1, version 23 its set_glass_variant and set_glass_tint requests; the other interfaces of the protocol are unchanged in each.
     </description>
 
     <enum name="error">
@@ -145,7 +145,7 @@
     </request>
   </interface>
 
-  <interface name="cupertino_backdrop_v1" version="22">
+  <interface name="cupertino_backdrop_v1" version="23">
     <description summary="a material region below a surface">
       All state is double-buffered: it applies on the next wl_surface.commit of the surface the
       backdrop was created for, together with that commit's buffer, so the backdrop and the content
@@ -156,8 +156,9 @@
       <entry name="unknown_material" value="0" summary="the material name is not a recipe of the server's design tokens"/>
       <entry name="invalid_shape" value="1" summary="negative width or height, or a negative corner radius"/>
       <entry name="invalid_alpha" value="2" summary="alpha outside 0 to 1"/>
-      <entry name="invalid_glass" value="3" summary="unknown glass style or a negative spacing" since="6"/>
+      <entry name="invalid_glass" value="3" summary="unknown glass style, variant, modifier or size class, or a negative spacing" since="6"/>
       <entry name="invalid_ramp" value="4" summary="a blur weight below 0 or above 1" since="22"/>
+      <entry name="invalid_tint" value="5" summary="a tint channel below 0, above 1 or not finite" since="23"/>
     </enum>
 
     <enum name="glass_style" since="6">
@@ -177,6 +178,50 @@
       <entry name="veiled" value="13" summary="clear glass under a soft blur fill, veiled black from a fifth at its top to fully at its bottom" since="18"/>
       <entry name="toolbar" value="14" summary="the glass of a window's toolbar controls: regular glass with a face lifted a little further, a thin line of light along its top edge and a fainter one along its bottom over a soft glow, and no rim or edge line of its own" since="19"/>
       <entry name="menu" value="15" summary="the glass of a menu: a wide blur under a face that tones the backdrop into a narrow band, a pale wash in the light appearance and a mid-dark pane in the dark one, with a thin line of light along its top and bottom edges" since="20"/>
+    </enum>
+
+    <enum name="glass_variant" since="23">
+      <description summary="the glass variants of the system">
+        Each variant is a recipe built on the regular glass or on the clear glass, with stages of its
+        own. The modifiers (glass_modifier), the size class (size_class) and whether the window is
+        active change how it resolves.
+      </description>
+      <entry name="regular" value="0" summary="the regular glass of controls, bars and panels with text on them"/>
+      <entry name="clear" value="1" summary="the clear glass, nearly unblurred and untinted, for controls over media"/>
+      <entry name="dock" value="2" summary="the dock's bar: clear glass with a slightly wider blur, a face of its own and a bend outside its edge"/>
+      <entry name="app_icons" value="3" summary="the glass of application icons"/>
+      <entry name="control_center" value="4" summary="the modules of the control centre: clear glass with the module face, alike in both appearances"/>
+      <entry name="notification_center" value="5" summary="the cards of the notification centre: regular glass"/>
+      <entry name="sidebar" value="6" summary="a floating sidebar: regular glass with the sidebar's face"/>
+      <entry name="abutted_sidebar" value="7" summary="a window's sidebar against its leading edge: regular glass made planar, with no light, ring or bend outside its edge"/>
+      <entry name="inspector" value="8" summary="a window's inspector against its trailing edge: the abutted sidebar at the other edge"/>
+      <entry name="cartouche_popover" value="9" summary="a small popover, the dock's labels and its stack grid: regular glass with a narrow fixed bend"/>
+      <entry name="menu" value="10" summary="a menu: regular glass resolved at the menu's own size, with a menu's window shadow"/>
+      <entry name="tab" value="11" summary="a selected tab or toolbar segment: regular glass under a white fill"/>
+      <entry name="glass_window" value="12" summary="an alert or a sheet: regular glass with a window's drop shadow"/>
+      <entry name="control" value="13" summary="a control's lens, a held switch knob: no blur, a face and a ring of its own"/>
+      <entry name="slider" value="14" summary="a slider knob's lens: the control glass bending harder, with a deeper ring"/>
+      <entry name="loupe" value="15" summary="the magnifying loupe: the control glass with a lower, softer ring"/>
+      <entry name="search_results" value="16" summary="the launcher's results panel"/>
+      <entry name="app_switcher" value="17" summary="the application switcher: the dock's recipe with a wider blur"/>
+      <entry name="focus_border" value="18" summary="the glass behind a focus ring"/>
+      <entry name="entry_field" value="19" summary="a text field: regular glass with no blur"/>
+      <entry name="toolbar_item" value="20" summary="a window toolbar's item capsule: regular glass with a fifth of the blur, a fixed bend and a control border"/>
+      <entry name="identity" value="21" summary="no glass: what lies behind the shape, as it is"/>
+    </enum>
+
+    <enum name="glass_modifier" bitfield="true" since="23">
+      <entry name="subdued" value="1" summary="the glass steps back behind what is in front of it"/>
+      <entry name="exclude_shadow" value="2" summary="no drop shadow from the glass: its surface draws its own"/>
+      <entry name="interactive" value="4" summary="the glass responds to a press: see set_glass_variant"/>
+      <entry name="adaptive" value="8" summary="the glass adapts to what lies behind it"/>
+    </enum>
+
+    <enum name="size_class" since="23">
+      <entry name="dynamic" value="0" summary="the shape's own shorter side"/>
+      <entry name="minimum" value="1" summary="the smallest size, a control's"/>
+      <entry name="medium" value="2" summary="the middle size, a card's"/>
+      <entry name="large" value="3" summary="the large size, where the regular blur is widest"/>
     </enum>
 
     <request name="destroy" type="destructor">
@@ -233,7 +278,7 @@
         Glass backdrops of the same surface with the same nonzero container join into one shape:
         their outlines blend into each other over spacing logical points, and 0 joins them with a
         hard edge; the server blends over at most 64 points. Container 0 keeps the backdrop on its
-        own. The last of set_glass and set_material decides how the backdrop draws. Posts
+        own. The last of set_glass, set_glass_variant and set_material decides how the backdrop draws. Posts
         invalid_glass for an unknown style or a negative spacing.
       </description>
       <arg name="style" type="uint" enum="glass_style"/>
@@ -253,6 +298,51 @@
       </description>
       <arg name="top" type="fixed"/>
       <arg name="bottom" type="fixed"/>
+    </request>
+
+    <request name="set_glass_variant" since="23">
+      <description summary="draw the backdrop as glass of a system variant">
+        As set_glass, with the glass named by its system variant, its modifiers and the size class
+        its size-dependent values resolve at, in place of a style; container and spacing join
+        backdrops as set_glass does. Each style of set_glass draws as one variant with modifiers,
+        so a backdrop asked for as that variant draws as the style does in an active window. The last of set_glass,
+        set_glass_variant and set_material decides how the backdrop draws.
+
+        The server resolves the variant with its window's state: while the window the surface
+        belongs to is not the active one (its xdg_toplevel has no activated state), a variant
+        on the regular glass takes its inactive branch. Glass of set_glass keeps the active
+        recipe whatever the window's state.
+
+        An interactive backdrop (the interactive modifier) responds to a press: while a pointer
+        button pressed over the backdrop's surface, inside its shape, is held, the server grows
+        the glass about the centre of its shape by about 1.4 percent along a spring on its clock,
+        overshooting a little, and on the release lets it back with a small undershoot; the
+        corners are circular while it is deformed, and its filter is the same. A drag after the
+        press does not stretch it. While reduce_motion is on (cupertino_appearance_v1) the glass
+        does not grow. The shape the client set is what it hit-tests against.
+
+        Posts invalid_glass for an unknown variant, size class or modifier bit, or a negative
+        spacing.
+      </description>
+      <arg name="variant" type="uint" enum="glass_variant"/>
+      <arg name="modifiers" type="uint" enum="glass_modifier"/>
+      <arg name="size_class" type="uint" enum="size_class"/>
+      <arg name="container" type="uint"/>
+      <arg name="spacing" type="fixed"/>
+    </request>
+
+    <request name="set_glass_tint" since="23">
+      <description summary="lay a colour over the face of the backdrop's glass">
+        A straight sRGB colour, red, green and blue from 0 to 1, laid over the face of the
+        backdrop's glass in normal blending at alpha, after the face's own fill and before its
+        rim; alpha 0 (the initial state) lays none. A material backdrop draws no tint. Glass
+        backdrops joined in a container each keep their own tint. Posts invalid_tint for a
+        channel below 0, above 1 or not finite.
+      </description>
+      <arg name="red" type="fixed"/>
+      <arg name="green" type="fixed"/>
+      <arg name="blue" type="fixed"/>
+      <arg name="alpha" type="fixed"/>
     </request>
 
     <enum name="tone" since="7">

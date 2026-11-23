@@ -97,7 +97,7 @@ fn a_connection_reports_what_the_server_offers_and_what_it_bound() {
         .collect();
     assert_eq!(
         listed,
-        [("cupertino_layers_v1", 6), ("cupertino_scroll_v1", 1)]
+        [("cupertino_layers_v1", 7), ("cupertino_scroll_v1", 1)]
     );
 }
 

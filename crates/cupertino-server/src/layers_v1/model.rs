@@ -2,10 +2,10 @@
 
 use std::sync::{Arc, Mutex};
 
+use crate::glass_look::GlassLook;
 use cupertino_animation::LayerCurve;
 use cupertino_animation::LayerProperty;
 use cupertino_protocols::server::layers::cupertino_layer_v1::CupertinoLayerV1;
-use cupertino_theme::GlassStyle;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::wayland::compositor::with_states;
 
@@ -84,7 +84,7 @@ pub struct LayerModel {
     sized: [bool; 2],
     /// Whether the layer had an animation running or waiting at the last tick, for `settled`.
     pub(super) busy: bool,
-    pub glass: Option<(GlassStyle, f64)>,
+    pub glass: Option<(GlassLook, f64)>,
     pub blend: BlendRole,
     pub raised: bool,
     pub pointer_lit: bool,
@@ -96,6 +96,8 @@ pub struct LayerModel {
     pub spacing: f64,
     /// The line along the outside of its glass.
     pub edge: GlassEdge,
+    /// The straight sRGB colour laid over its glass's face at its alpha (`set_glass_tint`); transparent for none.
+    pub tint: [f32; 4],
 }
 
 impl LayerModel {
@@ -128,6 +130,7 @@ impl LayerModel {
             group: 0,
             spacing: 0.0,
             edge: GlassEdge::default(),
+            tint: [0.0; 4],
         }
     }
 
@@ -388,6 +391,7 @@ impl LayerModel {
             Op::Placeholder(c) => self.placeholder = c,
             Op::Group(group, spacing) => (self.group, self.spacing) = (group, spacing),
             Op::Edge(edge) => self.edge = edge,
+            Op::Tint(tint) => self.tint = tint,
         }
     }
 }

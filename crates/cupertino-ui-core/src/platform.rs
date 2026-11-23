@@ -18,6 +18,7 @@ pub use cupertino_keyboard::modifiers::Mods;
 
 mod surface_layers;
 pub use cupertino_animation::{CubicBezier, LayerCurve};
+pub use cupertino_theme::{GlassModifiers, GlassSize, GlassVariant};
 pub use cupertino_ui_render::Color;
 pub use surface_layers::{
     surface_layer_size, BlurRamp, LayerChange, LayerEdge, LayerProperty, SurfaceLayer,
@@ -378,16 +379,61 @@ impl GlassStyle {
         .into_iter()
         .find(|s| s.material() == name)
     }
+
+    /// The system variant and modifiers this style draws as ([`cupertino_theme::GlassStyle::variant`]).
+    pub fn variant(self) -> (GlassVariant, GlassModifiers) {
+        use cupertino_theme::GlassStyle as Theme;
+        let style = match self {
+            Self::Regular => Theme::Regular,
+            Self::Clear => Theme::Clear,
+            Self::LargePanel => Theme::LargePanel,
+            Self::Bar => Theme::Bar,
+            Self::Dense => Theme::Dense,
+            Self::Module => Theme::Module,
+            Self::Card => Theme::Card,
+            Self::Track => Theme::Track,
+            Self::Popover => Theme::Popover,
+            Self::Switcher => Theme::Switcher,
+            Self::Sidebar => Theme::Sidebar,
+            Self::SubduedModule => Theme::SubduedModule,
+            Self::Snippet => Theme::Snippet,
+            Self::Veiled => Theme::Veiled,
+            Self::Toolbar => Theme::Toolbar,
+            Self::Menu => Theme::Menu,
+        };
+        style.variant()
+    }
 }
 
 /// How a [`MaterialRegion`] draws as glass: regions of a window with the same nonzero `container` join into one shape
 /// whose outlines blend into each other over `spacing` points (0 joins them with a hard edge); container 0 keeps the
 /// region on its own.
+///
+/// `variant`, when set, names the glass by its system variant and modifiers in place of the style, which a window
+/// system without variants draws instead; `tint` is a straight sRGB colour laid over the face at its alpha.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GlassRegion {
     pub style: GlassStyle,
     pub container: u32,
     pub spacing: f64,
+    /// The system variant and its modifiers ([`crate::Glass::variant`], or the style's own when the glass is
+    /// interactive); `None` draws the style. The window system takes [`GlassModifiers::active`] from the window.
+    pub variant: Option<(GlassVariant, GlassModifiers)>,
+    /// Straight sRGB red, green, blue and alpha; alpha 0 lays no tint.
+    pub tint: [f32; 4],
+}
+
+impl GlassRegion {
+    /// Glass of `style` in `container`, blending over `spacing` points, untinted.
+    pub fn of_style(style: GlassStyle, container: u32, spacing: f64) -> Self {
+        Self {
+            style,
+            container,
+            spacing,
+            variant: None,
+            tint: [0.0; 4],
+        }
+    }
 }
 
 /// What the text and symbols over a glass region are drawn with: the compositor measures the face of a small glass

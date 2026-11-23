@@ -177,6 +177,8 @@ pub struct SceneParams<'a> {
     pub cursor: CursorPlan,
     /// Pointer position in the global logical space.
     pub pointer: Point<f64, Logical>,
+    /// The press interactive glass grows under.
+    pub glass_press: &'a crate::glass_press::GlassPress,
     pub drag_icon: Option<(WlSurface, Point<i32, Logical>)>,
     /// The surface that has the keyboard: a session panel there casts an active alert's shadow.
     pub keyboard_focus: Option<WlSurface>,
@@ -862,6 +864,7 @@ fn window_elements(
     ));
     // the backdrops of its subsurfaces lie between the slices of the content, each reading the window below it
     out.extend(tree_pieces(p, tree, origin_local, |p, areas, bound| {
+        let bound = compose::pressed_bound(p, &areas, bound);
         let bound = rescaled_rect(bound, visual_local.loc, plan);
         bounded_glass(window_backdrops(p, areas), bound)
     }));

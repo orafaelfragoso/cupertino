@@ -111,6 +111,8 @@ impl GlassContainer {
             for v in s.rect.iter().chain([&s.radius]) {
                 v.to_bits().hash(&mut h);
             }
+            // interactive glass under a press takes circular corners
+            s.corner.hash(&mut h);
         }
         // each shape's look and values, its own recipe's where it has one (a segment in other glass than its group, a
         // tint)

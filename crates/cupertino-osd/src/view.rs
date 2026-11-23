@@ -211,10 +211,9 @@ impl<M: Clone + 'static> Widget<M> for Pacer<M> {
     fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
 }
 
-/// The overlay's body under its content, the whole window with its corners: the glass of a notification banner, which
-/// the reference gives these overlays, at the fade's `alpha`. With Reduce Transparency, or where the desktop shows no
-/// glass, it is the theme's opaque fill of the heads-up surface in the same shape. What the content paints over it
-/// fades with it as one layer.
+/// The overlay's body under its content, the whole window with its corners: the glass of a notification banner, at
+/// the fade's `alpha`. With Reduce Transparency, or where the desktop shows no glass, it is the theme's opaque fill of
+/// the heads-up surface in the same shape. What the content paints over it fades with it as one layer.
 fn banner(cx: &mut PaintCx<'_>, alpha: f64) {
     let alpha = alpha.clamp(0.0, 1.0);
     let rect = Rect::from_origin_size(Point::ZERO, cx.size());

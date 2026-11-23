@@ -2,7 +2,10 @@
 //! drawn by the headless compositor: a tint lays its colour over the glass; a variant follows its window's activation
 //! and takes the inactive recipe in a window that is not key, where glass a version 22 client asked for by its style
 //! draws as before; and interactive glass grows under a press along the compositor's clock, lets go with a small
-//! undershoot, and does not grow under Reduce Motion.
+//! undershoot, and does not grow under Reduce Motion, and a press beside it asks for no frames. A container draws as
+//! the backdrop made first; small glass follows what lies behind it only when adaptive or of an older client's style;
+//! and glass on a subsurface casts its shadow, and grows by its scale, past the subsurface, on a window, a popup, a
+//! layer shell surface and a layer shell surface's popup.
 
 use std::io::Write;
 use std::os::fd::AsFd;
@@ -12,7 +15,8 @@ use std::time::Duration;
 use cupertino_assets::Assets;
 use cupertino_protocols::client::app_effects::cupertino_app_effects_v1::CupertinoAppEffectsV1;
 use cupertino_protocols::client::app_effects::cupertino_backdrop_v1::{
-    CupertinoBackdropV1, GlassModifier, GlassStyle, GlassVariant, SizeClass,
+    self as cupertino_backdrop_v1, CupertinoBackdropV1, GlassModifier, GlassStyle, GlassVariant,
+    SizeClass, Tone,
 };
 use cupertino_server::glass_press::PRESS_SCALE;
 use cupertino_server::state::{insert_client, ClientState};
@@ -21,15 +25,17 @@ use cupertino_wm::WindowId;
 use smithay::backend::input::ButtonState;
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_protocols::xdg::shell::client::{
-    xdg_surface, xdg_toplevel, xdg_wm_base,
+    xdg_popup, xdg_positioner, xdg_surface, xdg_toplevel, xdg_wm_base,
 };
 use smithay::reexports::wayland_server::Display;
 use smithay::utils::Point;
+use wayland_client::backend::ObjectId;
 use wayland_client::protocol::{
     wl_buffer, wl_compositor, wl_registry, wl_shm, wl_shm_pool, wl_subcompositor, wl_subsurface,
     wl_surface,
 };
-use wayland_client::{Connection, Dispatch, EventQueue, QueueHandle};
+use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum};
+use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
 /// The version of `cupertino_app_effects_v1` whose backdrops take `set_glass_variant` and `set_glass_tint`.
 const VARIANT_VERSION: u32 = 23;
@@ -54,9 +60,12 @@ struct Client {
     subcompositor: Option<wl_subcompositor::WlSubcompositor>,
     shm: Option<wl_shm::WlShm>,
     wm_base: Option<xdg_wm_base::XdgWmBase>,
+    layer_shell: Option<zwlr_layer_shell_v1::ZwlrLayerShellV1>,
     effects: Option<CupertinoAppEffectsV1>,
     legacy_effects: Option<CupertinoAppEffectsV1>,
     configured: bool,
+    /// The tones the server sent each backdrop, oldest first.
+    tones: Vec<(ObjectId, WEnum<Tone>)>,
 }
 
 impl Dispatch<wl_registry::WlRegistry, ()> for Client {
@@ -79,6 +88,9 @@ impl Dispatch<wl_registry::WlRegistry, ()> for Client {
                 "wl_subcompositor" => state.subcompositor = Some(reg.bind(name, 1, qh, ())),
                 "wl_shm" => state.shm = Some(reg.bind(name, 1, qh, ())),
                 "xdg_wm_base" => state.wm_base = Some(reg.bind(name, 1, qh, ())),
+                "zwlr_layer_shell_v1" => {
+                    state.layer_shell = Some(reg.bind(name, version.min(4), qh, ()))
+                }
                 "cupertino_app_effects_v1" => {
                     assert!(
                         version >= VARIANT_VERSION,
@@ -124,7 +136,26 @@ impl Dispatch<xdg_surface::XdgSurface, ()> for Client {
     }
 }
 
+impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for Client {
+    fn event(
+        state: &mut Self,
+        surface: &zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
+        event: zwlr_layer_surface_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let zwlr_layer_surface_v1::Event::Configure { serial, .. } = event {
+            surface.ack_configure(serial);
+            state.configured = true;
+        }
+    }
+}
+
 wayland_client::delegate_noop!(Client: ignore xdg_toplevel::XdgToplevel);
+wayland_client::delegate_noop!(Client: ignore xdg_popup::XdgPopup);
+wayland_client::delegate_noop!(Client: ignore xdg_positioner::XdgPositioner);
+wayland_client::delegate_noop!(Client: ignore zwlr_layer_shell_v1::ZwlrLayerShellV1);
 wayland_client::delegate_noop!(Client: ignore wl_compositor::WlCompositor);
 wayland_client::delegate_noop!(Client: ignore wl_subcompositor::WlSubcompositor);
 wayland_client::delegate_noop!(Client: ignore wl_subsurface::WlSubsurface);
@@ -133,7 +164,20 @@ wayland_client::delegate_noop!(Client: ignore wl_shm::WlShm);
 wayland_client::delegate_noop!(Client: ignore wl_shm_pool::WlShmPool);
 wayland_client::delegate_noop!(Client: ignore wl_buffer::WlBuffer);
 wayland_client::delegate_noop!(Client: ignore CupertinoAppEffectsV1);
-wayland_client::delegate_noop!(Client: ignore CupertinoBackdropV1);
+impl Dispatch<CupertinoBackdropV1, ()> for Client {
+    fn event(
+        state: &mut Self,
+        backdrop: &CupertinoBackdropV1,
+        event: cupertino_backdrop_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let cupertino_backdrop_v1::Event::Tone { tone } = event {
+            state.tones.push((backdrop.id(), tone));
+        }
+    }
+}
 
 /// A `width` × `height` ARGB8888 buffer whose pixel at `x` (memory order blue, green, red, alpha) is `pixel(x)`.
 fn shm_buffer(
@@ -731,6 +775,381 @@ fn under_reduce_motion_interactive_glass_does_not_grow_under_a_press() {
         );
     }
     capsule.release(t0 + 1.0);
+}
+
+#[test]
+fn a_press_beside_interactive_glass_after_one_on_it_asks_for_no_frames() {
+    let mut capsule = Capsule::new();
+    let t0 = capsule.rig.now();
+    capsule.press(t0);
+    capsule.width_at(t0 + 0.1);
+    assert!(
+        capsule.rig.state.glass_press.wants_tick(t0 + 0.1),
+        "the glass under the press grows"
+    );
+    capsule.release(t0 + 0.2);
+    let t1 = t0 + SETTLE;
+    capsule.width_at(t1);
+    assert!(!capsule.rig.state.glass_press.wants_tick(t1));
+
+    // a click on the window beside the capsule, on no glass
+    let frame = capsule
+        .rig
+        .state
+        .wm
+        .window(capsule.window.id)
+        .unwrap()
+        .geometry();
+    let beside = Point::from((frame.x + 220.0, frame.y + 140.0));
+    capsule.rig.state.pointer_moved_to(beside, 0, None);
+    capsule
+        .rig
+        .state
+        .pointer_button(BTN_LEFT, ButtonState::Pressed, 3);
+    for after in [0.0, 0.05, 0.1] {
+        capsule.width_at(t1 + after);
+        assert!(
+            !capsule.rig.state.glass_press.wants_tick(t1 + after),
+            "{after} s into a press on no glass the press asks for frames"
+        );
+    }
+    capsule.rig.state.fixed_time = Some(t1 + 0.2);
+    capsule
+        .rig
+        .state
+        .pointer_button(BTN_LEFT, ButtonState::Released, 4);
+    assert!(!capsule.rig.state.animating());
+}
+
+/// The toolbar of [`a_toolbars_container_draws_alike_whichever_order_its_chosen_segment_was_made_in`]: its size in
+/// points, and the left, top, width and height of each item in it.
+const TOOLBAR: (i32, i32) = (360, 72);
+const TOOLBAR_ITEMS: [(i32, i32, i32, i32); 3] =
+    [(12, 16, 96, 40), (132, 16, 96, 40), (252, 16, 96, 40)];
+/// The container the toolbar's items join.
+const TOOLBAR_CONTAINER: u32 = 7;
+
+/// The output showing a window of light and dark stripes under a toolbar of glass in one container: a toolbar item
+/// made first, then the others in `order` (indices into [`TOOLBAR_ITEMS`]), the chosen segment (`chosen`) of the tab
+/// variant and the rest toolbar items; and the toolbar's pixels.
+fn toolbar_pixels(order: [usize; 2], chosen: usize) -> Vec<[u8; 4]> {
+    let mut rig = Rig::new((480, 320), 1.0);
+    let effects = rig.client.effects.clone().unwrap();
+    let window = rig.map("Toolbar", (400, 200), |x| {
+        if (x / 6) % 2 == 0 {
+            [60, 60, 60, 255]
+        } else {
+            [235, 235, 235, 255]
+        }
+    });
+    let at = (20, 40);
+    let bar = rig.pane(&window.surface, &effects, at, TOOLBAR, 0.0);
+    bar.backdrop.destroy();
+    let qh = rig.queue.handle();
+    let backdrops: Vec<CupertinoBackdropV1> = [0]
+        .into_iter()
+        .chain(order)
+        .map(|i| {
+            let (x, y, w, h) = TOOLBAR_ITEMS[i];
+            let backdrop = effects.get_backdrop(&bar.surface, &qh, ());
+            backdrop.set_shape(x, y, w, h, f64::from(h) / 2.0);
+            let variant = if i == chosen {
+                GlassVariant::Tab
+            } else {
+                GlassVariant::ToolbarItem
+            };
+            backdrop.set_glass_variant(
+                variant,
+                GlassModifier::empty(),
+                SizeClass::Dynamic,
+                TOOLBAR_CONTAINER,
+                0.0,
+            );
+            backdrop
+        })
+        .collect();
+    bar.surface.commit();
+    window.surface.commit();
+    rig.settle();
+    let image = rig.image();
+    let pixels = rig.pixels(&image, window.id, at, TOOLBAR, 0).collect();
+    drop(backdrops);
+    pixels
+}
+
+#[test]
+fn a_toolbars_container_draws_alike_whichever_order_its_chosen_segment_was_made_in() {
+    // the chosen segment made last, or before the last toolbar item
+    let last = toolbar_pixels([1, 2], 2);
+    let before = toolbar_pixels([2, 1], 2);
+    let change = difference(last, before);
+    assert!(
+        change < 0.05,
+        "the toolbar draws {change} apart in the two orders"
+    );
+}
+
+#[test]
+fn small_glass_follows_what_lies_behind_it_when_adaptive_or_of_an_older_clients_style_and_not_otherwise(
+) {
+    let mut rig = Rig::new((480, 320), 1.0);
+    let effects = rig.client.effects.clone().unwrap();
+    let legacy = rig.client.legacy_effects.clone().unwrap();
+    let window = rig.map("Tones", (400, 200), |_| [250, 250, 250, 255]);
+    // small enough for their text to follow what lies behind them
+    let size = (100, 40);
+    let fixed = rig.pane(&window.surface, &effects, (20, 60), size, 20.0);
+    let adaptive = rig.pane(&window.surface, &effects, (150, 60), size, 20.0);
+    let styled = rig.pane(&window.surface, &legacy, (280, 60), size, 20.0);
+    for (pane, modifiers) in [
+        (&fixed, GlassModifier::empty()),
+        (&adaptive, GlassModifier::Adaptive),
+    ] {
+        pane.backdrop.set_glass_variant(
+            GlassVariant::Regular,
+            modifiers,
+            SizeClass::Dynamic,
+            0,
+            0.0,
+        );
+    }
+    styled.backdrop.set_glass(GlassStyle::Regular, 0, 0.0);
+    for pane in [&fixed, &adaptive, &styled] {
+        pane.surface.commit();
+    }
+    window.surface.commit();
+    rig.settle();
+    rig.settle();
+
+    let tones = |pane: &Pane| {
+        rig.client
+            .tones
+            .iter()
+            .filter(|(id, _)| *id == pane.backdrop.id())
+            .count()
+    };
+    assert!(
+        tones(&adaptive) > 0,
+        "adaptive glass follows: {:?}",
+        rig.client.tones
+    );
+    assert!(
+        tones(&styled) > 0,
+        "the older client's style follows as before"
+    );
+    assert_eq!(
+        tones(&fixed),
+        0,
+        "glass not asked to adapt keeps the appearance"
+    );
+}
+
+#[test]
+fn an_alert_on_a_subsurface_casts_its_drop_shadow_past_the_subsurface() {
+    let mut rig = Rig::new((640, 480), 1.0);
+    let effects = rig.client.effects.clone().unwrap();
+    let window = rig.map("Alert", (560, 400), |_| [235, 235, 235, 255]);
+    let size = (200, 120);
+    let (cast_at, none_at) = ((40, 60), (300, 60));
+    let cast = rig.pane(&window.surface, &effects, cast_at, size, 24.0);
+    let none = rig.pane(&window.surface, &effects, none_at, size, 24.0);
+    for (pane, modifiers) in [
+        (&cast, GlassModifier::empty()),
+        (&none, GlassModifier::ExcludeShadow),
+    ] {
+        pane.backdrop.set_glass_variant(
+            GlassVariant::GlassWindow,
+            modifiers,
+            SizeClass::Dynamic,
+            0,
+            0.0,
+        );
+        pane.surface.commit();
+    }
+    window.surface.commit();
+    rig.settle();
+
+    // a band from 6 to 30 points below each panel, inside its middle
+    let image = rig.image();
+    let band = |at: (i32, i32)| (at.0 + 40, at.1 + size.1 + 6);
+    let below = |at| mean(rig.pixels(&image, window.id, band(at), (size.0 - 80, 24), 0));
+    let [shadowed, ..] = below(cast_at);
+    let [clear, ..] = below(none_at);
+    assert!(
+        shadowed < clear - 4.0,
+        "the alert's shadow darkens what lies below it to {shadowed}, without one {clear}"
+    );
+}
+
+/// A surface of a popup or a layer shell surface, and what keeps it shown.
+struct Shown {
+    surface: wl_surface::WlSurface,
+    _roles: Vec<Box<dyn std::any::Any>>,
+}
+
+impl Rig {
+    /// `surface` with `size` points of grey attached once its role is configured.
+    fn fill(&mut self, surface: &wl_surface::WlSurface, size: (i32, i32)) {
+        self.client.configured = false;
+        surface.commit();
+        for _ in 0..20 {
+            self.pump(1);
+            if self.client.configured {
+                break;
+            }
+        }
+        assert!(self.client.configured, "the surface is configured");
+        let buffer = shm_buffer(
+            self.client.shm.as_ref().unwrap(),
+            &self.queue.handle(),
+            size,
+            |_| GREY,
+        );
+        surface.attach(Some(&buffer), 0, 0);
+        surface.damage_buffer(0, 0, size.0, size.1);
+        surface.commit();
+        self.settle();
+    }
+
+    /// A popup of `size` points of `parent` (an xdg surface), or of `layer` with no xdg parent, at `at` in it.
+    fn popup(
+        &mut self,
+        parent: Option<&xdg_surface::XdgSurface>,
+        layer: Option<&zwlr_layer_surface_v1::ZwlrLayerSurfaceV1>,
+        at: (i32, i32),
+        size: (i32, i32),
+    ) -> Shown {
+        let qh = self.queue.handle();
+        let surface = self
+            .client
+            .compositor
+            .as_ref()
+            .unwrap()
+            .create_surface(&qh, ());
+        let wm_base = self.client.wm_base.as_ref().unwrap();
+        let positioner = wm_base.create_positioner(&qh, ());
+        positioner.set_size(size.0, size.1);
+        positioner.set_anchor_rect(at.0, at.1, 1, 1);
+        positioner.set_anchor(xdg_positioner::Anchor::TopLeft);
+        positioner.set_gravity(xdg_positioner::Gravity::BottomRight);
+        let xdg = wm_base.get_xdg_surface(&surface, &qh, ());
+        let popup = xdg.get_popup(parent, &positioner, &qh, ());
+        if let Some(layer) = layer {
+            layer.get_popup(&popup);
+        }
+        self.fill(&surface, size);
+        Shown {
+            surface,
+            _roles: vec![Box::new(positioner), Box::new(popup), Box::new(xdg)],
+        }
+    }
+
+    /// A layer shell surface of `size` points in the top layer, at the output's top left.
+    fn layer(&mut self, size: (i32, i32)) -> (Shown, zwlr_layer_surface_v1::ZwlrLayerSurfaceV1) {
+        let qh = self.queue.handle();
+        let surface = self
+            .client
+            .compositor
+            .as_ref()
+            .unwrap()
+            .create_surface(&qh, ());
+        let layer = self
+            .client
+            .layer_shell
+            .as_ref()
+            .expect("the server offers the layer shell")
+            .get_layer_surface(
+                &surface,
+                None,
+                zwlr_layer_shell_v1::Layer::Top,
+                "glass-test".into(),
+                &qh,
+                (),
+            );
+        layer.set_size(size.0 as u32, size.1 as u32);
+        layer.set_anchor(zwlr_layer_surface_v1::Anchor::Top | zwlr_layer_surface_v1::Anchor::Left);
+        self.fill(&surface, size);
+        (
+            Shown {
+                surface,
+                _roles: Vec::new(),
+            },
+            layer,
+        )
+    }
+
+    /// A red capsule of regular glass without a shadow over a clear subsurface of `parent`, its glass drawn
+    /// [`SCALED`] times its size; shown once the parent commits again, as it does here.
+    fn scaled_capsule(&mut self, parent: &wl_surface::WlSurface) -> Pane {
+        let effects = self.client.effects.clone().unwrap();
+        let pane = self.pane(
+            parent,
+            &effects,
+            (40, 40),
+            CAPSULE,
+            f64::from(CAPSULE.1) / 2.0,
+        );
+        pane.backdrop.set_glass_variant(
+            GlassVariant::Regular,
+            GlassModifier::ExcludeShadow,
+            SizeClass::Dynamic,
+            0,
+            0.0,
+        );
+        pane.backdrop.set_glass_tint(1.0, 0.0, 0.0, 1.0);
+        pane.backdrop.set_glass_scale(SCALED);
+        pane.surface.commit();
+        parent.commit();
+        self.settle();
+        pane
+    }
+}
+
+/// How many columns of `image` show red.
+fn red_columns(image: &image::RgbaImage) -> u32 {
+    let redness = |p: &image::Rgba<u8>| i32::from(p.0[0]) - i32::from(p.0[1]);
+    let peak = image.pixels().map(redness).max().unwrap();
+    assert!(peak > 60, "the capsule shows red: {peak}");
+    (0..image.width())
+        .filter(|x| (0..image.height()).any(|y| redness(image.get_pixel(*x, y)) * 2 > peak))
+        .count() as u32
+}
+
+/// Whether the red capsule of [`Rig::scaled_capsule`] shows wider than its subsurface, as its scale draws it.
+fn assert_scaled_past_its_subsurface(rig: &mut Rig, on: &str) {
+    let width = f64::from(red_columns(&rig.image())) / rig.scale;
+    let least = f64::from(CAPSULE.0) * (1.0 + SCALED) / 2.0;
+    assert!(
+        width > least,
+        "the scaled glass on {on} shows {width} points wide, past its subsurface of {}",
+        CAPSULE.0
+    );
+}
+
+#[test]
+fn scaled_glass_reaches_past_its_subsurface_on_a_windows_popup() {
+    let mut rig = Rig::new((640, 480), 1.0);
+    let window = rig.map("Popup parent", (400, 300), |_| GREY);
+    let popup = rig.popup(Some(&window._xdg.0), None, (40, 40), (300, 200));
+    let _capsule = rig.scaled_capsule(&popup.surface);
+    assert_scaled_past_its_subsurface(&mut rig, "a window's popup");
+}
+
+#[test]
+fn scaled_glass_reaches_past_its_subsurface_on_a_layer_shell_surface() {
+    let mut rig = Rig::new((640, 480), 1.0);
+    let (layer, _role) = rig.layer((300, 200));
+    let _capsule = rig.scaled_capsule(&layer.surface);
+    assert_scaled_past_its_subsurface(&mut rig, "a layer shell surface");
+}
+
+#[test]
+fn scaled_glass_reaches_past_its_subsurface_on_a_layer_shell_surfaces_popup() {
+    let mut rig = Rig::new((640, 480), 1.0);
+    let (_layer, role) = rig.layer((300, 100));
+    let popup = rig.popup(None, Some(&role), (20, 90), (300, 200));
+    let _capsule = rig.scaled_capsule(&popup.surface);
+    assert_scaled_past_its_subsurface(&mut rig, "a layer shell surface's popup");
 }
 
 /// How many times its size the scaled capsule's glass is drawn.

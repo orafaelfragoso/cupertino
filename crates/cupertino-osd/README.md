@@ -47,7 +47,7 @@ The levels themselves live in `cupertino-audiod`, the power daemon and UPower, s
 bottom margin of 140 pt, no keyboard interactivity and an empty input region. The window is a CupertinoKit window
 (`view::window`); the component's `Program::surface` gives it that layer surface (`cupertino-kit-shell`), on the
 server's first output; with no output there is no window, and a window the server closed is made anew.
-Its body is the glass of a notification banner (`Glass::card`, the `NotificationCenter` variant at medium size, as
+Its body is the glass of a notification banner (`Glass::card` named as the `NotificationCenter` variant at medium size, not adaptive, as
 the reference draws these overlays) over the whole window with the window's radius, and its alpha follows the fade. The glyph
 (an `Icon`) and the meter draw over it as one layer at the same alpha. While hidden the surface stays mapped, draws
 nothing and has no glass. Glyphs are template symbols of the asset directory

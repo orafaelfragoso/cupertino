@@ -6,7 +6,9 @@ use std::num::NonZeroU32;
 use std::sync::Arc;
 
 use cupertino_assets::BUILTIN_FONT;
-use cupertino_kit::core::{Application, Command, RuntimeOptions, Window};
+use cupertino_kit::core::{
+    Application, Command, GlassModifiers, GlassSize, GlassVariant, RuntimeOptions, Window,
+};
 use cupertino_kit::geometry::Rect;
 use cupertino_kit::layout::LayoutDirection;
 use cupertino_kit::platform::{GlassStyle, Timestamp, WindowId, WindowRequest};
@@ -91,6 +93,7 @@ fn options(reduce_transparency: bool) -> RuntimeOptions {
 #[derive(Debug)]
 struct Region {
     glass: Option<GlassStyle>,
+    variant: Option<(GlassVariant, GlassModifiers)>,
     rect: Rect,
     radius: f64,
     alpha: f64,
@@ -128,6 +131,7 @@ fn drawn<A: Application>(reduce_transparency: bool) -> (Vec<Region>, u8) {
                     .iter()
                     .map(|r| Region {
                         glass: r.glass.map(|g| g.style),
+                        variant: r.glass.and_then(|g| g.variant),
                         rect: r.rect,
                         radius: r.radius,
                         alpha: r.alpha,
@@ -153,6 +157,14 @@ fn the_overlay_lies_on_notification_banner_glass_with_its_corners_and_fade() {
         region.glass,
         Some(GlassStyle::Card),
         "the body is banner glass"
+    );
+    assert_eq!(
+        region.variant,
+        Some((
+            GlassVariant::NotificationCenter,
+            GlassModifiers::DEFAULT.sized(GlassSize::Medium)
+        )),
+        "named as the notification centre variant at the medium size, not adaptive"
     );
     assert_eq!(region.rect, Rect::new(0.0, 0.0, side, side));
     assert_eq!(region.radius, CORNER_RADIUS);

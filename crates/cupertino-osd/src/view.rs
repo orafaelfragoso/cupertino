@@ -3,9 +3,9 @@
 
 use cupertino_kit::controls::{Canvas, Icon, IconDirection, Stack};
 use cupertino_kit::core::{
-    glass_outline, AccessibleValue, Change, CommandRegistry, Element, Event, EventCx, Glass, Key,
-    Live, MeasureCx, PaintCx, Propagation, Role, SemanticsCx, Widget, Window, WindowBackground,
-    WindowKey,
+    glass_outline, AccessibleValue, Change, CommandRegistry, Element, Event, EventCx, Glass,
+    GlassSize, GlassVariant, Key, Live, MeasureCx, PaintCx, Propagation, Role, SemanticsCx, Widget,
+    Window, WindowBackground, WindowKey,
 };
 use cupertino_kit::geometry::{Insets, Point, Rect, Size};
 use cupertino_kit::layout::{
@@ -219,7 +219,13 @@ fn banner(cx: &mut PaintCx<'_>, alpha: f64) {
     let alpha = alpha.clamp(0.0, 1.0);
     let rect = Rect::from_origin_size(Point::ZERO, cx.size());
     let glass = !cx.env().theme.preferences.reduce_transparency
-        && cx.glass(Glass::card().radius(CORNER_RADIUS).alpha(alpha));
+        && cx.glass(
+            Glass::card()
+                .variant(GlassVariant::NotificationCenter)
+                .size_class(GlassSize::Medium)
+                .radius(CORNER_RADIUS)
+                .alpha(alpha),
+        );
     cx.set_group(alpha as f32, Vec::new());
     if !glass {
         if let Some(color) = cx.env().theme.surface(Surface::Hud).fill {

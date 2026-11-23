@@ -54,7 +54,8 @@ its own, with its own Wayland and bus connections, when the server's `components
 per output and opens its menus as popups (`src/view.rs`): each bar is a Kit window with the server's `menu_bar` role
 (`Role::MenuBar`, a top layer surface across the output that reserves its height, kept while the component restarts, D19),
 the `MenuBar` material behind it while the bar is solid (`Surface::MenuBar`), and each open menu level is a Kit popup with a
-grab, on the `Menu` material, placed where the controller laid it out. The theme, text and icons are the ones Kit shares in
+grab, on the menu variant's glass at the menu's own size without the variant's drop shadow (the popup draws the menu's window
+shadow apart; `view/body.rs`, the Wi-Fi join prompt too), placed where the controller laid it out. The theme, text and icons are the ones Kit shares in
 the process; the display options come with the host's `Event::Appearance`, the outputs with `Event::Outputs`, the server's
 feed with `Event::MenuBar` and the lock with `Event::Session`. Its session and system bus connections are Kit's async ones
 (`bus::session`, `cupertino_kit::bus::connect`), whose tasks run on the component's own loop; what reads files, the X11

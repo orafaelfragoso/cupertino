@@ -56,16 +56,14 @@ pub(super) fn menu<M: Clone + 'static>(
         spec: spec(BAR_APP_ID.to_owned(), size),
         shortcuts: CommandRegistry::new(),
         on_close: None,
-        background: WindowBackground::Surface {
-            surface: Surface::Menu,
-            radius: if layout.panel {
+        // the body is the root's menu glass, which the rows lie on
+        background: WindowBackground::None,
+        content: Element::new(Root {
+            body: Some(if layout.panel {
                 panel::RADIUS
             } else {
                 POPUP_RADIUS
-            },
-            alpha: 1.0,
-        },
-        content: Element::new(Root {
+            }),
             bar: scene.bar,
             keyboard: false,
             origin: BarPoint::new(rect.x, rect.y),

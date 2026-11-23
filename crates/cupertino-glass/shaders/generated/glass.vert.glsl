@@ -31,20 +31,25 @@ struct Glass {
     vec4 info;
     vec4 levels;
     vec4 fill;
-    vec4 face;
-    vec4 face_fill;
     vec4 bleed;
-    vec4 highlight;
-    vec4 highlight2_;
+    vec4 light;
     vec4 glow;
     vec4 diffuse;
     vec4 hm[3];
     vec4 shadow;
     vec4 shadow_color;
-    vec4 ring;
     vec4 shapes[16];
     vec4 shape_a[16];
     vec4 shape_b[16];
+    vec4 shape_c[16];
+    vec4 shape_face[16];
+    vec4 shape_fill[16];
+    vec4 shape_tint[16];
+    vec4 shape_rim[16];
+    vec4 shape_spec[16];
+    vec4 shape_spec2_[16];
+    vec4 shape_ring[16];
+    vec4 shape_border[16];
     vec4 cut;
     vec4 cut_shape;
     vec4 lens;
@@ -54,12 +59,22 @@ struct Field {
     float d;
     vec4 a;
     vec4 b;
+    vec4 c;
+    vec4 face;
+    vec4 fill;
+    vec4 tint;
+    vec4 rim;
+    vec4 spec;
+    vec4 spec2_;
+    vec4 ring;
+    vec4 border;
 };
 const float CIRCULAR_EXPONENT = 2.001;
 const int SHADOW_STEPS = 8;
 const int MAX_STOPS = 8;
 const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
 const float PI = 3.1415927;
+const float BORDER_LIT_SHARE = 0.2;
 const float LOBE_REACH = 0.75;
 const float MIN_FIELD_SLOPE = 0.05;
 
@@ -69,9 +84,9 @@ smooth out vec2 _vs2fs_location0;
 smooth out vec2 _vs2fs_location1;
 
 vec4 fullscreen_position(uint index) {
-    float x_5 = ((float(((index << 1u) & 2u)) * 2.0) - 1.0);
-    float y_2 = ((float((index & 2u)) * 2.0) - 1.0);
-    return vec4(x_5, y_2, 0.0, 1.0);
+    float x_6 = ((float(((index << 1u) & 2u)) * 2.0) - 1.0);
+    float y_3 = ((float((index & 2u)) * 2.0) - 1.0);
+    return vec4(x_6, y_3, 0.0, 1.0);
 }
 
 float rounded_distance(vec2 p, vec2 half_, float e, float n_1) {
@@ -96,8 +111,8 @@ float rounded_distance(vec2 p, vec2 half_, float e, float n_1) {
     float v_1 = max((qy / e), 1e-6);
     float g = pow((pow(u_1, n_1) + pow(v_1, n_1)), (1.0 / n_1));
     float grad = (sqrt((pow(u_1, ((2.0 * n_1) - 2.0)) + pow(v_1, ((2.0 * n_1) - 2.0)))) / pow(g, (n_1 - 1.0)));
-    float d_9 = (((g - 1.0) / grad) * e);
-    return max(d_9, (max(qx, qy) - e));
+    float d_12 = (((g - 1.0) / grad) * e);
+    return max(d_12, (max(qx, qy) - e));
 }
 
 float rect_distance(vec2 p_1, vec2 half_1) {
@@ -322,10 +337,10 @@ uint dither_pair(uvec2 p_5, uint k_1) {
 }
 
 uint dither_matrix(vec2 frag) {
-    uvec2 p_17 = uvec2(floor(frag));
-    uint _e5 = dither_pair(p_17, 0u);
-    uint _e9 = dither_pair(p_17, 1u);
-    uint _e13 = dither_pair(p_17, 2u);
+    uvec2 p_18 = uvec2(floor(frag));
+    uint _e5 = dither_pair(p_18, 0u);
+    uint _e9 = dither_pair(p_18, 1u);
+    uint _e13 = dither_pair(p_18, 2u);
     return (((16u * _e5) + (4u * _e9)) + _e13);
 }
 
@@ -378,21 +393,73 @@ float refraction_profile(float t_2) {
     return ((0.9 * exp((-4.2 * t_2))) * (1.0 - (t2_ * t2_)));
 }
 
+vec4 towards(vec4 x_3, vec4 y_2, float h) {
+    return (x_3 + ((y_2 - x_3) * h));
+}
+
 vec3 saturate_encoded(vec3 c_3, float s) {
-    float y_3 = dot(c_3, LUMA);
-    return max((vec3(y_3) + ((c_3 - vec3(y_3)) * s)), vec3(0.0));
+    float y_4 = dot(c_3, LUMA);
+    return max((vec3(y_4) + ((c_3 - vec3(y_4)) * s)), vec3(0.0));
 }
 
 float angle_between(float a_1, float b) {
-    float d_10 = ((a_1 - b) - (floor(((a_1 - b) / 6.2831855)) * 6.2831855));
-    return min(d_10, (6.2831855 - d_10));
+    float d_13 = ((a_1 - b) - (floor(((a_1 - b) / 6.2831855)) * 6.2831855));
+    return min(d_13, (6.2831855 - d_13));
 }
 
-float shadow_coverage(float d_3, float r_1) {
-    if ((r_1 <= 0.0)) {
-        return ((d_3 <= 0.0) ? 1.0 : 0.0);
+float light_arc(float normal_angle_1, float light_1, float spread) {
+    if ((spread <= 0.0)) {
+        return 0.0;
     }
-    float t_4 = clamp((0.5 - (d_3 / (3.0 * r_1))), 0.0, 1.0);
+    float _e7 = angle_between(normal_angle_1, light_1);
+    return (1.0 - smoothstep(0.0, spread, _e7));
+}
+
+float key_and_fill(float na, vec4 spec, float fill, float spread_1) {
+    float _e5 = light_arc(na, spec.w, spread_1);
+    float _e9 = light_arc(na, (spec.w + PI), spread_1);
+    return (_e5 + (fill * _e9));
+}
+
+float specular(float depth, float na_1, vec4 spec_1, vec4 spec2_) {
+    float band = 0.0;
+    float glow = 0.0;
+    if ((spec_1.z > 0.0)) {
+        band = (1.0 - smoothstep(0.0, spec_1.z, depth));
+    }
+    float _e16 = key_and_fill(na_1, spec_1, spec2_.x, spec_1.y);
+    float dh = (spec_1.z * spec2_.y);
+    if (((dh > 0.0) && (depth < dh))) {
+        float td = (1.0 - (depth / dh));
+        float _e34 = key_and_fill(na_1, spec_1, spec2_.x, (spec_1.y * spec2_.z));
+        glow = (((spec2_.w * _e34) * td) * td);
+    }
+    float _e39 = band;
+    float _e41 = glow;
+    return (spec_1.x * ((_e16 * _e39) + _e41));
+}
+
+float border_line(float d_3, vec2 n_3, Field f_1) {
+    float line = 0.0;
+    if (((f_1.border.x <= 0.0) || (f_1.border.y <= 0.0))) {
+        return 0.0;
+    }
+    line = (f_1.border.x * clamp((((0.5 * f_1.border.y) + 0.5) - abs(d_3)), 0.0, 1.0));
+    float _e28 = line;
+    if ((((_e28 > 0.0) && (f_1.spec.x > 0.0)) && (dot(n_3, n_3) > 0.0))) {
+        float _e49 = key_and_fill(atan(-(n_3.y), n_3.x), f_1.spec, f_1.spec2_.x, f_1.spec.y);
+        float _e50 = line;
+        line = (_e50 * (1.0 - (0.8 * min(1.0, _e49))));
+    }
+    float _e58 = line;
+    return _e58;
+}
+
+float shadow_coverage(float d_4, float r_1) {
+    if ((r_1 <= 0.0)) {
+        return ((d_4 <= 0.0) ? 1.0 : 0.0);
+    }
+    float t_4 = clamp((0.5 - (d_4 / (3.0 * r_1))), 0.0, 1.0);
     return ((t_4 * t_4) * (3.0 - (2.0 * t_4)));
 }
 
@@ -410,21 +477,21 @@ float rim_brightness(float l0_) {
     return mix(1.13, 1.0, ((l_1 - 0.75) * 4.0));
 }
 
-float rim_direction(vec2 n_3) {
-    float s_3 = ((2.0 * n_3.x) * n_3.y);
+float rim_direction(vec2 n_4) {
+    float s_3 = ((2.0 * n_4.x) * n_4.y);
     return (0.15 + ((0.85 * s_3) * s_3));
 }
 
-float normal_cdf(float x_3) {
-    return (1.0 / (1.0 + exp((-1.702 * x_3))));
+float normal_cdf(float x_4) {
+    return (1.0 / (1.0 + exp((-1.702 * x_4))));
 }
 
-float gaussian_cdf(float x_4) {
-    float z = (abs(x_4) * 0.70710677);
+float gaussian_cdf(float x_5) {
+    float z = (abs(x_5) * 0.70710677);
     float t_5 = (1.0 / (1.0 + (0.3275911 * z)));
     float poly = (t_5 * (0.2548296 + (t_5 * (-0.28449675 + (t_5 * (1.4214137 + (t_5 * (-1.453152 + (t_5 * 1.0614054)))))))));
     float erf = (1.0 - (poly * exp((-(z) * z))));
-    return (0.5 * (1.0 + ((x_4 >= 0.0) ? erf : -(erf))));
+    return (0.5 * (1.0 + ((x_5 >= 0.0) ? erf : -(erf))));
 }
 
 float gaussian_ramp(float u) {
@@ -432,14 +499,14 @@ float gaussian_ramp(float u) {
     return ((u * _e1) + (0.3989423 * exp(((-0.5 * u) * u))));
 }
 
-float edge_share(float d_7, float w_2, float s_2) {
+float edge_share(float d_9, float w_2, float s_2) {
     if ((s_2 <= 0.0)) {
-        return clamp((min((d_7 + 0.5), w_2) - max((d_7 - 0.5), 0.0)), 0.0, 1.0);
+        return clamp((min((d_9 + 0.5), w_2) - max((d_9 - 0.5), 0.0)), 0.0, 1.0);
     }
-    float _e19 = gaussian_ramp(((d_7 + 0.5) / s_2));
-    float _e23 = gaussian_ramp(((d_7 - 0.5) / s_2));
-    float _e29 = gaussian_ramp((((d_7 + 0.5) - w_2) / s_2));
-    float _e35 = gaussian_ramp((((d_7 - 0.5) - w_2) / s_2));
+    float _e19 = gaussian_ramp(((d_9 + 0.5) / s_2));
+    float _e23 = gaussian_ramp(((d_9 - 0.5) / s_2));
+    float _e29 = gaussian_ramp((((d_9 + 0.5) - w_2) / s_2));
+    float _e35 = gaussian_ramp((((d_9 - 0.5) - w_2) / s_2));
     float r_2 = (s_2 * (((_e19 - _e23) - _e29) + _e35));
     return clamp(r_2, 0.0, 1.0);
 }
@@ -450,12 +517,12 @@ void main() {
     vec2 corner_2 = vec2(float((i & 1u)), float(((i >> 1u) & 1u)));
     vec4 _e12 = _group_1_binding_0_vs.quad;
     vec4 _e16 = _group_1_binding_0_vs.quad;
-    vec2 p_18 = (_e12.xy + (corner_2 * _e16.zw));
+    vec2 p_19 = (_e12.xy + (corner_2 * _e16.zw));
     mat3x3 _e22 = _group_1_binding_0_vs.proj;
-    vec3 c_8 = (_e22 * vec3(p_18, 1.0));
-    o.pos = vec4(c_8.xy, 0.0, 1.0);
-    o.px = p_18;
-    o.uv = ((c_8.xy * 0.5) + vec2(0.5));
+    vec3 c_9 = (_e22 * vec3(p_19, 1.0));
+    o.pos = vec4(c_9.xy, 0.0, 1.0);
+    o.px = p_19;
+    o.uv = ((c_9.xy * 0.5) + vec2(0.5));
     VsOut _e40 = o;
     gl_Position = _e40.pos;
     _vs2fs_location0 = _e40.px;

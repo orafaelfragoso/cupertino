@@ -111,7 +111,6 @@ impl HeadlessGpu {
             .collect::<Result<Vec<_>>>()?;
         let mut kinds = vec![BindingKind::UniformBuffer];
         kinds.extend(uploaded.iter().map(|_| BindingKind::Texture));
-        kinds.push(BindingKind::Sampler);
         let entries: Vec<BindingLayout> = kinds
             .iter()
             .enumerate()
@@ -121,10 +120,17 @@ impl HeadlessGpu {
             })
             .collect();
         let layout_glass = device.create_bind_group_layout(&entries)?;
-        let layout_place = device.create_bind_group_layout(&[BindingLayout {
-            binding: 0,
-            kind: BindingKind::UniformBuffer,
-        }])?;
+        // the placement block, and beside it the sampler (`shaders::GLASS_SAMPLER`)
+        let layout_place = device.create_bind_group_layout(&[
+            BindingLayout {
+                binding: 0,
+                kind: BindingKind::UniformBuffer,
+            },
+            BindingLayout {
+                binding: shaders::GLASS_SAMPLER.1,
+                kind: BindingKind::Sampler,
+            },
+        ])?;
         let pipeline = device.create_pipeline(&PipelineDesc {
             shader: &shaders::GLASS.source,
             layouts: &[&layout_glass, &layout_place],
@@ -165,17 +171,19 @@ impl HeadlessGpu {
                 resource: BindingResource::Texture(t),
             });
         }
-        group.push(BindGroupEntry {
-            binding: uploaded.len() as u32 + 1,
-            resource: BindingResource::Sampler(&sampler),
-        });
         let g0 = device.create_bind_group(&layout_glass, &group)?;
         let g1 = device.create_bind_group(
             &layout_place,
-            &[BindGroupEntry {
-                binding: 0,
-                resource: whole(&buffers[1]),
-            }],
+            &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: whole(&buffers[1]),
+                },
+                BindGroupEntry {
+                    binding: shaders::GLASS_SAMPLER.1,
+                    resource: BindingResource::Sampler(&sampler),
+                },
+            ],
         )?;
         let target = self.target(size.0, size.1)?;
         let drawn = (|| {

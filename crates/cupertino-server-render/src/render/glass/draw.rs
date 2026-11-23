@@ -127,7 +127,7 @@ impl MaterialGl {
     }
 
     /// Capture framebuffer rectangle `fb` of `src_fbo` at the recipe's capture scale and blur it into the copies (one per distinct
-    /// deviation of its shapes' blur) and the blur fill `glass` reads. With `within`, a framebuffer rectangle, the capture outside it repeats its edge pixels.
+    /// deviation of its shapes' blur), the blur fill and the edge bleed's blur `glass` reads. With `within`, a framebuffer rectangle, the capture outside it repeats its edge pixels.
     unsafe fn process_glass(
         &mut self,
         gl: &ffi::Gles2,
@@ -136,7 +136,7 @@ impl MaterialGl {
         within: Option<[i32; 4]>,
         glass: &Container,
         scale: f32,
-    ) -> Option<(Vec<Target>, [usize; BLUR_LEVELS + 1])> {
+    ) -> Option<(Vec<Target>, [usize; GLASS_SLOTS])> {
         gl.Disable(ffi::SCISSOR_TEST);
         gl.Disable(ffi::BLEND);
         let size = capture_size(fb, glass.params.capture_scale);
@@ -177,7 +177,7 @@ impl MaterialGl {
         let px_per_pt = scale * size.0 as f32 / fb[2] as f32;
         let src = (capture.tex, capture.size);
         let mut targets = vec![capture];
-        let mut slots = [usize::MAX; BLUR_LEVELS + 1];
+        let mut slots = [usize::MAX; GLASS_SLOTS];
         for (i, (sigma, used)) in glass.levels().into_iter().enumerate() {
             if used {
                 targets.push(self.blurred(gl, src, sigma, px_per_pt, false)?);
@@ -186,7 +186,21 @@ impl MaterialGl {
         }
         if let Some(sigma) = glass.fill_sigma() {
             targets.push(self.blurred(gl, src, sigma, px_per_pt, false)?);
-            slots[BLUR_LEVELS] = targets.len() - 1;
+            slots[FILL_LEVEL] = targets.len() - 1;
+        }
+        // the edge bleed reads a copy blurred already where one has its deviation, else one of its own
+        match glass.bleed_source() {
+            Some(BleedSource::Level(i)) => slots[BLEED_LEVEL] = slots[i],
+            Some(BleedSource::Fill) => slots[BLEED_LEVEL] = slots[FILL_LEVEL],
+            Some(BleedSource::Own(sigma)) => {
+                targets.push(self.blurred(gl, src, sigma, px_per_pt, false)?);
+                slots[BLEED_LEVEL] = targets.len() - 1;
+            }
+            None => {}
+        }
+        // the bend outside the edge reads the capture itself
+        if glass.reads_sharp() {
+            slots[SHARP_LEVEL] = 0;
         }
         // a level no shape reads has no weight: any texture will do
         let any = slots
@@ -377,7 +391,7 @@ impl MaterialGl {
         gl: &ffi::Gles2,
         p: &GlassDraw<'_>,
         targets: &[Target],
-        slots: &[usize; BLUR_LEVELS + 1],
+        slots: &[usize; GLASS_SLOTS],
         viewport: [i32; 4],
         fb: [i32; 4],
     ) {

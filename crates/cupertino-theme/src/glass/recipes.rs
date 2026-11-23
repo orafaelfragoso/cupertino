@@ -113,10 +113,13 @@ impl GlassParams {
                 amount: -(REFRACTION_PER_POINT_REGULAR * s).min(REFRACTION_AMOUNT_MAX),
                 height: (REFRACTION_HEIGHT_PER_POINT_REGULAR * s).min(REFRACTION_HEIGHT_MAX),
                 outer_amount: 0.0,
+                outer_height: 0.0,
+                outer_opacity: 0.0,
             },
             bleed: GlassBleed {
                 amount: bleed,
                 height: bleed,
+                blur: bleed.min(BLEED_BLUR_MAX),
                 white: if dark { 0.5 } else { 1.0 },
                 black: if dark { 0.125 } else { 0.9 },
                 saturation: if dark { 1.0 } else { 1.2 },
@@ -161,6 +164,9 @@ impl GlassParams {
             },
             capture_scale: GLASS_BACKDROP_SCALE,
             veil: [0.0; 2],
+            specular: GlassSpecular::NONE,
+            border: GlassBorder::NONE,
+            tint: [0.0; 4],
         }
     }
 
@@ -401,6 +407,8 @@ impl GlassParams {
             amount: POPOVER_REFRACTION,
             height: POPOVER_REFRACTION_HEIGHT,
             outer_amount: 0.0,
+            outer_height: 0.0,
+            outer_opacity: 0.0,
         };
         p.bleed.amount = POPOVER_BLEED;
         p.bleed.height = POPOVER_BLEED;
@@ -438,6 +446,8 @@ impl GlassParams {
             amount: SWITCHER_REFRACTION,
             height: SWITCHER_REFRACTION_HEIGHT,
             outer_amount: 0.0,
+            outer_height: 0.0,
+            outer_opacity: 0.0,
         };
         p.highlight.amount = SWITCHER_RIM;
         p.highlight.color_bias = SWITCHER_RIM_BIAS;
@@ -466,6 +476,8 @@ impl GlassParams {
             amount: SIDEBAR_REFRACTION,
             height: SIDEBAR_REFRACTION_HEIGHT,
             outer_amount: 0.0,
+            outer_height: 0.0,
+            outer_opacity: 0.0,
         };
         p.highlight.amount = SIDEBAR_RIM;
         p.highlight.color_bias = SIDEBAR_RIM_BIAS;
@@ -505,6 +517,8 @@ impl GlassParams {
             amount: SNIPPET_REFRACTION,
             height: SNIPPET_REFRACTION_HEIGHT,
             outer_amount: 0.0,
+            outer_height: 0.0,
+            outer_opacity: 0.0,
         };
         p.highlight.amount = SNIPPET_RIM;
         p.highlight.color_bias = SNIPPET_RIM_BIAS;
@@ -530,6 +544,8 @@ impl GlassParams {
             amount: VEILED_REFRACTION,
             height: VEILED_REFRACTION_HEIGHT,
             outer_amount: 0.0,
+            outer_height: 0.0,
+            outer_opacity: 0.0,
         };
         p.highlight.amount = VEILED_RIM;
         p.highlight.color_bias = VEILED_RIM_BIAS;
@@ -556,6 +572,8 @@ impl GlassParams {
             amount: 0.0,
             height: 0.0,
             outer_amount: 0.0,
+            outer_height: 0.0,
+            outer_opacity: 0.0,
         };
         p.bleed.amount = 0.0;
         p.bleed.height = 0.0;
@@ -657,10 +675,13 @@ impl GlassParams {
                 amount: -(REFRACTION_PER_POINT_CLEAR * s).min(REFRACTION_AMOUNT_MAX),
                 height: (REFRACTION_HEIGHT_PER_POINT_CLEAR * s).min(REFRACTION_HEIGHT_MAX),
                 outer_amount: 0.0,
+                outer_height: 0.0,
+                outer_opacity: 0.0,
             },
             bleed: GlassBleed {
                 amount: 0.0,
                 height: 0.0,
+                blur: 0.0,
                 white: 1.0,
                 black: 0.75,
                 saturation: 1.2,
@@ -701,6 +722,9 @@ impl GlassParams {
             },
             capture_scale: GLASS_BACKDROP_SCALE,
             veil: [0.0; 2],
+            specular: GlassSpecular::NONE,
+            border: GlassBorder::NONE,
+            tint: [0.0; 4],
         }
     }
 

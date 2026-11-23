@@ -89,8 +89,13 @@ flag and its Increase Contrast option.
   a blur fill that darkens, lightens or covers), the face colour (`GlassFace`: a saturation about the luma of the encoded
   colour, then a white gain and per-channel limit on linear light, a luminance cap, a black lift and a fill), the refraction (`GlassRefraction`: strength in points
   and band along the edge; a pixel `t` of the band deep reads the face `amount · refraction_profile(t)` along the outward
-  normal, 0.9·e^(−4.2t)·(1 − t⁴)), the bleed of the widest level (`GlassBleed`), the key and fill rim lights (`GlassHighlight`) and the
-  drop and ring shadows (`GlassShadow`, at opacity 0 at rest). Some values follow the shape's size: for regular glass
+  normal, 0.9·e^(−4.2t)·(1 − t⁴); outside the edge the same profile bends the backdrop over `outer_height` at
+  `outer_opacity`), the edge bleed (`GlassBleed`: the backdrop `amount` points outside the edge, blurred by `blur`, through
+  its own saturation and levels, blended over a band `height` deep at `opacity`; `GlassBleed::normalized` sets the lengths
+  as fractions of the short side), the soft band and rim (`GlassHighlight`), the key and fill light added as white
+  (`GlassSpecular`), the control outline centred on the edge (`GlassBorder`), the tint over the face (`tint`,
+  `GlassParams::with_tint`) and the drop and ring shadows (`GlassShadow`), the bend, the bleed, the light, the outline,
+  the tint and the shadows at opacity 0 at rest. Some values follow the shape's size: for regular glass
   the refraction offset (−min(s/2, 60)) and band (min(s/4, 20)), the bleed band (0.35·min(s, 140)), the opacity of the
   two narrowest levels (0.4 + clamp(s − 64, 0, 76)/240) and, in the dark appearance, the luminance cap (0.6 at 60 pt
   down to 0.35 at 120 pt); for clear glass the offset (−min(0.65·s, 60)), band (min(0.36·s, 20)), blur radius

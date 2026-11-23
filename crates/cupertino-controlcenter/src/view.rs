@@ -2,11 +2,12 @@
 //! the open detail view grown out of its tile, and the transparent catcher under the panel that takes a press outside
 //! it.
 //!
-//! The window paints no panel of its own: every tile asks the compositor for glass under its outline, and the tiles
-//! join one glass container so the compositor can blend them where they come close. A level's track is glass of its own
-//! over its tile's. With Reduce Transparency the tiles are opaque and sit on one opaque panel, in the session's
-//! appearance. Otherwise the tiles look the same in both appearances: mid-toned glass with light labels and symbols;
-//! with Increase Contrast the glass takes its contrast face and each tile draws a rim.
+//! The window paints no panel of its own: the panel behind the tiles is clear glass on its own, every tile asks the
+//! compositor for glass under its outline, and the tiles join one glass container so the compositor can blend them
+//! where they come close. A level's track is glass of its own over its tile's. With Reduce Transparency the tiles are
+//! opaque and sit on one opaque panel, in the session's appearance. Otherwise the tiles look the same in both
+//! appearances: mid-toned glass with light labels and symbols; with Increase Contrast the glass takes its contrast face
+//! and each tile draws a rim.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -511,7 +512,13 @@ pub fn arranged<M: Clone + 'static>(
             cutouts: builder.cutouts(),
             on_outside: (!editing).then(|| to(away(Via::Pointer))),
             on_inactive: presentation.input.then(|| to(Input::Dismiss)),
-            children: builder.board(),
+            // the clear panel first, so the tiles lie over it
+            children: std::iter::once(Element::new(PanelGlass {
+                height: builder.height(),
+                alpha: presentation.alpha,
+            }))
+            .chain(builder.board())
+            .collect(),
         })
         .key(Key::from(PANEL_ROOT)),
         popup: None,

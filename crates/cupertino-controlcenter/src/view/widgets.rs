@@ -221,14 +221,8 @@ impl<M: Clone + 'static> Widget<M> for Board<M> {
             cx.set_group(alpha as f32, Vec::new());
         }
         if reduce_transparency(cx) {
-            let group = Rect::new(
-                WINDOW_ORIGIN.x,
-                WINDOW_ORIGIN.y,
-                WINDOW.width,
-                self.height + 2.0 * INSET,
-            );
             let color = by_appearance(cx, RT_GROUP, RT_GROUP_LIGHT);
-            fill(cx, group, layout::GROUP_RADIUS, color);
+            fill(cx, group(self.height), layout::GROUP_RADIUS, color);
         } else {
             // the tiles look the same in both appearances: a mid-toned glass with light labels and symbols
             cx.pin_appearance(true);
@@ -259,6 +253,69 @@ impl<M: Clone + 'static> Widget<M> for Board<M> {
         cx.role(Role::Group);
         cx.name(TITLE);
     }
+}
+
+/// The panel's outline around tiles `height` tall, in the window: [`INSET`] around them, with the corners of
+/// [`layout::GROUP_RADIUS`].
+pub(super) fn group(height: f64) -> Rect {
+    Rect::new(
+        WINDOW_ORIGIN.x,
+        WINDOW_ORIGIN.y,
+        WINDOW.width,
+        height + 2.0 * INSET,
+    )
+}
+
+/// The panel behind the tiles: clear glass in the panel's outline ([`group`]), as macOS lays its modules on a clear
+/// glass backdrop, on its own so it never blends with the tiles' container. With Reduce Transparency it draws nothing:
+/// the board paints the opaque panel there. Presses go through to the board.
+pub(super) struct PanelGlass {
+    /// Height of the tiles the panel goes around, as the board's.
+    pub(super) height: f64,
+    /// The panel's opacity.
+    pub(super) alpha: f64,
+}
+
+impl<M: 'static> Widget<M> for PanelGlass {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        spec(ContainerKind::Leaf, group(self.height))
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self.height != old.height {
+            Change::Layout
+        } else if self.alpha != old.alpha {
+            Change::Paint
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: group(self.height).size,
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        if !reduce_transparency(cx) {
+            let glass = Glass::clear()
+                .radius(layout::GROUP_RADIUS)
+                .alpha(finite_alpha(self.alpha));
+            cx.glass(glass);
+        }
+    }
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
 }
 
 /// One tile: glass under its outline, its content over it. A press on the tile outside its controls does nothing.

@@ -60,6 +60,10 @@ motion, only its alpha changing, so nothing changes look the moment a motion sta
 follows the fade; the content fades as one layer. Module glass
 keeps the wallpaper's colour: over white a tile comes out at 244 in the light appearance and 207 in the dark one. The
 Edit Controls capsule is glass as the tiles are.
+Behind the tiles lies the panel: clear glass (`Glass::clear`, as macOS lays its modules on a clear glass backdrop) in
+the outline the opaque panel of Reduce Transparency has, 8 pt around the grid and the Edit Controls capsule with 40 pt
+corners, closing in to an open detail view as it opens, faded with the panel. It is glass on its own, outside the
+tiles' container, so it never blends with them; with Reduce Transparency the opaque panel stands in its place.
 With Reduce Transparency each tile fills grey 0.114 on one grey 0.302 panel of 40 pt corners (0.96 on 0.82 in the light
 appearance), 8 pt around the grid and the Edit Controls capsule, closing in to an open detail view as it opens. With
 Increase Contrast each tile fills grey 0.463 inside a 0.5 pt rim of grey 0.341 (0.86 inside 0.45 in the light
@@ -252,7 +256,7 @@ the menu bar. The panel has no power controls: restart, shut down, sleep and log
 | Capsule content | 36 pt badge 14 pt in; text from 56 pt; 13 pt semibold title, 11 pt state |
 | Level | 4 pt track centred 42 pt below the tile's top; display track 36 to 254 pt, sound 33 to 213 pt; 26 pt output button centred at 265 pt |
 | Media tile | 40 pt artwork 14 pt in; buttons centred at 30, 70 and 110 pt across and 111 pt down |
-| Glass | regular, one container, 8 pt blend; in a light session black 0.27 over the glass so it reads as the dark glass does; the rim and glow are the same in both sessions |
+| Glass | tiles: module glass, one container, 8 pt blend; the panel behind them: clear glass on its own, 40 pt corners; in a light session black 0.27 over the glass so it reads as the dark glass does; the rim and glow are the same in both sessions |
 | Reduce Transparency | tiles grey 0.114, panel grey 0.302 with 40 pt corners and 8 pt padding |
 | Increase Contrast | tiles grey 0.463, 0.5 pt rim grey 0.341 |
 | Detail view | 64 pt header, 28 pt heading, 32 pt rows (at most 9), 9 pt separator, 32 pt settings row, 8 pt bottom (`layout::detail`) |

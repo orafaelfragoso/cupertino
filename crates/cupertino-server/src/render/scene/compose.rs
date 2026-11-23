@@ -142,6 +142,17 @@ fn glass_pieces(
         })
         .collect();
     let mut container = Container::new(shapes, spec.spacing as f32, mode);
+    // a member in other glass than the first (a selected segment in its group) keeps its own recipe on its shape
+    let last = members.len() - 1;
+    for (j, b) in members.iter().enumerate().skip(1) {
+        if let Some(own) = b.glass.filter(|g| g.style != spec.style) {
+            let own_mode = cupertino_theme::GlassMode {
+                style: own.style,
+                ..mode
+            };
+            container = container.with_shape_mode(last - j, own_mode);
+        }
+    }
     // a callout (a panel and its pointer, a label and its pointer) is one piece of glass that lights its own rim, and a
     // small one keeps the glass's face
     let callout = members.len() > 1 && spec.container != 0;
@@ -156,7 +167,7 @@ fn glass_pieces(
             // with Reduce Transparency or Increase Contrast the popup's rim is drawn apart (`inner_rim_item`), lit all
             // round, in place of the glass's own
             _ if popup && (mode.reduce_transparency || mode.increase_contrast) => {
-                container.params.highlight.amount = 0.0
+                container.for_each_recipe(|r| r.highlight.amount = 0.0)
             }
             _ => {}
         }
@@ -191,7 +202,7 @@ fn glass_pieces(
         {
             // a small dark callout (a label) is a veil a little lighter than the plain glass; popover glass keeps its
             // own face
-            container.params.face.fill = SMALL_CALLOUT_FACE_DARK;
+            container.for_each_recipe(|r| r.face.fill = SMALL_CALLOUT_FACE_DARK);
         }
     }
     let alpha = members.iter().map(|b| b.alpha).fold(0.0, f64::max) as f32 * opacity;

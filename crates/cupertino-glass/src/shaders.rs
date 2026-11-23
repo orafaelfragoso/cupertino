@@ -107,10 +107,27 @@ pub const PLACEMENT: (u32, u32) = (1, 0);
 /// Where the material program binds its region block (`RegionParams`) and its backdrop.
 pub const REGION_BLOCK: (u32, u32) = (0, 0);
 pub const REGION_BACKDROP: (u32, u32) = (0, 1);
-/// Where the glass program binds its container block (`GlassUniform`), its four blurred copies and its blur fill.
+/// Where the glass program binds its container block (`GlassUniform`), its four blurred copies, its blur fill, the
+/// blur its edge bleed reads and the backdrop as captured, which the bend outside the edge reads.
 pub const GLASS_BLOCK: (u32, u32) = (0, 0);
 pub const GLASS_LEVELS: [(u32, u32); 4] = [(0, 1), (0, 2), (0, 3), (0, 4)];
 pub const GLASS_FILL: (u32, u32) = (0, 5);
+pub const GLASS_BLEED: (u32, u32) = (0, 6);
+pub const GLASS_SHARP: (u32, u32) = (0, 7);
+/// Every texture the glass program reads, in binding order and in the order of `Container::shade`'s copies
+/// (`glass::FILL_LEVEL`, `BLEED_LEVEL`, `SHARP_LEVEL` after the blurred copies).
+pub const GLASS_TEXTURES: [(u32, u32); 7] = [
+    GLASS_LEVELS[0],
+    GLASS_LEVELS[1],
+    GLASS_LEVELS[2],
+    GLASS_LEVELS[3],
+    GLASS_FILL,
+    GLASS_BLEED,
+    GLASS_SHARP,
+];
+/// Where the glass program binds the sampler its textures are read through: beside the placement block, as its
+/// textures fill the first group.
+pub const GLASS_SAMPLER: (u32, u32) = (1, 1);
 /// Where the vibrant program binds its block (`VibrantUniform`), its glyphs and the copy of its target.
 pub const VIBRANT_BLOCK: (u32, u32) = (0, 0);
 pub const VIBRANT_GLYPHS: (u32, u32) = (0, 1);

@@ -151,7 +151,7 @@ pub struct GlassFace {
     pub fill: [f32; 4],
 }
 
-/// Refraction at the inner edge of the shape.
+/// Refraction at the inner edge of the shape, and the bend of the backdrop just outside it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GlassRefraction {
     /// Strength in points: a pixel at the edge reads the face [`REFRACTION_EDGE_SHARE`] of it along the outward normal,
@@ -159,27 +159,122 @@ pub struct GlassRefraction {
     pub amount: f32,
     /// Width in points of the band inside the edge that bends.
     pub height: f32,
-    /// Strength outside the edge (none at rest).
+    /// Strength in points of the bend outside the edge: a pixel `d` outside the outline reads the backdrop
+    /// `outer_amount · g(d / outer_height)` points along the outward normal (`g` the inner band's
+    /// [`refraction_profile`]), so a negative strength draws what lies next to the shape towards it.
     pub outer_amount: f32,
+    /// Width in points of the band outside the edge that bends.
+    pub outer_height: f32,
+    /// How much of the bent backdrop is laid over what lies outside the edge, fading out across the band: none at
+    /// rest.
+    pub outer_opacity: f32,
 }
 
-/// The backdrop's colour bleeding into the inner edge.
+/// The backdrop just outside the shape bleeding into the inner edge: inside a band `height` deep along the edge, the
+/// backdrop read `amount · (1 − t)` points outside the pixel (`t` the depth into the band, 0 at the edge), blurred by a
+/// Gaussian of deviation `blur`, through its own saturation and levels, blends into the face at `opacity · (1 − t)²`,
+/// so the rim picks up the colour of what surrounds it. Lengths are points for the shape's size;
+/// [`GlassBleed::normalized`] sets them as fractions of its short side.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GlassBleed {
-    /// Strength in percent at the edge.
+    /// How far outside the pixel the bleed reads the backdrop at the edge, in points; none at the band's inner side.
     pub amount: f32,
     /// Width in points of the band it fades over.
     pub height: f32,
-    /// Encoded level that white maps to.
+    /// The Gaussian deviation in points of the blur of the backdrop it reads.
+    pub blur: f32,
+    /// The white level of the bleed's colour: it loses `(1 − white) · L` on every channel, `L` its luma.
     pub white: f32,
-    /// Encoded level that black maps to.
+    /// The black level: the bleed's colour gains `black · (1 − L)` on every channel.
     pub black: f32,
+    /// Saturation about the Rec. 709 luma of the bleed's encoded colour (1 leaves it).
     pub saturation: f32,
-    /// Darken blending (light glass) instead of lighten blending (dark glass).
+    /// Darken blending, the smaller of each channel (light glass), instead of normal blending (dark glass).
     pub darken: bool,
     /// How much of the bleed shows: none at rest.
     pub opacity: f32,
 }
+
+impl GlassBleed {
+    /// The bleed with its band, its reach and its blur set as fractions of `short_side` (points), the blur at most
+    /// `max_blur` points: the bleed of a shape of that size from the size-free values of a recipe.
+    pub fn normalized(
+        self,
+        short_side: f32,
+        height: f32,
+        amount: f32,
+        blur: f32,
+        max_blur: f32,
+    ) -> Self {
+        let s = if short_side.is_finite() {
+            short_side.max(0.0)
+        } else {
+            0.0
+        };
+        Self {
+            height: height * s,
+            amount: amount * s,
+            blur: (blur * s).min(max_blur).max(0.0),
+            ..self
+        }
+    }
+}
+
+/// The key and fill light along the edge, added to the face as white light: the arc of edge facing the key light, and
+/// the opposite one facing the fill light at `fill` of its strength, each lit at `amount` in a band `height` deep that
+/// fades out along a smoothstep; under it the diffuse glow the same lights cast, a band `height · diffuse.height_scale`
+/// deep fading as the square of what is left of it, over arcs `diffuse.spread_scale` as wide, at
+/// `amount · diffuse.amount_scale`. An arc lights `1 − smoothstep(0, spread, a)`, `a` the angle between the edge's
+/// outward normal and its light.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GlassSpecular {
+    /// Strength of the key light (0 for none).
+    pub amount: f32,
+    /// Half-width in radians of each arc: how far from its light's direction the arc reaches.
+    pub spread: f32,
+    /// Depth in points of the band.
+    pub height: f32,
+    /// Direction the key light comes from, in radians, counter-clockwise from the right with y up (π/2 is the top);
+    /// the fill light comes from the opposite direction.
+    pub angle: f32,
+    /// Strength of the fill light per unit of the key's.
+    pub fill: f32,
+    /// The diffuse glow, in multiples of the band's depth, the arcs' half-width and the strength.
+    pub diffuse: GlowDiffuse,
+}
+
+impl GlassSpecular {
+    /// No key or fill light.
+    pub const NONE: Self = Self {
+        amount: 0.0,
+        spread: 0.0,
+        height: 0.0,
+        angle: HIGHLIGHT_ANGLE,
+        fill: 1.0,
+        diffuse: GlowDiffuse::NONE,
+    };
+}
+
+/// The outline a control draws round its glass: a black line of `opacity`, `width` points wide, centred on the edge and
+/// laid under the key and fill light, which hide it down to [`BORDER_LIT_SHARE`] where they fall.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GlassBorder {
+    /// Opacity of the line (0 for none).
+    pub opacity: f32,
+    /// Width in points.
+    pub width: f32,
+}
+
+impl GlassBorder {
+    /// No outline.
+    pub const NONE: Self = Self {
+        opacity: 0.0,
+        width: 0.0,
+    };
+}
+
+/// How much of the control outline ([`GlassBorder`]) shows where the key or fill light falls on it fully.
+pub const BORDER_LIT_SHARE: f32 = 0.2;
 
 /// The rim along the edge, and the soft band of light some surfaces lay under their top and bottom edges.
 ///
@@ -318,6 +413,24 @@ pub struct GlassParams {
     /// A black veil over the face, its opacity at the top and at the bottom of the shapes' bounds, linear between and
     /// laid after the rim; `[0, 0]` for none.
     pub veil: [f32; 2],
+    /// The key and fill light added along the edge ([`GlassSpecular`]); none in the recipes of today.
+    pub specular: GlassSpecular,
+    /// The control outline centred on the edge ([`GlassBorder`]); none in the recipes of today.
+    pub border: GlassBorder,
+    /// A straight sRGB colour laid over the face in normal blending, after the fill and before the rim; its alpha is
+    /// the tint's own times the face opacity its caller asks for ([`GlassParams::with_tint`]). Transparent for none.
+    pub tint: [f32; 4],
+}
+
+impl GlassParams {
+    /// The recipe with `tint` (straight sRGB) laid over its face at the tint's alpha times `face_opacity`.
+    pub fn with_tint(self, tint: [f32; 4], face_opacity: f32) -> Self {
+        let a = (tint[3] * face_opacity).clamp(0.0, 1.0);
+        Self {
+            tint: [tint[0], tint[1], tint[2], if a.is_nan() { 0.0 } else { a }],
+            ..self
+        }
+    }
 }
 
 // ---- size rules -------------------------------------------------------------------------------------------------
@@ -336,6 +449,8 @@ const REFRACTION_HEIGHT_PER_POINT_REGULAR: f32 = 0.25;
 const REFRACTION_HEIGHT_PER_POINT_CLEAR: f32 = 0.36;
 /// Bleed strength and width per point of short side (regular style).
 const BLEED_PER_POINT: f32 = 0.35;
+/// The widest blur of the backdrop the bleed reads, in points.
+const BLEED_BLUR_MAX: f32 = 160.0;
 /// Short side past which the bleed stops growing.
 const BLEED_SIDE_MAX: f32 = 240.0;
 /// Opacity of the first blur level of a regular shape by short side `(side, opacity)`, which scales its blur radius;

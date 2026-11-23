@@ -13,40 +13,68 @@
 //! 2. **Colour matrix.** On encoded values: saturation about the Rec. 709 luma `L`; the luma compression
 //!    `c − (1 − max_luma) · L · (0.75 c + 0.25 L)` (a grey `x` becomes `x − (1 − max_luma) · x²`); the levels, one shift
 //!    `black · (1 − L) − (1 − white) · L` added to every channel, `L` the luma after the compression; a limit at
-//!    `clamp`; then the fill colour over it.
-//! 3. **Inner refraction.** Inside a band `height` wide along the edge, the face is read `amount · g(t)` points along
-//!    the field's outward normal, where `t` runs from 0 at the edge to 1 at the band's inner side and
-//!    `g(t) = 0.9 · e^(−4.2 t) · (1 − t⁴)` ([`refraction_profile`]): a negative strength reads it further inside, so the
-//!    edge magnifies what lies just inside it.
-//! 4. **Bleed.** The blur fill, mapped to the encoded range `[black, white]` after its own saturation, blends
-//!    into the face over a band `height` wide at `amount` percent: lighten on dark glass, darken on light glass. It
-//!    shows at the bleed's opacity, which is 0 at rest.
-//! 5. **Soft band and rim.** Where a surface asks for it, a soft band of the light `matrix · face` along the arcs of
+//!    `clamp` ([`face_tone`]). The inner refraction moves where all of this is read: inside a band `height` wide along
+//!    the edge, the face is read `amount · g(t)` points along the field's outward normal, where `t` runs from 0 at the
+//!    edge to 1 at the band's inner side and `g(t) = 0.9 · e^(−4.2 t) · (1 − t⁴)` ([`refraction_profile`]): a negative
+//!    strength reads it further inside, so the edge magnifies what lies just inside it.
+//! 3. **Edge bleed, fill and tint.** Inside a band `height` deep, the backdrop `amount · (1 − t)` points outside the
+//!    pixel, blurred by its own Gaussian (the copy [`BLEED_LEVEL`]), through its own saturation and levels
+//!    ([`bleed_tone`]), blends into the face at `opacity · (1 − t)²`, darken or normal ([`bleed_read`],
+//!    [`bleed_into`]); none at rest. Then the face's fill and the tint over it, in normal blending ([`fill_and_tint`]).
+//! 4. **Soft band and rim.** Where a surface asks for it, a soft band of the light `matrix · face` along the arcs of
 //!    edge facing either end of the axis through `angle` ([`highlight_lobe`]). Then the rim ([`rim_shift`]): every
 //!    channel shifted by `amount · color_bias` (darker for a negative bias), scaled by the face's brightness
 //!    ([`rim_brightness`]) and by the edge's direction ([`rim_direction`], strongest on diagonals), in a band
 //!    `RIM_DEPTH_PER_HEIGHT · height` deep.
-//! 6. **Ring shadow.** Inside the shape, a stroke `stroke` wide along the inside of the outline, moved up by
+//! 5. **Control outline and key and fill light.** The control outline, a black line centred on the edge, darkens the
+//!    face ([`border_line`]); over it the key and fill light and their diffuse glow add white ([`specular_light`]),
+//!    and where they fall the outline shows at a fifth. Neither shows in today's recipes.
+//! 6. **Veil.** A black veil from the top of the shapes to their bottom ([`Container::veil`]).
+//! 7. **Ring shadow.** Inside the shape, a stroke `stroke` wide along the inside of the outline, moved up by
 //!    `ring_offset` and blurred with a Gaussian of `ring_blur`, darkens the face by its opacity ([`ring_shadow`]).
-//! 7. **Drop shadow.** Outside the shape: a drop shadow offset by `offset`, blurred by `height` at `amount` percent
-//!    of its fill's alpha, and an outline hairline. Ring and drop shadow are drawn at their opacity, which is 0 at rest.
-//!    A pixel the shape's edge crosses shows the glass over this in the part the glass leaves uncovered.
-//! 8. **Edge.** Where the container carries one ([`GlassEdge`]), a line of its width just outside each shape's own
+//! 8. **Outside.** The backdrop bent outside the edge ([`outer_read`], the sharp copy [`SHARP_LEVEL`]), under a drop
+//!    shadow offset by `offset`, blurred by `height` at `amount` percent of its fill's alpha, and an outline hairline,
+//!    under the edge line and the control outline. The bend, ring and drop shadow are drawn at their opacity, which is
+//!    0 at rest. A pixel the shape's edge crosses shows the glass over this in the part the glass leaves uncovered.
+//! 9. **Edge.** Where the container carries one ([`GlassEdge`]), a line of its width just outside each shape's own
 //!    outline, left out inside the container's other shapes ([`Container::edge_alpha_at`]), so where the shapes overlap
 //!    only the outline of the whole shows, as a stroke around each shape cut by the others draws it; drawn over all of
 //!    the above: over what lies there and over the glass's own antialiased edge ([`edge_share`], [`over_edge`]), its
 //!    band in the field's units as the glass's own coverage is. A soft edge is that band blurred by a Gaussian, in
 //!    closed form ([`soft_edge_share`]), so it softens as content blurred with the same deviation does.
 //!
+//! Each shape of a container may carry a recipe of its own ([`Container::with_shape_mode`]): its look
+//! ([`ShapeLook`]: face, fill, tint, rim, key and fill light, ring, control outline and the opacities of the bleed and
+//! the bend) and its size-dependent values ([`ShapeValues`]) mix across the union with the field's weights, and where the
+//! looks differ each shape's look is laid over that by the share of the pixel it covers ([`Container::field_look`]), so a
+//! segment inside its group shows its own glass. The blur fill, the soft band, the shadows, the edge line and the veil
+//! are the container's.
+//!
 //! The foreground of text and symbols on glass is [`foreground`]: the face under the glyph through the mode's 4×5 matrix,
 //! mixed over the face by the glyph's coverage.
 //!
 //! Colours are straight sRGB-encoded `f32` unless a function says otherwise.
 
+mod stages;
+mod uniform;
+
+pub use stages::{
+    bleed_into, bleed_read, bleed_tone, border_and_light, border_line, fill_and_tint, key_and_fill,
+    light_arc, outer_read, smoothstep, specular_light, ShapeLook,
+};
+pub use uniform::GlassUniform;
+
 use cupertino_theme::glass::{
     apply_matrix, refraction_profile, rim_brightness, rim_direction, ColorMatrix, GlassParams,
-    BLUR_LEVELS, RIM_DEPTH_PER_HEIGHT,
+    BLUR_LEVELS, BLUR_SIGMA_MAX, RIM_DEPTH_PER_HEIGHT,
 };
+
+/// The copy of the backdrop `Container::shade`'s sampler reads for the blur fill, after the blurred copies.
+pub const FILL_LEVEL: usize = BLUR_LEVELS;
+/// The copy blurred for the edge bleed ([`cupertino_theme::glass::GlassBleed::blur`]).
+pub const BLEED_LEVEL: usize = BLUR_LEVELS + 1;
+/// The backdrop as captured, unblurred, which the bend outside the edge reads.
+pub const SHARP_LEVEL: usize = BLUR_LEVELS + 2;
 
 /// Deviations closer than this, in points, are blurred once.
 const SAME_SIGMA: f32 = 0.05;
@@ -438,16 +466,25 @@ pub fn face_levels(c: Rgb, black: f32, white: f32) -> Rgb {
     c.map(|v| v + shift)
 }
 
-/// Stage 2: the face colour of the blurred backdrop `c`, with the face's `max_luma` replaced by `max_luma` (it depends
-/// on the shape's size): saturation, luma compression and levels on encoded values, then the fill over it.
-pub fn face_color(c: Rgb, p: &GlassParams, max_luma: f32) -> Rgb {
+/// Stage 2: the tone of the face of the blurred backdrop `c`, with the face's `max_luma` replaced by `max_luma` (it
+/// depends on the shape's size): saturation, luma compression and levels on encoded values, within the face's limit.
+pub fn face_tone(c: Rgb, p: &GlassParams, max_luma: f32) -> Rgb {
     let f = &p.face;
     let c = compress_luma(saturate_encoded(c, f.saturation), max_luma);
-    let c = face_levels(c, f.black, f.white).map(|v| v.clamp(0.0, f.clamp.min(1.0)));
-    mix(c, [f.fill[0], f.fill[1], f.fill[2]], f.fill[3])
+    face_levels(c, f.black, f.white).map(|v| v.clamp(0.0, f.clamp.min(1.0)))
 }
 
-/// Stage 3: where the face is read for a pixel `d` from the edge (negative inside) with outward `normal`, as an
+/// The face colour of the blurred backdrop `c`: its tone ([`face_tone`]), then the fill over it.
+pub fn face_color(c: Rgb, p: &GlassParams, max_luma: f32) -> Rgb {
+    let f = &p.face;
+    mix(
+        face_tone(c, p, max_luma),
+        [f.fill[0], f.fill[1], f.fill[2]],
+        f.fill[3],
+    )
+}
+
+/// Stage 2: where the face is read for a pixel `d` from the edge (negative inside) with outward `normal`, as an
 /// offset in points: `amount · g(−d / height)` along the normal ([`refraction_profile`]), further inside for a negative
 /// strength. Zero outside the shape, past the band and without refraction.
 pub fn refraction_offset(d: f32, normal: [f32; 2], amount: f32, height: f32) -> [f32; 2] {
@@ -456,27 +493,6 @@ pub fn refraction_offset(d: f32, normal: [f32; 2], amount: f32, height: f32) -> 
     }
     let reach = amount * refraction_profile(-d / height);
     [normal[0] * reach, normal[1] * reach]
-}
-
-/// Stage 4: the bleed of the backdrop colour `wide` (the blur fill) into the face `c`, `d` from the edge, at the
-/// bleed's opacity (none at rest).
-pub fn bleed(c: Rgb, wide: Rgb, d: f32, p: &GlassParams, amount: f32, height: f32) -> Rgb {
-    let b = &p.bleed;
-    if amount <= 0.0 || height <= 0.0 || b.opacity <= 0.0 {
-        return c;
-    }
-    let t = (-d / height).clamp(0.0, 1.0);
-    let w = (amount / 100.0).clamp(0.0, 1.0) * b.opacity.min(1.0) * (1.0 - t) * (1.0 - t);
-    let tone =
-        saturate_encoded(wide, b.saturation).map(|v| b.black + (b.white - b.black) * v.min(1.0));
-    let blended: Rgb = std::array::from_fn(|i| {
-        if b.darken {
-            c[i].min(tone[i])
-        } else {
-            c[i].max(tone[i])
-        }
-    });
-    mix(c, blended, w)
 }
 
 /// Angle between two directions in radians, in `[0, π]`.
@@ -672,13 +688,18 @@ pub fn foreground(face: Rgb, matrix: &ColorMatrix, coverage: f32) -> Rgb {
     mix(face, matrix_rgb(matrix, face), coverage.clamp(0.0, 1.0))
 }
 
-/// Size-dependent values of one shape, as the shaders take them per shape.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// Size-dependent values of one shape, as the shaders take them per shape: lengths in points.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct ShapeValues {
     pub refraction_amount: f32,
     pub refraction_height: f32,
+    /// How far outside the edge the edge bleed reads, and the depth of its band.
     pub bleed_amount: f32,
     pub bleed_height: f32,
+    /// The strength and the band of the bend outside the edge.
+    pub outer_amount: f32,
+    pub outer_height: f32,
     pub max_luma: f32,
     /// The deviation of the shape's blur in points.
     pub blur_sigma: f32,
@@ -693,6 +714,8 @@ impl ShapeValues {
             refraction_height: p.refraction.height,
             bleed_amount: p.bleed.amount,
             bleed_height: p.bleed.height,
+            outer_amount: p.refraction.outer_amount,
+            outer_height: p.refraction.outer_height,
             max_luma: p.face.max_luma,
             blur_sigma: p.blur_sigma(),
             blur_level: 0.0,
@@ -706,6 +729,8 @@ impl ShapeValues {
             refraction_height: m(a.refraction_height, b.refraction_height),
             bleed_amount: m(a.bleed_amount, b.bleed_amount),
             bleed_height: m(a.bleed_height, b.bleed_height),
+            outer_amount: m(a.outer_amount, b.outer_amount),
+            outer_height: m(a.outer_height, b.outer_height),
             max_luma: m(a.max_luma, b.max_luma),
             blur_sigma: m(a.blur_sigma, b.blur_sigma),
             blur_level: m(a.blur_level, b.blur_level),
@@ -762,6 +787,9 @@ pub struct Container {
     pub lens: f32,
     /// The line along the outside of the union's outline ([`GlassEdge`]); none by default.
     pub edge: GlassEdge,
+    /// Each shape's own recipe, where it has one ([`Container::with_shape_mode`]); `None` takes the container's
+    /// `params`. Its look ([`ShapeLook`]) and its size-dependent values replace the container's on that shape.
+    pub recipes: Vec<Option<GlassParams>>,
 }
 
 impl Container {
@@ -774,15 +802,12 @@ impl Container {
             .iter()
             .map(GlassShape::short_side)
             .fold(0.0f32, f32::max);
-        let mut values: Vec<ShapeValues> = shapes
+        let values: Vec<ShapeValues> = shapes
             .iter()
             .map(|s| ShapeValues::of(&GlassParams::new(mode, s.short_side())))
             .collect();
-        let sigmas = blur_levels(&values.iter().map(|v| v.blur_sigma).collect::<Vec<_>>());
-        for v in &mut values {
-            v.blur_level = level_position(&sigmas, v.blur_sigma);
-        }
-        Self {
+        let mut c = Self {
+            recipes: vec![None; shapes.len()],
             shapes,
             spacing: if spacing.is_finite() {
                 spacing.clamp(0.0, MAX_SPACING)
@@ -792,12 +817,74 @@ impl Container {
             mode,
             params: GlassParams::new(mode, largest),
             values,
-            sigmas,
+            sigmas: Vec::new(),
             cut: None,
             blur_ramp: [1.0, 1.0],
             lens: 1.0,
             edge: GlassEdge::default(),
+        };
+        c.place_levels();
+        c
+    }
+
+    /// The blurred copies the shapes' blurs need ([`blur_levels`], with an unblurred one under a blur ramp), and where
+    /// each shape's blur lies among them.
+    fn place_levels(&mut self) {
+        let mut all: Vec<f32> = self.values.iter().map(|v| v.blur_sigma).collect();
+        if self.blur_ramp[0] < 1.0 || self.blur_ramp[1] < 1.0 {
+            all.push(0.0);
         }
+        self.sigmas = blur_levels(&all);
+        for v in &mut self.values {
+            v.blur_level = level_position(&self.sigmas, v.blur_sigma);
+        }
+    }
+
+    /// The recipe of shape `i`: its own, or the container's.
+    pub fn recipe(&self, i: usize) -> &GlassParams {
+        self.recipes
+            .get(i)
+            .and_then(Option::as_ref)
+            .unwrap_or(&self.params)
+    }
+
+    /// The container with shape `i` in the recipe `params` (for that shape's size): its look and its size-dependent
+    /// values, while the blur fill, the soft band, the shadows, the edge line and the veil stay the container's. Out of
+    /// range does nothing.
+    pub fn with_shape_recipe(mut self, i: usize, params: GlassParams) -> Self {
+        if i < self.shapes.len() {
+            self.values[i] = ShapeValues::of(&params);
+            self.recipes[i] = Some(params);
+            self.place_levels();
+        }
+        self
+    }
+
+    /// The container with shape `i` in the glass of `mode` at its size ([`Container::with_shape_recipe`]): a selected
+    /// segment of another style than the group it is in, joined in one container.
+    pub fn with_shape_mode(self, i: usize, mode: GlassMode) -> Self {
+        match self.shapes.get(i) {
+            Some(s) => {
+                let params = GlassParams::new(mode, s.short_side());
+                self.with_shape_recipe(i, params)
+            }
+            None => self,
+        }
+    }
+
+    /// `change` made to the container's recipe and to each shape's own.
+    pub fn for_each_recipe(&mut self, mut change: impl FnMut(&mut GlassParams)) {
+        change(&mut self.params);
+        for p in self.recipes.iter_mut().flatten() {
+            change(p);
+        }
+    }
+
+    /// Each shape's look ([`ShapeLook`]), in order.
+    pub fn looks(&self) -> Vec<ShapeLook> {
+        (0..self.shapes.len())
+            .map(|i| ShapeLook::of(self.recipe(i)))
+            .collect()
     }
 
     /// The container with `edge` along the outside of its outline.
@@ -838,14 +925,7 @@ impl Container {
     /// sharp.
     pub fn with_blur_ramp(mut self, ramp: [f32; 2]) -> Self {
         self.blur_ramp = ramp.map(|w| w.clamp(0.0, 1.0));
-        if ramp[0] < 1.0 || ramp[1] < 1.0 {
-            let mut all: Vec<f32> = self.values.iter().map(|v| v.blur_sigma).collect();
-            all.push(0.0);
-            self.sigmas = blur_levels(&all);
-            for v in &mut self.values {
-                v.blur_level = level_position(&self.sigmas, v.blur_sigma);
-            }
-        }
+        self.place_levels();
         self
     }
 
@@ -915,8 +995,84 @@ impl Container {
         } else {
             0.0
         };
-        let r = self.params.reach().max(edge) + bulge;
+        let stages = (0..self.shapes.len())
+            .map(|i| self.stage_reach(i))
+            .fold(self.params.reach(), f32::max);
+        let r = stages.max(edge) + bulge;
         Some([x - r, y - r, w + 2.0 * r, h + 2.0 * r])
+    }
+
+    /// How far past shape `i` its recipe reads the backdrop or draws, in points: its blur and shadow
+    /// ([`GlassParams::reach`]), the edge bleed's reach and three deviations of its blur, the bend outside the edge and
+    /// the outer half of the control outline, each where it shows.
+    fn stage_reach(&self, i: usize) -> f32 {
+        let (p, v) = (self.recipe(i), &self.values[i]);
+        let bleed = if p.bleed.opacity > 0.0 && v.bleed_height > 0.0 {
+            v.bleed_amount.abs() + 3.0 * p.bleed.blur.max(0.0)
+        } else {
+            0.0
+        };
+        let outer = if self.bends_outside(i) {
+            v.outer_height + v.outer_amount.abs()
+        } else {
+            0.0
+        };
+        let border = if p.border.opacity > 0.0 && p.border.width > 0.0 {
+            0.5 * p.border.width + 1.0
+        } else {
+            0.0
+        };
+        p.reach().max(bleed).max(outer).max(border)
+    }
+
+    /// Whether shape `i` bleeds the backdrop outside it into its edge.
+    fn bleeds_at(&self, i: usize) -> bool {
+        let v = &self.values[i];
+        self.recipe(i).bleed.opacity > 0.0 && v.bleed_height > 0.0
+    }
+
+    /// Whether shape `i` bends the backdrop outside its edge.
+    fn bends_outside(&self, i: usize) -> bool {
+        let v = &self.values[i];
+        self.recipe(i).refraction.outer_opacity > 0.0
+            && v.outer_height > 0.0
+            && v.outer_amount != 0.0
+    }
+
+    /// The field, the shape values and the shapes' looks blended like the field at `p`; where the shapes differ in look
+    /// ([`Container::looks_differ`]), each shape's look laid over that, back to front, by the share of the pixel it
+    /// covers, so a segment inside its group shows its own glass, antialiased along its outline.
+    pub fn field_look(&self, p: [f32; 2]) -> (f32, ShapeValues, ShapeLook) {
+        let (d, weights) = union_field(&self.shapes, self.spacing, p);
+        let mut v = self.values[0];
+        let mut look = ShapeLook::of(self.recipe(0));
+        let mut total = weights[0];
+        for (i, w) in weights.iter().enumerate().skip(1) {
+            if total + w > 0.0 {
+                let t = w / (total + w);
+                v = ShapeValues::mix(v, self.values[i], t);
+                look = ShapeLook::mix(look, ShapeLook::of(self.recipe(i)), t);
+            }
+            total += w;
+        }
+        if self.looks_differ() {
+            for (i, s) in self.shapes.iter().enumerate() {
+                let cov = (0.5 - s.sdf(p)).clamp(0.0, 1.0);
+                if cov > 0.0 {
+                    look = ShapeLook::mix(look, ShapeLook::of(self.recipe(i)), cov);
+                }
+            }
+        }
+        (d, v, look)
+    }
+
+    /// Whether the shapes' looks differ: some shape has a recipe of its own whose look is not the container's.
+    pub fn looks_differ(&self) -> bool {
+        let own = ShapeLook::of(&self.params);
+        self.recipes
+            .iter()
+            .flatten()
+            .any(|r| ShapeLook::of(r) != own)
     }
 
     /// The field and the shape values blended like the field at `p`.
@@ -933,8 +1089,9 @@ impl Container {
         (d, v)
     }
 
-    /// Shade the pixel at `p` (points): `sample(level, q)` reads blur level `level` (0..4, and 4 for the blur fill) of
-    /// the backdrop at `q`. Returns the colour and its coverage (glass inside, shadow outside), none outside the
+    /// Shade the pixel at `p` (points): `sample(level, q)` reads copy `level` of the backdrop at `q`: the blurred copies
+    /// `0..BLUR_LEVELS`, the blur fill ([`FILL_LEVEL`]), the edge bleed's blur ([`BLEED_LEVEL`]) and the backdrop as
+    /// captured ([`SHARP_LEVEL`]). Returns the colour and its coverage (glass inside, shadow outside), none outside the
     /// outline the container is cut to.
     pub fn shade(&self, p: [f32; 2], sample: &dyn Fn(usize, [f32; 2]) -> Rgb) -> (Rgb, f32) {
         let (c, a) = self.shade_shapes(p, sample);
@@ -948,8 +1105,11 @@ impl Container {
 
     /// The colour and coverage of the shapes at `p`, before the cut.
     fn shade_shapes(&self, p: [f32; 2], sample: &dyn Fn(usize, [f32; 2]) -> Rgb) -> (Rgb, f32) {
-        let params = &self.params;
-        let (d, v) = self.field(p);
+        let (d, v, look) = self.field_look(p);
+        // the container's recipe with the look of the shapes at p
+        let mut here = self.params;
+        look.apply(&mut here);
+        let params = &here;
         let gradient = field_gradient(&self.shapes, self.spacing, p);
         let slope = (gradient[0] * gradient[0] + gradient[1] * gradient[1]).sqrt();
         let normal = if slope < 1e-6 {
@@ -962,31 +1122,49 @@ impl Container {
             let levels: [Rgb; BLUR_LEVELS] = std::array::from_fn(|i| sample(i, p));
             level_mix(levels, v.blur_level)
         };
+        // the backdrop bent outside the edge, under what the shape draws there
+        let bent = || {
+            outer_read(
+                p,
+                d,
+                normal,
+                v.outer_amount,
+                v.outer_height,
+                params.refraction.outer_opacity,
+            )
+            .map(|(q, alpha)| (sample(SHARP_LEVEL, q), alpha))
+        };
         if d > 0.5 {
-            return self.outside(p, d, normal, backdrop());
+            return self.outside(p, d, normal, backdrop(), params, bent());
         }
         let weight = self.blur_weight(p);
         let face_at = |q: [f32; 2]| {
             let levels: [Rgb; BLUR_LEVELS] = std::array::from_fn(|i| sample(i, q));
             let c = blur_fill_weighted(
                 level_mix(levels, v.blur_level * weight),
-                sample(BLUR_LEVELS, q),
+                sample(FILL_LEVEL, q),
                 params,
                 weight,
             );
-            face_color(c, params, v.max_luma)
+            face_tone(c, params, v.max_luma)
         };
         let off = refraction_offset(d, normal, v.refraction_amount, v.refraction_height);
         let mut c = face_at(self.lensed([p[0] + off[0], p[1] + off[1]]));
-        c = bleed(
-            c,
-            sample(BLUR_LEVELS, p),
+        let read = bleed_read(
+            p,
             d,
-            params,
+            normal,
             v.bleed_amount,
             v.bleed_height,
+            params.bleed.opacity,
         );
-        c = highlight(c, edge_distance(d, slope), normal, params);
+        if let Some((at, w)) = read {
+            c = bleed_into(c, bleed_tone(sample(BLEED_LEVEL, at), params), w, params);
+        }
+        c = fill_and_tint(c, params);
+        let de = edge_distance(d, slope);
+        c = highlight(c, de, normal, params);
+        c = border_and_light(c, d, (-de).max(0.0), normal, params);
         c = self.veil(p, c);
         // the ring is moved up: at p it is what the shape's field is a ring offset below p
         let ring = ring_shadow(
@@ -996,7 +1174,7 @@ impl Container {
         c = c.map(|v| v * (1.0 - ring));
         // an edge pixel: the glass over what lies outside it in the part it leaves uncovered
         let cov = (0.5 - d).clamp(0.0, 1.0);
-        let (outside, alpha) = self.outside(p, d, normal, backdrop());
+        let (outside, alpha) = self.outside(p, d, normal, backdrop(), params, bent());
         let under = (1.0 - cov) * alpha;
         let a = cov + under;
         if a > 0.0 {
@@ -1027,223 +1205,80 @@ impl Container {
     }
 
     /// What the shape draws outside itself at `p`, `d` from its edge whose outward normal is `normal`, over a
-    /// `backdrop` of that colour: the drop shadow and the outline in the shadow's colour, and the edge line over them in
-    /// black ([`edge_line_alpha`]). Returns the colour and its alpha.
-    pub fn outside(&self, p: [f32; 2], d: f32, normal: [f32; 2], backdrop: Rgb) -> (Rgb, f32) {
+    /// `backdrop` of that colour, in the recipe `here` of the shapes there: the drop shadow and the outline in the
+    /// shadow's colour, with the edge line ([`edge_line_alpha`]) and the control outline ([`border_line`]) over them in
+    /// black, all over `bent`, the bent backdrop's colour and alpha where it shows ([`outer_read`]). Returns the colour
+    /// and its alpha.
+    pub fn outside(
+        &self,
+        p: [f32; 2],
+        d: f32,
+        normal: [f32; 2],
+        backdrop: Rgb,
+        here: &GlassParams,
+        bent: Option<(Rgb, f32)>,
+    ) -> (Rgb, f32) {
         let fill = self.params.shadow.fill;
         let shadow = self.outside_alpha(p, d);
-        let line = edge_line_alpha(d, backdrop, normal, &self.params);
+        let mut line = edge_line_alpha(d, backdrop, normal, &self.params);
+        let border = border_line(d, normal, here);
+        if border > 0.0 {
+            line = line + border - line * border;
+        }
         let a = line + shadow * (1.0 - line);
-        if a <= 0.0 {
-            return ([fill[0], fill[1], fill[2]], 0.0);
-        }
-        let k = shadow * (1.0 - line) / a;
-        ([fill[0] * k, fill[1] * k, fill[2] * k], a)
-    }
-}
-
-/// Uniform block of the glass composite (`Glass` in `shaders/glass.wgsl` and the GLSL generated from it), std140
-/// with 16-byte members only. Lengths are in target pixels.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct GlassUniform {
-    /// Where the composite draws: x, y, w, h in target pixels (y down).
-    pub quad: [f32; 4],
-    /// Affine map from target pixels to the capture's texture coordinates: `u = a·x + b·y + c`, and the deviation in
-    /// pixels of the Gaussian the edge is softened by ([`GlassEdge::soft`]): `[a, b, c, soft]`.
-    pub uv_x: [f32; 4],
-    /// The same for `v`.
-    pub uv_y: [f32; 4],
-    /// Number of shapes, blend width, antialiasing width, overall opacity.
-    pub info: [f32; 4],
-    /// The edge line's strength, the veil's opacity at the bottom of the shapes, and the target's width and height.
-    pub levels: [f32; 4],
-    /// Blur fill opacities: darken, lighten, normal, and the veil's opacity at the top of the shapes.
-    pub fill: [f32; 4],
-    /// Face: saturation, white, black, clamp.
-    pub face: [f32; 4],
-    /// Face fill, straight sRGB.
-    pub face_fill: [f32; 4],
-    /// Bleed: white, black, saturation, darken (0/1).
-    pub bleed: [f32; 4],
-    /// Rim strength, the soft band's light angle and spread, the rim's depth.
-    pub highlight: [f32; 4],
-    /// Highlight: offset, colour bias, curvature, the soft band's strength at the far end of its axis.
-    pub highlight2: [f32; 4],
-    /// The soft band of light: strength, half-width, offset, and the opacity of the outline outside the shape.
-    pub glow: [f32; 4],
-    /// The diffuse band under it: half-width, arcs' width and strength as multiples of the soft band's, and the
-    /// angular width of the arcs facing left and right that keep the edge line (0: all round).
-    pub diffuse: [f32; 4],
-    /// Key colour matrix rows: `[r, g, b coefficients, offset (+ alpha coefficient)]`.
-    pub highlight_matrix: [[f32; 4]; 3],
-    /// Drop shadow: offset x, offset y, alpha, blur radius.
-    pub shadow: [f32; 4],
-    /// Shadow colour (rgb) and how much the ring darkens the face.
-    pub shadow_color: [f32; 4],
-    /// Ring inside the shape: how far up it is moved, its stroke, its Gaussian deviation, and the width of the outline
-    /// outside the shape.
-    pub ring: [f32; 4],
-    /// Each shape: x, y, w, h.
-    pub shapes: [[f32; 4]; MAX_SHAPES],
-    /// Each shape: how far its corners reach along the sides, refraction strength, refraction band, bleed fraction.
-    pub shape_a: [[f32; 4]; MAX_SHAPES],
-    /// Each shape: bleed band, largest luminance, where its blur lies among the blurred copies, the exponent of its
-    /// corners' superellipse.
-    pub shape_b: [[f32; 4]; MAX_SHAPES],
-    /// The outline the container is cut to: x, y, w, h.
-    pub cut: [f32; 4],
-    /// How far its corners reach along the sides, the exponent of their superellipse, 1 when the container is cut and
-    /// 0 when not, and 1 when the edge line keeps its strength over any backdrop (0 when it follows its brightness).
-    pub cut_shape: [f32; 4],
-    /// The blur's weight at the top and at the bottom of the shapes ([`Container::blur_ramp`]), the magnification
-    /// about the first shape's centre ([`Container::lens`]), and the width of the edge ([`Container::edge`]).
-    pub lens: [f32; 4],
-    /// The edge's straight colour and opacity.
-    pub edge: [f32; 4],
-}
-
-impl GlassUniform {
-    /// The uniform of `container` (output-local points) drawn at `scale` pixels per point: `uv` maps target pixels to
-    /// the capture's texture coordinates (`[[a, b, c], [d, e, f]]`), `quad` is where it draws in a `target` that size, and
-    /// `opacity` fades it.
-    pub fn new(
-        container: &Container,
-        scale: f32,
-        uv: [[f32; 3]; 2],
-        quad: [f32; 4],
-        target: [f32; 2],
-        opacity: f32,
-    ) -> Self {
-        let p = &container.params;
-        let mut u: Self = bytemuck::Zeroable::zeroed();
-        u.quad = quad;
-        let soft = if container.edge.shows() {
-            container.edge.soft * scale
+        let (c, a) = if a <= 0.0 {
+            ([fill[0], fill[1], fill[2]], 0.0)
         } else {
-            0.0
+            let k = shadow * (1.0 - line) / a;
+            ([fill[0] * k, fill[1] * k, fill[2] * k], a)
         };
-        u.uv_x = [uv[0][0], uv[0][1], uv[0][2], soft];
-        u.uv_y = [uv[1][0], uv[1][1], uv[1][2], 0.0];
-        u.info = [
-            container.shapes.len() as f32,
-            container.spacing * scale,
-            1.0,
-            opacity.clamp(0.0, 1.0),
-        ];
-        u.levels = [p.shadow.edge_line, p.veil[1], target[0], target[1]];
-        u.fill = [
-            p.blur.fill_darken,
-            p.blur.fill_lighten,
-            p.blur.fill_normal,
-            p.veil[0],
-        ];
-        u.face = [p.face.saturation, p.face.white, p.face.black, p.face.clamp];
-        u.face_fill = p.face.fill;
-        u.bleed = [
-            p.bleed.white,
-            p.bleed.black,
-            p.bleed.saturation,
-            if p.bleed.darken { 1.0 } else { 0.0 },
-        ];
-        let h = &p.highlight;
-        u.highlight = [
-            h.amount,
-            h.angle,
-            h.spread,
-            RIM_DEPTH_PER_HEIGHT * h.height * scale,
-        ];
-        u.highlight2 = [h.offset * scale, h.color_bias, h.curvature, h.glow_fill];
-        u.glow = [
-            h.glow_amount,
-            h.glow_height * scale,
-            h.glow_offset * scale,
-            p.shadow.outline_opacity,
-        ];
-        u.diffuse = [
-            h.diffuse.height_scale,
-            h.diffuse.spread_scale,
-            h.diffuse.amount_scale,
-            p.shadow.edge_line_sides,
-        ];
-        for r in 0..3 {
-            let m = &h.matrix[r * 5..r * 5 + 5];
-            u.highlight_matrix[r] = [m[0], m[1], m[2], m[3] + m[4]];
-        }
-        let s = &p.shadow;
-        u.shadow = [
-            s.offset[0] * scale,
-            s.offset[1] * scale,
-            s.opacity * (s.amount / 100.0).clamp(0.0, 1.0) * s.fill[3],
-            s.height * scale,
-        ];
-        u.shadow_color = [s.fill[0], s.fill[1], s.fill[2], s.ring_opacity];
-        u.ring = [
-            s.ring_offset * scale,
-            s.ring_stroke * scale,
-            s.ring_blur * scale,
-            s.outline_width * scale,
-        ];
-        for (i, (shape, v)) in container.shapes.iter().zip(&container.values).enumerate() {
-            u.shapes[i] = shape.rect.map(|x| x * scale);
-            let (extent, exponent) = shape.corner_shape();
-            u.shape_a[i] = [
-                extent * scale,
-                v.refraction_amount * scale,
-                v.refraction_height * scale,
-                (v.bleed_amount / 100.0).clamp(0.0, 1.0) * p.bleed.opacity.clamp(0.0, 1.0),
-            ];
-            u.shape_b[i] = [v.bleed_height * scale, v.max_luma, v.blur_level, exponent];
-        }
-        if let Some(cut) = container.cut {
-            u.cut = cut.rect.map(|x| x * scale);
-            u.cut_shape = [cut.extent * scale, cut.exponent, 1.0, 0.0];
-        }
-        u.cut_shape[3] = if p.shadow.edge_line_even { 1.0 } else { 0.0 };
-        u.lens = [
-            container.blur_ramp[0].clamp(0.0, 1.0),
-            container.blur_ramp[1].clamp(0.0, 1.0),
-            container.lens.max(1.0),
-            if container.edge.shows() {
-                container.edge.width * scale
-            } else {
-                0.0
-            },
-        ];
-        u.edge = container.edge.color;
-        u
-    }
-
-    /// The uniform with the edges of its square shapes and of its cut on the nearest whole pixel: a square edge is then
-    /// hard and meets what is drawn beside it on the same pixel, with no column of partial coverage between them.
-    /// Rounded shapes keep their edges where they are.
-    pub fn on_pixels(mut self) -> Self {
-        let n = (self.info[0].max(0.0) as usize).min(MAX_SHAPES);
-        for i in 0..n {
-            if self.shape_a[i][0] <= 0.0 {
-                self.shapes[i] = whole_pixels(self.shapes[i]);
+        match bent {
+            Some((r, o)) if o > 0.0 => {
+                let out = a + o * (1.0 - a);
+                (
+                    std::array::from_fn(|i| (c[i] * a + r[i] * o * (1.0 - a)) / out),
+                    out,
+                )
             }
+            _ => (c, a),
         }
-        if self.cut_shape[2] > 0.0 {
-            self.cut = whole_pixels(self.cut);
-        }
-        self
     }
 }
 
-/// How far below a half pixel an edge still counts as on it: the error of a shape placed from its surface's device
-/// origin, which is no exact number of points at a fractional scale, carried in single precision.
-const HALF_PIXEL_TOLERANCE: f32 = 1.0 / 1024.0;
-
-/// `[x, y, w, h]` with each edge on the nearest whole pixel, a half towards positive infinity (within
-/// [`HALF_PIXEL_TOLERANCE`]), as the content of the surface the shape belongs to rounds it in its own pixels.
-fn whole_pixels([x, y, w, h]: [f32; 4]) -> [f32; 4] {
-    let pixel = |v: f32| (v + 0.5 + HALF_PIXEL_TOLERANCE).floor();
-    let (x0, y0) = (pixel(x), pixel(y));
-    [x0, y0, pixel(x + w) - x0, pixel(y + h) - y0]
+/// Where the edge bleed of a container reads its blurred backdrop ([`Container::bleed_source`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum BleedSource {
+    /// A blurred copy the shapes read already, of the same deviation.
+    Level(usize),
+    /// The blur fill, of the same deviation.
+    Fill,
+    /// A copy of its own, blurred with this deviation in points.
+    Own(f32),
 }
 
 impl Container {
+    /// Where the edge bleed reads its blurred backdrop, if a shape bleeds: the widest blur of the bleeding shapes'
+    /// recipes, from a copy the container blurs already when one has that deviation (within the deviation two copies
+    /// share), else from a copy of its own.
+    pub fn bleed_source(&self) -> Option<BleedSource> {
+        let sigma = (0..self.shapes.len())
+            .filter(|&i| self.bleeds_at(i))
+            .map(|i| self.recipe(i).bleed.blur.clamp(0.0, BLUR_SIGMA_MAX))
+            .reduce(f32::max)?;
+        let same = |s: f32| (s - sigma).abs() < SAME_SIGMA;
+        if let Some(i) = self.levels().iter().position(|&(s, used)| used && same(s)) {
+            return Some(BleedSource::Level(i));
+        }
+        if self.fill_sigma().is_some_and(same) {
+            return Some(BleedSource::Fill);
+        }
+        Some(BleedSource::Own(sigma))
+    }
+
+    /// Whether a shape bends the backdrop outside its edge, which reads the backdrop as captured ([`SHARP_LEVEL`]).
+    pub fn reads_sharp(&self) -> bool {
+        (0..self.shapes.len()).any(|i| self.bends_outside(i))
+    }
     /// The deviation in points of each blurred copy of the backdrop, and whether a shape reads it.
     pub fn levels(&self) -> [(f32, bool); BLUR_LEVELS] {
         let mut used = [false; BLUR_LEVELS];
@@ -1258,18 +1293,9 @@ impl Container {
         std::array::from_fn(|i| (self.sigmas.get(i).copied().unwrap_or(last), used[i]))
     }
 
-    /// Whether a shape bleeds the backdrop into its edge.
-    fn bleeds(&self) -> bool {
-        self.params.bleed.opacity > 0.0
-            && self
-                .values
-                .iter()
-                .any(|v| v.bleed_amount > 0.0 && v.bleed_height > 0.0)
-    }
-
-    /// The deviation in points of the blur fill, if it shows or the bleed reads it.
+    /// The deviation in points of the blur fill, if it shows.
     pub fn fill_sigma(&self) -> Option<f32> {
         let sigma = self.params.fill_sigma();
-        ((self.params.fill_shows() || self.bleeds()) && sigma > 0.0).then_some(sigma)
+        (self.params.fill_shows() && sigma > 0.0).then_some(sigma)
     }
 }

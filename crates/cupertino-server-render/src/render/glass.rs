@@ -2,7 +2,7 @@
 //!
 //! The element covers what of the backdrop the container reads, its shapes grown by the reach of the blur and the
 //! refraction (`Container::sample_area`). When it draws with a new backdrop, that area of the bound framebuffer is
-//! captured at half scale, blurred into the levels its recipe uses and the blur fill, and kept; the composite then
+//! captured at half scale, blurred into the levels its recipe uses, the blur fill and the edge bleed's blur (a copy of its own only when none of those has its deviation), and kept; the composite then
 //! shades the union of the shapes from those textures with the glass program `cupertino-glass` generates
 //! ([`cupertino_glass::shaders::GLASS`]). The textures are kept per container and made again only when the backdrop below the
 //! sampled area changed: [`area_generation`] signs the elements below that overlap it, so a change elsewhere on the
@@ -19,13 +19,13 @@ use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 use cupertino_geometry::CornerStyle;
-use cupertino_glass::glass::{face_color, Container, Cut, GlassUniform};
-use cupertino_glass::ops::{PassParams, PASS_KEEP_ALPHA};
-use cupertino_glass::shaders::{GLASS_BLOCK, GLASS_FILL, GLASS_LEVELS, PLACEMENT};
-use cupertino_raster_math::blur::plan_blur;
-use cupertino_theme::glass::{
-    relative_luminance, GlassMode, GlassParams, BLUR_LEVELS, GLASS_BACKDROP_SCALE,
+use cupertino_glass::glass::{
+    face_color, BleedSource, Container, Cut, GlassUniform, BLEED_LEVEL, FILL_LEVEL, SHARP_LEVEL,
 };
+use cupertino_glass::ops::{PassParams, PASS_KEEP_ALPHA};
+use cupertino_glass::shaders::{GLASS_BLOCK, GLASS_TEXTURES, PLACEMENT};
+use cupertino_raster_math::blur::plan_blur;
+use cupertino_theme::glass::{relative_luminance, GlassMode, GlassParams, GLASS_BACKDROP_SCALE};
 use smithay::backend::renderer::element::{Element, Id, Kind, RenderElement, UnderlyingStorage};
 use smithay::backend::renderer::gles::{ffi, GlesError, GlesFrame, GlesRenderer};
 use smithay::backend::renderer::utils::{CommitCounter, OpaqueRegions};
@@ -111,6 +111,14 @@ impl GlassContainer {
             for v in s.rect.iter().chain([&s.radius]) {
                 v.to_bits().hash(&mut h);
             }
+        }
+        // each shape's look and values, its own recipe's where it has one (a segment in other glass than its group, a
+        // tint)
+        for look in container.looks() {
+            bytemuck::bytes_of(&look).hash(&mut h);
+        }
+        for v in &container.values {
+            bytemuck::bytes_of(v).hash(&mut h);
         }
         Self {
             key: h.finish(),
@@ -573,10 +581,13 @@ pub fn probe_uv(rect: [f32; 4], scale: f32, uv: &[[f32; 3]; 2]) -> [f32; 4] {
     ]
 }
 
+/// The textures the glass program reads: the blurred copies, the blur fill, the edge bleed's blur and the capture.
+const GLASS_SLOTS: usize = GLASS_TEXTURES.len();
+
 /// The blurred backdrop of one container: its textures and which of them each level and the blur fill reads.
 struct CachedGlass {
     targets: Vec<Target>,
-    slots: [usize; BLUR_LEVELS + 1],
+    slots: [usize; GLASS_SLOTS],
 }
 
 /// One container's kept textures (`T`).
@@ -762,9 +773,9 @@ impl GlassGl {
             source,
             &[(GLASS_BLOCK, BIND_GLASS), (PLACEMENT, BIND_PLACE)],
         )?;
-        // the four blurred copies on the first four units, the blur fill on the fifth
+        // the four blurred copies on the first four units, then the blur fill, the edge bleed's blur and the capture
         let mut units = Vec::new();
-        for at in GLASS_LEVELS.into_iter().chain([GLASS_FILL]) {
+        for at in GLASS_TEXTURES {
             match sampler_loc(gl, program, source, at) {
                 Ok(loc) => units.push(loc),
                 Err(e) => {

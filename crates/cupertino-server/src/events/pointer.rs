@@ -251,6 +251,9 @@ impl Cupertino {
             self.last_user_event = Some(now);
             let focus = pointer.current_focus();
             self.note_input(focus.as_ref());
+        } else if button == BTN_LEFT {
+            // interactive glass lets go whoever took the press
+            self.glass_press.release(now);
         }
         let release_consumed =
             state == ButtonState::Released && self.consumed_buttons.contains(&button);
@@ -319,6 +322,13 @@ impl Cupertino {
         }
         if state == ButtonState::Pressed {
             self.arm_by_press();
+        }
+        if state == ButtonState::Pressed && button == BTN_LEFT {
+            // a press a client takes: interactive glass of its surface under the press grows
+            if let Some(focus) = pointer.current_focus() {
+                self.glass_press.press(pos, &focus, now);
+                self.request_redraw();
+            }
         }
 
         pointer.button(

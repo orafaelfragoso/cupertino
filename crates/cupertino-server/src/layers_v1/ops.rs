@@ -4,9 +4,9 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+use crate::glass_look::GlassLook;
 use cupertino_animation::LayerCurve;
 use cupertino_protocols::server::layers::cupertino_layer_v1::CupertinoLayerV1;
-use cupertino_theme::GlassStyle;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::DisplayHandle;
 use smithay::wayland::compositor::Cacheable;
@@ -35,7 +35,7 @@ pub(super) enum Op {
         _queued: Queued,
     },
     Cancel(usize),
-    Glass(Option<(GlassStyle, f64)>),
+    Glass(Option<(GlassLook, f64)>),
     Blend(BlendRole),
     Raised(bool),
     PointerLit(bool),
@@ -44,6 +44,7 @@ pub(super) enum Op {
     Placeholder([f32; 4]),
     Group(u32, f64),
     Edge(GlassEdge),
+    Tint([f32; 4]),
 }
 
 /// An animation queued in a parent's state and not yet applied, wherever that state is (pending, or cached by a

@@ -20,10 +20,10 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
+use crate::glass_look::GlassLook;
 use cupertino_app_protocols::layers::MAX_CONTENT_BLUR;
 use cupertino_protocols::server::layers::cupertino_layer_v1::{CupertinoLayerV1, Property};
 use cupertino_protocols::server::layers::cupertino_layers_v1::CupertinoLayersV1;
-use cupertino_theme::GlassStyle;
 use smithay::reexports::wayland_server::backend::{ClientId, GlobalId};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{DisplayHandle, Resource, WEnum};
@@ -56,7 +56,7 @@ pub const START_AT_THE_LATEST: f64 = 0.1;
 /// The wire value of "no glass" in `set_glass`.
 pub const NO_GLASS: u32 = u32::MAX;
 /// The version of the global this server offers.
-pub const VERSION: u32 = 6;
+pub const VERSION: u32 = 7;
 /// The version from which a popup may have a presentation and layers may join their glass.
 pub const POPUP_VERSION: u32 = 3;
 /// The version from which a layer's content blurs ([`CONTENT_BLUR`]).
@@ -65,6 +65,9 @@ pub const CONTENT_BLUR_VERSION: u32 = 4;
 pub const GLASS_EDGE_VERSION: u32 = 5;
 /// The version from which the edge along a layer's glass softens by the layer's content blur ([`GlassEdge::soft`]).
 pub const SOFT_EDGE_VERSION: u32 = 6;
+/// The version from which a layer's glass is named by its system variant and tinted (`set_glass_variant`,
+/// `set_glass_tint`).
+pub const VARIANT_VERSION: u32 = 7;
 /// Layers of one parent in one glass group: as many shapes as one joined glass holds.
 pub const MAX_PER_GROUP: usize = cupertino_glass::glass::MAX_SHAPES;
 /// The farthest a layer's origin, size or corner radius goes, in logical points either way. A value asked or reached
@@ -293,7 +296,7 @@ pub struct LayerDraw {
     pub scale: f64,
     pub radius: f64,
     pub content: (f64, f64),
-    pub glass: Option<(GlassStyle, f64)>,
+    pub glass: Option<(GlassLook, f64)>,
     pub blend: BlendRole,
     pub raised: bool,
     pub pointer_lit: bool,
@@ -305,6 +308,9 @@ pub struct LayerDraw {
     pub spacing: f64,
     /// The line along the outside of its glass, or of its group's joined glass when it is the group's first layer.
     pub edge: GlassEdge,
+    /// The colour laid over its glass's face (`set_glass_tint`), or over its group's joined glass when it is the
+    /// group's first layer.
+    pub tint: [f32; 4],
     /// The standard deviation of the blur of the layer's content, in the layer's points; 0 draws it sharp.
     pub content_blur: f64,
 }
@@ -339,6 +345,7 @@ pub fn present(parent: &WlSurface, now: f64, reduce_motion: bool) -> Vec<LayerDr
                     group: l.group,
                     spacing: l.spacing,
                     edge: l.edge,
+                    tint: l.tint,
                     content_blur: l.value(CONTENT_BLUR, now).clamp(0.0, MAX_CONTENT_BLUR),
                 }
             })

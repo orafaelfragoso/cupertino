@@ -10,6 +10,7 @@ mod damage;
 mod drop_target;
 mod focus;
 mod frame_timing;
+mod glass;
 mod icons;
 pub mod kinetic;
 pub mod layout;
@@ -29,7 +30,7 @@ mod task;
 mod tree;
 mod widget;
 
-pub use crate::platform::{GlassStyle, RendererClass};
+pub use crate::platform::{GlassModifiers, GlassSize, GlassStyle, GlassVariant, RendererClass};
 pub use accessibility::{
     AccessibilityAdapter, AccessibilityNode, AccessibilityUpdate, AccessibleStates,
     AccessibleValue, Action, ActionData, ActionRequest, Checked, Live, Relation, Role, SortOrder,
@@ -39,13 +40,14 @@ pub use clock::MonotonicClock;
 pub use command::CommandRegistry;
 pub use cupertino_defaults::appearance::{ScrollClick, SidebarIcons, TitlebarAction};
 pub use cx::{
-    glass_outline, EventCx, FocusTarget, Glass, GlassCorners, IdleCx, MeasureCx, OverlayCx,
-    OwnedWindows, PaintCx, SemanticsCx, GLASS_CORNER_EXPONENT, GLASS_CORNER_REACH,
+    glass_outline, EventCx, FocusTarget, IdleCx, MeasureCx, OverlayCx, OwnedWindows, PaintCx,
+    SemanticsCx, GLASS_CORNER_EXPONENT, GLASS_CORNER_REACH,
 };
 pub use drop_target::{
     DropHandler, DropOver, DropPlace, DropTarget, Dropped, HoverHandler, PlaceHandler,
 };
 pub use frame_timing::{FrameTiming, FrameTimingSink};
+pub use glass::{Glass, GlassCorners};
 pub use icons::{next_resource_id, IconImage, Icons, PlaceholderIcons};
 pub use paint::{overlay_id, MAX_MATERIALS};
 pub use personal::{personal, set_personal, Personal};

@@ -92,7 +92,8 @@ pub struct AppEffects(CupertinoAppEffectsV1);
 impl AppEffects {
     /// Bind the global; `None` when the server does not offer it.
     pub fn bind(conn: &mut Connection) -> Option<AppEffects> {
-        conn.bind_extension(1..=22, Quiet).map(AppEffects)
+        conn.bind_extension(1..=super::backdrop::VARIANT_VERSION, Quiet)
+            .map(AppEffects)
     }
 
     /// Observe the session's appearance and display options: [`AppEvent::Appearance`] and

@@ -11,6 +11,8 @@ mod cursor_reader;
 mod desktop_index;
 #[path = "frame-not-ready.rs"]
 mod frame_not_ready;
+#[path = "glass-variants.rs"]
+mod glass_variants;
 #[path = "host-protocol.rs"]
 mod host_protocol;
 #[path = "host-spawning.rs"]

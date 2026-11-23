@@ -99,7 +99,7 @@ corner, as wide as the window, at its scale and with an empty input region; its 
 subsurface's backdrops (`cupertino_app_effects_v1` version 11), so the compositor draws them between the subsurface and
 the window's content. Its frame draws only its own damage and what its buffer missed, and it commits before the
 window, so it applies with the window's commit; `present_layer(None)` hides it with a solid colour's. The capability needs the transport's subsurfaces and version 11
-of the effects global. `request_frame` answers at once when no frame callback is outstanding, else with the callback; a
+of the effects global. A glass region named by a variant (`GlassRegion::variant`) goes as `set_glass_variant` and its tint as `set_glass_tint` to a backdrop of version 23, and a surface layer's (`SurfaceLayerLook::variant`, `tint`) to a layer of version 7 (`glass_wire.rs`), each sent when it changes; an older compositor is sent the region's or the look's style and no tint. `request_frame` answers at once when no frame callback is outstanding, else with the callback; a
 callback nobody asked for is not reported. On a compositor with `wp_presentation`, each presented frame is reported as
 `Presented` with the time it turned visible, moved from the compositor's presentation clock onto the window system's
 clock and never later than now, or as `Discarded` when the compositor never showed it.

@@ -90,6 +90,14 @@ fn on_wire_weight(weight: f64) -> f64 {
     weight.clamp(0.0, 1.0)
 }
 
+/// A tint channel as the protocol takes it: from 0 to 1, 0 for one that is not a number.
+fn on_wire_tint(channel: f64) -> f64 {
+    if channel.is_nan() {
+        return 0.0;
+    }
+    channel.clamp(0.0, 1.0)
+}
+
 fn protocol_error(e: impl std::fmt::Display) -> PlatformError {
     PlatformError::Protocol(e.to_string())
 }
@@ -226,13 +234,30 @@ impl SurfaceLayers {
                         .set(Wire::CornerRadius, look.radius.max(0.0))
                         .map_err(protocol_error)?;
                 }
-                if look.glass != s.look.glass || look.lens != s.look.lens {
+                if look.tint != s.look.tint {
                     s.layer
-                        .set_glass(
+                        .set_glass_tint(look.tint.map(|c| on_wire_tint(f64::from(c))))
+                        .map_err(protocol_error)?;
+                }
+                if look.glass != s.look.glass
+                    || look.lens != s.look.lens
+                    || look.variant != s.look.variant
+                {
+                    // a compositor without variants draws the style
+                    let variant = look
+                        .variant
+                        .filter(|_| look.glass.is_some() && layers.takes_glass_variants());
+                    match variant {
+                        Some(v) => s.layer.set_glass_variant(
+                            Some(crate::glass_wire::protocol_variant(v)),
+                            on_wire_lens(look.lens),
+                        ),
+                        None => s.layer.set_glass(
                             look.glass.map(crate::window_system::protocol_style),
                             on_wire_lens(look.lens),
-                        )
-                        .map_err(protocol_error)?;
+                        ),
+                    }
+                    .map_err(protocol_error)?;
                 }
                 if look.blur_ramp != s.look.blur_ramp {
                     let BlurRamp { top, bottom } = look.blur_ramp;

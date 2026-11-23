@@ -150,6 +150,7 @@ impl Cupertino {
             cache: &mut out.cache,
             cursor,
             pointer,
+            glass_press: &self.glass_press,
             drag_icon,
             keyboard_focus,
             lock,

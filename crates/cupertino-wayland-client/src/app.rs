@@ -6,7 +6,8 @@
 //! application window, announces where a window's menus are on the session bus ([`AppEffects::menu`]), for the
 //! desktop's menu bar, and disables a window's minimize and zoom controls ([`AppEffects::set_disabled_controls`]).
 //! A glass backdrop tells the tone of the face behind it ([`AppEvent::BackdropTone`], version 7), which picks the
-//! colour of the text and symbols over a small shape.
+//! colour of the text and symbols over a small shape. From version 23 a backdrop names its glass by the system variant
+//! ([`Backdrop::set_glass_variant`], [`VariantGlass`]) and tints it ([`Backdrop::set_glass_tint`]).
 //! [`ScrollCounts`] (`cupertino_scroll_v1`) reports how many scroll steps each pointer frame carries. [`Layers`]
 //! (`cupertino_layers_v1`) hands the server [`Layer`]s to place and animate on its clock, and from version 2 the
 //! presentation of a layer shell surface as a whole ([`Layers::presentation`]), so a panel opens and closes without a
@@ -17,6 +18,7 @@
 mod backdrop;
 mod effects;
 mod error;
+mod glass_variant;
 mod layers;
 mod scroll;
 mod semantics;
@@ -28,6 +30,7 @@ pub use effects::{
     MenuAddress, WindowControls, WindowStyle,
 };
 pub use error::Error;
+pub use glass_variant::{GlassModifiers, GlassSizeClass, GlassVariant, VariantGlass};
 pub use layers::{
     Fixed, Layer, LayerId, LayerProperty, Layers, MAX_CONTENT_BLUR, MAX_GLASS_EDGE,
     MAX_GROUP_SPACING, MAX_SAMPLES,

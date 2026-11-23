@@ -123,6 +123,7 @@ impl Cupertino {
             || self.overlays.wants_tick()
             || self.power.policy().animating(now)
             || self.layers.wants_tick(now)
+            || self.glass_press.wants_tick(now)
     }
 
     pub fn wants_frames(&self) -> bool {

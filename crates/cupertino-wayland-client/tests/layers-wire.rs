@@ -97,7 +97,7 @@ fn binding_reports_what_the_servers_version_offers() {
     let _layers = Layers::bind(&mut conn).unwrap();
     assert_eq!(
         conn.capabilities().extension("cupertino_layers_v1"),
-        Some(6)
+        Some(7)
     );
 
     // presents surfaces, presents popups, blurs content, draws glass edges, softens glass edges

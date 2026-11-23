@@ -13,7 +13,8 @@
     a raised elevation that lifts it above its siblings, a pointer-lit rim and a blur that varies
     across it; the glass of several layers may join into one shape that moves as they do, and a
     layer's own content may blur as it goes, and glass may carry a thin line along the outside of
-    its outline that keeps its width as the layer scales. A popup,
+    its outline that keeps its width as the layer scales; from version 7 the glass may be named
+    by its system variant, tinted, and grow under a press. A popup,
     like a panel, may be moved, faded and scaled as a whole. Scrolling and other motion that follows the pointer stay with the client: it moves
     layers with a cheap commit per frame and no repaint.
 
@@ -21,7 +22,7 @@
     or animate another client's surface.
   </description>
 
-  <interface name="cupertino_layers_v1" version="6">
+  <interface name="cupertino_layers_v1" version="7">
     <description summary="makes surfaces layers of a parent surface">
       Global singleton, offered to every client.
     </description>
@@ -101,7 +102,7 @@
     </request>
   </interface>
 
-  <interface name="cupertino_layer_v1" version="6">
+  <interface name="cupertino_layer_v1" version="7">
     <description summary="a surface placed, blended and animated by the server over its parent">
       All state is double-buffered on the parent surface: it applies on the parent's next
       wl_surface.commit, together with that commit's buffer, and a synchronized parent caches it
@@ -171,8 +172,8 @@
     </description>
 
     <enum name="error">
-      <entry name="invalid_value" value="0" summary="opacity outside 0 to 1, a negative size, scale, radius or blur, a content blur over 64, a lens outside 1 to 4, a glass group spacing outside 0 to 64, or a glass edge wider than 4 or of a channel outside 0 to 1"/>
-      <entry name="invalid_property" value="1" summary="a property, glass style, blend role, elevation or highlight not defined at the object's version"/>
+      <entry name="invalid_value" value="0" summary="opacity outside 0 to 1, a negative size, scale, radius or blur, a content blur over 64, a lens outside 1 to 4, a glass group spacing outside 0 to 64, a glass edge wider than 4 or of a channel outside 0 to 1, or a glass tint channel outside 0 to 1"/>
+      <entry name="invalid_property" value="1" summary="a property, glass style, glass variant, glass modifier, size class, blend role, elevation or highlight not defined at the object's version"/>
       <entry name="invalid_curve" value="2" summary="a duration over 10 seconds, Bézier x control points outside 0 to 1, or a spring response outside 0.01 to 10 seconds or damping ratio outside 0.05 to 4"/>
       <entry name="too_many_animations" value="3" summary="the client has as many animations running or waiting as the server allows"/>
       <entry name="group_full" value="4" summary="the glass group already holds 16 layers of the parent"/>
@@ -347,7 +348,7 @@
         into each other over spacing logical points (0 joins them with a hard edge). So a shape that
         grows out of another (a button budding out of a field) comes out of its glass as the layers
         move, scale and resize. The joined glass takes the style, lens, highlight, blur ramp,
-        elevation and (from version 5) edge of the group's first layer in drawing order and the highest opacity of its
+        elevation, (from version 5) edge and (from version 7) variant and tint of the group's first layer in drawing order and the highest opacity of its
         layers, and is drawn below the content of that layer. 0, the initial group, keeps the
         layer's glass alone; a layer without glass adds nothing to its group. A group holds at most
         16 layers of a parent, as many shapes as one joined glass takes: the request that would
@@ -402,6 +403,40 @@
         below 0 or above 4, or a channel outside 0 to 1.
       </description>
       <arg name="width" type="fixed"/>
+      <arg name="red" type="fixed"/>
+      <arg name="green" type="fixed"/>
+      <arg name="blue" type="fixed"/>
+      <arg name="alpha" type="fixed"/>
+    </request>
+
+    <!-- Version 7 additions -->
+
+    <request name="set_glass_variant" since="7">
+      <description summary="draw glass of a system variant below the layer's content">
+        As set_glass, with the glass named by its system variant, its modifiers and the size class
+        its size-dependent values resolve at: the values of cupertino_backdrop_v1.glass_variant,
+        glass_modifier and size_class (cupertino_app_effects_v1), resolved as
+        cupertino_backdrop_v1.set_glass_variant resolves them. A layer of an inactive window takes
+        the inactive branch of a variant on the regular glass, and the glass of an interactive
+        layer grows under a press inside its bounds as shown, about their centre, and lets go on
+        the release; it does not grow while reduce_motion is on. The last of set_glass and
+        set_glass_variant decides the layer's glass; set_glass with 4294967295 removes it. Posts
+        invalid_property for an unknown variant, size class or modifier bit and invalid_value for
+        a lens below 1 or above 4.
+      </description>
+      <arg name="variant" type="uint" summary="a cupertino_backdrop_v1.glass_variant value"/>
+      <arg name="modifiers" type="uint" summary="cupertino_backdrop_v1.glass_modifier bits"/>
+      <arg name="size_class" type="uint" summary="a cupertino_backdrop_v1.size_class value"/>
+      <arg name="lens" type="fixed"/>
+    </request>
+
+    <request name="set_glass_tint" since="7">
+      <description summary="lay a colour over the face of the layer's glass">
+        A straight sRGB colour, red, green and blue from 0 to 1, laid over the face of the layer's
+        glass at alpha, as cupertino_backdrop_v1.set_glass_tint lays it; alpha 0 (the initial
+        state) lays none. In a glass group the joined glass takes the tint of the group's first
+        layer. Posts invalid_value for a channel outside 0 to 1.
+      </description>
       <arg name="red" type="fixed"/>
       <arg name="green" type="fixed"/>
       <arg name="blue" type="fixed"/>

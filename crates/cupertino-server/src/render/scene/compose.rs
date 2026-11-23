@@ -353,10 +353,14 @@ fn press_scale(p: &SceneParams<'_>, b: &BackdropArea) -> f64 {
 /// its text keeps the light tone and every card of a column reads alike. Nor does a large panel's glass, even where a
 /// piece of it is small (the launcher's search field): its strong tone compression keeps the face in its appearance's
 /// range, so its text keeps the appearance's tone over a bright scene and the field reads with the panel it opens.
+/// Glass named by its variant follows only when asked to (the `adaptive` modifier), whatever style it draws as.
 fn tone_probes(members: &[&BackdropArea], dark: bool) -> Vec<ToneProbe> {
     use cupertino_theme::GlassStyle;
     let fixed = members.iter().any(|b| {
         b.glass.is_some_and(|g| {
+            if g.look.follows_window {
+                return !g.look.modifiers.adaptive;
+            }
             g.look.style == Some(GlassStyle::LargePanel)
                 || (dark && g.look.style == Some(GlassStyle::Card))
         })

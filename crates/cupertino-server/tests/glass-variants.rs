@@ -12,7 +12,7 @@ use std::time::Duration;
 use cupertino_assets::Assets;
 use cupertino_protocols::client::app_effects::cupertino_app_effects_v1::CupertinoAppEffectsV1;
 use cupertino_protocols::client::app_effects::cupertino_backdrop_v1::{
-    CupertinoBackdropV1, GlassModifier, GlassStyle, GlassVariant, SizeClass,
+    self as cupertino_backdrop_v1, CupertinoBackdropV1, GlassModifier, GlassStyle, GlassVariant, SizeClass, Tone,
 };
 use cupertino_server::glass_press::PRESS_SCALE;
 use cupertino_server::state::{insert_client, ClientState};
@@ -29,7 +29,8 @@ use wayland_client::protocol::{
     wl_buffer, wl_compositor, wl_registry, wl_shm, wl_shm_pool, wl_subcompositor, wl_subsurface,
     wl_surface,
 };
-use wayland_client::{Connection, Dispatch, EventQueue, QueueHandle};
+use wayland_client::backend::ObjectId;
+use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum};
 
 /// The version of `cupertino_app_effects_v1` whose backdrops take `set_glass_variant` and `set_glass_tint`.
 const VARIANT_VERSION: u32 = 23;
@@ -57,6 +58,8 @@ struct Client {
     effects: Option<CupertinoAppEffectsV1>,
     legacy_effects: Option<CupertinoAppEffectsV1>,
     configured: bool,
+    /// The tones the server sent each backdrop, oldest first.
+    tones: Vec<(ObjectId, WEnum<Tone>)>,
 }
 
 impl Dispatch<wl_registry::WlRegistry, ()> for Client {
@@ -133,7 +136,20 @@ wayland_client::delegate_noop!(Client: ignore wl_shm::WlShm);
 wayland_client::delegate_noop!(Client: ignore wl_shm_pool::WlShmPool);
 wayland_client::delegate_noop!(Client: ignore wl_buffer::WlBuffer);
 wayland_client::delegate_noop!(Client: ignore CupertinoAppEffectsV1);
-wayland_client::delegate_noop!(Client: ignore CupertinoBackdropV1);
+impl Dispatch<CupertinoBackdropV1, ()> for Client {
+    fn event(
+        state: &mut Self,
+        backdrop: &CupertinoBackdropV1,
+        event: cupertino_backdrop_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let cupertino_backdrop_v1::Event::Tone { tone } = event {
+            state.tones.push((backdrop.id(), tone));
+        }
+    }
+}
 
 /// A `width` × `height` ARGB8888 buffer whose pixel at `x` (memory order blue, green, red, alpha) is `pixel(x)`.
 fn shm_buffer(
@@ -842,6 +858,49 @@ fn a_toolbars_container_draws_alike_whichever_order_its_chosen_segment_was_made_
         change < 0.05,
         "the toolbar draws {change} apart in the two orders"
     );
+}
+
+#[test]
+fn small_glass_follows_what_lies_behind_it_when_adaptive_or_of_an_older_clients_style_and_not_otherwise() {
+    let mut rig = Rig::new((480, 320), 1.0);
+    let effects = rig.client.effects.clone().unwrap();
+    let legacy = rig.client.legacy_effects.clone().unwrap();
+    let window = rig.map("Tones", (400, 200), |_| [250, 250, 250, 255]);
+    // small enough for their text to follow what lies behind them
+    let size = (100, 40);
+    let fixed = rig.pane(&window.surface, &effects, (20, 60), size, 20.0);
+    let adaptive = rig.pane(&window.surface, &effects, (150, 60), size, 20.0);
+    let styled = rig.pane(&window.surface, &legacy, (280, 60), size, 20.0);
+    for (pane, modifiers) in [
+        (&fixed, GlassModifier::empty()),
+        (&adaptive, GlassModifier::Adaptive),
+    ] {
+        pane.backdrop.set_glass_variant(
+            GlassVariant::Regular,
+            modifiers,
+            SizeClass::Dynamic,
+            0,
+            0.0,
+        );
+    }
+    styled.backdrop.set_glass(GlassStyle::Regular, 0, 0.0);
+    for pane in [&fixed, &adaptive, &styled] {
+        pane.surface.commit();
+    }
+    window.surface.commit();
+    rig.settle();
+    rig.settle();
+
+    let tones = |pane: &Pane| {
+        rig.client
+            .tones
+            .iter()
+            .filter(|(id, _)| *id == pane.backdrop.id())
+            .count()
+    };
+    assert!(tones(&adaptive) > 0, "adaptive glass follows: {:?}", rig.client.tones);
+    assert!(tones(&styled) > 0, "the older client's style follows as before");
+    assert_eq!(tones(&fixed), 0, "glass not asked to adapt keeps the appearance");
 }
 
 /// How many times its size the scaled capsule's glass is drawn.

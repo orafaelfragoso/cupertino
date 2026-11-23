@@ -744,6 +744,7 @@ fn window_popup_elements(
         out.extend(tree_pieces(p, tree, popup_origin, |p, areas, bound| {
             let areas = rescaled_backdrops(shown(areas), visual_local.loc, plan);
             let bound = rescaled_rect(own.map_or(bound, |s| s.rect(bound)), visual_local.loc, plan);
+            let bound = compose::pressed_bound(p, &areas, bound);
             bounded_glass(
                 backdrop_elements(p, &areas, alpha, WindowState::Active),
                 bound,

@@ -2,7 +2,10 @@
 //! drawn by the headless compositor: a tint lays its colour over the glass; a variant follows its window's activation
 //! and takes the inactive recipe in a window that is not key, where glass a version 22 client asked for by its style
 //! draws as before; and interactive glass grows under a press along the compositor's clock, lets go with a small
-//! undershoot, and does not grow under Reduce Motion.
+//! undershoot, and does not grow under Reduce Motion, and a press beside it asks for no frames. A container draws as
+//! the backdrop made first; small glass follows what lies behind it only when adaptive or of an older client's style;
+//! and glass on a subsurface casts its shadow, and grows by its scale, past the subsurface, on a window, a popup, a
+//! layer shell surface and a layer shell surface's popup.
 
 use std::io::Write;
 use std::os::fd::AsFd;
@@ -21,7 +24,7 @@ use cupertino_wm::WindowId;
 use smithay::backend::input::ButtonState;
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_protocols::xdg::shell::client::{
-    xdg_surface, xdg_toplevel, xdg_wm_base,
+    xdg_popup, xdg_positioner, xdg_surface, xdg_toplevel, xdg_wm_base,
 };
 use smithay::reexports::wayland_server::Display;
 use smithay::utils::Point;
@@ -31,6 +34,7 @@ use wayland_client::protocol::{
 };
 use wayland_client::backend::ObjectId;
 use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum};
+use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
 /// The version of `cupertino_app_effects_v1` whose backdrops take `set_glass_variant` and `set_glass_tint`.
 const VARIANT_VERSION: u32 = 23;
@@ -55,6 +59,7 @@ struct Client {
     subcompositor: Option<wl_subcompositor::WlSubcompositor>,
     shm: Option<wl_shm::WlShm>,
     wm_base: Option<xdg_wm_base::XdgWmBase>,
+    layer_shell: Option<zwlr_layer_shell_v1::ZwlrLayerShellV1>,
     effects: Option<CupertinoAppEffectsV1>,
     legacy_effects: Option<CupertinoAppEffectsV1>,
     configured: bool,
@@ -82,6 +87,9 @@ impl Dispatch<wl_registry::WlRegistry, ()> for Client {
                 "wl_subcompositor" => state.subcompositor = Some(reg.bind(name, 1, qh, ())),
                 "wl_shm" => state.shm = Some(reg.bind(name, 1, qh, ())),
                 "xdg_wm_base" => state.wm_base = Some(reg.bind(name, 1, qh, ())),
+                "zwlr_layer_shell_v1" => {
+                    state.layer_shell = Some(reg.bind(name, version.min(4), qh, ()))
+                }
                 "cupertino_app_effects_v1" => {
                     assert!(
                         version >= VARIANT_VERSION,
@@ -127,7 +135,26 @@ impl Dispatch<xdg_surface::XdgSurface, ()> for Client {
     }
 }
 
+impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for Client {
+    fn event(
+        state: &mut Self,
+        surface: &zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
+        event: zwlr_layer_surface_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let zwlr_layer_surface_v1::Event::Configure { serial, .. } = event {
+            surface.ack_configure(serial);
+            state.configured = true;
+        }
+    }
+}
+
 wayland_client::delegate_noop!(Client: ignore xdg_toplevel::XdgToplevel);
+wayland_client::delegate_noop!(Client: ignore xdg_popup::XdgPopup);
+wayland_client::delegate_noop!(Client: ignore xdg_positioner::XdgPositioner);
+wayland_client::delegate_noop!(Client: ignore zwlr_layer_shell_v1::ZwlrLayerShellV1);
 wayland_client::delegate_noop!(Client: ignore wl_compositor::WlCompositor);
 wayland_client::delegate_noop!(Client: ignore wl_subcompositor::WlSubcompositor);
 wayland_client::delegate_noop!(Client: ignore wl_subsurface::WlSubsurface);
@@ -938,6 +965,171 @@ fn an_alert_on_a_subsurface_casts_its_drop_shadow_past_the_subsurface() {
         shadowed < clear - 4.0,
         "the alert's shadow darkens what lies below it to {shadowed}, without one {clear}"
     );
+}
+
+/// A surface of a popup or a layer shell surface, and what keeps it shown.
+struct Shown {
+    surface: wl_surface::WlSurface,
+    _roles: Vec<Box<dyn std::any::Any>>,
+}
+
+impl Rig {
+    /// `surface` with `size` points of grey attached once its role is configured.
+    fn fill(&mut self, surface: &wl_surface::WlSurface, size: (i32, i32)) {
+        self.client.configured = false;
+        surface.commit();
+        for _ in 0..20 {
+            self.pump(1);
+            if self.client.configured {
+                break;
+            }
+        }
+        assert!(self.client.configured, "the surface is configured");
+        let buffer = shm_buffer(
+            self.client.shm.as_ref().unwrap(),
+            &self.queue.handle(),
+            size,
+            |_| GREY,
+        );
+        surface.attach(Some(&buffer), 0, 0);
+        surface.damage_buffer(0, 0, size.0, size.1);
+        surface.commit();
+        self.settle();
+    }
+
+    /// A popup of `size` points of `parent` (an xdg surface), or of `layer` with no xdg parent, at `at` in it.
+    fn popup(
+        &mut self,
+        parent: Option<&xdg_surface::XdgSurface>,
+        layer: Option<&zwlr_layer_surface_v1::ZwlrLayerSurfaceV1>,
+        at: (i32, i32),
+        size: (i32, i32),
+    ) -> Shown {
+        let qh = self.queue.handle();
+        let surface = self
+            .client
+            .compositor
+            .as_ref()
+            .unwrap()
+            .create_surface(&qh, ());
+        let wm_base = self.client.wm_base.as_ref().unwrap();
+        let positioner = wm_base.create_positioner(&qh, ());
+        positioner.set_size(size.0, size.1);
+        positioner.set_anchor_rect(at.0, at.1, 1, 1);
+        positioner.set_anchor(xdg_positioner::Anchor::TopLeft);
+        positioner.set_gravity(xdg_positioner::Gravity::BottomRight);
+        let xdg = wm_base.get_xdg_surface(&surface, &qh, ());
+        let popup = xdg.get_popup(parent, &positioner, &qh, ());
+        if let Some(layer) = layer {
+            layer.get_popup(&popup);
+        }
+        self.fill(&surface, size);
+        Shown {
+            surface,
+            _roles: vec![Box::new(positioner), Box::new(popup), Box::new(xdg)],
+        }
+    }
+
+    /// A layer shell surface of `size` points in the top layer, at the output's top left.
+    fn layer(&mut self, size: (i32, i32)) -> (Shown, zwlr_layer_surface_v1::ZwlrLayerSurfaceV1) {
+        let qh = self.queue.handle();
+        let surface = self
+            .client
+            .compositor
+            .as_ref()
+            .unwrap()
+            .create_surface(&qh, ());
+        let layer = self
+            .client
+            .layer_shell
+            .as_ref()
+            .expect("the server offers the layer shell")
+            .get_layer_surface(
+                &surface,
+                None,
+                zwlr_layer_shell_v1::Layer::Top,
+                "glass-test".into(),
+                &qh,
+                (),
+            );
+        layer.set_size(size.0 as u32, size.1 as u32);
+        layer.set_anchor(zwlr_layer_surface_v1::Anchor::Top | zwlr_layer_surface_v1::Anchor::Left);
+        self.fill(&surface, size);
+        (
+            Shown {
+                surface,
+                _roles: Vec::new(),
+            },
+            layer,
+        )
+    }
+
+    /// A red capsule of regular glass without a shadow over a clear subsurface of `parent`, its glass drawn
+    /// [`SCALED`] times its size; shown once the parent commits again, as it does here.
+    fn scaled_capsule(&mut self, parent: &wl_surface::WlSurface) -> Pane {
+        let effects = self.client.effects.clone().unwrap();
+        let pane = self.pane(parent, &effects, (40, 40), CAPSULE, f64::from(CAPSULE.1) / 2.0);
+        pane.backdrop.set_glass_variant(
+            GlassVariant::Regular,
+            GlassModifier::ExcludeShadow,
+            SizeClass::Dynamic,
+            0,
+            0.0,
+        );
+        pane.backdrop.set_glass_tint(1.0, 0.0, 0.0, 1.0);
+        pane.backdrop.set_glass_scale(SCALED);
+        pane.surface.commit();
+        parent.commit();
+        self.settle();
+        pane
+    }
+}
+
+/// How many columns of `image` show red.
+fn red_columns(image: &image::RgbaImage) -> u32 {
+    let redness = |p: &image::Rgba<u8>| i32::from(p.0[0]) - i32::from(p.0[1]);
+    let peak = image.pixels().map(redness).max().unwrap();
+    assert!(peak > 60, "the capsule shows red: {peak}");
+    (0..image.width())
+        .filter(|x| (0..image.height()).any(|y| redness(image.get_pixel(*x, y)) * 2 > peak))
+        .count() as u32
+}
+
+/// Whether the red capsule of [`Rig::scaled_capsule`] shows wider than its subsurface, as its scale draws it.
+fn assert_scaled_past_its_subsurface(rig: &mut Rig, on: &str) {
+    let width = f64::from(red_columns(&rig.image())) / rig.scale;
+    let least = f64::from(CAPSULE.0) * (1.0 + SCALED) / 2.0;
+    assert!(
+        width > least,
+        "the scaled glass on {on} shows {width} points wide, past its subsurface of {}",
+        CAPSULE.0
+    );
+}
+
+#[test]
+fn scaled_glass_reaches_past_its_subsurface_on_a_windows_popup() {
+    let mut rig = Rig::new((640, 480), 1.0);
+    let window = rig.map("Popup parent", (400, 300), |_| GREY);
+    let popup = rig.popup(Some(&window._xdg.0), None, (40, 40), (300, 200));
+    let _capsule = rig.scaled_capsule(&popup.surface);
+    assert_scaled_past_its_subsurface(&mut rig, "a window's popup");
+}
+
+#[test]
+fn scaled_glass_reaches_past_its_subsurface_on_a_layer_shell_surface() {
+    let mut rig = Rig::new((640, 480), 1.0);
+    let (layer, _role) = rig.layer((300, 200));
+    let _capsule = rig.scaled_capsule(&layer.surface);
+    assert_scaled_past_its_subsurface(&mut rig, "a layer shell surface");
+}
+
+#[test]
+fn scaled_glass_reaches_past_its_subsurface_on_a_layer_shell_surfaces_popup() {
+    let mut rig = Rig::new((640, 480), 1.0);
+    let (_layer, role) = rig.layer((300, 100));
+    let popup = rig.popup(None, Some(&role), (20, 90), (300, 200));
+    let _capsule = rig.scaled_capsule(&popup.surface);
+    assert_scaled_past_its_subsurface(&mut rig, "a layer shell surface's popup");
 }
 
 /// How many times its size the scaled capsule's glass is drawn.

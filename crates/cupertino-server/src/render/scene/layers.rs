@@ -772,9 +772,11 @@ pub(super) fn layer_elements(
                 tree.role = SurfaceRole::Popup;
                 let tree = both.tree(tree, p.scale);
                 own.extend(tree_pieces(p, tree, popup_origin, |p, areas, bound| {
+                    let areas = both.areas(areas);
+                    let bound = super::compose::pressed_bound(p, &areas, both.rect(bound));
                     bounded_glass(
-                        backdrop_elements(p, &both.areas(areas), opacity, WindowState::Active),
-                        both.rect(bound),
+                        backdrop_elements(p, &areas, opacity, WindowState::Active),
+                        bound,
                     )
                 }));
                 let backdrops = both.areas(surface_backdrops(popup.wl_surface(), popup_origin));
@@ -791,9 +793,11 @@ pub(super) fn layer_elements(
                 scale,
             );
             own.extend(tree_pieces(p, tree, popup_origin, |p, areas, bound| {
+                let areas = zoomed.areas(areas);
+                let bound = super::compose::pressed_bound(p, &areas, zoomed.rect(bound));
                 bounded_glass(
-                    backdrop_elements(p, &zoomed.areas(areas), opacity, WindowState::Active),
-                    zoomed.rect(bound),
+                    backdrop_elements(p, &areas, opacity, WindowState::Active),
+                    bound,
                 )
             }));
             let backdrops = zoomed.areas(surface_backdrops(popup.wl_surface(), popup_origin));
@@ -828,9 +832,11 @@ pub(super) fn layer_elements(
             scale,
         );
         out.extend(tree_pieces(p, tree, origin, |p, areas, bound| {
+            let areas = zoomed.areas(areas);
+            let bound = super::compose::pressed_bound(p, &areas, zoomed.rect(bound));
             bounded_glass(
-                backdrop_elements(p, &zoomed.areas(areas), opacity, WindowState::Active),
-                zoomed.rect(bound),
+                backdrop_elements(p, &areas, opacity, WindowState::Active),
+                bound,
             )
         }));
         let backdrops = zoomed.areas(surface_backdrops(surface.wl_surface(), origin));
@@ -991,9 +997,11 @@ fn held_picture_pieces(
                 out.extend(made.moved(by).make(p, pieces));
             }
             Some(HeldGlass::Subsurface { areas, bound }) => {
+                let areas = moved(areas);
                 let bound = Rectangle::new(bound.loc + by, bound.size);
+                let bound = super::compose::pressed_bound(p, &areas, bound);
                 out.extend(bounded_glass(
-                    backdrop_elements(p, &moved(areas), opacity, WindowState::Active),
+                    backdrop_elements(p, &areas, opacity, WindowState::Active),
                     bound,
                 ));
             }

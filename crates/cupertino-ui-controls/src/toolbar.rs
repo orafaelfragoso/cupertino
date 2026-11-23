@@ -784,7 +784,8 @@ impl<M: 'static> Widget<M> for PillSlot {
 }
 
 /// The chosen segment's pill: where the window shows glass, the tab glass as a shape of the toolbar's container
-/// ([`toolbar_selection_glass`]), which draws its own edge; elsewhere a fill over the painted capsule.
+/// ([`toolbar_selection_glass`]), which draws its own edge; elsewhere, and where the window system draws no variants, a
+/// fill over the capsule.
 struct Pill;
 
 impl<M: 'static> Widget<M> for Pill {
@@ -820,7 +821,8 @@ impl<M: 'static> Widget<M> for Pill {
         let size = cx.size();
         let rect = Rect::new(0.0, 0.0, size.width, size.height);
         let radius = nested_radius(TOOLBAR_CONTROL / 2.0, TOOLBAR_CHOICE_INSET);
-        if cx.glass(toolbar_selection_glass(radius)) {
+        // without variants the tab glass would be the toolbar's own glass inside it, so the pill is painted
+        if cx.glass_variants() && cx.glass(toolbar_selection_glass(radius)) {
             return;
         }
         let theme = cx.env().theme.clone();

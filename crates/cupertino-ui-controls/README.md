@@ -192,7 +192,8 @@ from the application's model and reports changes as messages.
   neither Reduce Transparency nor Increase Contrast is on, are glass of the glass window variant
   (`GlassVariant::GlassWindow`) over the window's content, which casts the window shadow (an alert's, or a sheet's fainter one as document-modal glass; deep while the window is
   active, shallow while it is not) and takes its inactive recipe while the window is not active; the painted bodies
-  below stand in for it elsewhere and while an alert pops in, each with its own shadow. A `DialogKind::Dialog` is a sheet: 340 pt wide, solid in the window colour with a 16 pt radius, a soft
+  below stand in for it elsewhere (and where the desktop draws no variants) and while an alert pops in, each with its
+  own shadow. A `DialogKind::Dialog` is a sheet: 340 pt wide, solid in the window colour with a 16 pt radius, a soft
   shadow, a dark hairline outside its edge and, in the dark appearance, a faint light rim inside it; the title, the
   message, the body and a trailing row of buttons, 20 pt in. A `DialogKind::Alert` is 260 pt wide, a nearly opaque
   grey (97 %, opaque under Reduce Transparency and Increase Contrast) with a light rim, a 26 pt radius and the
@@ -277,7 +278,7 @@ from the application's model and reports changes as messages.
   pixel, 50 % black at the sides and 30 % at the top and bottom. A choice's chosen pill is glass of the tab variant
   (`GlassVariant::Tab`, the regular glass under a white fill) as a shape of the toolbar's container with a recipe of
   its own, laid under the segments so their glyphs lie over it; the toolkit draws no edge over it, and where the
-  desktop shows no glass it is a fill over the painted capsule. A glass button is regular glass of its own (container 0) where that glass can show,
+  desktop shows no glass, or draws no variants (`PaintCx::glass_variants`), it is a fill over the capsule. A glass button is regular glass of its own (container 0) where that glass can show,
   its body filling its node, without Reduce Transparency: on a material the window shows (a sidebar, a translucent
   window background), and over the window's own content, as the button is a raised node (`Widget::raised`) whose glass
   lies between the window's raised layer and its content, so the content shows through it; its label then takes the
@@ -290,7 +291,8 @@ from the application's model and reports changes as messages.
   marks the pointer: 4.7 % at once while it is over the button, 9.8 % while pressed (14.9 % and 34.9 % light, 29.8 %
   dark with Increase Contrast), the press level coming on over 45 ms and going over 320 ms. Where the window system has
   no raised layer, with Reduce Transparency and where the desktop shows no glass it paints its body and rim, a default
-  button the accent over them. A held thumb's lens lies over the
+  button the accent over them; where the desktop tints no glass (`PaintCx::glass_tint`) a default button fills the
+  accent over its glass, and where it scales none (`PaintCx::glass_scale`) the glass does not grow. A held thumb's lens lies over the
   track the window paints, so it is glass in a surface layer of its own over the track (`GlassMaterial::Layer`),
   painted where the window system shows no surface layers and with Reduce Transparency. A light divider is 40 % black, as strong over
   the glass as the disabled glyphs beside it. The field under a resting `ToolbarSearch` button is not drawn, so the button's

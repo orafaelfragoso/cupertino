@@ -224,6 +224,7 @@ pub(super) fn drag_image<M: 'static>(
             obscuring: &[],
             layer: false,
             surface_layers: false,
+            glass: crate::paint::GlassSupport::default(),
             pinned: &[None, None],
             activation: 1.0,
         },

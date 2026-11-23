@@ -62,6 +62,15 @@ pub struct Capabilities {
     /// A surface layer's glass may carry an edge the compositor draws ([`SurfaceLayerLook::edge`]); without it the
     /// edge is not drawn.
     pub surface_layer_edges: bool,
+    /// A window's glass may be named by its system variant ([`GlassRegion::variant`]); without it the compositor
+    /// draws the region's style, so a control whose look rests on the variant paints its own fill in its place.
+    pub glass_variants: bool,
+    /// A window's glass may be tinted ([`GlassRegion::tint`]); without it the glass is drawn untinted, so a control
+    /// whose look rests on the tint lays the colour over the glass itself.
+    pub glass_tint: bool,
+    /// A window's glass may be drawn scaled about its shape's centre ([`GlassRegion::scale`]); without it the glass
+    /// keeps its shape's size.
+    pub glass_scale: bool,
 }
 
 /// A property of a window's presentation ([`WindowRequest::Present`]).

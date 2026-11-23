@@ -18,13 +18,36 @@ use cupertino_ui_core::platform::{
 use cupertino_ui_core::{Element, Key, Role, Window, WindowKey};
 use support::{Scene, View};
 
-/// A window system with the desktop's effects and a raised layer.
+/// A window system with the desktop's effects and a raised layer, whose glass takes variants, tints and scales.
 fn effects() -> Capabilities {
+    Capabilities {
+        glass_variants: true,
+        glass_tint: true,
+        glass_scale: true,
+        ..older()
+    }
+}
+
+/// A window system with the desktop's effects and a raised layer, whose glass is drawn by its style alone: untinted
+/// and at its shape.
+fn older() -> Capabilities {
     Capabilities {
         app_effects: true,
         raised_layer: true,
         ..Capabilities::default()
     }
+}
+
+/// The pixel of `view`'s window at `at`, as the compositor shows it without its glass, straight RGBA.
+fn pixel<S: Scene>(view: &mut View<S>, at: Point) -> [u8; 4] {
+    let system = view.driver.window_system_mut();
+    let frame = system.frames(view.window).unwrap().last().unwrap();
+    let pixels = system.composited(view.window).unwrap().unwrap();
+    let scale = f64::from(frame.width) / support::SIZE.width;
+    let stride = pixels.len() / frame.height as usize;
+    let (x, y) = ((at.x * scale) as usize, (at.y * scale) as usize);
+    let p = &pixels[y * stride + x * 4..][..4];
+    [p[0], p[1], p[2], p[3]]
 }
 
 /// An empty stack that fills what it is given.
@@ -328,7 +351,15 @@ impl<const SHEET: bool> Scene for Asking<SHEET> {
 /// The glass window glass of the panel a window with a sheet (`SHEET`) or an alert shows once it has settled, with
 /// Reduce Transparency on or off.
 fn window_glass<const SHEET: bool>(reduce_transparency: bool) -> Vec<(Rect, GlassRegion)> {
-    let mut view = View::<Asking<SHEET>>::open_with(effects(), reduce_transparency);
+    window_glass_on::<SHEET>(effects(), reduce_transparency)
+}
+
+/// [`window_glass`] on a window system of `capabilities`.
+fn window_glass_on<const SHEET: bool>(
+    capabilities: Capabilities,
+    reduce_transparency: bool,
+) -> Vec<(Rect, GlassRegion)> {
+    let mut view = View::<Asking<SHEET>>::open_with(capabilities, reduce_transparency);
     // past an alert's pop-in
     view.wait(1.0);
     let window = view.window;
@@ -486,4 +517,83 @@ fn under_reduce_motion_a_glass_buttons_glass_does_not_grow() {
         assert_eq!(button_scale(&mut view, "Share"), 1.0);
     }
     view.release(at, MouseButton::Left);
+}
+
+#[test]
+fn where_glass_takes_no_variants_the_chosen_segments_pill_is_painted() {
+    let mut glass_view = View::<Toolbar>::open_with(effects(), false);
+    let mut older_view = View::<Toolbar>::open_with(older(), false);
+    let window = older_view.window;
+    let shown = glass(&mut older_view, window);
+    assert!(
+        shown
+            .iter()
+            .all(|(_, g)| variant(g) != Some(GlassVariant::Tab)),
+        "no tab glass, which would be the toolbar's glass inside it: {shown:?}"
+    );
+    // just inside the pill's leading end, clear of its glyph
+    let pill = older_view
+        .bounds_of(Role::RadioButton, "List")
+        .inset(Insets::uniform(TOOLBAR_CHOICE_INSET));
+    let at = Point::new(pill.min_x() + 3.0, pill.center().y);
+    assert_ne!(
+        pixel(&mut older_view, at),
+        pixel(&mut glass_view, at),
+        "the pill is painted where the compositor would draw its glass"
+    );
+}
+
+#[test]
+fn where_glass_takes_no_tint_a_default_glass_button_fills_the_accent_and_does_not_grow() {
+    let mut glass_view = View::<GlassButtons>::open_with(effects(), false);
+    let mut older_view = View::<GlassButtons>::open_moving(older(), false, false);
+    let window = older_view.window;
+    let shown = glass(&mut older_view, window);
+    assert_eq!(shown.len(), 2, "both buttons still lie on glass: {shown:?}");
+    assert!(
+        shown.iter().all(|(_, g)| g.tint[3] == 0.0),
+        "no tint is asked for: {shown:?}"
+    );
+    // beside the label, inside the capsule's straight run
+    let beside = |view: &View<GlassButtons>, name: &str| {
+        let b = view.bounds_of(Role::Button, name);
+        Point::new(b.min_x() + b.height() / 2.0, b.center().y)
+    };
+    let done = beside(&older_view, "Done");
+    assert_ne!(
+        pixel(&mut older_view, done),
+        pixel(&mut glass_view, done),
+        "the accent is filled over the glass"
+    );
+    let share = beside(&older_view, "Share");
+    assert_eq!(
+        pixel(&mut older_view, share),
+        pixel(&mut glass_view, share),
+        "an ordinary button is as it was"
+    );
+
+    let press = older_view.center_of(Role::Button, "Share");
+    older_view.press(press, MouseButton::Left, Mods::NONE);
+    for _ in 0..4 {
+        older_view.wait(0.1);
+        assert_eq!(
+            button_scale(&mut older_view, "Share"),
+            1.0,
+            "glass the window system draws at its shape is asked for at it"
+        );
+    }
+    older_view.release(press, MouseButton::Left);
+}
+
+#[test]
+fn where_glass_takes_no_variants_alerts_and_sheets_are_painted() {
+    // glass of the style alone would cast no window shadow
+    assert!(
+        window_glass_on::<false>(older(), false).is_empty(),
+        "the alert's grey"
+    );
+    assert!(
+        window_glass_on::<true>(older(), false).is_empty(),
+        "the sheet's solid body"
+    );
 }

@@ -475,6 +475,8 @@ pub struct PaintCx<'a> {
     pub(crate) in_layer: bool,
     /// The window system shows surface layers ([`PaintCx::surface_layers`]).
     pub(crate) surface_layers: bool,
+    /// What the window system's glass takes beyond its style ([`PaintCx::glass_variants`]).
+    pub(crate) glass_support: crate::paint::GlassSupport,
     /// What nodes of the window told each other so far ([`PaintCx::page_scrolled`]).
     pub(crate) marks: crate::paint::WindowMarks,
     /// The appearance the node asked its subtree to draw in ([`PaintCx::pin_appearance`]).
@@ -573,6 +575,28 @@ impl PaintCx<'_> {
     /// node paints what the layer's glass would have shown, such as a held knob's painted lens.
     pub fn surface_layers(&self) -> bool {
         self.surface_layers
+    }
+
+    /// Whether the window system draws glass named by its system variant ([`Glass::variant`],
+    /// [`Capabilities::glass_variants`](crate::platform::Capabilities::glass_variants)). Without it
+    /// [`PaintCx::glass`] still shows glass where the window can, of the [`Glass`]'s style alone, so a node whose look
+    /// rests on the variant (glass within glass of another variant) paints its own fill instead of asking.
+    pub fn glass_variants(&self) -> bool {
+        self.glass_support.variants
+    }
+
+    /// Whether the window system tints glass ([`Glass::tint`],
+    /// [`Capabilities::glass_tint`](crate::platform::Capabilities::glass_tint)). Without it the glass shows
+    /// untinted, so a node whose look rests on the tint paints the colour itself.
+    pub fn glass_tint(&self) -> bool {
+        self.glass_support.tint
+    }
+
+    /// Whether the window system draws glass scaled about its shape's centre ([`Glass::scale`],
+    /// [`Capabilities::glass_scale`](crate::platform::Capabilities::glass_scale)). Without it the glass keeps its
+    /// shape's size whatever scale is asked.
+    pub fn glass_scale(&self) -> bool {
+        self.glass_support.scale
     }
 
     /// A scroll view tells the window whether its page is scrolled under the window's raised nodes. A node that does

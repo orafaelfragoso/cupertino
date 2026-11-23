@@ -1155,7 +1155,7 @@ fn highlight_pill(m: &BarMetrics, slot: &Slot) -> (Rect, f64) {
 }
 
 /// A slot's highlight, under the slot: clear glass tinted with the bar's highlight colour, or that colour painted where
-/// the window shows no glass and under Reduce Transparency.
+/// the window shows no glass or the window system does not tint it, and under Reduce Transparency.
 struct HighlightPill {
     rect: Rect,
     radius: f64,
@@ -1198,7 +1198,9 @@ impl<M: Clone + 'static> Widget<M> for HighlightPill {
             .tone
             .palette(dark(env), high_contrast(env))
             .bar_highlight;
+        // untinted clear glass would show no highlight, so without a tint the colour is painted
         let glass = !env.theme.preferences.reduce_transparency
+            && cx.glass_tint()
             && cx.glass(
                 Glass::clear()
                     .variant(GlassVariant::Clear)

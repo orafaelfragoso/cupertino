@@ -758,9 +758,11 @@ fn pop_scale(t: f64) -> f64 {
 /// the panel floats in the raised layer, so the glass lies over the window's content. The glass window variant casts
 /// the window shadow itself, deep while the window is active and shallow while it is not, and takes its inactive
 /// recipe then; a `sheet` is document-modal glass, whose shadow is the sheet's, fainter than an alert's. Returns
-/// whether the window shows it.
+/// whether the window shows it. A window system without variants would draw glass casting no window shadow, so the
+/// panel is painted there.
 fn window_glass(cx: &mut PaintCx<'_>, radius: f64, sheet: bool) -> bool {
     cx.in_raised_layer()
+        && cx.glass_variants()
         && cx.glass(
             Glass::dense()
                 .variant(GlassVariant::GlassWindow)

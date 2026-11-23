@@ -18,11 +18,13 @@ use cupertino_ui_core::{
     PaintCx, Propagation, SemanticsCx, Widget, Window, WindowBackground, WindowKey,
 };
 use cupertino_ui_test::{ManualClock, TestDriver};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 thread_local! {
     /// The glass the next window's node asks for.
     static GLASS: RefCell<Option<Glass>> = const { RefCell::new(None) };
+    /// Whether the node last painted was told the window's glass takes variants, tints and scales.
+    static TAKES: Cell<Option<(bool, bool, bool)>> = const { Cell::new(None) };
 }
 
 /// One window whose one node is the glass the test set.
@@ -94,6 +96,8 @@ impl Widget<()> for Pad {
     }
 
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        let takes = (cx.glass_variants(), cx.glass_tint(), cx.glass_scale());
+        TAKES.with(|t| t.set(Some(takes)));
         assert!(cx.glass(self.0), "the window shows the glass");
     }
 
@@ -102,11 +106,18 @@ impl Widget<()> for Pad {
 
 /// The glass region the window asks for when its node asks for `glass`, on a window system with the desktop's effects.
 fn region_of(glass: Glass) -> GlassRegion {
+    region_on(
+        Capabilities {
+            app_effects: true,
+            ..Capabilities::default()
+        },
+        glass,
+    )
+}
+
+/// [`region_of`] on a window system of `capabilities`.
+fn region_on(capabilities: Capabilities, glass: Glass) -> GlassRegion {
     GLASS.with(|g| *g.borrow_mut() = Some(glass));
-    let capabilities = Capabilities {
-        app_effects: true,
-        ..Capabilities::default()
-    };
     let mut driver =
         TestDriver::<Pane>::new(capabilities, options(1000), ManualClock::new(Timestamp(0)));
     driver.run_until_idle(turns()).unwrap();
@@ -133,6 +144,34 @@ fn region_of(glass: Glass) -> GlassRegion {
         .expect("the window asks for its materials");
     assert_eq!(materials.len(), 1, "{materials:?}");
     materials[0].glass.expect("the material is glass")
+}
+
+#[test]
+fn a_node_is_told_whether_the_window_systems_glass_takes_variants_tints_and_scales() {
+    let glass = Glass::clear().variant(GlassVariant::Clear);
+    region_of(glass);
+    assert_eq!(
+        TAKES.get(),
+        Some((false, false, false)),
+        "an older compositor draws glass by its style alone"
+    );
+    for (variants, tint, scale) in [
+        (true, false, false),
+        (false, true, false),
+        (false, false, true),
+    ] {
+        region_on(
+            Capabilities {
+                app_effects: true,
+                glass_variants: variants,
+                glass_tint: tint,
+                glass_scale: scale,
+                ..Capabilities::default()
+            },
+            glass,
+        );
+        assert_eq!(TAKES.get(), Some((variants, tint, scale)));
+    }
 }
 
 #[test]

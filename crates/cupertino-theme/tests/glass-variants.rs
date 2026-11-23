@@ -3,9 +3,9 @@
 
 use cupertino_theme::glass::{
     legibility_amount, GlassBase, GlassShadow, SidebarEdge, BLEED_AMOUNT_MAX, BLEED_BLUR_MAX,
-    CLEAR_BLUR, GLASS_SIZE_MEDIUM,
-    GLASS_SIZE_MINIMUM, LARGE_PANEL_BLACK_LIGHT, LARGE_PANEL_SATURATION_DARK,
-    LARGE_PANEL_SHADOW_BLUR, MODULE_BLACK, MODULE_SATURATION, MODULE_WHITE, TRACK_CAPTURE_SCALE,
+    CLEAR_BLUR, GLASS_SIZE_MEDIUM, GLASS_SIZE_MINIMUM, LARGE_PANEL_BLACK_LIGHT,
+    LARGE_PANEL_SATURATION_DARK, LARGE_PANEL_SHADOW_BLUR, MODULE_BLACK, MODULE_SATURATION,
+    MODULE_WHITE, TRACK_CAPTURE_SCALE,
 };
 use cupertino_theme::{
     GlassMode, GlassModifiers, GlassParams, GlassSize, GlassStyle, GlassVariant,
@@ -53,7 +53,7 @@ fn inactive(variant: GlassVariant, dark: bool, side: f32) -> GlassParams {
 const DEG: f32 = std::f32::consts::PI / 180.0;
 
 #[test]
-fn every_legacy_style_draws_as_its_macos_variant() {
+fn every_legacy_style_draws_as_its_variant() {
     use GlassSize::*;
     use GlassVariant as V;
     let d = GlassModifiers::DEFAULT;
@@ -274,7 +274,10 @@ fn reduce_motion_flattens_both_bends_and_widens_the_blur_four_times_for_the_cent
     );
     // the dock and the app switcher bend what lies outside their edge, but not with Reduce Motion
     for variant in [GlassVariant::Dock, GlassVariant::AppSwitcher] {
-        assert!(at(variant, false, 100.0).refraction.outer_opacity > 0.0, "{variant:?}");
+        assert!(
+            at(variant, false, 100.0).refraction.outer_opacity > 0.0,
+            "{variant:?}"
+        );
         let reduced = with(variant, false, 100.0, |m| m.reduce_motion = true);
         assert_eq!(reduced.refraction.outer_opacity, 0.0, "{variant:?}");
     }

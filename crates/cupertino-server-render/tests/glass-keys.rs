@@ -18,7 +18,11 @@ fn mode(variant: GlassVariant) -> GlassMode {
 /// server draws a pressed glass button).
 fn button(grow: f32) -> Container {
     let rest = [100.0, 100.0, 96.0, 36.0];
-    let mut c = Container::new(vec![GlassShape::capsule(rest)], 0.0, mode(GlassVariant::Regular));
+    let mut c = Container::new(
+        vec![GlassShape::capsule(rest)],
+        0.0,
+        mode(GlassVariant::Regular),
+    );
     let [x, y, w, h] = rest;
     let (gw, gh) = (w * grow, h * grow);
     c.shapes[0] = GlassShape::capsule([x - (gw - w) / 2.0, y - (gh - h) / 2.0, gw, gh]);
@@ -41,7 +45,10 @@ fn glass_keys_a_grown_shape_inside_its_bound_keeps_its_blurred_textures_and_draw
             rest.state(GENERATION, SCALE),
             "the blurred textures are kept at {grow}"
         );
-        assert_ne!(grown.key, rest.key, "the composite is drawn again at {grow}");
+        assert_ne!(
+            grown.key, rest.key,
+            "the composite is drawn again at {grow}"
+        );
     }
     // a new backdrop or another scale makes them again
     assert_ne!(
@@ -101,7 +108,9 @@ fn glass_keys_every_part_of_the_recipe_the_composite_reads_changes_the_key() {
     let changes: [(&str, fn(&mut Container)); 7] = [
         ("shadow offset", |c| c.params.shadow.offset[1] += 2.0),
         ("shadow colour", |c| c.params.shadow.fill[0] = 0.5),
-        ("tint", |c| c.params = c.params.with_tint([1.0, 0.0, 0.0, 0.5], 0.5)),
+        ("tint", |c| {
+            c.params = c.params.with_tint([1.0, 0.0, 0.0, 0.5], 0.5)
+        }),
         ("blur ramp", |c| c.blur_ramp = [1.0, 0.5]),
         ("lens", |c| c.lens = 1.2),
         ("veil", |c| c.params.veil = [0.2, 0.4]),

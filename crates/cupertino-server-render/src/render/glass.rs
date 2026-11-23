@@ -100,13 +100,13 @@ const MAX_TONE_READS: usize = 8;
 fn texture_identity(container: &Container) -> u64 {
     let mut sig = Sig::new().u(u64::from(container.params.capture_scale.to_bits()));
     for (sigma, used) in container.levels() {
-        sig = sig.u(u64::from(used)).u(if used {
-            u64::from(sigma.to_bits())
-        } else {
-            0
-        });
+        sig = sig
+            .u(u64::from(used))
+            .u(if used { u64::from(sigma.to_bits()) } else { 0 });
     }
-    let fill = container.fill_sigma().map_or(u64::MAX, |s| u64::from(s.to_bits()));
+    let fill = container
+        .fill_sigma()
+        .map_or(u64::MAX, |s| u64::from(s.to_bits()));
     let bleed = match container.bleed_source() {
         None => 0,
         Some(BleedSource::Level(i)) => 1 + i as u64,

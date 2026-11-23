@@ -57,7 +57,7 @@ pub struct Glass {
 
 impl Glass {
     /// Regular glass with square corners, on its own, opaque.
-    pub fn regular() -> Self {
+    pub const fn regular() -> Self {
         Self {
             style: GlassStyle::Regular,
             corners: GlassCorners::Radius(0.0),
@@ -75,7 +75,7 @@ impl Glass {
 
     /// This glass drawn as the system's `variant` in place of its style; the style
     /// stays as what a window system without variants draws.
-    pub fn variant(self, variant: GlassVariant) -> Self {
+    pub const fn variant(self, variant: GlassVariant) -> Self {
         Self {
             variant: Some(variant),
             ..self
@@ -83,12 +83,12 @@ impl Glass {
     }
 
     /// The variant's size-dependent values resolved at `size` rather than the node's own.
-    pub fn size_class(self, size: GlassSize) -> Self {
+    pub const fn size_class(self, size: GlassSize) -> Self {
         Self { size, ..self }
     }
 
     /// The straight sRGB `color` laid over the glass's face at its alpha.
-    pub fn tint(self, color: Color) -> Self {
+    pub const fn tint(self, color: Color) -> Self {
         Self {
             tint: Some(color),
             ..self
@@ -96,7 +96,7 @@ impl Glass {
     }
 
     /// Whether the glass grows a little about its centre under a press, on the compositor's clock.
-    pub fn interactive(self, interactive: bool) -> Self {
+    pub const fn interactive(self, interactive: bool) -> Self {
         Self {
             interactive,
             ..self
@@ -104,12 +104,12 @@ impl Glass {
     }
 
     /// Whether the variant steps back behind what is in front of it (a card behind another).
-    pub fn subdued(self, subdued: bool) -> Self {
+    pub const fn subdued(self, subdued: bool) -> Self {
         Self { subdued, ..self }
     }
 
     /// Whether the variant draws no drop shadow of its own, as the surface draws its shadow apart.
-    pub fn exclude_shadow(self, exclude_shadow: bool) -> Self {
+    pub const fn exclude_shadow(self, exclude_shadow: bool) -> Self {
         Self {
             exclude_shadow,
             ..self
@@ -156,8 +156,19 @@ impl Glass {
         }
     }
 
+    /// The glass as the background of a whole window ([`crate::WindowBackground::Surface`]): on its own, as the
+    /// window's shape and alpha stand for its corners and its alpha.
+    pub(crate) fn window_region(&self) -> GlassRegion {
+        Self {
+            container: 0,
+            spacing: 0.0,
+            ..*self
+        }
+        .region(0.0)
+    }
+
     /// Clear glass with square corners, on its own, opaque.
-    pub fn clear() -> Self {
+    pub const fn clear() -> Self {
         Self {
             style: GlassStyle::Clear,
             ..Self::regular()
@@ -166,7 +177,7 @@ impl Glass {
 
     /// The glass of a large floating panel with square corners, on its own, opaque: regular glass toned further
     /// towards the middle, with a soft drop shadow the compositor draws below it.
-    pub fn large_panel() -> Self {
+    pub const fn large_panel() -> Self {
         Self {
             style: GlassStyle::LargePanel,
             ..Self::regular()
@@ -175,7 +186,7 @@ impl Glass {
 
     /// The glass of a dense floating surface with square corners, on its own, opaque: regular glass with a wider blur
     /// over a washed-out face.
-    pub fn dense() -> Self {
+    pub const fn dense() -> Self {
         Self {
             style: GlassStyle::Dense,
             ..Self::regular()
@@ -184,7 +195,7 @@ impl Glass {
 
     /// The glass of the tiles of a panel of modules with square corners, on its own, opaque: the clear face under a
     /// wide blur and a strong bending edge.
-    pub fn module() -> Self {
+    pub const fn module() -> Self {
         Self {
             style: GlassStyle::Module,
             ..Self::regular()
@@ -193,7 +204,7 @@ impl Glass {
 
     /// The glass of a notification card with square corners, on its own, opaque: the clear face over a wide blur and a
     /// blur fill, with a faint ring shadow inside its outline.
-    pub fn card() -> Self {
+    pub const fn card() -> Self {
         Self {
             style: GlassStyle::Card,
             ..Self::regular()
@@ -202,7 +213,7 @@ impl Glass {
 
     /// The glass of a level's track with square corners, on its own, opaque: no blur, a bending edge that follows the
     /// track's height and a ring shadow inside its outline.
-    pub fn track() -> Self {
+    pub const fn track() -> Self {
         Self {
             style: GlassStyle::Track,
             ..Self::regular()
@@ -211,7 +222,7 @@ impl Glass {
 
     /// The glass of a small popover over a floating bar with square corners, on its own, opaque: a wide soft blur fill,
     /// a strong bending edge and a thin line of light along its top and bottom edges.
-    pub fn popover() -> Self {
+    pub const fn popover() -> Self {
         Self {
             style: GlassStyle::Popover,
             ..Self::regular()
@@ -220,7 +231,7 @@ impl Glass {
 
     /// The glass of a wide floating panel of large icons (the application switcher) with square corners, on its own,
     /// opaque: a blur of about a point, a strong bending edge and no shadow.
-    pub fn switcher() -> Self {
+    pub const fn switcher() -> Self {
         Self {
             style: GlassStyle::Switcher,
             ..Self::regular()
@@ -229,7 +240,7 @@ impl Glass {
 
     /// The glass of a window's sidebar with square corners, on its own, opaque: a wide soft blur fill over a light pane
     /// in the light appearance and a dark, nearly grey one in the dark.
-    pub fn sidebar() -> Self {
+    pub const fn sidebar() -> Self {
         Self {
             style: GlassStyle::Sidebar,
             ..Self::regular()
@@ -238,7 +249,7 @@ impl Glass {
 
     /// The module glass of a tile that steps back, with square corners, on its own, opaque: twice the module's blur and
     /// a quieter face.
-    pub fn subdued_module() -> Self {
+    pub const fn subdued_module() -> Self {
         Self {
             style: GlassStyle::SubduedModule,
             ..Self::regular()
@@ -247,7 +258,7 @@ impl Glass {
 
     /// The glass of a small card of content over the desktop with square corners, on its own, opaque: a faint blur under
     /// a wide soft blur fill and a veiled face.
-    pub fn snippet() -> Self {
+    pub const fn snippet() -> Self {
         Self {
             style: GlassStyle::Snippet,
             ..Self::regular()
@@ -255,7 +266,7 @@ impl Glass {
     }
 
     /// Clear glass veiled black from a fifth at its top to fully at its bottom, with square corners, on its own, opaque.
-    pub fn veiled() -> Self {
+    pub const fn veiled() -> Self {
         Self {
             style: GlassStyle::Veiled,
             ..Self::regular()
@@ -264,7 +275,7 @@ impl Glass {
 
     /// The glass of a window's toolbar controls with square corners, on its own, opaque: regular glass with a face
     /// lifted a little further and a thin line of light along its top and bottom edges.
-    pub fn toolbar() -> Self {
+    pub const fn toolbar() -> Self {
         Self {
             style: GlassStyle::Toolbar,
             ..Self::regular()
@@ -273,7 +284,7 @@ impl Glass {
 
     /// The glass of a menu with square corners, on its own, opaque: a wide blur under a face that tones the backdrop
     /// into a narrow band, with a thin line of light along its top and bottom edges.
-    pub fn menu() -> Self {
+    pub const fn menu() -> Self {
         Self {
             style: GlassStyle::Menu,
             ..Self::regular()
@@ -281,7 +292,7 @@ impl Glass {
     }
 
     /// Corners of `radius` points.
-    pub fn radius(self, radius: f64) -> Self {
+    pub const fn radius(self, radius: f64) -> Self {
         Self {
             corners: GlassCorners::Radius(radius),
             ..self
@@ -289,7 +300,7 @@ impl Glass {
     }
 
     /// Round ends.
-    pub fn capsule(self) -> Self {
+    pub const fn capsule(self) -> Self {
         Self {
             corners: GlassCorners::Capsule,
             ..self
@@ -297,7 +308,7 @@ impl Glass {
     }
 
     /// Join container `id` (nonzero), blending into its other shapes over `spacing` points.
-    pub fn container(self, id: u32, spacing: f64) -> Self {
+    pub const fn container(self, id: u32, spacing: f64) -> Self {
         Self {
             container: id,
             spacing,
@@ -306,7 +317,7 @@ impl Glass {
     }
 
     /// Draw at `alpha`, from 0 (hidden) to 1.
-    pub fn alpha(self, alpha: f64) -> Self {
+    pub const fn alpha(self, alpha: f64) -> Self {
         Self { alpha, ..self }
     }
 }

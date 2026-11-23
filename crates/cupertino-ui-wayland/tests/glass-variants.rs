@@ -8,9 +8,9 @@ use crate::wire;
 use cupertino_geometry::{Rect, Size};
 use cupertino_keyboard::modifiers::Profile;
 use cupertino_ui_core::platform::{
-    BlurRamp, DecorationMode, GlassModifiers, GlassRegion, GlassSize, GlassStyle, GlassVariant,
-    MaterialRegion, PlatformEvent, Submitted, SurfaceLayerLook, WindowEvent, WindowId,
-    WindowRequest, WindowSpec, WindowSystem,
+    Backdrop, BlurRamp, DecorationMode, GlassModifiers, GlassRegion, GlassSize, GlassStyle,
+    GlassVariant, MaterialRegion, PlatformEvent, Submitted, SurfaceLayerLook, WindowEvent,
+    WindowId, WindowRequest, WindowSpec, WindowSystem,
 };
 use cupertino_ui_wayland::WaylandWindowSystem;
 use std::time::{Duration, Instant};
@@ -222,5 +222,50 @@ fn a_layers_variant_and_tint_go_out_from_version_7_and_its_style_before() {
         sent,
         ["SetGlass { style: 7, lens: 1.0 }"],
         "version 6 draws the look's style, untinted"
+    );
+}
+
+#[test]
+fn a_window_backgrounds_glass_variant_goes_to_its_backdrop_and_a_fade_sends_only_the_alpha() {
+    let (server, conn) = Harness::start(Offer {
+        app_effects: Some(23),
+        ..Offer::NONE
+    });
+    let mut system = WaylandWindowSystem::new(conn, Profile::cupertino());
+    let window = system.create_window(&spec()).unwrap();
+    flush(&mut system);
+    let backdrop = |alpha| Backdrop {
+        material: GlassStyle::Sidebar.material().into(),
+        radius: 16.0,
+        alpha,
+        glass: Some(GlassRegion {
+            variant: Some((GlassVariant::AbuttedSidebar, GlassModifiers::DEFAULT)),
+            ..GlassRegion::of_style(GlassStyle::Sidebar, 0, 0.0)
+        }),
+    };
+    system
+        .request(window, WindowRequest::Backdrop(Some(backdrop(1.0))))
+        .unwrap();
+    flush(&mut system);
+    server.wait_for("SetGlassVariant", 1);
+    let sent = glass_sent(&server);
+    assert!(
+        sent.last()
+            .unwrap()
+            .starts_with("SetGlassVariant { variant: Value(AbuttedSidebar)"),
+        "{sent:?}"
+    );
+    let before = server.requests().len();
+    system
+        .request(window, WindowRequest::Backdrop(Some(backdrop(0.5))))
+        .unwrap();
+    flush(&mut system);
+    server.wait_for("SetAlpha", 2);
+    let after: Vec<_> = server.requests().split_off(before);
+    assert!(
+        !after
+            .iter()
+            .any(|r| r.starts_with("SetGlass") || r.starts_with("GetBackdrop")),
+        "{after:?}"
     );
 }

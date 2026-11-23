@@ -255,12 +255,14 @@ pub struct MenuDescription {
 }
 
 /// A material of the theme data (`materials.json`) the compositor draws under a window, the window's size with its
-/// corners rounded by `radius` points, at `alpha` from 0 (hidden) to 1 (opaque).
+/// corners rounded by `radius` points, at `alpha` from 0 (hidden) to 1 (opaque). With `glass`, the compositor draws
+/// that glass there instead, and `material` names what a compositor without glass draws.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Backdrop {
     pub material: String,
     pub radius: f64,
     pub alpha: f64,
+    pub glass: Option<GlassRegion>,
 }
 
 /// A material of the theme data (`materials.json`) the compositor draws under one part of a window: `rect` in the

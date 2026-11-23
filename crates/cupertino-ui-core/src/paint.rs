@@ -726,6 +726,7 @@ impl Painter {
                             surface,
                             radius,
                             alpha,
+                            ..
                         } => (
                             Shape::RoundedRect {
                                 rect: bounds,

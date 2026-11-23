@@ -209,6 +209,8 @@ enum Published {
 struct ShownBackdrop {
     material: Material,
     name: String,
+    /// The glass drawn in place of the material, if any.
+    glass: Option<GlassRegion>,
     radius: f64,
     /// The logical size its shape was last given.
     shaped: Option<(u32, u32)>,
@@ -877,13 +879,14 @@ impl WaylandWindowSystem {
                 material,
                 radius,
                 alpha,
+                glass,
             }) => {
                 // a fade changes only the alpha of the material already shown
                 if let Some(shown) = self
                     .window_mut(window)?
                     .backdrop
                     .as_mut()
-                    .filter(|b| b.name == material)
+                    .filter(|b| b.name == material && b.glass == glass)
                 {
                     shown.material.set_alpha(alpha).map_err(protocol)?;
                     if shown.radius != radius {
@@ -904,11 +907,12 @@ impl WaylandWindowSystem {
                 let wire = effects
                     .backdrop(&self.conn, surface)
                     .map_err(|e| PlatformError::Protocol(e.to_string()))?;
-                set_look(&wire, &material, None).map_err(protocol)?;
+                set_look(&wire, &material, glass).map_err(protocol)?;
                 wire.set_alpha(alpha).map_err(protocol)?;
                 Some(ShownBackdrop {
                     material: wire,
                     name: material,
+                    glass,
                     radius,
                     shaped: None,
                 })

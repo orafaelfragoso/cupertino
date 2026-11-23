@@ -498,6 +498,7 @@ fn bar<M: Clone + 'static>(scene: &BarScene<'_>, input: fn(Input) -> M) -> Windo
                 surface: Surface::MenuBar,
                 radius: 0.0,
                 alpha: 1.0,
+                glass: None,
             }
         } else {
             WindowBackground::None

@@ -338,3 +338,19 @@ fn the_app_choosers_question_names_its_target_shortened() {
         "Open “” with:".chars().count() + 81
     );
 }
+
+#[test]
+fn the_app_chooser_window_is_abutted_sidebar_glass_over_the_sidebar_material() {
+    use cupertino_kit::core::{GlassVariant, WindowBackground};
+    use cupertino_kit::theme::Surface;
+    let (d, _answer) = apps(false);
+    let window = cupertino_shell_dialogs::view::app_window(&d);
+    let WindowBackground::Surface { surface, glass, .. } = window.background else {
+        panic!("a surface background: {:?}", window.background);
+    };
+    assert_eq!(surface, Surface::Sidebar, "its material and opaque fill");
+    assert_eq!(
+        glass.and_then(|g| g.variant),
+        Some(GlassVariant::AbuttedSidebar)
+    );
+}

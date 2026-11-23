@@ -121,6 +121,24 @@ fn the_sidebar_panel_is_abutted_sidebar_glass_and_opaque_with_reduce_transparenc
     );
 }
 
+#[test]
+fn a_single_panel_window_is_abutted_sidebar_glass_over_the_sidebar_material() {
+    let cupertino_ui_core::WindowBackground::Surface { surface, glass, .. } =
+        cupertino_ui_controls::PANEL_WINDOW_BACKGROUND
+    else {
+        panic!("a surface background");
+    };
+    assert_eq!(
+        surface,
+        cupertino_theme::ui::Surface::Sidebar,
+        "its material and its opaque fill"
+    );
+    assert_eq!(
+        glass.and_then(|g| g.variant),
+        Some(GlassVariant::AbuttedSidebar)
+    );
+}
+
 struct Toolbar;
 
 impl Scene for Toolbar {

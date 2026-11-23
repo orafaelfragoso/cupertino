@@ -10,6 +10,7 @@
 //! - A window that closes while the overview is open has its hole closed: the claim ends and nothing of it shows.
 //! - The toggle (the shortcut, F3) opens the overview and the next one leaves it, giving the window back, more times
 //!   than a connection may have transactions, with the same instance.
+//! - Going from one application's window to another's arms the gestures anew each time, and never opens the overview.
 
 #[path = "shell-host/app.rs"]
 mod app;
@@ -495,4 +496,57 @@ fn the_toggle_opens_the_overview_and_the_next_one_leaves_it() {
         1,
         "the overview kept its first instance"
     );
+}
+
+/// The turns a test watches after the windows changed: past the re-arm's quiet time (250 ms) and the arming after it.
+const CHANGE_TURNS: u32 = 200;
+
+#[test]
+fn the_windows_changing_never_open_the_overview() {
+    let (_bus, mut rig) = start("overview-changes", &["overview"]);
+    app::spawn(rig.client(), "org.cupertino.test.first");
+    let (first, _) = mapped(&mut rig);
+    app::spawn(rig.client(), "org.cupertino.test.second");
+    rig.until("both windows are mapped", |rig| {
+        rig.state.windows.iter().filter(|w| w.mapped).count() == 2
+    });
+    let second = rig
+        .state
+        .windows
+        .iter()
+        .find(|w| w.mapped && w.id != first)
+        .unwrap()
+        .id;
+    let output = rig.state.outputs[0].id;
+    rig.until("the swipe up is armed", |rig| {
+        rig.state
+            .transactions
+            .has_gesture_binding(output, WireGesture::SwipeUp)
+    });
+    // the person goes from one application to the other and back: each change arms the gestures anew
+    for (round, window) in [second, first, second, first].into_iter().enumerate() {
+        rig.state.focus_window_by_input(window);
+        let mut disarmed = false;
+        for turn in 0..CHANGE_TURNS {
+            rig.turn();
+            disarmed |= !rig
+                .state
+                .transactions
+                .has_gesture_binding(output, WireGesture::SwipeUp);
+            assert!(
+                !rig.state.transactions.is_window_claimed(first)
+                    && !rig.state.transactions.is_window_claimed(second),
+                "change {round}, turn {turn}: no overview opened by itself"
+            );
+        }
+        assert!(disarmed, "change {round}: the gestures were armed anew");
+        rig.until(
+            &format!("change {round}: the swipe up is armed again"),
+            |rig| {
+                rig.state
+                    .transactions
+                    .has_gesture_binding(output, WireGesture::SwipeUp)
+            },
+        );
+    }
 }

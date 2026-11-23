@@ -149,7 +149,9 @@
       100 milliseconds after its submit, a participant with a staged surface that has not
       committed is ready as it stands. That surface leaves the part and commits as usual from
       then, and the rest of the part, the kept commits of its other surfaces and its window
-      changes, is applied.
+      changes, is applied. In a transaction bound to a gesture (bind_gesture) the surface stays
+      in the part: the transaction waits for its gesture anyway, and its first commit, however
+      late, is kept for the gesture like the others.
 
       Start. The transaction starts on the first frame of its output that the server prepares
       after its creator and every component the creator expects are ready, and at the latest on

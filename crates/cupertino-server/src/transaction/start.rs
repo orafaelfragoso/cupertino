@@ -51,13 +51,16 @@ fn deadline_ms(tx: &TransactionRecord, outputs: &[OutputEntry]) -> u32 {
 
 /// Take the parts of `tx` on: a participant that has not submitted [`AUTO_SUBMIT_MS`] after it created or joined is
 /// taken as submitted, and one whose staged surface has not committed [`COMMIT_GRACE_MS`] after its `submit` is ready
-/// as it stands, that surface leaving the part.
+/// as it stands, that surface leaving the part. In a transaction bound to a gesture the surface stays in the part: the
+/// transaction waits for its gesture whatever the surface does, and the surface shows nothing before it, so its first
+/// commit, however late, is kept for the gesture too.
 fn advance_parts(
     tx: &mut TransactionRecord,
     now: Instant,
     owners: &mut HashMap<ObjectId, (TxId, u64)>,
 ) {
     let tx_id = tx.id;
+    let keeps_late_commits = tx.gesture.is_some();
     for p in &mut tx.participants {
         if p.withdrawn {
             continue;
@@ -77,12 +80,14 @@ fn advance_parts(
                     >= Duration::from_millis(COMMIT_GRACE_MS.into())
             {
                 let pid = p.id;
-                p.staged.retain(|s| {
-                    if !s.committed && owners.get(&s.surface_id) == Some(&(tx_id, pid)) {
-                        owners.remove(&s.surface_id);
-                    }
-                    s.committed
-                });
+                if !keeps_late_commits {
+                    p.staged.retain(|s| {
+                        if !s.committed && owners.get(&s.surface_id) == Some(&(tx_id, pid)) {
+                            owners.remove(&s.surface_id);
+                        }
+                        s.committed
+                    });
+                }
                 p.mark_ready(now);
             }
         }

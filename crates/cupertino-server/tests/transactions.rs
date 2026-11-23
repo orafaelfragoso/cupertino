@@ -1736,6 +1736,63 @@ fn an_armed_part_merges_later_commits_into_its_kept_one() {
     );
 }
 
+/// Longer than a part waits for its staged surfaces' commits after its submit (`COMMIT_GRACE_MS`, 100 ms).
+const PAST_COMMIT_GRACE: Duration = Duration::from_millis(150);
+
+#[test]
+fn an_armed_part_whose_surface_commits_late_keeps_that_commit_for_the_gesture() {
+    let mut rig = Rig::new();
+    let (hconn, mut hq, mut hst) = rig.connect_host(&["overview"]);
+    let (_hov, oconn, mut oq, mut ost) = rig.spawn_component(&hconn, &mut hq, &mut hst, "overview");
+    let (surf, _shell) = rig.create_layer_surface(&oconn, &mut oq, &mut ost, "strip");
+    let server_strip = server_layer_surface(&rig, "strip");
+    let oqh = oq.handle();
+    // the overview arms its way in before the surface's first frame is drawn, which takes longer than the grace
+    let tx = ost
+        .tx_manager
+        .as_ref()
+        .unwrap()
+        .create(1, ost.output.as_ref().unwrap(), &oqh, ());
+    tx.bind_gesture(Gesture::SwipeUp, 0.45, 1.0);
+    tx.stage(&surf);
+    tx.submit();
+    let deadline = Instant::now() + PAST_COMMIT_GRACE;
+    while Instant::now() < deadline {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    assert!(
+        rig.state.transactions.has_gesture_binding(
+            rig.output_id,
+            cupertino_protocols::server::transaction::cupertino_transaction_v1::Gesture::SwipeUp
+        ),
+        "the part is ready as it stands, and the transaction armed"
+    );
+    // the frame comes: it shows nothing before the gesture
+    let child = ost.compositor.as_ref().unwrap().create_surface(&oqh, ());
+    let _layer = ost
+        .layers
+        .as_ref()
+        .unwrap()
+        .get_layer(&child, &surf, &oqh, ());
+    surf.commit();
+    for _ in 0..3 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    assert_eq!(
+        layers_of(&server_strip),
+        0,
+        "the late commit of an armed part's surface is kept for its gesture"
+    );
+    assert!(rig.state.transaction_gesture_begin(
+        rig.output_id,
+        cupertino_protocols::server::transaction::cupertino_transaction_v1::Gesture::SwipeUp
+    ));
+    for _ in 0..3 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    assert_eq!(layers_of(&server_strip), 1, "the gesture applies it");
+}
+
 #[test]
 fn a_hole_layer_merged_into_its_kept_commit_applies_the_newest_hole_state() {
     let mut rig = Rig::new();

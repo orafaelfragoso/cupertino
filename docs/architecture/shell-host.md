@@ -483,7 +483,10 @@ A participant's part is made of two things:
 - A part never waits without end. 100 ms after its `submit`, a participant with a staged surface that has not
   committed is ready as it stands: that surface leaves the part, and the rest (the kept commits of its other
   surfaces, its window changes) applies. `cupertino-kit-shell` commits a staged window in the update that submits,
-  also when the view draws nothing that differs, so a part of a Kit window is ready with its `submit`.
+  also when the view draws nothing that differs, so a part of a Kit window is ready with its `submit`. In a
+  transaction bound to a gesture the surface stays in the part: it waits for the gesture anyway, and a new window's
+  first frame, drawn after its `submit` and often later than 100 ms, is kept for the gesture like the others rather
+  than shown at once.
 - The transaction starts on the first frame of its output that the server prepares after the creator and every
   component it expects (`expect`) are ready, and at the latest on the first frame prepared after the deadline. The
   deadline counts from the creator's `submit`: one frame interval of the output plus 4 ms unless `set_deadline` gives

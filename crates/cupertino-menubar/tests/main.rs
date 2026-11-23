@@ -3,3 +3,4 @@
 
 #[path = "late-menu.rs"]
 mod late_menu;
+mod menus;

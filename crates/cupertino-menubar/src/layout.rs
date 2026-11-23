@@ -584,7 +584,7 @@ pub mod panel {
     pub const RADIUS: f64 = 14.0;
     /// The row with the title and the switch.
     pub const HEADER: f64 = 41.5;
-    /// A heading over the rows below it, and the row of the network joined.
+    /// A heading over the rows below it, and the row of the network joined or of a Bluetooth device.
     pub const SECTION: f64 = 24.0;
     pub const CURRENT: f64 = 40.0;
     /// The row that shows or hides the list, a network of the list, and a line of plain text.
@@ -622,7 +622,7 @@ fn panel_height(item: &MenuItem) -> f64 {
     match &item.panel {
         Some(PanelRow::Header { .. }) | None => panel::HEADER,
         Some(PanelRow::Section { .. }) => panel::SECTION,
-        Some(PanelRow::Current { .. }) => panel::CURRENT,
+        Some(PanelRow::Current { .. } | PanelRow::Device { .. }) => panel::CURRENT,
         Some(PanelRow::Disclosure { .. }) => panel::DISCLOSURE,
         Some(PanelRow::Network { .. }) => panel::NETWORK,
         Some(PanelRow::Note { .. }) => panel::NOTE,

@@ -165,8 +165,9 @@ impl Export<'_> {
                 )
             });
             collapse_separators(&mut menu.children);
-            // a menu still to be loaded stays; one the removal emptied goes
-            if loaded && menu.children.is_empty() {
+            // a menu still to be loaded stays; one the removal left with nothing to show goes (Electron's File keeps
+            // a hidden Close Developer Tools next to the Settings and Quit that left it)
+            if loaded && !menu.children.iter().any(|c| c.visible && !c.separator) {
                 *slot = None;
             }
         }
@@ -339,7 +340,8 @@ fn plain_label(label: &str) -> String {
 /// The role an English DBusMenu label names, with the mnemonic marker, a trailing ellipsis and case ignored: about
 /// starts with "About"; quit is "Quit", "Quit" and a name, or "Exit"; preferences is "Preferences", "Settings",
 /// "Options" or "Configure" and one of `names` (other "Configure" items are not the application's settings); close
-/// is "Close" or "Close Window"; full screen is "Full Screen" or "Enter Full Screen". Any other label has none.
+/// is "Close" or "Close Window"; full screen is "Full Screen", "Enter Full Screen", "Exit Full Screen" or "Toggle
+/// Full Screen" (Electron's). Any other label has none.
 pub fn label_role(label: &str, names: &[&str]) -> Option<Role> {
     let label = plain_label(label);
     let words = |prefix: &str| {
@@ -357,7 +359,9 @@ pub fn label_role(label: &str, names: &[&str]) -> Option<Role> {
         "quit" | "exit" => Role::Quit,
         "preferences" | "settings" | "options" => Role::Preferences,
         "close" | "close window" => Role::Close,
-        "full screen" | "enter full screen" | "exit full screen" => Role::FullScreen,
+        "full screen" | "enter full screen" | "exit full screen" | "toggle full screen" => {
+            Role::FullScreen
+        }
         _ if words("about").is_some() => Role::About,
         _ if words("quit").is_some_and(|rest| !rest.trim().is_empty()) => Role::Quit,
         _ if words("configure").is_some_and(names_app) => Role::Preferences,

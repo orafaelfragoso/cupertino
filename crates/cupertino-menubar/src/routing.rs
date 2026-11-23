@@ -31,6 +31,15 @@ mod key {
 /// The control panel, which Settings… of the system menu starts.
 const SETTINGS_PROGRAM: &str = "cupertino-settings";
 
+/// Start the control panel on the pane named `pane`.
+fn settings_pane(pane: &str) -> Action {
+    Action::Launch(Launch::Program(vec![
+        SETTINGS_PROGRAM.to_owned(),
+        "--pane".to_owned(),
+        pane.to_owned(),
+    ]))
+}
+
 /// The menu key for an evdev key code; `None` for keys menus ignore. Letters come through
 /// [`typed_key`].
 pub fn menu_key(code: u32) -> Option<Key> {
@@ -157,12 +166,9 @@ pub fn resolve(effect: Effect, cx: &Context) -> Option<Action> {
         } if ExtraKind::from_slot_id(&id).is_some() => {
             let kind = ExtraKind::from_slot_id(&id)?;
             match cx.shared.extras.menu(kind).action(item)? {
-                ExtraAction::System(SystemAction::WifiSettings) => {
-                    Some(Action::Launch(Launch::Program(vec![
-                        SETTINGS_PROGRAM.to_owned(),
-                        "--pane".to_owned(),
-                        "wifi".to_owned(),
-                    ])))
+                ExtraAction::System(SystemAction::WifiSettings) => Some(settings_pane("wifi")),
+                ExtraAction::System(SystemAction::BluetoothSettings) => {
+                    Some(settings_pane("bluetooth"))
                 }
                 action => Some(Action::Extra(action.clone())),
             }

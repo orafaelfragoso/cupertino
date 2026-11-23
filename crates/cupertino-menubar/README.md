@@ -12,7 +12,7 @@ timer events with absolute timestamps in seconds.
 | `layout` | `BarContent` → `BarLayout`: bold app-name menu, menus, status items nearest the control panel first, control panel slot, clock. Items that do not fit are reported hidden. `layout_popup` lays out rows, separators, check / radio column, icon column, shortcut text (the Mac modifier glyphs while Super is the command key, the PC key names such as `Alt+` and `F4`, `Ctrl+Super+` and `Z` while Ctrl is: `MenuMetrics::shortcut_style`, set from the server's primary modifier), submenu arrows, flipping, clipping and scrolling. `TextMeasure` abstracts text measurement; `MonoMeasure` is a deterministic stand-in. |
 | `controller` | `MenuController`: press-drag-release, click-sticky menus, hover switching between open menus, focus-bar shortcut, arrow / Home / End / Enter / Esc keys, type-ahead, submenus that open after a short dwell and close at once off the way into them, with a safe triangle, disabled / checked / separator / shortcut items, `AboutToShow` and `Activate` effects. Releasing a press, the delays and the way into a submenu are `cupertino-menu-model`'s `tracking`, which Kit's menus share: a press on a title dragged onto a row chooses it on release; released on the title within 0.5 s the menu stays open; released there later, held or dragged out and back, it closes. The way into a submenu holds while each move stays in the triangle and the pointer does not rest 0.375 s (`tick` then gives the row under it the highlight). Type-ahead is CupertinoKit's `typeahead` (a one-second pause restarts it, and it restarts in another menu level). |
 | `clock` | The clock text (`clock_text`: weekday, day and short month, 12 / 24-hour time, seconds, day period, flashing separators) and its ticks (`next_tick`, `tick_interval`) from `ClockSettings`, which `cupertino_defaults::menubar` reads from and writes to `menubar.conf` (the `clock.* keys, bad lines reported with their numbers). |
-| `extras` | The bar's own status items (Wi-Fi, battery, Bluetooth, Focus): which show, their icons, menus (`ExtraMenu`) and row actions (`ExtraAction`), from an `Extras` snapshot of the services; the system menu (`system_menu`, rows at fixed ids `SystemRow`) and its Recent Items submenu (`recent_items`). The Wi-Fi item's menu is a panel: its rows carry a `PanelRow` (`item`), which `layout_popup` lays out 308.5 pt wide with its right edge level with the item's, and which the view draws with a switch, a disc for the joined network, lock and signal marks and a disclosure for the other networks; the switch and the disclosure leave the panel open when chosen. |
+| `extras` | The bar's own status items (Wi-Fi, battery, Bluetooth, Focus): which show, their icons, menus (`ExtraMenu`) and row actions (`ExtraAction`), from an `Extras` snapshot of the services; the system menu (`system_menu`, rows at fixed ids `SystemRow`) and its Recent Items submenu (`recent_items`). The Wi-Fi item's menu is a panel: its rows carry a `PanelRow` (`item`), which `layout_popup` lays out 308.5 pt wide with its right edge level with the item's, and which the view draws with a switch, a disc for the joined network, lock and signal marks and a disclosure for the other networks, and so is the Bluetooth item's, with a disc for each paired device; the title row never highlights and a row's highlight stands clear of the dividing lines; the switch and the disclosure leave the panel open when chosen. |
 | `recent` | What Recent Items lists (`RecentItems`): `RecentSources::read` takes the launcher's applications in its order (`cupertino_apps::frecency`, ids without an installed visible desktop entry skipped) and the documents of `recently-used.xbel` newest first (`cupertino_apps::recent`, missing files skipped), at most 10 of each, leaving out what was used at or before the last Clear Menu (`RecentSources::clear`, the bar's own `$XDG_DATA_HOME/cupertino/menubar-recent-items-cleared`). It never writes the launcher's or the applications' files. |
 | `item` | `MenuItem`: label, mnemonic, separator, enabled, visible, `Toggle`, `Shortcut`, icon name / data, children, the GMenuModel action and accelerator, and its `Origin` (the bar's or an exporter's), by which an activated item is routed, and a `detail`: secondary text drawn dimmed after the label (a search result's path). |
 | `fallback` | Synthetic menus of an app that exports none: the app menu (About, Settings…, Hide, Hide Others, Show All, Quit; Settings… and Show All on the desktop), File (Close Window), Edit (Undo, Redo, Cut, Copy, Paste, Select All; enabled on a bar whose server takes `edit`, version 11, and disabled below), View (Exit Full Screen while the active window is in full screen, always enabled then; else Enter Full Screen, enabled only while the window can zoom, since the server refuses the person's full screen elsewhere; with a server before shell version 16, which never says full screen, Enter Full Screen stays enabled), Window (Minimize and Zoom, each disabled while the active window's is (`WindowState::can_minimize`, from shell version 15, and `can_zoom`), Move to Workspace, Tile Window, Bring All to Front, the window list of at most 1000 rows with the active window checked and minimized ones marked, Close Window; with Alt held Minimize All, Zoom All, Arrange in Front (a cascade) and Close All, see *Alt variants*) and Help (the search field, see *Help search*). Items of server actions show the chord the server binds (`Chords`), none while it sent none; the app's own convention chords use the primary modifier the server names. Ids are negative and stable; `action_for` maps activated ids back to `FallbackAction`. |
@@ -157,7 +157,7 @@ executor, and what it holds (the extras' task holds the system connection) with 
   place: in the Window menu Minimize becomes Minimize All (`minimize_all`, enabled even when the active window cannot
   minimize), Zoom becomes Zoom All (`zoom_all`, enabled even when the active window cannot zoom), Close Window becomes Close All (`quit_app`, every window of the application)
   and Bring All to Front becomes Arrange in Front, which cascades the windows (`cascade_all`; a Cupertino label, as the
-  design names none); in the system menu Force Quit… becomes Force Quit <app name> (see *System menu*). The bar holds the keyboard while its
+  design names none); in the system menu Force Quit becomes Force Quit <app name> (see *System menu*). The bar holds the keyboard while its
   menus are open and reads Alt from the modifiers it was last sent, once per batch of events, so an Alt press and a
   click that arrive in the same batch choose what the menu showed before the swap; a menu opened with Alt held shows
   the alternates at once. A click or Return chooses the item the row shows at that moment, and the
@@ -170,12 +170,12 @@ executor, and what it holds (the extras' task holds the system connection) with 
     `app.preferences` or `app.settings`; `app.quit`; `win.close`; `win.fullscreen`). A DBusMenu item has the role of its
     label, compared without mnemonic markers, a trailing "…" or "..." and case: about starts with "About"; quit is
     "Quit", "Quit" and anything, or "Exit"; preferences is "Preferences", "Settings", "Options" or "Configure <name>";
-    close is "Close" or "Close Window"; full screen is "Full Screen" or "Enter Full Screen". English only; any other
+    close is "Close" or "Close Window"; full screen is "Full Screen", "Enter Full Screen", "Exit Full Screen" or "Toggle Full Screen" (Electron's). English only; any other
     label stays as exported. `<name>` is the desktop entry's `Name` or the last component of the application id.
   - App menu: always the bar's. About, Settings… and Quit invoke the exporter's first item of their role (looked for in
     the application's own menu, File, Edit, then the other menus); without one About shows the About panel, Settings…
     is disabled and Quit closes every window. The exporter's about, preferences and quit items leave the application's
-    own menu, File and Edit, and the separators left leading, trailing or doubled go; a menu the removal emptied goes.
+    own menu, File and Edit, and the separators left leading, trailing or doubled go; a menu the removal left with no visible item goes (hidden items do not count).
     The rest of the application's own menu goes between About and Settings…, after a separator: the GMenuModel
     application menu (`app_menu_object_path`), or the top-level DBusMenu menu titled (any case) with `<name>`.
   - File, Edit and any other menu show as exported. View shows as exported, with a separator and Enter Full Screen
@@ -286,19 +286,19 @@ executor, and what it holds (the extras' task holds the system connection) with 
   have none. The session's Reduce Transparency is the one source of the solid strip
   (`tone::solid_bar`, `BarScene::solid`). A bar redraws when its tone changes.
 - **System menu.** The first slot draws the system mark (`cupertino_icons::system_mark`, tinted with the label colour) and
-  opens `Extras::system_menu`: About This Computer, Settings…, Recent Items, Force Quit…, then Sleep, Restart…, Shut Down…, Lock Screen, Log
-  Out <name>… and, when the session agent can switch, Login Window…, with separators between the groups. Every row and
+  opens `Extras::system_menu`: About This Computer, Settings, Recent Items, Force Quit, then Sleep, Restart, Shut Down, Lock Screen, Log
+  Out <name> and, when the session agent can switch, Login Window, with separators between the groups. Every row and
   separator has a fixed id in -4000…-4099 (`SystemRow`), so an open menu survives a rebuild. About This Computer starts
-  `cupertino-settings --about` and Settings… starts `cupertino-settings`, both from `PATH` with an activation token (`XDG_ACTIVATION_TOKEN`, `DESKTOP_STARTUP_ID`); Force Quit…
+  `cupertino-settings --about` and Settings starts `cupertino-settings`, both from `PATH` with an activation token (`XDG_ACTIVATION_TOKEN`, `DESKTOP_STARTUP_ID`); Force Quit
   sends the `force_quit_dialog` command, which a version 9 server does not get. With Alt held and an active application,
-  Force Quit… shows its alternate Force Quit <app name> (-4013, `SystemRow::ForceQuitApp`), with the name the bold App menu
+  Force Quit shows its alternate Force Quit <app name> (-4013, `SystemRow::ForceQuitApp`), with the name the bold App menu
   title shows, no ellipsis and no chord; a name over 64 characters (`MAX_FORCE_QUIT_NAME_CHARS`, the cap of the other
   names in the system menu) is cut at its end with an ellipsis. It sends `force_quit_app` with the app id the label was
-  built for, and the server ends that application only while it is still the active one. Unlike Force Quit…, it asks for
+  built for, and the server ends that application only while it is still the active one. Unlike Force Quit, it asks for
   no confirmation: choosing the item that names the application with Alt held is the confirmation. It is disabled below version 13
-  (`MenuBar::can_force_quit_app`) and absent on the desktop. Force Quit…, Lock Screen and Log Out show
-  the chord the server binds to them, none while it sent none. Without a session agent the menu is About This Computer, Settings…, Recent
-  Items, Force Quit… and Lock Screen.
+  (`MenuBar::can_force_quit_app`) and absent on the desktop. Force Quit, Lock Screen and Log Out show
+  the chord the server binds to them, none while it sent none. Without a session agent the menu is About This Computer, Settings, Recent
+  Items, Force Quit and Lock Screen.
 - **Recent Items.** The submenu is read (`recent` module) each time the system menu opens, never on a timer: a disabled
   Applications header and up to 10 applications by desktop entry name, a disabled Documents header and up to 10 documents by
   file name, a separator and Clear Menu. A section without rows keeps its header; with nothing to list the submenu is a
@@ -322,8 +322,8 @@ executor, and what it holds (the extras' task holds the system connection) with 
   - Wi-Fi: a `Wi-Fi` switch row, then "Known Network(s)" and "Other Network(s)", each by name. A saved, open or OWE network is
     joined without a passphrase. The bar has no passphrase prompt, so other networks are listed disabled.
   - Battery: "Battery N%", "Power Source: Battery / Power Adapter", and "Charging" while charging (rows approximate).
-  - Bluetooth: a `Bluetooth` switch row, then the paired devices by name, checked when connected. A row connects or
-    disconnects.
+  - Bluetooth: a panel like the Wi-Fi one: the `Bluetooth` title with its switch, then while on a Devices heading over the
+    paired devices by name (a disc with the Bluetooth mark, the accent's while connected; "No devices" when there are none; at most 8), and Bluetooth Settings…, which opens the settings' Bluetooth pane. A device row connects or disconnects.
   - Focus: shown only while do not disturb is on. A `Do Not Disturb` row turns it off, and the duration rows re-arm it.
 - **Screen capture indicator.** While the server reports a capture session (`screen_capture`, menu bar version 3), a 9 pt
   indigo dot sits right of the clock at the bar's right end, 7.5 pt from the output's edge and 8 pt from the clock's

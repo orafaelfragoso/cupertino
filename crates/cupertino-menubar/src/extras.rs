@@ -260,13 +260,15 @@ pub enum ExtraAction {
 pub enum SystemAction {
     /// Open the Wi-Fi pane of the settings.
     WifiSettings,
+    /// Open the Bluetooth pane of the settings.
+    BluetoothSettings,
     /// Open the About This Computer window of the control panel.
     About,
     /// Start the control panel.
     Settings,
     /// Show the server's Force Quit dialog.
     ForceQuit,
-    /// Force quit the application with this id, the one the Alt alternate of Force Quit… names, without the dialog.
+    /// Force quit the application with this id, the one the Alt alternate of Force Quit names, without the dialog.
     ForceQuitApp(String),
     /// Start the application of Recent Items at this position.
     OpenRecentApp(usize),
@@ -289,7 +291,7 @@ pub enum SystemRow {
     LogOut = -4007,
     LoginWindow = -4008,
     RecentItems = -4009,
-    /// The Alt alternate of Force Quit…: Force Quit <app name>.
+    /// The Alt alternate of Force Quit: Force Quit <app name>.
     ForceQuitApp = -4013,
 }
 
@@ -361,7 +363,7 @@ impl Default for SessionCaps {
 }
 
 /// The most characters of the application name the Force Quit alternate shows, the ellipsis included: the cap of the
-/// person's name in Log Out <name>… and of the Recent Items names, so the row's width stays bounded.
+/// person's name in Log Out <name> and of the Recent Items names, so the row's width stays bounded.
 const MAX_FORCE_QUIT_NAME_CHARS: usize = 64;
 
 /// The active application as the Force Quit alternate names it.
@@ -442,6 +444,19 @@ impl ExtraMenu {
             ..MenuItem::new(id.0, "")
         });
         self.rows.last_mut().expect("a row was just pushed")
+    }
+
+    /// A row of a status panel with the id `id`.
+    fn panel_row(
+        &mut self,
+        id: i32,
+        label: &str,
+        enabled: bool,
+        toggle: Toggle,
+        panel: PanelRow,
+        action: Option<ExtraAction>,
+    ) {
+        self.push(ItemId(id), label, enabled, toggle, action).panel = Some(panel);
     }
 
     /// A row with the next positional id.
@@ -599,13 +614,13 @@ impl Extras {
         menu
     }
 
-    /// The system menu: About This Computer, Settings…, Recent Items (the submenu of `recent`, see [`recent_items`]),
-    /// Force Quit…, then the session agent's Sleep, Restart…, Shut Down…, Lock Screen and Log Out <name>…, then the login
-    /// window entry. The session's ellipsis entries open the agent's confirmation panel. Without a session agent (none
-    /// runs, or the owner of its name is not the one the server started) the rows up to Force Quit… are followed only by
-    /// Lock Screen, enabled while the server has named a login process: it locks without the agent. Force Quit…, Lock
+    /// The system menu: About This Computer, Settings, Recent Items (the submenu of `recent`, see [`recent_items`]),
+    /// Force Quit, then the session agent's Sleep, Restart, Shut Down, Lock Screen and Log Out <name>, then the login
+    /// window entry. Restart, Shut Down and Log Out open the agent's confirmation panel. Without a session agent (none
+    /// runs, or the owner of its name is not the one the server started) the rows up to Force Quit are followed only by
+    /// Lock Screen, enabled while the server has named a login process: it locks without the agent. Force Quit, Lock
     /// Screen and Log Out show the chord the server binds to them in `chords`. With an active application (`front`),
-    /// Force Quit… has the Alt alternate Force Quit <name>, which force-quits it without the dialog: disabled when the
+    /// Force Quit has the Alt alternate Force Quit <name>, which force-quits it without the dialog: disabled when the
     /// server does not take the request, absent on the desktop. It shows no chord: none is bound.
     pub fn system_menu(
         &self,
@@ -626,7 +641,7 @@ impl Extras {
         menu.rows.push(MenuItem::separator(SEPARATOR_AFTER_ABOUT));
         menu.system_row(
             SystemRow::Settings,
-            "Settings\u{2026}",
+            "Settings",
             true,
             chords,
             ExtraAction::System(SystemAction::Settings),
@@ -645,7 +660,7 @@ impl Extras {
             .push(MenuItem::separator(SEPARATOR_AFTER_RECENT_ITEMS));
         menu.system_row(
             SystemRow::ForceQuit,
-            "Force Quit\u{2026}",
+            "Force Quit",
             true,
             chords,
             ExtraAction::System(SystemAction::ForceQuit),
@@ -687,14 +702,14 @@ impl Extras {
         );
         menu.system_row(
             SystemRow::Restart,
-            "Restart\u{2026}",
+            "Restart",
             caps.restart,
             chords,
             session(SessionAction::Restart),
         );
         menu.system_row(
             SystemRow::ShutDown,
-            "Shut Down\u{2026}",
+            "Shut Down",
             caps.shut_down,
             chords,
             session(SessionAction::ShutDown),
@@ -710,9 +725,9 @@ impl Extras {
         );
         let name = display_name(&state.user_name);
         let log_out = if name.is_empty() {
-            "Log Out\u{2026}".to_owned()
+            "Log Out".to_owned()
         } else {
-            format!("Log Out {name}\u{2026}")
+            format!("Log Out {name}")
         };
         menu.system_row(
             SystemRow::LogOut,
@@ -725,7 +740,7 @@ impl Extras {
             menu.rows.push(MenuItem::separator(SEPARATOR_AFTER_LOG_OUT));
             menu.system_row(
                 SystemRow::LoginWindow,
-                "Login Window\u{2026}",
+                "Login Window",
                 true,
                 chords,
                 session(SessionAction::SwitchUser),
@@ -986,38 +1001,96 @@ fn battery_menu(menu: &mut ExtraMenu, battery: &BatteryState) {
     }
 }
 
+/// Row ids of the Bluetooth panel, fixed so the highlighted row stays the same when the rows around it change.
+const BLUETOOTH_HEADER: i32 = 1;
+const BLUETOOTH_RULE_AFTER_HEADER: i32 = 2;
+const BLUETOOTH_SECTION: i32 = 3;
+const BLUETOOTH_NOTE: i32 = 4;
+const BLUETOOTH_RULE_BEFORE_SETTINGS: i32 = 5;
+const BLUETOOTH_SETTINGS: i32 = 6;
+/// The first id of the paired devices.
+const BLUETOOTH_DEVICES: i32 = 100;
+/// The most devices the panel lists.
+const MAX_PANEL_DEVICES: usize = 8;
+
+/// The Bluetooth panel: the title with its switch, the paired devices under a Devices heading (a disc each, the
+/// accent's while connected; a note when there are none), and the row that opens the settings. The devices are left
+/// out while Bluetooth is off.
 fn bluetooth_menu(menu: &mut ExtraMenu, bluetooth: &BluetoothState) {
-    menu.row(
+    let on = bluetooth.powered;
+    menu.panel_row(
+        BLUETOOTH_HEADER,
         "Bluetooth",
         true,
-        Toggle::Check(bluetooth.powered),
-        Some(ExtraAction::SetBluetoothPowered(!bluetooth.powered)),
+        Toggle::Check(on),
+        PanelRow::Header {
+            title: "Bluetooth".to_owned(),
+            on,
+        },
+        Some(ExtraAction::SetBluetoothPowered(!on)),
     );
-    if !bluetooth.powered {
-        return;
-    }
-    let mut devices: Vec<&BluetoothDevice> =
-        bluetooth.devices.iter().filter(|d| d.paired).collect();
-    if devices.is_empty() {
-        return;
-    }
-    let name = |d: &BluetoothDevice| d.name.clone().unwrap_or_else(|| d.address.clone());
-    devices.sort_by_key(|d| name(d));
-    menu.separator();
-    menu.header("Devices");
-    for device in devices {
-        let action = if device.connected {
-            ExtraAction::DisconnectDevice(device.id.clone())
-        } else {
-            ExtraAction::ConnectDevice(device.id.clone())
-        };
-        menu.row(
-            &name(device),
-            true,
-            Toggle::Check(device.connected),
-            Some(action),
+    menu.rows
+        .push(MenuItem::separator(BLUETOOTH_RULE_AFTER_HEADER));
+    if on {
+        menu.panel_row(
+            BLUETOOTH_SECTION,
+            "Devices",
+            false,
+            Toggle::None,
+            PanelRow::Section {
+                title: "Devices".to_owned(),
+            },
+            None,
         );
+        let mut devices: Vec<&BluetoothDevice> =
+            bluetooth.devices.iter().filter(|d| d.paired).collect();
+        let name = |d: &BluetoothDevice| d.name.clone().unwrap_or_else(|| d.address.clone());
+        devices.sort_by_key(|d| name(d));
+        if devices.is_empty() {
+            let text = "No devices";
+            menu.panel_row(
+                BLUETOOTH_NOTE,
+                text,
+                false,
+                Toggle::None,
+                PanelRow::Note {
+                    text: text.to_owned(),
+                },
+                None,
+            );
+        }
+        for (i, device) in devices.into_iter().take(MAX_PANEL_DEVICES).enumerate() {
+            let action = if device.connected {
+                ExtraAction::DisconnectDevice(device.id.clone())
+            } else {
+                ExtraAction::ConnectDevice(device.id.clone())
+            };
+            menu.panel_row(
+                BLUETOOTH_DEVICES + i as i32,
+                &name(device),
+                true,
+                Toggle::Check(device.connected),
+                PanelRow::Device {
+                    name: name(device),
+                    connected: device.connected,
+                },
+                Some(action),
+            );
+        }
+        menu.rows
+            .push(MenuItem::separator(BLUETOOTH_RULE_BEFORE_SETTINGS));
     }
+    let title = "Bluetooth Settings\u{2026}";
+    menu.panel_row(
+        BLUETOOTH_SETTINGS,
+        title,
+        true,
+        Toggle::None,
+        PanelRow::Link {
+            title: title.to_owned(),
+        },
+        Some(ExtraAction::System(SystemAction::BluetoothSettings)),
+    );
 }
 
 fn focus_menu(menu: &mut ExtraMenu, focus: &FocusState) {

@@ -127,8 +127,14 @@ const PANEL_SECONDARY: f32 = 0.6;
 const PANEL_DISCLOSURE: f32 = 0.75;
 /// Size of the panel's headings.
 const PANEL_HEADING_PT: f32 = 12.0;
-/// Edge of the wireless mark in the joined network's disc.
+/// Edge of the wireless mark in the joined network's disc, and of the Bluetooth mark in a device's.
 const PANEL_MARK_PT: f64 = 14.0;
+/// Opacity of the disc of a Bluetooth device that is not connected, a share of the text colour.
+const PANEL_IDLE_DISC: f32 = 0.18;
+/// Inset of a panel row's highlight from the panel's sides and from the row's top and bottom, so it stands clear of
+/// the dividing lines. approximate.
+const PANEL_HIGHLIGHT_INSET_X: f64 = 8.0;
+const PANEL_HIGHLIGHT_INSET_Y: f64 = 3.0;
 /// A signal mark's arc radii, the half-angle they span and their stroke.
 const SIGNAL_RADII: [f64; 3] = [4.5, 8.0, 11.5];
 const SIGNAL_HALF_ANGLE: f64 = std::f64::consts::FRAC_PI_4;
@@ -197,12 +203,13 @@ impl<M> RowNode<M> {
             ..self.font
         };
         let x = panel::TEXT_INSET;
-        if self.hot {
+        // the title row is chosen through its switch and never highlights
+        if self.hot && !matches!(row, PanelRow::Header { .. }) {
             let rect = Rect::new(
-                ROW_HIGHLIGHT_INSET,
-                0.0,
-                size.width - 2.0 * ROW_HIGHLIGHT_INSET,
-                size.height,
+                PANEL_HIGHLIGHT_INSET_X,
+                PANEL_HIGHLIGHT_INSET_Y,
+                size.width - 2.0 * PANEL_HIGHLIGHT_INSET_X,
+                size.height - 2.0 * PANEL_HIGHLIGHT_INSET_Y,
             );
             fill(cx, rect, ROW_HIGHLIGHT_RADIUS, palette.bar_highlight);
         }
@@ -276,6 +283,33 @@ impl<M> RowNode<M> {
                     );
                     lock(cx, at, secondary(PANEL_DISCLOSURE));
                 }
+            }
+            PanelRow::Device { name, connected } => {
+                let disc = Point::new(panel::DISC_INSET + panel::DISC / 2.0, middle);
+                let (fill_c, mark_c) = if *connected {
+                    (accent, [1.0, 1.0, 1.0, 1.0])
+                } else {
+                    (secondary(PANEL_IDLE_DISC), text_c)
+                };
+                circle(cx, disc, panel::DISC / 2.0, fill_c);
+                let mark = MenuItem {
+                    icon_name: Some("symbol.bluetooth".to_owned()),
+                    ..MenuItem::default()
+                };
+                if let Some(icon) = self.icons.row_icon(&mark, row_icon_px(cx.env().scale)) {
+                    image(cx, &icon.tinted(mark_c), disc, PANEL_MARK_PT);
+                }
+                let name_x = panel::DISC_INSET + panel::DISC + panel::DISC_GAP;
+                text(
+                    cx,
+                    &self.font,
+                    name,
+                    name_x,
+                    0.0,
+                    size.height,
+                    false,
+                    text_c,
+                );
             }
             PanelRow::Disclosure { title, expanded } => {
                 let c = secondary(PANEL_DISCLOSURE);

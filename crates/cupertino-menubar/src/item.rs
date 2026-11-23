@@ -270,6 +270,8 @@ pub enum PanelRow {
         secured: bool,
         strength: u8,
     },
+    /// A paired Bluetooth device: a disc with the Bluetooth mark, the accent's while connected, and the name.
+    Device { name: String, connected: bool },
     /// A line of plain secondary text: a state such as no networks.
     Note { text: String },
     /// A plain text row that opens something.

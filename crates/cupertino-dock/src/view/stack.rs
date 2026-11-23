@@ -11,6 +11,7 @@ use cupertino_kit::core::{
     Popup, PopupAnchor, Propagation, Role, SemanticsCx, Widget, Window, WindowBackground,
     WindowKey,
 };
+use cupertino_kit::core::{GlassSize, GlassVariant};
 use cupertino_kit::geometry::{Point, Rect, Size};
 use cupertino_kit::layout::{
     Align, Axis, Constraints, ContainerKind, Justify, LayoutSpec, Measured, SizeSpec,
@@ -226,10 +227,12 @@ pub fn window<M: Clone + 'static>(view: StackView<'_>, input: fn(Input) -> M) ->
     }
 }
 
-/// The glass of the panel and its pointer at `alpha`: the glass of a dense floating surface with text on it, joined
-/// into one shape.
+/// The glass of the panel and its pointer at `alpha`: a cartouche popover's at the medium size, not adapting to what is
+/// behind it, joined into one shape.
 fn panel_glass(alpha: f64) -> Glass {
     Glass::dense()
+        .variant(GlassVariant::CartouchePopover)
+        .size_class(GlassSize::Medium)
         .container(GLASS_CONTAINER, GLASS_BLEND)
         .alpha(alpha)
 }

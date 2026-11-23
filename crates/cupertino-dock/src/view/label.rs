@@ -9,6 +9,7 @@ use cupertino_kit::core::{
     Change, CommandRegistry, Element, Event, EventCx, Glass, Key, MeasureCx, PaintCx, Popup,
     PopupAnchor, Propagation, Role, SemanticsCx, Widget, Window, WindowBackground, WindowKey,
 };
+use cupertino_kit::core::{GlassSize, GlassVariant};
 use cupertino_kit::geometry::{Point, Size};
 use cupertino_kit::layout::{
     Align, Axis, Constraints, ContainerKind, Justify, LayoutSpec, Measured,
@@ -102,6 +103,17 @@ fn shown_on_glass(cx: &mut PaintCx<'_>, glass: Glass) -> bool {
         && cx.glass(glass.container(GLASS_CONTAINER, GLASS_BLEND))
 }
 
+/// The glass of a label and its pointer, at the smallest size, not adapting to what is behind it: over a bar at the
+/// bottom (with a pointer, `pointer`) a cartouche popover's; beside a bar at a side the regular glass, a plain capsule.
+fn label_glass(pointer: bool) -> Glass {
+    if pointer {
+        Glass::popover().variant(GlassVariant::CartouchePopover)
+    } else {
+        Glass::regular().variant(GlassVariant::Regular)
+    }
+    .size_class(GlassSize::Minimum)
+}
+
 /// The line a label over a bar at the bottom stands [`GAP`] above: the bar's top edge at `bar_top`, or the top of
 /// the label's tile at `tile_top` where the tile stands higher than the bar (a magnified one), raised by the tile's
 /// bounce `lift`. A tile inside the bar leaves the label where the bar puts it, so it does not move from tile to tile.
@@ -178,7 +190,7 @@ pub fn window<M: Clone + 'static>(view: LabelView<'_>, input: fn(Input) -> M) ->
                         CalloutPointer {
                             width: POINTER_WIDTH,
                             depth: POINTER_DEPTH,
-                            glass: Glass::popover()
+                            glass: label_glass(pointer)
                                 .container(GLASS_CONTAINER, GLASS_BLEND)
                                 .alpha(opacity),
                             surface: Surface::Tooltip,
@@ -380,7 +392,10 @@ impl<M: Clone + 'static> Widget<M> for Body {
         let env = cx.env().clone();
         let mode = usize::from(paint::is_dark(&env));
         let (w, h) = (cx.size().width, cx.size().height);
-        let shown = shown_on_glass(cx, Glass::popover().radius(RADIUS).alpha(self.opacity));
+        let shown = shown_on_glass(
+            cx,
+            label_glass(self.pointer).radius(RADIUS).alpha(self.opacity),
+        );
         if self.opacity < 1.0 {
             cx.set_group(self.opacity as f32, Vec::new());
         }

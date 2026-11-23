@@ -78,8 +78,7 @@ pub const CROSSHAIR_GAP: f64 = 3.0;
 
 // ---- toolbar -----------------------------------------------------------------------------------------------------
 
-/// The toolbar: its window is its background, 560 x 48 points with corners of radius 8, drawn on the toolkit's
-/// heads-up material.
+/// The toolbar: its window is its body, 560 x 48 points with corners of radius 8, drawn on regular glass.
 pub const TOOLBAR_SIZE: (f64, f64) = (560.0, 48.0);
 pub const TOOLBAR_RADIUS: f64 = 8.0;
 /// Distance of the toolbar from the bottom of the visible frame, in points.

@@ -903,6 +903,43 @@ fn small_glass_follows_what_lies_behind_it_when_adaptive_or_of_an_older_clients_
     assert_eq!(tones(&fixed), 0, "glass not asked to adapt keeps the appearance");
 }
 
+#[test]
+fn an_alert_on_a_subsurface_casts_its_drop_shadow_past_the_subsurface() {
+    let mut rig = Rig::new((640, 480), 1.0);
+    let effects = rig.client.effects.clone().unwrap();
+    let window = rig.map("Alert", (560, 400), |_| [235, 235, 235, 255]);
+    let size = (200, 120);
+    let (cast_at, none_at) = ((40, 60), (300, 60));
+    let cast = rig.pane(&window.surface, &effects, cast_at, size, 24.0);
+    let none = rig.pane(&window.surface, &effects, none_at, size, 24.0);
+    for (pane, modifiers) in [
+        (&cast, GlassModifier::empty()),
+        (&none, GlassModifier::ExcludeShadow),
+    ] {
+        pane.backdrop.set_glass_variant(
+            GlassVariant::GlassWindow,
+            modifiers,
+            SizeClass::Dynamic,
+            0,
+            0.0,
+        );
+        pane.surface.commit();
+    }
+    window.surface.commit();
+    rig.settle();
+
+    // a band from 6 to 30 points below each panel, inside its middle
+    let image = rig.image();
+    let band = |at: (i32, i32)| (at.0 + 40, at.1 + size.1 + 6);
+    let below = |at| mean(rig.pixels(&image, window.id, band(at), (size.0 - 80, 24), 0));
+    let [shadowed, ..] = below(cast_at);
+    let [clear, ..] = below(none_at);
+    assert!(
+        shadowed < clear - 4.0,
+        "the alert's shadow darkens what lies below it to {shadowed}, without one {clear}"
+    );
+}
+
 /// How many times its size the scaled capsule's glass is drawn.
 const SCALED: f64 = 1.1;
 

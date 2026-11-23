@@ -266,7 +266,8 @@ pub struct Backdrop {
 /// window's coordinates with its corners rounded by `radius` points, at `alpha` from 0 (hidden) to 1 (opaque).
 /// With `glass`, the compositor draws glass there instead, and `material` names what a compositor without glass draws.
 /// A `raised` region lies above the window's content, under its raised layer ([`WindowSystem::present_layer`]), and
-/// reads the content below it; the others lie under all of the window's content.
+/// reads the content below it; the others lie under all of the window's content. Its blur varies from the top of `rect`
+/// to its bottom by `blur_ramp` (a variable blur) where the compositor can, and is even where it cannot.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MaterialRegion {
     pub material: String,
@@ -275,6 +276,7 @@ pub struct MaterialRegion {
     pub alpha: f64,
     pub glass: Option<GlassRegion>,
     pub raised: bool,
+    pub blur_ramp: BlurRamp,
 }
 
 /// The raised layer of a window ([`WindowSystem::present_layer`]): a frame drawn over the window's content from its top

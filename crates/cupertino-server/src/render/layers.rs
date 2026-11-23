@@ -503,6 +503,7 @@ pub fn layer_pieces_with(
                 radius,
                 alpha: 1.0,
                 glass: Some(spec),
+                blur_ramp: [1.0, 1.0],
             }]
         } else {
             group_areas(&layers, l.group, place.opacity, place.origin)
@@ -515,6 +516,7 @@ pub fn layer_pieces_with(
                     radius,
                     alpha,
                     glass: Some(spec),
+                    blur_ramp: [1.0, 1.0],
                 })
                 .collect()
         };

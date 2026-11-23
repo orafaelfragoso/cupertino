@@ -95,6 +95,9 @@ pub struct Material {
     pub opacity: f32,
     /// A rounded clip cuts the region to a window's outline as well; the material pass draws it as the region's mask.
     pub clip: Clip,
+    /// How much of its backdrop's filter the region keeps along its top and its bottom, smoothly between (a variable
+    /// blur); `[1, 1]` filters evenly.
+    pub blur_ramp: [f32; 2],
 }
 
 /// A glass container over what lies below it, drawn over the area it samples. Its container gets a handle in the
@@ -255,6 +258,7 @@ impl Composition {
                             style: material.style,
                             stage: material.stage,
                             tint: material.tint,
+                            blur_ramp: material.blur_ramp,
                         }),
                         placement: Placement::IDENTITY,
                         opacity: f64::from(material.opacity),

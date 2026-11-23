@@ -1,6 +1,8 @@
 //! The integration tests of `cupertino-server`, one binary: each file beside this one is a module of it, so a
 //! test's name starts with its file's.
 
+#[path = "backdrop-ramp.rs"]
+mod backdrop_ramp;
 #[path = "copy-sync.rs"]
 mod copy_sync;
 #[path = "cursor-reader.rs"]

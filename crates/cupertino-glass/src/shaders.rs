@@ -107,6 +107,9 @@ pub const PLACEMENT: (u32, u32) = (1, 0);
 /// Where the material program binds its region block (`RegionParams`) and its backdrop.
 pub const REGION_BLOCK: (u32, u32) = (0, 0);
 pub const REGION_BACKDROP: (u32, u32) = (0, 1);
+/// Where the material program binds the capture of its backdrop before the filter, which a blur ramp shows where its
+/// weight is low (`RegionParams::set_blur_ramp`).
+pub const REGION_CAPTURE: (u32, u32) = (0, 3);
 /// Where the glass program binds its container block (`GlassUniform`), its four blurred copies, its blur fill, the
 /// blur its edge bleed reads and the backdrop as captured, which the bend outside the edge reads.
 pub const GLASS_BLOCK: (u32, u32) = (0, 0);

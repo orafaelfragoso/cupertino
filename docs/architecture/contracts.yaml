@@ -458,7 +458,7 @@
   source_match: Cupertino, CupertinoScrollV1
 - name: cupertino_app_effects_v1
   kind: wayland-global
-  version: 21
+  version: 22
   owner_crate: cupertino-server
   owner_area: compositor
   scope: public
@@ -466,7 +466,7 @@
   advertised: always
   source: crates/cupertino-server/src/app_effects_v1.rs
   source_match: Cupertino, CupertinoAppEffectsV1
-  note: Version 21 adds buffers_lost to cupertino_appearance_v1, the per-client observer every toolkit process holds: sent to each observer of version 21 or later after the server's GPU was reset or its video memory purged and its renderer made again (crates/cupertino-server/src/gpu_reset.rs, Cupertino::rebuild_render), never at creation. The client draws every surface whole again and commits it; a client whose own context was lost makes it again first..
+  note: Version 22 adds set_blur_ramp(top, bottom) to cupertino_backdrop_v1, double-buffered with the surface's commit like the rest of its state, a variable blur from top times the backdrop's blur along its shape's top to bottom times it along its bottom; a material backdrop mixes its filtered backdrop with the capture before the filter (crates/cupertino-glass/shaders/material.wgsl), a glass one ramps its container (Container::with_blur_ramp); a weight outside 0 to 1 is the error invalid_ramp. Kit's toolbar band over a scrolled page asks for it. Version 21 adds buffers_lost to cupertino_appearance_v1, the per-client observer every toolkit process holds: sent to each observer of version 21 or later after the server's GPU was reset or its video memory purged and its renderer made again (crates/cupertino-server/src/gpu_reset.rs, Cupertino::rebuild_render), never at creation. The client draws every surface whole again and commits it; a client whose own context was lost makes it again first..
 - name: cupertino_layers_v1
   kind: wayland-global
   version: 6

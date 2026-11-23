@@ -198,6 +198,9 @@ before creating it, so a backend can select its role even when several windows h
   when the theme gives the surface a material and while the window holds fewer than `MAX_MATERIALS` (32); otherwise,
   or after the window system refused the list, the node paints its own fill. The material lies under all of the
   window's content, so a node drawn over another node's material shows it; group opacity does not reach it.
+  `PaintCx::set_blur_ramp(BlurRamp)` after it varies the material's blur down the node (a variable blur, carried as
+  `MaterialRegion::blur_ramp`): `top` times its blur along the node's top and `bottom` times it along its bottom; a
+  compositor without blur ramps blurs evenly.
 - **Glass.** `PaintCx::glass(Glass)` makes the node glass: the compositor blurs what lies behind it, bends it along the
   edge and lights the rim, with the recipe of the node's size, the appearance and the display options. Reduce
   Transparency and Increase Contrast keep the glass with the compositor's recipes for them (the menu and popover

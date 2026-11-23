@@ -17,13 +17,13 @@ use cupertino_geometry::{Rect, Size};
 use cupertino_keyboard::modifiers::Profile;
 use cupertino_menu_model::{ActionName, Command, Entry, Menu, MenuBar};
 use cupertino_ui_core::platform::{
-    ActivationRequest, Backdrop, Capabilities, ClipboardData, ClipboardKind, ClipboardToken, Color,
-    ConfigureId, CursorShape, DragImage, DragProgress, DragRequest, DragToken, DropAction,
-    DropAnswer, DropEvent, DropToken, GlassRegion, GlassStyle, GlassTone, KeyEvent, Keysym,
-    LayerList, MaterialRegion, MenuDescription, PlatformError, PlatformEvent, PopupSpec,
-    PresentOutcome, RaisedChange, RaisedLayer, RendererClass, ScrollBars, Shown, Submission,
-    Submitted, SurfaceLayerLook, SystemAppearance, Timestamp, WindowEvent, WindowId, WindowRequest,
-    WindowSpec, WindowSystem,
+    ActivationRequest, Backdrop, BlurRamp, Capabilities, ClipboardData, ClipboardKind,
+    ClipboardToken, Color, ConfigureId, CursorShape, DragImage, DragProgress, DragRequest,
+    DragToken, DropAction, DropAnswer, DropEvent, DropToken, GlassRegion, GlassStyle, GlassTone,
+    KeyEvent, Keysym, LayerList, MaterialRegion, MenuDescription, PlatformError, PlatformEvent,
+    PopupSpec, PresentOutcome, RaisedChange, RaisedLayer, RendererClass, ScrollBars, Shown,
+    Submission, Submitted, SurfaceLayerLook, SystemAppearance, Timestamp, WindowEvent, WindowId,
+    WindowRequest, WindowSpec, WindowSystem,
 };
 use cupertino_ui_core::WindowKey;
 use cupertino_ui_render::render_thread;
@@ -225,6 +225,16 @@ struct ShownMaterial {
 fn layers_drawn(conn: &Connection, effects: Option<&AppEffects>) -> bool {
     conn.capabilities().contains(Capability::Subsurface)
         && effects.is_some_and(AppEffects::draws_subsurface_backdrops)
+}
+
+/// Varies the blur of `backdrop` from its top to its bottom by `ramp`, each weight taken from 0 to 1 (one that is not a
+/// number as 1); a compositor without blur ramps is sent nothing and blurs evenly.
+fn set_ramp(
+    backdrop: &Material,
+    ramp: BlurRamp,
+) -> Result<(), cupertino_wayland_client::app::Error> {
+    let weight = |w: f64| if w.is_nan() { 1.0 } else { w.clamp(0.0, 1.0) };
+    backdrop.set_blur_ramp(weight(ramp.top), weight(ramp.bottom))
 }
 
 /// Gives `backdrop` its look: glass for `glass`, or for a glass material name of the theme, on its own; otherwise the
@@ -952,6 +962,9 @@ impl WaylandWindowSystem {
                     if old.region.alpha != region.alpha {
                         old.material.set_alpha(region.alpha).map_err(protocol)?;
                     }
+                    if old.region.blur_ramp != region.blur_ramp {
+                        set_ramp(&old.material, region.blur_ramp).map_err(protocol)?;
+                    }
                     if old.region.rect != region.rect || old.region.radius != region.radius {
                         old.material
                             .set_shape(&region.rect, region.radius)
@@ -970,6 +983,9 @@ impl WaylandWindowSystem {
                     .map_err(|e| PlatformError::Protocol(e.to_string()))?;
                 set_look(&material, &region.material, region.glass).map_err(protocol)?;
                 material.set_alpha(region.alpha).map_err(protocol)?;
+                if region.blur_ramp != BlurRamp::EVEN {
+                    set_ramp(&material, region.blur_ramp).map_err(protocol)?;
+                }
                 material
                     .set_shape(&region.rect, region.radius)
                     .map_err(protocol)?;

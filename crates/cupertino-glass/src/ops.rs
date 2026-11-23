@@ -143,10 +143,31 @@ pub struct RegionParams {
     /// target w, h, source w, h
     pub sizes: [f32; 4],
     pub tint: [f32; 4],
+    /// The blur ramp ([`RegionParams::set_blur_ramp`]): how much of the backdrop's filter fades out at the top and the
+    /// bottom of its band, the band's top y and height in target pixels; zero has no ramp.
+    pub ramp: [f32; 4],
     pub fills: [[f32; 4]; 16],
 }
 
 impl RegionParams {
+    /// A variable blur over the band from `top_y` to `top_y + height` (target pixels): the backdrop keeps `weights[0]`
+    /// of its filter along the band's top and `weights[1]` along its bottom, smoothly between, and shows the unfiltered
+    /// capture for the rest. `[1, 1]` (or a weight out of 0 to 1, clamped) filters evenly.
+    pub fn set_blur_ramp(&mut self, weights: [f32; 2], top_y: f32, height: f32) {
+        let fade = weights.map(|w| {
+            if w.is_finite() {
+                1.0 - w.clamp(0.0, 1.0)
+            } else {
+                0.0
+            }
+        });
+        self.ramp = if fade == [0.0, 0.0] {
+            [0.0; 4]
+        } else {
+            [fade[0], fade[1], top_y, height.max(0.0)]
+        };
+    }
+
     pub fn set_fills(&mut self, fills: &[Op]) {
         self.fills = [[0.0; 4]; 16];
         for (i, f) in fills.iter().take(MAX_FILLS).enumerate() {

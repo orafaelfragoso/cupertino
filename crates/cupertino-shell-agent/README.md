@@ -73,7 +73,7 @@ text column's leading edge, 16 pt, the title (bold 13 on 16 pt lines, wrapped in
 buttons, 16 pt. Each element sits at the previous one's bottom edge, using the line counts the theme's text system
 measures (`view::panel_frames`; the info line at the most lines it takes while counting down, so the size stays put). The
 buttons are 28 pt capsules: Cancel and the confirming button side by side 8 pt apart, sharing the row between the 16 pt
-side padding. The panel is a Kit window (`view::panel`): an alert dialog on regular glass (the popover surface's fill
+side padding. The panel is a Kit window (`view::panel`): an alert dialog on the glass window variant's glass, the regular glass of an alert with the alert's drop shadow the compositor draws (the popover surface's fill
 where the desktop shows none), Kit capsule buttons at the frames (the default one with the accent), and Kit's `CheckBox`
 in the checkbox row, which has the focus when the panel shows.
 

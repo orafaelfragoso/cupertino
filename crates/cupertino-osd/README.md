@@ -89,10 +89,10 @@ on stderr with its reason.
 (`cupertino_kit_shell::keyboard_panels`); the component holds the `keyboard_panels` role. The switcher's panel is a
 transient overlay layer surface (`cupertino-osd-input-sources`) centred on its output, with no input: rows of 40 pt
 with a 24 pt source icon and its two-letter code, the selected one on the accent highlight, on the regular glass of an
-alert (`Glass::regular()`). Once the switch ends it fades at constant speed over 0.3 s (`Timing::INPUT_SOURCES_FADE`),
+alert (`Glass::regular()` named as the regular variant). Once the switch ends it fades at constant speed over 0.3 s (`Timing::INPUT_SOURCES_FADE`),
 from its first frame when the end came before it, so a quick tap still shows the choice. The picker's panel is a
 transient overlay layer surface (`cupertino-osd-accents`) anchored at its layout's corner next to the text cursor, below
-the menu bar, on the menu material (`Surface::Menu`), one numbered cell per candidate (at most nine,
+the menu bar, on the menu variant's glass without its drop shadow (`Surface::Menu`'s opaque fill where the desktop shows no glass), one numbered cell per candidate (at most nine,
 `cupertino_keyboard::accent::layout_popup`); a press and release on a candidate sends `accent_pick` with the picker's
 serial. Neither takes the keyboard, and neither holds any text: the server edits the field. Each is a list (`Role::List`)
 named "Input sources" or "Accents", its rows static text named by the source and its candidates buttons named by the

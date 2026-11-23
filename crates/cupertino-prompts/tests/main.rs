@@ -3,4 +3,5 @@
 
 mod authentication;
 mod consent;
+mod glass;
 mod keyring;

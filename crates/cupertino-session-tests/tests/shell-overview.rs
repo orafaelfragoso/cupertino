@@ -448,6 +448,26 @@ fn a_window_closing_in_the_open_overview_closes_its_hole() {
     });
 }
 
+/// The surface the keyboard's input goes to.
+fn keyboard_focus(rig: &Rig) -> Option<wayland_server::protocol::wl_surface::WlSurface> {
+    rig.state
+        .seat
+        .get_keyboard()
+        .and_then(|k| k.current_focus())
+}
+
+/// The surface of window `id`.
+fn window_surface(
+    rig: &Rig,
+    id: cupertino_wm::WindowId,
+) -> Option<wayland_server::protocol::wl_surface::WlSurface> {
+    rig.state
+        .windows
+        .iter()
+        .find(|w| w.id == id)
+        .map(|w| w.toplevel.wl_surface().clone())
+}
+
 /// The times the toggle opens and leaves the overview, each a transaction in and one out: more than a connection may
 /// have that have not ended.
 const TOGGLE_ROUNDS: usize = cupertino_protocols::transaction::MAX_ACTIVE_TRANSACTIONS / 2 + 2;
@@ -478,6 +498,15 @@ fn the_toggle_opens_the_overview_and_the_next_one_leaves_it() {
         for _ in 0..SHOWN_TURNS {
             rig.turn();
         }
+        rig.until(
+            &format!("round {round}: the open overview has the keyboard, not the window"),
+            |rig| {
+                let focus = keyboard_focus(rig);
+                focus.is_some()
+                    && focus == rig.state.exclusive_layer
+                    && focus != window_surface(rig, id)
+            },
+        );
         rig.state.toggle_overview(false);
         rig.until(&format!("round {round}: the next toggle left it"), |rig| {
             !rig.state.transactions.is_window_claimed(id)
@@ -489,6 +518,10 @@ fn the_toggle_opens_the_overview_and_the_next_one_leaves_it() {
         assert!(
             rig.shows(own, magenta, own.covered()),
             "round {round}: the window shows at its own frame"
+        );
+        assert!(
+            rig.state.exclusive_layer.is_none() && keyboard_focus(&rig) == window_surface(&rig, id),
+            "round {round}: the window has the keyboard again"
         );
     }
     assert_eq!(

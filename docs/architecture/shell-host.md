@@ -499,9 +499,18 @@ A participant's part is made of two things:
 - A join by name that reaches the server before the creator's `create` waits for it, at most 100 ms, then starts as a
   transaction of its own, on the clock of the output the join names. When the `create` is there, the creator's output
   is the transaction's and the join's is not read.
-- A transaction bound to no gesture ends once it started and every participant that did not withdraw had its part
-  applied and destroyed its object: no event says when its animations end, so a participant keeps its object while
-  it waits for them and destroys it when it is done.
+- A transaction bound to no gesture ends once its motion has run, and every participant that holds its object hears
+  `finished(completed)` (version 2 of `cupertino_transaction_manager_v1`; version 1 said so only of a gesture's
+  transaction). The server applies the parts and runs their animations, so it is the authority on the end: every
+  participant that did not withdraw had its part applied, each layer animation its parts' kept commits started has
+  finished or been replaced (the server marks them as the kept commits apply, `layers_v1::Motion`), and the window
+  motion of the window changes it carried out (a window restored or moved, the desktops sliding, a window manager's
+  fades) is still. A component it expects that has not joined holds the end as long as it held the start, the
+  deadline, so a part a little late joins the transaction rather than one that ended. Under Reduce Motion the end
+  comes once the reduced motion has run. A participant that destroyed its object after `submit` hears nothing; its
+  part still counts until the end. A gesture's transaction ends where its progress comes to rest.
+- A creator's `cancel` after the start stops every animation the transaction started where it shows, each answered
+  `replaced`, and every participant hears `finished(cancelled)`.
 - A join within 10 s after the transaction ended applies with every animation at its end.
 - A connection takes part in at most 16 transactions that have not ended, the ones it created and the ones it
   joined counted together.

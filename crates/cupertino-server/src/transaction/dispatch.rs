@@ -165,6 +165,10 @@ impl Dispatch<CupertinoTransactionManagerV1, ()> for Cupertino {
                             applied: false,
                             withdrawn: false,
                         }],
+                        unmarked: Vec::new(),
+                        moving: Vec::new(),
+                        carried_out: Vec::new(),
+                        started_at: None,
                     },
                 );
             }
@@ -271,6 +275,10 @@ impl Dispatch<CupertinoTransactionManagerV1, ()> for Cupertino {
                             applied: false,
                             withdrawn: false,
                         }],
+                        unmarked: Vec::new(),
+                        moving: Vec::new(),
+                        carried_out: Vec::new(),
+                        started_at: None,
                     },
                 );
             }
@@ -345,6 +353,8 @@ impl Dispatch<CupertinoTransactionV1, TransactionObjectData> for Cupertino {
         _: &mut DataInit<'_, Self>,
     ) {
         let now = Instant::now();
+        // the model clock, which the layer animations run on
+        let now_s = state.now();
         let client_id = client.id();
 
         let is_submitted = state
@@ -391,8 +401,9 @@ impl Dispatch<CupertinoTransactionV1, TransactionObjectData> for Cupertino {
                             // the binding ends with the creator's object: a transaction waiting for its gesture,
                             // armed or still waiting for its parts to arm, is cancelled for all (nothing else starts it)
                             TxPhase::Pending | TxPhase::Armed => {
-                                flush_changes
-                                    .extend(state.transactions.end_cancelled(data.tx_id, now));
+                                flush_changes.extend(
+                                    state.transactions.end_cancelled(data.tx_id, now, now_s),
+                                );
                             }
                             TxPhase::RestingCompleted => {
                                 tx.phase = TxPhase::Ended {
@@ -402,8 +413,7 @@ impl Dispatch<CupertinoTransactionV1, TransactionObjectData> for Cupertino {
                             }
                             // a gesture under way settles back to its start
                             TxPhase::GestureTracking | TxPhase::GestureSettling => {
-                                let model_now = state.now();
-                                state.transactions.settle_back(data.tx_id, model_now);
+                                state.transactions.settle_back(data.tx_id, now_s);
                             }
                             _ => {}
                         }
@@ -680,9 +690,8 @@ impl Dispatch<CupertinoTransactionV1, TransactionObjectData> for Cupertino {
                 } else {
                     // Creator cancel ends the transaction for every participant; a gesture under way settles back to its
                     // start first
-                    let model_now = state.now();
-                    if !state.transactions.settle_back(data.tx_id, model_now) {
-                        flush_changes = state.transactions.end_cancelled(data.tx_id, now);
+                    if !state.transactions.settle_back(data.tx_id, now_s) {
+                        flush_changes = state.transactions.end_cancelled(data.tx_id, now, now_s);
                     }
                 }
                 for change in flush_changes {

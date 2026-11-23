@@ -146,6 +146,18 @@ impl WindowManagers {
         self.placed.values().any(|p| p.is_animating(now))
     }
 
+    /// Whether window `id` fades out or back in at `now`.
+    pub fn moves(&self, id: WindowId, now: f64) -> bool {
+        self.placed.get(&id).is_some_and(|p| p.is_animating(now))
+    }
+
+    /// Whether a window of `output` fades out or back in at `now`: the motion of a window manager's commit.
+    pub fn moves_on(&self, output: OutputId, now: f64) -> bool {
+        self.placed
+            .values()
+            .any(|p| p.output == output && p.is_animating(now))
+    }
+
     /// Keep window `id`, while it fades back in on the stage, at its own frame `natural` (a client that resized
     /// meanwhile).
     fn follow_natural(&mut self, id: WindowId, natural: Rect) {

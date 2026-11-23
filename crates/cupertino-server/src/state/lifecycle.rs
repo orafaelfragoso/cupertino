@@ -61,6 +61,8 @@ impl Cupertino {
         self.tick_input_timers(now);
         self.tick_overlays();
         self.tick_layers(now);
+        // after the layers' finished: a transaction whose motion came to rest ends, and says so after them
+        self.end_transactions_at_rest(wall_now);
         if self.popup_linger.tick(now) {
             // a dismissed popup reached its limit: the next frame no longer draws it
             self.request_redraw();

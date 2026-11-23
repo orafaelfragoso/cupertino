@@ -11,7 +11,7 @@ use smithay::wayland::compositor::with_states;
 
 use super::ops::Op;
 use super::tracked::{GestureProgress, Tracked};
-use super::{held, spatial, PROPERTIES};
+use super::{held, spatial, Motion, PROPERTIES};
 
 /// How a layer's content mixes with what lies behind it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -51,6 +51,8 @@ pub(super) struct Waiting {
     pub(super) since: f64,
     /// The gesture that drives the animation once it starts ([`Tracked`]).
     pub(super) gesture: Option<GestureProgress>,
+    /// The transaction whose part started the animation ([`Motion`]).
+    pub(super) motion: Option<Motion>,
 }
 
 /// The value property `prop` of a new layer starts at: opacity and scale at 1, the rest at 0.
@@ -72,6 +74,8 @@ pub struct LayerModel {
     pub(super) props: [LayerProperty; PROPERTIES],
     /// The serial of each property's running animation.
     pub(super) running: [Option<u32>; PROPERTIES],
+    /// The transaction whose part started each property's running animation, read while `running` holds it.
+    pub(super) motion: [Option<Motion>; PROPERTIES],
     /// The animation of each property a gesture drives: the property shows it rather than `props`, which rests at the
     /// value it started from.
     pub(super) tracked: [Option<Tracked>; PROPERTIES],
@@ -109,6 +113,7 @@ impl LayerModel {
             resource,
             props,
             running: [None; PROPERTIES],
+            motion: [None; PROPERTIES],
             tracked: std::array::from_fn(|_| None),
             waiting: Vec::new(),
             sized: [false; 2],
@@ -287,6 +292,7 @@ impl LayerModel {
                 let still = reduce_motion && spatial(w.prop);
                 self.tracked[w.prop] = Some(Tracked::new(progress, from, w.to, w.samples, still));
                 self.running[w.prop] = Some(w.serial);
+                self.motion[w.prop] = w.motion;
                 continue;
             }
             self.replace(w.prop, now);
@@ -299,6 +305,43 @@ impl LayerModel {
                 self.props[w.prop].animate(w.to, w.curve, now, w.velocity);
             }
             self.running[w.prop] = Some(w.serial);
+            self.motion[w.prop] = w.motion;
+        }
+    }
+
+    /// The animations waiting to start that no transaction's part claimed are `motion`'s: the commits of its part just
+    /// applied.
+    pub(super) fn mark(&mut self, motion: Motion) {
+        for w in &mut self.waiting {
+            w.motion.get_or_insert(motion);
+        }
+    }
+
+    /// Whether an animation of `motion` waits or runs: one that finished, or was replaced, is no longer its.
+    pub(super) fn moves(&self, motion: Motion) -> bool {
+        self.waiting.iter().any(|w| w.motion == Some(motion))
+            || (0..PROPERTIES).any(|p| self.running[p].is_some() && self.motion[p] == Some(motion))
+    }
+
+    /// Stop the animations of `motion` at what they show at `now`, each answered `replaced` with it: its transaction
+    /// was cancelled after it started.
+    pub(super) fn stop(&mut self, motion: Motion, now: f64) {
+        if self.waiting.iter().any(|w| w.motion == Some(motion)) {
+            for w in std::mem::take(&mut self.waiting) {
+                if w.motion == Some(motion) {
+                    let (value, velocity) = (self.value(w.prop, now), self.velocity(w.prop, now));
+                    self.resource.replaced(w.serial, value, velocity);
+                } else {
+                    self.waiting.push(w);
+                }
+            }
+        }
+        for prop in 0..PROPERTIES {
+            if self.running[prop].is_some() && self.motion[prop] == Some(motion) {
+                let shown = self.shown(prop, now);
+                self.replace(prop, now);
+                self.props[prop].set(shown);
+            }
         }
     }
 
@@ -328,6 +371,7 @@ impl LayerModel {
                 samples,
                 since: now,
                 gesture: None,
+                motion: None,
             }),
             Op::Cancel(prop) => {
                 let shown = self.shown(prop, now);

@@ -26,8 +26,9 @@ pub(crate) const SHELL_WINDOW_MANAGER_VERSION: u32 = 29;
 pub(crate) const SHELL_KEYBOARD_PANELS_VERSION: u32 = 30;
 /// `zwlr_layer_shell_v1`: on-demand keyboard interactivity came with version 4, the oldest the components work with.
 pub(crate) const LAYER_SHELL_VERSION: u32 = 4;
-/// `cupertino_transaction_manager_v1`, which every component's connection sees, as the components bind it.
-pub(crate) const TRANSACTION_VERSION: u32 = 1;
+/// `cupertino_transaction_manager_v1`, which every component's connection sees, as the components bind it: from 2 every
+/// transaction ends with `finished`, which the overview waits for.
+pub(crate) const TRANSACTION_VERSION: u32 = 2;
 /// `cupertino_overview_manager_v1`, the overview's role, as the overview binds it.
 pub(crate) const OVERVIEW_VERSION: u32 = 1;
 

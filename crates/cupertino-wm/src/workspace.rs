@@ -62,6 +62,12 @@ impl Wm {
     pub fn current_workspace(&self, output: OutputId) -> Option<WorkspaceId> {
         self.workspaces.get(&output).map(|w| w.current)
     }
+    /// Whether the desktops of `output` slide at `now`: a switch's motion runs.
+    pub fn workspaces_sliding(&self, output: OutputId, now: f64) -> bool {
+        self.workspaces
+            .get(&output)
+            .is_some_and(|w| w.position.is_animating(now))
+    }
     /// Slide position in workspace-index units (0.0 = first workspace fully shown).
     pub fn workspace_position(&self, output: OutputId, now: f64) -> f64 {
         self.workspaces

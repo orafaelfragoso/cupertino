@@ -37,7 +37,7 @@ fn want_frame(outputs: &mut [OutputEntry], id: OutputId) {
 
 /// The deadline of `tx` in milliseconds after its creator's `submit`: `set_deadline`'s, else one frame interval of its
 /// output plus [`DEFAULT_DEADLINE_EXTRA_MS`], never more than [`MAX_DEADLINE_MS`].
-fn deadline_ms(tx: &TransactionRecord, outputs: &[OutputEntry]) -> u32 {
+pub(super) fn deadline_ms(tx: &TransactionRecord, outputs: &[OutputEntry]) -> u32 {
     tx.deadline_ms.unwrap_or_else(|| {
         let frame_ms = outputs
             .iter()
@@ -129,17 +129,6 @@ fn start_due(
     all_expected_ready || deadline_passed
 }
 
-/// Whether `tx` (started, bound to no gesture) is over: every participant that did not withdraw has its part applied
-/// and has destroyed its object. No event says when such a transaction's motion ends, so its participants let go of
-/// it when they are done with it; nothing is left for it to do, and it ends.
-fn let_go(tx: &TransactionRecord) -> bool {
-    tx.gesture.is_none()
-        && tx
-            .participants
-            .iter()
-            .all(|p| p.withdrawn || (p.applied && p.resource.is_none()))
-}
-
 /// Apply part `p` of `tx_id` with start time `ts`: its staged surfaces leave it, so their kept commits leave the hold
 /// ([`Cupertino::release_left_holds`]), its window changes go to `changes` and it hears `started`.
 fn apply_part(
@@ -221,13 +210,6 @@ impl Cupertino {
                 }
             }
             match tx.phase {
-                // ended, it no longer counts towards its connections' limit and is forgotten after the retention
-                TxPhase::Started { .. } if let_go(tx) => {
-                    tx.phase = TxPhase::Ended {
-                        ended_at: now,
-                        outcome: WireOutcome::Completed,
-                    };
-                }
                 TxPhase::Pending => {
                     if tx.ready_at.is_none() && start_due(tx, now, &self.hosts, &self.outputs) {
                         if tx.gesture.is_some() {
@@ -288,6 +270,7 @@ impl Cupertino {
             }
         }
         self.release_left_holds();
+        self.mark_started_motion();
         self.answer_unshown_callbacks();
     }
 
@@ -333,6 +316,7 @@ impl Cupertino {
             self.apply_queued_window_change(change);
         }
         self.release_left_holds();
+        self.mark_started_motion();
         self.answer_held_callbacks(output, frame_now);
     }
 
@@ -345,8 +329,9 @@ impl Cupertino {
             return;
         }
         let mut changes = Vec::new();
+        let now_s = self.now();
         for tx_id in abandoned {
-            changes.extend(self.transactions.end_cancelled(tx_id, now));
+            changes.extend(self.transactions.end_cancelled(tx_id, now, now_s));
         }
         for change in changes {
             self.apply_queued_window_change(change);
@@ -363,9 +348,20 @@ impl Cupertino {
         model_s: f64,
     ) -> Vec<QueuedWindowChange> {
         let mut changes = Vec::new();
+        let Some(tx) = self.transactions.transactions.get(&tx_id) else {
+            return changes;
+        };
+        let parts: Vec<u64> = tx
+            .participants
+            .iter()
+            .filter(|p| p.ready && !p.applied && !p.withdrawn)
+            .map(|p| p.id)
+            .collect();
+        let surfaces = self.transactions.kept_surfaces(tx_id, &parts);
         let Some(tx) = self.transactions.transactions.get_mut(&tx_id) else {
             return changes;
         };
+        tx.unmarked.extend(surfaces);
         let (tv_sec_hi, tv_sec_lo, tv_nsec) = split_timestamp(at);
         tx.phase = TxPhase::Started {
             tv_sec_hi,
@@ -374,6 +370,7 @@ impl Cupertino {
             start_model_s: model_s,
         };
         tx.ready_at = None;
+        tx.started_at = Some(Instant::now());
         for p in &mut tx.participants {
             if p.ready && !p.applied && !p.withdrawn {
                 apply_part(
@@ -385,6 +382,7 @@ impl Cupertino {
                 );
             }
         }
+        tx.carried_out.extend(changes.iter().cloned());
         self.request_redraw();
         changes
     }
@@ -392,6 +390,7 @@ impl Cupertino {
     /// Apply the late part `pid` of the started `tx_id` at the transaction's original start time.
     fn apply_late_part(&mut self, tx_id: TxId, pid: u64) -> Vec<QueuedWindowChange> {
         let mut changes = Vec::new();
+        let surfaces = self.transactions.kept_surfaces(tx_id, &[pid]);
         let Some(tx) = self.transactions.transactions.get_mut(&tx_id) else {
             return changes;
         };
@@ -413,6 +412,8 @@ impl Cupertino {
                     &mut changes,
                     (tv_sec_hi, tv_sec_lo, tv_nsec),
                 );
+                tx.unmarked.extend(surfaces);
+                tx.carried_out.extend(changes.iter().cloned());
             }
         }
         self.request_redraw();
@@ -510,6 +511,12 @@ impl Cupertino {
                     }
                     _ => {}
                 }
+            }
+            // an expected component that has not joined holds the end until the deadline after the start
+            if let Some(until) = end::waits_for_expected(tx, &self.hosts, &self.outputs)
+                .filter(|&until| until > Instant::now())
+            {
+                at(until);
             }
             if tx.phase == TxPhase::Pending {
                 match tx.ready_at {

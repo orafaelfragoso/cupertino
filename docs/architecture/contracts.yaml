@@ -562,7 +562,7 @@
   source_match: Cupertino, CupertinoComponentV1
 - name: cupertino_transaction_manager_v1
   kind: wayland-global
-  version: 1
+  version: 2
   owner_crate: cupertino-server
   owner_area: compositor
   scope: shell-private

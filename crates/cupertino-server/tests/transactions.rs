@@ -4,6 +4,9 @@
 //! - A gesture-bound transaction (`overview`) tracks progress and settles with the release velocity (and supports
 //!   reverse gestures).
 //! - Window/workspace holes (`get_hole`) stack claims in commit order, fall back on destroy, and emit `source_closed`.
+//! - A transaction no gesture drives finishes, for every participant, once the animations its parts started ran (under
+//!   Reduce Motion once the reduced motion ran), a late part's included, and once the desktops a switch it carried out
+//!   slide stopped; cancelled after the start it stops them; ended, it no longer counts towards the limit.
 
 use std::io::Write;
 use std::os::fd::AsFd;
@@ -18,6 +21,10 @@ use cupertino_protocols::client::host::cupertino_host_component_v1::{
 use cupertino_protocols::client::host::cupertino_host_v1::{self, CupertinoHostV1};
 use cupertino_protocols::client::layers::cupertino_layer_v1::{self, CupertinoLayerV1};
 use cupertino_protocols::client::layers::cupertino_layers_v1::{self, CupertinoLayersV1};
+use cupertino_protocols::client::overview::cupertino_overview_manager_v1::{
+    self, CupertinoOverviewManagerV1,
+};
+use cupertino_protocols::client::overview::cupertino_overview_v1::{self, CupertinoOverviewV1};
 use cupertino_protocols::client::transaction::cupertino_hole_v1::{
     self, CupertinoHoleV1, Source as HoleWireSource,
 };
@@ -113,6 +120,8 @@ struct CompClient {
     layers: Option<CupertinoLayersV1>,
     component_global: Option<CupertinoComponentV1>,
     tx_manager: Option<CupertinoTransactionManagerV1>,
+    /// The overview's role, offered to the overview's connection alone.
+    overviews: Option<CupertinoOverviewManagerV1>,
     instance: Option<u32>,
     started: Vec<(u32, u32, u32)>,
     gesture_began: Vec<Gesture>,
@@ -179,6 +188,14 @@ impl Dispatch<wl_registry::WlRegistry, ()> for CompClient {
                 }
                 "cupertino_transaction_manager_v1" => {
                     state.tx_manager = Some(reg.bind::<CupertinoTransactionManagerV1, _, _>(
+                        name,
+                        version.min(2),
+                        qh,
+                        (),
+                    ));
+                }
+                "cupertino_overview_manager_v1" => {
+                    state.overviews = Some(reg.bind::<CupertinoOverviewManagerV1, _, _>(
                         name,
                         version.min(1),
                         qh,
@@ -376,6 +393,30 @@ impl Dispatch<CupertinoTransactionV1, ()> for CompClient {
             } => state.finished.push(o),
             _ => {}
         }
+    }
+}
+
+impl Dispatch<CupertinoOverviewManagerV1, ()> for CompClient {
+    fn event(
+        _: &mut Self,
+        _: &CupertinoOverviewManagerV1,
+        _: cupertino_overview_manager_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<CupertinoOverviewV1, ()> for CompClient {
+    fn event(
+        _: &mut Self,
+        _: &CupertinoOverviewV1,
+        _: cupertino_overview_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
     }
 }
 
@@ -3558,60 +3599,403 @@ fn a_gesture_bound_transaction_destroyed_before_it_arms_ends_cancelled_and_no_lo
 /// and each turn waits up to 2 ms for the clients.
 const STARTING_PUMPS: usize = 200;
 
-#[test]
-fn a_started_transaction_every_participant_let_go_of_no_longer_counts() {
-    let mut rig = Rig::new();
-    let (hconn, mut hq, mut hst) = rig.connect_host(&["overview", "menubar"]);
-    let (_hov, oconn, mut oq, mut ost) = rig.spawn_component(&hconn, &mut hq, &mut hst, "overview");
-    let (_hbar, bconn, mut bq, mut bst) = rig.spawn_component(&hconn, &mut hq, &mut hst, "menubar");
-    let oqh = oq.handle();
-    let bqh = bq.handle();
-    // more transactions than a connection may have, each let go of once it started: the overview's way in and out
-    let cycles =
-        u32::try_from(cupertino_protocols::transaction::MAX_ACTIVE_TRANSACTIONS + 4).unwrap();
-    for serial in 1..=cycles {
-        let tx =
-            ost.tx_manager
-                .as_ref()
-                .unwrap()
-                .create(serial, ost.output.as_ref().unwrap(), &oqh, ());
+/// A dock and a menu bar on a fixed clock at [`PLAIN_T0`], and the dock's layer surface with one layer, applied.
+struct PlainRig {
+    rig: Rig,
+    dock: (Connection, EventQueue<CompClient>, CompClient),
+    bar: (Connection, EventQueue<CompClient>, CompClient),
+    surf: wl_surface::WlSurface,
+    layer: CupertinoLayerV1,
+    _child: wl_surface::WlSurface,
+    _host: (Connection, EventQueue<HostClient>, HostClient),
+}
+
+/// The model time the tests of transactions no gesture drives start at.
+const PLAIN_T0: f64 = 50.0;
+/// The length of the dock's animation in those tests, in milliseconds.
+const PLAIN_MS: u32 = 200;
+/// Model seconds after which the dock's animation ran for sure, whenever it started: one that no frame shows starts
+/// `START_AT_THE_LATEST` (0.1 s) after its commit.
+const PAST_PLAIN: f64 = 1.0;
+/// A model time in the middle of the dock's animation, which started at most 0.1 s after its commit.
+const AMID_PLAIN: f64 = 0.2;
+/// How far the model clock moves between two turns of the loop in those tests: about three frames.
+const PLAIN_STEP: f64 = 0.05;
+
+impl PlainRig {
+    fn new() -> Self {
+        let mut rig = Rig::new();
+        at_time(&mut rig, PLAIN_T0);
+        let (hconn, mut hq, mut hst) = rig.connect_host(&["dock", "menubar"]);
+        let (_hd, dconn, mut dq, mut dst) = rig.spawn_component(&hconn, &mut hq, &mut hst, "dock");
+        let (_hb, bconn, bq, bst) = rig.spawn_component(&hconn, &mut hq, &mut hst, "menubar");
+        let (surf, _shell) = rig.create_layer_surface(&dconn, &mut dq, &mut dst, "dock");
+        let dqh = dq.handle();
+        let child = dst.compositor.as_ref().unwrap().create_surface(&dqh, ());
+        let layer = dst
+            .layers
+            .as_ref()
+            .unwrap()
+            .get_layer(&child, &surf, &dqh, ());
+        surf.commit();
+        for _ in 0..2 {
+            rig.pump_comp(&dconn, &mut dq, &mut dst);
+        }
+        Self {
+            rig,
+            dock: (dconn, dq, dst),
+            bar: (bconn, bq, bst),
+            surf,
+            layer,
+            _child: child,
+            _host: (hconn, hq, hst),
+        }
+    }
+
+    fn pump(&mut self) {
+        let (c, q, s) = &mut self.dock;
+        self.rig.pump_comp(c, q, s);
+        let (c, q, s) = &mut self.bar;
+        self.rig.pump_comp(c, q, s);
+    }
+
+    /// The model clock moved on to `PLAIN_T0 + t` in steps of [`PLAIN_STEP`], a turn of the loop at each, as frames
+    /// would see it, and a few turns more there.
+    fn at(&mut self, t: f64) {
+        let target = PLAIN_T0 + t;
+        let mut now = self.rig.state.fixed_time.unwrap_or(PLAIN_T0);
+        while now < target {
+            now = (now + PLAIN_STEP).min(target);
+            at_time(&mut self.rig, now);
+            self.pump();
+        }
+        at_time(&mut self.rig, target);
+        for _ in 0..3 {
+            self.pump();
+        }
+    }
+
+    /// The dock creates transaction `serial` with its surface staged; `part` describes its part, before the surface's
+    /// commit and the submit.
+    fn create(
+        &mut self,
+        serial: u32,
+        part: impl FnOnce(&CupertinoLayerV1),
+    ) -> CupertinoTransactionV1 {
+        let (_, dq, dst) = &mut self.dock;
+        let tx = dst.tx_manager.as_ref().unwrap().create(
+            serial,
+            dst.output.as_ref().unwrap(),
+            &dq.handle(),
+            (),
+        );
+        tx.stage(&self.surf);
+        part(&self.layer);
+        self.surf.commit();
         tx.submit();
+        tx
+    }
+
+    /// The menu bar joins the dock's transaction `serial` with nothing of its own.
+    fn join(&mut self, serial: u32) -> CupertinoTransactionV1 {
+        let instance = self.dock.2.instance.unwrap();
+        let (_, bq, bst) = &mut self.bar;
         let joined = bst.tx_manager.as_ref().unwrap().join(
-            "overview".into(),
-            ost.instance.unwrap(),
+            "dock".into(),
+            instance,
             serial,
             bst.output.as_ref().unwrap(),
-            &bqh,
+            &bq.handle(),
             (),
         );
         joined.submit();
-        let started = ost.started.len();
+        joined
+    }
+
+    /// Turn until the dock heard its `started`-th start.
+    fn until_started(&mut self, started: usize) {
         for _ in 0..STARTING_PUMPS {
-            if ost.started.len() > started {
-                break;
+            if self.dock.2.started.len() >= started {
+                return;
             }
-            rig.pump_comp(&oconn, &mut oq, &mut ost);
-            rig.pump_comp(&bconn, &mut bq, &mut bst);
+            self.pump();
         }
-        assert!(ost.started.len() > started, "transaction {serial} started");
-        tx.destroy();
-        // the joiner holds its object still: the transaction goes on for it
-        if serial == 1 {
-            rig.pump_comp(&oconn, &mut oq, &mut ost);
-            rig.pump_comp(&bconn, &mut bq, &mut bst);
-            assert!(
-                bst.finished.is_empty(),
-                "a transaction a participant holds goes on"
-            );
-        }
-        joined.destroy();
-        rig.pump_comp(&oconn, &mut oq, &mut ost);
-        rig.pump_comp(&bconn, &mut bq, &mut bst);
-        assert!(
-            oconn.protocol_error().is_none() && bconn.protocol_error().is_none(),
-            "transaction {serial}: the ones let go of no longer count towards the connections' limit"
+        panic!("transaction {started} started");
+    }
+
+    /// What the dock and the menu bar heard of their transactions' ends.
+    fn finished(&self) -> (&[Outcome], &[Outcome]) {
+        (&self.dock.2.finished, &self.bar.2.finished)
+    }
+}
+
+/// An animation `serial` of `property` of the dock's layer over [`PLAIN_MS`].
+fn plain_motion(serial: u32, property: cupertino_layer_v1::Property, layer: &CupertinoLayerV1) {
+    layer.animate_timed(serial, property, 0.5, PLAIN_MS, 0.25, 0.1, 0.25, 1.0);
+}
+
+#[test]
+fn a_transaction_no_gesture_drives_finishes_once_its_animations_ran() {
+    use cupertino_layer_v1::Property;
+    let mut p = PlainRig::new();
+    let _tx = p.create(1, |layer| plain_motion(1, Property::X, layer));
+    let _joined = p.join(1);
+    p.until_started(1);
+    assert_eq!(p.bar.2.started, p.dock.2.started, "both started together");
+    for t in [0.0, AMID_PLAIN] {
+        p.at(t);
+        assert_eq!(
+            p.finished(),
+            (&[][..], &[][..]),
+            "{t} s in: the animation runs, and the transaction goes on"
         );
     }
+    p.at(PAST_PLAIN);
+    assert_eq!(p.dock.2.layer_finished, vec![1], "the animation ran");
+    assert_eq!(
+        p.finished(),
+        (&[Outcome::Completed][..], &[Outcome::Completed][..]),
+        "once it ran every participant hears the transaction finished"
+    );
+    p.at(PAST_PLAIN + 1.0);
+    assert_eq!(p.finished().0.len(), 1, "finished once");
+}
+
+#[test]
+fn under_reduce_motion_a_transaction_finishes_once_its_reduced_motion_ran() {
+    use cupertino_layer_v1::Property;
+    let mut p = PlainRig::new();
+    p.rig.state.set_display_option(
+        cupertino_defaults::accessibility::DisplayOption::ReduceMotion,
+        true,
+    );
+    // a spatial change is at its target at once: nothing is left to run once it started
+    let _tx = p.create(1, |layer| plain_motion(1, Property::X, layer));
+    let _joined = p.join(1);
+    p.until_started(1);
+    p.at(AMID_PLAIN);
+    assert_eq!(
+        p.finished(),
+        (&[Outcome::Completed][..], &[Outcome::Completed][..]),
+        "the move took its target at once, and the transaction finished then"
+    );
+    // a fade runs as asked: the transaction goes on while it does
+    let _tx = p.create(2, |layer| plain_motion(2, Property::Opacity, layer));
+    let _joined = p.join(2);
+    p.until_started(2);
+    p.at(2.0 * AMID_PLAIN);
+    assert_eq!(
+        p.finished().0.len(),
+        1,
+        "the fade runs: the transaction goes on"
+    );
+    p.at(PAST_PLAIN + 1.0);
+    assert_eq!(
+        p.finished(),
+        (
+            &[Outcome::Completed, Outcome::Completed][..],
+            &[Outcome::Completed, Outcome::Completed][..]
+        ),
+        "the fade ran: the transaction finished"
+    );
+}
+
+#[test]
+fn a_late_part_keeps_the_transaction_until_its_animations_ran_and_a_join_after_the_end_hears_it_at_once(
+) {
+    use cupertino_layer_v1::Property;
+    let mut p = PlainRig::new();
+    let _tx = p.create(1, |layer| plain_motion(1, Property::X, layer));
+    p.until_started(1);
+    // the menu bar joins after the start with a part of its own that runs longer
+    let (bar_surf, _shell) = {
+        let (bconn, bq, bst) = &mut p.bar;
+        p.rig.create_layer_surface(bconn, bq, bst, "menubar")
+    };
+    let (_, bq, bst) = &mut p.bar;
+    let bqh = bq.handle();
+    let child = bst.compositor.as_ref().unwrap().create_surface(&bqh, ());
+    let bar_layer = bst
+        .layers
+        .as_ref()
+        .unwrap()
+        .get_layer(&child, &bar_surf, &bqh, ());
+    bar_surf.commit();
+    p.pump();
+    let instance = p.dock.2.instance.unwrap();
+    let (_, bq, bst) = &mut p.bar;
+    let joined = bst.tx_manager.as_ref().unwrap().join(
+        "dock".into(),
+        instance,
+        1,
+        bst.output.as_ref().unwrap(),
+        &bq.handle(),
+        (),
+    );
+    joined.stage(&bar_surf);
+    bar_layer.animate_timed(7, Property::Y, 3.0, 10 * PLAIN_MS, 0.25, 0.1, 0.25, 1.0);
+    bar_surf.commit();
+    joined.submit();
+    for _ in 0..STARTING_PUMPS {
+        if !p.bar.2.started.is_empty() {
+            break;
+        }
+        p.pump();
+    }
+    assert_eq!(
+        p.bar.2.started, p.dock.2.started,
+        "the late part starts at the start time"
+    );
+    p.at(PAST_PLAIN);
+    assert_eq!(p.dock.2.layer_finished, vec![1], "the dock's animation ran");
+    assert_eq!(
+        p.finished(),
+        (&[][..], &[][..]),
+        "the late part's animation runs: the transaction goes on"
+    );
+    p.at(PAST_PLAIN + 3.0);
+    assert_eq!(
+        p.bar.2.layer_finished,
+        vec![7],
+        "the late part's animation ran"
+    );
+    assert_eq!(
+        p.finished(),
+        (&[Outcome::Completed][..], &[Outcome::Completed][..]),
+        "the late part ran too: the transaction finished"
+    );
+    // a component that joins once it ended hears so at once
+    let _late = p.join(1);
+    p.pump();
+    assert_eq!(
+        p.bar.2.finished,
+        vec![Outcome::Completed, Outcome::Completed],
+        "a join after the end hears finished at once"
+    );
+}
+
+#[test]
+fn a_transaction_cancelled_after_it_started_stops_its_animations_and_finishes_cancelled() {
+    use cupertino_layer_v1::Property;
+    let mut p = PlainRig::new();
+    let tx = p.create(1, |layer| plain_motion(1, Property::X, layer));
+    let _joined = p.join(1);
+    p.until_started(1);
+    p.at(AMID_PLAIN);
+    tx.cancel();
+    p.at(AMID_PLAIN);
+    assert_eq!(
+        p.finished(),
+        (&[Outcome::Cancelled][..], &[Outcome::Cancelled][..]),
+        "every participant hears the transaction cancelled"
+    );
+    assert_eq!(
+        p.dock.2.layer_replaced,
+        vec![1],
+        "the animation it started stopped where it showed"
+    );
+    p.at(PAST_PLAIN);
+    assert_eq!(
+        p.finished(),
+        (&[Outcome::Cancelled][..], &[Outcome::Cancelled][..]),
+        "nothing more is heard of it"
+    );
+    assert!(
+        p.dock.2.layer_finished.is_empty(),
+        "the animation never ran to its end"
+    );
+}
+
+#[test]
+fn a_transaction_of_a_desktop_switch_finishes_once_the_desktops_stopped_sliding() {
+    let mut rig = Rig::new();
+    at_time(&mut rig, PLAIN_T0);
+    let (hconn, mut hq, mut hst) = rig.connect_host(&["overview"]);
+    let (_hov, oconn, mut oq, mut ost) = rig.spawn_component(&hconn, &mut hq, &mut hst, "overview");
+    let oqh = oq.handle();
+    let overview = ost
+        .overviews
+        .as_ref()
+        .expect("the overview's role")
+        .get_overview(ost.output.as_ref().unwrap(), &oqh, ());
+    overview.add_workspace();
+    for _ in 0..3 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    let output = rig.output_id;
+    let second = rig.state.wm.workspaces(output)[1].id;
+    // the overview's way out to the second desktop
+    let tx = ost
+        .tx_manager
+        .as_ref()
+        .unwrap()
+        .create(1, ost.output.as_ref().unwrap(), &oqh, ());
+    tx.begin_window_changes();
+    overview.switch_workspace(u32::try_from(second.0).unwrap());
+    tx.end_window_changes();
+    tx.submit();
+    for _ in 0..STARTING_PUMPS {
+        if !ost.started.is_empty() {
+            break;
+        }
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    assert_eq!(ost.started.len(), 1, "the transaction started");
+    assert_eq!(
+        rig.state.wm.current_workspace(output),
+        Some(second),
+        "the switch was carried out at the start"
+    );
+    let mut now = PLAIN_T0;
+    while rig.state.wm.workspaces_sliding(output, now) {
+        assert!(
+            ost.finished.is_empty(),
+            "{} s in: the desktops slide, and the transaction goes on",
+            now - PLAIN_T0
+        );
+        assert!(now < PLAIN_T0 + PAST_PLAIN * 5.0, "the slide ends");
+        now += PLAIN_STEP;
+        at_time(&mut rig, now);
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    assert!(now > PLAIN_T0, "the switch slid");
+    for _ in 0..3 {
+        rig.pump_comp(&oconn, &mut oq, &mut ost);
+    }
+    assert_eq!(
+        ost.finished,
+        vec![Outcome::Completed],
+        "once the desktops stopped the transaction finished"
+    );
+}
+
+#[test]
+fn transactions_no_gesture_drives_end_and_no_longer_count() {
+    let mut p = PlainRig::new();
+    // more transactions than a connection may have, one after another, each object held: the toggle's way in and out
+    let cycles =
+        u32::try_from(cupertino_protocols::transaction::MAX_ACTIVE_TRANSACTIONS + 4).unwrap();
+    let mut held = Vec::new();
+    for serial in 1..=cycles {
+        held.push(p.create(serial, |_| {}));
+        held.push(p.join(serial));
+        p.until_started(serial as usize);
+        p.pump();
+        assert!(
+            p.dock.0.protocol_error().is_none() && p.bar.0.protocol_error().is_none(),
+            "transaction {serial}: the ones that ended no longer count towards the connections' limit"
+        );
+        assert_eq!(
+            p.finished().0.len(),
+            serial as usize,
+            "transaction {serial}: nothing to run, it finished once it started"
+        );
+    }
+    assert_eq!(
+        p.finished().1.len(),
+        cycles as usize,
+        "the joiner heard each end"
+    );
 }
 
 #[test]

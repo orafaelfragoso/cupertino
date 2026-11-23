@@ -28,7 +28,7 @@
     built with (cupertino_host_v1).
   </description>
 
-  <interface name="cupertino_transaction_manager_v1" version="1">
+  <interface name="cupertino_transaction_manager_v1" version="2">
     <description summary="makes transactions and holes">
       Global singleton, offered only on a connection the server handed out for a component
       (cupertino_host_component_v1.connection). A transaction is named by the component that
@@ -39,6 +39,11 @@
 
       A connection takes part in at most 16 transactions that have not ended, the ones it
       created and the ones it joined counted together.
+
+      Version 2 ends every transaction and says so: a transaction no gesture drives ends once
+      the motion it started has run, and each participant hears finished (see the End of
+      cupertino_transaction_v1). Version 1 ended only a transaction bound to a gesture, so a
+      participant of any other could not tell when it was over.
     </description>
 
     <enum name="error">
@@ -110,7 +115,7 @@
     </request>
   </interface>
 
-  <interface name="cupertino_transaction_v1" version="1">
+  <interface name="cupertino_transaction_v1" version="2">
     <description summary="one participant's part of a transaction">
       Each participant has an object of its own for the transaction. Through it the participant
       stages surfaces, brackets window changes and submits.
@@ -177,13 +182,22 @@
       cupertino_layer_v1 retargets, and its client hears replaced there. The earlier transaction
       goes on with its other animations.
 
-      End. The transaction ends when every animation its parts started has finished or been
-      replaced and every window change has been carried out; each participant hears finished.
+      End. The transaction ends when every participant that did not withdraw had its part
+      applied, every animation its parts started has finished or been replaced, and the window
+      changes have been carried out and the server's window motion they started (a window
+      restored, placed or faded, the desktops sliding) has come to rest: the server applies the
+      parts and runs every animation, so it is the one that knows. Each participant that still
+      holds its object hears finished with completed, after the finished or replaced of each of
+      its layer animations; one that destroyed its object after submit hears nothing, and its
+      part still counts until the end. An ended transaction no longer counts towards the 16 of
+      its connections. A transaction bound to a gesture ends where its progress comes to rest
+      instead (bind_gesture).
 
       Reduced motion. While reduce_motion is on, animations follow cupertino_layer_v1: those of
       the spatial properties are at their target in their first frame and opacity animates as
       asked, and the server's own window changes take their reduced form. The start, the
-      deadline and the late rule are the same.
+      deadline, the late rule and the end are the same: the end comes once the reduced motion
+      has run, a fade at its end and a spatial change at its target at once.
 
       A participant's connection ending. What the participant had kept and not applied is
       dropped, and the transaction does not wait for it. What had started ends with its
@@ -347,7 +361,8 @@
         transaction started stops at the value shown on the next frame, and its client hears
         replaced with that value; window changes that were carried out stay. An armed
         transaction is disarmed as before the start; one whose gesture is under way is settled
-        back to its start. Every participant hears finished with cancelled.
+        back to its start. Every participant hears finished with cancelled, and the transaction
+        ends.
       </description>
     </request>
 
@@ -388,15 +403,17 @@
 
     <event name="finished">
       <description summary="the transaction is at rest">
-        Sent to each participant when the transaction ended, and for a transaction bound to a
-        gesture each time it comes to rest. After completed with a reverse binding the
-        transaction stays, for that gesture; after reverted or cancelled it is over.
+        Sent to each participant when the transaction ended: one no gesture drives once its motion
+        has run (see End), with completed, or when it is cancelled; one bound to a gesture each
+        time it comes to rest. After completed with a reverse binding the transaction stays, for
+        that gesture; after reverted or cancelled it is over. A join to a transaction that ended
+        hears it at once.
       </description>
       <arg name="outcome" type="uint" enum="outcome"/>
     </event>
   </interface>
 
-  <interface name="cupertino_hole_v1" version="1">
+  <interface name="cupertino_hole_v1" version="2">
     <description summary="a layer in which the server draws a window">
       The hole fills its layer's bounds as the layer is shown and moves, scales, fades and is
       clipped with it; the layer's animations are the hole's. Its source is drawn to fit the

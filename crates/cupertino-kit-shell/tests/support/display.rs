@@ -104,7 +104,10 @@ pub(super) fn create_globals(handle: &mut DisplayHandle, offer: Offer) {
     handle.create_global::<State, WlOutput, ()>(4, ());
     handle.create_global::<State, ZwlrLayerShellV1, ()>(offer.layer_shell, ());
     handle.create_global::<State, CupertinoShellV1, ()>(offer.shell, ());
-    handle.create_global::<State, CupertinoTransactionManagerV1, ()>(1, ());
+    handle.create_global::<State, CupertinoTransactionManagerV1, ()>(
+        CupertinoTransactionManagerV1::interface().version,
+        (),
+    );
     handle.create_global::<State, CupertinoAppEffectsV1, ()>(offer.app_effects, ());
     if let Some(transform) = offer.capture {
         super::capture::create_globals(handle, transform);

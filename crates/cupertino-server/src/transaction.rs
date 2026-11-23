@@ -35,8 +35,9 @@ use crate::host::{component_spec, HeldSurface};
 use crate::layers_v1::{GestureProgress, LAYER_ROLE};
 use crate::state::{ClientState, Cupertino};
 
-/// Protocol version offered for `cupertino_transaction_manager_v1`.
-pub const TRANSACTION_PROTOCOL_VERSION: u32 = 1;
+/// Protocol version offered for `cupertino_transaction_manager_v1`: version 2 ends a transaction no gesture drives once
+/// its motion has run, and says so (`finished`).
+pub const TRANSACTION_PROTOCOL_VERSION: u32 = 2;
 
 /// How many holes deep the scene draws sources: a window drawn in a hole draws its own layers, and a hole among them
 /// draws nothing, so no source draws itself and a frame never recurses.
@@ -197,6 +198,24 @@ struct TransactionRecord {
     phase: TxPhase,
     gesture: Option<GestureBinding>,
     participants: Vec<Participant>,
+    /// The staged surfaces of the parts just applied, whose animations become the transaction's once their kept
+    /// commits applied ([`Cupertino::mark_started_motion`]).
+    unmarked: Vec<WlSurface>,
+    /// The surfaces whose animations the transaction's parts started ([`crate::layers_v1::Motion`]).
+    moving: Vec<WlSurface>,
+    /// The window changes its parts asked for, carried out at the start: the server's window motion they run is the
+    /// transaction's too.
+    carried_out: Vec<QueuedWindowChange>,
+    /// When it started, on the loop's clock: an expected component that has not joined holds its end as long as it
+    /// held its start, its deadline ([`end`]).
+    started_at: Option<Instant>,
+}
+
+impl TransactionRecord {
+    /// The animations of the transaction's parts.
+    fn motion(&self) -> crate::layers_v1::Motion {
+        crate::layers_v1::Motion(self.id.0)
+    }
 }
 
 /// Content source bound to a `cupertino_hole_v1` layer.
@@ -415,12 +434,19 @@ impl TransactionManager {
     /// End `tx_id` as cancelled for every participant: each that has not withdrawn hears `finished(cancelled)` and its
     /// staged surfaces leave the transaction, so their kept commits apply at once, as ordinary commits
     /// ([`Cupertino::release_left_holds`]). Returns the window changes to carry out: before the start each part applies
-    /// by itself; after it, the changes not yet carried out are dropped.
-    fn end_cancelled(&mut self, tx_id: TxId, now: Instant) -> Vec<QueuedWindowChange> {
+    /// by itself; after it, the changes not yet carried out are dropped, and the animations its parts started stop at
+    /// what they show at `now_s` (model seconds).
+    fn end_cancelled(&mut self, tx_id: TxId, now: Instant, now_s: f64) -> Vec<QueuedWindowChange> {
         let mut changes = Vec::new();
         let Some(tx) = self.transactions.get_mut(&tx_id) else {
             return changes;
         };
+        // what it started stops where it shows, and each animation's client hears replaced
+        let motion = tx.motion();
+        for surface in std::mem::take(&mut tx.moving) {
+            crate::layers_v1::stop_motion(&surface, motion, now_s);
+        }
+        tx.unmarked.clear();
         let before_start = matches!(tx.phase, TxPhase::Pending | TxPhase::Armed);
         if self.active_gesture_tx.get(&tx.output) == Some(&tx_id) {
             self.active_gesture_tx.remove(&tx.output);
@@ -930,5 +956,6 @@ impl Cupertino {
 }
 
 mod dispatch;
+mod end;
 mod staging;
 mod start;

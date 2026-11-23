@@ -401,6 +401,39 @@ pub fn track_gesture(parent: &WlSurface, progress: &GestureProgress) {
     }
 }
 
+/// The animations the parts of one transaction started, named by the transaction: the server ends a transaction no
+/// gesture drives once none of them waits or runs ([`moves`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Motion(pub u64);
+
+/// The animations waiting to start on the layers of `parent`, its presentation's included, that no transaction's part
+/// claimed are `motion`'s: the kept commits of a part of its transaction just applied.
+pub fn mark_motion(parent: &WlSurface, motion: Motion) {
+    if parent.is_alive() {
+        with_parent(parent, |layers| {
+            for l in layers.iter_mut() {
+                l.mark(motion);
+            }
+        });
+    }
+}
+
+/// Whether an animation of `motion` waits or runs on a layer of `parent`; never on a surface that is gone.
+pub fn moves(parent: &WlSurface, motion: Motion) -> bool {
+    parent.is_alive() && with_parent(parent, |layers| layers.iter().any(|l| l.moves(motion)))
+}
+
+/// Stop the animations of `motion` on the layers of `parent` at what they show at `now`, each answered `replaced`.
+pub fn stop_motion(parent: &WlSurface, motion: Motion, now: f64) {
+    if parent.is_alive() {
+        with_parent(parent, |layers| {
+            for l in layers.iter_mut() {
+                l.stop(motion, now);
+            }
+        });
+    }
+}
+
 /// The layer requests queued on `parent` for its next commit.
 pub fn queued(parent: &WlSurface) -> usize {
     with_states(parent, |s| {

@@ -1,7 +1,7 @@
 use crate::cx::{EventCx, IdleCx, MeasureCx, OverlayCx, PaintCx, SemanticsCx};
 use crate::layout::{Constraints, Flex, GridSpan, LayoutSpec, Measured, SizeSpec};
 use crate::{Environment, Event, Key};
-use cupertino_geometry::{Point, Size};
+use cupertino_geometry::{Point, Rect, Size};
 use std::any::{type_name, Any, TypeId};
 use std::fmt;
 
@@ -102,6 +102,14 @@ pub trait Widget<M>: 'static {
     /// shows no layers the overlay draws in place. A widget whose answer changes returns [`Change::Paint`] from its
     /// update.
     fn overlay_layer(&self, _state: &Self::State) -> Option<crate::SurfaceLayerMark> {
+        None
+    }
+    /// Where the node's overlay layer ([`overlay_layer`](Self::overlay_layer)) lies instead of the rect of the layer the
+    /// node lies in, in the node's coordinates; `None` keeps that rect. A layer whose glass covers only a part of the
+    /// node gives that part: a held knob's lens, whose glass is the lens's shape over the track. The layer's frame is
+    /// that size, and what the overlay draws outside it is cut away. Asked after the node paints in the same frame, so
+    /// it may give what the paint worked out (where a moving knob is now).
+    fn overlay_layer_rect(&self, _state: &Self::State) -> Option<Rect> {
         None
     }
     /// Whether the node lies on whole device pixels of the window: its origin, and its subtree with it, moves to the
@@ -346,6 +354,7 @@ pub(crate) trait AnyWidget<M> {
     fn obscures(&self, state: &dyn Any) -> bool;
     fn surface_layer(&self, state: &dyn Any) -> Option<crate::SurfaceLayerMark>;
     fn overlay_layer(&self, state: &dyn Any) -> Option<crate::SurfaceLayerMark>;
+    fn overlay_layer_rect(&self, state: &dyn Any) -> Option<Rect>;
     fn on_pixels(&self, state: &dyn Any) -> bool;
     fn grows_from_anchor(&self) -> bool;
     fn closes_as_menu(&self) -> bool;
@@ -442,6 +451,10 @@ impl<M, W: Widget<M>> AnyWidget<M> for W {
 
     fn overlay_layer(&self, state: &dyn Any) -> Option<crate::SurfaceLayerMark> {
         Widget::overlay_layer(self, state.downcast_ref().expect(STATE))
+    }
+
+    fn overlay_layer_rect(&self, state: &dyn Any) -> Option<Rect> {
+        Widget::overlay_layer_rect(self, state.downcast_ref().expect(STATE))
     }
 
     fn on_pixels(&self, state: &dyn Any) -> bool {

@@ -95,14 +95,15 @@ impl<S: Scene> Application for Probe<S> {
     }
 }
 
-/// Options that draw on the CPU with the built-in font, in the neutral light theme, left to right.
-fn options() -> RuntimeOptions {
+/// Options that draw on the CPU with the built-in font, in the neutral light theme, left to right, with Reduce
+/// Transparency on or off.
+fn options(reduce_transparency: bool) -> RuntimeOptions {
     let mut fonts = FontIndex::new();
     fonts.add_font(Arc::new(BUILTIN_FONT.to_vec())).unwrap();
     let text = Arc::new(TextSystem::new(fonts, "Inter Variable"));
     let theme = ThemeTokens::neutral(ThemePreferences {
         appearance: Appearance::Light,
-        reduce_transparency: false,
+        reduce_transparency,
         reduce_motion: true,
     })
     .unwrap();
@@ -143,9 +144,14 @@ pub struct View<S: Scene> {
 
 impl<S: Scene> View<S> {
     pub fn open() -> View<S> {
+        View::open_with(Capabilities::default(), false)
+    }
+
+    /// [`View::open`] on a window system of `capabilities`, with Reduce Transparency on or off.
+    pub fn open_with(capabilities: Capabilities, reduce_transparency: bool) -> View<S> {
         let mut driver = TestDriver::<Probe<S>>::new(
-            Capabilities::default(),
-            options(),
+            capabilities,
+            options(reduce_transparency),
             ManualClock::new(Timestamp(0)),
         );
         driver.run_until_idle(turns()).unwrap();

@@ -1,5 +1,5 @@
 use crate::icon::symbol;
-use crate::lens::{paint_lens_faded, Lens, LensKind};
+use crate::lens::{paint_lens_faded, Lens, LensKind, LensLayer};
 use crate::look::{self, paint_focus_ring};
 use crate::motion::{Curve, Tween};
 use crate::{Slider, SliderStyle};
@@ -11,7 +11,7 @@ use cupertino_ui_core::layout::{
 use cupertino_ui_core::platform::{Keysym, MouseButton, PointerEvent};
 use cupertino_ui_core::{
     AccessibleStates, AccessibleValue, Action, ActionData, Change, ControlState, Environment,
-    Event, EventCx, MeasureCx, PaintCx, Propagation, Role, SemanticsCx, Widget,
+    Event, EventCx, MeasureCx, PaintCx, Propagation, Role, SemanticsCx, SurfaceLayerMark, Widget,
 };
 use cupertino_ui_render::{Effect, PaintOp};
 
@@ -60,6 +60,8 @@ pub struct SliderState {
     knob: Tween,
     /// How far the knob has swelled into its lens, 0 to 1.
     lift: Tween,
+    /// The lens in the compositor's glass, as the last paint showed it.
+    lens_layer: LensLayer,
 }
 
 /// The soft shade under a regular slider's white knob at rest.
@@ -481,8 +483,11 @@ impl<M: 'static> Widget<M> for Slider<M> {
                 cx.push(PaintOp::PopLayer);
             }
         }
-        if let Some(lens) = Lens::lifted(LensKind::Slider, thumb, lift) {
-            // held, the knob is a lens: the track and its fill show through it, shrunk about its centre
+        let lens = Lens::lifted(LensKind::Slider, thumb, lift);
+        // held, the knob is a lens: the compositor's glass over the track, or painted with the track and its fill
+        // showing through it, shrunk about its centre
+        let in_layer = state.lens_layer.show(cx, lens.as_ref());
+        if let Some(lens) = lens.filter(|_| !in_layer) {
             let fill = look::color(&theme, ColorRole::ControlFill, &filled_state);
             paint_lens_faded(cx, &lens, lift as f32, |cx, lens| {
                 let r = radius * lens.minify;
@@ -495,6 +500,14 @@ impl<M: 'static> Widget<M> for Slider<M> {
 
     fn semantics(&self, _: &SliderState, cx: &mut SemanticsCx<'_>) {
         self.semantics_of(cx);
+    }
+
+    fn overlay_layer(&self, state: &SliderState) -> Option<SurfaceLayerMark> {
+        state.lens_layer.mark()
+    }
+
+    fn overlay_layer_rect(&self, state: &SliderState) -> Option<Rect> {
+        state.lens_layer.rect()
     }
 }
 

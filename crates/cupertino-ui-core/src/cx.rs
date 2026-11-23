@@ -473,6 +473,8 @@ pub struct PaintCx<'a> {
     pub(crate) layer: bool,
     /// The node draws in that layer.
     pub(crate) in_layer: bool,
+    /// The window system shows surface layers ([`PaintCx::surface_layers`]).
+    pub(crate) surface_layers: bool,
     /// What nodes of the window told each other so far ([`PaintCx::page_scrolled`]).
     pub(crate) marks: crate::paint::WindowMarks,
     /// The appearance the node asked its subtree to draw in ([`PaintCx::pin_appearance`]).
@@ -563,6 +565,14 @@ impl PaintCx<'_> {
     /// the window's own content through it.
     pub fn in_raised_layer(&self) -> bool {
         self.in_layer
+    }
+
+    /// Whether the window system shows surface layers ([`Capabilities::surface_layers`](crate::platform::Capabilities)),
+    /// so a node's overlay layer ([`Widget::overlay_layer`](crate::Widget::overlay_layer)) is drawn as one, with the
+    /// glass its look asks for over what the window draws under it. Without them the overlay draws in place and the
+    /// node paints what the layer's glass would have shown, such as a held knob's painted lens.
+    pub fn surface_layers(&self) -> bool {
+        self.surface_layers
     }
 
     /// A scroll view tells the window whether its page is scrolled under the window's raised nodes. A node that does

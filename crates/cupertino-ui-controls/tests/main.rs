@@ -5,6 +5,8 @@
 mod support;
 
 mod dialog;
+#[path = "knob-lens.rs"]
+mod knob_lens;
 mod lists;
 mod menus;
 #[path = "press-controls.rs"]

@@ -58,7 +58,10 @@ from the application's model and reports changes as messages.
   translucent body through which the track shows shrunk about the lens's centre, a light band along its top and
   bottom, a bright rim and a fine dark outline. At rest both thumbs are plain; buttons, check boxes and fields never
   take a lens. Increase Contrast strengthens the rim and outline, Reduce Transparency makes the body nearly opaque,
-  and Reduce Motion leaves the lens as it is: it is a state, not a motion.
+  and Reduce Motion leaves the lens as it is: it is a state, not a motion. Where the window system shows surface
+  layers and Reduce Transparency is off, the lens is the compositor's glass instead of the painted body: the thumb's
+  overlay is a surface layer of its own at the lens's rect (`Widget::overlay_layer_rect`) whose glass, of the track's
+  style for now, magnifies the track under it, while the plain thumb fades under it as before.
 - **Dragging.** A switch's thumb follows a drag along its track once the pointer moves 3 pt; let go over the switch,
   it takes the side the thumb is nearer, and let go away from it the drag is cancelled. A segmented control dragged
   from one segment across the others keeps the chosen segment marked and shows the one under the pointer pressed;
@@ -272,7 +275,8 @@ from the application's model and reports changes as messages.
   lies between the window's raised layer and its content, so the content shows through it; its label then takes the
   colours of text on glass. Where the window system has no raised layer, with Reduce Transparency and where the
   desktop shows no glass it paints its body and rim. A held thumb's lens lies over the
-  track the window paints, so it stays painted. A light divider is 40 % black, as strong over
+  track the window paints, so it is glass in a surface layer of its own over the track (`GlassMaterial::Layer`),
+  painted where the window system shows no surface layers and with Reduce Transparency. A light divider is 40 % black, as strong over
   the glass as the disabled glyphs beside it. The field under a resting `ToolbarSearch` button is not drawn, so the button's
   glass shows what lies below the field. Moving a role to another material is its one arm in `GlassRole::material`.
   `GlassRole::floating` tells the floating controls (toolbar groups, glass buttons, a held thumb) from the content

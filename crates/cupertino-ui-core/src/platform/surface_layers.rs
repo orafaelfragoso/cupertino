@@ -84,11 +84,21 @@ impl LayerChange {
 /// system carries.
 pub const MAX_LAYER_SAMPLES: usize = cupertino_app_protocols::layers::MAX_SAMPLES;
 
+/// The strongest magnification of a surface layer's glass lens ([`SurfaceLayerLook::lens`]): the compositor's limit.
+pub const MAX_LAYER_LENS: f64 = cupertino_app_protocols::layers::LENS.1;
+
 /// How a surface layer looks besides its frame.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SurfaceLayerLook {
     /// The glass the compositor draws under the layer's frame, in its shape; `None` draws none.
     pub glass: Option<GlassStyle>,
+    /// How much the layer's glass magnifies what it shows, about the centre of its bounds: 1, the default, shows it at
+    /// its size, and the window system takes a value below 1 as 1 and one above [`MAX_LAYER_LENS`] as that. A held
+    /// knob's lens magnifies the track it slides along. Nothing without glass.
+    pub lens: f64,
+    /// How the blur of the layer's glass varies from its top edge to its bottom edge ([`BlurRamp`]); the default
+    /// blurs evenly. Nothing without glass.
+    pub blur_ramp: BlurRamp,
     /// The glass group the layer's glass joins, and the distance in points over which the group's shapes blend: the
     /// glass of the layers of one group is drawn as one shape. 0 joins none.
     pub group: (u32, f64),
@@ -100,6 +110,44 @@ pub struct SurfaceLayerLook {
     /// by the others when the layer is the group's first ([`LayerEdge`]); its default draws none. Only where the window system draws edges
     /// ([`Capabilities::surface_layer_edges`](crate::platform::Capabilities::surface_layer_edges)).
     pub edge: LayerEdge,
+}
+
+impl Default for SurfaceLayerLook {
+    /// No glass, a lens that shows what is behind at its size, an even blur, no group, no corners, no mask, no edge.
+    fn default() -> SurfaceLayerLook {
+        SurfaceLayerLook {
+            glass: None,
+            lens: 1.0,
+            blur_ramp: BlurRamp::EVEN,
+            group: (0, 0.0),
+            radius: 0.0,
+            masks: false,
+            edge: LayerEdge::NONE,
+        }
+    }
+}
+
+/// How the blur of a layer's glass varies down the layer: `top` times its style's blur along its top edge and `bottom`
+/// times it along its bottom edge, smoothly in between, each from 0 (sharp) to 1 (the style's blur), as the soft edge
+/// of a bar over content scrolled under it. The window system takes a weight outside 0 to 1 as the nearest of them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BlurRamp {
+    pub top: f64,
+    pub bottom: f64,
+}
+
+impl BlurRamp {
+    /// The style's blur all the way down.
+    pub const EVEN: BlurRamp = BlurRamp {
+        top: 1.0,
+        bottom: 1.0,
+    };
+}
+
+impl Default for BlurRamp {
+    fn default() -> BlurRamp {
+        BlurRamp::EVEN
+    }
 }
 
 /// A line along the outside of a layer's glass: `width` points wide whatever the layer's scale, of the straight colour

@@ -355,8 +355,9 @@ fn glass_interaction_fill(theme: &ThemeTokens, pressed: bool) -> Color {
 impl<M> Button<M> {
     /// The glass a glass button lies on and what it lays over it, and the look its label then takes. A default button
     /// in an active window, enabled, is the regular glass tinted with the accent at full strength, its label in the
-    /// default button's text colour; where the desktop shows no glass the accent is filled over the painted body. The
-    /// button grows its glass under a press on Kit's clock ([`GLASS_PRESS_SCALE`], none under Reduce Motion); its glass
+    /// default button's text colour; where the desktop shows no glass the accent is filled over the painted body, and
+    /// where it does not tint glass over the glass. The button grows its glass under a press on Kit's clock
+    /// ([`GLASS_PRESS_SCALE`], none under Reduce Motion nor where the desktop does not scale glass); its glass
     /// is not interactive, so the compositor does not grow it again. Over it the interaction fill
     /// ([`glass_interaction_fill`]): the hover level at once, the press level coming on and going with the press.
     fn paint_glass_body(
@@ -372,10 +373,13 @@ impl<M> Button<M> {
             .then(|| look::color(&theme, ColorRole::DefaultButtonFill, state))
             .flatten()
             .map(|c| c.with_alpha(1.0));
-        // on glass already the button draws none of its own, so the accent is filled there too
+        // on glass already the button draws none of its own, so the accent is filled there too, as it is over glass
+        // the window system does not tint
         let on_glass = cx.on_glass();
-        // the glass grows under a press on Kit's clock, not under Reduce Motion
-        let scale = if theme.motion.reduce {
+        let tinted = cx.glass_tint();
+        // the glass grows under a press on Kit's clock, not under Reduce Motion nor where the window system draws it at
+        // its shape
+        let scale = if theme.motion.reduce || !cx.glass_scale() {
             1.0
         } else {
             1.0 + (GLASS_PRESS_SCALE - 1.0) * button.grow.sample(cx)
@@ -385,10 +389,10 @@ impl<M> Button<M> {
             GlassRole::GlassButton,
             chrome,
             radius,
-            accent,
+            accent.filter(|_| tinted),
             scale,
         );
-        if !shown || on_glass {
+        if !shown || on_glass || !tinted {
             look::fill(cx, chrome, radius, accent);
         }
         // the label takes the colours of text on the glass, or on the accent

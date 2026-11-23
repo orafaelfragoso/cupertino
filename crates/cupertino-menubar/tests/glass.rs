@@ -1,7 +1,7 @@
 //! The glass a bar's popups name: a menu and the Wi-Fi join prompt lie on the menu variant over their whole window with
 //! their corners, at the menu's own size and without the variant's drop shadow, as the popup draws the menu's window
 //! shadow apart; the bar's highlight under the open menu's title is clear glass tinted with the highlight colour, and
-//! is painted under Reduce Transparency.
+//! is painted under Reduce Transparency and on a desktop that does not tint glass.
 
 use std::cell::RefCell;
 use std::num::NonZeroU32;
@@ -161,11 +161,13 @@ struct Region {
 }
 
 /// The windows of the bar's scene (`menu` or the prompt) in the `appearance` with or without Reduce Transparency, and
-/// the material regions each asked for the last time it asked, on a desktop that shows materials.
+/// the material regions each asked for the last time it asked, on a desktop that shows materials and, with `variants`,
+/// takes glass named by its variant and tinted.
 fn regions(
     menu: bool,
     appearance: Appearance,
     reduce_transparency: bool,
+    variants: bool,
 ) -> Vec<(WindowKey, Size, Vec<Region>)> {
     let text = text();
     NEXT.set(Some(scene(&text, menu)));
@@ -200,6 +202,9 @@ fn regions(
     };
     let capabilities = Capabilities {
         app_effects: true,
+        glass_variants: variants,
+        glass_tint: variants,
+        glass_scale: variants,
         ..Capabilities::default()
     };
     let mut driver = TestDriver::<Bar>::new(capabilities, options, ManualClock::new(Timestamp(0)));
@@ -244,7 +249,8 @@ fn regions(
         .collect()
 }
 
-/// The menu variant at the menu's own size, its shadow left out.
+/// The menu variant at the menu's own size, its shadow left out; an application's menu adapts to what lies behind it,
+/// a status panel's and the join prompt's do not.
 const MENU: (GlassVariant, GlassModifiers) = (
     GlassVariant::Menu,
     GlassModifiers {
@@ -254,8 +260,8 @@ const MENU: (GlassVariant, GlassModifiers) = (
 );
 
 /// Asserts that the popup of `size` lies on one region of the menu's glass over its whole window with corners of
-/// `radius`.
-fn lies_on_menu_glass(size: Size, regions: &[Region], radius: f64) {
+/// `radius`, adapting to what lies behind it or not.
+fn lies_on_menu_glass(size: Size, regions: &[Region], radius: f64, adaptive: bool) {
     assert_eq!(regions.len(), 1, "one region: {regions:?}");
     let region = &regions[0];
     assert_eq!(region.rect, Rect::new(0.0, 0.0, size.width, size.height));
@@ -265,7 +271,17 @@ fn lies_on_menu_glass(size: Size, regions: &[Region], radius: f64) {
         Some(GlassStyle::Menu),
         "the menu glass where the window system has no variants"
     );
-    assert_eq!(region.variant, Some(MENU));
+    let (variant, modifiers) = MENU;
+    assert_eq!(
+        region.variant,
+        Some((
+            variant,
+            GlassModifiers {
+                adaptive,
+                ..modifiers
+            }
+        ))
+    );
 }
 
 #[test]
@@ -276,7 +292,7 @@ fn a_menu_lies_on_the_menu_variant_without_its_shadow() {
         (Appearance::DarkHighContrast, false),
         (Appearance::Light, true),
     ] {
-        let windows = regions(true, appearance, reduce_transparency);
+        let windows = regions(true, appearance, reduce_transparency, true);
         assert_eq!(windows.len(), 2, "the bar and its menu: {windows:?}");
         let (_, _, bar) = &windows[0];
         if reduce_transparency {
@@ -285,16 +301,31 @@ fn a_menu_lies_on_the_menu_variant_without_its_shadow() {
             lies_on_highlight_glass(bar, appearance);
         }
         let (_, size, menu) = &windows[1];
-        lies_on_menu_glass(*size, menu, view::POPUP_RADIUS);
+        lies_on_menu_glass(*size, menu, view::POPUP_RADIUS, true);
+    }
+}
+
+#[test]
+fn a_desktop_that_does_not_tint_glass_has_the_bar_paint_its_highlight() {
+    for appearance in [Appearance::Light, Appearance::Dark] {
+        let windows = regions(true, appearance, false, false);
+        assert_eq!(windows.len(), 2, "the bar and its menu: {windows:?}");
+        let (_, _, bar) = &windows[0];
+        assert!(
+            bar.is_empty(),
+            "untinted clear glass would show no highlight, so the bar paints it: {bar:?}"
+        );
+        let (_, size, menu) = &windows[1];
+        lies_on_menu_glass(*size, menu, view::POPUP_RADIUS, true);
     }
 }
 
 #[test]
 fn the_join_prompt_lies_on_the_menu_variant_with_the_panels_corners() {
-    let windows = regions(false, Appearance::Dark, false);
+    let windows = regions(false, Appearance::Dark, false, true);
     assert_eq!(windows.len(), 2, "the bar and the prompt: {windows:?}");
     let (_, size, prompt) = &windows[1];
-    lies_on_menu_glass(*size, prompt, panel::RADIUS);
+    lies_on_menu_glass(*size, prompt, panel::RADIUS, false);
 }
 
 /// Asserts that the bar's one region is its highlight under the system menu's title: clear glass where the bar painted
@@ -331,7 +362,13 @@ fn lies_on_highlight_glass(bar: &[Region], appearance: Appearance) {
     assert_eq!(region.style, Some(GlassStyle::Clear));
     assert_eq!(
         region.variant,
-        Some((GlassVariant::Clear, GlassModifiers::DEFAULT))
+        Some((
+            GlassVariant::Clear,
+            GlassModifiers {
+                adaptive: true,
+                ..GlassModifiers::DEFAULT
+            }
+        ))
     );
     assert_eq!(region.tint, Some(palette.bar_highlight));
 }

@@ -13,6 +13,7 @@ use crate::{
     Button, ButtonRole, ButtonStyle, Dialog, DialogAction, DialogKind, Modal, Stack, Text, TextRole,
 };
 use cupertino_geometry::{Insets, Point, Rect, Size};
+use cupertino_theme::glass::AlertShadow;
 use cupertino_theme::ui::{Color, ColorRole, StateVariant};
 use cupertino_ui_core::layout::{
     Align, Axis, Constraints, ContainerKind, Flex, Justify, LayoutSpec, Measured, SizeSpec, Track,
@@ -80,10 +81,11 @@ const POP_SETTLE_EXPONENT: f64 = 1.35;
 const POP_PANEL_FADE: f64 = 0.1;
 const POP_CONTENT_DELAY: f64 = 0.06;
 const POP_CONTENT_FADE: f64 = 0.08;
-/// The alert's shadow: lower and fainter above than below.
-const ALERT_SHADOW_OFFSET: f64 = 9.0;
-const ALERT_SHADOW_BLUR: f64 = 34.0;
-const ALERT_SHADOW_ALPHA: f32 = 0.27;
+/// The alert's own shadow while it pops in and where it shows no glass, while its window is active and while it is
+/// not: the window shadow the compositor casts under the settled alert's glass (offset, blur and the shadow's
+/// darkness in the light and the dark appearance), so the shadow holds as the glass takes over.
+const ALERT_SHADOW_ACTIVE: AlertShadow = cupertino_theme::glass::ALERT_SHADOW_ACTIVE;
+const ALERT_SHADOW_INACTIVE: AlertShadow = cupertino_theme::glass::ALERT_SHADOW_INACTIVE;
 /// The alert: its width, corner radius and padding; the icon and the text sit further in than the buttons.
 const ALERT_WIDTH: f64 = 260.0;
 const ALERT_RADIUS: f64 = 26.0;
@@ -758,15 +760,31 @@ fn pop_scale(t: f64) -> f64 {
 /// the panel floats in the raised layer, so the glass lies over the window's content. The glass window variant casts
 /// the window shadow itself, deep while the window is active and shallow while it is not, and takes its inactive
 /// recipe then; a `sheet` is document-modal glass, whose shadow is the sheet's, fainter than an alert's. Returns
-/// whether the window shows it.
+/// whether the window shows it. A window system without variants would draw glass casting no window shadow, so the
+/// panel is painted there.
 fn window_glass(cx: &mut PaintCx<'_>, radius: f64, sheet: bool) -> bool {
     cx.in_raised_layer()
+        && cx.glass_variants()
         && cx.glass(
             Glass::dense()
                 .variant(GlassVariant::GlassWindow)
                 .document_modal(sheet)
                 .radius(radius),
         )
+}
+
+/// The alert's own shadow in a window that is `active` or not, in the dark appearance or the light one.
+fn alert_shadow(active: bool, dark: bool) -> Effect {
+    let s = if active {
+        ALERT_SHADOW_ACTIVE
+    } else {
+        ALERT_SHADOW_INACTIVE
+    };
+    Effect::DropShadow {
+        offset: Point::new(0.0, f64::from(s.offset)),
+        blur: f64::from(s.blur),
+        color: Color::new(0.0, 0.0, 0.0, if dark { s.dark } else { s.light }),
+    }
 }
 
 /// A sheet's solid body where it shows no glass: the window colour under its soft shadow.
@@ -938,11 +956,7 @@ impl<M: Clone + 'static> Widget<M> for Sheet<M> {
         // that keeps the content from showing through its text and a sheet the window's solid colour
         let mut glass = false;
         if self.kind == DialogKind::Alert {
-            let shadow = Effect::DropShadow {
-                offset: Point::new(0.0, ALERT_SHADOW_OFFSET),
-                blur: ALERT_SHADOW_BLUR,
-                color: Color::new(0.0, 0.0, 0.0, ALERT_SHADOW_ALPHA),
-            };
+            let shadow = alert_shadow(cx.window_active(), theme.preferences.appearance.is_dark());
             let opaque = theme.preferences.reduce_transparency
                 || theme.preferences.appearance.is_high_contrast();
             match pop_time(born, cx) {

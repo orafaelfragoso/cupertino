@@ -142,6 +142,27 @@ fn a_glass_regions_variant_and_tint_go_to_a_compositor_that_takes_them_and_its_s
     );
 }
 
+#[test]
+fn a_compositor_takes_glass_variants_tints_and_scales_from_version_23() {
+    for (version, takes) in [(23, true), (22, false)] {
+        let (_server, conn) = Harness::start(Offer {
+            app_effects: Some(version),
+            ..Offer::NONE
+        });
+        let system = WaylandWindowSystem::new(conn, Profile::cupertino());
+        let caps = system.capabilities();
+        assert!(caps.app_effects, "version {version}");
+        assert_eq!(
+            (caps.glass_variants, caps.glass_tint, caps.glass_scale),
+            (takes, takes, takes),
+            "version {version}"
+        );
+    }
+    let (_server, conn) = Harness::start(Offer::NONE);
+    let caps = WaylandWindowSystem::new(conn, Profile::cupertino()).capabilities();
+    assert!(!caps.glass_variants && !caps.glass_tint && !caps.glass_scale);
+}
+
 /// Submits a frame whose layer has `look`, waits until it is shown and returns the glass requests sent since.
 fn show(
     server: &Harness,

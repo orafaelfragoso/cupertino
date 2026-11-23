@@ -451,6 +451,7 @@ fn body<M: Clone + 'static>(size: Size, alpha: f64) -> Element<M> {
             let theme = cx.env().theme.surface(Surface::Switcher);
             let glass = Glass::switcher()
                 .variant(GlassVariant::AppSwitcher)
+                .adaptive(false)
                 .size_class(GlassSize::Medium)
                 .radius(SwitcherLayout::RADIUS)
                 .alpha(alpha);

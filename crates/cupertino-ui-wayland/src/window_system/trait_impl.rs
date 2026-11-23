@@ -53,6 +53,11 @@ impl WindowSystem for WaylandWindowSystem {
 
     fn capabilities(&self) -> Capabilities {
         let has = |c| self.conn.capabilities().contains(c);
+        // a backdrop takes what the effects it is made from take
+        let variants = self
+            .effects
+            .as_ref()
+            .is_some_and(|(e, _)| e.takes_glass_variants());
         Capabilities {
             fractional_scale: has(Capability::FractionalScale),
             presentation_time: has(Capability::Presentation),
@@ -73,6 +78,9 @@ impl WindowSystem for WaylandWindowSystem {
                     .presentations
                     .layers()
                     .is_some_and(cupertino_wayland_client::app::Layers::draws_glass_edges),
+            glass_variants: variants,
+            glass_tint: variants,
+            glass_scale: variants,
         }
     }
 

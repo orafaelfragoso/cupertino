@@ -398,6 +398,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         let effects = capabilities.app_effects;
         let layered = capabilities.raised_layer;
         let surface_layered = capabilities.surface_layers;
+        let glass = crate::paint::GlassSupport::of(&capabilities);
         let paint = |w: &mut WindowState<A::Message>,
                      tree: &Tree<A::Message>,
                      pinned: &[Option<Arc<ThemeTokens>>; 2]| {
@@ -424,6 +425,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                     obscuring: &w.obscuring,
                     layer: layered,
                     surface_layers: surface_layered,
+                    glass,
                     pinned,
                     activation,
                 },

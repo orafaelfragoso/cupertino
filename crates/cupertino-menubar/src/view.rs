@@ -427,6 +427,8 @@ fn join_prompt<M: Clone + 'static>(
         background: WindowBackground::None,
         content: Element::new(body::Body {
             radius: panel::RADIUS,
+            // a status panel's glass keeps the appearance's foreground
+            adaptive: false,
             children: vec![content],
         }),
         popup: Some(Popup {
@@ -980,8 +982,9 @@ fn system_mark(px: u32, c: Rgba) -> IconImage {
 /// The root of a bar's window or of one of its menus: it takes the pointer and the keys for the controller before any
 /// node below it, and lays its children out where the controller put them.
 struct Root<M> {
-    /// A menu's body under its rows, with corners of this radius ([`body::paint`]); a bar paints none.
-    body: Option<f64>,
+    /// A menu's body under its rows, with corners of this radius and its glass adaptive or not ([`body::paint`]); a
+    /// bar paints none.
+    body: Option<(f64, bool)>,
     bar: BarId,
     /// The bar's own root: it holds the window's focus, so it hears the window get the keyboard and lose it.
     keyboard: bool,
@@ -1086,8 +1089,8 @@ impl<M: Clone + 'static> Widget<M> for Root<M> {
     }
 
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
-        if let Some(radius) = self.body {
-            body::paint(cx, radius);
+        if let Some((radius, adaptive)) = self.body {
+            body::paint(cx, radius, adaptive);
         }
     }
 
@@ -1155,7 +1158,7 @@ fn highlight_pill(m: &BarMetrics, slot: &Slot) -> (Rect, f64) {
 }
 
 /// A slot's highlight, under the slot: clear glass tinted with the bar's highlight colour, or that colour painted where
-/// the window shows no glass and under Reduce Transparency.
+/// the window shows no glass or the window system does not tint it, and under Reduce Transparency.
 struct HighlightPill {
     rect: Rect,
     radius: f64,
@@ -1198,7 +1201,9 @@ impl<M: Clone + 'static> Widget<M> for HighlightPill {
             .tone
             .palette(dark(env), high_contrast(env))
             .bar_highlight;
+        // untinted clear glass would show no highlight, so without a tint the colour is painted
         let glass = !env.theme.preferences.reduce_transparency
+            && cx.glass_tint()
             && cx.glass(
                 Glass::clear()
                     .variant(GlassVariant::Clear)

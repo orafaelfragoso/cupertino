@@ -26,6 +26,7 @@
 
 use cupertino_geometry::{Insets, Rect};
 use cupertino_theme::ui::{Color, Surface};
+use cupertino_ui_core::platform::GlassStyle;
 use cupertino_ui_core::{Glass, PaintCx};
 use cupertino_ui_render::{Paint, PaintOp, Shape};
 
@@ -53,6 +54,10 @@ pub enum GlassMaterial {
     Glass,
     /// A translucent body and rim the toolkit paints over the window's own content.
     Painted,
+    /// The compositor's glass of this style in a surface layer of the node's own over the window's content, which it
+    /// shows through the glass ([`PaintCx::surface_layers`]); where the window system shows no surface layers, and with
+    /// Reduce Transparency, the toolkit paints the role as [`GlassMaterial::Painted`].
+    Layer(GlassStyle),
 }
 
 impl GlassRole {
@@ -60,12 +65,13 @@ impl GlassRole {
     /// compositor draws below it; the sidebar panel lies at the window's edge over what is behind the window, which
     /// the compositor's sidebar glass shows. A translucent button is glass of its own where that glass can show
     /// ([`paint_glass`]) and paints its body elsewhere. A thumb's lens lies over the track it slides along, which the
-    /// window paints and which would hide the compositor's glass, so the toolkit paints it.
+    /// window paints and which would hide the compositor's glass under the window, so it is glass in a surface layer
+    /// of its own over the track, painted where the window system shows no such layer.
     pub const fn material(self) -> GlassMaterial {
         match self {
             GlassRole::ToolbarGroup | GlassRole::GlassButton => GlassMaterial::Glass,
             GlassRole::SidebarPanel => GlassMaterial::Compositor(Surface::Sidebar),
-            GlassRole::ThumbLens => GlassMaterial::Painted,
+            GlassRole::ThumbLens => GlassMaterial::Layer(crate::lens::KNOB_GLASS),
         }
     }
 
@@ -160,7 +166,7 @@ pub fn paint_glass(cx: &mut PaintCx<'_>, role: GlassRole, rect: Rect, radius: f6
             }
             false
         }
-        GlassMaterial::Painted => {
+        GlassMaterial::Painted | GlassMaterial::Layer(_) => {
             match role {
                 GlassRole::GlassButton => paint_button_body(cx, rect, radius),
                 _ => paint_body(cx, rect, radius),

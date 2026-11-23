@@ -399,7 +399,9 @@ the frame instead (`Submission::raised`, `RaisedChange`: kept, hidden, or drawn 
 
 With `Capabilities::surface_layers` a window may show marked parts of it in surfaces of their own that the compositor
 places and animates (`WindowSystem::present_surface_layers`): each `SurfaceLayer` has a key, its rect in the window,
-its look (`SurfaceLayerLook`: glass style, glass group and spacing, corner radius, masks to its shape, and a
+its look (`SurfaceLayerLook`: glass style, the glass's lens magnification about its centre (1 to `MAX_LAYER_LENS`) and
+its `BlurRamp` (the blur's weight from 0 to 1 at its top and its bottom edge), glass group and spacing, corner radius,
+masks to its shape, and a
 `LayerEdge`, a line the compositor draws along the outside of the glass's outline, in a group each shape's outline cut by the others, at
 a width in points that stays as the layer scales, where `Capabilities::surface_layer_edges` says it can) and its frame at
 its rect's size in whole points (`surface_layer_size`: each side rounded, at least one point), or `None` when unchanged; the list is shown with the window's next `present`, back to front over its

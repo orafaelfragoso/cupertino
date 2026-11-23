@@ -119,6 +119,7 @@ pub fn glass_look(frame: &Frame) -> SurfaceLayerLook {
         radius: enclosure_radius(frame),
         masks: false,
         edge: LayerEdge::NONE,
+        ..SurfaceLayerLook::default()
     }
 }
 
@@ -131,6 +132,7 @@ pub fn button_glass_look(side: f64) -> SurfaceLayerLook {
         radius: side / 2.0,
         masks: false,
         edge: LayerEdge::NONE,
+        ..SurfaceLayerLook::default()
     }
 }
 

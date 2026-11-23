@@ -331,6 +331,17 @@ impl Layer {
         Ok(())
     }
 
+    /// Blur the layer's glass at `top` times its style's blur along its top edge and `bottom` times it along its bottom
+    /// edge, smoothly in between (1 and 1 blur evenly), as the soft edge of a bar over content scrolled under it. Every
+    /// version takes it. A weight outside 0 to 1 is [`Error::InvalidGlass`] and sends nothing.
+    pub fn set_blur_ramp(&self, top: f64, bottom: f64) -> Result<(), Error> {
+        if ![top, bottom].iter().all(|w| (0.0..=1.0).contains(w)) {
+            return Err(Error::InvalidGlass);
+        }
+        self.0.set_blur_ramp(top, bottom);
+        Ok(())
+    }
+
     /// Clip the content to the layer's rounded bounds.
     pub fn set_masks_to_bounds(&self, masks: bool) {
         self.0.set_masks_to_bounds(u32::from(masks));

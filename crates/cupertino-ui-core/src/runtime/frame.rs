@@ -397,11 +397,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         let capabilities = self.system.capabilities();
         let effects = capabilities.app_effects;
         let layered = capabilities.raised_layer;
-        let marks = if capabilities.surface_layers {
-            surface_layers::marked(&self.tree, root, &w.geometry, w.size)
-        } else {
-            Vec::new()
-        };
+        let surface_layered = capabilities.surface_layers;
         let paint = |w: &mut WindowState<A::Message>,
                      tree: &Tree<A::Message>,
                      pinned: &[Option<Arc<ThemeTokens>>; 2]| {
@@ -427,6 +423,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                     raised: &w.raised,
                     obscuring: &w.obscuring,
                     layer: layered,
+                    surface_layers: surface_layered,
                     pinned,
                     activation,
                 },
@@ -482,7 +479,13 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             let kept = w.materials.len();
             w.painter.tones.regions.truncate(kept);
         }
-        // the marked subtrees leave the window's paint for their surface layers
+        // the marked subtrees leave the window's paint for their surface layers, marked once the nodes painted so an
+        // overlay's layer lies where its paint put it this frame
+        let marks = if surface_layered {
+            surface_layers::marked(&self.tree, root, &w.geometry, w.size)
+        } else {
+            Vec::new()
+        };
         let surface = w
             .surface_layers
             .prepare(surface_layers::split(&mut painting, &marks));

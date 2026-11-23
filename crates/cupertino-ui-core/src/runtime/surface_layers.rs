@@ -38,7 +38,8 @@ pub(crate) type Marked = (PaintNodeId, Rect, SurfaceLayerMark);
 
 /// The layers under `root` in paint order, in a window `window` large: the marked nodes, a mark inside a marked
 /// subtree being part of the outer layer, and the overlays that are layers of their own
-/// ([`Widget::overlay_layer`](crate::Widget::overlay_layer)), each after the layer it lies in and at its rect (the
+/// ([`Widget::overlay_layer`](crate::Widget::overlay_layer)), each after the layer it lies in and at its own rect
+/// ([`Widget::overlay_layer_rect`](crate::Widget::overlay_layer_rect)) or that layer's (the
 /// window's where it lies in none). A key marked twice keeps its first.
 pub(crate) fn marked<M: 'static>(
     tree: &Tree<M>,
@@ -65,8 +66,12 @@ pub(crate) fn marked<M: 'static>(
             }
         }
         if let Some(mark) = node.widget.overlay_layer(&*node.state) {
-            if geometry.contains_key(&id) && !taken(&out, mark.key) {
-                let rect = inner.unwrap_or(Rect::from_origin_size(Point::ZERO, window));
+            if let Some(placement) = geometry.get(&id).filter(|_| !taken(&out, mark.key)) {
+                let origin = placement.rect.origin;
+                let rect = match node.widget.overlay_layer_rect(&*node.state) {
+                    Some(own) => own.translate(origin.x, origin.y),
+                    None => inner.unwrap_or(Rect::from_origin_size(Point::ZERO, window)),
+                };
                 out.push((crate::paint::overlay_id(id), rect, mark));
             }
         }

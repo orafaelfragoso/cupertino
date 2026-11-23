@@ -227,6 +227,7 @@ struct Ground {
     window_active: bool,
     focus_visible: bool,
     layer: bool,
+    surface_layers: bool,
     materials: bool,
 }
 
@@ -337,6 +338,8 @@ pub(crate) struct PaintInput<'a> {
     pub(crate) obscuring: &'a [(NodeId, Rect)],
     /// The window system shows a raised layer, which the raised nodes draw in.
     pub(crate) layer: bool,
+    /// The window system shows surface layers ([`PaintCx::surface_layers`]).
+    pub(crate) surface_layers: bool,
     /// The window's theme in the light and the dark appearance, for subtrees pinned to one
     /// ([`PaintCx::pin_appearance`]); `None` keeps such a subtree in the window's.
     pub(crate) pinned: &'a [Option<Arc<ThemeTokens>>; 2],
@@ -613,6 +616,7 @@ impl Painter {
                 window_active: input.window_active,
                 focus_visible: input.focus_visible,
                 layer: input.layer,
+                surface_layers: input.surface_layers,
                 materials: input.materials,
             };
             // a kept subtree that changed in nothing and lies on the same ground is laid in as it was, unwalked
@@ -796,6 +800,7 @@ impl Painter {
                         reads_obscured: &mut reads_obscured,
                         layer: input.layer,
                         in_layer: raised && input.layer,
+                        surface_layers: input.surface_layers,
                         marks,
                         reads_marks: &mut reads_marks,
                         set_page_scrolled: &mut set_scrolled,

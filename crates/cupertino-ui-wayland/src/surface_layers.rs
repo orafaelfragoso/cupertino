@@ -2,7 +2,8 @@
 //! window's surface, its frame drawn into buffers of its own with the window's, its rect and look sent as the layer's
 //! values, and the application's changes ([`WindowRequest::Layer`]) sent as the layer's requests, so they apply with
 //! the window's next commit. Layers need version 4 of the global (content blur): below it a window has none and the
-//! runtime paints marked subtrees in place. From version 5 a layer's look carries the edge along its glass.
+//! runtime paints marked subtrees in place. A layer's look carries its glass's lens and blur ramp at every version, and
+//! from version 5 the edge along its glass.
 //!
 //! [`Submission::surface_layers`]: cupertino_ui_core::platform::Submission::surface_layers
 //! [`WindowRequest::Layer`]: cupertino_ui_core::platform::WindowRequest
@@ -11,7 +12,8 @@ use std::collections::{HashMap, HashSet};
 
 use cupertino_geometry::Rect;
 use cupertino_ui_core::platform::{
-    surface_layer_size, LayerChange, LayerProperty, PlatformError, SurfaceLayerLook, WindowId,
+    surface_layer_size, BlurRamp, LayerChange, LayerProperty, PlatformError, SurfaceLayerLook,
+    WindowId, MAX_LAYER_LENS,
 };
 use cupertino_wayland_client::app::{AppEvent, Layer, LayerId, LayerProperty as Wire, Layers};
 use cupertino_wayland_client::{Connection, ExternalRole, SurfaceId};
@@ -70,6 +72,22 @@ fn place_to_send(
         }
     }
     send
+}
+
+/// A look's lens as the protocol takes it: within its limits, 1 for one that is not a number.
+fn on_wire_lens(lens: f64) -> f64 {
+    if lens.is_nan() {
+        return 1.0;
+    }
+    lens.clamp(1.0, MAX_LAYER_LENS)
+}
+
+/// A blur ramp's weight as the protocol takes it: from 0 to 1, 1 for one that is not a number.
+fn on_wire_weight(weight: f64) -> f64 {
+    if weight.is_nan() {
+        return 1.0;
+    }
+    weight.clamp(0.0, 1.0)
 }
 
 fn protocol_error(e: impl std::fmt::Display) -> PlatformError {
@@ -208,9 +226,18 @@ impl SurfaceLayers {
                         .set(Wire::CornerRadius, look.radius.max(0.0))
                         .map_err(protocol_error)?;
                 }
-                if look.glass != s.look.glass {
+                if look.glass != s.look.glass || look.lens != s.look.lens {
                     s.layer
-                        .set_glass(look.glass.map(crate::window_system::protocol_style), 1.0)
+                        .set_glass(
+                            look.glass.map(crate::window_system::protocol_style),
+                            on_wire_lens(look.lens),
+                        )
+                        .map_err(protocol_error)?;
+                }
+                if look.blur_ramp != s.look.blur_ramp {
+                    let BlurRamp { top, bottom } = look.blur_ramp;
+                    s.layer
+                        .set_blur_ramp(on_wire_weight(top), on_wire_weight(bottom))
                         .map_err(protocol_error)?;
                 }
                 if look.group != s.look.group {

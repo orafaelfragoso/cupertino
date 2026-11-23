@@ -223,6 +223,7 @@ pub(super) fn drag_image<M: 'static>(
             raised: &[],
             obscuring: &[],
             layer: false,
+            surface_layers: false,
             pinned: &[None, None],
             activation: 1.0,
         },

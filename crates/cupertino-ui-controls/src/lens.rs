@@ -22,7 +22,7 @@ use std::cell::Cell;
 use crate::glass::{GlassMaterial, GlassRole};
 use cupertino_geometry::{Insets, Point, Rect};
 use cupertino_theme::ui::{Color, ThemeTokens};
-use cupertino_ui_core::platform::{GlassStyle, SurfaceLayerLook};
+use cupertino_ui_core::platform::{GlassModifiers, GlassStyle, GlassVariant, SurfaceLayerLook};
 use cupertino_ui_core::{PaintCx, SurfaceLayerMark};
 use cupertino_ui_render::{Effect, GradientStop, Paint, PaintOp, Shape};
 
@@ -73,6 +73,8 @@ pub(crate) struct Lens {
     pub radius: f64,
     /// What lies under the lens is drawn at this scale about its centre.
     pub minify: f64,
+    /// The thumb it takes the place of, which names its glass ([`knob_variant`]).
+    pub kind: LensKind,
 }
 
 impl Lens {
@@ -99,6 +101,7 @@ impl Lens {
             rect,
             radius,
             minify,
+            kind,
         })
     }
 
@@ -274,10 +277,20 @@ pub(crate) fn paint_lens(
     });
 }
 
-/// The compositor's glass a held knob's lens is drawn in ([`GlassRole::ThumbLens`]): of its styles the closest to the
-/// lens, a level's track (no blur, the backdrop read at the output's scale, a slight lift of black, a bending edge
-/// and a ring shadow inside its outline), until the lens has a recipe of its own; switching it is this line.
+/// The legacy style of the compositor's glass a held knob's lens is drawn in ([`GlassRole::ThumbLens`]), which a window
+/// system without variants draws: of its styles the closest to the lens, a level's track (no blur, the backdrop read
+/// at the output's scale, a slight lift of black, a bending edge and a ring shadow inside its outline). Where variants
+/// are drawn the lens is named by its own ([`knob_variant`]).
 pub(crate) const KNOB_GLASS: GlassStyle = GlassStyle::Track;
+
+/// The system variant a held thumb's lens is drawn as: a switch's thumb the control lens (no blur, its own face and
+/// ring), a slider's knob the slider lens, which bends harder with a deeper ring.
+pub(crate) fn knob_variant(kind: LensKind) -> GlassVariant {
+    match kind {
+        LensKind::Switch => GlassVariant::Control,
+        LensKind::Slider => GlassVariant::Slider,
+    }
+}
 /// How much the compositor's lens magnifies the track under it, about its centre: the painted lens's view of the
 /// track turned the other way, a little larger than it is rather than smaller, as the protocol's lens only magnifies.
 pub(crate) const KNOB_MAGNIFICATION: f64 = 1.1;
@@ -317,6 +330,7 @@ impl LensLayer {
             key,
             look: SurfaceLayerLook {
                 glass: Some(style),
+                variant: Some((knob_variant(lens.kind), GlassModifiers::DEFAULT)),
                 lens: KNOB_MAGNIFICATION,
                 radius: lens.radius,
                 ..SurfaceLayerLook::default()

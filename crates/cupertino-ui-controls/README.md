@@ -60,8 +60,9 @@ from the application's model and reports changes as messages.
   take a lens. Increase Contrast strengthens the rim and outline, Reduce Transparency makes the body nearly opaque,
   and Reduce Motion leaves the lens as it is: it is a state, not a motion. Where the window system shows surface
   layers and Reduce Transparency is off, the lens is the compositor's glass instead of the painted body: the thumb's
-  overlay is a surface layer of its own at the lens's rect (`Widget::overlay_layer_rect`) whose glass, of the track's
-  style for now, magnifies the track under it, while the plain thumb fades under it as before.
+  overlay is a surface layer of its own at the lens's rect (`Widget::overlay_layer_rect`) whose glass, named by the
+  control lens variant for a switch and the slider lens variant for a slider (`SurfaceLayerLook::variant`; the track's
+  style where variants are not drawn), magnifies the track under it, while the plain thumb fades under it as before.
 - **Dragging.** A switch's thumb follows a drag along its track once the pointer moves 3 pt; let go over the switch,
   it takes the side the thumb is nearer, and let go away from it the drag is cancelled. A segmented control dragged
   from one segment across the others keeps the chosen segment marked and shows the one under the pointer pressed;

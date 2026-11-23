@@ -1,5 +1,6 @@
 //! A held switch's thumb or slider's knob becomes a lens: where the window system shows surface layers it is the
-//! compositor's glass in a layer of its own over the knob, magnifying the track, and goes when the knob is let go;
+//! compositor's glass in a layer of its own over the knob, magnifying the track, named by the control lens variant for
+//! a switch and the slider lens variant for a slider, and goes when the knob is let go;
 //! without surface layers, and with Reduce Transparency, the control paints it and shows no layer.
 
 use crate::support;
@@ -7,7 +8,9 @@ use crate::support;
 use cupertino_geometry::{Insets, Rect};
 use cupertino_ui_controls::{Slider, SliderStyle, Stack, Toggle};
 use cupertino_ui_core::layout::{Align, Axis};
-use cupertino_ui_core::platform::{Capabilities, GlassStyle, Mods, MouseButton, MAX_LAYER_LENS};
+use cupertino_ui_core::platform::{
+    Capabilities, GlassStyle, GlassVariant, Mods, MouseButton, MAX_LAYER_LENS,
+};
 use cupertino_ui_core::{Element, Role};
 use cupertino_ui_test::PresentedSurfaceLayer;
 use support::{Scene, View};
@@ -95,11 +98,12 @@ fn held(view: &mut View<Knobs>, role: Role, name: &str) -> Vec<PresentedSurfaceL
 
 /// The glass lens a held control shows over `bounds`, its node's: one layer of the compositor's glass, magnifying, in a
 /// shape that holds the centre of the control.
-fn assert_lens(layers: &[PresentedSurfaceLayer], bounds: Rect, name: &str) {
+fn assert_lens(layers: &[PresentedSurfaceLayer], bounds: Rect, name: &str, variant: GlassVariant) {
     let [layer] = layers else {
         panic!("{name}: one lens layer, not {layers:?}")
     };
     assert_eq!(layer.look.glass, Some(GlassStyle::Track), "{name}");
+    assert_eq!(layer.look.variant.map(|(v, _)| v), Some(variant), "{name}");
     assert!(
         layer.look.lens > 1.0 && layer.look.lens <= MAX_LAYER_LENS,
         "{name}: the lens magnifies the track, {}",
@@ -122,10 +126,13 @@ fn assert_lens(layers: &[PresentedSurfaceLayer], bounds: Rect, name: &str) {
 fn a_held_knob_is_the_compositors_glass_lens_in_a_layer_that_goes_when_let_go() {
     let mut view = View::<Knobs>::open_with(layered(), false);
     assert!(shown(&mut view).is_empty(), "no lens at rest");
-    for (role, name) in [(Role::Slider, "Volume"), (Role::Switch, "Wi-Fi")] {
+    for (role, name, variant) in [
+        (Role::Slider, "Volume", GlassVariant::Slider),
+        (Role::Switch, "Wi-Fi", GlassVariant::Control),
+    ] {
         let bounds = view.bounds_of(role, name);
         let layers = held(&mut view, role, name);
-        assert_lens(&layers, bounds, name);
+        assert_lens(&layers, bounds, name, variant);
         view.release(bounds.center(), MouseButton::Left);
         view.wait(0.5);
         assert!(

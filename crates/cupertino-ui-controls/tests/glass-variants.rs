@@ -1,17 +1,20 @@
 //! Each control's glass is named by the system variant it stands for, so the compositor draws that variant's recipe
 //! (and its inactive branch while the window is not active): the sidebar panel's abutted sidebar glass, the toolbar
-//! controls' toolbar item glass with the chosen segment's pill as tab glass in their container.
+//! controls' toolbar item glass with the chosen segment's pill as tab glass in their container, an anchored popover's
+//! cartouche popover glass at the medium size.
 
 use crate::support;
 
-use cupertino_geometry::{Insets, Rect};
+use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_ui_controls::{
-    SidebarWindow, SplitLayout, Stack, ToolbarButton, ToolbarGlyph, ToolbarGroup, ToolbarItem,
-    TOOLBAR_CHOICE_INSET,
+    Button, ButtonRole, ButtonStyle, Popover, SidebarWindow, SplitLayout, Stack, ToolbarButton,
+    ToolbarGlyph, ToolbarGroup, ToolbarItem, TOOLBAR_CHOICE_INSET,
 };
-use cupertino_ui_core::layout::{Align, Axis};
-use cupertino_ui_core::platform::{Capabilities, GlassRegion, GlassVariant, WindowId};
-use cupertino_ui_core::{Element, Role};
+use cupertino_ui_core::layout::{Align, Axis, ScrollState};
+use cupertino_ui_core::platform::{
+    Capabilities, GlassRegion, GlassSize, GlassVariant, WindowId, WindowStates,
+};
+use cupertino_ui_core::{Element, Key, Role, Window, WindowKey};
 use support::{Scene, View};
 
 /// A window system with the desktop's effects and a raised layer.
@@ -40,6 +43,19 @@ fn glass<S: Scene>(view: &mut View<S>, window: WindowId) -> Vec<(Rect, GlassRegi
         .into_iter()
         .filter_map(|m| m.glass.map(|g| (m.rect, g)))
         .collect()
+}
+
+/// `window`, a popup, configured by its window system as a compositor places one, and drawn.
+fn configured<S: Scene>(view: &mut View<S>, window: WindowId) {
+    let active = WindowStates {
+        activated: true,
+        ..WindowStates::default()
+    };
+    view.driver
+        .window_system_mut()
+        .configure(window, None, active)
+        .unwrap();
+    view.settle();
 }
 
 /// The variant a glass region is named by.
@@ -180,5 +196,71 @@ fn toolbar_controls_are_toolbar_item_glass_and_the_chosen_segment_is_tab_glass_i
             (a - b).abs() < 0.5,
             "the pill {pill:?} lies inside the chosen segment, at {inset:?}"
         );
+    }
+}
+
+struct Anchored;
+
+impl Scene for Anchored {
+    type State = ();
+    type Msg = ();
+
+    fn state() {}
+
+    fn update(_: &mut (), _: ()) {}
+
+    fn view(_: &()) -> Element<()> {
+        Element::new(Stack {
+            axis: Axis::Vertical,
+            padding: Insets::uniform(20.0),
+            spacing: 0.0,
+            align: Align::Start,
+            children: vec![Element::new(Button {
+                label: "Info".into(),
+                role: ButtonRole::Normal,
+                style: ButtonStyle::Bordered,
+                enabled: true,
+                busy: false,
+                on_press: None,
+            })
+            .key("anchor")],
+        })
+    }
+
+    fn popups(_: &()) -> Vec<Window<()>> {
+        vec![Popover {
+            parent: WindowKey(Key::from("probe")),
+            anchor: Key::from("anchor"),
+            label: "Info".into(),
+            content: blank(),
+            scroll: ScrollState {
+                offset: Point::ZERO,
+                content: Size::ZERO,
+                viewport: Size::ZERO,
+            },
+            on_scroll: Box::new(|_| ()),
+            on_close: (),
+        }
+        .window(WindowKey(Key::from("popover")))]
+    }
+}
+
+#[test]
+fn an_anchored_popover_and_its_pointer_are_one_cartouche_popover_glass_at_the_medium_size() {
+    let mut view = View::<Anchored>::open_with(effects(), false);
+    let popup = view.popup().expect("the popover's window");
+    configured(&mut view, popup);
+    let shown = glass(&mut view, popup);
+    // the panel, and the pointer as strips of its outline
+    assert!(shown.len() >= 2, "the panel and its pointer: {shown:?}");
+    let container = shown[0].1.container;
+    assert!(container != 0, "{shown:?}");
+    for (_, g) in &shown {
+        assert_eq!(
+            g.variant.map(|(v, m)| (v, m.size)),
+            Some((GlassVariant::CartouchePopover, GlassSize::Medium)),
+            "{shown:?}"
+        );
+        assert_eq!(g.container, container, "one container: {shown:?}");
     }
 }

@@ -328,7 +328,9 @@ from the application's model and reports changes as messages.
   (`cupertino-ui-core`'s runtime). Rows are 24 pt, labels 16.5 pt in, the highlight inset 5.5 pt with a 6.75 pt corner,
   the panel's corner 11.5 pt, a submenu overlaps its menu by 5.5 pt, and shortcuts take 0.28 of the label's strength.
 - **Popovers.** A popover is glass with a 16 pt corner, like a menu: the compositor draws its body and edge, and
-  over the opaque fill (no material) it strokes its own edge.
+  over the opaque fill (no material) it strokes its own edge. Anchored by its pointer, the panel and the pointer are
+  one container of the cartouche popover variant at the medium size (`GlassVariant::CartouchePopover`,
+  `GlassSize::Medium`), with its inactive recipe while the popover's window is not active.
 - **Pickers.** `PullDownButton` is titled with what it does and opens a menu of actions below itself on the press,
   with a single downward chevron where a `PopUpButton` has two opposing ones; its menu marks nothing.
   `ColorWell` shows a colour in a capsule set in a quiet rim, sends `on_open` on a press, Space or Return, and reads as

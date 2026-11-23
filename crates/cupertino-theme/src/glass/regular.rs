@@ -36,11 +36,16 @@ const REFRACTION_PER_POINT_REGULAR: f32 = 0.5;
 const REFRACTION_HEIGHT_PER_POINT_REGULAR: f32 = 0.25;
 const REFRACTION_AMOUNT_MAX: f32 = 60.0;
 const REFRACTION_HEIGHT_MAX: f32 = 20.0;
-/// The regular edge bleed's band, reach and blur as fractions of the short side, its widest blur in points, and its
-/// opacity.
+/// The regular edge bleed's band, reach and blur as fractions of the short side, and its opacity.
 const BLEED_NORMALIZED: f32 = 0.35;
-const BLEED_BLUR_MAX: f32 = 160.0;
 const BLEED_OPACITY: f32 = 0.2;
+/// The widest blur of the edge bleed, in points: the blur fill's deviation, so a shape past about 45.7 points (where
+/// its fraction of the side reaches it) reads the copy its blur fill makes instead of blurring one of its own, while a
+/// control keeps its own (a 36-point capsule blurs its bleed by 12.6 points).
+pub const BLEED_BLUR_MAX: f32 = FILL_SIGMA_PER_RADIUS * REGULAR_FILL_RADIUS;
+/// The farthest outside its edge the edge bleed reads, in points, as far as its widest blur: the bleed of any shape
+/// reads at most this and three of those deviations (64 points) around it, where a 300-point panel read 420.
+pub const BLEED_AMOUNT_MAX: f32 = 16.0;
 /// The edge bleed's colour: its black lift and saturation in the light appearance (white kept, darken blending), and
 /// its black lift and white in the dark one (saturation kept, normal blending).
 const BLEED_BLACK_LIGHT: f32 = 0.9;
@@ -127,7 +132,7 @@ fn regular_face(dark: bool, s: f32) -> GlassFace {
 /// The regular glass resolved at short side `s`: every stage the regular recipe records.
 pub(super) fn regular_base(dark: bool, s: f32) -> GlassParams {
     let narrow = by_side(&NARROW_LEVEL_OPACITY_BY_SIDE, s);
-    let bleed = GlassBleed {
+    let mut bleed = GlassBleed {
         amount: 0.0,
         height: 0.0,
         blur: 0.0,
@@ -148,6 +153,7 @@ pub(super) fn regular_base(dark: bool, s: f32) -> GlassParams {
         BLEED_NORMALIZED,
         BLEED_BLUR_MAX,
     );
+    bleed.amount = bleed.amount.min(BLEED_AMOUNT_MAX);
     GlassParams {
         blur: GlassBlur {
             radius: REGULAR_BLUR,

@@ -78,6 +78,10 @@ pub const SHARP_LEVEL: usize = BLUR_LEVELS + 2;
 
 /// Deviations closer than this, in points, are blurred once.
 const SAME_SIGMA: f32 = 0.05;
+/// How far, as a share of its own, the edge bleed's deviation may lie from that of a copy the container blurs already
+/// for the bleed to read that copy instead of blurring one of its own: a faint band softened a tenth more or less looks
+/// the same, and one blur pass fewer is a whole pass over the sampled area.
+pub const BLEED_SHARE_TOLERANCE: f32 = 0.1;
 
 pub use cupertino_theme::glass::{GlassMode, GlassStyle, GLASS_BACKDROP_SCALE};
 
@@ -995,20 +999,23 @@ impl Container {
         } else {
             0.0
         };
+        let bleed_sigma = self.bleed_sigma();
         let stages = (0..self.shapes.len())
-            .map(|i| self.stage_reach(i))
+            .map(|i| self.stage_reach(i, bleed_sigma))
             .fold(self.params.reach(), f32::max);
         let r = stages.max(edge) + bulge;
         Some([x - r, y - r, w + 2.0 * r, h + 2.0 * r])
     }
 
     /// How far past shape `i` its recipe reads the backdrop or draws, in points: its blur and shadow
-    /// ([`GlassParams::reach`]), the edge bleed's reach and three deviations of its blur, the bend outside the edge and
-    /// the outer half of the control outline, each where it shows.
-    fn stage_reach(&self, i: usize) -> f32 {
+    /// ([`GlassParams::reach`]), the edge bleed's reach and three deviations of the copy it reads
+    /// ([`Container::bleed_sigma`]), the bend outside the edge and the outer half of the control outline, each where it
+    /// shows.
+    fn stage_reach(&self, i: usize, bleed_sigma: Option<f32>) -> f32 {
         let (p, v) = (self.recipe(i), &self.values[i]);
-        let bleed = if p.bleed.opacity > 0.0 && v.bleed_height > 0.0 {
-            v.bleed_amount.abs() + 3.0 * p.bleed.blur.max(0.0)
+        let bleed = if self.bleeds_at(i) {
+            let sigma = bleed_sigma.unwrap_or(p.bleed.blur);
+            v.bleed_amount.abs() + 3.0 * sigma.max(0.0)
         } else {
             0.0
         };
@@ -1258,21 +1265,38 @@ pub enum BleedSource {
 
 impl Container {
     /// Where the edge bleed reads its blurred backdrop, if a shape bleeds: the widest blur of the bleeding shapes'
-    /// recipes, from a copy the container blurs already when one has that deviation (within the deviation two copies
-    /// share), else from a copy of its own.
+    /// recipes, from the copy the container blurs already whose deviation is nearest it when that lies within
+    /// [`BLEED_SHARE_TOLERANCE`] of it (or within the deviation two copies share), a level's before the blur fill's at
+    /// the same distance, else from a copy of its own.
     pub fn bleed_source(&self) -> Option<BleedSource> {
         let sigma = (0..self.shapes.len())
             .filter(|&i| self.bleeds_at(i))
             .map(|i| self.recipe(i).bleed.blur.clamp(0.0, BLUR_SIGMA_MAX))
             .reduce(f32::max)?;
-        let same = |s: f32| (s - sigma).abs() < SAME_SIGMA;
-        if let Some(i) = self.levels().iter().position(|&(s, used)| used && same(s)) {
-            return Some(BleedSource::Level(i));
-        }
-        if self.fill_sigma().is_some_and(same) {
-            return Some(BleedSource::Fill);
-        }
-        Some(BleedSource::Own(sigma))
+        let tolerance = (BLEED_SHARE_TOLERANCE * sigma).max(SAME_SIGMA);
+        let levels = self
+            .levels()
+            .into_iter()
+            .enumerate()
+            .filter(|&(_, (_, used))| used)
+            .map(|(i, (s, _))| (BleedSource::Level(i), (s - sigma).abs()));
+        let fill = self
+            .fill_sigma()
+            .map(|s| (BleedSource::Fill, (s - sigma).abs()));
+        let nearest = levels
+            .chain(fill)
+            .filter(|&(_, d)| d < tolerance)
+            .min_by(|a, b| a.1.total_cmp(&b.1));
+        Some(nearest.map_or(BleedSource::Own(sigma), |(source, _)| source))
+    }
+
+    /// The deviation in points of the copy the edge bleed reads ([`Container::bleed_source`]), if a shape bleeds.
+    pub fn bleed_sigma(&self) -> Option<f32> {
+        Some(match self.bleed_source()? {
+            BleedSource::Level(i) => self.levels()[i].0,
+            BleedSource::Fill => self.fill_sigma().unwrap_or(0.0),
+            BleedSource::Own(sigma) => sigma,
+        })
     }
 
     /// Whether a shape bends the backdrop outside its edge, which reads the backdrop as captured ([`SHARP_LEVEL`]).

@@ -251,27 +251,27 @@ fn the_glass_program_agrees_with_the_cpu_model() {
 }
 
 const MODEL_FINGERPRINTS: [(&str, u64); 10] = [
-    ("regular dark", 3090781794271355752),
-    ("regular light pair", 714335166968171239),
+    ("regular dark", 5941775824379530258),
+    ("regular light pair", 13765159682105776361),
     ("clear dark capsule", 535904700277293323),
-    ("large panel dark", 14608176073171154180),
-    ("card light", 15533129145349833937),
+    ("large panel dark", 14200626413007156778),
+    ("card light", 13810383690058592169),
     ("module pair", 2219171919134958771),
     ("bar light capsule", 2689815143484161464),
-    ("popover outline", 5206748911706460017),
-    ("toolbar edge", 9903925566250079167),
+    ("popover outline", 16496941921438256133),
+    ("toolbar edge", 8746112307137350193),
     ("reduced transparency", 3290778928593919062),
 ];
 
 const DEVICE_FINGERPRINTS: [(&str, u64); 10] = [
-    ("regular dark", 15032506918187949951),
-    ("regular light pair", 14506083299972674069),
+    ("regular dark", 16295651710169393633),
+    ("regular light pair", 15337197699327271545),
     ("clear dark capsule", 12860175283153529903),
-    ("large panel dark", 909770197359738154),
-    ("card light", 17776628249363455869),
+    ("large panel dark", 8061126439798849296),
+    ("card light", 6931184559608800328),
     ("module pair", 7526460935851899905),
     ("bar light capsule", 13168230188289903164),
-    ("popover outline", 12264618184555609004),
-    ("toolbar edge", 13940538949189605013),
+    ("popover outline", 9629186189288533202),
+    ("toolbar edge", 1902305022080684821),
     ("reduced transparency", 17816218594961483024),
 ];

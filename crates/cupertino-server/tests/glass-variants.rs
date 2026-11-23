@@ -733,6 +733,50 @@ fn under_reduce_motion_interactive_glass_does_not_grow_under_a_press() {
     capsule.release(t0 + 1.0);
 }
 
+#[test]
+fn a_press_beside_interactive_glass_after_one_on_it_asks_for_no_frames() {
+    let mut capsule = Capsule::new();
+    let t0 = capsule.rig.now();
+    capsule.press(t0);
+    capsule.width_at(t0 + 0.1);
+    assert!(
+        capsule.rig.state.glass_press.wants_tick(t0 + 0.1),
+        "the glass under the press grows"
+    );
+    capsule.release(t0 + 0.2);
+    let t1 = t0 + SETTLE;
+    capsule.width_at(t1);
+    assert!(!capsule.rig.state.glass_press.wants_tick(t1));
+
+    // a click on the window beside the capsule, on no glass
+    let frame = capsule
+        .rig
+        .state
+        .wm
+        .window(capsule.window.id)
+        .unwrap()
+        .geometry();
+    let beside = Point::from((frame.x + 220.0, frame.y + 140.0));
+    capsule.rig.state.pointer_moved_to(beside, 0, None);
+    capsule
+        .rig
+        .state
+        .pointer_button(BTN_LEFT, ButtonState::Pressed, 3);
+    for after in [0.0, 0.05, 0.1] {
+        capsule.width_at(t1 + after);
+        assert!(
+            !capsule.rig.state.glass_press.wants_tick(t1 + after),
+            "{after} s into a press on no glass the press asks for frames"
+        );
+    }
+    capsule.rig.state.fixed_time = Some(t1 + 0.2);
+    capsule
+        .rig
+        .state
+        .pointer_button(BTN_LEFT, ButtonState::Released, 4);
+    assert!(!capsule.rig.state.animating());
+}
+
 /// How many times its size the scaled capsule's glass is drawn.
 const SCALED: f64 = 1.1;
 

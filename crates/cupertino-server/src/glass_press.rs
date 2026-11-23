@@ -46,13 +46,20 @@ struct Press {
     root: WlSurface,
     held: bool,
     scale: LayerProperty,
+    /// Whether a frame drew interactive glass under this press: until one does, it asks for no frames, so a press
+    /// beside any interactive glass costs none.
+    hit: Cell<bool>,
 }
 
 impl Press {
     /// The scale of glass of a surface of the tree `owner` over `area` (global logical points) at `now`: grown when the
     /// press lies in the area, 1 otherwise.
     fn scale_of(&self, owner: &WlSurface, area: Rectangle<f64, Logical>, now: f64) -> Option<f64> {
-        (self.root == *owner && area.contains(self.at)).then(|| self.scale.value(now))
+        let under = self.root == *owner && area.contains(self.at);
+        if under {
+            self.hit.set(true);
+        }
+        under.then(|| self.scale.value(now))
     }
 }
 
@@ -61,8 +68,6 @@ impl Press {
 pub struct GlassPress {
     current: Option<Press>,
     previous: Option<Press>,
-    /// Whether a frame drew interactive glass under a press: until one does, the press asks for no frames.
-    hit: Cell<bool>,
 }
 
 impl GlassPress {
@@ -87,6 +92,7 @@ impl GlassPress {
             root: root.clone(),
             held: false,
             scale: LayerProperty::new(1.0),
+            hit: Cell::new(false),
         });
         press.held = true;
         press.scale.animate(PRESS_SCALE, spring(), now, 0.0);
@@ -104,14 +110,11 @@ impl GlassPress {
     /// points) at `now`: grown or letting go under a press that went down in the area, 1 otherwise.
     pub fn scale_of(&self, owner: &WlSurface, area: Rectangle<f64, Logical>, now: f64) -> f64 {
         let owner = root_of(owner);
-        let scale = [&self.current, &self.previous]
+        [&self.current, &self.previous]
             .into_iter()
             .flatten()
-            .find_map(|p| p.scale_of(&owner, area, now));
-        if scale.is_some() {
-            self.hit.set(true);
-        }
-        scale.unwrap_or(1.0)
+            .find_map(|p| p.scale_of(&owner, area, now))
+            .unwrap_or(1.0)
     }
 
     /// The scale the glass under the press shows at `now`, 1 without a press.
@@ -121,11 +124,10 @@ impl GlassPress {
 
     /// Whether interactive glass under a press is still moving at `now`, so outputs draw frames.
     pub fn wants_tick(&self, now: f64) -> bool {
-        self.hit.get()
-            && [&self.current, &self.previous]
-                .into_iter()
-                .flatten()
-                .any(|p| p.scale.is_animating(now))
+        [&self.current, &self.previous]
+            .into_iter()
+            .flatten()
+            .any(|p| p.hit.get() && p.scale.is_animating(now))
     }
 }
 

@@ -11,9 +11,9 @@ use cupertino_geometry::{Point, Rect, Size};
 use cupertino_kit::controls::{Button, ButtonRole, ButtonStyle, Menu, MenuAnchor, MenuItem};
 use cupertino_kit::controls::{SegmentedControl, Spacer, Stack};
 use cupertino_kit::core::{
-    AccessibleValue, Action, Change, CommandRegistry, Element, Event, EventCx, Key as NodeKey,
-    MeasureCx, PaintCx, Phase as RoutePhase, Propagation, Role, SemanticsCx, Widget, Window,
-    WindowBackground, WindowKey,
+    glass_outline, AccessibleValue, Action, Change, CommandRegistry, Element, Event, EventCx,
+    Glass, Key as NodeKey, MeasureCx, PaintCx, Phase as RoutePhase, Propagation, Role, SemanticsCx,
+    Widget, Window, WindowBackground, WindowKey,
 };
 use cupertino_kit::geometry::Insets;
 use cupertino_kit::layout::{
@@ -633,7 +633,8 @@ pub fn overlay<M: Clone + 'static>(
 }
 
 /// Turns the keys nothing in the toolbar took (Escape, Space, Return and the arrows while no control has the focus)
-/// into [`Input::Key`], so the toolbar keeps the overlay's keys while it holds the keyboard.
+/// into [`Input::Key`], so the toolbar keeps the overlay's keys while it holds the keyboard, and draws the toolbar's
+/// body under its controls.
 struct Keys<M> {
     children: Vec<Element<M>>,
     to: fn(Input) -> M,
@@ -688,7 +689,22 @@ impl<M: 'static> Widget<M> for Keys<M> {
         }
     }
 
-    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+    /// The toolbar's body under its controls, the whole window with its corners: regular glass, as macOS draws its
+    /// capture toolbar. With Reduce Transparency, or where the desktop shows no glass, the theme's opaque fill of the
+    /// heads-up surface in the same shape.
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        let glass = !cx.env().theme.preferences.reduce_transparency
+            && cx.glass(Glass::regular().radius(TOOLBAR_RADIUS));
+        if !glass {
+            if let Some(color) = cx.env().theme.surface(Surface::Hud).fill {
+                let rect = Rect::from_origin_size(Point::ZERO, cx.size());
+                cx.push(PaintOp::Fill {
+                    shape: glass_outline(rect, TOOLBAR_RADIUS, 0.0),
+                    paint: Paint::Solid(color),
+                });
+            }
+        }
+    }
 
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
         cx.role(Role::Toolbar);
@@ -704,7 +720,7 @@ pub struct ToolbarView {
     pub countdown: Option<u32>,
 }
 
-/// The toolbar window: close, the three modes, Options and Capture, on the heads-up material.
+/// The toolbar window: close, the three modes, Options and Capture, on regular glass.
 pub fn toolbar<M: Clone + 'static>(view: ToolbarView, to: fn(Input) -> M) -> Window<M> {
     let counting = view.countdown.is_some();
     let selected = MODES.iter().position(|(m, _)| *m == view.mode);
@@ -754,11 +770,8 @@ pub fn toolbar<M: Clone + 'static>(view: ToolbarView, to: fn(Input) -> M) -> Win
         spec: spec(TOOLBAR_TITLE, TOOLBAR_APP_ID.to_owned(), size, None),
         shortcuts: CommandRegistry::new(),
         on_close: Some(to(Input::Closed)),
-        background: WindowBackground::Surface {
-            surface: Surface::Hud,
-            radius: TOOLBAR_RADIUS,
-            alpha: 1.0,
-        },
+        // the body is the toolbar's glass, which `Keys` asks for
+        background: WindowBackground::None,
         content: Element::new(Keys {
             children: vec![Element::new(Stack {
                 axis: Axis::Horizontal,

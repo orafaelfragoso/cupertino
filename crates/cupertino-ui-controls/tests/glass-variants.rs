@@ -340,3 +340,68 @@ fn alerts_and_sheets_are_glass_window_glass_and_opaque_with_reduce_transparency(
         "the sheet's solid body"
     );
 }
+
+struct GlassButtons;
+
+impl Scene for GlassButtons {
+    type State = ();
+    type Msg = ();
+
+    fn state() {}
+
+    fn update(_: &mut (), _: ()) {}
+
+    fn view(_: &()) -> Element<()> {
+        let button = |label: &str, role| {
+            Element::new(Button {
+                label: label.into(),
+                role,
+                style: ButtonStyle::Glass,
+                enabled: true,
+                busy: false,
+                on_press: Some(()),
+            })
+        };
+        Element::new(Stack {
+            axis: Axis::Horizontal,
+            padding: Insets::uniform(20.0),
+            spacing: 20.0,
+            align: Align::Start,
+            children: vec![
+                button("Share", ButtonRole::Normal),
+                button("Done", ButtonRole::Default),
+            ],
+        })
+    }
+}
+
+#[test]
+fn glass_buttons_are_interactive_regular_glass_and_a_default_one_is_tinted_with_the_accent() {
+    let mut view = View::<GlassButtons>::open_with(effects(), false);
+    let window = view.window;
+    let shown = glass(&mut view, window);
+    assert_eq!(shown.len(), 2, "{shown:?}");
+    for (_, g) in &shown {
+        assert_eq!(
+            g.variant.map(|(v, m)| (v, m.interactive)),
+            Some((GlassVariant::Regular, true)),
+            "the compositor grows the glass under a press: {shown:?}"
+        );
+    }
+    let at = |name: &str| view.bounds_of(Role::Button, name).center();
+    let (share, done) = (at("Share"), at("Done"));
+    let tint_at = |p: Point| {
+        shown
+            .iter()
+            .find(|(r, _)| r.contains(p))
+            .map(|(_, g)| g.tint)
+            .unwrap()
+    };
+    assert_eq!(tint_at(share)[3], 0.0, "an ordinary button is untinted");
+    let accent = tint_at(done);
+    assert_eq!(accent[3], 1.0, "the accent at full strength: {accent:?}");
+    assert!(
+        accent[..3].iter().any(|&c| c > 0.0),
+        "the accent: {accent:?}"
+    );
+}

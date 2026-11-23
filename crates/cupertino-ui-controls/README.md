@@ -280,8 +280,14 @@ from the application's model and reports changes as messages.
   its body filling its node, without Reduce Transparency: on a material the window shows (a sidebar, a translucent
   window background), and over the window's own content, as the button is a raised node (`Widget::raised`) whose glass
   lies between the window's raised layer and its content, so the content shows through it; its label then takes the
-  colours of text on glass. Where the window system has no raised layer, with Reduce Transparency and where the
-  desktop shows no glass it paints its body and rim. A held thumb's lens lies over the
+  colours of text on glass. Its glass is the regular variant, interactive: the compositor grows it a little under a
+  press on its clock (none under Reduce Motion), and the button grows nothing of its own, so the glass grows once. A
+  default button, enabled in an active window, tints its glass with the accent at full strength and takes the default
+  button's label colour. Over the glass a level of the label colour (black in the light appearance, white in the dark)
+  marks the pointer: 4.7 % at once while it is over the button, 9.8 % while pressed (14.9 % and 34.9 % light, 29.8 %
+  dark with Increase Contrast), the press level coming on over 45 ms and going over 320 ms. Where the window system has
+  no raised layer, with Reduce Transparency and where the desktop shows no glass it paints its body and rim, a default
+  button the accent over them. A held thumb's lens lies over the
   track the window paints, so it is glass in a surface layer of its own over the track (`GlassMaterial::Layer`),
   painted where the window system shows no surface layers and with Reduce Transparency. A light divider is 40 % black, as strong over
   the glass as the disabled glyphs beside it. The field under a resting `ToolbarSearch` button is not drawn, so the button's

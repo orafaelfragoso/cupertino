@@ -29,23 +29,31 @@ use cupertino_defaults::accessibility::{
 use cupertino_effects::{TransformKind, WindowKind};
 use cupertino_glass::display_filter::display_filter_ops;
 use cupertino_theme::recipe::{Backdrop, Recipe};
-use cupertino_theme::{Appearance, GlassMode, GlassStyle};
+use cupertino_theme::{Appearance, GlassMode};
 
 use crate::render::GpuRecipe;
 
 use crate::state::Cupertino;
 
-/// The glass recipe mode of `style` in the dark (`dark`) or light appearance under the display `options`: each option
+/// The glass recipe mode of `look` in a window that is `active` or not, in the dark (`dark`) or light appearance under
+/// the display `options` ([`GlassLook::mode`](crate::glass_look::GlassLook::mode)): each option
 /// selects its own recipe of the glass rather than turning it off.
-pub fn glass_mode(dark: bool, style: GlassStyle, options: DisplayOptions) -> GlassMode {
-    GlassMode {
-        dark,
-        style,
-        reduce_transparency: options.reduce_transparency,
-        increase_contrast: options.increase_contrast,
-        reduce_motion: options.reduce_motion,
-        density: 0,
-    }
+pub fn glass_mode(
+    dark: bool,
+    look: crate::glass_look::GlassLook,
+    active: bool,
+    options: DisplayOptions,
+) -> GlassMode {
+    look.mode(
+        GlassMode {
+            reduce_transparency: options.reduce_transparency,
+            increase_contrast: options.increase_contrast,
+            reduce_motion: options.reduce_motion,
+            density: 0,
+            ..GlassMode::default().appearance(dark)
+        },
+        active,
+    )
 }
 
 /// The settings and where they are stored.

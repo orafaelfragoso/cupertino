@@ -1,7 +1,8 @@
 //! A window's modal dialogs: the content behind and the panel hanging near the window's top. A dialog is a sheet, a
-//! solid panel with its controls over a scrim that dims the window; an alert is a narrow panel of dense glass over the
-//! window's content (a nearly opaque grey where there is no such glass) with the application's icon, its title and
-//! message and a column of capsule buttons, hanging closer to the top with no scrim.
+//! panel of the glass window variant with its controls over a scrim that dims the window (solid where there is no such
+//! glass); an alert is a narrow panel of the same glass over the window's content (a nearly opaque grey where there is
+//! no such glass) with the application's icon, its title and message and a column of capsule buttons, hanging closer
+//! to the top with no scrim. The glass casts the window shadow of its variant.
 //! A sheet shows at once, which a dialog shown as a window of its own gets motion for from the compositor; an alert
 //! pops in (its panel grows past its size and settles, its content fading in a little after) and goes at once.
 
@@ -12,16 +13,17 @@ use crate::{
     Button, ButtonRole, ButtonStyle, Dialog, DialogAction, DialogKind, Modal, Stack, Text, TextRole,
 };
 use cupertino_geometry::{Insets, Point, Rect, Size};
+use cupertino_theme::glass::AlertShadow;
 use cupertino_theme::ui::{Color, ColorRole, StateVariant};
 use cupertino_ui_core::layout::{
     Align, Axis, Constraints, ContainerKind, Flex, Justify, LayoutSpec, Measured, SizeSpec, Track,
 };
 use cupertino_ui_core::platform::{Keysym, Timestamp};
 use cupertino_ui_core::{
-    AccessibleStates, Change, Element, Event, EventCx, Glass, MeasureCx, PaintCx, Phase,
-    Propagation, Role, SemanticsCx, Widget,
+    AccessibleStates, Change, Element, Event, EventCx, Glass, GlassVariant, MeasureCx, PaintCx,
+    Phase, Propagation, Role, SemanticsCx, Widget,
 };
-use cupertino_ui_render::{Effect, FillRule, GradientStop, Paint, PaintOp, Sampling, Shape};
+use cupertino_ui_render::{Effect, GradientStop, Paint, PaintOp, Sampling, Shape};
 use cupertino_ui_text::{AttributedText, FontWeight, TextStyle};
 use std::cell::Cell;
 
@@ -79,10 +81,11 @@ const POP_SETTLE_EXPONENT: f64 = 1.35;
 const POP_PANEL_FADE: f64 = 0.1;
 const POP_CONTENT_DELAY: f64 = 0.06;
 const POP_CONTENT_FADE: f64 = 0.08;
-/// The alert's shadow: lower and fainter above than below.
-const ALERT_SHADOW_OFFSET: f64 = 9.0;
-const ALERT_SHADOW_BLUR: f64 = 34.0;
-const ALERT_SHADOW_ALPHA: f32 = 0.27;
+/// The alert's own shadow while it pops in and where it shows no glass, while its window is active and while it is
+/// not: the window shadow the compositor casts under the settled alert's glass (offset, blur and the shadow's
+/// darkness in the light and the dark appearance), so the shadow holds as the glass takes over.
+const ALERT_SHADOW_ACTIVE: AlertShadow = cupertino_theme::glass::ALERT_SHADOW_ACTIVE;
+const ALERT_SHADOW_INACTIVE: AlertShadow = cupertino_theme::glass::ALERT_SHADOW_INACTIVE;
 /// The alert: its width, corner radius and padding; the icon and the text sit further in than the buttons.
 const ALERT_WIDTH: f64 = 260.0;
 const ALERT_RADIUS: f64 = 26.0;
@@ -753,26 +756,53 @@ fn pop_scale(t: f64) -> f64 {
     }
 }
 
-/// The shadow of a panel `rect` rounded by `radius` that is glass, drawn only outside it: from an opaque copy of its
-/// shape that a clip hides, so the glass under the panel stays clear of it.
-fn halo(cx: &mut PaintCx<'_>, rect: Rect, radius: f64, shadow: Effect) {
-    let reach = ALERT_SHADOW_OFFSET.abs() + 3.0 * ALERT_SHADOW_BLUR;
-    let mut outside = crate::tabs::rounded(rect.inset(Insets::uniform(-reach)), 0.0);
-    outside.extend(crate::tabs::rounded(rect, radius));
-    cx.push(PaintOp::PushClip(Shape::Path {
-        verbs: outside,
-        fill_rule: FillRule::EvenOdd,
-    }));
-    cx.push(PaintOp::PushLayer {
-        opacity: 1.0,
-        effects: vec![shadow],
-    });
-    cx.push(PaintOp::Fill {
-        shape: Shape::RoundedRect { rect, radius },
-        paint: Paint::Solid(Color::new(0.0, 0.0, 0.0, 1.0)),
-    });
-    cx.push(PaintOp::PopLayer);
-    cx.push(PaintOp::PopClip);
+/// Asks for the glass of an alert or a sheet under the whole panel, its corners rounded by `radius`, where it can show:
+/// the panel floats in the raised layer, so the glass lies over the window's content. The glass window variant casts
+/// the window shadow itself, deep while the window is active and shallow while it is not, and takes its inactive
+/// recipe then; a `sheet` is document-modal glass, whose shadow is the sheet's, fainter than an alert's. Returns
+/// whether the window shows it. A window system without variants would draw glass casting no window shadow, so the
+/// panel is painted there.
+fn window_glass(cx: &mut PaintCx<'_>, radius: f64, sheet: bool) -> bool {
+    cx.in_raised_layer()
+        && cx.glass_variants()
+        && cx.glass(
+            Glass::dense()
+                .variant(GlassVariant::GlassWindow)
+                .document_modal(sheet)
+                .radius(radius),
+        )
+}
+
+/// The alert's own shadow in a window that is `active` or not, in the dark appearance or the light one.
+fn alert_shadow(active: bool, dark: bool) -> Effect {
+    let s = if active {
+        ALERT_SHADOW_ACTIVE
+    } else {
+        ALERT_SHADOW_INACTIVE
+    };
+    Effect::DropShadow {
+        offset: Point::new(0.0, f64::from(s.offset)),
+        blur: f64::from(s.blur),
+        color: Color::new(0.0, 0.0, 0.0, if dark { s.dark } else { s.light }),
+    }
+}
+
+/// A sheet's solid body where it shows no glass: the window colour under its soft shadow.
+fn paint_solid_sheet(cx: &mut PaintCx<'_>, rect: Rect) {
+    cx.set_group(
+        1.0,
+        vec![Effect::DropShadow {
+            offset: Point::new(0.0, SHADOW_OFFSET),
+            blur: SHADOW_BLUR,
+            color: Color::new(0.0, 0.0, 0.0, SHADOW_ALPHA),
+        }],
+    );
+    let fill = cx
+        .env()
+        .theme
+        .colors
+        .get(ColorRole::WindowBackground, StateVariant::NORMAL);
+    look::fill(cx, rect, RADIUS, fill);
 }
 
 /// A fade from 0 at `delay` seconds to 1 at `delay + length`.
@@ -862,10 +892,10 @@ impl<M: Clone + 'static> Widget<M> for Sheet<M> {
         Cell::new(None)
     }
 
-    /// An alert floats in the raised layer, so its glass lies over the window's content, which shows blurred through
-    /// it.
+    /// An alert and a sheet float in the raised layer, so their glass lies over the window's content, which shows
+    /// blurred through it.
     fn raised(&self, _: &Born) -> bool {
-        self.kind == DialogKind::Alert
+        true
     }
 
     /// It covers nothing for the rest of the window: the content keeps its edges and bars under it.
@@ -912,25 +942,21 @@ impl<M: Clone + 'static> Widget<M> for Sheet<M> {
         Propagation::Stop
     }
 
-    /// A sheet is solid with a shadow and, in the dark appearance, a light rim just inside its edge; an alert is dense
-    /// glass (a nearly opaque grey while it pops in and without the glass) with a rim; both have a dark hairline just
-    /// outside their edge.
+    /// A sheet is the glass window variant (solid with a shadow without the glass) and, in the dark appearance, has a
+    /// light rim just inside its edge; an alert is the same glass (a nearly opaque grey while it pops in and without the
+    /// glass) with a rim; both have a dark hairline just outside their edge.
     fn paint(&self, born: &Born, cx: &mut PaintCx<'_>) {
         let size = cx.size();
         let mut rect = Rect::new(0.0, 0.0, size.width, size.height);
         let theme = cx.env().theme.clone();
         // an alert pops in: its panel grows about its centre and fades in, as a group with its shadow
         let mut grow = 1.0;
-        // settled in the raised layer, an alert's body is dense glass over the window's content; while it pops in,
-        // with Reduce Transparency or Increase Contrast and where there is no such glass, a grey that keeps the content
-        // from showing through its text
+        // in the raised layer, a settled alert's body and a sheet's are glass over the window's content; while an alert
+        // pops in, with Reduce Transparency or Increase Contrast and where there is no such glass, an alert is a grey
+        // that keeps the content from showing through its text and a sheet the window's solid colour
         let mut glass = false;
         if self.kind == DialogKind::Alert {
-            let shadow = Effect::DropShadow {
-                offset: Point::new(0.0, ALERT_SHADOW_OFFSET),
-                blur: ALERT_SHADOW_BLUR,
-                color: Color::new(0.0, 0.0, 0.0, ALERT_SHADOW_ALPHA),
-            };
+            let shadow = alert_shadow(cx.window_active(), theme.preferences.appearance.is_dark());
             let opaque = theme.preferences.reduce_transparency
                 || theme.preferences.appearance.is_high_contrast();
             match pop_time(born, cx) {
@@ -941,19 +967,19 @@ impl<M: Clone + 'static> Widget<M> for Sheet<M> {
                     cx.set_group(ramp(t, 0.0, POP_PANEL_FADE), vec![shadow]);
                 }
                 None => {
-                    glass = !opaque
-                        && cx.in_raised_layer()
-                        && cx.glass(Glass::dense().radius(ALERT_RADIUS));
-                    if glass {
-                        // the glass casts no shadow of its own: one from an opaque copy of the panel, outside it
-                        halo(cx, rect, ALERT_RADIUS, shadow);
-                    } else {
+                    glass = !opaque && window_glass(cx, ALERT_RADIUS, false);
+                    // the glass casts the window shadow of its variant; the painted body casts its own
+                    if !glass {
                         cx.set_group(1.0, vec![shadow]);
                     }
                 }
             }
             let (w, h) = (size.width * grow, size.height * grow);
             rect = Rect::new((size.width - w) / 2.0, (size.height - h) / 2.0, w, h);
+        } else {
+            let opaque = theme.preferences.reduce_transparency
+                || theme.preferences.appearance.is_high_contrast();
+            glass = !opaque && window_glass(cx, RADIUS, true);
         }
         let dark = theme.preferences.appearance.is_dark();
         let px = 1.0 / cx.env().scale.max(1.0);
@@ -965,18 +991,9 @@ impl<M: Clone + 'static> Widget<M> for Sheet<M> {
         );
         let radius = match self.kind {
             DialogKind::Dialog => {
-                cx.set_group(
-                    1.0,
-                    vec![Effect::DropShadow {
-                        offset: Point::new(0.0, SHADOW_OFFSET),
-                        blur: SHADOW_BLUR,
-                        color: Color::new(0.0, 0.0, 0.0, SHADOW_ALPHA),
-                    }],
-                );
-                let fill = theme
-                    .colors
-                    .get(ColorRole::WindowBackground, StateVariant::NORMAL);
-                look::fill(cx, rect, RADIUS, fill);
+                if !glass {
+                    paint_solid_sheet(cx, rect);
+                }
                 if dark {
                     look::stroke(
                         cx,

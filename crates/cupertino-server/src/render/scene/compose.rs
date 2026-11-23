@@ -17,18 +17,34 @@ pub(super) fn backdrop_elements(
             glass.add(b, out.len());
             continue;
         }
-        out.extend(window_material_layer(
-            p,
-            SceneKind::Backdrop,
-            b.key,
-            &b.material,
-            b.area,
-            b.radius,
-            b.alpha as f32 * opacity,
-            window,
-        ));
+        out.extend(
+            window_material_layer(
+                p,
+                SceneKind::Backdrop,
+                b.key,
+                &b.material,
+                b.area,
+                b.radius,
+                b.alpha as f32 * opacity,
+                window,
+            )
+            .into_iter()
+            .map(|piece| ramped(piece, b.blur_ramp)),
+        );
     }
-    glass.finish(p, out, opacity)
+    glass.finish(p, out, opacity, window == WindowState::Active)
+}
+
+/// `piece` with its material's filter fading by `ramp` from its top to its bottom (a backdrop's `set_blur_ramp`); the
+/// fallback fill that stands in for a material has no filter to fade.
+fn ramped(piece: Piece, ramp: [f32; 2]) -> Piece {
+    match piece {
+        Piece::Material(m) => Piece::Material(Material {
+            blur_ramp: ramp,
+            ..m
+        }),
+        other => other,
+    }
 }
 
 /// Note the backdrops drawn as a material other than glass: one whose face was measured while it was glass goes back
@@ -69,9 +85,17 @@ impl<'a> GlassGroups<'a> {
         self.groups.push((at, container, vec![b]));
     }
 
-    /// `out` with each container's piece at its place.
-    pub(super) fn finish(self, p: &SceneParams<'_>, out: Vec<Piece>, opacity: f32) -> Vec<Piece> {
-        self.place(out, |members| glass_pieces(p, members, opacity, false))
+    /// `out` with each container's piece at its place, the glass of a window that is `active` or not.
+    pub(super) fn finish(
+        self,
+        p: &SceneParams<'_>,
+        out: Vec<Piece>,
+        opacity: f32,
+        active: bool,
+    ) -> Vec<Piece> {
+        self.place(out, |members| {
+            glass_pieces(p, members, opacity, false, active)
+        })
     }
 
     /// `out` with each container's piece at its place, for the glass of a popup (a menu, a popover): its rim is lit
@@ -82,7 +106,7 @@ impl<'a> GlassGroups<'a> {
         out: Vec<Piece>,
         opacity: f32,
     ) -> Vec<Piece> {
-        self.place(out, |members| glass_pieces(p, members, opacity, true))
+        self.place(out, |members| glass_pieces(p, members, opacity, true, true))
     }
 
     /// `out` with the pieces `make` gives each container (its backdrops front to back) at the container's place.
@@ -111,64 +135,53 @@ impl<'a> GlassGroups<'a> {
 
 /// The glass piece of the container of `members` (glass backdrops of one surface, front to back), or translucent fills
 /// standing in for it while the material pass is unavailable. A `popup`'s glass takes the popup face, and its rim is
-/// drawn apart ([`inner_rim_item`]).
+/// drawn apart ([`inner_rim_item`]); the glass of a variant takes the inactive branch in a window that is not `active`.
+/// What the container draws as a whole (its recipe, its edge line, blur fill, shadow and blur ramp) is its anchor's,
+/// the backdrop the surface created first, whichever order the others are in.
 fn glass_pieces(
     p: &SceneParams<'_>,
     members: &[&BackdropArea],
     opacity: f32,
     popup: bool,
+    active: bool,
 ) -> Vec<Piece> {
-    let Some(spec) = members.first().and_then(|b| b.glass) else {
+    let Some(anchor) = members.last() else {
+        return Vec::new();
+    };
+    let Some(spec) = anchor.glass else {
         return Vec::new();
     };
     let mode = cupertino_theme::GlassMode {
         density: (p.config.material_density * 100.0).round() as u8,
-        ..crate::accessibility::glass_mode(p.config.is_dark(), spec.style, p.display)
+        ..crate::accessibility::glass_mode(p.config.is_dark(), spec.look, active, p.display)
     };
-    // the shapes back to front, as the surface created them
-    let shapes = members
-        .iter()
-        .rev()
-        .map(|b| {
-            GlassShape::new(
-                [
-                    b.area.loc.x as f32,
-                    b.area.loc.y as f32,
-                    b.area.size.w as f32,
-                    b.area.size.h as f32,
-                ],
-                b.radius as f32,
-            )
-        })
-        .collect();
-    let mut container = Container::new(shapes, spec.spacing as f32, mode);
+    let mut container = glass_container(p, members, spec, mode, active);
+    // the container's blur ramp runs along its first shape, the anchor's
+    let ramp = anchor.blur_ramp;
+    if ramp != [1.0, 1.0] {
+        container = container.with_blur_ramp(ramp);
+    }
     // a callout (a panel and its pointer, a label and its pointer) is one piece of glass that lights its own rim, and a
     // small one keeps the glass's face
     let callout = members.len() > 1 && spec.container != 0;
     if !callout {
         use cupertino_theme::GlassStyle;
-        match spec.style {
+        match spec.look.style {
             // the dark panel's recipe holds its bevel and the soft band under it
-            GlassStyle::LargePanel if !mode.dark => {
+            Some(GlassStyle::LargePanel) if !mode.dark => {
                 let h = &mut container.params.highlight;
                 (h.glow_amount, h.glow_height, h.glow_offset) = LARGE_PANEL_GLOW_LIGHT;
             }
             // with Reduce Transparency or Increase Contrast the popup's rim is drawn apart (`inner_rim_item`), lit all
             // round, in place of the glass's own
             _ if popup && (mode.reduce_transparency || mode.increase_contrast) => {
-                container.params.highlight.amount = 0.0
+                container.for_each_recipe(|r| r.highlight.amount = 0.0)
             }
             _ => {}
         }
     }
     // a popover's outline, which a callout's one piece of glass draws itself
-    if popup
-        && callout
-        && matches!(
-            spec.style,
-            cupertino_theme::GlassStyle::Dense | cupertino_theme::GlassStyle::Menu
-        )
-    {
+    if popup && callout && spec.look.popover_outline() {
         let (opacity, width) = if mode.dark {
             POPOVER_OUTLINE_DARK
         } else {
@@ -181,7 +194,7 @@ fn glass_pieces(
         let small = container
             .bounds()
             .is_some_and(|b| b[2].min(b[3]) < CALLOUT_SHADOW_MIN_SIDE as f32);
-        let own_face = spec.style == cupertino_theme::GlassStyle::Popover;
+        let own_face = spec.look.style == Some(cupertino_theme::GlassStyle::Popover);
         if callout
             && small
             && !own_face
@@ -191,7 +204,7 @@ fn glass_pieces(
         {
             // a small dark callout (a label) is a veil a little lighter than the plain glass; popover glass keeps its
             // own face
-            container.params.face.fill = SMALL_CALLOUT_FACE_DARK;
+            container.for_each_recipe(|r| r.face.fill = SMALL_CALLOUT_FACE_DARK);
         }
     }
     let alpha = members.iter().map(|b| b.alpha).fold(0.0, f64::max) as f32 * opacity;
@@ -218,17 +231,138 @@ fn glass_pieces(
     })]
 }
 
+/// The container of `members` (glass backdrops of one surface, front to back) in `mode`, the anchor's (the backdrop the
+/// surface created first, the last member), in a window that is `active` or not: its shapes back to front, as the
+/// surface created them. A member in other glass or of another tint than the anchor (a selected segment in its group)
+/// keeps its own recipe on its shape. A shape its client scaled (`set_glass_scale`), or of interactive glass under a
+/// press ([`crate::glass_press`]), grows about its centre with circular corners, its recipe resolved at its size at
+/// rest, so what the glass filters does not change.
+fn glass_container(
+    p: &SceneParams<'_>,
+    members: &[&BackdropArea],
+    spec: crate::app_effects_v1::GlassSpec,
+    mode: cupertino_theme::GlassMode,
+    active: bool,
+) -> Container {
+    use crate::glass_look::TINT_FACE_OPACITY;
+    let shapes = members
+        .iter()
+        .rev()
+        .map(|b| {
+            GlassShape::new(
+                [
+                    b.area.loc.x as f32,
+                    b.area.loc.y as f32,
+                    b.area.size.w as f32,
+                    b.area.size.h as f32,
+                ],
+                b.radius as f32,
+            )
+        })
+        .collect();
+    let mut container = Container::new(shapes, spec.spacing as f32, mode);
+    // a sheet casts its own shadow, the container's for all its shapes
+    spec.look.lay_sheet_shadow(&mut container.params, mode);
+    if spec.tint[3] > 0.0 {
+        container.params = container.params.with_tint(spec.tint, TINT_FACE_OPACITY);
+    }
+    let last = members.len() - 1;
+    for (j, b) in members.iter().enumerate().take(last) {
+        let Some(own) = b
+            .glass
+            .filter(|g| g.look != spec.look || g.tint != spec.tint)
+        else {
+            continue;
+        };
+        let side = container.shapes[last - j].short_side();
+        let mut recipe = cupertino_theme::GlassParams::new(own.look.mode(mode, active), side);
+        if own.tint[3] > 0.0 {
+            recipe = recipe.with_tint(own.tint, TINT_FACE_OPACITY);
+        }
+        container = container.with_shape_recipe(last - j, recipe);
+    }
+    for (j, b) in members.iter().enumerate() {
+        let k = glass_scale(p, b);
+        if (k - 1.0).abs() > crate::glass_press::DEFORMED {
+            let shape = &mut container.shapes[last - j];
+            let [x, y, w, h] = shape.rect;
+            let k = k as f32;
+            shape.rect = [
+                x + 0.5 * w * (1.0 - k),
+                y + 0.5 * h * (1.0 - k),
+                w * k,
+                h * k,
+            ];
+            shape.radius *= k;
+            shape.corner = cupertino_glass::glass::GlassCorner::Circular;
+        }
+    }
+    container
+}
+
+/// `bound` (output-local points), the area a subsurface's glass reads and draws in, widened to hold the glass of those
+/// of its backdrops `areas` that a press or their scale grows past it, so a grown shape the size of its subsurface is
+/// not cut.
+pub(super) fn pressed_bound(
+    p: &SceneParams<'_>,
+    areas: &[BackdropArea],
+    bound: Rectangle<f64, Logical>,
+) -> Rectangle<f64, Logical> {
+    areas.iter().fold(bound, |bound, b| {
+        let k = glass_scale(p, b);
+        if k <= 1.0 + crate::glass_press::DEFORMED {
+            return bound;
+        }
+        let (w, h) = (b.area.size.w * k, b.area.size.h * k);
+        let grown = Rectangle::new(
+            Point::from((
+                b.area.loc.x - 0.5 * (w - b.area.size.w),
+                b.area.loc.y - 0.5 * (h - b.area.size.h),
+            )),
+            (w, h).into(),
+        );
+        bound.merge(grown)
+    })
+}
+
+/// The scale about its centre the glass of backdrop `b` is drawn at in the frame: the scale its client set
+/// (`set_glass_scale`) times its growth under a press.
+fn glass_scale(p: &SceneParams<'_>, b: &BackdropArea) -> f64 {
+    b.glass.map_or(1.0, |g| g.scale) * press_scale(p, b)
+}
+
+/// The scale about its centre of the glass of backdrop `b` under a press at the frame's time: 1 unless its glass is
+/// interactive, a press of its surface lies in it and Reduce Motion is off.
+fn press_scale(p: &SceneParams<'_>, b: &BackdropArea) -> f64 {
+    let (Some(owner), Some(glass)) = (&b.owner, b.glass) else {
+        return 1.0;
+    };
+    if !glass.look.interactive() || p.display.reduce_motion {
+        return 1.0;
+    }
+    let global = Rectangle::new(
+        b.area.loc + Point::<f64, Logical>::from((p.rect.x, p.rect.y)),
+        b.area.size,
+    );
+    p.glass_press.scale_of(owner, global, p.now)
+}
+
 /// The glass backdrops of a container (`members`) whose text follows what lies behind them: every one when the
 /// container's bounds are small enough ([`adapts_foreground`]), none otherwise, so the shapes of a larger panel keep
 /// the appearance together. A dark card (`dark`) never follows: its face stays a mid-dark pane over any backdrop, so
 /// its text keeps the light tone and every card of a column reads alike. Nor does a large panel's glass, even where a
 /// piece of it is small (the launcher's search field): its strong tone compression keeps the face in its appearance's
 /// range, so its text keeps the appearance's tone over a bright scene and the field reads with the panel it opens.
+/// Glass named by its variant follows only when asked to (the `adaptive` modifier), whatever style it draws as.
 fn tone_probes(members: &[&BackdropArea], dark: bool) -> Vec<ToneProbe> {
     use cupertino_theme::GlassStyle;
     let fixed = members.iter().any(|b| {
         b.glass.is_some_and(|g| {
-            g.style == GlassStyle::LargePanel || (dark && g.style == GlassStyle::Card)
+            if g.look.follows_window {
+                return !g.look.modifiers.adaptive;
+            }
+            g.look.style == Some(GlassStyle::LargePanel)
+                || (dark && g.look.style == Some(GlassStyle::Card))
         })
     });
     let Some(bounds) = members
@@ -316,7 +450,7 @@ pub(super) fn bar_backdrop_elements(
             MaterialStage::Composite { owner },
             WindowState::Active,
         );
-        let Some(composite) = composite else {
+        let Some(composite) = composite.map(|piece| ramped(piece, b.blur_ramp)) else {
             out.push(fallback_fill(
                 p,
                 SceneKind::Backdrop,
@@ -341,7 +475,7 @@ pub(super) fn bar_backdrop_elements(
         ));
         out.push(composite);
     }
-    glass.finish(p, out, opacity)
+    glass.finish(p, out, opacity, true)
 }
 
 /// Material pass (or the translucent fallback fill without one) behind `area`, drawn at `alpha`.
@@ -431,6 +565,7 @@ fn material_piece(
         tint: window_tint(p, dark),
         opacity: alpha,
         clip: Clip::None,
+        blur_ramp: [1.0, 1.0],
     }))
 }
 
@@ -861,6 +996,7 @@ fn display_filter(p: &mut SceneParams<'_>, stack: &mut Composition) {
             tint: [0.0; 3],
             opacity: 1.0,
             clip: Clip::None,
+            blur_ramp: [1.0, 1.0],
         }),
     );
 }

@@ -101,8 +101,8 @@ pub struct Offer {
 impl Offer {
     /// Every protocol at its newest version.
     pub const ALL: Offer = Offer {
-        layers: Some(6),
-        app_effects: Some(21),
+        layers: Some(7),
+        app_effects: Some(23),
         scroll: Some(1),
         semantics: Some(2),
         shell: true,

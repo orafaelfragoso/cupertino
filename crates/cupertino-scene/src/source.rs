@@ -139,6 +139,9 @@ pub struct MaterialPass {
     pub stage: MaterialStage,
     /// Average colour of the wallpaper below, which tints the material.
     pub tint: [f32; 3],
+    /// How much of its backdrop's filter the region keeps along the top and the bottom of `rect`, smoothly between (a
+    /// variable blur); `[1, 1]` filters evenly.
+    pub blur_ramp: [f32; 2],
 }
 
 /// One glass container: its shapes joined into one outline over the backdrop below. `rect` is what of the backdrop

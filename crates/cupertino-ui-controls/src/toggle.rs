@@ -1,4 +1,4 @@
-use crate::lens::{paint_lens_faded, Lens, LensKind};
+use crate::lens::{paint_lens_faded, Lens, LensKind, LensLayer};
 use crate::look::{self, paint_focus_ring};
 use crate::motion::{Curve, Tween};
 use crate::press::{Keys, Outcome, Press};
@@ -12,7 +12,7 @@ use cupertino_ui_core::platform::{MouseButton, PointerEvent};
 use cupertino_ui_core::Phase;
 use cupertino_ui_core::{
     AccessibleStates, AccessibleValue, Action, Change, Checked, ControlState, Environment, Event,
-    EventCx, MeasureCx, PaintCx, Propagation, Role, SemanticsCx, Widget,
+    EventCx, MeasureCx, PaintCx, Propagation, Role, SemanticsCx, SurfaceLayerMark, Widget,
 };
 
 /// The track: the accent when on; off, a quiet well that neither darkens under the pointer nor while held, or the
@@ -77,8 +77,11 @@ impl<M: 'static> Toggle<M> {
                 ),
             );
         }
-        if let Some(lens) = Lens::lifted(LensKind::Switch, thumb, lift) {
-            // held, the thumb is a lens: the track shows through it, shrunk about its centre
+        let lens = Lens::lifted(LensKind::Switch, thumb, lift);
+        // held, the thumb is a lens: the compositor's glass over the track, or painted with the track showing through
+        // it, shrunk about its centre
+        let in_layer = state.lens_layer.show(cx, lens.as_ref());
+        if let Some(lens) = lens.filter(|_| !in_layer) {
             paint_lens_faded(cx, &lens, lens_opacity as f32, |cx, lens| {
                 fill_track(cx, lens.through(track), radius * lens.minify);
             });
@@ -244,6 +247,8 @@ pub struct SwitchState {
     lift: Tween,
     /// The event at hand sends the thumb across: the lens sinks once it has arrived.
     travels: bool,
+    /// The lens in the compositor's glass, as the last paint showed it.
+    lens_layer: LensLayer,
 }
 
 /// A pointer press that may drag the thumb.
@@ -342,6 +347,14 @@ impl<M: 'static> Widget<M> for Toggle<M> {
 
     fn semantics(&self, _: &SwitchState, cx: &mut SemanticsCx<'_>) {
         self.semantics_of(cx)
+    }
+
+    fn overlay_layer(&self, state: &SwitchState) -> Option<SurfaceLayerMark> {
+        state.lens_layer.mark()
+    }
+
+    fn overlay_layer_rect(&self, state: &SwitchState) -> Option<Rect> {
+        state.lens_layer.rect()
     }
 }
 
@@ -545,6 +558,14 @@ impl<M: 'static> Widget<M> for SmallToggle<M> {
     fn semantics(&self, _: &SwitchState, cx: &mut SemanticsCx<'_>) {
         self.toggle.semantics_of(cx)
     }
+
+    fn overlay_layer(&self, state: &SwitchState) -> Option<SurfaceLayerMark> {
+        state.lens_layer.mark()
+    }
+
+    fn overlay_layer_rect(&self, state: &SwitchState) -> Option<Rect> {
+        state.lens_layer.rect()
+    }
 }
 
 /// The pane header's switch: the toggle's behaviour, reading and look at the header switch's size (`SwitchShape::HEADER`).
@@ -590,5 +611,13 @@ impl<M: 'static> Widget<M> for HeaderToggle<M> {
 
     fn semantics(&self, _: &SwitchState, cx: &mut SemanticsCx<'_>) {
         self.toggle.semantics_of(cx)
+    }
+
+    fn overlay_layer(&self, state: &SwitchState) -> Option<SurfaceLayerMark> {
+        state.lens_layer.mark()
+    }
+
+    fn overlay_layer_rect(&self, state: &SwitchState) -> Option<Rect> {
+        state.lens_layer.rect()
     }
 }

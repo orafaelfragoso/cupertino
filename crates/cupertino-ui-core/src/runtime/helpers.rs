@@ -223,6 +223,8 @@ pub(super) fn drag_image<M: 'static>(
             raised: &[],
             obscuring: &[],
             layer: false,
+            surface_layers: false,
+            glass: crate::paint::GlassSupport::default(),
             pinned: &[None, None],
             activation: 1.0,
         },
@@ -390,11 +392,12 @@ pub(super) fn sync_backdrop<M>(system: &mut impl WindowSystem, w: &mut WindowSta
             surface,
             radius,
             alpha,
-        } => Some((surface, radius, alpha)),
+            glass,
+        } => Some((surface, radius, alpha, glass)),
         _ => None,
     };
     let wanted = match shaped {
-        Some((surface, radius, alpha)) if system.capabilities().app_effects => w
+        Some((surface, radius, alpha, glass)) if system.capabilities().app_effects => w
             .env
             .theme
             .surface(surface)
@@ -403,6 +406,7 @@ pub(super) fn sync_backdrop<M>(system: &mut impl WindowSystem, w: &mut WindowSta
                 material: material.to_owned(),
                 radius,
                 alpha: crate::surface_alpha(alpha),
+                glass: glass.map(|g| g.window_region()),
             }),
         _ => None,
     };

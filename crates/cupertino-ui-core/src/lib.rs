@@ -10,6 +10,7 @@ mod damage;
 mod drop_target;
 mod focus;
 mod frame_timing;
+mod glass;
 mod icons;
 pub mod kinetic;
 pub mod layout;
@@ -29,7 +30,7 @@ mod task;
 mod tree;
 mod widget;
 
-pub use crate::platform::{GlassStyle, RendererClass};
+pub use crate::platform::{GlassModifiers, GlassSize, GlassStyle, GlassVariant, RendererClass};
 pub use accessibility::{
     AccessibilityAdapter, AccessibilityNode, AccessibilityUpdate, AccessibleStates,
     AccessibleValue, Action, ActionData, ActionRequest, Checked, Live, Relation, Role, SortOrder,
@@ -39,13 +40,14 @@ pub use clock::MonotonicClock;
 pub use command::CommandRegistry;
 pub use cupertino_defaults::appearance::{ScrollClick, SidebarIcons, TitlebarAction};
 pub use cx::{
-    glass_outline, EventCx, FocusTarget, Glass, GlassCorners, IdleCx, MeasureCx, OverlayCx,
-    OwnedWindows, PaintCx, SemanticsCx, GLASS_CORNER_EXPONENT, GLASS_CORNER_REACH,
+    glass_outline, EventCx, FocusTarget, IdleCx, MeasureCx, OverlayCx, OwnedWindows, PaintCx,
+    SemanticsCx, GLASS_CORNER_EXPONENT, GLASS_CORNER_REACH,
 };
 pub use drop_target::{
     DropHandler, DropOver, DropPlace, DropTarget, Dropped, HoverHandler, PlaceHandler,
 };
 pub use frame_timing::{FrameTiming, FrameTimingSink};
+pub use glass::{Glass, GlassCorners};
 pub use icons::{next_resource_id, IconImage, Icons, PlaceholderIcons};
 pub use paint::{overlay_id, MAX_MATERIALS};
 pub use personal::{personal, set_personal, Personal};
@@ -227,10 +229,17 @@ pub enum WindowBackground {
     /// desktop's effects offer it and the theme asks for one ([`ThemeTokens::surface`]); otherwise the theme's opaque
     /// fill for the surface in the same shape. Either shows at `alpha`, from 0 (hidden) to 1 (opaque), so a window can
     /// fade its background with its content; an alpha that is not finite shows opaque.
+    ///
+    /// With `glass`, where the theme keeps the surface's material, the compositor draws that glass under the window in
+    /// its place: its system variant, size class, modifiers and tint (or its style, without a variant), which follow
+    /// the window's activation as a node's glass does. The window's shape and `alpha` stand for the glass's corners,
+    /// container and alpha; a window system without glass draws the surface's material, and the opaque fill stays
+    /// where the theme keeps none.
     Surface {
         surface: Surface,
         radius: f64,
         alpha: f64,
+        glass: Option<Glass>,
     },
     /// One colour all over, transparent for a window that only takes input (a catcher of presses around a panel) or
     /// translucent for one that dims what is under it. The content still lays out and takes input, but paints nothing:

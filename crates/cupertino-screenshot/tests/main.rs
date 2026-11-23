@@ -6,3 +6,4 @@ mod color_picker;
 mod files;
 #[path = "share-picker.rs"]
 mod share_picker;
+mod toolbar;

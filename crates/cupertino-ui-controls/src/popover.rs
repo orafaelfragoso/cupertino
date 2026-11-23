@@ -8,8 +8,9 @@ use cupertino_ui_core::layout::{
 };
 use cupertino_ui_core::platform::{DecorationMode, Keysym, WindowSpec};
 use cupertino_ui_core::{
-    Change, CommandRegistry, Element, Event, EventCx, Glass, MeasureCx, PaintCx, Popup,
-    PopupAnchor, Propagation, Role, SemanticsCx, Widget, Window, WindowBackground, WindowKey,
+    Change, CommandRegistry, Element, Event, EventCx, Glass, GlassSize, GlassVariant, MeasureCx,
+    PaintCx, Popup, PopupAnchor, Propagation, Role, SemanticsCx, Widget, Window, WindowBackground,
+    WindowKey,
 };
 
 const ESCAPE: Keysym = Keysym(0xff1b);
@@ -169,8 +170,14 @@ impl<M: Clone + 'static> Widget<M> for Panel<M> {
     }
 }
 
+/// The glass of the panel and of its pointer: a popover anchored to what it belongs to is the cartouche popover
+/// variant at the medium size, which takes its inactive recipe while its window is not active; the legacy dense glass
+/// is what a window system without variants draws.
 fn popover_glass() -> Glass {
-    Glass::dense().container(GLASS_CONTAINER, GLASS_BLEND)
+    Glass::dense()
+        .variant(GlassVariant::CartouchePopover)
+        .size_class(GlassSize::Medium)
+        .container(GLASS_CONTAINER, GLASS_BLEND)
 }
 
 /// The content of a popover window: the row holding the pointer, and under it the panel.

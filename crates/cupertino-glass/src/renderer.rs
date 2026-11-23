@@ -46,6 +46,9 @@ pub struct MaterialRegion<'a> {
     pub corner_style: CornerStyle,
     /// Multiplies the mask coverage (0..=1).
     pub opacity: f32,
+    /// How much of the backdrop's filter the region keeps along its top and its bottom, smoothly between (a variable
+    /// blur, [`RegionParams::set_blur_ramp`]); `[1, 1]` filters evenly.
+    pub blur_ramp: [f32; 2],
 }
 
 impl<'a> MaterialRegion<'a> {
@@ -57,7 +60,25 @@ impl<'a> MaterialRegion<'a> {
             corner_radius: 0.0,
             corner_style: CornerStyle::Circular,
             opacity: 1.0,
+            blur_ramp: [1.0, 1.0],
         }
+    }
+
+    /// The region with its filter fading from `ramp[0]` of it along its top to `ramp[1]` along its bottom.
+    pub fn with_blur_ramp(mut self, ramp: [f32; 2]) -> Self {
+        self.blur_ramp = ramp;
+        self
+    }
+
+    /// The share of the backdrop's filter the region keeps at height `y` (target pixels), as the material program
+    /// weighs it ([`MaterialRegion::blur_ramp`]).
+    pub fn blur_weight(&self, y: f32) -> f32 {
+        let mut p: RegionParams = bytemuck::Zeroable::zeroed();
+        p.set_blur_ramp(self.blur_ramp, self.rect[1], self.rect[3]);
+        let [fade_top, fade_bottom, top, height] = p.ramp;
+        let t = ((y - top) / height.max(1e-3)).clamp(0.0, 1.0);
+        let t = t * t * (3.0 - 2.0 * t);
+        1.0 - (fade_top + (fade_bottom - fade_top) * t)
     }
 
     /// Region that takes its corner radius (points → pixels with `display_scale`) and curve from the
@@ -167,6 +188,9 @@ struct BackdropEntry {
     last_used: u64,
     /// The levels the passes write, in order; the last is the processed backdrop.
     levels: Vec<Texture>,
+    /// The level that holds the capture at the recipe's scale before it is filtered, which a blur ramp shows where
+    /// its weight is low; `None` when the capture is the frame's source.
+    capture: Option<usize>,
 }
 
 /// The device objects of one frame's draws, destroyed once the draws are recorded.
@@ -242,7 +266,8 @@ impl MaterialRenderer {
     pub fn new(device: &Device) -> Result<Self> {
         use BindingKind::{Sampler as S, Texture as T, UniformBuffer as U};
         let layout_pass = layout(device, &[U, T, S])?;
-        let layout_region = layout(device, &[U, T, S])?;
+        // the block, the processed backdrop, the sampler and the capture a blur ramp shows unfiltered
+        let layout_region = layout(device, &[U, T, S, T])?;
         let layout_place = layout(device, &[U])?;
         let layout_vibrant = layout(device, &[U, T, T, S])?;
         let make =
@@ -433,11 +458,15 @@ impl MaterialRenderer {
             }
             return Err(e);
         }
+        let capture = passes
+            .iter()
+            .rposition(|(pass, _)| matches!(pass.kind, PassKind::Downsample));
         Ok((
             BackdropEntry {
                 generation: frame.damage_generation,
                 last_used: self.frame,
                 levels,
+                capture,
             },
             passes.len(),
         ))
@@ -560,6 +589,7 @@ impl MaterialRenderer {
             let fills: Vec<Op> = fill_ops(r.recipe);
             debug_assert!(fills.len() <= MAX_FILLS);
             p.set_fills(&fills);
+            p.set_blur_ramp(r.blur_ramp, r.rect[1], r.rect[3]);
             // the quad covers the mask's antialiased edge past the rectangle
             let pad = 1.0 + MASK_AA;
             let quad = [
@@ -589,10 +619,10 @@ impl MaterialRenderer {
         };
         let mut groups = Vec::with_capacity(regions.len());
         for (key, (region, place)) in keys.iter().zip(&uniforms) {
-            let backdrop = key
-                .as_ref()
-                .and_then(|k| self.cache.get(k))
-                .and_then(|e| e.levels.last())
+            let entry = key.as_ref().and_then(|k| self.cache.get(k));
+            let backdrop = entry.and_then(|e| e.levels.last()).unwrap_or(frame.source);
+            let capture = entry
+                .and_then(|e| e.capture.map(|i| &e.levels[i]))
                 .unwrap_or(frame.source);
             let g0 = device.create_bind_group(
                 &self.layout_region,
@@ -608,6 +638,10 @@ impl MaterialRenderer {
                     BindGroupEntry {
                         binding: 2,
                         resource: BindingResource::Sampler(&self.sampler),
+                    },
+                    BindGroupEntry {
+                        binding: 3,
+                        resource: BindingResource::Texture(capture),
                     },
                 ],
             )?;

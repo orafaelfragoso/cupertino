@@ -1,5 +1,5 @@
 //! The bar: one window as wide (or tall) as its edge of the output, deep enough for the magnified tiles and the
-//! bounces. A node at the bar's own rectangle asks for the Dock's material under it ([`PaintCx::material`]: glass,
+//! bounces. A node at the bar's own rectangle asks for the Dock's glass under it ([`PaintCx::glass`]: the Dock variant,
 //! and with Reduce Transparency a body in the wallpaper's colour), or paints the window's opaque fill where the session
 //! shows none; each tile is a node at the rectangle the model laid it out at,
 //! drawing its icon, and each running indicator and separator is a node of its own under the tiles, so a change
@@ -7,13 +7,15 @@
 //! Return or Space activates, the Menu key or Shift+F10 opens the tile's menu, Escape gives the keyboard back.
 
 use cupertino_kit::core::{
-    AccessibleStates, Action, Change, CommandRegistry, Element, Event, EventCx, FocusTarget, Key,
-    MeasureCx, PaintCx, Propagation, Role, SemanticsCx, SurfaceLayerMark, Widget, Window,
-    WindowBackground, WindowKey,
+    AccessibleStates, Action, Change, CommandRegistry, Element, Event, EventCx, FocusTarget, Glass,
+    GlassSize, GlassVariant, Key, MeasureCx, PaintCx, Propagation, Role, SemanticsCx,
+    SurfaceLayerMark, Widget, Window, WindowBackground, WindowKey,
 };
 use cupertino_kit::geometry::{Point, Rect, Size};
 use cupertino_kit::layout::{Constraints, LayoutSpec, Measured};
-use cupertino_kit::platform::{DecorationMode, Keysym, Mods, SurfaceLayerLook, WindowSpec};
+use cupertino_kit::platform::{
+    DecorationMode, GlassStyle, Keysym, Mods, SurfaceLayerLook, WindowSpec,
+};
 use cupertino_kit::render::{FillRule, GradientStop, Paint, PaintOp, PathVerb, Shape};
 use cupertino_kit::theme::{Surface, BAR_GLASS_MATERIAL, GLASS_MATERIAL};
 
@@ -302,7 +304,13 @@ impl<M: Clone + 'static> Widget<M> for BarMaterial {
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
         let size = cx.size();
         let all = Rect::new(0.0, 0.0, size.width, size.height);
-        let shown = cx.material(BAR_SURFACE, self.radius, 1.0);
+        // glass wherever the theme gives the bar glass, with Increase Contrast too, as the Dock's own variant with
+        // its stages for the display options; a body of another material (Reduce Transparency's) where it does not
+        let shown = if lit_by_glass(cx) {
+            cx.glass(bar_glass().radius(self.radius))
+        } else {
+            cx.material(BAR_SURFACE, self.radius, 1.0)
+        };
         if !shown {
             if let Some(fill) = cx.env().theme.surface(BAR_SURFACE).fill {
                 cx.push(PaintOp::Fill {
@@ -320,6 +328,18 @@ impl<M: Clone + 'static> Widget<M> for BarMaterial {
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
         cx.hidden();
     }
+}
+
+/// The bar's glass: the Dock's variant at the medium size, not adapting to what is behind it; a window system without
+/// variants draws the bar glass in its place.
+fn bar_glass() -> Glass {
+    Glass {
+        style: GlassStyle::Bar,
+        ..Glass::regular()
+    }
+    .variant(GlassVariant::Dock)
+    .size_class(GlassSize::Medium)
+    .adaptive(false)
 }
 
 /// Whether the bar's surface is glass, which lights its own rim along the top and the bottom.

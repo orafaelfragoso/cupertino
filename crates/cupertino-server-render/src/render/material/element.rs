@@ -27,6 +27,9 @@ pub struct MaterialElement {
     output_px: (i32, i32),
     scale: f64,
     mask: Option<MaterialMask>,
+    /// How much of its backdrop's filter the region keeps along its top and its bottom (a variable blur); `[1, 1]`
+    /// filters evenly.
+    blur_ramp: [f32; 2],
     /// The last frame's backdrop generation and where the backdrop changed since (output pixels), when known.
     changed: Option<(u64, Vec<Rectangle<i32, Physical>>)>,
 }
@@ -72,6 +75,7 @@ impl MaterialElement {
             output_px,
             scale,
             mask: None,
+            blur_ramp: [1.0, 1.0],
             changed: None,
         };
         // the id until `finalize`, which sets the commit once a frame: asking with a provisional signature would
@@ -83,6 +87,20 @@ impl MaterialElement {
     /// The region cut to `mask` as well as to its own rectangle; the mask counts from the next [`Self::finalize`].
     pub fn masked(mut self, mask: MaterialMask) -> Self {
         self.mask = Some(mask);
+        self
+    }
+
+    /// The region with its backdrop's filter fading from `ramp[0]` of it along its top to `ramp[1]` along its bottom,
+    /// smoothly between: where less of it is kept the region shows the capture at the recipe's scale, less filtered.
+    /// A weight out of 0 to 1 is clamped, one that is not finite keeps the whole filter.
+    pub fn with_blur_ramp(mut self, ramp: [f32; 2]) -> Self {
+        self.blur_ramp = ramp.map(|w| {
+            if w.is_finite() {
+                w.clamp(0.0, 1.0)
+            } else {
+                1.0
+            }
+        });
         self
     }
 
@@ -153,7 +171,9 @@ impl MaterialElement {
             .f(self.opacity as f64)
             .u(self.recipe.key)
             .u(generation)
-            .u(self.continuous as u64);
+            .u(self.continuous as u64)
+            .f(f64::from(self.blur_ramp[0]))
+            .f(f64::from(self.blur_ramp[1]));
         if let Some(mask) = self.mask {
             sig = sig
                 .rect(mask.rect)
@@ -251,6 +271,7 @@ impl RenderElement<GlesRenderer> for MaterialElement {
             opacity: self.opacity,
             tint: self.tint,
             damage: &abs,
+            blur_ramp: self.blur_ramp,
             changed: self.changed.as_ref().map(|(g, r)| (*g, r.as_slice())),
         };
         let shared = self.shared.clone();

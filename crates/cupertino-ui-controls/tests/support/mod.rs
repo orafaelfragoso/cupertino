@@ -11,8 +11,8 @@ use cupertino_geometry::{Point, Rect, Size};
 use cupertino_theme::ui::{Appearance, ThemePreferences, ThemeTokens};
 use cupertino_ui_core::layout::LayoutDirection;
 use cupertino_ui_core::platform::{
-    Capabilities, DecorationMode, KeyEvent, Keysym, Mods, MouseButton, PointerEvent, Timestamp,
-    WindowEvent, WindowId, WindowSpec, WindowStates,
+    Capabilities, DecorationMode, KeyEvent, Keysym, MaterialRegion, Mods, MouseButton,
+    PointerEvent, Timestamp, WindowEvent, WindowId, WindowRequest, WindowSpec, WindowStates,
 };
 use cupertino_ui_core::{
     AccessibilityNode, Application, Command, CommandRegistry, Element, Key, PlaceholderIcons, Role,
@@ -95,15 +95,16 @@ impl<S: Scene> Application for Probe<S> {
     }
 }
 
-/// Options that draw on the CPU with the built-in font, in the neutral light theme, left to right.
-fn options() -> RuntimeOptions {
+/// Options that draw on the CPU with the built-in font, in the neutral light theme, left to right, with Reduce
+/// Transparency and Reduce Motion on or off.
+fn options(reduce_transparency: bool, reduce_motion: bool) -> RuntimeOptions {
     let mut fonts = FontIndex::new();
     fonts.add_font(Arc::new(BUILTIN_FONT.to_vec())).unwrap();
     let text = Arc::new(TextSystem::new(fonts, "Inter Variable"));
     let theme = ThemeTokens::neutral(ThemePreferences {
         appearance: Appearance::Light,
-        reduce_transparency: false,
-        reduce_motion: true,
+        reduce_transparency,
+        reduce_motion,
     })
     .unwrap();
     let glyphs = Arc::clone(&text);
@@ -143,9 +144,24 @@ pub struct View<S: Scene> {
 
 impl<S: Scene> View<S> {
     pub fn open() -> View<S> {
+        View::open_with(Capabilities::default(), false)
+    }
+
+    /// [`View::open`] on a window system of `capabilities`, with Reduce Transparency on or off.
+    pub fn open_with(capabilities: Capabilities, reduce_transparency: bool) -> View<S> {
+        View::open_moving(capabilities, reduce_transparency, true)
+    }
+
+    /// [`View::open_with`], with Reduce Motion on or off: off, a control's motions run on the clock [`View::wait`]
+    /// moves on.
+    pub fn open_moving(
+        capabilities: Capabilities,
+        reduce_transparency: bool,
+        reduce_motion: bool,
+    ) -> View<S> {
         let mut driver = TestDriver::<Probe<S>>::new(
-            Capabilities::default(),
-            options(),
+            capabilities,
+            options(reduce_transparency, reduce_motion),
             ManualClock::new(Timestamp(0)),
         );
         driver.run_until_idle(turns()).unwrap();
@@ -195,6 +211,21 @@ impl<S: Scene> View<S> {
             .copied()
             .find(|window| shown.iter().any(|(_, id)| id == window))
             .unwrap_or(self.window)
+    }
+
+    /// The materials and glass `window` asked its window system for last, as the window system keeps them.
+    pub fn materials(&mut self, window: WindowId) -> Vec<MaterialRegion> {
+        self.driver
+            .window_system_mut()
+            .requests(window)
+            .unwrap()
+            .iter()
+            .rev()
+            .find_map(|r| match r {
+                WindowRequest::Materials(m) => Some(m.clone()),
+                _ => None,
+            })
+            .unwrap_or_default()
     }
 
     pub fn state(&self) -> &S::State {

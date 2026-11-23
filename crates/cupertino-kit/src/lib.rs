@@ -48,10 +48,10 @@ pub mod core {
         glass_outline, next_resource_id, session_scroll_bars, AccessibleStates, AccessibleValue,
         Action, ActionData, Application, Change, Checked, Command, CommandRegistry, Drag,
         DragPreview, DropOver, DropPlace, DropTarget, Dropped, Element, Environment, Event,
-        EventCx, ExitWhen, FocusTarget, Glass, GlassStyle, IconImage, Icons, IdleCx, Key, Live,
-        MeasureCx, Menus, PaintCx, Phase, Popup, PopupAnchor, Propagation, Relation, RendererClass,
-        Role, SemanticsCx, Shortcut, SurfaceLayerMark, Widget, Window, WindowBackground, WindowKey,
-        MAX_MATERIALS,
+        EventCx, ExitWhen, FocusTarget, Glass, GlassCorners, GlassModifiers, GlassSize, GlassStyle,
+        GlassVariant, IconImage, Icons, IdleCx, Key, Live, MeasureCx, Menus, PaintCx, Phase, Popup,
+        PopupAnchor, Propagation, Relation, RendererClass, Role, SemanticsCx, Shortcut,
+        SurfaceLayerMark, Widget, Window, WindowBackground, WindowKey, MAX_MATERIALS,
     };
 
     /// The runtime's options, which [`crate::app::run_on_with`] and [`crate::app::run_lock_screen_on_with`] hand a
@@ -63,11 +63,11 @@ pub mod core {
 /// Values of windows and input, and the changes the compositor runs on a window's surfaces.
 pub mod platform {
     pub use cupertino_ui_core::platform::{
-        ClipboardData, CursorShape, DecorationMode, DragProgress, DropAction, DropToken,
+        BlurRamp, ClipboardData, CursorShape, DecorationMode, DragProgress, DropAction, DropToken,
         ForeignParent, GlassStyle, KeyEvent, Keysym, LayerChange, LayerEdge, LayerProperty, Mods,
         MouseButton, PointerEvent, PresentChange, PresentProperty, ScrollBars, ScrollSource,
         SurfaceLayerLook, SystemAppearance, Timestamp, WindowId, WindowRequest, WindowSpec,
-        MAX_LAYER_SAMPLES,
+        MAX_LAYER_LENS, MAX_LAYER_SAMPLES,
     };
 
     /// The window system's interface, which [`crate::app::run_on`] and the functions beside it run on: named until
@@ -178,7 +178,7 @@ pub mod prelude {
     pub use cupertino_ui_core::layout::{Align, Axis};
     pub use cupertino_ui_core::platform::WindowSpec;
     pub use cupertino_ui_core::{
-        Application, Command, Element, Glass, GlassStyle, Key, RendererClass, Window,
+        Application, Command, Element, Glass, GlassStyle, GlassVariant, Key, RendererClass, Window,
         WindowBackground, WindowKey,
     };
 }

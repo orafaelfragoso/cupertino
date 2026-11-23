@@ -7,7 +7,7 @@ use cupertino_geometry::CornerStyle;
 use cupertino_glass::cpu;
 use cupertino_glass::gpu::{psnr, HeadlessGpu};
 use cupertino_glass::MaterialRegion;
-use cupertino_theme::{Blend, Fill, Recipe};
+use cupertino_theme::{Backdrop, Blend, Fill, Recipe};
 use image::{Rgba, RgbaImage};
 
 const SIZE: u32 = 96;
@@ -99,6 +99,74 @@ fn the_device_agrees_with_the_cpu_reference() {
     });
     let device = gpu.render_once(&source, &regions, 1.0, [0.5; 3]).unwrap();
     let reference = cpu::render_regions(&source, &regions, 1.0, [0.5; 3], false, false);
+    let quality = psnr(&device, &reference);
+    assert!(
+        quality > 40.0,
+        "the device differs from the CPU renderer: {quality} dB"
+    );
+}
+
+/// A recipe that blurs its backdrop, captured at half scale, by `sigma` points, with no fill over it.
+fn blurred(sigma: f32) -> Recipe {
+    Recipe {
+        backdrop: Some(Backdrop {
+            scale: 0.5,
+            sigma_pt: sigma,
+            ops: Vec::new(),
+        }),
+        ..Default::default()
+    }
+}
+
+/// The spread of the green channel along row `y` of `image` between `x0` and `x1`: how much of the stripes shows.
+fn spread(image: &RgbaImage, x0: u32, x1: u32, y: u32) -> u8 {
+    let values: Vec<u8> = (x0..x1).map(|x| image.get_pixel(x, y)[1]).collect();
+    values.iter().max().unwrap() - values.iter().min().unwrap()
+}
+
+#[test]
+fn a_blur_ramp_blurs_the_top_of_a_region_more_than_its_bottom_and_the_device_agrees_with_the_cpu_reference(
+) {
+    let Some(gpu) = gpu() else { return };
+    // stripes four pixels wide, black and white in turn
+    let source = RgbaImage::from_fn(SIZE, SIZE, |x, _| {
+        if (x / 4) % 2 == 0 {
+            Rgba([0, 0, 0, 255])
+        } else {
+            Rgba([255, 255, 255, 255])
+        }
+    });
+    let recipe = blurred(4.0);
+    let rect = [8.0, 8.0, 80.0, 80.0];
+    let even = MaterialRegion::new(rect, &recipe);
+    let ramped = MaterialRegion::new(rect, &recipe).with_blur_ramp([1.0, 0.0]);
+    assert_eq!(even.blur_weight(8.0), 1.0);
+    assert_eq!(
+        ramped.blur_weight(8.0),
+        1.0,
+        "all of the blur along the top"
+    );
+    assert_eq!(ramped.blur_weight(88.0), 0.0, "none along the bottom");
+    assert!(
+        (ramped.blur_weight(48.0) - 0.5).abs() < 1e-6,
+        "half way down"
+    );
+
+    let device = gpu.render_once(&source, &[ramped], 1.0, [0.5; 3]).unwrap();
+    let evenly = gpu.render_once(&source, &[even], 1.0, [0.5; 3]).unwrap();
+    let (x0, x1) = (24, 72);
+    let (top, bottom) = (spread(&device, x0, x1, 10), spread(&device, x0, x1, 86));
+    assert!(
+        bottom > 3 * top.max(1),
+        "the ramp blurs the top ({top}) more than the bottom ({bottom})"
+    );
+    let even_bottom = spread(&evenly, x0, x1, 86);
+    assert!(
+        even_bottom * 3 < bottom,
+        "evenly the bottom is blurred as the top: {even_bottom}, ramped {bottom}"
+    );
+
+    let reference = cpu::render_regions(&source, &[ramped], 1.0, [0.5; 3], false, false);
     let quality = psnr(&device, &reference);
     assert!(
         quality > 40.0,

@@ -20,7 +20,7 @@ use cupertino_glass::ops::{
     color_ops, fill_ops, Op, PassParams, Placement, RegionParams, PASS_DITHER,
 };
 use cupertino_glass::shaders::{
-    Program, PASS_BLOCK, PASS_SOURCE, PLACEMENT, REGION_BACKDROP, REGION_BLOCK,
+    Program, PASS_BLOCK, PASS_SOURCE, PLACEMENT, REGION_BACKDROP, REGION_BLOCK, REGION_CAPTURE,
 };
 use cupertino_raster_math::blur::{plan_blur, BlurPlan};
 use cupertino_theme::recipe::Recipe;
@@ -113,6 +113,8 @@ struct Programs {
     material: GLuint,
     /// The location of the material program's backdrop sampler.
     material_backdrop: GLint,
+    /// The location of the material program's sampler of the unfiltered capture a blur ramp shows.
+    material_capture: GLint,
     src_loc: [GLint; 3],
     /// The blur dithers its result by pixel: its levels are 8 bits a channel and dithering is on.
     blur_dither: bool,
@@ -728,6 +730,9 @@ pub struct DrawParams<'a> {
     pub tint: [f32; 3],
     /// Rectangles (absolute output pixels) to draw.
     pub damage: &'a [Rectangle<i32, Physical>],
+    /// How much of the backdrop's filter the region keeps along the top and the bottom of `area`, smoothly between (a
+    /// variable blur); `[1, 1]` filters evenly.
+    pub blur_ramp: [f32; 2],
     /// A generation the backdrop had before and the rectangles (output pixels) where it changed since: a backdrop
     /// kept from then is blurred again only around them.
     pub changed: Option<(u64, &'a [Rectangle<i32, Physical>])>,

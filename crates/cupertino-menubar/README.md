@@ -54,7 +54,8 @@ its own, with its own Wayland and bus connections, when the server's `components
 per output and opens its menus as popups (`src/view.rs`): each bar is a Kit window with the server's `menu_bar` role
 (`Role::MenuBar`, a top layer surface across the output that reserves its height, kept while the component restarts, D19),
 the `MenuBar` material behind it while the bar is solid (`Surface::MenuBar`), and each open menu level is a Kit popup with a
-grab, on the `Menu` material, placed where the controller laid it out. The theme, text and icons are the ones Kit shares in
+grab, on the menu variant's glass at the menu's own size without the variant's drop shadow (the popup draws the menu's window
+shadow apart; `view/body.rs`, the Wi-Fi join prompt too), placed where the controller laid it out. The theme, text and icons are the ones Kit shares in
 the process; the display options come with the host's `Event::Appearance`, the outputs with `Event::Outputs`, the server's
 feed with `Event::MenuBar` and the lock with `Event::Session`. Its session and system bus connections are Kit's async ones
 (`bus::session`, `cupertino_kit::bus::connect`), whose tasks run on the component's own loop; what reads files, the X11
@@ -255,8 +256,10 @@ executor, and what it holds (the extras' task holds the system connection) with 
   highlight, and a panel's component the server gives up (`ComponentStopped`) takes it along. A click on the control
   panel slot or the clock publishes `TogglePanel` for the bar's output. The highlight shows on the bar of the panel's
   output only; while a panel does not say its output it shows only where there is one bar. Both items read as expanded to assistive
-  technology while their panel is open. The highlight is the same fill in every mode and tone, Reduce Transparency and
-  Increase Contrast included.
+  technology while their panel is open. The highlight is clear glass tinted with the highlight colour of the slot's tone
+  (`view::HighlightPill`, a node under the slot, so the text keeps the bar's colours), the same shape in every mode and
+  tone; under Reduce Transparency, where the window shows no glass and where the desktop tints none
+  (`PaintCx::glass_tint`), it is that colour painted.
 - **Backdrop.** From shell version 21 the server sends each bar the mean encoded sRGB colour of its output's wallpaper
   under the strip in bands of equal width across the output (`backdrop_bands`); a server of version 14 to 20 sends the
   lightness of that mean colour instead (`backdrop_luminance`, CIE L*/100 in thousandths), read as the luminance it

@@ -30,6 +30,7 @@ struct Region {
     vec4 info;
     vec4 sizes;
     vec4 tint;
+    vec4 ramp;
     vec4 fills[16];
 };
 const float CIRCULAR_EXPONENT = 2.001;
@@ -41,6 +42,8 @@ layout(std140) uniform Placement_block_0Fragment { Placement _group_1_binding_0_
 layout(std140) uniform Region_block_1Fragment { Region _group_0_binding_0_fs; };
 
 uniform highp sampler2D _group_0_binding_1_fs;
+
+uniform highp sampler2D _group_0_binding_3_fs;
 
 smooth in vec2 _vs2fs_location0;
 smooth in vec2 _vs2fs_location1;
@@ -431,39 +434,52 @@ void main() {
     vec2 uv = (((fin.uv * _e43.xy) - _e48.zw) / _e53.zw);
     vec4 _e59 = textureLod(_group_0_binding_1_fs, vec2(uv), 0.0);
     base = _e59.xyz;
-    float _e65 = _group_0_binding_0_fs.info.x;
-    int n_2 = int(_e65);
+    float _e65 = _group_0_binding_0_fs.ramp.x;
+    float _e71 = _group_0_binding_0_fs.ramp.y;
+    if (((_e65 > 0.0) || (_e71 > 0.0))) {
+        float _e80 = _group_0_binding_0_fs.ramp.z;
+        float _e85 = _group_0_binding_0_fs.ramp.w;
+        float t_2 = clamp(((fin.px.y - _e80) / max(_e85, 0.001)), 0.0, 1.0);
+        float _e95 = _group_0_binding_0_fs.ramp.x;
+        float _e99 = _group_0_binding_0_fs.ramp.y;
+        float fade = mix(_e95, _e99, smoothstep(0.0, 1.0, t_2));
+        vec3 _e104 = base;
+        vec4 _e108 = textureLod(_group_0_binding_3_fs, vec2(uv), 0.0);
+        base = mix(_e104, _e108.xyz, fade);
+    }
+    float _e114 = _group_0_binding_0_fs.info.x;
+    int n_2 = int(_e114);
     bool loop_init_3 = true;
     while(true) {
         if (!loop_init_3) {
-            int _e103 = i_1;
-            i_1 = (_e103 + 1);
+            int _e152 = i_1;
+            i_1 = (_e152 + 1);
         }
         loop_init_3 = false;
-        int _e69 = i_1;
-        if ((_e69 < n_2)) {
+        int _e118 = i_1;
+        if ((_e118 < n_2)) {
         } else {
             break;
         }
         {
-            int _e73 = i_1;
-            vec4 a_5 = _group_0_binding_0_fs.fills[(2 * _e73)];
-            int _e80 = i_1;
-            vec4 b_3 = _group_0_binding_0_fs.fills[((2 * _e80) + 1)];
+            int _e122 = i_1;
+            vec4 a_5 = _group_0_binding_0_fs.fills[(2 * _e122)];
+            int _e129 = i_1;
+            vec4 b_3 = _group_0_binding_0_fs.fills[((2 * _e129) + 1)];
             s = b_3.xyz;
             if ((a_5.y > 0.5)) {
-                vec4 _e94 = _group_0_binding_0_fs.tint;
-                s = _e94.xyz;
+                vec4 _e143 = _group_0_binding_0_fs.tint;
+                s = _e143.xyz;
             }
-            vec3 _e98 = s;
-            vec3 _e100 = base;
-            vec3 _e101 = blend(int(a_5.x), _e98, b_3.w, _e100);
-            base = _e101;
+            vec3 _e147 = s;
+            vec3 _e149 = base;
+            vec3 _e150 = blend(int(a_5.x), _e147, b_3.w, _e149);
+            base = _e150;
         }
     }
-    vec3 _e105 = base;
-    vec4 _e114 = placed(vec4(clamp(_e105, vec3(0.0), vec3(1.0)), cov), fin.pos.xy);
-    _fs2p_location0 = _e114;
+    vec3 _e154 = base;
+    vec4 _e163 = placed(vec4(clamp(_e154, vec3(0.0), vec3(1.0)), cov), fin.pos.xy);
+    _fs2p_location0 = _e163;
     return;
 }
 

@@ -7,6 +7,8 @@ mod support;
 mod app_effects_wire;
 #[path = "commit-order.rs"]
 mod commit_order;
+#[path = "glass-variant-wire.rs"]
+mod glass_variant_wire;
 #[path = "keymap-wire.rs"]
 mod keymap_wire;
 #[path = "layer-values.rs"]

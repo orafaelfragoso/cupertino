@@ -39,8 +39,8 @@ use cupertino_kit::controls::{
 };
 use cupertino_kit::core::{
     AccessibleStates, Action, Change, CommandRegistry, Element, Environment, Event, EventCx, Glass,
-    Key, Live, MeasureCx, PaintCx, Phase, Propagation, Role, SemanticsCx, Widget, Window,
-    WindowBackground, WindowKey, MAX_MATERIALS,
+    GlassSize, GlassVariant, Key, Live, MeasureCx, PaintCx, Phase, Propagation, Role, SemanticsCx,
+    Widget, Window, WindowBackground, WindowKey, MAX_MATERIALS,
 };
 use cupertino_kit::geometry::{Insets, Point, Rect, Size};
 use cupertino_kit::layout::{
@@ -2882,9 +2882,13 @@ impl<M: 'static> Widget<M> for Card<M> {
         } else {
             Vec::new()
         };
+        // the notification centre's glass at the medium size; a sheet behind a group's front card steps back
         let glass = self.material
             && cx.glass(
                 Glass::card()
+                    .variant(GlassVariant::NotificationCenter)
+                    .size_class(GlassSize::Medium)
+                    .subdued(self.cover.is_some())
                     .radius(radius)
                     .container(self.container, 0.0)
                     .alpha(opacity),

@@ -3,6 +3,7 @@
 
 mod support;
 
+mod glass;
 mod layout;
 mod runtime;
 mod scrolling;

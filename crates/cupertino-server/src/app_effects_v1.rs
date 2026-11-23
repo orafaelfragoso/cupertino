@@ -17,6 +17,8 @@ use cupertino_protocols::server::app_effects::cupertino_backdrop_v1::{
 use cupertino_server_render::decorations::TitlebarStyle;
 use cupertino_theme::glass::{face_tone, FaceTone};
 use cupertino_theme::GlassStyle;
+
+use crate::glass_look::GlassLook;
 use smithay::desktop::{layer_map_for_output, LayerMap, LayerSurface};
 use smithay::output::Output;
 use smithay::reexports::wayland_server::backend::{ClientId, GlobalId};
@@ -45,7 +47,7 @@ impl AppEffectsV1Global {
 }
 
 /// The version of `cupertino_app_effects_v1` the server offers.
-const VERSION: u32 = 21;
+const VERSION: u32 = 23;
 /// The version from which the backdrops of a subsurface are drawn, above the rest of its surface tree.
 pub const SUBSURFACE_BACKDROPS_VERSION: u32 = 11;
 
@@ -75,6 +77,13 @@ const SIDEBAR_VERSION: u32 = 18;
 const TOOLBAR_VERSION: u32 = 19;
 /// The version of `cupertino_backdrop_v1` that has the menu glass style.
 const MENU_VERSION: u32 = 20;
+/// The version of `cupertino_backdrop_v1` that has `set_blur_ramp`.
+const BLUR_RAMP_VERSION: u32 = 22;
+/// The version of `cupertino_backdrop_v1` that has `set_glass_variant`, `set_glass_tint` and `set_glass_scale`.
+pub const VARIANT_VERSION: u32 = 23;
+/// The most a backdrop's glass may be scaled about its centre (`set_glass_scale`): past it the request is
+/// `invalid_scale`.
+pub const MAX_GLASS_SCALE: f64 = 4.0;
 
 /// The tone a backdrop's text is drawn with, as the wire carries it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -221,14 +230,38 @@ pub fn glass_material(name: &str) -> Option<GlassStyle> {
         .map(|(_, style)| *style)
 }
 
-/// How a backdrop draws as glass (`set_glass`).
+/// How a backdrop draws as glass (`set_glass`, `set_glass_variant`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GlassSpec {
-    pub style: GlassStyle,
+    /// The style or the variant asked for.
+    pub look: GlassLook,
+    /// A straight sRGB colour laid over the face at its alpha (`set_glass_tint`); transparent for none.
+    pub tint: [f32; 4],
     /// Backdrops of a surface with the same nonzero container join into one shape; 0 keeps the backdrop alone.
     pub container: u32,
     /// How far the outlines of a container blend into each other, in logical points; 0 joins them with a hard edge.
     pub spacing: f64,
+    /// How many times its shape's size the glass is drawn, about the shape's centre (`set_glass_scale`); 1 draws it
+    /// at its shape.
+    pub scale: f64,
+}
+
+impl GlassSpec {
+    /// Glass of the legacy `style`, untinted.
+    pub fn of_style(style: GlassStyle, container: u32, spacing: f64) -> Self {
+        Self::of_look(GlassLook::of_style(style), container, spacing)
+    }
+
+    /// Glass of `look`, untinted.
+    pub fn of_look(look: GlassLook, container: u32, spacing: f64) -> Self {
+        Self {
+            look,
+            tint: [0.0; 4],
+            container,
+            spacing,
+            scale: 1.0,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -237,8 +270,14 @@ struct BackdropEntry {
     /// `None` until `set_material`: the backdrop draws nothing unless it is glass.
     material: Option<String>,
     glass: Option<GlassSpec>,
+    /// The tint of its glass (`set_glass_tint`), kept whichever glass it is asked to draw.
+    tint: [f32; 4],
+    /// The scale of its glass about its shape's centre (`set_glass_scale`), kept whichever glass it is asked to draw.
+    glass_scale: f64,
     shape: Shape,
     alpha: f64,
+    /// The share of its blur the backdrop keeps along the top and the bottom of its shape (`set_blur_ramp`).
+    blur_ramp: [f32; 2],
     /// Made through an object of [`SUBSURFACE_BACKDROPS_VERSION`] or later: on a subsurface it is drawn.
     on_subsurface: bool,
 }
@@ -270,25 +309,36 @@ pub struct BackdropArea {
     pub alpha: f64,
     /// Drawn as glass: by `set_glass`, or by a glass material name ([`GLASS_MATERIALS`]).
     pub glass: Option<GlassSpec>,
+    /// The share of its blur the backdrop keeps along the top and the bottom of its area, smoothly between
+    /// (`set_blur_ramp`); `[1, 1]` blurs evenly.
+    pub blur_ramp: [f32; 2],
+    /// The surface whose backdrop it is (a layer's glass: the layer's parent), whose presses interactive glass grows
+    /// under ([`crate::glass_press`]); `None` takes none.
+    pub owner: Option<WlSurface>,
 }
 
 /// Committed, visible backdrops of `surface` (set material or glass, non-empty shape) in creation order,
 /// placed relative to `origin`, the logical position of the surface's local origin.
 pub fn surface_backdrops(surface: &WlSurface, origin: Point<f64, Logical>) -> Vec<BackdropArea> {
-    with_states(surface, |states| committed_backdrops(states, origin, false))
+    with_states(surface, |states| {
+        committed_backdrops(states, origin, false, Some(surface))
+    })
 }
 
 /// Committed, visible backdrops of the subsurface `surface` that it draws ([`SUBSURFACE_BACKDROPS_VERSION`]), as
 /// [`surface_backdrops`] places them.
 pub fn subsurface_backdrops(surface: &WlSurface, origin: Point<f64, Logical>) -> Vec<BackdropArea> {
-    with_states(surface, |states| committed_backdrops(states, origin, true))
+    with_states(surface, |states| {
+        committed_backdrops(states, origin, true, Some(surface))
+    })
 }
 
-/// The committed backdrops of a surface's `states`, those a subsurface draws only with `subsurface`.
+/// The committed backdrops of a surface's `states`, those a subsurface draws only with `subsurface`, of `owner`.
 fn committed_backdrops(
     states: &SurfaceData,
     origin: Point<f64, Logical>,
     subsurface: bool,
+    owner: Option<&WlSurface>,
 ) -> Vec<BackdropArea> {
     states
         .cached_state
@@ -298,16 +348,19 @@ fn committed_backdrops(
         .iter()
         .filter(|e| !subsurface || e.on_subsurface)
         .filter_map(|e| {
-            let glass = e.glass.or_else(|| {
-                e.material
-                    .as_deref()
-                    .and_then(glass_material)
-                    .map(|style| GlassSpec {
-                        style,
-                        container: 0,
-                        spacing: 0.0,
-                    })
-            });
+            let glass = e
+                .glass
+                .or_else(|| {
+                    e.material
+                        .as_deref()
+                        .and_then(glass_material)
+                        .map(|style| GlassSpec::of_style(style, 0, 0.0))
+                })
+                .map(|g| GlassSpec {
+                    tint: e.tint,
+                    scale: e.glass_scale,
+                    ..g
+                });
             let material = match (&e.material, glass) {
                 (Some(m), _) => m.clone(),
                 (None, Some(_)) => String::new(),
@@ -321,6 +374,8 @@ fn committed_backdrops(
                 area: Rectangle::new(origin + Point::from((s.x, s.y)), (s.width, s.height).into()),
                 radius: s.radius,
                 alpha: e.alpha,
+                blur_ramp: e.blur_ramp,
+                owner: owner.cloned(),
             })
         })
         .collect()
@@ -409,7 +464,7 @@ pub fn raised_parts(root: &WlSurface) -> Option<Vec<TreePart<WlSurface>>> {
             let Some(v) = view(states) else {
                 return true;
             };
-            let raised = !committed_backdrops(states, (0.0, 0.0).into(), true).is_empty();
+            let raised = !committed_backdrops(states, (0.0, 0.0).into(), true, None).is_empty();
             if raised {
                 steps.borrow_mut().push(TreeStep::End {
                     surface: surface.clone(),
@@ -560,8 +615,11 @@ impl Dispatch<CupertinoAppEffectsV1, ()> for Cupertino {
                             serial,
                             material: None,
                             glass: None,
+                            tint: [0.0; 4],
+                            glass_scale: 1.0,
                             shape: Shape::default(),
                             alpha: 1.0,
+                            blur_ramp: [1.0, 1.0],
                             on_subsurface: effects.version() >= SUBSURFACE_BACKDROPS_VERSION,
                         });
                 });
@@ -818,6 +876,28 @@ fn set_shape(resource: &CupertinoBackdropV1, data: &BackdropData, rect: [f64; 4]
     });
 }
 
+/// Draw a backdrop as glass of the variant, modifier bits and size class of `wire` (`set_glass_variant`); one the
+/// protocol does not define, or a negative or non-finite spacing, is a protocol error.
+fn set_glass_variant(
+    resource: &CupertinoBackdropV1,
+    data: &BackdropData,
+    [variant, bits, size]: [u32; 3],
+    container: u32,
+    spacing: f64,
+) {
+    let look = crate::glass_look::of_wire(variant, bits, size);
+    let (Some(look), true) = (look, spacing >= 0.0 && spacing.is_finite()) else {
+        resource.post_error(
+            Error::InvalidGlass,
+            format!(
+                "unknown glass variant {variant}, modifiers {bits} or size class {size}, or negative spacing {spacing}"
+            ),
+        );
+        return;
+    };
+    data.edit(|e| e.glass = Some(GlassSpec::of_look(look, container, spacing)));
+}
+
 impl Dispatch<CupertinoBackdropV1, BackdropData> for Cupertino {
     fn request(
         state: &mut Self,
@@ -979,13 +1059,61 @@ impl Dispatch<CupertinoBackdropV1, BackdropData> for Cupertino {
                     );
                     return;
                 };
-                data.edit(|e| {
-                    e.glass = Some(GlassSpec {
-                        style,
-                        container,
-                        spacing,
-                    })
-                });
+                data.edit(|e| e.glass = Some(GlassSpec::of_style(style, container, spacing)));
+            }
+            cupertino_backdrop_v1::Request::SetGlassVariant {
+                variant,
+                modifiers,
+                size_class,
+                container,
+                spacing,
+            } if resource.version() >= VARIANT_VERSION => {
+                let wire = [
+                    u32::from(variant),
+                    u32::from(modifiers),
+                    u32::from(size_class),
+                ];
+                set_glass_variant(resource, data, wire, container, spacing)
+            }
+            cupertino_backdrop_v1::Request::SetGlassTint {
+                red,
+                green,
+                blue,
+                alpha,
+            } if resource.version() >= VARIANT_VERSION => {
+                let Some(tint) = crate::glass_look::tint([red, green, blue, alpha]) else {
+                    resource.post_error(
+                        Error::InvalidTint,
+                        format!("tint {red}, {green}, {blue}, {alpha} is not all from 0 to 1"),
+                    );
+                    return;
+                };
+                data.edit(|e| e.tint = tint);
+            }
+            cupertino_backdrop_v1::Request::SetGlassScale { scale }
+                if resource.version() >= VARIANT_VERSION =>
+            {
+                if !(scale.is_finite() && scale > 0.0 && scale <= MAX_GLASS_SCALE) {
+                    resource.post_error(
+                        Error::InvalidScale,
+                        format!("glass scale {scale} is not above 0 and at most {MAX_GLASS_SCALE}"),
+                    );
+                    return;
+                }
+                data.edit(|e| e.glass_scale = scale);
+            }
+            cupertino_backdrop_v1::Request::SetBlurRamp { top, bottom }
+                if resource.version() >= BLUR_RAMP_VERSION =>
+            {
+                let weight = |w: f64| w.is_finite() && (0.0..=1.0).contains(&w);
+                if !(weight(top) && weight(bottom)) {
+                    resource.post_error(
+                        Error::InvalidRamp,
+                        format!("blur weights {top} and {bottom} are not both from 0 to 1"),
+                    );
+                    return;
+                }
+                data.edit(|e| e.blur_ramp = [top as f32, bottom as f32]);
             }
             // `Destroy` is handled in `destroyed`
             _ => {}

@@ -1,5 +1,6 @@
 //! Typed wrapper of `cupertino_backdrop_v1`: a material the server draws below a surface.
 
+use crate::app::glass_variant::{valid_tint, VariantGlass};
 use crate::app::{AppEvent, Error};
 use crate::State;
 use cupertino_app_protocols::client::app_effects::cupertino_backdrop_v1::{
@@ -222,12 +223,92 @@ impl Backdrop {
         Ok(())
     }
 
+    /// Whether the server takes glass named by its system variant and tinted ([`Self::set_glass_variant`],
+    /// [`Self::set_glass_tint`], version 23).
+    pub fn takes_glass_variants(&self) -> bool {
+        self.proxy.version() >= VARIANT_VERSION
+    }
+
+    /// Draw the backdrop as glass of a system variant, its size class and modifiers, joined into `container` as
+    /// [`Self::set_glass`] joins it. The server resolves it with the window's activation, and grows interactive glass
+    /// under a press. A server before version 23 draws [`VariantGlass::fallback_style`] instead. Errors on a negative
+    /// or non-finite spacing, which the server would reject as a protocol error.
+    pub fn set_glass_variant(
+        &self,
+        glass: VariantGlass,
+        container: u32,
+        spacing: f64,
+    ) -> Result<(), Error> {
+        if !(spacing.is_finite() && spacing >= 0.0) {
+            return Err(Error::InvalidGlass);
+        }
+        if !self.takes_glass_variants() {
+            return self.set_glass(glass.fallback_style(), container, spacing);
+        }
+        self.proxy.set_glass_variant(
+            glass.wire_variant(),
+            glass.wire_modifiers(),
+            glass.wire_size(),
+            container,
+            spacing,
+        );
+        Ok(())
+    }
+
+    /// Lay the straight sRGB colour `rgba` (each channel 0 to 1) over the face of the backdrop's glass at its alpha;
+    /// alpha 0 lays none. Errors on a channel outside 0 to 1 or not finite, which the server would reject as a protocol
+    /// error. A server before version 23 tints nothing and is sent nothing.
+    pub fn set_glass_tint(&self, rgba: [f64; 4]) -> Result<(), Error> {
+        if !valid_tint(rgba) {
+            return Err(Error::InvalidGlass);
+        }
+        if self.takes_glass_variants() {
+            let [r, g, b, a] = rgba;
+            self.proxy.set_glass_tint(r, g, b, a);
+        }
+        Ok(())
+    }
+
+    /// Draw the backdrop's glass `scale` times its shape's size about the shape's centre, its recipe resolved at the
+    /// shape's size and its corners circular while it is not 1; 1 draws it at its shape. Errors on a scale not above 0,
+    /// above [`MAX_GLASS_SCALE`] or not finite, which the server would reject as a protocol error. A server before
+    /// version 23 draws the glass at its shape and is sent nothing.
+    pub fn set_glass_scale(&self, scale: f64) -> Result<(), Error> {
+        if !(scale.is_finite() && scale > 0.0 && scale <= MAX_GLASS_SCALE) {
+            return Err(Error::InvalidGlass);
+        }
+        if self.takes_glass_variants() {
+            self.proxy.set_glass_scale(scale);
+        }
+        Ok(())
+    }
+
     /// Opacity of the whole backdrop, 0 to 1.
     pub fn set_alpha(&self, alpha: f64) -> Result<(), Error> {
         if !(0.0..=1.0).contains(&alpha) {
             return Err(Error::InvalidAlpha);
         }
         self.proxy.set_alpha(alpha);
+        Ok(())
+    }
+
+    /// Whether the server varies the backdrop's blur from its top to its bottom ([`Self::set_blur_ramp`], version 22).
+    pub fn takes_blur_ramp(&self) -> bool {
+        self.proxy.version() >= BLUR_RAMP_VERSION
+    }
+
+    /// Blur the backdrop at `top` times its blur along the top edge of its shape and at `bottom` times it along the
+    /// bottom edge, smoothly between (a variable blur); 1 and 1 blur evenly. Errors on a weight below 0, above 1 or not
+    /// finite, which the server would reject as a protocol error. A server before version 22 blurs evenly and is sent
+    /// nothing.
+    pub fn set_blur_ramp(&self, top: f64, bottom: f64) -> Result<(), Error> {
+        let weight = |w: f64| w.is_finite() && (0.0..=1.0).contains(&w);
+        if !(weight(top) && weight(bottom)) {
+            return Err(Error::InvalidRamp);
+        }
+        if self.takes_blur_ramp() {
+            self.proxy.set_blur_ramp(top, bottom);
+        }
         Ok(())
     }
 }
@@ -283,6 +364,13 @@ const SIDEBAR_VERSION: u32 = 18;
 const TOOLBAR_VERSION: u32 = 19;
 /// The version of `cupertino_backdrop_v1` that has the menu glass style.
 const MENU_VERSION: u32 = 20;
+/// The version of `cupertino_backdrop_v1` that has `set_blur_ramp`.
+const BLUR_RAMP_VERSION: u32 = 22;
+/// The version of `cupertino_backdrop_v1` that has `set_glass_variant` and `set_glass_tint`.
+pub(crate) const VARIANT_VERSION: u32 = 23;
+/// The most a backdrop's glass may be scaled about its centre ([`Backdrop::set_glass_scale`]), as the protocol bounds
+/// it.
+pub const MAX_GLASS_SCALE: f64 = 4.0;
 
 /// The wire style of the menu on a server of `version`: one before [`MENU_VERSION`] draws it as dense glass (regular
 /// glass before [`DENSE_VERSION`]).

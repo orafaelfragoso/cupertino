@@ -88,6 +88,11 @@ fn dither_rgb(c: vec3<f32>, frag: vec2<f32>) -> vec3<f32> {
 // The backdrop is always bound (a recipe without a backdrop filter reads an unfiltered copy of the target) and shares
 // the target's orientation; it may cover only part of the target, the part around the region it was made for:
 // Region.info.zw is its origin and Region.sizes.zw its size, in target pixels.
+//
+// A blur ramp (a variable blur) mixes the backdrop with `sharp`, the same part of the target captured at the recipe's
+// scale before it was filtered, by a weight that runs from the top of the ramp's band to its bottom along a smoothstep.
+// Region.ramp.xy is how much of the filter fades out at the band's top and bottom (0 keeps it all, so a zeroed block
+// has no ramp) and Region.ramp.zw the band's top y and height in target pixels.
 
 // ---- place.wgsl ----
 // Where a region program (material, glass) draws: one quad per damage rectangle, mapped through the frame's
@@ -141,12 +146,14 @@ struct Region {
   info: vec4<f32>,      // number of fill layers, 1, the backdrop's origin x, y
   sizes: vec4<f32>,     // target w, h, the backdrop's w, h
   tint: vec4<f32>,      // tint layer colour (rgb)
+  ramp: vec4<f32>,      // the filter's fade at the band's top and bottom, the band's top y and height (px)
   fills: array<vec4<f32>, 16>,  // per fill: (blend id, tint flag, 0, 0), straight rgba
 };
 
 @group(0) @binding(0) var<uniform> R: Region;
 @group(0) @binding(1) var backdrop: texture_2d<f32>;
 @group(0) @binding(2) var samp: sampler;
+@group(0) @binding(3) var sharp: texture_2d<f32>;
 
 // Signed distance (negative inside) to a rounded rectangle centred at the origin with half extents `hs`. `e` is the
 // corner extent; `n` the superellipse exponent (2 = circular). Same formula as
@@ -197,6 +204,11 @@ fn fs_main(fin: VsOut) -> @location(0) vec4<f32> {
   if (cov <= 0.0) { discard; }
   let uv = (fin.uv * R.sizes.xy - R.info.zw) / R.sizes.zw;
   var base = textureSampleLevel(backdrop, samp, uv, 0.0).rgb;
+  if (R.ramp.x > 0.0 || R.ramp.y > 0.0) {
+    let t = clamp((fin.px.y - R.ramp.z) / max(R.ramp.w, 1e-3), 0.0, 1.0);
+    let fade = mix(R.ramp.x, R.ramp.y, smoothstep(0.0, 1.0, t));
+    base = mix(base, textureSampleLevel(sharp, samp, uv, 0.0).rgb, fade);
+  }
   let n = i32(R.info.x);
   for (var i = 0; i < n; i++) {
     let a = R.fills[2 * i];

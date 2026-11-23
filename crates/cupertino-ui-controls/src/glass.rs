@@ -3,7 +3,8 @@
 //! Every glass surface a control draws names its [`GlassRole`]; [`GlassRole::material`] says what draws that role. A
 //! role drawn by the compositor asks for the theme's material under the node ([`PaintCx::material`]) and paints the
 //! surface's opaque fill where the window cannot show it (no desktop effects, Reduce Transparency, Increase
-//! Contrast). A glass role asks for glass under the node ([`PaintCx::glass`]), which the compositor keeps with
+//! Contrast); where the theme keeps that material, a role with a system variant ([`GlassRole::variant_glass`]) asks for
+//! the variant's glass in its place. A glass role asks for glass under the node ([`PaintCx::glass`]), which the compositor keeps with
 //! Reduce Transparency and Increase Contrast, and joins the role's container. A painted role draws a translucent body
 //! with a fine rim over what the window shows below it, as a glass role does where the desktop shows no glass. Moving
 //! a role to another material is the one line of its arm in [`GlassRole::material`].
@@ -26,6 +27,7 @@
 
 use cupertino_geometry::{Insets, Rect};
 use cupertino_theme::ui::{Color, Surface};
+use cupertino_ui_core::platform::{GlassStyle, GlassVariant};
 use cupertino_ui_core::{Glass, PaintCx};
 use cupertino_ui_render::{Paint, PaintOp, Shape};
 
@@ -53,6 +55,10 @@ pub enum GlassMaterial {
     Glass,
     /// A translucent body and rim the toolkit paints over the window's own content.
     Painted,
+    /// The compositor's glass of this style in a surface layer of the node's own over the window's content, which it
+    /// shows through the glass ([`PaintCx::surface_layers`]); where the window system shows no surface layers, and with
+    /// Reduce Transparency, the toolkit paints the role as [`GlassMaterial::Painted`].
+    Layer(GlassStyle),
 }
 
 impl GlassRole {
@@ -60,12 +66,13 @@ impl GlassRole {
     /// compositor draws below it; the sidebar panel lies at the window's edge over what is behind the window, which
     /// the compositor's sidebar glass shows. A translucent button is glass of its own where that glass can show
     /// ([`paint_glass`]) and paints its body elsewhere. A thumb's lens lies over the track it slides along, which the
-    /// window paints and which would hide the compositor's glass, so the toolkit paints it.
+    /// window paints and which would hide the compositor's glass under the window, so it is glass in a surface layer
+    /// of its own over the track, painted where the window system shows no such layer.
     pub const fn material(self) -> GlassMaterial {
         match self {
             GlassRole::ToolbarGroup | GlassRole::GlassButton => GlassMaterial::Glass,
             GlassRole::SidebarPanel => GlassMaterial::Compositor(Surface::Sidebar),
-            GlassRole::ThumbLens => GlassMaterial::Painted,
+            GlassRole::ThumbLens => GlassMaterial::Layer(crate::lens::KNOB_GLASS),
         }
     }
 
@@ -77,14 +84,25 @@ impl GlassRole {
         }
     }
 
-    /// The glass a role of [`GlassMaterial::Glass`] asks for: a toolbar control's glass of its own, lifted further from
-    /// the content with a line of light along its top, and regular glass for the rest.
+    /// The glass a role of [`GlassMaterial::Glass`] asks for: a toolbar control's glass of its own, the toolbar item
+    /// variant (a fifth of the blur, a fixed bend and the control border, with its inactive recipe while the window is
+    /// not active); a glass button's the regular variant, which the button grows under a press itself (its scale), so
+    /// it is not interactive glass the compositor would grow again; and regular glass for the rest.
     pub fn glass(self) -> Glass {
         match self {
-            GlassRole::ToolbarGroup => Glass::toolbar(),
-            GlassRole::SidebarPanel | GlassRole::GlassButton | GlassRole::ThumbLens => {
-                Glass::regular()
-            }
+            GlassRole::ToolbarGroup => Glass::toolbar().variant(GlassVariant::ToolbarItem),
+            GlassRole::GlassButton => Glass::regular().variant(GlassVariant::Regular),
+            GlassRole::SidebarPanel | GlassRole::ThumbLens => Glass::regular(),
+        }
+    }
+
+    /// The glass a role of [`GlassMaterial::Compositor`] asks for in place of its surface's material where the theme
+    /// keeps that material: the sidebar panel lies against the window's leading edge, the abutted sidebar's glass
+    /// (planar, no light and no ring at its edge), which takes its inactive recipe while the window is not active.
+    pub fn variant_glass(self) -> Option<Glass> {
+        match self {
+            GlassRole::SidebarPanel => Some(Glass::sidebar().variant(GlassVariant::AbuttedSidebar)),
+            GlassRole::ToolbarGroup | GlassRole::GlassButton | GlassRole::ThumbLens => None,
         }
     }
 
@@ -103,6 +121,16 @@ const TOOLBAR_CONTAINER: u32 = 1;
 /// How close two toolbar controls come before their glass blends into one shape: the room between neighbouring
 /// controls, so at rest each keeps its own outline and they merge only as one grows towards the next.
 const TOOLBAR_SPACING: f64 = crate::toolbar::TOOLBAR_GAP;
+
+/// The glass of the chosen segment's pill inside a toolbar control: the tab variant (the regular glass under a white
+/// fill), a shape of the toolbar's container with a recipe of its own, so it lies within its control's glass rather
+/// than on it. The variant draws its own edge; the toolkit lays none over it.
+pub(crate) fn toolbar_selection_glass(radius: f64) -> Glass {
+    Glass::toolbar()
+        .variant(GlassVariant::Tab)
+        .radius(radius)
+        .container(TOOLBAR_CONTAINER, TOOLBAR_SPACING)
+}
 
 /// The corner radius of a shape inset `inset` points inside a shape with corner radius `outer`, so both corners share
 /// a centre: `outer − inset`, never below zero.
@@ -125,6 +153,20 @@ const SHADE_BLUR: f64 = 3.0;
 /// Returns true when the compositor draws it, or when the node already lies on glass, which then serves it: glass is
 /// never doubled. A glass button asks for glass only where it can show ([`shows_button_glass`]).
 pub fn paint_glass(cx: &mut PaintCx<'_>, role: GlassRole, rect: Rect, radius: f64) -> bool {
+    paint_glass_tinted(cx, role, rect, radius, None, 1.0)
+}
+
+/// [`paint_glass`] with the compositor's glass of a [`GlassMaterial::Glass`] role tinted with `tint` laid over its face
+/// at the tint's alpha, drawn `scale` times the node's size about its centre; what the toolkit paints in its place is
+/// untinted and unscaled, so the caller lays the tint over it.
+pub(crate) fn paint_glass_tinted(
+    cx: &mut PaintCx<'_>,
+    role: GlassRole,
+    rect: Rect,
+    radius: f64,
+    tint: Option<Color>,
+    scale: f64,
+) -> bool {
     if cx.on_glass() {
         return true;
     }
@@ -134,7 +176,14 @@ pub fn paint_glass(cx: &mut PaintCx<'_>, role: GlassRole, rect: Rect, radius: f6
     }
     match role.material() {
         GlassMaterial::Compositor(surface) => {
-            if cx.material(surface, radius, 1.0) {
+            // where the theme keeps the surface's glass, a role named by its system variant asks for that glass, which
+            // follows the window's activation; elsewhere the surface's opaque fill
+            let kept = cx.env().theme.surface(surface).material.is_some();
+            let shown = match role.variant_glass() {
+                Some(glass) if kept => cx.glass(glass.radius(radius)),
+                _ => cx.material(surface, radius, 1.0),
+            };
+            if shown {
                 return true;
             }
             if let Some(fill) = cx.env().theme.surface(surface).fill {
@@ -147,7 +196,12 @@ pub fn paint_glass(cx: &mut PaintCx<'_>, role: GlassRole, rect: Rect, radius: f6
         }
         GlassMaterial::Glass => {
             let (container, spacing) = role.container();
-            if cx.glass(role.glass().radius(radius).container(container, spacing)) {
+            let glass = role
+                .glass()
+                .radius(radius)
+                .container(container, spacing)
+                .scale(scale);
+            if cx.glass(tint.map_or(glass, |c| glass.tint(c))) {
                 // the toolkit lays a toolbar control's outline, and with Increase Contrast a firmer rim, over the
                 // compositor's glass
                 paint_edge(cx, role, rect, radius);
@@ -160,7 +214,7 @@ pub fn paint_glass(cx: &mut PaintCx<'_>, role: GlassRole, rect: Rect, radius: f6
             }
             false
         }
-        GlassMaterial::Painted => {
+        GlassMaterial::Painted | GlassMaterial::Layer(_) => {
             match role {
                 GlassRole::GlassButton => paint_button_body(cx, rect, radius),
                 _ => paint_body(cx, rect, radius),

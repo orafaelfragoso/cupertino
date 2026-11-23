@@ -5,12 +5,18 @@
 mod support;
 
 mod dialog;
+#[path = "glass-variants.rs"]
+mod glass_variants;
+#[path = "knob-lens.rs"]
+mod knob_lens;
 mod lists;
 mod menus;
 #[path = "press-controls.rs"]
 mod press_controls;
 #[path = "text-fields.rs"]
 mod text_fields;
+#[path = "toolbar-band.rs"]
+mod toolbar_band;
 mod typeahead;
 #[path = "value-controls.rs"]
 mod value_controls;

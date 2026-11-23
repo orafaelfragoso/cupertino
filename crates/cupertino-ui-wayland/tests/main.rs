@@ -5,7 +5,11 @@
 mod wire;
 
 mod geometry;
+#[path = "glass-variants.rs"]
+mod glass_variants;
 #[path = "keyed-surfaces.rs"]
 mod keyed_surfaces;
+#[path = "layer-look.rs"]
+mod layer_look;
 mod materials;
 mod presenter;

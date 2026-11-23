@@ -1062,9 +1062,16 @@ impl<M: Clone + 'static> Widget<M> for PullDownButton<M> {
 const TAIL_CONTAINER: u32 = 1;
 const TAIL_BLEND: f64 = 5.0;
 
+/// The glass of a menu: the menu variant, which takes its inactive recipe while its window is not active, without its
+/// drop shadow, as the compositor draws a popup's shadow and outline apart; the menu style stays what a window system
+/// without variants draws.
+pub(crate) const MENU_GLASS: Glass = Glass::menu()
+    .variant(cupertino_ui_core::GlassVariant::Menu)
+    .exclude_shadow(true);
+
 /// A panel with a pointer is a menu all the same: it is menu glass, its pointer joined to it.
 pub(super) fn tail_glass() -> Glass {
-    Glass::menu().container(TAIL_CONTAINER, TAIL_BLEND)
+    MENU_GLASS.container(TAIL_CONTAINER, TAIL_BLEND)
 }
 
 /// The content of a menu window with a pointer: the panel, and under it the row that holds the pointer.

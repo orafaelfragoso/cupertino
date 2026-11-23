@@ -3,10 +3,10 @@ use crate::accessibility::{
 };
 use crate::layout::LayoutDirection;
 use crate::paint::NodeMaterial;
-use crate::platform::{CursorShape, GlassRegion, GlassStyle, Timestamp};
+use crate::platform::{BlurRamp, CursorShape, GlassRegion, GlassStyle, Timestamp};
 use crate::route::Placement;
 use crate::widget::Change;
-use crate::{Environment, Key, NodeId, Phase, WindowKey};
+use crate::{Environment, Glass, GlassCorners, Key, NodeId, Phase, WindowKey};
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_theme::ui::Surface;
 use cupertino_ui_render::{
@@ -473,6 +473,10 @@ pub struct PaintCx<'a> {
     pub(crate) layer: bool,
     /// The node draws in that layer.
     pub(crate) in_layer: bool,
+    /// The window system shows surface layers ([`PaintCx::surface_layers`]).
+    pub(crate) surface_layers: bool,
+    /// What the window system's glass takes beyond its style ([`PaintCx::glass_variants`]).
+    pub(crate) glass_support: crate::paint::GlassSupport,
     /// What nodes of the window told each other so far ([`PaintCx::page_scrolled`]).
     pub(crate) marks: crate::paint::WindowMarks,
     /// The appearance the node asked its subtree to draw in ([`PaintCx::pin_appearance`]).
@@ -563,6 +567,36 @@ impl PaintCx<'_> {
     /// the window's own content through it.
     pub fn in_raised_layer(&self) -> bool {
         self.in_layer
+    }
+
+    /// Whether the window system shows surface layers ([`Capabilities::surface_layers`](crate::platform::Capabilities)),
+    /// so a node's overlay layer ([`Widget::overlay_layer`](crate::Widget::overlay_layer)) is drawn as one, with the
+    /// glass its look asks for over what the window draws under it. Without them the overlay draws in place and the
+    /// node paints what the layer's glass would have shown, such as a held knob's painted lens.
+    pub fn surface_layers(&self) -> bool {
+        self.surface_layers
+    }
+
+    /// Whether the window system draws glass named by its system variant ([`Glass::variant`],
+    /// [`Capabilities::glass_variants`](crate::platform::Capabilities::glass_variants)). Without it
+    /// [`PaintCx::glass`] still shows glass where the window can, of the [`Glass`]'s style alone, so a node whose look
+    /// rests on the variant (glass within glass of another variant) paints its own fill instead of asking.
+    pub fn glass_variants(&self) -> bool {
+        self.glass_support.variants
+    }
+
+    /// Whether the window system tints glass ([`Glass::tint`],
+    /// [`Capabilities::glass_tint`](crate::platform::Capabilities::glass_tint)). Without it the glass shows
+    /// untinted, so a node whose look rests on the tint paints the colour itself.
+    pub fn glass_tint(&self) -> bool {
+        self.glass_support.tint
+    }
+
+    /// Whether the window system draws glass scaled about its shape's centre ([`Glass::scale`],
+    /// [`Capabilities::glass_scale`](crate::platform::Capabilities::glass_scale)). Without it the glass keeps its
+    /// shape's size whatever scale is asked.
+    pub fn glass_scale(&self) -> bool {
+        self.glass_support.scale
     }
 
     /// A scroll view tells the window whether its page is scrolled under the window's raised nodes. A node that does
@@ -702,11 +736,8 @@ impl PaintCx<'_> {
                 1.0
             },
             // a glass surface is glass on its own
-            glass: glass_style(name).map(|style| GlassRegion {
-                style,
-                container: 0,
-                spacing: 0.0,
-            }),
+            glass: glass_style(name).map(|style| GlassRegion::of_style(style, 0, 0.0)),
+            blur_ramp: BlurRamp::EVEN,
         });
         self.take_foreground();
         self.material.is_some()
@@ -758,7 +789,7 @@ impl PaintCx<'_> {
         *self.asked_material = true;
         *self.lays_material = true;
         let finite = |v: f64, otherwise: f64| if v.is_finite() { v } else { otherwise };
-        let (name, style) = (glass.style.material(), glass.style);
+        let name = glass.style.material();
         *self.material = self.materials.then(|| NodeMaterial {
             name,
             radius: match glass.corners {
@@ -768,14 +799,32 @@ impl PaintCx<'_> {
             capsule: glass.corners == GlassCorners::Capsule,
             in_layer,
             alpha: finite(glass.alpha, 1.0).clamp(0.0, 1.0),
-            glass: Some(GlassRegion {
-                style,
-                container: glass.container,
-                spacing: finite(glass.spacing, 0.0).max(0.0),
-            }),
+            glass: Some(glass.region(finite(glass.spacing, 0.0).max(0.0))),
+            blur_ramp: BlurRamp::EVEN,
         });
         self.take_foreground();
         self.material.is_some()
+    }
+
+    /// Varies the blur of the material or glass this node asked for ([`PaintCx::material`], [`PaintCx::glass`]) down
+    /// the node: `ramp.top` times its blur along its top edge and `ramp.bottom` times it along its bottom edge,
+    /// smoothly between (a variable blur), each weight taken from 0 to 1; where less of the blur is kept the material
+    /// shows what lies behind it as the compositor captured it. A compositor that cannot blurs evenly. Nothing without a
+    /// material asked for first; asking again resets the ramp to [`BlurRamp::EVEN`].
+    pub fn set_blur_ramp(&mut self, ramp: BlurRamp) {
+        let weight = |w: f64| {
+            if w.is_finite() {
+                w.clamp(0.0, 1.0)
+            } else {
+                1.0
+            }
+        };
+        if let Some(material) = self.material.as_mut() {
+            material.blur_ramp = BlurRamp {
+                top: weight(ramp.top),
+                bottom: weight(ramp.bottom),
+            };
+        }
     }
 }
 
@@ -845,206 +894,6 @@ pub fn glass_outline(rect: Rect, radius: f64, outset: f64) -> Shape {
         extent,
         exponent,
         outset,
-    }
-}
-
-/// The corners of a glass node.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum GlassCorners {
-    /// Corners of this radius in points.
-    Radius(f64),
-    /// Round ends: the radius is half the node's shorter side, whatever its size.
-    Capsule,
-}
-
-/// What [`PaintCx::glass`] puts under a node: the style, the corners, the container it joins and its opacity.
-///
-/// ```
-/// use cupertino_ui_core::{Glass, GlassCorners, GlassStyle};
-///
-/// // two capsule buttons of a toolbar that merge where they are less than 8 points apart
-/// let button = Glass::regular().capsule().container(1, 8.0);
-/// assert_eq!(button.corners, GlassCorners::Capsule);
-/// // a clear panel on its own, fading in
-/// let panel = Glass::clear().radius(16.0).alpha(0.5);
-/// assert_eq!((panel.style, panel.container), (GlassStyle::Clear, 0));
-/// ```
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Glass {
-    pub style: GlassStyle,
-    pub corners: GlassCorners,
-    /// Nodes of a window with the same nonzero container join into one shape; 0 keeps the node on its own.
-    pub container: u32,
-    /// How far the outlines of a container blend into each other, in points; 0 joins them with a hard edge.
-    pub spacing: f64,
-    /// From 0 (hidden) to 1.
-    pub alpha: f64,
-}
-
-impl Glass {
-    /// Regular glass with square corners, on its own, opaque.
-    pub fn regular() -> Self {
-        Self {
-            style: GlassStyle::Regular,
-            corners: GlassCorners::Radius(0.0),
-            container: 0,
-            spacing: 0.0,
-            alpha: 1.0,
-        }
-    }
-
-    /// Clear glass with square corners, on its own, opaque.
-    pub fn clear() -> Self {
-        Self {
-            style: GlassStyle::Clear,
-            ..Self::regular()
-        }
-    }
-
-    /// The glass of a large floating panel with square corners, on its own, opaque: regular glass toned further
-    /// towards the middle, with a soft drop shadow the compositor draws below it.
-    pub fn large_panel() -> Self {
-        Self {
-            style: GlassStyle::LargePanel,
-            ..Self::regular()
-        }
-    }
-
-    /// The glass of a dense floating surface with square corners, on its own, opaque: regular glass with a wider blur
-    /// over a washed-out face.
-    pub fn dense() -> Self {
-        Self {
-            style: GlassStyle::Dense,
-            ..Self::regular()
-        }
-    }
-
-    /// The glass of the tiles of a panel of modules with square corners, on its own, opaque: the clear face under a
-    /// wide blur and a strong bending edge.
-    pub fn module() -> Self {
-        Self {
-            style: GlassStyle::Module,
-            ..Self::regular()
-        }
-    }
-
-    /// The glass of a notification card with square corners, on its own, opaque: the clear face over a wide blur and a
-    /// blur fill, with a faint ring shadow inside its outline.
-    pub fn card() -> Self {
-        Self {
-            style: GlassStyle::Card,
-            ..Self::regular()
-        }
-    }
-
-    /// The glass of a level's track with square corners, on its own, opaque: no blur, a bending edge that follows the
-    /// track's height and a ring shadow inside its outline.
-    pub fn track() -> Self {
-        Self {
-            style: GlassStyle::Track,
-            ..Self::regular()
-        }
-    }
-
-    /// The glass of a small popover over a floating bar with square corners, on its own, opaque: a wide soft blur fill,
-    /// a strong bending edge and a thin line of light along its top and bottom edges.
-    pub fn popover() -> Self {
-        Self {
-            style: GlassStyle::Popover,
-            ..Self::regular()
-        }
-    }
-
-    /// The glass of a wide floating panel of large icons (the application switcher) with square corners, on its own,
-    /// opaque: a blur of about a point, a strong bending edge and no shadow.
-    pub fn switcher() -> Self {
-        Self {
-            style: GlassStyle::Switcher,
-            ..Self::regular()
-        }
-    }
-
-    /// The glass of a window's sidebar with square corners, on its own, opaque: a wide soft blur fill over a light pane
-    /// in the light appearance and a dark, nearly grey one in the dark.
-    pub fn sidebar() -> Self {
-        Self {
-            style: GlassStyle::Sidebar,
-            ..Self::regular()
-        }
-    }
-
-    /// The module glass of a tile that steps back, with square corners, on its own, opaque: twice the module's blur and
-    /// a quieter face.
-    pub fn subdued_module() -> Self {
-        Self {
-            style: GlassStyle::SubduedModule,
-            ..Self::regular()
-        }
-    }
-
-    /// The glass of a small card of content over the desktop with square corners, on its own, opaque: a faint blur under
-    /// a wide soft blur fill and a veiled face.
-    pub fn snippet() -> Self {
-        Self {
-            style: GlassStyle::Snippet,
-            ..Self::regular()
-        }
-    }
-
-    /// Clear glass veiled black from a fifth at its top to fully at its bottom, with square corners, on its own, opaque.
-    pub fn veiled() -> Self {
-        Self {
-            style: GlassStyle::Veiled,
-            ..Self::regular()
-        }
-    }
-
-    /// The glass of a window's toolbar controls with square corners, on its own, opaque: regular glass with a face
-    /// lifted a little further and a thin line of light along its top and bottom edges.
-    pub fn toolbar() -> Self {
-        Self {
-            style: GlassStyle::Toolbar,
-            ..Self::regular()
-        }
-    }
-
-    /// The glass of a menu with square corners, on its own, opaque: a wide blur under a face that tones the backdrop
-    /// into a narrow band, with a thin line of light along its top and bottom edges.
-    pub fn menu() -> Self {
-        Self {
-            style: GlassStyle::Menu,
-            ..Self::regular()
-        }
-    }
-
-    /// Corners of `radius` points.
-    pub fn radius(self, radius: f64) -> Self {
-        Self {
-            corners: GlassCorners::Radius(radius),
-            ..self
-        }
-    }
-
-    /// Round ends.
-    pub fn capsule(self) -> Self {
-        Self {
-            corners: GlassCorners::Capsule,
-            ..self
-        }
-    }
-
-    /// Join container `id` (nonzero), blending into its other shapes over `spacing` points.
-    pub fn container(self, id: u32, spacing: f64) -> Self {
-        Self {
-            container: id,
-            spacing,
-            ..self
-        }
-    }
-
-    /// Draw at `alpha`, from 0 (hidden) to 1.
-    pub fn alpha(self, alpha: f64) -> Self {
-        Self { alpha, ..self }
     }
 }
 

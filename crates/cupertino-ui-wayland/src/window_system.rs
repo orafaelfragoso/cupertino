@@ -17,13 +17,13 @@ use cupertino_geometry::{Rect, Size};
 use cupertino_keyboard::modifiers::Profile;
 use cupertino_menu_model::{ActionName, Command, Entry, Menu, MenuBar};
 use cupertino_ui_core::platform::{
-    ActivationRequest, Backdrop, Capabilities, ClipboardData, ClipboardKind, ClipboardToken, Color,
-    ConfigureId, CursorShape, DragImage, DragProgress, DragRequest, DragToken, DropAction,
-    DropAnswer, DropEvent, DropToken, GlassRegion, GlassStyle, GlassTone, KeyEvent, Keysym,
-    LayerList, MaterialRegion, MenuDescription, PlatformError, PlatformEvent, PopupSpec,
-    PresentOutcome, RaisedChange, RaisedLayer, RendererClass, ScrollBars, Shown, Submission,
-    Submitted, SurfaceLayerLook, SystemAppearance, Timestamp, WindowEvent, WindowId, WindowRequest,
-    WindowSpec, WindowSystem,
+    ActivationRequest, Backdrop, BlurRamp, Capabilities, ClipboardData, ClipboardKind,
+    ClipboardToken, Color, ConfigureId, CursorShape, DragImage, DragProgress, DragRequest,
+    DragToken, DropAction, DropAnswer, DropEvent, DropToken, GlassRegion, GlassStyle, GlassTone,
+    KeyEvent, Keysym, LayerList, MaterialRegion, MenuDescription, PlatformError, PlatformEvent,
+    PopupSpec, PresentOutcome, RaisedChange, RaisedLayer, RendererClass, ScrollBars, Shown,
+    Submission, Submitted, SurfaceLayerLook, SystemAppearance, Timestamp, WindowEvent, WindowId,
+    WindowRequest, WindowSpec, WindowSystem,
 };
 use cupertino_ui_core::WindowKey;
 use cupertino_ui_render::render_thread;
@@ -209,6 +209,8 @@ enum Published {
 struct ShownBackdrop {
     material: Material,
     name: String,
+    /// The glass drawn in place of the material, if any.
+    glass: Option<GlassRegion>,
     radius: f64,
     /// The logical size its shape was last given.
     shaped: Option<(u32, u32)>,
@@ -227,6 +229,39 @@ fn layers_drawn(conn: &Connection, effects: Option<&AppEffects>) -> bool {
         && effects.is_some_and(AppEffects::draws_subsurface_backdrops)
 }
 
+/// Varies the blur of `backdrop` from its top to its bottom by `ramp`, each weight taken from 0 to 1 (one that is not a
+/// number as 1); a compositor without blur ramps is sent nothing and blurs evenly.
+fn set_ramp(
+    backdrop: &Material,
+    ramp: BlurRamp,
+) -> Result<(), cupertino_wayland_client::app::Error> {
+    let weight = |w: f64| if w.is_nan() { 1.0 } else { w.clamp(0.0, 1.0) };
+    backdrop.set_blur_ramp(weight(ramp.top), weight(ramp.bottom))
+}
+
+/// Draws the glass of `backdrop` `scale` times its shape about its centre, held to what the protocol takes (one not
+/// above 0 or not finite as 1); a compositor without it is sent nothing.
+fn set_scale(backdrop: &Material, scale: f64) -> Result<(), cupertino_wayland_client::app::Error> {
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale.min(cupertino_wayland_client::app::MAX_GLASS_SCALE)
+    } else {
+        1.0
+    };
+    backdrop.set_glass_scale(scale)
+}
+
+/// The scale a region's glass is drawn at about its centre: 1 for a material.
+fn glass_scale(region: &MaterialRegion) -> f64 {
+    region.glass.map_or(1.0, |g| g.scale)
+}
+
+/// Whether two regions draw the same material or glass but for the glass's scale, which goes on its own
+/// ([`set_scale`]) as a control grows its glass frame by frame.
+fn same_look(a: &MaterialRegion, b: &MaterialRegion) -> bool {
+    let unscaled = |g: Option<GlassRegion>| g.map(|g| GlassRegion { scale: 1.0, ..g });
+    a.material == b.material && unscaled(a.glass) == unscaled(b.glass)
+}
+
 /// Gives `backdrop` its look: glass for `glass`, or for a glass material name of the theme, on its own; otherwise the
 /// material `name`.
 fn set_look(
@@ -234,19 +269,21 @@ fn set_look(
     name: &str,
     glass: Option<GlassRegion>,
 ) -> Result<(), cupertino_wayland_client::app::Error> {
-    let glass = glass.or_else(|| {
-        GlassStyle::of_material(name).map(|style| GlassRegion {
-            style,
-            container: 0,
-            spacing: 0.0,
-        })
-    });
-    match glass {
-        Some(g) => backdrop.set_glass(protocol_style(g.style), g.container, g.spacing),
-        None => {
-            backdrop.set_material(name);
-            Ok(())
-        }
+    let glass =
+        glass.or_else(|| GlassStyle::of_material(name).map(|s| GlassRegion::of_style(s, 0, 0.0)));
+    let Some(g) = glass else {
+        backdrop.set_material(name);
+        return Ok(());
+    };
+    // a compositor without variants draws the style, untinted
+    backdrop.set_glass_tint(g.tint.map(f64::from))?;
+    match g.variant.filter(|_| backdrop.takes_glass_variants()) {
+        Some(variant) => backdrop.set_glass_variant(
+            crate::glass_wire::protocol_variant(variant, g.document_modal),
+            g.container,
+            g.spacing,
+        ),
+        None => backdrop.set_glass(protocol_style(g.style), g.container, g.spacing),
     }
 }
 
@@ -865,13 +902,14 @@ impl WaylandWindowSystem {
                 material,
                 radius,
                 alpha,
+                glass,
             }) => {
                 // a fade changes only the alpha of the material already shown
                 if let Some(shown) = self
                     .window_mut(window)?
                     .backdrop
                     .as_mut()
-                    .filter(|b| b.name == material)
+                    .filter(|b| b.name == material && b.glass == glass)
                 {
                     shown.material.set_alpha(alpha).map_err(protocol)?;
                     if shown.radius != radius {
@@ -892,11 +930,12 @@ impl WaylandWindowSystem {
                 let wire = effects
                     .backdrop(&self.conn, surface)
                     .map_err(|e| PlatformError::Protocol(e.to_string()))?;
-                set_look(&wire, &material, None).map_err(protocol)?;
+                set_look(&wire, &material, glass).map_err(protocol)?;
                 wire.set_alpha(alpha).map_err(protocol)?;
                 Some(ShownBackdrop {
                     material: wire,
                     name: material,
+                    glass,
                     radius,
                     shaped: None,
                 })
@@ -945,12 +984,19 @@ impl WaylandWindowSystem {
         let result = (|| {
             for (i, region) in regions.into_iter().enumerate() {
                 if let Some(old) = shown.get_mut(i) {
-                    if old.region.material != region.material || old.region.glass != region.glass {
+                    if !same_look(&old.region, &region) {
                         set_look(&old.material, &region.material, region.glass)
                             .map_err(protocol)?;
                     }
+                    // the compositor keeps the scale whichever glass the backdrop draws
+                    if glass_scale(&old.region) != glass_scale(&region) {
+                        set_scale(&old.material, glass_scale(&region)).map_err(protocol)?;
+                    }
                     if old.region.alpha != region.alpha {
                         old.material.set_alpha(region.alpha).map_err(protocol)?;
+                    }
+                    if old.region.blur_ramp != region.blur_ramp {
+                        set_ramp(&old.material, region.blur_ramp).map_err(protocol)?;
                     }
                     if old.region.rect != region.rect || old.region.radius != region.radius {
                         old.material
@@ -969,7 +1015,13 @@ impl WaylandWindowSystem {
                     .backdrop(&self.conn, on)
                     .map_err(|e| PlatformError::Protocol(e.to_string()))?;
                 set_look(&material, &region.material, region.glass).map_err(protocol)?;
+                if glass_scale(&region) != 1.0 {
+                    set_scale(&material, glass_scale(&region)).map_err(protocol)?;
+                }
                 material.set_alpha(region.alpha).map_err(protocol)?;
+                if region.blur_ramp != BlurRamp::EVEN {
+                    set_ramp(&material, region.blur_ramp).map_err(protocol)?;
+                }
                 material
                     .set_shape(&region.rect, region.radius)
                     .map_err(protocol)?;

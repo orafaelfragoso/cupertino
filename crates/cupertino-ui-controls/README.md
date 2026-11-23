@@ -58,7 +58,11 @@ from the application's model and reports changes as messages.
   translucent body through which the track shows shrunk about the lens's centre, a light band along its top and
   bottom, a bright rim and a fine dark outline. At rest both thumbs are plain; buttons, check boxes and fields never
   take a lens. Increase Contrast strengthens the rim and outline, Reduce Transparency makes the body nearly opaque,
-  and Reduce Motion leaves the lens as it is: it is a state, not a motion.
+  and Reduce Motion leaves the lens as it is: it is a state, not a motion. Where the window system shows surface
+  layers and Reduce Transparency is off, the lens is the compositor's glass instead of the painted body: the thumb's
+  overlay is a surface layer of its own at the lens's rect (`Widget::overlay_layer_rect`) whose glass, named by the
+  control lens variant for a switch and the slider lens variant for a slider (`SurfaceLayerLook::variant`; the track's
+  style where variants are not drawn), magnifies the track under it, while the plain thumb fades under it as before.
 - **Dragging.** A switch's thumb follows a drag along its track once the pointer moves 3 pt; let go over the switch,
   it takes the side the thumb is nearer, and let go away from it the drag is cancelled. A segmented control dragged
   from one segment across the others keeps the chosen segment marked and shows the one under the pointer pressed;
@@ -184,7 +188,13 @@ from the application's model and reports changes as messages.
   window's top (under the toolbar row), centred across. Return answers with the default button and Escape with the
   cancel one once the focused control passes them on; Tab and Shift+Tab stay inside; every other key stops there. The
   first control of the body takes the focus, else the least destructive button (Cancel, then the default, then
-  another). A `DialogKind::Dialog` is a sheet: 340 pt wide, solid in the window colour with a 16 pt radius, a soft
+  another). Both panels float in the window's raised layer (`Widget::raised`) and, where the desktop shows glass and
+  neither Reduce Transparency nor Increase Contrast is on, are glass of the glass window variant
+  (`GlassVariant::GlassWindow`) over the window's content, which casts the window shadow (an alert's, or a sheet's fainter one as document-modal glass; deep while the window is
+  active, shallow while it is not) and takes its inactive recipe while the window is not active; the painted bodies
+  below stand in for it elsewhere (and where the desktop draws no variants) and while an alert pops in, each with its
+  own shadow; an alert's is the window shadow its settled glass casts (`cupertino_theme::glass::ALERT_SHADOW_ACTIVE`,
+  `ALERT_SHADOW_INACTIVE`), so the shadow holds as the glass takes over. A `DialogKind::Dialog` is a sheet: 340 pt wide, solid in the window colour with a 16 pt radius, a soft
   shadow, a dark hairline outside its edge and, in the dark appearance, a faint light rim inside it; the title, the
   message, the body and a trailing row of buttons, 20 pt in. A `DialogKind::Alert` is 260 pt wide, a nearly opaque
   grey (97 %, opaque under Reduce Transparency and Increase Contrast) with a light rim, a 26 pt radius and the
@@ -193,12 +203,7 @@ from the application's model and reports changes as messages.
   28 pt capsule buttons 16 pt from the sides and the bottom. Two buttons whose labels fit half the row (reckoned from
   the character count) go side by side at equal widths in their given order; otherwise they are stacked full width,
   8 pt apart, in the reverse order, so the default is on top. The default capsule takes the accent, the others a quiet
-  fill; a destructive answer has a red label (a red capsule in high contrast). The alert is not glass: `PaintCx::glass`
-  is drawn by the compositor under the window's surface, so over the window's own opaque content it would not show,
-  and the alert is part of that surface. Glass would need the alert on a surface of its own above the window, which
-  Kit's popups are not fit for: a popup without a grab gets no keyboard, one with a grab needs the serial of a press
-  (an alert raised by a timer or a task has none) and is dismissed by a press outside, and no anchor hangs one centred
-  under the toolbar row. Dialogs show and go at once: the window draws no motion for them, since a fade keyed to the
+  fill; a destructive answer has a red label (a red capsule in high contrast). Dialogs show and go at once: the window draws no motion for them, since a fade keyed to the
   clock would leave them unseen in every test harness whose clock stands still.
 - **Press catchers.** `PressCatcher` is the window a shell panel puts under itself, over a whole output, to hear a press
   outside the panel: it asks for no size (its surface's role gives it one), is shown as one transparent colour without
@@ -250,7 +255,10 @@ from the application's model and reports changes as messages.
   band thinning in a straight line to 72 % at its bottom, with a hairline of 0.5 pt along the bottom, or, with Reduce Transparency and in high contrast, the band filled with
   the window background and a separator along its bottom. In a window that is not active the band is the inactive
   title bar colour (`ColorRole::InactiveTitlebar`), solid with a hard edge and no veil, with the separator under it
-  where the active band has one. Its bar, paging and focus scrolling keep below the row.
+  where the active band has one. Its bar, paging and focus scrolling keep below the row. Where the window shows
+  materials the row lays the soft band itself, the `ToolbarBand` material, and the veil is left out: its blur fades
+  out down the row as a scroll edge does (`scroll_edge::TOOLBAR_BAND_RAMP`, all of it under the row's top and 3 % at
+  the band's bottom, `PaintCx::set_blur_ramp`); a compositor without blur ramps blurs the band evenly.
   Without a layer the row draws in place, the page is clipped below it and there is no edge. A `TableView` with
   `header_top` puts its header that far down, raised with the row, and starts its rows below both; the rows scroll
   under the two, and since the header's titles are text outside glass the band under them is always the solid one,
@@ -260,25 +268,46 @@ from the application's model and reports changes as messages.
   back and forward chevrons, `More`'s three dots and `Tag`, a tag outline pointing up and to the trailing side with its
   hole by the point, mirrored right to left.
 - **Glass.** Each glass surface names a `GlassRole` (`ToolbarGroup`, `SidebarPanel`, `GlassButton`, `ThumbLens`) and
-  `GlassRole::material` says what draws it; a toolbar group is toolbar glass (`Glass::toolbar`, through `GlassRole::glass`) in one container
+  `GlassRole::material` says what draws it; a toolbar group is toolbar glass named by the toolbar item variant
+  (`Glass::toolbar` with `GlassVariant::ToolbarItem`, through `GlassRole::glass`, its inactive recipe while the window
+  is not active) in one container
   per window (`GlassRole::container`, blending only when two controls come closer than the 8 pt gap between them),
   kept by the compositor with Reduce Transparency and Increase Contrast, over the content pane's background, which the
   compositor draws below it; where the desktop shows no glass it paints a translucent body with a one-pixel rim (and a
   soft shade in the light appearance). At rest the toolkit outlines a toolbar group's glass (above); with Increase Contrast
   in the light appearance it lays a firmer rim over any floating control's glass: a dark rim on the outermost device
-  pixel, 50 % black at the sides and 30 % at the top and bottom. A glass button is regular glass of its own (container 0) where that glass can show,
+  pixel, 50 % black at the sides and 30 % at the top and bottom. A choice's chosen pill is glass of the tab variant
+  (`GlassVariant::Tab`, the regular glass under a white fill) as a shape of the toolbar's container with a recipe of
+  its own, laid under the segments so their glyphs lie over it; the toolkit draws no edge over it, and where the
+  desktop shows no glass, or draws no variants (`PaintCx::glass_variants`), it is a fill over the capsule. A glass button is regular glass of its own (container 0) where that glass can show,
   its body filling its node, without Reduce Transparency: on a material the window shows (a sidebar, a translucent
   window background), and over the window's own content, as the button is a raised node (`Widget::raised`) whose glass
   lies between the window's raised layer and its content, so the content shows through it; its label then takes the
-  colours of text on glass. Where the window system has no raised layer, with Reduce Transparency and where the
-  desktop shows no glass it paints its body and rim. A held thumb's lens lies over the
-  track the window paints, so it stays painted. A light divider is 40 % black, as strong over
+  colours of text on glass. Its glass is the regular variant, which the button grows about its centre (`Glass::scale`) under a
+  press on Kit's clock, to 1.043 times its size along `SpringPreset::GLASS_BUTTON_PRESS` (settled in about 512 ms)
+  and back along `GLASS_BUTTON_RELEASE` (about 965 ms), none under Reduce Motion; it is not interactive glass, so
+  the compositor does not grow it again. A
+  default button, enabled in an active window, tints its glass with the accent at full strength and takes the default
+  button's label colour. Over the glass a level of the label colour (black in the light appearance, white in the dark)
+  marks the pointer: 4.7 % at once while it is over the button, 9.8 % while pressed (14.9 % and 34.9 % light, 29.8 %
+  dark with Increase Contrast), the press level coming on over 45 ms and going over 320 ms. Where the window system has
+  no raised layer, with Reduce Transparency and where the desktop shows no glass it paints its body and rim, a default
+  button the accent over them; where the desktop tints no glass (`PaintCx::glass_tint`) a default button fills the
+  accent over its glass, and where it scales none (`PaintCx::glass_scale`) the glass does not grow. A held thumb's lens lies over the
+  track the window paints, so it is glass in a surface layer of its own over the track (`GlassMaterial::Layer`),
+  painted where the window system shows no surface layers and with Reduce Transparency. A light divider is 40 % black, as strong over
   the glass as the disabled glyphs beside it. The field under a resting `ToolbarSearch` button is not drawn, so the button's
   glass shows what lies below the field. Moving a role to another material is its one arm in `GlassRole::material`.
   `GlassRole::floating` tells the floating controls (toolbar groups, glass buttons, a held thumb) from the content
-  surfaces (the sidebar panel). Glass is never laid on glass: a node on glass the window shows
+  surfaces (the sidebar panel). The sidebar panel's glass is named by the abutted sidebar variant
+  (`GlassRole::variant_glass`, `GlassVariant::AbuttedSidebar`): planar against the window's leading edge, with its
+  inactive recipe while the window is not active; where the theme keeps no sidebar material (Reduce Transparency) it
+  paints the theme's opaque fill. A single-panel window (`PANEL_WINDOW_BACKGROUND`) is the abutted sidebar glass too,
+  named on its window background over the sidebar material, opaque where the theme keeps none. Glass is never laid on glass: a node on glass the window shows
   (`PaintCx::on_glass`) draws none of its own, so a glass button on a toolbar group shows its label alone.
-- **Menus.** `Menu` levels follow the pointer as the menu bar's do (`cupertino-menu-model`'s `tracking`): the row
+- **Menus.** A menu's panel, square-cornered or round, and a pointed menu's panel and pointer are the menu variant
+  without its drop shadow (`MENU_GLASS`), as the compositor draws a popup's shadow and outline apart; the menu style
+  stays what a window system without variants draws. `Menu` levels follow the pointer as the menu bar's do (`cupertino-menu-model`'s `tracking`): the row
   under the pointer takes the focus and the highlight, a submenu opens once the pointer rests 0.2 s on its row and
   closes once it rests 0.3 s on another, and while the pointer heads from a row into its open submenu (each move inside
   the triangle between the last point and the submenu's near edge, without a 0.3 s rest) the rows it crosses wait. A
@@ -312,7 +341,9 @@ from the application's model and reports changes as messages.
   (`cupertino-ui-core`'s runtime). Rows are 24 pt, labels 16.5 pt in, the highlight inset 5.5 pt with a 6.75 pt corner,
   the panel's corner 11.5 pt, a submenu overlaps its menu by 5.5 pt, and shortcuts take 0.28 of the label's strength.
 - **Popovers.** A popover is glass with a 16 pt corner, like a menu: the compositor draws its body and edge, and
-  over the opaque fill (no material) it strokes its own edge.
+  over the opaque fill (no material) it strokes its own edge. Anchored by its pointer, the panel and the pointer are
+  one container of the cartouche popover variant at the medium size (`GlassVariant::CartouchePopover`,
+  `GlassSize::Medium`), with its inactive recipe while the popover's window is not active.
 - **Pickers.** `PullDownButton` is titled with what it does and opens a menu of actions below itself on the press,
   with a single downward chevron where a `PopUpButton` has two opposing ones; its menu marks nothing.
   `ColorWell` shows a colour in a capsule set in a quiet rim, sends `on_open` on a press, Space or Return, and reads as

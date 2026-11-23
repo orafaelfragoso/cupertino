@@ -133,7 +133,8 @@ pub fn lower(
                             pass.tint,
                             viewport,
                             ctx.scale,
-                        );
+                        )
+                        .with_blur_ramp(pass.blur_ramp);
                         // a region cannot be drawn apart and clipped (it reads what is drawn below it): a rounded
                         // clip becomes its mask
                         let element = match item.clip {

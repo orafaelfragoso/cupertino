@@ -3,4 +3,5 @@
 
 mod arrangement;
 mod controller;
+mod glass;
 mod lifecycle;

@@ -13,8 +13,8 @@ use cupertino_ui_core::layout::{
     Align, Axis, Constraints, ContainerKind, Flex, Justify, LayoutSpec, Measured, SizeSpec,
 };
 use cupertino_ui_core::{
-    Change, Element, Event, EventCx, MeasureCx, PaintCx, Propagation, SemanticsCx, Widget,
-    WindowBackground,
+    Change, Element, Event, EventCx, Glass, GlassVariant, MeasureCx, PaintCx, Propagation,
+    SemanticsCx, Widget, WindowBackground,
 };
 use cupertino_ui_render::{Paint, PaintOp, Shape};
 
@@ -23,11 +23,13 @@ use cupertino_ui_render::{Paint, PaintOp, Shape};
 pub const WINDOW_CORNER_RADIUS: f64 = cupertino_theme::WINDOW_CORNER_RADIUS_REGULAR;
 /// The background of a small window that is a single panel, such as an About window or a prompt for permission: the
 /// sidebar's glass under the whole window, its corners the window's, so it reads as the same glass as a sidebar
-/// window's panel. Where the desktop's effects offer no glass it is the theme's opaque window colour in that shape.
+/// window's panel: the abutted sidebar variant, which takes its inactive recipe while the window is not active. Where
+/// the desktop's effects offer no glass it is the theme's opaque window colour in that shape.
 pub const PANEL_WINDOW_BACKGROUND: WindowBackground = WindowBackground::Surface {
     surface: Surface::Sidebar,
     radius: WINDOW_CORNER_RADIUS,
     alpha: 1.0,
+    glass: Some(Glass::sidebar().variant(GlassVariant::AbuttedSidebar)),
 };
 /// How far the sidebar panel lies inside the window's edges. The panel meets the top, leading and bottom edges, its
 /// corners there the window's own; a panel inset from them would have [`nested_radius`] corners.

@@ -3,7 +3,11 @@
 
 #[path = "display-filter.rs"]
 mod display_filter;
+#[path = "glass-looks.rs"]
+mod glass_looks;
 #[path = "glass-model.rs"]
 mod glass_model;
+#[path = "glass-stages.rs"]
+mod glass_stages;
 #[path = "material-renderer.rs"]
 mod material_renderer;

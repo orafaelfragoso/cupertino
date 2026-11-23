@@ -6,7 +6,7 @@
 use crate::cx::{OverlayCx, PaintCx};
 use crate::layout::{ContainerKind, LayoutDirection};
 use crate::layout::{IdMap, IdSet};
-use crate::platform::{GlassRegion, GlassStyle, GlassTone, MaterialRegion, Timestamp};
+use crate::platform::{BlurRamp, GlassRegion, GlassStyle, GlassTone, MaterialRegion, Timestamp};
 use crate::route::{Geometry, Placement};
 use crate::tree::Tree;
 use crate::{Environment, NodeId, WindowBackground};
@@ -169,6 +169,8 @@ pub(crate) struct NodeMaterial {
     pub(crate) in_layer: bool,
     pub(crate) alpha: f64,
     pub(crate) glass: Option<GlassRegion>,
+    /// How its blur varies from its top to its bottom ([`crate::PaintCx::set_blur_ramp`]).
+    pub(crate) blur_ramp: BlurRamp,
 }
 
 mod geometry;
@@ -227,6 +229,8 @@ struct Ground {
     window_active: bool,
     focus_visible: bool,
     layer: bool,
+    surface_layers: bool,
+    glass: GlassSupport,
     materials: bool,
 }
 
@@ -320,6 +324,25 @@ pub(crate) struct LayerPainting {
     pub(crate) bottom: f64,
 }
 
+/// What a window's glass takes beyond its style: a system variant, a tint and a scale
+/// ([`Capabilities::glass_variants`](crate::platform::Capabilities::glass_variants), `glass_tint`, `glass_scale`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct GlassSupport {
+    pub(crate) variants: bool,
+    pub(crate) tint: bool,
+    pub(crate) scale: bool,
+}
+
+impl GlassSupport {
+    pub(crate) fn of(capabilities: &crate::platform::Capabilities) -> Self {
+        Self {
+            variants: capabilities.glass_variants,
+            tint: capabilities.glass_tint,
+            scale: capabilities.glass_scale,
+        }
+    }
+}
+
 pub(crate) struct PaintInput<'a> {
     pub(crate) env: &'a Environment,
     pub(crate) focus: Option<NodeId>,
@@ -337,6 +360,10 @@ pub(crate) struct PaintInput<'a> {
     pub(crate) obscuring: &'a [(NodeId, Rect)],
     /// The window system shows a raised layer, which the raised nodes draw in.
     pub(crate) layer: bool,
+    /// The window system shows surface layers ([`PaintCx::surface_layers`]).
+    pub(crate) surface_layers: bool,
+    /// What the window system's glass takes beyond its style ([`PaintCx::glass_variants`]).
+    pub(crate) glass: GlassSupport,
     /// The window's theme in the light and the dark appearance, for subtrees pinned to one
     /// ([`PaintCx::pin_appearance`]); `None` keeps such a subtree in the window's.
     pub(crate) pinned: &'a [Option<Arc<ThemeTokens>>; 2],
@@ -613,6 +640,8 @@ impl Painter {
                 window_active: input.window_active,
                 focus_visible: input.focus_visible,
                 layer: input.layer,
+                surface_layers: input.surface_layers,
+                glass: input.glass,
                 materials: input.materials,
             };
             // a kept subtree that changed in nothing and lies on the same ground is laid in as it was, unwalked
@@ -720,6 +749,7 @@ impl Painter {
                             surface,
                             radius,
                             alpha,
+                            ..
                         } => (
                             Shape::RoundedRect {
                                 rect: bounds,
@@ -796,6 +826,8 @@ impl Painter {
                         reads_obscured: &mut reads_obscured,
                         layer: input.layer,
                         in_layer: raised && input.layer,
+                        surface_layers: input.surface_layers,
+                        glass_support: input.glass,
                         marks,
                         reads_marks: &mut reads_marks,
                         set_page_scrolled: &mut set_scrolled,
@@ -881,6 +913,7 @@ impl Painter {
                         alpha: material.alpha,
                         glass: material.glass,
                         raised: raised && input.layer,
+                        blur_ramp: material.blur_ramp,
                     });
                 }
             }

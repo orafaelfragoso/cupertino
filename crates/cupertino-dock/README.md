@@ -121,13 +121,14 @@ with amplitudes 1/0.5/0.25, repeating every 2000 ms with lift `len + 1` pt (info
 | Minimized window | the picture the server draws of the window in a hole of the bar's window (a thumbnail hole on a layer of its own under the tile's), fitted into 60 × 52 pt across the tile, its middle 1.25 pt above the tile's, and the application's icon over it with a 19.5 pt artwork, 3.25 pt inside the tile's trailing edge and 4.5 pt above its bottom (`minimized.rs`); until the server has a picture, the small icon alone |
 | Edge and rim | over glass, the glass's own rim light, along the top and the bottom and fading around the corners; where the bar is not glass (Reduce Transparency, no desktop effects), a 0.5 pt dark hairline just inside the outline and inside it a 0.5 pt light rim that is brightest along the top and the bottom and fades out down the sides; Increase Contrast doubles the hairline and draws the rim all round, over glass too |
 
-The bar's material is `view::bar::BAR_SURFACE` (the `Dock` surface): glass in the bar's shape, with Reduce Transparency
+The bar's material is `view::bar::BAR_SURFACE` (the `Dock` surface): glass in the bar's shape, named as the Dock variant at the
+medium size and not adaptive, with Increase Contrast too (the compositor draws the variant's contrast stage); with Reduce Transparency
 the `Dock` body in the colour of the wallpaper under it, and the window's opaque fill where the desktop shows no
 material. Giving the bar another material is that one line. (A folder's stack is glass of its own, see Folder stacks.)
 
 The bar is a Kit window (`src/view/bar.rs`) on a layer surface of the dock's display. The surface is at the bottom, left or
 right per `Orientation`, full width or height along its edge so magnification and bounces have room. It has the
-`BAR_SURFACE` material under the bar's own rectangle only, asked for by the bar's background node (`PaintCx::material`), and takes the dock role (`get_dock`). The
+`BAR_SURFACE` material under the bar's own rectangle only, asked for by the bar's background node (`PaintCx::glass`, or `PaintCx::material` for the Reduce Transparency body), and takes the dock role (`get_dock`). The
 exclusive zone is the bar's thickness, or 0 with auto-hide. The input region is the bar and its tiles, or only the reveal
 strip while hidden. Each tile is a node at the rectangle `Dock::layout` gives it and draws its icon; the bar draws the
 running indicators and the separators under the tiles.
@@ -182,7 +183,9 @@ The bar follows Reduce Motion too:
   that takes neither the pointer nor the keyboard, a 25 pt capsule with the name at 13 pt and 13 pt either side, and a
   16 pt wide, 6.5 pt deep pointer under its middle whose tip stands 3 pt above the bar's top edge, or 3 pt above its
   tile where that stands higher than the bar (a magnified one), coming down as the tile does (`view::label::stands_on`);
-  when the dock is on a side it stands beside the tile, without the pointer. It is a translucent fill with a 0.5 pt outline, light or dark with the
+  when the dock is on a side it stands beside the tile, without the pointer. Over a bottom bar the capsule and its pointer are
+  one piece of the cartouche popover variant's glass at the smallest size; beside a side bar the capsule is the regular
+  variant's at the smallest size; neither adapts to what is behind it. Where the desktop shows no glass it is a translucent fill with a 0.5 pt outline, light or dark with the
   appearance, and follows the pointer from tile to tile. It does not show over a separator, with a menu or a stack
   open, during a press or a drag, or while the session is locked. For assistive technology it is a tooltip.
 - **Recents.** With `recents` on (off by default), the bar has a section of up to three recent applications
@@ -281,8 +284,8 @@ panel stays 8 pt inside the output: near a screen edge it moves along the bar an
 to the panel's round corner. Beside a bar at a side the panel has no pointer, stands 8 pt off the bar and is centred on
 the tile, 8 pt inside the output. The popup anchors to a rectangle of the bar's window that is not the tile
 (`view::bar::STACK_ANCHOR`) and asks for exactly that place in whole points, so the window system neither slides it nor
-depends on how a mirrored popup treats its offset. The panel and its pointer are one piece of glass (the dense glass of
-a floating surface with text on it, one container); Reduce Transparency and Increase Contrast take the compositor's
+depends on how a mirrored popup treats its offset. The panel and its pointer are one piece of glass (the cartouche popover
+variant at the medium size, not adaptive, one container); Reduce Transparency and Increase Contrast take the compositor's
 recipes for that glass. Where the desktop draws no glass the panel paints the popover's opaque fill with a 1 pt edge
 (2 pt with Increase Contrast) that goes on round the pointer. It holds the folder's name along the top (14 pt semibold), a grid of the newest entries and a capsule
 button, "Open in Files", that opens the folder and closes the stack. The grid has up to 5 columns and 3 rows of 112 × 102 pt
@@ -340,7 +343,7 @@ bar reserve (exclusive zone -1) and lies on the compositor's switcher glass (`Sw
 - The label is drawn without the plus-darker blend of the real panel, so it is faint over a dark backdrop (approximate).
 
 **On Kit.** `src/switcher_kit.rs` is the same panel as a Kit window (`SwitcherSurface`, app id `cupertino-dock-switcher`):
-the model above, the `Switcher` surface (the compositor's `SwitcherGlass`) as the window background, one list item per application and the label,
+the model above, a body node of the application switcher variant's glass at the medium size, not adaptive, over the whole window (the `Switcher` surface's opaque fill where the theme gives it no material), one list item per application and the label,
 with the delay, the fade and the pointer rules unchanged. The panel is a list named "Application Switcher". Each entry is a
 list item that a screen reader can press (`switcher_activate`), and the label is a polite live region, so the selection is
 read as the keys step it (the panel never takes the keyboard). Under Reduce Transparency the material is opaque; with

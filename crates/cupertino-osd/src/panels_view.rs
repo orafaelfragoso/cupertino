@@ -1,18 +1,19 @@
 //! The keyboard's panels as CupertinoKit draws them: the switcher's rows on regular glass, faded as one layer with the
-//! glass, and the picker's numbered candidates on the menu material, each a button that picks its candidate when the
+//! glass, and the picker's numbered candidates on the menu glass, each a button that picks its candidate when the
 //! pointer is released on it. Neither window ever takes the keyboard.
 
 use std::sync::Arc;
 
 use cupertino_keyboard::switcher;
 use cupertino_kit::core::{
-    glass_outline, Change, CommandRegistry, Element, Event, EventCx, Glass, Key, MeasureCx,
-    PaintCx, Propagation, Role, SemanticsCx, Widget, Window, WindowBackground, WindowKey,
+    glass_outline, Change, CommandRegistry, Element, Event, EventCx, Glass, GlassCorners,
+    GlassVariant, Key, MeasureCx, PaintCx, Propagation, Role, SemanticsCx, Widget, Window,
+    WindowBackground, WindowKey,
 };
 use cupertino_kit::geometry::{Point, Rect, Size};
 use cupertino_kit::layout::{Constraints, ContainerKind, LayoutSpec, Measured, SizeSpec};
 use cupertino_kit::platform::{DecorationMode, MouseButton, PointerEvent, WindowSpec};
-use cupertino_kit::render::{Paint, PaintOp};
+use cupertino_kit::render::{Paint, PaintOp, Shape};
 use cupertino_kit::text::{AttributedText, FontWeight, ParagraphStyle, TextAlign, TextStyle};
 use cupertino_kit::theme::{Color, Surface};
 
@@ -133,9 +134,11 @@ fn measured(size: Size) -> Measured {
 /// A panel: its children at their places on the glass or the material, faded by `alpha` as one layer.
 struct Body<M> {
     size: Size,
-    /// The regular glass of an alert, with these corners, under the switcher's rows; the picker's material is its
-    /// window's background.
-    glass: Option<f64>,
+    /// The glass under the panel with its corners: the switcher's regular glass, the picker's menu glass; where the
+    /// window shows none, the picker paints the menu surface's opaque fill in its place.
+    glass: Option<Glass>,
+    /// The surface whose opaque fill stands in for the glass where the window shows none.
+    fill: Option<Surface>,
     alpha: f64,
     label: String,
     children: Vec<Element<M>>,
@@ -161,7 +164,11 @@ impl<M: 'static> Widget<M> for Body<M> {
     fn update(&self, old: &Self, _: &mut ()) -> Change {
         if self.size != old.size {
             Change::Layout
-        } else if self.alpha != old.alpha || self.glass != old.glass || self.label != old.label {
+        } else if self.alpha != old.alpha
+            || self.glass != old.glass
+            || self.fill != old.fill
+            || self.label != old.label
+        {
             Change::Paint
         } else {
             Change::None
@@ -178,11 +185,24 @@ impl<M: 'static> Widget<M> for Body<M> {
 
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
         let alpha = self.alpha.clamp(0.0, 1.0);
-        if let Some(radius) = self.glass {
-            cx.glass(Glass::regular().radius(radius).alpha(alpha));
-        }
+        let shown = self.glass.is_some_and(|glass| cx.glass(glass.alpha(alpha)));
         if alpha < 1.0 {
             cx.set_group(alpha as f32, Vec::new());
+        }
+        let fill = self.fill.and_then(|s| cx.env().theme.surface(s).fill);
+        if let (false, Some(fill)) = (shown, fill) {
+            let radius = match self.glass.map(|g| g.corners) {
+                Some(GlassCorners::Radius(r)) => r,
+                _ => 0.0,
+            };
+            let size = cx.size();
+            cx.push(PaintOp::Fill {
+                shape: Shape::RoundedRect {
+                    rect: Rect::new(0.0, 0.0, size.width, size.height),
+                    radius,
+                },
+                paint: Paint::Solid(fill),
+            });
         }
     }
 
@@ -449,7 +469,12 @@ pub fn sources_window<M: Clone + 'static>(
     children.extend(frame.map(|frame| Element::new(Pacer { frame })));
     let body = Element::new(Body {
         size,
-        glass: Some(switcher::HUD_CORNER_RADIUS),
+        glass: Some(
+            Glass::regular()
+                .variant(GlassVariant::Regular)
+                .radius(switcher::HUD_CORNER_RADIUS),
+        ),
+        fill: None,
         alpha,
         label: "Input sources".to_owned(),
         children,
@@ -488,7 +513,14 @@ pub fn accents_window<M: Clone + 'static>(
     let size = layout.rect.size;
     let body = Element::new(Body {
         size,
-        glass: None,
+        // the menu glass, without its drop shadow as before it named the variant
+        glass: Some(
+            Glass::menu()
+                .variant(GlassVariant::Menu)
+                .exclude_shadow(true)
+                .radius(PICKER_RADIUS),
+        ),
+        fill: Some(Surface::Menu),
         alpha: 1.0,
         label: "Accents".to_owned(),
         children,
@@ -498,11 +530,8 @@ pub fn accents_window<M: Clone + 'static>(
         "Accents",
         size,
         true,
-        WindowBackground::Surface {
-            surface: Surface::Menu,
-            radius: PICKER_RADIUS,
-            alpha: 1.0,
-        },
+        // the body is the panel's menu glass
+        WindowBackground::None,
         body,
     )
 }

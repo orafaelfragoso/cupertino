@@ -22,8 +22,9 @@ use cupertino_kit::controls::{
 };
 use cupertino_kit::core::{
     next_resource_id, AccessibleStates, AccessibleValue, Action, Change, Checked, CommandRegistry,
-    Element, Environment, Event, EventCx, IconImage, Key, MeasureCx, PaintCx, Phase, Popup,
-    PopupAnchor, Propagation, Role, SemanticsCx, Widget, Window, WindowBackground, WindowKey,
+    Element, Environment, Event, EventCx, Glass, GlassVariant, IconImage, Key, MeasureCx, PaintCx,
+    Phase, Popup, PopupAnchor, Propagation, Role, SemanticsCx, Widget, Window, WindowBackground,
+    WindowKey,
 };
 use cupertino_kit::geometry::{Insets, Point, Rect, Size};
 use cupertino_kit::layout::{Align, Axis};
@@ -47,6 +48,7 @@ use std::ops::Range;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, OnceLock};
 
+mod body;
 mod rows;
 
 /// The `app_id` of a bar's window is this followed by the bar's number; the roles give it its layer surface.
@@ -421,12 +423,14 @@ fn join_prompt<M: Clone + 'static>(
         spec: spec(BAR_APP_ID.to_owned(), size),
         shortcuts: CommandRegistry::new(),
         on_close: None,
-        background: WindowBackground::Surface {
-            surface: Surface::Menu,
+        // the body is the menu glass the content lies on
+        background: WindowBackground::None,
+        content: Element::new(body::Body {
             radius: panel::RADIUS,
-            alpha: 1.0,
-        },
-        content,
+            // a status panel's glass keeps the appearance's foreground
+            adaptive: false,
+            children: vec![content],
+        }),
         popup: Some(Popup {
             parent: bar.window(),
             // `At` hangs the popup off the far corner of the point's one-point square
@@ -463,26 +467,34 @@ fn bar<M: Clone + 'static>(scene: &BarScene<'_>, input: fn(Input) -> M) -> Windo
         .layout()
         .slots
         .iter()
-        .map(|slot| {
+        .flat_map(|slot| {
             let (role, name) = slot_semantics(slot, scene);
+            let highlighted = highlight == Some(&slot.key) || scene.open_panels.contains(&slot.key);
+            let tone = scene.slot_tones.tone(&slot.key).unwrap_or(scene.tone);
             let place = (role == Role::MenuItem).then(|| {
                 places += 1;
                 places - 1
             });
-            Element::new(SlotNode {
+            // the highlight lies under the slot, which draws its text and symbols over it
+            let pill = highlighted.then(|| {
+                let (rect, radius) = highlight_pill(&controller.bar_metrics, slot);
+                Element::new(HighlightPill { rect, radius, tone })
+                    .key(format!("highlight {:?}", slot.key))
+            });
+            pill.into_iter().chain([Element::new(SlotNode {
                 place,
                 bar: scene.bar,
                 slot: slot.clone(),
                 look: slot_look(slot, scene),
-                highlighted: highlight == Some(&slot.key) || scene.open_panels.contains(&slot.key),
+                highlighted,
                 expanded: expanded(&slot.key, scene),
                 role,
                 name,
                 metrics: controller.bar_metrics.clone(),
                 font: scene.font,
-                tone: scene.slot_tones.tone(&slot.key).unwrap_or(scene.tone),
+                tone,
                 input,
-            })
+            })])
         })
         .collect();
     Window {
@@ -497,11 +509,13 @@ fn bar<M: Clone + 'static>(scene: &BarScene<'_>, input: fn(Input) -> M) -> Windo
                 surface: Surface::MenuBar,
                 radius: 0.0,
                 alpha: 1.0,
+                glass: None,
             }
         } else {
             WindowBackground::None
         },
         content: Element::new(Root {
+            body: None,
             bar: scene.bar,
             keyboard: true,
             origin: BarPoint::new(0.0, 0.0),
@@ -968,6 +982,9 @@ fn system_mark(px: u32, c: Rgba) -> IconImage {
 /// The root of a bar's window or of one of its menus: it takes the pointer and the keys for the controller before any
 /// node below it, and lays its children out where the controller put them.
 struct Root<M> {
+    /// A menu's body under its rows, with corners of this radius and its glass adaptive or not ([`body::paint`]); a
+    /// bar paints none.
+    body: Option<(f64, bool)>,
     bar: BarId,
     /// The bar's own root: it holds the window's focus, so it hears the window get the keyboard and lose it.
     keyboard: bool,
@@ -1008,7 +1025,11 @@ impl<M: Clone + 'static> Widget<M> for Root<M> {
     fn update(&self, old: &Self, _: &mut ()) -> Change {
         if self.size != old.size {
             Change::Layout
-        } else if self.name != old.name || self.items != old.items || self.origin != old.origin {
+        } else if self.name != old.name
+            || self.items != old.items
+            || self.origin != old.origin
+            || self.body != old.body
+        {
             Change::Paint
         } else {
             Change::None
@@ -1067,7 +1088,11 @@ impl<M: Clone + 'static> Widget<M> for Root<M> {
         Propagation::Stop
     }
 
-    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        if let Some((radius, adaptive)) = self.body {
+            body::paint(cx, radius, adaptive);
+        }
+    }
 
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
         cx.role(self.role);
@@ -1116,6 +1141,82 @@ fn clicked<M>(
         }
         _ => Propagation::Continue,
     }
+}
+
+/// Where a slot's highlight lies in its bar, and its corner radius: a capsule; a title's reaches past the slot's
+/// padding, over the room between two titles; a status item's fills its frame.
+fn highlight_pill(m: &BarMetrics, slot: &Slot) -> (Rect, f64) {
+    let (x, width) = m.highlight_span(&slot.key, slot.rect.w);
+    let height = slot.rect.h - 2.0 * m.selection_inset_y;
+    let rect = Rect::new(
+        slot.rect.x + x,
+        slot.rect.y + m.selection_inset_y,
+        width,
+        height,
+    );
+    (rect, m.selection_corner_radius.min(height / 2.0))
+}
+
+/// A slot's highlight, under the slot: clear glass tinted with the bar's highlight colour, or that colour painted where
+/// the window shows no glass or the window system does not tint it, and under Reduce Transparency.
+struct HighlightPill {
+    rect: Rect,
+    radius: f64,
+    tone: BarTone,
+}
+
+impl<M: Clone + 'static> Widget<M> for HighlightPill {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        placed(self.rect)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self.rect != old.rect {
+            Change::Layout
+        } else if self.radius != old.radius || self.tone != old.tone {
+            Change::Paint
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: self.rect.size,
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        let env = cx.env();
+        let tint = self
+            .tone
+            .palette(dark(env), high_contrast(env))
+            .bar_highlight;
+        // untinted clear glass would show no highlight, so without a tint the colour is painted
+        let glass = !env.theme.preferences.reduce_transparency
+            && cx.glass_tint()
+            && cx.glass(
+                Glass::clear()
+                    .variant(GlassVariant::Clear)
+                    .tint(color(tint))
+                    .radius(self.radius),
+            );
+        if !glass {
+            let rect = Rect::new(0.0, 0.0, self.rect.width(), self.rect.height());
+            fill(cx, rect, self.radius, tint);
+        }
+    }
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
 }
 
 /// One slot of a bar: its highlight and what it draws.
@@ -1176,17 +1277,6 @@ impl<M: Clone + 'static> Widget<M> for SlotNode<M> {
 
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
         let palette = self.tone.palette(dark(cx.env()), high_contrast(cx.env()));
-        let size = cx.size();
-        let m = &self.metrics;
-        if self.highlighted {
-            // a capsule: a title's reaches past the slot's padding, over the room between two titles; a status item's
-            // fills its frame
-            let (x, width) = m.highlight_span(&self.slot.key, size.width);
-            let height = size.height - 2.0 * m.selection_inset_y;
-            let rect = Rect::new(x, m.selection_inset_y, width, height);
-            let radius = m.selection_corner_radius.min(height / 2.0);
-            fill(cx, rect, radius, palette.bar_highlight);
-        }
         // the text and symbols lie straight on the wallpaper, sharp, with no halo under them: their tone, dark or light
         // for the wallpaper under them, keeps them readable; a status symbol drawn light keeps one faint shadow below it
         let shadow = self

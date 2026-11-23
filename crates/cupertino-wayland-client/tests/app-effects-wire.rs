@@ -68,14 +68,14 @@ fn address(app_menu: Option<&str>) -> MenuAddress {
 }
 
 #[test]
-fn binding_takes_the_servers_version_up_to_21_and_reports_what_it_offers() {
+fn binding_takes_the_servers_version_up_to_22_and_reports_what_it_offers() {
     let (_server, mut conn) = Harness::start(Offer::NONE);
     assert!(
         AppEffects::bind(&mut conn).is_none(),
         "no global, no effects"
     );
 
-    for version in [21, 9] {
+    for version in [22, 9] {
         let s = setup(version);
         assert_eq!(
             s.conn.capabilities().extension("cupertino_app_effects_v1"),
@@ -354,6 +354,42 @@ fn a_backdrop_refuses_a_bad_shape_alpha_or_glass_spacing_and_sends_nothing() {
     for (row, refused) in results {
         assert!(refused, "{row}");
     }
+    assert!(s.sent().is_empty());
+}
+
+#[test]
+fn a_blur_ramp_goes_out_from_version_22_and_a_weight_outside_0_to_1_is_refused() {
+    let mut s = setup(22);
+    let backdrop = s.backdrop();
+    assert!(backdrop.takes_blur_ramp());
+    backdrop.set_blur_ramp(1.0, 0.03).unwrap();
+    backdrop.set_blur_ramp(0.0, 1.0).unwrap();
+    for (top, bottom) in [
+        (-0.01, 1.0),
+        (1.0, 1.01),
+        (f64::NAN, 1.0),
+        (1.0, f64::INFINITY),
+    ] {
+        assert!(
+            matches!(backdrop.set_blur_ramp(top, bottom), Err(Error::InvalidRamp)),
+            "{top} {bottom}"
+        );
+    }
+    let sent = s.sent();
+    // the wire carries 256ths, truncated: the lift of 0.03 goes as 7/256
+    assert_eq!(
+        sent,
+        [
+            "SetBlurRamp { top: 1.0, bottom: 0.02734375 }",
+            "SetBlurRamp { top: 0.0, bottom: 1.0 }",
+        ]
+    );
+
+    // an older server blurs evenly and is sent nothing
+    let mut s = setup(21);
+    let backdrop = s.backdrop();
+    assert!(!backdrop.takes_blur_ramp());
+    backdrop.set_blur_ramp(1.0, 0.0).unwrap();
     assert!(s.sent().is_empty());
 }
 

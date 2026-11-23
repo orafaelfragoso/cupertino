@@ -26,8 +26,9 @@ use super::{
     held, in_range, presented, property_index, with_parent, BlendRole, GlassEdge, LayerData,
     LayerOps, LayerSurfaceData, VibrantWeight, BEZIER_Y, LAYER_ROLE, MAX_ANIMATIONS, MAX_EXTENT,
     MAX_PER_CLIENT, MAX_PER_GROUP, MAX_PER_PARENT, NEXT_SERIAL, NO_GLASS, POPUP_VERSION,
-    SOFT_EDGE_VERSION,
+    SOFT_EDGE_VERSION, VARIANT_VERSION,
 };
+use crate::glass_look::GlassLook;
 use crate::state::Cupertino;
 
 /// In a layer shell surface's data map: whether it holds a presentation that is not destroyed.
@@ -451,7 +452,32 @@ impl Dispatch<CupertinoLayerV1, LayerData> for Cupertino {
                 if !(LENS.0..=LENS.1).contains(&lens) {
                     return bad_value("a lens below 1 or above 4");
                 }
-                data.queue(Op::Glass(Some((*style, lens))));
+                data.queue(Op::Glass(Some((GlassLook::of_style(*style), lens))));
+            }
+            R::SetGlassVariant {
+                variant,
+                modifiers,
+                size_class,
+                lens,
+            } if layer.version() >= VARIANT_VERSION => {
+                let Some(look) = crate::glass_look::of_wire(variant, modifiers, size_class) else {
+                    return bad_property("glass variant, modifier or size class");
+                };
+                if !(LENS.0..=LENS.1).contains(&lens) {
+                    return bad_value("a lens below 1 or above 4");
+                }
+                data.queue(Op::Glass(Some((look, lens))));
+            }
+            R::SetGlassTint {
+                red,
+                green,
+                blue,
+                alpha,
+            } if layer.version() >= VARIANT_VERSION => {
+                let Some(tint) = crate::glass_look::tint([red, green, blue, alpha]) else {
+                    return bad_value("a glass tint channel outside 0 to 1");
+                };
+                data.queue(Op::Tint(tint));
             }
             R::SetBlend { blend } => {
                 let role = match blend {
@@ -526,7 +552,7 @@ impl Dispatch<CupertinoLayerV1, LayerData> for Cupertino {
                     soft: layer.version() >= SOFT_EDGE_VERSION,
                 }));
             }
-            _ => unreachable!("cupertino_layer_v1 version 6 has no other request"),
+            _ => unreachable!("cupertino_layer_v1 version 7 has no other request"),
         }
     }
 

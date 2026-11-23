@@ -97,7 +97,7 @@ fn binding_reports_what_the_servers_version_offers() {
     let _layers = Layers::bind(&mut conn).unwrap();
     assert_eq!(
         conn.capabilities().extension("cupertino_layers_v1"),
-        Some(6)
+        Some(7)
     );
 
     // presents surfaces, presents popups, blurs content, draws glass edges, softens glass edges
@@ -534,4 +534,33 @@ fn the_servers_events_arrive_in_order_naming_their_layer() {
             AppEvent::LayerSettled { layer: id },
         ]
     );
+}
+
+#[test]
+fn a_blur_ramp_takes_two_weights_from_0_to_1_at_every_version() {
+    let mut s = setup(1);
+    s.layer.set_blur_ramp(1.0, 0.0).unwrap();
+    s.layer.set_blur_ramp(0.25, 1.0).unwrap();
+    assert_eq!(
+        s.sent(),
+        [
+            "SetBlurRamp { top: 1.0, bottom: 0.0 }",
+            "SetBlurRamp { top: 0.25, bottom: 1.0 }",
+        ]
+    );
+
+    let mut rows: Vec<(String, u32, Call)> = Vec::new();
+    for (top, bottom) in [
+        (-0.1, 1.0),
+        (1.0, 1.1),
+        (f64::NAN, 1.0),
+        (1.0, f64::INFINITY),
+    ] {
+        rows.push((
+            format!("ramp {top} {bottom}"),
+            6,
+            Box::new(move |l| l.set_blur_ramp(top, bottom)),
+        ));
+    }
+    assert_refused(rows, |e| matches!(e, Error::InvalidGlass));
 }

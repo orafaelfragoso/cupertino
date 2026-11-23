@@ -18,10 +18,11 @@ pub use cupertino_keyboard::modifiers::Mods;
 
 mod surface_layers;
 pub use cupertino_animation::{CubicBezier, LayerCurve};
+pub use cupertino_theme::{GlassModifiers, GlassSize, GlassVariant};
 pub use cupertino_ui_render::Color;
 pub use surface_layers::{
-    surface_layer_size, LayerChange, LayerEdge, LayerProperty, SurfaceLayer, SurfaceLayerLook,
-    MAX_LAYER_SAMPLES,
+    surface_layer_size, BlurRamp, LayerChange, LayerEdge, LayerProperty, SurfaceLayer,
+    SurfaceLayerLook, MAX_LAYER_LENS, MAX_LAYER_SAMPLES,
 };
 
 /// A toplevel window or a popup.
@@ -61,6 +62,15 @@ pub struct Capabilities {
     /// A surface layer's glass may carry an edge the compositor draws ([`SurfaceLayerLook::edge`]); without it the
     /// edge is not drawn.
     pub surface_layer_edges: bool,
+    /// A window's glass may be named by its system variant ([`GlassRegion::variant`]); without it the compositor
+    /// draws the region's style, so a control whose look rests on the variant paints its own fill in its place.
+    pub glass_variants: bool,
+    /// A window's glass may be tinted ([`GlassRegion::tint`]); without it the glass is drawn untinted, so a control
+    /// whose look rests on the tint lays the colour over the glass itself.
+    pub glass_tint: bool,
+    /// A window's glass may be drawn scaled about its shape's centre ([`GlassRegion::scale`]); without it the glass
+    /// keeps its shape's size.
+    pub glass_scale: bool,
 }
 
 /// A property of a window's presentation ([`WindowRequest::Present`]).
@@ -254,19 +264,22 @@ pub struct MenuDescription {
 }
 
 /// A material of the theme data (`materials.json`) the compositor draws under a window, the window's size with its
-/// corners rounded by `radius` points, at `alpha` from 0 (hidden) to 1 (opaque).
+/// corners rounded by `radius` points, at `alpha` from 0 (hidden) to 1 (opaque). With `glass`, the compositor draws
+/// that glass there instead, and `material` names what a compositor without glass draws.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Backdrop {
     pub material: String,
     pub radius: f64,
     pub alpha: f64,
+    pub glass: Option<GlassRegion>,
 }
 
 /// A material of the theme data (`materials.json`) the compositor draws under one part of a window: `rect` in the
 /// window's coordinates with its corners rounded by `radius` points, at `alpha` from 0 (hidden) to 1 (opaque).
 /// With `glass`, the compositor draws glass there instead, and `material` names what a compositor without glass draws.
 /// A `raised` region lies above the window's content, under its raised layer ([`WindowSystem::present_layer`]), and
-/// reads the content below it; the others lie under all of the window's content.
+/// reads the content below it; the others lie under all of the window's content. Its blur varies from the top of `rect`
+/// to its bottom by `blur_ramp` (a variable blur) where the compositor can, and is even where it cannot.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MaterialRegion {
     pub material: String,
@@ -275,6 +288,7 @@ pub struct MaterialRegion {
     pub alpha: f64,
     pub glass: Option<GlassRegion>,
     pub raised: bool,
+    pub blur_ramp: BlurRamp,
 }
 
 /// The raised layer of a window ([`WindowSystem::present_layer`]): a frame drawn over the window's content from its top
@@ -376,16 +390,69 @@ impl GlassStyle {
         .into_iter()
         .find(|s| s.material() == name)
     }
+
+    /// The system variant and modifiers this style draws as ([`cupertino_theme::GlassStyle::variant`]).
+    pub fn variant(self) -> (GlassVariant, GlassModifiers) {
+        use cupertino_theme::GlassStyle as Theme;
+        let style = match self {
+            Self::Regular => Theme::Regular,
+            Self::Clear => Theme::Clear,
+            Self::LargePanel => Theme::LargePanel,
+            Self::Bar => Theme::Bar,
+            Self::Dense => Theme::Dense,
+            Self::Module => Theme::Module,
+            Self::Card => Theme::Card,
+            Self::Track => Theme::Track,
+            Self::Popover => Theme::Popover,
+            Self::Switcher => Theme::Switcher,
+            Self::Sidebar => Theme::Sidebar,
+            Self::SubduedModule => Theme::SubduedModule,
+            Self::Snippet => Theme::Snippet,
+            Self::Veiled => Theme::Veiled,
+            Self::Toolbar => Theme::Toolbar,
+            Self::Menu => Theme::Menu,
+        };
+        style.variant()
+    }
 }
 
 /// How a [`MaterialRegion`] draws as glass: regions of a window with the same nonzero `container` join into one shape
 /// whose outlines blend into each other over `spacing` points (0 joins them with a hard edge); container 0 keeps the
 /// region on its own.
+///
+/// `variant`, when set, names the glass by its system variant and modifiers in place of the style, which a window
+/// system without variants draws instead; `tint` is a straight sRGB colour laid over the face at its alpha.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GlassRegion {
     pub style: GlassStyle,
     pub container: u32,
     pub spacing: f64,
+    /// The system variant and its modifiers ([`crate::Glass::variant`], or the style's own when the glass is
+    /// interactive); `None` draws the style. The window system takes [`GlassModifiers::active`] from the window.
+    pub variant: Option<(GlassVariant, GlassModifiers)>,
+    /// Straight sRGB red, green, blue and alpha; alpha 0 lays no tint.
+    pub tint: [f32; 4],
+    /// The variant's glass is a document-modal sheet ([`crate::Glass::document_modal`]): the glass window variant casts
+    /// a sheet's drop shadow in place of an alert's. Set only with a variant.
+    pub document_modal: bool,
+    /// How many times its rectangle's size the glass is drawn, about its centre (the `scale` of [`crate::Glass`]); 1
+    /// draws it in the rectangle. A surface layer's glass scales with its layer instead.
+    pub scale: f64,
+}
+
+impl GlassRegion {
+    /// Glass of `style` in `container`, blending over `spacing` points, untinted.
+    pub fn of_style(style: GlassStyle, container: u32, spacing: f64) -> Self {
+        Self {
+            style,
+            container,
+            spacing,
+            variant: None,
+            tint: [0.0; 4],
+            document_modal: false,
+            scale: 1.0,
+        }
+    }
 }
 
 /// What the text and symbols over a glass region are drawn with: the compositor measures the face of a small glass

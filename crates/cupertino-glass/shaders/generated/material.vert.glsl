@@ -30,6 +30,7 @@ struct Region {
     vec4 info;
     vec4 sizes;
     vec4 tint;
+    vec4 ramp;
     vec4 fills[16];
 };
 const float CIRCULAR_EXPONENT = 2.001;

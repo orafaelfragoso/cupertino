@@ -177,6 +177,8 @@ pub struct SceneParams<'a> {
     pub cursor: CursorPlan,
     /// Pointer position in the global logical space.
     pub pointer: Point<f64, Logical>,
+    /// The press interactive glass grows under.
+    pub glass_press: &'a crate::glass_press::GlassPress,
     pub drag_icon: Option<(WlSurface, Point<i32, Logical>)>,
     /// The surface that has the keyboard: a session panel there casts an active alert's shadow.
     pub keyboard_focus: Option<WlSurface>,
@@ -408,17 +410,50 @@ fn tree_pieces(
     out
 }
 
-/// `pieces` with their glass reading and drawing only inside `bound` (output-local points).
+/// `pieces` with their glass reading and drawing only inside `bound` (output-local points), the rectangle of the
+/// subsurface whose glass they are as drawn, widened by [`shadowed_bound`] for the drop shadow each casts.
 fn bounded_glass(
     mut pieces: Vec<Piece>,
     bound: smithay::utils::Rectangle<f64, Logical>,
 ) -> Vec<Piece> {
     for piece in &mut pieces {
         if let Piece::Glass(g) = piece {
+            let bound = shadowed_bound(&g.glass.container, bound);
             g.glass = Rc::new((*g.glass).clone().bounded(bound));
         }
     }
     pieces
+}
+
+/// `bound` (output-local points), the area a subsurface's glass reads and draws in, widened to hold the drop shadow
+/// `container` casts from its shapes inside it (an alert's or a sheet's below its panel): their bounds there grown by
+/// how far the widest shadow of its recipes reaches, its offset and its blur. Glass that casts no shadow keeps `bound`.
+fn shadowed_bound(
+    container: &cupertino_glass::glass::Container,
+    bound: smithay::utils::Rectangle<f64, Logical>,
+) -> smithay::utils::Rectangle<f64, Logical> {
+    let reach = container
+        .recipes
+        .iter()
+        .flatten()
+        .map(cupertino_theme::GlassParams::shadow_reach)
+        .fold(container.params.shadow_reach(), f32::max);
+    let Some([x, y, w, h]) = container.bounds().filter(|_| reach > 0.0) else {
+        return bound;
+    };
+    let shapes = smithay::utils::Rectangle::<f64, Logical>::new(
+        (f64::from(x), f64::from(y)).into(),
+        (f64::from(w), f64::from(h)).into(),
+    );
+    let Some(inside) = shapes.intersection(bound) else {
+        return bound;
+    };
+    let r = f64::from(reach);
+    let shadow = smithay::utils::Rectangle::new(
+        (inside.loc.x - r, inside.loc.y - r).into(),
+        (inside.size.w + 2.0 * r, inside.size.h + 2.0 * r).into(),
+    );
+    bound.merge(shadow)
 }
 
 /// The wallpaper of the output: the image of the user or of the asset pack, else the procedural one.
@@ -709,6 +744,7 @@ fn window_popup_elements(
         out.extend(tree_pieces(p, tree, popup_origin, |p, areas, bound| {
             let areas = rescaled_backdrops(shown(areas), visual_local.loc, plan);
             let bound = rescaled_rect(own.map_or(bound, |s| s.rect(bound)), visual_local.loc, plan);
+            let bound = compose::pressed_bound(p, &areas, bound);
             bounded_glass(
                 backdrop_elements(p, &areas, alpha, WindowState::Active),
                 bound,
@@ -862,6 +898,7 @@ fn window_elements(
     ));
     // the backdrops of its subsurfaces lie between the slices of the content, each reading the window below it
     out.extend(tree_pieces(p, tree, origin_local, |p, areas, bound| {
+        let bound = compose::pressed_bound(p, &areas, bound);
         let bound = rescaled_rect(bound, visual_local.loc, plan);
         bounded_glass(window_backdrops(p, areas), bound)
     }));

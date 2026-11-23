@@ -3,10 +3,12 @@
 //! white capsule; ordinary buttons, check boxes and fields never take a lens.
 //!
 //! The model ([`Lens::lifted`]) is pure: the control's state says how far the lens shows and the thumb's
-//! rectangle where it is. The lens is painted over the track by the control itself ([`GlassRole::ThumbLens`]): the
-//! compositor's glass lies under the window's content and could not show the track drawn above it. It reaches past
-//! the thumb, and past the control's node, but never changes the layout: only paint grows, never the node or its
-//! target.
+//! rectangle where it is. Where the window system shows surface layers the lens is the compositor's glass
+//! ([`GlassRole::ThumbLens`], [`KNOB_GLASS`]) in a layer of its own over the track ([`LensLayer`]): the glass of the
+//! window lies under its content and could not show the track drawn above it, a layer's glass lies over it and
+//! magnifies it ([`KNOB_MAGNIFICATION`]). Elsewhere, and with Reduce Transparency, the control paints the lens over the
+//! track itself ([`paint_lens`]). It reaches past the thumb, and past the control's node, but never changes the
+//! layout: only paint and the layer grow, never the node or its target.
 //!
 //! The accessibility options change the lens, never take it away: Increase Contrast darkens its outline and
 //! brightens its rim, Reduce Transparency makes its body nearly opaque, and Reduce Motion leaves it as it is (it
@@ -15,10 +17,13 @@
 //! The lens swells out of the thumb as it is taken hold of and sinks back into it when let go
 //! ([`Lens::lifted`]): the control times that lift and fades the lens in over the plain thumb.
 
-use crate::glass::GlassRole;
+use std::cell::Cell;
+
+use crate::glass::{GlassMaterial, GlassRole};
 use cupertino_geometry::{Insets, Point, Rect};
 use cupertino_theme::ui::{Color, ThemeTokens};
-use cupertino_ui_core::PaintCx;
+use cupertino_ui_core::platform::{GlassModifiers, GlassStyle, GlassVariant, SurfaceLayerLook};
+use cupertino_ui_core::{PaintCx, SurfaceLayerMark};
 use cupertino_ui_render::{Effect, GradientStop, Paint, PaintOp, Shape};
 
 /// Which thumb the lens takes the place of.
@@ -68,6 +73,8 @@ pub(crate) struct Lens {
     pub radius: f64,
     /// What lies under the lens is drawn at this scale about its centre.
     pub minify: f64,
+    /// The thumb it takes the place of, which names its glass ([`knob_variant`]).
+    pub kind: LensKind,
 }
 
 impl Lens {
@@ -94,6 +101,7 @@ impl Lens {
             rect,
             radius,
             minify,
+            kind,
         })
     }
 
@@ -200,10 +208,6 @@ pub(crate) fn paint_lens(
     lens: &Lens,
     under: impl FnOnce(&mut PaintCx<'_>, &Lens),
 ) {
-    debug_assert_eq!(
-        GlassRole::ThumbLens.material(),
-        crate::GlassMaterial::Painted
-    );
     let look = LensLook::of(&cx.env().theme);
     let shape = lens.shape();
     // the shade: a blurred copy of the lens, a little below it
@@ -271,4 +275,71 @@ pub(crate) fn paint_lens(
         width: OUTLINE_WIDTH,
         paint: Paint::Solid(look.outline),
     });
+}
+
+/// The legacy style of the compositor's glass a held knob's lens is drawn in ([`GlassRole::ThumbLens`]), which a window
+/// system without variants draws: of its styles the closest to the lens, a level's track (no blur, the backdrop read
+/// at the output's scale, a slight lift of black, a bending edge and a ring shadow inside its outline). Where variants
+/// are drawn the lens is named by its own ([`knob_variant`]).
+pub(crate) const KNOB_GLASS: GlassStyle = GlassStyle::Track;
+
+/// The system variant a held thumb's lens is drawn as: a switch's thumb the control lens (no blur, its own face and
+/// ring), a slider's knob the slider lens, which bends harder with a deeper ring.
+pub(crate) fn knob_variant(kind: LensKind) -> GlassVariant {
+    match kind {
+        LensKind::Switch => GlassVariant::Control,
+        LensKind::Slider => GlassVariant::Slider,
+    }
+}
+/// How much the compositor's lens magnifies the track under it, about its centre: the painted lens's view of the
+/// track turned the other way, a little larger than it is rather than smaller, as the protocol's lens only magnifies.
+pub(crate) const KNOB_MAGNIFICATION: f64 = 1.1;
+/// The surface layer keys of held knobs' lenses: this prefix over the knob's node index, so a window's lenses never
+/// take one another's key nor the small keys an application gives its own layers.
+const LENS_LAYER_KEYS: u64 = 0x4c45_4e53 << 32;
+
+/// A held knob's lens as a surface layer of its own ([`Widget::overlay_layer`]): the lens the knob's last paint showed
+/// in the compositor's glass, `None` while the knob shows none or paints it ([`LensLayer::show`]). Kept in the knob's
+/// state, read when the window marks its layers after the paint.
+///
+/// [`Widget::overlay_layer`]: cupertino_ui_core::Widget::overlay_layer
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct LensLayer(Cell<Option<(u64, Lens)>>);
+
+impl LensLayer {
+    /// Whether the compositor draws `lens` in glass of its own layer: where the window system shows surface layers
+    /// ([`PaintCx::surface_layers`]) and Reduce Transparency is off, which keeps the nearly opaque painted body. The
+    /// knob paints the lens itself when this is false.
+    pub fn show(&self, cx: &PaintCx<'_>, lens: Option<&Lens>) -> bool {
+        let drawn = lens.filter(|_| {
+            matches!(GlassRole::ThumbLens.material(), GlassMaterial::Layer(_))
+                && cx.surface_layers()
+                && !cx.env().theme.preferences.reduce_transparency
+        });
+        let key = LENS_LAYER_KEYS | u64::from(cx.node().index());
+        self.0.set(drawn.map(|l| (key, *l)));
+        drawn.is_some()
+    }
+
+    /// The layer's mark: the lens's corners in the compositor's glass, magnifying what it shows.
+    pub fn mark(&self) -> Option<SurfaceLayerMark> {
+        let GlassMaterial::Layer(style) = GlassRole::ThumbLens.material() else {
+            return None;
+        };
+        self.0.get().map(|(key, lens)| SurfaceLayerMark {
+            key,
+            look: SurfaceLayerLook {
+                glass: Some(style),
+                variant: Some((knob_variant(lens.kind), GlassModifiers::DEFAULT)),
+                lens: KNOB_MAGNIFICATION,
+                radius: lens.radius,
+                ..SurfaceLayerLook::default()
+            },
+        })
+    }
+
+    /// Where the layer lies, in the knob's coordinates: the lens's rectangle.
+    pub fn rect(&self) -> Option<Rect> {
+        self.0.get().map(|(_, lens)| lens.rect)
+    }
 }

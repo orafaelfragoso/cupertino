@@ -162,3 +162,24 @@ fn a_named_motion_reads_out_as_the_curves_that_run_it() {
         );
     }
 }
+
+#[test]
+fn a_glass_buttons_press_settles_in_about_512_ms_and_its_release_in_about_965() {
+    for (spring, settles) in [
+        (SpringPreset::GLASS_BUTTON_PRESS, 0.512),
+        (SpringPreset::GLASS_BUTTON_RELEASE, 0.965),
+    ] {
+        let timing = Timing::from(spring);
+        assert!(
+            (timing.duration() - settles).abs() < 0.005,
+            "{spring:?} settles in {} s",
+            timing.duration()
+        );
+        // a little bounce past its target, and at rest once settled
+        let peak = (1..100)
+            .map(|i| timing.value(settles * f64::from(i) / 100.0))
+            .fold(0.0, f64::max);
+        assert!(peak > 1.0 && peak < 1.05, "{spring:?} peaks at {peak}");
+        assert!((timing.value(settles) - 1.0).abs() < 1e-3);
+    }
+}

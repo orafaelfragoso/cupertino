@@ -15,6 +15,7 @@ pub mod clipboard;
 mod convert;
 mod damage;
 mod error;
+mod glass_wire;
 pub mod gpu_path;
 pub mod gpu_present;
 mod hand_over;

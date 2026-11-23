@@ -15,8 +15,19 @@
 
 use cupertino_geometry::{Point, Rect};
 use cupertino_theme::ui::{Color, ColorRole, StateVariant, ThemePreferences};
+use cupertino_ui_core::platform::BlurRamp;
 use cupertino_ui_core::{OverlayCx, PaintCx};
 use cupertino_ui_render::{GradientStop, Paint};
+
+/// The variable blur of the toolbar row's band over a scrolled page, as a scroll edge: what passes under the row
+/// is blurred most under the row's top, with all of the band's blur, and the blur fades down the band to this slight
+/// lift of it at the band's bottom, so content comes out of the band almost sharp. The compositor eases the weight
+/// between the two along a smoothstep over the band's height (standing in for a scroll edge's softening of about
+/// 20 pt of its mask over a toolbar row); one without blur ramps blurs the band evenly, as before.
+pub const TOOLBAR_BAND_RAMP: BlurRamp = BlurRamp {
+    top: 1.0,
+    bottom: 0.03,
+};
 
 /// The soft edge's veil over the top of the band: this much of the window background shows over the content.
 pub const SOFT_EDGE_MAX: f64 = 0.96;

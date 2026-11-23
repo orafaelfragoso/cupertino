@@ -4,8 +4,10 @@
 //! one shape ([`Layer::set_glass_group`]). Version 4 blurs a layer's own content ([`LayerProperty::ContentBlur`]).
 //! Version 5 draws a line along the outside of a layer's glass, or of its group's joined glass, at a width that keeps
 //! as the layer scales ([`Layer::set_glass_edge`]); from version 6 that line softens with the layer's content blur
-//! ([`Layers::softens_glass_edges`]).
+//! ([`Layers::softens_glass_edges`]). Version 7 names a layer's glass by its system variant and tints it
+//! ([`Layer::set_glass_variant`], [`Layer::set_glass_tint`]).
 
+use crate::app::glass_variant::{valid_tint, VariantGlass};
 use crate::app::{AppEvent, Error, Quiet};
 use crate::{Connection, State, SurfaceId};
 use cupertino_animation::LayerCurve;
@@ -32,6 +34,8 @@ const CONTENT_BLUR_VERSION: u32 = 4;
 const GLASS_EDGE_VERSION: u32 = 5;
 /// The version that softens the edge along a layer's glass by its content blur ([`Layers::softens_glass_edges`]).
 const SOFT_EDGE_VERSION: u32 = 6;
+/// The version that names a layer's glass by its system variant and tints it ([`Layers::takes_glass_variants`]).
+const VARIANT_VERSION: u32 = 7;
 
 /// Names a [`Layer`] of this process in [`AppEvent::LayerFinished`], [`AppEvent::LayerReplaced`] and
 /// [`AppEvent::LayerSettled`].
@@ -133,8 +137,13 @@ pub struct Layers(CupertinoLayersV1);
 impl Layers {
     /// Bind the global; `None` when the server does not offer it.
     pub fn bind(conn: &mut Connection) -> Option<Layers> {
-        conn.bind_extension(1..=SOFT_EDGE_VERSION, Quiet)
-            .map(Layers)
+        conn.bind_extension(1..=VARIANT_VERSION, Quiet).map(Layers)
+    }
+
+    /// Whether the server names a layer's glass by its system variant and tints it ([`Layer::set_glass_variant`],
+    /// [`Layer::set_glass_tint`], version 7).
+    pub fn takes_glass_variants(&self) -> bool {
+        self.0.version() >= VARIANT_VERSION
     }
 
     /// Whether the server presents layer shell surfaces as a whole ([`Self::presentation`], version 2).
@@ -328,6 +337,51 @@ impl Layer {
         }
         self.0
             .set_glass(style.map_or(u32::MAX, crate::app::GlassStyle::wire), lens);
+        Ok(())
+    }
+
+    /// Draw glass of a system variant below the layer's content, in its bounds, magnified by `lens` (1 for none, at
+    /// most 4); `None` draws none. The server resolves it with the window's activation and grows interactive glass
+    /// under a press. A server before version 7 draws [`VariantGlass::fallback_style`] instead. A lens outside 1 to 4 is
+    /// [`Error::InvalidGlass`] and sends nothing.
+    pub fn set_glass_variant(&self, glass: Option<VariantGlass>, lens: f64) -> Result<(), Error> {
+        let Some(glass) = glass.filter(|_| self.0.version() >= VARIANT_VERSION) else {
+            return self.set_glass(glass.map(VariantGlass::fallback_style), lens);
+        };
+        if !(lens.is_finite() && (LENS.0..=LENS.1).contains(&lens)) {
+            return Err(Error::InvalidGlass);
+        }
+        self.0.set_glass_variant(
+            glass.wire_variant() as u32,
+            glass.wire_modifiers().bits(),
+            glass.wire_size() as u32,
+            lens,
+        );
+        Ok(())
+    }
+
+    /// Lay the straight sRGB colour `rgba` (each channel 0 to 1) over the face of the layer's glass at its alpha; alpha
+    /// 0 lays none. A channel outside 0 to 1 is [`Error::InvalidGlass`] and sends nothing; a server before version 7
+    /// tints nothing and is sent nothing.
+    pub fn set_glass_tint(&self, rgba: [f64; 4]) -> Result<(), Error> {
+        if !valid_tint(rgba) {
+            return Err(Error::InvalidGlass);
+        }
+        if self.0.version() >= VARIANT_VERSION {
+            let [r, g, b, a] = rgba;
+            self.0.set_glass_tint(r, g, b, a);
+        }
+        Ok(())
+    }
+
+    /// Blur the layer's glass at `top` times its style's blur along its top edge and `bottom` times it along its bottom
+    /// edge, smoothly in between (1 and 1 blur evenly), as the soft edge of a bar over content scrolled under it. Every
+    /// version takes it. A weight outside 0 to 1 is [`Error::InvalidGlass`] and sends nothing.
+    pub fn set_blur_ramp(&self, top: f64, bottom: f64) -> Result<(), Error> {
+        if ![top, bottom].iter().all(|w| (0.0..=1.0).contains(w)) {
+            return Err(Error::InvalidGlass);
+        }
+        self.0.set_blur_ramp(top, bottom);
         Ok(())
     }
 

@@ -2,11 +2,12 @@
 //! the open detail view grown out of its tile, and the transparent catcher under the panel that takes a press outside
 //! it.
 //!
-//! The window paints no panel of its own: every tile asks the compositor for glass under its outline, and the tiles
-//! join one glass container so the compositor can blend them where they come close. A level's track is glass of its own
-//! over its tile's. With Reduce Transparency the tiles are opaque and sit on one opaque panel, in the session's
-//! appearance. Otherwise the tiles look the same in both appearances: mid-toned glass with light labels and symbols;
-//! with Increase Contrast the glass takes its contrast face and each tile draws a rim.
+//! The window paints no panel of its own: the panel behind the tiles is clear glass on its own, every tile asks the
+//! compositor for glass under its outline, and the tiles join one glass container so the compositor can blend them
+//! where they come close. A level's track is glass of its own over its tile's. With Reduce Transparency the tiles are
+//! opaque and sit on one opaque panel, in the session's appearance. Otherwise the tiles look the same in both
+//! appearances: mid-toned glass with light labels and symbols; with Increase Contrast the glass takes its contrast face
+//! and each tile draws a rim.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -85,6 +86,11 @@ const DELETE: Keysym = Keysym(0xffff);
 /// between tiles, so tiles at rest stay apart.
 const CONTAINER: u32 = 1;
 const BLEND: f64 = 8.0;
+
+/// How strongly the clear glass panel behind the tiles shows at rest, as a share of the panel's opacity: faint, so the
+/// panel all but vanishes into the desktop around it, its face lifting what lies under the tiles and between them by a
+/// level or two and its edge a trace of a line, rather than a pale plate with a bright rim.
+pub const PANEL_GLASS: f64 = 0.25;
 
 /// The fills a tile paints itself, in the dark and the light appearance. `RT_*`: the opaque panel and tiles with Reduce
 /// Transparency. `FALLBACK`: a tile the window cannot show glass under.
@@ -511,7 +517,13 @@ pub fn arranged<M: Clone + 'static>(
             cutouts: builder.cutouts(),
             on_outside: (!editing).then(|| to(away(Via::Pointer))),
             on_inactive: presentation.input.then(|| to(Input::Dismiss)),
-            children: builder.board(),
+            // the clear panel first, so the tiles lie over it
+            children: std::iter::once(Element::new(PanelGlass {
+                height: builder.height(),
+                alpha: presentation.alpha,
+            }))
+            .chain(builder.board())
+            .collect(),
         })
         .key(Key::from(PANEL_ROOT)),
         popup: None,

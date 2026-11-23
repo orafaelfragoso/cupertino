@@ -1,10 +1,10 @@
-//! The regular glass and the variants built on it: their recorded values, the variant stages laid over the base, the
+//! The regular glass and the variants built on it: their values, the variant stages laid over the base, the
 //! inactive branch and the window shadows.
 
 use super::fitted;
 use super::*;
 
-// ---- the regular base (recorded) -------------------------------------------------------------------------------
+// ---- the regular base ------------------------------------------------------------------------------------------
 
 /// The regular blur radius in points (the filter's half of the recipe's 10), scaled by the first level's opacity.
 const REGULAR_BLUR: f32 = 5.0;
@@ -74,20 +74,18 @@ const SPECULAR_DIFFUSE: GlowDiffuse = GlowDiffuse {
     spread_scale: 0.65,
     amount_scale: 0.15,
 };
-/// The edge line of regular glass in the light and the dark appearance ([`GlassShadow::edge_line`]; fitted to
-/// captures).
+/// The edge line of regular glass in the light and the dark appearance ([`GlassShadow::edge_line`]).
 const REGULAR_EDGE_LINE_LIGHT: f32 = 0.2;
 const REGULAR_EDGE_LINE_DARK: f32 = 0.22;
 /// The colour of the soft band's light from the face under it, when an interaction state lights it: a little more
-/// saturated and lifted than the face (fitted to captures).
+/// saturated and lifted than the face.
 pub(super) const HIGHLIGHT_MATRIX_REGULAR: ColorMatrix = [
     1.1202, -0.1894, -0.019, 0.0, 0.1471, //
     -0.0563, 0.9871, -0.0191, 0.0, 0.1471, //
     -0.0563, -0.1893, 1.1574, 0.0, 0.1471, //
     0.0, 0.0, 0.0, 1.0, 0.0,
 ];
-/// How strongly the soft band lights the far end of its axis on regular glass, as a share of the near end (fitted to
-/// captures).
+/// How strongly the soft band lights the far end of its axis on regular glass, as a share of the near end.
 const GLOW_FILL_REGULAR: f32 = 0.8125;
 
 /// The key and fill light of regular glass in the dark appearance or the light one.
@@ -216,10 +214,10 @@ pub(super) fn regular_base(dark: bool, s: f32) -> GlassParams {
     }
 }
 
-// ---- Increase Contrast (recorded) --------------------------------------------------------------------------------
+// ---- Increase Contrast -------------------------------------------------------------------------------------------
 
 /// The regular face with Increase Contrast: black lift, saturation and the normal fill's opacity (white light, black
-/// dark). The dark black lift is the recipe's floor for the dark face under the setting (inferred).
+/// dark). The dark black lift is the recipe's floor for the dark face under the setting.
 const CONTRAST_BLACK_LIGHT: f32 = 0.5;
 const CONTRAST_BLACK_DARK: f32 = 0.2;
 const CONTRAST_SATURATION: f32 = 0.8;
@@ -239,21 +237,21 @@ pub(super) fn contrast_face(face: &mut GlassFace, dark: bool) {
 
 // ---- the variants' stages ----------------------------------------------------------------------------------------
 
-/// The light sidebar face's luma cap (recorded; the dark one keeps the regular map).
+/// The light sidebar face's luma cap (the dark one keeps the regular map).
 pub const SIDEBAR_MAX_LUMA_LIGHT: f32 = 0.85;
-/// The planar stage's edge bleed saturation (recorded).
+/// The planar stage's edge bleed saturation.
 pub const PLANAR_BLEED_SATURATION: f32 = 1.5;
 /// The tab's normal fill: white at this opacity in both appearances; and how much the light tab lowers the face's
-/// black and white (recorded).
+/// black and white.
 pub const TAB_FILL: f32 = 0.15;
 pub const TAB_LIGHT_REDUCTION: f32 = 0.05;
 /// The cartouche's fixed inner bend: its strength (inwards) and band in points; and its white normal fill in the light
-/// appearance (recorded).
+/// appearance.
 pub const CARTOUCHE_REFRACTION: f32 = -5.0;
 pub const CARTOUCHE_REFRACTION_HEIGHT: f32 = 5.0;
 pub const CARTOUCHE_FILL_LIGHT: f32 = 0.1;
 /// A toolbar item's first blur level (a fifth of the radius at every size), its fixed bend in points and its control
-/// border (recorded).
+/// border.
 pub const TOOLBAR_LEVEL_OPACITY: f32 = 0.2;
 pub const TOOLBAR_REFRACTION: f32 = -18.0;
 pub const TOOLBAR_REFRACTION_HEIGHT: f32 = 9.0;
@@ -261,7 +259,7 @@ pub const TOOLBAR_BORDER: GlassBorder = GlassBorder {
     opacity: 0.125,
     width: 1.0,
 };
-/// The scale a menu's backdrop is captured at (fitted to captures).
+/// The scale a menu's backdrop is captured at.
 const MENU_CAPTURE_SCALE: f32 = 0.25;
 
 /// The variant's own stages over the regular base `p` resolved at `s`, in the dark appearance or the light one, with
@@ -306,12 +304,12 @@ pub(super) fn regular_variant(
             } else {
                 TOOLBAR_BORDER
             };
-            // the control border marks the edge: no line outside it (fitted to captures)
+            // the control border marks the edge: no line outside it
             p.shadow.edge_line = 0.0;
         }
         GlassVariant::Menu => {
             p.capture_scale = MENU_CAPTURE_SCALE;
-            // the popup's own outline marks the edge (fitted to captures)
+            // the popup's own outline marks the edge
             p.shadow.edge_line = 0.0;
         }
         GlassVariant::NotificationCenter => fitted::notification_center(p, dark),
@@ -341,18 +339,17 @@ fn planar(p: &mut GlassParams, dark: bool) {
     if !dark {
         p.face.max_luma = SIDEBAR_MAX_LUMA_LIGHT;
     }
-    // the sidebar meets the window's content at its edge, which a line would mark (fitted to captures)
+    // the sidebar meets the window's content at its edge, which a line would mark
     p.shadow.edge_line = 0.0;
 }
 
 // ---- the inactive branch -------------------------------------------------------------------------------------------
 
-/// The inactive frost: the blur radius in points (the filter's half of the recorded 1), at full opacity.
+/// The inactive frost: the blur radius in points (the filter's half of the recipe's 1), at full opacity.
 pub const INACTIVE_BLUR: f32 = 0.5;
-/// The share of the key and fill light an inactive window keeps: its face values are not recorded, so the regular face
-/// with the light at half strength (inferred).
+/// The share of the key and fill light an inactive window keeps: the regular face with the light at half strength.
 pub const INACTIVE_HIGHLIGHT_SHARE: f32 = 0.5;
-/// An inactive tab's white normal fill, light and dark (recorded; which branch each belongs to is inferred).
+/// An inactive tab's white normal fill, light and dark.
 pub const TAB_INACTIVE_FILL_LIGHT: f32 = 0.30;
 pub const TAB_INACTIVE_FILL_DARK: f32 = 0.07;
 

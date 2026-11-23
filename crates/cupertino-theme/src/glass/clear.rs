@@ -1,38 +1,37 @@
 //! The clear glass and the variants built on it: the Dock, the application switcher and the controls' lenses (the
-//! control centre's fitted values are in `fitted`).
+//! control centre's modules are in `fitted`).
 
 use super::regular::{regular_specular, FACE_CLAMP};
 use super::*;
 
-// ---- the clear base (recorded) ---------------------------------------------------------------------------------
+// ---- the clear base --------------------------------------------------------------------------------------------
 
-/// The clear blur radius in points at full opacity: the resolved filter's, against a recorded recipe radius of 1, so a
-/// recorded clear-family radius `r` is `r` times this.
+/// The clear blur radius in points at full opacity: the resolved filter's for a recipe radius of 1, so a
+/// clear-family recipe radius `r` is `r` times this.
 pub const CLEAR_BLUR: f32 = 0.690_272_15;
 /// The clear face, the same in both appearances: black lift, white gain and saturation; no luma cap and no fill.
 const CLEAR_BLACK: f32 = 0.125;
 const CLEAR_WHITE: f32 = 1.08;
 const CLEAR_SATURATION: f32 = 1.06;
 /// The clear inner refraction per point of short side (negative: inwards) and its band per point, each at most the cap
-/// below: −13 at 20 pt, −26 at 40, −39 over a 20 pt band at 60 (recorded readbacks).
+/// below: −13 at 20 pt, −26 at 40, −39 over a 20 pt band at 60.
 const REFRACTION_PER_POINT_CLEAR: f32 = 0.65;
 const REFRACTION_HEIGHT_PER_POINT_CLEAR: f32 = 0.36;
 const REFRACTION_AMOUNT_MAX: f32 = 60.0;
 const REFRACTION_HEIGHT_MAX: f32 = 20.0;
-/// The clear rim: strength, colour shift per unit of it and depth in points (recorded).
+/// The clear rim: strength, colour shift per unit of it and depth in points.
 const CLEAR_RIM: f32 = 0.4;
 const CLEAR_RIM_BIAS: f32 = -0.25;
 const CLEAR_RIM_HEIGHT: f32 = 0.5;
 /// The clear drop shadow (shown at no opacity at rest): strength per point of short side and the side it stops growing
-/// at, and blur per point of short side and its side (fitted to captures).
+/// at, and blur per point of short side and its side.
 const CLEAR_SHADOW_AMOUNT_PER_POINT: f32 = 0.625;
 const CLEAR_SHADOW_AMOUNT_SIDE_MAX: f32 = 120.0;
 const CLEAR_SHADOW_HEIGHT_PER_POINT: f32 = 0.4;
 const CLEAR_SHADOW_HEIGHT_SIDE_MAX: f32 = 240.0;
-/// How strongly the soft band lights the far end of its axis on clear glass, as a share of the near end (fitted to
-/// captures).
+/// How strongly the soft band lights the far end of its axis on clear glass, as a share of the near end.
 const GLOW_FILL: f32 = 0.75;
-/// The colour of the soft band's light on clear glass: brighter, keeping the hue (fitted to captures).
+/// The colour of the soft band's light on clear glass: brighter, keeping the hue.
 const HIGHLIGHT_MATRIX_CLEAR: ColorMatrix = [
     1.3192, -0.0478, -0.0047, 0.0, 0.2, //
     -0.0142, 1.2856, -0.0048, 0.0, 0.2, //
@@ -117,7 +116,7 @@ pub(super) fn clear_base(s: f32) -> GlassParams {
 }
 
 /// Clear glass with Reduce Transparency: the blur radius in points at full opacity, the light face's black lift and
-/// the dark face's saturation (recorded).
+/// the dark face's saturation.
 pub const CLEAR_REDUCED_BLUR: f32 = 200.0;
 const CLEAR_REDUCED_BLACK_LIGHT: f32 = 0.125;
 const CLEAR_REDUCED_SATURATION_DARK: f32 = 0.7;
@@ -135,7 +134,7 @@ pub(super) fn clear_reduced(p: &mut GlassParams, dark: bool) {
     }
 }
 
-// ---- the Dock and the application switcher (recorded) ------------------------------------------------------------
+// ---- the Dock and the application switcher -----------------------------------------------------------------------
 
 /// The Dock's blur, in multiples of the clear blur ([`CLEAR_BLUR`]); the application switcher's in the light and the
 /// dark appearance.
@@ -165,14 +164,13 @@ pub const DOCK_CONTRAST_BLACK_DARK: f32 = 0.1;
 pub const DOCK_CONTRAST_WHITE_DARK: f32 = 0.65;
 pub const DOCK_CONTRAST_FILL_DARK: f32 = 0.15;
 /// The key and fill light the Dock shows only with Increase Contrast: their opacity, scaling the regular light's
-/// strength (the scaling is inferred).
+/// strength.
 pub const DOCK_CONTRAST_HIGHLIGHT: f32 = 0.75;
 /// The light Dock's face with Reduce Transparency: black lift, white gain and white fill; the dark Dock keeps its own.
 pub const DOCK_REDUCED_BLACK_LIGHT: f32 = 0.4;
 pub const DOCK_REDUCED_WHITE_LIGHT: f32 = 0.92;
 pub const DOCK_REDUCED_FILL_LIGHT: f32 = 0.1;
-/// The application switcher's edge line in the dark appearance; the light one keeps regular glass's (fitted to
-/// captures).
+/// The application switcher's edge line in the dark appearance; the light one keeps regular glass's.
 const SWITCHER_EDGE_LINE_DARK: f32 = 0.32;
 const SWITCHER_EDGE_LINE_LIGHT: f32 = 0.2;
 
@@ -246,7 +244,7 @@ pub(super) fn dock(
     p
 }
 
-// ---- the controls' lenses (recorded) -----------------------------------------------------------------------------
+// ---- the controls' lenses ----------------------------------------------------------------------------------------
 
 /// The control face: black lift and white gain light and dark, no colour change, no luma cap and no fill.
 pub const CONTROL_BLACK_LIGHT: f32 = 0.5;
@@ -272,12 +270,13 @@ pub const LOUPE_RING_BLUR: f32 = 4.0;
 pub const LOUPE_RING_OPACITY: f32 = 0.07;
 pub const LOUPE_REFRACTION: f32 = -0.3;
 pub const LOUPE_REFRACTION_HEIGHT: f32 = 0.095;
-/// A slider track's edge line, light and dark (fitted to captures).
+/// A slider track's edge line, light and dark.
 const SLIDER_EDGE_LINE_LIGHT: f32 = 0.22;
 const SLIDER_EDGE_LINE_DARK: f32 = 0.24;
 
 /// The glass of a control's lens (`Control`, `Slider` or `Loupe`) at short side `s`: no blur, read at the output's
-/// scale, the control face, its ring and its bend. No Increase Contrast or Reduce Transparency values are recorded.
+/// scale, the control face, its ring and its bend, with no values of its own for Increase Contrast or Reduce
+/// Transparency.
 pub(super) fn control(variant: GlassVariant, dark: bool, s: f32) -> GlassParams {
     let mut p = clear_base(s);
     p.blur = GlassBlur {

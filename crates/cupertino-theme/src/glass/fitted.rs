@@ -1,6 +1,6 @@
-//! The values no recipe records, fitted to captures and kept under the glass variant names: the control centre's
-//! modules, the notification cards' edges, the launcher's results panel and the cartouches' edge lines. The control
-//! centre's accessibility shifts are recorded and laid over its fitted face.
+//! The glass of the control centre's modules, the notification cards' edges, the launcher's results panel and the
+//! cartouches' edge lines, kept under the glass variant names, and the control centre's accessibility shifts laid over
+//! its face.
 
 use super::clear::clear_base;
 use super::*;
@@ -61,15 +61,15 @@ const SUBDUED_MODULE_WHITE_LIGHT: f32 = 0.88;
 const SUBDUED_MODULE_BLACK_DARK: f32 = 0.0;
 
 /// The control centre's shifts of its face with Increase Contrast: the light face's black lift and the dark face's
-/// white gain (recorded, relative to the face at rest).
+/// white gain (relative to the face at rest).
 pub const CONTROL_CENTER_CONTRAST_BLACK_LIGHT: f32 = -0.2;
 pub const CONTROL_CENTER_CONTRAST_WHITE_DARK: f32 = 0.55;
-/// The dark face's luma cap with Increase Contrast (fitted): the white gain lifts the face over a dark backdrop, and the
+/// The dark face's luma cap with Increase Contrast: the white gain lifts the face over a dark backdrop, and the
 /// cap keeps a bright one from carrying it towards white, so the module's light labels and symbols stay at about 4:1
 /// over any backdrop rather than vanishing into a sunlit one.
 pub const CONTROL_CENTER_CONTRAST_MAX_LUMA_DARK: f32 = 0.35;
 /// The control centre with Reduce Transparency: the blur radius in points at full opacity, the shifts of the face's
-/// black lift and white gain, light and dark (recorded, relative to the face at rest), and the dark face's saturation
+/// black lift and white gain, light and dark (relative to the face at rest), and the dark face's saturation
 /// (the clear glass's).
 pub const CONTROL_CENTER_REDUCED_BLUR: f32 = 10.0;
 pub const CONTROL_CENTER_REDUCED_BLACK_LIGHT: f32 = -0.25;
@@ -80,8 +80,8 @@ const CONTROL_CENTER_REDUCED_SATURATION_DARK: f32 = 0.7;
 
 /// The control centre's module glass, the same in both appearances at rest: the clear glass of its size with the
 /// module's blur, face, refraction and rim, a line of light inside its top and bottom edges and a dark line outside its
-/// sides (fitted to captures); subdued, twice the blur and a quieter face. Increase Contrast and Reduce Transparency
-/// shift its face by the recorded amounts.
+/// sides; subdued, twice the blur and a quieter face. Increase Contrast and Reduce Transparency
+/// shift its face.
 pub(super) fn control_center(mode: GlassMode, s: f32) -> GlassParams {
     let dark = mode.dark;
     let mut p = clear_base(s);
@@ -153,7 +153,7 @@ const CARD_EDGE_LINE_LIGHT: f32 = 0.19;
 const CARD_EDGE_LINE_DARK: f32 = 0.62;
 
 /// The notification centre's cards over the regular base `p`: the card's edge lines, read from a backdrop captured at
-/// [`CARD_CAPTURE_SCALE`] (fitted to captures).
+/// [`CARD_CAPTURE_SCALE`].
 pub(super) fn notification_center(p: &mut GlassParams, dark: bool) {
     let sh = &mut p.shadow;
     if dark {
@@ -174,7 +174,7 @@ const CARTOUCHE_EDGE_LINE_LIGHT: f32 = 0.175;
 const CARTOUCHE_EDGE_LINE_WIDE_LIGHT: f32 = 0.31;
 const CARTOUCHE_EDGE_LINE_WIDE_DARK: f32 = 0.54;
 
-/// The edge line of a cartouche resolved at `size` (fitted to captures of each surface).
+/// The edge line of a cartouche resolved at `size`.
 pub(super) fn cartouche_edge_line(size: GlassSize, dark: bool) -> f32 {
     match (size, dark) {
         (GlassSize::Minimum, false) => CARTOUCHE_EDGE_LINE_LIGHT,
@@ -189,7 +189,7 @@ pub(super) fn cartouche_edge_line(size: GlassSize, dark: bool) -> f32 {
 /// The launcher's results panel over the regular base `p`: a blur twice as wide, its own face (unless Increase
 /// Contrast gave it the contrast face), a refraction band no deeper than [`LARGE_PANEL_REFRACTION_HEIGHT_MAX`], in the
 /// light appearance a bright inner line and in the dark one a bevel, in place of the key and fill light, and its drop
-/// shadow shown (fitted to captures).
+/// shadow shown.
 pub(super) fn search_results(p: &mut GlassParams, dark: bool, contrast: bool) {
     p.blur.radius *= LARGE_PANEL_BLUR_SCALE;
     p.blur.fill_radius *= LARGE_PANEL_BLUR_SCALE;

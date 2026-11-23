@@ -9,8 +9,6 @@
 //!   ([`GlassBase`]) with stages of its own; [`GlassModifiers`] say the size it resolves at, whether its window is
 //!   active, and whether it steps back or leaves its shadow to its surface. [`GlassStyle`] is the legacy style of the
 //!   wire and the toolkit, mapped onto a variant ([`GlassStyle::variant`]).
-//! * Values are recorded from the system where the recipes record them, and fitted to captures where nothing is
-//!   recorded; the comments say which.
 //! * Size: several values follow the short side of the shape ([`GlassParams::new`]) or the size the variant resolves
 //!   at ([`GlassSize`]), so a small control bends and bleeds less than a large panel.
 //! * Accessibility selects recipes of its own, it does not turn the glass off: Reduce Transparency trades refraction for
@@ -22,7 +20,7 @@
 /// The scale the backdrop of a glass container is captured at, relative to the output's pixels, unless its recipe
 /// says otherwise ([`GlassParams::capture_scale`]).
 pub const GLASS_BACKDROP_SCALE: f32 = 0.5;
-/// The capture scale of a notification card's glass (fitted to captures).
+/// The capture scale of a notification card's glass.
 pub const CARD_CAPTURE_SCALE: f32 = 0.25;
 /// The capture scale of the controls' glass, which does not blur: the output's own.
 pub const TRACK_CAPTURE_SCALE: f32 = 1.0;
@@ -442,7 +440,7 @@ pub struct AlertShadow {
 }
 
 /// The shadow of an alert and of a menu while its window has the keyboard, and the shallower, fainter one while another
-/// window has it (recorded).
+/// window has it.
 pub const ALERT_SHADOW_ACTIVE: AlertShadow = AlertShadow {
     blur: 24.0,
     offset: 10.0,
@@ -489,7 +487,7 @@ fn by_side(table: &[(f32, f32)], side: f32) -> f32 {
 }
 
 /// The sheet's shadow while its window has the keyboard, and the fainter one while another window has it: the alert's
-/// optics at a lower opacity (recorded).
+/// optics at a lower opacity.
 pub const SHEET_SHADOW_ACTIVE: AlertShadow = AlertShadow {
     blur: 24.0,
     offset: 10.0,

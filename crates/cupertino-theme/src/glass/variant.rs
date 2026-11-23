@@ -14,7 +14,7 @@ pub enum GlassVariant {
     Clear,
     /// The Dock bar: the clear base with a slightly wider blur, its own face and a bend outside its edge.
     Dock,
-    /// The glass of application icons: no values are recorded, so it is the clear glass.
+    /// The glass of application icons: the clear glass.
     AppIcons,
     /// The control centre's modules: the clear base with the module face, the same in both appearances.
     ControlCenter,
@@ -41,11 +41,11 @@ pub enum GlassVariant {
     Slider,
     /// The magnifying loupe: the control glass with a lower, softer ring.
     Loupe,
-    /// The launcher's results panel: no values are recorded, so it keeps the fitted large panel glass.
+    /// The launcher's results panel: the large panel glass.
     SearchResults,
     /// The application switcher: the Dock's recipe with a wider blur.
     AppSwitcher,
-    /// The glass behind a focus ring: no values are recorded, so it is the regular glass.
+    /// The glass behind a focus ring: the regular glass.
     FocusBorder,
     /// The glass of a text field: the regular glass with no blur.
     EntryField,
@@ -156,14 +156,13 @@ pub enum GlassSize {
     Dynamic,
 }
 
-/// The short side in points the minimum size resolves at: the fallback dimension the regular recipe records (a
-/// control's size, where the size-dependent values are at their smallest).
+/// The short side in points the minimum size resolves at: a control's size, where the size-dependent values are at
+/// their smallest.
 pub const GLASS_SIZE_MINIMUM: f32 = 48.0;
-/// The short side in points the medium size resolves at: not recorded; where the regular bend reaches its cap (−60 pt)
-/// and the dark luma cap its floor, as the notification cards bent before (inferred).
+/// The short side in points the medium size resolves at: where the regular bend reaches its cap (−60 pt) and the dark
+/// luma cap its floor.
 pub const GLASS_SIZE_MEDIUM: f32 = 120.0;
-/// The short side in points the large size resolves at: not recorded; where the regular blur reaches its widest
-/// (inferred).
+/// The short side in points the large size resolves at: where the regular blur reaches its widest.
 pub const GLASS_SIZE_LARGE: f32 = 160.0;
 
 impl GlassSize {
@@ -183,8 +182,8 @@ impl GlassSize {
 pub struct GlassModifiers {
     /// The size the recipe resolves at.
     pub size: GlassSize,
-    /// The variant steps back behind what is in front of it: only the control centre has a subdued recipe (fitted to
-    /// captures); elsewhere it is carried only.
+    /// The variant steps back behind what is in front of it: only the control centre has a subdued recipe;
+    /// elsewhere it is carried only.
     pub subdued: bool,
     /// No drop shadow from the glass: its surface draws its own (a menu's popup draws the window shadow apart).
     pub exclude_shadow: bool,

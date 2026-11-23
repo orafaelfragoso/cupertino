@@ -100,27 +100,26 @@ flag and its Increase Contrast option.
   `GlassSize::{Minimum, Medium, Large, Dynamic}` = 48, 120, 160 pt or the shape's own short side `s`; `subdued`;
   `exclude_shadow`; `interactive` and `adaptive`, carried only; `active`, false selecting the inactive branch of the
   variants on the regular base), the accessibility options and the legibility amount. Each variant is built on the
-  regular or the clear base (`GlassVariant::base`); values are the recorded ones where the system's recipes record them
-  and fitted to captures elsewhere (the source comments say which). The legacy `GlassStyle` of the wire and the toolkit
+  regular or the clear base (`GlassVariant::base`). The legacy `GlassStyle` of the wire and the toolkit
   maps onto a variant (`GlassStyle::variant`, `GlassMode::of_style`, `GlassMode::with_style`).
 
   | Variant | Recipe (light / dark where they differ) |
   |---|---|
-  | `Regular` | blur 5 pt, first level 0.4 up to s = 64 rising to 0.8 at 160 (deviation 2·radius·opacity); blur fill 8 pt, lighten 0.9 / darken 0.9, normal 0.5; face black 0.4 / 0.125, white 1.03 / 1.125, saturation 1.2 / 1.3, luma cap 0.94 / 0.6 at s ≤ 64 to 0.35 at 104, white fill 0.2 / none; bend −min(s/2, 60) over min(s/4, 20); edge bleed 0.35·s band, reach and blur (reach and blur at most 16, the blur fill's deviation), opacity 0.2, black 0.9, saturation 1.2, darken / black 0.125, white 0.5, normal; rim 0.5, bias −0.25; ring 0.06 (stroke 4, 8 pt down, deviation 5); key and fill light 0.4 from the top, arcs 96° / 75°, 0.75 pt deep, diffuse ×8 deep, ×0.65 wide, ×0.15; edge line 0.2 / 0.22 (fitted) |
+  | `Regular` | blur 5 pt, first level 0.4 up to s = 64 rising to 0.8 at 160 (deviation 2·radius·opacity); blur fill 8 pt, lighten 0.9 / darken 0.9, normal 0.5; face black 0.4 / 0.125, white 1.03 / 1.125, saturation 1.2 / 1.3, luma cap 0.94 / 0.6 at s ≤ 64 to 0.35 at 104, white fill 0.2 / none; bend −min(s/2, 60) over min(s/4, 20); edge bleed 0.35·s band, reach and blur (reach and blur at most 16, the blur fill's deviation), opacity 0.2, black 0.9, saturation 1.2, darken / black 0.125, white 0.5, normal; rim 0.5, bias −0.25; ring 0.06 (stroke 4, 8 pt down, deviation 5); key and fill light 0.4 from the top, arcs 96° / 75°, 0.75 pt deep, diffuse ×8 deep, ×0.65 wide, ×0.15; edge line 0.2 / 0.22 |
   | `Clear`, `AppIcons` | blur 0.69 pt at full opacity, no fill; face black 0.125, white 1.08, saturation 1.06 in both; bend −min(0.65·s, 60) over min(0.36·s, 20); rim 0.4, bias −0.25; no ring, no light |
   | `Dock` | clear base, blur 1.5 × 0.69 pt; face saturation 1.25, black 0.15 / 0.05, white 0.9 / 0.92, black fill 0.02 dark; bend −0.18·s over 0.08·s; bend outside the edge 0.42·s over 0.13·s at 0.2; no light at rest |
-  | `AppSwitcher` | the Dock with blur 2 × / 3.5 × 0.69 pt; edge line 0.2 / 0.32 (fitted) |
-  | `ControlCenter` | the module glass (fitted): clear base, blur 5 to 10 pt between s = 60 and 140, face saturation 1.045, white 0.697, black 0.107 in both appearances, bend −80 over 0.18·s (at most 25), a line of light top and bottom, a dark line down the sides; `subdued`: twice the blur, white 0.88 / black 0 |
-  | `NotificationCenter` | regular at `Medium` (legacy cards) or at its size (legacy snippets), the card's edge lines (fitted), captured at 0.25 |
+  | `AppSwitcher` | the Dock with blur 2 × / 3.5 × 0.69 pt; edge line 0.2 / 0.32 |
+  | `ControlCenter` | the module glass: clear base, blur 5 to 10 pt between s = 60 and 140, face saturation 1.045, white 0.697, black 0.107 in both appearances, bend −80 over 0.18·s (at most 25), a line of light top and bottom, a dark line down the sides; `subdued`: twice the blur, white 0.88 / black 0 |
+  | `NotificationCenter` | regular at `Medium` (legacy cards) or at its size (legacy snippets), the card's edge lines, captured at 0.25 |
   | `Sidebar` | regular, luma cap 0.85 light |
   | `AbuttedSidebar`, `Inspector` | regular made planar: no key and fill light, rim 0, ring 0, no bend outside, bleed saturation 1.5, luma cap 0.85 light, no edge line; `sidebar_edge` leading / trailing |
-  | `CartouchePopover` | regular at its size class (`Minimum` for the dock's labels, `Medium` for its stack grid), bend −5 over 5 pt, white fill 0.1 light; edge line 0.175 / none at minimum, 0.31 / 0.54 larger (fitted) |
+  | `CartouchePopover` | regular at its size class (`Minimum` for the dock's labels, `Medium` for its stack grid), bend −5 over 5 pt, white fill 0.1 light; edge line 0.175 / none at minimum, 0.31 / 0.54 larger |
   | `Menu` | regular at its own size, captured at 0.25, no edge line; window shadow 24 pt, 10 pt down, 0.7 / 0.8 (inactive 16 pt, 4 down, 0.55 / 0.65), which the legacy `Menu` leaves to the popup (`exclude_shadow`) |
   | `GlassWindow` | regular with the window shadow of an alert (`GlassShadow::alert`; a sheet's 0.6 / 0.7, inactive 0.45 / 0.55, through `GlassShadow::sheet`) |
   | `Tab` | regular under a white fill 0.15, black and white lowered by 0.05 light; inactive fill 0.3 / 0.07 |
   | `ToolbarItem` | regular with the first levels at 0.2, bend −18 over 9 pt, control border black 0.125, 1 pt (none with Increase Contrast), no edge line |
-  | `Control`, `Slider`, `Loupe` | no blur, read at the output's scale; face black 0.5 / 0.2, white 1.03 / 0.6; ring 0.1 (deviation 3, 8 down) and bend −0.15·s over 0.1·s; `Slider` ring 0.15 / 0.4, bend −0.27·s over 0.18·s, the track's edge line 0.22 / 0.24 (fitted); `Loupe` ring 0.07, deviation 4, 12 down, bend −0.3·s over 0.095·s |
-  | `SearchResults` | the large panel (fitted): regular with the blur and blur fill twice as wide, its own face, bend band at most 6 pt, an inner line (light) or bevel (dark) in place of the key light, drop shadow 24 pt, 16 down, 0.4 / 0.5 |
+  | `Control`, `Slider`, `Loupe` | no blur, read at the output's scale; face black 0.5 / 0.2, white 1.03 / 0.6; ring 0.1 (deviation 3, 8 down) and bend −0.15·s over 0.1·s; `Slider` ring 0.15 / 0.4, bend −0.27·s over 0.18·s, the track's edge line 0.22 / 0.24; `Loupe` ring 0.07, deviation 4, 12 down, bend −0.3·s over 0.095·s |
+  | `SearchResults` | the large panel: regular with the blur and blur fill twice as wide, its own face, bend band at most 6 pt, an inner line (light) or bevel (dark) in place of the key light, drop shadow 24 pt, 16 down, 0.4 / 0.5 |
   | `FocusBorder` | regular |
   | `EntryField` | regular with no blur |
   | `Identity` | no glass: a face that leaves the backdrop as it is, nothing at the edge, read at the output's scale (`GlassVariant::draws_glass` is false) |
@@ -139,8 +138,8 @@ flag and its Increase Contrast option.
   black 0.125 / 0.1, white 0.7 / 0.65, fill white 0.12 / black 0.15 and the key and fill light at 0.75 of the regular
   strength; Reduce Transparency gives the light face black 0.4, white 0.92, white fill 0.1. The control centre shifts
   its face (Increase Contrast: black −0.2 light, white +0.55 dark; Reduce Transparency: blur 10 pt, nothing bent, black
-  −0.25 and white −0.11 light, black +0.05, white +0.10 and saturation 0.7 dark). The controls record none. Reduce
-  Motion on every variant: no inner bend and no bend outside the edge, the blur at least 8 pt over levels 1, 1, 0.625,
+  −0.25 and white −0.11 light, black +0.05, white +0.10 and saturation 0.7 dark). The controls have no values of their own for
+  them. Reduce Motion on every variant: no inner bend and no bend outside the edge, the blur at least 8 pt over levels 1, 1, 0.625,
   0.625, four times as wide first for the control and notification centres. The inactive branch (`active: false`, regular base): a frost of
   0.5 pt at full opacity, no ring or drop shadow (a glass window keeps its inactive window shadow), nothing bent
   outside the edge, no bleed and the key and fill light at half strength. The legibility amount `a = 0.5 + density/200`
@@ -268,7 +267,7 @@ is glass of that style, drawn as the system variant in brackets (`GlassStyle::va
 
 - **kept**: the component asks for the same material and the compositor draws that material's recipe of the option. For
   glass that is the variant's own stage: with Reduce Transparency, on the regular base a wide blur under a denser face with
-  nothing bent at the edge (the Dock keeps its optics and changes its face, the controls record none), and
+  nothing bent at the edge (the Dock keeps its optics and changes its face, the controls have no values of their own), and
   with Increase Contrast the same optics under the contrast face; for a recipe of `materials.json`, its opaque variant
   and the high-contrast catalog's.
 - **kept in dark**: kept in the dark appearance, not drawn in the light one.

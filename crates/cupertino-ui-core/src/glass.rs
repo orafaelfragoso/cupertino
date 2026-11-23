@@ -48,6 +48,11 @@ pub struct Glass {
     pub interactive: bool,
     /// A colour laid over the glass's face at its alpha; `None` lays none.
     pub tint: Option<Color>,
+    /// The variant steps back behind what is in front of it ([`GlassModifiers::subdued`]).
+    pub subdued: bool,
+    /// The variant draws no drop shadow of its own: the surface draws its shadow apart
+    /// ([`GlassModifiers::exclude_shadow`]).
+    pub exclude_shadow: bool,
 }
 
 impl Glass {
@@ -63,6 +68,8 @@ impl Glass {
             size: GlassSize::Dynamic,
             interactive: false,
             tint: None,
+            subdued: false,
+            exclude_shadow: false,
         }
     }
 
@@ -96,6 +103,19 @@ impl Glass {
         }
     }
 
+    /// Whether the variant steps back behind what is in front of it (a card behind another).
+    pub fn subdued(self, subdued: bool) -> Self {
+        Self { subdued, ..self }
+    }
+
+    /// Whether the variant draws no drop shadow of its own, as the surface draws its shadow apart.
+    pub fn exclude_shadow(self, exclude_shadow: bool) -> Self {
+        Self {
+            exclude_shadow,
+            ..self
+        }
+    }
+
     /// The glass as a region of the window's material, in `container` blending over `spacing` points: named by its
     /// variant when it has one, or by its style's own variant when it is interactive, so the compositor can grow it.
     pub(crate) fn region(&self, spacing: f64) -> GlassRegion {
@@ -123,6 +143,8 @@ impl Glass {
                     GlassModifiers {
                         size,
                         interactive: self.interactive,
+                        subdued: m.subdued || self.subdued,
+                        exclude_shadow: m.exclude_shadow || self.exclude_shadow,
                         ..m
                     },
                 )

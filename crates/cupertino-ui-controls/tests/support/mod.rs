@@ -11,8 +11,8 @@ use cupertino_geometry::{Point, Rect, Size};
 use cupertino_theme::ui::{Appearance, ThemePreferences, ThemeTokens};
 use cupertino_ui_core::layout::LayoutDirection;
 use cupertino_ui_core::platform::{
-    Capabilities, DecorationMode, KeyEvent, Keysym, Mods, MouseButton, PointerEvent, Timestamp,
-    WindowEvent, WindowId, WindowSpec, WindowStates,
+    Capabilities, DecorationMode, KeyEvent, Keysym, MaterialRegion, Mods, MouseButton,
+    PointerEvent, Timestamp, WindowEvent, WindowId, WindowRequest, WindowSpec, WindowStates,
 };
 use cupertino_ui_core::{
     AccessibilityNode, Application, Command, CommandRegistry, Element, Key, PlaceholderIcons, Role,
@@ -201,6 +201,21 @@ impl<S: Scene> View<S> {
             .copied()
             .find(|window| shown.iter().any(|(_, id)| id == window))
             .unwrap_or(self.window)
+    }
+
+    /// The materials and glass `window` asked its window system for last, as the window system keeps them.
+    pub fn materials(&mut self, window: WindowId) -> Vec<MaterialRegion> {
+        self.driver
+            .window_system_mut()
+            .requests(window)
+            .unwrap()
+            .iter()
+            .rev()
+            .find_map(|r| match r {
+                WindowRequest::Materials(m) => Some(m.clone()),
+                _ => None,
+            })
+            .unwrap_or_default()
     }
 
     pub fn state(&self) -> &S::State {

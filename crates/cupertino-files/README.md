@@ -154,7 +154,8 @@ dropped when the item shown has changed since; a pipe or a device is never opene
 anything else its large icon with kind, size and dates. With several items selected the arrows go from one to the
 next; with one, they move the window's selection and the window follows. Space or Escape closes it. It grows from its
 centre as it fades in, over a time that grows with its size (at most 0.35 s), and shrinks back as it closes; with
-Reduce Motion it only fades, over 0.2 s. While a name is being
+Reduce Motion it only fades, over 0.2 s. Its panel, detached from what it shows, is the regular glass variant, with its
+inactive recipe while it is not active, and the theme's opaque fill where the desktop shows no glass. While a name is being
 typed to select an item, Space goes on to the name.
 
 **Tabs** (`tab_strip`, `kit::tabs`). Primary+T or File › New Tab opens a tab on the folder shown, after the one shown;

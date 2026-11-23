@@ -7,7 +7,7 @@
 //! inset ([`nested_radius`]). Thin dividers 20 pt tall separate the segments of a group that asks for them, except
 //! beside the chosen one. Each control's glass is the [`GlassRole::ToolbarGroup`] role.
 
-use crate::glass::{nested_radius, paint_glass, GlassRole};
+use crate::glass::{nested_radius, paint_glass, toolbar_selection_glass, GlassRole};
 use crate::icon::symbol;
 use crate::look::{self, paint_focus_ring};
 use crate::press::{Keys, Outcome, Press};
@@ -521,17 +521,27 @@ impl<M: 'static> Widget<M> for Capsule<M> {
             width: SizeSpec::Fixed(self.width),
             height: SizeSpec::Fixed(TOOLBAR_CONTROL),
             flex: Flex::NONE,
-            ..LayoutSpec::new(ContainerKind::Stack {
-                axis: Axis::Horizontal,
-                spacing: 0.0,
-                align: Align::Stretch,
-                justify: Justify::Start,
-            })
+            ..LayoutSpec::new(ContainerKind::Overlay)
         }
     }
 
+    /// The chosen segment's pill under the segments, so the segments' glyphs lie over it.
     fn take_children(&mut self) -> Vec<Element<M>> {
-        std::mem::take(&mut self.children)
+        let segments = std::mem::take(&mut self.children);
+        let count = segments.len();
+        let row = Element::new(SegmentRow { children: segments }).key("segments");
+        match self.selected {
+            Some(chosen) => vec![
+                Element::new(PillTrack {
+                    count,
+                    segment: self.segment,
+                    chosen,
+                })
+                .key("pill"),
+                row,
+            ],
+            None => vec![row],
+        }
     }
 
     fn state(&self) {}
@@ -567,22 +577,7 @@ impl<M: 'static> Widget<M> for Capsule<M> {
         paint_glass(cx, GlassRole::ToolbarGroup, rect, radius);
         let theme = cx.env().theme.clone();
         let rtl = cx.env().direction == LayoutDirection::Rtl;
-        let mirror = |x: f64, w: f64| if rtl { size.width - x - w } else { x };
-        if let Some(i) = self.selected {
-            let pill = Rect::new(
-                mirror(self.segment * i as f64, self.segment),
-                0.0,
-                self.segment,
-                size.height,
-            )
-            .inset(Insets::uniform(TOOLBAR_CHOICE_INSET));
-            look::fill(
-                cx,
-                pill,
-                nested_radius(radius, TOOLBAR_CHOICE_INSET),
-                Some(pill_color(&theme, true)),
-            );
-        }
+        let mirror = |x: f64| if rtl { size.width - x } else { x };
         let px = 1.0 / cx.env().scale.max(1.0);
         let color = theme
             .colors
@@ -592,7 +587,7 @@ impl<M: 'static> Widget<M> for Capsule<M> {
             )
             .map(|c| divider_color(&theme, c));
         for x in self.divider_positions() {
-            let x = mirror(x, 0.0);
+            let x = mirror(x);
             look::fill(
                 cx,
                 Rect::new(
@@ -618,6 +613,221 @@ impl<M: 'static> Widget<M> for Capsule<M> {
         });
         cx.name(self.label.clone());
     }
+}
+
+/// A capsule's segments side by side.
+struct SegmentRow<M> {
+    children: Vec<Element<M>>,
+}
+
+impl<M: 'static> Widget<M> for SegmentRow<M> {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: SizeSpec::Fill,
+            height: SizeSpec::Fill,
+            ..LayoutSpec::new(ContainerKind::Stack {
+                axis: Axis::Horizontal,
+                spacing: 0.0,
+                align: Align::Stretch,
+                justify: Justify::Start,
+            })
+        }
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        std::mem::take(&mut self.children)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        no_measure()
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn hit(&self, _: &(), _: Point) -> bool {
+        false
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
+/// A slot as wide as each of a choice's `count` segments, side by side as the segments are, the `chosen` one holding
+/// its pill [`TOOLBAR_CHOICE_INSET`] inside it.
+struct PillTrack {
+    count: usize,
+    segment: f64,
+    chosen: usize,
+}
+
+impl<M: 'static> Widget<M> for PillTrack {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: SizeSpec::Fill,
+            height: SizeSpec::Fill,
+            ..LayoutSpec::new(ContainerKind::Stack {
+                axis: Axis::Horizontal,
+                spacing: 0.0,
+                align: Align::Stretch,
+                justify: Justify::Start,
+            })
+        }
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        (0..self.count)
+            .map(|i| {
+                Element::new(PillSlot {
+                    segment: self.segment,
+                    chosen: i == self.chosen,
+                })
+            })
+            .collect()
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self.count != old.count || self.segment != old.segment || self.chosen != old.chosen {
+            Change::Layout
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        no_measure()
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn hit(&self, _: &(), _: Point) -> bool {
+        false
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        cx.hidden();
+    }
+}
+
+/// One segment's room in a [`PillTrack`]; the chosen one holds the pill inside its inset.
+struct PillSlot {
+    segment: f64,
+    chosen: bool,
+}
+
+impl<M: 'static> Widget<M> for PillSlot {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            insets: Insets::uniform(TOOLBAR_CHOICE_INSET),
+            width: SizeSpec::Fixed(self.segment),
+            height: SizeSpec::Fill,
+            ..LayoutSpec::new(ContainerKind::Overlay)
+        }
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        if self.chosen {
+            vec![Element::new(Pill)]
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self.segment != old.segment || self.chosen != old.chosen {
+            Change::Layout
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(self.segment, TOOLBAR_CONTROL),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn hit(&self, _: &(), _: Point) -> bool {
+        false
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
+/// The chosen segment's pill: where the window shows glass, the tab glass as a shape of the toolbar's container
+/// ([`toolbar_selection_glass`]), which draws its own edge; elsewhere a fill over the painted capsule.
+struct Pill;
+
+impl<M: 'static> Widget<M> for Pill {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: SizeSpec::Fill,
+            height: SizeSpec::Fill,
+            ..LayoutSpec::new(ContainerKind::Leaf)
+        }
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        no_measure()
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn hit(&self, _: &(), _: Point) -> bool {
+        false
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        let size = cx.size();
+        let rect = Rect::new(0.0, 0.0, size.width, size.height);
+        let radius = nested_radius(TOOLBAR_CONTROL / 2.0, TOOLBAR_CHOICE_INSET);
+        if cx.glass(toolbar_selection_glass(radius)) {
+            return;
+        }
+        let theme = cx.env().theme.clone();
+        look::fill(cx, rect, radius, Some(pill_color(&theme, true)));
+    }
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
 }
 
 /// The colour of a chosen segment's pill, or of a pressed one's.

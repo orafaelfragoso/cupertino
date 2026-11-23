@@ -29,7 +29,7 @@ use cupertino_kit::core::{
     Action, Change, CommandRegistry, Element, Event, EventCx, Key, MeasureCx, PaintCx, Phase,
     Propagation, Role, SemanticsCx, Shortcut, Widget, WindowBackground,
 };
-use cupertino_kit::core::{Glass, Popup, PopupAnchor};
+use cupertino_kit::core::{Glass, GlassVariant, Popup, PopupAnchor};
 use cupertino_kit::geometry::{Insets, Point, Rect, Size};
 use cupertino_kit::layout::{
     Align, Axis, Constraints, ContainerKind, Flex, Justify, LayoutSpec, Measured, Overflow,
@@ -947,10 +947,12 @@ impl Widget<Message> for Sheet {
         Propagation::Continue
     }
 
-    /// The panel is the popovers' glass, which the compositor gives their outline and soft shadow; without it the panel
-    /// paints the opaque fill and its own edge.
+    /// The panel stands detached from what it shows, so it is the regular glass variant, which takes its inactive
+    /// recipe while the panel is not active and which the compositor gives a popup's outline and soft shadow (the
+    /// popovers' dense glass is what a window system without variants draws); without it the panel paints the opaque
+    /// fill and its own edge.
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
-        if cx.glass(Glass::dense().radius(RADIUS)) {
+        if cx.glass(Glass::dense().variant(GlassVariant::Regular).radius(RADIUS)) {
             return;
         }
         let size = cx.size();

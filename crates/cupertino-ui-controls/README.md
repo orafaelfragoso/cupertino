@@ -187,7 +187,11 @@ from the application's model and reports changes as messages.
   window's top (under the toolbar row), centred across. Return answers with the default button and Escape with the
   cancel one once the focused control passes them on; Tab and Shift+Tab stay inside; every other key stops there. The
   first control of the body takes the focus, else the least destructive button (Cancel, then the default, then
-  another). A `DialogKind::Dialog` is a sheet: 340 pt wide, solid in the window colour with a 16 pt radius, a soft
+  another). Both panels float in the window's raised layer (`Widget::raised`) and, where the desktop shows glass and
+  neither Reduce Transparency nor Increase Contrast is on, are glass of the glass window variant
+  (`GlassVariant::GlassWindow`) over the window's content, which casts the window shadow (deep while the window is
+  active, shallow while it is not) and takes its inactive recipe while the window is not active; the painted bodies
+  below stand in for it elsewhere and while an alert pops in, each with its own shadow. A `DialogKind::Dialog` is a sheet: 340 pt wide, solid in the window colour with a 16 pt radius, a soft
   shadow, a dark hairline outside its edge and, in the dark appearance, a faint light rim inside it; the title, the
   message, the body and a trailing row of buttons, 20 pt in. A `DialogKind::Alert` is 260 pt wide, a nearly opaque
   grey (97 %, opaque under Reduce Transparency and Increase Contrast) with a light rim, a 26 pt radius and the
@@ -196,12 +200,7 @@ from the application's model and reports changes as messages.
   28 pt capsule buttons 16 pt from the sides and the bottom. Two buttons whose labels fit half the row (reckoned from
   the character count) go side by side at equal widths in their given order; otherwise they are stacked full width,
   8 pt apart, in the reverse order, so the default is on top. The default capsule takes the accent, the others a quiet
-  fill; a destructive answer has a red label (a red capsule in high contrast). The alert is not glass: `PaintCx::glass`
-  is drawn by the compositor under the window's surface, so over the window's own opaque content it would not show,
-  and the alert is part of that surface. Glass would need the alert on a surface of its own above the window, which
-  Kit's popups are not fit for: a popup without a grab gets no keyboard, one with a grab needs the serial of a press
-  (an alert raised by a timer or a task has none) and is dismissed by a press outside, and no anchor hangs one centred
-  under the toolbar row. Dialogs show and go at once: the window draws no motion for them, since a fade keyed to the
+  fill; a destructive answer has a red label (a red capsule in high contrast). Dialogs show and go at once: the window draws no motion for them, since a fade keyed to the
   clock would leave them unseen in every test harness whose clock stands still.
 - **Press catchers.** `PressCatcher` is the window a shell panel puts under itself, over a whole output, to hear a press
   outside the panel: it asks for no size (its surface's role gives it one), is shown as one transparent colour without

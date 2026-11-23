@@ -7,8 +7,9 @@ use crate::support;
 
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_ui_controls::{
-    Button, ButtonRole, ButtonStyle, Popover, SidebarWindow, SplitLayout, Stack, ToolbarButton,
-    ToolbarGlyph, ToolbarGroup, ToolbarItem, TOOLBAR_CHOICE_INSET,
+    Button, ButtonRole, ButtonStyle, Dialog, DialogAction, DialogButton, DialogKind, Modal,
+    Popover, SidebarWindow, SplitLayout, Stack, ToolbarButton, ToolbarGlyph, ToolbarGroup,
+    ToolbarItem, TOOLBAR_CHOICE_INSET,
 };
 use cupertino_ui_core::layout::{Align, Axis, ScrollState};
 use cupertino_ui_core::platform::{
@@ -263,4 +264,79 @@ fn an_anchored_popover_and_its_pointer_are_one_cartouche_popover_glass_at_the_me
         );
         assert_eq!(g.container, container, "one container: {shown:?}");
     }
+}
+
+/// A window with a sheet up when `SHEET`, else an alert.
+struct Asking<const SHEET: bool>;
+
+impl<const SHEET: bool> Scene for Asking<SHEET> {
+    type State = ();
+    type Msg = ();
+
+    fn state() {}
+
+    fn update(_: &mut (), _: ()) {}
+
+    fn view(_: &()) -> Element<()> {
+        Element::from(Modal {
+            content: blank(),
+            dialog: Some(Dialog {
+                kind: if SHEET {
+                    DialogKind::Dialog
+                } else {
+                    DialogKind::Alert
+                },
+                icon: None,
+                title: "Replace it?".into(),
+                message: String::new(),
+                body: None,
+                buttons: vec![
+                    DialogButton {
+                        label: "Cancel".into(),
+                        action: DialogAction::Cancel,
+                        on_press: (),
+                    },
+                    DialogButton {
+                        label: "Replace".into(),
+                        action: DialogAction::Default,
+                        on_press: (),
+                    },
+                ],
+            }),
+        })
+    }
+}
+
+/// The glass window glass of the panel a window with a sheet (`SHEET`) or an alert shows once it has settled, with
+/// Reduce Transparency on or off.
+fn window_glass<const SHEET: bool>(reduce_transparency: bool) -> Vec<(Rect, GlassRegion)> {
+    let mut view = View::<Asking<SHEET>>::open_with(effects(), reduce_transparency);
+    // past an alert's pop-in
+    view.wait(1.0);
+    let window = view.window;
+    glass(&mut view, window)
+        .into_iter()
+        .filter(|(_, g)| variant(g) == Some(GlassVariant::GlassWindow))
+        .collect()
+}
+
+#[test]
+fn alerts_and_sheets_are_glass_window_glass_and_opaque_with_reduce_transparency() {
+    for (sheet, shown) in [
+        (false, window_glass::<false>(false)),
+        (true, window_glass::<true>(false)),
+    ] {
+        let [(rect, _)] = shown[..] else {
+            panic!("sheet {sheet}: one panel of the glass window variant, not {shown:?}")
+        };
+        assert!(
+            rect.width() > 200.0,
+            "sheet {sheet}: the whole panel: {rect:?}"
+        );
+    }
+    assert!(window_glass::<false>(true).is_empty(), "the alert's grey");
+    assert!(
+        window_glass::<true>(true).is_empty(),
+        "the sheet's solid body"
+    );
 }

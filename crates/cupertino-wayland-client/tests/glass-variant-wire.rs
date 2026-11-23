@@ -78,6 +78,29 @@ fn a_backdrop_sends_its_variant_modifiers_size_class_and_tint_from_version_23() 
 }
 
 #[test]
+fn a_sheets_glass_window_variant_sends_the_document_modal_bit_and_falls_back_to_regular_glass() {
+    let sheet = VariantGlass {
+        modifiers: GlassModifiers {
+            document_modal: true,
+            ..GlassModifiers::default()
+        },
+        ..VariantGlass::new(GlassVariant::GlassWindow)
+    };
+    let (server, mut conn, backdrop) = backdrop_on(23);
+    backdrop.set_glass_variant(sheet, 0, 0.0).unwrap();
+    let sent = sent(&server, &mut conn);
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert!(
+        sent[0].starts_with("SetGlassVariant { variant: Value(GlassWindow)")
+            && sent[0].contains("DocumentModal")
+            && !sent[0].contains("ExcludeShadow"),
+        "{}",
+        sent[0]
+    );
+    assert_eq!(sheet.fallback_style(), GlassStyle::Regular);
+}
+
+#[test]
 fn an_older_server_is_sent_the_style_the_variant_falls_back_to_and_no_tint() {
     let (server, mut conn, backdrop) = backdrop_on(22);
     assert!(!backdrop.takes_glass_variants());

@@ -53,6 +53,9 @@ pub struct Glass {
     /// The variant draws no drop shadow of its own: the surface draws its shadow apart
     /// ([`GlassModifiers::exclude_shadow`]).
     pub exclude_shadow: bool,
+    /// The glass is a document-modal sheet: the glass window variant casts a sheet's shallower drop shadow in place of
+    /// an alert's; no other variant changes.
+    pub document_modal: bool,
 }
 
 impl Glass {
@@ -70,6 +73,7 @@ impl Glass {
             tint: None,
             subdued: false,
             exclude_shadow: false,
+            document_modal: false,
         }
     }
 
@@ -116,6 +120,15 @@ impl Glass {
         }
     }
 
+    /// Whether the glass is a document-modal sheet: the glass window variant then casts a sheet's drop shadow, shallower
+    /// than an alert's.
+    pub const fn document_modal(self, document_modal: bool) -> Self {
+        Self {
+            document_modal,
+            ..self
+        }
+    }
+
     /// The glass as a region of the window's material, in `container` blending over `spacing` points: named by its
     /// variant when it has one, or by its style's own variant when it is interactive, so the compositor can grow it.
     pub(crate) fn region(&self, spacing: f64) -> GlassRegion {
@@ -152,6 +165,7 @@ impl Glass {
             tint: self.tint.map_or([0.0; 4], |c| {
                 [finite(c.r), finite(c.g), finite(c.b), finite(c.a)]
             }),
+            document_modal: self.variant.is_some() && self.document_modal,
             ..GlassRegion::of_style(self.style, self.container, spacing)
         }
     }

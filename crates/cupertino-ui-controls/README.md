@@ -190,7 +190,7 @@ from the application's model and reports changes as messages.
   first control of the body takes the focus, else the least destructive button (Cancel, then the default, then
   another). Both panels float in the window's raised layer (`Widget::raised`) and, where the desktop shows glass and
   neither Reduce Transparency nor Increase Contrast is on, are glass of the glass window variant
-  (`GlassVariant::GlassWindow`) over the window's content, which casts the window shadow (deep while the window is
+  (`GlassVariant::GlassWindow`) over the window's content, which casts the window shadow (an alert's, or a sheet's fainter one as document-modal glass; deep while the window is
   active, shallow while it is not) and takes its inactive recipe while the window is not active; the painted bodies
   below stand in for it elsewhere and while an alert pops in, each with its own shadow. A `DialogKind::Dialog` is a sheet: 340 pt wide, solid in the window colour with a 16 pt radius, a soft
   shadow, a dark hairline outside its edge and, in the dark appearance, a faint light rim inside it; the title, the

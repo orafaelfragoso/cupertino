@@ -748,3 +748,57 @@ fn a_menu_named_by_its_variant_keeps_the_popover_outline_of_the_menu_style() {
     assert!(GlassLook::of_style(Style::Menu).popover_outline());
     assert!(!GlassLook::of_style(Style::Regular).popover_outline());
 }
+
+#[test]
+fn document_modal_glass_window_glass_casts_the_sheets_shadow_and_other_glass_keeps_its_own() {
+    use cupertino_server::glass_look::of_wire;
+    use cupertino_theme::glass::GlassShadow;
+    use cupertino_theme::GlassParams;
+    let look = |variant: GlassVariant, bits: GlassModifier| {
+        of_wire(variant as u32, bits.bits(), SizeClass::Dynamic as u32).expect("known bits")
+    };
+    let sheet = look(GlassVariant::GlassWindow, GlassModifier::DocumentModal);
+    assert!(sheet.document_modal);
+    // the drop shadow's black in each appearance, while the window is active and while it is not
+    for (dark, active, black) in [
+        (false, true, 0.6),
+        (true, true, 0.7),
+        (false, false, 0.45),
+        (true, false, 0.55),
+    ] {
+        let base = cupertino_theme::GlassMode {
+            dark,
+            ..cupertino_theme::GlassMode::default()
+        };
+        let mode = sheet.mode(base, active);
+        let mut params = GlassParams::new(mode, 200.0);
+        let alert = params.shadow;
+        sheet.lay_sheet_shadow(&mut params, mode);
+        let expected: GlassShadow = alert.sheet(active, dark);
+        assert_eq!(params.shadow, expected, "dark {dark}, active {active}");
+        assert!(
+            (params.shadow.fill[3] - black).abs() < 1e-6,
+            "dark {dark}, active {active}: {:?}",
+            params.shadow.fill
+        );
+        assert!(
+            params.shadow.fill[3] < alert.fill[3],
+            "fainter than the alert's"
+        );
+    }
+    // an alert, a sheet without its own shadow and another variant keep what their recipe casts
+    for other in [
+        look(GlassVariant::GlassWindow, GlassModifier::empty()),
+        look(
+            GlassVariant::GlassWindow,
+            GlassModifier::DocumentModal | GlassModifier::ExcludeShadow,
+        ),
+        look(GlassVariant::Menu, GlassModifier::DocumentModal),
+    ] {
+        let mode = other.mode(cupertino_theme::GlassMode::default(), true);
+        let mut params = GlassParams::new(mode, 200.0);
+        let before = params.shadow;
+        other.lay_sheet_shadow(&mut params, mode);
+        assert_eq!(params.shadow, before, "{other:?}");
+    }
+}

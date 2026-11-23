@@ -215,6 +215,7 @@
       <entry name="exclude_shadow" value="2" summary="no drop shadow from the glass: its surface draws its own"/>
       <entry name="interactive" value="4" summary="the glass responds to a press: see set_glass_variant"/>
       <entry name="adaptive" value="8" summary="the glass adapts to what lies behind it"/>
+      <entry name="document_modal" value="16" summary="the glass is a document-modal sheet: see set_glass_variant"/>
     </enum>
 
     <enum name="size_class" since="23">
@@ -320,6 +321,11 @@
         corners are circular while it is deformed, and its filter is the same. A drag after the
         press does not stretch it. While reduce_motion is on (cupertino_appearance_v1) the glass
         does not grow. The shape the client set is what it hit-tests against.
+
+        Glass window glass (the glass_window variant) casts the drop shadow of an alert: deep while
+        its window is active and shallow while it is not. With the document_modal modifier it casts
+        a sheet's in their place, of the same depth and blur and fainter; the modifier changes no
+        other variant, and exclude_shadow leaves out either shadow.
 
         Posts invalid_glass for an unknown variant, size class or modifier bit, or a negative
         spacing.

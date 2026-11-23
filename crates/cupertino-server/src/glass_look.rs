@@ -7,7 +7,9 @@
 use cupertino_protocols::server::app_effects::cupertino_backdrop_v1::{
     GlassModifier as WireModifier, GlassVariant as WireVariant, SizeClass as WireSize,
 };
-use cupertino_theme::{GlassMode, GlassModifiers, GlassSize, GlassStyle, GlassVariant};
+use cupertino_theme::{
+    GlassMode, GlassModifiers, GlassParams, GlassSize, GlassStyle, GlassVariant,
+};
 
 /// The legacy styles in the order of their wire values (`cupertino_backdrop_v1.glass_style`).
 pub const GLASS_STYLES: [GlassStyle; 16] = [
@@ -46,6 +48,9 @@ pub struct GlassLook {
     /// Asked for as a variant: the glass takes the inactive branch while its window is inactive. Glass of a legacy
     /// style keeps the active recipe, as it always drew.
     pub follows_window: bool,
+    /// The glass is a document-modal sheet (the `document_modal` modifier): glass window glass casts a sheet's drop
+    /// shadow in place of an alert's ([`GlassLook::lay_sheet_shadow`]).
+    pub document_modal: bool,
 }
 
 impl GlassLook {
@@ -57,6 +62,7 @@ impl GlassLook {
             variant,
             modifiers,
             follows_window: false,
+            document_modal: false,
         }
     }
 
@@ -79,6 +85,7 @@ impl GlassLook {
                 ..modifiers
             },
             follows_window: true,
+            document_modal: false,
         }
     }
 
@@ -101,6 +108,19 @@ impl GlassLook {
     pub fn popover_outline(self) -> bool {
         matches!(self.style, Some(GlassStyle::Dense | GlassStyle::Menu))
             || self.variant == GlassVariant::Menu
+    }
+
+    /// Lays the drop shadow of a document-modal sheet on `params`, the recipe of this glass in `mode`: glass window glass
+    /// asked for with the `document_modal` modifier casts [`cupertino_theme::GlassShadow::sheet`] in place of the alert's
+    /// shadow its recipe casts, deep while its window is active and shallow while it is not, its ring and edge lines
+    /// kept; any other glass, and glass without its own shadow (`exclude_shadow`), is left as it is.
+    pub fn lay_sheet_shadow(self, params: &mut GlassParams, mode: GlassMode) {
+        if self.document_modal
+            && self.variant == GlassVariant::GlassWindow
+            && !self.modifiers.exclude_shadow
+        {
+            params.shadow = params.shadow.sheet(mode.modifiers.active, mode.dark);
+        }
     }
 
     /// Whether the glass responds to a press ([`crate::glass_press`]).
@@ -161,10 +181,13 @@ pub fn modifiers(bits: u32, size: u32) -> Option<GlassModifiers> {
 
 /// The glass of `set_glass_variant`'s wire values, `None` for one the protocol does not define.
 pub fn of_wire(variant_wire: u32, bits: u32, size: u32) -> Option<GlassLook> {
-    Some(GlassLook::of_variant(
-        variant(variant_wire)?,
-        modifiers(bits, size)?,
-    ))
+    let look = GlassLook::of_variant(variant(variant_wire)?, modifiers(bits, size)?);
+    // the bit is known, as `modifiers` checked
+    let document_modal = WireModifier::from_bits_retain(bits).contains(WireModifier::DocumentModal);
+    Some(GlassLook {
+        document_modal,
+        ..look
+    })
 }
 
 /// A tint of `set_glass_tint` as the scene lays it, straight sRGB; `None` for a channel below 0, above 1 or not

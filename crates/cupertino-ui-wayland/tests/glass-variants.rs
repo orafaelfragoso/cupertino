@@ -269,3 +269,33 @@ fn a_window_backgrounds_glass_variant_goes_to_its_backdrop_and_a_fade_sends_only
         "{after:?}"
     );
 }
+
+#[test]
+fn a_sheets_glass_region_goes_with_the_document_modal_bit() {
+    let (server, conn) = Harness::start(Offer {
+        app_effects: Some(23),
+        ..Offer::NONE
+    });
+    let mut system = WaylandWindowSystem::new(conn, Profile::cupertino());
+    let window = system.create_window(&spec()).unwrap();
+    flush(&mut system);
+    let mut regions = region(
+        Some((GlassVariant::GlassWindow, GlassModifiers::DEFAULT)),
+        [0.0; 4],
+    );
+    if let Some(g) = regions[0].glass.as_mut() {
+        g.document_modal = true;
+    }
+    system
+        .request(window, WindowRequest::Materials(regions))
+        .unwrap();
+    flush(&mut system);
+    server.wait_for("SetGlassVariant", 1);
+    let sent = glass_sent(&server);
+    let variant = sent.last().unwrap();
+    assert!(
+        variant.starts_with("SetGlassVariant { variant: Value(GlassWindow)")
+            && variant.contains("DocumentModal"),
+        "{variant}"
+    );
+}

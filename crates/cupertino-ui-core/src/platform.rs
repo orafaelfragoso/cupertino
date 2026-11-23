@@ -423,6 +423,9 @@ pub struct GlassRegion {
     pub variant: Option<(GlassVariant, GlassModifiers)>,
     /// Straight sRGB red, green, blue and alpha; alpha 0 lays no tint.
     pub tint: [f32; 4],
+    /// The variant's glass is a document-modal sheet ([`crate::Glass::document_modal`]): the glass window variant casts
+    /// a sheet's drop shadow in place of an alert's. Set only with a variant.
+    pub document_modal: bool,
 }
 
 impl GlassRegion {
@@ -434,6 +437,7 @@ impl GlassRegion {
             spacing,
             variant: None,
             tint: [0.0; 4],
+            document_modal: false,
         }
     }
 }

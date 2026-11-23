@@ -256,7 +256,7 @@ fn set_look(
     backdrop.set_glass_tint(g.tint.map(f64::from))?;
     match g.variant.filter(|_| backdrop.takes_glass_variants()) {
         Some(variant) => backdrop.set_glass_variant(
-            crate::glass_wire::protocol_variant(variant),
+            crate::glass_wire::protocol_variant(variant, g.document_modal),
             g.container,
             g.spacing,
         ),

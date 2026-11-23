@@ -220,6 +220,27 @@ fn a_tint_out_of_range_is_held_to_it() {
     assert_eq!(region.variant, None, "a tint alone keeps the style");
 }
 
+#[test]
+fn a_sheets_variant_goes_document_modal_and_a_style_alone_does_not() {
+    let sheet = region_of(
+        Glass::dense()
+            .variant(GlassVariant::GlassWindow)
+            .document_modal(true),
+    );
+    assert!(sheet.document_modal);
+    assert_eq!(
+        sheet.variant.map(|(v, _)| v),
+        Some(GlassVariant::GlassWindow)
+    );
+    let alert = region_of(Glass::dense().variant(GlassVariant::GlassWindow));
+    assert!(!alert.document_modal);
+    let style = region_of(Glass::dense().document_modal(true));
+    assert!(
+        !style.document_modal,
+        "only a variant carries its modifiers"
+    );
+}
+
 thread_local! {
     /// The background glass the next window of [`Panel`] asks for.
     static BACKGROUND: RefCell<Option<Glass>> = const { RefCell::new(None) };

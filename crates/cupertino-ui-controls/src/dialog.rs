@@ -757,12 +757,14 @@ fn pop_scale(t: f64) -> f64 {
 /// Asks for the glass of an alert or a sheet under the whole panel, its corners rounded by `radius`, where it can show:
 /// the panel floats in the raised layer, so the glass lies over the window's content. The glass window variant casts
 /// the window shadow itself, deep while the window is active and shallow while it is not, and takes its inactive
-/// recipe then. Returns whether the window shows it.
-fn window_glass(cx: &mut PaintCx<'_>, radius: f64) -> bool {
+/// recipe then; a `sheet` is document-modal glass, whose shadow is the sheet's, fainter than an alert's. Returns
+/// whether the window shows it.
+fn window_glass(cx: &mut PaintCx<'_>, radius: f64, sheet: bool) -> bool {
     cx.in_raised_layer()
         && cx.glass(
             Glass::dense()
                 .variant(GlassVariant::GlassWindow)
+                .document_modal(sheet)
                 .radius(radius),
         )
 }
@@ -951,7 +953,7 @@ impl<M: Clone + 'static> Widget<M> for Sheet<M> {
                     cx.set_group(ramp(t, 0.0, POP_PANEL_FADE), vec![shadow]);
                 }
                 None => {
-                    glass = !opaque && window_glass(cx, ALERT_RADIUS);
+                    glass = !opaque && window_glass(cx, ALERT_RADIUS, false);
                     // the glass casts the window shadow of its variant; the painted body casts its own
                     if !glass {
                         cx.set_group(1.0, vec![shadow]);
@@ -963,7 +965,7 @@ impl<M: Clone + 'static> Widget<M> for Sheet<M> {
         } else {
             let opaque = theme.preferences.reduce_transparency
                 || theme.preferences.appearance.is_high_contrast();
-            glass = !opaque && window_glass(cx, RADIUS);
+            glass = !opaque && window_glass(cx, RADIUS, true);
         }
         let dark = theme.preferences.appearance.is_dark();
         let px = 1.0 / cx.env().scale.max(1.0);

@@ -344,9 +344,13 @@ fn alerts_and_sheets_are_glass_window_glass_and_opaque_with_reduce_transparency(
         (false, window_glass::<false>(false)),
         (true, window_glass::<true>(false)),
     ] {
-        let [(rect, _)] = shown[..] else {
+        let [(rect, g)] = shown[..] else {
             panic!("sheet {sheet}: one panel of the glass window variant, not {shown:?}")
         };
+        assert_eq!(
+            g.document_modal, sheet,
+            "a sheet casts the sheet's shadow, an alert the alert's"
+        );
         assert!(
             rect.width() > 200.0,
             "sheet {sheet}: the whole panel: {rect:?}"

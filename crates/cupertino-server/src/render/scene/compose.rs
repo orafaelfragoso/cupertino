@@ -256,6 +256,8 @@ fn glass_container(
         })
         .collect();
     let mut container = Container::new(shapes, spec.spacing as f32, mode);
+    // a sheet casts its own shadow, the container's for all its shapes
+    spec.look.lay_sheet_shadow(&mut container.params, mode);
     if spec.tint[3] > 0.0 {
         container.params = container.params.with_tint(spec.tint, TINT_FACE_OPACITY);
     }

@@ -130,7 +130,7 @@ executor, and what it holds (the extras' task holds the system connection) with 
 
 - **Surfaces.** A top-anchored layer surface per output whose exclusive zone is the bar's height, so the server keeps
   the space while it holds the bar (D19). The server owns hiding, revealing and dimming. The bar gives way to an
-  overview of its output, as the menu bar does to Mission Control: while the overview says it is on its way in or open
+  overview of its output: while the overview says it is on its way in or open
   (`OverviewShown` on the host bus, from the `overview` component alone; the bus says it no longer is when the
   overview stops), the bar's menus close, it fades out along the overview's own motion (`SpringPreset::OVERVIEW_OPEN`,
   under Reduce Motion `Timing::OVERVIEW_FADE`, on the compositor's clock: `WindowRequest::Present`) and takes no input

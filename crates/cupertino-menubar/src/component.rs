@@ -451,7 +451,7 @@ impl Model {
         self.shared.extras.lock_without_agent = true;
     }
 
-    /// Each bar gives way to an overview of its output, as Mission Control takes the menu bar away: its menus close
+    /// Each bar gives way to an overview of its output: its menus close
     /// and it fades out along the overview's own motion ([`SpringPreset::OVERVIEW_OPEN`], under Reduce Motion the
     /// overview's fade [`Timing::OVERVIEW_FADE`]) and takes no input, and it fades back in the same way as the
     /// overview leaves. Its space stays reserved all the while.

@@ -136,6 +136,8 @@ impl<'a> GlassGroups<'a> {
 /// The glass piece of the container of `members` (glass backdrops of one surface, front to back), or translucent fills
 /// standing in for it while the material pass is unavailable. A `popup`'s glass takes the popup face, and its rim is
 /// drawn apart ([`inner_rim_item`]); the glass of a variant takes the inactive branch in a window that is not `active`.
+/// What the container draws as a whole (its recipe, its edge line, blur fill, shadow and blur ramp) is its anchor's,
+/// the backdrop the surface created first, whichever order the others are in.
 fn glass_pieces(
     p: &SceneParams<'_>,
     members: &[&BackdropArea],
@@ -143,7 +145,10 @@ fn glass_pieces(
     popup: bool,
     active: bool,
 ) -> Vec<Piece> {
-    let Some(spec) = members.first().and_then(|b| b.glass) else {
+    let Some(anchor) = members.last() else {
+        return Vec::new();
+    };
+    let Some(spec) = anchor.glass else {
         return Vec::new();
     };
     let mode = cupertino_theme::GlassMode {
@@ -151,9 +156,8 @@ fn glass_pieces(
         ..crate::accessibility::glass_mode(p.config.is_dark(), spec.look, active, p.display)
     };
     let mut container = glass_container(p, members, spec, mode, active);
-    let last = members.len() - 1;
-    // the container's blur ramp runs along its first shape, the backdrop the surface created first
-    let ramp = members[last].blur_ramp;
+    // the container's blur ramp runs along its first shape, the anchor's
+    let ramp = anchor.blur_ramp;
     if ramp != [1.0, 1.0] {
         container = container.with_blur_ramp(ramp);
     }
@@ -227,11 +231,12 @@ fn glass_pieces(
     })]
 }
 
-/// The container of `members` (glass backdrops of one surface, front to back) in `mode`, the first member's, in a
-/// window that is `active` or not: its shapes back to front, as the surface created them. A member in other glass or
-/// of another tint than the first (a selected segment in its group) keeps its own recipe on its shape. A shape its
-/// client scaled (`set_glass_scale`), or of interactive glass under a press ([`crate::glass_press`]), grows about its
-/// centre with circular corners, its recipe resolved at its size at rest, so what the glass filters does not change.
+/// The container of `members` (glass backdrops of one surface, front to back) in `mode`, the anchor's (the backdrop the
+/// surface created first, the last member), in a window that is `active` or not: its shapes back to front, as the
+/// surface created them. A member in other glass or of another tint than the anchor (a selected segment in its group)
+/// keeps its own recipe on its shape. A shape its client scaled (`set_glass_scale`), or of interactive glass under a
+/// press ([`crate::glass_press`]), grows about its centre with circular corners, its recipe resolved at its size at
+/// rest, so what the glass filters does not change.
 fn glass_container(
     p: &SceneParams<'_>,
     members: &[&BackdropArea],
@@ -262,7 +267,7 @@ fn glass_container(
         container.params = container.params.with_tint(spec.tint, TINT_FACE_OPACITY);
     }
     let last = members.len() - 1;
-    for (j, b) in members.iter().enumerate().skip(1) {
+    for (j, b) in members.iter().enumerate().take(last) {
         let Some(own) = b
             .glass
             .filter(|g| g.look != spec.look || g.tint != spec.tint)

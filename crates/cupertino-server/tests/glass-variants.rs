@@ -777,6 +777,73 @@ fn a_press_beside_interactive_glass_after_one_on_it_asks_for_no_frames() {
     assert!(!capsule.rig.state.animating());
 }
 
+/// The toolbar of [`a_toolbars_container_draws_alike_whichever_order_its_chosen_segment_was_made_in`]: its size in
+/// points, and the left, top, width and height of each item in it.
+const TOOLBAR: (i32, i32) = (360, 72);
+const TOOLBAR_ITEMS: [(i32, i32, i32, i32); 3] = [(12, 16, 96, 40), (132, 16, 96, 40), (252, 16, 96, 40)];
+/// The container the toolbar's items join.
+const TOOLBAR_CONTAINER: u32 = 7;
+
+/// The output showing a window of light and dark stripes under a toolbar of glass in one container: a toolbar item
+/// made first, then the others in `order` (indices into [`TOOLBAR_ITEMS`]), the chosen segment (`chosen`) of the tab
+/// variant and the rest toolbar items; and the toolbar's pixels.
+fn toolbar_pixels(order: [usize; 2], chosen: usize) -> Vec<[u8; 4]> {
+    let mut rig = Rig::new((480, 320), 1.0);
+    let effects = rig.client.effects.clone().unwrap();
+    let window = rig.map("Toolbar", (400, 200), |x| {
+        if (x / 6) % 2 == 0 {
+            [60, 60, 60, 255]
+        } else {
+            [235, 235, 235, 255]
+        }
+    });
+    let at = (20, 40);
+    let bar = rig.pane(&window.surface, &effects, at, TOOLBAR, 0.0);
+    bar.backdrop.destroy();
+    let qh = rig.queue.handle();
+    let backdrops: Vec<CupertinoBackdropV1> = [0]
+        .into_iter()
+        .chain(order)
+        .map(|i| {
+            let (x, y, w, h) = TOOLBAR_ITEMS[i];
+            let backdrop = effects.get_backdrop(&bar.surface, &qh, ());
+            backdrop.set_shape(x, y, w, h, f64::from(h) / 2.0);
+            let variant = if i == chosen {
+                GlassVariant::Tab
+            } else {
+                GlassVariant::ToolbarItem
+            };
+            backdrop.set_glass_variant(
+                variant,
+                GlassModifier::empty(),
+                SizeClass::Dynamic,
+                TOOLBAR_CONTAINER,
+                0.0,
+            );
+            backdrop
+        })
+        .collect();
+    bar.surface.commit();
+    window.surface.commit();
+    rig.settle();
+    let image = rig.image();
+    let pixels = rig.pixels(&image, window.id, at, TOOLBAR, 0).collect();
+    drop(backdrops);
+    pixels
+}
+
+#[test]
+fn a_toolbars_container_draws_alike_whichever_order_its_chosen_segment_was_made_in() {
+    // the chosen segment made last, or before the last toolbar item
+    let last = toolbar_pixels([1, 2], 2);
+    let before = toolbar_pixels([2, 1], 2);
+    let change = difference(last, before);
+    assert!(
+        change < 0.05,
+        "the toolbar draws {change} apart in the two orders"
+    );
+}
+
 /// How many times its size the scaled capsule's glass is drawn.
 const SCALED: f64 = 1.1;
 

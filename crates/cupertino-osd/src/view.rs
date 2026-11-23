@@ -1,12 +1,13 @@
-//! The overlay's window as CupertinoKit draws it: the glyph and the 16-segment meter over the HUD material, faded as
-//! one layer with the material, and while it fades a pacer that asks for each of the display's frames.
+//! The overlay's window as CupertinoKit draws it: the glyph and the 16-segment meter over the glass of a notification
+//! banner, faded as one layer with the glass, and while it fades a pacer that asks for each of the display's frames.
 
 use cupertino_kit::controls::{Canvas, Icon, IconDirection, Stack};
 use cupertino_kit::core::{
-    AccessibleValue, Change, CommandRegistry, Element, Event, EventCx, Key, Live, MeasureCx,
-    PaintCx, Propagation, Role, SemanticsCx, Widget, Window, WindowBackground, WindowKey,
+    glass_outline, AccessibleValue, Change, CommandRegistry, Element, Event, EventCx, Glass, Key,
+    Live, MeasureCx, PaintCx, Propagation, Role, SemanticsCx, Widget, Window, WindowBackground,
+    WindowKey,
 };
-use cupertino_kit::geometry::{Insets, Rect, Size};
+use cupertino_kit::geometry::{Insets, Point, Rect, Size};
 use cupertino_kit::layout::{
     Align, Axis, Constraints, ContainerKind, LayoutSpec, Measured, SizeSpec,
 };
@@ -210,8 +211,28 @@ impl<M: Clone + 'static> Widget<M> for Pacer<M> {
     fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
 }
 
-/// The overlay's content: the glyph and the meter, faded by `alpha` as one layer, and the pacer sending `frame` when
-/// there is one.
+/// The overlay's body under its content, the whole window with its corners: the glass of a notification banner, which
+/// macOS gives these overlays, at the fade's `alpha`. With Reduce Transparency, or where the desktop shows no glass, it
+/// is the theme's opaque fill of the heads-up surface in the same shape. What the content paints over it fades with it
+/// as one layer.
+fn banner(cx: &mut PaintCx<'_>, alpha: f64) {
+    let alpha = alpha.clamp(0.0, 1.0);
+    let rect = Rect::from_origin_size(Point::ZERO, cx.size());
+    let glass = !cx.env().theme.preferences.reduce_transparency
+        && cx.glass(Glass::card().radius(CORNER_RADIUS).alpha(alpha));
+    cx.set_group(alpha as f32, Vec::new());
+    if !glass {
+        if let Some(color) = cx.env().theme.surface(Surface::Hud).fill {
+            cx.push(PaintOp::Fill {
+                shape: glass_outline(rect, CORNER_RADIUS, 0.0),
+                paint: Paint::Solid(color),
+            });
+        }
+    }
+}
+
+/// The overlay's content over its [`banner`]: the glyph and the meter, faded by `alpha` as one layer, and the pacer
+/// sending `frame` when there is one.
 fn content<M: Clone + 'static>(overlay: &Overlay, alpha: f64, frame: Option<M>) -> Element<M> {
     let label = accessible_name(overlay.kind());
     let side = f64::from(WINDOW_SIZE);
@@ -220,7 +241,7 @@ fn content<M: Clone + 'static>(overlay: &Overlay, alpha: f64, frame: Option<M>) 
     Element::new(Canvas {
         size: Some(Size::new(side, side)),
         label: label.to_owned(),
-        paint: Box::new(move |cx| cx.set_group(alpha.clamp(0.0, 1.0) as f32, Vec::new())),
+        paint: Box::new(move |cx| banner(cx, alpha)),
         children: std::iter::once(Element::new(Stack {
             axis: Axis::Vertical,
             padding: Insets {
@@ -249,22 +270,16 @@ fn content<M: Clone + 'static>(overlay: &Overlay, alpha: f64, frame: Option<M>) 
 }
 
 /// The overlay's one window: always open, so a show needs no new surface. While hidden it draws nothing and has no
-/// material. It takes no input. `frame` is sent at every frame of the display while it is given, for a fade.
+/// glass. It takes no input. `frame` is sent at every frame of the display while it is given, for a fade.
 pub fn window<M: Clone + 'static>(view: Option<View>, frame: Option<M>) -> Window<M> {
     let side = f64::from(WINDOW_SIZE);
-    let (title, background, content) = match view {
+    let (title, content) = match view {
         Some(View { overlay, alpha }) => (
             accessible_name(overlay.kind()),
-            WindowBackground::Surface {
-                surface: Surface::Hud,
-                radius: CORNER_RADIUS,
-                alpha,
-            },
             content(&overlay, alpha, frame),
         ),
         None => (
             "Volume and brightness",
-            WindowBackground::None,
             Element::new(Stack {
                 axis: Axis::Vertical,
                 padding: Insets::default(),
@@ -289,7 +304,7 @@ pub fn window<M: Clone + 'static>(view: Option<View>, frame: Option<M>) -> Windo
         },
         shortcuts: CommandRegistry::new(),
         on_close: None,
-        background,
+        background: WindowBackground::None,
         content,
         popup: None,
         menus: None,

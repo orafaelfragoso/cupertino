@@ -47,14 +47,16 @@ The levels themselves live in `cupertino-audiod`, the power daemon and UPower, s
 bottom margin of 140 pt, no keyboard interactivity and an empty input region. The window is a CupertinoKit window
 (`view::window`); the component's `Program::surface` gives it that layer surface (`cupertino-kit-shell`), on the
 server's first output; with no output there is no window, and a window the server closed is made anew.
-Its background is the HUD surface (`Surface::Hud`, the `LoginWindowControl` material) with the window's radius, and its
-alpha follows the fade. The glyph (an `Icon`) and the meter draw over it as one layer at the same alpha. While hidden the
-surface stays mapped, draws nothing and has no material. Glyphs are template symbols of the asset directory
+Its body is the glass of a notification banner (`Glass::card`, the `NotificationCenter` variant at medium size, as
+macOS draws these overlays) over the whole window with the window's radius, and its alpha follows the fade. The glyph
+(an `Icon`) and the meter draw over it as one layer at the same alpha. While hidden the surface stays mapped, draws
+nothing and has no glass. Glyphs are template symbols of the asset directory
 (`symbol.speaker.slash`, `symbol.speaker.low`, `symbol.speaker`, `symbol.speaker.high`, `symbol.sun`, `symbol.keyboard-brightness` and `.off`, `symbol.mic` and `.slash`; `model::ICON_NAMES`),
 in the control text colour (the label colour). A symbol no asset pack provides draws as Kit's placeholder.
 
-**Session.** CupertinoKit follows the session's appearance and display options. With Reduce Transparency or Increase
-Contrast the HUD surface takes no material and paints the theme's opaque window background in its shape. The overlay
+**Session.** CupertinoKit follows the session's appearance and display options. With Reduce Transparency, or where
+the desktop shows no glass, the body is the theme's opaque fill of the heads-up surface (`Surface::Hud`) in its shape;
+with Increase Contrast the compositor draws the glass's contrast stage. The overlay
 takes no input and the server hides it while the session is locked, so a lock needs no reaction.
 
 **Accessibility.** The window is named after the overlay ("Volume", "Volume muted", "Brightness", "Keyboard brightness",
@@ -152,7 +154,7 @@ The server calls the interface for these keys. Shift+Alt held makes the press fi
 | Hold (`sender::HOLD_CHANGED_MSEC`, `HOLD_UNCHANGED_MSEC`, `hold_seconds`) | the sender passes 4000 ms when the press changed a value, 1000 ms when it was refused or changed nothing (up at 1.0); the helper holds `floor(msec / 1000)` whole seconds, then the fade. `effects::apply` says whether a press changed a value (the level, or the mute state) |
 | Hold of `Show` | 4 s: the control panel changed the level itself |
 | Bounds | volume and keyboard backlight reach 0; display brightness is requested down to 0.0 |
-| Material | `LoginWindowControl` through `Surface::Hud`; with Reduce Transparency or Increase Contrast, the theme's opaque window background in the window's shape |
+| Material | the `NotificationCenter` glass at medium size (`Glass::card`); with Reduce Transparency, the theme's opaque fill of `Surface::Hud` in the window's shape |
 | Track and segment colours | picked by the menu bar's darkness (the session's appearance stands in). Light: track = secondary label colour (black 0.498), segments white. Dark: track = black 0.25, segments = secondary label colour (white 0.549). The track is the 161 x 8 container drawn behind the segments; empty segments show only it |
 | Priority | all four overlays share one priority (the design sends 500 for all), so a show always replaces a visible one |
 | Muted glyph below level 0.001; speaker tiers at 1/3 and 2/3 | |

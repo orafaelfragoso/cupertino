@@ -1,7 +1,7 @@
 //! The on-screen displays drawn to PNGs for look checks:
 //! `cargo run -p cupertino-osd --example osd_capture -- osd/SURFACE [flags]` (crates/cupertino-kit/README.md).
 //!
-//! * `overlay`: the 200 x 200 pt window over the HUD material, as the server shows it. `--kind` names the overlay
+//! * `overlay`: the 200 x 200 pt window on banner glass, as the server shows it. `--kind` names the overlay
 //!   (`volume`, the default, `mute`, `brightness`, `keyboard-brightness`, `microphone`, `microphone-mute`), `--level`
 //!   its meter's level from 0 to 1 (default 0.5) and `--alpha` the opacity of the fade (default 1). The sheet shows each
 //!   kind.

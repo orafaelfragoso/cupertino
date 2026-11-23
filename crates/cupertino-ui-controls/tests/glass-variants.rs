@@ -597,3 +597,27 @@ fn where_glass_takes_no_variants_alerts_and_sheets_are_painted() {
         "the sheet's solid body"
     );
 }
+
+/// How much darker the pixel at `at` is than the one at `ground`, as a share of the ground's brightness.
+fn darkness<S: Scene>(view: &mut View<S>, at: Point, ground: Point) -> f64 {
+    let lum = |p: [u8; 4]| (f64::from(p[0]) + f64::from(p[1]) + f64::from(p[2])) / 3.0;
+    1.0 - lum(pixel(view, at)) / lum(pixel(view, ground))
+}
+
+#[test]
+fn a_popping_alert_casts_the_shadow_its_settled_glass_casts() {
+    let shadow = cupertino_theme::glass::ALERT_SHADOW_ACTIVE;
+    // Reduce Motion keeps the panel at its size; past its fade-in, still popping in
+    let mut view = View::<Asking<false>>::open_with(effects(), false);
+    view.wait(0.2);
+    let panel = view.bounds_of(Role::AlertDialog, "Replace it?");
+    let ground = Point::new(panel.center().x, support::SIZE.height - 2.0);
+    // the shadow's edge, where a straight side's shadow is half its darkness
+    let edge = Point::new(panel.center().x, panel.max_y() + f64::from(shadow.offset));
+    let dark = darkness(&mut view, edge, ground);
+    let expected = f64::from(shadow.light) / 2.0;
+    assert!(
+        (dark - expected).abs() < 0.08,
+        "the shadow's edge is {dark} dark, the settled shadow's {expected}"
+    );
+}

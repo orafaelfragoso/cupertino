@@ -193,7 +193,8 @@ from the application's model and reports changes as messages.
   (`GlassVariant::GlassWindow`) over the window's content, which casts the window shadow (an alert's, or a sheet's fainter one as document-modal glass; deep while the window is
   active, shallow while it is not) and takes its inactive recipe while the window is not active; the painted bodies
   below stand in for it elsewhere (and where the desktop draws no variants) and while an alert pops in, each with its
-  own shadow. A `DialogKind::Dialog` is a sheet: 340 pt wide, solid in the window colour with a 16 pt radius, a soft
+  own shadow; an alert's is the window shadow its settled glass casts (`cupertino_theme::glass::ALERT_SHADOW_ACTIVE`,
+  `ALERT_SHADOW_INACTIVE`), so the shadow holds as the glass takes over. A `DialogKind::Dialog` is a sheet: 340 pt wide, solid in the window colour with a 16 pt radius, a soft
   shadow, a dark hairline outside its edge and, in the dark appearance, a faint light rim inside it; the title, the
   message, the body and a trailing row of buttons, 20 pt in. A `DialogKind::Alert` is 260 pt wide, a nearly opaque
   grey (97 %, opaque under Reduce Transparency and Increase Contrast) with a light rim, a 26 pt radius and the

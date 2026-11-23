@@ -7,10 +7,11 @@
 use crate::support::{options, turns};
 
 use cupertino_geometry::Size;
+use cupertino_theme::ui::Surface;
 use cupertino_ui_core::layout::{Constraints, ContainerKind, LayoutSpec, Measured};
 use cupertino_ui_core::platform::{
-    Capabilities, Color, DecorationMode, GlassModifiers, GlassRegion, GlassSize, GlassStyle,
-    GlassVariant, Timestamp, WindowRequest, WindowSpec, WindowStates,
+    Backdrop, Capabilities, Color, DecorationMode, GlassModifiers, GlassRegion, GlassSize,
+    GlassStyle, GlassVariant, Timestamp, WindowRequest, WindowSpec, WindowStates,
 };
 use cupertino_ui_core::{
     Application, Change, Command, CommandRegistry, Element, Event, EventCx, Glass, MeasureCx,
@@ -217,4 +218,165 @@ fn a_tint_out_of_range_is_held_to_it() {
     let region = region_of(Glass::regular().tint(Color::new(1.5, -0.5, f32::NAN, 0.5)));
     assert_eq!(region.tint, [1.0, 0.0, 0.0, 0.5]);
     assert_eq!(region.variant, None, "a tint alone keeps the style");
+}
+
+#[test]
+fn a_glass_scale_goes_with_its_region_and_one_not_above_0_draws_it_at_the_node() {
+    assert_eq!(region_of(Glass::regular()).scale, 1.0);
+    assert_eq!(region_of(Glass::regular().scale(1.043)).scale, 1.043);
+    for bad in [0.0, -2.0, f64::NAN, f64::INFINITY] {
+        assert_eq!(region_of(Glass::regular().scale(bad)).scale, 1.0, "{bad}");
+    }
+}
+
+#[test]
+fn a_sheets_variant_goes_document_modal_and_a_style_alone_does_not() {
+    let sheet = region_of(
+        Glass::dense()
+            .variant(GlassVariant::GlassWindow)
+            .document_modal(true),
+    );
+    assert!(sheet.document_modal);
+    assert_eq!(
+        sheet.variant.map(|(v, _)| v),
+        Some(GlassVariant::GlassWindow)
+    );
+    let alert = region_of(Glass::dense().variant(GlassVariant::GlassWindow));
+    assert!(!alert.document_modal);
+    let style = region_of(Glass::dense().document_modal(true));
+    assert!(
+        !style.document_modal,
+        "only a variant carries its modifiers"
+    );
+}
+
+thread_local! {
+    /// The background glass the next window of [`Panel`] asks for.
+    static BACKGROUND: RefCell<Option<Glass>> = const { RefCell::new(None) };
+}
+
+/// One window whose background is the sidebar surface, drawn as the glass the test set.
+struct Panel;
+
+impl Application for Panel {
+    type Model = Option<Glass>;
+    type Message = ();
+
+    fn init() -> (Option<Glass>, Vec<Command<()>>) {
+        (BACKGROUND.with(|g| *g.borrow()), Vec::new())
+    }
+
+    fn update(_: &mut Option<Glass>, _: ()) -> Vec<Command<()>> {
+        Vec::new()
+    }
+
+    fn view(glass: &Option<Glass>) -> Vec<Window<()>> {
+        let mut windows = Pane::view(&Glass::regular());
+        windows[0].background = WindowBackground::Surface {
+            surface: Surface::Sidebar,
+            radius: 16.0,
+            alpha: 1.0,
+            glass: *glass,
+        };
+        windows[0].content = Element::new(Plain);
+        windows
+    }
+}
+
+/// A leaf of 80 by 30 points that paints nothing.
+struct Plain;
+
+impl Widget<()> for Plain {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec::new(ContainerKind::Leaf)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(80.0, 30.0),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, ()>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
+/// The backdrop the window of [`Panel`] asks for with `glass` as its background's, on a window system with the
+/// desktop's effects.
+fn backdrop_of(glass: Option<Glass>) -> Backdrop {
+    BACKGROUND.with(|g| *g.borrow_mut() = glass);
+    let capabilities = Capabilities {
+        app_effects: true,
+        ..Capabilities::default()
+    };
+    let mut driver =
+        TestDriver::<Panel>::new(capabilities, options(1000), ManualClock::new(Timestamp(0)));
+    driver.run_until_idle(turns()).unwrap();
+    let window = driver.runtime().windows()[0].1;
+    driver
+        .window_system_mut()
+        .requests(window)
+        .unwrap()
+        .iter()
+        .rev()
+        .find_map(|r| match r {
+            WindowRequest::Backdrop(b) => b.clone(),
+            _ => None,
+        })
+        .expect("the window asks for its backdrop")
+}
+
+#[test]
+fn a_window_background_asks_for_its_glass_variant_on_its_own() {
+    let backdrop = backdrop_of(Some(
+        Glass::sidebar()
+            .variant(GlassVariant::AbuttedSidebar)
+            .subdued(true)
+            .tint(Color::new(0.0, 0.5, 1.0, 0.25))
+            .container(3, 8.0)
+            .radius(4.0),
+    ));
+    assert_eq!(
+        backdrop.radius, 16.0,
+        "the window's corners, not the glass's"
+    );
+    let glass = backdrop.glass.expect("the background is glass");
+    assert_eq!((glass.container, glass.spacing), (0, 0.0), "on its own");
+    assert_eq!(
+        glass.style,
+        GlassStyle::Sidebar,
+        "kept for a window system without variants"
+    );
+    assert_eq!(
+        glass.variant,
+        Some((
+            GlassVariant::AbuttedSidebar,
+            GlassModifiers {
+                subdued: true,
+                ..GlassModifiers::DEFAULT
+            }
+        ))
+    );
+    assert_eq!(glass.tint, [0.0, 0.5, 1.0, 0.25]);
+}
+
+#[test]
+fn a_window_background_without_glass_asks_for_its_material_alone() {
+    let backdrop = backdrop_of(None);
+    assert_eq!(backdrop.glass, None);
+    assert!(!backdrop.material.is_empty());
 }

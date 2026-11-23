@@ -407,6 +407,22 @@ impl SpringPreset {
     });
 }
 
+/// The motions of a glass button's glass.
+impl SpringPreset {
+    /// A glass button's glass growing under a press: a little bounce (damping ratio 0.8), its undamped period 0.332 s,
+    /// so it settles within a thousandth in about 512 ms.
+    pub const GLASS_BUTTON_PRESS: SpringPreset = SpringPreset(SpringForm::Ratio {
+        response: 0.332,
+        damping: 0.8,
+    });
+    /// The glass going back to its size once the press lets go: the same bounce, its undamped period 0.625 s, so it
+    /// settles in about 965 ms.
+    pub const GLASS_BUTTON_RELEASE: SpringPreset = SpringPreset(SpringForm::Ratio {
+        response: 0.625,
+        damping: 0.8,
+    });
+}
+
 /// The motions of the notification banners and the notification list.
 impl SpringPreset {
     /// A banner springing back to rest after a leftward swipe: mass 1, stiffness 100, damping 100, a damping ratio of

@@ -159,6 +159,7 @@
       <entry name="invalid_glass" value="3" summary="unknown glass style, variant, modifier or size class, or a negative spacing" since="6"/>
       <entry name="invalid_ramp" value="4" summary="a blur weight below 0 or above 1" since="22"/>
       <entry name="invalid_tint" value="5" summary="a tint channel below 0, above 1 or not finite" since="23"/>
+      <entry name="invalid_scale" value="6" summary="a glass scale not above 0, above 4 or not finite" since="23"/>
     </enum>
 
     <enum name="glass_style" since="6">
@@ -215,6 +216,7 @@
       <entry name="exclude_shadow" value="2" summary="no drop shadow from the glass: its surface draws its own"/>
       <entry name="interactive" value="4" summary="the glass responds to a press: see set_glass_variant"/>
       <entry name="adaptive" value="8" summary="the glass adapts to what lies behind it"/>
+      <entry name="document_modal" value="16" summary="the glass is a document-modal sheet: see set_glass_variant"/>
     </enum>
 
     <enum name="size_class" since="23">
@@ -321,6 +323,11 @@
         press does not stretch it. While reduce_motion is on (cupertino_appearance_v1) the glass
         does not grow. The shape the client set is what it hit-tests against.
 
+        Glass window glass (the glass_window variant) casts the drop shadow of an alert: deep while
+        its window is active and shallow while it is not. With the document_modal modifier it casts
+        a sheet's in their place, of the same depth and blur and fainter; the modifier changes no
+        other variant, and exclude_shadow leaves out either shadow.
+
         Posts invalid_glass for an unknown variant, size class or modifier bit, or a negative
         spacing.
       </description>
@@ -343,6 +350,20 @@
       <arg name="green" type="fixed"/>
       <arg name="blue" type="fixed"/>
       <arg name="alpha" type="fixed"/>
+    </request>
+
+    <request name="set_glass_scale" since="23">
+      <description summary="draw the backdrop's glass scaled about the centre of its shape">
+        The glass of the backdrop drawn scale times its shape's size, about the centre of the
+        shape, as a control grows its glass under a press on its own clock; 1 (the initial state)
+        draws it at its shape. Its recipe resolves at the shape's size, so what it filters does not
+        change, and its corners are circular while the scale is not 1. The scale multiplies the
+        growth of interactive glass under a press. The shape the client set is what it hit-tests
+        against; a subsurface's glass is drawn past the subsurface where the scale grows it. A
+        material backdrop is not scaled. Posts invalid_scale for a scale not above 0, above 4 or
+        not finite.
+      </description>
+      <arg name="scale" type="fixed"/>
     </request>
 
     <enum name="tone" since="7">

@@ -8,9 +8,9 @@ use crate::wire;
 use cupertino_geometry::{Rect, Size};
 use cupertino_keyboard::modifiers::Profile;
 use cupertino_ui_core::platform::{
-    BlurRamp, DecorationMode, GlassModifiers, GlassRegion, GlassSize, GlassStyle, GlassVariant,
-    MaterialRegion, PlatformEvent, Submitted, SurfaceLayerLook, WindowEvent, WindowId,
-    WindowRequest, WindowSpec, WindowSystem,
+    Backdrop, BlurRamp, DecorationMode, GlassModifiers, GlassRegion, GlassSize, GlassStyle,
+    GlassVariant, MaterialRegion, PlatformEvent, Submitted, SurfaceLayerLook, WindowEvent,
+    WindowId, WindowRequest, WindowSpec, WindowSystem,
 };
 use cupertino_ui_wayland::WaylandWindowSystem;
 use std::time::{Duration, Instant};
@@ -222,5 +222,123 @@ fn a_layers_variant_and_tint_go_out_from_version_7_and_its_style_before() {
         sent,
         ["SetGlass { style: 7, lens: 1.0 }"],
         "version 6 draws the look's style, untinted"
+    );
+}
+
+#[test]
+fn a_window_backgrounds_glass_variant_goes_to_its_backdrop_and_a_fade_sends_only_the_alpha() {
+    let (server, conn) = Harness::start(Offer {
+        app_effects: Some(23),
+        ..Offer::NONE
+    });
+    let mut system = WaylandWindowSystem::new(conn, Profile::cupertino());
+    let window = system.create_window(&spec()).unwrap();
+    flush(&mut system);
+    let backdrop = |alpha| Backdrop {
+        material: GlassStyle::Sidebar.material().into(),
+        radius: 16.0,
+        alpha,
+        glass: Some(GlassRegion {
+            variant: Some((GlassVariant::AbuttedSidebar, GlassModifiers::DEFAULT)),
+            ..GlassRegion::of_style(GlassStyle::Sidebar, 0, 0.0)
+        }),
+    };
+    system
+        .request(window, WindowRequest::Backdrop(Some(backdrop(1.0))))
+        .unwrap();
+    flush(&mut system);
+    server.wait_for("SetGlassVariant", 1);
+    let sent = glass_sent(&server);
+    assert!(
+        sent.last()
+            .unwrap()
+            .starts_with("SetGlassVariant { variant: Value(AbuttedSidebar)"),
+        "{sent:?}"
+    );
+    let before = server.requests().len();
+    system
+        .request(window, WindowRequest::Backdrop(Some(backdrop(0.5))))
+        .unwrap();
+    flush(&mut system);
+    server.wait_for("SetAlpha", 2);
+    let after: Vec<_> = server.requests().split_off(before);
+    assert!(
+        !after
+            .iter()
+            .any(|r| r.starts_with("SetGlass") || r.starts_with("GetBackdrop")),
+        "{after:?}"
+    );
+}
+
+#[test]
+fn a_sheets_glass_region_goes_with_the_document_modal_bit() {
+    let (server, conn) = Harness::start(Offer {
+        app_effects: Some(23),
+        ..Offer::NONE
+    });
+    let mut system = WaylandWindowSystem::new(conn, Profile::cupertino());
+    let window = system.create_window(&spec()).unwrap();
+    flush(&mut system);
+    let mut regions = region(
+        Some((GlassVariant::GlassWindow, GlassModifiers::DEFAULT)),
+        [0.0; 4],
+    );
+    if let Some(g) = regions[0].glass.as_mut() {
+        g.document_modal = true;
+    }
+    system
+        .request(window, WindowRequest::Materials(regions))
+        .unwrap();
+    flush(&mut system);
+    server.wait_for("SetGlassVariant", 1);
+    let sent = glass_sent(&server);
+    let variant = sent.last().unwrap();
+    assert!(
+        variant.starts_with("SetGlassVariant { variant: Value(GlassWindow)")
+            && variant.contains("DocumentModal"),
+        "{variant}"
+    );
+}
+
+#[test]
+fn a_glass_regions_scale_goes_on_its_own_as_it_changes() {
+    let (server, conn) = Harness::start(Offer {
+        app_effects: Some(23),
+        ..Offer::NONE
+    });
+    let mut system = WaylandWindowSystem::new(conn, Profile::cupertino());
+    let window = system.create_window(&spec()).unwrap();
+    flush(&mut system);
+    let scaled = |scale: f64| {
+        let mut regions = region(Some(pressable()), HALF_RED);
+        if let Some(g) = regions[0].glass.as_mut() {
+            g.scale = scale;
+        }
+        regions
+    };
+    system
+        .request(window, WindowRequest::Materials(scaled(1.0)))
+        .unwrap();
+    flush(&mut system);
+    server.wait_for("SetGlassVariant", 1);
+    assert!(
+        !glass_sent(&server)
+            .iter()
+            .any(|r| r.starts_with("SetGlassScale")),
+        "a region at its size sends no scale"
+    );
+    let before = glass_sent(&server).len();
+    for scale in [1.02, 1.04] {
+        system
+            .request(window, WindowRequest::Materials(scaled(scale)))
+            .unwrap();
+        flush(&mut system);
+    }
+    server.wait_for("SetGlassScale", 2);
+    let after = glass_sent(&server).split_off(before);
+    assert_eq!(after.len(), 2, "only the scale goes again: {after:?}");
+    assert!(
+        after.iter().all(|r| r.starts_with("SetGlassScale")),
+        "{after:?}"
     );
 }

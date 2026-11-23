@@ -190,7 +190,7 @@ from the application's model and reports changes as messages.
   first control of the body takes the focus, else the least destructive button (Cancel, then the default, then
   another). Both panels float in the window's raised layer (`Widget::raised`) and, where the desktop shows glass and
   neither Reduce Transparency nor Increase Contrast is on, are glass of the glass window variant
-  (`GlassVariant::GlassWindow`) over the window's content, which casts the window shadow (deep while the window is
+  (`GlassVariant::GlassWindow`) over the window's content, which casts the window shadow (an alert's, or a sheet's fainter one as document-modal glass; deep while the window is
   active, shallow while it is not) and takes its inactive recipe while the window is not active; the painted bodies
   below stand in for it elsewhere and while an alert pops in, each with its own shadow. A `DialogKind::Dialog` is a sheet: 340 pt wide, solid in the window colour with a 16 pt radius, a soft
   shadow, a dark hairline outside its edge and, in the dark appearance, a faint light rim inside it; the title, the
@@ -281,8 +281,10 @@ from the application's model and reports changes as messages.
   its body filling its node, without Reduce Transparency: on a material the window shows (a sidebar, a translucent
   window background), and over the window's own content, as the button is a raised node (`Widget::raised`) whose glass
   lies between the window's raised layer and its content, so the content shows through it; its label then takes the
-  colours of text on glass. Its glass is the regular variant, interactive: the compositor grows it a little under a
-  press on its clock (none under Reduce Motion), and the button grows nothing of its own, so the glass grows once. A
+  colours of text on glass. Its glass is the regular variant, which the button grows about its centre (`Glass::scale`) under a
+  press on Kit's clock, to 1.043 times its size along `SpringPreset::GLASS_BUTTON_PRESS` (settled in about 512 ms)
+  and back along `GLASS_BUTTON_RELEASE` (about 965 ms), none under Reduce Motion; it is not interactive glass, so
+  the compositor does not grow it again. A
   default button, enabled in an active window, tints its glass with the accent at full strength and takes the default
   button's label colour. Over the glass a level of the label colour (black in the light appearance, white in the dark)
   marks the pointer: 4.7 % at once while it is over the button, 9.8 % while pressed (14.9 % and 34.9 % light, 29.8 %
@@ -297,10 +299,12 @@ from the application's model and reports changes as messages.
   surfaces (the sidebar panel). The sidebar panel's glass is named by the abutted sidebar variant
   (`GlassRole::variant_glass`, `GlassVariant::AbuttedSidebar`): planar against the window's leading edge, with its
   inactive recipe while the window is not active; where the theme keeps no sidebar material (Reduce Transparency) it
-  paints the theme's opaque fill. A single-panel window (`PANEL_WINDOW_BACKGROUND`) keeps the sidebar material of its
-  window background, which names no variant. Glass is never laid on glass: a node on glass the window shows
+  paints the theme's opaque fill. A single-panel window (`PANEL_WINDOW_BACKGROUND`) is the abutted sidebar glass too,
+  named on its window background over the sidebar material, opaque where the theme keeps none. Glass is never laid on glass: a node on glass the window shows
   (`PaintCx::on_glass`) draws none of its own, so a glass button on a toolbar group shows its label alone.
-- **Menus.** `Menu` levels follow the pointer as the menu bar's do (`cupertino-menu-model`'s `tracking`): the row
+- **Menus.** A menu's panel, square-cornered or round, and a pointed menu's panel and pointer are the menu variant
+  without its drop shadow (`MENU_GLASS`), as the compositor draws a popup's shadow and outline apart; the menu style
+  stays what a window system without variants draws. `Menu` levels follow the pointer as the menu bar's do (`cupertino-menu-model`'s `tracking`): the row
   under the pointer takes the focus and the highlight, a submenu opens once the pointer rests 0.2 s on its row and
   closes once it rests 0.3 s on another, and while the pointer heads from a row into its open submenu (each move inside
   the triangle between the last point and the submenu's near edge, without a 0.3 s rest) the rows it crosses wait. A

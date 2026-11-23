@@ -79,8 +79,11 @@ const TOOLBAR_VERSION: u32 = 19;
 const MENU_VERSION: u32 = 20;
 /// The version of `cupertino_backdrop_v1` that has `set_blur_ramp`.
 const BLUR_RAMP_VERSION: u32 = 22;
-/// The version of `cupertino_backdrop_v1` that has `set_glass_variant` and `set_glass_tint`.
+/// The version of `cupertino_backdrop_v1` that has `set_glass_variant`, `set_glass_tint` and `set_glass_scale`.
 pub const VARIANT_VERSION: u32 = 23;
+/// The most a backdrop's glass may be scaled about its centre (`set_glass_scale`): past it the request is
+/// `invalid_scale`.
+pub const MAX_GLASS_SCALE: f64 = 4.0;
 
 /// The tone a backdrop's text is drawn with, as the wire carries it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -238,6 +241,9 @@ pub struct GlassSpec {
     pub container: u32,
     /// How far the outlines of a container blend into each other, in logical points; 0 joins them with a hard edge.
     pub spacing: f64,
+    /// How many times its shape's size the glass is drawn, about the shape's centre (`set_glass_scale`); 1 draws it
+    /// at its shape.
+    pub scale: f64,
 }
 
 impl GlassSpec {
@@ -253,6 +259,7 @@ impl GlassSpec {
             tint: [0.0; 4],
             container,
             spacing,
+            scale: 1.0,
         }
     }
 }
@@ -265,6 +272,8 @@ struct BackdropEntry {
     glass: Option<GlassSpec>,
     /// The tint of its glass (`set_glass_tint`), kept whichever glass it is asked to draw.
     tint: [f32; 4],
+    /// The scale of its glass about its shape's centre (`set_glass_scale`), kept whichever glass it is asked to draw.
+    glass_scale: f64,
     shape: Shape,
     alpha: f64,
     /// The share of its blur the backdrop keeps along the top and the bottom of its shape (`set_blur_ramp`).
@@ -347,7 +356,11 @@ fn committed_backdrops(
                         .and_then(glass_material)
                         .map(|style| GlassSpec::of_style(style, 0, 0.0))
                 })
-                .map(|g| GlassSpec { tint: e.tint, ..g });
+                .map(|g| GlassSpec {
+                    tint: e.tint,
+                    scale: e.glass_scale,
+                    ..g
+                });
             let material = match (&e.material, glass) {
                 (Some(m), _) => m.clone(),
                 (None, Some(_)) => String::new(),
@@ -603,6 +616,7 @@ impl Dispatch<CupertinoAppEffectsV1, ()> for Cupertino {
                             material: None,
                             glass: None,
                             tint: [0.0; 4],
+                            glass_scale: 1.0,
                             shape: Shape::default(),
                             alpha: 1.0,
                             blur_ramp: [1.0, 1.0],
@@ -1075,6 +1089,18 @@ impl Dispatch<CupertinoBackdropV1, BackdropData> for Cupertino {
                     return;
                 };
                 data.edit(|e| e.tint = tint);
+            }
+            cupertino_backdrop_v1::Request::SetGlassScale { scale }
+                if resource.version() >= VARIANT_VERSION =>
+            {
+                if !(scale.is_finite() && scale > 0.0 && scale <= MAX_GLASS_SCALE) {
+                    resource.post_error(
+                        Error::InvalidScale,
+                        format!("glass scale {scale} is not above 0 and at most {MAX_GLASS_SCALE}"),
+                    );
+                    return;
+                }
+                data.edit(|e| e.glass_scale = scale);
             }
             cupertino_backdrop_v1::Request::SetBlurRamp { top, bottom }
                 if resource.version() >= BLUR_RAMP_VERSION =>

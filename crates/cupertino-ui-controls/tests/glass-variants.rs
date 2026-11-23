@@ -13,7 +13,7 @@ use cupertino_ui_controls::{
 };
 use cupertino_ui_core::layout::{Align, Axis, ScrollState};
 use cupertino_ui_core::platform::{
-    Capabilities, GlassRegion, GlassSize, GlassVariant, WindowId, WindowStates,
+    Capabilities, GlassRegion, GlassSize, GlassVariant, Mods, MouseButton, WindowId, WindowStates,
 };
 use cupertino_ui_core::{Element, Key, Role, Window, WindowKey};
 use support::{Scene, View};
@@ -118,6 +118,24 @@ fn the_sidebar_panel_is_abutted_sidebar_glass_and_opaque_with_reduce_transparenc
             .iter()
             .all(|(_, g)| variant(g) != Some(GlassVariant::AbuttedSidebar)),
         "with Reduce Transparency the sidebar paints its opaque fill"
+    );
+}
+
+#[test]
+fn a_single_panel_window_is_abutted_sidebar_glass_over_the_sidebar_material() {
+    let cupertino_ui_core::WindowBackground::Surface { surface, glass, .. } =
+        cupertino_ui_controls::PANEL_WINDOW_BACKGROUND
+    else {
+        panic!("a surface background");
+    };
+    assert_eq!(
+        surface,
+        cupertino_theme::ui::Surface::Sidebar,
+        "its material and its opaque fill"
+    );
+    assert_eq!(
+        glass.and_then(|g| g.variant),
+        Some(GlassVariant::AbuttedSidebar)
     );
 }
 
@@ -326,9 +344,13 @@ fn alerts_and_sheets_are_glass_window_glass_and_opaque_with_reduce_transparency(
         (false, window_glass::<false>(false)),
         (true, window_glass::<true>(false)),
     ] {
-        let [(rect, _)] = shown[..] else {
+        let [(rect, g)] = shown[..] else {
             panic!("sheet {sheet}: one panel of the glass window variant, not {shown:?}")
         };
+        assert_eq!(
+            g.document_modal, sheet,
+            "a sheet casts the sheet's shadow, an alert the alert's"
+        );
         assert!(
             rect.width() > 200.0,
             "sheet {sheet}: the whole panel: {rect:?}"
@@ -376,7 +398,7 @@ impl Scene for GlassButtons {
 }
 
 #[test]
-fn glass_buttons_are_interactive_regular_glass_and_a_default_one_is_tinted_with_the_accent() {
+fn glass_buttons_are_regular_glass_at_their_size_and_a_default_one_is_tinted_with_the_accent() {
     let mut view = View::<GlassButtons>::open_with(effects(), false);
     let window = view.window;
     let shown = glass(&mut view, window);
@@ -384,9 +406,10 @@ fn glass_buttons_are_interactive_regular_glass_and_a_default_one_is_tinted_with_
     for (_, g) in &shown {
         assert_eq!(
             g.variant.map(|(v, m)| (v, m.interactive)),
-            Some((GlassVariant::Regular, true)),
-            "the compositor grows the glass under a press: {shown:?}"
+            Some((GlassVariant::Regular, false)),
+            "the button grows its glass itself, so the compositor does not: {shown:?}"
         );
+        assert_eq!(g.scale, 1.0, "at rest: {shown:?}");
     }
     let at = |name: &str| view.bounds_of(Role::Button, name).center();
     let (share, done) = (at("Share"), at("Done"));
@@ -404,4 +427,63 @@ fn glass_buttons_are_interactive_regular_glass_and_a_default_one_is_tinted_with_
         accent[..3].iter().any(|&c| c > 0.0),
         "the accent: {accent:?}"
     );
+}
+
+/// How much a glass button's glass grows under a press.
+const PRESSED: f64 = 1.043;
+
+/// The scale of the glass of the button `name` as `view` shows it now.
+fn button_scale(view: &mut View<GlassButtons>, name: &str) -> f64 {
+    let window = view.window;
+    let at = view.bounds_of(Role::Button, name).center();
+    glass(view, window)
+        .into_iter()
+        .find(|(r, _)| r.contains(at))
+        .map(|(_, g)| g.scale)
+        .unwrap_or_else(|| panic!("{name} shows glass"))
+}
+
+#[test]
+fn a_glass_buttons_glass_grows_under_a_press_on_its_spring_and_settles_back_on_the_release() {
+    let mut view = View::<GlassButtons>::open_moving(effects(), false, false);
+    let at = view.center_of(Role::Button, "Share");
+    view.press(at, MouseButton::Left, Mods::NONE);
+    // it grows past its size a little and settles there in about 512 ms
+    let mut peak: f64 = 1.0;
+    for _ in 0..10 {
+        view.wait(0.05);
+        peak = peak.max(button_scale(&mut view, "Share"));
+    }
+    assert!(peak > PRESSED && peak < PRESSED + 0.01, "peaks at {peak}");
+    view.wait(0.03);
+    let settled = button_scale(&mut view, "Share");
+    assert!((settled - PRESSED).abs() < 1e-4, "settled at {settled}");
+    assert_eq!(
+        button_scale(&mut view, "Done"),
+        1.0,
+        "only the pressed button grows"
+    );
+    // the release takes about 965 ms to settle back
+    view.release(at, MouseButton::Left);
+    view.wait(0.5);
+    let going = button_scale(&mut view, "Share");
+    assert!(
+        (going - 1.0).abs() > 1e-4,
+        "still settling at 500 ms: {going}"
+    );
+    view.wait(0.5);
+    let back = button_scale(&mut view, "Share");
+    assert!((back - 1.0).abs() < 1e-4, "back at {back}");
+}
+
+#[test]
+fn under_reduce_motion_a_glass_buttons_glass_does_not_grow() {
+    let mut view = View::<GlassButtons>::open_moving(effects(), false, true);
+    let at = view.center_of(Role::Button, "Share");
+    view.press(at, MouseButton::Left, Mods::NONE);
+    for _ in 0..4 {
+        view.wait(0.1);
+        assert_eq!(button_scale(&mut view, "Share"), 1.0);
+    }
+    view.release(at, MouseButton::Left);
 }

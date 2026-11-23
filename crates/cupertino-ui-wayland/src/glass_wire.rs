@@ -6,9 +6,11 @@ use cupertino_wayland_client::app::{
     GlassModifiers as WireModifiers, GlassSizeClass, GlassVariant as Wire, VariantGlass,
 };
 
-/// The protocol's glass of a system `variant` and its modifiers; the compositor takes their `active` from the window.
+/// The protocol's glass of a system `variant` and its modifiers, a document-modal sheet's when `document_modal`; the
+/// compositor takes their `active` from the window.
 pub(crate) fn protocol_variant(
     (variant, modifiers): (GlassVariant, GlassModifiers),
+    document_modal: bool,
 ) -> VariantGlass {
     VariantGlass {
         variant: wire_variant(variant),
@@ -23,6 +25,7 @@ pub(crate) fn protocol_variant(
             exclude_shadow: modifiers.exclude_shadow,
             interactive: modifiers.interactive,
             adaptive: modifiers.adaptive,
+            document_modal,
         },
     }
 }

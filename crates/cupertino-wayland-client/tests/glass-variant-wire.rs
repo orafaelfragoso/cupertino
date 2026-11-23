@@ -6,7 +6,7 @@ use crate::support;
 
 use cupertino_wayland_client::app::{
     AppEffects, Error, GlassModifiers, GlassSizeClass, GlassStyle, GlassVariant, Layers,
-    VariantGlass,
+    VariantGlass, MAX_GLASS_SCALE,
 };
 use cupertino_wayland_client::Connection;
 use support::*;
@@ -74,6 +74,55 @@ fn a_backdrop_sends_its_variant_modifiers_size_class_and_tint_from_version_23() 
     assert_eq!(
         sent[1],
         "SetGlassTint { red: 1.0, green: 0.5, blue: 0.25, alpha: 0.75 }"
+    );
+}
+
+#[test]
+fn a_sheets_glass_window_variant_sends_the_document_modal_bit_and_falls_back_to_regular_glass() {
+    let sheet = VariantGlass {
+        modifiers: GlassModifiers {
+            document_modal: true,
+            ..GlassModifiers::default()
+        },
+        ..VariantGlass::new(GlassVariant::GlassWindow)
+    };
+    let (server, mut conn, backdrop) = backdrop_on(23);
+    backdrop.set_glass_variant(sheet, 0, 0.0).unwrap();
+    let sent = sent(&server, &mut conn);
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert!(
+        sent[0].starts_with("SetGlassVariant { variant: Value(GlassWindow)")
+            && sent[0].contains("DocumentModal")
+            && !sent[0].contains("ExcludeShadow"),
+        "{}",
+        sent[0]
+    );
+    assert_eq!(sheet.fallback_style(), GlassStyle::Regular);
+}
+
+#[test]
+fn a_glass_scale_goes_from_version_23_and_a_bad_one_is_refused() {
+    let (server, mut conn, backdrop) = backdrop_on(23);
+    backdrop.set_glass_scale(1.043).unwrap();
+    for scale in [0.0, -1.0, f64::NAN, MAX_GLASS_SCALE + 0.5] {
+        assert!(
+            matches!(backdrop.set_glass_scale(scale), Err(Error::InvalidGlass)),
+            "{scale}"
+        );
+    }
+    let first = sent(&server, &mut conn);
+    assert_eq!(first.len(), 1, "{first:?}");
+    assert!(
+        first[0].starts_with("SetGlassScale { scale: 1.04"),
+        "{}",
+        first[0]
+    );
+
+    let (server, mut conn, backdrop) = backdrop_on(22);
+    backdrop.set_glass_scale(1.043).unwrap();
+    assert!(
+        sent(&server, &mut conn).is_empty(),
+        "an older server draws the glass at its shape"
     );
 }
 

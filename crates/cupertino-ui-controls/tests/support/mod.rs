@@ -96,15 +96,15 @@ impl<S: Scene> Application for Probe<S> {
 }
 
 /// Options that draw on the CPU with the built-in font, in the neutral light theme, left to right, with Reduce
-/// Transparency on or off.
-fn options(reduce_transparency: bool) -> RuntimeOptions {
+/// Transparency and Reduce Motion on or off.
+fn options(reduce_transparency: bool, reduce_motion: bool) -> RuntimeOptions {
     let mut fonts = FontIndex::new();
     fonts.add_font(Arc::new(BUILTIN_FONT.to_vec())).unwrap();
     let text = Arc::new(TextSystem::new(fonts, "Inter Variable"));
     let theme = ThemeTokens::neutral(ThemePreferences {
         appearance: Appearance::Light,
         reduce_transparency,
-        reduce_motion: true,
+        reduce_motion,
     })
     .unwrap();
     let glyphs = Arc::clone(&text);
@@ -149,9 +149,19 @@ impl<S: Scene> View<S> {
 
     /// [`View::open`] on a window system of `capabilities`, with Reduce Transparency on or off.
     pub fn open_with(capabilities: Capabilities, reduce_transparency: bool) -> View<S> {
+        View::open_moving(capabilities, reduce_transparency, true)
+    }
+
+    /// [`View::open_with`], with Reduce Motion on or off: off, a control's motions run on the clock [`View::wait`]
+    /// moves on.
+    pub fn open_moving(
+        capabilities: Capabilities,
+        reduce_transparency: bool,
+        reduce_motion: bool,
+    ) -> View<S> {
         let mut driver = TestDriver::<Probe<S>>::new(
             capabilities,
-            options(reduce_transparency),
+            options(reduce_transparency, reduce_motion),
             ManualClock::new(Timestamp(0)),
         );
         driver.run_until_idle(turns()).unwrap();

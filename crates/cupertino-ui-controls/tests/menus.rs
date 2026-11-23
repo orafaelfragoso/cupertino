@@ -4,12 +4,15 @@
 use crate::support;
 
 use cupertino_geometry::Insets;
+use cupertino_theme::ui::Surface;
 use cupertino_ui_controls::{
-    Button, ButtonRole, ButtonStyle, Menu, MenuAnchor, MenuItem, PopUpButton, Stack,
+    Button, ButtonRole, ButtonStyle, Menu, MenuAnchor, MenuItem, MenuStyle, PopUpButton, Stack,
 };
 use cupertino_ui_core::layout::{Align, Axis};
-use cupertino_ui_core::platform::{Keysym, Mods};
-use cupertino_ui_core::{Element, Key, Role, Window, WindowKey};
+use cupertino_ui_core::platform::{
+    Capabilities, GlassModifiers, GlassStyle, GlassVariant, Keysym, Mods,
+};
+use cupertino_ui_core::{Element, Key, Role, Window, WindowBackground, WindowKey};
 use support::{Scene, View, DOWN, END, ESCAPE, HOME, LEFT, RETURN, RIGHT, UP};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -316,4 +319,125 @@ fn a_pop_up_button_opens_its_menu_on_the_chosen_option_and_choosing_another_sele
         1,
         "Return at once chooses the option shown"
     );
+}
+
+/// A menu of one item.
+fn one_item() -> Menu<Msg> {
+    Menu {
+        parent: parent(),
+        anchor: MenuAnchor::Below(Key::from("trigger")),
+        label: "Actions".into(),
+        items: vec![MenuItem::Item {
+            label: "New".into(),
+            enabled: true,
+            checked: false,
+            on_select: Msg::Chosen("new"),
+        }],
+        current: None,
+        open: Vec::new(),
+        on_open: Box::new(Msg::Submenus),
+        on_close: Msg::Close,
+    }
+}
+
+/// The menu variant without its drop shadow, which the compositor draws apart for a popup.
+fn is_menu_glass(variant: Option<(GlassVariant, GlassModifiers)>) -> bool {
+    variant.is_some_and(|(v, m)| v == GlassVariant::Menu && m.exclude_shadow)
+}
+
+#[test]
+fn a_menus_window_background_is_the_menu_variant_without_its_shadow() {
+    let windows = one_item().windows(WindowKey(Key::from("menu")));
+    let WindowBackground::Surface {
+        surface,
+        radius,
+        glass,
+        ..
+    } = windows[0].background
+    else {
+        panic!("a surface background: {:?}", windows[0].background);
+    };
+    assert_eq!(surface, Surface::Menu, "its material and opaque fill");
+    let glass = glass.expect("named glass");
+    assert_eq!(
+        (glass.variant, glass.exclude_shadow),
+        (Some(GlassVariant::Menu), true),
+        "the compositor draws the popup's shadow apart"
+    );
+    // a square-cornered menu keeps its corners and the same glass
+    let square = one_item().windows_styled(
+        WindowKey(Key::from("menu")),
+        MenuStyle {
+            radius: 0.0,
+            ..MenuStyle::default()
+        },
+    );
+    assert!(matches!(
+        square[0].background,
+        WindowBackground::Surface { radius: 0.0, glass: Some(g), .. } if g == glass
+    ));
+    assert!(radius > 0.0);
+}
+
+/// A button that opens a menu with a pointer.
+struct Pointed;
+
+impl Scene for Pointed {
+    type State = State;
+    type Msg = Msg;
+
+    fn state() -> State {
+        State::default()
+    }
+
+    fn update(state: &mut State, message: Msg) {
+        update(state, message);
+    }
+
+    fn view(state: &State) -> Element<Msg> {
+        Actions::view(state)
+    }
+
+    fn popups(state: &State) -> Vec<Window<Msg>> {
+        if !state.open {
+            return Vec::new();
+        }
+        one_item().windows_styled(WindowKey(Key::from("menu")), MenuStyle::pointed(30.0))
+    }
+}
+
+#[test]
+fn a_pointed_menus_panel_and_pointer_are_the_menu_variant_in_one_container() {
+    let capabilities = Capabilities {
+        app_effects: true,
+        ..Capabilities::default()
+    };
+    let mut view = View::<Pointed>::open_with(capabilities, false);
+    let trigger = view.center_of(Role::Button, "Actions");
+    view.click(trigger, Mods::NONE);
+    let popup = view.popup().expect("the menu is shown");
+    let active = cupertino_ui_core::platform::WindowStates {
+        activated: true,
+        ..Default::default()
+    };
+    view.driver
+        .window_system_mut()
+        .configure(popup, None, active)
+        .unwrap();
+    view.settle();
+    let shown: Vec<_> = view
+        .materials(popup)
+        .into_iter()
+        .filter_map(|m| m.glass)
+        .collect();
+    assert!(shown.len() >= 2, "the panel and its pointer: {shown:?}");
+    for g in &shown {
+        assert!(is_menu_glass(g.variant), "{shown:?}");
+        assert_eq!(
+            g.style,
+            GlassStyle::Menu,
+            "for a compositor without variants"
+        );
+        assert_ne!(g.container, 0, "joined: {shown:?}");
+    }
 }

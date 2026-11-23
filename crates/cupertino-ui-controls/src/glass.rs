@@ -86,15 +86,12 @@ impl GlassRole {
 
     /// The glass a role of [`GlassMaterial::Glass`] asks for: a toolbar control's glass of its own, the toolbar item
     /// variant (a fifth of the blur, a fixed bend and the control border, with its inactive recipe while the window is
-    /// not active); a glass button's the regular variant, interactive, which grows a little under a press; and regular
-    /// glass for the rest.
+    /// not active); a glass button's the regular variant, which the button grows under a press itself (its scale), so
+    /// it is not interactive glass the compositor would grow again; and regular glass for the rest.
     pub fn glass(self) -> Glass {
         match self {
             GlassRole::ToolbarGroup => Glass::toolbar().variant(GlassVariant::ToolbarItem),
-            // the compositor grows the button's glass under a press, on its clock: the one growth it has
-            GlassRole::GlassButton => Glass::regular()
-                .variant(GlassVariant::Regular)
-                .interactive(true),
+            GlassRole::GlassButton => Glass::regular().variant(GlassVariant::Regular),
             GlassRole::SidebarPanel | GlassRole::ThumbLens => Glass::regular(),
         }
     }
@@ -156,17 +153,19 @@ const SHADE_BLUR: f64 = 3.0;
 /// Returns true when the compositor draws it, or when the node already lies on glass, which then serves it: glass is
 /// never doubled. A glass button asks for glass only where it can show ([`shows_button_glass`]).
 pub fn paint_glass(cx: &mut PaintCx<'_>, role: GlassRole, rect: Rect, radius: f64) -> bool {
-    paint_glass_tinted(cx, role, rect, radius, None)
+    paint_glass_tinted(cx, role, rect, radius, None, 1.0)
 }
 
 /// [`paint_glass`] with the compositor's glass of a [`GlassMaterial::Glass`] role tinted with `tint` laid over its face
-/// at the tint's alpha; what the toolkit paints in its place is untinted, so the caller lays the tint over it.
+/// at the tint's alpha, drawn `scale` times the node's size about its centre; what the toolkit paints in its place is
+/// untinted and unscaled, so the caller lays the tint over it.
 pub(crate) fn paint_glass_tinted(
     cx: &mut PaintCx<'_>,
     role: GlassRole,
     rect: Rect,
     radius: f64,
     tint: Option<Color>,
+    scale: f64,
 ) -> bool {
     if cx.on_glass() {
         return true;
@@ -197,7 +196,11 @@ pub(crate) fn paint_glass_tinted(
         }
         GlassMaterial::Glass => {
             let (container, spacing) = role.container();
-            let glass = role.glass().radius(radius).container(container, spacing);
+            let glass = role
+                .glass()
+                .radius(radius)
+                .container(container, spacing)
+                .scale(scale);
             if cx.glass(tint.map_or(glass, |c| glass.tint(c))) {
                 // the toolkit lays a toolbar control's outline, and with Increase Contrast a firmer rim, over the
                 // compositor's glass

@@ -205,7 +205,10 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             // so as part of it
             if w.backdrop.is_some() {
                 if let WindowBackground::Surface {
-                    surface, radius, ..
+                    surface,
+                    radius,
+                    glass,
+                    ..
                 } = w.background
                 {
                     let alpha = f64::from(opacity);
@@ -215,6 +218,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                             surface,
                             radius,
                             alpha,
+                            glass,
                         },
                     );
                     sync_backdrop(&mut self.system, w);

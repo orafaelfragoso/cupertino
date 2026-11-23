@@ -82,6 +82,9 @@ pub struct GlassModifiers {
     pub interactive: bool,
     /// The glass adapts to what lies behind it.
     pub adaptive: bool,
+    /// The glass is a document-modal sheet: the glass window variant casts a sheet's drop shadow, fainter than an
+    /// alert's.
+    pub document_modal: bool,
 }
 
 /// Glass named by its system variant ([`crate::app::Backdrop::set_glass_variant`],
@@ -174,6 +177,7 @@ impl VariantGlass {
             (m.exclude_shadow, WireModifier::ExcludeShadow),
             (m.interactive, WireModifier::Interactive),
             (m.adaptive, WireModifier::Adaptive),
+            (m.document_modal, WireModifier::DocumentModal),
         ] {
             if on {
                 bits |= bit;

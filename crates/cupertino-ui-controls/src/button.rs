@@ -1,9 +1,10 @@
 use crate::glass::GlassRole;
 use crate::look::{self, paint_focus_ring};
-use crate::motion::{Curve, Tween};
+use crate::motion::{Curve, SpringTween, Tween};
 use crate::press::{Keys, Outcome, Press};
 use crate::{Button, ButtonRole, ButtonStyle};
 use cupertino_geometry::{Rect, Size};
+use cupertino_theme::animation::SpringPreset;
 use cupertino_theme::ui::{Color, ColorRole, ControlFamily, InteractionVariant, ThemeTokens};
 use cupertino_ui_core::layout::{Constraints, ContainerKind, LayoutSpec, Measured, SizeSpec};
 use cupertino_ui_core::{
@@ -322,6 +323,11 @@ impl<M: Clone + 'static> Widget<M> for SheetButton<M> {
 const GLASS_PRESS_IN: f64 = 0.045;
 const GLASS_PRESS_OUT: f64 = 0.32;
 
+/// How many times its size a glass button's glass grows under a press, about its centre: on Kit's clock along
+/// [`SpringPreset::GLASS_BUTTON_PRESS`] as it is pressed and back along [`SpringPreset::GLASS_BUTTON_RELEASE`] as it is
+/// let go; not under Reduce Motion.
+const GLASS_PRESS_SCALE: f64 = 1.043;
+
 /// The interaction fill a glass button lays over its glass, a level of the label colour (black in the light appearance,
 /// white in the dark one): the quinary level while the pointer is over it, shown at once and gone as soon as it leaves,
 /// and the quaternary level while it is pressed; with Increase Contrast the deeper levels of those, light and dark.
@@ -350,9 +356,9 @@ impl<M> Button<M> {
     /// The glass a glass button lies on and what it lays over it, and the look its label then takes. A default button
     /// in an active window, enabled, is the regular glass tinted with the accent at full strength, its label in the
     /// default button's text colour; where the desktop shows no glass the accent is filled over the painted body. The
-    /// compositor grows the glass a little under a press (interactive glass, none under Reduce Motion); the button
-    /// grows nothing of its own, so the glass grows once. Over it the interaction fill ([`glass_interaction_fill`]):
-    /// the hover level at once, the press level coming on and going with the press.
+    /// button grows its glass under a press on Kit's clock ([`GLASS_PRESS_SCALE`], none under Reduce Motion); its glass
+    /// is not interactive, so the compositor does not grow it again. Over it the interaction fill
+    /// ([`glass_interaction_fill`]): the hover level at once, the press level coming on and going with the press.
     fn paint_glass_body(
         &self,
         button: &ButtonState,
@@ -368,8 +374,20 @@ impl<M> Button<M> {
             .map(|c| c.with_alpha(1.0));
         // on glass already the button draws none of its own, so the accent is filled there too
         let on_glass = cx.on_glass();
-        let shown =
-            crate::glass::paint_glass_tinted(cx, GlassRole::GlassButton, chrome, radius, accent);
+        // the glass grows under a press on Kit's clock, not under Reduce Motion
+        let scale = if theme.motion.reduce {
+            1.0
+        } else {
+            1.0 + (GLASS_PRESS_SCALE - 1.0) * button.grow.sample(cx)
+        };
+        let shown = crate::glass::paint_glass_tinted(
+            cx,
+            GlassRole::GlassButton,
+            chrome,
+            radius,
+            accent,
+            scale,
+        );
         if !shown || on_glass {
             look::fill(cx, chrome, radius, accent);
         }
@@ -397,11 +415,13 @@ impl<M> Button<M> {
     }
 }
 
-/// The node state of a [`Button`]: how it is armed, and how far a glass button's press tint has come on. Opaque.
+/// The node state of a [`Button`]: how it is armed, how far a glass button's press tint has come on and how far its
+/// glass has grown towards [`GLASS_PRESS_SCALE`], from 0 at rest to 1. Opaque.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ButtonState {
     press: Press,
     tint: Tween,
+    grow: SpringTween,
 }
 
 impl<M: Clone + 'static> Widget<M> for Button<M> {
@@ -459,10 +479,16 @@ impl<M: Clone + 'static> Widget<M> for Button<M> {
     ) -> Propagation {
         let pressed = state.press.pressed();
         let propagation = self.press(&mut state.press, event, Keys::SpaceAndReturn, cx);
-        // a glass button's press tint comes on quickly and lingers as it goes
+        // a glass button's press tint comes on quickly and lingers as it goes; its glass grows and settles back
         match (pressed, state.press.pressed()) {
-            (false, true) => state.tint.go(1.0, GLASS_PRESS_IN, 0.0, Curve::EaseOut),
-            (true, false) => state.tint.go(0.0, GLASS_PRESS_OUT, 0.0, Curve::EaseInOut),
+            (false, true) => {
+                state.tint.go(1.0, GLASS_PRESS_IN, 0.0, Curve::EaseOut);
+                state.grow.go(1.0, SpringPreset::GLASS_BUTTON_PRESS);
+            }
+            (true, false) => {
+                state.tint.go(0.0, GLASS_PRESS_OUT, 0.0, Curve::EaseInOut);
+                state.grow.go(0.0, SpringPreset::GLASS_BUTTON_RELEASE);
+            }
             _ => {}
         }
         propagation

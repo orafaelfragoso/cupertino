@@ -249,7 +249,7 @@ impl SurfaceLayers {
                         .filter(|_| look.glass.is_some() && layers.takes_glass_variants());
                     match variant {
                         Some(v) => s.layer.set_glass_variant(
-                            Some(crate::glass_wire::protocol_variant(v)),
+                            Some(crate::glass_wire::protocol_variant(v, false)),
                             on_wire_lens(look.lens),
                         ),
                         None => s.layer.set_glass(

@@ -255,12 +255,14 @@ pub struct MenuDescription {
 }
 
 /// A material of the theme data (`materials.json`) the compositor draws under a window, the window's size with its
-/// corners rounded by `radius` points, at `alpha` from 0 (hidden) to 1 (opaque).
+/// corners rounded by `radius` points, at `alpha` from 0 (hidden) to 1 (opaque). With `glass`, the compositor draws
+/// that glass there instead, and `material` names what a compositor without glass draws.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Backdrop {
     pub material: String,
     pub radius: f64,
     pub alpha: f64,
+    pub glass: Option<GlassRegion>,
 }
 
 /// A material of the theme data (`materials.json`) the compositor draws under one part of a window: `rect` in the
@@ -421,6 +423,12 @@ pub struct GlassRegion {
     pub variant: Option<(GlassVariant, GlassModifiers)>,
     /// Straight sRGB red, green, blue and alpha; alpha 0 lays no tint.
     pub tint: [f32; 4],
+    /// The variant's glass is a document-modal sheet ([`crate::Glass::document_modal`]): the glass window variant casts
+    /// a sheet's drop shadow in place of an alert's. Set only with a variant.
+    pub document_modal: bool,
+    /// How many times its rectangle's size the glass is drawn, about its centre (the `scale` of [`crate::Glass`]); 1
+    /// draws it in the rectangle. A surface layer's glass scales with its layer instead.
+    pub scale: f64,
 }
 
 impl GlassRegion {
@@ -432,6 +440,8 @@ impl GlassRegion {
             spacing,
             variant: None,
             tint: [0.0; 4],
+            document_modal: false,
+            scale: 1.0,
         }
     }
 }

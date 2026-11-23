@@ -9,13 +9,14 @@ pub(super) enum TypeSize {
     Caption,
 }
 
-/// How a label is coloured. Over glass the label colours are the glass's foreground: a title and a primary label go
-/// to black on light glass and to near white on dark glass, a second line and a secondary label shift the face less.
+/// How a label is coloured. Over glass the label colours are the glass's foreground: a title, a tile's second line and
+/// a primary label go to black on light glass and to near white on dark glass, a secondary label shifts the face less.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Tone {
     /// A tile's title: the primary label colour.
     Title,
-    /// A tile's second line: the secondary label colour.
+    /// A tile's second line: the primary label colour as the title's, so the state under it reads as well as the title
+    /// over a bright backdrop.
     Line,
     /// The label colour at its full strength.
     Primary,
@@ -85,8 +86,8 @@ impl Label {
             .get(ColorRole::SecondaryText, StateVariant::NORMAL)
             .unwrap_or(fallback(0.55));
         match self.tone {
-            Tone::Title | Tone::Primary => label,
-            Tone::Line | Tone::Secondary => secondary,
+            Tone::Title | Tone::Line | Tone::Primary => label,
+            Tone::Secondary => secondary,
         }
     }
 }

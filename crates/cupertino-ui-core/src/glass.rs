@@ -56,6 +56,10 @@ pub struct Glass {
     /// The glass is a document-modal sheet: the glass window variant casts a sheet's shallower drop shadow in place of
     /// an alert's; no other variant changes.
     pub document_modal: bool,
+    /// How many times the node's size the compositor draws the glass, about the node's centre, its corners circular
+    /// while it is not 1 and its recipe resolved at the node's size: a control growing its glass under a press on its
+    /// own clock. 1 draws it at the node, as does a scale not above 0 or not finite.
+    pub scale: f64,
 }
 
 impl Glass {
@@ -74,7 +78,13 @@ impl Glass {
             subdued: false,
             exclude_shadow: false,
             document_modal: false,
+            scale: 1.0,
         }
+    }
+
+    /// The glass drawn `scale` times the node's size about its centre.
+    pub const fn scale(self, scale: f64) -> Self {
+        Self { scale, ..self }
     }
 
     /// This glass drawn as the system's `variant` in place of its style; the style
@@ -166,16 +176,22 @@ impl Glass {
                 [finite(c.r), finite(c.g), finite(c.b), finite(c.a)]
             }),
             document_modal: self.variant.is_some() && self.document_modal,
+            scale: if self.scale.is_finite() && self.scale > 0.0 {
+                self.scale
+            } else {
+                1.0
+            },
             ..GlassRegion::of_style(self.style, self.container, spacing)
         }
     }
 
     /// The glass as the background of a whole window ([`crate::WindowBackground::Surface`]): on its own, as the
-    /// window's shape and alpha stand for its corners and its alpha.
+    /// window's shape and alpha stand for its corners and its alpha, and at the window's size.
     pub(crate) fn window_region(&self) -> GlassRegion {
         Self {
             container: 0,
             spacing: 0.0,
+            scale: 1.0,
             ..*self
         }
         .region(0.0)

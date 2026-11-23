@@ -426,6 +426,9 @@ pub struct GlassRegion {
     /// The variant's glass is a document-modal sheet ([`crate::Glass::document_modal`]): the glass window variant casts
     /// a sheet's drop shadow in place of an alert's. Set only with a variant.
     pub document_modal: bool,
+    /// How many times its rectangle's size the glass is drawn, about its centre (the `scale` of [`crate::Glass`]); 1
+    /// draws it in the rectangle. A surface layer's glass scales with its layer instead.
+    pub scale: f64,
 }
 
 impl GlassRegion {
@@ -438,6 +441,7 @@ impl GlassRegion {
             variant: None,
             tint: [0.0; 4],
             document_modal: false,
+            scale: 1.0,
         }
     }
 }

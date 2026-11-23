@@ -575,6 +575,11 @@ struct Capsule {
 
 impl Capsule {
     fn new() -> Capsule {
+        Capsule::with(GlassModifier::Interactive, 1.0)
+    }
+
+    /// The capsule of regular glass with `modifiers`, its glass drawn `scale` times its size.
+    fn with(modifiers: GlassModifier, scale: f64) -> Capsule {
         let mut rig = Rig::new((480, 320), 2.0);
         let effects = rig
             .client
@@ -592,12 +597,15 @@ impl Capsule {
         );
         pane.backdrop.set_glass_variant(
             GlassVariant::Regular,
-            GlassModifier::Interactive,
+            modifiers,
             SizeClass::Dynamic,
             0,
             0.0,
         );
         pane.backdrop.set_glass_tint(1.0, 0.0, 0.0, 1.0);
+        if scale != 1.0 {
+            pane.backdrop.set_glass_scale(scale);
+        }
         pane.surface.commit();
         window.surface.commit();
         rig.settle();
@@ -723,6 +731,40 @@ fn under_reduce_motion_interactive_glass_does_not_grow_under_a_press() {
         );
     }
     capsule.release(t0 + 1.0);
+}
+
+/// How many times its size the scaled capsule's glass is drawn.
+const SCALED: f64 = 1.1;
+
+#[test]
+fn a_scaled_glass_backdrop_draws_larger_about_its_centre() {
+    let mut plain = Capsule::with(GlassModifier::empty(), 1.0);
+    let mut scaled = Capsule::with(GlassModifier::empty(), SCALED);
+    let t = plain.rig.now();
+    let rest = plain.width_at(t);
+    let grown = scaled.width_at(scaled.rig.now());
+    let expected = f64::from(rest) * SCALED;
+    assert!(
+        (f64::from(grown) - expected).abs() <= 4.0,
+        "the scaled capsule shows {grown} pixels wide, {expected} expected from {rest}"
+    );
+    // about its centre: as much red each side of the centre, and past the subsurface it lies on
+    let image = scaled.rig.image();
+    let centre = scaled.centre();
+    let s = scaled.rig.scale;
+    let y = (centre.y * s) as u32;
+    let mid = (centre.x * s) as u32;
+    let reach = ((f64::from(CAPSULE.0) / 2.0 + 30.0) * s) as u32;
+    let left = red_width(&image, y, mid - reach, mid);
+    let right = red_width(&image, y, mid, mid + reach);
+    assert!(
+        left.abs_diff(right) <= 2,
+        "{left} pixels left of the centre, {right} right"
+    );
+    assert!(
+        f64::from(left) > f64::from(CAPSULE.0) / 2.0 * s + 4.0,
+        "the glass reaches past its subsurface: {left}"
+    );
 }
 
 #[test]

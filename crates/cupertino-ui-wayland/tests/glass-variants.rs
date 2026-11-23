@@ -299,3 +299,46 @@ fn a_sheets_glass_region_goes_with_the_document_modal_bit() {
         "{variant}"
     );
 }
+
+#[test]
+fn a_glass_regions_scale_goes_on_its_own_as_it_changes() {
+    let (server, conn) = Harness::start(Offer {
+        app_effects: Some(23),
+        ..Offer::NONE
+    });
+    let mut system = WaylandWindowSystem::new(conn, Profile::cupertino());
+    let window = system.create_window(&spec()).unwrap();
+    flush(&mut system);
+    let scaled = |scale: f64| {
+        let mut regions = region(Some(pressable()), HALF_RED);
+        if let Some(g) = regions[0].glass.as_mut() {
+            g.scale = scale;
+        }
+        regions
+    };
+    system
+        .request(window, WindowRequest::Materials(scaled(1.0)))
+        .unwrap();
+    flush(&mut system);
+    server.wait_for("SetGlassVariant", 1);
+    assert!(
+        !glass_sent(&server)
+            .iter()
+            .any(|r| r.starts_with("SetGlassScale")),
+        "a region at its size sends no scale"
+    );
+    let before = glass_sent(&server).len();
+    for scale in [1.02, 1.04] {
+        system
+            .request(window, WindowRequest::Materials(scaled(scale)))
+            .unwrap();
+        flush(&mut system);
+    }
+    server.wait_for("SetGlassScale", 2);
+    let after = glass_sent(&server).split_off(before);
+    assert_eq!(after.len(), 2, "only the scale goes again: {after:?}");
+    assert!(
+        after.iter().all(|r| r.starts_with("SetGlassScale")),
+        "{after:?}"
+    );
+}

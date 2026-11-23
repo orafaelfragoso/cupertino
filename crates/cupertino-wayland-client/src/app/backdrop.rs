@@ -269,6 +269,20 @@ impl Backdrop {
         Ok(())
     }
 
+    /// Draw the backdrop's glass `scale` times its shape's size about the shape's centre, its recipe resolved at the
+    /// shape's size and its corners circular while it is not 1; 1 draws it at its shape. Errors on a scale not above 0,
+    /// above [`MAX_GLASS_SCALE`] or not finite, which the server would reject as a protocol error. A server before
+    /// version 23 draws the glass at its shape and is sent nothing.
+    pub fn set_glass_scale(&self, scale: f64) -> Result<(), Error> {
+        if !(scale.is_finite() && scale > 0.0 && scale <= MAX_GLASS_SCALE) {
+            return Err(Error::InvalidGlass);
+        }
+        if self.takes_glass_variants() {
+            self.proxy.set_glass_scale(scale);
+        }
+        Ok(())
+    }
+
     /// Opacity of the whole backdrop, 0 to 1.
     pub fn set_alpha(&self, alpha: f64) -> Result<(), Error> {
         if !(0.0..=1.0).contains(&alpha) {
@@ -354,6 +368,9 @@ const MENU_VERSION: u32 = 20;
 const BLUR_RAMP_VERSION: u32 = 22;
 /// The version of `cupertino_backdrop_v1` that has `set_glass_variant` and `set_glass_tint`.
 pub(crate) const VARIANT_VERSION: u32 = 23;
+/// The most a backdrop's glass may be scaled about its centre ([`Backdrop::set_glass_scale`]), as the protocol bounds
+/// it.
+pub const MAX_GLASS_SCALE: f64 = 4.0;
 
 /// The wire style of the menu on a server of `version`: one before [`MENU_VERSION`] draws it as dense glass (regular
 /// glass before [`DENSE_VERSION`]).

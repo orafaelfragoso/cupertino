@@ -1,12 +1,14 @@
 //! The transitions a control paints by itself: a value that moves from where it was shown to where it is going over a
-//! duration, timed from the first paint after it was told to move. While it moves, its paint asks for the next frame,
-//! so the window draws each step at the display's pace and stops asking once it has arrived.
+//! duration or along a spring ([`SpringTween`]), timed from the first paint after it was told to move. While it moves,
+//! its paint asks for the next frame, so the window draws each step at the display's pace and stops asking once it has
+//! arrived.
 //!
 //! The model is pure ([`Tween::value_at`]); [`Tween::sample`] reads the paint's clock. With Reduce Motion a tween is
-//! always where it is going.
+//! always where it is going; a spring tween leaves Reduce Motion to its control.
 
 use std::cell::Cell;
 
+use cupertino_theme::animation::Timing;
 use cupertino_ui_core::platform::Timestamp;
 use cupertino_ui_core::PaintCx;
 
@@ -108,6 +110,76 @@ impl Tween {
         }
         self.shown.set(value);
         value
+    }
+}
+
+/// A value moving from where it was shown to where it is going along a spring of the motion catalogue ([`Timing`]),
+/// timed from the first paint after it was told to move; a spring may pass its target before it rests. Opaque.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct SpringTween {
+    from: f64,
+    to: f64,
+    /// The spring it moves along; `None` rests at `to`.
+    timing: Option<Timing>,
+    /// When it was told to move: the first paint after that.
+    start: Cell<Option<Timestamp>>,
+    /// Where the last paint showed it.
+    shown: Cell<f64>,
+}
+
+impl SpringTween {
+    /// A spring tween resting at `value`.
+    pub fn at(value: f64) -> SpringTween {
+        SpringTween {
+            from: value,
+            to: value,
+            timing: None,
+            start: Cell::new(None),
+            shown: Cell::new(value),
+        }
+    }
+
+    /// Moves from where it was last shown to `to` along `spring`; one already going to `to` goes on as it was.
+    pub fn go(&mut self, to: f64, spring: impl Into<Timing>) {
+        if to == self.to {
+            return;
+        }
+        self.from = self.shown.get();
+        self.to = to;
+        self.timing = Some(spring.into());
+        self.start.set(None);
+    }
+
+    /// Where it is `seconds` after it started moving, and whether it is still on its way.
+    pub fn value_at(&self, seconds: f64) -> (f64, bool) {
+        match self.timing {
+            Some(t) if self.from != self.to && seconds < t.duration() => (
+                self.from + (self.to - self.from) * t.value(seconds.max(0.0)),
+                true,
+            ),
+            _ => (self.to, false),
+        }
+    }
+
+    /// Where it is at the paint's time, asking for the next frame while it moves.
+    pub fn sample(&self, cx: &mut PaintCx<'_>) -> f64 {
+        let now = cx.now();
+        let start = self.start.get().unwrap_or_else(|| {
+            self.start.set(Some(now));
+            now
+        });
+        let (value, moving) = self.value_at(now.0.saturating_sub(start.0) as f64 / 1e9);
+        if moving {
+            cx.request_animation_frame();
+        }
+        self.shown.set(value);
+        value
+    }
+}
+
+impl Default for SpringTween {
+    fn default() -> Self {
+        SpringTween::at(0.0)
     }
 }
 

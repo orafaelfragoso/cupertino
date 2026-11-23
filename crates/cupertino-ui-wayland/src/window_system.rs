@@ -239,6 +239,29 @@ fn set_ramp(
     backdrop.set_blur_ramp(weight(ramp.top), weight(ramp.bottom))
 }
 
+/// Draws the glass of `backdrop` `scale` times its shape about its centre, held to what the protocol takes (one not
+/// above 0 or not finite as 1); a compositor without it is sent nothing.
+fn set_scale(backdrop: &Material, scale: f64) -> Result<(), cupertino_wayland_client::app::Error> {
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale.min(cupertino_wayland_client::app::MAX_GLASS_SCALE)
+    } else {
+        1.0
+    };
+    backdrop.set_glass_scale(scale)
+}
+
+/// The scale a region's glass is drawn at about its centre: 1 for a material.
+fn glass_scale(region: &MaterialRegion) -> f64 {
+    region.glass.map_or(1.0, |g| g.scale)
+}
+
+/// Whether two regions draw the same material or glass but for the glass's scale, which goes on its own
+/// ([`set_scale`]) as a control grows its glass frame by frame.
+fn same_look(a: &MaterialRegion, b: &MaterialRegion) -> bool {
+    let unscaled = |g: Option<GlassRegion>| g.map(|g| GlassRegion { scale: 1.0, ..g });
+    a.material == b.material && unscaled(a.glass) == unscaled(b.glass)
+}
+
 /// Gives `backdrop` its look: glass for `glass`, or for a glass material name of the theme, on its own; otherwise the
 /// material `name`.
 fn set_look(
@@ -961,9 +984,13 @@ impl WaylandWindowSystem {
         let result = (|| {
             for (i, region) in regions.into_iter().enumerate() {
                 if let Some(old) = shown.get_mut(i) {
-                    if old.region.material != region.material || old.region.glass != region.glass {
+                    if !same_look(&old.region, &region) {
                         set_look(&old.material, &region.material, region.glass)
                             .map_err(protocol)?;
+                    }
+                    // the compositor keeps the scale whichever glass the backdrop draws
+                    if glass_scale(&old.region) != glass_scale(&region) {
+                        set_scale(&old.material, glass_scale(&region)).map_err(protocol)?;
                     }
                     if old.region.alpha != region.alpha {
                         old.material.set_alpha(region.alpha).map_err(protocol)?;
@@ -988,6 +1015,9 @@ impl WaylandWindowSystem {
                     .backdrop(&self.conn, on)
                     .map_err(|e| PlatformError::Protocol(e.to_string()))?;
                 set_look(&material, &region.material, region.glass).map_err(protocol)?;
+                if glass_scale(&region) != 1.0 {
+                    set_scale(&material, glass_scale(&region)).map_err(protocol)?;
+                }
                 material.set_alpha(region.alpha).map_err(protocol)?;
                 if region.blur_ramp != BlurRamp::EVEN {
                     set_ramp(&material, region.blur_ramp).map_err(protocol)?;

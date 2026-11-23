@@ -221,6 +221,15 @@ fn a_tint_out_of_range_is_held_to_it() {
 }
 
 #[test]
+fn a_glass_scale_goes_with_its_region_and_one_not_above_0_draws_it_at_the_node() {
+    assert_eq!(region_of(Glass::regular()).scale, 1.0);
+    assert_eq!(region_of(Glass::regular().scale(1.043)).scale, 1.043);
+    for bad in [0.0, -2.0, f64::NAN, f64::INFINITY] {
+        assert_eq!(region_of(Glass::regular().scale(bad)).scale, 1.0, "{bad}");
+    }
+}
+
+#[test]
 fn a_sheets_variant_goes_document_modal_and_a_style_alone_does_not() {
     let sheet = region_of(
         Glass::dense()

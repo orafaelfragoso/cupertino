@@ -281,8 +281,10 @@ from the application's model and reports changes as messages.
   its body filling its node, without Reduce Transparency: on a material the window shows (a sidebar, a translucent
   window background), and over the window's own content, as the button is a raised node (`Widget::raised`) whose glass
   lies between the window's raised layer and its content, so the content shows through it; its label then takes the
-  colours of text on glass. Its glass is the regular variant, interactive: the compositor grows it a little under a
-  press on its clock (none under Reduce Motion), and the button grows nothing of its own, so the glass grows once. A
+  colours of text on glass. Its glass is the regular variant, which the button grows about its centre (`Glass::scale`) under a
+  press on Kit's clock, to 1.043 times its size along `SpringPreset::GLASS_BUTTON_PRESS` (settled in about 512 ms)
+  and back along `GLASS_BUTTON_RELEASE` (about 965 ms), none under Reduce Motion; it is not interactive glass, so
+  the compositor does not grow it again. A
   default button, enabled in an active window, tints its glass with the accent at full strength and takes the default
   button's label colour. Over the glass a level of the label colour (black in the light appearance, white in the dark)
   marks the pointer: 4.7 % at once while it is over the button, 9.8 % while pressed (14.9 % and 34.9 % light, 29.8 %

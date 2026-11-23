@@ -229,9 +229,9 @@ fn glass_pieces(
 
 /// The container of `members` (glass backdrops of one surface, front to back) in `mode`, the first member's, in a
 /// window that is `active` or not: its shapes back to front, as the surface created them. A member in other glass or
-/// of another tint than the first (a selected segment in its group) keeps its own recipe on its shape. A shape of
-/// interactive glass under a press grows about its centre with circular corners ([`crate::glass_press`]), its recipe
-/// resolved at its size at rest, so what the glass filters does not change.
+/// of another tint than the first (a selected segment in its group) keeps its own recipe on its shape. A shape its
+/// client scaled (`set_glass_scale`), or of interactive glass under a press ([`crate::glass_press`]), grows about its
+/// centre with circular corners, its recipe resolved at its size at rest, so what the glass filters does not change.
 fn glass_container(
     p: &SceneParams<'_>,
     members: &[&BackdropArea],
@@ -277,7 +277,7 @@ fn glass_container(
         container = container.with_shape_recipe(last - j, recipe);
     }
     for (j, b) in members.iter().enumerate() {
-        let k = press_scale(p, b);
+        let k = glass_scale(p, b);
         if (k - 1.0).abs() > crate::glass_press::DEFORMED {
             let shape = &mut container.shapes[last - j];
             let [x, y, w, h] = shape.rect;
@@ -296,14 +296,15 @@ fn glass_container(
 }
 
 /// `bound` (output-local points), the area a subsurface's glass reads and draws in, widened to hold the glass of those
-/// of its backdrops `areas` that a press grows past it, so a pressed shape the size of its subsurface is not cut.
+/// of its backdrops `areas` that a press or their scale grows past it, so a grown shape the size of its subsurface is
+/// not cut.
 pub(super) fn pressed_bound(
     p: &SceneParams<'_>,
     areas: &[BackdropArea],
     bound: Rectangle<f64, Logical>,
 ) -> Rectangle<f64, Logical> {
     areas.iter().fold(bound, |bound, b| {
-        let k = press_scale(p, b);
+        let k = glass_scale(p, b);
         if k <= 1.0 + crate::glass_press::DEFORMED {
             return bound;
         }
@@ -317,6 +318,12 @@ pub(super) fn pressed_bound(
         );
         bound.merge(grown)
     })
+}
+
+/// The scale about its centre the glass of backdrop `b` is drawn at in the frame: the scale its client set
+/// (`set_glass_scale`) times its growth under a press.
+fn glass_scale(p: &SceneParams<'_>, b: &BackdropArea) -> f64 {
+    b.glass.map_or(1.0, |g| g.scale) * press_scale(p, b)
 }
 
 /// The scale about its centre of the glass of backdrop `b` under a press at the frame's time: 1 unless its glass is

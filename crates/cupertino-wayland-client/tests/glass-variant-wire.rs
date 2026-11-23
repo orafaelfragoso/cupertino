@@ -6,7 +6,7 @@ use crate::support;
 
 use cupertino_wayland_client::app::{
     AppEffects, Error, GlassModifiers, GlassSizeClass, GlassStyle, GlassVariant, Layers,
-    VariantGlass,
+    VariantGlass, MAX_GLASS_SCALE,
 };
 use cupertino_wayland_client::Connection;
 use support::*;
@@ -98,6 +98,32 @@ fn a_sheets_glass_window_variant_sends_the_document_modal_bit_and_falls_back_to_
         sent[0]
     );
     assert_eq!(sheet.fallback_style(), GlassStyle::Regular);
+}
+
+#[test]
+fn a_glass_scale_goes_from_version_23_and_a_bad_one_is_refused() {
+    let (server, mut conn, backdrop) = backdrop_on(23);
+    backdrop.set_glass_scale(1.043).unwrap();
+    for scale in [0.0, -1.0, f64::NAN, MAX_GLASS_SCALE + 0.5] {
+        assert!(
+            matches!(backdrop.set_glass_scale(scale), Err(Error::InvalidGlass)),
+            "{scale}"
+        );
+    }
+    let first = sent(&server, &mut conn);
+    assert_eq!(first.len(), 1, "{first:?}");
+    assert!(
+        first[0].starts_with("SetGlassScale { scale: 1.04"),
+        "{}",
+        first[0]
+    );
+
+    let (server, mut conn, backdrop) = backdrop_on(22);
+    backdrop.set_glass_scale(1.043).unwrap();
+    assert!(
+        sent(&server, &mut conn).is_empty(),
+        "an older server draws the glass at its shape"
+    );
 }
 
 #[test]

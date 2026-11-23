@@ -84,11 +84,12 @@ impl GlassRole {
         }
     }
 
-    /// The glass a role of [`GlassMaterial::Glass`] asks for: a toolbar control's glass of its own, lifted further from
-    /// the content with a line of light along its top, and regular glass for the rest.
+    /// The glass a role of [`GlassMaterial::Glass`] asks for: a toolbar control's glass of its own, the toolbar item
+    /// variant (a fifth of the blur, a fixed bend and the control border, with its inactive recipe while the window is
+    /// not active), and regular glass for the rest.
     pub fn glass(self) -> Glass {
         match self {
-            GlassRole::ToolbarGroup => Glass::toolbar(),
+            GlassRole::ToolbarGroup => Glass::toolbar().variant(GlassVariant::ToolbarItem),
             GlassRole::SidebarPanel | GlassRole::GlassButton | GlassRole::ThumbLens => {
                 Glass::regular()
             }
@@ -120,6 +121,16 @@ const TOOLBAR_CONTAINER: u32 = 1;
 /// How close two toolbar controls come before their glass blends into one shape: the room between neighbouring
 /// controls, so at rest each keeps its own outline and they merge only as one grows towards the next.
 const TOOLBAR_SPACING: f64 = crate::toolbar::TOOLBAR_GAP;
+
+/// The glass of the chosen segment's pill inside a toolbar control: the tab variant (the regular glass under a white
+/// fill), a shape of the toolbar's container with a recipe of its own, so it lies within its control's glass rather
+/// than on it. The variant draws its own edge; the toolkit lays none over it.
+pub(crate) fn toolbar_selection_glass(radius: f64) -> Glass {
+    Glass::toolbar()
+        .variant(GlassVariant::Tab)
+        .radius(radius)
+        .container(TOOLBAR_CONTAINER, TOOLBAR_SPACING)
+}
 
 /// The corner radius of a shape inset `inset` points inside a shape with corner radius `outer`, so both corners share
 /// a centre: `outer − inset`, never below zero.

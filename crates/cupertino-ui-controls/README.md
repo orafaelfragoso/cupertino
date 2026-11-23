@@ -266,13 +266,18 @@ from the application's model and reports changes as messages.
   back and forward chevrons, `More`'s three dots and `Tag`, a tag outline pointing up and to the trailing side with its
   hole by the point, mirrored right to left.
 - **Glass.** Each glass surface names a `GlassRole` (`ToolbarGroup`, `SidebarPanel`, `GlassButton`, `ThumbLens`) and
-  `GlassRole::material` says what draws it; a toolbar group is toolbar glass (`Glass::toolbar`, through `GlassRole::glass`) in one container
+  `GlassRole::material` says what draws it; a toolbar group is toolbar glass named by the toolbar item variant
+  (`Glass::toolbar` with `GlassVariant::ToolbarItem`, through `GlassRole::glass`, its inactive recipe while the window
+  is not active) in one container
   per window (`GlassRole::container`, blending only when two controls come closer than the 8 pt gap between them),
   kept by the compositor with Reduce Transparency and Increase Contrast, over the content pane's background, which the
   compositor draws below it; where the desktop shows no glass it paints a translucent body with a one-pixel rim (and a
   soft shade in the light appearance). At rest the toolkit outlines a toolbar group's glass (above); with Increase Contrast
   in the light appearance it lays a firmer rim over any floating control's glass: a dark rim on the outermost device
-  pixel, 50 % black at the sides and 30 % at the top and bottom. A glass button is regular glass of its own (container 0) where that glass can show,
+  pixel, 50 % black at the sides and 30 % at the top and bottom. A choice's chosen pill is glass of the tab variant
+  (`GlassVariant::Tab`, the regular glass under a white fill) as a shape of the toolbar's container with a recipe of
+  its own, laid under the segments so their glyphs lie over it; the toolkit draws no edge over it, and where the
+  desktop shows no glass it is a fill over the painted capsule. A glass button is regular glass of its own (container 0) where that glass can show,
   its body filling its node, without Reduce Transparency: on a material the window shows (a sidebar, a translucent
   window background), and over the window's own content, as the button is a raised node (`Widget::raised`) whose glass
   lies between the window's raised layer and its content, so the content shows through it; its label then takes the

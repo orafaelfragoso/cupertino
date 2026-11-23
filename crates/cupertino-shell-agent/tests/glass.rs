@@ -128,7 +128,13 @@ fn a_confirmation_panel_lies_on_the_glass_window_variant() {
     assert!(
         glass.contains(&(
             GlassStyle::Regular,
-            Some((GlassVariant::GlassWindow, GlassModifiers::DEFAULT))
+            Some((
+                GlassVariant::GlassWindow,
+                GlassModifiers {
+                    adaptive: true,
+                    ..GlassModifiers::DEFAULT
+                }
+            ))
         )),
         "{glass:?}"
     );

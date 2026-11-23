@@ -164,12 +164,14 @@ fn glass(centre: bool) -> Vec<(GlassStyle, Option<(GlassVariant, GlassModifiers)
         .unwrap_or_default()
 }
 
-/// The notification centre variant at the medium size, stepping back (`subdued`) or not.
+/// The notification centre variant at the medium size, adapting to what lies behind it, stepping back (`subdued`) or
+/// not.
 fn card(subdued: bool) -> Option<(GlassVariant, GlassModifiers)> {
     Some((
         GlassVariant::NotificationCenter,
         GlassModifiers {
             subdued,
+            adaptive: true,
             ..GlassModifiers::DEFAULT.sized(GlassSize::Medium)
         },
     ))

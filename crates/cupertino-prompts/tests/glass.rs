@@ -143,7 +143,13 @@ fn an_alert_lies_on_the_glass_window_variant_with_its_corners() {
             RADIUS,
             Some((
                 GlassStyle::Regular,
-                Some((GlassVariant::GlassWindow, GlassModifiers::DEFAULT))
+                Some((
+                    GlassVariant::GlassWindow,
+                    GlassModifiers {
+                        adaptive: true,
+                        ..GlassModifiers::DEFAULT
+                    }
+                ))
             ))
         )]
     );

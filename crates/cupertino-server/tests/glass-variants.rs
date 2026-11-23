@@ -15,7 +15,8 @@ use std::time::Duration;
 use cupertino_assets::Assets;
 use cupertino_protocols::client::app_effects::cupertino_app_effects_v1::CupertinoAppEffectsV1;
 use cupertino_protocols::client::app_effects::cupertino_backdrop_v1::{
-    self as cupertino_backdrop_v1, CupertinoBackdropV1, GlassModifier, GlassStyle, GlassVariant, SizeClass, Tone,
+    self as cupertino_backdrop_v1, CupertinoBackdropV1, GlassModifier, GlassStyle, GlassVariant,
+    SizeClass, Tone,
 };
 use cupertino_server::glass_press::PRESS_SCALE;
 use cupertino_server::state::{insert_client, ClientState};
@@ -28,11 +29,11 @@ use smithay::reexports::wayland_protocols::xdg::shell::client::{
 };
 use smithay::reexports::wayland_server::Display;
 use smithay::utils::Point;
+use wayland_client::backend::ObjectId;
 use wayland_client::protocol::{
     wl_buffer, wl_compositor, wl_registry, wl_shm, wl_shm_pool, wl_subcompositor, wl_subsurface,
     wl_surface,
 };
-use wayland_client::backend::ObjectId;
 use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum};
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
@@ -823,7 +824,8 @@ fn a_press_beside_interactive_glass_after_one_on_it_asks_for_no_frames() {
 /// The toolbar of [`a_toolbars_container_draws_alike_whichever_order_its_chosen_segment_was_made_in`]: its size in
 /// points, and the left, top, width and height of each item in it.
 const TOOLBAR: (i32, i32) = (360, 72);
-const TOOLBAR_ITEMS: [(i32, i32, i32, i32); 3] = [(12, 16, 96, 40), (132, 16, 96, 40), (252, 16, 96, 40)];
+const TOOLBAR_ITEMS: [(i32, i32, i32, i32); 3] =
+    [(12, 16, 96, 40), (132, 16, 96, 40), (252, 16, 96, 40)];
 /// The container the toolbar's items join.
 const TOOLBAR_CONTAINER: u32 = 7;
 
@@ -888,7 +890,8 @@ fn a_toolbars_container_draws_alike_whichever_order_its_chosen_segment_was_made_
 }
 
 #[test]
-fn small_glass_follows_what_lies_behind_it_when_adaptive_or_of_an_older_clients_style_and_not_otherwise() {
+fn small_glass_follows_what_lies_behind_it_when_adaptive_or_of_an_older_clients_style_and_not_otherwise(
+) {
     let mut rig = Rig::new((480, 320), 1.0);
     let effects = rig.client.effects.clone().unwrap();
     let legacy = rig.client.legacy_effects.clone().unwrap();
@@ -925,9 +928,20 @@ fn small_glass_follows_what_lies_behind_it_when_adaptive_or_of_an_older_clients_
             .filter(|(id, _)| *id == pane.backdrop.id())
             .count()
     };
-    assert!(tones(&adaptive) > 0, "adaptive glass follows: {:?}", rig.client.tones);
-    assert!(tones(&styled) > 0, "the older client's style follows as before");
-    assert_eq!(tones(&fixed), 0, "glass not asked to adapt keeps the appearance");
+    assert!(
+        tones(&adaptive) > 0,
+        "adaptive glass follows: {:?}",
+        rig.client.tones
+    );
+    assert!(
+        tones(&styled) > 0,
+        "the older client's style follows as before"
+    );
+    assert_eq!(
+        tones(&fixed),
+        0,
+        "glass not asked to adapt keeps the appearance"
+    );
 }
 
 #[test]
@@ -1068,7 +1082,13 @@ impl Rig {
     /// [`SCALED`] times its size; shown once the parent commits again, as it does here.
     fn scaled_capsule(&mut self, parent: &wl_surface::WlSurface) -> Pane {
         let effects = self.client.effects.clone().unwrap();
-        let pane = self.pane(parent, &effects, (40, 40), CAPSULE, f64::from(CAPSULE.1) / 2.0);
+        let pane = self.pane(
+            parent,
+            &effects,
+            (40, 40),
+            CAPSULE,
+            f64::from(CAPSULE.1) / 2.0,
+        );
         pane.backdrop.set_glass_variant(
             GlassVariant::Regular,
             GlassModifier::ExcludeShadow,

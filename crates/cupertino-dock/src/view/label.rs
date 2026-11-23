@@ -112,6 +112,7 @@ fn label_glass(pointer: bool) -> Glass {
         Glass::regular().variant(GlassVariant::Regular)
     }
     .size_class(GlassSize::Minimum)
+    .adaptive(false)
 }
 
 /// The line a label over a bar at the bottom stands [`GAP`] above: the bar's top edge at `bar_top`, or the top of

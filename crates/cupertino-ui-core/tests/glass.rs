@@ -205,6 +205,7 @@ fn a_variant_goes_with_its_size_class_its_press_response_and_its_tint_and_keeps_
             GlassModifiers {
                 size: GlassSize::Large,
                 interactive: true,
+                adaptive: true,
                 ..GlassModifiers::DEFAULT
             }
         ))
@@ -222,6 +223,7 @@ fn interactive_glass_of_a_style_is_named_by_the_styles_own_variant() {
             variant,
             GlassModifiers {
                 interactive: true,
+                adaptive: true,
                 ..modifiers
             }
         ))
@@ -246,10 +248,19 @@ fn a_variant_goes_subdued_and_without_its_shadow_when_asked() {
                 size: GlassSize::Medium,
                 subdued: true,
                 exclude_shadow: true,
+                adaptive: true,
                 ..GlassModifiers::DEFAULT
             }
         ))
     );
+}
+
+#[test]
+fn a_variant_adapts_to_what_lies_behind_it_unless_asked_not_to() {
+    let glass = Glass::regular().variant(GlassVariant::Regular);
+    let adaptive = |g: Glass| region_of(g).variant.map(|(_, m)| m.adaptive);
+    assert_eq!(adaptive(glass), Some(true));
+    assert_eq!(adaptive(glass.adaptive(false)), Some(false));
 }
 
 #[test]
@@ -406,6 +417,7 @@ fn a_window_background_asks_for_its_glass_variant_on_its_own() {
             GlassVariant::AbuttedSidebar,
             GlassModifiers {
                 subdued: true,
+                adaptive: true,
                 ..GlassModifiers::DEFAULT
             }
         ))

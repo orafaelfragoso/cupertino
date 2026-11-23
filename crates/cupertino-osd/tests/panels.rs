@@ -559,7 +559,13 @@ fn the_switcher_lies_on_regular_glass_and_the_picker_on_menu_glass_without_its_s
         of("Input sources"),
         [(
             GlassStyle::Regular,
-            Some((GlassVariant::Regular, GlassModifiers::DEFAULT))
+            Some((
+                GlassVariant::Regular,
+                GlassModifiers {
+                    adaptive: true,
+                    ..GlassModifiers::DEFAULT
+                }
+            ))
         )]
     );
     assert_eq!(
@@ -570,6 +576,7 @@ fn the_switcher_lies_on_regular_glass_and_the_picker_on_menu_glass_without_its_s
                 GlassVariant::Menu,
                 GlassModifiers {
                     exclude_shadow: true,
+                    adaptive: true,
                     ..GlassModifiers::DEFAULT
                 }
             ))

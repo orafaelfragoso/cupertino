@@ -59,10 +59,11 @@ pub(super) fn menu<M: Clone + 'static>(
         // the body is the root's menu glass, which the rows lie on
         background: WindowBackground::None,
         content: Element::new(Root {
+            // a status panel's glass keeps the appearance's foreground; a menu's adapts to what lies behind it
             body: Some(if layout.panel {
-                panel::RADIUS
+                (panel::RADIUS, false)
             } else {
-                POPUP_RADIUS
+                (POPUP_RADIUS, true)
             }),
             bar: scene.bar,
             keyboard: false,

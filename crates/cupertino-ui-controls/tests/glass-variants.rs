@@ -441,6 +441,10 @@ fn glass_buttons_are_regular_glass_at_their_size_and_a_default_one_is_tinted_wit
             "the button grows its glass itself, so the compositor does not: {shown:?}"
         );
         assert_eq!(g.scale, 1.0, "at rest: {shown:?}");
+        assert!(
+            g.variant.is_some_and(|(_, m)| m.adaptive),
+            "its label follows the face behind it: {shown:?}"
+        );
     }
     let at = |name: &str| view.bounds_of(Role::Button, name).center();
     let (share, done) = (at("Share"), at("Done"));

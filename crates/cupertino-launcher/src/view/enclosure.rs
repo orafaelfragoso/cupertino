@@ -100,6 +100,7 @@ impl<M: 'static> Widget<M> for Enclosure<M> {
         let mut material = Glass::large_panel()
             .variant(self.variant.0)
             .size_class(self.variant.1)
+            .adaptive(false)
             .radius(radius)
             .alpha(alpha);
         if self.joins {

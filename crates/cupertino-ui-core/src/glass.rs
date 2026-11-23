@@ -60,6 +60,10 @@ pub struct Glass {
     /// while it is not 1 and its recipe resolved at the node's size: a control growing its glass under a press on its
     /// own clock. 1 draws it at the node, as does a scale not above 0 or not finite.
     pub scale: f64,
+    /// The variant adapts to what lies behind it: the compositor measures the face behind the glass and tells the
+    /// window which way the text and symbols on it go ([`GlassModifiers::adaptive`]). On by default; a large surface
+    /// whose foreground keeps the appearance's (a bar, a panel, a control centre's menu) turns it off.
+    pub adaptive: bool,
 }
 
 impl Glass {
@@ -79,7 +83,14 @@ impl Glass {
             exclude_shadow: false,
             document_modal: false,
             scale: 1.0,
+            adaptive: true,
         }
+    }
+
+    /// Whether the variant adapts to what lies behind it, the compositor telling the window which way its foreground
+    /// goes.
+    pub const fn adaptive(self, adaptive: bool) -> Self {
+        Self { adaptive, ..self }
     }
 
     /// The glass drawn `scale` times the node's size about its centre.
@@ -168,6 +179,7 @@ impl Glass {
                         interactive: self.interactive,
                         subdued: m.subdued || self.subdued,
                         exclude_shadow: m.exclude_shadow || self.exclude_shadow,
+                        adaptive: self.adaptive,
                         ..m
                     },
                 )

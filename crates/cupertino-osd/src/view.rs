@@ -221,6 +221,7 @@ fn banner(cx: &mut PaintCx<'_>, alpha: f64) {
         && cx.glass(
             Glass::card()
                 .variant(GlassVariant::NotificationCenter)
+                .adaptive(false)
                 .size_class(GlassSize::Medium)
                 .radius(CORNER_RADIUS)
                 .alpha(alpha),

@@ -233,6 +233,7 @@ fn panel_glass(alpha: f64) -> Glass {
     Glass::dense()
         .variant(GlassVariant::CartouchePopover)
         .size_class(GlassSize::Medium)
+        .adaptive(false)
         .container(GLASS_CONTAINER, GLASS_BLEND)
         .alpha(alpha)
 }

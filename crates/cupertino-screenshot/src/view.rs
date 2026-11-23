@@ -697,6 +697,7 @@ impl<M: 'static> Widget<M> for Keys<M> {
             && cx.glass(
                 Glass::regular()
                     .variant(GlassVariant::Regular)
+                    .adaptive(false)
                     .radius(TOOLBAR_RADIUS),
             );
         if !glass {

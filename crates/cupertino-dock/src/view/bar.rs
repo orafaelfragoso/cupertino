@@ -339,6 +339,7 @@ fn bar_glass() -> Glass {
     }
     .variant(GlassVariant::Dock)
     .size_class(GlassSize::Medium)
+    .adaptive(false)
 }
 
 /// Whether the bar's surface is glass, which lights its own rim along the top and the bottom.

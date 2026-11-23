@@ -6,7 +6,9 @@
 //! shades the union of the shapes from those textures with the glass program `cupertino-glass` generates
 //! ([`cupertino_glass::shaders::GLASS`]). The textures are kept per container and made again only when the backdrop below the
 //! sampled area changed: [`area_generation`] signs the elements below that overlap it, so a change elsewhere on the
-//! output, or above the glass, leaves them alone.
+//! output, or above the glass, leaves them alone. Nor does a change of the shapes or of the look inside an unchanged
+//! sampled area (a glass button growing under a press, a sheet's shadow): the textures are kept under what they are
+//! made from (`GlassContainer::textures`), and only the composite, keyed on everything it reads, is drawn again.
 //!
 //! A capture is clean only when the whole area was drawn afresh below the glass; elsewhere the framebuffer still holds
 //! the last frame, glass and all. So textures are made again only when the element's commit advanced (its backdrop or
@@ -55,6 +57,11 @@ pub struct GlassContainer {
     pub container: Container,
     /// Identity of everything that changes how it looks besides the backdrop.
     pub key: u64,
+    /// Identity of what its blurred textures are made from besides the backdrop and where it is captured: the capture
+    /// scale, the deviation of each blurred copy it reads, of the blur fill and of the edge bleed's copy, whether it
+    /// reads the capture itself, what of the window it reads and the faces it measures. A shape that moves or grows
+    /// inside an unchanged sampled area keeps it, so only the composite is drawn again.
+    pub textures: u64,
     /// The small shapes whose face the pass measures when it makes the container's blurred backdrop, for the tone of
     /// their text ([`ToneProbe`]).
     pub probes: Vec<ToneProbe>,
@@ -88,42 +95,46 @@ const TONE_GRID: i32 = 32;
 /// Readbacks waiting for the GPU at once; past it the oldest is given up.
 const MAX_TONE_READS: usize = 8;
 
+/// What the blurred textures of `container` are made from besides the backdrop and where it is captured
+/// ([`GlassContainer::textures`]): exactly what the pass that makes them reads of it.
+fn texture_identity(container: &Container) -> u64 {
+    let mut sig = Sig::new().u(u64::from(container.params.capture_scale.to_bits()));
+    for (sigma, used) in container.levels() {
+        sig = sig
+            .u(u64::from(used))
+            .u(if used { u64::from(sigma.to_bits()) } else { 0 });
+    }
+    let fill = container
+        .fill_sigma()
+        .map_or(u64::MAX, |s| u64::from(s.to_bits()));
+    let bleed = match container.bleed_source() {
+        None => 0,
+        Some(BleedSource::Level(i)) => 1 + i as u64,
+        Some(BleedSource::Fill) => 0x100,
+        Some(BleedSource::Own(s)) => 0x1_0000_0000 | u64::from(s.to_bits()),
+    };
+    sig.u(fill)
+        .u(bleed)
+        .u(u64::from(container.reads_sharp()))
+        .finish()
+}
+
 impl GlassContainer {
     pub fn new(container: Container) -> Self {
+        let textures = texture_identity(&container);
         let mut h = std::collections::hash_map::DefaultHasher::new();
+        textures.hash(&mut h);
         container.mode.hash(&mut h);
-        container.spacing.to_bits().hash(&mut h);
-        // a popup's glass lays its own face fill over the recipe of the mode
-        for v in container.params.face.fill {
-            v.to_bits().hash(&mut h);
-        }
-        // a layer's glass: its lens, its blur ramp, where its rim is lit from and its lifted shadow
-        for v in [
-            container.lens,
-            container.blur_ramp[0],
-            container.blur_ramp[1],
-            container.params.highlight.angle,
-            container.params.shadow.opacity,
-        ] {
-            v.to_bits().hash(&mut h);
-        }
-        for s in &container.shapes {
-            for v in s.rect.iter().chain([&s.radius]) {
-                v.to_bits().hash(&mut h);
-            }
-            // interactive glass under a press takes circular corners
-            s.corner.hash(&mut h);
-        }
-        // each shape's look and values, its own recipe's where it has one (a segment in other glass than its group, a
-        // tint)
-        for look in container.looks() {
-            bytemuck::bytes_of(&look).hash(&mut h);
-        }
+        // everything the composite reads, at one pixel a point placed nowhere: the shapes, their corners, looks and
+        // values, the whole drop shadow, the tint, the blur ramp, the lens, the edge and the cut, whatever set them
+        let uniform = GlassUniform::new(&container, 1.0, [[0.0; 3]; 2], [0.0; 4], [0.0; 2], 1.0);
+        bytemuck::bytes_of(&uniform).hash(&mut h);
         for v in &container.values {
             bytemuck::bytes_of(v).hash(&mut h);
         }
         Self {
             key: h.finish(),
+            textures,
             container,
             probes: Vec::new(),
             within: None,
@@ -135,11 +146,12 @@ impl GlassContainer {
     /// unchanged shape is measured too.
     pub fn with_probes(mut self, probes: Vec<ToneProbe>) -> Self {
         if !probes.is_empty() {
-            let mut sig = Sig::new().u(self.key);
+            let mut sig = Sig::new().u(self.textures);
             for p in &probes {
                 sig = sig.u(p.serial);
             }
-            self.key = sig.finish();
+            self.textures = sig.finish();
+            self.key = Sig::new().u(self.key).u(self.textures).finish();
         }
         self.probes = probes;
         self
@@ -147,13 +159,14 @@ impl GlassContainer {
 
     /// The container reading only `within` (output-local points) of what lies below it.
     pub fn within(mut self, within: Rectangle<f64, Logical>) -> Self {
-        self.key = Sig::new()
-            .u(self.key)
+        self.textures = Sig::new()
+            .u(self.textures)
             .f(within.loc.x)
             .f(within.loc.y)
             .f(within.size.w)
             .f(within.size.h)
             .finish();
+        self.key = Sig::new().u(self.key).u(self.textures).finish();
         self.within = Some(within);
         self
     }
@@ -200,11 +213,12 @@ impl GlassContainer {
         c
     }
 
-    /// Identity of the textures the container needs: its look, the backdrop signature and the scale.
+    /// Identity of the textures the container needs: what they are made from ([`GlassContainer::textures`]), the
+    /// backdrop signature and the scale. Not its shapes or its look: those are the composite's.
     pub fn state(&self, generation: u64, scale: f32) -> u64 {
         Sig::new()
             .u(generation)
-            .u(self.key)
+            .u(self.textures)
             .u(scale.to_bits() as u64)
             .finish()
     }

@@ -3,7 +3,7 @@
 
 use super::*;
 
-// ---- Reduce Transparency on the regular base (recorded) -------------------------------------------------------------
+// ---- Reduce Transparency on the regular base ------------------------------------------------------------------------
 
 /// Blur radius of regular glass with Reduce Transparency, in points.
 pub const REDUCED_TRANSPARENCY_BLUR: f32 = 40.625;
@@ -15,8 +15,7 @@ const REDUCED_BLACK_LIGHT: f32 = 0.9;
 const REDUCED_CONTRAST_BLACK_LIGHT: f32 = 0.5;
 const REDUCED_SATURATION_LIGHT: f32 = 0.9;
 /// The dark face with Reduce Transparency: its saturation (with Increase Contrast too, the contrast saturation), and
-/// the levels that map it into a dark surface with no luma cap: black lift and white gain (inferred from the system's
-/// dark chrome with the setting, as the glass's own are not recorded).
+/// the levels that map it into a dark surface with no luma cap: black lift and white gain.
 const REDUCED_SATURATION_DARK: f32 = 0.7;
 const REDUCED_CONTRAST_SATURATION_DARK: f32 = 0.8;
 const REDUCED_BLACK_DARK: f32 = 0.225;
@@ -60,7 +59,7 @@ pub(super) fn flatten(p: &mut GlassParams) {
     p.shadow.ring_opacity = 0.0;
 }
 
-// ---- Reduce Motion (recorded) ---------------------------------------------------------------------------------------
+// ---- Reduce Motion --------------------------------------------------------------------------------------------------
 
 /// Smallest blur radius with Reduce Motion.
 const REDUCED_MOTION_BLUR: f32 = 8.0;
@@ -69,11 +68,12 @@ const REDUCED_MOTION_LEVELS: [f32; BLUR_LEVELS] = [1.0, 1.0, 0.625, 0.625];
 /// How much wider the control centre's and the notification centre's blur is with Reduce Motion (their shared stage).
 pub const REDUCED_MOTION_BLUR_SCALE: f32 = 4.0;
 
-/// The Reduce Motion stage over `p`: no inner bend, and a blur at least [`REDUCED_MOTION_BLUR`] wide over the Reduce
-/// Motion levels, [`REDUCED_MOTION_BLUR_SCALE`] times as wide first for the variants whose recipes take the shared
-/// stage.
+/// The Reduce Motion stage over `p`: no inner bend and no bend outside the edge, and a blur at least
+/// [`REDUCED_MOTION_BLUR`] wide over the Reduce Motion levels, [`REDUCED_MOTION_BLUR_SCALE`] times as wide first for the
+/// variants whose recipes take the shared stage.
 pub(super) fn reduced_motion(p: &mut GlassParams, variant: GlassVariant) {
     p.refraction.height = 0.0;
+    p.refraction.outer_opacity = 0.0;
     if matches!(
         variant,
         GlassVariant::ControlCenter | GlassVariant::NotificationCenter
@@ -84,7 +84,7 @@ pub(super) fn reduced_motion(p: &mut GlassParams, variant: GlassVariant) {
     p.blur.level_opacity = REDUCED_MOTION_LEVELS;
 }
 
-// ---- the legibility amount (recorded) -------------------------------------------------------------------------------
+// ---- the legibility amount ------------------------------------------------------------------------------------------
 
 /// The legibility amount of the system at which nothing changes.
 pub const LEGIBILITY_NEUTRAL: f32 = 0.5;

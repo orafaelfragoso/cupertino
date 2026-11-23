@@ -9,6 +9,7 @@ use cupertino_glass::glass::{
 };
 use cupertino_glass::gpu::HeadlessGpu;
 use cupertino_theme::glass::{GlassBorder, GlassParams, GlassSpecular, GlassStyle, GlowDiffuse};
+use cupertino_theme::{GlassModifiers, GlassVariant};
 
 const FLAT: Rgb = [0.3, 0.5, 0.7];
 
@@ -198,6 +199,61 @@ fn the_edge_bleed_reads_a_copy_of_its_deviation_the_container_blurs_already() {
     c.params.bleed.opacity = 0.2;
     c.params.bleed.blur = widest;
     assert_eq!(c.bleed_source(), Some(BleedSource::Level(0)));
+}
+
+#[test]
+fn the_edge_bleed_reads_a_copy_within_a_tenth_of_its_deviation_and_reaches_as_far_as_that_copy() {
+    let mut c = square();
+    let fill = c.fill_sigma().unwrap();
+    c.params.bleed.opacity = 0.2;
+    c.params.bleed.amount = 5.0;
+    c.params.bleed.height = 10.0;
+    c.values[0].bleed_amount = 5.0;
+    c.values[0].bleed_height = 10.0;
+    // within a tenth of its own deviation of the blur fill's: the fill's copy, read as far as its deviation
+    c.params.bleed.blur = fill * 0.95;
+    assert_eq!(c.bleed_source(), Some(BleedSource::Fill));
+    assert_eq!(c.bleed_sigma(), Some(fill));
+    let [x, ..] = c.sample_area().unwrap();
+    assert!((x + 5.0 + 3.0 * fill).abs() < 1e-4, "{x}");
+    // further off: a copy of its own
+    c.params.bleed.blur = fill * 0.85;
+    assert_eq!(c.bleed_source(), Some(BleedSource::Own(fill * 0.85)));
+}
+
+/// The regular toolbar glass of a capsule `side` points high, twice as wide.
+fn toolbar(side: f32) -> Container {
+    let mode = GlassMode::new(false, GlassVariant::ToolbarItem, GlassModifiers::DEFAULT);
+    Container::new(
+        vec![GlassShape::new([0.0, 0.0, 2.0 * side, side], side / 2.0)],
+        0.0,
+        mode,
+    )
+}
+
+#[test]
+fn a_controls_edge_bleed_keeps_its_own_blur_and_a_panels_reads_its_blur_fill_close_around_it() {
+    // a 36-point capsule: 0.35 of its side for the reach and the blur, read that and three deviations around it
+    let capsule = toolbar(36.0);
+    let p = &capsule.params.bleed;
+    assert!(
+        (p.blur - 12.6).abs() < 1e-4 && (p.amount - 12.6).abs() < 1e-4,
+        "{p:?}"
+    );
+    assert_eq!(capsule.bleed_source(), Some(BleedSource::Own(p.blur)));
+    let [x, ..] = capsule.sample_area().unwrap();
+    assert!((x + 4.0 * 12.6).abs() < 1e-3, "{x}");
+    // a 300-point panel: its bleed reads the blur fill's copy and no further than that and three deviations
+    let panel = toolbar(300.0);
+    assert_eq!(panel.bleed_source(), Some(BleedSource::Fill));
+    let fill = panel.fill_sigma().unwrap();
+    let [x, ..] = panel.sample_area().unwrap();
+    assert!(-x <= panel.params.bleed.amount + 3.0 * fill + 1e-3, "{x}");
+    assert!(
+        -x <= 64.0 + 1e-3,
+        "a 300-point panel reads {} points around it",
+        -x
+    );
 }
 
 #[test]

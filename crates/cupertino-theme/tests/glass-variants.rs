@@ -2,9 +2,10 @@
 //! inactive and at the size it resolves at, and every legacy style draws as its variant.
 
 use cupertino_theme::glass::{
-    legibility_amount, GlassBase, GlassShadow, SidebarEdge, CLEAR_BLUR, GLASS_SIZE_MEDIUM,
-    GLASS_SIZE_MINIMUM, LARGE_PANEL_BLACK_LIGHT, LARGE_PANEL_SATURATION_DARK,
-    LARGE_PANEL_SHADOW_BLUR, MODULE_BLACK, MODULE_SATURATION, MODULE_WHITE, TRACK_CAPTURE_SCALE,
+    legibility_amount, GlassBase, GlassShadow, SidebarEdge, BLEED_AMOUNT_MAX, BLEED_BLUR_MAX,
+    CLEAR_BLUR, GLASS_SIZE_MEDIUM, GLASS_SIZE_MINIMUM, LARGE_PANEL_BLACK_LIGHT,
+    LARGE_PANEL_SATURATION_DARK, LARGE_PANEL_SHADOW_BLUR, MODULE_BLACK, MODULE_SATURATION,
+    MODULE_WHITE, TRACK_CAPTURE_SCALE,
 };
 use cupertino_theme::{
     GlassMode, GlassModifiers, GlassParams, GlassSize, GlassStyle, GlassVariant,
@@ -52,7 +53,7 @@ fn inactive(variant: GlassVariant, dark: bool, side: f32) -> GlassParams {
 const DEG: f32 = std::f32::consts::PI / 180.0;
 
 #[test]
-fn every_legacy_style_draws_as_its_macos_variant() {
+fn every_legacy_style_draws_as_its_variant() {
     use GlassSize::*;
     use GlassVariant as V;
     let d = GlassModifiers::DEFAULT;
@@ -132,8 +133,8 @@ fn regular_glass_resolves_its_recorded_values_at_each_size() {
             assert_close!(p.refraction.height, height, "{side}");
             assert_eq!(p.refraction.outer_opacity, 0.0);
             assert_close!(p.bleed.height, bleed, "{side}");
-            assert_close!(p.bleed.amount, bleed);
-            assert_close!(p.bleed.blur, bleed);
+            assert_close!(p.bleed.amount, bleed.min(BLEED_AMOUNT_MAX));
+            assert_close!(p.bleed.blur, bleed.min(BLEED_BLUR_MAX));
             assert_eq!(p.bleed.opacity, 0.2);
             assert_eq!(p.bleed.darken, !dark);
             let (bb, bw, bs) = if dark {
@@ -164,8 +165,27 @@ fn regular_glass_resolves_its_recorded_values_at_each_size() {
             assert_eq!(p.border.opacity, 0.0);
         }
     }
-    // the edge bleed's blur stops at 160 points
-    assert_close!(at(GlassVariant::Regular, false, 1000.0).bleed.blur, 160.0);
+    // the edge bleed's blur stops at the blur fill's deviation, and its reach as far
+    let large = at(GlassVariant::Regular, false, 1000.0);
+    assert_close!(large.bleed.blur, large.fill_sigma());
+    assert_close!(large.bleed.amount, 16.0);
+}
+
+#[test]
+fn the_edge_bleed_keeps_a_controls_size_and_bounds_a_panels_reach() {
+    // a 36-point toolbar capsule: 0.35 of its side, under both caps
+    for dark in [false, true] {
+        let b = at(GlassVariant::ToolbarItem, dark, 36.0).bleed;
+        assert_close!(b.blur, 12.6);
+        assert_close!(b.amount, 12.6);
+        assert_close!(b.height, 12.6);
+    }
+    // a 300-point panel: its band still a fraction of its side, its reach and blur capped, read at most 64 points out
+    let b = at(GlassVariant::Regular, false, 300.0).bleed;
+    assert_close!(b.height, 105.0);
+    assert_close!(b.amount, BLEED_AMOUNT_MAX);
+    assert_close!(b.blur, BLEED_BLUR_MAX);
+    assert!(b.amount + 3.0 * b.blur <= 64.0 + EPS);
 }
 
 #[test]
@@ -223,7 +243,7 @@ fn reduce_transparency_on_regular_glass_takes_the_recorded_optics_and_faces() {
 }
 
 #[test]
-fn reduce_motion_flattens_the_inner_bend_and_widens_the_blur_four_times_for_the_centres() {
+fn reduce_motion_flattens_both_bends_and_widens_the_blur_four_times_for_the_centres() {
     for variant in GlassVariant::ALL {
         if variant == GlassVariant::Identity {
             continue;
@@ -232,6 +252,7 @@ fn reduce_motion_flattens_the_inner_bend_and_widens_the_blur_four_times_for_the_
             let plain = at(variant, dark, 100.0);
             let p = with(variant, dark, 100.0, |m| m.reduce_motion = true);
             assert_eq!(p.refraction.height, 0.0, "{variant:?}");
+            assert_eq!(p.refraction.outer_opacity, 0.0, "{variant:?}");
             assert_eq!(p.blur.level_opacity, [1.0, 1.0, 0.625, 0.625]);
             let scale = match variant {
                 GlassVariant::ControlCenter | GlassVariant::NotificationCenter => 4.0,
@@ -251,6 +272,15 @@ fn reduce_motion_flattens_the_inner_bend_and_widens_the_blur_four_times_for_the_
         .radius,
         8.0
     );
+    // the dock and the app switcher bend what lies outside their edge, but not with Reduce Motion
+    for variant in [GlassVariant::Dock, GlassVariant::AppSwitcher] {
+        assert!(
+            at(variant, false, 100.0).refraction.outer_opacity > 0.0,
+            "{variant:?}"
+        );
+        let reduced = with(variant, false, 100.0, |m| m.reduce_motion = true);
+        assert_eq!(reduced.refraction.outer_opacity, 0.0, "{variant:?}");
+    }
 }
 
 #[test]

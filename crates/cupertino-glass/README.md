@@ -111,8 +111,9 @@ placement block at `GLASS_SAMPLER`), which only a recipe that turns those stages
    `black·(1 − L) − (1 − white)·L` added to every channel (L the luma after the compression), all on encoded values
    (`face_tone`);
 5. edge bleed, fill and tint: inside the bleed band (`GlassBleed::height` points, t the depth into it), the backdrop
-   `amount · (1 − t)` points outside the pixel along the outward normal, read from its own Gaussian of deviation
-   `GlassBleed::blur` (`BLEED_LEVEL`), saturated about its luma and through its own levels `black`/`white`
+   `amount · (1 − t)` points outside the pixel along the outward normal, read from a Gaussian of deviation
+   `GlassBleed::blur` (`BLEED_LEVEL`: the blurred copy or blur fill whose deviation lies within a tenth of it,
+   `BLEED_SHARE_TOLERANCE`, else a copy of its own; `Container::bleed_source`), saturated about its luma and through its own levels `black`/`white`
    (`bleed_tone`), blends into the face at `opacity · (1 − t)²`, by the smaller channel (`darken`, light glass) or
    normally (dark glass) (`bleed_read`, `bleed_into`); the regular glass bleeds at 0.2. Then the face's fill and the tint
    (`GlassParams::tint`, straight, its alpha the tint's times the face opacity its caller asks for,

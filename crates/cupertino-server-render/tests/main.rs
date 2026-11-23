@@ -9,5 +9,7 @@ mod decorations_frame;
 mod decorations_shadow;
 #[path = "decorations-titlebar.rs"]
 mod decorations_titlebar;
+#[path = "glass-keys.rs"]
+mod glass_keys;
 #[path = "render-models.rs"]
 mod render_models;

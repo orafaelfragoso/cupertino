@@ -48,7 +48,7 @@ bottom margin of 140 pt, no keyboard interactivity and an empty input region. Th
 (`view::window`); the component's `Program::surface` gives it that layer surface (`cupertino-kit-shell`), on the
 server's first output; with no output there is no window, and a window the server closed is made anew.
 Its body is the glass of a notification banner (`Glass::card`, the `NotificationCenter` variant at medium size, as
-macOS draws these overlays) over the whole window with the window's radius, and its alpha follows the fade. The glyph
+the reference draws these overlays) over the whole window with the window's radius, and its alpha follows the fade. The glyph
 (an `Icon`) and the meter draw over it as one layer at the same alpha. While hidden the surface stays mapped, draws
 nothing and has no glass. Glyphs are template symbols of the asset directory
 (`symbol.speaker.slash`, `symbol.speaker.low`, `symbol.speaker`, `symbol.speaker.high`, `symbol.sun`, `symbol.keyboard-brightness` and `.off`, `symbol.mic` and `.slash`; `model::ICON_NAMES`),

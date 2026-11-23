@@ -689,9 +689,9 @@ impl<M: 'static> Widget<M> for Keys<M> {
         }
     }
 
-    /// The toolbar's body under its controls, the whole window with its corners: regular glass, as macOS draws its
-    /// capture toolbar. With Reduce Transparency, or where the desktop shows no glass, the theme's opaque fill of the
-    /// heads-up surface in the same shape.
+    /// The toolbar's body under its controls, the whole window with its corners: regular glass, as the reference draws
+    /// its capture toolbar. With Reduce Transparency, or where the desktop shows no glass, the theme's opaque fill of
+    /// the heads-up surface in the same shape.
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
         let glass = !cx.env().theme.preferences.reduce_transparency
             && cx.glass(Glass::regular().radius(TOOLBAR_RADIUS));

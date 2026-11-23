@@ -82,7 +82,7 @@ time-stamped name.
 - The overlay draws the crosshair and hides the system pointer.
 - The first output's overlay takes the keyboard (see Keyboard).
 
-**Toolbar.** The overlay plus the toolbar, a 560 × 48 pt window on regular glass (as macOS draws its capture toolbar;
+**Toolbar.** The overlay plus the toolbar, a 560 × 48 pt window on regular glass (as the reference draws its capture toolbar;
 with Reduce Transparency, or where the desktop shows no glass, the opaque heads-up fill in its shape), centred 40 pt
 above the bottom of the first output and above the dock's exclusive zone. It takes the keyboard; the overlays take none.
 

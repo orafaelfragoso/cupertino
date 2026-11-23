@@ -140,7 +140,7 @@ impl<M: 'static> Widget<M> for Slot<M> {
             let scrolled = cx.page_scrolled();
             let shown =
                 scrolled && cx.window_active() && cx.material(Surface::ToolbarBand, 0.0, 1.0);
-            // the band's blur fades out down the row, as macOS's scroll edge
+            // the band's blur fades out down the row, as a scroll edge does
             if shown {
                 cx.set_blur_ramp(crate::scroll_edge::TOOLBAR_BAND_RAMP);
             }

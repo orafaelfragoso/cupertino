@@ -255,7 +255,7 @@ from the application's model and reports changes as messages.
   title bar colour (`ColorRole::InactiveTitlebar`), solid with a hard edge and no veil, with the separator under it
   where the active band has one. Its bar, paging and focus scrolling keep below the row. Where the window shows
   materials the row lays the soft band itself, the `ToolbarBand` material, and the veil is left out: its blur fades
-  out down the row as macOS's scroll edge (`scroll_edge::TOOLBAR_BAND_RAMP`, all of it under the row's top and 3 % at
+  out down the row as a scroll edge does (`scroll_edge::TOOLBAR_BAND_RAMP`, all of it under the row's top and 3 % at
   the band's bottom, `PaintCx::set_blur_ramp`); a compositor without blur ramps blurs the band evenly.
   Without a layer the row draws in place, the page is clipped below it and there is no edge. A `TableView` with
   `header_top` puts its header that far down, raised with the row, and starts its rows below both; the rows scroll

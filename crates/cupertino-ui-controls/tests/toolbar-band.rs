@@ -1,5 +1,5 @@
 //! The band a toolbar row lays over a page scrolled under it: the compositor's material, whose blur fades out down the
-//! row as macOS's scroll edge does, shown only once the page is scrolled; with Reduce Transparency the row keeps its
+//! row as a scroll edge does, shown only once the page is scrolled; with Reduce Transparency the row keeps its
 //! solid fill and asks for no material.
 
 use crate::support;

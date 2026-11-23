@@ -140,10 +140,10 @@ was announced), the id the next one takes, and do not disturb (a duration that e
   `max(dx/100, 8) / 15`; a leftward one springs back.
 - **Do not disturb.** Banners are suppressed and notifications kept in the centre. Critical urgency bypasses it
   (`critical_bypasses_dnd`), and `Until(t) ends by itself.
-- **Drawing.** Kit controls on a card the `view` module paints: card glass under the card (`PaintCx::glass`, `Glass::card`, cut to the
+- **Drawing.** Kit controls on a card the `view` module paints: card glass under the card (`PaintCx::glass`, `Glass::card` named as the notification centre variant at the medium size, cut to the
   part the list shows), a 0.5 pt separator outline, 18 pt corners and a wide dark halo (standard deviation 32 pt, peak 0.45 black, the surface holds its 96 pt reach) drawn only outside it and kept off the other cards only where the list shows them (a card under the header or past the list's bottom edge leaves no unshadowed patch in its shape; a card the list cuts casts the halo of the part it shows, straight along the list's edge, so the halo goes on over the part cut off), faded as one
   layer with its content. A collapsed group's front card and the sheets peeking below it join one glass container with a
-  hard edge, so they read as one shape; each sheet's shadow, darkening and outline stay off the front card. The list keeps its glass
+  hard edge, so they read as one shape; the sheets' glass steps back (subdued), and each sheet's shadow, darkening and outline stay off the front card. The list keeps its glass
   within what one window shows (`MAX_MATERIALS`, counted over the part in view): every card keeps its glass, and the
   sheets of collapsed groups keep theirs a whole group at a time down the list while room is left; the sheets past it are
   opaque sheets. Where the glass is refused (no compositor effects, or more cards in view than the window may show) a card

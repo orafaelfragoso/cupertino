@@ -78,6 +78,9 @@ fn glass_keys_a_change_of_blur_makes_the_textures_again() {
     );
 }
 
+/// A change of a container's recipe.
+type Change = fn(&mut Container);
+
 /// A glass window's container, 300 points square.
 fn window() -> Container {
     Container::new(
@@ -105,7 +108,7 @@ fn glass_keys_a_sheets_shadow_tells_its_glass_from_an_alerts() {
 #[test]
 fn glass_keys_every_part_of_the_recipe_the_composite_reads_changes_the_key() {
     let plain = GlassContainer::new(window()).key;
-    let changes: [(&str, fn(&mut Container)); 7] = [
+    let changes: [(&str, Change); 7] = [
         ("shadow offset", |c| c.params.shadow.offset[1] += 2.0),
         ("shadow colour", |c| c.params.shadow.fill[0] = 0.5),
         ("tint", |c| {

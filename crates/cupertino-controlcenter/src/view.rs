@@ -87,6 +87,11 @@ const DELETE: Keysym = Keysym(0xffff);
 const CONTAINER: u32 = 1;
 const BLEND: f64 = 8.0;
 
+/// How strongly the clear glass panel behind the tiles shows at rest, as a share of the panel's opacity: faint, so the
+/// panel all but vanishes into the desktop around it, its face lifting what lies under the tiles and between them by a
+/// level or two and its edge a trace of a line, rather than a pale plate with a bright rim.
+pub const PANEL_GLASS: f64 = 0.25;
+
 /// The fills a tile paints itself, in the dark and the light appearance. `RT_*`: the opaque panel and tiles with Reduce
 /// Transparency. `FALLBACK`: a tile the window cannot show glass under.
 const RT_GROUP: Color = Color::new(0.302, 0.302, 0.302, 1.0);

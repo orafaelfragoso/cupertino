@@ -22,14 +22,21 @@ const MODULE_RIM_BIAS: f32 = -0.3;
 /// The module's face, the same in both appearances: a little more colour, black lifted to about 27 of 255 and white held
 /// near 178, so every channel comes out at about `0.59 · c + 27` and a sunlit backdrop as a mid tone of its own colour.
 pub const MODULE_SATURATION: f32 = 1.045;
-pub const MODULE_WHITE: f32 = 0.697;
+pub const MODULE_WHITE: f32 = 0.685;
 pub const MODULE_BLACK: f32 = 0.107;
 /// The module's line of light just inside its top and bottom edges: its strength (the share of its colour added at its
 /// middle), its half-width and where its middle lies inside the edge, in points, and the bottom's strength as a share
 /// of the top's: a bright line about a point wide along the top and as bright along the bottom, which takes a
-/// mid-toned face to near white.
-pub const MODULE_LINE: (f32, f32, f32) = (0.55, 0.55, -0.45);
+/// mid-toned face to near white and a dark warm one to a pale tint of it.
+pub const MODULE_LINE: (f32, f32, f32) = (0.65, 0.45, -0.35);
 pub const MODULE_LINE_BOTTOM: f32 = 1.0;
+/// The soft glow the module's line of light spreads inwards under it: about a tenth of the line's light a point inside
+/// the edge, fading out some five points in, along the same arcs.
+pub const MODULE_LINE_DIFFUSE: GlowDiffuse = GlowDiffuse {
+    height_scale: 6.0,
+    spread_scale: 1.0,
+    amount_scale: 0.2,
+};
 /// The exponent on the module line's arc falloff: under 1, so the line keeps most of its light round the corners until
 /// the side's dark line takes over.
 const MODULE_LINE_CURVATURE: f32 = 0.5;
@@ -57,6 +64,10 @@ const SUBDUED_MODULE_BLACK_DARK: f32 = 0.0;
 /// white gain (recorded, relative to the face at rest).
 pub const CONTROL_CENTER_CONTRAST_BLACK_LIGHT: f32 = -0.2;
 pub const CONTROL_CENTER_CONTRAST_WHITE_DARK: f32 = 0.55;
+/// The dark face's luma cap with Increase Contrast (fitted): the white gain lifts the face over a dark backdrop, and the
+/// cap keeps a bright one from carrying it towards white, so the module's light labels and symbols stay at about 4:1
+/// over any backdrop rather than vanishing into a sunlit one.
+pub const CONTROL_CENTER_CONTRAST_MAX_LUMA_DARK: f32 = 0.35;
 /// The control centre with Reduce Transparency: the blur radius in points at full opacity, the shifts of the face's
 /// black lift and white gain, light and dark (recorded, relative to the face at rest), and the dark face's saturation
 /// (the clear glass's).
@@ -94,7 +105,7 @@ pub(super) fn control_center(mode: GlassMode, s: f32) -> GlassParams {
     p.highlight.glow_fill = MODULE_LINE_BOTTOM;
     p.highlight.spread = MODULE_LINE_SPREAD;
     p.highlight.curvature = MODULE_LINE_CURVATURE;
-    p.highlight.diffuse = GlowDiffuse::NONE;
+    p.highlight.diffuse = MODULE_LINE_DIFFUSE;
     p.highlight.matrix = MODULE_LINE_MATRIX;
     p.shadow.edge_line = MODULE_EDGE_LINE;
     p.shadow.edge_line_sides = MODULE_EDGE_LINE_SIDES;
@@ -111,6 +122,7 @@ pub(super) fn control_center(mode: GlassMode, s: f32) -> GlassParams {
     if mode.increase_contrast {
         if dark {
             f.white += CONTROL_CENTER_CONTRAST_WHITE_DARK;
+            f.max_luma = CONTROL_CENTER_CONTRAST_MAX_LUMA_DARK;
         } else {
             f.black += CONTROL_CENTER_CONTRAST_BLACK_LIGHT;
         }

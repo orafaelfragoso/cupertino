@@ -1,6 +1,6 @@
-//! The panel's glass: clear glass of its own behind the tiles, in the outline of the opaque panel of Reduce
+//! The panel's glass: faint clear glass of its own behind the tiles, in the outline of the opaque panel of Reduce
 //! Transparency, faded with the panel and never in the tiles' container; the tiles' module glass over it in one
-//! container; with Reduce Transparency no glass at all.
+//! container; with Reduce Transparency no glass at all. The tiles' labels over that glass.
 
 use std::num::NonZeroU32;
 use std::sync::Arc;
@@ -14,12 +14,12 @@ use cupertino_kit::core::{Application, Command, RuntimeOptions, Window};
 use cupertino_kit::geometry::Rect;
 use cupertino_kit::layout::LayoutDirection;
 use cupertino_kit::platform::{GlassStyle, Timestamp, WindowId, WindowRequest};
-use cupertino_kit::render::{CpuConfig, CpuRenderer};
+use cupertino_kit::render::{CpuConfig, CpuRenderer, PaintOp};
 use cupertino_kit::test::{
     Capabilities, FontIndex, ManualClock, PlaceholderIcons, TestDriver, WindowStates,
 };
 use cupertino_kit::text::{GlyphRaster, TextSystem};
-use cupertino_kit::theme::{Appearance, ThemePreferences, ThemeTokens};
+use cupertino_kit::theme::{Appearance, Color, ThemePreferences, ThemeTokens};
 
 /// The runtime turns between two looks at the window.
 const TURNS: u32 = 10_000;
@@ -103,8 +103,8 @@ struct Region {
     alpha: f64,
 }
 
-/// The glass regions the panel's window asked for the last time it asked, on a desktop that shows materials.
-fn glass(reduce_transparency: bool) -> Vec<Region> {
+/// The panel shown and drawn on a desktop that shows materials, and its window.
+fn shown(reduce_transparency: bool) -> (TestDriver<Panel>, WindowId) {
     let capabilities = Capabilities {
         app_effects: true,
         ..Capabilities::default()
@@ -122,6 +122,12 @@ fn glass(reduce_transparency: bool) -> Vec<Region> {
         .configure(window, None, WindowStates::default())
         .unwrap();
     driver.run_until_idle(turns).unwrap();
+    (driver, window)
+}
+
+/// The glass regions the panel's window asked for the last time it asked, on a desktop that shows materials.
+fn glass(reduce_transparency: bool) -> Vec<Region> {
+    let (mut driver, window) = shown(reduce_transparency);
     driver
         .window_system_mut()
         .requests(window)
@@ -159,7 +165,14 @@ fn the_tiles_lie_on_a_clear_glass_panel_of_its_own() {
     let panel = panels[0];
     assert_eq!(panel.container, 0, "the panel is glass on its own");
     assert_eq!(panel.radius, GROUP_RADIUS);
-    assert_eq!(panel.alpha, FADING, "the panel fades with the card");
+    assert!(
+        panel.alpha > 0.0 && panel.alpha <= 0.5 * FADING,
+        "the clear panel shows faintly, never as a plate: {panel:?}"
+    );
+    assert!(
+        (panel.alpha - FADING * view::PANEL_GLASS).abs() < 1e-9,
+        "the panel fades with the card at its faint strength: {panel:?}"
+    );
     assert_eq!(
         (panel.rect.x(), panel.rect.y(), panel.rect.width()),
         (WINDOW_ORIGIN.x, WINDOW_ORIGIN.y, WINDOW.width)
@@ -197,4 +210,37 @@ fn the_tiles_lie_on_a_clear_glass_panel_of_its_own() {
 fn with_reduce_transparency_the_panel_asks_for_no_glass() {
     let regions = glass(true);
     assert!(regions.is_empty(), "no glass: {regions:?}");
+}
+
+#[test]
+fn a_tiles_second_line_is_drawn_in_its_titles_colour() {
+    let (driver, window) = shown(false);
+    let snapshot = driver.runtime().snapshot(window).unwrap();
+    // every text run of the panel at rest by its size: the titles in the body size, the tiles' second lines smaller
+    let mut runs: Vec<(f32, Color)> = Vec::new();
+    for node in &snapshot.display_list.nodes {
+        for op in &node.ops {
+            if let PaintOp::Glyphs { run, color, .. } = op {
+                runs.push((run.size, *color));
+            }
+        }
+    }
+    let largest = runs.iter().map(|r| r.0).fold(0.0, f32::max);
+    let titles: Vec<Color> = runs
+        .iter()
+        .filter(|r| r.0 == largest)
+        .map(|r| r.1)
+        .collect();
+    let lines: Vec<Color> = runs.iter().filter(|r| r.0 < largest).map(|r| r.1).collect();
+    assert!(
+        !titles.is_empty() && !lines.is_empty(),
+        "titles and second lines: {runs:?}"
+    );
+    for line in &lines {
+        assert_eq!(
+            Some(line),
+            titles.first(),
+            "a second line reads as well as its title over a bright backdrop: {runs:?}"
+        );
+    }
 }

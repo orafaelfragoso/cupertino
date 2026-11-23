@@ -60,10 +60,13 @@ motion, only its alpha changing, so nothing changes look the moment a motion sta
 follows the fade; the content fades as one layer. Module glass
 keeps the wallpaper's colour: over white a tile comes out at 244 in the light appearance and 207 in the dark one. The
 Edit Controls capsule is glass as the tiles are.
-Behind the tiles lies the panel: clear glass (`Glass::clear`, as macOS lays its modules on a clear glass backdrop) in
+Behind the tiles lies the panel: clear glass (`Glass::clear`) in
 the outline the opaque panel of Reduce Transparency has, 8 pt around the grid and the Edit Controls capsule with 40 pt
-corners, closing in to an open detail view as it opens, faded with the panel. It is glass on its own, outside the
-tiles' container, so it never blends with them; with Reduce Transparency the opaque panel stands in its place.
+corners, closing in to an open detail view as it opens, faded with the panel. It is drawn at a quarter of the panel's
+opacity (`view::PANEL_GLASS`), so at rest it all but vanishes into the desktop: what lies under and between the tiles
+is lifted by a level or two and its edge is a trace of a line, where at full strength it showed as a paler plate with a
+bright rim and lifted the tiles' backdrop with it. It is glass on its own, outside the tiles' container, so it never
+blends with them; with Reduce Transparency the opaque panel stands in its place.
 With Reduce Transparency each tile fills grey 0.114 on one grey 0.302 panel of 40 pt corners (0.96 on 0.82 in the light
 appearance), 8 pt around the grid and the Edit Controls capsule, closing in to an open detail view as it opens. With
 Increase Contrast each tile fills grey 0.463 inside a 0.5 pt rim of grey 0.341 (0.86 inside 0.45 in the light
@@ -77,12 +80,11 @@ it, over the whole output.
 
 **Tiles.** A capsule shows a 36 pt badge 14 pt in from its leading and top edges, white with the symbol in the accent
 colour when the module is on, a veil when it is off (white at 0.108 in the dark appearance, black at 0.102 in the light
-one), and its title (13 semibold) over its state (11 regular),
+one), and its title (13 semibold) over its state (11 medium),
 wrapping onto a second line where the column is too narrow. The sizes are the theme's body and caption sizes; the panel
 sets its labels itself (`view::Label`), since the kit's static text sets every label in its role's size. Over the glass a
-tile's title is the primary label colour and its state the secondary one, so the state reads as a quieter line under the
-name; the kit draws both as the glass's foreground (black in the light appearance, white in the dark one, the
-secondary label at the strength that shifts the face by −0.4 or +0.3). The display and sound tiles' titles and the Edit
+tile's title and its state are both the primary label colour, so the state reads as well as the name over a bright
+backdrop; the kit draws them as the glass's foreground (black in the light appearance, white in the dark one). The display and sound tiles' titles and the Edit
 Controls label (13 medium) are primary labels, and a detail's heading is 11 semibold in the secondary label colour.
 Other veils (a pressed control, a row under the pointer, the artwork placeholder, a separator) are white in the dark
 appearance and black in the light one. The badge is the

@@ -266,9 +266,9 @@ pub(super) fn group(height: f64) -> Rect {
     )
 }
 
-/// The panel behind the tiles: clear glass in the panel's outline ([`group`]), as macOS lays its modules on a clear
-/// glass backdrop, on its own so it never blends with the tiles' container. With Reduce Transparency it draws nothing:
-/// the board paints the opaque panel there. Presses go through to the board.
+/// The panel behind the tiles: clear glass in the panel's outline ([`group`]) at [`PANEL_GLASS`] of the panel's
+/// opacity, on its own so it never blends with the tiles' container. With Reduce Transparency it draws nothing: the
+/// board paints the opaque panel there. Presses go through to the board.
 pub(super) struct PanelGlass {
     /// Height of the tiles the panel goes around, as the board's.
     pub(super) height: f64,
@@ -310,7 +310,7 @@ impl<M: 'static> Widget<M> for PanelGlass {
         if !reduce_transparency(cx) {
             let glass = Glass::clear()
                 .radius(layout::GROUP_RADIUS)
-                .alpha(finite_alpha(self.alpha));
+                .alpha(finite_alpha(self.alpha) * PANEL_GLASS);
             cx.glass(glass);
         }
     }

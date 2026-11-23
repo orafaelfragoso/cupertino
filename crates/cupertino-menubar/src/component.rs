@@ -21,7 +21,8 @@ use cupertino_defaults::accessibility::DisplayOptions;
 use cupertino_defaults::menubar::MenuBarSettings;
 use cupertino_kit::core::{Application, Command as Do, RendererClass, Window, WindowKey};
 use cupertino_kit::geometry::Size;
-use cupertino_kit::platform::SystemAppearance;
+use cupertino_kit::motion::{SpringPreset, Timing};
+use cupertino_kit::platform::{PresentChange, PresentProperty, SystemAppearance, WindowRequest};
 use cupertino_kit::text::{Keymap, TextSystem};
 use cupertino_kit_shell::bus::{self, Message as Published, Panel, Sender, Topic};
 use cupertino_kit_shell::outputs::OutputId;
@@ -221,6 +222,30 @@ pub struct Model {
     focus: Option<FocusState>,
     panels: OpenPanels,
     session: Option<SessionState>,
+    /// The outputs an overview is shown on, on its way in or open, as the overview last told: their bars give way to
+    /// it ([`Model::give_way`]).
+    overview: HashSet<OutputId>,
+}
+
+/// The requests that hide the bar `window` (`hidden`) or show it again, along `curve` or at once: its opacity, and its
+/// input region, none while it is hidden. Its exclusive zone stays as it is, so no window refits.
+fn presented(window: &WindowKey, hidden: bool, curve: Option<Timing>) -> Vec<Do<Message>> {
+    vec![
+        // asked before the presentation, whose commit carries it
+        Do::Window(
+            window.clone(),
+            WindowRequest::SetInputRegion(hidden.then(Vec::new)),
+        ),
+        Do::Window(
+            window.clone(),
+            WindowRequest::Present(vec![PresentChange {
+                property: PresentProperty::Opacity,
+                to: if hidden { 0.0 } else { 1.0 },
+                curve,
+                velocity: 0.0,
+            }]),
+        ),
+    ]
 }
 
 /// The next message on `channel`, as `message` makes it.
@@ -355,6 +380,9 @@ impl Model {
                     self.panels.control_panel = None;
                 } else if component == ComponentName::AGENT {
                     return self.session_menu(None);
+                } else if component == ComponentName::OVERVIEW {
+                    self.overview.clear();
+                    return self.give_way();
                 } else {
                     return Vec::new();
                 }
@@ -378,6 +406,17 @@ impl Model {
                     lock,
                 };
                 return self.session_menu(Some(SessionState { user_name, caps }));
+            }
+            // where an overview is shown, from the overview alone; the bus says it is no longer when the overview stops
+            Published::OverviewShown { output, shown }
+                if from == Sender::Component(ComponentName::OVERVIEW) =>
+            {
+                if shown {
+                    self.overview.insert(output);
+                } else {
+                    self.overview.remove(&output);
+                }
+                return self.give_way();
             }
             _ => return Vec::new(),
         }
@@ -410,6 +449,32 @@ impl Model {
         self.shared.extras.session.clone_from(&self.session);
         // the server locks through the lock screen whether or not the agent runs
         self.shared.extras.lock_without_agent = true;
+    }
+
+    /// Each bar gives way to an overview of its output, as Mission Control takes the menu bar away: its menus close
+    /// and it fades out along the overview's own motion ([`SpringPreset::OVERVIEW_OPEN`], under Reduce Motion the
+    /// overview's fade [`Timing::OVERVIEW_FADE`]) and takes no input, and it fades back in the same way as the
+    /// overview leaves. Its space stays reserved all the while.
+    fn give_way(&mut self) -> Vec<Do<Message>> {
+        let curve = if self.display.reduce_motion {
+            Timing::OVERVIEW_FADE
+        } else {
+            SpringPreset::OVERVIEW_OPEN.into()
+        };
+        let mut commands = Vec::new();
+        for i in 0..self.bars.len() {
+            let hidden = self.overview.contains(&self.bars[i].output);
+            if self.bars[i].hidden == hidden {
+                continue;
+            }
+            self.bars[i].hidden = hidden;
+            if hidden {
+                let outcome = self.bars[i].controller.close();
+                commands.extend(self.apply(i, outcome));
+            }
+            commands.extend(presented(&self.bars[i].id.window(), hidden, Some(curve)));
+        }
+        commands
     }
 
     /// The bars and their windows for every output the server has described, once `menubar.conf` is read.
@@ -504,6 +569,7 @@ impl Application for MenuBar {
             focus: None,
             panels: OpenPanels::default(),
             session: None,
+            overview: HashSet::new(),
         };
         model.services.recent = tasks::recent_sources().map(Arc::new);
         bus::follow(&[
@@ -511,6 +577,7 @@ impl Application for MenuBar {
             Topic::Panels,
             Topic::DoNotDisturb,
             Topic::Session,
+            Topic::Overview,
         ]);
         let mut commands = bus::session(
             |connection| Message::Session(connection.ok()),

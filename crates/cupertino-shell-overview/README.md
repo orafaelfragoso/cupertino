@@ -29,7 +29,8 @@ A failed component is started again alone by its host (D16, D21). The overview's
 component stops, the server dismisses it and the windows it claimed go back to their places along the server's return
 motion (D19). Lost with it:
 
-- an overview on screen, and the way in or out under way: the person opens it again;
+- an overview on screen, and the way in or out under way: the person opens it again; the host bus says the overview
+  gone in its name as the component stops, so the menu bar comes back at once;
 - a gesture under way: the server settles it back, and the rest of that touchpad gesture stays with it;
 - the armed gestures: the new instance arms them again once it has the feed, so a swipe made before that reaches the
   dock, which runs its action through the server's toggle.
@@ -65,6 +66,12 @@ or the desktop switched to, at its start (`kit_shell::overview`). At its end, on
 the activation has run, the surface goes and the windows show in their places again. Dragging a window onto another
 desktop of the band moves it there in a transaction of window changes alone, kept until it finished; dropped anywhere
 else it goes back to its place.
+
+**The menu bar.** The component says on the host bus where an overview is on its way in or open (`OverviewShown`,
+retained, one per output): from a gesture's `gesture_began` or the toggle, until the way out starts or the fingers of a
+gesture lift to take it back (`gesture_ended` reverted). The menu bar of that output gives way to it meanwhile, fading
+along the overview's own motion; it is not a part of the overview's transactions, so an armed way in never holds the
+bar's commits, and it does not follow the fingers' progress, which the server alone knows.
 
 **Session.** Under Reduce Motion the server drives only the opacity of a gesture's layers, and a toggle fades the
 overview in and out over 0.2 s (`Timing::OVERVIEW_FADE`) with the holes at their end places. Kit follows the appearance;

@@ -15,7 +15,7 @@ use cupertino_kit_shell::bus::{self, Message as Published};
 use cupertino_kit_shell::outputs::OutputId;
 use cupertino_kit_shell::{menu_bar, Keyboard, ServerWindowId};
 
-use super::{fail, Message, Model, PROCESS};
+use super::{fail, presented, Message, Model, PROCESS};
 use crate::controller::{MenuController, Mode, Outcome};
 use crate::extras::{ExtraAction, Passphrase, SessionAction};
 use crate::feed::BarFeed;
@@ -88,6 +88,8 @@ pub(super) struct Bar {
     pub(super) slot_tones: SlotTones,
     /// Groups of the menu-bar object that wait for the name of the application they make active, in order.
     pub(super) held: VecDeque<menu_bar::Update>,
+    /// The bar gives way to an overview of its output: faded out, without input (`Model::give_way`).
+    pub(super) hidden: bool,
 }
 
 impl Bar {
@@ -198,6 +200,8 @@ impl Model {
         controller.menu_metrics.shortcut_style = self.shared.chords.style();
         controller.cfg.flash_choice = !self.display.reduce_motion;
         let tone = BarTone::fresh(None, self.tone_display());
+        // a bar made while an overview of its output is shown starts hidden, with no motion
+        let hidden = self.overview.contains(&output);
         self.bars.push(Bar {
             id,
             output,
@@ -212,8 +216,14 @@ impl Model {
             tone,
             slot_tones: SlotTones::default(),
             held: VecDeque::new(),
+            hidden,
         });
-        let mut commands = self.refresh();
+        let mut commands = if hidden {
+            presented(&id.window(), true, None)
+        } else {
+            Vec::new()
+        };
+        commands.extend(self.refresh());
         if self.bars.len() == 1 {
             commands.extend(self.request(Request::AppMenuRegistrar(true)));
         }
@@ -317,6 +327,12 @@ impl Model {
 
     pub(super) fn input(&mut self, input: Input) -> Vec<Do<Message>> {
         let now = self.now();
+        // a bar that gives way to an overview takes no input, also what was on its way as it hid
+        if let Input::Pointer { bar, .. } | Input::Key { bar, .. } = &input {
+            if self.index(*bar).is_some_and(|i| self.bars[i].hidden) {
+                return Vec::new();
+            }
+        }
         match input {
             Input::Pointer { bar, pointer } => {
                 let Some(i) = self.index(bar) else {

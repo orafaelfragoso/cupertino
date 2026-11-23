@@ -1,7 +1,8 @@
 //! The host bus across hosts (`shell-host.md#the-host-bus-and-its-bridge`), through the hosting runtime and a
 //! stand-in server: the bridge's handshake and retained replay, the shared host's checks of every frame, the
-//! forwarding from bridge to bridge and to the host's own components, a separate host's waiting publications, and the
-//! retained publications of a component's separate host, which outlive the instance the shared host lost before it.
+//! forwarding from bridge to bridge and to the host's own components, a separate host's waiting publications, the
+//! retained publications of a component's separate host, which outlive the instance the shared host lost before it,
+//! and an overview said shown that is said gone when its publisher stops.
 
 use crate::support;
 
@@ -81,8 +82,27 @@ macro_rules! component {
 
 component!(MenuBar, ComponentName::MENUBAR, || bus::follow(&[
     Topic::Osd,
-    Topic::Panels
+    Topic::Panels,
+    Topic::Overview
 ]));
+
+// in the overview's stead, whose role global the stand-in does not offer: the bus takes any publisher's word
+component!(ShownHere, ComponentName::LAUNCHER, || bus::publish(
+    overview_shown(SHOWN_HERE, true)
+));
+
+/// The output an overview of this host is shown on, and the one an overview of a separate host is.
+const SHOWN_HERE: u32 = 17;
+const SHOWN_THERE: u32 = 18;
+
+/// `OverviewShown` of output `output`.
+fn overview_shown(output: u32, shown: bool) -> Message {
+    serde_json::from_value(overview_shown_wire(output, shown)).expect("an OverviewShown")
+}
+
+fn overview_shown_wire(output: u32, shown: bool) -> Value {
+    json!({"type": "OverviewShown", "output": output, "shown": shown})
+}
 
 component!(Osd, ComponentName::OSD, || {
     bus::follow(&[Topic::Panels]);
@@ -145,6 +165,7 @@ impl Component for Stuck {
 
 static MENU_BAR: Entry = Entry::of::<MenuBar>();
 static OSD: Entry = Entry::of::<Osd>();
+static SHOWN_HERE_ENTRY: Entry = Entry::of::<ShownHere>();
 static STUCK: Entry = Entry::of::<Stuck>();
 
 fn hello(component: &str) -> Value {
@@ -354,4 +375,83 @@ fn a_lost_instance_that_ends_late_leaves_what_its_separate_host_retained() {
     eventually("the lost instance ends", || lost.ended().is_some());
     let (_osd, replay) = join(&server, &mut host, "osd", 1);
     assert_eq!(replay, vec![message("menubar", panel_shown("Launcher"))]);
+}
+
+#[test]
+fn an_overview_whose_publisher_stops_is_said_gone_to_the_host_s_followers_and_the_bridges() {
+    let (server, host_end) = Server::start(Kind::Shared, &["menubar", "launcher"]);
+    let mut host = connect_host(host_end);
+    wait_for(&mut host, |event| matches!(event, HostEvent::Components(_)));
+    let environment = cupertino_kit::app::environment().expect("toolkit environment");
+    let runtime = Runtime::for_host(&mut host, Kind::Shared, environment).unwrap();
+    let connection = component_connection(&mut host, "menubar");
+    let mut menu_bar = runtime.start(&MENU_BAR, connection).unwrap();
+    let (mut dock, _) = join(&server, &mut host, "dock", 0);
+
+    // a component of this host says an overview is shown, and stops: the menu bar and the bridge hear it gone, in its
+    // name
+    let here = Sender::Component(ComponentName::LAUNCHER);
+    let connection = component_connection(&mut host, "launcher");
+    let mut shown_here = runtime.start(&SHOWN_HERE_ENTRY, connection).unwrap();
+    assert_eq!(
+        read_frame(&mut dock),
+        Some(message("launcher", overview_shown_wire(SHOWN_HERE, true)))
+    );
+    eventually("the menu bar hears the overview shown", || {
+        heard(
+            ComponentName::MENUBAR,
+            here,
+            &overview_shown(SHOWN_HERE, true),
+        )
+    });
+    shown_here.stop();
+    eventually("the publisher stops", || shown_here.ended().is_some());
+    assert_eq!(
+        read_frame(&mut dock),
+        Some(message("launcher", overview_shown_wire(SHOWN_HERE, false)))
+    );
+    eventually("the menu bar hears the overview gone", || {
+        heard(
+            ComponentName::MENUBAR,
+            here,
+            &overview_shown(SHOWN_HERE, false),
+        )
+    });
+
+    // the overview of a separate host says it is shown, and its host ends: the same
+    let (mut there, _) = join(&server, &mut host, "overview", 0);
+    send_frame(
+        &mut there,
+        &message("overview", overview_shown_wire(SHOWN_THERE, true)),
+    );
+    assert_eq!(
+        read_frame(&mut dock),
+        Some(message("overview", overview_shown_wire(SHOWN_THERE, true)))
+    );
+    server.bus_peer_gone("overview");
+    settle(&mut host);
+    assert_eq!(
+        read_frame(&mut dock),
+        Some(message("overview", overview_shown_wire(SHOWN_THERE, false)))
+    );
+    eventually(
+        "the menu bar hears the separate host's overview gone",
+        || {
+            heard(
+                ComponentName::MENUBAR,
+                Sender::Component(ComponentName::OVERVIEW),
+                &overview_shown(SHOWN_THERE, false),
+            )
+        },
+    );
+
+    // what was said gone is not retained: a bridge that joins now hears nothing of either before what comes next
+    let (mut osd, _) = join(&server, &mut host, "osd", 0);
+    runtime.publish(Message::ShowOsd {
+        kind: OsdKind::Volume,
+        level: 0.75,
+    });
+    assert_eq!(read_frame(&mut osd), Some(message("host", show_osd(0.75))));
+    menu_bar.stop();
+    eventually("the menu bar stops", || menu_bar.ended().is_some());
 }

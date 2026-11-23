@@ -103,8 +103,9 @@ battery or Bluetooth item.
 A failed component is started again alone by its host (D16). While it is down the server keeps each bar's last picture
 and the space it reserves (the persistent `menu_bar` surface, D19), so windows do not move under it; the new instance
 draws over it. Kept across a restart: `menubar.conf` and the time of the last Clear Menu (files, read again), the
-do-not-disturb state and which panel is open where (retained on the host bus, so they arrive again as the component
-follows its topics), the server's feed of the active application and its windows (sent again to the new bars), the
+do-not-disturb state, which panel is open where and where an overview is shown (retained on the host bus, so they
+arrive again as the component follows its topics; a bar made while an overview of its output is shown starts hidden),
+the server's feed of the active application and its windows (sent again to the new bars), the
 radios and the battery (read again) and the session agent's entries (retained on the host bus). It loses:
 
 - any open menu, title focus and a Help search with its text;
@@ -128,7 +129,13 @@ executor, and what it holds (the extras' task holds the system connection) with 
 ## How it works
 
 - **Surfaces.** A top-anchored layer surface per output whose exclusive zone is the bar's height, so the server keeps
-  the space while it holds the bar (D19). The server owns hiding, revealing and dimming. The bar draws nothing of its
+  the space while it holds the bar (D19). The server owns hiding, revealing and dimming. The bar gives way to an
+  overview of its output, as the menu bar does to Mission Control: while the overview says it is on its way in or open
+  (`OverviewShown` on the host bus, from the `overview` component alone; the bus says it no longer is when the
+  overview stops), the bar's menus close, it fades out along the overview's own motion (`SpringPreset::OVERVIEW_OPEN`,
+  under Reduce Motion `Timing::OVERVIEW_FADE`, on the compositor's clock: `WindowRequest::Present`) and takes no input
+  (an empty input region); it fades back in the same way from the start of the way out. Its exclusive zone stays, so no
+  window refits. The bar draws nothing of its
   own: the wallpaper shows through it as it is, with no strip, fill or blur, and only its text and symbols follow what
   is behind them (*Backdrop* below). Increase Contrast keeps it see-through. Under Reduce Transparency it is a solid
   strip: the window's background is the `MenuBar` surface of the theme, the material's opaque recipe (grey 0.1255
@@ -328,7 +335,7 @@ executor, and what it holds (the extras' task holds the system connection) with 
 
 | Name | Role |
 |---|---|
-| Host bus (`cupertino_kit_shell::bus`) | `TogglePanel` on a click on the clock (notification centre) or the control panel slot, `PanelShown` for their highlight; `DoNotDisturbChanged` for the Focus item and `SetDoNotDisturb` from its rows; `ComponentStopped`. |
+| Host bus (`cupertino_kit_shell::bus`) | `TogglePanel` on a click on the clock (notification centre) or the control panel slot, `PanelShown` for their highlight; `DoNotDisturbChanged` for the Focus item and `SetDoNotDisturb` from its rows; `OverviewShown`, which the bar gives way to; `ComponentStopped`. |
 | `org.kde.StatusNotifierWatcher` | Owned on the component's own session bus connection; the component is the status item host. |
 | `com.canonical.AppMenu.Registrar` | Owned on the component's own connection while it shows a bar and no other process owns the name; released with the last bar. Qt, KDE Frameworks, Chromium, Electron and LibreOffice export their menus and hide their in-window menu bar only while the name has an owner. Electron's registrations are the only place its menus are named: the bar matches them to the active window (`registered`). |
 | `org.cupertino.Network1`, else NetworkManager | System bus, through `cupertino-radios`. The radio switch, the devices, the networks in range, joining, leaving and scanning. |

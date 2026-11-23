@@ -62,6 +62,9 @@ pub enum Message {
         output: OutputId,
         scene: Scene,
     },
+    /// Whether an overview of `output` is shown or on its way in (`shown`), or gone or on its way out: the menu bar
+    /// gives way to it.
+    OverviewShown { output: OutputId, shown: bool },
 }
 
 /// A panel the shell opens or closes.
@@ -99,6 +102,7 @@ pub enum Topic {
     Session,
     Osd,
     Transactions,
+    Overview,
 }
 
 impl Message {
@@ -111,6 +115,7 @@ impl Message {
             Self::SessionMenu { .. } => Topic::Session,
             Self::ShowOsd { .. } => Topic::Osd,
             Self::Transaction { .. } => Topic::Transactions,
+            Self::OverviewShown { .. } => Topic::Overview,
         }
     }
 
@@ -118,8 +123,27 @@ impl Message {
     pub fn retained(&self) -> bool {
         matches!(
             self,
-            Self::PanelShown { .. } | Self::DoNotDisturbChanged { .. } | Self::SessionMenu { .. }
+            Self::PanelShown { .. }
+                | Self::DoNotDisturbChanged { .. }
+                | Self::SessionMenu { .. }
+                | Self::OverviewShown { .. }
         )
+    }
+
+    /// What the followers hear, in the publisher's name, when the bus drops this retained publication because its
+    /// publisher stopped: an overview said shown is gone with its component. `None` for a publication that is dropped
+    /// unheard.
+    pub fn withdrawn(&self) -> Option<Message> {
+        match *self {
+            Self::OverviewShown {
+                output,
+                shown: true,
+            } => Some(Self::OverviewShown {
+                output,
+                shown: false,
+            }),
+            _ => None,
+        }
     }
 }
 

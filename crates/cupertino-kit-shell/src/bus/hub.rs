@@ -7,6 +7,7 @@ use std::task::{Context, Poll, Waker};
 
 use super::bridge::{Bridges, Came};
 use super::{Message, Panel, Sender, Topic, MAX_SUBSCRIBER_QUEUE};
+use crate::outputs::OutputId;
 use crate::ComponentName;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -14,6 +15,7 @@ enum RetainedKey {
     PanelShown(Sender, Panel),
     DoNotDisturbChanged(Sender),
     SessionMenu(Sender),
+    OverviewShown(Sender, OutputId),
 }
 
 impl RetainedKey {
@@ -22,13 +24,17 @@ impl RetainedKey {
             Message::PanelShown { panel, .. } => Some(Self::PanelShown(from, *panel)),
             Message::DoNotDisturbChanged { .. } => Some(Self::DoNotDisturbChanged(from)),
             Message::SessionMenu { .. } => Some(Self::SessionMenu(from)),
+            Message::OverviewShown { output, .. } => Some(Self::OverviewShown(from, *output)),
             _ => None,
         }
     }
 
     fn sender(self) -> Sender {
         match self {
-            Self::PanelShown(s, _) | Self::DoNotDisturbChanged(s) | Self::SessionMenu(s) => s,
+            Self::PanelShown(s, _)
+            | Self::DoNotDisturbChanged(s)
+            | Self::SessionMenu(s)
+            | Self::OverviewShown(s, _) => s,
         }
     }
 }
@@ -106,14 +112,30 @@ impl BusHub {
         }
         let still_present = inner.subscribers.iter().any(|s| s.component == component);
         if !still_present {
-            let sender = Sender::Component(component);
-            inner.retained.retain(|k, _| k.sender() != sender);
+            self.withdraw(&mut inner, Sender::Component(component));
         }
     }
 
     /// Drops the retained publications of `sender`, a publisher that stopped.
     pub(crate) fn forget(&self, sender: Sender) {
-        self.lock().retained.retain(|k, _| k.sender() != sender);
+        let mut inner = self.lock();
+        self.withdraw(&mut inner, sender);
+    }
+
+    /// Drops the retained publications of `sender`, a publisher that stopped, and sends the followers, in its name and
+    /// unretained, what each dropped publication says once its publisher is gone ([`Message::withdrawn`]).
+    fn withdraw(&self, inner: &mut BusHubInner, sender: Sender) {
+        let mut withdrawn = Vec::new();
+        inner.retained.retain(|key, (_, message)| {
+            let kept = key.sender() != sender;
+            if !kept {
+                withdrawn.extend(message.withdrawn());
+            }
+            kept
+        });
+        for message in withdrawn {
+            self.send(inner, sender, None, message, Came::Here);
+        }
     }
 
     pub fn follow(&self, sub_id: u64, topics: &[Topic]) {
@@ -179,11 +201,24 @@ impl BusHub {
     }
 
     fn deliver(&self, from: Sender, skip_sub_id: Option<u64>, message: Message, came: Came) {
-        let topic = message.topic();
         let mut inner = self.lock();
         if let Some(key) = RetainedKey::for_message(from, &message) {
             inner.retained.insert(key, (from, message.clone()));
         }
+        self.send(&mut inner, from, skip_sub_id, message, came);
+    }
+
+    /// Hands `message` from `from` to every subscriber of its topic but its sender and `skip_sub_id`, and to the
+    /// bridges, under the bus's lock.
+    fn send(
+        &self,
+        inner: &mut BusHubInner,
+        from: Sender,
+        skip_sub_id: Option<u64>,
+        message: Message,
+        came: Came,
+    ) {
+        let topic = message.topic();
         for sub in &mut inner.subscribers {
             if Some(sub.id) == skip_sub_id {
                 continue;

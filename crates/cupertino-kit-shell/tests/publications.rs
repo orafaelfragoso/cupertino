@@ -47,10 +47,34 @@ fn a_bridged_publication_keeps_its_payload_topic_and_delivery_kind() {
             Topic::Transactions,
             false,
         ),
+        (
+            json!({"type":"OverviewShown","output":17,"shown":true}),
+            Topic::Overview,
+            true,
+        ),
     ] {
         let message: Message = from_value(wire.clone()).unwrap();
         assert_eq!((message.topic(), message.retained()), (topic, retained));
         assert_eq!(to_value(message).unwrap(), wire);
+    }
+}
+
+#[test]
+fn an_overview_said_shown_is_said_gone_when_its_publisher_stops_and_nothing_else_is_said_again() {
+    let shown: Message =
+        from_value(json!({"type":"OverviewShown","output":17,"shown":true})).unwrap();
+    assert_eq!(
+        shown.withdrawn().map(|m| to_value(m).unwrap()),
+        Some(json!({"type":"OverviewShown","output":17,"shown":false}))
+    );
+    for wire in [
+        json!({"type":"OverviewShown","output":17,"shown":false}),
+        json!({"type":"PanelShown", "panel":"ControlPanel", "shown":true, "output":17}),
+        json!({"type":"DoNotDisturbChanged", "on":true, "lifetimes":[]}),
+        json!({"type":"ShowOsd","kind":"Brightness","level":0.5}),
+    ] {
+        let message: Message = from_value(wire).unwrap();
+        assert_eq!(message.withdrawn(), None, "{message:?}");
     }
 }
 

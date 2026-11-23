@@ -1041,11 +1041,14 @@ pub mod bus {
         ShowOsd { kind: OsdKind, level: f64 },
         /// Join a transaction of `output`.
         Transaction { id: transaction::Id, output: OutputId, scene: Scene },
+        /// Retained, from `overview`, withdrawn when it stops. Whether an overview of `output` is on its way in or
+        /// open (`shown`), or on its way out or gone.
+        OverviewShown { output: OutputId, shown: bool },
     }
     pub enum Panel { ControlPanel, NotificationCenter, Launcher, Applications }
     pub enum OsdKind { Volume, Mute, Brightness, KeyboardBrightness }
     pub enum Scene { OverviewOpening, OverviewClosing, StageSwitch }
-    pub enum Topic { Host, Panels, DoNotDisturb, Session, Osd, Transactions }
+    pub enum Topic { Host, Panels, DoNotDisturb, Session, Osd, Transactions, Overview }
 
     /// Who published a message. Its serialised form is a string: the component's name, or `host`.
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1055,6 +1058,9 @@ pub mod bus {
         pub fn topic(&self) -> Topic;
         /// A retained message is kept by the bus and given to a component when it starts to follow the topic.
         pub fn retained(&self) -> bool;
+        /// What the followers hear in the publisher's name when the bus drops this retained message because its
+        /// publisher stopped: `OverviewShown` that said shown is said not shown. `None` for one dropped unheard.
+        pub fn withdrawn(&self) -> Option<Message>;
     }
 
     /// Sends `message` to every component that follows its topic, the sender excepted. A message of `Topic::Host`
@@ -1091,8 +1097,11 @@ pub mod bus {
 - A message's sender is set by the bus, never by the publisher: the component whose thread published it, the
   component of the bridge it came over, or the host. A component trusts a message by its `from`: the menu bar takes
   `SessionMenu` from `Sender::Component(ComponentName::AGENT)` alone.
-- The bus keeps the latest retained message of each publisher and variant (and of each `panel`), and drops it when
-  its publisher stops.
+- The bus keeps the latest retained message of each publisher and variant (and of each `panel` and each `output` of
+  `OverviewShown`), and drops it when its publisher stops: its last subscriber in the host leaves the bus, or its
+  separate host ends (`bus_peer_gone`). A dropped message with a withdrawn form (`Message::withdrawn`) is followed by
+  that form, in the publisher's name and not retained, to the host's followers and the bridges, so a menu bar that
+  gave way to an overview comes back when the overview fails, without waiting for its next instance.
 - A queue holds 256 messages for a component; a component that does not empty its queue loses the oldest, and the
   host logs it once.
 - A component makes no call of its own before its identity is settled: `session` hands the connection over after
@@ -1101,7 +1110,7 @@ pub mod bus {
 - A component accepts the server as a caller by `Caller::Server` and another component by `Caller::Component`. No
   component compares process ids or asks for its parent.
 - Programs outside the hosts are reached through the session bus or the server's protocols, never through this bus.
-- The catalogue is the eight messages above. A message joins it with a change of this file.
+- The catalogue is the nine messages above. A message joins it with a change of this file.
 
 What the components read of each other goes over this bus and not over their session bus interfaces:
 
@@ -1110,6 +1119,7 @@ What the components read of each other goes over this bus and not over their ses
 | `menubar` | the session menu's state | `SessionMenu` | `agent` |
 | `menubar` | do not disturb and its durations | `DoNotDisturbChanged` | `notifications` |
 | `menubar` | which panels are open, and where | `PanelShown` | `controlcenter`, `notifications`, `launcher` |
+| `menubar` | where an overview is on its way in or open, which its bar gives way to | `OverviewShown` | `overview` |
 | `notifications` | a component the server stopped | `ComponentStopped` | the host |
 | any | open or close a panel, set do not disturb, show a level | `TogglePanel`, `SetDoNotDisturb`, `ShowOsd` | the component that asks |
 

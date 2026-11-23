@@ -16,12 +16,15 @@
 //!   transaction that takes the holes back to the windows' frames (the picked window activated at its start) and
 //!   fades the chrome; when the server says it finished the surface goes and the windows show in their places again.
 //!   Then the gesture is armed anew.
+//! - **The menu bar.** The host bus hears where an overview is on its way in or open, from a gesture's start or the
+//!   toggle, and where it is no longer, from the start of the way out or the release of a gesture that takes it back
+//!   (`bus::Message::OverviewShown`): the menu bar of that output gives way to it meanwhile.
 //!
 //! The windows' frames are global; the component subtracts the output's origin. Under Reduce Motion the server
 //! drives only the opacity of a gesture's layers, and a toggle fades the overview in and out with the windows at
 //! their end places ([`Timing::OVERVIEW_FADE`]).
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -150,6 +153,8 @@ struct View {
     tx: Option<transaction::Id>,
     handle: Option<transaction::Handle>,
     holes: BTreeMap<u32, HoleState>,
+    /// The fingers of its gesture lifted to take it back: on its way out though its phase has not changed yet.
+    leaving: bool,
 }
 
 impl View {
@@ -165,6 +170,11 @@ impl View {
                 .map_or(hole.target, |d| d.1),
         }
     }
+
+    /// Whether the view is on its way in or open, as the menu bar is told: not armed, and not on its way out.
+    fn shown(&self) -> bool {
+        matches!(self.phase, Phase::Opening | Phase::Open) && !self.leaving
+    }
 }
 
 pub struct Model {
@@ -177,6 +187,8 @@ pub struct Model {
     next_view: u64,
     /// Transactions of window changes alone (a window moved to another desktop), kept until they finish.
     errands: Vec<transaction::Handle>,
+    /// The outputs the bus was last told an overview is shown on (`bus::Message::OverviewShown`).
+    announced: HashSet<OutputId>,
     /// Where the watch on `dock.conf` says the file changed.
     conf_changes: (async_channel::Sender<()>, async_channel::Receiver<()>),
 }
@@ -372,6 +384,7 @@ impl Model {
             tx: None,
             handle: None,
             holes,
+            leaving: false,
         })
     }
 
@@ -660,6 +673,7 @@ impl Model {
             transaction::Event::GestureBegan { id, .. } => {
                 if let Some(i) = self.by_tx(id) {
                     let view = &mut self.views[i];
+                    view.leaving = false;
                     if view.phase == Phase::Armed {
                         view.phase = Phase::Opening;
                         let (output, key) = (view.output, view.key.clone());
@@ -680,6 +694,16 @@ impl Model {
                     Some(i) => self.rest(i, outcome),
                     None => Vec::new(),
                 }
+            }
+            // the fingers lifted to take it back, the way in's gesture or the reverse one: it settles on its way out
+            transaction::Event::GestureEnded {
+                id,
+                outcome: Outcome::Reverted,
+            } => {
+                if let Some(i) = self.by_tx(id) {
+                    self.views[i].leaving = true;
+                }
+                Vec::new()
             }
             transaction::Event::Started { .. } | transaction::Event::GestureEnded { .. } => {
                 Vec::new()
@@ -763,6 +787,24 @@ impl Model {
         out
     }
 
+    /// Tell the bus each change of the outputs an overview is shown on: the menu bar there gives way to it as it comes
+    /// in and comes back as it goes out. What was said shown the bus takes back when the component stops.
+    fn announce(&mut self) {
+        let shown: HashSet<OutputId> = self
+            .views
+            .iter()
+            .filter(|v| v.shown())
+            .map(|v| v.output)
+            .collect();
+        for &output in shown.symmetric_difference(&self.announced) {
+            bus::publish(bus::Message::OverviewShown {
+                output,
+                shown: shown.contains(&output),
+            });
+        }
+        self.announced = shown;
+    }
+
     /// The outputs changed: views of an output that went, or moved, go; the gestures are armed on what is left.
     fn outputs(&mut self) -> Vec<Do<Message>> {
         let all = outputs::all();
@@ -810,6 +852,7 @@ impl Application for Overview {
             views: Vec::new(),
             next_view: 0,
             errands: Vec::new(),
+            announced: HashSet::new(),
             conf_changes: async_channel::unbounded(),
         };
         commands.push(listen(&model.conf_changes.1));
@@ -817,7 +860,7 @@ impl Application for Overview {
     }
 
     fn update(model: &mut Model, message: Message) -> Vec<Do<Message>> {
-        match message {
+        let out = match message {
             Message::Session(Some(connection)) => {
                 // the connection carries the component's debug interface and its identity
                 model.session = Some(connection);
@@ -877,14 +920,14 @@ impl Application for Overview {
                 }
                 Vec::new()
             }
-            Message::Closed(key) => {
+            Message::Closed(key) => match model.view(&key) {
                 // the server closed the surface: its gestures are armed anew
-                let Some(i) = model.view(&key) else {
-                    return Vec::new();
-                };
-                let output = model.views.remove(i).output;
-                model.arm(output)
-            }
+                Some(i) => {
+                    let output = model.views.remove(i).output;
+                    model.arm(output)
+                }
+                None => Vec::new(),
+            },
             Message::Input(key, input) => match model.view(&key) {
                 Some(i) => model.input(i, input),
                 None => Vec::new(),
@@ -903,7 +946,9 @@ impl Application for Overview {
                     Vec::new()
                 }
             }
-        }
+        };
+        model.announce();
+        out
     }
 
     fn view(model: &Model) -> Vec<Window<Message>> {

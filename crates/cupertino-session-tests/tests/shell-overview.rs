@@ -1,7 +1,8 @@
 //! The overview (`cupertino-shell-overview`) as `cupertino-shell` runs it, against the real server, headless, on a
 //! session bus of the test's own and with settings and data directories of its own (`docs/architecture/shell-host.md`,
 //! D16). The server's supervisor starts this test binary as `cupertino-shell`: with [`host::MARK`] among its arguments it
-//! runs the host with the test dock of `shell/components.rs` and the real overview (`cupertino_shell::OVERVIEW`).
+//! runs the host with the test dock of `shell/components.rs`, the real overview (`cupertino_shell::OVERVIEW`) and the
+//! real menu bar (`cupertino_shell::MENUBAR`), each test starting the ones it needs.
 //! - A panic injected as it paints, as its loop dispatches and on a helper thread restarts it alone, fifty times, while
 //!   the dock keeps drawing and the host's anonymous memory stays flat.
 //! - The swipe up is armed for the overview: released slowly short of half its travel it settles back and gives the
@@ -12,6 +13,9 @@
 //! - The toggle (the shortcut, F3) opens the overview and the next one leaves it, giving the window back, more times
 //!   than a connection may have transactions, with the same instance.
 //! - Going from one application's window to another's arms the gestures anew each time, and never opens the overview.
+//! - The menu bar gives way to the overview: it fades out and takes no input while the toggle's overview is open, and
+//!   comes back when the toggle or Escape leaves it, when a swipe up that began to open it settles back, and when the
+//!   overview fails while it is open; its space stays reserved all the while, so the window keeps its frame.
 
 #[path = "shell-host/app.rs"]
 mod app;
@@ -41,8 +45,8 @@ use components::{BLUE, DOCK_SIZE, RED};
 use memory::{steady_allocator, HostMemory, CRASHES_IN_A_ROW, RESTARTS};
 use rig::{count, magenta, Area, Rig, OUTPUT_SIZE};
 
-/// The host program of this test: `cupertino-shell`'s own (`cupertino_shell::run`) with the test dock and the real
-/// overview.
+/// The host program of this test: `cupertino-shell`'s own (`cupertino_shell::run`) with the test dock, the real
+/// overview and the real menu bar.
 mod host {
     use std::path::PathBuf;
 
@@ -54,7 +58,7 @@ mod host {
     pub const MARK: &str = "cupertino-shell-overview-host";
 
     /// The components this host was built with.
-    static ENTRIES: [&Entry; 2] = [&DOCK, &cupertino_shell::OVERVIEW];
+    static ENTRIES: [&Entry; 3] = [&DOCK, &cupertino_shell::OVERVIEW, &cupertino_shell::MENUBAR];
 
     /// The report file and the host's own arguments that follow [`MARK`], when this process is the host.
     pub fn arguments() -> Option<(PathBuf, Vec<String>)> {
@@ -637,4 +641,202 @@ fn the_windows_changing_never_open_the_overview() {
             },
         );
     }
+}
+
+/// How much of the menu bar may still show while it gives way to the overview, and may be missing once it is back:
+/// what is left of its fade once the fade has as good as run.
+const FADED: f64 = 0.01;
+
+/// A point of the menu bar: the middle of the output's width, half way down the bar.
+fn bar_point() -> (f64, f64) {
+    (
+        f64::from(OUTPUT_SIZE.0) / 2.0,
+        cupertino_kit_shell::design::menu_bar().height / 2.0,
+    )
+}
+
+/// The menu bar's surface, when it takes the pointer at [`bar_point`], where the pointer goes.
+fn bar_under_pointer(rig: &mut Rig) -> Option<wayland_server::protocol::wl_surface::WlSurface> {
+    let time = (rig.state.now() * 1000.0) as u32;
+    rig.state.pointer_moved_to(bar_point().into(), time, None);
+    rig.state
+        .pointer
+        .current_focus()
+        .filter(|surface| rig.state.menu_bars.has_surface(surface))
+}
+
+/// How much of the menu bar `bar` shows now: the opacity of its presentation.
+fn bar_opacity(rig: &Rig, bar: &wayland_server::protocol::wl_surface::WlSurface) -> f64 {
+    cupertino_server::layers_v1::presentation(bar, rig.state.now(), false)
+        .map_or(1.0, |p| p.opacity)
+}
+
+/// A session of the overview and the menu bar with one window, once the swipe up is armed and the bar takes the
+/// pointer: the window, its frame, the bar's surface and the usable area the bar leaves.
+struct Bar {
+    window: cupertino_wm::WindowId,
+    own: Area,
+    surface: wayland_server::protocol::wl_surface::WlSurface,
+    usable: cupertino_wm::Rect,
+}
+
+impl Bar {
+    fn start(rig: &mut Rig) -> Bar {
+        app::spawn(rig.client(), "org.cupertino.test.overview");
+        let (window, _) = mapped(rig);
+        let output = rig.state.outputs[0].id;
+        rig.until(
+            "the swipe up is armed and the bar takes the pointer",
+            |rig| {
+                rig.state
+                    .transactions
+                    .has_gesture_binding(output, WireGesture::SwipeUp)
+                    && bar_under_pointer(rig).is_some()
+            },
+        );
+        let surface = bar_under_pointer(rig).unwrap();
+        // the window's frame within the space the bar left it
+        let (_, own) = mapped(rig);
+        Bar {
+            window,
+            own,
+            surface,
+            usable: rig.state.usable_area(output),
+        }
+    }
+
+    /// The bar's space stays reserved and the window keeps its frame, `when`.
+    fn holds(&self, rig: &Rig, when: &str) {
+        let output = rig.state.outputs[0].id;
+        assert_eq!(
+            rig.state.usable_area(output),
+            self.usable,
+            "{when}: the bar's space stays reserved"
+        );
+        let frame = rig.state.wm.window(self.window).unwrap().geometry();
+        assert_eq!(
+            Area::new(
+                frame.x as i32,
+                frame.y as i32,
+                frame.w as i32,
+                frame.h as i32
+            ),
+            self.own,
+            "{when}: the window keeps its frame"
+        );
+    }
+
+    /// Turn until the overview has the window and the bar has given way to it, the bar's space reserved meanwhile.
+    fn gives_way(&self, rig: &mut Rig, when: &str) {
+        rig.until(
+            &format!("{when}: the bar gives way to the overview"),
+            |rig| {
+                self.holds(rig, when);
+                rig.state.transactions.is_window_claimed(self.window)
+                    && bar_opacity(rig, &self.surface) <= FADED
+            },
+        );
+    }
+
+    /// Turn until the overview left the window and the bar is back and takes the pointer, its space reserved
+    /// meanwhile.
+    fn is_back(&self, rig: &mut Rig, when: &str) {
+        rig.until(&format!("{when}: the bar is back"), |rig| {
+            self.holds(rig, when);
+            !rig.state.transactions.is_window_claimed(self.window)
+                && bar_opacity(rig, &self.surface) >= 1.0 - FADED
+                && bar_under_pointer(rig).as_ref() == Some(&self.surface)
+        });
+    }
+}
+
+#[test]
+fn the_menu_bar_gives_way_to_the_toggles_overview_until_the_toggle_or_escape_leaves_it() {
+    let (_bus, mut rig) = start("overview-menubar-toggle", &["overview", "menubar"]);
+    let bar = Bar::start(&mut rig);
+    assert!(
+        bar_opacity(&rig, &bar.surface) >= 1.0 - FADED,
+        "the bar shows"
+    );
+
+    rig.state.toggle_overview(false);
+    bar.gives_way(&mut rig, "the toggle");
+    assert!(
+        bar_under_pointer(&mut rig).is_none(),
+        "the bar takes no input under the overview"
+    );
+    rig.state.toggle_overview(false);
+    bar.is_back(&mut rig, "the next toggle");
+
+    // Escape in the open overview leaves it as well
+    rig.state.toggle_overview(false);
+    bar.gives_way(&mut rig, "the toggle again");
+    rig.until("the open overview has the keyboard", |rig| {
+        let focus = keyboard_focus(rig);
+        focus.is_some() && focus == rig.state.exclusive_layer
+    });
+    rig.state.scripted_key("Escape").expect("Escape is a key");
+    bar.is_back(&mut rig, "Escape");
+}
+
+#[test]
+fn the_menu_bar_comes_back_when_a_swipe_up_settles_back() {
+    let (_bus, mut rig) = start("overview-menubar-swipe", &["overview", "menubar"]);
+    let bar = Bar::start(&mut rig);
+    let output = rig.state.outputs[0].id;
+
+    // slowly, and still when the fingers lift: the bar began to give way as the overview came, and comes back
+    swipe(&mut rig, 1.0, SLOW_STEP, true);
+    let mut least = 1.0_f64;
+    rig.until("the slow swipe settled back", |rig| {
+        bar.holds(rig, "the slow swipe");
+        least = least.min(bar_opacity(rig, &bar.surface));
+        !rig.state.transactions.is_window_claimed(bar.window)
+            && rig
+                .state
+                .transactions
+                .has_gesture_binding(output, WireGesture::SwipeUp)
+    });
+    assert!(
+        least < 1.0 - FADED,
+        "the bar began to give way as the swipe brought the overview in (it showed {least} at the least)"
+    );
+    bar.is_back(&mut rig, "the swipe settled back");
+}
+
+#[test]
+fn the_menu_bar_comes_back_when_the_open_overview_fails() {
+    let (_bus, mut rig) = start("overview-menubar-crash", &["overview", "menubar"]);
+    let session = zbus::blocking::connection::Builder::session()
+        .and_then(|builder| builder.method_timeout(PROBE_TIMEOUT).build())
+        .expect("the test's bus");
+    let bar = Bar::start(&mut rig);
+    let first_instance = rig.state.hosts.component_instance("overview");
+    let mut name = None;
+    rig.until("the overview has its connection", |rig| {
+        name = overview_name(rig, &session, &HashSet::new());
+        name.is_some()
+    });
+    let name = name.unwrap();
+    rig.until("the overview serves its debug interface", |rig| {
+        serves_crash(rig, &session, &name)
+    });
+    rig.state.toggle_overview(false);
+    bar.gives_way(&mut rig, "the toggle");
+
+    // the overview fails while it is open: its surface goes, and the bar comes back without a word of the next
+    // instance
+    let crash_call = zbus::Message::method_call("/org/cupertino/ShellComponentDebug1", "Crash")
+        .and_then(|m| m.destination(name.as_str()))
+        .and_then(|m| m.interface("org.cupertino.ShellComponentDebug1"))
+        .and_then(|m| m.with_flags(zbus::message::Flags::NoReplyExpected))
+        .and_then(|m| m.build(&("dispatch",)))
+        .expect("the crash call");
+    session.send(&crash_call).expect("the crash is sent");
+    rig.until("the overview starts again", |rig| {
+        // the pointer moving over the open overview has it dispatch, where it fails
+        bar_under_pointer(rig);
+        rig.state.hosts.component_instance("overview") > first_instance
+    });
+    bar.is_back(&mut rig, "the overview failed");
 }

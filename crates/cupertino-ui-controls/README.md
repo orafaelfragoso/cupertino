@@ -276,10 +276,10 @@ from the application's model and reports changes as messages.
   compositor draws below it; where the desktop shows no glass it paints a translucent body with a one-pixel rim (and a
   soft shade in the light appearance). At rest the toolkit outlines a toolbar group's glass (above); with Increase Contrast
   in the light appearance it lays a firmer rim over any floating control's glass: a dark rim on the outermost device
-  pixel, 50 % black at the sides and 30 % at the top and bottom. A choice's chosen pill is glass of the tab variant
-  (`GlassVariant::Tab`, the regular glass under a white fill) as a shape of the toolbar's container with a recipe of
-  its own, laid under the segments so their glyphs lie over it; the toolkit draws no edge over it, and where the
-  desktop shows no glass, or draws no variants (`PaintCx::glass_variants`), it is a fill over the capsule. A glass button is regular glass of its own (container 0) where that glass can show,
+  pixel, 50 % black at the sides and 30 % at the top and bottom. A choice's chosen pill is a flat fill over the
+  capsule's glass with no edge of its own, laid under the segments so their glyphs lie over it, with or without the
+  desktop's glass; it is no shape of the toolbar's glass container, where a shape 4 pt inside the capsule would swell
+  the capsule's outline by the container's blend width. A glass button is regular glass of its own (container 0) where that glass can show,
   its body filling its node, without Reduce Transparency: on a material the window shows (a sidebar, a translucent
   window background), and over the window's own content, as the button is a raised node (`Widget::raised`) whose glass
   lies between the window's raised layer and its content, so the content shows through it; its label then takes the

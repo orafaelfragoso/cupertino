@@ -3,9 +3,12 @@
 
 use cupertino_theme::glass::{
     legibility_amount, GlassBase, GlassShadow, SidebarEdge, BLEED_AMOUNT_MAX, BLEED_BLUR_MAX,
-    CLEAR_BLUR, GLASS_SIZE_MEDIUM, GLASS_SIZE_MINIMUM, LARGE_PANEL_BLACK_LIGHT,
+    CLEAR_BLUR, DOCK_BAR_BLUR, DOCK_BAR_LINE, DOCK_BAR_MAX_LUMA_DARK, DOCK_BAR_REFRACTION,
+    DOCK_BAR_REFRACTION_HEIGHT, GLASS_SIZE_MEDIUM, GLASS_SIZE_MINIMUM, LARGE_PANEL_BLACK_LIGHT,
     LARGE_PANEL_SATURATION_DARK, LARGE_PANEL_SHADOW_BLUR, MODULE_BLACK, MODULE_SATURATION,
-    MODULE_WHITE, TRACK_CAPTURE_SCALE,
+    MODULE_WHITE, TRACK_CAPTURE_SCALE, WINDOW_SIDEBAR_BLACK_DARK, WINDOW_SIDEBAR_BLACK_LIGHT,
+    WINDOW_SIDEBAR_SATURATION, WINDOW_SIDEBAR_VEIL_LIGHT, WINDOW_SIDEBAR_WHITE_DARK,
+    WINDOW_SIDEBAR_WHITE_LIGHT,
 };
 use cupertino_theme::{
     GlassMode, GlassModifiers, GlassParams, GlassSize, GlassStyle, GlassVariant,
@@ -272,15 +275,23 @@ fn reduce_motion_flattens_both_bends_and_widens_the_blur_four_times_for_the_cent
         .radius,
         8.0
     );
-    // the dock and the app switcher bend what lies outside their edge, but not with Reduce Motion
-    for variant in [GlassVariant::Dock, GlassVariant::AppSwitcher] {
-        assert!(
-            at(variant, false, 100.0).refraction.outer_opacity > 0.0,
-            "{variant:?}"
-        );
-        let reduced = with(variant, false, 100.0, |m| m.reduce_motion = true);
-        assert_eq!(reduced.refraction.outer_opacity, 0.0, "{variant:?}");
-    }
+    // the app switcher bends what lies outside its edge, but not with Reduce Motion; the Dock bar never does
+    assert!(
+        at(GlassVariant::AppSwitcher, false, 100.0)
+            .refraction
+            .outer_opacity
+            > 0.0
+    );
+    let reduced = with(GlassVariant::AppSwitcher, false, 100.0, |m| {
+        m.reduce_motion = true
+    });
+    assert_eq!(reduced.refraction.outer_opacity, 0.0);
+    assert_eq!(
+        at(GlassVariant::Dock, false, 100.0)
+            .refraction
+            .outer_opacity,
+        0.0
+    );
 }
 
 #[test]
@@ -403,7 +414,7 @@ fn a_tab_lies_under_a_white_fill_and_the_light_one_is_lowered() {
 }
 
 #[test]
-fn the_window_sidebars_are_planar_regular_glass_and_the_floating_one_keeps_the_light() {
+fn the_window_sidebars_are_planar_dense_panes_and_the_floating_one_keeps_the_light() {
     for dark in [false, true] {
         let regular = at(GlassVariant::Regular, dark, 200.0);
         for variant in [GlassVariant::AbuttedSidebar, GlassVariant::Inspector] {
@@ -411,15 +422,41 @@ fn the_window_sidebars_are_planar_regular_glass_and_the_floating_one_keeps_the_l
             assert_eq!(p.specular.amount, 0.0, "{variant:?}");
             assert_eq!(p.highlight.amount, 0.0);
             assert_eq!(p.shadow.ring_opacity, 0.0);
+            assert_eq!(p.shadow.edge_line, 0.0);
             assert_eq!(p.refraction.outer_opacity, 0.0);
-            assert_eq!(p.bleed.saturation, 1.5);
             assert_eq!(
-                p.face.max_luma,
-                if dark { regular.face.max_luma } else { 0.85 }
+                p.bleed.opacity, 0.0,
+                "nothing outside the window in its edge"
             );
             assert_eq!((p.blur.radius, p.blur.fill_radius), (5.0, 8.0));
-            assert_eq!((p.refraction.amount, p.refraction.height), (-60.0, 20.0));
-            assert_eq!(p.face.saturation, regular.face.saturation);
+            assert_eq!(p.blur.level_opacity, [1.0; 4]);
+            assert_eq!((p.refraction.amount, p.refraction.height), (-24.0, 12.0));
+            // a dense pane with a faint tint of what lies behind the window: black and white come out close together
+            let f = p.face;
+            assert_eq!((f.saturation, f.max_luma), (WINDOW_SIDEBAR_SATURATION, 1.0));
+            if dark {
+                assert_eq!(
+                    (f.black, f.white, f.fill),
+                    (
+                        WINDOW_SIDEBAR_BLACK_DARK,
+                        WINDOW_SIDEBAR_WHITE_DARK,
+                        [0.0; 4]
+                    )
+                );
+            } else {
+                assert_eq!(
+                    (f.black, f.white, f.fill),
+                    (
+                        WINDOW_SIDEBAR_BLACK_LIGHT,
+                        WINDOW_SIDEBAR_WHITE_LIGHT,
+                        WINDOW_SIDEBAR_VEIL_LIGHT
+                    )
+                );
+            }
+            assert!(f.white - f.black < 0.05);
+            // Increase Contrast keeps the pane's face
+            let c = with(variant, dark, 200.0, |m| m.increase_contrast = true);
+            assert_eq!(c.face, f);
         }
         assert_eq!(
             at(GlassVariant::Inspector, dark, 200.0),
@@ -507,26 +544,38 @@ fn the_dock_takes_its_own_recipe_and_its_own_accessibility_stages() {
     for side in [64.0, 90.0] {
         for dark in [false, true] {
             let p = at(GlassVariant::Dock, dark, side);
-            assert_close!(p.blur.radius, CLEAR_BLUR * 1.5);
+            assert_eq!(p.blur.radius, DOCK_BAR_BLUR);
             assert_eq!(p.blur.level_opacity[0], 1.0);
             assert!(!p.fill_shows());
             let f = p.face;
-            assert_eq!((f.saturation, f.max_luma), (1.25, 1.0));
+            assert_eq!(f.saturation, 1.25);
             if dark {
                 assert_eq!(
-                    (f.black, f.white, f.fill),
-                    (0.05, 0.92, [0.0, 0.0, 0.0, 0.02])
+                    (f.black, f.white, f.fill, f.max_luma),
+                    (0.05, 0.92, [0.0, 0.0, 0.0, 0.02], DOCK_BAR_MAX_LUMA_DARK)
                 );
             } else {
-                assert_eq!((f.black, f.white, f.fill[3]), (0.15, 0.9, 0.0));
+                assert_eq!(
+                    (f.black, f.white, f.fill[3], f.max_luma),
+                    (0.15, 0.9, 0.0, 1.0)
+                );
             }
-            assert_close!(p.refraction.amount, -0.18 * side);
-            assert_close!(p.refraction.height, 0.08 * side);
-            assert_close!(p.refraction.outer_amount, 0.42 * side);
-            assert_close!(p.refraction.outer_height, 0.13 * side);
-            assert_eq!(p.refraction.outer_opacity, 0.2);
-            assert_eq!(p.specular.amount, 0.0, "no light at rest");
+            // a thin lens along the edge at every size, and nothing bent outside it
+            assert_eq!(
+                (p.refraction.amount, p.refraction.height),
+                (DOCK_BAR_REFRACTION, DOCK_BAR_REFRACTION_HEIGHT)
+            );
+            assert_eq!(p.refraction.outer_opacity, 0.0);
+            assert_eq!(p.specular.amount, 0.0, "no key light at rest");
             assert_eq!((p.highlight.amount, p.highlight.color_bias), (0.4, -0.25));
+            // the line of light along the top and the bottom, equally bright
+            let (amount, height, offset) = DOCK_BAR_LINE;
+            let h = p.highlight;
+            assert_eq!(
+                (h.glow_amount, h.glow_height, h.glow_offset, h.glow_fill),
+                (amount, height, offset, 1.0)
+            );
+            assert!(h.glow_amount > 0.0);
             assert_eq!(p.shadow.ring_opacity, 0.0);
 
             let c = with(GlassVariant::Dock, dark, side, |m| {
@@ -575,14 +624,29 @@ fn the_app_switcher_is_the_dock_with_a_wider_blur() {
         let p = at(GlassVariant::AppSwitcher, dark, 120.0);
         let dock = at(GlassVariant::Dock, dark, 120.0);
         assert_close!(p.blur.radius, CLEAR_BLUR * scale);
-        assert_eq!((p.face, p.refraction), (dock.face, dock.refraction));
+        // the Dock's face with the recipe's own bends, which the Dock bar's thin lens replaces
+        assert_eq!(
+            (p.face.black, p.face.white, p.face.fill),
+            (dock.face.black, dock.face.white, dock.face.fill)
+        );
+        assert_eq!(p.face.max_luma, 1.0);
+        assert_close!(p.refraction.amount, -0.18 * 120.0);
+        assert_close!(p.refraction.height, 0.08 * 120.0);
+        assert_close!(p.refraction.outer_amount, 0.42 * 120.0);
+        assert_close!(p.refraction.outer_height, 0.13 * 120.0);
+        assert_eq!(p.refraction.outer_opacity, 0.2);
+        assert_eq!(p.highlight.glow_amount, 0.0);
         let r = with(GlassVariant::AppSwitcher, dark, 120.0, |m| {
             m.reduce_transparency = true
         });
         let dock_r = with(GlassVariant::Dock, dark, 120.0, |m| {
             m.reduce_transparency = true
         });
-        assert_eq!(r.face, dock_r.face, "the Dock's Reduce Transparency");
+        assert_eq!(
+            (r.face.black, r.face.white, r.face.fill),
+            (dock_r.face.black, dock_r.face.white, dock_r.face.fill),
+            "the Dock's Reduce Transparency"
+        );
     }
 }
 

@@ -122,16 +122,6 @@ const TOOLBAR_CONTAINER: u32 = 1;
 /// controls, so at rest each keeps its own outline and they merge only as one grows towards the next.
 const TOOLBAR_SPACING: f64 = crate::toolbar::TOOLBAR_GAP;
 
-/// The glass of the chosen segment's pill inside a toolbar control: the tab variant (the regular glass under a white
-/// fill), a shape of the toolbar's container with a recipe of its own, so it lies within its control's glass rather
-/// than on it. The variant draws its own edge; the toolkit lays none over it.
-pub(crate) fn toolbar_selection_glass(radius: f64) -> Glass {
-    Glass::toolbar()
-        .variant(GlassVariant::Tab)
-        .radius(radius)
-        .container(TOOLBAR_CONTAINER, TOOLBAR_SPACING)
-}
-
 /// The corner radius of a shape inset `inset` points inside a shape with corner radius `outer`, so both corners share
 /// a centre: `outer − inset`, never below zero.
 pub fn nested_radius(outer: f64, inset: f64) -> f64 {

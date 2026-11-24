@@ -204,7 +204,7 @@ impl Scene for Toolbar {
 }
 
 #[test]
-fn toolbar_controls_are_toolbar_item_glass_and_the_chosen_segment_is_tab_glass_in_their_container()
+fn toolbar_controls_are_toolbar_item_glass_in_one_container_and_the_chosen_pill_is_no_shape_of_it()
 {
     let mut view = View::<Toolbar>::open_with(effects(), false);
     let window = view.window;
@@ -217,28 +217,12 @@ fn toolbar_controls_are_toolbar_item_glass_and_the_chosen_segment_is_tab_glass_i
     let container = items[0].1.container;
     assert!(container != 0, "the toolbar's controls share a container");
     assert!(items.iter().all(|(_, g)| g.container == container));
-
-    let tabs: Vec<_> = shown
-        .iter()
-        .filter(|(_, g)| variant(g) == Some(GlassVariant::Tab))
-        .collect();
-    let [(pill, tab)] = tabs[..] else {
-        panic!("one pill of tab glass: {shown:?}")
-    };
-    assert_eq!(tab.container, container, "a shape of the same container");
-    let chosen = view.bounds_of(Role::RadioButton, "List");
-    let inset = chosen.inset(Insets::uniform(TOOLBAR_CHOICE_INSET));
-    for (a, b) in [
-        (pill.min_x(), inset.min_x()),
-        (pill.min_y(), inset.min_y()),
-        (pill.width(), inset.width()),
-        (pill.height(), inset.height()),
-    ] {
-        assert!(
-            (a - b).abs() < 0.5,
-            "the pill {pill:?} lies inside the chosen segment, at {inset:?}"
-        );
-    }
+    // a shape 4 points inside the group's would swell the group's outline by the container's blend width
+    assert_eq!(
+        shown.len(),
+        2,
+        "no glass of the chosen segment's own: {shown:?}"
+    );
 }
 
 struct Anchored;
@@ -524,7 +508,7 @@ fn under_reduce_motion_a_glass_buttons_glass_does_not_grow() {
 }
 
 #[test]
-fn where_glass_takes_no_variants_the_chosen_segments_pill_is_painted() {
+fn the_chosen_segments_pill_is_painted_with_or_without_variants() {
     let mut glass_view = View::<Toolbar>::open_with(effects(), false);
     let mut older_view = View::<Toolbar>::open_with(older(), false);
     let window = older_view.window;
@@ -535,15 +519,23 @@ fn where_glass_takes_no_variants_the_chosen_segments_pill_is_painted() {
             .all(|(_, g)| variant(g) != Some(GlassVariant::Tab)),
         "no tab glass, which would be the toolbar's glass inside it: {shown:?}"
     );
-    // just inside the pill's leading end, clear of its glyph
-    let pill = older_view
-        .bounds_of(Role::RadioButton, "List")
-        .inset(Insets::uniform(TOOLBAR_CHOICE_INSET));
-    let at = Point::new(pill.min_x() + 3.0, pill.center().y);
+    // just inside the pill's leading end, clear of its glyph, and as far inside the unchosen segment
+    let at = |view: &View<Toolbar>, name: &str| {
+        let segment = view
+            .bounds_of(Role::RadioButton, name)
+            .inset(Insets::uniform(TOOLBAR_CHOICE_INSET));
+        Point::new(segment.min_x() + 3.0, segment.center().y)
+    };
+    let (chosen, other) = (at(&glass_view, "List"), at(&glass_view, "Icons"));
     assert_ne!(
-        pixel(&mut older_view, at),
-        pixel(&mut glass_view, at),
-        "the pill is painted where the compositor would draw its glass"
+        pixel(&mut glass_view, chosen),
+        pixel(&mut glass_view, other),
+        "the pill is painted over the glass"
+    );
+    assert_eq!(
+        pixel(&mut glass_view, chosen),
+        pixel(&mut older_view, chosen),
+        "the same pill whatever the window system draws"
     );
 }
 

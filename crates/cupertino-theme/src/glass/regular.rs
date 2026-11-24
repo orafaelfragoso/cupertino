@@ -277,7 +277,10 @@ pub(super) fn regular_variant(
                 p.face.max_luma = SIDEBAR_MAX_LUMA_LIGHT;
             }
         }
-        GlassVariant::AbuttedSidebar | GlassVariant::Inspector => planar(p, dark),
+        GlassVariant::AbuttedSidebar | GlassVariant::Inspector => {
+            planar(p, dark);
+            fitted::window_sidebar(p, dark);
+        }
         GlassVariant::Tab => {
             if !dark {
                 p.face.black -= TAB_LIGHT_REDUCTION;

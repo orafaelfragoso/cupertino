@@ -7,7 +7,7 @@
 //! inset ([`nested_radius`]). Thin dividers 20 pt tall separate the segments of a group that asks for them, except
 //! beside the chosen one. Each control's glass is the [`GlassRole::ToolbarGroup`] role.
 
-use crate::glass::{nested_radius, paint_glass, toolbar_selection_glass, GlassRole};
+use crate::glass::{nested_radius, paint_glass, GlassRole};
 use crate::icon::symbol;
 use crate::look::{self, paint_focus_ring};
 use crate::press::{Keys, Outcome, Press};
@@ -783,9 +783,9 @@ impl<M: 'static> Widget<M> for PillSlot {
     fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
 }
 
-/// The chosen segment's pill: where the window shows glass, the tab glass as a shape of the toolbar's container
-/// ([`toolbar_selection_glass`]), which draws its own edge; elsewhere, and where the window system draws no variants, a
-/// fill over the capsule.
+/// The chosen segment's pill: a flat fill over the capsule's glass, with no edge of its own. It is not a shape of the
+/// toolbar's glass container: a shape inside another one 4 pt from its edge would swell the capsule's outline by the
+/// container's blend width, and the capsule, deeper inside, would keep its own recipe over the pill.
 struct Pill;
 
 impl<M: 'static> Widget<M> for Pill {
@@ -821,10 +821,6 @@ impl<M: 'static> Widget<M> for Pill {
         let size = cx.size();
         let rect = Rect::new(0.0, 0.0, size.width, size.height);
         let radius = nested_radius(TOOLBAR_CONTROL / 2.0, TOOLBAR_CHOICE_INSET);
-        // without variants the tab glass would be the toolbar's own glass inside it, so the pill is painted
-        if cx.glass_variants() && cx.glass(toolbar_selection_glass(radius)) {
-            return;
-        }
         let theme = cx.env().theme.clone();
         look::fill(cx, rect, radius, Some(pill_color(&theme, true)));
     }

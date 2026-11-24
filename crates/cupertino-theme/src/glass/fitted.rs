@@ -1,6 +1,6 @@
-//! The glass of the control centre's modules, the notification cards' edges, the launcher's results panel and the
-//! cartouches' edge lines, kept under the glass variant names, and the control centre's accessibility shifts laid over
-//! its face.
+//! The glass of the control centre's modules, the Dock bar's optics, the window sidebars' dense pane, the notification
+//! cards' edges, the launcher's results panel and the cartouches' edge lines, kept under the glass variant names, and
+//! the control centre's accessibility shifts laid over its face.
 
 use super::clear::clear_base;
 use super::*;
@@ -142,6 +142,139 @@ pub(super) fn control_center(mode: GlassMode, s: f32) -> GlassParams {
         p.refraction.height = 0.0;
     }
     p
+}
+
+// ---- the Dock --------------------------------------------------------------------------------------------------
+
+/// The Dock bar's blur radius in points, at full opacity of the first level.
+pub const DOCK_BAR_BLUR: f32 = 1.0;
+/// The Dock bar's bend inside its edge: strength (inwards) and band in points, the same at every size, so the lens
+/// stays a thin band along the bar's edge whatever its size class.
+pub const DOCK_BAR_REFRACTION: f32 = -8.64;
+pub const DOCK_BAR_REFRACTION_HEIGHT: f32 = 3.84;
+/// The dark Dock bar's luma cap: a bright scene behind the bar comes through dimmed.
+pub const DOCK_BAR_MAX_LUMA_DARK: f32 = 0.75;
+/// The Dock bar's rim: strength and colour shift per unit of strength.
+const DOCK_BAR_RIM: f32 = 0.4;
+const DOCK_BAR_RIM_BIAS: f32 = -0.25;
+/// The Dock bar's line of light along its top and bottom edges: strength, half-width and middle (points from the edge,
+/// inside for a negative value), the arcs' angular width, and the bottom's strength as a share of the top's.
+pub const DOCK_BAR_LINE: (f32, f32, f32) = (0.5, 0.6, -0.25);
+const DOCK_BAR_LINE_SPREAD: f32 = 80.0 * std::f32::consts::PI / 180.0;
+const DOCK_BAR_LINE_BOTTOM: f32 = 1.0;
+/// The faint glow under the bar's line of light: eight times as wide, on arcs 0.65 as wide, at 0.15 of its strength.
+const DOCK_BAR_LINE_DIFFUSE: GlowDiffuse = GlowDiffuse {
+    height_scale: 8.0,
+    spread_scale: 0.65,
+    amount_scale: 0.15,
+};
+/// The colour of the bar's line of light from the face under it: a little more saturated and lifted than the face, in
+/// the light and the dark appearance.
+const DOCK_BAR_LINE_MATRIX_LIGHT: ColorMatrix = [
+    1.2625, -0.2385, -0.024, 0.0, 0.2, //
+    -0.0708, 1.0949, -0.0241, 0.0, 0.2, //
+    -0.0709, -0.2383, 1.3093, 0.0, 0.2, //
+    0.0, 0.0, 0.0, 1.0, 0.0,
+];
+const DOCK_BAR_LINE_MATRIX_DARK: ColorMatrix = [
+    1.0937, -0.3577, -0.036, 0.0, 0.25, //
+    -0.1063, 0.8424, -0.0361, 0.0, 0.25, //
+    -0.1064, -0.3575, 1.1639, 0.0, 0.25, //
+    0.0, 0.0, 0.0, 1.0, 0.0,
+];
+
+/// The Dock bar's optics over its recipe `p` (the Dock variant on the clear base), as the bar presents: a narrow blur,
+/// a thin lens along its edge in place of the recipe's size-scaled bend, no bend outside it, the dark face's luma cap
+/// and its rim with a thin line of light along its top and bottom edges, equally bright, over a faint glow, which the
+/// recipe's inputs alone leave out.
+pub(super) fn dock_bar(p: &mut GlassParams, dark: bool) {
+    p.blur.radius = DOCK_BAR_BLUR;
+    p.refraction = GlassRefraction {
+        amount: DOCK_BAR_REFRACTION,
+        height: DOCK_BAR_REFRACTION_HEIGHT,
+        outer_amount: 0.0,
+        outer_height: 0.0,
+        outer_opacity: 0.0,
+    };
+    if dark {
+        p.face.max_luma = DOCK_BAR_MAX_LUMA_DARK;
+    }
+    let (amount, height, offset) = DOCK_BAR_LINE;
+    p.highlight = GlassHighlight {
+        amount: DOCK_BAR_RIM,
+        spread: DOCK_BAR_LINE_SPREAD,
+        color_bias: DOCK_BAR_RIM_BIAS,
+        glow_amount: amount,
+        glow_height: height,
+        glow_offset: offset,
+        glow_fill: DOCK_BAR_LINE_BOTTOM,
+        diffuse: DOCK_BAR_LINE_DIFFUSE,
+        matrix: if dark {
+            DOCK_BAR_LINE_MATRIX_DARK
+        } else {
+            DOCK_BAR_LINE_MATRIX_LIGHT
+        },
+        ..p.highlight
+    };
+}
+
+// ---- the window sidebars -----------------------------------------------------------------------------------------
+
+/// A window sidebar's blur: its radius in points at full opacity of every level, and the blur fill's radius, its
+/// lighten (light) or darken (dark) opacity and its normal opacity.
+const WINDOW_SIDEBAR_BLUR: f32 = 5.0;
+const WINDOW_SIDEBAR_FILL_RADIUS: f32 = 8.0;
+const WINDOW_SIDEBAR_FILL_BLEND: f32 = 0.882;
+const WINDOW_SIDEBAR_FILL_NORMAL: f32 = 0.48;
+/// A window sidebar's bend inside its edge: strength (inwards) and band in points.
+const WINDOW_SIDEBAR_REFRACTION: f32 = -24.0;
+const WINDOW_SIDEBAR_REFRACTION_HEIGHT: f32 = 12.0;
+/// How much of the backdrop's departure from grey a window sidebar keeps, in both appearances.
+pub const WINDOW_SIDEBAR_SATURATION: f32 = 0.1;
+/// The dark window sidebar's black and white levels: a grey `x` comes out at about `0.034 · x + 34` of 255.
+pub const WINDOW_SIDEBAR_BLACK_DARK: f32 = 0.1325;
+pub const WINDOW_SIDEBAR_WHITE_DARK: f32 = 0.1665;
+/// The light window sidebar's black and white levels and the warm light grey veil over them: a grey `x` comes out at
+/// about `0.02 · x + 229` of 255.
+pub const WINDOW_SIDEBAR_BLACK_LIGHT: f32 = 0.9;
+pub const WINDOW_SIDEBAR_WHITE_LIGHT: f32 = 0.94;
+pub const WINDOW_SIDEBAR_VEIL_LIGHT: [f32; 4] = [0.9094, 0.8969, 0.8827, 0.5];
+
+/// A window's sidebar or inspector over its planar recipe `p`, as it presents: a dense pane that lets only a faint tint
+/// of what lies behind the window through (black near 34 and white near 42 of 255 in the dark appearance, near 229 and
+/// 234 under a warm grey veil in the light one), with the sidebar's blur, blur fill and bend, and no edge bleed, which
+/// would bring the scene outside the window into the pane's edge.
+pub(super) fn window_sidebar(p: &mut GlassParams, dark: bool) {
+    p.blur = GlassBlur {
+        radius: WINDOW_SIDEBAR_BLUR,
+        level_opacity: [1.0; BLUR_LEVELS],
+        fill_radius: WINDOW_SIDEBAR_FILL_RADIUS,
+        fill_darken: if dark { WINDOW_SIDEBAR_FILL_BLEND } else { 0.0 },
+        fill_normal: WINDOW_SIDEBAR_FILL_NORMAL,
+        fill_lighten: if dark { 0.0 } else { WINDOW_SIDEBAR_FILL_BLEND },
+    };
+    p.face = if dark {
+        GlassFace {
+            saturation: WINDOW_SIDEBAR_SATURATION,
+            white: WINDOW_SIDEBAR_WHITE_DARK,
+            black: WINDOW_SIDEBAR_BLACK_DARK,
+            clamp: 1.0,
+            max_luma: 1.0,
+            fill: [0.0; 4],
+        }
+    } else {
+        GlassFace {
+            saturation: WINDOW_SIDEBAR_SATURATION,
+            white: WINDOW_SIDEBAR_WHITE_LIGHT,
+            black: WINDOW_SIDEBAR_BLACK_LIGHT,
+            clamp: 1.0,
+            max_luma: 1.0,
+            fill: WINDOW_SIDEBAR_VEIL_LIGHT,
+        }
+    };
+    p.refraction.amount = WINDOW_SIDEBAR_REFRACTION;
+    p.refraction.height = WINDOW_SIDEBAR_REFRACTION_HEIGHT;
+    p.bleed.opacity = 0.0;
 }
 
 // ---- the notification centre -------------------------------------------------------------------------------------

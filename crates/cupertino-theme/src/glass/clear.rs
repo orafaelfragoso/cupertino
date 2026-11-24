@@ -217,6 +217,9 @@ pub(super) fn dock(
         outer_height: DOCK_OUTER_REFRACTION_HEIGHT * s,
         outer_opacity: DOCK_OUTER_OPACITY,
     };
+    if !switcher {
+        super::fitted::dock_bar(&mut p, dark);
+    }
     if contrast {
         let f = &mut p.face;
         if dark {

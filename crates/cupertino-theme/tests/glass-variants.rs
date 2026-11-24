@@ -3,12 +3,12 @@
 
 use cupertino_theme::glass::{
     legibility_amount, GlassBase, GlassShadow, SidebarEdge, BLEED_AMOUNT_MAX, BLEED_BLUR_MAX,
-    CLEAR_BLUR, DOCK_BAR_BLUR, DOCK_BAR_LINE, DOCK_BAR_MAX_LUMA_DARK, DOCK_BAR_REFRACTION,
-    DOCK_BAR_REFRACTION_HEIGHT, GLASS_SIZE_MEDIUM, GLASS_SIZE_MINIMUM, LARGE_PANEL_BLACK_LIGHT,
-    LARGE_PANEL_SATURATION_DARK, LARGE_PANEL_SHADOW_BLUR, MODULE_BLACK, MODULE_SATURATION,
-    MODULE_WHITE, TRACK_CAPTURE_SCALE, WINDOW_SIDEBAR_BLACK_DARK, WINDOW_SIDEBAR_BLACK_LIGHT,
-    WINDOW_SIDEBAR_SATURATION, WINDOW_SIDEBAR_VEIL_LIGHT, WINDOW_SIDEBAR_WHITE_DARK,
-    WINDOW_SIDEBAR_WHITE_LIGHT,
+    CLEAR_BLUR, DOCK_BAR_BLUR, DOCK_BAR_EDGE_LINE, DOCK_BAR_LINE, DOCK_BAR_LINE_LIGHT,
+    DOCK_BAR_MAX_LUMA_DARK, DOCK_BAR_PEAK, DOCK_BAR_REFRACTION, DOCK_BAR_REFRACTION_HEIGHT,
+    GLASS_SIZE_MEDIUM, GLASS_SIZE_MINIMUM, LARGE_PANEL_BLACK_LIGHT, LARGE_PANEL_SATURATION_DARK,
+    LARGE_PANEL_SHADOW_BLUR, MODULE_BLACK, MODULE_SATURATION, MODULE_WHITE, TRACK_CAPTURE_SCALE,
+    WINDOW_SIDEBAR_BLACK_DARK, WINDOW_SIDEBAR_BLACK_LIGHT, WINDOW_SIDEBAR_SATURATION,
+    WINDOW_SIDEBAR_VEIL_LIGHT, WINDOW_SIDEBAR_WHITE_DARK, WINDOW_SIDEBAR_WHITE_LIGHT,
 };
 use cupertino_theme::{
     GlassMode, GlassModifiers, GlassParams, GlassSize, GlassStyle, GlassVariant,
@@ -566,17 +566,31 @@ fn the_dock_takes_its_own_recipe_and_its_own_accessibility_stages() {
                 (DOCK_BAR_REFRACTION, DOCK_BAR_REFRACTION_HEIGHT)
             );
             assert_eq!(p.refraction.outer_opacity, 0.0);
-            assert_eq!(p.specular.amount, 0.0, "no key light at rest");
-            assert_eq!((p.highlight.amount, p.highlight.color_bias), (0.4, -0.25));
-            // the line of light along the top and the bottom, equally bright
+            // the bright line along the top and the bottom: white light from above and as much from below
+            let s = p.specular;
+            assert_eq!((s.amount, s.fill), (DOCK_BAR_PEAK, 1.0));
+            assert_close!(s.angle, std::f32::consts::FRAC_PI_2);
+            assert!(s.spread > 0.0 && s.spread < std::f32::consts::FRAC_PI_4);
+            assert_eq!(p.highlight.amount, 0.0, "no rim darkens the corners");
+            // the faint line round the ends and the soft lift under the top and the bottom, equally bright
             let (amount, height, offset) = DOCK_BAR_LINE;
             let h = p.highlight;
             assert_eq!(
                 (h.glow_amount, h.glow_height, h.glow_offset, h.glow_fill),
-                (amount, height, offset, 1.0)
+                (
+                    if dark { amount } else { DOCK_BAR_LINE_LIGHT },
+                    height,
+                    offset,
+                    1.0
+                )
             );
-            assert!(h.glow_amount > 0.0);
-            assert_eq!(p.shadow.ring_opacity, 0.0);
+            assert!(h.glow_amount > 0.0 && h.diffuse.amount_scale > 0.0);
+            // the dark line outside the ends only, as dark over any backdrop
+            let sh = p.shadow;
+            assert_eq!(sh.edge_line, DOCK_BAR_EDGE_LINE);
+            assert!(sh.edge_line_sides > 0.0 && sh.edge_line_sides < std::f32::consts::FRAC_PI_2);
+            assert!(sh.edge_line_even);
+            assert_eq!(sh.ring_opacity, 0.0);
 
             let c = with(GlassVariant::Dock, dark, side, |m| {
                 m.increase_contrast = true

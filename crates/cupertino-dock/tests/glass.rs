@@ -306,6 +306,23 @@ fn the_bar_is_the_docks_glass_at_the_medium_size() {
         variants(&regions),
         [named(GlassVariant::Dock, GlassSize::Medium)]
     );
+    assert_eq!(regions[0].radius, 64.0 * bar::BAR_RADIUS);
+}
+
+/// How far the glass's continuous corner reaches along each side, per point of its radius (`cupertino-glass`'s
+/// `CONTINUOUS_EXTENT`).
+const CONTINUOUS_REACH: f64 = 1.53;
+
+#[test]
+fn each_end_of_the_bar_is_one_continuous_curve_from_the_top_to_the_bottom() {
+    // a 64 pt tile in an 84 pt deep bar: the corners reach the middle of each end (past the radius at which their
+    // reach meets half the depth), but stay short of round ends
+    let half = (64.0 + 2.0 * 10.0) / 2.0;
+    let radius = 64.0 * bar::BAR_RADIUS;
+    assert!(radius * CONTINUOUS_REACH > half, "{radius} pt");
+    assert!(radius < half, "{radius} pt");
+    // close to where the reach meets the middle, so the curve keeps nearly the continuous corner's exponent
+    assert!(radius - half / CONTINUOUS_REACH < 0.1 * (half - half / CONTINUOUS_REACH));
 }
 
 #[test]

@@ -33,9 +33,13 @@ pub const BAR_SURFACE: Surface = Surface::DockBar;
 pub const INDICATOR: f64 = 4.0;
 /// Gap between the bottom of a resting tile and the top of its running indicator, in points.
 pub const INDICATOR_GAP: f64 = 2.0;
-/// Corner radius of the bar as a fraction of the tile size: 19.6 pt at 64, a continuous corner that reaches 30 pt along
-/// each side, so the 84 pt deep bar keeps a straight stretch at each end.
-pub const BAR_RADIUS: f64 = 19.6 / 64.0;
+/// Corner radius of the bar as a fraction of the tile size: 28.3 pt at 64. Each end of the 84 pt deep bar is one
+/// continuous curve from the top to the bottom with no straight stretch, its corners reaching the full 42 pt along
+/// both sides with a superellipse of exponent about 3.25, which the glass's continuous corner draws for a radius this
+/// far past the 27.45 pt at which its reach meets half the depth (the macOS 27 dock's ends, traced at device pixels in
+/// `dock/dock_dark_rest_67.883` and `dock_light_rest_328.340`: within 0.3 pt rms; the 19.6 pt corner reaching 30 pt
+/// it replaces was up to 3 pt squarer at the diagonal).
+pub const BAR_RADIUS: f64 = 28.3 / 64.0;
 /// Side of an icon's artwork as a fraction of its tile: a 64 pt tile shows a 52 pt icon, centred.
 pub const ICON_ARTWORK: f64 = 52.0 / 64.0;
 /// Length of a separator's line as a fraction of the tile size (62 pt at 64), and its width in points.

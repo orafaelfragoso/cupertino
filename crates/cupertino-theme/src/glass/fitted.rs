@@ -194,8 +194,8 @@ const DOCK_BAR_LINE_MATRIX_DARK: ColorMatrix = [
     0.0, 0.0, 0.0, 1.0, 0.0,
 ];
 
-/// The Dock bar's lines over its recipe `p` (the Dock variant on the clear base, whose blur, face, rim and bends inside
-/// and outside the edge it keeps): a thin line of light along its top and bottom edges, equally bright and running
+/// The Dock bar's lines over its recipe `p` (the Dock variant on the clear base, whose blur, face, rim and bend inside
+/// the edge it keeps, and with nothing bent outside the edge): a thin line of light along its top and bottom edges, equally bright and running
 /// faintly down the curve of each end, over a soft lift of white, and a dark line just outside its ends, which the
 /// recipe's inputs alone leave out.
 pub(super) fn dock_bar(p: &mut GlassParams, dark: bool) {
@@ -226,6 +226,11 @@ pub(super) fn dock_bar(p: &mut GlassParams, dark: bool) {
     p.shadow.edge_line = DOCK_BAR_EDGE_LINE;
     p.shadow.edge_line_sides = DOCK_BAR_EDGE_LINE_SIDES;
     p.shadow.edge_line_even = true;
+    // The bar bends nothing outside its edge: the recipe's outer bend would draw a mirrored strip of whatever lies
+    // above the bar (a window, the wallpaper) beyond its outline.
+    p.refraction.outer_amount = 0.0;
+    p.refraction.outer_height = 0.0;
+    p.refraction.outer_opacity = 0.0;
 }
 
 // ---- the window sidebars -----------------------------------------------------------------------------------------

@@ -275,12 +275,17 @@ fn reduce_motion_flattens_both_bends_and_widens_the_blur_four_times_for_the_cent
         .radius,
         8.0
     );
-    // the app switcher and the Dock bar bend what lies outside their edge, but not with Reduce Motion
-    for variant in [GlassVariant::AppSwitcher, GlassVariant::Dock] {
-        assert!(at(variant, false, 100.0).refraction.outer_opacity > 0.0);
-        let reduced = with(variant, false, 100.0, |m| m.reduce_motion = true);
-        assert_eq!(reduced.refraction.outer_opacity, 0.0);
-    }
+    // the app switcher bends what lies outside its edge, but not with Reduce Motion; the Dock bar never does
+    let switcher = GlassVariant::AppSwitcher;
+    assert!(at(switcher, false, 100.0).refraction.outer_opacity > 0.0);
+    let reduced = with(switcher, false, 100.0, |m| m.reduce_motion = true);
+    assert_eq!(reduced.refraction.outer_opacity, 0.0);
+    assert_eq!(
+        at(GlassVariant::Dock, false, 100.0)
+            .refraction
+            .outer_opacity,
+        0.0
+    );
 }
 
 #[test]
@@ -569,13 +574,13 @@ fn the_dock_takes_its_own_recipe_and_its_own_accessibility_stages() {
                     (0.15, 0.9, 0.0, 1.0)
                 );
             }
-            // the bend inside the edge and outside it follow the bar's size
+            // the bend inside the edge follows the bar's size, and nothing is bent outside it
             let r = p.refraction;
             assert_close!(r.amount, -0.18 * side);
             assert_close!(r.height, 0.08 * side);
-            assert_close!(r.outer_amount, 0.42 * side);
-            assert_close!(r.outer_height, 0.13 * side);
-            assert_close!(r.outer_opacity, 0.2);
+            assert_close!(r.outer_amount, 0.0);
+            assert_close!(r.outer_height, 0.0);
+            assert_close!(r.outer_opacity, 0.0);
             // the bright line along the top and the bottom: white light from above and as much from below
             let s = p.specular;
             assert_eq!((s.amount, s.fill), (DOCK_BAR_PEAK, 1.0));

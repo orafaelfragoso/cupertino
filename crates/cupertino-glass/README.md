@@ -120,9 +120,9 @@ placement block at `GLASS_SAMPLER`), which only a recipe that turns those stages
    `GlassParams::with_tint`) over it in normal blending (`fill_and_tint`);
 6. soft band and rim: the soft band, a Gaussian about the edge where the highlight matrix is applied to the face, lit
    by a raised-cosine lobe around each end of the light's axis (the top and the bottom edge, not the sides), drawn for
-   interaction states and for the surfaces that ask for it; then the rim, one shift added to every channel,
-   `amount × colour bias × g(L) × w(φ)` in a band 1.7 × the highlight height deep, g the response to the face's luma
-   (0, 0.63, 1, 1.13, 1 at 0, ¼, ½, ¾, 1) and w = 0.15 + 0.85·sin²(2φ) of the edge's direction (darkening most on the
+   interaction states and for the surfaces that ask for it; then the rim, a shift added to each channel,
+   `amount × colour bias × g(c) × w(φ)` in a band 1.7 × the highlight height deep, g the response to that channel's own
+   value c (0, 0.63, 1, 1.13, 1 at 0, ¼, ½, ¾, 1), so a coloured face keeps its hue, and w = 0.15 + 0.85·sin²(2φ) of the edge's direction (darkening most on the
    diagonal corners when the bias is negative); then the control outline (`GlassBorder`: black at `opacity`, `width`
    points wide centred on the edge, `opacity · clamp(width/2 + ½ − |d|)`, `border_line`) darkens the face, and the key
    and fill light (`GlassSpecular`) add white over it (`specular_light`): `amount · (key · band + glow)`, the band
@@ -130,8 +130,9 @@ placement block at `GLASS_SAMPLER`), which only a recipe that turns those stages
    and the key (at `angle`, y up) or the fill light opposite it (at `fill` of the key), and the glow
    `amount_scale · arcs′ · (1 − depth / (height · height_scale))²` over arcs `spread_scale` as wide; where the light
    falls the outline keeps a fifth (`BORDER_LIT_SHARE`). The regular glass lights its edge so, a toolbar item draws the outline (`cupertino-theme`'s variants);
-7. the ring shadow, a stroke inside the outline moved up by its offset and blurred by a Gaussian of its radius,
-   darkens the face by its opacity; outside the shape, the drop shadow at its opacity, over the backdrop bent outside
+7. the ring shadow, a stroke inside the outline moved down by its offset and blurred by a Gaussian of its radius,
+   darkens the face by its opacity: a soft shade a little below the top edge and down the sides, none along the bottom
+   (the regular glass's 4-point stroke 8 points down, its deviation 5 points, at 0.06); outside the shape, the drop shadow at its opacity, over the backdrop bent outside
    the edge (`outer_read`): `d` points outside the outline, t = d / `outer_height`, the capture (`SHARP_LEVEL`) read
    `outer_amount · g(t)` points along the outward normal, laid at `outer_opacity · (1 − smoothstep(0, 1, t))` (the Dock
    only, at 0.2); the control outline's outer half lies over all of it;

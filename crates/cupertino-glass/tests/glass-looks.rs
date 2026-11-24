@@ -8,7 +8,9 @@ use cupertino_glass::glass::{
     BleedSource, Container, GlassMode, GlassShape, Rgb, BLEED_LEVEL, SHARP_LEVEL,
 };
 use cupertino_glass::gpu::HeadlessGpu;
-use cupertino_theme::glass::{GlassBorder, GlassParams, GlassSpecular, GlassStyle, GlowDiffuse};
+use cupertino_theme::glass::{
+    rim_brightness, GlassBorder, GlassParams, GlassSpecular, GlassStyle, GlowDiffuse,
+};
 use cupertino_theme::{GlassModifiers, GlassVariant};
 
 const FLAT: Rgb = [0.3, 0.5, 0.7];
@@ -142,6 +144,51 @@ fn the_control_outline_is_centred_on_the_edge_and_hidden_under_the_light() {
     lit.params.specular = SPECULAR;
     let (_, a) = lit.shade([50.0, -0.8], &flat);
     assert!((a - 0.025 * 0.2).abs() < 1e-6, "{a}");
+}
+
+#[test]
+fn the_ring_shadow_shades_below_the_top_edge_and_down_the_sides_but_not_along_the_bottom() {
+    let off = square();
+    let mut ringed = square();
+    // the regular ring, unblurred so its stroke is easy to follow: 4 points wide, 8 points down, at 0.06
+    let s = &mut ringed.params.shadow;
+    (s.ring_stroke, s.ring_offset, s.ring_blur, s.ring_opacity) = (4.0, 8.0, 0.0, 0.06);
+    let darkened = |p: [f32; 2]| {
+        let (base, _) = off.shade(p, &flat);
+        let (c, _) = ringed.shade(p, &flat);
+        (base, c)
+    };
+    // 10 points below the top edge, 2 inside the moved stroke: the face at 0.94
+    let (base, c) = darkened([50.0, 10.0]);
+    assert!(close(c, base.map(|v| v * 0.94), 1e-6), "{c:?} {base:?}");
+    // 2 points in from the left side, half way down: the stroke runs down the side
+    let (base, c) = darkened([2.0, 50.0]);
+    assert!(close(c, base.map(|v| v * 0.94), 1e-6), "{c:?} {base:?}");
+    // just under the top edge, above the moved stroke, and just above the bottom edge, whose stroke lies below the
+    // shape: nothing
+    for p in [[50.0, 4.0], [50.0, 97.0], [50.0, 93.0]] {
+        let (base, c) = darkened(p);
+        assert_eq!(c, base, "at {p:?}");
+    }
+}
+
+#[test]
+fn the_rim_shifts_each_channel_by_its_own_brightness() {
+    let off = square();
+    let mut rimmed = square();
+    let h = &mut rimmed.params.highlight;
+    (h.amount, h.color_bias, h.height) = (0.5, -0.25, 0.5);
+    // a quarter point inside the top edge, within the rim's 0.85-point band: a straight edge keeps 0.15 of the rim, so
+    // each channel moves by 0.5 · −0.25 · 0.15 times the response to its own value
+    let p = [50.0, 0.25];
+    let (base, _) = off.shade(p, &flat);
+    let (c, _) = rimmed.shade(p, &flat);
+    let k = 0.5 * -0.25 * 0.15;
+    let expected = base.map(|v| (v + k * rim_brightness(v)).clamp(0.0, 1.0));
+    assert!(close(c, expected, 1e-6), "{c:?} {expected:?}");
+    // a coloured face: the channels move by different amounts, so the rim keeps the face's hue rather than one shift
+    let shift: Vec<f32> = c.iter().zip(base).map(|(a, b)| a - b).collect();
+    assert!((shift[0] - shift[2]).abs() > 1e-4, "{shift:?}");
 }
 
 #[test]

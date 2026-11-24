@@ -269,7 +269,7 @@ pub const BORDER_LIT_SHARE: f32 = 0.2;
 
 /// The rim along the edge, and the soft band of light some surfaces lay under their top and bottom edges.
 ///
-/// The rim shifts every channel of the face by `amount · color_bias` (a negative bias darkens), scaled by the face's
+/// The rim shifts each channel of the face by `amount · color_bias` (a negative bias darkens), scaled by that channel's
 /// brightness and by the direction of the edge, strongest where the edge runs diagonally, in a band
 /// [`RIM_DEPTH_PER_HEIGHT`] times `height` deep.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -327,8 +327,8 @@ impl GlowDiffuse {
 
 /// How deep the rim reaches into the shape, per point of its `height`.
 pub const RIM_DEPTH_PER_HEIGHT: f32 = 1.7;
-/// How strongly the rim shows by the luma of the face under it `(luma, response)`; linear between: nothing on black,
-/// most a little above the middle.
+/// How strongly the rim shows by the brightness under it `(value, response)`, a channel of the face for the rim and the
+/// luma of the backdrop for the edge line; linear between: nothing on black, most a little above the middle.
 pub const RIM_BRIGHTNESS_RESPONSE: [(f32, f32); 5] = [
     (0.0, 0.0),
     (0.25, 0.63),
@@ -340,7 +340,7 @@ pub const RIM_BRIGHTNESS_RESPONSE: [(f32, f32); 5] = [
 /// where the edge runs diagonally.
 pub const RIM_STRAIGHT_SHARE: f32 = 0.15;
 
-/// The rim's response to a face of luma `luma` ([`RIM_BRIGHTNESS_RESPONSE`]).
+/// The rim's response to a brightness of `luma` (a channel of the face, or a luma) ([`RIM_BRIGHTNESS_RESPONSE`]).
 pub fn rim_brightness(luma: f32) -> f32 {
     by_side(&RIM_BRIGHTNESS_RESPONSE, luma.clamp(0.0, 1.0))
 }
@@ -369,7 +369,8 @@ pub struct GlassShadow {
     pub ring_blur: f32,
     /// Width in points of the ring.
     pub ring_stroke: f32,
-    /// How far up the ring is moved, in points.
+    /// How far down the ring is moved, in points: its stroke lies a little below the top edge and runs down the sides,
+    /// and its part along the bottom falls outside the shape.
     pub ring_offset: f32,
     /// How much the ring darkens the face: none at rest.
     pub ring_opacity: f32,

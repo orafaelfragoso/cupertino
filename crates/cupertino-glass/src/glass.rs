@@ -22,16 +22,18 @@
 //!    ([`bleed_tone`]), blends into the face at `opacity · (1 − t)²`, darken or normal ([`bleed_read`],
 //!    [`bleed_into`]); none at rest. Then the face's fill and the tint over it, in normal blending ([`fill_and_tint`]).
 //! 4. **Soft band and rim.** Where a surface asks for it, a soft band of the light `matrix · face` along the arcs of
-//!    edge facing either end of the axis through `angle` ([`highlight_lobe`]). Then the rim ([`rim_shift`]): every
-//!    channel shifted by `amount · color_bias` (darker for a negative bias), scaled by the face's brightness
-//!    ([`rim_brightness`]) and by the edge's direction ([`rim_direction`], strongest on diagonals), in a band
-//!    `RIM_DEPTH_PER_HEIGHT · height` deep.
+//!    edge facing either end of the axis through `angle` ([`highlight_lobe`]). Then the rim ([`rim_shift`]): each
+//!    channel shifted by `amount · color_bias` (darker for a negative bias), scaled by that channel's own brightness
+//!    ([`rim_brightness`] of the channel, so a coloured face keeps its hue where a brighter channel moves further) and by
+//!    the edge's direction ([`rim_direction`], strongest on diagonals), in a band `RIM_DEPTH_PER_HEIGHT · height` deep.
 //! 5. **Control outline and key and fill light.** The control outline, a black line centred on the edge, darkens the
 //!    face ([`border_line`]); over it the key and fill light and their diffuse glow add white ([`specular_light`]),
-//!    and where they fall the outline shows at a fifth. Neither shows in today's recipes.
+//!    and where they fall the outline shows at a fifth.
 //! 6. **Veil.** A black veil from the top of the shapes to their bottom ([`Container::veil`]).
-//! 7. **Ring shadow.** Inside the shape, a stroke `stroke` wide along the inside of the outline, moved up by
-//!    `ring_offset` and blurred with a Gaussian of `ring_blur`, darkens the face by its opacity ([`ring_shadow`]).
+//! 7. **Ring shadow.** Inside the shape, a stroke `stroke` wide along the inside of the outline, moved down by
+//!    `ring_offset` and blurred with a Gaussian of `ring_blur`, darkens the face by its opacity ([`ring_shadow`]): a soft
+//!    shade a little below the top edge and down the sides, none along the bottom, whose part of the stroke lies outside
+//!    the shape.
 //! 8. **Outside.** The backdrop bent outside the edge ([`outer_read`], the sharp copy [`SHARP_LEVEL`]), under a drop
 //!    shadow offset by `offset`, blurred by `height` at `amount` percent of its fill's alpha, and an outline hairline,
 //!    under the edge line and the control outline. The bend, ring and drop shadow are drawn at their opacity, which is
@@ -567,27 +569,28 @@ pub fn rim_band(depth: f32, reach: f32) -> f32 {
     (reach + 0.5 - depth.max(0.0)).clamp(0.0, 1.0)
 }
 
-/// Stage 5, second part: the shift the rim adds to every channel of the face `c` at distance `d` (negative inside,
-/// points) from the edge, with outward `normal`: `amount · color_bias`, times the face's brightness response and the
-/// edge's direction response, inside the rim's depth.
-pub fn rim_shift(c: Rgb, d: f32, normal: [f32; 2], p: &GlassParams) -> f32 {
+/// Stage 5, second part: the shift the rim adds to each channel of the face `c` at distance `d` (negative inside,
+/// points) from the edge, with outward `normal`: `amount · color_bias`, times that channel's brightness response
+/// ([`rim_brightness`] of the channel's own value) and the edge's direction response, inside the rim's depth.
+pub fn rim_shift(c: Rgb, d: f32, normal: [f32; 2], p: &GlassParams) -> Rgb {
     let h = &p.highlight;
     if h.amount == 0.0 || h.height <= 0.0 || (normal[0] == 0.0 && normal[1] == 0.0) {
-        return 0.0;
+        return [0.0; 3];
     }
     let band = rim_band(-d, RIM_DEPTH_PER_HEIGHT * h.height);
     if band <= 0.0 {
-        return 0.0;
+        return [0.0; 3];
     }
     let angle = normal[1].atan2(normal[0]);
-    h.amount * h.color_bias * rim_brightness(luma(c)) * rim_direction(angle) * band
+    let k = h.amount * h.color_bias * rim_direction(angle) * band;
+    c.map(|v| k * rim_brightness(v))
 }
 
 /// Stage 5: the soft band, then the rim, on the face `c`.
 pub fn highlight(c: Rgb, d: f32, normal: [f32; 2], p: &GlassParams) -> Rgb {
     let c = glow(c, d, normal, p);
     let shift = rim_shift(c, d, normal, p);
-    c.map(|v| (v + shift).clamp(0.0, 1.0))
+    std::array::from_fn(|i| (c[i] + shift[i]).clamp(0.0, 1.0))
 }
 
 fn matrix_rgb(m: &ColorMatrix, c: Rgb) -> Rgb {
@@ -609,7 +612,7 @@ pub fn normal_cdf(x: f32) -> f32 {
     1.0 / (1.0 + (-1.702 * x).exp())
 }
 
-/// Stage 6: how much the ring shadow darkens the face at a pixel whose field, with the ring moved up by its offset, is
+/// Stage 6: how much the ring shadow darkens the face at a pixel whose field, with the ring moved down by its offset, is
 /// `d_ring` (negative inside): the stroke from the outline to `stroke` inside it, blurred with a Gaussian of
 /// `ring_blur`, at the ring's opacity. The face is multiplied by one minus it.
 pub fn ring_shadow(d_ring: f32, p: &GlassParams) -> f32 {
@@ -1173,9 +1176,9 @@ impl Container {
         c = highlight(c, de, normal, params);
         c = border_and_light(c, d, (-de).max(0.0), normal, params);
         c = self.veil(p, c);
-        // the ring is moved up: at p it is what the shape's field is a ring offset below p
+        // the ring is moved down: at p it is what the shape's field is a ring offset above p
         let ring = ring_shadow(
-            self.field([p[0], p[1] + params.shadow.ring_offset]).0,
+            self.field([p[0], p[1] - params.shadow.ring_offset]).0,
             params,
         );
         c = c.map(|v| v * (1.0 - ring));

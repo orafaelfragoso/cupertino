@@ -6,9 +6,9 @@ use cupertino_theme::glass::{
     CLEAR_BLUR, DOCK_BAR_BLUR, DOCK_BAR_LINE, DOCK_BAR_MAX_LUMA_DARK, DOCK_BAR_REFRACTION,
     DOCK_BAR_REFRACTION_HEIGHT, GLASS_SIZE_MEDIUM, GLASS_SIZE_MINIMUM, LARGE_PANEL_BLACK_LIGHT,
     LARGE_PANEL_SATURATION_DARK, LARGE_PANEL_SHADOW_BLUR, MODULE_BLACK, MODULE_SATURATION,
-    MODULE_WHITE, TRACK_CAPTURE_SCALE, WINDOW_SIDEBAR_BLACK_DARK, WINDOW_SIDEBAR_BLACK_LIGHT,
-    WINDOW_SIDEBAR_SATURATION, WINDOW_SIDEBAR_VEIL_LIGHT, WINDOW_SIDEBAR_WHITE_DARK,
-    WINDOW_SIDEBAR_WHITE_LIGHT,
+    MODULE_WHITE, TOOLBAR_SPECULAR_AMOUNT, TOOLBAR_SPECULAR_HEIGHT, TRACK_CAPTURE_SCALE,
+    WINDOW_SIDEBAR_BLACK_DARK, WINDOW_SIDEBAR_BLACK_LIGHT, WINDOW_SIDEBAR_SATURATION,
+    WINDOW_SIDEBAR_VEIL_LIGHT, WINDOW_SIDEBAR_WHITE_DARK, WINDOW_SIDEBAR_WHITE_LIGHT,
 };
 use cupertino_theme::{
     GlassMode, GlassModifiers, GlassParams, GlassSize, GlassStyle, GlassVariant,
@@ -522,15 +522,35 @@ fn a_cartouche_bends_a_fixed_five_points_at_the_size_it_resolves_at() {
 }
 
 #[test]
-fn a_toolbar_item_blurs_a_fifth_bends_a_fixed_band_and_draws_the_control_border() {
+fn a_toolbar_item_blurs_a_fifth_bends_a_fixed_band_lights_a_deeper_rim_and_leaves_its_outline_to_the_toolkit(
+) {
     for dark in [false, true] {
         for side in [28.0, 36.0] {
             let p = at(GlassVariant::ToolbarItem, dark, side);
             assert_eq!(&p.blur.level_opacity[..2], &[0.2, 0.2]);
             assert_close!(p.blur_sigma(), 2.0);
             assert_eq!((p.refraction.amount, p.refraction.height), (-18.0, 9.0));
-            assert_eq!((p.border.opacity, p.border.width), (0.125, 1.0));
-            assert_eq!(p.specular, at(GlassVariant::Regular, dark, side).specular);
+            assert_eq!(
+                p.border.opacity, 0.0,
+                "the system's control border is clear without a border setting"
+            );
+            assert_eq!(p.shadow.edge_line, 0.0);
+            // a deeper, softer line of light than the regular glass's, its glow as deep and as strong
+            let (sp, regular) = (p.specular, at(GlassVariant::Regular, dark, side).specular);
+            assert_eq!(
+                (sp.amount, sp.height),
+                (TOOLBAR_SPECULAR_AMOUNT, TOOLBAR_SPECULAR_HEIGHT)
+            );
+            assert!(sp.height > regular.height && sp.amount < regular.amount);
+            assert_close!(
+                sp.diffuse.height_scale * sp.height,
+                regular.diffuse.height_scale * regular.height
+            );
+            assert_close!(
+                sp.diffuse.amount_scale * sp.amount,
+                regular.diffuse.amount_scale * regular.amount
+            );
+            assert_eq!(sp.diffuse.spread_scale, regular.diffuse.spread_scale);
         }
         let contrast = with(GlassVariant::ToolbarItem, dark, 36.0, |m| {
             m.increase_contrast = true

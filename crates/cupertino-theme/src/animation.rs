@@ -423,6 +423,25 @@ impl SpringPreset {
     });
 }
 
+/// The motions of a toolbar item's glass.
+impl SpringPreset {
+    /// A toolbar item's glass growing under a press: a little bounce (damping ratio 0.65, passing its size by about
+    /// 7 %), its undamped period 0.16 s, so it peaks about 0.1 s in and settles within a hundredth by about 0.2 s. A
+    /// Finder recording (`video/frames/files-windows`, 362.78 s, 379.71 s, 389.87 s) shows each capsule widening by
+    /// about 2.5 points, at its widest about 90 ms after the press and a little narrower after.
+    pub const TOOLBAR_ITEM_PRESS: SpringPreset = SpringPreset(SpringForm::Ratio {
+        response: 0.16,
+        damping: 0.65,
+    });
+    /// The glass going back to its size once the press lets go: damping ratio 0.8, its undamped period 0.2 s, so it
+    /// has gone nine tenths of the way about 95 ms in and dips a little under its size (the recording: 390.08 to
+    /// 390.16 s, and a dip of about a tenth of a point after 363.00 s).
+    pub const TOOLBAR_ITEM_RELEASE: SpringPreset = SpringPreset(SpringForm::Ratio {
+        response: 0.2,
+        damping: 0.8,
+    });
+}
+
 /// The motions of the notification banners and the notification list.
 impl SpringPreset {
     /// A banner springing back to rest after a leftward swipe: mass 1, stiffness 100, damping 100, a damping ratio of

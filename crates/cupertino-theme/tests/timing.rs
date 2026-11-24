@@ -164,6 +164,36 @@ fn a_named_motion_reads_out_as_the_curves_that_run_it() {
 }
 
 #[test]
+fn a_toolbar_items_press_peaks_about_a_tenth_of_a_second_in_and_its_release_dips_a_little() {
+    let press = Timing::from(SpringPreset::TOOLBAR_ITEM_PRESS);
+    let (peak_at, peak) = (1..300)
+        .map(|ms| (f64::from(ms) / 1000.0, press.value(f64::from(ms) / 1000.0)))
+        .fold((0.0, 0.0), |a, b| if b.1 > a.1 { b } else { a });
+    assert!((0.09..0.12).contains(&peak_at), "peaks at {peak_at} s");
+    assert!(peak > 1.05 && peak < 1.09, "peaks at {peak}");
+    assert!(
+        (press.value(0.2) - 1.0).abs() < 0.01,
+        "{}",
+        press.value(0.2)
+    );
+    let release = Timing::from(SpringPreset::TOOLBAR_ITEM_RELEASE);
+    assert!(
+        (0.88..0.95).contains(&release.value(0.095)),
+        "{}",
+        release.value(0.095)
+    );
+    let dip = (1..300)
+        .map(|ms| release.value(f64::from(ms) / 1000.0))
+        .fold(0.0, f64::max);
+    assert!(dip > 1.0 && dip < 1.03, "passes its end by {dip}");
+    assert!(
+        release.duration() < 0.35,
+        "settles in {} s",
+        release.duration()
+    );
+}
+
+#[test]
 fn a_glass_buttons_press_settles_in_about_512_ms_and_its_release_in_about_965() {
     for (spring, settles) in [
         (SpringPreset::GLASS_BUTTON_PRESS, 0.512),

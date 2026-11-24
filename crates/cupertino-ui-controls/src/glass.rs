@@ -193,8 +193,9 @@ pub(crate) fn paint_glass_tinted(
                 .scale(scale);
             if cx.glass(tint.map_or(glass, |c| glass.tint(c))) {
                 // the toolkit lays a toolbar control's outline, and with Increase Contrast a firmer rim, over the
-                // compositor's glass
-                paint_edge(cx, role, rect, radius);
+                // compositor's glass, where the glass is drawn: grown with it under a press
+                let (edge, edge_radius) = scaled(rect, radius, scale);
+                paint_edge(cx, role, edge, edge_radius);
                 return true;
             }
             // without the desktop's glass the toolkit paints its own
@@ -229,17 +230,50 @@ fn shows_button_glass(cx: &PaintCx<'_>, rect: Rect) -> bool {
         && fills
 }
 
-/// The rim the toolkit lays over a floating control's glass with Increase Contrast in the light appearance, at its sides
-/// and at its top and bottom: a dark line on the outermost device pixel of the shape, strongest across the middle of the
-/// sides.
-const EDGE_RIM_CONTRAST_SIDES: f32 = 0.5;
-const EDGE_RIM_CONTRAST_ENDS: f32 = 0.3;
-/// The outline of a toolbar control's glass at rest, as a share of black on the outermost device pixel of its shape, at
-/// the middle of its sides and at its top and bottom. Light: a grey line at the sides and a faint one at the ends, so a
-/// face of 245 over white keeps its sides at 181 and its top and bottom at 228. Dark: a dark line along the sides only,
-/// which leaves the top and bottom to the glass's line of light.
-const TOOLBAR_RIM_LIGHT: (f32, f32) = (0.26, 0.07);
-const TOOLBAR_RIM_DARK: (f32, f32) = (0.6, 0.0);
+/// A line the toolkit lays on the outermost device pixel of a floating control's glass: black or white, at its share
+/// across the middle of the sides and at the top and the bottom, in a straight run between them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Rim {
+    white: bool,
+    sides: f32,
+    top: f32,
+    bottom: f32,
+}
+
+/// The rim the toolkit lays over a floating control's glass with Increase Contrast in the light appearance: a dark line,
+/// strongest across the middle of the sides.
+const EDGE_RIM_CONTRAST: Rim = Rim {
+    white: false,
+    sides: 0.5,
+    top: 0.3,
+    bottom: 0.3,
+};
+/// The outline of a toolbar control's glass in the light appearance, as a share of black: a grey line at the sides and
+/// a faint one at the top and bottom. A Finder capture (`files-windows/toolbar_icon_view_360s`, a white window) shows
+/// the round ends at 183 over a face of 248, the top at 231 under the line of light and the bottom at 227.
+const TOOLBAR_RIM_LIGHT: Rim = Rim {
+    white: false,
+    sides: 0.26,
+    top: 0.09,
+    bottom: 0.105,
+};
+/// The outline in the dark appearance: a dark line down the sides only, which leaves the top and bottom to the glass's
+/// line of light. A dark Finder capture (`observed/captures/55-columns`) shows the round ends at 14 between a window of
+/// 39 and a face of 66.
+const TOOLBAR_RIM_DARK: Rim = Rim {
+    white: false,
+    sides: 0.76,
+    top: 0.0,
+    bottom: 0.0,
+};
+/// The control border of a toolbar control with Increase Contrast in the dark appearance: the system's
+/// ControlBorderShapeStyle at 0.65, white (plus-lighter there, laid as a plain white line here).
+const TOOLBAR_RIM_CONTRAST_DARK: Rim = Rim {
+    white: true,
+    sides: 0.65,
+    top: 0.65,
+    bottom: 0.65,
+};
 /// The faint shade a toolbar control casts just below itself in the light appearance, as a share of black, its offset
 /// down and its blur in points, cut out of the control's shape so it never dims the glass.
 const TOOLBAR_SHADE: f32 = 0.015;
@@ -248,18 +282,19 @@ const TOOLBAR_SHADE_BLUR: f64 = 4.5;
 /// How far past the shape the shade may reach, in points.
 const TOOLBAR_SHADE_REACH: f64 = TOOLBAR_SHADE_OFFSET + 3.0 * TOOLBAR_SHADE_BLUR;
 
-/// The rim of a floating control's glass as a share of black `(sides, ends)`, or none: the firmer one with Increase
-/// Contrast in the light appearance, else a toolbar control's outline ([`TOOLBAR_RIM_LIGHT`], [`TOOLBAR_RIM_DARK`]);
-/// any other glass draws no outline of its own.
-fn edge_rim(theme: &cupertino_theme::ui::ThemeTokens, role: GlassRole) -> Option<(f32, f32)> {
+/// The rim of a floating control's glass, or none: the firmer one with Increase Contrast in the light appearance, else
+/// a toolbar control's outline ([`TOOLBAR_RIM_LIGHT`], [`TOOLBAR_RIM_DARK`], [`TOOLBAR_RIM_CONTRAST_DARK`]); any other
+/// glass draws no outline of its own.
+fn edge_rim(theme: &cupertino_theme::ui::ThemeTokens, role: GlassRole) -> Option<Rim> {
     let appearance = theme.preferences.appearance;
-    if !appearance.is_dark() && appearance.is_high_contrast() {
-        Some((EDGE_RIM_CONTRAST_SIDES, EDGE_RIM_CONTRAST_ENDS))
+    let (dark, contrast) = (appearance.is_dark(), appearance.is_high_contrast());
+    if !dark && contrast {
+        Some(EDGE_RIM_CONTRAST)
     } else if role == GlassRole::ToolbarGroup {
-        Some(if appearance.is_dark() {
-            TOOLBAR_RIM_DARK
-        } else {
-            TOOLBAR_RIM_LIGHT
+        Some(match (dark, contrast) {
+            (true, true) => TOOLBAR_RIM_CONTRAST_DARK,
+            (true, false) => TOOLBAR_RIM_DARK,
+            (false, _) => TOOLBAR_RIM_LIGHT,
         })
     } else {
         None
@@ -267,10 +302,11 @@ fn edge_rim(theme: &cupertino_theme::ui::ThemeTokens, role: GlassRole) -> Option
 }
 
 /// The rim the toolkit lays over the compositor's glass of a floating control ([`edge_rim`]), and in the light
-/// appearance the faint shade below a toolbar control ([`TOOLBAR_SHADE`]).
+/// appearance the faint shade below a toolbar control ([`TOOLBAR_SHADE`]), round `rect`: the glass's shape as it is
+/// drawn now, grown under a press.
 fn paint_edge(cx: &mut PaintCx<'_>, role: GlassRole, rect: Rect, radius: f64) {
     let theme = &cx.env().theme;
-    let Some((sides, ends)) = edge_rim(theme, role) else {
+    let Some(rim) = edge_rim(theme, role) else {
         return;
     };
     if role == GlassRole::ToolbarGroup && !theme.preferences.appearance.is_dark() {
@@ -278,7 +314,8 @@ fn paint_edge(cx: &mut PaintCx<'_>, role: GlassRole, rect: Rect, radius: f64) {
     }
     let scale = cx.env().scale.max(1.0);
     let px = 1.0 / scale;
-    let black = |a| Color::new(0.0, 0.0, 0.0, a);
+    let tone = if rim.white { 1.0 } else { 0.0 };
+    let line = |a| Color::new(tone, tone, tone, a);
     let stop = |offset, color| cupertino_ui_render::GradientStop { offset, color };
     cx.push(PaintOp::Stroke {
         shape: Shape::RoundedRect {
@@ -290,12 +327,25 @@ fn paint_edge(cx: &mut PaintCx<'_>, role: GlassRole, rect: Rect, radius: f64) {
             start: cupertino_geometry::Point::new(rect.min_x(), rect.min_y()),
             end: cupertino_geometry::Point::new(rect.min_x(), rect.max_y()),
             stops: vec![
-                stop(0.0, black(ends)),
-                stop(0.5, black(sides)),
-                stop(1.0, black(ends)),
+                stop(0.0, line(rim.top)),
+                stop(0.5, line(rim.sides)),
+                stop(1.0, line(rim.bottom)),
             ],
         },
     });
+}
+
+/// `rect` grown `scale` times its size about its centre, with its corner `radius`.
+pub(crate) fn scaled(rect: Rect, radius: f64, scale: f64) -> (Rect, f64) {
+    if scale == 1.0 {
+        return (rect, radius);
+    }
+    let (w, h) = (rect.width() * scale, rect.height() * scale);
+    let centre = rect.center();
+    (
+        Rect::new(centre.x - w / 2.0, centre.y - h / 2.0, w, h),
+        radius * scale,
+    )
 }
 
 /// The faint shade below a toolbar control in the light appearance, cut out of its shape.

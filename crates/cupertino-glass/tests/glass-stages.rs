@@ -259,7 +259,7 @@ const MODEL_FINGERPRINTS: [(&str, u64); 10] = [
     ("module pair", 2219171919134958771),
     ("bar light capsule", 5799772737222772845),
     ("popover outline", 16496941921438256133),
-    ("toolbar edge", 8746112307137350193),
+    ("toolbar edge", 1898479643907721445),
     ("reduced transparency", 3290778928593919062),
 ];
 
@@ -272,6 +272,6 @@ const DEVICE_FINGERPRINTS: [(&str, u64); 10] = [
     ("module pair", 7526460935851899905),
     ("bar light capsule", 15374590078766967087),
     ("popover outline", 9629186189288533202),
-    ("toolbar edge", 1902305022080684821),
+    ("toolbar edge", 7638736529590445401),
     ("reduced transparency", 17816218594961483024),
 ];

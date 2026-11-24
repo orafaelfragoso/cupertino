@@ -338,7 +338,7 @@ const GLASS_PRESS_FILL_CONTRAST_LIGHT: f32 = 0.349;
 const GLASS_PRESS_FILL_CONTRAST_DARK: f32 = 0.298;
 
 /// The interaction fill of a glass button in `theme`, while hovered or (`pressed`) pressed.
-fn glass_interaction_fill(theme: &ThemeTokens, pressed: bool) -> Color {
+pub(crate) fn glass_interaction_fill(theme: &ThemeTokens, pressed: bool) -> Color {
     let dark = theme.preferences.appearance.is_dark();
     let contrast = theme.preferences.appearance.is_high_contrast();
     let alpha = match (pressed, contrast, dark) {

@@ -7,10 +7,12 @@
 //! inset ([`nested_radius`]). Thin dividers 20 pt tall separate the segments of a group that asks for them, except
 //! beside the chosen one. Each control's glass is the [`GlassRole::ToolbarGroup`] role.
 
-use crate::glass::{nested_radius, paint_glass, GlassRole};
+use crate::button::glass_interaction_fill;
+use crate::glass::{nested_radius, paint_glass, paint_glass_tinted, GlassRole};
 use crate::icon::symbol;
 use crate::look::{self, paint_focus_ring};
-use crate::press::{Keys, Outcome, Press};
+use crate::press::{Keys, Outcome};
+use crate::toolbar_press::{CapsulePress, Landing, PressLink, SegmentPress};
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_theme::ui::{Color, ColorRole};
 use cupertino_ui_core::layout::{
@@ -206,8 +208,16 @@ impl<M: Clone + 'static> From<ToolbarGroup<M>> for Element<M> {
         } else {
             TOOLBAR_SEGMENT
         };
-        let enabled = group.items.iter().map(|i| i.on_press.is_some()).collect();
+        let landings = group
+            .items
+            .iter()
+            .map(|i| Landing {
+                enabled: i.on_press.is_some(),
+                menu: i.menu.is_some(),
+            })
+            .collect();
         let count = group.items.len();
+        let link = PressLink::default();
         let children = group
             .items
             .into_iter()
@@ -223,6 +233,7 @@ impl<M: Clone + 'static> From<ToolbarGroup<M>> for Element<M> {
                         width,
                         chosen: choice.then_some(group.selected == Some(i)),
                         picker: false,
+                        link: link.clone(),
                     }),
                     key,
                 )
@@ -234,7 +245,8 @@ impl<M: Clone + 'static> From<ToolbarGroup<M>> for Element<M> {
             selected: group.selected,
             segment: width,
             dividers: group.dividers,
-            enabled,
+            landings,
+            link,
             children,
         })
     }
@@ -243,6 +255,11 @@ impl<M: Clone + 'static> From<ToolbarGroup<M>> for Element<M> {
 impl<M: Clone + 'static> From<ToolbarMenuButton<M>> for Element<M> {
     fn from(button: ToolbarMenuButton<M>) -> Self {
         let key = button.key.clone();
+        let link = PressLink::default();
+        let landing = Landing {
+            enabled: button.on_press.is_some(),
+            menu: true,
+        };
         let segment = Element::new(Segment {
             glyph: ToolbarGlyph::Symbol(button.symbol),
             label: button.label,
@@ -251,6 +268,7 @@ impl<M: Clone + 'static> From<ToolbarMenuButton<M>> for Element<M> {
             width: TOOLBAR_MENU_BUTTON,
             chosen: None,
             picker: false,
+            link: link.clone(),
         });
         Element::new(Capsule {
             label: String::new(),
@@ -258,7 +276,8 @@ impl<M: Clone + 'static> From<ToolbarMenuButton<M>> for Element<M> {
             selected: None,
             segment: TOOLBAR_MENU_BUTTON,
             dividers: false,
-            enabled: Vec::new(),
+            landings: vec![landing],
+            link,
             children: vec![keyed(segment, key)],
         })
     }
@@ -267,6 +286,11 @@ impl<M: Clone + 'static> From<ToolbarMenuButton<M>> for Element<M> {
 impl<M: Clone + 'static> From<ToolbarPicker<M>> for Element<M> {
     fn from(picker: ToolbarPicker<M>) -> Self {
         let key = picker.key.clone();
+        let link = PressLink::default();
+        let landing = Landing {
+            enabled: picker.on_press.is_some(),
+            menu: true,
+        };
         let segment = Element::new(Segment {
             glyph: ToolbarGlyph::Symbol(picker.symbol),
             label: picker.label,
@@ -275,6 +299,7 @@ impl<M: Clone + 'static> From<ToolbarPicker<M>> for Element<M> {
             width: TOOLBAR_MENU_BUTTON,
             chosen: None,
             picker: true,
+            link: link.clone(),
         });
         Element::new(Capsule {
             label: String::new(),
@@ -282,7 +307,8 @@ impl<M: Clone + 'static> From<ToolbarPicker<M>> for Element<M> {
             selected: None,
             segment: TOOLBAR_MENU_BUTTON,
             dividers: false,
-            enabled: Vec::new(),
+            landings: vec![landing],
+            link,
             children: vec![keyed(segment, key)],
         })
     }
@@ -291,6 +317,11 @@ impl<M: Clone + 'static> From<ToolbarPicker<M>> for Element<M> {
 impl<M: Clone + 'static> From<ToolbarButton<M>> for Element<M> {
     fn from(button: ToolbarButton<M>) -> Self {
         let key = button.key.clone();
+        let link = PressLink::default();
+        let landing = Landing {
+            enabled: button.on_press.is_some(),
+            menu: false,
+        };
         let segment = Element::new(Segment {
             glyph: button.glyph,
             label: button.label,
@@ -299,6 +330,7 @@ impl<M: Clone + 'static> From<ToolbarButton<M>> for Element<M> {
             width: TOOLBAR_CONTROL,
             chosen: None,
             picker: false,
+            link: link.clone(),
         });
         Element::new(Capsule {
             label: String::new(),
@@ -306,7 +338,8 @@ impl<M: Clone + 'static> From<ToolbarButton<M>> for Element<M> {
             selected: None,
             segment: TOOLBAR_CONTROL,
             dividers: false,
-            enabled: Vec::new(),
+            landings: vec![landing],
+            link,
             children: vec![keyed(segment, key)],
         })
     }
@@ -482,7 +515,8 @@ impl<M: 'static> Widget<M> for SearchCover {
     }
 }
 
-/// The glass under a group's segments, the chosen segment's pill and the dividers.
+/// The glass under a group's segments, the chosen segment's pill and the dividers; the glass grows under a press of any
+/// of its enabled segments ([`CapsulePress`]).
 struct Capsule<M> {
     /// Empty for a single control, which needs no group of its own.
     label: String,
@@ -490,8 +524,10 @@ struct Capsule<M> {
     selected: Option<usize>,
     segment: f64,
     dividers: bool,
-    /// Which segments are enabled, for the dividers.
-    enabled: Vec<bool>,
+    /// Each segment, in order: whether it is enabled and whether it opens a menu.
+    landings: Vec<Landing>,
+    /// Hears from the segments whether the pointer arms one of them.
+    link: PressLink,
     children: Vec<Element<M>>,
 }
 
@@ -505,16 +541,28 @@ impl<M> Capsule<M> {
         if !self.dividers {
             return Vec::new();
         }
-        let count = self.enabled.len();
+        let count = self.landings.len();
         (1..count)
             .filter(|&i| self.selected != Some(i) && self.selected != Some(i - 1))
             .map(|i| self.segment * i as f64)
             .collect()
     }
+
+    /// The segment a position in window coordinates lands on, the capsule lying at `bounds`, its segments laid out
+    /// against the reading direction when `rtl`.
+    fn landing(&self, bounds: Option<Rect>, rtl: bool, at: Point) -> Option<Landing> {
+        let bounds = bounds.filter(|b| b.contains(at))?;
+        let x = at.x - bounds.min_x();
+        let x = if rtl { bounds.width() - x } else { x };
+        let i = (x / self.segment).floor().max(0.0) as usize;
+        self.landings
+            .get(i.min(self.landings.len().saturating_sub(1)))
+            .copied()
+    }
 }
 
 impl<M: 'static> Widget<M> for Capsule<M> {
-    type State = ();
+    type State = CapsulePress;
 
     fn layout(&self) -> LayoutSpec {
         LayoutSpec {
@@ -544,14 +592,17 @@ impl<M: 'static> Widget<M> for Capsule<M> {
         }
     }
 
-    fn state(&self) {}
+    fn state(&self) -> CapsulePress {
+        CapsulePress::new(&self.link)
+    }
 
-    fn update(&self, old: &Self, _: &mut ()) -> Change {
+    fn update(&self, old: &Self, press: &mut CapsulePress) -> Change {
+        press.adopt(&self.link);
         if self.width != old.width || self.segment != old.segment {
             Change::Layout
         } else if self.selected != old.selected
             || self.dividers != old.dividers
-            || self.enabled != old.enabled
+            || self.landings != old.landings
         {
             Change::Paint
         } else {
@@ -559,22 +610,34 @@ impl<M: 'static> Widget<M> for Capsule<M> {
         }
     }
 
-    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+    fn measure(&self, _: &CapsulePress, _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
         Measured {
             size: Size::new(self.width, TOOLBAR_CONTROL),
             baseline: None,
         }
     }
 
-    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+    /// Hears its segments' presses on their way down, to grow its glass; never takes them.
+    fn event(
+        &self,
+        press: &mut CapsulePress,
+        event: &Event,
+        cx: &mut EventCx<'_, M>,
+    ) -> Propagation {
+        let bounds = cx.bounds();
+        let rtl = cx.env().direction == LayoutDirection::Rtl;
+        if press.event(event, |at| self.landing(bounds, rtl, at), cx) {
+            cx.request_paint();
+        }
         Propagation::Continue
     }
 
-    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+    fn paint(&self, press: &CapsulePress, cx: &mut PaintCx<'_>) {
         let size = cx.size();
         let rect = Rect::new(0.0, 0.0, size.width, size.height);
         let radius = Self::radius();
-        paint_glass(cx, GlassRole::ToolbarGroup, rect, radius);
+        let scale = press.scale(size.width, cx);
+        paint_glass_tinted(cx, GlassRole::ToolbarGroup, rect, radius, None, scale);
         let theme = cx.env().theme.clone();
         let rtl = cx.env().direction == LayoutDirection::Rtl;
         let mirror = |x: f64| if rtl { size.width - x } else { x };
@@ -602,7 +665,7 @@ impl<M: 'static> Widget<M> for Capsule<M> {
         }
     }
 
-    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+    fn semantics(&self, _: &CapsulePress, cx: &mut SemanticsCx<'_>) {
         if self.label.is_empty() {
             return;
         }
@@ -822,20 +885,18 @@ impl<M: 'static> Widget<M> for Pill {
         let rect = Rect::new(0.0, 0.0, size.width, size.height);
         let radius = nested_radius(TOOLBAR_CONTROL / 2.0, TOOLBAR_CHOICE_INSET);
         let theme = cx.env().theme.clone();
-        look::fill(cx, rect, radius, Some(pill_color(&theme, true)));
+        look::fill(cx, rect, radius, Some(pill_color(&theme)));
     }
 
     fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
 }
 
-/// The colour of a chosen segment's pill, or of a pressed one's.
-fn pill_color(theme: &cupertino_theme::ui::ThemeTokens, chosen: bool) -> Color {
-    let dark = theme.preferences.appearance.is_dark();
-    match (dark, chosen) {
-        (true, true) => Color::new(1.0, 1.0, 1.0, 0.118),
-        (true, false) => Color::new(1.0, 1.0, 1.0, 0.08),
-        (false, true) => Color::new(0.0, 0.0, 0.0, 0.08),
-        (false, false) => Color::new(0.0, 0.0, 0.0, 0.05),
+/// The colour of a chosen segment's pill.
+fn pill_color(theme: &cupertino_theme::ui::ThemeTokens) -> Color {
+    if theme.preferences.appearance.is_dark() {
+        Color::new(1.0, 1.0, 1.0, 0.118)
+    } else {
+        Color::new(0.0, 0.0, 0.0, 0.08)
     }
 }
 
@@ -871,14 +932,16 @@ struct Segment<M> {
     /// A menu button's chevron is a pair, up over down, for a button that picks one of several: the pick's own symbol
     /// shows.
     picker: bool,
+    /// Says to its capsule whether the pointer arms it.
+    link: PressLink,
 }
 
 impl<M> Segment<M> {
-    fn state(&self, press: &Press, cx: &PaintCx<'_>) -> ControlState {
+    fn state(&self, press: &SegmentPress, cx: &PaintCx<'_>) -> ControlState {
         ControlState {
             enabled: self.message.is_some(),
-            hovered: press.hovered(),
-            pressed: press.pressed(),
+            hovered: press.press.hovered(),
+            pressed: press.press.pressed(),
             focused: cx.is_focused(),
             focus_visible: cx.focus_visible(),
             window_active: cx.window_active(),
@@ -889,7 +952,7 @@ impl<M> Segment<M> {
 }
 
 impl<M: Clone + 'static> Widget<M> for Segment<M> {
-    type State = Press;
+    type State = SegmentPress;
 
     fn layout(&self) -> LayoutSpec {
         LayoutSpec {
@@ -899,11 +962,13 @@ impl<M: Clone + 'static> Widget<M> for Segment<M> {
         }
     }
 
-    fn state(&self) -> Press {
-        Press::default()
+    fn state(&self) -> SegmentPress {
+        SegmentPress::default()
     }
 
-    fn update(&self, old: &Self, _: &mut Press) -> Change {
+    fn update(&self, old: &Self, press: &mut SegmentPress) -> Change {
+        // the capsule built with it asks this link from now on
+        self.link.set(press.press.pointer_armed());
         if self.width != old.width {
             Change::Layout
         } else if self.message.is_some() != old.message.is_some()
@@ -918,14 +983,19 @@ impl<M: Clone + 'static> Widget<M> for Segment<M> {
         }
     }
 
-    fn measure(&self, _: &Press, _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+    fn measure(&self, _: &SegmentPress, _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
         Measured {
             size: Size::new(self.width, TOOLBAR_CONTROL),
             baseline: None,
         }
     }
 
-    fn event(&self, press: &mut Press, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
+    fn event(
+        &self,
+        press: &mut SegmentPress,
+        event: &Event,
+        cx: &mut EventCx<'_, M>,
+    ) -> Propagation {
         let enabled = self.message.is_some();
         // a menu opens on the press, as a pop-up button's does
         if self.menu.is_some() && enabled && cx.phase() != Phase::Capture {
@@ -945,7 +1015,10 @@ impl<M: Clone + 'static> Widget<M> for Segment<M> {
                 return Propagation::Stop;
             }
         }
-        match press.event(event, enabled, Keys::SpaceAndReturn, cx) {
+        let was_pressed = press.press.pressed();
+        let outcome = press.press.event(event, enabled, Keys::SpaceAndReturn, cx);
+        press.follow(was_pressed, &self.link);
+        match outcome {
             Outcome::Ignored => Propagation::Continue,
             Outcome::Changed => {
                 cx.request_paint();
@@ -965,15 +1038,35 @@ impl<M: Clone + 'static> Widget<M> for Segment<M> {
         }
     }
 
-    fn paint(&self, press: &Press, cx: &mut PaintCx<'_>) {
+    fn paint(&self, press: &SegmentPress, cx: &mut PaintCx<'_>) {
         let state = self.state(press, cx);
         let theme = cx.env().theme.clone();
         let size = cx.size();
         let area = Rect::new(0.0, 0.0, size.width, size.height);
         let pill = area.inset(Insets::uniform(TOOLBAR_CHOICE_INSET));
         let radius = nested_radius(TOOLBAR_CONTROL / 2.0, TOOLBAR_CHOICE_INSET);
-        if state.enabled && (state.pressed || self.menu == Some(true)) && !state.selected {
-            look::fill(cx, pill, radius, Some(pill_color(&theme, false)));
+        if state.enabled && !state.selected {
+            // the quinary fill under the pointer, coming to the quaternary one under a press or while its menu is open
+            let share = if self.menu == Some(true) {
+                1.0
+            } else {
+                press.fill(cx)
+            };
+            let hover = glass_interaction_fill(&theme, false);
+            let pressed = glass_interaction_fill(&theme, true);
+            let from = if state.hovered { hover.a } else { 0.0 };
+            let alpha = from + (pressed.a - from) * share as f32;
+            if alpha > 0.0 {
+                look::fill(
+                    cx,
+                    pill,
+                    radius,
+                    Some(Color {
+                        a: alpha,
+                        ..pressed
+                    }),
+                );
+            }
         }
         let color = glyph_color(&theme, &state);
         let direction = cx.env().direction;
@@ -1076,7 +1169,7 @@ impl<M: Clone + 'static> Widget<M> for Segment<M> {
         paint_focus_ring(cx, pill, radius);
     }
 
-    fn semantics(&self, _: &Press, cx: &mut SemanticsCx<'_>) {
+    fn semantics(&self, _: &SegmentPress, cx: &mut SemanticsCx<'_>) {
         let enabled = self.message.is_some();
         cx.role(match (self.menu, self.chosen) {
             (Some(_), _) => Role::PopUpButton,

@@ -3,8 +3,9 @@ use crate::appearance::Appearance;
 use crate::error::Result;
 use crate::metrics::{ShapeTokens, WindowShadowPreset};
 use crate::recipe::{
-    app_grid_background, dock_reduced, opaque_background, running_indicator, switcher_panel,
-    window_background, MaterialLibrary, MaterialOptions, Recipe, APP_GRID_MATERIAL, DOCK_MATERIAL,
+    app_grid_background, dock_reduced, opaque_background, overview_band, overview_band_selection,
+    running_indicator, switcher_panel, window_background, MaterialLibrary, MaterialOptions, Recipe,
+    APP_GRID_MATERIAL, DOCK_MATERIAL, OVERVIEW_BAND_MATERIAL, OVERVIEW_BAND_SELECTION_MATERIAL,
     RUNNING_INDICATOR_MATERIAL, SWITCHER_MATERIAL, TEXT_BACKGROUND_MATERIAL,
     WINDOW_BACKGROUND_MATERIAL,
 };
@@ -47,6 +48,12 @@ impl Theme {
         }
         if material == APP_GRID_MATERIAL {
             return Ok(app_grid_background(appearance, opts.reduce_transparency));
+        }
+        if material == OVERVIEW_BAND_MATERIAL {
+            return Ok(overview_band(appearance, opts.reduce_transparency));
+        }
+        if material == OVERVIEW_BAND_SELECTION_MATERIAL {
+            return Ok(overview_band_selection(appearance));
         }
         if material == DOCK_MATERIAL {
             return Ok(dock_reduced(appearance));

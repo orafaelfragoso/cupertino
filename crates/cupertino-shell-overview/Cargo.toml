@@ -3,6 +3,7 @@ name = "cupertino-shell-overview"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
+autotests = false
 description = "Overview of the Cupertino desktop, a component of the shell host: the windows in holes of a surface over the output, the desktops band and the selection, opened and closed with transactions bound to the gestures"
 [package.metadata.cupertino]
 layer = "shell"
@@ -24,3 +25,8 @@ cupertino-kit = { path = "../cupertino-kit", features = ["test"] }
 
 [[example]]
 name = "overview_capture"
+
+[[test]]
+# Every file of `tests/` is a module of this one binary (`tests/main.rs`).
+name = "tests"
+path = "tests/main.rs"

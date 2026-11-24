@@ -161,6 +161,97 @@ pub fn switcher_panel(appearance: Appearance, reduce_transparency: bool) -> Reci
     }
 }
 
+/// Name of the overview's desktops band material, a code recipe like the switcher's (see [`overview_band`]).
+pub const OVERVIEW_BAND_MATERIAL: &str = "OverviewBand";
+
+/// The overview's desktops band across the top of the output: the ultra-thin material the switcher's panel is made of,
+/// with nothing of the wallpaper's tint and square ends. The desktop behind it captured at 1/8 scale, saturated by
+/// [`OVERVIEW_BAND_SATURATION`] and blurred with σ [`OVERVIEW_BAND_SIGMA`], under a fill of
+/// [`OVERVIEW_BAND_GRAY`] at [`OVERVIEW_BAND_COVER`]; the design's brightness (−0.01 light, +0.015 dark) has no recipe
+/// operation and is left out, as for the switcher.
+///
+/// A high-contrast appearance and `reduce_transparency` select the solid styles of the same material, as the
+/// switcher's: gray 0.7843 (light) or 0.05882 (dark) with Increase Contrast, gray 0.8548 or 0.1255 with Reduce
+/// Transparency. That the band takes them is approximate: what the display options do to it was not established.
+pub fn overview_band(appearance: Appearance, reduce_transparency: bool) -> Recipe {
+    let dark = appearance.is_dark();
+    let at = |pair: (f32, f32)| if dark { pair.1 } else { pair.0 };
+    let solid = |gray: f32, style: &str| Recipe {
+        name: format!("{OVERVIEW_BAND_MATERIAL}-{style}"),
+        material: OVERVIEW_BAND_MATERIAL.into(),
+        fills: vec![Fill {
+            rgba: [gray, gray, gray, 1.0],
+            blend: Blend::Normal,
+            tint_layer: false,
+        }],
+        opaque: true,
+        ..Recipe::default()
+    };
+    if appearance.is_high_contrast() {
+        return solid(at(OVERVIEW_BAND_CONTRAST_GRAY), "IncreaseContrast");
+    }
+    if reduce_transparency {
+        return solid(at(OVERVIEW_BAND_REDUCED_GRAY), "ReduceTransparency");
+    }
+    let gray = at(OVERVIEW_BAND_GRAY);
+    Recipe {
+        name: OVERVIEW_BAND_MATERIAL.into(),
+        material: OVERVIEW_BAND_MATERIAL.into(),
+        backdrop: Some(Backdrop {
+            scale: 0.125,
+            sigma_pt: OVERVIEW_BAND_SIGMA,
+            ops: vec![ColorOp::Saturate(at(OVERVIEW_BAND_SATURATION))],
+        }),
+        fills: vec![Fill {
+            rgba: [gray, gray, gray, at(OVERVIEW_BAND_COVER)],
+            blend: Blend::Normal,
+            tint_layer: false,
+        }],
+        notes: vec!["colorBrightness has no recipe operation and is left out".into()],
+        ..Recipe::default()
+    }
+}
+
+/// The overview band's blur in points.
+pub const OVERVIEW_BAND_SIGMA: f32 = 30.0;
+/// How much the band saturates the desktop behind it: (light, dark).
+pub const OVERVIEW_BAND_SATURATION: (f32, f32) = (1.8, 1.6);
+/// The gray laid over the band's blur and how much of it covers the blur: (light, dark).
+pub const OVERVIEW_BAND_GRAY: (f32, f32) = (0.9646, 0.1569);
+pub const OVERVIEW_BAND_COVER: (f32, f32) = (0.36, 0.40);
+/// The band's solid gray with Increase Contrast and with Reduce Transparency: (light, dark).
+pub const OVERVIEW_BAND_CONTRAST_GRAY: (f32, f32) = (0.7843, 0.05882);
+pub const OVERVIEW_BAND_REDUCED_GRAY: (f32, f32) = (0.8548, 0.1255);
+
+/// Name of the material of the pill under the current desktop's name in the overview's band, a code recipe (see
+/// [`overview_band_selection`]).
+pub const OVERVIEW_BAND_SELECTION_MATERIAL: &str = "OverviewBandSelection";
+
+/// The pill under the current desktop's name in the overview's band: no backdrop of its own, the gray
+/// [`OVERVIEW_BAND_SELECTION_DARK`] added to the band under it (plus-lighter) in the dark appearance, and in the light
+/// one the gray [`OVERVIEW_BAND_SELECTION_LIGHT`] laid plus-darker, which takes its distance from white away.
+pub fn overview_band_selection(appearance: Appearance) -> Recipe {
+    let (gray, blend) = if appearance.is_dark() {
+        (OVERVIEW_BAND_SELECTION_DARK, Blend::PlusLighter)
+    } else {
+        (OVERVIEW_BAND_SELECTION_LIGHT, Blend::PlusDarker)
+    };
+    Recipe {
+        name: OVERVIEW_BAND_SELECTION_MATERIAL.into(),
+        material: OVERVIEW_BAND_SELECTION_MATERIAL.into(),
+        fills: vec![Fill {
+            rgba: [gray, gray, gray, 1.0],
+            blend,
+            tint_layer: false,
+        }],
+        ..Recipe::default()
+    }
+}
+
+/// The gray of the current desktop's pill: light (plus-darker) and dark (plus-lighter).
+pub const OVERVIEW_BAND_SELECTION_LIGHT: f32 = 0.9098;
+pub const OVERVIEW_BAND_SELECTION_DARK: f32 = 0.1373;
+
 /// Name of the application grid's background material, a code recipe like the switcher's (see
 /// [`app_grid_background`]).
 pub const APP_GRID_MATERIAL: &str = "AppGrid";

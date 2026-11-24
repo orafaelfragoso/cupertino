@@ -33,7 +33,9 @@ use cupertino_defaults::watch::{ConfigWatcher, WatchEvent};
 use cupertino_kit::core::{Application, Command as Do, Key, RendererClass, Window, WindowKey};
 use cupertino_kit::geometry::{Rect, Size};
 use cupertino_kit::motion::{SpringPreset, Timing};
-use cupertino_kit::platform::{LayerChange, LayerProperty, WindowRequest};
+use cupertino_kit::platform::{
+    LayerChange, LayerProperty, PresentChange, PresentProperty, WindowRequest,
+};
 use cupertino_kit_shell::outputs::{self, OutputId};
 use cupertino_kit_shell::transaction::{self, Gesture, Outcome};
 use cupertino_kit_shell::{
@@ -155,6 +157,10 @@ struct View {
     holes: BTreeMap<u32, HoleState>,
     /// The fingers of its gesture lifted to take it back: on its way out though its phase has not changed yet.
     leaving: bool,
+    /// The band's own window (`chrome::band_window`), and whether it is shown: from the start of the way in until
+    /// the view goes, fading in and out as the chrome does.
+    band_key: WindowKey,
+    band: bool,
 }
 
 impl View {
@@ -371,8 +377,11 @@ impl Model {
             .collect();
         self.next_view += 1;
         let key = WindowKey(Key::from(format!("overview-{}", self.next_view)));
+        let band_key = WindowKey(Key::from(format!("overview-{}-band", self.next_view)));
         Some(View {
             key,
+            band_key,
+            band: false,
             output,
             origin,
             size: geometry.size,
@@ -415,6 +424,38 @@ impl Model {
             layer(chrome::window_layer(id), changes);
         }
         layer(CHROME_LAYER, fade_changes(opening, fade));
+        out
+    }
+
+    /// The band window of view `i` fading in (`shown`) or out along the chrome's fade; a band shown for the first
+    /// time starts from nothing. The application overview has no band.
+    fn band_shown(&mut self, i: usize, shown: bool) -> Vec<Do<Message>> {
+        let curve = if self.reduce_motion {
+            Timing::OVERVIEW_FADE
+        } else {
+            SpringPreset::OVERVIEW_OPEN.into()
+        };
+        let view = &mut self.views[i];
+        if view.mode != Mode::All || (!view.band && !shown) {
+            return Vec::new();
+        }
+        let present = |to: f64, curve: Option<Timing>| {
+            Do::Window(
+                view.band_key.clone(),
+                WindowRequest::Present(vec![PresentChange {
+                    property: PresentProperty::Opacity,
+                    to,
+                    curve,
+                    velocity: 0.0,
+                }]),
+            )
+        };
+        let mut out = Vec::new();
+        if !view.band {
+            out.push(present(0.0, None));
+        }
+        out.push(present(if shown { 1.0 } else { 0.0 }, Some(curve)));
+        view.band = true;
         out
     }
 
@@ -671,19 +712,28 @@ impl Model {
     fn transaction(&mut self, event: transaction::Event) -> Vec<Do<Message>> {
         match event {
             transaction::Event::GestureBegan { id, .. } => {
-                if let Some(i) = self.by_tx(id) {
-                    let view = &mut self.views[i];
-                    view.leaving = false;
-                    if view.phase == Phase::Armed {
-                        view.phase = Phase::Opening;
-                        let (output, key) = (view.output, view.key.clone());
-                        // the other gesture's surface waits until this overview is gone
-                        self.views.retain(|v| {
-                            v.key == key || !(v.output == output && v.phase == Phase::Armed)
-                        });
-                    }
+                let Some(i) = self.by_tx(id) else {
+                    return Vec::new();
+                };
+                let view = &mut self.views[i];
+                view.leaving = false;
+                let key = view.key.clone();
+                if view.phase == Phase::Armed {
+                    view.phase = Phase::Opening;
+                    let output = view.output;
+                    // the other gesture's surface waits until this overview is gone
+                    self.views.retain(|v| {
+                        v.key == key || !(v.output == output && v.phase == Phase::Armed)
+                    });
                 }
-                Vec::new()
+                match self.view(&key) {
+                    // the way in, or the reverse gesture of an open overview taken back
+                    Some(i) => {
+                        let shown = self.views[i].phase != Phase::Closing;
+                        self.band_shown(i, shown)
+                    }
+                    None => Vec::new(),
+                }
             }
             transaction::Event::Finished { id, outcome } => {
                 if let Some(i) = self.errands.iter().position(|h| h.id() == id) {
@@ -699,15 +749,23 @@ impl Model {
             transaction::Event::GestureEnded {
                 id,
                 outcome: Outcome::Reverted,
-            } => {
-                if let Some(i) = self.by_tx(id) {
+            } => match self.by_tx(id) {
+                Some(i) => {
                     self.views[i].leaving = true;
+                    self.band_shown(i, false)
                 }
-                Vec::new()
-            }
-            transaction::Event::Started { .. } | transaction::Event::GestureEnded { .. } => {
-                Vec::new()
-            }
+                None => Vec::new(),
+            },
+            // the toggle's way in or a way out was applied: the band fades with the chrome from now
+            transaction::Event::Started { id, .. } => match self.by_tx(id) {
+                Some(i) => match self.views[i].phase {
+                    Phase::Opening => self.band_shown(i, true),
+                    Phase::Closing => self.band_shown(i, false),
+                    Phase::Armed | Phase::Open => Vec::new(),
+                },
+                None => Vec::new(),
+            },
+            transaction::Event::GestureEnded { .. } => Vec::new(),
         }
     }
 
@@ -816,6 +874,30 @@ impl Model {
         });
         let outputs: Vec<OutputId> = self.feeds.keys().copied().collect();
         outputs.into_iter().flat_map(|o| self.arm(o)).collect()
+    }
+}
+
+/// The layer surface of `view`'s band window: over the output's top edge, as wide as the output and as tall as the
+/// band at its tallest, in the layer under the overview's, so the overview's window draws over it. It takes no keys.
+fn band_surface(view: &View, now: f64) -> Surface {
+    Surface {
+        role: Role::Layer(LayerSpec {
+            namespace: chrome::BAND_APP_ID,
+            output: Some(view.output),
+            layer: Layer::Top,
+            anchor: Anchor {
+                top: true,
+                bottom: false,
+                left: true,
+                right: true,
+            },
+            size: Size::new(0.0, view.ui.band_bottom(now).unwrap_or(0.0)),
+            margin: Margin::default(),
+            exclusive_zone: -1,
+            keyboard: Keyboard::None,
+        }),
+        persistent: None,
+        holes: Vec::new(),
     }
 }
 
@@ -953,10 +1035,17 @@ impl Application for Overview {
 
     fn view(model: &Model) -> Vec<Window<Message>> {
         let now = model.now();
-        model
-            .views
-            .iter()
-            .map(|view| {
+        let mut windows = Vec::new();
+        for view in &model.views {
+            if view.band {
+                windows.extend(chrome::band_window(
+                    view.band_key.clone(),
+                    view.size.width,
+                    &view.ui,
+                    now,
+                ));
+            }
+            windows.push({
                 let holes = view
                     .holes
                     .iter()
@@ -973,6 +1062,7 @@ impl Application for Overview {
                     reduce_motion: model.reduce_motion,
                     hole_fill: None,
                     chrome_opacity: 1.0,
+                    band_in_place: false,
                 };
                 let key = view.key.clone();
                 let frame = (view.phase == Phase::Open && view.ui.is_animating(now))
@@ -983,13 +1073,17 @@ impl Application for Overview {
                     move |input| Message::Input(key.clone(), input),
                     frame,
                 )
-            })
-            .collect()
+            });
+        }
+        windows
     }
 }
 
 impl Program for Overview {
     fn surface(model: &Model, window: &WindowKey) -> Surface {
+        if let Some(view) = model.views.iter().find(|v| &v.band_key == window) {
+            return band_surface(view, model.now());
+        }
         let view = model.view(window).map(|i| &model.views[i]);
         let now = model.now();
         let mut holes = Vec::new();

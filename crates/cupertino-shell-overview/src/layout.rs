@@ -231,6 +231,13 @@ impl OverviewUi {
         (self.mode == Mode::All).then(|| self.overview.bar.layout(now))
     }
 
+    /// The bottom of the desktops band at its tallest (open), in the output's points; none in the application
+    /// overview, which has no band.
+    pub fn band_bottom(&self, now: f64) -> Option<f64> {
+        self.bar(now)
+            .map(|bar| bar.rect.y + self.overview.bar.cfg.open_height)
+    }
+
     pub fn hovered_slot(&self) -> Option<u32> {
         self.hovered_slot
     }

@@ -5,8 +5,9 @@
 //! Three surfaces of a 1440 x 900 pt output with four windows and three desktops: `rest`, the overview open;
 //! `transition`, on its way in at `--progress` from 0 (the windows at their own frames, no chrome) to 1 (default 0.5);
 //! `workspaces`, open with the pointer at the top, so the band shows the desktops' pictures. A capture has no server:
-//! each hole is painted a flat grey where the server would draw the window or the desktop. Nothing moves, so a command
-//! gives the same pixels on every run.
+//! each hole is painted a flat grey where the server would draw the window or the desktop, and the band's material,
+//! which the shell draws in a window of its own, is its veil without the blur under the rest. Nothing moves, so a
+//! command gives the same pixels on every run.
 
 use std::cell::RefCell;
 use std::num::NonZeroU32;
@@ -84,6 +85,7 @@ impl Application for Captured {
             reduce_motion: false,
             hole_fill: Some(HOLE),
             chrome_opacity: shown.chrome_opacity,
+            band_in_place: true,
         };
         vec![chrome::window(&scene, NOW, |_| (), None)]
     }

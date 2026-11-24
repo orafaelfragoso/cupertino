@@ -1,8 +1,9 @@
 //! Loading a theme from its three documents, and resolving materials and colours from it.
 
 use cupertino_theme::recipe::{
-    app_grid_background, dock_reduced, opaque_background, running_indicator, switcher_panel,
-    window_background, APP_GRID_MATERIAL, DOCK_MATERIAL, RUNNING_INDICATOR_MATERIAL,
+    app_grid_background, dock_reduced, opaque_background, overview_band, overview_band_selection,
+    running_indicator, switcher_panel, window_background, APP_GRID_MATERIAL, DOCK_MATERIAL,
+    OVERVIEW_BAND_MATERIAL, OVERVIEW_BAND_SELECTION_MATERIAL, RUNNING_INDICATOR_MATERIAL,
     SWITCHER_MATERIAL, TEXT_BACKGROUND_MATERIAL, WINDOW_BACKGROUND_MATERIAL,
 };
 use cupertino_theme::{
@@ -389,6 +390,16 @@ fn materials_drawn_from_code_resolve_through_the_library() {
                 app_grid_background(a, reduce),
                 "{a:?}"
             );
+            assert_eq!(
+                t.recipe(a, OVERVIEW_BAND_MATERIAL, &o).unwrap(),
+                overview_band(a, reduce),
+                "{a:?}"
+            );
+            assert_eq!(
+                t.recipe(a, OVERVIEW_BAND_SELECTION_MATERIAL, &o).unwrap(),
+                overview_band_selection(a),
+                "{a:?}"
+            );
         }
     }
     for a in [Appearance::Light, Appearance::Dark] {
@@ -429,6 +440,44 @@ fn materials_drawn_from_code_resolve_through_the_library() {
             "{a:?} {material}"
         );
     }
+}
+
+#[test]
+fn the_overview_band_is_the_ultra_thin_material_square_and_untinted() {
+    for (a, saturation, gray, cover) in [
+        (Appearance::Light, 1.8, 0.9646, 0.36),
+        (Appearance::Dark, 1.6, 0.1569, 0.40),
+    ] {
+        let band = overview_band(a, false);
+        assert!(!band.opaque && band.corner_radius.is_none(), "{a:?}");
+        let backdrop = band.backdrop.as_ref().expect("a blurred backdrop");
+        assert_eq!((backdrop.scale, backdrop.sigma_pt), (0.125, 30.0), "{a:?}");
+        assert_eq!(backdrop.ops, vec![ColorOp::Saturate(saturation)], "{a:?}");
+        assert_eq!(band.fills.len(), 1, "no wallpaper tint: {a:?}");
+        assert_eq!(band.fills[0].rgba, [gray, gray, gray, cover], "{a:?}");
+        assert_eq!(band.fills[0].blend, Blend::Normal, "{a:?}");
+        // the switcher's panel is the same material, with the wallpaper's tint and round corners
+        let switcher = switcher_panel(a, false);
+        assert_eq!(switcher.backdrop, band.backdrop, "{a:?}");
+        assert_eq!(switcher.fills[0], band.fills[0], "{a:?}");
+    }
+    for (a, reduce, gray) in [
+        (Appearance::Light, true, 0.8548),
+        (Appearance::Dark, true, 0.1255),
+        (Appearance::LightHighContrast, false, 0.7843),
+        (Appearance::DarkHighContrast, true, 0.05882),
+    ] {
+        let solid = overview_band(a, reduce);
+        assert!(solid.opaque && !solid.has_backdrop(), "{a:?}");
+        assert_eq!(solid.fills[0].rgba, [gray, gray, gray, 1.0], "{a:?}");
+    }
+    let lift = overview_band_selection(Appearance::Dark);
+    assert!(!lift.has_backdrop() && !lift.opaque);
+    assert_eq!(lift.fills[0].blend, Blend::PlusLighter);
+    assert_eq!(lift.fills[0].rgba, [0.1373, 0.1373, 0.1373, 1.0]);
+    let shade = overview_band_selection(Appearance::Light);
+    assert_eq!(shade.fills[0].blend, Blend::PlusDarker);
+    assert_eq!(shade.fills[0].rgba, [0.9098, 0.9098, 0.9098, 1.0]);
 }
 
 #[test]

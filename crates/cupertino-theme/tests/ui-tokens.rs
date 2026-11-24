@@ -354,6 +354,18 @@ fn surfaces_pick_their_material_from_the_appearance_and_options() {
         (prefs(Light), Surface::MenuBar, Some("MenuBar")),
         (reduced(Dark), Surface::MenuBar, Some("MenuBar")),
         (prefs(DarkHighContrast), Surface::MenuBar, Some("MenuBar")),
+        (prefs(Dark), Surface::OverviewBand, Some("OverviewBand")),
+        (reduced(Light), Surface::OverviewBand, Some("OverviewBand")),
+        (
+            prefs(LightHighContrast),
+            Surface::OverviewBand,
+            Some("OverviewBand"),
+        ),
+        (
+            prefs(Light),
+            Surface::OverviewBandSelection,
+            Some("OverviewBandSelection"),
+        ),
         (
             prefs(LightHighContrast),
             Surface::Sidebar,

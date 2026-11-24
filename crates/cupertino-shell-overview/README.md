@@ -21,7 +21,8 @@ cargo run -p cupertino-shell-overview --example overview_capture -- overview/tra
 cargo run -p cupertino-shell-overview --example overview_capture -- overview/workspaces
 ```
 
-A capture has no server: each hole is painted a flat colour where the server would draw the window or the desktop.
+A capture has no server: each hole is painted a flat colour where the server would draw the window or the desktop, and
+the band's material, which the shell draws in a window of its own, is its veil without the blur.
 
 ## What a restart loses
 
@@ -67,6 +68,19 @@ the activation has run, the surface goes and the windows show in their places ag
 desktop of the band moves it there in a transaction of window changes alone, kept until it finished; dropped anywhere
 else it goes back to its place.
 
+**The band.** Nothing lies behind the windows: the desktop shows as it is, and only the desktops band across the top
+has a backdrop, the desktop blurred (σ 30 pt) and saturated under a light veil (gray 0.9646 at 36 %, saturation 1.8) or
+a dark one (gray 0.1569 at 40 %, saturation 1.6), the theme's `OverviewBand` material, with a shadow under it, a dark
+hairline over a faint shade gone by about 20 pt. The pill under the current desktop's name is a material of its own
+(`OverviewBandSelection`) that adds gray 0.1373 to the band in the dark appearance and takes 0.0902 away in the light
+one; the names and the plus are white in the dark appearance and dark in the light one. A material lies under all of a
+window, so the band and its pill are a second window of the component (`chrome::band_window`): a layer surface over
+the output's top edge in the layer under the overview's, as tall as the open band and taking no input, so the
+overview's window draws the desktops' pictures, the names and the rest over it. It shows from the start of the way in
+and fades in and out with the chrome's own curve, from the moment the server applies the toggle's or the way out's
+transaction, from a gesture's start, or when the fingers lift to take the overview back; like the menu bar's, its fade
+does not follow the fingers' progress.
+
 **The menu bar.** The component says on the host bus where an overview is on its way in or open (`OverviewShown`,
 retained, one per output): from a gesture's `gesture_began` or the toggle, until the way out starts or the fingers of a
 gesture lift to take it back (`gesture_ended` reverted). The menu bar of that output gives way to it meanwhile, fading
@@ -75,7 +89,8 @@ bar's commits, and it does not follow the fingers' progress, which the server al
 
 **Session.** Under Reduce Motion the server drives only the opacity of a gesture's layers, and a toggle fades the
 overview in and out over 0.2 s (`Timing::OVERVIEW_FADE`) with the holes at their end places. Kit follows the appearance;
-with Reduce Transparency or Increase Contrast the band and the plates are opaque and the ring wider.
+with Reduce Transparency or Increase Contrast the band (gray 0.8548 / 0.1255 with Reduce Transparency, 0.7843 / 0.0588
+with Increase Contrast) and the plates are opaque and the ring wider.
 
 **Accessibility.** The window is a group named "Overview"; each window is a button named by its title ("Untitled Window"
 without one), the selection its focus; each desktop is a button named "Desktop" or "Desktop n", with "Add Desktop" and

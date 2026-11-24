@@ -256,10 +256,10 @@ executor, and what it holds (the extras' task holds the system connection) with 
   highlight, and a panel's component the server gives up (`ComponentStopped`) takes it along. A click on the control
   panel slot or the clock publishes `TogglePanel` for the bar's output. The highlight shows on the bar of the panel's
   output only; while a panel does not say its output it shows only where there is one bar. Both items read as expanded to assistive
-  technology while their panel is open. The highlight is clear glass tinted with the highlight colour of the slot's tone
+  technology while their panel is open. The highlight is the highlight colour of the slot's tone painted
   (`view::HighlightPill`, a node under the slot, so the text keeps the bar's colours), the same shape in every mode and
-  tone; under Reduce Transparency, where the window shows no glass and where the desktop tints none
-  (`PaintCx::glass_tint`), it is that colour painted.
+  tone: the system names it tinted clear glass, but shows a flat capsule that only darkens what lies behind the bar by
+  the colour's share (lightens it under light text), with none of the lens, rim and lift clear glass would add.
 - **Backdrop.** From shell version 21 the server sends each bar the mean encoded sRGB colour of its output's wallpaper
   under the strip in bands of equal width across the output (`backdrop_bands`); a server of version 14 to 20 sends the
   lightness of that mean colour instead (`backdrop_luminance`, CIE L*/100 in thousandths), read as the luminance it

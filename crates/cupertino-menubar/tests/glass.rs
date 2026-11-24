@@ -1,7 +1,7 @@
 //! The glass a bar's popups name: a menu and the Wi-Fi join prompt lie on the menu variant over their whole window with
 //! their corners, at the menu's own size and without the variant's drop shadow, as the popup draws the menu's window
-//! shadow apart; the bar's highlight under the open menu's title is clear glass tinted with the highlight colour, and
-//! is painted under Reduce Transparency and on a desktop that does not tint glass.
+//! shadow apart; the bar's highlight under the open menu's title is no glass but the highlight colour painted, a flat
+//! veil, on every desktop and with Reduce Transparency.
 
 use std::cell::RefCell;
 use std::num::NonZeroU32;
@@ -15,7 +15,7 @@ use cupertino_kit::core::{
 use cupertino_kit::geometry::{Rect, Size};
 use cupertino_kit::layout::LayoutDirection;
 use cupertino_kit::platform::{GlassStyle, Timestamp, WindowRequest};
-use cupertino_kit::render::{CpuConfig, CpuRenderer};
+use cupertino_kit::render::{CpuConfig, CpuRenderer, PixelFormat};
 use cupertino_kit::test::{
     Capabilities, FontIndex, ManualClock, PlaceholderIcons, TestDriver, WindowStates,
 };
@@ -157,18 +157,35 @@ struct Region {
     radius: f64,
     style: Option<GlassStyle>,
     variant: Option<(GlassVariant, GlassModifiers)>,
-    tint: Option<[f32; 4]>,
 }
 
-/// The windows of the bar's scene (`menu` or the prompt) in the `appearance` with or without Reduce Transparency, and
-/// the material regions each asked for the last time it asked, on a desktop that shows materials and, with `variants`,
-/// takes glass named by its variant and tinted.
+/// One window as it was last drawn: its size, the material regions it asked for the last time it asked, and its last
+/// frame's premultiplied pixels, `width` pixels a row.
+#[derive(Debug)]
+struct Drawn {
+    size: Size,
+    regions: Vec<Region>,
+    width: u32,
+    pixels: Vec<u8>,
+}
+
+impl Drawn {
+    /// The alpha of the pixel at `at`, in the window's points.
+    fn alpha(&self, at: (f64, f64)) -> u8 {
+        let scale = f64::from(self.width) / self.size.width;
+        let (x, y) = ((at.0 * scale) as u32, (at.1 * scale) as u32);
+        self.pixels[(y * self.width + x) as usize * 4 + 3]
+    }
+}
+
+/// The windows of the bar's scene (`menu` or the prompt) in the `appearance` with or without Reduce Transparency, as
+/// last drawn on a desktop that shows materials and, with `variants`, takes glass named by its variant and tinted.
 fn regions(
     menu: bool,
     appearance: Appearance,
     reduce_transparency: bool,
     variants: bool,
-) -> Vec<(WindowKey, Size, Vec<Region>)> {
+) -> Vec<(WindowKey, Drawn)> {
     let text = text();
     NEXT.set(Some(scene(&text, menu)));
     let glyphs = Arc::clone(&text);
@@ -237,14 +254,21 @@ fn regions(
                                 radius: r.radius,
                                 style: r.glass.map(|g| g.style),
                                 variant: r.glass.and_then(|g| g.variant),
-                                tint: r.glass.map(|g| g.tint),
                             })
                             .collect(),
                     ),
                     _ => None,
                 })
                 .unwrap_or_default();
-            (key, size, regions)
+            let frame = system.frames(window).unwrap().last().expect("a frame");
+            assert_eq!(frame.format, PixelFormat::Rgba8Premultiplied);
+            let drawn = Drawn {
+                size,
+                regions,
+                width: frame.width,
+                pixels: frame.pixels.clone(),
+            };
+            (key, drawn)
         })
         .collect()
 }
@@ -285,38 +309,20 @@ fn lies_on_menu_glass(size: Size, regions: &[Region], radius: f64, adaptive: boo
 }
 
 #[test]
-fn a_menu_lies_on_the_menu_variant_without_its_shadow() {
-    for (appearance, reduce_transparency) in [
-        (Appearance::Light, false),
-        (Appearance::Dark, false),
-        (Appearance::DarkHighContrast, false),
-        (Appearance::Light, true),
+fn a_menu_lies_on_the_menu_variant_without_its_shadow_and_the_bar_paints_its_highlight() {
+    for (appearance, reduce_transparency, variants) in [
+        (Appearance::Light, false, true),
+        (Appearance::Dark, false, true),
+        (Appearance::DarkHighContrast, false, true),
+        (Appearance::Light, true, true),
+        (Appearance::Light, false, false),
+        (Appearance::Dark, false, false),
     ] {
-        let windows = regions(true, appearance, reduce_transparency, true);
+        let windows = regions(true, appearance, reduce_transparency, variants);
         assert_eq!(windows.len(), 2, "the bar and its menu: {windows:?}");
-        let (_, _, bar) = &windows[0];
-        if reduce_transparency {
-            assert!(bar.is_empty(), "the bar paints its highlight: {bar:?}");
-        } else {
-            lies_on_highlight_glass(bar, appearance);
-        }
-        let (_, size, menu) = &windows[1];
-        lies_on_menu_glass(*size, menu, view::POPUP_RADIUS, true);
-    }
-}
-
-#[test]
-fn a_desktop_that_does_not_tint_glass_has_the_bar_paint_its_highlight() {
-    for appearance in [Appearance::Light, Appearance::Dark] {
-        let windows = regions(true, appearance, false, false);
-        assert_eq!(windows.len(), 2, "the bar and its menu: {windows:?}");
-        let (_, _, bar) = &windows[0];
-        assert!(
-            bar.is_empty(),
-            "untinted clear glass would show no highlight, so the bar paints it: {bar:?}"
-        );
-        let (_, size, menu) = &windows[1];
-        lies_on_menu_glass(*size, menu, view::POPUP_RADIUS, true);
+        paints_its_highlight(&windows[0].1, appearance);
+        let menu = &windows[1].1;
+        lies_on_menu_glass(menu.size, &menu.regions, view::POPUP_RADIUS, true);
     }
 }
 
@@ -324,13 +330,17 @@ fn a_desktop_that_does_not_tint_glass_has_the_bar_paint_its_highlight() {
 fn the_join_prompt_lies_on_the_menu_variant_with_the_panels_corners() {
     let windows = regions(false, Appearance::Dark, false, true);
     assert_eq!(windows.len(), 2, "the bar and the prompt: {windows:?}");
-    let (_, size, prompt) = &windows[1];
-    lies_on_menu_glass(*size, prompt, panel::RADIUS, false);
+    let prompt = &windows[1].1;
+    lies_on_menu_glass(prompt.size, &prompt.regions, panel::RADIUS, false);
 }
 
-/// Asserts that the bar's one region is its highlight under the system menu's title: clear glass where the bar painted
-/// its highlight, tinted with the highlight colour of the `appearance`.
-fn lies_on_highlight_glass(bar: &[Region], appearance: Appearance) {
+/// Asserts that the bar asks for no glass and paints its highlight under the system menu's title: the highlight colour
+/// of the `appearance` inside the capsule's end, nothing above the capsule.
+fn paints_its_highlight(bar: &Drawn, appearance: Appearance) {
+    assert!(
+        bar.regions.is_empty(),
+        "no glass under the highlight: {bar:?}"
+    );
     let text = text();
     let scene = scene(&text, true);
     let metrics = &scene.controller.bar_metrics;
@@ -340,35 +350,15 @@ fn lies_on_highlight_glass(bar: &[Region], appearance: Appearance) {
         .slot(&SlotKey::System)
         .expect("a system menu")
         .rect;
-    let (x, width) = metrics.highlight_span(&SlotKey::System, slot.w);
-    let height = slot.h - 2.0 * metrics.selection_inset_y;
+    let (x, _) = metrics.highlight_span(&SlotKey::System, slot.w);
+    let (left, top) = (slot.x + x, slot.y + metrics.selection_inset_y);
     let dark = matches!(appearance, Appearance::Dark | Appearance::DarkHighContrast);
     let palette = BarTone::default().palette(dark, appearance.is_high_contrast());
-    assert_eq!(bar.len(), 1, "the highlight alone: {bar:?}");
-    let region = &bar[0];
-    assert_eq!(
-        region.rect,
-        Rect::new(
-            slot.x + x,
-            slot.y + metrics.selection_inset_y,
-            width,
-            height
-        )
+    let veil = (palette.bar_highlight[3] * 255.0).round();
+    let inside = bar.alpha((left + 2.0, slot.y + slot.h / 2.0));
+    assert!(
+        (f32::from(inside) - veil).abs() <= 1.0,
+        "the highlight colour inside the capsule's end: alpha {inside} for {veil}"
     );
-    assert_eq!(
-        region.radius,
-        metrics.selection_corner_radius.min(height / 2.0)
-    );
-    assert_eq!(region.style, Some(GlassStyle::Clear));
-    assert_eq!(
-        region.variant,
-        Some((
-            GlassVariant::Clear,
-            GlassModifiers {
-                adaptive: true,
-                ..GlassModifiers::DEFAULT
-            }
-        ))
-    );
-    assert_eq!(region.tint, Some(palette.bar_highlight));
+    assert_eq!(bar.alpha((left + 2.0, top - 2.0)), 0, "nothing above it");
 }

@@ -22,9 +22,8 @@ use cupertino_kit::controls::{
 };
 use cupertino_kit::core::{
     next_resource_id, AccessibleStates, AccessibleValue, Action, Change, Checked, CommandRegistry,
-    Element, Environment, Event, EventCx, Glass, GlassVariant, IconImage, Key, MeasureCx, PaintCx,
-    Phase, Popup, PopupAnchor, Propagation, Role, SemanticsCx, Widget, Window, WindowBackground,
-    WindowKey,
+    Element, Environment, Event, EventCx, IconImage, Key, MeasureCx, PaintCx, Phase, Popup,
+    PopupAnchor, Propagation, Role, SemanticsCx, Widget, Window, WindowBackground, WindowKey,
 };
 use cupertino_kit::geometry::{Insets, Point, Rect, Size};
 use cupertino_kit::layout::{Align, Axis};
@@ -1157,8 +1156,9 @@ fn highlight_pill(m: &BarMetrics, slot: &Slot) -> (Rect, f64) {
     (rect, m.selection_corner_radius.min(height / 2.0))
 }
 
-/// A slot's highlight, under the slot: clear glass tinted with the bar's highlight colour, or that colour painted where
-/// the window shows no glass or the window system does not tint it, and under Reduce Transparency.
+/// A slot's highlight, under the slot: the bar's highlight colour painted, a flat veil over what lies behind the bar.
+/// The system names it tinted clear glass, but shows a flat capsule that only darkens (or under light text lightens) what
+/// lies behind it by the colour's share, with no lens, rim or lift of its own, which clear glass would add.
 struct HighlightPill {
     rect: Rect,
     radius: f64,
@@ -1201,19 +1201,8 @@ impl<M: Clone + 'static> Widget<M> for HighlightPill {
             .tone
             .palette(dark(env), high_contrast(env))
             .bar_highlight;
-        // untinted clear glass would show no highlight, so without a tint the colour is painted
-        let glass = !env.theme.preferences.reduce_transparency
-            && cx.glass_tint()
-            && cx.glass(
-                Glass::clear()
-                    .variant(GlassVariant::Clear)
-                    .tint(color(tint))
-                    .radius(self.radius),
-            );
-        if !glass {
-            let rect = Rect::new(0.0, 0.0, self.rect.width(), self.rect.height());
-            fill(cx, rect, self.radius, tint);
-        }
+        let rect = Rect::new(0.0, 0.0, self.rect.width(), self.rect.height());
+        fill(cx, rect, self.radius, tint);
     }
 
     fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}

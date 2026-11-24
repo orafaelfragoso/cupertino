@@ -1,7 +1,7 @@
-//! The glass the launcher's panel names: the plain search bar a platter of the regular glass at the large size, the mode
-//! buttons beside it the same; a panel holding results below its field the search results' glass at its own size,
-//! with the compositor's soft shadow (no modifier). None adapts to what is behind it; the legacy large panel style stays
-//! what a window system without variants draws.
+//! The glass the launcher's panel names: the search results' glass, with the compositor's soft shadow (no modifier),
+//! for the plain search bar and the mode buttons beside it at the large size and for a panel holding results below its
+//! field at its own size. None adapts to what is behind it; the legacy large panel style stays what a window system
+//! without variants draws.
 
 use cupertino_kit::core::{GlassModifiers, GlassSize, GlassVariant};
 use cupertino_kit::platform::GlassStyle;
@@ -20,16 +20,20 @@ fn named(variant: GlassVariant, size: GlassSize) -> Option<(GlassVariant, GlassM
 }
 
 #[test]
-fn the_plain_search_bar_is_a_large_platter_of_regular_glass() {
+fn the_plain_search_bar_is_the_search_results_glass_at_the_large_size() {
     let frame = Motion::new(compact_shape()).frame(0.0);
     assert_eq!(frame.shape.height, COLLAPSED_HEIGHT);
     assert_eq!(
         enclosure_variant(&frame),
-        (GlassVariant::Regular, GlassSize::Large)
+        (GlassVariant::SearchResults, GlassSize::Large)
     );
     let look = glass_look(&frame);
     assert_eq!(look.glass, Some(GlassStyle::LargePanel));
-    assert_eq!(look.variant, named(GlassVariant::Regular, GlassSize::Large));
+    assert_eq!(
+        look.variant,
+        named(GlassVariant::SearchResults, GlassSize::Large),
+        "the milky sheet with its shadow, not clear regular glass without one"
+    );
 }
 
 #[test]
@@ -50,9 +54,15 @@ fn a_panel_with_results_is_the_search_results_glass_at_its_own_size() {
 }
 
 #[test]
-fn a_mode_button_is_the_search_bars_platter_glass() {
-    assert_eq!(BUTTON_VARIANT, (GlassVariant::Regular, GlassSize::Large));
+fn a_mode_button_is_the_search_bars_glass() {
+    assert_eq!(
+        BUTTON_VARIANT,
+        (GlassVariant::SearchResults, GlassSize::Large)
+    );
     let look = button_glass_look(44.0);
     assert_eq!(look.glass, Some(GlassStyle::LargePanel));
-    assert_eq!(look.variant, named(GlassVariant::Regular, GlassSize::Large));
+    assert_eq!(
+        look.variant,
+        named(GlassVariant::SearchResults, GlassSize::Large)
+    );
 }

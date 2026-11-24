@@ -524,19 +524,23 @@ pub fn enclosure_radius(frame: &Frame) -> f64 {
 }
 
 /// The system variant and size class the enclosure's glass is named by in `frame`, neither adapting to what is behind
-/// it: the plain search bar ([`COLLAPSED_HEIGHT`] tall, the mode buttons beside it) is a platter of the regular glass
-/// at the large size; a panel that holds more below its field is the search results' glass at its own size, with the
-/// soft shadow the compositor draws under it.
+/// it, both the search results' glass with the soft shadow the compositor draws under it: the plain search bar
+/// ([`COLLAPSED_HEIGHT`] tall, the mode buttons beside it) at the large size ([`BUTTON_VARIANT`]), a panel that holds
+/// more below its field at its own size.
 pub fn enclosure_variant(frame: &Frame) -> (GlassVariant, GlassSize) {
     if frame.shape.height <= COLLAPSED_HEIGHT {
-        (GlassVariant::Regular, GlassSize::Large)
+        BUTTON_VARIANT
     } else {
         (GlassVariant::SearchResults, GlassSize::Dynamic)
     }
 }
 
-/// The variant and size class of a mode button's glass: the search bar's platter it stands beside.
-pub const BUTTON_VARIANT: (GlassVariant, GlassSize) = (GlassVariant::Regular, GlassSize::Large);
+/// The variant and size class of a mode button's glass and of the plain search bar's: the search results' glass at the
+/// large size. The system names the bar a platter of the regular glass at the large size, but shows it as the milky
+/// sheet of the results panel with a thin dark rim and its window's soft shadow, where regular glass is a clear one with
+/// no shadow.
+pub const BUTTON_VARIANT: (GlassVariant, GlassSize) =
+    (GlassVariant::SearchResults, GlassSize::Large);
 
 /// Where the panel goes on an output `output` points large: horizontally centred, its top edge at [`TOP_FRACTION`]
 /// of the height.

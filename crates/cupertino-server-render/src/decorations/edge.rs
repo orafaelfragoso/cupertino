@@ -3,7 +3,7 @@
 //! The outline is half a point wide (one device pixel at 2×); with Increase Contrast it is a full point of the
 //! high-contrast `window-rim` colour, a visible border. A window's outline has the same strength all around. A menu's
 //! (and a popover's) follows the direction of its edge: full along the sides, fading around the corners to nothing at
-//! the top and bottom ([`OutlineFalloff::Sides`]). The inner rim of a window is white at half the inner-rim density of
+//! the top and bottom in the dark appearance and to a quarter of it in the light one ([`OutlineFalloff::Sides`]). The inner rim of a window is white at half the inner-rim density of
 //! its row of the shadow table, as wide in points as that row's inner-rim scale (1 pt in the dark appearance, ½ pt in
 //! the light one). A menu's inner rim is a white line half a point wide, brightest along the top and bottom and fainter
 //! along the sides ([`OutlineFalloff::Ends`]), so the glass reads lit all around; with Increase Contrast the border
@@ -22,11 +22,12 @@ pub const CONTRAST_OUTLINE_WIDTH: f64 = 1.0;
 /// Opacity of the black outline of an active window in the dark appearance.
 pub const WINDOW_OUTLINE_DARK: f32 = 0.93;
 /// Opacity of the black outline of an active window in the light appearance.
-pub const WINDOW_OUTLINE_LIGHT: f32 = 0.22;
-/// Share of the active outline's opacity an inactive window keeps.
-pub const INACTIVE_OUTLINE_SHARE: f32 = 0.62;
+pub const WINDOW_OUTLINE_LIGHT: f32 = 0.2;
+/// Share of the active outline's opacity an inactive window keeps: an inactive window's outline stays nearly as dark
+/// (0.83 against 0.93 in the dark appearance).
+pub const INACTIVE_OUTLINE_SHARE: f32 = 0.89;
 /// Opacity of the black outline along the sides of a menu in the dark appearance.
-pub const MENU_OUTLINE_DARK: f32 = 0.6;
+pub const MENU_OUTLINE_DARK: f32 = 0.7;
 /// Opacity of the black outline along the sides of a menu in the light appearance.
 pub const MENU_OUTLINE_LIGHT: f32 = 0.5;
 /// Share of the shadow table's inner-rim density the white inner rim of a window shows.
@@ -34,6 +35,9 @@ pub const INNER_RIM_SHARE: f64 = 0.5;
 /// How sharply a menu's outline fades from its sides towards its top and bottom: the outline's strength is the
 /// horizontal part of the edge's outward normal to this power.
 pub const SIDE_FALLOFF_POWER: f32 = 2.0;
+/// Share of a menu's side outline left along its top and bottom in the light appearance, a faint line there; the dark
+/// appearance keeps none.
+pub const MENU_OUTLINE_ENDS_LIGHT: f32 = 0.25;
 /// Width in points of the light rim inside a menu, in the dark and the light appearance.
 pub const MENU_RIM_WIDTH: f64 = 0.5;
 pub const MENU_RIM_WIDTH_LIGHT: f64 = 1.0;
@@ -61,8 +65,9 @@ pub enum EdgeKind {
 pub enum OutlineFalloff {
     /// The same all around.
     Uniform,
-    /// Full along the sides, `|n.x|^power` of the unit outward normal `n` elsewhere: nothing at the top and bottom.
-    Sides { power: f32 },
+    /// Full along the sides, `floor + (1 − floor) · |n.x|^power` of the unit outward normal `n` elsewhere: `floor` of
+    /// it along the top and bottom.
+    Sides { power: f32, floor: f32 },
     /// Full along the top and bottom, `floor + (1 − floor) · |n.y|^power` elsewhere: `floor` of it along the sides.
     Ends { power: f32, floor: f32 },
 }
@@ -73,7 +78,7 @@ impl OutlineFalloff {
     pub fn shader(self) -> (f32, f32, f32) {
         match self {
             OutlineFalloff::Uniform => (0.0, 0.0, 0.0),
-            OutlineFalloff::Sides { power } => (power, 0.0, 0.0),
+            OutlineFalloff::Sides { power, floor } => (power, 0.0, floor),
             OutlineFalloff::Ends { power, floor } => (0.0, power, floor),
         }
     }
@@ -167,6 +172,7 @@ pub fn edge(
     let falloff = match kind {
         EdgeKind::Menu if !increased_contrast => OutlineFalloff::Sides {
             power: SIDE_FALLOFF_POWER,
+            floor: if dark { 0.0 } else { MENU_OUTLINE_ENDS_LIGHT },
         },
         _ => OutlineFalloff::Uniform,
     };

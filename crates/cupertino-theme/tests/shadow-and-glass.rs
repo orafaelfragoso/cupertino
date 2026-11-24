@@ -42,6 +42,20 @@ fn a_standard_window_shadow_is_wider_lower_and_denser_while_active() {
 }
 
 #[test]
+fn an_inactive_standard_window_casts_a_tight_low_shadow_in_both_contrasts() {
+    for contrast in [false, true] {
+        for (dark, density) in [(false, 0.22), (true, 0.45)] {
+            let row = window_shadow(ShadowOption::Standard, false, dark, contrast);
+            assert_eq!(
+                (row.density, row.sigma, row.vertical_offset),
+                (density, 8.0, 7.0),
+                "dark {dark}, contrast {contrast}"
+            );
+        }
+    }
+}
+
+#[test]
 fn the_shadow_reaches_its_rounded_up_radius_shifted_by_its_offset() {
     for (sigma, radius) in [(20.0, 56), (12.0, 34), (1.0, 3)] {
         assert_eq!(sigma_to_radius_px(sigma), radius, "sigma {sigma}");

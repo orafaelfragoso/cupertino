@@ -10,7 +10,7 @@ use cupertino_ui_controls::{
 };
 use cupertino_ui_core::layout::{Align, Axis};
 use cupertino_ui_core::platform::{
-    Capabilities, GlassModifiers, GlassStyle, GlassVariant, Keysym, Mods,
+    Capabilities, GlassModifiers, GlassStyle, GlassVariant, Keysym, Mods, WindowStates,
 };
 use cupertino_ui_core::{Element, Key, Role, Window, WindowBackground, WindowKey};
 use support::{Scene, View, DOWN, END, ESCAPE, HOME, LEFT, RETURN, RIGHT, UP};
@@ -376,7 +376,49 @@ fn a_menus_window_background_is_the_menu_variant_without_its_shadow() {
         square[0].background,
         WindowBackground::Surface { radius: 0.0, glass: Some(g), .. } if g == glass
     ));
-    assert!(radius > 0.0);
+    assert_eq!(radius, 12.0, "a menu's panel rounds its corners by 12 pt");
+}
+
+#[test]
+fn a_highlighted_row_spans_its_row_five_points_in_from_the_sides_of_the_panel() {
+    let mut view = opened();
+    let popup = view.popup().expect("the menu is shown");
+    view.driver
+        .window_system_mut()
+        .configure(popup, None, WindowStates::default())
+        .unwrap();
+    view.key(DOWN, None, Mods::NONE);
+    view.settle();
+    let row = view.bounds_of(Role::MenuItem, "New");
+    let frame = view
+        .driver
+        .window_system_mut()
+        .frames(popup)
+        .unwrap()
+        .last()
+        .expect("the menu drew a frame")
+        .clone();
+    // the accent's blue covering the whole pixel, at the window's one pixel per point: an edge half a pixel off
+    // leaves its pixel half lit
+    let blue = |x: u32, y: u32| {
+        let i = ((y * frame.width + x) * 4) as usize;
+        let [r, _, b] = [frame.pixels[i], frame.pixels[i + 1], frame.pixels[i + 2]];
+        i32::from(b) - i32::from(r) > 200
+    };
+    let middle = row.center().y as u32;
+    let lit: Vec<u32> = (0..frame.width).filter(|&x| blue(x, middle)).collect();
+    assert_eq!(
+        (lit.first().copied(), lit.last().copied()),
+        (Some(5), Some(frame.width - 6)),
+        "the highlight is 5 pt in from each side"
+    );
+    let x = frame.width / 2;
+    let rows: Vec<u32> = (0..frame.height).filter(|&y| blue(x, y)).collect();
+    assert_eq!(
+        (rows.first().copied(), rows.last().copied()),
+        (Some(row.min_y() as u32), Some(row.max_y() as u32 - 1)),
+        "the highlight is the row's full height"
+    );
 }
 
 /// A button that opens a menu with a pointer.

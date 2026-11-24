@@ -213,6 +213,44 @@ fn edges_are_strongest_for_the_active_window_and_use_the_contrast_rim_when_asked
 }
 
 #[test]
+fn an_inactive_window_keeps_most_of_its_outline_and_a_dark_window_rim_is_two_device_pixels_at_2x() {
+    let rim = [0.2, 0.4, 0.6, 1.0];
+    let alpha = |dark, active| {
+        edge(EdgeKind::Window, dark, active, false, rim)
+            .outline
+            .color[3]
+    };
+    // the dark outline: 0.93 active, about 0.83 inactive
+    assert!(
+        (alpha(true, false) - 0.83).abs() < 0.01,
+        "{}",
+        alpha(true, false)
+    );
+    for dark in [false, true] {
+        let share = alpha(dark, false) / alpha(dark, true);
+        assert!((0.85..1.0).contains(&share), "dark {dark}: {share}");
+    }
+    let inner = |dark| {
+        edge(EdgeKind::Window, dark, true, false, rim)
+            .inner
+            .expect("a window has an inner rim")
+            .device(2.0)
+            .0
+    };
+    assert_eq!((inner(true), inner(false)), (2, 1), "device pixels at 2x");
+    // a menu's side outline is darker in the dark appearance
+    let menu = |dark| edge(EdgeKind::Menu, dark, true, false, rim).outline.color[3];
+    assert_eq!((menu(true), menu(false)), (0.7, 0.5));
+    // along the top a light menu keeps a quarter of its outline, a dark one none
+    let top = |dark| {
+        edge(EdgeKind::Menu, dark, true, false, rim)
+            .falloff
+            .weight((0.0, -1.0))
+    };
+    assert_eq!((top(true), top(false)), (0.0, 0.25));
+}
+
+#[test]
 fn a_hairline_is_whole_device_pixels_with_the_opacity_its_coverage_leaves() {
     let line = Hairline {
         color: [0.0, 0.0, 0.0, 0.8],

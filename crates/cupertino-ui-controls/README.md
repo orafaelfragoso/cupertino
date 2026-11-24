@@ -338,8 +338,8 @@ from the application's model and reports changes as messages.
   panel's edge; over the opaque fill the panel strokes its own.
   A chosen row's highlight goes off for 0.034 s and on for 0.067 s before its messages are sent (at once with Reduce
   Motion), and the menu takes no input meanwhile; the menu then fades out when the application stops declaring it
-  (`cupertino-ui-core`'s runtime). Rows are 24 pt, labels 16.5 pt in, the highlight inset 5.5 pt with a 6.75 pt corner,
-  the panel's corner 11.5 pt, a submenu overlaps its menu by 5.5 pt, and shortcuts take 0.28 of the label's strength.
+  (`cupertino-ui-core`'s runtime). Rows are 24 pt, labels 16.5 pt in, the highlight inset 5 pt with a 7 pt corner,
+  the panel's corner 12 pt, a submenu overlaps its menu by 5.5 pt, and shortcuts take 0.28 of the label's strength.
 - **Popovers.** A popover is glass with a 16 pt corner, like a menu: the compositor draws its body and edge, and
   over the opaque fill (no material) it strokes its own edge. Anchored by its pointer, the panel and the pointer are
   one container of the cartouche popover variant at the medium size (`GlassVariant::CartouchePopover`,

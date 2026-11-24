@@ -250,14 +250,24 @@ pub const TAB_LIGHT_REDUCTION: f32 = 0.05;
 pub const CARTOUCHE_REFRACTION: f32 = -5.0;
 pub const CARTOUCHE_REFRACTION_HEIGHT: f32 = 5.0;
 pub const CARTOUCHE_FILL_LIGHT: f32 = 0.1;
-/// A toolbar item's first blur level (a fifth of the radius at every size), its fixed bend in points and its control
-/// border.
+/// A toolbar item's first blur level (a fifth of the radius at every size) and its fixed bend in points. It draws no
+/// control border: the system's (ControlBorderShapeStyle, 0.125) is clear unless a border setting is on, and the line
+/// a Finder capture shows on a capsule's edge is one device pixel (26 % black at the round ends over a white window,
+/// `files-windows/toolbar_icon_view_360s`), which the toolkit lays over the glass itself; the border laid under it
+/// drew a second, wider line (the ends 220 and 160 against the capture's 183).
 pub const TOOLBAR_LEVEL_OPACITY: f32 = 0.2;
 pub const TOOLBAR_REFRACTION: f32 = -18.0;
 pub const TOOLBAR_REFRACTION_HEIGHT: f32 = 9.0;
-pub const TOOLBAR_BORDER: GlassBorder = GlassBorder {
-    opacity: 0.125,
-    width: 1.0,
+/// A toolbar item's line of light along its top and bottom: its strength and the depth of its band in points, with
+/// its glow as deep and as strong as the regular glass's. A dark Finder capture (`observed/captures/55-columns`) lights
+/// the two device pixels inside a capsule's top edge by 58 and 32 levels over a face of about 75, and the bottom's by
+/// 28 and 48, where the regular light's 0.75-point band lit one pixel by about 74.
+pub const TOOLBAR_SPECULAR_AMOUNT: f32 = 0.25;
+pub const TOOLBAR_SPECULAR_HEIGHT: f32 = 1.5;
+const TOOLBAR_SPECULAR_DIFFUSE: GlowDiffuse = GlowDiffuse {
+    height_scale: SPECULAR_DIFFUSE.height_scale * SPECULAR_HEIGHT / TOOLBAR_SPECULAR_HEIGHT,
+    spread_scale: SPECULAR_DIFFUSE.spread_scale,
+    amount_scale: SPECULAR_DIFFUSE.amount_scale * SPECULAR_AMOUNT / TOOLBAR_SPECULAR_AMOUNT,
 };
 /// The scale a menu's backdrop is captured at.
 const MENU_CAPTURE_SCALE: f32 = 0.25;
@@ -301,14 +311,12 @@ pub(super) fn regular_variant(
             p.blur.level_opacity[1] = TOOLBAR_LEVEL_OPACITY;
             p.refraction.amount = TOOLBAR_REFRACTION;
             p.refraction.height = TOOLBAR_REFRACTION_HEIGHT;
-            // with Increase Contrast the toolkit draws the stronger control border itself
-            p.border = if contrast {
-                GlassBorder::NONE
-            } else {
-                TOOLBAR_BORDER
-            };
-            // the control border marks the edge: no line outside it
+            // the toolkit outlines the item, with Increase Contrast too: no border of the glass and no line outside it
+            p.border = GlassBorder::NONE;
             p.shadow.edge_line = 0.0;
+            p.specular.amount = TOOLBAR_SPECULAR_AMOUNT;
+            p.specular.height = TOOLBAR_SPECULAR_HEIGHT;
+            p.specular.diffuse = TOOLBAR_SPECULAR_DIFFUSE;
         }
         GlassVariant::Menu => {
             p.capture_scale = MENU_CAPTURE_SCALE;

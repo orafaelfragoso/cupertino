@@ -55,6 +55,7 @@ mod thumbnail;
 mod tile_sidebar;
 mod toggle;
 mod toolbar;
+mod toolbar_press;
 mod tooltip;
 pub mod typeahead;
 mod window_drag;
@@ -93,6 +94,7 @@ pub use toolbar::{
     TOOLBAR_MENU_BUTTON, TOOLBAR_ROW, TOOLBAR_SEGMENT, TOOLBAR_SYMBOL, TOOLBAR_TITLE_GAP,
     TOOLBAR_TITLE_SIZE, TOOLBAR_TITLE_WEIGHT,
 };
+pub use toolbar_press::{TOOLBAR_MENU_PRESS_HOLD, TOOLBAR_PRESS_GROWTH};
 pub use tooltip::{TooltipChange, TooltipState};
 
 pub use cupertino_ui_core::SortOrder;

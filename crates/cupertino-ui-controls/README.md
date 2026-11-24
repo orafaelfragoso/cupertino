@@ -243,8 +243,19 @@ from the application's model and reports changes as messages.
   `ToolbarSearch` a search field that rests as such a circle and passes the press to the field under it, and
   `ToolbarTitle` the 15 pt bold title that takes the room the controls leave, on one line that ends in an ellipsis
   when it does not fit (nothing at all when not even the ellipsis does), so the row keeps its height. Each control's glass gets an
-  outline from the toolkit: a grey rim on its outermost device pixel (26 % black at the sides, 7 % at the top and bottom)
-  and a faint shade below it in the light appearance, a dark rim along its sides (60 % black) in the dark one. `NavigationStack` puts its back and
+  outline from the toolkit, the only line round it (the glass draws no border of its own): a grey rim on its outermost
+  device pixel (26 % black at the sides, 9 % at the top and 10.5 % at the bottom) and a faint shade below it in the
+  light appearance, a dark rim along its sides (76 % black) in the dark one, and with Increase Contrast in the dark one
+  a white rim of 65 % all round. A press of any enabled segment grows the whole capsule's glass and its outline about
+  their centre (`Glass::scale`) by `TOOLBAR_PRESS_GROWTH`, 2.5 pt wider whatever its width and taller in proportion,
+  along `SpringPreset::TOOLBAR_ITEM_PRESS` (a little past it about 0.1 s in, settled by 0.2 s), and back along
+  `TOOLBAR_ITEM_RELEASE` once the press lets go, a drag off the control holding it; a segment that opens a menu lets
+  go by itself `TOOLBAR_MENU_PRESS_HOLD` (0.2 s) after its press, the menu taking the release. Space on a focused
+  segment holds it as a press does. The glyphs and the pill keep their places, and nothing grows under Reduce Motion
+  or where the desktop scales no glass. Under the pointer a segment shows the glass's interaction fill 4 pt inside it,
+  the quinary level of the label colour (4.7 %, black in the light appearance and white in the dark), coming to the
+  quaternary level (9.8 %; 34.9 % light and 29.8 % dark with Increase Contrast) over 46 ms of a press and going 50 ms
+  after the release over 29 ms; a segment whose menu is open keeps the quaternary level. `NavigationStack` puts its back and
   forward buttons in such a group. With `under_toolbar` its page fills the whole pane and the row lies over it (the
   row takes the pointer first); the page lays out below the row with `unobscured_insets(mode)`, the top the window's
   chrome covers (52 pt for the unified and sidebar modes, 40 pt compact, none for a title bar above the content), so a

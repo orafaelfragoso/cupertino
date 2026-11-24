@@ -17,6 +17,8 @@ mod press_controls;
 mod text_fields;
 #[path = "toolbar-band.rs"]
 mod toolbar_band;
+#[path = "toolbar-press.rs"]
+mod toolbar_press;
 mod typeahead;
 #[path = "value-controls.rs"]
 mod value_controls;

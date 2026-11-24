@@ -117,7 +117,7 @@ flag and its Increase Contrast option.
   | `Menu` | regular at its own size, captured at 0.25, no edge line; window shadow 24 pt, 10 pt down, 0.7 / 0.8 (inactive 16 pt, 4 down, 0.55 / 0.65), which the legacy `Menu` leaves to the popup (`exclude_shadow`) |
   | `GlassWindow` | regular with the window shadow of an alert (`GlassShadow::alert`; a sheet's 0.6 / 0.7, inactive 0.45 / 0.55, through `GlassShadow::sheet`) |
   | `Tab` | regular under a white fill 0.15, black and white lowered by 0.05 light; inactive fill 0.3 / 0.07 |
-  | `ToolbarItem` | regular with the first levels at 0.2, bend −18 over 9 pt, control border black 0.125, 1 pt (none with Increase Contrast), no edge line |
+  | `ToolbarItem` | regular with the first levels at 0.2, bend −18 over 9 pt, a deeper line of light (0.25 over 1.5 pt, its glow as the regular glass's), no control border (the system's is clear without a border setting; the toolkit lays the item's outline over it) and no edge line |
   | `Control`, `Slider`, `Loupe` | no blur, read at the output's scale; face black 0.5 / 0.2, white 1.03 / 0.6; ring 0.1 (deviation 3, 8 down) and bend −0.15·s over 0.1·s; `Slider` ring 0.15 / 0.4, bend −0.27·s over 0.18·s, the track's edge line 0.22 / 0.24; `Loupe` ring 0.07, deviation 4, 12 down, bend −0.3·s over 0.095·s |
   | `SearchResults` | the large panel: regular with the blur and blur fill twice as wide, its own face, bend band at most 6 pt, an inner line (light) or bevel (dark) in place of the key light, drop shadow 24 pt, 16 down, 0.4 / 0.5 |
   | `FocusBorder` | regular |

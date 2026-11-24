@@ -427,7 +427,7 @@ impl SpringPreset {
 impl SpringPreset {
     /// A toolbar item's glass growing under a press: a little bounce (damping ratio 0.65, passing its size by about
     /// 7 %), its undamped period 0.16 s, so it peaks about 0.1 s in and settles within a hundredth by about 0.2 s. A
-    /// Finder recording (`video/frames/files-windows`, 362.78 s, 379.71 s, 389.87 s) shows each capsule widening by
+    /// file manager recording (`video/frames/files-windows`, 362.78 s, 379.71 s, 389.87 s) shows each capsule widening by
     /// about 2.5 points, at its widest about 90 ms after the press and a little narrower after.
     pub const TOOLBAR_ITEM_PRESS: SpringPreset = SpringPreset(SpringForm::Ratio {
         response: 0.16,

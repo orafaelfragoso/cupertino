@@ -22,7 +22,7 @@ use cupertino_ui_core::{Event, EventCx, PaintCx, Phase};
 use crate::motion::{Curve, SpringTween, Tween};
 
 /// How much wider a toolbar control's glass is drawn under a press, in points, about its centre; its height grows in
-/// proportion, so the glass keeps its shape. A Finder recording (`video/frames/files-windows`) shows a 47-point menu
+/// proportion, so the glass keeps its shape. A file manager recording (`video/frames/files-windows`) shows a 47-point menu
 /// button, a 110-point group and a 160-point choice each widening by 2.2 to 2.5 points once settled (2.7 to 2.8 at the
 /// widest), the 47-point one 2.1 points taller and the 160-point one about 1 point taller: the same growth at every
 /// width, not the same share.

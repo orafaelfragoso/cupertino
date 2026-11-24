@@ -36,7 +36,7 @@ pub const INDICATOR_GAP: f64 = 2.0;
 /// Corner radius of the bar as a fraction of the tile size: 28.3 pt at 64. Each end of the 84 pt deep bar is one
 /// continuous curve from the top to the bottom with no straight stretch, its corners reaching the full 42 pt along
 /// both sides with a superellipse of exponent about 3.25, which the glass's continuous corner draws for a radius this
-/// far past the 27.45 pt at which its reach meets half the depth (the macOS 27 dock's ends, traced at device pixels in
+/// far past the 27.45 pt at which its reach meets half the depth (the bar's ends as they present at device pixels in
 /// `dock/dock_dark_rest_67.883` and `dock_light_rest_328.340`: within 0.3 pt rms; the 19.6 pt corner reaching 30 pt
 /// it replaces was up to 3 pt squarer at the diagonal).
 pub const BAR_RADIUS: f64 = 28.3 / 64.0;

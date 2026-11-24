@@ -154,7 +154,7 @@ pub const DOCK_BAR_REFRACTION: f32 = -8.64;
 pub const DOCK_BAR_REFRACTION_HEIGHT: f32 = 3.84;
 /// The dark Dock bar's luma cap: a bright scene behind the bar comes through dimmed.
 pub const DOCK_BAR_MAX_LUMA_DARK: f32 = 0.75;
-/// The Dock bar's light along its outline, traced at device pixels round the ends of the macOS 27 bar
+/// The Dock bar's light along its outline, round its ends as they present at device pixels
 /// (`dock/dock_dark_rest_67.883`, `dock_light_rest_328.340`): a bright line along the top and the bottom (the outermost
 /// pixel about 89 levels over the backdrop, the next 52), at about three quarters of it 10° to 15° round each end and
 /// half 25° round, a faint line at about a quarter of the top's light that runs on down the curve of the end and is

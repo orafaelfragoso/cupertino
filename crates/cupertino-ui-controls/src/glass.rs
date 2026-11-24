@@ -249,7 +249,7 @@ const EDGE_RIM_CONTRAST: Rim = Rim {
     bottom: 0.3,
 };
 /// The outline of a toolbar control's glass in the light appearance, as a share of black: a grey line at the sides and
-/// a faint one at the top and bottom. A Finder capture (`files-windows/toolbar_icon_view_360s`, a white window) shows
+/// a faint one at the top and bottom. A file manager capture (`files-windows/toolbar_icon_view_360s`, a white window) shows
 /// the round ends at 183 over a face of 248, the top at 231 under the line of light and the bottom at 227.
 const TOOLBAR_RIM_LIGHT: Rim = Rim {
     white: false,
@@ -258,7 +258,7 @@ const TOOLBAR_RIM_LIGHT: Rim = Rim {
     bottom: 0.105,
 };
 /// The outline in the dark appearance: a dark line down the sides only, which leaves the top and bottom to the glass's
-/// line of light. A dark Finder capture (`observed/captures/55-columns`) shows the round ends at 14 between a window of
+/// line of light. A dark file manager capture (`observed/captures/55-columns`) shows the round ends at 14 between a window of
 /// 39 and a face of 66.
 const TOOLBAR_RIM_DARK: Rim = Rim {
     white: false,

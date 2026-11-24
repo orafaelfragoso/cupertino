@@ -145,6 +145,37 @@ fn the_sidebar_panel_is_abutted_sidebar_glass_and_opaque_with_reduce_transparenc
 }
 
 #[test]
+fn the_sidebar_panels_warm_band_is_warmest_in_its_bottom_corner() {
+    let mut view = View::<Sidebar>::open_with(effects(), false);
+    let window = view.window;
+    configured(&mut view, window);
+    let bottom = support::SIZE.height - 2.0;
+    // the band's strength at a point: how far its warm grey takes the blue of the white the test window system shows
+    // under the panel's glass
+    let mut band = |x: f64, y: f64| 1.0 - f64::from(pixel(&mut view, Point::new(x, y))[2]) / 255.0;
+    let (corner, leading, below) = (band(12.0, bottom), band(12.0, 150.0), band(40.0, bottom));
+    assert!(
+        leading > 0.0 && below > 0.0,
+        "the band lies along both edges: leading {leading}, bottom {below}"
+    );
+    assert!(
+        corner >= leading.max(below),
+        "the corner takes both bands, with no paler square: corner {corner}, leading {leading}, bottom {below}"
+    );
+    // along the bottom edge the band keeps its strength up to the corner
+    let (mut last, mut x) = (band(60.0, bottom), 60.0);
+    while x > 8.0 {
+        x -= 2.0;
+        let here = band(x, bottom);
+        assert!(
+            here + 0.02 >= last,
+            "no paler patch along the bottom towards the corner: {here} at {x} after {last}"
+        );
+        last = here;
+    }
+}
+
+#[test]
 fn a_single_panel_window_is_abutted_sidebar_glass_over_the_sidebar_material() {
     let cupertino_ui_core::WindowBackground::Surface { surface, glass, .. } =
         cupertino_ui_controls::PANEL_WINDOW_BACKGROUND

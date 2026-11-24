@@ -39,7 +39,9 @@ pub const SIDEBAR_PANEL_INSET: f64 = 0.0;
 const EDGE_BAND: f64 = 20.0;
 const EDGE_BAND_COLOR: [u8; 3] = [222, 214, 207];
 
-/// The warm band along the leading and bottom edges of a panel `size` big.
+/// The warm band along the leading and bottom edges of a panel `size` big. Both run the panel's full length, so the
+/// corner between them takes the two bands over each other and is the warmest part, as the desktop shows through
+/// there from two sides; a bottom band that started where the leading one ends left a paler square in the corner.
 fn paint_edge_band(cx: &mut PaintCx<'_>, size: Size) {
     use cupertino_geometry::Point;
     use cupertino_theme::ui::Color;
@@ -73,7 +75,7 @@ fn paint_edge_band(cx: &mut PaintCx<'_>, size: Size) {
         },
     });
     cx.push(PaintOp::Fill {
-        shape: Shape::Rect(Rect::new(band, size.height - band, size.width - band, band)),
+        shape: Shape::Rect(Rect::new(0.0, size.height - band, size.width, band)),
         paint: Paint::Linear {
             start: Point::new(0.0, size.height),
             end: Point::new(0.0, size.height - band),

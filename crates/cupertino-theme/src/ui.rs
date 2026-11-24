@@ -1,6 +1,7 @@
 //! CupertinoKit theme tokens. Controls read every colour, metric and type size from [`ThemeTokens`], never a
 //! literal. Colours are looked up by [`ColorRole`] and the control's [`StateVariant`], so a theme is a table.
 
+use crate::recipe;
 use cupertino_geometry::Size;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -406,6 +407,12 @@ pub enum Surface {
     /// The menu bar's strip in the menu bar material, which the compositor draws opaque with Reduce Transparency; the
     /// bar shows it only then and when the person asks for a backdrop of the bar's own, and no surface otherwise.
     MenuBar,
+    /// The overview's desktops band across the top of the output: the desktop blurred and saturated under a light or
+    /// dark veil, opaque with Reduce Transparency and in high contrast.
+    OverviewBand,
+    /// The pill under the current desktop's name in the overview's band, which lightens the band (darkens it in the
+    /// light appearance).
+    OverviewBandSelection,
 }
 
 /// How a surface paints: the compositor material to ask for, if any, and the opaque fill to paint where there is none.
@@ -476,6 +483,8 @@ impl ThemeTokens {
             Surface::TextBackground => ("TextBackground", true),
             Surface::ToolbarBand => ("ToolbarBand", false),
             Surface::MenuBar => ("MenuBar", true),
+            Surface::OverviewBand => (recipe::OVERVIEW_BAND_MATERIAL, true),
+            Surface::OverviewBandSelection => (recipe::OVERVIEW_BAND_SELECTION_MATERIAL, true),
         };
         let material = match surface {
             Surface::DockIndicator => kept.then_some(material),

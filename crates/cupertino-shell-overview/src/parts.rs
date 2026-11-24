@@ -10,7 +10,9 @@ use cupertino_kit::core::{
     Propagation, Role, SemanticsCx, SurfaceLayerMark, Widget,
 };
 use cupertino_kit::geometry::{Point, Rect, Size};
-use cupertino_kit::layout::{Constraints, ContainerKind, LayoutSpec, Measured, Overflow, SizeSpec};
+use cupertino_kit::layout::{
+    Align, Axis, Constraints, ContainerKind, Justify, LayoutSpec, Measured, Overflow, SizeSpec,
+};
 use cupertino_kit::platform::{KeyEvent, MouseButton, PointerEvent, SurfaceLayerLook};
 use cupertino_kit::render::{Paint, PaintOp, PathVerb, Shape};
 use cupertino_kit::text::{AttributedText, FontWeight, ParagraphStyle, TextAlign, TextStyle};
@@ -367,6 +369,149 @@ impl<M: Clone + 'static> Widget<M> for Group<M> {
             look: SurfaceLayerLook::default(),
         })
     }
+}
+
+/// A pill under a name, centred in the row `rect`: as wide as `name` set at `size` and `weight` with `side` points
+/// beside it, no wider than the row and as tall. Its face draws through `paint` at its own size, so a material it asks
+/// for has the pill's shape.
+pub fn pill<M: Clone + 'static>(
+    rect: Rect,
+    name: String,
+    (size, weight, side): (f64, u16, f64),
+    look_key: String,
+    paint: Painter,
+) -> Element<M> {
+    Element::new(PillRow {
+        rect,
+        children: vec![Element::new(PillFace {
+            name,
+            size,
+            weight,
+            side,
+            look_key,
+            paint,
+        })],
+    })
+}
+
+/// The row a [`PillFace`] is centred in.
+struct PillRow<M> {
+    rect: Rect,
+    children: Vec<Element<M>>,
+}
+
+impl<M: Clone + 'static> Widget<M> for PillRow<M> {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: SizeSpec::Fixed(self.rect.size.width),
+            height: SizeSpec::Fixed(self.rect.size.height),
+            position: self.rect.origin,
+            ..LayoutSpec::new(ContainerKind::Stack {
+                axis: Axis::Horizontal,
+                spacing: 0.0,
+                align: Align::Stretch,
+                justify: Justify::Center,
+            })
+        }
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        std::mem::take(&mut self.children)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self.rect == old.rect {
+            Change::None
+        } else {
+            Change::Layout
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: self.rect.size,
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
+/// The pill itself, as wide as its name asks.
+struct PillFace {
+    name: String,
+    size: f64,
+    weight: u16,
+    side: f64,
+    look_key: String,
+    paint: Painter,
+}
+
+impl<M: Clone + 'static> Widget<M> for PillFace {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec::new(ContainerKind::Leaf)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self.name != old.name
+            || self.size != old.size
+            || self.weight != old.weight
+            || self.side != old.side
+        {
+            Change::Layout
+        } else if self.look_key != old.look_key {
+            Change::Paint
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &(), constraints: Constraints, cx: &mut MeasureCx<'_>) -> Measured {
+        let style = TextStyle {
+            weight: FontWeight(self.weight),
+            ..TextStyle::new(self.size as f32)
+        };
+        let text = cx
+            .env()
+            .text
+            .paragraph(
+                &AttributedText::plain(&self.name, style),
+                &ParagraphStyle::default(),
+            )
+            .map_or(0.0, |p| p.layout(None).size().width);
+        Measured {
+            size: Size::new(
+                constraints.width.clamp(text + 2.0 * self.side),
+                constraints.height.clamp(0.0),
+            ),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        let look = Look::of(cx);
+        (self.paint)(cx, look);
+    }
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
 }
 
 /// A model rectangle as the toolkit's.

@@ -65,7 +65,7 @@ flag and its Increase Contrast option.
 - **Reduce Transparency.** `reduce_transparency` selects the `-Opaque` variant (mapping). The high-contrast
   appearances only ship opaque variants and fall back to the normal-contrast catalog for materials they do not define.
 - **Hidden state layer.** A few selection materials draw nothing in one state: an empty recipe with a note.
-- **Code recipes.** Five sit beside the catalog, and `Theme::recipe` answers them by name:
+- **Code recipes.** Several sit beside the catalog, and `Theme::recipe` answers them by name:
   - `Switcher`, the app switcher's panel. Under Reduce Transparency it is the solid gray 0.8548 (light) /
     0.1255 (dark), under Increase Contrast 0.7843 / 0.05882, opaque with no backdrop. Increase
     Contrast wins when both are on (approximate).
@@ -77,6 +77,12 @@ flag and its Increase Contrast option.
   - `Dock`, the Dock bar and its stack panel with Reduce Transparency (`dock_reduced`; otherwise they are glass): the
     desktop at 1/8 scale blurred with σ 40 pt and saturated by 3.2, covered by black (dark) or white (light) at 0.87,
     so the body is one deep colour of the wallpaper rather than a gray (approximate).
+  - `OverviewBand`, the overview's desktops band (`overview_band`): the switcher's material without the wallpaper's
+    tint and with square ends, the desktop at 1/8 scale saturated by 1.8 (dark 1.6) and blurred with σ 30 pt under
+    gray 0.9646 at 0.36 (dark 0.1569 at 0.40), and the switcher's solids with the display options (approximate).
+  - `OverviewBandSelection`, the pill under the current desktop's name in that band (`overview_band_selection`): no
+    backdrop, gray 0.1373 added to the band (plus-lighter) in the dark appearance, gray 0.9098 laid plus-darker in the
+    light one.
   - `RunningIndicator`, the Dock's running dot (`running_indicator`): no backdrop, gray 0.49 added to what lies behind
     it (plus-lighter) in the dark appearance, taken away (plus-darker) in the light one.
   - `WindowBackground`, a window's own background drawn by the compositor (`window_background`): the theme's
@@ -253,7 +259,8 @@ opaque grey at 3:1 or more in the built-in palettes; the shown page's dot is `Te
 
 `ThemeTokens::surface` gives each surface the material to ask the compositor for (`SidebarGlass` for a sidebar, `MenuGlass` for menus,
 `DenseGlass` for popovers, `Glass` for the Dock, `LoginWindowControl` for a heads-up display, `AppGrid` for the application grid's panel,
-`SwitcherGlass` for the application switcher's panel, `RunningIndicator` for the Dock's running dot, `WindowBackground`
+`SwitcherGlass` for the application switcher's panel, `OverviewBand` and `OverviewBandSelection` for the overview's
+desktops band and its current desktop's pill, `RunningIndicator` for the Dock's running dot, `WindowBackground`
 for a window's background and `TextBackground` for the colour behind a form's groups) and the opaque fill to paint
 where there is none (the text background colour for `TextBackground`, the window background for the others). With reduced transparency or
 in high contrast it asks for no material, except for the surfaces above that keep theirs.
@@ -296,6 +303,7 @@ is glass of that style, drawn as the system variant in brackets (`GlassStyle::va
 | Dock tile name and menu | `crates/cupertino-dock/src/view/label.rs` | `Surface::Tooltip` | opaque | kept |
 | Dock running indicator | `crates/cupertino-dock/src/view/bar.rs` | `Surface::DockIndicator` | kept in dark | opaque |
 | Application switcher | `crates/cupertino-dock/src/switcher_kit.rs` | `Surface::Switcher` | opaque | kept |
+| Overview's desktops band and its current desktop's pill | `crates/cupertino-shell-overview/src/chrome.rs` | `Surface::OverviewBand`, `Surface::OverviewBandSelection` | kept | kept |
 | Control panel tiles | `crates/cupertino-controlcenter/src/view.rs` | `Glass::module()` (`ControlCenter`) | kept | kept |
 | Control panel level tracks | `crates/cupertino-controlcenter/src/view.rs` | `Glass::track()` (`Slider`) | kept | kept |
 | Notification cards (banners and the centre) | `crates/cupertino-notifications/src/view.rs` | `Glass::card()` (`NotificationCenter`, medium) | kept | kept |

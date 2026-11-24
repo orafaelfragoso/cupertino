@@ -2,10 +2,11 @@
 //! every edge, so the window's coordinates are the output's. Each window shows in a hole of the surface (a surface
 //! layer the server draws the window in, [`window_layer`]); the desktops' pictures in the band are holes too
 //! ([`workspace_layer`]). The chrome is one surface layer above them ([`CHROME_LAYER`]), so the component fades it
-//! as one: the desktops band across the top (a tinted band with a soft shadow under it, the desktops' names with the
-//! current one on a pill, the bare plus that adds a desktop, the ring round the current desktop's picture and the
-//! remove button after a rest on a picture), and the ring round the selected window with its name on a plate in its
-//! middle.
+//! as one: what the desktops band across the top draws (the shadow under it, the desktops' names, the bare plus that
+//! adds a desktop, the ring round the current desktop's picture and the remove button after a rest on a picture), and
+//! the ring round the selected window with its name on a plate in its middle. The band's material and the pill under
+//! the current desktop's name lie under all of that in a window of their own ([`band_window`]), since a material lies
+//! under the whole of its window.
 //!
 //! The windows' layout is the model's ([`crate::layout`] on `cupertino_wm::overview`); where each hole is laid
 //! out is the component's ([`Scene::holes`]), which moves the holes with layer animations in its transactions.
@@ -24,6 +25,7 @@ use cupertino_kit::core::{
 use cupertino_kit::geometry::{Point, Rect, Size};
 use cupertino_kit::platform::{DecorationMode, KeyEvent, WindowSpec};
 use cupertino_kit::render::{GradientStop, Paint, PaintOp, Shape};
+use cupertino_kit::theme::Surface;
 use cupertino_wm::geometry::{Point as WmPoint, Rect as WmRect};
 use cupertino_wm::overview::bar::BarLayout;
 use cupertino_wm::overview::Key as OverviewKey;
@@ -34,6 +36,9 @@ pub const APP_ID: &str = "cupertino-overview";
 /// The surface layer of the chrome: the band, the rings and the name, which fade as one.
 pub const CHROME_LAYER: u64 = 1;
 
+/// The surface layer the band's stand-in is drawn in where the band has no window of its own (a capture).
+const BAND_LAYER: u64 = 2;
+
 /// The first layer key of the windows' holes and of the desktops' pictures: a window's or a desktop's id is added.
 const WINDOW_LAYERS: u64 = 1 << 32;
 const WORKSPACE_LAYERS: u64 = 2 << 32;
@@ -43,23 +48,40 @@ const HOLE_RADIUS: f64 = 10.0;
 
 /// What assistive technology calls the chrome.
 const TITLE: &str = "Overview";
+/// The `app_id` and the title of the band's own window ([`band_window`]), and the namespace of its layer surface.
+pub const BAND_APP_ID: &str = "cupertino-overview-band";
+const BAND_TITLE: &str = "Desktops Band";
 
-/// The desktops band's tint over the desktop, and under Reduce Transparency or Increase Contrast.
-const BAND: Rgba = [0.0, 0.0, 0.0, 0.05];
-const BAND_OPAQUE: Rgba = [0.12, 0.12, 0.14, 1.0];
-/// The shadow under the band: this tall, black from this opacity at the band's edge to none (44 pt).
+/// The desktops band where the window system shows no materials (a capture) and paints a stand-in: the veil of the
+/// band's material without its blur, and its solid gray under Reduce Transparency or Increase Contrast; (light, dark).
+const BAND_VEIL: [Rgba; 2] = [
+    [0.9646, 0.9646, 0.9646, 0.36],
+    [0.1569, 0.1569, 0.1569, 0.4],
+];
+const BAND_SOLID: [Rgba; 2] = [[0.8548, 0.8548, 0.8548, 1.0], [0.1255, 0.1255, 0.1255, 1.0]];
+/// The shadow under the band: this tall, black at these opacities down from the band's edge (a dark hairline, then a
+/// faint shade gone by about 20 pt), as (offset in points, opacity).
 const BAND_SHADOW: f64 = 44.0;
-const BAND_SHADOW_ALPHA: f32 = 0.22;
-/// The pill under the current desktop's name: a light veil, its corner radius and the space beside the name.
-const NAME_PILL: Rgba = [1.0, 1.0, 1.0, 0.2];
-const NAME_PILL_OPAQUE: Rgba = [0.35, 0.35, 0.38, 1.0];
+const BAND_SHADOW_STOPS: [(f64, f32); 8] = [
+    (0.0, 0.2),
+    (0.5, 0.08),
+    (1.0, 0.065),
+    (3.0, 0.058),
+    (7.0, 0.04),
+    (13.0, 0.024),
+    (20.0, 0.008),
+    (BAND_SHADOW, 0.0),
+];
+/// The pill under the current desktop's name: its corner radius and the space beside the name. Its stand-in where the
+/// band's material does not show: a veil near the lift the pill's material gives the band; (light, dark).
 const NAME_PILL_RADIUS: f64 = 5.0;
 const NAME_PILL_SIDE: f64 = 11.5;
+const NAME_PILL: [Rgba; 2] = [[0.0, 0.0, 0.0, 0.1], [1.0, 1.0, 1.0, 0.17]];
 /// A desktop's name: size and weight.
 const NAME_PT: f64 = 14.0;
 const NAME_WEIGHT: u16 = 400;
-/// Labels and glyphs over the band.
-const GLYPH: Rgba = [1.0, 1.0, 1.0, 0.95];
+/// The desktops' names and the plus over the band: dark in the light appearance, white in the dark one.
+const GLYPH: [Rgba; 2] = [[0.0, 0.0, 0.0, 0.95], [1.0, 1.0, 1.0, 0.95]];
 /// The ring round the current desktop's picture, and round a picture a window would be dropped on: blue, 3 pt, with
 /// corners of 4 pt.
 const SELECTION: Rgba = [0.188, 0.514, 0.984, 1.0];
@@ -243,6 +265,9 @@ pub struct Scene<'a> {
     pub hole_fill: Option<Rgba>,
     /// The chrome's opacity where it paints in place (a capture); 1 in the shell, which fades the chrome's layer.
     pub chrome_opacity: f64,
+    /// The band's material is drawn in this window, under everything else, at the chrome's opacity: a capture, which
+    /// has one window and no materials. In the shell it is the band's own window ([`band_window`]).
+    pub band_in_place: bool,
 }
 
 /// What a hole paints: `fill`, or nothing.
@@ -270,6 +295,19 @@ where
     let ui = scene.ui;
     let selection = ui.selection();
     let mut children = Vec::new();
+    if scene.band_in_place {
+        if let Some(bar) = ui.bar(now) {
+            children.push(
+                Element::new(Group {
+                    rect: Rect::new(0.0, 0.0, scene.size.width, scene.size.height),
+                    layer: BAND_LAYER,
+                    opacity: scene.chrome_opacity,
+                    children: band_parts(&bar, ui),
+                })
+                .key(Key::from("band")),
+            );
+        }
+    }
     for hole in &scene.holes {
         let id = hole.id;
         let title = ui.title(id).unwrap_or_default();
@@ -350,6 +388,107 @@ where
     }
 }
 
+/// The desktops band's own window over the output's top edge, under the overview's: the band's material, and the pill
+/// under the current desktop's name in its own material over it. The window takes no input and fades in and out as
+/// the shell presents it; the overview's window draws everything else over it. None for the application overview,
+/// which has no band.
+pub fn band_window<M: Clone + 'static>(
+    key: WindowKey,
+    width: f64,
+    ui: &OverviewUi,
+    now: f64,
+) -> Option<Window<M>> {
+    let bar = ui.bar(now)?;
+    let height = ui.band_bottom(now)?;
+    Some(Window {
+        key,
+        spec: WindowSpec {
+            title: BAND_TITLE.to_owned(),
+            app_id: BAND_APP_ID.to_owned(),
+            size: Size::new(width, height),
+            min_size: None,
+            max_size: None,
+            decorations: DecorationMode::None,
+            foreign_parent: None,
+            input_region: Some(Vec::new()),
+        },
+        shortcuts: CommandRegistry::new(),
+        on_close: None,
+        background: WindowBackground::None,
+        content: Element::new(Root {
+            role: Role::Group,
+            name: BAND_TITLE.to_owned(),
+            items: None,
+            opacity: 1.0,
+            pointer: None,
+            key: None,
+            frame: None,
+            children: band_parts(&bar, ui),
+        }),
+        popup: None,
+        menus: None,
+    })
+}
+
+/// The band's material across `bar` and the pill under the current desktop's name, where the window system shows
+/// them; their stand-ins where it does not.
+fn band_parts<M: Clone + 'static>(bar: &BarLayout, ui: &OverviewUi) -> Vec<Element<M>> {
+    let mut parts = vec![Element::new(Part {
+        rect: kit_rect(bar.rect),
+        role: None,
+        name: String::new(),
+        states: AccessibleStates::default(),
+        click: None,
+        look_key: String::new(),
+        take_focus: false,
+        layer: None,
+        place: None,
+        live: false,
+        paint: Box::new(|cx, look| {
+            if !cx.material(Surface::OverviewBand, 0.0, 1.0) {
+                let size = cx.size();
+                let stand_in = if look.opaque() { BAND_SOLID } else { BAND_VEIL };
+                fill(
+                    cx,
+                    Rect::new(0.0, 0.0, size.width, size.height),
+                    0.0,
+                    stand_in[usize::from(look.dark)],
+                );
+            }
+        }),
+    })
+    .key(Key::from("band-material"))];
+    let drag = ui.drag();
+    let count = bar.slots.len();
+    for (i, slot) in bar.slots.iter().enumerate().filter(|(_, s)| s.current) {
+        let id = slot.id.0 as u32;
+        let offset = drag
+            .filter(|d| d.0 == id)
+            .map_or(WmPoint::new(0.0, 0.0), |d| d.1);
+        parts.push(
+            parts::pill(
+                kit_rect(slot.name.translate(offset.x, offset.y)),
+                desktop_name(i, count),
+                (NAME_PT, NAME_WEIGHT, NAME_PILL_SIDE),
+                String::new(),
+                Box::new(|cx, look| {
+                    if !cx.material(Surface::OverviewBandSelection, NAME_PILL_RADIUS, 1.0) {
+                        let size = cx.size();
+                        fill(
+                            cx,
+                            Rect::new(0.0, 0.0, size.width, size.height),
+                            NAME_PILL_RADIUS,
+                            NAME_PILL[usize::from(look.dark)],
+                        );
+                    }
+                }),
+            )
+            .key(Key::from(format!("pill-{id}"))),
+        );
+    }
+    parts
+}
+
 /// The ring round the selected window and its name on its plate, following the window as the model draws it; under
 /// Reduce Motion, or while a window is dragged, at its hole.
 fn highlight<M: Clone + 'static>(chrome: &mut Vec<Element<M>>, scene: &Scene<'_>, now: f64) {
@@ -420,8 +559,8 @@ fn highlight<M: Clone + 'static>(chrome: &mut Vec<Element<M>>, scene: &Scene<'_>
     }
 }
 
-/// The desktops band: its tint and shadow, a part per desktop (its picture's ring and its name), the add button
-/// and the remove button.
+/// What the desktops band draws over its material: the shadow under it, a part per desktop (its picture's ring and its
+/// name), the add button and the remove button.
 fn band<M, F>(
     children: &mut Vec<Element<M>>,
     pictures: &mut Vec<Element<M>>,
@@ -434,31 +573,6 @@ fn band<M, F>(
     M: Clone + 'static,
     F: Fn(OverviewInput) -> M + Clone + 'static,
 {
-    children.push(
-        Element::new(Part {
-            rect: kit_rect(bar.rect),
-            role: None,
-            name: String::new(),
-            states: AccessibleStates::default(),
-            click: None,
-            look_key: String::new(),
-            take_focus: false,
-            layer: None,
-            place: None,
-            live: false,
-            paint: Box::new(|cx, look| {
-                let size = cx.size();
-                let fill_colour = if look.opaque() { BAND_OPAQUE } else { BAND };
-                fill(
-                    cx,
-                    Rect::new(0.0, 0.0, size.width, size.height),
-                    0.0,
-                    fill_colour,
-                );
-            }),
-        })
-        .key(Key::from("band")),
-    );
     let shadow = WmRect::new(bar.rect.x, bar.rect.bottom(), bar.rect.w, BAND_SHADOW);
     children.push(
         Element::new(Part {
@@ -479,16 +593,13 @@ fn band<M, F>(
                     paint: Paint::Linear {
                         start: Point::new(0.0, 0.0),
                         end: Point::new(0.0, size.height),
-                        stops: vec![
-                            GradientStop {
-                                offset: 0.0,
-                                color: parts::color([0.0, 0.0, 0.0, BAND_SHADOW_ALPHA]),
-                            },
-                            GradientStop {
-                                offset: 1.0,
-                                color: parts::color([0.0, 0.0, 0.0, 0.0]),
-                            },
-                        ],
+                        stops: BAND_SHADOW_STOPS
+                            .iter()
+                            .map(|&(at, alpha)| GradientStop {
+                                offset: (at / BAND_SHADOW) as f32,
+                                color: parts::color([0.0, 0.0, 0.0, alpha]),
+                            })
+                            .collect(),
                     },
                 });
             }),
@@ -575,7 +686,7 @@ fn band<M, F>(
                     ..AccessibleStates::default()
                 },
                 click: Some(input(OverviewInput::SwitchWorkspace(id))),
-                paint: Box::new(move |cx, look| name_paint(cx, look, &label, current)),
+                paint: Box::new(move |cx, look| name_paint(cx, look, &label)),
             })
             .key(Key::from(format!("slot-{id}"))),
         );
@@ -618,8 +729,9 @@ fn band<M, F>(
             layer: None,
             place: None,
             live: false,
-            paint: Box::new(|cx, _| {
+            paint: Box::new(|cx, look| {
                 let size = cx.size();
+                let glyph = GLYPH[usize::from(look.dark)];
                 let (x, y) = (size.width / 2.0, size.height / 2.0);
                 let a = PLUS_ARM;
                 line(
@@ -627,14 +739,14 @@ fn band<M, F>(
                     Point::new(x - a, y),
                     Point::new(x + a, y),
                     PLUS_WIDTH,
-                    GLYPH,
+                    glyph,
                 );
                 line(
                     cx,
                     Point::new(x, y - a),
                     Point::new(x, y + a),
                     PLUS_WIDTH,
-                    GLYPH,
+                    glyph,
                 );
             }),
         })
@@ -642,22 +754,18 @@ fn band<M, F>(
     );
 }
 
-/// A desktop's name centred in its row, white; the current one on a pill.
-fn name_paint(cx: &mut PaintCx<'_>, look: Look, name: &str, current: bool) {
+/// A desktop's name centred in its row; the pill under the current one is the band's ([`band_parts`]).
+fn name_paint(cx: &mut PaintCx<'_>, look: Look, name: &str) {
     let size = cx.size();
     let row = Rect::new(0.0, 0.0, size.width, size.height);
-    if current {
-        let w = (parts::text_width(cx, name, NAME_PT, NAME_WEIGHT) + 2.0 * NAME_PILL_SIDE)
-            .min(size.width);
-        let pill = Rect::new((size.width - w) / 2.0, 0.0, w, size.height);
-        let colour = if look.opaque() {
-            NAME_PILL_OPAQUE
-        } else {
-            NAME_PILL
-        };
-        fill(cx, pill, NAME_PILL_RADIUS, colour);
-    }
-    centred_text(cx, name, row, NAME_PT, NAME_WEIGHT, GLYPH);
+    centred_text(
+        cx,
+        name,
+        row,
+        NAME_PT,
+        NAME_WEIGHT,
+        GLYPH[usize::from(look.dark)],
+    );
 }
 
 /// The selected window's name on its plate, in the middle of the window's part.

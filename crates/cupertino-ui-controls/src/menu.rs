@@ -51,7 +51,7 @@ const RETURN: Keysym = Keysym(0xff0d);
 const SPACE: Keysym = Keysym(0x20);
 
 /// The panel's corner radius.
-pub(crate) const PANEL_RADIUS: f64 = 11.5;
+pub(crate) const PANEL_RADIUS: f64 = 12.0;
 /// The panel's own edge, drawn only over the opaque fill a window without the compositor's material paints.
 const EDGE: f64 = 1.0;
 /// Above the first row and below the last.
@@ -97,9 +97,9 @@ pub(crate) const TAIL_WIDTH: f64 = 18.0;
 pub(crate) const TAIL_DEPTH: f64 = 10.0;
 /// The least room between a row's label and the shortcuts and chevrons of a menu that has any.
 const SHORTCUT_GAP: f64 = 23.0;
-/// Between a highlight and the panel's sides.
-const HIGHLIGHT_INSET: f64 = 5.5;
-const HIGHLIGHT_RADIUS: f64 = 6.75;
+/// Between a highlight and the panel's sides, and the highlight's corner radius.
+const HIGHLIGHT_INSET: f64 = 5.0;
+const HIGHLIGHT_RADIUS: f64 = 7.0;
 /// The share of the label's opacity a shortcut keeps on an enabled row, and on a disabled one (whose label is dimmed
 /// already).
 const SHORTCUT_ALPHA: f32 = 0.28;

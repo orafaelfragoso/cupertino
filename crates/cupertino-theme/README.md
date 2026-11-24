@@ -162,8 +162,8 @@ terms). It is as designed and tested against the raw extraction table.
 - `window_shadow(option, active, dark, increased_contrast) selects a row. The contrast half starts at table offset 0x500
   under Increase Contrast.
 - `sigma_to_radius_px` is the verified `ceil(σ · 2.8)`. `rim_radius` is the verified 2/3 rule.
-- Rows of the standard class: active σ 20 / offset 18 / density 0.40, inactive σ 12 / 8 / 0.25, dark active density 0.70,
-  dark inactive 0.45.
+- Rows of the standard class: active σ 20 / offset 18 / density 0.40, inactive σ 8 / 7 / 0.22, dark active density 0.70,
+  dark inactive 0.45 (σ 8 / 7 too), the same under Increase Contrast.
 - Which window gets which class at run time is unknown. The `Other` class is to be sheets.
 
 Window corner radii are `WindowCornerSize::{Regular = 12 pt, Small = 10 pt} (supersedes the

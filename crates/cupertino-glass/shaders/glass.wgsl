@@ -32,7 +32,7 @@ struct Glass {
   shape_rim: array<vec4<f32>, 16>,    // rim: strength, colour bias, depth; unused
   shape_spec: array<vec4<f32>, 16>,   // key and fill light: amount, half-width, band, key angle
   shape_spec2: array<vec4<f32>, 16>,  // the fill's share; diffuse glow: band, arcs' half-width, strength, per unit
-  shape_ring: array<vec4<f32>, 16>,   // ring: moved up by, stroke, deviation, darkening
+  shape_ring: array<vec4<f32>, 16>,   // ring: moved down by, stroke, deviation, darkening
   shape_border: array<vec4<f32>, 16>, // control outline: opacity, width; unused
   cut: vec4<f32>,         // the outline the container is cut to: x, y, w, h
   cut_shape: vec4<f32>,   // its corner extent, corner exponent, 1 when cut; 1 when the edge line is even
@@ -537,11 +537,12 @@ fn fs_main(fin: VsOut) -> @location(0) vec4<f32> {
       }
       c = min(c + key_color(c) * w, vec3<f32>(1.0));
     }
-    // the rim: one shift of every channel, by the face's brightness and the edge's direction, in a band along it
+    // the rim: a shift of each channel by that channel's brightness and the edge's direction, in a band along it
     if (rim_on) {
       let band = clamp(f.rim.z + 0.5 - max(-de, 0.0), 0.0, 1.0);
-      let shift = f.rim.x * f.rim.y * rim_brightness(dot(c, LUMA)) * rim_direction(n) * band;
-      c = clamp(c + vec3<f32>(shift), vec3<f32>(0.0), vec3<f32>(1.0));
+      let k = f.rim.x * f.rim.y * rim_direction(n) * band;
+      let shift = vec3<f32>(rim_brightness(c.r), rim_brightness(c.g), rim_brightness(c.b)) * k;
+      c = clamp(c + shift, vec3<f32>(0.0), vec3<f32>(1.0));
     }
   }
   // stage 5: the control outline, then the key and fill light added as white over it
@@ -563,9 +564,9 @@ fn fs_main(fin: VsOut) -> @location(0) vec4<f32> {
     let vt = clamp((p.y - top) / max(bottom - top, 1e-3), 0.0, 1.0);
     c = c * (1.0 - clamp(mix(G.fill.w, G.levels.y, vt), 0.0, 1.0));
   }
-  // stage 7: the ring shadow, a blurred stroke along the inside of the outline moved up, darkening the face
+  // stage 7: the ring shadow, a blurred stroke along the inside of the outline moved down, darkening the face
   if (f.ring.w > 0.0 && f.ring.y > 0.0) {
-    let dr = field_d(p + vec2<f32>(0.0, f.ring.x));
+    let dr = field_d(p - vec2<f32>(0.0, f.ring.x));
     var m = 0.0;
     if (f.ring.z > 0.0) {
       m = normal_cdf(-dr / f.ring.z) - normal_cdf((-f.ring.y - dr) / f.ring.z);

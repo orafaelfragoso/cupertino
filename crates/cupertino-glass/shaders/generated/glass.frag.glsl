@@ -1308,105 +1308,110 @@ void main() {
         }
         if (rim_on) {
             float band_2 = clamp(((_e5.rim.z + 0.5) - max(-(de), 0.0)), 0.0, 1.0);
-            vec3 _e411 = c;
-            float _e414 = rim_brightness(dot(_e411, LUMA));
-            vec2 _e416 = n;
-            float _e417 = rim_direction(_e416);
-            float shift = ((((_e5.rim.x * _e5.rim.y) * _e414) * _e417) * band_2);
-            vec3 _e420 = c;
-            c = clamp((_e420 + vec3(shift)), vec3(0.0), vec3(1.0));
+            vec2 _e411 = n;
+            float _e412 = rim_direction(_e411);
+            float k_5 = (((_e5.rim.x * _e5.rim.y) * _e412) * band_2);
+            float _e416 = c.x;
+            float _e417 = rim_brightness(_e416);
+            float _e419 = c.y;
+            float _e420 = rim_brightness(_e419);
+            float _e422 = c.z;
+            float _e423 = rim_brightness(_e422);
+            vec3 shift = (vec3(_e417, _e420, _e423) * k_5);
+            vec3 _e426 = c;
+            c = clamp((_e426 + shift), vec3(0.0), vec3(1.0));
         }
     }
-    vec2 _e428 = n;
-    float _e429 = border_line(d_14, _e428, _e5);
-    if ((_e429 > 0.0)) {
-        vec3 _e432 = c;
-        c = (_e432 * (1.0 - _e429));
+    vec2 _e433 = n;
+    float _e434 = border_line(d_14, _e433, _e5);
+    if ((_e434 > 0.0)) {
+        vec3 _e437 = c;
+        c = (_e437 * (1.0 - _e434));
     }
     if (((_e5.spec.x > 0.0) && (grad_len_1 > 1e-6))) {
-        float _e444 = n.y;
-        float _e447 = n.x;
-        float na_3 = atan(-(_e444), _e447);
-        vec3 _e449 = c;
-        float _e455 = specular(max(-(de), 0.0), na_3, _e5.spec, _e5.spec2_);
-        c = clamp((_e449 + vec3(_e455)), vec3(0.0), vec3(1.0));
+        float _e449 = n.y;
+        float _e452 = n.x;
+        float na_3 = atan(-(_e449), _e452);
+        vec3 _e454 = c;
+        float _e460 = specular(max(-(de), 0.0), na_3, _e5.spec, _e5.spec2_);
+        c = clamp((_e454 + vec3(_e460)), vec3(0.0), vec3(1.0));
     }
-    float _e466 = _group_0_binding_0_fs.fill.w;
-    float _e472 = _group_0_binding_0_fs.levels.y;
-    if (((_e466 > 0.0) || (_e472 > 0.0))) {
-        float _e479 = _group_0_binding_0_fs.info.x;
-        int vn = int(_e479);
-        float _e485 = _group_0_binding_0_fs.shapes[0].y;
-        top = _e485;
-        float _e491 = _group_0_binding_0_fs.shapes[0].y;
-        float _e496 = _group_0_binding_0_fs.shapes[0].w;
-        bottom = (_e491 + _e496);
+    float _e471 = _group_0_binding_0_fs.fill.w;
+    float _e477 = _group_0_binding_0_fs.levels.y;
+    if (((_e471 > 0.0) || (_e477 > 0.0))) {
+        float _e484 = _group_0_binding_0_fs.info.x;
+        int vn = int(_e484);
+        float _e490 = _group_0_binding_0_fs.shapes[0].y;
+        top = _e490;
+        float _e496 = _group_0_binding_0_fs.shapes[0].y;
+        float _e501 = _group_0_binding_0_fs.shapes[0].w;
+        bottom = (_e496 + _e501);
         bool loop_init_9 = true;
         while(true) {
             if (!loop_init_9) {
-                int _e527 = i_1;
-                i_1 = (_e527 + 1);
+                int _e532 = i_1;
+                i_1 = (_e532 + 1);
             }
             loop_init_9 = false;
-            int _e501 = i_1;
-            if ((_e501 < vn)) {
+            int _e506 = i_1;
+            if ((_e506 < vn)) {
             } else {
                 break;
             }
             {
-                float _e503 = top;
-                int _e506 = i_1;
-                float _e509 = _group_0_binding_0_fs.shapes[_e506].y;
-                top = min(_e503, _e509);
-                float _e511 = bottom;
-                int _e514 = i_1;
-                float _e517 = _group_0_binding_0_fs.shapes[_e514].y;
-                int _e520 = i_1;
-                float _e523 = _group_0_binding_0_fs.shapes[_e520].w;
-                bottom = max(_e511, (_e517 + _e523));
+                float _e508 = top;
+                int _e511 = i_1;
+                float _e514 = _group_0_binding_0_fs.shapes[_e511].y;
+                top = min(_e508, _e514);
+                float _e516 = bottom;
+                int _e519 = i_1;
+                float _e522 = _group_0_binding_0_fs.shapes[_e519].y;
+                int _e525 = i_1;
+                float _e528 = _group_0_binding_0_fs.shapes[_e525].w;
+                bottom = max(_e516, (_e522 + _e528));
             }
         }
-        float _e530 = top;
-        float _e532 = bottom;
-        float _e533 = top;
-        float vt = clamp(((p_19.y - _e530) / max((_e532 - _e533), 0.001)), 0.0, 1.0);
-        vec3 _e541 = c;
-        float _e545 = _group_0_binding_0_fs.fill.w;
-        float _e549 = _group_0_binding_0_fs.levels.y;
-        c = (_e541 * (1.0 - clamp(mix(_e545, _e549, vt), 0.0, 1.0)));
+        float _e535 = top;
+        float _e537 = bottom;
+        float _e538 = top;
+        float vt = clamp(((p_19.y - _e535) / max((_e537 - _e538), 0.001)), 0.0, 1.0);
+        vec3 _e546 = c;
+        float _e550 = _group_0_binding_0_fs.fill.w;
+        float _e554 = _group_0_binding_0_fs.levels.y;
+        c = (_e546 * (1.0 - clamp(mix(_e550, _e554, vt), 0.0, 1.0)));
     }
     if (((_e5.ring.w > 0.0) && (_e5.ring.y > 0.0))) {
-        float _e571 = field_d((p_19 + vec2(0.0, _e5.ring.x)));
+        float _e576 = field_d((p_19 - vec2(0.0, _e5.ring.x)));
         if ((_e5.ring.z > 0.0)) {
-            float _e582 = normal_cdf((-(_e571) / _e5.ring.z));
-            float _e590 = normal_cdf(((-(_e5.ring.y) - _e571) / _e5.ring.z));
-            m = (_e582 - _e590);
+            float _e587 = normal_cdf((-(_e576) / _e5.ring.z));
+            float _e595 = normal_cdf(((-(_e5.ring.y) - _e576) / _e5.ring.z));
+            m = (_e587 - _e595);
         } else {
-            if (((_e571 <= 0.0) && (_e571 >= -(_e5.ring.y)))) {
+            if (((_e576 <= 0.0) && (_e576 >= -(_e5.ring.y)))) {
                 m = 1.0;
             }
         }
-        vec3 _e600 = c;
-        float _e605 = m;
-        c = (_e600 * (1.0 - (min(_e5.ring.w, 1.0) * max(_e605, 0.0))));
+        vec3 _e605 = c;
+        float _e610 = m;
+        c = (_e605 * (1.0 - (min(_e5.ring.w, 1.0) * max(_e610, 0.0))));
     }
-    float _e615 = _group_0_binding_0_fs.info.z;
-    float cov_1 = clamp((0.5 - (d_14 / _e615)), 0.0, 1.0);
-    vec2 _e624 = n;
-    vec4 _e625 = outside(p_19, d_14, _e5.b.z, _e624, _e5);
-    float under = ((1.0 - cov_1) * _e625.w);
+    float _e620 = _group_0_binding_0_fs.info.z;
+    float cov_1 = clamp((0.5 - (d_14 / _e620)), 0.0, 1.0);
+    vec2 _e629 = n;
+    vec4 _e630 = outside(p_19, d_14, _e5.b.z, _e629, _e5);
+    float under = ((1.0 - cov_1) * _e630.w);
     float a_9 = (cov_1 + under);
-    vec3 _e631 = c;
-    rgb = _e631;
+    vec3 _e636 = c;
+    rgb = _e636;
     if ((a_9 > 0.0)) {
-        vec3 _e635 = c;
-        rgb = (((clamp(_e635, vec3(0.0), vec3(1.0)) * cov_1) + (_e625.xyz * under)) / vec3(a_9));
+        vec3 _e640 = c;
+        rgb = (((clamp(_e640, vec3(0.0), vec3(1.0)) * cov_1) + (_e630.xyz * under)) / vec3(a_9));
     }
-    vec3 _e647 = rgb;
-    vec4 _e654 = with_edge(vec4(clamp(_e647, vec3(0.0), vec3(1.0)), a_9), p_19);
-    float _e665 = _group_0_binding_0_fs.info.w;
-    vec4 _e671 = placed(vec4(clamp(_e654.xyz, vec3(0.0), vec3(1.0)), ((_e654.w * _e665) * _e2)), fin.pos.xy);
-    _fs2p_location0 = _e671;
+    vec3 _e652 = rgb;
+    vec4 _e659 = with_edge(vec4(clamp(_e652, vec3(0.0), vec3(1.0)), a_9), p_19);
+    float _e670 = _group_0_binding_0_fs.info.w;
+    vec4 _e676 = placed(vec4(clamp(_e659.xyz, vec3(0.0), vec3(1.0)), ((_e659.w * _e670) * _e2)), fin.pos.xy);
+    _fs2p_location0 = _e676;
     return;
 }
 

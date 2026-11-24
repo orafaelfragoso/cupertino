@@ -58,7 +58,7 @@ pub struct GlassUniform {
     pub shape_spec: [[f32; 4]; MAX_SHAPES],
     /// Each shape's fill light share, and its diffuse glow's band, half-width and strength scales.
     pub shape_spec2: [[f32; 4]; MAX_SHAPES],
-    /// Each shape's ring: how far up it is moved, its stroke, its Gaussian deviation and how much it darkens the face.
+    /// Each shape's ring: how far down it is moved, its stroke, its Gaussian deviation and how much it darkens the face.
     pub shape_ring: [[f32; 4]; MAX_SHAPES],
     /// Each shape's control outline: opacity, width; 0, 0.
     pub shape_border: [[f32; 4]; MAX_SHAPES],

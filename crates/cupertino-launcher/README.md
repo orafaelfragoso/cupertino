@@ -57,7 +57,7 @@ them on its active output, the one the person works on:
   reaches the catcher. When the window's size changes the surface's size follows with the window's next frame
   (`Program::surface` gives `Model::extent`), and the server's configure gives Kit the new size. A settled shape's width and height are multiples of 4 pt (`view::SHAPE_GRID`), so the glass
   ends on whole device pixels at 1, 1.25, 1.5, 1.75 and 2. The window is transparent: the enclosure is large-panel glass
-  (`Glass::large_panel`, the regular recipe blurred twice as wide with a refraction band at most 6 pt deep and a face of its
+  (`Glass::large_panel`, the regular recipe with its bend, rim and key and fill light, blurred twice as wide and with a face of its
   own: in the dark appearance its tones pressed together, a lower white, a lifted black and a little less saturation; in the
   light one a bright, more saturated sheet, black behind coming through as a light grey and a dark scene as a light tint of
   its own hue, with a bright line just inside the edge; so the panel reads as one calm sheet over any wallpaper) with the

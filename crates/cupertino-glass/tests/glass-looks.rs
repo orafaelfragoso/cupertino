@@ -279,7 +279,7 @@ fn toolbar(side: f32) -> Container {
 }
 
 #[test]
-fn a_controls_edge_bleed_keeps_its_own_blur_and_a_panels_reads_its_blur_fill_close_around_it() {
+fn a_controls_edge_bleed_keeps_its_own_blur_and_a_panels_reads_its_blur_fill_as_far_as_its_band() {
     // a 36-point capsule: 0.35 of its side for the reach and the blur, read that and three deviations around it
     let capsule = toolbar(36.0);
     let p = &capsule.params.bleed;
@@ -290,17 +290,14 @@ fn a_controls_edge_bleed_keeps_its_own_blur_and_a_panels_reads_its_blur_fill_clo
     assert_eq!(capsule.bleed_source(), Some(BleedSource::Own(p.blur)));
     let [x, ..] = capsule.sample_area().unwrap();
     assert!((x + 4.0 * 12.6).abs() < 1e-3, "{x}");
-    // a 300-point panel: its bleed reads the blur fill's copy and no further than that and three deviations
+    // a 300-point panel: its bleed reads the blur fill's copy as far out as its band is deep (105 points), and three
+    // deviations of that copy around it
     let panel = toolbar(300.0);
     assert_eq!(panel.bleed_source(), Some(BleedSource::Fill));
     let fill = panel.fill_sigma().unwrap();
+    assert!((panel.params.bleed.amount - 105.0).abs() < 1e-3);
     let [x, ..] = panel.sample_area().unwrap();
-    assert!(-x <= panel.params.bleed.amount + 3.0 * fill + 1e-3, "{x}");
-    assert!(
-        -x <= 64.0 + 1e-3,
-        "a 300-point panel reads {} points around it",
-        -x
-    );
+    assert!((x + 105.0 + 3.0 * fill).abs() < 1e-3, "{x}");
 }
 
 #[test]

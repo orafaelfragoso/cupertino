@@ -3,8 +3,7 @@
 
 use cupertino_theme::glass::{
     legibility_amount, GlassBase, GlassShadow, SidebarEdge, BLEED_AMOUNT_MAX, BLEED_BLUR_MAX,
-    CLEAR_BLUR, DOCK_BAR_BLUR, DOCK_BAR_EDGE_LINE, DOCK_BAR_LINE, DOCK_BAR_LINE_LIGHT,
-    DOCK_BAR_MAX_LUMA_DARK, DOCK_BAR_PEAK, DOCK_BAR_REFRACTION, DOCK_BAR_REFRACTION_HEIGHT,
+    CLEAR_BLUR, DOCK_BAR_EDGE_LINE, DOCK_BAR_LINE, DOCK_BAR_LINE_LIGHT, DOCK_BAR_PEAK,
     GLASS_SIZE_MEDIUM, GLASS_SIZE_MINIMUM, LARGE_PANEL_BLACK_LIGHT, LARGE_PANEL_SATURATION_DARK,
     LARGE_PANEL_SHADOW_BLUR, MODULE_BLACK, MODULE_SATURATION, MODULE_WHITE,
     TOOLBAR_SPECULAR_AMOUNT, TOOLBAR_SPECULAR_HEIGHT, TRACK_CAPTURE_SCALE,
@@ -169,27 +168,27 @@ fn regular_glass_resolves_its_recorded_values_at_each_size() {
             assert_eq!(p.border.opacity, 0.0);
         }
     }
-    // the edge bleed's blur stops at the blur fill's deviation, and its reach as far
+    // the edge bleed's blur stops at the blur fill's deviation; its reach follows the side
     let large = at(GlassVariant::Regular, false, 1000.0);
     assert_close!(large.bleed.blur, large.fill_sigma());
-    assert_close!(large.bleed.amount, 16.0);
+    assert_close!(large.bleed.amount, 350.0);
 }
 
 #[test]
-fn the_edge_bleed_keeps_a_controls_size_and_bounds_a_panels_reach() {
-    // a 36-point toolbar capsule: 0.35 of its side, under both caps
+fn the_edge_bleed_reaches_as_far_as_its_band_and_shares_a_panels_blur_fill() {
+    // a 36-point toolbar capsule: band, reach and blur 0.35 of its side
     for dark in [false, true] {
         let b = at(GlassVariant::ToolbarItem, dark, 36.0).bleed;
         assert_close!(b.blur, 12.6);
         assert_close!(b.amount, 12.6);
         assert_close!(b.height, 12.6);
     }
-    // a 300-point panel: its band still a fraction of its side, its reach and blur capped, read at most 64 points out
+    // a 300-point panel: band and reach 0.35 of its side, its blur the blur fill's deviation
     let b = at(GlassVariant::Regular, false, 300.0).bleed;
     assert_close!(b.height, 105.0);
-    assert_close!(b.amount, BLEED_AMOUNT_MAX);
+    assert_close!(b.amount, 105.0);
     assert_close!(b.blur, BLEED_BLUR_MAX);
-    assert!(b.amount + 3.0 * b.blur <= 64.0 + EPS);
+    assert!(b.amount <= BLEED_AMOUNT_MAX);
 }
 
 #[test]
@@ -276,23 +275,12 @@ fn reduce_motion_flattens_both_bends_and_widens_the_blur_four_times_for_the_cent
         .radius,
         8.0
     );
-    // the app switcher bends what lies outside its edge, but not with Reduce Motion; the Dock bar never does
-    assert!(
-        at(GlassVariant::AppSwitcher, false, 100.0)
-            .refraction
-            .outer_opacity
-            > 0.0
-    );
-    let reduced = with(GlassVariant::AppSwitcher, false, 100.0, |m| {
-        m.reduce_motion = true
-    });
-    assert_eq!(reduced.refraction.outer_opacity, 0.0);
-    assert_eq!(
-        at(GlassVariant::Dock, false, 100.0)
-            .refraction
-            .outer_opacity,
-        0.0
-    );
+    // the app switcher and the Dock bar bend what lies outside their edge, but not with Reduce Motion
+    for variant in [GlassVariant::AppSwitcher, GlassVariant::Dock] {
+        assert!(at(variant, false, 100.0).refraction.outer_opacity > 0.0);
+        let reduced = with(variant, false, 100.0, |m| m.reduce_motion = true);
+        assert_eq!(reduced.refraction.outer_opacity, 0.0);
+    }
 }
 
 #[test]
@@ -565,7 +553,7 @@ fn the_dock_takes_its_own_recipe_and_its_own_accessibility_stages() {
     for side in [64.0, 90.0] {
         for dark in [false, true] {
             let p = at(GlassVariant::Dock, dark, side);
-            assert_eq!(p.blur.radius, DOCK_BAR_BLUR);
+            assert_close!(p.blur.radius, 1.5 * CLEAR_BLUR);
             assert_eq!(p.blur.level_opacity[0], 1.0);
             assert!(!p.fill_shows());
             let f = p.face;
@@ -573,7 +561,7 @@ fn the_dock_takes_its_own_recipe_and_its_own_accessibility_stages() {
             if dark {
                 assert_eq!(
                     (f.black, f.white, f.fill, f.max_luma),
-                    (0.05, 0.92, [0.0, 0.0, 0.0, 0.02], DOCK_BAR_MAX_LUMA_DARK)
+                    (0.05, 0.92, [0.0, 0.0, 0.0, 0.02], 1.0)
                 );
             } else {
                 assert_eq!(
@@ -581,18 +569,23 @@ fn the_dock_takes_its_own_recipe_and_its_own_accessibility_stages() {
                     (0.15, 0.9, 0.0, 1.0)
                 );
             }
-            // a thin lens along the edge at every size, and nothing bent outside it
-            assert_eq!(
-                (p.refraction.amount, p.refraction.height),
-                (DOCK_BAR_REFRACTION, DOCK_BAR_REFRACTION_HEIGHT)
-            );
-            assert_eq!(p.refraction.outer_opacity, 0.0);
+            // the bend inside the edge and outside it follow the bar's size
+            let r = p.refraction;
+            assert_close!(r.amount, -0.18 * side);
+            assert_close!(r.height, 0.08 * side);
+            assert_close!(r.outer_amount, 0.42 * side);
+            assert_close!(r.outer_height, 0.13 * side);
+            assert_close!(r.outer_opacity, 0.2);
             // the bright line along the top and the bottom: white light from above and as much from below
             let s = p.specular;
             assert_eq!((s.amount, s.fill), (DOCK_BAR_PEAK, 1.0));
             assert_close!(s.angle, std::f32::consts::FRAC_PI_2);
             assert!(s.spread > 0.0 && s.spread < std::f32::consts::FRAC_PI_4);
-            assert_eq!(p.highlight.amount, 0.0, "no rim darkens the corners");
+            assert_eq!(
+                (p.highlight.amount, p.highlight.color_bias),
+                (0.4, -0.25),
+                "the clear glass's rim darkens the corners"
+            );
             // the faint line round the ends and the soft lift under the top and the bottom, equally bright
             let (amount, height, offset) = DOCK_BAR_LINE;
             let h = p.highlight;
@@ -820,17 +813,23 @@ fn the_notification_centre_is_regular_glass_at_the_medium_size() {
 }
 
 #[test]
-fn the_launcher_panel_keeps_its_fitted_large_panel_values() {
+fn the_launcher_panel_takes_its_face_over_the_regular_optics() {
     let light = at(GlassVariant::SearchResults, false, 400.0);
     assert_eq!(light.face.black, LARGE_PANEL_BLACK_LIGHT);
     assert_eq!(light.blur.radius, 10.0);
     assert_eq!(light.shadow.height, LARGE_PANEL_SHADOW_BLUR);
-    assert_eq!(
-        light.specular.amount, 0.0,
-        "its bevel and inner line stand for the light"
-    );
     let dark = at(GlassVariant::SearchResults, true, 400.0);
     assert_eq!(dark.face.saturation, LARGE_PANEL_SATURATION_DARK);
+    // the regular glass's bend, edge bleed, rim, ring and key and fill light, as large as the panel
+    for (p, dark) in [(light, false), (dark, true)] {
+        let regular = at(GlassVariant::Regular, dark, 400.0);
+        assert_eq!(p.refraction, regular.refraction);
+        assert_eq!((p.refraction.amount, p.refraction.height), (-60.0, 20.0));
+        assert_eq!(p.bleed, regular.bleed);
+        assert_eq!(p.highlight, regular.highlight);
+        assert_eq!(p.specular, regular.specular);
+        assert_eq!(p.shadow.ring_opacity, regular.shadow.ring_opacity);
+    }
     let reduced = with(GlassVariant::SearchResults, true, 400.0, |m| {
         m.reduce_transparency = true
     });

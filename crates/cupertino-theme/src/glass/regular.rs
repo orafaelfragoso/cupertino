@@ -41,11 +41,13 @@ const BLEED_NORMALIZED: f32 = 0.35;
 const BLEED_OPACITY: f32 = 0.2;
 /// The widest blur of the edge bleed, in points: the blur fill's deviation, so a shape past about 45.7 points (where
 /// its fraction of the side reaches it) reads the copy its blur fill makes instead of blurring one of its own, while a
-/// control keeps its own (a 36-point capsule blurs its bleed by 12.6 points).
+/// control keeps its own (a 36-point capsule blurs its bleed by 12.6 points). A wider blur (0.35 of the side, 105
+/// points on a 300-point panel) changes the face by under two levels at 0.2 opacity and doubles the glass pass of a
+/// launcher-sized panel while it changes, as it blurs a copy of its own over the bleed's whole reach.
 pub const BLEED_BLUR_MAX: f32 = FILL_SIGMA_PER_RADIUS * REGULAR_FILL_RADIUS;
-/// The farthest outside its edge the edge bleed reads, in points, as far as its widest blur: the bleed of any shape
-/// reads at most this and three of those deviations (64 points) around it, where a 300-point panel read 420.
-pub const BLEED_AMOUNT_MAX: f32 = 16.0;
+/// The farthest outside its edge the edge bleed reads, in points: as far as its band is deep at every size, so a
+/// 240-point menu takes the colour of what lies up to 84 points around it into an 84-point band.
+pub const BLEED_AMOUNT_MAX: f32 = f32::INFINITY;
 /// The edge bleed's colour: its black lift and saturation in the light appearance (white kept, darken blending), and
 /// its black lift and white in the dark one (saturation kept, normal blending).
 const BLEED_BLACK_LIGHT: f32 = 0.9;

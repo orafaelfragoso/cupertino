@@ -1,4 +1,4 @@
-//! The glass of the control centre's modules, the Dock bar's optics, the window sidebars' dense pane, the notification
+//! The glass of the control centre's modules, the Dock bar's lines, the window sidebars' dense pane, the notification
 //! cards' edges, the launcher's results panel and the cartouches' edge lines, kept under the glass variant names, and
 //! the control centre's accessibility shifts laid over its face.
 
@@ -146,14 +146,6 @@ pub(super) fn control_center(mode: GlassMode, s: f32) -> GlassParams {
 
 // ---- the Dock --------------------------------------------------------------------------------------------------
 
-/// The Dock bar's blur radius in points, at full opacity of the first level.
-pub const DOCK_BAR_BLUR: f32 = 1.0;
-/// The Dock bar's bend inside its edge: strength (inwards) and band in points, the same at every size, so the lens
-/// stays a thin band along the bar's edge whatever its size class.
-pub const DOCK_BAR_REFRACTION: f32 = -8.64;
-pub const DOCK_BAR_REFRACTION_HEIGHT: f32 = 3.84;
-/// The dark Dock bar's luma cap: a bright scene behind the bar comes through dimmed.
-pub const DOCK_BAR_MAX_LUMA_DARK: f32 = 0.75;
 /// The Dock bar's light along its outline, round its ends as they present at device pixels
 /// (`dock/dock_dark_rest_67.883`, `dock_light_rest_328.340`): a bright line along the top and the bottom (the outermost
 /// pixel about 89 levels over the backdrop, the next 52), at about three quarters of it 10° to 15° round each end and
@@ -202,26 +194,13 @@ const DOCK_BAR_LINE_MATRIX_DARK: ColorMatrix = [
     0.0, 0.0, 0.0, 1.0, 0.0,
 ];
 
-/// The Dock bar's optics over its recipe `p` (the Dock variant on the clear base), as the bar presents: a narrow blur,
-/// a thin lens along its edge in place of the recipe's size-scaled bend, no bend outside it, the dark face's luma cap,
-/// a thin line of light along its top and bottom edges, equally bright and running faintly down the curve of each end,
-/// over a soft lift of white, and a dark line just outside its ends, which the recipe's inputs alone leave out; no
-/// rim darkens its corners.
+/// The Dock bar's lines over its recipe `p` (the Dock variant on the clear base, whose blur, face, rim and bends inside
+/// and outside the edge it keeps): a thin line of light along its top and bottom edges, equally bright and running
+/// faintly down the curve of each end, over a soft lift of white, and a dark line just outside its ends, which the
+/// recipe's inputs alone leave out.
 pub(super) fn dock_bar(p: &mut GlassParams, dark: bool) {
-    p.blur.radius = DOCK_BAR_BLUR;
-    p.refraction = GlassRefraction {
-        amount: DOCK_BAR_REFRACTION,
-        height: DOCK_BAR_REFRACTION_HEIGHT,
-        outer_amount: 0.0,
-        outer_height: 0.0,
-        outer_opacity: 0.0,
-    };
-    if dark {
-        p.face.max_luma = DOCK_BAR_MAX_LUMA_DARK;
-    }
     let (amount, height, offset) = DOCK_BAR_LINE;
     p.highlight = GlassHighlight {
-        amount: 0.0,
         spread: DOCK_BAR_LINE_SPREAD,
         curvature: DOCK_BAR_LINE_CURVATURE,
         glow_amount: if dark { amount } else { DOCK_BAR_LINE_LIGHT },
@@ -350,30 +329,14 @@ pub(super) fn cartouche_edge_line(size: GlassSize, dark: bool) -> f32 {
 
 // ---- the launcher's results panel ----------------------------------------------------------------------------------
 
-/// The launcher's results panel over the regular base `p`: a blur twice as wide, its own face (unless Increase
-/// Contrast gave it the contrast face), a refraction band no deeper than [`LARGE_PANEL_REFRACTION_HEIGHT_MAX`], in the
-/// light appearance a bright inner line and in the dark one a bevel, in place of the key and fill light, and its drop
-/// shadow shown.
+/// The launcher's results panel over the regular base `p`, whose bend, edge bleed, rim, ring and key and fill light it
+/// keeps: a blur twice as wide, its own face (unless Increase Contrast gave it the contrast face) and its drop shadow
+/// shown.
 pub(super) fn search_results(p: &mut GlassParams, dark: bool, contrast: bool) {
     p.blur.radius *= LARGE_PANEL_BLUR_SCALE;
     p.blur.fill_radius *= LARGE_PANEL_BLUR_SCALE;
     if !contrast {
         p.face = large_panel_face(dark, p.face);
-    }
-    p.refraction.height = p.refraction.height.min(LARGE_PANEL_REFRACTION_HEIGHT_MAX);
-    p.specular = GlassSpecular::NONE;
-    let h = &mut p.highlight;
-    if dark {
-        (h.glow_amount, h.glow_height, h.glow_offset) = LARGE_PANEL_RIM_DARK;
-        h.spread = LARGE_PANEL_RIM_SPREAD_DARK;
-        h.curvature = LARGE_PANEL_RIM_CURVATURE_DARK;
-        h.glow_fill = 1.0;
-        h.diffuse = LARGE_PANEL_GLOW_DARK;
-        h.matrix = TOWARDS_WHITE_MATRIX;
-    } else {
-        h.glow_amount = LARGE_PANEL_INNER_LINE_LIGHT;
-        h.glow_height = LARGE_PANEL_INNER_LINE_WIDTH;
-        h.glow_offset = LARGE_PANEL_INNER_LINE_DEPTH;
     }
     p.shadow.offset = [0.0, LARGE_PANEL_SHADOW_OFFSET];
     p.shadow.amount = 100.0;
@@ -433,38 +396,6 @@ pub const LARGE_PANEL_FILL_LIGHT: f32 = 0.184;
 /// The dark large panel's saturation with Reduce Transparency: the near-black sheet keeps a tenth or so of the
 /// backdrop's colour (its departure from grey), so a strong colour behind shows only as a faint tint.
 pub const LARGE_PANEL_REDUCED_SATURATION_DARK: f32 = 0.3;
-/// The large panel's refraction band: at most this many points inside its edge bend, so a launcher-sized sheet shows
-/// no wide lens along its sides.
-pub const LARGE_PANEL_REFRACTION_HEIGHT_MAX: f32 = 6.0;
-/// The light large panel's bright inner line: a narrow band of light just inside the dark edge, strongest along the
-/// top and still showing along the bottom: its strength, half-width and depth in points.
-pub const LARGE_PANEL_INNER_LINE_LIGHT: f32 = 0.6;
-pub const LARGE_PANEL_INNER_LINE_WIDTH: f32 = 0.35;
-pub const LARGE_PANEL_INNER_LINE_DEPTH: f32 = -0.6;
-/// The dark large panel's bevel: a bright rim about a point wide just inside its dark edge, which mixes the face this
-/// share of the way to white at its middle, its half-width and depth in points. With the arcs below it lights the top
-/// and the bottom fully and the sides at about 0.7, so the panel reads as raised rather than outlined.
-pub const LARGE_PANEL_RIM_DARK: (f32, f32, f32) = (0.33, 0.7, -0.3);
-/// The angular width of the arcs the dark bevel lights round each end of its axis, and the exponent on their falloff:
-/// two arcs this wide meet at the sides, where each gives about a third of its light.
-pub const LARGE_PANEL_RIM_SPREAD_DARK: f32 = 4.0 * std::f32::consts::FRAC_PI_3;
-pub const LARGE_PANEL_RIM_CURVATURE_DARK: f32 = 1.5;
-/// The soft band of light under the dark bevel, along the top and the bottom: as many times wider than the bevel, on
-/// arcs half as wide, at this share of its strength, so it also lifts the face where the blur of the darker backdrop
-/// outside the panel darkens it near the edge.
-pub const LARGE_PANEL_GLOW_DARK: GlowDiffuse = GlowDiffuse {
-    height_scale: 13.0,
-    spread_scale: 0.5,
-    amount_scale: 0.125,
-};
-/// The colour the dark bevel mixes the face towards: white.
-const TOWARDS_WHITE_MATRIX: ColorMatrix = [
-    -1.0, 0.0, 0.0, 0.0, 1.0, //
-    0.0, -1.0, 0.0, 0.0, 1.0, //
-    0.0, 0.0, -1.0, 0.0, 1.0, //
-    0.0, 0.0, 0.0, 1.0, 0.0,
-];
-
 /// The dark large panel's tone compression: saturation, white and black levels and luma compression. A bright spot in
 /// the scene (a sunlit sky, a white page, the light centre of a picture) comes through as a light patch near the
 /// panel's tint rather than a glare: white comes out near 125, black near 53.

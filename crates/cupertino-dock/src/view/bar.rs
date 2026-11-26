@@ -21,7 +21,7 @@ use cupertino_kit::theme::{Surface, BAR_GLASS_MATERIAL, GLASS_MATERIAL};
 
 use super::paint::{self, Root};
 use super::{IconSet, Input, BAR_APP_ID, BAR_TITLE};
-use crate::config::Orientation;
+use crate::config::{Orientation, BAR_EDGE_PADDING_RATIO, BAR_PADDING_RATIO};
 use crate::tiles::TileKind;
 
 /// The surface the bar's material is: the one place to change to give the bar another material. The bar's surface is
@@ -42,8 +42,13 @@ pub const INDICATOR_GAP: f64 = 2.0;
 pub const BAR_RADIUS: f64 = 28.3 / 64.0;
 /// Side of an icon's artwork as a fraction of its tile: a 64 pt tile shows a 52 pt icon, centred.
 pub const ICON_ARTWORK: f64 = 52.0 / 64.0;
-/// Length of a separator's line as a fraction of the tile size (62 pt at 64), and its width in points.
-pub const SEPARATOR_LENGTH: f64 = 62.0 / 64.0;
+/// How far a separator's line stands inset from each end of the bar's depth, as a fraction of that depth, rounded up
+/// to whole points: 11 pt of the 84 pt bar, a 62 pt line at 64 pt tiles. Its width is in points.
+pub const SEPARATOR_INSET: f64 = 0.125;
+/// Where a separator's line stands in its slot, as a fraction of the tile size from the slot's leading edge: 13 pt of
+/// the 26 pt slot at 64, so the line is 17 pt after the tile before it and 16 pt before the next.
+pub const SEPARATOR_OFFSET: f64 = 13.0 / 64.0;
+/// Width of a separator's line in points.
 pub const SEPARATOR_WIDTH: f64 = 1.0;
 /// Corner radius of the focus ring as a fraction of the tile size.
 const FOCUS_RADIUS: f64 = 0.22;
@@ -588,7 +593,7 @@ impl<M: Clone + 'static> Widget<M> for MarkNode {
         let all = Rect::new(0.0, 0.0, size.width, size.height);
         match self.mark {
             Mark::Indicator(_) => {
-                // in the dark the dot lightens the glass behind it, which only the compositor can read
+                // the dot lays a gray over what lies behind it, which only the compositor can read
                 if !contrast && cx.material(Surface::DockIndicator, INDICATOR / 2.0, self.alpha) {
                     return;
                 }
@@ -602,6 +607,12 @@ impl<M: Clone + 'static> Widget<M> for MarkNode {
                 paint::fill(cx, all, INDICATOR / 2.0, c);
             }
             Mark::Separator(_) => {
+                // the compositor lays the gray over what lies behind the line (plus-darker or plus-lighter)
+                if !contrast
+                    && cx.material(Surface::DockSeparator, SEPARATOR_WIDTH / 2.0, self.alpha)
+                {
+                    return;
+                }
                 let c = if dark {
                     SEPARATOR_DARK
                 } else {
@@ -670,24 +681,23 @@ impl<M: Clone + 'static> Widget<M> for AnchorNode {
     }
 }
 
-/// The separator's line across the middle of the slot `r`.
+/// The separator's line in the slot `r`: [`SEPARATOR_OFFSET`] of the tile size along the bar, and inset across it by
+/// [`SEPARATOR_INSET`] of the bar's depth (rounded up to whole points) from each edge of the bar.
 fn separator_rect(r: Rect, orientation: Orientation) -> Rect {
-    if orientation.is_horizontal() {
-        let length = r.height() * SEPARATOR_LENGTH;
-        Rect::new(
-            r.x() + (r.width() - SEPARATOR_WIDTH) / 2.0,
-            r.y() + (r.height() - length) / 2.0,
-            SEPARATOR_WIDTH,
-            length,
-        )
+    let tile = if orientation.is_horizontal() {
+        r.height()
     } else {
-        let length = r.width() * SEPARATOR_LENGTH;
-        Rect::new(
-            r.x() + (r.width() - length) / 2.0,
-            r.y() + (r.height() - SEPARATOR_WIDTH) / 2.0,
-            length,
-            SEPARATOR_WIDTH,
-        )
+        r.width()
+    };
+    let depth = tile * (1.0 + BAR_PADDING_RATIO + BAR_EDGE_PADDING_RATIO);
+    // the slot already lies inside the bar's padding
+    let inset = ((SEPARATOR_INSET * depth).ceil() - tile * BAR_PADDING_RATIO).max(0.0);
+    let length = (tile - 2.0 * inset).max(0.0);
+    let along = tile * SEPARATOR_OFFSET;
+    if orientation.is_horizontal() {
+        Rect::new(r.x() + along, r.y() + inset, SEPARATOR_WIDTH, length)
+    } else {
+        Rect::new(r.x() + inset, r.y() + along, length, SEPARATOR_WIDTH)
     }
 }
 

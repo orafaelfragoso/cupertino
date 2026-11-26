@@ -382,7 +382,14 @@ fn surfaces_pick_their_material_from_the_appearance_and_options() {
             Surface::DockIndicator,
             Some("RunningIndicator"),
         ),
-        (prefs(Light), Surface::DockIndicator, None),
+        (
+            prefs(Light),
+            Surface::DockIndicator,
+            Some("RunningIndicator"),
+        ),
+        (prefs(Light), Surface::DockSeparator, Some("DockSeparator")),
+        (prefs(DarkHighContrast), Surface::DockSeparator, None),
+        (prefs(LightHighContrast), Surface::DockIndicator, None),
     ] {
         let t = ThemeTokens::neutral(p).unwrap();
         assert_eq!(

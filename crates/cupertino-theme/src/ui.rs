@@ -386,9 +386,11 @@ pub enum Surface {
     Switcher,
     /// The Dock's bar and its stack panels: glass, and with Reduce Transparency a body in the wallpaper's colour.
     Dock,
-    /// A running indicator under a Dock tile in the dark appearance, which lightens what lies behind it; elsewhere it
-    /// asks for no material and the dot paints itself.
+    /// A running indicator under a Dock tile: the compositor lays a gray over what lies behind it (plus-lighter in the
+    /// dark appearance, plus-darker in the light); in high contrast it asks for no material and the dot paints itself.
     DockIndicator,
+    /// The line between the Dock's tiles, laid the same way as [`Surface::DockIndicator`].
+    DockSeparator,
     /// The Dock's bar itself: bar glass, clear glass with only a little lift of white, in both appearances; with
     /// Reduce Transparency and in high contrast the same as [`Surface::Dock`].
     DockBar,
@@ -476,8 +478,12 @@ impl ThemeTokens {
             Surface::DockBar => return self.surface(Surface::Dock),
             Surface::Tooltip => (GLASS_MATERIAL, contrast),
             Surface::DockIndicator => (
-                "RunningIndicator",
-                prefs.appearance.is_dark() && !prefs.appearance.is_high_contrast(),
+                recipe::RUNNING_INDICATOR_MATERIAL,
+                !prefs.appearance.is_high_contrast(),
+            ),
+            Surface::DockSeparator => (
+                recipe::DOCK_SEPARATOR_MATERIAL,
+                !prefs.appearance.is_high_contrast(),
             ),
             Surface::WindowBackground => ("WindowBackground", true),
             Surface::TextBackground => ("TextBackground", true),
@@ -487,7 +493,7 @@ impl ThemeTokens {
             Surface::OverviewBandSelection => (recipe::OVERVIEW_BAND_SELECTION_MATERIAL, true),
         };
         let material = match surface {
-            Surface::DockIndicator => kept.then_some(material),
+            Surface::DockIndicator | Surface::DockSeparator => kept.then_some(material),
             _ => (kept || !opaque).then_some(material),
         };
         let fill = match surface {

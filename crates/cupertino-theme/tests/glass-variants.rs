@@ -3,12 +3,13 @@
 
 use cupertino_theme::glass::{
     legibility_amount, GlassBase, GlassShadow, SidebarEdge, BLEED_AMOUNT_MAX, BLEED_BLUR_MAX,
-    CLEAR_BLUR, DOCK_BAR_EDGE_LINE, DOCK_BAR_LINE, DOCK_BAR_LINE_LIGHT, DOCK_BAR_PEAK,
-    GLASS_SIZE_MEDIUM, GLASS_SIZE_MINIMUM, LARGE_PANEL_BLACK_LIGHT, LARGE_PANEL_SATURATION_DARK,
-    LARGE_PANEL_SHADOW_BLUR, MODULE_BLACK, MODULE_SATURATION, MODULE_WHITE,
-    TOOLBAR_SPECULAR_AMOUNT, TOOLBAR_SPECULAR_HEIGHT, TRACK_CAPTURE_SCALE,
-    WINDOW_SIDEBAR_BLACK_DARK, WINDOW_SIDEBAR_BLACK_LIGHT, WINDOW_SIDEBAR_SATURATION,
-    WINDOW_SIDEBAR_VEIL_LIGHT, WINDOW_SIDEBAR_WHITE_DARK, WINDOW_SIDEBAR_WHITE_LIGHT,
+    CLEAR_BLUR, DOCK_BAR_BEND_DIMENSION, DOCK_BAR_LIGHT, DOCK_BAR_LIGHT_GAIN,
+    DOCK_BAR_MAX_LUMA_DARK, DOCK_BLUR_SCALE, GLASS_SIZE_MEDIUM, GLASS_SIZE_MINIMUM,
+    LARGE_PANEL_BLACK_LIGHT, LARGE_PANEL_SATURATION_DARK, LARGE_PANEL_SHADOW_BLUR, MODULE_BLACK,
+    MODULE_SATURATION, MODULE_WHITE, TOOLBAR_SPECULAR_AMOUNT, TOOLBAR_SPECULAR_HEIGHT,
+    TRACK_CAPTURE_SCALE, WINDOW_SIDEBAR_BLACK_DARK, WINDOW_SIDEBAR_BLACK_LIGHT,
+    WINDOW_SIDEBAR_SATURATION, WINDOW_SIDEBAR_VEIL_LIGHT, WINDOW_SIDEBAR_WHITE_DARK,
+    WINDOW_SIDEBAR_WHITE_LIGHT,
 };
 use cupertino_theme::{
     GlassMode, GlassModifiers, GlassParams, GlassSize, GlassStyle, GlassVariant,
@@ -558,7 +559,9 @@ fn the_dock_takes_its_own_recipe_and_its_own_accessibility_stages() {
     for side in [64.0, 90.0] {
         for dark in [false, true] {
             let p = at(GlassVariant::Dock, dark, side);
-            assert_close!(p.blur.radius, 1.5 * CLEAR_BLUR);
+            assert_close!(p.blur.radius, DOCK_BLUR_SCALE * CLEAR_BLUR);
+            // a Gaussian of about 2 points
+            assert!((p.blur_sigma() - 2.0).abs() < 0.01, "{}", p.blur_sigma());
             assert_eq!(p.blur.level_opacity[0], 1.0);
             assert!(!p.fill_shows());
             let f = p.face;
@@ -566,49 +569,55 @@ fn the_dock_takes_its_own_recipe_and_its_own_accessibility_stages() {
             if dark {
                 assert_eq!(
                     (f.black, f.white, f.fill, f.max_luma),
-                    (0.05, 0.92, [0.0, 0.0, 0.0, 0.02], 1.0)
+                    (0.05, 0.92, [0.0, 0.0, 0.0, 0.02], DOCK_BAR_MAX_LUMA_DARK)
                 );
+                assert_eq!(f.max_luma, 0.75);
             } else {
                 assert_eq!(
                     (f.black, f.white, f.fill[3], f.max_luma),
                     (0.15, 0.9, 0.0, 1.0)
                 );
             }
-            // the bend inside the edge follows the bar's size, and nothing is bent outside it
+            // a thin bend inside the edge, the same at any size, and nothing bent outside it
             let r = p.refraction;
-            assert_close!(r.amount, -0.18 * side);
-            assert_close!(r.height, 0.08 * side);
+            assert_close!(r.amount, -0.18 * DOCK_BAR_BEND_DIMENSION);
+            assert_close!(r.height, 0.08 * DOCK_BAR_BEND_DIMENSION);
+            assert_close!(r.amount, -8.64);
+            assert_close!(r.height, 3.84);
             assert_close!(r.outer_amount, 0.0);
             assert_close!(r.outer_height, 0.0);
             assert_close!(r.outer_opacity, 0.0);
-            // the bright line along the top and the bottom: white light from above and as much from below
+            // the light along the top and the bottom, from above and as much from below, in the colour of the face
             let s = p.specular;
-            assert_eq!((s.amount, s.fill), (DOCK_BAR_PEAK, 1.0));
+            assert_eq!(
+                (s.amount, s.fill, s.matrix_share),
+                (DOCK_BAR_LIGHT, 1.0, 1.0)
+            );
             assert_close!(s.angle, std::f32::consts::FRAC_PI_2);
-            assert!(s.spread > 0.0 && s.spread < std::f32::consts::FRAC_PI_4);
+            assert_close!(s.spread, 60.0_f32.to_radians());
+            assert_close!(s.height, 1.5);
+            assert_close!(s.height * s.diffuse.height_scale, 8.0);
             assert_eq!(
-                (p.highlight.amount, p.highlight.color_bias),
-                (0.4, -0.25),
-                "the clear glass's rim darkens the corners"
+                (s.diffuse.spread_scale, s.diffuse.amount_scale),
+                (0.65, 0.15)
             );
-            // the faint line round the ends and the soft lift under the top and the bottom, equally bright
-            let (amount, height, offset) = DOCK_BAR_LINE;
+            // the clear glass's rim, laid just outside the ends instead of inside the corners
             let h = p.highlight;
+            assert!(h.outside);
             assert_eq!(
-                (h.glow_amount, h.glow_height, h.glow_offset, h.glow_fill),
-                (
-                    if dark { amount } else { DOCK_BAR_LINE_LIGHT },
-                    height,
-                    offset,
-                    1.0
-                )
+                (h.amount, h.color_bias, h.height, h.offset),
+                (0.4, -0.25, 0.5, -0.5)
             );
-            assert!(h.glow_amount > 0.0 && h.diffuse.amount_scale > 0.0);
-            // the dark line outside the ends only, as dark over any backdrop
+            assert_eq!(h.angle, 0.0);
+            assert_close!(h.spread, 120.0_f32.to_radians());
+            // the light's colour: the matrix of its appearance, brightened by its gain
+            let lift = if dark { 0.25 } else { 0.2 };
+            assert_close!(h.matrix[4], lift * DOCK_BAR_LIGHT_GAIN);
+            assert_eq!(h.matrix[18], 1.0);
+            assert_eq!(h.glow_amount, 0.0);
+            // no line but the rim's outside the edge, and no ring
             let sh = p.shadow;
-            assert_eq!(sh.edge_line, DOCK_BAR_EDGE_LINE);
-            assert!(sh.edge_line_sides > 0.0 && sh.edge_line_sides < std::f32::consts::FRAC_PI_2);
-            assert!(sh.edge_line_even);
+            assert_eq!(sh.edge_line, 0.0);
             assert_eq!(sh.ring_opacity, 0.0);
 
             let c = with(GlassVariant::Dock, dark, side, |m| {
@@ -626,6 +635,7 @@ fn the_dock_takes_its_own_recipe_and_its_own_accessibility_stages() {
                 );
             }
             assert_close!(c.specular.amount, 0.4 * 0.75);
+            assert_eq!(c.specular.matrix_share, 0.0, "the regular key light, white");
             assert_eq!((c.blur, c.refraction), (p.blur, p.refraction));
 
             for contrast in [false, true] {
@@ -669,6 +679,9 @@ fn the_app_switcher_is_the_dock_with_a_wider_blur() {
         assert_close!(p.refraction.outer_height, 0.13 * 120.0);
         assert_eq!(p.refraction.outer_opacity, 0.2);
         assert_eq!(p.highlight.glow_amount, 0.0);
+        // the clear glass's rim inside its corners, and its own edge line
+        assert!(!p.highlight.outside);
+        assert!(p.shadow.edge_line > 0.0);
         let r = with(GlassVariant::AppSwitcher, dark, 120.0, |m| {
             m.reduce_transparency = true
         });

@@ -132,7 +132,14 @@ impl GlassParams {
         } else {
             0.0
         };
-        read.max(self.shadow_reach()).max(line)
+        // a rim outside the edge: its strip and the pixel its last part covers
+        let h = &self.highlight;
+        let rim = if h.outside && h.amount * h.color_bias != 0.0 {
+            EDGE_LINE_REACH.max(0.5 * h.height - h.offset + 1.0)
+        } else {
+            0.0
+        };
+        read.max(self.shadow_reach()).max(line).max(rim)
     }
 
     /// How far past the shape a shown drop shadow reaches, in points: its offset and half its smooth edge of three

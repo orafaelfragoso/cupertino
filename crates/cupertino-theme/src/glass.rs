@@ -216,7 +216,8 @@ impl GlassBleed {
 /// fades out along a smoothstep; under it the diffuse glow the same lights cast, a band `height · diffuse.height_scale`
 /// deep fading as the square of what is left of it, over arcs `diffuse.spread_scale` as wide, at
 /// `amount · diffuse.amount_scale`. An arc lights `1 − smoothstep(0, spread, a)`, `a` the angle between the edge's
-/// outward normal and its light.
+/// outward normal and its light. A light with a `matrix_share` lays the colour of the highlight matrix
+/// ([`GlassHighlight::matrix`]) over the face instead, at the light's strength.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GlassSpecular {
     /// Strength of the key light (0 for none).
@@ -232,6 +233,10 @@ pub struct GlassSpecular {
     pub fill: f32,
     /// The diffuse glow, in multiples of the band's depth, the arcs' half-width and the strength.
     pub diffuse: GlowDiffuse,
+    /// How much of the light is the highlight matrix's colour of the face rather than white: 0 adds its strength to
+    /// every channel, 1 lays `matrix · face` over the face at its strength (all of it from 1 up), so the light keeps
+    /// the hue of what lies under it; mixed between.
+    pub matrix_share: f32,
 }
 
 impl GlassSpecular {
@@ -243,6 +248,7 @@ impl GlassSpecular {
         angle: HIGHLIGHT_ANGLE,
         fill: 1.0,
         diffuse: GlowDiffuse::NONE,
+        matrix_share: 0.0,
     };
 }
 
@@ -272,20 +278,29 @@ pub const BORDER_LIT_SHARE: f32 = 0.2;
 /// The rim shifts each channel of the face by `amount · color_bias` (a negative bias darkens), scaled by that channel's
 /// brightness and by the direction of the edge, strongest where the edge runs diagonally, in a band
 /// [`RIM_DEPTH_PER_HEIGHT`] times `height` deep.
+///
+/// A rim `outside` the edge shifts what lies just outside it instead: a strip `height` wide whose middle lies
+/// `−offset` outside the outline, on the arcs facing either end of the axis through `angle` (each lit
+/// `1 − smoothstep(0, 0.75 · spread, a)`, `a` the angle between the edge's outward normal and its end of the axis),
+/// each channel shifted by [`RIM_OUTSIDE_GAIN`]` · amount · color_bias` times its brightness response
+/// ([`rim_brightness`] of the channel); nothing inside the edge.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GlassHighlight {
     /// Strength of the rim.
     pub amount: f32,
     /// Direction the soft band's light comes from, in radians, counter-clockwise from the right with y up (π/2 is the
-    /// top).
+    /// top); for a rim outside the edge, the axis its arcs face.
     pub angle: f32,
     /// Angular width of each arc the soft band lights, in radians; an arc fades to nothing three quarters of it from its
-    /// end of the axis.
+    /// end of the axis. A rim outside the edge keeps to arcs as wide.
     pub spread: f32,
-    /// The rim's depth in points, as a share of [`RIM_DEPTH_PER_HEIGHT`].
+    /// The rim's depth in points, as a share of [`RIM_DEPTH_PER_HEIGHT`]; outside the edge, its strip's width.
     pub height: f32,
-    /// Unused by the rim; kept with the recipe.
+    /// Where the middle of a rim outside the edge lies, in points (negative: outside the outline); unused by a rim
+    /// inside it.
     pub offset: f32,
+    /// Whether the rim lies outside the edge rather than inside it.
+    pub outside: bool,
     /// The colour shift of the rim per unit of strength: negative darkens. The soft band's far end of the axis is lit at
     /// `1 + color_bias` of its near end.
     pub color_bias: f32,
@@ -327,6 +342,9 @@ impl GlowDiffuse {
 
 /// How deep the rim reaches into the shape, per point of its `height`.
 pub const RIM_DEPTH_PER_HEIGHT: f32 = 1.7;
+/// The shift of each channel a rim outside the edge makes, per unit of its strength times its colour bias, before its
+/// brightness response: a rim of 0.4 at a bias of −0.25 takes up to a fifth off a channel just outside the edge.
+pub const RIM_OUTSIDE_GAIN: f32 = 2.0;
 /// How strongly the rim shows by the brightness under it `(value, response)`, a channel of the face for the rim and the
 /// luma of the backdrop for the edge line; linear between: nothing on black, most a little above the middle.
 pub const RIM_BRIGHTNESS_RESPONSE: [(f32, f32); 5] = [

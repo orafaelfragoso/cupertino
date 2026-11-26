@@ -103,6 +103,7 @@ pub(super) fn regular_specular(dark: bool) -> GlassSpecular {
         angle: HIGHLIGHT_ANGLE,
         fill: SPECULAR_FILL,
         diffuse: SPECULAR_DIFFUSE,
+        matrix_share: 0.0,
     }
 }
 
@@ -178,6 +179,7 @@ pub(super) fn regular_base(dark: bool, s: f32) -> GlassParams {
             spread: 2.0 * std::f32::consts::FRAC_PI_3,
             height: REGULAR_RIM_HEIGHT,
             offset: -0.5,
+            outside: false,
             color_bias: REGULAR_RIM_BIAS,
             curvature: 0.75,
             glow_amount: 0.0,

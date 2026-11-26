@@ -1,4 +1,4 @@
-//! The glass of the control centre's modules, the Dock bar's lines, the window sidebars' dense pane, the notification
+//! The glass of the control centre's modules, the Dock bar's edge, the window sidebars' dense pane, the notification
 //! cards' edges, the launcher's results panel and the cartouches' edge lines, kept under the glass variant names, and
 //! the control centre's accessibility shifts laid over its face.
 
@@ -146,86 +146,83 @@ pub(super) fn control_center(mode: GlassMode, s: f32) -> GlassParams {
 
 // ---- the Dock --------------------------------------------------------------------------------------------------
 
-/// The Dock bar's light along its outline, round its ends as they present at device pixels
-/// (`dock/dock_dark_rest_67.883`, `dock_light_rest_328.340`): a bright line along the top and the bottom (the outermost
-/// pixel about 89 levels over the backdrop, the next 52), at about three quarters of it 10° to 15° round each end and
-/// half 25° round, a faint line at about a quarter of the top's light that runs on down the curve of the end and is
-/// gone where the end runs straight down, and under the top and the bottom a soft lift that fades over four points.
-///
-/// The faint line round the end and the soft lift are the soft band of light: its strength, half-width and middle in
-/// points (inside for a negative value), on arcs reaching the middle of each end with an exponent on their falloff that
-/// keeps them nearly flat until close to it; the light bar's is a little weaker, as its face is lighter
-/// ([`DOCK_BAR_LINE_LIGHT`]).
-pub const DOCK_BAR_LINE: (f32, f32, f32) = (0.27, 0.6, -0.25);
-pub const DOCK_BAR_LINE_LIGHT: f32 = 0.235;
-const DOCK_BAR_LINE_SPREAD: f32 = 120.0 * std::f32::consts::PI / 180.0;
-const DOCK_BAR_LINE_CURVATURE: f32 = 0.25;
-const DOCK_BAR_LINE_BOTTOM: f32 = 1.0;
-/// The soft lift under the top and the bottom: five times as wide as the faint line, on arcs half as wide (gone 45°
-/// round each end), at 0.6 of its strength: about 16 levels a point inside the edge, 9 at two points, 3 at four.
-const DOCK_BAR_LINE_DIFFUSE: GlowDiffuse = GlowDiffuse {
-    height_scale: 5.0,
-    spread_scale: 0.5,
-    amount_scale: 0.6,
+/// The dimension in points the Dock bar's bend inside its edge is a fraction of ([`DOCK_REFRACTION`],
+/// [`DOCK_REFRACTION_HEIGHT`]), whatever the bar's size: a bend of −8.64 pt over a band of 3.84 pt, a thin lens along
+/// the edge rather than one that deepens with the bar.
+pub const DOCK_BAR_BEND_DIMENSION: f32 = 48.0;
+/// The dark bar's luma compression: white comes out at this, and a bright scene behind the bar is held down to a
+/// light grey rather than near white.
+pub const DOCK_BAR_MAX_LUMA_DARK: f32 = 0.75;
+/// The angular width of the arcs the rim outside the bar's edge keeps to, facing left and right
+/// ([`GlassHighlight::outside`]): all of it across the middle of each end, half 45° round it, none along the top and
+/// the bottom.
+const DOCK_BAR_RIM_SPREAD: f32 = 120.0 * std::f32::consts::PI / 180.0;
+/// The key and fill light along the bar's top and bottom edges, from straight above and as strong from below: the
+/// share of the light's colour laid over the face at the edge ([`GlassSpecular::amount`]), the band it fades over in
+/// points, and the half-width of its arcs.
+pub const DOCK_BAR_LIGHT: f32 = 1.0;
+const DOCK_BAR_LIGHT_DEPTH: f32 = 1.5;
+const DOCK_BAR_LIGHT_SPREAD: f32 = 60.0 * std::f32::consts::PI / 180.0;
+/// The diffuse glow under the bar's light: eight points deep, on arcs 0.65 as wide, at 0.15 of the light, fading as the
+/// square of what is left of its band.
+const DOCK_BAR_LIGHT_DIFFUSE: GlowDiffuse = GlowDiffuse {
+    height_scale: 8.0 / DOCK_BAR_LIGHT_DEPTH,
+    spread_scale: 0.65,
+    amount_scale: 0.15,
 };
-/// The bright line along the top and the bottom: white light from straight above and, as strong, from below, at this
-/// strength over a band this many points deep, on arcs of this half-width.
-pub const DOCK_BAR_PEAK: f32 = 0.175;
-const DOCK_BAR_PEAK_DEPTH: f32 = 1.4;
-const DOCK_BAR_PEAK_SPREAD: f32 = 32.0 * std::f32::consts::PI / 180.0;
-/// The dark line one device pixel wide just outside the bar's ends: black at this alpha over any backdrop, on arcs this
-/// wide facing left and right, so it is darkest across the middle of each end, about a third as dark 25° round it,
-/// gone 40° round and along the top and the bottom, which carry the line of light (about 0.6 over the backdrop at the
-/// middle of an end, in both appearances).
-pub const DOCK_BAR_EDGE_LINE: f32 = 0.6;
-const DOCK_BAR_EDGE_LINE_SIDES: f32 = 55.0 * std::f32::consts::PI / 180.0;
-/// The colour of the bar's line of light from the face under it: a little more saturated and lifted than the face, in
-/// the light and the dark appearance.
-const DOCK_BAR_LINE_MATRIX_LIGHT: ColorMatrix = [
+/// The colour of the bar's light from the face under it, in the light and the dark appearance: a little more saturated
+/// and lifted than the face, then brightened by [`DOCK_BAR_LIGHT_GAIN`].
+const DOCK_BAR_LIGHT_MATRIX_LIGHT: ColorMatrix = [
     1.2625, -0.2385, -0.024, 0.0, 0.2, //
     -0.0708, 1.0949, -0.0241, 0.0, 0.2, //
     -0.0709, -0.2383, 1.3093, 0.0, 0.2, //
     0.0, 0.0, 0.0, 1.0, 0.0,
 ];
-const DOCK_BAR_LINE_MATRIX_DARK: ColorMatrix = [
+const DOCK_BAR_LIGHT_MATRIX_DARK: ColorMatrix = [
     1.0937, -0.3577, -0.036, 0.0, 0.25, //
     -0.1063, 0.8424, -0.0361, 0.0, 0.25, //
     -0.1064, -0.3575, 1.1639, 0.0, 0.25, //
     0.0, 0.0, 0.0, 1.0, 0.0,
 ];
+/// How much brighter the bar's light is than its matrix's colour.
+pub const DOCK_BAR_LIGHT_GAIN: f32 = 1.2;
 
-/// The Dock bar's lines over its recipe `p` (the Dock variant on the clear base, whose blur, face, rim and bend inside
-/// the edge it keeps, and with nothing bent outside the edge): a thin line of light along its top and bottom edges, equally bright and running
-/// faintly down the curve of each end, over a soft lift of white, and a dark line just outside its ends, which the
-/// recipe's inputs alone leave out.
+/// `m` with its colour rows (coefficients and offsets) times `gain`.
+fn gained(m: ColorMatrix, gain: f32) -> ColorMatrix {
+    std::array::from_fn(|i| if i < 15 { m[i] * gain } else { m[i] })
+}
+
+/// The Dock bar over its recipe `p` (the Dock variant on the clear base, whose blur and face it keeps): a thin bend along
+/// its edge of the same size at any length of the bar, the dark face's luma held at [`DOCK_BAR_MAX_LUMA_DARK`], the
+/// clear rim laid just outside its ends instead of inside its corners, and a light along its top and bottom edges in
+/// the colour of the face under it; nothing bent outside the edge.
 pub(super) fn dock_bar(p: &mut GlassParams, dark: bool) {
-    let (amount, height, offset) = DOCK_BAR_LINE;
+    p.refraction.amount = DOCK_REFRACTION * DOCK_BAR_BEND_DIMENSION;
+    p.refraction.height = DOCK_REFRACTION_HEIGHT * DOCK_BAR_BEND_DIMENSION;
+    if dark {
+        p.face.max_luma = DOCK_BAR_MAX_LUMA_DARK;
+    }
+    let matrix = if dark {
+        DOCK_BAR_LIGHT_MATRIX_DARK
+    } else {
+        DOCK_BAR_LIGHT_MATRIX_LIGHT
+    };
     p.highlight = GlassHighlight {
-        spread: DOCK_BAR_LINE_SPREAD,
-        curvature: DOCK_BAR_LINE_CURVATURE,
-        glow_amount: if dark { amount } else { DOCK_BAR_LINE_LIGHT },
-        glow_height: height,
-        glow_offset: offset,
-        glow_fill: DOCK_BAR_LINE_BOTTOM,
-        diffuse: DOCK_BAR_LINE_DIFFUSE,
-        matrix: if dark {
-            DOCK_BAR_LINE_MATRIX_DARK
-        } else {
-            DOCK_BAR_LINE_MATRIX_LIGHT
-        },
+        outside: true,
+        angle: 0.0,
+        spread: DOCK_BAR_RIM_SPREAD,
+        matrix: gained(matrix, DOCK_BAR_LIGHT_GAIN),
         ..p.highlight
     };
     p.specular = GlassSpecular {
-        amount: DOCK_BAR_PEAK,
-        spread: DOCK_BAR_PEAK_SPREAD,
-        height: DOCK_BAR_PEAK_DEPTH,
+        amount: DOCK_BAR_LIGHT,
+        spread: DOCK_BAR_LIGHT_SPREAD,
+        height: DOCK_BAR_LIGHT_DEPTH,
         angle: std::f32::consts::FRAC_PI_2,
         fill: 1.0,
-        diffuse: GlowDiffuse::NONE,
+        diffuse: DOCK_BAR_LIGHT_DIFFUSE,
+        matrix_share: 1.0,
     };
-    p.shadow.edge_line = DOCK_BAR_EDGE_LINE;
-    p.shadow.edge_line_sides = DOCK_BAR_EDGE_LINE_SIDES;
-    p.shadow.edge_line_even = true;
     // The bar bends nothing outside its edge: the recipe's outer bend would draw a mirrored strip of whatever lies
     // above the bar (a window, the wallpaper) beyond its outline.
     p.refraction.outer_amount = 0.0;

@@ -81,6 +81,7 @@ pub(super) fn clear_base(s: f32) -> GlassParams {
             spread: 5.0 * std::f32::consts::PI / 12.0,
             height: CLEAR_RIM_HEIGHT,
             offset: -0.5,
+            outside: false,
             color_bias: CLEAR_RIM_BIAS,
             curvature: 0.75,
             glow_amount: 0.0,
@@ -136,9 +137,9 @@ pub(super) fn clear_reduced(p: &mut GlassParams, dark: bool) {
 
 // ---- the Dock and the application switcher -----------------------------------------------------------------------
 
-/// The Dock's blur, in multiples of the clear blur ([`CLEAR_BLUR`]); the application switcher's in the light and the
-/// dark appearance.
-pub const DOCK_BLUR_SCALE: f32 = 1.5;
+/// The Dock's blur, in multiples of the clear blur ([`CLEAR_BLUR`]): a Gaussian of 2 points; the application
+/// switcher's in the light and the dark appearance.
+pub const DOCK_BLUR_SCALE: f32 = 1.45;
 pub const SWITCHER_BLUR_SCALE_LIGHT: f32 = 2.0;
 pub const SWITCHER_BLUR_SCALE_DARK: f32 = 3.5;
 /// The Dock's face: saturation in both appearances, black lift and white gain light and dark, and the dark face's
@@ -149,10 +150,12 @@ pub const DOCK_WHITE_LIGHT: f32 = 0.9;
 pub const DOCK_BLACK_DARK: f32 = 0.05;
 pub const DOCK_WHITE_DARK: f32 = 0.92;
 pub const DOCK_FILL_DARK: f32 = 0.02;
-/// The Dock's inner refraction and band as fractions of its short side (negative: inwards).
+/// The Dock's inner refraction and band as fractions of a dimension (negative: inwards): the application switcher's
+/// short side, the bar's [`DOCK_BAR_BEND_DIMENSION`].
 pub const DOCK_REFRACTION: f32 = -0.18;
 pub const DOCK_REFRACTION_HEIGHT: f32 = 0.08;
-/// The Dock's bend outside its edge: strength and band as fractions of its short side, and its opacity.
+/// The application switcher's bend outside its edge: strength and band as fractions of its short side, and its
+/// opacity (the bar bends nothing outside its edge).
 pub const DOCK_OUTER_REFRACTION: f32 = 0.42;
 pub const DOCK_OUTER_REFRACTION_HEIGHT: f32 = 0.13;
 pub const DOCK_OUTER_OPACITY: f32 = 0.2;

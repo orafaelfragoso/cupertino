@@ -25,17 +25,21 @@
 //!    edge facing either end of the axis through `angle` ([`highlight_lobe`]). Then the rim ([`rim_shift`]): each
 //!    channel shifted by `amount · color_bias` (darker for a negative bias), scaled by that channel's own brightness
 //!    ([`rim_brightness`] of the channel, so a coloured face keeps its hue where a brighter channel moves further) and by
-//!    the edge's direction ([`rim_direction`], strongest on diagonals), in a band `RIM_DEPTH_PER_HEIGHT · height` deep.
+//!    the edge's direction ([`rim_direction`], strongest on diagonals), in a band `RIM_DEPTH_PER_HEIGHT · height` deep;
+//!    a rim outside the edge is drawn there instead (stage 8).
 //! 5. **Control outline and key and fill light.** The control outline, a black line centred on the edge, darkens the
 //!    face ([`border_line`]); over it the key and fill light and their diffuse glow add white ([`specular_light`]),
+//!    or by their matrix share lay the highlight matrix's colour of the face over it at their strength,
 //!    and where they fall the outline shows at a fifth.
 //! 6. **Veil.** A black veil from the top of the shapes to their bottom ([`Container::veil`]).
 //! 7. **Ring shadow.** Inside the shape, a stroke `stroke` wide along the inside of the outline, moved down by
 //!    `ring_offset` and blurred with a Gaussian of `ring_blur`, darkens the face by its opacity ([`ring_shadow`]): a soft
 //!    shade a little below the top edge and down the sides, none along the bottom, whose part of the stroke lies outside
 //!    the shape.
-//! 8. **Outside.** The backdrop bent outside the edge ([`outer_read`], the sharp copy [`SHARP_LEVEL`]), under a drop
-//!    shadow offset by `offset`, blurred by `height` at `amount` percent of its fill's alpha, and an outline hairline,
+//! 8. **Outside.** The rim outside the edge ([`rim_outside`]: each channel of what lies there shifted by its
+//!    brightness response, in a strip just outside the ends of its axis), under the backdrop bent outside the edge
+//!    ([`outer_read`], the sharp copy [`SHARP_LEVEL`]), under a drop shadow offset by `offset`, blurred by `height` at
+//!    `amount` percent of its fill's alpha, and an outline hairline,
 //!    under the edge line and the control outline. The bend, ring and drop shadow are drawn at their opacity, which is
 //!    0 at rest. A pixel the shape's edge crosses shows the glass over this in the part the glass leaves uncovered.
 //! 9. **Edge.** Where the container carries one ([`GlassEdge`]), a line of its width just outside each shape's own
@@ -62,7 +66,7 @@ mod uniform;
 
 pub use stages::{
     bleed_into, bleed_read, bleed_tone, border_and_light, border_line, fill_and_tint, key_and_fill,
-    light_arc, outer_read, smoothstep, specular_light, ShapeLook,
+    light_arc, outer_read, over_backdrop, rim_outside, smoothstep, specular_light, ShapeLook,
 };
 pub use uniform::GlassUniform;
 
@@ -571,10 +575,11 @@ pub fn rim_band(depth: f32, reach: f32) -> f32 {
 
 /// Stage 5, second part: the shift the rim adds to each channel of the face `c` at distance `d` (negative inside,
 /// points) from the edge, with outward `normal`: `amount · color_bias`, times that channel's brightness response
-/// ([`rim_brightness`] of the channel's own value) and the edge's direction response, inside the rim's depth.
+/// ([`rim_brightness`] of the channel's own value) and the edge's direction response, inside the rim's depth. None
+/// for a rim outside the edge ([`rim_outside`]).
 pub fn rim_shift(c: Rgb, d: f32, normal: [f32; 2], p: &GlassParams) -> Rgb {
     let h = &p.highlight;
-    if h.amount == 0.0 || h.height <= 0.0 || (normal[0] == 0.0 && normal[1] == 0.0) {
+    if h.outside || h.amount == 0.0 || h.height <= 0.0 || (normal[0] == 0.0 && normal[1] == 0.0) {
         return [0.0; 3];
     }
     let band = rim_band(-d, RIM_DEPTH_PER_HEIGHT * h.height);
@@ -1217,8 +1222,8 @@ impl Container {
     /// What the shape draws outside itself at `p`, `d` from its edge whose outward normal is `normal`, over a
     /// `backdrop` of that colour, in the recipe `here` of the shapes there: the drop shadow and the outline in the
     /// shadow's colour, with the edge line ([`edge_line_alpha`]) and the control outline ([`border_line`]) over them in
-    /// black, all over `bent`, the bent backdrop's colour and alpha where it shows ([`outer_read`]). Returns the colour
-    /// and its alpha.
+    /// black, all over `bent`, the bent backdrop's colour and alpha where it shows ([`outer_read`]), over the rim outside
+    /// the edge ([`rim_outside`]). Returns the colour and its alpha.
     pub fn outside(
         &self,
         p: [f32; 2],
@@ -1242,7 +1247,7 @@ impl Container {
             let k = shadow * (1.0 - line) / a;
             ([fill[0] * k, fill[1] * k, fill[2] * k], a)
         };
-        match bent {
+        let (c, a) = match bent {
             Some((r, o)) if o > 0.0 => {
                 let out = a + o * (1.0 - a);
                 (
@@ -1251,6 +1256,16 @@ impl Container {
                 )
             }
             _ => (c, a),
+        };
+        match rim_outside(d, normal, backdrop, &self.params) {
+            Some((r, o)) => {
+                let out = a + o * (1.0 - a);
+                (
+                    std::array::from_fn(|i| (c[i] * a + r[i] * o * (1.0 - a)) / out),
+                    out,
+                )
+            }
+            None => (c, a),
         }
     }
 }

@@ -2,7 +2,7 @@
 //! container-wide values, in target pixels.
 
 use super::{Container, ShapeLook, MAX_SHAPES};
-use cupertino_theme::glass::RIM_DEPTH_PER_HEIGHT;
+use cupertino_theme::glass::{RIM_DEPTH_PER_HEIGHT, RIM_OUTSIDE_GAIN};
 
 /// Uniform block of the glass composite (`Glass` in `shaders/glass.wgsl` and the GLSL generated from it), std140
 /// with 16-byte members only. Lengths are in target pixels.
@@ -52,7 +52,8 @@ pub struct GlassUniform {
     pub shape_fill: [[f32; 4]; MAX_SHAPES],
     /// Each shape's tint, straight sRGB.
     pub shape_tint: [[f32; 4]; MAX_SHAPES],
-    /// Each shape's rim: strength, colour bias, depth; 0.
+    /// Each shape's rim: strength, colour bias, depth; 0. No strength for a rim outside the edge, which `rim_outside`
+    /// carries.
     pub shape_rim: [[f32; 4]; MAX_SHAPES],
     /// Each shape's key and fill light: amount, half-width, band, key angle.
     pub shape_spec: [[f32; 4]; MAX_SHAPES],
@@ -60,7 +61,8 @@ pub struct GlassUniform {
     pub shape_spec2: [[f32; 4]; MAX_SHAPES],
     /// Each shape's ring: how far down it is moved, its stroke, its Gaussian deviation and how much it darkens the face.
     pub shape_ring: [[f32; 4]; MAX_SHAPES],
-    /// Each shape's control outline: opacity, width; 0, 0.
+    /// Each shape's control outline: opacity, width; the share of its key and fill light that is the highlight matrix's
+    /// colour; 0.
     pub shape_border: [[f32; 4]; MAX_SHAPES],
     /// The outline the container is cut to: x, y, w, h.
     pub cut: [f32; 4],
@@ -72,6 +74,10 @@ pub struct GlassUniform {
     pub lens: [f32; 4],
     /// The edge's straight colour and opacity.
     pub edge: [f32; 4],
+    /// The rim outside the edge: where its strip begins and ends outside the outline, the shift of each channel per
+    /// unit of its brightness response (negative: darker; 0 for none), 0. Its arcs face the ends of the soft band's
+    /// axis, `light`, as wide as its arcs.
+    pub rim_outside: [f32; 4],
 }
 
 impl GlassUniform {
@@ -163,7 +169,12 @@ impl GlassUniform {
             u.shape_fill[i] = look.fill;
             u.shape_tint[i] = look.tint;
             u.shape_rim[i] = [
-                look.rim[0],
+                // a rim outside the edge draws nothing inside it
+                if p.highlight.outside {
+                    0.0
+                } else {
+                    look.rim[0]
+                },
                 look.rim[1],
                 RIM_DEPTH_PER_HEIGHT * look.rim[2] * scale,
                 0.0,
@@ -173,7 +184,7 @@ impl GlassUniform {
             u.shape_spec2[i] = [sp[4], sp[5], sp[6], sp[7]];
             let r = look.ring;
             u.shape_ring[i] = [r[0] * scale, r[1] * scale, r[2] * scale, r[3]];
-            u.shape_border[i] = [look.border[0], look.border[1] * scale, 0.0, 0.0];
+            u.shape_border[i] = [look.border[0], look.border[1] * scale, sp[8], 0.0];
         }
         if let Some(cut) = container.cut {
             u.cut = cut.rect.map(|x| x * scale);
@@ -191,6 +202,12 @@ impl GlassUniform {
             },
         ];
         u.edge = container.edge.color;
+        let h = &p.highlight;
+        if h.outside && h.height > 0.0 {
+            let (lo, hi) = (-h.offset - 0.5 * h.height, -h.offset + 0.5 * h.height);
+            let shift = RIM_OUTSIDE_GAIN * h.amount * h.color_bias;
+            u.rim_outside = [lo * scale, hi * scale, shift, 0.0];
+        }
         u
     }
 

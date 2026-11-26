@@ -33,12 +33,14 @@ struct Glass {
   shape_spec: array<vec4<f32>, 16>,   // key and fill light: amount, half-width, band, key angle
   shape_spec2: array<vec4<f32>, 16>,  // the fill's share; diffuse glow: band, arcs' half-width, strength, per unit
   shape_ring: array<vec4<f32>, 16>,   // ring: moved down by, stroke, deviation, darkening
-  shape_border: array<vec4<f32>, 16>, // control outline: opacity, width; unused
+  shape_border: array<vec4<f32>, 16>, // control outline: opacity, width; the key light's matrix share; unused
   cut: vec4<f32>,         // the outline the container is cut to: x, y, w, h
   cut_shape: vec4<f32>,   // its corner extent, corner exponent, 1 when cut; 1 when the edge line is even
   lens: vec4<f32>,        // the blur's weight at the top and at the bottom of the shapes, magnification, the edge's
                           // width
   edge: vec4<f32>,        // the edge's straight colour and opacity
+  rim_outside: vec4<f32>, // the rim outside the edge: its strip's start and end outside the outline, its shift per
+                          // unit of brightness response (0: none); unused
 };
 
 @group(0) @binding(0) var<uniform> G: Glass;
@@ -377,6 +379,37 @@ fn outer_refraction(p: vec2<f32>, d: f32, n: vec2<f32>, f: Field) -> vec4<f32> {
   return vec4<f32>(r, min(f.c.w, 1.0) * (1.0 - smoothstep(0.0, 1.0, t)));
 }
 
+// the colour and alpha that bring a backdrop of colour b to t in normal blending, at the least alpha that keeps the
+// colour within [0, 1]; none where t is b
+fn over_backdrop(b0: vec3<f32>, t0: vec3<f32>) -> vec4<f32> {
+  let b = clamp(b0, vec3<f32>(0.0), vec3<f32>(1.0));
+  let t = clamp(t0, vec3<f32>(0.0), vec3<f32>(1.0));
+  let down = select(vec3<f32>(0.0), (b - t) / max(b, vec3<f32>(1e-6)), t < b);
+  let up = select(vec3<f32>(0.0), (t - b) / max(vec3<f32>(1.0) - b, vec3<f32>(1e-6)), t > b);
+  let need = max(down, up);
+  let a = min(max(need.x, max(need.y, need.z)), 1.0);
+  if (a <= 0.0) { return vec4<f32>(0.0); }
+  return vec4<f32>(clamp(b + (t - b) / a, vec3<f32>(0.0), vec3<f32>(1.0)), a);
+}
+
+// stage 8: the rim outside the edge, `d` outside it where its outward normal is n: each channel of what the shape's
+// blur at `pos` reads there shifted by its brightness response, in the share of the pixel inside its strip, on the arcs
+// facing the ends of the soft band's axis; as the colour and alpha laid over the backdrop
+fn rim_outside(p: vec2<f32>, d: f32, pos: f32, n: vec2<f32>) -> vec4<f32> {
+  let r = G.rim_outside;
+  if (r.z == 0.0 || dot(n, n) <= 0.0) { return vec4<f32>(0.0); }
+  let band = max(min(d + 0.5, r.y) - max(d - 0.5, r.x), 0.0);
+  if (band <= 0.0) { return vec4<f32>(0.0); }
+  let na = atan2(-n.y, n.x);
+  let reach = LOBE_REACH * G.light.y;
+  let arcs = light_arc(na, G.light.x, reach) + light_arc(na, G.light.x + PI, reach);
+  let k = r.z * min(arcs, 1.0) * band;
+  if (k == 0.0) { return vec4<f32>(0.0); }
+  let b = blurred(uv_of(p), pos);
+  let shift = vec3<f32>(rim_brightness(b.r), rim_brightness(b.g), rim_brightness(b.b)) * k;
+  return over_backdrop(b, b + shift);
+}
+
 // stage 8: what the shape draws outside itself where its outward normal is n, the bent backdrop under the drop shadow
 // and the outline in the shadow's colour, with the edge line and the control outline over them in black: its colour
 // and alpha
@@ -392,6 +425,11 @@ fn outside(p: vec2<f32>, d: f32, pos: f32, n: vec2<f32>, f: Field) -> vec4<f32> 
   if (r.a > 0.0) {
     let ao = o.a + r.a * (1.0 - o.a);
     o = vec4<f32>((o.rgb * o.a + r.rgb * r.a * (1.0 - o.a)) / ao, ao);
+  }
+  let s = rim_outside(p, d, pos, n);
+  if (s.a > 0.0) {
+    let ao = o.a + s.a * (1.0 - o.a);
+    o = vec4<f32>((o.rgb * o.a + s.rgb * s.a * (1.0 - o.a)) / ao, ao);
   }
   return o;
 }
@@ -469,7 +507,8 @@ fn outside_needs_normal(d: f32, f: Field) -> bool {
   let side_line = G.diffuse.w > 0.0 && G.levels.x > 0.0 && d < 1.5;
   let border = f.border.x > 0.0 && f.border.y > 0.0 && d < 0.5 * f.border.y + 0.5;
   let bent = f.c.w > 0.0 && f.c.z > 0.0 && f.c.y != 0.0 && d < f.c.z;
-  return side_line || border || bent;
+  let rim = G.rim_outside.z != 0.0 && d < G.rim_outside.y + 0.5;
+  return side_line || border || bent || rim;
 }
 
 @fragment
@@ -545,12 +584,20 @@ fn fs_main(fin: VsOut) -> @location(0) vec4<f32> {
       c = clamp(c + shift, vec3<f32>(0.0), vec3<f32>(1.0));
     }
   }
-  // stage 5: the control outline, then the key and fill light added as white over it
+  // stage 5: the control outline, then the key and fill light added as white over it, or the highlight matrix's
+  // colour of the face laid over it at their strength, by their matrix share
   let line = border_line(d, n, f);
   if (line > 0.0) { c = c * (1.0 - line); }
   if (f.spec.x > 0.0 && grad_len > 1e-6) {
     let na = atan2(-n.y, n.x);
-    c = clamp(c + vec3<f32>(specular(max(-de, 0.0), na, f.spec, f.spec2)), vec3<f32>(0.0), vec3<f32>(1.0));
+    let light = specular(max(-de, 0.0), na, f.spec, f.spec2);
+    let white = clamp(c + vec3<f32>(light), vec3<f32>(0.0), vec3<f32>(1.0));
+    let share = clamp(f.border.z, 0.0, 1.0);
+    if (share > 0.0 && light > 0.0) {
+      c = mix(white, mix(c, key_color(c), min(light, 1.0)), share);
+    } else {
+      c = white;
+    }
   }
   // the black veil, from its opacity at the top of the shapes to its opacity at their bottom
   if (G.fill.w > 0.0 || G.levels.y > 0.0) {

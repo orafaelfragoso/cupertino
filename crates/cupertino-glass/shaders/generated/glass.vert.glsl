@@ -54,6 +54,7 @@ struct Glass {
     vec4 cut_shape;
     vec4 lens;
     vec4 edge;
+    vec4 rim_outside;
 };
 struct Field {
     float d;
@@ -111,8 +112,8 @@ float rounded_distance(vec2 p, vec2 half_, float e, float n_1) {
     float v_1 = max((qy / e), 1e-6);
     float g = pow((pow(u_1, n_1) + pow(v_1, n_1)), (1.0 / n_1));
     float grad = (sqrt((pow(u_1, ((2.0 * n_1) - 2.0)) + pow(v_1, ((2.0 * n_1) - 2.0)))) / pow(g, (n_1 - 1.0)));
-    float d_12 = (((g - 1.0) / grad) * e);
-    return max(d_12, (max(qx, qy) - e));
+    float d_13 = (((g - 1.0) / grad) * e);
+    return max(d_13, (max(qx, qy) - e));
 }
 
 float rect_distance(vec2 p_1, vec2 half_1) {
@@ -337,10 +338,10 @@ uint dither_pair(uvec2 p_5, uint k_1) {
 }
 
 uint dither_matrix(vec2 frag) {
-    uvec2 p_18 = uvec2(floor(frag));
-    uint _e5 = dither_pair(p_18, 0u);
-    uint _e9 = dither_pair(p_18, 1u);
-    uint _e13 = dither_pair(p_18, 2u);
+    uvec2 p_19 = uvec2(floor(frag));
+    uint _e5 = dither_pair(p_19, 0u);
+    uint _e9 = dither_pair(p_19, 1u);
+    uint _e13 = dither_pair(p_19, 2u);
     return (((16u * _e5) + (4u * _e9)) + _e13);
 }
 
@@ -403,8 +404,8 @@ vec3 saturate_encoded(vec3 c_3, float s) {
 }
 
 float angle_between(float a_1, float b) {
-    float d_13 = ((a_1 - b) - (floor(((a_1 - b) / 6.2831855)) * 6.2831855));
-    return min(d_13, (6.2831855 - d_13));
+    float d_14 = ((a_1 - b) - (floor(((a_1 - b) / 6.2831855)) * 6.2831855));
+    return min(d_14, (6.2831855 - d_14));
 }
 
 float light_arc(float normal_angle_1, float light_1, float spread) {
@@ -486,10 +487,23 @@ float normal_cdf(float x_4) {
     return (1.0 / (1.0 + exp((-1.702 * x_4))));
 }
 
+vec4 over_backdrop(vec3 b0_, vec3 t0_) {
+    vec3 b_3 = clamp(b0_, vec3(0.0), vec3(1.0));
+    vec3 t_5 = clamp(t0_, vec3(0.0), vec3(1.0));
+    vec3 down = mix(vec3(0.0), ((b_3 - t_5) / max(b_3, vec3(1e-6))), lessThan(t_5, b_3));
+    vec3 up = mix(vec3(0.0), ((t_5 - b_3) / max((vec3(1.0) - b_3), vec3(1e-6))), greaterThan(t_5, b_3));
+    vec3 need = max(down, up);
+    float a_5 = min(max(need.x, max(need.y, need.z)), 1.0);
+    if ((a_5 <= 0.0)) {
+        return vec4(0.0);
+    }
+    return vec4(clamp((b_3 + ((t_5 - b_3) / vec3(a_5))), vec3(0.0), vec3(1.0)), a_5);
+}
+
 float gaussian_cdf(float x_5) {
     float z = (abs(x_5) * 0.70710677);
-    float t_5 = (1.0 / (1.0 + (0.3275911 * z)));
-    float poly = (t_5 * (0.2548296 + (t_5 * (-0.28449675 + (t_5 * (1.4214137 + (t_5 * (-1.453152 + (t_5 * 1.0614054)))))))));
+    float t_6 = (1.0 / (1.0 + (0.3275911 * z)));
+    float poly = (t_6 * (0.2548296 + (t_6 * (-0.28449675 + (t_6 * (1.4214137 + (t_6 * (-1.453152 + (t_6 * 1.0614054)))))))));
     float erf = (1.0 - (poly * exp((-(z) * z))));
     return (0.5 * (1.0 + ((x_5 >= 0.0) ? erf : -(erf))));
 }
@@ -499,14 +513,14 @@ float gaussian_ramp(float u) {
     return ((u * _e1) + (0.3989423 * exp(((-0.5 * u) * u))));
 }
 
-float edge_share(float d_9, float w_2, float s_2) {
+float edge_share(float d_10, float w_2, float s_2) {
     if ((s_2 <= 0.0)) {
-        return clamp((min((d_9 + 0.5), w_2) - max((d_9 - 0.5), 0.0)), 0.0, 1.0);
+        return clamp((min((d_10 + 0.5), w_2) - max((d_10 - 0.5), 0.0)), 0.0, 1.0);
     }
-    float _e19 = gaussian_ramp(((d_9 + 0.5) / s_2));
-    float _e23 = gaussian_ramp(((d_9 - 0.5) / s_2));
-    float _e29 = gaussian_ramp((((d_9 + 0.5) - w_2) / s_2));
-    float _e35 = gaussian_ramp((((d_9 - 0.5) - w_2) / s_2));
+    float _e19 = gaussian_ramp(((d_10 + 0.5) / s_2));
+    float _e23 = gaussian_ramp(((d_10 - 0.5) / s_2));
+    float _e29 = gaussian_ramp((((d_10 + 0.5) - w_2) / s_2));
+    float _e35 = gaussian_ramp((((d_10 - 0.5) - w_2) / s_2));
     float r_2 = (s_2 * (((_e19 - _e23) - _e29) + _e35));
     return clamp(r_2, 0.0, 1.0);
 }
@@ -517,11 +531,11 @@ void main() {
     vec2 corner_2 = vec2(float((i & 1u)), float(((i >> 1u) & 1u)));
     vec4 _e12 = _group_1_binding_0_vs.quad;
     vec4 _e16 = _group_1_binding_0_vs.quad;
-    vec2 p_19 = (_e12.xy + (corner_2 * _e16.zw));
+    vec2 p_20 = (_e12.xy + (corner_2 * _e16.zw));
     mat3x3 _e22 = _group_1_binding_0_vs.proj;
-    vec3 c_9 = (_e22 * vec3(p_19, 1.0));
+    vec3 c_9 = (_e22 * vec3(p_20, 1.0));
     o.pos = vec4(c_9.xy, 0.0, 1.0);
-    o.px = p_19;
+    o.px = p_20;
     o.uv = ((c_9.xy * 0.5) + vec2(0.5));
     VsOut _e40 = o;
     gl_Position = _e40.pos;

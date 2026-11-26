@@ -1,10 +1,12 @@
 //! The stages of the glass composite a recipe turns on with a value of its own, each off at its default: the edge bleed
-//! of the backdrop outside the shape, the tint over the face, the control outline, the key and fill light, and the bend
-//! of the backdrop outside the edge. Each shape of a container carries its own look ([`ShapeLook`]), mixed across the
-//! union with the field's weights.
+//! of the backdrop outside the shape, the tint over the face, the control outline, the key and fill light (white or in
+//! the highlight matrix's colour), the bend of the backdrop outside the edge and the rim outside it. Each shape of a
+//! container carries its own look ([`ShapeLook`]), mixed across the union with the field's weights.
 
-use super::{angle_between, luma, mix, refraction_profile, Rgb};
-use cupertino_theme::glass::{GlassParams, BORDER_LIT_SHARE, RIM_DEPTH_PER_HEIGHT};
+use super::{angle_between, luma, matrix_rgb, mix, refraction_profile, Rgb, LOBE_REACH};
+use cupertino_theme::glass::{
+    rim_brightness, GlassParams, BORDER_LIT_SHARE, RIM_DEPTH_PER_HEIGHT, RIM_OUTSIDE_GAIN,
+};
 
 /// The smoothstep of `x` from `e0` to `e1`: 0 below, 1 above, `t²(3 − 2t)` between.
 pub fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
@@ -132,7 +134,8 @@ pub fn border_line(d: f32, normal: [f32; 2], p: &GlassParams) -> f32 {
     line * (1.0 - (1.0 - BORDER_LIT_SHARE) * lit.min(1.0))
 }
 
-/// Stage 5 on the face `c`: the control outline darkens it, then the key and fill light add to it as white.
+/// Stage 5 on the face `c`: the control outline darkens it, then the key and fill light add to it as white, or lay the
+/// highlight matrix's colour of it over it at their strength, by their matrix share.
 pub fn border_and_light(c: Rgb, d: f32, depth: f32, normal: [f32; 2], p: &GlassParams) -> Rgb {
     let line = border_line(d, normal, p);
     let c = if line > 0.0 {
@@ -141,11 +144,72 @@ pub fn border_and_light(c: Rgb, d: f32, depth: f32, normal: [f32; 2], p: &GlassP
         c
     };
     let light = specular_light(depth, normal, p);
-    if light > 0.0 {
-        c.map(|v| (v + light).clamp(0.0, 1.0))
-    } else {
-        c
+    if light <= 0.0 {
+        return c;
     }
+    let white = c.map(|v| (v + light).clamp(0.0, 1.0));
+    let share = p.specular.matrix_share.clamp(0.0, 1.0);
+    if share <= 0.0 {
+        return white;
+    }
+    let colored = mix(c, matrix_rgb(&p.highlight.matrix, c), light.min(1.0));
+    mix(white, colored, share)
+}
+
+/// The colour and the alpha that bring a backdrop of colour `b` to `t` under normal blending: `b + (t − b) / a` at the
+/// least alpha `a` that keeps that colour within `[0, 1]`. None where `t` is `b`.
+pub fn over_backdrop(b: Rgb, t: Rgb) -> Option<(Rgb, f32)> {
+    let need = |i: usize| {
+        let (b, t) = (b[i].clamp(0.0, 1.0), t[i].clamp(0.0, 1.0));
+        if t < b {
+            (b - t) / b
+        } else if t > b {
+            (t - b) / (1.0 - b)
+        } else {
+            0.0
+        }
+    };
+    let a = need(0).max(need(1)).max(need(2)).min(1.0);
+    if a <= 0.0 {
+        return None;
+    }
+    let c = std::array::from_fn(|i| {
+        let b = b[i].clamp(0.0, 1.0);
+        (b + (t[i].clamp(0.0, 1.0) - b) / a).clamp(0.0, 1.0)
+    });
+    Some((c, a))
+}
+
+/// Stage 8: the rim outside the edge ([`GlassHighlight::outside`]) at a pixel `d` outside the outline (one unit wide)
+/// whose outward normal is `normal`, over a backdrop of colour `backdrop` there: each channel `v` shifted by
+/// `RIM_OUTSIDE_GAIN · amount · color_bias · arcs · band · rim_brightness(v)`, the band the share of the pixel inside the
+/// strip `height` wide about `−offset` outside the outline, the arcs those facing either end of the axis through the
+/// rim's angle, `1 − smoothstep(0, LOBE_REACH · spread, a)`. As the colour and alpha laid over the backdrop
+/// ([`over_backdrop`]), exact where what lies there is the backdrop's colour; none without such a rim.
+///
+/// [`GlassHighlight::outside`]: cupertino_theme::glass::GlassHighlight::outside
+pub fn rim_outside(d: f32, normal: [f32; 2], backdrop: Rgb, p: &GlassParams) -> Option<(Rgb, f32)> {
+    let h = &p.highlight;
+    if !h.outside || h.amount * h.color_bias == 0.0 || h.height <= 0.0 {
+        return None;
+    }
+    if normal[0] == 0.0 && normal[1] == 0.0 {
+        return None;
+    }
+    let (lo, hi) = (-h.offset - 0.5 * h.height, -h.offset + 0.5 * h.height);
+    let band = ((d + 0.5).min(hi) - (d - 0.5).max(lo)).max(0.0);
+    if band <= 0.0 {
+        return None;
+    }
+    let angle = up_angle(normal);
+    let reach = LOBE_REACH * h.spread;
+    let arcs =
+        light_arc(angle, h.angle, reach) + light_arc(angle, h.angle + std::f32::consts::PI, reach);
+    let k = RIM_OUTSIDE_GAIN * h.amount * h.color_bias * arcs.min(1.0) * band;
+    if k == 0.0 {
+        return None;
+    }
+    over_backdrop(backdrop, backdrop.map(|v| v + k * rim_brightness(v)))
 }
 
 /// Stage 8: where the bend outside the edge reads the backdrop for a pixel at `p`, `d` from the edge with outward
@@ -186,8 +250,8 @@ pub struct ShapeLook {
     /// The rim's strength, colour bias and height.
     pub rim: [f32; 3],
     /// The key and fill light: amount, half-width, band height, key angle, fill share, and the diffuse glow's height,
-    /// spread and amount scales.
-    pub specular: [f32; 8],
+    /// spread and amount scales, and the share of the light that is the highlight matrix's colour.
+    pub specular: [f32; 9],
     /// The ring shadow's offset, stroke, deviation and opacity.
     pub ring: [f32; 4],
     /// The control outline's opacity and width.
@@ -214,6 +278,7 @@ impl ShapeLook {
                 s.diffuse.height_scale,
                 s.diffuse.spread_scale,
                 s.diffuse.amount_scale,
+                s.matrix_share,
             ],
             ring: [
                 sh.ring_offset,
@@ -268,6 +333,7 @@ impl ShapeLook {
             s.diffuse.height_scale,
             s.diffuse.spread_scale,
             s.diffuse.amount_scale,
+            s.matrix_share,
         ] = self.specular;
         let sh = &mut p.shadow;
         [

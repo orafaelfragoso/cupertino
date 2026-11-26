@@ -1,7 +1,7 @@
-//! The stages a recipe turns on with a value of its own (the key and fill light, the control outline, the edge bleed,
-//! the bend outside the edge and the tint) and the look of each shape of a container: off at their defaults, on they
-//! follow the formulas of the stage hand-computed at a few points, and the glass program draws them as the CPU model
-//! does.
+//! The stages a recipe turns on with a value of its own (the key and fill light, white or in the highlight matrix's
+//! colour, the rim outside the edge, the control outline, the edge bleed, the bend outside the edge and the tint) and
+//! the look of each shape of a container: off at their defaults, on they follow the formulas of the stage hand-computed
+//! at a few points, and the glass program draws them as the CPU model does.
 
 use super::glass_stages::{agrees, scenes};
 use cupertino_glass::glass::{
@@ -9,7 +9,7 @@ use cupertino_glass::glass::{
 };
 use cupertino_glass::gpu::HeadlessGpu;
 use cupertino_theme::glass::{
-    rim_brightness, GlassBorder, GlassParams, GlassSpecular, GlassStyle, GlowDiffuse,
+    apply_matrix, rim_brightness, GlassBorder, GlassParams, GlassSpecular, GlassStyle, GlowDiffuse,
 };
 use cupertino_theme::{GlassModifiers, GlassVariant};
 
@@ -50,6 +50,7 @@ const SPECULAR: GlassSpecular = GlassSpecular {
         spread_scale: 0.65,
         amount_scale: 0.15,
     },
+    matrix_share: 0.0,
 };
 
 fn close(a: Rgb, b: Rgb, tolerance: f32) -> bool {
@@ -169,6 +170,77 @@ fn the_ring_shadow_shades_below_the_top_edge_and_down_the_sides_but_not_along_th
     for p in [[50.0, 4.0], [50.0, 97.0], [50.0, 93.0]] {
         let (base, c) = darkened(p);
         assert_eq!(c, base, "at {p:?}");
+    }
+}
+
+#[test]
+fn the_key_and_fill_light_lay_the_highlight_matrix_colour_by_their_matrix_share() {
+    let off = square();
+    let white = |share: f32| {
+        let mut c = square();
+        c.params.specular = GlassSpecular {
+            matrix_share: share,
+            ..SPECULAR
+        };
+        c
+    };
+    // 0.75 inside the top edge, facing the key: the light of the test above
+    let top = [50.0, 0.75];
+    let (base, _) = off.shade(top, &flat);
+    let light = 0.4 * (0.15625 + 0.15 * 0.906_25 * 0.906_25);
+    let lit = apply_matrix(
+        &off.params.highlight.matrix,
+        [base[0], base[1], base[2], 1.0],
+    );
+    let colored: Rgb =
+        std::array::from_fn(|i| base[i] + (lit[i].clamp(0.0, 1.0) - base[i]) * light);
+    let added = base.map(|v| (v + light).min(1.0));
+    let (c, _) = white(1.0).shade(top, &flat);
+    assert!(close(c, colored, 1e-5), "{c:?} {colored:?}");
+    let (c, _) = white(0.5).shade(top, &flat);
+    let half: Rgb = std::array::from_fn(|i| 0.5 * (added[i] + colored[i]));
+    assert!(close(c, half, 1e-5), "{c:?} {half:?}");
+    assert_eq!(white(0.0).shade(top, &flat), on_white().shade(top, &flat));
+}
+
+/// The square with the key and fill light of [`SPECULAR`], added as white.
+fn on_white() -> Container {
+    let mut c = square();
+    c.params.specular = SPECULAR;
+    c
+}
+
+/// The square with the rim outside its edge: 0.4 at a bias of −0.25 in a strip from half a point to a point and a half
+/// outside the outline, on arcs facing left and right that reach 90° round.
+fn rim_outside() -> Container {
+    let mut c = square();
+    let h = &mut c.params.highlight;
+    (h.amount, h.color_bias, h.height, h.offset) = (0.4, -0.25, 1.0, -1.0);
+    (h.outside, h.angle, h.spread) = (true, 0.0, 120.0 * std::f32::consts::PI / 180.0);
+    c
+}
+
+#[test]
+fn the_rim_outside_the_edge_shifts_what_lies_just_outside_the_sides_by_its_brightness() {
+    let c = rim_outside();
+    // a point outside the left side, the strip over all of the pixel and facing the arc's end: each channel moves by
+    // 2 · 0.4 · −0.25 times the response to its own value, laid as a colour over the backdrop
+    let (rgb, a) = c.shade([-1.0, 50.0], &flat);
+    let over: Rgb = std::array::from_fn(|i| rgb[i] * a + FLAT[i] * (1.0 - a));
+    let expected = FLAT.map(|v| v - 0.2 * rim_brightness(v));
+    assert!(close(over, expected, 1e-5), "{over:?} {expected:?}");
+    // a pixel half in the strip: half the shift
+    let (rgb, a) = c.shade([-1.5, 50.0], &flat);
+    let over: Rgb = std::array::from_fn(|i| rgb[i] * a + FLAT[i] * (1.0 - a));
+    let expected = FLAT.map(|v| v - 0.1 * rim_brightness(v));
+    assert!(close(over, expected, 1e-5), "{over:?} {expected:?}");
+    // outside the top edge, a quarter turn from either end of the axis, and past the strip: nothing
+    assert_eq!(c.shade([50.0, -1.0], &flat).1, 0.0);
+    assert_eq!(c.shade([-3.0, 50.0], &flat).1, 0.0);
+    // inside the edge, the face as without a rim
+    let off = square();
+    for p in [[0.25, 50.0], [1.0, 50.0], [50.0, 0.25]] {
+        assert_eq!(c.shade(p, &flat), off.shade(p, &flat), "{p:?}");
     }
 }
 
@@ -419,6 +491,18 @@ fn lit_scenes() -> Vec<(&'static str, Container)> {
     let mut joined = group().with_shape_recipe(1, tinted);
     joined.spacing = 16.0;
     out.push(("tinted segment joined", joined));
+    // the Dock bar's rim outside its ends in a strip wide enough to cover whole pixels, under a light half white and
+    // half the highlight matrix's colour
+    let mut bar = Container::new(
+        vec![GlassShape::capsule([24.0, 30.0, 112.0, 40.0])],
+        0.0,
+        GlassMode::of_style(true, GlassStyle::Bar),
+    );
+    bar.for_each_recipe(|r| {
+        (r.highlight.height, r.highlight.offset) = (2.0, -1.5);
+        r.specular.matrix_share = 0.5;
+    });
+    out.push(("bar with a wide rim outside", bar));
     out
 }
 

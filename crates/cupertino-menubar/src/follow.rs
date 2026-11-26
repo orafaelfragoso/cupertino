@@ -9,6 +9,12 @@
 //! read, and following an item the exporter renumbered to its new id. The latest `ItemActivationRequested` of a batch
 //! of signals is reported to the bars ([`Event::ActivationRequested`]).
 //!
+//! An application's top-level menus whose rows the exporter has not given yet (Chromium's and Electron's are empty
+//! until they are about to show) are told they are about to show as soon as the tree is read, and the tree is read
+//! again before it is reported: the bars merge loaded menus, so a menu the merge empties (a File that held only
+//! Settings… and Quit, which go to the App menu) never shows as a title that goes when it is clicked. No `opened` is
+//! sent for them. It is done again when a whole tree read later has such menus, at most [`PREFETCH_ROUNDS`] times.
+//!
 //! Commands that come together are sent together: several `AboutToShow` as one `AboutToShowGroup`, several events
 //! as one `EventGroup`, for an exporter that has them (protocol version 3 on, or one that does not say); one that
 //! answers that it has no such method is sent the single calls from then on.
@@ -51,6 +57,10 @@ const GROUP_LIMIT: usize = 32;
 /// At most this many menus are held as open; an exporter's menus nest far less deep, so more means ids that were
 /// never closed (an exporter that renumbered its tree under open menus).
 const OPEN_LIMIT: usize = 32;
+/// At most this many times one follower tells an application's unloaded top-level menus they are about to show
+/// before it reports the tree: once at the first read, the rest for menus a rebuilt tree has empty again, so an
+/// exporter that never fills them is not told without end.
+const PREFETCH_ROUNDS: u32 = 4;
 
 /// How long a follower waits for an exporter's answers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -278,6 +288,8 @@ async fn run(
         queue: VecDeque::new(),
         last_time: 0,
         shown: false,
+        // a status item's menu is one menu, told it shows before the first read
+        prefetches: if patient { 0 } else { PREFETCH_ROUNDS },
     };
     state.read_menu_properties().await;
     if patient {
@@ -381,6 +393,8 @@ struct State<S> {
     /// The exporter was told menus are about to show and has not been sent an event since: the changes it signals
     /// as it answers may come just after the answer, and are waited for before an `opened`.
     shown: bool,
+    /// How many more times the unloaded top-level menus may be told they are about to show ([`PREFETCH_ROUNDS`]).
+    prefetches: u32,
 }
 
 /// Where an item is in a tree: the id, index among its siblings and label of each item from a child of the root down
@@ -496,17 +510,90 @@ impl<S: Stream<Item = MenuUpdate> + Unpin> State<S> {
         applied
     }
 
-    /// Read the whole tree and report it.
+    /// Read the whole tree and report it; an application's top-level menus still to be loaded are loaded first
+    /// ([`Self::prefetch`]).
     async fn load(&mut self) {
+        if !self.read_whole().await {
+            return;
+        }
+        if self.prefetch().await && self.read_whole().await {
+            // the changes signalled before the answer are in the tree read: dropped, they cost no read again
+            self.signals.waiting.retain(|update| {
+                !matches!(
+                    update,
+                    MenuUpdate::Layout { .. } | MenuUpdate::Properties { .. }
+                )
+            });
+        }
+        self.emit();
+    }
+
+    /// Read the whole tree; `false` when it could not be read.
+    async fn read_whole(&mut self) -> bool {
         let read = self.client.fetch(ItemId(0), -1);
         match self.signals.within(self.waits.read, read).await {
             Some(Ok((revision, root))) => {
                 self.apply_reply(ItemId(0), revision, root);
                 self.retry = None;
-                self.emit();
+                true
             }
-            Some(Err(e)) => self.failed(e),
-            None => self.failed(NoAnswer(self.waits.read)),
+            Some(Err(e)) => {
+                self.failed(e);
+                false
+            }
+            None => {
+                self.failed(NoAnswer(self.waits.read));
+                false
+            }
+        }
+    }
+
+    /// Tell the exporter the visible top-level menus it has given no rows of are about to show, as one
+    /// `AboutToShowGroup` or one `AboutToShow` each, all within the wait for one answer; `true` when it answered in
+    /// time, so the tree is to be read again. No `opened` follows: nothing shows them yet.
+    async fn prefetch(&mut self) -> bool {
+        if self.prefetches == 0 {
+            return false;
+        }
+        let Some(root) = self.tree.root() else {
+            return false;
+        };
+        let items: Vec<ItemId> = root
+            .children
+            .iter()
+            .filter(|c| c.visible && !c.separator && c.needs_load())
+            .map(|c| c.id)
+            .take(GROUP_LIMIT)
+            .collect();
+        if items.is_empty() {
+            return false;
+        }
+        self.prefetches -= 1;
+        let client = &self.client;
+        let group = items.len() > 1 && self.show_groups;
+        // whether the exporter answered that it has no group call
+        let told = async {
+            if group {
+                match client.about_to_show_group(&items).await {
+                    Err(e) if is_unknown_method(&e) => {}
+                    _ => return false,
+                }
+            }
+            for item in &items {
+                // what the answer says is not needed: the whole tree is read again
+                let _ = client.about_to_show(*item).await;
+            }
+            group
+        };
+        match self.signals.within(self.waits.about_to_show, told).await {
+            Some(no_groups) => {
+                self.show_groups &= !no_groups;
+                true
+            }
+            None => {
+                self.report_show(NoAnswer(self.waits.about_to_show));
+                false
+            }
         }
     }
 

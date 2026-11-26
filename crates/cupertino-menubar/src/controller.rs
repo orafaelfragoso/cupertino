@@ -450,8 +450,18 @@ impl MenuController {
         let mut out = Outcome::default();
         if let Some(k) = &self.open_slot {
             if self.layout.slot(k).is_none() || self.root_item(k).is_none() {
+                // the press that opened it goes with it: its release, over whatever took the title's place, does nothing
                 self.close_all(&mut out);
+                self.held = None;
             }
+        }
+        if self
+            .pressed_button
+            .as_ref()
+            .is_some_and(|(k, _)| self.layout.slot(k).is_none())
+        {
+            self.pressed_button = None;
+            self.held = None;
         }
         if self
             .title_focus

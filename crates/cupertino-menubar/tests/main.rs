@@ -18,6 +18,8 @@ mod menu_events;
 #[path = "menu-rows.rs"]
 mod menu_rows;
 mod menus;
+#[path = "prefetched-menus.rs"]
+mod prefetched_menus;
 mod registrar;
 #[path = "renumbered-menu.rs"]
 mod renumbered_menu;

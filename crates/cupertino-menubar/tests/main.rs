@@ -5,3 +5,5 @@ mod glass;
 #[path = "late-menu.rs"]
 mod late_menu;
 mod menus;
+#[path = "renumbered-menu.rs"]
+mod renumbered_menu;

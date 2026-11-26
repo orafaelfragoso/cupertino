@@ -121,8 +121,9 @@ pub fn resolve(effect: Effect, cx: &Context) -> Option<Action> {
         Effect::Redraw => Some(Action::Redraw),
         Effect::Opened { .. } => Some(Action::SetMenuOpen(true)),
         Effect::Closed => Some(Action::SetMenuOpen(false)),
+        // an exporter's menu, or a submenu of the exporter's items the App menu took in
         Effect::AboutToShow {
-            slot: slot @ SlotKey::Menu(_),
+            slot: slot @ (SlotKey::Menu(_) | SlotKey::AppMenu),
             item,
         } if shown_origin(&slot, item, cx) == Some(Origin::Exporter) => {
             match cx.feed.source(cx.shared) {

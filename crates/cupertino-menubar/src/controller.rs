@@ -172,6 +172,38 @@ struct Pending {
     due: f64,
 }
 
+/// What an open popup showed, to find it again in new content: its menu's id and label, its selected row's id, index
+/// and label, and how far it was scrolled.
+struct Shown {
+    menu: (ItemId, String),
+    selected: Option<(ItemId, usize, String)>,
+    scroll: f64,
+}
+
+/// Where the item that was at `index` of a list, with `id` and `label`, is among `items` (id and label) now: under the
+/// same id and label; else, for an exporter that rebuilt its tree under new ids (Chromium's renumbers every item when
+/// a menu is about to show) or reused its ids for other items, at the same place under the same label, then under the
+/// label elsewhere; else under the same id, an item that was renamed. `None` when it is gone.
+fn rematch<'a>(
+    items: impl Iterator<Item = (ItemId, &'a str)> + Clone,
+    id: ItemId,
+    index: usize,
+    label: &str,
+) -> Option<usize> {
+    let items = items.enumerate();
+    let by = |found: &dyn Fn(usize, ItemId, &str) -> bool| {
+        items
+            .clone()
+            .find(|(i, (item, text))| found(*i, *item, text))
+            .map(|(i, _)| i)
+    };
+    let labelled = !label.is_empty();
+    by(&|_, item, text| item == id && text == label)
+        .or_else(|| by(&|i, _, text| labelled && i == index && text == label))
+        .or_else(|| by(&|_, _, text| labelled && text == label))
+        .or_else(|| by(&|_, item, _| item == id))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Hit {
     Popup { level: usize, row: usize },
@@ -318,12 +350,15 @@ impl MenuController {
         self.rebuild_levels();
     }
 
-    /// Replace the bar content (focused app changed, menus updated, status items changed). Open
-    /// menus are kept when their items still exist.
+    /// Replace the bar content (focused app changed, menus updated, status items changed). Open menus are kept, with the
+    /// rows of the new content, when their items still exist: under the same id, or, for an exporter that rebuilt its
+    /// tree under new ids, at the same place under the same label ([`rematch`]). A menu whose item is gone closes.
     pub fn set_content(&mut self, content: BarContent) -> Outcome {
-        self.content = content;
+        let old = std::mem::replace(&mut self.content, content);
         self.hits = search::search(&self.content, self.search.text());
         self.relayout();
+        self.open_slot = self.open_slot.take().map(|k| self.carried(&old, k));
+        self.title_focus = self.title_focus.take().map(|k| self.carried(&old, k));
         let mut out = Outcome::default();
         if let Some(k) = &self.open_slot {
             if self.layout.slot(k).is_none() || self.root_item(k).is_none() {
@@ -343,6 +378,22 @@ impl MenuController {
         self.rebuild_levels();
         out.effects.push(Effect::Redraw);
         out
+    }
+
+    /// The slot of the new content that stands for `key` of the `old`: an application's menu the exporter gave a new id
+    /// has it under that id, and the other slots keep their keys.
+    fn carried(&self, old: &BarContent, key: SlotKey) -> SlotKey {
+        let SlotKey::Menu(id) = key else {
+            return key;
+        };
+        let Some((index, was)) = old.menus.iter().enumerate().find(|(_, m)| m.id == id) else {
+            return key;
+        };
+        let menus = self.content.menus.iter().map(|m| (m.id, m.label.as_str()));
+        match rematch(menus, id, index, &was.label) {
+            Some(i) => SlotKey::Menu(self.content.menus[i].id),
+            None => key,
+        }
     }
 
     fn relayout(&mut self) {
@@ -469,20 +520,35 @@ impl MenuController {
             self.levels.clear();
             return;
         };
-        let old: Vec<(ItemId, Option<ItemId>, f64)> = self
+        let old: Vec<Shown> = self
             .levels
             .iter()
-            .map(|l| (l.menu.id, l.selected_item().map(|i| i.id), l.layout.scroll))
+            .map(|l| Shown {
+                menu: (l.menu.id, l.menu.label.clone()),
+                selected: l.selected.and_then(|row| {
+                    let item = &l.layout.rows.get(row)?.item;
+                    Some((item.id, row, item.label.clone()))
+                }),
+                scroll: l.layout.scroll,
+            })
             .collect();
+        // a submenu waiting to open from the selected row opens from that row in the new content
+        let pending = self.pending.filter(|p| {
+            old.get(p.level)
+                .and_then(|l| l.selected.as_ref())
+                .is_some_and(|(id, _, _)| *id == p.open)
+        });
         let mut new_levels: Vec<Level> = Vec::new();
-        for (i, (menu_id, sel, scroll)) in old.iter().enumerate() {
+        for (i, shown) in old.iter().enumerate() {
+            let (menu_id, label) = &shown.menu;
+            // the submenu of the row selected in its parent, which is the row it opened from
             let menu = if i == 0 {
                 Some(root.clone())
             } else {
                 new_levels[i - 1]
                     .selected_item()
                     .and_then(|r| new_levels[i - 1].menu.find(r.id))
-                    .filter(|m| m.id == *menu_id)
+                    .filter(|m| m.has_submenu && (m.id == *menu_id || m.label == *label))
                     .cloned()
             };
             let Some(menu) = menu else { break };
@@ -499,8 +565,15 @@ impl MenuController {
                     parent: p.layout.rect,
                 }
             };
-            let layout = self.popup(&menu, anchor, *scroll);
-            let selected = sel.and_then(|id| layout.index_of(id));
+            let layout = self.popup(&menu, anchor, shown.scroll);
+            let selected = shown.selected.as_ref().and_then(|(id, row, label)| {
+                let rows = layout
+                    .rows
+                    .iter()
+                    .map(|r| (r.item.id, r.item.label.as_str()));
+                // an alternate shown or hidden as Alt changes keeps its row
+                rematch(rows, *id, *row, label).or_else(|| layout.index_of(*id))
+            });
             new_levels.push(Level {
                 menu,
                 layout,
@@ -508,6 +581,15 @@ impl MenuController {
             });
         }
         self.levels = new_levels;
+        if let Some(p) = pending {
+            let open = self
+                .levels
+                .get(p.level)
+                .and_then(Level::selected_item)
+                .filter(|item| item.has_submenu)
+                .map(|item| item.id);
+            self.pending = open.map(|open| Pending { open, ..p });
+        }
         if self.levels.is_empty() {
             self.open_slot = None;
             if self.mode != Mode::TitleFocus {

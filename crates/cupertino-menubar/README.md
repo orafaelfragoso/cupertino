@@ -187,12 +187,19 @@ executor, and what it holds (the extras' task holds the system connection) with 
     File, Edit, View, the others, Window, Help; an application that exports only a GMenuModel application menu gets
     Window and Help.
   - Ids: the bar's items keep their fixed ids, all at most -1000 (-1107…-1110 for the separators the merge adds);
-    the exporter's keep theirs, so a layout update leaves an open menu in place. Each item carries its origin
+    the exporter's keep theirs, so a layout update leaves an open menu in place. An exporter that rebuilds its tree
+    under new ids (Chromium's, and so every Electron application, renumbers every item when it is told a menu is about
+    to show; the GMenuModel reader numbers its items afresh on every change) leaves it in place too: an open menu,
+    submenu and selected row are found again in the new content under the same id and label, else at the same place
+    under the same label, else under the label elsewhere, else under the same id (`controller`), and show the new
+    content's rows; the exporter is not told again that the menu shows. A menu whose item is gone closes, and so do the
+    submenus below it. Each item carries its origin
     (`item::Origin`, set to the exporter by the DBusMenu and GMenuModel readers), and an activated item is routed by the
     origin of the item shown in the menu that was open, never by its id: the bar's own items act through the server
     (rebound About, Settings… and Quit activate the exporter's item), the exporter's go to the exporter. The DBusMenu
     reader also leaves out an exporter's item whose id is in the bar's range (at most -1000), so ids never repeat in
-    one menu; the GMenuModel reader numbers its items from 1. The bar's
+    one menu; the GMenuModel reader numbers its items from 1. A submenu of the exporter's items, in the exporter's
+    menus or in the App menu, sends the exporter `AboutToShow` as it opens. The bar's
     Window and Help menus send the exporter no `AboutToShow`, so items an exporter fills in lazily there do not show.
   - Changes: a DBusMenu exporter is followed while a bar shows its menus (`follow`), so a menu the application
     changes or replaces shows its current rows, an open one included, and a chosen row carries the id the exporter

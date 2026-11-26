@@ -660,12 +660,12 @@ pub enum StatusAction {
 
 /// Whether `e` says the object has no such interface or method.
 fn is_unknown(e: &zbus::Error) -> bool {
-    const UNKNOWN: [&str; 2] = [
+    const NO_SUCH_MEMBER: [&str; 2] = [
         "org.freedesktop.DBus.Error.UnknownInterface",
         "org.freedesktop.DBus.Error.UnknownMethod",
     ];
     match e {
-        zbus::Error::MethodError(name, _, _) => UNKNOWN.contains(&name.as_str()),
+        zbus::Error::MethodError(name, _, _) => NO_SUCH_MEMBER.contains(&name.as_str()),
         zbus::Error::FDO(e) => matches!(
             **e,
             zbus::fdo::Error::UnknownInterface(_) | zbus::fdo::Error::UnknownMethod(_)

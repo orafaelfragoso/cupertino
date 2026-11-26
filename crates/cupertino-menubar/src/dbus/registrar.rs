@@ -7,14 +7,17 @@
 //! A registration lasts until its program unregisters the window or registers it again, its connection leaves the bus,
 //! or the bar finds its X11 window gone ([`Registrar::forget`]). A connection whose process the bus cannot name, as one
 //! that left while it was asked, is not kept. Several connections may register one window: `GetMenuForWindow` answers
-//! with the first.
+//! with the first, and an `InvalidArgs` error for a window none registered; `GetMenus` lists every window with that
+//! menu. `WindowRegistered` tells of a window that gets a menu or whose menu changes (another connection's, another
+//! path), `WindowUnregistered` of a window that has none any more, however its registrations went.
 
 use std::sync::{Arc, Mutex};
 
 use futures_util::StreamExt;
-use zbus::fdo::DBusProxy;
+use zbus::fdo::{self, DBusProxy};
 use zbus::message::Header;
 use zbus::names::BusName;
+use zbus::object_server::SignalEmitter;
 use zbus::zvariant::{ObjectPath, OwnedObjectPath};
 use zbus::Connection;
 
@@ -36,13 +39,57 @@ const PROTECTED_REGISTRATIONS: usize = 64;
 /// Called with every registration after each change.
 pub type Changed = Arc<dyn Fn(Vec<Registration>) + Send + Sync>;
 
+/// A window's menu, as the registrar's signals and `GetMenuForWindow` name it: the service and the object path.
+type Standing = (String, String);
+
+/// What the registrar's signals tell of.
+enum Signal {
+    Registered(u32, Standing),
+    Unregistered(u32),
+}
+
 #[derive(Default)]
 struct Registry {
     list: Vec<Registration>,
     serial: u64,
+    /// The menu of each window as last told of by the signals.
+    announced: std::collections::BTreeMap<u32, Standing>,
 }
 
 impl Registry {
+    /// The registration that stands for each window, by window: the connection that registered it first.
+    fn standing(&self) -> std::collections::BTreeMap<u32, Standing> {
+        let mut first: std::collections::BTreeMap<u32, &Registration> = Default::default();
+        for r in &self.list {
+            let kept = first.entry(r.window).or_insert(r);
+            if r.since < kept.since {
+                *kept = r;
+            }
+        }
+        first
+            .into_iter()
+            .map(|(window, r)| (window, (r.service.clone(), r.path.clone())))
+            .collect()
+    }
+
+    /// The signals that tell of the windows whose menu changed since the last call.
+    fn changes(&mut self) -> Vec<Signal> {
+        let now = self.standing();
+        let mut signals: Vec<Signal> = self
+            .announced
+            .keys()
+            .filter(|window| !now.contains_key(window))
+            .map(|window| Signal::Unregistered(*window))
+            .collect();
+        signals.extend(
+            now.iter()
+                .filter(|(window, menu)| self.announced.get(window) != Some(menu))
+                .map(|(window, menu)| Signal::Registered(*window, menu.clone())),
+        );
+        self.announced = now;
+        signals
+    }
+
     /// Keep the registration of `window` by connection `service` of process `pid`; whether the list changed (a full
     /// list may refuse it).
     fn register(&mut self, service: String, pid: u32, window: u32, path: String) -> bool {
@@ -118,6 +165,8 @@ impl Registry {
 pub struct Registrar {
     registry: Arc<Mutex<Registry>>,
     changed: Changed,
+    /// To the task that emits the registrar's signals, in the order of the changes.
+    signals: async_channel::Sender<Signal>,
 }
 
 impl Registrar {
@@ -126,6 +175,10 @@ impl Registrar {
             let mut registry = self.registry.lock().unwrap_or_else(|e| e.into_inner());
             if !change(&mut registry) {
                 return;
+            }
+            for signal in registry.changes() {
+                // closed only once the registrar's tasks end
+                let _ = self.signals.try_send(signal);
             }
             registry.list.clone()
         };
@@ -198,9 +251,9 @@ impl Service {
             .update(|r| r.remove(|reg| reg.service == sender.as_str() && reg.window == window_id));
     }
 
-    /// The registration of the window by the connection that registered it first; an empty service and the root path
-    /// when none.
-    fn get_menu_for_window(&self, window_id: u32) -> (String, OwnedObjectPath) {
+    /// The registration of the window by the connection that registered it first; `InvalidArgs` for a window no
+    /// connection registered.
+    fn get_menu_for_window(&self, window_id: u32) -> fdo::Result<(String, OwnedObjectPath)> {
         let registry = self.0.registry.lock().unwrap_or_else(|e| e.into_inner());
         registry
             .menu_for(window_id)
@@ -210,12 +263,51 @@ impl Service {
                     OwnedObjectPath::try_from(r.path.as_str()).ok()?,
                 ))
             })
-            .unwrap_or_else(|| {
-                (
-                    String::new(),
-                    OwnedObjectPath::from(ObjectPath::from_static_str_unchecked("/")),
-                )
+            .ok_or_else(|| fdo::Error::InvalidArgs(format!("window {window_id} is not registered")))
+    }
+
+    /// Every registered window with its menu (the first connection's registration), by window.
+    fn get_menus(&self) -> Vec<(u32, String, OwnedObjectPath)> {
+        let registry = self.0.registry.lock().unwrap_or_else(|e| e.into_inner());
+        registry
+            .standing()
+            .into_iter()
+            .filter_map(|(window, (service, path))| {
+                Some((window, service, OwnedObjectPath::try_from(path).ok()?))
             })
+            .collect()
+    }
+
+    #[zbus(signal)]
+    async fn window_registered(
+        emitter: &SignalEmitter<'_>,
+        window_id: u32,
+        service: &str,
+        menu_object_path: ObjectPath<'_>,
+    ) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    async fn window_unregistered(emitter: &SignalEmitter<'_>, window_id: u32) -> zbus::Result<()>;
+}
+
+/// Emit the registrar's signals as `signals` brings them, until the registrar is gone.
+async fn emit_signals(conn: Connection, signals: async_channel::Receiver<Signal>) {
+    let Ok(emitter) = SignalEmitter::new(&conn, REGISTRAR_PATH) else {
+        return;
+    };
+    while let Ok(signal) = signals.recv().await {
+        let sent = match &signal {
+            Signal::Registered(window, (service, path)) => {
+                match ObjectPath::try_from(path.as_str()) {
+                    Ok(path) => Service::window_registered(&emitter, *window, service, path).await,
+                    Err(e) => Err(e.into()),
+                }
+            }
+            Signal::Unregistered(window) => Service::window_unregistered(&emitter, *window).await,
+        };
+        if let Err(e) = sent {
+            crate::worker::report("cannot signal a change of the registered menus", e);
+        }
     }
 }
 
@@ -250,10 +342,16 @@ pub async fn serve(
     changed: Changed,
     spawner: &crate::spawned::Spawner,
 ) -> zbus::Result<Registrar> {
+    let (signals, to_emit) = async_channel::unbounded();
     let registrar = Registrar {
         registry: Arc::default(),
         changed,
+        signals,
     };
+    spawner.spawn(
+        emit_signals(conn.clone(), to_emit),
+        "cupertino-registrar-signals",
+    );
     // subscribed before the object is served, so no connection that registered can leave unseen
     let mut owners = DBusProxy::new(conn)
         .await?

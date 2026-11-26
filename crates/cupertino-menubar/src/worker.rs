@@ -73,6 +73,12 @@ pub enum Request {
         x: i32,
         y: i32,
     },
+    /// Send a status item a click or a scroll (`Activate`, `SecondaryActivate`, `ContextMenu`, `Scroll`).
+    StatusAction {
+        service: String,
+        path: String,
+        action: sni::StatusAction,
+    },
     /// Own `com.canonical.AppMenu.Registrar` while a bar exists, so toolkits keep their own menu bar otherwise.
     AppMenuRegistrar(bool),
     /// Forget registered menus, by connection and window: their X11 windows are gone.
@@ -473,9 +479,22 @@ async fn follow_status_item(
             None
         }
     };
+    // what a change names is read again of the item last read; the whole item when none was, or that reading fails
+    let mut last: Option<StatusItem> = None;
+    let mut change: Option<sni::ItemChange> = None;
     loop {
-        match sni::fetch_item(&conn, &service, &path).await {
+        let read = match (last.take(), &change) {
+            (Some(mut item), Some(change)) => {
+                match sni::refresh_item(&conn, &mut item, change).await {
+                    Ok(()) => Ok(item),
+                    Err(_) => sni::fetch_item(&conn, &service, &path).await,
+                }
+            }
+            _ => sni::fetch_item(&conn, &service, &path).await,
+        };
+        match read {
             Ok(item) => {
+                last = Some(item.clone());
                 let menu = item.menu_path.clone().map(|path| KdeAppMenu {
                     service: item.service.clone(),
                     path,
@@ -498,7 +517,8 @@ async fn follow_status_item(
         let Some(changes) = &mut changes else {
             return;
         };
-        if changes.next().await.is_none() {
+        change = changes.next().await;
+        if change.is_none() {
             return;
         }
     }
@@ -549,6 +569,18 @@ fn handle(conn: &Connection, spawner: &Spawner, request: Request) {
                 }
             },
             "cupertino-status-activate",
+        ),
+        Request::StatusAction {
+            service,
+            path,
+            action,
+        } => executor.spawn(
+            async move {
+                if let Err(e) = sni::send_action(&conn, &service, &path, action).await {
+                    report(&format!("cannot send {action:?} to {service}{path}"), e);
+                }
+            },
+            "cupertino-status-action",
         ),
         Request::AppMenuRegistrar(_)
         | Request::ForgetRegistrations(_)

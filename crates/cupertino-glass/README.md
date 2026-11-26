@@ -236,11 +236,3 @@ Images are written to `output/`. `--appearance` accepts `light`, `dark`, `light-
 `dark-high-contrast`; `--reduce-transparency`, `--window inactive` and `--interaction rollover|pressed`
 select the other recipe variants.
 
-`examples/dock_glass_parity.rs` measures the Dock bar's glass against a render of a fixed scene given as a PNG (a
-300 × 70 pt bar with 22 pt continuous corners over a checker, white bars and a grey ramp, at a scale of 2): the CPU
-model at that scale over the scene's backdrop, captured and blurred as the compositor does, and the error in 8-bit
-levels inside the bar, along its edge and just outside it (`--render`, `--diff`, `--against` for another render).
-
-```
-cargo run --release -p cupertino-glass --example dock_glass_parity -- SCENE.png light|dark [--render OUT.png]
-```

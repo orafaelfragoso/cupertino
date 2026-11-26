@@ -231,6 +231,17 @@ impl Model {
             None => Vec::new(),
         };
         match event {
+            // the application's menus open on the bar that shows them for its active window, the first of them
+            worker::Event::ActivationRequested { source, item } => {
+                let bar = (0..self.bars.len())
+                    .find(|i| self.bars[*i].feed.source(&self.shared) == source);
+                if let Some(i) = bar {
+                    let item = crate::item::ItemId(item);
+                    let outcome = self.bars[i].controller.open_item(item);
+                    commands.extend(self.apply(i, outcome));
+                }
+                return commands;
+            }
             worker::Event::Layout { source, root } => self.shared.apply_layout(&source, *root),
             worker::Event::LayoutFailed { source } => self.shared.layout_failed(&source),
             worker::Event::StatusUpdated { item } => {

@@ -255,6 +255,7 @@ impl Chords {
         Shortcut {
             modifiers,
             key: key.to_string(),
+            before: Vec::new(),
         }
     }
 

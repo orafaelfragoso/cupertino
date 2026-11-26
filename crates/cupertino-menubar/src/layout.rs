@@ -157,6 +157,9 @@ pub struct BarContent {
     pub indicator: Option<StatusEntry>,
     pub clock: String,
     pub control_panel: bool,
+    /// The application's menus ask to be noticed (its DBusMenu exporter's `Status` is `notice`): the bold application
+    /// name shows a dot after it.
+    pub notice: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]

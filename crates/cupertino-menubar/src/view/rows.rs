@@ -2,6 +2,7 @@
 //! panels, with the marks they draw.
 
 use super::*;
+use crate::item::Disposition;
 
 pub(super) fn menu<M: Clone + 'static>(
     scene: &BarScene<'_>,
@@ -119,6 +120,45 @@ struct RowNode<M> {
     metrics: MenuMetrics,
     font: BarFont,
     input: fn(Input) -> M,
+}
+
+/// Half the length of the dash an item neither on nor off shows in the marks' column.
+const MIXED_HALF_WIDTH: f64 = 4.0;
+/// The text of a row its exporter marks a warning (DBusMenu `disposition` `warning`): the system orange, (255, 159,
+/// 10) dark and (255, 149, 0) light. The theme names no warning colour.
+const WARNING_TEXT_DARK: Rgba = [1.0, 159.0 / 255.0, 10.0 / 255.0, 1.0];
+const WARNING_TEXT_LIGHT: Rgba = [1.0, 149.0 / 255.0, 0.0, 1.0];
+/// The text of a row marked an alert where the theme has no destructive colour: the system red, (255, 69, 58)
+/// dark and (255, 59, 48) light.
+const ALERT_TEXT_DARK: Rgba = [1.0, 69.0 / 255.0, 58.0 / 255.0, 1.0];
+const ALERT_TEXT_LIGHT: Rgba = [1.0, 59.0 / 255.0, 48.0 / 255.0, 1.0];
+
+/// The text colour of a row of `disposition` off the highlight: a warning orange, an alert the theme's destructive
+/// red (its destructive fill); `None` keeps the menu's text colour, as for a normal or an informative row (every row
+/// informs, so an informative one is not set apart).
+fn disposition_text(env: &Environment, disposition: Disposition) -> Option<Rgba> {
+    let dark = dark(env);
+    match disposition {
+        Disposition::Normal | Disposition::Informative => None,
+        Disposition::Warning => Some(if dark {
+            WARNING_TEXT_DARK
+        } else {
+            WARNING_TEXT_LIGHT
+        }),
+        Disposition::Alert => Some(
+            env.theme
+                .colors
+                .get(ColorRole::DestructiveFill, StateVariant::NORMAL)
+                .map_or(
+                    if dark {
+                        ALERT_TEXT_DARK
+                    } else {
+                        ALERT_TEXT_LIGHT
+                    },
+                    |c| [c.r, c.g, c.b, c.a],
+                ),
+        ),
+    }
 }
 
 /// Opacity of the secondary text of a status panel: its headings, notes and the disclosure's label.
@@ -365,26 +405,48 @@ impl<M> RowNode<M> {
     }
 
     /// The shortcut at the right end of the row's `width`: the key in its column, the modifier glyphs right-aligned
-    /// just before it. Returns where the modifier glyphs begin.
-    fn shortcut(&self, cx: &mut PaintCx<'_>, sc: &ShortcutGlyphs, width: f64, c: Rgba) -> f64 {
-        let height = cx.size().height;
+    /// just before it. Returns where the modifier glyphs begin. In a row laid out right to left (`rtl`) the shortcut
+    /// stands as far from the left end as it would from the right, read in the same order.
+    fn shortcut(
+        &self,
+        cx: &mut PaintCx<'_>,
+        sc: &ShortcutGlyphs,
+        width: f64,
+        c: Rgba,
+        rtl: bool,
+    ) -> f64 {
+        let (full, height) = (cx.size().width, cx.size().height);
         let key_x = width - self.metrics.trailing_inset - self.key_width;
+        let modifiers_x = key_x - self::width(cx, &self.font, &sc.modifiers);
+        let shift = if rtl {
+            full - (key_x + self.key_width) - modifiers_x
+        } else {
+            0.0
+        };
         // the keys stand centred in their column, so keys of different widths line up on its middle
         let centred =
             key_x + (self.key_width - self::width(cx, &self.font, &sc.key)).max(0.0) / 2.0;
-        text(cx, &self.font, &sc.key, centred, 0.0, height, false, c);
-        let modifiers_x = key_x - self::width(cx, &self.font, &sc.modifiers);
         text(
             cx,
             &self.font,
-            &sc.modifiers,
-            modifiers_x,
+            &sc.key,
+            centred + shift,
             0.0,
             height,
             false,
             c,
         );
-        modifiers_x
+        text(
+            cx,
+            &self.font,
+            &sc.modifiers,
+            modifiers_x + shift,
+            0.0,
+            height,
+            false,
+            c,
+        );
+        modifiers_x + shift
     }
 
     /// The search field: a box with the text, its selection and a caret that fades in and out, or the dimmed label while it is empty.
@@ -537,7 +599,7 @@ impl<M: Clone + 'static> Widget<M> for RowNode<M> {
                 .row
                 .shortcut
                 .as_ref()
-                .map(|sc| self.shortcut(cx, sc, size.width, faded_text));
+                .map(|sc| self.shortcut(cx, sc, size.width, faded_text, false));
             self.field(cx, field, &palette, chord_left, opacity);
             return;
         }
@@ -584,7 +646,7 @@ impl<M: Clone + 'static> Widget<M> for RowNode<M> {
         let base = if self.hot {
             palette.row_highlight_text
         } else {
-            palette.text
+            disposition_text(cx.env(), item.disposition).unwrap_or(palette.text)
         };
         let c = faded(
             base,
@@ -595,16 +657,29 @@ impl<M: Clone + 'static> Widget<M> for RowNode<M> {
             },
         );
         let middle = size.height / 2.0;
+        // a menu laid out right to left draws each row mirrored: the mark and the label at the right, the shortcut and
+        // the arrow at the left
+        let (rtl, full) = (item.rtl, size.width);
+        let px = |x: f64| if rtl { full - x } else { x };
+        let span = |x: f64, w: f64| if rtl { full - x - w } else { x };
         if item.toggle.is_marked() {
             // the mark stands in the column before the labels, centred on the labels' edge of a menu without marks
             let x = m.padding_x;
             match item.toggle {
-                Toggle::Radio(_) => circle(cx, Point::new(x, middle), RADIO_DOT_RADIUS, c),
+                // neither on nor off: a dash
+                toggle if toggle.is_mixed() => {
+                    let dash = [
+                        Point::new(px(x - MIXED_HALF_WIDTH), middle),
+                        Point::new(px(x + MIXED_HALF_WIDTH), middle),
+                    ];
+                    polyline(cx, &dash, CHECK_STROKE, c);
+                }
+                Toggle::Radio(_) => circle(cx, Point::new(px(x), middle), RADIO_DOT_RADIUS, c),
                 _ => {
                     let check = [
-                        Point::new(x - 4.0, middle),
-                        Point::new(x - 1.2, middle + 3.2),
-                        Point::new(x + 4.2, middle - 3.8),
+                        Point::new(px(x - 4.0), middle),
+                        Point::new(px(x - 1.2), middle + 3.2),
+                        Point::new(px(x + 4.2), middle - 3.8),
                     ];
                     polyline(cx, &check, CHECK_STROKE, c);
                 }
@@ -612,21 +687,24 @@ impl<M: Clone + 'static> Widget<M> for RowNode<M> {
         }
         if let Some(icon) = self.icons.row_icon(item, row_icon_px(cx.env().scale)) {
             let origin = self.row.label_x - m.icon_column;
-            let centre = Point::new(origin + ROW_ICON_PT / 2.0, middle);
+            let centre = Point::new(px(origin + ROW_ICON_PT / 2.0), middle);
             image(cx, &icon.tinted(c), centre, ROW_ICON_PT);
         }
+        let label_width = width(cx, &self.font, &item.label);
+        let label_x = span(self.row.label_x, label_width);
         text(
             cx,
             &self.font,
             &item.label,
-            self.row.label_x,
+            label_x,
             0.0,
             size.height,
             false,
             c,
         );
         if let Some(detail) = &self.row.detail {
-            let x = self.row.label_x + width(cx, &self.font, &item.label) + m.detail_gap;
+            let x = self.row.label_x + label_width + m.detail_gap;
+            let x = span(x, width(cx, &self.font, detail));
             text(
                 cx,
                 &self.font,
@@ -650,14 +728,14 @@ impl<M: Clone + 'static> Widget<M> for RowNode<M> {
                 (true, false) => faded(c, SHORTCUT_ALPHA),
                 (false, false) => faded(c, DISABLED_SHORTCUT_ALPHA),
             };
-            self.shortcut(cx, sc, room, keys);
+            self.shortcut(cx, sc, room, keys, rtl);
         }
         if item.has_submenu {
             let x = size.width - m.trailing_inset - CHEVRON_HALF_WIDTH - CHEVRON_SHIFT;
             let chevron = [
-                Point::new(x - CHEVRON_HALF_WIDTH, middle - 3.6),
-                Point::new(x + CHEVRON_HALF_WIDTH, middle),
-                Point::new(x - CHEVRON_HALF_WIDTH, middle + 3.6),
+                Point::new(px(x - CHEVRON_HALF_WIDTH), middle - 3.6),
+                Point::new(px(x + CHEVRON_HALF_WIDTH), middle),
+                Point::new(px(x - CHEVRON_HALF_WIDTH), middle + 3.6),
             ];
             polyline(cx, &chevron, CHEVRON_STROKE, c);
         }
@@ -698,12 +776,16 @@ impl<M: Clone + 'static> Widget<M> for RowNode<M> {
                 cx.role(Role::MenuItemRadio);
                 cx.value(checked(on));
             }
+            Toggle::RadioIndeterminate => {
+                cx.role(Role::MenuItemRadio);
+                cx.value(AccessibleValue::Toggle(Checked::Mixed));
+            }
         }
         cx.name(item.label.clone());
         if let Some(place) = self.place {
             cx.item_index(place);
         }
-        if let Some(detail) = &self.row.detail {
+        if let Some(detail) = self.row.detail.as_ref().or(item.description.as_ref()) {
             cx.description(detail.clone());
         }
         cx.states(AccessibleStates {

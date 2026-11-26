@@ -49,6 +49,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 mod body;
 mod rows;
+mod tip;
+
+pub use tip::{tip_text, LINE_JOIN};
 
 /// The `app_id` of a bar's window is this followed by the bar's number; the roles give it its layer surface.
 pub const BAR_APP_ID: &str = "cupertino-menubar.bar-";
@@ -125,6 +128,10 @@ impl BarId {
     fn menu(self, level: usize) -> WindowKey {
         WindowKey(Key::from(format!("menu-{}-{level}", self.0)))
     }
+
+    fn tip(self) -> WindowKey {
+        WindowKey(Key::from(format!("tip-{}", self.0)))
+    }
 }
 
 /// What the pointer did, at a point of the bar's coordinates.
@@ -141,6 +148,8 @@ pub enum BarPointer {
     },
     /// Assistive technology clicked the slot or the row around the point.
     Click(BarPoint),
+    /// The pointer left the bar's window.
+    Leave,
 }
 
 /// An input event's time as the menus' sources take it: milliseconds of the window system's monotonic clock, wrapping
@@ -166,6 +175,8 @@ pub enum Input {
     },
     /// The compositor dismissed the bar's menus.
     Dismissed(BarId),
+    /// The pointer reached a status item's tip, or the compositor dismissed it: the tip goes.
+    TipDismissed(BarId),
     /// The compositor closed the bar's window.
     Closed(BarId),
     /// The bar's own window got the keyboard, or lost it.
@@ -298,6 +309,7 @@ pub fn windows<M: Clone + 'static>(scene: &BarScene<'_>, input: fn(Input) -> M) 
     if let Some(prompt) = &scene.prompt {
         windows.push(join_prompt(scene.bar, prompt, input));
     }
+    windows.extend(tip::window(scene, input));
     windows
 }
 
@@ -496,7 +508,7 @@ fn bar<M: Clone + 'static>(scene: &BarScene<'_>, input: fn(Input) -> M) -> Windo
                 Element::new(HighlightPill { rect, radius, tone })
                     .key(format!("highlight {:?}", slot.key))
             });
-            pill.into_iter().chain([Element::new(SlotNode {
+            let node = Element::new(SlotNode {
                 place,
                 bar: scene.bar,
                 slot: slot.clone(),
@@ -509,7 +521,13 @@ fn bar<M: Clone + 'static>(scene: &BarScene<'_>, input: fn(Input) -> M) -> Windo
                 font: scene.font,
                 tone,
                 input,
-            })])
+            });
+            // a status item's tip is anchored below its slot
+            let node = match &slot.key {
+                SlotKey::Status(_) => node.key(tip::anchor(&slot.key)),
+                _ => node,
+            };
+            pill.into_iter().chain([node])
         })
         .collect();
     Window {
@@ -1068,6 +1086,14 @@ impl<M: Clone + 'static> Widget<M> for Root<M> {
     fn event(&self, _: &mut (), event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
         let at = |p: Point| BarPoint::new(p.x + self.origin.x, p.y + self.origin.y);
         let input = match event {
+            // the pointer left the window itself, not a node in it
+            Event::Pointer(PointerEvent::Leave, time) if cx.node() == cx.target() => {
+                Input::Pointer {
+                    bar: self.bar,
+                    pointer: BarPointer::Leave,
+                    time: input_millis(*time),
+                }
+            }
             Event::Pointer(pointer, time) if cx.phase() == Phase::Capture => {
                 let pointer = match *pointer {
                     PointerEvent::Enter { position } | PointerEvent::Motion { position } => {

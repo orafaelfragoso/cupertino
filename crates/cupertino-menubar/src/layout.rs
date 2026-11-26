@@ -139,6 +139,9 @@ pub struct StatusEntry {
     pub width: f64,
     /// The context menu (a submenu item whose children are the entries), if the item has one.
     pub menu: Option<MenuItem>,
+    /// The primary button opens the menu, as for the bar's own items and a status notifier item that is only a menu
+    /// (`ItemIsMenu`); otherwise it activates the item, and the secondary button opens the menu.
+    pub primary_opens_menu: bool,
 }
 
 /// Everything the bar shows for one output.

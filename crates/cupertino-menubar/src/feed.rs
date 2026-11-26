@@ -5,7 +5,7 @@
 //! and the menu trees loaded from exporters); a [`BarFeed`] holds what one output's
 //! menu-bar object reports (the active application and its window).
 
-use crate::dbus::sni::{self, StatusItem};
+use crate::dbus::sni::{self, PrimaryAction, StatusItem};
 use crate::desktop::AppName;
 use crate::extras::{tray_glyph, tray_radio, ExtraGlyph, ExtraKind, Extras, FrontApp, SystemRow};
 use crate::fallback::{self, Chords, FallbackAction, WindowRow};
@@ -503,6 +503,7 @@ impl BarFeed {
             id: SCREEN_CAPTURE_SLOT.to_owned(),
             width: PRIVACY_DOT_PT,
             menu: None,
+            primary_opens_menu: true,
         });
         let own: Vec<ExtraKind> = shared
             .extras
@@ -514,6 +515,7 @@ impl BarFeed {
             id: kind.slot_id().to_owned(),
             width: STATUS_ICON_PT,
             menu: Some(shared.extras.status_menu(kind)),
+            primary_opens_menu: true,
         });
         let items = shared
             .status
@@ -535,6 +537,7 @@ impl BarFeed {
                     has_submenu: true,
                     ..m
                 }),
+                primary_opens_menu: s.item.primary_action() == PrimaryAction::ShowMenu,
             });
         let status = extras.chain(items).collect();
         let system_menu = shared

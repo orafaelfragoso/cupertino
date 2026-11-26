@@ -244,6 +244,38 @@ fn a_request_to_open_an_item_opens_its_menus_as_if_clicked() {
     assert!(!out.consumed && told(&out).is_empty());
 }
 
+#[test]
+fn a_request_to_open_an_item_waits_for_no_press_and_no_hidden_or_locked_bar() {
+    let mut c = controller();
+    // a press that opened File is held: the request would take the menus from under it
+    let file = title(&c, 1);
+    c.pointer_press(file, 1.0);
+    let out = c.open_item(ItemId(10));
+    assert!(!out.consumed && told(&out).is_empty());
+    assert_eq!(c.open_slot(), Some(&SlotKey::Menu(ItemId(1))));
+    c.pointer_release(file, 1.0 + CLICK);
+    let out = c.open_item(ItemId(10));
+    assert_eq!(told(&out), [(false, 1), (true, 10)]);
+
+    // a press on a slot that opens nothing is held too
+    c.close();
+    c.set_content(BarContent {
+        clock: "9:41".into(),
+        ..content(menus())
+    });
+    let clock = c.layout().slot(&SlotKey::Clock).unwrap().rect;
+    let clock = Point::new(clock.x + clock.w / 2.0, clock.y + 1.0);
+    c.pointer_press(clock, 2.0);
+    assert!(!c.open_item(ItemId(10)).consumed);
+    c.pointer_release(clock, 2.0 + CLICK);
+    assert!(c.open_item(ItemId(10)).consumed);
+
+    // a bar that gives way to an overview, or a locked session, opens nothing a source asks for
+    assert!(routing::opens_requested_menu(false, false));
+    assert!(!routing::opens_requested_menu(true, false));
+    assert!(!routing::opens_requested_menu(false, true));
+}
+
 /// A bar fed an exporter's tree, as the component feeds it.
 fn bar() -> (BarFeed, Shared, MenuController) {
     let mut shared = Shared::default();

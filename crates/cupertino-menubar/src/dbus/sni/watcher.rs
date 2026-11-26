@@ -3,7 +3,8 @@
 //! An item registers with a bus name (its service, the item at [`DEFAULT_ITEM_PATH`]), a `service/path` string, or a
 //! bare object path (the caller's own unique name and that path). An item is kept until its service or the connection
 //! that registered it loses its name: the connection leaves the bus, or the well-known name the item gave passes to
-//! another owner. A registration is announced (the watcher's signals, [`WatcherEvent::ItemRegistered`]) only once its
+//! another owner; an item registered again by the owner of its service is that owner's from then on, so one another
+//! connection registered first under a name it does not own stays while the owner does. A registration is announced (the watcher's signals, [`WatcherEvent::ItemRegistered`]) only once its
 //! service is known to be on the bus, so one that left while it registered is never shown.
 
 use std::sync::{Arc, Mutex, PoisonError};
@@ -94,6 +95,15 @@ impl WatcherState {
             announced: false,
         });
         Added::New
+    }
+
+    /// The item `id`, registered by another connection first, is registered again by `owner`, the owner of its
+    /// service: it is the owner's from then on, so an item registered under a name its registrar does not own leaves
+    /// with the name's owner, not with the registrar.
+    fn adopt(&mut self, id: &str, owner: &str) {
+        if let Some(entry) = self.items.iter_mut().find(|e| e.id == id) {
+            entry.sender = owner.to_owned();
+        }
     }
 
     /// Announce the item `id` when it is still kept and was not yet; whether it was.
@@ -273,15 +283,24 @@ async fn announce(conn: &Connection, changes: &[Announce]) {
     }
 }
 
-/// Whether the name `name` has an owner; `false` when the bus does not answer, so nothing is shown that may be gone.
-async fn has_owner(conn: &Connection, name: &str) -> bool {
-    let Ok(name) = BusName::try_from(name) else {
-        return false;
-    };
-    match fdo::DBusProxy::new(conn).await {
-        Ok(bus) => bus.name_has_owner(name).await.unwrap_or(false),
-        Err(_) => false,
+/// The unique name of the owner of `name` (itself, for a unique name on the bus); `None` when it has none or the bus
+/// does not answer, so nothing is shown that may be gone.
+async fn name_owner(conn: &Connection, name: &str) -> Option<String> {
+    let name = BusName::try_from(name).ok()?;
+    let bus = fdo::DBusProxy::new(conn).await.ok()?;
+    let owner = bus.get_name_owner(name).await.ok()?;
+    Some(owner.to_string())
+}
+
+/// `name` lost its owner: drop its items and hosts, and tell of the items that were announced, and of the hosts when
+/// `hosts` (those of a host whose registration was not told of are not).
+async fn lost(shared: &Shared, conn: &Connection, name: &str, hosts: bool) {
+    let (items, hosts_went) = shared.lock().name_lost(name);
+    let mut changes: Vec<Announce> = items.into_iter().map(Announce::ItemUnregistered).collect();
+    if hosts && hosts_went {
+        changes.push(Announce::HostUnregistered);
     }
+    announce(conn, &changes).await;
 }
 
 async fn register_item(
@@ -296,18 +315,26 @@ async fn register_item(
     BusName::try_from(service.as_str()).map_err(|_| invalid())?;
     ObjectPath::try_from(path.as_str()).map_err(|_| invalid())?;
     let id = format!("{service}{path}");
-    match shared.lock().add(&id, &service, sender) {
-        Added::Known => return Ok(()),
+    let known = match shared.lock().add(&id, &service, sender) {
+        Added::Known => true,
         Added::Full => {
             return Err(fdo::Error::LimitsExceeded(format!(
                 "too many status items to register `{registered}`"
             )))
         }
-        Added::New => {}
-    }
+        Added::New => false,
+    };
     // kept before the bus is asked, so a leaving told of meanwhile drops it; announced only once it is known to stay
-    if !has_owner(conn, &service).await {
-        shared.lock().name_lost(&service);
+    let owner = name_owner(conn, &service).await;
+    if known {
+        // the owner of the service registering an item another connection registered first takes it over
+        if owner.as_deref() == Some(sender) {
+            shared.lock().adopt(&id, sender);
+        }
+        return Ok(());
+    }
+    if owner.is_none() {
+        lost(shared, conn, &service, true).await;
         return Err(fdo::Error::NameHasNoOwner(format!(
             "`{service}` is not on the bus"
         )));
@@ -340,8 +367,9 @@ async fn register_host(
             sender: sender.to_owned(),
         });
     }
-    if !has_owner(conn, sender).await {
-        shared.lock().name_lost(sender);
+    if name_owner(conn, sender).await.is_none() {
+        // the caller left: its items go, told of, and the host whose registration was never told of goes silently
+        lost(shared, conn, sender, false).await;
         return Ok(());
     }
     announce(conn, &[Announce::HostRegistered]).await;
@@ -392,13 +420,7 @@ impl WatcherService {
                     if args.old_owner().is_none() {
                         continue;
                     }
-                    let (items, hosts) = watched.lock().name_lost(args.name().as_str());
-                    let mut changes: Vec<Announce> =
-                        items.into_iter().map(Announce::ItemUnregistered).collect();
-                    if hosts {
-                        changes.push(Announce::HostUnregistered);
-                    }
-                    announce(&emit_conn, &changes).await;
+                    lost(&watched, &emit_conn, args.name().as_str(), true).await;
                 }
             },
             "menubar-sni-watch",

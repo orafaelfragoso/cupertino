@@ -1,18 +1,23 @@
 //! Clicks and scrolls on status items, from the controller through the routing and the worker to an item on a private
-//! session bus: the primary button activates an item without a menu, the secondary one asks it for its context menu,
-//! the middle one sends its secondary action, each at the pointer's place in the compositor space; an item with a menu
-//! opens it for either button and is sent nothing; scrolls arrive as whole steps, a touchpad's gathered into them.
+//! session bus, as the StatusNotifierItem specification has them: the primary button activates an item, the secondary
+//! one opens its menu or, without one, asks it for its context menu, the middle one sends its secondary action, each
+//! at the pointer's place in the compositor space; an item that is only a menu opens it for the primary button too;
+//! scrolls arrive as whole steps, a touchpad's gathered into them. Then an item's tip: after the pointer rests on it,
+//! put away by a press, leaving it or the bar, and an open menu.
 
 // a test owns its thread: it blocks on the bus
 #![allow(clippy::disallowed_methods)]
 
-use cupertino_menubar::controller::{Button, Effect, MenuController, Outcome};
-use cupertino_menubar::dbus::sni::StatusItem;
+use cupertino_menubar::controller::{
+    Button, Effect, MenuController, Outcome, STATUS_TOOLTIP_DELAY,
+};
+use cupertino_menubar::dbus::sni::{StatusItem, StatusToolTip};
 use cupertino_menubar::feed::{BarFeed, Shared, StatusState};
 use cupertino_menubar::geom::{Point, Rect};
 use cupertino_menubar::item::MenuItem;
 use cupertino_menubar::layout::{MonoMeasure, SlotKey};
 use cupertino_menubar::routing::{self, Action, Context};
+use cupertino_menubar::view;
 use cupertino_menubar::worker::{Request, Worker};
 
 use crate::bus::{within, Bus};
@@ -76,6 +81,7 @@ impl Bar {
         shared.set_status(state("plain", service, false, false));
         shared.set_status(state("menu-only", service, false, true));
         shared.set_status(state("with-menu", service, true, false));
+        shared.set_status(state("menu-item", service, true, true));
         let feed = BarFeed::new(0, false, false);
         let output = Rect::new(0.0, 0.0, 1600.0, 900.0);
         let mut controller = MenuController::new(output, Box::new(MonoMeasure::default()));
@@ -166,23 +172,43 @@ fn clicks_and_scrolls_on_an_item_reach_it_with_the_pointers_place() {
         sent.extend(bar.requests(out));
         expected.push(format!("ContextMenu {x} {y}"));
 
-        // an item with a menu opens it for the primary and the secondary button, the middle one acts
+        // an item with a menu is activated by the primary button and opens its menu for the secondary one; the
+        // middle one sends its secondary action
         let with_menu = bar.on("with-menu");
-        for (i, button) in [Button::Primary, Button::Secondary].into_iter().enumerate() {
-            let now = 3.0 + i as f64;
-            let out = bar.click(with_menu, button, now);
-            assert!(bar.requests(out).is_empty(), "{button:?} opens the menu");
-            assert_eq!(
-                bar.controller.open_slot(),
-                Some(&SlotKey::Status("with-menu".into()))
-            );
-            bar.controller.close();
-        }
         let (x, y) = screen(with_menu);
+        let out = bar.click(with_menu, Button::Primary, 3.0);
+        assert!(
+            !bar.controller.is_open(),
+            "the primary button opens no menu"
+        );
+        sent.extend(bar.requests(out));
+        expected.push(format!("Activate {x} {y}"));
+        let out = bar.click(with_menu, Button::Secondary, 4.0);
+        assert!(
+            bar.requests(out).is_empty(),
+            "the secondary button opens the menu"
+        );
+        assert_eq!(
+            bar.controller.open_slot(),
+            Some(&SlotKey::Status("with-menu".into()))
+        );
+        bar.controller.close();
         let out = bar.click(with_menu, Button::Middle, 5.0);
         assert!(!bar.controller.is_open());
         sent.extend(bar.requests(out));
         expected.push(format!("SecondaryActivate {x} {y}"));
+
+        // an item that is only a menu opens it for the primary button as for the secondary one
+        let menu_item = bar.on("menu-item");
+        for (i, button) in [Button::Primary, Button::Secondary].into_iter().enumerate() {
+            let out = bar.click(menu_item, button, 5.5 + i as f64 * 0.1);
+            assert!(bar.requests(out).is_empty(), "{button:?} opens the menu");
+            assert_eq!(
+                bar.controller.open_slot(),
+                Some(&SlotKey::Status("menu-item".into()))
+            );
+            bar.controller.close();
+        }
 
         // a touchpad's movement is gathered into steps, a turn back starts again, a wheel's detents are steps
         for (steps, call) in [
@@ -231,4 +257,74 @@ fn a_press_is_released_by_its_own_button() {
             ..
         }
     )));
+}
+
+#[test]
+fn an_items_tip_shows_once_the_pointer_rests_on_it() {
+    let mut bar = Bar::new(":1.1");
+    let (plain, with_menu) = (bar.on("plain"), bar.on("with-menu"));
+    let shown = |bar: &Bar| bar.controller.tooltip().cloned();
+    let tip = Some(SlotKey::Status("plain".into()));
+
+    bar.controller.pointer_move(plain, 1.0);
+    assert_eq!(shown(&bar), None, "not before the pointer rested");
+    assert_eq!(
+        bar.controller.next_deadline(),
+        Some(1.0 + STATUS_TOOLTIP_DELAY)
+    );
+    // moving within the item keeps the wait going
+    bar.controller
+        .pointer_move(Point::new(plain.x + 1.0, plain.y), 1.3);
+    let out = bar.controller.tick(1.0 + STATUS_TOOLTIP_DELAY);
+    assert!(out.effects.contains(&Effect::Redraw));
+    assert_eq!(shown(&bar), tip);
+
+    // a press puts it away until the pointer leaves the item and comes back
+    bar.controller.button_press(plain, Button::Middle, 2.0);
+    bar.controller.button_release(plain, Button::Middle, 2.05);
+    assert_eq!(shown(&bar), None);
+    bar.controller.tick(5.0);
+    assert_eq!(shown(&bar), None, "it stays away while the pointer stays");
+    bar.controller.pointer_move(with_menu, 6.0);
+    bar.controller.pointer_move(plain, 6.1);
+    bar.controller.tick(6.1 + STATUS_TOOLTIP_DELAY);
+    assert_eq!(shown(&bar), tip);
+
+    // the pointer leaving the bar puts it away, and an open menu hides it
+    bar.controller.pointer_leave(7.0);
+    assert_eq!(shown(&bar), None);
+    assert_eq!(bar.controller.next_deadline(), None);
+    bar.controller.pointer_move(with_menu, 8.0);
+    bar.controller.tick(8.0 + STATUS_TOOLTIP_DELAY);
+    assert!(shown(&bar).is_some());
+    bar.click(with_menu, Button::Secondary, 9.0);
+    assert!(bar.controller.is_open());
+    assert_eq!(shown(&bar), None);
+}
+
+#[test]
+fn an_items_tip_is_its_tooltip_on_one_line_else_its_title() {
+    let mut shared = Shared::default();
+    let mut tipped = state("tipped", ":1.1", false, false);
+    tipped.item.tooltip = StatusToolTip {
+        title: "Sync".into(),
+        description: "<b>3</b> files<br/>up to date".into(),
+        ..StatusToolTip::default()
+    };
+    shared.set_status(tipped);
+    shared.set_status(state("titled", ":1.1", false, false));
+    let mut bare = state("bare", ":1.1", false, false);
+    bare.item.title = " ".into();
+    shared.set_status(bare);
+    assert_eq!(
+        view::tip_text(&shared, "tipped").as_deref(),
+        Some(
+            ["Sync", "3 files", "up to date"]
+                .join(view::LINE_JOIN)
+                .as_str()
+        )
+    );
+    assert_eq!(view::tip_text(&shared, "titled").as_deref(), Some("titled"));
+    assert_eq!(view::tip_text(&shared, "bare"), None);
+    assert_eq!(view::tip_text(&shared, "gone"), None);
 }

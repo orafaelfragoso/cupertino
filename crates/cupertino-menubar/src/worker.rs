@@ -78,6 +78,17 @@ pub enum Request {
         item: i32,
         token: Option<String>,
     },
+    /// An item of a GMenuModel exporter was chosen and its activation waits for the bar's activation token: take what
+    /// it activates now (its action's name and target, and the object that owns it) under `click`, so an exporter that
+    /// rebuilds its tree meanwhile, numbering its items afresh, still has the chosen item's action run
+    /// ([`Request::ActivateChosen`]).
+    ChooseGtk {
+        props: GtkMenuProps,
+        item: i32,
+        click: u64,
+    },
+    /// Run the activation taken under `click` ([`Request::ChooseGtk`]), handing it `token`.
+    ActivateChosen { click: u64, token: Option<String> },
     /// Send a status item a click or a scroll (`Activate`, `SecondaryActivate`, `ContextMenu`, `Scroll`), at a point
     /// of the compositor space.
     StatusAction {
@@ -590,6 +601,8 @@ fn handle(conn: &Connection, spawner: &Spawner, request: Request) {
         | Request::FetchGtk(_)
         | Request::ReleaseGtk(_)
         | Request::ActivateGtk { .. }
+        | Request::ChooseGtk { .. }
+        | Request::ActivateChosen { .. }
         | Request::MenuEvent { .. } => {
             unreachable!("the worker's loop handles the registrar, the followed menus and the GMenuModel exporters")
         }

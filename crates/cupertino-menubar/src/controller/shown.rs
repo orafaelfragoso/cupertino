@@ -21,7 +21,7 @@ impl MenuController {
         millis.wrapping_add(since)
     }
 
-    fn at(&mut self, now: f64) {
+    pub(super) fn at(&mut self, now: f64) {
         self.clock = now;
     }
 
@@ -75,7 +75,8 @@ impl MenuController {
 
     pub fn pointer_move(&mut self, pos: Point, now: f64) -> Outcome {
         self.at(now);
-        let out = self.moved(pos, now);
+        let mut out = self.moved(pos, now);
+        self.hover_moved(pos, now, &mut out);
         self.synced(out)
     }
 
@@ -94,7 +95,8 @@ impl MenuController {
     /// ([`Effect::SlotActivated`]).
     pub fn button_press(&mut self, pos: Point, button: Button, now: f64) -> Outcome {
         self.at(now);
-        let out = self.pressed(pos, button, now);
+        let mut out = self.pressed(pos, button, now);
+        self.hover_dismissed(&mut out);
         self.synced(out)
     }
 
@@ -113,14 +115,16 @@ impl MenuController {
     /// scroll over it; a scroll the other way or over another slot starts again.
     pub fn pointer_scroll(&mut self, pos: Point, steps: (f64, f64), now: f64) -> Outcome {
         self.at(now);
-        let out = self.scrolled(pos, steps);
+        let mut out = self.scrolled(pos, steps);
+        self.hover_dismissed(&mut out);
         self.synced(out)
     }
 
     /// Advance timers (a submenu opening, the end of the way into a submenu).
     pub fn tick(&mut self, now: f64) -> Outcome {
         self.at(now);
-        let out = self.ticked(now);
+        let mut out = self.ticked(now);
+        self.hover_ticked(now, &mut out);
         self.synced(out)
     }
 
@@ -133,7 +137,8 @@ impl MenuController {
 
     pub fn key(&mut self, key: Key, now: f64) -> Outcome {
         self.at(now);
-        let out = self.keyed(key, now);
+        let mut out = self.keyed(key, now);
+        self.hover_dismissed(&mut out);
         self.synced(out)
     }
 
@@ -170,10 +175,11 @@ impl MenuController {
     /// The source asks for the menu of `item` to be opened (DBusMenu `ItemActivationRequested`): the title's menu that
     /// holds it opens as if clicked, with the submenus on the way to it open and their rows selected; a submenu's own
     /// menu opens too, an item without one is selected. Nothing happens for an item no menu of the bar holds, a
-    /// disabled one on the way, or while a chosen row flashes.
+    /// disabled one on the way, while a chosen row flashes, or while the pointer holds a press the bar follows (it
+    /// opened a menu, pressed in one or pressed a slot), which the request would take the menus from under.
     pub fn open_item(&mut self, item: ItemId) -> Outcome {
         let mut out = Outcome::default();
-        if self.flash.is_some() {
+        if self.flash.is_some() || self.held.is_some() || self.pressed_button.is_some() {
             return out;
         }
         let found = self.menu_slots().into_iter().find_map(|key| {

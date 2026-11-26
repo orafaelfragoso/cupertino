@@ -141,8 +141,9 @@ pub enum Message {
         launch: u64,
         token: Option<String>,
     },
-    /// The activation token for activating an item of a GMenuModel exporter, which the activation hands over.
-    GtkToken(Box<crate::source::GtkMenuProps>, i32, Option<String>),
+    /// The activation token of a chosen item of a GMenuModel exporter, by click, which the activation the worker took
+    /// for the click hands over ([`Request::ChooseGtk`]).
+    GtkToken(u64, Option<String>),
     /// A task that answers nothing ended.
     Done,
 }
@@ -210,6 +211,10 @@ pub struct Model {
     /// Launches waiting for their activation token, by number.
     pending: HashMap<u64, Launch>,
     next_launch: u64,
+    /// Numbers the next choice of an item of a GMenuModel exporter, whose activation waits for its token.
+    next_gtk_click: u64,
+    /// The session is locked: the server draws the lock screen, and no menu opens on a source's request.
+    locked: bool,
     /// The editing chords of the Help menu's search field, once read.
     keymap: Option<Keymap>,
     wakeup: Wakeup,
@@ -326,6 +331,7 @@ impl Model {
 
     /// The server draws the lock screen: only the menus this component owns have to go.
     fn lock(&mut self, locked: bool) -> Vec<Do<Message>> {
+        self.locked = locked;
         if !locked {
             return Vec::new();
         }
@@ -558,6 +564,8 @@ impl Application for MenuBar {
             next_bar: 0,
             pending: HashMap::new(),
             next_launch: 0,
+            next_gtk_click: 0,
+            locked: false,
             keymap: None,
             wakeup: Wakeup::default(),
             names: HashMap::new(),
@@ -673,11 +681,9 @@ impl Application for MenuBar {
                 model.complete_launch(launch, token);
                 Vec::new()
             }
-            Message::GtkToken(props, item, token) => model.request(Request::ActivateGtk {
-                props: *props,
-                item,
-                token,
-            }),
+            Message::GtkToken(click, token) => {
+                model.request(Request::ActivateChosen { click, token })
+            }
             Message::Done => Vec::new(),
         };
         commands.extend(model.housekeeping());

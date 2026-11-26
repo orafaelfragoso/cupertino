@@ -6,7 +6,7 @@
 //! released exporter, a client a reload replaced and a load or `Start` that ends after its exporter was released end
 //! their subscriptions, so the exporter stops sending their changes.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use futures_util::stream::BoxStream;
 use futures_util::StreamExt;
@@ -16,10 +16,14 @@ use super::{
     is_access_denied, report, Event, Out, Request, Work, GTK_CHANGE_INTERVAL, GTK_RELOADS,
     GTK_RETRY_FIRST, GTK_RETRY_LAST,
 };
-use crate::dbus::gtk::{GtkChange, GtkMenuClient, GtkStarted, GtkSubscription};
+use crate::dbus::gtk::{GtkActivation, GtkChange, GtkMenuClient, GtkStarted, GtkSubscription};
 use crate::item::{ItemId, MenuItem};
 use crate::source::{GtkMenuProps, MenuSource};
 use crate::spawned::Spawner;
+
+/// The most chosen items whose activation waits for its token; past it the oldest is dropped. A token comes within a
+/// moment of its choice, so more means tokens that never came.
+const MAX_CHOSEN: usize = 16;
 
 /// A loaded exporter: its client, and the load it came from, which names the `Start` replies meant for it.
 struct Exporter {
@@ -43,6 +47,8 @@ pub(super) struct Exporters {
     /// Exporters asked for and not released: a load of any other is ended as it comes.
     wanted: HashSet<GtkMenuProps>,
     next_generation: u64,
+    /// The activations of chosen items, taken as they were chosen, waiting for their tokens, by click.
+    chosen: VecDeque<(u64, GtkActivation)>,
 }
 
 impl Exporters {
@@ -64,6 +70,7 @@ impl Exporters {
             missed: HashSet::new(),
             wanted: HashSet::new(),
             next_generation: 0,
+            chosen: VecDeque::new(),
         }
     }
 
@@ -301,24 +308,32 @@ impl Exporters {
         );
     }
 
-    /// Activate `item` of `props`, with `token` in the activation's platform data.
-    pub(super) fn activate(&self, props: &GtkMenuProps, item: i32, token: Option<&str>) {
-        // the client stays: its changes keep coming while the activation runs
-        let Some(activation) = self
+    /// What activating `item` of `props` calls, with `token` in its platform data; reported when there is none.
+    fn activation(
+        &self,
+        props: &GtkMenuProps,
+        item: i32,
+        token: Option<&str>,
+    ) -> Option<GtkActivation> {
+        let activation = self
             .clients
             .get(props)
-            .and_then(|e| e.client.activation(ItemId(item), token))
-        else {
-            return report(
+            .and_then(|e| e.client.activation(ItemId(item), token));
+        if activation.is_none() {
+            report(
                 &format!("cannot activate item {item} of {}", props.bus_name),
                 "the menu is not loaded or the item has no action",
             );
-        };
-        let bus_name = props.bus_name.clone();
+        }
+        activation
+    }
+
+    /// Run `activation`, apart from the client: its changes keep coming while the activation runs.
+    fn run(&self, activation: GtkActivation) {
         self.spawner.spawn(
             async move {
                 if let Err(e) = activation.run().await {
-                    report(&format!("cannot activate item {item} of {bus_name}"), e);
+                    report("cannot activate an item of a menu", e);
                 }
             },
             "cupertino-activate-gtk",
@@ -331,7 +346,23 @@ impl Exporters {
             Request::FetchGtk(props) => self.fetch(props),
             Request::ReleaseGtk(props) => self.release(&props),
             Request::ActivateGtk { props, item, token } => {
-                self.activate(&props, item, token.as_deref())
+                if let Some(activation) = self.activation(&props, item, token.as_deref()) {
+                    self.run(activation);
+                }
+            }
+            Request::ChooseGtk { props, item, click } => {
+                if let Some(activation) = self.activation(&props, item, None) {
+                    if self.chosen.len() == MAX_CHOSEN {
+                        self.chosen.pop_front();
+                    }
+                    self.chosen.push_back((click, activation));
+                }
+            }
+            Request::ActivateChosen { click, token } => {
+                let at = self.chosen.iter().position(|(c, _)| *c == click);
+                if let Some((_, activation)) = at.and_then(|at| self.chosen.remove(at)) {
+                    self.run(activation.with_token(token.as_deref()));
+                }
             }
             other => return Some(other),
         }

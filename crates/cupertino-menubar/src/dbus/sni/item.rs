@@ -14,13 +14,14 @@ use zbus::{Connection, MatchRule, MessageStream};
 
 use crate::dbus::{prop, prop_bool, prop_i32, prop_str};
 use crate::item::MenuItem;
-use crate::layout::StatusEntry;
+use crate::layout::{StatusEntry, STATUS_ICON_PT};
 
-/// Largest width or height of an icon pixmap kept; a larger one is dropped, so an item cannot make the bar decode and
-/// hold an image of any size.
-const MAX_PIXMAP_EDGE: i32 = 1024;
-/// Most pixmaps of one icon kept (items send one per size).
-const MAX_PIXMAPS: usize = 16;
+/// Largest width or height of an icon pixmap kept, sixteen times the bar's status icon, so an item that sends only its
+/// application's large icon still shows it scaled down; a larger one is dropped, so an item cannot make the bar decode
+/// and hold an image of any size (at most two of this size are kept per icon, [`kept_pixmap_sizes`]).
+const MAX_PIXMAP_EDGE: i32 = 256;
+/// Most entries of one icon's pixmap array looked at (items send one per size); the rest are not.
+const MAX_PIXMAP_ENTRIES: usize = 16;
 /// Signals of one item queued on the bus connection before they are taken; the follower takes them at once and keeps
 /// one of each kind ([`Changes`]).
 const SIGNAL_QUEUE: usize = 64;
@@ -106,11 +107,10 @@ pub fn best_pixmap(pixmaps: &[IconPixmap], target: i32) -> Option<&IconPixmap> {
         .or_else(|| valid().max_by_key(|p| p.width * p.height))
 }
 
-/// An item's `ToolTip`.
+/// An item's `ToolTip`. Its pixmaps are not kept: the tip the bar shows draws text only.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct StatusToolTip {
     pub icon_name: String,
-    pub pixmaps: Vec<IconPixmap>,
     pub title: String,
     /// May carry the specification's basic markup (`b`, `i`, `u`, `br`, `p`, `a`, `img` and entities).
     pub description: String,
@@ -242,6 +242,17 @@ impl StatusItem {
         }
     }
 
+    /// The text of the tip shown while the pointer rests on the item: its tooltip's ([`StatusToolTip::text`]), else its
+    /// title; empty when it has neither.
+    pub fn tooltip_text(&self) -> String {
+        let text = self.tooltip.text();
+        if text.trim().is_empty() {
+            self.title.trim().to_owned()
+        } else {
+            text
+        }
+    }
+
     /// Passive items are normally tucked away by hosts.
     pub fn is_passive(&self) -> bool {
         self.status == ItemStatus::Passive
@@ -307,13 +318,24 @@ pub enum PrimaryAction {
     ShowMenu,
 }
 
-/// An array of `(width, height, ARGB32 bytes)`, the valid ones of a size the bar keeps.
+/// The pixel sizes the bar draws an item's icon at, which its pixmaps are kept for: the slot's icon at one and at two
+/// device pixels per point. Other scales draw the nearest kept one ([`best_pixmap`]).
+pub fn kept_pixmap_sizes() -> [i32; 2] {
+    let px = STATUS_ICON_PT.ceil() as i32;
+    [px, 2 * px]
+}
+
+/// An array of `(width, height, ARGB32 bytes)`: of its valid entries of a size the bar keeps, the one
+/// [`best_pixmap`] draws at each of [`kept_pixmap_sizes`], so an item that sends many sizes costs the bar two at most.
+/// Only the entries kept are copied out of the message.
 fn pixmaps(value: Option<&Value<'_>>) -> Vec<IconPixmap> {
     let Some(Value::Array(array)) = value.map(super::super::unwrap_variant) else {
         return Vec::new();
     };
-    array
+    // the entries of a size the bar keeps whose bytes are as many as the size takes: (width, height, bytes)
+    let candidates: Vec<(i32, i32, &zbus::zvariant::Array<'_>)> = array
         .iter()
+        .take(MAX_PIXMAP_ENTRIES)
         .filter_map(|entry| {
             let Value::Structure(fields) = super::super::unwrap_variant(entry) else {
                 return None;
@@ -322,9 +344,27 @@ fn pixmaps(value: Option<&Value<'_>>) -> Vec<IconPixmap> {
             else {
                 return None;
             };
-            if !(1..=MAX_PIXMAP_EDGE).contains(width) || !(1..=MAX_PIXMAP_EDGE).contains(height) {
-                return None;
-            }
+            let edges = 1..=MAX_PIXMAP_EDGE;
+            let fits = edges.contains(width) && edges.contains(height);
+            (fits && bytes.len() == (*width as usize) * (*height as usize) * 4)
+                .then_some((*width, *height, bytes))
+        })
+        .collect();
+    let mut kept: Vec<usize> = Vec::new();
+    for target in kept_pixmap_sizes() {
+        let area = |i: &usize| candidates[*i].0 * candidates[*i].1;
+        let all = || 0..candidates.len();
+        let best = all()
+            .filter(|i| candidates[*i].0 >= target && candidates[*i].1 >= target)
+            .min_by_key(area)
+            .or_else(|| all().max_by_key(area));
+        if let Some(best) = best.filter(|b| !kept.contains(b)) {
+            kept.push(best);
+        }
+    }
+    kept.into_iter()
+        .filter_map(|i| {
+            let (width, height, bytes) = candidates[i];
             let argb: Vec<u8> = bytes
                 .iter()
                 .map(|b| match b {
@@ -333,13 +373,12 @@ fn pixmaps(value: Option<&Value<'_>>) -> Vec<IconPixmap> {
                 })
                 .collect::<Option<_>>()?;
             let pixmap = IconPixmap {
-                width: *width,
-                height: *height,
+                width,
+                height,
                 argb,
             };
             pixmap.is_valid().then_some(pixmap)
         })
-        .take(MAX_PIXMAPS)
         .collect()
 }
 
@@ -353,9 +392,9 @@ fn tooltip(value: Option<&Value<'_>>) -> StatusToolTip {
         _ => String::new(),
     };
     match fields.fields() {
-        [icon, pixmap, title, description] => StatusToolTip {
+        // the tip draws text only: its pixmaps are not kept
+        [icon, _, title, description] => StatusToolTip {
             icon_name: text(icon),
-            pixmaps: pixmaps(Some(pixmap)),
             title: text(title),
             description: text(description),
         },
@@ -616,6 +655,7 @@ pub fn status_entry(item: &StatusItem, menu: Option<MenuItem>, width: f64) -> St
         id: item.id.clone(),
         width,
         menu,
+        primary_opens_menu: item.primary_action() == PrimaryAction::ShowMenu,
     }
 }
 

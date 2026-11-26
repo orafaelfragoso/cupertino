@@ -18,9 +18,11 @@
 //! mark. Action state and enabled flags come from `org.gtk.Actions.DescribeAll`; activation calls
 //! `org.gtk.Actions.Activate` on the object that owns the action, with the item's target and an activation token in
 //! its platform data. Both interfaces' `Changed` signals keep the cache current ([`GtkMenuClient::changes`]): change
-//! records apply to the groups subscribed, and a menu of such a group a record names first is created; groups that come
-//! into the tree are subscribed and those that leave it ended ([`GtkMenuClient::subscription`]). A menu keeps at most
-//! [`MAX_MENU_ITEMS`] items and an object at most [`MAX_GROUPS`] groups, since any application can send them.
+//! records apply to the groups subscribed after their `Start` reply, a menu of such a group that a record only inserts
+//! into is created and one left empty dropped; groups that come into the tree are subscribed and those that leave it
+//! ended ([`GtkMenuClient::subscription`]). A menu keeps at most [`MAX_MENU_ITEMS`] items, an object at most
+//! [`MAX_MENUS`] menus and [`MAX_GROUPS`] groups, and a signal applies at most [`MAX_SIGNAL_RECORDS`] records, since any
+//! application can send them.
 
 use std::collections::{HashMap, HashSet};
 
@@ -53,6 +55,12 @@ pub const MAX_ACTIONS: usize = 10_000;
 pub const MAX_GROUPS: usize = 256;
 /// The most change records kept for groups whose `Start` reply has not come yet; later ones are dropped.
 pub const MAX_HELD_RECORDS: usize = 1000;
+/// The most menus the bar keeps of one menu object of an exporter, sections included: a `Start` reply's menus past it
+/// and records that would add further menus are dropped, so an exporter cannot grow the cache without end.
+pub const MAX_MENUS: usize = 1024;
+/// The most change records of one `Changed` signal applied; the rest of the signal is dropped, so one signal cannot
+/// hold the worker for as long as its sender likes.
+pub const MAX_SIGNAL_RECORDS: usize = 1000;
 /// How deep links are followed: a tree nested deeper builds nothing below this depth.
 const MAX_DEPTH: usize = 16;
 /// The rounds of `Start` a load makes for groups the menus it read link to; groups further down are subscribed after
@@ -151,6 +159,9 @@ pub struct GtkMenus {
     refused: HashSet<u32>,
     /// Records for pending groups, with their signal's serial: applied once the reply came if sent after it.
     held: Vec<(u32, RawChange)>,
+    /// The serial of each subscribed group's `Start` reply: a record of a signal sent before it (delivered after it)
+    /// is already in the reply's menus, and is dropped.
+    replied: HashMap<u32, u32>,
 }
 
 impl GtkMenus {
@@ -169,18 +180,27 @@ impl GtkMenus {
 
     /// The reply to `Start(groups)` came, as the message of serial `serial`: the groups' menus are the reply's, and
     /// the records held for them that were sent after the reply apply on top. A group the reply has no menus of is
-    /// subscribed and empty.
+    /// subscribed and empty. Records of signals sent before the reply are dropped from then on, as the reply holds
+    /// them already; the reply's menus past [`MAX_MENUS`] are dropped.
     pub fn started(&mut self, groups: &[u32], serial: Option<u32>, reply: Vec<RawMenu>) {
         for g in groups {
             self.pending.remove(g);
             self.subscribed.insert(*g);
+            match serial {
+                Some(serial) => self.replied.insert(*g, serial),
+                None => self.replied.remove(g),
+            };
         }
         self.menus.retain(|(g, _), _| !groups.contains(g));
         for (g, m, mut items) in reply {
-            if groups.contains(&g) {
-                items.truncate(MAX_MENU_ITEMS);
-                self.menus.insert((g, m), items);
+            if !groups.contains(&g) || items.is_empty() {
+                continue;
             }
+            if self.menus.len() >= MAX_MENUS && !self.menus.contains_key(&(g, m)) {
+                continue;
+            }
+            items.truncate(MAX_MENU_ITEMS);
+            self.menus.insert((g, m), items);
         }
         let (now, still): (Vec<_>, Vec<_>) = std::mem::take(&mut self.held)
             .into_iter()
@@ -206,18 +226,27 @@ impl GtkMenus {
     pub fn ended(&mut self, groups: &[u32]) {
         for g in groups {
             self.subscribed.remove(g);
+            self.replied.remove(g);
         }
         self.menus.retain(|(g, _), _| !groups.contains(g));
     }
 
     /// Apply one record of a `Changed` signal of serial `serial`: replace `removed` items at `position` with `added`.
     /// A record for a group not subscribed is ignored, one for a group whose reply is awaited is held until it comes,
-    /// and one that removes past the end of its menu is ignored, as the menus' clients do.
+    /// one sent before the group's reply is ignored (the reply holds it), and one that removes past the end of its
+    /// menu is ignored, as the menus' clients do.
     pub fn apply_change(&mut self, serial: u32, change: RawChange) {
         if self.pending.contains(&change.0) {
             if self.held.len() < MAX_HELD_RECORDS {
                 self.held.push((serial, change));
             }
+            return;
+        }
+        if self
+            .replied
+            .get(&change.0)
+            .is_some_and(|reply| serial <= *reply)
+        {
             return;
         }
         self.apply_record(change);
@@ -228,14 +257,32 @@ impl GtkMenus {
         if !self.subscribed.contains(&g) {
             return;
         }
-        // a new menu of a subscribed group (a section added) comes as a record of its own
-        let list = self.menus.entry((g, m)).or_default();
+        let key = (g, m);
+        // a new menu of a subscribed group (a section added) comes as a record of its own, which only inserts
+        let inserts = position == 0 && removed == 0 && !added.is_empty();
+        if !self.menus.contains_key(&key) {
+            if !inserts || self.menus.len() >= MAX_MENUS {
+                return;
+            }
+            self.menus.insert(key, Vec::new());
+        }
+        let Some(list) = self.menus.get_mut(&key) else {
+            return;
+        };
         let (pos, end) = (position as usize, position as usize + removed as usize);
         if end > list.len() {
             return;
         }
         list.splice(pos..end, added);
         list.truncate(MAX_MENU_ITEMS);
+        if list.is_empty() {
+            self.menus.remove(&key);
+        }
+    }
+
+    /// How many menus are kept.
+    pub fn menu_count(&self) -> usize {
+        self.menus.len()
     }
 
     pub fn get(&self, group: u32, menu: u32) -> Option<&RawItems> {

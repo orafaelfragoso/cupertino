@@ -5,7 +5,9 @@
 //! and reports every change as a whole tree ([`Event::Layout`]), so what a bar shows and the ids it sends back are the
 //! exporter's current ones. Before a menu shows it sends `AboutToShow` and reads again what the exporter says has
 //! changed; as a menu shows and hides it sends `opened` and `closed`, and `closed` for every menu still open when the
-//! follower is let go. An `ItemActivationRequested` is reported to the bars ([`Event::ActivationRequested`]).
+//! follower is let go, each under the id the exporter has for the menu's item then: after the changes it signalled are
+//! read, and following an item the exporter renumbered to its new id. The latest `ItemActivationRequested` of a batch
+//! of signals is reported to the bars ([`Event::ActivationRequested`]).
 //!
 //! Commands that come together are sent together: several `AboutToShow` as one `AboutToShowGroup`, several events
 //! as one `EventGroup`, for an exporter that has them (protocol version 3 on, or one that does not say); one that
@@ -17,10 +19,11 @@
 //! are taken while a call is awaited too: left in the connection's queue they would fill it, and a full queue stops
 //! the connection, the awaited reply with it.
 
+use crate::controller::rematch;
 use crate::dbus::dbusmenu::{
     is_unknown_method, DBusMenuClient, MenuEvent, MenuTree, MenuUpdate, Reread,
 };
-use crate::item::ItemId;
+use crate::item::{ItemId, MenuItem};
 use crate::source::{KdeAppMenu, MenuSource};
 use crate::worker::{report, Event, Out};
 use futures_util::future::{pending, select, Either};
@@ -172,6 +175,24 @@ impl<S: Stream<Item = MenuUpdate> + Unpin> Signals<S> {
             }
         }
     }
+
+    /// Wait up to `wait` for a signal, kept; at once when one waits already.
+    async fn first_within(&mut self, wait: Duration) {
+        if !self.is_empty() {
+            return;
+        }
+        let signal = {
+            let (next, timer) = (pin!(self.next()), pin!(async_io::Timer::after(wait)));
+            match select(next, timer).await {
+                Either::Left((signal, _)) => signal,
+                Either::Right(_) => return,
+            }
+        };
+        match signal {
+            Some(update) => self.keep(update),
+            None => self.stream = None,
+        }
+    }
 }
 
 enum Next {
@@ -256,6 +277,7 @@ async fn run(
         event_groups: true,
         queue: VecDeque::new(),
         last_time: 0,
+        shown: false,
     };
     state.read_menu_properties().await;
     if patient {
@@ -356,6 +378,37 @@ struct State<S> {
     queue: VecDeque<Command>,
     /// The time of the last event sent, milliseconds of the bar's input clock.
     last_time: u32,
+    /// The exporter was told menus are about to show and has not been sent an event since: the changes it signals
+    /// as it answers may come just after the answer, and are waited for before an `opened`.
+    shown: bool,
+}
+
+/// Where an item is in a tree: the id, index among its siblings and label of each item from a child of the root down
+/// to the item.
+type Place = Vec<(ItemId, usize, String)>;
+
+/// The place of `id` below `root`; `None` when the tree does not hold it.
+fn place_of(root: &MenuItem, id: ItemId) -> Option<Place> {
+    root.children.iter().enumerate().find_map(|(i, child)| {
+        let step = (child.id, i, child.label.clone());
+        if child.id == id {
+            return Some(vec![step]);
+        }
+        let mut rest = place_of(child, id)?;
+        rest.insert(0, step);
+        Some(rest)
+    })
+}
+
+/// The id of the item at `place` in the tree below `root` now, each step found again as the bars find an open menu's
+/// item ([`rematch`]): an exporter that rebuilt its tree under new ids has it at the same place under the same label.
+fn found_at(root: &MenuItem, place: &Place) -> Option<ItemId> {
+    let mut at = root;
+    for (id, index, label) in place {
+        let items = at.children.iter().map(|c| (c.id, c.label.as_str()));
+        at = &at.children[rematch(items, *id, *index, label)?];
+    }
+    (!place.is_empty()).then_some(at.id)
 }
 
 /// An exporter that did not answer within its wait.
@@ -410,12 +463,45 @@ impl<S: Stream<Item = MenuUpdate> + Unpin> State<S> {
         }
     }
 
+    /// The places of `items` in the tree, to find them again after it is read anew ([`Self::found`]).
+    fn places(&self, items: impl Iterator<Item = ItemId>) -> Vec<Option<Place>> {
+        let root = self.tree.root();
+        items
+            .map(|item| root.and_then(|root| place_of(root, item)))
+            .collect()
+    }
+
+    /// The id the item that was `item`, at `place`, has in the tree now: an exporter that renumbered its tree has it
+    /// under a new id. An item that is gone, or was not in the tree, keeps its id.
+    fn found(&self, item: ItemId, place: Option<&Place>) -> ItemId {
+        place
+            .zip(self.tree.root())
+            .and_then(|(place, root)| found_at(root, place))
+            .unwrap_or(item)
+    }
+
+    /// Take the reply of a read below `parent` into the tree ([`MenuTree::apply_reply`]); the menus told as open
+    /// follow their items to the ids the exporter gave them, so the `closed` sent for one later is under the id the
+    /// bars have for it then too.
+    fn apply_reply(&mut self, parent: ItemId, revision: u32, layout: MenuItem) -> bool {
+        let places = self.places(self.open.iter().copied());
+        let applied = self.tree.apply_reply(parent, revision, layout);
+        let open = std::mem::take(&mut self.open);
+        for (item, place) in open.into_iter().zip(&places) {
+            let now = self.found(item, place.as_ref());
+            if !self.open.contains(&now) {
+                self.open.push(now);
+            }
+        }
+        applied
+    }
+
     /// Read the whole tree and report it.
     async fn load(&mut self) {
         let read = self.client.fetch(ItemId(0), -1);
         match self.signals.within(self.waits.read, read).await {
             Some(Ok((revision, root))) => {
-                self.tree.apply_reply(ItemId(0), revision, root);
+                self.apply_reply(ItemId(0), revision, root);
                 self.retry = None;
                 self.emit();
             }
@@ -429,7 +515,7 @@ impl<S: Stream<Item = MenuUpdate> + Unpin> State<S> {
     async fn read_part(&mut self, parent: ItemId) -> bool {
         let read = self.client.fetch(parent, -1);
         match self.signals.within(self.waits.read, read).await {
-            Some(Ok((revision, layout))) => self.tree.apply_reply(parent, revision, layout),
+            Some(Ok((revision, layout))) => self.apply_reply(parent, revision, layout),
             Some(Err(_)) | None => false,
         }
     }
@@ -453,7 +539,8 @@ impl<S: Stream<Item = MenuUpdate> + Unpin> State<S> {
         let batch = std::mem::take(&mut self.signals.waiting);
         let overflowed = std::mem::take(&mut self.signals.overflowed);
         let mut layouts = Vec::new();
-        let mut asked = Vec::new();
+        // one request of a batch is honoured, the latest: an exporter that asks without pause opens its menus once
+        let mut asked = None;
         let mut dirty = false;
         for update in batch {
             match update {
@@ -470,7 +557,7 @@ impl<S: Stream<Item = MenuUpdate> + Unpin> State<S> {
                     self.show_groups &= groups;
                     self.event_groups &= groups;
                 }
-                MenuUpdate::ActivationRequested { id, .. } => asked.push(id),
+                MenuUpdate::ActivationRequested { id, .. } => asked = Some(id),
             }
         }
         if overflowed || (!layouts.is_empty() && self.tree.is_unread()) {
@@ -483,8 +570,8 @@ impl<S: Stream<Item = MenuUpdate> + Unpin> State<S> {
                 None => {}
             }
         }
-        // after the tree they may name an item of
-        for id in asked {
+        // after the tree it may name an item of
+        if let Some(id) = asked {
             self.out.emit(Event::ActivationRequested {
                 source: MenuSource::Kde(self.menu.clone()),
                 item: id.0,
@@ -496,6 +583,7 @@ impl<S: Stream<Item = MenuUpdate> + Unpin> State<S> {
     /// tree never read are read whatever the answer, and so are the menus of an exporter that fails the call, which
     /// cannot say; one that does not answer in time is left alone until it signals.
     async fn show(&mut self, items: &[ItemId]) {
+        self.shown = true;
         let asked = if items.len() > 1 && self.show_groups {
             let told = self.client.about_to_show_group(items);
             match self.signals.within(self.waits.about_to_show, told).await {
@@ -566,14 +654,35 @@ impl<S: Stream<Item = MenuUpdate> + Unpin> State<S> {
         }
     }
 
-    /// Send `opened` and `closed` events. A menu is told it closed only when it was told it opened or the tree holds
-    /// its item, so a bar that changed exporters under an open menu sends the new one no stray `closed`.
-    async fn events(&mut self, events: Vec<(ItemId, MenuEvent, u32)>) {
+    /// Send `opened` and `closed` events. The signals that wait are applied first: an exporter that rebuilds its tree
+    /// under new ids as a menu is about to show (it signals the change before it answers `AboutToShow`) is told of the
+    /// menu under the id it gave it, the one the bars find the open menu under then ([`rematch`]), and a menu whose
+    /// item it took away is not told it opened. A menu is told it closed only when it was told it opened or the tree
+    /// holds its item, so a bar that changed exporters under an open menu sends the new one no stray `closed`.
+    async fn events(&mut self, mut events: Vec<(ItemId, MenuEvent, u32)>) {
+        let opens = events.iter().any(|(_, e, _)| *e == MenuEvent::Opened);
+        if std::mem::take(&mut self.shown) && opens {
+            // the changes signalled with the answer to `AboutToShow`, which the connection may hand over just after it
+            self.signals.first_within(CHANGE_INTERVAL).await;
+        }
+        if !self.signals.is_empty() {
+            // those of the interval join them, as for any change
+            let interval = self.signals.within(CHANGE_INTERVAL, pending::<()>());
+            interval.await;
+            let places = self.places(events.iter().map(|(item, ..)| *item));
+            self.changed().await;
+            for ((item, ..), place) in events.iter_mut().zip(&places) {
+                *item = self.found(*item, place.as_ref());
+            }
+        }
         let mut sent = Vec::with_capacity(events.len());
         for (item, event, time) in events {
             self.last_time = time;
             match event {
                 MenuEvent::Opened => {
+                    if !self.tree.is_unread() && !self.tree.holds(item) {
+                        continue;
+                    }
                     if !self.open.contains(&item) {
                         if self.open.len() == OPEN_LIMIT {
                             self.open.remove(0);

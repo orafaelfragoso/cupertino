@@ -485,3 +485,50 @@ fn a_menu_the_exporter_does_not_hold_is_not_told_it_closed() {
         assert_eq!(sent_events(&seen), [(1, "closed".to_owned(), TIME + 1)]);
     });
 }
+
+#[test]
+fn an_exporter_asking_again_and_again_opens_its_menus_once_a_batch() {
+    let (_bus, address) = session_bus();
+    async_io::block_on(async {
+        let (bar, app) = (connect(&address).await, connect(&address).await);
+        let (tx, _calls) = async_channel::unbounded();
+        let exporter = Grouped {
+            calls: tx,
+            status: "normal".into(),
+        };
+        app.object_server().at(PATH, exporter).await.unwrap();
+        let menu = KdeAppMenu {
+            service: app.unique_name().unwrap().to_string(),
+            path: PATH.into(),
+        };
+        let (worker, events) = Worker::start(bar).await.unwrap();
+        worker.send(Request::FetchDbusMenu(menu.clone())).unwrap();
+        next_tree(&events).await;
+
+        let iface = app
+            .object_server()
+            .interface::<_, Grouped>(PATH)
+            .await
+            .unwrap();
+        for id in [1, 3, 10] {
+            Grouped::item_activation_requested(iface.signal_emitter(), id, 5)
+                .await
+                .unwrap();
+        }
+        let asked = |event: Event| match event {
+            Event::ActivationRequested { item, .. } => Some(item),
+            _ => None,
+        };
+        let first = loop {
+            if let Some(item) = asked(within(&events, "the request").await) {
+                break item;
+            }
+        };
+        assert_eq!(first, 10, "the latest request of the batch");
+        let deadline = Timer::after(SLOW);
+        let more = select(Box::pin(events.recv()), deadline).await;
+        if let Either::Left((Ok(event), _)) = more {
+            assert_eq!(asked(event), None, "one request a batch");
+        }
+    });
+}

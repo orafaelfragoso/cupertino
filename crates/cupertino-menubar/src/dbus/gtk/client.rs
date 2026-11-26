@@ -9,7 +9,8 @@ use zbus::Connection;
 
 use super::{
     add_action, apply_actions, build_menus, platform_data, GtkActionRef, GtkActions,
-    GtkActionsProxy, GtkChange, GtkMenus, GtkMenusProxy, MenuObject, RawMenu, LOAD_ROUNDS, SCOPES,
+    GtkActionsProxy, GtkChange, GtkMenus, GtkMenusProxy, MenuObject, RawMenu, LOAD_ROUNDS,
+    MAX_SIGNAL_RECORDS, SCOPES,
 };
 use crate::item::{ItemId, MenuItem};
 use crate::source::GtkMenuProps;
@@ -174,8 +175,10 @@ impl GtkMenuClient {
         built.items
     }
 
-    /// What activating `item` calls, with `token` (an activation token) in its platform data; `None` for an item
-    /// without an action or whose action belongs to no object of the exporter.
+    /// What activating `item` of the tree last built calls: its action's name and target and the object that owns the
+    /// action, with `token` (an activation token) in its platform data ([`GtkActivation::with_token`] hands one over
+    /// later); `None` for an item without an action or whose action belongs to no object of the exporter. The ids are
+    /// numbered afresh with each build, so an activation taken when the item was chosen stays that item's.
     pub fn activation(&self, item: ItemId, token: Option<&str>) -> Option<GtkActivation> {
         let r = self.refs.get(&item)?;
         let (scope, name) = r.action.split_once('.')?;
@@ -268,7 +271,7 @@ impl GtkMenuClient {
         match change {
             GtkChange::Menus(object, serial, records) => {
                 let menus = self.cache(object);
-                for record in records {
+                for record in records.into_iter().take(MAX_SIGNAL_RECORDS) {
                     menus.apply_change(serial, record);
                 }
             }
@@ -475,6 +478,14 @@ pub struct GtkActivation {
 }
 
 impl GtkActivation {
+    /// The same activation with `token` (an activation token) in its platform data instead.
+    pub fn with_token(self, token: Option<&str>) -> Self {
+        Self {
+            platform_data: platform_data(token),
+            ..self
+        }
+    }
+
     pub async fn run(self) -> zbus::Result<()> {
         let proxy = actions_proxy(&self.conn, &self.bus_name, &self.path).await?;
         proxy

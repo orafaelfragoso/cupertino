@@ -231,10 +231,13 @@ impl Model {
             None => Vec::new(),
         };
         match event {
-            // the application's menus open on the bar that shows them for its active window, the first of them
+            // the application's menus open on the bar that shows them for its active window, the first of them, unless
+            // it gives way to an overview or the session is locked
             worker::Event::ActivationRequested { source, item } => {
-                let bar = (0..self.bars.len())
-                    .find(|i| self.bars[*i].feed.source(&self.shared) == source);
+                let bar = (0..self.bars.len()).find(|i| {
+                    self.bars[*i].feed.source(&self.shared) == source
+                        && crate::routing::opens_requested_menu(self.bars[*i].hidden, self.locked)
+                });
                 if let Some(i) = bar {
                     let item = crate::item::ItemId(item);
                     let outcome = self.bars[i].controller.open_item(item);

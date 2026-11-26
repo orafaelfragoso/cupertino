@@ -150,6 +150,8 @@ pub struct ControllerConfig {
     pub hover_switch: bool,
     /// A chosen row flashes ([`Timing::MENU_CHOICE_OFF`], [`Timing::MENU_CHOICE_ON`]) before the choice is made; off, it is made at once.
     pub flash_choice: bool,
+    /// How long the pointer rests on a status item before its tip shows, in seconds.
+    pub tooltip_delay: f64,
 }
 
 impl Default for ControllerConfig {
@@ -161,6 +163,7 @@ impl Default for ControllerConfig {
             click_outside_passthrough: false,
             hover_switch: true,
             flash_choice: true,
+            tooltip_delay: STATUS_TOOLTIP_DELAY,
         }
     }
 }
@@ -237,7 +240,7 @@ struct Shown {
 /// same id and label; else, for an exporter that rebuilt its tree under new ids (Chromium's renumbers every item when
 /// a menu is about to show) or reused its ids for other items, at the same place under the same label, then under the
 /// label elsewhere; else under the same id, an item that was renamed. `None` when it is gone.
-fn rematch<'a>(
+pub(crate) fn rematch<'a>(
     items: impl Iterator<Item = (ItemId, &'a str)> + Clone,
     id: ItemId,
     index: usize,
@@ -312,10 +315,16 @@ pub struct MenuController {
     input: (u32, f64),
     /// The controller's latest time, in seconds.
     clock: f64,
+    /// The status item under the pointer, and its tip.
+    hover: Hover,
 }
 
+mod hover;
 mod keyboard;
 mod shown;
+
+use hover::Hover;
+pub use hover::STATUS_TOOLTIP_DELAY;
 
 impl MenuController {
     pub fn new(output: Rect, measure: Box<dyn TextMeasure>) -> Self {
@@ -355,6 +364,7 @@ impl MenuController {
             told: Vec::new(),
             input: (0, 0.0),
             clock: 0.0,
+            hover: Hover::default(),
         };
         c.relayout();
         c
@@ -409,10 +419,15 @@ impl MenuController {
                 f.ends()
             }
         });
-        [self.pending.map(|p| p.due), self.aim.deadline(), flash]
-            .into_iter()
-            .flatten()
-            .reduce(f64::min)
+        [
+            self.pending.map(|p| p.due),
+            self.aim.deadline(),
+            flash,
+            self.tooltip_deadline(),
+        ]
+        .into_iter()
+        .flatten()
+        .reduce(f64::min)
     }
 
     // ---- content -------------------------------------------------------------------------
@@ -518,6 +533,26 @@ impl MenuController {
 
     fn slot_has_menu(&self, key: &SlotKey) -> bool {
         self.root_item(key).is_some()
+    }
+
+    /// Whether a press of `button` on the slot opens its menu: the middle button never does; the secondary one opens
+    /// any slot's menu; the primary one too, except on a status item whose primary action is to activate it
+    /// ([`crate::layout::StatusEntry::primary_opens_menu`]), which its release sends instead.
+    fn press_opens_menu(&self, key: &SlotKey, button: Button) -> bool {
+        let primary_opens = || match key {
+            SlotKey::Status(id) => self
+                .content
+                .status
+                .iter()
+                .find(|s| &s.id == id)
+                .is_none_or(|s| s.primary_opens_menu),
+            _ => true,
+        };
+        match button {
+            Button::Middle => false,
+            Button::Secondary => self.slot_has_menu(key),
+            Button::Primary => primary_opens() && self.slot_has_menu(key),
+        }
     }
 
     fn menu_slots(&self) -> Vec<SlotKey> {
@@ -978,7 +1013,7 @@ impl MenuController {
                 Hit::Slot => {
                     let key = self.hit_slot.clone().expect("slot hit");
                     out.consumed = true;
-                    if opens && self.slot_has_menu(&key) {
+                    if self.press_opens_menu(&key, button) {
                         self.open_title(key, &mut out);
                         self.tracking = Some(Tracking::from_title(now));
                         self.mode = Mode::Tracking;
@@ -1003,7 +1038,7 @@ impl MenuController {
                 let key = self.hit_slot.clone().expect("slot hit");
                 if self.open_slot.as_ref() == Some(&key) {
                     self.close_all(&mut out);
-                } else if opens && self.slot_has_menu(&key) {
+                } else if self.press_opens_menu(&key, button) {
                     self.open_title(key, &mut out);
                     self.tracking = Some(Tracking::from_title(now));
                     self.mode = Mode::Tracking;
@@ -1175,6 +1210,10 @@ impl MenuController {
     pub fn close(&mut self) -> Outcome {
         let mut out = Outcome::default();
         self.close_all(&mut out);
+        // a press whose release the bar may never see goes with them, and a status item's tip
+        self.held = None;
+        self.pressed_button = None;
+        self.hover_off(&mut out);
         self.synced(out)
     }
 }

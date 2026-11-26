@@ -349,6 +349,7 @@ impl Model {
                     BarPointer::Scroll { at, steps } => {
                         vec![controller.pointer_scroll(at, steps, now)]
                     }
+                    BarPointer::Leave => vec![controller.pointer_leave(now)],
                     BarPointer::Click(p) => vec![
                         controller.pointer_move(p, now),
                         controller.pointer_press(p, now),
@@ -371,6 +372,13 @@ impl Model {
                 // the server dismissed the grab: the menus are over
                 Some(i) => {
                     let outcome = self.bars[i].controller.close();
+                    self.apply(i, outcome)
+                }
+                None => Vec::new(),
+            },
+            Input::TipDismissed(bar) => match self.index(bar) {
+                Some(i) => {
+                    let outcome = self.bars[i].controller.dismiss_tooltip();
                     self.apply(i, outcome)
                 }
                 None => Vec::new(),
@@ -639,14 +647,17 @@ impl Model {
                     }
                     menu_bar::set_menu_open(&window, open);
                 }
-                // a window the action opens takes the focus with the bar's activation token
+                // a window the action opens takes the focus with the bar's activation token; the worker takes the
+                // chosen item's action now, as the exporter may number its items afresh before the token comes
                 Action::Request(Request::ActivateGtk { props, item, .. }) => {
+                    let click = self.next_gtk_click;
+                    self.next_gtk_click += 1;
+                    let app_id = props.application_id.clone();
+                    commands.extend(self.request(Request::ChooseGtk { props, item, click }));
                     commands.push(Do::ActivationToken {
                         window: window.clone(),
-                        app_id: props.application_id.clone(),
-                        on_token: Box::new(move |token| {
-                            Message::GtkToken(Box::new(props.clone()), item, token)
-                        }),
+                        app_id,
+                        on_token: Box::new(move |token| Message::GtkToken(click, token)),
                     });
                 }
                 Action::Request(request) => commands.extend(self.request(request)),

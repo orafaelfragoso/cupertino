@@ -1,7 +1,8 @@
 //! An open menu survives its exporter rebuilding the whole tree under new ids, as a Chromium exporter (Electron
 //! applications) does when told a menu is about to show: it answers `AboutToShow` with `false`, signals
 //! `ItemsPropertiesUpdated` and `LayoutUpdated` on the root, and the tree read again holds the same menus under fresh
-//! ids. The menu stays open with the rows of the new tree, and closes only when its item is really gone. The exporter
+//! ids. The menu stays open with the rows of the new tree, and closes only when its item is really gone; the exporter
+//! is told it opened, and the one before it closed, under the ids it has for them after the rebuild. The exporter
 //! runs on a private session bus. An exporter's submenu the App menu took in tells the exporter it shows as well.
 
 // a test owns its thread: it blocks on the bus and looks up the daemon's binary
@@ -74,6 +75,8 @@ const MENUS: [(&str, &[&str]); 3] = [
 struct Renumbering {
     base: i32,
     revision: u32,
+    /// The events the exporter was sent: the item's id and the event's name.
+    events: async_channel::Sender<(i32, String)>,
 }
 
 fn label(text: &str) -> HashMap<String, OwnedValue> {
@@ -135,6 +138,10 @@ impl Renumbering {
             .await
             .unwrap();
         false
+    }
+
+    fn event(&self, id: i32, event: String, _data: OwnedValue, _time: u32) {
+        let _ = self.events.try_send((id, event));
     }
 
     #[zbus(signal)]
@@ -282,9 +289,11 @@ fn a_menu_stays_open_when_its_exporter_renumbers_the_tree_as_it_shows() {
             .build()
             .await
             .unwrap();
+        let (told_events, sent_events) = async_channel::unbounded();
         let exporter = Renumbering {
             base: 0,
             revision: 1,
+            events: told_events,
         };
         app.object_server().at(PATH, exporter).await.unwrap();
         let service = app.unique_name().unwrap().to_string();
@@ -295,6 +304,7 @@ fn a_menu_stays_open_when_its_exporter_renumbers_the_tree_as_it_shows() {
         let (source, root) = next_tree(&events).await;
         bar.apply(&source, root);
 
+        let mut before: Option<&str> = None;
         for (i, title) in ["File", "Edit", "View"].into_iter().enumerate() {
             let shown = bar.menu_id(title).unwrap();
             let requests = bar.click(title, i as f64);
@@ -326,6 +336,23 @@ fn a_menu_stays_open_when_its_exporter_renumbers_the_tree_as_it_shows() {
                 .iter()
                 .take(rows(title).len())
                 .all(|r| r.item.id.0 > renumbered.0));
+
+            // the exporter is told under the ids it has now: the menu before closed, this one opened
+            let mut expected = Vec::new();
+            if let Some(before) = before {
+                expected.push((bar.menu_id(before).unwrap().0, "closed".to_owned()));
+            }
+            expected.push((renumbered.0, "opened".to_owned()));
+            let mut sent = Vec::new();
+            while sent.len() < expected.len() {
+                let event = select(Box::pin(sent_events.recv()), Timer::after(ARRIVAL)).await;
+                match event {
+                    Either::Left((Ok(event), _)) => sent.push(event),
+                    _ => panic!("the exporter was not told of {title}: {sent:?}"),
+                }
+            }
+            assert_eq!(sent, expected, "{title}");
+            before = Some(title);
         }
     });
 }

@@ -7,6 +7,8 @@ mod dbusmenu_exporter;
 #[path = "dbusmenu-properties.rs"]
 mod dbusmenu_properties;
 mod glass;
+#[path = "gtk-cache.rs"]
+mod gtk_cache;
 #[path = "gtk-menus.rs"]
 mod gtk_menus;
 #[path = "late-menu.rs"]

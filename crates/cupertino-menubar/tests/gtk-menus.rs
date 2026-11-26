@@ -13,7 +13,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_io::Timer;
-use cupertino_menubar::dbus::gtk::{build_menus, GtkActionState, GtkActions, GtkMenus};
+use cupertino_menubar::dbus::gtk::{
+    build_menus, GtkActionState, GtkActions, GtkMenus, MAX_SIGNAL_RECORDS,
+};
 use cupertino_menubar::item::{MenuItem, Toggle};
 use cupertino_menubar::source::{GtkMenuProps, MenuSource};
 use cupertino_menubar::worker::{Event, Request, Worker};
@@ -547,6 +549,109 @@ fn an_activation_hands_over_the_target_and_the_activation_token() {
                 ],
             }
         );
+    });
+}
+
+#[test]
+fn a_chosen_item_runs_its_own_action_when_the_tree_is_renumbered_before_the_token() {
+    async_io::block_on(async {
+        let target = |label: &str, value: &str| {
+            item([
+                ("label", Value::from(label)),
+                ("action", Value::from("win.size")),
+                ("target", Value::from(value)),
+            ])
+        };
+        let menus = HashMap::from([
+            ((0, 0), vec![submenu("View", 1, 0)]),
+            (
+                (1, 0),
+                vec![target("Small", "small"), target("Large", "large")],
+            ),
+        ]);
+        let win = HashMap::from([(
+            "size".to_owned(),
+            action(true, "s", Some(Value::from("small"))),
+        )]);
+        let f = Fixture::new(menus, HashMap::new(), win).await;
+        let rows = |t: &MenuItem| child(t, "View").map_or(0, |v| v.children.len());
+        let tree = f.tree(|t| rows(t) == 2).await;
+        let large = child(&tree, "View").unwrap().children[1].id.0;
+        while f.calls.try_recv().is_ok() {}
+
+        // Large is chosen; before the bar's token comes the exporter adds a row above it, and the ids move along
+        f.worker
+            .send(Request::ChooseGtk {
+                props: f.props.clone(),
+                item: large,
+                click: 7,
+            })
+            .unwrap();
+        f.change_menus(
+            |m| {
+                m.get_mut(&(1, 0))
+                    .unwrap()
+                    .insert(0, target("Tiny", "tiny"));
+            },
+            vec![(1, 0, 0, 0, vec![target("Tiny", "tiny")])],
+        )
+        .await;
+        let tree = f.tree(|t| rows(t) == 3).await;
+        let moved = &child(&tree, "View").unwrap().children[1];
+        assert_eq!((moved.id.0, moved.label.as_str()), (large, "Small"));
+
+        // a token for no choice runs nothing; the choice's runs Large's action
+        f.worker
+            .send(Request::ActivateChosen {
+                click: 8,
+                token: None,
+            })
+            .unwrap();
+        f.worker
+            .send(Request::ActivateChosen {
+                click: 7,
+                token: Some("token-7".into()),
+            })
+            .unwrap();
+        assert_eq!(
+            f.call().await,
+            Call::Activate {
+                path: WINDOW,
+                name: "size".into(),
+                parameter: vec!["large".into()],
+                platform_data: vec![
+                    ("activation-token".into(), "token-7".into()),
+                    ("desktop-startup-id".into(), "token-7".into()),
+                ],
+            }
+        );
+    });
+}
+
+#[test]
+fn a_signal_applies_a_bounded_number_of_records() {
+    async_io::block_on(async {
+        let menus = HashMap::from([
+            ((0, 0), vec![submenu("Edit", 1, 0)]),
+            ((1, 0), vec![row("Undo")]),
+        ]);
+        let f = Fixture::new(menus, HashMap::new(), HashMap::new()).await;
+        let edit = |t: &MenuItem| child(t, "Edit").map(labels).unwrap_or_default();
+        f.tree(|t| edit(t) == ["Undo"]).await;
+
+        // records past the bound are dropped: the last of this signal is one of them
+        let mut records: Vec<(u32, u32, u32, u32, Vec<Item>)> = (0..MAX_SIGNAL_RECORDS)
+            .map(|_| (1, 0, 5, 1, Vec::new()))
+            .collect();
+        records.push((1, 0, 1, 0, vec![row("Dropped")]));
+        f.change_menus(|_| {}, records).await;
+        f.change_menus(
+            |m| m.get_mut(&(1, 0)).unwrap().push(row("Redo")),
+            vec![(1, 0, 1, 0, vec![row("Redo")])],
+        )
+        .await;
+        let tree = f.tree(|t| edit(t).contains(&"Redo".to_owned())).await;
+        assert_eq!(edit(&tree), ["Undo", "Redo"]);
     });
 }
 

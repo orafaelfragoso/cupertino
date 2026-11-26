@@ -91,8 +91,11 @@ impl Item {
 
     #[zbus(property)]
     fn icon_pixmap(&self) -> Pixmaps {
-        // one of a size the bar keeps and one far larger, which it drops
-        let mut pixmaps = square(16, [255, 0, 0, 255]);
+        // sizes around the two the bar draws, which it keeps the best of, and one far larger, which it drops
+        let mut pixmaps = square(48, [255, 0, 0, 255]);
+        for edge in [8, 16, 22, 32] {
+            pixmaps.extend(square(edge, [255, 0, 0, 255]));
+        }
         pixmaps.push((4096, 1, vec![0; 4096 * 4]));
         pixmaps
     }
@@ -335,13 +338,18 @@ fn an_item_registered_by_its_path_is_read_whole() {
             .iter()
             .map(|p| (p.width, p.height))
             .collect();
-        assert_eq!(sizes, [(16, 16)], "the pixmap too large to keep is dropped");
+        assert_eq!(
+            sizes,
+            [(16, 16), (32, 32)],
+            "the best of the sizes the bar draws, at one and two pixels a point"
+        );
+        assert_eq!(sni::kept_pixmap_sizes(), [16, 32]);
         assert_eq!(read.attention_movie_name, "sync-busy");
         assert_eq!(read.overlay_pixmaps.len(), 1);
         assert_eq!(read.icon_theme_path, "/opt/sync/icons");
         assert_eq!(read.tooltip.icon_name, "sync-tip");
-        assert_eq!(read.tooltip.pixmaps.len(), 1);
         assert_eq!(read.tooltip.text(), "Sync\n3 files & folders");
+        assert_eq!(read.tooltip_text(), "Sync\n3 files & folders");
         assert!(read.item_is_menu);
         assert_eq!(read.menu_path.as_deref(), Some("/MenuBar"));
 
@@ -398,6 +406,113 @@ fn an_item_registered_by_its_bus_name_goes_with_the_name() {
 
         app.release_name(name).await.unwrap();
         assert_eq!(next_removed(&events).await, read.id);
+    });
+}
+
+#[test]
+fn an_item_registered_first_by_another_connection_stays_with_its_owner() {
+    let bus = Bus::start();
+    async_io::block_on(async {
+        let (bar, app, squatter, watch) = (
+            bus.connect().await,
+            bus.connect().await,
+            bus.connect().await,
+            bus.connect().await,
+        );
+        let watcher = bar.unique_name().unwrap().to_string();
+        let mut heard = signals(&watch, KDE_WATCHER).await;
+        let (_worker, events) = Worker::start(bar).await.unwrap();
+        let (calls, _) = async_channel::unbounded();
+        app.object_server()
+            .at(sni::DEFAULT_ITEM_PATH, item(calls))
+            .await
+            .unwrap();
+        let name = "org.kde.StatusNotifierItem-8-1";
+        app.request_name(name).await.unwrap();
+
+        // another connection registers the item under a name it does not own, then its owner does
+        for conn in [&squatter, &app] {
+            watcher_call(
+                conn,
+                &watcher,
+                KDE_WATCHER,
+                "RegisterStatusNotifierItem",
+                name,
+            )
+            .await
+            .unwrap();
+        }
+        let read = next_item(&events).await;
+        next_signal(&mut heard, "StatusNotifierItemRegistered").await;
+
+        // the item stays when the connection that registered it first leaves, and goes with its owner
+        drop(squatter);
+        assert!(
+            soon(next_signal(&mut heard, "StatusNotifierItemUnregistered"))
+                .await
+                .is_none(),
+            "the item stays with its owner"
+        );
+        drop(app);
+        assert_eq!(next_removed(&events).await, read.id);
+        let signal = next_signal(&mut heard, "StatusNotifierItemUnregistered").await;
+        assert_eq!(signal.body().deserialize::<String>().unwrap(), read.id);
+    });
+}
+
+#[test]
+fn the_items_of_a_host_that_left_as_it_registered_are_told_gone() {
+    let bus = Bus::start();
+    async_io::block_on(async {
+        let (bar, app, watch) = (
+            bus.connect().await,
+            bus.connect().await,
+            bus.connect().await,
+        );
+        let watcher = bar.unique_name().unwrap().to_string();
+        let mut heard = signals(&watch, KDE_WATCHER).await;
+        let (_worker, _events) = Worker::start(bar).await.unwrap();
+        let (calls, _) = async_channel::unbounded();
+        app.object_server()
+            .at(ITEM_PATH, item(calls))
+            .await
+            .unwrap();
+        let id = format!("{}{ITEM_PATH}", app.unique_name().unwrap());
+        watcher_call(
+            &app,
+            &watcher,
+            KDE_WATCHER,
+            "RegisterStatusNotifierItem",
+            ITEM_PATH,
+        )
+        .await
+        .unwrap();
+        next_signal(&mut heard, "StatusNotifierItemRegistered").await;
+
+        // a host registers and leaves before its registration is looked at: its item is told gone either way
+        let host = "org.kde.StatusNotifierHost-11";
+        let register = zbus::Message::method_call(WATCHER_PATH, "RegisterStatusNotifierHost")
+            .unwrap()
+            .destination(watcher.as_str())
+            .unwrap()
+            .interface(KDE_WATCHER)
+            .unwrap()
+            .with_flags(zbus::message::Flags::NoReplyExpected)
+            .unwrap()
+            .build(&(host,))
+            .unwrap();
+        app.send(&register).await.unwrap();
+        drop(app);
+        let signal = next_signal(&mut heard, "StatusNotifierItemUnregistered").await;
+        assert_eq!(signal.body().deserialize::<String>().unwrap(), id);
+        let listed = watcher_property(
+            &watch,
+            &watcher,
+            KDE_WATCHER,
+            "RegisteredStatusNotifierItems",
+        )
+        .await;
+        assert!(Vec::<String>::try_from(listed).unwrap().is_empty());
     });
 }
 

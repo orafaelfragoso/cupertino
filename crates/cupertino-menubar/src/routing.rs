@@ -42,6 +42,13 @@ fn settings_pane(pane: &str) -> Action {
     ]))
 }
 
+/// Whether a bar opens the menu a source asks for (DBusMenu `ItemActivationRequested`): not while the bar gives way to
+/// an overview (`hidden`), where nothing of it shows or takes input, nor while the session is locked, where the lock
+/// screen covers it.
+pub fn opens_requested_menu(hidden: bool, locked: bool) -> bool {
+    !hidden && !locked
+}
+
 /// The menu key for an evdev key code; `None` for keys menus ignore. Letters come through
 /// [`typed_key`].
 pub fn menu_key(code: u32) -> Option<Key> {
@@ -250,8 +257,10 @@ pub fn resolve(effect: Effect, cx: &Context) -> Option<Action> {
                     at.x.round() as i32 + cx.origin.0,
                     at.y.round() as i32 + cx.origin.1,
                 );
+                // as the specification has them: the primary button activates the item (the controller opened the
+                // menu of one that is only a menu, `StatusItem::primary_action`); an item that is only a menu and
+                // has none the bar could read, and the secondary button on an item without a menu, show its own
                 let action = match button {
-                    // an item that is only a menu and has none the bar could read shows its own
                     Button::Primary if !status.item.item_is_menu => StatusAction::Activate { x, y },
                     Button::Primary | Button::Secondary => StatusAction::ContextMenu { x, y },
                     Button::Middle => StatusAction::SecondaryActivate { x, y },

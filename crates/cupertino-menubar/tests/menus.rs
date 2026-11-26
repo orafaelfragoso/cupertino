@@ -66,7 +66,7 @@ fn electrons_toggle_full_screen_stands_for_the_view_menus_full_screen_item() {
 }
 
 #[test]
-fn a_file_menu_left_with_only_hidden_items_once_settings_and_quit_leave_it_is_not_shown() {
+fn a_file_menu_left_with_only_hidden_items_once_settings_and_quit_leave_it_is_the_bars() {
     // Electron's File menu: Settings..., a separator, a hidden Close Developer Tools and Quit
     let file = MenuItem::submenu(
         2,
@@ -80,20 +80,75 @@ fn a_file_menu_left_with_only_hidden_items_once_settings_and_quit_leave_it_is_no
     );
     let edit = MenuItem::submenu(3, "Edit", vec![MenuItem::new(11, "Undo")]);
     let tree = MenuItem::submenu(0, "Root", vec![file, edit]);
-    let titles = merged_titles(&tree);
-    assert!(!titles.iter().any(|t| t == "File"), "{titles:?}");
-    assert!(titles.iter().any(|t| t == "Edit"), "{titles:?}");
+    let menus = merged(&tree);
+    let titles: Vec<&str> = menus.iter().map(|m| m.label.as_str()).collect();
+    assert_eq!(titles[..2], ["File", "Edit"], "{titles:?}");
+    assert_eq!(menus[0].id, fallback::FILE_MENU, "the bar's File");
+    assert_eq!(rows(&menus[0]), ["Close Window"]);
+}
+
+/// The labels of `menu`'s visible rows, separators left out.
+fn rows(menu: &MenuItem) -> Vec<&str> {
+    menu.children
+        .iter()
+        .filter(|c| c.visible && !c.separator)
+        .map(|c| c.label.as_str())
+        .collect()
 }
 
 #[test]
-fn a_file_menu_with_an_item_of_its_own_left_is_shown() {
+fn a_file_menu_with_an_item_of_its_own_left_gets_close_window() {
     let file = MenuItem::submenu(
         2,
         "File",
         vec![MenuItem::new(6, "New Window"), MenuItem::new(10, "Quit")],
     );
     let tree = MenuItem::submenu(0, "Root", vec![file]);
-    assert!(merged_titles(&tree).iter().any(|t| t == "File"));
+    let file = merged(&tree)
+        .into_iter()
+        .find(|m| m.label == "File")
+        .unwrap();
+    assert_eq!(file.id, ItemId(2), "the exporter's File");
+    assert_eq!(rows(&file), ["New Window", "Close Window"]);
+    let close = file.children.last().unwrap();
+    assert_eq!(
+        fallback::action_for(close.id),
+        Some(fallback::FallbackAction::CloseWindow)
+    );
+}
+
+#[test]
+fn a_file_menu_with_its_own_close_keeps_it_alone() {
+    let file = MenuItem::submenu(
+        2,
+        "File",
+        vec![MenuItem::new(6, "New Window"), MenuItem::new(7, "Close")],
+    );
+    let tree = MenuItem::submenu(0, "Root", vec![file]);
+    let file = merged(&tree)
+        .into_iter()
+        .find(|m| m.label == "File")
+        .unwrap();
+    assert_eq!(rows(&file), ["New Window", "Close"]);
+}
+
+#[test]
+fn an_application_without_a_file_menu_gets_the_bars() {
+    let edit = MenuItem::submenu(3, "Edit", vec![MenuItem::new(11, "Undo")]);
+    let tree = MenuItem::submenu(0, "Root", vec![edit]);
+    let titles = merged_titles(&tree);
+    assert_eq!(titles[..2], ["File", "Edit"], "{titles:?}");
+}
+
+#[test]
+fn a_file_menu_still_to_be_loaded_is_left_as_it_is() {
+    let tree = MenuItem::submenu(0, "Root", vec![MenuItem::submenu(2, "File", Vec::new())]);
+    let file = merged(&tree)
+        .into_iter()
+        .find(|m| m.label == "File")
+        .unwrap();
+    assert_eq!(file.id, ItemId(2));
+    assert!(file.children.is_empty(), "it loads when it opens");
 }
 
 fn bluetooth(powered: bool, devices: Vec<BluetoothDevice>) -> Extras {

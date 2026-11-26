@@ -8,7 +8,8 @@
 //!   ([`Roles`]); those items leave the menu they were in when it is the application's own menu, File or Edit. The
 //!   rest of the application's own menu (the GMenuModel application menu, or the DBusMenu menu titled with the
 //!   application's name) goes between About and Settings….
-//! * File, Edit, View and any other menu show as exported, View with Enter Full Screen appended when it has no full
+//! * File is always shown: the exporter's with Close Window appended when it has no close item, else the bar's (Close
+//!   Window). Edit, View and any other menu show as exported, View with Enter Full Screen appended when it has no full
 //!   screen item. Window is the bar's, with the exporter's items that are no duplicates below; Help is the bar's,
 //!   with the exporter's items below the search row. The order is File, Edit, View, the others, Window, Help.
 //!
@@ -34,6 +35,8 @@ const FULL_SCREEN_SEPARATOR: i32 = -1108;
 const WINDOW_ITEMS_SEPARATOR: i32 = -1109;
 /// Separator before the exporter's items in the Help menu.
 const HELP_ITEMS_SEPARATOR: i32 = -1110;
+/// Separator before the Close Window item the bar appends to an exported File menu without one.
+const FILE_CLOSE_SEPARATOR: i32 = -1111;
 
 /// Labels of a Window menu item the bar's Window menu already has, lower case.
 const WINDOW_DUPLICATES: [&str; 8] = [
@@ -190,7 +193,8 @@ impl Export<'_> {
         }
 
         let take = |id: ItemId| system.iter().find(|m| m.id == id).cloned();
-        let mut menus: Vec<MenuItem> = [parts.file, parts.edit].into_iter().flatten().collect();
+        let file = self.file_menu(parts.file, take(fallback::FILE_MENU));
+        let mut menus: Vec<MenuItem> = [file, parts.edit].into_iter().flatten().collect();
         if let Some(mut view) = parts.view {
             // a View still to be loaded is left as it is, so it loads when it opens
             let full_screen = take(fallback::VIEW_MENU)
@@ -229,6 +233,26 @@ impl Export<'_> {
             menus.push(help);
         }
         (app_menu, menus)
+    }
+
+    /// The File menu, which every application has: the exporter's, with the bar's Close Window after a separator when
+    /// it is loaded and has no item of role close; the bar's (Close Window) when the exporter has none or the App
+    /// menu emptied it. An exported File still to be loaded is left as it is, so it loads when it opens.
+    fn file_menu(&self, exported: Option<MenuItem>, bar: Option<MenuItem>) -> Option<MenuItem> {
+        let Some(mut file) = exported else { return bar };
+        let has_close = file.children.is_empty()
+            || file
+                .children
+                .iter()
+                .any(|c| self.role(c) == Some(Role::Close));
+        if !has_close {
+            if let Some(close) = bar.and_then(|b| b.children.into_iter().next()) {
+                file.children
+                    .push(MenuItem::separator(FILE_CLOSE_SEPARATOR));
+                file.children.push(close);
+            }
+        }
+        Some(file)
     }
 
     /// An item of the exporter's Window menu that the bar's Window menu already has, by role or label.

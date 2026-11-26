@@ -1,6 +1,6 @@
 //! An application's top-level menus that its exporter leaves empty until they are about to show are loaded before the
 //! bar first gets the tree, as a Chromium exporter (Electron applications) needs: a File that holds only Settings…, a
-//! separator, a hidden item and Quit, which the merge moves to the App menu, never shows as a title that goes when it
+//! separator, a hidden item and Quit, which the merge moves to the App menu, is the bar's File from the start, no title that goes when it
 //! is clicked. The exporter runs on a private session bus, with `AboutToShowGroup` and without it. A title that goes
 //! under an open menu and a held press closes it cleanly.
 
@@ -242,7 +242,7 @@ async fn next_tree(events: &async_channel::Receiver<Event>) -> (MenuSource, Menu
     .await
 }
 
-/// The first tree the bar gets from `exporter` has no File, the App menu's Settings… and Quit invoke the exporter's
+/// The first tree the bar gets from `exporter` has the bar's File, the App menu's Settings… and Quit invoke the exporter's
 /// items, and the other menus are loaded; no `opened` is sent for the menus told they are about to show.
 fn first_tree_is_merged<T: zbus::object_server::Interface>(exporter: impl FnOnce(Menus) -> T) {
     let bus = Bus::start();
@@ -263,7 +263,17 @@ fn first_tree_is_merged<T: zbus::object_server::Interface>(exporter: impl FnOnce
         bar.apply(&source, root);
 
         let titles = bar.titles();
-        assert!(!titles.iter().any(|t| t == "File"), "{titles:?}");
+        let file = bar
+            .controller
+            .content()
+            .menus
+            .iter()
+            .find(|m| m.label == "File");
+        assert_eq!(
+            file.map(|f| f.id),
+            Some(cupertino_menubar::fallback::FILE_MENU),
+            "the bar's File in {titles:?}"
+        );
         for title in ["Edit", "View", "Window", "Help"] {
             assert!(titles.iter().any(|t| t == title), "{title} in {titles:?}");
         }

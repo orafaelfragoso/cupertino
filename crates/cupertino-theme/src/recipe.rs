@@ -379,18 +379,52 @@ pub const DOCK_REDUCED_COVER: f32 = 0.87;
 /// Name of the Dock's running indicator material, a code recipe (see [`running_indicator`]).
 pub const RUNNING_INDICATOR_MATERIAL: &str = "RunningIndicator";
 
-/// The Dock's running indicator: no backdrop of its own, the gray [`RUNNING_INDICATOR_LIFT`] added to what lies behind
-/// it (plus-lighter) in the dark appearance, so the dot is a lighter, brighter version of the glass under it; in the
-/// light appearance the same gray is taken away (plus-darker).
+/// The Dock's running indicator: no backdrop of its own, a gray laid over what lies behind it: in the dark appearance
+/// [`RUNNING_INDICATOR_DARK`] added to it (plus-lighter), so the dot is a lighter, brighter version of the glass under
+/// it; in the light appearance [`RUNNING_INDICATOR_LIGHT`] taken away (plus-darker).
 pub fn running_indicator(appearance: Appearance) -> Recipe {
+    plus_gray(
+        RUNNING_INDICATOR_MATERIAL,
+        appearance,
+        RUNNING_INDICATOR_LIGHT,
+        RUNNING_INDICATOR_DARK,
+    )
+}
+
+/// Gray of the running indicator in the light appearance, laid plus-darker: the result is the backdrop less 0.498.
+pub const RUNNING_INDICATOR_LIGHT: f32 = 0.502;
+/// Gray of the running indicator in the dark appearance, laid plus-lighter: the backdrop plus 0.486.
+pub const RUNNING_INDICATOR_DARK: f32 = 0.486;
+
+/// Name of the Dock's separator material, a code recipe (see [`dock_separator`]).
+pub const DOCK_SEPARATOR_MATERIAL: &str = "DockSeparator";
+
+/// The line between the Dock's tiles: no backdrop of its own, [`DOCK_SEPARATOR_DARK`] added to what lies behind it
+/// (plus-lighter) in the dark appearance and [`DOCK_SEPARATOR_LIGHT`] taken away (plus-darker) in the light one.
+pub fn dock_separator(appearance: Appearance) -> Recipe {
+    plus_gray(
+        DOCK_SEPARATOR_MATERIAL,
+        appearance,
+        DOCK_SEPARATOR_LIGHT,
+        DOCK_SEPARATOR_DARK,
+    )
+}
+
+/// Gray of the Dock's separator in the light appearance, laid plus-darker: the backdrop less 0.224.
+pub const DOCK_SEPARATOR_LIGHT: f32 = 0.776;
+/// Gray of the Dock's separator in the dark appearance, laid plus-lighter: the backdrop plus 0.255.
+pub const DOCK_SEPARATOR_DARK: f32 = 0.255;
+
+/// A recipe of one opaque gray with no backdrop, plus-lighter in the dark appearance and plus-darker in the light.
+fn plus_gray(name: &str, appearance: Appearance, light: f32, dark: f32) -> Recipe {
     let (gray, blend) = if appearance.is_dark() {
-        (RUNNING_INDICATOR_LIFT, Blend::PlusLighter)
+        (dark, Blend::PlusLighter)
     } else {
-        (1.0 - RUNNING_INDICATOR_LIFT, Blend::PlusDarker)
+        (light, Blend::PlusDarker)
     };
     Recipe {
-        name: RUNNING_INDICATOR_MATERIAL.into(),
-        material: RUNNING_INDICATOR_MATERIAL.into(),
+        name: name.into(),
+        material: name.into(),
         fills: vec![Fill {
             rgba: [gray, gray, gray, 1.0],
             blend,
@@ -399,9 +433,6 @@ pub fn running_indicator(appearance: Appearance) -> Recipe {
         ..Recipe::default()
     }
 }
-
-/// How much lighter the running indicator is than what lies behind it, per channel.
-pub const RUNNING_INDICATOR_LIFT: f32 = 0.49;
 
 /// Name of the window background material, a code recipe (see [`window_background`]).
 pub const WINDOW_BACKGROUND_MATERIAL: &str = "WindowBackground";

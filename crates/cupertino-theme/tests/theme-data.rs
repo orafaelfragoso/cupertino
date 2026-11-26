@@ -1,10 +1,11 @@
 //! Loading a theme from its three documents, and resolving materials and colours from it.
 
 use cupertino_theme::recipe::{
-    app_grid_background, dock_reduced, opaque_background, overview_band, overview_band_selection,
-    running_indicator, switcher_panel, window_background, APP_GRID_MATERIAL, DOCK_MATERIAL,
-    OVERVIEW_BAND_MATERIAL, OVERVIEW_BAND_SELECTION_MATERIAL, RUNNING_INDICATOR_MATERIAL,
-    SWITCHER_MATERIAL, TEXT_BACKGROUND_MATERIAL, WINDOW_BACKGROUND_MATERIAL,
+    app_grid_background, dock_reduced, dock_separator, opaque_background, overview_band,
+    overview_band_selection, running_indicator, switcher_panel, window_background,
+    APP_GRID_MATERIAL, DOCK_MATERIAL, DOCK_SEPARATOR_MATERIAL, OVERVIEW_BAND_MATERIAL,
+    OVERVIEW_BAND_SELECTION_MATERIAL, RUNNING_INDICATOR_MATERIAL, SWITCHER_MATERIAL,
+    TEXT_BACKGROUND_MATERIAL, WINDOW_BACKGROUND_MATERIAL,
 };
 use cupertino_theme::{
     kept_when_inactive, Appearance, Backdrop, Blend, Catalog, Color, ColorOp, CornerCurve, Error,
@@ -409,6 +410,11 @@ fn materials_drawn_from_code_resolve_through_the_library() {
             "{a:?}"
         );
         assert_eq!(
+            t.recipe(a, DOCK_SEPARATOR_MATERIAL, &opts()).unwrap(),
+            dock_separator(a),
+            "{a:?}"
+        );
+        assert_eq!(
             t.recipe(a, RUNNING_INDICATOR_MATERIAL, &opts()).unwrap(),
             running_indicator(a),
             "{a:?}"
@@ -505,6 +511,20 @@ fn the_code_drawn_materials_have_the_look_their_role_needs() {
         app_grid_background(Appearance::Dark, false).fills,
         app_grid_background(Appearance::Light, false).fills
     );
+    for (recipe, light, dark) in [
+        (running_indicator as fn(Appearance) -> _, 0.502, 0.486),
+        (dock_separator, 0.776, 0.255),
+    ] {
+        for (appearance, gray, blend) in [
+            (Appearance::Light, light, Blend::PlusDarker),
+            (Appearance::Dark, dark, Blend::PlusLighter),
+        ] {
+            let r = recipe(appearance);
+            assert!(!r.has_backdrop(), "{appearance:?}");
+            assert_eq!(r.fills[0].rgba, [gray, gray, gray, 1.0], "{appearance:?}");
+            assert_eq!(r.fills[0].blend, blend, "{appearance:?}");
+        }
+    }
     assert_eq!(
         running_indicator(Appearance::Dark).fills[0].blend,
         Blend::PlusLighter

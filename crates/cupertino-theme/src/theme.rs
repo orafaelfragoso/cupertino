@@ -3,11 +3,11 @@ use crate::appearance::Appearance;
 use crate::error::Result;
 use crate::metrics::{ShapeTokens, WindowShadowPreset};
 use crate::recipe::{
-    app_grid_background, dock_reduced, opaque_background, overview_band, overview_band_selection,
-    running_indicator, switcher_panel, window_background, MaterialLibrary, MaterialOptions, Recipe,
-    APP_GRID_MATERIAL, DOCK_MATERIAL, OVERVIEW_BAND_MATERIAL, OVERVIEW_BAND_SELECTION_MATERIAL,
-    RUNNING_INDICATOR_MATERIAL, SWITCHER_MATERIAL, TEXT_BACKGROUND_MATERIAL,
-    WINDOW_BACKGROUND_MATERIAL,
+    app_grid_background, dock_reduced, dock_separator, opaque_background, overview_band,
+    overview_band_selection, running_indicator, switcher_panel, window_background, MaterialLibrary,
+    MaterialOptions, Recipe, APP_GRID_MATERIAL, DOCK_MATERIAL, DOCK_SEPARATOR_MATERIAL,
+    OVERVIEW_BAND_MATERIAL, OVERVIEW_BAND_SELECTION_MATERIAL, RUNNING_INDICATOR_MATERIAL,
+    SWITCHER_MATERIAL, TEXT_BACKGROUND_MATERIAL, WINDOW_BACKGROUND_MATERIAL,
 };
 use crate::tokens::DesignTokens;
 
@@ -60,6 +60,9 @@ impl Theme {
         }
         if material == RUNNING_INDICATOR_MATERIAL {
             return Ok(running_indicator(appearance));
+        }
+        if material == DOCK_SEPARATOR_MATERIAL {
+            return Ok(dock_separator(appearance));
         }
         if material == WINDOW_BACKGROUND_MATERIAL {
             if let Some(color) = self.tokens.color(appearance, WINDOW_BACKGROUND_TOKEN) {

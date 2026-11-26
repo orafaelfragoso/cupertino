@@ -3,6 +3,7 @@
 
 mod glass;
 mod launch;
+mod marks;
 #[path = "ready-to-show.rs"]
 mod ready_to_show;
 mod session;

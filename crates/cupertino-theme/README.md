@@ -83,8 +83,10 @@ flag and its Increase Contrast option.
   - `OverviewBandSelection`, the pill under the current desktop's name in that band (`overview_band_selection`): no
     backdrop, gray 0.1373 added to the band (plus-lighter) in the dark appearance, gray 0.9098 laid plus-darker in the
     light one.
-  - `RunningIndicator`, the Dock's running dot (`running_indicator`): no backdrop, gray 0.49 added to what lies behind
-    it (plus-lighter) in the dark appearance, taken away (plus-darker) in the light one.
+  - `RunningIndicator`, the Dock's running dot (`running_indicator`): no backdrop, gray 0.486 added to what lies behind
+    it (plus-lighter) in the dark appearance, gray 0.502 laid plus-darker in the light one.
+  - `DockSeparator`, the line between the Dock's tiles (`dock_separator`): no backdrop, gray 0.255 added to what lies
+    behind it (plus-lighter) in the dark appearance, gray 0.776 laid plus-darker in the light one.
   - `WindowBackground`, a window's own background drawn by the compositor (`window_background`): the theme's
     `window-background` colour, copied opaque, so glass over it in the same window reads the window and not the
     desktop.
@@ -221,7 +223,7 @@ in light and dark; 118 and 150 in high contrast), `PanelTrack` against a module,
 background (118 in light, 145 in dark; 110 and 165 in high contrast). The thumb colour, which is a slider's knob and a
 panel slider's fill, stands 3:1 against both tracks. A disabled `PanelTrack` has its own colour, the enabled track faded towards the module (185 in light, 95 in dark; 160 and 110 in high contrast): still apart from the module, fainter than the enabled track.
 
-Menus, popovers and the Dock (`Surface::Menu`, `Surface::Popover`, `Surface::Dock`) are glass (`GLASS_MATERIAL`, `CLEAR_GLASS_MATERIAL`): `ThemeTokens::surface` keeps asking for it with Reduce Transparency and in high contrast, where the compositor draws the glass recipe of those options; the Dock asks for its own `Dock` body with Reduce Transparency. The application grid (`Surface::AppGrid`) keeps its `AppGrid` material too, whose recipe has variants of its own for those options, and a window's background drawn by the compositor (`Surface::WindowBackground`, `WindowBackground`) is opaque, so it is kept as well. The Dock's running dot (`Surface::DockIndicator`) asks for `RunningIndicator`, which lightens what lies behind it, in the dark appearance only (not in high contrast); elsewhere it asks for nothing and the dot paints itself. The other surfaces ask for no material with Reduce Transparency or in high contrast and paint their opaque fill.
+Menus, popovers and the Dock (`Surface::Menu`, `Surface::Popover`, `Surface::Dock`) are glass (`GLASS_MATERIAL`, `CLEAR_GLASS_MATERIAL`): `ThemeTokens::surface` keeps asking for it with Reduce Transparency and in high contrast, where the compositor draws the glass recipe of those options; the Dock asks for its own `Dock` body with Reduce Transparency. The application grid (`Surface::AppGrid`) keeps its `AppGrid` material too, whose recipe has variants of its own for those options, and a window's background drawn by the compositor (`Surface::WindowBackground`, `WindowBackground`) is opaque, so it is kept as well. The Dock's running dot (`Surface::DockIndicator`) asks for `RunningIndicator`, which lays a gray over what lies behind it (not in high contrast, where it asks for nothing and the dot paints itself), as does the separator's line (`Surface::DockSeparator`, `DockSeparator`). The other surfaces ask for no material with Reduce Transparency or in high contrast and paint their opaque fill.
 
 `ThemeTokens::on_glass(tone)` is the theme of what a window draws on glass whose face the compositor measured as `tone`
 (`None` until it did, and for shapes too large to follow what lies behind them): the neutral colours of `Text`,
@@ -277,7 +279,6 @@ is glass of that style, drawn as the system variant in brackets (`GlassStyle::va
   nothing bent at the edge (the Dock keeps its optics and changes its face, the controls have no values of their own), and
   with Increase Contrast the same optics under the contrast face; for a recipe of `materials.json`, its opaque variant
   and the high-contrast catalog's.
-- **kept in dark**: kept in the dark appearance, not drawn in the light one.
 - **opaque**: the component asks for no material and paints the theme's opaque window colour in the same shape.
 - **painted**: the component asks for no material and paints an opaque body of its own.
 
@@ -301,7 +302,8 @@ is glass of that style, drawn as the system variant in brackets (`GlassStyle::va
 | Dock bar | `crates/cupertino-dock/src/view/bar.rs` | `Surface::DockBar` | kept | kept |
 | Dock stack panel (the grid and its pointer, dense glass) | `crates/cupertino-dock/src/view/stack.rs` | `cx.glass(panel_glass(` (`CartouchePopover`, medium) | kept | kept |
 | Dock tile name and menu | `crates/cupertino-dock/src/view/label.rs` | `Surface::Tooltip` | opaque | kept |
-| Dock running indicator | `crates/cupertino-dock/src/view/bar.rs` | `Surface::DockIndicator` | kept in dark | opaque |
+| Dock running indicator | `crates/cupertino-dock/src/view/bar.rs` | `Surface::DockIndicator` | kept | opaque |
+| Dock separator | `crates/cupertino-dock/src/view/bar.rs` | `Surface::DockSeparator` | kept | opaque |
 | Application switcher | `crates/cupertino-dock/src/switcher_kit.rs` | `Surface::Switcher` | opaque | kept |
 | Overview's desktops band and its current desktop's pill | `crates/cupertino-shell-overview/src/chrome.rs` | `Surface::OverviewBand`, `Surface::OverviewBandSelection` | kept | kept |
 | Control panel tiles | `crates/cupertino-controlcenter/src/view.rs` | `Glass::module()` (`ControlCenter`) | kept | kept |

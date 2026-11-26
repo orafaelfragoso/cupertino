@@ -19,5 +19,7 @@ mod menus;
 mod registrar;
 #[path = "renumbered-menu.rs"]
 mod renumbered_menu;
+#[path = "status-input.rs"]
+mod status_input;
 #[path = "status-items.rs"]
 mod status_items;

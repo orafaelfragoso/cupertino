@@ -56,10 +56,7 @@ pub enum Request {
     /// The menu of an item (0 for the whole menu) of a followed DBusMenu exporter, an application's or a status
     /// item's, is about to be shown: tell the exporter, then read again what it says has changed. The answer is waited
     /// for by the worker, never by the bar, and no longer than [`Waits::about_to_show`].
-    AboutToShow {
-        menu: KdeAppMenu,
-        item: i32,
-    },
+    AboutToShow { menu: KdeAppMenu, item: i32 },
     /// Send `clicked` for an item of a DBusMenu, at `time` (milliseconds of the input clock).
     ActivateDbusMenu {
         menu: KdeAppMenu,
@@ -81,14 +78,8 @@ pub enum Request {
         item: i32,
         token: Option<String>,
     },
-    /// Primary action of a status item at a point of the compositor space.
-    ActivateStatus {
-        service: String,
-        path: String,
-        x: i32,
-        y: i32,
-    },
-    /// Send a status item a click or a scroll (`Activate`, `SecondaryActivate`, `ContextMenu`, `Scroll`).
+    /// Send a status item a click or a scroll (`Activate`, `SecondaryActivate`, `ContextMenu`, `Scroll`), at a point
+    /// of the compositor space.
     StatusAction {
         service: String,
         path: String,
@@ -578,30 +569,6 @@ fn handle(conn: &Connection, spawner: &Spawner, request: Request) {
                 }
             },
             "cupertino-activate-menu",
-        ),
-        Request::ActivateStatus {
-            service,
-            path,
-            x,
-            y,
-        } => executor.spawn(
-            async move {
-                let item = StatusItem {
-                    service,
-                    path,
-                    ..StatusItem::default()
-                };
-                if let Err(e) = sni::activate_item(&conn, &item, x, y).await {
-                    report(
-                        &format!(
-                            "cannot activate the status item {}{}",
-                            item.service, item.path
-                        ),
-                        e,
-                    );
-                }
-            },
-            "cupertino-status-activate",
         ),
         Request::StatusAction {
             service,

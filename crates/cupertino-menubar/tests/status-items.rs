@@ -1,7 +1,8 @@
 //! Status notifier items through the worker's watcher on a private session bus: registration by object path and by
 //! bus name, both interface names of the watcher and of an item, other hosts, every property read, the change signals
 //! reading again what they name, clicks and scrolls sent to the item, and items that leave. Then what the bar draws of
-//! an item: its attention icon, its tooltip text, its overlay, and an icon of its own icon directory.
+//! an item: its attention icon, its tooltip text, its overlay, and an icon of its own icon directory, found as a menu
+//! row's icon in its exporter's directories is.
 
 // a test owns its thread: it blocks on the bus and writes its own icon files
 #![allow(clippy::disallowed_methods)]
@@ -725,9 +726,43 @@ fn an_icon_of_the_items_own_directory_is_found() {
     assert_eq!((icon.width, icon.height), (22, 22));
     assert_eq!(first_pixel(&icon), [0, 0, 255, 255]);
     let named = Loader::default()
-        .named_icon("sync", &flat.to_string_lossy(), 16)
+        .named_icon("sync", std::slice::from_ref(&flat), 16)
         .unwrap();
     assert_eq!(first_pixel(&named), [0, 255, 0, 255]);
+}
+
+#[test]
+fn a_menu_row_and_an_item_find_an_icon_of_their_own_theme_alike() {
+    let themes = scratch("shared-themes");
+    svg(themes.join("hicolor/16x16/apps/pause.svg"), "#00ff00");
+    svg(themes.join("hicolor/24x24/apps/pause.svg"), "#0000ff");
+    let loader = Loader::default();
+    // a row names it with its exporter's IconThemePath, an empty directory ahead of it
+    let row = loader
+        .row_icon(&icons::Request {
+            key: (1, 24),
+            data: None,
+            name: Some("pause".into()),
+            dirs: vec![scratch("shared-empty"), themes.clone()],
+            px: 24,
+        })
+        .unwrap();
+    assert_eq!((row.width, row.height), (24, 24));
+    assert_eq!(first_pixel(&row), [0, 0, 255, 255], "the size nearest");
+    // an item names it with its own
+    let item = StatusItem {
+        icon_name: "pause".into(),
+        icon_theme_path: themes.to_string_lossy().into_owned(),
+        ..StatusItem::default()
+    };
+    let icon = loader.status_icon(&item, 16).unwrap();
+    assert_eq!(first_pixel(&icon), [0, 255, 0, 255]);
+    assert_eq!(
+        loader
+            .named_icon("pause", &[themes], 24)
+            .map(|i| first_pixel(&i)),
+        Some([0, 0, 255, 255])
+    );
 }
 
 #[test]

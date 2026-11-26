@@ -7,7 +7,6 @@ use crate::extras;
 use crate::feed;
 use cupertino_assets::Assets;
 use cupertino_icons::{SystemIcons, ThemeIcons};
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -30,9 +29,6 @@ pub struct Request {
     pub px: u32,
 }
 
-/// At most this many exporters' icon directories are kept looked up; past it the lookups start again.
-const MAX_EXPORTER_LOOKUPS: usize = 16;
-
 /// The icon themes and the asset packs, looked up on the I/O pool. One loader serves the component's tasks in turn.
 #[derive(Clone, Default)]
 pub struct Loader {
@@ -40,10 +36,7 @@ pub struct Loader {
 }
 
 struct Packs {
-    assets: Assets,
     themed: ThemeIcons,
-    /// The icons under each exporter's own directories, by the directories.
-    exporters: HashMap<Vec<PathBuf>, ThemeIcons>,
     /// The template symbols of the asset packs, which rows name as `symbol.*`.
     system: SystemIcons,
 }
@@ -63,8 +56,6 @@ impl Loader {
                 themed: ThemeIcons::new(&assets),
                 // the extras' symbols are drawn by the toolkit from the same packs; a missing one is reported here
                 system: SystemIcons::required(&assets, &[], &extras::SYMBOL_NAMES),
-                exporters: HashMap::new(),
-                assets,
             }
         });
         f(packs)
@@ -100,49 +91,22 @@ impl Loader {
                     })
                 });
             }
-            self.in_dirs(name, &request.dirs, request.px)
-                .or_else(|| self.themed(name, request.px))
-        })
-    }
-
-    /// The icon `name` under an exporter's own directories (each searched as an icon theme root and flat), `None`
-    /// without directories or such an icon there.
-    fn in_dirs(&self, name: &str, dirs: &[PathBuf], px: u32) -> Option<Pixels> {
-        if dirs.is_empty() {
-            return None;
-        }
-        let pixmap = self.with(|packs| {
-            if packs.exporters.len() >= MAX_EXPORTER_LOOKUPS && !packs.exporters.contains_key(dirs)
-            {
-                packs.exporters.clear();
-            }
-            let assets = &packs.assets;
-            packs
-                .exporters
-                .entry(dirs.to_vec())
-                .or_insert_with(|| ThemeIcons::with_roots(assets, dirs.to_vec(), Vec::new()))
-                .load(name, px)
-        })?;
-        Some(Pixels {
-            width: pixmap.width(),
-            height: pixmap.height(),
-            rgba: pixmap.data().to_vec(),
+            self.named_icon(name, &request.dirs, request.px)
         })
     }
 
     /// The icon of a status item at `px` device pixels: its pixmap, else the icon it names, looked up in its
     /// `IconThemePath` first ([`Loader::named_icon`]); its overlay, when it has one, over the bottom right corner.
     pub fn status_icon(&self, item: &StatusItem, px: u32) -> Option<Pixels> {
-        let icon = feed::status_icon(item, px, |name, px| {
-            self.named_icon(name, &item.icon_theme_path, px)
-        })?;
+        let dirs = [PathBuf::from(&item.icon_theme_path)];
+        let icon = feed::status_icon(item, px, |name, px| self.named_icon(name, &dirs, px))?;
         let overlay_px = ((f64::from(px) * OVERLAY_SHARE).round() as u32).max(1);
         let overlay = sni::best_pixmap(&item.overlay_pixmaps, overlay_px as i32)
             .and_then(|p| cupertino_icons::from_argb(p.width, p.height, &p.argb))
             .or_else(|| {
                 Some(item.overlay_icon_name.as_str())
                     .filter(|name| !name.is_empty())
-                    .and_then(|name| self.named_icon(name, &item.icon_theme_path, overlay_px))
+                    .and_then(|name| self.named_icon(name, &dirs, overlay_px))
             });
         Some(match overlay {
             Some(overlay) => overlaid(icon, &overlay),
@@ -150,24 +114,23 @@ impl Loader {
         })
     }
 
-    /// The icon `name` at `px` device pixels, looked up first in `theme_path`, a directory of an item's or a menu's
-    /// own icons (`IconThemePath`; empty for none), then in the system's icon themes ([`Loader::themed`]). The
-    /// directory is searched as icons laid flat in it (`<dir>/<name>.png`), as a theme directory
-    /// (`<dir>/<size>/<context>/<name>.png`) and as a base of themes, `hicolor` first
-    /// (`<dir>/hicolor/<size>/<context>/<name>.svg`); within one, the size nearest `px` wins.
-    pub fn named_icon(&self, name: &str, theme_path: &str, px: u32) -> Option<Pixels> {
-        find_in_theme_path(Path::new(theme_path), name, px)
-            .and_then(|path| cupertino_icons::load_icon(&path, px))
+    /// The icon `name` at `px` device pixels, looked up first in `dirs`, the directories of a status item's or a
+    /// menu's own icons (their `IconThemePath`; an empty path stands for none) in turn, then in the system's icon
+    /// themes ([`Loader::themed`]). Each directory is searched by [`find_in_theme_path`].
+    pub fn named_icon(&self, name: &str, dirs: &[PathBuf], px: u32) -> Option<Pixels> {
+        dirs.iter()
+            .filter_map(|dir| find_in_theme_path(dir, name, px))
+            .find_map(|path| cupertino_icons::load_icon(&path, px))
             .or_else(|| self.themed(name, px))
     }
 }
 
 /// How much of a status icon's width and height its overlay covers, at its bottom right corner.
 const OVERLAY_SHARE: f64 = 0.5;
-/// Most entries read of one directory while an icon is looked up in an item's own icons; past it the rest are not
-/// looked at, so a directory of any size costs a bounded time.
+/// Most entries read of one directory while an icon is looked up in an item's or a menu's own icons; past it the rest
+/// are not looked at, so a directory of any size costs a bounded time.
 const MAX_DIR_ENTRIES: usize = 256;
-/// The file types an item's own icons are read in.
+/// The file types an item's or a menu's own icons are read in.
 const ICON_EXTENSIONS: [&str; 2] = ["png", "svg"];
 /// The theme a base of themes is searched in first.
 const BASE_THEME: &str = "hicolor";
@@ -259,9 +222,11 @@ fn in_theme(theme: &Path, stem: &str, px: u32) -> Option<PathBuf> {
     best.map(|(_, path)| path)
 }
 
-/// The file of icon `name` at `px` device pixels in `dir`, a directory of an item's own icons: laid flat in it, else
-/// in it as a theme directory, else in the `hicolor` theme under it, else in the other themes under it. `None` for an
-/// empty or missing directory and for a name that is a path.
+/// The file of icon `name` at `px` device pixels in `dir`, a directory of an item's or a menu's own icons: laid flat in
+/// it (`<dir>/<name>.png`), else in the `hicolor` theme under it (`<dir>/hicolor/<size>/<context>/<name>.svg`), else in
+/// it as a theme directory (`<dir>/<size>/<context>/<name>.png`), else in the other themes under it; within a theme
+/// the size nearest `px` wins, and at most [`MAX_DIR_ENTRIES`] entries of a directory are read. `None` for an empty or
+/// missing directory and for a name that is a path.
 #[expect(
     clippy::disallowed_methods,
     reason = "runs on the I/O pool (kit::task::io), as every icon does"

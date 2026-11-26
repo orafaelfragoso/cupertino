@@ -3,7 +3,7 @@
 //! at the rectangle the controller gave it. The windows draw and describe what the controller holds and send the
 //! pointer and the keys back as [`Input`], in the coordinates of the bar.
 
-use crate::controller::{Level, MenuController};
+use crate::controller::{Button as PointerButton, Level, MenuController};
 use crate::extras::{ExtraGlyph, Passphrase};
 use crate::fallback::HELP_SEARCH;
 use crate::feed::{Shared, StatusIcon, SCREEN_CAPTURE_SLOT};
@@ -56,6 +56,9 @@ pub const BAR_APP_ID: &str = "cupertino-menubar.bar-";
 const BAR_TITLE: &str = "Menu Bar";
 /// Corner radius of a popup menu in points.
 pub const POPUP_RADIUS: f64 = 11.5;
+/// How far a touchpad or another smooth scroll moves, in points, for one step sent to a status item: the distance the
+/// window system gives one detent of a wheel, so either scrolls an item alike.
+pub const SCROLL_POINTS_PER_STEP: f64 = 15.0;
 /// The share of the label's opacity a row's shortcut keeps, on an enabled row and on a disabled one (whose label is
 /// dimmed already).
 const SHORTCUT_ALPHA: f32 = 0.28;
@@ -128,8 +131,14 @@ impl BarId {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum BarPointer {
     Move(BarPoint),
-    Press(BarPoint),
-    Release(BarPoint),
+    Press(BarPoint, PointerButton),
+    Release(BarPoint, PointerButton),
+    /// A scroll by `steps` `(x, y)`, positive right and down: a wheel's detent is one, a touchpad's movement of
+    /// [`SCROLL_POINTS_PER_STEP`] points is one.
+    Scroll {
+        at: BarPoint,
+        steps: (f64, f64),
+    },
     /// Assistive technology clicked the slot or the row around the point.
     Click(BarPoint),
 }
@@ -1066,16 +1075,31 @@ impl<M: Clone + 'static> Widget<M> for Root<M> {
                     }
                     PointerEvent::Button {
                         position,
-                        button: MouseButton::Left,
+                        button:
+                            button @ (MouseButton::Left | MouseButton::Right | MouseButton::Middle),
                         pressed,
                         ..
                     } => {
+                        let button = match button {
+                            MouseButton::Right => PointerButton::Secondary,
+                            MouseButton::Middle => PointerButton::Middle,
+                            _ => PointerButton::Primary,
+                        };
                         if pressed {
-                            BarPointer::Press(at(position))
+                            BarPointer::Press(at(position), button)
                         } else {
-                            BarPointer::Release(at(position))
+                            BarPointer::Release(at(position), button)
                         }
                     }
+                    PointerEvent::Scroll {
+                        position,
+                        delta,
+                        value120,
+                        ..
+                    } => BarPointer::Scroll {
+                        at: at(position),
+                        steps: scroll_steps(delta, value120),
+                    },
                     // the controller keeps its selection until the pointer shows up elsewhere
                     _ => return Propagation::Stop,
                 };
@@ -1136,6 +1160,19 @@ fn kit_rect(r: geom::Rect) -> Rect {
 
 fn centre(r: geom::Rect) -> BarPoint {
     BarPoint::new(r.x + r.w / 2.0, r.y + r.h / 2.0)
+}
+
+/// A scroll's movement in steps `(x, y)`: a wheel's in its detents (120ths of one), any other's in points.
+fn scroll_steps(delta: Point, value120: Option<(i32, i32)>) -> (f64, f64) {
+    /// The parts of one detent the window system counts a wheel's movement in.
+    const DETENT: f64 = 120.0;
+    match value120 {
+        Some((x, y)) if (x, y) != (0, 0) => (f64::from(x) / DETENT, f64::from(y) / DETENT),
+        _ => (
+            delta.x / SCROLL_POINTS_PER_STEP,
+            delta.y / SCROLL_POINTS_PER_STEP,
+        ),
+    }
 }
 
 /// Assistive technology's click on a slot or a row: the pointer pressed and released at its centre.

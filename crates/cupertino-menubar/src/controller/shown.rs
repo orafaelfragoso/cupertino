@@ -79,17 +79,41 @@ impl MenuController {
         self.synced(out)
     }
 
+    /// The primary button went down ([`MenuController::button_press`]).
     pub fn pointer_press(&mut self, pos: Point, now: f64) -> Outcome {
+        self.button_press(pos, Button::Primary, now)
+    }
+
+    /// The primary button went up ([`MenuController::button_release`]).
+    pub fn pointer_release(&mut self, pos: Point, now: f64) -> Outcome {
+        self.button_release(pos, Button::Primary, now)
+    }
+
+    /// `button` went down: the primary and the secondary button open a title's menu and press in the menus; the
+    /// middle button opens none. A slot it opens no menu of is activated by the release over it
+    /// ([`Effect::SlotActivated`]).
+    pub fn button_press(&mut self, pos: Point, button: Button, now: f64) -> Outcome {
         self.at(now);
-        let out = self.pressed(pos, now);
+        let out = self.pressed(pos, button, now);
         self.synced(out)
     }
 
-    /// A press opened a menu from its title or pressed in an open one: what its release does is
-    /// [`Tracking::release`]. A drag onto a row chooses it, a quick click on the title leaves the menu open.
-    pub fn pointer_release(&mut self, pos: Point, now: f64) -> Outcome {
+    /// `button` went up. A press opened a menu from its title or pressed in an open one: what its release does is
+    /// [`Tracking::release`]. A drag onto a row chooses it, a quick click on the title leaves the menu open. The
+    /// release of a button other than the one pressed does nothing.
+    pub fn button_release(&mut self, pos: Point, button: Button, now: f64) -> Outcome {
         self.at(now);
-        let out = self.released(pos, now);
+        let out = self.released(pos, button, now);
+        self.synced(out)
+    }
+
+    /// The pointer at `pos` scrolled by `steps` `(x, y)` (positive right and down), in steps and parts of one: a
+    /// wheel's detent is one step, a touchpad's movement a part of one in proportion. Over a status item with no menu
+    /// open the whole steps gathered over it are sent ([`Effect::SlotScrolled`]) and the rest is kept for the next
+    /// scroll over it; a scroll the other way or over another slot starts again.
+    pub fn pointer_scroll(&mut self, pos: Point, steps: (f64, f64), now: f64) -> Outcome {
+        self.at(now);
+        let out = self.scrolled(pos, steps);
         self.synced(out)
     }
 

@@ -1,8 +1,9 @@
 //! From input and controller effects to what the process does: key mapping and the action a
 //! controller effect stands for, given what the bar shows.
 
-use crate::controller::{Effect, Key, SYSTEM_MENU_ROOT};
+use crate::controller::{Button, Effect, Key, ScrollAxis, SYSTEM_MENU_ROOT};
 use crate::dbus::dbusmenu::MenuEvent;
+use crate::dbus::sni::{Orientation, StatusAction, StatusItem};
 use crate::extras::{ExtraAction, ExtraKind, SystemAction};
 use crate::fallback::{self, FallbackAction};
 use crate::feed::{BarFeed, Shared};
@@ -241,27 +242,57 @@ pub fn resolve(effect: Effect, cx: &Context) -> Option<Action> {
             slot: SlotKey::ControlPanel | SlotKey::Clock,
             ..
         } => None,
-        Effect::SlotActivated { slot } => match slot {
-            SlotKey::Status(id) => {
+        Effect::SlotActivated { slot, button, at } => match (slot, button) {
+            (SlotKey::Status(id), button) => {
                 let status = cx.shared.status.iter().find(|s| s.item.id == id)?;
-                let rect = cx.layout.slot(&SlotKey::Status(id))?.rect;
-                // the item anchors what it shows at the middle of its slot
+                // where the pointer is, in the compositor space
                 let (x, y) = (
-                    (rect.x + rect.w / 2.0).round() as i32 + cx.origin.0,
-                    (rect.y + rect.h / 2.0).round() as i32 + cx.origin.1,
+                    at.x.round() as i32 + cx.origin.0,
+                    at.y.round() as i32 + cx.origin.1,
                 );
-                Some(Action::Request(Request::ActivateStatus {
-                    service: status.item.service.clone(),
-                    path: status.item.path.clone(),
-                    x,
-                    y,
-                }))
+                let action = match button {
+                    // an item that is only a menu and has none the bar could read shows its own
+                    Button::Primary if !status.item.item_is_menu => StatusAction::Activate { x, y },
+                    Button::Primary | Button::Secondary => StatusAction::ContextMenu { x, y },
+                    Button::Middle => StatusAction::SecondaryActivate { x, y },
+                };
+                Some(status_action(&status.item, action))
             }
-            SlotKey::ControlPanel => Some(Action::TogglePanel(Panel::ControlPanel)),
-            SlotKey::Clock => Some(Action::TogglePanel(Panel::NotificationCenter)),
-            SlotKey::System | SlotKey::AppMenu | SlotKey::Menu(_) => None,
+            (SlotKey::ControlPanel, Button::Primary) => {
+                Some(Action::TogglePanel(Panel::ControlPanel))
+            }
+            (SlotKey::Clock, Button::Primary) => {
+                Some(Action::TogglePanel(Panel::NotificationCenter))
+            }
+            _ => None,
         },
+        Effect::SlotScrolled {
+            slot: SlotKey::Status(id),
+            steps,
+            axis,
+        } => {
+            let status = cx.shared.status.iter().find(|s| s.item.id == id)?;
+            let orientation = match axis {
+                ScrollAxis::Vertical => Orientation::Vertical,
+                ScrollAxis::Horizontal => Orientation::Horizontal,
+            };
+            let action = StatusAction::Scroll {
+                delta: steps,
+                orientation,
+            };
+            Some(status_action(&status.item, action))
+        }
+        Effect::SlotScrolled { .. } => None,
     }
+}
+
+/// Send `action` to the status item `item`.
+fn status_action(item: &StatusItem, action: StatusAction) -> Action {
+    Action::Request(Request::StatusAction {
+        service: item.service.clone(),
+        path: item.path.clone(),
+        action,
+    })
 }
 
 /// The origin of `item` as the bar shows it in the menu of `slot`; `None` when it does not show there.

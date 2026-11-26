@@ -86,10 +86,46 @@ pub enum Effect {
         item: ItemId,
         time: u32,
     },
-    /// A slot without a menu (clock, control panel, status item) was clicked.
+    /// A slot was clicked with `button` at `at` (the bar's coordinates) and opened no menu: a slot without one (clock,
+    /// control panel, a status item without a menu) clicked with the primary or secondary button, or any slot clicked
+    /// with the middle button.
     SlotActivated {
         slot: SlotKey,
+        button: Button,
+        at: Point,
     },
+    /// The pointer scrolled over a status item, by whole `steps` along `axis` (positive down or right), the scrolls of
+    /// a touchpad gathered into steps ([`MenuController::pointer_scroll`]).
+    SlotScrolled {
+        slot: SlotKey,
+        steps: i32,
+        axis: ScrollAxis,
+    },
+}
+
+/// A button of the pointer, as the bar tells them apart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Button {
+    /// The left button (the right one on a left-handed pointer): chooses, and opens a title's menu.
+    Primary,
+    /// The right button: opens a title's menu as the primary one does, else asks for a context menu.
+    Secondary,
+    /// The middle button: a status item's secondary action.
+    Middle,
+}
+
+/// Which way a scroll goes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ScrollAxis {
+    Vertical,
+    Horizontal,
+}
+
+/// Scroll movement gathered over one slot and not yet sent as whole steps, per axis `(x, y)`.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct ScrollRest {
+    slot: Option<SlotKey>,
+    steps: (f64, f64),
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -242,7 +278,13 @@ pub struct MenuController {
     open_slot: Option<SlotKey>,
     levels: Vec<Level>,
     title_focus: Option<SlotKey>,
-    pressed_button: Option<SlotKey>,
+    /// A slot pressed that opened no menu, and with which button: its release over it activates it.
+    pressed_button: Option<(SlotKey, Button)>,
+    /// The button whose press the bar follows (it opened a menu, pressed in one or pressed a slot); the release of
+    /// another button does nothing.
+    held: Option<Button>,
+    /// The scroll over a slot short of a whole step.
+    scroll: ScrollRest,
     hit_slot: Option<SlotKey>,
     last_pointer: Option<Point>,
     typing: TypeAhead,
@@ -295,6 +337,8 @@ impl MenuController {
             levels: Vec::new(),
             title_focus: None,
             pressed_button: None,
+            held: None,
+            scroll: ScrollRest::default(),
             hit_slot: None,
             last_pointer: None,
             typing: TypeAhead::default(),
@@ -910,7 +954,17 @@ impl MenuController {
         }
     }
 
-    fn pressed(&mut self, pos: Point, now: f64) -> Outcome {
+    /// A press of `button`: the primary and the secondary button open a title's menu and press in the menus alike;
+    /// the middle button opens no menu, presses no row and closes the menus as a press outside them does.
+    fn pressed(&mut self, pos: Point, button: Button, now: f64) -> Outcome {
+        let out = self.pressed_with(pos, button, now);
+        // the press the bar follows from now on, until its release
+        self.held =
+            (self.mode == Mode::Tracking || self.pressed_button.is_some()).then_some(button);
+        out
+    }
+
+    fn pressed_with(&mut self, pos: Point, button: Button, now: f64) -> Outcome {
         self.last_pointer = Some(pos);
         let mut out = Outcome::default();
         if self.flash.is_some() {
@@ -918,18 +972,19 @@ impl MenuController {
             return out;
         }
         let hit = self.hit(pos);
+        let opens = button != Button::Middle;
         if !self.is_open() {
             match hit {
                 Hit::Slot => {
                     let key = self.hit_slot.clone().expect("slot hit");
                     out.consumed = true;
-                    if self.slot_has_menu(&key) {
+                    if opens && self.slot_has_menu(&key) {
                         self.open_title(key, &mut out);
                         self.tracking = Some(Tracking::from_title(now));
                         self.mode = Mode::Tracking;
                         self.keyboard_origin = false;
                     } else {
-                        self.pressed_button = Some(key);
+                        self.pressed_button = Some((key, button));
                     }
                 }
                 Hit::Bar => out.consumed = true,
@@ -943,11 +998,12 @@ impl MenuController {
         }
         out.consumed = true;
         match hit {
+            Hit::Popup { .. } | Hit::PopupPadding { .. } if !opens => {}
             Hit::Slot => {
                 let key = self.hit_slot.clone().expect("slot hit");
                 if self.open_slot.as_ref() == Some(&key) {
                     self.close_all(&mut out);
-                } else if self.slot_has_menu(&key) {
+                } else if opens && self.slot_has_menu(&key) {
                     self.open_title(key, &mut out);
                     self.tracking = Some(Tracking::from_title(now));
                     self.mode = Mode::Tracking;
@@ -979,17 +1035,27 @@ impl MenuController {
 
     /// A press opened a menu from its title or pressed in an open one: what its release does is
     /// [`Tracking::release`]. A drag onto a row chooses it, a quick click on the title leaves the menu open.
-    fn released(&mut self, pos: Point, now: f64) -> Outcome {
+    fn released(&mut self, pos: Point, button: Button, now: f64) -> Outcome {
         self.last_pointer = Some(pos);
         let mut out = Outcome::default();
         if self.flash.is_some() {
             out.consumed = true;
             return out;
         }
+        if self.held.is_some_and(|held| held != button) {
+            // another button than the one pressed: the press goes on
+            out.consumed = self.is_open() || self.pressed_button.is_some();
+            return out;
+        }
+        self.held = None;
         let hit = self.hit(pos);
-        if let Some(button) = self.pressed_button.take() {
-            if hit == Hit::Slot && self.hit_slot.as_ref() == Some(&button) {
-                out.effects.push(Effect::SlotActivated { slot: button });
+        if let Some((slot, button)) = self.pressed_button.take() {
+            if hit == Hit::Slot && self.hit_slot.as_ref() == Some(&slot) {
+                out.effects.push(Effect::SlotActivated {
+                    slot,
+                    button,
+                    at: pos,
+                });
             }
             out.consumed = true;
             return out;
@@ -1032,6 +1098,47 @@ impl MenuController {
         out
     }
 
+    /// A scroll by `steps` `(x, y)`, in steps and parts of one: over a status item with no menu open, the whole steps
+    /// gathered over it so far.
+    fn scrolled(&mut self, pos: Point, steps: (f64, f64)) -> Outcome {
+        self.last_pointer = Some(pos);
+        let mut out = Outcome::default();
+        if self.flash.is_some() || self.is_open() {
+            out.consumed = true;
+            return out;
+        }
+        let hit = self.hit(pos);
+        out.consumed = hit != Hit::Outside;
+        let slot = match self.hit_slot.clone() {
+            Some(slot @ SlotKey::Status(_)) if hit == Hit::Slot => slot,
+            _ => {
+                self.scroll = ScrollRest::default();
+                return out;
+            }
+        };
+        if self.scroll.slot.as_ref() != Some(&slot) {
+            self.scroll = ScrollRest {
+                slot: Some(slot.clone()),
+                steps: (0.0, 0.0),
+            };
+        }
+        let (x, y) = &mut self.scroll.steps;
+        let gathered = [
+            (gather(y, steps.1), ScrollAxis::Vertical),
+            (gather(x, steps.0), ScrollAxis::Horizontal),
+        ];
+        for (steps, axis) in gathered {
+            if steps != 0 {
+                out.effects.push(Effect::SlotScrolled {
+                    slot: slot.clone(),
+                    steps,
+                    axis,
+                });
+            }
+        }
+        out
+    }
+
     /// Advance timers (a submenu opening, the end of the way into a submenu).
     fn ticked(&mut self, now: f64) -> Outcome {
         let mut out = Outcome::default();
@@ -1070,6 +1177,21 @@ impl MenuController {
         self.close_all(&mut out);
         self.synced(out)
     }
+}
+
+/// Add `delta` to the movement `rest` gathered along one axis and take the whole steps out of it. A scroll the other
+/// way drops what was gathered, so turning back answers at once.
+fn gather(rest: &mut f64, delta: f64) -> i32 {
+    if !delta.is_finite() || delta == 0.0 {
+        return 0;
+    }
+    if *rest != 0.0 && rest.signum() != delta.signum() {
+        *rest = 0.0;
+    }
+    *rest += delta;
+    let whole = rest.trunc();
+    *rest -= whole;
+    whole.clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32
 }
 
 /// Whether `p` lies inside (or on the edge of) the triangle `(t0, t1, t2)`.

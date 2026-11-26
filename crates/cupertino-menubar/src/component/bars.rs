@@ -342,8 +342,13 @@ impl Model {
                 controller.set_input_time(time, now);
                 let outcomes = match pointer {
                     BarPointer::Move(p) => vec![controller.pointer_move(p, now)],
-                    BarPointer::Press(p) => vec![controller.pointer_press(p, now)],
-                    BarPointer::Release(p) => vec![controller.pointer_release(p, now)],
+                    BarPointer::Press(p, button) => vec![controller.button_press(p, button, now)],
+                    BarPointer::Release(p, button) => {
+                        vec![controller.button_release(p, button, now)]
+                    }
+                    BarPointer::Scroll { at, steps } => {
+                        vec![controller.pointer_scroll(at, steps, now)]
+                    }
                     BarPointer::Click(p) => vec![
                         controller.pointer_move(p, now),
                         controller.pointer_press(p, now),

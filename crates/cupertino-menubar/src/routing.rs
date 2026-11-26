@@ -2,6 +2,7 @@
 //! controller effect stands for, given what the bar shows.
 
 use crate::controller::{Effect, Key, SYSTEM_MENU_ROOT};
+use crate::dbus::dbusmenu::MenuEvent;
 use crate::extras::{ExtraAction, ExtraKind, SystemAction};
 use crate::fallback::{self, FallbackAction};
 use crate::feed::{BarFeed, Shared};
@@ -164,6 +165,7 @@ pub fn resolve(effect: Effect, cx: &Context) -> Option<Action> {
         Effect::Activate {
             slot: SlotKey::Status(id),
             item,
+            ..
         } if ExtraKind::from_slot_id(&id).is_some() => {
             let kind = ExtraKind::from_slot_id(&id)?;
             match cx.shared.extras.menu(kind).action(item)? {
@@ -177,6 +179,7 @@ pub fn resolve(effect: Effect, cx: &Context) -> Option<Action> {
         Effect::Activate {
             slot: SlotKey::Status(id),
             item,
+            time,
         } => {
             let status = cx.shared.status.iter().find(|s| s.item.id == id)?;
             // the row is one the exporter still has, and can be chosen
@@ -186,15 +189,24 @@ pub fn resolve(effect: Effect, cx: &Context) -> Option<Action> {
             Some(Action::Request(Request::ActivateDbusMenu {
                 menu: status.menu_source()?,
                 item: item.0,
+                time,
             }))
         }
         Effect::Activate {
             slot: slot @ (SlotKey::Menu(_) | SlotKey::AppMenu),
             item,
-        } => menu_action(&slot, item, cx),
+            time,
+        } => menu_action(&slot, item, time, cx),
+        Effect::MenuOpened { slot, item, time } => {
+            menu_event(&slot, item, MenuEvent::Opened, time, cx)
+        }
+        Effect::MenuClosed { slot, item, time } => {
+            menu_event(&slot, item, MenuEvent::Closed, time, cx)
+        }
         Effect::Activate {
             slot: SlotKey::System,
             item,
+            ..
         } => Some(
             match cx
                 .shared
@@ -266,7 +278,7 @@ fn shown_origin(slot: &SlotKey, item: ItemId, cx: &Context) -> Option<Origin> {
 /// The action of an item of the App menu or of the application's menus, by the item's origin: the bar's own items act
 /// through the server, unless About, Settings… or Quit is rebound to the exporter's item of its role; the exporter's
 /// items go to the exporter.
-fn menu_action(slot: &SlotKey, item: ItemId, cx: &Context) -> Option<Action> {
+fn menu_action(slot: &SlotKey, item: ItemId, time: u32, cx: &Context) -> Option<Action> {
     let target = match shown_origin(slot, item, cx)? {
         Origin::Exporter => item,
         Origin::Bar => {
@@ -280,6 +292,7 @@ fn menu_action(slot: &SlotKey, item: ItemId, cx: &Context) -> Option<Action> {
         MenuSource::Kde(menu) => Some(Action::Request(Request::ActivateDbusMenu {
             menu,
             item: target.0,
+            time,
         })),
         MenuSource::Gtk(props) => Some(Action::Request(Request::ActivateGtk {
             props,
@@ -289,6 +302,47 @@ fn menu_action(slot: &SlotKey, item: ItemId, cx: &Context) -> Option<Action> {
         })),
         MenuSource::Synthetic => None,
     }
+}
+
+/// The DBusMenu event that tells an exporter the menu of `item` of `slot` opened or closed. An exporter is told of its
+/// own menus only: an application's menus and the submenus of its items the App menu took in, a status item's menu and
+/// its submenus. A menu that closed because its item left the tree is told under the id it had: the follower sends it
+/// only to an exporter that was told it opened or still has the id, so a bar that changed applications under an open
+/// menu tells the new one nothing.
+fn menu_event(
+    slot: &SlotKey,
+    item: ItemId,
+    event: MenuEvent,
+    time: u32,
+    cx: &Context,
+) -> Option<Action> {
+    let menu = match slot {
+        SlotKey::Menu(_) | SlotKey::AppMenu => {
+            if fallback::is_system(item) {
+                return None;
+            }
+            match shown_origin(slot, item, cx) {
+                Some(Origin::Bar) => return None,
+                None if event == MenuEvent::Opened => return None,
+                _ => {}
+            }
+            match cx.feed.source(cx.shared) {
+                MenuSource::Kde(menu) => menu,
+                _ => return None,
+            }
+        }
+        SlotKey::Status(id) => {
+            let status = cx.shared.status.iter().find(|s| &s.item.id == id)?;
+            status.menu_source()?
+        }
+        SlotKey::System | SlotKey::ControlPanel | SlotKey::Clock => return None,
+    };
+    Some(Action::Request(Request::MenuEvent {
+        menu,
+        item: item.0,
+        event,
+        time,
+    }))
 }
 
 /// The action of an item of the synthetic menus.

@@ -3,23 +3,32 @@
 //! Wire format (an open Canonical specification): `GetLayout(parentId i, recursionDepth i,
 //! propertyNames as) → (revision u, layout (ia{sv}av))`, where every `av` element is a variant
 //! holding a nested `(ia{sv}av)` node. Items carry the properties `type`, `label`, `enabled`,
-//! `visible`, `icon-name`, `icon-data`, `shortcut`, `toggle-type`, `toggle-state` and
-//! `children-display`. Events (`clicked`, `hovered`, `opened`, `closed`) go through `Event`;
-//! `AboutToShow` lets a service refresh a submenu lazily; `LayoutUpdated` and
-//! `ItemsPropertiesUpdated` signal changes.
+//! `visible`, `icon-name`, `icon-data`, `shortcut`, `toggle-type`, `toggle-state`, `children-display`,
+//! `disposition` and `accessible-desc`. Events (`clicked`, `hovered`, `opened`, `closed`) go through `Event`, or
+//! several at once through `EventGroup`; `AboutToShow` (`AboutToShowGroup` for several) lets a service refresh a
+//! submenu lazily; `LayoutUpdated` and `ItemsPropertiesUpdated` signal changes, `ItemActivationRequested` asks for a
+//! menu to be opened. The menu as a whole has the properties `Version`, `TextDirection`, `Status` and
+//! `IconThemePath` ([`MenuProperties`]).
 
 use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use futures_util::{Stream, StreamExt};
+use zbus::fdo::PropertiesProxy;
 use zbus::proxy;
+use zbus::proxy::CacheProperties;
 use zbus::zvariant::{OwnedValue, Value};
 use zbus::Connection;
 
 use crate::fallback;
-use crate::item::{ItemId, MenuItem, Origin, Shortcut, Toggle};
+use crate::item::{Disposition, ItemId, MenuItem, Origin, Shortcut, Toggle};
 
 /// One node of the wire layout: id, properties, children (variants holding nested nodes).
 pub type RawNode = (i32, HashMap<String, OwnedValue>, Vec<OwnedValue>);
+
+/// The interface's name, as `PropertiesChanged` names it.
+pub const INTERFACE: &str = "com.canonical.dbusmenu";
 
 /// Properties requested from `GetLayout`.
 pub const LAYOUT_PROPERTIES: &[&str] = &[
@@ -33,6 +42,8 @@ pub const LAYOUT_PROPERTIES: &[&str] = &[
     "toggle-type",
     "toggle-state",
     "children-display",
+    "disposition",
+    "accessible-desc",
 ];
 
 #[proxy(
@@ -58,7 +69,13 @@ pub trait DBusMenu {
 
     fn event(&self, id: i32, event_id: &str, data: &Value<'_>, timestamp: u32) -> zbus::Result<()>;
 
+    /// `(id, eventId, data, timestamp)` for each event; answers the ids that were not found.
+    fn event_group(&self, events: &[(i32, &str, Value<'_>, u32)]) -> zbus::Result<Vec<i32>>;
+
     fn about_to_show(&self, id: i32) -> zbus::Result<bool>;
+
+    /// Answers the ids whose layouts are to be read again, then the ids that were not found.
+    fn about_to_show_group(&self, ids: &[i32]) -> zbus::Result<(Vec<i32>, Vec<i32>)>;
 
     #[zbus(signal)]
     fn items_properties_updated(
@@ -78,6 +95,122 @@ pub trait DBusMenu {
 
     #[zbus(property)]
     fn status(&self) -> zbus::Result<String>;
+
+    #[zbus(property)]
+    fn text_direction(&self) -> zbus::Result<String>;
+
+    #[zbus(property)]
+    fn icon_theme_path(&self) -> zbus::Result<Vec<String>>;
+}
+
+/// The first protocol version with `AboutToShowGroup` and `EventGroup`. An exporter of an earlier version is sent the
+/// single calls; one that does not say its version is tried, and sent the single calls once it answers that it has no
+/// such method.
+pub const GROUP_VERSION: u32 = 3;
+/// The most directories of an exporter's `IconThemePath` searched (the list comes from the app).
+const MAX_ICON_DIRS: usize = 8;
+
+/// The menu as a whole, as the exporter's properties describe it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MenuProperties {
+    /// The protocol version the exporter speaks; 0 when it does not say.
+    pub version: u32,
+    /// `TextDirection` is `rtl`: the menus' rows are laid out right to left.
+    pub rtl: bool,
+    /// `Status` is `notice`: the menus ask to be noticed.
+    pub notice: bool,
+    /// `IconThemePath`: directories searched for the items' icon names, absolute paths only.
+    pub icon_dirs: Arc<[PathBuf]>,
+}
+
+impl MenuProperties {
+    /// Apply the properties `GetAll` answered or `PropertiesChanged` changed, and reset those it `invalidated` to their
+    /// defaults; `true` when something changed.
+    pub fn apply(&mut self, changed: &HashMap<String, OwnedValue>, invalidated: &[String]) -> bool {
+        use super::{prop, prop_i32, prop_str};
+        let before = self.clone();
+        for name in invalidated {
+            match name.as_str() {
+                "Version" => self.version = 0,
+                "TextDirection" => self.rtl = false,
+                "Status" => self.notice = false,
+                "IconThemePath" => self.icon_dirs = Arc::from([]),
+                _ => {}
+            }
+        }
+        if let Some(v) = prop_i32(changed, "Version") {
+            self.version = u32::try_from(v).unwrap_or(0);
+        }
+        if let Some(d) = prop_str(changed, "TextDirection") {
+            self.rtl = d == "rtl";
+        }
+        if let Some(s) = prop_str(changed, "Status") {
+            self.notice = s == "notice";
+        }
+        if let Some(v) = prop(changed, "IconThemePath") {
+            let dirs: Vec<PathBuf> = strings(v)
+                .into_iter()
+                .map(PathBuf::from)
+                .filter(|p| p.is_absolute())
+                .take(MAX_ICON_DIRS)
+                .collect();
+            self.icon_dirs = Arc::from(dirs);
+        }
+        *self != before
+    }
+
+    /// Whether to send the group calls rather than the single ones.
+    pub fn has_groups(&self) -> bool {
+        self.version == 0 || self.version >= GROUP_VERSION
+    }
+
+    /// Lay the menu's properties on its tree: the direction and the icon directories on every item, the status on
+    /// the root.
+    pub fn decorate(&self, root: &mut MenuItem) {
+        root.notice = self.notice;
+        root.for_each_mut(&mut |item| {
+            item.rtl = self.rtl;
+            item.icon_dirs = Arc::clone(&self.icon_dirs);
+        });
+    }
+}
+
+/// An event the bar sends an exporter about one of its menus.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum MenuEvent {
+    /// The item's menu shows.
+    Opened,
+    /// The item's menu no longer shows.
+    Closed,
+    /// The person chose the item.
+    Clicked,
+}
+
+impl MenuEvent {
+    /// The event's id on the wire.
+    pub fn name(self) -> &'static str {
+        match self {
+            MenuEvent::Opened => "opened",
+            MenuEvent::Closed => "closed",
+            MenuEvent::Clicked => "clicked",
+        }
+    }
+}
+
+/// The data every event carries: none is defined for the events the bar sends, and the protocol's reference client
+/// sends an `i32` 0 in the variant.
+fn event_data() -> Value<'static> {
+    Value::from(0i32)
+}
+
+/// Whether the exporter answered that it has no such method (an earlier version of the protocol).
+pub fn is_unknown_method(e: &zbus::Error) -> bool {
+    const UNKNOWN_METHOD: &str = "org.freedesktop.DBus.Error.UnknownMethod";
+    match e {
+        zbus::Error::MethodError(name, _, _) => name.as_str() == UNKNOWN_METHOD,
+        zbus::Error::FDO(e) => matches!(**e, zbus::fdo::Error::UnknownMethod(_)),
+        _ => false,
+    }
 }
 
 #[derive(Debug)]
@@ -139,6 +272,81 @@ pub fn node_from_value(v: &Value<'_>) -> Result<RawNode, ParseError> {
     Ok((id, props, children))
 }
 
+/// The `toggle-state` of an item that has none: indeterminate.
+const DEFAULT_TOGGLE_STATE: i32 = -1;
+
+/// The `toggle-type` name of a toggle, `""` for none.
+fn toggle_kind(toggle: Toggle) -> &'static str {
+    match toggle {
+        Toggle::None => "",
+        Toggle::Check(_) | Toggle::Indeterminate => "checkmark",
+        Toggle::Radio(_) | Toggle::RadioIndeterminate => "radio",
+    }
+}
+
+/// The `toggle-state` of a toggle: 1 on, 0 off, -1 neither (also for no toggle, the protocol's default).
+fn toggle_state(toggle: Toggle) -> i32 {
+    match toggle {
+        Toggle::Check(true) | Toggle::Radio(true) => 1,
+        Toggle::Check(false) | Toggle::Radio(false) => 0,
+        Toggle::None | Toggle::Indeterminate | Toggle::RadioIndeterminate => DEFAULT_TOGGLE_STATE,
+    }
+}
+
+/// The toggle of a `toggle-type` and a `toggle-state`: a state other than 0 or 1 is neither on nor off.
+fn toggle(kind: &str, state: i32) -> Toggle {
+    match (kind, state) {
+        ("checkmark", 0 | 1) => Toggle::Check(state == 1),
+        ("checkmark", _) => Toggle::Indeterminate,
+        ("radio", 0 | 1) => Toggle::Radio(state == 1),
+        ("radio", _) => Toggle::RadioIndeterminate,
+        _ => Toggle::None,
+    }
+}
+
+/// The strings of an `as` value, or of each element of an `aas` value's arrays.
+fn strings(value: &Value<'_>) -> Vec<String> {
+    let Value::Array(a) = value else {
+        return Vec::new();
+    };
+    a.iter()
+        .filter_map(|v| match super::unwrap_variant(v) {
+            Value::Str(s) => Some(s.as_str().to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The `shortcut` property (`aas`): the key presses of the sequence, each its modifiers and its key.
+fn shortcut(value: &Value<'_>) -> Option<Shortcut> {
+    let Value::Array(chords) = value else {
+        return None;
+    };
+    let chords: Vec<Vec<String>> = chords
+        .iter()
+        .map(|chord| strings(super::unwrap_variant(chord)))
+        .collect();
+    Shortcut::from_sequence(&chords)
+}
+
+/// The `icon-data` property: the bytes of a PNG image.
+fn icon_data(value: &Value<'_>) -> Option<Vec<u8>> {
+    let Value::Array(a) = value else {
+        return None;
+    };
+    let bytes: Vec<u8> = a
+        .iter()
+        .filter_map(|v| match super::unwrap_variant(v) {
+            Value::U8(b) => Some(*b),
+            _ => None,
+        })
+        .collect();
+    (!bytes.is_empty()).then_some(bytes)
+}
+
+/// The most characters of an `accessible-desc` kept (the text comes from the app).
+const MAX_DESCRIPTION_CHARS: usize = 512;
+
 /// Apply the dbusmenu properties in `props` to `item`.
 pub fn apply_properties(item: &mut MenuItem, props: &HashMap<String, OwnedValue>) {
     use super::{prop, prop_bool, prop_i32, prop_str};
@@ -159,63 +367,32 @@ pub fn apply_properties(item: &mut MenuItem, props: &HashMap<String, OwnedValue>
     if let Some(n) = prop_str(props, "icon-name") {
         item.icon_name = (!n.is_empty()).then_some(n);
     }
-    if let Some(Value::Array(a)) = prop(props, "icon-data") {
-        let bytes: Vec<u8> = a
-            .iter()
-            .filter_map(|v| {
-                if let Value::U8(b) = super::unwrap_variant(v) {
-                    Some(*b)
-                } else {
-                    None
-                }
-            })
-            .collect();
-        item.icon_data = (!bytes.is_empty()).then_some(bytes);
+    if let Some(v) = prop(props, "icon-data") {
+        item.icon_data = icon_data(v);
     }
-    if let Some(Value::Array(a)) = prop(props, "shortcut") {
-        // aas: take the first combination
-        if let Some(Value::Array(first)) = a.iter().next().map(super::unwrap_variant) {
-            let tokens: Vec<String> = first
-                .iter()
-                .filter_map(|t| {
-                    if let Value::Str(s) = super::unwrap_variant(t) {
-                        Some(s.as_str().to_string())
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            item.shortcut = Shortcut::from_tokens(&tokens);
-        }
+    if let Some(v) = prop(props, "shortcut") {
+        item.shortcut = shortcut(v);
     }
-    let toggle_type = prop_str(props, "toggle-type");
-    let toggle_state = prop_i32(props, "toggle-state");
-    if toggle_type.is_some() || toggle_state.is_some() {
-        let kind = toggle_type.unwrap_or_else(|| match item.toggle {
-            Toggle::Radio(_) => "radio".into(),
-            Toggle::None => String::new(),
-            _ => "checkmark".into(),
-        });
-        let state = toggle_state.unwrap_or(match item.toggle {
-            Toggle::Check(true) | Toggle::Radio(true) => 1,
-            Toggle::Indeterminate => -1,
-            _ => 0,
-        });
-        item.toggle = match (kind.as_str(), state) {
-            ("checkmark", 0) => Toggle::Check(false),
-            ("checkmark", 1) => Toggle::Check(true),
-            ("radio", 0) => Toggle::Radio(false),
-            ("radio", 1) => Toggle::Radio(true),
-            ("checkmark" | "radio", _) => Toggle::Indeterminate,
-            _ => Toggle::None,
-        };
+    if let Some(d) = prop_str(props, "disposition") {
+        item.disposition = Disposition::from_name(&d);
+    }
+    if let Some(d) = prop_str(props, "accessible-desc") {
+        let d = crate::item::plain_text(&d, MAX_DESCRIPTION_CHARS);
+        item.description = (!d.is_empty()).then_some(d);
+    }
+    let kind = prop_str(props, "toggle-type");
+    let state = prop_i32(props, "toggle-state");
+    if kind.is_some() || state.is_some() {
+        let kind = kind.unwrap_or_else(|| toggle_kind(item.toggle).to_owned());
+        item.toggle = toggle(&kind, state.unwrap_or(toggle_state(item.toggle)));
     }
     if let Some(d) = prop_str(props, "children-display") {
-        item.has_submenu = d == "submenu";
+        item.has_submenu = d == "submenu" || !item.children.is_empty();
     }
 }
 
-/// Reset one property to its protocol default (`ItemsPropertiesUpdated` removed properties).
+/// Reset one property to its protocol default (`ItemsPropertiesUpdated` removed properties): a standard item, enabled,
+/// visible, without label, icon or shortcut, no toggle, an indeterminate state, normal disposition.
 pub fn reset_property(item: &mut MenuItem, name: &str) {
     match name {
         "type" => item.separator = false,
@@ -228,8 +405,11 @@ pub fn reset_property(item: &mut MenuItem, name: &str) {
         "icon-name" => item.icon_name = None,
         "icon-data" => item.icon_data = None,
         "shortcut" => item.shortcut = None,
-        "toggle-type" | "toggle-state" => item.toggle = Toggle::None,
+        "toggle-type" => item.toggle = Toggle::None,
+        "toggle-state" => item.toggle = toggle(toggle_kind(item.toggle), DEFAULT_TOGGLE_STATE),
         "children-display" => item.has_submenu = !item.children.is_empty(),
+        "disposition" => item.disposition = Disposition::Normal,
+        "accessible-desc" => item.description = None,
         _ => {}
     }
 }
@@ -246,10 +426,6 @@ fn parse_node(node: &RawNode, depth: usize) -> Result<MenuItem, ParseError> {
         visible: true,
         ..Default::default()
     };
-    apply_properties(&mut item, props);
-    if item.separator {
-        item.enabled = false;
-    }
     for c in children {
         let raw = node_from_value(c)?;
         // the bar's own items use those ids; an exporter's item with one is left out
@@ -258,6 +434,8 @@ fn parse_node(node: &RawNode, depth: usize) -> Result<MenuItem, ParseError> {
         }
         item.children.push(parse_node(&raw, depth + 1)?);
     }
+    // a separator is never chosen, whatever it says of `enabled`, so one turned standard keeps what it said
+    apply_properties(&mut item, props);
     if !item.children.is_empty() {
         item.has_submenu = true;
     }
@@ -322,6 +500,7 @@ const REREAD_PARENTS: usize = 4;
 pub struct MenuTree {
     root: Option<MenuItem>,
     revision: u32,
+    props: MenuProperties,
 }
 
 impl MenuTree {
@@ -396,6 +575,34 @@ impl MenuTree {
             _ => true,
         }
     }
+
+    /// The menu's own properties as last read.
+    pub fn properties(&self) -> &MenuProperties {
+        &self.props
+    }
+
+    /// Apply the menu's properties `GetAll` answered or `PropertiesChanged` changed; `true` when they changed.
+    pub fn apply_menu_properties(
+        &mut self,
+        changed: &HashMap<String, OwnedValue>,
+        invalidated: &[String],
+    ) -> bool {
+        self.props.apply(changed, invalidated)
+    }
+
+    /// The tree as the bars show it: with the menu's properties laid on its items ([`MenuProperties::decorate`]).
+    pub fn shown(&self) -> Option<MenuItem> {
+        let mut root = self.root.clone()?;
+        self.props.decorate(&mut root);
+        Some(root)
+    }
+
+    /// Whether the tree holds an item of this id.
+    pub fn holds(&self, id: ItemId) -> bool {
+        self.root
+            .as_ref()
+            .is_some_and(|root| root.find(id).is_some())
+    }
 }
 
 /// A change reported by the service.
@@ -407,8 +614,13 @@ pub enum MenuUpdate {
         updated: Vec<(i32, HashMap<String, OwnedValue>)>,
         removed: Vec<(i32, Vec<String>)>,
     },
-    /// The service asks for the item to be activated (for example a hot key was pressed).
+    /// The service asks for the item's menu to be opened (for example a hot key was pressed).
     ActivationRequested { id: ItemId, timestamp: u32 },
+    /// The menu's own properties changed (`PropertiesChanged`), for [`MenuProperties::apply`].
+    Menu {
+        changed: HashMap<String, OwnedValue>,
+        invalidated: Vec<String>,
+    },
 }
 
 /// Encode a node as the variant a parent's `av` children array holds (for services and tests).
@@ -446,16 +658,26 @@ pub fn make_node(
 
 pub struct DBusMenuClient {
     proxy: DBusMenuProxy<'static>,
+    /// The object's `org.freedesktop.DBus.Properties`, for the menu's own properties and their changes.
+    properties: PropertiesProxy<'static>,
 }
 
 impl DBusMenuClient {
     pub async fn connect(conn: &Connection, service: &str, path: &str) -> zbus::Result<Self> {
+        // the menu's properties are read and followed by the follower, which waits for nothing it did not ask
         let proxy = DBusMenuProxy::builder(conn)
             .destination(service.to_string())?
             .path(path.to_string())?
+            .cache_properties(CacheProperties::No)
             .build()
             .await?;
-        Ok(Self { proxy })
+        let properties = PropertiesProxy::builder(conn)
+            .destination(service.to_string())?
+            .path(path.to_string())?
+            .cache_properties(CacheProperties::No)
+            .build()
+            .await?;
+        Ok(Self { proxy, properties })
     }
 
     pub fn proxy(&self) -> &DBusMenuProxy<'static> {
@@ -472,34 +694,47 @@ impl DBusMenuClient {
         Ok((revision, item))
     }
 
+    /// The menu's own properties (`Version`, `TextDirection`, `Status`, `IconThemePath`), for
+    /// [`MenuProperties::apply`].
+    pub async fn menu_properties(&self) -> zbus::Result<HashMap<String, OwnedValue>> {
+        let interface = zbus::names::InterfaceName::from_static_str_unchecked(INTERFACE);
+        Ok(self.properties.get_all(interface).await?)
+    }
+
     /// `AboutToShow`; returns whether the layout changed and must be refetched.
     pub async fn about_to_show(&self, id: ItemId) -> zbus::Result<bool> {
         self.proxy.about_to_show(id.0).await
     }
 
+    /// `AboutToShowGroup`: the items among `ids` whose layouts are to be read again. An exporter of an earlier
+    /// version answers [`is_unknown_method`].
+    pub async fn about_to_show_group(&self, ids: &[ItemId]) -> zbus::Result<Vec<ItemId>> {
+        let ids: Vec<i32> = ids.iter().map(|id| id.0).collect();
+        let (update, _not_found) = self.proxy.about_to_show_group(&ids).await?;
+        Ok(update.into_iter().map(ItemId).collect())
+    }
+
+    /// Send `event` for `id`, at `timestamp` (milliseconds of the input clock).
+    pub async fn event(&self, id: ItemId, event: MenuEvent, timestamp: u32) -> zbus::Result<()> {
+        self.proxy
+            .event(id.0, event.name(), &event_data(), timestamp)
+            .await
+    }
+
+    /// Send several events in one `EventGroup` call. An exporter of an earlier version answers
+    /// [`is_unknown_method`].
+    pub async fn event_group(&self, events: &[(ItemId, MenuEvent, u32)]) -> zbus::Result<()> {
+        let events: Vec<(i32, &str, Value<'_>, u32)> = events
+            .iter()
+            .map(|(id, event, time)| (id.0, event.name(), event_data(), *time))
+            .collect();
+        // the ids not found are items the exporter removed since; nothing is to be done for them
+        self.proxy.event_group(&events).await.map(drop)
+    }
+
     /// Send the `clicked` event for `id`.
     pub async fn activate(&self, id: ItemId, timestamp: u32) -> zbus::Result<()> {
-        self.proxy
-            .event(id.0, "clicked", &Value::from(0i32), timestamp)
-            .await
-    }
-
-    pub async fn hover(&self, id: ItemId, timestamp: u32) -> zbus::Result<()> {
-        self.proxy
-            .event(id.0, "hovered", &Value::from(0i32), timestamp)
-            .await
-    }
-
-    /// Tell the service a submenu was opened (`opened`) or closed (`closed`).
-    pub async fn notify_open(&self, id: ItemId, open: bool, timestamp: u32) -> zbus::Result<()> {
-        self.proxy
-            .event(
-                id.0,
-                if open { "opened" } else { "closed" },
-                &Value::from(0i32),
-                timestamp,
-            )
-            .await
+        self.event(id, MenuEvent::Clicked, timestamp).await
     }
 
     /// Stream of change notifications from the service.
@@ -537,6 +772,28 @@ impl DBusMenuClient {
                     timestamp: a.timestamp,
                 })
             });
-        Ok(futures_util::stream::select(futures_util::stream::select(layout, props), act).boxed())
+        let menu = self
+            .properties
+            .receive_properties_changed_with_args(&[(0, INTERFACE)])
+            .await?
+            .filter_map(|s| async move {
+                let a = s.args().ok()?;
+                let changed = a
+                    .changed_properties()
+                    .iter()
+                    .filter_map(|(k, v)| Some(((*k).to_owned(), OwnedValue::try_from(v).ok()?)))
+                    .collect();
+                let invalidated = a
+                    .invalidated_properties()
+                    .iter()
+                    .map(|name| (*name).to_owned())
+                    .collect();
+                Some(MenuUpdate::Menu {
+                    changed,
+                    invalidated,
+                })
+            });
+        let items = futures_util::stream::select(futures_util::stream::select(layout, props), act);
+        Ok(futures_util::stream::select(items, menu).boxed())
     }
 }

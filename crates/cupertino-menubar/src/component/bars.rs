@@ -334,11 +334,12 @@ impl Model {
             }
         }
         match input {
-            Input::Pointer { bar, pointer } => {
+            Input::Pointer { bar, pointer, time } => {
                 let Some(i) = self.index(bar) else {
                     return Vec::new();
                 };
                 let controller = &mut self.bars[i].controller;
+                controller.set_input_time(time, now);
                 let outcomes = match pointer {
                     BarPointer::Move(p) => vec![controller.pointer_move(p, now)],
                     BarPointer::Press(p) => vec![controller.pointer_press(p, now)],
@@ -354,8 +355,11 @@ impl Model {
                     .flat_map(|outcome| self.apply(i, outcome))
                     .collect()
             }
-            Input::Key { bar, key } => match self.index(bar) {
-                Some(i) => self.key(i, &key, now),
+            Input::Key { bar, key, time } => match self.index(bar) {
+                Some(i) => {
+                    self.bars[i].controller.set_input_time(time, now);
+                    self.key(i, &key, now)
+                }
                 None => Vec::new(),
             },
             Input::Dismissed(bar) => match self.index(bar) {

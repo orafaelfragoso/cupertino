@@ -6,7 +6,7 @@
 //! hears its [`Event`]s on a channel. A bus call that fails is reported on stderr with what it was for; the bars carry
 //! on.
 
-use crate::dbus::dbusmenu::DBusMenuClient;
+use crate::dbus::dbusmenu::{DBusMenuClient, MenuEvent};
 use crate::dbus::gtk::{GtkChange, GtkMenuClient, GtkStarted};
 use crate::dbus::registrar;
 use crate::dbus::sni::{self, StatusItem, WatcherEvent, WatcherService};
@@ -56,9 +56,24 @@ pub enum Request {
     /// The menu of an item (0 for the whole menu) of a followed DBusMenu exporter, an application's or a status
     /// item's, is about to be shown: tell the exporter, then read again what it says has changed. The answer is waited
     /// for by the worker, never by the bar, and no longer than [`Waits::about_to_show`].
-    AboutToShow { menu: KdeAppMenu, item: i32 },
-    /// Send `clicked` for an item of a DBusMenu.
-    ActivateDbusMenu { menu: KdeAppMenu, item: i32 },
+    AboutToShow {
+        menu: KdeAppMenu,
+        item: i32,
+    },
+    /// Send `clicked` for an item of a DBusMenu, at `time` (milliseconds of the input clock).
+    ActivateDbusMenu {
+        menu: KdeAppMenu,
+        item: i32,
+        time: u32,
+    },
+    /// Tell a followed DBusMenu exporter that the menu of one of its items (0 for the whole menu) opened or closed, at
+    /// `time` (milliseconds of the input clock).
+    MenuEvent {
+        menu: KdeAppMenu,
+        item: i32,
+        event: MenuEvent,
+        time: u32,
+    },
     /// Activate the action of an item of a GMenuModel exporter, handing it `token` (an activation token of the bar's)
     /// so a window the action opens takes the focus.
     ActivateGtk {
@@ -107,6 +122,11 @@ pub enum Event {
     },
     /// The menus registered with `com.canonical.AppMenu.Registrar` changed: all of them now.
     Registrations(Vec<Registration>),
+    /// A DBusMenu exporter asks for the menu of its item `item` to be opened (`ItemActivationRequested`).
+    ActivationRequested {
+        source: MenuSource,
+        item: i32,
+    },
 }
 
 /// Why the worker did not start.
@@ -317,6 +337,12 @@ async fn run(
             Work::Request(Request::FetchDbusMenu(menu)) => menus.hold(&Holder::Bars, Some(menu)),
             Work::Request(Request::ReleaseDbusMenu(menu)) => menus.release(&Holder::Bars, &menu),
             Work::Request(Request::AboutToShow { menu, item }) => menus.show(&menu, item),
+            Work::Request(Request::MenuEvent {
+                menu,
+                item,
+                event,
+                time,
+            }) => menus.send(&menu, Command::Event { item, event, time }),
             // hosts need no action: this component is the host
             Work::Watcher(WatcherEvent::HostRegistered) => {}
             Work::GtkLoaded {
@@ -414,15 +440,22 @@ impl Followed {
         if let Some((_, holders)) = self.menus.get_mut(menu) {
             holders.remove(holder);
             if holders.is_empty() {
-                self.menus.remove(menu);
+                if let Some((follower, _)) = self.menus.remove(menu) {
+                    follower.finish();
+                }
             }
         }
     }
 
     /// The menu of `item` of `menu` is about to show. A menu that is not followed is shown by nothing.
     fn show(&self, menu: &KdeAppMenu, item: i32) {
+        self.send(menu, Command::Show(item));
+    }
+
+    /// Hand `command` to the follower of `menu`; a menu that is not followed is shown by nothing.
+    fn send(&self, menu: &KdeAppMenu, command: Command) {
         if let Some((follower, _)) = self.menus.get(menu) {
-            follower.send(Command::Show(item));
+            follower.send(command);
         }
     }
 }
@@ -528,10 +561,10 @@ fn handle(conn: &Connection, spawner: &Spawner, request: Request) {
     let conn = conn.clone();
     let executor = spawner;
     match request {
-        Request::ActivateDbusMenu { menu, item } => executor.spawn(
+        Request::ActivateDbusMenu { menu, item, time } => executor.spawn(
             async move {
                 let result = match DBusMenuClient::connect(&conn, &menu.service, &menu.path).await {
-                    Ok(client) => client.activate(ItemId(item), 0).await,
+                    Ok(client) => client.activate(ItemId(item), time).await,
                     Err(e) => Err(e),
                 };
                 if let Err(e) = result {
@@ -589,7 +622,8 @@ fn handle(conn: &Connection, spawner: &Spawner, request: Request) {
         | Request::AboutToShow { .. }
         | Request::FetchGtk(_)
         | Request::ReleaseGtk(_)
-        | Request::ActivateGtk { .. } => {
+        | Request::ActivateGtk { .. }
+        | Request::MenuEvent { .. } => {
             unreachable!("the worker's loop handles the registrar, the followed menus and the GMenuModel exporters")
         }
     }

@@ -66,6 +66,9 @@ const DETAIL_ALPHA: f32 = 0.65;
 const ROW_ICON_PT: f64 = 14.0;
 /// Opacity factor of a status item's dot, drawn when it has no icon. approximate.
 const DOT_ALPHA: f32 = 0.7;
+/// Diameter of the dot after the bold application name while the application's menus ask to be noticed (DBusMenu
+/// `Status` `notice`): a restrained mark in the bar's text colour, inside the title's trailing padding.
+const NOTICE_DOT_PT: f64 = 4.0;
 /// Opacity factor of an item symbol whose radio is off or has no link. approximate (the design does not say).
 const DIMMED_ALPHA: f32 = 0.4;
 /// The search field's capsule: its height, its distance from the top of its row and from the menu's sides, in points.
@@ -131,31 +134,35 @@ pub enum BarPointer {
     Click(BarPoint),
 }
 
+/// An input event's time as the menus' sources take it: milliseconds of the window system's monotonic clock, wrapping
+/// as the Wayland input timestamps do.
+pub fn input_millis(time: Timestamp) -> u32 {
+    const NANOS_PER_MILLI: u64 = 1_000_000;
+    (time.0 / NANOS_PER_MILLI) as u32
+}
+
 /// What the user did on a bar or its menus.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Input {
     Pointer {
         bar: BarId,
         pointer: BarPointer,
+        /// When, in milliseconds of the window system's input clock ([`input_millis`]).
+        time: u32,
     },
     Key {
         bar: BarId,
         key: KeyEvent,
+        time: u32,
     },
     /// The compositor dismissed the bar's menus.
     Dismissed(BarId),
     /// The compositor closed the bar's window.
     Closed(BarId),
     /// The bar's own window got the keyboard, or lost it.
-    Keyboard {
-        bar: BarId,
-        focused: bool,
-    },
+    Keyboard { bar: BarId, focused: bool },
     /// Something in the join prompt of the bar.
-    Prompt {
-        bar: BarId,
-        event: PromptEvent,
-    },
+    Prompt { bar: BarId, event: PromptEvent },
 }
 
 /// What the person did in the join prompt.
@@ -591,6 +598,8 @@ enum SlotLook {
         text: String,
         padding: f64,
         bold: bool,
+        /// A dot after the text: the application's menus ask to be noticed.
+        notice: bool,
     },
     PrivacyDot,
     Image(IconImage),
@@ -624,12 +633,14 @@ fn slot_look(slot: &Slot, scene: &BarScene<'_>) -> SlotLook {
             text: content.app_name.clone(),
             padding: metrics.title_padding,
             bold: true,
+            notice: content.notice,
         },
         SlotKey::Menu(id) => match content.menus.iter().find(|m| m.id == *id) {
             Some(m) => SlotLook::Text {
                 text: m.label.clone(),
                 padding: metrics.title_padding,
                 bold: false,
+                notice: false,
             },
             None => SlotLook::Nothing,
         },
@@ -645,6 +656,7 @@ fn slot_look(slot: &Slot, scene: &BarScene<'_>) -> SlotLook {
             text: content.clock.clone(),
             padding: metrics.clock_padding,
             bold: false,
+            notice: false,
         },
     }
 }
@@ -933,6 +945,7 @@ impl RowIcons {
         let mut hasher = DefaultHasher::new();
         item.icon_data.hash(&mut hasher);
         item.icon_name.hash(&mut hasher);
+        item.icon_dirs.hash(&mut hasher);
         let key = (hasher.finish(), px);
         if let Some(icon) = self.loaded.borrow().get(&key) {
             return icon.clone();
@@ -943,6 +956,7 @@ impl RowIcons {
                 key,
                 data: item.icon_data.clone(),
                 name: item.icon_name.clone(),
+                dirs: item.icon_dirs.to_vec(),
                 px,
             });
             if wanted.len() == 1 {
@@ -1045,7 +1059,7 @@ impl<M: Clone + 'static> Widget<M> for Root<M> {
     fn event(&self, _: &mut (), event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
         let at = |p: Point| BarPoint::new(p.x + self.origin.x, p.y + self.origin.y);
         let input = match event {
-            Event::Pointer(pointer, _) if cx.phase() == Phase::Capture => {
+            Event::Pointer(pointer, time) if cx.phase() == Phase::Capture => {
                 let pointer = match *pointer {
                     PointerEvent::Enter { position } | PointerEvent::Motion { position } => {
                         BarPointer::Move(at(position))
@@ -1068,11 +1082,13 @@ impl<M: Clone + 'static> Widget<M> for Root<M> {
                 Input::Pointer {
                     bar: self.bar,
                     pointer,
+                    time: input_millis(*time),
                 }
             }
-            Event::Key(key, _) => Input::Key {
+            Event::Key(key, time) => Input::Key {
                 bar: self.bar,
                 key: *key,
+                time: input_millis(*time),
             },
             Event::WindowActive(focused) if self.keyboard => {
                 cx.emit((self.input)(Input::Keyboard {
@@ -1132,9 +1148,12 @@ fn clicked<M>(
 ) -> Propagation {
     match event {
         Event::Action(request) if request.action == Action::Click => {
+            // assistive technology's request carries no input time: it is the window system's clock now
+            let time = input_millis(cx.now());
             cx.emit(input(Input::Pointer {
                 bar,
                 pointer: BarPointer::Click(at),
+                time,
             }));
             Propagation::Stop
         }
@@ -1331,16 +1350,24 @@ impl<M> SlotNode<M> {
                 text: s,
                 padding,
                 bold,
-            } => text(
-                cx,
-                &self.font,
-                s,
-                *padding,
-                0.0,
-                size.height,
-                *bold,
-                palette.text,
-            ),
+                notice,
+            } => {
+                text(
+                    cx,
+                    &self.font,
+                    s,
+                    *padding,
+                    0.0,
+                    size.height,
+                    *bold,
+                    palette.text,
+                );
+                // in the middle of the trailing padding, so the slot keeps its width
+                if *notice {
+                    let at = Point::new(size.width - padding / 2.0, middle.y);
+                    circle(cx, at, NOTICE_DOT_PT / 2.0, palette.text);
+                }
+            }
             SlotLook::PrivacyDot => {
                 circle(cx, middle, PRIVACY_DOT_PT / 2.0, palette.screen_capture)
             }

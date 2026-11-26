@@ -1,9 +1,15 @@
 //! One DBusMenu exporter followed for as long as a bar shows its menu: an application's menus or a status item's.
 //!
-//! A [`Follower`] is a task of the session bus worker. It reads the exporter's tree, keeps it current from the
-//! exporter's `LayoutUpdated` and `ItemsPropertiesUpdated` signals and reports every change as a whole tree
-//! ([`Event::Layout`]), so what a bar shows and the ids it sends back are the exporter's current ones. Before a menu
-//! shows it sends `AboutToShow` and reads again what the exporter says has changed.
+//! A [`Follower`] is a task of the session bus worker. It reads the exporter's tree and its menu's own properties,
+//! keeps them current from the exporter's `LayoutUpdated`, `ItemsPropertiesUpdated` and `PropertiesChanged` signals
+//! and reports every change as a whole tree ([`Event::Layout`]), so what a bar shows and the ids it sends back are the
+//! exporter's current ones. Before a menu shows it sends `AboutToShow` and reads again what the exporter says has
+//! changed; as a menu shows and hides it sends `opened` and `closed`, and `closed` for every menu still open when the
+//! follower is let go. An `ItemActivationRequested` is reported to the bars ([`Event::ActivationRequested`]).
+//!
+//! Commands that come together are sent together: several `AboutToShow` as one `AboutToShowGroup`, several events
+//! as one `EventGroup`, for an exporter that has them (protocol version 3 on, or one that does not say); one that
+//! answers that it has no such method is sent the single calls from then on.
 //!
 //! The task makes one call at a time and applies the replies in the order asked, so an older reply never replaces a
 //! newer layout. Every call has a bounded wait ([`Waits`]): an exporter that answers late or never holds up its own
@@ -11,13 +17,15 @@
 //! are taken while a call is awaited too: left in the connection's queue they would fill it, and a full queue stops
 //! the connection, the awaited reply with it.
 
-use crate::dbus::dbusmenu::{DBusMenuClient, MenuTree, MenuUpdate, Reread};
+use crate::dbus::dbusmenu::{
+    is_unknown_method, DBusMenuClient, MenuEvent, MenuTree, MenuUpdate, Reread,
+};
 use crate::item::ItemId;
 use crate::source::{KdeAppMenu, MenuSource};
 use crate::worker::{report, Event, Out};
-use async_channel::TryRecvError;
 use futures_util::future::{pending, select, Either};
 use futures_util::{Stream, StreamExt};
+use std::collections::VecDeque;
 use std::fmt;
 use std::future::Future;
 use std::pin::pin;
@@ -35,14 +43,19 @@ const CHANGE_BATCH: usize = 256;
 const RETRY_FIRST: Duration = Duration::from_millis(100);
 /// The last wait of the doubling from [`RETRY_FIRST`]: 12.7 s in all before the failure is reported.
 const RETRY_LAST: Duration = Duration::from_millis(6400);
+/// At most this many commands of one kind are sent as one group call.
+const GROUP_LIMIT: usize = 32;
+/// At most this many menus are held as open; an exporter's menus nest far less deep, so more means ids that were
+/// never closed (an exporter that renumbered its tree under open menus).
+const OPEN_LIMIT: usize = 32;
 
 /// How long a follower waits for an exporter's answers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Waits {
-    /// For the answer to `AboutToShow`. The menu is on screen meanwhile with the rows last read; past the wait it
-    /// stays as it is until the exporter signals a change.
+    /// For the answer to `AboutToShow`, and to an event. The menu is on screen meanwhile with the rows last read; past
+    /// the wait it stays as it is until the exporter signals a change.
     pub about_to_show: Duration,
-    /// For a layout.
+    /// For a layout, and for the menu's own properties.
     pub read: Duration,
 }
 
@@ -62,12 +75,21 @@ pub(crate) enum Command {
     Show(i32),
     /// Report the tree again (to a bar that starts showing it), reading it first when it was never read.
     Publish,
+    /// Send `opened` or `closed` for the menu of `item`, at `time` (milliseconds of the input clock).
+    Event {
+        item: i32,
+        event: MenuEvent,
+        time: u32,
+    },
+    /// Nothing shows the menu any more: close what is still open, then end.
+    Finish,
 }
 
-/// Handle on a followed exporter; dropping it ends the following.
+/// Handle on a followed exporter; dropping it ends the following at once, [`Follower::finish`] once the menus still
+/// open are closed.
 pub(crate) struct Follower {
     commands: async_channel::Sender<Command>,
-    _task: zbus::Task<()>,
+    task: zbus::Task<()>,
 }
 
 impl Follower {
@@ -86,15 +108,18 @@ impl Follower {
             run(conn.clone(), out, menu, patient, waits, received),
             "cupertino-follow-menu",
         );
-        Follower {
-            commands,
-            _task: task,
-        }
+        Follower { commands, task }
     }
 
     pub(crate) fn send(&self, command: Command) {
         // the task is gone only when its exporter's object could not be addressed, which it reported
         let _ = self.commands.try_send(command);
+    }
+
+    /// Let the exporter go: the task tells it the menus still open closed, within its wait, and ends.
+    pub(crate) fn finish(self) {
+        self.send(Command::Finish);
+        self.task.detach();
     }
 }
 
@@ -226,7 +251,13 @@ async fn run(
         tree: MenuTree::default(),
         retry: Some(RETRY_FIRST),
         show_reported: false,
+        open: Vec::new(),
+        show_groups: true,
+        event_groups: true,
+        queue: VecDeque::new(),
+        last_time: 0,
     };
+    state.read_menu_properties().await;
     if patient {
         // many exporters do not implement it and the tree is worth reading anyway
         let told = state.client.about_to_show(ItemId(0));
@@ -236,15 +267,21 @@ async fn run(
     loop {
         // a command goes before the signals that wait, so an exporter that signals without pause keeps no menu from
         // being told that it shows
-        let step = if state.signals.is_empty() {
+        let step = if let Some(command) = state.queue.pop_front() {
+            Next::Command(command)
+        } else if state.signals.is_empty() {
             next(&mut state.signals, &commands, state.retry).await
         } else {
             match commands.try_recv() {
                 Ok(command) => Next::Command(command),
-                Err(TryRecvError::Empty) => Next::Changes,
-                Err(TryRecvError::Closed) => Next::Ended,
+                Err(async_channel::TryRecvError::Empty) => Next::Changes,
+                Err(async_channel::TryRecvError::Closed) => Next::Ended,
             }
         };
+        // the commands that came with this one join it, so those of a kind go as one call
+        while let Ok(command) = commands.try_recv() {
+            state.queue.push_back(command);
+        }
         match step {
             Next::Signal(update) => state.signals.keep(update),
             Next::Changes => {
@@ -253,7 +290,31 @@ async fn run(
                 interval.await;
                 state.changed().await;
             }
-            Next::Command(Command::Show(item)) => state.show(ItemId(item)).await,
+            Next::Command(Command::Show(item)) => {
+                let mut items = vec![ItemId(item)];
+                while let Some(Command::Show(more)) = state.queue.front().copied() {
+                    if items.len() == GROUP_LIMIT {
+                        break;
+                    }
+                    state.queue.pop_front();
+                    if !items.contains(&ItemId(more)) {
+                        items.push(ItemId(more));
+                    }
+                }
+                state.show(&items).await;
+            }
+            Next::Command(Command::Event { item, event, time }) => {
+                let mut events = vec![(ItemId(item), event, time)];
+                while let Some(Command::Event { item, event, time }) = state.queue.front().copied()
+                {
+                    if events.len() == GROUP_LIMIT {
+                        break;
+                    }
+                    state.queue.pop_front();
+                    events.push((ItemId(item), event, time));
+                }
+                state.events(events).await;
+            }
             Next::Command(Command::Publish) => {
                 if state.tree.is_unread() {
                     state.load().await;
@@ -261,6 +322,7 @@ async fn run(
                     state.emit();
                 }
             }
+            Next::Command(Command::Finish) => return state.finish().await,
             Next::Retry => {
                 state.retry = state
                     .retry
@@ -284,6 +346,16 @@ struct State<S> {
     retry: Option<Duration>,
     /// An `AboutToShow` that failed was reported: an exporter without the method fails at every opening.
     show_reported: bool,
+    /// The menus the exporter was told opened and not yet closed, by their ids then.
+    open: Vec<ItemId>,
+    /// Whether `AboutToShowGroup` and `EventGroup` are worth sending: the version allows them and the exporter did not
+    /// answer that it has no such method.
+    show_groups: bool,
+    event_groups: bool,
+    /// Commands taken from the worker and not handled yet.
+    queue: VecDeque<Command>,
+    /// The time of the last event sent, milliseconds of the bar's input clock.
+    last_time: u32,
 }
 
 /// An exporter that did not answer within its wait.
@@ -297,12 +369,24 @@ impl fmt::Display for NoAnswer {
 
 impl<S: Stream<Item = MenuUpdate> + Unpin> State<S> {
     fn emit(&self) {
-        if let Some(root) = self.tree.root() {
+        if let Some(root) = self.tree.shown() {
             self.out.emit(Event::Layout {
                 source: MenuSource::Kde(self.menu.clone()),
-                root: Box::new(root.clone()),
+                root: Box::new(root),
             });
         }
+    }
+
+    /// Read the menu's own properties. An exporter without them (or without `org.freedesktop.DBus.Properties`) has
+    /// the defaults: left to right, a normal status, no icon directories, a version not said.
+    async fn read_menu_properties(&mut self) {
+        let read = self.client.menu_properties();
+        if let Some(Ok(props)) = self.signals.within(self.waits.read, read).await {
+            self.tree.apply_menu_properties(&props, &[]);
+        }
+        let groups = self.tree.properties().has_groups();
+        self.show_groups = groups;
+        self.event_groups = groups;
     }
 
     /// A read failed. The first read is made again without a word while its waits last.
@@ -350,8 +434,12 @@ impl<S: Stream<Item = MenuUpdate> + Unpin> State<S> {
         }
     }
 
-    /// Read the layouts below `parents` and report the tree; the whole tree when one of them cannot be read.
+    /// Read the layouts below `parents` and report the tree; the whole tree when one of them cannot be read, or is the
+    /// root.
     async fn read_parts(&mut self, parents: &[ItemId]) {
+        if parents.iter().any(|p| p.0 == 0) {
+            return self.load().await;
+        }
         for parent in parents {
             if !self.read_part(*parent).await {
                 return self.load().await;
@@ -365,6 +453,7 @@ impl<S: Stream<Item = MenuUpdate> + Unpin> State<S> {
         let batch = std::mem::take(&mut self.signals.waiting);
         let overflowed = std::mem::take(&mut self.signals.overflowed);
         let mut layouts = Vec::new();
+        let mut asked = Vec::new();
         let mut dirty = false;
         for update in batch {
             match update {
@@ -372,31 +461,90 @@ impl<S: Stream<Item = MenuUpdate> + Unpin> State<S> {
                 MenuUpdate::Properties { updated, removed } => {
                     dirty |= self.tree.apply_properties(&updated, &removed);
                 }
-                // the bar opens menus for the person only
-                MenuUpdate::ActivationRequested { .. } => {}
+                MenuUpdate::Menu {
+                    changed,
+                    invalidated,
+                } => {
+                    dirty |= self.tree.apply_menu_properties(&changed, &invalidated);
+                    let groups = self.tree.properties().has_groups();
+                    self.show_groups &= groups;
+                    self.event_groups &= groups;
+                }
+                MenuUpdate::ActivationRequested { id, .. } => asked.push(id),
             }
         }
         if overflowed || (!layouts.is_empty() && self.tree.is_unread()) {
-            return self.load().await;
+            self.load().await;
+        } else {
+            match self.tree.reread(&layouts) {
+                Some(Reread::Whole) => self.load().await,
+                Some(Reread::Parents(parents)) => self.read_parts(&parents).await,
+                None if dirty => self.emit(),
+                None => {}
+            }
         }
-        match self.tree.reread(&layouts) {
-            Some(Reread::Whole) => self.load().await,
-            Some(Reread::Parents(parents)) => self.read_parts(&parents).await,
-            None if dirty => self.emit(),
-            None => {}
+        // after the tree they may name an item of
+        for id in asked {
+            self.out.emit(Event::ActivationRequested {
+                source: MenuSource::Kde(self.menu.clone()),
+                item: id.0,
+            });
         }
     }
 
-    /// The menu of `item` is about to show: tell the exporter and read again what it says has changed. Rows the tree
-    /// never read are read whatever the answer, and so is the menu of an exporter that fails the call, which cannot
-    /// say; one that does not answer in time is left alone until it signals.
-    async fn show(&mut self, item: ItemId) {
-        let told = self.client.about_to_show(item);
-        let asked = self.signals.within(self.waits.about_to_show, told).await;
+    /// The menus of `items` are about to show: tell the exporter and read again what it says has changed. Rows the
+    /// tree never read are read whatever the answer, and so are the menus of an exporter that fails the call, which
+    /// cannot say; one that does not answer in time is left alone until it signals.
+    async fn show(&mut self, items: &[ItemId]) {
+        let asked = if items.len() > 1 && self.show_groups {
+            let told = self.client.about_to_show_group(items);
+            match self.signals.within(self.waits.about_to_show, told).await {
+                Some(Err(e)) if is_unknown_method(&e) => {
+                    self.show_groups = false;
+                    None
+                }
+                asked => Some(asked),
+            }
+        } else {
+            None
+        };
+        let read: Vec<ItemId> = match asked {
+            Some(Some(Ok(update))) => items
+                .iter()
+                .copied()
+                .filter(|item| update.contains(item) || self.tree.is_unloaded(*item))
+                .collect(),
+            Some(Some(Err(e))) => {
+                self.report_show(e);
+                items.to_vec()
+            }
+            Some(None) => {
+                self.report_show(NoAnswer(self.waits.about_to_show));
+                Vec::new()
+            }
+            // one call each
+            None => {
+                let mut read = Vec::new();
+                for item in items {
+                    if self.show_one(*item).await {
+                        read.push(*item);
+                    }
+                }
+                read
+            }
+        };
         if self.tree.is_unread() {
             return self.load().await;
         }
-        let read = match asked {
+        if !read.is_empty() {
+            self.read_parts(&read).await;
+        }
+    }
+
+    /// `AboutToShow` for `item`: whether its layout is to be read again.
+    async fn show_one(&mut self, item: ItemId) -> bool {
+        let told = self.client.about_to_show(item);
+        match self.signals.within(self.waits.about_to_show, told).await {
             Some(Ok(update)) => update || self.tree.is_unloaded(item),
             Some(Err(e)) => {
                 self.report_show(e);
@@ -406,14 +554,6 @@ impl<S: Stream<Item = MenuUpdate> + Unpin> State<S> {
                 self.report_show(NoAnswer(self.waits.about_to_show));
                 false
             }
-        };
-        if !read {
-            return;
-        }
-        if item.0 == 0 {
-            self.load().await;
-        } else {
-            self.read_parts(&[item]).await;
         }
     }
 
@@ -424,5 +564,73 @@ impl<S: Stream<Item = MenuUpdate> + Unpin> State<S> {
                 error,
             );
         }
+    }
+
+    /// Send `opened` and `closed` events. A menu is told it closed only when it was told it opened or the tree holds
+    /// its item, so a bar that changed exporters under an open menu sends the new one no stray `closed`.
+    async fn events(&mut self, events: Vec<(ItemId, MenuEvent, u32)>) {
+        let mut sent = Vec::with_capacity(events.len());
+        for (item, event, time) in events {
+            self.last_time = time;
+            match event {
+                MenuEvent::Opened => {
+                    if !self.open.contains(&item) {
+                        if self.open.len() == OPEN_LIMIT {
+                            self.open.remove(0);
+                        }
+                        self.open.push(item);
+                    }
+                }
+                MenuEvent::Closed => {
+                    let was_open = self.open.contains(&item);
+                    self.open.retain(|open| *open != item);
+                    if !was_open && !self.tree.holds(item) {
+                        continue;
+                    }
+                }
+                MenuEvent::Clicked => {}
+            }
+            sent.push((item, event, time));
+        }
+        self.send_events(&sent).await;
+    }
+
+    /// Send `events`, as one group when there are several and the exporter has the call. The events are advisory: an
+    /// exporter that fails them, or left the bus, is not reported.
+    async fn send_events(&mut self, events: &[(ItemId, MenuEvent, u32)]) {
+        if events.len() > 1 && self.event_groups {
+            let call = self.client.event_group(events);
+            match self.signals.within(self.waits.about_to_show, call).await {
+                Some(Err(e)) if is_unknown_method(&e) => self.event_groups = false,
+                _ => return,
+            }
+        }
+        for (item, event, time) in events {
+            let call = self.client.event(*item, *event, *time);
+            let _ = self.signals.within(self.waits.about_to_show, call).await;
+        }
+    }
+
+    /// Nothing shows the menu any more: the menus still open closed, the deepest first.
+    async fn finish(&mut self) {
+        let pending: Vec<_> = std::mem::take(&mut self.queue)
+            .into_iter()
+            .filter_map(|command| match command {
+                Command::Event { item, event, time } => Some((ItemId(item), event, time)),
+                _ => None,
+            })
+            .collect();
+        if !pending.is_empty() {
+            self.events(pending).await;
+        }
+        // the time of the last event the bar sent, the latest of its input clock the follower knows
+        let time = self.last_time;
+        let closing: Vec<_> = self
+            .open
+            .drain(..)
+            .rev()
+            .map(|item| (item, MenuEvent::Closed, time))
+            .collect();
+        self.send_events(&closing).await;
     }
 }

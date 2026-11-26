@@ -423,6 +423,7 @@ pub fn accel_shortcut(
     Some(Shortcut {
         modifiers,
         key: chord.key.label(),
+        before: Vec::new(),
     })
 }
 

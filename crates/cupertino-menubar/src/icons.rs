@@ -7,6 +7,7 @@ use crate::extras;
 use crate::feed;
 use cupertino_assets::Assets;
 use cupertino_icons::{SystemIcons, ThemeIcons};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -23,8 +24,14 @@ pub struct Request {
     pub key: (u64, u32),
     pub data: Option<Vec<u8>>,
     pub name: Option<String>,
+    /// The directories the row's exporter names for its icons (DBusMenu `IconThemePath`), searched for `name` before
+    /// the icon themes.
+    pub dirs: Vec<PathBuf>,
     pub px: u32,
 }
+
+/// At most this many exporters' icon directories are kept looked up; past it the lookups start again.
+const MAX_EXPORTER_LOOKUPS: usize = 16;
 
 /// The icon themes and the asset packs, looked up on the I/O pool. One loader serves the component's tasks in turn.
 #[derive(Clone, Default)]
@@ -33,7 +40,10 @@ pub struct Loader {
 }
 
 struct Packs {
+    assets: Assets,
     themed: ThemeIcons,
+    /// The icons under each exporter's own directories, by the directories.
+    exporters: HashMap<Vec<PathBuf>, ThemeIcons>,
     /// The template symbols of the asset packs, which rows name as `symbol.*`.
     system: SystemIcons,
 }
@@ -53,6 +63,8 @@ impl Loader {
                 themed: ThemeIcons::new(&assets),
                 // the extras' symbols are drawn by the toolkit from the same packs; a missing one is reported here
                 system: SystemIcons::required(&assets, &[], &extras::SYMBOL_NAMES),
+                exporters: HashMap::new(),
+                assets,
             }
         });
         f(packs)
@@ -88,7 +100,33 @@ impl Loader {
                     })
                 });
             }
-            self.themed(name, request.px)
+            self.in_dirs(name, &request.dirs, request.px)
+                .or_else(|| self.themed(name, request.px))
+        })
+    }
+
+    /// The icon `name` under an exporter's own directories (each searched as an icon theme root and flat), `None`
+    /// without directories or such an icon there.
+    fn in_dirs(&self, name: &str, dirs: &[PathBuf], px: u32) -> Option<Pixels> {
+        if dirs.is_empty() {
+            return None;
+        }
+        let pixmap = self.with(|packs| {
+            if packs.exporters.len() >= MAX_EXPORTER_LOOKUPS && !packs.exporters.contains_key(dirs)
+            {
+                packs.exporters.clear();
+            }
+            let assets = &packs.assets;
+            packs
+                .exporters
+                .entry(dirs.to_vec())
+                .or_insert_with(|| ThemeIcons::with_roots(assets, dirs.to_vec(), Vec::new()))
+                .load(name, px)
+        })?;
+        Some(Pixels {
+            width: pixmap.width(),
+            height: pixmap.height(),
+            rgba: pixmap.data().to_vec(),
         })
     }
 

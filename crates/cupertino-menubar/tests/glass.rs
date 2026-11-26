@@ -40,12 +40,12 @@ const PRESS_AT: f64 = 1.0;
 const RELEASE_AT: f64 = 1.05;
 
 /// What the bar shows: its system menu open, or the join prompt.
-struct Scene {
-    controller: MenuController,
-    shared: Shared,
-    font: BarFont,
-    icons: Rc<RowIcons>,
-    prompt: Option<(geom::Point, Passphrase)>,
+pub(crate) struct Scene {
+    pub(crate) controller: MenuController,
+    pub(crate) shared: Shared,
+    pub(crate) font: BarFont,
+    pub(crate) icons: Rc<RowIcons>,
+    pub(crate) prompt: Option<(geom::Point, Passphrase)>,
 }
 
 thread_local! {
@@ -95,7 +95,7 @@ impl Application for Bar {
 }
 
 /// The text system of the built-in font.
-fn text() -> Arc<TextSystem> {
+pub(crate) fn text() -> Arc<TextSystem> {
     let mut fonts = FontIndex::new();
     fonts.add_font(Arc::new(BUILTIN_FONT.to_vec())).unwrap();
     Arc::new(TextSystem::new(fonts, "Inter Variable"))
@@ -162,11 +162,11 @@ struct Region {
 /// One window as it was last drawn: its size, the material regions it asked for the last time it asked, and its last
 /// frame's premultiplied pixels, `width` pixels a row.
 #[derive(Debug)]
-struct Drawn {
-    size: Size,
+pub(crate) struct Drawn {
+    pub(crate) size: Size,
     regions: Vec<Region>,
-    width: u32,
-    pixels: Vec<u8>,
+    pub(crate) width: u32,
+    pub(crate) pixels: Vec<u8>,
 }
 
 impl Drawn {
@@ -187,7 +187,19 @@ fn regions(
     variants: bool,
 ) -> Vec<(WindowKey, Drawn)> {
     let text = text();
-    NEXT.set(Some(scene(&text, menu)));
+    let scene = scene(&text, menu);
+    drawn(text, scene, appearance, reduce_transparency, variants)
+}
+
+/// The windows of `scene`, drawn as [`regions`] draws them.
+pub(crate) fn drawn(
+    text: Arc<TextSystem>,
+    scene: Scene,
+    appearance: Appearance,
+    reduce_transparency: bool,
+    variants: bool,
+) -> Vec<(WindowKey, Drawn)> {
+    NEXT.set(Some(scene));
     let glyphs = Arc::clone(&text);
     let options = RuntimeOptions {
         theme: Arc::new(

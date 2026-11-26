@@ -554,6 +554,11 @@ impl BarFeed {
                 String::new()
             },
             control_panel: true,
+            notice: self.app.is_some()
+                && shared
+                    .layouts
+                    .get(&self.source(shared))
+                    .is_some_and(|tree| tree.notice),
         }
     }
 

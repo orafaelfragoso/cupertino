@@ -1,5 +1,8 @@
 //! Menu item model shared by every menu source (synthetic, DBusMenu, GMenuModel, status items).
 
+use std::path::PathBuf;
+use std::sync::Arc;
+
 /// Identifier of an item inside one menu tree. DBusMenu ids are used as they are (the root is 0);
 /// other sources number their items.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -30,16 +33,26 @@ pub enum Toggle {
     Check(bool),
     /// A radio mark; the flag is the selected state.
     Radio(bool),
-    /// A tri-state check that is neither on nor off.
+    /// A tri-state check that is neither on nor off, drawn as a dash.
     Indeterminate,
+    /// A radio item that is neither selected nor not, drawn as a dash.
+    RadioIndeterminate,
 }
 
 impl Toggle {
     pub fn is_marked(self) -> bool {
         matches!(
             self,
-            Toggle::Check(true) | Toggle::Radio(true) | Toggle::Indeterminate
+            Toggle::Check(true)
+                | Toggle::Radio(true)
+                | Toggle::Indeterminate
+                | Toggle::RadioIndeterminate
         )
+    }
+
+    /// Neither on nor off: the dash.
+    pub fn is_mixed(self) -> bool {
+        matches!(self, Toggle::Indeterminate | Toggle::RadioIndeterminate)
     }
 }
 
@@ -64,7 +77,13 @@ pub enum ShortcutStyle {
 pub struct Shortcut {
     pub modifiers: Vec<ShortcutModifier>,
     pub key: String,
+    /// The chords pressed before this one, first first, when the shortcut is a sequence of key presses (a DBusMenu
+    /// `shortcut` of several chords); empty for a single chord.
+    pub before: Vec<Shortcut>,
 }
+
+/// The most chords of a key sequence a shortcut keeps (the sequence comes from the app); a longer one is not shown.
+const MAX_SEQUENCE: usize = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ShortcutModifier {
@@ -95,7 +114,27 @@ impl Shortcut {
         }
         modifiers.sort();
         let key = plain_text(key.as_ref(), MAX_KEY_CHARS);
-        (!key.is_empty()).then_some(Shortcut { modifiers, key })
+        (!key.is_empty()).then_some(Shortcut {
+            modifiers,
+            key,
+            before: Vec::new(),
+        })
+    }
+
+    /// Parse the whole DBusMenu `shortcut` property: the key presses of a sequence in order, each a list of tokens
+    /// (`[["Control", "K"], ["Control", "C"]]`). `None` when it is empty, longer than [`MAX_SEQUENCE`], or a chord of
+    /// it does not parse.
+    pub fn from_sequence<S: AsRef<str>>(chords: &[Vec<S>]) -> Option<Shortcut> {
+        if chords.len() > MAX_SEQUENCE {
+            return None;
+        }
+        let mut parsed = chords
+            .iter()
+            .map(|tokens| Self::from_tokens(tokens))
+            .collect::<Option<Vec<_>>>()?;
+        let mut last = parsed.pop()?;
+        last.before = parsed;
+        Some(last)
     }
 
     /// Parse a chord in the shortcut file's syntax, such as `Ctrl+Super+Left`: physical Super is the primary
@@ -136,12 +175,27 @@ impl Shortcut {
         ShortcutGlyphs { modifiers, key }
     }
 
-    /// The shortcut as `style` draws it.
+    /// The shortcut as `style` draws it. The chords of a sequence pressed before the last stand before its modifiers,
+    /// each followed by a space, so the last chord's key keeps the keys' column.
     pub fn shown(&self, style: ShortcutStyle) -> ShortcutGlyphs {
-        match style {
-            ShortcutStyle::Glyphs => self.glyphs(),
-            ShortcutStyle::Names => self.names(),
+        let one = |chord: &Shortcut| match style {
+            ShortcutStyle::Glyphs => chord.glyphs(),
+            ShortcutStyle::Names => chord.names(),
+        };
+        let mut shown = one(self);
+        if !self.before.is_empty() {
+            let mut lead: String = self
+                .before
+                .iter()
+                .map(|chord| {
+                    let g = one(chord);
+                    format!("{}{} ", g.modifiers, g.key)
+                })
+                .collect();
+            lead.push_str(&shown.modifiers);
+            shown.modifiers = lead;
         }
+        shown
     }
 
     /// The shortcut as the PC layout names its keys: `Ctrl+`, `Alt+`, `Shift+`, `Super+` in that order and the key by
@@ -316,6 +370,42 @@ pub struct MenuItem {
     /// The row of a status panel this item is, drawn in the panel's style; `None` for the rows of a plain menu. A menu
     /// whose children have one is laid out as a panel.
     pub panel: Option<PanelRow>,
+    /// How the exporter asks the row to be read (DBusMenu `disposition`); a warning or an alert is drawn in its colour.
+    pub disposition: Disposition,
+    /// What assistive technology says of the item besides its label (DBusMenu `accessible-desc`).
+    pub description: Option<String>,
+    /// The rows of this item's menu are laid out right to left (the exporter's `TextDirection` is `rtl`).
+    pub rtl: bool,
+    /// Directories the exporter names for its icons (its `IconThemePath`), searched for `icon_name` before the icon
+    /// themes; empty for other sources.
+    pub icon_dirs: Arc<[PathBuf]>,
+    /// The exporter asks for its menus to be noticed (its `Status` is `notice`); held by the root of its tree.
+    pub notice: bool,
+}
+
+/// How an exporter asks a menu row to be read (DBusMenu `disposition`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Disposition {
+    #[default]
+    Normal,
+    /// Additional information for the person.
+    Informative,
+    /// Something the person should be careful about.
+    Warning,
+    /// Something dangerous or destructive.
+    Alert,
+}
+
+impl Disposition {
+    /// The disposition a DBusMenu `disposition` value names; an unknown one is normal.
+    pub fn from_name(name: &str) -> Disposition {
+        match name {
+            "informative" => Disposition::Informative,
+            "warning" => Disposition::Warning,
+            "alert" => Disposition::Alert,
+            _ => Disposition::Normal,
+        }
+    }
 }
 
 impl MenuItem {
@@ -407,6 +497,29 @@ impl MenuItem {
             return Some(alternate);
         }
         self.children.iter().find_map(|c| c.find(id))
+    }
+
+    /// The ids from a child of this item down to `id`, `id` last; `None` when no item below this one has it.
+    pub fn path_to(&self, id: ItemId) -> Option<Vec<ItemId>> {
+        self.children.iter().find_map(|c| {
+            if c.id == id {
+                return Some(vec![id]);
+            }
+            let mut rest = c.path_to(id)?;
+            rest.insert(0, c.id);
+            Some(rest)
+        })
+    }
+
+    /// Apply `f` to this item and every item below it, alternates included.
+    pub fn for_each_mut(&mut self, f: &mut impl FnMut(&mut MenuItem)) {
+        f(self);
+        if let Some(alternate) = self.alternate.as_deref_mut() {
+            f(alternate);
+        }
+        for c in &mut self.children {
+            c.for_each_mut(f);
+        }
     }
 
     pub fn find_mut(&mut self, id: ItemId) -> Option<&mut MenuItem> {
